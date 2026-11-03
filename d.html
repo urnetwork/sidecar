@@ -1,0 +1,2588 @@
+
+<!DOCTYPE html>
+
+
+
+
+
+
+<html data-bs-theme="auto" lang="en" prefix="og: http://ogp.me/ns# article: http://ogp.me/ns/article#">
+    <head>
+        
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>
+            
+    
+        draft-ietf-scitt-receipts-ccf-profile-06 - CCF Profile for COSE Receipts
+    
+
+        </title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="traceparent" content="">
+        <link href="https://static.ietf.org/fonts/inter/import.css" rel="stylesheet">
+        <link href="https://static.ietf.org/fonts/noto-sans-mono/import.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://static.ietf.org/dt/12.82.1/ietf/css/ietf.css">
+        <link rel="stylesheet" href="https://static.ietf.org/dt/12.82.1/ietf/css/select2.css">
+        
+        <script src="https://static.ietf.org/dt/12.82.1/ietf/js/theme.js"></script>
+        <style>
+            .inline { display: inline; }
+        </style>
+        
+        
+    
+
+
+
+
+<meta property="og:title" content="CCF Profile for COSE Receipts">
+<meta property="og:url" content="https://datatracker.ietf.org/doc/draft-ietf-scitt-receipts-ccf-profile/">
+
+
+<link rel="canonical" href="https://datatracker.ietf.org/doc/draft-ietf-scitt-receipts-ccf-profile/">
+
+<meta property="og:site_name" content="IETF Datatracker">
+<meta property="og:description" content="This document defines a new verifiable data structure (VDS) type for COSE Receipts and the associated inclusion and consistency proofs, specifically designed for append-only logs produced by the Confidential Consortium Framework (CCF) to provide stronger tamper- evidence guarantees.">
+<meta property="og:type" content="article">
+
+<meta property="og:image" content="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-card.png">
+<meta property="og:image:alt" content="Logo of the IETF">
+<meta property="article:section" content="IETF - Internet Engineering Task Force">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+
+<meta property="article:author" content="Henk Birkholz">
+<meta property="article:author" content="Antoine Delignat-Lavaud">
+<meta property="article:author" content="Cedric Fournet">
+<meta property="article:author" content="Amaury Chamayou">
+
+
+
+    <link rel="alternate"
+          type="application/atom+xml"
+          title="Document changes"
+          href="/feed/document-changes/draft-ietf-scitt-receipts-ccf-profile/">
+    <meta name="description"
+          content="CCF Profile for COSE Receipts ">
+
+        <script type="module" crossorigin="" src="https://static.ietf.org/dt/12.82.1/assets/embedded-73a0c4fc.js"></script>
+<link href="https://static.ietf.org/dt/12.82.1/assets/create-pinia-singleton-03577dc2.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+<link href="https://static.ietf.org/dt/12.82.1/assets/Scrollbar-3f2fb773.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+        
+
+<link rel="apple-touch-icon"
+      sizes="180x180"
+      href="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-nor-180.png">
+<link rel="icon"
+      sizes="32x32"
+      href="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-nor-32.png">
+<link rel="icon"
+      sizes="16x16"
+      href="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-nor-16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon"
+      href="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-nor-mask.svg"
+      color="#ffffff">
+<meta name="msapplication-TileColor"
+      content="#ffffff">
+<meta name="theme-color"
+      content="#ffffff">
+        <script src="https://static.ietf.org/dt/12.82.1/ietf/js/ietf.js"></script>
+        
+    </head>
+    <body  class="navbar-offset position-relative"
+          data-group-menu-data-url="/group/groupmenu.json">
+        
+        <noscript><iframe class="status" title="Site status" src="/status/latest"></iframe></noscript>
+<div class="vue-embed" data-component="Status"></div>
+        <a class="visually-hidden visually-hidden-focusable" href="#content">Skip to main content</a>
+        <nav class="navbar navbar-expand-lg fixed-top bg-secondary-subtle">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/">
+                    
+
+
+
+<img alt="IETF Logo"
+     class="d-lm-none me-2"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-nor-white.svg"
+        
+     
+     >
+
+<img alt="IETF Logo"
+     class="d-dm-none me-2"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.82.1/ietf/images/ietf-logo-nor.svg"
+        
+     
+     >
+                    Datatracker
+                    
+                </a>
+                <div class="collapse navbar-collapse" id="navbar-collapse">
+                    <ul class="nav navbar-nav flex-nowrap">
+                        
+
+
+
+
+<li class="nav-item dropdown">
+    
+        <a href="#"
+           class="nav-link dropdown-toggle"
+           role="button"
+           data-bs-toggle="dropdown"
+           aria-expanded="false">
+            Groups
+        </a>
+        <ul class="dropdown-menu mt-n1">
+        
+    <li class="dropdown-header">By area/parent</li>
+    
+
+
+
+    
+    <li class="dropend group-menu group-parent-2010">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#ART">
+            Apps &amp; Realtime
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-1008">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#GEN">
+            General
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-1052">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#INT">
+            Internet
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-1193">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#OPS">
+            Ops &amp; Management
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-1249">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#RTG">
+            Routing
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-1260">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#SEC">
+            Security
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-2412">
+        <a class="dropdown-item dropdown-toggle "
+           href="/wg/#WIT">
+            Web and Internet Transport
+        </a>
+    </li>
+
+    
+        <li><a class="dropdown-item" href="/group/iesg/about/">IESG</a></li>
+    
+    <li class="dropend group-menu group-parent-7">
+        <a class="dropdown-item dropdown-toggle "
+           href="/program/">
+            IAB
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-3">
+        <a class="dropdown-item dropdown-toggle "
+           href="/rg/">
+            IRTF
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-2309">
+        <a class="dropdown-item dropdown-toggle "
+           href="/adm/">
+            IETF LLC
+        </a>
+    </li>
+
+    
+    <li class="dropend group-menu group-parent-1876">
+        <a class="dropdown-item dropdown-toggle "
+           href="/rfcedtyp/">
+            RFC Editor
+        </a>
+    </li>
+
+
+    <li class="dropend">
+        <a class="dropdown-item dropdown-toggle "
+           href="/group/">
+            Other
+        </a>
+        
+
+
+<ul class="dropdown-menu ms-n1">
+    
+        <li>
+            <a class="dropdown-item "
+               href="/ag/">Active AGs</a>
+        </li>
+    
+        <li>
+            <a class="dropdown-item "
+               href="/area/">Active Areas</a>
+        </li>
+    
+        <li>
+            <a class="dropdown-item "
+               href="/dir/">Active Directorates</a>
+        </li>
+    
+        <li>
+            <a class="dropdown-item "
+               href="/iabworkshop/">Active IAB Workshops</a>
+        </li>
+    
+        <li>
+            <a class="dropdown-item "
+               href="/program/">Active Programs</a>
+        </li>
+    
+        <li>
+            <a class="dropdown-item "
+               href="/rag/">Active RAGs</a>
+        </li>
+    
+        <li>
+            <a class="dropdown-item "
+               href="/team/">Active Teams</a>
+        </li>
+    
+    
+</ul>
+
+    </li>
+    <li><hr class="dropdown-divider"></li>
+    <li class="dropdown-header">New work</li>
+    <li>
+        <a class="dropdown-item"
+           href="/group/chartering/">
+            Chartering groups
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/wg/bofs/">
+            BOFs
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/doc/bof-requests">
+            BOF Requests
+        </a>
+    </li>
+    <li><hr class="dropdown-divider"></li>
+    <li class="dropdown-header">Other groups</li>
+    <li>
+        <a class="dropdown-item"
+           href="/group/concluded/">
+            Concluded groups
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/list/nonwg">
+            Non-WG lists
+        </a>
+    </li>
+    
+    </ul>
+</li>
+
+<li class="nav-item dropdown">
+    
+        <a href="#"
+           class="nav-link dropdown-toggle"
+           role="button"
+           data-bs-toggle="dropdown"
+           aria-expanded="false">
+            Documents
+        </a>
+        <ul class="dropdown-menu mt-n1">
+        
+    <li>
+        <a class="dropdown-item"
+           href="/doc/search">
+            Search
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/doc/recent">
+            Recent I-Ds
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/submit/">
+            Submit an Internet-Draft
+        </a>
+    </li>
+    
+    
+        <li><hr class="dropdown-divider">
+        </li>
+    
+    <li class="dropdown-header">
+        RFC streams
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/stream/iab/">
+            IAB
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/stream/irtf/">
+            IRTF
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/stream/ise/">
+            ISE
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/stream/editorial/">
+            Editorial
+        </a>
+    </li>
+    
+        <li><hr class="dropdown-divider">
+        </li>
+    
+    <li class="dropdown-header">
+        Subseries
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/doc/std">
+            STD
+        </a>
+        <a class="dropdown-item"
+           href="/doc/bcp">
+            BCP
+        </a>
+        <a class="dropdown-item"
+           href="/doc/fyi">
+            FYI
+        </a>
+    </li>
+    
+    </ul>
+</li>
+
+<li class="nav-item dropdown">
+    
+        <a href="#"
+           class="nav-link dropdown-toggle"
+           role="button"
+           data-bs-toggle="dropdown"
+           aria-expanded="false">
+            Meetings
+        </a>
+        <ul class="dropdown-menu mt-n1">
+        
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/agenda">
+            Agenda
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/materials">
+            Materials
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/floor-plan">
+            Floor plan
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="https://www.ietf.org/how/meetings/register/">
+            Registration
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/important-dates/">
+            Important dates
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/session/request/">
+            Request a session
+        </a>
+    </li>
+    
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/requests">
+            Session requests
+        </a>
+    </li>
+    
+    
+        
+            <li><hr class="dropdown-divider">
+            </li>
+        
+        <li class="dropdown-header">
+            Upcoming meetings
+        </li>
+    
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/upcoming">
+            Upcoming meetings
+        </a>
+    </li>
+    
+        
+            <li><hr class="dropdown-divider">
+            </li>
+        
+        <li class="dropdown-header">
+            Past meetings
+        </li>
+    
+    <li>
+        <a class="dropdown-item"
+           href="/meeting/past">
+            Past meetings
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="https://www.ietf.org/how/meetings/past/">
+            Meeting proceedings
+        </a>
+    </li>
+    
+    </ul>
+</li>
+
+<li class="nav-item dropdown">
+    
+        <a href="#"
+           class="nav-link dropdown-toggle"
+           role="button"
+           data-bs-toggle="dropdown"
+           aria-expanded="false">
+            Other
+        </a>
+        <ul class="dropdown-menu mt-n1">
+        
+    <li>
+        <a class="dropdown-item"
+           href="/ipr/">
+            IPR disclosures
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/liaison/">
+            Liaison statements
+        </a>
+    </li>
+    
+    <li>
+        <a class="dropdown-item"
+           href="/iesg/agenda/">
+            IESG agenda
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/nomcom/">
+            NomComs
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/doc/downref">
+            Downref registry
+        </a>
+    </li>
+    <li class="dropend">
+        <a class="dropdown-item dropdown-toggle" href="#">
+            Statistics
+        </a>
+        <ul class="dropdown-menu">
+            <li>
+                <a class="dropdown-item"
+                   href="/stats/document/">
+                    I-Ds/RFCs
+                </a>
+            </li>
+            <li>
+                <a class="dropdown-item"
+                   href="/stats/meeting/">
+                    Meetings
+                </a>
+            </li>
+            
+            
+        </ul>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/api/">
+            API Help
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           href="/release/">
+            Release notes
+        </a>
+    </li>
+    <li>
+        <a class="dropdown-item"
+           target="_blank" href="https://status.ietf.org">
+            System status
+        </a>
+    </li>
+    
+        <li><hr class="dropdown-divider">
+        </li>
+    
+    <li>
+        <a class="dropdown-item text-danger "
+           target="_blank" href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+            <i class="bi bi-bug">
+            </i>
+            Report a bug
+        </a>
+    </li>
+    
+    </ul>
+</li>
+
+
+    
+
+
+
+<li class="nav-item dropdown">
+    
+        <a href="#"
+           class="nav-link dropdown-toggle"
+           role="button"
+           data-bs-toggle="dropdown"
+           aria-expanded="false">
+            
+                User
+            
+        </a>
+        <ul class="dropdown-menu  mt-n1 ">
+        
+    
+    
+        
+            <li>
+                <a class="dropdown-item "
+                   rel="nofollow"
+                   href="/accounts/login/?next=/doc/draft-ietf-scitt-receipts-ccf-profile/">
+                    Sign in
+                </a>
+            </li>
+            <li>
+                <a class="dropdown-item "
+                   rel="nofollow"
+                   href="/accounts/reset/">
+                    Password reset
+                </a>
+            </li>
+            <li>
+                <a class="dropdown-item "
+                   href="/accounts/settings/"
+                   rel="nofollow">
+                    Preferences
+                </a>
+            </li>
+        
+    
+    
+        <li>
+            <a class="dropdown-item "
+               href="/accounts/create/">
+                New account
+            </a>
+        </li>
+    
+    <li class="dropend">
+      <a class="dropdown-item dropdown-toggle" href="#">
+        List subscriptions
+      </a>
+      <ul class="dropdown-menu">
+            <li>
+                <a class="dropdown-item "
+                href="https://mailman3.ietf.org/mailman3/lists/">
+                    IETF Lists
+                </a>
+            </li>
+            <li>
+                <a class="dropdown-item "
+                href="https://mailman3.irtf.org/mailman3/lists/">
+                IRTF Lists
+                </a>
+            </li>
+            <li>
+                <a class="dropdown-item "
+                href="https://mailman3.iab.org/mailman3/lists/">
+                    IAB Lists
+                </a>
+            </li>
+            <li>
+                <a class="dropdown-item "
+                href="https://mailman3.rfc-editor.org/mailman3/lists/">
+                    RFC-Editor Lists
+                </a>
+            </li>
+        </ul>
+    </li>
+    
+    
+    
+    </ul></li>
+
+
+                    </ul>
+                </div>
+                <div class="d-flex align-items-center">
+                    <a class="nav-link text-danger d-none d-xl-inline me-xl-4"
+                       target="_blank"
+                       href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+                        Report a bug
+                        <i class="bi bi-bug"></i>
+                    </a>
+
+                    
+                        <a class="btn me-1  btn-warning  d-none d-sm-block"
+                           rel="nofollow"
+                           href="/accounts/login/?next=/doc/draft-ietf-scitt-receipts-ccf-profile/">
+                            Sign in
+                        </a>
+                    
+
+                    <div class="d-none d-md-block dropdown" id="navbar-doc-search-wrapper">
+                        <input class="form-control"
+                               id="navbar-doc-search"
+                               type="text"
+                               placeholder="Document search"
+                               autocomplete="off"
+                               data-ajax-url="/doc/select2search/document/all/"
+                               aria-label="Document search">
+                        <ul class="dropdown-menu" id="navbar-doc-search-results">
+                        </ul>
+                    </div>
+                </div>
+                <button class="navbar-toggler"
+                        type="button"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#navbar-collapse"
+                        aria-controls="navbar-collapse"
+                        aria-expanded="false"
+                        aria-label="Toggle navigation">
+                    <i class="navbar-toggler-icon"></i>
+                </button>
+            </div>
+        </nav>
+        
+        <main class="pt-3 container-fluid" id="main">
+            <div class="row">
+                
+                <div class="col mx-lg-3 ietf-auto-nav" id="content">
+                    <noscript data-nosnippet>
+                        <div class="alert alert-danger alert-ignore my-3">
+                            <b>Javascript disabled?</b> Like other modern websites, the IETF Datatracker relies on Javascript.
+                            Please enable Javascript for full functionality.
+                        </div>
+                    </noscript>
+                    
+                    
+    
+    
+
+
+
+<h1>
+    CCF Profile for COSE Receipts
+    <br>
+    <small class="text-body-secondary">draft-ietf-scitt-receipts-ccf-profile-06</small>
+</h1>
+<ul class="nav nav-tabs my-3">
+    
+        <li  class="nav-item">
+            <a class="nav-link active"
+               href="/doc/draft-ietf-scitt-receipts-ccf-profile/">
+                Status
+            </a>
+        </li>
+    
+        <li  class="nav-item">
+            <a class="nav-link disabled"
+               >
+                IESG evaluation record
+            </a>
+        </li>
+    
+        <li  class="nav-item">
+            <a class="nav-link "
+               href="/doc/draft-ietf-scitt-receipts-ccf-profile/writeup/">
+                IESG writeups
+            </a>
+        </li>
+    
+        <li  class="nav-item">
+            <a class="nav-link "
+               href="/doc/draft-ietf-scitt-receipts-ccf-profile/email/">
+                Email expansions
+            </a>
+        </li>
+    
+        <li  class="nav-item">
+            <a class="nav-link "
+               href="/doc/draft-ietf-scitt-receipts-ccf-profile/history/">
+                History
+            </a>
+        </li>
+    
+</ul>
+
+    
+
+
+
+    <label class="my-1 fw-bold">Versions:</label>
+    <nav class="mb-3">
+
+    <ul class="revision-list pagination pagination-sm text-center flex-wrap">
+        
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/00/"
+                        >
+                            00
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/01/"
+                        rel="nofollow">
+                            01
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/02/"
+                        rel="nofollow">
+                            02
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/03/"
+                        rel="nofollow">
+                            03
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/04/"
+                        rel="nofollow">
+                            04
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item ">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/05/"
+                        rel="nofollow">
+                            05
+                        </a>
+                    </li>
+                
+            
+                 
+                    <li class="page-item active">
+                        <a class="page-link"
+                        href="/doc/draft-ietf-scitt-receipts-ccf-profile/06/"
+                        >
+                            06
+                        </a>
+                    </li>
+                
+            
+            
+        
+    </ul>
+
+    </nav>
+
+    
+
+
+
+
+    
+
+
+    <div id="doc-timeline"></div>
+    
+        
+    
+    <table class="table table-sm table-borderless">
+        
+
+
+
+
+
+
+
+<tbody class="meta align-top  border-top">
+    <tr>
+        <th scope="row">Document</th>
+        <th scope="row">Type</th>
+        <td class="edit"></td>
+        <td>
+            
+
+
+
+
+
+
+
+    <span class="text-success">Active Internet-Draft</span>
+    (<a href="/wg/scitt/about/">scitt WG</a>)
+    
+
+            
+            
+            
+        </td>
+    </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">Authors</th>
+        <td class="edit">
+            
+        </td>
+        <td>
+            
+            
+                <span ><a 
+           title="Datatracker profile of Henk Birkholz"
+            href="/person/henk.birkholz@ietf.contact" >Henk Birkholz</a> <a 
+               href="mailto:henk.birkholz%40ietf.contact"
+               aria-label="Compose email to henk.birkholz@ietf.contact"
+               title="Compose email to henk.birkholz@ietf.contact">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Antoine Delignat-Lavaud"
+            href="/person/antdl@microsoft.com" >Antoine Delignat-Lavaud</a> <a 
+               href="mailto:antdl%40microsoft.com"
+               aria-label="Compose email to antdl@microsoft.com"
+               title="Compose email to antdl@microsoft.com">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Cedric Fournet"
+            href="/person/fournet@microsoft.com" >Cedric Fournet</a> <a 
+               href="mailto:fournet%40microsoft.com"
+               aria-label="Compose email to fournet@microsoft.com"
+               title="Compose email to fournet@microsoft.com">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Amaury Chamayou"
+            href="/person/amaury.chamayou@microsoft.com" >Amaury Chamayou</a> <a 
+               href="mailto:amaury.chamayou%40microsoft.com"
+               aria-label="Compose email to amaury.chamayou@microsoft.com"
+               title="Compose email to amaury.chamayou@microsoft.com">
+                <i class="bi bi-envelope"></i></a></span>
+            
+            
+        </td>
+    </tr>
+    
+    
+    <tr>
+        <td></td>
+        <th scope="row">Last updated</th>
+        <td class="edit"></td>
+        <td>
+            2026-10-22
+            
+        </td>
+    </tr>
+    
+    
+        
+            <tr>
+                <td></td>
+                <th scope="row">Replaces</th>
+                <td class="edit">
+                    
+                </td>
+                <td>
+                    
+                        
+                            <a href="/doc/draft-birkholz-cose-receipts-ccf-profile/" title="COSE Receipts with CCF">draft-birkholz-cose-receipts-ccf-profile</a>
+                        
+                    
+                </td>
+            </tr>
+        
+        
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            RFC stream
+        </th>
+        <td class="edit">
+            
+        </td>
+        <td >
+            
+                
+                
+                    Internet Engineering Task Force (IETF)
+                
+                
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">
+                Intended RFC status
+            </th>
+            <td class="edit">
+                
+            </td>
+            <td>
+                
+                    Proposed Standard
+                
+            </td>
+        </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            Formats
+        </th>
+        <td class="edit">
+        </td>
+        <td>
+            
+                
+    <div class="buttonlist">
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-ietf-scitt-receipts-ccf-profile-06.txt">
+            
+                <i class="bi bi-file-text"></i> txt
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-ietf-scitt-receipts-ccf-profile-06.html">
+            
+                <i class="bi bi-file-code"></i> html
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.ietf.org/archive/id/draft-ietf-scitt-receipts-ccf-profile-06.xml">
+            
+                <i class="bi bi-file-code"></i> xml
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          
+          href="/doc/html/draft-ietf-scitt-receipts-ccf-profile-06">
+            
+                <i class="bi bi-file-code"></i> htmlized
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/draft-ietf-scitt-receipts-ccf-profile/06/bibtex/">
+            
+                <i class="bi bi-file-ruled"></i> bibtex
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/bibxml3/draft-ietf-scitt-receipts-ccf-profile-06.xml">
+            
+                <i class="bi bi-file-code"></i> bibxml
+            
+        </a>
+        
+    
+</div>
+
+            
+        </td>
+    </tr>
+    
+    
+        
+    
+        
+    
+        
+            
+                <tr>
+                    <td></td>
+                    <th scope="row">
+                        Reviews
+                    </th>
+                    <td class="edit">
+                    </td>
+                    <td>
+                        
+                    
+<div class="review-assignment-summary">
+    
+        <a href="/doc/review-ietf-scitt-receipts-ccf-profile-04-artart-lc-singh-2026-09-07/">
+            ARTART IETF Last Call review
+            
+                (of
+                
+                -04)
+            by Jasdip Singh</a>
+        
+        
+            
+                <span class="badge rounded-pill text-bg-success text-wrap">
+                    <i class="bi bi-"></i> Ready
+                </span>
+                
+        
+    
+</div>
+                
+                    
+<div class="review-assignment-summary">
+    
+        <a href="/doc/review-ietf-scitt-receipts-ccf-profile-01-secdir-early-sheffer-2026-04-19/">
+            SECDIR Early review
+            
+                (of
+                
+                -01)
+            by Yaron Sheffer</a>
+        
+        
+            
+                <span class="badge rounded-pill text-bg-success text-wrap">
+                    <i class="bi bi-"></i> Ready
+                </span>
+                
+        
+    
+</div>
+                
+                    
+<div class="review-assignment-summary">
+    
+        <a href="/doc/review-ietf-scitt-receipts-ccf-profile-01-genart-early-holmberg-2026-04-16/">
+            GENART Early review
+            
+                (of
+                
+                -01)
+            by Christer Holmberg</a>
+        
+        
+            
+                <span class="badge rounded-pill text-bg-success text-wrap">
+                    <i class="bi bi-"></i> Ready
+                </span>
+                
+        
+    
+</div>
+                
+                
+                        
+                        
+                    </td>
+                </tr>
+            
+            
+        
+    
+    
+        
+            <tr>
+                <td>
+                </td>
+                <th scope="row">
+                    Additional resources
+                </th>
+                <td class="edit">
+                    
+                </td>
+                <td>
+                    
+                        
+                        
+                            
+                                <a href="https://mailarchive.ietf.org/arch/browse/scitt/?q=draft-ietf-scitt-receipts-ccf-profile">
+                                    Mailing list discussion
+                                </a>
+                            
+                        
+                    
+                </td>
+            </tr>
+        
+    
+</tbody>
+        <tbody class="meta border-top">
+            <tr>
+                <th scope="row">
+                    Stream
+                </th>
+                
+                    <th scope="row">
+                        
+                            <a href="/doc/help/state/draft-stream-ietf/">
+                                
+                                    WG
+                                
+                                state
+                            </a>
+                        
+                    </th>
+                    <td class="edit">
+                        
+                    </td>
+                    <td>
+                        
+                            <span class="">
+                                Submitted to IESG for Publication
+                            </span>
+                        
+                        
+                        
+                    </td>
+                
+            </tr>
+            
+            
+            
+            
+                <tr>
+                    <td></td>
+                    <th scope="row">
+                        Document shepherd
+                    </th>
+                    <td class="edit">
+                        
+                    </td>
+                    <td>
+                        
+                            <span ><a 
+           title="Datatracker profile of Nicole Bates"
+            href="/person/nicolebates@microsoft.com" >Nicole Bates</a> <a 
+               href="mailto:nicolebates%40microsoft.com"
+               aria-label="Compose email to nicolebates@microsoft.com"
+               title="Compose email to nicolebates@microsoft.com">
+                <i class="bi bi-envelope"></i></a></span>
+                        
+                    </td>
+                </tr>
+                
+                    <tr>
+                        <td></td>
+                        <th scope="row">
+                            Shepherd write-up
+                        </th>
+                        <td class="edit">
+                            
+                        </td>
+                        <td>
+                            
+                                <a class="btn btn-primary btn-sm"
+                                   href="/doc/draft-ietf-scitt-receipts-ccf-profile/shepherdwriteup/">
+                                    Show
+                                </a>
+                                <span class="badge rounded-pill text-bg-secondary">Last changed 2026-07-01</span>
+                            
+                        </td>
+                    </tr>
+                
+            
+            
+        </tbody>
+        
+            <tbody class="meta border-top">
+                <tr>
+                    <th scope="row">
+                        IESG
+                    </th>
+                    <th scope="row">
+                        <a href="/doc/help/state/draft-iesg/">
+                            IESG state
+                        </a>
+                    </th>
+                    <td class="edit">
+                        
+                    </td>
+                    <td>
+                        <span class="">
+                            
+                                Waiting for AD Go-Ahead
+                            
+                        </span>
+                    </td>
+                </tr>
+                
+                    <tr>
+                        <td></td>
+                        <th scope="row">
+                            Action Holder
+                        </th>
+                        <td class="edit">
+                            
+                        </td>
+                        <td>
+                            <div>
+                                
+                                    
+                                        <div>
+                                            <span ><a 
+           title="Responsible AD"
+            href="/person/stndrds-inacio@andrew.cmu.edu" >Christopher Inacio</a> <a 
+               href="mailto:stndrds-inacio%40andrew.cmu.edu"
+               aria-label="Compose email to stndrds-inacio@andrew.cmu.edu"
+               title="Compose email to stndrds-inacio@andrew.cmu.edu">
+                <i class="bi bi-envelope"></i></a></span> <span class="badge rounded-pill text-bg-danger" title="In state for 55 days; goal is &lt;20 days."><i class="bi bi-clock-fill"></i> 55</span>
+                                        </div>
+                                    
+                                    
+                                
+                            </div>
+                        </td>
+                    </tr>
+                    
+                    
+                        <tr>
+                            <td></td>
+                            <th scope="row">
+                                Consensus boilerplate
+                            </th>
+                            <td class="edit">
+                                
+                            </td>
+                            <td>
+                                <span class="text-success"
+                                      title="Whether the document is the result of a community consensus process as defined in RFC 5741">
+                                    Yes
+                                </span>
+                            </td>
+                        </tr>
+                    
+                    <tr>
+                        <td></td>
+                        <th scope="row">
+                            Telechat date
+                        </th>
+                        <td class="edit">
+                            
+                        </td>
+                        <td>
+                            
+                                <span class="text-body-secondary">
+                                    (None)
+                                </span>
+                            
+                            
+                        </td>
+                    </tr>
+                    <tr>
+                        <td></td>
+                        <th scope="row">
+                            Responsible AD
+                        </th>
+                        <td class="edit">
+                            
+                        </td>
+                        <td>
+                            
+                                <span ><a 
+           title="Datatracker profile of Christopher Inacio"
+            href="/person/stndrds-inacio@andrew.cmu.edu" >Christopher Inacio</a> <a 
+               href="mailto:stndrds-inacio%40andrew.cmu.edu"
+               aria-label="Compose email to stndrds-inacio@andrew.cmu.edu"
+               title="Compose email to stndrds-inacio@andrew.cmu.edu">
+                <i class="bi bi-envelope"></i></a></span>
+                            
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <td></td>
+                        <th scope="row">
+                            Send notices to
+                        </th>
+                        <td class="edit">
+                            
+                        </td>
+                        <td>
+                            
+                                <a href="mailto:nicolebates@microsoft.com">nicolebates@microsoft.com</a>
+                            
+                        </td>
+                    </tr>
+                </tbody>
+            
+            
+                
+                    <tbody class="meta border-top">
+                        
+                            <tr>
+                                <th scope="row">
+                                    IANA
+                                </th>
+                                <th scope="row">
+                                    <a href="/doc/help/state/draft-iana-review/">
+                                        IANA review state
+                                    </a>
+                                </th>
+                                <td class="edit">
+                                    
+                                </td>
+                                <td class="text-danger">
+                                    
+                                        Version Changed - Review Needed
+                                    
+                                </td>
+                            </tr>
+                        
+                        
+                        
+                            <tr>
+                                <th scope="row">
+                                    
+                                </th>
+                                <th scope="row">
+                                    <a href="/doc/help/state/draft-iana-experts/">
+                                        IANA expert review state
+                                    </a>
+                                </th>
+                                <td class="edit">
+                                    
+                                </td>
+                                <td class="text-danger">
+                                    
+                                        Issues identified
+                                    
+                                </td>
+                            </tr>
+                        
+                        
+                            <tr>
+                                <th scope="row">
+                                    
+                                </th>
+                                <th scope="row">
+                                    IANA expert review comments
+                                </th>
+                                <td class="edit">
+                                    
+                                </td>
+                                <td>
+                                    
+                                        The verifiable data structure registration seems fine.
+However, this registration requests no proof types.
+I would expect to see at least a request to add a proof of inclusion for this data structure... possibly also a proof of consistency.
+
+https://www.iana.org/assignments/cose#verifiable-data-structure-proofs
+
+You need to have a row in this table that explains what kinds of proofs &quot;2&quot; produces.
+
+Type 1 has two existing proof types (inclusion and consistency).
+
+Without requesting at least a -1 for your proof of inclusion format, implementers will not be able to understand it.
+
+Please consider also this AI-generated review:
+
+Five blocking findings:
+1. No Proofs registry entry (above).
+2. §6&#x27;s only two security mitigations both require consistency auditing, but no consistency proof is defined or registered for this VDS.
+3. §3.1, §3.2 and §4 give three incompatible encodings of the same proof—bare in the unprotected header, indexed by -1 at the top level, and correctly nested under vdp (396). Only §4 matches RFC 9942 §5.2.1.
+4. §3.1 requires a protected header parameter named label set to -1. No such parameter exists; RFC 9942 conveys the proof type as the vdp map key.
+5. §2.1&#x27;s MTH({d[0]}) = HASH(d[0]) never defines the transaction serialization, and doesn&#x27;t match §3.2&#x27;s actual leaf hash HASH(itxh || HASH(evidence) || data-hash).
+
+Template gaps: Change Controller missing (must be IETF; §8.2.1 also wants it matched across the paired registrations); Related information isn&#x27;t a template field; two conflicting Descriptions (§2 vs §7.1.1); TBD_1 vs hardcoded 2 in Figure 7.
+
+Also worth flagging to the authors: both normative I-D references have shipped — draft-ietf-cose-merkle-tree-proofs-18 is now RFC 9942 and draft-ietf-scitt-architecture-22 is now RFC 9943. Datatracker already shows IANA review state IANA — Not OK, consistent with the missing paired registration. Due date is today.
+
+Recommended disposition: no objection to reserving 2 (early allocation available under RFC 7120 §2), but do not complete the assignment on -04.
+                                    
+                                </td>
+                            </tr>
+                        
+                    </tbody>
+                
+            
+            
+        </table>
+        <div class="buttonlist">
+            <a class="btn btn-primary btn-sm"
+               href="mailto:draft-ietf-scitt-receipts-ccf-profile@ietf.org?subject=Mail%20regarding%20draft-ietf-scitt-receipts-ccf-profile">
+                <i class="bi bi-envelope">
+                </i>
+                Email authors
+            </a>
+            
+                <a class="btn btn-primary btn-sm"
+                   href="mailto:scitt@ietf.org?subject=Mail%20regarding%20draft-ietf-scitt-receipts-ccf-profile">
+                    <i class="bi bi-envelope">
+                    </i>
+                    Email WG
+                </a>
+            
+            <a class="btn btn-primary btn-sm"
+               href="/ipr/search/?submit=draft&amp;id=draft-ietf-scitt-receipts-ccf-profile"
+               rel="nofollow">
+                <i class="bi bi-lightning">
+                </i>
+                IPR
+                
+                    <span class="badge rounded-pill text-bg-secondary">
+                        2
+                    </span>
+                
+            </a>
+            <a class="btn btn-primary btn-sm"
+               href="/doc/draft-ietf-scitt-receipts-ccf-profile/references/"
+               rel="nofollow">
+                <i class="bi bi-arrow-left">
+                </i>
+                References
+            </a>
+            <a class="btn btn-primary btn-sm"
+               href="/doc/draft-ietf-scitt-receipts-ccf-profile/referencedby/"
+               rel="nofollow">
+                <i class="bi bi-arrow-right">
+                </i>
+                Referenced by
+            </a>
+            <a class="btn btn-primary btn-sm"
+               href="https://author-tools.ietf.org/api/idnits?url=https://www.ietf.org/archive/id/draft-ietf-scitt-receipts-ccf-profile-06.txt"
+               rel="nofollow"
+               target="_blank">
+                <i class="bi bi-exclamation">
+                </i>
+                Nits
+            </a>
+             <a class="btn btn-primary btn-sm"
+               href="https://author-tools.ietf.org/idnits3/results?url=https://www.ietf.org/archive/id/draft-ietf-scitt-receipts-ccf-profile-06.txt"
+               rel="nofollow"
+               target="_blank">
+                <i class="bi bi-exclamation-diamond">
+                </i>
+                Nits v3
+            </a>           
+            <a class="btn btn-primary btn-sm"
+               href="https://mailarchive.ietf.org/arch/search/?q=%22draft-ietf-scitt-receipts-ccf-profile%22"
+               rel="nofollow"
+               target="_blank">
+                <i class="bi bi-search">
+                </i>
+                Search email archive
+            </a>
+            
+            
+            
+            
+        </div>
+        
+            <div class="card mt-5">
+                <div class="card-header">
+                    
+                        draft-ietf-scitt-receipts-ccf-profile-06
+                    
+                </div>
+                <div class="card-body">
+                    <pre>SCITT                                                        H. Birkholz
+Internet-Draft                                            Fraunhofer SIT
+Intended status: Standards Track                      A. Delignat-Lavaud
+Expires: 25 April 2027                                        C. Fournet
+                                                             A. Chamayou
+                                                      Microsoft Research
+                                                         22 October 2026
+
+                     CCF Profile for COSE Receipts
+                draft-ietf-scitt-receipts-ccf-profile-06
+
+<span>Abstract</span>
+
+   This document defines a new verifiable data structure (VDS) type for
+   COSE Receipts and the associated inclusion and consistency proofs,
+   specifically designed for append-only logs produced by the
+   Confidential Consortium Framework (CCF) to provide stronger tamper-
+   evidence guarantees.
+
+<span>Status of This Memo</span>
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as &quot;work in progress.&quot;
+
+   This Internet-Draft will expire on 25 April 2027.
+
+<span>Copyright Notice</span>
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 1]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   This document is subject to BCP 78 and the IETF Trust&#x27;s Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+<span>Table of Contents</span>
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+     1.1.  Requirements Notation . . . . . . . . . . . . . . . . . .   3
+   2.  Description of the Confidential Consortium Framework Ledger
+           Verifiable Data Structure . . . . . . . . . . . . . . . .   3
+     2.1.  Merkle Tree Shape . . . . . . . . . . . . . . . . . . . .   4
+     2.2.  Transaction Components  . . . . . . . . . . . . . . . . .   5
+   3.  CCF Inclusion Proofs  . . . . . . . . . . . . . . . . . . . .   6
+     3.1.  CCF Inclusion Proof Signature . . . . . . . . . . . . . .   7
+     3.2.  Inclusion Proof Verification Algorithm  . . . . . . . . .   8
+   4.  CCF Consistency Proofs  . . . . . . . . . . . . . . . . . . .  10
+     4.1.  CCF Consistency Proof Signature . . . . . . . . . . . . .  11
+     4.2.  Consistency Proof Verification Algorithm  . . . . . . . .  11
+   5.  Usage in COSE Receipts  . . . . . . . . . . . . . . . . . . .  13
+   6.  Privacy Considerations  . . . . . . . . . . . . . . . . . . .  14
+   7.  Security Considerations . . . . . . . . . . . . . . . . . . .  15
+     7.1.  Trusted Execution Environments  . . . . . . . . . . . . .  15
+     7.2.  Operators . . . . . . . . . . . . . . . . . . . . . . . .  15
+     7.3.  Consistency Receipts  . . . . . . . . . . . . . . . . . .  15
+   8.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  16
+     8.1.  Additions to Existing Registries  . . . . . . . . . . . .  16
+       8.1.1.  COSE Verifiable Data Structure Algorithms . . . . . .  16
+       8.1.2.  COSE Verifiable Data Structure Proofs . . . . . . . .  16
+   9.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  17
+     9.1.  Normative References  . . . . . . . . . . . . . . . . . .  17
+     9.2.  Informative References  . . . . . . . . . . . . . . . . .  18
+   Authors&#x27; Addresses  . . . . . . . . . . . . . . . . . . . . . . .  18
+
+1.  Introduction
+
+   The COSE Receipts document [RFC9942] defines a common framework for
+   expressing different types of proofs about verifiable data structures
+   (VDS), providing a standardized way to convey trust-relevant
+   evidence.  For instance, inclusion proofs guarantee to a verifier
+   that a given serializable element is recorded at a given state of the
+   VDS, while consistency proofs are used to establish that an inclusion
+   proof is still consistent with the new state of the VDS at a later
+   time.
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 2]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   In this document, we define a new type of VDS and the associated
+   inclusion and consistency proofs for an application of the
+   Confidential Consortium Framework (CCF) ledger that implements the
+   SCITT Architecture defined in [RFC9943].  This VDS carries indexed
+   transaction information in a binary Merkle Tree, where new
+   transactions are appended to the right, so that the binary
+   decomposition of the index of a transaction can be interpreted as the
+   position in the tree if 0 represents the left branch and 1 the right
+   branch.  Compared to [RFC9162], the leaves of CCF trees carry
+   additional internal information for the following purposes:
+
+   1.  To bind the full details of the transaction executed, which is a
+       superset of what is exposed in the proof and captures internal
+       details useful for detailed system audit, but not for application
+       purposes.
+
+   2.  To allow the distributed system executing the application logic
+       in Trusted Execution Environments (TEEs) to persist signatures to
+       storage early.  Receipt production is only enabled once
+       transactions are fully committed by the consensus protocol.
+
+1.1.  Requirements Notation
+
+   The key words &quot;MUST&quot;, &quot;MUST NOT&quot;, &quot;REQUIRED&quot;, &quot;SHALL&quot;, &quot;SHALL NOT&quot;,
+   &quot;SHOULD&quot;, &quot;SHOULD NOT&quot;, &quot;RECOMMENDED&quot;, &quot;NOT RECOMMENDED&quot;, &quot;MAY&quot;, and
+   &quot;OPTIONAL&quot; in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+2.  Description of the Confidential Consortium Framework Ledger
+    Verifiable Data Structure
+
+   This document defines CCF_LEDGER_SHA256 for append-only CCF
+   transaction ledgers containing a mix of public and confidential
+   information.  These ledgers are integrity-protected by a Merkle Tree
+   and signatures produced via Trusted Execution Environments.  The
+   registration request for this verifiable data structure is specified
+   in Section 8.1.1.
+
+   The placeholder TBD_1 denotes the algorithm identifier, with
+   requested assignment 2.  The CDDL and examples use this requested
+   value pending IANA allocation; it is not an assigned value.
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 3]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+2.1.  Merkle Tree Shape
+
+   A CCF ledger is a binary Merkle Tree constructed from a hash function
+   H, which is defined from the log type.  For instance, the hash
+   function for CCF_LEDGER_SHA256 is SHA256, whose HASH_SIZE is 32
+   bytes.
+
+   The Merkle Tree encodes an ordered list of n transactions T_n =
+   {T[0], T[1], ..., T[n-1]}. Each transaction T[i] is serialized to a
+   byte string d[i] as defined in Section 2.2, giving the list D_n =
+   {d[0], d[1], ..., d[n-1]}. We define the Merkle Tree Hash (MTH)
+   function, which takes as input such a list of serialized
+   transactions, and outputs a single HASH_SIZE byte string called the
+   Merkle root hash, by induction on the list.
+
+   This function is defined as follows:
+
+   The hash of an empty list is the hash of an empty string:
+
+   MTH({}) = HASH().
+
+                  Figure 1: Merkle Tree Hash of Empty List
+
+   The hash of a list with one entry (also known as a leaf hash) is:
+
+   MTH({d[0]}) = HASH(d[0]).
+
+                Figure 2: Merkle Tree Hash of a Single Entry
+
+   For n &gt; 1, let k be the largest power of two smaller than n (i.e., k
+   &lt; n &lt;= 2k).  The Merkle Tree Hash of an n-element list D_n is then
+   defined recursively as:
+
+   MTH(D_n) = HASH(MTH(D[0:k]) || MTH(D[k:n])),
+
+                    Figure 3: Recursive Merkle Tree Hash
+
+   where:
+
+   *  || denotes concatenation
+
+   *  : denotes concatenation of lists
+
+   *  D[k1:k2] = D&#x27;_(k2-k1) denotes the list {d&#x27;[0] = d[k1], d&#x27;[1] =
+      d[k1+1], ..., d&#x27;[k2-k1-1] = d[k2-1]} of length (k2 - k1).
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 4]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+2.2.  Transaction Components
+
+   Each leaf in a CCF ledger carries the following components:
+
+   ccf-leaf = [
+     ; Byte string of size HASH_SIZE(32)
+     internal-transaction-hash: bstr .size 32
+
+     ; Text string of at most 1024 bytes
+     internal-evidence: tstr .size (1..1024)
+
+     ; Byte string of size HASH_SIZE(32)
+     data-hash: bstr .size 32
+   ]
+
+                          Figure 4: CCF Leaf CDDL
+
+   The ccf-leaf array is the representation of these components in an
+   inclusion proof (Section 3).  It is not what is hashed into the tree.
+   The serialized transaction d[i] that is input to MTH in Section 2.1
+   is the byte string of length 3 * HASH_SIZE obtained by concatenating
+   the internal transaction hash, the hash of the internal evidence, and
+   the data hash:
+
+   d[i] = internal-transaction-hash
+          || HASH(internal-evidence)
+          || data-hash
+
+                    Figure 5: Transaction Serialization
+
+   where HASH(internal-evidence) is the digest of the UTF-8 encoding of
+   the internal-evidence text string.  The leaf hash MTH({d[i]}) =
+   HASH(d[i]) is therefore HASH(internal-transaction-hash ||
+   HASH(internal-evidence) || data-hash), which is the value computed by
+   the first step of compute_root in Figure 7.  Note that the proof
+   carries internal-evidence itself rather than its digest: revealing
+   the evidence is what demonstrates that the transaction was committed
+   (see below).
+
+   The internal-transaction-hash and internal-evidence values are
+   internal to the CCF implementation.  They can be safely ignored by
+   receipt Verifiers, but they commit the transparency service (TS) to
+   the whole tree contents and may be used for additional, CCF-specific
+   auditing.
+
+   internal-transaction-hash is a hash over the complete entry in the
+   [CCF-Ledger-Format], and internal-evidence is a revealable
+   [CCF-Commit-Evidence] value that allows early persistence of ledger
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 5]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   entries before distributed consensus can be established.  This
+   mechanism is useful to implement high-throughput transparency
+   applications in Trusted Execution Environments (TEEs) that only
+   provide a limited amount of memory, while maintaining high
+   availability afforded by distributed consensus.  Using a secure one-
+   way function f to publish an f(x) commitment to an x value that can
+   be revealed at a later time is a common feature of distributed
+   protocols ([COIN-FLIPPING]).  The hash function used for internal-
+   transaction-hash is the same hash function H as in the Merkle Tree
+   construction for the selected verifiable data structure algorithm.
+   For CCF_LEDGER_SHA256, this function is SHA256.
+
+   data-hash is the hash of the bytes of the Signed Statement as
+   registered: the COSE_Sign1 encoding with CBOR tag 18 retained
+   (Section 6.1 of [RFC9943]) and an empty unprotected header map
+   (Section 6.3 of [RFC9943]), other elements as submitted.  The hash
+   function used for data-hash is also the same hash function H as in
+   the Merkle Tree construction for the selected verifiable data
+   structure algorithm.  For CCF_LEDGER_SHA256, this function is SHA256.
+
+   data-hash captures the Signed Statement, not the Transparent
+   Statement of Section 7 of [RFC9943], which adds Receipts to that
+   unprotected header.  A Verifier holding a Transparent Statement
+   recovers the preimage as follows:
+
+   1.  Take the COSE_Sign1 of the Transparent Statement.
+
+   2.  Replace its unprotected header with an empty map (Section 6.3 of
+       [RFC9943]).
+
+   3.  Keep tag 18, and keep the encoded values of the protected header,
+       payload and signature as received.
+
+   4.  Hash the resulting byte string with H (SHA256 for
+       CCF_LEDGER_SHA256).
+
+3.  CCF Inclusion Proofs
+
+   CCF inclusion proofs consist of a list of digests tagged with a
+   single left-or-right bit.
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 6]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   ccf-proof-element = [
+     ; Position of the element
+     left: bool
+
+     ; Hash of the proof element: byte string of size HASH_SIZE(32)
+     hash: bstr .size 32
+   ]
+
+   ccf-inclusion-proof = bstr .cbor {
+     &amp;(leaf: 1) =&gt; ccf-leaf
+     &amp;(path: 2) =&gt; [* ccf-proof-element]
+   }
+
+                     Figure 6: CCF Inclusion Proof CDDL
+
+   Unlike some other tree algorithms, neither the index of the element
+   nor the size of the tree is explicit in the inclusion proof.  Read
+   from the leaf up, the left-or-right bits are the binary decomposition
+   of the index for the first k elements, where k is the largest power
+   of two not greater than the tree size; for later elements the proof
+   may have fewer elements than the depth of the index, and the index
+   cannot be read from the proof alone.  The path is empty for a tree of
+   size 1, whose root is the leaf hash.
+
+3.1.  CCF Inclusion Proof Signature
+
+   The proof signature for a CCF inclusion proof is a COSE signature
+   (encoded with the COSE_Sign1 CBOR type) which includes the following
+   additional requirements for protected and unprotected headers.  These
+   follow the conventions of Section 5.2.1 of [RFC9942]; the
+   corresponding CDDL is given in Section 5.  Please note that there may
+   be additional header parameters defined by the application.
+
+   The protected header parameters for the CCF inclusion proof signature
+   MUST include the following:
+
+   *  vds (label 395): int.  This header MUST be set to the verifiable
+      data structure algorithm identifier for CCF_LEDGER_SHA256 (TBD_1).
+
+   The unprotected header for a CCF inclusion proof signature MUST
+   include the following:
+
+   *  vdp (label 396): map.  This header conveys the verifiable data
+      structure proofs, keyed by proof type.  It MUST contain the
+      inclusion-proof (-1) key, whose value is an array of one or more
+      ccf-inclusion-proof values as defined above.  The proof type is
+      identified solely by this key; no other header parameter is used
+      to convey it.
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 7]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   The payload of the signature is the CCF ledger Merkle root digest,
+   and MUST be detached in order to force verifiers to recompute the
+   root from the inclusion proofs in the unprotected header.  This
+   provides a safeguard against implementation errors that use the
+   payload of the signature but do not recompute the root from the
+   inclusion proof.  When the array contains more than one inclusion
+   proof, every proof MUST compute to the same root.
+
+3.2.  Inclusion Proof Verification Algorithm
+
+   After decoding each ccf-inclusion-proof byte string, the Verifier
+   MUST validate that the decoded value is well constructed with regard
+   to the schema defined in Figure 6, including Figure 4 for the leaf,
+   and MUST reject the proof before compute_root is called if any check
+   fails.  In particular:
+
+   *  the byte string is valid CBOR (Section 5.3.1 of [RFC8949]), in
+      particular the map has no duplicate keys;
+
+   *  the map has the keys leaf (1) and path (2);
+
+   *  internal-transaction-hash is a byte string of exactly HASH_SIZE
+      (32) bytes;
+
+   *  internal-evidence is a text string of 1 to 1024 bytes of valid
+      UTF-8;
+
+   *  data-hash is a byte string of exactly HASH_SIZE (32) bytes;
+
+   *  path is an array, each element of which is an array of exactly two
+      items: a boolean and a byte string of exactly HASH_SIZE (32)
+      bytes.
+
+   Without these checks, since leaf and interior node hashes are not
+   domain separated, an oversized path element lets an existing leaf be
+   recomputed as if it were an interior node, so that a proof for a leaf
+   and data-hash of the attacker&#x27;s choosing still recomputes a validly
+   signed root (a second-preimage-style forgery).
+
+   CCF uses the following algorithm to verify an inclusion receipt:
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 8]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   compute_root(proof):
+     h := HASH(
+          proof.leaf.internal-transaction-hash
+              || HASH(proof.leaf.internal-evidence)
+              || proof.leaf.data-hash
+          )
+
+     for [left, hash] in proof.path:
+         h := HASH(hash || h) if left
+              HASH(h || hash) else
+     return h
+
+   verify_inclusion_receipt(inclusion_receipt, statement_digest):
+     assert(VDP_LABEL in inclusion_receipt.unprotected_header)
+     let vdp = inclusion_receipt.unprotected_header[VDP_LABEL]
+     assert(INCLUSION_PROOF_LABEL in vdp)
+     let proofs = vdp[INCLUSION_PROOF_LABEL]
+     assert(len(proofs) &gt; 0)
+     assert(inclusion_receipt.payload == nil)
+
+     for proof in proofs:
+         assert(validate_ccf_inclusion_proof(proof))
+         assert(proof.leaf.data-hash == statement_digest)
+         # Use the Merkle Root as the detached payload
+         let payload = compute_root(proof)
+         assert(verify_cose(inclusion_receipt, payload))
+     return true
+
+                Figure 7: CCF Inclusion Receipt Verification
+
+   VDP_LABEL is the vdp header parameter label (396) and
+   INCLUSION_PROOF_LABEL is the inclusion-proof proof type label (-1),
+   both defined by [RFC9942].  Each element of proofs is a ccf-
+   inclusion-proof, i.e., a byte string wrapping a CBOR-encoded map,
+   which is decoded and validated against the schema defined in Figure 6
+   before compute_root is applied.
+
+   statement_digest is the data-hash of the candidate Signed Statement,
+   computed by the Verifier from the bytes of that Signed Statement as
+   described in Section 2.2; it MUST NOT be taken from the receipt.
+   Every proof in the receipt MUST have a data-hash equal to
+   statement_digest.  This defines how the inclusion proofs of this
+   profile are consumed (Section 4.4.1 of [RFC9942]), by applying them
+   to the bytes of a candidate entry (Section 5.2.1 of [RFC9942]).  If
+   the receipt also carries consistency proofs, they MUST recompute the
+   same root (Section 5).
+
+   A description can also be found at [CCF-Receipt-Verification].
+
+<span>Birkholz, et al.          Expires 25 April 2027                 [Page 9]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+4.  CCF Consistency Proofs
+
+   A CCF consistency proof establishes that the tree of m transactions
+   with root R_m is a prefix of the tree of n transactions with root
+   R_n, where 0 &lt; m &lt; n: every transaction of the older tree is at the
+   same position in the newer tree.
+
+   ccf-consistency-proof = bstr .cbor {
+     ; Root of the largest complete subtree containing
+     ; the last transaction of the older tree
+     &amp;(anchor: 1) =&gt; bstr .size 32
+
+     ; Siblings from the anchor to the newer root
+     &amp;(path: 2) =&gt; [+ ccf-proof-element]
+   }
+
+                    Figure 8: CCF Consistency Proof CDDL
+
+   The anchor MUST be the root of the subtree covering transactions T[m
+   - 2^t], ..., T[m - 1], where 2^t is the largest power of two dividing
+   m; when m is a power of two, the anchor is R_m.  The path lists the
+   sibling of each node on the path from the anchor to R_n, tagged as in
+   inclusion proofs.  Left siblings belong to both trees and right
+   siblings only to the newer one, so folding the anchor with the left
+   siblings alone yields R_m, and with all siblings R_n.  Apart from the
+   tags, path holds the digests of the same subtrees, in the same order,
+   as the consistency proof of Section 2.1.4.1 of [RFC9162] for the same
+   sizes, with the anchor as the first element of that proof when m is
+   not a power of two.  The digests themselves are those of the Merkle
+   Tree Hash of Section 2.1, not of [RFC9162], which prefixes leaves and
+   nodes differently.
+
+   The first element of path MUST be a right sibling (left is false):
+   the anchor is the root of the last complete subtree of the older
+   tree, so its first sibling can only hold transactions appended after
+   T[m - 1].  A proof whose first element is a left sibling MUST be
+   rejected.  In particular, there is no consistency proof for m == n,
+   for which every sibling would be a left one.
+
+   Neither tree size is carried by the proof, and verification does not
+   establish m, n, or that the anchor is the node required above.  What
+   verification establishes is that every transaction of the tree with
+   root R_m is at the same position in the tree with root R_n
+   (Section 7.3); the anchor requirement fixes a canonical encoding of
+   that fact.
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 10]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+4.1.  CCF Consistency Proof Signature
+
+   The proof signature for a CCF consistency proof is a COSE_Sign1 with
+   the same protected header requirements as an inclusion proof
+   signature (Section 3.1).  Its unprotected header MUST include:
+
+   *  vdp (label 396): map.  It MUST contain the consistency-proof (-2)
+      key, whose value is an array of one or more ccf-consistency-proof
+      values, each relating one older root to the newer root.
+
+   The payload is the newer root R_n, and MUST be detached.  When the
+   array contains more than one consistency proof, every proof MUST
+   compute to the same newer root, and a Verifier MUST reject the
+   receipt if any proof computes to a different one.  The older root R_m
+   is not carried by the receipt: the verifier already holds it,
+   typically as the root recomputed from an inclusion receipt
+   (Figure 7), and checks that at least one proof recomputes it.  Other
+   proofs in the same array may start from other older roots.
+
+4.2.  Consistency Proof Verification Algorithm
+
+   Before applying this algorithm, the Verifier MUST have validated the
+   vdp map as required in Section 5.  After decoding each ccf-
+   consistency-proof byte string, the Verifier MUST validate that the
+   decoded value is well constructed with regard to the schema defined
+   in Figure 8, and MUST reject the proof before compute_roots is called
+   if any check fails.  In particular:
+
+   *  the byte string is valid CBOR (Section 5.3.1 of [RFC8949]), in
+      particular the map has no duplicate keys;
+
+   *  the map has the keys anchor (1) and path (2);
+
+   *  anchor is a byte string of exactly HASH_SIZE (32) bytes;
+
+   *  path is a non-empty array, each element of which is an array of
+      exactly two items: a boolean and a byte string of exactly
+      HASH_SIZE (32) bytes.
+
+   These checks ensure that compute_roots is only applied to well-formed
+   proofs.
+
+   A consistency receipt is verified against a trusted older_root as
+   follows:
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 11]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   compute_roots(proof):
+     older := proof.anchor
+     newer := proof.anchor
+
+     for [left, hash] in proof.path:
+         if left:
+             older := HASH(hash || older)
+             newer := HASH(hash || newer)
+         else:
+             newer := HASH(newer || hash)
+     return older, newer
+
+   verify_consistency_receipt(consistency_receipt, older_root):
+     assert(VDP_LABEL in consistency_receipt.unprotected_header)
+     let vdp = consistency_receipt.unprotected_header[VDP_LABEL]
+     assert(CONSISTENCY_PROOF_LABEL in vdp)
+     let proofs = vdp[CONSISTENCY_PROOF_LABEL]
+     assert(len(proofs) &gt; 0)
+     assert(consistency_receipt.payload == nil)
+
+     let payload = nil
+     let older_root_found = false
+     for proof in proofs:
+         assert(validate_ccf_consistency_proof(proof))
+         # The first sibling of the anchor is in the newer tree only
+         assert(proof.path[0].left == false)
+         let older, newer = compute_roots(proof)
+         # Every proof must compute to the same newer root
+         assert(payload == nil or newer == payload)
+         payload := newer
+         if older == older_root:
+             older_root_found := true
+     # At least one proof must start from older_root
+     assert(older_root_found)
+
+     # Use the common newer Merkle Root as the detached payload
+     assert(verify_cose(consistency_receipt, payload))
+     return true
+
+               Figure 9: CCF Consistency Receipt Verification
+
+   CONSISTENCY_PROOF_LABEL is the consistency-proof proof type label
+   (-2) defined by [RFC9942].  Each element of proofs is a ccf-
+   consistency-proof, i.e., a byte string wrapping a CBOR-encoded map,
+   which is decoded and validated against the schema defined in Figure 8
+   before compute_roots is applied.  All proofs are folded before the
+   signature is checked, so that a receipt in which any proof computes
+   to a different newer root is rejected, whichever proof the Verifier
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 12]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   is interested in.  If the receipt also carries inclusion proofs, they
+   MUST recompute the same root (Section 5).  The comparison with
+   older_root binds the receipt to a state the verifier already trusts:
+   a receipt in which no proof recomputes older_root proves nothing
+   about that state.  It also confirms that the anchor is a node of that
+   state, but not that it is the anchor required in Section 4, which is
+   not needed for the guarantee the receipt provides (Section 7.3).
+
+   The signature attests that payload is the root of a state of the
+   ledger; verification establishes that the state with root older_root
+   is a prefix of it, not that the signed value is itself a Merkle Tree
+   Hash of Section 2.1 (Section 7.3).
+
+5.  Usage in COSE Receipts
+
+   A COSE Receipt with CCF inclusion or consistency proofs is described
+   by the following CDDL definition, which follows Section 5.2.1 of
+   [RFC9942] and Section 5.3.1 of [RFC9942]:
+
+   protected-header-map = {
+     &amp;(alg: 1) =&gt; int
+     &amp;(vds: 395) =&gt; TBD_1
+     * cose-label =&gt; cose-value
+   }
+
+   TBD_1 = 2 ; Requested assignment for CCF_LEDGER_SHA256
+
+                    Figure 10: Protected Header Map CDDL
+
+   *  alg (label: 1): REQUIRED.  Signature algorithm identifier.  Value
+      type: int.
+
+   *  vds (label: 395): REQUIRED.  Verifiable data structure algorithm
+      identifier.  Value type: int.
+
+   The unprotected header is described by the following CDDL definition:
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 13]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   inclusion-proof = ccf-inclusion-proof
+   inclusion-proofs = [ + inclusion-proof ]
+
+   consistency-proof = ccf-consistency-proof
+   consistency-proofs = [ + consistency-proof ]
+
+   verifiable-proofs = {
+     &amp;(inclusion-proof: -1) =&gt; inclusion-proofs
+     ? &amp;(consistency-proof: -2) =&gt; consistency-proofs
+     //
+     &amp;(consistency-proof: -2) =&gt; consistency-proofs
+   }
+
+   unprotected-header-map = {
+     &amp;(vdp: 396) =&gt; verifiable-proofs
+     * cose-label =&gt; cose-value
+   }
+
+                   Figure 11: Unprotected Header Map CDDL
+
+   *  vdp (label: 396): REQUIRED.  Verifiable data structure proofs.
+      Value type: map.
+
+   *  inclusion-proof (label: -1): Inclusion proofs.  Value type: array
+      of ccf-inclusion-proof.
+
+   *  consistency-proof (label: -2): Consistency proofs.  Value type:
+      array of ccf-consistency-proof.
+
+   At least one of inclusion-proof and consistency-proof MUST be
+   present.  All proofs in a receipt, of either type, MUST recompute the
+   same root (the newer root, for consistency proofs), which is the
+   detached payload.  A Verifier MUST reject a receipt in which any
+   proof present in the vdp map recomputes a different root, including
+   proofs of a type it does not otherwise use: the vdp map is in the
+   unprotected header, so proofs can be added to a receipt without
+   invalidating its signature.  The proof type is conveyed by the key of
+   the vdp map, as specified by [RFC9942]; it is not carried in a
+   separate header parameter.  A Verifier MUST reject a receipt whose
+   vdp map is not valid CBOR (Section 5.3.1 of [RFC8949]) or does not
+   match verifiable-proofs in Figure 11, before applying either
+   verification algorithm.
+
+6.  Privacy Considerations
+
+   See the privacy considerations section of:
+
+   *  [RFC9942]
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 14]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+7.  Security Considerations
+
+   The security considerations of [RFC9942] apply.
+
+7.1.  Trusted Execution Environments
+
+   CCF networks of nodes rely on executing in TEEs to secure their
+   function, in particular:
+
+   1.  The evaluation of registration policies
+
+   2.  The creation and usage of receipt signing keys
+
+   A compromise in the TEE platform used to execute the network may
+   allow an attacker to produce invalid and divergent ledger branches.
+   Clients can mitigate this risk in two ways: by regularly auditing the
+   consistency of the CCF ledger, for instance by verifying consistency
+   receipts (Figure 9) from roots they hold to the current root; and by
+   regularly fetching attestation information about the TEE instances,
+   available in the ledger and from the network itself, and confirming
+   that the nodes composing the network are running up-to-date, trusted
+   platform components.
+
+7.2.  Operators
+
+   An operator has the ability to start successor networks with a
+   distinct identity.  The operator of a CCF network can recover the
+   service by starting a successor network, for example a new CCF
+   network with its own service identity, that endorses the ledger state
+   of the previous instance.  This provides service continuity after a
+   catastrophic failure of a majority of the nodes.  However, a
+   malicious operator could exploit this mechanism and truncate the
+   ledger’s history by initializing the successor network from an
+   earlier ledger prefix, thereby omitting some later entries.  Clients
+   can mitigate this risk by auditing the successor ledger and verifying
+   that their latest known receipts from the prior service are included
+   in the successor’s ledger.
+
+7.3.  Consistency Receipts
+
+   A consistency receipt relates two roots and establishes nothing about
+   ledger contents on its own.  Verifiers MUST compare the recomputed
+   older root with a root they have already verified; which signing key
+   they accept, including that of a successor network (Section 7.2), is
+   their trust policy as for any Receipt of [RFC9942].  Consistency
+   receipts also cannot provide guarantees about the correct application
+   of Registration Policies, which requires additional material as
+   outlined in Section 5.1.1.2 of [RFC9943].
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 15]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   The receipt carries no tree sizes and the signature covers only the
+   newer root, so sizes cannot be authenticated; none is needed.
+   Because the older root is trusted and the newer root is signed, every
+   node a passing proof folds is, barring a second preimage of H, a node
+   of one of the two states, and every transaction of the older state is
+   at the same position in the signed one.  This holds whether or not
+   the anchor is the canonical node of Section 4.
+
+   Verification does not establish that the signed value is itself a
+   Merkle Tree Hash of Section 2.1; that is attested by the Transparency
+   Service, and a Transparency Service signing values that are not roots
+   of its ledger is the misbehaviour addressed in Section 7.1 and
+   Section 7.2.  A Verifier that needs m or n MUST obtain them from a
+   source it trusts independently of the receipt; this document does not
+   define one.
+
+8.  IANA Considerations
+
+8.1.  Additions to Existing Registries
+
+   The registries in this section are defined by [RFC9942].
+
+8.1.1.  COSE Verifiable Data Structure Algorithms
+
+   This document requests IANA to add the following new value to the
+   &quot;COSE Verifiable Data Structure Algorithms&quot; registry:
+
+   *  Name: CCF_LEDGER_SHA256
+
+   *  Value: TBD_1 (requested assignment 2)
+
+   *  Description: Append-only CCF transaction ledgers protected by
+      SHA-256 Merkle Trees and signatures produced via Trusted Execution
+      Environments.
+
+   *  Reference: RFCthis
+
+   *  Change Controller: IETF
+
+8.1.2.  COSE Verifiable Data Structure Proofs
+
+   This document requests IANA to add the following new entries to the
+   &quot;COSE Verifiable Data Structure Proofs&quot; registry:
+
+   *  Verifiable Data Structure: TBD_1 (requested assignment 2)
+
+   *  Name: inclusion proofs
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 16]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   *  Label: -1
+
+   *  CBOR Type: array (of bstr)
+
+   *  Description: Proof of inclusion
+
+   *  Reference: RFCthis, Section 3 and Section 5
+
+   *  Change Controller: IETF
+
+   and:
+
+   *  Verifiable Data Structure: TBD_1 (requested assignment 2)
+
+   *  Name: consistency proofs
+
+   *  Label: -2
+
+   *  CBOR Type: array (of bstr)
+
+   *  Description: Proof of consistency
+
+   *  Reference: RFCthis, Section 4 and Section 5
+
+   *  Change Controller: IETF
+
+9.  References
+
+9.1.  Normative References
+
+   [RFC2119]  Bradner, S., &quot;Key words for use in RFCs to Indicate
+              Requirement Levels&quot;, BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              &lt;https://www.rfc-editor.org/rfc/rfc2119&gt;.
+
+   [RFC8174]  Leiba, B., &quot;Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words&quot;, BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, &lt;https://www.rfc-editor.org/rfc/rfc8174&gt;.
+
+   [RFC8949]  Bormann, C. and P. Hoffman, &quot;Concise Binary Object
+              Representation (CBOR)&quot;, STD 94, RFC 8949,
+              DOI 10.17487/RFC8949, December 2020,
+              &lt;https://www.rfc-editor.org/rfc/rfc8949&gt;.
+
+   [RFC9162]  Laurie, B., Messeri, E., and R. Stradling, &quot;Certificate
+              Transparency Version 2.0&quot;, RFC 9162, DOI 10.17487/RFC9162,
+              December 2021, &lt;https://www.rfc-editor.org/rfc/rfc9162&gt;.
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 17]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   [RFC9942]  Steele, O., Birkholz, H., Delignat-Lavaud, A., and C.
+              Fournet, &quot;CBOR Object Signing and Encryption (COSE)
+              Receipts&quot;, RFC 9942, DOI 10.17487/RFC9942, June 2026,
+              &lt;https://www.rfc-editor.org/rfc/rfc9942&gt;.
+
+   [RFC9943]  Birkholz, H., Delignat-Lavaud, A., Fournet, C., Deshpande,
+              Y., and S. Lasker, &quot;An Architecture for Trustworthy and
+              Transparent Digital Supply Chains&quot;, RFC 9943,
+              DOI 10.17487/RFC9943, June 2026,
+              &lt;https://www.rfc-editor.org/rfc/rfc9943&gt;.
+
+9.2.  Informative References
+
+   [CCF]      &quot;Confidential Consortium Framework&quot;, n.d.,
+              &lt;https://github.com/microsoft/ccf&gt;.
+
+   [CCF-Commit-Evidence]
+              &quot;CCF Commit Evidence&quot;, n.d.,
+              &lt;https://microsoft.github.io/CCF/main/use_apps/
+              verify_tx.html#commit-evidence&gt;.
+
+   [CCF-Ledger-Format]
+              &quot;CCF Ledger Format&quot;, n.d.,
+              &lt;https://microsoft.github.io/CCF/main/architecture/
+              ledger.html&gt;.
+
+   [CCF-Receipt-Verification]
+              &quot;CCF Receipt Verification&quot;, n.d.,
+              &lt;https://microsoft.github.io/CCF/main/use_apps/
+              verify_tx.html#receipt-verification&gt;.
+
+   [COIN-FLIPPING]
+              &quot;Coin Flipping By Telephone - A Protocol For Solving
+              Impossible Problems&quot;, DOI 10.1145/1323293.1294280, n.d.,
+              &lt;https://dl.acm.org/doi/epdf/10.1145/1008908.1008911&gt;.
+
+<span>Authors&#x27; Addresses</span>
+
+   Henk Birkholz
+   Fraunhofer SIT
+   Rheinstrasse 75
+   64295 Darmstadt
+   Germany
+   Email: henk.birkholz@ietf.contact
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 18]</span>
+<span>Internet-Draft        CCF Profile for COSE Receipts         October 2026</span>
+
+   Antoine Delignat-Lavaud
+   Microsoft Research
+   21 Station Road
+   Cambridge
+   CB1 2FB
+   United Kingdom
+   Email: antdl@microsoft.com
+
+   Cedric Fournet
+   Microsoft Research
+   21 Station Road
+   Cambridge
+   CB1 2FB
+   United Kingdom
+   Email: fournet@microsoft.com
+
+   Amaury Chamayou
+   Microsoft Research
+   21 Station Road
+   Cambridge
+   CB1 2FB
+   United Kingdom
+   Email: amaury.chamayou@microsoft.com
+
+<span>Birkholz, et al.          Expires 25 April 2027                [Page 19]</span>
+</pre>
+                </div>
+            </div>
+            
+        
+    
+                    
+                </div>
+            </div>
+        </main>
+        
+            <footer class="col-md-12 col-sm-12 border-top mt-5 py-5 bg-light-subtle text-center position-sticky">
+                <a href="https://www.ietf.org/" class="p-3">IETF</a>
+                <a href="https://www.ietf.org/iesg/" class="p-3">IESG</a>
+                <a href="https://www.iab.org/" class="p-3">IAB</a>
+                <a href="https://www.irtf.org/" class="p-3">IRTF</a>
+                <a href="https://www.ietf.org/llc/" class="p-3 text-nowrap">IETF LLC</a>
+                <a href="https://trustee.ietf.org/" class="p-3 text-nowrap">IETF Trust</a>
+                <a href="https://www.rfc-editor.org/" class="p-3 text-nowrap">RFC Editor</a>
+                <a href="https://www.iana.org/" class="p-3">IANA</a>
+                <a href="https://www.ietf.org/privacy-statement/" class="p-3 text-nowrap">Privacy Statement</a>
+                <div class="small text-body-secondary py-3">
+                    
+                        <a class="mx-2" href="/release/about">About IETF Datatracker</a>
+                        <span class="mx-2">
+                            
+                                <a href="https://github.com/ietf-tools/datatracker/releases/tag/12.82.1">
+                            
+                            Version 12.82.1
+                            (release - 3aa2f63)
+                            
+                                </a>
+                            
+                        </span>
+                    
+                    <a class="mx-2" href="https://status.ietf.org" target="_blank">System Status</a>
+                    <span class="mx-2 text-danger">
+                        <i class="bi bi-bug"></i>
+                        Report a bug:
+                        <a class="text-reset" target="_blank" href="https://github.com/ietf-tools/datatracker/issues/new/choose">GitHub</a>
+                        
+                            <a class="text-reset" href="mailto:tools-help@ietf.org">Email</a>
+                        
+                    </span>
+                    
+                </div>
+            </footer>
+        
+        
+        <script src="https://static.ietf.org/dt/12.82.1/ietf/js/d3.js">
+        </script>
+        <script src="https://static.ietf.org/dt/12.82.1/ietf/js/document_timeline.js">
+        </script>
+    
+        <script src="https://static.ietf.org/dt/12.82.1/ietf/js/select2.js"></script>
+        <script src="https://static.ietf.org/dt/12.82.1/ietf/js/navbar-doc-search.js"></script>
+      
+<script>
+  var _paq = window._paq || [];
+  
+  _paq.push(['disableCookies']);
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//analytics.ietf.org/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', 7]);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.type='text/javascript'; g.async=true; g.defer=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<noscript><p><img src="//analytics.ietf.org/matomo.php?idsite=7" style="border:0;" alt="" /></p></noscript>
+
+    <script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a53d1d9d3d2407d1',t:'MTc5MzU1OTM0Ng=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a53d1d9d3d2407d1',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

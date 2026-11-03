@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One write, three readers</title>
+<meta name="description" content="A three-page pitch for URnetwork's agent sidecar: the core idea, the core features, and the market opportunity.">
+<style>
+  :root {
+    --bg: #eceff3;
+    --paper: #ffffff;
+    --ink: #15171b;
+    --ink-2: #3b414b;
+    --muted: #6a7280;
+    --rule: #e3e6ea;
+    --accent: #0e5a61;
+    --accent-soft: #e5f1f1;
+    --agents: #2457d6;
+    --agents-soft: #e9effd;
+    --devs: #a8540a;
+    --devs-soft: #fbf0e3;
+    --admins: #6d3fd6;
+    --admins-soft: #f0eafd;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 10px 30px rgba(16, 24, 40, .08);
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0e11;
+      --paper: #16191e;
+      --ink: #eceef2;
+      --ink-2: #c5cad3;
+      --muted: #98a1ad;
+      --rule: #2a2f37;
+      --accent: #62c3cb;
+      --accent-soft: #11302f;
+      --agents: #86a8ff;
+      --agents-soft: #172341;
+      --devs: #f0a75f;
+      --devs-soft: #33250f;
+      --admins: #b9a0ff;
+      --admins-soft: #251a40;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0e11;
+    --paper: #16191e;
+    --ink: #eceef2;
+    --ink-2: #c5cad3;
+    --muted: #98a1ad;
+    --rule: #2a2f37;
+    --accent: #62c3cb;
+    --accent-soft: #11302f;
+    --agents: #86a8ff;
+    --agents-soft: #172341;
+    --devs: #f0a75f;
+    --devs-soft: #33250f;
+    --admins: #b9a0ff;
+    --admins-soft: #251a40;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 10pt/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  a { color: inherit; text-decoration-color: var(--rule); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: currentColor; }
+
+  .page {
+    width: 8.5in;
+    height: 11in;
+    margin: 0.35in auto;
+    padding: 0.5in 0.6in 0.45in;
+    background: var(--paper);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 8pt;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 7px;
+    margin-bottom: 16px;
+  }
+  .page-head .brand { color: var(--accent); font-weight: 650; }
+  .page-foot {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    font-size: 7.5pt;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  h1 {
+    font-size: 25pt;
+    line-height: 1.08;
+    letter-spacing: -.015em;
+    margin: 0 0 6px;
+    font-weight: 750;
+  }
+  .lede {
+    font-size: 13.5pt;
+    line-height: 1.3;
+    color: var(--accent);
+    margin: 0 0 11px;
+    font-weight: 560;
+  }
+  h2 {
+    font-size: 8.5pt;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 7px;
+    font-weight: 650;
+  }
+  p { margin: 0 0 8px; color: var(--ink-2); }
+  strong { color: var(--ink); }
+
+  /* Page 1 */
+  .problem {
+    display: grid;
+    grid-template-columns: 1fr 1.25fr;
+    gap: 18px;
+    margin-bottom: 12px;
+  }
+  .pains { list-style: none; margin: 0; padding: 0; }
+  .pains li {
+    padding: 2px 0 2px 12px;
+    border-left: 2px solid var(--rule);
+    margin-bottom: 4px;
+    color: var(--ink-2);
+  }
+  .pains b { color: var(--ink); font-weight: 650; }
+  figure { margin: 4px auto 8px; width: 92%; }
+  figure svg { width: 100%; height: auto; display: block; }
+  .svg-box { fill: var(--paper); stroke: var(--rule); stroke-width: 1.2; }
+  .svg-write { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+  .svg-dom { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1.1; }
+  .svg-agents { fill: var(--agents-soft); stroke: var(--agents); stroke-width: 1.3; }
+  .svg-devs { fill: var(--devs-soft); stroke: var(--devs); stroke-width: 1.3; }
+  .svg-admins { fill: var(--admins-soft); stroke: var(--admins); stroke-width: 1.3; }
+  .svg-title { fill: var(--ink); font: 650 12.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-sub { fill: var(--muted); font: 10.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-line { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+  .svg-arrowhead { fill: var(--muted); }
+  .svg-fence { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 4; }
+  .svg-fence-label { fill: var(--accent); font: 600 10px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .04em; }
+
+  .readers {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .reader {
+    border-radius: 8px;
+    padding: 10px 11px 9px;
+    border-top: 3px solid;
+  }
+  .reader h3 { margin: 0 0 4px; font-size: 10.5pt; }
+  .reader h3 span { font-weight: 500; color: var(--muted); }
+  .reader p { margin: 0; font-size: 9.2pt; }
+  .r-agents { background: var(--agents-soft); border-color: var(--agents); }
+  .r-agents h3 { color: var(--agents); }
+  .r-devs { background: var(--devs-soft); border-color: var(--devs); }
+  .r-devs h3 { color: var(--devs); }
+  .r-admins { background: var(--admins-soft); border-color: var(--admins); }
+  .r-admins h3 { color: var(--admins); }
+
+  .callouts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .callout {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .callout p { margin: 0; font-size: 9.4pt; }
+  .callout.quote { background: var(--accent-soft); border-color: transparent; }
+  .callout.quote p { color: var(--ink); font-size: 10.5pt; font-weight: 560; line-height: 1.35; }
+
+  /* Page 2 */
+  .group-label {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 4px 0 6px;
+  }
+  .group-label h2 { margin: 0; }
+  .group-label span { font-size: 8.5pt; color: var(--muted); }
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px 12px;
+    margin-bottom: 10px;
+  }
+  .feature {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 7px 10px 6px;
+  }
+  .feature h3 {
+    margin: 0 0 2px;
+    font-size: 9.8pt;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .tag {
+    font-size: 7pt;
+    font-weight: 650;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 999px;
+    white-space: nowrap;
+    align-self: center;
+  }
+  .t-agents { color: var(--agents); background: var(--agents-soft); }
+  .t-devs { color: var(--devs); background: var(--devs-soft); }
+  .t-admins { color: var(--admins); background: var(--admins-soft); }
+  .f-agents { border-left-color: var(--agents); }
+  .f-devs { border-left-color: var(--devs); }
+  .f-admins { border-left-color: var(--admins); }
+  .feature p { margin: 0; font-size: 8.8pt; line-height: 1.38; }
+  .feature .why { color: var(--muted); font-size: 8.2pt; margin-top: 2px; }
+
+  .principles {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 9px 10px;
+    margin-bottom: 10px;
+  }
+  .principles div { font-size: 8.1pt; color: var(--ink-2); line-height: 1.32; }
+  .principles b { display: block; color: var(--accent); font-size: 8.6pt; margin-bottom: 1px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 8.6pt; }
+  th, td { text-align: left; vertical-align: top; padding: 5px 8px; border-bottom: 1px solid var(--rule); }
+  th { font-size: 7.8pt; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 650; }
+  td { color: var(--ink-2); }
+  td:first-child { color: var(--ink); font-weight: 650; white-space: nowrap; }
+  .price { color: var(--accent); font-weight: 650; display: block; margin-top: 1px; }
+  .note { font-size: 7.8pt; color: var(--muted); margin-top: 5px; }
+
+  /* Page 3 */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 9px;
+    margin-bottom: 12px;
+  }
+  .stat {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 9px 10px 8px;
+  }
+  .stat .num {
+    font-size: 21pt;
+    font-weight: 750;
+    letter-spacing: -.02em;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat p { margin: 0 0 4px; font-size: 8.6pt; line-height: 1.35; }
+  .stat .src { font-size: 7.4pt; color: var(--muted); }
+  .owners td:first-child { width: 22%; }
+  .owners tr.us td { color: var(--ink); background: var(--accent-soft); }
+  .owners tr.us td:first-child { color: var(--accent); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0 10px; }
+  ul.tight { margin: 0; padding-left: 16px; }
+  ul.tight li { margin-bottom: 3px; color: var(--ink-2); font-size: 8.9pt; line-height: 1.38; }
+  .timeline {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--rule);
+  }
+  .timeline div { padding: 8px 10px; font-size: 8.7pt; color: var(--ink-2); line-height: 1.38; }
+  .timeline div + div { border-left: 1px solid var(--rule); }
+  .timeline b { display: block; color: var(--ink); font-size: 9pt; margin-bottom: 2px; }
+  .timeline .moat { background: var(--accent-soft); }
+  .timeline .moat b { color: var(--accent); }
+
+  @media print {
+    @page { size: letter; margin: 0; }
+    body { background: #ffffff; }
+    .page { margin: 0; box-shadow: none; break-after: page; page-break-after: always; }
+    .page:last-child { break-after: auto; page-break-after: auto; }
+  }
+  @media screen and (max-width: 8.9in) {
+    .page { width: auto; height: auto; margin: 12px 16px; padding: 20px 18px; overflow: visible; }
+    .problem, .callouts, .two-col { grid-template-columns: 1fr; }
+    .readers, .features { grid-template-columns: 1fr; }
+    .principles { grid-template-columns: 1fr 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .timeline { grid-template-columns: 1fr; }
+    .timeline div + div { border-left: 0; border-top: 1px solid var(--rule); }
+    .page-foot { flex-direction: column; gap: 4px; }
+    table { font-size: 8.4pt; }
+    td:first-child { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+
+<!-- PAGE 1: THE CORE IDEA -->
+<section class="page" aria-label="Page 1: The core idea">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>1 / 3 · The core idea</span></header>
+
+  <h1>One write, three readers</h1>
+  <p class="lede">Every agent leaves a trail. Only your team can read it.</p>
+
+  <div class="problem">
+    <div>
+      <h2>The problem</h2>
+      <p>Teams now run several coding agents, such as Claude Code, Codex, Cursor, and Copilot, and they switch between them often. About a third of developers who use agents run more than one, and they are the heaviest users.</p>
+      <p>Each harness keeps its own partial record, so the work between them falls through.</p>
+    </div>
+    <ul class="pains">
+      <li><b>Sessions vanish.</b> Claude Code silently deletes transcripts after 30 days.</li>
+      <li><b>Edits escape.</b> Shell, subagent, and revert edits slip past every harness's checkpoints.</li>
+      <li><b>Handoffs break.</b> Sessions rarely follow you to another harness, machine, or teammate.</li>
+      <li><b>Approvals go dark.</b> Nothing records who clicked "Allow"; auto modes route around hooks.</li>
+      <li><b>Admins are blind.</b> 68% of organizations cannot tell agent from human activity (vendor-sponsored survey).</li>
+    </ul>
+  </div>
+
+  <h2>The idea</h2>
+  <p>Sidecar is a small local process that runs beside any harness. It captures each agent action once, from its own traffic, the harness's hooks and telemetry, and the filesystem, and writes it once. The raw session goes into the developer's encrypted vault, and a signed entry goes into the team's ledger. Three readers use that one write.</p>
+
+  <figure aria-label="Diagram: one write lands in the developer's vault and the team's ledger, and three readers use it">
+    <svg viewBox="0 0 680 222" role="img">
+      <title>One write, two key domains, three readers</title>
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="svg-arrowhead" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+      <!-- one write -->
+      <rect class="svg-write" x="6" y="76" width="150" height="64" rx="10"/>
+      <text class="svg-title" x="81" y="103" text-anchor="middle">One write</text>
+      <text class="svg-sub" x="81" y="121" text-anchor="middle">each action, captured once</text>
+      <!-- fence around key domains -->
+      <rect class="svg-fence" x="206" y="16" width="214" height="184" rx="12"/>
+      <text class="svg-fence-label" x="313" y="216" text-anchor="middle">URNETWORK SEES ONLY CIPHERTEXT</text>
+      <!-- key domains -->
+      <rect class="svg-dom" x="222" y="30" width="182" height="62" rx="9"/>
+      <text class="svg-title" x="313" y="56" text-anchor="middle">Developer's vault</text>
+      <text class="svg-sub" x="313" y="74" text-anchor="middle">raw sessions · your keys</text>
+      <rect class="svg-dom" x="222" y="124" width="182" height="62" rx="9"/>
+      <text class="svg-title" x="313" y="150" text-anchor="middle">Team ledger</text>
+      <text class="svg-sub" x="313" y="168" text-anchor="middle">signed entries · team keys</text>
+      <!-- readers -->
+      <rect class="svg-agents" x="478" y="12" width="196" height="54" rx="9"/>
+      <text class="svg-title" x="576" y="35" text-anchor="middle">Agents</text>
+      <text class="svg-sub" x="576" y="52" text-anchor="middle">coordinate</text>
+      <rect class="svg-devs" x="478" y="81" width="196" height="54" rx="9"/>
+      <text class="svg-title" x="576" y="104" text-anchor="middle">Developers and next run</text>
+      <text class="svg-sub" x="576" y="121" text-anchor="middle">continue</text>
+      <rect class="svg-admins" x="478" y="150" width="196" height="54" rx="9"/>
+      <text class="svg-title" x="576" y="173" text-anchor="middle">Admins</text>
+      <text class="svg-sub" x="576" y="190" text-anchor="middle">answer</text>
+      <!-- write to domains -->
+      <path class="svg-line" d="M156,98 C188,98 190,61 220,61" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M156,118 C188,118 190,155 220,155" marker-end="url(#ah)"/>
+      <!-- vault to developers -->
+      <path class="svg-line" d="M404,61 C440,61 444,104 476,104" marker-end="url(#ah)"/>
+      <!-- ledger to readers -->
+      <path class="svg-line" d="M404,147 C444,147 440,39 476,39" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M404,155 C440,155 446,112 476,112" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M404,163 C440,163 446,177 476,177" marker-end="url(#ah)"/>
+    </svg>
+  </figure>
+
+  <div class="readers">
+    <div class="reader r-agents">
+      <h3>Agents <span>· coordinate</span></h3>
+      <p>Find each other through the work: who claimed which files, what the last run decided, which route worked. Across harnesses, not inside one vendor.</p>
+    </div>
+    <div class="reader r-devs">
+      <h3>Developers <span>· continue</span></h3>
+      <p>Never lose a session or an edit, whichever harness made it. Review or restore what a run changed, and pick it up anywhere.</p>
+    </div>
+    <div class="reader r-admins">
+      <h3>Admins <span>· answer</span></h3>
+      <p>Know which agent did what, for whom, and who approved it, in a signed ledger you can prove to a client without the code.</p>
+    </div>
+  </div>
+
+  <div class="callouts">
+    <div class="callout">
+      <h2>Why one write matters</h2>
+      <p>Audit-only logs are overhead, so they get bypassed. Here, an agent that skips its claims and handoffs cannot coordinate, so the record fills itself.</p>
+    </div>
+    <div class="callout quote">
+      <p>Private from us. Actions and approvals complete for your admins. Sessions stay with their author unless shared.</p>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is a product in design. Figures as of 31 October 2026.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 2: CORE FEATURES -->
+<section class="page" aria-label="Page 2: Core features">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>2 / 3 · Core features</span></header>
+
+  <h1>Core features</h1>
+  <p class="lede">One capture engine and one entry format serve all three readers.</p>
+
+  <div class="group-label"><h2>First release</h2><span>Ships first, on one capture engine</span></div>
+  <div class="features">
+    <div class="feature f-devs">
+      <h3>Session vault <span class="tag t-devs">Developers</span></h3>
+      <p>Every session from every harness, under the developer's own keys. Archived, never silently deleted; searchable, with secrets redacted.</p>
+      <p class="why">About 200 developers report lost or hidden sessions.</p>
+    </div>
+    <div class="feature f-devs">
+      <h3>Change set and restore <span class="tag t-devs">Developers</span></h3>
+      <p>Every file a run changed by any tool path, including shell, subagents, and reverts, with a preview-first restore.</p>
+      <p class="why">About 280 report changes they could not review or undo.</p>
+    </div>
+    <div class="feature f-admins">
+      <h3>Approval receipts <span class="tag t-admins">Admins</span></h3>
+      <p>One action ID binds proposal, decision, command, and result. High-risk approvals carry the human's SSH signature.</p>
+      <p class="why">No product binds an approval to the action that ran.</p>
+    </div>
+    <div class="feature f-admins">
+      <h3>Run inventory and agent identity <span class="tag t-admins">Admins</span></h3>
+      <p>Which harness, version, and model ran, for which sponsor, under an agent identity of its own.</p>
+      <p class="why">What questionnaires ask today: which AI, and is it human-reviewed?</p>
+    </div>
+    <div class="feature f-agents">
+      <h3>Handoffs and coordination <span class="tag t-agents">Agents</span></h3>
+      <p>Handoff notes that record decisions, not transcripts. Claims and leases across harnesses.</p>
+      <p class="why">139 developers report broken handoffs.</p>
+    </div>
+    <div class="feature f-agents">
+      <h3>Private links from commits to runs <span class="tag t-agents">Agents</span></h3>
+      <p>Every commit links privately to the run that made it. Nothing enters public history unless you disclose it.</p>
+      <p class="why">Linux dropped its AI tag; developers strip vendor trailers.</p>
+    </div>
+  </div>
+
+  <div class="group-label"><h2>Team tier</h2><span>Built on the same ledger</span></div>
+  <div class="features">
+    <div class="feature f-admins">
+      <h3>Verifiable ledger <span class="tag t-admins">Admins</span></h3>
+      <p>A transparency log with witness cosigning and an open-source verifier. Clients verify it without trusting us.</p>
+    </div>
+    <div class="feature f-admins">
+      <h3>Client disclosure packets <span class="tag t-admins">Admins</span></h3>
+      <p>Prove a human approved a change, field by field, without showing the code. Per-client keys and erasure.</p>
+    </div>
+    <div class="feature f-agents">
+      <h3>Reach receipts <span class="tag t-agents">Agents</span></h3>
+      <p>Every forwarded port and published name: owner, approver, scope, and who connected.</p>
+    </div>
+    <div class="feature f-admins">
+      <h3>Exports, retention, and cost <span class="tag t-admins">Admins</span></h3>
+      <p>OpenTelemetry, SIEM, and Agent Trace exports; 12 months kept, 90 days searchable; cost per run.</p>
+    </div>
+  </div>
+
+  <div class="principles" aria-label="Design principles">
+    <div><b>Two key domains</b>Sessions under the developer's keys, actions under the team's. We read neither.</div>
+    <div><b>Capture outside the harness</b>Own traffic, hooks, telemetry, and the filesystem.</div>
+    <div><b>Honest coverage</b>Each run states what the record could not see.</div>
+    <div><b>Trust-weighted reading</b>Entries from runs that read untrusted input are flagged.</div>
+    <div><b>Works-council ready</b>No leaderboards, team-level metrics, visible admin reads.</div>
+  </div>
+
+  <table aria-label="Tiers">
+    <thead><tr><th>Tier</th><th>For</th><th>Includes</th></tr></thead>
+    <tbody>
+      <tr><td>Solo<span class="price">Free</span></td><td>One person, any number of agents and harnesses</td><td>Vault, change sets and restore, handoffs, your own approval history, coordination among your agents</td></tr>
+      <tr><td>Team<span class="price">$8–25 / seat*</span></td><td>Two or more people</td><td>Shared signed approval ledger, inventory, shared trails, verifiable ledger, client packets, reach receipts, exports, SSO, works-council packet</td></tr>
+      <tr><td>Assured<span class="price">~$39 / seat*</span></td><td>Regulated teams, Microsoft suppliers, agent vendors</td><td>SCIM, kill switch, visible audit member, legal hold, mappings to SOC 2 (2027 draft), ISO 42001, Microsoft DPR, PCI, AIUC-1</td></tr>
+    </tbody>
+  </table>
+  <p class="note">*Pricing is inferred from comparable per-seat products (Tailscale, Microsoft Agent 365, GitHub Copilot, Claude Team). Agents are never metered; storage, edge traffic, and mail are.</p>
+
+  <footer class="page-foot"><span>Sidecar (working name) is a product in design. Figures as of 31 October 2026.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 3: MARKET OPPORTUNITY -->
+<section class="page" aria-label="Page 3: Market opportunity">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>3 / 3 · Market opportunity</span></header>
+
+  <h1>The record no one else can sell</h1>
+  <p class="lede">Vendors record their own agents. None can span them without reading the work.</p>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="num">~⅓</div>
+      <p>of agent users run several agents. 77–85% of them use agents daily, against 54% of single-agent users.</p>
+      <div class="src"><a href="https://stackoverflow.blog/2026/05/27/agents-on-a-leash-agentic-ai-remains-mostly-monitored-at-work">Stack Overflow pulse, May 2026</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">66%</div>
+      <p>of developers switched AI tools in the past year, so the record must outlive any one harness.</p>
+      <div class="src"><a href="https://survey.stackoverflow.co/2026/ai">Stack Overflow Developer Survey 2026</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">68%</div>
+      <p>of organizations cannot tell agent activity from human activity.</p>
+      <div class="src"><a href="https://cloudsecurityalliance.org/articles/more-than-two-thirds-of-organizations-cannot-clearly-distinguish-ai-agent-from-human-actions">CSA, sponsored by Aembit, Mar 2026</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">914</div>
+      <p>developer voices: lost sessions, unseen edits, broken handoffs, unrecorded approvals.</p>
+      <div class="src">GitHub, Hacker News, and forums, Oct 2026</div>
+    </div>
+  </div>
+
+  <h2>Each competitor owns one reader</h2>
+  <table class="owners" aria-label="Competitive map">
+    <thead><tr><th>Reader</th><th>Who serves it today</th><th>Where they stop</th></tr></thead>
+    <tbody>
+      <tr><td>Agents</td><td>Claude Code agent teams, Codex message boards, MCP Agent Mail</td><td>One vendor or one host</td></tr>
+      <tr><td>Developers</td><td>Entire, SpecStory, git-ai (team now at OpenAI's Codex)</td><td>Readable from the repo or vendor cloud; miss shell edits</td></tr>
+      <tr><td>Admins</td><td>Anthropic Compliance API, GitHub control plane, Agent 365, Span</td><td>The vendor can read it; each stops at its own runtime</td></tr>
+      <tr class="us"><td>All three</td><td>Sidecar: one write, across harnesses</td><td>The vendor cannot read it</td></tr>
+    </tbody>
+  </table>
+  <p class="note">Why the gap stays open: harness owners earn when work stays on their runtime, and gateway and recorder vendors are built on reading the data. Neither can copy a neutral record the operator cannot read without undercutting its business.</p>
+
+  <div class="two-col">
+    <div>
+      <h2>Money is moving into this space</h2>
+      <ul class="tight">
+        <li><strong>Entire:</strong> $60M seed (Feb 2026) to keep agent sessions in git.</li>
+        <li><strong>Span:</strong> $25M (Nov 2025) for agent traces from a local recorder.</li>
+        <li><strong>Atlassian</strong> bought DX (closed Nov 2025; about $1B reported).</li>
+        <li><strong>Keycard</strong> ($38M) and <strong>Mem0</strong> ($24M) raised for agent identity and memory.</li>
+        <li>AI spend per user at the median Jellyfish customer rose from about $5 to $81 a month (Aug 2025 to May 2026; vendor data).</li>
+        <li>Seat pricing is the norm: Microsoft Agent 365 is $15 per user, and "Agents do not require their own licenses."</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Where we start</h2>
+      <p style="font-size:8.9pt">Teams of 5 to 150 engineers on two or more harnesses, where proof is already demanded:</p>
+      <ul class="tight">
+        <li>Microsoft suppliers: change logs must name the approver</li>
+        <li>Consultancies and agencies under client AI-disclosure terms</li>
+        <li>Teams removing human approval from low-risk changes</li>
+        <li>Fintech and health vendors with agents on in-scope systems</li>
+        <li>Teams that ship agents and face AIUC-1 reviews</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="timeline" aria-label="Why now">
+    <div><b>Now</b>Questionnaires ask which AI you use and whether a human reviews it. Sidecar answers with evidence from real runs.</div>
+    <div><b>December 2027</b>Draft SOC 2 criteria, EU AI Act high-risk logging, and most Cyber Resilience Act duties arrive. "What did the agents touch" becomes an audit question.</div>
+    <div class="moat"><b>The moat is time</b>A team that starts in 2026 holds a year of signed approvals when the questions arrive. Latecomers cannot recreate it.</div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is a product in design. Figures as of 31 October 2026; vendor-run surveys and vendor data are labeled.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>recURd / URnetwork — UX mockups</title>
+<style>
+  :root{--bg:#f3f5f8;--surface:#fff;--surface-2:#eef1f5;--raised:#f8fafc;--ink:#14171c;--ink-2:#434b56;--muted:#6f7883;--rule:#e3e7ec;--accent:#0e6b73;--accent-2:#0a4a50;--accent-soft:#e2f1f1;--active:#179b53;--active-soft:#e2f4ea;--radius:14px;--radius-sm:8px;--shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.08);--font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  @media(prefers-color-scheme:dark){:root{--bg:#0c0e11;--surface:#15181d;--surface-2:#1c2026;--raised:#1a1e24;--ink:#eceef2;--ink-2:#c2c8d1;--muted:#8a93a0;--rule:#262b33;--accent:#5bc0c8;--accent-2:#8fd6dc;--accent-soft:#102f2f;--active:#45c67c;--active-soft:#0f2e1c;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35)}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:48px 20px 72px}
+  .brand{display:inline-flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em;color:var(--accent);font-size:15px}
+  .brand .dot{width:11px;height:11px;border-radius:3px;background:var(--accent)}
+  h1{font-size:30px;line-height:1.1;letter-spacing:-.02em;margin:20px 0 8px;font-weight:760}
+  .lede{font-size:16px;color:var(--ink-2);margin:0 0 6px;max-width:68ch}
+  .meta{font-size:13px;color:var(--muted);margin:0 0 30px}
+  .grid{display:grid;grid-template-columns:1fr;gap:16px;margin:0 0 36px}
+  @media(min-width:720px){.grid{grid-template-columns:1fr 1fr 1fr}}
+  a.card{display:flex;flex-direction:column;text-decoration:none;color:inherit;background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;transition:transform .12s ease,box-shadow .12s ease}
+  a.card:hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(16,24,40,.08),0 14px 36px rgba(16,24,40,.12)}
+  .card .thumb{height:118px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--accent-soft),var(--surface-2));border-bottom:1px solid var(--rule)}
+  .card .thumb svg{width:100%;height:100%}
+  .card .body{padding:14px 15px 16px}
+  .card .num{font:700 11px/1 var(--mono);color:var(--accent);letter-spacing:.08em;text-transform:uppercase}
+  .card h2{font-size:16px;margin:7px 0 4px;letter-spacing:-.01em}
+  .card p{font-size:13px;color:var(--ink-2);margin:0}
+  .card .go{margin-top:11px;font-size:12.5px;font-weight:650;color:var(--accent)}
+  section.notes{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px 24px;margin-bottom:18px}
+  section.notes h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 12px;font-weight:700}
+  .notes ul{margin:0;padding-left:18px}
+  .notes li{font-size:13.5px;color:var(--ink-2);margin-bottom:6px}
+  .notes li b{color:var(--ink)}
+  .swatches{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  .sw{display:flex;align-items:center;gap:7px;font:600 11px/1 var(--mono);color:var(--muted);background:var(--surface-2);border:1px solid var(--rule);border-radius:999px;padding:5px 10px 5px 6px}
+  .sw i{width:14px;height:14px;border-radius:4px;display:block}
+  code{font:600 12px/1.3 var(--mono);background:var(--surface-2);border:1px solid var(--rule);border-radius:5px;padding:1px 5px;color:var(--accent-2)}
+  footer{font-size:12px;color:var(--muted);border-top:1px solid var(--rule);padding-top:16px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="brand"><span class="dot"></span>recURd · URnetwork</span>
+  <h1>UX mockups for review</h1>
+  <p class="lede">Three tangible, clickable mockups to iterate on the experience across the recURd web app, the URnetwork phone app, and the URnetwork team console. Each is a self-contained HTML file — open it directly in a browser; no build, no network.</p>
+  <p class="meta">Design stage · 1 November 2026 · for iteration, not final UI</p>
+
+  <div class="grid">
+    <a class="card" href="recurd-app.html">
+      <div class="thumb" aria-hidden="true"><svg viewBox="0 0 200 118"><rect x="0" y="0" width="200" height="16" fill="var(--accent-soft)"/><rect x="0" y="16" width="44" height="102" fill="var(--surface-2)"/><rect x="156" y="16" width="44" height="102" fill="var(--surface-2)"/><circle cx="100" cy="55" r="9" fill="var(--active)"/><circle cx="74" cy="80" r="7" fill="var(--accent)"/><circle cx="126" cy="82" r="7" fill="var(--accent)"/><line x1="100" y1="55" x2="74" y2="80" stroke="var(--rule)" stroke-width="2"/><line x1="100" y1="55" x2="126" y2="82" stroke="var(--rule)" stroke-width="2"/><rect x="8" y="26" width="28" height="5" rx="2.5" fill="var(--rule)"/><rect x="8" y="36" width="28" height="5" rx="2.5" fill="var(--rule)"/><rect x="164" y="26" width="28" height="12" rx="3" fill="var(--rule)"/></svg></div>
+      <div class="body">
+        <div class="num">01 · recurd.dev</div>
+        <h2>recURd web app</h2>
+        <p>Log in with URnetwork, connect agents, agent graph + details, chat, global mic, stats & backtesting, harness editor.</p>
+        <div class="go">Open mockup →</div>
+      </div>
+    </a>
+    <a class="card" href="urnetwork-mobile.html">
+      <div class="thumb" aria-hidden="true"><svg viewBox="0 0 200 118"><rect x="70" y="10" width="60" height="98" rx="12" fill="var(--surface)" stroke="var(--rule)" stroke-width="2"/><rect x="78" y="22" width="44" height="8" rx="3" fill="var(--rule)"/><rect x="78" y="36" width="44" height="12" rx="3" fill="var(--accent-soft)"/><rect x="78" y="52" width="44" height="12" rx="3" fill="var(--surface-2)"/><rect x="78" y="68" width="44" height="12" rx="3" fill="var(--surface-2)"/><rect x="74" y="92" width="52" height="12" rx="4" fill="var(--surface-2)"/><circle cx="83" cy="98" r="2.4" fill="var(--accent)"/><circle cx="94" cy="98" r="2.4" fill="var(--muted)"/><circle cx="105" cy="98" r="2.4" fill="var(--muted)"/><circle cx="116" cy="98" r="2.4" fill="var(--muted)"/></svg></div>
+      <div class="body">
+        <div class="num">02 · URnetwork app</div>
+        <h2>Phone app redesign</h2>
+        <p>New Burner (emails + password manager) and recURd (pocket agents) tabs, Feedback as a live chat with factury, Leaderboard moved under Account.</p>
+        <div class="go">Open mockup →</div>
+      </div>
+    </a>
+    <a class="card" href="team-management.html">
+      <div class="thumb" aria-hidden="true"><svg viewBox="0 0 200 118"><rect x="0" y="0" width="200" height="16" fill="var(--accent-soft)"/><rect x="0" y="16" width="52" height="102" fill="var(--surface-2)"/><rect x="8" y="26" width="36" height="5" rx="2.5" fill="var(--accent)"/><rect x="8" y="36" width="36" height="5" rx="2.5" fill="var(--rule)"/><rect x="8" y="46" width="36" height="5" rx="2.5" fill="var(--rule)"/><rect x="64" y="26" width="124" height="18" rx="4" fill="var(--surface)" stroke="var(--rule)"/><rect x="64" y="50" width="124" height="14" rx="3" fill="var(--surface)" stroke="var(--rule)"/><rect x="64" y="68" width="124" height="14" rx="3" fill="var(--surface)" stroke="var(--rule)"/><rect x="70" y="31" width="30" height="8" rx="2" fill="var(--active-soft)"/></svg></div>
+      <div class="body">
+        <div class="num">03 · ur.io/app</div>
+        <h2>Team management</h2>
+        <p>SSO/OIDC, SCIM, roles & approvals, domains, one-command device add, auth keys, access-control policy, signed membership — Tailscale-grade.</p>
+        <div class="go">Open mockup →</div>
+      </div>
+    </a>
+  </div>
+
+  <section class="notes">
+    <h3>Shared design language</h3>
+    <div class="swatches">
+      <span class="sw"><i style="background:#0e6b73"></i>accent</span>
+      <span class="sw"><i style="background:#179b53"></i>active</span>
+      <span class="sw"><i style="background:#2457d6"></i>agent a</span>
+      <span class="sw"><i style="background:#a8540a"></i>agent b</span>
+      <span class="sw"><i style="background:#6d3fd6"></i>agent c</span>
+      <span class="sw"><i style="background:#b4540a"></i>warn</span>
+      <span class="sw"><i style="background:#c0362c"></i>danger</span>
+    </div>
+    <ul style="margin-top:12px">
+      <li>All three share one token set (teal accent, system fonts, <code>--radius</code> cards, soft shadow) and a <b>light + dark</b> theme via <code>prefers-color-scheme</code>. Toggle your OS theme to see both.</li>
+      <li>Everything is <b>self-contained</b>: inline CSS + vanilla JS, inline SVG icons/graphs, no external fonts, images, or libraries. Edit any file directly to iterate.</li>
+      <li>Active agents are marked with a <b>green pulsing dot</b> everywhere they appear (web sidebar, graph, phone list).</li>
+    </ul>
+  </section>
+
+  <section class="notes">
+    <h3>Open questions to resolve while iterating</h3>
+    <ul>
+      <li><b>Activity query language.</b> The search uses a placeholder grammar (<code>harness:claude-code status:active repo:api "auth" last:1h</code>) — we should pin the real field set and operators.</li>
+      <li><b>Graph semantics.</b> What edges mean (handoffs, shared repos, agent-to-agent messages) and how they're weighted/animated is a design decision shown one way here.</li>
+      <li><b>Harness injection.</b> The connect flow shows a <code>curl … | sh</code> + <code>ur connect</code> snippet; the exact binary, token flow, and global-vs-per-agent sync model are placeholders.</li>
+      <li><b>Burner as password manager.</b> The autofill/OS-integration story (how URnetwork registers as a password manager) is implied, not specified.</li>
+      <li><b>Signed membership.</b> The team console frames URnetwork's edge over Tailscale as generalized "tailnet lock" — this depends on the blind-coordination architecture decision still open elsewhere.</li>
+    </ul>
+  </section>
+
+  <footer>recURd / URnetwork design mockups · <code>sidecar/mocks/</code> · tell me which screen to iterate on first.</footer>
+</div>
+</body>
+</html>

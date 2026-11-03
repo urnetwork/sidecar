@@ -1,0 +1,953 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>recURd open pitch</title>
+<meta name="description" content="A six-page pitch for recURd, URnetwork's agent record and reach layer: one write, three readers, open source and self-hostable, with one promise for developers, one for security buyers, a fit for mixed open-weight fleets, and a plan to prove it.">
+<style>
+  :root {
+    --bg: #eceff3;
+    --paper: #ffffff;
+    --ink: #15171b;
+    --ink-2: #3b414b;
+    --muted: #6a7280;
+    --rule: #e3e6ea;
+    --chip: #f1f3f6;
+    --accent: #0e5a61;
+    --accent-soft: #e5f1f1;
+    --agents: #2457d6;
+    --agents-soft: #e9effd;
+    --devs: #a8540a;
+    --devs-soft: #fbf0e3;
+    --admins: #6d3fd6;
+    --admins-soft: #f0eafd;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 10px 30px rgba(16, 24, 40, .08);
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0e11;
+      --paper: #16191e;
+      --ink: #eceef2;
+      --ink-2: #c5cad3;
+      --muted: #98a1ad;
+      --rule: #2a2f37;
+      --chip: #20242b;
+      --accent: #62c3cb;
+      --accent-soft: #11302f;
+      --agents: #86a8ff;
+      --agents-soft: #172341;
+      --devs: #f0a75f;
+      --devs-soft: #33250f;
+      --admins: #b9a0ff;
+      --admins-soft: #251a40;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0e11;
+    --paper: #16191e;
+    --ink: #eceef2;
+    --ink-2: #c5cad3;
+    --muted: #98a1ad;
+    --rule: #2a2f37;
+    --chip: #20242b;
+    --accent: #62c3cb;
+    --accent-soft: #11302f;
+    --agents: #86a8ff;
+    --agents-soft: #172341;
+    --devs: #f0a75f;
+    --devs-soft: #33250f;
+    --admins: #b9a0ff;
+    --admins-soft: #251a40;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 10pt/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  a { color: inherit; text-decoration-color: var(--rule); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: currentColor; }
+  code {
+    font: 600 7.9pt/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .page {
+    width: 8.5in;
+    height: 11in;
+    margin: 0.35in auto;
+    padding: 0.5in 0.6in 0.45in;
+    background: var(--paper);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .page > * { flex-shrink: 0; }
+  .page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 8pt;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 7px;
+    margin-bottom: 16px;
+  }
+  .page-head .brand { color: var(--accent); font-weight: 650; }
+  .page-foot {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    font-size: 7.5pt;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  h1 {
+    font-size: 25pt;
+    line-height: 1.08;
+    letter-spacing: -.015em;
+    margin: 0 0 6px;
+    font-weight: 750;
+  }
+  .lede {
+    font-size: 13.5pt;
+    line-height: 1.3;
+    color: var(--accent);
+    margin: 0 0 12px;
+    font-weight: 560;
+  }
+  h2 {
+    font-size: 8.5pt;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 7px;
+    font-weight: 650;
+  }
+  p { margin: 0 0 8px; color: var(--ink-2); }
+  strong { color: var(--ink); }
+  .note { font-size: 7.8pt; color: var(--muted); margin: 5px 0 0; }
+
+  /* Page 1 */
+  .problem {
+    display: grid;
+    grid-template-columns: 0.82fr 1.45fr;
+    gap: 16px;
+    margin-bottom: 10px;
+  }
+  .pains { list-style: none; margin: 0; padding: 0; }
+  .pains li {
+    padding: 2px 0 2px 12px;
+    border-left: 2px solid var(--rule);
+    margin-bottom: 4px;
+    color: var(--ink-2);
+    font-size: 9.2pt;
+  }
+  .pains b { color: var(--ink); font-weight: 650; }
+  figure { margin: 2px auto 6px; width: 94%; }
+  figure svg { width: 100%; height: auto; display: block; }
+  .svg-agents { fill: var(--agents-soft); stroke: var(--agents); stroke-width: 1.3; }
+  .svg-devs { fill: var(--devs-soft); stroke: var(--devs); stroke-width: 1.3; }
+  .svg-admins { fill: var(--admins-soft); stroke: var(--admins); stroke-width: 1.3; }
+  .svg-dom { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1.1; }
+  .svg-tool { fill: var(--paper); stroke: var(--accent); stroke-width: 1.3; }
+  .svg-net { fill: var(--chip); stroke: var(--rule); stroke-width: 1.2; }
+  .svg-band { fill: var(--accent-soft); }
+  .svg-band-arrow { fill: var(--accent); }
+  .svg-title { fill: var(--ink); font: 650 12.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-sub { fill: var(--muted); font: 10.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-band-text { fill: var(--accent); font: 600 10.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-layer { fill: var(--muted); font: 650 9.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .07em; }
+  .svg-layer-accent { fill: var(--accent); }
+
+  .props { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+  .prop { border-radius: 8px; padding: 10px 12px 9px; background: var(--accent-soft); }
+  .prop h3 { margin: 0 0 3px; font-size: 10.5pt; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+  .prop h3 svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .prop p { margin: 0; font-size: 9pt; line-height: 1.38; }
+
+  .callouts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .callout { border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+  .callout p { margin: 0; font-size: 9.3pt; }
+  .callout.quote { background: var(--accent-soft); border-color: transparent; display: flex; align-items: center; }
+  .callout.quote p { color: var(--ink); font-size: 10.5pt; font-weight: 560; line-height: 1.35; }
+
+  /* Shared pieces */
+  .tw { flex: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.6pt; }
+  th, td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid var(--rule); }
+  th { font-size: 7.8pt; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 650; }
+  td { color: var(--ink-2); line-height: 1.38; }
+  td:first-child { color: var(--ink); font-weight: 650; }
+  .entry {
+    display: inline-block;
+    font: 600 7.6pt/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--ink-2);
+    background: var(--chip);
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin: 0 2px 2px 0;
+    white-space: nowrap;
+  }
+  .chip {
+    display: inline-block;
+    font-size: 7.6pt;
+    font-weight: 650;
+    padding: 1px 7px;
+    border-radius: 999px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    white-space: nowrap;
+  }
+  .chip.plain { color: var(--muted); background: var(--chip); }
+  .tag {
+    font-size: 7pt;
+    font-weight: 650;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .t-agents { color: var(--agents); background: var(--agents-soft); }
+  .t-devs { color: var(--devs); background: var(--devs-soft); }
+  .t-admins { color: var(--admins); background: var(--admins-soft); }
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 9px 11px;
+  }
+  .strip div { font-size: 8.3pt; color: var(--ink-2); line-height: 1.34; }
+  .strip b { display: block; color: var(--accent); font-size: 8.8pt; margin-bottom: 1px; }
+
+  /* Page 2 */
+  .run td:first-child { font-variant-numeric: tabular-nums; width: 6%; white-space: nowrap; }
+  .run td:nth-child(2) { width: 49%; }
+  .run td:nth-child(3) { width: 12%; }
+  .run td:nth-child(4) { width: 18%; }
+  .run .muted { color: var(--muted); font-size: 7.8pt; }
+  .uses { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+  .use-col { border-radius: 8px; padding: 9px 11px 4px; border-top: 3px solid; }
+  .use-col h3 { margin: 0 0 6px; font-size: 10.5pt; }
+  .use-col h3 span { font-weight: 500; color: var(--muted); }
+  .u-agents { background: var(--agents-soft); border-color: var(--agents); }
+  .u-agents h3 { color: var(--agents); }
+  .u-devs { background: var(--devs-soft); border-color: var(--devs); }
+  .u-devs h3 { color: var(--devs); }
+  .u-admins { background: var(--admins-soft); border-color: var(--admins); }
+  .u-admins h3 { color: var(--admins); }
+  .use { margin-bottom: 7px; }
+  .use b { display: block; color: var(--ink); font-size: 9pt; }
+  .use p { margin: 0; font-size: 8.5pt; line-height: 1.36; }
+  .use .why { color: var(--muted); font-size: 7.8pt; margin-top: 1px; }
+
+  /* Page 3 */
+  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-bottom: 11px; }
+  .tool {
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 8px 11px 7px;
+    display: flex;
+    flex-direction: column;
+  }
+  .tool-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .tool-head h3 { margin: 0; font-size: 11pt; }
+  .tool .job { margin: 0 0 6px; font-size: 8.9pt; line-height: 1.37; color: var(--ink); }
+  .pae { display: grid; grid-template-columns: 62px 1fr; gap: 3px 8px; margin: 0 0 6px; }
+  .pae dt {
+    font-size: 7pt;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding-top: 2px;
+  }
+  .pae dd { margin: 0; font-size: 8.4pt; line-height: 1.35; color: var(--ink-2); }
+  .writes {
+    margin-top: auto;
+    padding-top: 6px;
+    border-top: 1px dashed var(--rule);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+    font-size: 7.6pt;
+    color: var(--muted);
+  }
+  .writes .lbl { text-transform: uppercase; letter-spacing: .06em; font-weight: 650; margin-right: 3px; }
+  .writes .entry { margin: 0; }
+  .writes .readers { margin-left: auto; display: flex; gap: 4px; }
+
+  /* Page 4 */
+  .ends td:first-child { width: 17%; }
+  .ends td:nth-child(2) { width: 22%; }
+  .ends td:nth-child(3) { width: 25%; }
+  .boxes { display: grid; grid-template-columns: 1fr 1fr; gap: 11px 12px; margin-top: 12px; }
+  .box { border: 1px solid var(--rule); border-radius: 8px; padding: 9px 12px 8px; }
+  .box.accent { background: var(--accent-soft); border-color: transparent; }
+  .box h2 { margin-bottom: 5px; }
+  .box.accent h2 { color: var(--accent); }
+  .box p { font-size: 8.7pt; margin: 0 0 5px; line-height: 1.38; }
+  .box .src { font-size: 7.6pt; color: var(--muted); margin: 4px 0 0; }
+  ul.tight { margin: 0; padding-left: 15px; }
+  ul.tight li { margin-bottom: 3px; color: var(--ink-2); font-size: 8.7pt; line-height: 1.36; }
+
+  /* Page 5 */
+  .stages td:first-child { white-space: nowrap; }
+  .stages td:nth-child(2) { width: 54%; }
+  .tiers td:first-child { width: 21%; }
+  .tiers td:nth-child(2) { width: 41%; }
+  .price { color: var(--accent); font-weight: 650; display: block; margin-top: 1px; }
+  .for { display: block; font-weight: 400; color: var(--muted); font-size: 7.8pt; line-height: 1.3; margin-top: 2px; }
+  .costs td:first-child { width: 23%; }
+  .costs td:nth-child(2) { width: 20%; }
+  .costs td:nth-child(3) { width: 33%; }
+  .section { margin-bottom: 9px; }
+
+  /* Page 6 */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--rule); border-radius: 8px; padding: 9px 10px 8px; }
+  .stat .num { font-size: 21pt; font-weight: 750; letter-spacing: -.02em; color: var(--accent); line-height: 1; margin-bottom: 4px; }
+  .stat p { margin: 0 0 4px; font-size: 8.5pt; line-height: 1.35; }
+  .stat .src { font-size: 7.4pt; color: var(--muted); }
+  .owners td:first-child { width: 17%; }
+  .owners td:nth-child(2) { width: 30%; }
+  .owners td:nth-child(3) { width: 31%; }
+  .owners tr.us td { color: var(--ink); background: var(--accent-soft); }
+  .owners tr.us td:first-child { color: var(--accent); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0 11px; }
+  .two-col ul.tight li { font-size: 8.6pt; }
+  .timeline { display: grid; grid-template-columns: repeat(4, 1fr); border-radius: 8px; overflow: hidden; border: 1px solid var(--rule); }
+  .timeline div { padding: 8px 10px; font-size: 8.4pt; color: var(--ink-2); line-height: 1.36; }
+  .timeline div + div { border-left: 1px solid var(--rule); }
+  .timeline b { display: block; color: var(--ink); font-size: 9pt; margin-bottom: 2px; }
+  .timeline .moat { background: var(--accent-soft); }
+  .timeline .moat b { color: var(--accent); }
+
+  @media print {
+    @page { size: letter; margin: 0; }
+    body { background: #ffffff; }
+    .page { margin: 0; box-shadow: none; break-after: page; page-break-after: always; }
+    .page:last-child { break-after: auto; page-break-after: auto; }
+  }
+  @media screen and (max-width: 8.9in) {
+    .page { width: auto; height: auto; margin: 12px 16px; padding: 20px 18px; overflow: visible; }
+    .problem, .callouts, .two-col, .boxes, .tools, .uses, .props { grid-template-columns: 1fr; }
+    .strip { grid-template-columns: 1fr 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .timeline { grid-template-columns: 1fr; }
+    .timeline div + div { border-left: 0; border-top: 1px solid var(--rule); }
+    .page-foot { flex-direction: column; gap: 4px; }
+    .tw { overflow-x: auto; }
+    table { font-size: 8.4pt; min-width: 520px; }
+    figure { width: 100%; }
+  }
+
+  /* pitch3 additions */
+  .promises { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .promise { border-radius: 8px; padding: 10px 13px 10px; border-top: 3px solid; }
+  .promise .promise-for { display: block; font-size: 7.8pt; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px; }
+  .promise .promise-line { font-size: 12.5pt; line-height: 1.28; font-weight: 650; color: var(--ink); margin: 0 0 6px; }
+  .promise p { margin: 0; font-size: 9pt; line-height: 1.38; }
+  .p-devs { background: var(--devs-soft); border-color: var(--devs); }
+  .p-devs .promise-for { color: var(--devs); }
+  .p-sec { background: var(--admins-soft); border-color: var(--admins); }
+  .p-sec .promise-for { color: var(--admins); }
+  .svg-sidecar { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+  .svg-harness { fill: var(--chip); stroke: var(--rule); stroke-width: 1.1; }
+  .svg-out { fill: var(--paper); stroke: var(--admins); stroke-width: 1.3; }
+  .svg-out-later { stroke-dasharray: 4 3; }
+  .svg-line { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+  .svg-arrowhead { fill: var(--muted); }
+  .svg-fence { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+  .svg-accent { fill: var(--accent); }
+  .svg-hname { fill: var(--ink-2); font: 600 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .stats-note { margin: -4px 0 12px; }
+  .features { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 12px; }
+  .feature { border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 10px 6px; }
+  .feature h3 { margin: 0 0 2px; font-size: 9.8pt; display: flex; justify-content: space-between; gap: 8px; }
+  .feature h3 .tag { align-self: center; }
+  .f-agents { border-left-color: var(--agents); }
+  .f-devs { border-left-color: var(--devs); }
+  .f-admins { border-left-color: var(--admins); }
+  .feature p { margin: 0; font-size: 8.8pt; line-height: 1.38; }
+  .feature .why { color: var(--muted); font-size: 8.1pt; margin-top: 2px; }
+  .t-first { color: var(--accent); background: var(--accent-soft); }
+  .t-later { color: var(--muted); background: var(--chip); }
+  .day td:first-child { width: 8%; font-variant-numeric: tabular-nums; }
+  .day td:nth-child(2) { width: 48%; }
+  .strip-2 { grid-template-columns: 1fr 1fr; }
+  .stand td:first-child { width: 27%; }
+  .stand td:nth-child(2) { width: 40%; }
+  .stand tr.us td { color: var(--ink); background: var(--accent-soft); }
+  .stand tr.us td:first-child { color: var(--accent); }
+  .tiers3 td:first-child { width: 30%; white-space: nowrap; }
+  ul.tight.cols2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 22px; margin-bottom: 14px; }
+  .timeline.three { grid-template-columns: repeat(3, 1fr); }
+  .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .stage { border: 1px solid var(--rule); border-radius: 8px; padding: 9px 11px 7px; }
+  .stage.now { background: var(--accent-soft); border-color: transparent; }
+  .stage b { display: block; font-size: 9.6pt; color: var(--ink); margin-bottom: 3px; }
+  .stage.now b { color: var(--accent); }
+  .stage p { margin: 0 0 4px; font-size: 8.6pt; line-height: 1.38; }
+  .metrics td:first-child { width: 26%; }
+  .metrics td:nth-child(2) { width: 38%; }
+  .lead-in { font-size: 9pt; margin: 0 0 6px; }
+  @media screen and (max-width: 8.9in) {
+    .promises, .features, .roadmap { grid-template-columns: 1fr; }
+    .timeline.three { grid-template-columns: 1fr; }
+    ul.tight.cols2 { grid-template-columns: 1fr; }
+  }
+
+  /* pitch4 additions */
+  .callouts.three { grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .callouts.three .callout p { font-size: 8.9pt; line-height: 1.38; }
+  .callouts.three .callout.quote p { font-size: 10pt; }
+  .callout.open { background: var(--chip); border-color: transparent; }
+  .callout.open h2 { color: var(--accent); }
+  .mine td:first-child { width: 30%; }
+  .mine td:nth-child(2) { width: 30%; }
+  .mine td:nth-child(3) { color: var(--ink); }
+  .fit { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 12px 0; }
+  .seg { margin-bottom: 8px; padding-left: 10px; border-left: 2px solid var(--rule); }
+  .seg b { display: block; color: var(--ink); font-size: 9.2pt; margin-bottom: 1px; line-height: 1.3; }
+  .seg p { margin: 0; font-size: 8.7pt; line-height: 1.38; }
+  .opentools td:first-child { width: 17%; }
+  .opentools td:nth-child(2) { width: 55%; }
+  .opentools tr.us td { color: var(--ink); background: var(--accent-soft); }
+  .opentools tr.us td:first-child { color: var(--accent); }
+  figure.fig-narrow { width: 68%; }
+  @media screen and (max-width: 8.9in) {
+    .callouts.three, .fit { grid-template-columns: 1fr; }
+    figure.fig-narrow { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- PAGE 1: THE IDEA -->
+<section class="page" aria-label="Page 1: The idea">
+  <header class="page-head"><span class="brand">URnetwork · recURd</span><span>1 / 6 · The idea</span></header>
+
+  <h1>One write, three readers</h1>
+  <p class="lede">Every agent leaves a trail. Only your team can read it, and anyone can read the code.</p>
+
+  <div class="problem">
+    <div>
+      <h2>The problem</h2>
+      <p>Teams run several coding agents — Claude Code, Codex, OpenCode, Goose — some on open-weight models they host. Each keeps a partial record, and none controls how its agents reach the world outside.</p>
+    </div>
+    <ul class="pains">
+      <li><b>Sessions scatter.</b> The CLI clears them at 30 days; each vendor keeps only its own.</li>
+      <li><b>Edits escape.</b> Shell and subagent edits skip checkpoints.</li>
+      <li><b>Handoffs break.</b> Work rarely follows across harnesses.</li>
+      <li><b>Approvals don't travel.</b> Each vendor's, unsigned and unbound to the action.</li>
+      <li><b>Reach is shared, not scoped.</b> One grant covers every session and run.</li>
+      <li><b>Local runs go unrecorded.</b> No vendor keeps a record you control.</li>
+    </ul>
+  </div>
+
+  <div class="promises">
+    <div class="promise p-devs">
+      <span class="promise-for">For developers</span>
+      <p class="promise-line">Never lose a session or an edit, whichever harness made it.</p>
+      <p>Every session goes to a vault under the developer's own keys, and every change gets a restore point, whatever tool path or model made it.</p>
+    </div>
+    <div class="promise p-sec">
+      <span class="promise-for">For security buyers</span>
+      <p class="promise-line">Every way your agents reach the outside world is private, approved, and on a record only your team can read.</p>
+      <p>Forwards, private addresses, and model servers first, then public names, then mail. Each is a scoped grant with a signed receipt; every run lists what it could not see.</p>
+    </div>
+  </div>
+
+  <h2>How it works</h2>
+  <p>recURd runs a small open-source sidecar beside any harness. It captures each action once — from the harness's hooks, the filesystem, and its own traffic — and writes it once: the raw session to the developer's vault, a signed entry to the team's ledger. Agents coordinate, developers continue, admins answer.</p>
+
+  <figure class="fig-narrow" aria-label="Diagram: harnesses feed the open-source sidecar's one write, three readers read it, and every way out, including your own model servers, passes through it as a scoped grant">
+    <svg viewBox="0 0 720 290" role="img">
+      <title>Harnesses, one write, three readers, and the way out</title>
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="svg-arrowhead" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+      <text class="svg-layer" x="0" y="12">HARNESSES</text>
+      <text class="svg-layer svg-layer-accent" x="334" y="12" text-anchor="middle">OPEN SOURCE · BESIDE EVERY HARNESS</text>
+      <text class="svg-layer" x="540" y="12">READERS</text>
+      <text class="svg-layer" x="0" y="233">THE WAY OUT</text>
+
+      <rect class="svg-harness" x="0" y="22" width="124" height="26" rx="7"/>
+      <text class="svg-hname" x="62" y="39.5" text-anchor="middle">Claude Code</text>
+      <rect class="svg-harness" x="0" y="54" width="124" height="26" rx="7"/>
+      <text class="svg-hname" x="62" y="71.5" text-anchor="middle">Codex</text>
+      <rect class="svg-harness" x="0" y="86" width="124" height="26" rx="7"/>
+      <text class="svg-hname" x="62" y="103.5" text-anchor="middle">Cursor</text>
+      <rect class="svg-harness" x="0" y="118" width="124" height="26" rx="7"/>
+      <text class="svg-hname" x="62" y="135.5" text-anchor="middle">Copilot</text>
+      <rect class="svg-harness" x="0" y="150" width="124" height="26" rx="7"/>
+      <text class="svg-hname" x="62" y="167.5" text-anchor="middle">OpenCode · Goose</text>
+
+      <path class="svg-line" d="M124,35 C152,35 148,97 174,97" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M124,67 C152,67 148,97 174,97"/>
+      <path class="svg-line" d="M124,99 C152,99 148,97 174,97"/>
+      <path class="svg-line" d="M124,131 C152,131 148,97 174,97"/>
+      <path class="svg-line" d="M124,163 C152,163 148,97 174,97"/>
+
+      <rect class="svg-sidecar" x="176" y="18" width="316" height="158" rx="12"/>
+      <text class="svg-title svg-accent" x="334" y="40" text-anchor="middle">recURd · one write per action</text>
+      <rect class="svg-dom" x="192" y="52" width="284" height="50" rx="8"/>
+      <text class="svg-title" x="334" y="73" text-anchor="middle">Developer's vault</text>
+      <text class="svg-sub" x="334" y="91" text-anchor="middle">sessions and edits · the developer's keys</text>
+      <rect class="svg-dom" x="192" y="112" width="284" height="50" rx="8"/>
+      <text class="svg-title" x="334" y="133" text-anchor="middle">Team ledger</text>
+      <text class="svg-sub" x="334" y="151" text-anchor="middle">actions, approvals, and reach · team keys</text>
+
+      <path class="svg-line" d="M492,77 C516,77 514,100 538,100" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M492,131 C516,131 514,46 538,46" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M492,137 C516,137 514,106 538,106" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M492,143 C516,143 514,154 538,154" marker-end="url(#ah)"/>
+
+      <rect class="svg-agents" x="540" y="24" width="180" height="44" rx="8"/>
+      <text class="svg-title" x="630" y="42" text-anchor="middle">Agents</text>
+      <text class="svg-sub" x="630" y="59" text-anchor="middle">coordinate</text>
+      <rect class="svg-devs" x="540" y="78" width="180" height="44" rx="8"/>
+      <text class="svg-title" x="630" y="96" text-anchor="middle">Developers and next run</text>
+      <text class="svg-sub" x="630" y="113" text-anchor="middle">continue</text>
+      <rect class="svg-admins" x="540" y="132" width="180" height="44" rx="8"/>
+      <text class="svg-title" x="630" y="150" text-anchor="middle">Admins</text>
+      <text class="svg-sub" x="630" y="167" text-anchor="middle">answer</text>
+
+      <path class="svg-line" d="M334,176 C334,194 158,190 158,208" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M334,176 C334,194 284,190 284,208" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M334,176 C334,194 410,190 410,208" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M334,176 C334,194 536,190 536,208" marker-end="url(#ah)"/>
+      <path class="svg-line" d="M334,176 C334,194 662,190 662,208" marker-end="url(#ah)"/>
+
+      <rect class="svg-out" x="100" y="210" width="116" height="40" rx="8"/>
+      <text class="svg-hname" x="158" y="227" text-anchor="middle">Port forwarding</text>
+      <text class="svg-sub" x="158" y="243" text-anchor="middle">first release</text>
+      <rect class="svg-out" x="226" y="210" width="116" height="40" rx="8"/>
+      <text class="svg-hname" x="284" y="227" text-anchor="middle">IP addresses</text>
+      <text class="svg-sub" x="284" y="243" text-anchor="middle">first release</text>
+      <rect class="svg-out" x="352" y="210" width="116" height="40" rx="8"/>
+      <text class="svg-hname" x="410" y="227" text-anchor="middle">Model servers</text>
+      <text class="svg-sub" x="410" y="243" text-anchor="middle">first release</text>
+      <rect class="svg-out svg-out-later" x="478" y="210" width="116" height="40" rx="8"/>
+      <text class="svg-hname" x="536" y="227" text-anchor="middle">TLS edge</text>
+      <text class="svg-sub" x="536" y="243" text-anchor="middle">team layer</text>
+      <rect class="svg-out svg-out-later" x="604" y="210" width="116" height="40" rx="8"/>
+      <text class="svg-hname" x="662" y="227" text-anchor="middle">Email</text>
+      <text class="svg-sub" x="662" y="243" text-anchor="middle">ships last</text>
+
+      <line class="svg-fence" x1="100" y1="262" x2="720" y2="262"/>
+      <text class="svg-band-text" x="410" y="282" text-anchor="middle">each way out is a scoped grant: approved, encrypted, and recorded</text>
+    </svg>
+  </figure>
+
+  <div class="callouts three">
+    <div class="callout">
+      <h2>Why one write matters</h2>
+      <p>Audit-only logs are overhead, so they get bypassed. Here agents need the entries to coordinate and developers need them to recover, so the record fills itself.</p>
+    </div>
+    <div class="callout open">
+      <h2>Open source</h2>
+      <p>You don't have to trust us. recURd, its relay, and the entry format are open; self-host any part, air-gapped if needed. It is plain git underneath.</p>
+    </div>
+    <div class="callout quote">
+      <p>Private from us. Actions and approvals complete for your admins. Sessions stay with their author unless shared.</p>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>recURd is a product in design. Figures as of 1 November 2026.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 2: FOR DEVELOPERS -->
+<section class="page" aria-label="Page 2: For developers">
+  <header class="page-head"><span class="brand">URnetwork · recURd</span><span>2 / 6 · For developers</span></header>
+
+  <h1>Never lose a session or an edit</h1>
+  <p class="lede">Whichever harness made it. This is why a developer installs recURd.</p>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="num">~280</div>
+      <p>developers report agent changes they could not review or undo.</p>
+    </div>
+    <div class="stat">
+      <div class="num">~200</div>
+      <p>report lost or hidden sessions. The Claude Code CLI clears local transcripts after 30 days by default.</p>
+      <div class="src"><a href="https://github.com/anthropics/claude-code/issues/62476">Claude Code #62476</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">139</div>
+      <p>report handoffs that break between runs, machines, or harnesses.</p>
+    </div>
+    <div class="stat">
+      <div class="num">66%</div>
+      <p>of developers switched AI tools in the past year, so the record must outlive any one harness.</p>
+      <div class="src"><a href="https://survey.stackoverflow.co/2026/ai">Stack Overflow survey 2026</a></div>
+    </div>
+  </div>
+  <p class="note stats-note">The first three are counts of distinct people among 914 developer voices on GitHub, Hacker News, and forums, October 2026.</p>
+
+  <div class="features">
+    <div class="feature f-devs">
+      <h3>Session vault <span class="tag t-devs">Why they install</span></h3>
+      <p>Every session from every harness and model, under the developer's own keys. Kept on your retention policy, not a vendor's timer; searchable on the developer's machine; secrets redacted before saving.</p>
+    </div>
+    <div class="feature f-devs">
+      <h3>Change set and restore <span class="tag t-devs">Why it stays on</span></h3>
+      <p>Every file a run changed by any tool path, including shell commands, subagents, and reverts. Restore previews first, stays inside the run's own changes, and is recorded.</p>
+    </div>
+    <div class="feature f-devs">
+      <h3>Pick up anywhere</h3>
+      <p>Continue a run on another machine, in another harness or model, or as a teammate. Handoff notes record decisions, not transcripts.</p>
+    </div>
+    <div class="feature f-devs">
+      <h3>Context that loads</h3>
+      <p>Team context written into each harness's own files, such as <code>AGENTS.md</code> and <code>CLAUDE.md</code>, with a warning before a harness truncates it.</p>
+      <p class="why">Codex cuts AGENTS.md at 32 KB, with only a log-file warning.</p>
+    </div>
+    <div class="feature f-agents">
+      <h3>Agents that find each other's work</h3>
+      <p>Claims and leases across harnesses, so two agents don't edit the same files, and the next run starts where the last one stopped.</p>
+      <p class="why">A hypothesis until the pilots measure it.</p>
+    </div>
+    <div class="feature f-admins">
+      <h3>Yours unless you share</h3>
+      <p>Admins see actions and approvals, not transcripts. Sessions open only when the developer shares them, and every admin read is visible to the developer.</p>
+    </div>
+  </div>
+
+  <h2>A day without losing anything</h2>
+  <div class="tw">
+  <table class="day" aria-label="A developer's day with the sidecar">
+    <thead><tr><th>Time</th><th>What happens</th><th>What recURd keeps</th></tr></thead>
+    <tbody>
+      <tr><td>09:10</td><td>A Claude Code session runs on a laptop.</td><td>The full session, in the developer's vault</td></tr>
+      <tr><td>10:20</td><td>A shell command edits files that the harness's checkpoints miss.</td><td>Every changed file, in the run's change set</td></tr>
+      <tr><td>11:05</td><td>The run goes wrong.</td><td>A preview, then a restore of only that run's changes</td></tr>
+      <tr><td>13:30</td><td>The developer continues in OpenCode, on a local model, on another machine.</td><td>The handoff note and the session, ready to resume</td></tr>
+      <tr><td>16:00</td><td>A teammate's agent starts on the same module.</td><td>A live claim, so that agent picks other work</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="strip" style="margin-top:12px">
+    <div><b>Free for one person</b>Any number of agents and harnesses: the vault, restore, handoffs, and approval history.</div>
+    <div><b>Nothing to change</b>Captures from each harness's own hooks, deployed once per machine, plus a CLI. No new editor.</div>
+    <div><b>Open source</b>Read exactly what it captures and redacts, or build it yourself.</div>
+    <div><b>Plain git underneath</b>Back up the vault, host it yourself, or leave with a clone.</div>
+  </div>
+
+  <footer class="page-foot"><span>recURd is in design. Counts are distinct people, October 2026.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 3: FOR SECURITY BUYERS -->
+<section class="page" aria-label="Page 3: For security buyers">
+  <header class="page-head"><span class="brand">URnetwork · recURd</span><span>3 / 6 · For security buyers</span></header>
+
+  <h1>Govern every way out</h1>
+  <p class="lede">Every way your agents reach the outside world is private, approved, and on a record only your team can read.</p>
+
+  <div class="tools">
+    <div class="tool">
+      <div class="tool-head"><h3>Port forwarding</h3><span class="tag t-first">First release</span></div>
+      <p class="job">A cloud agent reaches a private service or a developer's own machine, without opening the network.</p>
+      <dl class="pae">
+        <dt>Grant</dt><dd>One agent, one port, one time window, approved by a person.</dd>
+        <dt>Encrypted</dt><dd>Between the two sidecars. The relay carries only ciphertext.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Records</span><span class="entry">route</span><span class="entry">approval</span><span class="readers"><code>ur bridge forward</code></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>IP addresses</h3><span class="tag t-first">First release</span></div>
+      <p class="job">A permanent private address for each agent and service, plus subnets you choose to route.</p>
+      <dl class="pae">
+        <dt>Grant</dt><dd>Agents reach only granted ranges, and leave only through exits you run.</dd>
+        <dt>Encrypted</dt><dd>Packet by packet, between your sidecars.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Records</span><span class="entry">route</span><span class="readers"><code>ur tun ip</code></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>TLS edge</h3><span class="tag t-later">Team layer</span></div>
+      <p class="job">A public HTTPS name for a service on a developer's machine, such as a client preview or a webhook.</p>
+      <dl class="pae">
+        <dt>Grant</dt><dd>Explicit, authenticated by default, and short-lived. Agent control panels are refused.</dd>
+        <dt>Encrypted</dt><dd>TLS passthrough. The certificate key stays in the sidecar.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Records</span><span class="entry">publish</span><span class="readers"><code>ur bridge public-tls</code></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>Email</h3><span class="tag t-later">Ships last</span></div>
+      <p class="job">Addresses on your own domain for agents and people, including approval by reply.</p>
+      <dl class="pae">
+        <dt>Grant</dt><dd>Outside mail is untrusted. First messages to new recipients wait for approval.</dd>
+        <dt>Encrypted</dt><dd>End to end between members. Outside mail is encrypted on arrival.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Records</span><span class="entry">ask</span><span class="entry">answer</span><span class="entry">approval</span><span class="readers"><code>ur id</code></span></div>
+    </div>
+  </div>
+
+  <div class="boxes" style="margin-top:0">
+    <div class="box">
+      <h2>Reach is shared, not scoped, today</h2>
+      <p><a href="https://learn.chatgpt.com/docs/environments/cloud-environments">Codex cloud</a> supports only Tailscale, which <a href="https://tailscale.com/blog/codex-cloud-tailscale">warns</a> Codex "could reach nearly everything in your tailnet." No vendor scopes a hosted run to one service on a developer's machine, with an approver and expiry.</p>
+    </div>
+    <div class="box">
+      <h2>Easy exposure has already gone wrong</h2>
+      <p><a href="https://www.knostic.ai/blog/mapping-mcp-servers-study">Knostic</a> found 1,862 MCP servers open to the internet; none of 119 checked required auth to list tools. And 68% of organizations cannot tell agent activity from human (<a href="https://cloudsecurityalliance.org/articles/more-than-two-thirds-of-organizations-cannot-clearly-distinguish-ai-agent-from-human-actions">CSA</a>, Aembit-sponsored).</p>
+    </div>
+    <div class="box">
+      <h2>What admins can answer</h2>
+      <ul class="tight">
+        <li>Which agents, harnesses, and models touched which repos, for which sponsor.</li>
+        <li>Who approved each action: one action ID, SSH-signed for high-risk steps.</li>
+        <li>Proof for a client that a person approved a change, without the code.</li>
+        <li>One switch revokes an agent's forwards, addresses, names, and mail.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h2>Safe by default</h2>
+      <p>recURd holds the three legs of the <a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/">lethal trifecta</a> — private data, untrusted input, the way out — apart.</p>
+      <ul class="tight">
+        <li>Untrusted mail cuts off send, forward, and publish until a person approves.</li>
+        <li>Edits to <code>CLAUDE.md</code>, hooks, and <code>.mcp.json</code> go to review.</li>
+        <li>Shared writes are scanned for secrets, and recURd keeps no long-lived ones.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="box accent" style="margin-top:11px">
+    <h2>What encryption changes, and what it doesn't</h2>
+    <p>With customer-managed keys the vendor still decrypts and may keep records outside your key. recURd's relay and storage hold no key, so a subpoena or breach yields only ciphertext and the metadata listed here; blindness shortens the review but a DPA, subprocessor list, and breach notice remain. <strong>Where it ends:</strong> a hosted model sees what the harness sends unless you run it; outside mail is ordinary SMTP; signed membership stops a breached server adding a reader.</p>
+  </div>
+
+  <footer class="page-foot"><span>recURd is in design. This page states design commitments.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 4: OPEN ALL THE WAY DOWN -->
+<section class="page" aria-label="Page 4: Open all the way down">
+  <header class="page-head"><span class="brand">URnetwork · recURd</span><span>4 / 6 · Open</span></header>
+
+  <h1>Open all the way down</h1>
+  <p class="lede">Open source, so no one has to take our word for it. Run the models yourself, and prompts and code never leave your control.</p>
+
+  <h2>What changes when the model is yours</h2>
+  <div class="tw">
+  <table class="mine" aria-label="Hosted models compared with open weights you run">
+    <thead><tr><th></th><th>Hosted model</th><th>Open weights you run</th></tr></thead>
+    <tbody>
+      <tr><td>Who sees prompts and code</td><td>The model provider</td><td>Only your team</td></tr>
+      <tr><td>Vendor record of agent work</td><td>Each vendor's, for its own product; GitLab now ingests some</td><td>None, so the record is the one you keep</td></tr>
+      <tr><td>What URnetwork holds</td><td>Ciphertext</td><td>Ciphertext, or nothing if you self-host</td></tr>
+      <tr><td>What the record can prove</td><td>Which harness and which model name</td><td>Also the weight digest, quantization, and engine</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note"><a href="https://claude.com/blog/compliance-api-security-partners">Anthropic's Compliance API</a> and OpenAI's compliance logs cover their own products. Open-weight teams get the whole privacy chain, and the most need for a record.</p>
+
+  <div class="fit">
+    <div class="tool">
+      <div class="tool-head"><h3>Model access</h3><span class="tag t-first">First release</span></div>
+      <p class="job">Agents reach the inference servers you run, such as vLLM, SGLang, Ollama, or llama.cpp, and nothing else.</p>
+      <dl class="pae">
+        <dt>Grant</dt><dd>Per agent and per model, approved by a person, revoked with the agent.</dd>
+        <dt>Encrypted</dt><dd>Between the sidecars. No vendor sits in the path.</dd>
+        <dt>Signs</dt><dd>Per request: the weight digest, quantization, and engine, each labelled by evidence level.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Records</span><span class="entry">route</span><span class="entry">model</span><span class="readers"><code>ur bridge forward</code></span></div>
+    </div>
+    <div>
+      <h2>Who it's for</h2>
+      <div class="seg">
+        <b>Mixed fleets — teams that run some agents on open-weight models</b>
+        <p>The common case, not a niche: ~11–20% of agent-model users name an open-weight family and ~2% name nothing else (<a href="https://survey.stackoverflow.co/2026/ai">Stack Overflow 2026</a>); on OpenRouter open weights carry ~80% of coding tokens but ~33% of spend.</p>
+      </div>
+      <div class="seg">
+        <b>Developers and homelabs</b>
+        <p>Adoption and credibility, but little revenue. Open tools draw big followings: <a href="https://github.com/anomalyco/opencode">OpenCode</a> has 224k GitHub stars, <a href="https://github.com/ollama/ollama">Ollama</a> 186k, <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> 133k. Stars measure attention, not use.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Where open tools already stand</h2>
+  <div class="tw">
+  <table class="opentools" aria-label="What open tools already do, and where the sidecar stands">
+    <thead><tr><th>Piece</th><th>Open tools today</th><th>Where we stand</th></tr></thead>
+    <tbody>
+      <tr><td>Reach</td><td>Free to self-host: <a href="https://github.com/fatedier/frp">frp</a> (110k stars), <a href="https://github.com/juanfont/headscale">Headscale</a> (45k), zrok, and iroh. <a href="https://zrok.io/">zrok's</a> hosted service runs "the same code base" people self-host.</td><td>Free in ours too. We add per-agent grants and receipts.</td></tr>
+      <tr><td>Agents and shared models</td><td><a href="https://github.com/block/buzz">Block's Buzz</a>: a signed, self-hostable relay that runs Goose, Codex, and Claude Code over ACP, streaming every event to one log.</td><td>Partner first. We record Goose like any harness.</td></tr>
+      <tr><td>Encrypted git</td><td><a href="https://radicle.dev/guides/user">Radicle</a> calls its private repos "unfit for use today"; <a href="https://github.com/AGWA/git-crypt">git-crypt</a> cannot revoke access; <a href="https://github.com/spwhitton/git-remote-gcrypt">git-remote-gcrypt</a> syncs only on push and pull.</td><td>Ours: real time, with team key rotation.</td></tr>
+      <tr class="us"><td>A signed record of agent work</td><td>About two dozen competing IETF drafts and an AUDIT BoF (17 Nov); <a href="https://github.com/ocsf/ocsf-schema/releases/tag/1.9.0">OCSF 1.9</a> defines signed agent events. <a href="https://agentreceipts.ai">Agent Receipts</a> and <a href="https://nono.sh/docs/cli/features/audit">nono</a> already sign tool calls and sessions.</td><td>Ours: one record across harnesses binding approvals, edits, and reach under your keys.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="box accent" style="margin-top:12px">
+    <h2>Open core, hosted blind</h2>
+    <p><strong>Free and open:</strong> recURd, the admin app, relay, and entry format, and self-hosting any part, air-gapped if needed. <strong>Paid:</strong> relays, storage, and an edge we run and cannot read; names, certificates, and mail delivery; the team layer; support for your own installs. iroh, zrok, and Tailscale earn the same way.</p>
+  </div>
+
+  <footer class="page-foot"><span>recURd is in design. GitHub stars fetched 1 November 2026.</span><span>Sources: sidecar/research_notes, GitHub, Stack Overflow 2026</span></footer>
+</section>
+
+<!-- PAGE 5: WHAT'S OURS, AND WHO PAYS -->
+<section class="page" aria-label="Page 5: What's ours, and who pays">
+  <header class="page-head"><span class="brand">URnetwork · recURd</span><span>5 / 6 · Market</span></header>
+
+  <h1>What's ours, and who pays</h1>
+  <p class="lede">The tools are table stakes. The record under your keys is the product.</p>
+
+  <h2>Where we stand, piece by piece</h2>
+  <div class="tw">
+  <table class="stand" aria-label="Where the sidecar stands against what exists">
+    <thead><tr><th>Piece</th><th>Who already sells it</th><th>Where we stand</th></tr></thead>
+    <tbody>
+      <tr><td>Reach: forwards, private addresses, public names</td><td>ngrok, Cloudflare Tunnel, and Tailscale, which is end-to-end encrypted and <a href="https://tailscale.com/blog/codex-cloud-tailscale">Codex cloud's only VPN</a></td><td>At par, and free when self-hosted. We add per-agent grants and receipts.</td></tr>
+      <tr><td>Agent mail</td><td>AgentMail, Resend Inboxes, Cloudflare Email Service</td><td>At par, so it ships last.</td></tr>
+      <tr><td>Coordination across agents</td><td>Claude Code agent teams, Codex message boards, Block's Buzz, Warp, and Entire</td><td>Also span harnesses; we don't lead. Claims stay a free hypothesis.</td></tr>
+      <tr class="us"><td>A signed team ledger across harnesses, under customer keys</td><td>Happy and Infisical Agent Vault keep host-unreadable records; none binds approvals, edits, and reach in one.</td><td>Ours.</td></tr>
+      <tr class="us"><td>Sessions and actions under separate keys</td><td>Span keeps sessions private by access control, not keys.</td><td>Ours.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">Why the gap stays open: harness owners earn when work stays on their runtime, and gateway and recorder vendors are built on reading the data. That is an inference about incentives. Anthropic, OpenAI, GitLab, and Block moved furthest this year; watch them.</p>
+
+  <div class="two-col">
+    <div>
+      <h2>Who pays</h2>
+      <table class="mini tiers3" aria-label="Tiers">
+        <tbody>
+          <tr><td>Solo<span class="price">Free, open source</span></td><td>One person, any number of agents: the vault, restore, handoffs, forwards, and model access.</td></tr>
+          <tr><td>Team<span class="price">$20–40 / seat*</span></td><td>From the second person, hosted: the signed ledger, cross-harness attribution, per-client cost and policy, reach receipts, SSO/SCIM, exports.</td></tr>
+          <tr><td>Assured<span class="price">Annual</span></td><td>For regulated and defense buyers: change records, a self-hosted licence and support, compliance mappings, an air-gapped install; on your servers.</td></tr>
+        </tbody>
+      </table>
+      <p class="note">*Team dev tools run $20–50 a seat; SSO plans start near $500/mo. Agents are never metered; storage, edge traffic, and mail are. Self-hosting is free.</p>
+    </div>
+    <div>
+      <h2>Where we start</h2>
+      <p class="lead-in">Teams of 5 to 150 engineers on two or more harnesses, where a contract already demands proof:</p>
+      <ul class="tight">
+        <li>Agencies and outsourcers under client AI terms, one AI policy per client</li>
+        <li>Suppliers to banks and defense primes with flow-down AI terms (Citi, Lockheed)</li>
+        <li>Teams whose cloud agents need private reach</li>
+        <li>Fintech and other regulated teams, including mixed open-weight fleets</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Money is moving into this space</h2>
+  <ul class="tight cols2">
+    <li><strong>Entire:</strong> $60M seed (Feb 2026), agent sessions in git</li>
+    <li><strong>Span:</strong> $25M (Nov 2025), agent traces</li>
+    <li><strong>AgentMail:</strong> <a href="https://techcrunch.com/2026/03/10/agentmail-raises-6m-to-build-an-email-service-for-ai-agents/">$6M seed</a> (Mar 2026), agent email</li>
+    <li><strong>Keycard</strong> ($38M), <strong>Mem0</strong> ($24M): identity, memory</li>
+    <li><strong>Tailscale:</strong> <a href="https://betakit.com/corporate-vpn-startup-tailscale-secures-230-million-cad-series-c-on-back-of-surprising-growth/">$160M Series C</a> (Apr 2025), <a href="https://tailscale.com/use-cases/secure-ai-agent-connectivity">now for agents</a></li>
+    <li><strong>Agent 365:</strong> <a href="https://www.microsoft.com/licensing/faqs/122">$15 per user</a>, agents unlicensed</li>
+  </ul>
+
+  <div class="timeline three" aria-label="Why now">
+    <div><b>Now</b>Questionnaires ask which AI a team uses and whether a human reviews its work.</div>
+    <div><b>From Dec 2027</b>If finalized, SOC 2 engagements use criteria whose AI points of focus prompt auditors' questions; they require no specific control.</div>
+    <div class="moat"><b>The moat is service, not lock-in</b>The format is open and portable, so nothing traps the record. Teams stay because hosting, support, and coverage are good.</div>
+  </div>
+
+  <footer class="page-foot"><span>recURd is in design. Prices marked * are inferences.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 6: PROOF BEFORE SCALE -->
+<section class="page" aria-label="Page 6: Proof before scale">
+  <header class="page-head"><span class="brand">URnetwork · recURd</span><span>6 / 6 · The plan</span></header>
+
+  <h1>Proof before scale</h1>
+  <p class="lede">One open-source capture engine, ten to fifteen design partners, and published trust documents come before the rest of the build.</p>
+
+  <h2>What ships, in order</h2>
+  <div class="roadmap">
+    <div class="stage now">
+      <b>First release, open source</b>
+      <p>The vault, change sets and restore, approval receipts, run inventory and agent identity, handoffs and claims, commit-to-run links, and the instruction-file writer.</p>
+      <p><strong>Reach:</strong> port forwarding, private IP addresses (Linux and WSL2 first), and access to model servers you run.</p>
+    </div>
+    <div class="stage">
+      <b>Next: the team layer</b>
+      <p>The shared signed ledger, SSO and SCIM, SIEM export, retention, the verifiable log, client packets, reach receipts, and a supported self-hosted install.</p>
+      <p><strong>Reach:</strong> the TLS edge, and approval by email reply.</p>
+    </div>
+    <div class="stage">
+      <b>Last: inbox and assurance</b>
+      <p>The visible audit member, key-escrow options, legal hold, compliance mappings, and an air-gapped install.</p>
+      <p><strong>Reach:</strong> mail with the outside world on your domain, and group inboxes.</p>
+    </div>
+  </div>
+  <p class="note">Each stage ships whole. Reach comes first, built on code URnetwork already runs; email, the heaviest build, comes last.</p>
+
+  <h2 style="margin-top:12px">Ten to fifteen design partners</h2>
+  <p class="lead-in">Teams of 5 to 150 engineers on two or more harnesses, drawn from the beachhead, including two or three that run open weights. Each question has a measure, and a decision if the answer is no.</p>
+  <div class="tw">
+  <table class="metrics" aria-label="What the design partners test">
+    <thead><tr><th>Question</th><th>What we measure</th><th>If the answer is no</th></tr></thead>
+    <tbody>
+      <tr><td>Do developers keep it running?</td><td>Daily use of the vault and restore, per developer</td><td>Rework the developer hook before building the team layer</td></tr>
+      <tr><td>Does the ledger sell?</td><td>Conversion to Team when a second person joins</td><td>Move the free line or the Team price</td></tr>
+      <tr><td>Does coordination earn its place?</td><td>Duplicate work and conflicting edits, with and without claims</td><td>Keep claims as a free feature, not a selling point</td></tr>
+      <tr><td>Is reach a wedge?</td><td>Cloud-agent grants approved and used each week</td><td>Keep reach as a feature, and lead with the record</td></tr>
+      <tr><td>Will teams pay?</td><td>Paid conversions at $20–40 a seat</td><td>Re-price before launch</td></tr>
+      <tr><td>Do mixed-fleet teams adopt it, and pay?</td><td>Model calls recorded through recURd; hosted versus self-hosted relays</td><td>Sell the team layer and support, not hosting</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="boxes">
+    <div class="box accent">
+      <h2>Trust documents first</h2>
+      <p>Before "end-to-end encrypted" appears in public:</p>
+      <ul class="tight">
+        <li>recURd, the admin app, relay, and entry format ship open source, with reproducible builds.</li>
+        <li>An independent audit covers the client and the protocol.</li>
+        <li>A threat model assumes a malicious server and lists all metadata our servers see.</li>
+        <li>A data-flow diagram and subprocessor list, a self-service DPA, and a dated warrant canary.</li>
+        <li>A plain statement: recURd has no token, and uses URnetwork's network only for worldwide reach.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h2>Risks we manage</h2>
+      <ul class="tight">
+        <li><strong>Scope.</strong> One capture engine and one entry format; each stage ships whole.</li>
+        <li><strong>Completeness.</strong> Hook behavior differs by harness (some fail closed, some open), so each run states what the record could not see.</li>
+        <li><strong>Free built-ins and self-hosting.</strong> We sell hosting we can't read, the team layer, and support.</li>
+        <li><strong>Open rivals.</strong> Block's Buzz is closest; we partner first and record Goose like any harness.</li>
+        <li><strong>Reputation.</strong> Trust documents come before claims, and agents leave only through exits you run.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>recURd is in design. The metrics are the pilot plan, not results.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+</body>
+</html>

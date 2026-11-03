@@ -1,0 +1,935 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>URnetwork App Redesign</title>
+<meta name="description" content="High-fidelity mobile UI mockup for the URnetwork app redesign: burner identities, recURd agent tracking, and a live feedback chat with factury.">
+<style>
+:root{--bg:#f3f5f8;--surface:#fff;--surface-2:#eef1f5;--raised:#f8fafc;--ink:#14171c;--ink-2:#434b56;--muted:#6f7883;--rule:#e3e7ec;--accent:#0e6b73;--accent-2:#0a4a50;--accent-soft:#e2f1f1;--active:#179b53;--active-soft:#e2f4ea;--warn:#b4540a;--danger:#c0362c;--info:#2a5bd7;--radius:12px;--radius-sm:8px;--shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.08);--font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#0c0e11;--surface:#15181d;--surface-2:#1c2026;--raised:#1a1e24;--ink:#eceef2;--ink-2:#c2c8d1;--muted:#8a93a0;--rule:#262b33;--accent:#5bc0c8;--accent-2:#8fd6dc;--accent-soft:#102f2f;--active:#45c67c;--active-soft:#0f2e1c;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35)}}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font)}
+
+/* extended tokens */
+:root{--on-accent:#ffffff;--on-active:#fff;--info-soft:#e7edfd;--warn-soft:#fbeadb;--danger-soft:#fbe4e2;--gold:#cf9d1f;--silver:#8b949e;--bronze:#b4772f}
+@media(prefers-color-scheme:dark){:root{--on-accent:#06231f;--on-active:#06231f;--info-soft:#17233f;--warn-soft:#2e2112;--danger-soft:#331a17;--gold:#d8b23f;--silver:#9aa3ad;--bronze:#c08a4a}}
+
+html{-webkit-text-size-adjust:100%}
+body{-webkit-font-smoothing:antialiased;line-height:1.4;overflow-x:hidden}
+img{max-width:100%}
+
+/* page scaffold */
+.page-head{max-width:1100px;margin:0 auto;padding:46px 24px 6px;text-align:center}
+.page-head .kick{color:var(--accent);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:10px}
+.page-head h1{font-size:28px;font-weight:760;letter-spacing:-.4px;margin:0}
+.page-head p{color:var(--muted);max-width:640px;margin:12px auto 0;font-size:14.5px;line-height:1.55}
+.page-head .legend{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;margin-top:16px;font-size:12.5px;color:var(--muted)}
+.page-head .legend b{color:var(--accent);font-weight:650}
+.grid{display:flex;flex-wrap:wrap;gap:46px 40px;justify-content:center;align-items:flex-start;max-width:1640px;margin:0 auto;padding:30px 24px 90px}
+
+.frame-wrap{display:flex;flex-direction:column;align-items:center;width:390px;max-width:100%}
+figure{margin:0}
+.cap{margin-top:20px;text-align:center;max-width:368px}
+.cap .lab{font-weight:650;color:var(--ink);font-size:14px;display:inline-flex;align-items:center;gap:8px}
+.cap .n{display:inline-grid;place-items:center;width:21px;height:21px;border-radius:6px;background:var(--accent);color:var(--on-accent);font-size:11.5px;font-weight:700}
+.cap .n.live{background:var(--active)}
+.cap .desc{color:var(--muted);font-size:12.5px;margin-top:5px;line-height:1.4}
+
+/* phone */
+.phone{width:390px;max-width:100%;padding:11px;background:#07090c;border-radius:54px;box-shadow:0 0 0 2px #22262d,0 26px 56px rgba(0,0,0,.30),inset 0 0 0 1px rgba(255,255,255,.05)}
+.screen{position:relative;height:816px;border-radius:43px;overflow:hidden;background:var(--surface);display:flex;flex-direction:column}
+.live-ring .phone{box-shadow:0 0 0 2px var(--accent),0 0 0 7px rgba(14,107,115,.18),0 26px 56px rgba(0,0,0,.30)}
+
+/* status bar */
+.statusbar{flex:0 0 auto;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:relative;z-index:6;background:var(--surface)}
+.sb-time{font-weight:650;font-size:15px;letter-spacing:.2px;color:var(--ink)}
+.island{position:absolute;left:50%;top:10px;transform:translateX(-50%);width:112px;height:30px;background:#000;border-radius:16px}
+.sb-ic{display:flex;align-items:center;gap:7px;color:var(--ink)}
+.sb-ic svg{width:17px;height:17px;display:block}
+
+/* icons */
+svg.i{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
+/* large header */
+.hdr{flex:0 0 auto;background:var(--surface);padding:2px 20px 12px;position:relative;z-index:4}
+.hdr-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-height:36px}
+.hdr h1{font-size:28px;font-weight:740;letter-spacing:-.4px;margin:4px 0 0}
+.hdr .sub{color:var(--muted);font-size:13px;margin-top:3px}
+.icbtn{width:36px;height:36px;border-radius:50%;background:var(--surface-2);color:var(--ink-2);border:none;display:grid;place-items:center;flex:0 0 auto;cursor:pointer}
+.icbtn svg{width:19px;height:19px}
+.icbtn.accent{background:var(--accent-soft);color:var(--accent)}
+
+/* compact navbar */
+.navbar{flex:0 0 auto;display:flex;align-items:center;gap:6px;min-height:44px;padding:2px 10px 10px;background:var(--surface);position:relative;z-index:4}
+.navbar .back{display:flex;align-items:center;gap:1px;color:var(--accent);background:none;border:none;font-size:16px;font-weight:550;cursor:pointer;padding:4px 6px;font-family:inherit}
+.navbar .back svg{width:22px;height:22px;stroke-width:2.1}
+.navbar .nav-title{flex:1;text-align:center;font-size:16px;font-weight:650;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.navbar .nav-right{display:flex;gap:4px;min-width:60px;justify-content:flex-end}
+.navbar .nav-right .t{color:var(--accent);font-size:16px;font-weight:550;padding:4px 6px}
+
+/* scroll area */
+.scroll{flex:1 1 auto;overflow-y:auto;background:var(--bg);padding:10px 16px 22px;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.scroll.plain{background:var(--surface)}
+
+.sec{margin:20px 4px 8px;font-size:11.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;align-items:baseline}
+.sec:first-child{margin-top:4px}
+.sec .sc{color:var(--muted);font-weight:600;letter-spacing:.2px}
+
+/* cards + rows */
+.card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.card.flat{box-shadow:none;border:1px solid var(--rule)}
+.row{display:flex;align-items:center;gap:12px;padding:12px 14px;min-height:54px;position:relative;cursor:pointer;text-decoration:none;color:inherit}
+.card>.row+.row{border-top:1px solid var(--rule)}
+.row .ic{flex:0 0 auto;width:31px;height:31px;border-radius:8px;display:grid;place-items:center;background:var(--surface-2);color:var(--ink-2)}
+.row .ic svg{width:18px;height:18px}
+.row .ic.accent{background:var(--accent-soft);color:var(--accent)}
+.row .ic.warn{background:var(--warn-soft);color:var(--warn)}
+.row .ic.info{background:var(--info-soft);color:var(--info)}
+.row .ic.active{background:var(--active-soft);color:var(--active)}
+.row .main{flex:1 1 auto;min-width:0}
+.row .main .t{font-size:15px;font-weight:550;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .main .d{font-size:12.5px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .val{color:var(--muted);font-size:14px;flex:0 0 auto}
+.row .chev{color:var(--muted);opacity:.55;flex:0 0 auto;display:grid}
+.row .chev svg{width:19px;height:19px;stroke-width:2}
+.row.danger .main .t{color:var(--danger)}
+
+/* badges + chips + pills */
+.badge{min-width:21px;height:21px;padding:0 6px;border-radius:11px;background:var(--accent);color:var(--on-accent);font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:999px;font-size:11.5px;font-weight:650;line-height:1;white-space:nowrap}
+.chip .cd{width:6px;height:6px;border-radius:50%;background:currentColor}
+.chip.received{color:var(--info);background:var(--info-soft)}
+.chip.progress{color:var(--warn);background:var(--warn-soft)}
+.chip.fixed{color:var(--active);background:var(--active-soft)}
+.chip.wontfix{color:var(--muted);background:var(--surface-2)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-2);background:var(--surface-2);border-radius:7px;padding:4px 8px;white-space:nowrap}
+.pill svg{width:13px;height:13px;opacity:.85;stroke-width:2}
+.pill.g{color:var(--muted);background:transparent;padding:4px 0}
+.mono{font-family:var(--mono)}
+
+/* live dot */
+.live-dot{width:9px;height:9px;border-radius:50%;background:var(--active);position:relative;flex:0 0 auto}
+.live-dot::after{content:"";position:absolute;inset:-4px;border-radius:50%;background:var(--active);opacity:.4;animation:pulse 1.7s ease-out infinite}
+@keyframes pulse{0%{transform:scale(.55);opacity:.5}70%{transform:scale(1.9);opacity:0}100%{opacity:0}}
+
+/* composer */
+.composer{flex:0 0 auto;display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--surface);border-top:1px solid var(--rule)}
+.composer .inp{flex:1;background:var(--surface-2);border:1px solid var(--rule);border-radius:20px;padding:9px 14px;color:var(--muted);font-size:14px;min-width:0}
+.composer .send{width:37px;height:37px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;flex:0 0 auto;border:none;cursor:pointer}
+.composer .send svg{width:19px;height:19px;stroke-width:2}
+
+/* tab bar */
+.tabbar{flex:0 0 auto;display:flex;background:var(--surface);border-top:1px solid var(--rule);padding:8px 4px 22px;position:relative;z-index:5}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--muted);text-decoration:none;font-size:10px;font-weight:600;letter-spacing:.2px;cursor:pointer;background:none;border:0;padding:3px 0;font-family:inherit}
+.tab svg{width:26px;height:26px;stroke-width:1.8}
+.tab.active{color:var(--accent)}
+.home-ind{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:var(--ink);opacity:.22;z-index:7}
+
+/* banner */
+.banner{display:flex;align-items:center;gap:11px;background:var(--accent-soft);border:1px solid transparent;border-radius:var(--radius);padding:11px 13px;margin:2px 0 2px}
+.banner .bi{width:34px;height:34px;border-radius:9px;background:var(--surface);color:var(--accent);display:grid;place-items:center;flex:0 0 auto}
+.banner .bi svg{width:19px;height:19px}
+.banner .bt{flex:1;font-size:12.5px;color:var(--accent-2);line-height:1.35}
+.banner .bt b{font-weight:700}
+.banner .bx{color:var(--accent);flex:0 0 auto;display:grid}
+.banner .bx svg{width:20px;height:20px;stroke-width:2.2}
+
+/* burner cards */
+.bcard{display:block;background:var(--surface);border-radius:14px;box-shadow:var(--shadow);padding:13px 14px;margin-bottom:12px;text-decoration:none;color:inherit}
+.bcard .btop{display:flex;align-items:center;gap:11px}
+.fav{width:42px;height:42px;border-radius:12px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;flex:0 0 auto}
+.fav svg{width:22px;height:22px}
+.bcard .em{flex:1;min-width:0}
+.bcard .addr{font-family:var(--mono);font-weight:650;font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bcard .use{font-size:12.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bcard .rt{display:flex;align-items:center;gap:9px;flex:0 0 auto}
+.bcard .pills{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}
+
+/* message rows (inbox) */
+.mrow{display:flex;gap:11px;padding:11px 14px;position:relative;cursor:pointer}
+.ava-l{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px;flex:0 0 auto}
+.mrow .mb{flex:1;min-width:0}
+.mrow .mhead{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.mrow .who{font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow .when{color:var(--muted);font-size:11.5px;flex:0 0 auto;display:flex;align-items:center;gap:6px}
+.mrow .msub{font-size:13px;color:var(--ink-2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow .mprev{font-size:12.5px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow.unread .who,.mrow.unread .msub{font-weight:700;color:var(--ink)}
+.mdot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:0 0 auto}
+
+/* login rows */
+.lrow{display:flex;align-items:center;gap:11px;padding:11px 14px}
+.lrow .lb{flex:1;min-width:0}
+.lrow .lsite{font-size:14.5px;font-weight:600;color:var(--ink)}
+.lrow .luser{font-size:12.5px;color:var(--muted);font-family:var(--mono);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pw{font-family:var(--mono);font-size:13px;letter-spacing:1px;color:var(--ink-2)}
+.lax{display:flex;gap:6px;flex:0 0 auto}
+.minibtn{width:30px;height:30px;border-radius:8px;background:var(--surface-2);color:var(--ink-2);border:1px solid var(--rule);display:grid;place-items:center;cursor:pointer}
+.minibtn svg{width:16px;height:16px;stroke-width:1.9}
+.minibtn.on{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+
+/* generic action button group under hero */
+.actions{display:flex;gap:9px;margin-top:13px}
+.btn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:11px;padding:11px;font-size:14px;font-weight:650;cursor:pointer;border:1px solid transparent;font-family:inherit;text-decoration:none}
+.btn svg{width:17px;height:17px;stroke-width:2}
+.btn.primary{background:var(--accent);color:var(--on-accent)}
+.btn.ghost{background:var(--surface);color:var(--accent);border-color:var(--rule)}
+.btn.block{width:100%;padding:14px;font-size:15.5px;margin-top:4px}
+
+/* burner identity hero */
+.idhero{background:var(--surface);border-radius:16px;box-shadow:var(--shadow);padding:16px;margin-bottom:4px;text-align:center}
+.idhero .fav{margin:2px auto 10px;width:52px;height:52px}
+.idhero .fav svg{width:26px;height:26px}
+.idhero .idaddr{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:14.5px;font-weight:650;color:var(--ink);background:var(--surface-2);border-radius:9px;padding:7px 11px}
+.idhero .idaddr button{background:none;border:none;color:var(--accent);display:grid;cursor:pointer;padding:0}
+.idhero .idaddr svg{width:16px;height:16px;stroke-width:2}
+.idhero .idmeta{font-size:12.5px;color:var(--muted);margin-top:9px;display:flex;align-items:center;gap:6px;justify-content:center}
+
+/* FAB */
+.fab{position:absolute;right:18px;bottom:92px;width:56px;height:56px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;box-shadow:0 8px 22px rgba(14,107,115,.45);z-index:8;border:none;cursor:pointer}
+.fab svg{width:27px;height:27px;stroke-width:2.1}
+
+/* agent rows (recURd) */
+.arow{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer}
+.ava{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px;flex:0 0 auto;letter-spacing:.3px}
+.arow .ab{flex:1;min-width:0}
+.arow .aname{display:flex;align-items:center;gap:8px}
+.arow .aname .nm{font-size:15px;font-weight:650;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hpill{font-size:10.5px;font-weight:650;color:var(--ink-2);background:var(--surface-2);border-radius:6px;padding:2px 6px;flex:0 0 auto}
+.arow .atask{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arow .atask.liveT{color:var(--active);font-weight:550}
+.arow .aright{text-align:right;flex:0 0 auto}
+.arow .acost{font-size:14px;font-weight:700;font-family:var(--mono);color:var(--ink)}
+.arow .albl{font-size:10.5px;color:var(--muted);margin-top:1px}
+
+/* agent detail */
+.adhead{display:flex;gap:13px;align-items:center;padding:4px 2px 2px}
+.adhead .ava{width:50px;height:50px;border-radius:14px;font-size:16px}
+.adhead .adn{font-size:19px;font-weight:720;color:var(--ink);display:flex;align-items:center;gap:8px}
+.adhead .adsub{font-size:12.5px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.statuspill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;color:var(--active);background:var(--active-soft);border-radius:999px;padding:3px 9px}
+.addr-row{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--rule);border-radius:11px;padding:10px 12px;margin:12px 0 4px}
+.addr-row .al{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+.addr-row .av{font-family:var(--mono);font-size:13.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.addr-row .ab2{flex:1;min-width:0}
+.stats{display:flex;gap:9px;margin:12px 0 2px}
+.stat{flex:1;background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:10px 11px}
+.stat .v{font-size:17px;font-weight:720;color:var(--ink);font-family:var(--mono)}
+.stat .k{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:3px}
+
+/* timeline */
+.timeline{padding:2px 2px 0}
+.tl{position:relative;display:flex;gap:12px;padding-bottom:15px}
+.tl::before{content:"";position:absolute;left:14px;top:26px;bottom:-2px;width:2px;background:var(--rule)}
+.tl:last-child::before{display:none}
+.tl .tdot{width:29px;height:29px;border-radius:8px;flex:0 0 auto;display:grid;place-items:center;z-index:1}
+.tl .tdot svg{width:16px;height:16px;stroke-width:2}
+.tl .tbody{flex:1;min-width:0;padding-top:2px}
+.tl .trow{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.tl .tt{font-size:14px;font-weight:600;color:var(--ink)}
+.tl .ttime{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto}
+.tl .td{font-size:12px;color:var(--muted);margin-top:2px;font-family:var(--mono);word-break:break-word;line-height:1.4}
+.k-edit{background:var(--accent-soft);color:var(--accent)}
+.k-bash{background:var(--surface-2);color:var(--ink-2)}
+.k-model{background:var(--info-soft);color:var(--info)}
+.k-appr{background:var(--active-soft);color:var(--active)}
+.k-read{background:var(--surface-2);color:var(--muted)}
+
+/* mini chat (agent messages) */
+.mini{display:flex;flex-direction:column;gap:8px;padding:4px 0}
+.mb-b{max-width:82%;padding:9px 12px;border-radius:16px;font-size:13.5px;line-height:1.35}
+.mb-b.them{align-self:flex-start;background:var(--surface);border:1px solid var(--rule);color:var(--ink);border-bottom-left-radius:5px}
+.mb-b.me{align-self:flex-end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:5px}
+.mb-b.me .mono{color:var(--on-accent)}
+
+/* feedback thread */
+.fbhead{display:flex;align-items:center;gap:11px;padding:4px 16px 12px;background:var(--surface);border-bottom:1px solid var(--rule)}
+.fbhead .fav2{width:40px;height:40px;border-radius:11px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-weight:750;font-size:13px;position:relative;flex:0 0 auto}
+.fbhead .fav2 .on{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;border-radius:50%;background:var(--active);border:2px solid var(--surface)}
+.fbhead .fn{font-size:16px;font-weight:700;color:var(--ink)}
+.fbhead .fd{font-size:12px;color:var(--muted);margin-top:1px}
+.thread{flex:1 1 auto;overflow-y:auto;background:var(--bg);padding:14px 14px 18px;display:flex;flex-direction:column;gap:3px;scrollbar-width:none}
+.thread::-webkit-scrollbar{display:none}
+.daydiv{align-self:center;font-size:11px;font-weight:650;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:4px 11px;margin:8px 0}
+.grp{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;max-width:84%}
+.grp.them{align-self:flex-start;align-items:flex-start}
+.grp.me{align-self:flex-end;align-items:flex-end}
+.sysname{font-size:10.5px;font-weight:700;color:var(--muted);letter-spacing:.3px;margin:2px 4px -1px}
+.msg{padding:9px 13px;border-radius:18px;font-size:14px;line-height:1.38;position:relative;word-wrap:break-word}
+.msg.them{background:var(--surface);border:1px solid var(--rule);color:var(--ink);border-bottom-left-radius:6px}
+.msg.me{background:var(--accent);color:var(--on-accent);border-bottom-right-radius:6px}
+.msg .idtag{font-family:var(--mono);font-weight:650}
+.mtime{font-size:10.5px;color:var(--muted);margin:1px 5px 0}
+.typing{align-self:flex-start;background:var(--surface);border:1px solid var(--rule);border-radius:18px;border-bottom-left-radius:6px;padding:12px 15px;display:inline-flex;gap:5px}
+.typing span{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:blink 1.3s infinite}
+.typing span:nth-child(2){animation-delay:.18s}
+.typing span:nth-child(3){animation-delay:.36s}
+@keyframes blink{0%,65%,100%{opacity:.25;transform:translateY(0)}32%{opacity:1;transform:translateY(-3px)}}
+
+/* account */
+.profile{display:flex;align-items:center;gap:14px;padding:6px 4px 16px}
+.profile .pav{width:62px;height:62px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:24px;font-weight:720;flex:0 0 auto}
+.profile .pn{font-size:21px;font-weight:720;color:var(--ink)}
+.profile .pid{font-size:13px;color:var(--muted);font-family:var(--mono);margin-top:3px;display:flex;align-items:center;gap:6px}
+.profile .pid svg{width:14px;height:14px;color:var(--accent);stroke-width:2;cursor:pointer}
+.planchip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 9px;margin-top:7px}
+.lbcard{display:flex;align-items:center;gap:13px;padding:15px 15px;background:var(--surface);border-radius:14px;box-shadow:var(--shadow);text-decoration:none;color:inherit;position:relative;overflow:hidden}
+.lbcard::before{content:"";position:absolute;inset:0;background:linear-gradient(100deg,var(--accent-soft),transparent 60%);opacity:.7}
+.lbcard>*{position:relative}
+.lbcard .lbic{width:44px;height:44px;border-radius:12px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;flex:0 0 auto}
+.lbcard .lbic svg{width:24px;height:24px}
+.lbcard .lbm{flex:1;min-width:0}
+.lbcard .lbt{font-size:16px;font-weight:700;color:var(--ink)}
+.lbcard .lbd{font-size:12.5px;color:var(--muted);margin-top:2px}
+.rankbubble{font-size:15px;font-weight:750;color:var(--accent);font-family:var(--mono)}
+
+/* leaderboard */
+.seg{display:flex;background:var(--surface-2);border-radius:10px;padding:3px;margin:2px 0 4px}
+.seg button{flex:1;border:none;background:none;font-family:inherit;font-size:13px;font-weight:600;color:var(--muted);padding:8px;border-radius:8px;cursor:pointer}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(16,24,40,.12)}
+.lbrow{display:flex;align-items:center;gap:12px;padding:11px 14px}
+.lbrow .rk{width:26px;text-align:center;font-weight:750;font-size:14px;font-family:var(--mono);color:var(--muted);flex:0 0 auto}
+.medal{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:750;font-size:12px;flex:0 0 auto}
+.lbrow .lname{flex:1;min-width:0}
+.lbrow .lnm{font-size:14.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lbrow .lrg{font-size:12px;color:var(--muted);margin-top:1px}
+.lbrow .lval{text-align:right;flex:0 0 auto}
+.lbrow .lv{font-size:14.5px;font-weight:700;font-family:var(--mono);color:var(--ink)}
+.lbrow .ldelta{font-size:11px;font-weight:650;margin-top:1px}
+.ldelta.up{color:var(--active)}
+.youcard{background:var(--accent-soft);border:1.5px solid var(--accent);border-radius:12px;margin-top:10px}
+.youcard .rk{color:var(--accent)}
+.youcard .lnm{color:var(--accent-2)}
+
+/* network panel */
+.panels{flex:1 1 auto;position:relative;overflow:hidden}
+.panel{position:absolute;inset:0;display:flex;flex-direction:column}
+.panel[hidden]{display:none}
+.net-hero{background:var(--accent-soft);border-radius:18px;padding:22px 18px 18px;text-align:center;margin:4px 0 14px}
+.ring{width:78px;height:78px;border-radius:50%;background:var(--surface);display:grid;place-items:center;margin:0 auto 12px;color:var(--accent);box-shadow:0 0 0 6px rgba(14,107,115,.14);position:relative}
+.ring svg{width:34px;height:34px;stroke-width:2.1}
+.ring::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--accent);opacity:.25;animation:pulse 2.4s ease-out infinite}
+.net-status{font-size:23px;font-weight:750;color:var(--accent-2)}
+.net-sub{font-size:13px;color:var(--accent-2);opacity:.85;margin-top:4px}
+.net-up{display:inline-block;margin-top:13px;font-size:12px;font-weight:650;color:var(--accent);background:var(--surface);border-radius:999px;padding:6px 13px}
+.tiles{display:flex;gap:9px;margin-bottom:4px}
+.tile{flex:1;background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:12px 11px}
+.tile .tv{font-size:17px;font-weight:720;color:var(--ink);font-family:var(--mono)}
+.tile .tk{font-size:11px;color:var(--muted);margin-top:3px}
+
+/* switch */
+.sw{width:46px;height:28px;border-radius:15px;background:var(--active);position:relative;flex:0 0 auto}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.sw.on::after{left:21px}
+.sw.off{background:var(--rule)}
+.sw.off::after{left:3px}
+
+/* note row */
+.secnote{display:flex;align-items:center;gap:11px;padding:12px 14px}
+.secnote .nk{font-size:14px;font-weight:600;color:var(--ink)}
+.secnote .nd{font-size:12.5px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* create sheet */
+.scrim{position:absolute;inset:0;background:rgba(6,10,14,.5);z-index:20}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:21;background:var(--surface);border-radius:22px 22px 0 0;padding:9px 18px 26px;box-shadow:0 -12px 44px rgba(0,0,0,.3);max-height:90%;overflow-y:auto;scrollbar-width:none}
+.sheet::-webkit-scrollbar{display:none}
+.grabber{width:40px;height:5px;border-radius:3px;background:var(--rule);margin:3px auto 10px}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.sheet-head .st{font-size:19px;font-weight:720;color:var(--ink)}
+.sheet-head .cancel{color:var(--accent);background:none;border:none;font-size:15px;font-weight:550;font-family:inherit;cursor:pointer}
+.field{margin:14px 0}
+.field>label{display:flex;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:0 2px 7px}
+.field .opt{color:var(--muted);font-weight:600}
+.input{display:flex;align-items:center;gap:9px;background:var(--surface-2);border:1px solid var(--rule);border-radius:11px;padding:11px 12px}
+.input .tx{flex:1;font-size:15px;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.input .tx.ph{color:var(--muted)}
+.input .tx.mono{font-family:var(--mono);font-size:14px;letter-spacing:.3px}
+.strength{display:flex;gap:4px;margin:9px 2px 0}
+.strength i{height:4px;flex:1;border-radius:2px;background:var(--rule)}
+.strength i.on{background:var(--active)}
+.strength-label{font-size:12px;color:var(--active);margin-top:6px;font-weight:600}
+.subnote{font-size:12px;color:var(--muted);text-align:center;margin-top:10px}
+
+/* toast */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(12px);background:var(--ink);color:var(--surface);padding:10px 18px;border-radius:999px;font-size:13px;font-weight:600;opacity:0;pointer-events:none;transition:.22s;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ensure ellipsis/stacked text spans are block-level so they don't overlap */
+.bcard .addr,.bcard .use,.row .main .t,.row .main .d,.mrow .msub,.mrow .mprev,.lrow .lsite,.lrow .luser,.arow .atask,.lbrow .lnm,.lbrow .lrg,.secnote .nk,.secnote .nd,.profile .pn{display:block}
+.lbcard .lbt,.lbcard .lbd,.fbhead .fn,.fbhead .fd{display:block}
+.lbcard .lbm{min-width:0}
+.mrow .who{min-width:0}
+.arow .aname{min-width:0;overflow:hidden}
+.arow .aname .nm{flex:0 0 auto;min-width:0;max-width:150px}
+.arow .aname .hpill{flex:0 0 auto}
+@media(prefers-reduced-motion:reduce){.live-dot::after,.typing span,.ring::after{animation:none}}
+@media(max-width:440px){.phone{width:100%;border-radius:40px}.screen{border-radius:30px;height:92vh;max-height:760px}.frame-wrap{width:100%}}
+</style>
+</head>
+<body>
+
+<!-- icon sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="ic-network" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 2.6 2.8 15.4 0 18"/><path d="M12 3c-2.8 2.6-2.8 15.4 0 18"/></symbol>
+<symbol id="ic-burner" viewBox="0 0 24 24"><path d="M12 3c3.2 3 4.6 5.2 4.6 8A4.6 4.6 0 0 1 7.4 11c0-1.6.6-2.8 1.5-3.8.1 1.2.8 1.9 1.6 1.9C10 6.7 10.8 4.8 12 3z"/></symbol>
+<symbol id="ic-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.3" fill="currentColor" stroke="none"/></symbol>
+<symbol id="ic-feedback" viewBox="0 0 24 24"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3.2V15.5a2 2 0 0 1-.5-1.3z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/></symbol>
+<symbol id="ic-account" viewBox="0 0 24 24"><circle cx="12" cy="8.2" r="3.7"/><path d="M5 19.6c0-3.7 3.1-5.7 7-5.7s7 2 7 5.7"/></symbol>
+<symbol id="ic-signal" viewBox="0 0 24 24"><rect x="2" y="14" width="3.4" height="6" rx="1" fill="currentColor" stroke="none"/><rect x="7.2" y="10.5" width="3.4" height="9.5" rx="1" fill="currentColor" stroke="none"/><rect x="12.4" y="7" width="3.4" height="13" rx="1" fill="currentColor" stroke="none"/><rect x="17.6" y="3.5" width="3.4" height="16.5" rx="1" fill="currentColor" stroke="none"/></symbol>
+<symbol id="ic-wifi" viewBox="0 0 24 24"><path d="M3.5 8.5c5-4.2 12-4.2 17 0"/><path d="M6.5 12c3.2-2.7 7.8-2.7 11 0"/><path d="M9.5 15.4c1.6-1.3 3.4-1.3 5 0"/><circle cx="12" cy="18.6" r="1.1" fill="currentColor" stroke="none"/></symbol>
+<symbol id="ic-battery" viewBox="0 0 24 24"><rect x="2" y="7.5" width="18" height="9" rx="2.4"/><rect x="3.6" y="9.1" width="11" height="5.8" rx="1.2" fill="currentColor" stroke="none"/><path d="M21.4 10.6v2.8"/></symbol>
+<symbol id="ic-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.4"/><path d="M15.5 8.5V6.2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2.3"/></symbol>
+<symbol id="ic-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+<symbol id="ic-chev" viewBox="0 0 24 24"><path d="M9.5 5.5l6.2 6.5-6.2 6.5"/></symbol>
+<symbol id="ic-back" viewBox="0 0 24 24"><path d="M14.5 5.5l-6.2 6.5 6.2 6.5"/></symbol>
+<symbol id="ic-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3.1"/></symbol>
+<symbol id="ic-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4.6L4 8.5"/><path d="M4 4.5V8.5h4"/><path d="M4 13a8 8 0 0 0 14 4.6l2-2.1"/><path d="M20 19.5V15.5h-4"/></symbol>
+<symbol id="ic-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="3.7"/><path d="M10.6 12.4 19.2 3.8"/><path d="M16.4 6.6 19.4 9.6"/><path d="M14 9l2.4 2.4"/></symbol>
+<symbol id="ic-note" viewBox="0 0 24 24"><rect x="5.5" y="4" width="13" height="16" rx="2.4"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4.5"/></symbol>
+<symbol id="ic-mail" viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2.4"/><path d="M3.6 7.2 12 13l8.4-5.8"/></symbol>
+<symbol id="ic-shield" viewBox="0 0 24 24"><path d="M12 3.2 19 6v5.2c0 4.4-3 7.8-7 9.6-4-1.8-7-5.2-7-9.6V6z"/></symbol>
+<symbol id="ic-devices" viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="9.2" rx="1.6"/><path d="M2 17.4h14.5"/><rect x="16.5" y="8.5" width="5.5" height="9.5" rx="1.4"/><path d="M18.3 15.8h1.9"/></symbol>
+<symbol id="ic-trophy" viewBox="0 0 24 24"><path d="M7.5 4.5h9v3.5a4.5 4.5 0 0 1-9 0z"/><path d="M7.5 6H5a2.5 2.5 0 0 0 2.6 2.9M16.5 6H19a2.5 2.5 0 0 1-2.6 2.9"/><path d="M12 12.5v3.5M9 19.5h6M9.8 19.5c0-2 1-3.5 2.2-3.5s2.2 1.5 2.2 3.5"/></symbol>
+<symbol id="ic-send" viewBox="0 0 24 24"><path d="M20.5 3.5 10 11"/><path d="M20.5 3.5 14 20.5l-3.9-7.8L3.5 9z"/></symbol>
+<symbol id="ic-check" viewBox="0 0 24 24"><path d="M5 12.5 10 17.5 19.5 6.5"/></symbol>
+<symbol id="ic-edit" viewBox="0 0 24 24"><path d="M4 20h4.2L19 9.2 14.8 5 4 15.8z"/><path d="M13.5 6.3 17.7 10.5"/></symbol>
+<symbol id="ic-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.4"/><path d="M7 9.5l3 2.8-3 2.8"/><path d="M12.5 15.1h4.5"/></symbol>
+<symbol id="ic-cpu" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9.5 2.8v3M14.5 2.8v3M9.5 18.2v3M14.5 18.2v3M2.8 9.5h3M2.8 14.5h3M18.2 9.5h3M18.2 14.5h3"/></symbol>
+<symbol id="ic-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.7v.3"/></symbol>
+<symbol id="ic-support" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.6"/><path d="M5.5 5.5 9.4 9.4M14.6 14.6 18.5 18.5M18.5 5.5 14.6 9.4M9.4 14.6 5.5 18.5"/></symbol>
+<symbol id="ic-reply" viewBox="0 0 24 24"><path d="M9.5 6.5 4.5 11.5l5 5"/><path d="M4.5 11.5h8.5a6 6 0 0 1 6 6v1"/></symbol>
+<symbol id="ic-power" viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M6.8 7A7.5 7.5 0 1 0 17.2 7"/></symbol>
+<symbol id="ic-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9.5" rx="2.4"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+<symbol id="ic-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.3 2"/></symbol>
+<symbol id="ic-checkcircle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.2l2.8 2.8L16.2 9"/></symbol>
+<symbol id="ic-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+<symbol id="ic-bolt" viewBox="0 0 24 24"><path d="M13 3 5.5 13H11l-1 8 7.5-10H12z"/></symbol>
+<symbol id="ic-globe-pin" viewBox="0 0 24 24"><path d="M12 21s6-5.2 6-10A6 6 0 0 0 6 11c0 4.8 6 10 6 10z"/><circle cx="12" cy="11" r="2.3"/></symbol>
+</defs>
+</svg>
+
+<header class="page-head">
+  <div class="kick">URnetwork · product design</div>
+  <h1>URnetwork app &mdash; redesign mockup</h1>
+  <p>Burner identities with a built-in password manager, <b>recURd</b> agent tracking, and a feedback tab reborn as a live chat with <b>factury</b>. Leaderboard moves under Account. New bottom tab bar across every screen.</p>
+  <div class="legend">
+    <span><b>Tap the tabs</b> on the first (Live) frame to switch screens</span>
+    <span>Reveal / copy / regenerate buttons are interactive</span>
+    <span>Switches to <b>dark mode</b> with your system</span>
+  </div>
+</header>
+
+<main class="grid">
+
+<!-- =============== INTERACTIVE FRAME =============== -->
+<figure class="frame-wrap live-ring">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+
+    <div class="panels">
+      <!-- NETWORK -->
+      <section class="panel" data-screen="network">
+        <div class="hdr"><div class="hdr-top"><div><h1>Network</h1><div class="sub">Private, worldwide reach</div></div><button class="icbtn"><svg class="i"><use href="#ic-globe-pin"/></svg></button></div></div>
+        <div class="scroll">
+          <div class="net-hero">
+            <div class="ring"><svg class="i"><use href="#ic-power"/></svg></div>
+            <div class="net-status">Connected</div>
+            <div class="net-sub">Routed worldwide &middot; Amsterdam exit</div>
+            <div class="net-up">Protected for 4h 12m</div>
+          </div>
+          <div class="tiles">
+            <div class="tile"><div class="tv">2.4 GB</div><div class="tk">Shared today</div></div>
+            <div class="tile"><div class="tv">840 MB</div><div class="tk">Used today</div></div>
+            <div class="tile"><div class="tv">1,280</div><div class="tk">Points</div></div>
+          </div>
+          <div class="sec">Connection</div>
+          <div class="card">
+            <div class="row"><span class="ic accent"><svg class="i"><use href="#ic-globe-pin"/></svg></span><span class="main"><span class="t">Location</span></span><span class="val">Amsterdam, NL</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+            <div class="row"><span class="ic"><svg class="i"><use href="#ic-shield"/></svg></span><span class="main"><span class="t">Exit</span></span><span class="val">Provider mesh</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+            <div class="row"><span class="ic active"><svg class="i"><use href="#ic-bolt"/></svg></span><span class="main"><span class="t">Provide bandwidth</span><span class="d">Earn points while idle</span></span><span class="sw on"></span></div>
+          </div>
+          <div class="sec">Session</div>
+          <div class="card">
+            <div class="row"><span class="ic"><svg class="i"><use href="#ic-clock"/></svg></span><span class="main"><span class="t">Speed</span></span><span class="val">128 Mbps</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+            <div class="row"><span class="ic"><svg class="i"><use href="#ic-record"/></svg></span><span class="main"><span class="t">Network stats</span></span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BURNER (compact) -->
+      <section class="panel" data-screen="burner" hidden>
+        <div class="hdr"><div class="hdr-top"><div><h1>Burner</h1><div class="sub">5 identities</div></div><button class="icbtn accent"><svg class="i"><use href="#ic-plus"/></svg></button></div></div>
+        <div class="scroll">
+          <div class="banner"><span class="bi"><svg class="i"><use href="#ic-key"/></svg></span><span class="bt"><b>Set URnetwork as your password manager</b> &mdash; autofill logins everywhere.</span><span class="bx"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+          <a class="bcard" style="margin-top:12px">
+            <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">swift-otter-4821@burner.ur</span><span class="use">Used at shopify.com, reddit.com</span></span><span class="rt"><span class="badge">3</span><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+            <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>4 logins</span><span class="pill"><svg class="i"><use href="#ic-note"/></svg>2 notes</span></div>
+          </a>
+          <a class="bcard">
+            <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">brave-ember-2508@burner.ur</span><span class="use">Design tools</span></span><span class="rt"><span class="badge">1</span><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+            <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>6 logins</span></div>
+          </a>
+        </div>
+      </section>
+
+      <!-- recURd (compact) -->
+      <section class="panel" data-screen="recurd" hidden>
+        <div class="hdr"><div class="hdr-top"><div><h1>recURd</h1><div class="sub">2 active &middot; 6 total</div></div><button class="icbtn"><svg class="i"><use href="#ic-search"/></svg></button></div></div>
+        <div class="scroll">
+          <div class="sec">Active now</div>
+          <div class="card">
+            <div class="arow"><span class="ava" style="background:#c56a3a">CC</span><span class="ab"><span class="aname"><span class="live-dot"></span><span class="nm">api-refactor</span><span class="hpill">Claude Code</span></span><span class="atask liveT">Editing connect/transfer.go</span></span><span class="aright"><span class="acost">$2.14</span><span class="albl">today</span></span></div>
+            <div class="arow"><span class="ava" style="background:#2b2f36">Cu</span><span class="ab"><span class="aname"><span class="live-dot"></span><span class="nm">docs-sync</span><span class="hpill">Cursor</span></span><span class="atask liveT">Reading 12 files in /docs</span></span><span class="aright"><span class="acost">$0.41</span><span class="albl">today</span></span></div>
+          </div>
+          <div class="sec">Recent</div>
+          <div class="card">
+            <div class="arow"><span class="ava" style="background:#6b53c7">Go</span><span class="ab"><span class="aname"><span class="nm">pr-triage</span><span class="hpill">Goose</span></span><span class="atask">Idle &middot; last seen 2h ago</span></span><span class="aright"><span class="acost">$1.05</span><span class="albl">today</span></span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEEDBACK (compact) -->
+      <section class="panel" data-screen="feedback" hidden>
+        <div class="fbhead"><span class="fav2">fa<span class="on"></span></span><span><span class="fn">factury</span><span class="fd">Support &middot; typically replies in minutes</span></span></div>
+        <div class="thread">
+          <span class="daydiv">Today</span>
+          <div class="grp me"><div class="msg me">Dark mode map labels are hard to read.</div><span class="mtime">9:12</span></div>
+          <div class="grp them"><span class="sysname">FACTURY</span><div class="msg them">Logged as <span class="idtag">#8171</span> &mdash; forwarded with your screenshot. <span class="chip received" style="margin-top:7px"><span class="cd"></span>Received</span></div></div>
+          <div class="typing"><span></span><span></span><span></span></div>
+        </div>
+        <div class="composer"><span class="inp">Send feedback&hellip;</span><button class="send"><svg class="i"><use href="#ic-send"/></svg></button></div>
+      </section>
+
+      <!-- ACCOUNT (compact) -->
+      <section class="panel" data-screen="account" hidden>
+        <div class="hdr"><div class="hdr-top"><h1>Account</h1></div></div>
+        <div class="scroll">
+          <div class="profile"><span class="pav">B</span><span><span class="pn">Brien</span><span class="pid">brien.ur.network <svg class="i"><use href="#ic-copy"/></svg></span><span class="planchip"><svg class="i" style="width:12px;height:12px"><use href="#ic-shield"/></svg>Supporter &middot; $5/mo</span></span></div>
+          <a class="lbcard"><span class="lbic"><svg class="i"><use href="#ic-trophy"/></svg></span><span class="lbm"><span class="lbt">Leaderboard</span><span class="lbd">You're #214 this week &middot; 48 GB shared</span></span><span class="rankbubble">#214</span><span class="chev" style="opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></a>
+          <div class="sec">Settings</div>
+          <div class="card">
+            <div class="row"><span class="ic"><svg class="i"><use href="#ic-devices"/></svg></span><span class="main"><span class="t">Devices</span></span><span class="val">4</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+            <div class="row"><span class="ic accent"><svg class="i"><use href="#ic-key"/></svg></span><span class="main"><span class="t">Password manager</span></span><span class="val" style="color:var(--accent);font-weight:600">Set up</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <nav class="tabbar" data-live>
+      <button class="tab active" data-go="network"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab" data-go="burner"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab" data-go="recurd"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab" data-go="feedback"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab" data-go="account"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n live">&#9654;</span>Interactive &mdash; tap the bottom tabs</span><span class="desc">The live frame. Tap Network / Burner / recURd / Feedback / Account to switch screens.</span></figcaption>
+</figure>
+
+<!-- =============== A) BURNER LIST =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="hdr"><div class="hdr-top"><div><h1>Burner identities</h1><div class="sub">5 identities &middot; 16 unread</div></div><button class="icbtn"><svg class="i"><use href="#ic-search"/></svg></button></div></div>
+    <div class="scroll">
+      <div class="banner"><span class="bi"><svg class="i"><use href="#ic-key"/></svg></span><span class="bt"><b>Set URnetwork as your password manager</b> &mdash; autofill logins everywhere.</span><span class="bx"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+
+      <a class="bcard" style="margin-top:12px">
+        <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">swift-otter-4821@burner.ur</span><span class="use">Used at shopify.com, reddit.com</span></span><span class="rt"><span class="badge">3</span><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+        <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>4 logins</span><span class="pill"><svg class="i"><use href="#ic-note"/></svg>2 notes</span><span class="pill g">Created Oct 12</span></div>
+      </a>
+      <a class="bcard">
+        <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">calm-harbor-7193@burner.ur</span><span class="use">Newsletters &amp; signups</span></span><span class="rt"><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+        <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>2 logins</span><span class="pill"><svg class="i"><use href="#ic-note"/></svg>1 note</span><span class="pill g">Created Sep 3</span></div>
+      </a>
+      <a class="bcard">
+        <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">brave-ember-2508@burner.ur</span><span class="use">Design tools</span></span><span class="rt"><span class="badge">1</span><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+        <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>6 logins</span><span class="pill g">Created Aug 21</span></div>
+      </a>
+      <a class="bcard">
+        <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">bold-cedar-3317@burner.ur</span><span class="use">Shopping &amp; deliveries</span></span><span class="rt"><span class="badge">12</span><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+        <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>3 logins</span><span class="pill"><svg class="i"><use href="#ic-note"/></svg>1 note</span><span class="pill g">Created Jul 19</span></div>
+      </a>
+      <a class="bcard">
+        <div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">quiet-meadow-6642@burner.ur</span><span class="use">Banking alias</span></span><span class="rt"><span class="chev" style="color:var(--muted);opacity:.5"><svg class="i"><use href="#ic-chev"/></svg></span></span></div>
+        <div class="pills"><span class="pill"><svg class="i"><use href="#ic-key"/></svg>1 login</span><span class="pill"><svg class="i"><use href="#ic-note"/></svg>3 notes</span><span class="pill g">Created Jun 2</span></div>
+      </a>
+    </div>
+    <button class="fab"><svg class="i"><use href="#ic-plus"/></svg></button>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">A</span>Burner &mdash; identities</span><span class="desc">List of burner email identities with unread counts, saved-login and note indicators, and a &ldquo;+&rdquo; to create one.</span></figcaption>
+</figure>
+
+<!-- =============== B) BURNER DETAIL =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="navbar"><button class="back"><svg class="i"><use href="#ic-back"/></svg>Burner</button><span class="nav-title">Identity</span><span class="nav-right"><span class="t">Edit</span></span></div>
+    <div class="scroll">
+      <div class="idhero">
+        <span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span>
+        <div><span class="idaddr">swift-otter-4821@burner.ur<button data-copy="swift-otter-4821@burner.ur"><svg class="i"><use href="#ic-copy"/></svg></button></span></div>
+        <div class="idmeta"><span class="live-dot" style="background:var(--active);width:7px;height:7px"></span>Active &middot; created Oct 12 &middot; forwards to you</div>
+        <div class="actions"><a class="btn primary"><svg class="i"><use href="#ic-reply"/></svg>Reply from this</a><a class="btn ghost"><svg class="i"><use href="#ic-mail"/></svg>Compose</a></div>
+      </div>
+
+      <div class="sec">Inbox <span class="sc">3 unread</span></div>
+      <div class="card">
+        <div class="mrow unread"><span class="ava-l" style="background:#5a8f3a">S</span><span class="mb"><span class="mhead"><span class="who">Shopify</span><span class="when">2h<span class="mdot"></span></span></span><span class="msub">Your order #10432 has shipped</span><span class="mprev">Your package is on its way. Track it here&hellip;</span></span></div>
+        <div class="mrow"><span class="ava-l" style="background:#ff4500">R</span><span class="mb"><span class="mhead"><span class="who">Reddit</span><span class="when">1d</span></span><span class="msub">New reply to your comment</span><span class="mprev">u/mapfan replied: &ldquo;Same issue on my end&hellip;&rdquo;</span></span></div>
+        <div class="mrow"><span class="ava-l" style="background:#a259ff">F</span><span class="mb"><span class="mhead"><span class="who">Figma</span><span class="when">3d</span></span><span class="msub">You were added to &ldquo;Redesign&rdquo;</span><span class="mprev">Brien added you to a team workspace&hellip;</span></span></div>
+      </div>
+
+      <div class="sec">Logins <span class="sc">4 saved</span></div>
+      <div class="card">
+        <div class="lrow"><span class="ava-l" style="background:#5a8f3a;border-radius:9px">S</span><span class="lb"><span class="lsite">shopify.com</span><span class="luser">otter4821 &middot; <span class="pw" data-pw="s9!Km2vQ" data-shown="0">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span></span></span><span class="lax"><button class="minibtn" data-reveal><svg class="i"><use href="#ic-eye"/></svg></button><button class="minibtn" data-copy="s9!Km2vQ"><svg class="i"><use href="#ic-copy"/></svg></button></span></div>
+        <div class="lrow"><span class="ava-l" style="background:#ff4500;border-radius:9px">R</span><span class="lb"><span class="lsite">reddit.com</span><span class="luser">swift_otter &middot; <span class="pw" data-pw="Rd7$pLx1" data-shown="0">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span></span></span><span class="lax"><button class="minibtn" data-reveal><svg class="i"><use href="#ic-eye"/></svg></button><button class="minibtn" data-copy="Rd7$pLx1"><svg class="i"><use href="#ic-copy"/></svg></button></span></div>
+        <div class="lrow"><span class="ava-l" style="background:#a259ff;border-radius:9px">F</span><span class="lb"><span class="lsite">figma.com</span><span class="luser">otter4821 &middot; <span class="pw" data-pw="Fg3@wZ8n" data-shown="0">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span></span></span><span class="lax"><button class="minibtn" data-reveal><svg class="i"><use href="#ic-eye"/></svg></button><button class="minibtn" data-copy="Fg3@wZ8n"><svg class="i"><use href="#ic-copy"/></svg></button></span></div>
+        <div class="lrow"><span class="ava-l" style="background:#111418;border-radius:9px">N</span><span class="lb"><span class="lsite">notion.so</span><span class="luser">otter4821 &middot; <span class="pw" data-pw="No5!tQ2k" data-shown="0">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span></span></span><span class="lax"><button class="minibtn" data-reveal><svg class="i"><use href="#ic-eye"/></svg></button><button class="minibtn" data-copy="No5!tQ2k"><svg class="i"><use href="#ic-copy"/></svg></button></span></div>
+      </div>
+
+      <div class="sec">Notes <span class="sc">2</span></div>
+      <div class="card">
+        <div class="secnote"><span class="ic accent" style="width:31px;height:31px;border-radius:8px;display:grid;place-items:center"><svg class="i" style="width:18px;height:18px"><use href="#ic-lock"/></svg></span><span class="mb"><span class="nk">Recovery codes &mdash; Shopify</span><span class="nd">8 codes &middot; tap to reveal</span></span><span class="chev" style="color:var(--muted);opacity:.5;display:grid"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+        <div class="secnote" style="border-top:1px solid var(--rule)"><span class="ic" style="width:31px;height:31px;border-radius:8px;display:grid;place-items:center"><svg class="i" style="width:18px;height:18px"><use href="#ic-note"/></svg></span><span class="mb"><span class="nk">Shipping alias</span><span class="nd">Jordan Ellis &middot; 24 Pine St, Portland&hellip;</span></span><span class="chev" style="color:var(--muted);opacity:.5;display:grid"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+      </div>
+    </div>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">B</span>Burner &mdash; identity detail</span><span class="desc">Inbox (one unread) + saved logins with reveal/copy + secure notes. Header copies the address or replies from it.</span></figcaption>
+</figure>
+
+<!-- =============== C) BURNER CREATE (SHEET) =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="hdr"><div class="hdr-top"><div><h1>Burner identities</h1><div class="sub">5 identities</div></div><button class="icbtn"><svg class="i"><use href="#ic-search"/></svg></button></div></div>
+    <div class="scroll" aria-hidden="true">
+      <div class="banner"><span class="bi"><svg class="i"><use href="#ic-key"/></svg></span><span class="bt"><b>Set URnetwork as your password manager</b></span></div>
+      <a class="bcard" style="margin-top:12px"><div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">swift-otter-4821@burner.ur</span><span class="use">Used at shopify.com</span></span></div></a>
+      <a class="bcard"><div class="btop"><span class="fav"><svg class="i"><use href="#ic-burner"/></svg></span><span class="em"><span class="addr">calm-harbor-7193@burner.ur</span><span class="use">Newsletters</span></span></div></a>
+    </div>
+    <div class="scrim"></div>
+    <div class="sheet">
+      <div class="grabber"></div>
+      <div class="sheet-head"><span class="st">New burner</span><button class="cancel">Cancel</button></div>
+      <div class="field">
+        <label>Generated email</label>
+        <div class="input"><span class="tx mono">swift-otter-4821@burner.ur</span><button class="minibtn" data-regen="email"><svg class="i"><use href="#ic-refresh"/></svg></button><button class="minibtn" data-copy="swift-otter-4821@burner.ur"><svg class="i"><use href="#ic-copy"/></svg></button></div>
+      </div>
+      <div class="field">
+        <label>Website <span class="opt">optional</span></label>
+        <div class="input"><span class="tx">shopify.com</span></div>
+      </div>
+      <div class="field">
+        <label>Username <span class="opt">optional</span></label>
+        <div class="input"><span class="tx">otter4821</span></div>
+      </div>
+      <div class="field pwwrap">
+        <label>Password <span class="opt">generated</span></label>
+        <div class="input"><span class="pw tx mono" data-pw="Xq7!vK2$mNp9bL" data-shown="1">Xq7!vK2$mNp9bL</span><button class="minibtn on" data-reveal><svg class="i"><use href="#ic-eye"/></svg></button><button class="minibtn" data-regen="pw"><svg class="i"><use href="#ic-refresh"/></svg></button></div>
+        <div class="strength"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div>
+        <div class="strength-label">Strong &middot; 14 characters</div>
+      </div>
+      <div class="field">
+        <label>Note <span class="opt">optional</span></label>
+        <div class="input"><span class="tx ph">Shopping account &mdash; no marketing&hellip;</span></div>
+      </div>
+      <button class="btn primary block">Save burner</button>
+      <div class="subnote">URnetwork will autofill this login on shopify.com next time.</div>
+    </div>
+    <nav class="tabbar" style="filter:brightness(.97)">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">C</span>Burner &mdash; create identity / password</span><span class="desc">Bottom sheet over the list: regenerate the email, optional site, username + generated strong password, and a note.</span></figcaption>
+</figure>
+
+<!-- =============== D) recURd LIST =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="hdr"><div class="hdr-top"><div><h1>Your agents</h1><div class="sub">2 active &middot; $3.52 today</div></div><button class="icbtn"><svg class="i"><use href="#ic-search"/></svg></button></div></div>
+    <div class="scroll">
+      <div class="sec">Active now <span class="sc">live</span></div>
+      <div class="card">
+        <div class="arow"><span class="ava" style="background:#c56a3a">CC</span><span class="ab"><span class="aname"><span class="live-dot"></span><span class="nm">api-refactor</span><span class="hpill">Claude Code</span></span><span class="atask liveT">Editing connect/transfer.go &middot; running go test</span></span><span class="aright"><span class="acost">$2.14</span><span class="albl">today</span></span></div>
+        <div class="arow"><span class="ava" style="background:#2b2f36">Cu</span><span class="ab"><span class="aname"><span class="live-dot"></span><span class="nm">docs-sync</span><span class="hpill">Cursor</span></span><span class="atask liveT">Reading 12 files in /docs</span></span><span class="aright"><span class="acost">$0.41</span><span class="albl">today</span></span></div>
+      </div>
+
+      <div class="sec">Recent &amp; idle</div>
+      <div class="card">
+        <div class="arow"><span class="ava" style="background:#c56a3a">CC</span><span class="ab"><span class="aname"><span class="nm">schema-migrate</span><span class="hpill">Claude Code</span></span><span class="atask">Done 32m ago &middot; 142 edits, merged PR #318</span></span><span class="aright"><span class="acost">$6.80</span><span class="albl">today</span></span></div>
+        <div class="arow"><span class="ava" style="background:#6b53c7">Go</span><span class="ab"><span class="aname"><span class="nm">pr-triage</span><span class="hpill">Goose</span></span><span class="atask">Idle &middot; last seen 2h ago</span></span><span class="aright"><span class="acost">$1.05</span><span class="albl">today</span></span></div>
+        <div class="arow"><span class="ava" style="background:#0ea47f">Cx</span><span class="ab"><span class="aname"><span class="nm">nightly-build</span><span class="hpill">Codex CLI</span></span><span class="atask">Scheduled &middot; next run 02:00</span></span><span class="aright"><span class="acost">$0.00</span><span class="albl">today</span></span></div>
+        <div class="arow"><span class="ava" style="background:#2f6bff">Ze</span><span class="ab"><span class="aname"><span class="nm">perf-audit</span><span class="hpill">Zed</span></span><span class="atask">Done yesterday &middot; 18 edits</span></span><span class="aright"><span class="acost">$0.92</span><span class="albl">Tue</span></span></div>
+      </div>
+      <div class="subnote" style="margin-top:14px">Mirrors the recURd desktop app. Every agent keeps a private record you control.</div>
+    </div>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">D</span>recURd &mdash; agents (active on top)</span><span class="desc">Active agents with pulsing green dots and a live task line, then idle/historical. Each row shows harness and cost today.</span></figcaption>
+</figure>
+
+<!-- =============== E) recURd DETAIL =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="navbar"><button class="back"><svg class="i"><use href="#ic-back"/></svg>Agents</button><span class="nav-title">api-refactor</span><span class="nav-right"><button class="icbtn" style="width:32px;height:32px"><svg class="i" style="width:18px;height:18px"><use href="#ic-more"/></svg></button></span></div>
+    <div class="scroll">
+      <div class="adhead"><span class="ava" style="background:#c56a3a">CC</span><span><span class="adn">api-refactor</span><span class="adsub"><span class="statuspill"><span class="live-dot"></span>Active</span><span>Claude Code</span><span>&middot;</span><span class="mono">urnetwork/connect @ main</span></span></span></div>
+
+      <div class="addr-row"><span class="ab2"><span class="al">Agent address</span><div class="av">api-refactor@brien.ur.network</div></span><button class="minibtn" data-copy="api-refactor@brien.ur.network"><svg class="i"><use href="#ic-copy"/></svg></button><button class="minibtn" data-reveal style="display:none"></button></div>
+      <div class="subnote" style="text-align:left;margin:6px 2px 0">Agents send and receive messages at this address.</div>
+
+      <div class="stats">
+        <div class="stat"><div class="v">$2.14</div><div class="k">Cost today</div></div>
+        <div class="stat"><div class="v">1.24M</div><div class="k">Tokens</div></div>
+        <div class="stat"><div class="v">23</div><div class="k">Edits</div></div>
+      </div>
+
+      <div class="sec">Activity <span class="sc">live</span></div>
+      <div class="card" style="padding:12px 12px 2px">
+        <div class="timeline">
+          <div class="tl"><span class="tdot k-edit"><svg class="i"><use href="#ic-edit"/></svg></span><span class="tbody"><span class="trow"><span class="tt">Edit</span><span class="ttime">14:32:08</span></span><span class="td">connect/transfer.go &nbsp;<span style="color:var(--active)">+18</span> <span style="color:var(--danger)">&minus;4</span></span></span></div>
+          <div class="tl"><span class="tdot k-bash"><svg class="i"><use href="#ic-terminal"/></svg></span><span class="tbody"><span class="trow"><span class="tt">Bash</span><span class="ttime">14:32:01</span></span><span class="td">go test ./transfer/... &middot; exit 0</span></span></div>
+          <div class="tl"><span class="tdot k-appr"><svg class="i"><use href="#ic-checkcircle"/></svg></span><span class="tbody"><span class="trow"><span class="tt">Approval</span><span class="ttime">14:31:46</span></span><span class="td">&ldquo;run tests&rdquo; &mdash; approved by you</span></span></div>
+          <div class="tl"><span class="tdot k-model"><svg class="i"><use href="#ic-cpu"/></svg></span><span class="tbody"><span class="trow"><span class="tt">Model call</span><span class="ttime">14:31:39</span></span><span class="td">claude-opus-4-8 &middot; 14.2k tokens</span></span></div>
+          <div class="tl"><span class="tdot k-read"><svg class="i"><use href="#ic-note"/></svg></span><span class="tbody"><span class="trow"><span class="tt">Read</span><span class="ttime">14:31:20</span></span><span class="td">transfer.go, transfer_test.go</span></span></div>
+          <div class="tl"><span class="tdot k-edit"><svg class="i"><use href="#ic-edit"/></svg></span><span class="tbody"><span class="trow"><span class="tt">Edit</span><span class="ttime">14:30:58</span></span><span class="td">connect/transfer.go &nbsp;<span style="color:var(--active)">+42</span> <span style="color:var(--danger)">&minus;7</span></span></span></div>
+        </div>
+      </div>
+
+      <div class="sec">History</div>
+      <div class="card">
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-clock"/></svg></span><span class="main"><span class="t">Today, 09:12</span><span class="d">142 edits &middot; merged PR #318</span></span><span class="val mono">$4.66</span></div>
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-clock"/></svg></span><span class="main"><span class="t">Yesterday</span><span class="d">38 edits &middot; 2 sessions</span></span><span class="val mono">$1.90</span></div>
+      </div>
+
+      <div class="sec">Messages</div>
+      <div class="mini">
+        <div class="mb-b me">Skip integration tests for now &mdash; unit only.</div>
+        <div class="mb-b them">Got it &mdash; switching to <span class="mono">go test -short ./...</span> and re-running now.</div>
+      </div>
+    </div>
+    <div class="composer"><span class="inp">Message api-refactor&hellip;</span><button class="send"><svg class="i"><use href="#ic-send"/></svg></button></div>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">E</span>recURd &mdash; agent detail + message</span><span class="desc">Agent address <span class="mono">api-refactor@brien.ur.network</span>, a real-time activity stream, history, and a composer to message the agent.</span></figcaption>
+</figure>
+
+<!-- =============== F) FEEDBACK CHAT =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="fbhead"><span class="fav2">fa<span class="on"></span></span><span><span class="fn">factury</span><span class="fd">URnetwork support &middot; typically replies in minutes</span></span></div>
+    <div class="thread">
+      <span class="daydiv">Oct 28</span>
+      <div class="grp me"><div class="msg me">The map doesn&rsquo;t load on wifi &mdash; it just spins.</div><span class="mtime">10:02</span></div>
+      <div class="grp them"><span class="sysname">FACTURY</span><div class="msg them">Thanks, Brien. Logged as <span class="idtag">#8152</span> and routed to the maps team.<div style="margin-top:8px"><span class="chip received"><span class="cd"></span>Received</span></div></div></div>
+
+      <span class="daydiv">Oct 29</span>
+      <div class="grp them"><span class="sysname">FACTURY</span><div class="msg them">Reproduced on iOS 18 behind a captive-portal wifi. Working on a fix.<div style="margin-top:8px"><span class="chip progress"><span class="cd"></span>In progress</span></div></div></div>
+
+      <span class="daydiv">Oct 31</span>
+      <div class="grp them"><span class="sysname">FACTURY</span><div class="msg them">Shipped: the map now retries on reconnect. Fixed in <span class="idtag">2.31</span> &mdash; thanks for the report!<div style="margin-top:8px"><span class="chip fixed"><span class="cd"></span>Fixed in 2.31</span></div></div></div>
+
+      <span class="daydiv">Today</span>
+      <div class="grp me"><div class="msg me">Dark-mode map labels are hard to read.</div><span class="mtime">9:12</span></div>
+      <div class="grp them"><span class="sysname">FACTURY</span><div class="msg them">Logged as <span class="idtag">#8171</span> &mdash; forwarded with your screenshot.<div style="margin-top:8px"><span class="chip received"><span class="cd"></span>Received</span></div></div></div>
+      <div class="grp me"><div class="msg me">Also &mdash; can you add WireGuard config export?</div><span class="mtime">9:14</span></div>
+      <div class="grp them"><span class="sysname">FACTURY</span><div class="msg them">Good idea. Not planned for the next release, but I&rsquo;ve added it to the request board as <span class="idtag">#R-204</span>.<div style="margin-top:8px"><span class="chip wontfix"><span class="cd"></span>Not planned</span></div></div></div>
+      <div class="typing"><span></span><span></span><span></span></div>
+    </div>
+    <div class="composer"><span class="inp">Send feedback&hellip;</span><button class="send"><svg class="i"><use href="#ic-send"/></svg></button></div>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">F</span>Feedback &mdash; live chat with factury</span><span class="desc">The feedback tab is now a chat thread. Items carry status chips: Received &rarr; In progress &rarr; Fixed / Not planned.</span></figcaption>
+</figure>
+
+<!-- =============== G) ACCOUNT =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="hdr"><div class="hdr-top"><h1>Account</h1></div></div>
+    <div class="scroll">
+      <div class="profile"><span class="pav">B</span><span><span class="pn">Brien</span><span class="pid">brien.ur.network <svg class="i" data-copy="brien.ur.network"><use href="#ic-copy"/></svg></span><span class="planchip"><svg class="i" style="width:12px;height:12px"><use href="#ic-shield"/></svg>Supporter &middot; $5/mo</span></span></div>
+
+      <a class="lbcard"><span class="lbic"><svg class="i"><use href="#ic-trophy"/></svg></span><span class="lbm"><span class="lbt">Leaderboard</span><span class="lbd">You&rsquo;re #214 this week &middot; 48 GB shared</span></span><span class="rankbubble">#214</span><span class="chev" style="opacity:.5;display:grid;color:var(--accent)"><svg class="i"><use href="#ic-chev"/></svg></span></a>
+
+      <div class="sec">Settings</div>
+      <div class="card">
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-devices"/></svg></span><span class="main"><span class="t">Devices</span></span><span class="val">4</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-shield"/></svg></span><span class="main"><span class="t">Privacy &amp; data</span></span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+        <div class="row"><span class="ic accent"><svg class="i"><use href="#ic-key"/></svg></span><span class="main"><span class="t">Password manager</span><span class="d">Autofill logins everywhere</span></span><span class="val" style="color:var(--accent);font-weight:600">Set up</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-burner"/></svg></span><span class="main"><span class="t">Burner identities</span></span><span class="val">5</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+      </div>
+
+      <div class="sec">Help</div>
+      <div class="card">
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-support"/></svg></span><span class="main"><span class="t">Support</span><span class="d">Chat with factury</span></span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+        <div class="row"><span class="ic"><svg class="i"><use href="#ic-info"/></svg></span><span class="main"><span class="t">About URnetwork</span></span><span class="val">v2.31</span><span class="chev"><svg class="i"><use href="#ic-chev"/></svg></span></div>
+      </div>
+
+      <div class="card" style="margin-top:14px"><div class="row danger"><span class="main" style="text-align:center"><span class="t" style="width:100%">Sign out</span></span></div></div>
+      <div class="subnote" style="margin-top:14px">Leaderboard moved here from its own tab.</div>
+    </div>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">G</span>Account &mdash; Leaderboard moved here</span><span class="desc">Profile, plan, and settings rows. Leaderboard is now a prominent entry here (with your rank), not a bottom tab.</span></figcaption>
+</figure>
+
+<!-- =============== H) LEADERBOARD =============== -->
+<figure class="frame-wrap">
+  <div class="phone"><div class="screen">
+    <div class="statusbar"><span class="sb-time">9:41</span><span class="island"></span><span class="sb-ic"><svg class="i"><use href="#ic-signal"/></svg><svg class="i"><use href="#ic-wifi"/></svg><svg class="i"><use href="#ic-battery"/></svg></span></div>
+    <div class="navbar"><button class="back"><svg class="i"><use href="#ic-back"/></svg>Account</button><span class="nav-title">Leaderboard</span><span class="nav-right"></span></div>
+    <div class="scroll">
+      <div class="seg"><button class="on">This week</button><button>All time</button></div>
+      <div class="sec">Top providers by data shared</div>
+      <div class="card">
+        <div class="lbrow"><span class="medal" style="background:var(--gold)">1</span><span class="lname"><span class="lnm">nebula-fox</span><span class="lrg">Rotterdam, NL</span></span><span class="lval"><span class="lv">2.41 TB</span><span class="ldelta up">&#9650; held</span></span></div>
+        <div class="lbrow" style="border-top:1px solid var(--rule)"><span class="medal" style="background:var(--silver)">2</span><span class="lname"><span class="lnm">quiet-river</span><span class="lrg">Austin, US</span></span><span class="lval"><span class="lv">2.08 TB</span><span class="ldelta up">&#9650; 1</span></span></div>
+        <div class="lbrow" style="border-top:1px solid var(--rule)"><span class="medal" style="background:var(--bronze)">3</span><span class="lname"><span class="lnm">solar-kite</span><span class="lrg">Seoul, KR</span></span><span class="lval"><span class="lv">1.87 TB</span><span class="ldelta up">&#9650; 2</span></span></div>
+        <div class="lbrow" style="border-top:1px solid var(--rule)"><span class="rk">4</span><span class="lname"><span class="lnm">lunar-reef</span><span class="lrg">Lisbon, PT</span></span><span class="lval"><span class="lv">1.52 TB</span></span></div>
+        <div class="lbrow" style="border-top:1px solid var(--rule)"><span class="rk">5</span><span class="lname"><span class="lnm">amber-dune</span><span class="lrg">Nairobi, KE</span></span><span class="lval"><span class="lv">1.33 TB</span></span></div>
+        <div class="lbrow" style="border-top:1px solid var(--rule)"><span class="rk">6</span><span class="lname"><span class="lnm">cobalt-pine</span><span class="lrg">Toronto, CA</span></span><span class="lval"><span class="lv">1.19 TB</span></span></div>
+        <div class="lbrow" style="border-top:1px solid var(--rule)"><span class="rk">7</span><span class="lname"><span class="lnm">nimble-wren</span><span class="lrg">Berlin, DE</span></span><span class="lval"><span class="lv">1.04 TB</span></span></div>
+      </div>
+
+      <div class="card youcard">
+        <div class="lbrow"><span class="rk">214</span><span class="lname"><span class="lnm">You &middot; brien.ur.network</span><span class="lrg" style="color:var(--accent);opacity:.8">Portland, US</span></span><span class="lval"><span class="lv" style="color:var(--accent-2)">48 GB</span><span class="ldelta up">&#9650; 12 this week</span></span></div>
+      </div>
+      <div class="subnote" style="margin-top:12px">Share more bandwidth to climb the ranking.</div>
+    </div>
+    <nav class="tabbar">
+      <button class="tab"><svg class="i"><use href="#ic-network"/></svg><span>Network</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-burner"/></svg><span>Burner</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-record"/></svg><span>recURd</span></button>
+      <button class="tab"><svg class="i"><use href="#ic-feedback"/></svg><span>Feedback</span></button>
+      <button class="tab active"><svg class="i"><use href="#ic-account"/></svg><span>Account</span></button>
+    </nav>
+    <div class="home-ind"></div>
+  </div></div>
+  <figcaption class="cap"><span class="lab"><span class="n">H</span>Leaderboard (under Account)</span><span class="desc">Reached from the Account screen. Ranking of providers by data shared, with your own row highlighted.</span></figcaption>
+</figure>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  // interactive frame tab switching
+  document.querySelectorAll('[data-live] .tab').forEach(function(t){
+    t.addEventListener('click',function(){
+      var go=t.getAttribute('data-go'); var frame=t.closest('.screen');
+      frame.querySelectorAll('.panel').forEach(function(p){ p.hidden = p.getAttribute('data-screen')!==go; });
+      frame.querySelectorAll('[data-live] .tab').forEach(function(x){ x.classList.toggle('active', x===t); });
+    });
+  });
+
+  // reveal password / secret
+  document.querySelectorAll('[data-reveal]').forEach(function(b){
+    b.addEventListener('click',function(){
+      var wrap=b.closest('.lrow,.input,.field,.pwwrap')||b.parentElement;
+      var pw=wrap.querySelector('.pw'); if(!pw) return;
+      var shown=pw.getAttribute('data-shown')==='1';
+      var real=pw.getAttribute('data-pw')||'';
+      pw.textContent = shown ? '•'.repeat(real.length||9) : real;
+      pw.setAttribute('data-shown', shown?'0':'1');
+      b.classList.toggle('on', !shown);
+    });
+  });
+
+  // copy with toast
+  var toast=document.getElementById('toast');
+  function flash(msg){ toast.textContent=msg; toast.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(function(){toast.classList.remove('show');},1300); }
+  document.querySelectorAll('[data-copy]').forEach(function(b){
+    b.addEventListener('click',function(e){
+      e.preventDefault();
+      var v=b.getAttribute('data-copy')||'';
+      if(navigator.clipboard&&v){ navigator.clipboard.writeText(v).catch(function(){}); }
+      flash('Copied ' + (v && v.length<30 ? v : 'to clipboard'));
+    });
+  });
+
+  // regenerate email / password
+  var adj=['swift','calm','brave','quiet','bold','amber','lunar','solar','nimble','cobalt'];
+  var noun=['otter','harbor','ember','meadow','cedar','falcon','river','kite','willow','delta'];
+  function pick(a){return a[Math.floor(Math.random()*a.length)];}
+  document.querySelectorAll('[data-regen]').forEach(function(b){
+    b.addEventListener('click',function(){
+      var kind=b.getAttribute('data-regen');
+      var wrap=b.closest('.input')||b.parentElement;
+      var tx=wrap.querySelector('.tx')||wrap.querySelector('.pw');
+      if(!tx) return;
+      if(kind==='email'){ tx.classList.remove('ph'); tx.textContent = pick(adj)+'-'+pick(noun)+'-'+(1000+Math.floor(Math.random()*8999))+'@burner.ur'; }
+      else { var cs='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%&*'; var p=''; for(var i=0;i<14;i++){p+=cs[Math.floor(Math.random()*cs.length)];} var real=p; var pwEl=wrap.querySelector('.pw'); if(pwEl){ pwEl.setAttribute('data-pw',real); pwEl.textContent = pwEl.getAttribute('data-shown')==='1'?real:'•'.repeat(real.length);} else { tx.textContent=real; } flash('New strong password'); }
+    });
+  });
+
+  // segmented control (leaderboard)
+  document.querySelectorAll('.seg').forEach(function(seg){
+    seg.querySelectorAll('button').forEach(function(btn){
+      btn.addEventListener('click',function(){ seg.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===btn);}); });
+    });
+  });
+
+  // switches
+  document.querySelectorAll('.sw').forEach(function(s){ s.addEventListener('click',function(){ s.classList.toggle('on'); s.classList.toggle('off'); }); });
+})();
+</script>
+</body>
+</html>

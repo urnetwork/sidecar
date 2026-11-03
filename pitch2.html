@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidecar extended pitch</title>
+<meta name="description" content="A six-page pitch for URnetwork's agent sidecar: one write, three readers, on a private toolkit of storage, email, a TLS edge, inter-agent messaging, port forwarding, and IP addresses.">
+<style>
+  :root {
+    --bg: #eceff3;
+    --paper: #ffffff;
+    --ink: #15171b;
+    --ink-2: #3b414b;
+    --muted: #6a7280;
+    --rule: #e3e6ea;
+    --chip: #f1f3f6;
+    --accent: #0e5a61;
+    --accent-soft: #e5f1f1;
+    --agents: #2457d6;
+    --agents-soft: #e9effd;
+    --devs: #a8540a;
+    --devs-soft: #fbf0e3;
+    --admins: #6d3fd6;
+    --admins-soft: #f0eafd;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 10px 30px rgba(16, 24, 40, .08);
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0e11;
+      --paper: #16191e;
+      --ink: #eceef2;
+      --ink-2: #c5cad3;
+      --muted: #98a1ad;
+      --rule: #2a2f37;
+      --chip: #20242b;
+      --accent: #62c3cb;
+      --accent-soft: #11302f;
+      --agents: #86a8ff;
+      --agents-soft: #172341;
+      --devs: #f0a75f;
+      --devs-soft: #33250f;
+      --admins: #b9a0ff;
+      --admins-soft: #251a40;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0e11;
+    --paper: #16191e;
+    --ink: #eceef2;
+    --ink-2: #c5cad3;
+    --muted: #98a1ad;
+    --rule: #2a2f37;
+    --chip: #20242b;
+    --accent: #62c3cb;
+    --accent-soft: #11302f;
+    --agents: #86a8ff;
+    --agents-soft: #172341;
+    --devs: #f0a75f;
+    --devs-soft: #33250f;
+    --admins: #b9a0ff;
+    --admins-soft: #251a40;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 10pt/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  a { color: inherit; text-decoration-color: var(--rule); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: currentColor; }
+  code {
+    font: 600 7.9pt/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .page {
+    width: 8.5in;
+    height: 11in;
+    margin: 0.35in auto;
+    padding: 0.5in 0.6in 0.45in;
+    background: var(--paper);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .page > * { flex-shrink: 0; }
+  .page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 8pt;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 7px;
+    margin-bottom: 16px;
+  }
+  .page-head .brand { color: var(--accent); font-weight: 650; }
+  .page-foot {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    font-size: 7.5pt;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  h1 {
+    font-size: 25pt;
+    line-height: 1.08;
+    letter-spacing: -.015em;
+    margin: 0 0 6px;
+    font-weight: 750;
+  }
+  .lede {
+    font-size: 13.5pt;
+    line-height: 1.3;
+    color: var(--accent);
+    margin: 0 0 12px;
+    font-weight: 560;
+  }
+  h2 {
+    font-size: 8.5pt;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 7px;
+    font-weight: 650;
+  }
+  p { margin: 0 0 8px; color: var(--ink-2); }
+  strong { color: var(--ink); }
+  .note { font-size: 7.8pt; color: var(--muted); margin: 5px 0 0; }
+
+  /* Page 1 */
+  .problem {
+    display: grid;
+    grid-template-columns: 1fr 1.25fr;
+    gap: 18px;
+    margin-bottom: 10px;
+  }
+  .pains { list-style: none; margin: 0; padding: 0; }
+  .pains li {
+    padding: 2px 0 2px 12px;
+    border-left: 2px solid var(--rule);
+    margin-bottom: 4px;
+    color: var(--ink-2);
+    font-size: 9.2pt;
+  }
+  .pains b { color: var(--ink); font-weight: 650; }
+  figure { margin: 2px auto 10px; width: 94%; }
+  figure svg { width: 100%; height: auto; display: block; }
+  .svg-agents { fill: var(--agents-soft); stroke: var(--agents); stroke-width: 1.3; }
+  .svg-devs { fill: var(--devs-soft); stroke: var(--devs); stroke-width: 1.3; }
+  .svg-admins { fill: var(--admins-soft); stroke: var(--admins); stroke-width: 1.3; }
+  .svg-dom { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1.1; }
+  .svg-tool { fill: var(--paper); stroke: var(--accent); stroke-width: 1.3; }
+  .svg-net { fill: var(--chip); stroke: var(--rule); stroke-width: 1.2; }
+  .svg-band { fill: var(--accent-soft); }
+  .svg-band-arrow { fill: var(--accent); }
+  .svg-title { fill: var(--ink); font: 650 12.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-sub { fill: var(--muted); font: 10.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-band-text { fill: var(--accent); font: 600 10.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .svg-layer { fill: var(--muted); font: 650 9.5px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .07em; }
+  .svg-layer-accent { fill: var(--accent); }
+
+  .props { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+  .prop { border-radius: 8px; padding: 10px 12px 9px; background: var(--accent-soft); }
+  .prop h3 { margin: 0 0 3px; font-size: 10.5pt; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+  .prop h3 svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .prop p { margin: 0; font-size: 9pt; line-height: 1.38; }
+
+  .callouts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .callout { border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+  .callout p { margin: 0; font-size: 9.3pt; }
+  .callout.quote { background: var(--accent-soft); border-color: transparent; display: flex; align-items: center; }
+  .callout.quote p { color: var(--ink); font-size: 10.5pt; font-weight: 560; line-height: 1.35; }
+
+  /* Shared pieces */
+  .tw { flex: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.6pt; }
+  th, td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid var(--rule); }
+  th { font-size: 7.8pt; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 650; }
+  td { color: var(--ink-2); line-height: 1.38; }
+  td:first-child { color: var(--ink); font-weight: 650; }
+  .entry {
+    display: inline-block;
+    font: 600 7.6pt/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--ink-2);
+    background: var(--chip);
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin: 0 2px 2px 0;
+    white-space: nowrap;
+  }
+  .chip {
+    display: inline-block;
+    font-size: 7.6pt;
+    font-weight: 650;
+    padding: 1px 7px;
+    border-radius: 999px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    white-space: nowrap;
+  }
+  .chip.plain { color: var(--muted); background: var(--chip); }
+  .tag {
+    font-size: 7pt;
+    font-weight: 650;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .t-agents { color: var(--agents); background: var(--agents-soft); }
+  .t-devs { color: var(--devs); background: var(--devs-soft); }
+  .t-admins { color: var(--admins); background: var(--admins-soft); }
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 9px 11px;
+  }
+  .strip div { font-size: 8.3pt; color: var(--ink-2); line-height: 1.34; }
+  .strip b { display: block; color: var(--accent); font-size: 8.8pt; margin-bottom: 1px; }
+
+  /* Page 2 */
+  .run td:first-child { font-variant-numeric: tabular-nums; width: 6%; white-space: nowrap; }
+  .run td:nth-child(2) { width: 49%; }
+  .run td:nth-child(3) { width: 12%; }
+  .run td:nth-child(4) { width: 18%; }
+  .run .muted { color: var(--muted); font-size: 7.8pt; }
+  .uses { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+  .use-col { border-radius: 8px; padding: 9px 11px 4px; border-top: 3px solid; }
+  .use-col h3 { margin: 0 0 6px; font-size: 10.5pt; }
+  .use-col h3 span { font-weight: 500; color: var(--muted); }
+  .u-agents { background: var(--agents-soft); border-color: var(--agents); }
+  .u-agents h3 { color: var(--agents); }
+  .u-devs { background: var(--devs-soft); border-color: var(--devs); }
+  .u-devs h3 { color: var(--devs); }
+  .u-admins { background: var(--admins-soft); border-color: var(--admins); }
+  .u-admins h3 { color: var(--admins); }
+  .use { margin-bottom: 7px; }
+  .use b { display: block; color: var(--ink); font-size: 9pt; }
+  .use p { margin: 0; font-size: 8.5pt; line-height: 1.36; }
+  .use .why { color: var(--muted); font-size: 7.8pt; margin-top: 1px; }
+
+  /* Page 3 */
+  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-bottom: 11px; }
+  .tool {
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 8px 11px 7px;
+    display: flex;
+    flex-direction: column;
+  }
+  .tool-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .tool-head h3 { margin: 0; font-size: 11pt; }
+  .tool .job { margin: 0 0 6px; font-size: 8.9pt; line-height: 1.37; color: var(--ink); }
+  .pae { display: grid; grid-template-columns: 62px 1fr; gap: 3px 8px; margin: 0 0 6px; }
+  .pae dt {
+    font-size: 7pt;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding-top: 2px;
+  }
+  .pae dd { margin: 0; font-size: 8.4pt; line-height: 1.35; color: var(--ink-2); }
+  .writes {
+    margin-top: auto;
+    padding-top: 6px;
+    border-top: 1px dashed var(--rule);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+    font-size: 7.6pt;
+    color: var(--muted);
+  }
+  .writes .lbl { text-transform: uppercase; letter-spacing: .06em; font-weight: 650; margin-right: 3px; }
+  .writes .entry { margin: 0; }
+  .writes .readers { margin-left: auto; display: flex; gap: 4px; }
+
+  /* Page 4 */
+  .ends td:first-child { width: 17%; }
+  .ends td:nth-child(2) { width: 22%; }
+  .ends td:nth-child(3) { width: 25%; }
+  .boxes { display: grid; grid-template-columns: 1fr 1fr; gap: 11px 12px; margin-top: 12px; }
+  .box { border: 1px solid var(--rule); border-radius: 8px; padding: 9px 12px 8px; }
+  .box.accent { background: var(--accent-soft); border-color: transparent; }
+  .box h2 { margin-bottom: 5px; }
+  .box.accent h2 { color: var(--accent); }
+  .box p { font-size: 8.7pt; margin: 0 0 5px; line-height: 1.38; }
+  .box .src { font-size: 7.6pt; color: var(--muted); margin: 4px 0 0; }
+  ul.tight { margin: 0; padding-left: 15px; }
+  ul.tight li { margin-bottom: 3px; color: var(--ink-2); font-size: 8.7pt; line-height: 1.36; }
+
+  /* Page 5 */
+  .stages td:first-child { white-space: nowrap; }
+  .stages td:nth-child(2) { width: 54%; }
+  .tiers td:first-child { width: 21%; }
+  .tiers td:nth-child(2) { width: 41%; }
+  .price { color: var(--accent); font-weight: 650; display: block; margin-top: 1px; }
+  .for { display: block; font-weight: 400; color: var(--muted); font-size: 7.8pt; line-height: 1.3; margin-top: 2px; }
+  .costs td:first-child { width: 23%; }
+  .costs td:nth-child(2) { width: 20%; }
+  .costs td:nth-child(3) { width: 33%; }
+  .section { margin-bottom: 9px; }
+
+  /* Page 6 */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--rule); border-radius: 8px; padding: 9px 10px 8px; }
+  .stat .num { font-size: 21pt; font-weight: 750; letter-spacing: -.02em; color: var(--accent); line-height: 1; margin-bottom: 4px; }
+  .stat p { margin: 0 0 4px; font-size: 8.5pt; line-height: 1.35; }
+  .stat .src { font-size: 7.4pt; color: var(--muted); }
+  .owners td:first-child { width: 17%; }
+  .owners td:nth-child(2) { width: 30%; }
+  .owners td:nth-child(3) { width: 31%; }
+  .owners tr.us td { color: var(--ink); background: var(--accent-soft); }
+  .owners tr.us td:first-child { color: var(--accent); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0 11px; }
+  .two-col ul.tight li { font-size: 8.6pt; }
+  .timeline { display: grid; grid-template-columns: repeat(4, 1fr); border-radius: 8px; overflow: hidden; border: 1px solid var(--rule); }
+  .timeline div { padding: 8px 10px; font-size: 8.4pt; color: var(--ink-2); line-height: 1.36; }
+  .timeline div + div { border-left: 1px solid var(--rule); }
+  .timeline b { display: block; color: var(--ink); font-size: 9pt; margin-bottom: 2px; }
+  .timeline .moat { background: var(--accent-soft); }
+  .timeline .moat b { color: var(--accent); }
+
+  @media print {
+    @page { size: letter; margin: 0; }
+    body { background: #ffffff; }
+    .page { margin: 0; box-shadow: none; break-after: page; page-break-after: always; }
+    .page:last-child { break-after: auto; page-break-after: auto; }
+  }
+  @media screen and (max-width: 8.9in) {
+    .page { width: auto; height: auto; margin: 12px 16px; padding: 20px 18px; overflow: visible; }
+    .problem, .callouts, .two-col, .boxes, .tools, .uses, .props { grid-template-columns: 1fr; }
+    .strip { grid-template-columns: 1fr 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .timeline { grid-template-columns: 1fr; }
+    .timeline div + div { border-left: 0; border-top: 1px solid var(--rule); }
+    .page-foot { flex-direction: column; gap: 4px; }
+    .tw { overflow-x: auto; }
+    table { font-size: 8.4pt; min-width: 520px; }
+    figure { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- PAGE 1: THE IDEA -->
+<section class="page" aria-label="Page 1: The idea">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>1 / 6 · The idea</span></header>
+
+  <h1>One write, three readers</h1>
+  <p class="lede">Every agent leaves a trail. Only your team can read it.</p>
+
+  <div class="problem">
+    <div>
+      <h2>The problem</h2>
+      <p>Teams now run several coding agents, such as Claude Code, Codex, Cursor, and Copilot, and switch between them often. Each harness keeps a partial record, and most tools an agent uses belong to vendors that can read them.</p>
+    </div>
+    <ul class="pains">
+      <li><b>Sessions vanish.</b> Claude Code deletes them after 30 days.</li>
+      <li><b>Edits escape.</b> Shell and subagent edits skip checkpoints.</li>
+      <li><b>Handoffs break.</b> Work rarely follows you across harnesses.</li>
+      <li><b>Approvals go dark.</b> Nothing records who clicked "Allow."</li>
+      <li><b>Tools read everything.</b> Their vendors hold the keys.</li>
+    </ul>
+  </div>
+
+  <h2>The idea</h2>
+  <p>Sidecar is a small local process that runs beside any harness. It gives each agent six tools: <strong>storage, email, a TLS edge, inter-agent messaging, port forwarding, and an IP address</strong>. It captures each action once, from those tools, the harness's hooks, and the filesystem, and writes it once: the raw session to the developer's vault, a signed entry to the team's ledger. Agents, developers, and admins all read that one write.</p>
+
+  <figure aria-label="Diagram: three readers read the record, every tool use writes to the record, and the URnetwork layer carries only ciphertext">
+    <svg viewBox="0 0 720 298" role="img">
+      <title>Readers, the record, the toolkit, and the network</title>
+      <text class="svg-layer" x="0" y="35">READERS</text>
+      <text class="svg-layer svg-layer-accent" x="0" y="80">READ MANY</text>
+      <text class="svg-layer" x="0" y="127">THE RECORD</text>
+      <text class="svg-layer svg-layer-accent" x="0" y="174">WRITE ONCE</text>
+      <text class="svg-layer" x="0" y="219">THE TOOLKIT</text>
+      <text class="svg-layer" x="0" y="277">THE NETWORK</text>
+
+      <rect class="svg-agents" x="108" y="6" width="188" height="50" rx="9"/>
+      <text class="svg-title" x="202" y="27" text-anchor="middle">Agents</text>
+      <text class="svg-sub" x="202" y="44" text-anchor="middle">coordinate</text>
+      <rect class="svg-devs" x="316" y="6" width="188" height="50" rx="9"/>
+      <text class="svg-title" x="410" y="27" text-anchor="middle">Developers and next run</text>
+      <text class="svg-sub" x="410" y="44" text-anchor="middle">continue</text>
+      <rect class="svg-admins" x="524" y="6" width="188" height="50" rx="9"/>
+      <text class="svg-title" x="618" y="27" text-anchor="middle">Admins</text>
+      <text class="svg-sub" x="618" y="44" text-anchor="middle">answer</text>
+
+      <rect class="svg-band" x="108" y="64" width="604" height="24" rx="12"/>
+      <path class="svg-band-arrow" d="M122,81 L129,70 L136,81 z"/>
+      <path class="svg-band-arrow" d="M684,81 L691,70 L698,81 z"/>
+      <text class="svg-band-text" x="410" y="80" text-anchor="middle">each reader with its own keys and rights</text>
+
+      <rect class="svg-dom" x="108" y="96" width="292" height="54" rx="9"/>
+      <text class="svg-title" x="254" y="119" text-anchor="middle">Developer's vault</text>
+      <text class="svg-sub" x="254" y="137" text-anchor="middle">raw sessions · the developer's keys</text>
+      <rect class="svg-dom" x="420" y="96" width="292" height="54" rx="9"/>
+      <text class="svg-title" x="566" y="119" text-anchor="middle">Team ledger</text>
+      <text class="svg-sub" x="566" y="137" text-anchor="middle">signed actions and approvals · team keys</text>
+
+      <rect class="svg-band" x="108" y="158" width="604" height="24" rx="12"/>
+      <path class="svg-band-arrow" d="M122,175 L129,164 L136,175 z"/>
+      <path class="svg-band-arrow" d="M684,175 L691,164 L698,175 z"/>
+      <text class="svg-band-text" x="410" y="174" text-anchor="middle">every use of a tool becomes one signed entry</text>
+
+      <rect class="svg-tool" x="108" y="190" width="92" height="50" rx="8"/>
+      <text class="svg-title" x="154" y="211" text-anchor="middle">Storage</text>
+      <text class="svg-sub" x="154" y="228" text-anchor="middle">encrypted git</text>
+      <rect class="svg-tool" x="210.4" y="190" width="92" height="50" rx="8"/>
+      <text class="svg-title" x="256.4" y="211" text-anchor="middle">Email</text>
+      <text class="svg-sub" x="256.4" y="228" text-anchor="middle">agent inboxes</text>
+      <rect class="svg-tool" x="312.8" y="190" width="92" height="50" rx="8"/>
+      <text class="svg-title" x="358.8" y="211" text-anchor="middle">TLS edge</text>
+      <text class="svg-sub" x="358.8" y="228" text-anchor="middle">public names</text>
+      <rect class="svg-tool" x="415.2" y="190" width="92" height="50" rx="8"/>
+      <text class="svg-title" x="461.2" y="211" text-anchor="middle">Messaging</text>
+      <text class="svg-sub" x="461.2" y="228" text-anchor="middle">agent to agent</text>
+      <rect class="svg-tool" x="517.6" y="190" width="92" height="50" rx="8"/>
+      <text class="svg-title" x="563.6" y="211" text-anchor="middle">Forwarding</text>
+      <text class="svg-sub" x="563.6" y="228" text-anchor="middle">private ports</text>
+      <rect class="svg-tool" x="620" y="190" width="92" height="50" rx="8"/>
+      <text class="svg-title" x="666" y="211" text-anchor="middle">IP address</text>
+      <text class="svg-sub" x="666" y="228" text-anchor="middle">per agent</text>
+
+      <rect class="svg-net" x="108" y="250" width="604" height="44" rx="9"/>
+      <text class="svg-title" x="410" y="269" text-anchor="middle">URnetwork</text>
+      <text class="svg-sub" x="410" y="286" text-anchor="middle">encrypted links that work from anywhere · relays and storage hold only ciphertext</text>
+    </svg>
+  </figure>
+
+  <div class="props">
+    <div class="prop">
+      <h3><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6l5.4 2v4.1c0 3.2-2.2 5.5-5.4 6.7-3.2-1.2-5.4-3.5-5.4-6.7V3.6z"/></svg>Private</h3>
+      <p>Nothing is public until you publish it. Each agent has its own identity and grants. URnetwork cannot read your data.</p>
+    </div>
+    <div class="prop">
+      <h3><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4"/><path d="M1.6 8h12.8M8 1.6c1.9 1.9 2.8 4.1 2.8 6.4S9.9 12.5 8 14.4C6.1 12.5 5.2 10.3 5.2 8S6.1 3.5 8 1.6z"/></svg>Anywhere</h3>
+      <p>The sidecar dials out, so every tool works behind NAT and firewalls, on laptops, CI runners, and cloud sandboxes.</p>
+    </div>
+    <div class="prop">
+      <h3><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.4" rx="1.6"/><path d="M5.3 7V5.1a2.7 2.7 0 0 1 5.4 0V7"/></svg>End-to-end encrypted</h3>
+      <p>Keys are made and kept on your devices. Everything is encrypted before it leaves, so relays hold only ciphertext.</p>
+    </div>
+  </div>
+
+  <div class="callouts">
+    <div class="callout">
+      <h2>Why the tools feed the record</h2>
+      <p>Each tool exists elsewhere on its own. Here, using a tool writes the entry, so the record stays complete in whichever harness the agent runs.</p>
+    </div>
+    <div class="callout quote">
+      <p>Private from us. Actions and approvals complete for your admins. Sessions stay with their author unless shared.</p>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is a product in design. Figures as of 31 October 2026.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 2: THE RECORD -->
+<section class="page" aria-label="Page 2: The record">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>2 / 6 · The record</span></header>
+
+  <h1>Write once, read many</h1>
+  <p class="lede">Each action is captured once and written once. Three readers use it.</p>
+
+  <h2>One day, one record</h2>
+  <div class="tw">
+  <table class="run" aria-label="One day of work and the entries it writes">
+    <thead><tr><th>Time</th><th>What happens</th><th>Through</th><th>Entry</th><th>Read by</th></tr></thead>
+    <tbody>
+      <tr><td>09:02</td><td>A Codex cloud agent claims <code>billing/</code> before it edits, so a Claude Code agent on a laptop picks other work.</td><td><span class="chip">Messaging</span></td><td><span class="entry">claim</span></td><td>Agents</td></tr>
+      <tr><td>09:40</td><td>It asks to reach Maya's local staging database. Maya approves a two-hour grant for that one port.</td><td><span class="chip">Forwarding</span></td><td><span class="entry">approval</span><span class="entry">route</span></td><td>Admins, agents</td></tr>
+      <tr><td>10:20</td><td>It edits the billing code, including a shell command that the harness's checkpoints miss.</td><td><span class="chip plain">Capture</span></td><td><span class="entry">change</span></td><td>Developers, admins</td></tr>
+      <tr><td>11:15</td><td>It publishes a preview for the client on the team's domain, with login on and a one-day expiry.</td><td><span class="chip">TLS edge</span></td><td><span class="entry">publish</span></td><td>Admins</td></tr>
+      <tr><td>11:48</td><td>The client replies by email with a change. The run that reads it loses send and publish until Maya approves.</td><td><span class="chip">Email</span></td><td><span class="entry">ask</span><span class="entry">approval</span></td><td>Agents, admins</td></tr>
+      <tr><td>14:05</td><td>Claude Code on Maya's laptop picks up the handoff and the morning's decisions from the shared repo.</td><td><span class="chip">Storage</span></td><td><span class="entry">handoff</span><span class="entry">context</span></td><td>Developers, next run</td></tr>
+      <tr><td>17:30</td><td>The client asks who approved the billing change. The lead sends a signed packet that proves it without the code.</td><td><span class="chip plain">Ledger</span></td><td><span class="muted">reads the approvals</span></td><td>Admins, the client</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="uses">
+    <div class="use-col u-agents">
+      <h3>Agents <span>· coordinate</span></h3>
+      <div class="use"><b>Claims and leases</b><p>Who holds which files, across harnesses, so agents never collide.</p><p class="why">Built-in teams coordinate one vendor's agents.</p></div>
+      <div class="use"><b>Handoffs</b><p>Notes that record decisions, not transcripts.</p><p class="why">139 developers report broken handoffs.</p></div>
+      <div class="use"><b>Ask and answer</b><p>Questions to an agent or a person, answered for the next run.</p></div>
+      <div class="use"><b>Commit-to-run links</b><p>Every commit links privately to the run that made it.</p><p class="why">Developers strip vendor AI trailers from commits.</p></div>
+    </div>
+    <div class="use-col u-devs">
+      <h3>Developers <span>· continue</span></h3>
+      <div class="use"><b>Session vault</b><p>Every session from every harness, under your keys, archived and searchable.</p><p class="why">About 200 developers report lost or hidden sessions.</p></div>
+      <div class="use"><b>Change set and restore</b><p>Every file a run changed by any tool path, with a preview-first restore.</p><p class="why">About 280 report changes they could not review or undo.</p></div>
+      <div class="use"><b>Pick up anywhere</b><p>Continue on another machine, in another harness, or as a teammate.</p></div>
+      <div class="use"><b>Context that loads</b><p>Team context written into each harness's own files.</p><p class="why">Codex silently cuts AGENTS.md at 32 KB.</p></div>
+    </div>
+    <div class="use-col u-admins">
+      <h3>Admins <span>· answer</span></h3>
+      <div class="use"><b>Approval receipts</b><p>One action ID binds proposal, approval, and what ran. High-risk approvals are SSH-signed.</p><p class="why">No product binds an approval to the action that ran.</p></div>
+      <div class="use"><b>Run inventory and agent identity</b><p>Which harness, version, and model ran, for which sponsor.</p></div>
+      <div class="use"><b>Reach receipts</b><p>Every forward, name, and route: owner, approver, scope, who connected.</p></div>
+      <div class="use"><b>Client packets</b><p>Prove who approved a change without the code, from a log clients can verify.</p></div>
+    </div>
+  </div>
+
+  <div class="strip" aria-label="Rules that keep the readers apart">
+    <div><b>Two key domains</b>Sessions under the developer's keys; actions under the team's.</div>
+    <div><b>Visible admin reads</b>Every admin read is an entry the developer can see.</div>
+    <div><b>Honest coverage</b>Each run states what the record could not see.</div>
+    <div><b>Works-council ready</b>Team-level metrics and no leaderboards.</div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is in design. The example's names are illustrative.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 3: THE TOOLKIT -->
+<section class="page" aria-label="Page 3: The toolkit">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>3 / 6 · The toolkit</span></header>
+
+  <h1>Six tools under the record</h1>
+  <p class="lede">Each one private, reachable from anywhere, and end-to-end encrypted.</p>
+
+  <div class="tools">
+    <div class="tool">
+      <div class="tool-head"><h3>Storage</h3><code>ur mount</code></div>
+      <p class="job">Encrypted git repos for context, memory, and project files, synced live to every machine you allow.</p>
+      <dl class="pae">
+        <dt>Private</dt><dd>Keys per repo. Each agent writes its own branch; shared branches merge by review.</dd>
+        <dt>Anywhere</dt><dd>Plain git for any harness, laptop, or cloud sandbox, and it clones out as plain git.</dd>
+        <dt>Encrypted</dt><dd>Files, names, and history are encrypted on your device. We store ciphertext.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Writes</span><span class="entry">change</span><span class="readers"><span class="tag t-devs">Developers</span><span class="tag t-agents">Agents</span></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>Email</h3><code>ur id</code></div>
+      <p class="job">A real address for every agent and person on your domain, plus group inboxes people and agents share.</p>
+      <dl class="pae">
+        <dt>Private</dt><dd>Outside mail is untrusted: after reading it, a run can't send or publish until approved.</dd>
+        <dt>Anywhere</dt><dd>Ordinary email, so anyone in the world can reach your agent: sign-ups, vendors, clients.</dd>
+        <dt>Encrypted</dt><dd>End to end between members. Outside mail is encrypted on arrival to the recipient's keys.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Writes</span><span class="entry">ask</span><span class="entry">answer</span><span class="entry">approval</span><span class="readers"><span class="tag t-agents">Agents</span><span class="tag t-admins">Admins</span></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>TLS edge</h3><code>ur bridge public-tls</code></div>
+      <p class="job">A public HTTPS name for a service on your machine: a client preview, a webhook, a local MCP server.</p>
+      <dl class="pae">
+        <dt>Private</dt><dd>Publishing is explicit and recorded. Names have login on by default and expire.</dd>
+        <dt>Anywhere</dt><dd>Reachable from any browser in the world. No open ports, static IP, or certificates.</dd>
+        <dt>Encrypted</dt><dd>TLS passthrough: the edge routes by name and can't decrypt. The key stays in your sidecar.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Writes</span><span class="entry">publish</span><span class="readers"><span class="tag t-admins">Admins</span></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>Inter-agent messaging</h3><code>ur id send</code></div>
+      <p class="job">Direct and group messages between agents and people across harnesses, machines, and companies.</p>
+      <dl class="pae">
+        <dt>Private</dt><dd>Signed membership. Removing a member rotates keys; every join and leave is recorded.</dd>
+        <dt>Anywhere</dt><dd>A Codex cloud agent, Claude Code on a laptop, and a partner's Cursor share one thread.</dd>
+        <dt>Encrypted</dt><dd>MLS (RFC 9420) group encryption, as in URmessage. Servers store what they can't decrypt.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Writes</span><span class="entry">claim</span><span class="entry">handoff</span><span class="entry">ask</span><span class="entry">answer</span><span class="readers"><span class="tag t-agents">Agents</span></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>Port forwarding</h3><code>ur bridge forward</code></div>
+      <p class="job">Reach an allowed port on another machine: a teammate's dev server, a staging database, a lab device. Partners can forward in by invite.</p>
+      <dl class="pae">
+        <dt>Private</dt><dd>Each grant names one agent, port, and time window, and a person approves it.</dd>
+        <dt>Anywhere</dt><dd>Works through NAT and firewalls, even from a cloud agent to a developer's laptop.</dd>
+        <dt>Encrypted</dt><dd>Encrypted between the two sidecars, so the relay carries only ciphertext.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Writes</span><span class="entry">route</span><span class="entry">approval</span><span class="readers"><span class="tag t-admins">Admins</span><span class="tag t-agents">Agents</span></span></div>
+    </div>
+    <div class="tool">
+      <div class="tool-head"><h3>IP address</h3><code>ur tun ip</code></div>
+      <p class="job">A permanent private address for every agent, device, and service, plus subnets you choose to route.</p>
+      <dl class="pae">
+        <dt>Private</dt><dd>Agents reach only granted ranges, and leave only through exits you run.</dd>
+        <dt>Anywhere</dt><dd>The address follows the agent from laptop to CI to cloud sandbox, on any network.</dd>
+        <dt>Encrypted</dt><dd>Packets are encrypted between your sidecars on URnetwork's userspace network stack.</dd>
+      </dl>
+      <div class="writes"><span class="lbl">Writes</span><span class="entry">route</span><span class="readers"><span class="tag t-admins">Admins</span></span></div>
+    </div>
+  </div>
+
+  <div class="strip" aria-label="What all six tools share">
+    <div><b>One principal</b>Each agent and person is one identity with a sponsor, across mail, commits, names, and the record.</div>
+    <div><b>One grant model</b>Team management decides who may store, mail, publish, forward, and route, with SSO and SCIM.</div>
+    <div><b>One protocol</b>MCP over stdio, which the leading harnesses already launch, plus a CLI for people.</div>
+    <div><b>One kill switch</b>Revoking an agent cuts its mail, names, forwards, and addresses at once.</div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is in design. Commands follow the CLI design sketch.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 4: SECURITY MODEL -->
+<section class="page" aria-label="Page 4: Security model">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>4 / 6 · Security model</span></header>
+
+  <h1>Private, anywhere, end to end</h1>
+  <p class="lede">Privacy rests on keys you hold, not on whose network the bytes cross.</p>
+
+  <h2>Where the encryption ends, tool by tool</h2>
+  <div class="tw">
+  <table class="ends" aria-label="Where encryption ends for each tool">
+    <thead><tr><th>Tool</th><th>Encrypted between</th><th>URnetwork can see</th><th>The honest edge</th></tr></thead>
+    <tbody>
+      <tr><td>Storage</td><td>Your device and each key holder's device</td><td>Object sizes and timing</td><td>A removed member keeps what they already read.</td></tr>
+      <tr><td>Inter-agent messaging</td><td>The members of each group</td><td>Who is in a group, and when it is active</td><td>The same as storage. Key recovery is each member's choice.</td></tr>
+      <tr><td>Port forwarding and IP addresses</td><td>Your two sidecars</td><td>Which sidecars connect, when, and how much</td><td>Sites reached through your exit see that exit's address.</td></tr>
+      <tr><td>TLS edge</td><td>The visitor's browser and your sidecar</td><td>The public name and visitor addresses</td><td>Names appear in certificate logs. Any mode that ends TLS at the edge is labeled readable.</td></tr>
+      <tr><td>Email</td><td>Members, end to end</td><td>Outside mail in transit, before it is encrypted</td><td>Outside mail arrives as ordinary SMTP, and mail to outsiders leaves as ordinary email.</td></tr>
+      <tr><td>The record</td><td>Your sidecars and your team's readers</td><td>That entries exist, with size and time</td><td>Vault content opens only when its author shares it.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">The model provider still sees whatever the harness sends it. Search and summarization run on members' machines. The full list of what our servers can see ships with the threat model.</p>
+
+  <div class="boxes">
+    <div class="box">
+      <h2>Anywhere, no open ports</h2>
+      <ul class="tight">
+        <li><strong>Outbound only.</strong> The sidecar dials out: no inbound ports, router changes, or static IPs.</li>
+        <li><strong>Userspace.</strong> It runs as a subprocess of the harness, so it works in CI runners and cloud sandboxes.</li>
+        <li><strong>Stable identities.</strong> The address, the TLS name, and the private IP follow the agent across networks.</li>
+      </ul>
+      <p class="src">Today <a href="https://learn.chatgpt.com/docs/environments/cloud-environments">Codex cloud</a> supports only Tailscale, <a href="https://cursor.com/docs/cloud-agent/private-connectivity">Cursor's private route</a> is Enterprise-only, and no harness vendor documents a cloud agent reaching a developer's own machine.</p>
+    </div>
+    <div class="box">
+      <h2>Safe by default</h2>
+      <p>The sidecar holds all three legs of the <a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/">lethal trifecta</a>: private data, untrusted input, and a way out. It keeps them apart.</p>
+      <ul class="tight">
+        <li>Untrusted mail cuts off send, forward, and publish until a person approves.</li>
+        <li>Public names are authenticated and short-lived; agent control panels are refused.</li>
+        <li>Edits to <code>CLAUDE.md</code>, hooks, and <code>.mcp.json</code> go to review.</li>
+        <li>Shared writes are scanned for secrets.</li>
+      </ul>
+      <p class="src"><a href="https://www.knostic.ai/blog/mapping-mcp-servers-study">Knostic</a> found 1,862 MCP servers open to the internet. None of 119 it checked required authentication to list tools.</p>
+    </div>
+    <div class="box accent">
+      <h2>Proof before the claim</h2>
+      <p>Before the first public use of "end-to-end encrypted":</p>
+      <ul class="tight">
+        <li>The sidecar client ships as open source.</li>
+        <li>An independent audit covers the client and the protocol.</li>
+        <li>A threat model assumes a malicious server and lists all metadata we see.</li>
+        <li>A dated warrant canary and current transparency reports return.</li>
+      </ul>
+    </div>
+    <div class="box accent">
+      <h2>The network gives reach, nothing else</h2>
+      <ul class="tight">
+        <li>The sidecar has no token. It uses URnetwork's network only for worldwide reach.</li>
+        <li>The network carries only ciphertext. Storage and mail run outside it.</li>
+        <li>The inbox and the edge default to your own domain.</li>
+        <li>Agents leave only through exits you run, so sign-ins never come from addresses Okta or Entra flag as anonymizing.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is in design. This page states design commitments.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 5: PACKAGING -->
+<section class="page" aria-label="Page 5: Packaging">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>5 / 6 · Packaging</span></header>
+
+  <h1>What ships, and what it costs</h1>
+  <p class="lede">Free for one person and any number of agents. Teams pay per person.</p>
+
+  <div class="section">
+    <h2>Three stages, one capture engine</h2>
+    <div class="tw">
+    <table class="stages" aria-label="Release stages">
+      <thead><tr><th>Stage</th><th>The record</th><th>The toolkit</th></tr></thead>
+      <tbody>
+        <tr><td>First release</td><td>Session vault, change sets and restore, approval receipts, run inventory, handoffs, commit-to-run links, the instruction-file writer</td><td>Storage, messaging, forwarding, IP addresses</td></tr>
+        <tr><td>Team layer</td><td>Shared signed ledger, SSO and SCIM, SIEM export, retention, verifiable ledger, client packets, reach receipts</td><td>The TLS edge; approvals by email reply</td></tr>
+        <tr><td>Inbox and assurance</td><td>Visible audit member, key-escrow options, legal hold, compliance mappings</td><td>Mail with the outside world on your domain; group inboxes</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="note">Forwarding ships first because it sits closest to code URnetwork runs today. Outside email ships last as the heaviest build.</p>
+  </div>
+
+  <div class="section">
+    <h2>Tiers</h2>
+    <div class="tw">
+    <table class="tiers" aria-label="Tiers">
+      <thead><tr><th>Tier</th><th>The record</th><th>The toolkit</th></tr></thead>
+      <tbody>
+        <tr><td>Solo<span class="price">Free</span><span class="for">One person, any number of agents</span></td><td>Vault, change sets and restore, handoffs, your own approvals, coordination among your agents</td><td>1 GB of storage; agent addresses, replies only; messaging; forwards and addresses across your devices</td></tr>
+        <tr><td>Team<span class="price">$8–25 / seat*</span><span class="for">Two or more people</span></td><td>Shared signed ledger, inventory, shared trails, verifiable ledger, client packets, reach receipts, exports, SSO</td><td>100 GB of storage; 2,000 sends a day; public names; group inboxes on your domain; team exits</td></tr>
+        <tr><td>Assured<span class="price">~$39 / seat*</span><span class="for">Regulated teams and agent vendors</span></td><td>SCIM, visible audit member, legal hold, mappings to SOC 2 (2027 draft), ISO 42001, Microsoft DPR, PCI, and AIUC-1</td><td>One kill switch across every tool; policy on what agents may publish, send, and reach</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="note">*Inferred from comparable per-seat products. Quotas follow the CLI design sketch. Storage over quota, edge traffic, and mail are metered; agents can top up with x402.</p>
+  </div>
+
+  <div class="section">
+    <h2>What the same jobs cost, assembled today</h2>
+    <div class="tw">
+    <table class="costs" aria-label="Comparable products and list prices">
+      <thead><tr><th>Job</th><th>Typical product</th><th>List price</th><th>Who holds the keys</th></tr></thead>
+      <tbody>
+        <tr><td>Public edge and forwarding</td><td><a href="https://ngrok.com/pricing">ngrok</a></td><td>SSO and RBAC $10/user/mo; audit logs +$15/user/mo</td><td>ngrok, unless you pay for end-to-end TLS</td></tr>
+        <tr><td>Private network and addresses</td><td><a href="https://tailscale.com/pricing">Tailscale</a></td><td>$8 or $18/user/mo; tagged resources $1/mo beyond 50</td><td>You; Tailscale logs the network, not agent work</td></tr>
+        <tr><td>Agent email</td><td><a href="https://www.agentmail.to/pricing.md">AgentMail</a></td><td>Free for 3 inboxes; $20 and $200/mo plans; SAML on Enterprise</td><td>AgentMail</td></tr>
+        <tr><td>Git storage for agents</td><td><a href="https://blog.cloudflare.com/artifacts-git-for-agents-beta">Cloudflare Artifacts</a> (beta)</td><td>$0.50/GB-month; $0.15 per 1,000 operations</td><td>Cloudflare</td></tr>
+        <tr><td>Agent governance</td><td><a href="https://www.microsoft.com/licensing/faqs/122">Microsoft Agent 365</a></td><td>$15/user/mo; agents need no license</td><td>Microsoft</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="note">List prices from vendor pages, October 2026. SSO and audit logs on ngrok alone cost $25 per user a month, the top of Sidecar's inferred Team band.</p>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is in design. Prices marked * are inferences.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+<!-- PAGE 6: MARKET OPPORTUNITY -->
+<section class="page" aria-label="Page 6: Market opportunity">
+  <header class="page-head"><span class="brand">URnetwork · Sidecar</span><span>6 / 6 · Market opportunity</span></header>
+
+  <h1>The record no one else can sell</h1>
+  <p class="lede">No one sells all six encrypted end to end, in one record, across harnesses.</p>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="num">~⅓</div>
+      <p>of agent users run several agents; 77–85% of them use agents daily, against 54% of others.</p>
+      <div class="src"><a href="https://stackoverflow.blog/2026/05/27/agents-on-a-leash-agentic-ai-remains-mostly-monitored-at-work">Stack Overflow, May 2026</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">68%</div>
+      <p>of organizations cannot tell agent activity from human activity.</p>
+      <div class="src"><a href="https://cloudsecurityalliance.org/articles/more-than-two-thirds-of-organizations-cannot-clearly-distinguish-ai-agent-from-human-actions">CSA, Aembit-sponsored, Mar 2026</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">15.3M</div>
+      <p>developers have signed up for ngrok to put local work on the internet.</p>
+      <div class="src"><a href="https://ngrok.com/about">ngrok, undated vendor claim</a></div>
+    </div>
+    <div class="stat">
+      <div class="num">914</div>
+      <p>developer voices: lost sessions, unseen edits, broken handoffs, unrecorded approvals.</p>
+      <div class="src">GitHub, HN, and forums, Oct 2026</div>
+    </div>
+  </div>
+
+  <h2>Each tool exists. None is private as a set, or writes to your record</h2>
+  <div class="tw">
+  <table class="owners" aria-label="Competitive map by tool">
+    <thead><tr><th>Tool</th><th>Common choice today</th><th>Who holds the keys</th><th>Feeds your record</th></tr></thead>
+    <tbody>
+      <tr><td>Storage</td><td>Cloudflare Artifacts, Letta MemFS, Entire, claude-mem</td><td>The vendor, or encryption is not stated</td><td>No</td></tr>
+      <tr><td>Email</td><td>AgentMail, Resend Inboxes, Cloudflare Email Service</td><td>The vendor</td><td>No</td></tr>
+      <tr><td>TLS edge</td><td>ngrok, Cloudflare Tunnel, Microsoft dev tunnels</td><td>The vendor; TLS ends at its edge</td><td>No</td></tr>
+      <tr><td>Inter-agent messaging</td><td>Claude Code agent teams, Codex message boards, A2A</td><td>The vendor; Claude's cross-machine messages <a href="https://code.claude.com/docs/en/cross-session-messaging">pass through Anthropic</a></td><td>One vendor's agents</td></tr>
+      <tr><td>Forwarding and addresses</td><td>Tailscale, <a href="https://tailscale.com/blog/codex-cloud-tailscale">Codex cloud's only VPN</a></td><td>You; Funnel's relay <a href="https://tailscale.com/kb/1223/funnel">cannot decrypt</a></td><td>Network logs only</td></tr>
+      <tr class="us"><td>Sidecar</td><td>All six in one process, for any harness</td><td>Only your team</td><td>Yes, every use</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">Cloudflare is the strongest potential rival: it offers storage, memory, email, tunnels, and identity for agents on Workers, but secures them by inspecting traffic. That points it away from a laptop process it cannot read (our inference about incentives).</p>
+
+  <div class="two-col">
+    <div>
+      <h2>Money is moving into this space</h2>
+      <ul class="tight">
+        <li><strong>Entire:</strong> $60M seed (Feb 2026) for agent sessions in git.</li>
+        <li><strong>AgentMail:</strong> <a href="https://techcrunch.com/2026/03/10/agentmail-raises-6m-to-build-an-email-service-for-ai-agents/">$6M seed</a> (Mar 2026) for agent email.</li>
+        <li><strong>Tailscale:</strong> <a href="https://betakit.com/corporate-vpn-startup-tailscale-secures-230-million-cad-series-c-on-back-of-surprising-growth/">$160M Series C</a> (Apr 2025), now <a href="https://tailscale.com/use-cases/secure-ai-agent-connectivity">"the missing network identity layer for AI agents."</a></li>
+        <li><strong>Span:</strong> $25M (Nov 2025) for agent traces.</li>
+        <li><strong>Keycard</strong> ($38M) and <strong>Mem0</strong> ($24M) for agent identity and memory.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Where we start</h2>
+      <p style="font-size:8.6pt;margin-bottom:4px">Teams of 5 to 150 engineers on two or more harnesses, where proof is demanded:</p>
+      <ul class="tight">
+        <li>Microsoft suppliers: change logs must name the approver</li>
+        <li>Consultancies under client AI-disclosure terms</li>
+        <li>Teams whose cloud agents need private reach</li>
+        <li>Fintech and health vendors with agents on in-scope systems</li>
+        <li>Agent vendors facing AIUC-1 reviews</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="timeline" aria-label="Why now">
+    <div><b>Now</b>Questionnaires ask which AI you use and whether a human reviews it.</div>
+    <div><b>December 2027</b>Draft SOC 2 criteria, EU AI Act logging, and Cyber Resilience Act duties arrive.</div>
+    <div><b>Head start</b>Forwarding and the edge build on URnetwork's relay, client addresses, and userspace stack.</div>
+    <div class="moat"><b>The moat is time</b>A team that starts in 2026 holds a year of signed approvals when audits ask.</div>
+  </div>
+
+  <footer class="page-foot"><span>Sidecar (working name) is in design. Figures as of 31 October 2026.</span><span>Sources: sidecar/research_notes and sidecar/reports</span></footer>
+</section>
+
+</body>
+</html>

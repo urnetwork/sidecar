@@ -1,0 +1,1392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>URnetwork · Team</title>
+<meta name="description" content="URnetwork team management console — SSO, domains, device enrollment, access control, key authority, and audit log.">
+<style>
+:root{--bg:#f3f5f8;--surface:#fff;--surface-2:#eef1f5;--raised:#f8fafc;--ink:#14171c;--ink-2:#434b56;--muted:#6f7883;--rule:#e3e7ec;--accent:#0e6b73;--accent-2:#0a4a50;--accent-soft:#e2f1f1;--active:#179b53;--active-soft:#e2f4ea;--warn:#b4540a;--danger:#c0362c;--info:#2a5bd7;--radius:12px;--radius-sm:8px;--shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.08);--font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#0c0e11;--surface:#15181d;--surface-2:#1c2026;--raised:#1a1e24;--ink:#eceef2;--ink-2:#c2c8d1;--muted:#8a93a0;--rule:#262b33;--accent:#5bc0c8;--accent-2:#8fd6dc;--accent-soft:#102f2f;--active:#45c67c;--active-soft:#0f2e1c;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35)}}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font)}
+
+/* ---- extended tokens ---- */
+:root{--warn-soft:#f7ebe0;--info-soft:#e7edfb;--danger-soft:#f9e6e4;--on-accent:#fff;--code-key:#0e6b73;--code-str:#1f7a46;--code-com:#8a929d;--code-pun:#6f7883}
+@media(prefers-color-scheme:dark){:root{--warn-soft:#3a2713;--info-soft:#16213f;--danger-soft:#3a1a18;--on-accent:#06211f;--code-key:#5bc0c8;--code-str:#7fd6a0;--code-com:#717b88;--code-pun:#8a93a0}}
+
+html{-webkit-text-size-adjust:100%}
+a{color:inherit}
+::selection{background:var(--accent-soft)}
+svg{display:block}
+button{font-family:inherit}
+
+/* ---- top bar ---- */
+.topbar{position:sticky;top:0;z-index:50;height:56px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;background:var(--surface);border-bottom:1px solid var(--rule)}
+.tb-left,.tb-right{display:flex;align-items:center;gap:10px}
+.brandmark{display:flex;align-items:center;gap:9px;font-weight:650;font-size:14.5px;letter-spacing:-.01em}
+.brandmark .logo{width:26px;height:26px;border-radius:7px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--on-accent);flex:none}
+.tb-sep{color:var(--rule);font-size:18px;font-weight:300;margin:0 -2px}
+.tb-tag{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--rule);border-radius:6px;padding:3px 7px}
+.team-switch{display:flex;align-items:center;gap:8px;background:transparent;border:1px solid transparent;border-radius:8px;padding:5px 8px 5px 6px;cursor:pointer;color:var(--ink);font-size:13.5px;font-weight:550}
+.team-switch:hover{background:var(--surface-2)}
+.team-badge{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+.icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.icon-btn:hover{background:var(--surface-2);color:var(--ink-2)}
+.identity{display:flex;align-items:center;gap:8px;background:transparent;border:1px solid transparent;border-radius:8px;padding:4px 8px 4px 5px;cursor:pointer;color:var(--ink);font-size:13.5px;font-weight:550}
+.identity:hover{background:var(--surface-2)}
+.chev{color:var(--muted)}
+
+/* ---- shell / nav ---- */
+.shell{display:flex;align-items:flex-start;max-width:1320px;margin:0 auto}
+.sidenav{position:sticky;top:56px;align-self:flex-start;width:252px;flex:none;height:calc(100vh - 56px);overflow-y:auto;border-right:1px solid var(--rule);padding:18px 12px 32px;background:var(--bg)}
+.nav-group{margin-bottom:18px}
+.nav-label{font-size:11px;font-weight:650;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:0 10px 7px}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:transparent;border:0;border-radius:8px;padding:8px 10px;margin:1px 0;cursor:pointer;color:var(--ink-2);font-size:13.5px;font-weight:500;line-height:1}
+.nav-item:hover{background:var(--surface-2);color:var(--ink)}
+.nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item.active svg{color:var(--accent)}
+.nav-item svg{color:var(--muted);flex:none}
+.nav-item .count{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:1px 7px}
+.nav-item.active .count{background:rgba(14,107,115,.14);color:var(--accent)}
+
+/* ---- content ---- */
+.content{flex:1;min-width:0;padding:30px 36px 80px;max-width:1040px}
+.pane{display:none}
+.pane.show{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.pane-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:22px}
+.pane-head h1{margin:0 0 5px;font-size:20px;font-weight:680;letter-spacing:-.015em}
+.pane-head p{margin:0;color:var(--muted);font-size:13.5px;max-width:62ch;line-height:1.5}
+.pane-head .actions{display:flex;gap:9px;flex:none;align-items:center}
+
+/* ---- cards ---- */
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:18px;overflow:visible}
+.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 18px;border-bottom:1px solid var(--rule)}
+.card-head.no-border{border-bottom:0}
+.card-head h2{margin:0 0 3px;font-size:14.5px;font-weight:650;display:flex;align-items:center;gap:9px}
+.card-head p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.45;max-width:66ch}
+.card-head .ch-actions{display:flex;gap:8px;align-items:center;flex:none}
+.card-body{padding:16px 18px}
+.card-body.tight{padding:6px 10px}
+
+/* ---- buttons ---- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:7px 13px;border-radius:var(--radius-sm);border:1px solid transparent;background:transparent;color:var(--ink-2);font-size:13px;font-weight:600;cursor:pointer;line-height:1;white-space:nowrap;transition:background .12s,border-color .12s}
+.btn svg{flex:none}
+.btn-primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.btn-primary:hover{background:var(--accent-2);border-color:var(--accent-2)}
+.btn-secondary{background:var(--surface);border-color:var(--rule);color:var(--ink)}
+.btn-secondary:hover{background:var(--surface-2)}
+.btn-ghost{color:var(--ink-2)}
+.btn-ghost:hover{background:var(--surface-2)}
+.btn-sm{padding:5px 10px;font-size:12px;gap:5px}
+.btn-approve{background:var(--active-soft);color:var(--active);font-weight:650}
+.btn-approve:hover{filter:brightness(.97)}
+.btn-deny{border-color:var(--rule);color:var(--muted)}
+.btn-deny:hover{color:var(--danger);border-color:var(--danger);background:var(--danger-soft)}
+
+/* ---- pills ---- */
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:650;border:1px solid transparent;line-height:1.2;white-space:nowrap}
+.pill .dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+.pill-active{background:var(--active-soft);color:var(--active)}
+.pill-warn{background:var(--warn-soft);color:var(--warn)}
+.pill-info{background:var(--info-soft);color:var(--info)}
+.pill-accent{background:var(--accent-soft);color:var(--accent)}
+.pill-neutral{background:var(--surface-2);color:var(--muted)}
+
+/* ---- tables ---- */
+.table-wrap{overflow:visible}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;font-size:11px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:9px 18px;border-bottom:1px solid var(--rule);white-space:nowrap}
+tbody td{padding:11px 18px;border-bottom:1px solid var(--rule);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--raised)}
+tr.resolving{transition:opacity .4s,background .4s}
+tr.resolved td:first-child{position:relative}
+
+.who{display:flex;align-items:center;gap:11px}
+.avatar{width:32px;height:32px;border-radius:999px;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none;letter-spacing:.02em}
+.av-teal{background:#0e8a93}.av-blue{background:#2a5bd7}.av-purple{background:#7c4dd6}.av-amber{background:#b4540a}.av-green{background:#179b53}.av-rose{background:#c0497a}
+.who .nm{font-weight:600;color:var(--ink);line-height:1.25}
+.who .em{color:var(--muted);font-size:12px;line-height:1.3}
+.you-tag{font-size:10px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle}
+.lastseen{color:var(--muted);font-size:12.5px}
+
+/* ---- role dropdown & generic dd ---- */
+.dd{position:relative;display:inline-block}
+.dd-trigger{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--rule);border-radius:7px;padding:5px 9px;font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;line-height:1}
+.dd-trigger:hover{background:var(--surface-2)}
+.dd-trigger .chev{transition:transform .15s}
+.dd.open .dd-trigger .chev{transform:rotate(180deg)}
+.dd-menu{position:absolute;top:calc(100% + 6px);left:0;min-width:234px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;box-shadow:var(--shadow);padding:6px;z-index:70;display:none}
+.dd-menu.right{left:auto;right:0}
+.dd.open .dd-menu{display:block}
+.dd-opt{display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;background:transparent;border:0;border-radius:7px;padding:8px 9px;cursor:pointer;color:var(--ink);font-size:13px;line-height:1.3}
+.dd-opt:hover{background:var(--surface-2)}
+.dd-opt .ck{width:15px;flex:none;color:var(--accent);opacity:0;margin-top:1px}
+.dd-opt.sel .ck{opacity:1}
+.dd-opt .ro-name{font-weight:600}
+.dd-opt .ro-desc{color:var(--muted);font-size:11.5px;margin-top:2px}
+.dd-divider{height:1px;background:var(--rule);margin:6px 2px}
+.dd-head{padding:7px 9px 8px;border-bottom:1px solid var(--rule);margin-bottom:4px}
+.dd-head .nm{font-weight:650;font-size:13px}
+.dd-head .em{color:var(--muted);font-size:12px}
+
+/* ---- toggle ---- */
+.toggle{width:38px;height:22px;border-radius:999px;background:var(--rule);border:0;position:relative;cursor:pointer;flex:none;transition:background .16s;padding:0}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:999px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .16s}
+.toggle[aria-checked="true"]{background:var(--accent)}
+.toggle[aria-checked="true"]::after{transform:translateX(16px)}
+
+/* ---- provider / sso rows ---- */
+.prov-row{display:flex;align-items:center;gap:14px;padding:13px 18px;border-bottom:1px solid var(--rule)}
+.prov-row:last-child{border-bottom:0}
+.prov-logo{width:36px;height:36px;border-radius:9px;background:var(--raised);border:1px solid var(--rule);display:flex;align-items:center;justify-content:center;flex:none}
+.prov-meta{min-width:0}
+.prov-meta .pn{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:9px}
+.prov-meta .pd{color:var(--muted);font-size:12px;margin-top:2px}
+.prov-row .prov-act{margin-left:auto;display:flex;align-items:center;gap:10px;flex:none}
+
+.callout{display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft);color:var(--accent);border-radius:var(--radius-sm);padding:11px 13px;font-size:12.5px;line-height:1.5}
+.callout svg{flex:none;margin-top:1px}
+.callout b{font-weight:650}
+.note{color:var(--muted);font-size:12.5px;line-height:1.5}
+
+/* ---- key / value grid ---- */
+.kv{display:flex;flex-wrap:wrap;gap:26px}
+.kv .k{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.kv .v{font-size:15px;font-weight:650}
+.kv .v.sm{font-size:13.5px;font-weight:600}
+
+/* ---- code box ---- */
+.codebox{position:relative;background:var(--surface-2);border:1px solid var(--rule);border-radius:var(--radius-sm);padding:13px 15px;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:var(--ink);overflow-x:auto}
+.codebox .prompt{color:var(--muted);user-select:none}
+.codebox code{white-space:pre;display:block}
+.copy-btn{position:absolute;top:9px;right:9px;display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:4px 8px;font-size:11.5px;font-weight:600;color:var(--ink-2);cursor:pointer;font-family:var(--font)}
+.copy-btn:hover{background:var(--raised)}
+.copy-btn.ok{color:var(--active);border-color:var(--active)}
+.mono{font-family:var(--mono)}
+.masked{font-family:var(--mono);letter-spacing:.02em}
+
+/* ---- tag chips ---- */
+.tag{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11.5px;font-weight:600;background:var(--surface-2);color:var(--ink-2);border-radius:6px;padding:2px 7px;white-space:nowrap}
+.tag.tag-accent{background:var(--accent-soft);color:var(--accent)}
+.tag.tag-info{background:var(--info-soft);color:var(--info)}
+.tagrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+
+.chip-toggle{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--rule);border-radius:999px;padding:6px 12px 6px 10px;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer}
+.chip-toggle .box{width:15px;height:15px;border-radius:5px;border:1.5px solid var(--rule);display:flex;align-items:center;justify-content:center;color:transparent}
+.chip-toggle.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.chip-toggle.on .box{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+
+/* ---- add-device hero ---- */
+.hero{display:grid;grid-template-columns:1fr 220px;gap:26px;align-items:center}
+.hero .step{font-size:11px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+.hero h3{margin:0 0 6px;font-size:16px;font-weight:650}
+.hero p{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.5}
+.qr-wrap{text-align:center}
+.qr{width:150px;height:150px;padding:12px;background:#fff;border:1px solid var(--rule);border-radius:12px;margin:0 auto}
+.qr rect{fill:#111}
+.qr-cap{margin-top:10px;font-size:12px;font-weight:600;color:var(--ink-2)}
+.qr-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
+
+/* ---- access control grid ---- */
+.ac-grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(270px,1fr);gap:18px;align-items:start}
+.editor{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.editor-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--rule);background:var(--raised)}
+.editor-bar .fname{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.editor-bar .tabdot{width:8px;height:8px;border-radius:999px;background:var(--active)}
+.editor-body{display:flex;max-height:520px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.65}
+.gutter{flex:none;text-align:right;padding:12px 10px 12px 14px;color:var(--muted);user-select:none;border-right:1px solid var(--rule);background:var(--raised);opacity:.7}
+.gutter span{display:block}
+.code-area{padding:12px 16px;white-space:pre;overflow-x:auto;flex:1;min-width:0;tab-size:2}
+.ck{color:var(--code-key)}.cs{color:var(--code-str)}.cc{color:var(--code-com);font-style:italic}.cp{color:var(--code-pun)}
+.editor-foot{display:flex;align-items:center;gap:14px;padding:10px 14px;border-top:1px solid var(--rule);background:var(--raised);font-size:12px;color:var(--muted)}
+
+.mini-card{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:16px}
+.mini-head{padding:12px 14px;border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.mini-head h3{margin:0;font-size:13px;font-weight:650;display:flex;align-items:center;gap:7px}
+.mini-head .lnk{font-size:11.5px;font-weight:600;color:var(--accent);background:transparent;border:0;cursor:pointer;padding:0}
+.mini-body{padding:12px 14px}
+.def{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--rule)}
+.def:last-child{border-bottom:0}
+.def .dn{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink)}
+.def .dd2{color:var(--muted);font-size:11.5px;margin-top:3px;line-height:1.4}
+.def .cnt{font-size:11.5px;font-weight:600;color:var(--muted);flex:none}
+
+.test-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--rule);font-size:12px}
+.test-row:last-child{border-bottom:0}
+.test-row .expr{font-family:var(--mono);color:var(--ink-2);flex:1;min-width:0}
+.test-row .verdict{display:inline-flex;align-items:center;gap:5px;font-weight:700;font-size:11px;flex:none}
+.pass{color:var(--active)}.fail{color:var(--danger)}
+
+/* ---- key authority ---- */
+.lock-hero{display:flex;align-items:flex-start;gap:16px}
+.lock-ic{width:46px;height:46px;border-radius:12px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;flex:none}
+.thresh{display:flex;align-items:center;gap:10px;margin:2px 0 4px;font-size:13px;color:var(--ink-2)}
+.thresh .bars{display:flex;gap:4px}
+.thresh .bars i{width:26px;height:7px;border-radius:3px;background:var(--rule);display:block}
+.thresh .bars i.on{background:var(--accent)}
+.signer{display:flex;align-items:center;gap:13px;padding:13px 0;border-bottom:1px solid var(--rule)}
+.signer:last-child{border-bottom:0}
+.signer .si{width:34px;height:34px;border-radius:9px;background:var(--surface-2);color:var(--ink-2);display:flex;align-items:center;justify-content:center;flex:none}
+.signer .sn{font-weight:600;font-size:13.5px}
+.signer .sm{color:var(--muted);font-size:12px;margin-top:2px;font-family:var(--mono)}
+.signer .sr{margin-left:auto;text-align:right;flex:none}
+
+.diagram{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 14px}
+.dg-node{border:1px solid var(--rule);border-radius:10px;padding:10px 13px;background:var(--raised);font-size:12px;font-weight:600;color:var(--ink);text-align:center;min-width:96px}
+.dg-node .sub{font-weight:500;color:var(--muted);font-size:11px;margin-top:2px}
+.dg-node.cipher{background:var(--surface-2);border-style:dashed}
+.dg-arrow{color:var(--muted);flex:none;display:flex;flex-direction:column;align-items:center;font-size:10px;gap:2px}
+
+/* ---- audit ---- */
+.act-tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink)}
+.act-tag .adot{width:7px;height:7px;border-radius:999px;flex:none}
+.aud-filters{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+
+.search{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:6px 10px;color:var(--muted);min-width:210px}
+.search input{border:0;background:transparent;outline:0;color:var(--ink);font-size:13px;width:100%;font-family:inherit}
+.spacer{flex:1}
+
+/* ---- toast ---- */
+.toasts{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{background:var(--ink);color:var(--bg);padding:9px 15px;border-radius:999px;font-size:12.5px;font-weight:600;box-shadow:var(--shadow);display:flex;align-items:center;gap:8px;animation:tin .22s ease}
+.toast svg{color:var(--active)}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.hr{height:1px;background:var(--rule);border:0;margin:0}
+.muted{color:var(--muted)}
+
+@media(max-width:900px){
+  .ac-grid{grid-template-columns:1fr}
+  .hero{grid-template-columns:1fr}
+  .qr-wrap{justify-self:start}
+  .sidenav{display:none}
+  .content{padding:24px 18px 70px}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ TOP BAR ============ -->
+<header class="topbar">
+  <div class="tb-left">
+    <div class="brandmark">
+      <span class="logo" aria-hidden="true">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M5 4v7a7 7 0 0 0 14 0V4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+      </span>
+      URnetwork
+    </div>
+    <span class="tb-sep">/</span>
+    <div class="dd">
+      <button class="team-switch dd-trigger" data-dd aria-haspopup="true">
+        <span class="team-badge">A</span>
+        Acme Corp
+        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="dd-menu">
+        <div class="dd-head"><div class="nm">Acme Corp</div><div class="em">acme.com · Team plan</div></div>
+        <button class="dd-opt sel" data-close><span class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="ro-name">Acme Corp</span></button>
+        <button class="dd-opt" data-close><span class="ck"></span><span><span class="ro-name">Acme Labs</span><span class="ro-desc">acme-labs.dev · Sandbox</span></span></button>
+        <div class="dd-divider"></div>
+        <button class="dd-opt" data-close data-toast="Create a new team"><span class="ck"></span><span class="ro-name">Create team…</span></button>
+      </div>
+    </div>
+    <span class="tb-tag">Team</span>
+  </div>
+  <div class="tb-right">
+    <button class="icon-btn" title="Search" data-toast="Search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m20 20-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" title="Documentation" data-toast="Opening docs">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.7.3-.9.7-.9 1.4v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="currentColor"/></svg>
+    </button>
+    <div class="dd">
+      <button class="identity dd-trigger" data-dd aria-haspopup="true">
+        <span class="avatar av-teal" style="width:26px;height:26px;font-size:11px">DO</span>
+        Dana Okafor
+        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="dd-menu right">
+        <div class="dd-head"><div class="nm">Dana Okafor</div><div class="em">dana@acme.com · Owner</div></div>
+        <button class="dd-opt" data-close data-toast="Account settings"><span class="ck"></span><span class="ro-name">Account</span></button>
+        <button class="dd-opt" data-close data-toast="Theme follows your system"><span class="ck"></span><span class="ro-name">Theme: Auto</span></button>
+        <div class="dd-divider"></div>
+        <button class="dd-opt" data-close data-toast="Signed out"><span class="ck"></span><span class="ro-name">Sign out</span></button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <!-- ============ SIDE NAV ============ -->
+  <nav class="sidenav">
+    <div class="nav-group">
+      <div class="nav-label">Organization</div>
+      <button class="nav-item active" data-target="members">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="2"/><path d="M4 19c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M16 5.5a3 3 0 0 1 0 5.6M18 19c0-2.2-1-4-2.6-4.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Members &amp; SSO <span class="count">143</span>
+      </button>
+      <button class="nav-item" data-target="domains">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c2.5 2.4 3.8 5.6 3.8 9S14.5 18.6 12 21c-2.5-2.4-3.8-5.6-3.8-9S9.5 5.4 12 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Domains <span class="count">2</span>
+      </button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Devices</div>
+      <button class="nav-item" data-target="clients">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 19h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="16" y="11" width="5" height="8" rx="1.3" stroke="currentColor" stroke-width="2"/></svg>
+        Add clients
+      </button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Policy</div>
+      <button class="nav-item" data-target="acl">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6l-7-3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Access control
+      </button>
+      <button class="nav-item" data-target="keyauth">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="8" cy="12" r="4" stroke="currentColor" stroke-width="2"/><path d="M12 12h9M17 12v4M20 12v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Key authority
+      </button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Logs</div>
+      <button class="nav-item" data-target="audit">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="18" rx="2.2" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Audit log
+      </button>
+    </div>
+  </nav>
+
+  <!-- ============ CONTENT ============ -->
+  <main class="content">
+
+  <!-- ====== 1. MEMBERS & SSO ====== -->
+  <section class="pane show" id="pane-members">
+    <div class="pane-head">
+      <div>
+        <h1>Members &amp; SSO</h1>
+        <p>Manage who belongs to your team and how they sign in. Authentication is delegated to your identity provider over OIDC.</p>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" data-toast="Invitation link copied">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          Invite
+        </button>
+      </div>
+    </div>
+
+    <!-- Single sign-on -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Single sign-on
+            <span class="pill pill-active"><span class="dot"></span>Connected</span>
+          </h2>
+          <p>Connect an identity provider over OIDC. URnetwork uses OIDC — authentication is delegated to your IdP, which holds passwords and MFA.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <!-- Okta connected -->
+        <div class="prov-row">
+          <div class="prov-logo">
+            <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#007dc1" stroke-width="4"/></svg>
+          </div>
+          <div class="prov-meta">
+            <div class="pn">Okta <span class="pill pill-active"><span class="dot"></span>Active</span></div>
+            <div class="pd">OIDC · acme.okta.com · connected 14 Aug 2026 · 142 members signing in</div>
+          </div>
+          <div class="prov-act">
+            <button class="btn btn-secondary btn-sm" data-toast="Opening Okta configuration">Configure</button>
+          </div>
+        </div>
+        <!-- Google -->
+        <div class="prov-row">
+          <div class="prov-logo">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M21.6 12.2c0-.6-.1-1.2-.2-1.8H12v3.6h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.3Z"/><path fill="#34A853" d="M12 22c2.7 0 4.9-.9 6.6-2.4l-3.2-2.5c-.9.6-2 .9-3.4.9-2.6 0-4.8-1.7-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.4 13.9a6 6 0 0 1 0-3.8V7.5H3.1a10 10 0 0 0 0 9z"/><path fill="#EA4335" d="M12 6.1c1.5 0 2.8.5 3.8 1.5l2.8-2.8A10 10 0 0 0 3.1 7.5l3.3 2.6C7.2 7.7 9.4 6.1 12 6.1Z"/></svg>
+          </div>
+          <div class="prov-meta">
+            <div class="pn">Google Workspace</div>
+            <div class="pd">Sign in with Google · OIDC</div>
+          </div>
+          <div class="prov-act">
+            <button class="btn btn-secondary btn-sm" data-toast="Connect Google Workspace">Connect</button>
+          </div>
+        </div>
+        <!-- Microsoft -->
+        <div class="prov-row">
+          <div class="prov-logo">
+            <svg width="18" height="18" viewBox="0 0 24 24"><rect x="2" y="2" width="9" height="9" fill="#F25022"/><rect x="13" y="2" width="9" height="9" fill="#7FBA00"/><rect x="2" y="13" width="9" height="9" fill="#00A4EF"/><rect x="13" y="13" width="9" height="9" fill="#FFB900"/></svg>
+          </div>
+          <div class="prov-meta">
+            <div class="pn">Microsoft Entra ID</div>
+            <div class="pd">Azure AD · OIDC · group sync supported</div>
+          </div>
+          <div class="prov-act">
+            <button class="btn btn-secondary btn-sm" data-toast="Connect Microsoft Entra ID">Connect</button>
+          </div>
+        </div>
+        <!-- Custom -->
+        <div class="prov-row">
+          <div class="prov-logo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="12" r="3.2" stroke="var(--muted)" stroke-width="2"/><path d="M12 12h8M17 12v3M20 12v2.5" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"/></svg>
+          </div>
+          <div class="prov-meta">
+            <div class="pn">Custom OIDC</div>
+            <div class="pd">Any provider with ES256/RSA signing and the standard openid/profile/email scopes</div>
+          </div>
+          <div class="prov-act">
+            <button class="btn btn-secondary btn-sm" data-toast="Set up a custom OIDC provider">Set up</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCIM -->
+    <div class="card">
+      <div class="card-head no-border">
+        <div>
+          <h2>Directory sync (SCIM)</h2>
+          <p>Provision users and groups automatically from your directory. Synced groups map to access-control groups — role assignment stays in URnetwork.</p>
+        </div>
+        <div class="ch-actions">
+          <span class="note" style="margin-right:2px">Enabled</span>
+          <button class="toggle" role="switch" aria-checked="true" data-toast-on="Directory sync enabled" data-toast-off="Directory sync paused"></button>
+        </div>
+      </div>
+      <div class="card-body" style="padding-top:4px">
+        <div class="kv">
+          <div><div class="k">Provider</div><div class="v sm">Okta</div></div>
+          <div><div class="k">Last sync</div><div class="v sm">2 minutes ago</div></div>
+          <div><div class="k">Users synced</div><div class="v">142</div></div>
+          <div><div class="k">Groups synced</div><div class="v">9</div></div>
+          <div><div class="k">Status</div><div class="v sm"><span class="pill pill-active"><span class="dot"></span>Healthy</span></div></div>
+        </div>
+        <div class="callout" style="margin-top:16px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="currentColor"/></svg>
+          <div>Synced groups become policy references like <span class="mono">group:eng@acme.com</span> and are usable directly in <b>Access control</b>. SCIM syncs membership only; roles are assigned here.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Members table -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Members</h2>
+          <p>143 members · 1 awaiting approval</p>
+        </div>
+        <div class="ch-actions">
+          <div class="search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m20 20-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input placeholder="Search members" aria-label="Search members">
+          </div>
+          <button class="btn btn-secondary btn-sm" data-toast="Filter members">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Filter
+          </button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Last seen</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="who"><span class="avatar av-teal">DO</span><div><div class="nm">Dana Okafor<span class="you-tag">YOU</span></div><div class="em">dana@acme.com</div></div></div></td>
+              <td data-role="Owner"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">Just now</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-blue">AH</span><div><div class="nm">Amir Haddad</div><div class="em">amir@acme.com</div></div></div></td>
+              <td data-role="Network admin"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">4 min ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-purple">ML</span><div><div class="nm">Mei Lin</div><div class="em">mei@acme.com</div></div></div></td>
+              <td data-role="Admin"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">1 hour ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-green">SR</span><div><div class="nm">Sofia Reyes</div><div class="em">sofia@acme.com</div></div></div></td>
+              <td data-role="Member"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">3 hours ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-amber">JW</span><div><div class="nm">Jonas Weber</div><div class="em">jonas@acme.com</div></div></div></td>
+              <td data-role="Billing admin"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">1 day ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-rose">PN</span><div><div class="nm">Priya Nair</div><div class="em">priya@acme.com</div></div></div></td>
+              <td data-role="Auditor"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">2 days ago</td>
+            </tr>
+            <!-- Needs approval -->
+            <tr class="resolving" id="member-approval">
+              <td><div class="who"><span class="avatar av-blue">TK</span><div><div class="nm">Tomasz Król</div><div class="em">tomasz@acme.com</div></div></div></td>
+              <td data-role="Member"></td>
+              <td data-cell="status">
+                <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                  <span class="pill pill-warn"><span class="dot"></span>Needs approval</span>
+                  <span style="display:flex;gap:7px">
+                    <button class="btn btn-approve btn-sm" data-approve="member-approval">Approve</button>
+                    <button class="btn btn-deny btn-sm" data-deny="member-approval">Deny</button>
+                  </span>
+                </div>
+              </td>
+              <td class="lastseen" data-cell="lastseen">—</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-teal">GK</span><div><div class="nm">Grace Kim</div><div class="em">grace@acme.com</div></div></div></td>
+              <td data-role="IT admin"></td>
+              <td><span class="pill pill-active"><span class="dot"></span>Active</span></td>
+              <td class="lastseen">5 days ago</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== 2. DOMAINS ====== -->
+  <section class="pane" id="pane-domains">
+    <div class="pane-head">
+      <div>
+        <h1>Domains</h1>
+        <p>Claim and verify the domains your team signs in from. SSO applies per verified domain — members signing in from a verified domain are matched to your team automatically.</p>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" data-toast="Add a domain to verify">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          Add domain
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Domain</th><th>Status</th><th>SSO</th><th>Added</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div style="display:flex;align-items:center;gap:10px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="var(--muted)" stroke-width="1.8"/><path d="M3 12h18M12 3c2.3 2.2 3.5 5.4 3.5 9S14.3 18.8 12 21M12 3C9.7 5.2 8.5 8.4 8.5 12S9.7 18.8 12 21" stroke="var(--muted)" stroke-width="1.8"/></svg><span class="mono" style="font-weight:600;font-size:13.5px">acme.com</span><span class="pill pill-accent">Primary</span></div></td>
+              <td><span class="pill pill-active"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Verified</span></td>
+              <td class="mono" style="font-size:12.5px">Okta</td>
+              <td class="lastseen">14 Aug 2026</td>
+              <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-toast="Manage acme.com">Manage</button></td>
+            </tr>
+            <tr>
+              <td><div style="display:flex;align-items:center;gap:10px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="var(--muted)" stroke-width="1.8"/><path d="M3 12h18M12 3c2.3 2.2 3.5 5.4 3.5 9S14.3 18.8 12 21M12 3C9.7 5.2 8.5 8.4 8.5 12S9.7 18.8 12 21" stroke="var(--muted)" stroke-width="1.8"/></svg><span class="mono" style="font-weight:600;font-size:13.5px">acme.io</span></div></td>
+              <td data-cell="status"><span class="pill pill-warn"><span class="dot"></span>Pending</span></td>
+              <td class="muted" style="font-size:12.5px">—</td>
+              <td class="lastseen">Today</td>
+              <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-toast="Remove acme.io">Remove</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-body" id="dns-panel" style="border-top:1px solid var(--rule);background:var(--raised)">
+        <div style="font-size:12.5px;font-weight:650;margin-bottom:4px">Verify <span class="mono">acme.io</span></div>
+        <p class="note" style="margin:0 0 12px">Add the following <b>TXT</b> record to your DNS to prove ownership. Verification usually completes within a few minutes of propagation.</p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <div class="k" style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Host / Name</div>
+            <div class="codebox" style="padding:11px 13px"><button class="copy-btn" data-copy="#txt-host">Copy</button><code id="txt-host">_urnetwork-challenge.acme.io</code></div>
+          </div>
+          <div style="flex:2;min-width:260px">
+            <div class="k" style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Value</div>
+            <div class="codebox" style="padding:11px 13px"><button class="copy-btn" data-copy="#txt-val">Copy</button><code id="txt-val">urnetwork-site-verification=4f9a2c6b8d1e03a79b5c21f6ee4d8a0c</code></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:9px;margin-top:14px;align-items:center">
+          <button class="btn btn-primary btn-sm" id="verify-domain">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            I've added the record — verify
+          </button>
+          <span class="note">Last checked 1 min ago</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head no-border">
+        <div>
+          <h2>Domain aliases</h2>
+          <p>Additional domains that resolve to your primary domain for sign-in and addressing.</p>
+        </div>
+        <div class="ch-actions"><button class="btn btn-secondary btn-sm" data-toast="Add an alias">Add alias</button></div>
+      </div>
+      <div class="card-body tight">
+        <div class="def" style="padding:11px 8px"><div><span class="mono dn">eng.acme.com</span> <span class="muted" style="font-size:12px">→ acme.com</span></div><button class="btn btn-ghost btn-sm" data-toast="Remove alias">Remove</button></div>
+        <div class="def" style="padding:11px 8px"><div><span class="mono dn">mail.acme.com</span> <span class="muted" style="font-size:12px">→ acme.com</span></div><button class="btn btn-ghost btn-sm" data-toast="Remove alias">Remove</button></div>
+        <div class="def" style="padding:11px 8px"><div><span class="mono dn">corp.acme.com</span> <span class="muted" style="font-size:12px">→ acme.com</span></div><button class="btn btn-ghost btn-sm" data-toast="Remove alias">Remove</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== 3. ADD CLIENTS ====== -->
+  <section class="pane" id="pane-clients">
+    <div class="pane-head">
+      <div>
+        <h1>Add clients</h1>
+        <p>The fastest ways to add devices and agents to your team — one command on a laptop, a scan from a phone, or a pre-authenticated key for servers, CI, and managed fleets.</p>
+      </div>
+    </div>
+
+    <!-- Add a device hero -->
+    <div class="card">
+      <div class="card-body">
+        <div class="hero">
+          <div>
+            <div class="step">Add a device</div>
+            <h3>Run one command on the device</h3>
+            <p>Installs the URnetwork client and signs in through your identity provider. The device joins your team and picks up its access policy automatically.</p>
+            <div class="codebox"><button class="copy-btn" data-copy="#install-cmd">Copy</button><code id="install-cmd"><span class="prompt">$ </span>curl -fsSL https://ur.io/install.sh | sh &amp;&amp; ur up</code></div>
+            <p class="note" style="margin:12px 0 0">Prefer not to type? Send an <a style="color:var(--accent);font-weight:600;text-decoration:none" href="#" onclick="return false" data-toast="Install link copied">install link</a> or use an <b>auth key</b> below for headless hosts.</p>
+          </div>
+          <div class="qr-wrap">
+            <svg class="qr" id="qr" viewBox="0 0 29 29" shape-rendering="crispEdges" aria-label="QR code to add this device"></svg>
+            <div class="qr-cap">Scan to add this device</div>
+            <div class="qr-sub">Authenticate once on your phone</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auth keys -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Auth keys</h2>
+          <p>Pre-authenticate headless devices, containers, and agents. A key registers a device without a browser login.</p>
+        </div>
+      </div>
+      <div class="card-body" style="border-bottom:1px solid var(--rule)">
+        <div style="font-size:11px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">New key</div>
+        <div class="tagrow" style="gap:8px">
+          <button class="chip-toggle" data-chip><span class="box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Reusable</button>
+          <button class="chip-toggle" data-chip><span class="box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Ephemeral</button>
+          <button class="chip-toggle on" data-chip><span class="box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Pre-approved</button>
+          <button class="chip-toggle on" data-chip><span class="box"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Tagged</button>
+          <span class="tag tag-accent">tag:ci</span>
+          <div class="dd" style="margin-left:auto">
+            <button class="dd-trigger" data-dd>Expiry: 90 days<svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <div class="dd-menu right" data-simple>
+              <button class="dd-opt" data-close><span class="ck"></span>7 days</button>
+              <button class="dd-opt" data-close><span class="ck"></span>30 days</button>
+              <button class="dd-opt sel" data-close><span class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>90 days</button>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" data-toast="Auth key created — copy it now, it won't be shown again">Create key</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>Properties</th><th>Tags</th><th>Expires</th><th>Created by</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="masked">ur-authkey-k1Yd••••••••</td>
+              <td><span class="tag">Reusable</span></td>
+              <td><span class="tag tag-accent">tag:ci</span></td>
+              <td class="lastseen">in 83 days</td>
+              <td class="lastseen">Amir Haddad</td>
+              <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-toast="Key revoked">Revoke</button></td>
+            </tr>
+            <tr>
+              <td class="masked">ur-authkey-7p2M••••••••</td>
+              <td><span class="tagrow"><span class="tag">Ephemeral</span><span class="tag">Tagged</span></span></td>
+              <td><span class="tag tag-info">tag:recurd</span></td>
+              <td class="lastseen">in 6 days</td>
+              <td class="lastseen">Mei Lin</td>
+              <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-toast="Key revoked">Revoke</button></td>
+            </tr>
+            <tr>
+              <td class="masked">ur-authkey-Qf9x••••••••</td>
+              <td><span class="tagrow"><span class="tag">Pre-approved</span><span class="tag">Tagged</span></span></td>
+              <td><span class="tag tag-accent">tag:ci</span></td>
+              <td class="lastseen">in 30 days</td>
+              <td class="lastseen">Grace Kim</td>
+              <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-toast="Key revoked">Revoke</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- OAuth clients -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>OAuth clients</h2>
+          <p>Non-expiring credentials for CI and automation. A client mints short-lived, tag-bound keys on demand, so no long-lived secret sits in your pipeline.</p>
+        </div>
+        <div class="ch-actions"><button class="btn btn-secondary btn-sm" data-toast="Create an OAuth client">Create client</button></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Client ID</th><th>Secret</th><th>Scopes</th><th>Created</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="mono" style="font-size:12.5px">ur-oauth-ci-7f3a</td>
+              <td><span class="masked" data-secret data-full="ur_sk_9c2f8a1b7e40d5c3e2a1">ur_sk_••••••••••••••••</span></td>
+              <td><span class="tagrow"><span class="tag">devices:core</span><span class="tag">auth_keys</span></span></td>
+              <td class="lastseen">12 Oct 2026</td>
+              <td style="text-align:right;white-space:nowrap"><button class="btn btn-ghost btn-sm" data-reveal>Reveal</button><button class="btn btn-ghost btn-sm" data-toast="Secret copied">Copy</button></td>
+            </tr>
+            <tr>
+              <td class="mono" style="font-size:12.5px">ur-oauth-tf-2b55</td>
+              <td><span class="masked" data-secret data-full="ur_sk_4e10bb93af7c22d9108f">ur_sk_••••••••••••••••</span></td>
+              <td><span class="tagrow"><span class="tag">all</span></span></td>
+              <td class="lastseen">28 Sep 2026</td>
+              <td style="text-align:right;white-space:nowrap"><button class="btn btn-ghost btn-sm" data-reveal>Reveal</button><button class="btn btn-ghost btn-sm" data-toast="Secret copied">Copy</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- MDM -->
+    <div class="card">
+      <div class="card-head no-border">
+        <div>
+          <h2>Deploy to a managed fleet</h2>
+          <p>Push the URnetwork client and an auth key through Intune, Jamf, or Kandji for zero-touch enrollment — devices join with no one typing on them.</p>
+        </div>
+      </div>
+      <div class="card-body" style="padding-top:2px">
+        <div class="codebox"><button class="copy-btn" data-copy="#mdm-cfg">Copy</button><code id="mdm-cfg">{
+  "client": "urnetwork",
+  "authKey": "ur-authkey-${SCOPED}",   // mint per-fleet in OAuth clients
+  "tags": ["tag:prod"],
+  "unattended": true,
+  "acceptRoutes": false
+}</code></div>
+        <p class="note" style="margin:12px 0 0">Deliver as a configuration profile (Jamf/Kandji) or a Win32 app (Intune). The key is tag-bound and short-lived, so a lost profile can't admit an unmanaged device.</p>
+      </div>
+    </div>
+
+    <!-- Device approval -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Device approval</h2>
+          <p>New devices wait for admin approval before they can reach peers, unless they joined with a pre-approved key.</p>
+        </div>
+        <div class="ch-actions">
+          <span class="note" style="margin-right:2px">Required</span>
+          <button class="toggle" role="switch" aria-checked="true" data-toast-on="Device approval required" data-toast-off="Device approval off"></button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Device</th><th>Requested by</th><th>OS</th><th>Requested</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr class="resolving" id="device-approval">
+              <td><div style="display:flex;align-items:center;gap:10px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="13" rx="2" stroke="var(--muted)" stroke-width="1.8"/><path d="M8 20h8" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round"/></svg><span class="mono" style="font-weight:600">mac-studio-ci-04</span></div></td>
+              <td class="lastseen">sofia@acme.com</td>
+              <td class="lastseen">macOS 15.1</td>
+              <td class="lastseen">8 min ago</td>
+              <td data-cell="action">
+                <div style="display:flex;gap:7px">
+                  <button class="btn btn-approve btn-sm" data-approve="device-approval">Approve</button>
+                  <button class="btn btn-deny btn-sm" data-deny="device-approval">Deny</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== 4. ACCESS CONTROL ====== -->
+  <section class="pane" id="pane-acl">
+    <div class="pane-head">
+      <div>
+        <h1>Access control</h1>
+        <p>One deny-by-default policy in HuJSON. It's compiled under your key authority and enforced on every client — the coordination network transports it but never reads it.</p>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="run-preview">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          Preview / Test
+        </button>
+        <button class="btn btn-primary" id="save-policy">Save</button>
+      </div>
+    </div>
+
+    <div class="ac-grid">
+      <!-- editor -->
+      <div class="editor">
+        <div class="editor-bar">
+          <span class="tabdot"></span>
+          <span class="fname">policy.hujson</span>
+          <span class="pill pill-neutral" style="margin-left:auto">deny-by-default</span>
+          <span class="pill pill-accent">signed by key authority</span>
+        </div>
+        <div class="editor-body">
+          <div class="gutter" id="gutter"></div><div class="code-area"><code id="policy-code">{
+  <span class="cc">// URnetwork access policy — deny by default.</span>
+  <span class="cc">// Compiled under your key authority; the network never reads it.</span>
+
+  <span class="ck">"tagOwners"</span><span class="cp">:</span> {
+    <span class="ck">"tag:ci"</span><span class="cp">:</span>     [<span class="cs">"group:eng"</span>],
+    <span class="ck">"tag:prod"</span><span class="cp">:</span>   [<span class="cs">"group:security"</span>],
+    <span class="ck">"tag:recurd"</span><span class="cp">:</span> [<span class="cs">"group:security"</span>],
+  },
+
+  <span class="ck">"groups"</span><span class="cp">:</span> {
+    <span class="ck">"group:eng"</span><span class="cp">:</span>      [<span class="cs">"dana@acme.com"</span>, <span class="cs">"amir@acme.com"</span>],
+    <span class="ck">"group:security"</span><span class="cp">:</span> [<span class="cs">"mei@acme.com"</span>],
+  },
+
+  <span class="ck">"postures"</span><span class="cp">:</span> {
+    <span class="ck">"posture:compliant"</span><span class="cp">:</span> [<span class="cs">"node:os in ['macos','linux']"</span>, <span class="cs">"node:mdm == true"</span>],
+  },
+
+  <span class="ck">"grants"</span><span class="cp">:</span> [
+    <span class="cc">// Engineers reach CI over HTTPS from a compliant device.</span>
+    {
+      <span class="ck">"src"</span><span class="cp">:</span>        [<span class="cs">"group:eng"</span>],
+      <span class="ck">"dst"</span><span class="cp">:</span>        [<span class="cs">"tag:ci"</span>],
+      <span class="ck">"ip"</span><span class="cp">:</span>         [<span class="cs">"tcp:443"</span>],
+      <span class="ck">"srcPosture"</span><span class="cp">:</span> [<span class="cs">"posture:compliant"</span>],
+    },
+    <span class="cc">// recURd agents reach only their own team record.</span>
+    {
+      <span class="ck">"src"</span><span class="cp">:</span> [<span class="cs">"tag:recurd"</span>],
+      <span class="ck">"dst"</span><span class="cp">:</span> [<span class="cs">"autogroup:self"</span>],
+      <span class="ck">"ip"</span><span class="cp">:</span>  [<span class="cs">"tcp:443"</span>],
+    },
+    <span class="cc">// Security administers production over SSH.</span>
+    {
+      <span class="ck">"src"</span><span class="cp">:</span> [<span class="cs">"group:security"</span>],
+      <span class="ck">"dst"</span><span class="cp">:</span> [<span class="cs">"tag:prod"</span>],
+      <span class="ck">"ip"</span><span class="cp">:</span>  [<span class="cs">"tcp:22"</span>],
+    },
+  ],
+
+  <span class="ck">"tests"</span><span class="cp">:</span> [
+    { <span class="ck">"src"</span><span class="cp">:</span> <span class="cs">"dana@acme.com"</span>,  <span class="ck">"accept"</span><span class="cp">:</span> [<span class="cs">"tag:ci:443"</span>] },
+    { <span class="ck">"src"</span><span class="cp">:</span> <span class="cs">"guest@acme.com"</span>, <span class="ck">"deny"</span><span class="cp">:</span>   [<span class="cs">"tag:prod:22"</span>] },
+  ],
+}</code></div>
+        </div>
+        <div class="editor-foot">
+          <span>HuJSON · 2 spaces</span>
+          <span>·</span>
+          <span>3 grants · 3 tags · 2 groups</span>
+          <span style="margin-left:auto;color:var(--active);font-weight:600">● Valid</span>
+        </div>
+      </div>
+
+      <!-- right rail -->
+      <div>
+        <div class="mini-card">
+          <div class="mini-head"><h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 7a2 2 0 0 1 2-2h6l8 8-6 6-8-8V7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="8.5" cy="9.5" r="1.3" fill="currentColor"/></svg>Tags</h3><button class="lnk" data-toast="Add a tag">+ Add</button></div>
+          <div class="mini-body">
+            <div class="def"><div><span class="dn tag tag-accent" style="padding:2px 7px">tag:ci</span><div class="dd2">owners: group:eng</div></div><span class="cnt">12</span></div>
+            <div class="def"><div><span class="dn tag" style="padding:2px 7px">tag:prod</span><div class="dd2">owners: group:security</div></div><span class="cnt">6</span></div>
+            <div class="def"><div><span class="dn tag tag-info" style="padding:2px 7px">tag:recurd</span><div class="dd2">owners: group:security</div></div><span class="cnt">34</span></div>
+          </div>
+        </div>
+
+        <div class="mini-card">
+          <div class="mini-head"><h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="8" cy="9" r="2.4" stroke="currentColor" stroke-width="1.8"/><circle cx="16" cy="9" r="2.4" stroke="currentColor" stroke-width="1.8"/><path d="M4 18c0-2 1.8-3.4 4-3.4s4 1.4 4 3.4M12 18c0-2 1.8-3.4 4-3.4s4 1.4 4 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Groups &amp; autogroups</h3><button class="lnk" data-toast="Manage groups">Manage</button></div>
+          <div class="mini-body">
+            <div class="def"><div><span class="dn">group:eng</span><div class="dd2">synced from Okta</div></div><span class="cnt">42</span></div>
+            <div class="def"><div><span class="dn">group:security</span><div class="dd2">synced from Okta</div></div><span class="cnt">6</span></div>
+            <div class="def"><div><span class="dn">autogroup:member</span><div class="dd2">every approved member</div></div><span class="cnt">auto</span></div>
+            <div class="def"><div><span class="dn">autogroup:self</span><div class="dd2">a device's own owner</div></div><span class="cnt">auto</span></div>
+            <div class="def"><div><span class="dn">autogroup:tagged</span><div class="dd2">any tagged device</div></div><span class="cnt">auto</span></div>
+          </div>
+        </div>
+
+        <div class="mini-card">
+          <div class="mini-head"><h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6l-7-3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Device posture</h3></div>
+          <div class="mini-body">
+            <div class="def"><div><span class="dn">posture:compliant</span><div class="dd2">macOS/Linux · MDM-enrolled</div></div><span class="pill pill-active" style="font-size:10.5px">● 128 ok</span></div>
+            <div class="def"><div><span class="dn">latestOS</span><div class="dd2">OS version ≥ 14.5</div></div><span class="pill pill-warn" style="font-size:10.5px">3 stale</span></div>
+            <p class="note" style="margin:10px 2px 0;font-size:11.5px">Signals are client-attested. Server-computed geolocation is intentionally not used — the network never sees connection metadata to evaluate.</p>
+          </div>
+        </div>
+
+        <div class="mini-card">
+          <div class="mini-head"><h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 11l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.8"/></svg>ACL tests</h3><button class="lnk" id="run-tests">Run</button></div>
+          <div class="mini-body" id="test-list">
+            <div class="test-row"><span class="expr">dana@acme.com → tag:ci:443</span><span class="verdict pass">PASS</span></div>
+            <div class="test-row"><span class="expr">guest@acme.com → tag:prod:22</span><span class="verdict pass">PASS</span></div>
+            <div class="test-row"><span class="expr">tag:recurd → tag:prod:443</span><span class="verdict pass">PASS</span></div>
+            <div class="test-row"><span class="expr">sofia@acme.com → tag:ci:443</span><span class="verdict fail">FAIL</span></div>
+          </div>
+          <div style="padding:0 14px 13px"><span class="note" style="font-size:11.5px">3 passing · 1 failing — <span style="color:var(--danger)">sofia@acme.com</span> is not in <span class="mono">group:eng</span>.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== 5. KEY AUTHORITY ====== -->
+  <section class="pane" id="pane-keyauth">
+    <div class="pane-head">
+      <div>
+        <h1>Key authority <span class="pill pill-accent" style="vertical-align:middle;margin-left:4px">Signed membership</span></h1>
+        <p>New members and devices must be signed by your own trusted signing nodes — so even URnetwork's coordination servers can't add a reader to your team.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="lock-hero">
+          <div class="lock-ic">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m11 14 1 1 2-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:12px">
+              <h2 style="margin:0;font-size:15px">Require signed membership</h2>
+              <span class="pill pill-active" style="margin-left:auto"><span class="dot"></span>Enforced · always-on</span>
+              <button class="toggle" role="switch" aria-checked="true" data-toast-on="Signed membership enforced" data-toast-off="Signed membership relaxed"></button>
+            </div>
+            <p class="note" style="margin:8px 0 0;max-width:72ch">Admission decisions are anchored in keys you hold, not in URnetwork. A new member or device is admitted only when enough of your signing nodes vouch for it. This generalizes Tailscale's tailnet lock from signing node keys to signing your whole membership graph — and runs by default rather than opt-in.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Trusted signing nodes</h2>
+          <p>Admission requires a quorum of signatures from the keys below.</p>
+        </div>
+        <div class="ch-actions"><button class="btn btn-secondary btn-sm" data-toast="Add a signing node">Add signing node</button></div>
+      </div>
+      <div class="card-body" style="border-bottom:1px solid var(--rule)">
+        <div class="thresh">
+          <span style="font-weight:650;color:var(--ink)">Threshold</span>
+          <span class="bars"><i class="on"></i><i class="on"></i><i></i></span>
+          <span><b style="color:var(--ink)">2 of 3</b> signatures required to admit a member or device</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="signer">
+          <div class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+          <div><div class="sn">dana-laptop <span class="pill pill-neutral" style="font-size:10.5px">Secure Enclave</span></div><div class="sm">ed25519:AB12…4F9E</div></div>
+          <div class="sr"><span class="pill pill-active"><span class="dot"></span>Trusted</span><div class="lastseen" style="margin-top:4px">signed 2 min ago</div></div>
+        </div>
+        <div class="signer">
+          <div class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="9" r="2.4" stroke="currentColor" stroke-width="1.8"/><path d="M12 11.5V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+          <div><div class="sn">hsm-sec-1 <span class="pill pill-neutral" style="font-size:10.5px">YubiHSM 2</span></div><div class="sm">ed25519:77C3…1A20</div></div>
+          <div class="sr"><span class="pill pill-active"><span class="dot"></span>Trusted</span><div class="lastseen" style="margin-top:4px">signed 1 day ago</div></div>
+        </div>
+        <div class="signer">
+          <div class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 3v18M5 7l7-4 7 4-7 4-7-4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+          <div><div class="sn">build-signer <span class="pill pill-neutral" style="font-size:10.5px">Offline backup</span></div><div class="sm">ed25519:E4D0…55B7</div></div>
+          <div class="sr"><span class="pill pill-neutral"><span class="dot"></span>Standby</span><div class="lastseen" style="margin-top:4px">signed 12 days ago</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head no-border">
+        <div><h2>How this stays private</h2><p>The blind-coordination model — what the network carries, and what it can and can't see.</p></div>
+      </div>
+      <div class="card-body" style="padding-top:2px">
+        <div class="diagram">
+          <div class="dg-node">Your signing nodes<div class="sub">keys you hold</div></div>
+          <div class="dg-arrow"><svg width="26" height="14" viewBox="0 0 26 14" fill="none"><path d="M1 7h22m0 0-5-4m5 4-5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>sign</div>
+          <div class="dg-node">Members &amp; devices<div class="sub">admitted on quorum</div></div>
+          <div class="dg-arrow"><svg width="26" height="14" viewBox="0 0 26 14" fill="none"><path d="M1 7h22m0 0-5-4m5 4-5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>relay</div>
+          <div class="dg-node cipher">URnetwork network<div class="sub">carries ciphertext</div></div>
+        </div>
+        <div class="callout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="5" y="10" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <div>The network carries only <b>ciphertext</b>. URnetwork can see <b>membership metadata</b> — that a device joined and when — but never your team's content or record. Because admission is anchored in your keys, a compromised coordination server can relay traffic but <b>cannot add a reader</b>. This is the differentiator versus Tailscale, whose tailnet lock covers membership authenticity only.</div>
+        </div>
+        <p class="note" style="margin:14px 0 0;font-size:12px">Bootstrap is trust-on-first-use and the signing keys live on your devices — rotate a lost key immediately and keep <span class="mono">build-signer</span> offline as recovery.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== 6. AUDIT LOG ====== -->
+  <section class="pane" id="pane-audit">
+    <div class="pane-head">
+      <div>
+        <h1>Audit log</h1>
+        <p>Every admin and configuration change, written to a record only your team can read. Records are end-to-end encrypted to your team and hash-chained for tamper evidence.</p>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary" data-toast="Exporting log as JSON">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0 4-4m-4 4-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 20h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Export
+        </button>
+        <button class="btn btn-primary" data-toast="Configure SIEM streaming">Stream to SIEM</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="aud-filters">
+          <div class="search" style="min-width:230px">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m20 20-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input placeholder="Search events, actors, targets" aria-label="Search audit log">
+          </div>
+          <button class="btn btn-secondary btn-sm" data-toast="Filter by actor">Actor</button>
+          <button class="btn btn-secondary btn-sm" data-toast="Filter by action">Action</button>
+          <button class="btn btn-secondary btn-sm" data-toast="Pick a date range">Last 7 days</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Actor</th><th>Action</th><th>Target</th><th>Time</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="who"><span class="avatar av-teal" style="width:26px;height:26px;font-size:10px">DO</span><span class="nm">Dana Okafor</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--accent)"></span>Connected SSO</span></td>
+              <td class="mono" style="font-size:12.5px">Okta (OIDC)</td>
+              <td class="lastseen">2 min ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-purple" style="width:26px;height:26px;font-size:10px">ML</span><span class="nm">Mei Lin</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--active)"></span>Approved member</span></td>
+              <td class="mono" style="font-size:12.5px">sofia@acme.com</td>
+              <td class="lastseen">3 hours ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-blue" style="width:26px;height:26px;font-size:10px">AH</span><span class="nm">Amir Haddad</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--accent)"></span>Created auth key</span></td>
+              <td class="mono" style="font-size:12.5px">tag:ci · reusable</td>
+              <td class="lastseen">5 hours ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-purple" style="width:26px;height:26px;font-size:10px">ML</span><span class="nm">Mei Lin</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--info)"></span>Updated policy</span></td>
+              <td class="mono" style="font-size:12.5px">grants (+2 −1)</td>
+              <td class="lastseen">1 day ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-teal" style="width:26px;height:26px;font-size:10px">GK</span><span class="nm">Grace Kim</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:#7c4dd6"></span>Approved device</span></td>
+              <td class="mono" style="font-size:12.5px">mac-studio-ci-03</td>
+              <td class="lastseen">1 day ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-teal" style="width:26px;height:26px;font-size:10px">DO</span><span class="nm">Dana Okafor</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--warn)"></span>Added signing node</span></td>
+              <td class="mono" style="font-size:12.5px">hsm-sec-1</td>
+              <td class="lastseen">2 days ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-blue" style="width:26px;height:26px;font-size:10px">AH</span><span class="nm">Amir Haddad</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--active)"></span>Verified domain</span></td>
+              <td class="mono" style="font-size:12.5px">acme.com</td>
+              <td class="lastseen">6 days ago</td>
+            </tr>
+            <tr>
+              <td><div class="who"><span class="avatar av-teal" style="width:26px;height:26px;font-size:10px">DO</span><span class="nm">Dana Okafor</span></div></td>
+              <td><span class="act-tag"><span class="adot" style="background:var(--warn)"></span>Enabled key authority</span></td>
+              <td class="mono" style="font-size:12.5px">team-wide · 2-of-3</td>
+              <td class="lastseen">6 days ago</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-body" style="border-top:1px solid var(--rule);background:var(--raised)">
+        <div class="callout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 7v10l8 4 8-4V7l-8-4-8 4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m4 7 8 4 8-4M12 11v10" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <div>Records are <b>end-to-end encrypted to your team</b> and hash-chained, so integrity doesn't depend on the network. Export to JSON, or stream over an encrypted webhook to Splunk, Datadog, or any SIEM.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+(function(){
+  "use strict";
+  var ROLES=[
+    ["Owner","Full control, including billing and deletion."],
+    ["Admin","Manage members, policy, and devices."],
+    ["Member","Standard access to the team."],
+    ["Network admin","Edit access policy and device settings."],
+    ["IT admin","Approve users and devices."],
+    ["Billing admin","Manage the subscription and invoices."],
+    ["Auditor","Read-only access to logs and config."]
+  ];
+  function chevron(){return '<svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';}
+  function checkmark(){return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';}
+
+  /* ---------- build role dropdowns ---------- */
+  var roleCells=document.querySelectorAll('td[data-role]');
+  Array.prototype.forEach.call(roleCells,function(td){
+    var current=td.getAttribute('data-role');
+    var opts=ROLES.map(function(r){
+      var sel=r[0]===current?' sel':'';
+      return '<button class="dd-opt'+sel+'" data-role-opt="'+r[0]+'"><span class="ck">'+checkmark()+'</span><span><span class="ro-name">'+r[0]+'</span><span class="ro-desc">'+r[1]+'</span></span></button>';
+    }).join('');
+    td.innerHTML='<div class="dd"><button class="dd-trigger" data-dd><span class="role-label">'+current+'</span>'+chevron()+'</button><div class="dd-menu">'+opts+'</div></div>';
+  });
+
+  /* ---------- dropdown open/close (delegated) ---------- */
+  function closeAll(except){
+    Array.prototype.forEach.call(document.querySelectorAll('.dd.open'),function(d){
+      if(d!==except) d.classList.remove('open');
+    });
+  }
+  document.addEventListener('click',function(e){
+    var trig=e.target.closest('[data-dd]');
+    if(trig){
+      var dd=trig.closest('.dd');
+      var wasOpen=dd.classList.contains('open');
+      closeAll(dd);
+      dd.classList.toggle('open',!wasOpen);
+      return;
+    }
+    // role option chosen
+    var ro=e.target.closest('[data-role-opt]');
+    if(ro){
+      var menu=ro.closest('.dd-menu');
+      Array.prototype.forEach.call(menu.querySelectorAll('.dd-opt'),function(o){o.classList.remove('sel');});
+      ro.classList.add('sel');
+      var dd2=ro.closest('.dd');
+      dd2.querySelector('.role-label').textContent=ro.getAttribute('data-role-opt');
+      dd2.classList.remove('open');
+      toast('Role updated to '+ro.getAttribute('data-role-opt'));
+      return;
+    }
+    // simple menu option (expiry etc.)
+    var simpleOpt=e.target.closest('[data-simple] .dd-opt');
+    if(simpleOpt){
+      var m=simpleOpt.closest('.dd-menu');
+      Array.prototype.forEach.call(m.querySelectorAll('.dd-opt'),function(o){o.classList.remove('sel');o.querySelector('.ck').innerHTML='';});
+      simpleOpt.classList.add('sel');
+      simpleOpt.querySelector('.ck').innerHTML=checkmark();
+      var trg=simpleOpt.closest('.dd').querySelector('.dd-trigger');
+      if(trg) trg.firstChild.textContent='Expiry: '+simpleOpt.textContent.trim();
+      simpleOpt.closest('.dd').classList.remove('open');
+      return;
+    }
+    // generic close-on-select
+    var closer=e.target.closest('[data-close]');
+    if(closer){
+      if(closer.getAttribute('data-toast')) toast(closer.getAttribute('data-toast'));
+      var ddc=closer.closest('.dd'); if(ddc) ddc.classList.remove('open');
+      return;
+    }
+    // click outside
+    if(!e.target.closest('.dd')) closeAll(null);
+  });
+
+  /* ---------- nav switching ---------- */
+  var navItems=document.querySelectorAll('.nav-item');
+  Array.prototype.forEach.call(navItems,function(btn){
+    btn.addEventListener('click',function(){
+      var target=btn.getAttribute('data-target');
+      Array.prototype.forEach.call(navItems,function(b){b.classList.remove('active');});
+      btn.classList.add('active');
+      Array.prototype.forEach.call(document.querySelectorAll('.pane'),function(p){p.classList.remove('show');});
+      var pane=document.getElementById('pane-'+target);
+      if(pane) pane.classList.add('show');
+      window.scrollTo({top:0,behavior:'smooth'});
+    });
+  });
+
+  /* ---------- toggles ---------- */
+  document.addEventListener('click',function(e){
+    var t=e.target.closest('.toggle');
+    if(!t) return;
+    var on=t.getAttribute('aria-checked')==='true';
+    t.setAttribute('aria-checked',on?'false':'true');
+    var msg=on?t.getAttribute('data-toast-off'):t.getAttribute('data-toast-on');
+    if(msg) toast(msg);
+  });
+
+  /* ---------- chip toggles ---------- */
+  document.addEventListener('click',function(e){
+    var c=e.target.closest('[data-chip]');
+    if(!c) return;
+    c.classList.toggle('on');
+  });
+
+  /* ---------- approve / deny ---------- */
+  document.addEventListener('click',function(e){
+    var ap=e.target.closest('[data-approve]');
+    var dn=e.target.closest('[data-deny]');
+    if(!ap&&!dn) return;
+    var id=(ap||dn).getAttribute(ap?'data-approve':'data-deny');
+    var row=document.getElementById(id);
+    if(!row) return;
+    var actionCell=row.querySelector('[data-cell="action"]');
+    var statusCell=row.querySelector('[data-cell="status"]');
+    var seenCell=row.querySelector('[data-cell="lastseen"]');
+    if(ap){
+      var check='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      if(statusCell){ statusCell.innerHTML='<span class="pill pill-active">'+check+'Active</span>'; }
+      else if(actionCell){ actionCell.innerHTML='<span class="pill pill-active">'+check+'Approved</span>'; }
+      if(seenCell) seenCell.textContent='Just now';
+      row.classList.add('resolved');
+      toast('Approved — signed by your key authority');
+    }else{
+      row.style.opacity='0';
+      setTimeout(function(){ if(row.parentNode) row.parentNode.removeChild(row); },420);
+      toast('Request denied');
+    }
+  });
+
+  /* ---------- reveal secrets ---------- */
+  document.addEventListener('click',function(e){
+    var r=e.target.closest('[data-reveal]');
+    if(!r) return;
+    var cell=r.closest('tr').querySelector('[data-secret]');
+    if(!cell) return;
+    var full=cell.getAttribute('data-full');
+    if(cell.getAttribute('data-shown')==='1'){
+      cell.textContent='ur_sk_••••••••••••••••';
+      cell.removeAttribute('data-shown');
+      r.textContent='Reveal';
+    }else{
+      cell.textContent=full;
+      cell.setAttribute('data-shown','1');
+      r.textContent='Hide';
+    }
+  });
+
+  /* ---------- copy ---------- */
+  function doCopy(text){
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).catch(function(){fallbackCopy(text);});
+        return;
+      }
+    }catch(err){}
+    fallbackCopy(text);
+  }
+  function fallbackCopy(text){
+    try{
+      var ta=document.createElement('textarea');
+      ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }catch(err){}
+  }
+  document.addEventListener('click',function(e){
+    var btn=e.target.closest('.copy-btn');
+    if(!btn||btn.getAttribute('data-busy')==='1') return;
+    var sel=btn.getAttribute('data-copy');
+    var node=sel?document.querySelector(sel):null;
+    var text=node?node.textContent:'';
+    doCopy(text);
+    btn.setAttribute('data-busy','1');
+    var orig=btn.innerHTML;
+    btn.classList.add('ok');
+    btn.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Copied';
+    setTimeout(function(){btn.innerHTML=orig;btn.classList.remove('ok');btn.removeAttribute('data-busy');},1300);
+  });
+
+  /* ---------- generic toast buttons ---------- */
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('[data-toast]');
+    if(!b||b.hasAttribute('data-close')) return;
+    toast(b.getAttribute('data-toast'));
+  });
+
+  /* ---------- domain verify ---------- */
+  var vbtn=document.getElementById('verify-domain');
+  if(vbtn){
+    vbtn.addEventListener('click',function(){
+      var row=vbtn.closest('.card').querySelectorAll('tbody tr')[1];
+      if(row){
+        var sc=row.querySelector('[data-cell="status"]');
+        if(sc) sc.innerHTML='<span class="pill pill-active"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Verified</span>';
+        var sso=row.children[2]; if(sso){sso.className='mono';sso.style.fontSize='12.5px';sso.textContent='Okta';}
+      }
+      var panel=document.getElementById('dns-panel');
+      if(panel) panel.style.display='none';
+      toast('acme.io verified — SSO now applies to this domain');
+    });
+  }
+
+  /* ---------- policy preview / save / tests ---------- */
+  var sp=document.getElementById('save-policy');
+  if(sp) sp.addEventListener('click',function(){toast('Policy saved and signed — 3 passing · 1 failing test');});
+  var rp=document.getElementById('run-preview');
+  if(rp) rp.addEventListener('click',function(){toast('Compiled 3 grants · evaluated 128 devices');});
+  var rt=document.getElementById('run-tests');
+  if(rt) rt.addEventListener('click',function(){toast('Ran 4 ACL tests — 3 passing, 1 failing');});
+
+  /* ---------- line numbers ---------- */
+  var code=document.getElementById('policy-code');
+  var gutter=document.getElementById('gutter');
+  if(code&&gutter){
+    var lines=code.textContent.replace(/\n$/,'').split('\n').length;
+    var html='';
+    for(var i=1;i<=lines;i++) html+='<span>'+i+'</span>';
+    gutter.innerHTML=html;
+  }
+
+  /* ---------- QR placeholder (deterministic, hand-drawn) ---------- */
+  var qr=document.getElementById('qr');
+  if(qr){
+    var N=29, reserved=[], cells='';
+    for(var y=0;y<N;y++){reserved[y]=[];for(var x=0;x<N;x++)reserved[y][x]=false;}
+    function finder(ox,oy){
+      for(var gy=0;gy<7;gy++)for(var gx=0;gx<7;gx++){
+        var on=(gx===0||gx===6||gy===0||gy===6)||(gx>=2&&gx<=4&&gy>=2&&gy<=4);
+        if(on) cells+='<rect x="'+(ox+gx)+'" y="'+(oy+gy)+'" width="1" height="1"/>';
+      }
+      // reserve 8x8 (incl. separator)
+      for(var ry=-1;ry<=7;ry++)for(var rx=-1;rx<=7;rx++){
+        var py=oy+ry, px=ox+rx;
+        if(py>=0&&py<N&&px>=0&&px<N) reserved[py][px]=true;
+      }
+    }
+    finder(0,0); finder(N-7,0); finder(0,N-7);
+    // small alignment pattern
+    var ax=N-9, ay=N-9;
+    for(var ey=0;ey<5;ey++)for(var ex=0;ex<5;ex++){
+      var aon=(ex===0||ex===4||ey===0||ey===4)||(ex===2&&ey===2);
+      if(aon) cells+='<rect x="'+(ax+ex)+'" y="'+(ay+ey)+'" width="1" height="1"/>';
+      reserved[ay+ey][ax+ex]=true;
+    }
+    // timing lines
+    for(var tx=8;tx<N-8;tx++){ if(tx%2===0){cells+='<rect x="'+tx+'" y="6" width="1" height="1"/>';cells+='<rect x="6" y="'+tx+'" width="1" height="1"/>';} reserved[6][tx]=true; reserved[tx][6]=true; }
+    // deterministic data fill
+    var seed=1337;
+    function rnd(){ seed=(seed*1103515245+12345)&0x7fffffff; return ((seed>>>13)&0xff)/255; }
+    for(var dy=0;dy<N;dy++)for(var dx=0;dx<N;dx++){
+      if(reserved[dy][dx]) continue;
+      if(rnd()<0.46) cells+='<rect x="'+dx+'" y="'+dy+'" width="1" height="1"/>';
+    }
+    qr.innerHTML=cells;
+  }
+
+  /* ---------- toast util ---------- */
+  var toastHost=document.getElementById('toasts');
+  function toast(msg){
+    if(!msg) return;
+    var el=document.createElement('div');
+    el.className='toast';
+    el.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4 10-10" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span></span>';
+    el.querySelector('span').textContent=msg;
+    toastHost.appendChild(el);
+    setTimeout(function(){
+      el.style.transition='opacity .3s,transform .3s';
+      el.style.opacity='0'; el.style.transform='translateY(8px)';
+      setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); },320);
+    },2000);
+  }
+})();
+</script>
+</body>
+</html>

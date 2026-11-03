@@ -1,0 +1,809 @@
+{
+ "nodes": [
+  {
+   "id": "1.1",
+   "key": "open-harness-user-voice",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.01-open-harness-user-voice.md",
+   "answer_summary": "Users of open-source harnesses ask most for four things. They want local models to work (model discovery, tool calls, timeouts), a guarantee of privacy and offline use, and sessions they don't lose and can export and search. Requests for approval or audit logs (19 people, 0 votes outside Codex) and for sync across machines (13 people) are rare. For local-model users, the main leak is the harness itself: OpenCode sent session titles to a cloud model, and its maintainers declined to make offline the default. A run of trust failures between September and October 2026 (ZCode's silent git upload, Codex's self-updating daemon, OpenCode's leak of stored provider keys, and the LiteLLM supply-chain compromise in March) sets the adoption bar: open source, works offline, no phone-home, not a required hop in the request path, signed releases. Tailscale and LM Studio's LM Link already solve reaching a home GPU box. What remains open is identity and logging at the inference server, and proof of which weights and quantization served a request, which users ask for explicitly. Session sharing is crowded (Vibivibi already sells end-to-end encrypted sharing at $8/$15), OpenCode has retired /share and Roo Code has shut down. Pitch4's vault is therefore table stakes, and it should set itself apart through local-only proof, a signed model manifest, offline mode from the first release, importing history from retired harnesses, and wider harness coverage (Pi, Cline, Kilo).",
+   "open_questions": [
+    {
+     "question": "Will local-model developers and their security teams accept a sidecar that enforces local-only egress for the harness and writes receipts, rather than OS-level tools (Little Snitch, OpenSnitch, LuLu, bubblewrap, sandbox-exec)? How widely are those tools used among harness users, and what breaks when harness egress is blocked (OpenCode web UI calls to app.opencode.ai, models.dev, LSP downloads)?",
+     "why_it_matters": "It decides whether local-only proof is the lead product for open-weight users or a feature, and whether the objection that a proxy is a single point of failure rules out enforcement in the request path.",
+     "suggested_sources": "HN threads 50145507, 50060694, 47704539; OpenSnitch, LuLu, and Little Snitch adoption data; offline issues in OpenCode, Crush, Cline, and Continue; r/LocalLLaMA (needs a working Reddit access path)",
+     "cid": "c2-1.1-1"
+    },
+    {
+     "question": "What do vLLM, SGLang, llama.cpp, Ollama, and LM Studio expose about the weights they serve (file hashes, GGUF metadata, quantization, runtime version and flags, chat template, tool parser)? Can a sidecar attest these without a TEE, and would harness maintainers (OpenCode, Pi, Kilo) and auditors accept a signed model manifest?",
+     "why_it_matters": "Pitch4's 'signs which weights it serves' claim, and the proposed manifest that would also fix model discovery, depend on it.",
+     "suggested_sources": "Inference-server API docs (/v1/models, Ollama /api/show, llama.cpp /props); GGUF spec; OpenSSF model-signing work; OpenRouter Exacto and Kimi Vendor Verifier methods; maintainers' replies on OpenCode #6231 and #56362",
+     "cid": "c2-1.1-2"
+    },
+    {
+     "question": "How much do teams actually use session sharing? What traction do Vibivibi, Supafork, Skillsync (YC W26), Ocean, Pond, and SpecStory have? Why did OpenCode retire /share on 15 Oct 2026 (cost, abuse, or the security incident), and how many OpenCode users relied on it?",
+     "why_it_matters": "It decides whether the vault and handoff lead the paid offering or are a free hook, and how to price them against Vibivibi's $8 and $15 tiers.",
+     "suggested_sources": "OpenCode maintainers (context for PR #55716, Discord, X); founders' posts and the YC profile; GitHub star trends; HN follow-ups",
+     "cid": "c2-1.1-3"
+    },
+    {
+     "question": "How many companies run open harnesses (OpenCode, Pi, Cline, Kilo, Continue) on self-hosted weights for production work, and who buys for them (OpenCode Enterprise per seat, Kilo or Cline enterprise, LM Studio enterprise)? Which compliance drivers apply (EU AI Act Article 12 logging, client contracts)?",
+     "why_it_matters": "Pitch4's 'best fit' segment is unsized beyond Menlo's estimate that open-source models hold 11% of enterprise LLM spend; local-only proof and model provenance are worth building only if this segment buys.",
+     "suggested_sources": "Stack Overflow 2026 and JetBrains 2026 survey cross-tabs; NYT, 4 Sep 2026, 'Corporate America is getting hooked on open-source AI'; OpenCode Enterprise, Kilo, and Cline case studies; LM Studio enterprise announcements; Menlo and a16z reports",
+     "cid": "c2-1.1-4"
+    },
+    {
+     "question": "What capture surface does each open harness offer (OpenCode plugin and server events, Pi extensions, Goose, Kilo, Cline hooks, Crush, Aider, Qwen Code, and Gemini CLI hooks) for sessions, permission decisions, file edits, and model IDs? How often do their session stores change (OpenCode's V1-to-V2 SQLite migration, Roo's globalState)?",
+     "why_it_matters": "It sets build cost and how complete pitch4's capture claim can be, and whether approvals can be recorded where harnesses keep them only in memory (OpenCode #32190).",
+     "suggested_sources": "Harness docs and changelogs; plugin and extension APIs; the Agent Client Protocol spec; issue trackers for storage migrations",
+     "cid": "c2-1.1-5"
+    },
+    {
+     "question": "For teams sharing a GPU server among developers and cloud agents, what do they use for identity, quotas, and logs (LiteLLM, Bifrost, Tailscale Aperture, LM Link, Open WebUI, GPUStack, llama-swap)? What fails, would they pay for per-agent grants and content-free receipts, and can cloud agents (OpenHands Cloud, Kilo Cloud Agents, Codex cloud) reach private model servers today?",
+     "why_it_matters": "It tests whether model access is a wedge against Aperture and LM Link, and whether cloud agents reaching private models is a real need. This pass found no first-person evidence for the latter.",
+     "suggested_sources": "Tailscale Aperture docs and customers; LiteLLM and GPUStack issues; Ask HN threads; OpenHands and Kilo cloud-agent docs; r/LocalLLaMA and r/selfhosted",
+     "cid": "c2-1.1-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Local-only proof: for each harness, the sidecar allows outbound traffic only to the team's model server, records every blocked attempt (title generation, models.dev, share pages, telemetry, update checks), and produces a 'what left this machine' report. This makes 'nothing has to leave your control' verifiable instead of a description.",
+     "rationale": "The most-voted privacy complaints from local-model users are about the harness's own traffic (OpenCode #10416, 65 thumbs-up; #5554; #2224, 48; Crush #453, 28; Cline phoning home). Maintainers say offline 'cannot be the default'. HN users say OTEL shows only what harnesses choose to show. No harness vendor will certify its own egress.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Extend 'signs which weights it serves' into a signed model manifest from the model-server sidecar: weights digest, quantization, runtime version and flags, context length, chat template, and tool-call parser. Harnesses use it to discover and configure models automatically, and the ledger stamps every change with it.",
+     "rationale": "The manifest addresses the largest local-model request (model discovery, OpenCode #6231, 248 thumbs-up) and explicit provenance requests (#41969, #56362, #24649, #40544; HN calls for proof of quantization; Moonshot's K2 Vendor Verifier) in one artifact. That gives provenance daily use, which fits 'one write, three readers'.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Ship offline, air-gapped single-user mode in the first release (pitch4 currently lists it last), with strict trust hygiene. No phone-home, no auto-updating daemon, reproducible builds, signed and pinned releases. Capture fails open and is never a required hop for model traffic.",
+     "rationale": "There is high demand for air-gapped and offline use (OpenCode #2224, #16117, #18492; Crush #453). The Codex daemon backlash (193 commenters) and the LiteLLM supply-chain compromise (290 commenters) set the bar. The 'proxy is a single point of failure' objection points to the same design.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Treat the vault as table stakes and add harness-exit import. Offer full-content search, export that survives compaction, and resilience to path moves, upgrades, and database migrations. Import history from retired harnesses (Roo Code, OpenCode share links). Make sharing end-to-end encrypted, revocable, expiring, and team-scoped, never public by default. Price against Vibivibi ($8/$15). Replace 'Ours' for sessions under keys with the combination of sessions, signed action ledger, and governed reach.",
+     "rationale": "Session loss, export, search, and sharing complaints are the largest session themes (110 to 190 people each). Vibivibi, Skillsync, Pond, cass, and SpecStory already cover parts of this, including encrypted sharing. Roo Code shut down, and OpenCode retired /share on 15 Oct 2026.",
+     "effect": "offering",
+     "confidence": "high"
+    },
+    {
+     "direction": "Build an inference-server guard for teams. Put identity in front of Ollama, vLLM, and llama.cpp; issue per-agent grants and content-free receipts that correlate request IDs; show queue position. Stand apart from Tailscale Aperture and LM Link through per-agent grants, receipts, and the model manifest, and partner by running over Tailscale.",
+     "rationale": "Ollama has no native authentication (175k exposed hosts). vLLM's API-key bypass and llama.cpp's router key gap are documented. Users ask for ID-only request correlation (vLLM #64654) and EU AI Act logging. Individuals' reach is already solved by Tailscale and LM Link, so the value is at team level.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Record attribution outside the commit. Store model and weights per change in git notes or the ledger, and generate Assisted-by trailers on request from facts the sidecar observed, never from the model's self-report.",
+     "rationale": "Users reject forced Co-authored-by trailers (Qwen Code #1379, #2899). Models write false or wrong trailers (OpenCode #52445, #9473; Aider #4721). The Linux kernel requires Assisted-by and forbids Signed-off-by from AI agents.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Widen the harness list and lead the open side with OpenCode and Pi. Name Cline, Kilo, Continue, Crush, Aider, Qwen Code, and Gemini CLI. Present Roo Code's shutdown as proof that the record must outlive any harness.",
+     "rationale": "Pi has 119k stars and 1.72M npm downloads a month and is preferred by local-model users wary of OpenCode's cloud features. Cline has 5.8M installs, Continue 4.5M, and Kilo 1.7M. Pitch4 names only OpenCode and Goose.",
+     "effect": "offering",
+     "confidence": "high"
+    }
+   ]
+  },
+  {
+   "id": "1.2",
+   "key": "coordination-parallel-agents",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.02-coordination-parallel-agents.md",
+   "answer_summary": "Heavy users now commonly run several agents: about a third of agent users run more than one (Stack Overflow pulse, April 2026), and agent PRs overlap in time in 40% of repositories that have them. But the pain people voice most is the shared local environment (ports, databases, dependencies, disk) and the human review bottleneck, not two agents claiming the same task. Measured evidence on coordination is mixed. Locks cut throughput at scale (Cursor: 20 agents worked at the pace of 2 or 3), and Anthropic dropped its global merge lock and lets Claude fix textual conflicts. Up-front planning into separate scopes (merge conflicts 13 to 0) and telling agents about an interface change (82% of constructed failures recovered) help with semantic conflicts, but those were rare in real code pairs (1 in 834 runs). No study tests advisory claims across harnesses; the closest tool, Foremerge, has no benchmark and excludes coordination between machines. Agents from different vendors rarely edit the same repo in parallel (4.3% of repositories), though such pairs conflict twice as often (41.7% vs 19.8%). Having one vendor's agent review another's work is common: about 61 distinct HN users describe it in 2026, and OpenAI's Codex plugin for Claude Code has 34,787 stars. So pitch4 should keep claims free and advisory. It should sell its cross-harness value as a signed record and gate for review and handoff between vendors, plus network isolation per agent, priced on team and admin features. Conductor gives local parallel agents away free and charges $60 per user per month for multiplayer and admin.",
+   "open_questions": [
+    {
+     "question": "How often do different developers' agents (not one developer's swarm) collide or duplicate work in real team repos, and what does each incident cost in rework hours?",
+     "why_it_matters": "Pitch4's flagship coordination story is a teammate's agent starting on the same module, but nearly all public evidence comes from a single operator running many agents, or from harness bugs. If collisions between developers are rare or cheap, claims across the team cannot be a selling point.",
+     "suggested_sources": "Re-analysis of the AIDev-pop and AgenticFlict data by PR author identity; interviews with or telemetry from teams of 10+ using agents; engineering posts from Anthropic, Cursor, and Uber; GitHub issues mentioning a teammate's agent",
+     "cid": "c2-1.2-1"
+    },
+    {
+     "question": "Would teams pay for a network identity per agent that removes port, database, and service collisions, rather than free scripts (portless, direnv, Coasts) or cloud workspaces (Conductor Cloud, Boxes.dev)? What share of parallel-agent users run local services for each agent?",
+     "why_it_matters": "If yes, pitch4's first-release reach features become a developer feature used daily, not only a security line item. That changes the lead message and the free/paid split.",
+     "suggested_sources": "Issues, pricing, and adoption for Coasts, Hyve, Boxes.dev, and Conductor Cloud; the outcome of Claude Code #34385; Paradev's port features; developer interviews",
+     "cid": "c2-1.2-2"
+    },
+    {
+     "question": "Do security, compliance, or audit buyers require or value evidence that agent code was reviewed independently by a different model or a human, and in what form?",
+     "why_it_matters": "If they do, a signed record of review between vendors can be sold to admins (the Assured tier) instead of being given away as a developer convenience.",
+     "suggested_sources": "SOC 2 and ISO 42001 auditor guidance on AI-generated code; EU AI Act and financial-regulator SDLC guidance; GRC vendor documentation (Vanta, Drata); CISO surveys; bank and insurer secure-SDLC policies",
+     "cid": "c2-1.2-3"
+    },
+    {
+     "question": "Will harness vendors make review and delegation between vendors a free built-in (OpenAI codex-plugin-cc, an Anthropic or GitHub Agent HQ counterpart, A2A or ACP support), and what do those bridges record and where do they store it?",
+     "why_it_matters": "If vendors give away both the bridge and its record, the sidecar's cross-harness value narrows to customer keys, privacy, and team-wide scope. Pitch4's competitive table would need updating.",
+     "suggested_sources": "openai/codex-plugin-cc README, issues, and changelog; the Claude Code plugin marketplace; GitHub Agent HQ changelog; A2A and ACP registries and specs; Codex message-board documentation",
+     "cid": "c2-1.2-4"
+    },
+    {
+     "question": "Do advisory notices of intent or contract changes measurably reduce rework when agents from different vendors work in parallel, and at what cost in tokens and latency?",
+     "why_it_matters": "This experiment decides whether claims are a selling point or a free feature. No benchmark exists yet: Foremerge has none, and NP-Bench does not test leases on their own.",
+     "suggested_sources": "Code for the stale benchmark (arXiv 2609.25396) and NP-Bench (arXiv 2610.07261); Foremerge GitHub discussions; Weave's semantic tooling; an A/B test with design partners",
+     "cid": "c2-1.2-5"
+    },
+    {
+     "question": "At merge rates of tens of thousands per day, does the bottleneck move to detecting semantic conflicts after merge, and to CI and review, making claims before editing irrelevant? Is there a product at that stage?",
+     "why_it_matters": "Anthropic dropped its merge lock and relies on post-merge testing, and says semantic conflicts are unavoidable. Pitch4 may be aiming coordination at the wrong stage of the pipeline.",
+     "suggested_sources": "Anthropic's source-control post and its 1,012-comment HN thread (HN 50073633); Weave and sem documentation; merge-queue vendor documentation (Graphite, Mergify, Aviator); research on semantic merge conflicts",
+     "cid": "c2-1.2-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Reposition \"a private IP address per agent\" and port forwarding as a fix for collisions between parallel agents. Each agent runs its dev server, database, and services on default ports at its own address, and the developer and teammates can reach them. This would sit alongside the security message, not replace it.",
+     "rationale": "Shared-environment collisions are the parallel-agent pain voiced most often: 14 people describe it directly, 6 more built workarounds, and Claude Code #34385 asks for port allocation. Several products patch it (Coasts, Hyve, Boxes.dev, Paradev port detection), but no harness vendor documents a fix. That turns a first-release reach feature into something developers would use every day.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Replace \"claims and leases so two agents don't edit the same files\" with \"review and handoff between vendors, on the record\". Write signed ledger entries saying which harness and model wrote a change set, which reviewed it, round count, and verdict. Add round caps and loop detection, and export the entries as evidence of independent review for admins.",
+     "rationale": "About 61 distinct HN users describe cross-vendor review in 2026, and OpenAI's Codex plugin for Claude Code has 34,787 stars. The effect is measurable and depends on direction (+18.1 points in one direction, -8.6 in the other). Loops need governing (50+ rounds at Anthropic, 13 for one user). A record kept under the team's keys serves developers (continuing work) and security buyers (independent review evidence), so admins could pay for it.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Keep claims free, advisory, and expiring; never use blocking locks. Change the claim entry into a notice of intent or contract change that reaches every harness and teammate (\"I am replacing PaymentService\", \"I changed interface X\").",
+     "rationale": "Locks cut throughput at scale (Cursor), and Foremerge avoids them because one crashed agent would stall the fleet. Agents now fix textual conflicts cheaply (Anthropic). The coordination with measured value is semantic: telling agents about an interface change recovered 82% of constructed failures, and separate scopes cut merge conflicts from 13 to 0.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Aim coordination at the scope that vendors and open tools leave out: across machines, across developers, and across accounts and providers (API keys, Bedrock, Vertex). Carry it through the relay and the team-keyed ledger without a vendor in the middle.",
+     "rationale": "Claude Code's cross-machine messaging goes through Anthropic servers, needs a claude.ai sign-in, and two Team seats cannot coordinate (#103760). Foremerge puts coordination between machines out of scope. Cross-vendor pairs conflict twice as often as same-vendor pairs. Demand evidence is thin, though, so this needs testing before it leads the pitch.",
+     "effect": "differentiation",
+     "confidence": "low"
+    },
+    {
+     "direction": "Swap the unmeasured \"saves work\" claim for a published measurement plan. Use existing benchmarks (stale, NP-Bench, AgenticFlict-style merge replays) on cross-vendor pairs and semantic conflicts, and track design-partner metrics: rework hours, review rounds, and how often agents collide in their environment.",
+     "rationale": "No study tests advisory claims across harnesses, and Foremerge has no benchmark. Pitch4's own test (duplicate work and conflicting edits, with and without claims) would likely show little, because agents resolve textual conflicts cheaply. The effect is more likely to show on cross-vendor and semantic conflicts and on environment collisions.",
+     "effect": "offering",
+     "confidence": "high"
+    },
+    {
+     "direction": "Base the Team tier's value on multiplayer, admin, the shared record, and reach, not on coordination. Revisit the $8-25 inferred price against Conductor's $60 per user per month for Teams, and make \"hosted blind\" the contrast to tools that keep chats on their servers.",
+     "rationale": "Conductor gives local parallel agents away and charges for cloud workspaces, multiplayer, and admin. Vibe Kanban's hosted service died with mostly free users. Conductor states that chat messages are stored on its servers.",
+     "effect": "both",
+     "confidence": "medium"
+    }
+   ]
+  },
+  {
+   "id": "1.4",
+   "key": "open-weight-org-segment",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.04-open-weight-org-segment.md",
+   "answer_summary": "Open weights now carry a large and growing share of enterprise AI tokens: 34% among enterprise production users in September 2026. In a mostly North American sample of 200, 42% run open weights in production, and 42% of those host some on their own premises. Open weights are still a small share of spend: 5% of metered consumption (Futurum, October 2026). pitch4's 11% is a November 2025 Menlo figure based on API spend, so it undercounts models that are self-hosted and produce no bill. No survey isolates coding agents on self-hosted open weights. Only four named organizations have public, coding-specific evidence: Capgemini and Abanca (Mistral Code on-premises and hybrid), Lockheed Martin (Llama and Granite in its on-premises AI Factory, 2024 sources) and Pegatron (GLM through OpenCode on Blackwell), plus one unnamed US agency on GitLab Duo Self-Hosted. Meanwhile the DoD CDAO and the Army are soliciting on-premises and air-gapped coding tools for tens of thousands of developers, with \"built-in attribution and traceability mechanisms\". Buyers choose open weights for cost (69%) and control, and screens on country of origin (47%) and export-control exposure (30%) are rising. The main blockers sit around the model: security and compliance reviews stall 62% of pilots and self-hosting cost 50%, and self-hosted model servers are widely exposed without authentication. For this buyer the real competitors are GitLab Duo Agent Platform Self-Hosted, Coder (AI Gateway and Agent Firewall, bundled into Premium since July 2026), Mistral Code enterprise and Tailscale Aperture, not frp or Headscale. The most defensible differentiator is a signed record, across harnesses, that ties each change to the exact weights, origin and license that served it; neither the incumbents nor current standards provide this.",
+   "open_questions": [
+    {
+     "question": "What share of coding-agent usage (not all AI tokens) in regulated enterprises runs on self-hosted open weights, broken down by sector and region?",
+     "why_it_matters": "pitch4 calls this segment the best fit, but every available survey measures all AI workloads. Without a coding-specific figure the segment's size, and whether it justifies a lead position, is unknown.",
+     "suggested_sources": "The Futurum/ETR drill-down by use case; GitLab Duo Self-Hosted and Coder Agents customer disclosures; JetBrains 2026 data playground; Stack Overflow 2026 raw data; interviews with bank and defense platform teams",
+     "cid": "c2-1.4-1"
+    },
+    {
+     "question": "What evidence format satisfies 'attribution and traceability' of AI-generated code for DoD buyers, and for banks under DORA: per-change or per-inference, a weights hash, signed by a software sidecar, or only hardware (TEE) attestation?",
+     "why_it_matters": "This determines whether the sidecar's 'signs which weights it serves' is a purchasable compliance feature or an unverifiable claim, and how it should be built.",
+     "suggested_sources": "SAM.gov text of the CDAO/Army AI coding solicitation and any awards; DISA and CDAO guidance; DORA technical standards; Big Four AI-assurance practices; the OpenSSF AI/ML working group",
+     "cid": "c2-1.4-2"
+    },
+    {
+     "question": "How do Coder AI Gateway and Agent Firewall, Tailscale Aperture, GitLab Duo Self-Hosted and LiteLLM record self-hosted model calls (fields, signing, who can read them, coverage of laptops and non-platform harnesses), and what do they cost?",
+     "why_it_matters": "These are the real incumbents for this buyer. If any already signs cross-harness records tied to weights, the sidecar's main differentiation in this segment disappears.",
+     "suggested_sources": "Vendor docs and changelogs; Coder and Tailscale pricing; GSA, SHI and Carahsoft public-sector price lists; GitHub issues in coder/coder and LiteLLM",
+     "cid": "c2-1.4-3"
+    },
+    {
+     "question": "What do air-gapped and sovereign buyers require before adopting an open-source agent sidecar (FIPS 140-3, Iron Bank hardening, IL5 inheritance, SBOM, offline licensing, update cadence, support SLAs), and what do they pay for comparable governance add-ons, per seat or per site?",
+     "why_it_matters": "It sets the paid offering and price for the segment, where hosted relays will not sell, and whether 'Assured ~$39' is mispriced.",
+     "suggested_sources": "Iron Bank (Platform One) catalog; DISA IL5 guidance; BSI C5 and SecNumCloud requirements; GitLab and Coder public-sector listings; procurement notices on TED, Contracts Finder and SAM.gov",
+     "cid": "c2-1.4-4"
+    },
+    {
+     "question": "Do regulated teams want enforceable routing per repository or data class between hosted and self-hosted models, with proof (the Abanca pattern), and who owns that policy: the CISO, platform team or compliance?",
+     "why_it_matters": "If yes, it is a distinct selling point that fits the hybrid fleets these buyers run, and it changes the first-release scope for model access.",
+     "suggested_sources": "Talks by Abanca, BNP Paribas and Capgemini; Mistral Code and GitLab hybrid deployment docs; bank CISO interviews; DORA ICT third-party risk guidance",
+     "cid": "c2-1.4-5"
+    },
+    {
+     "question": "Do teams using self-hosted open-weight coding models do measurably more rework than teams on hosted frontier models (as in Pegatron's single-developer study), and does that raise demand for restore and change sets?",
+     "why_it_matters": "It would decide whether the developer-side wedge (never lose an edit) should be pitched hardest to open-weight teams.",
+     "suggested_sources": "Further case studies (arXiv, engineering blogs); OpenCode, Continue and Cline issue trackers; telemetry from design-partner pilots",
+     "cid": "c2-1.4-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Replace pitch4's '11% of enterprise LLM spend' line with the token-versus-spend split (34% of tokens among enterprise production users against 5% of metered spend, October 2026). Tie it to the thesis: self-hosted models produce no vendor bill and no vendor log, so the record has to be the one the team keeps.",
+     "rationale": "Menlo's figure is a November 2025 estimate built from API spend that structurally undercounts self-hosting. Futurum's October 2026 data measures this segment directly and says outright that 'self-hosted models generate no vendor bill', which supports pitch4's 'Local models leave no log' claim.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Lead the open-weight offer with provenance per change. Each change set and ledger entry would carry the hash of the weights served, plus quantization, runtime, model origin and license, all signed by the sidecar beside the model server. Add an exportable report on AI attribution, origin and export control.",
+     "rationale": "The DoD requires 'built-in attribution and traceability mechanisms'. 47% of production users screen on origin and 30% on export control. OpenSSF Model Signing covers files at rest only, an IETF draft says no production system binds outputs to model versions, and license terms differ by checkpoint (Devstral 2's revenue cap). The pitch should not claim more than a software signature, which is weaker than TEE attestation.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Add enforceable model-routing policy per repository and per data class (for example, 'this repo may reach only self-hosted weights'), with signed receipts proving that no call went elsewhere. This would cover the mixed hosted and self-hosted fleets these teams actually run.",
+     "rationale": "Abanca prototypes in the cloud while keeping core banking code on premises. 93% of open-weight production users are still growing proprietary use, so the buyer is hybrid. No source showed any vendor offering provable routing compliance.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Re-benchmark 'model access' and 'reach' against this segment's real incumbents: Coder AI Gateway and Agent Firewall, Tailscale Aperture, GitLab Duo Self-Hosted and Mistral Code enterprise, not frp or Headscale. Claim parity on gateway functions. Ship the model-server sidecar default-deny and authenticated, and lead on signed, cross-harness records that also cover laptops and environments outside Coder.",
+     "rationale": "Coder already audits prompts, tool calls and egress, and has bundled that into Premium since July 2026. Aperture already offers identity-based LLM access. Meanwhile thousands of Ollama servers answer unauthenticated prompts, and CSA recommends VPN gating plus an authenticated, logging proxy.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Package a 'security review pack' for open-weight pilots: a threat model, data-flow diagram, control mappings, default-deny configurations for the inference endpoint and a sample signed ledger. The aim is to shorten the review that blocks deployment.",
+     "rationale": "Incomplete security and compliance reviews hold up 62% of open-weight pilots, the largest measured blocker, and in-house builds rarely reach ROI at scale (10%).",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "For this segment, make the paid product an offline or air-gapped license with support and certifications by default, not the fallback. That means signed offline update bundles (Zarf-style), SBOMs, FIPS-validated crypto and an IL5-inheritable deployment. Consider per-deployment or site pricing alongside per-seat.",
+     "rationale": "These buyers run the control plane themselves, so 'hosted blind' adds little. The DoD needs FedRAMP High and IL5, GitLab sells offline licenses seat-based, and OpenHands sells self-hosted with 'no per-seat licensing'. Anchors run from about $39 (Tabnine) to a reported but unverified $299 per seat per month (GitLab's offline self-hosted add-on).",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Narrow the 'best fit' claim to where named evidence exists: defense and government under air-gap mandates, EU banks, systems integrators serving regulated clients, and Asian manufacturers. Reach them through systems integrators and AI-factory or platform vendors (Dell, NVIDIA, Red Hat, and integrations with GitLab and Coder).",
+     "rationale": "Only four named organizations show public, coding-specific self-hosting. US commercial 'regulated' customers accept Cursor's hosted inference with self-hosted execution. Futurum finds that infrastructure sellers capture the value and buyers prefer platforms to building their own. Capgemini deploys on premises for regulated clients.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Test whether restore and change sets are a stronger wedge for open-weight teams, and pitch them that way if pilots confirm it ('restore matters more when the model needs more fixing').",
+     "rationale": "In Pegatron's study, local GLM had a 74.9% fix-commit ratio against 45.9% for hosted Claude, with longer debugging spirals. That is one developer, so it is a hypothesis to measure in the planned pilots.",
+     "effect": "differentiation",
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "1.5",
+   "key": "model-access-and-provenance",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.05-model-access-and-provenance.md",
+   "answer_summary": "Half of pitch4's \"model access with a signed receipt of which weights served\" is already at par, and half is open. Private access to self-hosted vLLM, Ollama and llama.cpp servers already ships in Tailscale Aperture and NetFoundry's LLM gateway, and LiteLLM gives away keys, budgets and logging. Meanwhile gateways are being absorbed: Palo Alto bought Portkey, Mintlify bought Helicone, Envoy AI Gateway moved to the Agentic AI Foundation, and Anthropic now ships its own gateway. None of these gateways signs per-request receipts or binds the served weights. Logging under customer-held keys exists only in weak forms: Cloudflare's export encrypted to a customer key, and Portkey's hybrid storage. The provenance and attestation building blocks are production-ready: model signing in NVIDIA NGC and Kaggle, NVIDIA Blackwell confidential computing at single-digit overhead, Tinfoil's weights-in-attestation, signed per-request receipts from NEAR AI and Phala/Dstack, and an IETF draft receipt format (AIR). None of them keeps receipts under the customer's keys, links them to agent actions, or covers a mix of self-hosted servers and attested providers. Demand is real but concentrated on third-party hosts of open-weight models and on silent model switching. Moonshot's verifiers, OpenRouter's provider ranking and 19 Claude Code issue authors show it. Moonshot's tests also show quality drift comes mostly from the serving setup: self-hosted vLLM reached 76% tool-call schema accuracy against 100% for the official API. So pitch4 should claim tiered receipts covering weights, runtime and a conformance score, and verify attested providers as a client. Its position should be the receipt layer beside gateways, not another gateway.",
+   "open_questions": [
+    {
+     "question": "Will auditors, AIUC-1 and HITRUST assessors, and clients under AI-disclosure terms accept operator-signed (non-TEE) weights and runtime receipts as evidence, or only hardware-attested ones?",
+     "why_it_matters": "It decides whether the first release can ship software-signed receipts, or whether attestation support (verifying TEE providers, or running on confidential GPUs) must come first for the claim to sell.",
+     "suggested_sources": "The final HITRUST AI requirement text, AIUC-1 auditor guidance, interviews with SOC 2 auditors, consultancy client contract clauses, and the IETF RATS working-group list on AIR",
+     "cid": "c2-1.5-1"
+    },
+    {
+     "question": "Among teams running coding agents on open weights, what share self-host inference and what share use third-party hosts (Together, Fireworks, Groq, Bedrock, OpenRouter)? Which of those hosts offer attestation or signed receipts?",
+     "why_it_matters": "If most use third-party hosts, 'only your own servers' is too narrow, and verifying attested providers becomes the core offer.",
+     "suggested_sources": "OpenRouter and Artificial Analysis provider data, Menlo/a16z surveys, r/LocalLLaMA, provider docs (Tinfoil, NEAR, Phala, Chutes, Privatemode, Together, Fireworks), design-partner interviews",
+     "cid": "c2-1.5-2"
+    },
+    {
+     "question": "Can a sidecar capture runtime identity (engine commit, parser, chat-template hash, quantization including KV cache, LoRA adapters, draft model) from vLLM, SGLang, Ollama and llama.cpp without patching them, at acceptable cost? Would those projects accept an upstream signed /identity endpoint?",
+     "why_it_matters": "Without reliable runtime capture, the receipt covers only weights, which the evidence shows is not what drives quality.",
+     "suggested_sources": "vLLM and SGLang source and maintainers, GitHub issues and RFCs, vLLM weight-checker docs, Ollama manifests and API, llama.cpp /props",
+     "cid": "c2-1.5-3"
+    },
+    {
+     "question": "Which receipt format will consolidate: Phala/Dstack's ACI, IETF AIR, NEAR's signatures, Tinfoil's attestation, or in-toto/SCITT? Will attested providers interoperate with a third-party verifier and a shared model-identity manifest?",
+     "why_it_matters": "If the sidecar picks the wrong format, it must maintain per-provider adapters. Contributing early could make it the reference team-side collector.",
+     "suggested_sources": "The Dstack-TEE private-ai-gateway repo and its issues, IETF RATS working group, Confidential Computing Consortium, Tinfoil and NEAR verifier repos, Sigstore/OpenSSF AI/ML working group",
+     "cid": "c2-1.5-4"
+    },
+    {
+     "question": "Can a lightweight conformance canary detect parser, template and decoding drift on a self-hosted server at a cost teams will accept? Moonshot's full verifier run takes about 15 hours on two 8-GPU H20 servers.",
+     "why_it_matters": "The 'served as well as the reference' promise depends on cheap, frequent checks. If they cost too much, the offer shrinks back to identity-only receipts.",
+     "suggested_sources": "Kimi Vendor Verifier methods, OpenRouter Exacto/Auto Exacto telemetry design, Artificial Analysis Endpoint Accuracy Index, the gpt-oss compatibility test, BFCL and tau2-Bench subsets",
+     "cid": "c2-1.5-5"
+    },
+    {
+     "question": "Will Tailscale Aperture, Palo Alto (Portkey/Prisma AIRS), Cloudflare, or Anthropic add signed per-request receipts, attestation verification or provable inference in 2027? What is the actual status of Anthropic's RSP 'provable inference' moonshot?",
+     "why_it_matters": "Any of them shipping receipts under customer-held keys would close the whitespace. Anthropic shipping provable inference for Claude would validate the concept but cover only its own models.",
+     "suggested_sources": "Anthropic RSP page and announcements, Tailscale and Cloudflare changelogs, Palo Alto Prisma AIRS release notes, Vercel AI Gateway docs, conference talks (Confidential Computing Summit, OpenSSF)",
+     "cid": "c2-1.5-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Restate the 'proves which weights' claim as tiered receipts. Tier one, observed: the provider-reported model. Tier two, operator-signed: signed by the server's sidecar. Tier three, hardware-attested: a TEE quote with a weights root. Say 'proves' only for tier three.",
+     "rationale": "HN skeptics and Cai et al. show that a signature with no hardware root is an operator assertion. The IETF AIR draft says such receipts must not be presented as TEE evidence. Honest tiers protect pitch4's 'you don't have to trust us' credibility.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Make the receipt cover weights plus runtime (engine version or commit, tool-call and reasoning parser, chat-template hash, quantization including KV cache, draft model, LoRA adapters, enforced sampling). Add a periodic conformance canary in the style of Moonshot's verifier, scored against reference outputs and written to the ledger. Sell it as 'your self-hosted model, served as well as the reference'.",
+     "rationale": "K2VV shows self-hosted vLLM at 76% tool-call schema accuracy against 100% official. OpenRouter, Azure's old-vLLM case and Moonshot all trace drift to runtime, not weights. A weights-only receipt could certify a badly served model.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Widen model access from 'only your own servers' to 'verified open weights wherever they run'. The sidecar acts as the verifying client for attested providers (Tinfoil, NEAR AI, Phala/RedPill, Chutes, Privatemode), fails closed when verification fails, and keeps their receipts under team keys.",
+     "rationale": "Open weights are a minority of enterprise spend (Menlo: 11%), and running GPUs is a burden. Attested providers already exist and sign per-request receipts, but they keep them for bounded periods and link none to agent work. This widens the market without weakening privacy.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Add a 'served-model record' for every harness, including hosted models. Record the model each response reports per step, and flag mismatches with the configured or displayed model.",
+     "rationale": "19 Claude Code issue authors could not tell which model actually served them. The sidecar already sees traffic, so this is cheap and honest (observed tier). It extends the record's value to teams on hosted models.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Position as the receipt layer beside a team's existing gateway (LiteLLM, Agent Router, agentgateway, the Claude apps gateway, Portkey/Prisma AIRS), not as a gateway. Integrate with their callbacks and OTLP output, and argue that receipts must live outside the gateway's mutable database.",
+     "rationale": "Virtual keys, budgets and logging are free in LiteLLM, and gateways are consolidating into security platforms. CVE-2026-42208 allowed destroying gateway audit records. Signed receipts under team keys are a different object from gateway logs.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Before the sidecar lets a model server answer agents, verify the weights at load: check the OMS signature or pinned digests, and record quantization provenance (source commit, quantizer tool and version).",
+     "rationale": "A GGUF attack shows malicious quantizations can hide insecure-code behaviour (Δ=88.7%). NGC and Kaggle ship OMS signatures. The Hugging Face Hub does not link quantized files to their sources (issue #4021). Sigstore's model-validation-operator shows the load-gate pattern.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Propose an open 'weights + runtime manifest' as an extension to ACI or AIR rather than a new URnetwork format, and ship the sidecar as its reference implementation.",
+     "rationale": "ACI explicitly leaves canonical model identifiers undefined, and AIR's model_hash_scheme is optional. A small standards contribution fits the 'open all the way down' story and helps the sidecar interoperate with attested providers.",
+     "effect": "differentiation",
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "1.6",
+   "key": "competitive-refresh-and-standards",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.06-competitive-refresh-and-standards.md",
+   "answer_summary": "From September to November 2026, three moves press hardest on pitch4. Block's open-source Buzz (36.6k stars) now signs every message and approval and runs Claude Code, Codex and goose through ACP. Tailscale added agent nodes with first-connect approval, Aperture GA, a \"multi-million-dollar\" sovereign-AI investment and PAM session recording. Harness vendors hardened their own records: Anthropic's Compliance API covers Claude Code CLI and desktop transcripts (GA), customer-managed keys cover them, and a self-hosted gateway exists; Cursor offers CMEK and SIEM streaming. No product combines host-blind keys, capture across harnesses, and signed records. Signing alone is now a commodity, offered by Buzz, nono, Obsigna and priced receipt startups, and CMEK lets the vendor read while the key is active. No standard for agent activity records exists. OTel ruled integrity out of its GenAI conventions, OCSF 1.9 already defines signed, chained AI-agent security events, the IETF AUDIT BoF meets 17 Nov 2026 amid about 25 competing record drafts with none adopted, and the AAIF Observability & Traceability WG names the exact missing profile (coverage, approvals, effects, retention). The opening is for a sidecar entry format that composes these standards and ships with adoption. It should go first to the AAIF WG as its independent implementation alongside goose. To be clearly different, the sidecar must bind approval, action, file changes, network grant and attested model per run, outside any one harness, under keys the host never holds, and state what it could not see.",
+   "open_questions": [
+    {
+     "question": "Will the IETF AUDIT BoF (17 Nov 2026) lead to a working-group charter, and which envelope will it adopt: VACR (CDDL with COSE), in-toto/DSSE (as in draft-gilda), or SCITT receipt profiles?",
+     "why_it_matters": "It decides whether the sidecar's entry format should be COSE/CBOR or JSON/DSSE, and whether 'standard-compatible' can be claimed in pitch4.",
+     "suggested_sources": "IETF 127 AUDIT session materials and recording; audit@ietf.org archive; datatracker for a charter or adopted drafts after 20 Nov 2026",
+     "cid": "c2-1.6-1"
+    },
+    {
+     "question": "Would the AAIF Observability & Traceability WG and the goose maintainers accept a cross-harness capture tool as the 'independent agent or SDK' in their execution plan? What evidence or assurance ladder (use case E4) will they define for approvals and effects?",
+     "why_it_matters": "Being the WG's reference implementation is the most credible route for the entry format to become a standard. The WG's choices on approvals and effects would shape the sidecar's schema.",
+     "suggested_sources": "aaif/wg-observability-and-traceability issues #40–#47 and #12; the WG's Google Docs trace-model proposal; Discord; the interim attestation WG's 90-day recommendation to the AAIF Technical Committee",
+     "cid": "c2-1.6-2"
+    },
+    {
+     "question": "Do security buyers treat vendor CMEK (Anthropic, Cursor) as enough, or will they pay more for host-blind records that the operator can never decrypt?",
+     "why_it_matters": "'Hosted blind' is pitch4's core paid differentiation. If CMEK satisfies reviewers, the Team and Assured tiers need another reason to buy.",
+     "suggested_sources": "Interviews with security reviewers at the beachhead segments; vendor questionnaires (SIG, CAIQ) and AI-specific addenda; analyst notes on CMEK versus E2EE; design-partner pilots",
+     "cid": "c2-1.6-3"
+    },
+    {
+     "question": "Is Block extending Buzz to capture harness-level actions (tool calls, file changes, wired approval gates) or to encrypt channel content from the relay? Would it adopt an external entry format?",
+     "why_it_matters": "Buzz is the nearest open rival with a large following. If it closes these gaps, the sidecar's open-source position narrows to a capture plug-in for Buzz.",
+     "suggested_sources": "block/buzz VISION and ARCHITECTURE docs, issues and roadmap (WF-08 approval gates, NIP-17/NIP-44 use); Block engineering blog; maintainers' public talks",
+     "cid": "c2-1.6-4"
+    },
+    {
+     "question": "Will Tailscale add per-action records bound to agent approvals, or customer-keyed log encryption, across Aperture, PAM and MCP endpoints? Is it open to tsnet-based partners serving sovereign-AI customers?",
+     "why_it_matters": "It decides whether reach and model access should be built, integrated over Tailscale, or dropped from the first release. It also tests whether Tailscale's sovereign-AI buyers are a channel or a closed door.",
+     "suggested_sources": "Tailscale Aperture and PAM docs and changelog; Sovereign AI GM statements; TailscaleUp sessions; partner program pages",
+     "cid": "c2-1.6-5"
+    },
+    {
+     "question": "Which formats do SIEMs and auditors actually ingest or accept for AI-agent activity in 2026? For example, OCSF 1.9 ai_operation and record_integrity in Splunk, AWS Security Lake or Sentinel; and SCITT/COSE receipts as audit evidence for SOC 2 or the EU AI Act.",
+     "why_it_matters": "It decides the 'admins answer' export and whether verifiable receipts count as evidence buyers will pay for, or are only technical polish.",
+     "suggested_sources": "AWS Security Lake, Splunk and Microsoft Sentinel OCSF docs; OCSF adopter list; audit firms' AI assurance guidance; AIUC-1 and SOC 2 draft criteria",
+     "cid": "c2-1.6-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Lead with 'bound and blind' instead of 'signed'. The sidecar's record binds, per run, the human approval, the action, the file change set, the network grant and the model served. It is written from outside any harness and encrypted under keys the host never holds.",
+     "rationale": "Signing is now common: Buzz, nono, Obsigna, priced receipt startups and about 25 IETF drafts. Each strong threat covers one layer only (Buzz workspace events, Tailscale connections, Anthropic transcripts, nono one machine). The AAIF WG's 'Approvals' and 'Effects' questions and draft-gilda's 'decision and observed effect' show this binding is the unsolved gap.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Publish the entry format as a profile of existing standards, not a new one. Use OTel GenAI attribute names, an OCSF 1.9 export (ai_operation, delegation, record_integrity), and COSE/SCITT-compatible receipts tracking IETF AUDIT/VACR. Offer the open-source sidecar to the AAIF Observability & Traceability WG as its cross-harness 'independent agent' implementation and test fixture beside goose.",
+     "rationale": "The AAIF has no record project, and its WG says the E3 profile is missing. OTel pushed integrity and authorization elsewhere. OCSF 1.9 already carries signed, agent-attributed events for SIEMs. The AUDIT BoF meets 17 Nov 2026. Maintainers accept only formats backed by real adoption.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Make coverage a first-class, standardized field and a selling point. Each entry states its observer, observation point and assurance level, and treats missing data as 'unknown', not 'none'.",
+     "rationale": "The AAIF lists 'explicit sampling or collection-gap indicators' and observer identity as requirements and says 'missing observations mean unknown'. Claude Code hooks failed open on Windows until 22–23 Oct 2026. The Compliance API misses on-device actions. No threat offers this.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Treat reach as pluggable transports (Tailscale tsnet or Aperture, iroh, zrok) and sell the grant receipt that ties each connection to the approving person, run and change set. Explore Tailscale's sovereign-AI program as a channel rather than a rival.",
+     "rationale": "Tailscale now offers agent nodes with first-connect approval, Aperture GA, MCP endpoints, Codex Cloud reach and a funded sovereign-AI push aimed at the same open-weight buyers. Earlier research already rated reach at par.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Reframe model access from 'the sidecar signs which weights it serves' to 'the record names the attested weights that served each call'. Consume WCM, enclave attestations or OpenSSF Model Signing where present, and label a sidecar-only hash as weaker.",
+     "rationale": "OPAQUE's Weight Custody Manifest (on the AAIF blog) and Tinfoil bind weights to attested hardware, so a software signature by the sidecar would be discounted by informed reviewers.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Target the segments harness-vendor records exclude, and explain CMEK versus host-blind in one testable line. Those segments: multi-harness teams; Claude Code on Bedrock, Vertex or Foundry; open-weight models; CMEK organizations that lose Claude Code on the web; buyers who need vendor-blind keys.",
+     "rationale": "Anthropic's Compliance API excludes Bedrock, Vertex and Foundry and Claude Code on the web. Anthropic's CMEK keeps vendor read access while the key is active and disables features. Its gateway serves only Claude providers. Cursor and GitHub cover only their own surfaces.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Make 'partner with Buzz' concrete. Post sidecar entries and approval requests into Buzz channels as signed events, accept a Buzz reaction as an approval source, and position the sidecar as capture for harnesses running outside Buzz, with content kept encrypted from any relay.",
+     "rationale": "Buzz has a large audience and signed events, but its approval gates are unwired, its audit covers only workspace actions, and its relay stores and indexes channel content. pitch4 already says 'partner first' but names no integration.",
+     "effect": "both",
+     "confidence": "low"
+    },
+    {
+     "direction": "Correct pitch4's competitive claims before publishing. Agent Receipts does sign edits; nono covers signed local audit, rollback and egress; Span audits every read; Claude Code records approval decisions as telemetry; Buzz is Nostr, not 'over iroh'; 'No one' should become 'no hosted, host-blind record across harnesses'.",
+     "rationale": "These statements are now contradicted by vendor docs. Earlier research flagged URnetwork's trust gaps, so accuracy is part of the offering.",
+     "effect": "offering",
+     "confidence": "high"
+    }
+   ]
+  },
+  {
+   "id": "1.7",
+   "key": "open-core-business-models",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.07-open-core-business-models.md",
+   "answer_summary": "The comparable products earn money in three ways:\n- license keys for enterprise features in self-hosted installs (Bitwarden, GitLab, Mattermost, Langfuse, Infisical);\n- paid features only in the cloud, with free but unsupported self-hosting (PostHog, Sentry, Supabase);\n- charging only for infrastructure the vendor runs (Zulip's push relay, Tailscale's coordination server).\n\nNetwork and security peers put SSO, SCIM and audit logs in their first or second paid tier, at $4–18 per user (Bitwarden $4/$6, NetBird €6/€12, Tailscale $8/$18). Against them, pitch4's placement of SCIM in Assured and its ~$39 Assured price are outliers. Only AI-governance seats (Zed Business $30) and per-identity secrets pricing (Infisical $40) come close.\n\nThe licence pattern that kept or restored trust in 2023–2025 was AGPL for servers with a commercial exception and permissive client licences (Element, Elastic, Redis, NetBird). Moving open code to source-available terms produced lasting forks, and Redis's CEO wrote that its 2024 change \"hurt our relationship with the Redis community\". The sharpest user reactions came when vendors took away something users already had: Mattermost hid stored messages on self-hosted servers, and one commenter called it \"ransomware with extra steps\".\n\nEncrypted-product vendors still obtained SOC 2 Type II attestations: Proton got its first in July 2025, and Bitwarden and Tailscale also hold one. Audit fees run about $10–50K, with a 3–12 month observation window (Vanta's figures), and independent code audits cost tens of thousands of dollars (one OSTIF example: $71K). Hacker News users who pay for hosted open source cite time saved from running servers, support and accountability, SSO and compliance paperwork. Volume pricing, data control and tight per-person budgets keep others self-hosting.",
+   "open_questions": [
+    {
+     "question": "Will beachhead buyers accept an AGPL relay and admin server that they self-host? And will harness projects (Goose, OpenCode, others) embed or bundle an Apache-2.0 sidecar?",
+     "why_it_matters": "This decides the licence split, and whether harness projects become a distribution channel or avoid the sidecar for legal reasons.",
+     "suggested_sources": "Corporate open-source policy pages (e.g., Google's AGPL policy), the dependency and contribution policies of the Goose and OpenCode repos, legal reviews by design partners, and FOSSA or Black Duck licence-policy reports.",
+     "cid": "c2-1.7-1"
+    },
+    {
+     "question": "In the beachhead (regulated teams of 5–150 engineers, consultancies, Microsoft suppliers), what share would self-host rather than buy hosted? Does a vendor that holds only ciphertext still need SOC 2 Type II or ISO 27001 to pass their vendor reviews?",
+     "why_it_matters": "It decides whether revenue comes from hosted seats (the PostHog and Sentry pattern) or from enterprise licences for self-hosted installs (GitLab is mostly self-managed). It also sets when SOC 2 work must start.",
+     "suggested_sources": "SIG and CAIQ questionnaires, AIUC-1 requirements, CISO interviews, Proton's and Bitwarden's compliance rationale, and compliance-platform data on E2EE vendors.",
+     "cid": "c2-1.7-2"
+    },
+    {
+     "question": "How do E2EE vendors deliver legal hold, eDiscovery, retention enforcement and SIEM export without the server reading plaintext? How do they price it, and do buyers accept a reader that the customer runs?",
+     "why_it_matters": "It tests whether \"hosted blind\" and the Assured tier can coexist, or whether Assured must run on the customer's side.",
+     "suggested_sources": "Element AuditBot docs and pricing, Wire and Tresorit compliance docs, Proton for Business admin docs, Bitwarden event-log docs, and buyer discussions.",
+     "cid": "c2-1.7-3"
+    },
+    {
+     "question": "How are 2026 products that govern agents' outbound access priced, and what do they record? Examples: Infisical Agent Vault (per brokered request), Tailscale Aperture, and Cloudflare's and ngrok's AI or agent gateways. Is per-human-seat, per-agent or per-request pricing becoming the norm?",
+     "why_it_matters": "It tests pitch4's \"agents are never metered\" rule and the price of reach, its first-release product, against direct competitors.",
+     "suggested_sources": "Infisical pricing and blog posts (April 2026 preview), Tailscale Aperture docs and pricing, Cloudflare and ngrok gateway pricing pages, and HN or Reddit reactions.",
+     "cid": "c2-1.7-4"
+    },
+    {
+     "question": "What would an independent audit of a sidecar-like client and protocol actually cost and take? Could URnetwork get third-party funding (OSTIF, the Open Technology Fund's Red Team Lab, the Sovereign Tech Agency, NLnet), given its token-governed network history?",
+     "why_it_matters": "It sets the cost and timeline of pitch4's \"trust documents first\" step, and a named sponsor could help close URnetwork's trust gap.",
+     "suggested_sources": "OSTIF annual and impact reports, the Red Team Lab's criteria, NLnet and Sovereign Tech Agency eligibility rules, and published Cure53 and Trail of Bits reports that state effort in days.",
+     "cid": "c2-1.7-5"
+    },
+    {
+     "question": "How should downgrade and licence expiry work for a record product so it is not seen as holding data hostage, while still preventing free-riding? What do Bitwarden, Proton, Standard Notes, Ente, GitLab and Mattermost do when a plan lapses, and how did users react?",
+     "why_it_matters": "A \"no data hostage\" commitment needs concrete rules for what happens on lapse, and those rules shape both trust and conversion.",
+     "suggested_sources": "Vendor docs on downgrade and lapse, GitHub issues and forum threads about expired licences, and HN threads.",
+     "cid": "c2-1.7-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Split the licence by layer:\n- Apache-2.0 for the sidecar, the entry format and the SDKs.\n- AGPL-3.0 with a commercial exception for the relay and the admin server.\n- No BSL, FSL, SSPL or ELv2 anywhere.\n- A dated public pledge that released code will never be relicensed to non-OSI terms, or a DCO instead of a CLA.",
+     "rationale": "AGPL with a commercial exception is how Element, Elastic, Redis and NetBird kept or restored community trust while blocking closed hosted resale. Non-OSI relicensing produced lasting forks, and Redis admitted it \"hurt our relationship\". Permissive client code lets harness vendors and corporate legal teams embed the sidecar. In the NetBird thread, two people feared the company could relicense through its CLA. Source-available licences would also contradict pitch4's \"you don't have to trust us\" line.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Publish a \"no data hostage\" commitment:\n- No plan, cap, downgrade or lapsed licence ever hides, deletes or locks a session, change set or ledger entry already written.\n- A lapsed licence falls back to read-only access plus export.\n- Self-hosted installs never get artificial caps.",
+     "rationale": "Mattermost's cap on stored messages drew a thread with 148 distinct authors; 17 named a replacement and one called it \"ransomware with extra steps\". Bitwarden's current terms disable a self-hosted organization 60 days after renewal lapses. The commitment turns pitch4's \"never lose a session\" promise into a stated rule about the business model, which no comparable states.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Re-tier the plans:\n- Move SCIM and basic audit-log export into Team, and sell Team self-serve with a card, without a sales call.\n- Keep in Assured: legal hold, eDiscovery and compliance export, SIEM streaming, the visible audit member, compliance mappings, SLAs, FIPS and air-gapped builds, and the enterprise licence for self-hosted installs.",
+     "rationale": "SCIM sits in the first paid tier at Bitwarden ($4), NetBird (€6) and Tailscale ($8). In the HN SSO-tax thread, 9 of 24 top-level commenters criticized the tax, and one resented having to talk to a sales rep to get SSO. Mattermost, Infisical and Langfuse hold back retention, legal hold, SIEM streaming and FIPS or air-gapped builds for enterprise. Putting SCIM in a ~$39 tier would read as an SSO tax.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Re-anchor prices:\n- Team at about $8–12 per human seat.\n- Assured at about $20–30, testing $39 only if it includes legal hold and eDiscovery.\n- Bill only active users.\n- Meter only hosted relay, edge, storage and mail, at small unit prices.\n- Present \"never per agent\" as a deliberate contrast to per-identity and per-request pricing.",
+     "rationale": "Published network and security seats: Bitwarden $4/$6, NetBird €6/€12, Tailscale $8/$18, Proton $12.99/$19.99, Zed Business $30. Low-price precedents for non-human resources exist: Tailscale charges $1 a month per tagged resource and NetBird €0.50 per machine. Infisical charges $20–40 per machine identity and $2 per 1,000 agent requests. NetBird bills only users and machines active in the period. These are list prices only; willingness to pay is untested.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Extend \"Trust documents first\":\n- Get SOC 2 Type II for the hosted service, starting the observation clock when the first hosted relay goes live.\n- Publish full audit reports (Ente's practice) and a plain list of the metadata the servers see (Tailscale's practice).\n- Consider a small public bug bounty.\n- Seek third-party audit sponsorship.",
+     "rationale": "Proton, the purest E2EE brand in the set, still added SOC 2 Type II in 2025, and Bitwarden and Tailscale hold it. One HN buyer credited Bitwarden's compliance page with winning approval. Costs and timing:\n- Type 2 observation takes 3–12 months, with audit fees of about $10–50K (Vanta's figures).\n- Code audits cost tens of thousands of dollars (OSTIF example: $71K).\n- CERN sponsored Ente's audit.\nTailscale has no bug bounty and shares audits only on request, so publishing would set pitch4 apart from its nearest reach incumbent and help with URnetwork's trust gaps.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Give away the software and charge for the service:\n- Keep every software feature free to self-host, as Zulip and Langfuse do.\n- Charge for what only URnetwork can run: worldwide relays, public names and certificates, mail delivery reputation, and phone push for approvals.\n- Sell supported self-hosting and SLAs as a separate line.\n- Keep the self-hosted install deliberately simple (one binary plus plain git) and support only a few install shapes.",
+     "rationale": "HN commenters suspected Sentry makes self-hosting deliberately hard to protect its cloud. PostHog dropped paid self-hosting after 3.5% of users on Kubernetes took outsized support time. Commenters in the Mattermost thread praised Zulip's model of free features plus a paid push service. GitLab shows enterprises will pay licence fees for software they run themselves, so a supported self-hosted enterprise licence should stay.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Run Assured features that need readable data in components the customer holds, so the hosted service stays blind:\n- Features affected: search, SIEM export, retention enforcement and legal hold.\n- Where they run: the admin app, a reader the customer runs, or the visible audit member.\n- Present E2EE as the reason the product is safe to adopt, not as the reason to buy.",
+     "rationale": "Infisical found E2EE \"a nice-to-have rather than a must-have\" and turned it off by default because it blocked integrations. If the Assured features need the server to read data, \"hosted blind\" and \"Assured\" will conflict unless those features run on the customer's side.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Add Infisical Agent Vault to pitch4's competitor table and spell out the difference: Agent Vault brokers HTTP credentials, while the sidecar records sessions, edits, approvals and reach across harnesses under team keys. Consider recording Agent Vault sessions as reach events rather than competing on credential brokering.",
+     "rationale": "Agent Vault entered preview in 2026, with an open-source research preview released in April 2026. It names Claude Code, Codex and OpenCode and keeps encrypted logs in the customer's own S3 bucket, which overlaps pitch4's \"every way out is approved and recorded\" claim. Pitch4 does not mention it today.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    }
+   ]
+  },
+  {
+   "id": "1.8",
+   "key": "buyer-evidence-artifacts",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.08-buyer-evidence-artifacts.md",
+   "answer_summary": "Public AI questionnaires still ask what AI a team uses, whether customer data trains it, and whether a human reviews it. That covers Vanta's 30+ verbatim AI-vendor questions and the compiled 2026 lists. None that I could read asks which coding agent or which weights produced code, or where inference ran. NIST's agent overlays are still unpublished (the project was renamed COSIS on 20 Oct 2026), and SP 800-218A explicitly does not distinguish AI-generated code. The concrete, artifact-level asks come from two places:\n- **AIUC-1 E015.2 (agent-vendor certification):** agent provenance, tool calls, delegations, and approvals linked to execution.\n- **Enterprise supplier terms:** AT&T's SAIR v2.1 requires per-instance approval of AI tools, a per-release SBOM naming the AI tool, \"AI Generated\" labels, and human review. It also bans training on client data, including RAG and context learning, and requires deleting client data after use, keeping only pseudonymized traceability metadata.\n\nA ledger can generate the inventory, approval receipts, a per-release AI SBOM through non-standard CycloneDX or SPDX mappings, the population of agent-authored changes that auditors sample, and integrity evidence. It cannot generate policies, DPAs or impact assessments. For open-weight teams, the sub-processor and no-training questions fall away, but three burdens move onto the team:\n- **Model origin:** DHS's 20 Oct 2026 FASCSA order removes products \"developed using DeepSeek implementations\".\n- **Integrity before load:** the eight-nation guidance and SP 800-218A PW.4.4.\n- **Quantized-file provenance:** 0 of 198 popular GGUF repos can be re-derived.\n\nPractitioner voice remains thin: I found no first-hand report of a customer or auditor asking for agent-run records, and Reddit was unreachable. The audible pain is the credibility of evidence after the Delve allegations.",
+   "open_questions": [
+    {
+     "question": "How widespread are AT&T-style supplier AI terms among large enterprises: per-release SBOMs naming the AI tool, per-instance approval of AI use, named AI subcontractors, and delete-after-use with metadata-only audit logs? How do suppliers comply with them today?",
+     "why_it_matters": "If several large buyers impose these terms, the client packet (an AI SBOM plus approvals) and a client-matter retention mode become pitch4's lead paid offering. The 'never lose a session' promise would then need per-client deletion by default. If AT&T is an outlier, the packet stays a niche feature.",
+     "suggested_sources": "Supplier portals and AI addenda of large telcos, banks, insurers and tech firms (Verizon, Comcast, JPMorgan, Citi, Salesforce, IBM, Google, Microsoft DPR); law-firm alerts on supplier AI clauses; supplier and consultancy forums; procurement templates such as the ANA AI Rider and ACC guidelines",
+     "cid": "c2-1.8-1"
+    },
+    {
+     "question": "Does the DHS FASCSA DeepSeek order's phrase \"third-party products and services developed using DeepSeek implementations\" reach software written with DeepSeek-based coding agents on self-hosted open weights? Are federal suppliers being asked to certify or report this (FAR 52.204-29/30)? How do NDAA §1532 and the pending No Adversarial AI Act define \"use\"?",
+     "why_it_matters": "If it does, signed per-session serving receipts that show which weights ran become a compliance artifact for every federal civilian and DoD supplier that runs open weights. That would make the open-weight segment, currently a minority, a regulated one with a clear evidence need.",
+     "suggested_sources": "The signed order in docket DHS-2026-0628 on regulations.gov; FAR 52.204-29/30 and CISA FASCSA FAQs; government-contracts alerts from Crowell & Moring, Wiley, Covington and King & Spalding; any DFARS rule implementing §1532",
+     "cid": "c2-1.8-2"
+    },
+    {
+     "question": "What proof of which weights ran will reviewers accept? The options are: a signature from the operator's own sidecar, OMS-verified weights plus reproducible quantization records, or hardware-rooted attestation (confidential-computing GPUs or TEEs).",
+     "why_it_matters": "This decides whether pitch4's claim that the record proves 'which weights, quantization, and runtime' is credible as written, must be strengthened (OMS verification, recording the imatrix and recipe, TEE attestation), or should be softened. It also decides how much engineering the model-server sidecar needs.",
+     "suggested_sources": "OpenSSF Model Signing WG and the sigstore model-transparency maintainers; the authors of arXiv 2610.19498 and 2607.16596; NVIDIA confidential computing and NIM docs; TEE inference vendors; SOC 2 and ISO 42001 auditors",
+     "cid": "c2-1.8-3"
+    },
+    {
+     "question": "What exactly do the AICPA 2027 exposure draft's CC5.1, CC5.3 and CC8.1 points of focus say about automated agents, unapproved AI tools and third-party models? How do CPA firms plan to test them: populations, sampling, and system-generated versus manually assembled evidence?",
+     "why_it_matters": "If firms will sample agent-authored changes and test detection of unapproved AI from 2028 (or earlier through early adoption), the inventory and sampling-population exports become audit-critical. If the points are treated as optional conversation starters, they stay nice-to-have.",
+     "suggested_sources": "The AICPA exposure draft (free account) and comment letters due 15 Jan 2027; webinars and blogs from Schellman, A-LIGN, Linford, Prescient and Johanson; posts by Troy Fine and other SOC 2 auditors; CSA STAR for AI materials",
+     "cid": "c2-1.8-4"
+    },
+    {
+     "question": "Which format will become the convention for 'this code or change was produced by tool X running model Y, approved by Z': CycloneDX formulation, SPDX 3 usesTool and generates, the open in-toto agent predicates (#588, #600), or a new OpenSSF or IETF draft? Would an early contribution make sidecar's export the de facto standard?",
+     "why_it_matters": "No agreed field exists today, and AT&T-style buyers already ask for an SBOM naming the AI tool. Shaping the standard is a durable differentiation lever for an open-format, open-source product. Picking the wrong format early adds rework.",
+     "suggested_sources": "CycloneDX and SPDX AI working groups and issue trackers; in-toto attestation PR #588 and issue #600; the OpenSSF AI/ML Security WG; draft-gilda-audit-agent-audit-record; maintainers of aiprov, git-ai and Agent Trace",
+     "cid": "c2-1.8-5"
+    },
+    {
+     "question": "Do GRC and security leads at 5-150-person software vendors actually receive questions about coding agents or models (which agents, which weights, where inference runs, proof of review) in 2026 questionnaires or audits? What do they submit, and what triggers escalation?",
+     "why_it_matters": "The demand trigger and willingness to pay remain unmeasured. Public sources show questions about AI use, but no first-hand requests for agent-run records. The answer decides whether pitch4 should lead with the assurance buyer or with the developer.",
+     "suggested_sources": "Interviews with design partners and GRC leads; r/grc, r/cybersecurity and r/sysadmin (not reachable by these tools); the GRC Engineering community; Vanta and Drata community forums; LinkedIn posts by GRC practitioners; datasets from SafeBase, Conveyor or Whistic, if obtainable",
+     "cid": "c2-1.8-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Add a client-matter retention mode. Purge session content for a client's work on the client's schedule, and keep signed, pseudonymized metadata in the ledger with an escrowed mapping key. Pitch it as \"delete what the client requires, prove what happened\".",
+     "rationale": "AT&T SAIR C.1.c requires permanent deletion of client information after use. C.1.d permits only pseudonymized traceability metadata, with a retained and access-controlled mapping key. Pitch4's session vault (\"Archived instead of deleted\") would breach this for client work. Pitch4's split between the developer's vault and the team ledger matches the carve-out almost exactly.",
+     "effect": "both",
+     "confidence": "high"
+    },
+    {
+     "direction": "Define the 'client packet' concretely. It should hold: a per-release AI SBOM in CycloneDX and SPDX 3 with \"AI Generated\" file labels; the approval receipts for each AI use; and the inventory of harnesses and models actually used. Generate it from run-to-commit links rather than from commit trailers engineers can strip.",
+     "rationale": "AT&T SAIR C.3.c and C.3.e require an SBOM naming the AI tool with each release, \"AI Generated\" labels, and human review. C.5.c requires approval of each use. No agreed field exists in CycloneDX or SPDX, and the only tool found (aiprov) relies on trailers and has no adoption.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Ship an auditor-sampling export and a verifier that runs without URnetwork. The export lists every agent-authored change in a period, each with its generation, review, approval and deploy chain. Position the product as 'evidence a reviewer can check', not just 'logs we keep'.",
+     "rationale": "Auditors sample populations of AI-generated changes. After the Delve allegations, IANS tells buyers to spot-check underlying evidence and confirm the auditor's own testing. AIUC-1 E015.4 asks for immutability, with detectable gaps and reordering. GRC platforms cannot build this population across harnesses.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Turn 'the sidecar beside the model server signs which weights it serves' into signed serving receipts. At load, it should verify OMS signatures and hash the exact quantized file, its imatrix and its recipe, plus the runtime version. It should enforce an allowlist of model origins and sign a receipt for each session. Market the result as proof of model origin and integrity for open-weight teams.",
+     "rationale": "Several sources bear on this. The DHS FASCSA order (20 Oct 2026) reaches products \"developed using DeepSeek implementations\", and NDAA §1532 bans covered AI for DoD contractors. The eight-nation guidance and SP 800-218A PW.4.4 call for signature and integrity checks before a model loads. Serving-side enforcement is immature (KServe proposal, Ollama PR open since Jul 2025), and 0 of 198 GGUF repos can be independently re-derived, so a bare signature from the operator would be discounted.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Move compliance mappings from the last stage to the first team release. Map ledger fields one by one to: AIUC-1 E015.1–E015.4; the AICPA draft's CC5.1, CC5.3 and CC8.1 points of focus; SP 800-218A PS.3.1, PS.3.2 and PW.4.4; AT&T SAIR; and Microsoft DPR Req. 33. Publish them openly as a reference evidence specification.",
+     "rationale": "AIUC-1 E015.2 lists agent fields that match pitch4's ledger closely. Agent vendors are a pitch4 beachhead and face AIUC-1. No audit firm has published a position on AI-written code, so the first public, standards-mapped evidence spec can become the reference. Mappings cost little compared with building features.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Add a client data boundary for context and memory. Scope team context files, handoff notes and any embeddings or memory to each client or engagement, and record in the ledger that the scoping held.",
+     "rationale": "AT&T SAIR defines \"Model\" to include \"prompt/context learning, RAG or vector storage … data embedding\" and forbids using client information to Model. Pitch4's 'Context that loads' and cross-run memory features could put a supplier in breach unless they are scoped and provable.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Re-sequence the assurance story. Lead with enterprise supplier terms (AT&T SAIR, Microsoft DPR) and AIUC-1 for agent vendors as today's concrete triggers, and add 'large-enterprise suppliers under AI supplier terms' to the beachhead. Present NIST and SOC 2 as later and non-mandatory, rather than implying regulation requires agent records.",
+     "rationale": "Questionnaires still ask only about AI use, data and human review. SP 800-218A does not distinguish AI-written code. NIST's agent overlays are unpublished, the project was renamed COSIS, and the AICPA points of focus \"require no specific control\". Claims built on regulation would overreach, while the supplier terms are binding and specific.",
+     "effect": "differentiation",
+     "confidence": "high"
+    },
+    {
+     "direction": "Export into GRC platforms (Vanta, Drata) rather than compete with them. Feed cross-harness approval and inventory evidence into their evidence stores and MCP or CLI, and frame the sidecar as the per-action source that Vanta's single-harness GrantGuard lacks.",
+     "rationale": "Vanta shipped GrantGuard (open source, Jul 2026), which audits accumulated Claude Code permission grants. It also shipped a Claude Code plugin, a CLI and broad MCP tooling. Buyers already gather evidence in these platforms, which do not see per-action approvals across harnesses.",
+     "effect": "offering",
+     "confidence": "medium"
+    }
+   ]
+  },
+  {
+   "id": "1.9",
+   "key": "trust-and-reputation",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.09-trust-and-reputation.md",
+   "answer_summary": "The sidecar will be reviewed as a top-tier vendor because of its design alone: it runs where source code and agent sessions live, opens network paths, and gates model access. URnetwork's reputation then decides whether the review escalates further. Network controls already in place make this practical rather than only reputational:\n- All four URnetwork domains (bringyour.com, ur.io, ur.network, ur.xyz) are on HaGeZi's public VPN/proxy-bypass DNS blocklist.\n- Palo Alto's setup guide says to block proxy-avoidance and newly registered domains.\n- On 28 Oct 2026 Okta made a curated HIGH_RISK_PROXIES category generally available, for blocking sign-ins from commercial proxy networks.\n\nToken-associated companies that won enterprise business did three things: they made the operating company the counterparty, scoped a separate attested product on stricter infrastructure (Brave Search API's SOC 2, Storj Select), and kept the token out of the buyer's payment path. Certificates do not separate a vendor from the proxy category, because Bright Data holds ISO 27001 and SOC 2. Separation therefore has to come from architecture and contract terms:\n- no SN25 operator or community provider in the sidecar's data path;\n- its own aged, categorized domain and IP space, with a published allowlist;\n- no provider code in the binary, checkable through reproducible builds.\n\nA minimum package costs roughly $22k–$115k in sourced year-one direct costs, plus an unsourced penetration test, audit and legal work. It reaches SOC 2 Type 1 in about 3–4 months and Type II in about 9–12. Its contents:\n- the named entity, no-token terms and fiat-only billing;\n- data-flow and subprocessor lists, a DPA plus DPF self-certification, and a sanctions policy;\n- CAIQ Level 1 (free), a penetration-test letter and a published protocol audit;\n- SOC 2 Type 1, then Type II;\n- $1–2M cyber insurance.",
+   "open_questions": [
+    {
+     "question": "How do commercial secure web gateways and identity providers currently classify URnetwork's assets? Specifically: how do Zscaler, PAN-DB, Netskope, Cisco Talos, Fortinet and Cloudflare Gateway categorize ur.io, bringyour.com, ur.network, ur.xyz and mcp.bringyour.com; and are URnetwork providers or operators in Okta's HIGH_RISK_PROXIES list or in Spur, MaxMind or IPQS feeds?",
+     "why_it_matters": "This decides whether the sidecar can share any URnetwork domain, IP space or brand, or needs a fully separate trust boundary. It also tells pitch4 whether 'uses URnetwork's network for reach' is safe to say at all.",
+     "suggested_sources": "Lookups run by URnetwork staff (PAN Test A Site, Zscaler Site Review, Talos, FortiGuard), Okta's supported IP service categories documentation, the Spur and MaxMind anonymous-IP products, and Cloudflare Radar domain categories.",
+     "cid": "c2-1.9-1"
+    },
+    {
+     "question": "Do security reviewers and procurement treat a token-associated parent or foundation as an escalation trigger? If so, which separation has actually resolved it in practice: a separate legal entity, a separate brand and domain, a contractual no-token clause, or a spin-out? Brave, Helium Mobile, Storj and Livepeer are the cases to check.",
+     "why_it_matters": "It decides whether the sidecar needs its own entity and brand, or whether BringYour, Inc. with no-token terms is enough. That changes pitch4's 'URnetwork · Sidecar' branding.",
+     "suggested_sources": "Brave, Helium, Storj and Livepeer master service agreements and trust centers; GRC questionnaire libraries (SIG, CAIQ) for crypto questions; procurement and security forums (r/cybersecurity, r/sysadmin); interviews with those companies' enterprise sales.",
+     "cid": "c2-1.9-2"
+    },
+    {
+     "question": "What is URnetwork's sanctions exposure from paying bandwidth contributors in digital assets, and from serving and featuring users in Iran? Does OFAC General License D-2 cover the consumer VPN but not payouts to providers in embargoed jurisdictions?",
+     "why_it_matters": "An adverse sanctions finding would block every enterprise sale. The answer decides what sanctions statement the sidecar can publish, and whether the consumer homepage must change before the sidecar launches.",
+     "suggested_sources": "OFAC GL D-2 text and FAQs 1087 and 346; the Iranian Transactions and Sanctions Regulations' rules on importing services; OFAC enforcement actions involving VPN and crypto payouts; sanctions counsel.",
+     "cid": "c2-1.9-3"
+    },
+    {
+     "question": "Which minimum artifacts actually unblock deals for teams of 5–150 engineers (the beachhead), compared with regulated buyers? Is SOC 2 Type 1 plus a penetration-test letter plus a CAIQ enough, or is Type II required?",
+     "why_it_matters": "It sets the build order, the first-year cost (about $15k against $60k or more) and how long a design partner must wait, which in turn sets pitch4's timeline and pricing claims.",
+     "suggested_sources": "Trust-center vendor reports (Vanta, Drata/SafeBase, Conveyor), founder accounts on Hacker News, questionnaire templates, and the pitch's design-partner interviews.",
+     "cid": "c2-1.9-4"
+    },
+    {
+     "question": "How do enterprise third-party-risk programs tier self-hosted open-source infrastructure compared with hosted SaaS that holds only ciphertext? Can 'hosted blind' or self-hosting move the sidecar out of the critical-vendor tier?",
+     "why_it_matters": "If self-hosting or ciphertext-only hosting lowers the tier, an Assured self-host route can sell before SOC 2 Type II, and 'hosted blind' becomes a procurement advantage, not just a privacy claim.",
+     "suggested_sources": "Shared Assessments SIG tiering guidance, OneTrust, ProcessUnity and Vanta tiering documentation, NIST SP 800-161, how Bitwarden and Tailscale handle self-host procurement, and practitioner discussions.",
+     "cid": "c2-1.9-5"
+    },
+    {
+     "question": "Do security-rating vendors (Bitsight, SecurityScorecard) attribute malicious traffic carried by URnetwork's operator or relay IP space to BringYour, and what are BringYour's current grades?",
+     "why_it_matters": "A low outside-in rating triggers automatic escalation in many vendor-risk programs, whatever the sidecar's own design. If URnetwork's IP space is tainted, the sidecar needs separate IP ranges and possibly a separate rated entity.",
+     "suggested_sources": "Bitsight and SecurityScorecard vendor portals (with URnetwork's authorization), URnetwork's ASN and IP allocations, AbuseIPDB, and Spamhaus and other blocklist checks on relay IPs.",
+     "cid": "c2-1.9-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Reframe the sidecar's network features as 'attribution, not anonymity'. Every path an agent takes is named, granted, and signed with a per-hop receipt showing which operator (BringYour or the customer) carried it. Pitch4 should say so in the security-buyer section, so the record answers the proxy question.",
+     "rationale": "Okta's HIGH_RISK_PROXIES, Palo Alto's proxy-avoidance category and CISA's Tor guidance all target anonymous egress that cannot be attributed. The sidecar's signed record is the opposite, and it is the one thing a residential-proxy vendor with ISO and SOC 2 certificates (Bright Data) cannot offer.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Define 'worldwide reach' precisely and contractually: relays run only by BringYour, Inc. in named regions, or by the customer. No SN25 operator, miner or community provider ever carries sidecar packets, and agents exit only through customer-run exits. Publish a data-flow diagram and subprocessor list that show this.",
+     "rationale": "Under SN25, operators deposit alpha and miners carry traffic (ur.xyz). The interagency guidance makes reliance on subcontractors a due-diligence factor, so pitch4's current line 'uses URnetwork's network only for worldwide reach' invites the question of whose servers carry the packets.",
+     "effect": "offering",
+     "confidence": "high"
+    },
+    {
+     "direction": "Give the sidecar its own trust boundary: a separate domain registered and categorized months before design partners (not ur.io or ur.network), separate IP space and certificates, a published allowlist of domains, IPs and ports, relays that can be self-hosted on the customer's domain, and public names on the customer's domain by default.",
+     "rationale": "All four URnetwork domains are on HaGeZi's VPN/proxy-bypass list. Palo Alto recommends blocking newly registered domains (32 days) and unknown ones. Tailscale and ngrok sell to enterprises despite being on bypass lists because admins can allowlist their dedicated domains.",
+     "effect": "offering",
+     "confidence": "high"
+    },
+    {
+     "direction": "Publish a staged trust packet before the first design partner, and add it to pitch4's 'Trust documents first' list:\n- the named contracting entity, a no-token and no-emissions clause, and fiat-only billing;\n- a DPA, DPF self-certification, a sanctions policy, and CAIQ Lite or CAIQ v4 (STAR Level 1, free);\n- a pre-filled proxy-SDK disclosure;\n- a penetration-test summary letter and the full Cure53 protocol audit;\n- $1–2M cyber insurance;\n- SOC 2 Type 1 at months 2–4, then a 3–6-month Type II window, with a public SOC 3 or summary in a trust center.",
+     "rationale": "Proton and Brave both say enterprise buyers require SOC 2. The interagency guidance lists ownership, insurance and subcontractors as factors. Brave shows a three-month first Type II window is acceptable. Pitch4's current list (open source, audit, threat model, canary, no-token statement) leaves out the commercial and attestation items questionnaires ask for.",
+     "effect": "offering",
+     "confidence": "high"
+    },
+    {
+     "direction": "Scope attestations and claims narrowly to the sidecar, Brave-style: the SOC 2 system description covers only the hosted relay, ledger and storage, the consumer network is excluded, and nothing in the sidecar's materials uses consumer-network superlatives such as 'No logs' or 'Tor-like'.",
+     "rationale": "Brave scoped its SOC 2 to the Search API with no mention of BAT, and Storj carved out Select on SOC 2 facilities. The interagency guidance tells reviewers to check that marketing claims are accurate, and ur.io's 'No logs' conflicts with retention stated in URnetwork's own threat model.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Do not compete on badges. Lead with verifiable architecture: reproducible builds plus an SBOM proving the binary contains no provider or bandwidth-sharing code, 'hosted blind' backed by a published audit and a dated canary, and design-partner logos shown only with written permission.",
+     "rationale": "Bright Data holds ISO 27001 and SOC 2 yet remains the archetype of the category Okta lists. Mullvad's warrant outcome and Bitwarden's published yearly audits show that claims gain credibility when something tests them. Helium's 2022 logo dispute shows the cost of overclaiming.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Offer a self-host-first Assured route, where BringYour is only the software supplier and holds no data, so regulated design partners can start before a SOC 2 Type II exists. Pair it with supply-chain evidence (signed releases, an SBOM, the published audit).",
+     "rationale": "The interagency guidance scales diligence to risk and data access, and a supplier holding no data should face a lighter review. However, I found no primary source on how buyers tier self-hosted open source, so this needs validation.",
+     "effect": "offering",
+     "confidence": "low"
+    }
+   ]
+  },
+  {
+   "id": "1.10",
+   "key": "willingness-to-pay",
+   "notes_path": "/Users/brien/urnetwork/sidecar/research_notes/Sidecar pitch4 differentiation directions/L1-1.10-willingness-to-pay.md",
+   "answer_summary": "Pitch4's inferred Team price ($8–25 a seat) is low for the market, so the risk is charging too little, not too much. Team plans for comparable developer tools cost $20–50 a seat, and the cheapest plans that include SSO cost about $500 a month flat (Langfuse Pro plus its Teams add-on, Keycard Team). Almost every comparable product keeps audit logs, SCIM or SIEM export for its top tier: Cursor, Claude's Compliance API (Enterprise, 20-seat minimum), Graphite, Langfuse ($2,499 a month), Factory, Keycard and Teleport. That leaves room for \"audit without Enterprise\" in the Team tier. Two budgets pay, and they buy differently. Engineering buys self-serve, per seat or as a flat fee a manager puts on a card. Security buys sales-led annual commitments of about $10,000–200,000 on AWS Marketplace (Prompt, Lasso, Noma) or pays per agent or resource ($20 per agent at Aembit, $130 per resource at Noma and Zenity), though only 24% of security teams track AI as its own budget line. Assured at about $39 a seat matches Copilot Enterprise, but 20 seats come to $9,360 a year, below Lasso's $20,000 minimum, so an annual commitment with a floor would fit security buyers better. I found no public evidence that a standalone agent-record product earns revenue: Entire, now a hosted git forge, publishes no price, and Prompt Security was acquired with \"immaterial ARR\"; money goes to security control, to engineering measurement (Atlassian paid about $1B for DX), and to audit bundled into enterprise plans.",
+   "open_questions": [
+    {
+     "question": "Do teams below the Enterprise line (Cursor Teams, Claude Team, teams under Claude Enterprise's 20-seat minimum) seek audit evidence for agent work, and would they pay a Team price for a cross-harness signed export?",
+     "why_it_matters": "It decides whether 'audit without Enterprise' is a real wedge and whether SSO and export belong in Team or Assured.",
+     "suggested_sources": "Cursor forum and Anthropic community feature requests, r/cursor and r/ClaudeAI threads, SOC 2 auditor and consultant guides on AI coding evidence, codenote-style workaround posts, design-partner interviews",
+     "cid": "c2-1.10-1"
+    },
+    {
+     "question": "In 5–150-engineer companies, who signs for coding-agent governance: the engineering leader from the AI-tools budget, or security from a security line?",
+     "why_it_matters": "It sets the sales motion (card versus annual commitment) and whether Assured should be priced per seat or as a platform floor.",
+     "suggested_sources": "Full IANS/Artico 2026 Security Budget report, Gartner Market Guide for AI Governance Platforms, Felicis survey detail, LeadDev or Pragmatic Engineer surveys, Vendr or Tropic purchase data",
+     "cid": "c2-1.10-2"
+    },
+    {
+     "question": "What do security buyers actually pay per developer for coding-assistant security, and what counts as a 'resource' in Noma's and Zenity's $130 per-resource pricing?",
+     "why_it_matters": "It anchors Assured's price and unit, and shows whether security buyers count agents, developer endpoints or applications.",
+     "suggested_sources": "SHI, CDW, Carahsoft and GSA Advantage price lists (Prompt's 'AI Code Assistant per developer' SKU), AWS and Azure Marketplace listings, Noma and Zenity documentation, Vendr",
+     "cid": "c2-1.10-3"
+    },
+    {
+     "question": "Is any standalone agent-record or session product earning revenue, and at what price per developer (Entire's forge pricing when published, Span's per-contributor price, SpecStory, git-ai)?",
+     "why_it_matters": "It tests whether an agent record is a paid category or only a feature of security, measurement or harness plans, which changes what pitch4 should lead with.",
+     "suggested_sources": "Entire announcements and pricing when published, Vendr or Spendflo data on Span, DX and Jellyfish, customer case studies, job posts revealing sales motion",
+     "cid": "c2-1.10-4"
+    },
+    {
+     "question": "What conversion does a 'second person joins' trigger achieve in open-source developer tools with hosted team tiers, and does a flat team fee beat per-seat pricing at that step?",
+     "why_it_matters": "It sets the free line and the shape of the Team price, which pitch4 lists as untested.",
+     "suggested_sources": "Tailscale blog posts (e.g., 5,000-customers post), Langfuse/ClickHouse disclosures, Sentry, PostHog and Bitwarden founder interviews, Growth Unhinged and OpenView benchmarks, the full ChartMogul conversion report",
+     "cid": "c2-1.10-5"
+    },
+    {
+     "question": "Will agent-governance pricing converge on per-agent or per-resource metering, and would buyers see 'agents never metered' as value or as a sign the product is a developer tool rather than a control?",
+     "why_it_matters": "It decides whether to keep unmetered agents as a headline or add a governed-agent unit to Assured.",
+     "suggested_sources": "PricingSaaS tracker diffs for Aembit, Keycard, Zenity and Noma, Gartner and Forrester notes on non-human-identity pricing, Okta and Microsoft agent licensing updates, buyer interviews",
+     "cid": "c2-1.10-6"
+    }
+   ],
+   "directions": [
+    {
+     "direction": "Offer 'audit without Enterprise': put SSO and a signed, exportable audit record (SIEM/OCSF-ready) in the Team tier, and say so in the pitch as a contrast to Enterprise-only audit at Cursor, Claude, Graphite and Langfuse.",
+     "rationale": "Cursor's audit logs and Claude's Compliance API are Enterprise-only, and Claude Enterprise needs 20 seats. Langfuse first offers audit logs at $2,499 a month, and Graphite, Factory and Keycard also keep audit, export or SCIM for their top tiers. SSO markups run 50–425%. One practitioner's guides show teams looking for workarounds, though how many is unknown.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Make Team payable on a manager's card: a small team fee plus a low seat price (or flat team bundles with unlimited members), self-serve up to about 25 seats, with free read-only seats for reviewers, auditors and executives.",
+     "rationale": "Factory charges $60 per team plus $40 a seat for up to 10 seats; Devin $80 plus $40. Warp Business is self-serve up to 25 seats. Langfuse and Keycard charge flat fees with unlimited users. Span lets dashboard viewers in free. Tailscale converts through 'a dev manager or TLM ... on a corporate credit card', and in a 2026 survey only 5% of investors preferred pure seat pricing.",
+     "effect": "offering",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Sell Assured as an annual commitment with a floor, through AWS Marketplace private offers, keeping ~$39 a seat as the list price. Position it as the security buyer's control and evidence layer, not only as a seat upgrade.",
+     "rationale": "Security tools are bought as annual commitments of $10,000 (Prompt), $20,000–50,000 (Lasso) and about $200,000 (Noma) on AWS Marketplace, or per resource ($130 a month). At $39, 20 seats come to $9,360 a year, below Lasso's $20,000 minimum. Caveat: 38% of organizations fund AI security from IT, data or innovation budgets, so security may approve rather than pay.",
+     "effect": "offering",
+     "confidence": "low"
+    },
+    {
+     "direction": "Keep 'agents are never metered' and make it a headline contrast for teams that run many parallel agents; meter only hosted storage, edge traffic and mail.",
+     "rationale": "Security and identity tools meter non-human identities: Aembit $20 per agent per month, Noma and Zenity $130 per resource per month, and Teleport counts MCP servers and git repositories as billable protected resources. Harness vendors and Microsoft do not meter agents, so developers expect unmetered agents.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Present the paid record as evidence for purchases buyers already make: proof of AI-tool adoption and ROI for engineering leaders, and audit evidence for security and compliance. Do not present it as a record bought for its own sake.",
+     "rationale": "No standalone record product shows paid traction: Entire has no price, and Prompt was acquired with 'immaterial ARR'. Money goes to measurement (Atlassian–DX about $1B; Span per contributor) and to security control. One HN user mentions 'observability tools that we already pay for'.",
+     "effect": "both",
+     "confidence": "medium"
+    },
+    {
+     "direction": "Replace the price footnote's harness-seat anchors (Copilot $19, Claude Team $20–25) with governance anchors: Langfuse's cheapest SSO configuration ($499 a month), Keycard Team ($500 a month), Aembit ($20 per agent) and Span (per contributor). Show the annual cost for a 20-engineer team. Sharpen 'ahead across harnesses' against Warp Enterprise and Entire.",
+     "rationale": "Copilot seats are dissolving into usage-based AI credits, and since 28 Oct 2026 GitHub Enterprise customers can skip the Copilot seat. Claude Team seats bundle model usage. Warp Enterprise now lists cross-harness agent memory, and Entire sells hosted shared agent memory, so the cross-harness claim needs a specific difference: cross-vendor, signed, and keyed to the customer.",
+     "effect": "differentiation",
+     "confidence": "medium"
+    }
+   ]
+  }
+ ],
+ "about": "Level-1 results for nodes 1.1, 1.2 and 1.4-1.10 of the pitch4 research tree, copied verbatim from the first workflow run (wf_b027d4f2-b95) on 1 November 2026. Node 1.3 failed on a login interruption and was re-run. Each open question has a candidate id (cid) used by level-2 triage."
+}
