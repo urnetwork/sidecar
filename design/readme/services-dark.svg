@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="875" viewBox="0 0 1000 875" role="img" aria-labelledby="t d">
+<title id="t">sidecar services</title>
+<desc id="d">Encrypted storage: Git repos and file trees, encrypted on your device: paths, names, messages and contents. Stock git still works, and subscribers hear of changes in real time.; Group keys: Each repo is an MLS group with post-quantum hybrid keys. Members' devices hold the keys, agents get wrapped copies, and removing anyone rotates them.; Agent record: One MCP server for Claude Code, Codex, Cursor and any harness. Every session and changed file lands in your encrypted vault, every approval as a signed receipt.; Email and burners: Your own mail server, with unlimited aliases and burner addresses. Inbound TLS ends on your indexer, outbound TLS runs to the recipient, and the edges keep nothing.; Public HTTPS: Publish a local app at app.&lt;net&gt;.ur.network with an automatic certificate. The edge routes by SNI and never decrypts, and the key stays on your machine.; Private network: A stable private address and name for every device and agent. Subnet routes and port forwards are granted by your access policy and carried end to end.; Sockets and sharing: Listen on a name instead of a port, and each dial reaches one listener, chosen by load. File-share links work a set number of times.; Teams and access: Members, roles, SSO, and enrollment by QR code or MDM. A deny-by-default policy is signed into your encrypted config and evaluated on every device.; Encrypted search: Each repo keeps an encrypted index its committers update. Search mail, notes and code, or find agents working on a task, and the server never sees your queries.</desc>
+<g transform="translate(6.0 6.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Encrypted storage</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">evs</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Git repos and file trees,</tspan><tspan x="22" dy="27">encrypted on your device:</tspan><tspan x="22" dy="27">paths, names, messages and</tspan><tspan x="22" dy="27">contents. Stock git still works,</tspan><tspan x="22" dy="27">and subscribers hear of</tspan><tspan x="22" dy="27">changes in real time.</tspan></text>
+</g>
+<g transform="translate(340.7 6.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3"/><path d="M16.5 6.5l3 3"/><path d="M14 9l2 2"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Group keys</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">gkm · MLS</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Each repo is an MLS group</tspan><tspan x="22" dy="27">with post-quantum hybrid</tspan><tspan x="22" dy="27">keys. Members' devices hold</tspan><tspan x="22" dy="27">the keys, agents get wrapped</tspan><tspan x="22" dy="27">copies, and removing anyone</tspan><tspan x="22" dy="27">rotates them.</tspan></text>
+</g>
+<g transform="translate(675.3 6.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7.5 10l3 3-3 3"/><path d="M13 16h4"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Agent record</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">mcp · record</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">One MCP server for Claude</tspan><tspan x="22" dy="27">Code, Codex, Cursor and any</tspan><tspan x="22" dy="27">harness. Every session and</tspan><tspan x="22" dy="27">changed file lands in your</tspan><tspan x="22" dy="27">encrypted vault, every</tspan><tspan x="22" dy="27">approval as a signed receipt.</tspan></text>
+</g>
+<g transform="translate(6.0 299.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Email and burners</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">mail</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Your own mail server, with</tspan><tspan x="22" dy="27">unlimited aliases and burner</tspan><tspan x="22" dy="27">addresses. Inbound TLS ends</tspan><tspan x="22" dy="27">on your indexer, outbound</tspan><tspan x="22" dy="27">TLS runs to the recipient, and</tspan><tspan x="22" dy="27">the edges keep nothing.</tspan></text>
+</g>
+<g transform="translate(340.7 299.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Public HTTPS</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">tlsedge</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Publish a local app at</tspan><tspan x="22" dy="27">app.&lt;net&gt;.ur.network with an</tspan><tspan x="22" dy="27">automatic certificate. The</tspan><tspan x="22" dy="27">edge routes by SNI and never</tspan><tspan x="22" dy="27">decrypts, and the key stays on</tspan><tspan x="22" dy="27">your machine.</tspan></text>
+</g>
+<g transform="translate(675.3 299.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="6" r="2.5"/><circle cx="18.5" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 6h8"/><path d="M6.8 8.2l3.9 7.6"/><path d="M17.2 8.2l-3.9 7.6"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Private network</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">bridge</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">A stable private address and</tspan><tspan x="22" dy="27">name for every device and</tspan><tspan x="22" dy="27">agent. Subnet routes and port</tspan><tspan x="22" dy="27">forwards are granted by your</tspan><tspan x="22" dy="27">access policy and carried end</tspan><tspan x="22" dy="27">to end.</tspan></text>
+</g>
+<g transform="translate(6.0 592.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v4"/><path d="M15 3v4"/><rect x="6.5" y="7" width="11" height="6" rx="1.5"/><path d="M12 13v3.5a3 3 0 0 1-3 3H7"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Sockets and sharing</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">sockets</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Listen on a name instead of a</tspan><tspan x="22" dy="27">port, and each dial reaches</tspan><tspan x="22" dy="27">one listener, chosen by load.</tspan><tspan x="22" dy="27">File-share links work a set</tspan><tspan x="22" dy="27">number of times.</tspan></text>
+</g>
+<g transform="translate(340.7 592.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.6-3 8.3-7 10-4-1.7-7-5.4-7-10V6z"/><path d="M9 12l2 2 4-4"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Teams and access</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">teams · acl</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Members, roles, SSO, and</tspan><tspan x="22" dy="27">enrollment by QR code or</tspan><tspan x="22" dy="27">MDM. A deny-by-default policy</tspan><tspan x="22" dy="27">is signed into your encrypted</tspan><tspan x="22" dy="27">config and evaluated on every</tspan><tspan x="22" dy="27">device.</tspan></text>
+</g>
+<g transform="translate(675.3 592.0)">
+<rect width="318.7" height="277" rx="16" fill="#151b23" stroke="#3d444d"/>
+<rect x="22" y="22" width="48" height="48" rx="12" fill="#102f2f"/>
+<g transform="translate(31 31) scale(1.25)" fill="none" stroke="#5bc0c8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></g>
+<text x="84" y="43" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="22" font-weight="700" fill="#f0f6fc">Encrypted search</text>
+<text x="84" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" fill="#5bc0c8">search · v1</text>
+<text y="114" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="19" fill="#b4bcc6"><tspan x="22" dy="0">Each repo keeps an encrypted</tspan><tspan x="22" dy="27">index its committers update.</tspan><tspan x="22" dy="27">Search mail, notes and code,</tspan><tspan x="22" dy="27">or find agents working on a</tspan><tspan x="22" dy="27">task, and the server never</tspan><tspan x="22" dy="27">sees your queries.</tspan></text>
+</g>
+</svg>
