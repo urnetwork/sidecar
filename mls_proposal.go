@@ -8,7 +8,18 @@ import (
 	"fmt"
 )
 
-// Proposal (§12.1). proposalType says which of the fields below it holds.
+// Proposal types (RFC §17.4), all of them default types, which capabilities never list (RFC §7.2).
+const (
+	mlsProposalTypeAdd                    uint16 = 0x0001
+	mlsProposalTypeUpdate                 uint16 = 0x0002
+	mlsProposalTypeRemove                 uint16 = 0x0003
+	mlsProposalTypePsk                    uint16 = 0x0004
+	mlsProposalTypeReInit                 uint16 = 0x0005
+	mlsProposalTypeExternalInit           uint16 = 0x0006
+	mlsProposalTypeGroupContextExtensions uint16 = 0x0007
+)
+
+// Proposal (RFC §12.1). proposalType says which of the fields below it holds.
 type mlsProposal struct {
 	proposalType uint16
 

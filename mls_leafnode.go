@@ -1,6 +1,6 @@
-// A member's appearance in a group: LeafNode (RFC 9420 §7.2) and what it carries, credentials (§5.3),
-// capabilities and a lifetime. A leaf is the same bytes in a KeyPackage and in the ratchet tree, and
-// everything in it is signed, so what is decoded is kept exactly as it arrived.
+// A member's appearance in a group: LeafNode (RFC 9420 §7.2) and what it carries, credentials (RFC
+// §5.3), capabilities and a lifetime. A leaf is the same bytes in a KeyPackage and in the ratchet
+// tree, and everything in it is signed, so what is decoded is kept exactly as it arrived.
 //
 // §10.4's subset takes one credential type on the wire, 0xF552, whose encoding M2's entry review
 // specifies (D-KEYS-10). Until then the decoder refuses it like any type it cannot read, and takes
@@ -18,37 +18,26 @@ import (
 	"time"
 )
 
-// Credential types (§17.5; §10.4).
+// Credential types (RFC §17.5; §10.4).
 const (
 	mlsCredentialTypeBasic     uint16 = 0x0001
 	mlsCredentialTypeUrSidecar uint16 = 0xf552
 )
 
-// LeafNodeSource (§7.2).
+// LeafNodeSource (RFC §7.2).
 const (
 	mlsLeafNodeSourceKeyPackage uint8 = 1
 	mlsLeafNodeSourceUpdate     uint8 = 2
 	mlsLeafNodeSourceCommit     uint8 = 3
 )
 
-// Signature labels (§17.6).
+// Signature labels (RFC §17.6).
 const mlsSignatureLabelLeafNode = "LeafNodeTBS"
-
-// Default proposal types (§7.2), which capabilities never list.
-const (
-	mlsProposalTypeAdd                    uint16 = 0x0001
-	mlsProposalTypeUpdate                 uint16 = 0x0002
-	mlsProposalTypeRemove                 uint16 = 0x0003
-	mlsProposalTypePsk                    uint16 = 0x0004
-	mlsProposalTypeReInit                 uint16 = 0x0005
-	mlsProposalTypeExternalInit           uint16 = 0x0006
-	mlsProposalTypeGroupContextExtensions uint16 = 0x0007
-)
 
 // A structure that decodes but breaks a rule of the protocol.
 var errMlsInvalid = errors.New("mls: invalid")
 
-// Whether a credential is acceptable for a signature key (§5.3.1). The application decides: for
+// Whether a credential is acceptable for a signature key (RFC §5.3.1). The application decides: for
 // §10.4, a verified SidecarAdmit naming the credential's sidecar and identity key, checked against
 // §7.9's authorization log.
 type mlsCredentialValidator func(credential *mlsCredential, signatureKey []byte) error
@@ -58,7 +47,7 @@ func mlsRefuseEveryCredential(credential *mlsCredential, signatureKey []byte) er
 	return fmt.Errorf("%w: no admission check exists yet for credential type %#x", errMlsRefused, credential.credentialType)
 }
 
-// Credential (§5.3).
+// Credential (RFC §5.3).
 type mlsCredential struct {
 	credentialType uint16
 	// A basic credential's identity.
@@ -91,7 +80,7 @@ func (self *mlsCredential) decode(decoder *mlsDecoder) {
 	}
 }
 
-// Capabilities (§7.2). Unknown values stay, because the list is signed, and mean nothing.
+// Capabilities (RFC §7.2). Unknown values stay, because the list is signed, and mean nothing.
 type mlsCapabilities struct {
 	versions     []uint16
 	cipherSuites []uint16
@@ -100,7 +89,7 @@ type mlsCapabilities struct {
 	credentials  []uint16
 }
 
-// Capabilities, in §7.2's field order.
+// Capabilities, in RFC §7.2's field order.
 func (self *mlsCapabilities) encode(encoder *mlsEncoder) {
 	encoder.writeUint16Vector(self.versions)
 	encoder.writeUint16Vector(self.cipherSuites)
@@ -109,7 +98,7 @@ func (self *mlsCapabilities) encode(encoder *mlsEncoder) {
 	encoder.writeUint16Vector(self.credentials)
 }
 
-// Capabilities, in §7.2's field order.
+// Capabilities, in RFC §7.2's field order.
 func (self *mlsCapabilities) decode(decoder *mlsDecoder) {
 	self.versions = decoder.readUint16Vector()
 	self.cipherSuites = decoder.readUint16Vector()
@@ -118,38 +107,38 @@ func (self *mlsCapabilities) decode(decoder *mlsDecoder) {
 	self.credentials = decoder.readUint16Vector()
 }
 
-// Default extension types are implicit (§7.2).
+// Default extension types are implicit (RFC §7.2).
 func (self *mlsCapabilities) supportsExtension(extensionType uint16) bool {
 	return (mlsExtensionTypeApplicationId <= extensionType && extensionType <= mlsExtensionTypeExternalSenders) ||
 		slices.Contains(self.extensions, extensionType)
 }
 
-// Default proposal types are implicit (§7.2).
+// Default proposal types are implicit (RFC §7.2).
 func (self *mlsCapabilities) supportsProposal(proposalType uint16) bool {
 	return (mlsProposalTypeAdd <= proposalType && proposalType <= mlsProposalTypeGroupContextExtensions) ||
 		slices.Contains(self.proposals, proposalType)
 }
 
-// Unlike the other two, nothing is implicit here (§11.1).
+// Unlike the other two, nothing is implicit here (RFC §11.1).
 func (self *mlsCapabilities) supportsCredential(credentialType uint16) bool {
 	return slices.Contains(self.credentials, credentialType)
 }
 
-// RequiredCapabilities (§11.1), a GroupContext extension's data.
+// RequiredCapabilities (RFC §11.1), a GroupContext extension's data.
 type mlsRequiredCapabilities struct {
 	extensionTypes  []uint16
 	proposalTypes   []uint16
 	credentialTypes []uint16
 }
 
-// RequiredCapabilities, in §11.1's field order.
+// RequiredCapabilities, in RFC §11.1's field order.
 func (self *mlsRequiredCapabilities) encode(encoder *mlsEncoder) {
 	encoder.writeUint16Vector(self.extensionTypes)
 	encoder.writeUint16Vector(self.proposalTypes)
 	encoder.writeUint16Vector(self.credentialTypes)
 }
 
-// RequiredCapabilities, in §11.1's field order.
+// RequiredCapabilities, in RFC §11.1's field order.
 func (self *mlsRequiredCapabilities) decode(decoder *mlsDecoder) {
 	self.extensionTypes = decoder.readUint16Vector()
 	self.proposalTypes = decoder.readUint16Vector()
@@ -176,13 +165,13 @@ func (self *mlsCapabilities) satisfies(required *mlsRequiredCapabilities) bool {
 	return true
 }
 
-// Lifetime (§7.2), in seconds since the Unix epoch.
+// Lifetime (RFC §7.2), in seconds since the Unix epoch.
 type mlsLifetime struct {
 	notBefore uint64
 	notAfter  uint64
 }
 
-// At least the second must not precede the first, and a positive maximum bounds the span (§7.2 has
+// At least the second must not precede the first, and a positive maximum bounds the span (RFC §7.2 has
 // the application set one).
 func (self *mlsLifetime) validSpan(maximum time.Duration) bool {
 	if self.notAfter < self.notBefore {
@@ -200,7 +189,7 @@ func (self *mlsLifetime) contains(at time.Time) bool {
 	return 0 <= seconds && self.notBefore <= uint64(seconds) && uint64(seconds) <= self.notAfter
 }
 
-// LeafNode (§7.2).
+// LeafNode (RFC §7.2).
 type mlsLeafNode struct {
 	encryptionKey  []byte
 	signatureKey   []byte
@@ -241,7 +230,7 @@ func (self *mlsLeafNode) encode(encoder *mlsEncoder) {
 	encoder.writeVector(self.signature)
 }
 
-// LeafNode, refusing a source §7.2 does not define.
+// LeafNode, refusing a source RFC §7.2 does not define.
 func (self *mlsLeafNode) decode(decoder *mlsDecoder) {
 	self.encryptionKey = decoder.readVector()
 	self.signatureKey = decoder.readVector()
@@ -301,8 +290,8 @@ func (self *mlsLeafNode) verifySignature(suite *mlsCipherSuite, groupId []byte, 
 	return suite.verifyWithLabel(self.signatureKey, mlsSignatureLabelLeafNode, content, self.signature)
 }
 
-// §7.3's checks on the leaf alone: its credential, its signature, and a capabilities list consistent
-// with what it carries. The checks against the rest of the group are the tree's.
+// RFC §7.3's checks on the leaf alone: its credential, its signature, and a capabilities list
+// consistent with what it carries. The checks against the rest of the group are the tree's.
 func (self *mlsLeafNode) validateAlone(suite *mlsCipherSuite, settings *mlsTreeSettings, credentialValidator mlsCredentialValidator, groupId []byte, leafIndex mlsLeafIndex) error {
 	if !self.capabilities.supportsCredential(self.credential.credentialType) {
 		return fmt.Errorf("%w: capabilities do not list the leaf's own credential type %#x", errMlsInvalid, self.credential.credentialType)

@@ -1,10 +1,10 @@
 // The key schedule (RFC 9420 §8): the GroupContext it binds, one epoch's secrets, the exporter,
-// external initialization and the transcript hashes (§8.2).
+// external initialization and the transcript hashes (RFC §8.2).
 //
-// Hook kinds name the values as §8's table 4 and diagram do. The two extractions the diagram leaves
+// Hook kinds name the values as RFC §8's table 4 and diagram do. The two extractions the diagram leaves
 // unnamed are "joiner_extract" and "member_extract".
 //
-// PSKs are refused (§10.4), so production passes a nil psk_secret, which is §8's all-zero vector.
+// PSKs are refused (§10.4), so production passes a nil psk_secret, which is RFC §8's all-zero vector.
 // The parameter exists because the secret enters the schedule either way and the mlswg's vectors
 // set it.
 
@@ -16,10 +16,10 @@ import (
 	"fmt"
 )
 
-// The HPKE exporter context of §8.3.
+// The HPKE exporter context of RFC §8.3.
 const mlsExternalInitLabel = "MLS 1.0 external init secret"
 
-// §8.1's summary of a group's state, which binds the key schedule to it.
+// RFC §8.1's summary of a group's state, which binds the key schedule to it.
 type mlsGroupContext struct {
 	cipherSuite             uint16
 	groupId                 []byte
@@ -54,9 +54,9 @@ func (self *mlsGroupContext) decode(decoder *mlsDecoder) {
 	self.extensions = decoder.readExtensions()
 }
 
-// What one epoch keeps of the schedule, as §8's table 4 names it, with the two secrets a commit also
-// produces. epoch_secret itself is consumed here (§9.2). The caller retains what its role needs and
-// erases the rest.
+// What one epoch keeps of the schedule, as RFC §8's table 4 names it, with the two secrets a commit
+// also produces. epoch_secret itself is consumed here (RFC §9.2). The caller retains what its role
+// needs and erases the rest.
 type mlsEpochSecrets struct {
 	// Set only when the epoch came from a commit or a Welcome. A committer needs it for the Welcome.
 	joinerSecret []byte
@@ -76,7 +76,7 @@ type mlsEpochSecrets struct {
 	epochAuthenticator []byte
 }
 
-// Overwrites every secret, for an epoch left behind (§9.2).
+// Overwrites every secret, for an epoch left behind (RFC §9.2).
 func (self *mlsEpochSecrets) erase() {
 	clear(self.joinerSecret)
 	clear(self.welcomeSecret)
@@ -92,7 +92,7 @@ func (self *mlsEpochSecrets) erase() {
 }
 
 // The schedule's first half: init_secret_[n-1] and commit_secret to joiner_secret. A nil commit_secret
-// is the all-zero vector of a commit without a path (§12.4.1). The caller still owns and erases its
+// is the all-zero vector of a commit without a path (RFC §12.4.1). The caller still owns and erases its
 // inputs.
 func (self *mlsCipherSuite) deriveJoinerSecret(initSecret []byte, commitSecret []byte, groupContext []byte) ([]byte, error) {
 	if commitSecret == nil {
@@ -135,7 +135,7 @@ func (self *mlsCipherSuite) deriveEpochSecrets(joinerSecret []byte, pskSecret []
 	return secrets, nil
 }
 
-// Epoch 0 of a new group (§11): epoch_secret is fresh, so there is no joiner or welcome secret, and
+// Epoch 0 of a new group (RFC §11): epoch_secret is fresh, so there is no joiner or welcome secret, and
 // the GroupContext enters only through what later epochs derive.
 func (self *mlsCipherSuite) newGroupEpochSecrets() (*mlsEpochSecrets, error) {
 	epochSecret := self.generateSecret("epoch_secret")
@@ -171,12 +171,12 @@ func (self *mlsCipherSuite) deriveFromEpochSecret(epochSecret []byte) (*mlsEpoch
 	return secrets, nil
 }
 
-// external_priv and, through its public half, external_pub (§8).
+// external_priv and, through its public half, external_pub (RFC §8).
 func (self *mlsCipherSuite) deriveExternalKey(externalSecret []byte) (hpke.PrivateKey, error) {
 	return self.deriveKemKey("external_priv", externalSecret)
 }
 
-// MLS-Exporter (§8.5). kind names what the caller exports.
+// MLS-Exporter (RFC §8.5). kind names what the caller exports.
 func (self *mlsCipherSuite) exporter(kind string, exporterSecret []byte, label string, context []byte, length int) ([]byte, error) {
 	labelSecret, err := self.deriveSecret("exporter_label_secret", exporterSecret, label)
 	if err != nil {
@@ -186,7 +186,7 @@ func (self *mlsCipherSuite) exporter(kind string, exporterSecret []byte, label s
 	return self.expandWithLabel(kind, labelSecret, "exported", self.hash(context), length)
 }
 
-// A joiner's half of §8.3: encapsulates to external_pub and exports the new init_secret, which
+// A joiner's half of RFC §8.3: encapsulates to external_pub and exports the new init_secret, which
 // the ExternalInit proposal's kem_output carries to the group.
 func (self *mlsCipherSuite) externalInitSeal(externalPublicKey []byte) (kemOutput []byte, initSecret []byte, err error) {
 	publicKey, err := self.kem.NewPublicKey(externalPublicKey)
@@ -205,7 +205,7 @@ func (self *mlsCipherSuite) externalInitSeal(externalPublicKey []byte) (kemOutpu
 	return kemOutput, initSecret, nil
 }
 
-// A member's half of §8.3: the same init_secret from kem_output and external_priv.
+// A member's half of RFC §8.3: the same init_secret from kem_output and external_priv.
 func (self *mlsCipherSuite) externalInitOpen(externalPrivateKey hpke.PrivateKey, kemOutput []byte) ([]byte, error) {
 	recipient, err := hpke.NewRecipient(kemOutput, externalPrivateKey, self.kdf, self.aead, nil)
 	if err != nil {
@@ -219,13 +219,13 @@ func (self *mlsCipherSuite) externalInitOpen(externalPrivateKey hpke.PrivateKey,
 	return initSecret, nil
 }
 
-// confirmed_transcript_hash_[epoch] (§8.2). The input is the encoded ConfirmedTranscriptHashInput of
-// the commit that starts the epoch.
+// confirmed_transcript_hash_[epoch] (RFC §8.2). The input is the encoded
+// ConfirmedTranscriptHashInput of the commit that starts the epoch.
 func (self *mlsCipherSuite) nextConfirmedTranscriptHash(interimTranscriptHash []byte, confirmedTranscriptHashInput []byte) []byte {
 	return self.hash(append(append([]byte{}, interimTranscriptHash...), confirmedTranscriptHashInput...))
 }
 
-// interim_transcript_hash_[epoch] (§8.2), whose InterimTranscriptHashInput is the tag as a MAC<V>.
+// interim_transcript_hash_[epoch] (RFC §8.2), whose InterimTranscriptHashInput is the tag as a MAC<V>.
 func (self *mlsCipherSuite) nextInterimTranscriptHash(confirmedTranscriptHash []byte, confirmationTag []byte) ([]byte, error) {
 	encoder := &mlsEncoder{}
 	encoder.writeFixed(confirmedTranscriptHash)
@@ -237,7 +237,7 @@ func (self *mlsCipherSuite) nextInterimTranscriptHash(confirmedTranscriptHash []
 	return self.hash(encoded), nil
 }
 
-// The confirmation_tag of §6.1: confirmation_key over the confirmed transcript hash.
+// The confirmation_tag of RFC §6.1: confirmation_key over the confirmed transcript hash.
 func (self *mlsCipherSuite) confirmationTag(confirmationKey []byte, confirmedTranscriptHash []byte) []byte {
 	return self.mac(confirmationKey, confirmedTranscriptHash)
 }

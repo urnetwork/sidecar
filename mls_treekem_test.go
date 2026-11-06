@@ -283,7 +283,7 @@ func (self *mlsTestGroup) checkInvariants() {
 			t.Fatalf("epoch %d: leaf %d holds a key its tree does not show", self.epoch, leaf)
 		}
 
-		// §4.2's tree invariant, both ways
+		// RFC §4.2's tree invariant, both ways
 		ownNode := leaf.node()
 		for node := range member.secrets.nodeIndexKeys {
 			if !node.subtreeContains(ownNode) {
@@ -389,9 +389,10 @@ func TestMlsTreeKemLifecycleUnderBothSuites(t *testing.T) {
 	}
 }
 
-// A tree the size of §10.4's cap, built and validated once, so width is not only a claim.
+// A tree the size of §10.4's cap, under the real KEM, built and validated once, so the width is not
+// only a claim.
 func TestMlsTreeKemAtFullGroupWidth(t *testing.T) {
-	suite := mlsTestSuiteX25519
+	suite := mlsSuite
 	cryptotest.SetGlobalRandom(t, 2)
 	group := mlsNewTestGroup(t, suite)
 	creator := group.members[0]
@@ -497,7 +498,7 @@ func TestMlsMergeRefusesAWrongParentHash(t *testing.T) {
 	}
 }
 
-// Keeping the leaf's old key is a commit that heals nothing (§12.4.2).
+// Keeping the leaf's old key is a commit that heals nothing (RFC §12.4.2).
 func TestMlsMergeRefusesAnUnchangedLeafKey(t *testing.T) {
 	group := mlsNewMergedTestGroup(t, mlsTestSuiteX25519, 4)
 	member := group.members[0]
@@ -638,7 +639,8 @@ func TestMlsReceiveRefusesTheSendersOwnPath(t *testing.T) {
 	}
 }
 
-// A new leaf's key must not appear among the path's recipients: it gets the secret by Welcome (§7.5).
+// A new leaf's key must not appear among the path's recipients: it gets the secret by Welcome (RFC
+// §7.5).
 func TestMlsNewLeavesAreLeftOutOfThePath(t *testing.T) {
 	suite := mlsSuite
 	group := mlsNewMergedTestGroup(t, suite, 3)
@@ -847,6 +849,38 @@ func TestMlsExternalCommitPath(t *testing.T) {
 		if err := tree.validate(group.validation); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMlsPrepareRefusesASenderOutsideTheTree(t *testing.T) {
+	group := mlsNewTestGroup(t, mlsSuite)
+	member := group.members[0]
+	tree := member.tree.clone()
+	if _, err := tree.prepareUpdatePath(1, tree.leafNode(0), member.signatureKey, group.groupId); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+}
+
+// §10.6's per-node sizes for X-Wing: a parent is its key, a 32-byte hash and 4 bytes per unmerged leaf.
+func TestMlsParentNodeSizeUnderXWing(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsSuite, 2)
+	root := mlsTreeRoot(group.members[0].tree.leafCount())
+	parent := *group.members[0].tree.nodes[root].parent
+	parent.parentHash = make([]byte, 32)
+	encoded, err := mlsMarshal(&parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) != 1252 {
+		t.Fatalf("parent of %d bytes", len(encoded))
+	}
+	parent.unmergedLeaves = []mlsLeafIndex{1}
+	encoded, err = mlsMarshal(&parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) != 1256 {
+		t.Fatalf("parent of %d bytes with one unmerged leaf", len(encoded))
 	}
 }
 

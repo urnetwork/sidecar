@@ -38,7 +38,7 @@ func TestMlsVectorHeaderVectors(t *testing.T) {
 	}
 }
 
-// The worked examples in §2.1.2.
+// The worked examples in RFC §2.1.2.
 func TestMlsVectorHeaderSpecExamples(t *testing.T) {
 	cases := []struct {
 		header string

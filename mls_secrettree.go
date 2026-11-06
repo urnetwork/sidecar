@@ -1,13 +1,13 @@
 // The secret tree and sender ratchets (RFC 9420 §9), which give each member one-use keys and nonces
-// for PrivateMessage, and the sender data key (§6.3.2).
+// for PrivateMessage, and the sender data key (RFC §6.3.2).
 //
-// This is where forward secrecy of messages is won, so §9.2's deletion schedule is the design. A
+// This is where forward secrecy of messages is won, so RFC §9.2's deletion schedule is the design. A
 // node's secret is overwritten once its two children exist, a leaf's once its two ratchets do, and
 // each ratchet keeps only the secret of its next generation.
 //
 // A ratchet only moves forward. Keys of skipped generations are not kept: §10.4 carries only
 // handshakes in PrivateMessage, gkm orders them one commit to an epoch, so a member has no use for a
-// late key, and a key not kept cannot leak. RFC 9420 allows this (§9.2's MAY).
+// late key, and a key not kept cannot leak. RFC 9420 allows this (RFC §9.2's MAY).
 //
 // A receiver must not lose a key to a forged message, so stepTo holds the next state apart and the
 // ratchet moves only when the caller reports the message opened. A sender is the reverse: it moves
@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	// The two sender ratchets of a leaf, as their labels (§9).
+	// The two sender ratchets of a leaf, as their labels (RFC §9).
 	mlsRatchetHandshake   = "handshake"
 	mlsRatchetApplication = "application"
 )
@@ -50,7 +50,7 @@ func defaultMlsSecretTreeSettings() *mlsSecretTreeSettings {
 	}
 }
 
-// One sender ratchet: a leaf's handshake or application ratchet (§9.1).
+// One sender ratchet: a leaf's handshake or application ratchet (RFC §9.1).
 type mlsSenderRatchet struct {
 	suite    *mlsCipherSuite
 	settings *mlsSecretTreeSettings
@@ -193,7 +193,7 @@ func newMlsSecretTree(suite *mlsCipherSuite, settings *mlsSecretTreeSettings, en
 }
 
 // A leaf's ratchets, deriving down to it the first time. Every node passed has both children stored
-// and is erased (§9.2).
+// and is erased (RFC §9.2).
 func (self *mlsSecretTree) ratchets(leaf mlsLeafIndex) (*mlsLeafRatchets, error) {
 	if self.leafCount <= uint32(leaf) {
 		return nil, fmt.Errorf("mls: leaf %d in a secret tree of %d", leaf, self.leafCount)
@@ -263,8 +263,8 @@ func (self *mlsSecretTree) erase() {
 	}
 }
 
-// sender_data_key and sender_data_nonce (§6.3.2), from sender_data_secret and the first KDF.Nh bytes
-// of the content ciphertext, or all of it if shorter.
+// sender_data_key and sender_data_nonce (RFC §6.3.2), from sender_data_secret and the first KDF.Nh
+// bytes of the content ciphertext, or all of it if shorter.
 func (self *mlsCipherSuite) deriveSenderDataKey(senderDataSecret []byte, ciphertext []byte) (key []byte, nonce []byte, err error) {
 	sample := ciphertext[:min(len(ciphertext), self.hashLength)]
 	key, err = self.expandWithLabel("sender_data_key", senderDataSecret, "key", sample, self.aeadKeyLength)

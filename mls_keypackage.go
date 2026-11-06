@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// Signature labels (§17.6).
+// Signature labels (RFC §17.6).
 const mlsSignatureLabelKeyPackage = "KeyPackageTBS"
 
-// KeyPackage (§10).
+// KeyPackage (RFC §10).
 type mlsKeyPackage struct {
 	cipherSuite uint16
 	initKey     []byte
@@ -71,7 +71,7 @@ func (self *mlsKeyPackage) sign(suite *mlsCipherSuite, signatureKey ed25519.Priv
 	return nil
 }
 
-// KeyPackageRef (§5.2).
+// KeyPackageRef (RFC §5.2).
 func (self *mlsKeyPackage) ref(suite *mlsCipherSuite) ([]byte, error) {
 	encoded, err := mlsMarshal(self)
 	if err != nil {
@@ -80,11 +80,11 @@ func (self *mlsKeyPackage) ref(suite *mlsCipherSuite) ([]byte, error) {
 	return suite.makeKeyPackageRef(encoded)
 }
 
-// §10.1's checks, against the group's suite. The checks against the group's members are the tree's,
+// RFC §10.1's checks, against the group's suite. The checks against the group's members are the tree's,
 // at the leaf's position.
 //
 // sendingAt is the current time when this client is about to send the KeyPackage in an Add, which
-// must then be inside its lifetime (§7.3). A receiver passes nil, since a message may outlive the
+// must then be inside its lifetime (RFC §7.3). A receiver passes nil, since a message may outlive the
 // lifetime on its way.
 func (self *mlsKeyPackage) validate(suite *mlsCipherSuite, settings *mlsTreeSettings, credentialValidator mlsCredentialValidator, sendingAt *time.Time) error {
 	if self.cipherSuite != suite.value {

@@ -1,5 +1,5 @@
-// LeafNode, credentials, capabilities and KeyPackage: their encodings, signatures and §7.3 and §10.1
-// checks.
+// LeafNode, credentials, capabilities and KeyPackage: their encodings, signatures and RFC §7.3 and
+// RFC §10.1 checks.
 
 package sidecar
 
@@ -422,7 +422,7 @@ func TestMlsKeyPackageValidateRefusals(t *testing.T) {
 	}
 }
 
-// §7.3: a sender must hold the lifetime against its own clock, and a receiver need not.
+// RFC §7.3: a sender must hold the lifetime against its own clock, and a receiver need not.
 func TestMlsKeyPackageLifetimeBindsOnlyTheSender(t *testing.T) {
 	suite := mlsTestSuiteX25519
 	settings := defaultMlsTreeSettings()

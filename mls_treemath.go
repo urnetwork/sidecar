@@ -1,6 +1,6 @@
 // Tree math for the array layout of RFC 9420 Appendix C, which the ratchet tree and the secret tree
 // share: leaf n sits at node 2n, parents at odd indices, and a tree is always full, with 2^d leaves
-// and 2^(d+1)-1 nodes (§7.7). So relationships between nodes are bit operations on their indices.
+// and 2^(d+1)-1 nodes (RFC §7.7). So relationships between nodes are bit operations on their indices.
 //
 // A leaf count here is always such a power of two, at most mlsTreeLeafCountMaximum, which callers
 // establish once: mlsTreeLeafCountValid says whether a count qualifies. A node index, by contrast, can
@@ -104,7 +104,7 @@ func (self mlsNodeIndex) sibling(leafCount uint32) (mlsNodeIndex, bool) {
 	return parent.left()
 }
 
-// Ordered from this node's parent to the root (§4.1.2). Empty for the root and for a node outside
+// Ordered from this node's parent to the root (RFC §4.1.2). Empty for the root and for a node outside
 // the tree.
 func (self mlsNodeIndex) directPath(leafCount uint32) []mlsNodeIndex {
 	var path []mlsNodeIndex
@@ -119,7 +119,7 @@ func (self mlsNodeIndex) directPath(leafCount uint32) []mlsNodeIndex {
 	}
 }
 
-// The sibling of this node and of each node on its direct path but the root, leaf to root (§4.1.2).
+// The sibling of this node and of each node on its direct path but the root, leaf to root (RFC §4.1.2).
 func (self mlsNodeIndex) copath(leafCount uint32) []mlsNodeIndex {
 	var copath []mlsNodeIndex
 	node := self

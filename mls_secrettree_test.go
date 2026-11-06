@@ -1,5 +1,5 @@
-// The secret tree against the mlswg's secret-tree vectors under 0x0001, then §9.2's deletion schedule
-// and the ratchets' refusals under both suites.
+// The secret tree against the mlswg's secret-tree vectors under 0x0001, then RFC §9.2's deletion
+// schedule and the ratchets' refusals under both suites.
 
 package sidecar
 
@@ -311,7 +311,7 @@ func TestMlsStaleStepCannotMoveTheRatchetBack(t *testing.T) {
 	}
 }
 
-// §9.2: consuming a generation overwrites the secrets behind it.
+// RFC §9.2: consuming a generation overwrites the secrets behind it.
 func TestMlsRatchetOverwritesConsumedSecrets(t *testing.T) {
 	ratchet := mlsTestHandshakeRatchet(t, mlsNewTestSecretTree(t, mlsSuite), 0)
 	before := ratchet.secret
@@ -337,8 +337,8 @@ func TestMlsRatchetOverwritesConsumedSecrets(t *testing.T) {
 	}
 }
 
-// §9.2's example, on an eight-leaf tree: deriving leaf 3's ratchets consumes the root and everything
-// on leaf 3's path, and leaves exactly its copath.
+// RFC §9.2's example, on an eight-leaf tree: deriving leaf 3's ratchets consumes the root and
+// everything on leaf 3's path, and leaves exactly its copath.
 func TestMlsTreeSecretsFollowTheDeletionSchedule(t *testing.T) {
 	suite := mlsSuite
 	tree := mlsNewTestSecretTree(t, suite)

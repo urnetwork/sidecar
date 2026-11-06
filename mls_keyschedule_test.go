@@ -396,8 +396,8 @@ func TestMlsExporterBindsLabelContextAndLength(t *testing.T) {
 	}
 }
 
-// §8.3 end to end: a joiner holding only external_pub and a member holding external_secret reach one
-// init_secret.
+// RFC §8.3 end to end: a joiner holding only external_pub and a member holding external_secret
+// reach one init_secret.
 func TestMlsExternalInitAgreesOnTheInitSecret(t *testing.T) {
 	for _, suite := range mlsTestSuites {
 		secrets, err := suite.newGroupEpochSecrets()
@@ -430,7 +430,7 @@ func TestMlsExternalInitAgreesOnTheInitSecret(t *testing.T) {
 	}
 }
 
-// §11: a new group's interim hash comes from the empty confirmed hash and its first tag.
+// RFC §11: a new group's interim hash comes from the empty confirmed hash and its first tag.
 func TestMlsTranscriptOfANewGroup(t *testing.T) {
 	suite := mlsSuite
 	secrets, err := suite.newGroupEpochSecrets()

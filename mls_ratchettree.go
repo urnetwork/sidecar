@@ -1,7 +1,7 @@
-// The ratchet tree's public state (RFC 9420 §7): the array of nodes, resolutions and filtered direct
-// paths (§4.1), tree and parent hashes (§7.8, §7.9), leaf changes (§7.7, §12.1), the ratchet_tree
-// encoding (§12.4.3.3) and the validation a joiner runs (§12.4.3.1). TreeKEM's encryption over this
-// is mls_treekem.go.
+// The ratchet tree's public state (RFC 9420 §7): the array of nodes, resolutions and filtered
+// direct paths (RFC §4.1), tree and parent hashes (RFC §7.8, RFC §7.9), leaf changes (RFC §7.7, RFC
+// §12.1), the ratchet_tree encoding (RFC §12.4.3.3) and the validation a joiner runs (RFC
+// §12.4.3.1). TreeKEM's encryption over this is mls_treekem.go.
 //
 // Nodes are immutable once in the tree: a change installs a new node, so clone is a shallow copy and
 // a commit runs on one, adopted only if the whole commit validates. A method that returns an error
@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-// NodeType (§7.8).
+// NodeType (RFC §7.8).
 const (
 	mlsNodeTypeLeaf   uint8 = 1
 	mlsNodeTypeParent uint8 = 2
@@ -33,7 +33,7 @@ type mlsTreeSettings struct {
 	// which 1,024 fits, and Adds fill the leftmost blank leaf, so no honest tree is wider. This bounds
 	// what a decoded tree can make a client allocate and hash.
 	MaximumLeafCount uint32
-	// Longest span a leaf's lifetime may cover, which §7.2 has the application set: KeyPackages are
+	// Longest span a leaf's lifetime may cover, which RFC §7.2 has the application set: KeyPackages are
 	// valid 90 days (§10.6). Non-positive disables the bound, which only tests do, because the mlswg's
 	// leaves never expire.
 	MaximumLeafLifetime time.Duration
@@ -55,7 +55,7 @@ type mlsLeafValidation struct {
 	credentialValidator mlsCredentialValidator
 }
 
-// ParentNode (§7.1).
+// ParentNode (RFC §7.1).
 type mlsParentNode struct {
 	encryptionKey []byte
 	parentHash    []byte
@@ -63,7 +63,7 @@ type mlsParentNode struct {
 	unmergedLeaves []mlsLeafIndex
 }
 
-// ParentNode, in §7.1's field order.
+// ParentNode, in RFC §7.1's field order.
 func (self *mlsParentNode) encode(encoder *mlsEncoder) {
 	encoder.writeVector(self.encryptionKey)
 	encoder.writeVector(self.parentHash)
@@ -74,7 +74,7 @@ func (self *mlsParentNode) encode(encoder *mlsEncoder) {
 	})
 }
 
-// Refuses an unmerged list out of order (§7.1), which also means no leaf appears twice.
+// Refuses an unmerged list out of order (RFC §7.1), which also means no leaf appears twice.
 func (self *mlsParentNode) decode(decoder *mlsDecoder) {
 	self.encryptionKey = decoder.readVector()
 	self.parentHash = decoder.readVector()
@@ -121,7 +121,7 @@ type mlsRatchetTree struct {
 	nodeHashes [][]byte
 }
 
-// A tree of one leaf, a new group's (§11).
+// A tree of one leaf, a new group's (RFC §11).
 func newMlsRatchetTree(suite *mlsCipherSuite, settings *mlsTreeSettings, creator *mlsLeafNode) *mlsRatchetTree {
 	return &mlsRatchetTree{
 		suite:      suite,
@@ -131,7 +131,7 @@ func newMlsRatchetTree(suite *mlsCipherSuite, settings *mlsTreeSettings, creator
 	}
 }
 
-// Reads optional<Node> ratchet_tree<V> (§12.4.3.3): the last entry must be non-blank, the array is
+// Reads optional<Node> ratchet_tree<V> (RFC §12.4.3.3): the last entry must be non-blank, the array is
 // extended to a full tree with blanks, and each position must hold its own kind of node.
 func decodeMlsRatchetTree(suite *mlsCipherSuite, settings *mlsTreeSettings, encoded []byte) (*mlsRatchetTree, error) {
 	if !mlsTreeLeafCountValid(settings.MaximumLeafCount) {
@@ -189,7 +189,7 @@ func decodeMlsRatchetTree(suite *mlsCipherSuite, settings *mlsTreeSettings, enco
 	}, nil
 }
 
-// optional<Node> ratchet_tree<V>, without trailing blanks (§12.4.3.3).
+// optional<Node> ratchet_tree<V>, without trailing blanks (RFC §12.4.3.3).
 func (self *mlsRatchetTree) encode(encoder *mlsEncoder) {
 	last := len(self.nodes) - 1
 	for 0 <= last && self.nodes[last].blank() {
@@ -249,7 +249,7 @@ func (self *mlsRatchetTree) setNode(index mlsNodeIndex, node mlsTreeNode) {
 	}
 }
 
-// §4.1.1's resolution of a node, as node indices, unmerged leaves as their leaf nodes.
+// RFC §4.1.1's resolution of a node, as node indices, unmerged leaves as their leaf nodes.
 func (self *mlsRatchetTree) resolution(index mlsNodeIndex) []mlsNodeIndex {
 	node := &self.nodes[index]
 	if !node.blank() {
@@ -275,7 +275,7 @@ type mlsFilteredPathNode struct {
 	copathChild mlsNodeIndex
 }
 
-// §4.1.2's filtered direct path of a leaf, leaf to root: the direct path without any node whose
+// RFC §4.1.2's filtered direct path of a leaf, leaf to root: the direct path without any node whose
 // copath child has an empty resolution.
 func (self *mlsRatchetTree) filteredDirectPath(leaf mlsLeafIndex) []mlsFilteredPathNode {
 	leafCount := self.leafCount()
@@ -294,7 +294,7 @@ func (self *mlsRatchetTree) filteredDirectPath(leaf mlsLeafIndex) []mlsFilteredP
 	}
 }
 
-// The tree hash of the whole tree (§7.8).
+// The tree hash of the whole tree (RFC §7.8).
 func (self *mlsRatchetTree) treeHash() ([]byte, error) {
 	return self.nodeTreeHash(mlsTreeRoot(self.leafCount()))
 }
@@ -361,7 +361,7 @@ func (self *mlsRatchetTree) hashParent(parent *mlsParentNode, leftHash []byte, r
 	return self.suite.hash(encoded), nil
 }
 
-// The tree hash of a subtree as it stood before these leaves joined (§7.9's original sibling tree
+// The tree hash of a subtree as it stood before these leaves joined (RFC §7.9's original sibling tree
 // hash): each blanked, and dropped from every parent's unmerged list. A subtree without any of them
 // hashes as it is, cached, which is the common case.
 func (self *mlsRatchetTree) originalTreeHash(index mlsNodeIndex, excludedLeaves []mlsLeafIndex) ([]byte, error) {
@@ -400,7 +400,7 @@ func (self *mlsRatchetTree) originalTreeHash(index mlsNodeIndex, excludedLeaves 
 	return self.hashParent(parent, leftHash, rightHash)
 }
 
-// Hash of ParentHashInput (§7.9).
+// Hash of ParentHashInput (RFC §7.9).
 func (self *mlsRatchetTree) hashParentHashInput(encryptionKey []byte, parentHash []byte, originalSiblingTreeHash []byte) ([]byte, error) {
 	encoder := &mlsEncoder{}
 	encoder.writeVector(encryptionKey)
@@ -413,10 +413,22 @@ func (self *mlsRatchetTree) hashParentHashInput(encryptionKey []byte, parentHash
 	return self.suite.hash(encoded), nil
 }
 
-// Whether a non-blank parent node P is parent-hash valid (§7.9.2): exactly one node D below it, in
+// Whether a non-blank parent node P is parent-hash valid (RFC §7.9.2): exactly one node D below it, in
 // the resolution of one child C, carries P's parent hash with the other child as copath child, and
 // everything else in C's resolution is P's unmerged leaves under C.
 func (self *mlsRatchetTree) verifyParentHash(index mlsNodeIndex) error {
+	// the parent_hash a node carries: a leaf from anything but a commit has none to link with
+	carriedHash := func(candidate mlsNodeIndex) []byte {
+		node := &self.nodes[candidate]
+		if node.parent != nil {
+			return node.parent.parentHash
+		}
+		if node.leaf != nil && node.leaf.leafNodeSource == mlsLeafNodeSourceCommit {
+			return node.leaf.parentHash
+		}
+		return nil
+	}
+
 	parent := self.nodes[index].parent
 	left, _ := index.left()
 	right, _ := index.right()
@@ -440,7 +452,7 @@ func (self *mlsRatchetTree) verifyParentHash(index mlsNodeIndex) error {
 		}
 		resolved := self.resolution(child)
 		for _, candidate := range resolved {
-			if !bytes.Equal(self.nodeParentHash(candidate), parentHash) {
+			if !bytes.Equal(carriedHash(candidate), parentHash) {
 				continue
 			}
 			others := slices.DeleteFunc(slices.Clone(resolved), func(node mlsNodeIndex) bool {
@@ -458,20 +470,7 @@ func (self *mlsRatchetTree) verifyParentHash(index mlsNodeIndex) error {
 	return nil
 }
 
-// The parent_hash a node carries: nil for a blank node and a leaf from anything but a commit, which
-// no parent can link to.
-func (self *mlsRatchetTree) nodeParentHash(index mlsNodeIndex) []byte {
-	node := &self.nodes[index]
-	if node.parent != nil {
-		return node.parent.parentHash
-	}
-	if node.leaf != nil && node.leaf.leafNodeSource == mlsLeafNodeSourceCommit {
-		return node.leaf.parentHash
-	}
-	return nil
-}
-
-// Every non-blank parent is parent-hash valid (§7.9.2).
+// Every non-blank parent is parent-hash valid (RFC §7.9.2).
 func (self *mlsRatchetTree) verifyParentHashes() error {
 	for index := range self.nodes {
 		if self.nodes[index].parent == nil {
@@ -484,28 +483,17 @@ func (self *mlsRatchetTree) verifyParentHashes() error {
 	return nil
 }
 
-// The required_capabilities a group's extensions carry, or nil.
-func mlsRequiredCapabilitiesOf(groupExtensions []mlsExtension) (*mlsRequiredCapabilities, error) {
-	extension := mlsFindExtension(groupExtensions, mlsExtensionTypeRequiredCapabilities)
-	if extension == nil {
-		return nil, nil
-	}
-	required := &mlsRequiredCapabilities{}
-	if err := mlsUnmarshal(extension.extensionData, required); err != nil {
-		return nil, err
-	}
-	return required, nil
-}
-
-// §7.3's checks of one leaf's capabilities against the group's parameters: required_capabilities, and
-// every extension of the GroupContext (§13.4).
+// RFC §7.3's checks of one leaf's capabilities against the group's parameters:
+// required_capabilities, and every extension of the GroupContext (RFC §13.4).
 func (self *mlsRatchetTree) validateGroupCompatibility(leaf *mlsLeafNode, groupExtensions []mlsExtension) error {
-	required, err := mlsRequiredCapabilitiesOf(groupExtensions)
-	if err != nil {
-		return err
-	}
-	if required != nil && !leaf.capabilities.satisfies(required) {
-		return fmt.Errorf("%w: leaf lacks the group's required capabilities", errMlsInvalid)
+	if extension := mlsFindExtension(groupExtensions, mlsExtensionTypeRequiredCapabilities); extension != nil {
+		required := &mlsRequiredCapabilities{}
+		if err := mlsUnmarshal(extension.extensionData, required); err != nil {
+			return err
+		}
+		if !leaf.capabilities.satisfies(required) {
+			return fmt.Errorf("%w: leaf lacks the group's required capabilities", errMlsInvalid)
+		}
 	}
 	for index := range groupExtensions {
 		if extensionType := groupExtensions[index].extensionType; !leaf.capabilities.supportsExtension(extensionType) {
@@ -515,7 +503,7 @@ func (self *mlsRatchetTree) validateGroupCompatibility(leaf *mlsLeafNode, groupE
 	return nil
 }
 
-// §7.3 for a leaf entering this tree at a position, or replacing what is there: everything
+// RFC §7.3 for a leaf entering this tree at a position, or replacing what is there: everything
 // validateAlone checks, its source, the group's parameters, mutual credential support, and unique
 // signature and encryption keys among the other members.
 func (self *mlsRatchetTree) validateNewLeaf(leaf *mlsLeafNode, position mlsLeafIndex, expectedSource uint8, validation *mlsLeafValidation) error {
@@ -549,10 +537,10 @@ func (self *mlsRatchetTree) validateNewLeaf(leaf *mlsLeafNode, position mlsLeafI
 	return nil
 }
 
-// A joiner's check of a whole tree (§12.4.3.1), other than comparing its hash to the GroupInfo's:
+// A joiner's check of a whole tree (RFC §12.4.3.1), other than comparing its hash to the GroupInfo's:
 // every leaf is valid, every key appears once, every unmerged list is honest, and every parent is
 // parent-hash valid. Lifetimes are not held against a tree: a member may hold a long-expired
-// KeyPackage leaf and be no less a member (§7.3 makes this check only recommended).
+// KeyPackage leaf and be no less a member (RFC §7.3 makes this check only recommended).
 func (self *mlsRatchetTree) validate(validation *mlsLeafValidation) error {
 	if !mlsTreeLeafCountValid(self.leafCount()) || self.settings.MaximumLeafCount < self.leafCount() {
 		return fmt.Errorf("%w: tree of %d leaves", errMlsRefused, self.leafCount())
@@ -614,7 +602,7 @@ func (self *mlsRatchetTree) validate(validation *mlsLeafValidation) error {
 	return self.verifyParentHashes()
 }
 
-// §12.4.3.1's rules for one parent's unmerged list: each entry a non-blank leaf below it, listed by
+// RFC §12.4.3.1's rules for one parent's unmerged list: each entry a non-blank leaf below it, listed by
 // every non-blank node between that leaf and it.
 func (self *mlsRatchetTree) validateUnmergedLeaves(index mlsNodeIndex) error {
 	parent := self.nodes[index].parent
@@ -639,8 +627,8 @@ func (self *mlsRatchetTree) validateUnmergedLeaves(index mlsNodeIndex) error {
 	return nil
 }
 
-// The leftmost blank leaf, extending the tree when there is none (§7.7, §12.1.1). Refuses to pass the
-// widest tree the settings allow.
+// The leftmost blank leaf, extending the tree when there is none (RFC §7.7, RFC §12.1.1). Refuses
+// to pass the widest tree the settings allow.
 func (self *mlsRatchetTree) reserveLeaf() (mlsLeafIndex, error) {
 	leafCount := self.leafCount()
 	for index := range leafCount {
@@ -656,7 +644,7 @@ func (self *mlsRatchetTree) reserveLeaf() (mlsLeafIndex, error) {
 	return mlsLeafIndex(leafCount), nil
 }
 
-// Applies an Add (§12.1.1), returning the new member's leaf. The leaf must already be validated.
+// Applies an Add (RFC §12.1.1), returning the new member's leaf. The leaf must already be validated.
 func (self *mlsRatchetTree) addLeaf(leaf *mlsLeafNode) (mlsLeafIndex, error) {
 	index, err := self.reserveLeaf()
 	if err != nil {
@@ -678,15 +666,30 @@ func (self *mlsRatchetTree) addLeaf(leaf *mlsLeafNode) (mlsLeafIndex, error) {
 	return index, nil
 }
 
-// Applies a Remove (§12.1.3): blanks the leaf and its direct path and truncates the tree. Refuses a
-// leaf that is not a member.
+// Applies a Remove (RFC §12.1.3): blanks the leaf and its direct path, then halves the tree until
+// its right subtree holds a member (RFC §7.7). The root and right subtree go, blank or not, and the
+// left child becomes the root, so hashes below it stay valid. Refuses a leaf that is not a member.
 func (self *mlsRatchetTree) removeLeaf(leaf mlsLeafIndex) error {
 	if self.leafNode(leaf) == nil {
 		return fmt.Errorf("%w: removing leaf %d, which is blank", errMlsInvalid, leaf)
 	}
 	self.blankPath(leaf)
 	self.setNode(leaf.node(), mlsTreeNode{})
-	self.truncate()
+
+	rightHalfHasMember := func() bool {
+		leafCount := self.leafCount()
+		for index := leafCount / 2; index < leafCount; index++ {
+			if self.nodes[mlsLeafIndex(index).node()].leaf != nil {
+				return true
+			}
+		}
+		return false
+	}
+	for 1 < self.leafCount() && !rightHalfHasMember() {
+		width := (len(self.nodes) - 1) / 2
+		self.nodes = self.nodes[:width]
+		self.nodeHashes = self.nodeHashes[:width]
+	}
 	return nil
 }
 
@@ -694,21 +697,5 @@ func (self *mlsRatchetTree) removeLeaf(leaf mlsLeafIndex) error {
 func (self *mlsRatchetTree) blankPath(leaf mlsLeafIndex) {
 	for _, ancestor := range leaf.node().directPath(self.leafCount()) {
 		self.setNode(ancestor, mlsTreeNode{})
-	}
-}
-
-// Halves the tree until its right subtree holds a member (§7.7): the root and right subtree go,
-// blank or not, and the left child becomes the root. Hashes below the new root stay valid.
-func (self *mlsRatchetTree) truncate() {
-	for 1 < self.leafCount() {
-		leafCount := self.leafCount()
-		for index := leafCount / 2; index < leafCount; index++ {
-			if self.nodes[mlsLeafIndex(index).node()].leaf != nil {
-				return
-			}
-		}
-		width := (len(self.nodes) - 1) / 2
-		self.nodes = self.nodes[:width]
-		self.nodeHashes = self.nodeHashes[:width]
 	}
 }

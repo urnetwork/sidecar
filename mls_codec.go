@@ -1,4 +1,4 @@
-// The TLS presentation language as RFC 9420 uses it (§2.1): big-endian integers, fixed opaque
+// The TLS presentation language as RFC 9420 uses it (RFC §2.1): big-endian integers, fixed opaque
 // fields, optional<T> behind a presence octet, and vectors behind a variable-size length header.
 //
 // Both directions take only canonical encodings: a length header in its shortest form, a presence
@@ -21,7 +21,7 @@ import (
 	"fmt"
 )
 
-// The largest length a variable-size vector header carries (§2.1.2).
+// The largest length a variable-size vector header carries (RFC §2.1.2).
 const mlsVectorLengthMaximum = 1024*1024*1024 - 1
 
 var (
@@ -101,7 +101,7 @@ func (self *mlsEncoder) writeFixed(value []byte) {
 	self.encoded = append(self.encoded, value...)
 }
 
-// A length header in its shortest form (§2.1.2).
+// A length header in its shortest form (RFC §2.1.2).
 func (self *mlsEncoder) writeLength(length int) {
 	switch {
 	case length < 0 || mlsVectorLengthMaximum < length:
@@ -235,7 +235,7 @@ func (self *mlsDecoder) readFixed(length int) []byte {
 	return bytes.Clone(taken)
 }
 
-// A length header: refuses the 0b11 prefix and any value a shorter form could carry (§2.1.2).
+// A length header: refuses the 0b11 prefix and any value a shorter form could carry (RFC §2.1.2).
 func (self *mlsDecoder) readLength() int {
 	if self.err != nil {
 		return 0
@@ -305,7 +305,7 @@ func (self *mlsDecoder) readUint16Vector() []uint16 {
 	return values
 }
 
-// optional<T>'s presence octet: anything but 0 or 1 is malformed (§2.1.1). The caller reads the
+// optional<T>'s presence octet: anything but 0 or 1 is malformed (RFC §2.1.1). The caller reads the
 // value after it when present.
 func (self *mlsDecoder) readOptional() bool {
 	presence := self.readUint8()

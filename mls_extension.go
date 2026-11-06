@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// Registered extension types (§17.3).
+// Registered extension types (RFC §17.3).
 const (
 	mlsExtensionTypeApplicationId        uint16 = 0x0001
 	mlsExtensionTypeRatchetTree          uint16 = 0x0002
@@ -22,13 +22,13 @@ type mlsExtension struct {
 	extensionData []byte
 }
 
-// Extension, in §7.2's field order.
+// Extension, in RFC §7.2's field order.
 func (self *mlsExtension) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.extensionType)
 	encoder.writeVector(self.extensionData)
 }
 
-// Extension, in §7.2's field order.
+// Extension, in RFC §7.2's field order.
 func (self *mlsExtension) decode(decoder *mlsDecoder) {
 	self.extensionType = decoder.readUint16()
 	self.extensionData = decoder.readVector()
@@ -43,7 +43,7 @@ func (self *mlsEncoder) writeExtensions(extensions []mlsExtension) {
 	})
 }
 
-// Extension extensions<V>, refusing a list with two of one type (§13.4).
+// Extension extensions<V>, refusing a list with two of one type (RFC §13.4).
 func (self *mlsDecoder) readExtensions() []mlsExtension {
 	var extensions []mlsExtension
 	seenTypes := map[uint16]bool{}

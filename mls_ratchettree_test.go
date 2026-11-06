@@ -504,8 +504,14 @@ func TestMlsFilteredDirectPathsOfFigure11(t *testing.T) {
 		var got []mlsNodeIndex
 		for _, entry := range tree.filteredDirectPath(c.leaf) {
 			got = append(got, entry.node)
-			if sibling, _ := mlsSiblingOnPath(entry, c.leaf, 8); sibling != entry.copathChild {
-				t.Errorf("leaf %d: copath child of %d is %d, want %d", c.leaf, entry.node, entry.copathChild, sibling)
+			left, _ := entry.node.left()
+			right, _ := entry.node.right()
+			wantChild := left
+			if left.subtreeContains(c.leaf.node()) {
+				wantChild = right
+			}
+			if entry.copathChild != wantChild {
+				t.Errorf("leaf %d: copath child of %d is %d, want %d", c.leaf, entry.node, entry.copathChild, wantChild)
 			}
 		}
 		if !slices.Equal(got, c.want) {
@@ -514,21 +520,8 @@ func TestMlsFilteredDirectPathsOfFigure11(t *testing.T) {
 	}
 }
 
-// The child of a path node that is not on the leaf's side.
-func mlsSiblingOnPath(entry mlsFilteredPathNode, leaf mlsLeafIndex, leafCount uint32) (mlsNodeIndex, bool) {
-	left, ok := entry.node.left()
-	if !ok {
-		return 0, false
-	}
-	right, _ := entry.node.right()
-	if left.subtreeContains(leaf.node()) {
-		return right, true
-	}
-	return left, true
-}
-
 // An unmerged leaf keeps a node on the path though the copath child's own node is blank: the
-// parenthetical in §4.1.2.
+// parenthetical in RFC §4.1.2.
 func TestMlsUnmergedLeavesCountTowardTheResolution(t *testing.T) {
 	blank := mlsTreeNode{}
 	tree := mlsShapedTree(mlsShapeLeaf("A"), mlsShapeParent("X", 1), mlsShapeLeaf("B"))
@@ -804,7 +797,7 @@ func TestMlsTreeHashCacheFollowsChanges(t *testing.T) {
 	}
 }
 
-// §7.8: a blank leaf still hashes with its index, so two blanks differ.
+// RFC §7.8: a blank leaf still hashes with its index, so two blanks differ.
 func TestMlsTreeHashOfBlankLeavesDependsOnPosition(t *testing.T) {
 	tree := mlsShapedTree(mlsShapeLeaf("A"), mlsTreeNode{}, mlsTreeNode{}, mlsTreeNode{}, mlsTreeNode{}, mlsTreeNode{}, mlsShapeLeaf("D"))
 	first, err := tree.nodeTreeHash(2)
@@ -927,7 +920,7 @@ func TestMlsValidateRefusesAnAlteredParentHash(t *testing.T) {
 	}
 }
 
-// The hash checks alone would pass here: this is §7.9.2's third condition. A leaf dropped from P's
+// The hash checks alone would pass here: this is RFC §7.9.2's third condition. A leaf dropped from P's
 // unmerged list, while kept under D, makes P's list disagree with C's resolution.
 func TestMlsValidateRefusesAParentListingTooFewUnmergedLeaves(t *testing.T) {
 	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
@@ -997,14 +990,52 @@ func TestMlsValidateRefusesAnIntermediateOmittingAnUnmergedLeaf(t *testing.T) {
 	}
 }
 
-func TestMlsValidateRefusesARepeatedEncryptionKey(t *testing.T) {
-	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
-	root := mlsTreeRoot(tree.leafCount())
-	mlsReplaceParent(tree, root, func(parent *mlsParentNode) {
-		parent.encryptionKey = tree.leafNode(3).encryptionKey
-	})
+// Two leaves on one key, each otherwise valid: nothing but the uniqueness rule can catch this.
+func TestMlsValidateRefusesTwoLeavesOnOneEncryptionKey(t *testing.T) {
+	suite := mlsTestSuiteX25519
+	group := mlsNewTestGroup(t, suite)
+	tree := group.members[0].tree
+	twin := mlsNewTestClient(t, suite, "twin")
+	leaf := twin.keyPackage.leafNode
+	leaf.encryptionKey = tree.leafNode(0).encryptionKey
+	if err := leaf.sign(suite, twin.signatureKey, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tree.addLeaf(&leaf); err != nil {
+		t.Fatal(err)
+	}
 	if err := tree.validate(group.validation); !errors.Is(err, errMlsInvalid) {
 		t.Fatal(err)
+	}
+}
+
+// A committer free to pick its path's keys, with every hash and signature in order, reuses another
+// member's key at the root (RFC §12.4.3.1's last check). Without the rule that member could read
+// what is encrypted to the root while the tree invariant says it holds nothing there.
+func TestMlsValidateRefusesAParentOnAnotherNodesKey(t *testing.T) {
+	suite := mlsTestSuiteX25519
+	group := mlsNewMergedTestGroup(t, suite, 2)
+	member := group.members[0]
+	tree := member.tree.clone()
+
+	path := tree.filteredDirectPath(0)
+	tree.blankPath(0)
+	parentHash, err := tree.installPathKeys(path, [][]byte{tree.leafNode(1).encryptionKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := *tree.leafNode(0)
+	leaf.parentHash = parentHash
+	if err := leaf.sign(suite, member.signatureKey, group.groupId, 0); err != nil {
+		t.Fatal(err)
+	}
+	tree.setNode(mlsLeafIndex(0).node(), mlsTreeNode{leaf: &leaf})
+
+	if err := tree.validate(group.validation); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+	if err := tree.verifyParentHashes(); err != nil {
+		t.Fatalf("the hashes were meant to hold: %v", err)
 	}
 }
 
@@ -1129,7 +1160,8 @@ func TestMlsValidateChecksRequiredCapabilities(t *testing.T) {
 	}
 }
 
-// §13.4: every GroupContext extension must be in each member's capabilities, default ones implicitly.
+// RFC §13.4: every GroupContext extension must be in each member's capabilities, default ones
+// implicitly.
 func TestMlsValidateChecksGroupContextExtensions(t *testing.T) {
 	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
 	implicit := *group.validation
@@ -1182,8 +1214,8 @@ func TestMlsValidateNewLeafRefusals(t *testing.T) {
 	}
 }
 
-// §7.3's fourth check, in both directions. Only basic parses today, so a second type exists only as a
-// member's in-memory leaf, which is all this check reads.
+// RFC §7.3's fourth check, in both directions. Only basic parses today, so a second type exists
+// only as a member's in-memory leaf, which is all this check reads.
 func TestMlsValidateNewLeafChecksMutualCredentialSupport(t *testing.T) {
 	suite := mlsTestSuiteX25519
 	group := mlsNewMergedTestGroup(t, suite, 2)
