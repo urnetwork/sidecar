@@ -270,7 +270,7 @@ func TestVerifySignedRefusesRewrittenType(t *testing.T) {
 // only the enum can refuse it.
 func TestVerifySignedRefusesUnknownTypes(t *testing.T) {
 	publicKey := testEd25519Public()
-	for _, signedType := range []SignedType{0, 1, 0x1100, 0x12FF, 0x1402, 0x7FFFFFFF, -1} {
+	for _, signedType := range []SignedType{0, 1, 0x1100, 0x12FF, 0x14FF, 0x7FFFFFFF, -1} {
 		signed := testSignEd25519(testPurpose, signedType, testBody)
 		err := VerifySigned(signed, testPurpose, signedType, SignedKeyAlgEd25519, publicKey)
 		if !errors.Is(err, ErrSignedTypeUnknown) {
