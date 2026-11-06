@@ -103,19 +103,14 @@ func (self *repository) legTagFindings() []string {
 }
 
 // The caller's GOFLAGS, which every go command here clears so a leg stays what it names. A tag in
-// it is a tag on whatever else that environment builds, the release's own steps included.
+// it is a tag on whatever else that environment builds, the release's own steps included. Read as
+// whole words, because GOFLAGS may quote a -tags value.
 func callerGoflagsFindings(goflags string) []string {
 	findings := []string{}
-	for _, flag := range strings.Fields(goflags) {
-		flag = strings.TrimLeft(flag, "-")
-		value, isTags := strings.CutPrefix(flag, "tags=")
-		if !isTags {
-			continue
-		}
-		for _, tag := range unshippableTags {
-			if slices.Contains(strings.Split(value, ","), tag) {
-				findings = append(findings, findingf("GOFLAGS carries %s, so a release built here is built with it", tag))
-			}
+	for _, tag := range unshippableTags {
+		word := regexp.MustCompile(`(^|[^a-z0-9_])` + tag + `($|[^a-z0-9_])`)
+		if word.MatchString(goflags) {
+			findings = append(findings, findingf("GOFLAGS carries %s, so a release built here is built with it", tag))
 		}
 	}
 	return findings

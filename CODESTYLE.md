@@ -313,7 +313,7 @@ Dependencies point one way, and these packages are the leaves everything else re
 ## Dependencies
 
 - **Modules.** Beside this repository's own, a sidecar module requires connect and connect's replaced forks, and third-party modules. Never server, sdk, sn, proxy or userwireguard. The root requires no module of this repository, so `cli/`'s and `smtpproof/`'s requirements stay out of consumers' graphs.
-- **`dependencies.yml` lists each module** a leg links, with its SPDX id, why it is here and the legs that link it (client, engine, cli, test). Add the row in the change that adds the require, and drop `planned: true` in the change that first links a planned module. `make check` reads each id against the module's own license files.
+- **`dependencies.yml` lists each module** a leg links, with its SPDX id, why it is here and the legs that link it (client, engine, cli, test). Add the row in the change that adds the require, and drop `planned: true` in the change that first links a planned module, which `make check` reminds you of. It reads each linked module's id against the module's own license files.
 - **Licenses** are MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC or MPL-2.0. GPL family, SSPL, BUSL, custom and unlicensed modules are refused. A familiar license with an added clause is custom.
 - **Versions.** A shared module matches connect, sdk and server, because an uncoordinated bump fails server's `-mod=readonly` build. `golang.org/x/text` is one version on every leg, §11.14's normalizer 1's, and a new version is a new normalizer, not a bump.
 - **Replaces** are §4.7's four, and a nested module repeats them one level up, plus this repository's own. Go does not inherit a replace. Any other goes through an owner decision.
