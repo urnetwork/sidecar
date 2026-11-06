@@ -2,7 +2,7 @@
 
 ## 1. Reviews answered
 
-- **Date:** 2026-11-04; final state 2026-11-05. **From:** the design team. **For:** the reviewers and the owner.
+- **Date:** 2026-11-04; final state 2026-11-06. **From:** the design team. **For:** the reviewers and the owner.
 - **Reviews of the 2026-11-03 draft** (DESIGN.md, SHA-256 `12aba8d5…`, 9,256 lines):
   - R1, DESIGN-REVIEW1.md (Astra);
   - R2, DESIGN-REVIEW2.md (Sol);
@@ -13,9 +13,13 @@
 - **Also folded in:** the internal reports CHECK4 and CRITIC4. Their points overlap the reviews', and the same entries dispose of them. They are listed under "Sources" where they apply. peer/INDEX.md indexes them; section 4 of this file does not.
 - **Second round:** a final panel of eight clusters re-checked the five reviews' findings against the section files after FIX3 (peer/FINAL-*.md, 2026-11-05; section 6.4).
 - **Final rounds:** rounds 3 and 4 fixed what the panel left, independent checkers re-checked its ten majors, and six checkers cross-checked the sections (2026-11-05; section 6.7). Rounds 5 and 6 then applied owner decisions 146-149 to the four majors the final re-check left partial (2026-11-05; section 6.8). The statuses here are final.
-- **Revised DESIGN.md** (SHA-256 `8bff53d4cbb23d116753cd8ada85fd58e53ddeaf0e120a8d592aa83aebd251aa`, 14,724 lines, 254,532 words, the file now in the sidecar checkout): the current build, assembled from the 23 section files as round 6 left them (sections/01-CTX.md to 23-PHASE.md, last edited 2026-11-05 09:51), under owner decisions 1-149. Its validation passed: no duplicate or undefined ids, every link resolving, no live superseded option, no open question, and all 149 owner decisions cited. All §N.k references and ids below are to that text.
+- **v1 additions:** owner decisions 150-184 then added the indexer, the search index, versionless objects, search in `ur` and MCP, and the team directory (2026-11-05; section 6.9). They answer no finding of the earlier reviews. The final meta review has since reviewed them, and several of its findings concern them (F07-F09, F16, F18-F22 among others; section 7).
+- **The owner's SDK fixes** (2026-11-05): at the owner's instruction after the v1 build, the two SDK residuals section 6.9 flagged were designed: stale page Workers when `self_admit` is off (D-TEAM-29, §7.10's `stale` row; FS-97), and member device revocation from apps (D-CORE-20 in §5.4 and §5.6, D-SDK-30 in §18.5; FS-98). Independent checkers reviewed them before the rebuild, and owner decision 185 answered the question one of them raised.
+- **Final meta review** (DESIGN-REVIEW-META.md; Astra MAX, 2026-11-05), of the 2026-11-05 build and this file. It reviewed DESIGN.md (SHA-256 `41ba66700e65969c4b8ff7a499e9ba6b7f79189a7a903848711a6638a9f73925`, 19,005 lines, 339,101 words), assembled under owner decisions 1-184 from the 23 section files as round 3 of the v1 additions, the code-citation refresh and the front matter's id-range fix left them (last edited 2026-11-05 20:11), and this file as it then stood (SHA-256 `277dd50e6610671205ab2c1650e231a5da340c02a122da231bf89d111fee06e4`, 1,815 lines), which it cites as "R" by line. Its 22 findings, 5 acknowledged residuals and 7 conditional constraints were incorporated into the section files on 2026-11-06 (section 7).
+- **Owner decisions 185-191** (2026-11-05 and 2026-11-06; section 2.4): 185 on the SDK fixes' question, and 186-191 on the meta review's.
+- **Revised DESIGN.md** (SHA-256 `0d12d726a3651b9eb2e1bf70d58bb4e9dec0e0eaa4bf0a6ec7ba9aa6a542bc6e`, 21,286 lines, 389,350 words, the file now in the sidecar checkout): the current build, assembled from the 23 section files as the final meta review's incorporation left them (2026-11-06), under owner decisions 1-191. Its validation passed: no duplicate or undefined ids, every link resolving, no live superseded option, no open question, and all 191 owner decisions cited. Its status line says it was revised on 2026-11-06 after the final meta review, with owner decisions 185-191. All §N.k references and ids below are to that text. The v1 additions' new §11.14, §16.10 and §16.11 renumbered the subsections after them, so this file's references to those subsections carry their new numbers (§11.15-§11.22, §16.12-§16.18).
 
-**How to read this.** Section 3 has one entry per consolidated finding, T1-01 to T5-35, grouped by theme. Section 4 maps every id from each review to its entry.
+**How to read this.** Section 3 has one entry per consolidated finding, T1-01 to T5-35, grouped by theme. Section 4 maps every id from each review to its entry. Section 7 has one entry per item of the final meta review, under the review's own ids, and section 4.6 indexes them.
 
 - **Sources** use the reviews' own ids: R1 F01, R3 C1, R3b finding 1, R1b invariant 1, and so on.
 - **Verdicts:**
@@ -30,11 +34,13 @@
   - *disclose*;
   - *decline*;
   - *merged*: governed by another entry;
-  - *owner item*: the owner has now decided it.
+  - *owner item*: the owner has now decided it;
+  - *narrowed claim* (section 7): the mechanism stays, and the text now claims only what it supports;
+  - *response update* (section 7): only this file changes.
 - **Tests** name deterministic schedules (FS-n in §22.8, checked against the FI-n invariants), §22.5's component rows, §22.6's fuzz targets and §22.7's suites. None of them has run: nothing in DESIGN.md is implemented.
-- **Final status** (*Final* in section 3, the last column in sections 4 and 5) is the second-round panel's, as the final rounds changed it (sections 6.7 and 6.8):
+- **Final status** (*Final* in section 3, the last column in sections 4.1 to 4.5 and 5) is the second-round panel's, as the final rounds changed it (sections 6.7 and 6.8):
   - *resolved*: the text does what the reviewer asked, or an equivalent, and the main failure trace is tested; for a gap the panel left, an independent re-check found it closed;
-  - *fixed*: one of rounds 3 to 6 closed the gap the panel left and the build validated, but no independent reviewer has re-checked the fix;
+  - *fixed*: one of rounds 3 to 6 closed the gap the panel left, or the meta review's incorporation closed one of that review's items (section 7), and the build validated, but no independent reviewer has re-checked the fix;
   - *partial*: something the reviewer explicitly asked for is still missing (section 6.1);
   - *disclosed*: an owner decision keeps the residual, and the text states it truthfully;
   - *declined-as-stated*: we declined, and our reason holds;
@@ -50,9 +56,9 @@
 
 **Authority and keys (§6-§8, §10).** One hash-chained authorization log per network replaces bases plus delta sequence numbers. Every consumer pins (n, A_n), and the gate compares positional shrinks and timed expiries (§7.9, §10.6; D-TEAM-19). A `gen/<g>` claim is the only place a generation exists (D-KEYS-15). Delegations get DelegationWraps, and owner decision 114's reap residual is stated where readers will see it (D-KEYS-16). §2.8 publishes one 72-hour bound with its exceptions. Witnesses compare authorization pins, generations and ref heads from M2, and get control contracts at M4 (D-PROTO-17, D-PROTO-18). The rest of the theme adds a signed recovery veto (D-TEAM-21), typed `Signed` records (D-PROTO-7), drop keys inside GenRotate (D-KEYS-17) and one leaves rule for owner decision 144 (§7.9).
 
-**Runtime and approvals (§4, §5, §16, §18).** Approval uses are reserved before their effect, and decisions bind their requester and auth pin (D-MCP-11, D-MCP-12). Harness evidence cannot be bound to the harness binary, so under owner decision 142 it counts in a tainted run only where a rule names it (D-MCP-9). Restore writes only a run's attributed edits (attribution still lacks a pre-edit hash: section 6.1), taint survives restarts, and MCP signs no policy (D-MCP-15 to D-MCP-17). The SDK separates transport loss from revocation and reports keystore states (D-SDK-14, D-SDK-15). Wakes stay within one Redis slot, and HTTPS-only clients hold a poll lease (D-SDK-16, D-SDK-17). Browser keys live in their own origin, the page Worker links no connect package, and the device role is `sidecar/device` (D-SDK-18 to D-SDK-20). Refresh needs a DPoP proof (Q-CORE-4).
+**Runtime and approvals (§4, §5, §16, §18).** Approval uses are reserved before their effect, and decisions bind their requester and auth pin (D-MCP-11, D-MCP-12). Harness evidence cannot be bound to the harness binary, so under owner decision 142 it counts in a tainted run only where a rule names it (D-MCP-9). Restore writes only a run's attributed edits, whose before- and after-hashes chain across the scan (section 6.1), taint survives restarts, and MCP signs no policy (D-MCP-15 to D-MCP-17). The SDK separates transport loss from revocation and reports keystore states (D-SDK-14, D-SDK-15). Wakes stay within one Redis slot, and HTTPS-only clients hold a poll lease (D-SDK-16, D-SDK-17). Browser keys live in their own origin, the page Worker links no connect package, and the device role is `sidecar/device` (D-SDK-18 to D-SDK-20). Refresh needs a DPoP proof (Q-CORE-4).
 
-**Edges, mail and network (§6, §9, §12-§15, §17).** The SMTP proof now covers the MX's authenticated replies (D-SMTP-22), and DATA mode's size cap is disclosed. CAA has strong and weak modes (D-DNS-9), and strict mail's claim is limited to customer-signed MX and TLSA (D-MAIL-12). Custom SNI reaches tlsedge (D-TLS-12), and dispatch keys on the signed application mode (D-TLS-13). Reports get a bounded aggregate parser (D-SMTP-23), and receivers seal reception-time evidence (D-MAIL-14). The REQUIRETLS label, the report-listener exception (still missing from D-MAIL-1 and the X6 row: section 6.1) and iOS foreground receipt are disclosed, and burner DKIM keeps the burner's MX (D-DNS-11). Sockets get a control-plane bound without count caps (D-SOCK-15). Native flows need a WindowDelegation under C13's seal, and the bridge gains verified states, an own-listener guard, a share preflight and a dial fence (D-PROTO-19, D-BRIDGE-17 to D-BRIDGE-21).
+**Edges, mail and network (§6, §9, §12-§15, §17).** The SMTP proof now covers the MX's authenticated replies (D-SMTP-22), and DATA mode's size cap is disclosed. CAA has strong and weak modes (D-DNS-9), and strict mail's claim is limited to customer-signed MX and TLSA (D-MAIL-12). Custom SNI reaches tlsedge (D-TLS-12), and dispatch keys on the signed application mode (D-TLS-13). Reports get a bounded aggregate parser (D-SMTP-23), and receivers seal reception-time evidence (D-MAIL-14). The REQUIRETLS label, the report-listener exception (which D-MAIL-1 and the X6 row now name: T4-11) and iOS foreground receipt are disclosed, and burner DKIM keeps the burner's MX (D-DNS-11). Sockets get a control-plane bound without count caps (D-SOCK-15). Native flows need a WindowDelegation under C13's seal, and the bridge gains verified states, an own-listener guard, a share preflight and a dial fence (D-PROTO-19, D-BRIDGE-17 to D-BRIDGE-21).
 
 **Ops, tests and phasing (§19-§23).** The durability table now says what holds, but for two corrections (SL-N4, OT-N1): RPO 0 for drives and hosts, and at the site only what devices hold (§19.6). Sidecar tables get a daily off-site dump (D-OPS-18), and sets get protection states. §19.10 recovers from a Postgres or site loss with CT replay, re-registration and log resumption. Owner decision 143 pages infrastructure out of hours from M3. Billing uses pre-aggregated daily meters, idempotent usage batches, relayed reservations and one draw order (D-QUOTA-8, D-QUOTA-4, D-QUOTA-9), and holds have kinds (D-ABUSE-6). Deterministic fault schedules FS-1 to FS-63 run against FI-1 to FI-14, with a TLA+ model and Porcupine (D-TEST-10). Formats freeze twice (D-PHASE-7), 0x0010 needs an interop artifact, and unfinished migrations stay behind a build tag (D-OPS-6). G0's word ceilings gave way to a density rule (T5-30).
 
@@ -72,6 +78,8 @@
 ### 2.2 Counts
 
 155 consolidated entries cover the 264 items section 4 indexes (R1 42, R1b 54, R2 51, R3 80, R3b 37), and the internal reports' items.
+
+The final meta review's own line: 22 findings, 5 residuals and 7 constraints, 34 items, each with one entry in section 7 and one row in section 4.6. 33 are valid and one partly valid (CC-06); 23 are fixes, 6 fix-modified and 5 narrowed claims (F12, F19, F21, CC-02, CC-05), and all 34 are *fixed* in design. The tables below count the five earlier reviews only.
 
 | Theme | Entries | Valid | Partly valid | Accepted residual | Already fixed | Invalid |
 |---|---:|---:|---:|---:|---:|---:|
@@ -98,7 +106,7 @@
   - T1-05, a fix whose git model the owner confirmed (Q-EVS-8, owner decision 141).
 - **The storage tier.** The owner decided Q-OPS-10 (owner decision 145).
 - **Peer-review questions.** Peer review closed the eleven questions left to it, plus Q-QUOTA-3's residual (section 5). The final panel found two closures partial, Q-CTX-4 and Q-OPS-2, and round 3 fixed both.
-- **Raised during the response.** Q-EVS-9 is closed by owner decision 140's corrected record (section 6.3). No owner question is open.
+- **Raised during the response.** Q-EVS-9 is closed by owner decision 140's corrected record (section 6.3). The meta review's F12 raised Q-EVS-24, decided by owner decision 186 and refined by 190, and owner decisions 188 and 191 amended Q-PROTO-4's answer (section 7). No owner question is open.
 
 **Final status.** An entry takes the weakest final status of a finding it answers, where the gap lies in that entry's mechanism; a gap in another entry's mechanism is noted as related. The final rounds moved 14 of the panel's 21 partial entries: 13 to *fixed*, and T5-04 to *resolved*, its two majors re-checked (section 6.7). Of the other seven, the close-out build resolved T4-11, and rounds 5 and 6 moved T1-01, T1-16, T2-05, T2-06, T2-18 and T5-12 to *fixed* (owner decisions 146-149; section 6.8). No entry is partial.
 
@@ -128,9 +136,10 @@
 Nothing is frozen by this response. Under D-PHASE-7, each format freezes twice: its specification at its milestone's entry review (Gn-in) and its bytes at the exit review (Gn-out) (§22.10, §23.8). Before a final freeze, only local, T3, canary and staging environments hold the format. Production data starts at M3.
 
 - **At M2's entry: the specifications of §7.9's records, format 1, credential 0xF552 and suite 0x0010's fields.**
-  - The five reviews and the second-round panel are the peer review those specifications needed, and Q-EVS-8 is decided.
+  - The five reviews and the second-round panel are the peer review those specifications needed, and Q-EVS-8 is decided. The exception was format 1's reservations for format 2 and the team directory (D-PHASE-9), which the v1 additions brought. The final meta review has since read them with the rest of the 2026-11-05 build, and its fixes changed several of M2's specifications; the directory's reservations now include its admin-only erasure (F01; section 7).
   - What remains:
     - the open items that sections 6.1 and 6.2 place at G0 or M2-in and the residuals of section 6.8, and a reviewer's re-check of the items fixed there, the majors ST-N1, SL-N1, AU-N2 and WR-N1 among them;
+    - a reviewer's re-check of the meta review's entries whose gate is M2-in (section 7; section 4.6's By column);
     - `EvsCommit.tla` written and passing TLC at its bounds;
     - the FS rows written as tests against the fakes;
     - the vector schemas fixed;
@@ -174,11 +183,26 @@ Nothing is frozen by this response. Under D-PHASE-7, each format freezes twice: 
 - **147.** WR-N1 (2026-11-05): phones keep their newest 64 KiB of authorization-log entries and serve proofs; §7.9 stands, and FS-17 follows it.
 - **148.** ST-N1 (2026-11-05): removal folds never blind-delete an index entry; they write a versioned tombstone marker by If-Match, garbage-collected once the fold horizon passes it.
 - **149.** AU-N2 (2026-11-05): a scoped admission by a binding the compromise cascade restored activates through the 72 h recovery window with admin veto; the cascade re-seals keychains, and backups exposed to the voided binding are re-enrolled.
-- **150.** Terminology (2026-11-05): a network's always-on point device for its background services is the "indexer"; the next pass applies the term, which DESIGN.md does not use yet.
+- **150.** Terminology (2026-11-05): a network's always-on point device for its background services is the "indexer". DESIGN.md now uses the term, defined in §3.6 and Appendix C, and keeps "always-on" only as a device property.
+- **151-157.** The search index (2026-11-05): each repo keeps an encrypted trigram index, on by default, that its committers update with their commits. Clients search it locally, merging two latest time buckets at once and the all partition in the background or on "search more". A roll-up folds each expired bucket into all, run by the indexer, else by the first writer after expiry (§11.14).
+- **158-165.** Versionless objects (2026-11-05): versioning is set per object, the index is always versionless, and versionless files are allowed in every repo kind but config and mailcfg. Replaced content is purged about a minute after its replacement commits, git large files go through git-lfs, and each network's default rule, which its admins can edit, turns versioning off above 64 MiB. All of it ships in v1 as storage format 2, whose numbers format 1 reserves at M2 (§11.7).
+- **166.** CLI and MCP search (2026-11-05): `ur search` and the MCP search tools search the repos the caller can read, including for the agents working on a task (§16.10).
+- **167-170, 172-176 and 179-184.** Owner questions (2026-11-05): the owner's answers to the 15 questions the v1 designs raised, Q-EVS-19 to Q-EVS-23, Q-PHASE-9, Q-PHASE-10, Q-MCP-7 to Q-MCP-9, Q-SDK-6, Q-PROTO-4, Q-ACL-11, Q-KEYS-16 and Q-ABUSE-7. Among them, format 2 is its own milestone, M10 (169); runs in team networks announce themselves by default (170); an admin drop-history action ships, cancellable for 7 days, and a preservation hold defers its deletions silently (173, 183, 184); and phones may ask an indexer to search, with connect rounding those contracts' byte reports up to 128 KiB (175, 176). The record corrects two lines: 173's hold line, which the design team added and 184 replaces, and 176's cost, which is about 5 MiB a day per phone, not 2.5.
+- **171.** The team directory (2026-11-05): one repo per team indexes every announcement of runs, repos and workers, each with who, what and where, and members request access to repos and workers through it (§16.11).
+- **177, 178.** No indexer by default (2026-11-05): a network has none until one is designated, so a phone downloads and searches its own index; once an indexer serves a repo, phones send "search more" to it (§3.6).
+- **185.** Presence countersignature (2026-11-05): a `compromise` SidecarRevoke, and a KeyRevoke of a presence key, carry that key's countersignature whenever the signing device registered a live presence key, and api and every member device verify it; it amends D-CORE-20 and D-TEAM-26.
+- **186.** F12 (2026-11-05): P0 work stays unlimited, never queued, refused or paced, and FI-14's wear bound exempts its writes, disclosed with P0 dashboards and alarms; it amends owner decision 140's hard budget for P0 writes only. The team had recommended (a), a reserved budget with the fan-out paced.
+- **187.** The countersignature's extension (2026-11-05): 185's countersignature also covers every SidecarRevoke of another device, for any reason, every Suspend of another device, and every RecoveryVeto.
+- **188.** F18 (2026-11-06): owner decision 176's five-page promise holds through C19's 55-minute windows, which withhold reports to the window's end at a 256 KiB floor each way, with a Ping a minute in the foreground; about 10 MiB a phone-day.
+- **189.** The countersignature's reach (2026-11-06): it also covers every SidecarAdmit, AdmissionConfirm and OwnerConfirm of an untagged sidecar, every AdminSet change and MemberRevoke, and every RecoveryBind and RecoveryRebind.
+- **190.** After a P0 storm (2026-11-06): the write bucket floors at zero and P0's excess is forgiven, counted but never repaid, so the other classes resume when the storm ends; each storm's extra wear is kept, ~0.23 drive-writes a 6-hour storm at the review's stress. It refines 186.
+- **191.** A lost search session (2026-11-06): a search that finds its foreground indexer session lost (120 s with no Pong) re-establishes it at once by its own Hello, so that contract, and the successor connect requests with it, keep the search's time for 300 days; §2.10's threat table and connect-5 disclose it beside a failover's window. It narrows 188's "never at searches"; waiting for the keepalive, which could stall a search for up to a minute, was not taken.
+
+Decisions 150-184 are the v1 additions (section 6.9), not answers to a review finding. Decision 185 answered the question the owner's SDK fixes raised (section 1), and decisions 186-191 came with the final meta review (section 7).
 
 ## 3. Responses by theme
 
-Each entry gives its sources, then its verdict and disposition, then what changed and where (new or changed ids in the text), then its tests. "T6" refers to the storage-tier redesign of section 3.6, which replaced parts of several T1 resolutions. Each entry describes the mechanism the text now holds. Its last line, *Final*, gives the second-round panel's status (section 1) and the new issues of section 6.2 that touch it.
+Each entry gives its sources, then its verdict and disposition, then what changed and where (new or changed ids in the text), then its tests. "T6" refers to the storage-tier redesign of section 3.6, which replaced parts of several T1 resolutions. Each entry describes the mechanism the text now holds. Its last line, *Final*, gives the second-round panel's status (section 1) and the new issues of section 6.2 that touch it. Where the final meta review narrowed an entry's claim, the entry says so and points to section 7.
 
 ### 3.1 Storage commit protocol (T1)
 
@@ -186,21 +210,21 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Changed:* in §11.8's write rules, only the head If-Match decides. Other families are create-only, except the fences `repo/` and `slot/`, and `idx/`, a cache that only folds of committed versions write (§11.7). I-EVS-1 to I-EVS-7 are new; D-EVS-13 and §3.7 F2 change to match.
 - *Not adopted:* R3b's immutable per-push entry objects. A head read would then need a LIST or a whole-ref manifest, against owner decision 2's 2-3 GET read.
 - *Tests:* FS-1, FS-2, FS-57; TLC on `EvsCommit.tla`.
-- *Final:* fixed (owner decision 148; rounds 5-6): 5g reads entries after the head and keeps that head's horizon, and removal folds now write versioned tombstone markers with If-Match, never blind deletes, so no late or redundant fold deletes an entry a later fold wrote (ST-N1; section 6.2). The batch records a head names by push id and place are the panel's accepted equivalent of R3b's per-push objects.
+- *Final:* fixed (owner decision 148; rounds 5-6): 5g reads entries after the head and keeps that head's horizon, and removal folds now write versioned tombstone markers with If-Match, never blind deletes, so no late or redundant fold deletes an entry a later fold wrote (ST-N1; section 6.2). The batch records a head names by push id and place are the panel's accepted equivalent of R3b's per-push objects. Its dependence on the store's ordering, which the meta review's K01 named, is now D-OPS-20's tested settle rule (FS-114, FI-30, StoreSettle.tla): fixed, for re-check at M2-in (section 7).
 
 **T1-02. Uncertain head-CAS outcomes entered cleanup, and retries could not find their commit.** R1 F08; R1b F06, invariant 2; R2 F07; R3 C1; R3b finding 1. *Valid; fix.*
 - *Changed:* §11.8 Outcomes (D-EVS-23):
   - A push id names one statement. Its retry returns the original version from the window or the log pages of (b, b+64].
   - No answer deletes anything. A dead push's record and slots go only through evacuation's Resolve.
-  - Every refusal rests on a cluster read of the head. A refusal from a check outside the head first raises the ref's fence.
+  - Every refusal rests on a cluster read of the head. A refusal from a check outside the head first raised the ref's fence, which closed only attempts that had already arrived; a terminal refusal now rests on the head's record (narrowed by the meta review's F10; section 7).
   - An unknown outcome reissues the identical PUT only within 5 s of step 4.
 - *Tests:* FS-1 (a lost response, 65+ commits, concurrent retries, a fenced refusal), FS-57, FS-62.
-- *Final:* resolved. New: SC-N1 (major; resolved), SC-N3 and SC-N4 (fixed).
+- *Final:* resolved. New: SC-N1 (major; resolved), SC-N3 and SC-N4 (fixed). Its two fixes stand, as the meta review found: no cleanup at answer time, and the bounded lookup of a committed push.
 
 **T1-03. Pending versions could evict the committed version of a path.** R1 S01; R1b S02, invariant 6. *Valid; fix, as amended by T6.*
 - *Changed:* index entries hold only committed versions, written by lazy folds (§11.7; D-EVS-31). Pushes write nothing to `idx/`, so no pending version exists to evict anything. A path's newest committed version is its folded entry or a newer window version. Reads, listings and the path-level CAS all use that rule (I-EVS-4, I-EVS-6; §2.8 evs-11). T1's cap of four pending versions and PATH_BUSY are gone.
 - *Tests:* FS-7, FS-58.
-- *Final:* resolved. The lazy-fold rule it adopted had ST-N1, now fixed (owner decision 148; rounds 5-6; section 6.2).
+- *Final:* resolved. The lazy-fold rule it adopted had ST-N1, now fixed (owner decision 148; rounds 5-6; section 6.2). Its dependence on the store's ordering is now D-OPS-20's tested settle rule (the meta review's K01; FS-114, FI-30, StoreSettle.tla): fixed, for re-check at M2-in (section 7).
 
 **T1-04. Orphan GC could not find never-logged uploads, and raced publication.** R1 S03; R1b S03, invariant 6; R2 F10; R3 major "GC and quotas" (GC half). *Valid; fix-modified (receipts and evacuation instead of a history walk).*
 - *Changed:*
@@ -218,7 +242,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - The local tier publishes through proc-receive with per-ref statuses and a journal (§11.11; D-EVS-22, D-EVS-28).
 - *Not adopted:* landing plus an automatic merge push (CRITIC4). The tip stays undefined until the merge lands, and sidecar/market2.md:519-520 forbids automatic merges.
 - *Tests:* FS-5, FS-1, §22.7 S2.
-- *Final:* resolved. New: SC-N1 (major; resolved).
+- *Final:* resolved. New: SC-N1 (major; resolved). It stays resolved after the meta review; F11, the git-lfs tip check, is a new v1 seam, fixed (section 7).
 
 **T1-06. The revocation gate did not fence the commit.** R1 F09; R1b F07, invariant 3; R2 F19. *Valid; fix (with T2-01).*
 - *Changed:* the gate object left `repo/`. Statements declare an AuthPin and a generation pin. Step 7's If-Match commits only if the pins satisfy §10.6's predicate against the newest state and do not fall below the head's (§11.8 Gate; D-EVS-18).
@@ -232,9 +256,9 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - A member-device removal or a compromise makes an epoch due at once. In general, config and mailcfg repos, creations then wait for the map (412 PATH_EPOCH_DUE).
   - The map binds its source version and chain and is keyed by its hash. The head's path epoch fences stale writers, parts and seals.
   - Up to three source epochs overlap under one copy job, and lease holders re-subscribe.
-- *Residual (§11.20):* with no capable mapper online, creation stays blocked, and writers alarm after 1 h.
+- *Residual (§11.21):* with no capable mapper online, creation stays blocked, and writers alarm after 1 h.
 - *Tests:* FS-4.
-- *Final:* fixed: a path tail and a creation block of at most 2 min let every epoch land, batched epochs alarm 1 h past due, and D-EVS-12 reads "due within 24 h" (SL-N3); the copy now handles directories a fold moved (SL-N2, re-checked resolved; its checker's follow-ups fixed in round 4; section 6.1).
+- *Final:* fixed: a path tail and a creation block of at most 2 min let every epoch land, batched epochs alarm 1 h past due, and D-EVS-12 reads "due within 24 h" (SL-N3); the copy now handles directories a fold moved (SL-N2, re-checked resolved; its checker's follow-ups fixed in round 4; section 6.1). The meta review's CC-01 is workload stability, not this protocol, which stands; it is fixed with a disclosed residual (section 7).
 
 **T1-08. The token, name and ref-id derivations were underspecified.** R3 major "Path tokens work for a client that already knows the path" (derivations). *Valid (t_0 was already defined); fix.*
 - *Changed:* §11.6's Tokens block fixes:
@@ -258,10 +282,10 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Disclosed (§2.8, §11.9):* a never-read path's version at the first pin rests on evs. A HeadCheck confirms the pin, not that version.
 - *Not adopted:* a Merkle root over the token tree, or a whole-ref manifest.
 - *Tests:* FS-10.
-- *Final:* disclosed. §11.17's closure no longer ends "Residual: none": a HeadCheck confirms the pin, not a never-read path's version, and that limit is its residual (SC-N7, fixed). New: SC-N5 and OT-N8 (fixed).
+- *Final:* disclosed. §11.18's closure no longer ends "Residual: none": a HeadCheck confirms the pin, not a never-read path's version, and that limit is its residual (SC-N7, fixed). New: SC-N5 and OT-N8 (fixed).
 
 **T1-11. v0 witnesses did not compare ordinary ref heads.** R1 F02; R1b F05. *Valid; fix (with T2-07).*
-- *Changed:* HeadCheck carries up to 16 RefHead pins a round, rotating, defined once in §6.5. The side at the lower version recomputes C forward from the window's statement hashes or the log pages (§6.4; §11.8's witness rule). This ships at M2, so I-16 holds for ordinary refs. EvsHeadCheck is withdrawn, and 0x1402-0x1403 stay reserved (§6.11, §11.19).
+- *Changed:* HeadCheck carries up to 16 RefHead pins a round, rotating, defined once in §6.5. The side at the lower version recomputes C forward from the window's statement hashes or the log pages (§6.4; §11.8's witness rule). This ships at M2, so I-16 holds for ordinary refs. EvsHeadCheck is withdrawn, and 0x1402-0x1403 stay reserved (§6.11, §11.20).
 - *Tests:* FS-17.
 - *Final:* resolved; FS-17 lacks an independently advanced, non-conflicting case.
 
@@ -273,7 +297,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - Each phase rereads the state and the deletion id, so a stale job deletes nothing.
   - A re-seed refuses a repo whose log ends in RepoDelete (§19.10).
 - *Tests:* FS-6; §22.5's §11 row.
-- *Final:* resolved. New: SC-N6 (fixed).
+- *Final:* resolved. New: SC-N6 (fixed). Its environment assumption, the store's ordering, is now D-OPS-20's stated and tested settle rule (the meta review's K01; section 7).
 
 **T1-13. Erasure left decryptable deposit, index and retained copies.** R2 F11; R3 major "GC and quotas" (erasure); R1b C06. *Valid; fix.*
 - *Changed:*
@@ -282,7 +306,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - Readers and mirrors delete cached keys, slot copies and decrypted copies on the hint (§15.7, §16.8).
 - *Stated limits:* v0 erasure is key destruction. Ciphertext stays in batches, packs and segments until v1's compaction, and statements stay.
 - *Tests:* FS-13; §22.5's §11 row.
-- *Final:* resolved. At the storage limit an erasure's CLOSURE push passes within its eraser's own daily closure allowance, which §21 cannot cut below its floor, and §11.13 and §15.7 state the wait (SL-N1, now fixed: owner decision 146; rounds 5-6; section 6.2).
+- *Final:* resolved, for the copies the earlier design held: deposits, `i/` chains, index files and retained versions. At the storage limit an erasure's CLOSURE push passes within its eraser's own daily closure allowance, which §21 cannot cut below its floor, and §11.13 and §15.7 state the wait (SL-N1, now fixed: owner decision 146; rounds 5-6; section 6.2). Narrowed by the meta review: the v1 index's later publication paths (F09) and its fan-out (F19) were open at the 41ba6670 build; F09's CUT and F19's restated wait now cover them (section 7).
 
 **T1-14. Mirrored recovery and cluster-only slots contradicted each other.** R1 F18; R1b F11; R2 C03. *Valid; fix (with T5-05).*
 - *Changed:* §11.13's mirror contract (D-EVS-17):
@@ -306,10 +330,10 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - Maintenance pushes pass: CONSUME, BASE, ERASE, PATH_EPOCH and its maps, DELETE, deletion, restore and re-seed.
   - So do config and mailcfg pushes within §7.9's limits (§11.13 `limit`; §20.7).
 - *Tests:* FS-47.
-- *Final:* fixed (owner decision 146; rounds 5-6): an erasure's CLOSURE push and its uploads pass at the limit, and §11.13 and §20.7 agree on uploads (SL-N6, fixed); the closure allowance is now per eraser, with a floor §21 cannot lower, §11.12, §11.13 and §11.19 state it and its 429, and FS-47 queues a CLOSURE past the rate as P1, as §11.12 does (SL-N1; section 6.2).
+- *Final:* fixed (owner decision 146; rounds 5-6): an erasure's CLOSURE push and its uploads pass at the limit, and §11.13 and §20.7 agree on uploads (SL-N6, fixed); the closure allowance is now per eraser, with a floor §21 cannot lower, §11.12, §11.13 and §11.20 state it and its 429, and FS-47 queues a CLOSURE past the rate as P1, as §11.12 does (SL-N1; section 6.2).
 
 **T1-17. The directory cap did not fit the entry size.** R1b S04. *Valid; fix.*
-- *Changed:* a directory holds at most 4,096 children and 448 KiB of name table. Both are checked at push time against the folded table plus unfolded deltas (409 DIRECTORY_FULL), and `layout` reserves paging (§11.7; §2.8 evs-11; §11.18).
+- *Changed:* a directory holds at most 4,096 children and 448 KiB of name table. Both are checked at push time against the folded table plus unfolded deltas (409 DIRECTORY_FULL), and `layout` reserves paging (§11.7; §2.8 evs-11; §11.19).
 - *Tests:* FS-9.
 - *Final:* resolved. New: SL-N7 and SC-N2 (fixed).
 
@@ -344,7 +368,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 **T1-23. Repo-wide hint topics used per-ref counters.** R1 S02; R2 F17; R3 major "Head readers cannot bind …" (last sentence). *Already fixed: the push sequence versions the topic per repo. Decline.*
 - *Changed:* one clause. The delta's ref version against the client's pin shows a gap on that ref (§11.10). The sequence now lives in Redis and restarts above every earlier value after a loss.
 - *Tests:* FS-62.
-- *Final:* resolved; the stated residual is a crash before the raise, left to the hourly resync.
+- *Final:* resolved; the stated residual is a crash before the raise, left to the hourly resync. The meta review found it right about repo-wide sequencing; CC-04's exact-arithmetic rule is now explicit (§6.8, §11.10; FS-62; section 7).
 
 **T1-24. Inline bodies in one buffered POST exceeded the load balancer's 16 MiB.** R3 C2 (third paragraph). *Already fixed: pushes over 1 MiB or 1,024 entry writes travel in parts (D-EVS-20). Decline; no change.* *Final:* resolved.
 
@@ -365,7 +389,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - MLS commits never raise the generation; they carry the newest GenWrap. `ur_group` loses its generation fields.
   - A leaf rotator puts one LeafWrap in the GenRotate. A removal is a Remove commit, then an independent rotation (§10.5, §10.7, §10.9). D-KEYS-6 changes to match.
 - *Tests:* FS-15; the TLA+ model's `gen/` claims.
-- *Final:* resolved.
+- *Final:* resolved for the generation claim. Delivery after the claim was open until the meta review's F04 and F05, which fix it (section 7).
 
 **T2-03. Delegation reader keys had no object, check or reap rule, and a dropped writer could sample the next generation.** R3b finding 4, before-M2 4; R3 "Q-ACL-9 (a) breaks removal"; R1 Q-ACL-9 note; CHECK4 major 1; CRITIC4 Major 4, minor 7. *Valid; fix.*
 - *Changed:* §10.5 defines KeyHolders (leaves, uncovered agents, live Delegations and recovery keys), and DelegationWraps with their writers, checks and a Drops table (D-KEYS-16).
@@ -373,15 +397,15 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - DelegationRevoke, `not_after`, or a non-reap revocation of one of its agents drops a Delegation's key.
   - Every GenRotate is signed by a current holder and excludes the dropped key.
 - *Tests:* FS-18.
-- *Final:* resolved: any holder at a covering pin may sign, which gives R3b's member-leaf property under owner decision 114.
+- *Final:* resolved: any holder at a covering pin may sign, which gives R3b's member-leaf property under owner decision 114. Narrowed by the meta review (section 7): this holds for revocation, `DelegationRevoke`, `not_after`, reaping and signer exclusion. A `Suspend` was no drop event until F02; a covered agent's own expiry still drops nothing, since F02 refuses a non-ephemeral agent's earlier `not_after` and treats an ephemeral one's as a reap, disclosed; and the holder function now names the Delegation's reach; "every staged or late delivery names a holder" had no state for late deliveries until F05's bytes, so the closure holds only with them.
 
 **T2-04. A reaped Delegation-admitted agent reads later generations until DelegationRevoke.** R3b finding 4; R3, R2 and R1 Q-ACL-9; R1b; CHECK4 major 1; CRITIC4 Major 4, minor 9, Q4. *Accepted residual (owner decision 114); disclose.*
 - *Why it stays:* no individually revocable key lets an agent read before any writer is online, and that is the decision's purpose. The old per-reap rotations excluded nothing a reaped agent could not still read.
-- *Disclosed* alike in I-15, §2.6, §2.10, §2.18, §3.6, §7.18, §10.5, §11.5 and §16.9.
-- *Bounds:* `not_after` of at most 90 days (30 for CI), and a key drop on any non-reap revocation of its agents.
+- *Disclosed* alike in I-15, §2.6, §2.10, §2.18, §3.6, §7.18, §8.12's invariant, §10.5, §11.5, §16.9 and Q-ACL-9.
+- *Bounds:* `not_after` of at most 90 days (30 for CI); a key drop on any non-reap revocation of its agents, or a `Suspend` of one (F02); and the Delegation's end, at its `DelegationRevoke`, its void or a compromise revocation of one of its agents (F03).
 - *Reviewers split:* R1b accepts the shared key; R2 and R3 asked for individual keys.
 - *Tests:* FS-18.
-- *Final:* disclosed, alike in §10.5, I-15, §2.6, §2.10 and §2.18; §16.9's wording, which could be misread, now names the key's drop causes (AU-N9, fixed); the decline of individual keys holds.
+- *Final:* disclosed, alike in §10.5, I-15, §2.6, §2.10 and §2.18; §16.9's wording, which could be misread, now names the key's drop causes (AU-N9, fixed); the decline of individual keys holds. Narrowed by the meta review (section 7): the accepted residual is the reader seed until the key drops, for reaped agents, ephemeral agents past their own `not_after`, and copies of the seed. "Each copy of its auth key" is withdrawn from the non-reap-revocation bound, since a whole bundle also admitted fresh agents until the Delegation ended (F03).
 
 **T2-05. The published 72-hour bound did not hold against a splitting server, an offline revoker or own groups.** R3 C5; R3b finding 2, before-M2 2; R1 F03; R2 F05; R1b F03; CRITIC4 Major 2, Q2; CHECK4 minor 8. *Accepted residual (owner decision 129), with valid text contradictions; disclose.*
 - *Changed:* §2.8 publishes one bound, naming the split, the offline revoker, own groups, personal networks and the pilot. Every restatement cites it, and §6.17 rates the split Medium.
@@ -489,7 +513,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 **T2-22. gkm's work hints were dropped as stale, and rotations without a commit went unhinted.** R1b S05; R1 S02 (last sentence); CRITIC4 Major 5. *Valid; fix.*
 - *Changed:* `gkm:<group_id>` is versioned epoch × 2^24 + generation. Pending and wrap-pending hints go on the per-client `gkm` topic of the sidecars that must act, versioned by gkm's clock (§6.8, §10.6, §10.14; D-KEYS-19).
 - *Tests:* FS-24.
-- *Final:* resolved. New: AU-N10 (fixed).
+- *Final:* resolved. New: AU-N10 (fixed). The meta review found its hints right, but the late write they asked for had no free target once a staged wrap held the path; F04's typed deliveries give it one (section 7).
 
 **T2-23. Epoch retention could delete the predecessor of the next commit.** R2 F16; the Q-KEYS-11 answers of all five reviews. *Valid; fix.*
 - *Changed:*
@@ -506,10 +530,10 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - D-KEYS-1 claims tree post-compromise security for KEKs only; content keys heal at the next generation.
   - R-KEYS-12 claims harvest-now-decrypt-later resistance against a passive adversary only.
   - §10.5 states the ladder's limits. §2.10 and §2.18 disclose copied keychains and a future signature forgery.
-  - `ur evs rekey` moves to v0 (M2) (§10.16, §11.21).
+  - `ur evs rekey` moves to v0 (M2) (§10.16, §11.22).
 - *Declined:* rotating the root key on every Update. A 1,000-leaf group would get about 33 generations a day, with old content left under old keys anyway. Hybrid ML-DSA authority signatures are Later.
 - *Tests:* §22.7's revocation suite (after `ur evs rekey`, only the current generation opens).
-- *Final:* fixed: Q-KEYS-2 now states its residual (WR-N3; section 6.1). The decline of rotation on every Update holds. New: WR-N6 (fixed).
+- *Final:* fixed: Q-KEYS-2 now states its residual (WR-N3; section 6.1). The decline of rotation on every Update holds. New: WR-N6 (fixed). Narrowed by the meta review's F06 (section 7): the fresh-pair fix held only against a passive copy with an honest gkm; the 37-day figure now carries that qualification, with the 7-day ReaderKey validity (D-KEYS-25).
 
 **T2-25. M2's 0x0010 gate interoperated with no second stack.** R3 cryptography and internal-gates majors; R3b ladder major, before-M2 7. *Valid; fix (with T5-22, T5-23).*
 - *Changed:* the MLS wire's fields are fixed at M2's entry. The wire and suite 0x0010 freeze at M2's exit on §22.10's interop artifact:
@@ -528,7 +552,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - Senders check target keys against the target's identity binding.
   - Shares use a ShareKey that the other network pins (§17.6, §17.8, §17.9, §8.10, §6.10.1, §4.6 C13; D-BRIDGE-17).
 - *Tests:* FS-38.
-- *Final:* resolved; before C16, sdk providers apply rules 4 and 7 to C13's operator-asserted subject, as disclosed. New: AU-N7 (fixed).
+- *Final:* resolved; before C16, sdk providers apply rules 4 and 7 to C13's operator-asserted subject, as disclosed. New: AU-N7 (fixed). T2-26 and AU-N7 stand for removed readers and static roots; the meta review's CC-05 states the boundary against a modified Y reader with a colluding operator (section 7).
 
 **T2-27. Unknown policy state selected allow-all.** R2 F02; R1 C04; R1b C10. *Valid; fix (with T3-08).*
 - *Changed:* the bridge and the keyless device role share one state machine: legacy, pending, enforcing{doc} and enforcing{nodoc}. It persists the last verified state with a `document_seen_at` latch.
@@ -621,7 +645,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - `device` evidence must come from such a device other than the requester.
   - Control mode signs it only for another sidecar's request, after a /dev/tty or app confirmation (D-SDK-9).
   - `harness_ok` counts only approval-capable devices (D-MCP-14; I-8 reworded).
-- *Disclosed (§16.15):* two of a member's devices that both run agents can approve each other.
+- *Disclosed (§16.17):* two of a member's devices that both run agents can approve each other.
 - *Tests:* the approval suite's `devices` row.
 - *Final:* resolved.
 
@@ -638,7 +662,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Changed:* §16.6 states that no binding to the harness binary is possible.
   - Harness evidence never authorizes key, recovery, consent, admission or authority statements, nor acl or bridge statements beyond an O tool's own filings, except a member's first presence key.
   - The daemon offers a presence prompt, and `ur login` offers a presence key.
-  - In a tainted run, harness evidence counts only where the requests rule names it (D-MCP-9; I-9; §2.10, §8.5, §16.15).
+  - In a tainted run, harness evidence counts only where the requests rule names it (D-MCP-9; I-9; §2.10, §8.5, §16.17).
 - *Residual:* in untainted runs it stays a labeled weaker channel (owner decision 75).
 - *Tests:* FS-28.
 - *Final:* disclosed; §2.18 does not repeat the untainted-run residual.
@@ -659,7 +683,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - shell-attributed paths are restored only when named after a dry run;
   - RV1-RV3 are its invariants.
 - *Tests:* FS-26; §22.7's restore suite.
-- *Final:* fixed: each edit observation carries a before-hash, a change counts as the run's edit only when the run's edits chain from the scan's before to its after, and the restore suite and FS-26 add a hand edit before the run's edit of the same path (section 6.1).
+- *Final:* fixed: each edit observation carries a before-hash, a change counts as the run's edit only when the run's edits chain from the scan's before to its after, and the restore suite and FS-26 add a hand edit before the run's edit of the same path (section 6.1). "Fixed" covers attribution only: the live-worktree commit race is the meta review's F14, fixed (section 7).
 
 **T3-08. Run taint and the device role's policy did not survive restarts.** R1 C04; R1b C10, invariant 7; R2 F02, "Sticky run taint". *Valid; fix (with T2-27).*
 - *Changed:*
@@ -728,7 +752,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
   - the mail router sends forced hints;
   - tokens are re-projected after a Redis loss.
 - *Tests:* FS-36, on a 3-master cluster.
-- *Final:* resolved; the obligation-record decline holds, and a sentinel per slot now re-projects the tokens of any lost master (RT-N5, fixed). New: RT-N4 (fixed).
+- *Final:* resolved; the obligation-record decline holds, and a sentinel per slot now re-projects the tokens of any lost master (RT-N5, fixed). New: RT-N4 (fixed). Narrowed by the meta review's F15 (section 7): "resolved", and RT-N4's and RT-N5's "fixed", stand for CROSSSLOT, the separate enqueue and master loss; §18.7's `FOR SHARE` ordering claim was wrong, and token-projection order stayed open until F15's change.
 
 **T3-17. HTTPS-only hosts had no liveness lease, and the long poll had no body.** R1 S16; R1b S18; R3 "§6 is not a wire spec" (poll body). *Valid; fix.*
 - *Changed:*
@@ -743,7 +767,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Changed:* a key origin, `https://sidecar.ur.io`, holds the Worker, the key and the token. ur.io frames it under a strict CSP and `frame-ancestors`, and its exact-origin API returns views only. Its block states the admission flow (a consented device online) and the Workers' leaf cost (§18.8, §2.4 TB1, §2.8 EX7, §2.10; D-SDK-18).
 - *Residual:* script running in a ur.io page reads views while it runs.
 - *Tests:* §22.9's Browsers row (Playwright).
-- *Final:* resolved. New: RT-N8 (fixed).
+- *Final:* resolved. New: RT-N8 (fixed). The meta review's K05, stale page Workers with `self_admit` off, is now bounded, and admins get a cleanup list before the cap (D-TEAM-29; section 7).
 
 **T3-19. A missed wasm size goal had no defined browser path.** R3 client major. *Partly valid: ur.io already serves a gated ~75 MB build. Fix-modified.*
 - *Changed:* the page Worker builds the root with `-tags sidecar_http` and links no connect or gVisor package (§18.10, §5.4, §4.6, §4.7; D-SDK-19).
@@ -817,8 +841,8 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Final:* resolved; the formal state machine waits for SPEC.md at M9. New: EM-N4 (fixed).
 
 **T4-02. DATA mode could not finish a large message inside its 2 h limit.** R3b major; CRITIC4 minor 3. *Accepted residual (owner decision 125); disclose.*
-- *Disclosed:* the cap is `smtp_data_proof_bytes`, measured per host: about 1 MiB on the M1 reference and 600 KiB on an m5.large. A larger message to an MX without CHUNKING gets a DSN before MAIL (§14.5; D-SMTP-20; §14.15). The receiver copy says large attachments may miss that minority until a faster prover (Later) (§15.9, §18.5).
-- *Final:* disclosed. The copy gives no size, though a ~1 MiB cap catches ordinary photos, and it sits on `GetReceiverCoverage`, an inbound API, while the limit is outbound.
+- *Disclosed:* the cap is `smtp_data_proof_bytes`, measured per host: about 1 MiB on the M1 reference and 600 KiB on an m5.large. A larger message to an MX without CHUNKING gets a DSN before MAIL (§14.5; D-SMTP-20; §14.15). The receiver copy said large attachments may miss that minority until a faster prover (Later) (§15.9, §18.5).
+- *Final:* disclosed. The copy gave no size, though a ~1 MiB cap catches ordinary photos, and it sat on `GetReceiverCoverage`, an inbound API, while the limit is outbound. Narrowed by the meta review's K04 (section 7): the disclosure moves from the receiver copy to the send, per recipient, through `CheckSend`, `GetSendResult` and the `mail_send` event (D-SDK-31), and `GetReceiverCoverage` drops its outbound line; the cap stays (owner decision 125).
 
 **T4-03. The X-UR-Ref medium join was not bound to the verified DKIM `d=`.** R3 C6. *Valid; fix.*
 - *Changed:* a medium-confidence join counts only if a verifying DKIM signature's `d=` is the network the X-UR-Ref MAC encodes (§14.8; D-SMTP-8).
@@ -841,7 +865,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 **T4-06. The outer 443 split never sent custom-domain SNI to tlsedge.** R1 S07; R1b S12; R2 F20; R3 major. *Valid; fix.*
 - *Changed:* the lb's SNI map includes a generated map of active custom hosts. It is regenerated with the port-80 names on every add and removal and reloaded at most once per 15 min, and unknown SNI keeps the platform default (§13.4, §12.8, §19.5 W1; D-TLS-12).
 - *Tests:* FS-35.
-- *Final:* resolved. The activation barrier is a fixed wait: nothing confirms each lb loaded the map, and probes test only `<root>` names.
+- *Final:* resolved for the missing map. Its readiness residual, a fixed wait with nothing to confirm each lb loaded the map and probes of `<root>` names only, is now fixed by the meta review's K02: a host turns ready only once every serving interface reports its map version (section 7).
 
 **T4-07. Empty ALPN selected raw forwarding around the HTTP audience check.** R1 F12; R1b F17; R2 C02. *Valid; fix.*
 - *Changed:* dispatch binds to the signed registration's AppMode, never to the visitor's ALPN.
@@ -860,7 +884,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 **T4-09. Deferred mail authentication lost reception-time DNS evidence.** R1 S10; R1b S14. *Valid; fix.*
 - *Changed:* the receiver seals a bounded MailAuthEvidence into the deposit, bound to the message hash, the time and itself. Ingest labels from it, never from later DNS (§15.5, §15.7; D-MAIL-14).
 - *Tests:* FS-39; §22.7 S7.
-- *Final:* resolved; no risk row says a compromised receiver can forge reception-time verdicts. New: EM-N1 (fixed).
+- *Final:* resolved; no risk row says a compromised receiver can forge reception-time verdicts. New: EM-N1 (fixed). Narrowed by the meta review's F17 (section 7): "bounded MailAuthEvidence" was bounded only by dropping records, and the verdict count and the work had no bound until F17's per-message limits.
 
 **T4-10. REQUIRETLS and the operator list are inferences, not proof of prior privacy.** R1 C01; R1b S15; R3 "Q-MAIL-13 (b) is the wrong label"; R3b note. *Accepted residual (owner decision 135); disclose.*
 - *Disclosed:* §15.5, §2.8 EX3 and §2.18 say the operator list is a reputation check, not proof of a DANE or MTA-STS path. REQUIRETLS records only the final hop's requirement. No UI or API claims end-to-end path confidentiality (D-MAIL-13).
@@ -941,7 +965,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 **T4-26. The edge ticket exception could be read to waive source identity.** R1b C08; R2 "Socket ticket source binding". *Valid; fix.*
 - *Changed:* source equality always holds. Only the Hello check is waived for edges, and an edge ticket names only a `tls/` or `smtp/` name (§9.6; D-SOCK-12).
 - *Tests:* §22.5's §9 row.
-- *Final:* resolved.
+- *Final:* resolved. It stands; the meta review's CC-06, the issued-count cap against eager reports, is a separate specification, fixed (section 7).
 
 **T4-27. TLS 1.2 server-key disclosure.** R1 F16; R3 C6; R3b's C6 disposition. *Already fixed in mechanism: Z1 proves the server Finished in-circuit, and no key that opens application data is disclosed (D-SMTP-21). Fix, test only.*
 - *Tests:* FS-31. An honest 451 against a forged 250: the sender keeps and retries the message, and the edge reads no MX reply.
@@ -1092,7 +1116,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Final:* not re-checked.
 
 **T5-21. S2 and the twenty-agent test assumed disjoint pushes land on shared refs.** CRITIC4 Major 1. *Valid; fix.*
-- *Changed:* S2 follows §11.7's modes. On a shared git-mode ref the second push gets a non-fast-forward and its merge lands. No acknowledged commit is lost, and oids match a second device's (§22.7 S2, §22.8, §11.14).
+- *Changed:* S2 follows §11.7's modes. On a shared git-mode ref the second push gets a non-fast-forward and its merge lands. No acknowledged commit is lost, and oids match a second device's (§22.7 S2, §22.8, §11.15).
 - *Tests:* FS-5.
 - *Final:* resolved.
 
@@ -1100,7 +1124,7 @@ Each entry gives its sources, then its verdict and disposition, then what change
 - *Changed:* D-PHASE-7 freezes each format twice.
   - **Specification, at Gn-in:** peer review, TLC, the FS rows written, vector schemas and RECORD.md.
   - **Bytes, at Gn-out:** the FS rows passing on their tiers, Porcupine, the 0x0010 interop, the benchmark and the sizes.
-- Production holds no format before its final freeze (§22.10, §23.4, §23.8, §11.21; D-TEST-9).
+- Production holds no format before its final freeze (§22.10, §23.4, §23.8, §11.22; D-TEST-9).
 - *Final:* resolved. New: OT-N3 (fixed).
 
 **T5-23. Suite 0x0010 froze on vectors run under 0x0001, with no hybrid interop.** R3b ladder major, before-M2 7; R3 internal-gates major. *Valid; fix (with T2-25).*
@@ -1175,22 +1199,22 @@ These are not review findings. The owner fixed the hardware during the response 
   - receipts instead of upload markers (D-EVS-34);
   - leases, the push sequence and gkm acks in Redis, beside the verified head and projection caches (`{evsh_}` §11.9, `{acl_}e` §7.9; D-EVS-14, D-KEYS-21).
 - **Budget (§11.13; R-EVS-19; D-EVS-33).** Each metadata cluster has one write budget, measured from drive counters and refilled at 0.768 DWPD.
-  - P0 work (revocation, `proj/`, shred, erasure) is never refused.
+  - P0 work (revocation, `proj/`, shred, erasure) is never queued or refused, and the wear bound exempts it (owner decision 186): its bytes are measured and drain the bucket the other classes draw on, its excess past what the bucket holds forgiven (owner decision 190), so a P0 storm wears the drives past 0.8 DWPD and their 1 DWPD rating while it lasts (narrowed by the meta review's F12; section 7).
   - P1 pushes are priced at admission with the folds and evacuation they cause.
-  - P2 background work spends what P1 leaves and keeps a floor above its ~37% steady share (40% until measured).
+  - Funded P2 spends a prepaid wallet outside the allowance; only unfunded P2 takes the allowance, capped at 40% (narrowed by the meta review's F13; section 7).
   - The heaviest network per weight is refused first.
 - **Growth (§11.8 Placement; §19.9; owner decision 145).** A create-only `place/<repo_id>` on the first cluster places each new repo and its gkm group. The next cluster is ordered at owner decision 136's triggers or their projection over the lead time, at about 1.25× year one. Pools are refused by FS-63.
-- **Fit, by the model.** These are inferences until §22.8 measures them.
+- **Fit, by the model.** These are inferences until §22.8 measures them, and they hold for the specified mix only, as the meta review asks to keep (section 7).
   - Year one: ~43 KiB a push per drive (~33 on 1 KiB blocks), 0.40 DWPD (0.31), ~3% of rated write IOPS, and reads at ~0.3% of 800k.
-  - Per set: ~400-450 pushes/s (~530-600 on 1 KiB blocks). Batches are per evs process and cluster, so a set near capacity sees ~1-1.6 records a batch (§11.13); at the model's high constants a set carries ~310-330 (§11.20).
+  - Per set: ~400-450 pushes/s (~530-600 on 1 KiB blocks). Batches are per evs process and cluster, so a set near capacity sees ~1-1.6 records a batch (§11.13); at the model's high constants a set carries ~310-330 (§11.21).
   - Year two: five to six clusters.
 - **Q-EVS-9, closed.** Owner decision 140's record first gave ~10-15 KiB a push, a design-team estimate below the head overwrite's ~14 KiB floor. The corrected record makes the drive budget the target (section 6.3).
 - **Tests.** FS-57 to FS-63; FI-14; §22.8's `nvme`, `fold`, `trash` and `hdd` rows; the D-TEST-11 gate.
-- *Final (storage-tier cluster):* 28 of 30 checks resolved, among them the hardware, packing, soft state, small heads, batches, receipts, the write governor, the XFS and MinIO settings, the gate, growth by clusters and the per-set capacity, which reproduces from the model. Partial: D-EVS-31's lazy folds, and R3b finding 1 through them (ST-N1), since fixed (owner decision 148; rounds 5-6): removal folds write versioned tombstone markers with If-Match, never blind deletes. New: ST-N2 to ST-N5 (fixed) and ST-N6 (already fixed in the owner's record).
+- *Final (storage-tier cluster):* 28 of 30 checks resolved, among them the hardware, packing, soft state, small heads, batches, receipts, the write governor (narrowed by the meta review to its bound on P1 and P2, and resolved only by intent until F13's transitions were written; section 7), the XFS and MinIO settings, the gate, growth by clusters and the per-set capacity, which reproduces from the model. Partial: D-EVS-31's lazy folds, and R3b finding 1 through them (ST-N1), since fixed (owner decision 148; rounds 5-6): removal folds write versioned tombstone markers with If-Match, never blind deletes. New: ST-N2 to ST-N5 (fixed) and ST-N6 (already fixed in the owner's record).
 
 ## 4. Index by review
 
-Every finding that the design team's finding index (peer/INDEX.md) lists for R1, R1b, R2, R3 and R3b appears once in its review's table: 264 rows in all.
+Every finding that the design team's finding index (peer/INDEX.md) lists for R1, R1b, R2, R3 and R3b appears once in its review's table: 264 rows in all. Section 4.6 adds the final meta review's 34 items, each mapped to its entry in section 7.
 
 - **Columns.** "Entry" is the consolidated entry in section 3, or the peer-review question that closed the item. "Where" gives each entry's main place in the revised text; rows that touch three or more entries give one place per entry.
 - **Final.** The second-round panel's status for the finding, as the final rounds changed it (section 1). Where the panel checked it under another name, or checked only its entries or its question, the cell says "as …", "by entry" or "by question". Where two clusters disagree, the weaker status stands.
@@ -1354,7 +1378,7 @@ Every finding that the design team's finding index (peer/INDEX.md) lists for R1,
 | Recommendation: Q-TEST-2 | Q-TEST-2 | closed by peer review | §22.13; §22.4 | resolved |
 | Recommendation: Q-TEST-6 | T5-31, Q-TEST-6 | T5-31 fix; Q-TEST-6 closed by peer review | §22.13; §6.11 | resolved |
 | Recommendation: Q-KEYS-11 | T2-23, Q-KEYS-11 | T2-23 fix; Q-KEYS-11 closed by peer review | §10.6 retention; D-KEYS-20; §10.12 | resolved |
-| Recommendation: Q-EVS-6 | T1-10, Q-EVS-6 | T1-10 fix-modified; Q-EVS-6 closed by peer review | §11.8 head; §11.9; D-EVS-24, -29; §11.17 | resolved |
+| Recommendation: Q-EVS-6 | T1-10, Q-EVS-6 | T1-10 fix-modified; Q-EVS-6 closed by peer review | §11.8 head; §11.9; D-EVS-24, -29; §11.18 | resolved |
 | Recommendation: Q-OPS-2 | T1-20, Q-OPS-2 | T1-20 fix; Q-OPS-2 closed by peer review | §11.6; §11.13; D-EVS-27; §19.14 | resolved |
 | Recommendation: Q-BRIDGE-2 / Q-SDK-5 | T3-20, Q-BRIDGE-2, Q-SDK-5 | T3-20 fix; Q-BRIDGE-2 closed by peer review; Q-SDK-5 closed by peer review | §18.13; §17.14 | resolved; Q-SDK-5 declined-as-stated |
 | Recommendation: Q-OPS-5 | Q-OPS-5 | closed by peer review | §19.14 | resolved |
@@ -1371,7 +1395,7 @@ Every finding that the design team's finding index (peer/INDEX.md) lists for R1,
 | C1 A ref commit does not publish the entry versions it names | T1-01, T1-02 | T1-01 fix-modified; T1-02 fix | §11.8 write rules, I-EVS-1..7; D-EVS-13; §11.8 Outcomes; D-EVS-23 | resolved |
 | C2 Path-level success and a git ref are two histories | T1-05, T1-24 | T1-05 fix; Q-EVS-8 decided (owner decision 141); T1-24 decline (already fixed) | §11.7 modes; §11.11; D-EVS-22, -28; §11.8 parts; D-EVS-20 | resolved |
 | C3 The P0 does not close before the daemon, and a 7-day `exp` … | T3-21 | fix | §7.4; §5.13; D-TRUST-3 | fixed (6.1) |
-| C4 Harness evidence is a signature by the sidecar that was … | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.12 Q-MCP-6 | disclosed |
+| C4 Harness evidence is a signature by the sidecar that was … | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.14 Q-MCP-6 | disclosed |
 | C5 A withheld removal is not bounded by 24 hours | T2-05, T2-06, T2-34 | T2-05 disclose; T2-06 fix-modified; T2-34 disclose | §2.8 exposure bound; §6.4-§6.6; §7.6 | fixed (owner decision 147; rounds 5-6) |
 | C6 The outbound proof is a sketch, and TLS 1.2 shows … | T4-01, T4-03, T4-27 | T4-01 fix; T4-03 fix; T4-27 fix (test only; already fixed) | §14.5 Z7-Z9; §14.8; FS-31 | resolved |
 | C7 Site loss does not restore the rows names and mail live on … | T5-01, T5-03, T5-04, T5-05, T5-07, T5-16 | T5-01 fix; T5-03 fix; T5-04 fix; T5-05 fix; T5-07 owner item, decided (owner decision 143); T5-16 fix | §19.6; §19.10 recovery; §19.10; §19.8; §21.9 | resolved |
@@ -1413,7 +1437,7 @@ Every finding that the design team's finding index (peer/INDEX.md) lists for R1,
 | Major: Q-SDK-5. | T3-20, Q-SDK-5 | T3-20 fix; Q-SDK-5 closed by peer review | §18.13; §4.4; D-SDK-20 | resolved |
 | Major: The sandbox operator is not in the threat model. | T3-23 (with T2-40) | disclose | §2.4 TB1; §2.10; §18.9 | disclosed |
 | Answer: Q-CORE-4 | T3-21, Q-CORE-4 | T3-21 fix; Q-CORE-4 closed by peer review | §7.4; §5.13; D-TRUST-3 | resolved (by question) |
-| Answer: Q-EVS-6 | T1-10, Q-EVS-6 | T1-10 fix-modified; Q-EVS-6 closed by peer review | §11.8 head; §11.9; D-EVS-24, -29; §11.17 | disclosed (as the head-readers major) |
+| Answer: Q-EVS-6 | T1-10, Q-EVS-6 | T1-10 fix-modified; Q-EVS-6 closed by peer review | §11.8 head; §11.9; D-EVS-24, -29; §11.18 | disclosed (as the head-readers major) |
 | Answer: Q-OPS-2 | T1-20, Q-OPS-2 | T1-20 fix; Q-OPS-2 closed by peer review | §11.6; §11.13; D-EVS-27; §19.14 | resolved (as the Q-OPS-2 major) |
 | Answer: Q-KEYS-11 | T2-23, Q-KEYS-11 | T2-23 fix; Q-KEYS-11 closed by peer review | §10.6 retention; D-KEYS-20; §10.12 | resolved (by question) |
 | Answer: Q-TEST-1 | Q-TEST-1 | closed by peer review | §22.13 | declined-as-stated (by question) |
@@ -1455,7 +1479,7 @@ Every finding that the design team's finding index (peer/INDEX.md) lists for R1,
 |---|---|---|---|---|
 | Finding 1 The head commit still does not publish the entry bytes it … | T1-01, T1-02, T1-05 | T1-01 fix-modified; T1-02 fix; T1-05 fix; Q-EVS-8 decided (owner decision 141) | §11.8 write rules, I-EVS-1..7; §11.8 Outcomes; §11.7 modes | fixed (owner decision 148; rounds 5-6) |
 | Finding 2 The 72-hour exposure bound does not survive the server the … | T2-05, T2-06 | T2-05 disclose; T2-06 fix-modified | §2.8 exposure bound; §6.17; §6.4-§6.6; §8.10; D-PROTO-17, -18 | fixed (owner decision 147; rounds 5-6) |
-| Finding 3 Harness evidence is still a hook any same-uid process can … | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.12 Q-MCP-6 | disclosed |
+| Finding 3 Harness evidence is still a hook any same-uid process can … | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.14 Q-MCP-6 | disclosed |
 | Finding 4 A removed wrapped writer can still sample the next … | T2-03, T2-04 | T2-03 fix; T2-04 disclose | §10.5 KeyHolders; D-KEYS-16; §2.9 I-15; §10.5 | resolved |
 | Finding 5 Site loss still restores the wrong Postgres, and the RPO … | T5-01, T5-03, T5-04, T5-05 | all fix | §19.6; §19.10 recovery; §19.10 | resolved |
 | Major: The content-key ladder is not the post-compromise security D-KEYS-1 … | T2-24, T2-25, T5-23 | T2-24 fix-modified; T2-25 fix; T5-23 fix | §10.5; §10.4; §22.10 | resolved |
@@ -1463,7 +1487,7 @@ Every finding that the design team's finding index (peer/INDEX.md) lists for R1,
 | Major: DATA mode cannot finish a large message inside its own limit, and the … | T4-02, T4-01 | T4-02 disclose; T4-01 fix | §14.5 DATA mode; D-SMTP-20; §14.5 Z7-Z9; D-SMTP-22 | disclosed |
 | Major: A replying burner's DKIM name still deletes its MX. | T4-12 | fix | §12.7; D-DNS-11 | resolved |
 | Major: iOS in the foreground is still not a receive path. | T4-13 | disclose | §15.6, §15.9; §23.4 M8 | resolved |
-| Answer: Q-EVS-6 | T1-10, Q-EVS-6 | T1-10 fix-modified; Q-EVS-6 closed by peer review | §11.8 head; §11.9; D-EVS-24, -29; §11.17 | disclosed |
+| Answer: Q-EVS-6 | T1-10, Q-EVS-6 | T1-10 fix-modified; Q-EVS-6 closed by peer review | §11.8 head; §11.9; D-EVS-24, -29; §11.18 | disclosed |
 | Answer: Q-OPS-2 | T1-20, Q-OPS-2 | T1-20 fix; Q-OPS-2 closed by peer review | §11.6; §11.13; D-EVS-27; §19.14 | resolved |
 | Answer: Q-CORE-4 | T3-21, Q-CORE-4 | T3-21 fix; Q-CORE-4 closed by peer review | §7.4; §5.13; D-TRUST-3 | resolved |
 | Answer: Q-TEST-1 | Q-TEST-1 | closed by peer review | §22.13 | declined-as-stated |
@@ -1479,17 +1503,58 @@ Every finding that the design team's finding index (peer/INDEX.md) lists for R1,
 | Disposition of R3 C1: Head commit does not cover the entry versions it names | T1-01, T1-02 | T1-01 fix-modified; T1-02 fix | §11.8 write rules, I-EVS-1..7; D-EVS-13; §11.8 Outcomes; D-EVS-23 | resolved (as R3 C1) |
 | Disposition of R3 C2: Path-level success and a git ref are two histories | T1-05, T1-24 | T1-05 fix; Q-EVS-8 decided (owner decision 141); T1-24 decline (already fixed) | §11.7 modes; §11.11; D-EVS-22, -28; §11.8 parts; D-EVS-20 | resolved (as R3 C2) |
 | Disposition of R3 C3: P0 schedule and the 7-day cap | T3-21 | fix | §7.4; §5.13; D-TRUST-3 | fixed (as R3 C3) |
-| Disposition of R3 C4: Harness evidence is a self-signature | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.12 Q-MCP-6 | disclosed (as R3 C4) |
+| Disposition of R3 C4: Harness evidence is a self-signature | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.14 Q-MCP-6 | disclosed (as R3 C4) |
 | Disposition of R3 C5: A withheld removal is not bounded by 24 hours | T2-05, T2-06 | T2-05 disclose; T2-06 fix-modified | §2.8 exposure bound; §6.17; §6.4-§6.6; §8.10; D-PROTO-17, -18 | fixed (owner decision 147; rounds 5-6; as R3 C5) |
 | Disposition of R3 C6: TLS 1.2 shows recipients to the edge, and the proof is a … | T4-01, T4-27 | T4-01 fix; T4-27 fix (test only; already fixed) | §14.5 Z7-Z9; D-SMTP-22; FS-31; D-SMTP-21 | resolved |
 | Disposition of R3 C7: Site loss skips the sidecar dump, and the RPO sentence is … | T5-01, T5-03, T5-04 | all fix | §19.6; §19.10 recovery | resolved (as finding 5) |
 | Before M2 1: Make the head `If-Match` the only read-modify-write, over … | T1-01, T1-02, T1-05 | T1-01 fix-modified; T1-02 fix; T1-05 fix; Q-EVS-8 decided (owner decision 141) | §11.8 write rules, I-EVS-1..7; §11.8 Outcomes; §11.7 modes | fixed (owner decision 148; rounds 5-6; as finding 1) |
 | Before M2 2: Publish the witness residual §2.8 already states, and stop … | T2-05, T2-06 | T2-05 disclose; T2-06 fix-modified | §2.8 exposure bound; §6.17; §6.4-§6.6; §8.10; D-PROTO-17, -18 | fixed (owner decision 147; rounds 5-6; as finding 2) |
-| Before M2 3: Take `harness` out of `evidenceDefault` until the hook peer … | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.12 Q-MCP-6 | disclosed (as finding 3) |
+| Before M2 3: Take `harness` out of `evidenceDefault` until the hook peer … | T3-05 | owner item, decided (owner decision 142) | §16.6; D-MCP-9; §16.14 Q-MCP-6 | disclosed (as finding 3) |
 | Before M2 4: Exclude a dropped agent's `ReaderKey` from the rotation … | T2-03, T2-04 | T2-03 fix; T2-04 disclose | §10.5 KeyHolders; D-KEYS-16; §2.9 I-15; §10.5 | resolved (as finding 4) |
 | Before M2 5: Rewrite the RPO sentence and restore the sidecar dump in … | T5-01, T5-03 | all fix | §19.6; D-OPS-14; D-OPS-18 | resolved (as finding 5) |
 | Before M2 6: Answer Q-EVS-6 with a head binding, and reserve pack … | T1-10, T1-20 | T1-10 fix-modified; T1-20 fix | §11.8 head; §11.9; D-EVS-24, -29; §11.6; §11.13; D-EVS-27 | disclosed (as the Q-EVS-6 answer) |
 | Before M2 7: Keep the 0x0010 freeze at the exit review that has one … | T2-25, T5-23, T2-24 | T2-25 fix; T5-23 fix; T2-24 fix-modified | §10.4; §22.10; §10.5 | resolved (as the ladder major) |
+
+### 4.6 META (DESIGN-REVIEW-META.md; Astra MAX, of the 2026-11-05 build): 34 items
+
+"Entry" is the item's entry in section 7, under the review's own id. "Final" is *fixed* for every row: the incorporation changed the text, and no reviewer has re-checked it (section 7). "By" is the review where a reviewer re-checks it, as in section 6: the entry review (Gn-in) of the milestone whose design closure in §23.6 holds the mechanism, or G0 for text.
+
+| Finding | Entry | Disposition | Where | Final | By |
+|---|---|---|---|---|---|
+| F01 Directory destruction is authorized after the keys have already … | 7.1 F01 | fix | §16.11; §11.8; §11.12; §7.8; D-MCP-33; I-EVS-16 | fixed | M2-in, M6-in |
+| F02 Suspend and individual expiry do not remove a Delegation-covered … | 7.1 F02 | fix-modified | §10.5 live(d); §7.9 scoped; §8.6; D-KEYS-16, D-TEAM-30 | fixed | M2-in |
+| F03 Revoking one agent drops the shared reader key but leaves a … | 7.1 F03 | fix | §7.9 delegation; §7.10 agents; D-TEAM-30, -31 | fixed | M2-in |
+| F04 Immutable delivery identity does not include the recipient's … | 7.1 F04 | fix | §10.5; §10.6; D-KEYS-24 | fixed | M2-in |
+| F05 Late deliveries have no signed authorization pin for their … | 7.1 F05 | fix | §10.9; §10.6; D-KEYS-24 | fixed | M2-in |
+| F06 Weekly replacement does not establish the advertised 37-day … | 7.1 F06 | fix-modified | §10.5; D-KEYS-25 | fixed | M2-in |
+| F07 A head overwrite can destroy the base of its own index diff | 7.1 F07 | fix | §11.14 dependency, chains; D-EVS-46, -47 | fixed | M10-in |
+| F08 The canonical shard format cannot retain deletion masks | 7.1 F08 | fix | §11.14 tombstones; D-EVS-44, -47, -52 | fixed | M10-in |
+| F09 Erasure does not fence publication of new index copies | 7.1 F09 | fix-modified | §11.8; §11.12; §11.14; D-EVS-66; I-EVS-17 | fixed | M2-in, M10-in |
+| F10 A handler-arrival fence cannot establish a stable terminal refusal | 7.1 F10 | fix | §11.8 refusal records; D-EVS-23 | fixed | M2-in |
+| F11 Stock Git LFS can force a tip back to a pruned object without … | 7.1 F11 | fix | §11.11 tip check; D-EVS-41 | fixed | M10-in |
+| F12 Unconditional P0 admission defeats the unconditional physical-write … | 7.1 F12 | narrowed claim (owner decisions 186, 190) | §11.13; §19.6; §19.8; D-EVS-33; Q-EVS-24 | fixed | M2-in |
+| F13 The literal allowance split reserves deferred P2 work twice | 7.1 F13 | fix | §11.13 accounts, wallet; §19.6; D-EVS-33 | fixed | M2-in |
+| F14 Safe restore still has a hash-check/rename race that can … | 7.1 F14 | fix-modified | §16.7; D-MCP-8; RV4 | fixed | M3-in |
+| F15 Post-commit push-token projections can regress or resurrect a … | 7.1 F15 | fix | §18.7; D-SDK-16; WK5 | fixed | M8-in |
+| F16 Denying a directory request does not complete the notice/wake … | 7.1 F16 | fix | §16.11; §18.7; D-MCP-34 | fixed | M6-in |
+| F17 Reception-time authentication has contradictory size/work bounds | 7.1 F17 | fix | §15.5; D-MAIL-14 | fixed | M7-in |
+| F18 128-KiB rounding cannot guarantee that up to five search pages … | 7.1 F18 | fix (owner decisions 188, 191) | §6.10; §4.6 C19; D-PROTO-22 | fixed | M10-in |
+| F19 The advertised next-day erasure bound assumes one physical … | 7.1 F19 | narrowed claim | §11.13; §11.14; §15.7; D-EVS-67 | fixed | M10-in |
+| F20 The global newest-version mask is outside the claimed search … | 7.1 F20 | fix | §5.9 version table; §11.14; D-EVS-52 | fixed | M10-in |
+| F21 Cold-search first-hit latency contradicts fixed-order whole-index … | 7.1 F21 | narrowed claim | §16.10 cold contract; §18.4; D-SDK-25 | fixed | M10-in |
+| F22 Some directory benchmark acceptance criteria are unspecified | 7.1 F22 | fix | §16.11 cost table; §11.9; D-MCP-31 | fixed | M6-in |
+| K01 The disclosed late-drive residual remains a storage-correctness … | 7.2 K01 | fix | §19.6 settle rule; §11.13; D-OPS-20 | fixed | M2-in |
+| K02 Custom-host readiness still relies on an unacknowledged 15-minute … | 7.2 K02 | fix | §13.4; D-TLS-12 | fixed | M6-in |
+| K03 The phone has no API for revoking an ordinary lost device | 7.2 K03; the countersignature | fix | §5.4; §5.6; §18.5; D-CORE-20, D-SDK-30; D-TEAM-32 | fixed | M3-in, M8-in; the countersignature M2-in |
+| K04 Outbound DATA size limits need an outbound capability/result … | 7.2 K04 | fix | §14.5; §18.5; D-SDK-31 | fixed | M9-in |
+| K05 Stale Workers can accumulate with `self_admit` disabled | 7.2 K05; the countersignature | fix-modified | §7.10 stale, cleanup; D-TEAM-29 | fixed | M4-in (Team M6-in) |
+| CC-01 The global path-copy limit is a service-rate constraint | 7.3 CC-01 | fix | §11.6 copy rate; §19.9; §19.8 | fixed | M2-in |
+| CC-02 The HDD model's write floor already consumes its 50% allowance … | 7.3 CC-02 | narrowed claim | §19.6; §19.9; D-OPS-17 | fixed | G0 |
+| CC-03 New-cluster placement does not make old cohorts or the first … | 7.3 CC-03 | fix | §19.9 cohorts; D-OPS-22 | fixed | M3-in |
+| CC-04 Redis sequence scripts need explicit lossless 64-bit handling | 7.3 CC-04 | fix-modified | §11.10; §6.8; D-PROTO-12 | fixed | M2-in |
+| CC-05 Cross-network “intersection” needs an explicit colluding-operator … | 7.3 CC-05 | narrowed claim | §8.11; §17.9 | fixed | M6-in |
+| CC-06 Socket issued-count cap versus eager reports may cap one … | 7.3 CC-06 | fix | §9.7; D-SOCK-5 | fixed | M5-in |
+| CC-07 Complete the maintenance and long-lived proof matrices | 7.3 CC-07 | fix | §10.6 scopes; §7.9 read_only; D-KEYS-26; §16.11; D-MCP-35 | fixed | M2-in, M6-in |
 
 ## 5. Peer-review questions, closed with their conditions
 
@@ -1503,7 +1568,7 @@ Peer review was the decider for these eleven questions and for Q-QUOTA-3's resid
 | Q-TEST-6: does the `oneof` ban cover every proto? | (b) | No `oneof` in envelope, stream or push messages, or anything they carry. §22.5's descriptor lint walks those roots, with an empty allowlist in v0. The reason is hot-path allocation, not `UrMlsCredential`, which has no oneof. | M1 | §22.13, §6.11 | resolved |
 | Q-CTX-4: who designs `ur share`? | (a), §9 (D-SOCK-16) | A blinded `share/<token>` socket while `ur share` runs, with a 256-bit secret in the link's fragment. A durable use count under D-MCP-11's reserve-before-effect rule. Bytes count on the transfer balance. Availability ends when the sharer exits. (b) would have changed format 1. | M2 | §1.13, §9 | fixed: D-SOCK-16 now binds the expiry R1b and R2 asked for, 24 h by default and at most 30 days (6.1) |
 | Q-KEYS-11: how long does GKM keep epoch objects? | (a) | 30 days, then until every leaf that acked in the last 30 days has applied them, on four conditions: (1) the newest epoch is never deleted, and the `group-info` pointer moves first; (2) generations, GroupInfo and recovery wraps live outside epochs; (3) a hold pauses the sweep; (4) §19.9 sizes the family at M2. *Changed since PEERQ:* acks are Redis soft state (owner decision 136), and the reconciler deletes only while the ack family has existed 30 days. *Residual:* §19.9's measured size. | M2 | §10.12, §10.6 | resolved |
-| Q-EVS-6: must a head reader that does not replay verify freshness? | (c), made cheap | Head readers replay signed statements, not payloads, from their pin, and check the statement behind every entry they read. Statements are at most 1 KiB, with `changes_root` and proofs for larger change lists. Phones keep durable pins and catch up by at most 4 MiB, else re-pin with a gap mark. Config, mailcfg, the mailbox's `vault/` and `i/`, and approvals are mirrored and replayed in full. A head below a pin needs an EvsReseed. Disclosed: a never-read path's version at the first pin rests on evs; a HeadCheck confirms the pin, not that version (§11.17's closure now says so: SC-N7). Under T6, the head names statements by hash and batch place; the reply is unchanged. | M2 | §11.17, §11.9 | disclosed. New: SC-N5, SC-N7 and OT-N8 (fixed) |
+| Q-EVS-6: must a head reader that does not replay verify freshness? | (c), made cheap | Head readers replay signed statements, not payloads, from their pin, and check the statement behind every entry they read. Statements are at most 1 KiB, with `changes_root` and proofs for larger change lists. Phones keep durable pins and catch up by at most 4 MiB, else re-pin with a gap mark. Config, mailcfg, the mailbox's `vault/` and `i/`, and approvals are mirrored and replayed in full. A head below a pin needs an EvsReseed. Disclosed: a never-read path's version at the first pin rests on evs; a HeadCheck confirms the pin, not that version (§11.18's closure now says so: SC-N7). Under T6, the head names statements by hash and batch place; the reply is unchanged. | M2 | §11.18, §11.9 | disclosed. New: SC-N5, SC-N7 and OT-N8 (fixed) |
 | Q-OPS-2: should small objects pack? | (b) in v0; (a) a switch | Format 1 freezes content-id segment ids, the `spidx/` family and its lookup order, and reserved locator kinds 3 and 4, never a physical address. After §22.8's `hdd` row (M3; OT-N4), (a) turns on for segments under 1 MiB and older than 7 days, once HDD drive operations pass 50% of capacity. GETs, ~25,600 of year two's ~32,000 operations a second, go to the page cache and (c), more HDD sets. *Changed since PEERQ:* history packing follows owner decision 136 (after 24 h; a small repo's at 256 KiB or 7 d), not weekly; and gkm's `gen/` packs into §10.16's gen packs only from §19.9's gen trigger, not by a fixed date, the packs counting as `gen/` for shreds and re-seeds. | M2 | §19.14 | fixed: R1b's `gen/` packing now has a trigger and a shred and erasure rule (6.1). New: OT-N4 (fixed) |
 | Q-BRIDGE-2: how do bridge links reach targets? | (c) | One `BridgeHost` link per target: a fixed `ProviderSpec{ClientId}` multi client with window size 1, PostQuantumEncryption Required, `OverrideAllowDirect=false` until C3, and `EnableIcmp`, never `DefaultMultiClientSettings`. Each window client carries the subject's WindowDelegation into C13's seal. (b) is adopted only where §22.9 measures per-target memory over the iOS budget and the new framing passes its tests. The iOS tunnel runs no link until measured. | M4 | §17.14 | resolved |
 | Q-SDK-5: where does the iOS device role live? | (b) now | `sidecar/device` imports only connect and a generated `sidecar/protocol/bridge`, which imports only std and protobuf and holds what the role verifies. `make check` fails the ios_extension leg if it links the root or `protocol`. `make size`'s 1 MiB gate stays and passes at M4. §2.10 gains the routing-integrity row, and `device.Bridge` replaces `sidecar.Bridge`. | M4 | §18.13 | resolved; R1b's and R2's (a) declined-as-stated |
@@ -1512,7 +1577,7 @@ Peer review was the decider for these eleven questions and for Q-QUOTA-3's resid
 
 ## 6. Remaining open items and verification gaps
 
-The final panel marks no finding open. Sections 6.1 and 6.2 list what it left, 24 findings partial and 61 new issues, 10 of them major, each with its final status after rounds 3 to 6 and the major re-checks (sections 6.7 and 6.8). None stays partial. Rounds 3 and 4 left seven findings and four majors partial: the close-out build resolved the finding through the front matter, and rounds 5 and 6 fixed the majors SL-N1, WR-N1, ST-N1 and AU-N2 and the six findings through them (section 6.8).
+The final panel marks no finding open. Sections 6.1 and 6.2 list what it left, 24 findings partial and 61 new issues, 10 of them major, each with its final status after rounds 3 to 6 and the major re-checks (sections 6.7 and 6.8). None stays partial. Rounds 3 and 4 left seven findings and four majors partial: the close-out build resolved the finding through the front matter, and rounds 5 and 6 fixed the majors SL-N1, WR-N1, ST-N1 and AU-N2 and the six findings through them (section 6.8). Section 6.9 adds the v1 additions, which the final meta review has since reviewed (section 7).
 - **Final:** as section 1 defines it. A *fixed* item waits for a reviewer's re-check at its gate. *(R4)* marks a fix that round 4 changed again after the major re-check or the cross-section check, which no reviewer has read since.
 - **Decider:** the sections whose editors settle the item; the owner only where a decision or its record is touched. For a fixed item, where to re-check it.
 - **By:** the review gate where the item must be settled (§23.8): G0 for text and for closures of the questions in §23.6's M0-M2 rows; otherwise the entry review (Gn-in) of the milestone whose design closure in §23.6 holds the mechanism.
@@ -1532,7 +1597,7 @@ The final panel marks no finding open. Sections 6.1 and 6.2 list what it left, 2
 | R1b C04 | T2-21 | fixed (R4) | Nothing (WR-N7). | §10, §22, §5 | M2-in |
 | R1 F06 | T1-22, T2-12 | fixed (R4) | Nothing. §5.9, §7.9 and §10.8 say that no rebind reaches an earlier keychain backup, and each device whose backups may be exposed is revoked as compromised and enrolled anew. Related: AU-N2's keychain.wrap gap, now fixed (owner decision 149; rounds 5-6), which extends the rule to voided bindings. | §5, §7 | G0 |
 | R3's HNDL major | T2-24 | fixed | Nothing (WR-N3, WR-N8). | §10 | G0 |
-| R1b F13; R1 F19; R2 F14 | T3-07 | fixed | Nothing. A change counts as the run's edit only when the run's before- and after-hashes chain across the scan; the restore suite and FS-26 add a hand edit before the run's edit. | §16, §22 | M3-in |
+| R1b F13; R1 F19; R2 F14 | T3-07 | fixed | Nothing. A change counts as the run's edit only when the run's before- and after-hashes chain across the scan; the restore suite and FS-26 add a hand edit before the run's edit. Related: the meta review's F14, the live-worktree commit race, fixed by its change to §16.7's apply (section 7). | §16, §22 | M3-in |
 | R3 C3 | T3-21 | fixed (R4) | Nothing. §7.4's stage 2 waits for the extension release that stops persisting `by_jwt`, which round 4 scheduled (§23.7), and `ur` refuses to enroll beside it (§5.6). | §7, §18, §5 | M1-in |
 | R3's "§6 is not a wire spec" major | T4-18 | fixed (R4) | Nothing. §6.5-§6.7 define the stream offsets, the windows and a response's type, and §9.4 K's labels and the listing seal; round 4 added §22.5's vectors. | §6, §9 | M2-in |
 | R3's platform-listener major | T4-11 | resolved (close-out build) | Nothing. The front matter's X6 row and Appendix A's D-MAIL-1 row now name D-MAIL-10's listener, as D-MAIL-1 and the requirement rows do. | — | — |
@@ -1546,14 +1611,14 @@ Ids name the panel's cluster and its own number (peer/FINAL-*.md): SC storage-co
 
 | Id | Severity | Entry | Final | Issue, and what remains | Decider | By |
 |---|---|---|---|---|---|---|
-| SC-N1 | major | T1-02, T1-05 | resolved | A fence, seal lease or source drop gave a warm-cache git push a false 409. The 412 row's git branch now decides by version, and leases set no fence_ms (§11.8; FS-5). Round 4 fixed its checker's three minor follow-ups: the lease's own head CAS, the costs row and §11.19's FS-1 ask. | §11, §22 | M2-in |
+| SC-N1 | major | T1-02, T1-05 | resolved | A fence, seal lease or source drop gave a warm-cache git push a false 409. The 412 row's git branch now decides by version, and leases set no fence_ms (§11.8; FS-5). Round 4 fixed its checker's three minor follow-ups: the lease's own head CAS, the costs row and §11.20's FS-1 ask. | §11, §22 | M2-in |
 | SC-N2 | minor | T1-17, T1-24 | fixed | The seal's re-check skipped 5g's directory rules. It now reruns 5g per part, merges directory deltas and checks the bound (§11.8 seal row; FS-9). | §11, §22 | M2-in |
-| SC-N3 | minor | T1-02 | fixed (R4) | Fences compared unsynced clocks; chrony now runs on the evs, gkm and taskworker hosts, and evs answers pushes 503 past a 50 ms offset (§11.8, §19.6; FS-1); round 4 gated taskworker's fences too and put chrony on the Redis masters' hosts. | §11, §19, §22 | M2-in |
-| SC-N4 | minor | T1-02 | fixed (R4) | A refusal fence ended every concurrent push. A refusal now relies on a recent fence, at most one a second per ref, and leases set no fence_ms (§11.8; D-EVS-23; §11.20; FS-1); round 4 reconciled §11.19's FS-1 ask on seals with the fence row. | §11 | M2-in |
-| SC-N5 | minor | T1-10 | fixed | Proving a path unchanged needed a push's whole change list. Changes are sorted, adjacent-leaf proofs show absence, and the 4 MiB budget counts proofs (§11.6, §11.9, §11.14; FS-10). | §11, §22 | M2-in |
+| SC-N3 | minor | T1-02 | fixed (R4) | Fences compared unsynced clocks; chrony now runs on the evs, gkm and taskworker hosts, and evs answers pushes 503 past a 50 ms offset (§11.8, §19.6; FS-1); round 4 gated taskworker's fences too and put chrony on the Redis masters' hosts. Since the meta review's F10, clocks still bound evacuation and GC fences and a refusal record's lapse (section 7). | §11, §19, §22 | M2-in |
+| SC-N4 | minor | T1-02 | fixed (R4) | A refusal fence ended every concurrent push. A refusal now relies on a recent fence, at most one a second per ref, and leases set no fence_ms (§11.8; D-EVS-23; §11.21; FS-1); round 4 reconciled §11.20's FS-1 ask on seals with the fence row. Superseded by the meta review's F10 (section 7): a refusal now rests on the head's record and ends no other push. | §11 | M2-in |
+| SC-N5 | minor | T1-10 | fixed | Proving a path unchanged needed a push's whole change list. Changes are sorted, adjacent-leaf proofs show absence, and the 4 MiB budget counts proofs (§11.6, §11.9, §11.15; FS-10). | §11, §22 | M2-in |
 | SC-N6 | minor | T1-06, T1-12 | fixed | Shred phase 1 now waits 20 s, outlasting §19.6's request deadline (§11.12, §19.6). | §11, §10, §19 | M2-in |
-| SC-N7 | minor | T1-10 | fixed (R4) | §11.17's Q-EVS-6 closure ended "Residual: none". It now names its limit, that a HeadCheck confirms the pin and not a never-read path's version, and FS-10 serves a refused push's entry as current; round 4 aligned §11.9's trusts row with §2.8. | §11, §2, §22 | G0 |
-| SL-N1 | major | T1-13, T1-16, T5-12 | fixed (owner decision 146; rounds 5-6) | Rounds 3 and 4 let an erasure's CLOSURE push and its `?closure=1` uploads through at the limit, bounded by rate, size and a daily allowance, but the allowance was network-wide, so one admin's CLOSUREs could make other erasures wait; §11 never named it, and FS-47 expected 429 for a CLOSURE push that §11.12 queues as P1. Now the allowance is per eraser, with a floor: each erasing sidecar has its own UTC-day `evs_closure_bytes_per_day` and 60 closure uploads a minute, which §21 may tighten but never below `evs_closure_bytes_floor`; FS-47 queues the push as P1, and §11.13 and §15.7 state the wait at the floor (§11.12, §11.19, §20.4, §20.7, §21.16; D-EVS-26). Residuals: section 6.8. | §11, §20, §15, §21, §22 | M2-in |
+| SC-N7 | minor | T1-10 | fixed (R4) | §11.18's Q-EVS-6 closure ended "Residual: none". It now names its limit, that a HeadCheck confirms the pin and not a never-read path's version, and FS-10 serves a refused push's entry as current; round 4 aligned §11.9's trusts row with §2.8. | §11, §2, §22 | G0 |
+| SL-N1 | major | T1-13, T1-16, T5-12 | fixed (owner decision 146; rounds 5-6) | Rounds 3 and 4 let an erasure's CLOSURE push and its `?closure=1` uploads through at the limit, bounded by rate, size and a daily allowance, but the allowance was network-wide, so one admin's CLOSUREs could make other erasures wait; §11 never named it, and FS-47 expected 429 for a CLOSURE push that §11.12 queues as P1. Now the allowance is per eraser, with a floor: each erasing sidecar has its own UTC-day `evs_closure_bytes_per_day` and 60 closure uploads a minute, which §21 may tighten but never below `evs_closure_bytes_floor`; FS-47 queues the push as P1, and §11.13 and §15.7 state the wait at the floor (§11.12, §11.20, §20.4, §20.7, §21.16; D-EVS-26). Residuals: section 6.8. Narrowed by the meta review's F19 (section 7): §11.13's and §15.7's wait, stated per entry as the next 00:00 UTC, assumed one representation per message; F19 restates it from closure bytes, and the allowance, floor and pacing stand. | §11, §20, §15, §21, §22 | M2-in |
 | SL-N2 | major | T1-07 | resolved | The path-epoch copy skipped directories a fold had moved. A fold now carries the source's rows, each tagged with its epoch, and the copy replaces them on its 412 path (§11.6 copy and read rows; EvsName.epoch; FS-4). Its checker raised six more issues, one major: a path removed during a copy came back. Round 4 fixed them with removed entries (§11.7; evs-11), and no reviewer has re-checked those fixes. | §11, §22 | M2-in |
 | SL-N3 | minor | T1-07 | fixed (R4) | Steady creation could starve a PATH_EPOCH. A path tail and a creation block of at most 2 min let it land, batched epochs alarm 1 h past due, and D-EVS-12 reads "due within 24 h" (§11.6; FS-4); round 4 added the new head fields to §2.8's evs-3 and evs-12. | §11, §22 | M2-in |
 | SL-N4 | minor | T5-01, T5-02 | fixed | D-OPS-14 gave a second host RPO 0 by set state. §19.6 now judges each object by its shards, and FS-40 adds a write that misses a drive with every host up. | §19, §22 | G0 |
@@ -1576,18 +1641,18 @@ Ids name the panel's cluster and its own number (peer/FINAL-*.md): SC storage-co
 | WR-N3 | minor | T2-05, T2-24 | fixed | Q-TRUST-9 and Q-KEYS-2 state their residuals, and D-TEAM-17 and §8.7 qualify "visibly". | §2, §10, §7, §8 | G0 |
 | WR-N4 | minor | T2-08 | fixed (R4) | The window bounds admission, not what the code reads. §2.6 and §2.10 say the code reads its wraps at once, and D-TEAM-21 says "no key to the proposed device"; round 4 gave Q-KEYS-7 and Q-TEAM-11 the same residual. | §2, §7, §10 | G0 |
 | WR-N5 | minor | T2-08 | fixed (R4) | A backdated veto could fork every reader; a veto kept off the log now forks only devices that held it before the activation (§7.9; D-TEAM-21). Round 4 added the case to §22. | §7, §6 | M2-in |
-| WR-N6 | minor | T2-24 | fixed (R4) | The post-compromise bound omitted KEKs until the device's own path commit and a re-signed ReaderKey. A ReaderKey is now a fresh pair every 7 days, and §10.5 and §2.10 put the heal point after both events, about 37 days after a copy (60 above 50 leaves); round 4 aligned §7.9's expiry row. | §10, §2, §5 | M2-in |
+| WR-N6 | minor | T2-24 | fixed (R4) | The post-compromise bound omitted KEKs until the device's own path commit and a re-signed ReaderKey. A ReaderKey is now a fresh pair every 7 days, and §10.5 and §2.10 put the heal point after both events, about 37 days after a copy (60 above 50 leaves); round 4 aligned §7.9's expiry row. Narrowed by the meta review's F06 (section 7): the fresh pair held only against a passive copy with an honest gkm; the 37-day figure now carries that qualification, with the 7-day ReaderKey validity (D-KEYS-25). | §10, §2, §5 | M2-in |
 | WR-N7 | minor | T2-09, T2-21 | fixed (R4) | KF1 writes the first RecoveryWraps before activation, a later commit heals the `group-info` pointer, FS-20 kills both boundaries, and §5.9 cites §10.8's limit; round 4 aligned §10.14's FS-20 ask. | §10, §22, §5 | M2-in |
 | WR-N8 | minor | T2-25, T5-23 | fixed | A gap in a step the 0x0010 artifact requires holds the freeze unless a second peer covers that step (§10.4, §22.10, §23.8). | §22, §10, §23 | M2-in |
 | WR-N9 | minor | T2-08, T2-09 | fixed (R4) | A code-only recovered device's genesis rested on what api serves; it now checks §7.9's anchor before any write (EX5; §5.6). Round 4 rebuilt the anchor after the cross-section check found seven majors in it: stated two ways, gating too little, resting on a recovery key every config reader holds, and absent from §10.8. | §7, §5, §2, §10 | M2-in |
 | RT-N1 | major | T3-09 | resolved | MCP's evs tools reached `secret` repos and the config's keys. Every evs tool now refuses kind secret, reads of the config are refused (§16.5, §16.6; D-MCP-17), and §22.7's actions row and §22.15's testHookSecret sites test it. Optional wording left: D-MCP-17 says the tools "never read the config repo", where §16.6 refuses only reads of its contents, and §16.6 calls config files "records". | §16 | G0 |
 | RT-N2 | minor | T3-09 | fixed (R4) | A host's first BridgeAddress could not be filed through MCP; §16.6, §5.8, D-MCP-17 and §17.9 now admit it. Round 4 added the §22.7 refusal cases. | §16, §5, §17, §22 | M4-in |
 | RT-N3 | minor | T3-01, T3-09 | fixed | bridge_expose returns §17.8's rule id, and bridge_close takes either (§16.5, §17.9). | §16, §17 | M4-in |
-| RT-N4 | minor | T3-16 | fixed | WK2 now names every way a wake is lost, and counts the failed XADDs (§18.7; FS-36). | §18, §22 | M8-in |
-| RT-N5 | minor | T3-16 | fixed (R4) | Losing a master that did not hold the one sentinel lost its tokens; a sentinel per slot now re-projects them (§18.7; FS-36). Round 4 listed the sentinels in §2.8's api-6. | §18, §19, §22 | M8-in |
+| RT-N4 | minor | T3-16 | fixed | WK2 now names every way a wake is lost, and counts the failed XADDs (§18.7; FS-36). It stands; token-projection order was the meta review's F15, fixed (section 7). | §18, §22 | M8-in |
+| RT-N5 | minor | T3-16 | fixed (R4) | Losing a master that did not hold the one sentinel lost its tokens; a sentinel per slot now re-projects them (§18.7; FS-36). Round 4 listed the sentinels in §2.8's api-6. It stands for master loss; token-projection order was the meta review's F15, fixed (section 7). | §18, §19, §22 | M8-in |
 | RT-N6 | minor | T3-02, T3-08 | fixed (R4) | A decision approved before taint kept spending; the daemon now refuses it as stale and files a tainted request (§16.6, §5.4; §22.7). Round 4 aligned §3.7's F8. | §16, §5, §22 | M3-in |
 | RT-N7 | minor | T3-12 | fixed (R4) | A receipt-only depositor's other entries had no enforcement point; ingest consumes them unread, with an alarm (§11.12; FS-30). Round 4 added the alarm to §16.8 and D-MCP-18. | §11, §16, §22 | M3-in |
-| RT-N8 | minor | T3-18 | fixed | Two tabs ran two Workers on one keychain; only the holder of a per-network Web Lock loads state, and the others relay (§18.8; §22.9). | §18, §22 | M4-in |
+| RT-N8 | minor | T3-18 | fixed | Two tabs ran two Workers on one keychain; only the holder of a per-network Web Lock loads state, and the others relay (§18.8; §22.9). K05, which the meta review called an already-disclosed lifecycle gap, is now bounded, and admins get a cleanup list before the cap (D-TEAM-29; section 7). | §18, §22 | M4-in |
 | EM-N1 | minor | T4-09 | fixed | ext-3 now names receivers' reception-time lookups (D-MAIL-14). | §2, §15 | G0 |
 | EM-N2 | minor | T4-10, T4-28 | fixed | Burner mail from an operator listed only for MTA-STS stays "validated" under owner decision 135, and §15.5, §15.16, EX3 and §2.18 now say that no policy applies to it; §22.7 tests the label's basis. | §15, §2, §22; the owner for the second option | M7-in |
 | EM-N3 | minor | T4-04 | fixed (R4) | Strong mode's ALIAS could flatten CAA. It now flattens A and AAAA only, with a canary CAA checked at setup and renewal (§12.8, §13.8; FS-32); round 4 defined the apex target, the probe's pending state and the compelled-operator risk. | §12, §13, §2, §22 | M6-in |
@@ -1601,27 +1666,27 @@ Ids name the panel's cluster and its own number (peer/FINAL-*.md): SC storage-co
 | OT-N7 | minor | T5-03 | fixed | Q-OPS-3's residual is marked closed by peer review, with OT-N1's bound. | §19 | G0 |
 | OT-N8 | minor | T1-10 | fixed (R4) | §2.8 now says a re-pin past §11.9's 4 MiB budget takes every path's version on evs's word; round 4 aligned §11.9's trusts row and Q-EVS-6. | §2, §11 | G0 |
 | OT-N9 | minor | T5-07, T5-18 | fixed | FS-50 keeps its pager case at T3, and its out-of-hours host return is §22.8's production `hosts` row. | §22 | M3-in |
-| ST-N1 | major | T1-01, T1-03 | fixed (owner decision 148; rounds 5-6) | Rounds 3 and 4 read the head before entries and added I-EVS-8 and FI-15 (§11.7-§11.9), but a late or redundant removal fold could still delete an entry a later fold wrote, and entry versions restarted after a delete, so a stale push passed 5g. Now removal folds write versioned tombstone markers with If-Match, never blind deletes: a marker {removing push id, r, the path's version} goes only over an entry holding an older version, a re-created path's versions continue from it, and taskworker deletes markers only in collect windows a head CAS opens, once folded_through ≥ r + 64 (§11.7, §11.8, I-EVS-8; D-EVS-31; §2.8 evs-3, evs-11; FI-15, FS-58; D-OPS-20). Residuals: section 6.8. | §11, §22, §19, §2 | M2-in |
+| ST-N1 | major | T1-01, T1-03 | fixed (owner decision 148; rounds 5-6) | Rounds 3 and 4 read the head before entries and added I-EVS-8 and FI-15 (§11.7-§11.9), but a late or redundant removal fold could still delete an entry a later fold wrote, and entry versions restarted after a delete, so a stale push passed 5g. Now removal folds write versioned tombstone markers with If-Match, never blind deletes: a marker {removing push id, r, the path's version} goes only over an entry holding an older version, a re-created path's versions continue from it, and taskworker deletes markers only in collect windows a head CAS opens, once folded_through ≥ r + 64 (§11.7, §11.8, I-EVS-8; D-EVS-31; §2.8 evs-3, evs-11; FI-15, FS-58; D-OPS-20). Residuals: section 6.8. Its dependence on the store's ordering is now D-OPS-20's tested settle rule (the meta review's K01; FS-114, FI-30, StoreSettle.tla), fixed, for re-check at M2-in (section 7). | §11, §22, §19, §2 | M2-in |
 | ST-N2 | minor | §3.6 | fixed (R4) | §11.13 and §19.6 now read "3.7-4.0 DWPD at the ~1-1.6 records a batch of a set near capacity"; round 4 aligned §19.9's pb/ row. | §11, §19 | G0 |
 | ST-N3 | minor | §3.6 | fixed | R-EVS-15 says 3-5 store round trips. | §11 | G0 |
-| ST-N4 | minor | §3.6 | fixed | The byte bucket's 512 B sector bound caps writes near 39% of rated IOPS, T is defined, and FI-14 excepts a drive under heal (§11.13, §19.6). | §11, §19, §22 | M2-in |
+| ST-N4 | minor | §3.6 | fixed | The byte bucket's 512 B sector bound caps the other classes' writes near 39% of rated IOPS, T is defined, and FI-14 excepts a drive under heal (§11.13, §19.6). Narrowed by the meta review's F12 (section 7): P0's IOs follow its bytes; the sector bound never established an aggregate P0 bound, and under owner decision 186 none exists. | §11, §19, §22 | M2-in |
 | ST-N5 | minor | §3.6 | fixed | `{evsh_}` serves each head only within 10 min of its own cache time (§11.9; evs-24; FS-62). | §11, §2 | M2-in |
 | ST-N6 | minor | §3.6 | already fixed | Owner decision 145's record was corrected 2026-11-04, as decision 140's was: ~400-450 pushes/s a set once load spans clusters and five to six sets in year two. Section 2.4 says so, and the 2026-11-05 close-out build's front matter and §19's Q-OPS-10 carry the corrected sizing. | — | — |
 
 **Also from the assembly.** The seventh assembly's report (review/ASSEMBLY7.md, "Problems not fixed") added three section gaps, each a text edit by G0. Round 3 fixed all three:
 - §2.8's api-7 and §19.7's `{acl_}` tag omitted the `{acl_}q` counter that §7.17 says api-7 lists; both now list it (§2, §7, §19);
 - §20.4's pro.yml lacked the authorization log's append limits that §7.9 puts there; it now carries them (§20, §7);
-- §11.19 said §23.7 sizes year two at five to six sets, though §23.7 gives no count; it now cites §19.9 (§11, §23).
+- §11.20 said §23.7 sizes year two at five to six sets, though §23.7 gives no count; it now cites §19.9 (§11, §23).
 
 Its fourth, a host's BridgeAddress, is RT-N2.
 
 ### 6.3 Q-EVS-9, closed (owner decisions 2, 140, 145)
 
-The fix round raised Q-EVS-9 in §11.17, in answer to VERIFY-T6's finding that owner decision 140's ~10-15 KiB per push target was silently unmet.
+The fix round raised Q-EVS-9 in §11.18, in answer to VERIFY-T6's finding that owner decision 140's ~10-15 KiB per push target was silently unmet.
 - **The problem.** Owner decision 2's commit point is the head's If-Match overwrite. That overwrite alone writes ~14 KiB on each drive (~10.5 KiB on 1 KiB blocks), because MinIO also rewrites the old `xl.meta`.
 - **Closed (owner decision 140, record corrected 2026-11-04).** The ~10-15 KiB of drive writes a push in the record was the design team's first estimate, not the owner's requirement, which is the PM9A3 profile itself ("We have to make that iop profile work"). The binding target is the drive budget: at most 0.8 DWPD and at most 50% of rated IOPS per drive at the design load. The design meets it at about 27-43 KiB per push, and D-TEST-11 gates format 1 on at most 43 KiB per push per drive. That was option (a).
 - **Not taken:** (b) a head per version, created If-None-Match, which departs from owner decision 2's If-Match commit point; (c) patching MinIO to skip the old `xl.meta` copy, which gives up its torn-write backup.
-- **Text.** §11.13, §11.17, D-TEST-11 and §23.6 record the closure, so §1.9's, §3.1's and §23.6's statements that no owner question is open hold. The storage-tier cluster found it resolved.
+- **Text.** §11.13, §11.18, D-TEST-11 and §23.6 record the closure, so §1.9's, §3.1's and §23.6's statements that no owner question is open hold. The storage-tier cluster found it resolved.
 
 ### 6.4 Verification: the verifiers, FIX3 and the final panel
 
@@ -1646,7 +1711,7 @@ The blockers, all addressed in the text:
 - **One leaves rule.** §7.9's rule is the only one; §5.6, §8.12 and §10.4 cite it.
 - **Expiry rotations.** A rotation covering an authorization expiry is cause REMOVE (§10.9).
 - **Recovery window.** It runs from the newest recovery-key signature, so a late cosign restarts it (§7.9).
-- **The P2 cap.** It is replaced by a pre-paid, work-conserving floor (§11.13).
+- **The P2 cap.** It was replaced by a pre-paid, work-conserving floor (§11.13), which the meta review's F13 made a wallet: funded P2 spends W, never T again (section 7).
 - **`pidx/` keys.** They are container-keyed (§11.13).
 
 **What we checked.** We compared each of the 117 issues with the edited sections and found the fix text in place for every one, except two outside the sections, now settled (6.5). Where the fix round chose between the verifier's options, the choice is in the text:
@@ -1697,9 +1762,9 @@ The blockers, all addressed in the text:
 ### 6.6 Evidence the design still waits for
 
 These are gates by design, not defects. Every throughput, endurance and capacity figure in §11.13, §19.6 and §19.9 is a model inference until these runs replace it. That includes:
-- the per-set capacity of ~400-450 pushes/s, which falls to ~310-330 at the model's high constants (§11.20);
+- the per-set capacity of ~400-450 pushes/s, which falls to ~310-330 at the model's high constants (§11.21);
 - year two's five to six clusters;
-- the 40% P2 floor.
+- the 40% P2 floor, which the meta review's F13 replaced: funded P2 spends a prepaid wallet, and only unfunded P2 takes the allowance, capped at 40% (section 7).
 
 | When | Evidence | Owner |
 |---|---|---|
@@ -1720,7 +1785,7 @@ These are gates by design, not defects. Every throughput, endurance and capacity
 - **Cross-section check.** Six checkers looked for issues that round 3's concurrent edits left between sections (peer/XS-ISSUES.json) and found 86, 20 of them major.
 - **Round 4.** It fixed those 135 issues (peer/R4-OUTCOMES.json): 343 section items, 276 fixed and 67 already fixed.
 - **Final re-check.** The seven partial majors were checked again against the sections as round 4 left them. OT-N1, OT-N2 and RT-N1 are resolved, with minor leftovers; SL-N1, WR-N1, ST-N1 and AU-N2 stayed partial until owner decisions 146-149 and rounds 5 and 6 fixed them (section 6.8).
-- **The build.** The DESIGN.md built after round 4 (SHA-256 `164456b9…`, 14,510 lines) was assembled from the sections then, and its validation passed; section 1's build follows round 6 (section 6.8).
+- **The build.** The DESIGN.md built after round 4 (SHA-256 `164456b9…`, 14,510 lines) was assembled from the sections then, and its validation passed; the round-6 build followed it (section 6.8).
 - **What no reviewer has re-checked.** Round 4's minor fixes were checked by the build validation but not each by an independent reviewer. That validation checks ids, links, superseded options, open questions and decision citations, not whether a fix closes its issue. The same holds for:
   - round 3's minor fixes, whose only second reading was the cross-section check, which looked for issues the concurrent edits left, not at each fix in turn;
   - 11 of the 29 major issues round 4 fixed, which lie outside the seven majors re-checked: the code-only recovery anchor (seven, under WR-N9), the escrow index's migration group (two, under OT-N3), the extension release that stage 2 waits for (T3-21) and removals during a path-epoch copy (SL-N2).
@@ -1736,28 +1801,402 @@ Owner decisions 146-149 (section 2.4) decided the four majors the final re-check
   - closure uploads count per eraser, within each eraser's own 60 a minute, and the network's erasure rate only queues ERASE and CLOSURE pushes as P1 (§11.12, §15.7, §20.7; FS-47);
   - tombstones are collected only in collect windows a head CAS opens (`EvsCollect`), and fold and copy writes are cancelled 15 s after their head read (§11.7's stale and collect rows; §2.8 evs-3, evs-11; FI-15, FS-58);
   - D-OPS-20: both clusters run an in-house MinIO build whose cancels reach every drive and keep locks until drive operations answer, so a cancelled write lands within a measured lag or never, and before any later request on its key (§19.6's cancel row; §19.17).
-- **Not re-checked.** These fixes passed the build validation (section 1), but no independent reviewer has re-checked each of them. That validation checks ids, links, superseded options, open questions and decision citations, not whether a fix closes its issue. Sections 6.1 and 6.2 therefore mark them *fixed*, not *resolved*, for a reviewer's re-check at M2-in.
+- **The build.** The DESIGN.md built after round 6 (SHA-256 `8bff53d4…`, 14,724 lines, committed in the sidecar checkout as 708bb45) validated under owner decisions 1-149; the 41ba6670 build added the v1 additions (section 6.9), and section 1's build the final meta review's incorporation (section 7).
+- **Not re-checked.** These fixes passed the build validation, but no independent reviewer has re-checked each of them. That validation checks ids, links, superseded options, open questions and decision citations, not whether a fix closes its issue. Sections 6.1 and 6.2 therefore mark them *fixed*, not *resolved*, for a reviewer's re-check at M2-in.
 - **Residuals the round notes name:**
   - *One config writer* (§10.15's risk row): the restored code's device anchors only once a config writer gives it its ReaderWrap (KF2). If M, the network's only config writer, loses every device after a void no device re-signed, none remains, and the device never anchors. M's devices raise `recovery_rebind` at the void, and any of them can run `ur keychain recovery-rotate` (§5.9).
-  - *Closure bytes per network* (§20.15's risk row): with no network-wide closure-upload rate, a network's daily closure bytes are bounded only by its admissions times the allowance, about 312 GiB for a Team's 5,000.
-  - *Marker cost* (§11.20's risk row): each marker adds ~12.5-14 KiB of drive writes, and a collect window can hold a re-creating fold for up to 30 s; §22.8's fold row measures both before D-TEST-11's 43 KiB gate.
-  - *Versions after collection* (§11.7's versions row): owner decision 148's "versions never restart" holds while a marker stands. Once it is collected, at folded_through ≥ r + 64, a path may restart at 1, since no push based before the removal can then commit.
-  - *A stalled drive* (§19.17's risk row): under D-OPS-20's build, a drive operation stalled past the 30 s drive timeout can still land late.
-  - *D-OPS-20 not yet in §11 and §22* (§19's round-6 note; by M2-in): §22.9's file-cluster row names final-upstream MinIO, not D-OPS-20's build, and lacks the slowed-remote-drive case and "before any later request on its key"; §11.13's store needs and §11.3 lack D-OPS-20's measured lag, ordering and remote-drive fact; and §11.7's collect row keeps 100 ms margins, which two clocks each up to 50 ms off (§19.6) plus the cancel's lag can exceed.
-  - *The metadata list* (§2's round-6 note): 15 of §2.8's 90 rows, evs-3 and evs-11 among them, are not strict YAML, since plain scalars contain ": "; this predates rounds 5 and 6.
+  - *Closure bytes per network* (§20.15's risk row; corrected after the meta review, section 7.5): §20.7 paces a network's `?closure=1` uploads at 4 a second in equal turns (`evs_closure_uploads_per_s`), so no eraser starves another. A day's closure bytes stay bounded by the erasers' allowances: about 312.5 GiB for a Team's 5,000, and with admission churn the pacing caps uploads near 358 GiB. Aggregate P0 work is F12's, answered by owner decision 186 and disclosed in §11.21's P0 row, not this residual's.
+  - *Marker cost* (§11.21's risk row): each marker adds ~12.5-14 KiB of drive writes, and a collect window can hold a re-creating fold for up to 30 s; §22.8's fold row measures both before D-TEST-11's 43 KiB gate.
+  - *Versions after collection* (§11.7's versions row; corrected after the meta review, section 7.5): no longer a residual. A creation takes the version max(b, m) + 1, b being the push's effective base version and m the version of the newest removal its marker or the window holds, so a path's versions never restart, after a marker's collection or after a path-epoch copy (I-EVS-8, FI-15, FS-58).
+  - *A stalled drive* (§19.17's risk row): under D-OPS-20's build, a drive operation stalled past the 30 s drive timeout could still land late. *Closed by the meta review's K01 (section 7):* D-OPS-20's settle rule applies a drive commit only over the version its coordinator read and before its deadline, and releases a key only once settled; the cost is a held key after two failures during one write (§19.17's new row).
+  - *D-OPS-20 not yet in §11 and §22* (§19's round-6 note; by M2-in): §22.9's file-cluster row named final-upstream MinIO, not D-OPS-20's build, and lacked the slowed-remote-drive case and "before any later request on its key"; §11.13's store needs and §11.3 lacked D-OPS-20's measured lag, ordering and remote-drive fact; and §11.7's collect row kept 100 ms margins, which two clocks each up to 50 ms off (§19.6) plus the cancel's lag can exceed. *Since closed by the v1 rounds (section 6.9):* §22.9's row names D-OPS-20's build and gates the lag under 100 ms with another host's drives slowed, §11.3 and §11.13 cite D-OPS-20, and §11.7's collect margins count both clocks' slew and hold while that lag stays under 100 ms. *Narrowed by the meta review's K01 (section 7):* that "lag under 100 ms" gate is now a reported latency, and the margins rest on deadlines and clocks.
+  - *The metadata list* (§2's round-6 note): 15 of §2.8's 90 rows, evs-3 and evs-11 among them, were not strict YAML, since plain scalars contained ": "; this predated rounds 5 and 6. *Since closed by the v1 rounds:* §2.8's list is now v7, and all 94 of its rows parse as strict YAML.
 
-## 7. What the second round answered, and what reviewers re-check next
+### 6.9 v1 additions (2026-11-05)
 
-The final panel (section 6.4) answered the questions this section put to the reviewers. In brief, by group:
+Owner decisions 150-184 (section 2.4) added v1's indexer, search, versionless storage and team directory to DESIGN.md. They answer no review finding, so sections 3 to 5 and the counts in section 2.2 are unchanged.
+
+- **What was added:**
+  - the indexer, a device its network designates, none by default, as the always-on point device for background services such as mail, mirrors and index upkeep ([§3.6](DESIGN.md#36-runtime-topologies); owner decisions 150, 177, 178);
+  - a per-repo encrypted trigram search index, on by default and searched on the device, which phones can also query through a designated indexer that serves the repo ([§11.14](DESIGN.md#1114-the-encrypted-search-index); owner decisions 151-157, 172, 175, 176);
+  - versionless objects, and an admin drop-history action that can be cancelled for 7 days ([§11.7](DESIGN.md#117-diffs-checkpoints-index-entries-reconstruction); owner decisions 158-165, 167, 168, 173, 183, 184);
+  - search in `ur` and the MCP server ([§16.10](DESIGN.md#1610-search); owner decision 166);
+  - the team directory, where runs, repos and workers are announced and members request access ([§16.11](DESIGN.md#1611-the-team-directory); owner decisions 170, 171, 179-182);
+  - storage format 2 as its own milestone, M10, whose numbers format 1 reserves at M2 (§23.4; D-PHASE-9; owner decisions 163, 169, 174).
+- **How they were made:**
+  - Six architects wrote parallel briefs (peer/v1/A-index-store.md to F-tests-phase.md), and a reconciler merged them into 313 orders (peer/v1/RECONCILE.md). Three later designs followed the owner's answers: peer/v1/G-directory.md, H-drop-history.md and I-remote-search.md.
+  - Round 1 applied the orders to 17 sections, each followed by an independent checker, and left 155 leftovers (peer/v1/ROUND1-RESULTS.json).
+  - Round 2 applied 241 items across 18 sections: the three later designs, decisions 167-184 and the leftovers it routed (peer/v1/r2/; ROUND2-RESULTS.json).
+  - Round 3, a final alignment pass, applied 80 items (peer/v1/r3/; ROUND3-RESULTS.json).
+  - Server commits of 2026-11-05 moved cited lines, so a refresh re-pointed the code citations at server HEAD ad7dde64e. The business documents moved into the checkout's design/ folder, and DESIGN.md's citations to them were remapped.
+  - The 41ba6670 build validated clean, with all 184 decisions cited and no owner question open; the final meta review read it (section 1).
+- **Reviewed by the final meta review.** Until then no peer reviewer had checked these additions: section checkers read each round's edits, and the build validation checks ids, links, superseded options, open questions and decision citations, not whether the design holds, as the 41ba6670 build's status line said. The final meta review then reviewed them with the rest of that build, and several of its findings concern them (F07-F09, F16, F18-F22 among others; section 7). Their fixes are fixed in design, not resolved: a reviewer re-checks them at the gates section 7 names, M10's Gn-in for the index and format 2, M6-in for the directory's protocols, and M2-in for format 1's reservations for format 2 and the directory, which now include the directory's admin-only erasure (F01; section 2.3).
+- **Residuals and flags:**
+  - *Stale page Workers with `self_admit` off* (§7.10's signer row, §18.8's admission row): fixed in design, not resolved. An admin's device admitting a member's page Worker never ran the revocation of that member's stale page Workers, which the admitting consented device signs, so in a Team a weekly re-enroller's stale Workers could pile up toward `config_admissions` unless an admin revoked them. The owner's fix 1 (D-TEAM-29; §7.10's `stale` and `cleanup` rows; FS-97 at M4-out, Team at M6-out) has whichever device admits a page Worker revoke those it saw removed as stale; the meta review's K05 checked it, bounded the claim and added the admins' cleanup list before the cap (section 7).
+  - *No SDK call revokes another device* (§5.6, §18.5): fixed in design, not resolved. No binding signed a SidecarRevoke for another of the member's devices, so a phone could not revoke a lost device, or the other page Workers that §18.8 offers to revoke; this predated the v1 work. The owner's fix 2 adds the core method and its binding (D-CORE-20 in §5.4 and §5.6, D-SDK-30 in §18.5; FS-98 at M3-out, Team M6-out, app hosts M8-out), with owner decisions 185, 187 and 189's countersignature; the meta review's K03 checked it and added FS-98's acceptance journey (section 7).
+  - *Owner decision 181's reading* (§16.11; Q-MCP-9 in §16.14), confirmed by the owner (2026-11-05): members' vaults, mailboxes and secret repos and the team record are not announced by default, and the system repos (config, mailcfg and the directory) never; group inboxes are announced with requests closed.
+  - *pitch5's copy* (design/pitch5.html, outside DESIGN.md), updated at the owner's instruction: "Sessions open only when the developer shares them" held only for session contents, since in team networks a run's title, project and branch reach teammates by default (owner decision 170). Both session lines (:579, :640) now say so, the five footers cite sidecar/design/reports, and the PDF was re-rendered. §8.15 quotes the line with that limit.
+  - *Code citations drift* as the server changes. They were refreshed against server HEAD ad7dde64e on 2026-11-05.
+
+## 7. The final meta review (2026-11-06)
+
+The owner had a final peer review done, DESIGN-REVIEW-META.md (Astra MAX, 2026-11-05), of the 2026-11-05 build and of this file as it then stood (section 1), and asked for its feedback to be incorporated. It found 22 findings (F01-F22), 5 acknowledged residuals that still need their feature gates (K01-K05) and 7 conditional capacity and implementation constraints (CC-01 to CC-07). Its response closure says which claims of this file stand, which narrow, and which two residuals are stale. It cites this file as "R" by the line numbers of that text; this section names entries by id instead.
+
+- **How it was incorporated:**
+  - Eleven architects wrote one brief per cluster of findings (peer/meta/delegation.md, delivery.md, directory.md, indexfmt.md, erasure.md, outcomes.md, governor.md, gitrestore.md, clients-edges.md, remote-search.md and sdkfix.md). Once owner decision 186 chose option (b) for F12, the governor cluster wrote governor-F12b.md, whose orders replace the governor brief's option-(a) orders.
+  - A reconciler merged them into 714 orders for 22 section files, 21-ABUSE.md taking none (peer/meta/RECONCILE.md; orders/). 54 orders carry two or more clusters' edits to one passage, and ten contradictions between clusters were settled, among them the directory's CUT taking `admin` like its ERASE (F01 against F09) and recorded refusals replacing "after a fence" throughout (F10). The new ids are final (peer/meta/IDS.md): FS-99 to FS-125, FI-28 to FI-30, I-EVS-16 and I-EVS-17, D-TEAM-30 to D-TEAM-32, D-KEYS-24 to D-KEYS-26, D-MCP-33 to D-MCP-35, D-EVS-66 and D-EVS-67, D-OPS-22, D-SDK-31, D-PROTO-22, Q-EVS-24, WK5 and RV4. [§2.8](DESIGN.md#28-private-from-us)'s metadata list goes to v8.
+  - Owner decisions 186, 188 and 189 answered the briefs' three questions, so no order waited for the owner. Owner decision 190 then refined 186, and an editor applied it after the reconciliation, with governor-F12b.md's classification of a rotation's staged deliveries (F12). Twelve independent checkers then verified the applied text, one for each cluster and one across the sections. Of their 182 findings, 164 were fixed in the section files, 17 in the assembler's data and this section's entries, and one raised owner decision 191 (F18), which narrows 188.
+  - The 23 section files as this left them build section 1's DESIGN.md. Every item, every closure row the review asks to narrow and both stale residuals have a brief and an entry (RECONCILE.md section 7).
+  - Two points outside the numbered findings take no order. A retry UI must keep a push's identity while its outcome is unresolved: [§11.8](DESIGN.md#118-the-evs-service-objects-push-commit-reads)'s retry rule covers it at the protocol level, and §18's copy takes it up when the SDK surfaces push outcomes. Launch drills must show the user-facing failure and repair states: a drill requirement, which the new FS rows meet only for their own states (FS-112's erasure finish, FS-117's changed contract, FS-122's readiness).
+- **Entries.** Each gives the review's id, with its severity where the review states one, the verdict and disposition, what changed and where, its tests, and the earlier claims of this file it narrows. One disposition is new here, *narrowed claim*: the mechanism stays, and the text now claims only what it supports. The two stale residuals take a *response update*, which changes only this file. Owner decisions 185-191 bind every entry; 186 and 188-191 answered every question the incorporation raised, so no entry waits for the owner.
+- **Final.** Every entry is *fixed* in design, not *resolved*: no reviewer has re-checked the incorporation, and the build validation checks ids, links, superseded options, open questions and decision citations, not whether a fix closes its finding. Each entry's *Final* names the review where a reviewer re-checks it: the entry review (Gn-in) of the milestone whose design closure in [§23.6](DESIGN.md#236-decisions-that-block-each-milestone) holds its mechanism, or G0 for text. Section 4.6 indexes the entries.
+
+### 7.1 Findings
+
+**F01. Directory destruction was authorized after the keys were already destroyed.** Meta review F01 (High). *Valid; fix.*
+- *Changed:*
+  - In the team directory, as in every other repo, ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete` now take `admin`, which [§7.8](DESIGN.md#78-credentials-and-scoped-tokens) mints only to the directory's creator and config writers, each consented and not read_only.
+  - evs refuses them below `admin` before any commit or slot rewrite, so no ordinary writer, agent or device parked for consent destroys a key, under a hold too (I-EVS-16; FI-25).
+  - A repo owner's revocation (owner decision 181) writes its private marker at once and files an `erasure_request`. The directory's erasure runner, a directory admin's indexer or daemon, checks it and erases exactly the copies that name the repo; the wait is shown, alarmed past 24 h, and disclosed in [§2.8](DESIGN.md#28-private-from-us) and [§2.10](DESIGN.md#210-threats-and-mitigations).
+  - The cards ref's versionless files stay reader-checked. A breach there is now a stated denial that each file's rightful writer repairs, with no history lost.
+  - Where: [§16.11](DESIGN.md#1611-the-team-directory), [§11.8](DESIGN.md#118-the-evs-service-objects-push-commit-reads), [§11.12](DESIGN.md#1112-repos-kinds-naming-grants-deposits-lifecycle-export), [§11.20](DESIGN.md#1120-interfaces), §7.8, [§8.8](DESIGN.md#88-the-policy-in-the-config-repo-rows-grant-chains-saving), [§8.10](DESIGN.md#810-enforcement-points), §2.8, §2.10 and [§5.4](DESIGN.md#54-sidecar-fields-settings-lifecycle-components); D-MCP-33. The rule joins M2's design closure ([§23.6](DESIGN.md#236-decisions-that-block-each-milestone)), because M2's binary compiles the kind's rules.
+- *Tests:* FS-99; FI-25.
+- *Earlier claims:* sections 2.3 and 6.9 called the team directory's M2 reservations unreviewed; they now include its admin-only erasure. The design's old §2.10 residual ("a denial until each writer's next write") understated the loss and is replaced.
+- *Final:* fixed, for re-check at M2-in and M6-in.
+
+**F02. Suspend and individual expiry did not remove a Delegation-covered agent's keys.** Meta review F02 (High). *Valid; fix-modified.*
+- *Changed:*
+  - **Suspend.** A `Suspend` of a sidecar a Delegation admitted drops the Delegation's shared reader key at the Suspend's position ([§10.5](DESIGN.md#105-the-key-hierarchy-what-one-session-key-stored-in-gkm-means)'s `live(d)`), and the shrink test and gate close and reopen as for a revocation. The Delegation's other agents read on by their own ReaderWraps, and an `Unsuspend` returns the agent uncovered ([§8.6](DESIGN.md#86-evaluation-semantics); D-ACL-8, D-KEYS-16).
+  - **Read authority.** A covered agent's read authority equals its Delegation's reach: a Delegation-signed admission carries exactly its tags, and a non-ephemeral one a `not_after` no earlier than the Delegation's ([§7.9](DESIGN.md#79-the-config-repo-customer-held-key-authority-x3)'s `scoped`; D-TEAM-30), so its own expiry never precedes the key's drop.
+  - **Ephemeral expiry.** An ephemeral covered agent's own `not_after` ends it as a reap does, since a self-close or api's reap can always pre-empt it; [§8.12](DESIGN.md#812-acl-and-evs-readers)'s invariant, I-15, [§2.6](DESIGN.md#26-key-custody), [§2.10](DESIGN.md#210-threats-and-mitigations) and [§2.18](DESIGN.md#218-risks) state the exception.
+  - **Reaped agents.** A removal of an already reaped agent lands, and drops the key.
+- *Why modified:* a time identity at each covered agent's own expiry would come from a record later than the holder it shortens, so a stale-pinned generation would pass the gate, and it could not bind an ephemeral agent that closes first.
+- *Tests:* FS-18, extended: a Suspend with the gate off and every wrap delivered, unsuspension, a refused short or narrower admission, the reach case, and the positive reap and ephemeral-expiry cases.
+- *Earlier claims:* T2-03 and T2-04 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F03. Revoking one agent dropped the shared reader key but left a stolen auth bundle's admission authority.** Meta review F03 (High, a claim and incident-response defect). *Valid; fix.*
+- *Changed:*
+  - **The Delegation's end.** [§7.9](DESIGN.md#79-the-config-repo-customer-held-key-authority-x3)'s new `delegation` row ends a Delegation at its `DelegationRevoke`, its void, or a compromise revocation of one of its agents. From that position api and every reader refuse its admissions, whatever bearer or client the operator supplies (D-TEAM-30).
+  - **Parks.** `DelegationRevoke` gains `since_n`, which parks the agents admitted from that position, as in the compromise case.
+  - **`max_admits`** counts for the Delegation's life.
+  - **Routine acts.** A lost or removed revocation, or a `Suspend`, retires only the shared key; [§10.5](DESIGN.md#105-the-key-hierarchy-what-one-session-key-stored-in-gkm-means)'s drops table and Residual, [§2.6](DESIGN.md#26-key-custody), [§2.10](DESIGN.md#210-threats-and-mitigations)'s two new rows, [§2.18](DESIGN.md#218-risks) and [§7.18](DESIGN.md#718-risks) say so.
+  - **The plan.** [§7.10](DESIGN.md#710-removal-and-consistency-with-mls-10)'s new `agents` row shows the agent, the shared key and the admission authority apart, each with its fan-out (D-TEAM-31).
+- *Tests:* FS-102: an end by compromise revocation; a removal, then a `DelegationRevoke` with `since_n`; a thief holding only the reader seed; `max_admits` across folds; a kill and retry.
+- *Earlier claims:* T2-04 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F04. Immutable delivery identity omitted the recipient key's incarnation.** Meta review F04 (High). *Valid; fix.*
+- *Changed:* ReaderWraps and DelegationWraps become typed `KeyDelivery` bodies stored at `wrap/<g>/<c8>/<recipient>/<k8>`, the recipient key's digest in the signed body and the HPKE context. [§10.5](DESIGN.md#105-the-key-hierarchy-what-one-session-key-stored-in-gkm-means) and [§10.6](DESIGN.md#106-gkm-the-delivery-service-and-wrapped-key-store) specify lookup, retries, a 30-day GC of older-key objects, and a late-wrap hint to writers first, then to up to 64 holders (D-KEYS-24). A RecoveryRebind's re-wraps land at their binding's own `<b8>` path before the old ones go (§10.6, [§10.8](DESIGN.md#108-revocation-erasure-recovery-re-seeding-key-domains)).
+- *Tests:* FS-103; FI-28.
+- *Earlier claims:* T2-02 and T2-22 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F05. Late deliveries carried no authorization pin.** Meta review F05 (Medium, a specification blocker). *Valid; fix.*
+- *Changed:*
+  - A LATE `KeyDelivery` carries its signer's AuthPin and time, and every verifier judges it at that state; a STAGED one is judged against its claim's holder set.
+  - First and replacement deliveries share one signer rule: any holder that is not read_only.
+  - A valid delivery stays valid after later revocations or replays; a judged-invalid one poisons the generation.
+  - Where: [§10.9](DESIGN.md#109-authorization-of-mls-operations)'s delivery checks and Add row, [§10.6](DESIGN.md#106-gkm-the-delivery-service-and-wrapped-key-store)'s wrap checks, [§3.7](DESIGN.md#37-end-to-end-flows) and [§6.9](DESIGN.md#69-peer-authentication-and-encryption); D-KEYS-24.
+- *Tests:* FS-104, whose oracle judges independently; FI-28.
+- *Earlier claims:* T2-02 and T2-03 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F06. Weekly ReaderKey replacement did not establish the 37-day healing bound.** Meta review F06 (Medium). *Valid; fix-modified: a validity limit and a narrowed claim.*
+- *Changed:* a ReaderKey lives at most 7 days and is replaced at 6. Rotators and deliverers seal only to an unexpired key valid no longer than that, so a stale advertisement is useless after 7 days (D-KEYS-25). [§10.5](DESIGN.md#105-the-key-hierarchy-what-one-session-key-stored-in-gkm-means), [§2.10](DESIGN.md#210-threats-and-mitigations) and D-KEYS-1 name the assumptions: a passive copy heals by about 37 days (60 above 50 leaves) while the device runs; an active clone heals only at a compromise revocation and a new enrollment. [§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery) and [§2.8](DESIGN.md#28-private-from-us) agree.
+- *Why modified:* authenticated retirement proves order only to rotators that have seen the newer key, and gkm can withhold that key; a validity limit gives the bound with no new channel.
+- *Tests:* FS-105; FI-29.
+- *Earlier claims:* T2-24 and WR-N6 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F07. A head overwrite could destroy the base of its own index diff.** Meta review F07 (High). *Valid; fix, with both of the review's corrections.* Verification added that a merged copy of the diff's own version, and a DROP's kept head, could also strand a base.
+- *Changed:* a head entry is full, or a diff onto an explicit base outside every head, its delta composed when it replaces the writer's own diff. Merges keep a base that a current head diff needs, and that is the lifetime rule. [§11.14](DESIGN.md#1114-the-encrypted-search-index) gains its commit path's `dependency` row and its read path's `chains` row; its merges, reproduce and drop rows, D-EVS-46 and D-EVS-47 follow.
+- *Tests:* FS-107, from a fresh cache after purges and slot reuse; FI-18; IndexRollup.tla.
+- *Earlier claims:* none; a new v1 item (section 7.4).
+- *Final:* fixed, for re-check at M10-in.
+
+**F08. The canonical shard format could not retain deletion masks.** Meta review F08 (High). *Valid; fix.* Verification added that a tombstone a merge dropped was lost to the roll-up for good, that a ref tombstone's version was undefined, and that clock skew could leave a newer deletion in an older bucket.
+- *Changed:* bucket shards gain a canonical tombstone table of document and ref tombstones, counted by `IndexFileHeader` field 15. Merges fill it, and it stays until the bucket's roll-up, which drops `all`'s older rows, removes any older entry a newer bucket holds, and leaves `all` with no tombstone. A ref tombstone sits at its DELETE's ref version, and skew no longer inverts buckets. [§11.14](DESIGN.md#1114-the-encrypted-search-index), D-EVS-44, D-EVS-47 and D-EVS-52, the decoder rules, vectors and fuzz seeds follow. The encoding freezes at M10 and needs no M2 number (D-PHASE-9).
+- *Tests:* FS-108.
+- *Earlier claims:* none; a new v1 item (section 7.4).
+- *Final:* fixed, for re-check at M10-in.
+
+**F09. Erasure did not fence publication of new index copies.** Meta review F09 (High). *Valid; fix-modified.*
+- *Changed:*
+  - An erasure's first push on each index ref is a CUT. It lists the erasure's documents in that ref's versionless erasure set and moves the head's `index_epoch` (D-EVS-66).
+  - Every other push that creates or replaces an index file names that epoch at its head CAS (409 INDEX_EPOCH otherwise, final below the head's epoch, which never falls, and above it a refusal recorded under F10's rule) and applies the set, so delayed fresh-path, merge, roll-up, build, backfill, DROP and companion-journal pushes rebuild without the documents (I-EVS-17).
+  - The eraser lists index files only after its CUT, and the 10-minute watch is gone. An erasure resumes from evs's state on its eraser's device or another device that may erase, with no indexer.
+  - In the team directory the CUT takes `admin`, as its ERASE and CLOSURE do (F01).
+  - Where: [§11.8](DESIGN.md#118-the-evs-service-objects-push-commit-reads), [§11.12](DESIGN.md#1112-repos-kinds-naming-grants-deposits-lifecycle-export), [§11.14](DESIGN.md#1114-the-encrypted-search-index) and [§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery)'s version table; I-EVS-13, FI-19, FS-78.
+- *Why modified:* owner decision 146's fairness is kept. CLOSUREs stay outside the epoch, so another eraser's CUT never voids closure uploads already paid for at the floor; path CAS orders them instead.
+- *Tests:* FS-111; FS-78; FI-19.
+- *Earlier claims:* T1-13 (section 7.4).
+- *Final:* fixed, for re-check at M2-in (the CUT's reserved numbers) and M10-in.
+
+**F10. A handler-arrival fence could not establish a stable terminal refusal.** Meta review F10 (High, an arrival assumption). *Valid; fix, the review's first option: a durable refusal record covered by the head CAS.*
+- *Changed:*
+  - [§11.8](DESIGN.md#118-the-evs-service-objects-push-commit-reads) answers a refusal the head does not settle only once one head CAS records it in the head (`EvsRefusal` in `EvsHead.refused`, field 25; at most 8 a ref and one a second, else 429; a placeholder head for a push that creates its ref). Step 5a answers the record to every later attempt.
+  - Every terminal refusal outside the head is recorded the same way: DIRECTORY_FULL, NOTHING_TO_ERASE, an INDEX_EPOCH above the head's epoch (one below it is final), and CC-03's 507 CLUSTER_FULL.
+  - The arrival-time fence now serves only evacuation and GC fences, and statements dated more than their bound ahead get 429 TIME_AHEAD.
+  - D-EVS-23, I-EVS-3, FI-2, [§2.8](DESIGN.md#28-private-from-us)'s evs-3 and [§11.21](DESIGN.md#1121-risks)'s risk row follow.
+- *Tests:* FS-1, rewritten; FS-113; EvsCommit.tla, whose attempts may reach evs at any step.
+- *Earlier claims:* T1-02, section 8's item 1, SC-N3 and SC-N4 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F11. Stock Git LFS could force a tip back to a pruned object without invoking the upload agent.** Meta review F11 (High). *Valid; fix.*
+- *Changed:*
+  - [§11.11](DESIGN.md#1111-the-local-tier) adds the local tier's git-lfs tip check (D-EVS-41). Before a git-mode tip commits, the daemon takes the pointers under `filter=lfs` in the new tip's tree that the old tip lacked. Under path-level CAS, before the push's POST, it touches each such object whose newest `ur/lfs` version is 5 days old or more, and refuses with `ng <ref> lfs objects missing` when one is gone, naming each object and `git lfs push --object-id`.
+  - The check covers force pushes, new refs and tags, imports, `--no-verify` and `GIT_LFS_SKIP_PUSH`.
+  - The prune reads every ref's head at its start and removes only objects older than N days at that read; N is 30, or a repo setting of at least 7.
+- *Tests:* FS-73, with the stock-client cases (a force push to a pruned ancestor; a new branch and tag; the touch with a prune paused between its read and its removal; skipped hooks; `.gitattributes` changes; imports; offline owned refs; ordinary pushes writing nothing extra); FI-9; [§22.9](DESIGN.md#229-conformance-and-platform-budgets)'s git-lfs row.
+- *Earlier claims:* T1-05 stays resolved, as the review says; this is a new v1 seam.
+- *Final:* fixed, for re-check at M10-in.
+
+**F12. Unconditional P0 admission defeated the unconditional physical-write bound.** Meta review F12 (High). *Valid; narrowed claim, by owner decision 186 (option (b); the design team had recommended (a)), refined by owner decision 190.*
+- *Decision:* P0 work stays unlimited, never queued, refused or paced, and FI-14's wear bound exempts its writes, so a P0 storm can pass 0.8 DWPD and the drives' 1 DWPD rating, disclosed with P0 dashboards and alarms. Owner decision 186 amends owner decision 140's hard budget for P0 writes only; the governor still bounds P1 and P2. Owner decision 190 (2026-11-06; governor-F12b.md, part 2.10's problem 2) then forgave P0's excess instead of having the other classes repay it: repaid, a 6-hour storm at the review's stress (P0 at ~2.2 times the refill) stopped the cluster's pushes for about 12-13 hours. Each storm's extra wear is kept, ~0.23 drive-writes at that stress; the ~420 drive-writes between the refill (0.768 DWPD) and the drives' 1 DWPD five-year rating cover ~1,800 such storms. *Not adopted:* (a) a reserved budget for the immediate safety commit, its fan-out precharged and paced; (c) a finite admitted P0 liability, a count cap owner decision 66 rules out; and, under owner decision 190, repaying the excess.
+- *Changed:*
+  - **[§11.13](DESIGN.md#1113-backend-iops-gc-quotas-durability).** P0's bytes drain the bucket B and come off the next allowance. B floors at zero, and P0's excess past it is counted by kind, never repaid. Every other class issues only while B holds it, so pushes are shed while P0 takes the refill; when the storm ends they restart within one interval and ramp up as B refills, held-back funded P2 first (the `gates` row). The CUT joins P0's list (F09). A rotation's staged deliveries and claim are P0 only while gkm's newest verified state shows a shrink, an authorization expiry or a compromise retirement since the newest generation's auth pin and time, and an MLS commit counts as a Remove only while that state shows a holder dropped since the previous epoch's auth pin and time, so a REQUEST or SCHEDULE rotator cannot label its work P0 (the `classes` row; [§10.6](DESIGN.md#106-gkm-the-delivery-service-and-wrapped-key-store)'s checks).
+  - **Disclosed:** P0's only bounds are its classes' own rates, per uploader, group and network, never per cluster. At the review's stress, 100 large Teams on one cluster each shrinking every 5 minutes, that is ~2.9 TiB a day a drive, about twice the refill: wear past 0.8 DWPD and the rating, pushes and evacuation stopped while the storm lasts, and batches past the 26 h NVMe bound. [§2.8](DESIGN.md#28-private-from-us), [§2.10](DESIGN.md#210-threats-and-mitigations), [§3.14](DESIGN.md#314-risks), [§10.15](DESIGN.md#1015-risks), [§11.21](DESIGN.md#1121-risks), [§19.6](DESIGN.md#196-the-file-cluster-x13), [§19.17](DESIGN.md#1917-risks) and [§22.16](DESIGN.md#2216-risks) state it.
+  - **Narrowed wherever the bound was unconditional:** R-EVS-19, R-OPS-12 and R-PHASE-11; §11.13's opening promise and budget row; [§11.15](DESIGN.md#1115-performance-and-concurrency-verified-in-22)'s drive-writes target; §19.6's wear row; [§19.9](DESIGN.md#199-capacity-and-cost-drivers)'s year-two sizing; [§20.15](DESIGN.md#2015-risks); and D-EVS-33.
+  - **[§19.8](DESIGN.md#198-observability-and-slos) and [§19.10](DESIGN.md#1910-failure-modes-and-runbooks):** P0's bytes by kind against the hour's refill, the bucket, P0's forgiven excess (`urnetwork_evs_budget_p0_forgiven_bytes_total`) and the busiest drive's wear against its rating, none with a network or repo label (D-OPS-8). A page fires when P0's bytes in an hour pass that hour's refill. The runbook never paces or refuses P0; it acts by capacity, placement and contacting the networks.
+  - **FI-14:** (a) bounds the other classes' writes over any 24 h by the refill and the bucket's depth, less what P0 drew, so the drives pass it only by P0's forgiven excess, which is reported, not bounded; (b) is F13's conservation; (c) no P0 write waits or is refused. **Q-EVS-24** records the question and both decisions.
+- *Tests:* FS-117, the review's root-cause schedule: 24 h of P0 alone past the refill, every uploader, group and network within its own rate, with full-size rotations, large ERASEs and `--now` shreds, a SCHEDULE and a REQUEST rotation claiming REMOVE without cause, a killed governor and a lost `{nvb_<set>}`, then a day after the storm. It asserts that P0 issues on arrival and gates reopen within 5 minutes (FI-3); the other classes issue nothing B does not hold, B never below zero; the mislabeled rotations are charged as P1; pushes and evacuation resume within one interval of the storm's end; FI-14 (a) holds; and the page fires within an hour, never on a control day. It reports the changed contract the review asks for: the forgiven excess, the days past 0.8 and 1 DWPD, the ramp and the pushes shed. Three mutants must fail: T floored at a fifth of the refill while B is empty, P0 queued behind B, and the excess repaid. FS-61 keeps P0 at once beside a push flood, and D-TEST-11 sets the warn line.
+- *Earlier claims:* section 3.6 and ST-N4 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F13. The literal allowance split reserved deferred P2 work twice.** Meta review F13 (High, a specification ambiguity). *Valid; fix, the review's first option.*
+- *Changed:* [§11.13](DESIGN.md#1113-backend-iops-gc-quotas-durability)'s accounts, wallet, gates and reports rows and [§19.6](DESIGN.md#196-the-file-cluster-x13)'s budget row define one conservation equation. The allowance T, 5 s of the refill less P0's measured writes and never more than B holds, pays P1 at full price and unfunded P2 (A_U, at most 40% of T while its backlog lasts). A P1 admission's deferred part moves into a prepaid wallet W, which funded P2 spends (A2) and T never pays again. The rows give the transitions for aborts, retries, process death, Redis loss and calibration. D-EVS-33 and FI-14 (b) carry the equation.
+- *Tests:* FS-116, with the review's exact-cost trace (T = 1,000; 63/37 pushes; ten admitted each interval), delayed P2, process kills, a lost `{nvb_<set>}`, unfunded backlog, calibration error, and a mutant of the literal split, which admits ~7.3 pushes an interval and must fail. It runs before D-TEST-11's hardware gate.
+- *Earlier claims:* section 3.6 and section 6.4's P2 cap (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**F14. Restore's hash check and rename could overwrite a concurrent human edit.** Meta review F14 (Medium). *Valid; fix-modified.*
+- *Changed:* [§16.7](DESIGN.md#167-harness-integration-ingest-and-restore)'s apply no longer checks, then renames over. It moves each path aside atomically, hashes the bytes it moved against the preview, and installs the original only into a free name (`renameat2` with `RENAME_NOREPLACE`, `renameatx_np` with `RENAME_EXCL`, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`, else a hard link); otherwise it puts the moved bytes back. A conflict overwrites nothing: the concurrent bytes stay at the path or beside it as a conflict copy, and the original, when not installed, beside it as a restored copy. The new rows specify the reasons, `os.Root` confinement, symlinks, deletions, kinds, Windows sharing and restart. RV4 (restore discards no bytes but the preview's current ones) joins RV1-RV3, and D-MCP-8 and FI-8 follow.
+- *Why modified:* one protocol serves exclusive and shared worktrees; it is the conditional replacement the review asks for, and an exclusive worktree simply never conflicts. Conflicts are not merged in place, since RV2 allows only exact original bytes. One residual is disclosed: a write through a handle opened before apply that lands after it ends, as under `git checkout`.
+- *Tests:* FS-115 at M3-out (the review's barrier schedule, atomic saves, delete and recreate, two paths with only the second racing, Windows); FS-26's before-edit case is kept; [§22.9](DESIGN.md#229-conformance-and-platform-budgets) adds a Restore row for each OS and volume.
+- *Earlier claims:* T3-07 and section 6.1's row for it (section 7.4).
+- *Final:* fixed, for re-check at M3-in.
+
+**F15. Post-commit push-token projections could regress, or resurrect a deleted token.** Meta review F15 (Medium). *Valid; fix.*
+- *Changed:*
+  - [§18.7](DESIGN.md#187-host-services-the-sdk-injects) orders token projections by a per-client revision that Postgres raises with each change. A removal, the client's own included, leaves a tombstone row.
+  - The apply script (step 0) is slot-local. It applies a revision only above `{scp_<C>}tokrev`, and only within 60 s of the master's TIME read before the change's transaction (WK5).
+  - The reconcile (step 5) waits 90 s after a master change, lists keys before reading rows, and no longer relies on `FOR SHARE`. Each pass (step 6) sweeps recent changes and deletes removed clients' rows after 24 h.
+  - The push sender tombstones on a vendor 410 only at the revision it read. After a Postgres restore, [§19.10](DESIGN.md#1910-failure-modes-and-runbooks)'s api step raises every revision by 2^32.
+  - D-SDK-16, [§19.4](DESIGN.md#194-service-blocks), [§2.8](DESIGN.md#28-private-from-us)'s api-6, [§7.10](DESIGN.md#710-removal-and-consistency-with-mls-10) and [§18.15](DESIGN.md#1815-interfaces) follow.
+- *Tests:* FS-120 (M8-out): reverse-order applies for two POSTs, a POST and an empty POST, a client's removal, and a vendor 410 racing a new POST; EXPIRED retries and the sweep after an api kill; reconciles around held applies and an older-RDB restart, a first POST mid-reconcile included. FS-36 and FS-42 change to match.
+- *Earlier claims:* T3-16, RT-N4 and RT-N5 (section 7.4).
+- *Final:* fixed, for re-check at M8-in.
+
+**F16. Denying a directory request did not complete the requester's notice and wake path.** Meta review F16 (Medium). *Valid; fix.*
+- *Changed:*
+  - Approvals and denials share one resumable protocol: the ledger journal, the approval's statement, the decision entry, then the notice's compare-and-set rewrite adding a `DecisionRef` (decider, seq, header hash; `DirectoryNotice` fields 6 and 7). The notice becomes decided at a denial or at the rule's count of approvals. The decider's device resumes each step after a crash, with no duplicate entry, statement or rewrite (D-MCP-34).
+  - Requesters lease their own notice paths and reach the outcome by one notice read and a head read per named entry, with no stream scan or index, at M6 and from format 2.
+  - A decided notice frees the pending counts at once; expiry stays distinct; races resolve at the rewrite.
+  - Where: [§16.11](DESIGN.md#1611-the-team-directory), [§18.4](DESIGN.md#184-roles-placement-identity), [§18.5](DESIGN.md#185-sdksidecargo), [§18.7](DESIGN.md#187-host-services-the-sdk-injects), [§18.12](DESIGN.md#1812-decisions-proposed), [§5.4](DESIGN.md#54-sidecar-fields-settings-lifecycle-components) and [§2.8](DESIGN.md#28-private-from-us)'s evs-27.
+- *Tests:* FS-100; FI-26.
+- *Final:* fixed, for re-check at M6-in.
+
+**F17. Reception-time authentication had contradictory size and work bounds.** Meta review F17 (Medium). *Valid; fix.*
+- *Changed:*
+  - [§15.5](DESIGN.md#155-the-receiver-local-smtp-server-listener-certificates) bounds the check per message: 256 KiB of header; 8 DKIM signatures, aligned first and oldest first; 8 ARC sets, after RFC 8617's structure checks; RFC 7208's SPF limits; 64 queries, 8 in flight; 30 s, 9 body hashes and 17 signature checks. Per receiver, 4 messages check at once.
+  - A cut check counts as no result, and the DMARC rule is stated. `MailAuthEvidence` is at most 8,192 B whatever its identifiers, with `AuthLimits` counting what was skipped.
+  - Mail is still deposited and answered 250, and labels can only weaken.
+  - D-MAIL-14, [§15.16](DESIGN.md#1516-risks), [§2.8](DESIGN.md#28-private-from-us)'s ext-3 and [§3.7](DESIGN.md#37-end-to-end-flows)'s flow follow.
+- *Tests:* FS-121 (M7-out); [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §15 row; S7.
+- *Earlier claims:* T4-08 and T4-09 (section 7.4).
+- *Final:* fixed, for re-check at M7-in.
+
+**F18. 128-KiB rounding did not hide up to five search pages.** Meta review F18 (Medium). *Valid; fix, option (a), decided by owner decision 188 (2026-11-06) and narrowed by owner decision 191.*
+- *Changed:*
+  - C19 accounts a marked requester-indexer pair in 55-minute windows ([§6.10](DESIGN.md#610-contracts-and-accounting); D-PROTO-22). It withholds every report of a window's contracts, checkpoint or close, until the window ends, then reports each direction as F = 256 KiB on the window's first contract and 0 on the others, or F plus 128 KiB steps past it.
+  - F covers five one-step exchanges and every scheduled message on the pair at its maximum: 55 keepalives, 28 Hello exchanges, 9 HeadCheck exchanges and one HeadCheckProof each way, 240,200 B down in all.
+  - A Ping a minute while the app is in the foreground keeps the window's sequences open, so contracts open at foregrounds and window ends, not at searches. Two cases are disclosed in §2.10's threat table and connect-5: a search that fails over to an indexer it had not warmed opens that indexer's window, and, by owner decision 191 (2026-11-06), a search that finds the session lost (120 s with no Pong) re-establishes it at once, so its contract and successor keep its time. Making that search wait for the keepalive, which could stall it for up to a minute after an outage at the indexer's end, was not taken.
+  - Q-PROTO-4's answer is recorded as amended by owner decisions 188 and 191; 188 also amends owner decision 176's summary.
+  - These follow: [§4.6](DESIGN.md#46-connect-changes-x9)'s C19 and [§4.16](DESIGN.md#416-interfaces)-[§4.18](DESIGN.md#418-phasing); [§6.5](DESIGN.md#65-envelope-size-budget-chunking), [§6.6](DESIGN.md#66-requestresponse-rpc), §6.10, [§6.11](DESIGN.md#611-message-catalog-index-and-codec-conventions)'s bit 1, [§6.12](DESIGN.md#612-alternatives-considered), [§6.13](DESIGN.md#613-decisions-proposed) and [§6.16](DESIGN.md#616-interfaces)-[§6.18](DESIGN.md#618-phasing); [§2.8](DESIGN.md#28-private-from-us)'s connect-1 and connect-5, the threat table and [§2.17](DESIGN.md#217-interfaces); [§11.14](DESIGN.md#1114-the-encrypted-search-index)'s failover and server-view rows; [§18.4](DESIGN.md#184-roles-placement-identity), [§18.7](DESIGN.md#187-host-services-the-sdk-injects) and D-SDK-27; [§20.6](DESIGN.md#206-x11-what-counts-toward-the-transfer-balance); R-CTX-37 and [§3.7](DESIGN.md#37-end-to-end-flows)'s flow F12, step 7; FI-24, [§22.7](DESIGN.md#227-scenarios-privacy-revocation)'s CC2, S12 and D-TEST-16; [§23.4](DESIGN.md#234-milestones), [§23.6](DESIGN.md#236-decisions-that-block-each-milestone) and [§23.14](DESIGN.md#2314-interfaces).
+- *Stronger than the review:* connect's checkpoint at every idle receive-sequence exit, and the contracts it opened after idle send-sequence exits, broke the promise with no background at all. The windows withhold the first, and the keepalive removes the second.
+- *Tests:* FS-125 sweeps each direction's background up to its allowance (178,419 B down, 241,709 B up) through every multiple of 128 KiB and F, ±1 B, adding 0 to 5 exchanges of exact sizes in both directions across a window's first, re-establishment and overflow contracts. It asserts identical reports, sent only at window ends; the review's case, 120 KiB plus one page, reports F. Root-cause regressions: a receive sequence idling out mid-window sends no checkpoint, and no search opens a contract in either direction, 30 minutes into a foreground window or 10 seconds after a window's end, whose next window opens with the contract connect took at that end. A 3-minute network drop in the foreground re-establishes by the search that comes before the next tick, its contract created at that search (owner decision 191). FS-83 keeps its evs-independence and frame-size checks and points to FS-125.
+- *Not adopted:* (b) the same windows at a 128 KiB floor; (c) a narrowed per-contract quantization claim.
+- *Earlier claims:* none in this file restates the five-page promise (section 6.9 lists owner decisions 175 and 176 only), so nothing here narrows. The review's "Accepted choices" note on the served record stays.
+- *Final:* fixed, for re-check at M10-in.
+
+**F19. The advertised next-day erasure bound assumed one physical representation per message.** Meta review F19 (Medium). *Valid; narrowed claim, with the review's progress estimate.*
+- *Changed:* the fixed next-day bound is replaced by one stated from the erasure's rekey objects. At the limit, with B closure bytes left when its allowance A first refuses it, its last pair commits after at most the ⌈B / (A - 1,088 KiB)⌉-th 00:00 UTC that follows, plus a turn per upload of that day (D-EVS-67). The next-day case is kept only for a one-document entry with no copy. The CUT and the first ERASE, of the entry's own keys, land at once even at the floor. [§5.4](DESIGN.md#54-sidecar-fields-settings-lifecycle-components)'s `erasure` event and [§18.5](DESIGN.md#185-sdksidecargo)'s `Erasures` show what is left and the finish estimate. Where: [§11.13](DESIGN.md#1113-backend-iops-gc-quotas-durability), [§11.14](DESIGN.md#1114-the-encrypted-search-index), [§15.7](DESIGN.md#157-the-mailbox-in-evs), [§20.7](DESIGN.md#207-enforcement-points-counters-downgrade) and [§2.8](DESIGN.md#28-private-from-us)'s disclosure.
+- *Tests:* FS-112.
+- *Earlier claims:* T1-13 and SL-N1 (section 7.4).
+- *Final:* fixed, for re-check at M10-in.
+
+**F20. The global newest-version mask was outside the claimed search memory bound.** Meta review F20 (Medium). *Valid; fix, the review's first option.*
+- *Changed:* [§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery) keeps a version table: sealed, sorted, immutable runs of each key's newest version, updated at each swap within 1 MiB. A search probes it per candidate, lazily in rank order, through `Search.VersionCacheByteCount` (256 KiB a process), so its mask state is its pending candidates whatever the buckets hold. An erasure set's documents join it as erased (F09). [§11.14](DESIGN.md#1114-the-encrypted-search-index)'s newest row, §5.9's bounds row, [§11.15](DESIGN.md#1115-performance-and-concurrency-verified-in-22)'s table, the memory targets of [§16.10](DESIGN.md#1610-search) and [§18.4](DESIGN.md#184-roles-placement-identity), and D-EVS-52 count it.
+- *Tests:* FS-109 gates peak heap at 500,000 and 1,000,000 changed keys, with retained buckets and concurrent searches.
+- *Earlier claims:* none; a new v1 item (section 7.4).
+- *Final:* fixed, for re-check at M10-in.
+
+**F21. Cold-search first-hit latency contradicted fixed-order whole-index downloads.** Meta review F21 (Medium). *Valid; narrowed claim.* The fixed, query-independent order is kept (I-19).
+- *Changed:* [§16.10](DESIGN.md#1610-search)'s single cold row becomes a cold contract: progress within 500 ms, then at least once a second and at each shard; each shard's hits within 100 ms of its landing (300 ms on phones and page Workers); completion within the missing bytes over the throughput plus 1 s, with cursor continuation across `MoreByteCount` that never restarts the order. The 3 s median first hit is kept only as a target over FS-76's query set, reported with the last-shard and no-hit times. [§18.4](DESIGN.md#184-roles-placement-identity)'s targets, D-SDK-25, [§16.12](DESIGN.md#1612-alternatives-considered), [§16.17](DESIGN.md#1617-risks) and [§22.8](DESIGN.md#228-load-soak-failure-injection)'s search row follow.
+- *Tests:* FS-110.
+- *Earlier claims:* none; a new v1 item (section 7.4).
+- *Final:* fixed, for re-check at M10-in.
+
+**F22. Some directory benchmark acceptance criteria were unspecified.** Meta review F22 (Medium). *Valid; fix, with one extension.*
+- *Changed:*
+  - [§16.11](DESIGN.md#1611-the-team-directory)'s cost table states the parameters, mix and sync model, splitting [§19.6](DESIGN.md#196-the-file-cluster-x13)'s 6.7 pushes/s into 5.8 on the cards ref and 0.9 on streams and `ur/index`. It covers 500 members, the Team limit (2,000 members) and a 5,000-member stress case, with M6's announce-entry form beside M10's: bytes and requests per reader-day and per team-day, evs path reads, cold and warm bytes, phone coverage at the 8 MiB cap, and commit p99, rerun and 429 ceilings.
+  - *Extension:* per-stream reads would have cost M6's carrier ~64,000 requests a daemon-day at the Team limit, so [§11.9](DESIGN.md#119-head-read-api) adds a 64-stream read and a moved-ref listing.
+  - Where: §16.11, §11.9, [§11.20](DESIGN.md#1120-interfaces), §19.6, [§22.8](DESIGN.md#228-load-soak-failure-injection) and [§23.6](DESIGN.md#236-decisions-that-block-each-milestone); D-MCP-31.
+- *Tests:* FS-86 and D-TEST-17 gate the table: a golden schedule (`DirectoryCostOracle`) within 1.25 times; three mutants and injected delays that must fail; physical-time runs for latency, and fake-clock runs for schedules and 400-day retention; a cold phone's partial coverage; the M6 case at M6's exit, and the card case at the later of M6's and M10's. A miss at the Team limit goes to the owner.
+- *Earlier claims:* none to narrow; the table's earlier byte figures stand, decomposed.
+- *Final:* fixed, for re-check at M6-in.
+
+### 7.2 Acknowledged residuals
+
+**K01. The disclosed late-drive residual remained a storage-correctness dependency.** Meta review K01 (known; critical if exercised). *Valid (a known residual); fix: target-side fencing that fails closed.*
+- *Changed:*
+  - [§19.6](DESIGN.md#196-the-file-cluster-x13)'s cancel row becomes the deadline and settle rules (D-OPS-20). Requests carry `x-ur-deadline-ms`; each drive commit applies only over the version its coordinator read, and only before its deadline; a key is released only once a write quorum holds the write, or after reverts leave it below a read quorum; another host settles a dead coordinator's writes; heal never spreads a minority version.
+  - [§11.13](DESIGN.md#1113-backend-iops-gc-quotas-durability)'s store needs, [§11.7](DESIGN.md#117-diffs-checkpoints-index-entries-reconstruction)'s stale and collect rows (margins from clocks, not a measured lag) and [§11.8](DESIGN.md#118-the-evs-service-objects-push-commit-reads)'s linearizability follow, with chrony on the storage hosts. §11.8's gate contract and [§11.12](DESIGN.md#1112-repos-kinds-naming-grants-deposits-lifecycle-export)'s first shred wait say what happens to a stalled commit: it holds its key until it is decided.
+  - Collection, purge and drops wait on a build that has not passed.
+  - [§19.8](DESIGN.md#198-observability-and-slos)'s held-key page, a [§19.10](DESIGN.md#1910-failure-modes-and-runbooks) runbook row and [§19.17](DESIGN.md#1917-risks)'s held-key risk are new.
+- *Tests:* [§22.9](DESIGN.md#229-conformance-and-platform-budgets); FS-114; FI-30; StoreSettle.tla.
+- *Earlier claims:* T1-01, T1-03 and ST-N1; T1-12; and section 6.8's "A stalled drive" and "D-OPS-20 not yet in §11 and §22" (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**K02. Custom-host readiness relied on an unacknowledged 15-minute wait.** Meta review K02 (Medium; known). *Valid (an acknowledged residual); fix.*
+- *Changed:* each custom-host change raises a map version. `lbmap`, beside each lb interface's nginx, loads the version and reports it, at once at start, else on [§13.4](DESIGN.md#134-ingress-the-sni-split-ports-proxy-port-80)'s 15-minute cadence. The dns edges probe each interface's reported version, and up to 16 hosts it added, with a `ur-route-probe` ClientHello that tlsedge answers at once. A host is ready only once every serving interface is current for it; TLS-ALPN-01 orders wait for readiness; an interface over 20 min behind leaves user-name answers and pages; a restore makes every host pending again. §13.4, [§13.5](DESIGN.md#135-tlsedge-the-connection-path), [§13.8](DESIGN.md#138-certificates), [§12.6](DESIGN.md#126-hosting-the-self-hosted-dns-edge), [§12.8](DESIGN.md#128-record-api-dns-01-custom-domains), [§19.5](DESIGN.md#195-load-balancer-addresses-certificates)'s W1, [§19.8](DESIGN.md#198-observability-and-slos), D-TLS-12 and [§2.8](DESIGN.md#28-private-from-us)'s dns-1 follow.
+- *Tests:* FS-122 (M6-out): a dropped update, a refused reload and a restart with an old map; coalesced changes, a restore, and a report that nginx did not load; CA surrogates on every advertised address. FS-42's M6 step changes to match.
+- *Earlier claims:* T4-06 (section 7.4).
+- *Final:* fixed, for re-check at M6-in.
+
+**K03. The phone had no API for revoking an ordinary lost device.** Meta review K03 (Medium; known). *Valid at the 41ba6670 build; fix.*
+- *Changed:* the owner's fix 2 (D-CORE-20, D-SDK-30) adds [§5.4](DESIGN.md#54-sidecar-fields-settings-lifecycle-components)'s `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` under [§5.6](DESIGN.md#56-login-enrollment-admission-refresh-revocation)'s rules, `SidecarApprovals`' bound calls with the plan's copy, `ur devices` and `ur approve <proposal_id>`. It is closed to MCP, to read_only page Workers and to the alarms-only extension. This round adds FS-98's acceptance journey (the phone the only device online, no alarm pending, a lost laptop and an evicted page Worker revoked) and corrects [§22.7](DESIGN.md#227-scenarios-privacy-revocation)'s counting and `self_admit` cases. Owner decisions 185, 187 and 189 make the phone's presence check a countersignature that api and every member device verify (the countersignature's entry, below).
+- *Tests:* FS-98; FS-124.
+- *Evidence still owed:* FS-98's app-host cases at M8-out. The design text is not implementation closure.
+- *Earlier claims:* section 6.9's residual "No SDK call revokes another device" (section 7.4).
+- *Final:* fixed, for re-check at M3-in (§5's revocation) and M8-in (the bound API).
+
+**K04. Outbound DATA size limits lacked a capability and result journey.** Meta review K04 (Medium; known). *Valid (an acknowledged residual); fix, keeping owner decision 125.*
+- *Changed:* [§14.5](DESIGN.md#145-the-preamble-and-what-makes-it-trustworthy-x7) adds `SmtpSender.Check` and per-recipient-domain outcomes. Prover hosts record their caps at `p/`, and outcomes go to `or/`, so phones see them. [§18.5](DESIGN.md#185-sdksidecargo) adds `CheckSend`, `GetSendResult` and the `mail_send` event (D-SDK-31), whose copy names only the affected domain, the size and the cap. `GetReceiverCoverage` drops its outbound line. D-SMTP-20, [§14.15](DESIGN.md#1415-risks), [§15.7](DESIGN.md#157-the-mailbox-in-evs), [§15.10](DESIGN.md#1510-sending), [§5.4](DESIGN.md#54-sidecar-fields-settings-lifecycle-components) and [§3.7](DESIGN.md#37-end-to-end-flows) follow. The cap itself stays (owner decision 125).
+- *Tests:* FS-123 (M9-out); S6.
+- *Earlier claims:* T4-02 (section 7.4).
+- *Final:* fixed, for re-check at M9-in.
+
+**K05. Stale Workers could accumulate with `self_admit` disabled.** Meta review K05 (Medium; known). *Valid at the 41ba6670 build; fix-modified: a narrowed claim plus admin cleanup.*
+- *Changed:* the owner's fix 1 (D-TEAM-29) has whichever device admits a page Worker, an admin's included, revoke the member's Workers it saw removed as stale. The claim states its bound: a weekly re-enroller holds near 14 admissions, but a member with no device that answers grows without bound ([§7.10](DESIGN.md#710-removal-and-consistency-with-mls-10), [§7.18](DESIGN.md#718-risks), [§18.8](DESIGN.md#188-the-browser-sidecar-x14-the-extension-and-urio-pages)). This round adds §7.10's `cleanup` row: from 90% of `config_admissions` every admin device raises `admissions_near_cap` and lists each member's older page Workers to revoke, so the pile is freed before the cap refuses an admission.
+- *Why modified:* bounded admissions would need a member-device cap, which [§20.4](DESIGN.md#204-the-tier-table-x16) rules out, so the review's second branch is taken.
+- *Tests:* FS-97, over a year of weekly evictions with `self_admit` off.
+- *Earlier claims:* T3-18 and RT-N8, and section 6.9's residual "Stale page Workers with `self_admit` off" (section 7.4).
+- *Final:* fixed, for re-check at M4-in (Team at M6-in).
+
+**K03 and K05, with owner decisions 185, 187 and 189: the presence countersignature.** *Designed (owner decisions).*
+- *Changed:*
+  - [§7.9](DESIGN.md#79-the-config-repo-customer-held-key-authority-x3)'s presence row and D-TEAM-32 make each act the decisions name carry the countersignature of a live presence key its signing device registered, whenever it registered one: a compromise `SidecarRevoke` and a presence key's `KeyRevoke` (185); a presence key's `KeyRegister`, since otherwise a thief registers its own key; any other `SidecarRevoke` or `Suspend` of another device, and a `RecoveryVeto` (187); and every `SidecarAdmit`, `AdmissionConfirm` and `OwnerConfirm` of an untagged sidecar, AdminSet change, `MemberRevoke`, `RecoveryBind` and `RecoveryRebind` (189), which closes laundering through a fresh device and taking over recovery.
+  - api, evs, gkm and every member device check it, with UV, each statement alone by its inclusion path to the act's Merkle root ([§6.9](DESIGN.md#69-peer-authentication-and-encryption)'s `WebAuthnEvidence` fields 3-7 and `VerifyPresenceCountersign`; [§16.6](DESIGN.md#166-local-security)'s countersign profile and `ur keys rm`; [§5.6](DESIGN.md#56-login-enrollment-admission-refresh-revocation)'s acts; [§7.10](DESIGN.md#710-removal-and-consistency-with-mls-10)'s stale and cleanup acts; [§8.8](DESIGN.md#88-the-policy-in-the-config-repo-rows-grant-chains-saving)'s `Suspend`; §7.9's veto rule; [§18.5](DESIGN.md#185-sdksidecargo)'s answers; §2's invariant, threat and list).
+  - The keyless device role applies a covered revocation only as a denial, pending its sidecar role's verified state.
+- *Tests:* FS-124 at M2-out; §23's M2 freeze includes the fields.
+- *Cost (owner decision 189):* one presence prompt per such act on a device with a live key; these are already rare, person-confirmed acts.
+- *Final:* fixed, for re-check at M2-in.
+
+### 7.3 Conditional capacity and implementation constraints
+
+**CC-01. The global path-copy limit was a service-rate constraint.** Meta review CC-01 (conditional). *Valid, a conditional workload limit; fix: scope, planning, a deferral rule and a gate.*
+- *Changed:* [§11.6](DESIGN.md#116-format-keys-tokens-records-segments)'s copy rate is 250 a second per metadata cluster, rising to 1,000 while pushes leave a quarter of the allowance. Refs holding the most sources copy first, and each job reports its remaining moves. A batched epoch waits while two sources stand, keeping the third for an immediate epoch. [§19.9](DESIGN.md#199-capacity-and-cost-drivers) plans copy load as live entries per rotating ref times epochs a day, and [§19.8](DESIGN.md#198-observability-and-slos) publishes the migration liability and drain time. [§11.21](DESIGN.md#1121-risks) discloses a residual: an immediate epoch on a ref already holding three sources still waits, creation blocked, under removal rates faster than copies.
+- *Tests:* FS-118, a week-long fake-clock gate; [§22.8](DESIGN.md#228-load-soak-failure-injection)'s expiry row.
+- *Earlier claims:* T1-07 stands for the protocol; this is workload stability (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**CC-02. The HDD model's write floor already consumed its 50% allowance.** Meta review CC-02 (conditional). *Valid, an inference from the stated model; narrowed claim, with a gate.*
+- *Changed:* [§19.6](DESIGN.md#196-the-file-cluster-x13) and [§19.9](DESIGN.md#199-capacity-and-cost-drivers) state that year two's PUTs alone fill the 50% admission line. They order the segment placement and added HDD drive operations before that load, under a trigger on admitted throughput or the 30-day trend, and state that neither a higher line nor refused uploads count as fit. Q-OPS-2's residual, D-OPS-17, [§19.17](DESIGN.md#1917-risks) (now High by the model), [§19.18](DESIGN.md#1918-phasing), [§23.7](DESIGN.md#237-external-lead-times) and [§23.15](DESIGN.md#2315-risks) are aligned, and the segment placement leaves open-ended Later.
+- *Tests:* [§22.8](DESIGN.md#228-load-soak-failure-injection)'s hdd row at M3 (and M10) runs the mix with the real 50% admission on, reporting admitted throughput and the refusal rate.
+- *Final:* fixed, for re-check at G0 (Q-OPS-2's residual is text); the hdd run at M3's exit is its evidence.
+
+**CC-03. New-cluster placement did not make old cohorts or the first cluster elastic.** Meta review CC-03 (conditional). *Valid; fix.* The tradeoff stays accepted; the tracking, the tie to the move tool and a drill were missing.
+- *Changed:* [§19.9](DESIGN.md#199-capacity-and-cost-drivers)'s cohorts row tracks each cluster's own space, inode, wear and copy slopes, with the first cluster's control plane apart, and projects each cluster's exhaustion; the move tool is built before the earliest projected date. Until then a cluster at 80% raw or 70% inodes takes maintenance only, refusing the rest 507 CLUSTER_FULL, a recorded refusal (D-OPS-22; F10). [§19.8](DESIGN.md#198-observability-and-slos) adds the gauges and a business-hours page, and [§19.10](DESIGN.md#1910-failure-modes-and-runbooks)'s runbook, [§11.20](DESIGN.md#1120-interfaces)'s refusals and [§3.14](DESIGN.md#314-risks)'s risk are updated.
+- *Tests:* FS-119 on T3 at M3-out and before each next cluster.
+- *Final:* fixed, for re-check at M3-in.
+
+**CC-04. Redis sequence scripts needed explicit lossless 64-bit handling.** Meta review CC-04 (a conditional implementation trap). *Valid; fix-modified.*
+- *Changed:* the push sequence's seed becomes TIME in µs × 1,000, built by joining TIME's digits, so no script arithmetic touches it. [§11.10](DESIGN.md#1110-subscriptions)'s sequence and loss rows, [§6.8](DESIGN.md#68-server-push-x8)'s hint rule (decimal strings, an exact "higher", HINCRBY, ParseUint, uint64 on the wire, strings in bindings) and its topic registry, D-PROTO-12 and [§6.16](DESIGN.md#616-interfaces)'s assumption follow.
+- *Why modified:* the review asked only for lossless handling; a seed no script computes removes the trap.
+- *Tests:* FS-62's exact vectors at a fixed 2026 TIME, through the real publisher and decoder.
+- *Earlier claims:* T1-23 (section 7.4).
+- *Final:* fixed, for re-check at M2-in.
+
+**CC-05. Cross-network "intersection" needed an explicit colluding-operator boundary.** Meta review CC-05 (conditional). *Valid as a gap in the claim's scope; narrowed claim.*
+- *Changed:* [§8.11](DESIGN.md#811-cross-network-sharing-and-invites) and [§17.9](DESIGN.md#179-acl-identity-egress-cross-network-shares-c18) state the trust unit. X's half checks the network, the share and a current Y reader's signer, never Y's per-subject grant; Y's half is Y's routers and the contract gate; so the intersection holds against a modified Y reader or a compromised operator, not both together. [§17.17](DESIGN.md#1717-risks), [§2.10](DESIGN.md#210-threats-and-mitigations) and §2's key table disclose the residual, and [§17.12](DESIGN.md#1712-alternatives-considered) records per-subject authority as not chosen.
+- *Tests:* FS-38 adds the review's case: a reader with no Y grant, on an operator-minted contract, reaches only X's granted targets, and the run records the gate and X's grant as what enforced.
+- *Earlier claims:* T2-26 stays resolved, and AU-N7 fixed, for removed readers and static roots (section 7.4).
+- *Final:* fixed, for re-check at M6-in.
+
+**CC-06. How the socket issued-count cap interacts with eager reports was undefined.** Meta review CC-06. *Partly valid; fix (specification).*
+- *Changed:* [§9.7](DESIGN.md#97-the-scheduler) states that the per-dialer cap clamps only `est`, never refusing or delaying a ticket; that a burst can overshoot one listener until its next report, with `max_streams` and the backup ticket absorbing it; and the throughput bounds: 50 Finds a second per process for a sidecar dialer, 2,000 for an edge, and a listener's `max_streams` over its mean stream time. D-SOCK-5, [§9.15](DESIGN.md#915-interfaces), [§9.16](DESIGN.md#916-risks) and [§9.17](DESIGN.md#917-phasing) follow.
+- *Tests:* [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §9 row adds the deterministic one-dialer short-connection case.
+- *Earlier claims:* T4-26 stays resolved (section 7.4).
+- *Final:* fixed, for re-check at M5-in.
+
+**CC-07. The maintenance and long-lived proof matrices were incomplete.** Meta review CC-07 (conditional). *Valid as specification gaps, with one concrete defect at M6; fix.*
+- *Read-only key upkeep:* [§10.6](DESIGN.md#106-gkm-the-delivery-service-and-wrapped-key-store)'s scopes block maps every gkm route to its scope. [§7.9](DESIGN.md#79-the-config-repo-customer-held-key-authority-x3)'s `read_only` row accepts the device's own ReaderKeys, KeyPackages, path-only commits, resyncs and acks under r, and refuses its wraps, GenRotates, Welcomes and GroupInfo (D-KEYS-26; D-TEAM-24, [§7.17](DESIGN.md#717-interfaces), [§18.8](DESIGN.md#188-the-browser-sidecar-x14-the-extension-and-urio-pages)). *Tests:* FS-106, over 35 days to pass epoch retention; [§22.7](DESIGN.md#227-scenarios-privacy-revocation)'s read-only case.
+- *RepoAnnouncement's long-lived proof:* the proof comes from retained history, not from the announcement. A repo item's pin must lie within 4,096 positions before its push's auth pin, and its signer's right is judged at that push pin by the access log, which the config head keeps for the repo's life with each statement's log position ([§8.8](DESIGN.md#88-the-policy-in-the-config-repo-rows-grant-chains-saving)), and by the rows' admission, consent and revocation positions. A compromise revocation from an earlier `since_n` voids the item, as does an entry that ended the signer's right more than 10 min before the push's `time_ms`, since a writer's own stream or an idle cards ref can leave a push pin old; a later `RepoAdmin` remove does not; a current repo admin's device re-signs an item whose signer leaves. M6's repo items follow this rule instead of the cards' reader-relative 4,096-position check, which would have dropped every live repo announcement as the log grew (D-MCP-35; [§16.11](DESIGN.md#1611-the-team-directory), I-EVS-14). *Tests:* FS-101, through the real retention horizon.
+- *Final:* fixed, for re-check at M2-in (the upkeep) and M6-in (the proof).
+
+### 7.4 Response closure: claims narrowed or updated
+
+The review's closure table keeps most of this file's claims and narrows some. Each narrowing below is applied in place, at the entry it names, which now points here. The table's other rows stand as the review states them, with no change: T2-01; T2-08, T2-09, T2-18 and the recovery follow-ups, section 6.8's sole-config-writer residual ("One config writer") staying disclosed; T2-10 and T3-26; T1-04; T3-01, T3-02 and T3-08; T3-09 and RT-N1; T3-13 and T3-14; T3-19 and T3-22; T4-01 and EM-N4; T4-04 and EM-N3; T4-05 and T4-10; T4-07; T4-11; T5-22.
+
+- **T2-02.** "Resolved" covers the generation claim, not delivery after it, which F04 and F05 fix.
+- **T2-03.** "Resolved" holds for revocation, `DelegationRevoke`, `not_after`, reaping and signer exclusion. A `Suspend` was no drop event until F02; a covered agent's own expiry still drops nothing, since F02 refuses a non-ephemeral agent's earlier `not_after` and treats an ephemeral one's as a reap, disclosed; and the holder function now names the Delegation's reach. "Every staged or late delivery names a holder" had no state for late deliveries until F05's bytes, so the closure holds only with them.
+- **T2-04.** The accepted residual narrows to the reader seed until the key drops: reaped agents, ephemeral agents past their own `not_after`, and copies of the seed. "Each copy of its auth key" is withdrawn from the non-reap-revocation bound, since a whole bundle also admitted fresh agents until the Delegation ended (F03). *Bounds* gain the Suspend drop and the Delegation's end, and "Disclosed alike in" gains [§8.12](DESIGN.md#812-acl-and-evs-readers)'s invariant and Q-ACL-9. The decline of individual keys holds.
+- **T2-22 and T2-23.** T2-22's hints were right, but the late write they asked for had no free target once a staged wrap held the path (F04). T2-23 (retention) stands.
+- **T2-24 and WR-N6.** The fresh-pair fix held only against a passive copy with an honest gkm; the 37-day figure now carries that qualification, with the 7-day ReaderKey validity (F06).
+- **T1-01, T1-03 and ST-N1.** Their dependence on the store's ordering is now D-OPS-20's tested settle rule (K01; FS-114, FI-30, StoreSettle.tla), fixed, for re-check at M2-in; the entries' own statuses stand.
+- **T1-02.** "A refusal from a check outside the head first raises the ref's fence" closed only attempts that had already arrived. A terminal refusal now rests on the head's record (F10). T1-02's two fixes stand: no cleanup at answer time, and the bounded lookup of a committed push.
+- **Section 8's item 1.** "The fence before a refusal closes the delayed-first-attempt case" narrows the same way.
+- **SC-N4.** "A refusal fence ended every concurrent push" is superseded: a refusal now ends no other push.
+- **SC-N3.** Clocks still bound evacuation and GC fences and a refusal record's lapse.
+- **T1-05.** Stays resolved; F11 is a new v1 seam, fixed.
+- **T1-07.** Stands for the protocol; CC-01 is workload stability, fixed with a disclosed residual.
+- **T1-12.** Its environment assumption is now D-OPS-20's stated and tested settle rule (K01).
+- **T1-13.** Stays *resolved* for the copies the earlier design held: deposits, `i/` chains, index files and retained versions. Added: "Narrowed by the meta review: the v1 index's later publication paths (F09) and its fan-out (F19) were open at the 41ba6670 build; F09's CUT and F19's restated wait now cover them."
+- **SL-N1.** Stays *fixed* for the per-eraser allowance and floor. Added: "[§11.13](DESIGN.md#1113-backend-iops-gc-quotas-durability)'s and [§15.7](DESIGN.md#157-the-mailbox-in-evs)'s wait, stated per entry as the next 00:00 UTC, assumed one representation per message. The meta review's F19 restates it from closure bytes; the allowance, floor and pacing stand."
+- **T1-23.** Right about repo-wide sequencing; CC-04's exact-arithmetic rule is now explicit ([§6.8](DESIGN.md#68-server-push-x8), [§11.10](DESIGN.md#1110-subscriptions); FS-62).
+- **T3-07.** "Fixed" covers attribution only; F14 is the live-worktree commit race, fixed.
+- **Section 6.1's row for T3-07.** It said nothing remains; it now names F14 as the related item, fixed by this change.
+- **T3-16, RT-N4 and RT-N5.** "Resolved" and "fixed" stand for CROSSSLOT, the separate enqueue and master loss. [§18.7](DESIGN.md#187-host-services-the-sdk-injects)'s `FOR SHARE` ordering claim was wrong, and token-projection order stayed open until F15's change.
+- **T3-18 and RT-N8.** The review's "K05 is an already-disclosed enrollment lifecycle gap" becomes "K05: the claim is now bounded, and admins get a cleanup list before the cap (D-TEAM-29)".
+- **Section 6.9's residual "Stale page Workers with `self_admit` off".** Now designed: D-TEAM-29, [§7.10](DESIGN.md#710-removal-and-consistency-with-mls-10)'s `stale` and `cleanup` rows, and FS-97 at M4-out (Team at M6-out). Fixed in design, not resolved.
+- **Section 6.9's residual "No SDK call revokes another device".** Now designed: D-CORE-20, D-SDK-30 and FS-98 (M3-out, Team M6-out, app hosts M8-out), with owner decisions 185, 187 and 189's countersignature. Fixed in design, not resolved.
+- **"The presence check on a device revocation binds only the signing device"** ([§5.16](DESIGN.md#516-risks)'s old risk row). No line of this file said so, so nothing changes here; the design now says that api and every member device verify it (owner decisions 185, 187, 189).
+- **T4-02.** "Disclosed" moves from the receiver copy to the send, per recipient (K04).
+- **T4-06.** Stays resolved for the missing map; its fixed-wait readiness residual is now fixed (K02).
+- **T4-08 and T4-09.** T4-09's "bounded MailAuthEvidence" was bounded only by dropping records; the verdict count and the work had no bound until F17.
+- **T4-26, and T2-26 with AU-N7.** They stand (CC-06, CC-05).
+- **Section 3.6.** "P0 work (revocation, `proj/`, shred, erasure) is never refused" becomes "P0 work is never queued or refused, and the wear bound exempts it (owner decision 186): its bytes are measured and drain the bucket the other classes draw on, its excess past what the bucket holds forgiven (owner decision 190), so a P0 storm wears the drives past 0.8 DWPD and their 1 DWPD rating while it lasts" (F12). "P2 background work spends what P1 leaves and keeps a floor above its ~37% steady share (40% until measured)" becomes "funded P2 spends a prepaid wallet outside the allowance; only unfunded P2 takes the allowance, capped at 40%" (F13). The fit holds for its specified mix only, which the review asks to preserve. The storage-tier panel's "the write governor" narrows to the governor's bound on P1 and P2, and was "resolved" only by intent until F13's transitions were written.
+- **ST-N4.** Stays fixed for the sector bound, which caps the other classes' IOs near 39% of rated; P0's IOs follow its bytes. It never established an aggregate P0 bound, and under owner decision 186 none exists.
+- **Section 6.4's "The P2 cap".** "Replaced by a pre-paid, work-conserving floor" becomes F13's wallet: funded P2 spends W, never T again.
+- **Section 6.8's "A stalled drive".** Closed by the settle rule (K01). The cost is a held key after two failures during one write ([§19.17](DESIGN.md#1917-risks)'s new row).
+- **Section 6.8's "D-OPS-20 not yet in §11 and §22".** Its "lag under 100 ms" gate is now a reported latency, and the margins rest on deadlines and clocks.
+- **Sections 2.3 and 6.9.** The team directory's M2 reservations now include its admin-only erasure (F01).
+- **The v1 additions (section 6.9).** The review assessed F07, F08, F20 and F21 as new v1 items, not reopened resolved findings, so no claim narrows. Section 6.9 now records that the meta review reviewed the v1 additions; their fixes are fixed in design and wait for a reviewer's re-check at M10's Gn-in. FS-107 to FS-110 are the evidence the review asks for before M10's byte freeze: fresh-cache full-to-diff recovery, tombstones surviving merge and slot reuse, large mutable-corpus masks, and last-shard and no-hit cold queries. The review's M2-freeze note on the index's diff, tombstone and erasure format needs is answered in D-PHASE-9: the index's own encoding needs no M2 reservation.
+
+### 7.5 The two stale residuals
+
+**"Versions after collection" (section 6.8).** *Valid (the residual is stale); response update only, DESIGN.md unchanged.* [§11.7](DESIGN.md#117-diffs-checkpoints-index-entries-reconstruction)'s versions row gives a creation the version max(b, m) + 1, b being the push's effective base version and m the version of the newest removal its marker or the window holds, so a path's versions never restart, after a marker's collection or after a path-epoch copy (I-EVS-8, FI-15, FS-58). Section 6.8 now gives that credit in place of the residual.
+
+**"Closure bytes per network" (section 6.8).** *Valid (the response is stale); narrowed claim, no design change for it.* Section 6.8's residual now reads:
+
+> *Closure bytes per network* ([§20.15](DESIGN.md#2015-risks)'s risk row): [§20.7](DESIGN.md#207-enforcement-points-counters-downgrade) paces a network's `?closure=1` uploads at 4 a second in equal turns (`evs_closure_uploads_per_s`), so no eraser starves another. A day's closure bytes stay bounded by the erasers' allowances: about 312.5 GiB for a Team's 5,000, and with admission churn the pacing caps uploads near 358 GiB. Aggregate P0 work is F12's, answered by owner decision 186 and disclosed in [§11.21](DESIGN.md#1121-risks)'s P0 row, not this residual's.
+
+This correction does not close F12; F12's entry does.
+
+## 8. What the second round answered, and what reviewers re-check next
+
+The final panel (section 6.4) answered the questions this section put to the reviewers. In brief, by group, as the panel found them; every item marked *Open* below has since been fixed or resolved, and sections 6.1 and 6.2 give each one's final status:
 
 1. **The commit protocol under the storage redesign.**
    - I-EVS-1 to I-EVS-7 hold with batch records, places and window entries, and Resolve never drops a committed record.
    - Receipts keep I-EVS-5's fence and recheck, and nothing re-creates a `--now` shred.
-   - The fence before a refusal closes the delayed-first-attempt case. It rests on clocks agreeing within 100 ms (SC-N3), and it aborts every concurrent attempt (SC-N4).
+   - The fence before a refusal closes the delayed-first-attempt case. It rests on clocks agreeing within 100 ms (SC-N3), and it aborts every concurrent attempt (SC-N4). The meta review narrowed this: the fence closed only attempts that had already arrived, and a terminal refusal now rests on the head's record (F10; section 7).
    - The `idx/` folds do not keep the path-level CAS exact (ST-N1). The path-epoch copy mishandles directories a fold moved (SL-N2), and the seal skips 5g's directory rules (SC-N2).
 2. **Authority and keys.**
    - The authorization log, the gate predicate, `gen/` claims, the generation-0 self-join, the recovery window and owner decision 144's leaves rule hold.
-   - Open: the replay window against retention (AU-N4), site-loss adoption with one uploading member (AU-N6) and the one-hop cascade (AU-N2, AU-N3).
+   - Open: the replay window against retention (AU-N4), site-loss adoption with one uploading member (AU-N6) and the one-hop cascade (AU-N2, AU-N3). Owner decision 149 fixed AU-N2 in rounds 5 and 6 (section 6.8), and rounds 3 and 4 fixed the other three.
    - The witness contract does not deliver §2.8's chain of witnesses (WR-N1, WR-N2).
 3. **Runtime.**
    - The approval ledger and the gate's `approval_use` row, the reap predicate, the `sidecar_http` split, `protocol/bridge`'s contents and owner decision 142's rule hold.
@@ -1770,9 +2209,9 @@ The final panel (section 6.4) answered the questions this section put to the rev
 7. **The disclosed residuals.** They are accurate where stated, except:
    - the split witness (WR-N1, WR-N3);
    - a never-read path's pre-pin version, which a HeadCheck does not confirm (SC-N7, OT-N8);
-   - DATA mode's copy, which gives no size (T4-02);
+   - DATA mode's copy, which gives no size (T4-02), since fixed by the meta review's K04 (section 7);
    - single-site DNS, missing from §23.4's M7 row (T4-23);
    - harness evidence in untainted runs and the sandbox operator, both missing from §2.18 (T3-05, T3-23).
 8. **The storage tier.** The full review found the tier as owner decisions 136-140 and 145 require, and its figures reproduce from the model. ST-N1 is its one major.
 
-**Next.** Please re-check each open item of sections 6.1 and 6.2 at the gate it names, against the revised DESIGN.md.
+**Next.** Please re-check each fixed item of sections 6.1 and 6.2, and each entry of section 7, at the gate it names (§23.6), against the revised DESIGN.md.
