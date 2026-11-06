@@ -1,0 +1,6 @@
+URnetwork sidecar
+Copyright (c) 2026 BringYour, Inc.
+
+This repository is licensed under the Mozilla Public License, v. 2.0. The full text is in LICENSE.
+
+The third-party modules named in this repository's go.mod files keep their own licenses.
