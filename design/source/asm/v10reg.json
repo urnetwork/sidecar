@@ -1,0 +1,43 @@
+{
+ "D": {
+  "D-TEAM-30": "Delegations admit exact tags with a not_after floor and max_admits for life, ending at DelegationRevoke, void or compromise.",
+  "D-TEAM-31": "Revoking or suspending a tagged agent shows the agent, its Delegation's shared key and admission authority apart.",
+  "D-TEAM-32": "Revocations, suspensions, vetoes, admissions, AdminSet changes, member removals, recovery bindings and presence-key changes carry the signer's live presence key's countersignature.",
+  "D-KEYS-24": "ReaderWraps and DelegationWraps are typed KeyDeliveries naming the recipient key; late ones carry their signer's AuthPin and time.",
+  "D-KEYS-25": "ReaderKeys live 7 days, replaced at 6, so passive keychain copies heal in about 37 days; active clones need revocation.",
+  "D-KEYS-26": "gkm routes take 10.6's scopes; read_only devices keep their own ReaderKeys, KeyPackages, reads, acks and commits under r.",
+  "D-MCP-33": "Team-directory erasure takes admin; a repo owner's revocation files an erasure request that the directory's erasure runner completes.",
+  "D-MCP-34": "Directory approvals and denials complete by one resumable protocol, rewriting the notice with DecisionRefs that requesters read directly.",
+  "D-MCP-35": "A repo item counts only if its signer's right holds at its push's pin, judged from retained history.",
+  "D-EVS-66": "An erasure's first index push, a CUT, moves the head's index_epoch; other index pushes name it and apply the set.",
+  "D-EVS-67": "An erasure's wait is stated from its rekey objects and allowance; its CUT and first ERASE land at once.",
+  "D-OPS-22": "Until the move tool, a cluster at 80% raw or 70% inodes refuses payload 507 CLUSTER_FULL; exhaustion projected per cluster.",
+  "D-SDK-31": "CheckSend and GetSendResult give each recipient domain's DATA cap, predicted outcome and result; receiver coverage speaks only of receiving.",
+  "D-PROTO-22": "A marked pair's reports are withheld to each 55-minute window's end and fixed at a 256 KiB floor a direction.",
+  "D-EVS-23": "A push id names one statement; retries return its version; the head resolves unknown outcomes and records unsettled refusals.",
+  "D-EVS-33": "One write budget per metadata cluster (0.8 DWPD, 50% IOPS) except P0; P1 prepays P2 by wallet; heaviest refused first.",
+  "D-OPS-20": "Both clusters run an in-house MinIO build whose drive commits apply only before deadlines and release keys once settled.",
+  "D-KEYS-16": "KeyHolders: leaves, uncovered agents, live Delegations, recovery keys; a Delegation's key drops at revocation, not_after, Suspend or non-reap revocation.",
+  "D-EVS-52": "Only a document's newest version yields hits, probed per candidate in a bounded version table, tombstones and erasure sets included.",
+  "D-CORE-20": "Approval-capable devices revoke their member's other devices as `lost` or `compromise`, countersigned by their presence key where registered, else confirmed.",
+  "D-MCP-8": "run_restore writes only the run's attributed edits, checked on the bytes it moves aside, recorded, approved when tainted.",
+  "D-EVS-41": "git-lfs uses versionless `ur/lfs`; tips commit only with their objects protected; prunes drop what no tip or recent commit needs.",
+  "D-SDK-27": "At foreground, apps Hello their first-choice own indexer, then Ping it each minute; failover waits 3 s (5 s metered).",
+  "D-TLS-12": "Active custom hosts reach tlsedge via a versioned map, each ready once every serving interface's reported version passes route probes.",
+  "D-SDK-16": "Wakes follow 18.7: a slot-local script ordering token projections by revision, a separate enqueue, frame acks, a deferred live check.",
+  "D-MAIL-14": "Receivers seal bounded reception-time authentication evidence in the deposit; readers label, score and forward from it, never from later DNS.",
+  "D-TEST-10": "Every state machine of §7-§21 is tested by deterministic fault schedules against FI-1 to FI-30, beside TLA+ and Porcupine checks.",
+  "D-EVS-12": "11.6-11.7's token tree, re-keyed at once on removal or compromise, else within 24 h or, deferred, once a source drops.",
+  "D-TEST-17": "FS-86 gates the directory against 16.11's cost table: its M6 case at M6's Gn-out, its card case later."
+ },
+ "Q": {
+  "Q-EVS-24": [
+   "Must the PM9A3 write bound hold against aggregate P0 safety work?",
+   "(b), owner decisions 186, 190: P0 runs at once, outside the wear bound, alarmed."
+  ],
+  "Q-PROTO-4": [
+   "Should connect keep remote search's byte totals per contract, which show roughly how many search pages ran in each contract hour?",
+   "(b), owner decisions 176, 188, 191: marked pairs report windows at a 256 KiB floor."
+  ]
+ }
+}

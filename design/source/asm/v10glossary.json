@@ -1,0 +1,81 @@
+{
+ "add": [
+  [
+   "KeyDelivery",
+   "The typed body of a ReaderWrap or DelegationWrap: generation, commitment, recipient and recipient key, STAGED with its claim or LATE with its signer's AuthPin and time.",
+   "§10.5"
+  ],
+  [
+   "tombstone (search index)",
+   "An index entry or shard-table record ending a document, or a deleted ref's documents, at a version, which masks every older version in every partition until its bucket's roll-up removes them.",
+   "§11.14"
+  ],
+  [
+   "version table",
+   "A device's sealed, sorted runs of each indexed key's newest version in the partitions it holds, built as it syncs, which a search probes per candidate to apply newest wins in bounded memory.",
+   "§5.9"
+  ],
+  [
+   "CUT, erasure cut",
+   "An erasure's first push on each index ref. It rewrites the ref's erasure set and moves the head's `index_epoch`, so no index push built before it, except a CLOSURE, commits after it.",
+   "§11.12"
+  ],
+  [
+   "erasure set",
+   "The versionless file `x` beside a ref's index roots. It lists each pending erasure's documents, as doc_key and newest erased version, and only a CUT writes it.",
+   "§11.14"
+  ],
+  [
+   "index epoch",
+   "An index ref's head field: the version of its newest CUT. Every index push except a CLOSURE names it at its head CAS, else 409 INDEX_EPOCH.",
+   "§11.8"
+  ],
+  [
+   "RV1-RV4",
+   "The restore invariants: only the run's own edits, exact bytes or nothing, no stale preview, no other bytes discarded; not RS1-RS3.",
+   "§16.7"
+  ],
+  [
+   "C19 window",
+   "A 55-minute span of a phone-indexer search pair whose close reports connect withholds to its end and fixes at a 256 KiB floor each way.",
+   "§6.10"
+  ]
+ ],
+ "replace": {
+  "DelegationWrap": [
+   "A signed wrap of RK_g to a Delegation's reader key, through which its agents read until the Delegation ends or a Suspend or non-reap revocation of one drops the key.",
+   "§10.5"
+  ],
+  "ReaderKey, ReaderWrap": [
+   "A reader's signed X-Wing key, valid 7 days, and a KeyDelivery of RK_g to it, for reading without a leaf.",
+   "§10.5"
+  ],
+  "erasure, ERASE push": [
+   "Destroying chosen entries' keys everywhere by a committed push on the repo's `erasure` ref naming their slots; with the search index, a CUT goes first.",
+   "§11.12"
+  ],
+  "git-lfs store": [
+   "A repo's versionless `ur/lfs` ref of git-lfs objects, moved through the daemon with no LFS server, pruned after 30 unreferenced days (a repo setting of at least 7), and holding every object a current git tip requires.",
+   "§11.11"
+  ],
+  "write budget, governor": [
+   "Each metadata cluster's limit of 0.8 DWPD and 50% of write IOPS for all but P0 work, whose allowances taskworker's governor publishes from measured drive bytes.",
+   "§11.13"
+  ],
+  "fault schedule (FS-n)": [
+   "A deterministic script of actor steps, barriers, store faults and clock moves, checked against FI-1 to FI-30.",
+   "§22.8"
+  ],
+  "fence (head)": [
+   "A head write raising `fence` but no version: an evacuation's or GC's also sets fence_ms, ending every earlier-arrived attempt; a refusal's records the refusal.",
+   "§11.8"
+  ],
+  "P0, P1, P2 (write classes)": [
+   "The write budget's classes: P0 (revocations, lifecycle, Removes), never queued or refused; P1 (pushes), queued per network; P2 (folds, evacuation, GC), prepaid by the P1 admissions causing it, else unfunded.",
+   "§11.13"
+  ]
+ },
+ "delete": [
+  "RV1-RV3"
+ ]
+}

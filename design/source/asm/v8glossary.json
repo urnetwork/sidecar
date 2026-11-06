@@ -1,0 +1,193 @@
+{
+ "add": [
+  [
+   "versionless",
+   "A file version with `versioning` 1 (2 in the search index), whose content the purge deletes once a newer version commits.",
+   "§11.7"
+  ],
+  [
+   "VersioningRules, RepoVersioning",
+   "A network's signed path rules, or a repo's own replacing them, that set each new path's versioning; absent both, paths over 64 MiB are versionless.",
+   "§7.9"
+  ],
+  [
+   "git-lfs store",
+   "A repo's versionless `ur/lfs` ref of git-lfs objects, moved through the daemon with no LFS server and pruned after 30 unreferenced days.",
+   "§11.11"
+  ],
+  [
+   "search index",
+   "A repo's encrypted, versionless trigram index, updated by every committer and downloaded whole to search locally, so evs never sees a query.",
+   "§11.14"
+  ],
+  [
+   "bucket (search index)",
+   "An index partition of W days' entries, 30 by default, of which every syncing device keeps the newest two.",
+   "§11.14"
+  ],
+  [
+   "all partition",
+   "The index's older documents, one version each, rolled up from expired buckets; desktops and indexers keep it, others fetch on demand.",
+   "§11.14"
+  ],
+  [
+   "roll-up",
+   "Merging an expired bucket into the all partition and removing it in one locked push, by a search indexer, else the first writer after expiry.",
+   "§11.14"
+  ],
+  [
+   "verified hit, possible match",
+   "A hit checked against the document's text, and a trigram candidate shown from display fields, unchecked until opened.",
+   "§11.14"
+  ],
+  [
+   ".ur-index/, ur/index",
+   "The search index's roots: `.ur-index/` inside each file-mode ref, committed with its documents, and a repo's `ur/index` ref for git-mode refs and streams.",
+   "§11.14"
+  ],
+  [
+   "companion push",
+   "A committer's later push of its git-mode refs' and streams' index entries to `ur/index`, within one to five minutes.",
+   "§11.14"
+  ],
+  [
+   "IndexSettings",
+   "A repo admin's versioned file in each index root that turns the index off or sets its bucket window.",
+   "§11.14"
+  ],
+  [
+   "indexer",
+   "An always-on device its network designates by IndexerSet, none by default, to run background services (mail, mirrors, search upkeep) first, gaining no access.",
+   "§3.6"
+  ],
+  [
+   "IndexerSet",
+   "The config statement designating an indexer and its sealed services (mail, mirror, search), at network or member scope.",
+   "§7.9"
+  ],
+  [
+   "mail indexer",
+   "A receiver its network designates for mail by IndexerSet, through which alone a network receives reliably.",
+   "§15.6"
+  ],
+  [
+   "team directory",
+   "A team network's one repo of kind `directory`, read by every admitted sidecar, holding announcements, access requests and the coordination log.",
+   "§16.11"
+  ],
+  [
+   "announcement",
+   "A team-directory item stating who, what and where for a run, worker or repo; runs and workers expire unless renewed.",
+   "§16.11"
+  ],
+  [
+   "card (directory)",
+   "A sidecar's signed DirectoryCard in the team directory, holding up to 16 of its run and worker announcements.",
+   "§16.11"
+  ],
+  [
+   "notice (directory)",
+   "A small directory file under `q/<target>/` flagging an access request to its target's approvers, rewritten once decided.",
+   "§16.11"
+  ],
+  [
+   "directory stub",
+   "How tools return directory announcements, requests and decisions by default: attested and identifier fields and the match label, no prose.",
+   "§16.11"
+  ],
+  [
+   "private marker",
+   "A private repo's directory file: its signer, id, kind and request state only, padded like an announcement.",
+   "§16.11"
+  ],
+  [
+   "remote search",
+   "An app host's \"search more\" sent end to end to a designated search indexer, which answers with verified hits in fixed-size replies.",
+   "§11.14"
+  ],
+  [
+   "drop (DROP push), drop pending, dropped",
+   "A repo admin's push deleting the content only a path's earlier versions name; they read drop pending, cancellable, for 7 days (none with --now), then dropped, statements and hashes kept.",
+   "§11.7"
+  ],
+  [
+   "autogroup:dst-owner",
+   "The approver atom for a grant's destination subject's owner or, for a tagged sidecar, its sponsor, else an admin.",
+   "§8.4"
+  ],
+  [
+   "claims (setting)",
+   "A member's per-project setting for announcing runs: auto at start (the team default), prompt at a claim, or off.",
+   "§16.11"
+  ],
+  [
+   "format 2",
+   "v1's storage format (versionless content, history drops, the search index, git-lfs), which a repo adopts without rewriting at its first push under the `format2` gate.",
+   "§11.6"
+  ],
+  [
+   "coordination log",
+   "Where claims, handoffs, asks, answers, checks and notes go: the team directory in a team network, else the member's vault.",
+   "§16.8"
+  ]
+ ],
+ "replace": {
+  "receiver": [
+   "A sidecar listening on `smtp/25/mx` that terminates inbound mail TLS and deposits messages, reliably only as a designated mail indexer.",
+   "§15.4"
+  ],
+  "direct MX": [
+   "A Team option pointing MX straight at up to two of its mail indexers, bypassing mxedge.",
+   "§15.4"
+  ],
+  "record repo": [
+   "A `record`-kind ledger with grantee readers and append-only owned refs, never the coordination log.",
+   "§11.12"
+  ],
+  "repo kind": [
+   "A repo's fixed type: general, record, config, directory, team_record, mailcfg, vault, mailbox or secret.",
+   "§11.12"
+  ],
+  "leaves rule": [
+   "A network's first 1,000 live member devices are its config and team directory groups' leaves; later ones read by wraps, committing no Add or Remove.",
+   "§7.9"
+  ],
+  "readers(repo)": [
+   "The sidecars policy lets read a repo: member devices as its MLS leaves, others, config and directory overflow included, through wraps.",
+   "§8.12"
+  ],
+  "RECORD.md": [
+   "The separate design of recURd's record semantics, an M0 deliverable.",
+   "§16.14"
+  ],
+  "`.ur` file": [
+   "A committable project file naming the default network and, optionally, the `claims` setting and `project` label.",
+   "§5.8"
+  ],
+  "hold (preservation)": [
+   "A legal hold pausing only the server's TTL sweeps, GC and history drops for in-scope objects, never users' shredding.",
+   "§21.9"
+  ],
+  "fault schedule (FS-n)": [
+   "A deterministic script of actor steps, barriers, store faults and clock moves, checked against FI-1 to FI-27.",
+   "§22.8"
+  ],
+  "index entry": [
+   "A path's `idx/` object in evs's path index, one per path epoch, holding folded committed versions.",
+   "§11.7"
+  ],
+  "remote mode": [
+   "An sdk backend driving a desktop `ur daemon` instead of a local sidecar (not remote search's on/own/off).",
+   "§18.5"
+  ],
+  "engine": [
+   "Service logic in the sidecar repo behind host interfaces, hosted by server, unlike the devices' search engine.",
+   "§4.4"
+  ],
+  "coverage": [
+   "The record's statement of which hooks observed a run, and any lapse; not search coverage.",
+   "§16.8"
+  ]
+ },
+ "delete": []
+}

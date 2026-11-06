@@ -1,0 +1,1002 @@
+{
+ "Q-CTX-1": [
+  "decided",
+  "decided (implied by owner decision 48)",
+  "owner"
+ ],
+ "Q-CTX-2": [
+  "decided",
+  "decided (implied by owner decision 76)",
+  "owner"
+ ],
+ "Q-CTX-3": [
+  "decided",
+  "decided (implied by owner decision 59)",
+  "owner"
+ ],
+ "Q-CTX-4": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-TRUST-1": [
+  "decided",
+  "decided (owner decision 3)",
+  "owner"
+ ],
+ "Q-TRUST-2": [
+  "decided",
+  "decided (owner decision 47)",
+  "owner"
+ ],
+ "Q-TRUST-3": [
+  "decided",
+  "decided (implied by owner decision 59)",
+  "owner"
+ ],
+ "Q-TRUST-4": [
+  "decided",
+  "decided (owner decision 76)",
+  "owner"
+ ],
+ "Q-TRUST-5": [
+  "decided",
+  "decided (owner decision 77)",
+  "owner"
+ ],
+ "Q-TRUST-6": [
+  "decided",
+  "decided (implied by owner decision 108)",
+  "owner"
+ ],
+ "Q-TRUST-7": [
+  "decided",
+  "decided (owner decision 120, 2026-11-04)",
+  "owner"
+ ],
+ "Q-TRUST-8": [
+  "decided",
+  "decided (owner decision 119, 2026-11-04)",
+  "owner"
+ ],
+ "Q-TRUST-9": [
+  "decided",
+  "decided (owner decision 129, 2026-11-04)",
+  "owner"
+ ],
+ "Q-ARCH-1": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-2": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-3": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-4": [
+  "withdrawn",
+  "withdrawn",
+  "—"
+ ],
+ "Q-ARCH-5": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-6": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-7": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-8": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-ARCH-9": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-REPO-1": [
+  "decided",
+  "decided (owner decision 19)",
+  "owner"
+ ],
+ "Q-REPO-2": [
+  "decided",
+  "decided (owner decision 22)",
+  "owner"
+ ],
+ "Q-REPO-3": [
+  "decided",
+  "decided (owner decision 52)",
+  "owner"
+ ],
+ "Q-REPO-4": [
+  "decided",
+  "decided (owner decisions 117, 118, 2026-11-04)",
+  "owner"
+ ],
+ "Q-REPO-5": [
+  "decided",
+  "decided (owner decision 104)",
+  "owner"
+ ],
+ "Q-CORE-1": [
+  "decided",
+  "decided (owner decision 4)",
+  "owner"
+ ],
+ "Q-CORE-2": [
+  "decided",
+  "decided (owner decision 4)",
+  "owner"
+ ],
+ "Q-CORE-3": [
+  "decided",
+  "decided (implied by owner decision 59)",
+  "owner"
+ ],
+ "Q-CORE-4": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-CORE-5": [
+  "decided",
+  "decided (owner decision 62)",
+  "owner"
+ ],
+ "Q-CORE-6": [
+  "decided",
+  "decided (owner decision 23)",
+  "owner"
+ ],
+ "Q-PROTO-1": [
+  "decided",
+  "decided (owner decision 17)",
+  "owner"
+ ],
+ "Q-PROTO-2": [
+  "decided",
+  "decided (owner decision 4)",
+  "owner"
+ ],
+ "Q-PROTO-3": [
+  "decided",
+  "decided (owner decision 11)",
+  "owner"
+ ],
+ "Q-PROTO-4": [
+  "decided",
+  "decided (owner decision 176, 2026-11-05); amended (owner decision 188, 2026-11-06); amended (owner decision 191, 2026-11-06)",
+  "owner"
+ ],
+ "Q-TEAM-1": [
+  "decided",
+  "decided (owner decision 45)",
+  "owner"
+ ],
+ "Q-TEAM-2": [
+  "decided",
+  "decided (owner decision 55)",
+  "owner"
+ ],
+ "Q-TEAM-3": [
+  "decided",
+  "decided (owner decision 56)",
+  "owner"
+ ],
+ "Q-TEAM-4": [
+  "decided",
+  "decided (owner decision 46)",
+  "owner"
+ ],
+ "Q-TEAM-5": [
+  "decided",
+  "decided (owner decisions 3, 45)",
+  "owner"
+ ],
+ "Q-TEAM-6": [
+  "decided",
+  "decided (owner decision 110)",
+  "owner"
+ ],
+ "Q-TEAM-7": [
+  "decided",
+  "decided (owner decision 46)",
+  "owner"
+ ],
+ "Q-TEAM-8": [
+  "decided",
+  "decided (owner decision 83)",
+  "owner"
+ ],
+ "Q-TEAM-9": [
+  "decided",
+  "decided (implied by owner decision 83)",
+  "owner"
+ ],
+ "Q-TEAM-10": [
+  "decided",
+  "decided (owner decision 112, 2026-11-04)",
+  "owner"
+ ],
+ "Q-TEAM-11": [
+  "decided",
+  "decided (owner decision 127, 2026-11-04)",
+  "owner"
+ ],
+ "Q-ACL-1": [
+  "decided",
+  "decided (owner decisions 3, 5-8, 110)",
+  "owner"
+ ],
+ "Q-ACL-2": [
+  "decided",
+  "decided (owner decision 72)",
+  "owner"
+ ],
+ "Q-ACL-3": [
+  "withdrawn",
+  "withdrawn",
+  "—"
+ ],
+ "Q-ACL-4": [
+  "decided",
+  "decided (owner decision 105)",
+  "owner"
+ ],
+ "Q-ACL-5": [
+  "decided",
+  "decided (owner decision 106)",
+  "owner"
+ ],
+ "Q-ACL-6": [
+  "decided",
+  "decided (owner decision 73)",
+  "owner"
+ ],
+ "Q-ACL-7": [
+  "decided",
+  "decided (owner decisions 74, 75)",
+  "owner"
+ ],
+ "Q-ACL-8": [
+  "decided",
+  "decided (implied by owner decision 59)",
+  "owner"
+ ],
+ "Q-ACL-9": [
+  "decided",
+  "decided (owner decision 114, 2026-11-04)",
+  "owner"
+ ],
+ "Q-ACL-10": [
+  "decided",
+  "decided (owner decision 126, 2026-11-04)",
+  "owner"
+ ],
+ "Q-ACL-11": [
+  "decided",
+  "decided (owner decision 180, 2026-11-05)",
+  "owner"
+ ],
+ "Q-SOCK-1": [
+  "decided",
+  "decided (owner decision 65)",
+  "owner"
+ ],
+ "Q-SOCK-2": [
+  "decided",
+  "decided (owner decision 66)",
+  "owner"
+ ],
+ "Q-SOCK-3": [
+  "decided",
+  "decided (implied by owner decision 59)",
+  "owner"
+ ],
+ "Q-SOCK-4": [
+  "decided",
+  "decided (owner decision 67)",
+  "owner"
+ ],
+ "Q-KEYS-1": [
+  "decided",
+  "decided (owner decision 43)",
+  "owner"
+ ],
+ "Q-KEYS-2": [
+  "decided",
+  "decided (owner decision 44)",
+  "owner"
+ ],
+ "Q-KEYS-3": [
+  "decided",
+  "decided (owner decision 60)",
+  "owner"
+ ],
+ "Q-KEYS-4": [
+  "decided",
+  "decided (implied by owner decision 59)",
+  "owner"
+ ],
+ "Q-KEYS-5": [
+  "decided",
+  "decided (owner decisions 3, 5, 110)",
+  "owner"
+ ],
+ "Q-KEYS-6": [
+  "decided",
+  "decided (owner decision 61)",
+  "owner"
+ ],
+ "Q-KEYS-7": [
+  "decided",
+  "decided (owner decision 62)",
+  "owner"
+ ],
+ "Q-KEYS-8": [
+  "decided",
+  "decided (owner decision 63)",
+  "owner"
+ ],
+ "Q-KEYS-9": [
+  "decided",
+  "decided (owner decision 1)",
+  "owner"
+ ],
+ "Q-KEYS-10": [
+  "decided",
+  "decided (owner decision 64)",
+  "owner"
+ ],
+ "Q-KEYS-11": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-KEYS-12": [
+  "decided",
+  "decided (owner decision 115, 2026-11-04)",
+  "owner"
+ ],
+ "Q-KEYS-13": [
+  "decided",
+  "decided (owner decision 113, 2026-11-04)",
+  "owner"
+ ],
+ "Q-KEYS-14": [
+  "decided",
+  "decided (owner decision 128, 2026-11-04)",
+  "owner"
+ ],
+ "Q-KEYS-15": [
+  "decided",
+  "decided (owner decision 144, 2026-11-04)",
+  "owner"
+ ],
+ "Q-KEYS-16": [
+  "decided",
+  "decided (owner decision 182, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-1": [
+  "decided",
+  "decided (owner decision 2)",
+  "owner"
+ ],
+ "Q-EVS-2": [
+  "decided",
+  "decided (owner decision 24)",
+  "owner"
+ ],
+ "Q-EVS-3": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-EVS-4": [
+  "decided",
+  "decided (owner decision 81)",
+  "owner"
+ ],
+ "Q-EVS-5": [
+  "decided",
+  "decided (owner decision 82)",
+  "owner"
+ ],
+ "Q-EVS-6": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-EVS-7": [
+  "decided",
+  "decided (owner decision 133, 2026-11-04)",
+  "owner"
+ ],
+ "Q-EVS-8": [
+  "decided",
+  "decided (owner decision 141, 2026-11-04)",
+  "owner"
+ ],
+ "Q-EVS-9": [
+  "decided",
+  "decided (owner decision 140, record corrected, 2026-11-04)",
+  "owner"
+ ],
+ "Q-EVS-10": [
+  "decided",
+  "decided (owner decision 158, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-11": [
+  "decided",
+  "decided (owner decision 159, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-12": [
+  "decided",
+  "decided (owner decision 160, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-13": [
+  "decided",
+  "decided (owner decision 161, revising about a day, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-14": [
+  "decided",
+  "decided (owner decision 162, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-15": [
+  "decided",
+  "decided (owner decision 163, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-16": [
+  "decided",
+  "decided (owner decision 164, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-17": [
+  "decided",
+  "decided (owner decision 165, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-18": [
+  "decided",
+  "decided (owner decision 165, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-19": [
+  "decided",
+  "decided (owner decision 173, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-20": [
+  "decided",
+  "decided (owner decision 167, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-21": [
+  "decided",
+  "decided (owner decision 172, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-22": [
+  "decided",
+  "decided (owner decision 168, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-23": [
+  "decided",
+  "decided (owner decision 183, 2026-11-05)",
+  "owner"
+ ],
+ "Q-DNS-1": [
+  "decided",
+  "decided (owner decision 13)",
+  "owner"
+ ],
+ "Q-DNS-2": [
+  "decided",
+  "decided (owner decision 14)",
+  "owner"
+ ],
+ "Q-DNS-3": [
+  "decided",
+  "decided (owner decisions 15, 108)",
+  "owner"
+ ],
+ "Q-DNS-4": [
+  "decided",
+  "decided (owner decisions 69, 71)",
+  "owner"
+ ],
+ "Q-DNS-5": [
+  "decided",
+  "decided (owner decision 109)",
+  "owner"
+ ],
+ "Q-DNS-6": [
+  "decided",
+  "decided (owner decision 70)",
+  "owner"
+ ],
+ "Q-DNS-7": [
+  "decided",
+  "decided (owner decision 123, 2026-11-04)",
+  "owner"
+ ],
+ "Q-TLS-1": [
+  "decided",
+  "decided (owner decision 34)",
+  "owner"
+ ],
+ "Q-TLS-2": [
+  "decided",
+  "decided (owner decision 39)",
+  "owner"
+ ],
+ "Q-TLS-3": [
+  "decided",
+  "decided (owner decision 40)",
+  "owner"
+ ],
+ "Q-TLS-4": [
+  "decided",
+  "decided (owner decision 41)",
+  "owner"
+ ],
+ "Q-TLS-5": [
+  "decided",
+  "decided (implied by owner decisions 11 and 59)",
+  "owner"
+ ],
+ "Q-TLS-6": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-TLS-7": [
+  "decided",
+  "decided (owner decision 42)",
+  "owner"
+ ],
+ "Q-TLS-8": [
+  "decided",
+  "decided (owner decision 68; owner decision 121, 2026-11-04)",
+  "owner"
+ ],
+ "Q-SMTP-1": [
+  "decided",
+  "decided (owner decisions 35, 99; owner decision 125, 2026-11-04)",
+  "owner"
+ ],
+ "Q-SMTP-2": [
+  "decided",
+  "decided (owner decision 30)",
+  "owner"
+ ],
+ "Q-SMTP-3": [
+  "decided",
+  "decided (owner decision 37)",
+  "owner"
+ ],
+ "Q-SMTP-4": [
+  "decided",
+  "decided (owner decision 38)",
+  "owner"
+ ],
+ "Q-SMTP-5": [
+  "decided",
+  "decided (owner decision 36)",
+  "owner"
+ ],
+ "Q-SMTP-6": [
+  "decided",
+  "decided (owner decision 124, 2026-11-04)",
+  "owner"
+ ],
+ "Q-SMTP-7": [
+  "decided",
+  "decided (owner decision 78)",
+  "owner"
+ ],
+ "Q-MAIL-1": [
+  "decided",
+  "decided (owner decisions 31, 34)",
+  "owner"
+ ],
+ "Q-MAIL-2": [
+  "decided",
+  "decided (owner decision 12)",
+  "owner"
+ ],
+ "Q-MAIL-3": [
+  "decided",
+  "decided (owner decision 32, superseding owner decision 29)",
+  "owner"
+ ],
+ "Q-MAIL-4": [
+  "decided",
+  "decided (owner decision 53)",
+  "owner"
+ ],
+ "Q-MAIL-5": [
+  "decided",
+  "decided (owner decision 58, superseding owner decision 54)",
+  "owner"
+ ],
+ "Q-MAIL-6": [
+  "decided",
+  "decided (owner decision 111)",
+  "owner"
+ ],
+ "Q-MAIL-7": [
+  "withdrawn",
+  "withdrawn",
+  "—"
+ ],
+ "Q-MAIL-8": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-MAIL-9": [
+  "decided",
+  "decided (owner decision 33)",
+  "owner"
+ ],
+ "Q-MAIL-10": [
+  "decided",
+  "decided (owner decision 32)",
+  "owner"
+ ],
+ "Q-MAIL-11": [
+  "decided",
+  "decided (owner decision 80)",
+  "owner"
+ ],
+ "Q-MAIL-12": [
+  "decided",
+  "decided (owner decision 79)",
+  "owner"
+ ],
+ "Q-MAIL-13": [
+  "decided",
+  "decided (owner decision 135, 2026-11-04)",
+  "owner"
+ ],
+ "Q-MCP-1": [
+  "decided",
+  "decided (owner decision 25)",
+  "owner"
+ ],
+ "Q-MCP-2": [
+  "decided",
+  "decided (owner decision 57)",
+  "owner"
+ ],
+ "Q-MCP-3": [
+  "decided",
+  "decided (owner decision 75)",
+  "owner"
+ ],
+ "Q-MCP-4": [
+  "decided",
+  "decided (owner decision 49; owner decision 129, 2026-11-04)",
+  "owner"
+ ],
+ "Q-MCP-5": [
+  "closed",
+  "closed by the 2026-11-03 design review",
+  "peer review"
+ ],
+ "Q-MCP-6": [
+  "decided",
+  "decided (owner decision 142, 2026-11-04)",
+  "owner"
+ ],
+ "Q-MCP-7": [
+  "decided",
+  "decided (owner decision 170, 2026-11-05)",
+  "owner"
+ ],
+ "Q-MCP-8": [
+  "decided",
+  "decided (owner decision 179, 2026-11-05)",
+  "owner"
+ ],
+ "Q-MCP-9": [
+  "decided",
+  "decided (owner decision 181, 2026-11-05)",
+  "owner"
+ ],
+ "Q-BRIDGE-1": [
+  "decided",
+  "decided (owner decision 28)",
+  "owner"
+ ],
+ "Q-BRIDGE-2": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-BRIDGE-3": [
+  "decided",
+  "decided (owner decision 50)",
+  "owner"
+ ],
+ "Q-BRIDGE-4": [
+  "decided",
+  "decided (owner decision 85)",
+  "owner"
+ ],
+ "Q-BRIDGE-5": [
+  "decided",
+  "decided (owner decision 84; owner decision 130, 2026-11-04)",
+  "owner"
+ ],
+ "Q-BRIDGE-6": [
+  "decided",
+  "decided (owner decision 86)",
+  "owner"
+ ],
+ "Q-BRIDGE-7": [
+  "decided",
+  "decided (owner decision 132, 2026-11-04)",
+  "owner"
+ ],
+ "Q-SDK-1": [
+  "decided",
+  "decided (owner decision 26)",
+  "owner"
+ ],
+ "Q-SDK-2": [
+  "decided",
+  "decided (owner decision 87)",
+  "owner"
+ ],
+ "Q-SDK-3": [
+  "decided",
+  "decided (owner decision 88)",
+  "owner"
+ ],
+ "Q-SDK-4": [
+  "decided",
+  "decided (owner decision 76)",
+  "owner"
+ ],
+ "Q-SDK-5": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-SDK-6": [
+  "decided",
+  "decided (owner decisions 175, 177, 178, 2026-11-05)",
+  "owner"
+ ],
+ "Q-OPS-1": [
+  "decided",
+  "decided (owner decisions 18, 20, 21, 94; owner decisions 116, 136-140, 145, 2026-11-04)",
+  "owner"
+ ],
+ "Q-OPS-2": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-OPS-3": [
+  "decided",
+  "decided (implied by owner decisions 2, 18)",
+  "owner"
+ ],
+ "Q-OPS-4": [
+  "decided",
+  "decided (owner decision 91)",
+  "owner"
+ ],
+ "Q-OPS-5": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-OPS-6": [
+  "decided",
+  "decided (owner decision 90)",
+  "owner"
+ ],
+ "Q-OPS-7": [
+  "decided",
+  "decided (owner decisions 89, 94)",
+  "owner"
+ ],
+ "Q-OPS-8": [
+  "decided",
+  "decided (owner decision 118, 2026-11-04)",
+  "owner"
+ ],
+ "Q-OPS-9": [
+  "decided",
+  "decided (owner decision 143, 2026-11-04)",
+  "owner"
+ ],
+ "Q-OPS-10": [
+  "decided",
+  "decided (owner decision 145, 2026-11-04)",
+  "owner"
+ ],
+ "Q-QUOTA-1": [
+  "decided",
+  "decided (owner decision 27; owner decision 122, 2026-11-04)",
+  "owner"
+ ],
+ "Q-QUOTA-2": [
+  "decided",
+  "decided (owner decision 10)",
+  "owner"
+ ],
+ "Q-QUOTA-3": [
+  "decided",
+  "decided (owner decision 92)",
+  "owner"
+ ],
+ "Q-QUOTA-4": [
+  "decided",
+  "decided (owner decision 4)",
+  "owner"
+ ],
+ "Q-QUOTA-5": [
+  "decided",
+  "decided (owner decision 11)",
+  "owner"
+ ],
+ "Q-QUOTA-6": [
+  "decided",
+  "decided (owner decision 10)",
+  "owner"
+ ],
+ "Q-ABUSE-1": [
+  "decided",
+  "decided (owner decision 98)",
+  "owner"
+ ],
+ "Q-ABUSE-2": [
+  "decided",
+  "decided (owner decision 96)",
+  "owner"
+ ],
+ "Q-ABUSE-3": [
+  "decided",
+  "decided (owner decision 95)",
+  "owner"
+ ],
+ "Q-ABUSE-4": [
+  "decided",
+  "decided (owner decision 97)",
+  "owner"
+ ],
+ "Q-ABUSE-5": [
+  "decided",
+  "decided (owner decision 93)",
+  "owner"
+ ],
+ "Q-ABUSE-6": [
+  "decided",
+  "decided (owner decision 134, 2026-11-04)",
+  "owner"
+ ],
+ "Q-ABUSE-7": [
+  "decided",
+  "decided (owner decision 184, 2026-11-05)",
+  "owner"
+ ],
+ "Q-TEST-1": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-TEST-2": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-TEST-3": [
+  "decided",
+  "decided (owner decision 99)",
+  "owner"
+ ],
+ "Q-TEST-4": [
+  "decided",
+  "decided (owner decision 100)",
+  "owner"
+ ],
+ "Q-TEST-5": [
+  "withdrawn",
+  "withdrawn",
+  "—"
+ ],
+ "Q-TEST-6": [
+  "peer-closed",
+  "closed by peer review 2026-11-04",
+  "peer review"
+ ],
+ "Q-TEST-7": [
+  "decided",
+  "decided (owner decision 101)",
+  "owner"
+ ],
+ "Q-PHASE-1": [
+  "decided",
+  "decided (owner decision 9)",
+  "owner"
+ ],
+ "Q-PHASE-2": [
+  "decided",
+  "decided (implied by owner decision 80)",
+  "owner"
+ ],
+ "Q-PHASE-3": [
+  "decided",
+  "decided (owner decisions 22, 49)",
+  "owner"
+ ],
+ "Q-PHASE-4": [
+  "decided",
+  "decided (owner decision 102)",
+  "owner"
+ ],
+ "Q-PHASE-5": [
+  "decided",
+  "decided (implied by owner decisions 99, 102)",
+  "owner"
+ ],
+ "Q-PHASE-6": [
+  "decided",
+  "decided (implied by owner decision 32)",
+  "owner"
+ ],
+ "Q-PHASE-7": [
+  "decided",
+  "decided (owner decision 103; owner decision 131, 2026-11-04)",
+  "owner"
+ ],
+ "Q-PHASE-8": [
+  "decided",
+  "decided (owner decision 118, 2026-11-04)",
+  "owner"
+ ],
+ "Q-PHASE-9": [
+  "decided",
+  "decided (owner decision 169, 2026-11-05)",
+  "owner"
+ ],
+ "Q-PHASE-10": [
+  "decided",
+  "decided (owner decision 174, 2026-11-05)",
+  "owner"
+ ],
+ "Q-EVS-24": [
+  "decided",
+  "decided (owner decision 186, 2026-11-05); amended (owner decision 190, 2026-11-06)",
+  "owner"
+ ]
+}

@@ -1,0 +1,209 @@
+[
+ {
+  "num": 1,
+  "code": "CTX",
+  "words": 3755,
+  "code_words": 52,
+  "ceiling": 2200,
+  "over": 1555,
+  "over_pct": 70.7
+ },
+ {
+  "num": 2,
+  "code": "TRUST",
+  "words": 8502,
+  "code_words": 12848,
+  "ceiling": 3000,
+  "over": 5502,
+  "over_pct": 183.4
+ },
+ {
+  "num": 3,
+  "code": "ARCH",
+  "words": 4525,
+  "code_words": 6669,
+  "ceiling": 3000,
+  "over": 1525,
+  "over_pct": 50.8
+ },
+ {
+  "num": 4,
+  "code": "REPO",
+  "words": 4125,
+  "code_words": 929,
+  "ceiling": 2800,
+  "over": 1325,
+  "over_pct": 47.3
+ },
+ {
+  "num": 5,
+  "code": "CORE",
+  "words": 8110,
+  "code_words": 6301,
+  "ceiling": 3500,
+  "over": 4610,
+  "over_pct": 131.7
+ },
+ {
+  "num": 6,
+  "code": "PROTO",
+  "words": 7704,
+  "code_words": 4582,
+  "ceiling": 3800,
+  "over": 3904,
+  "over_pct": 102.7
+ },
+ {
+  "num": 7,
+  "code": "TEAM",
+  "words": 9455,
+  "code_words": 8681,
+  "ceiling": 3500,
+  "over": 5955,
+  "over_pct": 170.1
+ },
+ {
+  "num": 8,
+  "code": "ACL",
+  "words": 6899,
+  "code_words": 2429,
+  "ceiling": 3800,
+  "over": 3099,
+  "over_pct": 81.6
+ },
+ {
+  "num": 9,
+  "code": "SOCK",
+  "words": 4396,
+  "code_words": 1604,
+  "ceiling": 3000,
+  "over": 1396,
+  "over_pct": 46.5
+ },
+ {
+  "num": 10,
+  "code": "KEYS",
+  "words": 9688,
+  "code_words": 6635,
+  "ceiling": 4500,
+  "over": 5188,
+  "over_pct": 115.3
+ },
+ {
+  "num": 11,
+  "code": "EVS",
+  "words": 20960,
+  "code_words": 37111,
+  "ceiling": 5000,
+  "over": 15960,
+  "over_pct": 319.2
+ },
+ {
+  "num": 12,
+  "code": "DNS",
+  "words": 4655,
+  "code_words": 1636,
+  "ceiling": 3000,
+  "over": 1655,
+  "over_pct": 55.2
+ },
+ {
+  "num": 13,
+  "code": "TLS",
+  "words": 6120,
+  "code_words": 774,
+  "ceiling": 3800,
+  "over": 2320,
+  "over_pct": 61.1
+ },
+ {
+  "num": 14,
+  "code": "SMTP",
+  "words": 6918,
+  "code_words": 1079,
+  "ceiling": 4500,
+  "over": 2418,
+  "over_pct": 53.7
+ },
+ {
+  "num": 15,
+  "code": "MAIL",
+  "words": 8244,
+  "code_words": 1666,
+  "ceiling": 4500,
+  "over": 3744,
+  "over_pct": 83.2
+ },
+ {
+  "num": 16,
+  "code": "MCP",
+  "words": 12354,
+  "code_words": 16280,
+  "ceiling": 3500,
+  "over": 8854,
+  "over_pct": 253.0
+ },
+ {
+  "num": 17,
+  "code": "BRIDGE",
+  "words": 6572,
+  "code_words": 3095,
+  "ceiling": 3800,
+  "over": 2772,
+  "over_pct": 72.9
+ },
+ {
+  "num": 18,
+  "code": "SDK",
+  "words": 7960,
+  "code_words": 8312,
+  "ceiling": 3000,
+  "over": 4960,
+  "over_pct": 165.3
+ },
+ {
+  "num": 19,
+  "code": "OPS",
+  "words": 7536,
+  "code_words": 8437,
+  "ceiling": 3500,
+  "over": 4036,
+  "over_pct": 115.3
+ },
+ {
+  "num": 20,
+  "code": "QUOTA",
+  "words": 4441,
+  "code_words": 3805,
+  "ceiling": 2500,
+  "over": 1941,
+  "over_pct": 77.6
+ },
+ {
+  "num": 21,
+  "code": "ABUSE",
+  "words": 3864,
+  "code_words": 293,
+  "ceiling": 2500,
+  "over": 1364,
+  "over_pct": 54.6
+ },
+ {
+  "num": 22,
+  "code": "TEST",
+  "words": 7070,
+  "code_words": 34530,
+  "ceiling": 2500,
+  "over": 4570,
+  "over_pct": 182.8
+ },
+ {
+  "num": 23,
+  "code": "PHASE",
+  "words": 6399,
+  "code_words": 1080,
+  "ceiling": 2500,
+  "over": 3899,
+  "over_pct": 156.0
+ }
+]

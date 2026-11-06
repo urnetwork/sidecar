@@ -1,0 +1,190 @@
+{
+ "D": {
+  "D-EVS-35": "Per-version versioning: 0 keeps all, 1 newest only, 2 index files; config, mailcfg, git-mode, creates-only refuse 1-2; locks refuse 1.",
+  "D-EVS-36": "Versionless content: one-record kind-5 segments cited only by the path's next version or rename; ≤16 KiB staged; per-path slot keys.",
+  "D-EVS-37": "Committing evs processes delete replaced versionless content 60 s after commit, evacuation by ~26 h; holds keep only pre-placement content.",
+  "D-EVS-38": "Turning versioning off keeps every version written while on; turning it on starts history there; replaced versionless versions read `collected`.",
+  "D-EVS-39": "Format 1 reserves and refuses format-2 constructs as FORMAT_UNSUPPORTED; a repo's first push carrying one raises `repo/`'s format to 2.",
+  "D-EVS-40": "Directory removals and ref DELETEs list versionless files below; omitted files' content ids ride the removal marker, deleted at collection.",
+  "D-EVS-41": "git-lfs uses versionless `ur/lfs` via a standalone transfer agent; daily prunes drop objects no tip, 30-day commit or touch references.",
+  "D-EVS-42": "New paths take versioning from creation-time rules: repo's, else network's, else versionless above 64 MiB; only writers change it later.",
+  "D-EVS-43": "File-mode refs index in-push under `.ur-index/i1`; git-mode refs and streams share `ur/index` by companion pushes; config, mailcfg, secret repos: none.",
+  "D-EVS-44": "Index format 1: document-level byte trigrams, Unicode 17.0.0 normalization, VByte/bitset postings, no cross-document compression, keyed shard pads, byte-exact determinism.",
+  "D-EVS-45": "Buckets: UTC W-day windows (30, or 7-365) by signed push time; latest spans current and previous; expired roll up oldest-first.",
+  "D-EVS-46": "Each writer appends to a staged head ≤16,208 B, sealing into ≤8 reused slots that merges absorb into bucket shards.",
+  "D-EVS-47": "Merges and roll-ups are functions of base files; roll-ups are single lock-fenced pushes into all; readers search every bucket present.",
+  "D-EVS-48": "Index files ≤1 MiB; erasure's CLOSURE rewrites affected files in place, same length, fresh keys; ERASE destroys old slots' keys.",
+  "D-EVS-49": "Companion pushes: ≤1 a minute per writer on 1 KiB blocks, else every 5 minutes; backfill after 10 min unindexed.",
+  "D-EVS-50": "Devices fetch whole index files by sync position or \"search more\", search only their cache, and reproduce merges, downloading mismatches.",
+  "D-EVS-51": "Devices holding a stale all keep rolled-up buckets, masked, until it shows them, an ERASE occurs or 2W days pass.",
+  "D-EVS-52": "Hits count only from partitions holding the document's highest version, tombstones included, masked by bucket doc tables and ERASE lists.",
+  "D-EVS-53": "Hosts with text verify candidates; others confirm from display fields, mail's `i/` and cached bodies, else label possible, fetching nothing.",
+  "D-EVS-54": "Possible matches rank by trigram overlap; under 3 exact hits, desktops expand terms against local vocabulary, phones by one-edit variants.",
+  "D-EVS-55": "Query terms under 3 bytes match as whole words through boundary trigrams, and each CJK run is one substring term.",
+  "D-EVS-56": "Hosts with text re-extract new documents and reproduce merges and roll-ups, raising `index_mismatch` naming the signer, using their own result.",
+  "D-EVS-57": "App-host \"search more\" asks a designated search indexer over §6.6's RPC; it authorizes and verifies locally, fetching nothing from evs.",
+  "D-EVS-58": "Requesters ask own indexers first, owner-bound repos only the owner's consented ones, team repos one network-scope indexer, never app hosts.",
+  "D-EVS-59": "Request bodies are exactly 4,016 B, replies steps × 16,384 B (1 in v1), post-parse failures included, uncompressed and uncancelled.",
+  "D-EVS-60": "Phones merge pages per doc key, newest winning; unconfirmed local hits unreturned in the checked span collapse to \"not matched\".",
+  "D-EVS-61": "One record-class `directory` repo per team network: `cards` ref, per-writer streams, `ur/index`, `erasure`; readers enforce writers; always indexed, 7-day window.",
+  "D-EVS-62": "A repo admin's DROP push (flag 256) lists dropped versions by entry hash; any admin may cancel within 7 days.",
+  "D-EVS-63": "Drops delete only kind-1 segments and slots named solely by listed versions; statements and hashes stay; inline content awaits compaction.",
+  "D-EVS-64": "Commit fences listed versions; the job marks live versions, verifies with a separate implementation, deletes objects over 25 h old.",
+  "D-EVS-65": "Holds silently defer drop deletions, the drop reading, listing and billing as finished; the index and mirrors shed listed versions.",
+  "D-MCP-20": "Search is local and query-blind: evs sees only read receipts and sync-position fetches, `more` taking every missing all object whole.",
+  "D-MCP-21": "Search reaches only what `evs_read` reaches, naming each exclusion but `secret` repos; non-writers reading owner-bound repos deposit receipts first.",
+  "D-MCP-22": "Hits are confirmed, possible or near, ranked by phase, latest before all, then §11.14's tiers; only `--verify fetch` fetches bodies.",
+  "D-MCP-23": "Untrusted hits are text-free stubs unless `untrusted: include` taints the run first; `ur search` prints them after tainting ancestor runs.",
+  "D-MCP-24": "Record logs index only their own coordination entries and run cards, one per run; hits group by agent, active first.",
+  "D-MCP-25": "Session-bound cursors page over start-pinned ref versions in phase order until an erasure or lost read; calls return by `wait_ms`.",
+  "D-MCP-26": "One `directory` repo per team network, created with the team and read by every admitted sidecar, is its coordination log.",
+  "D-MCP-27": "Runs, workers and repos announce who, what and where; runs renew hourly, expiring 90 min later; repos announce unless private.",
+  "D-MCP-28": "From format 2, announcements are signed versionless files, a card per announcing sidecar and one per repo; before, `announce` entries.",
+  "D-MCP-29": "Directory announcement, request and decision prose is untrusted, reaching agents only via `untrusted: include`; parked devices' writes count for nothing.",
+  "D-MCP-30": "Requests are directory stream entries with notices approvers lease; persons decide by `RepoGrant`, `EvsShare` or `ApprovalDecision`; agents' requests need endorsement.",
+  "D-MCP-31": "Directory readers poll, not lease, the cards ref, deriving index heads; only desktops keep buckets; phones keep cards while viewing.",
+  "D-MCP-32": "Only a person drops history, at a device, after the server's dry run and a typed confirmation; MCP only previews.",
+  "D-MAIL-15": "`IndexerSet`-designated mail indexers provide reliable reception; `team_mail: indexers` bars undesignated `tag:mail` listeners; with none designated, any online receiver takes mail.",
+  "D-MAIL-16": "`i/` stays the message list; search uses an `m/`-only index keyed by message id, holding subject, from, to and date.",
+  "D-KEYS-22": "Search-index document keys derive from `ref` (RK_1), pads from per-generation `index` keys; slot-keyed repos give each index file one key.",
+  "D-KEYS-23": "The team directory's group follows §7.9's leaves rule (1,000 leaves, then wraps); gkm hints only the signer and config writers.",
+  "D-SDK-21": "Searching hosts sync buckets; desktops and indexers always sync all, phones and tabs at \"search more\" or Wi-Fi while charging.",
+  "D-SDK-22": "`SidecarSearch` gives apps one call streaming replacing pages of state-labeled hits naming any verifying indexer, with fetch and remote progress.",
+  "D-SDK-23": "Conditions come from apps' `SetConditions` and browsers' key-origin frame, background time from `RunBackgroundSync`; the Go core reads no platform API.",
+  "D-SDK-24": "The page Worker searches its own IndexedDB cache, written only by the Web Lock holder; pages get hit views only.",
+  "D-SDK-25": "Search meets 18.4's targets, measured on surrogates and Safari's wasm before M10's exit, remote ones after M10's and M8's exits.",
+  "D-SDK-26": "App hosts ask designated search indexers at \"search more\", other members' after a notice; per-device mode `on`, `own` or `off`.",
+  "D-SDK-27": "At foreground, apps send their first-choice own indexer Hello; failover waits 3 s (5 s metered), hedging only own indexers.",
+  "D-SDK-28": "Apps use `SidecarDirectory` for the team directory and repo announcements, `SidecarApprovals` for access requests; phones fetch announcements only while viewing.",
+  "D-SDK-29": "In-app drop history is admin-only, behind the server's dry run and a typed name; owner-bound repos need owners' consented devices.",
+  "D-CORE-16": "Per-network sealed index caches hold no query, hit or cursor; erasure or lost access deletes the affected data at once.",
+  "D-CORE-17": "Search-designated daemons serve remote searches on their own `Remote*` budget (4 at once, 16 queued), persisting no query or hit.",
+  "D-CORE-18": "`claims` defaults to auto in teams, off in personal networks; a committed `.ur` widens it only after confirmation outside MCP.",
+  "D-CORE-19": "Devices delete dropped content locally, decrypted copies included, on applying an executed drop.",
+  "D-PROTO-21": "`SEARCH` (0x1404) and `SEARCH_RESULT` (0x1405) carry remote search to designated indexers on data or control contracts, `timeout_ms` always 10,000.",
+  "D-TEAM-27": "Owners or Admins network-wide, or members' consented devices for their own, designate indexers by `IndexerSet`, granting nothing; none by default.",
+  "D-TEAM-28": "`team-create`'s first Owner device creates the directory after the config's first base; `ServiceSettings.directory` holds run (auto) and worker (on) defaults.",
+  "D-ABUSE-8": "Preservation holds defer drops silently: covered drops commit and read as finished, their deletions waiting until every covering hold ends.",
+  "D-TEST-12": "Versionless purge ships in observe mode; deletes start after FS-64 to FS-71 pass and a clean ≥14-day, ≥10,000-candidate production soak.",
+  "D-TEST-13": "Format 2's bytes freeze only when projected drive writes meet D-TEST-11's gate; production measuring >10% over priced holds its rollout.",
+  "D-TEST-14": "Every search schedule checks its results against `SearchOracle`, which shares no index code, for exact desktop hits and complete candidates.",
+  "D-TEST-15": "Every leg reproduces testdata/index/ vectors byte-for-byte under one Go toolchain, checking Unicode and x/text versions; decoders accept only canonical encodings.",
+  "D-TEST-16": "Remote search is checked against `SearchOracle` and by relay capture: one frame-size sequence per kind, evs request logs unchanged.",
+  "D-TEST-17": "M10's Gn-out (M6's if later) runs FS-86's directory load at 500 and 5,000 members, counted in format 2's write gate.",
+  "D-TEST-18": "Drop deletes start after FS-89 to FS-96 pass, TLC checks I-EVS-15 and FI-27, and a clean ≥30-day, ≥200-job observe-mode soak.",
+  "D-PHASE-8": "Format 2 is milestone M10, built on track A from M4's exit beside M6; no recURd stage waits for it.",
+  "D-PHASE-9": "Freezing formats reserve numbers decided later formats and milestones need; format 1 reserves format 2's and the directory's at M2.",
+  "D-PHASE-10": "Format 2 reaches production only after its final freeze, via the `format2` gate; its deletes await D-TEST-12's and D-TEST-18's soaks.",
+  "D-PHASE-11": "The directory ships at M6 on format 1 and moves to cards, repo files and its index with M10.",
+  "D-PHASE-12": "Drop deletes reach production only after D-TEST-18's soak, through §19.11's `format2.drop` gate in 23.9's order.",
+  "D-QUOTA-10": "The search index counts as storage; at the limit deletes proceed, but turning it off, merges, roll-ups and builds wait.",
+  "D-QUOTA-11": "`sidecar_abuse:` limits directory requests per sidecar (20 pending, 50 a day, 5 a run) and per target (100 pending), client-enforced.",
+  "D-QUOTA-12": "Drops free bytes as deleted or held; at the limit, upload-free drops and cancels are maintenance pushes; cancels skip `evs_drops_per_day`.",
+  "D-OPS-21": "P2 taskworker drop jobs, one per segment cluster, read ≤32 MB/s and delete ≤10 objects/s, pausing above 50% HDD load.",
+  "D-ACL-23": "Approver `autogroup:dst-owner` is the destination's owner or sponsor, else an admin; default policy uses it for dial requests, ≤30 days.",
+  "D-ACL-24": "No document widens or narrows `directory` defaults: every admitted sidecar reads; every non-read_only one writes its own paths and stream.",
+  "D-ACL-25": "Only repo admins drop; in owner-bound repos, only the owner's consented, not-read-only devices; a lock refuses and voids drops.",
+  "D-TRUST-2": "Invariants I-1..I-20 bind every section; a section that cannot meet one raises a Q- item.",
+  "D-CORE-20": "Approval-capable devices revoke their member's other devices as `lost` or `compromise`: presence where they registered one, else confirmation.",
+  "D-TEAM-29": "A page Worker's admitter, admins' included, revokes the member's Workers it sees stale-removed; so does the member's consented device.",
+  "D-SDK-30": "Apps list and revoke the member's other devices through `SidecarApprovals`' `GetDevices`, `PreviewRevokeDevice` and `RevokeDevice`, under §5.6's rules."
+ },
+ "Q": {
+  "Q-ABUSE-7": [
+   "How does a preservation hold apply to a drop of a path's history?",
+   "(a), owner decision 184: the drop reads as finished; deletions wait silently until holds end."
+  ],
+  "Q-ACL-11": [
+   "Who approves a member's request to reach another member's device, or a tagged sidecar?",
+   "(a), owner decision 180: the destination's owner or sponsor, through `autogroup:dst-owner`."
+  ],
+  "Q-EVS-10": [
+   "What happens to a path's history when versioning is turned off?",
+   "(a), owner decision 158: per version, as Perforce does; history written while on stays."
+  ],
+  "Q-EVS-11": [
+   "Are the search index's files always versionless?",
+   "(a), owner decision 159: always versionless, so erasing postings is real."
+  ],
+  "Q-EVS-12": [
+   "Which repo kinds may hold versionless files?",
+   "(a), owner decision 160: every kind but config and mailcfg; admins may lock repos."
+  ],
+  "Q-EVS-13": [
+   "How long does replaced versionless content stay?",
+   "(c), owner decision 161: purged about a minute after the replacement commits; no recovery window."
+  ],
+  "Q-EVS-14": [
+   "How do git-mode refs handle large files?",
+   "(a), owner decision 162: git refs stay versioned; git-lfs in v1 on a versionless store."
+  ],
+  "Q-EVS-15": [
+   "When does versionless ship?",
+   "(c), owner decision 163: in v1 as format 2; format 1 reserves numbers at M2."
+  ],
+  "Q-EVS-16": [
+   "Is there a default versioning rule?",
+   "(c), owner decision 164: a per-network rule, by default versionless above 64 MiB."
+  ],
+  "Q-EVS-17": [
+   "Does replaced content count toward storage?",
+   "(a), owner decision 165: replaced content counts in stored bytes until purged."
+  ],
+  "Q-EVS-18": [
+   "Should evs keep the newest n versions or d days?",
+   "(c), owner decision 165: never; versionless means head-only, with no field reserved."
+  ],
+  "Q-EVS-19": [
+   "Should v1 ship an admin \"drop history\" action for a path, which owner decision 158 allows?",
+   "(b), owner decision 173: a signed repo-admin DROP on file-mode refs, in v1."
+  ],
+  "Q-EVS-20": [
+   "When does a network's versioning rule take effect?",
+   "(a), owner decision 167: at a path's creation, from the rules then in force."
+  ],
+  "Q-EVS-21": [
+   "How often do git-mode refs and record streams update the index on `ur/index`?",
+   "(a) on 1 KiB blocks, else (b), owner decision 172: per minute, else 5 minutes."
+  ],
+  "Q-EVS-22": [
+   "Does a repo locked fully versioned (owner decision 160) keep its always-versionless index (owner decision 159)?",
+   "(b), owner decision 168: yes, through `versioning` 2, accepted only under an index root."
+  ],
+  "Q-EVS-23": [
+   "Does a drop wait out a cancellable window before it deletes?",
+   "(a), owner decision 183: a 7-day window any repo admin can cancel; `now` skips it."
+  ],
+  "Q-KEYS-16": [
+   "How does the team directory's group seat every admitted sidecar?",
+   "(a), owner decision 182: its own MLS group under §7.9's leaves rule."
+  ],
+  "Q-MCP-7": [
+   "Should a run's title and project reach the network's coordination log without the agent claiming them?",
+   "(c), owner decision 170: `claims` defaults to `auto` in teams, `off` in personal networks."
+  ],
+  "Q-MCP-8": [
+   "What does access to a worker mean in v1?",
+   "(a), owner decision 179: grants to dial the worker's announced services only."
+  ],
+  "Q-MCP-9": [
+   "Which repos does the directory announce, and may a run name a repo that some members cannot read?",
+   "(b), amended, owner decision 181: repos announce by default unless private; owners can revoke."
+  ],
+  "Q-PHASE-10": [
+   "Which drives run D-TEST-13's drive-write gate before format 2's bytes freeze?",
+   "(b), owner decision 174: computed from M2's price table, confirmed after the freeze."
+  ],
+  "Q-PHASE-9": [
+   "Where in v1 does format 2 go, and who builds it?",
+   "(b), owner decision 169: milestone M10 beside M6, with about three more engineers."
+  ],
+  "Q-PROTO-4": [
+   "Should connect keep remote search's byte totals per contract, which show roughly how many search pages ran in each contract hour?",
+   "(b), owner decision 176: marked pairs' contract bytes round up to 128 KiB multiples."
+  ],
+  "Q-SDK-6": [
+   "May a phone or browser ask one of its network's indexers to search all for verified hits, instead of downloading all for possible matches?",
+   "(c), amended, owner decisions 175, 177, 178: phones ask designated indexers; none by default."
+  ]
+ }
+}
