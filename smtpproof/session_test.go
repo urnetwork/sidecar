@@ -222,6 +222,8 @@ type testEdge struct {
 	mxConn      net.Conn
 
 	forwardLock sync.Mutex
+	// Both relay goroutines, so a test reads the trace only once it is whole.
+	relays sync.WaitGroup
 
 	stateLock sync.Mutex
 	err       error
@@ -292,7 +294,9 @@ func (self *testEdge) forward(call func() ([][]byte, error)) error {
 }
 
 func (self *testEdge) run() {
+	self.relays.Add(2)
 	go func() {
+		defer self.relays.Done()
 		for {
 			record, err := testReadRecord(self.sidecarConn)
 			if err != nil {
@@ -307,6 +311,7 @@ func (self *testEdge) run() {
 		}
 	}()
 	go func() {
+		defer self.relays.Done()
 		for {
 			record, err := testReadRecord(self.mxConn)
 			if err != nil {
@@ -461,6 +466,8 @@ func testRunSend(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, prov
 	result, err := prover.SendSmtp(context.Background(), sidecarConn, job, edge)
 	sidecarConn.Close()
 	<-mxDone
+	edge.fail(nil)
+	edge.relays.Wait()
 	return &testSend{mx: mx, edge: edge, backend: backend, result: result, err: err}
 }
 
