@@ -4,18 +4,23 @@
 package smtpproof
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"runtime"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
+	gnarkwitness "github.com/consensys/gnark/backend/witness"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 
@@ -963,16 +968,39 @@ func TestMeasureWholeSend(t *testing.T) {
 		measuring := &testMeasuringBackend{t: t, backend: backend, kinds: map[partShape]bool{}}
 		send := testRunSendWith(t, leg, testMxDefaults(), DefaultProverSettings(), job, measuring, measuring)
 		testExpectOneTransaction(t, leg, send, job)
-		t.Logf("%s: whole send proved and accepted; total proving %v", leg.name, measuring.provingTotal)
+		t.Logf("%s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
 	}
 }
 
-// Sets a shape up the first time it is needed, and times each part.
+// Sets a shape up the first time it is needed, and measures each part. Wall time depends on what
+// else the machine is running, so CPU time is the figure to read, and memory comes from a separate
+// process that only loads the key and proves, as a prover host would.
 type testMeasuringBackend struct {
 	t            *testing.T
 	backend      *groth16Backend
 	kinds        map[partShape]bool
 	provingTotal time.Duration
+	cpuTotal     time.Duration
+}
+
+// CPU time this process has used so far.
+func testCpuTime(t *testing.T) time.Duration {
+	t.Helper()
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		t.Fatal(err)
+	}
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+// Counts what passes through it.
+type testByteCounter struct {
+	count int64
+}
+
+func (self *testByteCounter) Write(data []byte) (int, error) {
+	self.count += int64(len(data))
+	return len(data), nil
 }
 
 func (self *testMeasuringBackend) provePart(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
@@ -985,24 +1013,108 @@ func (self *testMeasuringBackend) provePart(ctx context.Context, statement *part
 		start := time.Now()
 		keys := testSetup(self.t, shape)
 		self.backend.addKeys(keys)
-		self.t.Logf("part %d: %d constraints, %d public inputs, setup %v", statement.index, keys.compiled.GetNbConstraints(), keys.compiled.GetNbPublicVariables(), time.Since(start).Round(time.Second))
-	}
-	var proof []byte
-	for _, cores := range []int{runtime.NumCPU(), 4, 2} {
-		previous := runtime.GOMAXPROCS(cores)
-		start := time.Now()
-		proof, err = self.backend.provePart(ctx, statement, witness)
-		elapsed := time.Since(start)
-		runtime.GOMAXPROCS(previous)
-		if err != nil {
+		provingBytes := &testByteCounter{}
+		if _, err := keys.provingKey.WriteTo(provingBytes); err != nil {
 			return nil, err
 		}
-		self.t.Logf("part %d: proved in %v on %d cores", statement.index, elapsed.Round(10*time.Millisecond), cores)
-		if cores == runtime.NumCPU() {
-			self.provingTotal += elapsed
+		verifyingBytes := &testByteCounter{}
+		if _, err := keys.verifyingKey.WriteTo(verifyingBytes); err != nil {
+			return nil, err
+		}
+		self.t.Logf("part %d: %d constraints, %d public inputs, proving key %d MiB, verifying key %d KiB, setup %v",
+			statement.index, keys.compiled.GetNbConstraints(), keys.compiled.GetNbPublicVariables(),
+			provingBytes.count/1024/1024, verifyingBytes.count/1024, time.Since(start).Round(time.Second))
+		self.measureProveOnly(shape, keys, statement, witness)
+	}
+	cpuStart := testCpuTime(self.t)
+	start := time.Now()
+	proof, err := self.backend.provePart(ctx, statement, witness)
+	elapsed := time.Since(start)
+	cpu := testCpuTime(self.t) - cpuStart
+	if err != nil {
+		return nil, err
+	}
+	self.t.Logf("part %d: proved in %v wall, %v cpu, %d octets", statement.index, elapsed.Round(10*time.Millisecond), cpu.Round(10*time.Millisecond), len(proof))
+	self.provingTotal += elapsed
+	self.cpuTotal += cpu
+	return proof, nil
+}
+
+// Writes what a prover host holds to files, and proves from them in a fresh process.
+func (self *testMeasuringBackend) measureProveOnly(shape *partShape, keys *shapeKeys, statement *partStatement, witness *partWitness) {
+	t := self.t
+	directory := t.TempDir()
+	write := func(name string, value io.WriterTo) {
+		file, err := os.Create(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if _, err := value.WriteTo(file); err != nil {
+			t.Fatal(err)
 		}
 	}
-	return proof, nil
+	circuit, err := partAssignment(shape, statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignWitness(circuit, statement, witness)
+	full, err := frontend.NewWitness(circuit, ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("compiled", keys.compiled)
+	write("key", keys.provingKey)
+	write("witness", full)
+	command := exec.Command(os.Args[0], "-test.run=^TestMeasureProveOnly$", "-test.v")
+	command.Env = append(os.Environ(), "SMTPPROOF_PROVE_DIR="+directory)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("prove-only process: %v: %s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.Contains(line, "prove-only:") {
+			t.Logf("part %d: %s", statement.index, strings.TrimSpace(line[strings.Index(line, "prove-only:"):]))
+		}
+	}
+}
+
+// The child of measureProveOnly: reads a compiled circuit, key and witness, and proves once.
+func TestMeasureProveOnly(t *testing.T) {
+	directory := os.Getenv("SMTPPROOF_PROVE_DIR")
+	if directory == "" {
+		t.Skip("run by TestMeasureWholeSend")
+	}
+	read := func(name string, value io.ReaderFrom) {
+		file, err := os.Open(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if _, err := value.ReadFrom(bufio.NewReaderSize(file, 1024*1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compiled := groth16.NewCS(ecc.BN254)
+	read("compiled", compiled)
+	provingKey := groth16.NewProvingKey(ecc.BN254)
+	read("key", provingKey)
+	full, err := gnarkwitness.New(ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatal(err)
+	}
+	read("witness", full)
+	cpuStart := testCpuTime(t)
+	start := time.Now()
+	if _, err := groth16.Prove(compiled, provingKey, full); err != nil {
+		t.Fatal(err)
+	}
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		t.Fatal(err)
+	}
+	// ru_maxrss is in octets on darwin
+	t.Logf("prove-only: %v wall, %v cpu, peak %d MiB", time.Since(start).Round(10*time.Millisecond), (testCpuTime(t) - cpuStart).Round(10*time.Millisecond), usage.Maxrss/1024/1024)
 }
 
 func (self *testMeasuringBackend) verifyPart(ctx context.Context, statement *partStatement, proof []byte) error {

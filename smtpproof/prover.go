@@ -131,7 +131,8 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 	if job.Preamble == nil || uint32(len(job.RecipientLocals)) != job.Preamble.RecipientCount || len(job.RecipientLocals) == 0 {
 		return nil, errors.New("smtpproof: job's recipients do not match its preamble")
 	}
-	if uint64(len(job.Message)) != job.Preamble.MessageByteCount {
+	declared := job.Preamble.MessageByteCount
+	if declared != uint64(len(job.Message)) && declared != uint64(len(dotStuffed(job.Message))) {
 		return nil, errors.New("smtpproof: job's message does not match its declared octet count")
 	}
 	settings := defaultTlsClientSettings()
@@ -214,8 +215,19 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 			pipelining = true
 		}
 	}
-	if mode == partModeData && uint64(max(self.settings.DataProofBytes, 0)) < self.preamble.messageByteCount {
+	// the count was declared before the mode was known (plan-SMTP-preamble-byte-count). BDAT's n and
+	// DATA's stuffed count differ when a line starts with a dot: a count only DATA can meet means
+	// DATA, and a count only BDAT can meet at an MX that needs DATA means a new connection
+	stuffed := dotStuffed(self.job.Message)
+	declared := self.preamble.messageByteCount
+	if declared != uint64(len(self.job.Message)) {
+		mode = partModeData
+	}
+	if mode == partModeData && uint64(max(self.settings.DataProofBytes, 0)) < uint64(len(stuffed)) {
 		return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
+	}
+	if mode == partModeData && declared != uint64(len(stuffed)) {
+		return &sidecar.SmtpProofResult{Mode: mode, ReconnectByteCount: uint64(len(stuffed))}, nil
 	}
 
 	// pi2: the envelope
@@ -280,11 +292,25 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 		return nil, errors.New("smtpproof: header block is longer than one record")
 	}
 	headerBlock := self.job.Message[:headerEnd]
-	body := self.job.Message[headerEnd:]
 	if mode == partModeBdat {
-		return self.sendBdat(ctx, headerBlock, body)
+		return self.sendBdat(ctx, headerBlock, self.job.Message[headerEnd:])
 	}
-	return self.sendData(ctx, headerBlock, body)
+	return self.sendData(ctx, headerBlock, stuffed[headerEnd:])
+}
+
+// A message as DATA carries it: a leading dot doubled on each line (RFC 5321 §4.5.2). The header
+// block is unchanged, since Z5 keeps a dot from starting a line there.
+func dotStuffed(message []byte) []byte {
+	stuffed := make([]byte, 0, len(message))
+	lineStart := true
+	for _, octet := range message {
+		if lineStart && octet == '.' {
+			stuffed = append(stuffed, '.')
+		}
+		stuffed = append(stuffed, octet)
+		lineStart = octet == '\n'
+	}
+	return stuffed
 }
 
 // Whether a reply ends the send. Only DATA's own reply is 354; every other must be 2xx.

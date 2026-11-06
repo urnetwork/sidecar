@@ -84,7 +84,8 @@ type SmtpProofJob struct {
 	SenderLocal string
 	// The local part of each recipient, all at Preamble.RecipientDomain.
 	RecipientLocals []string
-	// Header block through its final CRLF CRLF, then body. In DATA mode the prover dot-stuffs it.
+	// Header block through its final CRLF CRLF, then body, unstuffed. Preamble.MessageByteCount is
+	// its length, or in DATA mode its dot-stuffed length; the prover stuffs it where the mode needs it.
 	Message []byte
 	// Decides TL1-TL3 over the chain the MX sent, leaf first (§14.4). Nil fails the send.
 	VerifyPeer func(chain []*x509.Certificate) error
@@ -100,6 +101,9 @@ type SmtpProofResult struct {
 	RefusedCode string
 	// DATA mode and over the prover's smtp_data_proof_bytes, decided before MAIL (§14.5).
 	TooLarge bool
+	// Set when the declared count was BDAT's and the MX needs DATA, whose dot-stuffing makes the count
+	// this: nothing was sent past EHLO, and a new connection must declare it.
+	ReconnectByteCount uint64
 }
 
 // Where a prover sends what the edge must see beside the stream.

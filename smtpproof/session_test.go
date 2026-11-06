@@ -154,7 +154,8 @@ func (self *testMx) serve(conn *tls.Conn) {
 				if line == ".\r\n" || (self.settings.laxDataEnd && line == ".\n") {
 					break
 				}
-				message.WriteString(line)
+				// a real receiver undoes dot-stuffing, so an unstuffed dot would be lost here
+				message.WriteString(strings.TrimPrefix(line, "."))
 			}
 			transaction.message = message.Bytes()
 			self.accept(transaction)
@@ -552,6 +553,68 @@ func TestSendDataForcedWhereChunkingIsOffered(t *testing.T) {
 		if send.result.Mode != partModeData {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
+	}
+}
+
+func TestSendDataStuffsEveryLeadingDot(t *testing.T) {
+	// a line a receiver would otherwise change, which would break the message and its DKIM signature
+	settings := DefaultProverSettings()
+	settings.ForceData = true
+	body := ".leading dot\r\n.\r\n..two dots\r\nplain\r\n"
+	for _, leg := range testTlsLegs() {
+		job := testJob(body, "bob")
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+		send := testRunSend(t, leg, testMxDefaults(), settings, job)
+		testExpectOneTransaction(t, leg, send, job)
+	}
+}
+
+func TestSendDataOnADeclaredStuffedCountEvenWhereChunkingIsOffered(t *testing.T) {
+	// only DATA can meet this count, so the prover does not take the MX's CHUNKING
+	for _, leg := range testTlsLegs() {
+		job := testJob(".leading dot\r\n", "bob")
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+		send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+		testExpectOneTransaction(t, leg, send, job)
+		if send.result.Mode != partModeData {
+			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
+		}
+	}
+}
+
+func TestSendAsksForANewConnectionWhenTheCountFitsOnlyBdat(t *testing.T) {
+	// the count went out before the MX's capabilities were known, and DATA's differs
+	mxSettings := testMxDefaults()
+	mxSettings.keywords = []string{"PIPELINING"}
+	for _, leg := range testTlsLegs() {
+		job := testJob(".leading dot\r\n", "bob")
+		send := testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.ReconnectByteCount != uint64(len(dotStuffed(job.Message))) {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+		for _, command := range send.mx.seen() {
+			if !strings.HasPrefix(command, "EHLO") {
+				t.Errorf("%s: %q reached the MX", leg.name, command)
+			}
+		}
+
+		// and that new connection, declaring the stuffed count, delivers it
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		testExpectOneTransaction(t, leg, send, job)
+	}
+}
+
+func TestSendRefusesACountThatFitsNeitherMode(t *testing.T) {
+	job := testJob("one line\r\n", "bob")
+	job.Preamble.MessageByteCount += 1
+	prover := &Prover{settings: DefaultProverSettings(), backend: newTestWitnessBackend()}
+	sidecarConn, _ := testPipe()
+	if _, err := prover.SendSmtp(context.Background(), sidecarConn, job, nil); err == nil {
+		t.Error("sent a message that fits neither count")
 	}
 }
 
