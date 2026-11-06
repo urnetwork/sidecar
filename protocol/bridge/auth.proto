@@ -1,0 +1,217 @@
+// The authorization log (§7.9) and what the keyless device role verifies and applies between states
+// (§17.8, §18.6): Genesis, MemberRevoke, SidecarRevoke, and §8.8's Suspend, Unsuspend and GrantRevoke.
+// config.proto and acl.proto import this file and never redeclare it, because both packages are
+// urnetwork.sidecar and a duplicate panics at init (§4.9).
+//
+// §7.9 and §8.8 write several messages here as field lists without numbers. Those take numbers in
+// the order written, a statement's StatementHeader being field 1, and are open to review until these
+// records freeze at M2.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol/bridge";
+
+message StatementHeader {    // begins every statement that enters the authorization log
+  bytes   network_id = 1;
+  AuthPin at = 2;            // the signer's state when signing: on the verifier's chain, within 4,096
+                             //   positions of the entry that carries it and not before the retention
+                             //   point of the state that entry lands on (replay)
+  bytes   nonce = 3;         // 16 random bytes
+  int64   not_after_ms = 4;  // at most 7 days after signing
+}
+
+message AuthEntry {                  // the body of proj/<network_id>/<n>/_
+  bytes  network_id = 1;
+  uint64 n = 2;                      // the bootstrap base is 1; every entry adds one
+  bytes  prev_chain = 3;             // A_{n-1}; A_0 = SHA-256(Signed Genesis)
+  uint32 kind = 4;                   // 1 BASE, 2 STATEMENT, 3 TICK
+  int64  time_ms = 5;                // api's clock when it sequenced the entry (server-asserted)
+  bytes  body = 6;                   // BASE: Signed ProjectionHeader; STATEMENT: one Signed statement;
+                                     // TICK: ApiTick, unsigned
+}
+
+message AuthPin {                    // (n, A_n), 40 B
+  uint64 version = 1;
+  bytes  chain = 2;
+}
+
+message ProjectionHeader {           // §6 Signed, purpose authority, by a config writer at S(n-1)
+  bytes  network_id = 1;
+  uint64 version = 2;                // this entry's n
+  bytes  prev_chain = 3;             // A_{n-1}
+  uint64 folded_through = 4;         // m <= n-1: the rows compile the config head, which holds every
+                                     // statement and tick up to m; the statements and ticks among
+                                     // m+1..n-1 re-apply on top, a BASE there skipped
+  uint64 config_version = 5;
+  bytes  config_head_sha256 = 6;
+  bytes  rows_sha256 = 7;
+  uint32 rows_byte_count = 8;        // ProjectionRows, <= 4 MiB (§8.8)
+  uint32 threshold = 9;
+}
+
+message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_; for the cascade a *_signer
+                                     // names a sidecar_id, a recovery key's hash or a delegation_id, and a
+                                     // *_at is the position n of the entry carrying the record
+  repeated MemberRow members = 1;
+  repeated SidecarRow sidecars = 2;
+  repeated DelegationRow delegations = 3;
+  repeated KeyRow registered_keys = 4;      // what the presence row reads
+  bytes  acl = 5;                    // §8.8's AclRows (acl.proto), deterministically encoded, so this file
+                                     // imports nothing, each EvsShare with its signer and at; with
+                                     // AclRepo.holders_shrunk_at; the device role reads only its
+                                     // has_document (field 1)
+}
+
+// Kept for the membership's life.
+message MemberRow {
+  bytes      member_id = 1;
+  MemberRole role = 2;
+  bytes      recovery_key_sha256 = 3;   // the binding in effect, windowed while a newer one below is void
+  repeated   RecoveryBindingRow bindings = 4;   // newest first
+}
+
+message RecoveryBindingRow {
+  bytes  key_sha256 = 1;
+  bytes  signer = 2;
+  uint64 at = 3;
+  RecoveryRebindReason reason = 4;      // unspecified: a RecoveryBind, which carries none
+}
+
+// The fields §7.9 lists. §2.8's api-7 also shows identity keys, member or keyed tag ids and ephemeral
+// flags in these rows; they stay out until the two sections agree, and later numbers can add them.
+message SidecarRow {
+  bytes  sidecar_id = 1;
+  bytes  admission_sha256 = 2;
+  repeated bytes admission_signers = 3;  // each counted one
+  uint64 admitted_at = 4;
+  bytes  confirm_signer = 5;             // its newest AdmissionConfirm
+  uint64 confirmed_at = 6;
+  bytes  owner_confirm_signer = 7;
+  uint64 owner_confirmed_at = 8;
+  uint64 revoked_at = 9;
+  uint64 parked_at = 10;
+  bytes  sponsor = 11;
+  uint32 capabilities = 12;              // SidecarCapability bits
+  bytes  delegation_id = 13;
+  uint64 live_since = 14;                // the config leaf rank (leaves)
+  int64  not_after = 15;                 // ms since the epoch: a revoked row stays a tombstone until it
+}
+
+// The fields §7.9 lists. §2.8's api-7 also shows the signing and reader public keys and max_admits in
+// these rows; they stay out until the two sections agree, and later numbers can add them.
+message DelegationRow {
+  bytes  delegation_id = 1;
+  bytes  signer = 2;
+  uint64 at = 3;
+  repeated bytes tag_atoms = 4;
+  int64  not_after = 5;                  // ms since the epoch
+  uint64 key_dropped_at = 6;             // §10.5
+  uint64 ended_at = 7;
+  uint32 admissions = 8;                 // those it has made, counted in log order for its life
+}
+
+// A KeyRegister, with its KeyRevoke's position: what the presence row reads.
+message KeyRow {
+  bytes      key_id = 1;
+  bytes      member_id = 2;
+  KeyAlg     alg = 3;
+  bytes      public_key = 4;
+  KeyPurpose purpose = 5;
+  bytes      signer = 6;
+  uint64     at = 7;
+  int64      not_after = 8;              // ms since the epoch
+  uint64     revoked_at = 9;
+}
+
+message ApiTick {                    // kind TICK: api's own facts, each checked by content
+  repeated bytes reaped_sidecar_ids = 1;     // ephemeral admissions only (7.10); coalesced per minute
+  repeated bytes activated_proposal_ids = 2; // recovery windows that ended (Recovery)
+}
+
+// §7.5's roles. The first four sign config records, under AdminSet; the rest ride a MemberAdmit.
+enum MemberRole {
+  MEMBER_ROLE_UNSPECIFIED = 0;
+  MEMBER_ROLE_OWNER = 1;
+  MEMBER_ROLE_ADMIN = 2;
+  MEMBER_ROLE_NETWORK_ADMIN = 3;
+  MEMBER_ROLE_IT_ADMIN = 4;
+  MEMBER_ROLE_BILLING_ADMIN = 5;
+  MEMBER_ROLE_AUDITOR = 6;
+  MEMBER_ROLE_MEMBER = 7;
+}
+
+// Bits of SidecarAdmit.capabilities and SidecarRow.capabilities.
+enum SidecarCapability {
+  SIDECAR_CAPABILITY_NONE = 0;
+  SIDECAR_CAPABILITY_READ_ONLY = 2;  // bit 1: page Workers (D-TEAM-24)
+}
+
+enum KeyAlg {
+  KEY_ALG_UNSPECIFIED = 0;
+  KEY_ALG_WEBAUTHN_ES256 = 1;        // webauthn-es256
+  KEY_ALG_ECDSA_P256_SHA256 = 2;     // ecdsa-p256-sha256
+  KEY_ALG_SSH_ED25519 = 3;           // ssh-ed25519
+}
+
+enum KeyPurpose {
+  KEY_PURPOSE_UNSPECIFIED = 0;
+  KEY_PURPOSE_PRESENCE = 1;
+  KEY_PURPOSE_SSHSIG = 2;
+}
+
+enum RecoveryRebindReason {
+  RECOVERY_REBIND_REASON_UNSPECIFIED = 0;
+  RECOVERY_REBIND_REASON_ROUTINE = 1;
+  RECOVERY_REBIND_REASON_LOST = 2;
+  RECOVERY_REBIND_REASON_COMPROMISE = 3;
+}
+
+// The network's first record, signed by the owner's first device (TOFU). No log position exists yet, so
+// it carries no StatementHeader: A_0 = SHA-256(Signed Genesis).
+message Genesis {
+  bytes network_id = 1;
+  bytes config_repo_id = 2;
+  bytes owner_member_id = 3;           // user_id in a personal network
+  bytes owner_sidecar_id = 4;
+  bytes owner_identity_public_key = 5;
+  int64 time_ms = 6;
+}
+
+message MemberRevoke {
+  StatementHeader header = 1;
+  bytes member_id = 2;
+}
+
+enum SidecarRevokeReason {
+  SIDECAR_REVOKE_REASON_UNSPECIFIED = 0;
+  SIDECAR_REVOKE_REASON_LOST = 1;
+  SIDECAR_REVOKE_REASON_REAPED = 2;
+  SIDECAR_REVOKE_REASON_REMOVED = 3;
+  SIDECAR_REVOKE_REASON_COMPROMISE = 4;
+}
+
+message SidecarRevoke {
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  SidecarRevokeReason reason = 3;
+  uint64 since_n = 4;                  // compromise: the required position the cascade parks from
+}
+
+// §8.8's statements the device role applies between states; purpose acl.
+message GrantRevoke {
+  StatementHeader header = 1;
+  bytes grant_id = 2;
+}
+
+message Suspend {
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes suspend_id = 3;                // random; only an Unsuspend naming it lifts this
+}
+
+message Unsuspend {
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes suspend_id = 3;
+}

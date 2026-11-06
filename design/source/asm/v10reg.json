@@ -1,5 +1,7 @@
 {
  "D": {
+  "D-PHASE-1": "Build 23.4's milestones straight through in dependency order, staffed as 23.5 proposes; each recURd stage releases once whole.",
+  "D-PHASE-2": "No code before G0, signed 2026-11-06; an unsettled blocker defers what it blocks; implementation findings return as Q- items.",
   "D-TEAM-30": "Delegations admit exact tags with a not_after floor and max_admits for life, ending at DelegationRevoke, void or compromise.",
   "D-TEAM-31": "Revoking or suspending a tagged agent shows the agent, its Delegation's shared key and admission authority apart.",
   "D-TEAM-32": "Revocations, suspensions, vetoes, admissions, AdminSet changes, member removals, recovery bindings and presence-key changes carry the signer's live presence key's countersignature.",
@@ -16,7 +18,7 @@
   "D-PROTO-22": "A marked pair's reports are withheld to each 55-minute window's end and fixed at a 256 KiB floor a direction.",
   "D-EVS-23": "A push id names one statement; retries return its version; the head resolves unknown outcomes and records unsettled refusals.",
   "D-EVS-33": "One write budget per metadata cluster (0.8 DWPD, 50% IOPS) except P0; P1 prepays P2 by wallet; heaviest refused first.",
-  "D-OPS-20": "Both clusters run an in-house MinIO build whose drive commits apply only before deadlines and release keys once settled.",
+  "D-OPS-20": "Both clusters run an in-house `urnetwork/minio` build whose drive commits apply only before deadlines and release keys once settled.",
   "D-KEYS-16": "KeyHolders: leaves, uncovered agents, live Delegations, recovery keys; a Delegation's key drops at revocation, not_after, Suspend or non-reap revocation.",
   "D-EVS-52": "Only a document's newest version yields hits, probed per candidate in a bounded version table, tombstones and erasure sets included.",
   "D-CORE-20": "Approval-capable devices revoke their member's other devices as `lost` or `compromise`, countersigned by their presence key where registered, else confirmed.",

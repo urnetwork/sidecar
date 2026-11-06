@@ -1,0 +1,9 @@
+**/build
+**/.DS_Store
+**/*.test
+**/profile
+.direnv
+
+# go build ./... in cli/ writes its lone main package here
+cli/cli
+cli/ur

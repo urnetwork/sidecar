@@ -1,0 +1,204 @@
+// §17's wire types: a sidecar role's compiled view for its device role (§18.6), the delegations and
+// share certificates hosts verify, and §17.8's statements. Std and protobuf only (§4.4).
+//
+// §17.8 writes its statements as field lists without numbers. Those take numbers in the order written,
+// and are open to review until they freeze. A statement a delta carries shows only ids, and the rest of
+// its row rides sealed_body: readers open it, and no server sees a prefix, address, port, map or alias
+// (§2.8, §17.8). Each *Body message below is what a sealed_body opens to. §17.8 names the seal but not
+// its bytes, so sealed_body stays opaque here.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+import "protocol/bridge/signed.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol/bridge";
+
+message BridgeRows {                      // acl.proto's AclRows.bridge (§8)
+  repeated BridgeEgressRow egress = 1;    // ids only
+}
+
+message BridgeEgressRow {
+  bytes subject = 1;                      // sidecar_id or keyed atom
+  BridgeEgressMode mode = 2;
+}
+
+// DeviceLocalRpc.SetBridgeState carries this, or it stays in process; auth only rises, and verified
+// entries apply on top.
+message BridgeState {
+  AuthPin auth = 1;                        // the newest verified state; ApplyDeltas chains from it
+  bytes genesis_sha256 = 2;                // the anchor (§7.9)
+  bool has_document = 3;                   // that state's rows: enforcing{doc} or enforcing{nodoc}
+  bytes rules = 4;                         // this device's compiled block, routes, maps and hook rules
+  map<string, fixed32> names = 5;          // client name -> overlay IPv4 (§7.7, 17.4), versioned with rules
+  repeated string name_zones = 6;          // <net>.<root>, and the alias zone where one is chosen (§12.9)
+  repeated BridgeIdentity identities = 7;  // the subjects its rules let reach this host (17.9), ~64 B each
+  repeated BridgeShareKey share_keys = 8;  // the shares this host serves (17.9)
+  repeated string daemon_listeners = 9;    // rule 0 (17.6): the daemon's listener binds, host:port
+}
+
+message BridgeIdentity {
+  bytes sidecar_id = 1;
+  bytes identity_public_key = 2;
+  uint64 admitted_at = 3;
+  bool revoked = 4;
+  bool suspended = 5;
+}
+
+message BridgeShareKey {                 // the pinned ShareKey, Ed25519
+  bytes share_id = 1;
+  bytes public_key = 2;
+}
+
+message Pending {                        // legacy -> pending
+  bytes network_id = 1;
+  bytes genesis_sha256 = 2;
+}
+
+// §6.9 Signed, purpose window-delegation, SignedType 0x1908; by the subject's identity key or, on a share
+// link, the ShareSigner its share_cert names (§17.9's share signers).
+message WindowDelegation {
+  bytes network_id = 1;                // the source network
+  bytes subject_sidecar_id = 2;
+  bytes window_client_id = 3;
+  bytes window_client_public_key = 4;  // the window client's ClientKey public key
+  bytes target_sidecar_id = 5;         // the host this link reaches
+  int64 not_after_ms = 6;              // at most the window client's strict_exp (§7.4)
+  bytes share_id = 7;                  // set for a cross-network share
+  bytes share_cert = 8;                // with share_id: the Signed ShareCert below
+}
+
+message ShareCert {                    // §6.9 Signed, purpose window-delegation, SignedType 0x1909, by the ShareKey
+  bytes share_id = 1;
+  uint64 config_generation = 2;        // g, the source network's config generation (§10.5)
+  bytes signer_public_key = 3;         // g's ShareSigner, Ed25519
+  int64 not_after_ms = 4;              // at most 7 days after signing
+}
+
+message BridgeShareSigner {            // Y's config file per accepted share; sidecar roles only, not in BridgeState
+  bytes share_id = 1;
+  uint64 config_generation = 2;        // g, as in share_cert
+  bytes signer_seed = 3;               // g's ShareSigner: a fresh 32-byte Ed25519 seed
+  bytes share_cert = 4;                // its Signed ShareCert
+}
+
+message BridgeIpv4Prefix {
+  fixed32 address = 1;                 // the network address, as BridgeState.names holds an IPv4
+  uint32 length = 2;
+}
+
+message BridgePortRange {
+  uint32 first = 1;
+  uint32 last = 2;
+}
+
+// None under a standing grant (17.7), or the I-8 decisions and this use's CanonicalAction (§16.8), which
+// readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester.
+message BridgeApproval {
+  bytes canonical_action = 1;          // as stored, which every decision's payload_sha256 hashes
+  repeated Signed decisions = 2;
+}
+
+// §6.9 Signed, purpose bridge, SignedType 0x1901 to 0x1907 in this order. BridgeBlock rides a head, so it
+// carries no StatementHeader and no seal of its own; every other statement is a delta.
+message BridgeBlock {                  // an admin
+  BridgeIpv4Prefix ipv4_prefix = 1;
+  BridgeIpv4Prefix previous_prefix = 2;
+  int64 drain_until = 3;               // ms since the epoch
+}
+
+message BridgeAddress {                // the sidecar or an admin
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  bytes sealed_body = 3;               // BridgeAddressBody
+}
+
+message BridgeAddressBody {
+  fixed32 ipv4 = 1;
+}
+
+enum BridgeRouteKind {
+  BRIDGE_ROUTE_KIND_UNSPECIFIED = 0;
+  BRIDGE_ROUTE_KIND_SUBNET = 1;
+  BRIDGE_ROUTE_KIND_EXIT = 2;
+}
+
+message BridgeRoute {                  // the advertiser; active once approved (17.7)
+  StatementHeader header = 1;
+  bytes route_id = 2;                  // 17.8's rule id
+  bytes advertiser = 3;
+  repeated bytes route_rule_ids = 4;   // the §8 route rules it serves, once approved
+  bytes sealed_body = 5;               // BridgeRouteBody
+}
+
+message BridgeRouteBody {
+  repeated BridgeIpv4Prefix prefixes = 1;
+  BridgeIpv4Prefix exposed_prefix = 2;
+  bytes site_id = 3;
+  uint32 weight = 4;
+  BridgeRouteKind kind = 5;
+  uint32 drain_seconds = 6;
+  BridgeApproval approval = 7;
+}
+
+message BridgeMap {                    // the host; active once approved (17.7)
+  StatementHeader header = 1;
+  bytes map_id = 2;                    // 17.8's rule id
+  bytes host = 3;
+  int64 expires = 4;                   // ms since the epoch
+  bytes sealed_body = 5;               // BridgeMapBody
+}
+
+message BridgeMapBody {
+  BridgeIpv4Prefix match_prefix = 1;
+  uint32 protocol = 2;                 // the IP protocol number
+  repeated BridgePortRange ports = 3;
+  bytes target = 4;                    // the address, 4 or 16 bytes
+  uint32 target_port = 5;
+  uint32 drain_seconds = 6;
+  BridgeApproval approval = 7;
+}
+
+enum BridgeEgressMode {
+  BRIDGE_EGRESS_MODE_UNSPECIFIED = 0;
+  BRIDGE_EGRESS_MODE_AUTO = 1;
+  BRIDGE_EGRESS_MODE_EXITS = 2;
+  BRIDGE_EGRESS_MODE_NONE = 3;
+}
+
+message BridgeEgress {                 // an admin, owner or sponsor
+  StatementHeader header = 1;
+  bytes subject = 2;
+  bytes sealed_body = 3;               // BridgeEgressBody
+}
+
+message BridgeEgressBody {
+  BridgeEgressMode mode = 1;
+  repeated bytes exit_sidecar_ids = 2; // or exit_tag_id
+  bytes exit_tag_id = 3;
+}
+
+message BridgeAlias {                  // the accepting sidecar (17.9)
+  StatementHeader header = 1;
+  bytes share_id = 2;
+  bytes host = 3;                      // sidecar_id
+  bytes sealed_body = 4;               // BridgeAliasBody
+}
+
+message BridgeAliasBody {
+  uint32 target_index = 1;
+  BridgeIpv4Prefix alias_prefix = 2;
+}
+
+enum BridgeWithdrawMode {
+  BRIDGE_WITHDRAW_MODE_UNSPECIFIED = 0;
+  BRIDGE_WITHDRAW_MODE_RESET = 1;
+  BRIDGE_WITHDRAW_MODE_DRAIN = 2;
+}
+
+message BridgeWithdraw {               // the rule's signer or an admin; bodiless, so it never waits on a seal
+  StatementHeader header = 1;
+  bytes rule_id = 2;
+  BridgeWithdrawMode mode = 3;
+}
