@@ -1,0 +1,12 @@
+The mlswg's 16 test vector files for RFC 9420, byte for byte.
+
+Upstream   https://github.com/mlswg/mls-implementations, test-vectors/
+Commit     2034fe72e0c805a683ba76165660c834f2a8142a (2026-10-07)
+Fetched    through the Go module proxy, 2026-11-06, as
+           github.com/mlswg/mls-implementations v0.0.0-20261007145543-2034fe72e0c8
+           h1:rdW5XamMVjKeVdLYosQFF/H1B/OJpGBd5F8pmJkFU4w=
+Format     test-vectors.md at that commit
+
+The upstream repository carries no license file; these files are the working group's published
+conformance data. Keep them unedited: SHA256SUMS lists each file, and TestMlsVectorFilesMatchUpstream
+fails on any change. §10.4 runs every file that covers a v0 feature under suite 0x0001.
