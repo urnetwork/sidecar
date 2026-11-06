@@ -52,7 +52,7 @@ The relation is simple because the sidecar's own client produces one normal form
 
 ### 4.1 The TLS client
 
-The prover runs `TlsClient` (`tls_client.go`), the sidecar's own TLS client. It exists for three reasons no stock client serves:
+The prover runs `tlsClient` (`tls_client.go`), the sidecar's own TLS client. It exists for three reasons no stock client serves:
 
 1. Go's `crypto/tls` exports TLS 1.2's master secret through `KeyLogWriter` but never TLS 1.3's HS (§14.3), and HS is Z1's witness.
 2. A proof must cover a record's ciphertext before the record is sent, so sealing and sending are separate steps.
@@ -83,7 +83,7 @@ Each opened client record holds exactly one of these contents, and 1.3 appends t
 | End mark (DATA) | `.` CRLF |
 | QUIT | `QUIT` CRLF |
 
-`local` is 1 to 64 octets of `A-Z a-z 0-9` and ``! # $ & ' * + - / = ? ^ _ ` { | } ~ .``. That is RFC 5321's Dot-string with `%` removed, and with no leading, trailing or doubled dot enforced only by the sidecar, not the relation. No `@`, `<`, `>`, `,`, `:`, CR, LF or SP can occur, so a path holds one address at one domain. Quoted local parts, source routes and non-ASCII addresses are not expressible, and such a recipient gets a DSN.
+`local` is 1 to 64 octets of `A-Z a-z 0-9` and ``# $ & ' * + - / = ? ^ _ ` { | } ~ .``. That is RFC 5321's Dot-string with `%` and `!` removed, and with no leading, trailing or doubled dot enforced only by the sidecar, not the relation. No `@`, `<`, `>`, `,`, `:`, CR, LF or SP can occur, so a path holds one address at one domain. Quoted local parts, source routes and non-ASCII addresses are not expressible, and such a recipient gets a DSN.
 
 Because one record holds one command and Z3 fixes its length, **every offset in a command is a function of public record lengths**. This is what keeps grammar out of the circuit: section 5's position templates are computed from public values by the edge, and the circuit only compares.
 
@@ -223,7 +223,7 @@ No tag is checked in the circuit. For client records the MX checks it; for serve
    - `Message-ID: <` message_id `>` CRLF
    - `X-UR-Ref: ` x_ur_ref CRLF
    - `Feedback-ID: ` feedback_id CRLF
-5. Exactly one line begins with the literal `DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=` header_from_domain `; s=` dkim_selector `; h=from:date:message-id:x-ur-ref:feedback-id; `. This is §14.6's second signature, the one that survives masked reports. The fuller signature and any other are unconstrained.
+5. Exactly one line begins with the constant `DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; `, and it continues `d=` header_from_domain `; s=` dkim_selector `; `. This is §14.6's second signature, the one that survives masked reports. `h=` comes first because DKIM's tag order is free, and a constant prefix is what makes "exactly one" cheap to count in the circuit. The fuller signature and any other are unconstrained.
 6. If BULK is set, exactly one line is `List-Unsubscribe-Post: List-Unsubscribe=One-Click` CRLF.
 
 **Z6, the end of the message.**
@@ -430,7 +430,7 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 2. **The header block is one record, ending at its CRLF CRLF** (4.2, Z5). It bounds the header block at the TLS record maximum of 16 KiB and adds nothing to what smtp-2 already lists.
 3. **DATA records are whole lines** (Z6), which makes §14.5's carried scan state the constant "line start". RFC 5322's 998-octet limit keeps this satisfiable.
 4. **MAIL takes no parameter but REQUIRETLS** (4.2), following Z4's literal form: no `SIZE=`, `BODY=` or `SMTPUTF8`. So bodies are 7-bit clean, and a non-ASCII address gets a DSN.
-5. **`local` drops `%`** (4.2). §14.5 says every RCPT is at the recipient domain, and `%` routing would undercut that on an MX that honors it.
+5. **`local` drops `%` and `!`** (4.2). §14.5 says every RCPT is at the recipient domain, and percent or bang routing would undercut that on an MX that honors them.
 6. **Z5 proves its signature on §14.6's second signature** (Z5.5), whose `h=` is a fixed list, so "covering them" is a literal comparison. Other DKIM-Signature fields are unconstrained, which reads Z5's "once each" as applying to this one.
 7. **`d=` equals `header_from_domain`** (Z5.5), from strict alignment (§14.6).
 8. **`message_id` carries no angle brackets** in the preamble, and Z5 adds them.

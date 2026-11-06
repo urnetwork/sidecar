@@ -29,8 +29,8 @@ type partProver interface {
 type ProverSettings struct {
 	// Largest content of one client record. The protocol's limit is 16 KiB.
 	MaxRecordContentBytes int
-	// DATA octets proven per part. The sidecar sizes this by its measured speed to prove within 2
-	// minutes (§14.5); 16 KiB is a conservative start until a host has measured.
+	// DATA octets proven per part, which must fit a shape's body blocks. The sidecar sizes this by its
+	// measured speed to prove within 2 minutes (§14.5). 2 KiB is what partShapes holds.
 	DataPartBytes int
 	// smtp_data_proof_bytes, measured on each host: a larger message to an MX without CHUNKING is
 	// too_large before MAIL (§14.5). Non-positive refuses every DATA send.
@@ -42,7 +42,7 @@ type ProverSettings struct {
 func DefaultProverSettings() *ProverSettings {
 	return &ProverSettings{
 		MaxRecordContentBytes: 16 * 1024,
-		DataPartBytes:         16 * 1024,
+		DataPartBytes:         2 * 1024,
 		DataProofBytes:        1024 * 1024,
 	}
 }

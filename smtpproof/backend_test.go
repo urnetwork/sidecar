@@ -6,6 +6,8 @@ package smtpproof
 import (
 	"bytes"
 	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/consensys/gnark/backend/groth16"
@@ -19,6 +21,24 @@ func testQuickShape(suite uint16, localOctets bool) *partShape {
 		shape.clientBlocks = 1
 	}
 	return shape
+}
+
+// Compiled shapes, shared by every test: compiling dwarfs solving.
+var (
+	testCompiledLock   sync.Mutex
+	testCompiledShapes = map[partShape]constraint.ConstraintSystem{}
+)
+
+func testCompileShape(t *testing.T, shape *partShape) constraint.ConstraintSystem {
+	t.Helper()
+	testCompiledLock.Lock()
+	defer testCompiledLock.Unlock()
+	if compiled, ok := testCompiledShapes[*shape]; ok {
+		return compiled
+	}
+	compiled := testCompile(t, newPartCircuit(shape))
+	testCompiledShapes[*shape] = compiled
+	return compiled
 }
 
 func testPartAssignment(t *testing.T, shape *partShape, statement *partStatement, witness *partWitness) *partCircuit {
@@ -37,9 +57,10 @@ func testPartSolved(t *testing.T, compiled constraint.ConstraintSystem, circuit 
 }
 
 func TestPartCircuitAcceptsARealEhlo(t *testing.T) {
+	t.Parallel()
 	for _, leg := range testTlsLegs()[:2] {
 		shape := testQuickShape(leg.suites[0], false)
-		compiled := testCompile(t, newPartCircuit(shape))
+		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		statement, witness := capture.part(t, 1)
 		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
@@ -49,10 +70,11 @@ func TestPartCircuitAcceptsARealEhlo(t *testing.T) {
 }
 
 func TestPartCircuitRefusesWhatTheRelationRefuses(t *testing.T) {
+	t.Parallel()
 	// the same mutated witnesses as relation_test.go, through the circuit
 	for _, leg := range testTlsLegs()[:2] {
 		shape := testQuickShape(leg.suites[0], false)
-		compiled := testCompile(t, newPartCircuit(shape))
+		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 
 		// Z2: a ciphertext that does not hold the claimed record
@@ -97,10 +119,11 @@ func TestPartCircuitRefusesWhatTheRelationRefuses(t *testing.T) {
 }
 
 func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
+	t.Parallel()
 	// MAIL's template, on a shape that carries local octets
 	for _, leg := range testTlsLegs()[:2] {
 		shape := testQuickShape(leg.suites[0], true)
-		compiled := testCompile(t, newPartCircuit(shape))
+		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
 		solve := func(content string) error {
 			t.Helper()
@@ -149,10 +172,11 @@ func testQuickEnvelopeShape(suite uint16) *partShape {
 func testEnvelopeCircuit(t *testing.T, leg *testTlsLeg) (*partShape, constraint.ConstraintSystem) {
 	t.Helper()
 	shape := testQuickEnvelopeShape(leg.suites[0])
-	return shape, testCompile(t, newPartCircuit(shape))
+	return shape, testCompileShape(t, shape)
 }
 
 func TestEnvelopeCircuitAcceptsARealEhloReply(t *testing.T) {
+	t.Parallel()
 	for _, leg := range testTlsLegs()[:2] {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testBdatCapture(t, leg)
@@ -164,6 +188,7 @@ func TestEnvelopeCircuitAcceptsARealEhloReply(t *testing.T) {
 }
 
 func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
+	t.Parallel()
 	// Z7-Z9 differentially: each stream goes through the reference relation and the circuit, and both
 	// must give the same answer. The stream is the EHLO reply, as the MX might have sent it.
 	cases := []struct {
@@ -216,6 +241,7 @@ func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
 }
 
 func TestEnvelopeCircuitAcceptsDataWithoutChunking(t *testing.T) {
+	t.Parallel()
 	// Z9 binds BDAT alone
 	for _, leg := range testTlsLegs()[:2] {
 		shape, compiled := testEnvelopeCircuit(t, leg)
@@ -231,6 +257,7 @@ func TestEnvelopeCircuitAcceptsDataWithoutChunking(t *testing.T) {
 }
 
 func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
+	t.Parallel()
 	for _, leg := range testTlsLegs()[:2] {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testBdatCapture(t, leg)
@@ -288,6 +315,7 @@ func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
 }
 
 func TestEnvelopeCircuitChecksTheEnvelope(t *testing.T) {
+	t.Parallel()
 	for _, leg := range testTlsLegs()[:2] {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testBdatCapture(t, leg)
@@ -311,6 +339,251 @@ func TestEnvelopeCircuitChecksTheEnvelope(t *testing.T) {
 	}
 }
 
+// A message shape with Z1 left out, sized to the test connection's header block.
+func testQuickMessageShape(suite uint16, bodyBlocks int) *partShape {
+	shape := &partShape{kind: partKindMessage, version: tlsVersion13, suite: suite, clientBlocks: 4, serverBlocks: 12, headerBlocks: 40, bodyBlocks: bodyBlocks, withoutKeySchedule: true}
+	if suite == tlsSuiteChacha20Poly1305Sha256 {
+		shape.clientBlocks = 2
+		shape.serverBlocks = 5
+		shape.headerBlocks = 10
+	}
+	return shape
+}
+
+func TestMessageCircuitAcceptsARealMessage(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs()[:2] {
+		shape := testQuickMessageShape(leg.suites[0], 0)
+		compiled := testCompileShape(t, shape)
+		t.Logf("%s: %d constraints", leg.name, compiled.GetNbConstraints())
+		capture := testBdatCapture(t, leg)
+		statement, witness := capture.part(t, 3)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("%s: %v", leg.name, err)
+		}
+	}
+}
+
+func TestMessageCircuitAgreesWithTheRelationOnHeaders(t *testing.T) {
+	t.Parallel()
+	// Z5 differentially: every smuggled header is refused by the relation and by the circuit alike
+	for _, leg := range testTlsLegs()[:2] {
+		shape := testQuickMessageShape(leg.suites[0], 0)
+		compiled := testCompileShape(t, shape)
+		capture := testBdatCapture(t, leg)
+		for _, c := range testSmuggledHeaders(t) {
+			statement, witness := capture.part(t, 3)
+			testAuthorHeaderBlock(t, statement, witness, c.block)
+			if failures := relationCheckPart(statement, witness); len(failures) != 1 || failures[0].check != checkZ5 {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, failures)
+			}
+			// must reach the circuit: a case the shape cannot hold would prove nothing by being skipped
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: %s: the circuit accepted", leg.name, c.name)
+			}
+		}
+	}
+}
+
+func TestMessageCircuitRefusesAnyPositionsForAHostileFrom(t *testing.T) {
+	t.Parallel()
+	// the positions of < and @ are the prover's to choose, so a refusal must not rest on the honest
+	// helper's choice: every candidate pair is tried here, as a malicious prover could
+	header := testHeaderBlock()
+	fromLine := "From: Alice Example <alice@" + testNetworkDomain + ">\r\n"
+	blocks := []string{
+		strings.Replace(header, fromLine, "From: <x@victim.example>, <alice@"+testNetworkDomain+">\r\n", 1),
+		strings.Replace(header, fromLine, "From: x@victim.example <alice@"+testNetworkDomain+">\r\n", 1),
+		strings.Replace(header, fromLine, "From: <x@victim.example> <alice@"+testNetworkDomain+">\r\n", 1),
+		strings.Replace(header, fromLine, "From: <alice@"+testNetworkDomain+"> <x@victim.example>\r\n", 1),
+	}
+	for _, leg := range testTlsLegs()[:2] {
+		shape := testQuickMessageShape(leg.suites[0], 0)
+		compiled := testCompileShape(t, shape)
+		capture := testBdatCapture(t, leg)
+		for _, block := range blocks {
+			var angles, ats []int
+			for i := range block {
+				if block[i] == '<' {
+					angles = append(angles, i)
+				}
+				if block[i] == '@' {
+					ats = append(ats, i)
+				}
+			}
+			statement, witness := capture.part(t, 3)
+			testAuthorHeaderBlock(t, statement, witness, block)
+			for _, angle := range angles {
+				for _, at := range ats {
+					circuit := testPartAssignment(t, shape, statement, witness)
+					for i := range circuit.Header.FromAngle {
+						circuit.Header.FromAngle[i] = 0
+						circuit.Header.FromAt[i] = 0
+					}
+					circuit.Header.FromAngle[angle] = 1
+					circuit.Header.FromAt[at] = 1
+					if err := testPartSolved(t, compiled, circuit); err == nil {
+						t.Errorf("%s: %q: accepted with < at %d and @ at %d", leg.name, block[:40], angle, at)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestMessageCircuitAcceptsFormsAnHonestMessageUses(t *testing.T) {
+	t.Parallel()
+	header := testHeaderBlock()
+	fromLine := "From: Alice Example <alice@" + testNetworkDomain + ">\r\n"
+	blocks := []string{
+		strings.Replace(header, fromLine, "From: <alice@"+testNetworkDomain+">\r\n", 1),
+		strings.Replace(header, fromLine, "From: =?utf-8?q?Al=C3=ADce?= <alice@"+testNetworkDomain+">\r\n", 1),
+		strings.Replace(header, "Subject: A synthetic", "Subject: A\r\n synthetic", 1),
+		"Received: by example\r\n" + header,
+	}
+	for _, leg := range testTlsLegs()[:2] {
+		shape := testQuickMessageShape(leg.suites[0], 0)
+		compiled := testCompileShape(t, shape)
+		capture := testBdatCapture(t, leg)
+		for i, block := range blocks {
+			statement, witness := capture.part(t, 3)
+			testAuthorHeaderBlock(t, statement, witness, block)
+			if failures := relationCheckPart(statement, witness); len(failures) != 0 {
+				t.Fatalf("%s: block %d: %v", leg.name, i, failures)
+			}
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+				t.Errorf("%s: block %d: %v", leg.name, i, err)
+			}
+		}
+	}
+}
+
+func TestMessageCircuitChecksTheReplies(t *testing.T) {
+	t.Parallel()
+	// Z8 for pi3: the same streams the relation's tests use
+	cases := []struct {
+		name    string
+		content string
+		accept  bool
+	}{
+		{name: "all accepted", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n250 2.1.5 Ok\r\n", accept: true},
+		{name: "a multiline reply", content: "250-2.1.0 Ok\r\n250 go on\r\n250 2.1.5 Ok\r\n250 2.1.5 Ok\r\n", accept: true},
+		{name: "a refused MAIL", content: "550 5.7.1 Refused\r\n250 2.1.5 Ok\r\n250 2.1.5 Ok\r\n"},
+		{name: "a refused RCPT", content: "250 2.1.0 Ok\r\n550 5.1.1 Unknown\r\n250 2.1.5 Ok\r\n"},
+		{name: "a deferred RCPT", content: "250 2.1.0 Ok\r\n451 4.3.0 Later\r\n250 2.1.5 Ok\r\n"},
+		{name: "a missing reply", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n"},
+		{name: "an extra reply", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n250 2.1.5 Ok\r\n250 Ok\r\n"},
+		{name: "a truncated reply", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n250 2.1"},
+	}
+	for _, leg := range testTlsLegs()[:2] {
+		shape := testQuickMessageShape(leg.suites[0], 0)
+		compiled := testCompileShape(t, shape)
+		capture := testBdatCapture(t, leg)
+		for _, c := range cases {
+			statement, witness := capture.part(t, 3)
+			statement.serverRecords = statement.serverRecords[:1]
+			witness.serverPlaintexts = witness.serverPlaintexts[:1]
+			testAuthorServerRecord(t, statement, witness, 0, testServerContent(statement, c.content))
+			if reference := len(relationCheckPart(statement, witness)) == 0; reference != c.accept {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, reference)
+			}
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); (err == nil) != c.accept {
+				t.Errorf("%s: %s: the circuit says %v", leg.name, c.name, err)
+			}
+		}
+	}
+}
+
+func TestMessageCircuitChecksTheBdatEnd(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs()[:2] {
+		shape := testQuickMessageShape(leg.suites[0], 0)
+		compiled := testCompileShape(t, shape)
+		capture := testBdatCapture(t, leg)
+		// same-length records, so only their octets differ from what the public template wants
+		for _, c := range []struct {
+			record  int
+			content string
+		}{
+			{record: 2, content: "RSET\r\n"},
+			{record: 0, content: strings.Replace(string(capture.witnesses[2].clientPlaintexts[0][:len(capture.witnesses[2].clientPlaintexts[0])-1]), "LAST", "XXXX", 1)},
+		} {
+			statement, witness := capture.part(t, 3)
+			testAuthorClientRecord(t, statement, witness, c.record, []byte(c.content))
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: %q: accepted", leg.name, c.content)
+			}
+		}
+	}
+}
+
+func TestMessageCircuitChecksDataFraming(t *testing.T) {
+	t.Parallel()
+	// Z6 differentially: the same smuggled DATA ends as relation_test.go
+	cases := []struct {
+		name    string
+		content string
+		accept  bool
+	}{
+		{name: "whole lines", content: "first\r\nsecond\r\n", accept: true},
+		{name: "a dot-stuffed line", content: "first\r\n..\r\n.leading dot\r\n", accept: true},
+		{name: "the end mark inside the record", content: "first\r\n.\r\nMAIL FROM:<x@b.example>\r\n"},
+		{name: "an end mark at the record's start", content: ".\r\nMAIL FROM:<x@b.example>\r\n"},
+		{name: "a bare-LF end", content: "first\n.\nMAIL FROM:<x@b.example>\r\n"},
+		{name: "a bare-LF dot before CRLF", content: "first\n.\r\n"},
+		{name: "a bare-CR end", content: "first\r.\r\n"},
+		{name: "a record ending inside a line", content: "first\r\nunfinished"},
+	}
+	for _, leg := range testTlsLegs()[:2] {
+		bodyBlocks := 6
+		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
+			bodyBlocks = 2
+		}
+		shape := testQuickMessageShape(leg.suites[0], bodyBlocks)
+		compiled := testCompileShape(t, shape)
+		capture := testDataCapture(t, leg)
+		for _, c := range cases {
+			statement, witness := capture.part(t, 3)
+			testAuthorClientRecord(t, statement, witness, 1, []byte(c.content))
+			// the declared count follows the body, so Z6's framing alone decides this
+			if reference := relationZ6(statement, witness) == nil; reference != c.accept {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, reference)
+			}
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); (err == nil) != c.accept {
+				t.Errorf("%s: %s: the circuit says %v", leg.name, c.name, err)
+			}
+		}
+	}
+}
+
+func TestMessageCircuitRequiresThe354(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs()[:2] {
+		bodyBlocks := 6
+		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
+			bodyBlocks = 2
+		}
+		shape := testQuickMessageShape(leg.suites[0], bodyBlocks)
+		compiled := testCompileShape(t, shape)
+		capture := testDataCapture(t, leg)
+		solve := func(content string) error {
+			statement, witness := capture.part(t, 3)
+			statement.serverRecords = statement.serverRecords[:1]
+			witness.serverPlaintexts = witness.serverPlaintexts[:1]
+			testAuthorServerRecord(t, statement, witness, 0, testServerContent(statement, content))
+			return testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness))
+		}
+		if err := solve("250 Ok\r\n250 Ok\r\n250 Ok\r\n354 Go\r\n"); err != nil {
+			t.Errorf("%s: an honest 354: %v", leg.name, err)
+		}
+		for _, content := range []string{"250 Ok\r\n250 Ok\r\n250 Ok\r\n250 Go\r\n", "250 Ok\r\n250 Ok\r\n250 Ok\r\n355 Go\r\n", "250 Ok\r\n250 Ok\r\n354 Go\r\n354 Go\r\n"} {
+			if err := solve(content); err == nil {
+				t.Errorf("%s: %q: accepted", leg.name, content)
+			}
+		}
+	}
+}
+
 func TestProductionShapesProveZ1(t *testing.T) {
 	for _, shape := range partShapes() {
 		if shape.withoutKeySchedule {
@@ -320,6 +593,7 @@ func TestProductionShapesProveZ1(t *testing.T) {
 }
 
 func TestCircuitsUseNoCommitments(t *testing.T) {
+	t.Parallel()
 	// SPEC.md 10.2's zero knowledge argument is vanilla Groth16's: a commitment would need its own
 	for _, shape := range partShapes() {
 		compiled, err := compilePartShape(shape)
@@ -338,7 +612,7 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 	backend := newGroth16Backend()
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)
-		// pi1 and pi2 have circuits with no keys loaded here, and pi3 has no circuit yet
+		// these parts have circuits, and no keys are loaded here; TLS 1.2 has no circuit at all yet
 		for _, index := range []uint32{1, 2, 3} {
 			statement, witness := capture.part(t, index)
 			if _, err := backend.provePart(context.Background(), statement, witness); err == nil {
@@ -366,6 +640,7 @@ func testSetup(t *testing.T, shape *partShape) *shapeKeys {
 }
 
 func TestGroth16ProofOfARealEhlo(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("runs a real setup")
 	}

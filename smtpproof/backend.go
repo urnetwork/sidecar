@@ -36,6 +36,29 @@ func partShapes() []*partShape {
 		// sized for D-SMTP-16's 10 recipients and a typical EHLO reply
 		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
 		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 12, serverBlocks: 6, localOctets: true},
+		// D-SMTP-16's 4 KiB header block, the envelope's replies, and BDAT and QUIT or DATA's end
+		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
+		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 6, headerBlocks: 64},
+		// DATA with a 2 KiB first body part beside the header block
+		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
+		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 6, headerBlocks: 64, bodyBlocks: 32},
+		// a later DATA part. A server record in one has no circuit yet, so it fails closed
+		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
+		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, bodyBlocks: 32},
+	}
+}
+
+// Which circuit a part's index calls for.
+func partKindOf(statement *partStatement) partKind {
+	switch statement.index {
+	case 1:
+		return partKindEhlo
+	case 2:
+		return partKindEnvelope
+	case 3:
+		return partKindMessage
+	default:
+		return partKindBody
 	}
 }
 
@@ -46,10 +69,11 @@ func partShapeFor(statement *partStatement) (*partShape, error) {
 		if shape.version != session.version || shape.suite != session.suite {
 			continue
 		}
-		if (statement.index == 1 && shape.kind == partKindEhlo) || (statement.index == 2 && shape.kind == partKindEnvelope) {
-			if _, err := partAssignment(shape, statement); err == nil {
-				return shape, nil
-			}
+		if shape.kind != partKindOf(statement) {
+			continue
+		}
+		if _, err := partAssignment(shape, statement); err == nil {
+			return shape, nil
 		}
 	}
 	return nil, errNoCircuit

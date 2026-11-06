@@ -81,9 +81,11 @@ const (
 	literalMessageIdPrefix = "Message-ID: <"
 	literalXUrRefPrefix    = "X-UR-Ref: "
 	literalFeedbackPrefix  = "Feedback-ID: "
-	literalDkimPrefix      = "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d="
+	// §14.6's second signature. h= comes first so that this constant alone identifies it.
+	literalDkimPrefix      = "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; "
+	literalDkimDomain      = "d="
 	literalDkimSelector    = "; s="
-	literalDkimCovered     = "; h=from:date:message-id:x-ur-ref:feedback-id; "
+	literalDkimEnd         = "; "
 	literalUnsubscribePost = "List-Unsubscribe-Post: List-Unsubscribe=One-Click"
 	keywordChunking        = "chunking"
 )
@@ -612,7 +614,8 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 	lines := bytes.Split(block[:len(block)-len(end)], []byte(literalCrlf))
 	counts := map[string]int{}
 	var dkimCount, unsubscribeCount int
-	dkimLiteral := []byte(literalDkimPrefix + preamble.headerFromDomain + literalDkimSelector + preamble.dkimSelector + literalDkimCovered)
+	dkimPrefix := []byte(literalDkimPrefix)
+	dkimLiteral := []byte(literalDkimPrefix + dkimTags(preamble))
 	for i, line := range lines {
 		if len(line) == 0 {
 			return errors.New("empty line before the end of the header block")
@@ -660,9 +663,12 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 				return fmt.Errorf("%s is not its declared value", name)
 			}
 		}
-		// rule 5: §14.6's fixed signature
-		if bytes.HasPrefix(line, dkimLiteral) {
+		// rule 5: §14.6's fixed signature, whose prefix nothing else may carry
+		if bytes.HasPrefix(line, dkimPrefix) {
 			dkimCount += 1
+			if !bytes.HasPrefix(line, dkimLiteral) {
+				return errors.New("the fixed DKIM signature has another d= or s=")
+			}
 		}
 		// rule 6
 		if string(line) == literalUnsubscribePost {
@@ -681,6 +687,11 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 		return fmt.Errorf("%d List-Unsubscribe-Post fields on a BULK message, want 1", unsubscribeCount)
 	}
 	return nil
+}
+
+// The tags that follow the fixed signature's constant prefix.
+func dkimTags(preamble *sessionPreamble) string {
+	return literalDkimDomain + preamble.headerFromDomain + literalDkimSelector + preamble.dkimSelector + literalDkimEnd
 }
 
 // Z5.4's From form: From: [phrase SP] < local @ domain >.

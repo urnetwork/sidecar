@@ -25,6 +25,8 @@ const (
 	replyWindowBytes = 16
 	replySepOffset   = 5
 	replyWordOffset  = 6
+	// Octets between pinning a scanner's running sums to single wires.
+	pinInterval = 32
 )
 
 // The octet of a reply stream as a wire value and its bits.
@@ -99,7 +101,18 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 	}
 	finalLine := frontend.Variable(0)
 	replies := frontend.Variable(0)
-	for _, octet := range octets {
+	for position, octet := range octets {
+		// a bound on how far these sums run before a constraint must carry all their terms
+		if position%pinInterval == 0 {
+			for i := range state {
+				state[i] = pinWire(api, state[i])
+			}
+			for i := range code {
+				code[i] = pinWire(api, code[i])
+			}
+			finalLine = pinWire(api, finalLine)
+			replies = pinWire(api, replies)
+		}
 		value := octet.value
 		isCr := replyEquals(api, value, replyCr)
 		isLf := replyEquals(api, value, replyLf)
@@ -133,6 +146,14 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 			api.AssertIsEqual(api.Mul(ended, api.Sub(code[0], '2')), 0)
 			api.AssertIsEqual(api.Mul(ended, api.Sub(code[1], '5')), 0)
 			api.AssertIsEqual(api.Mul(ended, api.Sub(code[2], '0')), 0)
+		case partKindMessage:
+			// each reply is 2xx, but in DATA mode the last is 354 (Z8)
+			isLast := api.IsZero(api.Sub(api.Add(replies, 1), circuit.ExpectedReplies))
+			wants354 := api.Mul(isLast, circuit.DataMode)
+			api.AssertIsEqual(api.Mul(replyEnded, api.Sub(code[0], api.Add('2', wants354))), 0)
+			ended354 := api.Mul(replyEnded, wants354)
+			api.AssertIsEqual(api.Mul(ended354, api.Sub(code[1], '5')), 0)
+			api.AssertIsEqual(api.Mul(ended354, api.Sub(code[2], '4')), 0)
 		}
 		replies = api.Add(replies, replyEnded)
 

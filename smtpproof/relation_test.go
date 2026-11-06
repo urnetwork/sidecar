@@ -368,7 +368,15 @@ func testAuthorHeaderBlock(t *testing.T, statement *partStatement, witness *part
 	testAuthorClientRecord(t, statement, witness, 1, []byte(block))
 }
 
-func TestZ5RefusesEverySmuggledHeader(t *testing.T) {
+// One header block a malicious sidecar might author, which Z5 must refuse.
+type testHeaderCase struct {
+	name  string
+	block string
+}
+
+// Every smuggled header, shared with the circuit's differential test.
+func testSmuggledHeaders(t *testing.T) []testHeaderCase {
+	t.Helper()
 	header := testHeaderBlock()
 	fromLine := "From: Alice Example <alice@" + testNetworkDomain + ">\r\n"
 	replaced := func(old string, new string) string {
@@ -377,10 +385,7 @@ func TestZ5RefusesEverySmuggledHeader(t *testing.T) {
 		}
 		return strings.Replace(header, old, new, 1)
 	}
-	cases := []struct {
-		name  string
-		block string
-	}{
+	return []testHeaderCase{
 		{name: "a second From", block: fromLine + header},
 		{name: "a second From in another case", block: "FROM: <x@victim.example>\r\n" + header},
 		{name: "From before a colon-spaced name", block: "From : <x@victim.example>\r\n" + header},
@@ -397,6 +402,7 @@ func TestZ5RefusesEverySmuggledHeader(t *testing.T) {
 		{name: "DKIM under another d=", block: replaced("d="+testNetworkDomain, "d=victim.example")},
 		{name: "DKIM under another s=", block: replaced("s="+testSelector, "s=other")},
 		{name: "DKIM not covering the reference", block: replaced("x-ur-ref:", "")},
+		{name: "a second fixed signature", block: replaced("DKIM-Signature: v=1;", "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; d=x\r\nDKIM-Signature: v=1;")},
 		{name: "a bare LF", block: replaced("Subject: A", "Subject:\nFrom: <x@victim.example>\r\nX: A")},
 		{name: "a bare CR", block: replaced("Subject: A", "Subject:\rA")},
 		{name: "an early end of the header block", block: replaced("Subject: A", "\r\nSubject: A")},
@@ -405,9 +411,12 @@ func TestZ5RefusesEverySmuggledHeader(t *testing.T) {
 		{name: "a first line that is a continuation", block: " folded\r\n" + header},
 		{name: "no end of the header block", block: strings.TrimSuffix(header, "\r\n")},
 	}
+}
+
+func TestZ5RefusesEverySmuggledHeader(t *testing.T) {
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)
-		for _, c := range cases {
+		for _, c := range testSmuggledHeaders(t) {
 			statement, witness := capture.part(t, 3)
 			testAuthorHeaderBlock(t, statement, witness, c.block)
 			testExpectOnly(t, leg.name+": "+c.name, statement, witness, checkZ5)

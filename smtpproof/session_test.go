@@ -366,8 +366,8 @@ func testHeaderBlock() string {
 		"Message-ID: <" + testMessageId + ">\r\n" +
 		"X-UR-Ref: " + testXUrRef + "\r\n" +
 		"Feedback-ID: " + testFeedbackId + "\r\n" +
-		"DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=" + testNetworkDomain + "; s=" + testSelector +
-		"; h=from:date:message-id:x-ur-ref:feedback-id; t=1; x=2; bh=AAAA; b=BBBB\r\n" +
+		"DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; d=" +
+		testNetworkDomain + "; s=" + testSelector + "; t=1; x=2; bh=AAAA; b=BBBB\r\n" +
 		"\r\n"
 }
 

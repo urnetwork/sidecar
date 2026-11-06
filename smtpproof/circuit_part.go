@@ -24,6 +24,10 @@ type partKind uint8
 const (
 	partKindEhlo partKind = iota + 1
 	partKindEnvelope
+	// π3: the header block, in either mode.
+	partKindMessage
+	// A later DATA part.
+	partKindBody
 )
 
 // A compiled circuit's fixed dimensions. A statement fits a shape if its records fit its blocks.
@@ -34,6 +38,9 @@ type partShape struct {
 	clientBlocks int
 	// Server keystream blocks, which hold the replies the part covers (Z7, Z8).
 	serverBlocks int
+	// Keystream blocks of the header block, which Z5 scans, and of body records, which Z6 scans.
+	headerBlocks int
+	bodyBlocks   int
 	// Whether the pool's template can hold a local part. π1's cannot, which saves a table per octet.
 	localOctets bool
 	// Leaves Z1 out, so tests can run every other check quickly over keys given as a witness.
@@ -100,10 +107,14 @@ type partCircuit struct {
 	FinishedHash []frontend.Variable `gnark:",public"`
 	Client       []*poolBlock
 	Server       []*serverBlock
+	Header       *headerScan
+	Body         []*bodyBlock
 	// How many replies the part's server records must hold in all (Z8).
 	ExpectedReplies frontend.Variable `gnark:",public"`
 	// 1 if the EHLO reply must offer CHUNKING (Z9).
 	RequireChunking frontend.Variable `gnark:",public"`
+	// 1 in DATA mode, where the last reply π3 covers is 354 (Z8).
+	DataMode frontend.Variable `gnark:",public"`
 
 	// 1.3: HS, in bits.
 	HandshakeSecret []frontend.Variable
@@ -140,6 +151,12 @@ func newPartCircuit(shape *partShape) *partCircuit {
 	}
 	for range shape.serverBlocks {
 		circuit.Server = append(circuit.Server, newServerBlock(shape.blockBytes()))
+	}
+	if 0 < shape.headerBlocks {
+		circuit.Header = newHeaderScan(shape)
+	}
+	for range shape.bodyBlocks {
+		circuit.Body = append(circuit.Body, newBodyBlock(shape.blockBytes()))
 	}
 	return circuit
 }
@@ -220,24 +237,43 @@ var localSetCoefficients = newNibbleCoefficients(func(index int) int64 {
 	return 0
 })
 
-// Checks a pool of blocks against their templates: Z2's XOR, then Z3 and Z4 by comparison. Returns
-// nothing: a template is all a pool block is for.
+// One opened octet.
+type openOctet struct {
+	value frontend.Variable
+	bits  circuitByte
+}
+
+// Opens a block's octets: Z2's XOR of ciphertext and keystream.
+func openBlock(api frontend.API, stream *circuitKeystream, counter frontend.Variable, cipher []frontend.Variable) []*openOctet {
+	keystream := stream.block(api, counter)
+	octets := make([]*openOctet, len(cipher))
+	for i := range cipher {
+		cipherBits := bitsOf(api, cipher[i], 8)
+		octet := &openOctet{}
+		for bit := range octet.bits {
+			octet.bits[bit] = bitXor(api, cipherBits[bit], keystream[i][bit])
+		}
+		octet.value = byteValue(api, octet.bits)
+		octets[i] = octet
+	}
+	return octets
+}
+
+// Whether an octet is in section 4.2's local set, as 0 or 1: 37 constraints.
+func localSetMember(api frontend.API, octet *openOctet) frontend.Variable {
+	low := nibbleMonomials(api, octet.bits[:4])
+	high := nibbleMonomials(api, octet.bits[4:])
+	return nibbleEvaluate(api, localSetCoefficients, &high, &low)
+}
+
+// Checks a pool of blocks against their templates: Z2's XOR, then Z3 and Z4 by comparison. A
+// template is all a pool block is for, so nothing is returned.
 func checkPool(api frontend.API, shape *partShape, stream *circuitKeystream, blocks []*poolBlock) {
 	for _, block := range blocks {
-		keystream := stream.block(api, block.Counter)
-		for i := range block.Cipher {
-			cipherBits := bitsOf(api, block.Cipher[i], 8)
-			var plaintext circuitByte
-			for bit := range plaintext {
-				plaintext[bit] = bitXor(api, cipherBits[bit], keystream[i][bit])
-			}
-			value := byteValue(api, plaintext)
-			api.AssertIsEqual(api.Mul(block.IsLiteral[i], api.Sub(value, block.Literal[i])), 0)
+		for i, octet := range openBlock(api, stream, block.Counter, block.Cipher) {
+			api.AssertIsEqual(api.Mul(block.IsLiteral[i], api.Sub(octet.value, block.Literal[i])), 0)
 			if shape.localOctets {
-				low := nibbleMonomials(api, plaintext[:4])
-				high := nibbleMonomials(api, plaintext[4:])
-				inSet := nibbleEvaluate(api, localSetCoefficients, &high, &low)
-				api.AssertIsEqual(api.Mul(block.IsLocal[i], api.Sub(1, inSet)), 0)
+				api.AssertIsEqual(api.Mul(block.IsLocal[i], api.Sub(1, localSetMember(api, octet))), 0)
 			}
 		}
 	}
@@ -247,6 +283,9 @@ func checkPool(api frontend.API, shape *partShape, stream *circuitKeystream, blo
 func (self *partShape) needsServerKeys() bool {
 	return 0 < self.serverBlocks
 }
+
+// Whether a part opens server records at all. A later DATA part may have none to cover, and still
+// must prove there were no replies, so it keeps the shape's blocks.
 
 func (self *partCircuit) Define(api frontend.API) error {
 	shape := self.shape
@@ -272,13 +311,21 @@ func (self *partCircuit) Define(api frontend.API) error {
 			publicBytes(self.HelloHash), publicBytes(self.FinishedHash), shape.keyBytes(), shape.needsServerKeys())
 		assertBooleans(self.ClientKey, self.ClientIv, self.ServerKey, self.ServerIv)
 	}
-	checkPool(api, shape, newCircuitKeystream(api, shape, keys.clientKey, keys.clientIv), self.Client)
+	clientStream := newCircuitKeystream(api, shape, keys.clientKey, keys.clientIv)
+	checkPool(api, shape, clientStream, self.Client)
+	if self.Header != nil {
+		checkHeaderBlockCircuit(api, shape, clientStream, self.Header)
+	}
+	if 0 < len(self.Body) {
+		checkBody(api, clientStream, self.Body)
+	}
 	if shape.needsServerKeys() {
 		checkReplies(api, shape, newCircuitKeystream(api, shape, keys.serverKey, keys.serverIv), self)
 	} else {
-		// π1 covers no reply; these public wires are still part of its statement
+		// no reply here; these public wires are still part of the statement
 		api.AssertIsEqual(self.ExpectedReplies, 0)
 		api.AssertIsEqual(self.RequireChunking, 0)
+		api.AssertIsEqual(self.DataMode, 0)
 	}
 	return nil
 }
@@ -368,8 +415,15 @@ func newZeroAssignment(shape *partShape) *partCircuit {
 		zero(block.FirstOctet)
 		zero(block.WindowActive)
 	}
+	if circuit.Header != nil {
+		zeroHeaderScan(circuit.Header)
+	}
+	for _, block := range circuit.Body {
+		zeroBodyBlock(block)
+	}
 	circuit.ExpectedReplies = 0
 	circuit.RequireChunking = 0
+	circuit.DataMode = 0
 	zero(circuit.ServerKey)
 	zero(circuit.ServerIv)
 	zero(circuit.ShtsHash)
@@ -416,26 +470,51 @@ func partAssignment(shape *partShape, statement *partStatement) (*partCircuit, e
 		return nil, err
 	}
 	slot := 0
+	bodySlot := 0
 	for i, role := range roles {
-		template, err := clientRecordTemplate(session, role, statement.clientRecords[i])
-		if err != nil {
-			return nil, err
+		record := statement.clientRecords[i]
+		switch role {
+		case recordRoleHeaderBlock:
+			if circuit.Header == nil {
+				return nil, errors.New("this shape has no header block")
+			}
+			if err := assignHeaderPublic(shape, statement, record, circuit.Header); err != nil {
+				return nil, err
+			}
+		case recordRoleBody:
+			used, err := assignBodyRecord(shape, statement, record, circuit.Body[bodySlot:])
+			if err != nil {
+				return nil, err
+			}
+			bodySlot += used
+		default:
+			template, err := clientRecordTemplate(session, role, record)
+			if err != nil {
+				return nil, err
+			}
+			used, err := assignRecordBlocks(shape, statement, record, template, circuit.Client[slot:])
+			if err != nil {
+				return nil, err
+			}
+			slot += used
 		}
-		used, err := assignRecordBlocks(shape, statement, statement.clientRecords[i], template, circuit.Client[slot:])
-		if err != nil {
-			return nil, err
-		}
-		slot += used
 	}
 	if err := assignServerRecords(shape, statement, circuit); err != nil {
 		return nil, err
 	}
-	switch statement.index {
-	case 2:
+	switch {
+	case statement.index == 2:
 		circuit.ExpectedReplies = 1
 		if statement.mode == partModeBdat {
 			circuit.RequireChunking = 1
 		}
+	case statement.index == 3:
+		replies := 1 + int(session.preamble.recipientCount)
+		if statement.mode == partModeData {
+			replies += 1
+			circuit.DataMode = 1
+		}
+		circuit.ExpectedReplies = replies
 	}
 	return circuit, nil
 }
@@ -449,6 +528,16 @@ func assignWitness(circuit *partCircuit, statement *partStatement, witness *part
 	if circuit.shape.needsServerKeys() {
 		circuit.ServerKey = assignBits(witness.serverKey)
 		circuit.ServerIv = assignBits(witness.serverIv)
+	}
+	if circuit.Header != nil {
+		roles, err := partRoles(statement)
+		if err == nil {
+			for i, role := range roles {
+				if role == recordRoleHeaderBlock && i < len(witness.clientPlaintexts) {
+					assignHeaderPrivate(circuit.Header, statement.session.preamble, witness.clientPlaintexts[i])
+				}
+			}
+		}
 	}
 	// each block of a ticket's record carries the record's private kind
 	slot := 0

@@ -17,6 +17,28 @@ import (
 
 func init() {
 	solver.RegisterHint(hintHighBits)
+	solver.RegisterHint(hintIdentity)
+}
+
+// A running value as one wire. A scanner's sum carried as a linear combination gains a term per
+// octet, and every constraint on it then costs that many terms, so N octets would cost N^2. One
+// constraint here resets that.
+func pinWire(api frontend.API, value frontend.Variable) frontend.Variable {
+	if _, ok := api.Compiler().ConstantValue(value); ok {
+		return value
+	}
+	pinned, err := api.Compiler().NewHint(hintIdentity, 1, value)
+	if err != nil {
+		panic(err)
+	}
+	api.AssertIsEqual(pinned[0], value)
+	return pinned[0]
+}
+
+// Its input. Prover-side only: pinWire's constraint is what makes the result sound.
+func hintIdentity(field *big.Int, inputs []*big.Int, outputs []*big.Int) error {
+	outputs[0].Set(inputs[0])
+	return nil
 }
 
 // The value of a constant wire, if it is one.
