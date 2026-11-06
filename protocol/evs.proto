@@ -1,0 +1,230 @@
+// §11's format 1: a push's signed statements and records (§11.6) and the head (§11.8), which only evs reads, with
+// EvsHeadChanged, the hint a commit raises (§11.10). A bare section number, as in 11.7, is DESIGN.md's.
+//
+// Format 1 reserves format 2's numbers by declaring them, never by leaving them out: EvsPush's flags 256 and 512
+// and fields 33 and 34, EvsHead.index_epoch, EvsEntryVersion.versioning, EvsLocator.staged and kind 5,
+// EvsUploadReceipt.versionless, and window bits 4 and 5. Format-1 code refuses each in use as FORMAT_UNSUPPORTED
+// {needs_format: 2}, never as a fork, tampering or a missing segment, and ignores the window bits (§11.6,
+// D-PHASE-9). EvsEntryVersion has no field 15, and no number serves keep-last-n (owner decisions 165, 167).
+//
+// §11.9's read states drop_pending and dropped are not here: no section gives them a number, or a message to ride.
+// EvsWindowEntry and EvsRefusal are §11.8's fixed layouts, not protobuf. The objects and request bodies §11.8 and
+// §11.9 write in prose wait for their format.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message EvsPush {                       // sidecar/protocol/evs.proto, inside §6 Signed, purpose evs-push; <= 1 KiB signed
+  bytes repo_id = 1; bytes ref_id = 2; uint32 ref_kind = 3; bytes owner_sidecar_id = 4;
+  bytes push_id = 5;                    // 16 random bytes; names this statement only (11.8)
+  uint64 base_version = 6; bytes base_chain = 7;        // the head it read: v and C_v
+  repeated EvsChange changes = 8;       // every change, while the signed statement stays <= 1 KiB
+  bytes sealed_metadata_sha256 = 9;     // commits, messages, provenance, epoch_authenticator, EvsImport
+  uint64 generation = 10; uint64 path_epoch = 11;
+  AuthPin auth = 12;                    // the authorization pin (n, A_n), §7.9
+  bytes signer_sidecar_id = 13; bytes client_id = 14; int64 time_ms = 15;
+  uint32 flags = 16;                    // 1 FORCE, 2 DELETE, 4 BASE, 8 IMMUTABLE, 16 CONSUME, 32 PATH_EPOCH,
+                                        // 64 ERASE, 128 CLOSURE (an erasure's re-checkpoint, 11.12), 256 DROP
+                                        // (a drop-history action or its cancel, 11.7; format 2), 512 CUT (an
+                                        // erasure's index cut, 11.12; format 2)
+  bytes path_map_sha256 = 17;           // PATH_EPOCH: SHA-256 over the epoch's EvsPathMap parts, in order
+  uint32 part_count = 18;               // 0 for a one-part push, else 2 to 1,024
+  bytes parts_sha256 = 19;              // SHA-256 over the parts' SHA-256s in part order (the list is in the payload)
+  uint32 ref_mode = 20;                 // 1 git, 2 file (11.7)
+  reserved 21;                          // the pin's chain lives in auth (12)
+  bytes group_id = 22; bytes generation_commitment = 23;     // the generation pin with generation: {group, g, C_g}
+  bytes changes_root = 24; uint32 change_count = 25;         // when changes are not inline: the root over all of them
+  repeated EvsTokenPath changed_prefixes = 26;               // then: token paths, <= 512 B in all, covering every change
+  bytes new_objects_sha256 = 27;        // segments (id, padded size, upload day) and slots (id) it introduces
+  uint64 map_source_version = 28; bytes map_source_chain = 29;  // PATH_EPOCH: the head the map covers (11.6)
+  bytes erased_sha256 = 30;             // ERASE, CLOSURE: SHA-256 of its payload's (slot id, key index) list (11.12)
+  bytes path_tail_sha256 = 31;          // PATH_EPOCH: SHA-256 of the tail's moves in its payload (11.6), or empty
+  bytes source_paths_sha256 = 32;       // while sources stand: SHA-256 of the payload's source paths (11.6), or empty
+  bytes drop_sha256 = 33;               // DROP: SHA-256 of the payload's EvsDropHistory; else empty (format 2)
+  uint64 index_epoch = 34;              // a CUT, or a push other than a CLOSURE creating or replacing an index
+                                        // file: the head's index_epoch it was built at, the ref's erasure set at
+                                        // that epoch applied (11.8's 5d, 11.14); else 0 (format 2)
+}
+message EvsTokenPath { repeated bytes token = 1; }            // 16 B per component
+message EvsChange {
+  repeated bytes token_path = 1;        // 16 B per component, in the push's path epoch
+  uint64 base_entry_version = 2;        // 0 creates; the path-level CAS condition (directories merge, 11.7)
+  bytes entry_sha256 = 3;               // SHA-256 of the new EvsEntryVersion; empty deletes
+}
+message EvsPushPart {                   // unsigned; parts_sha256 binds it
+  bytes push_id = 1; uint32 part = 2;
+  repeated EvsChange changes = 3;       // at most 1,024 entry writes; a path appears in one part only
+  repeated bytes entry_versions = 4;    // EvsEntryVersion bytes, as each change's entry_sha256 names
+  repeated bytes inline_records = 5;    // those that fit in 1 MiB; the rest go into segments
+  bytes sealed_metadata = 6;            // a slice; sealed_metadata_sha256 covers the slices in order
+  bytes changes_root = 7;               // root over this part's changes; the statement's root is over these roots
+}
+message EvsEntryVersion {               // what entry_sha256 hashes; in the push record, and folded into idx/
+  uint64 version = 1;                   // base_entry_version + 1; a creation's max(the push's effective base
+                                        // version, an overlay's chain included, a standing removal's) + 1, so it
+                                        // never restarts (11.7)
+  bytes push_id = 2; uint64 base_version = 3;            // the push that wrote it and the head it read
+  bytes prev_push_id = 4; uint64 prev_commit_version = 5; // the version it replaces, for history walks
+  int64 time_ms = 6; uint32 kind = 7; uint64 padded_size = 8;
+  bytes sealed_fields = 9;              // file: {file_id, mode, git oid, size}, plus content_sha256 (the
+                                        // plaintext's SHA-256) for a versionless file; directory: none
+  repeated EvsLocator chain = 10;       // file: at most N+1 records
+  repeated bytes slot_ids = 11;
+  EvsNameTable names = 12;              // directory: a push's delta; in idx/, a fold's table (11.7)
+  uint32 layout = 13;                   // directory: 0 single; other values reserved and refused
+  uint32 versioning = 14;               // file: 0 every version kept, 1 versionless, 2 a versionless file of the
+                                        // search index (11.7); directory: 0; format 1 refuses any value but 0
+}
+message EvsNameTable { repeated EvsName names = 1; repeated bytes removed_tokens = 2; }  // a fold's table removes none
+message EvsName {                       // sealed as 11.7's name row
+  bytes token = 1; uint32 kind = 2; bytes sealed_name = 3;
+  uint64 epoch = 4;                     // 0, or the source epoch whose token and AAD a carried row keeps (11.6)
+}
+message EvsLocator {
+  uint32 kind = 1;                      // 1 segment, 2 inline, 5 versionless segment (format 2, 11.7); 3
+                                        // (push-payload range) and 4 (pack range) reserved
+  bytes id = 2;                         // kinds 1 and 5: segment_id, at seg/<repo>/<id> (kind 1 also through
+                                        // spidx/, 11.13)
+  uint32 offset = 3; uint32 length = 4; bytes inline = 5;
+  bool staged = 6;                      // kind 5: the segment rides in this version's push (11.7); format 1
+                                        // refuses true
+}
+message EvsPathMap {                    // purpose evs-path-epoch; at most 8 MiB per part
+  bytes repo_id = 1; bytes ref_id = 2; uint64 path_epoch = 3; uint32 part = 4; uint32 parts = 5;
+  repeated EvsPathMove moves = 6;
+  uint64 source_version = 7; bytes source_chain = 8;    // the head whose paths the map covers
+}
+message EvsPathMove {
+  repeated bytes new_token_path = 1;
+  repeated EvsSourcePath sources = 2;   // the path in the current epoch and in each listed source
+  bytes sealed_name = 3;                // re-sealed under AAD with the new parent and child tokens
+}
+message EvsSourcePath { uint64 epoch = 1; repeated bytes token_path = 2; }
+message EvsImport {                     // purpose evs-import; carried in the push's sealed metadata
+  bytes repo_id = 1; bytes ref_id = 2; bytes tip_oid = 3; bytes oid_list_sha256 = 4; uint32 count = 5;
+}
+message EvsReseed {                     // §6 Signed, purpose evs-reseed, by a repo admin (§8.8); §19.10
+  bytes repo_id = 1; bytes ref_id = 2;
+  uint64 version = 3; bytes chain = 4;  // the re-seeded head: v and C_v
+  bytes incident_id = 5;                // the recovery's identity (§19.10)
+}
+message EvsDropHistory {                // a DROP push's payload body (format 2; 11.7)
+  bytes drop_id = 1;                    // 16 random bytes drawn per statement; a retry of the statement keeps it
+  uint32 action = 2;                    // 1 drop, 2 cancel
+  bytes cancels_drop_id = 3;            // cancel: the drop it ends, committed on this ref
+  uint64 cancels_version = 4;           // cancel: that drop's ref version
+  int64 not_before_ms = 5;              // drop: time_ms + 604,800,000 (7 days), or time_ms with now (owner
+                                        // decision 183)
+  repeated EvsDropPath paths = 6;       // drop: 1 to 1,024 lineages, sorted by their newest token path's bytes
+  bytes preview_id = 7;                 // drop: the dry run its signer confirmed (11.13), or empty
+}
+message EvsDropPath {                   // one lineage: one path name on this ref, as far as evs can follow it
+  repeated EvsSourcePath lineage = 1;   // its token path per path epoch, newest first; each older entry a source of
+                                        // the next in that epoch's committed map or PATH_EPOCH tail (11.6)
+  repeated uint32 map_parts = 2;        // per older entry, the map part (1 to parts) holding its move; 0 the tail
+  uint64 through_version = 3;           // the path version that stays; every listed version is older
+  uint32 boundary = 4;                  // 1 written: this push writes through_version, the head's content again;
+                                        // 2 removed: through_version is the path's standing removal
+  uint32 count = 5;                     // listed versions, 1 to 1,048,576
+  bytes listed_sha256 = 6;              // SHA-256 over the listed entry_sha256 values, ascending, which follow the
+                                        // body in the payload, spread over the push's parts past one part's 1 MiB
+}
+message EvsUploadReceipt {              // unsigned; evs MACs it (11.13), the push carries it back
+  bytes repo_id = 1; bytes segment_id = 2; uint64 padded_size = 3; int64 upload_ms = 4;
+  bytes uploader_sidecar_id = 5; uint32 key_id = 6; bytes mac = 7;  // HMAC-SHA256 over fields 1-6 and 8, first 16 B
+  bool versionless = 8;                 // the segment's header is a kind-5 header naming the receipt's push
+                                        // (11.7); format 1 issues false
+}
+message EvsPlace {                      // where a batch record's bytes are (11.8); assigned by evs, 20 B packed
+  uint32 minute = 1; uint32 instance = 2; uint32 seq = 3; uint32 offset = 4; uint32 length = 5;
+}
+
+message EvsHead {                       // head/<repo>/<ref>; written only by If-Match (create: If-None-Match)
+  uint64 version = 1; bytes chain = 2;  // v, C_v
+  bytes push_id = 3;                    // the push committed at v
+  uint32 ref_kind = 4; uint32 ref_mode = 5; bytes owner_sidecar_id = 6; bytes sealed_ref_name = 7;
+  EvsOverlay base = 8;                  // an overlay's (ref_id, version)
+  AuthPin auth = 9; reserved 10;        // authorization pin (n, A_n), §7.9: never falls (below)
+  bytes group_id = 11; uint64 generation = 12; bytes generation_commitment = 13;  // generation pin: never falls
+  EvsPathEpoch path_epoch = 14;         // 11.6
+  bytes window = 15;                    // 64-byte EvsWindowEntry records, versions v-w+1..v, oldest first;
+                                        // w in 64..127, at most 255 while folds lag (11.7)
+  uint32 fence = 16;                    // raised by every write that changes no version (below, 11.13)
+  EvsSealLease lease = 17;              // git mode: {push_id, until_ms}, or empty
+  bool deleted = 18;                    // DELETE committed; a later push to the name continues the versions
+  bytes window_base_chain = 19;         // C at version v-w, so the window's chain is computable forward
+  uint64 folded_through = 20;           // 11.7's horizon: file changes folded or replaced, directory deltas applied
+  int64 written_ms = 21;                // evs's clock at this head's write (11.13's orphan rule)
+  int64 fence_ms = 22;                  // its writer's clock at the newest evacuation or GC fence (outcomes)
+  EvsCollect collect = 23;              // 11.7's marker collection: done, through and a window's until_ms
+  uint64 index_epoch = 24;              // on a ref holding an index: its newest CUT's version, else 0 (11.12);
+                                        // never falls; a re-seed sets it from the newest CUT it replays
+  bytes refused = 25;                   // 16-byte EvsRefusal records, at most 8, oldest first (outcomes)
+  int64 refused_ms = 26;                // its writer's clock at the newest refusal fence
+}
+message EvsOverlay { bytes ref_id = 1; uint64 version = 2; }
+message EvsSealLease { bytes push_id = 1; int64 until_ms = 2; }
+message EvsPathEpoch {
+  uint64 current = 1;                   // p: the generation whose RK derives K_path
+  repeated EvsEpochSource sources = 2;  // at most 3 older epochs still holding entries, newest first
+  uint64 due_generation = 3;            // a generation that requires a new epoch, or 0
+  bool due_blocks_creation = 4; int64 due_by_ms = 5;
+  int64 block_until_ms = 6;             // a mapper's creation block (11.6), or 0
+}
+message EvsEpochSource { uint64 epoch = 1; bytes map_sha256 = 2; }
+message EvsCollect { uint64 done = 1; uint64 through = 2; int64 until_ms = 3; }
+
+message EvsHeadChanged {                // §6 0x1401, in PushHint.hint on evs:<repo_id>; coalesced to 10 a second a repo
+  bytes ref_id = 1;                     // 11.10 writes these as a field list, so their numbers follow its order
+  uint64 version = 2;                   // the ref's version; PushHint.version is the repo's push sequence
+  bytes chain = 3;
+  bytes push_id = 4;
+}
+
+// EvsPush.flags, as field 16's comment numbers them. DROP and CUT are format 2's.
+enum EvsPushFlag {
+  EVS_PUSH_FLAG_NONE = 0;
+  EVS_PUSH_FORCE = 1;
+  EVS_PUSH_DELETE = 2;
+  EVS_PUSH_BASE = 4;
+  EVS_PUSH_IMMUTABLE = 8;
+  EVS_PUSH_CONSUME = 16;
+  EVS_PUSH_PATH_EPOCH = 32;
+  EVS_PUSH_ERASE = 64;
+  EVS_PUSH_CLOSURE = 128;
+  EVS_PUSH_DROP = 256;
+  EVS_PUSH_CUT = 512;
+}
+
+// EvsLocator.kind. Versionless segments are format 2's. 3 is a push-payload range and 4 a pack range, each refused
+// until a format readers learn before writers use it (11.6).
+enum EvsLocatorKind {
+  EVS_LOCATOR_KIND_UNSPECIFIED = 0;
+  EVS_LOCATOR_SEGMENT = 1;
+  EVS_LOCATOR_INLINE = 2;
+  reserved 3, 4;
+  EVS_LOCATOR_VERSIONLESS_SEGMENT = 5;
+}
+
+// EvsEntryVersion.versioning. Format 1 refuses any value but 0.
+enum EvsVersioning {
+  EVS_VERSIONING_KEPT = 0;              // every version kept
+  EVS_VERSIONING_VERSIONLESS = 1;
+  EVS_VERSIONING_INDEX = 2;             // a versionless file of the search index
+}
+
+// EvsWindowEntry's flags word (11.8), as values of each bit; bits 16-31 hold its change count. Format 1 ignores
+// bits 4 and 5.
+enum EvsWindowFlag {
+  EVS_WINDOW_FLAG_NONE = 0;
+  EVS_WINDOW_CREATES_PATH = 1;          // bit 0
+  EVS_WINDOW_CHANGES_IN_PAYLOAD = 2;    // bit 1: under changes_root
+  EVS_WINDOW_PATH_EPOCH = 4;            // bit 2
+  EVS_WINDOW_REWRITES_HISTORY = 8;      // bit 3: FORCE, DELETE, BASE or ERASE
+  EVS_WINDOW_VERSIONLESS_REPLACED = 16; // bit 4: its record lists the purge's candidates (11.13)
+  EVS_WINDOW_DROP = 32;                 // bit 5
+}
