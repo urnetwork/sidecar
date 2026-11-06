@@ -74,6 +74,7 @@ var clientPatterns = []string{".", "./protocol", "./protocol/bridge", "./device"
 // §4.9: the ios_extension leg holds device/ and protocol/bridge only (D-SDK-20).
 var deviceRolePatterns = []string{"./protocol/bridge", "./device"}
 
+// Everything in a module, for the legs that build or test all of it.
 var allPatterns = []string{"./..."}
 
 // Every leg. This mirrors sdk/dependency_boundary_test.go:81-92, which
@@ -474,7 +475,7 @@ func stringLiteral(expression ast.Expr) (string, bool) {
 // §4.7's legs line points at sdk's table, so a row added there must not go unread here.
 func (self *repository) sdkLegRowFindings(t testing.TB) []string {
 	t.Helper()
-	sdkLegs, err := readSdkLegs(filepath.Join(self.siblingsDirectory, "sdk", "dependency_boundary_test.go"))
+	sdkLegs, err := readSdkLegs(self.siblingPath("sdk/dependency_boundary_test.go"))
 	if err != nil {
 		return []string{err.Error()}
 	}

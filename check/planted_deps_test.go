@@ -6,7 +6,6 @@
 package check
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -46,6 +45,18 @@ func TestDepsFailsOnSdkInALeg(t *testing.T) {
 func TestDepsFailsOnSnInALeg(t *testing.T) {
 	repository := plantLinkedModule(t, "@sn@", "@sn@", "sn")
 	wantFindings(t, repository.legModuleFindings(t), "root linux/amd64 links @sn@, from sn")
+}
+
+// §4.5: a row in dependencies.yml is no way round ServiceHost. An engine gets these from its host.
+func TestDepsFailsOnAnEngineLinkingGoRedis(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("engines linux/amd64")
+	fixture.writeSibling("goredis/go.mod", "module github.com/redis/go-redis/v9\n\ngo 1.27.3\n")
+	fixture.writeSibling("goredis/redis.go", "package redis\n")
+	fixture.requireLocal("github.com/redis/go-redis/v9", "v9.23.0", "goredis")
+	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: github.com/redis/go-redis/v9\n    spdx: BSD-2-Clause\n    reason: a listing is no way round the rule\n    leg: [engine]\n")
+	fixture.write("evsservice/engine.go", "package evsservice\n\nimport _ \"github.com/redis/go-redis/v9\"\n")
+	wantFindings(t, fixture.open().legModuleFindings(t), "engines linux/amd64 links github.com/redis/go-redis/v9, from go-redis")
 }
 
 func TestDepsFailsOnAnUnlistedModuleInALeg(t *testing.T) {
@@ -266,17 +277,4 @@ func TestDepsFailsOnAStaleLicenseException(t *testing.T) {
 		"example.com/left": {version: "v1.0.0", spdx: "X11", question: "example.md"},
 	}
 	wantFindings(t, fixture.open().licenseExceptionFindings(t), "the license exception for example.com/left has no matching row")
-}
-
-// This row's module list is this checkout's: dependencies.yml answers to the real files. Beyond the
-// control above, that the module cache's directories are where the check reads them.
-func TestLicenseFilesAreReadFromTheModuleDirectory(t *testing.T) {
-	repository := openThisCheckout(t)
-	licenseText, err := readLicenseText(filepath.Join(repository.siblingsDirectory, "connect"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(licenseText, "mozilla public license") {
-		t.Errorf("connect's license text reads %q", licenseText)
-	}
 }

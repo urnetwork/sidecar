@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -182,7 +183,7 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings := []string{}
+	findings := self.unregeneratedFindings(t)
 	for _, generatedFile := range generatedFiles {
 		if !slices.Contains(protoFiles, strings.TrimSuffix(generatedFile, ".pb.go")+".proto") {
 			findings = append(findings, findingf("%s has no .proto", generatedFile))
@@ -234,21 +235,41 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 	return findings
 }
 
-// build/all/run.sh:1560-1566 as this repository's release applies them: the root's exact path, then
-// each subpackage on a line not already carrying /vN. smtpproof's go first in the release, so a line
-// naming it is skipped by the pass that follows; this tree's generated files name only the root.
-func releaseRewrite(content string, suffix string) string {
-	lines := strings.Split(content, "\n")
-	for index, line := range lines {
-		if releaseVersionedLinePattern.MatchString(line) {
+// A generated file nothing here knows how to regenerate. Only protoc's output has a rule so far, so
+// the first go generate output fails until this file learns its generator, rather than going stale
+// unwatched. Read by Go's own marker line, which gofmt and the linters honor.
+func (self *repository) unregeneratedFindings(t testing.TB) []string {
+	t.Helper()
+	findings := []string{}
+	for _, file := range self.sourceFiles(t) {
+		if strings.HasSuffix(file.path, ".pb.go") {
 			continue
 		}
-		lines[index] = releaseQuotedPathPattern.ReplaceAllString(line, `"`+sidecarBasePath+suffix+`$1"`)
+		if ast.IsGenerated(file.syntax) {
+			findings = append(findings, findingf("%s is generated, and this rule has no way to regenerate it", self.displayPath(file.path)))
+		}
+	}
+	return findings
+}
+
+// build/all/run.sh:1560-1566 as this repository's release applies them to one module path: its
+// exact quoted path and each subpackage, on a line not already carrying /vN. smtpproof's go first in
+// the release, so a line naming it is skipped by the root's pass that follows.
+func releaseRewritePath(content string, modulePath string, suffix string) string {
+	quotedPathPattern := regexp.MustCompile(`"` + regexp.QuoteMeta(modulePath) + `([^"]*)"`)
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		if !releaseVersionedLinePattern.MatchString(line) {
+			lines[index] = quotedPathPattern.ReplaceAllString(line, `"`+modulePath+suffix+`$1"`)
+		}
 	}
 	return strings.Join(lines, "\n")
 }
 
-var (
-	releaseVersionedLinePattern = regexp.MustCompile(`/v[0-9]+`)
-	releaseQuotedPathPattern    = regexp.MustCompile(`"` + regexp.QuoteMeta(sidecarBasePath) + `([^"]*)"`)
-)
+// The rewrite of this repository's root path, which is all a generated file here names.
+func releaseRewrite(content string, suffix string) string {
+	return releaseRewritePath(content, sidecarBasePath, suffix)
+}
+
+// A line the release's subpackage pass leaves alone.
+var releaseVersionedLinePattern = regexp.MustCompile(`/v[0-9]+`)

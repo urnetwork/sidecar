@@ -5,7 +5,7 @@
 #
 # Allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0. Ids joined by AND are a module
 # whose files carry several of them. Refused: the GPL family, SSPL, BUSL, custom, unlicensed. A
-# license outside the list stops make check unless check/settings_test.go holds a dated exception
+# license outside the list stops make check unless check/settings_test.go holds an exception
 # for that module at that version, and that exception names a question for the owner.
 #
 # planned: true marks a module §4.7 names that nothing links yet; its id was read from its files at

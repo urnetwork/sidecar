@@ -182,9 +182,20 @@ func TestHygieneFailsOnAHookWithAnotherSignature(t *testing.T) {
 
 func TestHygieneFailsOnAMakefileBuildingWithTheTag(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.write("Makefile", "check:\n\t$(GO) test -tags sidecar_testhooks .\n")
-	fixture.write("cli/Makefile", "build:\n\tenv CGO_ENABLED=0 go build -tags sidecar_testhooks -o ur\n")
-	wantFindings(t, fixture.open().makefileTagFindings(t), "cli/Makefile:2: builds with sidecar_testhooks")
+	fixture.write("Makefile", "# tests run under sidecar_testhooks too\ncheck:\n\t$(GO) test -tags sidecar_testhooks .\n\tgo test -tags sidecar_leaktest .\n")
+	fixture.write("cli/Makefile", "build:\n\tenv CGO_ENABLED=0 go build -tags sidecar_testhooks -o ur\n\t$(GO) build -tags sidecar_leaktest -o ur\n\tGOFLAGS=-tags=sidecar_testhooks gomobile bind\n")
+	wantFindings(t, fixture.open().makefileTagFindings(t),
+		"cli/Makefile:2: builds with sidecar_testhooks",
+		"cli/Makefile:3: builds with sidecar_leaktest",
+		"cli/Makefile:4: builds with sidecar_testhooks")
+}
+
+// gomobile's legs are built by sdk's Makefile, and the leg table here would never see this.
+func TestHygieneFailsOnGomobileBindingWithTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.writeSibling("sdk/build/Makefile", "build_ios:\n\tgomobile bind -tags sdk_mobile_bind,sidecar_testhooks\n")
+	findings := fixture.open().makefileTagFindings(t)
+	wantFindings(t, findings, "Makefile:2: builds with sidecar_testhooks")
 }
 
 // Builds the fixture's ur, with or without the tag, as a release step would.

@@ -15,16 +15,20 @@ import (
 	"testing"
 )
 
-// Modules no leg may link and no sidecar module may require, with what each is. Owner rule 2 for
-// the first three, §4.7's imports bullet for the two after; proxy requires userwireguard, and cli's
-// ur proxy add runs on connect.Tun instead.
+// Modules no leg may link and no sidecar module may require, whatever dependencies.yml says, with
+// what each is. server, sdk and sn by owner rule 2; proxy and userwireguard by §4.7's imports bullet,
+// since cli's ur proxy add runs on connect.Tun instead; the message repo by owner rule 3; and the
+// three that §4.5's ServiceHost exists to keep out of sidecar.
 var refusedModules = map[string]string{
-	serverBasePath:                    "server, which imports sidecar",
-	sdkBasePath:                       "sdk, which imports sidecar",
-	snBasePath:                        "sn, which imports sidecar",
-	urnetworkPrefix + "proxy":         "proxy, which §4.7 keeps out",
-	urnetworkPrefix + "message":       "the deleted message repo (owner rule 3)",
-	urnetworkPrefix + "userwireguard": "userwireguard, which §4.7 keeps out",
+	serverBasePath:                        "server, which imports sidecar",
+	sdkBasePath:                           "sdk, which imports sidecar",
+	snBasePath:                            "sn, which imports sidecar",
+	urnetworkPrefix + "proxy":             "proxy, which §4.7 keeps out",
+	urnetworkPrefix + "message":           "the deleted message repo (owner rule 3)",
+	urnetworkPrefix + "userwireguard":     "userwireguard, which §4.7 keeps out",
+	"github.com/redis/go-redis":           "go-redis, which only ServiceHost's implementation may use",
+	"github.com/minio/minio-go":           "minio-go, which only ServiceHost's implementation may use",
+	"github.com/prometheus/client_golang": "prometheus, which only ServiceHost's implementation may use",
 }
 
 // The first-party modules a sidecar module may require beside this repository's own (§4.7).
@@ -390,6 +394,7 @@ var refusedLicensePhrases = []string{
 	"noncommercial",
 }
 
+// A license file by its name, as the go command's own license scan finds them.
 var licenseFileNamePattern = regexp.MustCompile(`(?i)^(licen[cs]e|copying|unlicense)([.-].*)?$`)
 
 // The license files at a module's top, as one lowered, whitespace-joined text, or "" without any.
