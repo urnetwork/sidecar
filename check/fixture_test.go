@@ -24,6 +24,7 @@ const (
 	fixtureApache     = "Apache License\nVersion 2.0, January 2004\n"
 )
 
+// What a fixture's text may spell with a token.
 var fixtureTokens = strings.NewReplacer(
 	"@module@", sidecarBasePath,
 	"@connect@", connectBasePath,
@@ -35,6 +36,7 @@ var fixtureTokens = strings.NewReplacer(
 	"@userwireguard@", urnetworkPrefix+"userwireguard",
 )
 
+// §4.7's replaces, from the root module.
 const fixtureSiblingReplaces = `
 replace @connect@ => ../connect
 
@@ -45,6 +47,7 @@ replace @glog@ => ../glog
 replace gvisor.dev/gvisor => ../gvisor
 `
 
+// The same, repeated one level up in a nested module.
 const fixtureNestedReplaces = `
 replace @connect@ => ../../connect
 
@@ -55,6 +58,7 @@ replace @glog@ => ../../glog
 replace gvisor.dev/gvisor => ../../gvisor
 `
 
+// What connect brings, which every module on a connect leg lists.
 const fixtureIndirectRequires = `
 require (
 	github.com/pion/sctp v1.0.0 // indirect
@@ -64,6 +68,7 @@ require (
 )
 `
 
+// Each module the clean tree links, and protobuf for the tests that plant protos.
 const fixtureDependencies = `# a fixture's dependencies.yml
 modules:
   - module: @connect@

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -182,7 +183,7 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings := []string{}
+	findings := self.unregeneratedFindings(t)
 	for _, generatedFile := range generatedFiles {
 		if !slices.Contains(protoFiles, strings.TrimSuffix(generatedFile, ".pb.go")+".proto") {
 			findings = append(findings, findingf("%s has no .proto", generatedFile))
@@ -229,6 +230,23 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 		}
 		if !bytes.Equal(normalize(committed), normalize(fresh)) {
 			findings = append(findings, findingf("%s is stale; run make proto", generatedFile))
+		}
+	}
+	return findings
+}
+
+// A generated file nothing here knows how to regenerate. Only protoc's output has a rule so far, so
+// the first go generate output fails until this file learns its generator, rather than going stale
+// unwatched. Read by Go's own marker line, which gofmt and the linters honor.
+func (self *repository) unregeneratedFindings(t testing.TB) []string {
+	t.Helper()
+	findings := []string{}
+	for _, file := range self.sourceFiles(t) {
+		if strings.HasSuffix(file.path, ".pb.go") {
+			continue
+		}
+		if ast.IsGenerated(file.syntax) {
+			findings = append(findings, findingf("%s is generated, and this rule has no way to regenerate it", self.displayPath(file.path)))
 		}
 	}
 	return findings

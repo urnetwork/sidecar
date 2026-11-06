@@ -74,6 +74,7 @@ var skippedDirectoryNames = map[string]bool{
 	"testdata":       true,
 }
 
+// A path element of the release's kind, such as v2026.
 var versionElementPattern = regexp.MustCompile(`^v[0-9]+$`)
 
 // True when path is root or lies beneath it, by whole path elements.
@@ -247,6 +248,7 @@ func runGo(directory string, environment []string, arguments ...string) ([]byte,
 	return output, nil
 }
 
+// One module file, through the go command.
 func readModuleFile(goModPath string) (*moduleFile, error) {
 	output, err := runGo(filepath.Dir(goModPath), goEnvironment(), "mod", "edit", "-json", goModPath)
 	if err != nil {
@@ -259,6 +261,7 @@ func readModuleFile(goModPath string) (*moduleFile, error) {
 	return file, nil
 }
 
+// Every module file in this checkout, by directory.
 func (self *repository) modules(t testing.TB) []*repositoryModule {
 	t.Helper()
 	modules, err := self.modulesOnce()
@@ -323,6 +326,7 @@ func (self *repository) readModules() ([]*repositoryModule, error) {
 	return modules, nil
 }
 
+// Every Go file in this checkout.
 func (self *repository) sourceFiles(t testing.TB) []*sourceFile {
 	t.Helper()
 	files, err := self.sourceFilesOnce()
@@ -460,6 +464,7 @@ func (self *sourceFile) isExternalTest(files []*sourceFile) bool {
 	return true
 }
 
+// The standard library's import paths, as this toolchain knows them.
 func (self *repository) stdPackages(t testing.TB) map[string]bool {
 	t.Helper()
 	packages, err := self.stdPackagesOnce()
@@ -469,6 +474,7 @@ func (self *repository) stdPackages(t testing.TB) map[string]bool {
 	return packages
 }
 
+// go list std, which holds every system's packages at once.
 func (self *repository) readStdPackages() (map[string]bool, error) {
 	output, err := runGo(self.moduleDirectory, goEnvironment(), "list", "std")
 	if err != nil {
@@ -494,11 +500,27 @@ func repositoryRelative(importPath string) (string, bool) {
 	return strings.TrimPrefix(base, sidecarBasePath+"/"), true
 }
 
+// A file in a sibling checkout. On a release branch an earlier step has moved connect's tree, and a
+// later one will move sdk's, into v2026/ (§4.9), so the moved place counts too. A nested module, such
+// as sdk/js, stays where it was.
+func (self *repository) siblingPath(relativePath string) string {
+	direct := filepath.Join(self.siblingsDirectory, filepath.FromSlash(relativePath))
+	if _, err := os.Stat(direct); err == nil || self.releaseSuffix == "" {
+		return direct
+	}
+	sibling, rest, _ := strings.Cut(relativePath, "/")
+	moved := filepath.Join(self.siblingsDirectory, sibling, strings.TrimPrefix(self.releaseSuffix, "/"), filepath.FromSlash(rest))
+	if _, err := os.Stat(moved); err == nil {
+		return moved
+	}
+	return direct
+}
+
 // The sibling checkout's go.mod, read by the go command, or an error naming it. Callers treat a
 // missing sibling as a failure: these rules compare against the siblings, and a rule that cannot
 // read them has not passed.
 func (self *repository) siblingModuleFile(relativeDirectory string) (*moduleFile, error) {
-	return readModuleFile(filepath.Join(self.siblingsDirectory, filepath.FromSlash(relativeDirectory), "go.mod"))
+	return readModuleFile(self.siblingPath(relativeDirectory + "/go.mod"))
 }
 
 // Fails the test with each finding, under the row's name.

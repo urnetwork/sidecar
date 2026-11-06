@@ -149,6 +149,28 @@ func TestHygieneFailsOnAReleaseBranchExtraReplace(t *testing.T) {
 	wantFindings(t, fixture.openRelease().replaceFindings(t), ".: replace golang.org/x/net => ../../net is not one of §4.7's")
 }
 
+// By sidecar's release step connect has moved into connect/v2026/, and the rules still read it.
+func TestRulesReadASiblingMovedOnARelease(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64")
+	fixture.toRelease()
+	connect := filepath.Join(fixture.directory, "connect")
+	if err := os.Mkdir(filepath.Join(connect, "v2026"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(connect, "go.mod"), filepath.Join(connect, "v2026", "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	repository := fixture.openRelease()
+	file, err := repository.siblingModuleFile("connect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Module.Path != connectBasePath {
+		t.Errorf("read the module %s", file.Module.Path)
+	}
+}
+
 // The release's real shape: connect's and glog's replaces gone for tagged requires, gVisor on the
 // urnetwork fork at a version (build/all/run.sh:1546-1551). A rule reading §4.7's development list
 // would fail its own release.

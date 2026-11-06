@@ -325,10 +325,11 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 	return findings
 }
 
-var goBuildCommandPattern = regexp.MustCompile(`\b(go|\$\(GO\)|lowgo)\s+(build|install|run)\b`)
+// A go test command, however the Makefile spells go.
+var goTestCommandPattern = regexp.MustCompile(`(^|[^[:alnum:]_/-])(go|lowgo|\$\(GO\))\s+test\b`)
 
-// A Makefile line that builds with an unshippable tag. Tests may use the tag, and a go test line is
-// how the hooks are exercised; a build line is how a binary is made.
+// A Makefile line carrying an unshippable tag that is not a go test line: go test is how the hooks
+// are exercised, and anything else, a go build or a GOFLAGS export, makes something that can ship.
 func (self *repository) makefileTagFindings(t testing.TB) []string {
 	t.Helper()
 	makefiles, err := filepath.Glob(filepath.Join(self.topDirectory, "Makefile"))
@@ -353,7 +354,7 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			t.Fatal(err)
 		}
 		for index, line := range strings.Split(string(data), "\n") {
-			if !goBuildCommandPattern.MatchString(line) {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") || goTestCommandPattern.MatchString(line) {
 				continue
 			}
 			for _, tag := range unshippableTags {
