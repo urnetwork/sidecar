@@ -31,6 +31,7 @@ func (self *mlsKeyPackage) encodeContent(encoder *mlsEncoder) {
 	encoder.writeExtensions(self.extensions)
 }
 
+// KeyPackage: KeyPackageTBS, then the signature.
 func (self *mlsKeyPackage) encode(encoder *mlsEncoder) {
 	self.encodeContent(encoder)
 	encoder.writeVector(self.signature)
@@ -49,6 +50,7 @@ func (self *mlsKeyPackage) decode(decoder *mlsDecoder) {
 	self.signature = decoder.readVector()
 }
 
+// KeyPackageTBS's bytes.
 func (self *mlsKeyPackage) toBeSigned() ([]byte, error) {
 	encoder := &mlsEncoder{}
 	self.encodeContent(encoder)

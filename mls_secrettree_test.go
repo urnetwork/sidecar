@@ -101,6 +101,7 @@ func mlsNewTestSecretTree(t *testing.T, suite *mlsCipherSuite) *mlsSecretTree {
 	return tree
 }
 
+// One leaf's handshake ratchet.
 func mlsTestHandshakeRatchet(t *testing.T, tree *mlsSecretTree, leaf mlsLeafIndex) *mlsSenderRatchet {
 	t.Helper()
 	ratchets, err := tree.ratchets(leaf)

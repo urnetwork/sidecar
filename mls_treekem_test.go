@@ -66,6 +66,7 @@ func mlsNewTestClient(t *testing.T, suite *mlsCipherSuite, identity string) *mls
 	return &mlsTestClient{signatureKey: signatureKey, leafKey: leafKey, initKey: initKey, keyPackage: keyPackage}
 }
 
+// What a test leaf advertises.
 func mlsTestCapabilities(suite *mlsCipherSuite) mlsCapabilities {
 	return mlsCapabilities{
 		versions:     []uint16{mlsProtocolVersion10},
@@ -94,6 +95,7 @@ type mlsTestGroup struct {
 	nextClient int
 }
 
+// A group of one, at epoch 0.
 func mlsNewTestGroup(t *testing.T, suite *mlsCipherSuite) *mlsTestGroup {
 	t.Helper()
 	groupId := []byte("mls-base test group")
@@ -329,6 +331,7 @@ func (self *mlsTestGroup) checkInvariants() {
 	}
 }
 
+// The members' leaves, in order, so a seeded run is repeatable.
 func (self *mlsTestGroup) leaves() []mlsLeafIndex {
 	leaves := make([]mlsLeafIndex, 0, len(self.members))
 	for leaf := range self.members {

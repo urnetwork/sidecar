@@ -39,6 +39,7 @@ type mlsTreeSettings struct {
 	MaximumLeafLifetime time.Duration
 }
 
+// The defaults every tree runs on outside tests.
 func defaultMlsTreeSettings() *mlsTreeSettings {
 	return &mlsTreeSettings{
 		MaximumLeafCount:    1024,
@@ -62,6 +63,7 @@ type mlsParentNode struct {
 	unmergedLeaves []mlsLeafIndex
 }
 
+// ParentNode, in §7.1's field order.
 func (self *mlsParentNode) encode(encoder *mlsEncoder) {
 	encoder.writeVector(self.encryptionKey)
 	encoder.writeVector(self.parentHash)
@@ -92,6 +94,7 @@ type mlsTreeNode struct {
 	parent *mlsParentNode
 }
 
+// Whether the position holds no value.
 func (self *mlsTreeNode) blank() bool {
 	return self.leaf == nil && self.parent == nil
 }
@@ -218,8 +221,15 @@ func (self *mlsRatchetTree) clone() *mlsRatchetTree {
 	}
 }
 
+// The leaves the array holds, blank ones included.
 func (self *mlsRatchetTree) leafCount() uint32 {
 	return (uint32(len(self.nodes)) + 1) / 2
+}
+
+// Whether this index is inside the tree. Indices are uint32 on every leg, so this compares in that
+// width, not in int.
+func (self *mlsRatchetTree) holds(index mlsNodeIndex) bool {
+	return uint32(index) < uint32(len(self.nodes))
 }
 
 // The leaf at this index, nil when blank or outside the tree.

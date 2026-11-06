@@ -22,11 +22,13 @@ type mlsExtension struct {
 	extensionData []byte
 }
 
+// Extension, in §7.2's field order.
 func (self *mlsExtension) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.extensionType)
 	encoder.writeVector(self.extensionData)
 }
 
+// Extension, in §7.2's field order.
 func (self *mlsExtension) decode(decoder *mlsDecoder) {
 	self.extensionType = decoder.readUint16()
 	self.extensionData = decoder.readVector()

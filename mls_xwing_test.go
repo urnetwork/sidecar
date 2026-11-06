@@ -38,6 +38,7 @@ type mlsXWingVector struct {
 	Ss    mlsHexBytes `json:"ss"`
 }
 
+// All three, or the test stops.
 func mlsLoadXWingVectors(t *testing.T) []mlsXWingVector {
 	t.Helper()
 	var vectors []mlsXWingVector
@@ -76,6 +77,7 @@ type mlsHpkePqVector struct {
 	} `json:"exports"`
 }
 
+// The one vector, or the test stops.
 func mlsLoadHpkePqVector(t *testing.T) *mlsHpkePqVector {
 	t.Helper()
 	var vectors []*mlsHpkePqVector
@@ -135,6 +137,7 @@ type mlsHpkeScheduleForTest struct {
 	exporterSecret []byte
 }
 
+// RFC 9180's LabeledExtract.
 func (self *mlsHpkeScheduleForTest) labeledExtract(t *testing.T, salt []byte, label string, inputKey []byte) []byte {
 	t.Helper()
 	labeled := append([]byte("HPKE-v1"), self.suiteId...)
@@ -147,6 +150,7 @@ func (self *mlsHpkeScheduleForTest) labeledExtract(t *testing.T, salt []byte, la
 	return extracted
 }
 
+// RFC 9180's LabeledExpand.
 func (self *mlsHpkeScheduleForTest) labeledExpand(t *testing.T, secret []byte, label string, info []byte, length int) []byte {
 	t.Helper()
 	labeled := binary.BigEndian.AppendUint16(nil, uint16(length))
@@ -161,6 +165,7 @@ func (self *mlsHpkeScheduleForTest) labeledExpand(t *testing.T, secret []byte, l
 	return expanded
 }
 
+// Runs the schedule for a suite and a shared secret.
 func newMlsHpkeScheduleForTest(t *testing.T, kemId uint16, kdfId uint16, aeadId uint16, aeadKeyLength int, sharedSecret []byte, info []byte) *mlsHpkeScheduleForTest {
 	t.Helper()
 	suiteId := []byte("HPKE")

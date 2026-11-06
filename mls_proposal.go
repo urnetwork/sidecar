@@ -22,6 +22,7 @@ type mlsProposal struct {
 	extensions []mlsExtension
 }
 
+// Proposal, refusing what decode refuses.
 func (self *mlsProposal) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.proposalType)
 	switch self.proposalType {
@@ -38,6 +39,7 @@ func (self *mlsProposal) encode(encoder *mlsEncoder) {
 	}
 }
 
+// Proposal: its type, then that type's body.
 func (self *mlsProposal) decode(decoder *mlsDecoder) {
 	self.proposalType = decoder.readUint16()
 	if decoder.err != nil {

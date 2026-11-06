@@ -44,10 +44,12 @@ func mlsTreeRoot(leafCount uint32) mlsNodeIndex {
 	return mlsNodeIndex(uint32(1)<<(bits.Len32(width)-1) - 1)
 }
 
+// The leaf's node, 2n.
 func (self mlsLeafIndex) node() mlsNodeIndex {
 	return mlsNodeIndex(self) * 2
 }
 
+// Leaves sit at even indices.
 func (self mlsNodeIndex) isLeaf() bool {
 	return self%2 == 0
 }

@@ -44,6 +44,7 @@ func mlsFuzzSeedTrees(f *testing.F) [][]byte {
 	return seeds
 }
 
+// A tree off the wire, through everything that may touch it before validate refuses it.
 func FuzzMlsRatchetTree(f *testing.F) {
 	for _, seed := range mlsFuzzSeedTrees(f) {
 		f.Add(seed)
@@ -90,6 +91,7 @@ func FuzzMlsRatchetTree(f *testing.F) {
 	})
 }
 
+// A leaf alone, as a KeyPackage or an UpdatePath delivers it.
 func FuzzMlsLeafNode(f *testing.F) {
 	for _, seed := range mlsFuzzSeedTrees(f) {
 		// a tree's first entry is a vector header, a presence octet, a node type and a leaf
@@ -100,6 +102,7 @@ func FuzzMlsLeafNode(f *testing.F) {
 	})
 }
 
+// A KeyPackage, public by design, so anyone can feed one in.
 func FuzzMlsKeyPackage(f *testing.F) {
 	var vectors []struct {
 		AddProposal mlsHexBytes `json:"add_proposal"`
@@ -113,6 +116,7 @@ func FuzzMlsKeyPackage(f *testing.F) {
 	})
 }
 
+// The subset's proposals, and the refusal of the rest.
 func FuzzMlsProposal(f *testing.F) {
 	f.Add([]byte{0, 3, 0, 0, 0, 1})
 	f.Add([]byte{0, 6, 2, 1, 2})
@@ -123,6 +127,7 @@ func FuzzMlsProposal(f *testing.F) {
 	})
 }
 
+// A commit's path.
 func FuzzMlsUpdatePath(f *testing.F) {
 	var vectors []struct {
 		CipherSuite uint16 `json:"cipher_suite"`
@@ -141,6 +146,7 @@ func FuzzMlsUpdatePath(f *testing.F) {
 	})
 }
 
+// The GroupContext a GroupInfo carries.
 func FuzzMlsGroupContext(f *testing.F) {
 	var vectors []struct {
 		CipherSuite uint16 `json:"cipher_suite"`
@@ -159,6 +165,7 @@ func FuzzMlsGroupContext(f *testing.F) {
 	})
 }
 
+// Capabilities, whose lists may hold anything.
 func FuzzMlsCapabilities(f *testing.F) {
 	f.Add([]byte{0, 0, 0, 0, 0})
 	f.Add([]byte{2, 0, 1, 2, 0, 16, 0, 0, 2, 0, 1})
@@ -167,6 +174,7 @@ func FuzzMlsCapabilities(f *testing.F) {
 	})
 }
 
+// Credentials, where one wrong type must not desynchronize a parse.
 func FuzzMlsCredential(f *testing.F) {
 	f.Add([]byte{0, 1, 2, 'i', 'd'})
 	f.Add([]byte{0xf5, 0x52, 0})

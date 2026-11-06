@@ -33,11 +33,13 @@ type mlsHpkeCiphertext struct {
 	ciphertext []byte
 }
 
+// HPKECiphertext, in §7.6's field order.
 func (self *mlsHpkeCiphertext) encode(encoder *mlsEncoder) {
 	encoder.writeVector(self.kemOutput)
 	encoder.writeVector(self.ciphertext)
 }
 
+// HPKECiphertext, in §7.6's field order.
 func (self *mlsHpkeCiphertext) decode(decoder *mlsDecoder) {
 	self.kemOutput = decoder.readVector()
 	self.ciphertext = decoder.readVector()
@@ -50,6 +52,7 @@ type mlsUpdatePathNode struct {
 	encryptedPathSecrets []mlsHpkeCiphertext
 }
 
+// UpdatePathNode, in §7.6's field order.
 func (self *mlsUpdatePathNode) encode(encoder *mlsEncoder) {
 	encoder.writeVector(self.encryptionKey)
 	encoder.writeVectorOf(func(elements *mlsEncoder) {
@@ -59,6 +62,7 @@ func (self *mlsUpdatePathNode) encode(encoder *mlsEncoder) {
 	})
 }
 
+// UpdatePathNode, in §7.6's field order.
 func (self *mlsUpdatePathNode) decode(decoder *mlsDecoder) {
 	self.encryptionKey = decoder.readVector()
 	decoder.readVectorOf(func(element *mlsDecoder) {
@@ -74,6 +78,7 @@ type mlsUpdatePath struct {
 	nodes    []mlsUpdatePathNode
 }
 
+// UpdatePath, in §7.6's field order.
 func (self *mlsUpdatePath) encode(encoder *mlsEncoder) {
 	self.leafNode.encode(encoder)
 	encoder.writeVectorOf(func(elements *mlsEncoder) {
@@ -83,6 +88,7 @@ func (self *mlsUpdatePath) encode(encoder *mlsEncoder) {
 	})
 }
 
+// UpdatePath, in §7.6's field order.
 func (self *mlsUpdatePath) decode(decoder *mlsDecoder) {
 	self.leafNode.decode(decoder)
 	decoder.readVectorOf(func(element *mlsDecoder) {
@@ -326,6 +332,7 @@ type mlsTreeSecrets struct {
 	nodeIndexKeys map[mlsNodeIndex]hpke.PrivateKey
 }
 
+// A member that holds only its leaf key, as it has before any path reaches it.
 func newMlsTreeSecrets(suite *mlsCipherSuite, leaf mlsLeafIndex, leafKey hpke.PrivateKey) *mlsTreeSecrets {
 	return &mlsTreeSecrets{
 		suite:         suite,
@@ -336,7 +343,7 @@ func newMlsTreeSecrets(suite *mlsCipherSuite, leaf mlsLeafIndex, leafKey hpke.Pr
 
 // Sets one node's key from its path secret, refusing a key that is not the tree's (§12.4.3.1).
 func (self *mlsTreeSecrets) implantPathSecret(tree *mlsRatchetTree, node mlsNodeIndex, pathSecret []byte) error {
-	if len(tree.nodes) <= int(node) {
+	if !tree.holds(node) {
 		return fmt.Errorf("%w: node %d outside the tree", errMlsInvalid, node)
 	}
 	key, err := self.suite.derivePathKey(pathSecret)
@@ -383,7 +390,7 @@ func (self *mlsTreeSecrets) implantWelcomePath(tree *mlsRatchetTree, sender mlsL
 // Whether every key held is the tree's (treekem's consistency check, and a cheap one to keep).
 func (self *mlsTreeSecrets) consistentWith(tree *mlsRatchetTree) bool {
 	for node, key := range self.nodeIndexKeys {
-		if len(tree.nodes) <= int(node) || !bytes.Equal(key.PublicKey().Bytes(), tree.nodes[node].encryptionKey()) {
+		if !tree.holds(node) || !bytes.Equal(key.PublicKey().Bytes(), tree.nodes[node].encryptionKey()) {
 			return false
 		}
 	}
@@ -394,7 +401,7 @@ func (self *mlsTreeSecrets) consistentWith(tree *mlsRatchetTree) bool {
 // (§7.5's outdated key pairs).
 func (self *mlsTreeSecrets) forgetStaleKeys(tree *mlsRatchetTree) {
 	maps.DeleteFunc(self.nodeIndexKeys, func(node mlsNodeIndex, key hpke.PrivateKey) bool {
-		return len(tree.nodes) <= int(node) || !bytes.Equal(key.PublicKey().Bytes(), tree.nodes[node].encryptionKey())
+		return !tree.holds(node) || !bytes.Equal(key.PublicKey().Bytes(), tree.nodes[node].encryptionKey())
 	})
 }
 

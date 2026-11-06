@@ -76,18 +76,22 @@ func (self *mlsEncoder) finish() ([]byte, error) {
 	return self.encoded, nil
 }
 
+// One octet.
 func (self *mlsEncoder) writeUint8(value uint8) {
 	self.encoded = append(self.encoded, value)
 }
 
+// Big-endian, as every integer here.
 func (self *mlsEncoder) writeUint16(value uint16) {
 	self.encoded = binary.BigEndian.AppendUint16(self.encoded, value)
 }
 
+// Big-endian.
 func (self *mlsEncoder) writeUint32(value uint32) {
 	self.encoded = binary.BigEndian.AppendUint32(self.encoded, value)
 }
 
+// Big-endian.
 func (self *mlsEncoder) writeUint64(value uint64) {
 	self.encoded = binary.BigEndian.AppendUint64(self.encoded, value)
 }
@@ -186,6 +190,7 @@ func (self *mlsDecoder) take(length int) []byte {
 	return taken
 }
 
+// One octet, 0 on a failure, as for every read here.
 func (self *mlsDecoder) readUint8() uint8 {
 	taken := self.take(1)
 	if taken == nil {
@@ -194,6 +199,7 @@ func (self *mlsDecoder) readUint8() uint8 {
 	return taken[0]
 }
 
+// Big-endian, as every integer here.
 func (self *mlsDecoder) readUint16() uint16 {
 	taken := self.take(2)
 	if taken == nil {
@@ -202,6 +208,7 @@ func (self *mlsDecoder) readUint16() uint16 {
 	return binary.BigEndian.Uint16(taken)
 }
 
+// Big-endian.
 func (self *mlsDecoder) readUint32() uint32 {
 	taken := self.take(4)
 	if taken == nil {
@@ -210,6 +217,7 @@ func (self *mlsDecoder) readUint32() uint32 {
 	return binary.BigEndian.Uint32(taken)
 }
 
+// Big-endian.
 func (self *mlsDecoder) readUint64() uint64 {
 	taken := self.take(8)
 	if taken == nil {

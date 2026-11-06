@@ -17,6 +17,7 @@ type mlsHookRecorder struct {
 	kindSecrets map[string][][]byte
 }
 
+// Installs a recorder for this test.
 func mlsRecordHooks(t *testing.T) *mlsHookRecorder {
 	t.Helper()
 	recorder := &mlsHookRecorder{kindSecrets: map[string][][]byte{}}
@@ -36,6 +37,7 @@ func (self *mlsHookRecorder) saw(kind string, secret []byte) bool {
 	})
 }
 
+// Fails the test unless this value was hooked under this kind.
 func (self *mlsHookRecorder) require(t *testing.T, kind string, secret []byte) {
 	t.Helper()
 	if len(secret) == 0 {
@@ -46,6 +48,7 @@ func (self *mlsHookRecorder) require(t *testing.T, kind string, secret []byte) {
 	}
 }
 
+// Fails the test unless something was hooked under each kind.
 func (self *mlsHookRecorder) requireKinds(t *testing.T, kinds ...string) {
 	t.Helper()
 	for _, kind := range kinds {

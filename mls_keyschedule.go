@@ -29,6 +29,7 @@ type mlsGroupContext struct {
 	extensions              []mlsExtension
 }
 
+// GroupContext, version included, which only mls10 fills.
 func (self *mlsGroupContext) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(mlsProtocolVersion10)
 	encoder.writeUint16(self.cipherSuite)

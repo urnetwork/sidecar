@@ -27,6 +27,7 @@ func mlsAcceptBasicCredential(credential *mlsCredential, signatureKey []byte) er
 	return nil
 }
 
+// Validation for a group under the vectors' rules.
 func mlsTestLeafValidation(groupId []byte) *mlsLeafValidation {
 	return &mlsLeafValidation{groupId: groupId, credentialValidator: mlsAcceptBasicCredential}
 }
@@ -892,6 +893,7 @@ func mlsUnmergedParentOf(t *testing.T, tree *mlsRatchetTree) mlsNodeIndex {
 	return 0
 }
 
+// Installs a changed copy of a parent, as the tree's own changes do.
 func mlsReplaceParent(tree *mlsRatchetTree, index mlsNodeIndex, change func(parent *mlsParentNode)) {
 	parent := *tree.nodes[index].parent
 	change(&parent)

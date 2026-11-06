@@ -43,6 +43,7 @@ type mlsSecretTreeSettings struct {
 	MaximumForwardDistance uint32
 }
 
+// The defaults every secret tree runs on outside tests.
 func defaultMlsSecretTreeSettings() *mlsSecretTreeSettings {
 	return &mlsSecretTreeSettings{
 		MaximumForwardDistance: 1000,
@@ -120,7 +121,8 @@ func (self *mlsSenderRatchet) stepTo(generation uint32) (*mlsRatchetStep, error)
 	return self.derive(generation)
 }
 
-// For a sender: the next generation's key and nonce, already consumed from the ratchet.
+// For a sender: the next generation's key and nonce, already consumed from the ratchet, for the
+// caller to use once and overwrite.
 func (self *mlsSenderRatchet) next() (generation uint32, key []byte, nonce []byte, err error) {
 	step, err := self.derive(self.generation)
 	if err != nil {

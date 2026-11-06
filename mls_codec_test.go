@@ -351,11 +351,13 @@ type mlsCodecTestValue struct {
 	body   []byte
 }
 
+// A fixed field, then a vector.
 func (self *mlsCodecTestValue) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.number)
 	encoder.writeVector(self.body)
 }
 
+// A fixed field, then a vector.
 func (self *mlsCodecTestValue) decode(decoder *mlsDecoder) {
 	self.number = decoder.readUint16()
 	self.body = decoder.readVector()

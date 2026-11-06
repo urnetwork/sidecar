@@ -65,6 +65,7 @@ type mlsCredential struct {
 	identity []byte
 }
 
+// Credential, refusing what decode refuses.
 func (self *mlsCredential) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.credentialType)
 	switch self.credentialType {
@@ -99,6 +100,7 @@ type mlsCapabilities struct {
 	credentials  []uint16
 }
 
+// Capabilities, in §7.2's field order.
 func (self *mlsCapabilities) encode(encoder *mlsEncoder) {
 	encoder.writeUint16Vector(self.versions)
 	encoder.writeUint16Vector(self.cipherSuites)
@@ -107,6 +109,7 @@ func (self *mlsCapabilities) encode(encoder *mlsEncoder) {
 	encoder.writeUint16Vector(self.credentials)
 }
 
+// Capabilities, in §7.2's field order.
 func (self *mlsCapabilities) decode(decoder *mlsDecoder) {
 	self.versions = decoder.readUint16Vector()
 	self.cipherSuites = decoder.readUint16Vector()
@@ -139,12 +142,14 @@ type mlsRequiredCapabilities struct {
 	credentialTypes []uint16
 }
 
+// RequiredCapabilities, in §11.1's field order.
 func (self *mlsRequiredCapabilities) encode(encoder *mlsEncoder) {
 	encoder.writeUint16Vector(self.extensionTypes)
 	encoder.writeUint16Vector(self.proposalTypes)
 	encoder.writeUint16Vector(self.credentialTypes)
 }
 
+// RequiredCapabilities, in §11.1's field order.
 func (self *mlsRequiredCapabilities) decode(decoder *mlsDecoder) {
 	self.extensionTypes = decoder.readUint16Vector()
 	self.proposalTypes = decoder.readUint16Vector()
@@ -189,6 +194,7 @@ func (self *mlsLifetime) validSpan(maximum time.Duration) bool {
 	return self.notAfter-self.notBefore <= uint64(maximum/time.Second)
 }
 
+// Whether this moment is inside the lifetime, both ends included.
 func (self *mlsLifetime) contains(at time.Time) bool {
 	seconds := at.Unix()
 	return 0 <= seconds && self.notBefore <= uint64(seconds) && uint64(seconds) <= self.notAfter
@@ -229,11 +235,13 @@ func (self *mlsLeafNode) encodeContent(encoder *mlsEncoder) {
 	encoder.writeExtensions(self.extensions)
 }
 
+// LeafNode: the content, then the signature.
 func (self *mlsLeafNode) encode(encoder *mlsEncoder) {
 	self.encodeContent(encoder)
 	encoder.writeVector(self.signature)
 }
 
+// LeafNode, refusing a source §7.2 does not define.
 func (self *mlsLeafNode) decode(decoder *mlsDecoder) {
 	self.encryptionKey = decoder.readVector()
 	self.signatureKey = decoder.readVector()
@@ -284,6 +292,7 @@ func (self *mlsLeafNode) sign(suite *mlsCipherSuite, signatureKey ed25519.Privat
 	return nil
 }
 
+// Against the leaf's own signature key, which validateAlone ties to its credential.
 func (self *mlsLeafNode) verifySignature(suite *mlsCipherSuite, groupId []byte, leafIndex mlsLeafIndex) bool {
 	content, err := self.toBeSigned(groupId, leafIndex)
 	if err != nil {

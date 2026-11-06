@@ -19,6 +19,7 @@ import (
 // The mlswg's JSON form of binary data. null decodes to nil.
 type mlsHexBytes []byte
 
+// Hex text or null.
 func (self *mlsHexBytes) UnmarshalJSON(encoded []byte) error {
 	var text *string
 	if err := json.Unmarshal(encoded, &text); err != nil {
