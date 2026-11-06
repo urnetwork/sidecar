@@ -1,0 +1,17 @@
+// What tlsedge tells a listener about a visitor (§13.5). Rides sealed streams only, as StreamOpen.metadata, and a
+// listener trusts it only as §9.6's admission step 3 allows. TlsHint (0x1502) has no field list in §13.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message TlsEdgeOpen {              // StreamOpen.metadata, edge -> listener (§6 0x1501), <= 512 B
+  bytes client_ip = 1;             // 4 or 16 B, from PROXY; edge memory only
+  uint32 client_port = 2;
+  string server_name = 3;          // normalized SNI
+  repeated string alpn = 4;        // offered by the visitor
+  uint32 client_hello_byte_count = 5;
+  bytes connection_id = 6;         // 16 random B; joins abuse reports for 24 h
+  uint64 expire_time_millis = 7;   // the ticket's grant_expire_time_millis; streams end here
+}
