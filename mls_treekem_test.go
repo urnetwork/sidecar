@@ -466,10 +466,48 @@ func TestMlsMergeRefusesAWrongCiphertextCount(t *testing.T) {
 	}
 }
 
+// A path whose committer chose its node keys freely: the hashes and the leaf's signature are all in
+// order, so a test using this reaches only the rule it means to.
+func mlsForgedPath(t *testing.T, group *mlsTestGroup, committer mlsLeafIndex, forgeKeys func(tree *mlsRatchetTree, keys [][]byte)) (*mlsUpdatePath, *mlsRatchetTree) {
+	t.Helper()
+	updatePath, _, tree := mlsPreparedCommit(t, group, committer)
+	keys := make([][]byte, len(updatePath.nodes))
+	for index := range updatePath.nodes {
+		keys[index] = updatePath.nodes[index].encryptionKey
+	}
+	forgeKeys(tree, keys)
+
+	forged := tree.clone()
+	path := forged.filteredDirectPath(committer)
+	forged.blankPath(committer)
+	parentHash, err := forged.installPathKeys(path, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range updatePath.nodes {
+		updatePath.nodes[index].encryptionKey = keys[index]
+	}
+	updatePath.leafNode.parentHash = parentHash
+	if err := updatePath.leafNode.sign(group.suite, group.members[committer].signatureKey, group.groupId, committer); err != nil {
+		t.Fatal(err)
+	}
+	return updatePath, tree
+}
+
+// With nothing forged the helper's path merges, so a refusal below is the rule's and no other.
+func TestMlsForgedPathMergesWhenNothingIsForged(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsTestSuiteX25519, 4)
+	updatePath, tree := mlsForgedPath(t, group, 0, func(tree *mlsRatchetTree, keys [][]byte) {})
+	if err := tree.mergeUpdatePath(0, updatePath, nil, group.validation); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMlsMergeRefusesAPathKeyAlreadyInTheTree(t *testing.T) {
 	group := mlsNewMergedTestGroup(t, mlsTestSuiteX25519, 4)
-	updatePath, _, tree := mlsPreparedCommit(t, group, 0)
-	updatePath.nodes[0].encryptionKey = tree.leafNode(2).encryptionKey
+	updatePath, tree := mlsForgedPath(t, group, 0, func(tree *mlsRatchetTree, keys [][]byte) {
+		keys[0] = tree.leafNode(2).encryptionKey
+	})
 	if err := tree.mergeUpdatePath(0, updatePath, nil, group.validation); !errors.Is(err, errMlsInvalid) {
 		t.Fatal(err)
 	}
@@ -477,8 +515,20 @@ func TestMlsMergeRefusesAPathKeyAlreadyInTheTree(t *testing.T) {
 
 func TestMlsMergeRefusesTheSameKeyTwiceInAPath(t *testing.T) {
 	group := mlsNewMergedTestGroup(t, mlsTestSuiteX25519, 4)
-	updatePath, _, tree := mlsPreparedCommit(t, group, 0)
-	updatePath.nodes[1].encryptionKey = updatePath.nodes[0].encryptionKey
+	updatePath, tree := mlsForgedPath(t, group, 0, func(tree *mlsRatchetTree, keys [][]byte) {
+		keys[1] = keys[0]
+	})
+	if err := tree.mergeUpdatePath(0, updatePath, nil, group.validation); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+}
+
+// A key no member can encrypt to would stall every later commit that reaches this node.
+func TestMlsMergeRefusesAPathKeyTheKemCannotParse(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsSuite, 4)
+	updatePath, tree := mlsForgedPath(t, group, 0, func(tree *mlsRatchetTree, keys [][]byte) {
+		keys[1] = []byte("no key at all")
+	})
 	if err := tree.mergeUpdatePath(0, updatePath, nil, group.validation); !errors.Is(err, errMlsInvalid) {
 		t.Fatal(err)
 	}

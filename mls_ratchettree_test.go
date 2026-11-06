@@ -1111,12 +1111,29 @@ func TestMlsValidateRefusesALifetimeOverTheBound(t *testing.T) {
 	}
 }
 
+// With its hashes and signatures in order, as a joiner would get it from a malicious committer.
 func TestMlsValidateRefusesAParentKeyNobodyCanEncryptTo(t *testing.T) {
-	group, tree := mlsValidTestTree(t, mlsSuite)
-	root := mlsTreeRoot(tree.leafCount())
-	mlsReplaceParent(tree, root, func(parent *mlsParentNode) {
-		parent.encryptionKey = []byte("no key at all")
-	})
+	suite := mlsSuite
+	group := mlsNewMergedTestGroup(t, suite, 2)
+	member := group.members[0]
+	tree := member.tree.clone()
+
+	path := tree.filteredDirectPath(0)
+	tree.blankPath(0)
+	parentHash, err := tree.installPathKeys(path, [][]byte{[]byte("no key at all")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := *tree.leafNode(0)
+	leaf.parentHash = parentHash
+	if err := leaf.sign(suite, member.signatureKey, group.groupId, 0); err != nil {
+		t.Fatal(err)
+	}
+	tree.setNode(mlsLeafIndex(0).node(), mlsTreeNode{leaf: &leaf})
+
+	if err := tree.verifyParentHashes(); err != nil {
+		t.Fatalf("the hashes were meant to hold: %v", err)
+	}
 	if err := tree.validate(group.validation); !errors.Is(err, errMlsInvalid) {
 		t.Fatal(err)
 	}
