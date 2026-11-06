@@ -6,12 +6,20 @@ package smtpproof
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/constraint"
+	"github.com/consensys/gnark/frontend"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // A small shape with Z1 left out: everything but the key schedule, in milliseconds.
@@ -685,17 +693,18 @@ func TestProductionShapesProveZ1(t *testing.T) {
 
 func TestCircuitsUseNoCommitments(t *testing.T) {
 	t.Parallel()
-	// SPEC.md 10.2's zero knowledge argument is vanilla Groth16's: a commitment would need its own
-	for _, shape := range partShapes() {
-		compiled, err := compilePartShape(shape)
-		if err != nil {
-			t.Fatal(err)
-		}
-		commitments := compiled.GetCommitments()
+	// SPEC.md 10.2's zero knowledge argument is vanilla Groth16's: a commitment would need its own.
+	// Compiling every production shape takes minutes, so this covers each gadget through the quick
+	// shapes, and TestMeasureShapes covers the production ones.
+	for _, shape := range []*partShape{
+		testQuickEnvelopeShape(tlsSuiteAes128GcmSha256),
+		testQuickMessageShape(tlsSuiteChacha20Poly1305Sha256, 2),
+		test12Shape(),
+	} {
+		commitments := testCompileShape(t, shape).GetCommitments()
 		if commitments != nil && len(commitments.CommitmentIndexes()) != 0 {
 			t.Errorf("%+v carries %d commitments", shape, len(commitments.CommitmentIndexes()))
 		}
-		t.Logf("%+v: %d constraints, %d public inputs", *shape, compiled.GetNbConstraints(), compiled.GetNbPublicVariables())
 	}
 }
 
@@ -713,6 +722,33 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 				t.Errorf("%s: verified part %d", leg.name, index)
 			}
 		}
+	}
+}
+
+func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
+	// what cli/ and server get today: an injected module that sends and passes no mail
+	for _, leg := range testTlsLegs() {
+		job := testJob("one line\r\n", "bob")
+		backend := newGroth16Backend()
+		send := testRunSendWith(t, leg, testMxDefaults(), DefaultProverSettings(), job, backend, backend)
+		if send.err == nil || !strings.Contains(send.err.Error(), errNoKeys.Error()) {
+			t.Errorf("%s: %v", leg.name, send.err)
+		}
+		if len(send.mx.transactions()) != 0 {
+			t.Errorf("%s: a transaction was accepted", leg.name)
+		}
+		// nothing past the handshake reached the MX: its first command needed a proof
+		if commands := send.mx.seen(); len(commands) != 0 {
+			t.Errorf("%s: %v reached the MX", leg.name, commands)
+		}
+	}
+	verifier := NewVerifier(DefaultVerifierSettings())
+	if _, err := verifier.NewSmtpProofSession(&sidecar.SmtpProofPreamble{}); err == nil {
+		t.Error("a session opened without the edge's own values")
+	}
+	session, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble)
+	if err != nil || session == nil {
+		t.Errorf("%v", err)
 	}
 }
 
@@ -771,4 +807,210 @@ func TestGroth16ProofOfARealEhlo(t *testing.T) {
 	if _, err := backend.provePart(context.Background(), statement, witness); err == nil {
 		t.Error("proved a witness with another HS")
 	}
+}
+
+// A shape small enough for a real ceremony in a test.
+type testSetupCircuit struct {
+	Secret frontend.Variable
+	Public frontend.Variable `gnark:",public"`
+}
+
+func (self *testSetupCircuit) Define(api frontend.API) error {
+	api.AssertIsEqual(api.Mul(self.Secret, self.Secret), self.Public)
+	return nil
+}
+
+func TestVerifiedSetupGivesKeysThatProve(t *testing.T) {
+	compiled := testCompile(t, &testSetupCircuit{})
+	transcript, err := runSetup(compiled, []byte("a synthetic beacon"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provingKey, verifyingKey, err := verifySetup(compiled, transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness, err := frontend.NewWitness(&testSetupCircuit{Secret: 3, Public: 9}, ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := groth16.Prove(compiled, provingKey, witness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := witness.Public()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := groth16.Verify(proof, verifyingKey, public); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifySetupRefusesWhatIsNotTheCeremony(t *testing.T) {
+	compiled := testCompile(t, &testSetupCircuit{})
+	transcript, err := runSetup(compiled, []byte("a synthetic beacon"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// no contribution at all: an edge that offers keys with nothing behind them
+	if _, _, err := verifySetup(compiled, &setupTranscript{beacon: transcript.beacon}); err == nil {
+		t.Error("verified an empty transcript")
+	}
+	// the same transcript verifies twice, so a refusal below is the mutation's and nothing else's
+	if _, _, err := verifySetup(compiled, transcript); err != nil {
+		t.Fatalf("the honest transcript: %v", err)
+	}
+	if _, _, err := verifySetup(compiled, transcript); err != nil {
+		t.Fatalf("the honest transcript, again: %v", err)
+	}
+	// a contribution changed by one octet at any depth
+	for _, offset := range []int{40, 100, 200, 500} {
+		for _, phase := range []int{1, 2} {
+			tampered := &setupTranscript{beacon: transcript.beacon, phase1: transcript.phase1, phase2: transcript.phase2}
+			target := &tampered.phase2
+			if phase == 1 {
+				target = &tampered.phase1
+			}
+			changed := bytes.Clone((*target)[0])
+			if offset < len(changed) {
+				changed[offset] ^= 1
+				*target = [][]byte{changed}
+				if _, _, err := verifySetup(compiled, tampered); err == nil {
+					t.Errorf("phase %d: verified with octet %d changed", phase, offset)
+				}
+			}
+		}
+	}
+	// a phase 2 contributed for another circuit: keys that are not this relation's
+	other := testCompile(t, &testSetupOtherCircuit{})
+	otherTranscript, err := runSetup(other, transcript.beacon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := &setupTranscript{beacon: transcript.beacon, phase1: transcript.phase1, phase2: otherTranscript.phase2}
+	if _, _, err := verifySetup(compiled, mixed); err == nil {
+		t.Error("verified another circuit's phase 2")
+	}
+	// another phase 1 under a phase 2 it never fed
+	mixed = &setupTranscript{beacon: transcript.beacon, phase1: otherTranscript.phase1, phase2: transcript.phase2}
+	if _, _, err := verifySetup(compiled, mixed); err == nil {
+		t.Error("verified a phase 2 against another phase 1")
+	}
+}
+
+// As testSetupCircuit, with one more constraint, so its keys differ.
+type testSetupOtherCircuit struct {
+	Secret frontend.Variable
+	Public frontend.Variable `gnark:",public"`
+}
+
+func (self *testSetupOtherCircuit) Define(api frontend.API) error {
+	square := api.Mul(self.Secret, self.Secret)
+	api.AssertIsEqual(api.Mul(square, self.Secret), self.Public)
+	return nil
+}
+
+func TestSetupRefusesACircuitWithACommitment(t *testing.T) {
+	compiled := testCompile(t, &testCommittingCircuit{})
+	if _, err := runSetup(compiled, []byte("a synthetic beacon")); err == nil || !strings.Contains(err.Error(), "commitment") {
+		t.Errorf("err %v", err)
+	}
+}
+
+// A circuit with a commitment, which SPEC.md 10.2 has no argument for.
+type testCommittingCircuit struct {
+	Secret frontend.Variable
+	Public frontend.Variable `gnark:",public"`
+}
+
+func (self *testCommittingCircuit) Define(api frontend.API) error {
+	committer, ok := api.(frontend.Committer)
+	if !ok {
+		return nil
+	}
+	commitment, err := committer.Commit(self.Secret)
+	if err != nil {
+		return err
+	}
+	api.AssertIsDifferent(commitment, 0)
+	api.AssertIsEqual(self.Secret, self.Public)
+	return nil
+}
+
+// Measures every part of one whole send under real Groth16, through the real gate, with a real
+// test-only setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes;
+// this takes minutes, so it stays out of the ordinary run. Its output is SPEC.md 11.3's source.
+func TestMeasureWholeSend(t *testing.T) {
+	legs := os.Getenv("SMTPPROOF_MEASURE")
+	if legs == "" {
+		t.Skip("set SMTPPROOF_MEASURE to run")
+	}
+	for _, leg := range testTlsLegs() {
+		if !strings.Contains(legs, strings.ReplaceAll(leg.name, " ", "-")) {
+			continue
+		}
+		// D-SMTP-16's BDAT case: a 4 KiB header block and 10 recipients
+		recipients := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"}
+		padding := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58)
+		message := padding + testHeaderBlock() + "a body line\r\n"
+		job := testJob("", recipients...)
+		job.Message = []byte(message)
+		job.Preamble.MessageByteCount = uint64(len(message))
+		t.Logf("%s: header block %d octets", leg.name, strings.Index(message, "\r\n\r\n")+4)
+
+		backend := newGroth16Backend()
+		measuring := &testMeasuringBackend{t: t, backend: backend, kinds: map[partShape]bool{}}
+		send := testRunSendWith(t, leg, testMxDefaults(), DefaultProverSettings(), job, measuring, measuring)
+		testExpectOneTransaction(t, leg, send, job)
+		t.Logf("%s: whole send proved and accepted; total proving %v", leg.name, measuring.provingTotal)
+	}
+}
+
+// Sets a shape up the first time it is needed, and times each part.
+type testMeasuringBackend struct {
+	t            *testing.T
+	backend      *groth16Backend
+	kinds        map[partShape]bool
+	provingTotal time.Duration
+}
+
+func (self *testMeasuringBackend) provePart(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
+	shape, err := partShapeFor(statement)
+	if err != nil {
+		return nil, err
+	}
+	if !self.kinds[*shape] {
+		self.kinds[*shape] = true
+		start := time.Now()
+		keys := testSetup(self.t, shape)
+		self.backend.addKeys(keys)
+		self.t.Logf("part %d: %d constraints, %d public inputs, setup %v", statement.index, keys.compiled.GetNbConstraints(), keys.compiled.GetNbPublicVariables(), time.Since(start).Round(time.Second))
+	}
+	var proof []byte
+	for _, cores := range []int{runtime.NumCPU(), 4, 2} {
+		previous := runtime.GOMAXPROCS(cores)
+		start := time.Now()
+		proof, err = self.backend.provePart(ctx, statement, witness)
+		elapsed := time.Since(start)
+		runtime.GOMAXPROCS(previous)
+		if err != nil {
+			return nil, err
+		}
+		self.t.Logf("part %d: proved in %v on %d cores", statement.index, elapsed.Round(10*time.Millisecond), cores)
+		if cores == runtime.NumCPU() {
+			self.provingTotal += elapsed
+		}
+	}
+	return proof, nil
+}
+
+func (self *testMeasuringBackend) verifyPart(ctx context.Context, statement *partStatement, proof []byte) error {
+	start := time.Now()
+	err := self.backend.verifyPart(ctx, statement, proof)
+	self.t.Logf("part %d: verified in %v: %v", statement.index, time.Since(start).Round(time.Millisecond), err)
+	if err != nil {
+		return fmt.Errorf("measuring: %w", err)
+	}
+	return nil
 }

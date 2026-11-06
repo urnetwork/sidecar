@@ -440,6 +440,15 @@ func testTlsLegs() []*testTlsLeg {
 // Runs a job through the prover, the gate and the MX, to the end.
 func testRunSend(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob) *testSend {
 	t.Helper()
+	backend := newTestWitnessBackend()
+	send := testRunSendWith(t, leg, mxSettings, proverSettings, job, backend, backend)
+	send.backend = backend
+	return send
+}
+
+// As testRunSend, under a given proof system.
+func testRunSendWith(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier) *testSend {
+	t.Helper()
 	sidecarConn, edgeSidecarConn := testPipe()
 	edgeMxConn, mxConn := testPipe()
 
@@ -454,21 +463,20 @@ func testRunSend(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, prov
 		mx.serve(server)
 	}()
 
-	backend := newTestWitnessBackend()
 	edge := &testEdge{
-		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble), job.Preamble.MxHost, backend),
+		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble), job.Preamble.MxHost, partVerifier),
 		sidecarConn: edgeSidecarConn,
 		mxConn:      edgeMxConn,
 	}
 	edge.run()
 
-	prover := &Prover{settings: proverSettings, backend: backend, tlsSuites: leg.suites}
+	prover := &Prover{settings: proverSettings, backend: partProver, tlsSuites: leg.suites}
 	result, err := prover.SendSmtp(context.Background(), sidecarConn, job, edge)
 	sidecarConn.Close()
 	<-mxDone
 	edge.fail(nil)
 	edge.relays.Wait()
-	return &testSend{mx: mx, edge: edge, backend: backend, result: result, err: err}
+	return &testSend{mx: mx, edge: edge, result: result, err: err}
 }
 
 func testExpectOneTransaction(t *testing.T, leg *testTlsLeg, send *testSend, job *sidecar.SmtpProofJob) {
