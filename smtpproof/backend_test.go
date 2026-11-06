@@ -584,6 +584,97 @@ func TestMessageCircuitRequiresThe354(t *testing.T) {
 	}
 }
 
+// A real TLS 1.2 connection's shape, with Z1 in it: the key schedule is what is under test.
+func test12Shape() *partShape {
+	return &partShape{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4}
+}
+
+func TestZ1CircuitIn12DerivesARealConnectionsKeys(t *testing.T) {
+	t.Parallel()
+	leg := testTlsLegs()[2]
+	shape := test12Shape()
+	compiled := testCompileShape(t, shape)
+	t.Logf("pi1 in TLS 1.2: %d constraints", compiled.GetNbConstraints())
+	capture := testBdatCapture(t, leg)
+	statement, witness := capture.part(t, 1)
+	if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+		t.Fatal(err)
+	}
+
+	// mutated witnesses and handshake inputs, each refused here as relation_test.go refuses it
+	mutations := []struct {
+		name   string
+		mutate func(statement *partStatement, witness *partWitness)
+	}{
+		{name: "another master secret", mutate: func(statement *partStatement, witness *partWitness) { witness.masterSecret[0] ^= 1 }},
+		{name: "another server random", mutate: func(statement *partStatement, witness *partWitness) {
+			statement.session.serverRandom = bytes.Clone(statement.session.serverRandom)
+			statement.session.serverRandom[0] ^= 1
+		}},
+		{name: "another SF", mutate: func(statement *partStatement, witness *partWitness) {
+			statement.session.serverFinishedRecord = bytes.Clone(statement.session.serverFinishedRecord)
+			statement.session.serverFinishedRecord[tlsRecordHeaderBytes+tlsExplicitNonceBytes] ^= 1
+		}},
+		{name: "another SF nonce", mutate: func(statement *partStatement, witness *partWitness) {
+			statement.session.serverFinishedRecord = bytes.Clone(statement.session.serverFinishedRecord)
+			statement.session.serverFinishedRecord[tlsRecordHeaderBytes] ^= 1
+		}},
+		{name: "another transcript", mutate: func(statement *partStatement, witness *partWitness) {
+			state := *statement.session.preFinishedState
+			state.chaining[0] ^= 1
+			statement.session.preFinishedState = &state
+		}},
+	}
+	for _, mutation := range mutations {
+		statement, witness := capture.part(t, 1)
+		mutation.mutate(statement, witness)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+			t.Errorf("%s: accepted", mutation.name)
+		}
+	}
+}
+
+func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
+	t.Parallel()
+	// the client Finished's offset depends on the transcript's length, and so on which blocks it
+	// falls in: a real handshake lands on one tail length, so this walks all 64 over a synthetic one
+	shape := test12Shape()
+	compiled := testCompileShape(t, shape)
+	leg := testTlsLegs()[2]
+	capture := testBdatCapture(t, leg)
+	for tail := range 64 {
+		statement, witness := capture.part(t, 1)
+		session := statement.session
+		messages := make([]byte, 3*sha256BlockBytes+tail)
+		for i := range messages {
+			messages[i] = byte(11*i + tail)
+		}
+		state, err := newSha256State(messages)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session.preFinishedState = state
+		// the record the MX would have sent for this transcript
+		clientHash, err := state.finish(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serverHash, err := state.finish(tls12FinishedMessage(witness.masterSecret, tlsLabelClientFinished, clientHash))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := &partRecord{raw: bytes.Clone(session.serverFinishedRecord)}
+		testSeal(t, statement, record, witness.serverKey, witness.serverIv, tls12FinishedMessage(witness.masterSecret, tlsLabelServerFinished, serverHash))
+		session.serverFinishedRecord = record.raw
+		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
+			t.Fatalf("tail %d: %v", tail, failures)
+		}
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("tail %d: %v", tail, err)
+		}
+	}
+}
+
 func TestProductionShapesProveZ1(t *testing.T) {
 	for _, shape := range partShapes() {
 		if shape.withoutKeySchedule {
@@ -612,7 +703,7 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 	backend := newGroth16Backend()
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)
-		// these parts have circuits, and no keys are loaded here; TLS 1.2 has no circuit at all yet
+		// these parts have circuits, and no keys are loaded here
 		for _, index := range []uint32{1, 2, 3} {
 			statement, witness := capture.part(t, index)
 			if _, err := backend.provePart(context.Background(), statement, witness); err == nil {

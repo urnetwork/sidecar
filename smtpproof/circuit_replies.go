@@ -67,6 +67,10 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 	previousTicket := frontend.Variable(0)
 	for _, block := range circuit.Server {
 		api.AssertIsBoolean(block.Ticket)
+		if shape.version == tlsVersion12 {
+			// 1.2 offers no ticket here, and its records carry their type in the clear (E1)
+			api.AssertIsEqual(block.Ticket, 0)
+		}
 		// a record's blocks share its kind
 		api.AssertIsEqual(api.Mul(block.Continues, api.Sub(block.Ticket, previousTicket)), 0)
 		previousTicket = block.Ticket

@@ -45,6 +45,17 @@ func partShapes() []*partShape {
 		// a later DATA part. A server record in one has no circuit yet, so it fails closed
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, bodyBlocks: 32},
+		// TLS 1.2, for Exchange Online among others: AES-128-GCM alone, under each of its two suites
+		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4},
+		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4},
+		{kind: partKindEnvelope, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
+		{kind: partKindEnvelope, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
+		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
+		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
+		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
+		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
+		{kind: partKindBody, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
+		{kind: partKindBody, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
 	}
 }
 
