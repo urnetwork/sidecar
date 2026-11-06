@@ -161,8 +161,9 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	}
 }
 
-// No environment's url lives in code: a host sets them. A dial on an empty url fails, so a host that
-// forgets gets an error, not a production service.
+// No environment's url lives in code: a host sets them. validate refuses one left empty, so a host
+// that forgets gets an error from NewSidecar, on the one leg where a dial would not give it one
+// (TestDefaultSettingsRefuseUntilAHostSetsItsUrls).
 func TestDefaultServiceUrlsAreUnset(t *testing.T) {
 	settings := DefaultSidecarSettings()
 	for name, url := range map[string]string{

@@ -18,11 +18,14 @@ type SidecarSettings struct {
 	// The instance name (§5.9): [a-z0-9][a-z0-9-]{0,31}. Default "default". A host reads UR_INSTANCE
 	// or --instance and sets it here.
 	Instance string
-	// Service urls, with no trailing slash. None has a default yet, so each host sets its
-	// environment's, and empty means the service is not configured: a dial of it fails. §5.4 has
-	// EvsUrl, GkmUrl, SocketsUrl and DnsUrl default from §19.4, which waits on whether a production
-	// hostname may sit in code.
-	ApiUrl      string
+	// Service urls, absolute, with no trailing slash, query or fragment. None has a default yet, so
+	// each host sets its environment's, and validate refuses one left empty. A dial would not catch
+	// it: in the page Worker fetch resolves an empty url against the Worker's own origin, which
+	// would send the bearer token to the page's host (api_transport.go). §5.4 has EvsUrl, GkmUrl,
+	// SocketsUrl and DnsUrl default from §19.4, which waits on whether a production hostname may sit
+	// in code.
+	ApiUrl string
+	// ws or wss, read only on connect legs. Every other url is http or https.
 	PlatformUrl string
 	AuthUrl     string
 	EvsUrl      string
@@ -98,7 +101,7 @@ type SidecarKeychainSettings struct {
 	PassAttemptInterval time.Duration
 	// Idle time before an unlocked keychain locks. Non-positive never locks, the default: §5.4 names
 	// the setting and no value, and an unattended daemon must keep serving.
-	AutoLockTimeout time.Duration
+	AutoLockTimeout time.Duration `settings:"zero"`
 }
 
 // The daemon's local IPC (§5.8). §5.4 names sockets, idle exit and a request bound without values.
@@ -110,7 +113,7 @@ type SidecarLocalSettings struct {
 	// How long an auto-spawned daemon with nothing to serve waits before it exits: 10 min, so a run
 	// of `ur` commands reuses one daemon. Non-positive never exits. A unit-run daemon and one that
 	// mail, sockets, bridge or an indexer keeps busy never idle out (§5.8).
-	IdleExitTimeout time.Duration
+	IdleExitTimeout time.Duration `settings:"zero"`
 	// The most one local request may hold: 4 MiB, above §16.7's 1 MiB body once JSON escapes it. A
 	// larger one closes its session. Non-positive refuses every request.
 	RequestByteCount int64
@@ -122,7 +125,7 @@ type SidecarLocalSettings struct {
 // applies CacheByteCount 16 GiB and MemoryBudgetByteCount 192 MiB (owner decision 175).
 type SidecarSearchSettings struct {
 	// The index cache: 4 GiB. 0 keeps it in memory (ephemeral sidecars).
-	CacheByteCount int64
+	CacheByteCount int64 `settings:"zero"`
 	// Decoded index state, inside MemoryBudgetByteCount: 64 MiB; app and page hosts set §18.4's
 	// smaller working sets.
 	MemoryByteCount int64

@@ -5,9 +5,16 @@
 
 package sidecar
 
+// Empty, and never nil, so a host may read the field on every leg.
 type SidecarConnectSettings struct {
 }
 
+// A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarConnectSettings() *SidecarConnectSettings {
 	return &SidecarConnectSettings{}
+}
+
+// What validate adds on this leg: nothing, since PlatformUrl and the connect settings go unread here.
+func (self *SidecarSettings) validateLeg() error {
+	return nil
 }

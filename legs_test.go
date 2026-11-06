@@ -8,6 +8,7 @@
 package sidecar
 
 import (
+	"go/ast"
 	"go/build"
 	"go/parser"
 	"go/token"
@@ -113,6 +114,184 @@ func goListDeps(t *testing.T, env []string, args ...string) []string {
 		t.Fatalf("go list: %v\n%s", err, stderr)
 	}
 	return strings.Fields(string(output))
+}
+
+// A Worker's globals, in node: no process, so net/http's fetch path runs, and a fetch that records what
+// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths.
+const workerHarness = `
+const fs = require("fs");
+const nodeProcess = process;
+const [wasmPath, wasmExecPath, ...testArgs] = nodeProcess.argv.slice(2);
+delete globalThis.process;
+require(wasmExecPath);
+globalThis.workerFetchCalls = [];
+globalThis.fetch = (url, options) => {
+	globalThis.workerFetchCalls.push({url: url, authorization: options.headers.get("authorization")});
+	return Promise.reject(new Error("the harness's fetch sends nothing"));
+};
+const go = new Go();
+go.argv = [wasmPath, ...testArgs];
+go.exit = (code) => { nodeProcess.exitCode = code; };
+WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
+	.then((result) => go.run(result.instance))
+	.catch((err) => { console.error(err); nodeProcess.exitCode = 1; });
+`
+
+// The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
+// under node's process global net/http never calls fetch, and what the page Worker's transport does
+// with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
+// its fetch tests, since a run that skipped them would still exit 0.
+func TestHttpLegPassesInAWorker(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skipf("no node to run the sidecar_http leg in, so this leg went untested: %v", err)
+	}
+	goroot, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	wasmPath := filepath.Join(directory, "sidecar.test.wasm")
+	harnessPath := filepath.Join(directory, "worker.js")
+
+	build := exec.Command("go", "test", "-c", "-tags", "sidecar_http", "-o", wasmPath, ".")
+	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go test -c: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(harnessPath, []byte(workerHarness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wasmExecPath := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
+	// these two read the source tree, which a Worker has no file system for
+	skip := "^(TestHookFilesSplitOnTag|TestHooksEmptyWithoutTag)$"
+	output, err := exec.Command(node, harnessPath, wasmPath, wasmExecPath, "-test.v", "-test.count=1", "-test.skip", skip).CombinedOutput()
+	if err != nil {
+		t.Fatalf("the leg's tests failed: %v\n%s", err, output)
+	}
+	for _, name := range []string{
+		"TestWorkerFetchGetsNoRequestWithAnEmptyServiceUrl",
+		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
+		"TestWorkerFetchGetsAnAbsoluteUrl",
+		"TestValidSettingsPass",
+	} {
+		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
+			t.Errorf("%s did not pass\n%s", name, output)
+		}
+	}
+}
+
+// Parses every root file that is not a test, on every leg at once, since a seam a leg's file skips is
+// the flaw these look for.
+func parseRootFiles(t *testing.T) map[string]*ast.File {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	files := map[string]*ast.File{}
+	for _, goFile := range rootGoFiles(t) {
+		if strings.HasSuffix(goFile, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, goFile, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[goFile] = file
+	}
+	return files
+}
+
+func parseSyntheticFile(t *testing.T, src string) *ast.File {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "synthetic.go", "package sidecar\n"+src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// Whether file declares a NewSidecar that never calls validate.
+func newSidecarSkipsValidate(file *ast.File) bool {
+	for _, decl := range file.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if !ok || function.Recv != nil || function.Name.Name != "NewSidecar" || function.Body == nil {
+			continue
+		}
+		validated := false
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "validate" {
+					validated = true
+				}
+			}
+			return true
+		})
+		if !validated {
+			return true
+		}
+	}
+	return false
+}
+
+// What keeps an empty url from the page Worker's fetch is settings.validate, so it holds only if every
+// NewSidecar runs it. Nothing declares NewSidecar yet: CORE-M1-08 and CORE-M4-01 do, one per leg, and
+// this fails either that leaves it out.
+func TestNewSidecarRunsValidate(t *testing.T) {
+	for goFile, file := range parseRootFiles(t) {
+		if newSidecarSkipsValidate(file) {
+			t.Errorf("%s: NewSidecar does not call settings.validate()", goFile)
+		}
+	}
+}
+
+func TestNewSidecarRuleCatchesAPlantedSkip(t *testing.T) {
+	skipping := parseSyntheticFile(t, "func NewSidecar(settings *SidecarSettings) error { return nil }")
+	if !newSidecarSkipsValidate(skipping) {
+		t.Error("a NewSidecar with no validate passed")
+	}
+	calling := parseSyntheticFile(t, "func NewSidecar(settings *SidecarSettings) error { return settings.validate() }")
+	if newSidecarSkipsValidate(calling) {
+		t.Error("a NewSidecar calling validate failed")
+	}
+}
+
+// The net/http names that reach its default transport, by-passing absoluteUrlTransport, found in file.
+func defaultHttpNames(file *ast.File) []string {
+	names := []string{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		if selector, ok := node.(*ast.SelectorExpr); ok {
+			if packageName, ok := selector.X.(*ast.Ident); ok && packageName.Name == "http" {
+				switch selector.Sel.Name {
+				case "DefaultTransport", "DefaultClient", "Get", "Head", "Post", "PostForm":
+					names = append(names, selector.Sel.Name)
+				}
+			}
+		}
+		return true
+	})
+	return names
+}
+
+// Only the transport files may reach net/http's defaults: on the sidecar_http leg they are fetch, with
+// no refusal of a relative url, and on a connect leg an unbound socket that can follow a tunnel's
+// default route back into this process (CORE-M1-04).
+func TestOnlyTheTransportFilesReachNetHttpDefaults(t *testing.T) {
+	for goFile, file := range parseRootFiles(t) {
+		if strings.HasPrefix(goFile, "api_transport") {
+			continue
+		}
+		if names := defaultHttpNames(file); len(names) != 0 {
+			t.Errorf("%s reaches http.%s", goFile, names[0])
+		}
+	}
+}
+
+func TestDefaultHttpRuleCatchesAPlantedCall(t *testing.T) {
+	file := parseSyntheticFile(t, `import "net/http"
+func f() { http.Post("/sidecar/bind", "", nil) }`)
+	if names := defaultHttpNames(file); !slices.Equal(names, []string{"Post"}) {
+		t.Errorf("names %q", names)
+	}
 }
 
 // What `make check` will enforce from M1 (§4.7), on the whole transitive graph.
