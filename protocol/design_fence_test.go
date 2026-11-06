@@ -33,6 +33,7 @@ type testFenceField struct {
 type testFenceMessage struct {
 	fields          []testFenceField
 	reservedNumbers []int32
+	reservedNames   []string
 }
 
 type testFenceEnum struct {
@@ -101,8 +102,10 @@ func testParseFence(t *testing.T, fence string, fences *testFences) {
 			for tokens[0] != "}" {
 				if tokens[0] == "reserved" {
 					var numbers []int32
-					tokens, numbers, _ = testParseReserved(t, tokens[1:])
+					var names []string
+					tokens, numbers, names = testParseReserved(t, tokens[1:])
 					message.reservedNumbers = append(message.reservedNumbers, numbers...)
+					message.reservedNames = append(message.reservedNames, names...)
 					continue
 				}
 				field := testFenceField{}
@@ -196,10 +199,7 @@ func testTypeName(field protoreflect.FieldDescriptor) string {
 	return field.Kind().String()
 }
 
-func testReservedNumbers(ranges interface {
-	Len() int
-	Get(i int) [2]protoreflect.FieldNumber
-}) []int32 {
+func testReservedNumbers(ranges protoreflect.FieldRanges) []int32 {
 	numbers := []int32{}
 	for i := range ranges.Len() {
 		for number := ranges.Get(i)[0]; number < ranges.Get(i)[1]; number++ {
@@ -271,6 +271,14 @@ func TestFencedMessagesMatchTheirDescriptors(t *testing.T) {
 		if !slices.Equal(got, testSorted(fence.reservedNumbers)) {
 			t.Errorf("%s reserves %v, and the design %v", name, got, fence.reservedNumbers)
 		}
+		if message.ReservedNames().Len() != len(fence.reservedNames) {
+			t.Errorf("%s reserves %d names, and the design %d", name, message.ReservedNames().Len(), len(fence.reservedNames))
+		}
+		for _, reservedName := range fence.reservedNames {
+			if !message.ReservedNames().Has(protoreflect.Name(reservedName)) {
+				t.Errorf("%s does not reserve %s", name, reservedName)
+			}
+		}
 	}
 }
 
@@ -301,6 +309,9 @@ func TestFencedEnumsMatchTheirDescriptors(t *testing.T) {
 		got := testSorted(testEnumReservedNumbers(enum.ReservedRanges()))
 		if !slices.Equal(got, testSorted(fence.reservedNumbers)) {
 			t.Errorf("%s reserves %v, and the design %v", name, got, fence.reservedNumbers)
+		}
+		if enum.ReservedNames().Len() != len(fence.reservedNames) {
+			t.Errorf("%s reserves %d names, and the design %d", name, enum.ReservedNames().Len(), len(fence.reservedNames))
 		}
 		for _, reservedName := range fence.reservedNames {
 			if !enum.ReservedNames().Has(protoreflect.Name(reservedName)) {

@@ -1,5 +1,5 @@
-// §11's format 1: a push's signed statements and records (§11.6) and the head (§11.8), which only evs reads, with
-// EvsHeadChanged, the hint a commit raises (§11.10). A bare section number, as in 11.7, is DESIGN.md's.
+// §11's format 1: a push's signed statements and records (§11.6) and the head (§11.8), which is server-internal,
+// with EvsHeadChanged, the hint a commit raises (§11.10). A bare section number, as in 11.7, is DESIGN.md's.
 //
 // Format 1 reserves format 2's numbers by declaring them, never by leaving them out: EvsPush's flags 256 and 512
 // and fields 33 and 34, EvsHead.index_epoch, EvsEntryVersion.versioning, EvsLocator.staged and kind 5,
