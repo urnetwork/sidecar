@@ -296,8 +296,8 @@ Each item gives (due; start).
 | No indexer is designated, so phones download all at "search more" (owner decision 177) | High | Low | owner decision 155's model; the app's indexer prompt names remote search; `ur indexer add --services search` |
 | Format 2's computed write cost misses on production after the freeze | Medium | High | owner decision 174's accepted risk: §19.9's next cluster sooner (owner decision 145) or a later format change; the gate holds at internal networks and design partners meanwhile (D-TEST-13) |
 | A rollback to format-1 binaries after format-2 data exists strands staged content | Low | High | FS-72's rollback case; format-2 batches left to a format-2 evacuator |
-| A G0 re-check or the density review, running beside M0's bootstrap, finds something that changes what is already built (owner decision 193) | Medium | Medium | Findings return as Q- items (D-PHASE-2); the first format freeze is M2's (23.8), so until then a change reworks only `sidecar` branches |
-| Later milestones build on formats that stay unfrozen, so a hardware miss at D-TEST-11's run forces rework in them (owner decision 194) | Medium | High | 23.8's freeze order still decides what reaches a production store (D-PHASE-7); the rework stays on `sidecar` branches, and data on local, T3, canary and the staging cluster is rebuilt |
+| A G0 re-check or the density review, running beside M0's bootstrap, finds something that changes what is already built (owner decision 193) | Medium | Medium | Findings return as Q- items (D-PHASE-2); the first format freeze is M2's (23.8), so a finding before it touches no frozen format |
+| Later milestones build on formats that stay unfrozen, so a hardware miss, at D-TEST-11's run or later, forces rework in them (owner decision 194) | Medium | High | 23.8's freeze order still decides what reaches a production store (D-PHASE-7), and data on local, T3, canary and the staging cluster is rebuilt |
 
 ### 23.16 Phasing
 
