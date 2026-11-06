@@ -37,17 +37,20 @@ INDEX = list(_P9['INDEX']) + [
      "M0-M10 build straight through in dependency order on the `sidecar` branches: each gate's local checks run and "
      "are reported, and anything needing hardware, production or people stays listed open. §23.8's freezes do not "
      "move."),
+    (195, "D-OPS-20",
+     "D-OPS-20's MinIO build lives in a new `urnetwork/minio` fork, a sibling checkout with its own `sidecar` branch, "
+     "keeping MinIO's AGPL source in one public place; the owner creates the GitHub repo before any push."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
 INDEX[_i176] = (176, INDEX[_i176][1],
                 "Connect rounds the byte reports of phone-to-indexer search contracts up to 128 KiB, hiding up to five "
                 "search pages an hour. Amended by @@OD:188@@.")
-assert [r[0] for r in INDEX] == list(range(1, 195))
+assert [r[0] for r in INDEX] == list(range(1, 196))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
-              194: '2026-11-06'})
+              194: '2026-11-06', 195: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -71,6 +74,11 @@ _BR_NEW = ("Its documents, DESIGN.md and `design/design-research/` among them, a
            "`sidecar` branch (§4.11).")
 assert BRANCH.count(_BR_OLD) == 1, 'branch policy text moved'
 BRANCH = BRANCH.replace(_BR_OLD, _BR_NEW)
+
+# Owner decision 195: D-OPS-20's MinIO build has a repo of its own.
+_SC_OLD = "through sn, warp, config, vault, build, xops and mmm."
+assert SCOPE.count(_SC_OLD) == 1, 'scope text moved'
+SCOPE = SCOPE.replace(_SC_OLD, "through sn, warp, config, vault, build, xops, mmm and the `urnetwork/minio` fork.")
 
 # Id families after the final meta review: filled in from the reconciler's IDS.md before the build.
 _ID_FIX = [("FI-1 to FI-27 (", "FI-1 to FI-30 ("), ("FS-1 to FS-98 (", "FS-1 to FS-125 ("),

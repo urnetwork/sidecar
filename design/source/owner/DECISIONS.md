@@ -896,6 +896,13 @@ The owner answered the questions HANDOFF.md left for them, and those the build r
     - Not taken: stopping at each Gn-out; building M0-M2 then re-planning.
     - Raised in planning the build from the handoff.
 
+195. **D-OPS-20's MinIO build lives in a new `urnetwork/minio` fork.**
+    - Question: D-OPS-20 needs an in-house MinIO build, and DESIGN.md names no repo for it.
+    - Answer: a new `urnetwork/minio` fork, a sibling checkout with its own `sidecar` branch, keeping MinIO's AGPL source in one public place. The owner creates the GitHub repo before any push.
+    - Cost: the owner stated none.
+    - Not taken: a patch series in warp; deciding at M2.
+    - Raised by HANDOFF.md section 9.15.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.
