@@ -115,3 +115,25 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 		ServiceClient: self.ServiceClient,
 	}
 }
+
+// CC3 and CC4 as far as the fakes hold them: every Redis value, object, metric, hint and usage event.
+func (self *FakeHost) privacyItems() []*PrivacyItem {
+	items := []*PrivacyItem{}
+	for key, value := range self.Redis.Dump() {
+		items = append(items, &PrivacyItem{Class: "CC3", Name: "redis " + key, Body: append([]byte(key+"\x00"), value...)})
+	}
+	for name, body := range self.Blobs.Dump() {
+		items = append(items, &PrivacyItem{Class: "CC3", Name: "object " + name, Body: body})
+	}
+	for _, line := range self.Metrics.Dump() {
+		items = append(items, &PrivacyItem{Class: "CC4", Name: "metric", Body: []byte(line)})
+	}
+	for _, hint := range self.Push.AllHints() {
+		items = append(items, &PrivacyItem{
+			Class: "CC4",
+			Name:  "hint to " + hint.ClientId.String(),
+			Body:  append([]byte(hint.Hint.Topic+"\x00"), hint.Hint.Body...),
+		})
+	}
+	return items
+}

@@ -155,7 +155,7 @@ func (self *BlobRecorder) begin(ctx context.Context, entry *BlobHistoryEntry) {
 	self.entries = append(self.entries, entry)
 }
 
-func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome) {
+func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome, readEtag string) {
 	returned := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -163,6 +163,7 @@ func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome) {
 	entry.ReturnSeq = self.seq
 	entry.Returned = returned
 	entry.Outcome = outcome
+	entry.ReadEtag = readEtag
 }
 
 func blobOutcomeOf(err error, isWrite bool) BlobOutcome {
@@ -200,7 +201,7 @@ func (self *recordedBlobCluster) PutIfNoneMatch(ctx context.Context, key string,
 	entry.WriteEtag = self.recorder.etagOf(body)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutIfNoneMatch(ctx, key, body, options)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return newEtag, err
 }
 
@@ -210,7 +211,7 @@ func (self *recordedBlobCluster) PutIfMatch(ctx context.Context, key string, eta
 	entry.WriteEtag = self.recorder.etagOf(body)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutIfMatch(ctx, key, etag, body, options)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return newEtag, err
 }
 
@@ -223,7 +224,7 @@ func (self *recordedBlobCluster) PutStream(ctx context.Context, key string, body
 	entry.WriteEtag = self.recorder.etagOf(bodyBytes)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutStream(ctx, key, strings.NewReader(string(bodyBytes)), byteCount, checksumSha256)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return newEtag, err
 }
 
@@ -231,10 +232,11 @@ func (self *recordedBlobCluster) Get(ctx context.Context, key string) (*sidecar.
 	entry := self.entry(ctx, BlobHistoryGet, key)
 	self.recorder.begin(ctx, entry)
 	object, err := self.BlobCluster.Get(ctx, key)
+	readEtag := ""
 	if err == nil {
-		entry.ReadEtag = object.Etag
+		readEtag = object.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
 	return object, err
 }
 
@@ -242,10 +244,11 @@ func (self *recordedBlobCluster) GetRange(ctx context.Context, key string, offse
 	entry := self.entry(ctx, BlobHistoryGetRange, key)
 	self.recorder.begin(ctx, entry)
 	object, err := self.BlobCluster.GetRange(ctx, key, offset, byteCount)
+	readEtag := ""
 	if err == nil {
-		entry.ReadEtag = object.Etag
+		readEtag = object.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
 	return object, err
 }
 
@@ -253,10 +256,11 @@ func (self *recordedBlobCluster) Head(ctx context.Context, key string) (*sidecar
 	entry := self.entry(ctx, BlobHistoryHead, key)
 	self.recorder.begin(ctx, entry)
 	info, err := self.BlobCluster.Head(ctx, key)
+	readEtag := ""
 	if err == nil {
-		entry.ReadEtag = info.Etag
+		readEtag = info.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
 	return info, err
 }
 
@@ -264,7 +268,7 @@ func (self *recordedBlobCluster) List(ctx context.Context, keyPrefix string, sta
 	entry := self.entry(ctx, BlobHistoryList, keyPrefix)
 	self.recorder.begin(ctx, entry)
 	objects, more, err := self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), "")
 	return objects, more, err
 }
 
@@ -272,7 +276,7 @@ func (self *recordedBlobCluster) Delete(ctx context.Context, key string) error {
 	entry := self.entry(ctx, BlobHistoryDelete, key)
 	self.recorder.begin(ctx, entry)
 	err := self.BlobCluster.Delete(ctx, key)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return err
 }
 
