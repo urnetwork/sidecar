@@ -18,12 +18,22 @@ func loggerOrDefault(log Logger) Logger {
 	return log
 }
 
+// A connect logger as a root one. Nil stays nil, the unset logger on both sides, never an adapter
+// around nothing.
 func loggerFromConnect(log connect.Logger) Logger {
+	if log == nil {
+		return nil
+	}
 	return connectBackedLogger{log: log}
 }
 
-// What a connect settings struct's Log field takes.
+// What a connect settings struct's Log field takes. Nil stays nil, so settings.Log's default passes
+// down as connect's own rule has it: a nil Log resolves to connect's default at construction
+// (connect/log.go), which an adapter around nothing would panic in place of.
 func connectLogger(log Logger) connect.Logger {
+	if log == nil {
+		return nil
+	}
 	if backed, ok := log.(connectBackedLogger); ok {
 		return backed.log
 	}
