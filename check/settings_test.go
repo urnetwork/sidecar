@@ -16,7 +16,7 @@ import (
 // passes in silence. TestRowsThatStartLaterHoldNow fails a switch left off under a row that holds.
 type rowSwitches struct {
 	// §18.10 and §4.18, from M1: the sidecar_http js leg links no connect or gVisor package.
-	// Held since M0: connect_require.go, the one root file importing connect, is !sidecar_http.
+	// Held since M0: every root file importing connect carries !sidecar_http.
 	sidecarHttpLinksNoConnect bool
 	// D-SDK-20 and §4.18, from M4: the ios_extension leg links neither the root nor protocol.
 	// Held since M0, by protocol/bridge alone until device/ lands, when the leg picks it up.

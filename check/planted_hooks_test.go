@@ -76,6 +76,7 @@ func TestHygieneFailsOnAReleaseLegWithTheLeakTag(t *testing.T) {
 func TestHygieneFailsOnTheHooksTagInGoflags(t *testing.T) {
 	wantFindings(t, callerGoflagsFindings("-trimpath -tags=other,sidecar_testhooks"), "GOFLAGS carries sidecar_testhooks")
 	wantFindings(t, callerGoflagsFindings("--tags=sidecar_leaktest"), "GOFLAGS carries sidecar_leaktest")
+	wantFindings(t, callerGoflagsFindings("'-tags=other sidecar_testhooks'"), "GOFLAGS carries sidecar_testhooks")
 	wantFindings(t, callerGoflagsFindings("-trimpath -tags=sidecar_testhooks_extra"))
 	wantFindings(t, callerGoflagsFindings(""))
 }
