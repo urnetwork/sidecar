@@ -2,7 +2,7 @@
 
 End-to-end encrypted infrastructure for agents, storage and mail. It runs on your devices and holds your keys; URnetwork's services see only ciphertext.
 
-Design stage: nothing is implemented yet. The full design is in [DESIGN.md](DESIGN.md).
+Design stage: nothing is implemented yet. The full design is in [DESIGN.md](DESIGN.md), and implementation starts from [HANDOFF.md](HANDOFF.md).
 
 ## Services
 
