@@ -1,0 +1,337 @@
+# Go Style Guide
+
+In the URnetwork code, the following Go style is used. A few conventions — notably the `self` receiver name and the verbose usage+type field naming — intentionally diverge from idiomatic Go; they are deliberate house rules, not oversights.
+
+## Naming
+
+- Treat acronyms and initialisms as ordinary words in Go identifiers: capitalize only the first letter of each acronym, not every letter. Write `EvmTxManager`, `Tcp`, `Rpc`, `Http`, `Api`, `Json`, `Id`, and `Uid`, not `EVMTxManager`, `TCP`, `RPC`, `HTTP`, `API`, `JSON`, `ID`, or `UID`. At the start of an unexported identifier, lowercase the whole acronym: `evmTxManager`, `tcpConnection`, `rpcClient`, `clientId`, and `validatorUid`. Apply this consistently to types, functions, methods, fields, variables, constants, and test names in code we write. This deliberately differs from standard Go initialism conventions.
+- Preserve identifiers required by external packages, generated bindings, or interface contracts, and preserve serialized field names and protocol formats unless changing that contract is explicitly part of the task. Rename an owned identifier and all its references together; a naming-only change must not alter behavior or wire compatibility.
+- Our receiver name is `self`: `func (self *T) f(...)` (pointer receiver) or `func (self T) f(...)` (value receiver).
+- Our canonical name for a `sync.Mutex` guarding state is `stateLock`.
+- Field and variable names are slightly more verbose than standard Go, so usage and type can be inferred from the name. The scheme is usage + type:
+  - Maps: `map[K]V` is `usageKVs` — e.g. `activeNetworkIdUsers` for a `map[Id]User` of active users. Note the plural `s`.
+  - Slices: `[]T` is `usageTs` — e.g. `activeNetworkIds` for a `[]Id` of active networks. Note the plural `s`.
+  - Variables: `T` is `usageT` — e.g. `activeNetworkId` for the active network `Id`.
+  - Use the shortest type token that stays unambiguous: `Id`, not `Identifier`; but never abbreviate past recognition (`activeNetworkIds`, not `activeNetIds`).
+  - When the value already implies its type, drop the type token: concrete objects are named by usage alone (`session`, `client`, `transferBalance`). Keep the type when dropping it would confuse an identifier with the object it names — an `Id` stays `clientId`, never `client`.
+  - Short names like `t`, `s`, `ts` are fine in a small scope with few locals, where the type is obvious from nearby context.
+
+## Identifiers
+
+- Our `Id` type is a ULID. ULIDs put a millisecond creation timestamp in their high bits, so ids are **lexicographically ordered by creation time** — and we rely on this in several places: `MAX(id)` / `MAX(id::varchar)` selects the most-recently-created row of a group, and `ORDER BY id` stands in for `ORDER BY create_time`. The ordering survives the `uuid` column type and its `::varchar` canonical form (the timestamp is in the leading bytes, and hex sorts in value order), so it holds in SQL as well as in Go.
+- The timestamp is **client-local**: an id carries the clock of whatever minted it, so id order is a dependable time order within a single source but is not a global clock across sources (two ids minted on different machines can be out of true order by the clock skew between them). When strict or cross-source ordering matters, order by an explicit server-set timestamp column instead.
+
+## Package layering
+
+**A package must never import its own subpackages.** Dependencies point one way:
+a subpackage may import its parent or a peer, never a child. This is the same rule
+the Go standard library follows.
+
+The package clause, not just the directory, determines this boundary. An
+internal `_test.go` file declaring `package connect` is part of connect and must
+obey the same rule. A root `_test.go` file declaring `package connect_test` is a
+separately compiled consumer package; it may import connect and its subpackages
+without adding those imports to connect. This is not a test-file exemption:
+non-test files and mismatched package names cannot claim that boundary. Keep any
+bridge to private fixtures in a `_test.go` file; do not export production APIs
+solely to make external tests reach private code.
+
+The reason is that a parent importing a child inverts the dependency: the child is
+supposed to be a detail of the parent, but the compiler now treats the parent as
+depending on it, so the child's API is frozen by its own parent, cycles become easy
+to create, and "what depends on what" stops being readable from the directory tree.
+
+If a parent and a child need to share code, that code belongs in the **parent**, not
+in a child the parent then imports. Do not reach for `internal/` to get around this
+— `internal/` controls *visibility*, not *direction*, and a parent importing
+`internal/x` is still a parent importing a child.
+
+Shared code that several files in one package need is just a file in that package.
+Name it for what it is, and prefix the files of a cohesive group so the grouping
+survives the flattening:
+
+```
+proxy/
+  relay.go            <- the shared bidirectional copy, used by http and socks
+  http.go
+  socks.go            <- the public SocksProxy
+  socks5_server.go    <- the socks5 protocol implementation, one package,
+  socks5_addr.go         grouped by filename prefix rather than by directory
+  socks5_associate.go
+  socks/main.go       <- a CHILD (package main) importing its parent: allowed
+```
+
+An identifier that no longer crosses a package boundary should be unexported. A
+name is exported to cross a boundary, not as decoration; collapsing a subpackage
+into its parent is a good moment to shrink the public surface back to what callers
+actually use.
+
+## Comments
+
+- Prefer short inline comments (`// ...` inside a function), 1–2 lines per point unless more is truly needed.
+- Put a doc comment at the top of each file, type, and function/method declaration, summarizing the architecture and edge cases. These can be as long as needed, but aim to be concise. Push information that applies throughout a type or file up to the type or file header instead of repeating it — in particular, concurrent goroutine safety.
+- Do not repeat the field or function name in its comment — the name is already on the declaration, so repeating it is redundant. Keep comments short and terse but effective. (This intentionally diverges from Go's start-with-the-name doc convention.)
+
+## Bug fixes
+
+- Every bug fix in every repository must include a deterministic regression test that exercises its root cause.
+- When a bug is found, look for adjacent and similar issues before considering the fix complete. A bug represents a flaw in the reasoning that produced it, and the same flaw may be applied elsewhere — check the surrounding code, sibling call sites, and other copies of the same pattern.
+
+## Commits
+
+- No AI attribution in commit messages, in any repository: no `Co-authored-by:` trailer for anyone, no "Generated with" footer or other trailer that names an AI tool, no AI tool's noreply address, and no AI session or task link. Commits that already have one stay as they are; history is not rewritten (owner decision, 2026-10-14).
+- `.githooks/commit-msg` rejects such a message. Install it once per clone, and its worktrees share it: `git config core.hooksPath .githooks`, or, in a clone that keeps git-lfs or gofmt hooks in `.git/hooks`, a copy at `.git/hooks/commit-msg`. Do not use `--no-verify` to get past it. `.githooks/commit-msg --scan <git log arguments>` lists commits that reached a branch without the check.
+
+## Database migrations and deploy order
+
+- **Migrations apply before any code deployment.** `bringyourctl db migrate` runs while the previous release still serves, and a new release's startup readiness requires the schema head. So every migration must work with the release that is running when it applies. It may add tables, columns, indexes, functions and permissive guards. It may not drop or narrow anything the running release reads or writes, and it may not bound the running release's work (a role default such as `transaction_timeout`) before that release honors the bound.
+- **Destructive changes are post-deployment cleanup migrations.** Dropping a table, column, index, trigger or guard the previous release uses, tightening a constraint, or bounding long work belongs in a later cleanup migration. Merge it only once every running job that reads or writes the database (api, connect, taskworker, alt, proxy, gossip, mcp, monitor) runs a release that no longer depends on what it removes.
+- **Prove compatibility against the running release before migrating.** Plan the running release's real query shapes (from `pg_stat_statements`) against a schema migrated to head with sequential scans disabled, and check dropped objects, new guards and session defaults against its code paths. When a pending migration is not compatible, fix the running release first, or split the migration into an additive part and a cleanup.
+
+## Routing keys
+
+A routing key is a value that decides *which* instance of something a message belongs to: the sequence lane (`Pack.force_stream` / `Pack.companion_contract`), the session role and identity companion (`TransferFrame.session_role` / `session_companion`), the handshake generation (`EncryptedControl.epoch_id`). Adding one is never a single-site change.
+
+- **Peer messages are path-independent for correctness.** `TransferKey` selects the logical send sequence and its lane/session; it does not select a transport path. The sequence's destination-keyed multi-route writer may use any live route to that peer, including exchange, direct P2P, or a multihop stream. Route knowledge may influence that choice for performance, but correctness must not depend on which route wins. In particular, do not add a transport-local stream id to `TransferKey`, the send-sequence identity, or the serialized transfer path.
+- **Source identity and transfer identity stay separate.** A receive callback gets the authenticated source as its `TransferPath` argument and the receiver-visible lane/session as `peer.TransferKey`. `TransferKey` must not repeat the source id already carried by the callback path. A reply normally sends to `source.SourceId` and passes `peer.TransferKey` as a send option so the peer's logical lane is reproduced without threading a transport path through the application.
+- **A selectable route must be usable end to end.** One connected local adjacency does not make a multihop stream live. Keep its transport alias unavailable while the stream is establishing, publish it only after end-to-end readiness succeeds, and withdraw it when the stream disconnects or loses readiness. An incomplete route is establishment state, not a slower route that ordinary traffic may try.
+- **Every delivery path must carry the key.** A message usually reaches its consumer by more than one route — the in-order drain and an optimistic fast path, a per-item call and a batch call, a live path and a replay/resend path. One path that omits the key silently reintroduces the entire class of bug the key was added to fix, and it surfaces only in the narrow race where that path wins. Adding a key is therefore: define it, stamp it at every producer, and grep for **every** consumer entry point before calling the change done.
+- **Sender-local state that selects a route must be visible to the receiver**, or the receiver cannot distinguish two live things and will collapse them into one — dropping whichever it decides is "older". If a key must stay off the wire, the sender is responsible for never running two things that differ only by it.
+- **Prefer routing a mismatch over judging it.** A message from another instance is evidence about that instance, not about this one. Judging it here produces a wrong verdict on state it does not describe (a proof for another generation fails signature verification and looks like an attack), and the wrong verdict is usually sticky. Route it, ignore it, or converge onto it.
+- **Order the key when the instances are ordered.** `Id` is a ULID, so generations compare directly: older is a straggler to drop, newer is a signal to converge. Without an ordering the receiver can only tell "different", which is not enough to decide who should move.
+- **A key with a single-slot consumer needs the key checked before the slot is taken.** Pending/first-wins state (one buffered proof per epoch, one head per sequence) is a resource a stale message can consume; validate the key first, or a straggler denies the slot to the message that belongs there.
+
+## Packet flow and durable state
+
+- **Work that holds locks needed by packets must never query PostgreSQL. Inline per-packet work must never query PostgreSQL either.** This includes indirect model/controller calls, SDK hooks, and cold cache loads on that path. Repeated forwarding and allowance checks use bounded Redis projections, with no PostgreSQL fallback or setting that can enable one.
+- A missing, expired, malformed, or unavailable packet-path projection refuses or drops the packet with bounded per-owner/per-pair admission. Never busy-wait or retain a per-packet retry queue. Contract allowance admits at most one Redis recheck per pair per second; when admission is unavailable, only an already-valid cached lease can allow delivery. Hold no packet-needed lock during I/O. Cap positive caching at five seconds and never past the returned lease deadline, respecting both absolute contract expiration and Redis freshness.
+- **Contract-hole keys use source and destination client IDs in canonical order.** The current count key is `contract-hole:v2:{<lower-client-id>:<higher-client-id>}:count`; both contract directions share its counter and membership set, and a self-pair counts each contract once. A valid positive lease allows and a valid zero denies; missing, expired, malformed, or unavailable evidence is unknown and denies. A count without matching expiring membership is not positive authority.
+- Committed contract creation adds one deduplicated member and increments its count; a newly added member renews the pair's count and membership TTL to the maximum contract lifespan, currently 60 minutes. Duplicate creation does not renew it. A meaningful final party close, dispute, terminal outcome, or deletion removes the member and decrements the count; removing the last member deletes both keys. A checkpoint preserves a resumable contract and never extends its immutable deadline. Each member expires at its own signed, persisted deadline even if a later creation extends the pair's TTL.
+- There is no periodic contract-hole refresher or packet-triggered source rebuild. Old queued refresh handlers and post retries drain as no-ops without rescheduling. Existing missing projections, including eligible legacy contracts, remain unknown and refuse delivery until a new eligible creation or explicit independent initialization/repair supplies evidence. Legacy NULL deadlines are not retroactively given a 60-minute lifespan; new signed deadlines do not prove legacy coverage or expiry.
+- Asynchronous work supporting packet flow may query PostgreSQL, including work triggered by a packet, provided packet delivery does not wait for it and it holds no packet-needed lock during I/O. Key lookup, multihop route setup, contract creation, acknowledged close, and settlement keep that independent owner. Snapshot shared state under its lock, then release the lock before durable I/O.
+- One-time proxy-device configuration and identity setup may query PostgreSQL after the proxy id signature and authenticated peer are verified. Coalesce construction by proxy id, bound failed retries, and reuse the live device; ordinary packets must not repeat setup queries.
+- A packet-path performance fix needs a deterministic regression at the real receive/forward entry point. Use a PostgreSQL acquisition tripwire for the entire inline path, and hold independent setup or control I/O at a barrier to prove established delivery still progresses. Verify healthy reuse, cold/missing/error behavior, admission boundaries, cancellation, and payload ownership. Include actual constructor wiring and a stale compatibility setting so a mocked authorization helper cannot hide an enabled source path; document the setup, control, and explicit repair boundaries.
+
+## Receive callbacks and reliable-carrier backpressure
+
+Send and receive sit on opposite sides of the backpressure contract. **Senders block**: a packet/frame send is allowed to wait (buffer full, contract wait, write timeout) because blocking the producer is how backpressure propagates toward the source. **Shared receive callbacks buffer and refuse**: a callback serving unrelated flows must never block, because stalling it stalls everyone behind the stall. A dedicated socket reader may retain one already-read message from an exactly identified reliable physical lane until fixed downstream capacity or cancellation. At a complete independently framed message boundary, refusal is also recoverable when the protocol still has a retry owner. It may add retransmission latency; it does not corrupt subsequent framing or create a permanent sequence hole merely because the physical carrier is reliable.
+
+- **Refuse overloaded complete-message handoffs without tearing down shared work.** A shared receive callback must use a 0 timeout. If full, drop/refuse and count the message while preserving the ACK/retry custody described below; keep the resident, shared carrier and unrelated flows live. Return any extra pooled share retained for the refused handoff; a borrowed callback buffer remains its caller's property. Never propagate one destination's downstream wait through a callback that serves unrelated work.
+- **Classify the exact physical receive lane, not the connection family.** Hybrid H3 publishes separate reliable-stream and DATAGRAM routes; production P2P publishes separate SCTP and native-datagram routes. H1, QUIC stream, SCTP, and framed internal TCP readers may retain only their one already-read complete message while waiting for fixed queue capacity or cancellation. H3 DATAGRAM, outer DNS datagrams, and native P2P datagrams remain zero-wait and counted on refusal. Unknown/custom lanes retain the compatibility policy rather than being guessed reliable.
+- **The final Client-to-Pack handoff must preserve ACK and retry custody.** Shared callbacks remain zero-wait even for complete Packs received on a reliable lane. Refusal must leave the exact item eligible for retry; do not advance the delivered prefix or publish a selective/cumulative acceptance promise for an undelivered item that has no retained recovery owner. If admission already advanced that state, make the transition reversible or retain bounded custody; simply removing cancellation is not proof of safe refusal. A dedicated reader may retain one message under the fixed count/byte-bounded lane contract, but Transfer ordering alone does not justify blocking a shared pump.
+- **A bounded carrier adapter may separate admission from forwarding.** The carrier reader must still offer into that adapter with a zero-wait send and drop immediately on refusal. One adapter-owned forwarding worker may wait on its consumer, because the carrier reader is insulated by the queue; the queue must have independent hard message and byte bounds, cancellation must join the worker, and every queued pooled buffer must be returned before lifecycle completion. Do not share that waiting worker across independent carrier readers.
+- **An unreplayed raw byte-stream fragment cannot be dropped and skipped.** If the refused unit is arbitrary stream bytes rather than a complete independently recoverable message, continuing can corrupt the stream's framing. Close the smallest affected stream/connection generation whose protocol requires reconnect; do not wait in a shared callback. This rule does not apply merely because a complete Transfer message arrived over TCP, QUIC or SCTP. Authentication failure, malformed framing, terminal revocation and explicit lifecycle shutdown keep their separate close rules.
+- **Do not call a blocking send from inside a receive callback.** A send blocks by design, which makes it exactly the thing a receive callback must not contain. Hand the data to a queue owned by a sender goroutine instead, with a 0-timeout enqueue as above.
+- **Identify the recovery owner at the exact refused boundary.** A complete retriable Transfer message can be refused after carrier delivery while its originating sender still owns retry. Physical carrier ACKs do not transfer application delivery responsibility. If an end-to-end ACK or application acceptance has already released that retry owner, retain the accepted item or use the protocol's explicit recovery/failure path; do not silently discard it or ACK an undelivered duplicate. No-ACK messages use their defined loss semantics and refusal counters, not an invented retry guarantee or unrelated-flow teardown. Never infer this contract from H3/P2P or reliable-carrier metadata alone.
+- The failure shape when this rule is broken is **head-of-line blocking across unrelated flows**: receive delivery is fanned out from shared pumps (a dispatch shard serves many flows; a client receive loop serves every sequence from a source), so one blocked callback parks every flow sharing the pump. One dead destination whose return send blocks for its full write timeout can starve delivery for all live destinations for that entire window — observed as flows that look dead on arrival while their peer is provably alive.
+
+The device-side tun write is one deliberate callback exception, documented at its call site: its synchronous handoff provides flow control; provider TCP replay is a bounded recovery backstop for loss after Transfer delivery. The provider's local-NAT TCP return callback is another: it runs on one flow's socket-reader or recovery goroutine, with origin bytes retained until the inner TCP acknowledges them. It may retry Transfer admission synchronously on that dedicated flow goroutine to propagate pressure without manufacturing retransmissions. Dedicated exact-lane reader waits above retain fixed ownership and end at capacity or lifecycle cancellation. Do not put these waits behind a shared callback worker, extend them to UDP/ICMP/datagram lanes, or infer them from a transport family. An exception must be argued like these — in a comment, from the specific loss model — not assumed.
+
+The provider TCP sequence's pure-acknowledgement worker is also per flow. It may retain its single regenerable acknowledgement while bounded Transfer admission waits, because refusing it after construction can stall the peer behind a full send window. Provider or flow cancellation joins that wait and returns the pooled packet. This exception does not apply to duplicate resets, unreachables, arbitrary synthesized controls, or public receive callbacks; those still use zero-wait refusal on the shared workers.
+
+## Load and recovery
+
+- **Budget retry amplification.** Count failed attempts' downstream work across callers and replicas, including setup and cleanup. Coalesce equivalent attempts, back off repeated failures, and stop retrying definitive failures for unchanged inputs.
+- **Bound work examined, not just results returned.** Startup, cleanup and metrics must bound work per pass as backlogs grow. Use indexed cursors for database scans; checkpoint resumable progress so one failed item does not restart the scan.
+- **Recovery must remain runnable under pressure.** A wait must not depend on work needing the same occupied worker, held lock or exhausted capacity. Prove recovery can dispatch while ordinary admission is blocked.
+- **Queued work keeps its owner's lifetime.** Until explicit ownership transfer, preserve the operation's deadline and cancellation across capacity waits. Retiring that owner must withdraw waiting work while shared parents remain live. A later write timeout does not bound earlier admission.
+- **Capacity changes need total-cost accounting.** Include descriptor arrays, retained roots, child budgets and native resources. Increase queue depth only with a draining consumer and measured performance benefit, keeping latency, fairness and total memory within declared bounds.
+
+## Tunables live in settings
+
+- **No global or hard-coded tunables.** Every timing value is a field of the owning component's settings struct: timeouts, intervals, debounces, holdoffs, grace periods, TTLs, backoff bases and caps, jitter bounds. So is every other value that tunes behavior: retry counts, concurrency caps, and size limits that are policy rather than protocol. The value is set by the settings' `Default...Settings()` constructor and read from the settings instance where it is used. Do not add package-level `const`/`var` tunables, and do not write inline duration or count literals into logic.
+- **Why.** A number buried in a constant cannot be tuned per owner or platform (mobile, desktop, provider, server). A test cannot override it without waiting out real time. And it drifts out of sight of whoever tunes the system next. One field, one default, one doc comment keeps every tunable discoverable and overridable.
+- **One default, one place.** The defaults constructor is the only source of a default value. Platform policies and owners adjust the settings they pass down (the `applyMobile...` pattern) rather than keeping a second copy of the number. Document each field with its unit, the reason for its default, and what a zero or negative value means (for example "non-positive disables").
+- **Exceptions are facts, not tunables.** Protocol and format values stay named constants: wire sizes, field lengths, protocol versions, enum values. So do mathematical constants and values whose change would break compatibility. Tests may use literals to configure settings.
+- **Migrate when you touch it.** When a change touches code that reads a legacy constant tunable, move that tunable into settings in the same change, as with process-global budgets below.
+
+## Concurrency and goroutine safety
+
+- By default, package-level functions are assumed safe for concurrent use, and a type's methods are assumed NOT safe unless the type documents otherwise.
+- **Budgets are owned by instances, not by the process.** A client, probe, device, transport group, or other lifecycle owner constructs its own memory, carrier-count, queue, and concurrency budgets and passes them through settings to the instances it creates. Descendants may share an explicitly passed parent budget when they belong to the same owner; unrelated instances must not silently contend for a package-level singleton. A default settings function may choose limit *values*, but it must not return a shared mutable budget object. Do not add new `Set...Budget` process-global controls or use a process-global budget as a shortcut for per-instance ownership; migrate legacy globals at the owning construction boundaries when touching them. The Go runtime memory limit and shared allocator free-list bounds are process resources, not substitutes for owner-level admission budgets.
+- **DoH state follows the same owner boundary.** Each independent probe, hosted device, or tunnel owns its resolver cache, request admission, and lifecycle. Sharing immutable resolver settings or a parent directory is fine; sharing a mutable DoH cache or semaphore between unrelated owners is not. Test simultaneous owners and verify closing one leaves the other's resolver usable.
+- Hold a lock across the smallest scope that needs it. The idiom is an immediately-invoked closure: `func() { self.stateLock.Lock(); defer self.stateLock.Unlock(); ... }()`.
+- Every potentially infinite loop must take a context (for cancellation) and rate-limit itself (to avoid busy-spinning).
+- Use `connect.Reconnect` for reconnect rate limiting.
+- Prefer `connect.MonitorValue[T]` over a bare `Monitor` whenever the thing being watched is a value. It pairs the value with its notification so neither half of the contract below can be broken: `Get` hands back the value and a channel armed at the same instant, and `Set`/`Update` notify inside the same critical section (and only on an actual change, so a loop that elects the value it also watches converges instead of waking itself forever). Reach for a bare `Monitor` only when the state is not a single comparable value.
+- A `Monitor` has two halves, and both fail silently. **Every mutation of the monitored state must notify**, and **every consumer must subscribe immediately before its read**. A mutation that forgets to notify parks its waiters forever — a monitor with no `NotifyAll` at all is dead on arrival and nothing will tell you.
+- Notify from inside the same locked scope as the mutation, so the state change and its notification cannot be separated: `func() { self.stateLock.Lock(); defer self.stateLock.Unlock(); if self.x == x { return }; self.x = x; self.monitor.NotifyAll() }()`. Gate the notify on an actual change — an unconditional notify lets a loop that also writes the state wake itself in a cycle.
+- `NotifyAll` closes the live channel and swaps in a fresh one, so a channel from `NotifyChannel` is a one-shot edge: once it fires it stays fired until you re-subscribe. A loop that waits on a channel it never re-subscribes to will hot spin the moment it takes a wake without exiting.
+- Subscribe *immediately* before reading the monitored state — `update := monitor.NotifyChannel()` — then `select` on it while waiting for changes. When the state is lock-guarded, subscribe and read in the same locked scope.
+- Nothing may block between the subscribe and the read. Both orderings fail silently, in opposite directions:
+  - subscribing *after* the read loses an update: a change in between closes the channel that was already discarded, so the loop stalls until an unrelated change arrives.
+  - subscribing well *before* the read duplicates work: a change in that gap is already carried by the read, and it also closed the channel that was subscribed, so the next iteration fires immediately and redoes the same work on identical state.
+- The monitor delivers edges, but a read of the current state delivers a level. Any change that lands before the read is already in the result, so re-arming for it does not "avoid missing" it — it double counts it. Keep the gap between subscribe and read empty and the two agree.
+- A coalescing emitter — at most one emit per epoch, carrying the complete state — waits for the change, sleeps the epoch, and only *then* subscribes and reads/emits. Subscribing before the epoch sleep is the duplicate case above: the burst's changes are already in the snapshot, and they leave the next round armed, so an identical emit fires one epoch later. See `DeviceLocal.watchNetworkPeers` in the sdk for the reference shape.
+
+## Goroutine lifecycle
+
+- Start a type's internal management goroutines in its constructor, so the returned object is already fully running. The lifecycle loop is conventionally `func (self *T) run()` — lowercase, internal, started by the constructor. When a type has a single internal lifecycle/maintenance loop (e.g. one goroutine that periodically evicts TTL state), name it `run`; give specific names only when a type has several distinct long-lived loops.
+- Exception: when an external manager must clean up after the lifecycle, expose `func (self *T) Run()` (uppercase) instead. The manager calls `Run()` after construction and tears the object down when `Run()` returns. Casing carries the meaning: lowercase `run()` is internal and self-started; uppercase `Run()` is externally driven.
+- A client-owned callback must never call `Client.CloseAndWait` directly. Receive, forward, ack, contract-status, contract-stats, encryption-event, peer-identity, and P2P callbacks can execute inside the worker tree that `CloseAndWait` joins; calling it there can self-join forever. A callback may request non-joining `Close`/`Cancel`, or hand shutdown to an owner goroutine outside the client tree.
+- Out-of-band control is an explicit ownership boundary. The client's launcher is owned until `SendControl`/`SendControlWithCtx` returns; after return, the OOB implementation owns its request, frames, and callback and the client does not join that external work. The one-shot `CloseContract` fallback started with `context.Background()` after client shutdown uses the same transfer deliberately; server-side contract expiry is its failure backstop.
+- Wait with `time.After` inside the run loop by default; we don't reach for `time.Timer` for the convenience of it.
+- Exception — hot-path timer reuse: in a per-packet (or otherwise hot) loop, where profiling shows the per-iteration `time.After` allocation is a significant share of allocations, reuse a single `time.Timer` instead. Create it with `time.NewTimer(0)` before the loop, `defer timer.Stop()`, and `timer.Reset(d)` immediately before each blocking `select` that reads `timer.C`. This relies on go1.23+ timer semantics, where `Reset` guarantees no stale fire is delivered afterward, so the drain dance is unnecessary and the initial already-fired state is harmless. Reach for this only with a profile that justifies it, not preemptively.
+- **Detection bounds and healthy-operation tolerance are correctness; never trade them for CPU.** Preserve both how long a stalled operation may run and the full budget a healthy operation may use. Reusing an earlier deadline can reject a healthy successor early. A callback watchdog must not expire a successor from a stale observation or close a connection after physical I/O succeeded but before its owner resumed. Native socket deadlines preserve this completion boundary; replacing them needs deterministic tests for both orderings, as well as exact stalled-I/O controls.
+- **Prove heartbeat redundancy on the actual path.** TCP's idle + interval × count is a conditional idle-probe schedule, not a universal dead-peer bound: outstanding data suppresses keepalive probes, so retransmission or application deadlines may govern instead. QUIC has its own acknowledgement and idle rules. A successful buffered heartbeat write alone does not prove the peer received it. Test loss with real transport behavior and preserve an independent liveness owner for every route sharing a listener, including ordinary HTTP and streaming services. A heartbeat timer advances only after a successful frame write; filtered input must not postpone it. See server/CPUOPT-KEEPALIVE.md.
+- **Shared detection work must not wait on logging or other external callbacks.** Publish every owner's recovery state independently of the sink, bound pending diagnostics, and release queued references on unsubscribe/cancellation. A noncancellable logger call may outlive shutdown; do not join it from the detection owner's close path. Test a blocked sink with healthy siblings and another detection pass.
+
+## Logging
+
+- Components log through a `Logger` (see `log.go`), not the global glog functions.
+- Guard every verbose log statement that takes format arguments — `if self.log.V(2).Enabled() { self.log.Infof("[tag]...", a, b) }`, never a bare `self.log.V(2).Infof("[tag]...", a, b)`. The variadic arguments (and any `fmt` / `.String()` work among them) are boxed into an `[]any` at the call site *before* the level is checked: Go's variadic + interface-dispatch semantics defeat escape analysis, so a disabled level still heap-allocates on every call. The `Enabled()` guard skips all of it. This matters most on per-packet paths but is the rule everywhere, for consistency.
+- Unconditional `Infof` / `Warningf` / `Errorf` (no `V(n)`) always emit, so they need no guard; a verbose call with no arguments boxes nothing and needs none either.
+
+## Formatting and structure
+
+- Format with `gofmt`.
+- Write binary size constants as products of well-known decimal values, such as `1024 * 1024` or `16 * 1024 * 1024`, rather than shifts such as `1 << 20` or `16 << 20`.
+- Inline single-use helper logic as a local closure at its call site (`f := func(...){ ... }; f()`) rather than pulling it out into a separate named function.
+
+## Tests
+
+Temporary investigation helpers and diagnostic programs must be written in Go
+by default. Use another language only when a clear task-specific requirement
+or concrete benefit justifies it; if Go is unavailable, prefer Python as the
+fallback. The helper should exercise the same Go dependencies and data model as
+the system when that matters to the finding. Do not infer a Go-path root cause
+from a different-language reproduction without cross-validating it in Go.
+
+- **Test data must never contain production identity or secrets.** Do not copy
+  tokens, credentials, private route prefixes, customer/account identifiers,
+  real hostnames or domains, public or private IP addresses, or other live
+  configuration values into test code, fixtures, golden files, comments, or
+  snapshots. Use visibly synthetic names, `.example` hostnames, RFC-reserved
+  documentation addresses (`192.0.2.0/24`, `198.51.100.0/24`,
+  `203.0.113.0/24`, and `2001:db8::/32`), and generated test-only identifiers.
+  When reproducing a length, collision, parser, or topology boundary, construct
+  an equal-or-more-demanding synthetic value and test the invariant rather than
+  retaining the production literal. Sanitize any production capture before it
+  becomes a fixture; keep necessary raw incident evidence outside the source
+  repository under its restricted evidence policy.
+- **Deterministic reproduction is a completion gate.** A bug fix is not complete until a regression test deterministically reproduces the pre-fix failure and verifies the corrected behavior. Use explicit barriers, hooks, or state transitions to force the relevant ordering; do not make sleeps, short negative timeouts, queue-length polling, or scheduler luck the primary proof. Race, ownership, stale-generation, and topology bugs each need a test at the layer where the broken behavior is observable so the same issue cannot silently return through another path.
+- **Exercise the composed path.** For cross-layer bugs, use public entry points with the relevant admission, duplicate suppression, acknowledgement and downstream-refusal policies enabled. Test a canceled child with shared parents and healthy siblings still running.
+- **Overload tests must prove isolation and recovery.** Saturate the actual receive boundary while a healthy sibling remains active. Verify immediate refusal, unchanged shared lifetime, exact retry/deduplication, counted no-ACK loss, no false delivery ACK and balanced buffer ownership. Retain fatal-error and explicit-shutdown controls.
+- **Benchmark enabled production behavior.** Use effective constructor settings and enabled features. Match workloads, timing boundaries and calibration; report failed attempts beside latency percentiles, and measure allocation and full-footprint costs.
+- Each test is a top-level `func TestXxx(t *testing.T)`. Normal (positive) tests do not use `t.Run` subtests: if cases are logically separate, write separate top-level tests; if they are homogeneous variations of one thing, use a plain table loop (`for _, c := range cases { ... }`) reporting with `t.Errorf`/`t.Fatalf`.
+- `t.Run` is appropriate only when the subtest boundary itself is the point — notably when a test deliberately runs a subtest that is expected to FAIL and asserts that failure. The subtest isolates and captures the failure so the parent can check it.
+
+## Struct creation
+
+- When initializing structs, always use explicit field names — `T{field: value}`, not `T{value}`.
+
+## Capitalization
+
+- In comments we do not use all upper case. If there is an important concept, use a concise name in lowercase for readability. Use plain words for names where possible e.g. "identity companion"
+
+## Locking
+
+- Never acquire another connection of a resource type while the caller still holds that type. A model function must call the callee's `...InConn`, `...InTx`, or corresponding `...InX` variant and pass the caller's connection or transaction; add that variant when it is missing. Keep acquisition at the outer ownership boundary. PostgreSQL `Db`, `Tx`, `OwnedTx`, `MaintenanceDb`, `MaintenanceTx`, and `ReplicaDb` all count as the same connection type, even when they use different pools. Redis connections likewise share one type. The rule applies directly and through helpers: PostgreSQL may call Redis while retaining its PostgreSQL connection, but a callee reached through Redis must not acquire PostgreSQL again until that original connection is released. Different connection types may be held together only without reacquiring any type already held.
+- Never nest database transactions, including savepoints. A model function running inside a caller's transaction must use that same transaction through the callee's `...InTx` variant. Beginning the first transaction on an existing caller-owned connection is allowed; beginning another transaction or savepoint while a transaction is active is not.
+- Minimize contention wherever possible; allow eventual consistency and asynchronous exception cleanup when they reduce contention, and document the consistency tradeoff and recovery behavior.
+- Functions that are expected to be called with one or more state locks should be named "*WithLock". Inversely, functions that do not have "*WithLock" should expect to be called with no state locks.
+- Operations on locked state should be as tightly scoped as possible.
+- Calls to external objects must not hold a state lock. This is generally an implication of the "WithLock" rule.
+- Locks must always be acquired in consistent order.
+- Do not use re-entrant locks because they will mask locking issues.
+
+## Message Pool
+
+Pool buffers (`MessagePoolGet`) have a single owner that is responsible for returning them (`MessagePoolReturn`). Ownership moves by these rules:
+
+1. **A successful send takes ownership.** When a buffer is handed to a sender and the send returns success, the sender now owns the buffer and is responsible for returning it.
+2. **An unsuccessful send leaves ownership with the caller.** If the send returns not-success, the caller still owns the buffer and must return it (or reuse/retry it).
+3. **A callback buffer is borrowed, valid only for the call.** A buffer passed to a callback is owned by the caller and is only valid for the duration of that call. To use it beyond the callback (e.g. to forward it on a channel or hand it to another goroutine), the callback must take a shared copy with `MessagePoolShareReadOnly` and pass that copy on; ownership of the copy then follows the send rules above.
+
+### Which entry points borrow, take, or take on success
+
+Adjacent entry points a layer apart differ, and nothing in their names says
+which. Three test cells and one adopted helper leaked or over-returned before
+this was written down, each by calling one of these as if it were another.
+Every new entry point goes under one of these headings, and its doc comment
+says which in those words. `TestEveryPoolBufferEntryPointDeclaresItsOwnership`
+(`pool_ownership_heading_test.go`) reads this list against the package source,
+so an entry point added here without the word in its own doc comment, or
+renamed out from under the list, fails rather than waiting to be noticed.
+
+**Borrows** — valid for the call, a share kept where the callee needs one, and
+the caller still owns the original afterwards. A caller that built the buffer
+must return it after the call.
+
+- `RemoteUserNatProvider.Receive`, `receiveTransfer`, `receiveTransferWithRecovery`
+- `RemoteUserNatProvider.ReceiveBatch`, `receiveTransferBatch`
+- `TcpSequence.retainReturnChunk`
+- every `ReceiveFunction` / `ReceivePacketFunction` callback
+
+**Takes** — ownership moves at the call and the buffer is returned by the
+callee. The caller must not return it and must not use it afterwards.
+
+- `TcpSequence.receivePacket`, `TcpSequence.receiveBatch`
+- `ipPacketGroupBatch.offer`
+- `RemoteUserNatMultiClient.SendNativePacketBatch`, `SendNativePacketBatchWithResults`
+- `UpgradeMux.SendNativePacketBatch`
+
+**Takes on success** — a true return transfers ownership; a false return
+leaves it with the caller, who must return it.
+
+- `LocalUserNat.SendPacket`, `SendPacketWithTimeout`, `SendPackets`
+- `Client.SendWithTimeout`, `SendWithTimeoutDetailed`
+- `Client.sendWithTimeoutAdmissionDetailed` (internal admission diagnostics)
+- `RemoteUserNatMultiClient.sendPreparedPacketGroup`, `sendParsedPacketGroupAttempt`
+- `RemoteUserNatMultiClient.sendNativePacketGroup`
+
+A batch entry's true return reads as a transfer and means delivered; the
+per-buffer ownership is the heading it sits under, not what the boolean
+suggests.
+
+Fixtures should call a borrowing entry through one helper that returns the
+buffer after the call, so the correct pattern is the easy one, and should run
+the pool boundary reconciliation in cleanup, which catches the leak direction
+as well as the over-return direction.
+
+# Sidecar rules
+
+Everything above is connect's CODESTYLE.md, adopted whole (§4.9). Where it names connect's own types and files, read it as the pattern for the same thing here. The rules below add what this repository needs, and `make check` enforces the ones it can: each is a row of §4.7's fails-on block, or a rule beside one, in `check/`.
+
+## Leaf packages
+
+Dependencies point one way, and these packages are the leaves everything else rests on. "A package must never import its own subpackages" has one exception: the root over `protocol`, and `protocol` over `protocol/bridge` (owner decision 52).
+
+- **The root** imports only `protocol` and `protocol/bridge` of this module. Never `device/`, a `<svc>service` or `mcp/`, in a test of `package sidecar` either. An external `package sidecar_test` is a consumer and may.
+- **`protocol`** imports only std, protobuf and `protocol/bridge`.
+- **`protocol/bridge`** imports only std and protobuf. It is the sole home of every type the device role parses: a type both packages use is declared there and nowhere else, because a duplicate panics at init in anything that links both.
+- **`device/`** imports connect and `protocol/bridge`, beside std and the protobuf runtime those types rest on. The iOS extension links it, and its closure must hold neither the root nor `protocol` (D-SDK-20), so a helper it wants from the root moves to `protocol/bridge` or is written again. That binds its files under `sidecar_testhooks` too.
+- **Anything new starts as a client.** A package that is not a `<svc>service` or under `sidecartest/` may not import a `<svc>service`, from the day it appears.
+
+## Host and engines
+
+- **Engines live in `<svc>service` packages**, import the root, and are imported only by server. `sidecartest` hosts them in-process for tests.
+- **An engine never imports server.** What it needs from its host comes through `ServiceHost` and the stores its package declares, so go-redis, minio-go and prometheus stay out of this repository.
+- **Nothing server-shaped goes in the root.** Client and shared code does, in `<service>_` prefixed files, which the root's single package groups by name.
+- **Build tags carry the seams.** A root file that uses package connect, and every `host_*.go`, carries `!sidecar_http`, because connect links gVisor into every importer and the page Worker's leg links neither. Everything else in the root uses the root's own `Id`, `Logger`, `MonitorValue`, `CallbackList` and `SidecarApi`, and converts to connect's types only in a connect-facing file. Desktop-only code lives in `cli/` or carries `!ios && !android && !sdk_mobile_bind`. GOOS=ios satisfies `darwin` and GOOS=android satisfies `linux`, so a file meant for the desktop says so.
+
+## Dependencies
+
+- **Modules.** Beside this repository's own, a sidecar module requires connect and connect's replaced forks, and third-party modules. Never server, sdk, sn, proxy or userwireguard. The root requires no module of this repository, so `cli/`'s and `smtpproof/`'s requirements stay out of consumers' graphs.
+- **`dependencies.yml` lists each module** a leg links, with its SPDX id, why it is here and the legs that link it (client, engine, cli, test). Add the row in the change that adds the require, and drop `planned: true` in the change that first links a planned module, which `make check` reminds you of. It reads each linked module's id against the module's own license files.
+- **Licenses** are MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC or MPL-2.0. GPL family, SSPL, BUSL, custom and unlicensed modules are refused. A familiar license with an added clause is custom.
+- **Versions.** A shared module matches connect, sdk and server, because an uncoordinated bump fails server's `-mod=readonly` build. `golang.org/x/text` is one version on every leg, §11.14's normalizer 1's, and a new version is a new normalizer, not a bump.
+- **Replaces** are §4.7's four, and a nested module repeats them one level up, plus this repository's own. Go does not inherit a replace. Any other goes through an owner decision.
+- **No cgo**, except `keychain_darwin.go` in §5.10's darwin fallback leg. A third-party cgo file on a leg is named in `check/settings_test.go`, with why it stands.
+- **No `net/rpc`, no template packages and no `reflect` `Method` or `MethodByName` calls** in anything a phone or a page links. Each one turns off the linker's method pruning (§18.10), and `make size` holds what the device role adds to 1 MiB.
+- **Tools** do not enter a `go.mod`. A `tool` line adds its requirements to every consumer's graph, so §4.7's protoc-gen-go is the only one, and `check/` fetches govulncheck by version.
+
+## Generated code
+
+Run `make proto` from the repo root, and commit the `.pb.go` files. Files register as `protocol/<name>.proto` and `protocol/bridge/<name>.proto` in package `urnetwork.sidecar` (§4.9). Never regenerate on a release branch.
+
+## Test hooks
+
+- From M0's `mls_*` on, call `testHookSecret` at every key creation, derivation and unwrap, and `testHookBarrier` at and around every linearization point. Call each with no state lock held.
+- Both are empty without the `sidecar_testhooks` tag, and no release leg builds with it. `make check` reads every package's pair, not just the root's.
+- A package other than the root that needs them keeps its own unexported pair under these names and this tag: empty under `!sidecar_testhooks`, and under the tag forwarding to the root's `TestHookSecret` and `TestHookBarrier`, and nothing else. `device/` may not import the root, so its tagged file keeps a `SetTestHooks` of its own instead, and `sidecartest` installs on both. Hooks are functions, never variables, because a variable can be set in a release.
+
+## Tests
+
+- `make check` and `make size` are Go tests in `check/`. A new rule gets a test that plants its violation, and a row in `failsOnRows`.
+- Tests here do not write a quoted first-party module path in `check/`: the release's sed rewrites those (§4.9).
