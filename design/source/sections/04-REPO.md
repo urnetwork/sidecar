@@ -79,6 +79,7 @@ sidecar/            github.com/urnetwork/sidecar, package sidecar
 | sockets (§9) | `socket_`, `socketsservice` | server/cli/sockets |
 | gkm (§10) | `mls_`, `gkm_`, `gkmservice` | server/cli/gkm from v0 (D-OPS-2); reconciler in taskworker |
 | evs (§11) | `evs_`, `evsservice` | server/cli/evs; GC, packing, drop jobs and the metadata write budget's loop in taskworker (§19.4) |
+| File cluster (§19.6; owner decision 195) | `ServiceHost.Blobs`, an interface only | `urnetwork/minio`, a public fork, holds D-OPS-20's build and MinIO's AGPL source; no module here imports it, and server's Blobs client is minio-go, Apache-2.0 (server/blob.go) |
 | dns (§12) | `dns_`, `dnsservice` | server/cli/dns on the dns edge (owner decision 71) |
 | tlsedge, certs (§13) | `tls_`, `tlsedgeservice`, `certsservice` | server/cli/tlsedge; taskworker |
 | smtpedge (§14) | `smtp_`, `smtpedgeservice`, `smtpproof` | server/cli/smtpedge |
@@ -195,7 +196,7 @@ legs        sdk's (sdk/dependency_boundary_test.go:81-92), gomobile's CGO_ENABLE
 
 ### 4.8 Branches and cross-repo pinning
 
-- **Branches.** Each repo a milestone touches (§23.4) gets a `sidecar` branch on its normal remote, public where the repo is (owner decision 118); the extension and apps only if the owner opts in. `main` stays production-ready (build/README.md:5).
+- **Branches.** Every repo the work touches gets a `sidecar` branch at M0 (§23.4; owner decision 196), on its normal remote, public where the repo is (owner decision 118); the extension and apps only if the owner opts in. `urnetwork/minio`, the new fork that holds D-OPS-20's build, is a sibling checkout with its own `sidecar` branch, and the owner creates its GitHub repo before any push (owner decision 195). `main` stays production-ready (build/README.md:5).
 - **Pins.** server@sidecar's lock and build@sidecar's submodules pin the same `sidecar` commits, which server's source-graph tests confirm.
 - **Merge, never rebase.** A rebase orphans pinned commits and skips the commit-msg hook (connect/.githooks/commit-msg:17-18). Merge `main` in weekly and before each gate, in the order connect, sidecar, sdk, sn, server, warp/config/vault/xops/mmm, build, re-pinning each time.
 - **To `main`** at each milestone's Gn-out (§23.8): every touched repo, server and sdk included, in that order, once the pinned set passes its checks, migrations are additive and release-compatible (connect/CODESTYLE.md:85-89), connect's default-off changes lead and the code is dark (D-OPS-10). Branch migrations stay pending until their own Gn-out registers them (D-OPS-6), so one track's merge never applies the other track's group, and M3's pilot runs on production (owner decision 118; §23.9).
@@ -225,7 +226,7 @@ fixture    the tags served through GOPROXY=file:// with GOWORK=off, an empty mod
            prover dependency
 ```
 
-- **License and style.** The full MPL-2.0 text, copyright 2026 BringYour, Inc., is the first `sidecar` commit and reaches `main` at M0's Gn-out; GitHub reads connect's abbreviated notice (connect/LICENSE:1-3) as "Other". CODESTYLE.md adopts connect's plus the leaf, host and dependency rules; `.githooks/commit-msg` is copied byte for byte into sidecar, config and vault before their first `sidecar` commit.
+- **License and style.** The full MPL-2.0 text, copyright 2026 BringYour, Inc., is the first `sidecar` commit and reaches `main` at M0's Gn-out; GitHub reads connect's abbreviated notice (connect/LICENSE:1-3) as "Other". CODESTYLE.md adopts connect's plus the leaf, host and dependency rules; `.githooks/commit-msg` is copied byte for byte into sidecar, config, vault and minio before their first `sidecar` commit.
 
 ### 4.10 CLI distribution
 
@@ -237,7 +238,7 @@ fixture    the tags served through GOPROXY=file:// with GOWORK=off, an empty mod
 
 - **`git-remote-ur`** ships beside `ur` in every package as a link to the same binary, which dispatches on argv[0] (a copy in the Windows zip); git runs it for `ur://` URLs from PATH (gitremote-helpers(7); §11.11), so Windows users add the zip's directory to PATH.
 - **Build.** `CGO_ENABLED=0 -trimpath` from `cli/`'s module, archive times from `SOURCE_DATE_EPOCH` (server/cli/api/Makefile:1, 4); macOS's keychain goes through purego (D-CORE-12).
-- **Release integrity.** Signing is the gate (owner decision 77): a VirusTotal scan (run.sh:2257-2298), then a `SHA256SUMS` SSH-signed by an offline two-person Ed25519 key (§2.6), whose public key the repo and ur.io publish. `install.sh` on ur.io (mmm's branch from M1, §23.4; owner decisions 15, 16) pins the key, verifies signature and checksum (`ssh-keygen -Y verify`, OpenSSH 8.1+) and refuses on any failure.
+- **Release integrity.** Signing is the gate (owner decision 77): a VirusTotal scan (run.sh:2257-2298), then a `SHA256SUMS` SSH-signed by an offline two-person Ed25519 key (§2.6), whose public key the repo and ur.io publish. `install.sh` on ur.io (mmm's branch from M0, §23.4; owner decisions 15, 16, 196) pins the key, verifies signature and checksum (`ssh-keygen -Y verify`, OpenSSH 8.1+) and refuses on any failure.
 - **Harness configs (§16)** use `ur`'s absolute path, since GUI-launched hosts lack the shell PATH ([MCP debugging](https://modelcontextprotocol.io/docs/2025-03-26/tools/debugging.md)). v0 has no self-updater.
 
 ### 4.11 The documents in the sidecar checkout
