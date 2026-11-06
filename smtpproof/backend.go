@@ -33,6 +33,9 @@ func partShapes() []*partShape {
 	return []*partShape{
 		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4},
 		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 1},
+		// sized for D-SMTP-16's 10 recipients and a typical EHLO reply
+		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
+		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 12, serverBlocks: 6, localOctets: true},
 	}
 }
 
@@ -43,7 +46,7 @@ func partShapeFor(statement *partStatement) (*partShape, error) {
 		if shape.version != session.version || shape.suite != session.suite {
 			continue
 		}
-		if statement.index == 1 && shape.kind == partKindEhlo {
+		if (statement.index == 1 && shape.kind == partKindEhlo) || (statement.index == 2 && shape.kind == partKindEnvelope) {
 			if _, err := partAssignment(shape, statement); err == nil {
 				return shape, nil
 			}
@@ -112,7 +115,7 @@ func (self *groth16Backend) provePart(ctx context.Context, statement *partStatem
 	if err != nil {
 		return nil, err
 	}
-	assignWitness(circuit, witness)
+	assignWitness(circuit, statement, witness)
 	full, err := frontend.NewWitness(circuit, ecc.BN254.ScalarField())
 	if err != nil {
 		return nil, err

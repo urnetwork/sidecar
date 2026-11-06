@@ -23,6 +23,7 @@ type partKind uint8
 
 const (
 	partKindEhlo partKind = iota + 1
+	partKindEnvelope
 )
 
 // A compiled circuit's fixed dimensions. A statement fits a shape if its records fit its blocks.
@@ -31,6 +32,8 @@ type partShape struct {
 	version      uint16
 	suite        uint16
 	clientBlocks int
+	// Server keystream blocks, which hold the replies the part covers (Z7, Z8).
+	serverBlocks int
 	// Whether the pool's template can hold a local part. π1's cannot, which saves a table per octet.
 	localOctets bool
 	// Leaves Z1 out, so tests can run every other check quickly over keys given as a witness.
@@ -69,6 +72,24 @@ type poolBlock struct {
 	IsLocal   []frontend.Variable `gnark:",public"`
 }
 
+// One keystream block of server records, with what the edge knows of each position from lengths.
+type serverBlock struct {
+	Counter frontend.Variable   `gnark:",public"`
+	Cipher  []frontend.Variable `gnark:",public"`
+	// A content octet, as opposed to a record's type octet or the unused tail of its last block.
+	Active []frontend.Variable `gnark:",public"`
+	// 1.3: the record's final octet, its inner type.
+	TypeOctet []frontend.Variable `gnark:",public"`
+	// The record's first octet.
+	FirstOctet []frontend.Variable `gnark:",public"`
+	// The 16 octets from here are all content of one record, so a keyword can match at it.
+	WindowActive []frontend.Variable `gnark:",public"`
+	// This block continues the previous block's record.
+	Continues frontend.Variable `gnark:",public"`
+	// Whether this block's record is a ticket. Private: §2.8 smtp-2 lists no such value (Z7).
+	Ticket frontend.Variable
+}
+
 // The circuit. Sized by its shape, which every instance of a compiled circuit shares.
 type partCircuit struct {
 	shape *partShape
@@ -78,12 +99,19 @@ type partCircuit struct {
 	HelloHash    []frontend.Variable `gnark:",public"`
 	FinishedHash []frontend.Variable `gnark:",public"`
 	Client       []*poolBlock
+	Server       []*serverBlock
+	// How many replies the part's server records must hold in all (Z8).
+	ExpectedReplies frontend.Variable `gnark:",public"`
+	// 1 if the EHLO reply must offer CHUNKING (Z9).
+	RequireChunking frontend.Variable `gnark:",public"`
 
 	// 1.3: HS, in bits.
 	HandshakeSecret []frontend.Variable
 	// When a test shape leaves Z1 out, the keys themselves.
 	ClientKey []frontend.Variable
 	ClientIv  []frontend.Variable
+	ServerKey []frontend.Variable
+	ServerIv  []frontend.Variable
 }
 
 func newPoolBlock(blockBytes int) *poolBlock {
@@ -104,11 +132,26 @@ func newPartCircuit(shape *partShape) *partCircuit {
 		HandshakeSecret: make([]frontend.Variable, 8*tlsSecretBytes),
 		ClientKey:       make([]frontend.Variable, 8*shape.keyBytes()),
 		ClientIv:        make([]frontend.Variable, 8*tlsIv13Bytes),
+		ServerKey:       make([]frontend.Variable, 8*shape.keyBytes()),
+		ServerIv:        make([]frontend.Variable, 8*tlsIv13Bytes),
 	}
 	for range shape.clientBlocks {
 		circuit.Client = append(circuit.Client, newPoolBlock(shape.blockBytes()))
 	}
+	for range shape.serverBlocks {
+		circuit.Server = append(circuit.Server, newServerBlock(shape.blockBytes()))
+	}
 	return circuit
+}
+
+func newServerBlock(blockBytes int) *serverBlock {
+	return &serverBlock{
+		Cipher:       make([]frontend.Variable, blockBytes),
+		Active:       make([]frontend.Variable, blockBytes),
+		TypeOctet:    make([]frontend.Variable, blockBytes),
+		FirstOctet:   make([]frontend.Variable, blockBytes),
+		WindowActive: make([]frontend.Variable, blockBytes),
+	}
 }
 
 // Public bit wires as octets. They need no constraint: the verifier computed them.
@@ -200,30 +243,43 @@ func checkPool(api frontend.API, shape *partShape, stream *circuitKeystream, blo
 	}
 }
 
+// Whether a part needs the server direction: everything but π1 (SPEC.md section 4.3).
+func (self *partShape) needsServerKeys() bool {
+	return 0 < self.serverBlocks
+}
+
 func (self *partCircuit) Define(api frontend.API) error {
 	shape := self.shape
-	var keys *circuitKeys
-	if shape.withoutKeySchedule {
-		keys = &circuitKeys{clientKey: privateBytes(api, self.ClientKey), clientIv: privateBytes(api, self.ClientIv)}
-		// unused secrets still need a constraint each, or compiling refuses them
-		for _, bit := range self.HandshakeSecret {
-			api.AssertIsBoolean(bit)
-		}
-		for _, bits := range [][]frontend.Variable{self.ShtsHash, self.HelloHash, self.FinishedHash} {
-			for _, bit := range bits {
-				api.AssertIsBoolean(bit)
-			}
-		}
-	} else {
-		keys = tls13CircuitKeys(api, privateBytes(api, self.HandshakeSecret), publicBytes(self.ShtsHash),
-			publicBytes(self.HelloHash), publicBytes(self.FinishedHash), shape.keyBytes(), false)
-		for _, bits := range [][]frontend.Variable{self.ClientKey, self.ClientIv} {
+	assertBooleans := func(sets ...[]frontend.Variable) {
+		for _, bits := range sets {
 			for _, bit := range bits {
 				api.AssertIsBoolean(bit)
 			}
 		}
 	}
+	var keys *circuitKeys
+	if shape.withoutKeySchedule {
+		keys = &circuitKeys{
+			clientKey: privateBytes(api, self.ClientKey),
+			clientIv:  privateBytes(api, self.ClientIv),
+			serverKey: privateBytes(api, self.ServerKey),
+			serverIv:  privateBytes(api, self.ServerIv),
+		}
+		// wires this test shape leaves unused still need a constraint each, or compiling refuses them
+		assertBooleans(self.HandshakeSecret, self.ShtsHash, self.HelloHash, self.FinishedHash)
+	} else {
+		keys = tls13CircuitKeys(api, privateBytes(api, self.HandshakeSecret), publicBytes(self.ShtsHash),
+			publicBytes(self.HelloHash), publicBytes(self.FinishedHash), shape.keyBytes(), shape.needsServerKeys())
+		assertBooleans(self.ClientKey, self.ClientIv, self.ServerKey, self.ServerIv)
+	}
 	checkPool(api, shape, newCircuitKeystream(api, shape, keys.clientKey, keys.clientIv), self.Client)
+	if shape.needsServerKeys() {
+		checkReplies(api, shape, newCircuitKeystream(api, shape, keys.serverKey, keys.serverIv), self)
+	} else {
+		// π1 covers no reply; these public wires are still part of its statement
+		api.AssertIsEqual(self.ExpectedReplies, 0)
+		api.AssertIsEqual(self.RequireChunking, 0)
+	}
 	return nil
 }
 
@@ -302,6 +358,20 @@ func newZeroAssignment(shape *partShape) *partCircuit {
 		zero(block.IsLiteral)
 		zero(block.IsLocal)
 	}
+	for _, block := range circuit.Server {
+		block.Counter = 0
+		block.Continues = 0
+		block.Ticket = 0
+		zero(block.Cipher)
+		zero(block.Active)
+		zero(block.TypeOctet)
+		zero(block.FirstOctet)
+		zero(block.WindowActive)
+	}
+	circuit.ExpectedReplies = 0
+	circuit.RequireChunking = 0
+	zero(circuit.ServerKey)
+	zero(circuit.ServerIv)
 	zero(circuit.ShtsHash)
 	zero(circuit.HelloHash)
 	zero(circuit.FinishedHash)
@@ -357,12 +427,42 @@ func partAssignment(shape *partShape, statement *partStatement) (*partCircuit, e
 		}
 		slot += used
 	}
+	if err := assignServerRecords(shape, statement, circuit); err != nil {
+		return nil, err
+	}
+	switch statement.index {
+	case 2:
+		circuit.ExpectedReplies = 1
+		if statement.mode == partModeBdat {
+			circuit.RequireChunking = 1
+		}
+	}
 	return circuit, nil
 }
 
-// The private side, added to a public assignment.
-func assignWitness(circuit *partCircuit, witness *partWitness) {
+// The private side, added to a public assignment. A shape that needs no server keys still has wires
+// for them, which stay zero.
+func assignWitness(circuit *partCircuit, statement *partStatement, witness *partWitness) {
 	circuit.HandshakeSecret = assignBits(witness.handshakeSecret)
 	circuit.ClientKey = assignBits(witness.clientKey)
 	circuit.ClientIv = assignBits(witness.clientIv)
+	if circuit.shape.needsServerKeys() {
+		circuit.ServerKey = assignBits(witness.serverKey)
+		circuit.ServerIv = assignBits(witness.serverIv)
+	}
+	// each block of a ticket's record carries the record's private kind
+	slot := 0
+	for _, plaintext := range witness.serverPlaintexts {
+		ticket := 0
+		if statement.session.version == tlsVersion13 && 0 < len(plaintext) && plaintext[len(plaintext)-1] == tlsRecordHandshake {
+			ticket = 1
+		}
+		blockCount := (len(plaintext) + circuit.shape.blockBytes() - 1) / circuit.shape.blockBytes()
+		for range blockCount {
+			if slot < len(circuit.Server) {
+				circuit.Server[slot].Ticket = ticket
+			}
+			slot += 1
+		}
+	}
 }

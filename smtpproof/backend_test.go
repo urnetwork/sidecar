@@ -4,6 +4,7 @@
 package smtpproof
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -26,7 +27,7 @@ func testPartAssignment(t *testing.T, shape *partShape, statement *partStatement
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignWitness(circuit, witness)
+	assignWitness(circuit, statement, witness)
 	return circuit
 }
 
@@ -119,7 +120,7 @@ func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
 			if _, err := assignRecordBlocks(shape, statement, statement.clientRecords[0], template, circuit.Client); err != nil {
 				t.Fatal(err)
 			}
-			assignWitness(circuit, witness)
+			assignWitness(circuit, statement, witness)
 			return testPartSolved(t, compiled, circuit)
 		}
 		suffix := "@" + testEnvelopeDomain + ">\r\n"
@@ -129,6 +130,182 @@ func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
 		for _, local := range []string{"a,b", "a b", "a>b", "a@b", "a%b", "a!b", "a\rb", "a\x00b", "a\xc3b"} {
 			if err := solve("MAIL FROM:<" + local + suffix); err == nil {
 				t.Errorf("%s: local part %q: accepted", leg.name, local)
+			}
+		}
+	}
+}
+
+// An envelope shape with Z1 left out, sized to the test connection.
+func testQuickEnvelopeShape(suite uint16) *partShape {
+	shape := &partShape{kind: partKindEnvelope, version: tlsVersion13, suite: suite, clientBlocks: 12, serverBlocks: 8, localOctets: true, withoutKeySchedule: true}
+	if suite == tlsSuiteChacha20Poly1305Sha256 {
+		shape.clientBlocks = 4
+		shape.serverBlocks = 3
+	}
+	return shape
+}
+
+// Compiled once per suite: every case below shares it.
+func testEnvelopeCircuit(t *testing.T, leg *testTlsLeg) (*partShape, constraint.ConstraintSystem) {
+	t.Helper()
+	shape := testQuickEnvelopeShape(leg.suites[0])
+	return shape, testCompile(t, newPartCircuit(shape))
+}
+
+func TestEnvelopeCircuitAcceptsARealEhloReply(t *testing.T) {
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		statement, witness := capture.part(t, 2)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("%s: %v", leg.name, err)
+		}
+	}
+}
+
+func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
+	// Z7-Z9 differentially: each stream goes through the reference relation and the circuit, and both
+	// must give the same answer. The stream is the EHLO reply, as the MX might have sent it.
+	cases := []struct {
+		name    string
+		content string
+		accept  bool
+	}{
+		{name: "chunking offered", content: "250-mx\r\n250-PIPELINING\r\n250-CHUNKING\r\n250 OK\r\n", accept: true},
+		{name: "chunking last", content: "250-mx\r\n250 CHUNKING\r\n", accept: true},
+		{name: "chunking in lower case", content: "250-mx\r\n250 chunking\r\n", accept: true},
+		{name: "chunking in mixed case", content: "250-mx\r\n250-ChUnKiNg\r\n250 OK\r\n", accept: true},
+		{name: "chunking absent", content: "250-mx\r\n250-PIPELINING\r\n250 OK\r\n"},
+		{name: "chunking in the MX's name line", content: "250-CHUNKING\r\n250 OK\r\n"},
+		{name: "chunking inside a longer keyword", content: "250-mx\r\n250-XCHUNKING\r\n250 OK\r\n"},
+		{name: "a keyword starting with chunking", content: "250-mx\r\n250-CHUNKINGX\r\n250 OK\r\n"},
+		{name: "a one-line reply", content: "250 mx\r\n"},
+		{name: "another code", content: "251-mx\r\n250-CHUNKING\r\n250 OK\r\n"},
+		{name: "another code on the last line", content: "250-mx\r\n250-CHUNKING\r\n251 OK\r\n"},
+		{name: "a refusal", content: "550 no\r\n"},
+		{name: "two replies", content: "250-mx\r\n250 CHUNKING\r\n250 OK\r\n"},
+		{name: "a truncated reply", content: "250-mx\r\n250 CHUNKING"},
+		{name: "a reply ending inside a multiline", content: "250-mx\r\n250-CHUNKING\r\n"},
+		{name: "a bare LF", content: "250-mx\n250 CHUNKING\r\n"},
+		{name: "a bare CR", content: "250-mx\r250 CHUNKING\r\n"},
+		{name: "a malformed code", content: "25x-mx\r\n250 CHUNKING\r\n"},
+		{name: "a malformed separator", content: "250+mx\r\n250 CHUNKING\r\n"},
+	}
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		for _, c := range cases {
+			statement, witness := capture.part(t, 2)
+			statement.serverRecords = statement.serverRecords[:1]
+			witness.serverPlaintexts = witness.serverPlaintexts[:1]
+			testAuthorServerRecord(t, statement, witness, 0, testServerContent(statement, c.content))
+			reference := len(relationCheckPart(statement, witness)) == 0
+			if reference != c.accept {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, reference)
+			}
+			circuit, err := partAssignment(shape, statement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assignWitness(circuit, statement, witness)
+			if err := testPartSolved(t, compiled, circuit); (err == nil) != c.accept {
+				t.Errorf("%s: %s: the circuit says %v", leg.name, c.name, err)
+			}
+		}
+	}
+}
+
+func TestEnvelopeCircuitAcceptsDataWithoutChunking(t *testing.T) {
+	// Z9 binds BDAT alone
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testDataCapture(t, leg)
+		statement, witness := capture.part(t, 2)
+		statement.serverRecords = statement.serverRecords[:1]
+		witness.serverPlaintexts = witness.serverPlaintexts[:1]
+		testAuthorServerRecord(t, statement, witness, 0, testServerContent(statement, "250 mx\r\n"))
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("%s: %v", leg.name, err)
+		}
+	}
+}
+
+func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		ticket := []byte{tlsHandshakeNewSessionTicket, 0, 0, 0, tlsRecordHandshake}
+
+		// Z7: a ticket before the reply is skipped, and which record it was stays private
+		statement, witness := capture.part(t, 2)
+		record := &partRecord{seq: statement.serverRecords[0].seq + 1, raw: bytes.Clone(statement.serverRecords[0].raw)}
+		reply := witness.serverPlaintexts[0]
+		statement.serverRecords = append(statement.serverRecords, record)
+		witness.serverPlaintexts = append(witness.serverPlaintexts, nil)
+		testAuthorServerRecord(t, statement, witness, 0, ticket)
+		testAuthorServerRecord(t, statement, witness, 1, reply)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("%s: a ticket before the reply: %v", leg.name, err)
+		}
+
+		// Z7: a KeyUpdate cannot pass as one
+		statement, witness = capture.part(t, 2)
+		record = &partRecord{seq: statement.serverRecords[0].seq + 1, raw: bytes.Clone(statement.serverRecords[0].raw)}
+		reply = witness.serverPlaintexts[0]
+		statement.serverRecords = append(statement.serverRecords, record)
+		witness.serverPlaintexts = append(witness.serverPlaintexts, nil)
+		testAuthorServerRecord(t, statement, witness, 0, []byte{tlsHandshakeKeyUpdate, 0, 0, 1, 0, tlsRecordHandshake})
+		testAuthorServerRecord(t, statement, witness, 1, reply)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+			t.Errorf("%s: a KeyUpdate: accepted", leg.name)
+		}
+
+		// Z7: an alert fits neither kind
+		statement, witness = capture.part(t, 2)
+		testAuthorServerRecord(t, statement, witness, 0, []byte{1, 0, tlsRecordAlert})
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+			t.Errorf("%s: an alert: accepted", leg.name)
+		}
+
+		// Z7: a server record claimed as a ticket by the prover, when it is a reply, fails its type octet
+		statement, witness = capture.part(t, 2)
+		circuit := testPartAssignment(t, shape, statement, witness)
+		for _, block := range circuit.Server {
+			block.Ticket = 1
+		}
+		if err := testPartSolved(t, compiled, circuit); err == nil {
+			t.Errorf("%s: a reply claimed as a ticket: accepted", leg.name)
+		}
+
+		// Z1 and Z7: the MX's replies open only under its key
+		statement, witness = capture.part(t, 2)
+		witness.serverKey = bytes.Clone(witness.serverKey)
+		witness.serverKey[0] ^= 1
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+			t.Errorf("%s: a substituted server key: accepted", leg.name)
+		}
+	}
+}
+
+func TestEnvelopeCircuitChecksTheEnvelope(t *testing.T) {
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		cases := []struct {
+			name    string
+			record  int
+			content string
+		}{
+			{name: "a local part with a comma", record: 1, content: "RCPT TO:<a,b@" + testRecipientDomain + ">\r\n"},
+			{name: "a percent route", record: 1, content: "RCPT TO:<a%b@" + testRecipientDomain + ">\r\n"},
+			{name: "a same-length domain", record: 1, content: "RCPT TO:<bob@" + "x" + testRecipientDomain[1:] + ">\r\n"},
+			{name: "a same-length sender domain", record: 0, content: "MAIL FROM:<bounce-1@x" + testEnvelopeDomain[1:] + ">\r\n"},
+		}
+		for _, c := range cases {
+			statement, witness := capture.part(t, 2)
+			testAuthorClientRecord(t, statement, witness, c.record, []byte(c.content))
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: %s: accepted", leg.name, c.name)
 			}
 		}
 	}
@@ -161,7 +338,7 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 	backend := newGroth16Backend()
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)
-		// pi2 has no circuit yet, and pi1 has no keys loaded here
+		// pi1 and pi2 have circuits with no keys loaded here, and pi3 has no circuit yet
 		for _, index := range []uint32{1, 2, 3} {
 			statement, witness := capture.part(t, index)
 			if _, err := backend.provePart(context.Background(), statement, witness); err == nil {
