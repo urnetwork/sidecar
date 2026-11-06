@@ -31,22 +31,39 @@ import (
 	"time"
 )
 
-// The part of a key Redis Cluster hashes: what lies between the first { and the next }, when that is
-// not empty, else the whole key. {scp_c}ver and {scp_c}n share "scp_c".
-func RedisHashTag(key string) string {
+// What lies between key's first { and the next }, and whether it has that. An empty {} is no tag.
+func redisKeyTag(key string) (string, bool) {
 	if start := strings.IndexByte(key, '{'); 0 <= start {
 		if length := strings.IndexByte(key[start+1:], '}'); 0 < length {
-			return key[start+1 : start+1+length]
+			return key[start+1 : start+1+length], true
 		}
+	}
+	return "", false
+}
+
+// The part of a key Redis Cluster hashes: its tag, else the whole key. {scp_c}ver and {scp_c}n share
+// "scp_c".
+func RedisHashTag(key string) string {
+	if tag, tagged := redisKeyTag(key); tagged {
+		return tag
 	}
 	return key
 }
 
-// Whether one call may name these keys, by §22.4's rule: one shared hash tag, not merely the luck of
-// a shared slot. What a fake checks to fail as production's cluster does.
+// Whether one call may name these keys, by §22.4's rule: a call of two or more keys shares one hash
+// tag, and each key carries it. A key with no tag fails, even one that hashes alike, as scp_c does
+// beside {scp_c}n, since that is the luck of a shared slot and not the rule. One key needs no tag.
+// What a fake checks to fail as production's cluster does.
 func RedisKeysShareTag(keys []string) bool {
-	for _, key := range keys {
-		if RedisHashTag(key) != RedisHashTag(keys[0]) {
+	if len(keys) < 2 {
+		return true
+	}
+	firstTag, tagged := redisKeyTag(keys[0])
+	if !tagged {
+		return false
+	}
+	for _, key := range keys[1:] {
+		if tag, tagged := redisKeyTag(key); !tagged || tag != firstTag {
 			return false
 		}
 	}
@@ -65,6 +82,7 @@ type RedisScript struct {
 	Source string
 }
 
+// What a RedisReply holds. The zero value is a nil reply.
 type RedisReplyKind int
 
 const (
@@ -109,44 +127,55 @@ type RedisKeyEvent struct {
 // returns, and a worker of its own does the rest (connect/CODESTYLE.md:119).
 type RedisKeyEventFunction func(event RedisKeyEvent)
 
-// See the rules above. A ttl of zero sets no expiry, and a negative one is the caller's bug and an
-// error. Redis keeps expiries to the millisecond.
+// See the rules above. Each method says what a zero means, and none passes one through to Redis, whose
+// zero is another operation: EXPIRE 0, EXPIRE NX 0 and HEXPIRE 0 delete what they name, SET PX 0 is an
+// error, XADD MAXLEN ~ 0 trims the entry just added and XREADGROUP BLOCK 0 waits forever. A positive ttl
+// rounds up to the millisecond Redis keeps, so it never reaches Redis as zero. A negative ttl or length,
+// or a count that is not positive, is the caller's bug and an error: COUNT 0 means nothing on XRANGE, no
+// limit on XREADGROUP and an error on XAUTOCLAIM, so it has no one meaning to keep.
 type Redis interface {
 	// A string key.
 	Get(ctx context.Context, key string) (value []byte, found bool, err error)
 	// MGET, in keys' order, a nil element for an absent key.
 	GetMany(ctx context.Context, keys []string) (values [][]byte, err error)
+	// A ttl of zero leaves the key with no expiry, clearing one it had.
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 	// SET NX, the once-only write: a DPoP jti's, {dpop_<client_id>}<jti> (§7.4), and a poll's
-	// {scp_<C>}hb (§6.16).
+	// {scp_<C>}hb (§6.16). A ttl of zero sets no expiry.
 	SetIfAbsent(ctx context.Context, key string, value []byte, ttl time.Duration) (set bool, err error)
-	// Replaces value only while the key holds expected: a lease renewal's cas. Absent never matches.
+	// Replaces value only while the key holds expected: a lease renewal's cas. Absent never matches. A
+	// ttl of zero leaves the key with no expiry, so a lease never renews with one.
 	CompareAndSet(ctx context.Context, key string, expected []byte, value []byte, ttl time.Duration) (set bool, err error)
 	// Deletes only while the key holds expected: a lease's release, which another holder's newer
 	// lease survives.
 	CompareAndDelete(ctx context.Context, key string, expected []byte) (deleted bool, err error)
 	// INCR with an EXPIRE NX of ttl in one step, so the first increment sets the key's life and later
-	// ones leave it. This is what fires a trigger: an INCR emits a class $ keyspace event, where HSET
+	// ones leave it. A ttl of zero sends no EXPIRE at all, since EXPIRE NX 0 would delete the counter
+	// it just raised. This is what fires a trigger: an INCR emits a class $ keyspace event, where HSET
 	// and XADD emit nothing (D-PROTO-12).
 	Increment(ctx context.Context, key string, ttl time.Duration) (value int64, err error)
 	// Absent keys are no error.
 	Delete(ctx context.Context, keys []string) error
-	// Sets the key's ttl, which must be positive here, since a zero EXPIRE would delete the key. found
-	// is false when the key is absent.
+	// Sets the key's ttl, which must be positive here: zero is an error, since a zero EXPIRE would
+	// delete the key. found is false when the key is absent.
 	Expire(ctx context.Context, key string, ttl time.Duration) (found bool, err error)
 
+	// One field of a hash.
 	HashGet(ctx context.Context, key string, field string) (value []byte, found bool, err error)
 	// An absent key is an empty map: {scp_<C>}ver for a reset (§6.8), {gka_<group_id>} for gkm's
 	// retention (§10.6).
 	HashGetAll(ctx context.Context, key string) (fieldValues map[string][]byte, err error)
+	// Writes fieldValues into the hash, leaving its other fields and their ttls.
 	HashSet(ctx context.Context, key string, fieldValues map[string][]byte) error
+	// Absent fields are no error.
 	HashDelete(ctx context.Context, key string, fields []string) error
 	// HEXPIRE: a ttl per field, the leases of §9.8's groups and {svc_} pairs. A field that is absent
-	// is no error.
+	// is no error. The ttl must be positive here, as Expire's: zero is an error, since HEXPIRE 0 would
+	// delete the fields, and a host passing it through would lose the lease.
 	HashExpire(ctx context.Context, key string, fields []string, ttl time.Duration) error
 
-	// XADD with MAXLEN ~ maxLength, none when zero, and returns the entry's id: {wakeq_<shard>}
-	// (§18.7).
+	// XADD with MAXLEN ~ maxLength, and returns the entry's id: {wakeq_<shard>} (§18.7). A maxLength of
+	// zero sends no MAXLEN.
 	StreamAdd(ctx context.Context, key string, maxLength int64, fieldValues map[string][]byte) (entryId string, err error)
 	// XRANGE, entries after afterEntryId, from the start when it is empty, at most count: a
 	// publisher's hint stream (§6.8).
@@ -154,7 +183,7 @@ type Redis interface {
 	// XGROUP CREATE MKSTREAM, for entries from now on. An existing group is no error.
 	StreamGroupCreate(ctx context.Context, key string, group string) error
 	// XREADGROUP of entries no consumer has been given, waiting up to block for one: §19.4's push
-	// sender. Empty when block passes.
+	// sender. Empty when block passes. A block of zero does not wait and sends no BLOCK.
 	StreamGroupRead(ctx context.Context, key string, group string, consumer string, count int64, block time.Duration) (entries []*RedisStreamEntry, err error)
 	// XACK.
 	StreamGroupAck(ctx context.Context, key string, group string, entryIds []string) error
