@@ -87,7 +87,7 @@ type testWebAuthnAssertion struct {
 	clientType      string
 	challenge       string
 	clientDataJson  []byte
-	shortAuthData   bool
+	authData        func(authenticatorData []byte) []byte // rewrites the data before it is signed
 	signSignedBytes bool
 }
 
@@ -110,8 +110,8 @@ func (self *testWebAuthnAssertion) sign(
 ) *Signed {
 	rpIdHash := sha256.Sum256([]byte(self.rpId))
 	authenticatorData := append(rpIdHash[:], self.flags, 0x00, 0x00, 0x00, 0x07)
-	if self.shortAuthData {
-		authenticatorData = authenticatorData[:webAuthnAuthenticatorDataMinSize-1]
+	if self.authData != nil {
+		authenticatorData = self.authData(authenticatorData)
 	}
 	clientDataJson := self.clientDataJson
 	if clientDataJson == nil {
@@ -744,13 +744,6 @@ func TestVerifySignedWebAuthnProfile(t *testing.T) {
 			want: ErrSignedEvidence,
 		},
 		{
-			name: "authenticator data too short",
-			mutate: func(assertion *testWebAuthnAssertion) {
-				assertion.shortAuthData = true
-			},
-			want: ErrSignedEvidence,
-		},
-		{
 			name: "webauthn.create",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.clientType = "webauthn.create"
@@ -761,6 +754,20 @@ func TestVerifySignedWebAuthnProfile(t *testing.T) {
 			name: "no client type",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.clientType = ""
+			},
+			want: ErrSignedEvidence,
+		},
+		{
+			name: "client type that only begins webauthn.get",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.clientType = "webauthn.get.other"
+			},
+			want: ErrSignedEvidence,
+		},
+		{
+			name: "client type that only ends webauthn.get",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.clientType = "other.webauthn.get"
 			},
 			want: ErrSignedEvidence,
 		},
@@ -831,6 +838,35 @@ func TestVerifySignedWebAuthnProfile(t *testing.T) {
 		err := VerifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
 		if !errors.Is(err, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+// WebAuthn §6.1's fixed head is the rp id hash's 32 bytes, a flags byte and a 4-byte counter, and §16.6's caller reads
+// signCount at bytes 33 to 37, so 37 is the least that passes. The sizes are written here, not read from the constant
+// under test, and every assertion is validly signed, so only the size can refuse it. What follows the counter is
+// extension data, which nothing here reads.
+func TestVerifySignedWebAuthnAuthenticatorDataFloor(t *testing.T) {
+	purpose := "approval"
+	signedType := SignedType_SIGNED_APPROVAL_DECISION
+	p256Key, p256Public := testP256Key(t)
+	signedOfSize := func(size int) *Signed {
+		assertion := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+		assertion.authData = func(authenticatorData []byte) []byte {
+			return append(authenticatorData, make([]byte, 64)...)[:size]
+		}
+		return assertion.sign(t, p256Key, purpose, signedType, testBody)
+	}
+	for size := range 37 {
+		err := VerifySigned(signedOfSize(size), purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
+		if !errors.Is(err, ErrSignedEvidence) {
+			t.Errorf("%d bytes: %v", size, err)
+		}
+	}
+	for _, size := range []int{37, 38, 64} {
+		err := VerifySigned(signedOfSize(size), purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
+		if err != nil {
+			t.Errorf("%d bytes: %v", size, err)
 		}
 	}
 }
@@ -1166,42 +1202,255 @@ func TestVerifyRecoverySignedKeepsVerifySignedsRules(t *testing.T) {
 	}
 }
 
-// Decoding and verifying are total on arbitrary input, and only the fixed statement's own bytes pass:
-// whatever a mutation does to a Signed, a nil result means the body and type are the ones that were signed.
-func FuzzVerifySigned(f *testing.F) {
-	purpose := testPurpose
-	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
-	good, err := proto.Marshal(testSignEd25519(purpose, signedType, testBody))
-	if err != nil {
-		f.Fatal(err)
-	}
-	countersigned := testSignEd25519(purpose, signedType, testBody)
-	countersigned.Webauthn = &WebAuthnEvidence{KeyId: []byte("synthetic-presence-key")}
-	withEvidence, err := proto.Marshal(countersigned)
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Add(good, int32(signedType), int(SignedKeyAlgEd25519))
-	f.Add(withEvidence, int32(signedType), int(SignedKeyAlgEd25519))
-	f.Add(good, int32(SignedType_SIGNED_BRIDGE_MAP), int(SignedKeyAlgEd25519))
-	f.Add(good, int32(0), int(SignedKeyAlgEd25519))
-	f.Add(good[:len(good)/2], int32(signedType), int(SignedKeyAlgEd25519))
-	f.Add(good, int32(signedType), int(SignedKeyAlgEcdsaP256))
-	f.Add(good, int32(signedType), int(SignedKeyAlgWebAuthnEs256))
-	f.Add([]byte{}, int32(signedType), 0)
+// One input for FuzzVerifySigned, with what VerifySigned must answer for it.
+type testFuzzSeed struct {
+	name     string
+	encoded  []byte
+	expected SignedType
+	alg      SignedKeyAlg
+	want     error
+}
 
-	publicKey := testEd25519Public()
+// The statement every fuzz input is judged against.
+const testFuzzType = SignedType_SIGNED_BRIDGE_WITHDRAW
+
+// The key FuzzVerifySigned verifies under for each algorithm, so each algorithm's checks are in reach of an input.
+func testFuzzPublicKeys(t testing.TB) map[SignedKeyAlg][]byte {
+	_, p256Public := testP256Key(t)
+	return map[SignedKeyAlg][]byte{
+		SignedKeyAlgEd25519:       testEd25519Public(),
+		SignedKeyAlgEcdsaP256:     p256Public,
+		SignedKeyAlgWebAuthnEs256: p256Public,
+	}
+}
+
+// A statement that verifies on each algorithm, and one that stops at each kind of check after it, so the corpus starts
+// past every branch rather than hoping a mutation finds a valid signature.
+func testFuzzSeeds(t testing.TB) []testFuzzSeed {
+	purpose := testPurpose
+	p256Key, _ := testP256Key(t)
+	marshal := func(signed *Signed) []byte {
+		encoded, err := proto.Marshal(signed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	ed25519Good := marshal(testSignEd25519(purpose, testFuzzType, testBody))
+	countersigned := testSignEd25519(purpose, testFuzzType, testBody)
+	countersigned.Webauthn = &WebAuthnEvidence{KeyId: []byte("synthetic-presence-key")}
+
+	p256Signed := testSignP256(t, p256Key, purpose, testFuzzType, testBody)
+	p256Good := marshal(p256Signed)
+	p256Signed.Signature[len(p256Signed.Signature)-1] ^= 0x01
+	p256Spoiled := marshal(p256Signed)
+
+	webAuthn := func(mutate func(assertion *testWebAuthnAssertion)) []byte {
+		assertion := testGoodWebAuthnAssertion(purpose, testFuzzType, testBody)
+		if mutate != nil {
+			mutate(assertion)
+		}
+		return marshal(assertion.sign(t, p256Key, purpose, testFuzzType, testBody))
+	}
+	webAuthnGood := webAuthn(nil)
+	withAssertion := testSignEd25519(purpose, testFuzzType, testBody)
+	withAssertion.Webauthn = &WebAuthnEvidence{AuthenticatorData: []byte("not an assertion")}
+	webAuthnEvidence := func(mutate func(evidence *WebAuthnEvidence)) []byte {
+		signed := testGoodWebAuthnAssertion(purpose, testFuzzType, testBody).sign(t, p256Key, purpose, testFuzzType, testBody)
+		mutate(signed.Webauthn)
+		return marshal(signed)
+	}
+
+	return []testFuzzSeed{
+		{name: "ed25519", encoded: ed25519Good, expected: testFuzzType, alg: SignedKeyAlgEd25519},
+		{
+			name:     "ed25519 with a countersignature",
+			encoded:  marshal(countersigned),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgEd25519,
+		},
+		{
+			name:     "ed25519 with an assertion",
+			encoded:  marshal(withAssertion),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgEd25519,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name:     "ed25519 as another type",
+			encoded:  ed25519Good,
+			expected: SignedType_SIGNED_BRIDGE_MAP,
+			alg:      SignedKeyAlgEd25519,
+			want:     ErrSignedTypeMismatch,
+		},
+		{name: "no type", encoded: ed25519Good, alg: SignedKeyAlgEd25519, want: ErrSignedTypeUnknown},
+		{name: "no algorithm", encoded: ed25519Good, expected: testFuzzType, want: ErrSignedKey},
+		{
+			name:     "ed25519 as ecdsa",
+			encoded:  ed25519Good,
+			expected: testFuzzType,
+			alg:      SignedKeyAlgEcdsaP256,
+			want:     ErrSignedSignature,
+		},
+		{
+			name:     "ed25519 as webauthn",
+			encoded:  ed25519Good,
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{name: "ecdsa", encoded: p256Good, expected: testFuzzType, alg: SignedKeyAlgEcdsaP256},
+		{
+			name:     "ecdsa, spoiled",
+			encoded:  p256Spoiled,
+			expected: testFuzzType,
+			alg:      SignedKeyAlgEcdsaP256,
+			want:     ErrSignedSignature,
+		},
+		{
+			name:     "ecdsa as ed25519",
+			encoded:  p256Good,
+			expected: testFuzzType,
+			alg:      SignedKeyAlgEd25519,
+			want:     ErrSignedSignature,
+		},
+		{name: "webauthn", encoded: webAuthnGood, expected: testFuzzType, alg: SignedKeyAlgWebAuthnEs256},
+		{
+			name:     "webauthn as ecdsa",
+			encoded:  webAuthnGood,
+			expected: testFuzzType,
+			alg:      SignedKeyAlgEcdsaP256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn with a countersignature's key_id",
+			encoded: webAuthnEvidence(func(evidence *WebAuthnEvidence) {
+				evidence.KeyId = []byte("synthetic-presence-key")
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn with a countersignature's fields",
+			encoded: webAuthnEvidence(func(evidence *WebAuthnEvidence) {
+				evidence.ActSize = 1
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, short authenticator data",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.authData = func(authenticatorData []byte) []byte {
+					return authenticatorData[:len(authenticatorData)-1]
+				}
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, another rp id",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.rpId = "rp.example"
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, user not verified",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.flags = webAuthnFlagUserPresent
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, client data not json",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.clientDataJson = []byte(`{"type":"webauthn.get"`)
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, another client type",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.clientType = "webauthn.create"
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, another challenge",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.challenge = "c3ludGhldGlj"
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
+			name: "webauthn, signature over the signed bytes",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.signSignedBytes = true
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedSignature,
+		},
+	}
+}
+
+// Holds the corpus to its purpose: if a change to a seed or to the target left an algorithm's verifier out of reach,
+// as a single Ed25519 key once did, its seeds would stop answering as written here.
+func TestFuzzSeedsReachEveryCheck(t *testing.T) {
+	publicKeys := testFuzzPublicKeys(t)
+	for _, seed := range testFuzzSeeds(t) {
+		signed := &Signed{}
+		if err := proto.Unmarshal(seed.encoded, signed); err != nil {
+			t.Fatalf("%s: %v", seed.name, err)
+		}
+		err := VerifySigned(signed, testPurpose, seed.expected, seed.alg, publicKeys[seed.alg])
+		if !errors.Is(err, seed.want) {
+			t.Errorf("%s: got %v, want %v", seed.name, err, seed.want)
+		}
+	}
+}
+
+// Decoding and verifying are total on arbitrary input under every algorithm, and only the fixed statement's own bytes
+// pass: whatever a mutation does to a Signed, a nil result means the body and type are the ones that were signed.
+func FuzzVerifySigned(f *testing.F) {
+	seeds := testFuzzSeeds(f)
+	for _, seed := range seeds {
+		f.Add(seed.encoded, int32(seed.expected), int(seed.alg))
+	}
+	good := seeds[0].encoded
+	f.Add(good[:len(good)/2], int32(testFuzzType), int(SignedKeyAlgEd25519))
+	f.Add([]byte{}, int32(testFuzzType), 0)
+
+	publicKeys := testFuzzPublicKeys(f)
 	f.Fuzz(func(t *testing.T, encoded []byte, expected int32, alg int) {
 		signed := &Signed{}
 		if proto.Unmarshal(encoded, signed) != nil {
 			return
 		}
 		expectedType := SignedType(expected)
-		err := VerifySigned(signed, purpose, expectedType, SignedKeyAlg(alg), publicKey)
+		keyAlg := SignedKeyAlg(alg)
+		// A key record is input too, so this must not panic, whatever it answers: an input may hold its own key.
+		_ = VerifySigned(signed, testPurpose, expectedType, keyAlg, signed.GetKeyId())
+
+		err := VerifySigned(signed, testPurpose, expectedType, keyAlg, publicKeys[keyAlg])
 		if err != nil {
 			return
 		}
-		if expectedType != signedType || !bytes.Equal(signed.GetBody(), testBody) {
+		if expectedType != testFuzzType || !bytes.Equal(signed.GetBody(), testBody) {
 			t.Fatalf("verified type %d with body %x", expected, signed.GetBody())
 		}
 	})
