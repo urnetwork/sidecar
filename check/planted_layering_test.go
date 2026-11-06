@@ -111,6 +111,19 @@ func TestLayeringAllowsEnginesAndSidecartestToImportEngines(t *testing.T) {
 	wantFindings(t, fixture.open().clientEngineImportFindings(t))
 }
 
+// Each import here is allowed on its own, and the closure still reaches an engine.
+func TestLayeringFailsOnAnEngineThroughSidecartest(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli linux/amd64")
+	fixture.write("evsservice/engine.go", "package evsservice\n")
+	fixture.write("sidecartest/net.go", "package sidecartest\n\nimport _ \"@module@/evsservice\"\n")
+	fixture.write("mcp/mcp.go", "package mcp\n\nimport _ \"@module@/sidecartest\"\n")
+	fixture.write("cli/planted.go", "package main\n\nimport _ \"@module@/mcp\"\n")
+	wantFindings(t, fixture.open().legEngineFindings(t),
+		"cli linux/amd64 links @module@/evsservice",
+		"cli linux/amd64 links @module@/sidecartest")
+}
+
 func TestLayeringFailsOnDeviceImportingTheRoot(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("device/planted.go", "package device\n\nimport _ \"@module@\"\n")

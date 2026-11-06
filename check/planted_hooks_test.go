@@ -190,6 +190,14 @@ func TestHygieneFailsOnAMakefileBuildingWithTheTag(t *testing.T) {
 		"cli/Makefile:4: builds with sidecar_testhooks")
 }
 
+// gomobile's legs are built by sdk's Makefile, and the leg table here would never see this.
+func TestHygieneFailsOnGomobileBindingWithTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.writeSibling("sdk/build/Makefile", "build_ios:\n\tgomobile bind -tags sdk_mobile_bind,sidecar_testhooks\n")
+	findings := fixture.open().makefileTagFindings(t)
+	wantFindings(t, findings, "Makefile:2: builds with sidecar_testhooks")
+}
+
 // Builds the fixture's ur, with or without the tag, as a release step would.
 func buildFixtureBinary(t *testing.T, fixture *fixture, tags string) string {
 	t.Helper()

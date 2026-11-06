@@ -112,6 +112,27 @@ func (self *repository) clientEngineImportFindings(t testing.TB) []string {
 	return findings
 }
 
+// The closure's reading of the same rule, for a route the import rule cannot see: a client that is
+// allowed to import sidecartest, which is allowed to import an engine. Only server links an engine,
+// and sidecartest's fakes reach no release.
+func (self *repository) legEngineFindings(t testing.TB) []string {
+	t.Helper()
+	findings := []string{}
+	for _, leg := range self.shippedLegs() {
+		if leg.class == classEngine {
+			continue
+		}
+		for _, listed := range self.closure(t, leg) {
+			relative, ours := repositoryRelative(listed.ImportPath)
+			if ours && clientRuleExempt(relative) {
+				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
+			}
+		}
+	}
+	slices.Sort(findings)
+	return findings
+}
+
 // §4.4, D-SDK-20: device imports connect and protocol/bridge only, so the iOS extension links no
 // root init or protocol descriptor. Beside std it may have protobuf, whose runtime bridge's types
 // are built on. A hook file under the tag may forward to the root (testhook.go), since no release

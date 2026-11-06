@@ -345,13 +345,16 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			makefiles = append(makefiles, matches...)
 		}
 	}
+	// gomobile's legs are built by sdk's Makefile, not by anything here
+	makefiles = append(makefiles, self.siblingPath("sdk/build/Makefile"))
 	slices.Sort(makefiles)
 	makefiles = slices.Compact(makefiles)
 	findings := []string{}
 	for _, makefile := range makefiles {
 		data, err := os.ReadFile(makefile)
 		if err != nil {
-			t.Fatal(err)
+			findings = append(findings, findingf("reading a release build's Makefile: %v", err))
+			continue
 		}
 		for index, line := range strings.Split(string(data), "\n") {
 			if strings.HasPrefix(strings.TrimSpace(line), "#") || goTestCommandPattern.MatchString(line) {

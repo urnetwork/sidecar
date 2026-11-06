@@ -124,6 +124,11 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "layering", item: "a client or cli leg linking a <svc>service or sidecartest",
+		rule:         (*repository).legEngineFindings,
+		plantedTests: []string{"TestLayeringFailsOnAnEngineThroughSidecartest"},
+	},
+	{
 		row: "layering", item: "device beyond connect and protocol/bridge (§4.4, D-SDK-20)",
 		rule:         (*repository).deviceImportFindings,
 		plantedTests: []string{"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol"},
@@ -154,7 +159,7 @@ var failsOnRows = []failsOnRow{
 		},
 		plantedTests: []string{
 			"TestLegsFailsOnIosExtensionLinkingTheRoot", "TestLegsFailsOnIosExtensionLinkingProtocol",
-			"TestLegsFailsOnTheMacExtensionSlice",
+			"TestLegsFailsOnTheMacExtensionSlice", "TestLegsFailsOnIosExtensionLinkingAnythingElseOfOurs",
 		},
 	},
 	{
@@ -277,7 +282,7 @@ var failsOnRows = []failsOnRow{
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a Makefile's build line",
 		rule:         (*repository).makefileTagFindings,
-		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag"},
+		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnGomobileBindingWithTheTag"},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: what the artifact says of itself",
