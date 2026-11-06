@@ -10,8 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -465,34 +468,191 @@ func TestPhaseReservations(t *testing.T) {
 	}
 }
 
-// Owner decision 165: no number is reserved for keep-last-n (D-PHASE-9).
-func TestNoNumberForKeepLastN(t *testing.T) {
-	refuse := func(name protoreflect.FullName) {
-		lower := strings.ToLower(string(name))
+// The names in file that spell keep-last-n, in every kind of declaration that can take a number or reserve one:
+// messages, fields, oneofs, enums, enum values, extensions and reserved names, nested ones included.
+func testKeepLastNNames(file protoreflect.FileDescriptor) []string {
+	found := []string{}
+	check := func(name string) {
+		lower := strings.ToLower(name)
 		if strings.Contains(lower, "keep_last") || strings.Contains(lower, "keeplast") {
-			t.Errorf("%s reserves keep-last-n", name)
+			found = append(found, name)
 		}
 	}
-	var walk func(message protoreflect.MessageDescriptor)
-	walk = func(message protoreflect.MessageDescriptor) {
-		refuse(message.FullName())
-		fields := message.Fields()
-		for i := range fields.Len() {
-			refuse(fields.Get(i).FullName())
-		}
-		reservedNames := message.ReservedNames()
-		for i := range reservedNames.Len() {
-			refuse(protoreflect.FullName(reservedNames.Get(i)))
-		}
-		nested := message.Messages()
-		for i := range nested.Len() {
-			walk(nested.Get(i))
+	checkReserved := func(names protoreflect.Names) {
+		for i := range names.Len() {
+			check(string(names.Get(i)))
 		}
 	}
-	for _, path := range testProtoFiles {
-		messages := testFile(t, path).Messages()
+	checkEnums := func(enums protoreflect.EnumDescriptors) {
+		for i := range enums.Len() {
+			enum := enums.Get(i)
+			check(string(enum.FullName()))
+			values := enum.Values()
+			for j := range values.Len() {
+				check(string(values.Get(j).FullName()))
+			}
+			checkReserved(enum.ReservedNames())
+		}
+	}
+	checkExtensions := func(extensions protoreflect.ExtensionDescriptors) {
+		for i := range extensions.Len() {
+			check(string(extensions.Get(i).FullName()))
+		}
+	}
+	var walk func(messages protoreflect.MessageDescriptors)
+	walk = func(messages protoreflect.MessageDescriptors) {
 		for i := range messages.Len() {
-			walk(messages.Get(i))
+			message := messages.Get(i)
+			check(string(message.FullName()))
+			fields := message.Fields()
+			for j := range fields.Len() {
+				check(string(fields.Get(j).FullName()))
+			}
+			oneofs := message.Oneofs()
+			for j := range oneofs.Len() {
+				check(string(oneofs.Get(j).FullName()))
+			}
+			checkReserved(message.ReservedNames())
+			checkEnums(message.Enums())
+			checkExtensions(message.Extensions())
+			walk(message.Messages())
+		}
+	}
+	walk(file.Messages())
+	checkEnums(file.Enums())
+	checkExtensions(file.Extensions())
+	return found
+}
+
+// Owner decision 165: no number is reserved for keep-last-n (D-PHASE-9). This walks the registry rather than
+// testProtoFiles, so a file joins by being linked.
+func TestNoNumberForKeepLastN(t *testing.T) {
+	count := 0
+	protoregistry.GlobalFiles.RangeFilesByPackage(testProtoPackage, func(file protoreflect.FileDescriptor) bool {
+		count++
+		for _, name := range testKeepLastNNames(file) {
+			t.Errorf("%s: %s reserves keep-last-n", file.Path(), name)
+		}
+		return true
+	})
+	if count < len(testProtoFiles) {
+		t.Fatalf("walked %d files", count)
+	}
+}
+
+// Plants keep-last-n in each kind of declaration of a file made here, because a lint that passes the real files
+// says nothing about what it would catch.
+func TestKeepLastNLintReachesEveryDeclaration(t *testing.T) {
+	enumValues := func(names ...string) []*descriptorpb.EnumValueDescriptorProto {
+		values := make([]*descriptorpb.EnumValueDescriptorProto, 0, len(names))
+		for i, name := range names {
+			values = append(values, &descriptorpb.EnumValueDescriptorProto{
+				Name:   proto.String(name),
+				Number: proto.Int32(int32(i)),
+			})
+		}
+		return values
+	}
+	field := func(name string) *descriptorpb.FieldDescriptorProto {
+		return &descriptorpb.FieldDescriptorProto{
+			Name:   proto.String(name),
+			Number: proto.Int32(1),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_UINT32.Enum(),
+		}
+	}
+	file := func(mutate func(file *descriptorpb.FileDescriptorProto)) protoreflect.FileDescriptor {
+		fileProto := &descriptorpb.FileDescriptorProto{
+			Name:        proto.String("protocol/planted.proto"),
+			Package:     proto.String("planted"),
+			Syntax:      proto.String("proto3"),
+			MessageType: []*descriptorpb.DescriptorProto{{Name: proto.String("Versioning")}},
+			EnumType: []*descriptorpb.EnumDescriptorProto{{
+				Name:  proto.String("VersioningMode"),
+				Value: enumValues("VERSIONING_MODE_UNSPECIFIED"),
+			}},
+		}
+		if mutate != nil {
+			mutate(fileProto)
+		}
+		descriptor, err := protodesc.NewFile(fileProto, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return descriptor
+	}
+
+	if names := testKeepLastNNames(file(nil)); len(names) != 0 {
+		t.Fatalf("the unplanted file reserves %v", names)
+	}
+	cases := []struct {
+		name   string
+		mutate func(file *descriptorpb.FileDescriptorProto)
+	}{
+		{
+			name: "a message",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.MessageType[0].Name = proto.String("KeepLastN")
+			},
+		},
+		{
+			name: "a nested message",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.MessageType[0].NestedType = []*descriptorpb.DescriptorProto{{Name: proto.String("KeepLastN")}}
+			},
+		},
+		{
+			name: "a field",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.MessageType[0].Field = []*descriptorpb.FieldDescriptorProto{field("keep_last_n")}
+			},
+		},
+		{
+			name: "a reserved field name",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.MessageType[0].ReservedName = []string{"keep_last_n"}
+			},
+		},
+		{
+			name: "a oneof",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				member := field("n")
+				member.OneofIndex = proto.Int32(0)
+				file.MessageType[0].Field = []*descriptorpb.FieldDescriptorProto{member}
+				file.MessageType[0].OneofDecl = []*descriptorpb.OneofDescriptorProto{{Name: proto.String("keep_last")}}
+			},
+		},
+		{
+			name: "an enum",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.EnumType[0].Name = proto.String("KeepLastMode")
+			},
+		},
+		{
+			name: "an enum value",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.EnumType[0].Value = enumValues("VERSIONING_MODE_UNSPECIFIED", "VERSIONING_MODE_KEEP_LAST_N")
+			},
+		},
+		{
+			name: "a reserved enum name",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.EnumType[0].ReservedName = []string{"VERSIONING_MODE_KEEP_LAST_N"}
+			},
+		},
+		{
+			name: "a nested enum's value",
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.MessageType[0].EnumType = []*descriptorpb.EnumDescriptorProto{{
+					Name:  proto.String("Mode"),
+					Value: enumValues("MODE_UNSPECIFIED", "MODE_KEEP_LAST_N"),
+				}}
+			},
+		},
+	}
+	for _, c := range cases {
+		if names := testKeepLastNNames(file(c.mutate)); len(names) != 1 {
+			t.Errorf("%s: found %v", c.name, names)
 		}
 	}
 }
