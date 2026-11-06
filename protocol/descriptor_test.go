@@ -1,5 +1,6 @@
 // Descriptor lints: the registered files, where each type lives, the numbers that are permanent once
-// released, and the reservations D-PHASE-9 makes at M2. evs.proto's reservations are its own lint's.
+// released, and the reservations D-PHASE-9 makes at M2 and M3. evs.proto's reservations are its own lint's, in
+// evs_descriptor_test.go.
 
 package protocol
 
@@ -20,9 +21,19 @@ const testProtoPackage = "urnetwork.sidecar"
 var testProtoFiles = []string{
 	"protocol/acl.proto",
 	"protocol/config.proto",
+	"protocol/directory.proto",
 	"protocol/envelope.proto",
+	"protocol/evs.proto",
+	"protocol/evsindex.proto",
+	"protocol/gkm.proto",
+	"protocol/mail.proto",
 	"protocol/push.proto",
+	"protocol/record.proto",
+	"protocol/search.proto",
+	"protocol/smtp.proto",
+	"protocol/socket.proto",
 	"protocol/stream.proto",
+	"protocol/tls.proto",
 	"protocol/types.proto",
 	"protocol/bridge/auth.proto",
 	"protocol/bridge/bridge.proto",
@@ -146,6 +157,26 @@ func TestNoOneofInEnvelopeStreamOrPush(t *testing.T) {
 	}
 }
 
+// §6.11's rule reaches what rides those messages as bytes, which the walk above cannot follow: hints in
+// PushHint.hint, tickets in StreamOpen.ticket and edge metadata in StreamOpen.metadata. search.proto states the rule
+// for itself, and evs.proto's statements are parsed on every push.
+func TestNoOneofInWhatStreamsAndPushesCarry(t *testing.T) {
+	for _, path := range []string{
+		"protocol/evs.proto", "protocol/gkm.proto", "protocol/mail.proto", "protocol/search.proto", "protocol/smtp.proto",
+		"protocol/socket.proto", "protocol/tls.proto",
+	} {
+		messages := testFile(t, path).Messages()
+		if messages.Len() == 0 {
+			t.Fatalf("%s declares no message", path)
+		}
+		for i := range messages.Len() {
+			if messages.Get(i).Oneofs().Len() != 0 {
+				t.Errorf("%s holds a oneof", messages.Get(i).FullName())
+			}
+		}
+	}
+}
+
 // §6.5: HelloResult and HeadCheckResult have Hello's and HeadCheck's fields.
 func TestResultMessagesHaveTheirRequestsFields(t *testing.T) {
 	for request, result := range map[string]string{"Hello": "HelloResult", "HeadCheck": "HeadCheckResult"} {
@@ -235,6 +266,127 @@ func TestEnumNumbersStable(t *testing.T) {
 	}
 }
 
+// §22.5's stability for the service files: §9's, §11.14's and §6.11's numbers as written, then evs.proto's bit and
+// kind values, whose reserved ones evs_descriptor_test.go reads again, then the values §10 and §15 write as names.
+func TestServiceEnumNumbersStable(t *testing.T) {
+	cases := []struct {
+		name string
+		got  map[string]int32
+		want map[string]int32
+	}{
+		{
+			name: "SocketHintKind",
+			got:  SocketHintKind_value,
+			want: map[string]int32{"SOCKET_HINT_KIND_UNSPECIFIED": 0, "SOCKET_HINT_REVOKED": 1, "SOCKET_HINT_DRAIN": 2},
+		},
+		{
+			name: "SearchStatus",
+			got:  SearchStatus_value,
+			want: map[string]int32{
+				"SEARCH_STATUS_UNSPECIFIED": 0, "SEARCH_OK": 1, "SEARCH_PARTIAL": 2, "SEARCH_TOO_BROAD": 3,
+				"SEARCH_CURSOR_EXPIRED": 4, "SEARCH_INVALID": 5, "SEARCH_UNSUPPORTED_VERSION": 6,
+			},
+		},
+		{
+			name: "SearchServed",
+			got:  SearchServed_value,
+			want: map[string]int32{
+				"SEARCH_SERVED_UNSPECIFIED": 0, "SERVED_TEXT": 1, "SERVED_INDEX": 2, "REFUSED_NOT_READER": 3,
+				"REFUSED_NOT_CONSENTED": 4, "REFUSED_SCOPE": 5, "REFUSED_INDEX_OFF": 6, "REFUSED_ALL_ABSENT": 7,
+				"REFUSED_FORMAT": 8,
+			},
+		},
+		{
+			name: "SmtpPreambleCode",
+			got:  SmtpPreambleCode_value,
+			want: map[string]int32{
+				"SMTP_PREAMBLE_CODE_UNSPECIFIED": 0, "SMTP_PREAMBLE_OK": 1, "SMTP_PREAMBLE_HALTED": 2,
+				"SMTP_PREAMBLE_QUOTA": 3, "SMTP_PREAMBLE_DENIED": 4, "SMTP_PREAMBLE_NO_MX": 5, "SMTP_PREAMBLE_NO_TLS": 6,
+				"SMTP_PREAMBLE_TRY_LATER": 7,
+			},
+		},
+		{
+			name: "SmtpProofCode",
+			got:  SmtpProofCode_value,
+			want: map[string]int32{"SMTP_PROOF_CODE_UNSPECIFIED": 0, "SMTP_PROOF_OK": 1, "SMTP_PROOF_INVALID": 2},
+		},
+		{
+			name: "EvsPushFlag",
+			got:  EvsPushFlag_value,
+			want: map[string]int32{
+				"EVS_PUSH_FLAG_NONE": 0, "EVS_PUSH_FORCE": 1, "EVS_PUSH_DELETE": 2, "EVS_PUSH_BASE": 4,
+				"EVS_PUSH_IMMUTABLE": 8, "EVS_PUSH_CONSUME": 16, "EVS_PUSH_PATH_EPOCH": 32, "EVS_PUSH_ERASE": 64,
+				"EVS_PUSH_CLOSURE": 128, "EVS_PUSH_DROP": 256, "EVS_PUSH_CUT": 512,
+			},
+		},
+		{
+			name: "EvsLocatorKind",
+			got:  EvsLocatorKind_value,
+			want: map[string]int32{
+				"EVS_LOCATOR_KIND_UNSPECIFIED": 0, "EVS_LOCATOR_SEGMENT": 1, "EVS_LOCATOR_INLINE": 2,
+				"EVS_LOCATOR_VERSIONLESS_SEGMENT": 5,
+			},
+		},
+		{
+			name: "EvsVersioning",
+			got:  EvsVersioning_value,
+			want: map[string]int32{"EVS_VERSIONING_KEPT": 0, "EVS_VERSIONING_VERSIONLESS": 1, "EVS_VERSIONING_INDEX": 2},
+		},
+		{
+			name: "EvsWindowFlag",
+			got:  EvsWindowFlag_value,
+			want: map[string]int32{
+				"EVS_WINDOW_FLAG_NONE": 0, "EVS_WINDOW_CREATES_PATH": 1, "EVS_WINDOW_CHANGES_IN_PAYLOAD": 2,
+				"EVS_WINDOW_PATH_EPOCH": 4, "EVS_WINDOW_REWRITES_HISTORY": 8, "EVS_WINDOW_VERSIONLESS_REPLACED": 16,
+				"EVS_WINDOW_DROP": 32,
+			},
+		},
+		{
+			name: "GkmHintKind",
+			got:  GkmHintKind_value,
+			want: map[string]int32{
+				"GKM_HINT_KIND_UNSPECIFIED": 0, "GKM_HINT_COMMIT": 1, "GKM_HINT_PENDING": 2, "GKM_HINT_WELCOME": 3,
+				"GKM_HINT_KEY_PACKAGES_LOW": 4, "GKM_HINT_WRAP_PENDING": 5,
+			},
+		},
+		{
+			name: "SpfVerdict",
+			got:  SpfVerdict_value,
+			want: map[string]int32{
+				"SPF_VERDICT_UNSPECIFIED": 0, "SPF_PASS": 1, "SPF_FAIL": 2, "SPF_SOFTFAIL": 3, "SPF_NEUTRAL": 4,
+				"SPF_NONE": 5, "SPF_TEMPERROR": 6, "SPF_PERMERROR": 7, "SPF_INCOMPLETE": 8,
+			},
+		},
+		{
+			name: "DkimVerdict",
+			got:  DkimVerdict_value,
+			want: map[string]int32{
+				"DKIM_VERDICT_UNSPECIFIED": 0, "DKIM_PASS": 1, "DKIM_FAIL": 2, "DKIM_PERMERROR": 3, "DKIM_TEMPERROR": 4,
+				"DKIM_INCOMPLETE": 5,
+			},
+		},
+		{
+			name: "DmarcVerdict",
+			got:  DmarcVerdict_value,
+			want: map[string]int32{
+				"DMARC_VERDICT_UNSPECIFIED": 0, "DMARC_PASS": 1, "DMARC_FAIL": 2, "DMARC_NONE": 3, "DMARC_TEMPERROR": 4,
+			},
+		},
+		{
+			name: "ArcVerdict",
+			got:  ArcVerdict_value,
+			want: map[string]int32{
+				"ARC_VERDICT_UNSPECIFIED": 0, "ARC_NONE": 1, "ARC_PASS": 2, "ARC_FAIL": 3, "ARC_INCOMPLETE": 4,
+			},
+		},
+	}
+	for _, c := range cases {
+		if !maps.Equal(c.got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, c.got, c.want)
+		}
+	}
+}
+
 // §6.11: an RPC's result type is its request's value + 1.
 func TestResultTypeIsRequestPlusOne(t *testing.T) {
 	for request, result := range map[MessageType]MessageType{
@@ -269,7 +421,7 @@ func TestWithdrawnEvsHeadCheckStaysReserved(t *testing.T) {
 	}
 }
 
-// D-PHASE-9's reservations in these files, fixed at M2 so a later milestone needs no number from a frozen
+// D-PHASE-9's reservations in these files, fixed at M2 and M3 so a later milestone needs no number from a frozen
 // format: each is field or value of a name the design gives, at the number this format assigns it.
 func TestPhaseReservations(t *testing.T) {
 	fields := []struct {
@@ -286,6 +438,7 @@ func TestPhaseReservations(t *testing.T) {
 		{message: "RepoVersioning", field: "sealed_rules", number: 4},
 		{message: "AclRepo", field: "lock", number: 10},
 		{message: "AclRepo", field: "holders_shrunk_at", number: 11},
+		{message: "CanonicalAction", field: "versioning", number: 37},
 	}
 	for _, c := range fields {
 		field := testMessage(t, c.message).Fields().ByName(c.field)
@@ -367,6 +520,20 @@ func TestStatementsOpenWithHeader(t *testing.T) {
 		if testMessage(t, name).Fields().ByName("header") != nil {
 			t.Errorf("%s carries a header", name)
 		}
+	}
+}
+
+// D-KEYS-3, owner decision 59: authenticated_data adds only what the gate needs and no roster delta, which §22.7
+// asserts of every stored commit. gkm reads this in the clear, so a field here reaches the server.
+func TestCommitHeaderCarriesOnlyGenerationAndAuth(t *testing.T) {
+	fields := testMessage(t, "GkmCommitHeader").Fields()
+	names := make([]string, 0, fields.Len())
+	for i := range fields.Len() {
+		names = append(names, string(fields.Get(i).Name()))
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"auth", "generation"}) {
+		t.Errorf("GkmCommitHeader shows %v", names)
 	}
 }
 
