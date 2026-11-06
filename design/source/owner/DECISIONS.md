@@ -888,6 +888,14 @@ The owner answered the questions HANDOFF.md left for them, and those the build r
     - Not taken: agents re-checking first; the owner's reviewers re-checking first.
     - Raised by HANDOFF.md sections 7 and 10.
 
+194. **M0-M10 build straight through on the `sidecar` branches; what a gate needs from hardware, production or people is listed open.**
+    - Question: several gates cannot be met from the build machine: M2's format-1 freeze needs the benchmark on the PM9A3 hardware, M0 and M1 need stages in production, and each Gn-out needs the owner's approval to merge. How does the build move past such a gate?
+    - Answer: build M0-M10 straight through in dependency order on the `sidecar` branches. Each gate's local checks run and are reported, and anything needing hardware, production or people is listed open.
+    - This changes how the milestones are executed, not what freezes when: §23.8's freeze order still decides what may reach a production store.
+    - Cost: formats stay unfrozen, so a later hardware miss could force rework in later milestones.
+    - Not taken: stopping at each Gn-out; building M0-M2 then re-planning.
+    - Raised in planning the build from the handoff.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

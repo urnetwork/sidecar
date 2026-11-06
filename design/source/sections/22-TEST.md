@@ -2606,7 +2606,7 @@ Beyond the schedules:
 
 ### 22.10 Internal review gates
 
-Gates (§23.8), with no external review (owner decision 99). Each format freezes twice (D-PHASE-7), its specification at Gn-in and its bytes at Gn-out:
+Gates (§23.8), with no external review (owner decision 99). The build runs each gate's local checks and reports them, listing open what needs hardware, production or people, and no freeze moves (owner decision 194). Each format freezes twice (D-PHASE-7), its specification at Gn-in and its bytes at Gn-out:
 
 ```text
 format                        spec freeze (Gn-in)                      final freeze (Gn-out)

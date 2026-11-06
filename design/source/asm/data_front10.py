@@ -33,16 +33,21 @@ INDEX = list(_P9['INDEX']) + [
     (193, "G0",
      "The owner signs G0 on 2026-11-06; the re-checks of the 21 items DESIGN-REVIEW-RESPONSE.md places at G0, the "
      "density review and RECORD.md's draft run beside M0's bootstrap, and their findings return as Q- items."),
+    (194, "Build order",
+     "M0-M10 build straight through in dependency order on the `sidecar` branches: each gate's local checks run and "
+     "are reported, and anything needing hardware, production or people stays listed open. §23.8's freezes do not "
+     "move."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
 INDEX[_i176] = (176, INDEX[_i176][1],
                 "Connect rounds the byte reports of phone-to-indexer search contracts up to 128 KiB, hiding up to five "
                 "search pages an hour. Amended by @@OD:188@@.")
-assert [r[0] for r in INDEX] == list(range(1, 194))
+assert [r[0] for r in INDEX] == list(range(1, 195))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
-              190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06'})
+              190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
+              194: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(

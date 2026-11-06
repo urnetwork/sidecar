@@ -317,6 +317,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-191"></a>191 | 2026-11-06 | [Q-PROTO-4](#614-open-questions) | A search that finds its indexer session lost re-establishes it at once; connect-5 discloses that its contract keeps the search's time, narrowing [owner decision 188](#od-188). | §1, §2, §6, §18, §22, §23 |
 | <a id="od-192"></a>192 | 2026-11-06 | Presence countersignature | A `DelegationRevoke` that parks other devices (`since_n` > 0) also carries the countersignature: the final meta review's extension, following [owner decision 187](#od-187)'s intent, ratified as written. | §5, §7, §22, §23 |
 | <a id="od-193"></a>193 | 2026-11-06 | G0 | The owner signs G0 on 2026-11-06; the re-checks of the 21 items DESIGN-REVIEW-RESPONSE.md places at G0, the density review and RECORD.md's draft run beside M0's bootstrap, and their findings return as Q- items. | §23 |
+| <a id="od-194"></a>194 | 2026-11-06 | Build order | M0-M10 build straight through in dependency order on the `sidecar` branches: each gate's local checks run and are reported, and anything needing hardware, production or people stays listed open. §23.8's freezes do not move. | §22, §23 |
 
 ## Contents
 
@@ -19449,7 +19450,7 @@ Beyond the schedules:
 
 ### 22.10 Internal review gates
 
-Gates (§23.8), with no external review ([owner decision 99](#od-99)). Each format freezes twice (D-PHASE-7), its specification at Gn-in and its bytes at Gn-out:
+Gates (§23.8), with no external review ([owner decision 99](#od-99)). The build runs each gate's local checks and reports them, listing open what needs hardware, production or people, and no freeze moves ([owner decision 194](#od-194)). Each format freezes twice (D-PHASE-7), its specification at Gn-in and its bytes at Gn-out:
 
 ```text
 format                        spec freeze (Gn-in)                      final freeze (Gn-out)
@@ -19666,7 +19667,7 @@ This section owns X15: milestones M0-M10 on two tracks, staffing, exit criteria,
 
 ### 23.4 Milestones
 
-Each milestone is a vertical slice (PLAN.md:36) with entry and exit reviews and a dark deploy. RS1-RS3 are recURd's stages (sidecar/design/pitch5.html:892-904; RECORD.md, §16.8), each released once its last item lands; BS1 is the burner launch. **v0** is what personal networks get, M0-M5 and M7-M9, with app hosts at M8; **v1** is M6, M10 and M7-M9's Team items, M10 bringing versionless objects and search to every network ([owner decision 163](#od-163)); **Later** follows M9 and M10. `sidecar` branches start: M0 sidecar, connect, server, sdk, build and sn, which must repeat server's sidecar replace (23.3), and xops for D-OPS-18's dumps; M1 mmm and config (pro.yml's `sidecar:` blocks, `preview_networks`); M2 vault; M5 warp.
+Each milestone is a vertical slice (PLAN.md:36) with entry and exit reviews and a dark deploy. RS1-RS3 are recURd's stages (sidecar/design/pitch5.html:892-904; RECORD.md, §16.8), each released once its last item lands; BS1 is the burner launch. **v0** is what personal networks get, M0-M5 and M7-M9, with app hosts at M8; **v1** is M6, M10 and M7-M9's Team items, M10 bringing versionless objects and search to every network ([owner decision 163](#od-163)); **Later** follows M9 and M10. `sidecar` branches start: M0 sidecar, connect, server, sdk, build and sn, which must repeat server's sidecar replace (23.3), and xops for D-OPS-18's dumps; M1 mmm and config (pro.yml's `sidecar:` blocks, `preview_networks`); M2 vault; M5 warp. M0-M10 build straight through on those branches, in dependency order; 23.8 says what happens at a gate the build cannot meet ([owner decision 194](#od-194)).
 
 | M | Scope (owning §) | Exit criteria (§22) |
 |---|---|---|
@@ -19690,7 +19691,7 @@ Team A (recURd) builds M0-M4 and M6; team B (mail and burner, [owner decision 9]
 
 M10 is track A's ([owner decision 169](#od-169)): about three more engineers, hired from M3's entry, build §11's format 2, the index and the search tools from M4's exit beside M6, about 9-12 engineer-months by inference; its hold, team, mail and phone cases wait for M5, M6, M7 and M8 (D-PHASE-8). If the engineers are not there by M4's exit, M10 follows M6, and the owner hears then.
 
-M2's critical path is §10.4's subset ([owner decision 43](#od-43)'s 2-4 engineer-months) and §22.10's 0x0010 interop; §7.9, §11 and gkm build in parallel against a fake of the subset, and D-TEST-11's run needs the production hosts and their PM9A3 set before M2's exit (23.7). If either slips, M2's exit and every later milestone slip with it, since both tracks share M0-M2.
+M2's critical path is §10.4's subset ([owner decision 43](#od-43)'s 2-4 engineer-months) and §22.10's 0x0010 interop; §7.9, §11 and gkm build in parallel against a fake of the subset, and D-TEST-11's run needs the production hosts and their PM9A3 set before M2's exit (23.7). If either slips, M2's exit and every later milestone's exit slip with it, since both tracks share M0-M2; the build goes on, with formats unfrozen ([owner decision 194](#od-194); 23.8).
 
 ### 23.6 Decisions that block each milestone
 
@@ -19831,6 +19832,7 @@ Each item gives (due; start).
 - **Freezes.** With no external review ([owner decision 99](#od-99)), each format freezes twice: its specification at Gn-in, its bytes at Gn-out on 22.10's evidence, whose FS rows are 23.6's schedules for that gate (D-PHASE-7). At M2: §7.9's records, its presence row and §6.9's countersignature fields among them (owner decisions [185](#od-185), [187](#od-187), [189](#od-189), [192](#od-192)); format 1, whose bytes, D-PHASE-9's reservations included, also wait for D-TEST-11's nvme gate, its erasure and deposit bytes freezing on §22.5's §11 tests, FS-23 and FS-47 while FS-13, FS-23's mailbox case and FS-47's mail case keep their M7 gates; credential 0xF552, suite 0x0010 and D-KEYS-10's delivery wire (ReaderKey, KeyDelivery and gkm's wrap and recovery paths), whose bytes freeze with §22.10's 0x0010 interop artifact, a gap in any step it requires holding the freeze unless a second peer covers that step. At M3: `record.proto`, [owner decision 142](#od-142)'s tainted-run rule and CanonicalAction's reserved field 37 included. At M6: the escrow order (D-QUOTA-9), frozen at M6's entry once FS-46 and 20.9's benchmark pass on M4's dark build, the benchmark rerunning at its exit; `directory.proto`'s announcement, request, decision and notice messages, specified at M6's Gn-in, bytes at its Gn-out. At M9: `smtpproof/SPEC.md`. At M10: format 2, with the DROP payload and `directory.proto`'s cards, its bytes also waiting for D-TEST-13's computed gate ([owner decision 174](#od-174)), repos migrating only after it (23.9); `search.proto`'s messages, types 0x1404 and 0x1405 and Hello's feature bits 0 and 1, additive to M2's wire.
 - **Gn-in.** 23.6's design closure for the gate; specifications freeze; changes since G0 and §22's exit-test plan reviewed.
 - **Gn-out.** Exit criteria shown, with 23.6's schedules passing; formats freeze; §22's privacy assertions pass; §2.8's list updated (I-18); `commit-msg --scan main..sidecar` clean (connect/CODESTYLE.md:83); the owner approves the deploy and merges (23.9).
+- **Gates the build cannot meet.** M0-M10 build straight through in dependency order on the `sidecar` branches, with no stop at a Gn-out ([owner decision 194](#od-194)). Each gate's local checks run and are reported, and anything needing hardware, production or people stays listed open: M2's format-1 freeze on D-TEST-11's PM9A3 run, M0's and M1's stages in production, each Gn-out's approval to merge. This changes how the milestones are executed, not what freezes when: the Freezes order above still decides what may reach a production store (D-PHASE-7). Formats stay unfrozen meanwhile, so a later hardware miss can force rework in later milestones.
 - **Releases.** D-TRUST-3 holds; RS1's copy discloses I-10's no-policy allow-all ([owner decision 120](#od-120)); "end-to-end encrypted" waits only for D-TRUST-4's document, §21.11's canary and §2.18's unaudited-cryptography disclosure (sidecar/design/pitch5.html:932-934; owner decisions [77](#od-77), [119](#od-119)); BS1 waits for 23.6's census call and M8's mail-indexer readiness, never for a user's indexer ([owner decision 12](#od-12)).
 
 ### 23.9 Branches, merges, and the source-graph lock
@@ -19853,7 +19855,7 @@ Each item gives (due; start).
 
 ### 23.11 Decisions proposed
 
-**D-PHASE-1 (proposed).** Build 23.4's milestones in dependency order, staffed as 23.5 proposes, releasing each recURd stage once its last item lands. *Why:* R-PHASE-4, whose stages ship whole (sidecar/design/pitch5.html:907), and R-PHASE-10; the sections' Phasing share these dependencies.
+**D-PHASE-1 (proposed).** Build 23.4's milestones in dependency order, straight through on the `sidecar` branches ([owner decision 194](#od-194); 23.8), staffed as 23.5 proposes, releasing each recURd stage once its last item lands. *Why:* R-PHASE-4, whose stages ship whole (sidecar/design/pitch5.html:907), and R-PHASE-10; the sections' Phasing share these dependencies; and several gates need hardware, production or people the build does not have, where stopping at each Gn-out and building M0-M2 then re-planning were not taken.
 
 **D-PHASE-2 (proposed).** No code is written before G0, which the owner signed on 2026-11-06, its re-checks, density review and RECORD.md draft running beside M0's bootstrap ([owner decision 193](#od-193); 23.8); an unsettled blocker defers what it blocks; until the owner decides an open question, text written at its recommendation is marked "(proposed; Q-...)" (D-ARCH-4); and an implementation finding that changes a D- item returns to review as a Q- item, as do those re-checks' and that review's findings. *Why:* R-PHASE-1; owner rule 8.
 
@@ -19931,6 +19933,7 @@ Each item gives (due; start).
 | Format 2's computed write cost misses on production after the freeze | Medium | High | [owner decision 174](#od-174)'s accepted risk: §19.9's next cluster sooner ([owner decision 145](#od-145)) or a later format change; the gate holds at internal networks and design partners meanwhile (D-TEST-13) |
 | A rollback to format-1 binaries after format-2 data exists strands staged content | Low | High | FS-72's rollback case; format-2 batches left to a format-2 evacuator |
 | A G0 re-check or the density review, running beside M0's bootstrap, finds something that changes what is already built ([owner decision 193](#od-193)) | Medium | Medium | Findings return as Q- items (D-PHASE-2); the first format freeze is M2's (23.8), so until then a change reworks only `sidecar` branches |
+| Later milestones build on formats that stay unfrozen, so a hardware miss at D-TEST-11's run forces rework in them ([owner decision 194](#od-194)) | Medium | High | 23.8's freeze order still decides what reaches a production store (D-PHASE-7); the rework stays on `sidecar` branches, and data on local, T3, canary and the staging cluster is rebuilt |
 
 ### 23.16 Phasing
 
@@ -20388,7 +20391,7 @@ Every D- item, in section order: 458 items, 16 of them withdrawn and 1 decided b
 | D-TEST-16 | Remote search is checked against `SearchOracle` and by relay capture: one frame-size sequence per kind, evs request logs unchanged. | [§22](#2212-decisions-proposed) |
 | D-TEST-17 | FS-86 gates the directory against 16.11's cost table: its M6 case at M6's Gn-out, its card case later. | [§22](#2212-decisions-proposed) |
 | D-TEST-18 | Drop deletes start after FS-89 to FS-96 pass, TLC checks I-EVS-15 and FI-27, and a clean ≥30-day, ≥200-job observe-mode soak. | [§22](#2212-decisions-proposed) |
-| D-PHASE-1 | Build 23.4's milestones in dependency order, staffed as 23.5 proposes, releasing each recURd stage once its last item lands. | [§23](#2311-decisions-proposed) |
+| D-PHASE-1 | Build 23.4's milestones straight through in dependency order, staffed as 23.5 proposes; each recURd stage releases once whole. | [§23](#2311-decisions-proposed) |
 | D-PHASE-2 | No code before G0, signed 2026-11-06; an unsettled blocker defers what it blocks; implementation findings return as Q- items. | [§23](#2311-decisions-proposed) |
 | D-PHASE-3 | P0 stage 1 and D-TEAM-14 reach production log-only at M0's Gn-out; stage 2 and sdk credential rules precede M3's pilot. | [§23](#2311-decisions-proposed) |
 | D-PHASE-4 | 23.7's M0 lead-time items and §10.4's MLS subset with its X-Wing KAT start in M0. | [§23](#2311-decisions-proposed) |

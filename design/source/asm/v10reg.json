@@ -1,5 +1,6 @@
 {
  "D": {
+  "D-PHASE-1": "Build 23.4's milestones straight through in dependency order, staffed as 23.5 proposes; each recURd stage releases once whole.",
   "D-PHASE-2": "No code before G0, signed 2026-11-06; an unsettled blocker defers what it blocks; implementation findings return as Q- items.",
   "D-TEAM-30": "Delegations admit exact tags with a not_after floor and max_admits for life, ending at DelegationRevoke, void or compromise.",
   "D-TEAM-31": "Revoking or suspending a tagged agent shows the agent, its Delegation's shared key and admission authority apart.",
