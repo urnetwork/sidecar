@@ -1036,6 +1036,136 @@ func TestSignedBytesSha256CoversPurposeTypeAndBody(t *testing.T) {
 	}
 }
 
+// Signs as a recovered device does: the member in signer_id and the key itself in key_id (§7.9's Recovery).
+func testSignRecovery(key ed25519.PrivateKey, purpose string, signedType SignedType, body []byte) *Signed {
+	return &Signed{
+		Body:      body,
+		SignerId:  []byte("synthetic-member"),
+		KeyId:     key.Public().(ed25519.PublicKey),
+		Signature: ed25519.Sign(key, SignedBytes(purpose, signedType, body)),
+		Type:      uint32(signedType),
+	}
+}
+
+// The fixed vector's Ed25519 key standing as a recovery key, with the hash a RecoveryBind shows for it written out,
+// so the match is SHA-256 of the 32 key bytes on every leg.
+func TestVerifyRecoverySignedFixedVector(t *testing.T) {
+	signed := &Signed{
+		Body:     testBody,
+		SignerId: []byte("synthetic-member"),
+		KeyId:    testFromHex(t, "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"),
+		Signature: testFromHex(t, "7be88830ddc0cb0462f0f79f11c92a5204d570662387dde958194a071905f4f5"+
+			"3012e611406a373ca8561dd39419b960f3bbbbfca14153e5a22e9e65685bec0c"),
+		Type: uint32(SignedType_SIGNED_BRIDGE_WITHDRAW),
+	}
+	recoveryKeySha256 := testFromHex(t, "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d")
+	err := VerifyRecoverySigned(signed, testPurpose, SignedType_SIGNED_BRIDGE_WITHDRAW, recoveryKeySha256)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// §7.9 has api and readers match the carried key to the row's hash. Each key below signs for itself, so a verifier
+// that took the carried key on trust would pass it, and only the match refuses.
+func TestVerifyRecoverySignedRefusesKeysItsRowDoesNotBind(t *testing.T) {
+	purpose := "authority"
+	signedType := SignedType_SIGNED_AUTHORITY_COSIGN
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x66}, ed25519.SeedSize))
+	otherKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x77}, ed25519.SeedSize))
+	keySha256 := sha256.Sum256(key.Public().(ed25519.PublicKey))
+	signed := testSignRecovery(key, purpose, signedType, testBody)
+	if err := VerifyRecoverySigned(signed, purpose, signedType, keySha256[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	otherSigned := testSignRecovery(otherKey, purpose, signedType, testBody)
+	if err := VerifyRecoverySigned(otherSigned, purpose, signedType, keySha256[:]); !errors.Is(err, ErrSignedKey) {
+		t.Errorf("another key: %v", err)
+	}
+	// A member with no binding has no hash to match, whatever signs.
+	for _, noBinding := range [][]byte{nil, {}} {
+		if err := VerifyRecoverySigned(signed, purpose, signedType, noBinding); !errors.Is(err, ErrSignedKey) {
+			t.Errorf("no binding %v: %v", noBinding, err)
+		}
+	}
+	// The hash in key_id, as a share key's would be, carries no key to verify under.
+	hashed := testSignRecovery(key, purpose, signedType, testBody)
+	hashed.KeyId = keySha256[:]
+	if err := VerifyRecoverySigned(hashed, purpose, signedType, keySha256[:]); !errors.Is(err, ErrSignedKey) {
+		t.Errorf("the key's hash: %v", err)
+	}
+	for _, size := range []int{0, 31, 33, 64} {
+		malformed := testSignRecovery(key, purpose, signedType, testBody)
+		malformed.KeyId = make([]byte, size)
+		malformedSha256 := sha256.Sum256(malformed.KeyId)
+		if err := VerifyRecoverySigned(malformed, purpose, signedType, malformedSha256[:]); !errors.Is(err, ErrSignedKey) {
+			t.Errorf("key of %d bytes: %v", size, err)
+		}
+	}
+	if err := VerifyRecoverySigned(nil, purpose, signedType, keySha256[:]); !errors.Is(err, ErrSignedMissing) {
+		t.Errorf("nil: %v", err)
+	}
+}
+
+// A bound key is one more Ed25519 signer: VerifySigned's rules hold it as they hold any other.
+func TestVerifyRecoverySignedKeepsVerifySignedsRules(t *testing.T) {
+	purpose := "authority"
+	signedType := SignedType_SIGNED_AUTHORITY_PROPOSAL
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x66}, ed25519.SeedSize))
+	keySha256 := sha256.Sum256(key.Public().(ed25519.PublicKey))
+
+	cases := []struct {
+		name         string
+		mutate       func(signed *Signed)
+		purpose      string
+		expectedType SignedType
+		want         error
+	}{
+		{name: "good", purpose: purpose, expectedType: signedType},
+		{
+			name:         "as another type",
+			purpose:      purpose,
+			expectedType: SignedType_SIGNED_ADMIN_SET,
+			want:         ErrSignedTypeMismatch,
+		},
+		{
+			name:         "as another purpose",
+			purpose:      testOtherPurpose,
+			expectedType: signedType,
+			want:         ErrSignedSignature,
+		},
+		{name: "a refused purpose", purpose: presenceActPurpose, expectedType: signedType, want: ErrSignedPurpose},
+		{
+			name: "another body",
+			mutate: func(signed *Signed) {
+				signed.Body = []byte("another synthetic body")
+			},
+			purpose:      purpose,
+			expectedType: signedType,
+			want:         ErrSignedSignature,
+		},
+		{
+			name: "an assertion beside an ed25519 signature",
+			mutate: func(signed *Signed) {
+				signed.Webauthn = &WebAuthnEvidence{}
+			},
+			purpose:      purpose,
+			expectedType: signedType,
+			want:         ErrSignedEvidence,
+		},
+	}
+	for _, c := range cases {
+		signed := testSignRecovery(key, purpose, signedType, testBody)
+		if c.mutate != nil {
+			c.mutate(signed)
+		}
+		err := VerifyRecoverySigned(signed, c.purpose, c.expectedType, keySha256[:])
+		if !errors.Is(err, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
 // Decoding and verifying are total on arbitrary input, and only the fixed statement's own bytes pass:
 // whatever a mutation does to a Signed, a nil result means the body and type are the ones that were signed.
 func FuzzVerifySigned(f *testing.F) {
@@ -1073,6 +1203,46 @@ func FuzzVerifySigned(f *testing.F) {
 		}
 		if expectedType != signedType || !bytes.Equal(signed.GetBody(), testBody) {
 			t.Fatalf("verified type %d with body %x", expected, signed.GetBody())
+		}
+	})
+}
+
+// key_id is input here, the one place a key comes from the message, so a nil result must also mean it is the bound key.
+func FuzzVerifyRecoverySigned(f *testing.F) {
+	purpose := "authority"
+	signedType := SignedType_SIGNED_AUTHORITY_COSIGN
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x66}, ed25519.SeedSize))
+	publicKey := key.Public().(ed25519.PublicKey)
+	publicKeySha256 := sha256.Sum256(publicKey)
+	otherKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x77}, ed25519.SeedSize))
+
+	for _, signed := range []*Signed{
+		testSignRecovery(key, purpose, signedType, testBody),
+		testSignRecovery(otherKey, purpose, signedType, testBody),
+	} {
+		encoded, err := proto.Marshal(signed)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(encoded, int32(signedType))
+		f.Add(encoded, int32(SignedType_SIGNED_SIDECAR_ADMIT))
+		f.Add(encoded[:len(encoded)/2], int32(signedType))
+	}
+	f.Add([]byte{}, int32(signedType))
+
+	f.Fuzz(func(t *testing.T, encoded []byte, expected int32) {
+		signed := &Signed{}
+		if proto.Unmarshal(encoded, signed) != nil {
+			return
+		}
+		expectedType := SignedType(expected)
+		err := VerifyRecoverySigned(signed, purpose, expectedType, publicKeySha256[:])
+		if err != nil {
+			return
+		}
+		if !bytes.Equal(signed.GetKeyId(), publicKey) || expectedType != signedType ||
+			!bytes.Equal(signed.GetBody(), testBody) {
+			t.Fatalf("verified type %d with key %x and body %x", expected, signed.GetKeyId(), signed.GetBody())
 		}
 	})
 }

@@ -54,7 +54,8 @@ var (
 	ErrSignedTypeMismatch = errors.New("signed type mismatch")
 	// The evidence does not fit the signer, or for webauthn-es256 does not pass (§6.9, §16.6).
 	ErrSignedEvidence = errors.New("signed evidence refused")
-	// The key algorithm is unknown, or the public key is malformed for it.
+	// The key algorithm is unknown, the public key is malformed for it, or a key the statement carries is
+	// not the one its row binds.
 	ErrSignedKey = errors.New("signed key refused")
 	// The signature does not verify.
 	ErrSignedSignature = errors.New("signed signature refused")
@@ -103,9 +104,9 @@ func SignedBytesSha256(purpose string, signedType SignedType, body []byte) [sha2
 // and nothing of the rest of signed (SignedBytesSha256).
 //
 // Callers resolve Signed.key_id to its key record for keyAlg and publicKey, and pass the purpose and
-// type their position expects. A purpose and type that were not signed together fail the signature, since
-// both are in the signed bytes. A heterogeneous list (deltas) maps each Signed.type to its purpose and
-// parser before calling this (§6.11).
+// type their position expects, or for a recovery key, which has no such record, call VerifyRecoverySigned.
+// A purpose and type that were not signed together fail the signature, since both are in the signed bytes.
+// A heterogeneous list (deltas) maps each Signed.type to its purpose and parser before calling this (§6.11).
 //
 // Evidence must fit: without its key_id only for a webauthn-es256 signer, and with it, a countersignature,
 // only beside an Ed25519 signature, which is as near as this comes to knowing an identity key. A
@@ -217,4 +218,23 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 	default:
 		return fmt.Errorf("%w: algorithm %d", ErrSignedKey, int(keyAlg))
 	}
+}
+
+// Checks a statement a member's recovery key signed (§7.9's Recovery), before or after its device is admitted. The
+// key has no record to resolve: a RecoveryBind seals it and rows keep only its hash, so the statement carries it in
+// Signed.key_id, and recoveryKeySha256 is the MemberRow.recovery_key_sha256 of the member its signer_id names. That
+// match is what vouches for the key, so nothing parses the body first, and VerifySigned then holds it to every rule
+// as an Ed25519 signer. An empty recoveryKeySha256, a member with no binding, refuses.
+//
+// Which statements a recovery key may sign, and whether the binding may still act, are the caller's, as a signer's
+// role is for VerifySigned. Its statements need no presence countersignature, so a nil says nothing of one.
+func VerifyRecoverySigned(signed *Signed, purpose string, expectedType SignedType, recoveryKeySha256 []byte) error {
+	if signed == nil {
+		return ErrSignedMissing
+	}
+	publicKeySha256 := sha256.Sum256(signed.GetKeyId())
+	if !bytes.Equal(publicKeySha256[:], recoveryKeySha256) {
+		return fmt.Errorf("%w: not the member's recovery key", ErrSignedKey)
+	}
+	return VerifySigned(signed, purpose, expectedType, SignedKeyAlgEd25519, signed.GetKeyId())
 }
