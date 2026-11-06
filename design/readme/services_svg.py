@@ -20,7 +20,7 @@ CARDS = [
      "file lands in your encrypted vault, every approval as a signed receipt."),
     ('Email and burners', 'mail', 'mail',
      "Your own mail server, with unlimited aliases and burner addresses. Inbound TLS ends on your "
-     "indexer, outbound TLS runs to the recipient, and the edges keep nothing."),
+     "devices, outbound TLS runs to the recipient, and the edges keep nothing."),
     ('Public HTTPS', 'tlsedge', 'globe',
      "Publish a local app at app.<net>.ur.network with an automatic certificate. The edge routes "
      "by SNI and never decrypts, and the key stays on your machine."),

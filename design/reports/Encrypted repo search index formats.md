@@ -29,7 +29,7 @@ The first is a **compression oracle**. DBREACH worked against compressed, encryp
 - compress each per-commit delta alone, so it carries only its own document;
 - pad every shared object (rebuilt bucket bases and all-blocks) with Padmé.
 
-Padmé leaks O(log log M) bits of length at no more than 12% overhead ([Padmé](https://arxiv.org/abs/1806.03160)), and evs already applies it to per-file change sizes ([DESIGN.md §11.5](../DESIGN.md)).
+Padmé leaks O(log log M) bits of length at no more than 12% overhead ([Padmé](https://arxiv.org/abs/1806.03160)), and evs already applies it to per-file change sizes ([DESIGN.md §11.5](../../DESIGN.md)).
 
 The second edge is that a phone's on-demand "search more" download tells the server that the user searched, and when, though not what. Background prefetch on Wi-Fi removes even that signal.
 
@@ -39,11 +39,11 @@ One rule follows from the SSE literature: never store the index as one server ob
 
 When a repo's index is on, the committing client normalizes each changed document and extracts its set of trigrams. It then writes one sealed delta object, listing (document key, version, sorted trigram set), inside the same push. The index advances atomically with the commit and needs no extra store round trip.
 
-How the delta is laid out matters more than which codec encodes it. Encoded as a forward list (one sorted trigram set per document, compressed alone), a one-message commit costs **29% of the message's text on Kafka dev mail, 34% on Lucene dev mail and 52% on 20 Newsgroups**. A median message's delta is 64–77% of its own text, because short messages compress poorly. The same document written as a one-document inverted segment costs **139–254%**, and even ten-document inverted segments cost 69–138% (own measurement, [Kafka](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/kafka.txt), [Lucene](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/lucene.txt), [20 Newsgroups](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/news20.txt)). Per-commit objects should therefore be forward lists, converted to inverted postings only when a bucket is rebuilt.
+How the delta is laid out matters more than which codec encodes it. Encoded as a forward list (one sorted trigram set per document, compressed alone), a one-message commit costs **29% of the message's text on Kafka dev mail, 34% on Lucene dev mail and 52% on 20 Newsgroups**. A median message's delta is 64–77% of its own text, because short messages compress poorly. The same document written as a one-document inverted segment costs **139–254%**, and even ten-document inverted segments cost 69–138% (own measurement, Kafka, Lucene, 20 Newsgroups). Per-commit objects should therefore be forward lists, converted to inverted postings only when a bucket is rebuilt.
 
-CPU cost is negligible. NFKC normalization with case folding ran at 41–66 MB/s, and trigram-set extraction at 17–39 MB/s, on one Apple M1 Max core. A typical 3.6 KB email costs about 0.3 ms. The notes measured pure-Go wasm at 2.5–5× native, which keeps even a browser commit near a millisecond ([notes harness](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/idxexp/main.go)).
+CPU cost is negligible. NFKC normalization with case folding ran at 41–66 MB/s, and trigram-set extraction at 17–39 MB/s, on one Apple M1 Max core. A typical 3.6 KB email costs about 0.3 ms. The notes measured pure-Go wasm at 2.5–5× native, which keeps even a browser commit near a millisecond (notes harness).
 
-Deltas cannot stay the read format for long. In the notes' measurements, splitting a corpus into one-to-ten-document segments inflated a docid index **2–8.5×**, mostly through duplicated dictionaries. Query cost grew linearly with segment count: an FTS5 term query took 3.2–4.7 ms across 1,000 one-document segments against 18–84 µs once merged, and Bleve ran 15–56× slower ([engines notes, local run](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/exp.log)). Every mature engine therefore merges small segments eagerly:
+Deltas cannot stay the read format for long. In the notes' measurements, splitting a corpus into one-to-ten-document segments inflated a docid index **2–8.5×**, mostly through duplicated dictionaries. Query cost grew linearly with segment count: an FTS5 term query took 3.2–4.7 ms across 1,000 one-document segments against 18–84 µs once merged, and Bleve ran 15–56× slower (engines notes, local run). Every mature engine therefore merges small segments eagerly:
 
 | Engine | Merge trigger | Floor |
 |---|---|---|
@@ -74,7 +74,7 @@ A word index was built alongside, with the same normalization. Two checks calibr
 - **Word index.** The harness reproduces the notes' figure exactly: 5.6% of text for a docid-only index on the same Go source slice.
 - **Trigrams on code.** Case-sensitive byte trigrams on that Go source came to 9.4–13.8% depending on codec. That is the same order as Cox's Linux figure, whose smaller files carry more trigrams per byte.
 
-The program and its raw outputs are in the session scratchpad, and every number used here is reproduced in this report ([program](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure/main.go), [Go](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/gosrc.txt), [serializations](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/serializations.txt)).
+The program and its raw outputs are in the session scratchpad, and every number used here is reproduced in this report (program, Go, serializations).
 
 | Index size, share of decoded text | Trigram, punctuation kept | Trigram, punctuation folded | Word docid+tf | Trigram (folded) ÷ word |
 |---|---|---|---|---|
@@ -88,7 +88,7 @@ How the table was measured:
 - **Trigram encoding.** VByte docid gaps, with bitsets for lists that cover more than an eighth of the documents, plus a 3-byte-key directory.
 - **Compression.** zstd at its best level, in process.
 - **Word ratio.** Against a docid-only word index, the folded trigram index is 1.7–2.4×.
-- **Brotli.** Brotli-11 beat zstd -19 by a further 5–11% on the same bytes (7.6–10.8% on trigram indexes) ([CLI compression](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/cli_compression.txt)).
+- **Brotli.** Brotli-11 beat zstd -19 by a further 5–11% on the same bytes (7.6–10.8% on trigram indexes) (CLI compression).
 
 The surprising row is the last one. Uncompressed in memory, a punctuation-folded trigram index with bitsets is about the size of a word docid+tf index.
 
@@ -101,7 +101,7 @@ The surprising row is the last one. Uncompressed in memory, a punctuation-folded
 | 4 KB | 31% | 289 | 4.3× |
 | 64 KB | 9% | 72 | 2.6× |
 
-(Own measurement, [Kafka](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/kafka.txt).) Notes are therefore the worst case per byte but the cheapest in total. A vault of 2,000 notes of 1 KB each is about 2 MB of text, which indexes to well under 1 MB.
+(Own measurement, Kafka.) Notes are therefore the worst case per byte but the cheapest in total. A vault of 2,000 notes of 1 KB each is about 2 MB of text, which indexes to well under 1 MB.
 
 **Normalization is the second lever.**
 
@@ -141,12 +141,12 @@ If the word complement recommended below is added, the notes' posting findings a
 - **Short lists dominate.** On personal-scale corpora, 31–83% of terms occur in just one document.
 - **VByte or frame-of-reference blocks** of 128–256 integers with a VByte tail land at 7–10 bits per posting.
 - **Roaring** costs 19–55 bits on such tiny lists.
-- **Interpolative coding** is smallest at 4.7–6.2 bits but has no maintained Go implementation ([Pibiri & Venturini](https://arxiv.org/abs/1908.10598), [notes harness](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/idxexp/main.go)).
+- **Interpolative coding** is smallest at 4.7–6.2 bits but has no maintained Go implementation ([Pibiri & Venturini](https://arxiv.org/abs/1908.10598), notes harness).
 - **Dictionaries.** Front-coded term blocks matched the vellum FST uncompressed and beat it after zstd, at 2.8–3.9 bytes per term against 4.6–5.9. Minimal perfect hashing answers only exact lookups.
 
 ## Trigram hits need checking, and precision falls as the searched set grows
 
-A trigram AND returns every document that contains all of a query's trigrams. That makes it complete: full-text scans confirmed no missed match in any of the 25 checked queries per type, on every corpus. But it returns a superset, and the superset grows with the number of documents searched, because unrelated documents assemble a short query's trigrams by chance. Median per-query precision (true matches over candidates) measured as follows (own measurement, [Kafka](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/kafka.txt), [Lucene](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/lucene.txt), [20 Newsgroups](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/news20.txt)):
+A trigram AND returns every document that contains all of a query's trigrams. That makes it complete: full-text scans confirmed no missed match in any of the 25 checked queries per type, on every corpus. But it returns a superset, and the superset grows with the number of documents searched, because unrelated documents assemble a short query's trigrams by chance. Median per-query precision (true matches over candidates) measured as follows (own measurement, Kafka, Lucene, 20 Newsgroups):
 
 | Query type (400 sampled per cell) | Lucene, 513 messages | Kafka, 3,019 | 20 Newsgroups, 18,846 |
 |---|---|---|---|
@@ -156,12 +156,12 @@ A trigram AND returns every document that contains all of a query's trigrams. Th
 | Four-letter infix of a long word | 0.94 | 0.91 | 0.74 |
 | Two adjacent words | 0.55 | 0.27 | 0.08 |
 
-Padding whole-word queries with spaces, to exploit word-boundary trigrams, did not help. Rare whole words reached only 0.16 on 20 Newsgroups and 0.48 on Kafka ([padded queries](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/query_padded.txt)). The low precision is inherent to the index, not a tuning problem. CPU is not the issue either. The median query touched 374 to 73,000 postings (p90 under 120,000), roughly a millisecond at the notes' 2–8 ns per posting in wasm.
+Padding whole-word queries with spaces, to exploit word-boundary trigrams, did not help. Rare whole words reached only 0.16 on 20 Newsgroups and 0.48 on Kafka (padded queries). The low precision is inherent to the index, not a tuning problem. CPU is not the issue either. The median query touched 374 to 73,000 postings (p90 under 120,000), roughly a millisecond at the notes' 2–8 ns per posting in wasm.
 
 How candidates get checked therefore decides the experience, and it differs by device:
 
 - **Desktops and the always-on device** hold the repo's text. They verify every candidate against the decrypted document locally, at no privacy cost, which turns trigram search into exact substring search.
-- **Phones** head-read the mailbox's `m/` tree rather than mirroring it ([DESIGN.md §18.4](../DESIGN.md)), so unverified candidates are the norm. A phone has three options:
+- **Phones** head-read the mailbox's `m/` tree rather than mirroring it ([DESIGN.md §18.4](../../DESIGN.md)), so unverified candidates are the norm. A phone has three options:
   - **Possible matches, verified on open.** Show candidates as ranked "possible matches" and verify each one when the user opens it. Opening a message is a fetch the server sees anyway, so this leaks nothing new.
   - **Fetch candidate bodies.** This reveals a query-dependent candidate set, the access pattern SSE attacks feed on, so it should not be the default.
   - **Exact word postings** for whole-word queries, described below.
@@ -200,13 +200,13 @@ The owner's layout has three partitions:
 - **Previous bucket.** Sealed.
 - **All.** A search merges both buckets immediately and folds all in later.
 
-Buckets should be fixed calendar windows of W days, aligned to UTC, so every client computes the same boundaries. A document belongs to the bucket of its latest change, timed by the commit's signed timestamp rather than the reader's clock. Coverage then oscillates between W and 2W: just after a boundary the current bucket is empty and the previous one holds the last full window, and just before the next boundary both are full. At the 30-day default that is 30–60 days, 45 on average. A repo that promises a searchable window on phones without "search more" needs W at least that long. The team record's "90 days searchable" requirement ([DESIGN.md §16](../DESIGN.md)), for example, needs W of 90 days, or an all partition its readers keep in the background.
+Buckets should be fixed calendar windows of W days, aligned to UTC, so every client computes the same boundaries. A document belongs to the bucket of its latest change, timed by the commit's signed timestamp rather than the reader's clock. Coverage then oscillates between W and 2W: just after a boundary the current bucket is empty and the previous one holds the last full window, and just before the next boundary both are full. At the 30-day default that is 30–60 days, 45 on average. A repo that promises a searchable window on phones without "search more" needs W at least that long. The team record's "90 days searchable" requirement ([DESIGN.md §16](../../DESIGN.md)), for example, needs W of 90 days, or an all partition its readers keep in the background.
 
 **Commits write only to the current bucket.** Updating all on every commit would rewrite an all-block per commit, or pile deltas onto the largest partition, which is the daily churn the owner's roll-up avoids.
 
 **Within the current bucket, a rebuild absorbs the deltas.** Forward deltas accumulate until a desktop or the always-on device rebuilds the bucket's inverted base. On Kafka, forward deltas cost about 2.3× the inverted form per message (29% against 12.4% of text for a 30-day bucket). Rebuilding once the delta tail reaches a quarter of the base, or 256 KiB, keeps the download small; at 100 messages a day that is roughly ten rebuilds per bucket (an estimate). Because the format is deterministic, a phone that already holds the old base and the deltas can reproduce the new base itself and check it against the hash in the head instead of downloading it.
 
-**At the boundary, the roll-up runs once.** The current bucket seals into previous. The expired previous bucket is rolled into all once and dropped, and under head-only storage its objects are then collected. The roll-up is a streaming merge (own measurement, [Kafka](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/kafka.txt), [20 Newsgroups](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/news20.txt)):
+**At the boundary, the roll-up runs once.** The current bucket seals into previous. The expired previous bucket is rolled into all once and dropped, and under head-only storage its objects are then collected. The roll-up is a streaming merge (own measurement, Kafka, 20 Newsgroups):
 
 - **Merge speed.** Decoding, merging and re-encoding ran at **7.0–9.7 ns per posting** on one native core. 2.5 million postings took 18 ms and 15.2 million took 147 ms; decoding alone ran at 1.7–1.8 ns per posting.
 - **Wasm** runs 2.5–5× slower.
@@ -253,7 +253,7 @@ The owner's device policy maps onto two triggers for phase two: automatic backgr
 | Desktop app, `ur daemon`, always-on device | kept in sync | downloaded and refreshed in the background; searched with every query and verified against local text |
 | Phone on Wi-Fi and charging | kept in sync | prefetched in the background |
 | Phone otherwise | kept in sync | fetched or refreshed on "search more" |
-| Browser extension worker (suggested) | kept in sync | on "search more", since its heap is capped at 64 MiB ([DESIGN.md §18.4](../DESIGN.md)) |
+| Browser extension worker (suggested) | kept in sync | on "search more", since its heap is capped at 64 MiB ([DESIGN.md §18.4](../../DESIGN.md)) |
 
 Every index object is immutable and named by its content, so sync is incremental. A device fetches:
 
@@ -264,19 +264,19 @@ Every index object is immutable and named by its content, so sync is incremental
 
 At 100 messages a day the deltas come to about 0.1 MB a day.
 
-Memory, not bandwidth, sets the block size. evs's design caps the working set at 4 MiB in the iOS app and never holds more than 1 MiB of a segment in RAM ([DESIGN.md §11.14](../DESIGN.md)). Partitions should therefore sit encrypted on disk in 256 KiB blocks and be searched one block at a time. A query decodes only its own trigrams' lists, and even in a 182,500-message all partition a bitset list is 23 KB, so the working set stays far below the cap.
+Memory, not bandwidth, sets the block size. evs's design caps the working set at 4 MiB in the iOS app and never holds more than 1 MiB of a segment in RAM ([DESIGN.md §11.14](../../DESIGN.md)). Partitions should therefore sit encrypted on disk in 256 KiB blocks and be searched one block at a time. A query decodes only its own trigrams' lists, and even in a 182,500-message all partition a bitset list is 23 KB, so the working set stays far below the cap.
 
 ## Head-only storage turns erasure into a bounded rewrite
 
-evs keeps push history for a repo's life by default ([DESIGN.md §2.8, evs-12](../DESIGN.md)). An index stored as ordinary versioned files would keep every delta, every rebuilt base and every all-block forever. That multiplies storage by the merges' write amplification. Worse, it preserves the trigram set of every document a user later erases. The design already names this hazard: erasure must destroy "every key of every representation", because "a shared index or live deposit would otherwise outlive the erasure" ([DESIGN.md D-EVS-26](../DESIGN.md)). A document's trigram set is a strong fingerprint of its vocabulary, so the index is such a representation. It is also derived data, rebuildable from the repo head, so history adds nothing worth keeping. Versionless storage should therefore be the index's only storage class, not an option.
+evs keeps push history for a repo's life by default ([DESIGN.md §2.8, evs-12](../../DESIGN.md)). An index stored as ordinary versioned files would keep every delta, every rebuilt base and every all-block forever. That multiplies storage by the merges' write amplification. Worse, it preserves the trigram set of every document a user later erases. The design already names this hazard: erasure must destroy "every key of every representation", because "a shared index or live deposit would otherwise outlive the erasure" ([DESIGN.md D-EVS-26](../../DESIGN.md)). A document's trigram set is a strong fingerprint of its vocabulary, so the index is such a representation. It is also derived data, rebuildable from the repo head, so history adds nothing worth keeping. Versionless storage should therefore be the index's only storage class, not an option.
 
 Head-only means immutable sealed objects plus one small mutable head:
 
 - **Objects.** Deltas, bucket bases, doc tables and all-blocks, each under its own key.
 - **Head.** It names the current and previous bucket ids, the objects in each partition, their plaintext hashes, the last commit covered, and the format and normalization versions. Writers update it by compare-and-swap.
-- **Collection.** Objects the head no longer names are collected after a grace period long enough for in-flight downloads; evs already deletes uploads that no push adopted after 25–49 hours ([DESIGN.md §2.8](../DESIGN.md)). Collection destroys the object's key, so the server's eventual deletion of the ciphertext is not on the critical path.
+- **Collection.** Objects the head no longer names are collected after a grace period long enough for in-flight downloads; evs already deletes uploads that no push adopted after 25–49 hours ([DESIGN.md §2.8](../../DESIGN.md)). Collection destroys the object's key, so the server's eventual deletion of the ciphertext is not on the critical path.
 
-Per-entry erasure in record-class repos and mail is required "from the start" and is "never deferred by a hold" ([DESIGN.md R-EVS-11](../DESIGN.md)). Across the buckets and all, an erasure takes five steps:
+Per-entry erasure in record-class repos and mail is required "from the start" and is "never deferred by a hold" ([DESIGN.md R-EVS-11](../../DESIGN.md)). Across the buckets and all, an erasure takes five steps:
 
 1. Drop the entry's own forward deltas. These are per-document objects, like Ente's per-file keys.
 2. Rebuild whichever bucket base holds the entry: current, previous or both.
@@ -284,25 +284,25 @@ Per-entry erasure in record-class repos and mail is required "from the start" an
 4. Publish a new head.
 5. Destroy the superseded objects' keys.
 
-Readers and mirrors already delete "entry, search and `ur://record` caches" on an ERASE hint ([DESIGN.md §16.8](../DESIGN.md)), and they would drop cached index blocks the same way.
+Readers and mirrors already delete "entry, search and `ur://record` caches" on an ERASE hint ([DESIGN.md §16.8](../../DESIGN.md)), and they would drop cached index blocks the same way.
 
 Capping all-blocks is what bounds the cost. Erasing one message costs at most a bucket rebuild of a few megabytes, a sub-second merge, and the upload of one 16 MiB block. The 16 MiB cap is a judgment, to be tuned against real erasure frequency.
 
 Logical deletion is the wrong tool for erasure:
 
 - Lucene's live-docs bitsets, Tantivy's delete files, Bleve's deleted bitmaps and zoekt's file tombstones all hide a document while leaving its terms in the segment.
-- FTS5's contentless tombstones keep the terms until a merge, and its in-place secure-delete rewrote 151 of 412 pages (37%) to purge a single document ([engines notes, local run](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/followup.log)).
+- FTS5's contentless tombstones keep the terms until a merge, and its in-place secure-delete rewrote 151 of 412 pages (37%) to purge a single document (engines notes, local run).
 
 Determinism across clients is what makes local folds, verifiable rebuilds and convergent roll-ups possible, and off-the-shelf engines don't provide it:
 
 - **Lucene** writes a 16-byte random object ID into every file header ([CodecUtil.java](https://github.com/apache/lucene/blob/main/lucene/core/src/java/org/apache/lucene/codecs/CodecUtil.java)).
 - **Tantivy** names segments with random UUIDv4s ([segment_id.rs](https://github.com/quickwit-oss/tantivy/blob/main/src/index/segment_id.rs)).
-- **Bleve** produced three different SHA-256 hashes from three builds of the same corpus ([engines notes, local run](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/followup.log)).
+- **Bleve** produced three different SHA-256 hashes from three builds of the same corpus (engines notes, local run).
 - **Roaring** permits two serializations of the same bitmap ([RoaringFormatSpec](https://github.com/RoaringBitmap/RoaringFormatSpec)).
 - **vellum** changed its FST builder's suffix sharing in November 2026 ([vellum commits](https://github.com/blevesearch/vellum/commits/master)).
-- **FTS5** is the exception. After optimize it produced identical blocks across modernc, ncruces, native and wasm builds ([engines notes, local run](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/exp.log)).
+- **FTS5** is the exception. After optimize it produced identical blocks across modernc, ncruces, native and wasm builds (engines notes, local run).
 
-The notes' own pure-Go encodings hashed identically on darwin/arm64 and js/wasm ([notes harness](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/idxexp/main.go)). The rules for evs's format are short:
+The notes' own pure-Go encodings hashed identically on darwin/arm64 and js/wasm (notes harness). The rules for evs's format are short:
 
 - **Normalization tables.** Pin them to the x/text Unicode version and record it in the format version.
 - **Grams.** Use byte trigrams.
@@ -314,14 +314,14 @@ Go library availability rules out adopting an engine and favours a small custom 
 
 | Option | Binary cost | Blocker |
 |---|---|---|
-| Bleve ([engines notes, local run](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/followup.log)) | +12.4–13.4 MB | fails to build for js/wasm (bbolt, mmap-go); nondeterministic |
+| Bleve (engines notes, local run) | +12.4–13.4 MB | fails to build for js/wasm (bbolt, mmap-go); nondeterministic |
 | SQLite FTS5 through [ncruces](https://github.com/ncruces/go-sqlite3) | +7.4 MB native, +15.7 MB wasm (4.1 MB gzipped) | deterministic, but its trigram tokenizer has the verification and short-query limits above; term queries took 1.2–7.7 ms in wasm |
 | modernc SQLite | not measured | does not build for js/wasm |
 | zapx | 0.75 MB | assumes mmap |
 | tantivy-go | not measured | needs cgo and a Rust static library per platform ([tantivy-go](https://github.com/anyproto/tantivy-go)) |
 | Custom stack: x/text normalization + klauspost pure-Go zstd | +1.06 MB darwin/arm64, +1.18 MB android/arm64, +1.82 MB js/wasm (0.52 MB gzipped) | none; the codec itself adds a few hundred lines |
 
-Within the custom stack, x/text normalization alone adds 0.38–0.59 MB and zstd alone 0.71–1.26 MB ([binary sizes](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/trimeasure_out/binsize.txt)). Brotli would add another 2.7–3.4 MB for its 5–11% gain, which is not worth it on phones.
+Within the custom stack, x/text normalization alone adds 0.38–0.59 MB and zstd alone 0.71–1.26 MB (binary sizes). Brotli would add another 2.7–3.4 MB for its 5–11% gain, which is not worth it on phones.
 
 Licensing fits too. [x/text](https://pkg.go.dev/golang.org/x/text/unicode/norm) is BSD-3-Clause, and [klauspost/compress](https://github.com/klauspost/compress) is BSD-3-Clause with some Apache-2.0 parts; DESIGN.md §4.7 allows both. Its refusal of the GPL family excludes Erigon's LGPL Elias-Fano code, which the format doesn't need. Google's BSD-licensed codesearch is worth borrowing from for its regexp-to-trigram query planner and its linear index merge ([codesearch merge.go](https://raw.githubusercontent.com/google/codesearch/master/index/merge.go)).
 
@@ -347,8 +347,8 @@ A semantic layer fits the same bucket layout, and can wait.
 
 - **Size.** Binary 1-bit codes take 48 bytes per 384-dimension chunk. At 512-token chunks, which Azure found recalled better than 8,191-token ones, that is about 2–3% of the text (computed), well under the trigram index ([Azure AI Search](https://techcommunity.microsoft.com/blog/azure-ai-services-blog/azure-ai-search-outperforming-vector-search-with-hybrid-retrieval-and-ranking-capabilities/3929167), [HF quantization](https://huggingface.co/blog/embedding-quantization)).
 - **Quality.** Rescoring with a float query keeps 75–96% of float nDCG@10, depending on the model; MiniLM keeps 94%.
-- **Index structure.** A flat scan of one million codes took 3.8 ms natively and 8–34 ms in Go wasm ([notes benchmark](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/hambench/main.go)), so flat per-bucket segments need no HNSW graph. HNSW would add 128–256 bytes of links per vector, depends on seeds and insertion order, and cannot truly delete ([Faiss](https://github.com/facebookresearch/faiss/wiki/Faiss-indexes), [hnswlib](https://github.com/nmslib/hnswlib)).
-- **Determinism.** Vectors must be computed once, by the committer or the always-on device, and stored as data, never recomputed and compared. Go's arm64 compiler fuses multiply-adds: 8,140 of 10,000 dot products differed from amd64 and wasm until explicit `float32()` rounding made all three agree ([Go spec](https://go.dev/ref/spec#Arithmetic_operators), [notes test](/private/tmp/claude-501/-Users-brien-urnetwork-sidecar/ab317000-f07f-4dd3-a893-6aa3b74b038e/scratchpad/fmatest/main.go)).
+- **Index structure.** A flat scan of one million codes took 3.8 ms natively and 8–34 ms in Go wasm (notes benchmark), so flat per-bucket segments need no HNSW graph. HNSW would add 128–256 bytes of links per vector, depends on seeds and insertion order, and cannot truly delete ([Faiss](https://github.com/facebookresearch/faiss/wiki/Faiss-indexes), [hnswlib](https://github.com/nmslib/hnswlib)).
+- **Determinism.** Vectors must be computed once, by the committer or the always-on device, and stored as data, never recomputed and compared. Go's arm64 compiler fuses multiply-adds: 8,140 of 10,000 dot products differed from amd64 and wasm until explicit `float32()` rounding made all three agree ([Go spec](https://go.dev/ref/spec#Arithmetic_operators), notes test).
 - **Payoff for mail.** Modest. On keyword queries, Azure measured BM25 at 79.2 nDCG@3 against 11.7 for vectors. Vectors won on low-overlap queries (36.1 against 23.0) and on misspellings ([Azure AI Search](https://techcommunity.microsoft.com/blog/azure-ai-services-blog/azure-ai-search-outperforming-vector-search-with-hybrid-retrieval-and-ranking-capabilities/3929167)), and vocabulary-based typo expansion already covers misspellings.
 - **Runtime cost.** Too heavy for phones. Pure-Go Hugot builds to 15.4 MB natively and 31.8 MB in wasm; ONNX Runtime Web is 2.4 MB brotli plus a 23–34 MB int8 model ([Hugot](https://github.com/knights-analytics/hugot), [ORT-Web files](https://data.jsdelivr.com/v1/packages/npm/onnxruntime-web@1.31.1?structure=flat), [MiniLM ONNX](https://huggingface.co/Xenova/all-MiniLM-L6-v2/tree/main/onnx)).
 
