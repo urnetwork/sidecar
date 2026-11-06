@@ -11,10 +11,12 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"slices"
 	"testing"
 
@@ -910,7 +912,8 @@ func TestVerifySignedCoversReceivedBytesNeverAReMarshal(t *testing.T) {
 }
 
 // A Signed crosses the wire and still verifies, an unknown field in the wrapper included, because the
-// signature covers only purpose, type and body.
+// signature covers only purpose, type and body and §6.4 skips what it does not know. That same openness is why a
+// Signed's own hash names no statement (TestSignedBytesSha256NamesEveryRewrittenSigned).
 func TestVerifySignedAfterWireRoundTrip(t *testing.T) {
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
@@ -927,6 +930,109 @@ func TestVerifySignedAfterWireRoundTrip(t *testing.T) {
 	}
 	if err := VerifySigned(decoded, purpose, signedType, SignedKeyAlgEd25519, testEd25519Public()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Pins the hash against the fixed vector's WebAuthn challenge, which §6.9 defines as this value, so it cannot change
+// with SignedBytes unnoticed.
+func TestSignedBytesSha256FixedVector(t *testing.T) {
+	want := testFromHex(t, "5a07f52f80f256266644464b50fedf2a68dc505581f41b27a20104516d2fe9fb")
+	got := SignedBytesSha256(testPurpose, SignedType_SIGNED_BRIDGE_WITHDRAW, testBody)
+	if !bytes.Equal(got[:], want) {
+		t.Fatalf("got %x, want %x", got, want)
+	}
+}
+
+// One RepoGrant written every way a relay can write it. Each form encodes apart and verifies, so a replay check
+// keyed on the hash of what arrived, §7.9's as written, takes each for a statement it has not seen, and a server
+// could carry the grant again after its RepoRevoke. The signed bytes' hash is the same for all of them, so a check
+// keyed on it refuses every one after the first.
+func TestSignedBytesSha256NamesEveryRewrittenSigned(t *testing.T) {
+	purpose := testOtherPurpose
+	signedType := SignedType_SIGNED_REPO_GRANT
+	p256Key, p256Public := testP256Key(t)
+	marshal := func(signed *Signed) []byte {
+		encoded, err := proto.Marshal(signed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+
+	plain := marshal(testSignEd25519(purpose, signedType, testBody))
+	unknownField := protowire.AppendBytes(protowire.AppendTag(bytes.Clone(plain), 100, protowire.BytesType), []byte("x"))
+	repeatedBody := protowire.AppendBytes(protowire.AppendTag(bytes.Clone(plain), 1, protowire.BytesType), testBody)
+	countersigned := testSignEd25519(purpose, signedType, testBody)
+	countersigned.Webauthn = &WebAuthnEvidence{KeyId: []byte("not a key"), Signature: []byte("not a signature")}
+	otherIds := testSignEd25519(purpose, signedType, testBody)
+	otherIds.SignerId, otherIds.KeyId = otherIds.KeyId, otherIds.SignerId
+
+	p256Signed := testSignP256(t, p256Key, purpose, signedType, testBody)
+	var rs struct{ R, S *big.Int }
+	if _, err := asn1.Unmarshal(p256Signed.Signature, &rs); err != nil {
+		t.Fatal(err)
+	}
+	rs.S.Sub(elliptic.P256().Params().N, rs.S)
+	otherSignature, err := asn1.Marshal(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p256Other := &Signed{Body: testBody, Signature: otherSignature, Type: uint32(signedType)}
+
+	cases := []struct {
+		name      string
+		encoded   []byte
+		alg       SignedKeyAlg
+		publicKey []byte
+	}{
+		{name: "as signed", encoded: plain, alg: SignedKeyAlgEd25519, publicKey: testEd25519Public()},
+		{name: "an unknown field", encoded: unknownField, alg: SignedKeyAlgEd25519, publicKey: testEd25519Public()},
+		{name: "the body twice", encoded: repeatedBody, alg: SignedKeyAlgEd25519, publicKey: testEd25519Public()},
+		{
+			name:      "a countersignature no row asks for",
+			encoded:   marshal(countersigned),
+			alg:       SignedKeyAlgEd25519,
+			publicKey: testEd25519Public(),
+		},
+		{name: "other ids", encoded: marshal(otherIds), alg: SignedKeyAlgEd25519, publicKey: testEd25519Public()},
+		{name: "ecdsa's (r, s)", encoded: marshal(p256Signed), alg: SignedKeyAlgEcdsaP256, publicKey: p256Public},
+		{name: "ecdsa's (r, n - s)", encoded: marshal(p256Other), alg: SignedKeyAlgEcdsaP256, publicKey: p256Public},
+	}
+
+	want := SignedBytesSha256(purpose, signedType, testBody)
+	encodingNames := map[[sha256.Size]byte]string{}
+	for _, c := range cases {
+		decoded := &Signed{}
+		if err := proto.Unmarshal(c.encoded, decoded); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if err := VerifySigned(decoded, purpose, signedType, c.alg, c.publicKey); err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		// Two forms alike would prove less than this claims.
+		encoding := sha256.Sum256(c.encoded)
+		if other, ok := encodingNames[encoding]; ok {
+			t.Errorf("%s encodes as %s does", c.name, other)
+		}
+		encodingNames[encoding] = c.name
+		if got := SignedBytesSha256(purpose, SignedType(decoded.GetType()), decoded.GetBody()); got != want {
+			t.Errorf("%s: got %x, want %x", c.name, got, want)
+		}
+	}
+}
+
+// What the signature covers is what the hash covers, so two statements never share one.
+func TestSignedBytesSha256CoversPurposeTypeAndBody(t *testing.T) {
+	signedType := SignedType_SIGNED_REPO_GRANT
+	statement := SignedBytesSha256(testOtherPurpose, signedType, testBody)
+	for name, other := range map[string][sha256.Size]byte{
+		"purpose": SignedBytesSha256(testPurpose, signedType, testBody),
+		"type":    SignedBytesSha256(testOtherPurpose, SignedType_SIGNED_REPO_REVOKE, testBody),
+		"body":    SignedBytesSha256(testOtherPurpose, signedType, []byte("another synthetic body")),
+	} {
+		if other == statement {
+			t.Errorf("another %s hashes alike", name)
+		}
 	}
 }
 

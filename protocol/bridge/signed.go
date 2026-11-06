@@ -3,7 +3,8 @@
 //
 // Signatures cover the bytes as received, never a re-marshal (§22.6): VerifySigned reads Signed.body and
 // parses nothing inside it, and a caller parses that body only after it returns nil, only as the
-// message its type registers.
+// message its type registers. They cover purpose, type and body and nothing else of a Signed, so what
+// names a statement comes from those three (SignedBytesSha256), never from the Signed around them.
 //
 // No key is created, derived or unwrapped here, since these checks take public keys only, so nothing
 // calls testHookSecret. Package-level functions are safe for concurrent use.
@@ -86,8 +87,20 @@ func SignedBytes(purpose string, signedType SignedType, body []byte) []byte {
 	return append(signedBytes, body...)
 }
 
+// The signed bytes' SHA-256: ECDSA's digest, WebAuthn's challenge and an act's leaf (§7.9), and the one hash of a
+// statement that its signature fixes, so what refuses a repeat keys on this.
+//
+// A hash of the Signed is no identity. No signature covers its signer_id, key_id, webauthn or unknown fields, or
+// the way it is encoded, §7.9 ignores a countersignature it does not require, and ECDSA takes (r, n - s) as well as
+// (r, s), so a relay can write one statement as any number of Signeds that all verify and all hash apart. §7.9's
+// replay row, keyed on such a hash, would pass each as new.
+func SignedBytesSha256(purpose string, signedType SignedType, body []byte) [sha256.Size]byte {
+	return sha256.Sum256(SignedBytes(purpose, signedType, body))
+}
+
 // Refuses a type other than expectedType, then checks the signature over the signed bytes. Returns nil
-// only when signed verifies under publicKey as that type.
+// only when signed verifies under publicKey as that type. A nil says that of the purpose, type and body,
+// and nothing of the rest of signed (SignedBytesSha256).
 //
 // Callers resolve Signed.key_id to its key record for keyAlg and publicKey, and pass the purpose and
 // type their position expects. A purpose and type that were not signed together fail the signature, since
@@ -116,7 +129,6 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 		return fmt.Errorf("%w: got %d, expected %d", ErrSignedTypeMismatch, signed.GetType(), int32(expectedType))
 	}
 
-	signedBytes := SignedBytes(purpose, expectedType, signed.GetBody())
 	evidence := signed.GetWebauthn()
 
 	switch keyAlg {
@@ -128,7 +140,7 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 		if len(publicKey) != ed25519.PublicKeySize {
 			return fmt.Errorf("%w: ed25519 public key of %d bytes", ErrSignedKey, len(publicKey))
 		}
-		if !ed25519.Verify(publicKey, signedBytes, signed.GetSignature()) {
+		if !ed25519.Verify(publicKey, SignedBytes(purpose, expectedType, signed.GetBody()), signed.GetSignature()) {
 			return ErrSignedSignature
 		}
 		return nil
@@ -141,7 +153,7 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrSignedKey, err)
 		}
-		digest := sha256.Sum256(signedBytes)
+		digest := SignedBytesSha256(purpose, expectedType, signed.GetBody())
 		if !ecdsa.VerifyASN1(ecdsaKey, digest[:], signed.GetSignature()) {
 			return ErrSignedSignature
 		}
@@ -184,7 +196,7 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 			return fmt.Errorf("%w: client data type", ErrSignedEvidence)
 		}
 		// The challenge is the SHA-256 of the signed bytes, so it covers the type.
-		challenge := sha256.Sum256(signedBytes)
+		challenge := SignedBytesSha256(purpose, expectedType, signed.GetBody())
 		if clientData.Challenge != base64.RawURLEncoding.EncodeToString(challenge[:]) {
 			return fmt.Errorf("%w: challenge", ErrSignedEvidence)
 		}
