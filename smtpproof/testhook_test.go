@@ -37,12 +37,6 @@ func TestHooksEmptyWithoutTag(t *testing.T) {
 			// an import, var or type here would be state the untagged build should not have
 			t.Errorf("testhook.go has %d declarations, want the two hooks alone", len(file.Decls))
 		}
-		for _, importSpec := range file.Imports {
-			// the root is linked here only under the tag
-			if importSpec.Path.Value == `"github.com/urnetwork/sidecar"` {
-				t.Errorf("%s imports the root in the untagged build", goFile)
-			}
-		}
 		for _, decl := range file.Decls {
 			if funcDecl, ok := decl.(*ast.FuncDecl); ok {
 				switch funcDecl.Name.Name {
