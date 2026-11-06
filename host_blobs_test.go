@@ -288,6 +288,29 @@ func TestBlobMetadataValidatesExactlyWhatAHeaderCarries(t *testing.T) {
 	}
 }
 
+// The store refuses past 2 KiB with the header prefix counted, so a fake must refuse there too.
+func TestBlobMetadataStaysInsideTheStoresLimit(t *testing.T) {
+	prefixByteCount := len("x-amz-meta-") + len("entry-state")
+	valueByteCount := 2*1024 - prefixByteCount
+
+	atLimit := &BlobPutOptions{Metadata: map[string]string{"entry-state": strings.Repeat("a", valueByteCount)}}
+	if err := atLimit.Validate(); err != nil {
+		t.Errorf("at the limit: %v", err)
+	}
+	pastLimit := &BlobPutOptions{Metadata: map[string]string{"entry-state": strings.Repeat("a", valueByteCount+1)}}
+	if err := pastLimit.Validate(); !errors.Is(err, ErrBlobPutOptions) {
+		t.Errorf("past the limit: %v", err)
+	}
+	// the limit is on the whole set, not one value
+	spread := &BlobPutOptions{Metadata: map[string]string{
+		"a": strings.Repeat("a", 1024),
+		"b": strings.Repeat("a", 1024),
+	}}
+	if err := spread.Validate(); !errors.Is(err, ErrBlobPutOptions) {
+		t.Errorf("spread past the limit: %v", err)
+	}
+}
+
 func TestBlobRequestDeadlineDefaultsToTheStoresTimeout(t *testing.T) {
 	issued := time.Unix(1000, 0)
 	got := BlobRequestDeadline(context.Background(), issued, 10*time.Second)

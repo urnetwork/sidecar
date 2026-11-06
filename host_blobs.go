@@ -63,6 +63,13 @@ var (
 	ErrBlobPutOptions = errors.New("blob put options invalid")
 )
 
+// The store's limits on a PUT's metadata (minio/cmd/generic-handlers.go, maxUserDataSize): 2 KiB,
+// counting each key with the header prefix it travels under. Format values, not settings.
+const (
+	blobMetadataMaxByteCount = 2 * 1024
+	blobMetadataKeyPrefix    = "x-amz-meta-"
+)
+
 // A PUT or DELETE that may have applied, or may yet apply before the next request on its key: a
 // timeout, an EOF or a 5xx. The caller rereads (§11.8's unknown row), and deletes nothing on the
 // strength of it (I-EVS-2). Err is what the transport said, for logs only.
@@ -182,7 +189,8 @@ type BlobPutOptions struct {
 	// Object metadata, read back by Head and Get: an idx/ entry's state while a head lists sources
 	// (§11.7). Nil for every other family, which carries none (§19.6). Keys are lowercase letters,
 	// digits and dashes, and values printable ASCII with no space at either end, which an HTTP header
-	// drops: what a store's headers carry unchanged, so T2's fake and the store agree.
+	// drops: what a store's headers carry unchanged, so T2's fake and the store agree. The store takes
+	// 2 KiB of them, keys included.
 	Metadata map[string]string
 }
 
@@ -195,10 +203,12 @@ func (self *BlobPutOptions) Validate() error {
 	if len(self.Sha256) != 0 && len(self.Sha256) != 32 {
 		return fmt.Errorf("%w: a %d byte checksum", ErrBlobPutOptions, len(self.Sha256))
 	}
+	metadataByteCount := 0
 	for key, value := range self.Metadata {
 		if key == "" {
 			return fmt.Errorf("%w: an empty metadata key", ErrBlobPutOptions)
 		}
+		metadataByteCount += len(blobMetadataKeyPrefix) + len(key) + len(value)
 		for i := 0; i < len(key); i += 1 {
 			c := key[i]
 			if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
@@ -213,6 +223,9 @@ func (self *BlobPutOptions) Validate() error {
 		if strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ") {
 			return fmt.Errorf("%w: a space at the end of a metadata value", ErrBlobPutOptions)
 		}
+	}
+	if blobMetadataMaxByteCount < metadataByteCount {
+		return fmt.Errorf("%w: %d bytes of metadata", ErrBlobPutOptions, metadataByteCount)
 	}
 	return nil
 }
