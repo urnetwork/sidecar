@@ -21,8 +21,9 @@ var errInvalidSettings = errors.New("invalid sidecar settings")
 
 // Whether the settings can run a Sidecar. Each leg's validateLeg adds what only that leg uses.
 //
-// Only this keeps an empty service url out of the page Worker's requests (api_transport.go), so
-// NewSidecar runs it on every leg, and legs_test.go fails a NewSidecar that does not.
+// An empty service url stops here with a clear error, and not at a dial, which in the page Worker
+// would go to the page's own host (api_transport.go). So NewSidecar runs this on every leg, and
+// legs_test.go fails a NewSidecar that does not.
 func (self *SidecarSettings) validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: no settings", errInvalidSettings)
