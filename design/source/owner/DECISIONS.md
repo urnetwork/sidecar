@@ -881,6 +881,13 @@ The owner answered the questions HANDOFF.md left for them, and those the build r
     - Not taken: removing it, which would let a compromised device park other devices with no presence check.
     - Raised by HANDOFF.md section 10, from the final meta review's fixes.
 
+193. **The owner signs G0 on 2026-11-06; the re-checks, the density review and the RECORD.md draft run beside M0's bootstrap.**
+    - Question: D-PHASE-2 says no code before G0, and G0 had not passed: 21 ledger items needed a reviewer's re-check, the density rule needed a judgment, and no one was named to sign.
+    - Answer: the owner signs G0 on 2026-11-06. The re-checks, the density review and the RECORD.md draft run beside M0's bootstrap, and their findings return as Q- items.
+    - Cost: a finding could change something already built.
+    - Not taken: agents re-checking first; the owner's reviewers re-checking first.
+    - Raised by HANDOFF.md sections 7 and 10.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.
