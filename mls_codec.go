@@ -129,6 +129,15 @@ func (self *mlsEncoder) writeVectorOf(writeElements func(elements *mlsEncoder)) 
 	self.writeVector(elements.encoded)
 }
 
+// uint16 values<V>.
+func (self *mlsEncoder) writeUint16Vector(values []uint16) {
+	self.writeVectorOf(func(elements *mlsEncoder) {
+		for _, value := range values {
+			elements.writeUint16(value)
+		}
+	})
+}
+
 // optional<T>'s presence octet. The caller writes the value after it when present.
 func (self *mlsEncoder) writeOptional(present bool) {
 	if present {
@@ -277,6 +286,15 @@ func (self *mlsDecoder) readVectorOf(readElement func(element *mlsDecoder)) {
 			return
 		}
 	}
+}
+
+// uint16 values<V>.
+func (self *mlsDecoder) readUint16Vector() []uint16 {
+	var values []uint16
+	self.readVectorOf(func(element *mlsDecoder) {
+		values = append(values, element.readUint16())
+	})
+	return values
 }
 
 // optional<T>'s presence octet: anything but 0 or 1 is malformed (§2.1.1). The caller reads the

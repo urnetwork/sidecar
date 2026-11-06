@@ -37,7 +37,7 @@ func (self *mlsHexBytes) UnmarshalJSON(encoded []byte) error {
 }
 
 // Reads one vector file into target.
-func mlsLoadVectorFile(t *testing.T, path string, target any) {
+func mlsLoadVectorFile(t testing.TB, path string, target any) {
 	t.Helper()
 	encoded, err := os.ReadFile(path)
 	if err != nil {
@@ -49,7 +49,7 @@ func mlsLoadVectorFile(t *testing.T, path string, target any) {
 }
 
 // Reads the mlswg vector file with this name.
-func mlsLoadVectors(t *testing.T, name string, target any) {
+func mlsLoadVectors(t testing.TB, name string, target any) {
 	t.Helper()
 	mlsLoadVectorFile(t, filepath.Join("testdata", "mls", "mlswg", name+".json"), target)
 }
