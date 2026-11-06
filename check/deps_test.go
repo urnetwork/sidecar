@@ -178,7 +178,8 @@ func (self *repository) legModuleFindings(t testing.TB) []string {
 				continue
 			}
 			if row.planned {
-				findings = append(findings, findingf("%s links %s, and its row still says planned", leg.name, modulePath))
+				// its license is read from its files from now on, so all this leaves is a stale field
+				self.report("a leg links %s, whose row can drop planned", modulePath)
 			}
 			if leg.class != classTest && !slices.Contains(row.legs, leg.class) {
 				findings = append(findings, findingf("%s is a %s leg and links %s, whose row names %v", leg.name, leg.class, modulePath, row.legs))
@@ -460,8 +461,8 @@ func (self *checkSettings) licenseFindings(row *dependencyRow, version string, l
 }
 
 // Every row's id against §4.7's list, and every linked module's files against its row. A planned
-// row has no files to read yet, so its id alone is checked; its module joins the file check on
-// landing, when the deps row makes it give up planned.
+// row has no files to read yet, so its id alone is checked, and its module joins the file check the
+// moment a leg links it, planned or not.
 func (self *repository) licenseRowFindings(t testing.TB) []string {
 	t.Helper()
 	rowsByModule, findings := self.dependencyRows(t)

@@ -78,12 +78,21 @@ func TestDepsFailsOnAModuleOutsideItsRowsLegs(t *testing.T) {
 	wantFindings(t, fixture.open().legModuleFindings(t), "root linux/amd64 is a client leg and links @glog@, whose row names [cli]")
 }
 
-func TestDepsFailsOnAPlannedRowThatIsLinked(t *testing.T) {
+// planted spares a row the stale check and nothing else: once a leg links the module its files are
+// read like any other's, so a row that said planned cannot wave a license through.
+func TestDepsReadsAPlannedRowsFilesOnceItIsLinked(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
 	fixture.write("planted.go", "package sidecar\n\nimport _ \"google.golang.org/protobuf/proto\"\n")
-	wantFindings(t, fixture.open().legModuleFindings(t),
-		"root linux/amd64 links google.golang.org/protobuf, and its row still says planned")
+	fixture.edit("dependencies.yml", "spdx: BSD-3-Clause", "spdx: MIT")
+	repository := fixture.open()
+	reports := []string{}
+	repository.report = func(format string, arguments ...any) {
+		reports = append(reports, findingf(format, arguments...))
+	}
+	wantFindings(t, repository.legModuleFindings(t))
+	wantFindings(t, reports, "a leg links google.golang.org/protobuf, whose row can drop planned")
+	wantFindings(t, repository.licenseRowFindings(t), "google.golang.org/protobuf says MIT, and its license text lacks")
 }
 
 // Every way the file can stray from its one shape fails, rather than dropping a row in silence.

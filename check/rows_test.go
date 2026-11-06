@@ -44,7 +44,7 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestDepsFailsOnServerInALeg", "TestDepsFailsOnSdkInALeg", "TestDepsFailsOnSnInALeg",
 			"TestDepsFailsOnAnEngineLinkingGoRedis", "TestDepsFailsOnAnUnlistedModuleInALeg", "TestDepsFailsOnAModuleOutsideItsRowsLegs",
-			"TestDepsFailsOnAPlannedRowThatIsLinked", "TestDepsFailsOnAnUnreadableDependenciesFile",
+			"TestDepsFailsOnAnUnreadableDependenciesFile",
 		},
 	},
 	{
