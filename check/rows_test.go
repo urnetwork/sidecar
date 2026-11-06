@@ -130,8 +130,11 @@ var failsOnRows = []failsOnRow{
 	},
 	{
 		row: "layering", item: "device beyond connect and protocol/bridge (§4.4, D-SDK-20)",
-		rule:         (*repository).deviceImportFindings,
-		plantedTests: []string{"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol"},
+		rule: (*repository).deviceImportFindings,
+		plantedTests: []string{
+			"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol",
+			"TestLayeringFailsOnDevicesTaggedHookFileImportingTheRoot",
+		},
 	},
 	{
 		row: "layering", item: "a parent importing its child (R-REPO-5)",
@@ -276,7 +279,8 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnAPackagesHookHeldInAVariable", "TestHygieneFailsOnAPackagesHalfMissing",
 			"TestHygieneFailsOnAPackagesTaggedHalfNotForwarding", "TestHygieneFailsOnAHookPairInANestedModule",
 			"TestHygieneFailsOnAnEntryPointWithoutTheTag", "TestHygieneFailsOnAnEntryPointOutsideTheRoot",
-			"TestHygieneFailsOnAHookWithAnotherSignature",
+			"TestHygieneFailsOnAHookWithAnotherSignature", "TestHygieneFailsOnADeviceEntryPoint",
+			"TestHygieneFailsOnADeviceInstallerWithoutTheTag", "TestHygieneFailsOnADeviceHookWithABody",
 		},
 	},
 	{
