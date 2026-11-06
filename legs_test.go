@@ -144,9 +144,10 @@ WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 // with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
 // its fetch tests, since a run that skipped them would still exit 0.
 func TestHttpLegPassesInAWorker(t *testing.T) {
+	// a failure and not a skip: a leg that did not run has not passed
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skipf("no node to run the sidecar_http leg in, so this leg went untested: %v", err)
+		t.Fatalf("the sidecar_http leg runs in node: %v", err)
 	}
 	goroot, err := exec.Command("go", "env", "GOROOT").Output()
 	if err != nil {
