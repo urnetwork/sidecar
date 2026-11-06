@@ -1,0 +1,127 @@
+// The subprotocol's envelope, errors, Hello and HeadCheck (§6.4, §6.5). No oneof here or in anything
+// these carry (§6.11), because protobuf-go allocates a wrapper per set oneof and hot-path decodes stay
+// allocation-free.
+//
+// Ping and Pong carry no body, and Cancel names its call in Envelope.request_id, so none has a message.
+
+syntax = "proto3";
+package urnetwork.sidecar;               // not connect's "bringyour"
+
+import "protocol/bridge/auth.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message Envelope {
+  uint32 version = 1;      // wire major
+  uint32 type = 2;         // MessageType (§6.11): service << 8 | message
+  fixed64 request_id = 3;  // random: RPC correlation, idempotency key, chunk group
+  uint32 flags = 4;        // 1 RESPONSE, 2 ERROR, 4 MORE, 8 NO_REPLY
+  uint64 stream_id = 5;
+  uint32 timeout_ms = 6;   // requests: relative deadline
+  Chunk chunk = 7;
+  bytes body = 15;
+}
+
+message Chunk {
+  uint32 index = 1;
+  uint32 count = 2;
+  uint32 total_byte_count = 3;
+  bytes sha256 = 4;        // of the whole body; final chunk only
+}
+
+message Error {
+  uint32 code = 1;             // ErrorCode
+  string message = 2;
+  uint32 retry_after_ms = 3;   // RESOURCE_EXHAUSTED, UNAVAILABLE
+  bytes result_ref = 4;        // ALREADY_EXISTS for an uncached response
+}
+
+// Permanent once released (D-PROTO-20); prose drops the ERR_ prefix; OK is never sent, and an Error
+// carrying it fails its call as an unknown code does.
+enum ErrorCode {
+  ERR_OK = 0; ERR_CANCELLED = 1; ERR_INVALID_ARGUMENT = 2; ERR_DEADLINE_EXCEEDED = 3;
+  ERR_NOT_FOUND = 4; ERR_ALREADY_EXISTS = 5; ERR_PERMISSION_DENIED = 6; ERR_RESOURCE_EXHAUSTED = 7;
+  ERR_FAILED_PRECONDITION = 8; ERR_ABORTED = 9; ERR_UNAVAILABLE = 10; ERR_UNIMPLEMENTED = 11;
+  ERR_UNAUTHENTICATED = 12; ERR_TOO_LARGE = 13; ERR_VERSION = 14;
+}
+
+message Hello {
+  uint32 min_version = 1;
+  uint32 max_version = 2;
+  uint32 secure_version = 3;       // refused below MinSecureVersion
+  uint64 features = 4;             // §6.11's registry; never security properties
+  uint32 max_body_byte_count = 5;
+  uint32 initial_window = 6;       // credit the sender grants a stream before accepting it (§6.7)
+  bytes binding = 7;               // §5.5 SidecarIdentityBinding, both signatures; empty from edges
+}
+
+// Hello's fields.
+message HelloResult {
+  uint32 min_version = 1;
+  uint32 max_version = 2;
+  uint32 secure_version = 3;
+  uint64 features = 4;
+  uint32 max_body_byte_count = 5;
+  uint32 initial_window = 6;
+  bytes binding = 7;
+}
+
+message HeadCheck {                // any admitted sidecar answers
+  bytes   network_id = 1;
+  AuthPin auth = 2;                // §7.9's (n, A_n), from protocol/bridge (§4.4)
+  repeated GroupHead groups = 3;   // MLS groups both peers are leaves of, <= 16, rotating
+  repeated GenHead gens = 4;       // repos both read, <= 16, rotating
+  repeated RefHead refs = 5;       // refs both read, <= 16, rotating
+  repeated bytes vetoes = 6;       // Signed RecoveryVetoes pending or recently activated in the sender's
+                                   //   view (§7.9), <= 4
+  AuthPin proven = 7;              // only while the sender holds proof of withholding or an auth fork
+                                   //   (§6.4): the withheld tip, or the pin it forks with
+  repeated UnverifiedPin unverified = 8; // only while the sender holds unverified pins (§6.4's relay):
+                                         //   <= 4, highest first
+}
+
+// HeadCheck's fields (I-16).
+message HeadCheckResult {
+  bytes   network_id = 1;
+  AuthPin auth = 2;
+  repeated GroupHead groups = 3;
+  repeated GenHead gens = 4;
+  repeated RefHead refs = 5;
+  repeated bytes vetoes = 6;
+  AuthPin proven = 7;
+  repeated UnverifiedPin unverified = 8;
+}
+
+message UnverifiedPin {
+  AuthPin pin = 1;
+  repeated bytes path = 2;         // sidecar_ids: the claimant, then each relayer before the sender
+}
+
+message GroupHead {
+  bytes group_id = 1;
+  uint64 epoch = 2;
+  bytes epoch_authenticator = 3;
+}
+
+message GenHead {
+  bytes group_id = 1;
+  uint64 generation = 2;
+  bytes commitment = 3;            // C_g (§10.5)
+}
+
+message RefHead {
+  bytes repo_id = 1;
+  bytes ref_id = 2;
+  uint64 version = 3;
+  bytes chain = 4;                 // C_v (§11.8)
+}
+
+message HeadCheckProofRequest {
+  uint64 after = 1;                // the requester's n
+}
+
+// AuthEntries after it up to the responder's proven pin, else its auth pin, <= 64 KiB; a base as its
+// header only, its rows by hash from api.
+message HeadCheckProof {
+  repeated bytes entries = 1;
+}

@@ -389,9 +389,9 @@ SERVICES = _replace(SERVICES, 'config',
      "the `urnetwork-edge` network's id; tiers, limits, prices and `sidecar_abuse:`; Team price ids; zones; abuse "
      "feeds and reviewer and pager routing", '§19.11, §20.14, §21.16'))
 SERVICES = _replace(SERVICES, 'file cluster',
-    ('file cluster', "MinIO from the final upstream source, with PR #21653's conditional-write fix, on 4 LAN hosts: a "
-                     "1,024 TB raw HDD segment cluster at EC:8 and metadata clusters of 8 × PM9A3 1.92 TB at EC:4, "
-                     "added whole",
+    ('file cluster', "D-OPS-20's in-house build in the `urnetwork/minio` fork (owner decision 195): MinIO from the final "
+                     "upstream source, with PR #21653's conditional-write fix, on 4 LAN hosts: a 1,024 TB raw HDD "
+                     "segment cluster at EC:8 and metadata clusters of 8 × PM9A3 1.92 TB at EC:4, added whole",
      "The system of record for evs and gkm, whose Blobs client cancels a request unanswered 10 s after its last byte; "
      "the metadata tier grows only by whole clusters, never pools (owner decisions 94, 116, 136-140, 145)", '§19.6, §19.9'))
 SERVICES = _replace(SERVICES, 'xops',

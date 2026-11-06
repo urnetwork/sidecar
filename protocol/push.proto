@@ -1,0 +1,32 @@
+// Server push (§6.8): idempotent state sync from ControlId, hints and never content, with the HTTPS
+// long-poll's body. No oneof, as in envelope.proto.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message PushReset {            // <= 48 versions a part
+  uint64 epoch = 1;
+  repeated TopicVersion versions = 2;
+  bool complete = 3;
+}
+
+message TopicVersion {
+  string topic = 1;
+  uint64 version = 2;
+}
+
+message PushHint {
+  uint64 seq = 1;        // the INCR value; a gap means hints were lost
+  string topic = 2;      // §6.8's topic registry
+  uint64 version = 3;
+  uint32 kind = 4;       // the owner's MessageType (§6.11), or 0
+  bytes hint = 5;        // that message, <= 256 B: ids, kinds, versions; never content; dropped when coalesced
+}
+
+message PollResponse {   // GET /sidecar/sync/poll's 200 body, application/octet-stream
+  bytes cursor = 1;      // opaque: the last hint stream id included, unchanged after an empty hold
+  repeated PushHint hints = 2;
+  PushReset reset = 3;   // first, for an empty cursor or one past the stream's retention
+}

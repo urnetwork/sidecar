@@ -1,0 +1,37 @@
+// The message catalog (§6.11): service << 8 | message, one dispatcher behind subprotocol id 21842. Owners
+// define messages and §6 assigns their numbers, permanent once released. An RPC's result type is its
+// request's value + 1. Services 0x80-0xFF are unreleased experiments. Push kinds ride in PushHint.hint.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// Comments: owner; carrier.
+enum MessageType {
+  MESSAGE_TYPE_NONE = 0;
+  HELLO = 0x0001; HELLO_RESULT = 0x0002; PING = 0x0003; PONG = 0x0004;        // §6; peer
+  CANCEL = 0x0005; ERROR = 0x0006; HEAD_CHECK = 0x0007; HEAD_CHECK_RESULT = 0x0008;
+  HEAD_CHECK_PROOF_REQUEST = 0x0009; HEAD_CHECK_PROOF = 0x000A;              // §6.4; peer RPC
+  PUSH_RESET = 0x0101; PUSH_HINT = 0x0102;                                    // §6; ControlId -> client
+  STREAM_OPEN = 0x0201; STREAM_ACCEPT = 0x0202; STREAM_REJECT = 0x0203;       // §6; peer
+  STREAM_DATA = 0x0204; STREAM_WINDOW = 0x0205; STREAM_CLOSE = 0x0206; STREAM_RESET = 0x0207;
+  SOCKET_HINT = 0x1001;                       // §9.5; push sock: {kind: revoked or drain, listen_id}
+  // 0x11 §8: none; policy rides the config repo (owner decisions 5, 6)
+  MEMBERSHIP_CHANGED = 0x1201; APPROVAL_REQUESTED = 0x1202;                   // §7; push team
+  AUTHORITY_HEAD_CHANGED = 0x1203;
+  GKM_HINT = 0x1301;                          // §10; push gkm, gkm:<group_id>
+  EVS_HEAD_CHANGED = 0x1401;                  // §11; push evs:<repo_id>
+  reserved 0x1402 to 0x1403;                  // withdrawn EvsHeadCheck: ref pins ride HeadCheck; never reused
+  reserved "EVS_HEAD_CHECK", "EVS_HEAD_CHECK_RESULT";
+  SEARCH = 0x1404; SEARCH_RESULT = 0x1405;    // §11.14; peer RPC, remote search (owner decision 175)
+  TLS_EDGE_OPEN = 0x1501; TLS_HINT = 0x1502;  // §13; StreamOpen metadata; push tls
+  SMTP_PREAMBLE = 0x1601; SMTP_PREAMBLE_RESULT = 0x1602; SMTP_OUTCOME = 0x1603; // §14; stream to smtpedge
+  SMTP_STATUS = 0x1604;                       // §14; push mail
+  SMTP_PROOF = 0x1605; SMTP_PROOF_RESULT = 0x1606;                            // §14; BDAT and DATA proofs, RPC to smtpedge, M9
+  MAIL_INGRESS = 0x1701; MAIL_HINT = 0x1702;  // §15; StreamOpen metadata; push mail
+  // 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
+  // 0x19 §17: none; bridge rules ride the config repo (owner decision 5)
+  CORE_HINT = 0x1A01;                         // §5; push core
+  DNS_ZONE_CHANGED = 0x1B01;                  // §12; push dns
+}

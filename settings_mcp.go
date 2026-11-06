@@ -1,0 +1,95 @@
+// §16's local settings. Each field is a limit §16 states in prose, under the name this file gives it,
+// so the track that builds §16 extends these structs and keeps the names.
+
+package sidecar
+
+import (
+	"time"
+)
+
+// §16.4's bounds on one MCP session.
+type SidecarMcpSettings struct {
+	// Calls in flight a session: 8.
+	SessionCallCount int
+	// W calls a session may start: 20 a second.
+	SessionWriteRate SidecarRate
+	// A result over this becomes a resource_link from 2025-06-18, else a text naming the ur://
+	// resource: 256 KiB (D-MCP-13).
+	ResultByteCount int
+	// 30 s, under Codex's 60 s tool_timeout_sec default. A call awaiting a person returns pending at
+	// once.
+	CallTimeout time.Duration
+}
+
+// §16.7's capture bounds. Every cut, missed event or changed config is a coverage gap.
+type SidecarIngestSettings struct {
+	// One hook payload or tool body: 1 MiB.
+	PayloadByteCount int64
+	// A file over this is recorded by hash and size: 8 MiB.
+	FileByteCount int64
+	// Captured bytes per run-hour: 256 MiB.
+	RunHourByteCount int64
+	// The local encrypted spool: 1 GiB.
+	SpoolByteCount int64
+	// A transcript is tailed this often, and at Stop, SubagentStop, PreCompact and SessionEnd: 30 s.
+	TranscriptTailInterval time.Duration
+	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
+	HookExitTimeout time.Duration
+	// A run's restore point: 256 MiB.
+	RestorePointByteCount int64
+	// A path's bytes are held from its PreToolUse to its PostToolUse at most this long: 10 min.
+	RestoreHoldTimeout time.Duration
+	// And at most this much a file: 8 MiB.
+	RestoreHoldByteCount int64
+}
+
+// §16.8's record defaults.
+type SidecarRecordSettings struct {
+	// Entries one push carries into a stream: 64.
+	PushEntryCount int
+	// Or the entries of this long, whichever comes first: 1 s.
+	PushCoalesce time.Duration
+	// ReachReceipts coalesce per (grant, peer) over this: 5 min.
+	ReachReceiptCoalesce time.Duration
+	// A run with no SessionEnd closes its Coverage after this idle: 10 min.
+	CoverageIdleTimeout time.Duration
+	// The team record's retention until its admin signs a RetentionPolicy: 400 days, in days as
+	// RetentionPolicy.keep_days counts them.
+	TeamRecordKeepDays int
+	// And how much of that stays searchable: 90 days.
+	TeamRecordSearchableDays int
+}
+
+func defaultSidecarMcpSettings() *SidecarMcpSettings {
+	return &SidecarMcpSettings{
+		SessionCallCount: 8,
+		SessionWriteRate: SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
+		ResultByteCount:  256 * 1024,
+		CallTimeout:      30 * time.Second,
+	}
+}
+
+func defaultSidecarIngestSettings() *SidecarIngestSettings {
+	return &SidecarIngestSettings{
+		PayloadByteCount:       1024 * 1024,
+		FileByteCount:          8 * 1024 * 1024,
+		RunHourByteCount:       256 * 1024 * 1024,
+		SpoolByteCount:         1024 * 1024 * 1024,
+		TranscriptTailInterval: 30 * time.Second,
+		HookExitTimeout:        300 * time.Millisecond,
+		RestorePointByteCount:  256 * 1024 * 1024,
+		RestoreHoldTimeout:     10 * time.Minute,
+		RestoreHoldByteCount:   8 * 1024 * 1024,
+	}
+}
+
+func defaultSidecarRecordSettings() *SidecarRecordSettings {
+	return &SidecarRecordSettings{
+		PushEntryCount:           64,
+		PushCoalesce:             1 * time.Second,
+		ReachReceiptCoalesce:     5 * time.Minute,
+		CoverageIdleTimeout:      10 * time.Minute,
+		TeamRecordKeepDays:       400,
+		TeamRecordSearchableDays: 90,
+	}
+}

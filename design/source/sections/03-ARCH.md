@@ -60,7 +60,8 @@ sdk -------------> sidecar root, protocol; its device files only sidecar/device,
                                           (§18.10, D-SDK-20)
 server ----------> sidecar root, sidecar/<svc>service engines, sdk, connect (owner decisions 19, 104)
 apps, extension -> sdk bindings           (§18 D-SDK-2)
-warp, config, vault, build: no Go import (§19); connect: X9 rows per owner decisions 22, 85, 86, 176 (§4.6)
+warp, config, vault, build, minio: no Go import (§19; owner decision 195)
+connect: X9 rows per owner decisions 22, 85, 86, 176 (§4.6)
 ```
 
 | Plane | Carrier | Endpoints | Protection (owner) |

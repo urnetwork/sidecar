@@ -1,0 +1,221 @@
+// §7.9's config records: the ones only a sidecar role reads, §6 Signed, purpose authority. Genesis,
+// MemberRevoke, SidecarRevoke and the log live in bridge/auth.proto, which this file imports and never
+// redeclares (§4.9).
+//
+// §7.9 writes these as field lists without numbers. They take numbers in the order written, a
+// statement's StatementHeader being field 1, and are open to review until §7.9's records freeze at M2.
+// A record that §7.9 keeps to config heads, ServiceSettings and VersioningRules, is no statement and
+// carries no header.
+//
+// Where §7.9 seals part of a record to the config's current generation, only ids show and the rest rides
+// a sealed field, which opens to the *Body or list message beside it (§2.8's api-7). §7.9 names the seal
+// but not its bytes, so the field stays opaque here.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message AdminSet {                     // authority
+  StatementHeader header = 1;
+  repeated bytes owners = 2;           // member_ids
+  repeated bytes admins = 3;
+  repeated bytes network_admins = 4;
+  repeated bytes it_admins = 5;
+  uint32 threshold = 6;                // k
+}
+
+message MemberAdmit {                  // an Owner or Admin; authority if the member is in the AdminSet
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  MemberRole role = 3;                 // billing_admin, auditor or member
+}
+
+message SidecarAdmit {                 // an Owner, Admin or IT admin, or scoped; authority for an AdminSet
+                                       // member's device; owner-bound reads need §8.5's consent
+  StatementHeader header = 1;
+  bytes network_id = 2;
+  bytes sidecar_id = 3;
+  bytes identity_public_key = 4;
+  string identity_alg = 5;             // ed25519 in v0
+  bytes member_id = 6;                 // or tag_ids
+  repeated bytes tag_ids = 7;
+  bool ephemeral = 8;
+  int64 not_after = 9;                 // ms since the epoch; agents only
+  uint32 capabilities = 10;            // SidecarCapability bits
+}
+
+message AdmissionConfirm {             // any signer allowed to admit it
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+}
+
+message SponsorSet {                   // an admin (owner decision 83)
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  bytes sponsor_member_id = 3;
+}
+
+enum IndexerScope {
+  INDEXER_SCOPE_UNSPECIFIED = 0;
+  INDEXER_SCOPE_NETWORK = 1;
+  INDEXER_SCOPE_MEMBER = 2;
+}
+
+// Readers ignore a value they do not know; embed comes later.
+enum IndexerService {
+  INDEXER_SERVICE_UNSPECIFIED = 0;
+  INDEXER_SERVICE_MAIL = 1;
+  INDEXER_SERVICE_MIRROR = 2;
+  INDEXER_SERVICE_SEARCH = 3;
+}
+
+message IndexerSet {                   // network: an Owner or Admin; member: a consented device (§8.5) of the
+                                       // subject's member; retire: also the subject itself
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+  IndexerScope scope = 3;
+  bool retire = 4;
+  bytes sealed_services = 5;           // IndexerServices
+}
+
+message IndexerServices {
+  repeated IndexerService services = 1;
+}
+
+message RecoveryBind {                 // the member's consented device (§8.5); authority for an AdminSet member
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes prev_sha256 = 3;               // the replaced binding's key hash
+  bytes ed25519_public_key_sha256 = 4;
+  bytes sealed_body = 5;               // RecoveryBindBody
+}
+
+message RecoveryBindBody {
+  bytes xwing_public_key = 1;
+  bytes ed25519_public_key = 2;
+  bytes genesis_sig = 3;               // Recovery's anchor
+}
+
+message RecoveryRebind {               // succeeds a RecoveryBind
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes prev_sha256 = 3;
+  bytes ed25519_public_key_sha256 = 4;
+  bytes sealed_body = 5;               // RecoveryBindBody
+  RecoveryRebindReason reason = 6;
+}
+
+message KeyRegister {                  // the member's consented, approval-capable device (§16.6)
+  StatementHeader header = 1;
+  bytes member_id = 2;
+  bytes key_id = 3;
+  KeyAlg alg = 4;
+  bytes public_key = 5;
+  bytes attestation = 6;
+  KeyPurpose purpose = 7;
+  int64 not_after = 8;                 // ms since the epoch
+}
+
+message KeyRevoke {
+  StatementHeader header = 1;
+  bytes key_id = 2;
+}
+
+message Delegation {                   // owner, admin, or tag-owning network admin
+  StatementHeader header = 1;
+  bytes pubkey = 2;
+  bytes reader_xwing_public_key = 3;   // §10.5
+  repeated bytes tag_ids = 4;
+  uint32 max_admits = 5;
+  int64 not_after = 6;                 // ms since the epoch; required, <= 90 d (7.8)
+}
+
+message DelegationRevoke {
+  StatementHeader header = 1;
+  bytes delegation_id = 2;
+  uint64 since_n = 3;                  // 0, or for a leaked bundle the position from which it parks
+}
+
+enum TeamMailMode {
+  TEAM_MAIL_MODE_UNSPECIFIED = 0;
+  TEAM_MAIL_MODE_INDEXERS = 1;         // owner decisions 58, 150; §15.5, §15.6
+  TEAM_MAIL_MODE_MEMBER_SCOPES = 2;
+}
+
+enum SelfAdmitMode {                   // owner decision 112; device-signed self-admission only
+  SELF_ADMIT_MODE_UNSPECIFIED = 0;     // on
+  SELF_ADMIT_MODE_ON = 1;
+  SELF_ADMIT_MODE_OFF = 2;
+}
+
+enum DirectoryRunsMode {
+  DIRECTORY_RUNS_MODE_UNSPECIFIED = 0; // auto
+  DIRECTORY_RUNS_MODE_AUTO = 1;
+  DIRECTORY_RUNS_MODE_PROMPT = 2;
+  DIRECTORY_RUNS_MODE_OFF = 3;
+}
+
+enum DirectoryWorkersMode {
+  DIRECTORY_WORKERS_MODE_UNSPECIFIED = 0;  // on
+  DIRECTORY_WORKERS_MODE_ON = 1;
+  DIRECTORY_WORKERS_MODE_OFF = 2;
+}
+
+// A Team's defaults for run and worker announcements (§16.11; owner decisions 170, 171).
+message ServiceDirectorySettings {
+  DirectoryRunsMode runs = 1;
+  DirectoryWorkersMode workers = 2;
+}
+
+// An owner or admin. A zero value means the default each comment gives.
+message ServiceSettings {
+  TeamMailMode team_mail = 1;
+  uint32 stale_leaf_days = 2;          // 90 (§10.9's stale Removes)
+  SelfAdmitMode self_admit = 3;
+  uint32 witness_bound_hours = 4;      // 72, 24 to 168 (D-TRUST-10, owner decision 129)
+  bytes scim_signer = 5;               // none, or the sidecar_id of an admin's indexer (7.6)
+  ServiceDirectorySettings directory = 6;  // from v1 (M6), reserved here at M2: older readers ignore it (D-PHASE-9)
+}
+
+enum VersioningMode {
+  VERSIONING_MODE_UNSPECIFIED = 0;
+  VERSIONING_MODE_ON = 1;
+  VERSIONING_MODE_OFF = 2;
+}
+
+// An empty selector matches all.
+message VersioningRule {
+  repeated uint32 kinds = 1;           // RepoKind
+  repeated bytes repo_ids = 2;
+  string path_glob = 3;
+  uint64 size_above_bytes = 4;
+  VersioningMode versioning = 5;
+}
+
+// An Owner, Admin or Network admin. Ordered, first match wins, unmatched paths staying versioned; absent,
+// the platform rule [{size_above_bytes: 64 MiB, off}]. v1, its type reserved at M2: format-1 readers apply
+// nothing from it but still apply the head holding it (owner decision 164; §11.7).
+message VersioningRules {
+  repeated VersioningRule rules = 1;
+}
+
+message AuthorityProposal {            // the first counted signer, or the recovery key;
+                                       // proposal_id = SHA-256(Signed AuthorityProposal)
+  StatementHeader header = 1;
+  uint32 statement_type = 2;           // SignedType
+  bytes statement = 3;                 // that type's body
+}
+
+message AuthorityCosign {              // each further counted signer; a recovery key's restarts the window
+  StatementHeader header = 1;
+  bytes proposal_id = 2;
+}
+
+message RecoveryVeto {                 // an AdminSet member's admitted device, the subject's others included;
+                                       // never the proposed device or a read_only one
+  StatementHeader header = 1;
+  bytes proposal_id = 2;
+}
