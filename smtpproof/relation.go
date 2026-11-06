@@ -236,15 +236,21 @@ func partRoles(statement *partStatement) ([]recordRole, error) {
 		}
 		return []recordRole{recordRoleEhlo}, nil
 	case statement.index == 2:
-		roles := []recordRole{recordRoleMail}
+		// compared before anything is built: the count is a preamble's, which a sidecar wrote
+		want := 1 + uint64(preamble.recipientCount)
+		if statement.mode == partModeData {
+			want += 1
+		}
+		if uint64(recordCount) != want {
+			return nil, fmt.Errorf("pi2 opens %d records, want %d", recordCount, want)
+		}
+		roles := make([]recordRole, 0, recordCount)
+		roles = append(roles, recordRoleMail)
 		for range preamble.recipientCount {
 			roles = append(roles, recordRoleRcpt)
 		}
 		if statement.mode == partModeData {
 			roles = append(roles, recordRoleData)
-		}
-		if recordCount != len(roles) {
-			return nil, fmt.Errorf("pi2 opens %d records, want %d", recordCount, len(roles))
 		}
 		return roles, nil
 	case statement.index == 3 && statement.mode == partModeBdat:
