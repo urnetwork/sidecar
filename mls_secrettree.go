@@ -7,7 +7,7 @@
 //
 // A ratchet only moves forward. Keys of skipped generations are not kept: §10.4 carries only
 // handshakes in PrivateMessage, gkm orders them one commit to an epoch, so a member has no use for a
-// late key, and a key not kept cannot leak. RFC 9420 allows this (RFC §9.2's MAY).
+// late key, and a key not kept cannot leak. RFC §9.2 only says a member may keep them.
 //
 // A receiver must not lose a key to a forged message, so stepTo holds the next state apart and the
 // ratchet moves only when the caller reports the message opened. A sender is the reverse: it moves
@@ -159,7 +159,8 @@ func (self *mlsRatchetStep) discard() {
 	self.nextSecret = nil
 }
 
-// A leaf's two ratchets.
+// A leaf's two ratchets. §10.4 sends nothing on the application ratchet: it exists because RFC §9
+// derives both from the leaf's secret and the mlswg's secret tree vectors read both.
 type mlsLeafRatchets struct {
 	handshake   *mlsSenderRatchet
 	application *mlsSenderRatchet

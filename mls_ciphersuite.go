@@ -15,6 +15,10 @@
 // crypto/hpke implements. It is not the unlabeled SHAKE256 of the X-Wing draft's own §5.6.
 //
 // Everything here is safe for concurrent use: a suite holds no state.
+//
+// Across the mls_ files, RFC § cites RFC 9420 and a bare § cites DESIGN.md, as elsewhere in this
+// repository, since the two number their sections alike: §7.9 is parent hashes in one and the
+// authorization log in the other.
 
 package sidecar
 

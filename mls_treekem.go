@@ -1,4 +1,4 @@
-// TreeKEM (RFC 9420 §7.4-RFC §7.6): how a commit's UpdatePath refreshes the keys along one member's
+// TreeKEM (RFC 9420 §7.4 to §7.6): how a commit's UpdatePath refreshes the keys along one member's
 // path and delivers them to everyone else.
 //
 // A committer runs prepareUpdatePath on its clone of the tree, which leaves the tree in its new shape,
@@ -7,9 +7,9 @@
 // Both sides leave the transcript and the key schedule to their caller, which takes commit_secret
 // from here.
 //
-// Private keys live apart from the tree, in mlsTreeSecrets, one per member's view (RFC §4.2). A secret
-// that drives the path is erased as soon as what it derives exists, and any held key the tree no
-// longer shows is forgotten (RFC §7.5).
+// Private keys live apart from the tree, in mlsTreeSecrets, one per member's view (RFC §4.2). A path
+// secret is erased once nothing still needs it, and any held key the tree no longer shows is
+// forgotten (RFC §7.5).
 //
 // Not safe for concurrent use.
 
