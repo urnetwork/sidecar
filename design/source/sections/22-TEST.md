@@ -2522,7 +2522,7 @@ FS-123 §14,18 a message 1 KiB over the prover host's measured smtp_data_proof_b
               and tls_refused outcomes per domain reach GetSendResult and mail_send;
               GetReceiverCoverage's copy and every send copy name no indexer, receiver or
               coverage setting
-FS-124 §7,16  presence countersignatures (owner decisions 185, 187, 189; D-TEAM-32),           I-4,FI-2    T2+T3  M2-out;
+FS-124 §7,16  presence countersignatures (owner decisions 185, 187, 189, 192; D-TEAM-32),      I-4,FI-2    T2+T3  M2-out;
               with fixture keys of both §16.6 profiles registered by device D: at api and on               +T4    CLI at
               every member device alike, each statement 7.9's presence row covers that D                          M3-out;
               signs, a k = 2 proposal and its cosign included, is refused with no                                 Team at

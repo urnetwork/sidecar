@@ -870,6 +870,17 @@ The owner had a final peer review done (DESIGN-REVIEW-META.md, of the 41ba6670 b
     - Rejected: (b) the search waits for the keepalive's re-establishment, which the keepalive would also send when the phone's network returns. That keeps decision 188's words, but after an outage at the indexer's end a search can stall up to 60 s, and failing over instead records the search's time anyway.
     - Narrows owner decision 188's "never at searches". Raised by the meta review's remote-search checker (finding remote-search-6).
 
+## Implementation handoff: owner questions (2026-11-06)
+
+The owner answered the questions HANDOFF.md left for them, and those the build raised, as implementation started.
+
+192. **The presence countersignature also covers a DelegationRevoke that parks other devices: ratified as written.**
+    - Question: the final meta review extended the presence countersignature to a DelegationRevoke that parks other devices (`since_n` > 0), in §7.9, D-TEAM-32, §5.6 and FS-124. That follows decision 187's intent, but no owner decision named it.
+    - Answer: ratified as written.
+    - Cost: none beyond what the text already carries.
+    - Not taken: removing it, which would let a compromised device park other devices with no presence check.
+    - Raised by HANDOFF.md section 10, from the final meta review's fixes.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

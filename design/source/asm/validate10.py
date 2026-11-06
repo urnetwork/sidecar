@@ -305,7 +305,7 @@ for n, head in sorted(entries.items()):
             named_open.append({'decision': n, 'q': q, 'issue': 'no such item'})
 open_items = [q for q, st in qstatus.items() if st == 'open']
 qf = json.loads((V7 / 'qfields.json').read_text())
-out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 192)),
+out['owner_record'] = {'entries': len(entries), 'entry_numbers_ok': sorted(entries) == list(range(1, 193)),
                        'q_named_by_decisions': sum(len(re.findall(r'Q-[A-Z]+-\d+', h)) for h in entries.values()),
                        'named_but_open': named_open,
                        'open_items': open_items,
@@ -428,7 +428,7 @@ out['registers'] = {
 
 # ---------------------------------------------------------------- 16. decisions-by-number rows and dates
 idx_rows = re.findall(r'^\| <a id="od-(\d+)"></a>\d+ \| (2026-11-0[3456]) \|', doc, re.M)
-out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 192)),
+out['decision_rows'] = {'rows': len(idx_rows), 'numbers_ok': [int(n) for n, d in idx_rows] == list(range(1, 193)),
                         'dates_ok': all(d == ('2026-11-03' if int(n) <= 111 else '2026-11-04' if int(n) <= 145 else '2026-11-05' if int(n) <= 187 else '2026-11-06') for n, d in idx_rows),
                         'known_gaps_heading': '### Known gaps' in doc,
                         'closed_by_peer_review_text': len(re.findall(r'closed by peer review', doc))}

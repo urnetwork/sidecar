@@ -27,16 +27,19 @@ INDEX = list(_P9['INDEX']) + [
     (191, "Q-PROTO-4",
      "A search that finds its indexer session lost re-establishes it at once; connect-5 discloses that its contract "
      "keeps the search's time, narrowing @@OD:188@@."),
+    (192, "Presence countersignature",
+     "A `DelegationRevoke` that parks other devices (`since_n` > 0) also carries the countersignature: the final meta "
+     "review's extension, following @@OD:187@@'s intent, ratified as written."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
 INDEX[_i176] = (176, INDEX[_i176][1],
                 "Connect rounds the byte reports of phone-to-indexer search contracts up to 128 KiB, hiding up to five "
                 "search pages an hour. Amended by @@OD:188@@.")
-assert [r[0] for r in INDEX] == list(range(1, 192))
+assert [r[0] for r in INDEX] == list(range(1, 193))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
-              190: '2026-11-06', 191: '2026-11-06'})
+              190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(

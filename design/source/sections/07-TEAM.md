@@ -443,11 +443,12 @@ presence    (owner decisions 185, 187; D-TEAM-32) a statement listed in covers, 
             KeyRegister{purpose: presence}, lest a thief register a key of its own to countersign with;
             every other SidecarRevoke of another sidecar, §7.10's stale and cleanup ones included, every
             Suspend of another sidecar and every RecoveryVeto (owner decision 187); every DelegationRevoke
-            with since_n > 0, which parks other sidecars as a compromise revocation does; every SidecarAdmit,
-            AdmissionConfirm and OwnerConfirm of an untagged sidecar, AdminSet change, MemberRevoke,
-            RecoveryBind and RecoveryRebind, lest a thief mint a signer with no key, take over the member's
-            recovery code or remove a member (owner decision 189); an AuthorityProposal carrying one of
-            these, and each AuthorityCosign of such a proposal, by its own signer's key
+            with since_n > 0, which parks other sidecars as a compromise revocation does
+            (owner decision 192); every SidecarAdmit, AdmissionConfirm and OwnerConfirm of an untagged
+            sidecar, AdminSet change, MemberRevoke, RecoveryBind and RecoveryRebind, lest a thief mint a
+            signer with no key, take over the member's recovery code or remove a member
+            (owner decision 189); an AuthorityProposal carrying one of these, and each AuthorityCosign
+            of such a proposal, by its own signer's key
   act       one presence check covers the m statements a device signs together, in order (1 <= m <=
             65,535): with d_i the SHA-256 of statement i's §6.9 signed bytes, root = RFC 9162's
             MTH(d_0..d_{m-1}), and the key signs, by its §16.6 profile with UV, the countersigned bytes
@@ -926,7 +927,7 @@ All three rename routes (server/controller/account_controller.go:13,160-256) cal
 
 **D-TEAM-31 (proposed).** A tagged sidecar's revocation or `Suspend` shows a plan that names the agent, its Delegation's shared reader key and that Delegation's admission authority apart, with the agents and repos each reaches; `--compromise` ends the Delegation, any other act offers `ur admin delegations revoke`, and revoking an auth key at api alone says that a copy of its bundle still admits (7.10's agents row). *Why:* the three are separate capabilities, a person stopping a leaked key must see which one each act ends, and only the customer-signed end stops a copied bundle.
 
-**D-TEAM-32 (proposed).** A `SidecarRevoke{reason: compromise}`, a presence key's `KeyRegister` or `KeyRevoke`, any other `SidecarRevoke` or `Suspend` of another sidecar, a `DelegationRevoke` with `since_n` > 0 and a `RecoveryVeto`, a `SidecarAdmit`, `AdmissionConfirm` or `OwnerConfirm` of an untagged sidecar, an AdminSet change, a `MemberRevoke`, a `RecoveryBind` or `RecoveryRebind`, and an `AuthorityProposal` carrying one or an `AuthorityCosign` of it, signed by a sidecar that registered a live presence key, carry that key's countersignature in §6.9's `Signed.webauthn`, which api, evs, gkm and every member device verify, each statement alone by its inclusion path to the act's Merkle root, UV required; a sidecar with none signs on its person's confirmation (D-CORE-13) (7.9's presence row). *Why:* owner decisions 185 and 187: a presence check that only the signing device ran was skipped by modified software on a stolen unlocked device, which could then lock the member out; one prompt must still cover an act of several statements that land separately; without the `KeyRegister` rule a thief would register a key of its own to countersign with; and without the admission, confirmation and binding rules it would admit a device with no key, or rebind the member's recovery code, and act from there (owner decision 189).
+**D-TEAM-32 (proposed).** A `SidecarRevoke{reason: compromise}`, a presence key's `KeyRegister` or `KeyRevoke`, any other `SidecarRevoke` or `Suspend` of another sidecar, a `DelegationRevoke` with `since_n` > 0 and a `RecoveryVeto`, a `SidecarAdmit`, `AdmissionConfirm` or `OwnerConfirm` of an untagged sidecar, an AdminSet change, a `MemberRevoke`, a `RecoveryBind` or `RecoveryRebind`, and an `AuthorityProposal` carrying one or an `AuthorityCosign` of it, signed by a sidecar that registered a live presence key, carry that key's countersignature in §6.9's `Signed.webauthn`, which api, evs, gkm and every member device verify, each statement alone by its inclusion path to the act's Merkle root, UV required; a sidecar with none signs on its person's confirmation (D-CORE-13) (7.9's presence row). *Why:* owner decisions 185 and 187: a presence check that only the signing device ran was skipped by modified software on a stolen unlocked device, which could then lock the member out; one prompt must still cover an act of several statements that land separately; without the `KeyRegister` rule a thief would register a key of its own to countersign with; without the `DelegationRevoke` rule a compromised device would park other devices with no presence check (owner decision 192); and without the admission, confirmation and binding rules a thief would admit a device with no key, or rebind the member's recovery code, and act from there (owner decision 189).
 
 ### 7.15 Open questions
 
