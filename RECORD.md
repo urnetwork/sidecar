@@ -6,7 +6,7 @@ DESIGN.md §16.8 provides the record's primitives (X20): signed, chained, sealed
 
 **What this document may not change.** §16.8's `semantics` row binds it: the logs' reader and writer matrix (§8.5's kind defaults), per-entry key slots, the source and tainted labels, and approvals bound by `request_sha256` and `payload_sha256`. It cites those and restates none. Where it and DESIGN.md disagree, DESIGN.md wins. Section 16 lists each place this draft found DESIGN.md silent or inconsistent, as a question raised to the owner or a reading taken.
 
-**Reading it.** `§n` cites DESIGN.md, and "section n" this document. Ids take DESIGN.md's forms: `R-RECORD-n`, `D-RECORD-n`, `Q-RECORD-n`. P5, PM, MK2 and REC are DESIGN.md's source keys: design/pitch5.html, design/product.md, design/market2.md and design/reports/Agent work record gaps and features.md. A figure marked "by inference" is an estimate until §22.8 measures it. A passage marked *Pending Q-RECORD-n* states the recommended answer to an open question, and that feature stays off until the owner answers.
+**Reading it.** `§n` cites DESIGN.md, and "section n" this document. Ids take DESIGN.md's forms: `R-RECORD-n`, `D-RECORD-n`, `Q-RECORD-n`. P5, PM, MK2 and REC are DESIGN.md's source keys: design/pitch5.html, design/product.md, design/market2.md and design/reports/Agent work record gaps and features.md. A figure marked "by inference" is an estimate until §22.8 measures it. A passage marked *Pending Q-RECORD-n* states the recommended answer to an open question, and a feature that hangs on one stays off until the owner answers.
 
 ## Contents
 
@@ -67,7 +67,7 @@ Not here: an eval or trace product (PM:47); compliance mappings and a team's own
 
 ## 3. What exists today
 
-Nothing is built. The sidecar repo holds documents only. DESIGN.md leaves these hooks here:
+None of the record is built: no `record.proto` and no `record_*` file exists. DESIGN.md leaves these hooks here:
 
 | Hook | Where DESIGN.md leaves it | Section |
 |---|---|---|
@@ -218,6 +218,8 @@ stream path   e/<n div 2048>/<n>, n a stream's own counter from 1, in decimal, s
 Each entry is built in one order: redact (§16.7), marshal the body, draw key and salt, commit, take the next (seq, prev_sha256), sign, journal, push.
 
 ```text
+ids         entry_id is 16 random bytes; log_id the repo_id; writer_sidecar_id the signer, the sidecar that sealed the
+            entry, which an ingester never changes
 chain       per (log_id, writer_sidecar_id): seq from 1, no gaps; the head {seq, leaf} sits in the component
             state <state>/net/<network_id>/record/<log_id> (§5.9), fsynced before a signed entry leaves the daemon
 signed      the identity key signs Signed.body, purpose record-entry, type SIGNED_RECORD_HEADER (§6.9, §16.8);
@@ -235,7 +237,8 @@ position    a push's entries are ordered by (writer_sidecar_id bytes, seq) (§16
 deposits    to T: coalesced for DepositInterval (5 min, the slower pace owner decision 172 sets companion pushes),
             flushed at once for the approval family and at run end, sleep and exit
 spool       a locked daemon spools (§16.7) and signs at unlock, in capture order
-retry       a signed entry whose push outcome is unknown is re-pushed verbatim, never re-signed (D-MCP-10)
+retry       a signed entry whose push outcome is unknown goes again with its header and sealed_body unchanged, never
+            re-signed (D-MCP-10); only a rebuilt push's slot ids may differ (§16.8)
 restart     a direct writer takes the higher of its local head and its stream's newest entry of this chain; a
             depositor reads no log, so a device restored from an old backup forks its chain, which readers alarm on
 agent key   RecordEntry.version 2 (M6, agent subkeys, §5.5): the sealed plaintext is AgentSignedBody {body, agent_id,
@@ -447,7 +450,7 @@ message ContextBody {                       // context
   string model = 6;                         // an identifier <= 64 B, or empty
   string permission_mode = 7;               // the harness's own string, <= 32 B
   bytes repo_id = 8;                        // the run's evs repo, else empty
-  string project = 9;                       // §16.11's project key rule, <= 128 B; empty when the repo is private
+  string project = 9;                       // §16.11's project key rule, <= 128 B; T: empty when the repo is private
   string branch = 10;                       // V: a git ref name <= 128 B
   string title = 11;                        // V: §16.10's run title, <= 120 B after redaction
   repeated InstructionFile instruction_files = 12;  // <= 64
@@ -893,6 +896,8 @@ steps
             (c2sp.org/tlog-witness), at most 60 s in all; a 409 names its size and the proof is rebuilt once; a witness
             still failing is left out of this note, and alarms past three misses
   6 entry   the checkpoint entry, holding the note and every cosignature got, then the journal's row goes
+cosign      each witness's lines as it returns them; verifiers take Ed25519 (type 0x04) and ML-DSA-44 (0x06, the type
+            c2sp.org/tlog-checkpoint recommends); M6's entry picks the ML-DSA code under §4's dependency rules
 resume      after a crash, step 5 re-sends the journaled note unchanged; a witness already there answers 200 with old
             equal to size; a log never signs two roots at one size (c2sp.org/tlog-checkpoint), so step 3 never
             re-runs for a journaled batch
@@ -973,7 +978,7 @@ erased      an erased entry goes as a header alone, showing it existed and is go
 no keys     a packet holds salts and bodies of what it opens, never an entry key, slot row or log key
 ```
 
-**Verifying** needs no daemon, network or keychain, and `ur record verify` is the open offline verifier (MK2:796). Exit 0 means every check passed, 1 that one failed, 2 that the file cannot be read.
+**Verifying** needs no daemon, network or keychain, and `ur record verify` is the open offline verifier (MK2:796). The log and witness keys come from the command line, never from the packet: a client pins them once, from the team and from the witness's operator. Exit 0 means every check passed, 1 that one failed, 2 that the file cannot be read.
 
 ```text
 1 note       each checkpoint parses; its signature by --log-key verifies; at least --quorum cosignatures by --witness keys
@@ -1177,7 +1182,7 @@ deposit, ingest, CONSUME pushes     850         25,500      85,000      340,000
 
 ### 16.1 Raised to the owner
 
-Each is filed under `.stack/questions/` with its context and options, and each part stays off, failing closed, until answered. None blocks this draft's review or `record.proto`'s envelope.
+Each is filed under `.stack/questions/` with its context and options, and whatever hangs on one stays off, failing closed, until it is answered (owner decision 193 returns such findings as Q- items). None blocks this draft's review or `record.proto`'s envelope.
 
 **Q-RECORD-1.** How does a log with several streams get the total order §16.8 promises? Cross-cutting (§16.8, §11.8). *Options:* (a) section 10.1's batches; (b) one designated ingester, so the row is literal on T; (c) amend the row to a per-stream order and give up one tree per log. *Recommendation:* (a). *Blocks:* the verifiable log on multi-stream logs, at M6's entry. *Decider:* owner.
 
