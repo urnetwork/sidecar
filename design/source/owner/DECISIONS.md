@@ -903,6 +903,13 @@ The owner answered the questions HANDOFF.md left for them, and those the build r
     - Not taken: a patch series in warp; deciding at M2.
     - Raised by HANDOFF.md section 9.15.
 
+196. **Warp's, config's, mmm's and vault's `sidecar` branches all open at M0.**
+    - Question: HANDOFF.md asked when warp's `sidecar` branch opens, since the branch policy and §23.4 open it at M5 but §19.11 lands W5 at M0 and W2 and W8 by M4.
+    - Answer: the owner directed a `sidecar` branch on all repos, so warp's, config's, mmm's and vault's all open at M0. The branch policy and §23.4's branch starts match.
+    - Cost: the owner stated none.
+    - Not taken: moving those changes later.
+    - Raised by HANDOFF.md section 10.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.
