@@ -1,6 +1,6 @@
-// VerifySigned's refusals. Each asserts why a statement is refused, so a test cannot pass on an unrelated
-// failure, such as a type-confusion case that only ever met a bad key. Keys are fixed synthetic values,
-// and the signatures are deterministic.
+// VerifySigned's and VerifyRecoverySigned's refusals, and what names a statement. Each refusal asserts why, so a test
+// cannot pass on an unrelated failure, such as a type-confusion case that only ever met a bad key. Keys are fixed
+// synthetic values, and the signatures are deterministic.
 
 package bridge
 
