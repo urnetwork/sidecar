@@ -1003,7 +1003,7 @@ no keys     a packet holds salts and bodies of what it opens, never an entry key
 
 **Scope of "approved".** §16.8's approvals bind O actions. A merge or a commit is no O action, so no `approval` entry names one. P5:728's "a person approved a change" has no entry today beyond an O-tier `evs_write`, and copy must not claim more than this table.
 
-*Pending Q-RECORD-7.* The recommended answer is an `attestation` entry: a person's signed statement about commits, outside the I-8 gate and never called an approval.
+*Pending Q-RECORD-7.* The recommended answer is an `attestation` entry, by `ur record attest` on /dev/tty or in an app's UI: a person's signed statement about commits, outside the I-8 gate and never called an approval.
 
 ```proto
 message AttestationBody {                   // attestation (M6), by a person's device
