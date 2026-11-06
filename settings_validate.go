@@ -24,6 +24,9 @@ var errInvalidSettings = errors.New("invalid sidecar settings")
 // Only this keeps an empty service url out of the page Worker's requests (api_transport.go), so
 // NewSidecar runs it on every leg, and legs_test.go fails a NewSidecar that does not.
 func (self *SidecarSettings) validate() error {
+	if self == nil {
+		return fmt.Errorf("%w: no settings", errInvalidSettings)
+	}
 	for _, serviceUrl := range []struct {
 		name  string
 		value string
@@ -39,7 +42,19 @@ func (self *SidecarSettings) validate() error {
 			return err
 		}
 	}
-	if !isInstanceName(self.Instance) {
+	// §5.9's form. An instance names a directory, so this also keeps a path out of it.
+	instanceFits := func() bool {
+		if self.Instance == "" || 32 < len(self.Instance) || self.Instance[0] == '-' {
+			return false
+		}
+		for i := 0; i < len(self.Instance); i += 1 {
+			if c := self.Instance[i]; !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
+				return false
+			}
+		}
+		return true
+	}
+	if !instanceFits() {
 		return fmt.Errorf("%w: Instance is not [a-z0-9][a-z0-9-]{0,31}", errInvalidSettings)
 	}
 	if self.Connect == nil {
@@ -69,19 +84,6 @@ func checkServiceUrl(name string, serviceUrl string, schemes ...string) error {
 		return fmt.Errorf("%w: %s is not an absolute url with no trailing slash, query or fragment", errInvalidSettings, name)
 	}
 	return nil
-}
-
-// §5.9's [a-z0-9][a-z0-9-]{0,31}. An instance names a directory, so this also keeps a path out of it.
-func isInstanceName(instance string) bool {
-	if instance == "" || 32 < len(instance) || instance[0] == '-' {
-		return false
-	}
-	for i := 0; i < len(instance); i += 1 {
-		if c := instance[i]; !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
-			return false
-		}
-	}
-	return true
 }
 
 // Walks a settings value, refusing a nil settings struct and a number that is not positive. name

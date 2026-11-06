@@ -3,7 +3,9 @@
 // Proves §4.4's build rule: the sidecar_http js leg links no connect or gVisor package, every file
 // that names one carries !sidecar_http, and every host_ file does whether it names one or not. These
 // run on the host, where go and the source tree are, and read the leg through an explicit go/build
-// context or `go list`, which -tags does not reach.
+// context or `go list`, which -tags does not reach. It also runs that leg's tests in a Worker's shape,
+// and holds the seams later tracks build on, each proved on a planted violation: NewSidecar runs
+// validate, requests go through the transport files, and engines authenticate through the host.
 
 package sidecar
 
@@ -197,7 +199,7 @@ func parseRootFiles(t *testing.T) map[string]*ast.File {
 
 func parseGoFile(t *testing.T, goFile string) *ast.File {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), goFile, nil, 0)
+	file, err := parser.ParseFile(token.NewFileSet(), goFile, nil, parser.ParseComments)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +208,7 @@ func parseGoFile(t *testing.T, goFile string) *ast.File {
 
 func parseSyntheticFile(t *testing.T, src string) *ast.File {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "synthetic.go", "package sidecar\n"+src, 0)
+	file, err := parser.ParseFile(token.NewFileSet(), "synthetic.go", "package sidecar\n"+src, parser.ParseComments)
 	if err != nil {
 		t.Fatal(err)
 	}

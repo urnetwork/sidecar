@@ -28,6 +28,13 @@ func TestValidSettingsPass(t *testing.T) {
 	}
 }
 
+func TestNoSettingsAreRefused(t *testing.T) {
+	var settings *SidecarSettings
+	if err := settings.validate(); !errors.Is(err, errInvalidSettings) {
+		t.Errorf("err %v", err)
+	}
+}
+
 // A host that sets nothing gets a refusal naming what it forgot, on every leg, where the page Worker's
 // own transport would have sent the token to the page's host.
 func TestDefaultSettingsRefuseUntilAHostSetsItsUrls(t *testing.T) {
