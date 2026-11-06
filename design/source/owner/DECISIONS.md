@@ -870,6 +870,46 @@ The owner had a final peer review done (DESIGN-REVIEW-META.md, of the 41ba6670 b
     - Rejected: (b) the search waits for the keepalive's re-establishment, which the keepalive would also send when the phone's network returns. That keeps decision 188's words, but after an outage at the indexer's end a search can stall up to 60 s, and failing over instead records the search's time anyway.
     - Narrows owner decision 188's "never at searches". Raised by the meta review's remote-search checker (finding remote-search-6).
 
+## Implementation handoff: owner questions (2026-11-06)
+
+The owner answered the questions HANDOFF.md left for them, and those the build raised, as implementation started.
+
+192. **The presence countersignature also covers a DelegationRevoke that parks other devices: ratified as written.**
+    - Question: the final meta review extended the presence countersignature to a DelegationRevoke that parks other devices (`since_n` > 0), in §7.9, D-TEAM-32, §5.6 and FS-124. That follows decision 187's intent, but no owner decision named it.
+    - Answer: ratified as written.
+    - Cost: none beyond what the text already carries.
+    - Not taken: removing it, which would let a compromised device park other devices with no presence check.
+    - Raised by HANDOFF.md section 10, from the final meta review's fixes.
+
+193. **The owner signs G0 on 2026-11-06; the re-checks, the density review and the RECORD.md draft run beside M0's bootstrap.**
+    - Question: D-PHASE-2 says no code before G0, and G0 had not passed: 21 ledger items needed a reviewer's re-check, the density rule needed a judgment, and no one was named to sign.
+    - Answer: the owner signs G0 on 2026-11-06. The re-checks, the density review and the RECORD.md draft run beside M0's bootstrap, and their findings return as Q- items.
+    - Cost: a finding could change something already built.
+    - Not taken: agents re-checking first; the owner's reviewers re-checking first.
+    - Raised by HANDOFF.md sections 7 and 10.
+
+194. **M0-M10 build straight through on the `sidecar` branches; what a gate needs from hardware, production or people is listed open.**
+    - Question: several gates cannot be met from the build machine: M2's format-1 freeze needs the benchmark on the PM9A3 hardware, M0 and M1 need stages in production, and each Gn-out needs the owner's approval to merge. How does the build move past such a gate?
+    - Answer: build M0-M10 straight through in dependency order on the `sidecar` branches. Each gate's local checks run and are reported, and anything needing hardware, production or people is listed open.
+    - This changes how the milestones are executed, not what freezes when: §23.8's freeze order still decides what may reach a production store.
+    - Cost: formats stay unfrozen, so a later hardware miss could force rework in later milestones.
+    - Not taken: stopping at each Gn-out; building M0-M2 then re-planning.
+    - Raised in planning the build from the handoff.
+
+195. **D-OPS-20's MinIO build lives in a new `urnetwork/minio` fork.**
+    - Question: D-OPS-20 needs an in-house MinIO build, and DESIGN.md names no repo for it.
+    - Answer: a new `urnetwork/minio` fork, a sibling checkout with its own `sidecar` branch, keeping MinIO's AGPL source in one public place. The owner creates the GitHub repo before any push.
+    - Cost: the owner stated none.
+    - Not taken: a patch series in warp; deciding at M2.
+    - Raised by HANDOFF.md section 9.15.
+
+196. **Warp's, config's, mmm's and vault's `sidecar` branches all open at M0.**
+    - Question: HANDOFF.md asked when warp's `sidecar` branch opens, since the branch policy and §23.4 open it at M5 but §19.11 lands W5 at M0 and W2 and W8 by M4.
+    - Answer: the owner directed a `sidecar` branch on all repos, so warp's, config's, mmm's and vault's all open at M0. The branch policy and §23.4's branch starts match.
+    - Cost: the owner stated none.
+    - Not taken: moving those changes later.
+    - Raised by HANDOFF.md section 10.
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

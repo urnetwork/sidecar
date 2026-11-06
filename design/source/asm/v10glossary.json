@@ -42,6 +42,10 @@
   ]
  ],
  "replace": {
+  "G0, Gn-in, Gn-out": [
+   "The review gates: G0, signed by the owner before code, and each milestone's entry and exit reviews.",
+   "§23.8"
+  ],
   "DelegationWrap": [
    "A signed wrap of RK_g to a Delegation's reader key, through which its agents read until the Delegation ends or a Suspend or non-reap revocation of one drops the key.",
    "§10.5"
