@@ -7,8 +7,9 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"reflect"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/urnetwork/connect"
 )
@@ -32,7 +33,11 @@ func (self hostAuthenticator) Authenticate(ctx context.Context, audience string,
 	if audience == "" {
 		return nil, ErrAuthenticationRefused
 	}
-	return &Principal{Audience: audience}, nil
+	principal := &Principal{NetworkId: connect.NewId(), ClientId: connect.NewId(), Audience: audience}
+	if err := principal.Validate(); err != nil {
+		return nil, err
+	}
+	return principal, nil
 }
 
 func (self hostQuota) Limits(ctx context.Context, networkId connect.Id) (*QuotaLimits, error) {
@@ -146,6 +151,19 @@ func (self hostStreamEngine) Serve(listener net.Listener) error {
 	return nil
 }
 
+// No Handler and no Serve: an engine that dials out and listens on nothing, as smtpedge does (§14.9).
+type hostDialOutEngine struct{}
+
+func (self hostDialOutEngine) Ready() bool {
+	return true
+}
+
+func (self hostDialOutEngine) Drain() {
+}
+
+func (self hostDialOutEngine) Close() {
+}
+
 var (
 	_ Authenticator       = hostAuthenticator{}
 	_ Quota               = hostQuota{}
@@ -161,8 +179,8 @@ var (
 	_ ServiceClientSource = hostClientSource{}
 	_ HttpEngine          = hostHttpEngine{}
 	_ StreamEngine        = hostStreamEngine{}
-	// an engine that dials out and listens on nothing, as smtpedge does
-	_ Engine = hostHttpEngine{}
+	// stops the build if Engine gains a member that smtpedge has nothing to give
+	_ Engine = hostDialOutEngine{}
 )
 
 // §4.5's eight fields, named as engines reach them (§14.9's NewSmtpEdgeService takes *ServiceHost).
@@ -179,8 +197,8 @@ func TestServiceHostAssembles(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := host.Authenticator.Authenticate(ctx, "", "synthetic-token"); !errors.Is(err, ErrAuthenticationRefused) {
-		t.Errorf("an empty audience: %v", err)
+	if _, err := host.Authenticate(ctx, "evs", "synthetic-token"); err != nil {
+		t.Errorf("a token naming its network and client: %v", err)
 	}
 	if _, err := host.Blobs.Cluster("no-such-cluster"); !errors.Is(err, ErrBlobClusterUnknown) {
 		t.Errorf("an unknown cluster: %v", err)
@@ -199,63 +217,65 @@ var (
 	_ func(QuotaLease)                                                                              = QuotaLease.Close
 )
 
-// §20.7's fields, as a producer fills them.
-func TestUsageBatchCarriesWhatEvs9Lists(t *testing.T) {
-	networkId := connect.NewId()
-	batch := &UsageBatch{
-		BatchId:     connect.NewId(),
-		Producer:    "evs",
-		WindowStart: time.Unix(0, 0),
-		Events: []*UsageEvent{
-			{NetworkId: networkId, Meter: "evs", TransferByteCount: 1024},
-			{NetworkId: networkId, Meter: "evs", StoredByteDelta: -1024},
-		},
-	}
-	if err := (hostQuota{}).ReportUsage(context.Background(), batch); err != nil {
-		t.Error(err)
-	}
-}
-
-// §9.6 reads only the spent mark, and evs both: a network can be at its storage limit and not spent.
-func TestQuotaOverLimitKeepsTheTwoReasonsApart(t *testing.T) {
-	networkId := connect.NewId()
-	overLimit := &QuotaOverLimit{
-		StorageNetworkIdRefusals: map[connect.Id]*QuotaRefusal{networkId: {LimitKey: "storage"}},
-		SpentNetworkIdRefusals:   map[connect.Id]*QuotaRefusal{},
-	}
-	if _, spent := overLimit.SpentNetworkIdRefusals[networkId]; spent {
-		t.Error("a network over its storage limit reads as spent, which would refuse its sockets")
-	}
-	if refusal := overLimit.StorageNetworkIdRefusals[networkId]; refusal.LimitKey != "storage" {
-		t.Errorf("refusal %+v", refusal)
-	}
-}
-
 // Hints fan out with one body, to the clients §11.10's leases name and the sidecars §10.6's rows name.
-func TestPushHintTakesManyClientsOrSidecars(t *testing.T) {
-	ids := []connect.Id{connect.NewId(), connect.NewId()}
-	hint := &ClientHint{Topic: "evs:synthetic", Version: 1793836800123457024, Kind: 0x1401, Body: []byte{1}}
-	if err := (hostPush{}).Hint(context.Background(), ids, hint); err != nil {
-		t.Error(err)
+var (
+	_ func(Push, context.Context, []connect.Id, *ClientHint) error = Push.Hint
+	_ func(Push, context.Context, []connect.Id, *ClientHint) error = Push.HintSidecars
+)
+
+// §9.6 reads only the spent mark and evs reads both, so a network can be at its storage limit and not
+// spent: the two stay two maps, and this stops the build if they become one.
+var _ = QuotaOverLimit{
+	StorageNetworkIdRefusals: map[connect.Id]*QuotaRefusal{},
+	SpentNetworkIdRefusals:   map[connect.Id]*QuotaRefusal{},
+}
+
+// §20.5 defines a limit of 0 as not included. An absent key reads 0 only while the values are plain
+// numbers, so this stops the build if they become anything that could read as unset.
+var _ map[string]int64 = QuotaLimits{}.Limits
+
+// The exported fields of a struct, in order.
+func structFieldNames(value any) []string {
+	names := []string{}
+	valueType := reflect.TypeOf(value)
+	for i := 0; i < valueType.NumField(); i += 1 {
+		names = append(names, valueType.Field(i).Name)
 	}
-	if err := (hostPush{}).HintSidecars(context.Background(), ids, hint); err != nil {
-		t.Error(err)
+	return names
+}
+
+// §2.8's evs-9 lists transfer bytes per caller network and stored-byte deltas per repo network and no
+// more, and this crosses to server, so a field added here is a metadata change that needs its row
+// first (I-18).
+func TestUsageEventCarriesOnlyWhatEvs9Lists(t *testing.T) {
+	want := []string{"NetworkId", "Meter", "TransferByteCount", "StoredByteDelta"}
+	if names := structFieldNames(UsageEvent{}); !slices.Equal(names, want) {
+		t.Errorf("fields %q, want %q", names, want)
+	}
+	want = []string{"BatchId", "Producer", "WindowStart", "Events"}
+	if names := structFieldNames(UsageBatch{}); !slices.Equal(names, want) {
+		t.Errorf("fields %q, want %q", names, want)
 	}
 }
 
-// Engine has no Handler: an engine that serves nothing inbound must still fit, as §14.9's does.
-func TestEngineNeedsNoHandlerOrListener(t *testing.T) {
-	var engine Engine = hostHttpEngine{}
-	if !engine.Ready() {
-		t.Error("not ready")
-	}
-	engine.Drain()
-	engine.Close()
-	// a host finds what to serve by asking
-	if _, ok := engine.(HttpEngine); !ok {
-		t.Error("an http engine is no HttpEngine")
-	}
-	if _, ok := engine.(StreamEngine); ok {
-		t.Error("an http engine is a StreamEngine")
+// A host finds what to serve by asking, so an engine with neither is one it starts and serves nothing
+// for, and the two kinds stay told apart.
+func TestAHostAsksAnEngineWhatItServes(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		engine     Engine
+		wantHttp   bool
+		wantStream bool
+	}{
+		{name: "dial out", engine: hostDialOutEngine{}},
+		{name: "http", engine: hostHttpEngine{}, wantHttp: true},
+		{name: "http and stream", engine: hostStreamEngine{}, wantHttp: true, wantStream: true},
+	} {
+		if _, ok := c.engine.(HttpEngine); ok != c.wantHttp {
+			t.Errorf("%s: HttpEngine %v", c.name, ok)
+		}
+		if _, ok := c.engine.(StreamEngine); ok != c.wantStream {
+			t.Errorf("%s: StreamEngine %v", c.name, ok)
+		}
 	}
 }

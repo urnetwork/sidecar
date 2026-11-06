@@ -300,7 +300,7 @@ Dependencies point one way, and these packages are the leaves everything else re
 - **The root** imports only `protocol` and `protocol/bridge` of this module. Never `device/`, a `<svc>service` or `mcp/`, in a test of `package sidecar` either. An external `package sidecar_test` is a consumer and may.
 - **`protocol`** imports only std, protobuf and `protocol/bridge`.
 - **`protocol/bridge`** imports only std and protobuf. It is the sole home of every type the device role parses: a type both packages use is declared there and nowhere else, because a duplicate panics at init in anything that links both.
-- **`device/`** imports connect and `protocol/bridge`, beside std and the protobuf runtime those types rest on. The iOS extension links it, and its closure must hold neither the root nor `protocol` (D-SDK-20), so a helper it wants from the root moves to `protocol/bridge` or is written again. A file under `sidecar_testhooks` may import the root to forward its hooks; nothing else may.
+- **`device/`** imports connect and `protocol/bridge`, beside std and the protobuf runtime those types rest on. The iOS extension links it, and its closure must hold neither the root nor `protocol` (D-SDK-20), so a helper it wants from the root moves to `protocol/bridge` or is written again. That binds its files under `sidecar_testhooks` too.
 - **Anything new starts as a client.** A package that is not a `<svc>service` or under `sidecartest/` may not import a `<svc>service`, from the day it appears.
 
 ## Host and engines
@@ -329,7 +329,7 @@ Run `make proto` from the repo root, and commit the `.pb.go` files. Files regist
 
 - From M0's `mls_*` on, call `testHookSecret` at every key creation, derivation and unwrap, and `testHookBarrier` at and around every linearization point. Call each with no state lock held.
 - Both are empty without the `sidecar_testhooks` tag, and no release leg builds with it. `make check` reads every package's pair, not just the root's.
-- A package other than the root that needs them keeps its own unexported pair under these names and this tag: empty under `!sidecar_testhooks`, and under the tag forwarding to the root's `TestHookSecret` and `TestHookBarrier`, and nothing else. Hooks are functions, never variables, because a variable can be set in a release.
+- A package other than the root that needs them keeps its own unexported pair under these names and this tag: empty under `!sidecar_testhooks`, and under the tag forwarding to the root's `TestHookSecret` and `TestHookBarrier`, and nothing else. `device/` may not import the root, so its tagged file keeps a `SetTestHooks` of its own instead, and `sidecartest` installs on both. Hooks are functions, never variables, because a variable can be set in a release.
 
 ## Tests
 

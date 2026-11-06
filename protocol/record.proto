@@ -1,0 +1,117 @@
+// The record's primitives (§16.8), sealed end to end, so no server reads a field here. RECORD.md's kinds, class
+// numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.
+//
+// CanonicalAction's field 37 is reserved in D-PHASE-9's sense: declared here, and set only in version 2, for
+// format 2's evs_write, so an approver that does not know that version refuses it (§16.8).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+import "protocol/bridge/signed.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// sidecar/protocol/record.proto; frozen at M3's entry review (D-MCP-6). Frozen means wire-stable: numbers and
+// meanings never change, versions add fields; every hash and signature covers stored bytes. Every field is
+// sealed: each RecordEntry is a file in its writer's stream (§11.8), and evs sees only §2.8's evs rows. The leaf
+// hash SHA-256(0x00 || Signed.body) (RFC 9162) admits M6's verifiable log (16.18). §6.11 SignedType: 0x1801
+// SIGNED_RECORD_HEADER, 0x1802 SIGNED_APPROVAL_DECISION, 0x1803 SIGNED_APPROVAL_CANCEL, 0x1804
+// SIGNED_RETENTION_POLICY.
+message RecordHeader {
+  bytes entry_id = 1; bytes log_id = 2;     // random; repo id
+  bytes writer_sidecar_id = 3; uint64 seq = 4; bytes prev_sha256 = 5;  // per-writer chain
+  bytes agent_id = 6; bytes run_id = 7; bytes action_id = 8;
+  uint32 kind = 9;   // RECORD.md's v1 registry; unknown kinds are kept and shown generically: coordination
+                     // log: claim, handoff, ask, answer, check, note, and, in the team directory, announce,
+                     // request, decision and erasure_request (claims and handoffs there are state of a run's
+                     // announcement, 16.11). Team record: context, change, approval, route, publish, reach,
+                     // membership, key, coverage, read, erasure, restore, inventory. Vault: raw content and read
+                     // receipts, plus every kind in a personal network.
+                     // membership and key entries mirror §5's SidecarEvents, admission alarms included,
+                     // into each affected log; a member's own device revocation's names its approval
+                     // evidence, presence with its assertion or a confirmation (§5.6).
+  int64 time_millis = 10;
+  uint32 source = 11;      // observed (the daemon did or saw it), hook (any same-user process can fake it),
+                           // agent, approver
+  bool tainted = 12;
+  bytes body_commitment = 13;               // SHA-256("urnetwork-sidecar-v1/record-body" || salt || body)
+  repeated ContentRef content = 14;
+  uint64 policy_version = 15; bytes grant_id = 16;
+  uint32 agent_source = 17;                 // agent_asserted, or isolated (own OS user, container or VM; §5.5)
+}
+message ContentRef { bytes repo_id = 1; bytes object_id = 2; bytes commitment = 3; }  // salt in the object's slot
+message RecordEntry {                       // header: §6 Signed, purpose record-entry
+  Signed header = 1; bytes sealed_body = 2;
+  bytes key_slot_id = 3;                    // with key_index, the body key's slot object and index (Erasure)
+  uint32 version = 4;                       // 1
+  uint32 key_index = 5;
+}
+// The writer's identity key signs the header; from v1 an agent subkey may sign inside the body (§5.5).
+
+message CanonicalAction {                   // built by the daemon; hashed as stored; approvers render only these
+  uint32 kind = 1;                          // §5.4 SidecarActionKind, or restore (16.7)
+  repeated string recipients = 2;           // to, cc and bcc
+  bytes body_sha256 = 3; string preview = 4;  // preview <= 2 KiB, rendered as untrusted text
+  string host = 5; uint32 port = 6; uint32 audience = 7; int64 expires_millis = 8;
+  repeated string cidrs = 9; repeated string grant_dst = 10; repeated string grant_allow = 11;
+  uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
+                                            // 10, 11, 14, 26, 27 and 29, which approvers that do not know it refuse
+  bool scope = 13;                          // a multi-use template (16.6)
+  bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
+                                                        // evs_delete; mail_alias_delete's mailcfg record (16.6)
+  string dns_name = 18; string dns_type = 19; string dns_value = 20; uint32 dns_ttl = 21;     // dns_set, dns_delete
+  string alias = 22;                                                     // mail_alias_*; mail_send's from_alias
+  string socket_name = 23; uint32 local_port = 24; int32 weight = 25;                        // socket_listen
+  bytes target_sidecar_id = 26; uint32 target_port = 27;                                     // bridge_forward, _expose
+  bytes rule_id = 28; bytes subject = 29;                // a grant (§8.8), with 8, 10 and 11; a publish's also 33, 35
+  bytes restore_run_id = 30; repeated string restore_paths = 31; bytes restore_preview_id = 32; // run_restore
+  uint32 app_mode = 33; repeated string alpn = 34; bytes link_spki_sha256 = 35;              // tls_publish (§13.7)
+  string alias_group = 36;                                                   // mail_alias_create's group (§15.8)
+  uint32 versioning = 37;                   // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
+                                            // only in version 2, which approvers that do not know it refuse
+}
+// Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, and
+// ApprovalRequest.summary and preview as untrusted text, so an agent cannot carry trusted rdata, an alias or a
+// path in prose.
+message ApprovalRequest {                   // body of an approval entry
+  bytes approval_id = 1; bytes action_id = 2; bytes run_id = 3; bytes agent_id = 4;
+  bytes canonical_action = 5; bytes payload_sha256 = 6;  // SHA-256(canonical_action as stored)
+  string summary = 7;                       // agent text, shown as untrusted
+  uint32 risk = 8;                          // max(policy, classifier); agents may only raise it
+  bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
+  uint32 version = 13;                      // 1
+}
+message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
+  bytes approval_id = 1;
+  bytes request_sha256 = 2;                 // SHA-256(ApprovalRequest as stored): binds run_id, agent_id,
+                                            // approvers, expiry
+  bytes payload_sha256 = 3;                 // SHA-256(CanonicalAction as stored), never a re-encoding
+  uint32 decision = 4; uint32 uses = 5; int64 not_after_millis = 6;  // at most uses distinct actions, each
+                                                                     // once (D-MCP-11); uses > 1 only with a
+                                                                     // scope = true template (16.6)
+  bytes approver_member_id = 7;
+  uint32 channel = 8;                       // evidence: device, presence or harness (owner decision 75)
+  bytes sshsig = 9;
+  bytes evidence_sha256 = 10;               // harness: the matched hook event, which stays in the record;
+                                            // presence: the WebAuthn assertion
+  bytes requester_sidecar_id = 11;          // the only sidecar that may spend it (16.6)
+  AuthPin auth_pin = 12;                    // §7.9's pin the approver evaluated the request under
+  uint32 version = 13;                      // 1
+}
+message ApprovalCancel { bytes approval_id = 1; }  // inside §6 Signed, purpose approval (16.6's ledger)
+message ReachReceipt {                      // coalesced per (grant, peer) per 5 min
+  bytes grant_id = 1; uint64 policy_version = 2; uint32 kind = 3; bytes owner = 4; bytes approver = 5;
+  int64 window_start_millis = 6; repeated bytes peers = 7; uint64 stream_count = 8; uint64 byte_count = 9;
+  repeated string relays = 10;              // host, IP and operator of each relay or edge in the path
+}
+message Coverage {                          // at run end, or after 10 min idle without SessionEnd
+  bytes run_id = 1; string harness = 2; string version = 3; repeated string sources = 4;
+  repeated string gaps = 5;  // hook failures, missed events, changed configs, downtime, truncation,
+                             // oversize, bypass modes, redactions
+  uint64 first_seq = 6; uint64 last_seq = 7;
+}
+message RetentionPolicy {                   // Signed (purpose record-entry) by the log's admin
+  bytes log_id = 1; uint32 class = 2;       // a kind class, announce among them (keep_days 30, 16.11)
+  uint32 keep_days = 3; uint32 searchable_days = 4; bool archive = 5;
+}
