@@ -54,9 +54,8 @@ const (
 	xTextBasePath    = "golang.org/x/text"
 )
 
-// The tag that holds these tests off go test ./..., and the two that make a build unfit to ship.
+// The build tags the rules read.
 const (
-	sidecarCheckTag     = "sidecar_check"
 	sidecarTestHooksTag = "sidecar_testhooks"
 	sidecarLeakTestTag  = "sidecar_leaktest"
 	sidecarHttpTag      = "sidecar_http"

@@ -113,6 +113,7 @@ var fixtureFiles = map[string]string{
 	"sdk/dependency_boundary_test.go": "package sdk\n\nvar messagingBoundaryLegs = []messagingBoundaryLeg{\n\t{name: \"root linux/amd64\", environment: []string{\"GOOS=linux\", \"GOARCH=amd64\"}},\n}\n",
 	"sdk/go.mod":                      "module @sdk@\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/sdk.go":                      "package sdk\n",
+	"sdk/build/Makefile":              "build_ios:\n\tgomobile bind -tags sdk_mobile_bind,ios_extension\n",
 	"sdk/js/go.mod":                   "module @sdk@/js\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/cgo/go.mod":                  "module @sdk@/cgo\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/build/go.mod":                "module @sdk@/build\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",

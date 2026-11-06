@@ -13,13 +13,17 @@ import (
 	"testing"
 )
 
-// Numbers as the design writes them, or for 0x11xx and 0x12xx as §8.8's and §7.9's rows order them. Values
-// are permanent once released, so a change here is a change to the wire.
+// Numbers as the design writes them, or for 0x10xx, 0x13xx and 0x14xx as §6.11's list orders them, §11.6's two more
+// statements after it, and 0x11xx and 0x12xx as §8.8's and §7.9's rows do. Values are permanent once released, so a
+// change here is a change to the wire.
 func TestSignedTypeNumbersStable(t *testing.T) {
 	cases := []struct {
 		signedType SignedType
 		number     int32
 	}{
+		{signedType: SignedType_SIGNED_SOCKET_REGISTRATION, number: 0x1001},
+		{signedType: SignedType_SIGNED_SOCKET_TICKET, number: 0x1002},
+
 		{signedType: SignedType_SIGNED_GRANT_ACTIVATE, number: 0x1101},
 		{signedType: SignedType_SIGNED_GRANT_REVOKE, number: 0x1102},
 		{signedType: SignedType_SIGNED_SUSPEND, number: 0x1103},
@@ -57,6 +61,16 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_AUTHORITY_COSIGN, number: 0x1213},
 		{signedType: SignedType_SIGNED_RECOVERY_VETO, number: 0x1214},
 		{signedType: SignedType_SIGNED_PROJECTION_HEADER, number: 0x1215},
+
+		{signedType: SignedType_SIGNED_GEN_ROTATE, number: 0x1301},
+		{signedType: SignedType_SIGNED_READER_KEY, number: 0x1302},
+		{signedType: SignedType_SIGNED_READER_WRAP, number: 0x1303},
+		{signedType: SignedType_SIGNED_DELEGATION_WRAP, number: 0x1304},
+
+		{signedType: SignedType_SIGNED_EVS_PUSH, number: 0x1401},
+		{signedType: SignedType_SIGNED_EVS_RESEED, number: 0x1402},
+		{signedType: SignedType_SIGNED_EVS_PATH_MAP, number: 0x1403},
+		{signedType: SignedType_SIGNED_EVS_IMPORT, number: 0x1404},
 
 		{signedType: SignedType_SIGNED_RECORD_HEADER, number: 0x1801},
 		{signedType: SignedType_SIGNED_APPROVAL_DECISION, number: 0x1802},

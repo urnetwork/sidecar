@@ -32,6 +32,9 @@ type SignedType int32
 
 const (
 	SignedType_SIGNED_TYPE_NONE SignedType = 0
+	// 0x10xx §9 in §6.11's order: purposes socket-registration and socket-ticket.
+	SignedType_SIGNED_SOCKET_REGISTRATION SignedType = 4097
+	SignedType_SIGNED_SOCKET_TICKET       SignedType = 4098
 	// 0x11xx §8 acl statements in §8.8's row order, GrantActivate first: purpose acl, but for AuditOptIn
 	// and AuditOptOut, which are purpose authority. RepoVersioning's type is reserved at M2: format-1
 	// code verifies it and folds its lock (D-PHASE-9).
@@ -74,6 +77,17 @@ const (
 	SignedType_SIGNED_AUTHORITY_COSIGN   SignedType = 4627
 	SignedType_SIGNED_RECOVERY_VETO      SignedType = 4628
 	SignedType_SIGNED_PROJECTION_HEADER  SignedType = 4629
+	// 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5).
+	SignedType_SIGNED_GEN_ROTATE      SignedType = 4865
+	SignedType_SIGNED_READER_KEY      SignedType = 4866
+	SignedType_SIGNED_READER_WRAP     SignedType = 4867
+	SignedType_SIGNED_DELEGATION_WRAP SignedType = 4868
+	// 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
+	// purposes evs-path-epoch and evs-import.
+	SignedType_SIGNED_EVS_PUSH     SignedType = 5121
+	SignedType_SIGNED_EVS_RESEED   SignedType = 5122
+	SignedType_SIGNED_EVS_PATH_MAP SignedType = 5123
+	SignedType_SIGNED_EVS_IMPORT   SignedType = 5124
 	// 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
 	// purpose approval; §16.11's directory items, purpose directory, the last two, reserved for format 2.
 	SignedType_SIGNED_RECORD_HEADER     SignedType = 6145
@@ -99,6 +113,8 @@ const (
 var (
 	SignedType_name = map[int32]string{
 		0:    "SIGNED_TYPE_NONE",
+		4097: "SIGNED_SOCKET_REGISTRATION",
+		4098: "SIGNED_SOCKET_TICKET",
 		4353: "SIGNED_GRANT_ACTIVATE",
 		4354: "SIGNED_GRANT_REVOKE",
 		4355: "SIGNED_SUSPEND",
@@ -135,6 +151,14 @@ var (
 		4627: "SIGNED_AUTHORITY_COSIGN",
 		4628: "SIGNED_RECOVERY_VETO",
 		4629: "SIGNED_PROJECTION_HEADER",
+		4865: "SIGNED_GEN_ROTATE",
+		4866: "SIGNED_READER_KEY",
+		4867: "SIGNED_READER_WRAP",
+		4868: "SIGNED_DELEGATION_WRAP",
+		5121: "SIGNED_EVS_PUSH",
+		5122: "SIGNED_EVS_RESEED",
+		5123: "SIGNED_EVS_PATH_MAP",
+		5124: "SIGNED_EVS_IMPORT",
 		6145: "SIGNED_RECORD_HEADER",
 		6146: "SIGNED_APPROVAL_DECISION",
 		6147: "SIGNED_APPROVAL_CANCEL",
@@ -152,58 +176,68 @@ var (
 		6409: "SIGNED_SHARE_CERT",
 	}
 	SignedType_value = map[string]int32{
-		"SIGNED_TYPE_NONE":          0,
-		"SIGNED_GRANT_ACTIVATE":     4353,
-		"SIGNED_GRANT_REVOKE":       4354,
-		"SIGNED_SUSPEND":            4355,
-		"SIGNED_UNSUSPEND":          4356,
-		"SIGNED_EVS_SHARE":          4357,
-		"SIGNED_OWNER_CONFIRM":      4358,
-		"SIGNED_REPO_CREATE":        4359,
-		"SIGNED_REPO_ADMIN":         4360,
-		"SIGNED_REPO_GRANT":         4361,
-		"SIGNED_REPO_REVOKE":        4362,
-		"SIGNED_REPO_DELETE":        4363,
-		"SIGNED_REPO_RESTORE":       4364,
-		"SIGNED_REPO_VERSIONING":    4365,
-		"SIGNED_AUDIT_OPT_IN":       4366,
-		"SIGNED_AUDIT_OPT_OUT":      4367,
-		"SIGNED_GENESIS":            4609,
-		"SIGNED_ADMIN_SET":          4610,
-		"SIGNED_MEMBER_ADMIT":       4611,
-		"SIGNED_MEMBER_REVOKE":      4612,
-		"SIGNED_SIDECAR_ADMIT":      4613,
-		"SIGNED_SIDECAR_REVOKE":     4614,
-		"SIGNED_ADMISSION_CONFIRM":  4615,
-		"SIGNED_SPONSOR_SET":        4616,
-		"SIGNED_INDEXER_SET":        4617,
-		"SIGNED_RECOVERY_BIND":      4618,
-		"SIGNED_RECOVERY_REBIND":    4619,
-		"SIGNED_KEY_REGISTER":       4620,
-		"SIGNED_KEY_REVOKE":         4621,
-		"SIGNED_DELEGATION":         4622,
-		"SIGNED_DELEGATION_REVOKE":  4623,
-		"SIGNED_SERVICE_SETTINGS":   4624,
-		"SIGNED_VERSIONING_RULES":   4625,
-		"SIGNED_AUTHORITY_PROPOSAL": 4626,
-		"SIGNED_AUTHORITY_COSIGN":   4627,
-		"SIGNED_RECOVERY_VETO":      4628,
-		"SIGNED_PROJECTION_HEADER":  4629,
-		"SIGNED_RECORD_HEADER":      6145,
-		"SIGNED_APPROVAL_DECISION":  6146,
-		"SIGNED_APPROVAL_CANCEL":    6147,
-		"SIGNED_RETENTION_POLICY":   6148,
-		"SIGNED_DIRECTORY_CARD":     6149,
-		"SIGNED_DIRECTORY_REPO":     6150,
-		"SIGNED_BRIDGE_BLOCK":       6401,
-		"SIGNED_BRIDGE_ADDRESS":     6402,
-		"SIGNED_BRIDGE_ROUTE":       6403,
-		"SIGNED_BRIDGE_MAP":         6404,
-		"SIGNED_BRIDGE_EGRESS":      6405,
-		"SIGNED_BRIDGE_ALIAS":       6406,
-		"SIGNED_BRIDGE_WITHDRAW":    6407,
-		"SIGNED_WINDOW_DELEGATION":  6408,
-		"SIGNED_SHARE_CERT":         6409,
+		"SIGNED_TYPE_NONE":           0,
+		"SIGNED_SOCKET_REGISTRATION": 4097,
+		"SIGNED_SOCKET_TICKET":       4098,
+		"SIGNED_GRANT_ACTIVATE":      4353,
+		"SIGNED_GRANT_REVOKE":        4354,
+		"SIGNED_SUSPEND":             4355,
+		"SIGNED_UNSUSPEND":           4356,
+		"SIGNED_EVS_SHARE":           4357,
+		"SIGNED_OWNER_CONFIRM":       4358,
+		"SIGNED_REPO_CREATE":         4359,
+		"SIGNED_REPO_ADMIN":          4360,
+		"SIGNED_REPO_GRANT":          4361,
+		"SIGNED_REPO_REVOKE":         4362,
+		"SIGNED_REPO_DELETE":         4363,
+		"SIGNED_REPO_RESTORE":        4364,
+		"SIGNED_REPO_VERSIONING":     4365,
+		"SIGNED_AUDIT_OPT_IN":        4366,
+		"SIGNED_AUDIT_OPT_OUT":       4367,
+		"SIGNED_GENESIS":             4609,
+		"SIGNED_ADMIN_SET":           4610,
+		"SIGNED_MEMBER_ADMIT":        4611,
+		"SIGNED_MEMBER_REVOKE":       4612,
+		"SIGNED_SIDECAR_ADMIT":       4613,
+		"SIGNED_SIDECAR_REVOKE":      4614,
+		"SIGNED_ADMISSION_CONFIRM":   4615,
+		"SIGNED_SPONSOR_SET":         4616,
+		"SIGNED_INDEXER_SET":         4617,
+		"SIGNED_RECOVERY_BIND":       4618,
+		"SIGNED_RECOVERY_REBIND":     4619,
+		"SIGNED_KEY_REGISTER":        4620,
+		"SIGNED_KEY_REVOKE":          4621,
+		"SIGNED_DELEGATION":          4622,
+		"SIGNED_DELEGATION_REVOKE":   4623,
+		"SIGNED_SERVICE_SETTINGS":    4624,
+		"SIGNED_VERSIONING_RULES":    4625,
+		"SIGNED_AUTHORITY_PROPOSAL":  4626,
+		"SIGNED_AUTHORITY_COSIGN":    4627,
+		"SIGNED_RECOVERY_VETO":       4628,
+		"SIGNED_PROJECTION_HEADER":   4629,
+		"SIGNED_GEN_ROTATE":          4865,
+		"SIGNED_READER_KEY":          4866,
+		"SIGNED_READER_WRAP":         4867,
+		"SIGNED_DELEGATION_WRAP":     4868,
+		"SIGNED_EVS_PUSH":            5121,
+		"SIGNED_EVS_RESEED":          5122,
+		"SIGNED_EVS_PATH_MAP":        5123,
+		"SIGNED_EVS_IMPORT":          5124,
+		"SIGNED_RECORD_HEADER":       6145,
+		"SIGNED_APPROVAL_DECISION":   6146,
+		"SIGNED_APPROVAL_CANCEL":     6147,
+		"SIGNED_RETENTION_POLICY":    6148,
+		"SIGNED_DIRECTORY_CARD":      6149,
+		"SIGNED_DIRECTORY_REPO":      6150,
+		"SIGNED_BRIDGE_BLOCK":        6401,
+		"SIGNED_BRIDGE_ADDRESS":      6402,
+		"SIGNED_BRIDGE_ROUTE":        6403,
+		"SIGNED_BRIDGE_MAP":          6404,
+		"SIGNED_BRIDGE_EGRESS":       6405,
+		"SIGNED_BRIDGE_ALIAS":        6406,
+		"SIGNED_BRIDGE_WITHDRAW":     6407,
+		"SIGNED_WINDOW_DELEGATION":   6408,
+		"SIGNED_SHARE_CERT":          6409,
 	}
 )
 
@@ -236,12 +270,13 @@ func (SignedType) EnumDescriptor() ([]byte, []int) {
 
 // signed bytes: "urnetwork-sidecar-v1/" || purpose || 0x00 || u32be(type) || body
 type Signed struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Body      []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
-	SignerId  []byte                 `protobuf:"bytes,2,opt,name=signer_id,json=signerId,proto3" json:"signer_id,omitempty"`
-	KeyId     []byte                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
-	Signature []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
-	Webauthn  *WebAuthnEvidence      `protobuf:"bytes,5,opt,name=webauthn,proto3" json:"webauthn,omitempty"` // a presence key's evidence: for Signed's own signature by a
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Body     []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
+	SignerId []byte                 `protobuf:"bytes,2,opt,name=signer_id,json=signerId,proto3" json:"signer_id,omitempty"` // a recovery key's statement (§7.9): the member_id it stands for
+	KeyId    []byte                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`          // a recovery key's statement: the Ed25519 public key itself, which rows
+	// hold only as a hash, so the statement carries it (VerifyRecoverySigned)
+	Signature []byte            `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	Webauthn  *WebAuthnEvidence `protobuf:"bytes,5,opt,name=webauthn,proto3" json:"webauthn,omitempty"` // a presence key's evidence: for Signed's own signature by a
 	// webauthn-es256 key, or, key_id set, §7.9's presence
 	// countersignature beside an identity key's
 	Type          uint32 `protobuf:"varint,6,opt,name=type,proto3" json:"type,omitempty"` // SignedType (§6.11)
@@ -435,11 +470,12 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xf9\n" +
-	"\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xfb\f\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
-	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1a\n" +
+	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
+	"\x1aSIGNED_SOCKET_REGISTRATION\x10\x81 \x12\x19\n" +
+	"\x14SIGNED_SOCKET_TICKET\x10\x82 \x12\x1a\n" +
 	"\x15SIGNED_GRANT_ACTIVATE\x10\x81\"\x12\x18\n" +
 	"\x13SIGNED_GRANT_REVOKE\x10\x82\"\x12\x13\n" +
 	"\x0eSIGNED_SUSPEND\x10\x83\"\x12\x15\n" +
@@ -475,7 +511,15 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x19SIGNED_AUTHORITY_PROPOSAL\x10\x92$\x12\x1c\n" +
 	"\x17SIGNED_AUTHORITY_COSIGN\x10\x93$\x12\x19\n" +
 	"\x14SIGNED_RECOVERY_VETO\x10\x94$\x12\x1d\n" +
-	"\x18SIGNED_PROJECTION_HEADER\x10\x95$\x12\x19\n" +
+	"\x18SIGNED_PROJECTION_HEADER\x10\x95$\x12\x16\n" +
+	"\x11SIGNED_GEN_ROTATE\x10\x81&\x12\x16\n" +
+	"\x11SIGNED_READER_KEY\x10\x82&\x12\x17\n" +
+	"\x12SIGNED_READER_WRAP\x10\x83&\x12\x1b\n" +
+	"\x16SIGNED_DELEGATION_WRAP\x10\x84&\x12\x14\n" +
+	"\x0fSIGNED_EVS_PUSH\x10\x81(\x12\x16\n" +
+	"\x11SIGNED_EVS_RESEED\x10\x82(\x12\x18\n" +
+	"\x13SIGNED_EVS_PATH_MAP\x10\x83(\x12\x16\n" +
+	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x19\n" +
 	"\x14SIGNED_RECORD_HEADER\x10\x810\x12\x1d\n" +
 	"\x18SIGNED_APPROVAL_DECISION\x10\x820\x12\x1b\n" +
 	"\x16SIGNED_APPROVAL_CANCEL\x10\x830\x12\x1c\n" +

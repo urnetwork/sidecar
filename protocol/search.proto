@@ -1,0 +1,94 @@
+// Remote search (§11.14): a phone's request to a designated indexer and the reply. Peer to peer over a Required
+// session, so no server reads a field here, and only sizes show (§2.8's connect-5). Freezes at M10, additive to
+// M2's wire (§23.8). Fields 13 and 14 stay reserved for later requesters.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// sidecar/protocol/search.proto (11.14): remote search over §6.6's RPC, MessageType SEARCH 0x1404 and
+// SEARCH_RESULT 0x1405 (§6.11). No oneof (§6.11's rule); nothing compressed; every body padded (sizes, below).
+message SearchRequest {
+  uint32 search_version = 1;          // 1
+  fixed64 search_id = 2;              // random per search, chosen by the requester; names the cursor
+  uint32 page = 3;                    // 0 opens the search; n asks page n once page n-1 arrived; a repeat
+                                      //   of n returns page n again
+  fixed64 supersedes = 4;             // an earlier search_id of this requester, whose work and cursor end; 0 none
+  uint32 steps = 5;                   // the reply's size in 16 KiB steps, 1-4; v1 requesters send 1
+  uint32 scope = 6;                   // page 0 only: 1 latest (buckets), 2 all (buckets, then all)
+  string query = 7;                   // page 0 only: §16.10's grammar, <= 512 B and 16 terms, NFC as typed;
+                                      //   the indexer normalizes it with each index's normalizer
+  repeated SearchRepo repos = 8;      // page 0 only: <= 64 repos the requester reads and asks of this indexer
+  int64 since_ms = 9;                 // page 0 only; 0 unbounded
+  int64 until_ms = 10;
+  SearchFilters filters = 11;         // page 0 only: §16.10's filters
+  bool fuzzy = 12;                    // page 0 only: near hits even with 3 or more exact hits
+  reserved 13, 14;                    // group_by and withhold_untrusted, for later requesters
+  bytes pad = 15;                     // zeros, sizing the body to exactly 4,016 B
+}
+message SearchRepo { bytes repo_id = 1; bytes ref_id = 2; }   // ref_id empty: the repo's default ref
+message SearchFilters {
+  repeated string agents = 1;         // agent labels, or agent ids in hex
+  repeated bytes sidecar_ids = 2;
+  repeated bytes member_ids = 3;
+  repeated bytes run_ids = 4;
+  repeated string session_ids = 5;
+  repeated uint32 kinds = 6;          // RECORD.md's kinds
+  string path_prefix = 7;
+  repeated SearchField fields = 8;    // field:text terms
+}
+message SearchField { uint32 field = 1; string text = 2; }    // 11.14's field numbers (1 subject, 2 from, ...)
+message SearchReply {
+  uint32 search_version = 1;          // the version answered
+  uint32 min_version = 2;             // this indexer's supported range
+  uint32 max_version = 3;
+  fixed64 search_id = 4;
+  uint32 page = 5;
+  uint32 status = 6;                  // SearchStatus
+  uint32 phase = 7;                   // 1 latest, 2 all, 3 done
+  bool complete = 8;                  // no later page holds a hit
+  int64 checked_through_ms = 9;       // SERVED_TEXT repos: every candidate newer than this was checked, and
+                                      //   returned on this or an earlier page if it matched
+  repeated SearchCoverage coverage = 10;   // page 0: one per repo named; later pages: none
+  repeated SearchHit hits = 11;       // as many as fit the steps, at most 20
+  SearchCounts counts = 12;
+  bytes pad = 15;                     // zeros, sizing the body to exactly steps x 16,384 B
+}
+enum SearchStatus {
+  SEARCH_STATUS_UNSPECIFIED = 0; SEARCH_OK = 1; SEARCH_PARTIAL = 2; SEARCH_TOO_BROAD = 3;
+  SEARCH_CURSOR_EXPIRED = 4; SEARCH_INVALID = 5; SEARCH_UNSUPPORTED_VERSION = 6;
+}
+message SearchCoverage {
+  bytes repo_id = 1;
+  bytes ref_id = 2;
+  uint32 served = 3;                  // SearchServed
+  uint64 ref_version = 4;             // the (v, C_v) the cursor pinned (11.9)
+  bytes chain = 5;
+  int64 ref_time_ms = 6;              // that version's signed time
+  int64 latest_from_ms = 7;           // the oldest bucket day searched
+  uint32 uncovered = 8;               // pushes past indexed_through that this indexer's text does not cover
+}
+enum SearchServed {
+  SEARCH_SERVED_UNSPECIFIED = 0; SERVED_TEXT = 1; SERVED_INDEX = 2; REFUSED_NOT_READER = 3;
+  REFUSED_NOT_CONSENTED = 4; REFUSED_SCOPE = 5; REFUSED_INDEX_OFF = 6; REFUSED_ALL_ABSENT = 7;
+  REFUSED_FORMAT = 8;
+}
+message SearchHit {
+  bytes repo_id = 1;
+  bytes ref_id = 2;
+  bytes doc_key = 3;                  // 11.14's doc_key, the same on every reader, so merges match
+  uint64 version = 4;
+  int64 time_ms = 5;
+  uint32 doc_kind = 6;                // 1 file, 2 mail, 3 record, 4 derived (a run card)
+  string locator = 7;                 // the path or derived name, <= 512 B, which the requester opens
+  uint32 state = 8;                   // 1 verified, 2 confirmed, 3 possible, 4 near
+  string correction = 9;              // near: the corrected term
+  uint32 partition = 10;              // 1 current, 2 previous, 3 older or retained, 4 all
+  uint32 trust = 11;                  // 1 own, 2 member, 3 untrusted, relative to the requester (§16.10)
+  bytes signer = 12;                  // the version's writer sidecar_id
+  repeated SearchField fields = 13;   // display fields from the row, at most 8, each <= 256 B
+  string snippet = 14;                // verified hits: <= 200 B around the first match
+  uint32 line = 15;                   // files: the first matching line
+}
+message SearchCounts { uint32 checked = 1; uint32 verified = 2; uint32 possible = 3; uint32 near = 4; uint32 masked = 5; }

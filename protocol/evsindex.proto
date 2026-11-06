@@ -1,0 +1,55 @@
+// The search index's plaintext (§11.14): what its files hold before evs seals them as it seals any file, so no
+// server reads a field here. It needs no number at M2 and freezes with format 2 at M10 (D-PHASE-9), inside the
+// versioning-2 files format 1 reserves. Headers and manifests marshal deterministically, repeated fields sorted,
+// because a file is a function of its inputs (§11.14's determinism).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// sidecar/protocol/evsindex.proto: plaintext inside index files, which evs seals as any file; index format 1
+message IndexSettings {                 // <root>/settings, versioned; only a repo admin's version counts
+  bool off = 1;                         // false (the default): the index is on
+  uint32 window_days = 2;               // 0 means 30; else 7-365
+}
+message IndexLock {                     // <root>/lock, versionless; an empty holder is free
+  bytes holder_sidecar_id = 1; uint32 bucket_start_day = 2; int64 until_ms = 3;
+}
+message IndexErasureSet {               // x beside a ref's roots (paths, above): versionless, staged, at most
+                                        // 16,208 B; only a CUT writes it (11.12)
+  uint64 listed_since = 1;              // every erasure whose CUT named an index_epoch at or above it is listed,
+                                        // and every pending one
+  repeated IndexErasure erasures = 2;   // sorted by erasure_id
+}
+message IndexErasure {
+  bytes erasure_id = 1;                 // 16 random bytes an erasure draws; its CLOSUREs' and ERASEs' notes name it
+  bytes eraser_sidecar_id = 2;
+  uint64 epoch = 3;                     // the index_epoch the CUT that added it named
+  int64 cut_ms = 4;                     // that CUT's signed time_ms
+  repeated IndexErased docs = 5;        // sorted by doc_key
+}
+message IndexErased { bytes doc_key = 1; uint64 version = 2; }  // every indexed version up to it is erased
+message IndexFileHeader {               // after "URix", VByte-length-prefixed, leading each slot, large entry and shard
+  uint32 format = 1;                    // 1
+  uint32 type = 2;                      // 1 slot, 2 large entry, 3 bucket shard, 4 all shard
+  uint32 normalizer = 3; uint32 extractor = 4; string unicode_version = 5;  // norm.Version, as linked
+  uint32 bucket_start_day = 6; uint32 bucket_days = 7;   // slots, large entries and bucket shards
+  bytes writer_sidecar_id = 8; uint32 seq = 9;           // slots and large entries
+  repeated IndexCoverage coverage = 10; // companion heads and backfillers': per content ref, sorted by ref_id
+  uint64 pad_generation = 11;           // shards: the generation whose index key drew the pad
+  uint32 body_length = 12; uint32 count = 13;            // bytes before the pad; entries or documents
+  string text_module_version = 14;      // golang.org/x/text's module version, as linked (runtime/debug.ReadBuildInfo)
+  uint32 tombstones = 15;               // shards: the tombstone table's entries; 0 in an all shard
+}
+message IndexCoverage {                 // horizon: every writer's, set by a backfiller (commit path's coverage)
+  bytes ref_id = 1; uint64 version = 2; bool horizon = 3;
+}
+message IndexManifest {                 // <root>/b/<S>/m and <root>/a/m, versionless
+  uint32 start_day = 1; uint32 days = 2;          // a bucket's window
+  repeated IndexShard shards = 3;                 // in document order
+  repeated IndexWatermark absorbed = 4;           // a bucket's: per writer, the highest slot seq its shards hold
+  uint32 rolled_through_day = 5;                  // a/m: the first day of the newest bucket rolled up
+}
+message IndexShard { uint32 n = 1; uint32 docs = 2; uint32 first_day = 3; uint32 last_day = 4; }  // a/: bucket days held
+message IndexWatermark { bytes writer_sidecar_id = 1; uint32 seq = 2; }

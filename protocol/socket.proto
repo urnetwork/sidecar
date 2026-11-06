@@ -1,0 +1,45 @@
+// §9's protobuf wire: the hint that revokes or drains a listener (§9.5), and the ticket a Find signs and a
+// dialer presents (§9.6). Numbers are §9's as written. Registrations and Find are JSON on §9's routes, so
+// they are not here, and neither is a registration's Claim, which §9.5 writes as a tuple.
+//
+// No oneof: SocketHint rides PushHint.hint and SignedSocketTicket StreamOpen.ticket (§6.11).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message SocketHint {             // §6 0x1001, topic `sock`: the client calls registrations at once, and the
+                                 // answer is authoritative; version: a per-client sequence from the service
+                                 // clock (ms), which Redis loss cannot lower
+  SocketHintKind kind = 1;
+  bytes listen_id = 2;
+}
+enum SocketHintKind {
+  SOCKET_HINT_KIND_UNSPECIFIED = 0;
+  SOCKET_HINT_REVOKED = 1;       // a grant was revoked or §21 suspended the name
+  SOCKET_HINT_DRAIN = 2;         // forced drain
+}
+
+message SocketTicket {           // signed: <= 370 B with a 112-byte name or an 8-segment token path
+  bytes ticket_id = 1;           // 16 random bytes, single use
+  bytes network_id = 2;
+  string name = 3;               // tls/, smtp/ and ur/ names only
+  bytes listener_client_id = 4;
+  bytes listen_id = 5;           // 16 B
+  bytes dialer_client_id = 6;    // edges: one of the caller's K clients
+  bytes dialer_network_id = 7;
+  uint64 issue_time_millis = 8;
+  uint64 expire_time_millis = 9; // issue + 30 s
+  uint64 policy_version = 10;    // §7.9 log position n that allowed it, at or after any GrantActivate
+  bytes grant_id = 11;           // projection or requested grant: receipts, revocation
+  bool backup = 12;
+  uint64 grant_expire_time_millis = 13; // streams end here; 0: none; ur/: issue + 60 min
+  bytes name_token = 14;         // other names: the token path (9.4)
+  reserved 15;                   // withdrawn policy_delta_seq
+}
+message SignedSocketTicket {     // in StreamOpen.ticket (<= 512 B); §6's Signed format, purpose socket-ticket
+  string key_id = 1;             // a service key; fixes the algorithm (Ed25519)
+  bytes ticket = 2;              // SocketTicket
+  bytes signature = 3;
+}

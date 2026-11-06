@@ -44,7 +44,7 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestDepsFailsOnServerInALeg", "TestDepsFailsOnSdkInALeg", "TestDepsFailsOnSnInALeg",
 			"TestDepsFailsOnAnEngineLinkingGoRedis", "TestDepsFailsOnAnUnlistedModuleInALeg", "TestDepsFailsOnAModuleOutsideItsRowsLegs",
-			"TestDepsFailsOnAPlannedRowThatIsLinked", "TestDepsFailsOnAnUnreadableDependenciesFile",
+			"TestDepsFailsOnAnUnreadableDependenciesFile",
 		},
 	},
 	{
@@ -124,9 +124,17 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "layering", item: "a client or cli leg linking a <svc>service or sidecartest",
+		rule:         (*repository).legEngineFindings,
+		plantedTests: []string{"TestLayeringFailsOnAnEngineThroughSidecartest"},
+	},
+	{
 		row: "layering", item: "device beyond connect and protocol/bridge (§4.4, D-SDK-20)",
-		rule:         (*repository).deviceImportFindings,
-		plantedTests: []string{"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol"},
+		rule: (*repository).deviceImportFindings,
+		plantedTests: []string{
+			"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol",
+			"TestLayeringFailsOnDevicesTaggedHookFileImportingTheRoot",
+		},
 	},
 	{
 		row: "layering", item: "a parent importing its child (R-REPO-5)",
@@ -154,7 +162,7 @@ var failsOnRows = []failsOnRow{
 		},
 		plantedTests: []string{
 			"TestLegsFailsOnIosExtensionLinkingTheRoot", "TestLegsFailsOnIosExtensionLinkingProtocol",
-			"TestLegsFailsOnTheMacExtensionSlice",
+			"TestLegsFailsOnTheMacExtensionSlice", "TestLegsFailsOnIosExtensionLinkingAnythingElseOfOurs",
 		},
 	},
 	{
@@ -271,13 +279,14 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnAPackagesHookHeldInAVariable", "TestHygieneFailsOnAPackagesHalfMissing",
 			"TestHygieneFailsOnAPackagesTaggedHalfNotForwarding", "TestHygieneFailsOnAHookPairInANestedModule",
 			"TestHygieneFailsOnAnEntryPointWithoutTheTag", "TestHygieneFailsOnAnEntryPointOutsideTheRoot",
-			"TestHygieneFailsOnAHookWithAnotherSignature",
+			"TestHygieneFailsOnAHookWithAnotherSignature", "TestHygieneFailsOnADeviceEntryPoint",
+			"TestHygieneFailsOnADeviceInstallerWithoutTheTag", "TestHygieneFailsOnADeviceHookWithABody",
 		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a Makefile's build line",
 		rule:         (*repository).makefileTagFindings,
-		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag"},
+		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnGomobileBindingWithTheTag"},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: what the artifact says of itself",

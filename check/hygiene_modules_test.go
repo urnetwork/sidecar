@@ -9,6 +9,7 @@ package check
 import (
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -68,6 +69,9 @@ func replaceFindingsDevelopment(module *repositoryModule) []string {
 	return findings
 }
 
+// A moved sibling's last element, such as /v2026.
+var versionElementSuffixPattern = regexp.MustCompile(`/v[0-9]+$`)
+
 // §4.7's replaces, release layout. The release step drops connect's and glog's for tagged requires
 // (build/all/run.sh:1546-1549), points gVisor at the urnetwork fork (:1551) and rebases what stays
 // (:1568), so each may be absent, and a path may climb further, but nothing else may appear.
@@ -91,7 +95,8 @@ func replaceFindingsRelease(module *repositoryModule) []string {
 		}
 		if sibling {
 			want := strings.TrimPrefix(siblingReplaces[old], "../")
-			if !strings.HasSuffix(path.Clean(newPath), "/"+want) {
+			target := versionElementSuffixPattern.ReplaceAllString(path.Clean(newPath), "")
+			if !strings.HasSuffix(target, "/"+want) {
 				findings = append(findings, findingf("%s: replace %s => %s does not end at %s", module.relativeName, replace.Old.Path, newPath, want))
 			}
 		}

@@ -252,21 +252,24 @@ func (self *repository) unregeneratedFindings(t testing.TB) []string {
 	return findings
 }
 
-// build/all/run.sh:1560-1566 as this repository's release applies them: the root's exact path, then
-// each subpackage on a line not already carrying /vN. smtpproof's go first in the release, so a line
-// naming it is skipped by the pass that follows; this tree's generated files name only the root.
-func releaseRewrite(content string, suffix string) string {
+// build/all/run.sh:1560-1566 as this repository's release applies them to one module path: its
+// exact quoted path and each subpackage, on a line not already carrying /vN. smtpproof's go first in
+// the release, so a line naming it is skipped by the root's pass that follows.
+func releaseRewritePath(content string, modulePath string, suffix string) string {
+	quotedPathPattern := regexp.MustCompile(`"` + regexp.QuoteMeta(modulePath) + `([^"]*)"`)
 	lines := strings.Split(content, "\n")
 	for index, line := range lines {
-		if releaseVersionedLinePattern.MatchString(line) {
-			continue
+		if !releaseVersionedLinePattern.MatchString(line) {
+			lines[index] = quotedPathPattern.ReplaceAllString(line, `"`+modulePath+suffix+`$1"`)
 		}
-		lines[index] = releaseQuotedPathPattern.ReplaceAllString(line, `"`+sidecarBasePath+suffix+`$1"`)
 	}
 	return strings.Join(lines, "\n")
 }
 
-var (
-	releaseVersionedLinePattern = regexp.MustCompile(`/v[0-9]+`)
-	releaseQuotedPathPattern    = regexp.MustCompile(`"` + regexp.QuoteMeta(sidecarBasePath) + `([^"]*)"`)
-)
+// The rewrite of this repository's root path, which is all a generated file here names.
+func releaseRewrite(content string, suffix string) string {
+	return releaseRewritePath(content, sidecarBasePath, suffix)
+}
+
+// A line the release's subpackage pass leaves alone.
+var releaseVersionedLinePattern = regexp.MustCompile(`/v[0-9]+`)
