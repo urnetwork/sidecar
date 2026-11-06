@@ -1,0 +1,54 @@
+// Streams (§6.7): opens, credit, data and ends, on one sequence per peer from M5. No oneof, as in
+// envelope.proto.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message StreamOpen {
+  string target = 1;
+  bytes metadata = 2;
+  bytes ticket = 3;
+  uint32 window = 4;
+  bytes early_data = 5;
+}
+
+message StreamAccept {
+  uint32 window = 1;
+}
+
+message StreamReject {
+  uint32 code = 1;            // StreamRejectCode
+  uint32 retry_after_ms = 2;
+}
+
+message StreamData {
+  uint64 offset = 1;
+  bytes data = 2;             // <= 4,000 B
+}
+
+message StreamWindow {
+  uint64 consumed_offset = 1;
+  uint64 max_offset = 2;
+}
+
+message StreamClose {         // half-close
+  uint64 final_offset = 1;
+}
+
+message StreamReset {
+  uint32 code = 1;            // StreamResetCode
+  uint64 final_offset = 2;
+}
+
+// §9's ticket codes, same numbers; QUOTA §20; prose drops the prefixes; a zero is a protocol error (§6.11).
+enum StreamRejectCode {
+  SR_UNSPECIFIED = 0; SR_RETRY = 1; SR_BUSY = 2; SR_DENIED = 3; SR_INVALID = 4; SR_QUOTA = 5;
+}
+
+// QUOTA §20.6, IDENTITY §6.4; a zero is a protocol error (§6.11).
+enum StreamResetCode {
+  RST_UNSPECIFIED = 0; RST_DRAINING = 1; RST_REVOKED = 2; RST_PEER_TIMEOUT = 3; RST_TRANSFER_FAILED = 4;
+  RST_PROTOCOL = 5; RST_CANCELLED = 6; RST_QUOTA = 7; RST_IDENTITY = 8;
+}

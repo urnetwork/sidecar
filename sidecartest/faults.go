@@ -1,0 +1,279 @@
+// A store fault is a plan: the next matching operation on any fake gets its result (§22.8's FaultPlan).
+// A schedule arms plans; a fake takes them. The types live here and not in sidecartest/fault, whose
+// Step carries them, because a parent never imports its child (connect/CODESTYLE.md:26) and every fake
+// here needs them. package fault re-exports them under the design's names.
+
+package sidecartest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+)
+
+// What an operation does instead of its normal result.
+type FaultResult int
+
+const (
+	// Applies a write and shows the caller a transport error (§22.8's unknown rule): a lost response.
+	// A read answers normally at the store and the caller gets the same transport error.
+	ApplyThenDrop FaultResult = iota + 1
+	// The request dies before the store takes it: nothing applies, and the caller gets a transport
+	// error, the same one a lost response gives.
+	FailBeforeApply
+	// A PUT's condition fails, whatever the key holds, and nothing applies.
+	Precondition
+	// The request is parked. FaultPlan.Delay says what becomes of it, and its caller waits as a client
+	// does: until it lands, its ctx ends, or the request's timeout passes on the clock.
+	Delay
+	// §19.6's settle holds the key: nothing applies and the caller gets ErrBlobHeld.
+	Held
+	// The caller's process dies as the request leaves, so nothing applies and the call never returns.
+	CrashBeforeApply
+	// The store applies the write, and the caller's process dies before the answer reaches it: a
+	// crash point after a commit, so the call never returns.
+	CrashAfterApply
+	// A real store loses its read or write quorum (T3 only: FS-1, FS-40).
+	QuorumLoss
+	// A write misses a drive (T3 only: FS-40).
+	DriveMiss
+)
+
+func (self FaultResult) String() string {
+	switch self {
+	case ApplyThenDrop:
+		return "ApplyThenDrop"
+	case FailBeforeApply:
+		return "FailBeforeApply"
+	case Precondition:
+		return "Precondition"
+	case Delay:
+		return "Delay"
+	case Held:
+		return "Held"
+	case CrashBeforeApply:
+		return "CrashBeforeApply"
+	case CrashAfterApply:
+		return "CrashAfterApply"
+	case QuorumLoss:
+		return "QuorumLoss"
+	case DriveMiss:
+		return "DriveMiss"
+	}
+	return fmt.Sprintf("FaultResult(%d)", int(self))
+}
+
+// What becomes of a Delay. The first two are the settle rule's two fates for a write the store took
+// (D-OPS-20): it takes effect before the next request on its key, or never.
+type FaultDelay int
+
+const (
+	// Takes effect just before the next request on its key, by the checks of that moment, its
+	// deadline and its condition among them.
+	DelayLandsBeforeNext FaultDelay = iota
+	// Never takes effect: the next request on its key finds it gone.
+	DelayNeverLands
+	// Has not reached the store: other requests on its key pass it, and it arrives when a test calls
+	// FakeBlobs.DeliverDelayed, judged then, by its deadline first (§19.6's a request delayed in the
+	// network).
+	DelayInNetwork
+)
+
+// Operation names a plan matches. A fake with no such operation never takes the plan, and the plan
+// stays unfired, which fails the schedule.
+const (
+	// PutIfNoneMatch, PutIfMatch and PutStream.
+	FaultOpPut = "put"
+	// Get, GetRange and Head.
+	FaultOpGet    = "get"
+	FaultOpList   = "list"
+	FaultOpDelete = "delete"
+	// Every Redis call but AddKeyEventCallback.
+	FaultOpRedis = "redis"
+	// A server's commit, at T3.
+	FaultOpPgCommit = "pg-commit"
+	// An api route, on FakeApi.
+	FaultOpHttp = "http"
+	// Every call of a Quota, Tasks or Push fake, which have no key: KeyPrefix then matches the
+	// method's name.
+	FaultOpHost = "host"
+)
+
+var faultOps = []string{
+	FaultOpPut, FaultOpGet, FaultOpList, FaultOpDelete, FaultOpRedis, FaultOpPgCommit, FaultOpHttp, FaultOpHost,
+}
+
+// The result the next matching operation gets. See §22.8.
+type FaultPlan struct {
+	Op        string
+	KeyPrefix string
+	// Which match gets it, counting from 1. Zero means the first.
+	Nth    int
+	Result FaultResult
+	// With Delay: what becomes of the request.
+	Delay FaultDelay
+	// How many further matches after Nth get the same result, so a store can stay down for a while.
+	// Negative: every further one, until the test ends. An unbounded plan counts as fired at its first.
+	Repeat int
+	// Only this actor's calls match. Empty: anyone's.
+	Actor string
+	// Only this cluster's calls match. Empty: any.
+	ClusterId string
+}
+
+func (self *FaultPlan) String() string {
+	return fmt.Sprintf("%s %s nth=%d %s", self.Op, self.KeyPrefix, self.Nth, self.Result)
+}
+
+// Whether a fake at T2 can do what this plan asks: T3's results need real drives.
+func (self *FaultPlan) validate() error {
+	if !slices.Contains(faultOps, self.Op) {
+		return fmt.Errorf("fault plan %s: no such operation", self)
+	}
+	if self.Nth < 0 {
+		return fmt.Errorf("fault plan %s: a negative Nth", self)
+	}
+	switch self.Result {
+	case ApplyThenDrop, FailBeforeApply, Delay, CrashBeforeApply, CrashAfterApply:
+	case Precondition:
+		if self.Op != FaultOpPut {
+			return fmt.Errorf("fault plan %s: only a PUT has a condition", self)
+		}
+	case Held:
+		if self.Op != FaultOpPut && self.Op != FaultOpGet && self.Op != FaultOpDelete {
+			return fmt.Errorf("fault plan %s: only a request on a key is held", self)
+		}
+	case QuorumLoss, DriveMiss:
+		return fmt.Errorf("fault plan %s: %w", self, ErrFaultNeedsRealStore)
+	default:
+		return fmt.Errorf("fault plan %s: no such result", self)
+	}
+	return nil
+}
+
+// A plan only T3's stores can carry out: a fake refuses it rather than pretend (§22.8).
+var ErrFaultNeedsRealStore = errors.New("this result needs a real store (T3)")
+
+type armedFault struct {
+	plan      *FaultPlan
+	matches   int
+	fireCount int
+	fired     chan struct{}
+}
+
+// One queue of armed plans, shared by every fake of a test, so a schedule's plan reaches whichever
+// fake the operation goes to. Safe for concurrent use.
+type FaultQueue struct {
+	stateLock sync.Mutex
+	armed     []*armedFault
+	onFire    func(plan *FaultPlan)
+}
+
+func NewFaultQueue() *FaultQueue {
+	return &FaultQueue{}
+}
+
+// Called with each plan as it fires, on the goroutine of the operation it hit, and with no lock held.
+func (self *FaultQueue) SetOnFire(onFire func(plan *FaultPlan)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.onFire = onFire
+}
+
+// Arms plan. A plan a fake cannot carry out is an error here, so a schedule fails where it was
+// written. The returned channel closes when the plan first fires.
+func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) {
+	if err := plan.validate(); err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	armed := &armedFault{plan: plan, fired: make(chan struct{})}
+	self.armed = append(self.armed, armed)
+	return armed.fired, nil
+}
+
+// For one operation, the plan it gets, or nil. Reading counts a match on every armed plan the
+// operation fits, so Nth means the same whatever else is armed. The oldest plan that fires wins.
+func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, key string) *FaultPlan {
+	if isInspecting(ctx) {
+		return nil
+	}
+	actorName := ActorName(ctx)
+	var taken *FaultPlan
+	var onFire func(plan *FaultPlan)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for _, armed := range self.armed {
+			plan := armed.plan
+			if plan.Op != op || !strings.HasPrefix(key, plan.KeyPrefix) {
+				continue
+			}
+			if plan.Actor != "" && plan.Actor != actorName {
+				continue
+			}
+			if plan.ClusterId != "" && plan.ClusterId != clusterId {
+				continue
+			}
+			armed.matches += 1
+			if taken != nil {
+				continue
+			}
+			first := max(plan.Nth, 1)
+			if armed.matches < first {
+				continue
+			}
+			if 0 <= plan.Repeat && first+plan.Repeat < armed.matches {
+				continue
+			}
+			taken = plan
+			armed.fireCount += 1
+			if armed.fireCount == 1 {
+				close(armed.fired)
+			}
+		}
+		onFire = self.onFire
+	}()
+	if taken != nil && onFire != nil {
+		onFire(taken)
+	}
+	return taken
+}
+
+// Plans armed and never fired: a schedule ending with one proved nothing about it.
+func (self *FaultQueue) Unfired() []*FaultPlan {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	plans := []*FaultPlan{}
+	for _, armed := range self.armed {
+		if armed.fireCount == 0 {
+			plans = append(plans, armed.plan)
+		}
+	}
+	return plans
+}
+
+// Drops every armed plan.
+func (self *FaultQueue) Clear() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.armed = nil
+}
+
+type inspectContextKey struct{}
+
+// ctx for an oracle: a fake serves a call under it directly from its state, with no fault, delay,
+// count, deadline or history, so reading after every step changes nothing a schedule counts. A real
+// store ignores it.
+func InspectContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inspectContextKey{}, true)
+}
+
+func isInspecting(ctx context.Context) bool {
+	inspecting, _ := ctx.Value(inspectContextKey{}).(bool)
+	return inspecting
+}

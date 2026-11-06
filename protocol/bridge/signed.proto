@@ -1,0 +1,124 @@
+// VerifySigned's input (§6.9) and the signed type registry (§6.11), which live here so the keyless
+// device role verifies and reads them without linking protocol (§4.4).
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol/bridge";
+
+// signed bytes: "urnetwork-sidecar-v1/" || purpose || 0x00 || u32be(type) || body
+message Signed {
+  bytes body = 1;
+  bytes signer_id = 2;
+  bytes key_id = 3;
+  bytes signature = 4;
+  WebAuthnEvidence webauthn = 5;  // a presence key's evidence: for Signed's own signature by a
+                                  // webauthn-es256 key, or, key_id set, §7.9's presence
+                                  // countersignature beside an identity key's
+  uint32 type = 6;                // SignedType (§6.11)
+}
+
+// countersigned bytes: "urnetwork-sidecar-v1/presence-act" || 0x00 || signer_id || u32be(act_size) ||
+// root, root being RFC 9162's MTH over the SHA-256 of each of the act's statements' signed bytes, in
+// act order; "presence-act" is no §6.11 purpose
+message WebAuthnEvidence {
+  bytes authenticator_data = 1;  // webauthn-es256 keys only
+  bytes client_data_json = 2;    // webauthn-es256 keys only
+  bytes key_id = 3;              // countersignature: the presence key's KeyRegister key_id
+  bytes signature = 4;           // countersignature: its DER ECDSA P-256 signature (§16.6)
+  uint32 act_size = 5;           // m, the act's statements: 1 to 65,535
+  uint32 act_index = 6;          // this statement's leaf, 0 to m - 1
+  repeated bytes act_path = 7;   // its RFC 9162 §2.1.3 inclusion path, at most 16 hashes
+}
+
+// Signed.type (§6.9): service << 8 | n, with MessageType's service bytes; names SIGNED_<MESSAGE>; one
+// value per body message, added by its owner with the format that defines it; permanent once
+// released. A verifier refuses 0, an unknown value, and any value its position does not expect; a
+// heterogeneous list (deltas) maps each value to its parser and purpose.
+enum SignedType {
+  SIGNED_TYPE_NONE = 0;
+
+  // 0x10xx §9 in §6.11's order: purposes socket-registration and socket-ticket.
+  SIGNED_SOCKET_REGISTRATION = 0x1001;
+  SIGNED_SOCKET_TICKET = 0x1002;
+
+  // 0x11xx §8 acl statements in §8.8's row order, GrantActivate first: purpose acl, but for AuditOptIn
+  // and AuditOptOut, which are purpose authority. RepoVersioning's type is reserved at M2: format-1
+  // code verifies it and folds its lock (D-PHASE-9).
+  SIGNED_GRANT_ACTIVATE = 0x1101;
+  SIGNED_GRANT_REVOKE = 0x1102;
+  SIGNED_SUSPEND = 0x1103;
+  SIGNED_UNSUSPEND = 0x1104;
+  SIGNED_EVS_SHARE = 0x1105;
+  SIGNED_OWNER_CONFIRM = 0x1106;
+  SIGNED_REPO_CREATE = 0x1107;
+  SIGNED_REPO_ADMIN = 0x1108;
+  SIGNED_REPO_GRANT = 0x1109;
+  SIGNED_REPO_REVOKE = 0x110A;
+  SIGNED_REPO_DELETE = 0x110B;
+  SIGNED_REPO_RESTORE = 0x110C;
+  SIGNED_REPO_VERSIONING = 0x110D;
+  SIGNED_AUDIT_OPT_IN = 0x110E;
+  SIGNED_AUDIT_OPT_OUT = 0x110F;
+
+  // 0x12xx §7 config records and log statements in §7.9's row order: purpose authority. VersioningRules'
+  // type is reserved at M2: format-1 readers apply nothing from it but still apply the head holding it
+  // (D-PHASE-9).
+  SIGNED_GENESIS = 0x1201;
+  SIGNED_ADMIN_SET = 0x1202;
+  SIGNED_MEMBER_ADMIT = 0x1203;
+  SIGNED_MEMBER_REVOKE = 0x1204;
+  SIGNED_SIDECAR_ADMIT = 0x1205;
+  SIGNED_SIDECAR_REVOKE = 0x1206;
+  SIGNED_ADMISSION_CONFIRM = 0x1207;
+  SIGNED_SPONSOR_SET = 0x1208;
+  SIGNED_INDEXER_SET = 0x1209;
+  SIGNED_RECOVERY_BIND = 0x120A;
+  SIGNED_RECOVERY_REBIND = 0x120B;
+  SIGNED_KEY_REGISTER = 0x120C;
+  SIGNED_KEY_REVOKE = 0x120D;
+  SIGNED_DELEGATION = 0x120E;
+  SIGNED_DELEGATION_REVOKE = 0x120F;
+  SIGNED_SERVICE_SETTINGS = 0x1210;
+  SIGNED_VERSIONING_RULES = 0x1211;
+  SIGNED_AUTHORITY_PROPOSAL = 0x1212;
+  SIGNED_AUTHORITY_COSIGN = 0x1213;
+  SIGNED_RECOVERY_VETO = 0x1214;
+  SIGNED_PROJECTION_HEADER = 0x1215;
+
+  // 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5).
+  SIGNED_GEN_ROTATE = 0x1301;
+  SIGNED_READER_KEY = 0x1302;
+  SIGNED_READER_WRAP = 0x1303;
+  SIGNED_DELEGATION_WRAP = 0x1304;
+
+  // 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
+  // purposes evs-path-epoch and evs-import.
+  SIGNED_EVS_PUSH = 0x1401;
+  SIGNED_EVS_RESEED = 0x1402;
+  SIGNED_EVS_PATH_MAP = 0x1403;
+  SIGNED_EVS_IMPORT = 0x1404;
+
+  // 0x15xx §13, 0x16xx §14, 0x17xx §15, 0x1Axx §5, 0x1Bxx §12
+
+  // 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
+  // purpose approval; §16.11's directory items, purpose directory, the last two, reserved for format 2.
+  SIGNED_RECORD_HEADER = 0x1801;
+  SIGNED_APPROVAL_DECISION = 0x1802;
+  SIGNED_APPROVAL_CANCEL = 0x1803;
+  SIGNED_RETENTION_POLICY = 0x1804;
+  SIGNED_DIRECTORY_CARD = 0x1805;
+  SIGNED_DIRECTORY_REPO = 0x1806;  // its body RepoAnnouncement
+
+  // 0x19xx §17: 17.8's statements in row order (purpose bridge), then WindowDelegation and ShareCert
+  // (purpose window-delegation).
+  SIGNED_BRIDGE_BLOCK = 0x1901;
+  SIGNED_BRIDGE_ADDRESS = 0x1902;
+  SIGNED_BRIDGE_ROUTE = 0x1903;
+  SIGNED_BRIDGE_MAP = 0x1904;
+  SIGNED_BRIDGE_EGRESS = 0x1905;
+  SIGNED_BRIDGE_ALIAS = 0x1906;
+  SIGNED_BRIDGE_WITHDRAW = 0x1907;
+  SIGNED_WINDOW_DELEGATION = 0x1908;
+  SIGNED_SHARE_CERT = 0x1909;
+}

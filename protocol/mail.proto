@@ -1,0 +1,121 @@
+// What mxedge tells a receiver about a sender (§15.4), and the evidence a receiver seals at reception (§15.5).
+// MailIngress rides sealed streams only, and readers read MailAuthEvidence, so neither reaches a server's store.
+//
+// §15.5 gives MailAuthEvidence's four result messages only in its comments. They sit last in this file, with the
+// fields those comments name in the order written, and a verdict enum of 0 unspecified then the values written.
+// Their numbers stay open to review until §15's formats freeze at M7. MailDeposit and MailHint have no field list
+// in §15, so neither is here.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message MailIngress {                // 0x1701 (§6.11), in StreamOpen.metadata, <= 1,024 B
+  reserved 4, 6, 7;                  // destination_ip, route, burner_id: SNI-only routing
+  uint32 version = 1;
+  bytes sender_ip = 2;
+  uint32 sender_port = 3;
+  string sni = 5;
+  string ehlo_name = 8;              // pre-TLS argument, <= 255 B
+  string ptr_name = 9;               // mxedge's forward-confirmed PTR, or ""; labels use the receiver's own
+  repeated string ip_listings = 10;  // categories from the local feed mirror, e.g. "pbl"
+  uint64 receive_time_millis = 11;
+}
+
+message MailAuthEvidence {         // sealed in the deposit header beside MailIngress (15.7); at most 8,192 B
+  uint32 version = 1;              //   whatever its identifiers, by the evidence row below
+  bytes message_sha256 = 2;        // the bytes as received, before ingest adds headers
+  uint64 receive_time_millis = 3;
+  bytes receiver_sidecar_id = 4;
+  SpfResult spf = 5;               // pass|fail|softfail|neutral|none|temperror|permerror|incomplete;
+                                   //   domain, ip, records
+  repeated DkimResult dkim = 6;    // per selected signature, in selection order: d=, s=,
+                                   //   pass|fail|permerror|temperror|incomplete, the public key relied on
+  DmarcResult dmarc = 7;           // the record (p, adkim, aspf), alignment, pass|fail|none|temperror
+  string ptr_name = 8;             // the receiver's own forward-confirmed PTR of sender_ip, or ""
+  bool sni_tlsa_live = 9;          // the SNI host's TLSA held this receiver's key
+  ArcResult arc = 10;              // cv= (none|pass|fail|incomplete), and each verified set's d=, s= and key
+  bool strict_chain = 11;          // mail.strict: SNI named a custom MX host, and this receiver's zone watch
+                                   //   (D-TRUST-9) holds every recipient domain's MX hosts and that host's
+                                   //   TLSA, with this key, customer-signed, none in a URnetwork zone
+  AuthLimits limits = 12;          // set only when a bound below cut the work
+}
+message AuthLimits {
+  uint32 reason = 1;               // bits: 1 a count or size bound, 2 the 30 s deadline
+  uint32 dkim_seen = 2;            // DKIM-Signature fields counted, at most 64
+  uint32 dkim_checked = 3;         // those selected and looked up, at most 8
+  uint32 arc_sets = 4;             // the highest ARC instance seen
+  uint32 dns_queries = 5;          // queries sent, DohCache hits excluded
+  uint32 dropped = 6;              // dkim and arc entries dropped to stay within 8,192 B
+}
+
+enum SpfVerdict {
+  SPF_VERDICT_UNSPECIFIED = 0;
+  SPF_PASS = 1;
+  SPF_FAIL = 2;
+  SPF_SOFTFAIL = 3;
+  SPF_NEUTRAL = 4;
+  SPF_NONE = 5;
+  SPF_TEMPERROR = 6;
+  SPF_PERMERROR = 7;
+  SPF_INCOMPLETE = 8;
+}
+
+message SpfResult {
+  SpfVerdict result = 1;
+  string domain = 2;
+  bytes ip = 3;                    // 4 or 16 B, as MailIngress.sender_ip
+  repeated string records = 4;     // the records relied on, never a DNS transcript (15.5)
+}
+
+enum DkimVerdict {
+  DKIM_VERDICT_UNSPECIFIED = 0;
+  DKIM_PASS = 1;
+  DKIM_FAIL = 2;
+  DKIM_PERMERROR = 3;
+  DKIM_TEMPERROR = 4;
+  DKIM_INCOMPLETE = 5;
+}
+
+message DkimResult {               // a selected signature; an unselected one has no entry
+  string domain = 1;               // d=
+  string selector = 2;             // s=
+  DkimVerdict result = 3;
+  bytes public_key = 4;            // the key relied on, which the evidence row drops first
+}
+
+enum DmarcVerdict {
+  DMARC_VERDICT_UNSPECIFIED = 0;
+  DMARC_PASS = 1;
+  DMARC_FAIL = 2;
+  DMARC_NONE = 3;
+  DMARC_TEMPERROR = 4;
+}
+
+message DmarcResult {
+  string p = 1;                    // the record's tags
+  string adkim = 2;
+  string aspf = 3;
+  uint32 alignment = 4;            // bits: 1 SPF aligned, 2 DKIM aligned
+  DmarcVerdict result = 5;
+}
+
+enum ArcVerdict {
+  ARC_VERDICT_UNSPECIFIED = 0;
+  ARC_NONE = 1;
+  ARC_PASS = 2;
+  ARC_FAIL = 3;
+  ARC_INCOMPLETE = 4;
+}
+
+message ArcSet {                   // a verified set
+  string domain = 1;               // d=
+  string selector = 2;             // s=
+  bytes public_key = 3;
+}
+
+message ArcResult {
+  ArcVerdict cv = 1;
+  repeated ArcSet sets = 2;
+}

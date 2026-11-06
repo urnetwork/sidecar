@@ -27,7 +27,7 @@ This is where building the sidecar infrastructure starts. The design is finished
   - team management and access control in server;
   - `sdk/sidecar.go`;
   - default-off changes on connect;
-  - build and deployment through sn, warp, config, vault, build, xops and mmm.
+  - build and deployment through sn, warp, config, vault, build, xops, mmm and the `minio` fork.
 
   See DESIGN.md's opening and [§1](DESIGN.md#1-context-goals-and-requirements).
 - **The one rule.** "End to end encryption is a must. The storage, tls edge, mail must only see encrypted bytes and some small header values like sni and spam headers." A server component that would see plaintext content is a design error and is never offered as an option ([owner directive](DESIGN.md#owner-directive)).
@@ -37,8 +37,8 @@ This is where building the sidecar infrastructure starts. The design is finished
     - 11 closed by peer review;
     - 12 closed by the internal design review of 2026-11-03, which reviewers may reopen;
     - 4 withdrawn.
-  - Owner decisions 1-191 settle the cross-cutting choices ([owner decisions by number](DESIGN.md#owner-decisions-by-number)).
-  - Nothing is implemented, and nothing is frozen. Each format's specification freezes at its milestone's entry review and its bytes at the exit review ([§23.8](DESIGN.md#238-review-gates)).
+  - Owner decisions 1-196 settle the cross-cutting choices ([owner decisions by number](DESIGN.md#owner-decisions-by-number)).
+  - The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build straight through on the `sidecar` branches (owner decision 194). Nothing is frozen. Each format's specification freezes at its milestone's entry review and its bytes at the exit review ([§23.8](DESIGN.md#238-review-gates)).
 - **What to do first.** M0, "Foundations" ([§23.4](DESIGN.md#234-milestones); [section 7](#7-m0-in-detail) lists it in full):
   - open the `sidecar` branches;
   - bootstrap the sidecar repo and wire its consumers;
@@ -47,13 +47,13 @@ This is where building the sidecar infrastructure starts. The design is finished
   - run §12's DNS census and renewal;
   - start `smtpproof`;
   - run the staged auth fix's first stage, log-only, in production;
-  - pass G0.
+  - run G0's re-checks and density review beside the bootstrap (owner decision 193).
 - **The critical path.** It runs through M2 ([§23.5](DESIGN.md#235-x15-two-tracks-and-staffing)):
   - the MLS subset, owner decision 43's 2-4 engineer-months;
   - the 0x0010 interop artifact;
   - the production hosts' PM9A3 set, which M2's storage benchmark needs before M2's exit.
 
-  Both tracks share M0-M2, so a slip there moves every later milestone.
+  Both tracks share M0-M2, so a slip there moves every later milestone's exit. The build itself goes on past M2 with formats unfrozen (owner decision 194).
 
 ## 2. The documents
 
@@ -230,13 +230,14 @@ These rules are hard. When a section cannot meet one, it raises a Q- item for th
 | build | public | The `sidecar` submodule, the release step, and `warpctl build` and a rollout class for each service | M0 |
 | sn | public (`urfoundation/sn`) | sidecar's require and replace, repeating server's | M0 |
 | xops | private | D-OPS-18's sidecar dumps | M0 |
-| mmm | internal | `install.sh` on ur.io | M1 |
-| config | private | `config/<env>/sidecar.yml` (dark gates, `preview_networks`) and `pro.yml`'s `sidecar:` blocks | M1 |
-| vault | private | Secrets | M2 |
-| warp | public | W1-W11 ([§19.5](DESIGN.md#195-load-balancer-addresses-certificates)) | M5, but §19.11 lands W5 at M0 ([section 10](#10-open-items-risks-and-evidence-gates)) |
+| mmm | internal | `install.sh` on ur.io | M0 |
+| config | private | `config/<env>/sidecar.yml` (dark gates, `preview_networks`) and `pro.yml`'s `sidecar:` blocks | M0 |
+| vault | private | Secrets | M0 |
+| warp | public | W1-W11 ([§19.5](DESIGN.md#195-load-balancer-addresses-certificates)) | M0 |
+| minio | public (AGPL-3.0), once the owner creates `urnetwork/minio` on GitHub | D-OPS-20's in-house MinIO build: a fork of upstream's final source, keeping MinIO's AGPL source in one public place (owner decision 195). No Go module imports it. | M0 |
 | extension, apps | — | Nothing, unless the owner opts in | — |
 
-On 2026-11-06 every one of these was on `main`, with no `sidecar` branch. connect's checkout had one uncommitted local change, which is not part of this work.
+At the handoff every one of these but the new minio fork was on `main`, with no `sidecar` branch. M0 opened each `sidecar` branch above on 2026-11-06, in the local checkouts: the owner directed one on every repo the work touches (owner decision 196). connect's checkout had one uncommitted local change, which is not part of this work.
 
 **Branch policy** ([branch policy](DESIGN.md#branch-policy), [§4.8](DESIGN.md#48-branches-and-cross-repo-pinning), [§23.9](DESIGN.md#239-branches-merges-and-the-source-graph-lock)):
 
@@ -353,7 +354,7 @@ Each milestone is a vertical slice with an entry review, an exit review and a da
   - §23.6's M0-M2 items settled;
   - RECORD.md reviewed, here or by M2's entry.
 
-  No code is written before G0 (D-PHASE-2).
+  No code is written before G0 (D-PHASE-2). The owner signed it on 2026-11-06 (owner decision 193); its re-checks, density review and RECORD.md draft run beside M0's bootstrap.
 - **Gn-in:**
   - §23.6's design closure for the gate;
   - specifications freeze;
@@ -367,6 +368,8 @@ Each milestone is a vertical slice with an entry review, an exit review and a da
   - the owner approves the deploy and merges.
 
 No external review gates any milestone (owner decision 99).
+
+**How the build moves past a gate** (owner decision 194). M0-M10 build straight through in dependency order on the `sidecar` branches, with no stop at a Gn-out. Each gate's local checks run and are reported, and anything needing hardware, production or people is listed open: M2's format-1 freeze on the PM9A3 benchmark, M0's and M1's stages in production, each Gn-out's approval to merge. This changes how the milestones are executed, not what freezes when: §23.8's freeze order still decides what may reach a production store. Formats stay unfrozen meanwhile, so a later hardware miss could force rework in later milestones.
 
 **What freezes when** ([§23.8](DESIGN.md#238-review-gates)). A specification freezes at Gn-in and its bytes at Gn-out. Before a final freeze, only local, T3, canary and M2's staging cluster hold a format. The production file cluster holds data from M3; sidecar's Postgres tables reach production earlier, from MG0 at M0.
 
@@ -406,25 +409,25 @@ Both tracks share M0. Its scope ([§23.4](DESIGN.md#234-milestones)):
 - §12's domain renewal and census;
 - the start of `smtpproof`.
 
-M0's exit needs G0 passed, `make check` green, the lock entry on server@sidecar, P0 log-only in production, and the sidecar dump running daily from MG0's Gn-out, with its tables excluded from the main dump (D-OPS-18). Its entry review needs §23.6's closures: the dump design, Q-TEST-1 and Q-TEST-2.
+M0's exit needs G0 passed, `make check` green, the lock entry on server@sidecar, P0 log-only in production, and the sidecar dump running daily from MG0's Gn-out, with its tables excluded from the main dump (D-OPS-18). The items that need production stay listed open while the build moves on (owner decision 194). Its entry review needs §23.6's closures: the dump design, Q-TEST-1 and Q-TEST-2.
 
-**1. Pass G0.** No code is written before G0 (D-PHASE-2). §23.8 lists what G0 needs but names no one who passes it; the owner approves each Gn-out's deploy and merges. G0's checklist, as of 2026-11-06:
+**1. G0 is signed.** No code is written before G0 (D-PHASE-2), and the owner signed it on 2026-11-06 (owner decision 193). The re-checks, the density review and the RECORD.md draft run beside M0's bootstrap, and their findings return as Q- items, so a finding could change something already built. G0's checklist at signing:
 
 | G0 requires | State |
 |---|---|
 | Peer review of DESIGN.md | Done: five reviews and a final meta review, each item answered in [the ledger](DESIGN-REVIEW-RESPONSE.md). The meta review also covered the v1 additions. |
-| A reviewer's re-check of the fixed items the ledger places at G0 | Open. The list is in the ledger's §6.1, §6.2 and §7 (indexed by §4.6's By column); CC-02, a §7.3 entry, is among them ([section 10](#10-open-items-risks-and-evidence-gates)). |
-| The density rule | A reviewer's judgment; no tool checks it. |
-| D-ARCH-4's assembly check | Passes: `design/source/build.sh`, 2026-11-06. |
+| A reviewer's re-check of the 21 fixed items the ledger places at G0 | Running beside M0's bootstrap. The list is in the ledger's §6.1, §6.2 and §7 (indexed by §4.6's By column); CC-02, a §7.3 entry, is among them ([section 10](#10-open-items-risks-and-evidence-gates)). |
+| The density rule | A reviewer's judgment; no tool checks it. The review runs beside M0's bootstrap. |
+| D-ARCH-4's assembly check | Passes: `design/source/build.sh`, 2026-11-06, with owner decisions 192-196. |
 | §23.6's M0-M2 items settled | No question is open. |
-| RECORD.md reviewed | Not yet written. It is an M0 deliverable, reviewed at G0 or by M2's entry. |
+| RECORD.md reviewed | Its draft runs beside M0's bootstrap. It is an M0 deliverable, reviewed by M2's entry. |
 
-**2. Open the branches.** Create `sidecar` from `main` in sidecar, connect, server, sdk, build, sn and xops. sn repeats server's sidecar replace, and xops holds D-OPS-18's dumps. mmm and config follow in M1, vault in M2 and warp in M5.
+**2. Open the branches.** Create `sidecar` from `main` in sidecar, connect, server, sdk, build, sn, xops, warp, config, mmm and vault, all at M0 (owner decision 196). sn repeats server's sidecar replace, xops holds D-OPS-18's dumps, and warp takes W5 at M0 and W2 and W8 by M4 ([§19.11](DESIGN.md#1911-environments-gates-rollout)). The `minio` fork, a sibling checkout, cuts its `sidecar` from upstream's final source; the owner creates the GitHub repo before any push (owner decision 195).
 
 **3. Bootstrap the sidecar repo** ([§4.9](DESIGN.md#49-generation-targets-versions-license-style), [§4.18](DESIGN.md#418-phasing)):
 
 - The first commit on `sidecar` is the full MPL-2.0 text.
-- Copy `.githooks/commit-msg` byte for byte into sidecar, config and vault before their first `sidecar` commit. Its source is `connect/.githooks/commit-msg`, which the other touched repos already share.
+- Copy `.githooks/commit-msg` byte for byte into sidecar, config, vault and minio before their first `sidecar` commit. Its source is `connect/.githooks/commit-msg`, which the other touched repos already share.
 - Install the hook once in every clone, as its header says: `git config core.hooksPath .githooks`, or copy it into the clone's hooks folder when the clone keeps other hooks. Copying the file into the repo does not install it, and a secret or AI-attributed message pushed to a public branch stays served by hash ([§4.17](DESIGN.md#417-risks)).
 - Add CODESTYLE.md, the root's and `cli/`'s go.mod, `dependencies.yml` and `make check`.
 
@@ -457,7 +460,7 @@ M0's exit needs G0 passed, `make check` green, the lock entry on server@sidecar,
 
 - `sidecartest` builds on connect's exported API, and T3 reruns each fake-backed scenario on server's exchange (Q-TEST-1).
 - The local stack matches production: a 3-master Redis Cluster and erasure-coded MinIO, with a CROSSSLOT lint (Q-TEST-2).
-- Use Redis 8.10.2 and MinIO built from the final upstream source with PR #21653's conditional-write fix: the deployed edge-5 build lacks it and proceeds when an If-Match read loses quorum ([§11.3](DESIGN.md#113-what-exists-today)). Locally, one 8-drive MinIO process at EC:4; in T3 and at the release gate, 4 × 2 drives at EC:4 and 4 × 4 at EC:8 ([§22.4](DESIGN.md#224-tiers-and-harness)).
+- Use Redis 8.10.2 and MinIO built from the `minio` fork, whose base, the final upstream source, has PR #21653's conditional-write fix: the deployed edge-5 build lacks it and proceeds when an If-Match read loses quorum ([§11.3](DESIGN.md#113-what-exists-today)). Locally, one 8-drive MinIO process at EC:4; in T3 and at the release gate, 4 × 2 drives at EC:4 and 4 × 4 at EC:8 ([§22.4](DESIGN.md#224-tiers-and-harness)).
 
 **9. Draft RECORD.md** (owner decision 25). It holds recURd's record semantics beyond the X20 primitives. It is reviewed by M2's entry, and `record.proto` freezes at M3. Its scope ([Q-MCP-1](DESIGN.md#1614-open-questions)): record semantics, the v1 kind registry with each kind's search text, exports, the verifiable log, disclosure, model receipts (D-CTX-5) and cost. It may not change DESIGN.md's semantics ([§16.8](DESIGN.md#168-record-primitives-x20)): the logs' reader and writer matrix, per-entry key slots, the source and tainted labels, and approvals bound by `request_sha256` and `payload_sha256`.
 
@@ -735,7 +738,7 @@ evs stores each repo as ciphertext on the MinIO file cluster; its stateless serv
 
 evs stores segments on an HDD cluster and metadata on clusters of 8 × PM9A3 at EC:4, where a governor keeps all but P0 writes within 0.8 DWPD and 50% of rated write IOPS.
 
-- **Code:** `server/cli/evs` hosts `sidecar/evsservice`; taskworker runs the governor loop per metadata cluster, GC and evacuation; `ServiceHost.Blobs` gains If-Match, streamed put, ranged get and delete (X13), over D-OPS-20's MinIO build.
+- **Code:** `server/cli/evs` hosts `sidecar/evsservice`; taskworker runs the governor loop per metadata cluster, GC and evacuation; `ServiceHost.Blobs` gains If-Match, streamed put, ranged get and delete (X13), over D-OPS-20's MinIO build in the `minio` fork.
 - **Lands:** M2 (governor, GC, evacuation; staging cluster); M3 (production cluster, budget live); M10 (purge, drop jobs).
 - **Read first:** [§19.6](DESIGN.md#196-the-file-cluster-x13), store rules, clocks, counters; [§11.13](DESIGN.md#1113-backend-iops-gc-quotas-durability), budget, GC, uploads; [§22.8](DESIGN.md#228-load-soak-failure-injection), FS-61, FS-116 to FS-119; [§19.9](DESIGN.md#199-capacity-and-cost-drivers), growth; [§11.21](DESIGN.md#1121-risks), P0 storms.
 - **Build first:**
@@ -922,7 +925,7 @@ This area binds the sidecar into the sdk: the `sdk.Sidecar` API apps call, a key
 
 This area puts every sidecar service on warp and runs what lies under them: the two on-site MinIO file clusters (X13) with their deadline, settle and write-budget rules, host clocks, migration groups, Redis, the daily sidecar dump, gates, paging, SLOs and runbooks.
 
-- **Code:** server: each service is `server/cli/<svc>` plus a block in `vault/<env>/services.yml` (gkm is `server/cli/gkm`, D-OPS-2); taskworker runs the push sender and the write-budget and HDD loops; pending migration groups live in `server/db_migrations_sidecar_pending.go` (build tag `sidecar_pending`). Gates: `config/<env>/sidecar.yml`. W1-W11: warp. xops: `file-clusters`, the sidecar dump, planetoid's `pg-sidecar` stream. DESIGN.md names no repo for D-OPS-20's MinIO build ([services table](DESIGN.md#services-and-config)).
+- **Code:** server: each service is `server/cli/<svc>` plus a block in `vault/<env>/services.yml` (gkm is `server/cli/gkm`, D-OPS-2); taskworker runs the push sender and the write-budget and HDD loops; pending migration groups live in `server/db_migrations_sidecar_pending.go` (build tag `sidecar_pending`). Gates: `config/<env>/sidecar.yml`. W1-W11: warp. xops: `file-clusters`, the sidecar dump, planetoid's `pg-sidecar` stream. minio: D-OPS-20's MinIO build, on the fork's `sidecar` branch (owner decision 195; [services table](DESIGN.md#services-and-config)).
 - **Lands:** M0 dump, W5, W6, hardware order; M2 staging cluster; M3 production cluster, write budget, protection states, pager; M5 dns edges (W9), tlsedge (W1, W7), platform listener (W11); M7 mxedge router; M8 push sender; M9 smtpedge; M10 `format2` gate; each MGn at Mn's Gn-out ([§19.11](DESIGN.md#1911-environments-gates-rollout)).
 - **Read first:** [§19.4](DESIGN.md#194-service-blocks) for blocks, mounts and the push sender; [§19.6](DESIGN.md#196-the-file-cluster-x13) for clusters, settle, clocks, budget, durability and the dump; [§19.7](DESIGN.md#197-postgresql-and-redis) for MG0-MG9 and Redis; [§19.11](DESIGN.md#1911-environments-gates-rollout) for gates, rollout classes and order; [§19.10](DESIGN.md#1910-failure-modes-and-runbooks) for runbooks and restore order.
 - **Build first:**
@@ -996,11 +999,7 @@ No design question is open. This is what remains.
 
 **For the owner now:**
 
-- **Pass G0, and say who signs it.** §23.8 lists what G0 needs but names no one who passes it ([section 7](#7-m0-in-detail)).
-- **Settle when warp's branch opens.** The branch policy and §23.4 open warp's `sidecar` branch at M5. But §19.11 lands W5 at M0, a change to `warp/warpctl/config.go` that makes the lb read `tls/current/<name>`, and lands W2 and W8, also in warp, by M4. Either open warp's branch at M0 or move those changes.
-- **Ratify the `DelegationRevoke` countersignature.**
-  - The final meta review's fixes extended the presence countersignature to a `DelegationRevoke` that parks other devices (`since_n` > 0). See §7.9's `delegation` row, D-TEAM-32, §5.6 and FS-124.
-  - This follows owner decision 187's intent, but no owner decision names it. Recording it would make it owner decision 192.
+- **Create `urnetwork/minio` on GitHub** before any push (owner decision 195).
 - **Decide what happens if M2's storage benchmark misses.**
   - The model puts 1 KiB blocks at 33.3 KiB written per push and 4 KiB blocks at 43.5 KiB, against a 43 KiB gate.
   - If the PM9A3 set misses even at 1 KiB, the design names no remedy but waiting (§22.16; the ledger's §6.6).
@@ -1029,7 +1028,7 @@ No design question is open. This is what remains.
 
 **Re-checks that reviewers still owe** (the ledger's §8):
 
-- **Fixed items.** Every item marked fixed waits for a reviewer's re-check at the gate it names. The largest set is at M2-in: F01-F06, F09, F10, F12, F13, K01, the presence countersignature, CC-01, CC-04, CC-07, and the second round's storage and authority majors. The ledger's §4.6, §6.1 and §6.2 give each item's gate.
+- **Fixed items.** Every item marked fixed waits for a reviewer's re-check at the gate it names. The 21 at G0 run beside M0's bootstrap, their findings returning as Q- items (owner decision 193). The largest set is at M2-in: F01-F06, F09, F10, F12, F13, K01, the presence countersignature, CC-01, CC-04, CC-07, and the second round's storage and authority majors. The ledger's §4.6, §6.1 and §6.2 give each item's gate.
 - **Never re-checked.** Twelve earlier entries lay outside the final panel's clusters and were never re-checked (ten were fixes; T4-22 and T5-34 were declined as already fixed): T2-17, T2-32, T2-35, T2-36, T2-37, T4-22, T5-06, T5-20, T5-25, T5-30, T5-34 and T5-35.
 - **Not yet confirmed.** Every meta-review entry, the v1 additions and the two SDK fixes are "fixed in design, not resolved": no reviewer has confirmed them yet.
 - **May be reopened.** Reviewers may reopen the 12 questions that the internal design review of 2026-11-03 closed (§3.11).
@@ -1075,7 +1074,7 @@ Implementation will find things the design got wrong or left thin. The rules for
   - An unsettled blocker defers only what it blocks.
   - Until the owner decides, text written at a question's recommendation is marked "(proposed; Q-…)" (D-ARCH-4).
   - A technical problem with a PLAN.md statement keeps the PLAN position visible and goes to the owner (owner rule 8).
-- **New owner decisions continue at 192.** Each one touches six places, which the source README lists. The validator fails a decision that no section cites.
+- **New owner decisions continue at 197.** Each one touches six places, which the source README lists. The validator fails a decision that no section cites.
 - **Freezes are real.** After a format's Gn-in its specification is frozen, and after Gn-out its bytes are. Before a final freeze, only local, T3, canary and M2's staging cluster may hold the format.
 - **Metadata goes on the list.** Any new server-visible column, Redis family, object family or proto field updates §2.8's list in the same change (I-18). Gn-out checks it.
 - **Before each review gate, refresh the checks:**

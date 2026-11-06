@@ -21,7 +21,7 @@
   "num": 3,
   "code": "ARCH",
   "words": 4525,
-  "code_words": 6669,
+  "code_words": 6673,
   "ceiling": 3000,
   "over": 1525,
   "over_pct": 50.8
@@ -29,20 +29,20 @@
  {
   "num": 4,
   "code": "REPO",
-  "words": 4125,
+  "words": 4200,
   "code_words": 929,
   "ceiling": 2800,
-  "over": 1325,
-  "over_pct": 47.3
+  "over": 1400,
+  "over_pct": 50.0
  },
  {
   "num": 5,
   "code": "CORE",
-  "words": 8110,
+  "words": 8113,
   "code_words": 6301,
   "ceiling": 3500,
-  "over": 4610,
-  "over_pct": 131.7
+  "over": 4613,
+  "over_pct": 131.8
  },
  {
   "num": 6,
@@ -56,11 +56,11 @@
  {
   "num": 7,
   "code": "TEAM",
-  "words": 9455,
-  "code_words": 8681,
+  "words": 9474,
+  "code_words": 8684,
   "ceiling": 3500,
-  "over": 5955,
-  "over_pct": 170.1
+  "over": 5974,
+  "over_pct": 170.7
  },
  {
   "num": 8,
@@ -164,11 +164,11 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 7536,
+  "words": 7613,
   "code_words": 8437,
   "ceiling": 3500,
-  "over": 4036,
-  "over_pct": 115.3
+  "over": 4113,
+  "over_pct": 117.5
  },
  {
   "num": 20,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7070,
-  "code_words": 34530,
+  "words": 7095,
+  "code_words": 34531,
   "ceiling": 2500,
-  "over": 4570,
-  "over_pct": 182.8
+  "over": 4595,
+  "over_pct": 183.8
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 6399,
-  "code_words": 1080,
+  "words": 6806,
+  "code_words": 1090,
   "ceiling": 2500,
-  "over": 3899,
-  "over_pct": 156.0
+  "over": 4306,
+  "over_pct": 172.2
  }
 ]

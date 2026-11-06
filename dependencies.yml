@@ -1,0 +1,278 @@
+# Every module a leg of this repository links, with its SPDX id, why it is here and the legs that
+# may link it: client, engine, cli, test (§4.7). make check fails a leg linking a module not listed
+# here, or linking it on a leg its row does not name, and reads each id against the module's own
+# license files. This repository's own modules are not listed.
+#
+# Allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0. Ids joined by AND are a module
+# whose files carry several of them. Refused: the GPL family, SSPL, BUSL, custom, unlicensed. A
+# license outside the list stops make check unless check/settings_test.go holds an exception
+# for that module at that version, and that exception names a question for the owner.
+#
+# planned: true marks a module nothing links yet, because §4.7 names it for later or a track has it in
+# flight. Its id was read from its files at the version §4.7, a sibling go.mod or that track gives.
+# Drop the field in the change that links it, which make check says when it sees one linked.
+#
+# Keep the file to this shape: check/deps_test.go reads it line by line and fails on anything else.
+
+modules:
+  - module: github.com/andybalholm/brotli
+    spdx: MIT
+    reason: through utls, for TLS certificate compression in connect's fingerprinted dials
+    leg: [client, engine, cli, test]
+  - module: github.com/bits-and-blooms/bitset
+    spdx: BSD-3-Clause
+    reason: through gnark, for smtpproof's prover (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/blang/semver/v4
+    spdx: MIT
+    reason: through gnark, for smtpproof's prover (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/consensys/gnark
+    spdx: Apache-2.0
+    reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/consensys/gnark-crypto
+    spdx: Apache-2.0
+    reason: gnark's curves and hashes, for smtpproof (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/decred/dcrd/dcrec/secp256k1/v4
+    spdx: ISC
+    reason: connect's use of secp256k1 signatures
+    leg: [client, engine, cli, test]
+  - module: github.com/docopt/docopt-go
+    spdx: MIT
+    reason: ur's command line, at the version connect, server and sn hold
+    leg: [cli]
+    planned: true
+  - module: github.com/ebitengine/purego
+    spdx: Apache-2.0
+    reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12)
+    leg: [cli]
+    planned: true
+  - module: github.com/fxamacker/cbor/v2
+    spdx: MIT
+    reason: through gnark, for smtpproof's prover (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/go-git/go-git/v5
+    spdx: Apache-2.0
+    reason: mlsinterop's git codec oracle (§22.6)
+    leg: [test]
+    planned: true
+  - module: github.com/golang-jwt/jwt/v5
+    spdx: MIT
+    reason: connect reads client tokens with it
+    leg: [client, engine, cli, test]
+  - module: github.com/google/btree
+    spdx: Apache-2.0
+    reason: through gVisor's netstack
+    leg: [client, engine, cli, test]
+  - module: github.com/google/pprof
+    spdx: Apache-2.0
+    reason: through gnark, for smtpproof's prover (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/google/uuid
+    spdx: BSD-3-Clause
+    reason: through pion's ice
+    leg: [client, engine, cli, test]
+  - module: github.com/gorilla/websocket
+    spdx: BSD-2-Clause
+    reason: connect's websocket transport
+    leg: [client, engine, cli, test]
+  - module: github.com/klauspost/compress
+    spdx: Apache-2.0 AND BSD-3-Clause AND MIT
+    reason: through utls, for TLS certificate compression
+    leg: [client, engine, cli, test]
+  - module: github.com/mattn/go-colorable
+    spdx: MIT
+    reason: through gnark's logger, for smtpproof (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/mattn/go-isatty
+    spdx: MIT
+    reason: through gnark's logger, for smtpproof (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/Microsoft/go-winio
+    spdx: MIT
+    reason: §5.8's named pipe at v0.6.2 for the daemon's control channel on windows
+    leg: [client, cli]
+    planned: true
+  - module: github.com/modelcontextprotocol/go-sdk
+    spdx: Apache-2.0 AND MIT
+    reason: v1.7.0 for mcp/ (§16), which server holds at that version; its docs are CC-BY-4.0 and no build links them
+    leg: [cli]
+    planned: true
+  - module: github.com/pion/datachannel
+    spdx: MIT
+    reason: connect's P2P transport
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/dtls/v3
+    spdx: MIT
+    reason: connect's P2P transport
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/ice/v4
+    spdx: MIT
+    reason: connect's P2P transport
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/interceptor
+    spdx: MIT
+    reason: through pion's webrtc
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/logging
+    spdx: MIT
+    reason: through pion's stack
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/mdns/v2
+    spdx: MIT
+    reason: through pion's ice
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/randutil
+    spdx: MIT
+    reason: through pion's stack
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/rtcp
+    spdx: MIT
+    reason: through pion's webrtc
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/rtp
+    spdx: MIT
+    reason: connect's P2P transport
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/sctp
+    spdx: MIT
+    reason: connect's fork, which §4.7 replaces with connect/sctp
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/sdp/v3
+    spdx: MIT
+    reason: through pion's webrtc
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/srtp/v3
+    spdx: MIT
+    reason: through pion's webrtc
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/stun/v3
+    spdx: MIT
+    reason: through pion's ice
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/transport/v4
+    spdx: MIT
+    reason: through pion's stack
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/turn/v5
+    spdx: MIT
+    reason: through pion's ice
+    leg: [client, engine, cli, test]
+  - module: github.com/pion/webrtc/v4
+    spdx: MIT
+    reason: connect's P2P transport
+    leg: [client, engine, cli, test]
+  - module: github.com/pires/go-proxyproto
+    spdx: Apache-2.0
+    reason: the PROXY-unwrapped listeners engines serve behind (§4.5)
+    leg: [engine]
+    planned: true
+  - module: github.com/quic-go/qpack
+    spdx: MIT
+    reason: through quic-go
+    leg: [client, engine, cli, test]
+  - module: github.com/quic-go/quic-go
+    spdx: MIT
+    reason: connect's H3 and QUIC transports
+    leg: [client, engine, cli, test]
+  - module: github.com/refraction-networking/utls
+    spdx: BSD-3-Clause
+    reason: connect's fingerprinted TLS dials
+    leg: [client, engine, cli, test]
+  - module: github.com/ronanh/intcomp
+    spdx: Apache-2.0
+    reason: through gnark, for smtpproof's prover (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/rs/zerolog
+    spdx: MIT
+    reason: gnark's logger, for smtpproof (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: github.com/theodorsm/covert-dtls
+    spdx: MIT
+    reason: connect's DTLS fingerprints
+    leg: [client, engine, cli, test]
+  - module: github.com/thomas-vilte/mls-go
+    spdx: MIT
+    reason: v1.6.0 is mlsinterop's differential peer under 0x0001 (§10.4)
+    leg: [test]
+    planned: true
+  - module: github.com/tmc/mls
+    spdx: MIT
+    reason: mlsinterop's differential peer under 0x004F, standing in for 0x0010 (§10.4)
+    leg: [test]
+    planned: true
+  - module: github.com/urnetwork/connect
+    spdx: MPL-2.0
+    reason: the one first-party module sidecar builds on (owner rule 2); a sibling replace
+    leg: [client, engine, cli, test]
+  - module: github.com/urnetwork/glog
+    spdx: Apache-2.0
+    reason: connect's logging fork; a sibling replace
+    leg: [client, engine, cli, test]
+  - module: github.com/wlynxg/anet
+    spdx: BSD-3-Clause
+    reason: Android interface listing for connect and pion
+    leg: [client, engine, cli, test]
+  - module: github.com/x448/float16
+    spdx: MIT
+    reason: through gnark's cbor, for smtpproof (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: golang.org/x/crypto
+    spdx: BSD-3-Clause
+    reason: §4.7's initial list; connect's and pion's primitives too
+    leg: [client, engine, cli, test]
+  - module: golang.org/x/exp
+    spdx: BSD-3-Clause
+    reason: through gVisor's netstack
+    leg: [client, engine, cli, test]
+  - module: golang.org/x/net
+    spdx: BSD-3-Clause
+    reason: connect's and quic-go's networking
+    leg: [client, engine, cli, test]
+  - module: golang.org/x/sync
+    spdx: BSD-3-Clause
+    reason: through gnark, for smtpproof's prover (§14)
+    leg: [engine, cli, test]
+    planned: true
+  - module: golang.org/x/sys
+    spdx: BSD-3-Clause
+    reason: connect's and quic-go's system calls
+    leg: [client, engine, cli, test]
+  - module: golang.org/x/text
+    spdx: BSD-3-Clause
+    reason: through x/net today; from M10 normalizer 1 of §11.14, pinned to one version on every leg
+    leg: [client, engine, cli, test]
+  - module: golang.org/x/time
+    spdx: BSD-3-Clause
+    reason: rate limits in pion and gVisor
+    leg: [client, engine, cli, test]
+  - module: golang.zx2c4.com/wireguard
+    spdx: MIT
+    reason: wireguard's tun for cli's OS tun (§17.10)
+    leg: [cli]
+    planned: true
+  - module: google.golang.org/protobuf
+    spdx: BSD-3-Clause
+    reason: wire types in protocol and protocol/bridge; v1.36.11 pins protoc-gen-go too (§4.9)
+    leg: [client, engine, cli, test]
+  - module: gvisor.dev/gvisor
+    spdx: Apache-2.0 AND BSD-3-Clause AND MIT
+    reason: connect's IP stack, kept out of the sidecar_http leg; a sibling replace
+    leg: [client, engine, cli, test]
+  - module: src.agwa.name/tlshacks
+    spdx: X11
+    reason: connect's ClientHello parser; MIT text plus an advertising clause, outside §4.7's list and held by an exception
+    leg: [client, engine, cli, test]

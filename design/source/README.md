@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-191. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-196. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,12 +42,12 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (192 onward)
+## Adding owner decision N (197 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
 3. Set `MAXD = N` in `asm/assemble10.py` and `asm/cites10.py`.
-4. In `asm/validate10.py`, raise both `list(range(1, 192))` checks, `owner_record` and `decision_rows`, to `N + 1`.
+4. In `asm/validate10.py`, raise both `list(range(1, 197))` checks, `owner_record` and `decision_rows`, to `N + 1`.
 5. In the sections, mark the question "**Decided by owner YYYY-MM-DD (owner decision N):**", or "**Amended by owner …**" for a change to an earlier answer. Cite "owner decision N" in every section that implements it: the validator fails any decision that no section cites. That is D-ARCH-4's assembly check, which G0 requires (§23.8).
 6. If the question's status cell changes, update it in `asm/v10/qstatus_final.json`.
 7. Rebuild, and read `v7/validate.json`.
@@ -60,13 +60,13 @@ The data files are layered. Each `data_*N.py` loads its predecessor with `runpy`
 - `v7/text_checks.json` lists reviewer ids, bare `<placeholders>` and HTML tags outside code, all of which break rendering or leak working ids. Regenerate it with `python3 -I text_checks6.py .. v7/text_checks.json`, run from `asm/`.
 - `v7/hits_class.json` holds a heuristic grep for superseded options (`v7/supersede_grep7.py`, whose docstring lists each family and the owner decision it guards), plus a hand reading of every hit. A hit on a new or changed line has no reading until someone reads it against the owner's record. Before a review gate, rerun the grep with `python3 -I v7/supersede_grep7.py .. /tmp/hits.json` and read the new hits.
 
-## Validation at the handoff (2026-11-06)
+## Validation after owner decisions 192-196 (2026-11-06)
 
-`build.sh` on this folder reproduces DESIGN.md (SHA-256 `ba39214fc44cec71545069796bf1d315a0b2f3d2a053b5de510653a3fcfbedb7`). All three hand-maintained inputs were regenerated for these sections that day. The validation shows:
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `41ec31ec017eaf3ac306497c0fe8806f895adf22e2ad72e237bcc8df5c082661`). All three hand-maintained inputs were regenerated for these sections that day. The validation shows:
 
 - **Ids.** None duplicated, undefined, or outside its own section.
 - **Links.** Every internal, relative and research link resolves. One section reference stays unresolved by design: RFC 5246's §7.4.9, inside a code block.
-- **Owner decisions.** All 191 rows are present, and the sections cite each one: D-ARCH-4's check.
+- **Owner decisions.** All 196 rows are present, and the sections cite each one: D-ARCH-4's check.
 - **Sections.** Each of §1-§23 in DESIGN.md matches its file.
 - **Superseded options.** All 292 grep hits have a reading. None is live, and none contradicts another section. Four are marked stated: text that openly revises owner decision 145's sizing figures, as its corrected record does.
 - **Text.** No bare placeholders or HTML tags. One id follows a research link (`[R:ext-edge] §5 R8`); it names an item in that sheet, which the conventions allow.
