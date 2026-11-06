@@ -1,0 +1,176 @@
+// Fuzz targets for everything mls_* decodes (§22.6). Native Go fuzzing, whose seeds run as ordinary
+// tests under go test, and crashers land in testdata/fuzz/ as more seeds (owner decision 101).
+//
+// Each target holds decoding to what §22.6 asks of it: total, memory-bounded, and canonical, so that
+// what decodes re-encodes to the same bytes. These targets check mls_* alone. The differential half of
+// §22.6's row, against mls-go and tmc/mls, waits for mlsinterop/.
+
+package sidecar
+
+import (
+	"bytes"
+	"testing"
+)
+
+// Every input either fails or re-encodes to itself.
+func mlsFuzzRoundTrip(t *testing.T, input []byte, value mlsDecodableEncodable) {
+	t.Helper()
+	if err := mlsUnmarshal(input, value); err != nil {
+		return
+	}
+	encoded, err := mlsMarshal(value)
+	if err != nil {
+		t.Fatalf("decoded but cannot encode: %v", err)
+	}
+	if !bytes.Equal(encoded, input) {
+		t.Fatalf("%x re-encoded as %x", input, encoded)
+	}
+}
+
+// Seeds from the mlswg's trees, cut down to the suite this package runs.
+func mlsFuzzSeedTrees(f *testing.F) [][]byte {
+	f.Helper()
+	var vectors []struct {
+		CipherSuite uint16      `json:"cipher_suite"`
+		Tree        mlsHexBytes `json:"tree"`
+	}
+	mlsLoadVectors(f, "tree-validation", &vectors)
+	var seeds [][]byte
+	for _, vector := range vectors {
+		if vector.CipherSuite == mlsCipherSuiteX25519 {
+			seeds = append(seeds, vector.Tree)
+		}
+	}
+	return seeds
+}
+
+func FuzzMlsRatchetTree(f *testing.F) {
+	for _, seed := range mlsFuzzSeedTrees(f) {
+		f.Add(seed)
+	}
+	f.Add([]byte{0})
+	f.Add([]byte{1, 0})
+	f.Add([]byte{2, 1, 3})
+	settings := mlsVectorTreeSettings()
+	settings.MaximumLeafCount = 64
+	validation := mlsTestLeafValidation([]byte("group"))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		suite := mlsTestSuiteX25519
+		tree, err := decodeMlsRatchetTree(suite, settings, input)
+		if err != nil {
+			return
+		}
+		encoded, err := mlsMarshal(tree)
+		if err != nil {
+			t.Fatalf("decoded but cannot encode: %v", err)
+		}
+		if !bytes.Equal(encoded, input) {
+			t.Fatalf("%x re-encoded as %x", input, encoded)
+		}
+
+		// nothing a peer's tree holds may panic before validation has refused it
+		if _, err := tree.treeHash(); err != nil {
+			t.Fatal(err)
+		}
+		for index := range tree.nodes {
+			tree.resolution(mlsNodeIndex(index))
+			if !mlsNodeIndex(index).isLeaf() && tree.nodes[index].parent != nil {
+				tree.validateUnmergedLeaves(mlsNodeIndex(index))
+			}
+		}
+		for index := range tree.leafCount() {
+			tree.filteredDirectPath(mlsLeafIndex(index))
+		}
+		tree.verifyParentHashes()
+		tree.validate(validation)
+		clone := tree.clone()
+		if leaf := clone.leafNode(0); leaf != nil {
+			clone.removeLeaf(0)
+		}
+	})
+}
+
+func FuzzMlsLeafNode(f *testing.F) {
+	for _, seed := range mlsFuzzSeedTrees(f) {
+		// a tree's first entry is a vector header, a presence octet, a node type and a leaf
+		f.Add(seed[min(len(seed), 3):])
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsLeafNode{})
+	})
+}
+
+func FuzzMlsKeyPackage(f *testing.F) {
+	var vectors []struct {
+		AddProposal mlsHexBytes `json:"add_proposal"`
+	}
+	mlsLoadVectors(f, "messages", &vectors)
+	for _, vector := range vectors[:min(len(vectors), 8)] {
+		f.Add([]byte(vector.AddProposal))
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsKeyPackage{})
+	})
+}
+
+func FuzzMlsProposal(f *testing.F) {
+	f.Add([]byte{0, 3, 0, 0, 0, 1})
+	f.Add([]byte{0, 6, 2, 1, 2})
+	f.Add([]byte{0, 7, 0})
+	f.Add([]byte{0, 2})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsProposal{})
+	})
+}
+
+func FuzzMlsUpdatePath(f *testing.F) {
+	var vectors []struct {
+		CipherSuite uint16 `json:"cipher_suite"`
+		UpdatePaths []struct {
+			UpdatePath mlsHexBytes `json:"update_path"`
+		} `json:"update_paths"`
+	}
+	mlsLoadVectors(f, "treekem", &vectors)
+	for _, vector := range vectors {
+		if vector.CipherSuite == mlsCipherSuiteX25519 {
+			f.Add([]byte(vector.UpdatePaths[0].UpdatePath))
+		}
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsUpdatePath{})
+	})
+}
+
+func FuzzMlsGroupContext(f *testing.F) {
+	var vectors []struct {
+		CipherSuite uint16 `json:"cipher_suite"`
+		Epochs      []struct {
+			GroupContext mlsHexBytes `json:"group_context"`
+		} `json:"epochs"`
+	}
+	mlsLoadVectors(f, "key-schedule", &vectors)
+	for _, vector := range vectors {
+		if vector.CipherSuite == mlsCipherSuiteX25519 {
+			f.Add([]byte(vector.Epochs[0].GroupContext))
+		}
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsGroupContext{})
+	})
+}
+
+func FuzzMlsCapabilities(f *testing.F) {
+	f.Add([]byte{0, 0, 0, 0, 0})
+	f.Add([]byte{2, 0, 1, 2, 0, 16, 0, 0, 2, 0, 1})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsCapabilities{})
+	})
+}
+
+func FuzzMlsCredential(f *testing.F) {
+	f.Add([]byte{0, 1, 2, 'i', 'd'})
+	f.Add([]byte{0xf5, 0x52, 0})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsCredential{})
+	})
+}
