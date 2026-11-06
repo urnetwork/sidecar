@@ -969,6 +969,26 @@ func (self *testCommittingCircuit) Define(api frontend.API) error {
 	return nil
 }
 
+// Compiles every production shape, which takes minutes, so it stays out of the ordinary run: set
+// SMTPPROOF_MEASURE_SHAPES. It holds each to SPEC.md 10.2's rule, and its output is SPEC.md 11.2's.
+func TestMeasureShapes(t *testing.T) {
+	if os.Getenv("SMTPPROOF_MEASURE_SHAPES") == "" {
+		t.Skip("set SMTPPROOF_MEASURE_SHAPES to run")
+	}
+	for _, shape := range partShapes() {
+		compiled, err := compilePartShape(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if commitments := compiled.GetCommitments(); commitments != nil && len(commitments.CommitmentIndexes()) != 0 {
+			t.Errorf("%+v carries %d commitments", *shape, len(commitments.CommitmentIndexes()))
+		}
+		t.Logf("kind %d version %#x suite %#x client %d server %d header %d body %d: %d constraints, %d public inputs",
+			shape.kind, shape.version, shape.suite, shape.clientBlocks, shape.serverBlocks, shape.headerBlocks, shape.bodyBlocks,
+			compiled.GetNbConstraints(), compiled.GetNbPublicVariables())
+	}
+}
+
 // Measures every part of one whole send under real Groth16, through the real gate, with a real
 // test-only setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes;
 // this takes minutes, so it stays out of the ordinary run. Its output is SPEC.md 11.3's source.
