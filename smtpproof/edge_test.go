@@ -295,6 +295,30 @@ func TestE1RefusesRenegotiationIn12(t *testing.T) {
 	testExpectCheck(t, "server", gate.ServerRecord(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, make([]byte, 40))), checkE1)
 }
 
+func TestE1RefusesASecondClientKeyExchangeIn12(t *testing.T) {
+	leg := testTlsLegs()[2]
+	fixture := testBdatGateCapture(t, leg)
+	gate := fixture.gate(&testFixedVerifier{})
+	for i, entry := range fixture.trace {
+		if !entry.fromClient {
+			if err := gate.ServerRecord(entry.record); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if _, err := gate.ClientRecord(entry.record); err != nil {
+			t.Fatal(err)
+		}
+		if 0 < i && entry.record[0] == tlsRecordHandshake {
+			// S_ckx is the state after exactly one
+			_, err := gate.ClientRecord(entry.record)
+			testExpectCheck(t, leg.name, err, checkE1)
+			return
+		}
+	}
+	t.Fatal("the trace held no ClientKeyExchange")
+}
+
 func TestE1RefusesAFlightOutOfOrderIn12(t *testing.T) {
 	leg := testTlsLegs()[2]
 	fixture := testBdatGateCapture(t, leg)

@@ -35,6 +35,9 @@ type testMxSettings struct {
 	dataReply string
 	// Treats a bare-LF "." line as the end of DATA, like receivers vulnerable to SMTP smuggling.
 	laxDataEnd bool
+	// Has the edge forge server records from this application record on, 1 being the first. A
+	// malicious edge can relay anything, and has no key to make it verify.
+	edgeForgesFrom int
 }
 
 func testMxDefaults() *testMxSettings {
@@ -224,6 +227,8 @@ type testEdge struct {
 	mxConn      net.Conn
 
 	forwardLock sync.Mutex
+	// As testMxSettings.edgeForgesFrom.
+	forgesFrom int
 	// Both relay goroutines, so a test reads the trace only once it is whole.
 	relays sync.WaitGroup
 
@@ -314,6 +319,7 @@ func (self *testEdge) run() {
 	}()
 	go func() {
 		defer self.relays.Done()
+		applicationRecords := 0
 		for {
 			record, err := testReadRecord(self.mxConn)
 			if err != nil {
@@ -325,6 +331,16 @@ func (self *testEdge) run() {
 			if err := self.session.ServerRecord(record); err != nil {
 				self.fail(err)
 				return
+			}
+			self.session.stateLock.Lock()
+			application := self.session.phase == edgePhaseApplication
+			self.session.stateLock.Unlock()
+			if application {
+				applicationRecords += 1
+				if 0 < self.forgesFrom && self.forgesFrom <= applicationRecords {
+					record = bytes.Clone(record)
+					record[tlsRecordHeaderBytes] ^= 1
+				}
 			}
 			if _, err := self.sidecarConn.Write(record); err != nil {
 				return
@@ -469,6 +485,7 @@ func testRunSendWith(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, 
 		session:     newEdgeSession(defaultEdgeSettings(), newSessionPreamble(job.Preamble), job.Preamble.MxHost, partVerifier),
 		sidecarConn: edgeSidecarConn,
 		mxConn:      edgeMxConn,
+		forgesFrom:  mxSettings.edgeForgesFrom,
 	}
 	edge.run()
 
@@ -734,6 +751,28 @@ func TestSendWithoutABody(t *testing.T) {
 		job := testJob("", "bob")
 		send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
 		testExpectOneTransaction(t, leg, send, job)
+	}
+}
+
+func TestAForgedReplyFromTheEdgeSendsNothing(t *testing.T) {
+	// FS-31: an honest MX answers 451 and a malicious edge would turn that into a 250. It holds no key
+	// that opens or seals a reply, so what it relays fails its tag at the client, the send ends, and
+	// the sender keeps the message to retry
+	mxSettings := testMxDefaults()
+	mxSettings.mailReply = "451 4.3.0 Try later"
+	mxSettings.edgeForgesFrom = 2
+	for _, leg := range testTlsLegs() {
+		job := testJob("one line\r\n", "bob")
+		send := testRunSend(t, leg, mxSettings, DefaultProverSettings(), job)
+		if send.err == nil {
+			t.Fatalf("%s: a forged reply went unnoticed: %+v", leg.name, send.result)
+		}
+		if !strings.Contains(send.err.Error(), "authentication") {
+			t.Errorf("%s: %v", leg.name, send.err)
+		}
+		if len(send.mx.transactions()) != 0 {
+			t.Errorf("%s: a transaction was accepted", leg.name)
+		}
 	}
 }
 

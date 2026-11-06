@@ -99,6 +99,12 @@ type serverBlock struct {
 	Ticket frontend.Variable
 }
 
+// SF as relayed: its explicit nonce, in the counter's high bits, and its 16 ciphertext octets.
+type serverFinishedBlock struct {
+	Counter frontend.Variable   `gnark:",public"`
+	Cipher  []frontend.Variable `gnark:",public"`
+}
+
 // The circuit. Sized by its shape, which every instance of a compiled circuit shares.
 type partCircuit struct {
 	shape *partShape
@@ -126,13 +132,13 @@ type partCircuit struct {
 	ResumeBase         []frontend.Variable `gnark:",public"`
 	ResumeShift        []frontend.Variable `gnark:",public"`
 	ResumeTwoBlocks    frontend.Variable   `gnark:",public"`
-	ServerFinished     *poolBlock
+	ServerFinished     *serverFinishedBlock
 
 	// 1.3: HS, in bits.
 	HandshakeSecret []frontend.Variable
 	// 1.2: the master secret, in bits.
 	MasterSecret []frontend.Variable
-	// When a test shape leaves Z1 out, the keys themselves.
+	// Only on a test shape that leaves Z1 out: the keys themselves.
 	ClientKey []frontend.Variable
 	ClientIv  []frontend.Variable
 	ServerKey []frontend.Variable
@@ -149,12 +155,12 @@ func newPoolBlock(blockBytes int) *poolBlock {
 }
 
 func newPartCircuit(shape *partShape) *partCircuit {
-	circuit := &partCircuit{
-		shape:     shape,
-		ClientKey: make([]frontend.Variable, 8*shape.keyBytes()),
-		ClientIv:  make([]frontend.Variable, 8*tlsIv13Bytes),
-		ServerKey: make([]frontend.Variable, 8*shape.keyBytes()),
-		ServerIv:  make([]frontend.Variable, 8*tlsIv13Bytes),
+	circuit := &partCircuit{shape: shape}
+	if shape.withoutKeySchedule {
+		circuit.ClientKey = make([]frontend.Variable, 8*shape.keyBytes())
+		circuit.ClientIv = make([]frontend.Variable, 8*tlsIv13Bytes)
+		circuit.ServerKey = make([]frontend.Variable, 8*shape.keyBytes())
+		circuit.ServerIv = make([]frontend.Variable, 8*tlsIv13Bytes)
 	}
 	if shape.version == tlsVersion13 {
 		circuit.ShtsHash = make([]frontend.Variable, 8*tlsSecretBytes)
@@ -168,7 +174,7 @@ func newPartCircuit(shape *partShape) *partCircuit {
 		circuit.Chaining = make([]frontend.Variable, 8*tlsSecretBytes)
 		circuit.ResumeBase = make([]frontend.Variable, 8*2*sha256BlockBytes)
 		circuit.ResumeShift = make([]frontend.Variable, 6)
-		circuit.ServerFinished = newPoolBlock(shape.blockBytes())
+		circuit.ServerFinished = &serverFinishedBlock{Cipher: make([]frontend.Variable, shape.blockBytes())}
 		circuit.MasterSecret = make([]frontend.Variable, 8*tlsMasterSecretBytes)
 	}
 	for range shape.clientBlocks {
@@ -309,39 +315,21 @@ func (self *partShape) needsServerKeys() bool {
 	return 0 < self.serverBlocks
 }
 
-// Whether a part opens server records at all. A later DATA part may have none to cover, and still
-// must prove there were no replies, so it keeps the shape's blocks.
-
 func (self *partCircuit) Define(api frontend.API) error {
 	shape := self.shape
-	assertBooleans := func(sets ...[]frontend.Variable) {
-		for _, bits := range sets {
-			for _, bit := range bits {
-				api.AssertIsBoolean(bit)
-			}
-		}
-	}
 	var keys *circuitKeys
-	if shape.withoutKeySchedule {
+	switch {
+	case shape.withoutKeySchedule:
 		keys = &circuitKeys{
 			clientKey: privateBytes(api, self.ClientKey),
 			clientIv:  privateBytes(api, self.ClientIv),
 			serverKey: privateBytes(api, self.ServerKey),
 			serverIv:  privateBytes(api, self.ServerIv),
 		}
-		// wires this test shape leaves unused still need a constraint each, or compiling refuses them
-		assertBooleans(self.HandshakeSecret, self.ShtsHash, self.HelloHash, self.FinishedHash, self.MasterSecret,
-			self.ClientRandom, self.ServerRandom, self.ClientFinishedHash, self.Chaining, self.ResumeBase, self.ResumeShift)
-		if shape.version == tlsVersion12 {
-			api.AssertIsBoolean(self.ResumeTwoBlocks)
-			assertBooleans(self.ServerFinished.Cipher, self.ServerFinished.Literal, self.ServerFinished.IsLiteral, self.ServerFinished.IsLocal)
-			api.AssertIsBoolean(self.ServerFinished.Counter)
-		}
-	} else if shape.version == tlsVersion13 {
+	case shape.version == tlsVersion13:
 		keys = tls13CircuitKeys(api, privateBytes(api, self.HandshakeSecret), publicBytes(self.ShtsHash),
 			publicBytes(self.HelloHash), publicBytes(self.FinishedHash), shape.keyBytes(), shape.needsServerKeys())
-		assertBooleans(self.ClientKey, self.ClientIv, self.ServerKey, self.ServerIv)
-	} else {
+	default:
 		var chaining circuitHashState
 		for i := range chaining {
 			copy(chaining[i][:], self.Chaining[32*i:32*i+32])
@@ -356,14 +344,11 @@ func (self *partCircuit) Define(api frontend.API) error {
 			resumeShift:        self.ResumeShift,
 			resumeTwoBlocks:    self.ResumeTwoBlocks,
 		})
-		assertBooleans(self.ClientKey, self.ClientIv, self.ServerKey, self.ServerIv)
 		// SF, opened under the server key this secret gives, is the verify_data it gives the handshake
 		opened := openBlock(api, newCircuitKeystream(api, shape, keys.serverKey, keys.serverIv), self.ServerFinished.Counter, self.ServerFinished.Cipher)
 		for i, octet := range opened {
 			assertBytesEqual(api, []circuitByte{octet.bits}, serverFinished[i:i+1])
 		}
-		// its other template wires are unused: a statement's fixed zeros
-		assertBooleans(self.ServerFinished.Literal, self.ServerFinished.IsLiteral, self.ServerFinished.IsLocal)
 	}
 	clientStream := newCircuitKeystream(api, shape, keys.clientKey, keys.clientIv)
 	checkPool(api, shape, clientStream, self.Client)
@@ -435,6 +420,10 @@ func assignRecordBlocks(shape *partShape, statement *partStatement, record *part
 				case templateLiteral:
 					slot.IsLiteral[i] = 1
 				case templateLocal:
+					// a shape without the local table would ignore this wire, and pass any octet
+					if !shape.localOctets {
+						return 0, errors.New("this shape does not check local octets")
+					}
 					slot.IsLocal[i] = 1
 				}
 			}
@@ -493,7 +482,8 @@ func newZeroAssignment(shape *partShape) *partCircuit {
 	zero(circuit.ResumeShift)
 	circuit.ResumeTwoBlocks = 0
 	if circuit.ServerFinished != nil {
-		zeroPoolBlock(circuit.ServerFinished)
+		circuit.ServerFinished.Counter = 0
+		zero(circuit.ServerFinished.Cipher)
 	}
 	zero(circuit.ClientKey)
 	zero(circuit.ClientIv)
@@ -628,9 +618,12 @@ func assignHandshake12(shape *partShape, statement *partStatement, circuit *part
 	// SF's opened octets, as a one-block record with no template of its own
 	record := &partRecord{raw: session.serverFinishedRecord}
 	template := make([]templateOctet, 4+tlsVerifyData12Bytes)
-	if _, err := assignRecordBlocks(shape, statement, record, template, []*poolBlock{circuit.ServerFinished}); err != nil {
+	block := newPoolBlock(shape.blockBytes())
+	if _, err := assignRecordBlocks(shape, statement, record, template, []*poolBlock{block}); err != nil {
 		return err
 	}
+	circuit.ServerFinished.Counter = block.Counter
+	copy(circuit.ServerFinished.Cipher, block.Cipher)
 	return nil
 }
 
@@ -642,15 +635,18 @@ func assignWitness(circuit *partCircuit, statement *partStatement, witness *part
 	} else {
 		circuit.MasterSecret = assignBits(witness.masterSecret)
 	}
-	// the IV wires hold 12 octets; a 1.2 salt fills the first 4
-	padded := func(iv []byte) []frontend.Variable {
-		return assignBits(append(bytes.Clone(iv), make([]byte, tlsIv13Bytes-len(iv))...))
-	}
-	circuit.ClientKey = assignBits(witness.clientKey)
-	circuit.ClientIv = padded(witness.clientIv)
-	if circuit.shape.needsServerKeys() || statement.session.version == tlsVersion12 {
-		circuit.ServerKey = assignBits(witness.serverKey)
-		circuit.ServerIv = padded(witness.serverIv)
+	if circuit.shape.withoutKeySchedule {
+		// the IV wires hold 12 octets; a 1.2 salt fills the first 4
+		padded := func(iv []byte) []frontend.Variable {
+			return assignBits(append(bytes.Clone(iv), make([]byte, tlsIv13Bytes-len(iv))...))
+		}
+		circuit.ClientKey = assignBits(witness.clientKey)
+		circuit.ClientIv = padded(witness.clientIv)
+		// a test shape's wires exist whether or not it opens a server record
+		if 0 < len(witness.serverKey) {
+			circuit.ServerKey = assignBits(witness.serverKey)
+			circuit.ServerIv = padded(witness.serverIv)
+		}
 	}
 	if circuit.Header != nil {
 		roles, err := partRoles(statement)

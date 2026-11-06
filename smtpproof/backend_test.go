@@ -27,9 +27,17 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
+// A suite's version.
+func testVersionOf(suite uint16) uint16 {
+	if tlsSuiteCovered(tlsVersion13, suite) {
+		return tlsVersion13
+	}
+	return tlsVersion12
+}
+
 // A small shape with Z1 left out: everything but the key schedule, in milliseconds.
 func testQuickShape(suite uint16, localOctets bool) *partShape {
-	shape := &partShape{kind: partKindEhlo, version: tlsVersion13, suite: suite, clientBlocks: 4, localOctets: localOctets, withoutKeySchedule: true}
+	shape := &partShape{kind: partKindEhlo, version: testVersionOf(suite), suite: suite, clientBlocks: 4, localOctets: localOctets, withoutKeySchedule: true}
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 1
 	}
@@ -71,7 +79,7 @@ func testPartSolved(t *testing.T, compiled constraint.ConstraintSystem, circuit 
 
 func TestPartCircuitAcceptsARealEhlo(t *testing.T) {
 	t.Parallel()
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickShape(leg.suites[0], false)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -85,7 +93,7 @@ func TestPartCircuitAcceptsARealEhlo(t *testing.T) {
 func TestPartCircuitRefusesWhatTheRelationRefuses(t *testing.T) {
 	t.Parallel()
 	// the same mutated witnesses as relation_test.go, through the circuit
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickShape(leg.suites[0], false)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -105,20 +113,22 @@ func TestPartCircuitRefusesWhatTheRelationRefuses(t *testing.T) {
 			t.Errorf("%s: a substituted key: accepted", leg.name)
 		}
 
-		// Z2: a record at another sequence number
-		statement, witness = capture.part(t, 1)
-		statement.clientRecords[0].seq += 1
-		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
-			t.Errorf("%s: another sequence number: accepted", leg.name)
-		}
+		if statement.session.version == tlsVersion13 {
+			// Z2: a record at another sequence number. 1.2 carries its nonce in the record
+			statement, witness = capture.part(t, 1)
+			statement.clientRecords[0].seq += 1
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: another sequence number: accepted", leg.name)
+			}
 
-		// Z3: another inner type, authored under the true key
-		statement, witness = capture.part(t, 1)
-		plaintext := witness.clientPlaintexts[0]
-		plaintext[len(plaintext)-1] = tlsRecordHandshake
-		testSeal(t, statement, statement.clientRecords[0], witness.clientKey, witness.clientIv, plaintext)
-		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
-			t.Errorf("%s: Z3: accepted", leg.name)
+			// Z3: another inner type, authored under the true key. 1.2 has none
+			statement, witness = capture.part(t, 1)
+			plaintext := witness.clientPlaintexts[0]
+			plaintext[len(plaintext)-1] = tlsRecordHandshake
+			testSeal(t, statement, statement.clientRecords[0], witness.clientKey, witness.clientIv, plaintext)
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: Z3: accepted", leg.name)
+			}
 		}
 
 		// Z4: another HELO name of the same length, so the record still fits its template
@@ -134,7 +144,7 @@ func TestPartCircuitRefusesWhatTheRelationRefuses(t *testing.T) {
 func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
 	t.Parallel()
 	// MAIL's template, on a shape that carries local octets
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickShape(leg.suites[0], true)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -173,7 +183,7 @@ func TestPartCircuitChecksALocalPartsOctets(t *testing.T) {
 
 // An envelope shape with Z1 left out, sized to the test connection.
 func testQuickEnvelopeShape(suite uint16) *partShape {
-	shape := &partShape{kind: partKindEnvelope, version: tlsVersion13, suite: suite, clientBlocks: 12, serverBlocks: 8, localOctets: true, withoutKeySchedule: true}
+	shape := &partShape{kind: partKindEnvelope, version: testVersionOf(suite), suite: suite, clientBlocks: 12, serverBlocks: 8, localOctets: true, withoutKeySchedule: true}
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 4
 		shape.serverBlocks = 3
@@ -190,7 +200,7 @@ func testEnvelopeCircuit(t *testing.T, leg *testTlsLeg) (*partShape, constraint.
 
 func TestEnvelopeCircuitAcceptsARealEhloReply(t *testing.T) {
 	t.Parallel()
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testBdatCapture(t, leg)
 		statement, witness := capture.part(t, 2)
@@ -229,7 +239,7 @@ func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
 		{name: "a malformed code", content: "25x-mx\r\n250 CHUNKING\r\n"},
 		{name: "a malformed separator", content: "250+mx\r\n250 CHUNKING\r\n"},
 	}
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testBdatCapture(t, leg)
 		for _, c := range cases {
@@ -256,7 +266,7 @@ func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
 func TestEnvelopeCircuitAcceptsDataWithoutChunking(t *testing.T) {
 	t.Parallel()
 	// Z9 binds BDAT alone
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testDataCapture(t, leg)
 		statement, witness := capture.part(t, 2)
@@ -329,7 +339,7 @@ func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
 
 func TestEnvelopeCircuitChecksTheEnvelope(t *testing.T) {
 	t.Parallel()
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape, compiled := testEnvelopeCircuit(t, leg)
 		capture := testBdatCapture(t, leg)
 		cases := []struct {
@@ -354,7 +364,7 @@ func TestEnvelopeCircuitChecksTheEnvelope(t *testing.T) {
 
 // A message shape with Z1 left out, sized to the test connection's header block.
 func testQuickMessageShape(suite uint16, bodyBlocks int) *partShape {
-	shape := &partShape{kind: partKindMessage, version: tlsVersion13, suite: suite, clientBlocks: 4, serverBlocks: 12, headerBlocks: 40, bodyBlocks: bodyBlocks, withoutKeySchedule: true}
+	shape := &partShape{kind: partKindMessage, version: testVersionOf(suite), suite: suite, clientBlocks: 4, serverBlocks: 12, headerBlocks: 40, bodyBlocks: bodyBlocks, withoutKeySchedule: true}
 	if suite == tlsSuiteChacha20Poly1305Sha256 {
 		shape.clientBlocks = 2
 		shape.serverBlocks = 5
@@ -365,7 +375,7 @@ func testQuickMessageShape(suite uint16, bodyBlocks int) *partShape {
 
 func TestMessageCircuitAcceptsARealMessage(t *testing.T) {
 	t.Parallel()
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickMessageShape(leg.suites[0], 0)
 		compiled := testCompileShape(t, shape)
 		t.Logf("%s: %d constraints", leg.name, compiled.GetNbConstraints())
@@ -380,7 +390,7 @@ func TestMessageCircuitAcceptsARealMessage(t *testing.T) {
 func TestMessageCircuitAgreesWithTheRelationOnHeaders(t *testing.T) {
 	t.Parallel()
 	// Z5 differentially: every smuggled header is refused by the relation and by the circuit alike
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickMessageShape(leg.suites[0], 0)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -410,7 +420,7 @@ func TestMessageCircuitRefusesAnyPositionsForAHostileFrom(t *testing.T) {
 		strings.Replace(header, fromLine, "From: <x@victim.example> <alice@"+testNetworkDomain+">\r\n", 1),
 		strings.Replace(header, fromLine, "From: <alice@"+testNetworkDomain+"> <x@victim.example>\r\n", 1),
 	}
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickMessageShape(leg.suites[0], 0)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -454,7 +464,7 @@ func TestMessageCircuitAcceptsFormsAnHonestMessageUses(t *testing.T) {
 		strings.Replace(header, "Subject: A synthetic", "Subject: A\r\n synthetic", 1),
 		"Received: by example\r\n" + header,
 	}
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickMessageShape(leg.suites[0], 0)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -488,7 +498,7 @@ func TestMessageCircuitChecksTheReplies(t *testing.T) {
 		{name: "an extra reply", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n250 2.1.5 Ok\r\n250 Ok\r\n"},
 		{name: "a truncated reply", content: "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n250 2.1"},
 	}
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickMessageShape(leg.suites[0], 0)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -509,7 +519,7 @@ func TestMessageCircuitChecksTheReplies(t *testing.T) {
 
 func TestMessageCircuitChecksTheBdatEnd(t *testing.T) {
 	t.Parallel()
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		shape := testQuickMessageShape(leg.suites[0], 0)
 		compiled := testCompileShape(t, shape)
 		capture := testBdatCapture(t, leg)
@@ -519,7 +529,7 @@ func TestMessageCircuitChecksTheBdatEnd(t *testing.T) {
 			content string
 		}{
 			{record: 2, content: "RSET\r\n"},
-			{record: 0, content: strings.Replace(string(capture.witnesses[2].clientPlaintexts[0][:len(capture.witnesses[2].clientPlaintexts[0])-1]), "LAST", "XXXX", 1)},
+			{record: 0, content: strings.Replace(string(clientContent(capture.statements[2].session.version, capture.witnesses[2].clientPlaintexts[0])), "LAST", "XXXX", 1)},
 		} {
 			statement, witness := capture.part(t, 3)
 			testAuthorClientRecord(t, statement, witness, c.record, []byte(c.content))
@@ -547,7 +557,7 @@ func TestMessageCircuitChecksDataFraming(t *testing.T) {
 		{name: "a bare-CR end", content: "first\r.\r\n"},
 		{name: "a record ending inside a line", content: "first\r\nunfinished"},
 	}
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		bodyBlocks := 6
 		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
 			bodyBlocks = 2
@@ -571,7 +581,7 @@ func TestMessageCircuitChecksDataFraming(t *testing.T) {
 
 func TestMessageCircuitRequiresThe354(t *testing.T) {
 	t.Parallel()
-	for _, leg := range testTlsLegs()[:2] {
+	for _, leg := range testTlsLegs() {
 		bodyBlocks := 6
 		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
 			bodyBlocks = 2
@@ -685,6 +695,22 @@ func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
 			t.Errorf("tail %d: %v", tail, err)
 		}
+	}
+}
+
+func TestAShapeWithoutTheLocalTableRefusesATemplateThatNeedsIt(t *testing.T) {
+	// its IsLocal wires go unread on such a shape, so a local position there must not assign at all
+	leg := testTlsLegs()[0]
+	shape := testQuickShape(leg.suites[0], false)
+	capture := testBdatCapture(t, leg)
+	statement, _ := capture.part(t, 2)
+	template, err := clientRecordTemplate(statement.session, recordRoleMail, statement.clientRecords[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	circuit := newZeroAssignment(shape)
+	if _, err := assignRecordBlocks(shape, statement, statement.clientRecords[0], template, circuit.Client); err == nil {
+		t.Error("a local position assigned on a shape that ignores it")
 	}
 }
 

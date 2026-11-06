@@ -119,6 +119,7 @@ type edgeSession struct {
 	clientFlightBytes int
 	// 1.2.
 	certificateRequested bool
+	clientExchangeSeen   bool
 	serverCertificate    *x509.Certificate
 	preFinishedState     *sha256State
 	serverFinishedRecord []byte
@@ -476,6 +477,10 @@ func (self *edgeSession) clientFlight12WithLock(record []byte) ([][]byte, error)
 					return nil, edgeRefuse(checkE1, "client sent a Certificate other than an empty answer")
 				}
 			case tlsHandshakeClientKeyExchange:
+				if self.clientExchangeSeen {
+					return nil, edgeRefuse(checkE1, "a second ClientKeyExchange")
+				}
+				self.clientExchangeSeen = true
 			default:
 				return nil, edgeRefuse(checkE1, "unexpected client handshake message %d", message[0])
 			}
@@ -484,7 +489,7 @@ func (self *edgeSession) clientFlight12WithLock(record []byte) ([][]byte, error)
 			}
 		}
 	case tlsRecordChangeCipherSpec:
-		if self.clientChangeSeen || !tlsDummyChangeCipherSpec(record) || !self.clientBuffer.empty() {
+		if self.clientChangeSeen || !self.clientExchangeSeen || !tlsDummyChangeCipherSpec(record) || !self.clientBuffer.empty() {
 			return nil, edgeRefuse(checkE1, "bad client change_cipher_spec")
 		}
 		self.clientChangeSeen = true

@@ -60,8 +60,10 @@ type SmtpProofVerifier interface {
 }
 
 // The record gate of one connection (E1-E3). Methods may run concurrently, one goroutine per
-// direction. Each that returns records returns those now cleared for the MX, in order. An error ends
-// the connection, and is ErrSmtpRecordCut only for §14.7's cuts.
+// direction. Each that returns records returns those now cleared for the MX, in order, and the gate's
+// order is the MX's: a caller writes them before the next such call returns, so ClientRecord,
+// DiscloseShts and VerifyPart share one lock or one goroutine around the write. An error ends the
+// connection, and is ErrSmtpRecordCut only for §14.7's cuts.
 type SmtpProofSession interface {
 	// A whole record from the sidecar. It may be held for a part that has yet to verify.
 	ClientRecord(record []byte) ([][]byte, error)

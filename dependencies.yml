@@ -235,7 +235,6 @@ modules:
     spdx: BSD-3-Clause
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: golang.org/x/sys
     spdx: BSD-3-Clause
     reason: connect's and quic-go's system calls
