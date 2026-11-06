@@ -47,6 +47,21 @@ var hookEntryPoints = map[string]string{
 // Names that exist only under the tag, and only in the root (testhook_enabled.go).
 var tagOnlyRootNames = []string{"TestHookSecret", "TestHookBarrier", "SetTestHooks", "TestHooks"}
 
+// device/ may not import the root even under the tag (§4.4, D-SDK-20), so it is the one package whose
+// tagged half forwards to nothing, and its tagged file holds an installer of its own: these two names
+// and no others.
+const deviceHooksPackage = "device"
+
+var deviceInstallerNames = []string{"SetTestHooks", "TestHooks"}
+
+// True for the file that may declare name, one of tagOnlyRootNames.
+func (self *sourceFile) holdsEntryPoint(name string) bool {
+	if !self.tagOnly(sidecarTestHooksTag) {
+		return false
+	}
+	return self.packageName == "." || (self.packageName == deviceHooksPackage && slices.Contains(deviceInstallerNames, name))
+}
+
 // True when no assignment of the other tags builds the expression without tag.
 func requiresTag(expression constraint.Expr, tag string) bool {
 	switch typed := expression.(type) {
@@ -265,7 +280,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 						if _, hook := hookSignatures[name]; hook {
 							findings = append(findings, findingf("%s: %s is not a function, so it can hold something in a release build", display, name))
 						}
-						if slices.Contains(tagOnlyRootNames, name) && !(file.packageName == "." && file.tagOnly(sidecarTestHooksTag)) {
+						if slices.Contains(tagOnlyRootNames, name) && !file.holdsEntryPoint(name) {
 							findings = append(findings, findingf("%s: %s exists outside the root's tagged file", display, name))
 						}
 					}
@@ -275,7 +290,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 					continue
 				}
 				name := typed.Name.Name
-				if slices.Contains(tagOnlyRootNames, name) && !(file.packageName == "." && file.tagOnly(sidecarTestHooksTag)) {
+				if slices.Contains(tagOnlyRootNames, name) && !file.holdsEntryPoint(name) {
 					findings = append(findings, findingf("%s: %s exists outside the root's tagged file", display, name))
 				}
 				signature, hook := hookSignatures[name]
@@ -311,7 +326,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 				findings = append(findings, findingf("%s keeps %s with no half under %s", packageName, name, sidecarTestHooksTag))
 				continue
 			}
-			if packageName != "." && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
+			if packageName != "." && packageName != deviceHooksPackage && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
 				findings = append(findings, findingf("%s: %s does not forward to the root's %s, as testhook.go has a package do", self.displayPath(tagged.file.path), name, hookEntryPoints[name]))
 			}
 		}

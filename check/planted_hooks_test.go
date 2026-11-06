@@ -175,6 +175,49 @@ func TestHygieneFailsOnAnEntryPointOutsideTheRoot(t *testing.T) {
 	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/planted.go: TestHooks exists outside the root's tagged file")
 }
 
+// A pair and an installer of device's own, as testhook.go has it: nothing to forward to, and no finding.
+func TestHygieneAllowsDevicesOwnInstaller(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	wantFindings(t, fixture.open().hookPairFindings(t))
+}
+
+// Its installer is the two names it needs: the entry points stay the root's.
+func TestHygieneFailsOnADeviceEntryPoint(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	fixture.write("device/planted.go", "//go:build sidecar_testhooks\n\npackage device\n\nfunc TestHookSecret(kind string, secret []byte) {}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t), "device/planted.go: TestHookSecret exists outside the root's tagged file")
+}
+
+// The exception is for the tagged file: an untagged installer ships.
+func TestHygieneFailsOnADeviceInstallerWithoutTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	fixture.edit("device/testhook_enabled.go", "//go:build sidecar_testhooks", "//go:build !sidecar_http")
+	findings := fixture.open().hookPairFindings(t)
+	wantFindings(t, findings,
+		"device keeps testHookBarrier with no half under sidecar_testhooks",
+		"device keeps testHookSecret with no half under sidecar_testhooks",
+		"device/testhook_enabled.go: SetTestHooks exists outside the root's tagged file",
+		"device/testhook_enabled.go: TestHooks exists outside the root's tagged file",
+		"device/testhook_enabled.go: testHookBarrier builds with and without sidecar_testhooks",
+		"device/testhook_enabled.go: testHookSecret builds with and without sidecar_testhooks")
+}
+
+// And its empty half stays empty, as every other package's does.
+func TestHygieneFailsOnADeviceHookWithABody(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	fixture.edit("device/testhook.go", "func testHookSecret(kind string, secret []byte) {}", "func testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}")
+	wantFindings(t, fixture.open().hookPairFindings(t), "device/testhook.go: testHookSecret has a body in the untagged build")
+}
+
+func writeDeviceHooks(fixture *fixture) {
+	fixture.write("device/testhook.go", "//go:build !sidecar_testhooks\n\npackage device\n\nfunc testHookSecret(kind string, secret []byte) {}\n\nfunc testHookBarrier(name string, key string) {}\n")
+	fixture.write("device/testhook_enabled.go", "//go:build sidecar_testhooks\n\npackage device\n\ntype TestHooks struct{}\n\nfunc SetTestHooks(hooks *TestHooks) {}\n\nfunc testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}\n\nfunc testHookBarrier(name string, key string) {\n\tprintln(name)\n}\n")
+}
+
 func TestHygieneFailsOnAHookWithAnotherSignature(t *testing.T) {
 	fixture := newHookFixture(t)
 	fixture.edit("evsservice/testhook.go", "func testHookBarrier(name string, key string) {}", "func testHookBarrier(name string) {}")
