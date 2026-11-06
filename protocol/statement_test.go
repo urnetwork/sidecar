@@ -16,6 +16,7 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// Two statements that encode alike, told apart by the signed type alone, whichever way a relay lies about it.
 func TestGrantRevokePresentedAsOwnerConfirmIsRefused(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x55}, ed25519.SeedSize))
 	publicKey := key.Public().(ed25519.PublicKey)

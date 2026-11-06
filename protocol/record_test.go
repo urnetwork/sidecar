@@ -22,6 +22,7 @@ const testRecordPurpose = "record-entry"
 // A kind no registry holds: readers keep it, verify it and show it generically, never refuse it.
 const testUnknownRecordKind = 60000
 
+// A header of a kind this reader does not know, its other fields synthetic.
 func testRecordHeader() *RecordHeader {
 	return &RecordHeader{
 		EntryId:         bytes.Repeat([]byte{0x01}, 16),
@@ -58,6 +59,7 @@ func testLaterRecordEntry(t *testing.T, key ed25519.PrivateKey) []byte {
 	return stored
 }
 
+// §22.6: a v1 reader verifies a later writer's header over the bytes it received, unknown field and kind included.
 func TestRecordHeaderWithUnknownFieldAndKindVerifies(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x66}, ed25519.SeedSize))
 	publicKey := key.Public().(ed25519.PublicKey)

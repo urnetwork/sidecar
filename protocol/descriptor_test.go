@@ -43,6 +43,7 @@ var testProtoFiles = []string{
 	"protocol/bridge/signed.proto",
 }
 
+// A registered file, by its root-relative path.
 func testFile(t *testing.T, path string) protoreflect.FileDescriptor {
 	file, err := protoregistry.GlobalFiles.FindFileByPath(path)
 	if err != nil {
@@ -51,6 +52,7 @@ func testFile(t *testing.T, path string) protoreflect.FileDescriptor {
 	return file
 }
 
+// A registered declaration, by its name in this package.
 func testDescriptor(t *testing.T, name string) protoreflect.Descriptor {
 	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(testProtoPackage + "." + name))
 	if err != nil {
@@ -59,20 +61,13 @@ func testDescriptor(t *testing.T, name string) protoreflect.Descriptor {
 	return descriptor
 }
 
+// As testDescriptor, for a name that must be a message.
 func testMessage(t *testing.T, name string) protoreflect.MessageDescriptor {
 	message, ok := testDescriptor(t, name).(protoreflect.MessageDescriptor)
 	if !ok {
 		t.Fatalf("%s is no message", name)
 	}
 	return message
-}
-
-func testEnum(t *testing.T, name string) protoreflect.EnumDescriptor {
-	enum, ok := testDescriptor(t, name).(protoreflect.EnumDescriptor)
-	if !ok {
-		t.Fatalf("%s is no enum", name)
-	}
-	return enum
 }
 
 // §4.9: files register by their root-relative paths in one package, and a duplicate would have panicked
@@ -408,7 +403,10 @@ func TestResultTypeIsRequestPlusOne(t *testing.T) {
 
 // The withdrawn EvsHeadCheck stays reserved, its numbers and names never reused (§6.11, §11).
 func TestWithdrawnEvsHeadCheckStaysReserved(t *testing.T) {
-	messageType := testEnum(t, "MessageType")
+	messageType, ok := testDescriptor(t, "MessageType").(protoreflect.EnumDescriptor)
+	if !ok {
+		t.Fatal("MessageType is no enum")
+	}
 	for _, number := range []protoreflect.EnumNumber{0x1402, 0x1403} {
 		if !messageType.ReservedRanges().Has(number) {
 			t.Errorf("%#x is not reserved", number)

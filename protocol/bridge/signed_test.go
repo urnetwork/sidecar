@@ -35,6 +35,7 @@ var (
 	testP256Scalar = bytes.Repeat([]byte{0x22}, 32)
 )
 
+// The verifying half of testEd25519Key, as a key record would hold it.
 func testEd25519Public() []byte {
 	return testEd25519Key.Public().(ed25519.PublicKey)
 }
@@ -50,6 +51,7 @@ func testSignEd25519(purpose string, signedType SignedType, body []byte) *Signed
 	}
 }
 
+// The fixed P-256 key, with its public half as VerifySigned takes it: a SEC 1 uncompressed point.
 func testP256Key(t testing.TB) (*ecdsa.PrivateKey, []byte) {
 	key, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), testP256Scalar)
 	if err != nil {
@@ -71,6 +73,7 @@ func testSignDigest(t testing.TB, key *ecdsa.PrivateKey, digest []byte) []byte {
 	return signature
 }
 
+// Signs as ecdsa-p256-sha256 does: a DER signature over the signed bytes' SHA-256 (§16.6).
 func testSignP256(t testing.TB, key *ecdsa.PrivateKey, purpose string, signedType SignedType, body []byte) *Signed {
 	digest := sha256.Sum256(SignedBytes(purpose, signedType, body))
 	return &Signed{
@@ -91,6 +94,7 @@ type testWebAuthnAssertion struct {
 	signSignedBytes bool
 }
 
+// An assertion every check passes, for a test to spoil one input of.
 func testGoodWebAuthnAssertion(purpose string, signedType SignedType, body []byte) *testWebAuthnAssertion {
 	challenge := sha256.Sum256(SignedBytes(purpose, signedType, body))
 	return &testWebAuthnAssertion{
@@ -101,6 +105,8 @@ func testGoodWebAuthnAssertion(purpose string, signedType SignedType, body []byt
 	}
 }
 
+// The Signed this assertion makes, its signature valid over whatever was spoiled, so a refusal comes from the check
+// a test aims at and not from the signature.
 func (self *testWebAuthnAssertion) sign(
 	t testing.TB,
 	key *ecdsa.PrivateKey,
@@ -154,6 +160,7 @@ func testRegisteredTypes() []SignedType {
 	return signedTypes
 }
 
+// A vector's bytes.
 func testFromHex(t testing.TB, value string) []byte {
 	decoded, err := hex.DecodeString(value)
 	if err != nil {
@@ -366,6 +373,7 @@ func TestVerifySignedChecksTypeBeforeSignature(t *testing.T) {
 	}
 }
 
+// A caller that lost its statement gets a refusal and no panic.
 func TestVerifySignedRefusesNilSigned(t *testing.T) {
 	err := VerifySigned(
 		nil,
@@ -410,6 +418,7 @@ func TestVerifySignedRefusesEveryBitFlip(t *testing.T) {
 	}
 }
 
+// A good signature under a key other than the record's is refused on both plain algorithms.
 func TestVerifySignedRefusesAnotherKey(t *testing.T) {
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
@@ -463,6 +472,7 @@ func TestVerifySignedRefusesMalformedEd25519Keys(t *testing.T) {
 	}
 }
 
+// Anything but an uncompressed point on the curve is a refusal for both P-256 algorithms, before any signature runs.
 func TestVerifySignedRefusesMalformedP256Keys(t *testing.T) {
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
