@@ -8,11 +8,19 @@
 
 package sidecar
 
+// What a component logs through, with connect's meaning for each level (connect/log.go): Info for
+// what is abnormal or worth a trace, Warningf for a recovered crash, Errorf for an unexpected one.
+// Safe for concurrent use.
 type Logger interface {
+	// Always emits, in fmt.Print's form.
 	Info(args ...any)
+	// Always emits, in fmt.Printf's form.
 	Infof(format string, args ...any)
+	// Always emits, as a warning.
 	Warningf(format string, args ...any)
+	// Always emits, as an error.
 	Errorf(format string, args ...any)
+	// The guarded logger for a verbosity level.
 	V(level int32) Verbose
 }
 
@@ -20,8 +28,11 @@ type Logger interface {
 // if self.log.V(2).Enabled() { self.log.Infof("[tag]...", a, b) }. The boxing into []any happens at
 // the call site, before the level is checked.
 type Verbose interface {
+	// Whether this level logs.
 	Enabled() bool
+	// Emits only while enabled.
 	Info(args ...any)
+	// Emits only while enabled, with the boxing above already paid.
 	Infof(format string, args ...any)
 }
 
@@ -31,32 +42,42 @@ func NewNoopLogger() Logger {
 	return noopLogger{}
 }
 
+// A Logger with nothing behind it.
 type noopLogger struct{}
 
+// Drops args.
 func (self noopLogger) Info(args ...any) {
 }
 
+// Drops the line.
 func (self noopLogger) Infof(format string, args ...any) {
 }
 
+// Drops the line.
 func (self noopLogger) Warningf(format string, args ...any) {
 }
 
+// Drops the line.
 func (self noopLogger) Errorf(format string, args ...any) {
 }
 
+// Every level is off.
 func (self noopLogger) V(level int32) Verbose {
 	return noopVerbose{}
 }
 
+// A Verbose that is never enabled.
 type noopVerbose struct{}
 
+// Always false, so a guarded call formats nothing.
 func (self noopVerbose) Enabled() bool {
 	return false
 }
 
+// Drops args.
 func (self noopVerbose) Info(args ...any) {
 }
 
+// Drops the line.
 func (self noopVerbose) Infof(format string, args ...any) {
 }

@@ -1,5 +1,6 @@
 // §16's local settings. Each field is a limit §16 states in prose, under the name this file gives it,
-// so the track that builds §16 extends these structs and keeps the names.
+// so the track that builds §16 extends these structs and keeps the names. Every number here must be
+// positive, as settings.go's header says.
 
 package sidecar
 
@@ -11,35 +12,35 @@ import (
 type SidecarMcpSettings struct {
 	// Calls in flight a session: 8.
 	SessionCallCount int
-	// W calls a session may start: 20 a second.
+	// W calls a session may start: 20 a second, and burst 20, a reading, since §16.4 states none.
 	SessionWriteRate SidecarRate
 	// A result over this becomes a resource_link from 2025-06-18, else a text naming the ur://
 	// resource: 256 KiB (D-MCP-13).
 	ResultByteCount int
-	// 30 s, under Codex's 60 s tool_timeout_sec default. A call awaiting a person returns pending at
-	// once.
+	// When a call times out: 30 s, under Codex's 60 s tool_timeout_sec default. A call awaiting a
+	// person returns pending at once.
 	CallTimeout time.Duration
 }
 
 // §16.7's capture bounds. Every cut, missed event or changed config is a coverage gap.
 type SidecarIngestSettings struct {
-	// One hook payload or tool body: 1 MiB.
+	// One hook payload or tool body: 1 MiB, past which it is cut.
 	PayloadByteCount int64
 	// A file over this is recorded by hash and size: 8 MiB.
 	FileByteCount int64
-	// Captured bytes per run-hour: 256 MiB.
+	// Captured bytes per run-hour, since vault bytes count toward storage (§20): 256 MiB.
 	RunHourByteCount int64
-	// The local encrypted spool: 1 GiB.
+	// The local encrypted spool, which keeps capturing while the daemon is locked: 1 GiB.
 	SpoolByteCount int64
 	// A transcript is tailed this often, and at Stop, SubagentStop, PreCompact and SessionEnd: 30 s.
 	TranscriptTailInterval time.Duration
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
 	HookExitTimeout time.Duration
-	// A run's restore point: 256 MiB.
+	// A run's restore point on disk: 256 MiB.
 	RestorePointByteCount int64
 	// A path's bytes are held from its PreToolUse to its PostToolUse at most this long: 10 min.
 	RestoreHoldTimeout time.Duration
-	// And at most this much a file: 8 MiB.
+	// How much of a file that hold keeps: 8 MiB.
 	RestoreHoldByteCount int64
 }
 
@@ -47,7 +48,7 @@ type SidecarIngestSettings struct {
 type SidecarRecordSettings struct {
 	// Entries one push carries into a stream: 64.
 	PushEntryCount int
-	// Or the entries of this long, whichever comes first: 1 s.
+	// How long a push waits for more entries, whichever comes first: 1 s.
 	PushCoalesce time.Duration
 	// ReachReceipts coalesce per (grant, peer) over this: 5 min.
 	ReachReceiptCoalesce time.Duration
@@ -56,10 +57,11 @@ type SidecarRecordSettings struct {
 	// The team record's retention until its admin signs a RetentionPolicy: 400 days, in days as
 	// RetentionPolicy.keep_days counts them.
 	TeamRecordKeepDays int
-	// And how much of that stays searchable: 90 days.
+	// How much of that stays searchable: 90 days.
 	TeamRecordSearchableDays int
 }
 
+// A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	return &SidecarMcpSettings{
 		SessionCallCount: 8,
@@ -69,6 +71,7 @@ func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	}
 }
 
+// A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarIngestSettings() *SidecarIngestSettings {
 	return &SidecarIngestSettings{
 		PayloadByteCount:       1024 * 1024,
@@ -83,6 +86,7 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 	}
 }
 
+// A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarRecordSettings() *SidecarRecordSettings {
 	return &SidecarRecordSettings{
 		PushEntryCount:           64,

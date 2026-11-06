@@ -30,6 +30,7 @@ type ClientHint struct {
 	Forced bool
 }
 
+// How an owning service tells clients something changed. Safe for concurrent use.
 type Push interface {
 	// For each client, one script on its slot of {scp_<C>}: raises ver, adds the hint and INCRs n,
 	// which is what triggers its resident's publisher, the gkm topic's clock rule included (§6.8).

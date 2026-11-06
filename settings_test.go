@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// Every default the design states, whole struct by whole struct, so a field added with a value fails
+// here until its row is. The readings the design leaves open are held by
+// TestDefaultSettingsTheDesignLeavesOpen.
 func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 	settings := DefaultSidecarSettings()
 
@@ -15,86 +18,137 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 		want any
 	}{
 		// §5.9, §18.4
-		{"Instance", settings.Instance, "default"},
-		{"AppVersion", settings.AppVersion, Version},
-		{"MemoryBudgetByteCount", settings.MemoryBudgetByteCount, int64(128 * 1024 * 1024)},
+		{name: "Instance", got: settings.Instance, want: "default"},
+		{name: "MemoryBudgetByteCount", got: settings.MemoryBudgetByteCount, want: int64(128 * 1024 * 1024)},
 		// §6.5's StreamData limit
-		{"StreamChunkByteCount", settings.StreamChunkByteCount, 4000},
-		{"Log", settings.Log, nil},
+		{name: "StreamChunkByteCount", got: settings.StreamChunkByteCount, want: 4000},
+		{name: "Log", got: settings.Log, want: nil},
 		// §5.4: sdk's schedule
-		{"RefreshWindowStart", settings.TokenRefreshSettings.RefreshWindowStart, 0.4},
-		{"RefreshWindowEnd", settings.TokenRefreshSettings.RefreshWindowEnd, 0.5},
-		{"MinRefreshTimeout", settings.TokenRefreshSettings.MinRefreshTimeout, 5 * time.Minute},
-		{"RefreshRetryTimeout", settings.TokenRefreshSettings.RefreshRetryTimeout, 15 * time.Minute},
-		// §5.9's pass
-		{"PassMemoryByteCount", settings.KeychainSettings.PassMemoryByteCount, int64(64 * 1024 * 1024)},
-		{"PassIterationCount", settings.KeychainSettings.PassIterationCount, 3},
-		{"PassThreadCount", settings.KeychainSettings.PassThreadCount, 4},
-		{"PassAttemptCount", settings.KeychainSettings.PassAttemptCount, 5},
-		{"PassAttemptInterval", settings.KeychainSettings.PassAttemptInterval, 10 * time.Minute},
-		// §16.4
-		{"SessionCallCount", settings.Mcp.SessionCallCount, 8},
-		{"SessionWriteRate", settings.Mcp.SessionWriteRate.Count, 20},
-		{"SessionWriteRate", settings.Mcp.SessionWriteRate.Interval, 1 * time.Second},
-		{"ResultByteCount", settings.Mcp.ResultByteCount, 256 * 1024},
-		{"CallTimeout", settings.Mcp.CallTimeout, 30 * time.Second},
+		{
+			name: "TokenRefreshSettings",
+			got:  *settings.TokenRefreshSettings,
+			want: SidecarTokenRefreshSettings{
+				RefreshWindowStart:  0.4,
+				RefreshWindowEnd:    0.5,
+				MinRefreshTimeout:   5 * time.Minute,
+				RefreshRetryTimeout: 15 * time.Minute,
+			},
+		},
+		// §5.9's pass; auto-lock is a reading
+		{
+			name: "KeychainSettings",
+			got:  *settings.KeychainSettings,
+			want: SidecarKeychainSettings{
+				PassMemoryByteCount: 64 * 1024 * 1024,
+				PassIterationCount:  3,
+				PassThreadCount:     4,
+				PassAttemptCount:    5,
+				PassAttemptInterval: 10 * time.Minute,
+				AutoLockTimeout:     settings.KeychainSettings.AutoLockTimeout,
+			},
+		},
+		// §16.4; the burst is a reading
+		{
+			name: "Mcp",
+			got:  *settings.Mcp,
+			want: SidecarMcpSettings{
+				SessionCallCount: 8,
+				SessionWriteRate: SidecarRate{Count: 20, Burst: settings.Mcp.SessionWriteRate.Burst, Interval: 1 * time.Second},
+				ResultByteCount:  256 * 1024,
+				CallTimeout:      30 * time.Second,
+			},
+		},
 		// §16.7
-		{"PayloadByteCount", settings.Ingest.PayloadByteCount, int64(1024 * 1024)},
-		{"FileByteCount", settings.Ingest.FileByteCount, int64(8 * 1024 * 1024)},
-		{"RunHourByteCount", settings.Ingest.RunHourByteCount, int64(256 * 1024 * 1024)},
-		{"SpoolByteCount", settings.Ingest.SpoolByteCount, int64(1024 * 1024 * 1024)},
-		{"TranscriptTailInterval", settings.Ingest.TranscriptTailInterval, 30 * time.Second},
-		{"HookExitTimeout", settings.Ingest.HookExitTimeout, 300 * time.Millisecond},
-		{"RestorePointByteCount", settings.Ingest.RestorePointByteCount, int64(256 * 1024 * 1024)},
-		{"RestoreHoldTimeout", settings.Ingest.RestoreHoldTimeout, 10 * time.Minute},
-		{"RestoreHoldByteCount", settings.Ingest.RestoreHoldByteCount, int64(8 * 1024 * 1024)},
+		{
+			name: "Ingest",
+			got:  *settings.Ingest,
+			want: SidecarIngestSettings{
+				PayloadByteCount:       1024 * 1024,
+				FileByteCount:          8 * 1024 * 1024,
+				RunHourByteCount:       256 * 1024 * 1024,
+				SpoolByteCount:         1024 * 1024 * 1024,
+				TranscriptTailInterval: 30 * time.Second,
+				HookExitTimeout:        300 * time.Millisecond,
+				RestorePointByteCount:  256 * 1024 * 1024,
+				RestoreHoldTimeout:     10 * time.Minute,
+				RestoreHoldByteCount:   8 * 1024 * 1024,
+			},
+		},
 		// §16.8
-		{"PushEntryCount", settings.Record.PushEntryCount, 64},
-		{"PushCoalesce", settings.Record.PushCoalesce, 1 * time.Second},
-		{"ReachReceiptCoalesce", settings.Record.ReachReceiptCoalesce, 5 * time.Minute},
-		{"CoverageIdleTimeout", settings.Record.CoverageIdleTimeout, 10 * time.Minute},
-		{"TeamRecordKeepDays", settings.Record.TeamRecordKeepDays, 400},
-		{"TeamRecordSearchableDays", settings.Record.TeamRecordSearchableDays, 90},
+		{
+			name: "Record",
+			got:  *settings.Record,
+			want: SidecarRecordSettings{
+				PushEntryCount:           64,
+				PushCoalesce:             1 * time.Second,
+				ReachReceiptCoalesce:     5 * time.Minute,
+				CoverageIdleTimeout:      10 * time.Minute,
+				TeamRecordKeepDays:       400,
+				TeamRecordSearchableDays: 90,
+			},
+		},
 		// §5.4's search settings
-		{"CacheByteCount", settings.Search.CacheByteCount, int64(4 * 1024 * 1024 * 1024)},
-		{"MemoryByteCount", settings.Search.MemoryByteCount, int64(64 * 1024 * 1024)},
-		{"VersionCacheByteCount", settings.Search.VersionCacheByteCount, int64(256 * 1024)},
-		{"BackgroundByteCount", settings.Search.BackgroundByteCount, int64(1024 * 1024 * 1024)},
-		{"MoreByteCount", settings.Search.MoreByteCount, int64(1024 * 1024 * 1024)},
-		{"AllPolicy", settings.Search.AllPolicy, "background"},
-		{"HintCoalesce", settings.Search.HintCoalesce, 1 * time.Minute},
-		{"CursorTimeout", settings.Search.CursorTimeout, 10 * time.Minute},
-		{"HeadRefreshInterval", settings.Search.HeadRefreshInterval, 10 * time.Minute},
-		{"NonWriterSyncInterval", settings.Search.NonWriterSyncInterval, 15 * time.Minute},
-		{"SessionSearchCount", settings.Search.SessionSearchCount, 2},
-		{"SessionSearchRate", settings.Search.SessionSearchRate, SidecarRate{Count: 5, Burst: 10, Interval: 1 * time.Second}},
-		{"SessionCursorCount", settings.Search.SessionCursorCount, 16},
-		{"DaemonSearchCount", settings.Search.DaemonSearchCount, 4},
-		{"PageCpu", settings.Search.PageCpu, 2 * time.Second},
-		{"PageCandidateCount", settings.Search.PageCandidateCount, 1000},
-		{"TooBroadCandidateCount", settings.Search.TooBroadCandidateCount, 20000},
-		{"PageByteCount", settings.Search.PageByteCount, 64 * 1024},
-		{"RemoteMode", settings.Search.RemoteMode, "on"},
-		{"RemoteTimeout", settings.Search.RemoteTimeout, [2]time.Duration{3 * time.Second, 5 * time.Second}},
-		{"RemoteServe", settings.Search.RemoteServe, true},
-		{"RemoteSearchCount", settings.Search.RemoteSearchCount, 4},
-		{"RemoteQueueCount", settings.Search.RemoteQueueCount, 16},
-		{"RemoteQueueTimeout", settings.Search.RemoteQueueTimeout, 1 * time.Second},
-		{"RemoteCpuPerMinute", settings.Search.RemoteCpuPerMinute, 30 * time.Second},
-		{"RemoteCursorCount", settings.Search.RemoteCursorCount, 64},
-		{"RemoteRequesterRate", settings.Search.RemoteRequesterRate, SidecarRate{Count: 30, Burst: 10, Interval: 1 * time.Minute}},
-		{"ServedRecordTimeout", settings.Search.ServedRecordTimeout, 30 * 24 * time.Hour},
+		{
+			name: "Search",
+			got:  *settings.Search,
+			want: SidecarSearchSettings{
+				CacheByteCount:         4 * 1024 * 1024 * 1024,
+				MemoryByteCount:        64 * 1024 * 1024,
+				VersionCacheByteCount:  256 * 1024,
+				BackgroundByteCount:    1024 * 1024 * 1024,
+				MoreByteCount:          1024 * 1024 * 1024,
+				AllPolicy:              "background",
+				HintCoalesce:           1 * time.Minute,
+				CursorTimeout:          10 * time.Minute,
+				HeadRefreshInterval:    10 * time.Minute,
+				NonWriterSyncInterval:  15 * time.Minute,
+				SessionSearchCount:     2,
+				SessionSearchRate:      SidecarRate{Count: 5, Burst: 10, Interval: 1 * time.Second},
+				SessionCursorCount:     16,
+				DaemonSearchCount:      4,
+				PageCpu:                2 * time.Second,
+				PageCandidateCount:     1000,
+				TooBroadCandidateCount: 20000,
+				PageByteCount:          64 * 1024,
+				RemoteMode:             "on",
+				RemoteTimeout:          [2]time.Duration{3 * time.Second, 5 * time.Second},
+				RemoteServe:            true,
+				RemoteSearchCount:      4,
+				RemoteQueueCount:       16,
+				RemoteQueueTimeout:     1 * time.Second,
+				RemoteCpuPerMinute:     30 * time.Second,
+				RemoteCursorCount:      64,
+				RemoteRequesterRate:    SidecarRate{Count: 30, Burst: 10, Interval: 1 * time.Minute},
+				ServedRecordTimeout:    30 * 24 * time.Hour,
+			},
+		},
 		// §5.4's directory settings
-		{"SessionSyncInterval", settings.Directory.SessionSyncInterval, 15 * time.Minute},
-		{"IdleSyncInterval", settings.Directory.IdleSyncInterval, 1 * time.Hour},
-		{"ViewCoalesce", settings.Directory.ViewCoalesce, 30 * time.Second},
-		{"PhoneMeteredByteCount", settings.Directory.PhoneMeteredByteCount, int64(8 * 1024 * 1024)},
-		{"RenewJitter", settings.Directory.RenewJitter, 5 * time.Minute},
+		{
+			name: "Directory",
+			got:  *settings.Directory,
+			want: SidecarDirectorySettings{
+				SessionSyncInterval:   15 * time.Minute,
+				IdleSyncInterval:      1 * time.Hour,
+				ViewCoalesce:          30 * time.Second,
+				PhoneMeteredByteCount: 8 * 1024 * 1024,
+				RenewJitter:           5 * time.Minute,
+			},
+		},
 	}
 	for _, check := range checks {
 		if !reflect.DeepEqual(check.got, check.want) {
-			t.Errorf("%s: %v, want %v", check.name, check.got, check.want)
+			t.Errorf("%s: %+v, want %+v", check.name, check.got, check.want)
 		}
+	}
+}
+
+// Version is empty in a development build, so comparing against it in place would pass with the field
+// unset: this gives it a release's value first.
+func TestDefaultAppVersionIsTheReleaseVersion(t *testing.T) {
+	defer func(version string) { Version = version }(Version)
+	Version = "2026.11.6-synthetic"
+	if appVersion := DefaultSidecarSettings().AppVersion; appVersion != "2026.11.6-synthetic" {
+		t.Errorf("AppVersion %q", appVersion)
 	}
 }
 
@@ -137,25 +191,42 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 	}
 }
 
-// The numbers §5.4 leaves open, pinned here so a change to one is deliberate. Each is a reading the
-// report names, not a design value.
+// The numbers the design leaves open, pinned exactly, so a change to one is deliberate. Each is a
+// reading raised with the owner, not a design value.
 func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	settings := DefaultSidecarSettings()
 
-	if settings.KeychainSettings.AutoLockTimeout != 0 {
-		t.Errorf("AutoLockTimeout %v: an unattended daemon must not lock itself", settings.KeychainSettings.AutoLockTimeout)
+	// §5.4 names auto-lock with no value, so it stays on the side that protects keys
+	if settings.KeychainSettings.AutoLockTimeout != 10*time.Minute {
+		t.Errorf("AutoLockTimeout %v", settings.KeychainSettings.AutoLockTimeout)
 	}
-	if settings.LocalSettings.SocketPath != "" || settings.LocalSettings.AppGroupSocketPath != "" {
-		t.Errorf("socket paths %+v: empty derives §5.9's", settings.LocalSettings)
+	wantLocal := SidecarLocalSettings{
+		IdleExitTimeout:  10 * time.Minute,
+		RequestByteCount: 4 * 1024 * 1024,
+		RequestTimeout:   30 * time.Second,
 	}
-	if settings.LocalSettings.IdleExitTimeout <= 0 || settings.LocalSettings.RequestTimeout <= 0 {
-		t.Errorf("local bounds %+v", settings.LocalSettings)
+	if *settings.LocalSettings != wantLocal {
+		t.Errorf("local settings %+v, want %+v", *settings.LocalSettings, wantLocal)
 	}
-	// a hook payload at its limit fits in one request, with room for JSON's escaping
+	if settings.ComponentQueueMessageCount != 256 {
+		t.Errorf("ComponentQueueMessageCount %d", settings.ComponentQueueMessageCount)
+	}
+	if settings.ComponentQueueByteCount != 1024*1024 {
+		t.Errorf("ComponentQueueByteCount %d", settings.ComponentQueueByteCount)
+	}
+	if settings.Mcp.SessionWriteRate.Burst != 20 {
+		t.Errorf("SessionWriteRate.Burst %d", settings.Mcp.SessionWriteRate.Burst)
+	}
+
+	// why those numbers hold together: a hook payload at its limit fits in one request with room for
+	// JSON's escaping, a local request gets a call's time, and a full queue of 4,080 B envelopes fits
+	// its bytes, each in its 4 KiB pool class
 	if settings.LocalSettings.RequestByteCount < 2*settings.Ingest.PayloadByteCount {
 		t.Errorf("RequestByteCount %d", settings.LocalSettings.RequestByteCount)
 	}
-	// 256 envelopes of 4,080 B, each in its 4 KiB pool class
+	if settings.LocalSettings.RequestTimeout != settings.Mcp.CallTimeout {
+		t.Errorf("RequestTimeout %v", settings.LocalSettings.RequestTimeout)
+	}
 	if settings.ComponentQueueByteCount != settings.ComponentQueueMessageCount*4096 {
 		t.Errorf("queue %d messages, %d bytes", settings.ComponentQueueMessageCount, settings.ComponentQueueByteCount)
 	}

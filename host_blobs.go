@@ -132,6 +132,7 @@ type BlobStore interface {
 
 // One cluster's bucket. See the file header for what every method promises.
 type BlobCluster interface {
+	// Its id in BlobStore.
 	ClusterId() string
 	// §19.6's store request deadline, 10 s on both clusters. What a waiter waits: §11.8's unknown row
 	// and §11.13's orphan and GC rules wait this long, so it is read from here and kept nowhere else.
@@ -218,6 +219,7 @@ func (self *BlobPutOptions) Validate() error {
 
 // One object, as Head, Get and List see it.
 type BlobInfo struct {
+	// The key, as a call named it or List found it.
 	Key string
 	// The whole object's size, even for a GetRange.
 	ByteCount int64
@@ -226,7 +228,8 @@ type BlobInfo struct {
 	Etag string
 	// The store's clock: §11.13's 23 h and 25 h age rules read it.
 	LastModified time.Time
-	Metadata     map[string]string
+	// What BlobPutOptions.Metadata set. Nil from List, and for an object with none.
+	Metadata map[string]string
 }
 
 // An open Get. Body holds the bytes asked for, and the caller closes it.
