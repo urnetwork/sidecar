@@ -51,7 +51,8 @@ type QuotaOverLimit struct {
 	SpentNetworkIdRefusals map[connect.Id]*QuotaRefusal
 }
 
-// §20.7. Producers cache limits 5 s.
+// §20.7. Producers cache limits 5 s. A zero network or debit id is the caller's bug and an error, never
+// a lookup: it names no one's limits, and two calls sharing a zero debit id would read as one retried.
 type Quota interface {
 	// The network's effective limits.
 	Limits(ctx context.Context, networkId connect.Id) (*QuotaLimits, error)

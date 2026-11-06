@@ -32,7 +32,11 @@ func (self hostAuthenticator) Authenticate(ctx context.Context, audience string,
 	if audience == "" {
 		return nil, ErrAuthenticationRefused
 	}
-	return &Principal{Audience: audience}, nil
+	principal := &Principal{NetworkId: connect.NewId(), ClientId: connect.NewId(), Audience: audience}
+	if err := principal.Validate(); err != nil {
+		return nil, err
+	}
+	return principal, nil
 }
 
 func (self hostQuota) Limits(ctx context.Context, networkId connect.Id) (*QuotaLimits, error) {
@@ -179,8 +183,8 @@ func TestServiceHostAssembles(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if _, err := host.Authenticator.Authenticate(ctx, "", "synthetic-token"); !errors.Is(err, ErrAuthenticationRefused) {
-		t.Errorf("an empty audience: %v", err)
+	if _, err := host.Authenticate(ctx, "evs", "synthetic-token"); err != nil {
+		t.Errorf("a token naming its network and client: %v", err)
 	}
 	if _, err := host.Blobs.Cluster("no-such-cluster"); !errors.Is(err, ErrBlobClusterUnknown) {
 		t.Errorf("an unknown cluster: %v", err)

@@ -12,17 +12,21 @@ import (
 	"github.com/urnetwork/connect"
 )
 
-// What connect.ClientAuth and the platform transport need for one platform client.
+// What connect.ClientAuth and the platform transport need for one platform client. A source that
+// cannot fill every field answers an error: a zero ClientId or an empty url is never a success.
 type ServiceClientAuth struct {
 	// The same for a given clientIndex for the process's life, since sockets ties a listener's edge
 	// streams to one of the caller's K clients (§9.6).
 	ClientId connect.Id
 	// A secret: never log it (I-7).
-	ByJwt       string
-	ApiUrl      string
+	ByJwt string
+	// Absolute, as SidecarSettings's are.
+	ApiUrl string
+	// Absolute, ws or wss.
 	PlatformUrl string
 }
 
+// Where an engine gets its platform clients' credentials, which only the host holds.
 type ServiceClientSource interface {
 	// One of the engine's platform clients, clientIndex from 0 up to the K its settings say. Call it
 	// again at each reconnect, since a later answer may carry a newer jwt for the same client.

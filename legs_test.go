@@ -186,19 +186,22 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 // the flaw these look for.
 func parseRootFiles(t *testing.T) map[string]*ast.File {
 	t.Helper()
-	fileSet := token.NewFileSet()
 	files := map[string]*ast.File{}
 	for _, goFile := range rootGoFiles(t) {
-		if strings.HasSuffix(goFile, "_test.go") {
-			continue
+		if !strings.HasSuffix(goFile, "_test.go") {
+			files[goFile] = parseGoFile(t, goFile)
 		}
-		file, err := parser.ParseFile(fileSet, goFile, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[goFile] = file
 	}
 	return files
+}
+
+func parseGoFile(t *testing.T, goFile string) *ast.File {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), goFile, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
 }
 
 func parseSyntheticFile(t *testing.T, src string) *ast.File {
@@ -291,6 +294,50 @@ func TestDefaultHttpRuleCatchesAPlantedCall(t *testing.T) {
 func f() { http.Post("/sidecar/bind", "", nil) }`)
 	if names := defaultHttpNames(file); !slices.Equal(names, []string{"Post"}) {
 		t.Errorf("names %q", names)
+	}
+}
+
+// Whether file reads ServiceHost.Authenticator, which reaches round the checks in Authenticate.
+func readsAuthenticatorField(file *ast.File) bool {
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		if selector, ok := node.(*ast.SelectorExpr); ok && selector.Sel.Name == "Authenticator" {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// Engines come later, each in its <svc>service, and this fails the first to skip the checks.
+func TestEnginesAuthenticateThroughTheHost(t *testing.T) {
+	engineGoFiles, err := filepath.Glob("*service/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, goFile := range engineGoFiles {
+		if strings.HasSuffix(goFile, "_test.go") {
+			continue
+		}
+		if readsAuthenticatorField(parseGoFile(t, goFile)) {
+			t.Errorf("%s reads ServiceHost.Authenticator: call host.Authenticate", goFile)
+		}
+	}
+	for goFile, file := range parseRootFiles(t) {
+		if goFile != "host_auth.go" && readsAuthenticatorField(file) {
+			t.Errorf("%s reads ServiceHost.Authenticator: call host.Authenticate", goFile)
+		}
+	}
+}
+
+func TestAuthenticatorRuleCatchesAPlantedRead(t *testing.T) {
+	file := parseSyntheticFile(t, `func f(host *ServiceHost) { host.Authenticator.Authenticate(nil, "evs", "") }`)
+	if !readsAuthenticatorField(file) {
+		t.Error("a direct read passed")
+	}
+	file = parseSyntheticFile(t, `func f(host *ServiceHost) { host.Authenticate(nil, "evs", "") }`)
+	if readsAuthenticatorField(file) {
+		t.Error("the host's own call failed")
 	}
 }
 
