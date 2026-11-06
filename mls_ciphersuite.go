@@ -46,9 +46,9 @@ const (
 	// Prepended to every label of the labeled functions (RFC §5.1.2, RFC §5.1.3, RFC §8).
 	mlsLabelPrefix = "MLS 1.0 "
 
-	// RefHash labels (RFC §5.2).
+	// RefHash's label for KeyPackageRef (RFC §5.2). §10.4 commits proposals inline, so ProposalRef has
+	// no use here.
 	mlsRefHashLabelKeyPackage = "MLS 1.0 KeyPackage Reference"
-	mlsRefHashLabelProposal   = "MLS 1.0 Proposal Reference"
 )
 
 // A failed MAC, signature or AEAD check.
@@ -165,11 +165,6 @@ func (self *mlsCipherSuite) refHash(label string, value []byte) ([]byte, error) 
 // MakeKeyPackageRef, over the encoded KeyPackage.
 func (self *mlsCipherSuite) makeKeyPackageRef(encodedKeyPackage []byte) ([]byte, error) {
 	return self.refHash(mlsRefHashLabelKeyPackage, encodedKeyPackage)
-}
-
-// MakeProposalRef, over the encoded AuthenticatedContent carrying the proposal.
-func (self *mlsCipherSuite) makeProposalRef(encodedAuthenticatedContent []byte) ([]byte, error) {
-	return self.refHash(mlsRefHashLabelProposal, encodedAuthenticatedContent)
 }
 
 // SignContent and EncryptContext (RFC §5.1.2, RFC §5.1.3), which share a form: the prefixed label,

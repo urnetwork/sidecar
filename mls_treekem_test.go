@@ -896,6 +896,65 @@ func TestMlsImplantRefusesAPathSecretForAnotherKey(t *testing.T) {
 	}
 }
 
+// A Welcome's path secret must rebuild the keys the tree shows, or the joiner holds keys nobody else
+// encrypts to and the tree invariant is a fiction.
+func TestMlsWelcomePathRefusesASecretThatMissesTheTree(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsSuite, 3)
+	committer := group.members[0]
+	tree := committer.tree.clone()
+	client := mlsNewTestClient(t, mlsSuite, "newcomer")
+	newLeaf, err := tree.addLeaf(&client.keyPackage.leafNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := tree.prepareUpdatePath(0, tree.leafNode(0), committer.signatureKey, group.groupId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := newMlsTreeSecrets(mlsSuite, newLeaf, client.leafKey)
+	if err := secrets.implantWelcomePath(tree, 0, bytes.Repeat([]byte{9}, 32)); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+	if len(secrets.nodeIndexKeys) != 1 {
+		t.Fatalf("%d keys after a refused path", len(secrets.nodeIndexKeys))
+	}
+
+	ancestor := mlsCommonAncestor(newLeaf.node(), mlsLeafIndex(0).node())
+	if err := secrets.implantWelcomePath(tree, 0, prepared.pathSecretAt(ancestor)); err != nil {
+		t.Fatal(err)
+	}
+	if !secrets.consistentWith(tree) {
+		t.Fatal("the joiner's keys do not match the tree")
+	}
+	if prepared.pathSecretAt(newLeaf.node()) != nil {
+		t.Fatal("a leaf node answered as a path node")
+	}
+}
+
+// The consistency check itself: a key the tree does not show, at a node inside or outside it.
+func TestMlsSecretsNoticeAKeyTheTreeDoesNotShow(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsSuite, 4)
+	member := group.members[0]
+	if !member.secrets.consistentWith(member.tree) {
+		t.Fatal("a member's own keys do not match")
+	}
+	stray, err := mlsSuite.generateKemKey("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []mlsNodeIndex{mlsTreeRoot(4), 99} {
+		secrets := member.secrets.cloneForTest()
+		secrets.nodeIndexKeys[node] = stray
+		if secrets.consistentWith(member.tree) {
+			t.Errorf("node %d: a stray key passed", node)
+		}
+		secrets.forgetStaleKeys(member.tree)
+		if _, held := secrets.nodeIndexKeys[node]; held {
+			t.Errorf("node %d: the stray key was not forgotten", node)
+		}
+	}
+}
+
 func TestMlsWelcomePathRefusesASenderWithoutAPath(t *testing.T) {
 	group := mlsNewTestGroup(t, mlsSuite)
 	secrets := group.members[0].secrets

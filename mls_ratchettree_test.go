@@ -971,6 +971,16 @@ func TestMlsValidateRefusesAnUnmergedLeafNotBelowIt(t *testing.T) {
 	}
 }
 
+// The decoder refuses this list, and validate holds the rule for a tree that did not come off the wire.
+func TestMlsValidateRefusesUnmergedLeavesOutOfOrder(t *testing.T) {
+	tree := mlsShapedTree(
+		mlsShapeLeaf("A"), mlsTreeNode{}, mlsShapeLeaf("B"), mlsShapeParent("Y", 1, 0), mlsTreeNode{}, mlsTreeNode{}, mlsTreeNode{},
+	)
+	if err := tree.validateUnmergedLeaves(3); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+}
+
 func TestMlsValidateRefusesAnIntermediateOmittingAnUnmergedLeaf(t *testing.T) {
 	blank := mlsTreeNode{}
 	tree := mlsShapedTree(
