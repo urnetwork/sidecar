@@ -1,0 +1,303 @@
+// §8's rows inside §7.9's ProjectionRows, ids only, and §8.8's grant chains and access logs. GrantRevoke,
+// Suspend and Unsuspend live in bridge/auth.proto, because the device role applies them between states,
+// and this file imports them and never redeclares them (§4.9).
+//
+// §8.8 writes AclAtom, AclRule, AclRepo and its statements as field lists without numbers, and §8.4 and
+// §11.12 write actions, autogroups and kinds as names. They take numbers in the order written, a
+// statement's StatementHeader being field 1, and are open to review until these formats freeze at M2.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+import "protocol/bridge/signed.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message AclRows {
+  bool has_document = 1;                  // owner decisions 50, 105
+  repeated AclAtom atoms = 2;             // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
+  repeated AclRule rules = 3;
+  repeated AclRequestRule requests = 4;
+  repeated AclRepo repos = 5;
+  bytes bridge = 6;                       // §17's id-only section
+  AclAudit audit = 7;                     // owner decision 63; Team only
+}
+
+message AclAtom {
+  bytes atom = 1;
+  repeated bytes member_ids = 2;
+  repeated bytes sidecar_ids = 3;
+}
+
+// §8.4's autogroups as atoms, autogroup:dst-owner fixed at M2 because the implicit document's directory
+// rule names it, which readers evaluate from then (D-PHASE-9). In a *_atoms field, one of these is 16
+// bytes: fifteen zeros, then this value.
+enum AclAutogroup {
+  ACL_AUTOGROUP_UNSPECIFIED = 0;
+  ACL_AUTOGROUP_MEMBER = 1;
+  ACL_AUTOGROUP_OWNER = 2;
+  ACL_AUTOGROUP_ADMIN = 3;
+  ACL_AUTOGROUP_AUDITOR = 4;
+  ACL_AUTOGROUP_SIDECAR = 5;
+  ACL_AUTOGROUP_TAGGED = 6;
+  ACL_AUTOGROUP_NETWORK = 7;
+  ACL_AUTOGROUP_UNTAGGED = 8;
+  ACL_AUTOGROUP_EPHEMERAL = 9;
+  ACL_AUTOGROUP_PUBLIC = 10;
+  ACL_AUTOGROUP_INTERNET = 11;
+  ACL_AUTOGROUP_SELF = 12;
+  ACL_AUTOGROUP_SPONSOR = 13;
+  ACL_AUTOGROUP_DST_OWNER = 14;
+}
+
+// Values of AclRule.actions and AclRequestRule.actions (§8.4).
+enum AclAction {
+  ACL_ACTION_UNSPECIFIED = 0;
+  ACL_ACTION_DIAL = 1;
+  ACL_ACTION_LISTEN = 2;
+  ACL_ACTION_ROUTE = 3;
+  ACL_ACTION_READ = 4;
+  ACL_ACTION_WRITE = 5;
+  ACL_ACTION_ADMIN = 6;
+  ACL_ACTION_DEPOSIT = 7;
+  ACL_ACTION_PUBLISH = 8;
+  ACL_ACTION_SEND = 9;
+}
+
+enum AclAudience {
+  ACL_AUDIENCE_UNSPECIFIED = 0;           // members, the default
+  ACL_AUDIENCE_MEMBERS = 1;
+  ACL_AUDIENCE_MEMBERS_DEVICE = 2;
+  ACL_AUDIENCE_LINK = 3;
+  ACL_AUDIENCE_PUBLIC = 4;
+}
+
+enum AclAppMode {
+  ACL_APP_MODE_UNSPECIFIED = 0;           // http, the default
+  ACL_APP_MODE_HTTP = 1;
+  ACL_APP_MODE_RAW = 2;
+}
+
+message AclPortRange {
+  uint32 protocol = 1;                    // the IP protocol number; 0 any
+  uint32 first = 2;
+  uint32 last = 3;
+}
+
+message AclRule {
+  bytes rule_id = 1;
+  repeated bytes src_atoms = 2;
+  repeated AclTarget targets = 3;
+  repeated uint32 actions = 4;            // AclAction
+  repeated AclPortRange ports = 5;
+  int64 expires = 6;                      // ms since the epoch; 0 none
+  AclAudience audience = 7;               // a publish's (8.4)
+  AclAppMode app_mode = 8;
+  bytes link_spki_sha256 = 9;             // the pin in full, as a requested grant's GrantActivate shows it to
+                                          // api anyway (§16.6 AD4)
+}
+
+message AclRequestRule {
+  bytes rule_id = 1;
+  repeated bytes src_atoms = 2;
+  repeated AclTarget targets = 3;
+  repeated uint32 actions = 4;            // AclAction
+  repeated bytes approver_atoms = 5;
+  uint32 approvers = 6;
+  int64 default_expiry_seconds = 7;       // expiresDefault: 1 h unless the document overrides it
+  int64 max_expiry_seconds = 8;           // maxExpiry: 30 days unless the rule overrides it
+  repeated uint32 evidence = 9;           // accepted ApprovalDecision.channel values (§16.8); default all three
+}
+
+// §11.12's kinds, fixed at creation. directory is known from M2, since the team directory runs on format
+// 1's streams from M6 (D-PHASE-9).
+enum RepoKind {
+  REPO_KIND_UNSPECIFIED = 0;
+  REPO_KIND_GENERAL = 1;
+  REPO_KIND_RECORD = 2;
+  REPO_KIND_CONFIG = 3;
+  REPO_KIND_DIRECTORY = 4;
+  REPO_KIND_TEAM_RECORD = 5;
+  REPO_KIND_MAILCFG = 6;
+  REPO_KIND_VAULT = 7;
+  REPO_KIND_MAILBOX = 8;
+  REPO_KIND_SECRET = 9;
+}
+
+enum RepoGrantRole {
+  REPO_GRANT_ROLE_UNSPECIFIED = 0;
+  REPO_GRANT_ROLE_DEPOSIT = 1;
+  REPO_GRANT_ROLE_READER = 2;
+  REPO_GRANT_ROLE_WRITER = 3;
+}
+
+// Folded from M2, enforced from format 2 (D-PHASE-9).
+enum RepoVersioningLock {
+  REPO_VERSIONING_LOCK_UNSPECIFIED = 0;
+  REPO_VERSIONING_LOCK_LOCKED = 1;
+  REPO_VERSIONING_LOCK_UNLOCKED = 2;
+}
+
+// A repo's folded access log. Every row keeps its signer sidecar_id and the log position of the entry
+// carrying it, for §7.9's cascade.
+message AclRepo {
+  bytes repo_id = 1;
+  RepoKind kind = 2;
+  bytes owner_member_id = 3;
+  repeated bytes consented_sidecar_ids = 4;  // the owner's (§8.5), whose consenting admission, AdmissionConfirm
+                                             // and OwnerConfirm signers and positions §7.9's SidecarRow keeps
+  repeated AclRepoAdminRow admins = 5;
+  repeated AclRepoGrantRow grants = 6;
+  repeated AclRepoShareRow shares = 7;
+  repeated AclRepoRevokeRow revokes = 8;     // config writers' standing RepoRevokes
+  AclRepoDeletionRow deletion = 9;           // the newest RepoDelete with any RepoRestore of its deletion_id
+  RepoVersioningLock lock = 10;              // the newest RepoVersioning's
+  uint64 holders_shrunk_at = 11;             // the newest log position that dropped a key holder (§7.9)
+}
+
+message AclRepoAdminRow {
+  bytes sidecar_id = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+}
+
+message AclRepoGrantRow {
+  bytes subject = 1;
+  RepoGrantRole role = 2;
+  int64 expires = 3;                      // ms since the epoch; 0 none
+  bytes signer = 4;
+  uint64 at = 5;
+}
+
+message AclRepoShareRow {
+  bytes subject = 1;
+  int64 expires = 2;                      // ms since the epoch; 0 none
+  bytes signer = 3;
+  uint64 at = 4;
+}
+
+message AclRepoRevokeRow {
+  bytes subject = 1;
+  bytes signer = 2;
+  uint64 at = 3;
+}
+
+message AclRepoDeletionRow {
+  bytes deletion_id = 1;
+  bool now = 2;
+  uint64 deleted_at = 3;
+  uint64 restored_at = 4;
+}
+
+message AclAudit {                        // a reader every member sees (owner decision 63)
+  repeated bytes reader_atoms = 1;
+  repeated uint32 repo_kinds = 2;         // RepoKind
+  repeated bytes repo_ids = 3;
+  bytes audit_opt_in = 4;                 // the k-of-n AuditOptIn record, which api and readers verify
+}
+
+message AclTarget {                       // exactly one kind set
+  bytes atom = 1;
+  bytes sidecar_id = 2;
+  bytes network_id = 3;
+  bytes repo_id = 4;
+  repeated bytes socket_tokens = 5;       // §9.4's token path
+  bool socket_prefix = 6;                 // whole-segment prefix; finer globs project to their literal prefix
+  string public_name = 7;                 // tls/ and smtp/ sockets, dns hosts
+  bytes cidr = 8;
+  bool mail_send = 9;
+}
+
+// §8.8's statements: §6 Signed, purpose acl unless noted, each opening with a StatementHeader.
+
+message GrantActivate {                   // any admitted sidecar; authority only from the embedded decisions
+  StatementHeader header = 1;
+  bytes grant_id = 2;
+  bytes canonical_action = 3;             // §16.8's CanonicalAction, as stored
+  repeated Signed decisions = 4;          // ApprovalDecisions
+}
+
+message EvsShare {                        // a consented device of the repo's owner (8.5), for owner-bound kinds
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+  int64 expires = 4;                      // ms since the epoch; optional, 0 none. Defined at M2 and honored by
+                                          // every reader as RepoGrant's is, so a time-bound share ends with no
+                                          // device online (D-PHASE-9)
+}
+
+message OwnerConfirm {                    // a consented device of the sidecar's member (8.5; owner decision 126)
+  StatementHeader header = 1;
+  bytes sidecar_id = 2;
+}
+
+// The access log of one repo_id (owner decision 8).
+
+message RepoCreate {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  RepoKind kind = 3;
+}
+
+enum RepoAdminChange {
+  REPO_ADMIN_CHANGE_UNSPECIFIED = 0;
+  REPO_ADMIN_CHANGE_ADD = 1;
+  REPO_ADMIN_CHANGE_REMOVE = 2;
+}
+
+message RepoAdmin {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sidecar_id = 3;
+  RepoAdminChange change = 4;
+}
+
+message RepoGrant {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+  RepoGrantRole role = 4;
+  int64 expires = 5;                      // ms since the epoch; 0 none
+}
+
+message RepoRevoke {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes subject = 3;
+}
+
+message RepoDelete {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes deletion_id = 3;                  // random
+  bool now = 4;
+}
+
+message RepoRestore {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes deletion_id = 3;
+}
+
+// v1 (owner decision 160). Format-1 code verifies it, folds the lock and skips sealed_rules, enforcing
+// nothing (D-PHASE-9); format 2 enforces the lock.
+message RepoVersioning {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  RepoVersioningLock lock = 3;
+  bytes sealed_rules = 4;                 // optional: config.proto's VersioningRules. An owner-bound repo's are
+                                          // sealed to its own generation, others' to the config's
+}
+
+// Authority statements, purpose authority, k of n (§7.9).
+
+message AuditOptIn {
+  StatementHeader header = 1;
+  repeated bytes reader_atoms = 2;
+  int64 not_after = 3;                    // ms since the epoch
+}
+
+message AuditOptOut {
+  StatementHeader header = 1;
+}
