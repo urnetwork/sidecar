@@ -548,7 +548,7 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 		{message: "BridgeRoute", fields: []string{"advertiser", "header", "route_id", "route_rule_ids", "sealed_body"}},
 		{message: "BridgeMap", fields: []string{"expires", "header", "host", "map_id", "sealed_body"}},
 		{message: "BridgeEgress", fields: []string{"header", "sealed_body", "subject"}},
-		{message: "BridgeAlias", fields: []string{"header", "host", "sealed_body", "share_id"}},
+		{message: "BridgeAlias", fields: []string{"header", "sealed_body"}},
 		{message: "BridgeWithdraw", fields: []string{"header", "mode", "rule_id"}},
 		{message: "IndexerSet", fields: []string{"header", "retire", "scope", "sealed_services", "sidecar_id"}},
 		{
@@ -559,6 +559,7 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 			message: "RecoveryRebind",
 			fields:  []string{"ed25519_public_key_sha256", "header", "member_id", "prev_sha256", "reason", "sealed_body"},
 		},
+		{message: "RepoVersioning", fields: []string{"header", "lock", "repo_id", "sealed_rules"}},
 	}
 	for _, c := range cases {
 		messageFields := testMessage(t, c.message).Fields()
