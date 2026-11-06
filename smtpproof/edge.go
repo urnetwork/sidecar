@@ -524,14 +524,21 @@ func (self *edgeSession) serverFinished12WithLock(record []byte) error {
 // DiscloseShts of sidecar.SmtpProofSession: runs E2 over the flight, then releases the client's
 // Finished. shts is never kept: only its hash survives, as Z1's public input.
 func (self *edgeSession) DiscloseShts(shts []byte) ([][]byte, error) {
+	// the hooks run with no lock held, so the keys are derived first; the suite never changes once set
+	suite := func() uint16 {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.suite
+	}()
+	key, iv := tls13TrafficKeys(suite, shts)
+	testHookSecret("edge_server_handshake_key", key)
+	testHookSecret("edge_server_handshake_iv", iv)
+
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.phase != edgePhaseFlight13 {
 		return nil, edgeRefuse(checkE2, "SHTS disclosed out of turn")
 	}
-	key, iv := tls13TrafficKeys(self.suite, shts)
-	testHookSecret("edge_server_handshake_key", key)
-	testHookSecret("edge_server_handshake_iv", iv)
 	cipher, err := newTlsCipher(tlsVersion13, self.suite, key, iv)
 	if err != nil {
 		return nil, err
@@ -728,7 +735,6 @@ func (self *edgeSession) releaseWithLock() ([][]byte, error) {
 			}
 			self.finished = true
 		}
-		testHookBarrier("edge.forward", "")
 		forward = append(forward, record)
 		self.heldRecords = self.heldRecords[1:]
 		self.heldBytes -= len(record)
@@ -944,15 +950,20 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 		return nil, edgeCut("part %d did not verify: %v", part.Index, err)
 	}
 
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if 0 < len(self.parts) && self.parts[len(self.parts)-1].part.Index == part.Index {
-		self.parts[len(self.parts)-1] = gated
-	} else {
-		self.parts = append(self.parts, gated)
-	}
-	if self.coveredServer < part.ServerRecordCount {
-		self.coveredServer = part.ServerRecordCount
-	}
-	return self.releaseWithLock()
+	testHookBarrier("edge.commit.before", "")
+	forward, err := func() ([][]byte, error) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if 0 < len(self.parts) && self.parts[len(self.parts)-1].part.Index == part.Index {
+			self.parts[len(self.parts)-1] = gated
+		} else {
+			self.parts = append(self.parts, gated)
+		}
+		if self.coveredServer < part.ServerRecordCount {
+			self.coveredServer = part.ServerRecordCount
+		}
+		return self.releaseWithLock()
+	}()
+	testHookBarrier("edge.commit.after", "")
+	return forward, err
 }
