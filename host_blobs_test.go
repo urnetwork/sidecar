@@ -7,12 +7,14 @@
 package sidecar
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -235,10 +237,53 @@ func TestBlobPutOptionsKeepMetadataToWhatHeadersCarry(t *testing.T) {
 		{"entry state": "carried"},
 		{"entry-state": "new\nline"},
 		{"entry-state": "café"},
+		// an HTTP header drops these, so the fake would keep what the store lost
+		{"entry-state": " carried"},
+		{"entry-state": "carried "},
+		{"entry-state": "  carried  "},
+		{"entry-state": " "},
 	} {
 		options := &BlobPutOptions{Metadata: metadata}
 		if err := options.Validate(); !errors.Is(err, ErrBlobPutOptions) {
 			t.Errorf("%q: %v", metadata, err)
+		}
+	}
+}
+
+// The value a store reads, by the header it would receive: written and read back by net/http, with no
+// socket involved.
+func blobMetadataThroughHeader(t *testing.T, value string) string {
+	t.Helper()
+	request, err := http.NewRequest("PUT", "http://store.example/key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Amz-Meta-Entry-State", value)
+	var wire bytes.Buffer
+	if err := request.Write(&wire); err != nil {
+		t.Fatal(err)
+	}
+	received, err := http.ReadRequest(bufio.NewReader(&wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return received.Header.Get("X-Amz-Meta-Entry-State")
+}
+
+// The rule against the thing it describes: every printable byte at the start, middle and end of a
+// value, kept by Validate exactly when a header carries the value unchanged. Interior runs of spaces
+// survive, so nothing broader than the ends is refused.
+func TestBlobMetadataValidatesExactlyWhatAHeaderCarries(t *testing.T) {
+	values := []string{"", "carried", "two  spaces", "a, b", `"quoted"`}
+	for c := byte(' '); c <= '~'; c += 1 {
+		values = append(values, string(c)+"a", "a"+string(c)+"b", "a"+string(c))
+	}
+	for _, value := range values {
+		options := &BlobPutOptions{Metadata: map[string]string{"entry-state": value}}
+		valid := options.Validate() == nil
+		unchanged := blobMetadataThroughHeader(t, value) == value
+		if valid != unchanged {
+			t.Errorf("%q: valid %v, unchanged by a header %v", value, valid, unchanged)
 		}
 	}
 }

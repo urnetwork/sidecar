@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -69,14 +70,17 @@ type BlobUnknownError struct {
 	Err error
 }
 
+// Names the cause, for logs only.
 func (self *BlobUnknownError) Error() string {
 	return fmt.Sprintf("blob outcome unknown: %v", self.Err)
 }
 
+// What the transport said.
 func (self *BlobUnknownError) Unwrap() error {
 	return self.Err
 }
 
+// The context key WithBlobDeadline stores under.
 type blobDeadlineKey struct{}
 
 // ctx with a request's own store deadline: a fold's or copy's write, 15 s after the head read it
@@ -176,8 +180,8 @@ type BlobPutOptions struct {
 	Sha256 []byte
 	// Object metadata, read back by Head and Get: an idx/ entry's state while a head lists sources
 	// (§11.7). Nil for every other family, which carries none (§19.6). Keys are lowercase letters,
-	// digits and dashes and values printable ASCII, what a store's headers carry unchanged, so T2's
-	// fake and the store agree.
+	// digits and dashes, and values printable ASCII with no space at either end, which an HTTP header
+	// drops: what a store's headers carry unchanged, so T2's fake and the store agree.
 	Metadata map[string]string
 }
 
@@ -204,6 +208,9 @@ func (self *BlobPutOptions) Validate() error {
 			if c := value[i]; c < ' ' || '~' < c {
 				return fmt.Errorf("%w: byte %d of a metadata value", ErrBlobPutOptions, i)
 			}
+		}
+		if strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ") {
+			return fmt.Errorf("%w: a space at the end of a metadata value", ErrBlobPutOptions)
 		}
 	}
 	return nil
