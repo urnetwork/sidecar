@@ -143,7 +143,7 @@ func (IndexerService) EnumDescriptor() ([]byte, []int) {
 type TeamMailMode int32
 
 const (
-	TeamMailMode_TEAM_MAIL_MODE_UNSPECIFIED   TeamMailMode = 0
+	TeamMailMode_TEAM_MAIL_MODE_UNSPECIFIED   TeamMailMode = 0 // no choice made: §7.9 writes no default, see ServiceSettings
 	TeamMailMode_TEAM_MAIL_MODE_INDEXERS      TeamMailMode = 1 // owner decisions 58, 150; §15.5, §15.6
 	TeamMailMode_TEAM_MAIL_MODE_MEMBER_SCOPES TeamMailMode = 2
 )
@@ -1451,7 +1451,9 @@ func (x *ServiceDirectorySettings) GetWorkers() DirectoryWorkersMode {
 	return DirectoryWorkersMode_DIRECTORY_WORKERS_MODE_UNSPECIFIED
 }
 
-// An owner or admin. A zero value means the default each comment gives.
+// An owner or admin. A zero value means the default each comment gives, but for team_mail, whose default no
+// section writes: there zero is no choice made, which grants nothing, so an undesignated tag:mail device
+// registers no listener as it would under indexers (D-MAIL-15).
 type ServiceSettings struct {
 	state             protoimpl.MessageState    `protogen:"open.v1"`
 	TeamMail          TeamMailMode              `protobuf:"varint,1,opt,name=team_mail,json=teamMail,proto3,enum=urnetwork.sidecar.TeamMailMode" json:"team_mail,omitempty"`

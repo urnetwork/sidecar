@@ -167,6 +167,8 @@ enum BridgeEgressMode {
   BRIDGE_EGRESS_MODE_NONE = 3;
 }
 
+// A gate holds no config key, so it learns a mode from BridgeRows at the next base (§8.10, §17.8): until a
+// writer folds this, a subject's new mode binds its readers and not the contract gate.
 message BridgeEgress {                 // an admin, owner or sponsor
   StatementHeader header = 1;
   bytes subject = 2;

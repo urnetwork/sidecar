@@ -1464,6 +1464,8 @@ func (x *BridgeMapBody) GetApproval() *BridgeApproval {
 	return nil
 }
 
+// A gate holds no config key, so it learns a mode from BridgeRows at the next base (§8.10, §17.8): until a
+// writer folds this, a subject's new mode binds its readers and not the contract gate.
 type BridgeEgress struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Header        *StatementHeader       `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
