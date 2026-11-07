@@ -95,13 +95,16 @@ func TestDepsReadsAPlannedRowsFilesOnceItIsLinked(t *testing.T) {
 	wantFindings(t, repository.licenseRowFindings(t), "google.golang.org/protobuf says MIT, and its license text lacks")
 }
 
-// Every way the file can stray from its one shape fails, rather than dropping a row in silence.
+// Every way the file can stray from its one shape fails, rather than dropping a row in silence. Each
+// is planted in a fixture and read through the leg rule, so the rule, not just its parser, fails on it.
 func TestDepsFailsOnAnUnreadableDependenciesFile(t *testing.T) {
 	row := "  - module: example.com/a\n    spdx: MIT\n    reason: a reason\n    leg: [client]\n"
 	for _, c := range []struct {
+		missing bool
 		content string
 		want    string
 	}{
+		{missing: true, want: "reading dependencies.yml"},
 		{content: "", want: "no modules: list"},
 		{content: "modules:\n  - module: example.com/a\n", want: "needs module, spdx, reason and leg"},
 		{content: "modules:\n" + row + row, want: "listed twice"},
@@ -112,7 +115,14 @@ func TestDepsFailsOnAnUnreadableDependenciesFile(t *testing.T) {
 		{content: "modules:\n" + strings.Replace(row, "a reason", "a: reason", 1), want: "holds ': '"},
 		{content: "modules:\n" + row + "    planned: no\n", want: "planned is true or absent"},
 	} {
-		_, findings := parseDependencies(c.content)
+		fixture := newFixture(t)
+		fixture.keepLegs("root linux/amd64")
+		if c.missing {
+			fixture.remove("dependencies.yml")
+		} else {
+			fixture.write("dependencies.yml", c.content)
+		}
+		findings := fixture.open().legModuleFindings(t)
 		if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, c.want) }) {
 			t.Errorf("%q: findings %v lack %q", c.content, findings, c.want)
 		}
@@ -268,16 +278,30 @@ func TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow(t *testing.T) {
 	wantFindings(t, fixture.open().licenseRowFindings(t), "github.com/pion/sctp's license text has \"shall not be used in advertising\"")
 }
 
-// An exception covers one version: a bump is a new license to read.
+// An exception covers one version: a bump is a new license to read. The exception is the real
+// settings' own, so this holds the one that stands, through the rule that reads it: at its version
+// the module passes, and at the next it fails.
 func TestDepsFailsOnAnExceptionAtAnotherVersion(t *testing.T) {
-	settings := defaultCheckSettings()
-	row := &dependencyRow{module: "src.agwa.name/tlshacks", spdx: "X11"}
-	licenseText := strings.ToLower(fixtureMitLicense + "shall not be used in advertising")
-	licenseText = strings.Join(strings.Fields(licenseText), " ")
-	wantFindings(t, settings.licenseFindings(row, "v0.0.4", licenseText))
-	wantFindings(t, settings.licenseFindings(row, "v0.0.5", licenseText),
-		"src.agwa.name/tlshacks is X11, which §4.7 does not allow",
-		"src.agwa.name/tlshacks's license text has")
+	exception, standing := defaultCheckSettings().licenseExceptions["src.agwa.name/tlshacks"]
+	if !standing || exception.version != "v0.0.4" {
+		t.Fatalf("the tlshacks exception is %+v, not the v0.0.4 one this test holds", exception)
+	}
+	tlshacksFixture := func(version string) *fixture {
+		fixture := newFixture(t)
+		fixture.keepLegs("root linux/amd64")
+		fixture.settings.licenseExceptions = map[string]licenseException{"src.agwa.name/tlshacks": exception}
+		fixture.writeSibling("tlshacks/go.mod", "module src.agwa.name/tlshacks\n\ngo 1.27.3\n")
+		fixture.writeSibling("tlshacks/LICENSE", fixtureMitLicense+"The name(s) of the copyright holders shall not be used in advertising.\n")
+		fixture.writeSibling("tlshacks/tlshacks.go", "package tlshacks\n")
+		fixture.requireLocal("src.agwa.name/tlshacks", version, "tlshacks")
+		fixture.write("tlshacks.go", "package sidecar\n\nimport _ \"src.agwa.name/tlshacks\"\n")
+		fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: src.agwa.name/tlshacks\n    spdx: X11\n    reason: parses a ClientHello\n    leg: [client]\n")
+		return fixture
+	}
+	wantFindings(t, tlshacksFixture("v0.0.4").open().licenseRowFindings(t))
+	wantFindings(t, tlshacksFixture("v0.0.5").open().licenseRowFindings(t),
+		"src.agwa.name/tlshacks is X11, which §4.7 does not allow, at v0.0.5",
+		"src.agwa.name/tlshacks's license text has \"shall not be used in advertising\", at v0.0.5")
 }
 
 // One module at two versions, each with its own license file: the root's legs link the first and
