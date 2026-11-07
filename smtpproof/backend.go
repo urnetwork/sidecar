@@ -166,7 +166,9 @@ func (self *groth16Backend) provePart(ctx context.Context, statement *partStatem
 	}
 	proof, err := groth16.Prove(keys.compiled, keys.provingKey, full)
 	if err != nil {
-		return nil, fmt.Errorf("smtpproof: proving part %d: %w", statement.index, err)
+		// not wrapped: gnark's solver writes wire values into its errors, and here those are keys and
+		// plaintext. The relation has already passed, so this says the circuit and it disagree
+		return nil, fmt.Errorf("smtpproof: part %d satisfies the relation and not its circuit", statement.index)
 	}
 	var encoded bytes.Buffer
 	if _, err := proof.WriteTo(&encoded); err != nil {
@@ -184,6 +186,9 @@ func (self *groth16Backend) verifyPart(ctx context.Context, statement *partState
 	keys, err := self.keysFor(shape)
 	if err != nil {
 		return err
+	}
+	if keys.verifyingKey == nil {
+		return errNoKeys
 	}
 	circuit, err := partAssignment(shape, statement)
 	if err != nil {

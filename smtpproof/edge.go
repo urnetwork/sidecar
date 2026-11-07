@@ -538,6 +538,7 @@ func (self *edgeSession) DiscloseShts(shts []byte) ([][]byte, error) {
 	if len(shts) != tlsSecretBytes {
 		return nil, edgeRefuse(checkE2, "SHTS has the wrong length")
 	}
+	testHookSecret("edge_shts", shts)
 	// the hooks run with no lock held, so the keys are derived first; the suite never changes once set
 	suite := func() uint16 {
 		self.stateLock.Lock()

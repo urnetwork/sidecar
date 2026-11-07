@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -783,6 +784,21 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 				t.Errorf("%s: verified part %d", leg.name, index)
 			}
 		}
+
+		// keys that hold neither half refuse too, rather than reach gnark with a nil key
+		statement, witness := capture.part(t, 1)
+		shape, err := partShapeFor(statement)
+		if err != nil {
+			t.Fatal(err)
+		}
+		halfLoaded := newGroth16Backend()
+		halfLoaded.addKeys(&shapeKeys{shape: shape})
+		if _, err := halfLoaded.provePart(context.Background(), statement, witness); !errors.Is(err, errNoKeys) {
+			t.Errorf("%s: proving with no key: %v", leg.name, err)
+		}
+		if err := halfLoaded.verifyPart(context.Background(), statement, []byte("not a proof")); !errors.Is(err, errNoKeys) {
+			t.Errorf("%s: verifying with no key: %v", leg.name, err)
+		}
 	}
 }
 
@@ -920,8 +936,13 @@ func TestGroth16ProofOfARealEhlo(t *testing.T) {
 	// a mutated witness cannot even be proven: the solver finds no satisfying assignment
 	statement, witness = capture.part(t, 1)
 	witness.handshakeSecret[0] ^= 1
-	if _, err := backend.provePart(context.Background(), statement, witness); err == nil {
-		t.Error("proved a witness with another HS")
+	_, err = backend.provePart(context.Background(), statement, witness)
+	if err == nil {
+		t.Fatal("proved a witness with another HS")
+	}
+	// gnark's solver writes wire values into its errors, and those wires are keys and plaintext
+	if errors.Unwrap(err) != nil || strings.Contains(err.Error(), "constraint") {
+		t.Errorf("a failed proof carried the solver's error: %v", err)
 	}
 }
 
