@@ -41,9 +41,18 @@ type checkSettings struct {
 	// §11.14: one x/text module version on every leg, which the search index's headers record
 	normalizerOneXTextVersion string
 
-	// §4.7's allowed licenses, as SPDX ids. X11 is MIT's text plus only its no-advertising clause
-	// (QD-240), which licensePhrases pins.
+	// §4.7's allowed licenses, as SPDX ids, each with its text in licenseTextsDirectory. X11 is MIT's
+	// text plus only its no-advertising clause (QD-240).
 	allowedLicenses []string
+	// the most words a license's <<...>> part takes for one copy. A holder's name is a few words, and
+	// this bounds what such a part could hide, so it is no longer than a name needs.
+	licenseVariableMaxWordCount int
+	// how many words a finding quotes from where a license file leaves its licenses' texts
+	licenseDepartureWordCount int
+	// a module's words beyond its licenses' own, by module path, each read by a person and kept with
+	// why it stands: what a file says of which license covers which of its files. Each passage is
+	// matched as a license's text is, so a changed word fails the row until someone reads the change.
+	licenseNotes map[string]licenseNote
 	// cgo files in a third-party package, as <import path>/<file>, each with why it stands. §4.7's
 	// cgo row binds this repository's packages (R-REPO-6), and a third-party file is listed here
 	// so a new one needs a reader, rather than passing unseen.
@@ -73,6 +82,13 @@ type checkSettings struct {
 	iosMinimumVersion string
 }
 
+// What a module's license file says beyond its licenses' own words, read by a person.
+type licenseNote struct {
+	why string
+	// each in the file's own words, as a license's text is written in licenseTextsDirectory
+	passages []string
+}
+
 // The only source of defaults.
 func defaultCheckSettings() *checkSettings {
 	return &checkSettings{
@@ -88,6 +104,36 @@ func defaultCheckSettings() *checkSettings {
 		normalizerOneXTextVersion: "v0.43.0",
 		allowedLicenses: []string{
 			"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "MPL-2.0", "X11",
+		},
+		licenseVariableMaxWordCount: 8,
+		licenseDepartureWordCount:   12,
+		licenseNotes: map[string]licenseNote{
+			"gopkg.in/yaml.v3": {
+				why: "says which of its files each of its two licenses covers",
+				passages: []string{
+					"This project is covered by two different licenses: MIT and Apache. #### MIT License #### " +
+						"The following files were ported to Go from C files of libyaml, and thus are still covered by " +
+						"their original MIT license, with the additional copyright staring in 2011 when the project " +
+						"was ported over: apic.go emitterc.go parserc.go readerc.go scannerc.go writerc.go yamlh.go yamlprivateh.go",
+					"### Apache License ### All the remaining project files are covered by the Apache license:",
+				},
+			},
+			"gvisor.dev/gvisor": {
+				why: "says that some of its files carry MIT's and BSD-3-Clause's texts below its Apache-2.0",
+				passages: []string{
+					"Some files carry the following license, noted at the top of each file:",
+					"Some files carry the \"BSD\" license, noted at the top of each file:",
+				},
+			},
+			"github.com/klauspost/compress": {
+				why: "names the directories each license in its file covers",
+				passages: []string{
+					"Files: gzhttp/*",
+					"Files: s2/cmd/internal/readahead/*",
+					"Files: snappy/* Files: internal/snapref/*",
+					"Files: s2/cmd/internal/filepathx/*",
+				},
+			},
 		},
 		thirdPartyCgoFiles: map[string]string{
 			"github.com/wlynxg/anet/android_api_level_cgo.go": "reads the Android API level; " +

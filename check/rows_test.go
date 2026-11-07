@@ -86,13 +86,16 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestDepsFailsOnASharedVersionMismatch", "TestDepsFailsOnAMissingSibling"},
 	},
 	{
-		row: "deps", item: "a license §4.7 refuses, or a row its module's files do not back",
+		row: "deps", item: "a license §4.7 refuses, or a row its module's files do not back, word for word, beside every package a leg links",
 		rule: (*repository).licenseRowFindings,
 		plantedTests: []string{
 			"TestDepsFailsOnARefusedLicenseId", "TestDepsFailsOnAnUnlicensedModule", "TestDepsFailsOnAGplFileUnderAnMitRow",
 			"TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow", "TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo",
 			"TestDepsFailsOnAnX11RowOverPlainMit", "TestDepsFailsOnAnX11ClauseWithoutMitsText",
 			"TestDepsFailsOnASecondAdvertisingClauseUnderAnX11Row", "TestDepsFailsOnAnotherClauseUnderAnX11Row",
+			"TestDepsFailsOnABsd4ClauseUnderABsd3Row", "TestDepsFailsOnAnAddedRestrictionUnderAnMitRow",
+			"TestDepsFailsOnAGplFileBesideALinkedPackage", "TestDepsFailsOnAGplFileAboveALinkedPackage",
+			"TestDepsFailsOnANoteThatNoLongerMatches",
 		},
 	},
 
