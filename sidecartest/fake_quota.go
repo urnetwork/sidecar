@@ -149,7 +149,19 @@ func (self *FakeQuota) Batches() []*sidecar.UsageBatch {
 	return append([]*sidecar.UsageBatch{}, self.batches...)
 }
 
+// host_quota.go's rule: a zero id names no one's limits or balance, and two calls sharing one would read
+// as one retried, the second counting nothing.
+func checkQuotaId(what string, id connect.Id) error {
+	if id == (connect.Id{}) {
+		return fmt.Errorf("a zero %s id", what)
+	}
+	return nil
+}
+
 func (self *FakeQuota) Limits(ctx context.Context, networkId connect.Id) (*sidecar.QuotaLimits, error) {
+	if err := checkQuotaId("network", networkId); err != nil {
+		return nil, err
+	}
 	var limits *sidecar.QuotaLimits
 	err := hostCall(ctx, self.faults, "quota.Limits", func() error {
 		self.stateLock.Lock()
@@ -165,6 +177,12 @@ func (self *FakeQuota) Limits(ctx context.Context, networkId connect.Id) (*sidec
 }
 
 func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyAmounts map[string]int64, debitId connect.Id) (*sidecar.QuotaRefusal, error) {
+	if err := checkQuotaId("network", networkId); err != nil {
+		return nil, err
+	}
+	if err := checkQuotaId("debit", debitId); err != nil {
+		return nil, err
+	}
 	var refusal *sidecar.QuotaRefusal
 	err := hostCall(ctx, self.faults, "quota.CountRate", func() error {
 		self.stateLock.Lock()
@@ -194,6 +212,9 @@ func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyA
 }
 
 func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter string) (sidecar.QuotaLease, *sidecar.QuotaRefusal, error) {
+	if err := checkQuotaId("network", networkId); err != nil {
+		return nil, nil, err
+	}
 	var lease *fakeQuotaLease
 	var refusal *sidecar.QuotaRefusal
 	err := hostCall(ctx, self.faults, "quota.Lease", func() error {
@@ -224,6 +245,14 @@ func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter st
 }
 
 func (self *FakeQuota) ReportUsage(ctx context.Context, batch *sidecar.UsageBatch) error {
+	if err := checkQuotaId("batch", batch.BatchId); err != nil {
+		return err
+	}
+	for _, event := range batch.Events {
+		if err := checkQuotaId("network", event.NetworkId); err != nil {
+			return err
+		}
+	}
 	return hostCall(ctx, self.faults, "quota.ReportUsage", func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

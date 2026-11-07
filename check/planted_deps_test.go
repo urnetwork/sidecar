@@ -6,6 +6,10 @@
 package check
 
 import (
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -92,16 +96,21 @@ func TestDepsReadsAPlannedRowsFilesOnceItIsLinked(t *testing.T) {
 	}
 	wantFindings(t, repository.legModuleFindings(t))
 	wantFindings(t, reports, "a leg links google.golang.org/protobuf, whose row can drop planned")
-	wantFindings(t, repository.licenseRowFindings(t), "google.golang.org/protobuf says MIT, and its license text lacks")
+	wantFindings(t, repository.licenseRowFindings(t),
+		"google.golang.org/protobuf says MIT, and none of its license files holds MIT's text",
+		"google.golang.org/protobuf's LICENSE holds words beyond MIT")
 }
 
-// Every way the file can stray from its one shape fails, rather than dropping a row in silence.
+// Every way the file can stray from its one shape fails, rather than dropping a row in silence. Each
+// is planted in a fixture and read through the leg rule, so the rule, not just its parser, fails on it.
 func TestDepsFailsOnAnUnreadableDependenciesFile(t *testing.T) {
 	row := "  - module: example.com/a\n    spdx: MIT\n    reason: a reason\n    leg: [client]\n"
 	for _, c := range []struct {
+		missing bool
 		content string
 		want    string
 	}{
+		{missing: true, want: "reading dependencies.yml"},
 		{content: "", want: "no modules: list"},
 		{content: "modules:\n  - module: example.com/a\n", want: "needs module, spdx, reason and leg"},
 		{content: "modules:\n" + row + row, want: "listed twice"},
@@ -112,7 +121,14 @@ func TestDepsFailsOnAnUnreadableDependenciesFile(t *testing.T) {
 		{content: "modules:\n" + strings.Replace(row, "a reason", "a: reason", 1), want: "holds ': '"},
 		{content: "modules:\n" + row + "    planned: no\n", want: "planned is true or absent"},
 	} {
-		_, findings := parseDependencies(c.content)
+		fixture := newFixture(t)
+		fixture.keepLegs("root linux/amd64")
+		if c.missing {
+			fixture.remove("dependencies.yml")
+		} else {
+			fixture.write("dependencies.yml", c.content)
+		}
+		findings := fixture.open().legModuleFindings(t)
 		if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, c.want) }) {
 			t.Errorf("%q: findings %v lack %q", c.content, findings, c.want)
 		}
@@ -256,52 +272,276 @@ func TestDepsFailsOnAGplFileUnderAnMitRow(t *testing.T) {
 	fixture.keepLegs("root linux/amd64")
 	fixture.writeSibling("connect/sctp/LICENSE", "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n")
 	wantFindings(t, fixture.open().licenseRowFindings(t),
-		"github.com/pion/sctp says MIT, and its license text lacks",
-		"github.com/pion/sctp's license text has \"gnu general public license\"")
+		"github.com/pion/sctp says MIT, and none of its license files holds MIT's text, at v1.0.0",
+		"github.com/pion/sctp's LICENSE has \"gnu general public license\", at v1.0.0",
+		"github.com/pion/sctp's LICENSE holds words beyond MIT, so it is another license or a custom one: it leaves MIT at \"gnu general public license version 3 29 june 2007\", at v1.0.0")
 }
 
-// tlshacks's case: MIT's words and one more clause make a custom license.
+// MIT's words and X11's clause are X11, not MIT, so under an MIT row the clause makes a custom
+// license: it passes only where the row says X11.
 func TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
-	fixture.writeSibling("connect/sctp/LICENSE", fixtureMitLicense+"The name(s) of the copyright holders shall not be used in advertising.\n")
-	wantFindings(t, fixture.open().licenseRowFindings(t), "github.com/pion/sctp's license text has \"shall not be used in advertising\"")
+	fixture.writeSibling("connect/sctp/LICENSE", fixtureMitLicense+"\n"+fixtureX11Clause)
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"github.com/pion/sctp's LICENSE has \"shall not be used in advertising\", at v1.0.0",
+		"github.com/pion/sctp's LICENSE holds words beyond MIT, so it is another license or a custom one: it leaves MIT at \"except as contained in this notice the name s of the above\", at v1.0.0")
 }
 
-// MPL-2.0 names the GNU licenses in its own definitions, as real MPL text does and the fixture's short
-// notice does not, and that one sentence refuses nothing. Anything past it still does, and it clears
-// only a row that claims MPL-2.0.
-func TestDepsTakesMplNamingTheGnuLicenses(t *testing.T) {
-	settings := defaultCheckSettings()
-	mpl := strings.ToLower(fixtureMplLicense) + mplSecondaryLicenseDefinition
-	mplRow := &dependencyRow{module: "example.com/mpl", spdx: "BSD-3-Clause AND MPL-2.0"}
-	bsd := "redistribution and use in source and binary forms, neither the name "
-	wantFindings(t, settings.licenseFindings(mplRow, "v1.0.0", bsd+mpl))
-	wantFindings(t, settings.licenseFindings(mplRow, "v1.0.0", bsd+mpl+" gnu general public license version 3"),
-		"example.com/mpl's license text has \"gnu general public license\"")
-	bsdRow := &dependencyRow{module: "example.com/bsd", spdx: "BSD-3-Clause"}
-	wantFindings(t, settings.licenseFindings(bsdRow, "v1.0.0", bsd+mpl),
-		"example.com/bsd's license text has \"gnu general public license\"",
-		"example.com/bsd's license text has \"gnu lesser general public\"",
-		"example.com/bsd's license text has \"gnu affero general public\"")
-}
-
-// An exception covers one version: a bump is a new license to read.
-func TestDepsFailsOnAnExceptionAtAnotherVersion(t *testing.T) {
-	settings := defaultCheckSettings()
-	row := &dependencyRow{module: "src.agwa.name/tlshacks", spdx: "X11"}
-	licenseText := strings.ToLower(fixtureMitLicense + "shall not be used in advertising")
-	licenseText = strings.Join(strings.Fields(licenseText), " ")
-	wantFindings(t, settings.licenseFindings(row, "v0.0.4", licenseText))
-	wantFindings(t, settings.licenseFindings(row, "v0.0.5", licenseText),
-		"src.agwa.name/tlshacks is X11, which §4.7 does not allow",
-		"src.agwa.name/tlshacks's license text has")
-}
-
-func TestDepsFailsOnAStaleLicenseException(t *testing.T) {
+// One module, example.com/licensed, under the row spdx, with files laid out from its top and the
+// root linking each package named, "" for the module's own.
+func newLicensedModuleFixture(t *testing.T, spdx string, files map[string]string, linkedPackages ...string) *fixture {
+	t.Helper()
 	fixture := newFixture(t)
-	fixture.settings.licenseExceptions = map[string]licenseException{
-		"example.com/left": {version: "v1.0.0", spdx: "X11", question: "example.md"},
+	fixture.keepLegs("root linux/amd64")
+	fixture.writeSibling("licensed/go.mod", "module example.com/licensed\n\ngo 1.27.3\n")
+	for name, content := range files {
+		fixture.writeSibling("licensed/"+name, content)
 	}
-	wantFindings(t, fixture.open().licenseExceptionFindings(t), "the license exception for example.com/left has no matching row")
+	imports := []string{}
+	for _, linkedPackage := range linkedPackages {
+		directory := path.Join("licensed", linkedPackage)
+		fixture.writeSibling(directory+"/package.go", "package "+path.Base(directory)+"\n")
+		imports = append(imports, "import _ \""+path.Join("example.com", directory)+"\"\n")
+	}
+	fixture.requireLocal("example.com/licensed", "v1.0.0", "licensed")
+	fixture.write("licensed.go", "package sidecar\n\n"+strings.Join(imports, ""))
+	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: example.com/licensed\n    spdx: "+spdx+"\n    reason: a module under the license planted\n    leg: [client]\n")
+	return fixture
+}
+
+// One module with an X11 row, linked by the root, under the license text given.
+func newX11Fixture(t *testing.T, licenseText string) *fixture {
+	t.Helper()
+	return newLicensedModuleFixture(t, "X11", map[string]string{"LICENSE": licenseText}, "")
+}
+
+// The control: X11 is MIT's text plus only its no-advertising clause (QD-240), at any version.
+func TestDepsAllowsAnX11Module(t *testing.T) {
+	wantFindings(t, newX11Fixture(t, fixtureMitLicense+"\n"+fixtureX11Clause).open().licenseRowFindings(t))
+}
+
+// Plain MIT under an X11 row is a claim the files do not back.
+func TestDepsFailsOnAnX11RowOverPlainMit(t *testing.T) {
+	wantFindings(t, newX11Fixture(t, fixtureMitLicense).open().licenseRowFindings(t),
+		"example.com/licensed says X11, and none of its license files holds X11's text, at v1.0.0",
+		"example.com/licensed's LICENSE holds words beyond X11, so it is another license or a custom one: it leaves X11 at the end of the file, at v1.0.0")
+}
+
+// The clause alone is not X11: the rest is MIT's text.
+func TestDepsFailsOnAnX11ClauseWithoutMitsText(t *testing.T) {
+	wantFindings(t, newX11Fixture(t, "Copyright (c) 2026 Example\n\n"+fixtureX11Clause).open().licenseRowFindings(t),
+		"example.com/licensed says X11, and none of its license files holds X11's text, at v1.0.0",
+		"example.com/licensed's LICENSE has \"shall not be used in advertising\", at v1.0.0",
+		"example.com/licensed's LICENSE holds words beyond X11")
+}
+
+// Only the clause X11 holds passes: another advertising sentence beside it is a custom term.
+func TestDepsFailsOnASecondAdvertisingClauseUnderAnX11Row(t *testing.T) {
+	licenseText := fixtureMitLicense + "\n" + fixtureX11Clause + "\nThis Software shall not be used in advertising for any product.\n"
+	wantFindings(t, newX11Fixture(t, licenseText).open().licenseRowFindings(t),
+		"example.com/licensed's LICENSE has \"shall not be used in advertising\", at v1.0.0",
+		"example.com/licensed's LICENSE holds words beyond X11, so it is another license or a custom one: it leaves X11 at \"this software shall not be used in advertising for any product\", at v1.0.0")
+}
+
+// Nor does X11's clause clear any other.
+func TestDepsFailsOnAnotherClauseUnderAnX11Row(t *testing.T) {
+	licenseText := fixtureMitLicense + "\n" + fixtureX11Clause + "\nThe Software shall be used for Good, not Evil.\n"
+	wantFindings(t, newX11Fixture(t, licenseText).open().licenseRowFindings(t),
+		"example.com/licensed's LICENSE has \"shall be used for good, not evil\", at v1.0.0",
+		"example.com/licensed's LICENSE holds words beyond X11, so it is another license or a custom one: it leaves X11 at \"the software shall be used for good not evil\", at v1.0.0")
+}
+
+// BSD-4-Clause's advertising clause, the clause that turned BSD's license into a custom one, and no
+// phrase a rule might list: every word of BSD-3-Clause's text is there besides it.
+func TestDepsFailsOnABsd4ClauseUnderABsd3Row(t *testing.T) {
+	bsd4 := strings.Replace(fixtureBsd3License, "   * Neither the name",
+		"   * All advertising materials mentioning features or use of this software\nmust display the following acknowledgement: This product includes software\ndeveloped by Example Authors.\n   * Neither the name", 1)
+	fixture := newLicensedModuleFixture(t, "BSD-3-Clause", map[string]string{"LICENSE": bsd4}, "")
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"example.com/licensed says BSD-3-Clause, and none of its license files holds BSD-3-Clause's text, at v1.0.0",
+		"example.com/licensed's LICENSE has \"all advertising materials mentioning features or use of this software\", at v1.0.0",
+		"example.com/licensed's LICENSE holds words beyond BSD-3-Clause, so it is another license or a custom one: it leaves BSD-3-Clause at \"all advertising materials mentioning features or use of this software must display\", at v1.0.0")
+}
+
+// A restriction in words no list holds, beside every word of MIT's text, is a custom license.
+func TestDepsFailsOnAnAddedRestrictionUnderAnMitRow(t *testing.T) {
+	restricted := strings.Replace(fixtureMitLicense, "THE SOFTWARE IS PROVIDED",
+		"The Software may not be used by or on behalf of any military organization.\n\nTHE SOFTWARE IS PROVIDED", 1)
+	fixture := newLicensedModuleFixture(t, "MIT", map[string]string{"LICENSE": restricted}, "")
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"example.com/licensed says MIT, and none of its license files holds MIT's text, at v1.0.0",
+		"example.com/licensed's LICENSE holds words beyond MIT, so it is another license or a custom one: it leaves MIT at \"may not be used by or on behalf of any military organization\", at v1.0.0")
+}
+
+// A package's own license file binds that package, and the leg links it under the module's row.
+func TestDepsFailsOnAGplFileBesideALinkedPackage(t *testing.T) {
+	fixture := newLicensedModuleFixture(t, "MIT", map[string]string{
+		"LICENSE":     fixtureMitLicense,
+		"gpl/LICENSE": "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n",
+	}, "", "gpl")
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"example.com/licensed's gpl/LICENSE has \"gnu general public license\", at v1.0.0",
+		"example.com/licensed's gpl/LICENSE holds words beyond MIT")
+}
+
+// And so does one in a directory above it, below the module's top.
+func TestDepsFailsOnAGplFileAboveALinkedPackage(t *testing.T) {
+	fixture := newLicensedModuleFixture(t, "MIT", map[string]string{
+		"LICENSE":             fixtureMitLicense,
+		"third_party/COPYING": "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n",
+	}, "", "third_party/vendored")
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"example.com/licensed's third_party/COPYING has \"gnu general public license\", at v1.0.0",
+		"example.com/licensed's third_party/COPYING holds words beyond MIT")
+}
+
+// The control: a license file over a directory no leg links says nothing about what ships.
+func TestDepsAllowsALicenseFileOverNothingALegLinks(t *testing.T) {
+	fixture := newLicensedModuleFixture(t, "MIT", map[string]string{
+		"LICENSE":        fixtureMitLicense,
+		"tools/LICENSE":  "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n",
+		"tools/tools.go": "package tools\n",
+	}, "")
+	wantFindings(t, fixture.open().licenseRowFindings(t))
+}
+
+// A license's id is shown by any of its files: a nested BSD-3-Clause file backs that id of the row.
+func TestDepsAllowsARowsLicensesSpreadOverItsFiles(t *testing.T) {
+	fixture := newLicensedModuleFixture(t, "MIT AND BSD-3-Clause", map[string]string{
+		"LICENSE":        fixtureMitLicense,
+		"snappy/LICENSE": fixtureBsd3License,
+	}, "", "snappy")
+	wantFindings(t, fixture.open().licenseRowFindings(t))
+}
+
+// What a module says of which file each license covers passes once someone has read it into
+// licenseNotes, and only in the words they read.
+func TestDepsAllowsAModulesNote(t *testing.T) {
+	files := map[string]string{"LICENSE": fixtureMitLicense + "\n------\n\nFiles: snappy/*\n\n" + fixtureBsd3License}
+	fixture := newLicensedModuleFixture(t, "MIT AND BSD-3-Clause", files, "")
+	wantFindings(t, fixture.open().licenseRowFindings(t), "example.com/licensed's LICENSE holds words beyond MIT AND BSD-3-Clause, so it is another license or a custom one: it leaves MIT AND BSD-3-Clause at \"files snappy")
+	fixture.settings.licenseNotes = map[string]licenseNote{"example.com/licensed": {why: "names what each license covers", passages: []string{"Files: snappy/*"}}}
+	wantFindings(t, fixture.open().licenseRowFindings(t))
+}
+
+func TestDepsFailsOnANoteThatNoLongerMatches(t *testing.T) {
+	files := map[string]string{"LICENSE": fixtureMitLicense + "\nFiles: snappy/* and everything else\n\n" + fixtureBsd3License}
+	fixture := newLicensedModuleFixture(t, "MIT AND BSD-3-Clause", files, "")
+	fixture.settings.licenseNotes = map[string]licenseNote{"example.com/licensed": {why: "names what each license covers", passages: []string{"Files: snappy/*"}}}
+	wantFindings(t, fixture.open().licenseRowFindings(t), "it leaves MIT AND BSD-3-Clause at \"and everything else")
+}
+
+// A license's own words quoted on their own pass, as connect's file quotes MPL-2.0's sections 6 and
+// 7 below its notice, and an excerpt alone does not show the license.
+func TestDepsAllowsALicensesOwnExcerpt(t *testing.T) {
+	texts, err := licenseTexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	excerpt, err := os.ReadFile(filepath.Join(licenseTextsDirectory, "MPL-2.0", "excerpt-sections-6-7.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultCheckSettings()
+	row := &dependencyRow{module: "example.com/licensed", spdx: "MPL-2.0"}
+	file := func(text string) []*linkedLicenseFile {
+		return []*linkedLicenseFile{{name: "LICENSE", top: true, words: licenseWords(text)}}
+	}
+	wantFindings(t, settings.licenseFindings(row, file(fixtureMplLicense+"\n"+string(excerpt)), texts))
+	wantFindings(t, settings.licenseFindings(row, file(string(excerpt)), texts), "says MPL-2.0, and none of its license files holds MPL-2.0's text")
+}
+
+// Each of §4.7's licenses has a text, every text is one of §4.7's, and each text, with its parts left
+// to each copy filled in, reads as that license both with and without the parts a copy may leave out.
+func TestEveryAllowedLicenseHasItsText(t *testing.T) {
+	texts, err := licenseTexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultCheckSettings()
+	for _, id := range settings.allowedLicenses {
+		if !slices.ContainsFunc(texts[id], func(text *licenseText) bool { return text.backs }) {
+			t.Errorf("%s has no text or notice in %s", id, licenseTextsDirectory)
+		}
+	}
+	for id := range texts {
+		if !slices.Contains(settings.allowedLicenses, id) {
+			t.Errorf("%s has a text in %s, and §4.7 does not allow it", id, licenseTextsDirectory)
+		}
+	}
+	variablePattern := regexp.MustCompile(`<<[^>]*>>`)
+	optionalPattern := regexp.MustCompile(`\[\[|\]\]`)
+	for id := range texts {
+		for _, name := range []string{"text", "notice"} {
+			data, err := os.ReadFile(filepath.Join(licenseTextsDirectory, id, name+".txt"))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			filled := variablePattern.ReplaceAllString(string(data), "Example Authors")
+			for _, instance := range []string{optionalPattern.ReplaceAllString(filled, ""), dropLicenseOptionals(filled)} {
+				row := &dependencyRow{module: "example.com/" + id, spdx: id}
+				findings := settings.licenseFindings(row, []*linkedLicenseFile{{name: name, top: true, words: licenseWords(instance)}}, texts)
+				if len(findings) != 0 {
+					t.Errorf("%s's %s does not read as itself: %v", id, name, findings)
+				}
+			}
+		}
+	}
+}
+
+// A text with every [[...]] part and its words taken out.
+func dropLicenseOptionals(text string) string {
+	result := strings.Builder{}
+	depth := 0
+	for index := 0; index < len(text); index++ {
+		switch {
+		case strings.HasPrefix(text[index:], "[["):
+			depth += 1
+			index += 1
+		case strings.HasPrefix(text[index:], "]]") && depth > 0:
+			depth -= 1
+			index += 1
+		case depth == 0:
+			result.WriteByte(text[index])
+		}
+	}
+	return result.String()
+}
+
+// One module at two versions, each with its own license file: the root's legs link the first and
+// mlsinterop's the second. mlsinterop requires nothing of the root, so it selects versions of its own,
+// and its test leg is the table's last, which is what a rule keeping one version per module would read.
+func newVersionSkewFixture(t *testing.T, spdx string, rootVersion string, rootLicense string, mlsinteropVersion string, mlsinteropLicense string) *fixture {
+	t.Helper()
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64", "tests mlsinterop linux/amd64")
+	for directory, license := range map[string]string{"skewed-root": rootLicense, "skewed-mlsinterop": mlsinteropLicense} {
+		fixture.writeSibling(directory+"/go.mod", "module example.com/skewed\n\ngo 1.27.3\n")
+		fixture.writeSibling(directory+"/LICENSE", license)
+		fixture.writeSibling(directory+"/skewed.go", "package skewed\n")
+	}
+	fixture.requireLocal("example.com/skewed", rootVersion, "skewed-root")
+	fixture.write("skewed.go", "package sidecar\n\nimport _ \"example.com/skewed\"\n")
+	fixture.edit("mlsinterop/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire example.com/skewed "+mlsinteropVersion+"\n\nreplace example.com/skewed => ../../skewed-mlsinterop\n")
+	fixture.write("mlsinterop/skewed.go", "package mlsinterop\n\nimport _ \"example.com/skewed\"\n")
+	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: example.com/skewed\n    spdx: "+spdx+"\n    reason: two modules of this repository select it apart\n    leg: [client, test]\n")
+	return fixture
+}
+
+// A relicensed release on a shipped leg is not cleared by an older copy on a test leg.
+func TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo(t *testing.T) {
+	fixture := newVersionSkewFixture(t, "MIT", "v1.1.0", fixtureMitLicense+"Business Source License 1.1\n", "v1.0.0", fixtureMitLicense)
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"example.com/skewed's LICENSE has \"business source license\", at v1.1.0",
+		"example.com/skewed's LICENSE holds words beyond MIT, so it is another license or a custom one: it leaves MIT at \"business source license 1 1\", at v1.1.0")
+}
+
+// The control: two versions that each back the row pass.
+func TestDepsAllowsTwoVersionsThatBothBackTheRow(t *testing.T) {
+	fixture := newVersionSkewFixture(t, "MIT", "v1.1.0", fixtureMitLicense, "v1.0.0", fixtureMitLicense)
+	wantFindings(t, fixture.open().licenseRowFindings(t))
 }

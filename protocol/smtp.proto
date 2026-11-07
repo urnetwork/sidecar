@@ -1,5 +1,8 @@
-// §14.5's preamble and proofs, which smtpedge sees (§2.8's smtp-1, smtp-2). SmtpOutcome and SmtpStatus have numbers
-// in §6.11 and no message in §14, so neither is here.
+// §14.5's preamble and proofs, which smtpedge sees (§2.8's smtp-1, smtp-2).
+//
+// §14.8 lists what SmtpOutcome reports and §14.14 what SmtpStatus says, and §6.11 numbers both, so neither is
+// unwritten, but neither has fields yet. This file took §14's fenced blocks, and SMTP-M9-01 brings the two with
+// plan-SMTP-wire-gaps, which asks where SmtpOutcome rides.
 
 syntax = "proto3";
 package urnetwork.sidecar;

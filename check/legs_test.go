@@ -2,7 +2,8 @@
 
 // §4.7's legs: every build this repository ships, and the test builds beside them, each read through
 // go list -deps. A leg's closure is what the deps, legs, cgo and hook rows read, so a leg that names
-// the wrong environment would pass them all; TestLegsReadTheirOwnBuildConfiguration holds that.
+// the wrong environment would pass them all; TestLegsReadTheirOwnBuildConfiguration holds that. Each
+// leg also compiles, in legs_compile_test.go.
 
 package check
 
@@ -78,7 +79,7 @@ var deviceRolePatterns = []string{"./protocol/bridge", "./device"}
 var allPatterns = []string{"./..."}
 
 // Every leg. This mirrors sdk/dependency_boundary_test.go:81-92, which
-// TestLegsCoverEverySdkLeg holds, and adds §4.7's sidecar_http js leg and the CLI's six release
+// sdkLegRowFindings holds, and adds §4.7's sidecar_http js leg and the CLI's six release
 // targets, then a leg for each module nothing else reads. Each row's cgo is explicit where sdk
 // leaves it to the host, because a leg is what it names on any machine.
 func defaultBuildLegs() []*buildLeg {

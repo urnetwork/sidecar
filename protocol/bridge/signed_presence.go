@@ -35,8 +35,14 @@ const (
 	webAuthnAuthenticatorDataMinSize      = sha256.Size + 1 + 4
 )
 
-// §16.6's "profile's per-platform list", which a countersignature's origin must be on. It holds one origin until
-// plan-MCP-presence-origins.md is answered, so any other, an Android passkey's among them, is refused.
+// §16.6's "profile's per-platform list" (QD-073): the client data's origin of every webauthn-es256 assertion, per use
+// or a countersignature, equals one of these byte for byte, with no subdomain, prefix or wildcard. https://ur.io is what
+// iOS and macOS passkeys, Windows Hello through the platform WebAuthn API and a FIDO key over CTAP2, whose client data
+// ur writes, report. Android's entry is android:apk-key-hash: and the unpadded base64url SHA-256 of the one certificate
+// that signs released builds, which the owner supplies and which lands with M8's Android host. Until then every Android
+// passkey is refused, and a debug-signed build always is, since the origin is what tells it from a release.
+//
+// A release changes these values, so tests verify against testdata/signed/origins.json's fixture origins instead.
 var webAuthnOrigins = [...]string{"https://ur.io"}
 
 // §7.9's act: m is 1 to 65,535, so its deepest leaf has 16 hashes to the root.
@@ -90,7 +96,7 @@ func PresenceActPath(statementDigests [][sha256.Size]byte, actIndex uint32) ([][
 
 // Checks signed.webauthn as §7.9's presence countersignature by the key its key_id names, keyAlg and publicKey being
 // that key's: hashes signed's own signed bytes as its leaf, walks its inclusion path to the act's root, and runs
-// §16.6's countersign check over the countersigned bytes they give, with UV and the signCount not compared. The
+// §16.6's countersign check over the countersigned bytes they give, UV set and the signCount not compared: the
 // statement's nonce and §7.9's replay row refuse a reuse, and a verifier of one statement holds no counter.
 //
 // A nil says this key countersigned this purpose, type and body in an act of this signer_id, and nothing more. So a
@@ -102,6 +108,18 @@ func PresenceActPath(statementDigests [][sha256.Size]byte, actIndex uint32) ([][
 // access control the key was created with, which no verifier can see (§16.6). For SignedKeyAlgWebAuthnEs256 the rp id
 // hash, client data type and origin come from this file's table.
 func VerifyPresenceCountersign(signed *Signed, purpose string, keyAlg SignedKeyAlg, publicKey []byte) error {
+	return verifyPresenceCountersign(signed, purpose, keyAlg, publicKey, webAuthnOrigins[:])
+}
+
+// VerifyPresenceCountersign's checks with origins in place of webAuthnOrigins. Only tests pass another list, the
+// fixture origins in testdata/, so no test needs a release's value (QD-073).
+func verifyPresenceCountersign(
+	signed *Signed,
+	purpose string,
+	keyAlg SignedKeyAlg,
+	publicKey []byte,
+	origins []string,
+) error {
 	if signed == nil {
 		return ErrSignedMissing
 	}
@@ -145,12 +163,8 @@ func VerifyPresenceCountersign(signed *Signed, purpose string, keyAlg SignedKeyA
 		return verifyP256Signature(publicKey, digest[:], evidence.GetSignature())
 
 	case SignedKeyAlgWebAuthnEs256:
-		origin, err := checkWebAuthnAssertion(evidence, countersignedBytes)
-		if err != nil {
+		if err := checkWebAuthnAssertion(evidence, countersignedBytes, origins); err != nil {
 			return err
-		}
-		if !slices.Contains(webAuthnOrigins[:], origin) {
-			return fmt.Errorf("%w: origin %q", ErrSignedEvidence, origin)
 		}
 		return verifyWebAuthnSignature(evidence, evidence.GetSignature(), publicKey)
 
@@ -160,20 +174,20 @@ func VerifyPresenceCountersign(signed *Signed, purpose string, keyAlg SignedKeyA
 }
 
 // §16.6's webauthn-es256 checks that come before the signature, over message, a statement's signed bytes or an act's
-// countersigned bytes: the rp id hash, UP and UV, the client data's type, and a challenge that is message's SHA-256.
-// Returns the client data's origin, for a caller holding the list it must be on.
-func checkWebAuthnAssertion(evidence *WebAuthnEvidence, message []byte) (string, error) {
+// countersigned bytes: the rp id hash, UP and UV, the client data's type, a challenge that is message's SHA-256, and an
+// origin equal to one of origins. Both checks call this, so neither can leave the origin to its caller.
+func checkWebAuthnAssertion(evidence *WebAuthnEvidence, message []byte, origins []string) error {
 	authenticatorData := evidence.GetAuthenticatorData()
 	if len(authenticatorData) < webAuthnAuthenticatorDataMinSize {
-		return "", fmt.Errorf("%w: authenticator data of %d bytes", ErrSignedEvidence, len(authenticatorData))
+		return fmt.Errorf("%w: authenticator data of %d bytes", ErrSignedEvidence, len(authenticatorData))
 	}
 	rpIdHash := sha256.Sum256([]byte(webAuthnRpId))
 	if !bytes.Equal(authenticatorData[:sha256.Size], rpIdHash[:]) {
-		return "", fmt.Errorf("%w: rp id hash", ErrSignedEvidence)
+		return fmt.Errorf("%w: rp id hash", ErrSignedEvidence)
 	}
 	requiredFlags := webAuthnFlagUserPresent | webAuthnFlagUserVerified
 	if authenticatorData[webAuthnFlagsOffset]&requiredFlags != requiredFlags {
-		return "", fmt.Errorf("%w: UP or UV unset", ErrSignedEvidence)
+		return fmt.Errorf("%w: UP or UV unset", ErrSignedEvidence)
 	}
 
 	var clientData struct {
@@ -182,16 +196,19 @@ func checkWebAuthnAssertion(evidence *WebAuthnEvidence, message []byte) (string,
 		Origin    string `json:"origin"`
 	}
 	if err := json.Unmarshal(evidence.GetClientDataJson(), &clientData); err != nil {
-		return "", fmt.Errorf("%w: client data: %w", ErrSignedEvidence, err)
+		return fmt.Errorf("%w: client data: %w", ErrSignedEvidence, err)
 	}
 	if clientData.Type != webAuthnClientDataTypeGet {
-		return "", fmt.Errorf("%w: client data type", ErrSignedEvidence)
+		return fmt.Errorf("%w: client data type", ErrSignedEvidence)
 	}
 	challenge := sha256.Sum256(message)
 	if clientData.Challenge != base64.RawURLEncoding.EncodeToString(challenge[:]) {
-		return "", fmt.Errorf("%w: challenge", ErrSignedEvidence)
+		return fmt.Errorf("%w: challenge", ErrSignedEvidence)
 	}
-	return clientData.Origin, nil
+	if !slices.Contains(origins, clientData.Origin) {
+		return fmt.Errorf("%w: origin %q", ErrSignedEvidence, clientData.Origin)
+	}
+	return nil
 }
 
 // Checks §16.6's DER ECDSA P-256 signature over authenticatorData || SHA-256(clientDataJSON), which is Signed.signature

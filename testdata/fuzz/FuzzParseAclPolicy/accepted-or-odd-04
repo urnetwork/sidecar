@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"hosts\": {\"192\": \"192.0.2.1\"}, \"grants\": [{\"src\": [\"tag:a\"], \"dst\": [\"ip:192\"], \"allow\": [\"route\"]}]}")
