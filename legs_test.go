@@ -119,7 +119,9 @@ func goListDeps(t *testing.T, env []string, args ...string) []string {
 }
 
 // A Worker's globals, in node: no process, so net/http's fetch path runs, and a fetch that records what
-// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths.
+// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. Exit
+// ends node at once, as go's own wasm_exec_node.js does: a run that allocated leaves the runtime a
+// timer pending, and one firing after exit throws, which would fail a leg whose tests passed.
 const workerHarness = `
 const fs = require("fs");
 const nodeProcess = process;
@@ -133,7 +135,7 @@ globalThis.fetch = (url, options) => {
 };
 const go = new Go();
 go.argv = [wasmPath, ...testArgs];
-go.exit = (code) => { nodeProcess.exitCode = code; };
+go.exit = (code) => nodeProcess.exit(code);
 WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.then((result) => go.run(result.instance))
 	.catch((err) => { console.error(err); nodeProcess.exitCode = 1; });
