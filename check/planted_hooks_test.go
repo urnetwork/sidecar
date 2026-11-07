@@ -283,6 +283,16 @@ func TestHygieneFailsOnAHookWithAnotherSignature(t *testing.T) {
 	wantFindings(t, fixture.open().hookPairFindings(t), "testHookBarrier(name string) is not §22.4's signature")
 }
 
+// go build follows an import into testdata, where the walks do not go, so a leg can link a file no
+// source rule has read. That fails whatever the file says: the rules cannot vouch for it.
+func TestHygieneFailsOnALegLinkingAFileTheRulesSkip(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli linux/amd64")
+	fixture.write("testdata/planted/planted.go", "package planted\n")
+	fixture.write("cli/planted.go", "package main\n\nimport _ \"@module@/testdata/planted\"\n")
+	wantFindings(t, fixture.open().legHookFileFindings(t), "cli linux/amd64 links planted.go in @module@/testdata/planted, which no source rule read")
+}
+
 func TestHygieneFailsOnAMakefileBuildingWithTheTag(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("Makefile", "# tests run under sidecar_testhooks too\ncheck:\n\t$(GO) test -tags sidecar_testhooks .\n\tgo test -tags sidecar_leaktest .\n")

@@ -269,7 +269,7 @@ var failsOnRows = []failsOnRow{
 		rule: (*repository).legHookFileFindings,
 		plantedTests: []string{
 			"TestHygieneFailsOnALegLinkingTheRootHookFile", "TestHygieneFailsOnALegLinkingAPackagesHookFile",
-			"TestHygieneFailsOnAHookFileAnotherConstraintLetsIn",
+			"TestHygieneFailsOnAHookFileAnotherConstraintLetsIn", "TestHygieneFailsOnALegLinkingAFileTheRulesSkip",
 		},
 	},
 	{

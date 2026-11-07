@@ -148,7 +148,12 @@ func (self *repository) legHookFileFindings(t testing.TB) []string {
 			}
 			for _, goFile := range listed.GoFiles {
 				file, known := bySourcePath[filepath.Join(listed.Dir, goFile)]
-				if !known || file.constraint == nil {
+				if !known {
+					// the walks skip testdata and the documents, but an import does not
+					findings = append(findings, findingf("%s links %s in %s, which no source rule read", leg.name, goFile, listed.ImportPath))
+					continue
+				}
+				if file.constraint == nil {
 					continue
 				}
 				for _, tag := range unshippableTags {
