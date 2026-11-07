@@ -317,7 +317,8 @@ func (self *FakeMls) heldKeyPackage(ref []byte) *fakeMlsKeyPackage {
 
 // A Welcome's join under keyPackage, completed: the group at epoch, as adoptWithLock lets a join move it, and a
 // one-time KeyPackage's private key dropped, so no Welcome under it joins again (RFC 9420 §16.8; §10.6's
-// KeyPackages). One already dropped refuses, as a second pending join of one Welcome would find it.
+// KeyPackages). One already dropped refuses, as a pending join opened under it before the first completed finds it,
+// another group's Welcome included.
 func (self *FakeMls) join(keyPackage *fakeMlsKeyPackage, epoch *fakeMlsEpoch) (sidecar.MlsGroup, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
