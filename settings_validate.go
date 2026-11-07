@@ -67,6 +67,12 @@ func (self *SidecarSettings) validate() error {
 	if err := checkSettingsNumbers("SidecarSettings", reflect.ValueOf(self).Elem(), false); err != nil {
 		return err
 	}
+	if err := self.ProtocolSettings.validate(); err != nil {
+		return err
+	}
+	if MaxStreamDataByteCount < self.StreamChunkByteCount {
+		return fmt.Errorf("%w: StreamChunkByteCount is past StreamData's limit", errInvalidSettings)
+	}
 	if !slices.Contains([]string{"background", "wifi_charging", "on_demand", "never"}, self.Search.AllPolicy) {
 		return fmt.Errorf("%w: Search.AllPolicy is not one of §18.4's modes", errInvalidSettings)
 	}
