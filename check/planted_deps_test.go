@@ -280,6 +280,50 @@ func TestDepsFailsOnAnExceptionAtAnotherVersion(t *testing.T) {
 		"src.agwa.name/tlshacks's license text has")
 }
 
+// One module at two versions, each with its own license file: the root's legs link the first and
+// mlsinterop's the second. mlsinterop requires nothing of the root, so it selects versions of its own,
+// and its test leg is the table's last, which is what a rule keeping one version per module would read.
+func newVersionSkewFixture(t *testing.T, spdx string, rootVersion string, rootLicense string, mlsinteropVersion string, mlsinteropLicense string) *fixture {
+	t.Helper()
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64", "tests mlsinterop linux/amd64")
+	for directory, license := range map[string]string{"skewed-root": rootLicense, "skewed-mlsinterop": mlsinteropLicense} {
+		fixture.writeSibling(directory+"/go.mod", "module example.com/skewed\n\ngo 1.27.3\n")
+		fixture.writeSibling(directory+"/LICENSE", license)
+		fixture.writeSibling(directory+"/skewed.go", "package skewed\n")
+	}
+	fixture.requireLocal("example.com/skewed", rootVersion, "skewed-root")
+	fixture.write("skewed.go", "package sidecar\n\nimport _ \"example.com/skewed\"\n")
+	fixture.edit("mlsinterop/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire example.com/skewed "+mlsinteropVersion+"\n\nreplace example.com/skewed => ../../skewed-mlsinterop\n")
+	fixture.write("mlsinterop/skewed.go", "package mlsinterop\n\nimport _ \"example.com/skewed\"\n")
+	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: example.com/skewed\n    spdx: "+spdx+"\n    reason: two modules of this repository select it apart\n    leg: [client, test]\n")
+	return fixture
+}
+
+// A relicensed release on a shipped leg is not cleared by an older copy on a test leg.
+func TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo(t *testing.T) {
+	fixture := newVersionSkewFixture(t, "MIT", "v1.1.0", fixtureMitLicense+"Business Source License 1.1\n", "v1.0.0", fixtureMitLicense)
+	wantFindings(t, fixture.open().licenseRowFindings(t), "example.com/skewed's license text has \"business source license\", at v1.1.0")
+}
+
+// An exception names one version, so another leg's version does not pass because of it.
+func TestDepsFailsOnAnExceptionCoveringOneVersionOfTwo(t *testing.T) {
+	licenseText := fixtureMitLicense + "The name(s) of the copyright holders shall not be used in advertising.\n"
+	fixture := newVersionSkewFixture(t, "X11", "v0.0.5", licenseText, "v0.0.4", licenseText)
+	fixture.settings.licenseExceptions = map[string]licenseException{
+		"example.com/skewed": {version: "v0.0.4", spdx: "X11", question: "example.md"},
+	}
+	wantFindings(t, fixture.open().licenseRowFindings(t),
+		"example.com/skewed is X11, which §4.7 does not allow, at v0.0.5",
+		"example.com/skewed's license text has \"shall not be used in advertising\", at v0.0.5")
+}
+
+// The control: two versions that each back the row pass.
+func TestDepsAllowsTwoVersionsThatBothBackTheRow(t *testing.T) {
+	fixture := newVersionSkewFixture(t, "MIT", "v1.1.0", fixtureMitLicense, "v1.0.0", fixtureMitLicense)
+	wantFindings(t, fixture.open().licenseRowFindings(t))
+}
+
 func TestDepsFailsOnAStaleLicenseException(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.settings.licenseExceptions = map[string]licenseException{

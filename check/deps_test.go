@@ -460,24 +460,35 @@ func (self *checkSettings) licenseFindings(row *dependencyRow, version string, l
 	return findings
 }
 
-// Every row's id against §4.7's list, and every linked module's files against its row. A planned
+// One copy of a module some leg links.
+type linkedModuleCopy struct {
+	directory string
+	version   string
+}
+
+// Every row's id against §4.7's list, and the files of every copy a leg links against its row. Each
+// module of this repository selects versions of its own, and mlsinterop requires nothing of the root,
+// so a module can stand at two versions: one copy's files say nothing about the other's. A planned
 // row has no files to read yet, so its id alone is checked, and its module joins the file check the
 // moment a leg links it, planned or not.
 func (self *repository) licenseRowFindings(t testing.TB) []string {
 	t.Helper()
 	rowsByModule, findings := self.dependencyRows(t)
-	moduleDirectories := map[string]string{}
-	moduleVersions := map[string]string{}
+	moduleCopies := map[string]map[linkedModuleCopy]bool{}
 	for _, leg := range self.legs {
 		for _, listed := range self.closure(t, leg) {
-			if listed.Module != nil {
-				moduleDirectories[firstPartyBase(listed.Module.Path)] = listed.Module.Dir
-				moduleVersions[firstPartyBase(listed.Module.Path)] = listed.Module.Version
+			if listed.Module == nil {
+				continue
 			}
+			modulePath := firstPartyBase(listed.Module.Path)
+			if moduleCopies[modulePath] == nil {
+				moduleCopies[modulePath] = map[linkedModuleCopy]bool{}
+			}
+			moduleCopies[modulePath][linkedModuleCopy{directory: listed.Module.Dir, version: listed.Module.Version}] = true
 		}
 	}
 	for modulePath, row := range rowsByModule {
-		directory, linked := moduleDirectories[modulePath]
+		copies, linked := moduleCopies[modulePath]
 		if !linked {
 			for _, id := range licenseIds(row.spdx) {
 				if !slices.Contains(self.settings.allowedLicenses, id) {
@@ -486,11 +497,15 @@ func (self *repository) licenseRowFindings(t testing.TB) []string {
 			}
 			continue
 		}
-		licenseText, err := readLicenseText(directory)
-		if err != nil {
-			t.Fatal(err)
+		for linkedCopy := range copies {
+			licenseText, err := readLicenseText(linkedCopy.directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, finding := range self.settings.licenseFindings(row, linkedCopy.version, licenseText) {
+				findings = append(findings, findingf("%s, at %s", finding, linkedCopy.version))
+			}
 		}
-		findings = append(findings, self.settings.licenseFindings(row, moduleVersions[modulePath], licenseText)...)
 	}
 	slices.Sort(findings)
 	return findings

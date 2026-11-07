@@ -91,6 +91,7 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestDepsFailsOnARefusedLicenseId", "TestDepsFailsOnAnUnlicensedModule", "TestDepsFailsOnAGplFileUnderAnMitRow",
 			"TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow", "TestDepsFailsOnAnExceptionAtAnotherVersion",
+			"TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo", "TestDepsFailsOnAnExceptionCoveringOneVersionOfTwo",
 		},
 	},
 	{
