@@ -90,6 +90,20 @@ func TestAFindingSaysWhereAndWhich(t *testing.T) {
 	t.Error("no finding")
 }
 
+// A loop's keys are read again as another pass, so a tag from the loop is two tags, not one shared.
+func TestALoopsPassReadsAsAnotherValue(t *testing.T) {
+	for _, finding := range plantedFindings(t) {
+		if finding.Function != "badATagFromTheLoop" {
+			continue
+		}
+		if !strings.Contains(finding.Message, "{scp_<clientId>}tok, {scp_<clientId on another pass>}tok") {
+			t.Errorf("%s", finding)
+		}
+		return
+	}
+	t.Error("no finding")
+}
+
 // A package that does not build is an error, never a pass.
 func TestAPackageThatDoesNotLoadIsNoPass(t *testing.T) {
 	if findings, err := Check(".", "./testdata/no-such-package"); err == nil {
@@ -114,6 +128,34 @@ func TestScriptKeyProblems(t *testing.T) {
 		{source: `redis.call('GET', ARGV[1])`, problems: 1},
 		{source: `redis.call('GET', 'a' .. KEYS[1])`, problems: 1},
 		{source: "local a = 'x'\nredis.call('GET', a)", problems: 1},
+		// every key position, not the first alone
+		{source: "redis.call('DEL', KEYS[1], 'literal')", problems: 1},
+		{source: "redis.call('MGET', KEYS[1], ARGV[1])", problems: 1},
+		{source: "redis.call('RENAME', KEYS[1], ARGV[1])", problems: 1},
+		{source: "redis.call('DEL', KEYS[1], KEYS[2])", problems: 0},
+		{source: "redis.call('MSET', KEYS[1], ARGV[1], KEYS[2], ARGV[2])", problems: 0},
+		{source: "redis.call('MSET', KEYS[1], ARGV[1], 'literal', ARGV[2])", problems: 1},
+		{source: "redis.call('SET', KEYS[1], redis.call('GET', 'literal'))", problems: 1},
+		{source: "redis.call('DEL', unpack(KEYS))", problems: 0},
+		// commands with a subcommand or a keyword before their keys
+		{source: "redis.call('XGROUP', 'CREATE', 'literal', 'g', '$')", problems: 1},
+		{source: "redis.call('XINFO', 'STREAM', 'literal')", problems: 1},
+		{source: "redis.call('OBJECT', 'ENCODING', KEYS[1])", problems: 0},
+		{source: "redis.call('XREADGROUP', 'GROUP', 'g', 'c', 'COUNT', 1, 'STREAMS', KEYS[1], '>')", problems: 0},
+		{source: "redis.call('XREAD', 'STREAMS', 'literal', '0')", problems: 1},
+		{source: "redis.call('XREAD', 'COUNT', 1)", problems: 1},
+		// locals and loops
+		{source: "local k = KEYS[1]\nk = ARGV[1]\nredis.call('GET', k)", problems: 1},
+		{source: "local k = KEYS[1]\nlocal x, k = 1, ARGV[1]\nredis.call('GET', k)", problems: 1},
+		{source: "for _, key in ipairs(KEYS) do redis.call('DEL', key) end", problems: 0},
+		{source: "KEYS[1] = ARGV[1]\nredis.call('GET', KEYS[1])", problems: 1},
+		// what it cannot read
+		{source: "local command = 'GET'\nredis.call(command, 'literal')", problems: 1},
+		{source: "local call = redis.call\ncall('GET', 'literal')", problems: 1},
+		{source: "redis.call('EVAL', 'return 1', 0)", problems: 1},
+		// a comment is no call
+		{source: "-- redis.call('GET', 'literal')\nredis.call('GET', KEYS[1])", problems: 0},
+		{source: "--[[ redis.call('GET', 'literal') ]]\nredis.call('GET', KEYS[1])", problems: 0},
 	} {
 		if got := len(scriptKeyProblems(c.source)); got != c.problems {
 			t.Errorf("%s: %d problems: %v", c.source, got, scriptKeyProblems(c.source))

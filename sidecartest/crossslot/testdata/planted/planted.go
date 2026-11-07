@@ -217,3 +217,117 @@ func badARecursiveBuilderStops(ctx context.Context, self *store) {
 func badABuilderOfTwoStatements(ctx context.Context, self *store) {
 	self.redis.Delete(ctx, []string{twoStepKey(self.clientId), ackKey(self.clientId)})
 }
+
+// Not a builder, being two statements: what it returns differs from call to call.
+func (self *store) nextId() string {
+	self.clientId += "x"
+	return self.clientId
+}
+
+// Writes the list it is given, out of the caller's sight.
+func fill(keys []string) {
+	keys[0] = "{b}1"
+}
+
+// The common Go shape: a list made at its length and filled by index. An element made empty is a key
+// nobody named, so the list cannot be read.
+func badAListMadeAtItsLength(ctx context.Context, self *store, clientIds []string) {
+	keys := make([]string, len(clientIds))
+	for index, clientId := range clientIds {
+		keys[index] = ackKey(clientId)
+	}
+	self.redis.GetMany(ctx, keys)
+}
+
+// An element set by index may replace any key, so the list holds both.
+func badAnElementReplaced(ctx context.Context, self *store) {
+	keys := []string{"{a}x", "{a}y"}
+	keys[1] = "{b}y"
+	self.redis.Delete(ctx, keys)
+}
+
+func goodAnElementReplacedUnderItsTag(ctx context.Context, self *store) {
+	keys := []string{"{a}x", "{a}y"}
+	keys[1] = "{a}z"
+	self.redis.Delete(ctx, keys)
+}
+
+// Each pass's tag is another id's, though it reads the same in source.
+func badATagFromTheLoop(ctx context.Context, self *store, clientIds []string) {
+	keys := []string{}
+	for _, clientId := range clientIds {
+		keys = append(keys, fmt.Sprintf("{scp_%s}tok", clientId))
+	}
+	self.redis.GetMany(ctx, keys)
+}
+
+// A closure runs as often as it is called.
+func badAClosureCalledTwice(ctx context.Context, self *store) {
+	keys := []string{}
+	add := func(clientId string) {
+		keys = append(keys, ackKey(clientId))
+	}
+	add(self.clientId)
+	add(self.otherId)
+	self.redis.Delete(ctx, keys)
+}
+
+// A call in the loop may answer differently on each pass.
+func badACallInTheLoop(ctx context.Context, self *store, names []string) {
+	keys := []string{}
+	for range names {
+		keys = append(keys, clientKey(self.nextId(), "a"))
+	}
+	self.redis.GetMany(ctx, keys)
+}
+
+// Made once, before the loop: one value on every pass.
+func goodACallBeforeTheLoop(ctx context.Context, self *store, names []string) {
+	clientId := self.nextId()
+	keys := []string{}
+	for _, name := range names {
+		keys = append(keys, clientKey(clientId, name))
+	}
+	self.redis.GetMany(ctx, keys)
+}
+
+// A list declared in the loop starts again on each pass.
+func goodAListPerPass(ctx context.Context, self *store, clientIds []string) {
+	for _, clientId := range clientIds {
+		keys := []string{}
+		keys = append(keys, ackKey(clientId))
+		keys = append(keys, tokKey(clientId))
+		self.redis.GetMany(ctx, keys)
+	}
+}
+
+func badAListPassedToACall(ctx context.Context, self *store) {
+	keys := []string{"{a}1", "{a}2"}
+	fill(keys)
+	self.redis.Delete(ctx, keys)
+}
+
+func badAListAliased(ctx context.Context, self *store) {
+	keys := []string{"{a}1", "{a}2"}
+	other := keys
+	other[0] = "{b}1"
+	self.redis.Delete(ctx, keys)
+}
+
+// clientId holds two values, read once each.
+func badAVariableWrittenTwice(ctx context.Context, self *store) {
+	clientId := self.clientId
+	first := ackKey(clientId)
+	clientId = self.otherId
+	second := ackKey(clientId)
+	self.redis.Delete(ctx, []string{first, second})
+}
+
+// The declaration's value is the one the list holds, not the later assignment's.
+func badADeclaredValueHidden(ctx context.Context, self *store) {
+	var key = "{b}1"
+	keys := []string{key, "{a}2"}
+	key = "{a}1"
+	self.redis.Delete(ctx, keys)
+	_ = key
+}
