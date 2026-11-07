@@ -237,7 +237,8 @@ message GkmWrapBatch {
 }
 message GkmWrapResult {
   uint32 status = 1;             // 201, 412, 403, 409 or 429, as for one delivery, or 0 for not tried
-  bytes winner = 2;              // a 412's Signed delivery
+  bytes winner = 2;              // a 412's winner, the bytes its object holds: a Signed delivery at the wraps route, and
+                                 //   a RecoveryWrap's bare ciphertext at the recovery-wraps route, which is unsigned
 }
 message GkmWrapBatchReply {
   repeated GkmWrapResult results = 1;

@@ -1925,7 +1925,7 @@ func (x *GkmWrapBatch) GetDeliveries() [][]byte {
 type GkmWrapResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        uint32                 `protobuf:"varint,1,opt,name=status,proto3" json:"status,omitempty"` // 201, 412, 403, 409 or 429, as for one delivery, or 0 for not tried
-	Winner        []byte                 `protobuf:"bytes,2,opt,name=winner,proto3" json:"winner,omitempty"`  // a 412's Signed delivery
+	Winner        []byte                 `protobuf:"bytes,2,opt,name=winner,proto3" json:"winner,omitempty"`  // a 412's winner, the bytes its object holds: a Signed delivery at the wraps route, and
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
