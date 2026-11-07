@@ -304,10 +304,10 @@ func TestEveryBodyKeepsUnknownFields(t *testing.T) {
 // the message, and a mutated name still lands on one, so a run spends its time in decoders.
 func FuzzBody(f *testing.F) {
 	types := testBodyTypes(f)
-	typesByName := map[string]protoreflect.MessageType{}
+	nameMessageTypes := map[string]protoreflect.MessageType{}
 	for _, messageType := range types {
 		name := string(messageType.Descriptor().Name())
-		typesByName[name] = messageType
+		nameMessageTypes[name] = messageType
 		canonical := testEncode(f, testFilled(messageType))
 		f.Add(name, canonical)
 		f.Add(name, testReordered(f, canonical))
@@ -317,7 +317,7 @@ func FuzzBody(f *testing.F) {
 		f.Add(name, append(slices.Clone(canonical), testUnknownField()...))
 	}
 	f.Fuzz(func(t *testing.T, name string, body []byte) {
-		messageType := typesByName[name]
+		messageType := nameMessageTypes[name]
 		if messageType == nil {
 			messageType = types[crc32.ChecksumIEEE([]byte(name))%uint32(len(types))]
 		}

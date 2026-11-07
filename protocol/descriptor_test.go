@@ -19,8 +19,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// §4.9: one protobuf package across protocol and protocol/bridge, never connect's "bringyour".
 const testProtoPackage = "urnetwork.sidecar"
 
+// §4.4's files and those the service sections add, each registered by its root-relative path.
 var testProtoFiles = []string{
 	"protocol/acl.proto",
 	"protocol/config.proto",
