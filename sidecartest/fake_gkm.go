@@ -8,10 +8,16 @@
 // What it keeps of §10:
 //
 //   - a client acts only on a verified state, from AuthAdvanced, and refuses with ErrGkmUnavailable before one;
-//   - each generation goes to the readers its rotator's state names, as staged deliveries do, and a reader asking
-//     later gets the newest, as a late delivery gives it, so a sidecar dropped before a rotation holds nothing of the
-//     new generation and keeps what it held;
-//   - EnsureWritable refuses a non-writer and rotates when the newest generation does not cover the repo's
+//   - each generation goes to the readers its rotator's state names, as staged deliveries do. A reader its own
+//     state names asks for the newest later, and gets it only as §10.9's late row lets a holder deliver it: from a
+//     holder of it whose own newest state is at or past the generation's auth pin and names both as readers, at that
+//     state. A sidecar dropped before a rotation therefore holds nothing of the new generation, however far behind
+//     its own state is, and keeps what it held;
+//   - a client uses a delivery only once its state reaches the delivery's pin, gen/<g>'s for a staged one and its
+//     deliverer's for a late one (§10.9's judged row), and until then waits with ErrGkmAuthAhead;
+//   - EnsureWritable and RotateRepo act only for a writer whose state reaches the newest generation's pin and
+//     which holds that generation, never sealing to or rotating from an older one (ErrGkmAuthAhead or
+//     ErrGkmKeyMissing until then). EnsureWritable rotates when the newest does not cover the repo's
 //     holders_shrunk_at, or a sidecar holding it reads no more (cause REMOVE), or it is ScheduleInterval old (cause
 //     SCHEDULE); RotateRepo rotates now, REMOVE or REQUEST by the same test;
 //   - DropKey keeps the depositor rule as far as this fake sees: coverage, the drop key's expiry and a pin that never
@@ -20,8 +26,13 @@
 //
 // What it does not keep: MLS, whose fake is FakeMls, so no epoch object, Welcome or LeafWrap is written, and the
 // GenWrap a client opens is under a KEK of this fake's own; KeyHolders and expiries (KEYS-M2-03), so deliveries
-// follow RepoReaders, holders_sha256 comes from FakeGkmSettings.HoldersSha256 and no expiry rotates; staged and late
-// wraps as objects; and gkm's route and scope checks. Safe for concurrent use.
+// follow RepoReaders, holders_sha256 comes from FakeGkmSettings.HoldersSha256 and no expiry rotates; ReaderKeys,
+// hint timing, and gkm's own late check that the recipient reads the repo in gkm's newest state, so any holder that
+// may deliver does so at once, and what a removed reader gets here is what the holders' rules alone give it, as the
+// revocation suite needs; staged and late wraps as objects; and gkm's route and scope checks.
+//
+// Safe for concurrent use. Locks nest one way: rotateLock, then the fake's stateLock or one client's stateLock,
+// never two stateLocks at once.
 
 package sidecartest
 
@@ -34,6 +45,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -87,6 +99,8 @@ type FakeGkm struct {
 
 	stateLock   sync.Mutex
 	repoIdRepos map[sidecar.Id]*fakeGkmRepo
+	// each sidecar's newest client, which answers for it as a holder that may deliver late
+	sidecarIdClients map[sidecar.Id]*fakeGkmClient
 }
 
 // One repo's group and ladder.
@@ -99,8 +113,9 @@ type fakeGkmRepo struct {
 	// by generation, from 1
 	keys     []*sidecar.EvsRepoKey
 	genWraps [][]byte
-	// who each generation was delivered to
-	generationHolders []map[sidecar.Id]bool
+	// who each generation was delivered to, and the pin each delivery is judged at: gen/<g>'s auth for a staged one,
+	// its deliverer's state for a late one. A pin is never changed once stored.
+	generationHolderIdPins []map[sidecar.Id]*bridge.AuthPin
 }
 
 // clock and settings may be nil, for a fresh clock and the defaults. blobs holds the gen/<g> objects.
@@ -112,10 +127,11 @@ func NewFakeGkm(clock Clock, blobs sidecar.BlobStore, settings *FakeGkmSettings)
 		settings = DefaultFakeGkmSettings()
 	}
 	return &FakeGkm{
-		clock:       clock,
-		blobs:       blobs,
-		settings:    settings,
-		repoIdRepos: map[sidecar.Id]*fakeGkmRepo{},
+		clock:            clock,
+		blobs:            blobs,
+		settings:         settings,
+		repoIdRepos:      map[sidecar.Id]*fakeGkmRepo{},
+		sidecarIdClients: map[sidecar.Id]*fakeGkmClient{},
 	}
 }
 
@@ -149,14 +165,19 @@ func (self *FakeGkmSigner) Sign(purpose string, signedType bridge.SignedType, bo
 	}, nil
 }
 
-// One sidecar's client, which signs its GenRotates through sign, as Sidecar.Sign would.
+// One sidecar's client, which signs its GenRotates through sign, as Sidecar.Sign would. A sidecar's newest client
+// answers for it as a holder.
 func (self *FakeGkm) Client(sidecarId sidecar.Id, sign sidecar.GkmSignFunction) sidecar.GkmClient {
-	return &fakeGkmClient{
+	client := &fakeGkmClient{
 		gkm:            self,
 		sidecarId:      sidecarId,
 		sign:           sign,
 		repoIdDropPins: map[sidecar.Id]uint64{},
 	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.sidecarIdClients[sidecarId] = client
+	return client
 }
 
 // The group of a repo and its newest generation, as gkm serves them.
@@ -203,24 +224,16 @@ func (self *FakeGkm) repo(repoId sidecar.Id) *fakeGkmRepo {
 	copied := *repo
 	copied.keys = slices.Clone(repo.keys)
 	copied.genWraps = slices.Clone(repo.genWraps)
-	copied.generationHolders = []map[sidecar.Id]bool{}
-	for _, holders := range repo.generationHolders {
-		copied.generationHolders = append(copied.generationHolders, cloneHolders(holders))
+	copied.generationHolderIdPins = []map[sidecar.Id]*bridge.AuthPin{}
+	for _, holderIdPins := range repo.generationHolderIdPins {
+		// the pins themselves never change, so the copy shares them
+		copied.generationHolderIdPins = append(copied.generationHolderIdPins, maps.Clone(holderIdPins))
 	}
 	return &copied
 }
 
-// A copy of one generation's holders.
-func cloneHolders(holders map[sidecar.Id]bool) map[sidecar.Id]bool {
-	cloned := map[sidecar.Id]bool{}
-	for sidecarId, held := range holders {
-		cloned[sidecarId] = held
-	}
-	return cloned
-}
-
-// Writes gen/<g> signed by sign, then the generation's key, GenWrap and holders, under rotateLock.
-func (self *FakeGkm) claimWithLock(ctx context.Context, repo *fakeGkmRepo, key *sidecar.EvsRepoKey, rotate *protocol.GenRotate, sign sidecar.GkmSignFunction, holders map[sidecar.Id]bool) error {
+// Writes gen/<g> signed by sign, then the generation's key, GenWrap and staged deliveries, under rotateLock.
+func (self *FakeGkm) claimWithLock(ctx context.Context, repo *fakeGkmRepo, key *sidecar.EvsRepoKey, rotate *protocol.GenRotate, sign sidecar.GkmSignFunction, holderIdPins map[sidecar.Id]*bridge.AuthPin) error {
 	signed, err := sidecar.SignGenRotate(rotate, sign)
 	if err != nil {
 		return err
@@ -249,17 +262,72 @@ func (self *FakeGkm) claimWithLock(ctx context.Context, repo *fakeGkmRepo, key *
 	}
 	stored.keys = append(stored.keys, key)
 	stored.genWraps = append(stored.genWraps, genWrap)
-	stored.generationHolders = append(stored.generationHolders, holders)
+	stored.generationHolderIdPins = append(stored.generationHolderIdPins, holderIdPins)
 	return nil
 }
 
-// Gives a sidecar the newest generation, a late delivery.
-func (self *FakeGkm) deliverNewest(repoId sidecar.Id, sidecarId sidecar.Id) {
+// A late delivery of the repo's newest generation to recipientId, unless it holds one (§10.6's late wraps). Only a
+// holder of that generation delivers, at its own newest state, and only if that state opens its own delivery of it,
+// so is at or past gen/<g>'s auth pin, and names both it and the recipient as readers (§10.9's late row). The
+// asker's state decides nothing. Of several such holders the delivery takes the lowest position, which a recipient
+// behind the others reaches first, so the outcome never rests on which one answers first; with none, nothing is
+// delivered.
+func (self *FakeGkm) deliverLate(repoId sidecar.Id, recipientId sidecar.Id) {
+	var generation int
+	holderIdPins := map[sidecar.Id]*bridge.AuthPin{}
+	holderIdClients := map[sidecar.Id]*fakeGkmClient{}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		repo, ok := self.repoIdRepos[repoId]
+		if !ok || len(repo.keys) == 0 {
+			return
+		}
+		generation = len(repo.keys)
+		for holderId, pin := range repo.generationHolderIdPins[generation-1] {
+			if client, ok := self.sidecarIdClients[holderId]; ok {
+				holderIdPins[holderId] = pin
+				holderIdClients[holderId] = client
+			}
+		}
+	}()
+
+	// each holder's state read with no other lock held
+	var deliveryPin *bridge.AuthPin
+	for holderId, holderPin := range holderIdPins {
+		state, err := holderIdClients[holderId].currentState()
+		if err != nil || judgeFakeGkmPin(state, holderPin) != nil {
+			continue
+		}
+		readers := state.RepoReaders(repoId)
+		if !slices.Contains(readers, holderId) || !slices.Contains(readers, recipientId) {
+			continue
+		}
+		if pin := state.Pin(); deliveryPin == nil || pin.GetVersion() < deliveryPin.GetVersion() {
+			deliveryPin = pin
+		}
+	}
+	if deliveryPin == nil {
+		return
+	}
+
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if repo, ok := self.repoIdRepos[repoId]; ok && 0 < len(repo.keys) {
-		repo.generationHolders[len(repo.keys)-1][sidecarId] = true
+	deliveries := self.repoIdRepos[repoId].generationHolderIdPins[generation-1]
+	// one delivery per recipient, the first stored, as If-None-Match keeps it: a staged one is never replaced
+	if _, ok := deliveries[recipientId]; !ok {
+		deliveries[recipientId] = deliveryPin
 	}
+}
+
+// Whether state may act on what was stated or delivered at pin, as §10.9's judged row has it: at or below its tip
+// on its chain, or before what it retains, which it does not judge and holds against no one. ErrGkmAuthAhead above
+// its tip, which waits until the log reaches it, and ErrGkmAuthOffChain off its chain.
+func judgeFakeGkmPin(state sidecar.GkmAuthView, pin *bridge.AuthPin) error {
+	if _, err := state.At(pin); err != nil && !errors.Is(err, sidecar.ErrGkmAuthNotRetained) {
+		return err
+	}
+	return nil
 }
 
 // Drops every generation a sidecar was given.
@@ -267,8 +335,8 @@ func (self *FakeGkm) forget(repoId sidecar.Id, sidecarId sidecar.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if repo, ok := self.repoIdRepos[repoId]; ok {
-		for _, holders := range repo.generationHolders {
-			delete(holders, sidecarId)
+		for _, holderIdPins := range repo.generationHolderIdPins {
+			delete(holderIdPins, sidecarId)
 		}
 	}
 }
@@ -366,11 +434,12 @@ func (self *fakeGkmClient) CreateGroup(ctx context.Context, args *sidecar.GkmCre
 	if err != nil {
 		return nil, err
 	}
-	holders := map[sidecar.Id]bool{self.sidecarId: true}
+	// staged, judged at gen/1's pin
+	holderIdPins := map[sidecar.Id]*bridge.AuthPin{self.sidecarId: generationArgs.Auth}
 	for _, reader := range state.RepoReaders(args.RepoId) {
-		holders[reader] = true
+		holderIdPins[reader] = generationArgs.Auth
 	}
-	if err := self.gkm.claimWithLock(ctx, repo, key, rotate, self.sign, holders); err != nil {
+	if err := self.gkm.claimWithLock(ctx, repo, key, rotate, self.sign, holderIdPins); err != nil {
 		return nil, err
 	}
 	return key, nil
@@ -384,7 +453,7 @@ func (self *fakeGkmClient) needsRemove(repo *fakeGkmRepo, state sidecar.GkmAuthV
 		return true
 	}
 	readers := state.RepoReaders(repo.repoId)
-	for holder := range repo.generationHolders[len(repo.keys)-1] {
+	for holder := range repo.generationHolderIdPins[len(repo.keys)-1] {
 		if !slices.Contains(readers, holder) {
 			return true
 		}
@@ -392,8 +461,9 @@ func (self *fakeGkmClient) needsRemove(repo *fakeGkmRepo, state sidecar.GkmAuthV
 	return false
 }
 
-// A new generation now, delivered to the readers state names, signed by this client.
-func (self *fakeGkmClient) rotateWithLock(ctx context.Context, repo *fakeGkmRepo, state sidecar.GkmAuthView, cause sidecar.GkmCause) (*sidecar.EvsRepoKey, error) {
+// A new generation after parent, the newest as this writer holds it, now: delivered to the readers state names,
+// signed by this client.
+func (self *fakeGkmClient) rotateWithLock(ctx context.Context, repo *fakeGkmRepo, parent *sidecar.EvsRepoKey, state sidecar.GkmAuthView, cause sidecar.GkmCause) (*sidecar.EvsRepoKey, error) {
 	now := self.gkm.clock.Now()
 	generationArgs := &sidecar.GkmGenerationArgs{
 		Cause:         cause,
@@ -404,69 +474,74 @@ func (self *fakeGkmClient) rotateWithLock(ctx context.Context, repo *fakeGkmRepo
 	if self.gkm.takesDeposits(repo.kind) {
 		generationArgs.DropNotAfter = now.Add(self.gkm.settings.DropKeyLifetime)
 	}
-	key, rotate, err := repo.keys[len(repo.keys)-1].NextGeneration(generationArgs)
+	key, rotate, err := parent.NextGeneration(generationArgs)
 	if err != nil {
 		return nil, err
 	}
-	holders := map[sidecar.Id]bool{}
+	// staged, judged at gen/<g>'s pin
+	holderIdPins := map[sidecar.Id]*bridge.AuthPin{}
 	for _, reader := range state.RepoReaders(repo.repoId) {
-		holders[reader] = true
+		holderIdPins[reader] = generationArgs.Auth
 	}
-	if err := self.gkm.claimWithLock(ctx, repo, key, rotate, self.sign, holders); err != nil {
+	if err := self.gkm.claimWithLock(ctx, repo, key, rotate, self.sign, holderIdPins); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-// The repo and this client's state, once it writes the repo. Under rotateLock.
-func (self *fakeGkmClient) writableWithLock(repoId sidecar.Id) (*fakeGkmRepo, sidecar.GkmAuthView, error) {
+// The repo, this client's state and the repo's newest generation as this client holds it, once it writes the repo
+// and may act on that generation. A writer whose state is below gen/<g>'s auth pin cannot judge it and waits for the
+// log (ErrGkmAuthAhead), since a claim from its older state would be refused below its parent's pin (§10.6's claim
+// checks). One the newest was not delivered to has nothing to seal to or rotate from (ErrGkmKeyMissing), and is never
+// given an older generation instead. Under rotateLock, so the newest cannot change before the caller acts.
+func (self *fakeGkmClient) writableWithLock(ctx context.Context, repoId sidecar.Id) (*fakeGkmRepo, sidecar.GkmAuthView, *sidecar.EvsRepoKey, error) {
 	state, err := self.currentState()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !slices.Contains(state.RepoWriters(repoId), self.sidecarId) {
-		return nil, nil, sidecar.ErrGkmNotWriter
+		return nil, nil, nil, sidecar.ErrGkmNotWriter
 	}
 	repo := self.gkm.repo(repoId)
 	if repo == nil {
-		return nil, nil, fmt.Errorf("%w: repo %s has no group", sidecar.ErrGkmKeyMissing, repoId)
+		return nil, nil, nil, fmt.Errorf("%w: repo %s has no group", sidecar.ErrGkmKeyMissing, repoId)
 	}
-	return repo, state, nil
+	newest := uint64(len(repo.keys))
+	if err := judgeFakeGkmPin(state, repo.keys[newest-1].Auth()); err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: gen/%d's auth pin", err, newest)
+	}
+	held, err := self.held(repoId, state, newest)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	key, err := self.repoKey(ctx, repoId, held, held, state)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return repo, state, key, nil
 }
 
 func (self *fakeGkmClient) EnsureWritable(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
-	key, state, err := func() (*sidecar.EvsRepoKey, sidecar.GkmAuthView, error) {
-		self.gkm.rotateLock.Lock()
-		defer self.gkm.rotateLock.Unlock()
-		repo, state, err := self.writableWithLock(repoId)
-		if err != nil {
-			return nil, nil, err
-		}
-		newest := repo.keys[len(repo.keys)-1]
-		var key *sidecar.EvsRepoKey
-		switch {
-		case self.needsRemove(repo, state):
-			key, err = self.rotateWithLock(ctx, repo, state, sidecar.GkmCauseRemove)
-		case self.gkm.settings.ScheduleInterval <= self.gkm.clock.Now().Sub(newest.Time()):
-			key, err = self.rotateWithLock(ctx, repo, state, sidecar.GkmCauseSchedule)
-		}
-		return key, state, err
-	}()
-	if err != nil || key != nil {
-		return key, err
-	}
-	// covered: the newest, as a writer that reads it holds it
-	held, err := self.held(repoId, state)
+	self.gkm.rotateLock.Lock()
+	defer self.gkm.rotateLock.Unlock()
+	repo, state, newest, err := self.writableWithLock(ctx, repoId)
 	if err != nil {
 		return nil, err
 	}
-	return self.repoKey(ctx, repoId, held, held, state)
+	switch {
+	case self.needsRemove(repo, state):
+		return self.rotateWithLock(ctx, repo, newest, state, sidecar.GkmCauseRemove)
+	case self.gkm.settings.ScheduleInterval <= self.gkm.clock.Now().Sub(newest.Time()):
+		return self.rotateWithLock(ctx, repo, newest, state, sidecar.GkmCauseSchedule)
+	}
+	// covered
+	return newest, nil
 }
 
 func (self *fakeGkmClient) RotateRepo(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
 	self.gkm.rotateLock.Lock()
 	defer self.gkm.rotateLock.Unlock()
-	repo, state, err := self.writableWithLock(repoId)
+	repo, state, newest, err := self.writableWithLock(ctx, repoId)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +549,7 @@ func (self *fakeGkmClient) RotateRepo(ctx context.Context, repoId sidecar.Id) (*
 	if self.needsRemove(repo, state) {
 		cause = sidecar.GkmCauseRemove
 	}
-	return self.rotateWithLock(ctx, repo, state, cause)
+	return self.rotateWithLock(ctx, repo, newest, state, cause)
 }
 
 func (self *fakeGkmClient) CurrentRepoKey(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
@@ -482,7 +557,7 @@ func (self *fakeGkmClient) CurrentRepoKey(ctx context.Context, repoId sidecar.Id
 	if err != nil {
 		return nil, err
 	}
-	held, err := self.held(repoId, state)
+	held, err := self.held(repoId, state, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -494,31 +569,48 @@ func (self *fakeGkmClient) RepoKey(ctx context.Context, repoId sidecar.Id, gener
 	if err != nil {
 		return nil, err
 	}
-	held, err := self.held(repoId, state)
+	held, err := self.held(repoId, state, generation)
 	if err != nil {
 		return nil, err
-	}
-	if generation == 0 || held < generation {
-		return nil, fmt.Errorf("%w: generation %d is not held", sidecar.ErrGkmKeyMissing, generation)
 	}
 	return self.repoKey(ctx, repoId, held, generation, state)
 }
 
-// The newest generation this client holds, after the late delivery a current reader gets.
-func (self *fakeGkmClient) held(repoId sidecar.Id, state sidecar.GkmAuthView) (uint64, error) {
+// The newest generation this client may use, at least atLeast. A reader its own state names first asks for a late
+// delivery of the newest, which a holder may then make (deliverLate). Of the generations delivered to it, the newest
+// whose delivery its state judges usable answers, every older one being reached down the ladder. When none at or
+// above atLeast is usable, it refuses as the newest delivery at or above atLeast does, ErrGkmAuthAhead until the log
+// reaches that delivery's pin, or with ErrGkmKeyMissing when there is none.
+func (self *fakeGkmClient) held(repoId sidecar.Id, state sidecar.GkmAuthView, atLeast uint64) (uint64, error) {
 	if slices.Contains(state.RepoReaders(repoId), self.sidecarId) {
-		self.gkm.deliverNewest(repoId, self.sidecarId)
+		self.gkm.deliverLate(repoId, self.sidecarId)
 	}
 	repo := self.gkm.repo(repoId)
 	if repo == nil {
 		return 0, fmt.Errorf("%w: repo %s has no group", sidecar.ErrGkmKeyMissing, repoId)
 	}
-	for index := len(repo.generationHolders) - 1; 0 <= index; index -= 1 {
-		if repo.generationHolders[index][self.sidecarId] {
-			return uint64(index + 1), nil
+	var refusal error
+	for index := len(repo.generationHolderIdPins) - 1; 0 <= index; index -= 1 {
+		generation := uint64(index + 1)
+		pin, ok := repo.generationHolderIdPins[index][self.sidecarId]
+		if !ok {
+			continue
+		}
+		err := judgeFakeGkmPin(state, pin)
+		if err == nil && atLeast <= generation {
+			return generation, nil
+		}
+		if err == nil {
+			break
+		}
+		if refusal == nil && atLeast <= generation {
+			refusal = fmt.Errorf("%w: generation %d's delivery", err, generation)
 		}
 	}
-	return 0, fmt.Errorf("%w: no generation of repo %s is held", sidecar.ErrGkmKeyMissing, repoId)
+	if refusal == nil {
+		refusal = fmt.Errorf("%w: generation %d of repo %s is not held", sidecar.ErrGkmKeyMissing, atLeast, repoId)
+	}
+	return 0, refusal
 }
 
 // Generation g, as a reader holding generation top opens it: every gen/<k> up to top read back and verified, top's

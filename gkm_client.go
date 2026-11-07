@@ -54,17 +54,22 @@ type GkmCreateGroupArgs struct {
 	OwnerMemberId *Id
 }
 
-// One sidecar's client of gkm (§10.14).
+// One sidecar's client of gkm (§10.14). A delivery is judged at its own pin, gen/<g>'s for a staged one and its
+// signer's state for a late one, never at this sidecar's tip, so one above the tip is held only once the log reaches
+// it (§10.9's judged row). A late delivery is a holder's to make, at a state of its own that names this sidecar
+// (§10.9's late row), and this sidecar's own state never stands in for that one.
 type GkmClient interface {
 	// The newest generation of the repo this sidecar holds, checked against gen/<g>'s C_g (§10.5), for reads. It
-	// commits and rotates nothing.
+	// commits and rotates nothing. ErrGkmAuthAhead when every delivery it holds waits for the log.
 	CurrentRepoKey(ctx context.Context, repoId Id) (*EvsRepoKey, error)
 	// Generation g of the repo, reached through the ladder from one this sidecar holds. ErrGkmKeyMissing when it
-	// holds none at or above g: never defaulted (§10.5).
+	// holds none at or above g: never defaulted (§10.5). ErrGkmAuthAhead when the one it holds waits for the log.
 	RepoKey(ctx context.Context, repoId Id, generation uint64) (*EvsRepoKey, error)
 	// The generation new content seals to, §8.12's primary control: it first commits the pending changes this
 	// device may, then rotates when the newest generation does not cover the repo's holders_shrunk_at or an expiry,
-	// or is over 30 days old, and refuses to return a key any non-reader holds, a live Delegation's key aside.
+	// or is over 30 days old, and refuses to return a key any non-reader holds, a live Delegation's key aside. It
+	// acts only on the newest generation, never an older one: ErrGkmAuthAhead while this sidecar's state is below
+	// that generation's pin, and ErrGkmKeyMissing while it holds no delivery of it.
 	EnsureWritable(ctx context.Context, repoId Id) (*EvsRepoKey, error)
 	// The newest generation's drop key, under §10.5's depositor rule: its GenRotate verifies, it is gkm's newest,
 	// it covers every shrink and expiry this sidecar's state shows, it has not lapsed, and it is not below this
@@ -74,7 +79,7 @@ type GkmClient interface {
 	// keying, resuming after a crash. Returns RK_1, whose GroupId names the group.
 	CreateGroup(ctx context.Context, args *GkmCreateGroupArgs) (*EvsRepoKey, error)
 	// `ur keys rotate`: a new generation now, REMOVE if it covers a shrink or expiry since its parent, else REQUEST
-	// (§10.5's Rotate).
+	// (§10.5's Rotate), from the newest generation as EnsureWritable reaches it, with its refusals.
 	RotateRepo(ctx context.Context, repoId Id) (*EvsRepoKey, error)
 	// §7.9's applier, after each entry it applies: the new state, from which pending commits and rotations follow.
 	// It never blocks, and a state below one already given changes nothing (I-16).
