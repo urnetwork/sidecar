@@ -242,6 +242,15 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAGoWorkFile"},
 	},
 	{
+		row: "hygiene", item: "a path the go command refuses in a module zip, which makes a tag no consumer can download (§4.9)",
+		rule: (*repository).moduleZipFindings,
+		plantedTests: []string{
+			"TestHygieneFailsOnAReservedWindowsName", "TestHygieneFailsOnACharacterAModuleZipRefuses",
+			"TestHygieneFailsOnATrailingDot", "TestHygieneFailsOnAPathInANestedModule",
+			"TestHygieneFailsOnTwoPathsThatDifferOnlyInCase",
+		},
+	},
+	{
 		row: "hygiene", item: "registry conflicts",
 		rule: (*repository).registryFindings,
 		plantedTests: []string{
