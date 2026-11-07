@@ -106,7 +106,7 @@ func caseFoldKey(text string) string {
 func moduleZipPathFindings(relativePaths []string, display func(relativePath string) string) []string {
 	findings := []string{}
 	keyPaths := map[string]string{}
-	collided := map[string]bool{}
+	collidedKeys := map[string]bool{}
 	for _, relativePath := range slices.Sorted(slices.Values(relativePaths)) {
 		if problem := moduleFilePathProblem(relativePath); problem != "" {
 			findings = append(findings, findingf("%s: a module zip may not hold this path: %s", display(relativePath), problem))
@@ -119,8 +119,8 @@ func moduleZipPathFindings(relativePaths []string, display func(relativePath str
 				keyPaths[key] = name
 				continue
 			}
-			if other != name && !collided[key] {
-				collided[key] = true
+			if other != name && !collidedKeys[key] {
+				collidedKeys[key] = true
 				findings = append(findings, findingf("%s: a module zip may not hold this path: %q differs from %q only in case", display(relativePath), name, other))
 			}
 			break
