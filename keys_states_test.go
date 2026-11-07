@@ -914,9 +914,13 @@ func TestARefusalPastTheLimitWritesNothing(t *testing.T) {
 	for i := 0; i < 5; i += 1 {
 		requireError(t, reopened.Unlock(wrong), ErrSidecarPassRefused)
 	}
-	before := backendSnapshot(t, backend)
+	recording := &recordingBackend{SidecarStoreBackend: backend}
+	reopened.backend = recording
 	requireError(t, reopened.Unlock(wrong), ErrSidecarPassLimited)
-	requireSameBackend(t, before, backend)
+	reopened.backend = backend
+	if recording.tempCount != 0 {
+		t.Errorf("%d writes for a refusal", recording.tempCount)
+	}
 }
 
 // If the count cannot reach the disk, the guess does not run.
@@ -1131,7 +1135,7 @@ func TestStateDocumentRefusesWhatIsNotOne(t *testing.T) {
 	good, err := (&sidecarStateDocument{
 		Version:    stateJsonVersion,
 		InstanceId: id,
-		Networks: []SidecarNetworkRecord{
+		NetworkRecords: []SidecarNetworkRecord{
 			{NetworkId: id, ClientId: id, SidecarId: id, ConnectInstanceId: id},
 		},
 	}).encode()
@@ -1375,7 +1379,7 @@ func TestAutoLockLocksAnIdleKeychain(t *testing.T) {
 	if _, err := opened.secrets("identity").Get("seed"); !errors.Is(err, ErrSidecarStoreLocked) {
 		t.Errorf("a secret stayed: %v", err)
 	}
-	if opened.roots != nil || opened.records != nil {
+	if opened.generationRoots != nil || opened.records != nil {
 		t.Error("the keychain kept its keys")
 	}
 }

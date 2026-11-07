@@ -94,7 +94,8 @@ type SidecarSecrets interface {
 // dot, does not end in a dot or a space, and holds no \, :, or control character. Anything else answers
 // ErrSidecarStoreName. A file opens only at its own path and under its own class, so a moved or
 // swapped file fails. Calls answer ErrSidecarStoreLocked while the keychain is locked, and a stream
-// open at that moment fails at its next chunk. Safe for concurrent use.
+// open at that moment fails at its next chunk, and ErrSidecarStoreFailed or ErrSidecarKeystoreLost
+// while this network's keychain cannot open. Safe for concurrent use.
 type SidecarStore interface {
 	// Streams the plaintext of name, authenticating each chunk before it is read. A cut, reordered
 	// or tampered file answers ErrSidecarStoreFailed from Read, at the chunk where it shows, so a

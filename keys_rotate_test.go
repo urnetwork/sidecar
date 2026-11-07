@@ -63,7 +63,7 @@ func TestRotateChangesEveryKeyAndKeepsEveryValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldRoot := bytes.Clone(opened.roots[1])
+	oldRoot := bytes.Clone(opened.generationRoots[1])
 	oldUnlockKey, err := instance.currentUnlockKey()
 	if err != nil {
 		t.Fatal(err)
@@ -90,10 +90,10 @@ func TestRotateChangesEveryKeyAndKeepsEveryValue(t *testing.T) {
 	if bytes.Equal(oldUnlockKey, newUnlockKey) {
 		t.Error("U did not change")
 	}
-	if opened.currentGeneration != 2 || len(opened.roots) != 1 {
-		t.Errorf("generation %d, %d roots", opened.currentGeneration, len(opened.roots))
+	if opened.currentGeneration != 2 || len(opened.generationRoots) != 1 {
+		t.Errorf("generation %d, %d roots", opened.currentGeneration, len(opened.generationRoots))
 	}
-	if bytes.Equal(oldRoot, opened.roots[2]) {
+	if bytes.Equal(oldRoot, opened.generationRoots[2]) {
 		t.Error("R_n did not change")
 	}
 	// the old W went with the old U, and the old root opens no file
@@ -289,6 +289,42 @@ func TestAWriteInFlightAcrossTheFlipIsResealed(t *testing.T) {
 	requireStoreFile(t, store, "file", []byte("in flight"))
 }
 
+// The gap a stream's count cannot see: a write begun on the old root commits and closes after the last
+// pass looked and before the old root goes. Nothing holds the root by then, so only the count of late
+// commits sends the pass round again, or the file would be left on a root nobody has.
+func TestAWriteLandingAfterTheLastPassIsResealed(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	store := storeOf(t, instance, testNetworkId, "evs")
+	writer, err := store.Create("file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Write([]byte("in flight")); err != nil {
+		t.Fatal(err)
+	}
+
+	// keychain.wrap's third read is the one that ends the pass: the first two come before it
+	instance.backend = &writeOnOpenBackend{
+		SidecarStoreBackend: backend,
+		path:                keychainWrapPath(testNetworkId),
+		skipCount:           2,
+		write: func() {
+			if err := writer.Commit(); err != nil {
+				t.Error(err)
+			}
+			writer.Close()
+		},
+	}
+	err = instance.RotateKeychain(context.Background(), nil)
+	instance.backend = backend
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireRotationFinished(t, instance, backend, testNetworkId)
+	requireStoreFile(t, store, "file", []byte("in flight"))
+}
+
 // A file replaced while its re-seal was being copied keeps the newer bytes: the re-seal must not put the
 // older ones back. resealFile checks the header it copied from is still the one at the path.
 func TestAResealLosesToANewerWrite(t *testing.T) {
@@ -327,17 +363,23 @@ func TestAResealLosesToANewerWrite(t *testing.T) {
 	requireStoreFile(t, store, "file", []byte("new"))
 }
 
-// Runs write once, after path is opened, so the reader it answers holds the bytes from before.
+// Runs write once, after path is opened for the skipCount+1th time, so the reader it answers holds the
+// bytes from before.
 type writeOnOpenBackend struct {
 	SidecarStoreBackend
-	path  string
-	write func()
+	path      string
+	skipCount int
+	write     func()
 }
 
 // Answers the reader of the old bytes, having run write behind it.
 func (self *writeOnOpenBackend) Open(filePath string) (io.ReadCloser, error) {
 	reader, err := self.SidecarStoreBackend.Open(filePath)
 	if filePath == self.path && self.write != nil {
+		if 0 < self.skipCount {
+			self.skipCount -= 1
+			return reader, err
+		}
 		write := self.write
 		self.write = nil
 		write()
@@ -563,7 +605,7 @@ func TestRotateWithNoNetworks(t *testing.T) {
 	if err := instance.RotateKeychain(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if wrap := mustUnlockWrap(t, instance); wrap.generation != 2 || len(wrap.previous) != 0 {
+	if wrap := mustUnlockWrap(t, instance); wrap.generation != 2 || len(wrap.previousKeys) != 0 {
 		t.Errorf("wrap %+v", wrap)
 	}
 }

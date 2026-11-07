@@ -120,7 +120,7 @@ type keychain struct {
 	stateLock sync.Mutex
 	closed    bool
 	// R_n by root generation. Holds more than one only during a rotation.
-	roots             map[uint64][]byte
+	generationRoots   map[uint64][]byte
 	currentGeneration uint64
 	classKeys         map[keychainClassKey][]byte
 	records           map[string][]byte
@@ -132,13 +132,13 @@ type keychain struct {
 	staleCommitCount atomic.Int64
 }
 
-// Open over roots, with its records still to load. Takes the map roots.
-func newKeychain(instance *SidecarInstance, networkId Id, roots map[uint64][]byte, currentGeneration uint64) *keychain {
+// Open over generationRoots, which it takes, with its records still to load.
+func newKeychain(instance *SidecarInstance, networkId Id, generationRoots map[uint64][]byte, currentGeneration uint64) *keychain {
 	return &keychain{
 		instance:          instance,
 		networkId:         networkId,
 		hookKey:           networkId.String(),
-		roots:             roots,
+		generationRoots:   generationRoots,
 		currentGeneration: currentGeneration,
 		classKeys:         map[keychainClassKey][]byte{},
 		records:           map[string][]byte{},
@@ -152,7 +152,7 @@ func (self *keychain) close() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.closed = true
-	for _, root := range self.roots {
+	for _, root := range self.generationRoots {
 		clear(root)
 	}
 	for _, key := range self.classKeys {
@@ -161,7 +161,7 @@ func (self *keychain) close() {
 	for _, value := range self.records {
 		clear(value)
 	}
-	self.roots = nil
+	self.generationRoots = nil
 	self.classKeys = nil
 	self.records = nil
 }
@@ -181,7 +181,7 @@ func (self *keychain) classKey(class string, generation uint64) ([]byte, error) 
 		if key, ok = self.classKeys[classKey]; ok {
 			return nil
 		}
-		if root, ok = self.roots[generation]; !ok {
+		if root, ok = self.generationRoots[generation]; !ok {
 			return errSealOpen
 		}
 		root = bytes.Clone(root)
@@ -235,7 +235,7 @@ func (self *keychain) holdGeneration(generation uint64) (uint64, error) {
 	if generation == 0 {
 		generation = self.currentGeneration
 	}
-	if _, ok := self.roots[generation]; !ok {
+	if _, ok := self.generationRoots[generation]; !ok {
 		return 0, errKeychainRootGone
 	}
 	self.generationStreams[generation] += 1

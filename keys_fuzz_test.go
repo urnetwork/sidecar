@@ -20,10 +20,10 @@ func keychainFuzzSeeds(t testing.TB) (records []byte, unlock []byte, keychain []
 	wrapped.nonce[3] = 9
 	records = encodeKeychainRecords(map[string][]byte{"a/b": []byte("value"), "c": {}})
 	unlock = (&unlockWrap{
-		generation: 3,
-		store:      &unlockStoreWrap{generation: 2, wrapped: wrapped},
-		pass:       &unlockPassWrap{memoryKibiCount: 8, iterationCount: 1, threadCount: 1, wrapped: wrapped},
-		previous:   []unlockPreviousKey{{generation: 2, wrapped: wrapped}},
+		generation:   3,
+		store:        &unlockStoreWrap{generation: 2, wrapped: wrapped},
+		pass:         &unlockPassWrap{memoryKibiCount: 8, iterationCount: 1, threadCount: 1, wrapped: wrapped},
+		previousKeys: []unlockPreviousKey{{generation: 2, wrapped: wrapped}},
 	}).encode()
 	keychain = (&keychainWrap{
 		networkId: Id{1},
@@ -107,9 +107,9 @@ func FuzzDecodeKeychainWrap(f *testing.F) {
 func FuzzDecodeStateDocument(f *testing.F) {
 	id := Id{1}
 	seed, err := (&sidecarStateDocument{
-		Version:    stateJsonVersion,
-		InstanceId: id,
-		Networks:   []SidecarNetworkRecord{{NetworkId: id, ClientId: id, SidecarId: id, ConnectInstanceId: id}},
+		Version:        stateJsonVersion,
+		InstanceId:     id,
+		NetworkRecords: []SidecarNetworkRecord{{NetworkId: id, ClientId: id, SidecarId: id, ConnectInstanceId: id}},
 	}).encode()
 	if err != nil {
 		f.Fatal(err)

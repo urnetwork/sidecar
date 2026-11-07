@@ -97,9 +97,9 @@ type SidecarInstance struct {
 	// Nil once sidecar.json fails to decode, which holds this instance at Failed.
 	document *sidecarStateDocument
 	// U by generation. Holds more than one only during a rotation.
-	unlockKeys       map[uint64][]byte
-	unlockGeneration uint64
-	keychains        map[Id]*keychain
+	generationUnlockKeys map[uint64][]byte
+	unlockGeneration     uint64
+	networkIdKeychains   map[Id]*keychain
 	// sidecar.json's hash is another machine's, or another instance's, and nothing has accepted it
 	restored bool
 }
@@ -123,19 +123,19 @@ func newSidecarInstance(ctx context.Context, args *SidecarInstanceArgs, now func
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &SidecarInstance{
-		ctx:       cancelCtx,
-		cancel:    cancel,
-		backend:   args.Backend,
-		keyStore:  args.KeyStore,
-		machineId: args.MachineId,
-		urls:      stateUrlsFromSettings(args.Settings),
-		settings:  args.Settings.KeychainSettings,
-		log:       loggerOrDefault(args.Settings.Log),
-		now:       now,
-		after:     after,
-		random:    random,
-		state:     NewMonitorValue(SidecarInstanceLocked),
-		keychains: map[Id]*keychain{},
+		ctx:                cancelCtx,
+		cancel:             cancel,
+		backend:            args.Backend,
+		keyStore:           args.KeyStore,
+		machineId:          args.MachineId,
+		urls:               stateUrlsFromSettings(args.Settings),
+		settings:           args.Settings.KeychainSettings,
+		log:                loggerOrDefault(args.Settings.Log),
+		now:                now,
+		after:              after,
+		random:             random,
+		state:              NewMonitorValue(SidecarInstanceLocked),
+		networkIdKeychains: map[Id]*keychain{},
 	}
 	self.touch()
 	if err := self.loadDocument(); err != nil {
@@ -157,11 +157,11 @@ func (self *SidecarInstance) loadDocument() error {
 	if errors.Is(err, ErrSidecarStoreAbsent) {
 		instanceId := NewId()
 		self.setDocument(&sidecarStateDocument{
-			Version:       stateJsonVersion,
-			InstanceId:    instanceId,
-			MachineIdHash: stateMachineIdHash(instanceId, self.machineId),
-			Urls:          self.urls,
-			Networks:      []SidecarNetworkRecord{},
+			Version:        stateJsonVersion,
+			InstanceId:     instanceId,
+			MachineIdHash:  stateMachineIdHash(instanceId, self.machineId),
+			Urls:           self.urls,
+			NetworkRecords: []SidecarNetworkRecord{},
 		})
 		return nil
 	}
@@ -254,7 +254,7 @@ func (self *SidecarInstance) Networks() []SidecarNetworkRecord {
 	if document == nil {
 		return nil
 	}
-	return slices.Clone(document.Networks)
+	return slices.Clone(document.NetworkRecords)
 }
 
 // Records a network, the last step of an enrollment (CORE-M1-09). From here a lost key for this network
@@ -270,10 +270,10 @@ func (self *SidecarInstance) RecordNetwork(record SidecarNetworkRecord) error {
 		defer self.operationLock.Unlock()
 		return self.editDocumentWithLock(func(document *sidecarStateDocument) error {
 			document.Urls = self.urls
-			document.Networks = slices.DeleteFunc(document.Networks, func(other SidecarNetworkRecord) bool {
+			document.NetworkRecords = slices.DeleteFunc(document.NetworkRecords, func(other SidecarNetworkRecord) bool {
 				return other.NetworkId == record.NetworkId
 			})
-			document.Networks = append(document.Networks, record)
+			document.NetworkRecords = append(document.NetworkRecords, record)
 			return nil
 		})
 	}()
@@ -322,7 +322,7 @@ func (self *SidecarInstance) keychainFor(networkId Id) (*keychain, error) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		opened = self.keychains[networkId]
+		opened = self.networkIdKeychains[networkId]
 	}()
 	if opened != nil {
 		return opened, nil
@@ -343,7 +343,7 @@ func (self *SidecarInstance) keychainWithLock(networkId Id) (*keychain, error) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		opened = self.keychains[networkId]
+		opened = self.networkIdKeychains[networkId]
 	}()
 	if opened != nil {
 		return opened, nil
@@ -404,10 +404,10 @@ func (self *SidecarInstance) openRoots(wrap *keychainWrap) (map[uint64][]byte, e
 		unlockKey, err := func() ([]byte, error) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			if self.unlockKeys == nil {
+			if self.generationUnlockKeys == nil {
 				return nil, ErrSidecarStoreLocked
 			}
-			unlockKey, ok := self.unlockKeys[root.unlockGeneration]
+			unlockKey, ok := self.generationUnlockKeys[root.unlockGeneration]
 			if !ok {
 				return nil, ErrSidecarStoreFailed
 			}
@@ -436,7 +436,7 @@ func (self *SidecarInstance) openRoots(wrap *keychainWrap) (map[uint64][]byte, e
 func (self *SidecarInstance) cacheKeychain(opened *keychain) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.keychains[opened.networkId] = opened
+	self.networkIdKeychains[opened.networkId] = opened
 }
 
 // Network n's keychain at its first enrollment (§5.9): R_n is created only here, and only when nothing
@@ -512,7 +512,7 @@ func (self *SidecarInstance) ConfirmNewDevice() error {
 	err := self.editDocumentWithLock(func(document *sidecarStateDocument) error {
 		document.InstanceId = instanceId
 		document.MachineIdHash = stateMachineIdHash(instanceId, self.machineId)
-		document.Networks = []SidecarNetworkRecord{}
+		document.NetworkRecords = []SidecarNetworkRecord{}
 		document.PassAttemptMillis = nil
 		return nil
 	})
@@ -536,7 +536,7 @@ func (self *SidecarInstance) ConfirmNewNetworkDevice(networkId Id) error {
 		return err
 	}
 	return self.editDocumentWithLock(func(document *sidecarStateDocument) error {
-		document.Networks = slices.DeleteFunc(document.Networks, func(record SidecarNetworkRecord) bool {
+		document.NetworkRecords = slices.DeleteFunc(document.NetworkRecords, func(record SidecarNetworkRecord) bool {
 			return record.NetworkId == networkId
 		})
 		return nil
@@ -592,15 +592,15 @@ func (self *SidecarInstance) lockWithLock() {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		for _, unlockKey := range self.unlockKeys {
+		for _, unlockKey := range self.generationUnlockKeys {
 			clear(unlockKey)
 		}
-		self.unlockKeys = nil
+		self.generationUnlockKeys = nil
 		self.unlockGeneration = 0
-		for _, opened := range self.keychains {
+		for _, opened := range self.networkIdKeychains {
 			keychains = append(keychains, opened)
 		}
-		self.keychains = map[Id]*keychain{}
+		self.networkIdKeychains = map[Id]*keychain{}
 	}()
 	for _, opened := range keychains {
 		opened.close()

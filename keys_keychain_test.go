@@ -131,10 +131,10 @@ func TestUnlockWrapRoundTrip(t *testing.T) {
 		{generation: 1, store: &unlockStoreWrap{generation: 1, wrapped: wrapped}},
 		{generation: 2, pass: &unlockPassWrap{memoryKibiCount: 64, iterationCount: 1, threadCount: 1, wrapped: wrapped}},
 		{
-			generation: 3,
-			store:      &unlockStoreWrap{generation: 2, wrapped: wrapped},
-			pass:       &unlockPassWrap{memoryKibiCount: 64, iterationCount: 1, threadCount: 1, wrapped: wrapped},
-			previous:   []unlockPreviousKey{{generation: 2, wrapped: wrapped}, {generation: 1, wrapped: wrapped}},
+			generation:   3,
+			store:        &unlockStoreWrap{generation: 2, wrapped: wrapped},
+			pass:         &unlockPassWrap{memoryKibiCount: 64, iterationCount: 1, threadCount: 1, wrapped: wrapped},
+			previousKeys: []unlockPreviousKey{{generation: 2, wrapped: wrapped}, {generation: 1, wrapped: wrapped}},
 		},
 	} {
 		encoded := wrap.encode()
@@ -176,9 +176,9 @@ func TestUnlockWrapRefusesWhatIsNotOne(t *testing.T) {
 		{name: "no iterations", encoded: withCost(func(pass *unlockPassWrap) { pass.iterationCount = 0 })},
 		{name: "iterations past the bound", encoded: withCost(func(pass *unlockPassWrap) { pass.iterationCount = passMaxIterationCount + 1 })},
 		{name: "no threads", encoded: withCost(func(pass *unlockPassWrap) { pass.threadCount = 0 })},
-		{name: "a previous key above the current", encoded: (&unlockWrap{generation: 2, pass: &cost, previous: []unlockPreviousKey{{generation: 2}}}).encode()},
-		{name: "previous keys out of order", encoded: (&unlockWrap{generation: 5, pass: &cost, previous: []unlockPreviousKey{{generation: 2}, {generation: 3}}}).encode()},
-		{name: "a previous key of no generation", encoded: (&unlockWrap{generation: 5, pass: &cost, previous: []unlockPreviousKey{{generation: 0}}}).encode()},
+		{name: "a previous key above the current", encoded: (&unlockWrap{generation: 2, pass: &cost, previousKeys: []unlockPreviousKey{{generation: 2}}}).encode()},
+		{name: "previous keys out of order", encoded: (&unlockWrap{generation: 5, pass: &cost, previousKeys: []unlockPreviousKey{{generation: 2}, {generation: 3}}}).encode()},
+		{name: "a previous key of no generation", encoded: (&unlockWrap{generation: 5, pass: &cost, previousKeys: []unlockPreviousKey{{generation: 0}}}).encode()},
 	} {
 		if _, err := decodeUnlockWrap(c.encoded); !errors.Is(err, ErrSidecarStoreFailed) {
 			t.Errorf("%s: err %v", c.name, err)
@@ -290,8 +290,8 @@ func TestOneNetworkCannotOpenAnother(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRoot := bytes.Clone(first.roots[1])
-	secondRoot := bytes.Clone(second.roots[1])
+	firstRoot := bytes.Clone(first.generationRoots[1])
+	secondRoot := bytes.Clone(second.generationRoots[1])
 	if bytes.Equal(firstRoot, secondRoot) {
 		t.Fatal("two networks share a root")
 	}
@@ -444,14 +444,16 @@ func TestNothingReachesTheMediumUnsealed(t *testing.T) {
 	}
 }
 
-// Sees every byte handed to a temp file.
+// Sees every write started and every byte handed to a temp file.
 type recordingBackend struct {
 	SidecarStoreBackend
-	written []byte
+	tempCount int
+	written   []byte
 }
 
 // A temp file that reports what it is handed.
 func (self *recordingBackend) CreateTemp() (SidecarStoreBackendFile, error) {
+	self.tempCount += 1
 	file, err := self.SidecarStoreBackend.CreateTemp()
 	if err != nil {
 		return nil, err
@@ -1032,7 +1034,7 @@ func TestTheStoreSealsWithTheClassKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	classKey, err := deriveLocalKey(opened.roots[1], "evs")
+	classKey, err := deriveLocalKey(opened.generationRoots[1], "evs")
 	if err != nil {
 		t.Fatal(err)
 	}

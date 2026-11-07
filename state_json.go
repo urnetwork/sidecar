@@ -70,9 +70,9 @@ type sidecarStateDocument struct {
 	// machine-id hash.
 	InstanceId Id `json:"instance_id"`
 	// Empty on a host with no machine id, where a copy cannot be told.
-	MachineIdHash string                 `json:"machine_id_hash,omitempty"`
-	Urls          sidecarStateUrls       `json:"urls"`
-	Networks      []SidecarNetworkRecord `json:"networks"`
+	MachineIdHash  string                 `json:"machine_id_hash,omitempty"`
+	Urls           sidecarStateUrls       `json:"urls"`
+	NetworkRecords []SidecarNetworkRecord `json:"networks"`
 	// When each recent wrong pass came, in unix milliseconds, oldest first (§5.4's limit).
 	PassAttemptMillis []int64 `json:"pass_attempt_millis,omitempty"`
 }
@@ -80,14 +80,14 @@ type sidecarStateDocument struct {
 // A copy sharing nothing a later edit changes.
 func (self *sidecarStateDocument) clone() *sidecarStateDocument {
 	clone := *self
-	clone.Networks = slices.Clone(self.Networks)
+	clone.NetworkRecords = slices.Clone(self.NetworkRecords)
 	clone.PassAttemptMillis = slices.Clone(self.PassAttemptMillis)
 	return &clone
 }
 
 // Whether a sidecar_id is recorded for networkId.
 func (self *sidecarStateDocument) recordsNetwork(networkId Id) bool {
-	return slices.ContainsFunc(self.Networks, func(record SidecarNetworkRecord) bool {
+	return slices.ContainsFunc(self.NetworkRecords, func(record SidecarNetworkRecord) bool {
 		return record.NetworkId == networkId
 	})
 }
@@ -117,7 +117,7 @@ func decodeStateDocument(encoded []byte) (*sidecarStateDocument, error) {
 		return nil, errStateJsonFormat
 	}
 	networkIds := map[Id]bool{}
-	for _, record := range document.Networks {
+	for _, record := range document.NetworkRecords {
 		if record.NetworkId == (Id{}) || record.ClientId == (Id{}) || record.SidecarId == (Id{}) ||
 			record.ConnectInstanceId == (Id{}) || networkIds[record.NetworkId] {
 			return nil, errStateJsonFormat

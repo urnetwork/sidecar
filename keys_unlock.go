@@ -204,7 +204,7 @@ type unlockWrap struct {
 	store      *unlockStoreWrap
 	pass       *unlockPassWrap
 	// newest first
-	previous []unlockPreviousKey
+	previousKeys []unlockPreviousKey
 }
 
 // The file's bytes.
@@ -232,10 +232,10 @@ func (self *unlockWrap) encode() []byte {
 		encoded = append(encoded, self.pass.salt[:]...)
 		encoded = self.pass.wrapped.append(encoded)
 	}
-	encoded = append(encoded, byte(len(self.previous)))
-	for i := range self.previous {
-		encoded = binary.BigEndian.AppendUint64(encoded, self.previous[i].generation)
-		encoded = self.previous[i].wrapped.append(encoded)
+	encoded = append(encoded, byte(len(self.previousKeys)))
+	for i := range self.previousKeys {
+		encoded = binary.BigEndian.AppendUint64(encoded, self.previousKeys[i].generation)
+		encoded = self.previousKeys[i].wrapped.append(encoded)
 	}
 	return encoded
 }
@@ -282,12 +282,12 @@ func decodeUnlockWrap(encoded []byte) (*unlockWrap, error) {
 		previous.wrapped.read(cursor)
 		newerGeneration := wrap.generation
 		if i != 0 {
-			newerGeneration = wrap.previous[i-1].generation
+			newerGeneration = wrap.previousKeys[i-1].generation
 		}
 		if cursor.failed || previous.generation == 0 || newerGeneration <= previous.generation {
 			return nil, errUnlockWrapFormat
 		}
-		wrap.previous = append(wrap.previous, previous)
+		wrap.previousKeys = append(wrap.previousKeys, previous)
 	}
 	if !cursor.finished() {
 		return nil, errUnlockWrapFormat
@@ -417,7 +417,7 @@ func (self *SidecarInstance) readUnlockWrap() (*unlockWrap, error) {
 // and a keychain.wrap on disk says so too: sidecar.json is written last, and a fault that took it must
 // not make a loss look like a first run, since the next step there is a new U.
 func (self *SidecarInstance) identityRecordedWithLock() (bool, error) {
-	if len(self.currentDocument().Networks) != 0 {
+	if len(self.currentDocument().NetworkRecords) != 0 {
 		return true, nil
 	}
 	entries, err := self.backend.List(networkTreeName + "/")
@@ -678,8 +678,8 @@ func (self *SidecarInstance) createUnlockKeyWithLock(passphrase []byte) error {
 
 // Moves to Open on unlockKey, which this takes, opening any older U a rotation left behind it.
 func (self *SidecarInstance) openWithLock(wrap *unlockWrap, unlockKey []byte) error {
-	unlockKeys := map[uint64][]byte{wrap.generation: unlockKey}
-	if len(wrap.previous) != 0 {
+	generationUnlockKeys := map[uint64][]byte{wrap.generation: unlockKey}
+	if len(wrap.previousKeys) != 0 {
 		chainKey, err := deriveLocalKey(unlockKey, unlockPreviousClass)
 		if err != nil {
 			clear(unlockKey)
@@ -687,23 +687,23 @@ func (self *SidecarInstance) openWithLock(wrap *unlockWrap, unlockKey []byte) er
 		}
 		defer clear(chainKey)
 		testHookSecret("K_unlock_previous", chainKey)
-		for i := range wrap.previous {
-			previous := &wrap.previous[i]
+		for i := range wrap.previousKeys {
+			previous := &wrap.previousKeys[i]
 			previousKey, err := previous.wrapped.open(chainKey, unlockPreviousAdditionalData(wrap.generation, previous.generation))
 			if err != nil {
-				for _, key := range unlockKeys {
+				for _, key := range generationUnlockKeys {
 					clear(key)
 				}
 				return self.settle(SidecarInstanceFailed, err)
 			}
 			testHookSecret("U", previousKey)
-			unlockKeys[previous.generation] = previousKey
+			generationUnlockKeys[previous.generation] = previousKey
 		}
 	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.unlockKeys = unlockKeys
+		self.generationUnlockKeys = generationUnlockKeys
 		self.unlockGeneration = wrap.generation
 	}()
 	self.touch()
@@ -715,7 +715,7 @@ func (self *SidecarInstance) openWithLock(wrap *unlockWrap, unlockKey []byte) er
 func (self *SidecarInstance) currentUnlockKey() ([]byte, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	unlockKey, ok := self.unlockKeys[self.unlockGeneration]
+	unlockKey, ok := self.generationUnlockKeys[self.unlockGeneration]
 	if !ok {
 		return nil, ErrSidecarStoreLocked
 	}

@@ -45,7 +45,7 @@ func (self *SidecarInstance) RotationPending() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return wrap != nil && len(wrap.previous) != 0, nil
+	return wrap != nil && len(wrap.previousKeys) != 0, nil
 }
 
 // Rotates U and every R_n, or finishes a rotation a kill interrupted. passphrase must open the pass wrap
@@ -79,7 +79,7 @@ func (self *SidecarInstance) rotateWithLock(ctx context.Context, passphrase []by
 	if err != nil {
 		return err
 	}
-	if len(wrap.previous) == 0 {
+	if len(wrap.previousKeys) == 0 {
 		if err := self.flipUnlockKeyWithLock(wrap, passphrase); err != nil {
 			return err
 		}
@@ -186,7 +186,7 @@ func (self *SidecarInstance) flipUnlockKeyWithLock(wrap *unlockWrap, passphrase 
 	if err != nil {
 		return storeFault(err)
 	}
-	next.previous = []unlockPreviousKey{{generation: wrap.generation, wrapped: *wrapped}}
+	next.previousKeys = []unlockPreviousKey{{generation: wrap.generation, wrapped: *wrapped}}
 
 	if err := writeBackendFile(self.backend, unlockWrapPath, next.encode()); err != nil {
 		return err
@@ -194,7 +194,7 @@ func (self *SidecarInstance) flipUnlockKeyWithLock(wrap *unlockWrap, passphrase 
 	keepKey = true
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.unlockKeys[next.generation] = nextKey
+	self.generationUnlockKeys[next.generation] = nextKey
 	self.unlockGeneration = next.generation
 	return nil
 }
@@ -290,7 +290,7 @@ func (self *SidecarInstance) addRootWithLock(opened *keychain, wrap *keychainWra
 		clear(root)
 		return ErrSidecarStoreLocked
 	}
-	opened.roots[generation] = root
+	opened.generationRoots[generation] = root
 	opened.currentGeneration = generation
 	return nil
 }
@@ -441,10 +441,10 @@ func (self *SidecarInstance) dropOldRootsWithLock(opened *keychain, staleCommitC
 	if opened.closed {
 		return true, nil
 	}
-	for generation, root := range opened.roots {
+	for generation, root := range opened.generationRoots {
 		if generation != opened.currentGeneration {
 			clear(root)
-			delete(opened.roots, generation)
+			delete(opened.generationRoots, generation)
 		}
 	}
 	for classKey, key := range opened.classKeys {
@@ -466,7 +466,7 @@ func (self *SidecarInstance) finishRotationWithLock() error {
 	if wrap == nil {
 		return ErrSidecarStoreFailed
 	}
-	if len(wrap.previous) == 0 {
+	if len(wrap.previousKeys) == 0 {
 		return nil
 	}
 	if self.keyStore != nil && wrap.store != nil && unlockFirstStoreGeneration < wrap.store.generation {
@@ -480,16 +480,16 @@ func (self *SidecarInstance) finishRotationWithLock() error {
 		}
 	}
 	next := *wrap
-	next.previous = nil
+	next.previousKeys = nil
 	if err := writeBackendFile(self.backend, unlockWrapPath, next.encode()); err != nil {
 		return err
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	for generation, unlockKey := range self.unlockKeys {
+	for generation, unlockKey := range self.generationUnlockKeys {
 		if generation != self.unlockGeneration {
 			clear(unlockKey)
-			delete(self.unlockKeys, generation)
+			delete(self.generationUnlockKeys, generation)
 		}
 	}
 	return nil

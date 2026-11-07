@@ -161,10 +161,10 @@ func unlockWrapOfVector(t *testing.T, vector *unlockWrapVector) []byte {
 		t.Fatal(err)
 	}
 	wrap := &unlockWrap{
-		generation: vector.Generation,
-		store:      store,
-		pass:       pass,
-		previous:   []unlockPreviousKey{{generation: previousGeneration, wrapped: *previousWrapped}},
+		generation:   vector.Generation,
+		store:        store,
+		pass:         pass,
+		previousKeys: []unlockPreviousKey{{generation: previousGeneration, wrapped: *previousWrapped}},
 	}
 	return wrap.encode()
 }
