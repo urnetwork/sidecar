@@ -268,6 +268,10 @@ modules:
     spdx: BSD-3-Clause
     reason: wire types in protocol and protocol/bridge; v1.36.11 pins protoc-gen-go too (§4.9)
     leg: [client, engine, cli, test]
+  - module: gopkg.in/yaml.v3
+    spdx: Apache-2.0 AND MIT
+    reason: sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
+    leg: [test]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
     reason: connect's IP stack, kept out of the sidecar_http leg; a sibling replace
