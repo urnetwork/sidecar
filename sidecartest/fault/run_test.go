@@ -940,3 +940,26 @@ func TestARunInWhichAnActorStalledFails(t *testing.T) {
 		t.Errorf("%s", result)
 	}
 }
+
+// A row whose connect clients run on the fake contract issuer and ControlId sink names T3, where a
+// divergence from server's exchange fails (Q-TEST-1). One that does not fails here.
+func TestARowOnThePlatformFakesNamesT3(t *testing.T) {
+	run := func(tiers []Tier) *Result {
+		net := sidecartest.NewNet(t.Context(), nil)
+		defer net.Close()
+		return Run(t.Context(), &Schedule{
+			Id: "platform-fakes",
+			Steps: []*Step{
+				{Actor: "daemonM", Action: func(ctx context.Context, net *Net) error {
+					net.AddClient("m", nil)
+					return nil
+				}},
+			},
+			Tiers: tiers,
+		}, net)
+	}
+	if result := run(nil); result.Err == nil || !strings.Contains(result.Err.Error(), "Q-TEST-1") {
+		t.Errorf("%s", result)
+	}
+	wantPass(t, run([]Tier{TierT2, TierT3}))
+}

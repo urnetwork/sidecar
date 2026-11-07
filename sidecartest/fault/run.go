@@ -276,6 +276,9 @@ func (self *runner) finish() error {
 	if unfired := self.net.Faults().Unfired(); 0 < len(unfired) {
 		return fmt.Errorf("never fired: %v", unfired)
 	}
+	if self.net.UsesPlatformFakes() && !slices.Contains(self.schedule.Tiers, TierT3) {
+		return errors.New("the row ran on the fake contract issuer and ControlId sink, so it names T3 too (Q-TEST-1)")
+	}
 	return nil
 }
 
