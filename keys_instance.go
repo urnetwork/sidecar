@@ -394,38 +394,26 @@ func (self *SidecarInstance) readKeychainWrap(networkId Id) (*keychainWrap, erro
 	return wrap, nil
 }
 
-// Every root in wrap, each under the U it names.
+// Every root in wrap, each under the U it names. A file naming a U this instance never had is damaged,
+// which is a failure and not a lock.
 func (self *SidecarInstance) openRoots(wrap *keychainWrap) (map[uint64][]byte, error) {
 	roots := map[uint64][]byte{}
+	fail := func(err error) (map[uint64][]byte, error) {
+		for _, opened := range roots {
+			clear(opened)
+		}
+		return nil, err
+	}
 	for i := range wrap.roots {
 		root := &wrap.roots[i]
-		// a copy, since a lock may zero the original. A file naming a U this instance never had is
-		// damaged, which is a failure and not a lock
-		unlockKey, err := func() ([]byte, error) {
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			if self.generationUnlockKeys == nil {
-				return nil, ErrSidecarStoreLocked
-			}
-			unlockKey, ok := self.generationUnlockKeys[root.unlockGeneration]
-			if !ok {
-				return nil, ErrSidecarStoreFailed
-			}
-			return slices.Clone(unlockKey), nil
-		}()
+		unlockKey, err := self.unlockKeyOf(root.unlockGeneration)
 		if err != nil {
-			for _, opened := range roots {
-				clear(opened)
-			}
-			return nil, err
+			return fail(err)
 		}
 		opened, err := root.open(wrap.networkId, unlockKey)
 		clear(unlockKey)
 		if err != nil {
-			for _, other := range roots {
-				clear(other)
-			}
-			return nil, err
+			return fail(err)
 		}
 		roots[root.generation] = opened
 	}

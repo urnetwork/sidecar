@@ -402,3 +402,35 @@ func (self *gateFile) Sync() error {
 	}
 	return self.SidecarStoreBackendFile.Sync()
 }
+
+// A medium whose next directory sync of one path fails once its rename has gone through, as a
+// directory's fsync can with EIO. Safe for concurrent use.
+type syncFaultBackend struct {
+	SidecarStoreBackend
+	stateLock sync.Mutex
+	faultPath string
+}
+
+// The next SyncDirectory of path fails.
+func (self *syncFaultBackend) failNextSync(path string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.faultPath = path
+}
+
+// Fails once at the armed path.
+func (self *syncFaultBackend) SyncDirectory(path string) error {
+	fault := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.faultPath == "" || path != self.faultPath {
+			return false
+		}
+		self.faultPath = ""
+		return true
+	}()
+	if fault {
+		return errMediumFault
+	}
+	return self.SidecarStoreBackend.SyncDirectory(path)
+}

@@ -562,7 +562,9 @@ func TestADamagedWrapHoldsNoOtherNetworkBack(t *testing.T) {
 	}
 }
 
-// A lost network has nothing a key could open, so it holds nothing up.
+// A lost network holds nothing up, and stays a loss: its keychain.wrap moves under the new U, so the
+// person can still confirm a new device for it. Its wrap once kept naming the U the rotation dropped,
+// which made the loss a failure that no confirmation could clear.
 func TestALostNetworkDoesNotHoldARotation(t *testing.T) {
 	instance, backend, keyStore := enrolledInstance(t)
 	enrollTestNetwork(t, instance, otherTestNetworkId)
@@ -576,6 +578,70 @@ func TestALostNetworkDoesNotHoldARotation(t *testing.T) {
 	}
 	if err := reopened.RotateKeychain(context.Background(), nil); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := reopened.keychainFor(testNetworkId); !errors.Is(err, ErrSidecarKeystoreLost) {
+		t.Errorf("the lost network reads %v", err)
+	}
+	reopened.Close()
+	again := newInstanceOn(t, backend, keyStore)
+	if err := again.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.keychainFor(testNetworkId); !errors.Is(err, ErrSidecarKeystoreLost) {
+		t.Errorf("after a restart the lost network reads %v", err)
+	}
+	if err := again.ConfirmNewNetworkDevice(testNetworkId); err != nil {
+		t.Errorf("the loss cannot be confirmed: %v", err)
+	}
+}
+
+// Step 3's own check: an older U stays while a keychain.wrap still names it, however the run got there.
+func TestStepThreeKeepsAnOlderUAWrapStillNames(t *testing.T) {
+	instance, backend, keyStore := enrolledInstance(t)
+	writeStoreFile(t, storeOf(t, instance, testNetworkId, "evs"), "file", []byte("old file"))
+	before := readBackend(t, backend, keychainWrapPath(testNetworkId))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	requireError(t, instance.RotateKeychain(ctx, nil), context.Canceled)
+	putBackendFile(t, backend, keychainWrapPath(testNetworkId), before)
+	requireError(t, instance.finishRotationWithLock([]Id{testNetworkId}), errRotateUnfinished)
+	if wrap := mustUnlockWrap(t, instance); len(wrap.previousKeys) != 1 {
+		t.Errorf("%d older U", len(wrap.previousKeys))
+	}
+	if len(keyStore.snapshot()) != 2 {
+		t.Errorf("%d items in the store", len(keyStore.snapshot()))
+	}
+	instance.Close()
+	reopened := newInstanceOn(t, backend, keyStore)
+	if err := reopened.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	requireStoreFile(t, storeOf(t, reopened, testNetworkId, "evs"), "file", []byte("old file"))
+}
+
+// Step 2's own check: the old roots stay unless the root kept is the one the files were re-sealed to.
+func TestStepTwoKeepsTheOldRootsUnlessTheFilesAreOnTheKeptOne(t *testing.T) {
+	instance, _, _ := enrolledInstance(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	requireError(t, instance.RotateKeychain(ctx, nil), context.Canceled)
+	opened, err := instance.keychainFor(testNetworkId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		opened.stateLock.Lock()
+		defer opened.stateLock.Unlock()
+		opened.currentGeneration = 1
+	}()
+	_, err = instance.dropOldRootsWithLock(opened, opened.staleCommitCount.Load())
+	requireError(t, err, errRotateUnfinished)
+	wrap, err := instance.readKeychainWrap(testNetworkId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wrap.roots) != 2 {
+		t.Errorf("%d roots", len(wrap.roots))
 	}
 }
 
@@ -633,7 +699,10 @@ func TestRotateTwice(t *testing.T) {
 
 // §5.9's promise, at every step of a rotation, in the worst case and the best: the machine comes back
 // up with every file readable, a resumed run finishes, and nothing was lost on the way.
-func TestRotateResumesAfterKill(t *testing.T) {
+// Two networks with a value, a multi-chunk file and a file each, on a crash world: what a rotation
+// test then holds every step to. Answers the content of the multi-chunk file.
+func rotationCrashWorld(t *testing.T) (*crashWorld, []byte) {
+	t.Helper()
 	world := enrolledCrashWorld(t)
 	content := sealTestPlaintext(sealChunkByteCount + 1)
 	setup := world.open(world.keyStore())
@@ -645,43 +714,65 @@ func TestRotateResumesAfterKill(t *testing.T) {
 	writeStoreFile(t, storeOf(t, setup, otherTestNetworkId, "evs"), "repo", []byte("synthetic repo"))
 	setup.Close()
 	world.reboot(false)
+	return world, content
+}
 
+// Every value and file of rotationCrashWorld, read through instance.
+func requireRotationWorld(t *testing.T, instance *SidecarInstance, content []byte, trace []string) {
+	t.Helper()
+	first, err := instance.keychainFor(testNetworkId)
+	if err != nil {
+		t.Fatalf("after %q: %v", trace, err)
+	}
+	second, err := instance.keychainFor(otherTestNetworkId)
+	if err != nil {
+		t.Fatalf("after %q: %v", trace, err)
+	}
+	for _, opened := range []*keychain{first, second} {
+		seed, err := opened.secrets("identity").Get("seed")
+		if err != nil || !strings.HasPrefix(string(seed), "synthetic seed") {
+			t.Errorf("after %q: seed %q, err %v", trace, seed, err)
+		}
+	}
+	value, err := first.secrets("evs").Get("key")
+	if err != nil || string(value) != "old value" {
+		t.Errorf("after %q: value %q, err %v", trace, value, err)
+	}
+	for _, check := range []struct {
+		store SidecarStore
+		name  string
+		want  []byte
+	}{
+		{store: storeOf(t, instance, testNetworkId, "evs"), name: "file", want: []byte("old file")},
+		{store: storeOf(t, instance, testNetworkId, "gkm"), name: "group", want: content},
+		{store: storeOf(t, instance, otherTestNetworkId, "evs"), name: "repo", want: []byte("synthetic repo")},
+	} {
+		got, err := readStoreFile(check.store, check.name)
+		if err != nil {
+			t.Errorf("after %q: %s: %v", trace, check.name, err)
+		} else if !bytes.Equal(got, check.want) {
+			t.Errorf("after %q: %s changed", trace, check.name)
+		}
+	}
+}
+
+// What a finished rotation leaves on a crash world: one root per network, every file on it, one U and
+// one item in the key store.
+func requireRotationWorldFinished(t *testing.T, instance *SidecarInstance, world *crashWorld, trace []string) {
+	t.Helper()
+	backend := &crashBackend{world: world}
+	requireRotationFinished(t, instance, backend, testNetworkId)
+	requireRotationFinished(t, instance, backend, otherTestNetworkId)
+	if len(world.keyStoreItems) != 1 {
+		t.Errorf("after %q: %d items in the store", trace, len(world.keyStoreItems))
+	}
+}
+
+func TestRotateResumesAfterKill(t *testing.T) {
+	world, content := rotationCrashWorld(t)
 	requireEverything := func(instance *SidecarInstance, trace []string) {
 		t.Helper()
-		first, err := instance.keychainFor(testNetworkId)
-		if err != nil {
-			t.Fatalf("after %q: %v", trace, err)
-		}
-		second, err := instance.keychainFor(otherTestNetworkId)
-		if err != nil {
-			t.Fatalf("after %q: %v", trace, err)
-		}
-		for _, opened := range []*keychain{first, second} {
-			seed, err := opened.secrets("identity").Get("seed")
-			if err != nil || !strings.HasPrefix(string(seed), "synthetic seed") {
-				t.Errorf("after %q: seed %q, err %v", trace, seed, err)
-			}
-		}
-		value, err := first.secrets("evs").Get("key")
-		if err != nil || string(value) != "old value" {
-			t.Errorf("after %q: value %q, err %v", trace, value, err)
-		}
-		for _, check := range []struct {
-			store SidecarStore
-			name  string
-			want  []byte
-		}{
-			{store: storeOf(t, instance, testNetworkId, "evs"), name: "file", want: []byte("old file")},
-			{store: storeOf(t, instance, testNetworkId, "gkm"), name: "group", want: content},
-			{store: storeOf(t, instance, otherTestNetworkId, "evs"), name: "repo", want: []byte("synthetic repo")},
-		} {
-			got, err := readStoreFile(check.store, check.name)
-			if err != nil {
-				t.Errorf("after %q: %s: %v", trace, check.name, err)
-			} else if !bytes.Equal(got, check.want) {
-				t.Errorf("after %q: %s changed", trace, check.name)
-			}
-		}
+		requireRotationWorld(t, instance, content, trace)
 	}
 
 	operation := func(world *crashWorld) error {
@@ -703,13 +794,54 @@ func TestRotateResumesAfterKill(t *testing.T) {
 			t.Fatalf("after %q: %v", trace, err)
 		}
 		requireEverything(instance, trace)
-		backend := &crashBackend{world: world}
-		requireRotationFinished(t, instance, backend, testNetworkId)
-		requireRotationFinished(t, instance, backend, otherTestNetworkId)
-		if len(world.keyStoreItems) != 1 {
-			t.Errorf("after %q: %d items in the store", trace, len(world.keyStoreItems))
-		}
+		requireRotationWorldFinished(t, instance, world, trace)
 	})
+}
+
+// A fault at any step of a rotation, the medium answering an error with the machine still on, as a
+// directory's fsync does with EIO after its rename went through: the same process tries again and
+// finishes, and then even the worst power cut leaves every file readable. A retry once took its idea of
+// the current U and root from memory, which such a fault leaves behind the disk, and dropped the keys
+// every file was on.
+func TestARotationRetriedAfterAFaultAtAnyStepLosesNothing(t *testing.T) {
+	world, content := rotationCrashWorld(t)
+	rotate := func(world *crashWorld) (*SidecarInstance, error) {
+		instance := world.open(world.keyStore())
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		return instance, instance.RotateKeychain(context.Background(), nil)
+	}
+	counted := world.clone()
+	instance, err := rotate(counted)
+	if err != nil {
+		t.Fatalf("the unbroken run failed: %v", err)
+	}
+	instance.Close()
+	stepCount := counted.steps
+	for faultAt := 1; faultAt <= stepCount; faultAt += 1 {
+		for _, loseUnsynced := range []bool{true, false} {
+			faulted := world.clone()
+			faulted.faultAt = faultAt
+			instance, err := rotate(faulted)
+			if err == nil {
+				t.Errorf("a fault at step %d of %d went unanswered", faultAt, stepCount)
+			}
+			for retryCount := 0; err != nil; retryCount += 1 {
+				if retryCount == 3 {
+					t.Fatalf("a fault at step %d of %d, still failing: %v", faultAt, stepCount, err)
+				}
+				err = instance.RotateKeychain(context.Background(), nil)
+			}
+			instance.Close()
+			trace := faulted.trace
+			faulted.reboot(loseUnsynced)
+			reopened := restartOpen(t, faulted, trace)
+			requireRotationWorld(t, reopened, content, trace)
+			requireRotationWorldFinished(t, reopened, faulted, trace)
+			reopened.Close()
+		}
+	}
 }
 
 // The same with a pass: at every step the pass opens U, whichever U that is.
@@ -784,5 +916,79 @@ func TestAnUnknownFileStopsARotation(t *testing.T) {
 	}
 	if len(wrap.roots) != 2 {
 		t.Errorf("%d roots", len(wrap.roots))
+	}
+}
+
+// A directory's fsync fails after its rename went through, and the power goes out at any step of the
+// retry that follows: the rename the fault left to chance may be undone, and nothing the retry built on
+// it may be lost with it. A restart resumes and finishes with every file readable.
+func TestARetryKilledAfterADirectorySyncFaultLosesNothing(t *testing.T) {
+	world, content := rotationCrashWorld(t)
+	// the fault, then the retry, which dies at dieAt when that is set
+	faultThenRetry := func(world *crashWorld) {
+		instance := world.open(world.keyStore())
+		defer instance.Close()
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.RotateKeychain(context.Background(), nil); err == nil {
+			t.Fatalf("a fault at step %d went unanswered", world.faultAt)
+		}
+		instance.RotateKeychain(context.Background(), nil)
+	}
+	counted := world.clone()
+	instance := counted.open(counted.keyStore())
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	instance.Close()
+	faultCount := 0
+	for faultAt, name := range counted.trace {
+		if !strings.HasPrefix(name, "sync directory of ") {
+			continue
+		}
+		faultCount += 1
+		// counts the steps of the fault's run and of its retry
+		faulted := world.clone()
+		faulted.faultAt = faultAt + 1
+		instance := faulted.open(faulted.keyStore())
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.RotateKeychain(context.Background(), nil); err == nil {
+			t.Fatalf("a fault at %q went unanswered", name)
+		}
+		faultedStepCount := faulted.steps
+		if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+			t.Fatalf("the retry after a fault at %q: %v", name, err)
+		}
+		instance.Close()
+		for dieAt := faultedStepCount + 1; dieAt <= faulted.steps; dieAt += 1 {
+			for _, loseUnsynced := range []bool{true, false} {
+				killed := world.clone()
+				killed.faultAt = faultAt + 1
+				killed.dieAt = dieAt
+				faultThenRetry(killed)
+				if !killed.dead {
+					t.Fatalf("a fault at %q: no death at step %d", name, dieAt)
+				}
+				trace := killed.trace
+				killed.reboot(loseUnsynced)
+				reopened := restartOpen(t, killed, trace)
+				requireRotationWorld(t, reopened, content, trace)
+				if err := reopened.RotateKeychain(context.Background(), nil); err != nil {
+					t.Fatalf("after %q: %v", trace, err)
+				}
+				requireRotationWorld(t, reopened, content, trace)
+				requireRotationWorldFinished(t, reopened, killed, trace)
+				reopened.Close()
+			}
+		}
+	}
+	if faultCount == 0 {
+		t.Fatal("a rotation synced no directory")
 	}
 }

@@ -1136,3 +1136,28 @@ func TestSecretsWorkAgainAfterAnUnlock(t *testing.T) {
 		}
 	}
 }
+
+// A pass set after a rotation's write failed past its rename wraps the U that unlock.wrap names, so the
+// pass opens what the store wrap beside it does. It once wrapped the U memory still took as current,
+// under the newer generation, which only the key store could then open.
+func TestAPassSetAfterAFailedFlipOpensTheFile(t *testing.T) {
+	backend := &syncFaultBackend{SidecarStoreBackend: NewSidecarMemoryBackend()}
+	keyStore := newFakeKeyStore()
+	instance := newInstanceOn(t, backend, keyStore)
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	enrollTestNetwork(t, instance, testNetworkId)
+	writeStoreFile(t, storeOf(t, instance, testNetworkId, "evs"), "file", []byte("synthetic"))
+	backend.failNextSync(unlockWrapPath)
+	requireError(t, instance.RotateKeychain(context.Background(), nil), ErrSidecarStoreFailed)
+	if err := instance.ChangePass(nil, testPass); err != nil {
+		t.Fatal(err)
+	}
+	instance.Close()
+	passOnly := newInstanceOn(t, backend, nil)
+	if err := passOnly.Unlock(testPass); err != nil {
+		t.Fatal(err)
+	}
+	requireStoreFile(t, storeOf(t, passOnly, testNetworkId, "evs"), "file", []byte("synthetic"))
+}

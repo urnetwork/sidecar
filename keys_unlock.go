@@ -603,7 +603,7 @@ func (self *SidecarInstance) restoreStoreWrapWithLock(wrap *unlockWrap) {
 		return
 	}
 	err := func() error {
-		unlockKey, err := self.currentUnlockKey()
+		unlockKey, err := self.unlockKeyOf(wrap.generation)
 		if err != nil {
 			return err
 		}
@@ -714,13 +714,37 @@ func (self *SidecarInstance) openWithLock(wrap *unlockWrap, unlockKey []byte) er
 	return nil
 }
 
-// A copy of the current U, or ErrSidecarStoreLocked.
+// A copy of the current U, or ErrSidecarStoreLocked. Current is what a new keychain.wrap goes under, and
+// only ever a U the disk durably names.
 func (self *SidecarInstance) currentUnlockKey() ([]byte, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	unlockKey, ok := self.generationUnlockKeys[self.unlockGeneration]
 	if !ok {
 		return nil, ErrSidecarStoreLocked
+	}
+	return bytes.Clone(unlockKey), nil
+}
+
+// The generation of the current U. Zero while locked.
+func (self *SidecarInstance) currentUnlockGeneration() uint64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.unlockGeneration
+}
+
+// A copy of U of generation, for a step that wraps or checks what a file names, which may be newer than
+// the current U when a write failed after its rename. ErrSidecarStoreLocked while locked, and
+// ErrSidecarStoreFailed for a generation this process never had, which only a damaged file names.
+func (self *SidecarInstance) unlockKeyOf(generation uint64) ([]byte, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.generationUnlockKeys == nil {
+		return nil, ErrSidecarStoreLocked
+	}
+	unlockKey, ok := self.generationUnlockKeys[generation]
+	if !ok {
+		return nil, ErrSidecarStoreFailed
 	}
 	return bytes.Clone(unlockKey), nil
 }
@@ -739,13 +763,12 @@ func (self *SidecarInstance) ChangePass(oldPassphrase []byte, newPassphrase []by
 	return err
 }
 
-// See ChangePass.
+// See ChangePass. The U wrapped is the one the file names, so a pass set after a rotation's write failed
+// past its rename opens what the store wrap beside it does.
 func (self *SidecarInstance) changePassWithLock(oldPassphrase []byte, newPassphrase []byte) error {
-	unlockKey, err := self.currentUnlockKey()
-	if err != nil {
+	if err := self.stateError(); err != nil {
 		return err
 	}
-	defer clear(unlockKey)
 	wrap, err := self.readUnlockWrap()
 	if err != nil {
 		return err
@@ -753,6 +776,11 @@ func (self *SidecarInstance) changePassWithLock(oldPassphrase []byte, newPassphr
 	if wrap == nil {
 		return ErrSidecarStoreFailed
 	}
+	unlockKey, err := self.unlockKeyOf(wrap.generation)
+	if err != nil {
+		return err
+	}
+	defer clear(unlockKey)
 	if wrap.pass != nil {
 		if err := self.checkPassWithLock(wrap, oldPassphrase, unlockKey); err != nil {
 			return err

@@ -252,6 +252,29 @@ func (self *keychain) holdGeneration(generation uint64) (uint64, error) {
 	return generation, nil
 }
 
+// Takes the roots of keychain.wrap this keychain does not hold, and makes currentGeneration current, for
+// a resumed rotation. A root held already is the same key: one reaches memory only from that file or
+// from a write of it that succeeded.
+func (self *keychain) adoptRoots(generationRoots map[uint64][]byte, currentGeneration uint64) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		for _, root := range generationRoots {
+			clear(root)
+		}
+		return ErrSidecarStoreLocked
+	}
+	for generation, root := range generationRoots {
+		if _, ok := self.generationRoots[generation]; ok {
+			clear(root)
+			continue
+		}
+		self.generationRoots[generation] = root
+	}
+	self.currentGeneration = currentGeneration
+	return nil
+}
+
 // Ends what holdGeneration began.
 func (self *keychain) releaseGeneration(generation uint64) {
 	self.stateLock.Lock()

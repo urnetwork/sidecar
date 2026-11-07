@@ -1,7 +1,8 @@
 // A machine that can lose power at any step (§22.8's kills mid-keychain write): every Sync, Rename,
-// SyncDirectory, Remove and key store write is a numbered step, and a run dies at the one a test names.
-// What the medium keeps after that is what a power cut keeps, in its worst case or its best: a rename
-// not yet fsynced into its directory is lost or kept, by the choice given to reboot.
+// SyncDirectory, Remove and key store write is a numbered step, and a run dies at the one a test names,
+// or that step answers a fault and the run goes on. What the medium keeps after that is what a power cut
+// keeps, in its worst case or its best: a rename not yet fsynced into its directory is lost or kept, by
+// the choice given to reboot.
 
 package sidecar
 
@@ -10,15 +11,19 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 )
 
 var errKilled = errors.New("the power went out")
+
+var errMediumFault = fmt.Errorf("%w: an injected medium fault", ErrSidecarStoreFailed)
 
 // One machine, its medium and its key store. Safe for concurrent use.
 type crashWorld struct {
@@ -33,6 +38,9 @@ type crashWorld struct {
 	steps         int
 	dieAt         int
 	dead          bool
+	// a step that answers a medium's fault with the machine still on, as an fsync's EIO does, so the
+	// caller goes on and may try again
+	faultAt int
 	// names each step, for a failure's message
 	trace []string
 }
@@ -57,6 +65,9 @@ func (self *crashWorld) step(name string) error {
 	}
 	self.steps += 1
 	self.trace = append(self.trace, name)
+	if self.steps == self.faultAt {
+		return errMediumFault
+	}
 	if self.steps == self.dieAt {
 		self.dead = true
 		return errKilled
@@ -88,6 +99,7 @@ func (self *crashWorld) reboot(loseUnsynced bool) {
 	self.unsynced = map[string][]byte{}
 	self.dead = false
 	self.dieAt = 0
+	self.faultAt = 0
 	self.steps = 0
 	self.trace = nil
 }
@@ -195,6 +207,10 @@ func (self *crashBackend) List(prefix string) ([]SidecarStoreEntry, error) {
 			entries = append(entries, SidecarStoreEntry{Name: filePath, ByteCount: int64(len(content))})
 		}
 	}
+	// sorted, as the interface has it, so a run takes the same steps each time
+	slices.SortFunc(entries, func(a SidecarStoreEntry, b SidecarStoreEntry) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 	return entries, nil
 }
 
