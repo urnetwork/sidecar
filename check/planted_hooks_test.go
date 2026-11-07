@@ -88,6 +88,9 @@ func TestHygieneFailsOnTheHooksTagInGoflags(t *testing.T) {
 
 // This test's environment with none of the host's go configuration in it: no GOFLAGS, GOENV or
 // GOROOT, and a home of its own, which holds the default go env file. Then extra.
+//
+// The home starts with go telemetry off. Otherwise the go command starts a telemetry process that
+// outlives it and writes under the home, which races the home's cleanup when the test ends.
 func plantedHostEnvironment(t *testing.T, extra ...string) []string {
 	t.Helper()
 	environment := []string{}
@@ -97,7 +100,18 @@ func plantedHostEnvironment(t *testing.T, extra ...string) []string {
 			environment = append(environment, entry)
 		}
 	}
-	return append(append(environment, "HOME="+t.TempDir()), extra...)
+	home := t.TempDir()
+	// os.UserConfigDir's answer for that home on darwin, then on every other unix
+	for _, configDir := range []string{filepath.Join(home, "Library", "Application Support"), filepath.Join(home, ".config")} {
+		telemetryDir := filepath.Join(configDir, "go", "telemetry")
+		if err := os.MkdirAll(telemetryDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(telemetryDir, "mode"), []byte("off"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return append(append(environment, "HOME="+home), extra...)
 }
 
 // A go env file holding content, as go env -w leaves one.
