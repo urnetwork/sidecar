@@ -395,6 +395,13 @@ var refusedLicensePhrases = []string{
 	"noncommercial",
 }
 
+// MPL-2.0's definition of a Secondary License, lowered and joined as a license text is. It names the
+// GNU licenses and grants nothing under them, so in a module claiming MPL-2.0 this one sentence is no
+// refused phrase.
+const mplSecondaryLicenseDefinition = "\"secondary license\" means either the gnu general public license, " +
+	"version 2.0, the gnu lesser general public license, version 2.1, the gnu affero general public " +
+	"license, version 3.0, or any later versions of those licenses."
+
 // A license file by its name, as the go command's own license scan finds them.
 var licenseFileNamePattern = regexp.MustCompile(`(?i)^(licen[cs]e|copying|unlicense)([.-].*)?$`)
 
@@ -448,8 +455,12 @@ func (self *checkSettings) licenseFindings(row *dependencyRow, version string, l
 	if licenseText == "" {
 		findings = append(findings, findingf("%s has no license file, and §4.7 refuses the unlicensed", row.module))
 	}
+	scannedText := licenseText
+	if slices.Contains(licenseIds(row.spdx), "MPL-2.0") {
+		scannedText = strings.ReplaceAll(scannedText, mplSecondaryLicenseDefinition, "")
+	}
 	for _, phrase := range refusedLicensePhrases {
-		if !strings.Contains(licenseText, phrase) {
+		if !strings.Contains(scannedText, phrase) {
 			continue
 		}
 		if excepted && slices.Contains(licensePhrases[exception.spdx], phrase) {

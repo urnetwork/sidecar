@@ -268,6 +268,24 @@ func TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow(t *testing.T) {
 	wantFindings(t, fixture.open().licenseRowFindings(t), "github.com/pion/sctp's license text has \"shall not be used in advertising\"")
 }
 
+// MPL-2.0 names the GNU licenses in its own definitions, as real MPL text does and the fixture's short
+// notice does not, and that one sentence refuses nothing. Anything past it still does, and it clears
+// only a row that claims MPL-2.0.
+func TestDepsTakesMplNamingTheGnuLicenses(t *testing.T) {
+	settings := defaultCheckSettings()
+	mpl := strings.ToLower(fixtureMplLicense) + mplSecondaryLicenseDefinition
+	mplRow := &dependencyRow{module: "example.com/mpl", spdx: "BSD-3-Clause AND MPL-2.0"}
+	bsd := "redistribution and use in source and binary forms, neither the name "
+	wantFindings(t, settings.licenseFindings(mplRow, "v1.0.0", bsd+mpl))
+	wantFindings(t, settings.licenseFindings(mplRow, "v1.0.0", bsd+mpl+" gnu general public license version 3"),
+		"example.com/mpl's license text has \"gnu general public license\"")
+	bsdRow := &dependencyRow{module: "example.com/bsd", spdx: "BSD-3-Clause"}
+	wantFindings(t, settings.licenseFindings(bsdRow, "v1.0.0", bsd+mpl),
+		"example.com/bsd's license text has \"gnu general public license\"",
+		"example.com/bsd's license text has \"gnu lesser general public\"",
+		"example.com/bsd's license text has \"gnu affero general public\"")
+}
+
 // An exception covers one version: a bump is a new license to read.
 func TestDepsFailsOnAnExceptionAtAnotherVersion(t *testing.T) {
 	settings := defaultCheckSettings()
