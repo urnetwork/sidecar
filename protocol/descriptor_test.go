@@ -119,43 +119,7 @@ func TestBridgeProtosImportOnlyBridgeProtos(t *testing.T) {
 	}
 }
 
-// §6.11 and §22.5: no oneof in envelope, stream or push messages or anything they carry, walking from each
-// message those files declare, so a new message joins the lint by being declared. The allowlist is empty
-// in v0.
-func TestNoOneofInEnvelopeStreamOrPush(t *testing.T) {
-	visited := map[protoreflect.FullName]bool{}
-	var walk func(message protoreflect.MessageDescriptor)
-	walk = func(message protoreflect.MessageDescriptor) {
-		if visited[message.FullName()] {
-			return
-		}
-		visited[message.FullName()] = true
-		if message.Oneofs().Len() != 0 {
-			t.Errorf("%s holds a oneof", message.FullName())
-		}
-		fields := message.Fields()
-		for i := range fields.Len() {
-			if fieldMessage := fields.Get(i).Message(); fieldMessage != nil {
-				walk(fieldMessage)
-			}
-		}
-	}
-	for _, path := range []string{"protocol/envelope.proto", "protocol/stream.proto", "protocol/push.proto"} {
-		messages := testFile(t, path).Messages()
-		if messages.Len() == 0 {
-			t.Fatalf("%s declares no message", path)
-		}
-		for i := range messages.Len() {
-			walk(messages.Get(i))
-		}
-	}
-	// The walk must reach through HeadCheck into protocol/bridge, or it proves less than it claims.
-	if !visited[protoreflect.FullName(testProtoPackage+".AuthPin")] {
-		t.Fatal("the walk never reached AuthPin")
-	}
-}
-
-// §6.11's rule reaches what rides those messages as bytes, which the walk above cannot follow: hints in
+// §6.11's rule reaches what rides those messages as bytes, which registry_test.go's walk cannot follow: hints in
 // PushHint.hint, tickets in StreamOpen.ticket and edge metadata in StreamOpen.metadata. search.proto states the rule
 // for itself, and evs.proto's statements are parsed on every push.
 func TestNoOneofInWhatStreamsAndPushesCarry(t *testing.T) {
