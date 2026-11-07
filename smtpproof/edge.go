@@ -89,6 +89,8 @@ type edgePart struct {
 	openedRecords map[uint64]*edgeOpenedRecord
 	// DATA octets declared through the end of this part.
 	dataOctets uint64
+	// partCommits when its order checks ran.
+	commits uint64
 }
 
 type edgeSession struct {
@@ -134,8 +136,11 @@ type edgeSession struct {
 	heldBytes         int
 	nextClientSeq     uint64
 	// The first application record's sequence number in each direction: 1.2's Finished takes 0.
-	firstSeq      uint64
-	parts         []*edgePart
+	firstSeq uint64
+	parts    []*edgePart
+	// Parts landed so far. A verification runs with no lock held, so this says whether the checks that
+	// came before it still stand.
+	partCommits   uint64
 	coveredServer uint64
 	chunkOctets   uint64
 	finished      bool
@@ -259,6 +264,11 @@ func (self *edgeSession) ServerRecord(record []byte) error {
 		defer self.stateLock.Unlock()
 		switch self.phase {
 		case edgePhaseClientHello:
+			// a retry's dummy change_cipher_spec comes ahead of the second ClientHello, which the server
+			// is still waiting for
+			if self.helloRetried && record[0] == tlsRecordChangeCipherSpec && tlsDummyChangeCipherSpec(record) {
+				return nil
+			}
 			return edgeRefuse(checkE1, "server record before ClientHello")
 		case edgePhaseServerHello:
 			return self.serverHelloWithLock(record)
@@ -529,6 +539,11 @@ func (self *edgeSession) serverFinished12WithLock(record []byte) error {
 // DiscloseShts of sidecar.SmtpProofSession: runs E2 over the flight, then releases the client's
 // Finished. shts is never kept: only its hash survives, as Z1's public input.
 func (self *edgeSession) DiscloseShts(shts []byte) ([][]byte, error) {
+	// HMAC pads a short key with zeros, so any other length of the same secret would open the flight
+	if len(shts) != tlsSecretBytes {
+		return nil, edgeRefuse(checkE2, "SHTS has the wrong length")
+	}
+	testHookSecret("edge_shts", shts)
 	// the hooks run with no lock held, so the keys are derived first; the suite never changes once set
 	suite := func() uint16 {
 		self.stateLock.Lock()
@@ -684,6 +699,9 @@ func (self *edgeSession) clientApplicationWithLock(record []byte) ([][]byte, err
 	if record[0] != tlsRecordApplicationData {
 		return nil, edgeRefuse(checkE1, "client record of type %d after the handshake", record[0])
 	}
+	if version := uint16(record[1])<<8 | uint16(record[2]); version != tlsVersion12 {
+		return nil, edgeRefuse(checkE1, "client record of version %#x after the handshake", version)
+	}
 	self.heldRecords = append(self.heldRecords, record)
 	self.heldBytes += len(record)
 	if self.settings.maxHeldBytes < self.heldBytes {
@@ -760,16 +778,19 @@ func (self *edgeSession) maxBodyOctets(record []byte) (uint64, error) {
 	return uint64(len(record) - overhead), nil
 }
 
-// The content length of an opened client record of a given raw length.
-func (self *edgeSession) contentBytes(record []byte) int {
+// The content length of an opened client record. A 1.3 record has at least its type octet.
+func (self *edgeSession) contentBytes(record []byte) (int, error) {
 	ciphertext, err := recordCiphertext(self.version, record)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	if self.version == tlsVersion13 {
-		return len(ciphertext) - tlsInnerTypeBytes
+		if len(ciphertext) == 0 {
+			return 0, errors.New("record holds no type octet")
+		}
+		return len(ciphertext) - tlsInnerTypeBytes, nil
 	}
-	return len(ciphertext)
+	return len(ciphertext), nil
 }
 
 // Runs the part-order rules of SPEC.md section 6, and builds the statement. It returns nil, nil for
@@ -883,15 +904,25 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 	if statement.clientRecords[len(statement.clientRecords)-1].seq != part.LastRecord {
 		return nil, edgeRefuse(checkE3, "part's records do not reach last_record")
 	}
+	// BDAT's QUIT names its own number, and at one the head already holds it would take that record's
+	// place in openedRecords: the stream would then pass with no header block behind it
+	for i := 1; i < len(statement.clientRecords); i += 1 {
+		if statement.clientRecords[i].seq <= statement.clientRecords[i-1].seq {
+			return nil, edgeRefuse(checkE3, "part's records are not in sequence order")
+		}
+	}
 	roles, err := partRoles(statement)
 	if err != nil {
 		return nil, edgeRefuse(checkE3, "%v", err)
 	}
 
-	gated := &edgePart{part: part, statement: statement, openedRecords: map[uint64]*edgeOpenedRecord{}, dataOctets: previousDataOctets}
+	gated := &edgePart{part: part, statement: statement, openedRecords: map[uint64]*edgeOpenedRecord{}, dataOctets: previousDataOctets, commits: self.partCommits}
 	for i, role := range roles {
 		record := statement.clientRecords[i]
-		contentBytes := self.contentBytes(record.raw)
+		contentBytes, err := self.contentBytes(record.raw)
+		if err != nil {
+			return nil, edgeRefuse(checkE3, "%v", err)
+		}
 		// no template, no satisfying plaintext: refuse before spending a verification
 		if _, err := commandTemplate(role, self.preamble, contentBytes); err != nil {
 			return nil, edgeRefuse(checkE3, "%v", err)
@@ -959,6 +990,20 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 	forward, err := func() ([][]byte, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		// the order checks ran against what stood before this verification. A part that landed since has
+		// taken this index, so only an exact resend of that part may pass, as a no-op: anything else
+		// would change what the gate holds with none of a replacement's checks
+		if gated.commits != self.partCommits {
+			again, err := self.preparePartWithLock(part)
+			if err != nil {
+				return nil, err
+			}
+			if again != nil {
+				return nil, edgeRefuse(checkE3, "part %d arrived while another verified", part.Index)
+			}
+			return nil, nil
+		}
+		self.partCommits += 1
 		if 0 < len(self.parts) && self.parts[len(self.parts)-1].part.Index == part.Index {
 			self.parts[len(self.parts)-1] = gated
 		} else {

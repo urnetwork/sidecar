@@ -17,9 +17,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,17 +28,6 @@ const signedBytesPrefix = "urnetwork-sidecar-v1/"
 
 // Names the countersigned bytes' domain and is no §6.11 purpose, so signed bytes never reach it.
 const presenceActPurpose = "presence-act"
-
-// §16.6's webauthn-es256 per-use profile. The authenticator data is the rp id's SHA-256, a flags byte,
-// then a 4-byte counter (WebAuthn §6.1).
-const (
-	webAuthnRpId                          = "ur.io"
-	webAuthnClientDataTypeGet             = "webauthn.get"
-	webAuthnFlagsOffset                   = sha256.Size
-	webAuthnFlagUserPresent          byte = 0x01
-	webAuthnFlagUserVerified         byte = 0x04
-	webAuthnAuthenticatorDataMinSize      = sha256.Size + 1 + 4
-)
 
 var (
 	// No Signed was given.
@@ -54,6 +41,8 @@ var (
 	ErrSignedTypeMismatch = errors.New("signed type mismatch")
 	// The evidence does not fit the signer, or for webauthn-es256 does not pass (§6.9, §16.6).
 	ErrSignedEvidence = errors.New("signed evidence refused")
+	// An act's size, index or inclusion path cannot be an act's, whatever it hashes to (§7.9).
+	ErrSignedAct = errors.New("signed act refused")
 	// The key algorithm is unknown, the public key is malformed for it, or a key the statement carries is
 	// not the one its row binds.
 	ErrSignedKey = errors.New("signed key refused")
@@ -111,7 +100,8 @@ func SignedBytesSha256(purpose string, signedType SignedType, body []byte) [sha2
 // Evidence must fit: without its key_id only for a webauthn-es256 signer, and with it, a countersignature,
 // only beside an Ed25519 signature, which is as near as this comes to knowing an identity key. A
 // countersignature is never checked here: nil says nothing about one, so a caller holding a statement
-// §7.9's presence row covers must check it apart, and any other caller ignores it.
+// §7.9's presence row covers must check it apart with VerifyPresenceCountersign, and any other caller
+// ignores it.
 //
 // For webauthn-es256 this checks everything in §16.6's per-use profile that needs no state: the rp id
 // hash, UP and UV, the client data's type and challenge, and the signature. Two checks stay with the
@@ -120,10 +110,10 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 	if signed == nil {
 		return ErrSignedMissing
 	}
-	if _, ok := SignedType_name[int32(expectedType)]; !ok || expectedType == SignedType_SIGNED_TYPE_NONE {
+	if !signedTypeRegistered(expectedType) {
 		return fmt.Errorf("%w: %d", ErrSignedTypeUnknown, int32(expectedType))
 	}
-	if purpose == "" || purpose == presenceActPurpose || strings.IndexByte(purpose, 0x00) >= 0 {
+	if !signedPurposeUsable(purpose) {
 		return fmt.Errorf("%w: %q", ErrSignedPurpose, purpose)
 	}
 	if signed.GetType() != uint32(expectedType) {
@@ -150,15 +140,8 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 		if evidence != nil {
 			return fmt.Errorf("%w: evidence beside an ecdsa-p256-sha256 signature", ErrSignedEvidence)
 		}
-		ecdsaKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), publicKey)
-		if err != nil {
-			return fmt.Errorf("%w: %w", ErrSignedKey, err)
-		}
 		digest := SignedBytesSha256(purpose, expectedType, signed.GetBody())
-		if !ecdsa.VerifyASN1(ecdsaKey, digest[:], signed.GetSignature()) {
-			return ErrSignedSignature
-		}
-		return nil
+		return verifyP256Signature(publicKey, digest[:], signed.GetSignature())
 
 	case SignedKeyAlgWebAuthnEs256:
 		if evidence == nil {
@@ -173,51 +156,39 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 			return fmt.Errorf("%w: countersignature fields without a key_id", ErrSignedEvidence)
 		}
 
-		authenticatorData := evidence.GetAuthenticatorData()
-		if len(authenticatorData) < webAuthnAuthenticatorDataMinSize {
-			return fmt.Errorf("%w: authenticator data of %d bytes", ErrSignedEvidence, len(authenticatorData))
-		}
-		rpIdHash := sha256.Sum256([]byte(webAuthnRpId))
-		if !bytes.Equal(authenticatorData[:sha256.Size], rpIdHash[:]) {
-			return fmt.Errorf("%w: rp id hash", ErrSignedEvidence)
-		}
-		requiredFlags := webAuthnFlagUserPresent | webAuthnFlagUserVerified
-		if authenticatorData[webAuthnFlagsOffset]&requiredFlags != requiredFlags {
-			return fmt.Errorf("%w: UP or UV unset", ErrSignedEvidence)
-		}
-
-		var clientData struct {
-			Type      string `json:"type"`
-			Challenge string `json:"challenge"`
-		}
-		if err := json.Unmarshal(evidence.GetClientDataJson(), &clientData); err != nil {
-			return fmt.Errorf("%w: client data: %w", ErrSignedEvidence, err)
-		}
-		if clientData.Type != webAuthnClientDataTypeGet {
-			return fmt.Errorf("%w: client data type", ErrSignedEvidence)
-		}
 		// The challenge is the SHA-256 of the signed bytes, so it covers the type.
-		challenge := SignedBytesSha256(purpose, expectedType, signed.GetBody())
-		if clientData.Challenge != base64.RawURLEncoding.EncodeToString(challenge[:]) {
-			return fmt.Errorf("%w: challenge", ErrSignedEvidence)
+		if _, err := checkWebAuthnAssertion(evidence, SignedBytes(purpose, expectedType, signed.GetBody())); err != nil {
+			return err
 		}
-
-		ecdsaKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), publicKey)
-		if err != nil {
-			return fmt.Errorf("%w: %w", ErrSignedKey, err)
-		}
-		clientDataHash := sha256.Sum256(evidence.GetClientDataJson())
-		digest := sha256.New()
-		digest.Write(authenticatorData)
-		digest.Write(clientDataHash[:])
-		if !ecdsa.VerifyASN1(ecdsaKey, digest.Sum(nil), signed.GetSignature()) {
-			return ErrSignedSignature
-		}
-		return nil
+		return verifyWebAuthnSignature(evidence, signed.GetSignature(), publicKey)
 
 	default:
 		return fmt.Errorf("%w: algorithm %d", ErrSignedKey, int(keyAlg))
 	}
+}
+
+// Whether §6.11 registers the value as a statement's type, 0 being none.
+func signedTypeRegistered(signedType SignedType) bool {
+	_, ok := SignedType_name[int32(signedType)]
+	return ok && signedType != SignedType_SIGNED_TYPE_NONE
+}
+
+// Whether the purpose keeps a statement's signed bytes apart from every other's: a 0x00 would let two purposes and
+// types encode alike, and "presence-act" would reach the countersigned bytes' domain.
+func signedPurposeUsable(purpose string) bool {
+	return purpose != "" && purpose != presenceActPurpose && strings.IndexByte(purpose, 0x00) < 0
+}
+
+// Checks a DER signature over digest, under a key as SignedKeyAlgEcdsaP256 holds it.
+func verifyP256Signature(publicKey []byte, digest []byte, signature []byte) error {
+	ecdsaKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), publicKey)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSignedKey, err)
+	}
+	if !ecdsa.VerifyASN1(ecdsaKey, digest, signature) {
+		return ErrSignedSignature
+	}
+	return nil
 }
 
 // Checks a statement a member's recovery key signed (§7.9's Recovery), before or after its device is admitted. The
