@@ -6,6 +6,7 @@
 package protocol
 
 import (
+	"errors"
 	"maps"
 	"os"
 	"regexp"
@@ -18,7 +19,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
-const testDesignPath = "../DESIGN.md"
+// Where DESIGN.md is from this directory. A release branch keeps it at the repository's top, beside
+// the module moved into v2026/ (§4.9), so there it sits one directory further up.
+var testDesignPaths = []string{"../DESIGN.md", "../../DESIGN.md"}
 
 // Written so a fence's string, identifier, number and punctuation each stay one token.
 var testFenceToken = regexp.MustCompile(`"[^"]*"|[A-Za-z_][A-Za-z0-9_.]*|0x[0-9A-Fa-f]+|[0-9]+|[{};=,<>]`)
@@ -80,7 +83,10 @@ func testParseNumber(t *testing.T, token string) int32 {
 
 // Every fenced proto block in DESIGN.md, read into one set of declarations.
 func testReadFences(t *testing.T) *testFences {
-	design, err := os.ReadFile(testDesignPath)
+	design, err := os.ReadFile(testDesignPaths[0])
+	if errors.Is(err, os.ErrNotExist) {
+		design, err = os.ReadFile(testDesignPaths[1])
+	}
 	if err != nil {
 		t.Fatalf("this test needs the design beside the module: %v", err)
 	}
