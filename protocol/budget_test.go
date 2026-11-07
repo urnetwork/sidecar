@@ -1,4 +1,4 @@
-// Bounds the design states on a message, held at each message's worst case. testFillWidest fills from the descriptor,
+// Bounds the design states on a message, held at each message's worst case. testFillToWidths fills from the descriptor,
 // not by hand, so a field added later takes its place in the worst case: a number goes in at its widest, and a string,
 // bytes or list field stops the test until testFieldWidths says how wide the design lets it grow. Identifiers are the
 // design's 16 B ids and 32 B hashes, and numbers the widest a varint holds, so these overstate what a real ticket or
@@ -92,7 +92,7 @@ func testSize(t *testing.T, message proto.Message) int {
 // Sets every field of message at its widest, nested messages included, so nothing can sit unset and cost no bytes. A
 // string, bytes or list field fieldWidths does not name is an error: nothing else can say how far it grows. So is a
 // map, and a list of strings or bytes, which no bounded message holds yet and which would need a width per element.
-func testFillWidest(message protoreflect.Message, fieldWidths map[string]int) error {
+func testFillToWidths(message protoreflect.Message, fieldWidths map[string]int) error {
 	// A negative int32 or int64 takes ten bytes, the most a varint does, and an enum its highest number.
 	widestNumber := func(field protoreflect.FieldDescriptor) protoreflect.Value {
 		switch field.Kind() {
@@ -138,13 +138,13 @@ func testFillWidest(message protoreflect.Message, fieldWidths map[string]int) er
 					continue
 				}
 				element := list.NewElement()
-				if err := testFillWidest(element.Message(), fieldWidths); err != nil {
+				if err := testFillToWidths(element.Message(), fieldWidths); err != nil {
 					return err
 				}
 				list.Append(element)
 			}
 		case field.Message() != nil:
-			if err := testFillWidest(message.Mutable(field).Message(), fieldWidths); err != nil {
+			if err := testFillToWidths(message.Mutable(field).Message(), fieldWidths); err != nil {
 				return err
 			}
 		case field.Kind() == protoreflect.StringKind:
@@ -166,7 +166,7 @@ func TestSocketTicketFitsItsBounds(t *testing.T) {
 		fieldWidths[unset] = 0
 
 		ticket := &SocketTicket{}
-		if err := testFillWidest(ticket.ProtoReflect(), fieldWidths); err != nil {
+		if err := testFillToWidths(ticket.ProtoReflect(), fieldWidths); err != nil {
 			t.Fatal(err)
 		}
 		size := testSize(t, ticket)
@@ -176,7 +176,7 @@ func TestSocketTicketFitsItsBounds(t *testing.T) {
 
 		fieldWidths["SignedSocketTicket.ticket"] = size
 		signed := &SignedSocketTicket{}
-		if err := testFillWidest(signed.ProtoReflect(), fieldWidths); err != nil {
+		if err := testFillToWidths(signed.ProtoReflect(), fieldWidths); err != nil {
 			t.Fatal(err)
 		}
 		if size := testSize(t, signed); size > testSignedTicketBound {
@@ -189,7 +189,7 @@ func TestSocketTicketFitsItsBounds(t *testing.T) {
 func TestHintsFitPushHint(t *testing.T) {
 	for _, message := range []proto.Message{&SocketHint{}, &GkmHint{}, &EvsHeadChanged{}} {
 		name := message.ProtoReflect().Descriptor().Name()
-		if err := testFillWidest(message.ProtoReflect(), testFieldWidths); err != nil {
+		if err := testFillToWidths(message.ProtoReflect(), testFieldWidths); err != nil {
 			t.Fatal(err)
 		}
 		if size := testSize(t, message); size > testHintBound {
@@ -201,7 +201,7 @@ func TestHintsFitPushHint(t *testing.T) {
 // §16.11: a notice names up to the rule's two approvals and still pads to 256 B.
 func TestDirectoryNoticeFitsItsBound(t *testing.T) {
 	notice := &DirectoryNotice{}
-	if err := testFillWidest(notice.ProtoReflect(), testFieldWidths); err != nil {
+	if err := testFillToWidths(notice.ProtoReflect(), testFieldWidths); err != nil {
 		t.Fatal(err)
 	}
 	if size := testSize(t, notice); size > testNoticeBound {
@@ -259,7 +259,7 @@ func TestBoundsReachAFieldAddedLater(t *testing.T) {
 			t.Fatal(err)
 		}
 		message := dynamicpb.NewMessage(descriptor.(protoreflect.MessageDescriptor))
-		return message, testFillWidest(message, testFieldWidths)
+		return message, testFillToWidths(message, testFieldWidths)
 	}
 	for _, c := range cases {
 		files := testPlantedFiles(t, func(fileProtos testFileProtos) {
@@ -298,7 +298,7 @@ func TestBoundsReachAFieldAddedLater(t *testing.T) {
 
 	// Every field of the real messages reaches the wire, width 0's aside, so a fill that stopped early cannot pass.
 	for _, message := range []proto.Message{&SocketHint{}, &GkmHint{}, &EvsHeadChanged{}, &DirectoryNotice{}} {
-		if err := testFillWidest(message.ProtoReflect(), testFieldWidths); err != nil {
+		if err := testFillToWidths(message.ProtoReflect(), testFieldWidths); err != nil {
 			t.Fatal(err)
 		}
 		set := 0
