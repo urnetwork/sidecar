@@ -10,7 +10,7 @@ else
 modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop
 endif
 
-.PHONY: check size proto
+.PHONY: check size proto stack-test
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
@@ -35,3 +35,7 @@ size:
 
 proto:
 	$(MAKE) -C protocol GO="$(GO)"
+
+# The store suites on §22.4's local stack, which needs Docker, so make check leaves it out.
+stack-test:
+	GO="$(GO)" local/stack.sh test
