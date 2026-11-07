@@ -169,14 +169,14 @@ func (self *repository) legReflectLookupFindings(leg *buildLeg) []string {
 	if export.failure != "" {
 		return []string{findingf("no reflect lookup was read on a leg that does not compile: %s", export.failure)}
 	}
-	exportFiles := map[string]string{}
+	importPathExportFiles := map[string]string{}
 	for _, listed := range export.packages {
-		exportFiles[listed.ImportPath] = listed.Export
+		importPathExportFiles[listed.ImportPath] = listed.Export
 	}
 	fileSet := token.NewFileSet()
 	// one importer for the leg, which keeps each package it reads for the next
 	exportImporter := importer.ForCompiler(fileSet, "gc", func(importPath string) (io.ReadCloser, error) {
-		exportFile := exportFiles[importPath]
+		exportFile := importPathExportFiles[importPath]
 		if exportFile == "" {
 			return nil, fmt.Errorf("the leg compiled no export data for %s", importPath)
 		}
