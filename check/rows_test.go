@@ -210,7 +210,7 @@ var failsOnRows = []failsOnRow{
 		rule: (*repository).cgoLegFindings,
 		plantedTests: []string{
 			"TestCgoFailsOnACgoFileOnALeg", "TestCgoFailsOnTheKeychainFileOutsideTheFallbackLeg",
-			"TestCgoFailsOnANewThirdPartyCgoFile",
+			"TestCgoFailsOnAKeychainFileInAnotherPackageOnTheFallbackLeg", "TestCgoFailsOnANewThirdPartyCgoFile",
 		},
 	},
 
