@@ -189,10 +189,44 @@ message GkmEpochsReply {
   repeated GkmEpochEntry epochs = 1;  // in order
 }
 
-// GET /gkm/groups/<id>/gen?since= and .../drop-key?since=. The gen route stops at gkm's bound as GkmEpochsReply does,
-// and the drop-key route at 64 (10.14).
+// GET /gkm/groups/<id>/gen?since= and /gkm/repos/<id>/drop-key?since=, which answers for the repo's newest GroupForm, so
+// a depositor needs no group id. The gen route stops at gkm's bound as GkmEpochsReply does, and the drop-key route at
+// 64 (10.14).
 message GkmGenerationsReply {
   repeated Signed generations = 1;  // GenRotates, in order
+}
+
+// GET /gkm/repos/<id>/forms.
+message GkmFormsReply {
+  repeated Signed forms = 1;     // the repo's GroupForms, oldest first
+}
+
+// POST /gkm/groups/<id>/ladder: a re-formed group's old generations, which the group takes byte for byte, naming their
+// old group_id.
+message GkmLadderRequest {
+  repeated Signed generations = 1;  // GenRotates, at most 64 a call, in ascending order
+}
+
+// POST /gkm/reader-keys, which spares a rotator a request per recipient.
+message GkmReaderKeysRequest {
+  repeated bytes sidecar_ids = 1;  // at most 256
+}
+message GkmReaderKeysReply {
+  repeated Signed reader_keys = 1;  // ReaderKeys in the request's order, an empty Signed for a sidecar that has none
+}
+
+// POST /gkm/groups/<id>/wraps/<g>/<c8>, so a rotation of thousands stays inside W2's limit. gkm runs each delivery through
+// the wrap checks and answers in order, so a batch of one behaves as one delivery would. If-None-Match makes a retry
+// safe.
+message GkmWrapBatch {
+  repeated bytes deliveries = 1;  // 1 to 256 Signed ReaderWraps and DelegationWraps
+}
+message GkmWrapResult {
+  uint32 status = 1;             // 201, 412, 403, 409 or 429, as for one delivery, or 0 for not tried
+  bytes winner = 2;              // a 412's Signed delivery
+}
+message GkmWrapBatchReply {
+  repeated GkmWrapResult results = 1;
 }
 
 // GET /gkm/groups/<id>/wraps/<g>.
@@ -226,8 +260,8 @@ message GkmAckRequest {
   uint64 epoch = 1;              // the leaf's newest applied epoch
 }
 
-// POST and GET /gkm/recovery/<member_id>/wraps. The object gkm/recovery/<member_id>/<group_id>/<g>/<c8>/<b8> holds
-// ciphertext bare, and these fields are its path.
+// GET /gkm/recovery/<member_id>/wraps, and its POST for a rebind's re-wrap. The object
+// gkm/recovery/<member_id>/<group_id>/<g>/<c8>/<b8> holds ciphertext bare, and these fields are its path.
 message GkmRecoveryWrap {
   bytes group_id = 1;
   uint64 generation = 2;         // g
@@ -237,4 +271,15 @@ message GkmRecoveryWrap {
 }
 message GkmRecoveryWrapsReply {
   repeated GkmRecoveryWrap wraps = 1;
+}
+
+// POST /gkm/groups/<id>/recovery-wraps/<g>/<c8>: a rotator's RecoveryWraps, as GkmWrapBatch is for its deliveries, and
+// answered by a GkmWrapBatchReply. The route names the group, g and c8 of each object.
+message GkmRecoveryWrapItem {
+  bytes member_id = 1;
+  bytes binding_prefix = 2;      // as GkmRecoveryWrap's
+  bytes ciphertext = 3;          // RecoveryWrap_{m,g}
+}
+message GkmRecoveryWrapBatch {
+  repeated GkmRecoveryWrapItem items = 1;  // 1 to 256
 }

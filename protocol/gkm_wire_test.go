@@ -24,6 +24,7 @@ const (
 	testFuzzSeedDirectory = "testdata/fuzz/FuzzBody"
 )
 
+// Writes the seeds, for a message that has none yet.
 var testUpdateFuzzSeeds = flag.Bool(
 	"update-fuzz-seeds", false, "write gkm.proto's seeds under testdata/fuzz/FuzzBody instead of checking for them",
 )

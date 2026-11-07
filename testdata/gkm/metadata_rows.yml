@@ -107,6 +107,18 @@ GkmEpochsReply.epochs: {number: 1, type: repeated GkmEpochEntry, row: gkm-2, see
 
 GkmGenerationsReply.generations: {number: 1, type: repeated Signed, row: gkm-7, sees: "GenRotates"}
 
+GkmFormsReply.forms: {number: 1, type: repeated Signed, row: gkm-1, sees: "GroupForm chain"}
+
+GkmLadderRequest.generations: {number: 1, type: repeated Signed, row: gkm-7, sees: "GenRotates"}
+
+GkmReaderKeysRequest.sidecar_ids: {number: 1, type: repeated bytes, row: gkm-4, sees: "ReaderKeys"}
+GkmReaderKeysReply.reader_keys: {number: 1, type: repeated Signed, row: gkm-4, sees: "ReaderKeys"}
+
+GkmWrapBatch.deliveries: {number: 1, type: repeated bytes, row: gkm-7, sees: "staged and late wraps"}
+GkmWrapResult.status: {number: 1, type: uint32, row: gkm-7, sees: "staged and late wraps"}
+GkmWrapResult.winner: {number: 2, type: bytes, row: gkm-7, sees: "staged and late wraps"}
+GkmWrapBatchReply.results: {number: 1, type: repeated GkmWrapResult, row: gkm-7, sees: "staged and late wraps"}
+
 GkmWrapsReply.wraps: {number: 1, type: repeated Signed, row: gkm-7, sees: "staged and late wraps"}
 
 GkmWelcomeRecipient.sidecar_id: {number: 1, type: bytes, row: gkm-5, sees: "recipient sidecar_ids"}
@@ -127,3 +139,7 @@ GkmRecoveryWrap.commitment_prefix: {number: 3, type: bytes, row: gkm-8, pending:
 GkmRecoveryWrap.binding_prefix: {number: 4, type: bytes, row: gkm-8, sees: "an 8-byte prefix of the binding's Ed25519 key hash"}
 GkmRecoveryWrap.ciphertext: {number: 5, type: bytes, row: gkm-8, sees: "HPKE ciphertext"}
 GkmRecoveryWrapsReply.wraps: {number: 1, type: repeated GkmRecoveryWrap, row: gkm-8, sees: "recovery wraps"}
+GkmRecoveryWrapItem.member_id: {number: 1, type: bytes, row: gkm-8, sees: "recovery wraps (member_id"}
+GkmRecoveryWrapItem.binding_prefix: {number: 2, type: bytes, row: gkm-8, sees: "an 8-byte prefix of the binding's Ed25519 key hash"}
+GkmRecoveryWrapItem.ciphertext: {number: 3, type: bytes, row: gkm-8, sees: "HPKE ciphertext"}
+GkmRecoveryWrapBatch.items: {number: 1, type: repeated GkmRecoveryWrapItem, row: gkm-8, sees: "recovery wraps"}
