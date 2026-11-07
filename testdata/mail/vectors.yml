@@ -1,0 +1,458 @@
+# Fixed bytes of protocol/mail.proto, which MAIL-FORMAT.md states. Each message's hex came from protoc --encode over its
+# text, the C++ encoder, so these and the Go code cannot share a bug. mail_vectors_test.go holds them on every leg it
+# runs on, and fails on a message or field no vector covers. All names and addresses are synthetic.
+#
+# Keep the file to this shape, which that test reads line by line since the root links no YAML parser: sections, each a
+# list of flat items, a value being one plain scalar or the literal block of text.
+
+messages:
+  - name: ingress
+    type: MailIngress
+    hex: "08011204c0000219188080032a146d782e61636d652e726f6f742e6578616d706c6542136d61696c2e73656e6465722e6578616d706c654a136d61696c2e73656e6465722e6578616d706c65520370626c52036373735880e89ef19a34"
+    text: |
+      version: 1
+      sender_ip: "\xc0\x00\x02\x19"
+      sender_port: 49152
+      sni: "mx.acme.root.example"
+      ehlo_name: "mail.sender.example"
+      ptr_name: "mail.sender.example"
+      ip_listings: "pbl"
+      ip_listings: "css"
+      receive_time_millis: 1793923200000
+  - name: ingress-widest-identifiers
+    type: MailIngress
+    hex: "0801121020010db800000000000000000000002518ffff032afd017373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737373737342ff016565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565654afd01707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070705880e89ef19a34"
+    text: |
+      version: 1
+      sender_ip: "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x25"
+      sender_port: 65535
+      sni: "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+      ehlo_name: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ptr_name: "ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      receive_time_millis: 1793923200000
+  - name: evidence
+    type: MailAuthEvidence
+    hex: "08011220abababababababababababababababababababababababababababababababab18a8e89ef19a342210019a5b1000007000800000000000000a2a360801120e73656e6465722e6578616d706c651a04c0000219221c763d73706631206970343a3139322e302e322e302f3234202d616c6c32240a0e73656e6465722e6578616d706c65120273311801220c302a300506032b657003210032150a0d6f746865722e6578616d706c651202733218043a120a0672656a6563741201731a01722002280142136d61696c2e73656e6465722e6578616d706c6548015225080212210a0d72656c61792e6578616d706c65120261311a0c302a300506032b65700321005801620c0803100918082001280c3001"
+    text: |
+      version: 1
+      message_sha256: "\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab"
+      receive_time_millis: 1793923200040
+      receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+      spf {
+        result: SPF_PASS
+        domain: "sender.example"
+        ip: "\xc0\x00\x02\x19"
+        records: "v=spf1 ip4:192.0.2.0/24 -all"
+      }
+      dkim {
+        domain: "sender.example"
+        selector: "s1"
+        result: DKIM_PASS
+        public_key: "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00"
+      }
+      dkim {
+        domain: "other.example"
+        selector: "s2"
+        result: DKIM_TEMPERROR
+      }
+      dmarc {
+        p: "reject"
+        adkim: "s"
+        aspf: "r"
+        alignment: 2
+        result: DMARC_PASS
+      }
+      ptr_name: "mail.sender.example"
+      sni_tlsa_live: true
+      arc {
+        cv: ARC_PASS
+        sets {
+          domain: "relay.example"
+          selector: "a1"
+          public_key: "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00"
+        }
+      }
+      strict_chain: true
+      limits {
+        reason: 3
+        dkim_seen: 9
+        dkim_checked: 8
+        arc_sets: 1
+        dns_queries: 12
+        dropped: 1
+      }
+  - name: hint-deposit
+    type: MailHint
+    hex: "0801"
+    text: |
+      kind: MAIL_HINT_DEPOSIT
+  - name: hint-receiver-needed
+    type: MailHint
+    hex: "0802"
+    text: |
+      kind: MAIL_HINT_RECEIVER_NEEDED
+  - name: deposit
+    type: MailDeposit
+    hex: "0801125d08011204c0000219188080032a146d782e61636d652e726f6f742e6578616d706c6542136d61696c2e73656e6465722e6578616d706c654a136d61696c2e73656e6465722e6578616d706c65520370626c52036373735880e89ef19a341a940208011220abababababababababababababababababababababababababababababababab18a8e89ef19a342210019a5b1000007000800000000000000a2a360801120e73656e6465722e6578616d706c651a04c0000219221c763d73706631206970343a3139322e302e322e302f3234202d616c6c32240a0e73656e6465722e6578616d706c65120273311801220c302a300506032b657003210032150a0d6f746865722e6578616d706c651202733218043a120a0672656a6563741201731a01722002280142136d61696c2e73656e6465722e6578616d706c6548015225080212210a0d72656c61792e6578616d706c65120261311a0c302a300506032b65700321005801620c0803100918082001280c30012217736f6d656f6e65ff4073656e6465722e6578616d706c65280132156164614061636d652e726f6f742e6578616d706c65321767726163654061636d652e726f6f742e6578616d706c653884064081264a10019a5b1000007000800000000000000a"
+    text: |
+      version: 1
+      ingress {
+        version: 1
+        sender_ip: "\xc0\x00\x02\x19"
+        sender_port: 49152
+        sni: "mx.acme.root.example"
+        ehlo_name: "mail.sender.example"
+        ptr_name: "mail.sender.example"
+        ip_listings: "pbl"
+        ip_listings: "css"
+        receive_time_millis: 1793923200000
+      }
+      evidence {
+        version: 1
+        message_sha256: "\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab\xab"
+        receive_time_millis: 1793923200040
+        receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+        spf {
+          result: SPF_PASS
+          domain: "sender.example"
+          ip: "\xc0\x00\x02\x19"
+          records: "v=spf1 ip4:192.0.2.0/24 -all"
+        }
+        dkim {
+          domain: "sender.example"
+          selector: "s1"
+          result: DKIM_PASS
+          public_key: "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00"
+        }
+        dkim {
+          domain: "other.example"
+          selector: "s2"
+          result: DKIM_TEMPERROR
+        }
+        dmarc {
+          p: "reject"
+          adkim: "s"
+          aspf: "r"
+          alignment: 2
+          result: DMARC_PASS
+        }
+        ptr_name: "mail.sender.example"
+        sni_tlsa_live: true
+        arc {
+          cv: ARC_PASS
+          sets {
+            domain: "relay.example"
+            selector: "a1"
+            public_key: "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00"
+          }
+        }
+        strict_chain: true
+        limits {
+          reason: 3
+          dkim_seen: 9
+          dkim_checked: 8
+          arc_sets: 1
+          dns_queries: 12
+          dropped: 1
+        }
+      }
+      mail_from: "someone\xff@sender.example"
+      require_tls: true
+      recipients: "ada@acme.root.example"
+      recipients: "grace@acme.root.example"
+      tls_version: 772
+      tls_suite: 4865
+      receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+  - name: deposit-same-network
+    type: MailDeposit
+    hex: "080122156164614061636d652e726f6f742e6578616d706c65321767726163654061636d652e726f6f742e6578616d706c654a10019a5b1000007000800000000000000b"
+    text: |
+      version: 1
+      mail_from: "ada@acme.root.example"
+      recipients: "grace@acme.root.example"
+      receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0b"
+  - name: address-group
+    type: MailAddress
+    hex: "08031210019a5b1000007000800000000000000d1a10019a5b1000007000800000000000000e1a10019a5b1000007000800000000000000f2210019a5b1000007000800000000000000a2a20eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    text: |
+      kind: MAIL_ADDRESS_GROUP
+      mailbox: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0d"
+      members: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0e"
+      members: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0f"
+      creator: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+      effect_key: "\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"
+  - name: burner
+    type: MailBurner
+    hex: "0a10019a5b1000007000800000000000000c100218012080e89ef19a342a20eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    text: |
+      mailbox: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0c"
+      state: MAIL_BURNER_PAUSED
+      replying: true
+      created: 1793923200000
+      effect_key: "\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"
+  - name: index-entry
+    type: IndexEntry
+    hex: "0a101111111111111111111111111111111112156164614061636d652e726f6f742e6578616d706c651880e89ef19a34221f53656e646572203c736f6d656f6e654073656e6465722e6578616d706c653e2a09596f757220636f6465321f5573652034383239313320746f2066696e697368207369676e696e6720696e3a156162633132334073656e6465722e6578616d706c654210a1a2a3a4a5a6a7a8a9aaabacadaeafb048802052210a0b696e766f6963652e706466120f6170706c69636174696f6e2f7064661880105a0c08011001180120012801300160016a170802120f6c69737465642d6f70657261746f721803200170197a06343832393133"
+    text: |
+      id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+      address: "ada@acme.root.example"
+      time: 1793923200000
+      from: "Sender <someone@sender.example>"
+      subject: "Your code"
+      snippet: "Use 482913 to finish signing in"
+      message_id: "abc123@sender.example"
+      thread_key: "\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0"
+      size: 4096
+      attachments {
+        name: "invoice.pdf"
+        type: "application/pdf"
+        size: 2048
+      }
+      auth_results {
+        spf: SPF_PASS
+        dkim: DKIM_PASS
+        dmarc: DMARC_PASS
+        arc: ARC_NONE
+        checks_incomplete: true
+        evidence_unavailable: true
+      }
+      tls_label: MAIL_TLS_VALIDATED
+      tls_basis {
+        rule: MAIL_TLS_RULE_OPERATOR
+        operator_id: "listed-operator"
+        list_version: 3
+        strict_custom_mx: true
+      }
+      spam_score: 25
+      one_time_code: "482913"
+  - name: index-segment
+    type: MailIndexSegment
+    hex: "080112ff010a101111111111111111111111111111111112156164614061636d652e726f6f742e6578616d706c651880e89ef19a34221f53656e646572203c736f6d656f6e654073656e6465722e6578616d706c653e2a09596f757220636f6465321f5573652034383239313320746f2066696e697368207369676e696e6720696e3a156162633132334073656e6465722e6578616d706c654210a1a2a3a4a5a6a7a8a9aaabacadaeafb048802052210a0b696e766f6963652e706466120f6170706c69636174696f6e2f7064661880105a0c08011001180120012801300160016a170802120f6c69737465642d6f70657261746f721803200170197a0634383239313312320a102222222222222222222222222222222212156164614061636d652e726f6f742e6578616d706c651881e89ef19a346003"
+    text: |
+      version: 1
+      entries {
+        id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        address: "ada@acme.root.example"
+        time: 1793923200000
+        from: "Sender <someone@sender.example>"
+        subject: "Your code"
+        snippet: "Use 482913 to finish signing in"
+        message_id: "abc123@sender.example"
+        thread_key: "\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0"
+        size: 4096
+        attachments {
+          name: "invoice.pdf"
+          type: "application/pdf"
+          size: 2048
+        }
+        auth_results {
+          spf: SPF_PASS
+          dkim: DKIM_PASS
+          dmarc: DMARC_PASS
+          arc: ARC_NONE
+          checks_incomplete: true
+          evidence_unavailable: true
+        }
+        tls_label: MAIL_TLS_VALIDATED
+        tls_basis {
+          rule: MAIL_TLS_RULE_OPERATOR
+          operator_id: "listed-operator"
+          list_version: 3
+          strict_custom_mx: true
+        }
+        spam_score: 25
+        one_time_code: "482913"
+      }
+      entries {
+        id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        address: "ada@acme.root.example"
+        time: 1793923200001
+        tls_label: MAIL_TLS_MEMBER_SIGNED
+      }
+  - name: flag-op
+    type: MailFlagOp
+    hex: "0a101111111111111111111111111111111110031a047370616d200128818080a0fbc4ebd0013210019a5b1000007000800000000000000a"
+    text: |
+      message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+      kind: MAIL_FLAG_LABEL
+      label: "spam"
+      set: true
+      hlc: 117566550835200001
+      sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+  - name: flag-segment
+    type: MailFlagSegment
+    hex: "080112320a10111111111111111111111111111111111001200128808080a0fbc4ebd0013210019a5b1000007000800000000000000b12380a101111111111111111111111111111111110031a047370616d200128818080a0fbc4ebd0013210019a5b1000007000800000000000000a"
+    text: |
+      version: 1
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        kind: MAIL_FLAG_SEEN
+        set: true
+        hlc: 117566550835200000
+        sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0b"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        kind: MAIL_FLAG_LABEL
+        label: "spam"
+        set: true
+        hlc: 117566550835200001
+        sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+      }
+  - name: reference
+    type: MailReference
+    hex: "0a10019a5b1000007000800000000000000d121011111111111111111111111111111111"
+    text: |
+      repo_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0d"
+      message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+  - name: vault-entry
+    type: VaultEntry
+    hex: "0a1033333333333333333333333333333333122173686f70406f747465722d343832312e61636d652e726f6f742e6578616d706c651a0c4578616d706c652073686f70220e73796e7468657469632d757365722a1973796e7468657469632d70617373776f72642d63616e617279321673796e7468657469632d70617373776f72642d6f6e65321673796e7468657469632d70617373776f72642d74776f3a1c0a14313233343536373839303132333435363738393010011806201e421a68747470733a2f2f73686f702e6578616d706c652f6c6f67696e4a10612073796e746865746963206e6f7465521c0a0c73686f702e6578616d706c651080e89ef19a341880a0b89a9b345880e89ef19a346080a0b89a9b346802"
+    text: |
+      entry_id: "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33"
+      address: "shop@otter-4821.acme.root.example"
+      title: "Example shop"
+      username: "synthetic-user"
+      password: "synthetic-password-canary"
+      password_history: "synthetic-password-one"
+      password_history: "synthetic-password-two"
+      totp {
+        secret: "12345678901234567890"
+        algorithm: VAULT_TOTP_SHA1
+        digits: 6
+        period: 30
+      }
+      urls: "https://shop.example/login"
+      notes: "a synthetic note"
+      used_at {
+        registrable_domain: "shop.example"
+        first: 1793923200000
+        last: 1794009600000
+      }
+      created: 1793923200000
+      updated: 1794009600000
+      state: VAULT_ENTRY_BURNED
+  - name: forward
+    type: MailForward
+    hex: "0a19656c73657768657265406f7574736964652e6578616d706c65120a6f747465722d34383231120a6865726f6e2d31303933"
+    text: |
+      address: "elsewhere@outside.example"
+      burners: "otter-4821"
+      burners: "heron-1093"
+  - name: reverse-alias
+    type: MailReverseAlias
+    hex: "0a16736f6d656f6e654073656e6465722e6578616d706c65122173686f70406f747465722d343832312e61636d652e726f6f742e6578616d706c65"
+    text: |
+      original_sender: "someone@sender.example"
+      burner_address: "shop@otter-4821.acme.root.example"
+  - name: outbox-entry
+    type: MailOutboxEntry
+    hex: "08011220eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1a21626f756e6365732b74306b656e40622e61636d652e726f6f742e6578616d706c652216736f6d656f6e654073656e6465722e6578616d706c65221668696464656e406f7574736964652e6578616d706c652a3646726f6d3a206164614061636d652e726f6f742e6578616d706c650d0a5375626a6563743a2068656c6c6f0d0a0d0a68656c6c6f0d0a30043a0f6f7574736964652e6578616d706c654080e89ef19a344880c5faf29a34"
+    text: |
+      version: 1
+      effect_key: "\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"
+      mail_from: "bounces+t0ken@b.acme.root.example"
+      recipients: "someone@sender.example"
+      recipients: "hidden@outside.example"
+      message: "From: ada@acme.root.example\r\nSubject: hello\r\n\r\nhello\r\n"
+      flags: 4
+      tl4_domains: "outside.example"
+      created: 1793923200000
+      approval_not_after: 1793926800000
+  - name: outcome
+    type: MailOutcome
+    hex: "0a0f6f7574736964652e6578616d706c651002180420808080012880804030e0d40338a6044003"
+    text: |
+      domain: "outside.example"
+      mode: MAIL_SEND_DATA
+      kind: MAIL_OUTCOME_TOO_LARGE
+      message_byte_count: 2097152
+      cap_byte_count: 1048576
+      retry_after_ms: 60000
+      reply_code: 550
+      tls_level: 3
+  - name: outcome-record
+    type: MailOutcomeRecord
+    hex: "0a160a0e73656e6465722e6578616d706c651001180140010a170a0f6f7574736964652e6578616d706c65180330e0d403"
+    text: |
+      outcomes {
+        domain: "sender.example"
+        mode: MAIL_SEND_BDAT
+        kind: MAIL_OUTCOME_SENT
+        tls_level: 1
+      }
+      outcomes {
+        domain: "outside.example"
+        kind: MAIL_OUTCOME_DEFERRED
+        retry_after_ms: 60000
+      }
+  - name: prover-record
+    type: MailProverRecord
+    hex: "08808040109201"
+    text: |
+      smtp_data_proof_bytes: 1048576
+      data_bytes_per_second: 146
+
+# <h> over a last name, and the spelling of a binary name.
+names:
+  - name: otter-4821
+    h: "f4"
+  - name: "ada@acme.root.example"
+    h: "88"
+  - name: ceirceirceirceirceirceirce
+    hex: "11111111111111111111111111111111"
+    h: "12"
+  - name: 53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xa
+    hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    h: "29"
+
+# <yyyymm> of a sealed receive time.
+months:
+  - millis: 1793923200000
+    month: "202611"
+  - millis: 1798761599999
+    month: "202612"
+  - millis: 1798761600000
+    month: "202701"
+
+# The clock's tick: last and now in, hlc out.
+clocks:
+  - last: 0
+    now: 1793923200000
+    hlc: 117566550835200000
+  - last: 117566550835200000
+    now: 1793923200000
+    hlc: 117566550835200001
+  - last: 117566550835265535
+    now: 1793923200000
+    hlc: 117566550835265536
+  - last: 117566550835527687
+    now: 1793923200000
+    hlc: 117566550835527688
+  - last: 18446744073709551615
+    now: 1793923200000
+    hlc: 18446744073709551615
+
+# Two ops on one key, and which wins.
+orders:
+  - a_hlc: 117566550835200002
+    a_sidecar: "01010101010101010101010101010101"
+    a_set: false
+    b_hlc: 117566550835200001
+    b_sidecar: "02020202020202020202020202020202"
+    b_set: true
+    wins: a
+  - a_hlc: 117566550835200000
+    a_sidecar: "01010101010101010101010101010101"
+    a_set: true
+    b_hlc: 117566550835200000
+    b_sidecar: "02020202020202020202020202020202"
+    b_set: false
+    wins: b
+  - a_hlc: 117566550835200000
+    a_sidecar: "01010101010101010101010101010101"
+    a_set: true
+    b_hlc: 117566550835200000
+    b_sidecar: "01010101010101010101010101010101"
+    b_set: false
+    wins: a

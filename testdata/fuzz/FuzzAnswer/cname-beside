@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("\x97\xda\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x01a\x04net1\x04zone\aexample\x00\x00\x01\x00\x01")
+[]byte("a user CNAME 60 b.net1.zone.example.\na user TXT 60 \"x\"")
