@@ -69,16 +69,12 @@ func testActDigests(statements []*testActStatement) [][sha256.Size]byte {
 	return statementDigests
 }
 
-// A fixed digest for leaf i of an act too large to write out, the same statement rule the vectors state.
-func testRuleDigest(i int) [sha256.Size]byte {
-	return SignedBytesSha256("authority", SignedType_SIGNED_SIDECAR_REVOKE, binary.BigEndian.AppendUint32(nil, uint32(i)))
-}
-
-// The first size of testRuleDigest.
+// Fixed digests for an act too large to write out, by the statement rule the vectors state.
 func testRuleDigests(size int) [][sha256.Size]byte {
 	statementDigests := make([][sha256.Size]byte, size)
 	for i := range statementDigests {
-		statementDigests[i] = testRuleDigest(i)
+		body := binary.BigEndian.AppendUint32(nil, uint32(i))
+		statementDigests[i] = SignedBytesSha256("authority", SignedType_SIGNED_SIDECAR_REVOKE, body)
 	}
 	return statementDigests
 }
@@ -86,7 +82,7 @@ func testRuleDigests(size int) [][sha256.Size]byte {
 // A presence key's one check, over an act's countersigned bytes: what the key returns, before the act's fields join it.
 type testPresenceCheck func(countersignedBytes []byte) *WebAuthnEvidence
 
-// ecdsa-p256-sha256's check by the fixture key, or by key where a test wants another.
+// ecdsa-p256-sha256's check by key.
 func testEcdsaPresenceCheck(t testing.TB, key *ecdsa.PrivateKey) testPresenceCheck {
 	return func(countersignedBytes []byte) *WebAuthnEvidence {
 		digest := sha256.Sum256(countersignedBytes)
@@ -313,7 +309,7 @@ func TestVerifyPresenceCountersignRefusesNoCountersignature(t *testing.T) {
 	}
 }
 
-// An act is one signer's, and a countersigned bytes with no signer in them would be nobody's.
+// An act is one signer's, and countersigned bytes with no signer in them would be nobody's.
 func TestVerifyPresenceCountersignRefusesNoSignerId(t *testing.T) {
 	statement := testActStatements(1)[0]
 	for _, profile := range testPresenceProfiles(t) {
@@ -618,8 +614,8 @@ func TestVerifyPresenceCountersignRefusesEveryBitFlip(t *testing.T) {
 	}
 }
 
-// §7.9's bounds, each against a countersignature that is otherwise whole, so only the bound can refuse it. A key
-// signs what it is given, so a thief holding the key's owner's device can sign an act of any size.
+// §7.9's bounds, each against a countersignature that is otherwise whole, so only the bound can refuse it. A presence
+// key signs what its client gives it, so an act past the bounds can carry a real signature.
 func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
 	statement := testActStatements(1)[0]
 	leafDigest := SignedBytesSha256(statement.purpose, statement.signedType, statement.body)
@@ -1018,9 +1014,9 @@ func TestVerifyPresenceCountersignEvidenceMustFit(t *testing.T) {
 	}
 }
 
-// The signature's message, which only VerifyPresenceCountersign's own bytes can be: a presence key signs the leaf's
-// bytes in place of the root's, which is what a check that dropped the walk would accept, and nothing but the
-// countersigned bytes pass.
+// A key signs an act's countersigned bytes and nothing near them: its signature over the statement's own bytes, the
+// leaf, those bytes cut short, another size or the layout with no size in it is refused, each with the act fields whole,
+// and only the bytes themselves pass.
 func TestVerifyPresenceCountersignSignsTheActsBytesAlone(t *testing.T) {
 	statement := testActStatements(1)[0]
 	signedBytes := SignedBytes(statement.purpose, statement.signedType, statement.body)
@@ -1156,9 +1152,10 @@ func TestCountersignatureAndIdentitySignatureAreApart(t *testing.T) {
 	}
 }
 
-// The tree's inputs for these: RFC 6962's and 9162's known answers from Certificate Transparency's test suites, which
-// are arbitrary leaves, where an act's are always 32 bytes, so they enter below PresenceActRoot, as leaf hashes.
-func testKnownAnswerLeafHashes(t *testing.T) [][sha256.Size]byte {
+// §2.1.1's tree against answers no code here produced, Certificate Transparency's published ones, at the sizes that
+// take each shape of right edge. Those leaves are arbitrary where an act's are 32 bytes, so they enter below
+// PresenceActRoot, as leaf hashes.
+func TestPresenceActTreeKnownAnswers(t *testing.T) {
 	leaves := []string{
 		"",
 		"00",
@@ -1173,11 +1170,6 @@ func testKnownAnswerLeafHashes(t *testing.T) [][sha256.Size]byte {
 	for i, leaf := range leaves {
 		leafHashes[i] = sha256.Sum256(append([]byte{0x00}, testFromHex(t, leaf)...))
 	}
-	return leafHashes
-}
-
-// §2.1.1's tree against answers no code here produced, at the sizes that take each shape of right edge.
-func TestPresenceActTreeKnownAnswers(t *testing.T) {
 	roots := []string{
 		"6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
 		"fac54203e7cc696cf0dfcb42c92a1d9dbaf70ad9e621f4bd8d98662f00e3c125",
@@ -1188,7 +1180,6 @@ func TestPresenceActTreeKnownAnswers(t *testing.T) {
 		"ddb89be403809e325750d3d263cd78929c2942b7942a34b77e122c9594a74c8c",
 		"5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328",
 	}
-	leafHashes := testKnownAnswerLeafHashes(t)
 	for i, root := range roots {
 		size := i + 1
 		want := testFromHex(t, root)
@@ -1234,9 +1225,9 @@ func TestPresenceActRootHashesItsLeaves(t *testing.T) {
 	}
 }
 
-// Every leaf of every act up to two full levels, and past each boundary: its path walks to the root, its length is
-// its own, and it stands for no other leaf. No index but its own reaches the root from this leaf by this path, the
-// off-by-one cases included, and a path never fits a size it was not made for.
+// Every leaf of every act up to 70 statements, past each power of two that shapes a right edge: its path walks to the
+// root, and it stands for no other leaf. No index but its own reaches the root from this leaf by this path, the
+// off-by-one cases included, nor does the next leaf reach it by this path.
 func TestPresenceActPathsWalkOnlyFromTheirOwnLeaf(t *testing.T) {
 	for size := 1; size <= 70; size++ {
 		statementDigests := testRuleDigests(size)
@@ -1295,7 +1286,7 @@ func TestPresenceActPathsAtTheLargestAct(t *testing.T) {
 		{index: 32768, size: 16},
 		{index: 65532, size: 16},
 		{index: 65533, size: 16},
-		// the last leaf's sibling subtrees skip the level its right edge has no node at
+		// an odd last leaf has no sibling at the bottom level, so its path is one shorter
 		{index: 65534, size: 15},
 	}
 	for _, c := range cases {
