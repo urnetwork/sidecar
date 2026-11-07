@@ -1,0 +1,1 @@
+{"format":1,"root":"zone.example.","serial":43,"added_by_n_plus_one":{"any":["shape"]},"upserts":[{"owner":"blog.abcdefghij.zone.example.","type":16,"ttl":300,"kind":"user","rdata":["\"hello world\""],"added_by_n_plus_one":7}]}
