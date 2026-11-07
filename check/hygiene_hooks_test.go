@@ -47,6 +47,21 @@ var hookEntryPoints = map[string]string{
 // Names that exist only under the tag, and only in the root (testhook_enabled.go).
 var tagOnlyRootNames = []string{"TestHookSecret", "TestHookBarrier", "SetTestHooks", "TestHooks"}
 
+// device/ may not import the root even under the tag (§4.4, D-SDK-20), so it is the one package whose
+// tagged half forwards to nothing, and its tagged file holds an installer of its own: these two names
+// and no others.
+const deviceHooksPackage = "device"
+
+var deviceInstallerNames = []string{"SetTestHooks", "TestHooks"}
+
+// True for the file that may declare name, one of tagOnlyRootNames.
+func (self *sourceFile) holdsEntryPoint(name string) bool {
+	if !self.tagOnly(sidecarTestHooksTag) {
+		return false
+	}
+	return self.packageName == "." || (self.packageName == deviceHooksPackage && slices.Contains(deviceInstallerNames, name))
+}
+
 // True when no assignment of the other tags builds the expression without tag.
 func requiresTag(expression constraint.Expr, tag string) bool {
 	switch typed := expression.(type) {
@@ -103,19 +118,14 @@ func (self *repository) legTagFindings() []string {
 }
 
 // The caller's GOFLAGS, which every go command here clears so a leg stays what it names. A tag in
-// it is a tag on whatever else that environment builds, the release's own steps included.
+// it is a tag on whatever else that environment builds, the release's own steps included. Read as
+// whole words, because GOFLAGS may quote a -tags value.
 func callerGoflagsFindings(goflags string) []string {
 	findings := []string{}
-	for _, flag := range strings.Fields(goflags) {
-		flag = strings.TrimLeft(flag, "-")
-		value, isTags := strings.CutPrefix(flag, "tags=")
-		if !isTags {
-			continue
-		}
-		for _, tag := range unshippableTags {
-			if slices.Contains(strings.Split(value, ","), tag) {
-				findings = append(findings, findingf("GOFLAGS carries %s, so a release built here is built with it", tag))
-			}
+	for _, tag := range unshippableTags {
+		word := regexp.MustCompile(`(^|[^a-z0-9_])` + tag + `($|[^a-z0-9_])`)
+		if word.MatchString(goflags) {
+			findings = append(findings, findingf("GOFLAGS carries %s, so a release built here is built with it", tag))
 		}
 	}
 	return findings
@@ -270,7 +280,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 						if _, hook := hookSignatures[name]; hook {
 							findings = append(findings, findingf("%s: %s is not a function, so it can hold something in a release build", display, name))
 						}
-						if slices.Contains(tagOnlyRootNames, name) && !(file.packageName == "." && file.tagOnly(sidecarTestHooksTag)) {
+						if slices.Contains(tagOnlyRootNames, name) && !file.holdsEntryPoint(name) {
 							findings = append(findings, findingf("%s: %s exists outside the root's tagged file", display, name))
 						}
 					}
@@ -280,7 +290,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 					continue
 				}
 				name := typed.Name.Name
-				if slices.Contains(tagOnlyRootNames, name) && !(file.packageName == "." && file.tagOnly(sidecarTestHooksTag)) {
+				if slices.Contains(tagOnlyRootNames, name) && !file.holdsEntryPoint(name) {
 					findings = append(findings, findingf("%s: %s exists outside the root's tagged file", display, name))
 				}
 				signature, hook := hookSignatures[name]
@@ -316,7 +326,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 				findings = append(findings, findingf("%s keeps %s with no half under %s", packageName, name, sidecarTestHooksTag))
 				continue
 			}
-			if packageName != "." && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
+			if packageName != "." && packageName != deviceHooksPackage && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
 				findings = append(findings, findingf("%s: %s does not forward to the root's %s, as testhook.go has a package do", self.displayPath(tagged.file.path), name, hookEntryPoints[name]))
 			}
 		}
@@ -325,10 +335,11 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 	return findings
 }
 
-var goBuildCommandPattern = regexp.MustCompile(`\b(go|\$\(GO\)|lowgo)\s+(build|install|run)\b`)
+// A go test command, however the Makefile spells go.
+var goTestCommandPattern = regexp.MustCompile(`(^|[^[:alnum:]_/-])(go|lowgo|\$\(GO\))\s+test\b`)
 
-// A Makefile line that builds with an unshippable tag. Tests may use the tag, and a go test line is
-// how the hooks are exercised; a build line is how a binary is made.
+// A Makefile line carrying an unshippable tag that is not a go test line: go test is how the hooks
+// are exercised, and anything else, a go build or a GOFLAGS export, makes something that can ship.
 func (self *repository) makefileTagFindings(t testing.TB) []string {
 	t.Helper()
 	makefiles, err := filepath.Glob(filepath.Join(self.topDirectory, "Makefile"))
@@ -344,16 +355,19 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			makefiles = append(makefiles, matches...)
 		}
 	}
+	// gomobile's legs are built by sdk's Makefile, not by anything here
+	makefiles = append(makefiles, self.siblingPath("sdk/build/Makefile"))
 	slices.Sort(makefiles)
 	makefiles = slices.Compact(makefiles)
 	findings := []string{}
 	for _, makefile := range makefiles {
 		data, err := os.ReadFile(makefile)
 		if err != nil {
-			t.Fatal(err)
+			findings = append(findings, findingf("reading a release build's Makefile: %v", err))
+			continue
 		}
 		for index, line := range strings.Split(string(data), "\n") {
-			if !goBuildCommandPattern.MatchString(line) {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") || goTestCommandPattern.MatchString(line) {
 				continue
 			}
 			for _, tag := range unshippableTags {

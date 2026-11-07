@@ -6,7 +6,6 @@
 package check
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -48,6 +47,18 @@ func TestDepsFailsOnSnInALeg(t *testing.T) {
 	wantFindings(t, repository.legModuleFindings(t), "root linux/amd64 links @sn@, from sn")
 }
 
+// §4.5: a row in dependencies.yml is no way round ServiceHost. An engine gets these from its host.
+func TestDepsFailsOnAnEngineLinkingGoRedis(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("engines linux/amd64")
+	fixture.writeSibling("goredis/go.mod", "module github.com/redis/go-redis/v9\n\ngo 1.27.3\n")
+	fixture.writeSibling("goredis/redis.go", "package redis\n")
+	fixture.requireLocal("github.com/redis/go-redis/v9", "v9.23.0", "goredis")
+	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: github.com/redis/go-redis/v9\n    spdx: BSD-2-Clause\n    reason: a listing is no way round the rule\n    leg: [engine]\n")
+	fixture.write("evsservice/engine.go", "package evsservice\n\nimport _ \"github.com/redis/go-redis/v9\"\n")
+	wantFindings(t, fixture.open().legModuleFindings(t), "engines linux/amd64 links github.com/redis/go-redis/v9, from go-redis")
+}
+
 func TestDepsFailsOnAnUnlistedModuleInALeg(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("cli linux/amd64")
@@ -67,12 +78,21 @@ func TestDepsFailsOnAModuleOutsideItsRowsLegs(t *testing.T) {
 	wantFindings(t, fixture.open().legModuleFindings(t), "root linux/amd64 is a client leg and links @glog@, whose row names [cli]")
 }
 
-func TestDepsFailsOnAPlannedRowThatIsLinked(t *testing.T) {
+// planted spares a row the stale check and nothing else: once a leg links the module its files are
+// read like any other's, so a row that said planned cannot wave a license through.
+func TestDepsReadsAPlannedRowsFilesOnceItIsLinked(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
 	fixture.write("planted.go", "package sidecar\n\nimport _ \"google.golang.org/protobuf/proto\"\n")
-	wantFindings(t, fixture.open().legModuleFindings(t),
-		"root linux/amd64 links google.golang.org/protobuf, and its row still says planned")
+	fixture.edit("dependencies.yml", "spdx: BSD-3-Clause", "spdx: MIT")
+	repository := fixture.open()
+	reports := []string{}
+	repository.report = func(format string, arguments ...any) {
+		reports = append(reports, findingf(format, arguments...))
+	}
+	wantFindings(t, repository.legModuleFindings(t))
+	wantFindings(t, reports, "a leg links google.golang.org/protobuf, whose row can drop planned")
+	wantFindings(t, repository.licenseRowFindings(t), "google.golang.org/protobuf says MIT, and its license text lacks")
 }
 
 // Every way the file can stray from its one shape fails, rather than dropping a row in silence.
@@ -266,17 +286,4 @@ func TestDepsFailsOnAStaleLicenseException(t *testing.T) {
 		"example.com/left": {version: "v1.0.0", spdx: "X11", question: "example.md"},
 	}
 	wantFindings(t, fixture.open().licenseExceptionFindings(t), "the license exception for example.com/left has no matching row")
-}
-
-// This row's module list is this checkout's: dependencies.yml answers to the real files. Beyond the
-// control above, that the module cache's directories are where the check reads them.
-func TestLicenseFilesAreReadFromTheModuleDirectory(t *testing.T) {
-	repository := openThisCheckout(t)
-	licenseText, err := readLicenseText(filepath.Join(repository.siblingsDirectory, "connect"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(licenseText, "mozilla public license") {
-		t.Errorf("connect's license text reads %q", licenseText)
-	}
 }

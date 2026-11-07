@@ -14,9 +14,11 @@ endif
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
-# cached pass would hide a new violation. RELEASE_BINARIES names built artifacts for the rules to
-# read as well. This needs the module proxy and vuln.go.dev for govulncheck, and protoc once a
-# .proto exists, and fails without them: a rule that did not run has not passed.
+# cached pass would hide a new violation. check/ runs from its own directory, go test's local mode,
+# so a passing run still prints what it leaned on. RELEASE_BINARIES names built artifacts for the
+# rules to read as well. This needs the module proxy and vuln.go.dev for govulncheck, protoc once a
+# .proto exists, and node, which the sidecar_http leg's tests run in, and fails without them: a rule
+# that did not run has not passed.
 check:
 	@set -e; for module in $(modules); do \
 		echo "go test in $$module"; \
@@ -24,7 +26,7 @@ check:
 		echo "go test -tags sidecar_testhooks in $$module"; \
 		(cd $$module && $(GO) test -count=1 -tags sidecar_testhooks ./...); \
 	done
-	$(GO) test -count=1 -timeout 30m -tags sidecar_check ./check
+	cd check && $(GO) test -count=1 -timeout 30m -tags sidecar_check
 
 # §4.9's size gates, which build and link, so they are not part of make check. check/size_test.go
 # says what is measured. The ios_extension leg needs Xcode.

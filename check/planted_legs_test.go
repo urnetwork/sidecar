@@ -30,6 +30,15 @@ func TestLegsFailsOnIosExtensionLinkingProtocol(t *testing.T) {
 	wantFindings(t, fixture.open().iosExtensionFindings(t), iosExtensionLegName+" links @module@/protocol")
 }
 
+// §4.9: device/ and protocol/bridge only.
+func TestLegsFailsOnIosExtensionLinkingAnythingElseOfOurs(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs(iosExtensionLegName)
+	fixture.write("device/device.go", "package device\n\nimport _ \"@module@/mcp\"\n")
+	fixture.write("mcp/mcp.go", "package mcp\n")
+	wantFindings(t, fixture.open().iosExtensionFindings(t), iosExtensionLegName+" links @module@/mcp")
+}
+
 // sdk/build/Makefile:153 builds the extension's macOS slices too; a file only they compile is seen.
 func TestLegsFailsOnTheMacExtensionSlice(t *testing.T) {
 	fixture := newFixture(t)

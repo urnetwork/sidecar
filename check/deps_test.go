@@ -15,16 +15,20 @@ import (
 	"testing"
 )
 
-// Modules no leg may link and no sidecar module may require, with what each is. Owner rule 2 for
-// the first three, §4.7's imports bullet for the two after; proxy requires userwireguard, and cli's
-// ur proxy add runs on connect.Tun instead.
+// Modules no leg may link and no sidecar module may require, whatever dependencies.yml says, with
+// what each is. server, sdk and sn by owner rule 2; proxy and userwireguard by §4.7's imports bullet,
+// since cli's ur proxy add runs on connect.Tun instead; the message repo by owner rule 3; and the
+// three that §4.5's ServiceHost exists to keep out of sidecar.
 var refusedModules = map[string]string{
-	serverBasePath:                    "server, which imports sidecar",
-	sdkBasePath:                       "sdk, which imports sidecar",
-	snBasePath:                        "sn, which imports sidecar",
-	urnetworkPrefix + "proxy":         "proxy, which §4.7 keeps out",
-	urnetworkPrefix + "message":       "the deleted message repo (owner rule 3)",
-	urnetworkPrefix + "userwireguard": "userwireguard, which §4.7 keeps out",
+	serverBasePath:                        "server, which imports sidecar",
+	sdkBasePath:                           "sdk, which imports sidecar",
+	snBasePath:                            "sn, which imports sidecar",
+	urnetworkPrefix + "proxy":             "proxy, which §4.7 keeps out",
+	urnetworkPrefix + "message":           "the deleted message repo (owner rule 3)",
+	urnetworkPrefix + "userwireguard":     "userwireguard, which §4.7 keeps out",
+	"github.com/redis/go-redis":           "go-redis, which only ServiceHost's implementation may use",
+	"github.com/minio/minio-go":           "minio-go, which only ServiceHost's implementation may use",
+	"github.com/prometheus/client_golang": "prometheus, which only ServiceHost's implementation may use",
 }
 
 // The first-party modules a sidecar module may require beside this repository's own (§4.7).
@@ -174,7 +178,8 @@ func (self *repository) legModuleFindings(t testing.TB) []string {
 				continue
 			}
 			if row.planned {
-				findings = append(findings, findingf("%s links %s, and its row still says planned", leg.name, modulePath))
+				// its license is read from its files from now on, so all this leaves is a stale field
+				self.report("a leg links %s, whose row can drop planned", modulePath)
 			}
 			if leg.class != classTest && !slices.Contains(row.legs, leg.class) {
 				findings = append(findings, findingf("%s is a %s leg and links %s, whose row names %v", leg.name, leg.class, modulePath, row.legs))
@@ -390,6 +395,7 @@ var refusedLicensePhrases = []string{
 	"noncommercial",
 }
 
+// A license file by its name, as the go command's own license scan finds them.
 var licenseFileNamePattern = regexp.MustCompile(`(?i)^(licen[cs]e|copying|unlicense)([.-].*)?$`)
 
 // The license files at a module's top, as one lowered, whitespace-joined text, or "" without any.
@@ -455,8 +461,8 @@ func (self *checkSettings) licenseFindings(row *dependencyRow, version string, l
 }
 
 // Every row's id against §4.7's list, and every linked module's files against its row. A planned
-// row has no files to read yet, so its id alone is checked; its module joins the file check on
-// landing, when the deps row makes it give up planned.
+// row has no files to read yet, so its id alone is checked, and its module joins the file check the
+// moment a leg links it, planned or not.
 func (self *repository) licenseRowFindings(t testing.TB) []string {
 	t.Helper()
 	rowsByModule, findings := self.dependencyRows(t)

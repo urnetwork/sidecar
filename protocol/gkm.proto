@@ -1,0 +1,96 @@
+// §10's wire: the clear header of every commit, the MLS credential, and the ladder and delivery records gkm
+// stores, as §10.4 and §10.5 write them. No field is removed once M2's entry review fixes it, and they freeze
+// at M2's exit on §22.10's 0x0010 interop artifact (D-KEYS-10). A bare section number, as in 10.5, is DESIGN.md's.
+//
+// ReaderKey and GkmHint, which §10 writes as field lists, and GroupForm, which only §2.8's gkm-1 lists, sit last
+// in this file. They take numbers in the order written, and stay open to review until that entry review.
+// §10.6's stored bodies (an epoch object, the group-info pointer, a Welcome pointer, a KeyPackage claim) have no
+// message in the design, so none is declared here.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message GkmCommitHeader {   // sidecar/protocol/gkm.proto, in authenticated_data of every commit
+  uint64  generation = 1;   // the generation of this epoch's GenWrap: the newest gen/ the committer holds;
+                            //   0 only for a recovery self-join that carries no GenWrap (10.6's epoch PUT, 10.8)
+  AuthPin auth = 2;         // the state (§7.9) the new roster was checked against
+}
+
+message UrMlsCredential {                         // sidecar/protocol/gkm.proto
+  bytes sidecar_id = 1;                           // durable leaf identity (§5)
+  bytes identity_public_key = 2; string identity_alg = 3;  // §5; ed25519 in v0
+  bytes mls_signature_public_key = 4;             // rotated by self-update
+  uint32 cipher_suite = 5; int64 not_after = 6;   // 0x0010 (owner decision 44)
+  bytes admission_sha256 = 7;                     // its §7.9 SidecarAdmit; Genesis for the first device
+  bytes identity_signature = 8;                   // §6 signing, purpose mls-credential, fields 1-7
+}
+
+message GenRotate {              // sidecar/protocol/gkm.proto; §6 Signed, purpose gen-rotate, by the rotator's identity key
+  bytes   group_id = 1; bytes repo_id = 2;
+  uint64  generation = 3;        // g; generation 1 is written with epoch 0 (KF1) and has no parent
+  bytes   parent_commitment = 4; // C_{g-1}
+  bytes   commitment = 5;        // C_g
+  uint32  cause = 6;             // 1 REMOVE, 2 REQUEST, 3 SCHEDULE; REMOVE iff it covers a shrink, an
+                                 //   authorization expiry or a compromise retirement since the parent (10.9)
+  AuthPin auth = 7;              // the state KeyHolders was computed at (§7.9); never below the previous
+                                 //   base or the parent's auth
+  int64   time_ms = 8;           // the evaluation time for expiries; within 10 min of gkm's clock
+  bytes   holders_sha256 = 9;    // SHA-256 over the sorted KeyHolders(R, auth, time) identities (below)
+  uint32  wrap_count = 10;       // staged wraps and recovery wraps, for completeness checks
+  bytes   genlink = 11;          // GenLink_g
+  LeafWrap leaf_wrap = 12;       // optional: one wrap for every leaf of that epoch, 72 B
+  bytes   drop_public_key = 13;  // only for kinds that take deposits (D-KEYS-17)
+  int64   drop_not_after_ms = 14;
+}
+message LeafWrap { uint64 epoch = 1; bytes ciphertext = 2; }  // RK_g under KEK_epoch, aad group_id||epoch||g
+message KeyDelivery {              // the body of a ReaderWrap or DelegationWrap, gkm's wrap/ object (10.6)
+  bytes   group_id = 1;
+  uint64  generation = 2;          // g
+  bytes   commitment = 3;          // C_g, all 32 bytes
+  bytes   recipient = 4;           // sidecar_id; a DelegationWrap's, the delegation_id
+  bytes   recipient_key_sha256 = 5;  // SHA-256 of the X-Wing public key sealed to: a ReaderKey's, which a
+                                     //   replacement changes, or the Delegation's reader_xwing_public_key
+  uint32  delivery_kind = 6;       // 1 STAGED: by gen/<g>'s rotator before its claim; 2 LATE: after it (10.9)
+  AuthPin auth = 7;                // LATE only: the signer's newest verified state when it signs
+  int64   time_ms = 8;             // LATE only: the signer's clock or, if later, gen/<g>'s time_ms; within 10 min of gkm's
+  bytes   ciphertext = 9;          // HPKE-XWing(that key, RK_g), info "UR evs 1.0 wrap", aad wrap_aad
+}
+message ReaderWrap { KeyDelivery wrap = 1; }      // §6 Signed, purpose reader-wrap, by the signer's identity key
+message DelegationWrap { KeyDelivery wrap = 1; }  // the same, to a Delegation's reader key
+// wrap_aad = u8(1 ReaderWrap | 2 DelegationWrap) || group_id || u64be(g) || C_g || SHA-256(recipient)
+//            || recipient_key_sha256 || u8(delivery_kind), then, LATE only, u64be(auth.version) || auth.chain
+//            || i64be(time_ms)
+
+message ReaderKey {              // §6 Signed, purpose reader-key (10.5): every reader keeps a current one
+  bytes sidecar_id = 1;
+  bytes xwing_public_key = 2;
+  int64 not_after = 3;           // ms since the epoch, at most 7 days after signing
+}
+
+message GroupForm {              // §6 Signed at gkm/repo/<repo_id>/<seq> (10.6): gkm-1's fields, its signer Signed's
+  bytes repo_id = 1;
+  bytes group_id = 2;
+  bytes previous_group_id = 3;   // the group this one re-forms, or empty
+  uint64 generation = 4;
+}
+
+// commit rides gkm:<group_id>, and the rest the per-client gkm topic (10.14).
+enum GkmHintKind {
+  GKM_HINT_KIND_UNSPECIFIED = 0;
+  GKM_HINT_COMMIT = 1;
+  GKM_HINT_PENDING = 2;
+  GKM_HINT_WELCOME = 3;
+  GKM_HINT_KEY_PACKAGES_LOW = 4;
+  GKM_HINT_WRAP_PENDING = 5;     // a GenWrap, wrap or sealed GroupInfo is missing
+}
+
+message GkmHint {                // §6 0x1301, in PushHint.hint
+  bytes group_id = 1;
+  uint64 epoch = 2;
+  GkmHintKind kind = 3;
+  bytes recipient = 4;           // 10.6's late wraps: the ask's s: or d: recipient, as its wrap path writes it
+}

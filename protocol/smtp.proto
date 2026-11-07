@@ -1,0 +1,67 @@
+// §14.5's preamble and proofs, which smtpedge sees (§2.8's smtp-1, smtp-2). SmtpOutcome and SmtpStatus have numbers
+// in §6.11 and no message in §14, so neither is here.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message SmtpPreamble {           // 0x1601, sidecar -> edge
+  uint32 version = 1;
+  string recipient_domain = 2;    // enforced: the edge resolves and dials it; every RCPT is at it (Z4)
+  uint32 recipient_count = 3;     // proven (Z4); capped per message and per day (14.7)
+  string message_id = 4;          // proven (Z5)
+  string header_from_domain = 5;  // proven (Z5); in the network's zone (§15.9) or a verified Team domain (§7.6)
+  string dkim_selector = 6;       // proven with d= (Z5)
+  uint64 message_byte_count = 7;  // proven: BDAT's n, or DATA's octets before the end mark (Z4, Z6)
+  bytes retry_of_send_id = 8;
+  uint32 flags = 9;               // 1 BULK, 2 REQUIRETLS, 4 BURNER
+}
+message SmtpPreambleResult {     // 0x1602, edge -> sidecar
+  uint32 code = 1;  // §6.11: 1 OK, 2 HALTED, 3 QUOTA, 4 DENIED, 5 NO_MX, 6 NO_TLS, 7 TRY_LATER;
+                    //   0 UNSPECIFIED, a protocol error
+  uint32 retry_after_ms = 2;
+  bytes send_id = 3;
+  string x_ur_ref = 4;            // issued; proven present (Z5)
+  string feedback_id = 5;         // issued; proven present (Z5)
+  string helo_name = 6;           // the sending address's PTR name (14.6)
+  string mx_host = 7;
+  bytes dnssec_chain = 8;         // MX, TLSA RRsets with RRSIGs (TL1)
+  repeated string ehlo_keywords = 9;  // pre-TLS hints only; Z8 proves the post-TLS reply
+}
+message SmtpProof {              // 0x1605, RPC sidecar -> edge (M9)
+  bytes send_id = 1;
+  uint32 index = 2;               // 1 pi1; 2 pi2; 3 pi3; 4.. later DATA parts
+  uint32 mode = 3;                // 1 BDAT, 2 DATA; fixed from pi2 on (Z9)
+  uint64 first_record = 4;        // client application records covered,
+  uint64 last_record = 5;         //   by TLS sequence number
+  bytes proof = 6;
+  bool last = 7;                  // covers octet n, the end mark (DATA) and QUIT
+  uint64 server_record_count = 8; // server records after Finished that this and earlier parts cover (0 in
+                                  //   pi1); this part covers those past the previous part's count (Z7)
+  repeated bytes records = 9;     // ciphertext of each client record the part opens, in sequence order
+                                  //   (BDAT's pi3: the head from first_record, then QUIT at last_record)
+}
+message SmtpProofResult {        // 0x1606, edge -> sidecar
+  uint32 code = 1;                // §6.11: 1 OK; 2 INVALID, and the edge cuts the connection (14.7);
+                                  //   0 UNSPECIFIED, a protocol error
+}
+
+// SmtpPreambleResult.code, numbered by §6.11. A receiver takes 0 as a protocol error and resets the stream.
+enum SmtpPreambleCode {
+  SMTP_PREAMBLE_CODE_UNSPECIFIED = 0;
+  SMTP_PREAMBLE_OK = 1;
+  SMTP_PREAMBLE_HALTED = 2;
+  SMTP_PREAMBLE_QUOTA = 3;
+  SMTP_PREAMBLE_DENIED = 4;
+  SMTP_PREAMBLE_NO_MX = 5;
+  SMTP_PREAMBLE_NO_TLS = 6;
+  SMTP_PREAMBLE_TRY_LATER = 7;
+}
+
+// SmtpProofResult.code, numbered by §6.11. A receiver takes 0 as a protocol error and resets the stream.
+enum SmtpProofCode {
+  SMTP_PROOF_CODE_UNSPECIFIED = 0;
+  SMTP_PROOF_OK = 1;
+  SMTP_PROOF_INVALID = 2;
+}

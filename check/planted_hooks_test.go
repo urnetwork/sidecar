@@ -76,6 +76,7 @@ func TestHygieneFailsOnAReleaseLegWithTheLeakTag(t *testing.T) {
 func TestHygieneFailsOnTheHooksTagInGoflags(t *testing.T) {
 	wantFindings(t, callerGoflagsFindings("-trimpath -tags=other,sidecar_testhooks"), "GOFLAGS carries sidecar_testhooks")
 	wantFindings(t, callerGoflagsFindings("--tags=sidecar_leaktest"), "GOFLAGS carries sidecar_leaktest")
+	wantFindings(t, callerGoflagsFindings("'-tags=other sidecar_testhooks'"), "GOFLAGS carries sidecar_testhooks")
 	wantFindings(t, callerGoflagsFindings("-trimpath -tags=sidecar_testhooks_extra"))
 	wantFindings(t, callerGoflagsFindings(""))
 }
@@ -174,6 +175,49 @@ func TestHygieneFailsOnAnEntryPointOutsideTheRoot(t *testing.T) {
 	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/planted.go: TestHooks exists outside the root's tagged file")
 }
 
+// A pair and an installer of device's own, as testhook.go has it: nothing to forward to, and no finding.
+func TestHygieneAllowsDevicesOwnInstaller(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	wantFindings(t, fixture.open().hookPairFindings(t))
+}
+
+// Its installer is the two names it needs: the entry points stay the root's.
+func TestHygieneFailsOnADeviceEntryPoint(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	fixture.write("device/planted.go", "//go:build sidecar_testhooks\n\npackage device\n\nfunc TestHookSecret(kind string, secret []byte) {}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t), "device/planted.go: TestHookSecret exists outside the root's tagged file")
+}
+
+// The exception is for the tagged file: an untagged installer ships.
+func TestHygieneFailsOnADeviceInstallerWithoutTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	fixture.edit("device/testhook_enabled.go", "//go:build sidecar_testhooks", "//go:build !sidecar_http")
+	findings := fixture.open().hookPairFindings(t)
+	wantFindings(t, findings,
+		"device keeps testHookBarrier with no half under sidecar_testhooks",
+		"device keeps testHookSecret with no half under sidecar_testhooks",
+		"device/testhook_enabled.go: SetTestHooks exists outside the root's tagged file",
+		"device/testhook_enabled.go: TestHooks exists outside the root's tagged file",
+		"device/testhook_enabled.go: testHookBarrier builds with and without sidecar_testhooks",
+		"device/testhook_enabled.go: testHookSecret builds with and without sidecar_testhooks")
+}
+
+// And its empty half stays empty, as every other package's does.
+func TestHygieneFailsOnADeviceHookWithABody(t *testing.T) {
+	fixture := newFixture(t)
+	writeDeviceHooks(fixture)
+	fixture.edit("device/testhook.go", "func testHookSecret(kind string, secret []byte) {}", "func testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}")
+	wantFindings(t, fixture.open().hookPairFindings(t), "device/testhook.go: testHookSecret has a body in the untagged build")
+}
+
+func writeDeviceHooks(fixture *fixture) {
+	fixture.write("device/testhook.go", "//go:build !sidecar_testhooks\n\npackage device\n\nfunc testHookSecret(kind string, secret []byte) {}\n\nfunc testHookBarrier(name string, key string) {}\n")
+	fixture.write("device/testhook_enabled.go", "//go:build sidecar_testhooks\n\npackage device\n\ntype TestHooks struct{}\n\nfunc SetTestHooks(hooks *TestHooks) {}\n\nfunc testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}\n\nfunc testHookBarrier(name string, key string) {\n\tprintln(name)\n}\n")
+}
+
 func TestHygieneFailsOnAHookWithAnotherSignature(t *testing.T) {
 	fixture := newHookFixture(t)
 	fixture.edit("evsservice/testhook.go", "func testHookBarrier(name string, key string) {}", "func testHookBarrier(name string) {}")
@@ -182,9 +226,20 @@ func TestHygieneFailsOnAHookWithAnotherSignature(t *testing.T) {
 
 func TestHygieneFailsOnAMakefileBuildingWithTheTag(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.write("Makefile", "check:\n\t$(GO) test -tags sidecar_testhooks .\n")
-	fixture.write("cli/Makefile", "build:\n\tenv CGO_ENABLED=0 go build -tags sidecar_testhooks -o ur\n")
-	wantFindings(t, fixture.open().makefileTagFindings(t), "cli/Makefile:2: builds with sidecar_testhooks")
+	fixture.write("Makefile", "# tests run under sidecar_testhooks too\ncheck:\n\t$(GO) test -tags sidecar_testhooks .\n\tgo test -tags sidecar_leaktest .\n")
+	fixture.write("cli/Makefile", "build:\n\tenv CGO_ENABLED=0 go build -tags sidecar_testhooks -o ur\n\t$(GO) build -tags sidecar_leaktest -o ur\n\tGOFLAGS=-tags=sidecar_testhooks gomobile bind\n")
+	wantFindings(t, fixture.open().makefileTagFindings(t),
+		"cli/Makefile:2: builds with sidecar_testhooks",
+		"cli/Makefile:3: builds with sidecar_leaktest",
+		"cli/Makefile:4: builds with sidecar_testhooks")
+}
+
+// gomobile's legs are built by sdk's Makefile, and the leg table here would never see this.
+func TestHygieneFailsOnGomobileBindingWithTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.writeSibling("sdk/build/Makefile", "build_ios:\n\tgomobile bind -tags sdk_mobile_bind,sidecar_testhooks\n")
+	findings := fixture.open().makefileTagFindings(t)
+	wantFindings(t, findings, "Makefile:2: builds with sidecar_testhooks")
 }
 
 // Builds the fixture's ur, with or without the tag, as a release step would.

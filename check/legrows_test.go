@@ -17,19 +17,19 @@ import (
 // (sdk/build/mobile_method_pruning_test.go:12-22).
 var pruningBreakers = []string{"net/rpc", "text/template", "html/template"}
 
-// D-SDK-20: the leg's closure holds neither the root package nor protocol. protocol/bridge and
-// device share those paths' prefix and are what the leg is for, so these are exact matches.
+// D-SDK-20: the leg's closure holds neither the root package nor protocol, and §4.9 words it as
+// device/ and protocol/bridge only, so nothing else of this repository either. protocol/bridge sits
+// under protocol's path and is what the leg is for, which is why these are read as whole packages.
 func (self *repository) iosExtensionFindings(t testing.TB) []string {
 	t.Helper()
-	root := self.modulePath
-	protocol := self.modulePath + "/protocol"
 	findings := []string{}
 	for _, leg := range self.legs {
 		if !leg.hasTag(iosExtensionTag) {
 			continue
 		}
 		for _, listed := range self.closure(t, leg) {
-			if listed.ImportPath == root || listed.ImportPath == protocol {
+			relative, ours := repositoryRelative(listed.ImportPath)
+			if ours && !underPath(relative, "device") && !underPath(relative, "protocol/bridge") {
 				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
 			}
 		}

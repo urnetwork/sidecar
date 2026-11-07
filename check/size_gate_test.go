@@ -7,8 +7,8 @@
 package check
 
 import (
-	"crypto/rand"
 	"encoding/hex"
+	"math/rand/v2"
 	"testing"
 )
 
@@ -18,8 +18,12 @@ func TestSizeGateIosExtension(t *testing.T) {
 	baselineByteCount, withSidecarByteCount := repository.measureIosExtension(t)
 	t.Logf("ios_extension leg: %d B without the device role, %d B with it, %d B added, limit %d B",
 		baselineByteCount, withSidecarByteCount, withSidecarByteCount-baselineByteCount, repository.settings.iosExtensionAddedMaxByteCount)
-	failFindings(t, "size", rowOff(t.Logf, repository.settings.switches.iosExtensionSizeGate, "iosExtensionSizeGate",
-		repository.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount)))
+	findings := repository.settings.iosExtensionSizeFindings(baselineByteCount, withSidecarByteCount)
+	switchOn := repository.settings.switches.iosExtensionSizeGate
+	if !switchOn && len(findings) == 0 {
+		t.Errorf("the gate holds, so iosExtensionSizeGate should be on")
+	}
+	failFindings(t, "size", rowOff(t.Logf, switchOn, "iosExtensionSizeGate", findings))
 }
 
 // §18.10, D-SDK-19: the page Worker's leg, unstripped, against its goal and miss rule.
@@ -28,16 +32,21 @@ func TestSizeGateSidecarHttp(t *testing.T) {
 	byteCount := repository.measureSidecarHttp(t)
 	t.Logf("sidecar_http js leg: %d B unstripped, goal %d B, miss gate %d B",
 		byteCount, repository.settings.sidecarHttpGoalByteCount, repository.settings.sidecarHttpMissByteCount)
-	failFindings(t, "size", rowOff(t.Logf, repository.settings.switches.sidecarHttpSizeGate, "sidecarHttpSizeGate",
-		repository.settings.sidecarHttpSizeFindings(byteCount)))
+	findings := repository.settings.sidecarHttpSizeFindings(byteCount)
+	switchOn := repository.settings.switches.sidecarHttpSizeGate
+	if !switchOn && len(findings) == 0 {
+		t.Errorf("the gate holds, so sidecarHttpSizeGate should be on")
+	}
+	failFindings(t, "size", rowOff(t.Logf, switchOn, "sidecarHttpSizeGate", findings))
 }
 
-// Text of the given size that no compression or dedup shrinks, as a Go string literal.
-func plantedTable(t *testing.T, byteCount int) string {
-	t.Helper()
+// Text of the given size that no compression or dedup shrinks, as a Go string literal, the same on
+// every run.
+func plantedTable(byteCount int) string {
+	generator := rand.NewChaCha8([32]byte{})
 	table := make([]byte, byteCount/2)
-	if _, err := rand.Read(table); err != nil {
-		t.Fatal(err)
+	if _, err := generator.Read(table); err != nil {
+		panic(err)
 	}
 	return hex.EncodeToString(table)
 }
@@ -46,7 +55,7 @@ func plantedTable(t *testing.T, byteCount int) string {
 // call the leg clean, so this is what shows the probe measures the role's real cost.
 func TestSizeGateFindsATablePlantedInDevice(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.write("device/device.go", "package device\n\nvar table = \""+plantedTable(t, 2*1024*1024)+"\"\n\nfunc Lookup(index int) byte {\n\treturn table[index]\n}\n")
+	fixture.write("device/device.go", "package device\n\nvar table = \""+plantedTable(2*1024*1024)+"\"\n\nfunc Lookup(index int) byte {\n\treturn table[index]\n}\n")
 	repository := fixture.open()
 	baselineByteCount, withSidecarByteCount := repository.measureIosExtension(t)
 	t.Logf("%d B added", withSidecarByteCount-baselineByteCount)
@@ -59,7 +68,7 @@ func TestSizeGateFindsATablePlantedInTheRoot(t *testing.T) {
 	cleanByteCount := fixture.open().measureSidecarHttp(t)
 	fixture.settings.sidecarHttpGoalByteCount = cleanByteCount + 1024*1024
 	fixture.settings.sidecarHttpMissByteCount = cleanByteCount + 4*1024*1024
-	fixture.write("planted.go", "package sidecar\n\nvar table = \""+plantedTable(t, 2*1024*1024)+"\"\n\nfunc Lookup(index int) byte {\n\treturn table[index]\n}\n")
+	fixture.write("planted.go", "package sidecar\n\nvar table = \""+plantedTable(2*1024*1024)+"\"\n\nfunc Lookup(index int) byte {\n\treturn table[index]\n}\n")
 	repository := fixture.open()
 	byteCount := repository.measureSidecarHttp(t)
 	t.Logf("%d B clean, %d B planted", cleanByteCount, byteCount)

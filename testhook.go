@@ -10,6 +10,9 @@
 // pair under these names and this tag: empty in its testhook.go, and in its tagged file forwarding
 // to TestHookSecret and TestHookBarrier, which the root declares only under the tag. An untagged
 // build therefore exports nothing for tests.
+//
+// device/ is the one exception. It may not import the root (§4.4, D-SDK-20), not even under the tag,
+// so its tagged file has a SetTestHooks of its own, and sidecartest installs on both.
 
 package sidecar
 

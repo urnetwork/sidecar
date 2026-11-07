@@ -111,6 +111,19 @@ func TestLayeringAllowsEnginesAndSidecartestToImportEngines(t *testing.T) {
 	wantFindings(t, fixture.open().clientEngineImportFindings(t))
 }
 
+// Each import here is allowed on its own, and the closure still reaches an engine.
+func TestLayeringFailsOnAnEngineThroughSidecartest(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli linux/amd64")
+	fixture.write("evsservice/engine.go", "package evsservice\n")
+	fixture.write("sidecartest/net.go", "package sidecartest\n\nimport _ \"@module@/evsservice\"\n")
+	fixture.write("mcp/mcp.go", "package mcp\n\nimport _ \"@module@/sidecartest\"\n")
+	fixture.write("cli/planted.go", "package main\n\nimport _ \"@module@/mcp\"\n")
+	wantFindings(t, fixture.open().legEngineFindings(t),
+		"cli linux/amd64 links @module@/evsservice",
+		"cli linux/amd64 links @module@/sidecartest")
+}
+
 func TestLayeringFailsOnDeviceImportingTheRoot(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("device/planted.go", "package device\n\nimport _ \"@module@\"\n")
@@ -123,13 +136,13 @@ func TestLayeringFailsOnDeviceImportingProtocol(t *testing.T) {
 	wantFindings(t, fixture.open().deviceImportFindings(t), "device imports @module@/protocol")
 }
 
-// testhook.go has a package's tagged file forward to the root. That file never ships, which the
-// hygiene row holds, so §4.4's rule does not bind it.
-func TestLayeringAllowsDevicesTaggedHookFileToImportTheRoot(t *testing.T) {
+// §4.4 binds device's hook files as well: under the tag it keeps an installer of its own (testhook.go),
+// so a tagged file there has no reason to reach the root.
+func TestLayeringFailsOnDevicesTaggedHookFileImportingTheRoot(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("device/device.go", "package device\n\nimport (\n\t_ \"@connect@\"\n\t_ \"@module@/protocol/bridge\"\n)\n")
 	fixture.write("device/testhook_enabled.go", "//go:build sidecar_testhooks\n\npackage device\n\nimport _ \"@module@\"\n")
-	wantFindings(t, fixture.open().deviceImportFindings(t))
+	wantFindings(t, fixture.open().deviceImportFindings(t), "device/testhook_enabled.go:5: device imports @module@")
 }
 
 func TestLayeringFailsOnAParentImportingItsChild(t *testing.T) {

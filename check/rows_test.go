@@ -8,9 +8,11 @@
 package check
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,8 +43,8 @@ var failsOnRows = []failsOnRow{
 		rule: (*repository).legModuleFindings,
 		plantedTests: []string{
 			"TestDepsFailsOnServerInALeg", "TestDepsFailsOnSdkInALeg", "TestDepsFailsOnSnInALeg",
-			"TestDepsFailsOnAnUnlistedModuleInALeg", "TestDepsFailsOnAModuleOutsideItsRowsLegs",
-			"TestDepsFailsOnAPlannedRowThatIsLinked", "TestDepsFailsOnAnUnreadableDependenciesFile",
+			"TestDepsFailsOnAnEngineLinkingGoRedis", "TestDepsFailsOnAnUnlistedModuleInALeg", "TestDepsFailsOnAModuleOutsideItsRowsLegs",
+			"TestDepsFailsOnAnUnreadableDependenciesFile",
 		},
 	},
 	{
@@ -122,9 +124,17 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "layering", item: "a client or cli leg linking a <svc>service or sidecartest",
+		rule:         (*repository).legEngineFindings,
+		plantedTests: []string{"TestLayeringFailsOnAnEngineThroughSidecartest"},
+	},
+	{
 		row: "layering", item: "device beyond connect and protocol/bridge (§4.4, D-SDK-20)",
-		rule:         (*repository).deviceImportFindings,
-		plantedTests: []string{"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol"},
+		rule: (*repository).deviceImportFindings,
+		plantedTests: []string{
+			"TestLayeringFailsOnDeviceImportingTheRoot", "TestLayeringFailsOnDeviceImportingProtocol",
+			"TestLayeringFailsOnDevicesTaggedHookFileImportingTheRoot",
+		},
 	},
 	{
 		row: "layering", item: "a parent importing its child (R-REPO-5)",
@@ -152,7 +162,7 @@ var failsOnRows = []failsOnRow{
 		},
 		plantedTests: []string{
 			"TestLegsFailsOnIosExtensionLinkingTheRoot", "TestLegsFailsOnIosExtensionLinkingProtocol",
-			"TestLegsFailsOnTheMacExtensionSlice",
+			"TestLegsFailsOnTheMacExtensionSlice", "TestLegsFailsOnIosExtensionLinkingAnythingElseOfOurs",
 		},
 	},
 	{
@@ -236,6 +246,7 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestHygieneFailsOnAProtoEditedAfterGeneration", "TestHygieneFailsOnAHandEditedPbGo", "TestHygieneFailsOnAMissingPbGo",
 			"TestHygieneFailsOnAnOrphanPbGo", "TestHygieneFailsOnAnotherPluginVersion", "TestHygieneFailsOnAStalePbGoOnAReleaseBranch",
+			"TestHygieneFailsOnGeneratedCodeItCannotRegenerate", "TestHygieneFailsOnAMissingProtoc",
 		},
 	},
 	{
@@ -268,13 +279,14 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnAPackagesHookHeldInAVariable", "TestHygieneFailsOnAPackagesHalfMissing",
 			"TestHygieneFailsOnAPackagesTaggedHalfNotForwarding", "TestHygieneFailsOnAHookPairInANestedModule",
 			"TestHygieneFailsOnAnEntryPointWithoutTheTag", "TestHygieneFailsOnAnEntryPointOutsideTheRoot",
-			"TestHygieneFailsOnAHookWithAnotherSignature",
+			"TestHygieneFailsOnAHookWithAnotherSignature", "TestHygieneFailsOnADeviceEntryPoint",
+			"TestHygieneFailsOnADeviceInstallerWithoutTheTag", "TestHygieneFailsOnADeviceHookWithABody",
 		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a Makefile's build line",
 		rule:         (*repository).makefileTagFindings,
-		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag"},
+		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnGomobileBindingWithTheTag"},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: what the artifact says of itself",
@@ -304,7 +316,14 @@ var thisCheckout = sync.OnceValues(func() (*repository, error) {
 	return openRepository("..", defaultCheckSettings(), defaultBuildLegs())
 })
 
-// This checkout, with the test's log as its report.
+// What this run did not enforce or leaned on, for the end of make check's output. A run that passes
+// says so too: a switched-off row or a license exception should not need a failure to be seen.
+var (
+	runReportLock  sync.Mutex
+	runReportLines = map[string]bool{}
+)
+
+// This checkout, reporting to the test's log and to the end of the run.
 func openThisCheckout(t testing.TB) *repository {
 	t.Helper()
 	repository, err := thisCheckout()
@@ -314,8 +333,22 @@ func openThisCheckout(t testing.TB) *repository {
 	repository.listAllLegs()
 	repository.report = func(format string, arguments ...any) {
 		t.Logf(format, arguments...)
+		runReportLock.Lock()
+		defer runReportLock.Unlock()
+		runReportLines[findingf(format, arguments...)] = true
 	}
 	return repository
+}
+
+// Runs the tests, then prints the run's report. make check runs this package in go test's local
+// directory mode, which is what lets a passing run's output through.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	lines := slices.Sorted(maps.Keys(runReportLines))
+	for _, line := range lines {
+		fmt.Println("make check:", line)
+	}
+	os.Exit(code)
 }
 
 // Runs one block row of failsOnRows over this checkout.
@@ -453,6 +486,65 @@ func TestRowsThatStartLaterHoldNow(t *testing.T) {
 	}
 	if switched != 3 {
 		t.Errorf("%d rows stand behind a switch; §4.18 starts three in make check", switched)
+	}
+}
+
+// Each switch governs its own row, in a run with the row's violation planted: off, the row passes
+// and reports the finding; on, the row fails on it.
+func TestEachSwitchGovernsItsRow(t *testing.T) {
+	for _, c := range []struct {
+		item  string
+		plant func(fixture *fixture)
+		legs  []string
+	}{
+		{
+			item: "the sidecar_http js leg's deps including any connect or gVisor package",
+			plant: func(fixture *fixture) {
+				fixture.edit("connect_require.go", "//go:build !sidecar_http\n\n", "")
+			},
+			legs: []string{sidecarHttpLegName},
+		},
+		{
+			item: "the ios_extension leg's deps including the root package or protocol",
+			plant: func(fixture *fixture) {
+				fixture.write("device/device.go", "package device\n\nimport _ \"@module@\"\n")
+			},
+			legs: []string{iosExtensionLegName},
+		},
+		{
+			item: "from M10, a leg selecting a golang.org/x/text other than normalizer 1's",
+			plant: func(fixture *fixture) {
+				fixture.writeSibling("sdk/js/go.mod", "module @sdk@/js\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.41.0\n")
+			},
+			legs: []string{"root linux/amd64"},
+		},
+	} {
+		index := slices.IndexFunc(failsOnRows, func(entry failsOnRow) bool { return entry.item == c.item })
+		if index < 0 {
+			t.Fatalf("no row reads %q", c.item)
+		}
+		entry := failsOnRows[index]
+		fixture := newFixture(t)
+		fixture.keepLegs(c.legs...)
+		c.plant(fixture)
+
+		*entry.switched(&fixture.settings.switches) = false
+		repository := fixture.open()
+		reports := []string{}
+		repository.report = func(format string, arguments ...any) {
+			reports = append(reports, findingf(format, arguments...))
+		}
+		if findings := entry.rule(repository, t); len(findings) != 0 {
+			t.Errorf("%s: off, the row failed on %v", c.item, findings)
+		}
+		if len(reports) < 2 {
+			t.Errorf("%s: off, the row reported %v, which lacks its finding", c.item, reports)
+		}
+
+		*entry.switched(&fixture.settings.switches) = true
+		if findings := entry.rule(fixture.open(), t); len(findings) == 0 {
+			t.Errorf("%s: on, the row passed its planted violation", c.item)
+		}
 	}
 }
 

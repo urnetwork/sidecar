@@ -1,0 +1,144 @@
+// The team directory (§16.11), plaintext inside its sealed files and entries, so no server reads a field here. A
+// bare section number, as in 16.8, is DESIGN.md's. D-PHASE-9's reservations for it are elsewhere: repo/'s directory
+// kind, acl.proto's autogroup:dst-owner and EvsShare.expires, and config.proto's ServiceSettings.directory.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+import "protocol/bridge/auth.proto";
+import "protocol/record.proto";
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+// sidecar/protocol/directory.proto (v1): plaintext inside the directory's sealed files and entries. §6.11
+// SignedType: 0x1805 SIGNED_DIRECTORY_CARD, 0x1806 SIGNED_DIRECTORY_REPO; §6.9 purpose directory. Announcement,
+// request, decision and notice messages are specified at M6's Gn-in and frozen at its Gn-out, DirectoryCard
+// and RepoAnnouncement specified at M10's Gn-in (§23.8).
+message DirectoryCard {                     // d/<h>/<sidecar_id>, from format 2
+  bytes network_id = 1; bytes sidecar_id = 2;  // the signer, equal to the path's
+  uint64 seq = 3;                           // +1 a version; readers refuse one not above the last they accepted
+  AuthPin at = 4;                           // §7.9's pin, within 4,096 positions of the reader's state
+  int64 written_millis = 5;
+  repeated Announcement items = 6;          // <= 16: at most one worker item, then runs; <= 16,208 B in all
+  uint32 version = 7;                       // 1
+}
+message RepoAnnouncement {                  // r/<h>/<repo_id>, from format 2
+  bytes network_id = 1; bytes repo_id = 2; uint64 seq = 3;
+  AuthPin at = 4;                           // within 4,096 positions before its push's auth pin, at whose
+                                            // position retained history judges the signer's right (repo file)
+  Announcement item = 5;                    // kind repo; announcement_id = SHA-256("urnetwork-sidecar-v1/
+                                            // directory-repo" || repo_id)[:16], one id for all its admins
+}
+message Announcement {
+  bytes announcement_id = 1;                // runs and workers: random 16 B, fixed for the item's life
+  uint32 kind = 2;                          // 1 run, 2 worker, 3 repo
+  uint64 version = 3;                       // +1 at each content change; a renewal keeps it
+  int64 started_millis = 4; int64 renewed_millis = 5;
+  int64 expires_millis = 6;                 // runs: renewed + 90 min; workers: renewed + 26 h; repos: none (0)
+  uint32 state = 7;                         // 1 active, 2 ended, 3 handed_off
+  bool tainted = 8;                         // the writing run's taint when this version was written (16.6)
+  AnnounceWho who = 9; AnnounceWhat what = 10; AnnounceWhere where = 11;
+  repeated Claim claims = 12;               // <= 4: record_append(kind: claim)
+  Handoff handoff = 13;                     // record_append(kind: handoff), or the run's end
+}
+message AnnounceWho {                       // attested: readers check every id against §7.9's state
+  bytes member_id = 1;                      // the member, or a tagged or ephemeral sidecar's sponsor
+  bytes sidecar_id = 2;
+  string member_label = 3;                  // the writer's view of the member's name, <= 64 B, for the index;
+                                            // readers display their own config's
+  bytes agent_id = 4;                       // runs
+  string agent_label = 5;                   // runs: [a-z0-9-]{1,64}, the daemon's normalization of §5.5's label
+  string harness = 6;                       // runs: claude-code, codex, cursor, or none (a person's task)
+  string model = 7;                         // runs: an identifier <= 64 B, or empty
+  repeated bytes tag_ids = 8;               // workers: keyed tag ids (§7.9)
+}
+message AnnounceWhat {
+  string title = 1;                         // runs: <= 120 B; repos: the display name, <= 128 B (prose)
+  string description = 2;                   // workers, repos: <= 512 B (prose)
+  bytes run_id = 3;                         // runs
+  repeated string harnesses = 4;            // workers: identifiers, <= 8
+  repeated string agent_labels = 5;         // workers: identifiers, <= 16
+  repeated Service services = 6;            // workers: <= 32
+  uint32 requests = 7;                      // workers, repos: 1 open, 2 closed
+  repeated string topics = 8;               // repos: [a-z0-9-]{1,32}, <= 8
+  uint32 repo_kind = 9;                     // repos: §11.12's kind
+  repeated uint32 roles = 10;               // repos: the roles offered (reader, writer, deposit)
+}
+message AnnounceWhere {
+  bytes repo_id = 1;                        // runs in an evs repo; repos
+  string project = 2;                       // runs: an identifier <= 128 B; empty when private
+  string branch = 3;                        // runs: a git ref name <= 128 B; empty when private
+  bool private = 4;                         // runs: the run's repo has no live announcement; repos: a private
+                                            // marker, holding only who, repo_id, repo_kind and requests
+  string host_label = 5;                    // the sidecar's config name (§7.7), for the index
+  uint32 platform = 6;                      // workers: darwin, linux, windows, android, ios, wasm
+  bool ephemeral = 7;
+}
+message Service {
+  uint32 kind = 1;                          // 1 application socket, 2 TLS host, 3 bridge port
+  string name = 2;                          // the socket name (§9.4), the published host, or tcp:<port>
+  string description = 3;                   // <= 256 B (prose)
+}
+message Claim {
+  bytes claim_id = 1; string text = 2;      // text <= 512 B (prose)
+  repeated string targets = 3;              // <= 16 path prefixes, each <= 256 B
+  int64 expires_millis = 4;                 // at most the run's expiry while it renews
+  uint32 state = 5;                         // 1 active, 2 released, 3 handed_off
+}
+message Handoff {
+  bytes to_member_id = 1; string to_agent_label = 2; string note = 3;  // note <= 512 B (prose)
+  int64 millis = 4;
+}
+
+// sidecar/protocol/directory.proto, continued
+message DirectoryRequest {                  // body of a RecordEntry kind request, in the requester's stream
+  bytes request_id = 1;                     // random 16 B; for reach, also the ApprovalRequest's approval_id
+  RequestTarget target = 2;
+  bytes subject = 3; bool subject_is_member = 4;  // the member_id, or the requesting sidecar_id
+  uint32 role = 5;                          // repos: reader, writer, deposit; reach: dial
+  int64 grant_expires_millis = 6;           // asked; 0 asks for the approver's default
+  int64 not_after_millis = 7;               // the request's own expiry: 7 d by default, at most 30 d
+  string reason = 8;                        // <= 512 B (prose)
+  bytes announcement_id = 9;                // the announcement the requester acted on, if any
+  uint32 filed_by = 10;                     // 1 person (a /dev/tty command or app UI), 2 agent, 3 tagged sidecar
+  uint32 endorsement_channel = 11;          // agents and tagged sidecars: device, presence or harness
+  bytes endorsement_sha256 = 12;            // that ApprovalDecision, kept in the member's vault or the sponsor's
+  bool tainted = 13;                        // the filing run's taint
+  ApprovalRequest approval = 14;            // reach only: 16.8's request, whose CanonicalAction is the grant
+                                            // (§8.8: the directory rule's rule_id, subject, grant_dst,
+                                            // grant_allow, ports, expires), approvers the eligible member_ids
+}
+message RequestTarget {                     // exactly one set
+  bytes repo_id = 1; bytes sidecar_id = 2;  // a repo; a worker
+  repeated uint32 tcp_ports = 3;            // a worker's: empty asks for its announced bridge ports
+  bytes socket_token = 4;                   // a service: §9.4's name token
+}
+message DirectoryDecision {                 // body of a RecordEntry kind decision, in the decider's stream
+  bytes request_id = 1;
+  bytes request_entry_sha256 = 2;           // SHA-256 of the request entry's Signed header
+  uint32 outcome = 3;                       // 1 approved, 2 denied, 3 cancelled (by its requester)
+  bytes statement_sha256 = 4;               // approved: the RepoGrant, EvsShare or ApprovalDecision signed
+  uint64 statement_position = 5;            // approved repos: its authorization-log position (the receipt)
+  bytes approval_decision = 6;              // approved reach: the Signed ApprovalDecision the requester spends
+  bytes subject = 7;                        // as approved: the request's, or one sidecar of its member
+  int64 grant_expires_millis = 8;           // as approved: never later than asked, when an expiry was asked
+  string note = 9;                          // <= 512 B (prose)
+}
+message DirectoryNotice {                   // q/<tgt>/<request_id>, <= 256 B
+  bytes request_id = 1; bytes requester_sidecar_id = 2;
+  uint64 entry_seq = 3;                     // the request entry's seq in the requester's stream
+  int64 not_after_millis = 4;
+  uint32 state = 5;                         // 1 pending, 2 decided
+  repeated DecisionRef decisions = 6;       // the approvals so far, at most the rule's 2, or the one denial
+  uint32 outcome = 7;                       // decided: 1 approved, 2 denied; a cancel removes the notice
+}
+message DecisionRef {                       // a decision entry in its decider's stream (16.8)
+  bytes decider_sidecar_id = 1;
+  uint64 seq = 2;                           // the entry's seq there, which names its path
+  bytes header_sha256 = 3;                  // SHA-256 of the entry's Signed header
+}
+message DirectoryErasureRequest {           // body of a RecordEntry kind erasure_request, in a revoker's stream
+  bytes request_id = 1;                     // random 16 B; each ERASE's sealed note names it
+  bytes repo_id = 2;                        // the revoked repo; the request erases only copies that name it
+  uint64 marker_version = 3;                // its private marker's Announcement.version; a newer item lapses it
+}

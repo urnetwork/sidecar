@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+// A root file that needs cgo.
 const plantedCgoSource = "package sidecar\n\n// int planted(void);\nimport \"C\"\n"
 
 func TestCgoFailsOnACgoFileInTheRoot(t *testing.T) {

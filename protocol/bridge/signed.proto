@@ -9,8 +9,9 @@ option go_package = "github.com/urnetwork/sidecar/protocol/bridge";
 // signed bytes: "urnetwork-sidecar-v1/" || purpose || 0x00 || u32be(type) || body
 message Signed {
   bytes body = 1;
-  bytes signer_id = 2;
-  bytes key_id = 3;
+  bytes signer_id = 2;            // a recovery key's statement (§7.9): the member_id it stands for
+  bytes key_id = 3;               // a recovery key's statement: the Ed25519 public key itself, which rows
+                                  // hold only as a hash, so the statement carries it (VerifyRecoverySigned)
   bytes signature = 4;
   WebAuthnEvidence webauthn = 5;  // a presence key's evidence: for Signed's own signature by a
                                   // webauthn-es256 key, or, key_id set, §7.9's presence
@@ -38,7 +39,9 @@ message WebAuthnEvidence {
 enum SignedType {
   SIGNED_TYPE_NONE = 0;
 
-  // 0x10xx §9 socket registrations, tickets
+  // 0x10xx §9 in §6.11's order: purposes socket-registration and socket-ticket.
+  SIGNED_SOCKET_REGISTRATION = 0x1001;
+  SIGNED_SOCKET_TICKET = 0x1002;
 
   // 0x11xx §8 acl statements in §8.8's row order, GrantActivate first: purpose acl, but for AuditOptIn
   // and AuditOptOut, which are purpose authority. RepoVersioning's type is reserved at M2: format-1
@@ -84,8 +87,19 @@ enum SignedType {
   SIGNED_RECOVERY_VETO = 0x1214;
   SIGNED_PROJECTION_HEADER = 0x1215;
 
-  // 0x13xx §10 GenRotate, ReaderKey, ReaderWrap, DelegationWrap
-  // 0x14xx §11 EvsPush, EvsReseed
+  // 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5).
+  SIGNED_GEN_ROTATE = 0x1301;
+  SIGNED_READER_KEY = 0x1302;
+  SIGNED_READER_WRAP = 0x1303;
+  SIGNED_DELEGATION_WRAP = 0x1304;
+
+  // 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
+  // purposes evs-path-epoch and evs-import.
+  SIGNED_EVS_PUSH = 0x1401;
+  SIGNED_EVS_RESEED = 0x1402;
+  SIGNED_EVS_PATH_MAP = 0x1403;
+  SIGNED_EVS_IMPORT = 0x1404;
+
   // 0x15xx §13, 0x16xx §14, 0x17xx §15, 0x1Axx §5, 0x1Bxx §12
 
   // 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
