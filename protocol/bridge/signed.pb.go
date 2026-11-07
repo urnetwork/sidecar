@@ -85,7 +85,7 @@ const (
 	SignedType_SIGNED_READER_WRAP     SignedType = 4867
 	SignedType_SIGNED_DELEGATION_WRAP SignedType = 4868
 	SignedType_SIGNED_GROUP_FORM      SignedType = 4869
-	SignedType_SIGNED_MLS_CREDENTIAL  SignedType = 4870
+	SignedType_SIGNED_MLS_CREDENTIAL  SignedType = 4870 // its body UrMlsCredential
 	// 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
 	// purposes evs-path-epoch and evs-import.
 	SignedType_SIGNED_EVS_PUSH     SignedType = 5121

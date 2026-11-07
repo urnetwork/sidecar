@@ -95,7 +95,7 @@ enum SignedType {
   SIGNED_READER_WRAP = 0x1303;
   SIGNED_DELEGATION_WRAP = 0x1304;
   SIGNED_GROUP_FORM = 0x1305;
-  SIGNED_MLS_CREDENTIAL = 0x1306;
+  SIGNED_MLS_CREDENTIAL = 0x1306;  // its body UrMlsCredential
 
   // 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
   // purposes evs-path-epoch and evs-import.

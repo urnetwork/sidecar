@@ -8,8 +8,8 @@
 // Last come what §10 names and gives no bytes, which that review also settles: the bodies of §10.6's objects, then
 // of §10.14's routes. Each route body is one of these messages, or a Signed, as application/octet-stream, as
 // PollResponse is, with no service block (§4.7). An object or route that holds only a Signed, a KeyPackage, a
-// Welcome or a RecoveryWrap's ciphertext holds those bytes bare and has no message here. Each field shows
-// nothing §2.8 does not, which testdata/gkm/metadata_rows.yml holds it to, row by row (I-18).
+// Welcome or a RecoveryWrap's ciphertext holds those bytes bare and has no message here. Every field names the §2.8
+// row that shows it in testdata/gkm/metadata_rows.yml (I-18), which also marks the few a row does not yet say.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -76,7 +76,8 @@ message ReaderKey {              // §6 Signed, purpose reader-key (10.5): every
   int64 not_after_ms = 3;        // at most 7 days after signing
 }
 
-message GroupForm {              // §6 Signed at gkm/repo/<repo_id>/<seq> (10.6): gkm-1's fields, its signer Signed's
+message GroupForm {              // §6 Signed, purpose group-form, at gkm/repo/<repo_id>/<seq> (10.6): gkm-1's fields,
+                                 //   its signer Signed's
   bytes repo_id = 1;
   bytes group_id = 2;
   bytes previous_group_id = 3;   // the group this one re-forms, or empty
@@ -169,7 +170,7 @@ message GkmGroupReply {
   Signed form = 1;               // the GroupForm that names this group
 }
 
-// POST /gkm/groups/<id>/epochs/<n>, under GkmEpochObject's fields of the same names.
+// POST /gkm/groups/<id>/epochs/<n>. Each field means what GkmEpochObject's does.
 message GkmEpochRequest {
   bytes commit = 1;
   bytes gen_wrap = 2;
