@@ -11,7 +11,8 @@
 //   - faults.go, a store fault as a plan the next matching operation gets.
 //   - blob_history.go, what a store's clients saw, and FI-30's check of it.
 //   - privacy.go, §22.7's capture: canaries, hooked keys and the scan.
-//   - metadata_list.go, §2.8's list and its strict reader (§22.7).
+//   - metadata_list.go, §2.8's list and its strict reader, and schema_guard*.go, §22.7's guard over it,
+//     whose map is testdata/metadata/fields.yml.
 //   - fake_blobs*.go, fake_redis*.go and the other fake_ files, a fake of every interface ServiceHost
 //     holds, gathered by fake_host.go.
 //   - net*.go, connect clients in one process, built on connect's exported API alone (Q-TEST-1).

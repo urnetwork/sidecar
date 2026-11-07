@@ -14,8 +14,8 @@ endif
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
-# cached pass would hide a new violation. Each step has 30 minutes, since smtpproof's circuits outlast
-# go test's default 10 on a loaded machine. check/ runs from its own directory, go test's local mode,
+# cached pass would hide a new violation. smtpproof's solver tests take a minute on a quiet machine
+# and past go test's 10 minutes on a loaded one, and a timeout there would stop every track landing. check/ runs from its own directory, go test's local mode,
 # so a passing run still prints what it leaned on. RELEASE_BINARIES names built artifacts for the
 # rules to read as well. This needs the module proxy and vuln.go.dev for govulncheck, protoc once a
 # .proto exists, and node, which the sidecar_http leg's tests run in, and fails without them: a rule
