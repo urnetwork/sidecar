@@ -244,6 +244,31 @@ func (self *FakeBlobs) DelayedCount() int {
 	return count
 }
 
+// Every object, by <cluster>/<key>, each as its key, metadata and body, for CC3's scan.
+func (self *FakeBlobs) Dump() map[string][]byte {
+	dump := map[string][]byte{}
+	for clusterId, cluster := range self.clusters {
+		func() {
+			cluster.stateLock.Lock()
+			defer cluster.stateLock.Unlock()
+			for key, blob := range cluster.objects {
+				var serialized bytes.Buffer
+				serialized.WriteString(key)
+				serialized.WriteByte(0)
+				for _, name := range slices.Sorted(maps.Keys(blob.metadata)) {
+					serialized.WriteString(name)
+					serialized.WriteByte(0)
+					serialized.WriteString(blob.metadata[name])
+					serialized.WriteByte(0)
+				}
+				serialized.Write(blob.body)
+				dump[clusterId+"/"+key] = serialized.Bytes()
+			}
+		}()
+	}
+	return dump
+}
+
 // Requests one cluster has served by operation, so a test can hold a cost to what §11.13 prices.
 func (self *FakeBlobs) RequestCount(clusterId string, op string) int {
 	cluster := self.clusters[clusterId]
