@@ -13,8 +13,10 @@ import (
 
 // §6.6's table. Defaults are the desktop's; a mobile value follows a semicolon.
 type SidecarProtocolSettings struct {
-	// How long a peer's Hello stands: 10 min, or until the sequence exits; a pair in a §6.10 window
-	// keeps it while the window is open and no 120 s pass without a keepalive.
+	// How long a peer's Hello stands: 10 min. Since connect signals no sequence exit, it ends sooner at
+	// any change of the peer's C15 key, checked per frame, or on a send's ack error
+	// (plan-PROTO-small-readings.md's reading 1). A pair in a §6.10 window keeps it while the window is
+	// open and no 120 s pass without a keepalive.
 	HelloCacheTimeout time.Duration
 	// How often an app host Pings an indexer whose §6.10 window is open, while in the foreground, on
 	// a grid from the window's start: 60 s, under connect's 120 s receive idle.
@@ -80,8 +82,9 @@ type SidecarProtocolSettings struct {
 	// How often a round runs while a revocation this device signed is unwitnessed: 10 min.
 	HeadCheckUnwitnessedInterval time.Duration
 	// The least time between wakes of one device: 1 h, as the api enforces; woken sidecars check
-	// first. The 24 h witness alarm and the stop at ServiceSettings.witness_bound_hours are per-network
-	// config (§7.9; owner decision 129), never local settings.
+	// first. Neither witness bound is a local setting: the stop at ServiceSettings.witness_bound_hours
+	// is per-network config (§7.9), and the 24 h alarm is a protocol constant fixed by owner decision 129
+	// (plan-PROTO-small-readings.md's reading 3).
 	WakeInterval time.Duration
 	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
 	// (§6.8).
