@@ -2,15 +2,20 @@
 // stores, as §10.4 and §10.5 write them. No field is removed once M2's entry review fixes it, and they freeze
 // at M2's exit on §22.10's 0x0010 interop artifact (D-KEYS-10). A bare section number, as in 10.5, is DESIGN.md's.
 //
-// ReaderKey and GkmHint, which §10 writes as field lists, and GroupForm, which only §2.8's gkm-1 lists, sit last
-// in this file. They take numbers in the order written, and stay open to review until that entry review.
-// §10.6's stored bodies (an epoch object, the group-info pointer, a Welcome pointer, a KeyPackage claim) have no
-// message in the design, so none is declared here.
+// ReaderKey and GkmHint, which §10 writes as field lists, and GroupForm, which only §2.8's gkm-1 lists, come next.
+// They take numbers in the order written, and stay open to review until that entry review.
+//
+// Last come what §10 names and gives no bytes, which that review also settles: the bodies of §10.6's objects, then
+// of §10.14's routes. Each route body is one of these messages, or a Signed, as application/octet-stream, as
+// PollResponse is, with no service block (§4.7). An object or route that holds only a Signed, a KeyPackage, a
+// Welcome or a RecoveryWrap's ciphertext holds those bytes bare and has no message here. Each field shows
+// nothing §2.8 does not, which testdata/gkm/metadata_rows.yml holds it to, row by row (I-18).
 
 syntax = "proto3";
 package urnetwork.sidecar;
 
 import "protocol/bridge/auth.proto";
+import "protocol/bridge/signed.proto";
 
 option go_package = "github.com/urnetwork/sidecar/protocol";
 
@@ -68,7 +73,7 @@ message DelegationWrap { KeyDelivery wrap = 1; }  // the same, to a Delegation's
 message ReaderKey {              // §6 Signed, purpose reader-key (10.5): every reader keeps a current one
   bytes sidecar_id = 1;
   bytes xwing_public_key = 2;
-  int64 not_after = 3;           // ms since the epoch, at most 7 days after signing
+  int64 not_after_ms = 3;        // at most 7 days after signing
 }
 
 message GroupForm {              // §6 Signed at gkm/repo/<repo_id>/<seq> (10.6): gkm-1's fields, its signer Signed's
@@ -93,4 +98,140 @@ message GkmHint {                // §6 0x1301, in PushHint.hint
   uint64 epoch = 2;
   GkmHintKind kind = 3;
   bytes recipient = 4;           // 10.6's late wraps: the ask's s: or d: recipient, as its wrap path writes it
+}
+
+// gkm/<group_id>/epoch/<n>. gkm writes uploader, time_ms and header itself, from the token, its clock and the commit,
+// so a client's GkmEpochRequest has no such field to state falsely.
+message GkmEpochObject {
+  bytes group_id = 1;
+  uint64 epoch = 2;
+  bytes commit = 3;              // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
+  GkmCommitHeader header = 4;    // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
+                                 //   one MLS authenticates. At epoch 0, gen/1's generation and auth
+  bytes uploader = 5;            // sidecar_id; at epoch 0 the creator (gkm-1)
+  int64 time_ms = 6;             // gkm's clock at the write
+  bytes gen_wrap = 7;            // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
+  bytes sealed_group_info = 8;   // GroupInfo_n under header.generation's key, at most 16 leaves; else empty, and empty
+                                 //   at a generation-0 self-join, which no generation seals
+  bytes network_id = 9;          // epoch 0 only (gkm-1), from the token
+  uint32 cipher_suite = 10;      // epoch 0 only (gkm-1); 0x0010 (owner decision 44)
+}
+
+// gkm/<group_id>/group-info, and the body of POST and GET .../group-info. At most 16 leaves it is the pointer {epoch},
+// and that epoch's object holds the sealed GroupInfo; above 16, it holds it here.
+message GkmGroupInfoObject {
+  uint64 epoch = 1;              // rises at each write (10.6)
+  uint64 generation = 2;         // above 16 leaves, whose K_groupinfo seals it, which may pass the epoch's own header
+                                 //   (KF5: "the generation it names"); 0 in a pointer
+  bytes sealed_group_info = 3;   // GroupInfo_epoch, above 16 leaves; empty in a pointer
+}
+
+// gkm/welcome/<sidecar_id>/<ref>, written with the Welcome.
+message GkmWelcomePointer {
+  bytes group_id = 1;
+  uint64 epoch = 2;              // n of gkm/<group_id>/welcome/<n>
+}
+
+// gkm/kp/<sidecar_id>/<ref>.claim. The target is the sidecar_id in its key.
+message GkmKeyPackageClaim {
+  bytes group_id = 1;
+  bytes claimer = 2;             // sidecar_id
+}
+
+// POST /gkm/key-packages. Each is a bare MLS KeyPackage: its credential names the sidecar, and its own extensions say
+// whether it is last-resort, so the wire states neither twice.
+message GkmKeyPackagesRequest {
+  repeated bytes key_packages = 1;
+}
+
+// POST /gkm/key-packages/claim.
+message GkmKeyPackageClaimRequest {
+  bytes group_id = 1;
+  bytes target = 2;              // the sidecar_id being added
+}
+message GkmKeyPackageClaimReply {
+  bytes key_package_ref = 1;     // <ref>
+  bytes key_package = 2;
+}
+
+// POST /gkm/groups (KF1), which writes the GroupForm, epoch/0 and gen/1, each If-None-Match. epoch/0's network_id and
+// uploader come from the token.
+message GkmGroupCreateRequest {
+  Signed form = 1;               // a GroupForm
+  Signed gen_rotate = 2;         // generation 1's GenRotate, without a parent
+  bytes gen_wrap = 3;            // GenWrap_0
+  bytes sealed_group_info = 4;   // GroupInfo_0
+  uint32 cipher_suite = 5;
+}
+
+// GET /gkm/groups/<id>.
+message GkmGroupReply {
+  Signed form = 1;               // the GroupForm that names this group
+}
+
+// POST /gkm/groups/<id>/epochs/<n>, under GkmEpochObject's fields of the same names.
+message GkmEpochRequest {
+  bytes commit = 1;
+  bytes gen_wrap = 2;
+  bytes sealed_group_info = 3;
+}
+
+// GET /gkm/groups/<id>/epochs?after=. An answer stops at gkm's bound, so a device asks again after its last epoch
+// until none comes.
+message GkmEpochEntry {
+  GkmEpochObject epoch = 1;
+  uint64 size = 2;               // the stored object's bytes
+}
+message GkmEpochsReply {
+  repeated GkmEpochEntry epochs = 1;  // in order
+}
+
+// GET /gkm/groups/<id>/gen?since= and .../drop-key?since=. The gen route stops at gkm's bound as GkmEpochsReply does,
+// and the drop-key route at 64 (10.14).
+message GkmGenerationsReply {
+  repeated Signed generations = 1;  // GenRotates, in order
+}
+
+// GET /gkm/groups/<id>/wraps/<g>.
+message GkmWrapsReply {
+  repeated Signed wraps = 1;     // ReaderWraps and DelegationWraps, the asked key's first
+}
+
+// POST /gkm/groups/<id>/welcome/<n>. gkm stores welcome bare at gkm/<group_id>/welcome/<n>, then writes one
+// GkmWelcomePointer per recipient, which the MLS Welcome alone cannot name: its refs say no sidecar.
+message GkmWelcomeRecipient {
+  bytes sidecar_id = 1;
+  bytes key_package_ref = 2;     // <ref>
+}
+message GkmWelcomeRequest {
+  bytes welcome = 1;
+  repeated GkmWelcomeRecipient recipients = 2;
+}
+
+// GET /gkm/welcomes: each pointer with its Welcome, which no other route serves.
+message GkmWelcomeEntry {
+  bytes key_package_ref = 1;     // <ref>
+  GkmWelcomePointer pointer = 2;
+  bytes welcome = 3;
+}
+message GkmWelcomesReply {
+  repeated GkmWelcomeEntry welcomes = 1;
+}
+
+// POST /gkm/groups/<id>/ack, for the token's own leaf, at gkm's clock.
+message GkmAckRequest {
+  uint64 epoch = 1;              // the leaf's newest applied epoch
+}
+
+// POST and GET /gkm/recovery/<member_id>/wraps. The object gkm/recovery/<member_id>/<group_id>/<g>/<c8>/<b8> holds
+// ciphertext bare, and these fields are its path.
+message GkmRecoveryWrap {
+  bytes group_id = 1;
+  uint64 generation = 2;         // g
+  bytes commitment_prefix = 3;   // C_g[0:8], which c8 writes as hex
+  bytes binding_prefix = 4;      // SHA-256(the binding's Ed25519 key)[0:8], which b8 writes as hex
+  bytes ciphertext = 5;          // RecoveryWrap_{m,g}
+}
+message GkmRecoveryWrapsReply {
+  repeated GkmRecoveryWrap wraps = 1;
 }
