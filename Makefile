@@ -2,6 +2,11 @@
 
 GO ?= go
 
+# How long one package's tests may run. go test's own 10 minutes is too little: smtpproof's circuit
+# tests take minutes on an idle machine and pass that limit on a loaded one, which fails make check
+# on the clock and says nothing about the code.
+TEST_TIMEOUT ?= 30m
+
 # The nested modules sit beside this file in development. A release branch moves the root module
 # into v2026/ beside them and smtpproof into its own v2026/ (§4.9), and make check runs there too.
 ifneq ($(wildcard cli/go.mod),)
@@ -22,16 +27,16 @@ endif
 check:
 	@set -e; for module in $(modules); do \
 		echo "go test in $$module"; \
-		(cd $$module && $(GO) test -count=1 ./...); \
+		(cd $$module && $(GO) test -count=1 -timeout $(TEST_TIMEOUT) ./...); \
 		echo "go test -tags sidecar_testhooks in $$module"; \
-		(cd $$module && $(GO) test -count=1 -tags sidecar_testhooks ./...); \
+		(cd $$module && $(GO) test -count=1 -timeout $(TEST_TIMEOUT) -tags sidecar_testhooks ./...); \
 	done
-	cd check && $(GO) test -count=1 -timeout 30m -tags sidecar_check
+	cd check && $(GO) test -count=1 -timeout $(TEST_TIMEOUT) -tags sidecar_check
 
 # §4.9's size gates, which build and link, so they are not part of make check. check/size_test.go
 # says what is measured. The ios_extension leg needs Xcode.
 size:
-	$(GO) test -count=1 -v -timeout 30m -tags sidecar_check,sidecar_size -run '^TestSizeGate' ./check
+	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_check,sidecar_size -run '^TestSizeGate' ./check
 
 proto:
 	$(MAKE) -C protocol GO="$(GO)"

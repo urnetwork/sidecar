@@ -592,3 +592,31 @@ func TestNoQuotedFirstPartyPathHere(t *testing.T) {
 		}
 	}
 }
+
+// go test's own limit is 10 minutes a package, and smtpproof's circuit tests pass it on a loaded
+// machine, which fails make check on the clock and says nothing about the code. So every go test the
+// Makefile runs names its limit, and a new one cannot quietly fall back to the default.
+func TestMakefileNamesEveryGoTestsTimeout(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for index, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for _, command := range shellCommandEndPattern.Split(line, -1) {
+			if !goTestCommandPattern.MatchString(command) || strings.HasPrefix(strings.TrimSpace(command), "echo") {
+				continue
+			}
+			found += 1
+			if !strings.Contains(command, "-timeout") {
+				t.Errorf("Makefile:%d: this go test falls back to the 10 minute default: %s", index+1, strings.TrimSpace(command))
+			}
+		}
+	}
+	if found == 0 {
+		t.Errorf("the Makefile holds no go test, so nothing here read it")
+	}
+}
