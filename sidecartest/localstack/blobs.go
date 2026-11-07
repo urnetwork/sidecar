@@ -5,7 +5,9 @@
 // per-cluster in production is only the bucket's name here.
 //
 // A stock MinIO ignores x-ur-deadline-ms and keeps none of D-OPS-20's settle rules, so SettlePassed
-// stays false until BlobSettings names a build that has passed FS-114. Safe for concurrent use.
+// stays false until BlobSettings names a build that has passed FS-114. ErrBlobHeld is never returned for
+// the same reason: a stock store holds no key, and until a fork build shows how it answers one, its 503
+// reads as unknown here, which only costs a caller a reread. Safe for concurrent use.
 
 package localstack
 
@@ -62,9 +64,11 @@ type BlobSettings struct {
 	MetadataClusters []*BlobClusterSettings
 	// Where seg/, pack/ and dropscan/ live.
 	SegmentCluster *BlobClusterSettings
-	// §19.6's store request deadline, 10 s on both clusters.
+	// §19.6's store request deadline, 10 s on both clusters. Not positive: every request but PutStream
+	// is abandoned as it starts, and PutStream waits on ctx alone.
 	RequestTimeout time.Duration
-	// How long a dial may take. 5 s: loopback answers at once, so this only bounds a dead store.
+	// How long a dial may take. 5 s: loopback answers at once, so this only bounds a dead store. Not
+	// positive: no bound but ctx.
 	DialTimeout time.Duration
 	// Whether the build behind Endpoint passed §22.9's settle cases. False until one has (FS-114).
 	SettlePassed bool

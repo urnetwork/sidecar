@@ -131,6 +131,29 @@ func TestASeedOffTheStackIsRefused(t *testing.T) {
 	}
 }
 
+// All that paces a lost subscription's retry, so zero would be a loop with no rate limit.
+func TestAResubscribeThatWouldSpinIsRefused(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -1 * time.Second} {
+		settings := DefaultRedisSettings()
+		settings.ResubscribeTimeout = timeout
+		if _, err := NewRedis(t.Context(), settings); err == nil || !strings.Contains(err.Error(), "spin") {
+			t.Errorf("%v: %v", timeout, err)
+		}
+	}
+}
+
+// Q-TEST-2's reason to exist: one node takes what a cluster refuses, so it is no stand-in for one.
+func TestANodeOutsideAClusterIsRefused(t *testing.T) {
+	node := newScriptedNode(t, func(socket *scriptedSocket, args []string) string {
+		return "-ERR This instance has cluster support disabled\r\n"
+	})
+	settings := DefaultRedisSettings()
+	settings.SeedAddresses = []string{node.address}
+	if _, err := NewRedis(t.Context(), settings); err == nil || !strings.Contains(err.Error(), "cluster support disabled") {
+		t.Errorf("err %v", err)
+	}
+}
+
 func TestAClusterWithNoSlotsFailsAtTheStart(t *testing.T) {
 	node := newScriptedNode(t, func(socket *scriptedSocket, args []string) string {
 		return "*0\r\n"

@@ -62,6 +62,7 @@ type RedisSettings struct {
 	// CheckStackAddress.
 	SeedAddresses []string
 	// How long a dial may take. 5 s: a node on loopback answers at once, so this only bounds a dead one.
+	// Not positive: no bound but ctx.
 	DialTimeout time.Duration
 	// How long one call may take when ctx sets nothing sooner, a blocked read's block on top. 10 s, the
 	// bound §19.6 gives a store request. Not positive: every call fails at once.
@@ -72,10 +73,13 @@ type RedisSettings struct {
 	// MOVED and ASK answers one call follows before it fails. 5: a reshard needs at most one of each, and
 	// a loop must not spin. Zero follows none.
 	RedirectLimit int
-	// The least time between attempts to win back a lost subscription: connect.Reconnect's. 1 s.
+	// The least time between attempts to win back a lost subscription: connect.Reconnect's. 1 s, so a
+	// dead node costs a dial a second. Must be positive, since that is all that paces the retry, and
+	// NewRedis refuses anything else.
 	ResubscribeTimeout time.Duration
 	// Key events waiting for the subscriber's goroutine. 1024. A master's reader waits once it is full,
-	// since a callback never blocks (host_redis.go) and a slow one here is a test's bug to see.
+	// since a callback never blocks (host_redis.go) and a slow one here is a test's bug to see. Zero
+	// hands each event straight over.
 	KeyEventQueueCount int
 }
 
@@ -122,6 +126,9 @@ func NewRedis(ctx context.Context, settings *RedisSettings) (*Redis, error) {
 		if err := CheckStackAddress(address); err != nil {
 			return nil, err
 		}
+	}
+	if settings.ResubscribeTimeout <= 0 {
+		return nil, fmt.Errorf("a resubscribe timeout of %v would spin on a dead node", settings.ResubscribeTimeout)
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &Redis{

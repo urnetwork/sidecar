@@ -28,9 +28,10 @@ runs, and `down` is refused until it ends.
 
 ## What waits for the fork
 
-This runs a stock MinIO, `cgr.dev/chainguard/minio` pinned by digest: upstream's Docker Hub and quay.io
-images are gone, and `minio --version` here reads `RELEASE.2026-10-23T20-06-51Z`. §22.4 asks for MinIO
-built from the `minio` fork, whose base has PR #21653, and D-OPS-20's settle rules exist only there.
+This runs a stock MinIO, `cgr.dev/chainguard/minio` pinned by digest, since upstream's Docker Hub and
+quay.io images could not be pulled here on 2026-11-06. `minio --version` reads
+`RELEASE.2026-10-23T20-06-51Z`. §22.4 asks for MinIO built from the `minio` fork, whose base has PR
+#21653, and D-OPS-20's settle rules exist only there.
 
 - **FS-114 waits for the fork.** A stock build keeps none of §19.6's deadline or settle rules, so
   `BlobSettings.SettlePassed` stays false and `blobsuite` names the cases it did not run, in its log, every

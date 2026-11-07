@@ -9,6 +9,8 @@
 //     kills and restarts. testhooks.go and testhooks_enabled.go install the driver on the root and on
 //     device/ under sidecar_testhooks; without the tag no site in this module reaches it.
 //   - faults.go, a store fault as a plan the next matching operation gets.
+//   - blob_history.go, what a store's clients saw, and FI-30's check of it.
+//   - privacy.go, §22.7's capture: canaries, hooked keys and the scan.
 //   - metadata_list.go, §2.8's list and its strict reader (§22.7).
 //   - fake_blobs*.go, fake_redis*.go and the other fake_ files, a fake of every interface ServiceHost
 //     holds, gathered by fake_host.go.
