@@ -10,7 +10,7 @@ else
 modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop
 endif
 
-.PHONY: check size proto stack-test
+.PHONY: check size proto metadata stack-test
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
@@ -39,3 +39,13 @@ proto:
 # The store suites on §22.4's local stack, which needs Docker, so make check leaves it out.
 stack-test:
 	GO="$(GO)" local/stack.sh test
+
+# §22.7's list: the fenced block under **The list** in §2.8, byte for byte and comments included, at
+# the top of the repository. check/metadata_list_test.go fails when the two differ, so a row changes
+# in the design and comes here through this target, never by hand. It stops rather than write nothing
+# when §2.8 holds no such block.
+metadata:
+	awk '/^\*\*The list\*\*/ { found = 1; next } found && /^```yaml$$/ { open = 1; next } open && /^```$$/ { exit } open' \
+		design/source/sections/02-TRUST.md > metadata_list.yml.new
+	test -s metadata_list.yml.new
+	mv metadata_list.yml.new metadata_list.yml
