@@ -140,9 +140,9 @@ func configSignedId(signedBytes []byte, expectedType bridge.SignedType) ([sha256
 	return sha256.Sum256(signedBytes), nil
 }
 
-// A statement's id: §7.9's replay row refuses a repeat of one, and a retry of one answers with its entry. A SidecarRow's
-// admission_sha256 is its SidecarAdmit's id, so it comes from here too. configSignedId says what this covers and what
-// that leaves open.
+// A statement's id: §7.9's replay row refuses a repeat of one, and a retry of one answers with its entry. It is also a
+// SidecarRow's admission_sha256 for a SidecarAdmit on its own; question team-records-admission-sha256-under-proposal
+// asks what that is for one inside a proposal. configSignedId says what this covers and what that leaves open.
 func StatementId(signedBytes []byte) ([sha256.Size]byte, error) {
 	return configSignedId(signedBytes, bridge.SignedType_SIGNED_TYPE_NONE)
 }

@@ -798,12 +798,17 @@ func TestAuthChainVectors(t *testing.T) {
 				t.Errorf("n %d: the base names %d, %x", row.N, header.GetVersion(), header.GetPrevChain())
 			}
 		case bridge.AuthEntryKindStatement:
-			_, message := verify(entry.GetBody())
+			signedType, message := verify(entry.GetBody())
 			if _, err := StatementId(entry.GetBody()); err != nil {
 				t.Errorf("n %d: %v", row.N, err)
 			}
-			at := message.ProtoReflect().Get(message.ProtoReflect().Descriptor().Fields().ByName("header")).
-				Message().Interface().(*bridge.StatementHeader).GetAt()
+			statement, ok := message.(interface {
+				GetHeader() *bridge.StatementHeader
+			})
+			if !ok {
+				t.Fatalf("n %d: %s has no header", row.N, signedType)
+			}
+			at := statement.GetHeader().GetAt()
 			if at.GetVersion() != pin.GetVersion() || !bytes.Equal(at.GetChain(), pin.GetChain()) {
 				t.Errorf("n %d: signed at %d, %x", row.N, at.GetVersion(), at.GetChain())
 			}
