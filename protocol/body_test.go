@@ -224,18 +224,18 @@ func TestEveryBodyRoundTrips(t *testing.T) {
 // §22.6's seeds as assertions: three encodings no writer here produces, each the same message, and each differing
 // from the canonical bytes wherever its message gives it a field to differ on.
 func TestEveryBodyDecodesAlikeHoweverEncoded(t *testing.T) {
-	differed := map[string]int{}
+	differedVariantCounts := map[string]int{}
 	for _, messageType := range testBodyTypes(t) {
 		message := testFilled(messageType)
 		canonical := testEncode(t, message)
-		variants := map[string][]byte{
+		variantEncodings := map[string][]byte{
 			"reordered":   testReordered(t, canonical),
 			"non-minimal": testNonMinimal(t, canonical),
 			"unpacked":    testUnpacked(t, messageType.Descriptor(), canonical),
 		}
-		for variant, encoded := range variants {
+		for variant, encoded := range variantEncodings {
 			if !bytes.Equal(encoded, canonical) {
-				differed[variant]++
+				differedVariantCounts[variant]++
 			}
 			decoded := messageType.New().Interface()
 			if err := proto.Unmarshal(encoded, decoded); err != nil {
@@ -252,7 +252,7 @@ func TestEveryBodyDecodesAlikeHoweverEncoded(t *testing.T) {
 	}
 	// A variant that never changed a byte would prove nothing about the parser.
 	for _, variant := range []string{"reordered", "non-minimal", "unpacked"} {
-		if differed[variant] == 0 {
+		if differedVariantCounts[variant] == 0 {
 			t.Errorf("no message's %s encoding differed", variant)
 		}
 	}
