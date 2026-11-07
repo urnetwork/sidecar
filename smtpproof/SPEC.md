@@ -148,9 +148,16 @@ The statement a circuit proves is this vector, encoded as field elements in the 
 
 `EdgeSession` runs E1-E3. They are ordinary code, not circuit: each fails closed, and each failure before the first forwarded application record is a refusal, not a record cut, unless 14.7 says otherwise.
 
+**The preamble, before E1.** A template is a literal and the circuit proves a record equals it, so a declared value holding `>` or CRLF would have the proof vouch for a command of the sidecar's own: `recipient_domain` set to `a.example>` CRLF `RCPT TO:<victim@other.example` would make a second recipient at another domain part of the template. So a session refuses, and the prover too before it dials, any preamble in which:
+
+- `recipient_count` is 0. BDAT with no RCPT draws a refusal, an MX that then reads the chunk as commands runs the unopened body, and π3 would be satisfiable with one reply (9.4). This is also why `partRoles` refuses it, so no statement of that count has a satisfying witness;
+- `recipient_domain`, `header_from_domain`, `dkim_selector`, `envelope_domain` or `helo_name` is not RFC 5321's Domain: labels of 1 to 63 octets of letters, digits and hyphens, no hyphen at either end, 255 octets in all;
+- `message_id` is not one `@` between two non-empty runs of section 4.2's `local` set;
+- `x_ur_ref` or `feedback_id` is empty or holds an octet outside 21-7E. The edge issues both, so this is a check on itself.
+
 **E1, handshake shape.** Over the relayed handshake:
 
-- The client's first bytes are a ClientHello in a record of type 22. Its extensions hold no `pre_shared_key`, `early_data` or `session_ticket`, its session id is empty, and its `server_name` is the MX host.
+- The client's first bytes are a ClientHello in a record of type 22. Its extensions hold no `pre_shared_key`, `early_data` or `session_ticket`, and none repeats. Its session id is empty, and its `server_name` holds exactly one name, the MX host, so no MX can read it as naming another.
 - The ServerHello selects 1.3 with `AES_128_GCM_SHA256` or `CHACHA20_POLY1305_SHA256` and no `pre_shared_key`, or 1.2 with one of section 4.1's two suites and no `session_ticket`.
 - 1.3: after the ClientHello the client sends at most one change_cipher_spec, then exactly one record of type 23, whose length is that of the client's Finished under the suite, plus an empty Certificate's 8 octets when the flight held a CertificateRequest. Nothing else passes before π1 verifies. This is what makes "no early data" hold for the client's second flight too.
 - 1.2: the flight is exactly ServerHello, Certificate, ServerKeyExchange, optional CertificateRequest, ServerHelloDone; then optional empty Certificate, ClientKeyExchange, change_cipher_spec, one Finished record; then the server's change_cipher_spec and Finished record. Any other shape fails, because S_ckx and SF depend on it.
@@ -159,7 +166,7 @@ The statement a circuit proves is this vector, encoded as field elements in the 
 **E2, the server's signature.**
 
 - The edge dialed the MX it resolved (§14.4).
-- 1.3: from the disclosed SHTS the edge derives the server handshake key and IV, opens the server's flight, checks CertificateVerify over `Transcript-Hash(ClientHello .. Certificate)` under the leaf key, and checks Finished under `HKDF-Expand-Label(SHTS, "finished", "", 32)`. Only then does it compute H_shts and H_sf.
+- 1.3: the disclosed SHTS is exactly 32 octets. HMAC zero-pads a short key, so a longer one could open the same flight. From it the edge derives the server handshake key and IV, opens the server's flight, checks CertificateVerify over `Transcript-Hash(ClientHello .. Certificate)` under the leaf key, and checks Finished under `HKDF-Expand-Label(SHTS, "finished", "", 32)`. Only then does it compute H_shts and H_sf.
 - 1.2: it checks ServerKeyExchange's signature, in clear, over `r_c ‖ r_s ‖ params`.
 - Accepted signature schemes are those the client offers, and SHA-1 is never accepted.
 - The edge then forgets SHTS. D-SMTP-10 forbids storing it.
@@ -173,7 +180,9 @@ The statement a circuit proves is this vector, encoded as field elements in the 
 5. A **message record** (BDAT's command and chunk, DATA's octets) is held until verified parts cover every server record relayed before it. Holding is not a cut.
 6. After the final QUIT no client record is forwarded. A later one, such as close_notify, ends the connection and is not a cut.
 
-Parts are accepted in `index` order. `first_record` continues from the previous part, `mode` never changes from π2 on, and `server_record_count` never falls and never exceeds what was relayed. A part resent under its `send_id` and `index` is idempotent. One proven again with a later `server_record_count` replaces it. Once the MX has closed, outstanding parts are moot.
+Parts are accepted in `index` order. `first_record` continues from the previous part, `mode` never changes from π2 on, and `server_record_count` never falls and never exceeds what was relayed. The records a part opens are in strictly increasing `seq`: BDAT's QUIT names its own, and at one the head already holds it would stand in for that record, passing `BDAT 0 LAST` with no header block. An opened record holds at least its type octet in 1.3. A part resent under its `send_id` and `index` is idempotent. One proven again with a later `server_record_count` replaces it. Once the MX has closed, outstanding parts are moot.
+
+A verification runs with no lock held, so another part may land during it. Then only an exact resend of what landed passes, as a no-op. Anything else ends the connection and is no cut, because its order checks ran against what no longer stands.
 
 The edge stores none of this past the connection (D-SMTP-10).
 
@@ -251,6 +260,8 @@ D-SMTP-16's corpus, FS-31 included. Each row must fail before any effect, with h
 | Record splits, a command split or two in one record | Z3 and Z4: one command per record, template by length |
 | Replayed server replies | Z7: a record decrypts only at its own `seq`, which the edge assigns |
 | A pipelined second transaction | Z4 and E3: every client record is proven; a second MAIL has no part |
+| A declared value that carries a command, or no recipient at all | The preamble's forms, before any template is built (section 6) |
+| A part's records stood on one number, to drop the header block | E3: `seq` strictly increases within a part |
 | Smuggled headers, a second From, one behind a leading dot | Z5.3, Z5.4 |
 | An early or bare-LF DATA end | Z6 |
 | No CHUNKING; CHUNKING only before TLS | Z8, Z9 over the post-TLS reply; the edge's pre-TLS hints are not inputs |
@@ -286,6 +297,8 @@ With the key bound, CTR-mode decryption is a function of key, nonce and cipherte
 
 Z7 opens the MX's own records under its own key, and E2's dial means they are the MX's. So Z8's parse is of what the MX really said, in order. This is why D-SMTP-22 proves replies rather than trust the sidecar's reading (RFC 3030 §2, RFC 3207 §4.2): the same bytes mean a message to a chunk-reading MX and commands to any other. π3 holds only if the MX accepted the envelope, and E3 releases message records only behind verified coverage of every reply relayed so far, so no refusal can be in flight unnoticed at the moment a message record is released. It can still arrive just after; 9.6 covers that.
 
+That argument needs an envelope to accept. With `recipient_count` 0, π3 needs only MAIL's reply and the MX has no recipient, so it refuses BDAT however it reads what follows. Section 6 refuses that count for this reason.
+
 ### 9.5 BDAT's unopened body
 
 The MX reads chunk octets from records. An honest edge counts each body record as carrying `len - 17` (or `len - 24`) octets. A 1.3 record carries at most that, and fewer if padded or if it is not application data; a 1.2 record of clear type application_data carries exactly that. So at every point the MX's count is at most the edge's, and the edge's never passes n. Hence:
@@ -309,7 +322,7 @@ What the MX stores is not quite what was proven: it deletes each line's leading 
 ### 9.8 Known weak points for the reviewers
 
 - Z5 constrains what receivers parse only as far as receivers agree with RFC 5322 on the normal form. A receiver that treats some other octet as a line ending defeats Z5.3; none is known for the class Z5.1 permits, and the corpus should keep looking.
-- Z5 does not bound a line's length. A hop that breaks a line past 998 octets without folding it would start a new header line mid-field, where Z5 saw none. Postfix and sendmail both fold such a line, as far as their documentation says, and nothing here has tested either. A bound is a counter and a range check per octet, about 50,000 constraints on a 4 KiB header block, if the reviewers want it.
+- Z5 does not bound a line's length. A hop that breaks a line past 998 octets without folding it would start a new header line mid-field, where Z5 saw none. Nothing here has tested what real hops do with such a line. A bound would be a counter and a range check per octet, by estimate about 50,000 constraints on a 4 KiB header block, if the reviewers want it.
 - 1.2's 128-bit margin (9.2), and BN254's estimated 100 to 110 bits for forging a proof, are the two smallest numbers in this document. Forgery costs abuse control, never confidentiality (10.2).
 - The Groth16 setup's soundness rests on the edge's own contribution (10.3). That is the right party, but a leaked toxic secret is silent. Rotation is a key-management item.
 
@@ -352,6 +365,8 @@ So this module pins v0.15.0 and **imports nothing from gnark's `std/`**. `TestCi
 Between v0.15.0 and v0.16.4, the packages this module links differ only by `uints`-style `std` changes it does not use, a prover `Accelerator` refactor, a `Lookup2` optimization and a commitment index fix it cannot reach; `backend/groth16/bn254/verify.go` is unchanged. That comparison was by `diff` over those packages, and a reviewer should repeat it at each bump. `gnark-crypto` v0.21's security fixes touch EdDSA, shplonk, fflonk, KZG's ceremony and twisted Edwards curves, none on this path. The KZG one would matter to a PLONK route.
 
 Moving past v0.15.0 is a coordinated bump across server and sn, and it would still leave lookups subject to 10.2's review.
+
+**Decoding a proof.** gnark's `Proof.ReadFrom` allocates the count of commitments the octets declare before it reads one, so a few hostile octets from a sidecar could ask an edge for 256 GiB, and a point marked uncompressed moves that count, so a length check alone does not help. These circuits carry no commitment, which leaves a proof one form, 164 octets, and `decodeProof` reads that and nothing else. A bump must keep it: `TestGroth16ProofOfARealEhlo` fails if gnark's encoding moves.
 
 ### 10.2 Zero knowledge
 
@@ -462,7 +477,8 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 15. **The fixed signature leads with `h=`** (Z5.5), since DKIM's tag order is free and a constant prefix makes "exactly one" a sum.
 16. **A chunk short of octet n at QUIT is a record cut** (E3). §14.7 names only a body past octet n, but Z6 requires n exactly and an honest sidecar never falls short.
 17. **Server replies stay parsed only where a part covers them.** A keyword split across records does not count as CHUNKING, so such an MX falls to DATA. That costs coverage, never soundness.
-18. **A header field name never starts with a dot, in either mode** (Z5.3). DATA needs it, since an MX deletes that dot. BDAT does not, and one rule costs an honest message nothing, because RFC 5322 field names in real mail do not start with one.
+18. **A header field name never starts with a dot, in either mode** (Z5.3). DATA needs it, since an MX deletes that dot. BDAT does not, but one rule is simpler, and a sidecar writing the header block has no reason to emit such a name. RFC 5322 allows one, so a message a mail client wrote that way fails the send.
+19. **The preamble's forms** (section 6). §14.5 calls these values proven and says the edge resolves `recipient_domain`, but states no syntax. The proofs mean what the design says only if a template holds one command, so the forms are refused here, whatever the engine's own gate does.
 
 ## 14. Open
 

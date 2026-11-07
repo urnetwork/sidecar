@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"golang.org/x/crypto/chacha20"
 )
@@ -62,6 +63,9 @@ const (
 	preambleFlagBurner     uint32 = 4
 
 	localMaxBytes = 64
+	// RFC 5321 §4.5.3.1.2 and RFC 1035 §2.3.4.
+	domainMaxBytes = 255
+	labelMaxBytes  = 63
 	// What every 1.3 server record after Finished holds as its first octet if it is a ticket.
 	tlsInnerTypeBytes = 1
 )
@@ -103,6 +107,82 @@ type sessionPreamble struct {
 	xUrRef           string
 	feedbackId       string
 	envelopeDomain   string
+}
+
+// Whether a name is RFC 5321's Domain: labels of letters, digits and hyphens, with a letter or digit
+// at each end, so that nothing in it can close a path or end a line.
+func domainForm(name string) bool {
+	if name == "" || domainMaxBytes < len(name) {
+		return false
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		if label == "" || labelMaxBytes < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := range len(label) {
+			octet := label[i]
+			if !('a' <= octet && octet <= 'z' || 'A' <= octet && octet <= 'Z' || '0' <= octet && octet <= '9' || octet == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Whether a value is one or more visible octets, so that it stays on its line as one token.
+func visibleForm(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := range len(value) {
+		if value[i] <= ' ' || '~' < value[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Whether a Message-ID, without its angle brackets, is left and right of one @ in the local set.
+func messageIdForm(value string) bool {
+	left, right, found := strings.Cut(value, "@")
+	if !found || left == "" || right == "" {
+		return false
+	}
+	for _, half := range []string{left, right} {
+		for i := range len(half) {
+			if !localOctet(half[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Refuses a preamble no template may be built from (SPEC.md section 6). A template is a literal, and
+// the circuit proves a record equals it, so a declared value holding the end of a path or a line
+// would have the proof vouch for a command of the sidecar's own.
+func checkSessionPreamble(preamble *sessionPreamble) error {
+	if preamble.recipientCount == 0 {
+		return errors.New("preamble declares no recipient")
+	}
+	for _, entry := range []struct {
+		name string
+		ok   bool
+	}{
+		{name: "recipient_domain", ok: domainForm(preamble.recipientDomain)},
+		{name: "header_from_domain", ok: domainForm(preamble.headerFromDomain)},
+		{name: "dkim_selector", ok: domainForm(preamble.dkimSelector)},
+		{name: "envelope_domain", ok: domainForm(preamble.envelopeDomain)},
+		{name: "helo_name", ok: domainForm(preamble.heloName)},
+		{name: "message_id", ok: messageIdForm(preamble.messageId)},
+		{name: "x_ur_ref", ok: visibleForm(preamble.xUrRef)},
+		{name: "feedback_id", ok: visibleForm(preamble.feedbackId)},
+	} {
+		if !entry.ok {
+			return fmt.Errorf("preamble's %s is outside its form", entry.name)
+		}
+	}
+	return nil
 }
 
 // The SHA-256 state S_ckx: chaining value, unhashed tail and length. Its marshaled form is what
@@ -229,6 +309,11 @@ const (
 func partRoles(statement *partStatement) ([]recordRole, error) {
 	recordCount := len(statement.clientRecords)
 	preamble := statement.session.preamble
+	// BDAT with no RCPT draws a refusal, and an MX that then reads the chunk as commands would run an
+	// unopened body, so a transaction holds a recipient whatever else its statement says
+	if preamble.recipientCount == 0 {
+		return nil, errors.New("a transaction names at least one recipient")
+	}
 	switch {
 	case statement.index == 1:
 		if recordCount != 1 {

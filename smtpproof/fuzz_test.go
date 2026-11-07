@@ -122,6 +122,90 @@ func TestTheGateSurvivesRandomRecordsInEveryPhase(t *testing.T) {
 	}
 }
 
+// Does what a real verifier does first with a statement: build its public wires. Nothing past that
+// matters here, since a hostile record has already done its worst by then.
+type testAssigningVerifier struct{}
+
+func (self *testAssigningVerifier) verifyPart(ctx context.Context, statement *partStatement, proof []byte) error {
+	_, err := partShapeFor(statement)
+	return err
+}
+
+func TestAnEmptyRecordFailsClosedInEveryPart(t *testing.T) {
+	// a record of nothing but its tag, which in 1.3 lacks even its type octet: the verifier's path is
+	// reachable before any key is, so a panic here would be a sidecar taking down an edge
+	for _, leg := range testTlsLegs() {
+		capture := testDataCapture(t, leg)
+		for _, index := range []uint32{1, 2, 3} {
+			statement, _ := capture.part(t, index)
+			overhead := tlsAeadTagBytes
+			if statement.session.version == tlsVersion12 {
+				overhead += tlsExplicitNonceBytes
+			}
+			empty := tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, overhead))
+			for i := range statement.clientRecords {
+				clone := testCloneStatement(statement)
+				clone.clientRecords[i].raw = empty
+				if _, err := partShapeFor(clone); err == nil {
+					t.Errorf("%s: part %d record %d: a shape took an empty record", leg.name, index, i)
+				}
+			}
+		}
+	}
+}
+
+func TestTheGateSurvivesMutatedParts(t *testing.T) {
+	// each real part in turn, every part before it honest so that this one is what reaches the
+	// verifier's path, with each record cut to a size around where a record stops holding its tag,
+	// nonce and type octet, dropped, or swapped: refused or unfit, and never a panic
+	for _, leg := range testTlsLegs() {
+		settings := DefaultProverSettings()
+		settings.ForceData = true
+		// parts short of the last, since only the last has its octet count compared before it verifies
+		settings.DataPartBytes = 12
+		fixture := testGateCapture(t, leg, testMxDefaults(), settings, testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol"))
+		if len(fixture.parts) < 5 {
+			t.Fatalf("%s: %d parts, too few to reach a later DATA part", leg.name, len(fixture.parts))
+		}
+		for target, original := range fixture.parts {
+			var mutations []func(part *sidecar.SmtpProofPart)
+			for i := range original.Records {
+				for _, size := range []int{0, 1, 15, 16, 17, 23, 24, 25, 40} {
+					mutations = append(mutations, func(part *sidecar.SmtpProofPart) {
+						part.Records[i] = tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, size))
+					})
+				}
+				mutations = append(mutations, func(part *sidecar.SmtpProofPart) {
+					part.Records = part.Records[:i]
+				}, func(part *sidecar.SmtpProofPart) {
+					part.Records[i] = part.Records[(i+1)%len(part.Records)]
+				})
+			}
+			for _, mutation := range mutations {
+				open := testOpen(t, fixture, &testAssigningVerifier{})
+				for index, honest := range fixture.parts[:target+1] {
+					for uint64(len(open.gate.serverRecords)) < honest.ServerRecordCount {
+						if err := open.gate.ServerRecord(open.server[0]); err != nil {
+							t.Fatal(err)
+						}
+						open.server = open.server[1:]
+					}
+					part := *honest
+					if index == target {
+						part.Records = testCloneByteSlices(honest.Records)
+						mutation(&part)
+						open.gate.VerifyPart(context.Background(), &part)
+						break
+					}
+					if _, err := open.gate.VerifyPart(context.Background(), &part); err != nil {
+						t.Fatalf("%s: honest part %d: %v", leg.name, honest.Index, err)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestAHugeDeclaredRecipientCountCostsNothing(t *testing.T) {
 	// the count is the sidecar's, and pi2's shape is checked against it before anything is built
 	statement := &partStatement{

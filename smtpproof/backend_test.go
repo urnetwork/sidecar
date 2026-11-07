@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark/backend/groth16"
 	gnarkwitness "github.com/consensys/gnark/backend/witness"
 	"github.com/consensys/gnark/constraint"
@@ -783,6 +786,61 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 	}
 }
 
+func TestVerifierRefusesAPreambleATemplateCouldCarryMoreThan(t *testing.T) {
+	// a template is a literal, so a declared value that can end a path or a line would put a command
+	// of the sidecar's own into what the circuit then proves
+	cases := []struct {
+		name     string
+		mutation func(preamble *sidecar.SmtpProofPreamble)
+	}{
+		{name: "no recipient", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientCount = 0 }},
+		{name: "a recipient domain ending the path", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = "a.example>\r\nRCPT TO:<victim@other.example"
+		}},
+		{name: "a recipient domain with a parameter", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = "a.example> NOTIFY=NEVER"
+		}},
+		{name: "an empty recipient domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "" }},
+		{name: "a label starting with a hyphen", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "-a.example" }},
+		{name: "a label ending with a hyphen", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "a-.example" }},
+		{name: "an empty label", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "a..example" }},
+		{name: "a trailing dot", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "a.example." }},
+		{name: "a label past 63 octets", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = strings.Repeat("a", 64) + ".example"
+		}},
+		{name: "a domain past 255 octets", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = strings.Repeat("a.", 128) + "example"
+		}},
+		{name: "a From domain ending the line", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.HeaderFromDomain = "a.example>\r\nX: <b"
+		}},
+		{name: "a selector with a tag in it", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.DkimSelector = "s1; d=victim.example"
+		}},
+		{name: "a Message-ID ending the field", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.MessageId = "a@b>\r\nX: <c@d"
+		}},
+		{name: "a Message-ID with no @", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MessageId = "ab" }},
+		{name: "a Message-ID with two", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MessageId = "a@b@c" }},
+		{name: "an issued reference with a space", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = "1.A B" }},
+		{name: "an issued Feedback-ID with a CRLF", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "a\r\nb" }},
+		{name: "an empty HELO name", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.HeloName = "" }},
+		{name: "no envelope domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.EnvelopeDomain = "" }},
+		{name: "no MX host", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MxHost = "" }},
+	}
+	verifier := NewVerifier(DefaultVerifierSettings())
+	if _, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble); err != nil {
+		t.Fatalf("an honest preamble: %v", err)
+	}
+	for _, c := range cases {
+		preamble := testJob("x\r\n", "bob").Preamble
+		c.mutation(preamble)
+		if _, err := verifier.NewSmtpProofSession(preamble); err == nil {
+			t.Errorf("%s: accepted", c.name)
+		}
+	}
+}
+
 func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 	// what cli/ and server get today: an injected module that sends and passes no mail
 	for _, leg := range testTlsLegs() {
@@ -876,6 +934,42 @@ type testSetupCircuit struct {
 func (self *testSetupCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(api.Mul(self.Secret, self.Secret), self.Public)
 	return nil
+}
+
+func TestDecodeProofRefusesWhatGnarkWouldAllocateFor(t *testing.T) {
+	// gnark's ReadFrom allocates the commitment count a proof declares before reading one, so a few
+	// hostile octets could ask an edge for 256 GiB. decodeProof reads the fixed form and nothing else
+	var g1 bn254.G1Affine
+	var g2 bn254.G2Affine
+	g1.ScalarMultiplicationBase(big.NewInt(3))
+	g2.ScalarMultiplicationBase(big.NewInt(5))
+	first := g1.Bytes()
+	second := g2.Bytes()
+	uncompressed := g1.RawBytes()
+	var pok bn254.G1Affine
+	pokBytes := pok.Bytes()
+	valid := slices.Concat(first[:], second[:], first[:], make([]byte, 4), pokBytes[:])
+	if _, err := decodeProof(valid); err != nil {
+		t.Fatal(err)
+	}
+	count := bytes.Clone(valid)
+	count[len(first)+len(second)+len(first)] = 0xff
+	shifted := slices.Concat(uncompressed[:], second[:], first[:], []byte{0xff, 0xff, 0xff, 0xff})
+	badPoint := bytes.Clone(valid)
+	badPoint[1] ^= 1
+	for name, encoded := range map[string][]byte{
+		"empty":                       nil,
+		"short":                       valid[:len(valid)-1],
+		"long":                        append(bytes.Clone(valid), 0),
+		"a declared commitment":       count,
+		"an uncompressed Ar":          shifted,
+		"a point off the curve":       badPoint,
+		"a proof of knowledge of one": slices.Concat(first[:], second[:], first[:], make([]byte, 4), first[:]),
+	} {
+		if _, err := decodeProof(encoded); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
 }
 
 func TestVerifiedSetupGivesKeysThatProve(t *testing.T) {

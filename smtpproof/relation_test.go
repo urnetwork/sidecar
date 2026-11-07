@@ -345,6 +345,20 @@ func TestZ4RefusesAWrongRecipientCount(t *testing.T) {
 	}
 }
 
+func TestZ4RefusesAnEnvelopeWithNoRecipient(t *testing.T) {
+	// BDAT with no RCPT draws a refusal, and an MX that then reads the chunk as commands runs whatever
+	// the unopened body holds, so no count of zero may have a satisfying witness
+	for _, leg := range testTlsLegs() {
+		capture := testBdatCapture(t, leg)
+		statement, witness := capture.part(t, 2)
+		statement.session.preamble.recipientCount = 0
+		statement.clientRecords = statement.clientRecords[:1]
+		statement.lastRecord = statement.firstRecord
+		witness.clientPlaintexts = witness.clientPlaintexts[:1]
+		testExpectOnly(t, leg.name, statement, witness, checkZ4)
+	}
+}
+
 func TestZ4RefusesAPipelinedSecondTransaction(t *testing.T) {
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)

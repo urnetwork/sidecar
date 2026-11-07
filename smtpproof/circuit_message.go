@@ -505,13 +505,16 @@ func assignBodyRecord(shape *partShape, statement *partStatement, record *partRe
 		return 0, err
 	}
 	contentBytes := len(ciphertext)
-	template := make([]templateOctet, len(ciphertext))
 	if session.version == tlsVersion13 {
 		contentBytes -= tlsInnerTypeBytes
-		template[contentBytes] = templateOctet{kind: templateLiteral, literal: tlsRecordApplicationData}
 	}
-	if contentBytes == 0 {
+	// a hostile sidecar's record can be all tag, which in 1.3 leaves this at -1
+	if contentBytes <= 0 {
 		return 0, errors.New("empty body record")
+	}
+	template := make([]templateOctet, len(ciphertext))
+	if session.version == tlsVersion13 {
+		template[contentBytes] = templateOctet{kind: templateLiteral, literal: tlsRecordApplicationData}
 	}
 	blocks := make([]*poolBlock, len(slots))
 	for i, slot := range slots {

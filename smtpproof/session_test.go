@@ -668,6 +668,7 @@ func TestALateTicketIsProvenAgainOverItsRecord(t *testing.T) {
 			original.Records = append(original.Records, record.raw)
 		}
 		run := &proverRun{
+			settings:  DefaultProverSettings(),
 			backend:   backend,
 			channel:   channel,
 			session:   session,
@@ -856,6 +857,48 @@ func TestOversizeMessageToAnMxWithoutChunkingStopsBeforeMail(t *testing.T) {
 				t.Errorf("%s: %q reached the MX", leg.name, command)
 			}
 		}
+	}
+}
+
+func TestSendStopsOnABadPreambleBeforeAnyEffect(t *testing.T) {
+	leg := testTlsLegs()[0]
+	job := testJob("one line\r\n", "bob")
+	job.Preamble.RecipientDomain = "a.example>\r\nRCPT TO:<victim@other.example"
+	send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+	if send.err == nil {
+		t.Fatal("sent")
+	}
+	if 0 < len(send.mx.transactions()) || 0 < len(send.edge.parts) {
+		t.Errorf("%d transactions, %d parts", len(send.mx.transactions()), len(send.edge.parts))
+	}
+}
+
+func TestProverBoundsWhatAnMxCanMakeItHold(t *testing.T) {
+	// a reply that never ends would otherwise grow without limit, and a part could never cover it
+	settings := DefaultProverSettings()
+	settings.MaxServerBytes = 1024
+	run := &proverRun{
+		settings: settings,
+		result:   &tlsHandshakeResult{version: tlsVersion12},
+		serverIn: make(chan *proverServerEvent),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			record := &tlsServerRecord{recordType: tlsRecordApplicationData, raw: make([]byte, 100), content: []byte("250-more")}
+			select {
+			case run.serverIn <- &proverServerEvent{record: record}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	if _, err := run.awaitReplies(ctx, 1); err == nil {
+		t.Error("the prover kept reading")
+	}
+	if settings.MaxServerBytes+100 < run.serverBytes {
+		t.Errorf("held %d octets", run.serverBytes)
 	}
 }
 
