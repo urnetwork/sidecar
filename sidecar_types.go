@@ -26,6 +26,10 @@ type Sidecar struct {
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
+	// raised and not yet delivered, oldest first
+	eventQueue []SidecarEvent
+	// a goroutine is delivering eventQueue, which every later event joins
+	eventDelivering bool
 }
 
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,

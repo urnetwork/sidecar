@@ -3,6 +3,7 @@
 package sidecar
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -408,5 +409,80 @@ func TestErrorsNameNoMoreThanTheirIds(t *testing.T) {
 	refused := &DeviceRevokeError{Code: "REVOKE_STALE", Position: 9}
 	if refused.Error() != "REVOKE_STALE" {
 		t.Errorf("error %q", refused.Error())
+	}
+}
+
+// D-SDK-14's order: an older generation's event that a callback held up while a newer generation bound
+// reaches no later subscriber after the newer one's, and the newer generation's raiser is not held up.
+// The check and the delivery were once apart, so the older event arrived last.
+func TestAnOvertakenEventNeverArrivesAfterTheNewerGeneration(t *testing.T) {
+	sidecar := newTestSidecar(t)
+	driveOnline(t, sidecar, 2)
+	if !sidecar.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: 2}) {
+		t.Fatal("offline at 2 did not move")
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+		if event.Kind == SidecarEventState && event.Reason == SidecarReasonRefused && event.Generation == 2 {
+			close(entered)
+			<-release
+		}
+	})
+	var recordedLock sync.Mutex
+	recorded := []SidecarEvent{}
+	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+		recordedLock.Lock()
+		defer recordedLock.Unlock()
+		recorded = append(recorded, event)
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sidecar.applyTransition(sidecarTransition{to: SidecarStateUnenrolled, reason: SidecarReasonRefused, generation: 2})
+	}()
+	<-entered
+	if !sidecar.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: 3}) {
+		t.Fatal("generation 3 did not bind")
+	}
+	close(release)
+	<-done
+	recordedLock.Lock()
+	defer recordedLock.Unlock()
+	newest := int64(0)
+	for _, event := range recorded {
+		if event.Generation < newest {
+			t.Errorf("generation %d's %s/%s arrived after generation %d's", event.Generation, event.State, event.Reason, newest)
+		}
+		newest = max(newest, event.Generation)
+	}
+	if len(recorded) == 0 || recorded[len(recorded)-1].Generation != 3 {
+		t.Errorf("recorded %+v", recorded)
+	}
+}
+
+// A callback that panics stops its own delivery and nothing after it: the next event raised delivers
+// what was left, and itself.
+func TestAPanickingCallbackDoesNotStopLaterEvents(t *testing.T) {
+	sidecar := newTestSidecar(t)
+	panicking := true
+	sidecar.eventCallbacks.Add(func(event SidecarEvent) {
+		if panicking {
+			panicking = false
+			panic("synthetic callback panic")
+		}
+	})
+	events := recordEvents(sidecar)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic did not reach the raiser")
+			}
+		}()
+		sidecar.emitEvent(SidecarEvent{Kind: SidecarEventKeyChanged})
+	}()
+	sidecar.emitEvent(SidecarEvent{Kind: SidecarEventHeadAlarm, HeadAlarm: SidecarHeadAlarmFork})
+	if len(*events) != 1 || (*events)[0].Kind != SidecarEventHeadAlarm {
+		t.Errorf("events %+v", *events)
 	}
 }
