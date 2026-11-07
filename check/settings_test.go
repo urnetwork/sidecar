@@ -125,6 +125,38 @@ func defaultCheckSettings() *checkSettings {
 					"Some files carry the \"BSD\" license, noted at the top of each file:",
 				},
 			},
+			"github.com/cyphar/filepath-securejoin": {
+				why: "COPYING.md says which of its files each of its two licenses covers, for pkg.go.dev's " +
+					"scan, and repeats both texts, which LICENSE.BSD and LICENSE.MPL-2.0 also hold",
+				passages: []string{
+					"## COPYING ## `SPDX-License-Identifier: BSD-3-Clause AND MPL-2.0` This project is made up of code " +
+						"licensed under different licenses. Which code you use will have an impact on whether only one or " +
+						"both licenses apply to your usage of this library. Note that **each file** in this project " +
+						"individually has a code comment at the start describing the license of that particular file -- " +
+						"this is the most accurate license information of this project; in case there is any conflict " +
+						"between this document and the comment at the start of a file, the comment shall take precedence. " +
+						"The only purpose of this document is to work around [a known technical limitation of " +
+						"pkg.go.dev's license checking tool when dealing with non-trivial project licenses][go75067]. " +
+						"[go75067]: https://go.dev/issue/75067",
+					"### `BSD-3-Clause` ### At time of writing, the following files and directories are licensed under " +
+						"the BSD-3-Clause license: * `doc.go` * `join*.go` * `vfs.go` * `internal/consts/*.go` " +
+						"* `pathrs-lite/internal/gocompat/*.go` * `pathrs-lite/internal/kernelversion/*.go` The text of " +
+						"the BSD-3-Clause license used by this project is the following (the text is also available from " +
+						"the [`LICENSE.BSD`](./LICENSE.BSD) file):",
+					"### `MPL-2.0` ### All other files (unless otherwise marked) are licensed under the Mozilla Public " +
+						"License (version 2.0). The text of the Mozilla Public License (version 2.0) is the following " +
+						"(the text is also available from the [`LICENSE.MPL-2.0`](./LICENSE.MPL-2.0) file):",
+				},
+			},
+			"github.com/emirpasic/gods": {
+				why:      "heads its second license, ISC's, with the one package that license covers",
+				passages: []string{"AVL Tree:"},
+			},
+			"github.com/go-git/gcfg": {
+				why: "breaks its copyright notice across two lines, so the notice's last word falls on a line of its " +
+					"own, outside the notice line the comparison leaves out",
+				passages: []string{"Authors."},
+			},
 			"github.com/klauspost/compress": {
 				why: "names the directories each license in its file covers",
 				passages: []string{
