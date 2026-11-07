@@ -532,6 +532,22 @@ func TestSendBdatThroughTheGate(t *testing.T) {
 	}
 }
 
+func TestSendThroughTheGateAfterAHelloRetryRequest(t *testing.T) {
+	// an MX preferring another group retries, and Go's server follows the retry with a dummy
+	// change_cipher_spec, which reaches the gate ahead of the second ClientHello
+	for _, leg := range testTlsLegs()[:2] {
+		retried := *leg
+		retried.serverTls = func(t *testing.T) *tls.Config {
+			config := leg.serverTls(t)
+			config.CurvePreferences = []tls.CurveID{tls.CurveP256}
+			return config
+		}
+		job := testJob("one line\r\n", "bob")
+		send := testRunSend(t, &retried, testMxDefaults(), DefaultProverSettings(), job)
+		testExpectOneTransaction(t, &retried, send, job)
+	}
+}
+
 func TestSendBdatBodyLongerThanOneRecord(t *testing.T) {
 	settings := DefaultProverSettings()
 	settings.MaxRecordContentBytes = 1024
@@ -668,6 +684,7 @@ func TestALateTicketIsProvenAgainOverItsRecord(t *testing.T) {
 			original.Records = append(original.Records, record.raw)
 		}
 		run := &proverRun{
+			settings:  DefaultProverSettings(),
 			backend:   backend,
 			channel:   channel,
 			session:   session,
@@ -859,6 +876,48 @@ func TestOversizeMessageToAnMxWithoutChunkingStopsBeforeMail(t *testing.T) {
 	}
 }
 
+func TestSendStopsOnABadPreambleBeforeAnyEffect(t *testing.T) {
+	leg := testTlsLegs()[0]
+	job := testJob("one line\r\n", "bob")
+	job.Preamble.RecipientDomain = "a.example>\r\nRCPT TO:<victim@other.example"
+	send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+	if send.err == nil {
+		t.Fatal("sent")
+	}
+	if 0 < len(send.mx.transactions()) || 0 < len(send.edge.parts) {
+		t.Errorf("%d transactions, %d parts", len(send.mx.transactions()), len(send.edge.parts))
+	}
+}
+
+func TestProverBoundsWhatAnMxCanMakeItHold(t *testing.T) {
+	// a reply that never ends would otherwise grow without limit, and a part could never cover it
+	settings := DefaultProverSettings()
+	settings.MaxServerBytes = 1024
+	run := &proverRun{
+		settings: settings,
+		result:   &tlsHandshakeResult{version: tlsVersion12},
+		serverIn: make(chan *proverServerEvent),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			record := &tlsServerRecord{recordType: tlsRecordApplicationData, raw: make([]byte, 100), content: []byte("250-more")}
+			select {
+			case run.serverIn <- &proverServerEvent{record: record}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	if _, err := run.awaitReplies(ctx, 1); err == nil {
+		t.Error("the prover kept reading")
+	}
+	if settings.MaxServerBytes+100 < run.serverBytes {
+		t.Errorf("held %d octets", run.serverBytes)
+	}
+}
+
 func TestProverRefusesAMessageTheRelationRefuses(t *testing.T) {
 	// the prover checks itself first, so a bad message never reaches the MX as a transaction
 	cases := []struct {
@@ -870,6 +929,9 @@ func TestProverRefusesAMessageTheRelationRefuses(t *testing.T) {
 		}},
 		{name: "wrong message id", mutation: func(job *sidecar.SmtpProofJob) {
 			job.Preamble.MessageId = "other@" + testNetworkDomain
+		}},
+		{name: "a field behind a leading dot", mutation: func(job *sidecar.SmtpProofJob) {
+			job.Message = append([]byte(".From: <x@victim.example>\r\n"), job.Message...)
 		}},
 	}
 	for _, leg := range testTlsLegs() {

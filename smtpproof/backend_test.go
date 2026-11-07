@@ -7,11 +7,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +22,7 @@ import (
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark/backend/groth16"
 	gnarkwitness "github.com/consensys/gnark/backend/witness"
 	"github.com/consensys/gnark/constraint"
@@ -227,6 +231,7 @@ func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
 		{name: "chunking in the MX's name line", content: "250-CHUNKING\r\n250 OK\r\n"},
 		{name: "chunking inside a longer keyword", content: "250-mx\r\n250-XCHUNKING\r\n250 OK\r\n"},
 		{name: "a keyword starting with chunking", content: "250-mx\r\n250-CHUNKINGX\r\n250 OK\r\n"},
+		{name: "a keyword only Unicode folds to chunking", content: "250-mx\r\n250-CHUN\u212aING\r\n250 OK\r\n"},
 		{name: "a one-line reply", content: "250 mx\r\n"},
 		{name: "another code", content: "251-mx\r\n250-CHUNKING\r\n250 OK\r\n"},
 		{name: "another code on the last line", content: "250-mx\r\n250-CHUNKING\r\n251 OK\r\n"},
@@ -333,6 +338,32 @@ func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
 		witness.serverKey[0] ^= 1
 		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
 			t.Errorf("%s: a substituted server key: accepted", leg.name)
+		}
+	}
+}
+
+func TestEnvelopeCircuitFindsNoKeywordInsideATicket(t *testing.T) {
+	t.Parallel()
+	// a ticket's octets are skipped, so they are no part of the reply Z9 reads, and whatever a ticket
+	// holds cannot stand in for the keyword the EHLO reply lacks
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		statement, witness := capture.part(t, 2)
+		statement.serverRecords = append(statement.serverRecords[:1], &partRecord{seq: statement.serverRecords[0].seq + 1, raw: bytes.Clone(statement.serverRecords[0].raw)})
+		witness.serverPlaintexts = append(witness.serverPlaintexts[:1], nil)
+		ticket := append([]byte{tlsHandshakeNewSessionTicket, 0, 0, 16}, []byte("\r\n250-CHUNKING\r\n")...)
+		testAuthorServerRecord(t, statement, witness, 0, append(ticket, tlsRecordHandshake))
+		testAuthorServerRecord(t, statement, witness, 1, testServerContent(statement, "250-mx\r\n250 OK\r\n"))
+		testExpectOnly(t, leg.name, statement, witness, checkZ9)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+			t.Errorf("%s: the circuit took a ticket's octets for the keyword", leg.name)
+		}
+
+		// the same reply with the keyword in it is what the check is for
+		testAuthorServerRecord(t, statement, witness, 1, testServerContent(statement, "250-mx\r\n250 CHUNKING\r\n"))
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("%s: a ticket beside a reply that offers it: %v", leg.name, err)
 		}
 	}
 }
@@ -657,12 +688,40 @@ func TestZ1CircuitIn12DerivesARealConnectionsKeys(t *testing.T) {
 	}
 }
 
+// S_ckx resumed over a client Finished, on its own: all that depends on the tail's length.
+type testResumeCircuit struct {
+	ClientFinished  []frontend.Variable
+	Chaining        []frontend.Variable `gnark:",public"`
+	ResumeBase      []frontend.Variable `gnark:",public"`
+	ResumeShift     []frontend.Variable `gnark:",public"`
+	ResumeTwoBlocks frontend.Variable   `gnark:",public"`
+	Digest          []frontend.Variable `gnark:",public"`
+}
+
+func (self *testResumeCircuit) Define(api frontend.API) error {
+	inputs := &circuitInputs12{resumeBase: publicBytes(self.ResumeBase), resumeShift: self.ResumeShift, resumeTwoBlocks: self.ResumeTwoBlocks}
+	for i := range inputs.chaining {
+		copy(inputs.chaining[i][:], self.Chaining[32*i:32*i+32])
+	}
+	testAssertBytesEqual(api, inputs.resumedHash(api, testByteWires(api, self.ClientFinished)), testByteWires(api, self.Digest))
+	return nil
+}
+
 func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 	t.Parallel()
 	// the client Finished's offset depends on the transcript's length, and so on which blocks it
-	// falls in: a real handshake lands on one tail length, so this walks all 64 over a synthetic one
+	// falls in: a real handshake lands on one tail length, so this walks all 64 over a synthetic one.
+	// Each runs on the resume alone, which is what varies. The lengths around the one-block limit and
+	// at the ends also run through a whole shape, where the rest of Z1 meets them
 	shape := test12Shape()
 	compiled := testCompileShape(t, shape)
+	resume := testCompile(t, &testResumeCircuit{
+		ClientFinished: make([]frontend.Variable, 8*(4+tlsVerifyData12Bytes)),
+		Chaining:       make([]frontend.Variable, 8*tlsSecretBytes),
+		ResumeBase:     make([]frontend.Variable, 8*2*sha256BlockBytes),
+		ResumeShift:    make([]frontend.Variable, 6),
+		Digest:         make([]frontend.Variable, 8*tlsSecretBytes),
+	})
 	leg := testTlsLegs()[2]
 	capture := testBdatCapture(t, leg)
 	for tail := range 64 {
@@ -682,7 +741,8 @@ func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		serverHash, err := state.finish(tls12FinishedMessage(witness.masterSecret, tlsLabelClientFinished, clientHash))
+		clientFinished := tls12FinishedMessage(witness.masterSecret, tlsLabelClientFinished, clientHash)
+		serverHash, err := state.finish(clientFinished)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -692,8 +752,29 @@ func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
 			t.Fatalf("tail %d: %v", tail, failures)
 		}
-		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+
+		public := testPartAssignment(t, shape, statement, witness)
+		assignment := func(digest []byte) *testResumeCircuit {
+			return &testResumeCircuit{
+				ClientFinished:  testAssignBits(clientFinished),
+				Chaining:        public.Chaining,
+				ResumeBase:      public.ResumeBase,
+				ResumeShift:     public.ResumeShift,
+				ResumeTwoBlocks: public.ResumeTwoBlocks,
+				Digest:          testAssignBits(digest),
+			}
+		}
+		if err := testSolved(t, resume, assignment(serverHash)); err != nil {
 			t.Errorf("tail %d: %v", tail, err)
+		}
+		serverHash[0] ^= 1
+		if err := testSolved(t, resume, assignment(serverHash)); err == nil {
+			t.Errorf("tail %d: accepted another digest", tail)
+		}
+		if slices.Contains([]int{0, 39, 40, 63}, tail) {
+			if err := testPartSolved(t, compiled, public); err != nil {
+				t.Errorf("tail %d through the whole shape: %v", tail, err)
+			}
 		}
 	}
 }
@@ -753,6 +834,76 @@ func TestUnknownPartsFailClosed(t *testing.T) {
 				t.Errorf("%s: verified part %d", leg.name, index)
 			}
 		}
+
+		// keys that hold neither half refuse too, rather than reach gnark with a nil key
+		statement, witness := capture.part(t, 1)
+		shape, err := partShapeFor(statement)
+		if err != nil {
+			t.Fatal(err)
+		}
+		halfLoaded := newGroth16Backend()
+		halfLoaded.addKeys(&shapeKeys{shape: shape})
+		if _, err := halfLoaded.provePart(context.Background(), statement, witness); !errors.Is(err, errNoKeys) {
+			t.Errorf("%s: proving with no key: %v", leg.name, err)
+		}
+		if err := halfLoaded.verifyPart(context.Background(), statement, []byte("not a proof")); !errors.Is(err, errNoKeys) {
+			t.Errorf("%s: verifying with no key: %v", leg.name, err)
+		}
+	}
+}
+
+func TestVerifierRefusesAPreambleATemplateCouldCarryMoreThan(t *testing.T) {
+	// a template is a literal, so a declared value that can end a path or a line would put a command
+	// of the sidecar's own into what the circuit then proves
+	cases := []struct {
+		name     string
+		mutation func(preamble *sidecar.SmtpProofPreamble)
+	}{
+		{name: "no recipient", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientCount = 0 }},
+		{name: "a recipient domain ending the path", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = "a.example>\r\nRCPT TO:<victim@other.example"
+		}},
+		{name: "a recipient domain with a parameter", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = "a.example> NOTIFY=NEVER"
+		}},
+		{name: "an empty recipient domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "" }},
+		{name: "a label starting with a hyphen", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "-a.example" }},
+		{name: "a label ending with a hyphen", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "a-.example" }},
+		{name: "an empty label", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "a..example" }},
+		{name: "a trailing dot", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.RecipientDomain = "a.example." }},
+		{name: "a label past 63 octets", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = strings.Repeat("a", 64) + ".example"
+		}},
+		{name: "a domain past 255 octets", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.RecipientDomain = strings.Repeat("a.", 128) + "example"
+		}},
+		{name: "a From domain ending the line", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.HeaderFromDomain = "a.example>\r\nX: <b"
+		}},
+		{name: "a selector with a tag in it", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.DkimSelector = "s1; d=victim.example"
+		}},
+		{name: "a Message-ID ending the field", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.MessageId = "a@b>\r\nX: <c@d"
+		}},
+		{name: "a Message-ID with no @", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MessageId = "ab" }},
+		{name: "a Message-ID with two", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MessageId = "a@b@c" }},
+		{name: "an issued reference with a space", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = "1.A B" }},
+		{name: "an issued Feedback-ID with a CRLF", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "a\r\nb" }},
+		{name: "an empty HELO name", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.HeloName = "" }},
+		{name: "no envelope domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.EnvelopeDomain = "" }},
+		{name: "no MX host", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MxHost = "" }},
+	}
+	verifier := NewVerifier(DefaultVerifierSettings())
+	if _, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble); err != nil {
+		t.Fatalf("an honest preamble: %v", err)
+	}
+	for _, c := range cases {
+		preamble := testJob("x\r\n", "bob").Preamble
+		c.mutation(preamble)
+		if _, err := verifier.NewSmtpProofSession(preamble); err == nil {
+			t.Errorf("%s: accepted", c.name)
+		}
 	}
 }
 
@@ -786,10 +937,7 @@ func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 // Runs a test-only setup for a shape, which is the slow step here.
 func testSetup(t *testing.T, shape *partShape) *shapeKeys {
 	t.Helper()
-	compiled, err := compilePartShape(shape)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := testCompileShape(t, shape)
 	provingKey, verifyingKey, err := groth16.Setup(compiled)
 	if err != nil {
 		t.Fatal(err)
@@ -835,8 +983,13 @@ func TestGroth16ProofOfARealEhlo(t *testing.T) {
 	// a mutated witness cannot even be proven: the solver finds no satisfying assignment
 	statement, witness = capture.part(t, 1)
 	witness.handshakeSecret[0] ^= 1
-	if _, err := backend.provePart(context.Background(), statement, witness); err == nil {
-		t.Error("proved a witness with another HS")
+	_, err = backend.provePart(context.Background(), statement, witness)
+	if err == nil {
+		t.Fatal("proved a witness with another HS")
+	}
+	// gnark's solver writes wire values into its errors, and those wires are keys and plaintext
+	if errors.Unwrap(err) != nil || strings.Contains(err.Error(), "constraint") {
+		t.Errorf("a failed proof carried the solver's error: %v", err)
 	}
 }
 
@@ -849,6 +1002,42 @@ type testSetupCircuit struct {
 func (self *testSetupCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(api.Mul(self.Secret, self.Secret), self.Public)
 	return nil
+}
+
+func TestDecodeProofRefusesWhatGnarkWouldAllocateFor(t *testing.T) {
+	// gnark's ReadFrom allocates the commitment count a proof declares before reading one, so a few
+	// hostile octets could ask an edge for 256 GiB. decodeProof reads the fixed form and nothing else
+	var g1 bn254.G1Affine
+	var g2 bn254.G2Affine
+	g1.ScalarMultiplicationBase(big.NewInt(3))
+	g2.ScalarMultiplicationBase(big.NewInt(5))
+	first := g1.Bytes()
+	second := g2.Bytes()
+	uncompressed := g1.RawBytes()
+	var pok bn254.G1Affine
+	pokBytes := pok.Bytes()
+	valid := slices.Concat(first[:], second[:], first[:], make([]byte, 4), pokBytes[:])
+	if _, err := decodeProof(valid); err != nil {
+		t.Fatal(err)
+	}
+	count := bytes.Clone(valid)
+	count[len(first)+len(second)+len(first)] = 0xff
+	shifted := slices.Concat(uncompressed[:], second[:], first[:], []byte{0xff, 0xff, 0xff, 0xff})
+	badPoint := bytes.Clone(valid)
+	badPoint[1] ^= 1
+	for name, encoded := range map[string][]byte{
+		"empty":                       nil,
+		"short":                       valid[:len(valid)-1],
+		"long":                        append(bytes.Clone(valid), 0),
+		"a declared commitment":       count,
+		"an uncompressed Ar":          shifted,
+		"a point off the curve":       badPoint,
+		"a proof of knowledge of one": slices.Concat(first[:], second[:], first[:], make([]byte, 4), first[:]),
+	} {
+		if _, err := decodeProof(encoded); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
 }
 
 func TestVerifiedSetupGivesKeysThatProve(t *testing.T) {
@@ -989,9 +1178,12 @@ func TestMeasureShapes(t *testing.T) {
 	}
 }
 
-// Measures every part of one whole send under real Groth16, through the real gate, with a real
-// test-only setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes;
-// this takes minutes, so it stays out of the ordinary run. Its output is SPEC.md 11.3's source.
+// Measures every part of whole sends under real Groth16, through the real gate, with a real test-only
+// setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes; this takes
+// minutes, so it stays out of the ordinary run. Each leg sends D-SMTP-16's BDAT case, then unless
+// SMTPPROOF_MEASURE_BDAT_ONLY is set a DATA send of the same header block and three body parts, which
+// is enough to price a part: D-SMTP-16's 100 KiB is that part's cost times the parts it takes. Its
+// output is SPEC.md 11.3's source.
 func TestMeasureWholeSend(t *testing.T) {
 	legs := os.Getenv("SMTPPROOF_MEASURE")
 	if legs == "" {
@@ -1004,17 +1196,25 @@ func TestMeasureWholeSend(t *testing.T) {
 		// D-SMTP-16's BDAT case: a 4 KiB header block and 10 recipients
 		recipients := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"}
 		padding := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58)
-		message := padding + testHeaderBlock() + "a body line\r\n"
-		job := testJob("", recipients...)
-		job.Message = []byte(message)
-		job.Preamble.MessageByteCount = uint64(len(message))
-		t.Logf("%s: header block %d octets", leg.name, strings.Index(message, "\r\n\r\n")+4)
-
-		backend := newGroth16Backend()
-		measuring := &testMeasuringBackend{t: t, backend: backend, kinds: map[partShape]bool{}}
-		send := testRunSendWith(t, leg, testMxDefaults(), DefaultProverSettings(), job, measuring, measuring)
-		testExpectOneTransaction(t, leg, send, job)
-		t.Logf("%s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
+		measuring := &testMeasuringBackend{t: t, backend: newGroth16Backend(), kinds: map[partShape]bool{}}
+		send := func(body string, settings *ProverSettings, mode string) {
+			message := padding + testHeaderBlock() + body
+			job := testJob("", recipients...)
+			job.Message = []byte(message)
+			job.Preamble.MessageByteCount = uint64(len(message))
+			t.Logf("%s %s: header block %d octets, body %d octets", leg.name, mode, strings.Index(message, "\r\n\r\n")+4, len(body))
+			measuring.provingTotal = 0
+			measuring.cpuTotal = 0
+			result := testRunSendWith(t, leg, testMxDefaults(), settings, job, measuring, measuring)
+			testExpectOneTransaction(t, leg, result, job)
+			t.Logf("%s %s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, mode, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
+		}
+		send("a body line\r\n", DefaultProverSettings(), "bdat")
+		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") == "" {
+			settings := DefaultProverSettings()
+			settings.ForceData = true
+			send(strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100), settings, "data")
+		}
 	}
 }
 
