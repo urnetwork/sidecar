@@ -74,6 +74,23 @@ func TestSchemaGuardMapsFormat2sValues(t *testing.T) {
 	}
 }
 
+// §22.7's guard carries v8's rows, these four by name, whose values land after M1.
+func TestSchemaGuardCarriesV8sRows(t *testing.T) {
+	guard, err := LoadSchemaGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rowId := range []string{"connect-5", "evs-26", "evs-27", "evs-28"} {
+		row := guard.list.Row(rowId)
+		if row == nil || !row.Live() {
+			t.Errorf("%s is no live row", rowId)
+		}
+		if entry := guard.fieldMap.Rows[rowId]; entry == nil || entry.Planned == "" {
+			t.Errorf("%s has no line saying when its values land", rowId)
+		}
+	}
+}
+
 // Roots matter: what the design seals stays out of the map, whichever class seals it, or the guard
 // would mark client data as server-visible.
 func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
@@ -552,6 +569,17 @@ const strayPrefix = "{stray_"
 	wantGuardFindings(t, tree.findings(), `redis family {stray_}, from "{stray_" at gkmservice/redis.go:4`)
 }
 
+// A suffix built at run time shows only the tag, so what the tag starts is all that can be held.
+func TestSchemaGuardReadsASuffixBuiltAtRunTime(t *testing.T) {
+	tree := newTestGuardTree(t)
+	tree.write("gkmservice/redis.go", `package gkmservice
+
+func aclKey(networkId string, suffix string) string { return "{acl_" + networkId + "}" + suffix }
+func strayKey(networkId string, suffix string) string { return "{stray_" + networkId + "}" + suffix }
+`)
+	wantGuardFindings(t, tree.findings(), `redis family {stray_}, from "{stray_<>}<>" at gkmservice/redis.go:4`)
+}
+
 // A family literal backs its row, so a planned row with one has what it was waiting for.
 func TestSchemaGuardTakesALiteralAsBacking(t *testing.T) {
 	tree := newTestGuardTree(t)
@@ -685,6 +713,7 @@ func TestSchemaGuardReadsTheMapStrictly(t *testing.T) {
 		{old: "  Root.repo_id: evs-1\n", new: "  Root.repo_id: evs-1\n  Root.repo_id: evs-2\n", want: "already defined"},
 		{old: "  Root: \"a", new: "\tRoot: \"a", want: "holds a tab"},
 		{old: "ext-1: {planned: M5}", new: "ext-1: {planned: M5, skip: true}", want: "skip"},
+		{old: "  ext-1: {planned: M5}\n", new: "  ext-1: &later {planned: M5}\n  evs-2: *later\n", want: "holds an alias"},
 	} {
 		tree := newTestGuardTree(t)
 		tree.editMap(planted.old, planted.new)

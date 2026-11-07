@@ -44,8 +44,8 @@ var schemaGuardMediaTypes = []string{"application", "audio", "font", "image", "m
 // A family a literal builds.
 type schemaGuardKeyLiteral struct {
 	family MetadataFamily
-	// True when the literal stops before the tag's end, so any suffix of the tag may follow it. A
-	// constant prefix reads this way, as "{evsq_" does.
+	// True when the literal does not show its suffix, so any family under the tag may be meant: a
+	// constant prefix reads this way, as "{evsq_" does, and so does a suffix built at run time.
 	openEnded bool
 	// the source text, with a placeholder as <>
 	text string
@@ -93,15 +93,25 @@ func schemaGuardClassifyLiteral(text string) (*schemaGuardKeyLiteral, bool) {
 		return nil, false
 	}
 	if schemaGuardRedisLiteralPattern.MatchString(text) {
-		if !strings.Contains(text, "}") {
-			tag := strings.TrimPrefix(strings.SplitN(text, schemaGuardPlaceholder, 2)[0], "{")
+		family := schemaGuardRedisFamily(text)
+		if strings.Contains(family.Name, schemaGuardPlaceholder) {
+			// the tag or its suffix is built at run time, so all that shows is the family's start
+			tagEnd := strings.IndexAny(text, "_}")
+			name := "{" + strings.TrimSuffix(text[1:tagEnd+1], "}") + "}"
 			return &schemaGuardKeyLiteral{
-				family:    MetadataFamily{Kind: MetadataFamilyRedis, Name: "{" + tag + "}"},
+				family:    MetadataFamily{Kind: MetadataFamilyRedis, Name: name},
 				openEnded: true,
 				text:      shown,
 			}, true
 		}
-		return &schemaGuardKeyLiteral{family: schemaGuardRedisFamily(text), text: shown}, true
+		if !strings.Contains(text, "}") {
+			return &schemaGuardKeyLiteral{
+				family:    MetadataFamily{Kind: MetadataFamilyRedis, Name: text + "}"},
+				openEnded: true,
+				text:      shown,
+			}, true
+		}
+		return &schemaGuardKeyLiteral{family: family, text: shown}, true
 	}
 	if match := schemaGuardObjectLiteralPattern.FindStringSubmatch(text); match != nil {
 		if slices.Contains(schemaGuardMediaTypes, match[1]) {
