@@ -2,11 +2,13 @@
 
 // §4.7's hygiene row, the module files: replaces other than §4.7's, and the go and tool lines of its
 // block. A replace is the one go.mod line that decides where code comes from without showing in a
-// version, and Go does not inherit one, so each module's list is checked on its own.
+// version, and Go does not inherit one, so each module's list is checked on its own. Beside them, a
+// go.work, and the one shape §4.9's release needs of the modules it never tags: one package each.
 
 package check
 
 import (
+	"maps"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -153,6 +155,30 @@ func (self *repository) workFileFindings(t testing.TB) []string {
 	findings := []string{}
 	for _, match := range matches {
 		findings = append(findings, findingf("%s changes what builds resolve, out of the rules' sight", self.displayPath(match)))
+	}
+	return findings
+}
+
+// The modules a release leaves unversioned in place, never tagged (§4.9).
+var untaggedModuleNames = []string{"cli", "mlsinterop"}
+
+// cli and mlsinterop each stay one package. The release rewrites every quoted path under the root's
+// to .../sidecar/v2026 (build/all/run.sh's sidecar_release_edit), and these modules keep their
+// unversioned paths, so an import of a package beside a module's own would name one nothing provides.
+func (self *repository) untaggedSubpackageFindings(t testing.TB) []string {
+	t.Helper()
+	packageNames := map[string]bool{}
+	for _, file := range self.sourceFiles(t) {
+		for _, name := range untaggedModuleNames {
+			if strings.HasPrefix(file.packageName, name+"/") {
+				packageNames[file.packageName] = true
+			}
+		}
+	}
+	findings := []string{}
+	for _, packageName := range slices.Sorted(maps.Keys(packageNames)) {
+		module, _, _ := strings.Cut(packageName, "/")
+		findings = append(findings, findingf("%s: a package beside %s's own, which the release's rewrite would import as one under .../sidecar/v2026 that nothing provides", packageName, module))
 	}
 	return findings
 }

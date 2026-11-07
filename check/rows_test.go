@@ -242,6 +242,11 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAGoWorkFile"},
 	},
 	{
+		row: "hygiene", item: "a package beside cli's or mlsinterop's own, which the release's rewrite would break (§4.9)",
+		rule:         (*repository).untaggedSubpackageFindings,
+		plantedTests: []string{"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop"},
+	},
+	{
 		row: "hygiene", item: "a path the go command refuses in a module zip, which makes a tag no consumer can download (§4.9)",
 		rule: (*repository).moduleZipFindings,
 		plantedTests: []string{

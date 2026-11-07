@@ -66,6 +66,23 @@ func TestHygieneFailsOnAGoWorkFile(t *testing.T) {
 	wantFindings(t, fixture.open().workFileFindings(t), "go.work changes what builds resolve")
 }
 
+// cli keeps its unversioned path at release, and the release's sed turns an import of
+// .../sidecar/cli/daemon into one under .../sidecar/v2026, which the root's tag does not hold.
+func TestHygieneFailsOnASubpackageOfCli(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("cli/daemon/daemon.go", "package daemon\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "cli/daemon: a package beside cli's own")
+}
+
+// One finding a package, its tests included, and testdata is no package.
+func TestHygieneFailsOnASubpackageOfMlsinterop(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("mlsinterop/peer/peer.go", "package peer\n")
+	fixture.write("mlsinterop/peer/peer_test.go", "package peer\n")
+	fixture.write("mlsinterop/testdata/vectors/vector.go", "package vectors\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "mlsinterop/peer: a package beside mlsinterop's own")
+}
+
 const (
 	plantedBridgeProto = `syntax = "proto3";
 package urnetwork.sidecar;
