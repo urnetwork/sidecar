@@ -2,6 +2,7 @@ package smtpproof
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -53,13 +54,17 @@ func NewProver(settings *ProverSettings) *Prover {
 
 // NewSmtpProofSession of sidecar.SmtpProofVerifier.
 func (self *Verifier) NewSmtpProofSession(preamble *sidecar.SmtpProofPreamble) (sidecar.SmtpProofSession, error) {
-	if preamble == nil || preamble.MxHost == "" || preamble.EnvelopeDomain == "" {
+	if preamble == nil || preamble.MxHost == "" {
 		return nil, errors.New("smtpproof: preamble lacks the edge's own values")
+	}
+	session := newSessionPreamble(preamble)
+	if err := checkSessionPreamble(session); err != nil {
+		return nil, fmt.Errorf("smtpproof: %w", err)
 	}
 	settings := &edgeSettings{
 		maxHeldBytes:      self.settings.MaxHeldBytes,
 		maxServerBytes:    self.settings.MaxServerBytes,
 		maxHandshakeBytes: self.settings.MaxHandshakeBytes,
 	}
-	return newEdgeSession(settings, newSessionPreamble(preamble), preamble.MxHost, self.backend), nil
+	return newEdgeSession(settings, session, preamble.MxHost, self.backend), nil
 }
