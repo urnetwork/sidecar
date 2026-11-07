@@ -245,15 +245,17 @@ func forwardsTo(decl *ast.FuncDecl, rootName string, entry string, parameters []
 func (self *repository) hookPairFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
+	// every declaration of each half: a package may split one by system, and each is then some
+	// system's build, so holding only the last one read would leave the others unread
 	type packageHooks struct {
-		tagged   map[string]hookDeclaration
-		untagged map[string]hookDeclaration
+		tagged   map[string][]hookDeclaration
+		untagged map[string][]hookDeclaration
 	}
 	packages := map[string]*packageHooks{}
 	hooksOf := func(packageName string) *packageHooks {
 		hooks, ok := packages[packageName]
 		if !ok {
-			hooks = &packageHooks{tagged: map[string]hookDeclaration{}, untagged: map[string]hookDeclaration{}}
+			hooks = &packageHooks{tagged: map[string][]hookDeclaration{}, untagged: map[string][]hookDeclaration{}}
 			packages[packageName] = hooks
 		}
 		return hooks
@@ -286,15 +288,16 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 					}
 				}
 			case *ast.FuncDecl:
-				if typed.Recv != nil {
-					continue
-				}
 				name := typed.Name.Name
 				if slices.Contains(tagOnlyRootNames, name) && !file.holdsEntryPoint(name) {
 					findings = append(findings, findingf("%s: %s exists outside the root's tagged file", display, name))
 				}
 				signature, hook := hookSignatures[name]
 				if !hook {
+					continue
+				}
+				if typed.Recv != nil {
+					findings = append(findings, findingf("%s: %s is a method, so no pair holds it empty in a release build", display, name))
 					continue
 				}
 				parameters := parameterTexts(typed.Type.Params)
@@ -304,9 +307,9 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 				hooks := hooksOf(file.packageName)
 				switch {
 				case file.tagOnly(sidecarTestHooksTag):
-					hooks.tagged[name] = hookDeclaration{file: file, decl: typed}
+					hooks.tagged[name] = append(hooks.tagged[name], hookDeclaration{file: file, decl: typed})
 				case file.constraint != nil && excludesTag(file.constraint, sidecarTestHooksTag):
-					hooks.untagged[name] = hookDeclaration{file: file, decl: typed}
+					hooks.untagged[name] = append(hooks.untagged[name], hookDeclaration{file: file, decl: typed})
 				default:
 					findings = append(findings, findingf("%s: %s builds with and without %s, so its body reaches a release", display, name, sidecarTestHooksTag))
 				}
@@ -315,19 +318,24 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 	}
 	for packageName, hooks := range packages {
 		for name, signature := range hookSignatures {
-			untagged, hasUntagged := hooks.untagged[name]
-			tagged, hasTagged := hooks.tagged[name]
-			if !hasUntagged {
+			if len(hooks.untagged[name]) == 0 {
 				findings = append(findings, findingf("%s keeps %s with no empty half under !%s", packageName, name, sidecarTestHooksTag))
-			} else if len(untagged.decl.Body.List) != 0 {
-				findings = append(findings, findingf("%s: %s has a body in the untagged build", self.displayPath(untagged.file.path), name))
 			}
-			if !hasTagged {
+			for _, untagged := range hooks.untagged[name] {
+				// no body at all is not empty: go:linkname or assembly decides what it runs
+				if untagged.decl.Body == nil {
+					findings = append(findings, findingf("%s: %s has no body of its own in the untagged build", self.displayPath(untagged.file.path), name))
+				} else if len(untagged.decl.Body.List) != 0 {
+					findings = append(findings, findingf("%s: %s has a body in the untagged build", self.displayPath(untagged.file.path), name))
+				}
+			}
+			if len(hooks.tagged[name]) == 0 {
 				findings = append(findings, findingf("%s keeps %s with no half under %s", packageName, name, sidecarTestHooksTag))
-				continue
 			}
-			if packageName != "." && packageName != deviceHooksPackage && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
-				findings = append(findings, findingf("%s: %s does not forward to the root's %s, as testhook.go has a package do", self.displayPath(tagged.file.path), name, hookEntryPoints[name]))
+			for _, tagged := range hooks.tagged[name] {
+				if packageName != "." && packageName != deviceHooksPackage && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
+					findings = append(findings, findingf("%s: %s does not forward to the root's %s, as testhook.go has a package do", self.displayPath(tagged.file.path), name, hookEntryPoints[name]))
+				}
 			}
 		}
 	}

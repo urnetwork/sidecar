@@ -7,6 +7,7 @@ package check
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,6 +114,63 @@ func TestHygieneFailsOnAPackagesHookWithABody(t *testing.T) {
 	fixture := newHookFixture(t)
 	fixture.edit("evsservice/testhook.go", "func testHookSecret(kind string, secret []byte) {}", "func testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}")
 	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/testhook.go: testHookSecret has a body in the untagged build")
+}
+
+// Halves split by system are each one system's release, so each is held to the rule. The empty one
+// is read last here, which is the order a rule keeping one half per name would be fooled by.
+func TestHygieneFailsOnAHookBodyBesideAnEmptyHalf(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.remove("evsservice/testhook.go")
+	linuxHalf := strings.Replace(packageHookUntagged, "!sidecar_testhooks", "!sidecar_testhooks && linux", 1)
+	linuxHalf = strings.Replace(linuxHalf, "func testHookSecret(kind string, secret []byte) {}", "func testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}", 1)
+	fixture.write("evsservice/testhook_linux.go", linuxHalf)
+	fixture.write("evsservice/testhook_other.go", strings.Replace(packageHookUntagged, "!sidecar_testhooks", "!sidecar_testhooks && !linux", 1))
+	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/testhook_linux.go: testHookSecret has a body in the untagged build")
+}
+
+// The same on the tagged side: one half forwarding says nothing of the other.
+func TestHygieneFailsOnATaggedHalfBesideOneForwarding(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.remove("evsservice/testhook_enabled.go")
+	linuxHalf := strings.Replace(packageHookTagged, "sidecar_testhooks", "sidecar_testhooks && linux", 1)
+	linuxHalf = strings.Replace(linuxHalf, "sidecar.TestHookSecret(kind, secret)", "println(kind)", 1)
+	fixture.write("evsservice/testhook_enabled_linux.go", linuxHalf)
+	fixture.write("evsservice/testhook_enabled_other.go", strings.Replace(packageHookTagged, "sidecar_testhooks", "sidecar_testhooks && !linux", 1))
+	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/testhook_enabled_linux.go: testHookSecret does not forward to the root's TestHookSecret")
+}
+
+// The control: halves split by system pass when each one is right.
+func TestHygieneAllowsHookHalvesSplitBySystem(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.remove("evsservice/testhook.go")
+	fixture.remove("evsservice/testhook_enabled.go")
+	fixture.write("evsservice/testhook_linux.go", strings.Replace(packageHookUntagged, "!sidecar_testhooks", "!sidecar_testhooks && linux", 1))
+	fixture.write("evsservice/testhook_other.go", strings.Replace(packageHookUntagged, "!sidecar_testhooks", "!sidecar_testhooks && !linux", 1))
+	fixture.write("evsservice/testhook_enabled_linux.go", strings.Replace(packageHookTagged, "sidecar_testhooks", "sidecar_testhooks && linux", 1))
+	fixture.write("evsservice/testhook_enabled_other.go", strings.Replace(packageHookTagged, "sidecar_testhooks", "sidecar_testhooks && !linux", 1))
+	wantFindings(t, fixture.open().hookPairFindings(t))
+}
+
+// A declaration with no body runs what go:linkname or assembly puts behind it, which is not empty.
+func TestHygieneFailsOnAHookWithNoBodyOfItsOwn(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.edit("evsservice/testhook.go", "func testHookSecret(kind string, secret []byte) {}", "func testHookSecret(kind string, secret []byte)")
+	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/testhook.go: testHookSecret has no body of its own in the untagged build")
+}
+
+// A method of the hook's name is a hook no pair rule reads, whatever its receiver, and it needs no tag
+// to reach a release.
+func TestHygieneFailsOnAHookDeclaredAsAMethod(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.write("evsservice/planted.go", "package evsservice\n\ntype keys struct{}\n\nfunc (self *keys) testHookSecret(kind string, secret []byte) {\n\tprintln(kind)\n}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/planted.go: testHookSecret is a method, so no pair holds it empty in a release build")
+}
+
+// The same for what may only exist under the tag: a method can install hooks as well as a function.
+func TestHygieneFailsOnAnEntryPointDeclaredAsAMethod(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\ntype keys struct{}\n\nfunc (self *keys) SetTestHooks(hooks any) {}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t), "planted.go: SetTestHooks exists outside the root's tagged file")
 }
 
 // With no constraint at all the one body is in every build, the release's included.
