@@ -270,38 +270,58 @@ func TestDepsFailsOnAGplFileUnderAnMitRow(t *testing.T) {
 		"github.com/pion/sctp's license text has \"gnu general public license\"")
 }
 
-// tlshacks's case: MIT's words and one more clause make a custom license.
+// MIT's words and X11's clause are X11, not MIT, so under an MIT row the clause makes a custom
+// license: it passes only where the row says X11.
 func TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
-	fixture.writeSibling("connect/sctp/LICENSE", fixtureMitLicense+"The name(s) of the copyright holders shall not be used in advertising.\n")
+	fixture.writeSibling("connect/sctp/LICENSE", fixtureMitLicense+"\n"+fixtureX11Clause)
 	wantFindings(t, fixture.open().licenseRowFindings(t), "github.com/pion/sctp's license text has \"shall not be used in advertising\"")
 }
 
-// An exception covers one version: a bump is a new license to read. The exception is the real
-// settings' own, so this holds the one that stands, through the rule that reads it: at its version
-// the module passes, and at the next it fails.
-func TestDepsFailsOnAnExceptionAtAnotherVersion(t *testing.T) {
-	exception, standing := defaultCheckSettings().licenseExceptions["src.agwa.name/tlshacks"]
-	if !standing || exception.version != "v0.0.4" {
-		t.Fatalf("the tlshacks exception is %+v, not the v0.0.4 one this test holds", exception)
-	}
-	tlshacksFixture := func(version string) *fixture {
-		fixture := newFixture(t)
-		fixture.keepLegs("root linux/amd64")
-		fixture.settings.licenseExceptions = map[string]licenseException{"src.agwa.name/tlshacks": exception}
-		fixture.writeSibling("tlshacks/go.mod", "module src.agwa.name/tlshacks\n\ngo 1.27.3\n")
-		fixture.writeSibling("tlshacks/LICENSE", fixtureMitLicense+"The name(s) of the copyright holders shall not be used in advertising.\n")
-		fixture.writeSibling("tlshacks/tlshacks.go", "package tlshacks\n")
-		fixture.requireLocal("src.agwa.name/tlshacks", version, "tlshacks")
-		fixture.write("tlshacks.go", "package sidecar\n\nimport _ \"src.agwa.name/tlshacks\"\n")
-		fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: src.agwa.name/tlshacks\n    spdx: X11\n    reason: parses a ClientHello\n    leg: [client]\n")
-		return fixture
-	}
-	wantFindings(t, tlshacksFixture("v0.0.4").open().licenseRowFindings(t))
-	wantFindings(t, tlshacksFixture("v0.0.5").open().licenseRowFindings(t),
-		"src.agwa.name/tlshacks is X11, which §4.7 does not allow, at v0.0.5",
-		"src.agwa.name/tlshacks's license text has \"shall not be used in advertising\", at v0.0.5")
+// One module with an X11 row, linked by the root, under the license text given.
+func newX11Fixture(t *testing.T, licenseText string) *fixture {
+	t.Helper()
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64")
+	fixture.writeSibling("x11/go.mod", "module example.com/x11\n\ngo 1.27.3\n")
+	fixture.writeSibling("x11/LICENSE", licenseText)
+	fixture.writeSibling("x11/x11.go", "package x11\n")
+	fixture.requireLocal("example.com/x11", "v1.0.0", "x11")
+	fixture.write("x11.go", "package sidecar\n\nimport _ \"example.com/x11\"\n")
+	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: example.com/x11\n    spdx: X11\n    reason: MIT's text and the no-advertising clause\n    leg: [client]\n")
+	return fixture
+}
+
+// The control: X11 is MIT's text plus only its no-advertising clause (QD-240), at any version.
+func TestDepsAllowsAnX11Module(t *testing.T) {
+	wantFindings(t, newX11Fixture(t, fixtureMitLicense+"\n"+fixtureX11Clause).open().licenseRowFindings(t))
+}
+
+// Plain MIT under an X11 row is a claim the files do not back.
+func TestDepsFailsOnAnX11RowOverPlainMit(t *testing.T) {
+	wantFindings(t, newX11Fixture(t, fixtureMitLicense).open().licenseRowFindings(t),
+		"example.com/x11 says X11, and its license text lacks \"shall not be used in advertising or otherwise to promote the sale, use or other dealings in this software without prior written authorization\", at v1.0.0")
+}
+
+// The clause alone is not X11: the rest is MIT's text.
+func TestDepsFailsOnAnX11ClauseWithoutMitsText(t *testing.T) {
+	wantFindings(t, newX11Fixture(t, "Copyright (c) 2026 Example\n\n"+fixtureX11Clause).open().licenseRowFindings(t),
+		"example.com/x11 says X11, and its license text lacks \"permission is hereby granted, free of charge, to any person obtaining a copy\", at v1.0.0")
+}
+
+// Only the clause X11 pins passes: another advertising sentence beside it is a custom term.
+func TestDepsFailsOnASecondAdvertisingClauseUnderAnX11Row(t *testing.T) {
+	licenseText := fixtureMitLicense + "\n" + fixtureX11Clause + "\nThis Software shall not be used in advertising for any product.\n"
+	wantFindings(t, newX11Fixture(t, licenseText).open().licenseRowFindings(t),
+		"example.com/x11's license text has \"shall not be used in advertising\", at v1.0.0")
+}
+
+// Nor does X11's clause clear any other refused one.
+func TestDepsFailsOnAnotherClauseUnderAnX11Row(t *testing.T) {
+	licenseText := fixtureMitLicense + "\n" + fixtureX11Clause + "\nThe Software shall be used for Good, not Evil.\n"
+	wantFindings(t, newX11Fixture(t, licenseText).open().licenseRowFindings(t),
+		"example.com/x11's license text has \"shall be used for good, not evil\", at v1.0.0")
 }
 
 // One module at two versions, each with its own license file: the root's legs link the first and
@@ -330,28 +350,8 @@ func TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo(t *testing.T) {
 	wantFindings(t, fixture.open().licenseRowFindings(t), "example.com/skewed's license text has \"business source license\", at v1.1.0")
 }
 
-// An exception names one version, so another leg's version does not pass because of it.
-func TestDepsFailsOnAnExceptionCoveringOneVersionOfTwo(t *testing.T) {
-	licenseText := fixtureMitLicense + "The name(s) of the copyright holders shall not be used in advertising.\n"
-	fixture := newVersionSkewFixture(t, "X11", "v0.0.5", licenseText, "v0.0.4", licenseText)
-	fixture.settings.licenseExceptions = map[string]licenseException{
-		"example.com/skewed": {version: "v0.0.4", spdx: "X11", question: "example.md"},
-	}
-	wantFindings(t, fixture.open().licenseRowFindings(t),
-		"example.com/skewed is X11, which §4.7 does not allow, at v0.0.5",
-		"example.com/skewed's license text has \"shall not be used in advertising\", at v0.0.5")
-}
-
 // The control: two versions that each back the row pass.
 func TestDepsAllowsTwoVersionsThatBothBackTheRow(t *testing.T) {
 	fixture := newVersionSkewFixture(t, "MIT", "v1.1.0", fixtureMitLicense, "v1.0.0", fixtureMitLicense)
 	wantFindings(t, fixture.open().licenseRowFindings(t))
-}
-
-func TestDepsFailsOnAStaleLicenseException(t *testing.T) {
-	fixture := newFixture(t)
-	fixture.settings.licenseExceptions = map[string]licenseException{
-		"example.com/left": {version: "v1.0.0", spdx: "X11", question: "example.md"},
-	}
-	wantFindings(t, fixture.open().licenseExceptionFindings(t), "the license exception for example.com/left has no matching row")
 }

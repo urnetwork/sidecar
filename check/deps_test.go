@@ -368,10 +368,14 @@ func (self *repository) sharedVersionFindings(t testing.TB) []string {
 
 // How a license's text is told apart, after lowercasing and joining whitespace. Each id must find
 // all of its phrases. These are a fingerprint, not a classifier: their job is to catch a row whose
-// claim the module's files do not back.
+// claim the module's files do not back. X11's are MIT's and its no-advertising clause in the
+// clause's fixed words, which leave the name it protects to each license (QD-240).
 var licensePhrases = map[string][]string{
-	"MIT":          {"permission is hereby granted, free of charge, to any person obtaining a copy"},
-	"X11":          {"permission is hereby granted, free of charge, to any person obtaining a copy", "shall not be used in advertising"},
+	"MIT": {"permission is hereby granted, free of charge, to any person obtaining a copy"},
+	"X11": {
+		"permission is hereby granted, free of charge, to any person obtaining a copy",
+		"shall not be used in advertising or otherwise to promote the sale, use or other dealings in this software without prior written authorization",
+	},
 	"Apache-2.0":   {"apache license", "version 2.0"},
 	"BSD-2-Clause": {"redistribution and use in source and binary forms"},
 	"BSD-3-Clause": {"redistribution and use in source and binary forms", "neither the name"},
@@ -380,8 +384,9 @@ var licensePhrases = map[string][]string{
 }
 
 // Phrases in a license file that take it out of what §4.7 allows, whatever else the file says: the
-// refused families, and the clauses that turn a familiar license into a custom one. An exception
-// names its own phrase, so tlshacks's advertising clause passes only there.
+// refused families, and the clauses that turn a familiar license into a custom one. One inside a
+// clause the row's own id pins is that id's, so X11's advertising clause passes under an X11 row
+// and nowhere else.
 var refusedLicensePhrases = []string{
 	"gnu general public license",
 	"gnu lesser general public",
@@ -423,16 +428,15 @@ func licenseIds(spdx string) []string {
 	return strings.Split(spdx, " AND ")
 }
 
-// What is wrong with one row given its module's license text, version and the settings.
-func (self *checkSettings) licenseFindings(row *dependencyRow, version string, licenseText string) []string {
+// What is wrong with one row given its module's license text and the settings. The refused phrases
+// are looked for with each clause the row's allowed ids pin taken out of the text, every occurrence
+// of it, so X11's clause passes under an X11 row and a second advertising sentence beside it does
+// not.
+func (self *checkSettings) licenseFindings(row *dependencyRow, licenseText string) []string {
 	findings := []string{}
-	exception, excepted := self.licenseExceptions[row.module]
-	if excepted && exception.version != version {
-		excepted = false
-	}
+	scannedText := licenseText
 	for _, id := range licenseIds(row.spdx) {
-		allowed := slices.Contains(self.allowedLicenses, id)
-		if !allowed && !(excepted && id == exception.spdx) {
+		if !slices.Contains(self.allowedLicenses, id) {
 			findings = append(findings, findingf("%s is %s, which §4.7 does not allow", row.module, id))
 			continue
 		}
@@ -442,6 +446,13 @@ func (self *checkSettings) licenseFindings(row *dependencyRow, version string, l
 		for _, phrase := range licensePhrases[id] {
 			if !strings.Contains(licenseText, phrase) {
 				findings = append(findings, findingf("%s says %s, and its license text lacks %q", row.module, id, phrase))
+				continue
+			}
+			pinsRefused := slices.ContainsFunc(refusedLicensePhrases, func(refused string) bool {
+				return strings.Contains(phrase, refused)
+			})
+			if pinsRefused {
+				scannedText = strings.ReplaceAll(scannedText, phrase, " ")
 			}
 		}
 	}
@@ -449,13 +460,9 @@ func (self *checkSettings) licenseFindings(row *dependencyRow, version string, l
 		findings = append(findings, findingf("%s has no license file, and §4.7 refuses the unlicensed", row.module))
 	}
 	for _, phrase := range refusedLicensePhrases {
-		if !strings.Contains(licenseText, phrase) {
-			continue
+		if strings.Contains(scannedText, phrase) {
+			findings = append(findings, findingf("%s's license text has %q", row.module, phrase))
 		}
-		if excepted && slices.Contains(licensePhrases[exception.spdx], phrase) {
-			continue
-		}
-		findings = append(findings, findingf("%s's license text has %q", row.module, phrase))
 	}
 	return findings
 }
@@ -502,27 +509,11 @@ func (self *repository) licenseRowFindings(t testing.TB) []string {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, finding := range self.settings.licenseFindings(row, linkedCopy.version, licenseText) {
+			for _, finding := range self.settings.licenseFindings(row, licenseText) {
 				findings = append(findings, findingf("%s, at %s", finding, linkedCopy.version))
 			}
 		}
 	}
 	slices.Sort(findings)
-	return findings
-}
-
-// The exceptions in force, for the run's log. One whose module left the tree goes too, or a stale
-// permission would wait for the next module of that name.
-func (self *repository) licenseExceptionFindings(t testing.TB) []string {
-	t.Helper()
-	rowsByModule, findings := self.dependencyRows(t)
-	for modulePath, exception := range self.settings.licenseExceptions {
-		row, listed := rowsByModule[modulePath]
-		if !listed || !slices.Contains(licenseIds(row.spdx), exception.spdx) {
-			findings = append(findings, findingf("the license exception for %s has no matching row; remove it", modulePath))
-			continue
-		}
-		self.report("%s stands on a license exception: %s, waiting on %s", modulePath, exception.spdx, exception.question)
-	}
 	return findings
 }

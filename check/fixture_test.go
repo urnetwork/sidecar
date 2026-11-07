@@ -20,6 +20,8 @@ import (
 
 const (
 	fixtureMitLicense = "Copyright (c) 2026 Example\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software.\n"
+	// X11's one clause past MIT's text, in tlshacks's words
+	fixtureX11Clause  = "Except as contained in this notice, the name(s) of the above copyright\nholders shall not be used in advertising or otherwise to promote the\nsale, use or other dealings in this Software without prior written\nauthorization.\n"
 	fixtureMplLicense = "This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.\n"
 	fixtureApache     = "Apache License\nVersion 2.0, January 2004\n"
 )
@@ -193,9 +195,6 @@ func newFixture(t testing.TB) *fixture {
 		settings:  defaultCheckSettings(),
 		legs:      defaultBuildLegs(),
 	}
-	// a fixture's connect is not the sibling that fills the exception's row, and one the fixture
-	// never lists would be reported as a stale exception
-	self.settings.licenseExceptions = map[string]licenseException{}
 	for name, content := range fixtureFiles {
 		self.writeSibling(name, content)
 	}

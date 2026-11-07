@@ -90,14 +90,10 @@ var failsOnRows = []failsOnRow{
 		rule: (*repository).licenseRowFindings,
 		plantedTests: []string{
 			"TestDepsFailsOnARefusedLicenseId", "TestDepsFailsOnAnUnlicensedModule", "TestDepsFailsOnAGplFileUnderAnMitRow",
-			"TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow", "TestDepsFailsOnAnExceptionAtAnotherVersion",
-			"TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo", "TestDepsFailsOnAnExceptionCoveringOneVersionOfTwo",
+			"TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow", "TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo",
+			"TestDepsFailsOnAnX11RowOverPlainMit", "TestDepsFailsOnAnX11ClauseWithoutMitsText",
+			"TestDepsFailsOnASecondAdvertisingClauseUnderAnX11Row", "TestDepsFailsOnAnotherClauseUnderAnX11Row",
 		},
-	},
-	{
-		row: "deps", item: "a license exception with no row to stand on",
-		rule:         (*repository).licenseExceptionFindings,
-		plantedTests: []string{"TestDepsFailsOnAStaleLicenseException"},
 	},
 
 	{

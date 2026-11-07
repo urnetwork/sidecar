@@ -30,15 +30,6 @@ type rowSwitches struct {
 	sidecarHttpSizeGate bool
 }
 
-// A module whose license §4.7 does not name, let through for one exact version while the question
-// that names it waits for the owner. Everything else about the row is still checked.
-type licenseException struct {
-	version string
-	spdx    string
-	// the file under .stack/questions
-	question string
-}
-
 // Read by every rule. There is one value, from defaultCheckSettings; a test may change a copy.
 type checkSettings struct {
 	switches rowSwitches
@@ -50,10 +41,9 @@ type checkSettings struct {
 	// §11.14: one x/text module version on every leg, which the search index's headers record
 	normalizerOneXTextVersion string
 
-	// §4.7's allowed licenses, as SPDX ids
+	// §4.7's allowed licenses, as SPDX ids. X11 is MIT's text plus only its no-advertising clause
+	// (QD-240), which licensePhrases pins.
 	allowedLicenses []string
-	// by module path; see licenseException
-	licenseExceptions map[string]licenseException
 	// cgo files in a third-party package, as <import path>/<file>, each with why it stands. §4.7's
 	// cgo row binds this repository's packages (R-REPO-6), and a third-party file is listed here
 	// so a new one needs a reader, rather than passing unseen.
@@ -93,15 +83,7 @@ func defaultCheckSettings() *checkSettings {
 		protocGenGoTool:           "google.golang.org/protobuf/cmd/protoc-gen-go",
 		normalizerOneXTextVersion: "v0.43.0",
 		allowedLicenses: []string{
-			"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "MPL-2.0",
-		},
-		licenseExceptions: map[string]licenseException{
-			// connect's net_tls.go parses a ClientHello with it, so it is in every connect leg
-			"src.agwa.name/tlshacks": {
-				version:  "v0.0.4",
-				spdx:     "X11",
-				question: "make-check-tlshacks-x11.md",
-			},
+			"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "MPL-2.0", "X11",
 		},
 		thirdPartyCgoFiles: map[string]string{
 			"github.com/wlynxg/anet/android_api_level_cgo.go": "reads the Android API level; " +
