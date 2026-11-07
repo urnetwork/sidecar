@@ -5,13 +5,14 @@
 // service network, so whatever else arrives is no visitor, and tlsedge owes it no TLS. v2 is taken too,
 // as §13.4 asks.
 //
-// pires/go-proxyproto parses. It is not used as a listener, which would read lazily on the first Read
-// and pass a connection with no header under some policies, and which refuses a v1 line that arrives
-// in two reads. Here the header is read before Accept sees the connection, on a goroutine of its own
-// so that a stalled peer delays nobody, and the bytes are framed first: the header must end inside
-// max_bytes before pires is given it, and pires then reads from memory, which is what policy REQUIRE
-// asks and an explicit bound on top. Bytes that came in behind the header are the hello's, and are
-// served first by Read, so none is lost.
+// pires/go-proxyproto parses, but not as a listener: that reads lazily on the first Read, passes a
+// connection with no header under some policies, and refuses a v1 line that arrives in two reads.
+// Here the header is read before Accept sees the connection, on a goroutine of its own so that a
+// stalled peer delays nobody, and its bytes are framed first, so a header must end inside max_bytes
+// before pires is given it and pires reads it from memory. A connection with no header never reaches
+// a policy to pass it: what the plan calls policy REQUIRE holds by construction. Bytes that came in
+// behind the header are the hello's, and Read serves them first, so none is lost. Reading them with
+// the header, rather than a byte at a time, is what keeps a connection to a read or two.
 //
 // Neither address reaches a log (I-13): nothing here logs, and a read error is dropped with its
 // connection, since a net.OpError prints the addresses it failed on.
@@ -51,7 +52,8 @@ var (
 	errProxyHeaderNoVisitor = errors.New("PROXY header names no visitor")
 )
 
-// tlsedge.yml's proxy_header (§13.5), and what bounds a listener's own work around it.
+// tlsedge.yml's proxy_header (§13.5), and what bounds a listener's own work around it. A value of zero
+// or less in any field is refused, so none reads as no bound.
 type ProxyHeaderSettings struct {
 	// timeout_s: from accept to the header's last byte, one deadline for the whole header, so a peer
 	// sending it a byte at a time cannot stretch it.
@@ -63,10 +65,11 @@ type ProxyHeaderSettings struct {
 	// Connections one listener holds between accept and its Accept, whether reading a header or
 	// waiting for the caller. Past this a new connection drops at once, so a host that stops accepting,
 	// or peers that stall, cost a bounded number of goroutines and buffers. A peer that sends its
-	// header at once holds a slot only for a moment.
+	// header at once holds a slot only for a moment, so the default is far above what healthy traffic
+	// holds, and costs at most 8 MiB of buffers a listener at max_bytes' default.
 	MaxPendingCount int
 	// The wait after a temporary accept failure such as running out of descriptors, which keeps the
-	// loop from spinning.
+	// loop from spinning. The default gives closing connections time to free descriptors.
 	AcceptRetryTimeout time.Duration
 }
 
@@ -80,7 +83,7 @@ func DefaultProxyHeaderSettings() *ProxyHeaderSettings {
 	}
 }
 
-// Every field must be usable, because a zero reads as no bound nowhere here: it fails.
+// Refuses what ProxyHeaderSettings says it refuses, naming the field and never a value.
 func (self *ProxyHeaderSettings) validate() error {
 	switch {
 	case self == nil:
@@ -274,6 +277,7 @@ func (self *proxyHeaderListener) run() {
 	for {
 		conn, err := self.listener.Accept()
 		if err != nil {
+			// the test net/http's Serve uses, deprecated only because most timeouts are not temporary
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Temporary() {
 				select {
@@ -364,7 +368,8 @@ func (self *proxyHeaderListener) Accept() (net.Conn, error) {
 }
 
 // Closes the inner listener and every connection that has not reached Accept, and returns once they
-// are gone. Connections already accepted are the caller's.
+// are gone. Connections already accepted are the caller's, but for one in the instant of its handoff,
+// which a close that lands then may end too.
 func (self *proxyHeaderListener) Close() error {
 	self.cancel(net.ErrClosed)
 	self.closeListener()
