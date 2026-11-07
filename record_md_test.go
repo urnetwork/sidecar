@@ -4,7 +4,8 @@
 // the document itself: each takes a normative row, puts the review's failing case through the rule that row
 // states, and fails while the document would still let that case through. A figure is recomputed, not
 // compared with itself. A later build's own tests prove the behavior; these keep the specification honest
-// until then, and section 20's cases name what the build must add.
+// until then, and section 20's cases name what the build must add. A row reworded on purpose changes its test
+// with it. The js leg opens no files, so these stay off it, as style_test.go does.
 
 package sidecar
 
@@ -18,6 +19,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
 	"math/bits"
 	"os"
 	"reflect"
@@ -29,6 +31,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -37,6 +40,7 @@ type recordMd struct {
 	text string
 }
 
+// Reads the document beside this package, where go test runs and a release's moved tree keeps it.
 func newRecordMd(t *testing.T) *recordMd {
 	t.Helper()
 	text, err := os.ReadFile("RECORD.md")
@@ -103,6 +107,7 @@ func (self *recordMd) row(t *testing.T, number string, key string) string {
 	return ""
 }
 
+// Fails for each phrase text does not hold, line wraps aside.
 func recordMdRequire(t *testing.T, where string, text string, phrases ...string) {
 	t.Helper()
 	flat := recordMdFlat(text)
@@ -113,6 +118,7 @@ func recordMdRequire(t *testing.T, where string, text string, phrases ...string)
 	}
 }
 
+// Fails for each phrase text still holds, line wraps aside.
 func recordMdForbid(t *testing.T, where string, text string, phrases ...string) {
 	t.Helper()
 	flat := recordMdFlat(text)
@@ -179,6 +185,7 @@ func (self *recordMd) messages(t *testing.T) map[string][]recordMdField {
 	return nameMessages
 }
 
+// One message's field by name, failing the test when the message has none.
 func (self *recordMd) field(t *testing.T, message string, name string) recordMdField {
 	t.Helper()
 	for _, field := range self.messages(t)[message] {
@@ -194,6 +201,7 @@ func (self *recordMd) field(t *testing.T, message string, name string) recordMdF
 type recordMdKind struct {
 	number   int
 	name     string
+	class    string
 	personal string
 	team     string
 	writer   string
@@ -201,6 +209,7 @@ type recordMdKind struct {
 	since    string
 }
 
+// Section 6.3's rows by kind name.
 func (self *recordMd) registry(t *testing.T) map[string]recordMdKind {
 	t.Helper()
 	nameKinds := map[string]recordMdKind{}
@@ -217,6 +226,7 @@ func (self *recordMd) registry(t *testing.T) map[string]recordMdKind {
 		nameKinds[name] = recordMdKind{
 			number:   number,
 			name:     name,
+			class:    cells[2],
 			personal: cells[3],
 			team:     cells[4],
 			writer:   cells[5],
@@ -246,6 +256,7 @@ func (self *recordMd) goFile(t *testing.T) *ast.File {
 	return file
 }
 
+// A struct section 18's block declares, failing the test when it declares none by that name.
 func recordMdStruct(t *testing.T, file *ast.File, name string) *ast.StructType {
 	t.Helper()
 	var found *ast.StructType
@@ -262,6 +273,7 @@ func recordMdStruct(t *testing.T, file *ast.File, name string) *ast.StructType {
 	return found
 }
 
+// A decimal as the document writes it, with commas.
 func recordMdNumber(t *testing.T, text string) int64 {
 	t.Helper()
 	value, err := strconv.ParseInt(strings.ReplaceAll(text, ",", ""), 10, 64)
@@ -269,6 +281,18 @@ func recordMdNumber(t *testing.T, text string) int64 {
 		t.Fatal(err)
 	}
 	return value
+}
+
+// One length-delimited field, as a body RECORD.md sketches and record.proto does not yet hold is marshaled.
+func recordMdAppendBytes(message []byte, number protowire.Number, value []byte) []byte {
+	message = protowire.AppendTag(message, number, protowire.BytesType)
+	return protowire.AppendBytes(message, value)
+}
+
+// One varint field, as above.
+func recordMdAppendVarint(message []byte, number protowire.Number, value uint64) []byte {
+	message = protowire.AppendTag(message, number, protowire.VarintType)
+	return protowire.AppendVarint(message, value)
 }
 
 // Finding: "entries in no run take false" labeled an unbound session's record_append untainted, which §16.6
@@ -355,8 +379,10 @@ func TestRecordMdErasureReachesEveryCopyOfAnEntry(t *testing.T) {
 	recordMdRequire(t, "section 5.5's push time row", doc.row(t, "5.5", "push time"), "the time_ms of the earliest push holding a copy of it")
 	recordMdRequire(t, "section 8's keep_days row", doc.row(t, "8", "keep_days"), "their push time", "two ingesters' copies of an entry expire together, on the earlier push")
 
-	// A row keyed on a stream path would differ between the two copies.
-	recordMdForbid(t, "section 7.1's row", doc.row(t, "7.1", "row"), "locator the stream path")
+	// Search keeps §11.14's locator, the path a hit opens in its ref, and a doc_key is built over that path, so each
+	// copy is its own document, and the erasure's CUT has to list both or one stays findable.
+	recordMdRequire(t, "section 7.1's row", doc.row(t, "7.1", "row"), "locator the stream path", "are two documents, each under its own ref and doc_key")
+	recordMdRequire(t, "section 8", section, "so the erasure's CUT lists each")
 }
 
 // Finding: e/<n div 2048>/<n> made e/ one directory, so a stream hit 409 DIRECTORY_FULL at about 7.3 million
@@ -364,6 +390,9 @@ func TestRecordMdErasureReachesEveryCopyOfAnEntry(t *testing.T) {
 func TestRecordMdStreamPathFitsTheDirectoryBound(t *testing.T) {
 	doc := newRecordMd(t)
 	row := doc.row(t, "5.2", "stream path")
+	// §11.7 and §16.8 count a row at about 128 B, of which a name is under 64 B.
+	recordMdForbid(t, "section 5.2's stream path row", row, "each row under 64 B")
+	recordMdRequire(t, "section 5.2's stream path row", row, "each name under 64 B and so each row about 128 B")
 	path := regexp.MustCompile(`e/(?:<[^>]*>/?)+`).FindString(row)
 	if path == "" {
 		t.Fatalf("the stream path row states no path: %q", row)
@@ -407,7 +436,7 @@ func TestRecordMdStreamPathFitsTheDirectoryBound(t *testing.T) {
 	}
 	for depth := 1; depth < len(levels); depth++ {
 		childCount, maxChildCount := int64(1), int64(1)
-		for n := int64(2); n < 3*4194304; n++ {
+		for n := int64(2); n < 3*2048*2048; n++ {
 			if !samePrefix(depth, n-1, n) {
 				childCount = 1
 			} else if levels[depth](n-1) != levels[depth](n) {
@@ -483,60 +512,56 @@ func TestRecordMdFormatOneFindingNamesWhatItRestsOn(t *testing.T) {
 	}
 	recordMdRequire(t, "section 5.7", section, "6,656 B of its 8 KiB")
 
-	// Read receipt: every field at its largest, through a deposit batch, §11.6's record framing and Padmé.
-	appendBytes := func(message []byte, number protowire.Number, value []byte) []byte {
-		message = protowire.AppendTag(message, number, protowire.BytesType)
-		return protowire.AppendBytes(message, value)
-	}
-	appendVarint := func(message []byte, number protowire.Number, value uint64) []byte {
-		message = protowire.AppendTag(message, number, protowire.VarintType)
-		return protowire.AppendVarint(message, value)
-	}
+	// Read receipt: every field at its largest, in record.proto's own envelope, through a deposit batch, §11.6's
+	// record framing and Padmé. ReadBody and RecordDeposit are RECORD.md's, so they are built by their field numbers.
 	id := make([]byte, 16)
 	hash := make([]byte, 32)
 	body := []byte{}
 	for i := 0; i < 64; i++ {
-		body = appendBytes(body, 1, hash)
+		body = recordMdAppendBytes(body, 1, hash)
 	}
-	body = appendVarint(body, 2, 4)
-	body = appendBytes(body, 3, id)
-	sealedBody := make([]byte, 24+len(body)+16)
-	header := []byte{}
-	header = appendBytes(header, 1, id)
-	header = appendBytes(header, 2, id)
-	header = appendBytes(header, 3, id)
-	header = appendVarint(header, 4, ^uint64(0))
-	header = appendBytes(header, 5, hash)
-	header = appendBytes(header, 6, id)
-	header = appendBytes(header, 7, id)
-	header = appendBytes(header, 8, hash)
-	header = appendVarint(header, 9, 35)
-	header = appendVarint(header, 10, ^uint64(0)>>1)
-	header = appendVarint(header, 11, 1)
-	header = appendVarint(header, 12, 1)
-	header = appendBytes(header, 13, hash)
-	header = appendVarint(header, 15, ^uint64(0))
-	header = appendBytes(header, 16, hash)
-	header = appendVarint(header, 17, 2)
-	signed, err := proto.Marshal(&bridge.Signed{
-		Body:      header,
-		SignerId:  id,
-		KeyId:     id,
-		Signature: make([]byte, 64),
-		Type:      uint32(bridge.SignedType_SIGNED_RECORD_HEADER),
+	body = recordMdAppendVarint(body, 2, 4)
+	body = recordMdAppendBytes(body, 3, id)
+	header, err := proto.Marshal(&protocol.RecordHeader{
+		EntryId:         id,
+		LogId:           id,
+		WriterSidecarId: id,
+		Seq:             math.MaxUint64,
+		PrevSha256:      hash,
+		AgentId:         id,
+		RunId:           id,
+		ActionId:        hash,
+		Kind:            35,
+		TimeMillis:      math.MaxInt64,
+		Source:          1,
+		Tainted:         true,
+		BodyCommitment:  hash,
+		PolicyVersion:   math.MaxUint64,
+		GrantId:         hash,
+		AgentSource:     2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := []byte{}
-	entry = appendBytes(entry, 1, signed)
-	entry = appendBytes(entry, 2, sealedBody)
-	entry = appendVarint(entry, 4, 1)
+	entry, err := proto.Marshal(&protocol.RecordEntry{
+		Header: &bridge.Signed{
+			Body:      header,
+			SignerId:  id,
+			KeyId:     id,
+			Signature: make([]byte, 64),
+			Type:      uint32(bridge.SignedType_SIGNED_RECORD_HEADER),
+		},
+		SealedBody: make([]byte, 24+len(body)+16),
+		Version:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	deposit := []byte{}
-	deposit = appendBytes(deposit, 1, entry)
-	deposit = appendBytes(deposit, 2, hash)
-	deposit = appendBytes(deposit, 3, hash)
-	batch := appendBytes(nil, 1, deposit)
+	deposit = recordMdAppendBytes(deposit, 1, entry)
+	deposit = recordMdAppendBytes(deposit, 2, hash)
+	deposit = recordMdAppendBytes(deposit, 3, hash)
+	batch := recordMdAppendBytes(nil, 1, deposit)
 	// §11.6's Padmé, over its 160 B record header and 16 B frame tag.
 	length := len(batch) + 160 + 16
 	exponent := bits.Len(uint(length)) - 1
@@ -577,6 +602,8 @@ func TestRecordMdVaultEntriesComeOnlyFromTheMatrixWriters(t *testing.T) {
 		"an admin's device never writes to M's vault",
 		"a removed member has no device left to write",
 	)
+	// The matrix narrows §16.8's "each affected log", which section 16.2 has to own up to.
+	recordMdRequire(t, "section 16.2", doc.section(t, "16.2"), `§16.8's "into each affected log" reads, for a member's vault, as what §8.5's matrix lets in`)
 }
 
 // Finding: a re-open held only while the run file lasts, and §16.6 deletes that file 30 days after Coverage, so
@@ -598,6 +625,8 @@ func TestRecordMdTaintOutlivesTheRunFile(t *testing.T) {
 	recordMdRequire(t, "section 6.4", doc.section(t, "6.4"), "`run_file_missing`")
 	recordMdRequire(t, "section 18", doc.section(t, "18"), "session rows")
 	recordMdRequire(t, "D-RECORD-5", doc.section(t, "15"), "A row per session outlasts the run file")
+	// Starting tainted departs from §16.6's "a new run starts untainted", in the closed direction, and says so.
+	recordMdRequire(t, "section 16.2", doc.section(t, "16.2"), "A session with no row that reports earlier context starts tainted too")
 }
 
 // Finding: ur record erase asked for no person, so an agent's shell could destroy record bodies for good, class 7
@@ -612,6 +641,9 @@ func TestRecordMdErasureTakesAPerson(t *testing.T) {
 		"It refuses a class 7 entry",
 	)
 	recordMdRequire(t, "section 8's floor row", doc.row(t, "8", "floor"), "no policy blocks, class 7 aside")
+	// A shorter keep_days erases at the next expiry pass, so it is the same act by another door.
+	recordMdRequire(t, "section 8's change row", doc.row(t, "8", "change"), "on existing entries too")
+	recordMdRequire(t, "section 8", section, "A `ur record retention set` that shortens a class's life takes the same refusal")
 	recordMdRequire(t, "kind erasure's source", doc.registry(t)["erasure"].source, "approver for reasons 1 and 3")
 
 	// Every command that files a person's act says so where it is listed.
@@ -681,6 +713,20 @@ func TestRecordMdReceiptOnlyExportRecordReachesTheLog(t *testing.T) {
 	if purpose := doc.field(t, "ReadBody", "purpose"); !strings.Contains(purpose.comment, "3 export") {
 		t.Errorf("ReadBody.purpose has no export value: %q", purpose.comment)
 	}
+
+	// A packet is the same act: the reader that only deposits receipts cannot land a disclosure entry there either.
+	packet := doc.row(t, "11", "record")
+	recordMdForbid(t, "section 11's record row", packet, "the disclosure entry commits in the log before the file is written, and an act")
+	recordMdRequire(t, "section 11's record row", packet,
+		"by section 9's record row",
+		"a receipt-only reader files none, since ingest takes only read from it",
+		"purpose 4, which stand as the record",
+		"an act that cannot land is refused",
+	)
+	if purpose := doc.field(t, "ReadBody", "purpose"); !strings.Contains(purpose.comment, "4 disclosure") {
+		t.Errorf("ReadBody.purpose has no disclosure value: %q", purpose.comment)
+	}
+	recordMdRequire(t, "D-RECORD-10", doc.section(t, "15"), "a `disclosure` entry, or a receipt-only reader's read receipts")
 }
 
 // Finding: ur evs export emitted bodies from T, R and D with no person, taint or disclosure entry, and a
@@ -891,6 +937,8 @@ func TestRecordMdEveryPendingGateNamesItsEnforcementPoint(t *testing.T) {
 	recordMdRequire(t, "section 10.2's read step", doc.row(t, "10.2", "1 read"), "while Q-RECORD-1 is open, if the log holds more than one stream")
 	recordMdRequire(t, "section 10.2's on row", doc.row(t, "10.2", "on"), "refuses on a log with more than one stream")
 	recordMdRequire(t, "section 11's checkpoint row", doc.row(t, "11", "checkpoint"), "refuses on a log whose verifiable log is off")
+	// A reader holds the gate too, as it does Q-RECORD-8's, so an old or rogue checkpointer gets nowhere.
+	recordMdRequire(t, "section 10.2's monitor row", doc.row(t, "10.2", "monitor"), "while Q-RECORD-1 is open, a batch whose frontier names more than one stream is ignored with an alarm")
 	if kinds := doc.field(t, "LedgerScopeBody", "kinds"); !strings.Contains(kinds.comment, "Q-RECORD-6") {
 		t.Errorf("LedgerScopeBody.kinds can still list cost past V: %q", kinds.comment)
 	}
@@ -1041,6 +1089,17 @@ func TestRecordMdVectorsRecompute(t *testing.T) {
 		hex.EncodeToString(weights[:]),
 	}
 	recordMdRequire(t, "section 20's vectors", section, wants...)
+
+	// The formulas above are the document's, or a value here could drift from the bytes section 5.1 states.
+	recordMdRequire(t, "section 5.1", doc.section(t, "5.1"),
+		`SHA-256(0x00 || E.header.body)`,
+		`SHA-256("urnetwork-sidecar-v1/record-body" || salt || body)`,
+		`"urnetwork-sidecar-v1/approval-sshsig" || 0x00 || u16be(len) || approval_id || request_sha256 || payload_sha256 || u32be(decision) || u32be(uses) || i64be(not_after_millis) || u16be(len) || requester_sidecar_id || u16be(len) || approver_member_id`,
+		`"urnetwork-sidecar-v1/attestation-sshsig" || 0x00 || u32be(statement) || u16be(count) || each commit's oid in hex, in order, u16be(len) || oid || u16be(len) || member_id`,
+		`SHA-256("urnetwork-sidecar-v1/model-weights" || 0x00 || u32be(file count) || per file, by path bytes: u16be(len) || path || the file's SHA-256)`,
+	)
+	recordMdRequire(t, "section 4.4", doc.section(t, "4.4"), `SHA-256("urnetwork-sidecar-v1/action-tool" || run_id || u16be(len(tool_use_id)) || tool_use_id)`)
+	recordMdRequire(t, "section 10.1", doc.section(t, "10.1"), `node SHA-256(0x01 || left || right)`)
 }
 
 // Finding: the head and the journal were two durable writes with no order, so a crash left a gap or a reused seq and
@@ -1101,6 +1160,21 @@ func TestRecordMdNormalOperationRaisesNoSignal(t *testing.T) {
 	}
 	chain := doc.row(t, "5.5", "4 chain")
 	recordMdRequire(t, "section 5.5's chain step", chain, "from a writer that deposits held open and alarmed only past ChainGapTimeout (1 h)", "from a writer with no deposit ref on this log")
+
+	// An entry captured before a batch closed and ingested after it sits past that frontier, and waits for the next
+	// batch. A rule by time would alarm on every such deposit.
+	monitor := doc.row(t, "10.2", "monitor")
+	byTime := strings.Contains(monitor, "entry older than a frontier")
+	entryPush, frontierVersion := uint64(9), uint64(7)
+	entryMs, frontierMs := int64(500), int64(1000)
+	alarmed := entryPush <= frontierVersion
+	if byTime {
+		alarmed = entryMs < frontierMs
+	}
+	if alarmed {
+		t.Errorf("a deposit ingested after a batch closed alarms as missing from the tree")
+	}
+	recordMdRequire(t, "section 10.2's monitor row", monitor, "an entry at or below a frontier's version of its stream and not in the tree alarms too")
 }
 
 // Finding: two checks could not be evaluated after GC, so routine expiry raised alarms.
@@ -1119,28 +1193,41 @@ func TestRecordMdChecksHoldAfterExpiry(t *testing.T) {
 	recordMdForbid(t, "section 10.2's monitor row", monitor, "for streams it reads, its own derivation gives the same leaves")
 }
 
-// Finding: ur record cost summed every cost entry, counting a re-opened run twice.
+// Finding: ur record cost summed every cost entry, counting a re-opened run twice. A seq counts one (log, writer)
+// chain, so a run's entries in two logs are no ladder to climb either.
 func TestRecordMdCostCountsARunOnce(t *testing.T) {
 	doc := newRecordMd(t)
-	section := doc.section(t, "13.1")
+	section := recordMdFlat(doc.section(t, "13.1"))
 	type entry struct {
+		log   string
 		runId string
 		seq   uint64
 		total uint64
 	}
-	// Whole-run totals: the second entry follows a re-open and restates the first.
-	entries := []entry{{runId: "a", seq: 1, total: 100}, {runId: "a", seq: 2, total: 150}, {runId: "b", seq: 3, total: 10}}
-	onlyNewest := strings.Contains(recordMdFlat(section), "sums, per run, only the newest `cost` entry by seq")
+	// Whole-run totals: the second entry follows a re-open and restates the first, and the last, once Q-RECORD-6 lets
+	// cost past V, is the same run in T, where its chain stands at a lower seq.
+	entries := []entry{
+		{log: "V", runId: "a", seq: 11, total: 100},
+		{log: "V", runId: "a", seq: 12, total: 150},
+		{log: "V", runId: "b", seq: 13, total: 10},
+		{log: "T", runId: "a", seq: 2, total: 150},
+	}
+	onlyNewest := strings.Contains(section, "sums, per run, only the newest `cost` entry by seq")
+	oneLog := strings.Contains(section, "reads one log, the vault by default")
 	sum := uint64(0)
-	runNewests := map[string]entry{}
+	logRunNewests := map[string]entry{}
 	for _, e := range entries {
+		if oneLog && e.log != "V" {
+			continue
+		}
+		key := e.log + "/" + e.runId
 		if !onlyNewest {
 			sum += e.total
-		} else if held, found := runNewests[e.runId]; !found || e.seq > held.seq {
-			runNewests[e.runId] = e
+		} else if held, found := logRunNewests[key]; !found || e.seq > held.seq {
+			logRunNewests[key] = e
 		}
 	}
-	for _, e := range runNewests {
+	for _, e := range logRunNewests {
 		sum += e.total
 	}
 	if sum != 160 {
@@ -1225,6 +1312,17 @@ func TestRecordMdProjectionMatchesTheIngestedTable(t *testing.T) {
 		}
 	}
 	recordMdForbid(t, "section 7.2", doc.section(t, "7.2"), "each instruction file's name")
+
+	// Keeping hashes in T grows a change entry, and section 13.2's bytes rest on its size.
+	hash := make([]byte, 32)
+	row := recordMdAppendBytes(nil, 2, hash)
+	row = recordMdAppendBytes(row, 3, hash)
+	row = recordMdAppendVarint(row, 4, 0o100644)
+	row = recordMdAppendVarint(row, 5, 3)
+	if byteCount := len(recordMdAppendBytes(nil, 10, row)); 80 < byteCount {
+		t.Errorf("a ChangedPath row in T is %d B, past section 13.2's 80 B a path", byteCount)
+	}
+	recordMdRequire(t, "section 13.2", doc.section(t, "13.2"), "at about 80 B a path")
 	section := doc.section(t, "16.2")
 	recordMdRequire(t, "section 16.2", section, "§16.7's \"instruction files by hash\" and \"a `change` entry with hashes\" bind T's projection", "flag bit 0 is the header's `tainted`")
 }
@@ -1252,15 +1350,31 @@ func TestRecordMdExportClaimsHold(t *testing.T) {
 	section := doc.section(t, "9")
 	recordMdForbid(t, "section 9", section, "No IP address appears", "verify a line with no other file")
 	recordMdRequire(t, "section 9", section,
-		"so neither `ocsf` nor `otel` carries an IP address",
-		"less `relays` and `cidrs`",
+		"so neither `ocsf` nor `otel` carries an IP address the record holds",
 		"verify a line given its writer's public key",
 		"`salt`, `body`, `fields` and `agent_label`",
 	)
-	recordMdRequire(t, "section 9's confirm row", doc.row(t, "9", "confirm"), "--bodies, --follow, --format ocsf and --format otel")
+	// Every field that can hold an address goes, not only the two with the word in their comments: an action's host
+	// and cidrs ride canonical_action, and any tool's output can quote one.
+	_, unmapped, found := strings.Cut(recordMdFlat(section), "`unmapped` carries")
+	if !found {
+		t.Fatal("section 9 does not say what unmapped carries")
+	}
+	unmapped, _, _ = strings.Cut(unmapped, "(I-13)")
+	_, left, found := strings.Cut(unmapped, "never ")
+	if !found {
+		t.Fatalf("unmapped's row leaves nothing out: %q", unmapped)
+	}
+	for _, name := range []string{"prose", "captured bytes", "`canonical_action`", "`relays`", "`cidrs`"} {
+		if !strings.Contains(left, name) {
+			t.Errorf("unmapped does not leave out %s: %q", name, left)
+		}
+	}
+	recordMdRequire(t, "section 9's unmapped row", unmapped, "`otel`'s `recurd.*` attributes are the same set")
+	recordMdRequire(t, "section 9's confirm row", doc.row(t, "9", "confirm"), "--bodies, --format ocsf and --format otel, which carry body data, and --follow")
 	tests := doc.section(t, "20")
 	recordMdForbid(t, "section 20", tests, "no IP appears in any format", "a line verifies from itself")
-	recordMdRequire(t, "section 20", tests, "no IP appears in `ocsf`, `otel` or a plain `jsonl`")
+	recordMdRequire(t, "section 20", tests, "a fixture's relay, route and action addresses appear in neither `ocsf`, `otel` nor a plain `jsonl`")
 }
 
 // Finding: section 18's settings renamed the fields settings_mcp.go holds, dropped three, and left tunables with no
@@ -1295,12 +1409,14 @@ func TestRecordMdSettingsExtendTheBranchStruct(t *testing.T) {
 	}
 	for _, declaration := range file.Decls {
 		general, ok := declaration.(*ast.GenDecl)
-		if !ok || general.Doc == nil {
+		if !ok {
 			continue
 		}
 		for _, spec := range general.Specs {
 			name := spec.(*ast.TypeSpec).Name.Name
-			if strings.HasPrefix(general.Doc.Text(), name) {
+			if general.Doc == nil {
+				t.Errorf("section 18's %s has no doc comment", name)
+			} else if strings.HasPrefix(general.Doc.Text(), name) {
 				t.Errorf("the doc comment on %s repeats its name", name)
 			}
 		}
@@ -1336,6 +1452,15 @@ func TestRecordMdFloorAcceptsKeepForever(t *testing.T) {
 			t.Errorf("keep_days %d, searchable_days %d: refused %v, want %v", c.keepDays, c.searchableDays, refused, c.refused)
 		}
 	}
+
+	// Keeping entries forever must not cap how long they stay searchable at zero days.
+	searchable := doc.row(t, "8", "searchable")
+	bounded := strings.Contains(searchable, "at most keep_days")
+	exempt := strings.Contains(searchable, "where keep_days is not 0")
+	keepDays, searchableDays := int64(0), int64(90)
+	if bounded && !exempt && keepDays < searchableDays {
+		t.Errorf("keep_days %d, which keeps entries forever, refuses searchable_days %d", keepDays, searchableDays)
+	}
 }
 
 // Finding: "a RepoCreate and no later RepoDelete" left a restored repo not live for good.
@@ -1351,4 +1476,154 @@ func TestRecordMdRecordQueryReadsArchived(t *testing.T) {
 	doc := newRecordMd(t)
 	recordMdRequire(t, "section 8's archive row", doc.row(t, "8", "archive"), "with archived true")
 	recordMdRequire(t, "section 5.6", doc.section(t, "5.6"), "untrusted?, archived?, cursor?) -> rows", "archived true adds archived entries")
+}
+
+// Finding beside the review's: section 3 said no record.proto exists, which stopped being true when it landed.
+func TestRecordMdStatesWhatIsBuilt(t *testing.T) {
+	doc := newRecordMd(t)
+	section := doc.section(t, "3")
+	if _, err := os.Stat("protocol/record.proto"); err != nil {
+		t.Fatal(err)
+	}
+	recordMdForbid(t, "section 3", section, "no `record.proto`")
+	recordMdRequire(t, "section 3", section, "`protocol/record.proto` holds §16.8's messages")
+}
+
+// Every section the document cites is one it holds, and every § and id it takes from DESIGN.md is there, so a
+// renumbering here or a renamed item there leaves no rule pointing at nothing.
+func TestRecordMdReferencesResolve(t *testing.T) {
+	doc := newRecordMd(t)
+	flat := recordMdFlat(doc.text)
+	headings := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?m)^#{2,3} (\d+(?:\.\d+)?)[. ]`).FindAllStringSubmatch(doc.text, -1) {
+		headings[match[1]] = true
+	}
+	separator := regexp.MustCompile(`, | and |-`)
+	for _, match := range regexp.MustCompile(`\b[Ss]ections? ((?:\d+(?:\.\d+)?(?:, | and |-)?)+)`).FindAllStringSubmatch(flat, -1) {
+		for _, number := range separator.Split(match[1], -1) {
+			if number != "" && !headings[number] {
+				t.Errorf("RECORD.md cites section %s in %q, and holds none", number, match[0])
+			}
+		}
+	}
+
+	design, err := os.ReadFile("DESIGN.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	designHeadings := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?m)^#{2,4} (\d+(?:\.\d+)?)[. ]`).FindAllSubmatch(design, -1) {
+		designHeadings[string(match[1])] = true
+	}
+	for _, match := range regexp.MustCompile(`(RFC \d+ )?§(\d+(?:\.\d+)?)`).FindAllStringSubmatch(flat, -1) {
+		if match[1] == "" && !designHeadings[match[2]] {
+			t.Errorf("RECORD.md cites §%s, and DESIGN.md holds none", match[2])
+		}
+	}
+	idPattern := regexp.MustCompile(`\b(?:[DRQ]-[A-Z0-9]+-\d+|FS-\d+|FI-\d+|I-\d+|evs-\d+)\b`)
+	designIds := map[string]bool{}
+	for _, id := range idPattern.FindAll(design, -1) {
+		designIds[string(id)] = true
+	}
+	for _, id := range idPattern.FindAllString(flat, -1) {
+		if strings.Contains(id, "-RECORD-") {
+			continue
+		}
+		if !designIds[id] {
+			t.Errorf("RECORD.md cites %s, and DESIGN.md holds none", id)
+		}
+	}
+
+	// Its own ids are defined where each kind of id lives.
+	definitions := map[string]string{
+		"R": `| %s |`,
+		"D": `**%s (proposed).**`,
+		"Q": `**%s.**`,
+	}
+	for _, id := range regexp.MustCompile(`\b[DRQ]-RECORD-\d+\b`).FindAllString(flat, -1) {
+		if !strings.Contains(flat, fmt.Sprintf(definitions[id[:1]], id)) {
+			t.Errorf("RECORD.md cites %s, and defines none", id)
+		}
+	}
+}
+
+// Sections 6.3, 7.2 and 8 each list the kinds, so a kind added to one and missed in another is a kind with no
+// class, or a search text nobody wrote.
+func TestRecordMdRegistryHoldsTogether(t *testing.T) {
+	doc := newRecordMd(t)
+	kinds := doc.registry(t)
+	numberNames := map[int]string{}
+	for _, kind := range kinds {
+		if held, found := numberNames[kind.number]; found {
+			t.Errorf("kinds %s and %s share number %d", held, kind.name, kind.number)
+		}
+		numberNames[kind.number] = kind.name
+		block := (kind.number >= 1 && kind.number <= 15 && (kind.class == "coordination" || kind.class == "announce" || kind.class == "request")) ||
+			(kind.number >= 16 && kind.number <= 47 && (kind.class == "action" || kind.class == "accounting" || kind.class == "log")) ||
+			(kind.number >= 48 && kind.number <= 63 && kind.class == "capture")
+		if !block {
+			t.Errorf("kind %s at %d sits outside section 6.1's block for class %s", kind.name, kind.number, kind.class)
+		}
+	}
+
+	// Section 8's class rows name each kind, and agree with section 6.3's column.
+	classRow := regexp.MustCompile(`^(?:class)? +\d ([a-z]+) +(.*)$`)
+	kindClasses := map[string]string{}
+	class := ""
+	for _, line := range strings.Split(doc.section(t, "8"), "\n") {
+		text := ""
+		if match := classRow.FindStringSubmatch(line); match != nil {
+			class, text = match[1], match[2]
+		} else if class != "" && strings.HasPrefix(line, strings.Repeat(" ", 31)) {
+			text = strings.TrimSpace(line)
+		} else {
+			class = ""
+			continue
+		}
+		listed, _, ended := strings.Cut(text, ":")
+		if !ended {
+			listed, _, ended = strings.Cut(text, "(")
+		}
+		for _, name := range strings.Split(listed, ",") {
+			name = strings.TrimSpace(name)
+			if name == "the approval family" {
+				for _, member := range []string{"approval", "approval_decision", "approval_cancel", "approval_use"} {
+					kindClasses[member] = class
+				}
+			} else if name != "" {
+				kindClasses[name] = class
+			}
+		}
+		if ended {
+			class = ""
+		}
+	}
+	for _, kind := range kinds {
+		if kindClasses[kind.name] != kind.class {
+			t.Errorf("kind %s is class %q in section 6.3 and %q in section 8", kind.name, kind.class, kindClasses[kind.name])
+		}
+	}
+	for name := range kindClasses {
+		if _, found := kinds[name]; !found {
+			t.Errorf("section 8 classes %s, which section 6.3 does not hold", name)
+		}
+	}
+
+	// Section 7.2 gives each kind its text, but those section 7.1 never indexes.
+	indexed := map[string]bool{}
+	for _, line := range strings.Split(doc.section(t, "7.2"), "\n") {
+		cells := strings.Split(strings.Trim(line, "| "), " | ")
+		if len(cells) != 4 {
+			continue
+		}
+		for _, match := range regexp.MustCompile("`([a-z_]+)`").FindAllStringSubmatch(cells[0], -1) {
+			indexed[match[1]] = true
+		}
+	}
+	for _, kind := range kinds {
+		never := kind.class == "capture" || kind.class == "log" || kind.name == "copy"
+		if indexed[kind.name] == never {
+			t.Errorf("kind %s: section 7.2 lists it %v, and section 7.1 never indexes it %v", kind.name, indexed[kind.name], never)
+		}
+	}
 }

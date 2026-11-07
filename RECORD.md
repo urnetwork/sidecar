@@ -6,7 +6,7 @@ DESIGN.md §16.8 provides the record's primitives (X20): signed, chained, sealed
 
 **What this document may not change.** §16.8's `semantics` row binds it: the logs' reader and writer matrix (§8.5's kind defaults), per-entry key slots, the source and tainted labels, and approvals bound by `request_sha256` and `payload_sha256`. It cites those and restates none. Where it and DESIGN.md disagree, DESIGN.md wins. Section 16 lists each place this draft found DESIGN.md silent or inconsistent, as a question raised to the owner or a reading taken.
 
-**Reading it.** `§n` cites DESIGN.md, and "section n" this document. Ids take DESIGN.md's forms: `R-RECORD-n`, `D-RECORD-n`, `Q-RECORD-n`. P5, PM, MK2 and REC are DESIGN.md's source keys: design/pitch5.html, design/product.md, design/market2.md and design/reports/Agent work record gaps and features.md. A figure marked "by inference" is an estimate until §22.8 measures it. A passage marked *Pending Q-RECORD-n* states the recommended answer to an open question, and a feature that hangs on one stays off until the owner answers; section 16.1's table says where each such gate is enforced.
+**Reading it.** `§n` cites DESIGN.md, and "section n" this document. Ids take DESIGN.md's forms: `R-RECORD-n`, `D-RECORD-n`, `Q-RECORD-n`. P5, PM, MK2 and REC are DESIGN.md's source keys: design/pitch5.html, design/product.md, design/market2.md and design/reports/Agent work record gaps and features.md. A figure marked "by inference" is an estimate until §22.8 measures it. A passage marked *Pending Q-RECORD-n* states the recommended answer to an open question, and a feature that hangs on one stays off until the owner answers; section 16.1's table says where each such gate is enforced. A `plan-` name is a question another track's plan raised, filed as section 16.1's are.
 
 ## Contents
 
@@ -67,7 +67,7 @@ Not here: an eval or trace product (PM:47); compliance mappings and a team's own
 
 ## 3. What exists today
 
-None of the record is built: no `record.proto` and no `record_*` file exists. DESIGN.md leaves these hooks here:
+None of the record's behavior is built. At this draft `protocol/record.proto` holds §16.8's messages and none of this document's kinds, class numbers or bodies, and nothing in the root implements them. DESIGN.md leaves these hooks here:
 
 | Hook | Where DESIGN.md leaves it | Section |
 |---|---|---|
@@ -244,11 +244,11 @@ entry file    the RecordEntry bytes, sealed as any record-class file (§11.6), u
               not touch, so headers and chains still verify after erasure (§16.8)
 stream path   e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>, n a stream's own counter from 1, each part in decimal,
               sealed and tokenized like any path (§11.6, §16.8): 2,048 entries to a leaf directory and 2,048 such
-              directories to the level above, each row under 64 B, so each table stays within §16.8's 256 KiB, and at
-              most 3,584 of those under e/ (§11.7's bound), about 15 billion entries, so no stream reaches 409
-              DIRECTORY_FULL; in a stream that holds no ingested entry, every directory stream among them, n equals
-              the header's seq, which is how §16.11's DecisionRef names a path; the ref's name and the text of ids in
-              paths wait on plan-RECORD-stream-names
+              directories to the level above, each name under 64 B and so each row about 128 B, which keeps each
+              table within §16.8's 256 KiB, and at most 3,584 of those under e/ (§11.7's bound), about 15 billion
+              entries, so no stream reaches 409 DIRECTORY_FULL; in a stream that holds no ingested entry, every
+              directory stream among them, n equals the header's seq, which is how §16.11's DecisionRef names a path;
+              the ref's name and the text of ids in paths wait on plan-RECORD-stream-names
 ```
 
 ### 5.3 Writing
@@ -740,8 +740,9 @@ documents   V: one run card per run; in personal mode each claim, handoff, ask, 
             R: each entry except class log
             never: raw kinds (§16.12's "Later", once §22.8 measures it), copy, class log
 row         §11.14's row: doc kind record for an entry, derived for a run card; flag bit 0 the header's tainted;
-            time the header's time_millis in seconds; started and expires 0 for an entry; locator entry/ and the
-            entry_id in lowercase hex, never a stream path, which differs between two ingesters' copies
+            time the header's time_millis in seconds; started and expires 0 for an entry; locator the stream path,
+            which a hit opens in its ref (§11.14's SearchHit), so two ingesters' copies of an entry are two
+            documents, each under its own ref and doc_key
 fields      4 title, 5 text; 6 the kind's registry name, or for an unknown kind kind-<number>; 7 writer sidecar_id,
             8 agent_id and 10 run_id in lowercase hex; 9 agent label and 11 session ids (space-joined) from the
             run's first context entry in this log, empty if none; 12-14 by section 7.3 and 7.4; 15 empty
@@ -753,9 +754,9 @@ caps        each display field <= 256 B cut on a code point, its flag bit set, a
             indexed whole, up to the body's own cap, and displays its first 256 B
 filters     SearchFilters.kinds carries numbers; a reader maps them to field 6's names, and a number it does not
             know matches nothing and is named in coverage
-determinism a row and its text are functions of the entry and its run's first context entry, so a rebuild writes
-            the same bytes (§11.14); this section is record extractor 1, named in each index file's header, and
-            any change to it is a new extractor id and a rebuild
+determinism a row and its text are functions of the entry, its copy's path and its run's first context entry, so a
+            rebuild writes the same bytes (§11.14); this section is record extractor 1, named in each index file's
+            header, and any change to it is a new extractor id and a rebuild
 trust       §16.10's rule, from the row's writer and tainted bit; §16.11 narrows it in D
 ```
 
@@ -866,7 +867,7 @@ keep_days     0 keeps entries until a person erases them; else entries of the cl
               their push time (section 5.5), which evs bounds (§11.14's entry row), never time_millis, which a
               writer asserts, so two ingesters' copies of an entry expire together, on the earlier push
 searchable    0 is no limit; else §16.10 masks older documents at query time, and they stay readable by id (FS-76);
-              at most keep_days
+              at most keep_days, where keep_days is not 0
 archive       true: past keep_days an entry is archived, not expired: its key stays, default views and search leave
               it out, and record_query reads it by entry or with archived true; false: it expires
 newest        a log's policy for a class is the newest retention entry for it, by section 5.5's newest row, from a
@@ -892,9 +893,9 @@ ur record erase --log l --entry id... --reason r                                
 
 **What an erasure leaves.** The header stays: kind, ids, time, source, tainted and the commitment, readable by the log's readers (§16.8). A leaf and any `checkpoint` naming it stay. A commitment whose salt is gone links to nothing (REC:219-223). Expiry adds BASE and GC, after which the entry file is gone as well, and its push statement and leaf remain.
 
-**Who erases.** Only `admin` on the log (§11.12): V's owner, T's and R's repo admins, D's admins and runner (§16.11). An author cannot erase a T entry: a member asks an admin. An erasure names entries in one log, and §11.12's closure covers an entry's own representations, never its twin or `copy` in another log, so taking a run's facts out of V and T is an erasure in each. `ur record erase` runs §16.8's erasure and writes the `erasure` entry, reason 1 or 3, source `approver`. Erasure cannot be undone, so, like `ur directory erase` (§16.11) and a history drop (D-MCP-32), a person does it: the command lists what it will destroy and signs only once confirmed on /dev/tty or in an app's UI (§5.8), no MCP tool reaches it, and a command with a harness process as its ancestor is refused, so a prompt-injected agent's shell cannot run it. It refuses a class 7 entry, which lasts as long as the log. Only expiry, under a policy a person signed, erases with no person at the keys.
+**Who erases.** Only `admin` on the log (§11.12): V's owner, T's and R's repo admins, D's admins and runner (§16.11). An author cannot erase a T entry: a member asks an admin. An erasure names entries in one log, and §11.12's closure covers an entry's own representations, never its twin or `copy` in another log, so taking a run's facts out of V and T is an erasure in each. `ur record erase` runs §16.8's erasure and writes the `erasure` entry, reason 1 or 3, source `approver`. Erasure cannot be undone, so, like `ur directory erase` (§16.11) and a history drop (D-MCP-32), a person does it: the command lists what it will destroy and signs only once confirmed on /dev/tty or in an app's UI (§5.8), no MCP tool reaches it, and a command with a harness process as its ancestor is refused, so a prompt-injected agent's shell cannot run it. It refuses a class 7 entry, which lasts as long as the log. A `ur record retention set` that shortens a class's life takes the same refusal, since its next expiry pass erases those entries with no further act. Only expiry, under a policy a person signed, erases with no person at the keys.
 
-**Every copy.** An entry's copies are representations of it, so an erasure reaches them all (owner decision 61; REC:221). The eraser reads every stream and deposit ref of the log to its head first, then names in one ERASE each copy's `(key_slot_id, key_index)` (section 5.4's `twice`) and any unconsumed deposit's slot holding the entry, which §11.12's closure row asks for. That slot's key opens a whole batch, so the eraser first ingests the deposit, step 6 refusing the erased entry, and its CONSUME deletes the slot; an ERASE names the slot itself only where ingest cannot run, such as at the storage limit, and the batch's other entries then read as a gap. An ingester's push can still race that read, so ingest refuses an erased entry (section 5.4's step 6), and a log admin's daemon that later reads a live copy of an entry an erasure names ERASEs that copy's row under the same `erasure_id`, at its next sync, with no time limit. A reader that holds the ERASE treats every copy as erased, whichever row it named.
+**Every copy.** An entry's copies are representations of it, so an erasure reaches them all (owner decision 61; REC:221). The eraser reads every stream and deposit ref of the log to its head first, then names in one ERASE each copy's `(key_slot_id, key_index)` (section 5.4's `twice`) and any unconsumed deposit's slot holding the entry, which §11.12's closure row asks for. That slot's key opens a whole batch, so the eraser first ingests the deposit, step 6 refusing the erased entry, and its CONSUME deletes the slot; an ERASE names the slot itself only where ingest cannot run, such as at the storage limit, and the batch's other entries then read as a gap. An ingester's push can still race that read, so ingest refuses an erased entry (section 5.4's step 6), and a log admin's daemon that later reads a live copy of an entry an erasure names ERASEs that copy's row under the same `erasure_id`, at its next sync, with no time limit. A reader that holds the ERASE treats every copy as erased, whichever row it named. Where search indexes the entry each copy is its own document (section 7.1), so the erasure's CUT lists each.
 
 **Run cards and packets.** An erased entry leaves its run card at the next re-projection (§16.8). A packet can no longer open it (§16.8's `disclosure` row), though a packet already sent stays out of reach, as every copy does.
 
@@ -909,10 +910,10 @@ ur record export --log l [--since t] [--until t] [--run id] [--kind k,...] [--bo
 
 ```text
 who         a reader of the log, a person's command; no MCP tool exports, and §16.5's catalog is unchanged
-confirm     --bodies, --follow, --format ocsf and --format otel, which all carry body data, only for a command
-            confirmed on /dev/tty or in an app's UI (§5.8); such a command with a harness process as its ancestor
-            first taints each such run, as §16.10's cli rule does; a plain jsonl export holds header fields alone, no
-            text, so it needs neither
+confirm     --bodies, --format ocsf and --format otel, which carry body data, and --follow, a job that outlives the
+            command, only for a command confirmed on /dev/tty or in an app's UI (§5.8); such a command with a harness
+            process as its ancestor first taints each such run, as §16.10's cli rule does; a plain jsonl export holds
+            header fields alone, no text, so it needs neither
 receipt     a reader that is not a writer of an owner-bound log deposits read receipts first, purpose 3, under
             D-MCP-18's budget; a receipt that cannot land stops the export
 record      write-ahead, before the first line is written: a writer of the log commits a disclosure entry with act 3
@@ -939,7 +940,7 @@ copies      an exported line is a copy beyond recall (§11.12's residual); a lat
 
 **`ur evs export`** of a log keeps §11.12's plain-git form and counts as `ur record export --bodies`: on every log, V, D, T and R alike, the `who`, `confirm`, `receipt`, `record` and `copies` rows above bind it, its `disclosure` entry saying format 4 and bodies true. This document fixes only the blob: each entry's file holds its canonical line with bodies, so a clone reads without a sidecar (R-RECORD-12). An erased entry's file holds the stub. Slot rows are never exported.
 
-**`ocsf`** is for SIEMs: OCSF 1.3.0, one event a line, pinned again at M6's entry. Every event sets `metadata.uid` to the entry id, `metadata.version` to `1.3.0`, `metadata.product` to name `recURd` and vendor `URnetwork`, `time`, `severity_id` 1 (3 for `admission_alarm`, the recovery alarms and a `coverage` with gaps), `cloud.provider` `urnetwork`, `osint` empty, and `type_uid` as class_uid × 100 + activity_id. `actor.user.uid` is the member or sponsor, `actor.session.uid` the run, and `src_endpoint.uid` the writer's `sidecar_id`. `unmapped` carries `kind`, `source`, `tainted`, `action`, `leaf` and the body's `fields`, less `relays` and `cidrs`, so neither `ocsf` nor `otel` carries an IP address (I-13). A `jsonl` export with `--bodies` does, in `fields` and `body`, because `reach` and `route` bodies hold relays' and routes' addresses and `body` must verify, and its confirmation says so.
+**`ocsf`** is for SIEMs: OCSF 1.3.0, one event a line, pinned again at M6's entry. Every event sets `metadata.uid` to the entry id, `metadata.version` to `1.3.0`, `metadata.product` to name `recURd` and vendor `URnetwork`, `time`, `severity_id` 1 (3 for `admission_alarm`, the recovery alarms and a `coverage` with gaps), `cloud.provider` `urnetwork`, `osint` empty, and `type_uid` as class_uid × 100 + activity_id. `actor.user.uid` is the member or sponsor, `actor.session.uid` the run, and `src_endpoint.uid` the writer's `sidecar_id`. `unmapped` carries `kind`, `source`, `tainted`, `action`, `leaf` and, of the body's `fields`, its numbers, booleans, ids, hashes and identifier strings, never prose, captured bytes, `canonical_action`, `relays` or `cidrs`, and `otel`'s `recurd.*` attributes are the same set, so neither `ocsf` nor `otel` carries an IP address the record holds (I-13); an identifier can still spell one, as a branch name can (§16.11's residual). A `jsonl` export with `--bodies` does carry them, in `fields` and `body`, because `reach`, `route` and `approval` bodies hold relays', routes' and actions' addresses, captured bytes can hold any text, and `body` must verify, and its confirmation says so.
 
 | Kind | OCSF class (category) | activity_id |
 |---|---|---|
@@ -1055,7 +1056,9 @@ monitor     every reader of the log, at each sync: batch is the last + 1; first_
             entries it still holds, its own derivation gives the same leaves in the same places; a leaf no held entry
             backs is no miss, since an entry file goes at expiry: it reads expired once a committed BASE removed a
             path at or below its batch's frontier for that stream, else lost; a miss alarms, naming the batch; an
-            entry older than a frontier and not in the tree alarms too
+            entry at or below a frontier's version of its stream and not in the tree alarms too, a position and never a
+            time, since an ingested entry's time_millis can long precede its push; while Q-RECORD-1 is open, a batch
+            whose frontier names more than one stream is ignored with an alarm
 lost        after a site loss, checkpoint entries re-seed verbatim (D-MCP-10), and a leaf with no entry and no such
             BASE shows as lost
 ```
@@ -1133,8 +1136,10 @@ checkpoint  a packet needs a checkpoint covering each entry; disclose asks for o
             and refuses on a log whose verifiable log is off, a multi-stream log among them while Q-RECORD-1 is open
 content     a T entry's ContentRef opens only with an Opening from the author: ur record open on the author's consented
             device, which writes its own disclosure entry in the vault; admins cannot make one (§8.5)
-record      write-ahead: the disclosure entry commits in the log before the file is written, and an act that cannot
-            land is refused; a reader that is not a writer of an owner-bound log deposits a read receipt, purpose 4
+record      write-ahead, by section 9's record row, before the file is written: a writer of the log commits the
+            disclosure entry, with act 1 or 2; a reader that deposits more than receipts deposits one and holds evs's
+            200; a receipt-only reader files none, since ingest takes only read from it, and deposits read receipts,
+            purpose 4, which stand as the record; an act that cannot land is refused
 erased      an erased entry goes as a header alone, showing it existed and is gone
 no keys     a packet holds salts and bodies of what it opens, never an entry key, slot row or log key
 ```
@@ -1273,11 +1278,11 @@ T           Pending Q-RECORD-6: I-20 keeps model calls in the vault, while P5:84
 ur record cost [--log l] [--since t] [--until t] [--by project|model|month] [--map file] [--format text|csv|jsonl]
 ```
 
-`ur record cost` sums, per run, only the newest `cost` entry by seq in its writer's chain, among those the device reads, since a re-opened run writes a newer entry of whole-run totals. `--map` is a local file of `project,client` lines, which gives P5:845's per-client view with nothing new in any log. There is no `--by member` and no ranking of people (MK2:774). With the recommended answer to Q-RECORD-6, a group holding fewer than 5 members shows as `other`, a minimum group size that REC:259 says may narrow works-council exposure and that needs legal review. Admins hold the entries regardless, so this shapes the tool and is no privacy control.
+`ur record cost` reads one log, the vault by default, and sums, per run, only the newest `cost` entry by seq in its writer's chain, since a re-opened run writes a newer entry of whole-run totals and a seq counts one (log, writer) chain. `--map` is a local file of `project,client` lines, which gives P5:845's per-client view with nothing new in any log. There is no `--by member` and no ranking of people (MK2:774). With the recommended answer to Q-RECORD-6, a group holding fewer than 5 members shows as `other`, a minimum group size that REC:259 says may narrow works-council exposure and that needs legal review. Admins hold the entries regardless, so this shapes the tool and is no privacy control.
 
 ### 13.2 What the record costs
 
-Record bytes count toward `storage` and reads toward the transfer balance (§20.6; §16.7), and agents themselves are never metered (P5:849). All figures are by inference, on §16.11's model of 10 agent runs a member-day and 5 working days in 7, until §22.8 measures them. A run writes about 20 T entries (a context, 6 changes, 8 permissions, 3 of the approval family, a coverage and a restore or route) of about 1 KiB each, Padmé included.
+Record bytes count toward `storage` and reads toward the transfer balance (§20.6; §16.7), and agents themselves are never metered (P5:849). All figures are by inference, on §16.11's model of 10 agent runs a member-day and 5 working days in 7, until §22.8 measures them. A run writes about 20 T entries (a context, 6 changes, 8 permissions, 3 of the approval family, a coverage and a restore or route) of about 1 KiB each, Padmé included, a `change` of more than a few paths running larger, at about 80 B a path (section 6.4's hashes).
 
 ```text
                                     5 members   150         500         2,000 (Team limit)
@@ -1340,7 +1345,7 @@ deposit, ingest, CONSUME pushes     850         25,500      85,000      340,000
 
 **D-RECORD-9 (proposed).** The verifiable log is an RFC 9162 tree over §16.8's leaves, in batches that `checkpoint` entries hold, with C2SP checkpoints signed by a log key and cosigned by customer-chosen witnesses, each note in the log before any witness sees it. *Why:* no format change and no server role; a leaf outlives its entry; witnesses speak an existing protocol; a successor must be able to extend every note a witness holds (Pending Q-RECORD-1, Q-RECORD-8).
 
-**D-RECORD-10 (proposed).** A packet opens whole bodies, a person builds it, never through MCP or under a harness, and a `disclosure` entry commits first. `ur record verify` needs nothing else. *Why:* §16.8's packet row; I-8's spirit, since a packet leaves the team; R-RECORD-8.
+**D-RECORD-10 (proposed).** A packet opens whole bodies, a person builds it, never through MCP or under a harness, and its record lands first: a `disclosure` entry, or a receipt-only reader's read receipts. `ur record verify` needs nothing else. *Why:* §16.8's packet row; I-8's spirit, since a packet leaves the team; R-RECORD-8.
 
 **D-RECORD-11 (proposed).** A model receipt is a `reach` entry naming a `model` manifest, each field labeled declared, reported or measured, plus harness-reported `model_call` entries. No software evidence is labeled attested. *Why:* D-CTX-5; P5:779's evidence levels; improvements4.md:64's point that no engine serves a weights digest and that software receipts must not pass as hardware evidence.
 
@@ -1378,7 +1383,7 @@ What stays off until each is answered, and what enforces it:
 
 | Question | Stays off | Enforced at |
 |---|---|---|
-| Q-RECORD-1 | the verifiable log and packets on a log with more than one stream | `ur record log on` refuses; step 1 of section 10.2 stops a log that gains a stream; `ur record disclose` refuses with no covering checkpoint |
+| Q-RECORD-1 | the verifiable log and packets on a log with more than one stream | `ur record log on` refuses; step 1 of section 10.2 stops a log that gains a stream; readers ignore a batch over more than one stream; `ur record disclose` refuses with no covering checkpoint |
 | Q-RECORD-2 | freezing `evidence_sha256`'s bytes for channel presence | `record.proto`'s spec at M3's entry, which section 20 holds to the answer |
 | Q-RECORD-3 | a team record's `RepoCreate` | no daemon files one, so a network routes as personal (section 4.2) |
 | Q-RECORD-4 | `ledger_scope`, and any write to an R log but a log admin's own | `ur record ledger set` refuses, and a daemon ignores any `ledger_scope` it reads |
@@ -1409,10 +1414,11 @@ Each is one reading of text that does not settle the point, changing no D- item,
 16. A search row's flag bit 0 is the header's `tainted`, not §11.14's "the push's provenance", which an ingested entry's push cannot give, since it is the ingester's and format 1 carries no such bit (§11.6).
 17. §5.4's `key_changed` covers a generation's rotation and a key's or recovery binding's registration, revocation or rebind; `Suspend`, `Unsuspend` and `OwnerConfirm` raise no §5.4 event, so they write no `membership` entry, and the authorization log keeps them.
 18. An ingested entry's right is judged at its deposit's push pin by the ingester and at the header's `policy_version` by readers, since §16.8 and §11.8 give an entry in an ingester's stream no link to that push.
-19. A session resumed after §16.6's retention deleted its run file is §16.6's missing file: tainted, on the same `run_id`.
+19. A session resumed after §16.6's retention deleted its run file is §16.6's missing file: tainted, on the same `run_id`. A session with no row that reports earlier context starts tainted too, the closed reading of §16.6's "a new run starts untainted", since its harness still holds whatever it read.
 20. `harness_ok`'s typed-command branch has no hook event, so its `evidence_sha256` cites a `hook_event` the daemon writes for the confirmation.
 21. A deposit ref's entries sit flat under their random ids, as §11.6 gives them no other path.
 22. "A person" for `ur record erase` follows `ur directory erase`'s signing row (§16.11) and D-MCP-32, which §16.6's refusal list states only for directory items and drops.
+23. §16.8's "into each affected log" reads, for a member's vault, as what §8.5's matrix lets in: M's own devices mirror a statement there, an admin's device never does, and a member removed whole has no entry of that removal in its vault, only in T.
 
 ## 17. Departures from the product sources
 
@@ -1446,6 +1452,7 @@ type RecordWriter interface {
 	Append(draft *RecordDraft) ([]*RecordEntryRef, error)
 }
 
+// One entry to write. Its zero value seals tainted, section 5.3's closed reading.
 type RecordDraft struct {
 	Kind       RecordKind
 	Source     RecordSource
@@ -1543,8 +1550,8 @@ Gates are §23.8's: `record.proto`'s spec at M3's entry, its bytes at M3's exit 
 - **Search (M10):** a rebuild of each kind's row and of both run cards gives equal bytes; a release, a handoff and a run end fold to section 7.3's states; an erasure re-projects a card (FS-80).
 - **Retention (M6):** class 7 survives an expiry pass and BASE; a backdated `time_millis` does not extend an entry's life; two admins' policies a year apart resolving to the later whatever their ids; `keep_days` 0 accepted on T and 364 refused.
 - **Log (M6):** a batch rebuilt by a second reader equals the first; a crash at each step, a witness at each error code, and a successor checkpointer sign no second root at one size; every note a witness holds found in the log after a crash at each step; a successor's note extending it; a witness without the successor's key answering 403, left out and named by `ur record log status`; a second entry for one batch kept once; a second stream stopping the log at step 1 while Q-RECORD-1 is open; `--witness` refused while Q-RECORD-8 is open; the leaf list survives its entries' expiry, raising no alarm on a later reader; a tampered batch alarms.
-- **Packet (M6):** `ur record verify` passes a good packet offline and fails on each altered byte class: note, path, header, salt, body, decision, `sshsig`; a packet spanning a key rotation verifying under both keys and failing under one; a `disclosure` that cannot land refuses the file; a command under a harness process is refused.
-- **Exports (M6):** a line verifies given its writer's key; an erased entry is a stub; a plain line holds no body field; no IP appears in `ocsf`, `otel` or a plain `jsonl`; a receipt that cannot land stops the export; a receipt-only reader's export files only receipts; `ur evs export` of T taints a harness ancestor's run and writes its `disclosure` first.
+- **Packet (M6):** `ur record verify` passes a good packet offline and fails on each altered byte class: note, path, header, salt, body, decision, `sshsig`; a packet spanning a key rotation verifying under both keys and failing under one; a `disclosure` that cannot land refuses the file; a receipt-only reader's packet filing only receipts; a command under a harness process is refused.
+- **Exports (M6):** a line verifies given its writer's key; an erased entry is a stub; a plain line holds no body field; a fixture's relay, route and action addresses appear in neither `ocsf`, `otel` nor a plain `jsonl`; a receipt that cannot land stops the export; a receipt-only reader's export files only receipts; `ur evs export` of T taints a harness ancestor's run and writes its `disclosure` first.
 
 **Vectors.** Computed for this draft, for implementers to check their first build against. `h0`, `h1` and `h2` stand for `Signed.body` bytes.
 
