@@ -17,6 +17,7 @@
 package check
 
 import (
+	"bytes"
 	"debug/buildinfo"
 	"go/ast"
 	"go/build/constraint"
@@ -148,21 +149,56 @@ func (self *repository) legHookFileFindings(t testing.TB) []string {
 			if _, ours := repositoryRelative(listed.ImportPath); !ours {
 				continue
 			}
-			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
-				file, known := bySourcePath[filepath.Join(listed.Dir, goFile)]
-				if !known {
-					// the walks skip testdata and the documents, but an import does not
-					findings = append(findings, findingf("%s links %s in %s, which no source rule read", leg.name, goFile, listed.ImportPath))
-					continue
-				}
-				if file.constraint == nil {
-					continue
-				}
-				for _, tag := range unshippableTags {
-					if answersToTag(file.constraint, tag, false) {
-						findings = append(findings, findingf("%s links %s in %s, which answers to %s", leg.name, goFile, listed.ImportPath, tag))
-					}
-				}
+			findings = append(findings, self.linkedFileFindings(t, leg.name, listed, bySourcePath)...)
+		}
+	}
+	return findings
+}
+
+// One package of ours a leg links, file by file, against what the source walks read. A module of
+// this repository that the leg takes at a tag comes from the module cache, as the root and smtpproof
+// do for cli and mlsinterop on a release branch once sidecar_cli_release_edit drops their replaces.
+// The tag holds this checkout's tree (run.sh's sidecar_release_publish proves it), so such a file is
+// read as its checkout twin, and held to that twin's bytes.
+func (self *repository) linkedFileFindings(t testing.TB, legName string, listed *listedPackage, bySourcePath map[string]*sourceFile) []string {
+	t.Helper()
+	directory := listed.Dir
+	fromCache := false
+	if listed.Module != nil && listed.Module.Dir != "" {
+		for _, module := range self.modules(t) {
+			if module.basePath != firstPartyBase(listed.Module.Path) || module.directory == listed.Module.Dir {
+				continue
+			}
+			relative, err := filepath.Rel(listed.Module.Dir, listed.Dir)
+			if err != nil || !filepath.IsLocal(relative) {
+				return []string{findingf("%s links %s from %s, which is outside its module at %s", legName, listed.ImportPath, listed.Dir, listed.Module.Dir)}
+			}
+			directory = filepath.Join(module.directory, relative)
+			fromCache = true
+		}
+	}
+	findings := []string{}
+	for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
+		file, known := bySourcePath[filepath.Join(directory, goFile)]
+		if !known {
+			// the walks skip testdata and the documents, but an import does not
+			findings = append(findings, findingf("%s links %s in %s, which no source rule read", legName, goFile, listed.ImportPath))
+			continue
+		}
+		if fromCache {
+			linked, linkedErr := os.ReadFile(filepath.Join(listed.Dir, goFile))
+			checkedOut, checkedOutErr := os.ReadFile(file.path)
+			if linkedErr != nil || checkedOutErr != nil || !bytes.Equal(linked, checkedOut) {
+				findings = append(findings, findingf("%s links %s in %s from %s, which is not this checkout's %s", legName, goFile, listed.ImportPath, listed.Dir, self.displayPath(file.path)))
+				continue
+			}
+		}
+		if file.constraint == nil {
+			continue
+		}
+		for _, tag := range unshippableTags {
+			if answersToTag(file.constraint, tag, false) {
+				findings = append(findings, findingf("%s links %s in %s, which answers to %s", legName, goFile, listed.ImportPath, tag))
 			}
 		}
 	}

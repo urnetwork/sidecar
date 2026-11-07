@@ -434,3 +434,78 @@ func TestHygieneFailsOnABinaryItCannotRead(t *testing.T) {
 	fixture := newFixture(t)
 	wantFindings(t, releaseBinaryFindings(filepath.Join(fixture.directory, "sidecar", "go.mod")), "go.mod")
 }
+
+// The root's protocol package as a leg lists it on a release branch, where cli takes the root at
+// its tag: a copy in a module cache of the checkout's files, after edit when one is given.
+func plantedTaggedCopy(t *testing.T, repository *repository, edit func(directory string)) *listedPackage {
+	t.Helper()
+	cache := filepath.Join(t.TempDir(), "modcache", "root@v2026.11.6-1234567")
+	directory := filepath.Join(cache, "protocol")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(repository.moduleDirectory, "protocol", "doc.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "doc.go"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if edit != nil {
+		edit(directory)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := &listedPackage{ImportPath: sidecarBasePath + releaseSuffix + "/protocol", Name: "protocol", Dir: directory}
+	listed.Module = &struct {
+		Path    string
+		Version string
+		Dir     string
+	}{Path: sidecarBasePath + releaseSuffix, Version: "v2026.11.6-1234567", Dir: cache}
+	for _, entry := range entries {
+		listed.GoFiles = append(listed.GoFiles, entry.Name())
+	}
+	return listed
+}
+
+// What the source walks read, by path, as the rule keys it.
+func sourceFilesByPath(t *testing.T, repository *repository) map[string]*sourceFile {
+	t.Helper()
+	bySourcePath := map[string]*sourceFile{}
+	for _, file := range repository.sourceFiles(t) {
+		bySourcePath[file.path] = file
+	}
+	return bySourcePath
+}
+
+// The tag holds this checkout's tree, so a copy of it reads as the checkout and passes.
+func TestHygieneReadsATaggedCopyOfThisRepositoryAsTheCheckout(t *testing.T) {
+	repository := newFixture(t).open()
+	listed := plantedTaggedCopy(t, repository, nil)
+	failFindings(t, "hygiene", repository.linkedFileFindings(t, "cli linux/amd64", listed, sourceFilesByPath(t, repository)))
+}
+
+// A copy that is not the checkout's tree is a leg linking what no rule here read.
+func TestHygieneFailsOnATaggedCopyThatIsNotTheCheckouts(t *testing.T) {
+	repository := newFixture(t).open()
+	listed := plantedTaggedCopy(t, repository, func(directory string) {
+		if err := os.WriteFile(filepath.Join(directory, "doc.go"), []byte("//go:build "+sidecarTestHooksTag+" || !"+sidecarTestHooksTag+"\n\npackage protocol\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	wantFindings(t, repository.linkedFileFindings(t, "cli linux/amd64", listed, sourceFilesByPath(t, repository)),
+		"cli linux/amd64 links doc.go in @module@/v2026/protocol from "+listed.Dir+", which is not this checkout's protocol/doc.go")
+}
+
+func TestHygieneFailsOnATaggedCopyHoldingAFileTheCheckoutLacks(t *testing.T) {
+	repository := newFixture(t).open()
+	listed := plantedTaggedCopy(t, repository, func(directory string) {
+		if err := os.WriteFile(filepath.Join(directory, "extra.go"), []byte("package protocol\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	wantFindings(t, repository.linkedFileFindings(t, "cli linux/amd64", listed, sourceFilesByPath(t, repository)),
+		"cli linux/amd64 links extra.go in @module@/v2026/protocol, which no source rule read")
+}
