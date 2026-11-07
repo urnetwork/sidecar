@@ -445,6 +445,14 @@ func TestRefusedBannerAnswers554ThenOnlyQuit(t *testing.T) {
 	expectReceive(t, dialog, "QUIT\r\n", "221 2.0.0 Bye\r\n", mxedgeservice.DialogStepQuit)
 }
 
+// Found by FuzzMxDialog. Only a well-formed QUIT does anything in a refused session, so a malformed one
+// is one more command out of sequence, and not a syntax error the session answers as if it were open.
+func TestRefusedSessionTakesOnlyAWellFormedQuit(t *testing.T) {
+	dialog := mxedgeservice.NewDialog(testSettings(), nil, true)
+	expectReceive(t, dialog, "QUIT now\r\n", "503 5.5.1 Bad sequence of commands\r\n", mxedgeservice.DialogStepRead)
+	expectReceive(t, dialog, "QUIT \t \r\n", "221 2.0.0 Bye\r\n", mxedgeservice.DialogStepQuit)
+}
+
 func TestRefusedSessionKeepsTheDialogsLimits(t *testing.T) {
 	dialog := mxedgeservice.NewDialog(testSettings(), nil, true)
 	expectReceive(t, dialog, strings.Repeat("N", mxedgeservice.DialogMaxLineByteCount+1), "", mxedgeservice.DialogStepClose)

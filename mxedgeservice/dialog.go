@@ -88,7 +88,7 @@ type mxDialog struct {
 	// Whether a plaintext transaction gets 451 rather than 530. It may do I/O, and Receive asks it
 	// at most once a session, the first time a sender tries one.
 	askRecent func() bool
-	// Answered 554 at the banner, so only QUIT does anything (RFC 5321 §3.1).
+	// Answered 554 at the banner, so only a well-formed QUIT does anything (RFC 5321 §3.1).
 	bannerRefused bool
 
 	recentAsked bool
@@ -154,7 +154,7 @@ func (self *mxDialog) Receive(data []byte) (reply []byte, step mxDialogStep) {
 		self.lineStart += lineByteCount + len("\r\n")
 		verb, argument := mxDialogVerbOf(line)
 
-		if self.bannerRefused && verb != mxDialogVerbQuit {
+		if self.bannerRefused && (verb != mxDialogVerbQuit || !mxDialogNoArgument(argument)) {
 			reply = append(reply, mxReplyBadSequence...)
 			continue
 		}
