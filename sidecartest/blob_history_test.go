@@ -313,8 +313,8 @@ func TestHistoryCheckHoldsALateReadToWhatItSaw(t *testing.T) {
 	}
 }
 
-func listEntry(listedEtags map[string]string) *BlobHistoryEntry {
-	return &BlobHistoryEntry{Op: BlobHistoryList, Key: "head/", ListedEtags: listedEtags, Outcome: BlobOutcomeOk}
+func listEntry(listedKeyEtags map[string]string) *BlobHistoryEntry {
+	return &BlobHistoryEntry{Op: BlobHistoryList, Key: "head/", ListedKeyEtags: listedKeyEtags, Outcome: BlobOutcomeOk}
 }
 
 // A LIST reads every key it covers, as a GET would (FI-30: as every request on its key sees it).
@@ -392,13 +392,13 @@ func TestRecorderKeepsWhatAListAnswered(t *testing.T) {
 	}
 	history := fixture.recorder.History()
 	list := history[len(history)-1]
-	if list.Op != BlobHistoryList || len(list.ListedEtags) != 1 || list.ListedEtags["head/b/_"] == "" || list.ListTruncated {
-		t.Fatalf("list entry %s %v", list, list.ListedEtags)
+	if list.Op != BlobHistoryList || len(list.ListedKeyEtags) != 1 || list.ListedKeyEtags["head/b/_"] == "" || list.ListTruncated {
+		t.Fatalf("list entry %s %v", list, list.ListedKeyEtags)
 	}
 	if err := CheckBlobHistory(history, nil); err != nil {
 		t.Fatal(err)
 	}
-	list.ListedEtags = map[string]string{"head/a/_": history[0].WriteEtag, "head/b/_": list.ListedEtags["head/b/_"]}
+	list.ListedKeyEtags = map[string]string{"head/a/_": history[0].WriteEtag, "head/b/_": list.ListedKeyEtags["head/b/_"]}
 	if err := CheckBlobHistory(history, nil); err == nil {
 		t.Error("a LIST showing a deleted key passed")
 	}

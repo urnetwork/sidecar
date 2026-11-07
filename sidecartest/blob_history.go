@@ -76,9 +76,9 @@ type BlobHistoryEntry struct {
 	Outcome  BlobOutcome
 	// A LIST: Key is its prefix, and it covers the keys after StartAfter, up to the last it returned
 	// when ListTruncated says more follow.
-	StartAfter    string
-	ListedEtags   map[string]string
-	ListTruncated bool
+	StartAfter     string
+	ListedKeyEtags map[string]string
+	ListTruncated  bool
 
 	InvokeSeq uint64
 	// Zero: no answer yet.
@@ -283,14 +283,14 @@ func (self *recordedBlobCluster) List(ctx context.Context, keyPrefix string, sta
 	self.recorder.begin(ctx, entry)
 	entry.StartAfter = startAfter
 	objects, more, err := self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
-	listedEtags := map[string]string{}
+	listedKeyEtags := map[string]string{}
 	for _, object := range objects {
-		listedEtags[object.Key] = object.Etag
+		listedKeyEtags[object.Key] = object.Etag
 	}
 	func() {
 		self.recorder.stateLock.Lock()
 		defer self.recorder.stateLock.Unlock()
-		entry.ListedEtags = listedEtags
+		entry.ListedKeyEtags = listedKeyEtags
 		entry.ListTruncated = more
 	}()
 	self.recorder.end(entry, blobOutcomeOf(err, false), "")
@@ -395,7 +395,7 @@ func (self *BlobHistoryEntry) listedEntries(keys []string) []*BlobHistoryEntry {
 		return nil
 	}
 	last := ""
-	for key := range self.ListedEtags {
+	for key := range self.ListedKeyEtags {
 		last = max(last, key)
 	}
 	entries := []*BlobHistoryEntry{}
@@ -405,8 +405,8 @@ func (self *BlobHistoryEntry) listedEntries(keys []string) []*BlobHistoryEntry {
 		}
 		entry := *self
 		entry.Key = key
-		entry.ListedEtags = nil
-		if etag, listed := self.ListedEtags[key]; listed {
+		entry.ListedKeyEtags = nil
+		if etag, listed := self.ListedKeyEtags[key]; listed {
 			entry.ReadEtag = etag
 		} else {
 			entry.Outcome = BlobOutcomeNotFound
