@@ -344,9 +344,9 @@ All are on §4.7's list. Refused: ORIGO's artifact (no license, and anonymous re
 - §4.7 requires shared modules to match connect, sdk and server. server and sn pin `gnark-crypto` v0.20.1, `bitset` v1.24.4, `go-colorable` v0.1.14 and `go-isatty` v0.0.20, and gnark v0.15.0 requires exactly those. Every v0.16.x raises all four, and v0.16.4 raises `gnark-crypto` to an untagged pseudo-version.
 - gnark v0.15.0's `std/math/uints` is unsound. It trusts lookup results to be in range, but the log-derivative table constrains only a packed value, so a malicious prover can answer `Xor(1,0) = 1/256`, which packs to the same key as the true entry. v0.16.0 added the range check; the comment in `uints/bytes.go` there explains the collision. `std/permutation/sha2` and `std/hash/sha2` are built on `uints`, so **gnark v0.15.0's SHA-256 gadget must not be used.** Its source is byte-identical to v0.16.4's, which hides this.
 
-So this module pins v0.15.0 and **imports nothing from gnark's `std/`**. `TestCircuitsImportNoGnarkStd` enforces that, and `TestCircuitsUseNoCommitments` that no compiled circuit carries a commitment. The gadgets here are plain R1CS over boolean wires. That costs constraints (AES most: 11.2) and buys two things: the v0.15.0 bug cannot reach the relation, and the circuits have no lookups, so no BSB22 commitment, which leaves vanilla Groth16 with three-element proofs and the simple ZK argument of 10.2.
+So this module pins v0.15.0 and **imports nothing from gnark's `std/`**. `TestCircuitsImportNoGnarkStd` enforces that, and `TestCircuitsUseNoCommitments` that no compiled circuit carries a commitment; `setup.go` also refuses one. The one `std` package still reached is `std/math/bits`, which the R1CS builder itself calls for `api.ToBinary`; it has no lookup, and between v0.15.0 and v0.16.4 it only gained an optional bound. The gadgets here are plain R1CS over boolean wires. That costs constraints (AES most: 11.2) and buys two things: the v0.15.0 bug cannot reach the relation, and the circuits have no lookups, so no BSB22 commitment, which leaves vanilla Groth16 with three-element proofs and the simple ZK argument of 10.2.
 
-Between v0.15.0 and v0.16.4, the packages this module links differ only by `uints`-style `std` changes it does not use, a prover `Accelerator` refactor, a `Lookup2` optimization and a commitment index fix it cannot reach; `backend/groth16/bn254/verify.go` is unchanged. `gnark-crypto` v0.21's security fixes touch EdDSA, shplonk, fflonk, KZG's ceremony and twisted Edwards curves, none on this path. The KZG one would matter to a PLONK route.
+Between v0.15.0 and v0.16.4, the packages this module links differ only by `uints`-style `std` changes it does not use, a prover `Accelerator` refactor, a `Lookup2` optimization and a commitment index fix it cannot reach; `backend/groth16/bn254/verify.go` is unchanged. That comparison was by `diff` over those packages, and a reviewer should repeat it at each bump. `gnark-crypto` v0.21's security fixes touch EdDSA, shplonk, fflonk, KZG's ceremony and twisted Edwards curves, none on this path. The KZG one would matter to a PLONK route.
 
 Moving past v0.15.0 is a coordinated bump across server and sn, and it would still leave lookups subject to 10.2's review.
 
@@ -354,7 +354,7 @@ Moving past v0.15.0 is a coordinated bump across server and sn, and it would sti
 
 Groth16 is perfectly zero knowledge for every well-formed CRS: given the CRS trapdoor a simulator outputs proofs distributed identically to real ones, and the proof's `r`, `s` are uniform. A malicious edge that ran the setup holds that trapdoor. Holding it gains nothing, since the simulated and real distributions are the same.
 
-A malformed CRS is different: a key element off its intended value can make a proof depend on the witness in a way the edge can test. So the prover must not take keys on trust. **A prover host uses a proving key only if `VerifyPhase1` and `VerifyPhase2` over the setup transcript, against the circuit it compiled from its own source, produced that key.** Those checks establish that the key is of the form Groth16's analysis needs, for whatever trapdoor. This is subversion zero knowledge by verification, in the sense of Bellare, Fuchsbauer and Scafuro (Asiacrypt 2016) and Fuchsbauer (PKC 2018).
+A malformed CRS is different: a key element off its intended value can make a proof depend on the witness in a way the edge can test. So the prover must not take keys on trust. **A prover host uses a proving key only if `verifySetup`, which runs gnark's `VerifyPhase1` and `VerifyPhase2` over the setup transcript against the circuit it compiled from its own source, produced that key.** Those checks establish that the key is of the form Groth16's analysis needs, for whatever trapdoor. This is subversion zero knowledge by verification, in the sense of Bellare, Fuchsbauer and Scafuro (Asiacrypt 2016) and Fuchsbauer (PKC 2018). A transcript travels as bytes and is decoded for each verification: gnark's checks assume what its `ReadFrom` establishes, group membership among them, and they modify the last contribution they are given.
 
 Three consequences:
 
@@ -420,7 +420,23 @@ Levers, none taken: a hiding commitment to the keys, proven once, so that later 
 
 Kept honest as the module grows. Anything not listed as built fails closed.
 
-*(Updated at the end of each work unit; see the repository history.)*
+| Piece | State |
+|---|---|
+| `tls_*.go`: the TLS client, 1.3 and 1.2, HelloRetryRequest, CertificateRequest | Built. Checked against Go's `crypto/tls` server, whose key log confirms HS and the master secret regenerate its own secrets |
+| `relation.go`: Z1-Z9 over plain Go values | Built, both versions and modes. Each check has mutated witnesses that it alone refuses |
+| `edge.go`: E1-E3 | Built, as one state machine per connection. Each check has refusals of its own, over replayed real connections |
+| `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving |
+| `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z4-Z9 differentially against `relation.go` |
+| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests, and a whole send under real proofs in `TestMeasureWholeSend` |
+| `setup.go`: the ceremony and its verification | Built and tested at small size. Never run at production size |
+| `smtp_proof.go` in the root: the injection seam | Built. `cli/` and server do not inject yet: `SmtpSender` and `smtpedgeservice` do not exist |
+
+Not built, each failing closed as stated:
+
+- **Keys.** Nothing loads keys into a `Prover` or `Verifier`, so both refuse every part. See section 14.
+- **Late server records in a later DATA part.** Its shapes hold no server blocks, so a late ticket during a DATA body makes the part unprovable and the send fails. π3 handles one.
+- **Larger capacities.** Shapes hold a 4 KiB header block, about 10 recipients and a 2 KiB DATA part. Anything larger finds no shape and fails. `smtp_recipients_per_message` allows 100.
+- **Scripted MXs for the rest of FS-31.** The scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand. Those cases are tested at the relation and gate, not end to end.
 
 ## 13. Readings taken
 
@@ -439,11 +455,18 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 11. **π1's `mode` is 0** and not part of its statement. §14.5 says `mode` is fixed from π2 on.
 12. **A padded 1.3 server record is unprovable** (Z7). No text requires padded server records, and the census will show whether any MX sends them.
 13. **Whether a server record is a ticket stays private** (Z7). Making it public would be cheaper, and would add a value §2.8 smtp-2 does not list.
+14. **The declared count follows `plan-SMTP-preamble-byte-count`'s option 1** (`prover.go`). A count only DATA can meet means DATA. A count only BDAT can meet, at an MX that needs DATA, stops before MAIL and names the count for a new connection.
+15. **The fixed signature leads with `h=`** (Z5.5), since DKIM's tag order is free and a constant prefix makes "exactly one" a sum.
+16. **A chunk short of octet n at QUIT is a record cut** (E3). §14.7 names only a body past octet n, but Z6 requires n exactly and an honest sidecar never falls short.
+17. **Server replies stay parsed only where a part covers them.** A keyword split across records does not count as CHUNKING, so such an MX falls to DATA. That costs coverage, never soundness.
 
 ## 14. Open
 
-Raised to the owner (`.stack/questions/`, one file each): how SHTS reaches the edge, since no message in §14.5 has a field for it; where keys live and who hosts them, given their size; and what to do about the m5.large bar, given 11.3.
+Raised to the owner (`.stack/questions/`, one file each): `smtpproof-start-shts-wire` (no message in §14.5 has a field for SHTS), `smtpproof-start-key-distribution` (where keys live, given their size and count) and `smtpproof-start-z1-reproof-cost` (what to do about the m5.large bar, given 11.3). `plan-SMTP-preamble-byte-count` and `plan-SMTP-data-connection-lifetime` carry two more that touch this module.
 
-Not started or not finished, in the order to take them: see section 12 and the track report.
+Evidence M9 still needs, none of which this draft provides (§22.10):
 
-Evidence M9 still needs, none of which this draft provides (§22.10): two non-authors' written soundness argument; a checker of the public relation written apart from the prover tree; D-SMTP-16's speed, coverage and interop runs on its named hardware and census MXs; FS-31 and FS-123 on T2 and T3.
+- two non-authors' written soundness argument;
+- a checker of the public relation written apart from the prover tree;
+- D-SMTP-16's speed, coverage and interop runs on its named hardware and census MXs;
+- FS-31 and FS-123 on T2 and T3.
