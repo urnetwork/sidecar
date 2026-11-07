@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// The test binary reads basic credentials, which the mlswg's vectors and every test group use.
+// Production never does: TestMlsProductionRefusesBasicCredentials.
+func init() {
+	mlsTestReadsBasicCredentials = true
+}
+
 // Leaf bytes round-trip for each source, and the source decides which fields travel.
 func TestMlsLeafNodeRoundTrip(t *testing.T) {
 	suite := mlsSuite
@@ -89,6 +95,32 @@ func TestMlsCredentialRefusesEveryOtherType(t *testing.T) {
 		if _, err := mlsMarshal(&mlsCredential{credentialType: credentialType}); !errors.Is(err, errMlsRefused) {
 			t.Errorf("type %#x encoded: %v", credentialType, err)
 		}
+	}
+}
+
+// §10.4 takes 0xF552 alone, so outside the test binary basic is refused like any other type, when
+// read and when written, and a KeyPackage carrying it does not decode.
+func TestMlsProductionRefusesBasicCredentials(t *testing.T) {
+	credential := &mlsCredential{credentialType: mlsCredentialTypeBasic, identity: []byte("anyone")}
+	encoded, err := mlsMarshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedKeyPackage, err := mlsMarshal(mlsNewTestClient(t, mlsTestSuiteX25519, "client").keyPackage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mlsTestReadsBasicCredentials = false
+	t.Cleanup(func() { mlsTestReadsBasicCredentials = true })
+	if err := mlsUnmarshal(encoded, &mlsCredential{}); !errors.Is(err, errMlsRefused) {
+		t.Errorf("decoded: %v", err)
+	}
+	if _, err := mlsMarshal(credential); !errors.Is(err, errMlsRefused) {
+		t.Errorf("encoded: %v", err)
+	}
+	if err := mlsUnmarshal(encodedKeyPackage, &mlsKeyPackage{}); !errors.Is(err, errMlsRefused) {
+		t.Errorf("a KeyPackage decoded: %v", err)
 	}
 }
 

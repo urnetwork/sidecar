@@ -3,10 +3,11 @@
 // tree, and everything in it is signed, so what is decoded is kept exactly as it arrived.
 //
 // §10.4's subset takes one credential type on the wire, 0xF552, whose encoding M2's entry review
-// specifies (D-KEYS-10). Until then the decoder refuses it like any type it cannot read, and takes
-// only basic, which the mlswg's vectors and tests use. A basic credential is no way in: whether a
-// credential is acceptable is the mlsCredentialValidator's call, and the only production validator
-// there is refuses everything until §7.9's admission check exists.
+// specifies (D-KEYS-10). Until then the decoder refuses it like any type it cannot read. Basic, which
+// the mlswg's vectors and the test groups use, reads only in the test binary, the way suite 0x0001 is
+// built only there, so production refuses it when parsed (D-KEYS-12) and no leaf decodes outside
+// tests yet. Reading is not acceptance either: that is the mlsCredentialValidator's call, and the only
+// production validator there is refuses everything until §7.9's admission check exists.
 
 package sidecar
 
@@ -47,6 +48,10 @@ func mlsRefuseEveryCredential(credential *mlsCredential, signatureKey []byte) er
 	return fmt.Errorf("%w: no admission check exists yet for credential type %#x", errMlsRefused, credential.credentialType)
 }
 
+// Whether basic credentials encode and decode. Production leaves this false. The test binary sets it,
+// and TestMlsProductionCodeReadsNoBasicCredential holds every other file to leaving it alone.
+var mlsTestReadsBasicCredentials bool
+
 // A member's claimed identity (RFC §5.3).
 type mlsCredential struct {
 	credentialType uint16
@@ -57,27 +62,25 @@ type mlsCredential struct {
 // Credential, refusing what decode refuses.
 func (self *mlsCredential) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.credentialType)
-	switch self.credentialType {
-	case mlsCredentialTypeBasic:
+	if self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials {
 		encoder.writeVector(self.identity)
-	default:
-		encoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
+		return
 	}
+	encoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 }
 
-// Any other type is refused: x509 is outside the subset, 0xF552 is not specified yet, and an unknown
-// type's length cannot be known.
+// Every type is refused outside tests: x509 is outside the subset, 0xF552 is not specified yet, basic
+// is the tests' alone, and an unknown type's length cannot be known.
 func (self *mlsCredential) decode(decoder *mlsDecoder) {
 	self.credentialType = decoder.readUint16()
 	if decoder.err != nil {
 		return
 	}
-	switch self.credentialType {
-	case mlsCredentialTypeBasic:
+	if self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials {
 		self.identity = decoder.readVector()
-	default:
-		decoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
+		return
 	}
+	decoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 }
 
 // What a leaf says it supports (RFC §7.2). Unknown values stay, because the list is signed, and mean
