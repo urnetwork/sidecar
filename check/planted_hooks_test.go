@@ -8,6 +8,7 @@ package check
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -100,6 +101,27 @@ func TestHygieneFailsOnALegLinkingAPackagesHookFile(t *testing.T) {
 	wantFindings(t, fixture.open().legHookFileFindings(t),
 		"engines linux/amd64 links testhook_enabled.go in @module@, which answers",
 		"engines linux/amd64 links hooks_on.go in @module@/evsservice, which answers")
+}
+
+// The go command still honors a // +build line in a file with no //go:build line, and this one ships
+// on every linux leg, so the rules refuse to read the tree rather than read the file as unconstrained.
+func TestHygieneFailsOnAPlusBuildLineTheRulesDoNotRead(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64")
+	fixture.write("planted.go", "// +build sidecar_testhooks linux\n\npackage sidecar\n\nfunc planted() {}\n")
+	repository := fixture.open()
+	closure := repository.closure(t, repository.legs[0])
+	rootIndex := slices.IndexFunc(closure, func(listed *listedPackage) bool { return listed.ImportPath == repository.modulePath })
+	if rootIndex < 0 || !slices.Contains(closure[rootIndex].GoFiles, "planted.go") {
+		t.Fatalf("the linux leg does not link planted.go, so this plants nothing")
+	}
+	_, err := repository.sourceFilesOnce()
+	if err == nil || !strings.Contains(err.Error(), "planted.go") || !strings.Contains(err.Error(), "// +build line with no //go:build line") {
+		t.Errorf("the tree read as %v", err)
+	}
+	// with the //go:build line gofmt writes beside it, the hook file rule reads the file and fails it
+	fixture.write("planted.go", "//go:build sidecar_testhooks || linux\n// +build sidecar_testhooks linux\n\npackage sidecar\n\nfunc planted() {}\n")
+	wantFindings(t, fixture.open().legHookFileFindings(t), "root linux/amd64 links planted.go in @module@, which answers to sidecar_testhooks")
 }
 
 // No leg asks for the tag here, and the file still ships: || lets it in.

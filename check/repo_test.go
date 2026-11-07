@@ -404,8 +404,12 @@ func (self *repository) readSourceFiles() ([]*sourceFile, error) {
 }
 
 // The expression on a file's //go:build line, or nil. Only a comment above the package clause
-// counts, as the go command reads it.
+// counts, as the go command reads it. The go command still honors // +build lines in a file with no
+// //go:build line, and these rules read none, so such a file is refused rather than read as
+// unconstrained: `// +build sidecar_testhooks linux` would put a file in every linux release with
+// no rule seeing it answer to the tag. gofmt writes the //go:build line beside them.
 func fileConstraint(syntax *ast.File) (constraint.Expr, error) {
+	plusBuild := false
 	for _, group := range syntax.Comments {
 		if group.Pos() >= syntax.Package {
 			break
@@ -414,7 +418,13 @@ func fileConstraint(syntax *ast.File) (constraint.Expr, error) {
 			if constraint.IsGoBuild(comment.Text) {
 				return constraint.Parse(comment.Text)
 			}
+			if constraint.IsPlusBuild(comment.Text) {
+				plusBuild = true
+			}
 		}
+	}
+	if plusBuild {
+		return nil, errors.New("a // +build line with no //go:build line, which the go command honors and these rules do not read; gofmt adds the //go:build line")
 	}
 	return nil, nil
 }

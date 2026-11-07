@@ -276,6 +276,7 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnALegLinkingTheRootHookFile", "TestHygieneFailsOnALegLinkingAPackagesHookFile",
 			"TestHygieneFailsOnAHookFileAnotherConstraintLetsIn", "TestHygieneFailsOnALegLinkingAFileTheRulesSkip",
 			"TestHygieneFailsOnACgoFileAnsweringToTheTag", "TestHygieneFailsOnALegLinkingACgoFileTheRulesSkip",
+			"TestHygieneFailsOnAPlusBuildLineTheRulesDoNotRead",
 		},
 	},
 	{
