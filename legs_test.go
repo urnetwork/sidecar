@@ -275,6 +275,7 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestAuthChainVectors",
 		"TestMlsVectorFilesMatchUpstream",
 		"TestMlsCryptoBasicsVectors",
 		"TestMlsKeyScheduleVectors",
