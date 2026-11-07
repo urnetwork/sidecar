@@ -1217,6 +1217,37 @@ func TestEvsGitDeltaIsDeterministic(t *testing.T) {
 	}
 }
 
+// Counts what is read of it, which in an apply is what the copies take from the base.
+type evsGitCountingSource struct {
+	*bytes.Reader
+	readSize int64
+}
+
+func (self *evsGitCountingSource) ReadAt(buffer []byte, offset int64) (int, error) {
+	readSize, err := self.Reader.ReadAt(buffer, offset)
+	self.readSize += int64(readSize)
+	return readSize, err
+}
+
+// Applies delta to base, checks that it gives target, and answers how many of target's bytes it
+// inserts rather than copies: all that apply writes, less what it reads of the base.
+func evsGitTestInsertedSize(t testing.TB, base []byte, target []byte, delta []byte) int64 {
+	t.Helper()
+	source := &evsGitCountingSource{Reader: bytes.NewReader(base)}
+	result := &bytes.Buffer{}
+	size, err := EvsGitDeltaApply(source, bytes.NewReader(delta), int64(len(target)), result, DefaultEvsGitDeltaSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(result.Bytes(), target) {
+		t.Fatal("result differs")
+	}
+	return size - source.readSize
+}
+
+// One changed byte costs one inserted byte. Every block of a 1 MiB base is indexed, and the change is
+// the first byte of one, so the next match is a block on, and the copy found there grows back over the
+// 15 B before it to the change.
 func TestEvsGitDeltaOfOneChangedByteIsSmall(t *testing.T) {
 	random := rand.New(rand.NewPCG(9, 10))
 	base := make([]byte, 1024*1024)
@@ -1226,21 +1257,21 @@ func TestEvsGitDeltaOfOneChangedByteIsSmall(t *testing.T) {
 	target := bytes.Clone(base)
 	target[len(target)/2] ^= 1
 	delta := evsGitTestEncode(t, base, target, DefaultEvsGitDeltaSettings())
-	// 16 copies of 64 KiB and a few bytes around the change
-	if 256 < len(delta) {
+	if insertedSize := evsGitTestInsertedSize(t, base, target, delta); insertedSize != 1 {
+		t.Errorf("%d B inserted", insertedSize)
+	}
+	// the 6 B of sizes, 16 copies of 1 B to 3 B but for the 5 B one ending the change's window, and the
+	// 2 B insert: 43 B
+	if 48 < len(delta) {
 		t.Errorf("%d B", len(delta))
-	}
-	result, err := evsGitTestApply(base, delta)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(result, target) {
-		t.Error("result differs")
 	}
 }
 
-// A base past what the index covers block by block is sampled, and its copies still reach back to the
-// start of each common run.
+// A base past what the index covers block by block is sampled, here a block every 128 B of 8 MiB, and
+// its copies still reach back to the start of each common run, so the delta inserts no byte the base
+// holds where the target needs it. Each run starts off the sampling stride, 77 B, 1 B and 127 B past
+// it, so a copy found at a run's first sampled block grows back to the run's start over up to 127 B,
+// and so does each copy that picks a run up again where a window ended inside it.
 func TestEvsGitDeltaOfASampledBaseIsSmall(t *testing.T) {
 	random := rand.New(rand.NewPCG(11, 12))
 	base := make([]byte, 8*1024*1024)
@@ -1249,17 +1280,16 @@ func TestEvsGitDeltaOfASampledBaseIsSmall(t *testing.T) {
 	}
 	// a stretch cut out, one inserted and two halves swapped
 	half := len(base) / 2
-	target := slices.Concat(base[half:half+1024*1024], []byte("inserted"), base[:half-4096], base[half+1024*1024+4096:])
+	inserted := []byte("inserted")
+	target := slices.Concat(base[half+77:half+1024*1024], inserted, base[1:half-4096], base[half+1024*1024+4096+127:])
 	delta := evsGitTestEncode(t, base, target, DefaultEvsGitDeltaSettings())
-	if 4096 < len(delta) {
+	if insertedSize := evsGitTestInsertedSize(t, base, target, delta); int64(len(inserted)) < insertedSize {
+		t.Errorf("%d B inserted, where the base lacks %d B", insertedSize, len(inserted))
+	}
+	// the sizes, copies of at most 5 B for each 64 KiB and a few more where runs and windows end, and
+	// the insert
+	if 1024 < len(delta) {
 		t.Errorf("%d B", len(delta))
-	}
-	result, err := evsGitTestApply(base, delta)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(result, target) {
-		t.Error("result differs")
 	}
 }
 
