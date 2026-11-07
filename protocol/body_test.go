@@ -25,6 +25,8 @@ const testFillDepth = 5
 // Above no real field number, so an encoding holding it is always unknown.
 const testUnknownFieldNumber = protowire.Number(9999)
 
+// Every message this package's binary registers in sidecar's proto package, sorted, so a new one joins each target
+// below by being declared.
 func testBodyTypes(t testing.TB) []protoreflect.MessageType {
 	types := []protoreflect.MessageType{}
 	protoregistry.GlobalTypes.RangeMessages(func(messageType protoreflect.MessageType) bool {
@@ -101,12 +103,14 @@ func testFill(message protoreflect.Message, depth int) {
 	}
 }
 
+// A message of this type with every field set, down to testFillDepth.
 func testFilled(messageType protoreflect.MessageType) proto.Message {
 	message := messageType.New()
 	testFill(message, testFillDepth)
 	return message.Interface()
 }
 
+// The one canonical form every encoding of a body comes back to.
 func testEncode(t testing.TB, message proto.Message) []byte {
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
 	if err != nil {
@@ -185,6 +189,7 @@ func testUnpacked(t testing.TB, descriptor protoreflect.MessageDescriptor, encod
 	return rewritten
 }
 
+// A whole field no message declares, tag and value.
 func testUnknownField() []byte {
 	return protowire.AppendVarint(protowire.AppendTag(nil, testUnknownFieldNumber, protowire.VarintType), 7)
 }

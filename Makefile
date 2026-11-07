@@ -16,8 +16,9 @@ endif
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
 # cached pass would hide a new violation. check/ runs from its own directory, go test's local mode,
 # so a passing run still prints what it leaned on. RELEASE_BINARIES names built artifacts for the
-# rules to read as well. This needs the module proxy and vuln.go.dev for govulncheck, and protoc
-# once a .proto exists, and fails without them: a rule that did not run has not passed.
+# rules to read as well. This needs the module proxy and vuln.go.dev for govulncheck, protoc once a
+# .proto exists, and node, which the sidecar_http leg's tests run in, and fails without them: a rule
+# that did not run has not passed.
 check:
 	@set -e; for module in $(modules); do \
 		echo "go test in $$module"; \

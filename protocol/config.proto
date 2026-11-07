@@ -10,6 +10,9 @@
 // Where §7.9 seals part of a record to the config's current generation, only ids show and the rest rides
 // a sealed field, which opens to the *Body or list message beside it (§2.8's api-7). §7.9 names the seal
 // but not its bytes, so the field stays opaque here.
+//
+// A statement a recovery key signs, a SidecarAdmit, AuthorityProposal or AuthorityCosign, carries that key in
+// Signed.key_id, since RecoveryBindBody seals it from api and rows keep only its hash (§7.9's Recovery).
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -140,7 +143,7 @@ message DelegationRevoke {
 }
 
 enum TeamMailMode {
-  TEAM_MAIL_MODE_UNSPECIFIED = 0;
+  TEAM_MAIL_MODE_UNSPECIFIED = 0;      // no choice made: §7.9 writes no default, see ServiceSettings
   TEAM_MAIL_MODE_INDEXERS = 1;         // owner decisions 58, 150; §15.5, §15.6
   TEAM_MAIL_MODE_MEMBER_SCOPES = 2;
 }
@@ -170,7 +173,9 @@ message ServiceDirectorySettings {
   DirectoryWorkersMode workers = 2;
 }
 
-// An owner or admin. A zero value means the default each comment gives.
+// An owner or admin. A zero value means the default each comment gives, but for team_mail, whose default no
+// section writes: there zero is no choice made, which grants nothing, so an undesignated tag:mail device
+// registers no listener as it would under indexers (D-MAIL-15).
 message ServiceSettings {
   TeamMailMode team_mail = 1;
   uint32 stale_leaf_days = 2;          // 90 (§10.9's stale Removes)

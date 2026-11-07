@@ -50,6 +50,7 @@ func NewId() Id {
 	return processIdGenerator.next(uint64(time.Now().UnixMilli()), draw)
 }
 
+// The id after the last one, with wallMs as the clock and draw as its entropy.
 func (self *idGenerator) next(wallMs uint64, draw [idDrawByteCount]byte) Id {
 	var id Id
 	func() {
@@ -82,6 +83,7 @@ func (self *idGenerator) next(wallMs uint64, draw [idDrawByteCount]byte) Id {
 	return id
 }
 
+// Exactly 16 bytes, copied, or an error.
 func IdFromBytes(idBytes []byte) (Id, error) {
 	if len(idBytes) != len(Id{}) {
 		return Id{}, errInvalidId
@@ -110,18 +112,22 @@ func ParseId(idStr string) (Id, error) {
 	return id, nil
 }
 
+// A copy, since the receiver is one, so a write to it leaves the id alone.
 func (self Id) Bytes() []byte {
 	return self[0:16]
 }
 
+// Whether this id sorts before b, by creation time within one source.
 func (self Id) LessThan(b Id) bool {
 	return self.Cmp(b) < 0
 }
 
+// -1, 0 or 1, by byte, as bytes.Compare gives.
 func (self Id) Cmp(b Id) int {
 	return bytes.Compare(self[:], b[:])
 }
 
+// Lowercase hex in the 8-4-4-4-12 form, connect's and the database's uuid.
 func (self Id) String() string {
 	var encoded [36]byte
 	hex.Encode(encoded[0:8], self[0:4])
@@ -142,7 +148,9 @@ func (self Id) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + self.String() + `"`), nil
 }
 
-// Refuses JSON null as connect does, so a missing id never reads as the zero id.
+// Takes a quoted id and refuses everything else, JSON null included, as connect does. That covers
+// what is sent, not what is left out: a field absent from the JSON never reaches this, so it keeps its
+// value, the zero id in a fresh struct, with no error. A reader of a required id compares it to Id{}.
 func (self *Id) UnmarshalJSON(src []byte) error {
 	if len(src) != 38 || src[0] != '"' || src[37] != '"' {
 		return errInvalidId

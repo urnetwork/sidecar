@@ -9,8 +9,9 @@ option go_package = "github.com/urnetwork/sidecar/protocol/bridge";
 // signed bytes: "urnetwork-sidecar-v1/" || purpose || 0x00 || u32be(type) || body
 message Signed {
   bytes body = 1;
-  bytes signer_id = 2;
-  bytes key_id = 3;
+  bytes signer_id = 2;            // a recovery key's statement (§7.9): the member_id it stands for
+  bytes key_id = 3;               // a recovery key's statement: the Ed25519 public key itself, which rows
+                                  // hold only as a hash, so the statement carries it (VerifyRecoverySigned)
   bytes signature = 4;
   WebAuthnEvidence webauthn = 5;  // a presence key's evidence: for Signed's own signature by a
                                   // webauthn-es256 key, or, key_id set, §7.9's presence

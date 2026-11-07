@@ -4,6 +4,11 @@
 // Defaults here are the desktop daemon's. A field's comment gives a mobile value after a semicolon
 // where the design sets one, for the host that applies it.
 //
+// A ByteCount is in bytes and a time.Duration is a span of time. Every number in these structs must
+// be positive: validate refuses anything else, so a zero is never unlimited or off, and no implementer
+// has to decide what one means. A field tagged settings:"zero" gives zero the meaning its comment
+// states, and refuses a negative value all the same.
+//
 // Format values that every reader applies alike are constants beside their formats, not settings
 // (connect/CODESTYLE.md:145). settings_connect.go and settings_http.go declare the connect settings
 // per leg, settings_protocol.go §6's, and settings_mcp.go §16's.
@@ -14,44 +19,57 @@ import (
 	"time"
 )
 
+// What a host adjusts and hands to NewSidecar, which refuses what validate refuses.
 type SidecarSettings struct {
-	// The instance name (§5.9): [a-z0-9][a-z0-9-]{0,31}. Default "default". A host reads UR_INSTANCE
-	// or --instance and sets it here.
+	// The instance name (§5.9): [a-z0-9][a-z0-9-]{0,31}, which names a directory, so anything else is
+	// refused. Default "default". A host reads UR_INSTANCE or --instance and sets it here.
 	Instance string
-	// Service urls, with no trailing slash. None has a default yet, so each host sets its
-	// environment's, and empty means the service is not configured: a dial of it fails. §5.4 has
-	// EvsUrl, GkmUrl, SocketsUrl and DnsUrl default from §19.4, which waits on whether a production
-	// hostname may sit in code.
-	ApiUrl      string
+	// Service urls, absolute, with no trailing slash, query or fragment. None has a default yet, so
+	// each host sets its environment's, and validate refuses one left empty. A dial would not catch
+	// it: in the page Worker fetch resolves an empty url against the Worker's own origin, which
+	// would send the bearer token to the page's host (api_transport.go). §5.4 has EvsUrl, GkmUrl,
+	// SocketsUrl and DnsUrl default from §19.4, which waits on whether a production hostname may sit
+	// in code.
+	ApiUrl string
+	// ws or wss, read only on connect legs. Every other url is http or https.
 	PlatformUrl string
 	AuthUrl     string
 	EvsUrl      string
 	GkmUrl      string
 	SocketsUrl  string
 	DnsUrl      string
-	// What a client reports as its version. Default Version, which is empty in a development build.
+	// What a client reports as its version. Default Version, which is empty in a development build,
+	// and empty here reports none.
 	AppVersion string
 
 	// Client generations, empty on the sidecar_http leg.
-	Connect          *SidecarConnectSettings
+	Connect *SidecarConnectSettings
+	// §6.6's bounds.
 	ProtocolSettings *SidecarProtocolSettings
 	// sdk's schedule (sdk/device_token_manager.go:20-27, :266-275), which D-CORE-8's refresher
 	// repeats, since sdk is not importable here.
 	TokenRefreshSettings *SidecarTokenRefreshSettings
-	KeychainSettings     *SidecarKeychainSettings
-	LocalSettings        *SidecarLocalSettings
-	Mcp                  *SidecarMcpSettings
-	Ingest               *SidecarIngestSettings
-	Record               *SidecarRecordSettings
-	Search               *SidecarSearchSettings
-	Directory            *SidecarDirectorySettings
+	// The pass's cost and limits, and auto-lock (§5.9).
+	KeychainSettings *SidecarKeychainSettings
+	// The daemon's sockets, idle exit and request bound (§5.8).
+	LocalSettings *SidecarLocalSettings
+	// §16.4's bounds on an MCP session.
+	Mcp *SidecarMcpSettings
+	// §16.7's capture bounds.
+	Ingest *SidecarIngestSettings
+	// §16.8's record defaults.
+	Record *SidecarRecordSettings
+	// §16.10's limits, 5.9's index cache and §11.14's remote search.
+	Search *SidecarSearchSettings
+	// §16.11's team directory.
+	Directory *SidecarDirectorySettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
-	// 256, the design sets no number. Non-positive drops everything.
+	// 256, a reading: the design sets no number, so this is four of §6.6's 64-message peer queues.
 	ComponentQueueMessageCount int
-	// Bytes one component's queue holds: 1 MiB, 256 envelopes of the 4,080 B maximum in their 4 KiB
-	// pool class. Non-positive drops everything.
+	// Bytes one component's queue holds: 1 MiB, a reading, ComponentQueueMessageCount envelopes of the
+	// 4,080 B maximum in their 4 KiB pool class.
 	ComponentQueueByteCount int
 	// The process's whole budget, §6's process-wide reassembly, idempotency and credit caps and
 	// Search.MemoryByteCount inside it: 128 MiB on a desktop or CLI daemon (§18.4), which a host
@@ -59,147 +77,162 @@ type SidecarSettings struct {
 	// 16 MiB added. A cap that would pass it answers RESOURCE_EXHAUSTED.
 	MemoryBudgetByteCount int64
 	// The most stream data one StreamData message carries: 4,000 B, the format's limit (§6.5). A
-	// positive value above it is refused by peers.
+	// value above it is refused by peers.
 	StreamChunkByteCount int
 
-	// nil: connect's default logger, glog, on connect legs (adapted, log_connect.go); no logging at
-	// all on the sidecar_http leg.
+	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
+	// logging at all on the sidecar_http leg.
 	Log Logger
 }
 
 // sdk's refresh schedule (§5.4). A token refreshes at a point of its lifetime drawn from the window
 // by its jti, so clients spread out and one token's point never moves.
 type SidecarTokenRefreshSettings struct {
-	// The window's start, as a fraction of the token's lifetime: 0.4.
+	// The window's start, as a fraction of the token's lifetime: 0.4, sdk's, which leaves a client
+	// more than half a token's life to retry in.
 	RefreshWindowStart float64
-	// The window's end: 0.5, the half-life, which no token's point passes. At or below
-	// RefreshWindowStart every token refreshes at the window's start.
+	// The window's end, as a fraction of the token's lifetime: 0.5, the half-life, which no token's
+	// point passes. At or below RefreshWindowStart every token refreshes at the window's start.
 	RefreshWindowEnd float64
 	// The least time from one attempt to the next scheduled one, so a server-set lifetime can never
-	// make a hot loop: 5 min. Non-positive is for tests only.
+	// make a hot loop: 5 min.
 	MinRefreshTimeout time.Duration
 	// After a failed refresh the next attempt waits a uniform draw from [0, this): 15 min, which
-	// spreads clients that failed together. Non-positive is for tests only.
+	// spreads clients that failed together.
 	RefreshRetryTimeout time.Duration
 }
 
 // The pass's Argon2id cost (§5.9) and the rules around it. Opening a keychain reads the parameters
-// stored beside its wrap, so changing these moves only new wraps.
+// stored beside its wrap, so changing these moves only new wraps. A cost of zero would be a pass with
+// no cost, and an interval of zero a limit that never counts, so these are held as every number is.
 type SidecarKeychainSettings struct {
 	// Argon2id memory: 64 MiB (RFC 9106 §4); 19 MiB on mobile and wasm (OWASP).
 	PassMemoryByteCount int64
-	// Argon2id passes: t=3; 2 on mobile and wasm.
+	// Argon2id passes: t=3 (RFC 9106 §4); 2 on mobile and wasm (OWASP).
 	PassIterationCount int
-	// Argon2id lanes: p=4; 1 on mobile and wasm.
+	// Argon2id lanes: p=4 (RFC 9106 §4); 1 on mobile and wasm (OWASP).
 	PassThreadCount int
-	// A wrong pass is refused past this many attempts in an interval: 5.
+	// A wrong pass is refused past this many attempts in an interval: 5 (§5.4), which bounds guessing
+	// at this device.
 	PassAttemptCount int
-	// That interval: 10 min.
+	// That interval: 10 min (§5.4).
 	PassAttemptInterval time.Duration
-	// Idle time before an unlocked keychain locks. Non-positive never locks, the default: §5.4 names
-	// the setting and no value, and an unattended daemon must keep serving.
-	AutoLockTimeout time.Duration
+	// Idle time before an unlocked keychain locks, dropping U and every R_n from memory: 10 min. §5.4
+	// names the setting and no value, so this is a reading, kept on the side that protects keys until
+	// the owner sets it, and the same bound as IdleExitTimeout. Zero never locks, which a host running
+	// a daemon that must keep serving with no person present sets on purpose.
+	AutoLockTimeout time.Duration `settings:"zero"`
 }
 
-// The daemon's local IPC (§5.8). §5.4 names sockets, idle exit and a request bound without values.
+// The daemon's local IPC (§5.8). §5.4 names sockets, idle exit and a request bound without values, so
+// the numbers here are readings, each with its reason.
 type SidecarLocalSettings struct {
 	// The control socket or pipe. Empty: §5.9's per-platform path for the instance.
 	SocketPath string
 	// A sandboxed desktop app's short-named socket in its app-group container (§5.9). Empty: none.
 	AppGroupSocketPath string
 	// How long an auto-spawned daemon with nothing to serve waits before it exits: 10 min, so a run
-	// of `ur` commands reuses one daemon. Non-positive never exits. A unit-run daemon and one that
-	// mail, sockets, bridge or an indexer keeps busy never idle out (§5.8).
-	IdleExitTimeout time.Duration
+	// of `ur` commands reuses one daemon. Zero never exits. A unit-run daemon and one that mail,
+	// sockets, bridge or an indexer keeps busy never idle out (§5.8).
+	IdleExitTimeout time.Duration `settings:"zero"`
 	// The most one local request may hold: 4 MiB, above §16.7's 1 MiB body once JSON escapes it. A
-	// larger one closes its session. Non-positive refuses every request.
+	// larger one closes its session.
 	RequestByteCount int64
-	// How long a local request may run: 30 s, §16.4's call timeout. Non-positive never times out.
+	// How long a local request may run: 30 s, §16.4's call timeout.
 	RequestTimeout time.Duration
 }
 
 // §16.10's limits, 5.9's cache and §11.14's remote search. A daemon designated for search (§7.9)
 // applies CacheByteCount 16 GiB and MemoryBudgetByteCount 192 MiB (owner decision 175).
 type SidecarSearchSettings struct {
-	// The index cache: 4 GiB. 0 keeps it in memory (ephemeral sidecars).
-	CacheByteCount int64
+	// The index cache on disk, past which all partitions go first: 4 GiB (§5.9). Zero keeps it in
+	// memory, inside MemoryBudgetByteCount, as ephemeral sidecars do.
+	CacheByteCount int64 `settings:"zero"`
 	// Decoded index state, inside MemoryBudgetByteCount: 64 MiB; app and page hosts set §18.4's
 	// smaller working sets.
 	MemoryByteCount int64
-	// 5.9's version-table pages a process, inside MemoryByteCount: 256 KiB.
+	// 5.9's version-table pages a process, inside MemoryByteCount: 256 KiB, four 64 KiB frames.
 	VersionCacheByteCount int64
-	// Sync downloads a day a network: 1 GiB.
+	// Sync downloads a day a network, since each debits the transfer balance: 1 GiB (§16.10).
 	BackgroundByteCount int64
-	// Downloads a "search more" call: 1 GiB.
+	// Downloads a "search more" call, where its page turns partial: 1 GiB (§16.10).
 	MoreByteCount int64
-	// §18.4's mode for all: background (desktops, indexers), on_demand (ephemeral, cloud).
+	// §18.4's mode for all: background (desktops, indexers), wifi_charging (phones, tabs), on_demand
+	// (ephemeral, cloud) or never. Anything else is refused.
 	AllPolicy string
-	// Hints coalesce a repo over this: 1 min.
+	// Hints coalesce a repo over this, so a busy repo costs one sync: 1 min (§16.10).
 	HintCoalesce time.Duration
-	// Idle time before a local or remote cursor goes: 10 min.
+	// Idle time before a local or remote cursor goes: 10 min (§16.10).
 	CursorTimeout time.Duration
-	// At most one forced head refresh a repo in this: 10 min.
+	// At most one forced head refresh a repo in this: 10 min (§16.10).
 	HeadRefreshInterval time.Duration
 	// A reader that is not a writer syncs an owner-bound index at most this often: 15 min (§16.10's
 	// receipts).
 	NonWriterSyncInterval time.Duration
-	// Searches at once a session: 2.
+	// Searches at once a session, inside §16.4's 8 calls in flight: 2. One past this waits up to its
+	// wait_ms, then answers busy (§16.10).
 	SessionSearchCount int
-	// Searches a session may start: 5 a second, burst 10.
+	// Searches a session may start: 5 a second, burst 10. One past this waits as above (§16.10).
 	SessionSearchRate SidecarRate
-	// Open cursors a session, the oldest dropped: 16.
+	// Open cursors a session, the oldest dropped: 16 (§16.10).
 	SessionCursorCount int
-	// Local searches at once: 4.
+	// Local searches at once: 4 (§16.10).
 	DaemonSearchCount int
-	// CPU a page, local or remote: 2 s.
+	// CPU a page, local or remote: 2 s (§16.10).
 	PageCpu time.Duration
-	// Candidates verified a page: 1,000.
+	// Candidates verified a page: 1,000 (§16.10).
 	PageCandidateCount int
-	// Candidates in a partition past which it answers too_broad: 20,000.
+	// Candidates in a partition past which it answers too_broad: 20,000 (§16.10).
 	TooBroadCandidateCount int
-	// MCP results a page: 64 KiB.
+	// MCP results a page: 64 KiB, under §16.4's 256 KiB result limit.
 	PageByteCount int
-	// "on" until the person picks on, own or off (5.9's state).
+	// "on" until the person picks on, own or off (5.9's state). Anything else is refused.
 	RemoteMode string
-	// Unmetered, then metered: 3 s and 5 s without a first page, then the next indexer.
+	// How long a requester waits for a first page before it tries the next indexer: unmetered, then
+	// metered, 3 s and 5 s (§11.14).
 	RemoteTimeout [2]time.Duration
-	// Answer remote searches once designated: true on daemon hosts; false on app hosts.
+	// Answer remote searches once designated: true on daemon hosts; false on app hosts, which never
+	// serve (§11.14).
 	RemoteServe bool
-	// Remote searches computing at once, beside DaemonSearchCount: 4.
+	// Remote searches computing at once, beside DaemonSearchCount: 4 (§11.14).
 	RemoteSearchCount int
-	// Remote searches waiting, each at most RemoteQueueTimeout, else RESOURCE_EXHAUSTED: 16.
+	// Remote searches waiting, each at most RemoteQueueTimeout, else RESOURCE_EXHAUSTED: 16 (§11.14).
 	RemoteQueueCount int
-	// 1 s.
+	// The most a remote search waits in that queue: 1 s (§11.14).
 	RemoteQueueTimeout time.Duration
-	// CPU a minute for all remote work: 30 s.
+	// CPU a minute for all remote work, D-CORE-17's budget: 30 s (§11.14).
 	RemoteCpuPerMinute time.Duration
-	// Open remote cursors, the oldest dropped: 64.
+	// Open remote cursors, the oldest dropped: 64 (§11.14).
 	RemoteCursorCount int
-	// Per requester at an indexer, and per indexer at a requester: 30 a minute, burst 10.
+	// Per requester at an indexer, and per indexer at a requester: 30 a minute, burst 10 (§11.14).
 	RemoteRequesterRate SidecarRate
-	// How long an owner's indexer keeps 5.9's served records: 30 d.
+	// How long an owner's indexer keeps 5.9's served records: 30 d (D-CORE-17).
 	ServedRecordTimeout time.Duration
 }
 
-// Count per Interval, bursting to Burst.
+// Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
+// rate of zero never reads as no limit.
 type SidecarRate struct {
-	Count    int
-	Burst    int
+	// Events an Interval, the long-run rate.
+	Count int
+	// Events at once from an idle start.
+	Burst int
+	// The span Count is over.
 	Interval time.Duration
 }
 
 // §16.11's team directory, in team networks. Its renewal and expiry times are format values that
 // every reader applies alike (§16.11), not settings.
 type SidecarDirectorySettings struct {
-	// While the daemon serves a harness session in the network: 15 min.
+	// How often cards sync while the daemon serves a harness session in the network: 15 min (§16.11).
 	SessionSyncInterval time.Duration
-	// Otherwise: 1 h.
+	// How often they sync otherwise: 1 h (§16.11).
 	IdleSyncInterval time.Duration
-	// A sync at each directory search or view, coalesced: 30 s.
+	// A sync at each directory search or view, coalesced over this: 30 s (§16.11).
 	ViewCoalesce time.Duration
-	// Cards a metered session on phones, which keep cards only while the view is open: 8 MiB.
+	// Cards a metered session on phones, which keep cards only while the view is open: 8 MiB (§16.11).
 	PhoneMeteredByteCount int64
-	// ±this on hourly run renewals: 5 min.
+	// ±this on hourly run renewals, so a team's cards do not renew together: 5 min (§16.11).
 	RenewJitter time.Duration
 }
 
@@ -223,7 +256,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			PassThreadCount:     4,
 			PassAttemptCount:    5,
 			PassAttemptInterval: 10 * time.Minute,
-			AutoLockTimeout:     0,
+			AutoLockTimeout:     10 * time.Minute,
 		},
 		LocalSettings: &SidecarLocalSettings{
 			IdleExitTimeout:  10 * time.Minute,

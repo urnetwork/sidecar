@@ -1,6 +1,8 @@
 // §6.6's subprotocol bounds. Timings and policy sizes are settings; protocol values such as the
 // 4,080 B envelope are constants (D-PROTO-16). Process-wide caps sit inside
-// SidecarSettings.MemoryBudgetByteCount and answer RESOURCE_EXHAUSTED.
+// SidecarSettings.MemoryBudgetByteCount and answer RESOURCE_EXHAUSTED. Every number here must be
+// positive, as settings.go's header says, which holds for the head checks above all: a zero there
+// would read as no witness ever asked for.
 
 package sidecar
 
@@ -8,72 +10,84 @@ import (
 	"time"
 )
 
-// Defaults are the desktop's; a mobile value follows a semicolon.
+// §6.6's table. Defaults are the desktop's; a mobile value follows a semicolon.
 type SidecarProtocolSettings struct {
-	// 10 min, or until the sequence exits; a pair in a §6.10 window keeps it while the window is
-	// open and no 120 s pass without a keepalive.
+	// How long a peer's Hello stands: 10 min, or until the sequence exits; a pair in a §6.10 window
+	// keeps it while the window is open and no 120 s pass without a keepalive.
 	HelloCacheTimeout time.Duration
-	// 60 s: an app host's Ping to an indexer whose §6.10 window is open, while in the foreground,
-	// on a grid from the window's start, under connect's 120 s receive idle.
+	// How often an app host Pings an indexer whose §6.10 window is open, while in the foreground, on
+	// a grid from the window's start: 60 s, under connect's 120 s receive idle.
 	MarkedKeepaliveInterval time.Duration
-	// 15 s. The protocol's maximum is 55 s.
+	// A call's timeout when its caller sets none: 15 s. The protocol's maximum is 55 s, before the 60 s
+	// sequence exit (§6.6).
 	DefaultCallTimeout time.Duration
-	// 64.
+	// Requests one peer may have queued past the inline handler, which answers RESOURCE_EXHAUSTED
+	// past this without waiting: 64.
 	PeerQueueMessageCount int
-	// 256 KiB. The protocol's maximum is 1 MiB.
+	// The largest body reassembled from chunks: 256 KiB. The protocol's maximum is 1 MiB.
 	ReassemblyMaxBodyByteCount int64
-	// 8; 4: two search pages (§11.14) and HeadCheck both ways at one peer.
+	// Bodies reassembling at once from one peer: 8; 4: two search pages (§11.14) and HeadCheck both
+	// ways at one peer.
 	ReassemblyPeerCount int
-	// 2 MiB; 512 KiB.
+	// Bytes reassembling from one peer: 2 MiB; 512 KiB.
 	ReassemblyPeerByteCount int64
-	// 16 MiB; 2 MiB.
+	// Bytes reassembling in the process: 16 MiB; 2 MiB.
 	ReassemblyProcessByteCount int64
-	// 30 s from the last chunk.
+	// How long a partial body waits after its last chunk: 30 s.
 	ReassemblyIdleTimeout time.Duration
-	// 10 min.
+	// How long a mutating call's response stays cached by (source, request_id), so a retry gets it
+	// and nothing runs twice: 10 min.
 	IdempotencyTimeout time.Duration
-	// 256 KiB; 64 KiB.
+	// Cached responses from one peer: 256 KiB; 64 KiB.
 	IdempotencyPeerByteCount int64
-	// 4 MiB; 512 KiB.
+	// Cached responses in the process: 4 MiB; 512 KiB.
 	IdempotencyProcessByteCount int64
-	// 16 KiB.
+	// The largest response cached: 16 KiB. A retry of a larger one gets Error{ALREADY_EXISTS} with a
+	// result_ref (§6.6).
 	IdempotencyMaxResponseByteCount int64
-	// 16 KiB, advertised in Hello.
+	// What a stream may send an acceptor before StreamAccept: 16 KiB, advertised in Hello, and the
+	// value without a Hello, as from edges (§6.7).
 	StreamInitialWindowByteCount int64
-	// 256 KiB; 64 KiB.
+	// The credit a receiver commits before it sends a window, else StreamReject{BUSY}: 256 KiB;
+	// 64 KiB.
 	StreamMinWindowByteCount int64
-	// 1 MiB; 256 KiB.
+	// The most a window grows to while the reader keeps up: 1 MiB; 256 KiB.
 	StreamMaxWindowByteCount int64
-	// 8 MiB; 1 MiB. Edge peers: grows with streams.
+	// Credit across one peer's streams: 8 MiB; 1 MiB. Edge peers: grows with streams, so one slow
+	// visitor cannot stall the rest.
 	StreamPeerCreditByteCount int64
-	// 64 MiB; 8 MiB.
+	// Credit across every stream: 64 MiB; 8 MiB.
 	StreamProcessCreditByteCount int64
-	// 1/8 per stream.
+	// The share of a peer's credit one stream's window may reach: 1/8.
 	StreamMaxPeerCreditFraction float64
-	// 15 s without inbound traffic.
+	// How long open streams go without inbound traffic before a Ping: 15 s.
 	PingTimeout time.Duration
-	// 45 s, before connect's 60 s exit.
+	// How long they go before the peer's streams reset with PEER_TIMEOUT: 45 s, before connect's 60 s
+	// exit.
 	PeerSilenceTimeout time.Duration
-	// 1 h per peer; overdue after 1 h without a consistent result (§6.4).
+	// How often a round of HeadCheck runs: 1 h per peer; overdue after 1 h without a consistent result
+	// (§6.4).
 	HeadCheckInterval time.Duration
-	// 4 per round: up to 2 of other members, the rest own devices and agents (§6.4; owner decision
-	// 129).
+	// Peers a round checks: 4: up to 2 of other members, the rest own devices and agents (§6.4; owner
+	// decision 129).
 	HeadCheckRoundPeerCount int
-	// 10 s per scheduled call; silent own app hosts get a wake (M8).
+	// How long a scheduled HeadCheck call waits: 10 s; silent own app hosts get a wake (M8).
 	HeadCheckTimeout time.Duration
-	// 10 min (2 tries) for api to serve a peer's newer entries, before asking the peer for a
-	// HeadCheckProof.
+	// How long api gets to serve a peer's newer entries, before asking the peer for a HeadCheckProof:
+	// 10 min (2 tries).
 	HeadCheckFetchTimeout time.Duration
-	// 10 min while a revocation this device signed is unwitnessed.
+	// How often a round runs while a revocation this device signed is unwitnessed: 10 min.
 	HeadCheckUnwitnessedInterval time.Duration
-	// 1 h per woken device, as the api enforces; woken sidecars check first. The 24 h witness alarm
-	// and the stop at ServiceSettings.witness_bound_hours are per-network config (§7.9; owner
-	// decision 129), never local settings.
+	// The least time between wakes of one device: 1 h, as the api enforces; woken sidecars check
+	// first. The 24 h witness alarm and the stop at ServiceSettings.witness_bound_hours are per-network
+	// config (§7.9; owner decision 129), never local settings.
 	WakeInterval time.Duration
-	// 1 h.
+	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
+	// (§6.8).
 	SyncRefetchInterval time.Duration
 }
 
+// A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarProtocolSettings() *SidecarProtocolSettings {
 	return &SidecarProtocolSettings{
 		HelloCacheTimeout:               10 * time.Minute,

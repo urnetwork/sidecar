@@ -8,27 +8,26 @@ import (
 	"time"
 )
 
-// The cases of Redis Cluster's own specification, and the design's
-// families.
+// The cases of Redis Cluster's own specification, and the design's families.
 func TestRedisHashTag(t *testing.T) {
 	for _, c := range []struct {
 		key  string
 		want string
 	}{
-		{"{user1000}.following", "user1000"},
-		{"{user1000}.followers", "user1000"},
-		{"foo{}{bar}", "foo{}{bar}"},
-		{"foo{{bar}}zap", "{bar"},
-		{"foo{bar}{zap}", "bar"},
-		{"no-tag", "no-tag"},
-		{"open{only", "open{only"},
-		{"close}only", "close}only"},
-		{"", ""},
-		{"{scp_c1}ver", "scp_c1"},
-		{"{scp_c1}n", "scp_c1"},
-		{"{sg_n1_0123456789abcdef}ix", "sg_n1_0123456789abcdef"},
-		{"{dpop_c1}jti", "dpop_c1"},
-		{"{dns}serial:root.example", "dns"},
+		{key: "{user1000}.following", want: "user1000"},
+		{key: "{user1000}.followers", want: "user1000"},
+		{key: "foo{}{bar}", want: "foo{}{bar}"},
+		{key: "foo{{bar}}zap", want: "{bar"},
+		{key: "foo{bar}{zap}", want: "bar"},
+		{key: "no-tag", want: "no-tag"},
+		{key: "open{only", want: "open{only"},
+		{key: "close}only", want: "close}only"},
+		{key: "", want: ""},
+		{key: "{scp_c1}ver", want: "scp_c1"},
+		{key: "{scp_c1}n", want: "scp_c1"},
+		{key: "{sg_n1_0123456789abcdef}ix", want: "sg_n1_0123456789abcdef"},
+		{key: "{dpop_c1}jti", want: "dpop_c1"},
+		{key: "{dns}serial:root.example", want: "dns"},
 	} {
 		if got := RedisHashTag(c.key); got != c.want {
 			t.Errorf("%q: %q, want %q", c.key, got, c.want)
@@ -41,14 +40,24 @@ func TestRedisKeysShareTag(t *testing.T) {
 		keys []string
 		want bool
 	}{
-		{nil, true},
-		{[]string{"{scp_c1}ack"}, true},
+		{keys: nil, want: true},
+		{keys: []string{"{scp_c1}ack"}, want: true},
+		// one key is no multi-key call, so §22.4 asks it for no tag
+		{keys: []string{"plain"}, want: true},
 		// §18.7's MGET of ack, tok and tokrev
-		{[]string{"{scp_c1}ack", "{scp_c1}tok", "{scp_c1}tokrev"}, true},
-		{[]string{"{scp_c1}ack", "{scp_c2}tok"}, false},
+		{keys: []string{"{scp_c1}ack", "{scp_c1}tok", "{scp_c1}tokrev"}, want: true},
+		{keys: []string{"{scp_c1}ack", "{scp_c2}tok"}, want: false},
 		// no tag at all: two plain keys, which production answers CROSSSLOT
-		{[]string{"plain-a", "plain-b"}, false},
-		{[]string{"{evsl_r1}", "{evsl_r1}v"}, true},
+		{keys: []string{"plain-a", "plain-b"}, want: false},
+		{keys: []string{"{evsl_r1}", "{evsl_r1}v"}, want: true},
+		// the same slot by luck: each pair hashes alike, and none shares a tag, so §22.4 refuses it
+		{keys: []string{"plain", "plain"}, want: false},
+		{keys: []string{"scp_c1", "{scp_c1}n"}, want: false},
+		{keys: []string{"{scp_c1}n", "scp_c1"}, want: false},
+		{keys: []string{"{a}x", "a"}, want: false},
+		{keys: []string{"{a}x", "{a}y", "a"}, want: false},
+		// an empty {} is no tag, so the whole key hashes
+		{keys: []string{"a{}", "a{}"}, want: false},
 	} {
 		if got := RedisKeysShareTag(c.keys); got != c.want {
 			t.Errorf("%q: %v, want %v", c.keys, got, c.want)

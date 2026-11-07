@@ -69,6 +69,7 @@ func testParseReserved(t *testing.T, tokens []string) (rest []string, numbers []
 	return tokens[1:], numbers, names
 }
 
+// A fence's number, decimal or hex.
 func testParseNumber(t *testing.T, token string) int32 {
 	number, err := strconv.ParseInt(token, 0, 32)
 	if err != nil {
@@ -77,93 +78,93 @@ func testParseNumber(t *testing.T, token string) int32 {
 	return int32(number)
 }
 
-// One fence's messages and enums. Fences hold no nesting, oneof or option inside a body, so anything else
-// stops the test rather than being skipped.
-func testParseFence(t *testing.T, fence string, fences *testFences) {
-	var source strings.Builder
-	for line := range strings.SplitSeq(fence, "\n") {
-		code, _, _ := strings.Cut(line, "//")
-		source.WriteString(code + "\n")
-	}
-	tokens := testFenceToken.FindAllString(source.String(), -1)
-	for len(tokens) > 0 {
-		switch tokens[0] {
-		case "syntax", "package", "import", "option":
-			end := slices.Index(tokens, ";")
-			tokens = tokens[end+1:]
-		case "message":
-			name := tokens[1]
-			if fences.messages[name] != nil {
-				t.Errorf("the design declares message %s twice", name)
-			}
-			message := &testFenceMessage{}
-			fences.messages[name] = message
-			tokens = tokens[3:]
-			for tokens[0] != "}" {
-				if tokens[0] == "reserved" {
-					var numbers []int32
-					var names []string
-					tokens, numbers, names = testParseReserved(t, tokens[1:])
-					message.reservedNumbers = append(message.reservedNumbers, numbers...)
-					message.reservedNames = append(message.reservedNames, names...)
-					continue
-				}
-				field := testFenceField{}
-				if tokens[0] == "repeated" {
-					field.repeated = true
-					tokens = tokens[1:]
-				}
-				field.typeName = tokens[0]
-				tokens = tokens[1:]
-				if field.typeName == "map" {
-					field.typeName = "map<" + tokens[1] + "," + tokens[3] + ">"
-					tokens = tokens[5:]
-				}
-				field.name = tokens[0]
-				if tokens[1] != "=" || tokens[3] != ";" {
-					t.Fatalf("%s.%s: unexpected %v", name, field.name, tokens[:4])
-				}
-				field.number = testParseNumber(t, tokens[2])
-				tokens = tokens[4:]
-				message.fields = append(message.fields, field)
-			}
-			tokens = tokens[1:]
-		case "enum":
-			name := tokens[1]
-			if fences.enums[name] != nil {
-				t.Errorf("the design declares enum %s twice", name)
-			}
-			enum := &testFenceEnum{values: map[string]int32{}}
-			fences.enums[name] = enum
-			tokens = tokens[3:]
-			for tokens[0] != "}" {
-				if tokens[0] == "reserved" {
-					var numbers []int32
-					var names []string
-					tokens, numbers, names = testParseReserved(t, tokens[1:])
-					enum.reservedNumbers = append(enum.reservedNumbers, numbers...)
-					enum.reservedNames = append(enum.reservedNames, names...)
-					continue
-				}
-				if tokens[1] != "=" || tokens[3] != ";" {
-					t.Fatalf("%s.%s: unexpected %v", name, tokens[0], tokens[:4])
-				}
-				enum.values[tokens[0]] = testParseNumber(t, tokens[2])
-				tokens = tokens[4:]
-			}
-			tokens = tokens[1:]
-		default:
-			t.Fatalf("a fence holds %q where a declaration should start", tokens[0])
-		}
-	}
-}
-
+// Every fenced proto block in DESIGN.md, read into one set of declarations.
 func testReadFences(t *testing.T) *testFences {
 	design, err := os.ReadFile(testDesignPath)
 	if err != nil {
 		t.Fatalf("this test needs the design beside the module: %v", err)
 	}
 	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
+	// One fence's messages and enums. Fences hold no nesting, oneof or option inside a body, so anything else
+	// stops the test rather than being skipped.
+	parseFence := func(fence string) {
+		var source strings.Builder
+		for line := range strings.SplitSeq(fence, "\n") {
+			code, _, _ := strings.Cut(line, "//")
+			source.WriteString(code + "\n")
+		}
+		tokens := testFenceToken.FindAllString(source.String(), -1)
+		for len(tokens) > 0 {
+			switch tokens[0] {
+			case "syntax", "package", "import", "option":
+				end := slices.Index(tokens, ";")
+				tokens = tokens[end+1:]
+			case "message":
+				name := tokens[1]
+				if fences.messages[name] != nil {
+					t.Errorf("the design declares message %s twice", name)
+				}
+				message := &testFenceMessage{}
+				fences.messages[name] = message
+				tokens = tokens[3:]
+				for tokens[0] != "}" {
+					if tokens[0] == "reserved" {
+						var numbers []int32
+						var names []string
+						tokens, numbers, names = testParseReserved(t, tokens[1:])
+						message.reservedNumbers = append(message.reservedNumbers, numbers...)
+						message.reservedNames = append(message.reservedNames, names...)
+						continue
+					}
+					field := testFenceField{}
+					if tokens[0] == "repeated" {
+						field.repeated = true
+						tokens = tokens[1:]
+					}
+					field.typeName = tokens[0]
+					tokens = tokens[1:]
+					if field.typeName == "map" {
+						field.typeName = "map<" + tokens[1] + "," + tokens[3] + ">"
+						tokens = tokens[5:]
+					}
+					field.name = tokens[0]
+					if tokens[1] != "=" || tokens[3] != ";" {
+						t.Fatalf("%s.%s: unexpected %v", name, field.name, tokens[:4])
+					}
+					field.number = testParseNumber(t, tokens[2])
+					tokens = tokens[4:]
+					message.fields = append(message.fields, field)
+				}
+				tokens = tokens[1:]
+			case "enum":
+				name := tokens[1]
+				if fences.enums[name] != nil {
+					t.Errorf("the design declares enum %s twice", name)
+				}
+				enum := &testFenceEnum{values: map[string]int32{}}
+				fences.enums[name] = enum
+				tokens = tokens[3:]
+				for tokens[0] != "}" {
+					if tokens[0] == "reserved" {
+						var numbers []int32
+						var names []string
+						tokens, numbers, names = testParseReserved(t, tokens[1:])
+						enum.reservedNumbers = append(enum.reservedNumbers, numbers...)
+						enum.reservedNames = append(enum.reservedNames, names...)
+						continue
+					}
+					if tokens[1] != "=" || tokens[3] != ";" {
+						t.Fatalf("%s.%s: unexpected %v", name, tokens[0], tokens[:4])
+					}
+					enum.values[tokens[0]] = testParseNumber(t, tokens[2])
+					tokens = tokens[4:]
+				}
+				tokens = tokens[1:]
+			default:
+				t.Fatalf("a fence holds %q where a declaration should start", tokens[0])
+			}
+		}
+	}
 	var fence *strings.Builder
 	count := 0
 	for line := range strings.SplitSeq(string(design), "\n") {
@@ -172,7 +173,7 @@ func testReadFences(t *testing.T) *testFences {
 		case fence == nil && trimmed == "```proto":
 			fence = &strings.Builder{}
 		case fence != nil && trimmed == "```":
-			testParseFence(t, fence.String(), fences)
+			parseFence(fence.String())
 			fence = nil
 			count++
 		case fence != nil:
@@ -186,19 +187,7 @@ func testReadFences(t *testing.T) *testFences {
 	return fences
 }
 
-func testTypeName(field protoreflect.FieldDescriptor) string {
-	if field.IsMap() {
-		return "map<" + field.MapKey().Kind().String() + "," + field.MapValue().Kind().String() + ">"
-	}
-	switch field.Kind() {
-	case protoreflect.MessageKind, protoreflect.GroupKind:
-		return string(field.Message().Name())
-	case protoreflect.EnumKind:
-		return string(field.Enum().Name())
-	}
-	return field.Kind().String()
-}
-
+// A message's reserved ranges, each number written out.
 func testReservedNumbers(ranges protoreflect.FieldRanges) []int32 {
 	numbers := []int32{}
 	for i := range ranges.Len() {
@@ -209,6 +198,7 @@ func testReservedNumbers(ranges protoreflect.FieldRanges) []int32 {
 	return numbers
 }
 
+// An enum's reserved ranges, each number written out.
 func testEnumReservedNumbers(ranges protoreflect.EnumRanges) []int32 {
 	numbers := []int32{}
 	for i := range ranges.Len() {
@@ -220,6 +210,7 @@ func testEnumReservedNumbers(ranges protoreflect.EnumRanges) []int32 {
 	return numbers
 }
 
+// A sorted copy, never nil, so slices.Equal compares two empty lists alike.
 func testSorted(numbers []int32) []int32 {
 	sorted := slices.Clone(numbers)
 	if sorted == nil {
@@ -229,6 +220,7 @@ func testSorted(numbers []int32) []int32 {
 	return sorted
 }
 
+// A declaration in this package, or nil, for a test that reports what is missing rather than stopping at it.
 func testLookup(name string) protoreflect.Descriptor {
 	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(testProtoPackage + "." + name))
 	if err != nil {
@@ -240,6 +232,18 @@ func testLookup(name string) protoreflect.Descriptor {
 // §4.9, and the rule that numbers stay as written: every field of every fenced message, in number, name, type and
 // cardinality, with nothing added or missing, and every reserved number.
 func TestFencedMessagesMatchTheirDescriptors(t *testing.T) {
+	typeName := func(field protoreflect.FieldDescriptor) string {
+		if field.IsMap() {
+			return "map<" + field.MapKey().Kind().String() + "," + field.MapValue().Kind().String() + ">"
+		}
+		switch field.Kind() {
+		case protoreflect.MessageKind, protoreflect.GroupKind:
+			return string(field.Message().Name())
+		case protoreflect.EnumKind:
+			return string(field.Enum().Name())
+		}
+		return field.Kind().String()
+	}
 	fences := testReadFences(t)
 	for name, fence := range fences.messages {
 		message, ok := testLookup(name).(protoreflect.MessageDescriptor)
@@ -260,7 +264,7 @@ func TestFencedMessagesMatchTheirDescriptors(t *testing.T) {
 			if int32(field.Number()) != want.number {
 				t.Errorf("%s.%s is %d, and the design writes %d", name, want.name, field.Number(), want.number)
 			}
-			if got := testTypeName(field); got != want.typeName {
+			if got := typeName(field); got != want.typeName {
 				t.Errorf("%s.%s is %s, and the design writes %s", name, want.name, got, want.typeName)
 			}
 			if repeated := field.IsList(); repeated != want.repeated {

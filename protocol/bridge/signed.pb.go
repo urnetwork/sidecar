@@ -270,12 +270,13 @@ func (SignedType) EnumDescriptor() ([]byte, []int) {
 
 // signed bytes: "urnetwork-sidecar-v1/" || purpose || 0x00 || u32be(type) || body
 type Signed struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Body      []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
-	SignerId  []byte                 `protobuf:"bytes,2,opt,name=signer_id,json=signerId,proto3" json:"signer_id,omitempty"`
-	KeyId     []byte                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
-	Signature []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
-	Webauthn  *WebAuthnEvidence      `protobuf:"bytes,5,opt,name=webauthn,proto3" json:"webauthn,omitempty"` // a presence key's evidence: for Signed's own signature by a
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Body     []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
+	SignerId []byte                 `protobuf:"bytes,2,opt,name=signer_id,json=signerId,proto3" json:"signer_id,omitempty"` // a recovery key's statement (§7.9): the member_id it stands for
+	KeyId    []byte                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`          // a recovery key's statement: the Ed25519 public key itself, which rows
+	// hold only as a hash, so the statement carries it (VerifyRecoverySigned)
+	Signature []byte            `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	Webauthn  *WebAuthnEvidence `protobuf:"bytes,5,opt,name=webauthn,proto3" json:"webauthn,omitempty"` // a presence key's evidence: for Signed's own signature by a
 	// webauthn-es256 key, or, key_id set, §7.9's presence
 	// countersignature beside an identity key's
 	Type          uint32 `protobuf:"varint,6,opt,name=type,proto3" json:"type,omitempty"` // SignedType (§6.11)
