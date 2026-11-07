@@ -23,22 +23,18 @@ modules:
     spdx: BSD-3-Clause
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/blang/semver/v4
     spdx: MIT
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/consensys/gnark
     spdx: Apache-2.0
     reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/consensys/gnark-crypto
     spdx: Apache-2.0
     reason: gnark's curves and hashes, for smtpproof (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/decred/dcrd/dcrec/secp256k1/v4
     spdx: ISC
     reason: connect's use of secp256k1 signatures
@@ -57,7 +53,6 @@ modules:
     spdx: MIT
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/go-git/go-git/v5
     spdx: Apache-2.0
     reason: mlsinterop's git codec oracle (§22.6)
@@ -75,7 +70,6 @@ modules:
     spdx: Apache-2.0
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/google/uuid
     spdx: BSD-3-Clause
     reason: through pion's ice
@@ -92,12 +86,14 @@ modules:
     spdx: MIT
     reason: through gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/mattn/go-isatty
     spdx: MIT
     reason: through gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
-    planned: true
+  - module: github.com/miekg/dns
+    spdx: BSD-3-Clause
+    reason: v1.1.72 is dnsservice's message, zone-file and RRSIG code (§12.6); it has TypeNXNAME for compact denial
+    leg: [engine, test]
   - module: github.com/Microsoft/go-winio
     spdx: MIT
     reason: §5.8's named pipe at v0.6.2 for the daemon's control channel on windows
@@ -193,12 +189,10 @@ modules:
     spdx: Apache-2.0
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/rs/zerolog
     spdx: MIT
     reason: gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: github.com/theodorsm/covert-dtls
     spdx: MIT
     reason: connect's DTLS fingerprints
@@ -229,7 +223,6 @@ modules:
     spdx: MIT
     reason: through gnark's cbor, for smtpproof (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: golang.org/x/crypto
     spdx: BSD-3-Clause
     reason: §4.7's initial list; connect's and pion's primitives too
@@ -246,7 +239,6 @@ modules:
     spdx: BSD-3-Clause
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
-    planned: true
   - module: golang.org/x/sys
     spdx: BSD-3-Clause
     reason: connect's and quic-go's system calls
@@ -268,6 +260,10 @@ modules:
     spdx: BSD-3-Clause
     reason: wire types in protocol and protocol/bridge; v1.36.11 pins protoc-gen-go too (§4.9)
     leg: [client, engine, cli, test]
+  - module: gopkg.in/yaml.v3
+    spdx: Apache-2.0 AND MIT
+    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and is sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
+    leg: [engine, test]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
     reason: connect's IP stack, kept out of the sidecar_http leg; a sibling replace
