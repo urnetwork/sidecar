@@ -332,6 +332,17 @@ type gateBackend struct {
 	release chan struct{}
 }
 
+// A copy of the current U, for a test comparing keys, or ErrSidecarStoreLocked.
+func (self *SidecarInstance) currentUnlockKey() ([]byte, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	unlockKey, ok := self.generationUnlockKeys[self.unlockGeneration]
+	if !ok {
+		return nil, ErrSidecarStoreLocked
+	}
+	return bytes.Clone(unlockKey), nil
+}
+
 // Over memory, armed for nothing yet.
 func newGateBackend() *gateBackend {
 	return &gateBackend{

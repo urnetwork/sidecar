@@ -17,7 +17,10 @@
 // process goes on. Then the disk is ahead of memory, and the rename may not survive a power cut. So
 // memory takes what it resumes from off the disk, never its own idea of what is current; a resumed step
 // writes its file again before anything is built on it; and a step that drops a key first checks on the
-// disk that nothing still names it, after syncing what might.
+// disk that nothing still names it, after syncing what might. An unlock or a keychain's open takes its
+// keys up from the disk too, from a file such a write, or a process killed before its directory sync,
+// may have left: nothing goes under the newest key such a file names until it is written again, unless
+// this process wrote it whole (durableWrapPaths).
 //
 // CORE-M2-05's HPKE copy of R_n must be re-sealed with step 2, which it does not exist to do yet, so a
 // network holding one refuses to rotate rather than leave its recovery code opening nothing.
@@ -217,7 +220,7 @@ func (self *SidecarInstance) flipUnlockKeyWithLock(wrap *unlockWrap, passphrase 
 		self.generationUnlockKeys[next.generation] = nextKey
 	}()
 	keepKey = true
-	if err := writeBackendFile(self.backend, unlockWrapPath, next.encode()); err != nil {
+	if err := self.writeWrapWithLock(unlockWrapPath, next.encode()); err != nil {
 		return err
 	}
 	self.stateLock.Lock()
@@ -236,7 +239,7 @@ func (self *SidecarInstance) resumeUnlockKeyWithLock(wrap *unlockWrap) error {
 		return err
 	}
 	clear(unlockKey)
-	if err := writeBackendFile(self.backend, unlockWrapPath, wrap.encode()); err != nil {
+	if err := self.writeWrapWithLock(unlockWrapPath, wrap.encode()); err != nil {
 		return err
 	}
 	self.stateLock.Lock()
@@ -292,12 +295,11 @@ func (self *SidecarInstance) rewrapLostNetworkWithLock(networkId Id) error {
 	if err != nil {
 		return err
 	}
-	unlockKey, err := self.currentUnlockKey()
+	unlockKey, unlockGeneration, err := self.durableUnlockKeyWithLock()
 	if err != nil {
 		return err
 	}
 	defer clear(unlockKey)
-	unlockGeneration := self.currentUnlockGeneration()
 	roots, err := self.openRoots(wrap)
 	if err != nil {
 		return err
@@ -316,18 +318,17 @@ func (self *SidecarInstance) rewrapLostNetworkWithLock(networkId Id) error {
 		}
 		next.roots = append(next.roots, *rewrapped)
 	}
-	return writeBackendFile(self.backend, keychainWrapPath(networkId), next.encode())
+	return self.writeWrapWithLock(keychainWrapPath(networkId), next.encode())
 }
 
 // keychain.wrap gains a new root unless it has one under the current U, which a resumed run finds. The
 // roots already there move under the current U too, so the old one can go at the end.
 func (self *SidecarInstance) addRootWithLock(opened *keychain, wrap *keychainWrap) error {
-	unlockKey, err := self.currentUnlockKey()
+	unlockKey, unlockGeneration, err := self.durableUnlockKeyWithLock()
 	if err != nil {
 		return err
 	}
 	defer clear(unlockKey)
-	unlockGeneration := self.currentUnlockGeneration()
 	if wrap.roots[0].unlockGeneration == unlockGeneration {
 		return self.resumeRootWithLock(opened, wrap)
 	}
@@ -363,7 +364,7 @@ func (self *SidecarInstance) addRootWithLock(opened *keychain, wrap *keychainWra
 		}
 		next.roots = append(next.roots, *rewrapped)
 	}
-	if err := writeBackendFile(self.backend, keychainWrapPath(wrap.networkId), next.encode()); err != nil {
+	if err := self.writeWrapWithLock(keychainWrapPath(wrap.networkId), next.encode()); err != nil {
 		clear(root)
 		return err
 	}
@@ -387,7 +388,7 @@ func (self *SidecarInstance) resumeRootWithLock(opened *keychain, wrap *keychain
 	if err != nil {
 		return err
 	}
-	if err := writeBackendFile(self.backend, keychainWrapPath(wrap.networkId), wrap.encode()); err != nil {
+	if err := self.writeWrapWithLock(keychainWrapPath(wrap.networkId), wrap.encode()); err != nil {
 		for _, root := range roots {
 			clear(root)
 		}
@@ -543,7 +544,7 @@ func (self *SidecarInstance) dropOldRootsWithLock(opened *keychain, staleCommitC
 	}
 	next := *wrap
 	next.roots = wrap.roots[:1]
-	if err := writeBackendFile(self.backend, keychainWrapPath(wrap.networkId), next.encode()); err != nil {
+	if err := self.writeWrapWithLock(keychainWrapPath(wrap.networkId), next.encode()); err != nil {
 		return false, err
 	}
 	opened.stateLock.Lock()
@@ -616,7 +617,7 @@ func (self *SidecarInstance) finishRotationWithLock(networkIds []Id) error {
 	}
 	next := *wrap
 	next.previousKeys = nil
-	if err := writeBackendFile(self.backend, unlockWrapPath, next.encode()); err != nil {
+	if err := self.writeWrapWithLock(unlockWrapPath, next.encode()); err != nil {
 		return err
 	}
 	self.dropOlderUnlockKeys(wrap.generation)
@@ -631,7 +632,7 @@ func (self *SidecarInstance) refinishRotationWithLock(networkIds []Id, wrap *unl
 	if err := self.requireOnlyUnlockGenerationWithLock(networkIds, wrap.generation); err != nil {
 		return err
 	}
-	if err := writeBackendFile(self.backend, unlockWrapPath, wrap.encode()); err != nil {
+	if err := self.writeWrapWithLock(unlockWrapPath, wrap.encode()); err != nil {
 		return err
 	}
 	self.dropOlderUnlockKeys(wrap.generation)

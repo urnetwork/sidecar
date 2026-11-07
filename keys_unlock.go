@@ -619,7 +619,7 @@ func (self *SidecarInstance) restoreStoreWrapWithLock(wrap *unlockWrap) {
 		if status := self.keyStore.PutSecret(itemName, storeKey); status != SidecarKeyStoreOk {
 			return ErrSidecarStoreFailed
 		}
-		return writeBackendFile(self.backend, unlockWrapPath, next.encode())
+		return self.writeWrapWithLock(unlockWrapPath, next.encode())
 	}()
 	if err != nil {
 		self.log.Warningf("[keys]the key store's wrap was not restored")
@@ -662,7 +662,7 @@ func (self *SidecarInstance) createUnlockKeyWithLock(passphrase []byte) error {
 	if err := self.editDocumentWithLock(func(document *sidecarStateDocument) error { return nil }); err != nil {
 		return self.settle(SidecarInstanceFailed, err)
 	}
-	if err := writeBackendFile(self.backend, unlockWrapPath, wrap.encode()); err != nil {
+	if err := self.writeWrapWithLock(unlockWrapPath, wrap.encode()); err != nil {
 		return self.settle(SidecarInstanceFailed, err)
 	}
 	if self.keyStore != nil {
@@ -714,16 +714,48 @@ func (self *SidecarInstance) openWithLock(wrap *unlockWrap, unlockKey []byte) er
 	return nil
 }
 
-// A copy of the current U, or ErrSidecarStoreLocked. Current is what a new keychain.wrap goes under, and
-// only ever a U the disk durably names.
-func (self *SidecarInstance) currentUnlockKey() ([]byte, error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	unlockKey, ok := self.generationUnlockKeys[self.unlockGeneration]
-	if !ok {
-		return nil, ErrSidecarStoreLocked
+// A copy of the current U and its generation, for a step that puts a root under it, or
+// ErrSidecarStoreLocked. Current is only ever a U the disk durably names. An unlock takes it up from
+// unlock.wrap, which a rename whose directory sync failed may have left, here or in a process killed
+// before its sync, so unless this process wrote the file whole it is written again first, as the disk
+// has it. A root put under a U that a power cut then took from the file would open nothing.
+func (self *SidecarInstance) durableUnlockKeyWithLock() ([]byte, uint64, error) {
+	var unlockKey []byte
+	var unlockGeneration uint64
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if currentKey, ok := self.generationUnlockKeys[self.unlockGeneration]; ok {
+			unlockKey = bytes.Clone(currentKey)
+			unlockGeneration = self.unlockGeneration
+		}
+	}()
+	if unlockKey == nil {
+		return nil, 0, ErrSidecarStoreLocked
 	}
-	return bytes.Clone(unlockKey), nil
+	if self.wrapDurable(unlockWrapPath) {
+		return unlockKey, unlockGeneration, nil
+	}
+	err := func() error {
+		wrap, err := self.readUnlockWrap()
+		if err != nil {
+			return err
+		}
+		// the file names the current U, as its own or behind a newer one a failed flip left
+		names := wrap != nil && (wrap.generation == unlockGeneration ||
+			slices.ContainsFunc(wrap.previousKeys, func(previous unlockPreviousKey) bool {
+				return previous.generation == unlockGeneration
+			}))
+		if !names {
+			return ErrSidecarStoreFailed
+		}
+		return self.writeWrapWithLock(unlockWrapPath, wrap.encode())
+	}()
+	if err != nil {
+		clear(unlockKey)
+		return nil, 0, err
+	}
+	return unlockKey, unlockGeneration, nil
 }
 
 // The generation of the current U. Zero while locked.
@@ -799,7 +831,7 @@ func (self *SidecarInstance) changePassWithLock(oldPassphrase []byte, newPassphr
 	} else if next.store == nil {
 		return ErrSidecarPassRefused
 	}
-	return writeBackendFile(self.backend, unlockWrapPath, next.encode())
+	return self.writeWrapWithLock(unlockWrapPath, next.encode())
 }
 
 // Holds passphrase to the pass wrap, under §5.4's limit, for a caller that already has U and only needs

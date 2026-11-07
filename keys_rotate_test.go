@@ -992,3 +992,204 @@ func TestARetryKilledAfterADirectorySyncFaultLosesNothing(t *testing.T) {
 		t.Fatal("a rotation synced no directory")
 	}
 }
+
+// The step at which the trace of a run first syncs the directory of filePath, at or after step
+// fromStep, counting from 1, or 0 for none.
+func syncStepAfter(trace []string, fromStep int, filePath string) int {
+	for i := fromStep; i < len(trace); i += 1 {
+		if trace[i] == "sync directory of "+filePath {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// How a test takes keys up from the disk again after a fault: a lock and an unlock in the same
+// process, or a new process, as a restart after a kill at the same step would be.
+var reopenCases = []struct {
+	name   string
+	reopen func(t *testing.T, world *crashWorld, instance *SidecarInstance) *SidecarInstance
+}{
+	{
+		name: "a lock and an unlock",
+		reopen: func(t *testing.T, world *crashWorld, instance *SidecarInstance) *SidecarInstance {
+			instance.Lock()
+			if err := instance.Unlock(nil); err != nil {
+				t.Fatal(err)
+			}
+			return instance
+		},
+	},
+	{
+		name: "a restart",
+		reopen: func(t *testing.T, world *crashWorld, instance *SidecarInstance) *SidecarInstance {
+			instance.Close()
+			restarted := world.open(world.keyStore())
+			if err := restarted.Unlock(nil); err != nil {
+				t.Fatal(err)
+			}
+			return restarted
+		},
+	},
+}
+
+// A rotation's new root reaches keychain.wrap by a rename whose directory sync fails, and the keychain
+// opens again, after a lock or a restart, before anything syncs that directory: a file written then,
+// whose write answered nil, still reads after the worst power cut. The open once took the newest root
+// up from the file as it stood, so the file went under a root the power cut took back, and the next
+// rotation, its new root numbered the same, passed over the file as already moved.
+func TestAWriteAfterAnOpenFollowingAFaultedNewRootSurvivesAPowerCut(t *testing.T) {
+	world := enrolledCrashWorld(t)
+	counted := world.clone()
+	instance := counted.open(counted.keyStore())
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instance.keychainFor(testNetworkId); err != nil {
+		t.Fatal(err)
+	}
+	rotateStep := len(counted.trace)
+	if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	instance.Close()
+	faultAt := syncStepAfter(counted.trace, rotateStep, keychainWrapPath(testNetworkId))
+	if faultAt == 0 {
+		t.Fatal("a rotation synced no directory of keychain.wrap")
+	}
+	for _, c := range reopenCases {
+		faulted := world.clone()
+		faulted.faultAt = faultAt
+		instance := faulted.open(faulted.keyStore())
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := instance.keychainFor(testNetworkId); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.RotateKeychain(context.Background(), nil); err == nil {
+			t.Fatalf("%s: the fault went unanswered", c.name)
+		}
+		instance = c.reopen(t, faulted, instance)
+		if err := putStoreFile(storeOf(t, instance, testNetworkId, "evs"), "new", []byte("synthetic new")); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		instance.Close()
+		faulted.reboot(true)
+
+		reopened := faulted.open(faulted.keyStore())
+		if err := reopened.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		requireRead := func() {
+			store := storeOf(t, reopened, testNetworkId, "evs")
+			for name, want := range map[string]string{"file": "old file", "new": "synthetic new"} {
+				content, err := readStoreFile(store, name)
+				if err != nil || string(content) != want {
+					t.Errorf("%s: %s after the power cut: %q, %v", c.name, name, content, err)
+				}
+			}
+		}
+		requireRead()
+		if err := reopened.RotateKeychain(context.Background(), nil); err != nil {
+			t.Errorf("%s: the rotation after the power cut: %v", c.name, err)
+		}
+		requireRead()
+		reopened.Close()
+	}
+}
+
+// A rotation's flip reaches unlock.wrap by a rename whose directory sync fails, and the key store
+// opens U again, after a lock or a restart: a network enrolled then, with the power going out before
+// anything syncs the root directory, still opens, and the rotation finishes. The unlock once took the
+// newer U up from the file as it stood, and the new network went under the U the power cut took back,
+// Failed for good, every later rotation stopping on it.
+func TestAnEnrollmentAfterAnUnlockFollowingAFaultedFlipSurvivesAPowerCut(t *testing.T) {
+	world := enrolledCrashWorld(t)
+	counted := world.clone()
+	instance := counted.open(counted.keyStore())
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	rotateStep := len(counted.trace)
+	if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	instance.Close()
+	faultAt := syncStepAfter(counted.trace, rotateStep, unlockWrapPath)
+	if faultAt == 0 {
+		t.Fatal("a rotation synced no directory of unlock.wrap")
+	}
+	for _, c := range reopenCases {
+		faulted := world.clone()
+		faulted.faultAt = faultAt
+		instance := faulted.open(faulted.keyStore())
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.RotateKeychain(context.Background(), nil); err == nil {
+			t.Fatalf("%s: the fault went unanswered", c.name)
+		}
+		instance = c.reopen(t, faulted, instance)
+		newNetworkId := NewId()
+		opened, err := instance.createKeychain(newNetworkId)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if err := opened.secrets("identity").Put("seed", []byte("synthetic seed")); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		instance.Close()
+		// the power goes out before the enrollment's RecordNetwork syncs the root directory
+		faulted.reboot(true)
+
+		reopened := faulted.open(faulted.keyStore())
+		if err := reopened.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		requireOpens := func() {
+			for _, networkId := range []Id{testNetworkId, newNetworkId} {
+				if _, err := reopened.keychainFor(networkId); err != nil {
+					t.Errorf("%s: a network does not open after the power cut: %v", c.name, err)
+				}
+			}
+			seed, err := reopened.secrets(newNetworkId, "identity").Get("seed")
+			if err != nil || string(seed) != "synthetic seed" {
+				t.Errorf("%s: the new network's seed: %q, %v", c.name, seed, err)
+			}
+		}
+		requireOpens()
+		if err := reopened.RotateKeychain(context.Background(), nil); err != nil {
+			t.Errorf("%s: the rotation after the power cut: %v", c.name, err)
+		}
+		if pending, err := reopened.RotationPending(); pending || err != nil {
+			t.Errorf("%s: pending %v, err %v", c.name, pending, err)
+		}
+		requireOpens()
+		reopened.Close()
+	}
+}
+
+// A keychain.wrap this process did not write, which it must write again before a keychain opens on
+// it, and which will not take the write: the keychain does not open, and the next try writes it and
+// opens.
+func TestAKeychainWhoseWrapWillNotTakeItsRewriteDoesNotOpen(t *testing.T) {
+	backend := &syncFaultBackend{SidecarStoreBackend: NewSidecarMemoryBackend()}
+	keyStore := newFakeKeyStore()
+	instance := newInstanceOn(t, backend, keyStore)
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	enrollTestNetwork(t, instance, testNetworkId)
+	writeStoreFile(t, storeOf(t, instance, testNetworkId, "evs"), "file", []byte("synthetic"))
+	instance.Close()
+
+	restarted := newInstanceOn(t, backend, keyStore)
+	defer restarted.Close()
+	if err := restarted.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	backend.failNextSync(keychainWrapPath(testNetworkId))
+	requireError(t, func() error { _, err := restarted.keychainFor(testNetworkId); return err }(), ErrSidecarStoreFailed)
+	requireStoreFile(t, storeOf(t, restarted, testNetworkId, "evs"), "file", []byte("synthetic"))
+}

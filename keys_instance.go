@@ -100,6 +100,11 @@ type SidecarInstance struct {
 	generationUnlockKeys map[uint64][]byte
 	unlockGeneration     uint64
 	networkIdKeychains   map[Id]*keychain
+	// The wrap files, unlock.wrap and each keychain.wrap, that this process wrote whole, so a power cut
+	// cannot take back what they hold. A failed write leaves its path out, since its rename may have gone
+	// through with its directory sync failing, and so does a file a killed process left, which this one
+	// never wrote. Nothing goes under a key such a file names until it is written again (keys_rotate.go).
+	durableWrapPaths map[string]bool
 	// sidecar.json's hash is another machine's, or another instance's, and nothing has accepted it
 	restored bool
 }
@@ -136,6 +141,7 @@ func newSidecarInstance(ctx context.Context, args *SidecarInstanceArgs, now func
 		random:             random,
 		state:              NewMonitorValue(SidecarInstanceLocked),
 		networkIdKeychains: map[Id]*keychain{},
+		durableWrapPaths:   map[string]bool{},
 	}
 	self.touch()
 	if err := self.loadDocument(); err != nil {
@@ -334,7 +340,8 @@ func (self *SidecarInstance) keychainFor(networkId Id) (*keychain, error) {
 
 // §5.9's table for a network: a lost keychain.wrap is the same loss for n, one that does not decode or
 // open is Failed, and neither creates anything. ErrSidecarStoreAbsent means nothing is here and nothing
-// is recorded, so an enrollment may create R_n.
+// is recorded, so an enrollment may create R_n. A keychain.wrap this process did not write whole is
+// written again before the keychain opens, and one that will not take the write does not open.
 func (self *SidecarInstance) keychainWithLock(networkId Id) (*keychain, error) {
 	if err := self.stateError(); err != nil {
 		return nil, err
@@ -361,6 +368,13 @@ func (self *SidecarInstance) keychainWithLock(networkId Id) (*keychain, error) {
 	}
 	roots, err := self.openRoots(wrap)
 	if err != nil {
+		return nil, err
+	}
+	// every write of this keychain goes under the newest root, which must outlive what goes under it
+	if err := self.requireDurableWrapWithLock(keychainWrapPath(networkId), wrap.encode()); err != nil {
+		for _, root := range roots {
+			clear(root)
+		}
 		return nil, err
 	}
 	opened = newKeychain(self, networkId, roots, wrap.roots[0].generation)
@@ -420,6 +434,42 @@ func (self *SidecarInstance) openRoots(wrap *keychainWrap) (map[uint64][]byte, e
 	return roots, nil
 }
 
+// Writes unlock.wrap or a keychain.wrap, and records whether the disk now holds it durably.
+func (self *SidecarInstance) writeWrapWithLock(path string, content []byte) error {
+	err := writeBackendFile(self.backend, path, content)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if err == nil {
+		self.durableWrapPaths[path] = true
+	} else {
+		delete(self.durableWrapPaths, path)
+	}
+	return err
+}
+
+// Writes the wrap file at path again, as content, which is what it holds now, unless this process wrote
+// it whole.
+func (self *SidecarInstance) requireDurableWrapWithLock(path string, content []byte) error {
+	if self.wrapDurable(path) {
+		return nil
+	}
+	return self.writeWrapWithLock(path, content)
+}
+
+// Whether this process wrote the wrap file at path whole, with no write of it failing since.
+func (self *SidecarInstance) wrapDurable(path string) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.durableWrapPaths[path]
+}
+
+// Forgets what was written to path, which a removal takes.
+func (self *SidecarInstance) forgetWrap(path string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.durableWrapPaths, path)
+}
+
 // Keeps an opened keychain, unless a lock got here first, which closes it.
 func (self *SidecarInstance) cacheKeychain(opened *keychain) {
 	self.stateLock.Lock()
@@ -449,7 +499,7 @@ func (self *SidecarInstance) createKeychain(networkId Id) (*keychain, error) {
 
 // A new R_n, wrapped under the current U.
 func (self *SidecarInstance) createKeychainWithLock(networkId Id) (*keychain, error) {
-	unlockKey, err := self.currentUnlockKey()
+	unlockKey, unlockGeneration, err := self.durableUnlockKeyWithLock()
 	if err != nil {
 		return nil, err
 	}
@@ -459,16 +509,13 @@ func (self *SidecarInstance) createKeychainWithLock(networkId Id) (*keychain, er
 		return nil, storeFault(err)
 	}
 	testHookSecret("R_n", root)
-	self.stateLock.Lock()
-	unlockGeneration := self.unlockGeneration
-	self.stateLock.Unlock()
 	wrapped, err := wrapKeychainRoot(networkId, 1, root, unlockGeneration, unlockKey, self.random)
 	if err != nil {
 		clear(root)
 		return nil, storeFault(err)
 	}
 	wrap := &keychainWrap{networkId: networkId, roots: []keychainRoot{*wrapped}}
-	if err := writeBackendFile(self.backend, keychainWrapPath(networkId), wrap.encode()); err != nil {
+	if err := self.writeWrapWithLock(keychainWrapPath(networkId), wrap.encode()); err != nil {
 		clear(root)
 		return nil, err
 	}
@@ -490,6 +537,7 @@ func (self *SidecarInstance) ConfirmNewDevice() error {
 	if err := self.removeTreeWithLock(networkTreeName + "/"); err != nil {
 		return err
 	}
+	self.forgetWrap(unlockWrapPath)
 	if err := self.backend.Remove(unlockWrapPath); err != nil {
 		return err
 	}
@@ -538,6 +586,7 @@ func (self *SidecarInstance) removeTreeWithLock(prefix string) error {
 		return err
 	}
 	for _, entry := range entries {
+		self.forgetWrap(entry.Name)
 		if err := self.backend.Remove(entry.Name); err != nil {
 			return err
 		}
