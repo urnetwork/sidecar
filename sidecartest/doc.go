@@ -16,6 +16,7 @@
 //   - blobsuite and redissuite, the conformance suites, which take a fake or a real store.
 //   - dns_store_fake.go and dns_store_suite.go, the seams of dnsservice and their suite, which runs
 //     here on the fake and in server on dnshost.Store.
+//   - mxedge_store_fake.go, mxedgeservice's seam, which MAIL-M7-21's real store replaces.
 //   - fault, the FS schedule runner (§22.8).
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
