@@ -12,6 +12,9 @@
 //   - KeyPackages, Welcomes and GroupInfos are MLSMessages of their own wire formats with bodies only FakeMls
 //     reads, which a real parser refuses. A GroupInfo carries a MAC under its epoch's secret, so a forged one
 //     fails Complete, as a real one fails its signature;
+//   - a one-time KeyPackage joins one Welcome, its private key gone once that join completes, and the last-resort
+//     one any number (RFC 9420 §16.8); and no join takes a group to an epoch at or below the newest this engine
+//     reached of it, held or since left (I-16), so a replayed Welcome moves nothing;
 //   - what the subset refuses is refused (§10.4): application data and standalone proposals, Update among them,
 //     and any sender but a member or a new member's commit, when a message is processed; a Remove without a path,
 //     a committer removing itself and an empty commit, when one is made; a commit on another epoch or by a leaf
@@ -78,11 +81,12 @@ func NewFakeMlsWorld() *FakeMlsWorld {
 // One sidecar's engine. credential is its leaf's, a UrMlsCredential's encoding, which Roster shows.
 func (self *FakeMlsWorld) Engine(sidecarId sidecar.Id, credential []byte) *FakeMls {
 	return &FakeMls{
-		world:          self,
-		sidecarId:      sidecarId,
-		credential:     bytes.Clone(credential),
-		groupIdEpochs:  map[sidecar.Id]*fakeMlsEpoch{},
-		keyPackageRefs: map[string]bool{},
+		world:                self,
+		sidecarId:            sidecarId,
+		credential:           bytes.Clone(credential),
+		groupIdEpochs:        map[sidecar.Id]*fakeMlsEpoch{},
+		groupIdReachedEpochs: map[sidecar.Id]uint64{},
+		refKeyPackages:       map[string]*fakeMlsKeyPackage{},
 	}
 }
 
@@ -188,8 +192,12 @@ type FakeMls struct {
 	stateLock sync.Mutex
 	// adopted, by group
 	groupIdEpochs map[sidecar.Id]*fakeMlsEpoch
-	// the KeyPackages this engine made, which only it can join under
-	keyPackageRefs map[string]bool
+	// the newest epoch each group reached here, kept after a removal drops the group's state, which no join goes back
+	// to or below (I-16)
+	groupIdReachedEpochs map[sidecar.Id]uint64
+	// the KeyPackages this engine made and still holds the private keys of, which only it can join under: a one-time
+	// one until a Welcome under it joins, the last-resort one for good
+	refKeyPackages map[string]*fakeMlsKeyPackage
 }
 
 // Its sidecar.
@@ -224,7 +232,7 @@ func (self *FakeMls) CreateKeyPackage(lastResort bool) (*sidecar.MlsKeyPackage, 
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.keyPackageRefs[hex.EncodeToString(keyPackage.ref)] = true
+		self.refKeyPackages[hex.EncodeToString(keyPackage.ref)] = keyPackage
 	}()
 	return &sidecar.MlsKeyPackage{Encoded: bytes.Clone(encoded), Ref: bytes.Clone(keyPackage.ref), LastResort: lastResort}, nil
 }
@@ -257,6 +265,7 @@ func (self *FakeMls) CreateGroup(groupId sidecar.Id, urGroup *sidecar.MlsUrGroup
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.groupIdEpochs[groupId] = epoch
+		self.groupIdReachedEpochs[groupId] = epoch.epoch
 	}()
 	return &fakeMlsGroup{engine: self, epoch: epoch}, nil
 }
@@ -280,7 +289,8 @@ func (self *FakeMls) JoinWelcome(welcome []byte) (sidecar.MlsPendingJoin, error)
 		if secretsReader.err != nil {
 			break
 		}
-		if !self.madeKeyPackage(ref) {
+		keyPackage := self.heldKeyPackage(ref)
+		if keyPackage == nil {
 			continue
 		}
 		commit, err := self.world.commit(handle)
@@ -290,7 +300,7 @@ func (self *FakeMls) JoinWelcome(welcome []byte) (sidecar.MlsPendingJoin, error)
 		if commit.to.leafOf(self.sidecarId) == nil {
 			return nil, sidecar.ErrMlsNotMember
 		}
-		return &fakeMlsPendingJoin{engine: self, epoch: commit.to}, nil
+		return &fakeMlsPendingJoin{engine: self, keyPackage: keyPackage, epoch: commit.to}, nil
 	}
 	if secretsReader.err != nil {
 		return nil, secretsReader.err
@@ -298,11 +308,31 @@ func (self *FakeMls) JoinWelcome(welcome []byte) (sidecar.MlsPendingJoin, error)
 	return nil, fmt.Errorf("%w: a Welcome to none of this sidecar's KeyPackages", sidecar.ErrMlsNotMember)
 }
 
-// Whether this engine made the KeyPackage ref names.
-func (self *FakeMls) madeKeyPackage(ref []byte) bool {
+// The KeyPackage ref names, if this engine made it and still holds its private key, or nil.
+func (self *FakeMls) heldKeyPackage(ref []byte) *fakeMlsKeyPackage {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.keyPackageRefs[hex.EncodeToString(ref)]
+	return self.refKeyPackages[hex.EncodeToString(ref)]
+}
+
+// A Welcome's join under keyPackage, completed: the group at epoch, as adoptWithLock lets a join move it, and a
+// one-time KeyPackage's private key dropped, so no Welcome under it joins again (RFC 9420 §16.8; §10.6's
+// KeyPackages). One already dropped refuses, as a second pending join of one Welcome would find it.
+func (self *FakeMls) join(keyPackage *fakeMlsKeyPackage, epoch *fakeMlsEpoch) (sidecar.MlsGroup, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	ref := hex.EncodeToString(keyPackage.ref)
+	if _, ok := self.refKeyPackages[ref]; !ok {
+		return nil, fmt.Errorf("%w: a Welcome under a one-time KeyPackage already used", sidecar.ErrMlsNotMember)
+	}
+	group, err := self.adoptWithLock(nil, epoch)
+	if err != nil {
+		return nil, err
+	}
+	if !keyPackage.lastResort {
+		delete(self.refKeyPackages, ref)
+	}
+	return group, nil
 }
 
 func (self *FakeMls) JoinExternal(groupInfo []byte, args *sidecar.MlsCommitArgs) (sidecar.MlsStagedCommit, error) {
@@ -346,14 +376,25 @@ func (self *FakeMls) heldEpoch(groupId sidecar.Id) *fakeMlsEpoch {
 	return self.groupIdEpochs[groupId]
 }
 
-// Moves the engine from one epoch to the next, or drops the group if the next holds no leaf of it.
+// Moves the engine from one epoch to the next, as adoptWithLock does.
 func (self *FakeMls) adopt(from *fakeMlsEpoch, to *fakeMlsEpoch) (sidecar.MlsGroup, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	return self.adoptWithLock(from, to)
+}
+
+// Moves the engine from one epoch to the next, or drops the group if the next holds no leaf of it. A join, from nil,
+// a Welcome's or an external commit's, never takes the group to an epoch at or below the newest it reached here,
+// whether the engine still holds it or a removal dropped it (I-16), so a Welcome replayed moves nothing.
+func (self *FakeMls) adoptWithLock(from *fakeMlsEpoch, to *fakeMlsEpoch) (sidecar.MlsGroup, error) {
 	held, ok := self.groupIdEpochs[to.groupId]
 	if from != nil && (!ok || held != from) {
 		return nil, fmt.Errorf("%w: epoch %d is no longer held", sidecar.ErrMlsGroupUnknown, from.epoch)
 	}
+	if reached, ok := self.groupIdReachedEpochs[to.groupId]; from == nil && ok && to.epoch <= reached {
+		return nil, fmt.Errorf("%w: a join to epoch %d of a group this engine reached epoch %d of", errFakeMlsRefused, to.epoch, reached)
+	}
+	self.groupIdReachedEpochs[to.groupId] = to.epoch
 	if to.leafOf(self.sidecarId) == nil {
 		delete(self.groupIdEpochs, to.groupId)
 		return nil, sidecar.ErrMlsNotMember
@@ -726,7 +767,9 @@ func (self *fakeMlsStagedCommit) Discard() {}
 // A Welcome opened, its epoch's exporter reachable, and its group not yet joined.
 type fakeMlsPendingJoin struct {
 	engine *FakeMls
-	epoch  *fakeMlsEpoch
+	// the one the Welcome was opened under
+	keyPackage *fakeMlsKeyPackage
+	epoch      *fakeMlsEpoch
 }
 
 func (self *fakeMlsPendingJoin) Exporter(label string, context []byte, length int) ([]byte, error) {
@@ -749,7 +792,7 @@ func (self *fakeMlsPendingJoin) Complete(groupInfo []byte) (sidecar.MlsGroup, er
 	if epoch != self.epoch {
 		return nil, fmt.Errorf("%w: a GroupInfo of another epoch than the Welcome's", errFakeMlsRefused)
 	}
-	return self.engine.adopt(nil, epoch)
+	return self.engine.join(self.keyPackage, epoch)
 }
 
 // MLSMessage's version and wire format.

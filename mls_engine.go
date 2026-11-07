@@ -11,7 +11,10 @@
 // the Welcome, which gives its epoch's exporter and so KEK_e; it opens GenWrap_e for RK_g, accepted only against
 // gen/<g>'s C_g (OpenGkmGenWrap); it derives K_groupinfo and opens the sealed GroupInfo; and only then does
 // Complete verify the GroupInfo's signature and tree against the Welcome. Nothing the Welcome says is trusted
-// before both checks pass.
+// before both checks pass. A server can replay any Welcome, so a one-time KeyPackage joins one Welcome, its private
+// key gone once that join completes (RFC 9420 §16.8; §10.6's KeyPackages), and no join, a Welcome's or an external
+// commit's, takes a group to an epoch at or below the newest this engine reached of it, held or since left (I-16).
+// The last-resort KeyPackage, which is kept, is held back by that second rule alone.
 //
 // ParseMlsHeader is the one MLS parse gkm runs, with no key (I-1). It reads a member's commit, a PrivateMessage,
 // and refuses a PublicMessage, an external commit, until KEYS-M2-05's framing reads one; so gkm refuses every
@@ -180,7 +183,7 @@ type MlsStagedCommit interface {
 	GroupInfo() ([]byte, error)
 	// Makes the new epoch the group's: this sidecar's commit once gkm answered 200, or a received one once it
 	// passed §10.9's checks. ErrMlsNotMember when the commit removed this sidecar, whose state of the group is
-	// then gone.
+	// then gone, all but the epoch it reached, which no later join goes back to or below.
 	Adopt() (MlsGroup, error)
 	// Leaves the group at its epoch: a 409's loser (KF6), or a commit its checks refused. Safe to call again.
 	Discard()
@@ -212,13 +215,15 @@ type MlsPendingJoin interface {
 	GroupId() Id
 	Epoch() uint64
 	// The second phase: groupInfo, opened from the epoch's sealed GroupInfo, supplies the tree the Welcome left out.
-	// Its signature, its tree and their agreement with the Welcome are verified before the group exists.
+	// Its signature, its tree and their agreement with the Welcome are verified before the group exists. Refused for
+	// an epoch at or below the newest this engine reached of the group, and once its one-time KeyPackage has joined.
 	Complete(groupInfo []byte) (MlsGroup, error)
 }
 
 // One sidecar's MLS: what it creates, joins and holds (§10.4).
 type MlsEngine interface {
-	// A KeyPackage for this sidecar's leaf: one-time, or its one last-resort KeyPackage.
+	// A KeyPackage for this sidecar's leaf: one-time, which joins one Welcome, or its one last-resort KeyPackage,
+	// which joins any number.
 	CreateKeyPackage(lastResort bool) (*MlsKeyPackage, error)
 	// A group at epoch 0 whose only leaf is this sidecar's (KF1), its ur_group fixed for its life.
 	CreateGroup(groupId Id, urGroup *MlsUrGroup) (MlsGroup, error)

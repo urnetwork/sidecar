@@ -204,6 +204,47 @@ func (self *sloppyPending) Complete(groupInfo []byte) (sidecar.MlsGroup, error) 
 	return self.MlsPendingJoin.Complete(again)
 }
 
+// An engine that keeps its one-time KeyPackages as it keeps the last-resort one, so each joins any number of
+// Welcomes.
+type keepingEngine struct {
+	sidecar.MlsEngine
+}
+
+func (self *keepingEngine) CreateKeyPackage(lastResort bool) (*sidecar.MlsKeyPackage, error) {
+	keyPackage, err := self.MlsEngine.CreateKeyPackage(true)
+	if err != nil {
+		return nil, err
+	}
+	keyPackage.LastResort = lastResort
+	return keyPackage, nil
+}
+
+// Keeping engines for one test.
+func keepingEngines(t *testing.T, count int) []sidecar.MlsEngine {
+	engines := []sidecar.MlsEngine{}
+	for _, engine := range fakeEngines(t, count) {
+		engines = append(engines, &keepingEngine{MlsEngine: engine})
+	}
+	return engines
+}
+
+// A pending join that answers a refused Complete with the group as its engine holds it, as one would that let a
+// replayed Welcome through.
+type replayingPending struct {
+	*plantedPending
+}
+
+func (self *replayingPending) Complete(groupInfo []byte) (sidecar.MlsGroup, error) {
+	group, err := self.plantedPending.Complete(groupInfo)
+	if err == nil {
+		return group, nil
+	}
+	if held, loadErr := self.engine.LoadGroup(self.GroupId()); loadErr == nil {
+		return held, nil
+	}
+	return nil, err
+}
+
 // Each planted break is caught by the case that holds its behavior, so a passing run says something.
 func TestTheSuiteCatchesPlantedBreaks(t *testing.T) {
 	planted := []struct {
@@ -238,6 +279,18 @@ func TestTheSuiteCatchesPlantedBreaks(t *testing.T) {
 				return &lenientGroup{plantedGroup: group.(*plantedGroup)}
 			}, nil),
 			catches: caseOtherEpoch,
+		},
+		{
+			name:       "a one-time KeyPackage kept as the last-resort one is",
+			newEngines: keepingEngines,
+			catches:    caseReplayedWelcome,
+		},
+		{
+			name: "a replayed Welcome's join reported though refused",
+			newEngines: plantedEngines(nil, func(pending sidecar.MlsPendingJoin) sidecar.MlsPendingJoin {
+				return &replayingPending{plantedPending: pending.(*plantedPending)}
+			}),
+			catches: caseReplayedWelcome,
 		},
 	}
 	for _, c := range planted {

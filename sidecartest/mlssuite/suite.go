@@ -48,6 +48,7 @@ func Run(t *testing.T, newEngines NewEngines) {
 		{name: "a-commit-of-another-epoch", run: caseOtherEpoch},
 		{name: "external-resync", run: caseExternalResync},
 		{name: "key-packages", run: caseKeyPackages},
+		{name: "a-replayed-welcome-moves-nothing", run: caseReplayedWelcome},
 	} {
 		if err := c.run(t, newEngines); err != nil {
 			t.Errorf("%s: %v", c.name, err)
@@ -584,6 +585,152 @@ func caseKeyPackages(t *testing.T, newEngines NewEngines) error {
 	}
 	if _, err := sidecar.ParseMlsHeader(first.Encoded); err == nil {
 		return errors.New("gkm read a KeyPackage as a commit")
+	}
+	return nil
+}
+
+// Both phases of a Welcome join.
+func suiteJoin(engine sidecar.MlsEngine, welcome []byte, groupInfo []byte) (sidecar.MlsGroup, error) {
+	pending, err := engine.JoinWelcome(welcome)
+	if err != nil {
+		return nil, err
+	}
+	return pending.Complete(groupInfo)
+}
+
+// A server can replay any Welcome, so one moves nothing a second time (I-16). Under a one-time KeyPackage, which has
+// joined, it joins nothing; under the last-resort one, which is kept, it never takes a held group back to its epoch;
+// and neither rejoins after a removal leaves the group unheld. A one-time KeyPackage joins one group, even when a
+// server handed it to two and both Welcomes were opened before either joined, and the last-resort one joins any
+// number (RFC 9420 §16.8; §10.6's KeyPackages). A refusal at either phase will do.
+func caseReplayedWelcome(t *testing.T, newEngines NewEngines) error {
+	engines := newEngines(t, 3)
+	creator, oneTimeJoiner, lastResortJoiner := engines[0], engines[1], engines[2]
+	oneTime, err := oneTimeJoiner.CreateKeyPackage(false)
+	if err != nil {
+		return err
+	}
+	lastResort, err := lastResortJoiner.CreateKeyPackage(true)
+	if err != nil {
+		return err
+	}
+	// two groups, each adding both KeyPackages
+	createds := []sidecar.MlsGroup{}
+	welcomes := [][]byte{}
+	groupInfos := [][]byte{}
+	for _, label := range []string{"first", "second"} {
+		group, err := creator.CreateGroup(suiteGroupId(), suiteUrGroup())
+		if err != nil {
+			return err
+		}
+		add, err := group.Commit(&sidecar.MlsCommitArgs{Adds: [][]byte{oneTime.Encoded, lastResort.Encoded}, AuthenticatedData: suiteHeader(label + " add")})
+		if err != nil {
+			return err
+		}
+		groupInfo, err := add.GroupInfo()
+		if err != nil {
+			return err
+		}
+		created, err := add.Adopt()
+		if err != nil {
+			return err
+		}
+		createds = append(createds, created)
+		welcomes = append(welcomes, add.Welcome())
+		groupInfos = append(groupInfos, groupInfo)
+	}
+
+	// the one-time KeyPackage opens both Welcomes and joins the first it completes alone
+	pendings := []sidecar.MlsPendingJoin{}
+	for _, welcome := range welcomes {
+		pending, err := oneTimeJoiner.JoinWelcome(welcome)
+		if err != nil {
+			return err
+		}
+		pendings = append(pendings, pending)
+	}
+	oneTimeMember, err := pendings[0].Complete(groupInfos[0])
+	if err != nil {
+		return err
+	}
+	if _, err := pendings[1].Complete(groupInfos[1]); err == nil {
+		return errors.New("a one-time KeyPackage joined a second group")
+	}
+	if _, err := oneTimeJoiner.LoadGroup(createds[1].GroupId()); !errors.Is(err, sidecar.ErrMlsGroupUnknown) {
+		return fmt.Errorf("a refused second join left a group: %v", err)
+	}
+	lastResortMember, err := suiteJoin(lastResortJoiner, welcomes[0], groupInfos[0])
+	if err != nil {
+		return err
+	}
+	if _, err := suiteJoin(lastResortJoiner, welcomes[1], groupInfos[1]); err != nil {
+		return fmt.Errorf("the last-resort KeyPackage joining a second group: %w", err)
+	}
+
+	// every member of the first group at epoch 2, then its epoch-1 Welcome again
+	groupId := createds[0].GroupId()
+	joiners := []sidecar.MlsEngine{oneTimeJoiner, lastResortJoiner}
+	joined := []sidecar.MlsGroup{oneTimeMember, lastResortMember}
+	update, err := createds[0].Commit(&sidecar.MlsCommitArgs{Path: true, AuthenticatedData: suiteHeader("update")})
+	if err != nil {
+		return err
+	}
+	current, err := update.Adopt()
+	if err != nil {
+		return err
+	}
+	for _, member := range joined {
+		processed, err := member.Process(update.Message())
+		if err != nil {
+			return err
+		}
+		if _, err := processed.Adopt(); err != nil {
+			return err
+		}
+	}
+	for index, engine := range joiners {
+		if _, err := suiteJoin(engine, welcomes[0], groupInfos[0]); err == nil {
+			return fmt.Errorf("joiner %d took a replayed Welcome", index+1)
+		}
+		loaded, err := engine.LoadGroup(groupId)
+		if err != nil {
+			return err
+		}
+		if loaded.Epoch() != 2 {
+			return fmt.Errorf("a replayed Welcome moved joiner %d's group to epoch %d", index+1, loaded.Epoch())
+		}
+	}
+
+	// both removed, so neither holds the group, and the Welcome again
+	removes := []uint32{}
+	for _, member := range joined {
+		removes = append(removes, member.Self().LeafIndex)
+	}
+	remove, err := current.Commit(&sidecar.MlsCommitArgs{Removes: removes, Path: true, AuthenticatedData: suiteHeader("remove")})
+	if err != nil {
+		return err
+	}
+	if _, err := remove.Adopt(); err != nil {
+		return err
+	}
+	for index, engine := range joiners {
+		member, err := engine.LoadGroup(groupId)
+		if err != nil {
+			return err
+		}
+		processed, err := member.Process(remove.Message())
+		if err != nil {
+			return err
+		}
+		if _, err := processed.Adopt(); !errors.Is(err, sidecar.ErrMlsNotMember) {
+			return fmt.Errorf("joiner %d adopted its removal: %v", index+1, err)
+		}
+		if _, err := suiteJoin(engine, welcomes[0], groupInfos[0]); err == nil {
+			return fmt.Errorf("joiner %d took a replayed Welcome after its removal", index+1)
+		}
+		if _, err := engine.LoadGroup(groupId); !errors.Is(err, sidecar.ErrMlsGroupUnknown) {
+			return fmt.Errorf("a replayed Welcome left removed joiner %d a group: %v", index+1, err)
+		}
 	}
 	return nil
 }
