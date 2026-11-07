@@ -302,7 +302,7 @@ func TestParseConfigStatementRefusesABodyThatDoesNotParse(t *testing.T) {
 	}
 }
 
-// A field a newer writer added stays with the body (§6.4), and a signature over it still holds.
+// A field a newer writer added stays with the body (§6.4).
 func TestParseConfigStatementKeepsUnknownFields(t *testing.T) {
 	signedType := bridge.SignedType_SIGNED_ADMISSION_CONFIRM
 	body := append(testConfigBody(t, signedType), testConfigUnknown()...)
@@ -394,9 +394,9 @@ func TestGrantRevokeIsNeverAnOwnerConfirm(t *testing.T) {
 	}
 }
 
-// §22.6's body target for each type the log carries, which this module's every-body tests take apart from a signature:
-// a body however it was encoded verifies as received and parses to the same message, and the canonical encoding of what
-// it parsed to is another body, whose signature refuses, so a layer that re-marshaled could never pass as one that kept.
+// §22.6's body target for each type the log carries, with the signature protocol's every-body tests leave out: a body
+// however it was encoded verifies as received and parses to the same message, while the canonical encoding of what it
+// parsed to is another body, which the signature refuses, so a layer that re-marshaled could not pass as one that kept.
 func TestConfigBodiesVerifyAsReceivedHoweverEncoded(t *testing.T) {
 	differed := map[string]int{}
 	for _, signedType := range testConfigTypes() {
@@ -577,7 +577,7 @@ func TestIdsRefuseWhatIsNoStatement(t *testing.T) {
 	}
 }
 
-// The exposure this file's configSignedId names, stated as a fact so it cannot be forgotten. No signature covers these
+// The exposure configSignedId names, stated as a fact so it cannot be forgotten. No signature covers these
 // wrappers, so each carries the one statement a server already holds, each verifies and parses to the same thing, and
 // each is a new id, which §7.9's replay row would pass and a RecoveryVeto or DelegationRevoke would not name. Only
 // SignedBytesSha256 sees through them. When question protos-bridge-statement-id-wrapper is answered, this test states
