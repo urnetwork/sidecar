@@ -9,7 +9,7 @@
 //   - wire.go, what the journal, snapshots and the feed carry between the block and its edges.
 //   - store.go, DnsStore and DnsFeed: the only ways an engine reaches §12.14's tables and an edge
 //     reaches the block, so each part here runs on sidecartest's fakes before its real half exists.
-//   - zone.go and answer.go, a root held at one serial and the unsigned answers it gives.
+//   - zone.go, zone_trie.go and answer.go, a root held at one serial and the unsigned answers it gives.
 //   - metrics.go, the metric families and their closed label values.
 //
 // This package never opens Postgres or Redis itself, and an edge holds neither, so with the core
