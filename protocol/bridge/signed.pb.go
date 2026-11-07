@@ -77,11 +77,15 @@ const (
 	SignedType_SIGNED_AUTHORITY_COSIGN   SignedType = 4627
 	SignedType_SIGNED_RECOVERY_VETO      SignedType = 4628
 	SignedType_SIGNED_PROJECTION_HEADER  SignedType = 4629
-	// 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5).
+	// 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5). Then
+	// the two §6.11's list omits: GroupForm, purpose group-form, and UrMlsCredential, purpose mls-credential, whose
+	// signed body is its bytes up to identity_signature, the one signature here no Signed carries (§10.4).
 	SignedType_SIGNED_GEN_ROTATE      SignedType = 4865
 	SignedType_SIGNED_READER_KEY      SignedType = 4866
 	SignedType_SIGNED_READER_WRAP     SignedType = 4867
 	SignedType_SIGNED_DELEGATION_WRAP SignedType = 4868
+	SignedType_SIGNED_GROUP_FORM      SignedType = 4869
+	SignedType_SIGNED_MLS_CREDENTIAL  SignedType = 4870
 	// 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
 	// purposes evs-path-epoch and evs-import.
 	SignedType_SIGNED_EVS_PUSH     SignedType = 5121
@@ -155,6 +159,8 @@ var (
 		4866: "SIGNED_READER_KEY",
 		4867: "SIGNED_READER_WRAP",
 		4868: "SIGNED_DELEGATION_WRAP",
+		4869: "SIGNED_GROUP_FORM",
+		4870: "SIGNED_MLS_CREDENTIAL",
 		5121: "SIGNED_EVS_PUSH",
 		5122: "SIGNED_EVS_RESEED",
 		5123: "SIGNED_EVS_PATH_MAP",
@@ -219,6 +225,8 @@ var (
 		"SIGNED_READER_KEY":          4866,
 		"SIGNED_READER_WRAP":         4867,
 		"SIGNED_DELEGATION_WRAP":     4868,
+		"SIGNED_GROUP_FORM":          4869,
+		"SIGNED_MLS_CREDENTIAL":      4870,
 		"SIGNED_EVS_PUSH":            5121,
 		"SIGNED_EVS_RESEED":          5122,
 		"SIGNED_EVS_PATH_MAP":        5123,
@@ -470,7 +478,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xfb\f\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xaf\r\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -515,7 +523,9 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x11SIGNED_GEN_ROTATE\x10\x81&\x12\x16\n" +
 	"\x11SIGNED_READER_KEY\x10\x82&\x12\x17\n" +
 	"\x12SIGNED_READER_WRAP\x10\x83&\x12\x1b\n" +
-	"\x16SIGNED_DELEGATION_WRAP\x10\x84&\x12\x14\n" +
+	"\x16SIGNED_DELEGATION_WRAP\x10\x84&\x12\x16\n" +
+	"\x11SIGNED_GROUP_FORM\x10\x85&\x12\x1a\n" +
+	"\x15SIGNED_MLS_CREDENTIAL\x10\x86&\x12\x14\n" +
 	"\x0fSIGNED_EVS_PUSH\x10\x81(\x12\x16\n" +
 	"\x11SIGNED_EVS_RESEED\x10\x82(\x12\x18\n" +
 	"\x13SIGNED_EVS_PATH_MAP\x10\x83(\x12\x16\n" +
