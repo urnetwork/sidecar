@@ -88,7 +88,8 @@ func checkReplies(api frontend.API, shape *partShape, stream *circuitKeystream, 
 			firstOfTicket := api.Mul(block.FirstOctet[i], block.Ticket)
 			api.AssertIsEqual(api.Mul(firstOfTicket, api.Sub(octet.value, tlsHandshakeNewSessionTicket)), 0)
 			octet.active = api.Mul(block.Active[i], api.Sub(1, block.Ticket))
-			octet.windowOk = block.WindowActive[i]
+			// a ticket's octets are no part of the reply stream, and Z9 reads only that
+			octet.windowOk = api.Mul(block.WindowActive[i], api.Sub(1, block.Ticket))
 			octets = append(octets, octet)
 		}
 	}
