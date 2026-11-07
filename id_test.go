@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -129,13 +130,43 @@ func TestIdJsonRefusesAnythingButAnId(t *testing.T) {
 		`""`,
 		`1234`,
 		`"not-an-id"`,
-		// 38 bytes, not quoted
-		`x01234567-89ab-cdef-fedc-ba9876543210x`,
 	} {
 		var id Id
 		if err := json.Unmarshal([]byte(src), &id); err == nil {
 			t.Errorf("%s decoded to %v", src, id)
 		}
+	}
+}
+
+// Called directly: encoding/json refuses these as bad syntax before UnmarshalJSON sees them, so its
+// quote check is what stands when a caller hands it the bytes itself.
+func TestIdJsonRefusesAnUnquotedId(t *testing.T) {
+	for _, src := range []string{
+		`x01234567-89ab-cdef-fedc-ba9876543210x`,
+		`"01234567-89ab-cdef-fedc-ba9876543210x`,
+		`x01234567-89ab-cdef-fedc-ba9876543210"`,
+	} {
+		var id Id
+		if err := id.UnmarshalJSON([]byte(src)); !errors.Is(err, errInvalidId) {
+			t.Errorf("%s: %v", src, err)
+		}
+		if id != (Id{}) {
+			t.Errorf("%s wrote %v", src, id)
+		}
+	}
+}
+
+// What UnmarshalJSON cannot refuse, stated: a field left out of the JSON never reaches it. A reader of
+// a required id compares it to Id{}, as Principal.Validate does for a token's.
+func TestIdJsonLeavesAnAbsentFieldZero(t *testing.T) {
+	var decoded struct {
+		Id Id `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(`{}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Id != (Id{}) {
+		t.Errorf("id %v", decoded.Id)
 	}
 }
 
@@ -181,6 +212,42 @@ func TestNewIdTakesTheWallClock(t *testing.T) {
 	}
 	if ms < before {
 		t.Errorf("timestamp %d is before the wall clock's %d", ms, before)
+	}
+}
+
+// The 80 bits past a ULID's timestamp, as hi:lo.
+func idEntropy(id Id) (uint16, uint64) {
+	return binary.BigEndian.Uint16(id[6:8]), binary.BigEndian.Uint64(id[8:16])
+}
+
+// id.go gives crypto/rand as the reason ids may name repos and sidecars. With no draw, an id that opens
+// a millisecond has zero entropy and the next steps by exactly one, so ids predict one another and two
+// processes collide. Mints until it has seen both of a draw's two uses. A wrong pass here needs 80 or
+// 32 random bits to come up zero, every other test here drives the generator with a draw of its own, and
+// none of this waits on the clock beyond the end of the current millisecond.
+func TestNewIdDrawsItsEntropy(t *testing.T) {
+	sawOpening := false
+	sawStep := false
+	previous := NewId()
+	for i := 0; i < 10000000 && !(sawOpening && sawStep); i += 1 {
+		id := NewId()
+		hi, lo := idEntropy(id)
+		if string(id[0:6]) != string(previous[0:6]) {
+			sawOpening = true
+			if hi == 0 && lo == 0 {
+				t.Fatalf("id %v opens a millisecond with no entropy", id)
+			}
+		} else {
+			_, previousLo := idEntropy(previous)
+			// a step past the 64-bit boundary still subtracts to the increment
+			if lo-previousLo != 1 {
+				sawStep = true
+			}
+		}
+		previous = id
+	}
+	if !sawOpening || !sawStep {
+		t.Errorf("opening %v, step past one %v: ids within a millisecond stepped by exactly one", sawOpening, sawStep)
 	}
 }
 

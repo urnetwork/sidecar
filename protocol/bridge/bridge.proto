@@ -3,9 +3,9 @@
 //
 // §17.8 writes its statements as field lists without numbers. Those take numbers in the order written,
 // and are open to review until they freeze. A statement a delta carries shows only ids, and the rest of
-// its row rides sealed_body: readers open it, and no server sees a prefix, address, port, map or alias
-// (§2.8, §17.8). Each *Body message below is what a sealed_body opens to. §17.8 names the seal but not
-// its bytes, so sealed_body stays opaque here.
+// its row rides sealed_body: readers open it, and no server sees a prefix, address, port, map, alias or
+// share target (§2.8, §17.8, §17.9). Each *Body message below is what a sealed_body opens to. §17.8 names
+// the seal but not its bytes, so sealed_body stays opaque here.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -167,6 +167,8 @@ enum BridgeEgressMode {
   BRIDGE_EGRESS_MODE_NONE = 3;
 }
 
+// A gate holds no config key, so it learns a mode from BridgeRows at the next base (§8.10, §17.8): until a
+// writer folds this, a subject's new mode binds its readers and not the contract gate.
 message BridgeEgress {                 // an admin, owner or sponsor
   StatementHeader header = 1;
   bytes subject = 2;
@@ -179,16 +181,19 @@ message BridgeEgressBody {
   bytes exit_tag_id = 3;
 }
 
+// §17.9 seals a share's targets T_i, host included, under a key no server derives, and api-9 keeps both
+// tables sealed, so all of the row rides the seal. No id-level check reads any of it: api and gates see a
+// filing's kind, signer and header, and §17.8's gates never see aliases.
 message BridgeAlias {                  // the accepting sidecar (17.9)
   StatementHeader header = 1;
-  bytes share_id = 2;
-  bytes host = 3;                      // sidecar_id
-  bytes sealed_body = 4;               // BridgeAliasBody
+  bytes sealed_body = 2;               // BridgeAliasBody
 }
 
 message BridgeAliasBody {
-  uint32 target_index = 1;
-  BridgeIpv4Prefix alias_prefix = 2;
+  bytes share_id = 1;
+  uint32 target_index = 2;
+  BridgeIpv4Prefix alias_prefix = 3;
+  bytes host = 4;                      // sidecar_id: T_i's host, in the source network
 }
 
 enum BridgeWithdrawMode {

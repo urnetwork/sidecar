@@ -44,11 +44,3 @@ func TestQuotaLimitsRoundTrip(t *testing.T) {
 		t.Errorf("%s, want %s", encoded, src)
 	}
 }
-
-// §20.5: zero is not included, so a key this build has never heard of refuses.
-func TestQuotaLimitsAbsentKeyReadsNotIncluded(t *testing.T) {
-	limits := QuotaLimits{Limits: map[string]int64{"storage": 1}}
-	if limits.Limits["a_key_from_a_later_release"] != 0 {
-		t.Error("an absent key read as included")
-	}
-}

@@ -28,10 +28,12 @@ const (
 	testNoticeDecisions = 2
 )
 
+// Stands for an identifier or hash of this size.
 func testBytes(size int) []byte {
 	return bytes.Repeat([]byte{0xFF}, size)
 }
 
+// What a message takes on the wire.
 func testSize(t *testing.T, message proto.Message) int {
 	encoded, err := proto.Marshal(message)
 	if err != nil {
@@ -40,6 +42,7 @@ func testSize(t *testing.T, message proto.Message) int {
 	return len(encoded)
 }
 
+// A ticket with every field at its widest but the name and token path, which each test sets to its own limit.
 func testTicket() *SocketTicket {
 	return &SocketTicket{
 		TicketId:              testBytes(testIdSize),

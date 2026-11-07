@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -62,6 +63,13 @@ var (
 	ErrBlobPutOptions = errors.New("blob put options invalid")
 )
 
+// The store's limits on a PUT's metadata (minio/cmd/generic-handlers.go, maxUserDataSize): 2 KiB,
+// counting each key with the header prefix it travels under. Format values, not settings.
+const (
+	blobMetadataMaxByteCount = 2 * 1024
+	blobMetadataKeyPrefix    = "x-amz-meta-"
+)
+
 // A PUT or DELETE that may have applied, or may yet apply before the next request on its key: a
 // timeout, an EOF or a 5xx. The caller rereads (§11.8's unknown row), and deletes nothing on the
 // strength of it (I-EVS-2). Err is what the transport said, for logs only.
@@ -69,14 +77,17 @@ type BlobUnknownError struct {
 	Err error
 }
 
+// Names the cause, for logs only.
 func (self *BlobUnknownError) Error() string {
 	return fmt.Sprintf("blob outcome unknown: %v", self.Err)
 }
 
+// What the transport said.
 func (self *BlobUnknownError) Unwrap() error {
 	return self.Err
 }
 
+// The context key WithBlobDeadline stores under.
 type blobDeadlineKey struct{}
 
 // ctx with a request's own store deadline: a fold's or copy's write, 15 s after the head read it
@@ -128,6 +139,7 @@ type BlobStore interface {
 
 // One cluster's bucket. See the file header for what every method promises.
 type BlobCluster interface {
+	// Its id in BlobStore.
 	ClusterId() string
 	// §19.6's store request deadline, 10 s on both clusters. What a waiter waits: §11.8's unknown row
 	// and §11.13's orphan and GC rules wait this long, so it is read from here and kept nowhere else.
@@ -176,8 +188,9 @@ type BlobPutOptions struct {
 	Sha256 []byte
 	// Object metadata, read back by Head and Get: an idx/ entry's state while a head lists sources
 	// (§11.7). Nil for every other family, which carries none (§19.6). Keys are lowercase letters,
-	// digits and dashes and values printable ASCII, what a store's headers carry unchanged, so T2's
-	// fake and the store agree.
+	// digits and dashes, and values printable ASCII with no space at either end, which an HTTP header
+	// drops: what a store's headers carry unchanged, so T2's fake and the store agree. The store takes
+	// 2 KiB of them, keys included.
 	Metadata map[string]string
 }
 
@@ -190,10 +203,12 @@ func (self *BlobPutOptions) Validate() error {
 	if len(self.Sha256) != 0 && len(self.Sha256) != 32 {
 		return fmt.Errorf("%w: a %d byte checksum", ErrBlobPutOptions, len(self.Sha256))
 	}
+	metadataByteCount := 0
 	for key, value := range self.Metadata {
 		if key == "" {
 			return fmt.Errorf("%w: an empty metadata key", ErrBlobPutOptions)
 		}
+		metadataByteCount += len(blobMetadataKeyPrefix) + len(key) + len(value)
 		for i := 0; i < len(key); i += 1 {
 			c := key[i]
 			if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
@@ -205,12 +220,19 @@ func (self *BlobPutOptions) Validate() error {
 				return fmt.Errorf("%w: byte %d of a metadata value", ErrBlobPutOptions, i)
 			}
 		}
+		if strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ") {
+			return fmt.Errorf("%w: a space at the end of a metadata value", ErrBlobPutOptions)
+		}
+	}
+	if blobMetadataMaxByteCount < metadataByteCount {
+		return fmt.Errorf("%w: %d bytes of metadata", ErrBlobPutOptions, metadataByteCount)
 	}
 	return nil
 }
 
 // One object, as Head, Get and List see it.
 type BlobInfo struct {
+	// The key, as a call named it or List found it.
 	Key string
 	// The whole object's size, even for a GetRange.
 	ByteCount int64
@@ -219,7 +241,8 @@ type BlobInfo struct {
 	Etag string
 	// The store's clock: §11.13's 23 h and 25 h age rules read it.
 	LastModified time.Time
-	Metadata     map[string]string
+	// What BlobPutOptions.Metadata set. Nil from List, and for an object with none.
+	Metadata map[string]string
 }
 
 // An open Get. Body holds the bytes asked for, and the caller closes it.

@@ -34,6 +34,7 @@ type TaskRequest struct {
 	MaxTime time.Duration
 }
 
+// taskworker's queue, by job name. Safe for concurrent use.
 type Tasks interface {
 	// Binds a job to its name, in the process that runs it, before that process claims work. A second
 	// function for one name is the caller's bug, and the host panics.

@@ -92,7 +92,7 @@ func TestLoggerFromConnectPassesEveryCall(t *testing.T) {
 
 func TestConnectLoggerPassesEveryCall(t *testing.T) {
 	lines := []string{}
-	exerciseConnectLogger(connectLogger(recordingLogger{recordingConnectLogger{lines: &lines}}))
+	exerciseConnectLogger(connectLogger(recordingLogger{recordingConnectLogger: recordingConnectLogger{lines: &lines}}))
 	if !slices.Equal(lines, wantLogLines) {
 		t.Errorf("lines %q", lines)
 	}
@@ -115,6 +115,17 @@ func TestConnectLoggerUnwrapsAnAdaptedLogger(t *testing.T) {
 	// a round trip adds no layer, so nothing logs through two adapters
 	if backed, ok := connectLogger(loggerFromConnect(original)).(recordingConnectLogger); !ok || backed.lines != &lines {
 		t.Errorf("round trip gave %T", connectLogger(loggerFromConnect(original)))
+	}
+}
+
+// settings.Log's default is nil, and connect's Log fields resolve nil to connect's default, so nil has
+// to arrive there as nil. An adapter around it would be a logger that panics at its first line.
+func TestConnectLoggerLeavesTheUnsetLoggerUnset(t *testing.T) {
+	if log := connectLogger(DefaultSidecarSettings().Log); log != nil {
+		t.Errorf("settings.Log's default gave %T", log)
+	}
+	if log := loggerFromConnect(nil); log != nil {
+		t.Errorf("a nil connect logger gave %T", log)
 	}
 }
 

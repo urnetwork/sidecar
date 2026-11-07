@@ -25,6 +25,7 @@ type MonitorValue[T comparable] struct {
 	notify    chan struct{}
 }
 
+// Starts at value, with nothing notified.
 func NewMonitorValue[T comparable](value T) *MonitorValue[T] {
 	return &MonitorValue[T]{
 		value:  value,
@@ -63,6 +64,7 @@ func (self *MonitorValue[T]) Update(f func(T) T) bool {
 	return self.setWithLock(f(self.value))
 }
 
+// Notifies in the same critical section as the write, and only on a change.
 func (self *MonitorValue[T]) setWithLock(value T) bool {
 	if self.value == value {
 		return false
@@ -84,6 +86,7 @@ type CallbackList[T any] struct {
 	nextCallbackId int
 }
 
+// Empty.
 func NewCallbackList[T any]() *CallbackList[T] {
 	return &CallbackList[T]{
 		callbacks:      []T{},
