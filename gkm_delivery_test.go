@@ -132,6 +132,26 @@ func TestGkmDeliveriesOpenForTheirRecipient(t *testing.T) {
 	if _, err := OpenGkmDelivery(otherGroup, generations[2], reader.Bytes(), readerKey); !errors.Is(err, ErrGkmAuthentication) {
 		t.Errorf("a delivery naming another group: %v", err)
 	}
+	// wrap_aad is read from the body, so a body naming another generation or commitment over gen/3's own key opens,
+	// and that key matches gen/3's C_g: only the body row's check against gen/3 refuses it (§10.9).
+	relabels := map[string]func(key *EvsRepoKey){
+		"generation": func(key *EvsRepoKey) { key.generation = 2 },
+		"commitment": func(key *EvsRepoKey) { key.commitment = gkmTestBytes("another commitment", gkmCommitmentByteCount) },
+	}
+	for name, relabel := range relabels {
+		relabeled := *keys[2]
+		relabel(&relabeled)
+		delivery := gkmTestDelivery(t, signer, &relabeled, &GkmDeliveryArgs{
+			GroupId:            groupId,
+			Type:               GkmWrapTypeReader,
+			Recipient:          reader.Bytes(),
+			RecipientPublicKey: readerKey.PublicKey().Bytes(),
+			Kind:               GkmDeliveryStaged,
+		})
+		if _, err := OpenGkmDelivery(delivery, generations[2], reader.Bytes(), readerKey); !errors.Is(err, ErrGkmAuthentication) {
+			t.Errorf("a delivery of gen/3's key naming another %s: %v", name, err)
+		}
+	}
 }
 
 // FI-28: a delivery to K0 never opens under K1. Its body names K0's digest, which wrap_aad binds, so relabeling it
@@ -401,6 +421,12 @@ func TestGkmRecoveryWrapOpensOnlyForItsBinding(t *testing.T) {
 	}
 	if _, err := OpenGkmRecoveryWrap(otherGroupWrap, generations[2], args, recoveryKey); !errors.Is(err, ErrGkmAuthentication) {
 		t.Errorf("a wrap sealed for another group: %v", err)
+	}
+	// A re-formed group's wrap carries this group's RK_3 and C_3 (QD-074), so opened with the args it was sealed
+	// under, its AAD holds and its key matches this gen/3: only the group check refuses it here, until KEYS-M2-25's
+	// form chain admits it.
+	if _, err := OpenGkmRecoveryWrap(otherGroupWrap, generations[2], &otherGroupArgs, recoveryKey); !errors.Is(err, ErrGkmAuthentication) {
+		t.Errorf("a re-formed group's wrap, opened against this group's gen/3: %v", err)
 	}
 	for name, mutate := range mutations {
 		changed := *args

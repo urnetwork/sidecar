@@ -271,6 +271,11 @@ func TestGkmLadderRefusesAMissingKey(t *testing.T) {
 	if _, err := top.WithFirst(top); !errors.Is(err, ErrGkmMalformed) {
 		t.Errorf("RK_3 as RK_1: %v", err)
 	}
+	// another ladder's RK_1 of the same repo never replaces the one a key holds, or every ref id would move
+	otherKeys, _ := gkmTestLadder(t, signer)
+	if _, err := withFirst.WithFirst(otherKeys[0]); !errors.Is(err, ErrGkmAuthentication) {
+		t.Errorf("another RK_1 of the repo: %v", err)
+	}
 }
 
 // A key is accepted only where gen/<g>'s C_g names it, and a link only toward the parent gen/<g> names.
@@ -294,6 +299,21 @@ func TestGkmLadderRefusesAnotherCommitment(t *testing.T) {
 	// gen/1 offered as gen/2
 	if _, err := top.OpenParent(generations[0]); !errors.Is(err, ErrGkmMalformed) {
 		t.Errorf("gen/1 as the parent of gen/3: %v", err)
+	}
+	// A gen/3 whose GenLink opens the true RK_2 but whose signed parent_commitment names another parent: the
+	// opened key matches gen/2's C_2, so only OpenParent's parent check keeps each generation to the one parent it
+	// states (FI-4).
+	forged := &GkmGeneration{Rotate: proto.Clone(generations[2].Rotate).(*protocol.GenRotate)}
+	forged.Rotate.ParentCommitment = gkmTestBytes("a parent no one signed", gkmCommitmentByteCount)
+	forgedTop, err := OpenEvsRepoKey(forged, keys[2].repoKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := forgedTop.OpenParent(generations[1]); !errors.Is(err, ErrGkmAuthentication) {
+		t.Errorf("a gen/3 naming another parent walked to gen/2: %v", err)
+	}
+	if _, err := OpenGkmLadder(forgedTop, generations[:2]); !errors.Is(err, ErrGkmAuthentication) {
+		t.Errorf("the ladder walked past a gen/3 naming another parent: %v", err)
 	}
 }
 
