@@ -119,10 +119,13 @@ func goListDeps(t *testing.T, env []string, args ...string) []string {
 }
 
 // A Worker's globals, in node: no process, so net/http's fetch path runs, and a fetch that records what
-// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. It ends
-// as the toolchain's wasm_exec_node.js does, whose two exit rules are the verdict's: node goes with the
-// Go program, or a timer the runtime armed fires into a program that has gone and fails a passing run,
-// and node never ends 0 with Go still running, or a suite that stalled would pass.
+// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. It keeps
+// the two exit rules of the toolchain's wasm_exec_node.js, which are the verdict's: node goes with the Go
+// program, or a timer the runtime armed fires into a program that has gone and fails a passing run, and
+// node never ends 0 with Go still running, or a suite that stalled would pass. Going with the program
+// means dropping those timers and letting node end, where wasm_exec_node.js calls process.exit: that
+// joins V8's workers, and one waiting on a collection the main thread will never run hangs it there,
+// which a run allocating this much reaches about one time in ten.
 const workerHarness = `
 const fs = require("fs");
 const nodeProcess = process;
@@ -136,7 +139,12 @@ globalThis.fetch = (url, options) => {
 };
 const go = new Go();
 go.argv = [wasmPath, ...testArgs];
-go.exit = (code) => nodeProcess.exit(code);
+go.exit = (code) => {
+	nodeProcess.exitCode = code;
+	for (const timeout of go._scheduledTimeouts.values()) {
+		clearTimeout(timeout);
+	}
+};
 WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.then((result) => {
 		nodeProcess.on("exit", (code) => {
@@ -253,8 +261,8 @@ func TestWorkerHarnessEndsAsItsProgramDoes(t *testing.T) {
 // The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
 // under node's process global net/http never calls fetch, and what the page Worker's transport does
 // with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
-// its fetch tests, the known answers for the mls_ it keeps and mail's vectors, since a run that
-// skipped them would still exit 0.
+// its fetch tests, the known answers for the mls_ and socket_ it keeps and mail's vectors, since a run
+// that skipped them would still exit 0.
 func TestHttpLegPassesInAWorker(t *testing.T) {
 	wasmPath := filepath.Join(t.TempDir(), "sidecar.test.wasm")
 
@@ -275,6 +283,7 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestAuthChainVectors",
 		"TestMlsVectorFilesMatchUpstream",
 		"TestMlsCryptoBasicsVectors",
 		"TestMlsKeyScheduleVectors",
@@ -282,12 +291,21 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestMlsTreeKemVectors",
 		"TestXWingKatDecapsulationThroughHpke",
 		"TestXWingKatEncapsulationThroughHpke",
+		"TestSocketTokenVectors",
+		"TestSocketSealVectors",
+		"TestSocketSealDropVectors",
 		"TestMailVectorsRoundTrip",
 		"TestMailVectorsCoverEveryField",
 		"TestMailVectorNames",
 		"TestMailVectorMonths",
 		"TestMailVectorClocks",
 		"TestMailVectorOrders",
+		"TestKeychainVectorsAreByteEqual",
+		"TestKeychainVectorsOpen",
+		"TestGkmLadderVectors",
+		"TestGkmWrapAadVectors",
+		"TestGkmWrapPathVectors",
+		"TestUrMlsCredentialRoundTrip",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)

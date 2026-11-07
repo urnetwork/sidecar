@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"tests\": [{\"src\": \"dana@acme.example\", \"accept\": [\"autogroup:internet#dial:tcp:443\"]}]}")

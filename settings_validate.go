@@ -43,19 +43,7 @@ func (self *SidecarSettings) validate() error {
 			return err
 		}
 	}
-	// §5.9's form. An instance names a directory, so this also keeps a path out of it.
-	instanceFits := func() bool {
-		if self.Instance == "" || 32 < len(self.Instance) || self.Instance[0] == '-' {
-			return false
-		}
-		for i := 0; i < len(self.Instance); i += 1 {
-			if c := self.Instance[i]; !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
-				return false
-			}
-		}
-		return true
-	}
-	if !instanceFits() {
+	if !isSidecarInstanceName(self.Instance) {
 		return fmt.Errorf("%w: Instance is not [a-z0-9][a-z0-9-]{0,31}", errInvalidSettings)
 	}
 	if self.Connect == nil {
@@ -66,6 +54,12 @@ func (self *SidecarSettings) validate() error {
 	}
 	if err := checkSettingsNumbers("SidecarSettings", reflect.ValueOf(self).Elem(), false); err != nil {
 		return err
+	}
+	if err := self.ProtocolSettings.validate(); err != nil {
+		return err
+	}
+	if MaxStreamDataByteCount < self.StreamChunkByteCount {
+		return fmt.Errorf("%w: StreamChunkByteCount is past StreamData's limit", errInvalidSettings)
 	}
 	if !slices.Contains([]string{"background", "wifi_charging", "on_demand", "never"}, self.Search.AllPolicy) {
 		return fmt.Errorf("%w: Search.AllPolicy is not one of §18.4's modes", errInvalidSettings)

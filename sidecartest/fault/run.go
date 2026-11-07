@@ -233,6 +233,22 @@ func (self *runner) check(step int, final bool) error {
 	if violations := self.barriers.Violations(); 0 < len(violations) {
 		return fmt.Errorf("a barrier broke its naming rule: %s", strings.Join(violations, "; "))
 	}
+	return self.stalled()
+}
+
+// An actor that kept the baton past the stall timeout let another run while it ran on, in an order the
+// schedule did not choose and a seed cannot repeat, so the run proves nothing it can be held to (§22.8's
+// determinism row).
+func (self *runner) stalled() error {
+	actorNames := []string{}
+	for _, event := range self.barriers.Trace() {
+		if event.Kind == sidecartest.BarrierStalled && !slices.Contains(actorNames, event.Actor) {
+			actorNames = append(actorNames, event.Actor)
+		}
+	}
+	if 0 < len(actorNames) {
+		return fmt.Errorf("%s stalled, blocked where no barrier sees it, and the run left the schedule's order", strings.Join(actorNames, ", "))
+	}
 	return nil
 }
 
@@ -259,6 +275,9 @@ func (self *runner) finish() error {
 	}
 	if unfired := self.net.Faults().Unfired(); 0 < len(unfired) {
 		return fmt.Errorf("never fired: %v", unfired)
+	}
+	if self.net.UsesPlatformFakes() && !slices.Contains(self.schedule.Tiers, TierT3) {
+		return errors.New("the row ran on the fake contract issuer and ControlId sink, so it names T3 too (Q-TEST-1)")
 	}
 	return nil
 }
@@ -288,9 +307,14 @@ func MergeSeeds() []int64 {
 
 // §22.8's unknown rule: every write in the named rows also runs with ApplyThenDrop. This runs the
 // schedule once to count its writes, then once for each, with that write's response lost, and returns
-// the failures. A fake counts the writes, so this is T2's; a T3 row sets its own plans.
+// the failures. Writes are counted where a plan counts them, at the fault queue, so a write the
+// schedule's own plan faults counts as well as one a store served. A write the schedule fails before
+// apply runs with its response lost instead, its plan counting as fired there, since a caller cannot
+// tell the two apart; one the schedule delays, holds, crashes or already drops keeps that fault, which
+// is the row's own. A fake counts the writes, so this is T2's; a T3 row sets its own plans.
 func RunEveryWriteUnknown(ctx context.Context, build func(net *Net) *Schedule, settings *sidecartest.NetSettings) []*Result {
-	var putCount, deleteCount int
+	writeOps := []string{sidecartest.FaultOpPut, sidecartest.FaultOpDelete}
+	opResults := map[string][]FaultResult{}
 	failures := []*Result{}
 	func() {
 		net := sidecartest.NewNet(ctx, settings)
@@ -299,9 +323,8 @@ func RunEveryWriteUnknown(ctx context.Context, build func(net *Net) *Schedule, s
 		if result.Err != nil {
 			failures = append(failures, result)
 		}
-		for _, clusterId := range clusterIds(net) {
-			putCount += net.Fakes().Blobs.RequestCount(clusterId, sidecartest.FaultOpPut)
-			deleteCount += net.Fakes().Blobs.RequestCount(clusterId, sidecartest.FaultOpDelete)
+		for _, op := range writeOps {
+			opResults[op] = net.Faults().OpResults(op)
 		}
 	}()
 	if 0 < len(failures) {
@@ -311,27 +334,19 @@ func RunEveryWriteUnknown(ctx context.Context, build func(net *Net) *Schedule, s
 		net := sidecartest.NewNet(ctx, settings)
 		defer net.Close()
 		schedule := build(net)
-		schedule.Steps = append([]*Step{{Fault: &FaultPlan{Op: op, Nth: nth, Result: ApplyThenDrop}}}, schedule.Steps...)
+		lost := &FaultPlan{Op: op, Nth: nth, Result: ApplyThenDrop, Displaces: true}
+		schedule.Steps = append([]*Step{{Fault: lost}}, schedule.Steps...)
 		schedule.Id = fmt.Sprintf("%s with %s %d's response lost", schedule.Id, op, nth)
 		if result := Run(ctx, schedule, net); result.Err != nil {
 			failures = append(failures, result)
 		}
 	}
-	for nth := 1; nth <= putCount; nth += 1 {
-		runLost(sidecartest.FaultOpPut, nth)
-	}
-	for nth := 1; nth <= deleteCount; nth += 1 {
-		runLost(sidecartest.FaultOpDelete, nth)
+	for _, op := range writeOps {
+		for index, result := range opResults[op] {
+			if result == 0 || result == FailBeforeApply {
+				runLost(op, index+1)
+			}
+		}
 	}
 	return failures
-}
-
-func clusterIds(net *Net) []string {
-	blobs := net.Fakes().Blobs
-	clusterIds := blobs.MetadataClusterIds()
-	segment, err := blobs.SegmentCluster()
-	if err == nil {
-		clusterIds = append(clusterIds, segment.ClusterId())
-	}
-	return clusterIds
 }

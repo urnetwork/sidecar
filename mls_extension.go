@@ -1,5 +1,8 @@
 // MLS extensions (RFC 9420 §13.4): typed opaque blobs on KeyPackages, LeafNodes, GroupInfo and the
 // GroupContext. A list keeps unknown types as they arrived, since it is hashed and signed as sent.
+//
+// §10.4 refuses external senders, so an external_senders extension is refused in every list, read or
+// written, and no leaf counts as supporting it (mlsCapabilities.supportsExtension).
 
 package sidecar
 
@@ -34,16 +37,21 @@ func (self *mlsExtension) decode(decoder *mlsDecoder) {
 	self.extensionData = decoder.readVector()
 }
 
-// Extension extensions<V>.
+// Extension extensions<V>, refusing what readExtensions refuses for the subset.
 func (self *mlsEncoder) writeExtensions(extensions []mlsExtension) {
 	self.writeVectorOf(func(elements *mlsEncoder) {
 		for index := range extensions {
+			if extensions[index].extensionType == mlsExtensionTypeExternalSenders {
+				elements.fail(fmt.Errorf("%w: external senders", errMlsRefused))
+				return
+			}
 			extensions[index].encode(elements)
 		}
 	})
 }
 
-// Extension extensions<V>, refusing a list with two of one type (RFC §13.4).
+// Extension extensions<V>, refusing a list with two of one type (RFC §13.4) and, in every list, the
+// external_senders extension (§10.4).
 func (self *mlsDecoder) readExtensions() []mlsExtension {
 	var extensions []mlsExtension
 	seenTypes := map[uint16]bool{}
@@ -51,6 +59,10 @@ func (self *mlsDecoder) readExtensions() []mlsExtension {
 		var extension mlsExtension
 		extension.decode(element)
 		if element.err != nil {
+			return
+		}
+		if extension.extensionType == mlsExtensionTypeExternalSenders {
+			element.fail(fmt.Errorf("%w: external senders", errMlsRefused))
 			return
 		}
 		if seenTypes[extension.extensionType] {

@@ -55,6 +55,14 @@ const (
 // or a Delay parking its caller.
 const FaultFired = "fault.fired"
 
+// A tier a row runs on (§22.4).
+type Tier string
+
+const (
+	TierT2 Tier = "T2"
+	TierT3 Tier = "T3"
+)
+
 type Schedule struct {
 	// "FS-1".
 	Id string
@@ -63,6 +71,10 @@ type Schedule struct {
 	Steps []*Step
 	// FI-n, after every step and at the end.
 	Check []Invariant
+	// The tiers its row names, beside the T2 this runs it on (§22.8's cadence rule). A row that adds a
+	// connect client runs on sidecartest's fake contract issuer and ControlId sink, so it names T3 too,
+	// where a divergence from server's exchange fails (Q-TEST-1), and Run fails one that does not.
+	Tiers []Tier
 }
 
 type Step struct {

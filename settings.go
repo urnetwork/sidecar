@@ -11,7 +11,7 @@
 //
 // Format values that every reader applies alike are constants beside their formats, not settings
 // (connect/CODESTYLE.md:145). settings_connect.go and settings_http.go declare the connect settings
-// per leg, settings_protocol.go §6's, and settings_mcp.go §16's.
+// per leg, envelope_settings.go §6's, and settings_mcp.go §16's.
 
 package sidecar
 
@@ -243,7 +243,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 		AppVersion: Version,
 
 		Connect:          defaultSidecarConnectSettings(),
-		ProtocolSettings: defaultSidecarProtocolSettings(),
+		ProtocolSettings: DefaultSidecarProtocolSettings(),
 		TokenRefreshSettings: &SidecarTokenRefreshSettings{
 			RefreshWindowStart:  0.4,
 			RefreshWindowEnd:    0.5,

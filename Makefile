@@ -15,15 +15,15 @@ else
 modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop
 endif
 
-.PHONY: check size proto metadata
+.PHONY: check size proto metadata stack-test
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
-# cached pass would hide a new violation. check/ runs from its own directory, go test's local mode,
-# so a passing run still prints what it leaned on. RELEASE_BINARIES names built artifacts for the
-# rules to read as well. This needs the module proxy and vuln.go.dev for govulncheck, protoc once a
-# .proto exists, and node, which the sidecar_http leg's tests run in, and fails without them: a rule
-# that did not run has not passed.
+# cached pass would hide a new violation. Each go test runs under TEST_TIMEOUT, above. check/ runs
+# from its own directory, go test's local mode, so a passing run still prints what it leaned on.
+# RELEASE_BINARIES names built artifacts for the rules to read as well. This needs the module proxy
+# and vuln.go.dev for govulncheck, protoc once a .proto exists, and node, which the sidecar_http
+# leg's tests run in, and fails without them: a rule that did not run has not passed.
 check:
 	@set -e; for module in $(modules); do \
 		echo "go test in $$module"; \
@@ -40,6 +40,10 @@ size:
 
 proto:
 	$(MAKE) -C protocol GO="$(GO)"
+
+# The store suites on §22.4's local stack, which needs Docker, so make check leaves it out.
+stack-test:
+	GO="$(GO)" local/stack.sh test
 
 # §22.7's list: the fenced block under **The list** in §2.8, byte for byte and comments included, at
 # the top of the repository. check/metadata_list_test.go fails when the two differ, so a row changes
