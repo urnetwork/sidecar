@@ -341,7 +341,8 @@ func (self *SidecarInstance) keychainFor(networkId Id) (*keychain, error) {
 // §5.9's table for a network: a lost keychain.wrap is the same loss for n, one that does not decode or
 // open is Failed, and neither creates anything. ErrSidecarStoreAbsent means nothing is here and nothing
 // is recorded, so an enrollment may create R_n. A keychain.wrap this process did not write whole is
-// written again before the keychain opens, and one that will not take the write does not open.
+// written again before the keychain opens, once the keychain has read as open, and one that will not
+// take the write does not open.
 func (self *SidecarInstance) keychainWithLock(networkId Id) (*keychain, error) {
 	if err := self.stateError(); err != nil {
 		return nil, err
@@ -370,13 +371,6 @@ func (self *SidecarInstance) keychainWithLock(networkId Id) (*keychain, error) {
 	if err != nil {
 		return nil, err
 	}
-	// every write of this keychain goes under the newest root, which must outlive what goes under it
-	if err := self.requireDurableWrapWithLock(keychainWrapPath(networkId), wrap.encode()); err != nil {
-		for _, root := range roots {
-			clear(root)
-		}
-		return nil, err
-	}
 	opened = newKeychain(self, networkId, roots, wrap.roots[0].generation)
 	if err := opened.loadRecords(); err != nil {
 		if !errors.Is(err, ErrSidecarStoreAbsent) {
@@ -387,6 +381,12 @@ func (self *SidecarInstance) keychainWithLock(networkId Id) (*keychain, error) {
 			opened.close()
 			return nil, ErrSidecarKeystoreLost
 		}
+	}
+	// every write of this keychain goes under the newest root, which must outlive what goes under it.
+	// Only a keychain that opens gets here, since a failed or lost one overwrites nothing (D-CORE-15)
+	if err := self.requireDurableWrapWithLock(keychainWrapPath(networkId), wrap.encode()); err != nil {
+		opened.close()
+		return nil, err
 	}
 	self.cacheKeychain(opened)
 	return opened, nil

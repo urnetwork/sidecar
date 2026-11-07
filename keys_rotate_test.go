@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1192,4 +1193,46 @@ func TestAKeychainWhoseWrapWillNotTakeItsRewriteDoesNotOpen(t *testing.T) {
 	backend.failNextSync(keychainWrapPath(testNetworkId))
 	requireError(t, func() error { _, err := restarted.keychainFor(testNetworkId); return err }(), ErrSidecarStoreFailed)
 	requireStoreFile(t, storeOf(t, restarted, testNetworkId, "evs"), "file", []byte("synthetic"))
+}
+
+// A network that reads as failed or lost, opened by a process that did not write its keychain.wrap,
+// has nothing written: the keychain.wrap is written again only for a keychain that opens, since a
+// failed or lost store overwrites nothing (D-CORE-15).
+func TestAFailedOrLostNetworkHasItsWrapWrittenByNoOpen(t *testing.T) {
+	world := enrolledCrashWorld(t)
+	recordsPath := networkFilePath(testNetworkId, keychainRecordsName)
+	cases := []struct {
+		name   string
+		damage func(world *crashWorld)
+		want   error
+	}{
+		{
+			name: "keychain.ur does not open",
+			damage: func(world *crashWorld) {
+				world.visible[recordsPath][len(world.visible[recordsPath])-1] ^= 1
+			},
+			want: ErrSidecarStoreFailed,
+		},
+		{
+			name:   "keychain.ur is gone",
+			damage: func(world *crashWorld) { delete(world.visible, recordsPath) },
+			want:   ErrSidecarKeystoreLost,
+		},
+	}
+	for _, c := range cases {
+		damaged := world.clone()
+		damaged.visible[recordsPath] = bytes.Clone(damaged.visible[recordsPath])
+		c.damage(damaged)
+		instance := damaged.open(damaged.keyStore())
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := instance.keychainFor(testNetworkId); !errors.Is(err, c.want) {
+			t.Errorf("%s: err %v, want %v", c.name, err, c.want)
+		}
+		instance.Close()
+		if slices.Contains(damaged.trace, "rename to "+keychainWrapPath(testNetworkId)) {
+			t.Errorf("%s: keychain.wrap was written: %q", c.name, damaged.trace)
+		}
+	}
 }
