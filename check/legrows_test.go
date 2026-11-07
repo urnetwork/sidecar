@@ -9,6 +9,7 @@ import (
 	"go/ast"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -110,9 +111,16 @@ func (self *repository) pruningFindings(t testing.TB) []string {
 	return findings
 }
 
-// §18.10's other pruning breaker: a reflect Method or MethodByName call with a name the linker can
-// not read keeps every exported method. Read off the syntax of the packages the legs above ship,
-// which is exact enough: only a file that imports reflect can make the call.
+// reflect's methods that keep every exported method: Method by index, MethodByName with a name the
+// linker cannot read, and the Methods iterators, which call Method for each index
+// (sdk/build/mobile_method_pruning_test.go:12-24).
+var reflectLookupNames = []string{"Method", "MethodByName", "Methods"}
+
+// §18.10's other pruning breaker: a reflect lookup the linker cannot read keeps every exported
+// method. Read off the syntax of the packages the legs above ship, which is exact enough: only a
+// file that imports reflect can make one. A call of one of reflectLookupNames counts, and so does a
+// method expression such as reflect.Value.MethodByName, which can be called later. A method value
+// held and called later is past what syntax tells from a field of the same name.
 func (self *repository) reflectLookupFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
@@ -124,20 +132,51 @@ func (self *repository) reflectLookupFindings(t testing.TB) []string {
 		if file.packageName != "." && first != "protocol" && first != "device" {
 			continue
 		}
-		importsReflect := slices.ContainsFunc(file.imports(), func(site importSite) bool {
-			return site.importPath == "reflect"
-		})
-		if !importsReflect {
+		// the name the file gives reflect, "." for a dot import
+		reflectName := ""
+		for _, spec := range file.syntax.Imports {
+			if importPath, err := strconv.Unquote(spec.Path.Value); err == nil && importPath == "reflect" {
+				reflectName = "reflect"
+				if spec.Name != nil {
+					reflectName = spec.Name.Name
+				}
+			}
+		}
+		if reflectName == "" || reflectName == "_" {
 			continue
 		}
+		// reflect.Value or reflect.Type, as a method expression's receiver spells it
+		var namesReflectType func(expression ast.Expr) bool
+		namesReflectType = func(expression ast.Expr) bool {
+			switch typed := expression.(type) {
+			case *ast.ParenExpr:
+				return namesReflectType(typed.X)
+			case *ast.StarExpr:
+				return namesReflectType(typed.X)
+			case *ast.SelectorExpr:
+				packageName, ok := typed.X.(*ast.Ident)
+				return ok && packageName.Name == reflectName && (typed.Sel.Name == "Value" || typed.Sel.Name == "Type")
+			case *ast.Ident:
+				return reflectName == "." && (typed.Name == "Value" || typed.Name == "Type")
+			}
+			return false
+		}
+		calledSelectors := map[*ast.SelectorExpr]bool{}
 		ast.Inspect(file.syntax, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+					calledSelectors[selector] = true
+				}
+			}
+			return true
+		})
+		ast.Inspect(file.syntax, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || !slices.Contains(reflectLookupNames, selector.Sel.Name) {
 				return true
 			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && (selector.Sel.Name == "MethodByName" || selector.Sel.Name == "Method") {
-				position := file.fileSet.Position(call.Pos())
+			if calledSelectors[selector] || namesReflectType(selector.X) {
+				position := file.fileSet.Position(selector.Sel.Pos())
 				findings = append(findings, findingf("%s:%d: a dynamic reflect lookup, %s", self.displayPath(file.path), position.Line, selector.Sel.Name))
 			}
 			return true

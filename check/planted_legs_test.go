@@ -161,6 +161,29 @@ func TestLegsFailsOnADynamicReflectLookup(t *testing.T) {
 	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:6: a dynamic reflect lookup, MethodByName")
 }
 
+// The Methods iterators call Method for every index, which keeps every exported method as surely.
+func TestLegsFailsOnAReflectMethodsIterator(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted(value any) {\n\tfor method := range reflect.TypeOf(value).Methods() {\n\t\t_ = method\n\t}\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:6: a dynamic reflect lookup, Methods")
+}
+
+// A method expression is the lookup held for later, under whatever name the file gives reflect.
+func TestLegsFailsOnAReflectMethodExpression(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\nimport mirror \"reflect\"\n\nvar lookup = mirror.Value.MethodByName\n\nvar index = (*mirror.Value).Method\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t),
+		"planted.go:5: a dynamic reflect lookup, MethodByName",
+		"planted.go:7: a dynamic reflect lookup, Method")
+}
+
+// A field of the same name is no lookup, in a file that imports reflect for something else.
+func TestLegsAllowAFieldNamedMethod(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\nimport \"reflect\"\n\ntype request struct {\n\tMethod string\n}\n\nfunc planted(value request) string {\n\t_ = reflect.TypeOf(value)\n\treturn value.Method\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t))
+}
+
 // A marker package behind each part of a leg's configuration: a runner that dropped GOOS, a tag,
 // cgo or -test would read the wrong set, and the caller's own environment must not reach the leg.
 func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {

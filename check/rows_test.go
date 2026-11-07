@@ -190,8 +190,10 @@ var failsOnRows = []failsOnRow{
 	},
 	{
 		row: "legs", item: "a dynamic reflect lookup in shipped code (§18.10)",
-		rule:         (*repository).reflectLookupFindings,
-		plantedTests: []string{"TestLegsFailsOnADynamicReflectLookup"},
+		rule: (*repository).reflectLookupFindings,
+		plantedTests: []string{
+			"TestLegsFailsOnADynamicReflectLookup", "TestLegsFailsOnAReflectMethodsIterator", "TestLegsFailsOnAReflectMethodExpression",
+		},
 	},
 	{
 		row: "legs", item: "a leg that does not compile, on each leg this host has the toolchain for (§22.4's T1)",
