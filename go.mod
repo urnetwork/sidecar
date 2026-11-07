@@ -7,6 +7,7 @@ tool google.golang.org/protobuf/cmd/protoc-gen-go
 require (
 	github.com/miekg/dns v1.1.72
 	github.com/urnetwork/connect v0.0.0
+	golang.org/x/text v0.43.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -47,7 +48,6 @@ require (
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.51.0 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
