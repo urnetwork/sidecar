@@ -195,11 +195,11 @@ func TestMlsHookSeesTreeKem(t *testing.T) {
 	if err := tree.mergeUpdatePath(0, updatePath, nil, group.validation); err != nil {
 		t.Fatal(err)
 	}
-	commitSecret, err := group.members[3].secrets.receiveUpdatePath(tree, 0, updatePath, group.provisionalContext(tree), nil)
+	received, err := group.members[3].secrets.receiveUpdatePath(tree, 0, updatePath, group.provisionalContext(tree), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder.require(t, "commit_secret", commitSecret)
+	recorder.require(t, "commit_secret", received.commitSecret)
 	recorder.require(t, "path_secret", prepared.pathSecrets[len(prepared.pathSecrets)-1])
 }
 

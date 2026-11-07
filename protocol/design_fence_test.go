@@ -6,6 +6,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -22,8 +23,9 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-// Beside the module, relative to this package.
-const testDesignPath = "../DESIGN.md"
+// Where DESIGN.md is from this directory. A release branch keeps it at the repository's top, beside
+// the module moved into v2026/ (§4.9), so there it sits one directory further up.
+var testDesignPaths = []string{"../DESIGN.md", "../../DESIGN.md"}
 
 // Written so a fence's string, identifier, number and punctuation each stay one token.
 var testFenceToken = regexp.MustCompile(`"[^"]*"|[A-Za-z_][A-Za-z0-9_.]*|0x[0-9A-Fa-f]+|[0-9]+|[{};=,<>]`)
@@ -222,13 +224,22 @@ func testParseFence(t *testing.T, fences *testFences, fence string) {
 	}
 }
 
-// Every fenced proto block in DESIGN.md, then testUnfencedFence, read into one set of declarations. A declaration
-// that later gains a fence is then written twice, which says to take it out of testUnfencedFence.
-func testReadFences(t *testing.T) *testFences {
-	design, err := os.ReadFile(testDesignPath)
+// DESIGN.md's bytes, from beside the module or, on a release branch, from one directory further up.
+func testReadDesign(t testing.TB) []byte {
+	design, err := os.ReadFile(testDesignPaths[0])
+	if errors.Is(err, os.ErrNotExist) {
+		design, err = os.ReadFile(testDesignPaths[1])
+	}
 	if err != nil {
 		t.Fatalf("this test needs the design beside the module: %v", err)
 	}
+	return design
+}
+
+// Every fenced proto block in DESIGN.md, then testUnfencedFence, read into one set of declarations. A declaration
+// that later gains a fence is then written twice, which says to take it out of testUnfencedFence.
+func testReadFences(t *testing.T) *testFences {
+	design := testReadDesign(t)
 	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
 	var fence *strings.Builder
 	count := 0
@@ -747,10 +758,7 @@ func TestWireDifferencesCatchPlantedFaults(t *testing.T) {
 // The field lists the design writes for what it fences nowhere (§10.5, §10.14, §11.10), which a descriptor must keep
 // name for name, its numbers following the order written. testUnfencedFence holds their types.
 func TestWrittenFieldListsMatchTheirMessages(t *testing.T) {
-	design, err := os.ReadFile(testDesignPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	design := testReadDesign(t)
 	cases := []struct {
 		name   string
 		list   string

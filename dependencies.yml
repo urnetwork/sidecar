@@ -1,12 +1,13 @@
 # Every module a leg of this repository links, with its SPDX id, why it is here and the legs that
 # may link it: client, engine, cli, test (§4.7). make check fails a leg linking a module not listed
 # here, or linking it on a leg its row does not name, and reads each id against the module's own
-# license files. This repository's own modules are not listed.
+# license files: those at its top, and those beside or above a package a leg links. This
+# repository's own modules are not listed.
 #
-# Allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0. Ids joined by AND are a module
-# whose files carry several of them. Refused: the GPL family, SSPL, BUSL, custom, unlicensed. A
-# license outside the list stops make check unless check/settings_test.go holds an exception
-# for that module at that version, and that exception names a question for the owner.
+# Allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0, and X11, which is MIT's text
+# plus only its no-advertising clause (QD-240). Ids joined by AND are a module whose files carry
+# several of them. Refused: the GPL family, SSPL, BUSL, custom, unlicensed. A license outside the
+# list stops make check.
 #
 # planned: true marks a module nothing links yet, because §4.7 names it for later or a track has it in
 # flight. Its id was read from its files at the version §4.7, a sibling go.mod or that track gives.
@@ -28,8 +29,8 @@ modules:
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
   - module: github.com/consensys/gnark
-    spdx: Apache-2.0
-    reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject
+    spdx: Apache-2.0 AND MIT
+    reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject; its frontend/schema links reflectwalk under MIT
     leg: [engine, cli, test]
   - module: github.com/consensys/gnark-crypto
     spdx: Apache-2.0
@@ -270,5 +271,5 @@ modules:
     leg: [client, engine, cli, test]
   - module: src.agwa.name/tlshacks
     spdx: X11
-    reason: connect's ClientHello parser; MIT text plus an advertising clause, outside §4.7's list and held by an exception
+    reason: connect's ClientHello parser; MIT's text plus X11's no-advertising clause
     leg: [client, engine, cli, test]

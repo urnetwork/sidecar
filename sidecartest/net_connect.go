@@ -5,6 +5,8 @@
 // The two things a platform gives a client stand in here as a fake contract issuer and a ControlId sink,
 // each named in §22.8's cadence rule: every row using them also runs on T3 against server's exchange
 // (server/connect/resident.go:902), and a divergence fails, so neither is the last word on connect.
+// Every client here runs on both, and fault.Run fails a row that adds one without naming T3. The T3
+// run and its comparison are server's, with T3.
 //
 // A connect client keeps real timers of its own, so what happens on a link runs in real time and not on
 // the injected clock. A test waits for what it expects on a channel, with no sleep, but a link's timing
@@ -283,6 +285,15 @@ func (self *Net) AddClient(name string, settings *connect.ClientSettings) *NetCl
 		exchange.sinkControl(netClient, controlRoute)
 	}()
 	return netClient
+}
+
+// Whether a client was added, each of which runs on the fake contract issuer and the ControlId sink, so
+// a row that added one names T3 too (Q-TEST-1).
+func (self *Net) UsesPlatformFakes() bool {
+	exchange := self.exchange
+	exchange.stateLock.Lock()
+	defer exchange.stateLock.Unlock()
+	return 0 < len(exchange.clients)
 }
 
 // The receive route of a carrier, made on first use.

@@ -4,20 +4,26 @@
 // module is .../sidecar/v2026 in v2026/, smtpproof is .../sidecar/smtpproof/v2026 in smtpproof/v2026/,
 // cli and mlsinterop stay put, and every quoted path of ours has been rewritten (§4.9). These apply
 // build/all/run.sh's transformation to a fixture and read the result, so the rules are shown to work
-// where they will next be run. A real dry run of the same steps over this tree is the release
-// fixture's job (§22.4), which the consumer wiring brings.
+// where they will next be run. release_step_test.go holds this to run.sh's own functions, and a real
+// dry run of them over this tree is the release fixture's job (§22.4): build/all's
+// TestSidecarReleaseFixture.
 
 package check
 
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 // The year in the release's module paths.
 const releaseSuffix = "/v2026"
+
+// What stays beside the module on a version branch, out of every consumer's module cache. These are
+// the arguments run.sh's sidecar_release_edit gives go_mod_fork.
+var releaseDocumentPattern = regexp.MustCompile(`^(design|research_notes|DESIGN.*|HANDOFF\.md|FEEDBACK-SYSTEM\.md)$`)
 
 // The go_mod_fork steps, in the order §4.9 gives them, on connect and glog as earlier release steps
 // leave them and on this repository: every module's quoted paths rewritten, smtpproof's before the
@@ -55,7 +61,7 @@ func (self *fixture) toRelease() {
 	rewrite(filepath.Join(self.directory, "connect"), connectBasePath, glogBasePath)
 	rewrite(top, smtpproofPath, sidecarBasePath, connectBasePath, glogBasePath)
 
-	// moves a tree into v2026/, leaving what holds its own go.mod where it is
+	// moves a tree into v2026/, leaving what holds its own go.mod where it is, and the documents
 	move := func(directory string) {
 		versioned := filepath.Join(directory, strings.TrimPrefix(releaseSuffix, "/"))
 		entries, err := os.ReadDir(directory)
@@ -67,6 +73,9 @@ func (self *fixture) toRelease() {
 		}
 		for _, entry := range entries {
 			if _, err := os.Stat(filepath.Join(directory, entry.Name(), "go.mod")); err == nil {
+				continue
+			}
+			if releaseDocumentPattern.MatchString(entry.Name()) {
 				continue
 			}
 			if err := os.Rename(filepath.Join(directory, entry.Name()), filepath.Join(versioned, entry.Name())); err != nil {
@@ -102,7 +111,8 @@ func (self *fixture) toRelease() {
 	}
 	edit(filepath.Join(top, "v2026", "go.mod"), append(siblings("../../"), "-module="+sidecarBasePath+releaseSuffix)...)
 	edit(filepath.Join(top, "smtpproof", "v2026", "go.mod"), append(siblings("../../../"),
-		"-module="+smtpproofPath+releaseSuffix, "-dropreplace="+sidecarBasePath, "-replace="+sidecarBasePath+releaseSuffix+"=../../v2026")...)
+		"-module="+smtpproofPath+releaseSuffix, "-droprequire="+sidecarBasePath, "-dropreplace="+sidecarBasePath,
+		"-require="+sidecarBasePath+releaseSuffix+version, "-replace="+sidecarBasePath+releaseSuffix+"=../../v2026")...)
 	edit(filepath.Join(top, "mlsinterop", "go.mod"), append(siblings("../../"),
 		"-dropreplace="+sidecarBasePath, "-replace="+sidecarBasePath+releaseSuffix+"=../v2026")...)
 	edit(filepath.Join(top, "cli", "go.mod"), append(siblings("../../"),

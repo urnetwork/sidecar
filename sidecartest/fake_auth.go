@@ -1,7 +1,8 @@
 // ServiceHost.Authenticator in memory. Tokens are opaque strings this fake issued, so a test mints one
 // for the Principal it wants, and only an Issue here authenticates: a guess, a token for another
-// audience, a revoked one and an expired one are refused, each as ErrAuthenticationRefused. A dropped
-// call is the other kind of error, the one an engine answers as unavailable (host_auth.go).
+// audience, a revoked one, an expired one and one Principal.Validate refuses are refused, each as
+// ErrAuthenticationRefused. A dropped call is the other kind of error, the one an engine answers as
+// unavailable (host_auth.go).
 
 package sidecartest
 
@@ -33,7 +34,8 @@ func NewFakeAuthenticator(clock Clock, faults *FaultQueue) *FakeAuthenticator {
 }
 
 // A token naming principal, good for principal.Audience until principal.ExpiresAt. A zero ExpiresAt
-// never expires. The string is opaque and synthetic, and no real issuer could have made it.
+// has passed, as host_auth.go says, and a Principal Validate refuses stays refused: a test can mint
+// either to see it fail. The string is opaque and synthetic, and no real issuer could have made it.
 func (self *FakeAuthenticator) Issue(principal *sidecar.Principal) string {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -70,8 +72,11 @@ func (self *FakeAuthenticator) Authenticate(ctx context.Context, audience string
 			return fmt.Errorf("%w: revoked", sidecar.ErrAuthenticationRefused)
 		case token.principal.Audience != audience:
 			return fmt.Errorf("%w: for another audience", sidecar.ErrAuthenticationRefused)
-		case !token.principal.ExpiresAt.IsZero() && !self.clock.Now().Before(token.principal.ExpiresAt):
+		case !self.clock.Now().Before(token.principal.ExpiresAt):
 			return fmt.Errorf("%w: expired", sidecar.ErrAuthenticationRefused)
+		}
+		if err := token.principal.Validate(); err != nil {
+			return err
 		}
 		principalCopy := *token.principal
 		principalCopy.Scopes = slices.Clone(token.principal.Scopes)

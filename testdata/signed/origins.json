@@ -1,0 +1,7 @@
+{
+ "comment": "Fixture WebAuthn origins (QD-073). protocol/bridge's tests and testdata/signed/vectors.json verify every webauthn-es256 assertion against this list in place of §16.6's per-platform list, webAuthnOrigins in protocol/bridge/signed_presence.go, which never holds one of these: an assertion made with them verifies nowhere else. Each has the form of a release entry. The second is android:apk-key-hash: and the unpadded base64url SHA-256 of the ASCII bytes 'synthetic release signing certificate', and the tests refuse the same form over 'synthetic debug signing certificate', a debug-signed build's.",
+ "origins": [
+  "https://presence.example",
+  "android:apk-key-hash:RVfku3txnN4YTzUlwu3VZHe41pMVBWBZWhER2UwV4N8"
+ ]
+}

@@ -7,6 +7,8 @@
 package check
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -366,22 +368,10 @@ func (self *repository) sharedVersionFindings(t testing.TB) []string {
 	return findings
 }
 
-// How a license's text is told apart, after lowercasing and joining whitespace. Each id must find
-// all of its phrases. These are a fingerprint, not a classifier: their job is to catch a row whose
-// claim the module's files do not back.
-var licensePhrases = map[string][]string{
-	"MIT":          {"permission is hereby granted, free of charge, to any person obtaining a copy"},
-	"X11":          {"permission is hereby granted, free of charge, to any person obtaining a copy", "shall not be used in advertising"},
-	"Apache-2.0":   {"apache license", "version 2.0"},
-	"BSD-2-Clause": {"redistribution and use in source and binary forms"},
-	"BSD-3-Clause": {"redistribution and use in source and binary forms", "neither the name"},
-	"ISC":          {"permission to use, copy, modify, and"},
-	"MPL-2.0":      {"mozilla public license", "2.0"},
-}
-
-// Phrases in a license file that take it out of what §4.7 allows, whatever else the file says: the
-// refused families, and the clauses that turn a familiar license into a custom one. An exception
-// names its own phrase, so tlshacks's advertising clause passes only there.
+// Phrases that name what a license file's words beyond its licenses' own are: the refused families,
+// and custom clauses everyone knows. Any word beyond a row's licenses fails it, so these add only the
+// refusal's name to a finding; one in a license's own text, such as X11's advertising clause under an
+// X11 row, is that license's and passes.
 var refusedLicensePhrases = []string{
 	"gnu general public license",
 	"gnu lesser general public",
@@ -391,93 +381,167 @@ var refusedLicensePhrases = []string{
 	"commons clause",
 	"shall be used for good, not evil",
 	"shall not be used in advertising",
+	"all advertising materials mentioning features or use of this software",
 	"non-commercial",
-	"noncommercial",
 }
 
 // A license file by its name, as the go command's own license scan finds them.
 var licenseFileNamePattern = regexp.MustCompile(`(?i)^(licen[cs]e|copying|unlicense)([.-].*)?$`)
-
-// The license files at a module's top, as one lowered, whitespace-joined text, or "" without any.
-func readLicenseText(directory string) (string, error) {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return "", err
-	}
-	texts := []string{}
-	for _, entry := range entries {
-		if entry.IsDir() || !licenseFileNamePattern.MatchString(entry.Name()) {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
-		if err != nil {
-			return "", err
-		}
-		texts = append(texts, string(data))
-	}
-	return strings.Join(strings.Fields(strings.ToLower(strings.Join(texts, " "))), " "), nil
-}
 
 // Each id in a row's spdx, joined by AND.
 func licenseIds(spdx string) []string {
 	return strings.Split(spdx, " AND ")
 }
 
-// What is wrong with one row given its module's license text, version and the settings.
-func (self *checkSettings) licenseFindings(row *dependencyRow, version string, licenseText string) []string {
+// One license file a leg links, read.
+type linkedLicenseFile struct {
+	// from its module's top, for a finding
+	name string
+	// at the module's top, rather than beside or above a package the leg links
+	top   bool
+	words []string
+}
+
+// What is wrong with one copy of a row's module, given the license files its linked packages sit
+// under and §4.7's texts: an id §4.7 does not allow; no license file at the module's top; a file with
+// words beyond the row's licenses and the module's notes, which makes it a custom license, with the
+// refused phrases among those words; or an id no file shows. Each file is read on its own, so a GPL
+// file beside a linked package fails an MIT row as surely as one at the top.
+func (self *checkSettings) licenseFindings(row *dependencyRow, files []*linkedLicenseFile, texts map[string][]*licenseText) []string {
 	findings := []string{}
-	exception, excepted := self.licenseExceptions[row.module]
-	if excepted && exception.version != version {
-		excepted = false
-	}
+	rowTexts := []*licenseText{}
 	for _, id := range licenseIds(row.spdx) {
-		allowed := slices.Contains(self.allowedLicenses, id)
-		if !allowed && !(excepted && id == exception.spdx) {
+		if !slices.Contains(self.allowedLicenses, id) {
 			findings = append(findings, findingf("%s is %s, which §4.7 does not allow", row.module, id))
 			continue
 		}
-		if licenseText == "" {
+		rowTexts = append(rowTexts, texts[id]...)
+	}
+	note := self.licenseNotes[row.module]
+	for _, passage := range note.passages {
+		items, err := parseLicenseTemplate(passage)
+		if err != nil {
+			findings = append(findings, findingf("%s's license note cannot be read: %v", row.module, err))
 			continue
 		}
-		for _, phrase := range licensePhrases[id] {
-			if !strings.Contains(licenseText, phrase) {
-				findings = append(findings, findingf("%s says %s, and its license text lacks %q", row.module, id, phrase))
+		rowTexts = append(rowTexts, &licenseText{id: row.module, name: "note", items: items})
+	}
+	if !slices.ContainsFunc(files, func(file *linkedLicenseFile) bool { return file.top }) {
+		return append(findings, findingf("%s has no license file, and §4.7 refuses the unlicensed", row.module))
+	}
+	refusedPhraseWords := map[string]string{}
+	for _, phrase := range refusedLicensePhrases {
+		refusedPhraseWords[phrase] = " " + strings.Join(licenseWords(phrase), " ") + " "
+	}
+	shownIds := map[string]bool{}
+	for _, file := range files {
+		covered := make([]bool, len(file.words))
+		for id := range self.coverLicenseWords(file.words, covered, rowTexts) {
+			shownIds[id] = true
+		}
+		beyond := []string{}
+		for index, word := range file.words {
+			if !covered[index] {
+				beyond = append(beyond, word)
+			}
+		}
+		if len(beyond) == 0 {
+			continue
+		}
+		findings = append(findings, findingf("%s's %s holds words beyond %s, so it is another license or a custom one: it leaves %s at %s",
+			row.module, file.name, row.spdx, row.spdx, self.licenseDeparture(file.words, covered, rowTexts)))
+		beyondText := " " + strings.Join(beyond, " ") + " "
+		for _, phrase := range refusedLicensePhrases {
+			if strings.Contains(beyondText, refusedPhraseWords[phrase]) {
+				findings = append(findings, findingf("%s's %s has %q", row.module, file.name, phrase))
 			}
 		}
 	}
-	if licenseText == "" {
-		findings = append(findings, findingf("%s has no license file, and §4.7 refuses the unlicensed", row.module))
-	}
-	for _, phrase := range refusedLicensePhrases {
-		if !strings.Contains(licenseText, phrase) {
-			continue
+	for _, id := range licenseIds(row.spdx) {
+		if slices.Contains(self.allowedLicenses, id) && !shownIds[id] {
+			findings = append(findings, findingf("%s says %s, and none of its license files holds %s's text", row.module, id, id))
 		}
-		if excepted && slices.Contains(licensePhrases[exception.spdx], phrase) {
-			continue
-		}
-		findings = append(findings, findingf("%s's license text has %q", row.module, phrase))
 	}
 	return findings
 }
 
-// Every row's id against §4.7's list, and every linked module's files against its row. A planned
-// row has no files to read yet, so its id alone is checked, and its module joins the file check the
-// moment a leg links it, planned or not.
+// One copy of a module some leg links.
+type linkedModuleCopy struct {
+	directory string
+	version   string
+}
+
+// The license files that bear on a copy's linked packages: those at the module's top, and those in
+// each linked package's directory and every directory between it and the top, which is where a
+// license file covering that package can sit. A file in a directory no linked package is under says
+// nothing about what ships.
+func readLinkedLicenseFiles(moduleDirectory string, packageDirectories map[string]bool) ([]*linkedLicenseFile, error) {
+	directories := map[string]bool{moduleDirectory: true}
+	for packageDirectory := range packageDirectories {
+		for directory := packageDirectory; directory != moduleDirectory; directory = filepath.Dir(directory) {
+			relative, err := filepath.Rel(moduleDirectory, directory)
+			if err != nil || !filepath.IsLocal(relative) {
+				return nil, fmt.Errorf("%s is outside its module at %s", packageDirectory, moduleDirectory)
+			}
+			directories[directory] = true
+		}
+	}
+	files := []*linkedLicenseFile{}
+	for _, directory := range slices.Sorted(maps.Keys(directories)) {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !licenseFileNamePattern.MatchString(entry.Name()) {
+				continue
+			}
+			filePath := filepath.Join(directory, entry.Name())
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return nil, err
+			}
+			relative, err := filepath.Rel(moduleDirectory, filePath)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, &linkedLicenseFile{name: filepath.ToSlash(relative), top: directory == moduleDirectory, words: licenseWords(string(data))})
+		}
+	}
+	return files, nil
+}
+
+// Every row's id against §4.7's list, and the license files of every copy a leg links against its
+// row. Each module of this repository selects versions of its own, and mlsinterop requires nothing of
+// the root, so a module can stand at two versions: one copy's files say nothing about the other's. A
+// planned row has no files to read yet, so its id alone is checked, and its module joins the file
+// check the moment a leg links it, planned or not.
 func (self *repository) licenseRowFindings(t testing.TB) []string {
 	t.Helper()
 	rowsByModule, findings := self.dependencyRows(t)
-	moduleDirectories := map[string]string{}
-	moduleVersions := map[string]string{}
+	texts, err := licenseTexts()
+	if err != nil {
+		return append(findings, findingf("reading §4.7's licenses' texts: %v", err))
+	}
+	moduleCopies := map[string]map[linkedModuleCopy]map[string]bool{}
 	for _, leg := range self.legs {
 		for _, listed := range self.closure(t, leg) {
-			if listed.Module != nil {
-				moduleDirectories[firstPartyBase(listed.Module.Path)] = listed.Module.Dir
-				moduleVersions[firstPartyBase(listed.Module.Path)] = listed.Module.Version
+			if listed.Module == nil {
+				continue
 			}
+			modulePath := firstPartyBase(listed.Module.Path)
+			if moduleCopies[modulePath] == nil {
+				moduleCopies[modulePath] = map[linkedModuleCopy]map[string]bool{}
+			}
+			linkedCopy := linkedModuleCopy{directory: listed.Module.Dir, version: listed.Module.Version}
+			if moduleCopies[modulePath][linkedCopy] == nil {
+				moduleCopies[modulePath][linkedCopy] = map[string]bool{}
+			}
+			moduleCopies[modulePath][linkedCopy][listed.Dir] = true
 		}
 	}
 	for modulePath, row := range rowsByModule {
-		directory, linked := moduleDirectories[modulePath]
+		copies, linked := moduleCopies[modulePath]
 		if !linked {
 			for _, id := range licenseIds(row.spdx) {
 				if !slices.Contains(self.settings.allowedLicenses, id) {
@@ -486,28 +550,17 @@ func (self *repository) licenseRowFindings(t testing.TB) []string {
 			}
 			continue
 		}
-		licenseText, err := readLicenseText(directory)
-		if err != nil {
-			t.Fatal(err)
+		for linkedCopy, packageDirectories := range copies {
+			files, err := readLinkedLicenseFiles(linkedCopy.directory, packageDirectories)
+			if err != nil {
+				findings = append(findings, findingf("reading %s's license files at %s: %v", modulePath, linkedCopy.version, err))
+				continue
+			}
+			for _, finding := range self.settings.licenseFindings(row, files, texts) {
+				findings = append(findings, findingf("%s, at %s", finding, linkedCopy.version))
+			}
 		}
-		findings = append(findings, self.settings.licenseFindings(row, moduleVersions[modulePath], licenseText)...)
 	}
 	slices.Sort(findings)
-	return findings
-}
-
-// The exceptions in force, for the run's log. One whose module left the tree goes too, or a stale
-// permission would wait for the next module of that name.
-func (self *repository) licenseExceptionFindings(t testing.TB) []string {
-	t.Helper()
-	rowsByModule, findings := self.dependencyRows(t)
-	for modulePath, exception := range self.settings.licenseExceptions {
-		row, listed := rowsByModule[modulePath]
-		if !listed || !slices.Contains(licenseIds(row.spdx), exception.spdx) {
-			findings = append(findings, findingf("the license exception for %s has no matching row; remove it", modulePath))
-			continue
-		}
-		self.report("%s stands on a license exception: %s, waiting on %s", modulePath, exception.spdx, exception.question)
-	}
 	return findings
 }

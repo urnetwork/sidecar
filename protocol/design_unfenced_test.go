@@ -285,6 +285,59 @@ enum GkmHintKind {
   GKM_HINT_KIND_UNSPECIFIED = 0; GKM_HINT_COMMIT = 1; GKM_HINT_PENDING = 2; GKM_HINT_WELCOME = 3;
   GKM_HINT_KEY_PACKAGES_LOW = 4; GKM_HINT_WRAP_PENDING = 5;
 }
+// §10.6's objects: the epoch/<n> row with gkm-1's epoch 0, the group-info row, the welcome/<sidecar_id>/<ref> row and
+// the <ref>.claim row, which §10 names and gives no bytes.
+message GkmEpochObject {
+  bytes commit = 1; GkmCommitHeader header = 2; bytes uploader = 3; int64 time_ms = 4; bytes gen_wrap = 5;
+  bytes sealed_group_info = 6; uint64 group_info_generation = 7; bytes network_id = 8; uint32 cipher_suite = 9;
+}
+message GkmGroupInfoObject { uint64 epoch = 1; uint64 generation = 2; bytes sealed_group_info = 3; }
+message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; }
+message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }
+// §10.14's routes: POST /gkm/key-packages and .../claim; POST /gkm/groups, as KF1 writes it; POST
+// /gkm/repos/<id>/forms, with 10.8's epoch 0; GET /gkm/groups/<id>; POST .../epochs/<n>; GET .../epochs, with sizes.
+message GkmKeyPackagesRequest { repeated bytes key_packages = 1; }
+message GkmKeyPackageClaimRequest { bytes group_id = 1; bytes target = 2; }
+message GkmKeyPackageClaimReply { bytes key_package_ref = 1; bytes key_package = 2; }
+message GkmGroupCreateRequest {
+  Signed form = 1; Signed gen_rotate = 2; bytes gen_wrap = 3; bytes sealed_group_info = 4;
+  uint32 cipher_suite = 5;
+}
+message GkmGroupReformRequest {
+  Signed form = 1; bytes gen_wrap = 2; bytes sealed_group_info = 3; uint32 cipher_suite = 4;
+}
+message GkmGroupReply { Signed form = 1; }
+message GkmEpochRequest {
+  bytes commit = 1; bytes gen_wrap = 2; bytes sealed_group_info = 3; uint64 group_info_generation = 4;
+}
+message GkmEpochEntry { uint64 epoch = 1; uint64 size = 2; GkmEpochObject object = 3; }
+message GkmEpochsReply { repeated GkmEpochEntry epochs = 1; }
+// §10.14's GET .../gen and .../drop-key; GET /gkm/repos/<id>/forms, which §10.14 lacks and members need; POST
+// .../ladder, which a re-form's ladder needs; and POST /gkm/reader-keys, for a rotator's batches.
+message GkmGenerationsReply { repeated Signed generations = 1; }
+message GkmFormsReply { repeated Signed forms = 1; }
+message GkmLadderRequest { repeated Signed generations = 1; }
+message GkmReaderKeysRequest { repeated bytes sidecar_ids = 1; }
+message GkmReaderKeysReply { repeated Signed reader_keys = 1; }
+// §10.14's POST .../wraps/<g>/<c8>, batched, and GET .../wraps/<g>; POST .../welcome/<n>, for gkm-5's recipients, and
+// GET /gkm/welcomes; POST .../ack, for gkm-10; GET and POST /gkm/recovery/<member_id>/wraps, for gkm-8; and POST
+// .../recovery-wraps/<g>/<c8>, a rotator's batches.
+message GkmWrapBatch { repeated bytes deliveries = 1; }
+message GkmWrapResult { uint32 status = 1; bytes winner = 2; }
+message GkmWrapBatchReply { repeated GkmWrapResult results = 1; }
+message GkmWrapsReply { repeated Signed wraps = 1; }
+message GkmWelcomeRecipient { bytes sidecar_id = 1; bytes key_package_ref = 2; }
+message GkmWelcomeRequest { bytes welcome = 1; repeated GkmWelcomeRecipient recipients = 2; }
+message GkmWelcomeEntry { bytes key_package_ref = 1; GkmWelcomePointer pointer = 2; bytes welcome = 3; }
+message GkmWelcomesReply { repeated GkmWelcomeEntry welcomes = 1; }
+message GkmAckRequest { uint64 epoch = 1; }
+message GkmRecoveryWrap {
+  bytes group_id = 1; uint64 generation = 2; bytes commitment_prefix = 3; bytes binding_prefix = 4;
+  bytes ciphertext = 5;
+}
+message GkmRecoveryWrapsReply { repeated GkmRecoveryWrap wraps = 1; }
+message GkmRecoveryWrapItem { bytes member_id = 1; bytes binding_prefix = 2; bytes ciphertext = 3; }
+message GkmRecoveryWrapBatch { repeated GkmRecoveryWrapItem items = 1; }
 
 // sidecar/protocol/evs.proto
 // §11.10's list.
