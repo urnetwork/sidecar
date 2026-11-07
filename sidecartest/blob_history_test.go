@@ -277,3 +277,129 @@ func TestHistoryOfAnInFlightWriteIsSeenAsUnknown(t *testing.T) {
 		t.Errorf("at the end: %v", err)
 	}
 }
+
+// FI-30: none the store took past its deadline takes effect, so an acknowledgement of one is a store
+// breaking it, whatever a later read finds.
+func TestHistoryCheckRefusesAWriteAcknowledgedPastItsDeadline(t *testing.T) {
+	start := DefaultClockStart()
+	late := start.Add(-1 * time.Millisecond)
+	for _, entries := range [][]*BlobHistoryEntry{
+		historyAt(start,
+			&BlobHistoryEntry{Op: BlobHistoryPutIfNoneMatch, WriteEtag: "e1", Outcome: BlobOutcomeOk, Deadline: late},
+			&BlobHistoryEntry{Op: BlobHistoryHead, ReadEtag: "e1", Outcome: BlobOutcomeOk},
+		),
+		historyAt(start,
+			&BlobHistoryEntry{Op: BlobHistoryPutIfNoneMatch, WriteEtag: "e1", Outcome: BlobOutcomeOk},
+			&BlobHistoryEntry{Op: BlobHistoryDelete, Outcome: BlobOutcomeOk, Deadline: late},
+			&BlobHistoryEntry{Op: BlobHistoryHead, Outcome: BlobOutcomeNotFound},
+		),
+	} {
+		err := CheckBlobHistory(entries, nil)
+		if err == nil || !strings.Contains(err.Error(), "past its deadline") {
+			t.Errorf("err %v", err)
+		}
+	}
+}
+
+// A read issued past its deadline is still an answer the store gave, and is held to it.
+func TestHistoryCheckHoldsALateReadToWhatItSaw(t *testing.T) {
+	start := DefaultClockStart()
+	entries := historyAt(start,
+		&BlobHistoryEntry{Op: BlobHistoryPutIfNoneMatch, WriteEtag: "e1", Outcome: BlobOutcomeOk},
+		&BlobHistoryEntry{Op: BlobHistoryHead, Outcome: BlobOutcomeNotFound, Deadline: start.Add(-1 * time.Millisecond)},
+	)
+	if err := CheckBlobHistory(entries, nil); err == nil {
+		t.Error("a late read missing an acknowledged write passed")
+	}
+}
+
+func listEntry(listedEtags map[string]string) *BlobHistoryEntry {
+	return &BlobHistoryEntry{Op: BlobHistoryList, Key: "head/", ListedEtags: listedEtags, Outcome: BlobOutcomeOk}
+}
+
+// A LIST reads every key it covers, as a GET would (FI-30: as every request on its key sees it).
+func TestHistoryCheckRefusesAWrongList(t *testing.T) {
+	start := DefaultClockStart()
+	put := func() *BlobHistoryEntry {
+		return &BlobHistoryEntry{Op: BlobHistoryPutIfNoneMatch, WriteEtag: "e1", Outcome: BlobOutcomeOk}
+	}
+	cases := []struct {
+		name    string
+		entries []*BlobHistoryEntry
+	}{
+		{name: "a LIST missing an acknowledged write", entries: historyAt(start, put(), listEntry(map[string]string{}))},
+		{name: "a LIST showing a deleted key", entries: historyAt(start,
+			put(),
+			&BlobHistoryEntry{Op: BlobHistoryDelete, Outcome: BlobOutcomeOk},
+			listEntry(map[string]string{"head/a/_": "e1"}),
+		)},
+		{name: "a LIST showing a stale etag", entries: historyAt(start,
+			put(),
+			&BlobHistoryEntry{Op: BlobHistoryPutIfMatch, IfEtag: "e1", WriteEtag: "e2", Outcome: BlobOutcomeOk},
+			listEntry(map[string]string{"head/a/_": "e1"}),
+		)},
+	}
+	for _, c := range cases {
+		if err := CheckBlobHistory(c.entries, nil); err == nil {
+			t.Errorf("%s passed", c.name)
+		}
+	}
+}
+
+// The twin: a LIST is held only to the keys it covers.
+func TestHistoryCheckTakesAListThatCoversWhatItShould(t *testing.T) {
+	start := DefaultClockStart()
+	put := func() *BlobHistoryEntry {
+		return &BlobHistoryEntry{Op: BlobHistoryPutIfNoneMatch, WriteEtag: "e1", Outcome: BlobOutcomeOk}
+	}
+	pastTheKey := listEntry(map[string]string{})
+	pastTheKey.StartAfter = "head/a/_"
+	truncatedBeforeIt := listEntry(map[string]string{"head/0/_": "e0"})
+	truncatedBeforeIt.ListTruncated = true
+	otherPrefix := listEntry(map[string]string{})
+	otherPrefix.Key = "seg/"
+	failed := listEntry(nil)
+	failed.Outcome = BlobOutcomeFailed
+	for _, entries := range [][]*BlobHistoryEntry{
+		historyAt(start, put(), listEntry(map[string]string{"head/a/_": "e1"})),
+		historyAt(start, listEntry(map[string]string{}), put()),
+		historyAt(start, put(), pastTheKey),
+		historyAt(start, put(), truncatedBeforeIt),
+		historyAt(start, put(), otherPrefix),
+		historyAt(start, put(), failed),
+	} {
+		if err := CheckBlobHistory(entries, nil); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// What the recorder keeps of a LIST is what the check needs: what it listed, from where, and whether
+// more followed. Changing that answer to show a deleted key fails the check.
+func TestRecorderKeepsWhatAListAnswered(t *testing.T) {
+	fixture := newRecordedFixture(t)
+	ctx := t.Context()
+	for _, key := range []string{"head/a/_", "head/b/_"} {
+		if _, err := fixture.recorded.PutIfNoneMatch(ctx, key, []byte("v1"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fixture.recorded.Delete(ctx, "head/a/_"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.recorded.List(ctx, "head/", "", 10); err != nil {
+		t.Fatal(err)
+	}
+	history := fixture.recorder.History()
+	list := history[len(history)-1]
+	if list.Op != BlobHistoryList || len(list.ListedEtags) != 1 || list.ListedEtags["head/b/_"] == "" || list.ListTruncated {
+		t.Fatalf("list entry %s %v", list, list.ListedEtags)
+	}
+	if err := CheckBlobHistory(history, nil); err != nil {
+		t.Fatal(err)
+	}
+	list.ListedEtags = map[string]string{"head/a/_": history[0].WriteEtag, "head/b/_": list.ListedEtags["head/b/_"]}
+	if err := CheckBlobHistory(history, nil); err == nil {
+		t.Error("a LIST showing a deleted key passed")
+	}
+}
