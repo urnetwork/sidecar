@@ -6,6 +6,7 @@
 package check
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -290,6 +291,37 @@ func TestHygieneFailsOnAMakefileBuildingWithTheTag(t *testing.T) {
 		"cli/Makefile:2: builds with sidecar_testhooks",
 		"cli/Makefile:3: builds with sidecar_leaktest",
 		"cli/Makefile:4: builds with sidecar_testhooks")
+}
+
+// go test excuses its own command and no other on the line, on either side of it.
+func TestHygieneFailsOnAMakefileBuildingBesideATest(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("cli/Makefile", "build:\n\tgo build -tags sidecar_testhooks -o ur . && go test .\n\t$(GO) test -tags sidecar_testhooks . ; go build -tags sidecar_leaktest -o ur .\n\tgo test -tags sidecar_testhooks . | tee test.log\n")
+	wantFindings(t, fixture.open().makefileTagFindings(t),
+		"cli/Makefile:2: builds with sidecar_testhooks",
+		"cli/Makefile:3: builds with sidecar_leaktest")
+}
+
+// Each leg that ships is built somewhere, and sdk's c-shared and wasm builds and server's services
+// are as much a release as gomobile's.
+func TestHygieneFailsOnAConsumerMakefileBuildingWithTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.writeSibling("sdk/cgo/Makefile", "build:\n\tgo build -buildmode=c-shared -tags sidecar_testhooks\n")
+	fixture.writeSibling("sdk/js/Makefile", "build:\n\tGOOS=js GOARCH=wasm go build -tags sidecar_leaktest\n")
+	fixture.writeSibling("server/cli/api/Makefile", "build:\n\tgo build -tags sidecar_testhooks\n")
+	wantFindings(t, fixture.open().makefileTagFindings(t),
+		"sdk/cgo/Makefile:2: builds with sidecar_testhooks",
+		"sdk/js/Makefile:2: builds with sidecar_leaktest",
+		"server/cli/api/Makefile:2: builds with sidecar_testhooks")
+}
+
+// A build this rule cannot read has not been shown clean.
+func TestHygieneFailsOnAMissingConsumerMakefile(t *testing.T) {
+	fixture := newFixture(t)
+	if err := os.Remove(filepath.Join(fixture.directory, "server", "cli", "api", "Makefile")); err != nil {
+		t.Fatal(err)
+	}
+	wantFindings(t, fixture.open().makefileTagFindings(t), "no Makefile under server/cli")
 }
 
 // gomobile's legs are built by sdk's Makefile, and the leg table here would never see this.

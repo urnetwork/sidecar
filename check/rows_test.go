@@ -288,8 +288,12 @@ var failsOnRows = []failsOnRow{
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a Makefile's build line",
-		rule:         (*repository).makefileTagFindings,
-		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnGomobileBindingWithTheTag"},
+		rule: (*repository).makefileTagFindings,
+		plantedTests: []string{
+			"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnAMakefileBuildingBesideATest",
+			"TestHygieneFailsOnGomobileBindingWithTheTag", "TestHygieneFailsOnAConsumerMakefileBuildingWithTheTag",
+			"TestHygieneFailsOnAMissingConsumerMakefile",
+		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: what the artifact says of itself",

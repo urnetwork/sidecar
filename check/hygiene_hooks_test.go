@@ -346,8 +346,12 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 // A go test command, however the Makefile spells go.
 var goTestCommandPattern = regexp.MustCompile(`(^|[^[:alnum:]_/-])(go|lowgo|\$\(GO\))\s+test\b`)
 
-// A Makefile line carrying an unshippable tag that is not a go test line: go test is how the hooks
-// are exercised, and anything else, a go build or a GOFLAGS export, makes something that can ship.
+// What ends one shell command on a Makefile line.
+var shellCommandEndPattern = regexp.MustCompile(`&&|\|\||[;|]`)
+
+// A shell command on a Makefile line carrying an unshippable tag that is not go test: go test is how
+// the hooks are exercised, and anything else, a go build or a GOFLAGS export, makes something that
+// can ship. Read per command, because go test excuses only itself, not a build beside it.
 func (self *repository) makefileTagFindings(t testing.TB) []string {
 	t.Helper()
 	makefiles, err := filepath.Glob(filepath.Join(self.topDirectory, "Makefile"))
@@ -363,11 +367,22 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			makefiles = append(makefiles, matches...)
 		}
 	}
-	// gomobile's legs are built by sdk's Makefile, not by anything here
-	makefiles = append(makefiles, self.siblingPath("sdk/build/Makefile"))
+	findings := []string{}
+	// what ships is also built outside this repository: sdk's gomobile, c-shared and wasm legs, and
+	// the engines in each of server's services
+	for _, makefile := range []string{"sdk/build/Makefile", "sdk/cgo/Makefile", "sdk/js/Makefile"} {
+		makefiles = append(makefiles, self.siblingPath(makefile))
+	}
+	serverMakefiles, err := filepath.Glob(filepath.Join(self.siblingPath("server/cli"), "*", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serverMakefiles) == 0 {
+		findings = append(findings, "no Makefile under server/cli, so nothing shows how the engines are built")
+	}
+	makefiles = append(makefiles, serverMakefiles...)
 	slices.Sort(makefiles)
 	makefiles = slices.Compact(makefiles)
-	findings := []string{}
 	for _, makefile := range makefiles {
 		data, err := os.ReadFile(makefile)
 		if err != nil {
@@ -375,12 +390,17 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			continue
 		}
 		for index, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "#") || goTestCommandPattern.MatchString(line) {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
 				continue
 			}
-			for _, tag := range unshippableTags {
-				if strings.Contains(line, tag) {
-					findings = append(findings, findingf("%s:%d: builds with %s", self.displayPath(makefile), index+1, tag))
+			for _, command := range shellCommandEndPattern.Split(line, -1) {
+				if goTestCommandPattern.MatchString(command) {
+					continue
+				}
+				for _, tag := range unshippableTags {
+					if strings.Contains(command, tag) {
+						findings = append(findings, findingf("%s:%d: builds with %s", self.displayPath(makefile), index+1, tag))
+					}
 				}
 			}
 		}
