@@ -9,8 +9,8 @@
 // cgo needs a C compiler for the leg's target, and a host has one for its own system at most. A
 // darwin host compiles every darwin leg, and the ios legs through Xcode, whose absence fails them as
 // it fails make size; any other host compiles the cgo legs of its own GOOS and GOARCH. A cgo leg no
-// toolchain here reaches compiles with cgo off instead, which is every file of ours the leg builds
-// but those behind the cgo tag, since the cgo row leaves this repository no cgo file there; std's
+// toolchain here reaches compiles with cgo off instead. For this repository's files that differs
+// only where a file reads the cgo tag, since the cgo row leaves them no cgo file on such a leg; std's
 // and third parties' cgo halves go uncompiled. The run's report names each such leg, rather than
 // passing it as compiled. Without this, a file only android builds would compile nowhere: no other
 // leg has its system. Running each leg's tests is T1's runner, not this rule.
