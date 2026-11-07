@@ -168,6 +168,7 @@ type repository struct {
 	stateLock sync.Mutex
 	// each computed once; a rule reads them through the methods below
 	closureLegOnces map[string]*legClosureOnce
+	exportLegOnces  map[string]*legExportOnce
 	modulesOnce     func() ([]*repositoryModule, error)
 	sourceFilesOnce func() ([]*sourceFile, error)
 	stdPackagesOnce func() (map[string]bool, error)
@@ -200,6 +201,7 @@ func openRepository(moduleDirectory string, settings *checkSettings, legs []*bui
 		siblingsDirectory: filepath.Dir(moduleDirectory),
 		report:            func(string, ...any) {},
 		closureLegOnces:   map[string]*legClosureOnce{},
+		exportLegOnces:    map[string]*legExportOnce{},
 	}
 	if suffix := strings.TrimPrefix(file.Module.Path, sidecarBasePath); suffix != "" {
 		// §4.9's release tree: v2026/ beside the nested modules, which stay in place

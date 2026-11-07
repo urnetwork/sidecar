@@ -184,6 +184,150 @@ func TestLegsAllowAFieldNamedMethod(t *testing.T) {
 	wantFindings(t, fixture.open().reflectLookupFindings(t))
 }
 
+// A method value held in a field or a variable, to be called later, is the lookup itself: the compiler
+// wraps it in a function that makes the call, and that function is what the linker sees.
+func TestLegsFailsOnAStoredReflectMethodValue(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type finder struct {
+	find func(string) reflect.Value
+}
+
+func planted(value any) finder {
+	return finder{find: reflect.ValueOf(value).MethodByName}
+}
+
+func plantedIndex(value any) func(int) reflect.Method {
+	lookup := reflect.TypeOf(value).Method
+	return lookup
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t),
+		"planted.go:10: a dynamic reflect lookup, MethodByName",
+		"planted.go:14: a dynamic reflect lookup, Method")
+}
+
+// An interface of the lookup's shape, which a reflect.Value satisfies, makes the same call, and the
+// file that calls it need not import reflect.
+func TestLegsFailsOnALookupThroughAnInterfaceInAFileWithoutReflect(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted_lookup.go", "package sidecar\n\nimport \"reflect\"\n\ntype lookuper interface {\n\tMethodByName(name string) reflect.Value\n}\n")
+	fixture.write("planted.go", "package sidecar\n\nfunc planted(lookup lookuper, name string) {\n\tlookup.MethodByName(name)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:4: a dynamic reflect lookup, MethodByName")
+}
+
+// A type that embeds reflect.Type has its Methods, promoted.
+func TestLegsFailsOnALookupPromotedFromAnEmbeddedField(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type wrapped struct {
+	reflect.Type
+}
+
+func planted(value any) {
+	for method := range (wrapped{Type: reflect.TypeOf(value)}).Methods() {
+		_ = method
+	}
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:10: a dynamic reflect lookup, Methods")
+}
+
+// A type parameter constrained to the shape, which reflect.Value instantiates.
+func TestLegsFailsOnALookupThroughATypeParameter(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted[T interface{ Method(int) reflect.Value }](value T, index int) reflect.Value {\n\treturn value.Method(index)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:6: a dynamic reflect lookup, Method")
+}
+
+// The compiler marks a call of any type's method with the lookup's shape, not reflect's alone, so a
+// type of ours with one is the same break.
+func TestLegsFailsOnAMethodOfTheLookupsShapeOnAnotherType(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type registry struct{}
+
+func (self registry) MethodByName(name string) reflect.Value {
+	return reflect.Value{}
+}
+
+func planted(name string) reflect.Value {
+	return registry{}.MethodByName(name)
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:12: a dynamic reflect lookup, MethodByName")
+}
+
+// A method named as a lookup is but shaped otherwise is no lookup, in a file that imports reflect.
+func TestLegsAllowAMethodOfAnotherShapeNamedMethod(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type registry struct{}
+
+func (self registry) Method(name string) string {
+	return name
+}
+
+func (self registry) Methods() []string {
+	return nil
+}
+
+func planted(value any) string {
+	_ = reflect.TypeOf(value)
+	_ = registry{}.Methods()
+	return registry{}.Method("synthetic")
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t))
+}
+
+// Each leg reads its own files: a lookup only android compiles is found on android's leg.
+func TestLegsFailsOnAReflectLookupOnlyAndroidCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm", "gomobile android/arm64")
+	fixture.write("planted_android.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted(value any, name string) {\n\treflect.ValueOf(value).MethodByName(name)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted_android.go:6: a dynamic reflect lookup, MethodByName")
+}
+
+// The row binds what reaches a phone or a page, as the pruning row does: a desktop leg may hold one.
+func TestLegsAllowAReflectLookupOnlyADesktopLegCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted_windows.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted(value any, name string) {\n\treflect.ValueOf(value).MethodByName(name)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t))
+}
+
+// A leg this rule cannot compile has had nothing read, which is not a pass.
+func TestLegsFailsOnALegTheReflectRuleCannotCompile(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted_js.go", "package sidecar\n\n"+plantedUncompiledBody)
+	findings := fixture.open().reflectLookupFindings(t)
+	wantFindings(t, findings, "no reflect lookup was read on a leg that does not compile: js/wasm does not compile: ")
+	for _, finding := range findings {
+		if !strings.Contains(finding, "planted_js.go:") || !strings.Contains(finding, "undefined: undeclared") {
+			t.Errorf("a finding lacks the error planted in planted_js.go:\n%s", finding)
+		}
+	}
+}
+
 // A marker package behind each part of a leg's configuration: a runner that dropped GOOS, a tag,
 // cgo or -test would read the wrong set, and the caller's own environment must not reach the leg.
 func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {

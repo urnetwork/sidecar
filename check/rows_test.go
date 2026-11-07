@@ -193,6 +193,10 @@ var failsOnRows = []failsOnRow{
 		rule: (*repository).reflectLookupFindings,
 		plantedTests: []string{
 			"TestLegsFailsOnADynamicReflectLookup", "TestLegsFailsOnAReflectMethodsIterator", "TestLegsFailsOnAReflectMethodExpression",
+			"TestLegsFailsOnAStoredReflectMethodValue", "TestLegsFailsOnALookupThroughAnInterfaceInAFileWithoutReflect",
+			"TestLegsFailsOnALookupPromotedFromAnEmbeddedField", "TestLegsFailsOnALookupThroughATypeParameter",
+			"TestLegsFailsOnAMethodOfTheLookupsShapeOnAnotherType", "TestLegsFailsOnAReflectLookupOnlyAndroidCompiles",
+			"TestLegsFailsOnALegTheReflectRuleCannotCompile",
 		},
 	},
 	{
