@@ -5,6 +5,9 @@
 package check
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -365,6 +368,132 @@ func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {
 		slices.Sort(found)
 		if !slices.Equal(found, c.want) {
 			t.Errorf("%s: found %v, want %v", c.name, found, c.want)
+		}
+	}
+}
+
+// The same through the go env file, which go env -w writes and the go command reads for any setting
+// whose variable is empty: a GOEXPERIMENT and a GOAMD64 there would each add a build tag to every leg.
+func TestLegsReadNoGoEnvFile(t *testing.T) {
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(goEnvPath, []byte("GOEXPERIMENT=arenas\nGOAMD64=v3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOENV", goEnvPath)
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64")
+	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.3\n")
+	for _, mark := range []string{"experiment", "level"} {
+		fixture.writeSibling("marks/"+mark+"/"+mark+".go", "package "+mark+"\n")
+	}
+	fixture.requireLocal("example.com/marks", "v1.0.0", "marks")
+	fixture.write("mark_experiment.go", "//go:build goexperiment.arenas\n\npackage sidecar\n\nimport _ \"example.com/marks/experiment\"\n")
+	fixture.write("mark_level.go", "//go:build amd64.v3\n\npackage sidecar\n\nimport _ \"example.com/marks/level\"\n")
+	repository := fixture.open()
+	for _, listed := range repository.closure(t, repository.legs[0]) {
+		if strings.HasPrefix(listed.ImportPath, "example.com/marks/") {
+			t.Errorf("root linux/amd64 links %s, which only the go env file's settings turn on", listed.ImportPath)
+		}
+	}
+}
+
+// Every setting goEnvironment clears, planted in a go env file at a value no default has, reads as
+// the go command's own default under goEnvironment, and GOFLAGS as goEnvironment sets it.
+func TestGoEnvironmentReadsNoGoEnvFile(t *testing.T) {
+	keys := append(slices.Clone(goEnvironmentCleared), "GOFLAGS", "GOWORK", "GOTOOLCHAIN")
+	read := func(base []string) map[string]string {
+		t.Helper()
+		output, err := runGo(t.TempDir(), goEnvironmentOver(base), append([]string{"env", "-json"}, keys...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := map[string]string{}
+		if err := json.Unmarshal(output, &values); err != nil {
+			t.Fatal(err)
+		}
+		return values
+	}
+	defaults := read(os.Environ())
+	plantedCgo := "0"
+	if defaults["CGO_ENABLED"] == "0" {
+		plantedCgo = "1"
+	}
+	planted := map[string]string{
+		"GOOS": "plan9", "GOARCH": "386", "CGO_ENABLED": plantedCgo, "GOEXPERIMENT": "arenas", "GO111MODULE": "off",
+		"GOFIPS140": "v1.0.0", "GO386": "softfloat", "GOAMD64": "v3", "GOARM": "7", "GOARM64": "v9.0",
+		"GOMIPS": "softfloat", "GOMIPS64": "softfloat", "GOPPC64": "power9", "GORISCV64": "rva22u64", "GOWASM": "satconv",
+		"GO_EXTLINK_ENABLED": "0", "GOFLAGS": "-tags=sidecar_testhooks", "GOTOOLCHAIN": "go1.99.0",
+	}
+	lines := []string{}
+	for _, key := range keys {
+		value, ok := planted[key]
+		if !ok {
+			// the compilers, their flags and the flag lists, which take any word
+			value = "-Dplanted_" + strings.ToLower(key)
+		}
+		lines = append(lines, key+"="+value)
+	}
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(goEnvPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withFile := read(append(os.Environ(), "GOENV="+goEnvPath))
+	for _, key := range keys {
+		if withFile[key] != defaults[key] {
+			t.Errorf("%s reads %q with a go env file and %q without one", key, withFile[key], defaults[key])
+		}
+	}
+	if withFile["GOFLAGS"] != "-trimpath" {
+		t.Errorf("GOFLAGS reads %q", withFile["GOFLAGS"])
+	}
+}
+
+// The go command's own list of what it reads (internal/cfg's KnownEnv), each decided once: set,
+// cleared, kept or only reported. A setting a later Go adds fails here until someone decides it, so
+// goEnvironment's claim that a leg is what it names survives a toolchain bump.
+func TestGoEnvironmentDecidesEveryGoSetting(t *testing.T) {
+	output, err := runGo(t.TempDir(), goEnvironment(), "env", "GOROOT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(output)), "src", "internal", "cfg", "cfg.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, found := strings.Cut(string(data), "const KnownEnv = `")
+	block, _, closed := strings.Cut(rest, "`")
+	if !found || !closed {
+		t.Fatalf("the toolchain's internal/cfg no longer declares KnownEnv")
+	}
+	known := strings.Fields(block)
+	setKeys := []string{}
+	for _, entry := range goEnvironmentSet {
+		key, _, _ := strings.Cut(entry, "=")
+		setKeys = append(setKeys, key)
+	}
+	decided := map[string]string{}
+	for _, list := range []struct {
+		name string
+		keys []string
+	}{
+		{name: "set", keys: setKeys}, {name: "cleared", keys: goEnvironmentCleared},
+		{name: "kept", keys: goEnvironmentKept}, {name: "computed", keys: goEnvironmentComputed},
+	} {
+		for _, key := range list.keys {
+			if previous, twice := decided[key]; twice {
+				t.Errorf("%s is both %s and %s", key, previous, list.name)
+			}
+			decided[key] = list.name
+		}
+	}
+	for _, key := range known {
+		if _, ok := decided[key]; !ok {
+			t.Errorf("the go command reads %s, which goEnvironment neither sets, clears nor keeps", key)
+		}
+	}
+	for key := range decided {
+		if !slices.Contains(known, key) {
+			t.Errorf("goEnvironment decides %s, which the go command does not read", key)
 		}
 	}
 }

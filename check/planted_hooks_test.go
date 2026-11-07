@@ -75,13 +75,109 @@ func TestHygieneFailsOnAReleaseLegWithTheLeakTag(t *testing.T) {
 	wantFindings(t, fixture.open().legTagFindings(), "cli linux/amd64 is a release leg built with sidecar_leaktest")
 }
 
-// The legs clear GOFLAGS so each stays what it names, and that must not hide the caller's tag.
+// The legs set GOFLAGS so each stays what it names, and that must not hide the host's tag. A tag is
+// read as a whole word, quoted or not.
 func TestHygieneFailsOnTheHooksTagInGoflags(t *testing.T) {
-	wantFindings(t, callerGoflagsFindings("-trimpath -tags=other,sidecar_testhooks"), "GOFLAGS carries sidecar_testhooks")
-	wantFindings(t, callerGoflagsFindings("--tags=sidecar_leaktest"), "GOFLAGS carries sidecar_leaktest")
-	wantFindings(t, callerGoflagsFindings("'-tags=other sidecar_testhooks'"), "GOFLAGS carries sidecar_testhooks")
-	wantFindings(t, callerGoflagsFindings("-trimpath -tags=sidecar_testhooks_extra"))
-	wantFindings(t, callerGoflagsFindings(""))
+	wantFindings(t, goflagsTagFindings("here", "-trimpath -tags=other,sidecar_testhooks"), "GOFLAGS in here carries sidecar_testhooks")
+	wantFindings(t, goflagsTagFindings("here", "--tags=sidecar_leaktest"), "GOFLAGS in here carries sidecar_leaktest")
+	wantFindings(t, goflagsTagFindings("here", "'-tags=other sidecar_testhooks'"), "GOFLAGS in here carries sidecar_testhooks")
+	wantFindings(t, goflagsTagFindings("here", "-trimpath -tags=sidecar_testhooks_extra"))
+	wantFindings(t, goflagsTagFindings("here", ""))
+}
+
+// This test's environment with none of the host's go configuration in it: no GOFLAGS, GOENV or
+// GOROOT, and a home of its own, which holds the default go env file. Then extra.
+func plantedHostEnvironment(t *testing.T, extra ...string) []string {
+	t.Helper()
+	environment := []string{}
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains([]string{"GOFLAGS", "GOENV", "GOROOT", "HOME", "XDG_CONFIG_HOME"}, name) {
+			environment = append(environment, entry)
+		}
+	}
+	return append(append(environment, "HOME="+t.TempDir()), extra...)
+}
+
+// A go env file holding content, as go env -w leaves one.
+func plantedGoEnvFile(t *testing.T, filePath string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The control: a host whose GOFLAGS carry other tags, in every place, passes.
+func TestHygieneAllowsAHostWhoseGoflagsCarryNoUnshippableTag(t *testing.T) {
+	repository := newFixture(t).open()
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	plantedGoEnvFile(t, goEnvPath, "GOFLAGS=-tags=other\n")
+	wantFindings(t, repository.hostGoflagsFindings(plantedHostEnvironment(t, "GOENV="+goEnvPath, "GOFLAGS=-trimpath -tags=another")))
+}
+
+func TestHygieneFailsOnTheHooksTagInTheGoflagsVariable(t *testing.T) {
+	repository := newFixture(t).open()
+	wantFindings(t, repository.hostGoflagsFindings(plantedHostEnvironment(t, "GOFLAGS=-tags=sidecar_testhooks")),
+		"GOFLAGS in the environment carries sidecar_testhooks")
+}
+
+// go env -w GOFLAGS=-tags=sidecar_testhooks: every build on this host carries the tag, and the
+// variable says nothing.
+func TestHygieneFailsOnTheHooksTagInTheGoEnvFile(t *testing.T) {
+	repository := newFixture(t).open()
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	plantedGoEnvFile(t, goEnvPath, "GOFLAGS=-tags=sidecar_testhooks\n")
+	wantFindings(t, repository.hostGoflagsFindings(plantedHostEnvironment(t, "GOENV="+goEnvPath)),
+		"GOFLAGS in the go env file "+goEnvPath+" carries sidecar_testhooks")
+}
+
+// lowgo sets the variable, which hides the file from the go command make check runs under, and not
+// from a release step that runs without lowgo.
+func TestHygieneFailsOnTheHooksTagInAGoEnvFileTheVariableHides(t *testing.T) {
+	repository := newFixture(t).open()
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	plantedGoEnvFile(t, goEnvPath, "GOFLAGS=-tags=sidecar_testhooks\n")
+	environment := plantedHostEnvironment(t, "GOENV="+goEnvPath, "GOFLAGS=-trimpath")
+	effective, err := runGo(repository.moduleDirectory, append(slices.Clone(environment), "GOTOOLCHAIN=local"), "env", "GOFLAGS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(effective)) != "-trimpath" {
+		t.Fatalf("the variable did not hide the file: go env GOFLAGS is %q", effective)
+	}
+	wantFindings(t, repository.hostGoflagsFindings(environment), "GOFLAGS in the go env file "+goEnvPath+" carries sidecar_testhooks")
+}
+
+// GOENV moved or off here does not move it for a release step that leaves GOENV alone.
+func TestHygieneFailsOnTheHooksTagInTheDefaultGoEnvFile(t *testing.T) {
+	repository := newFixture(t).open()
+	environment := plantedHostEnvironment(t, "GOENV=off")
+	defaultPath, err := runGo(repository.moduleDirectory, append(slices.Clone(environment), "GOTOOLCHAIN=local", "GOENV="), "env", "GOENV")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goEnvPath := strings.TrimSpace(string(defaultPath))
+	plantedGoEnvFile(t, goEnvPath, "GOFLAGS=-tags=sidecar_leaktest\n")
+	wantFindings(t, repository.hostGoflagsFindings(environment), "GOFLAGS in the go env file "+goEnvPath+" carries sidecar_leaktest")
+}
+
+// GOROOT's go.env is read beneath every user file, GOENV=off included.
+func TestHygieneFailsOnTheHooksTagInGorootsGoEnv(t *testing.T) {
+	repository := newFixture(t).open()
+	goroot := t.TempDir()
+	plantedGoEnvFile(t, filepath.Join(goroot, "go.env"), "GOFLAGS=-tags=sidecar_testhooks\n")
+	wantFindings(t, repository.hostGoflagsFindings(plantedHostEnvironment(t, "GOROOT="+goroot, "GOENV=off")),
+		"GOFLAGS in "+filepath.Join(goroot, "go.env")+" carries sidecar_testhooks")
+}
+
+// A place this cannot read has not passed.
+func TestHygieneFailsOnAGoflagsSourceItCannotRead(t *testing.T) {
+	repository := newFixture(t).open()
+	wantFindings(t, repository.hostGoflagsFindings(plantedHostEnvironment(t, "GOROOT="+filepath.Join(t.TempDir(), "absent"))),
+		"reading where this host's go command takes GOFLAGS from")
 }
 
 func TestHygieneFailsOnALegLinkingTheRootHookFile(t *testing.T) {

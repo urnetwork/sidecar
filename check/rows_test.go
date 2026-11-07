@@ -284,11 +284,16 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAReleaseLegWithTheHooksTag", "TestHygieneFailsOnAReleaseLegWithTheLeakTag"},
 	},
 	{
-		row: "hygiene", item: "a release leg built with sidecar_testhooks: the caller's GOFLAGS",
+		row: "hygiene", item: "a release leg built with sidecar_testhooks: the host's GOFLAGS, in the variable and every go env file",
 		rule: func(self *repository, t testing.TB) []string {
-			return callerGoflagsFindings(os.Getenv("GOFLAGS"))
+			return self.hostGoflagsFindings(os.Environ())
 		},
-		plantedTests: []string{"TestHygieneFailsOnTheHooksTagInGoflags"},
+		plantedTests: []string{
+			"TestHygieneFailsOnTheHooksTagInGoflags", "TestHygieneFailsOnTheHooksTagInTheGoflagsVariable",
+			"TestHygieneFailsOnTheHooksTagInTheGoEnvFile", "TestHygieneFailsOnTheHooksTagInAGoEnvFileTheVariableHides",
+			"TestHygieneFailsOnTheHooksTagInTheDefaultGoEnvFile", "TestHygieneFailsOnTheHooksTagInGorootsGoEnv",
+			"TestHygieneFailsOnAGoflagsSourceItCannotRead",
+		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a file it compiles that answers to the tag",

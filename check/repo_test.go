@@ -215,19 +215,51 @@ func openRepository(moduleDirectory string, settings *checkSettings, legs []*bui
 	return self, nil
 }
 
+// What goEnvironment sets, each to what every rule's go command runs with. GOENV=off keeps the
+// caller's go env file, which go env -w writes, from every rule: the go command reads a setting from
+// that file whenever its variable is empty, so clearing a variable alone hands the file's value to
+// every leg.
+var goEnvironmentSet = []string{"GOFLAGS=-trimpath", "GOWORK=off", "GOTOOLCHAIN=local", "GOENV=off"}
+
+// What goEnvironment clears, so the go command takes its own default: everything that picks a target,
+// selects files or changes how they compile. A leg sets GOOS, GOARCH and CGO_ENABLED again for itself.
+var goEnvironmentCleared = []string{
+	"GOOS", "GOARCH", "CGO_ENABLED", "GOEXPERIMENT", "GO111MODULE", "GOFIPS140",
+	"GO386", "GOAMD64", "GOARM", "GOARM64", "GOMIPS", "GOMIPS64", "GOPPC64", "GORISCV64", "GOWASM",
+	"GO_EXTLINK_ENABLED", "AR", "CC", "CXX", "FC", "GCCGO", "PKG_CONFIG",
+	"CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_FFLAGS", "CGO_LDFLAGS",
+	"CGO_CFLAGS_ALLOW", "CGO_CFLAGS_DISALLOW", "CGO_CPPFLAGS_ALLOW", "CGO_CPPFLAGS_DISALLOW",
+	"CGO_CXXFLAGS_ALLOW", "CGO_CXXFLAGS_DISALLOW", "CGO_FFLAGS_ALLOW", "CGO_FFLAGS_DISALLOW",
+	"CGO_LDFLAGS_ALLOW", "CGO_LDFLAGS_DISALLOW",
+}
+
+// What goEnvironment keeps from the caller: which toolchain runs, and where modules are fetched from
+// and kept. None of it changes what a leg is, since a module's bytes are held to go.sum wherever they
+// came from, and a host may need its own.
+var goEnvironmentKept = []string{
+	"GOROOT", "GOTOOLDIR", "GOPATH", "GOMODCACHE", "GOCACHE", "GOCACHEPROG", "GOTMPDIR", "GOBIN",
+	"GOPROXY", "GONOPROXY", "GOSUMDB", "GONOSUMDB", "GOPRIVATE", "GOINSECURE", "GOVCS", "GOAUTH",
+}
+
+// What the go command reports and never reads.
+var goEnvironmentComputed = []string{"GOEXE", "GOGCCFLAGS", "GOHOSTARCH", "GOHOSTOS"}
+
 // The environment every go command runs in. A leg is exactly what it names, so what the caller
-// exported never reaches a build: GOFLAGS is the shared -trimpath and nothing else, and the rest of
-// what could change a closure is cleared. A tag in the caller's GOFLAGS is read by
-// callerGoflagsFindings instead of being honored here.
+// configured never reaches a build: GOFLAGS is the shared -trimpath and nothing else, the go env file
+// is not read, and every setting that could change a closure or a compile is cleared.
+// TestGoEnvironmentDecidesEveryGoSetting holds the lists above to the go command's own. A tag in the
+// host's GOFLAGS, wherever the host keeps it, is read by hostGoflagsFindings instead.
 func goEnvironment(extra ...string) []string {
-	environment := append(os.Environ(),
-		"GOFLAGS=-trimpath",
-		"GOWORK=off",
-		"GOTOOLCHAIN=local",
-		"GOEXPERIMENT=",
-		"GOOS=", "GOARCH=", "CGO_ENABLED=",
-		"CC=", "CXX=", "CGO_CFLAGS=", "CGO_CXXFLAGS=", "CGO_LDFLAGS=",
-	)
+	return goEnvironmentOver(os.Environ(), extra...)
+}
+
+// goEnvironment over a given caller's environment.
+func goEnvironmentOver(base []string, extra ...string) []string {
+	environment := slices.Clone(base)
+	environment = append(environment, goEnvironmentSet...)
+	for _, key := range goEnvironmentCleared {
+		environment = append(environment, key+"=")
+	}
 	return append(environment, extra...)
 }
 

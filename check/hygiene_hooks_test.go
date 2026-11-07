@@ -5,7 +5,8 @@
 // installed, and testHookBarrier can hold a protocol step. So the rule has four readings, because a
 // leg can come to link a hook in four ways:
 //
-//   - the leg asks for the tag (the leg table, the caller's GOFLAGS, a Makefile's build line);
+//   - the leg asks for the tag (the leg table, the host's GOFLAGS in the variable or a go env file,
+//     a Makefile's build line);
 //   - a file compiled on a release leg answers to the tag some other way (an || constraint);
 //   - a package's pair is wrong, so its untagged half is not empty, which needs no tag at all. This
 //     covers every package and module, not just the root: testhook.go tells each package that needs
@@ -19,6 +20,7 @@ package check
 import (
 	"bytes"
 	"debug/buildinfo"
+	"fmt"
 	"go/ast"
 	"go/build/constraint"
 	"go/token"
@@ -119,16 +121,87 @@ func (self *repository) legTagFindings() []string {
 	return findings
 }
 
-// The caller's GOFLAGS, which every go command here clears so a leg stays what it names. A tag in
-// it is a tag on whatever else that environment builds, the release's own steps included. Read as
-// whole words, because GOFLAGS may quote a -tags value.
-func callerGoflagsFindings(goflags string) []string {
+// A tag in one place's GOFLAGS, read as whole words, because GOFLAGS may quote a -tags value.
+func goflagsTagFindings(place string, goflags string) []string {
 	findings := []string{}
 	for _, tag := range unshippableTags {
 		word := regexp.MustCompile(`(^|[^a-z0-9_])` + tag + `($|[^a-z0-9_])`)
 		if word.MatchString(goflags) {
-			findings = append(findings, findingf("GOFLAGS carries %s, so a release built here is built with it", tag))
+			findings = append(findings, findingf("GOFLAGS in %s carries %s, so a release built here is built with it", place, tag))
 		}
+	}
+	return findings
+}
+
+// One place the go command takes GOFLAGS from, and what it holds there.
+type goflagsSource struct {
+	place   string
+	goflags string
+}
+
+// Every place a go command on this host takes GOFLAGS from, each read by the go command itself in
+// the caller's environment. The go command reads the variable, then while that is empty the go env
+// file GOENV names, which go env -w writes, then while that holds none GOROOT's go.env. Every go
+// command the rules run sets the variable, which hides both files from them, and a release step on
+// this host need not run as make check does: it may leave the variable unset where lowgo sets it, or
+// GOENV at its default. So each place is read on its own, the default go env file too when this
+// environment moves GOENV, and a tag in any of them reaches some build here.
+func hostGoflagsSources(directory string, environment []string) ([]goflagsSource, error) {
+	variable := func(key string) string {
+		value := ""
+		for _, entry := range environment {
+			if name, entryValue, found := strings.Cut(entry, "="); found && name == key {
+				value = entryValue
+			}
+		}
+		return value
+	}
+	// GOFLAGS with its variable empty, the go env file and GOROOT, as the go command reads them with
+	// the overrides on top of the caller's environment
+	read := func(overrides ...string) (goflags string, envFile string, goroot string, err error) {
+		readEnvironment := append(slices.Clone(environment), "GOTOOLCHAIN=local", "GOFLAGS=")
+		output, err := runGo(directory, append(readEnvironment, overrides...), "env", "GOFLAGS", "GOENV", "GOROOT")
+		if err != nil {
+			return "", "", "", err
+		}
+		lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+		if len(lines) != 3 {
+			return "", "", "", fmt.Errorf("go env GOFLAGS GOENV GOROOT printed %q", output)
+		}
+		return lines[0], lines[1], lines[2], nil
+	}
+	sources := []goflagsSource{{place: "the environment", goflags: variable("GOFLAGS")}}
+	rootGoflags, _, goroot, err := read("GOENV=off")
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources, goflagsSource{place: filepath.Join(goroot, "go.env"), goflags: rootGoflags})
+	userOverrides := [][]string{nil}
+	if variable("GOENV") != "" {
+		userOverrides = append(userOverrides, []string{"GOENV="})
+	}
+	for _, overrides := range userOverrides {
+		goflags, envFile, _, err := read(overrides...)
+		if err != nil {
+			return nil, err
+		}
+		// a file holding no GOFLAGS reads as GOROOT's, which is already here
+		if envFile != "off" && goflags != rootGoflags {
+			sources = append(sources, goflagsSource{place: "the go env file " + envFile, goflags: goflags})
+		}
+	}
+	return sources, nil
+}
+
+// An unshippable tag in any place a go command on this host takes GOFLAGS from.
+func (self *repository) hostGoflagsFindings(environment []string) []string {
+	sources, err := hostGoflagsSources(self.moduleDirectory, environment)
+	if err != nil {
+		return []string{findingf("reading where this host's go command takes GOFLAGS from: %v", err)}
+	}
+	findings := []string{}
+	for _, source := range sources {
+		findings = append(findings, goflagsTagFindings(source.place, source.goflags)...)
 	}
 	return findings
 }
