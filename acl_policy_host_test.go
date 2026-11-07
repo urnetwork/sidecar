@@ -3,10 +3,10 @@
 // What needs a file system, which the sidecar_http Worker has none of: go's fuzz corpus reader, and
 // DESIGN.md. acl_policy_test.go runs the corpus's seeds on every leg through embed.
 //
-// And what is too heavy for that leg: a heap that grows by megabytes and shrinks leaves the runtime's
-// scavenger a timer armed when the program ends, which wasm_exec.js answers by throwing, and the leg's
-// run fails with every test passed. Nothing here depends on the leg: these are sizes of Go values, the
-// same in wasm's 64-bit words, and the seeds' allocation bound is what that leg keeps.
+// And what is too heavy for that leg: a heap that grows by megabytes leaves the runtime a timer armed
+// when the program ends, which wasm_exec.js answers by throwing, so the leg's run fails with every test
+// passed. Nothing here depends on the leg: these are sizes of Go values, the same in wasm's 64-bit
+// words, and the seeds' allocation bound is what that leg keeps.
 
 package sidecar
 
@@ -37,7 +37,7 @@ func testAclDesignHujson(t *testing.T) []string {
 	t.Helper()
 	design, err := os.ReadFile(testAclDesignPath)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("this test needs the design beside the module: %v", err)
 	}
 	blocks := []string{}
 	for _, match := range testAclHujsonFence.FindAllStringSubmatch(string(design), -1) {
