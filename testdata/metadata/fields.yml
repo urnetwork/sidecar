@@ -1,0 +1,917 @@
+# The map behind §22.7's schema guard (I-18), sidecar's half: what proves every server-visible proto
+# field, object family and Redis family is in §2.8's list, and every live row is backed. Read by
+# sidecartest/schema_guard.go, as strictly as the list.
+#
+# A new field on a message below fails until it has a line, and its row comes first: a row changes only
+# through the design, so a value with no row is a question, never a line in open with no question
+# behind it. Keys are Message.field, names without their package.
+#
+#   landed           the newest milestone whose exit has passed; each gate's sweep raises it
+#   pending_until    the milestone whose exit a pending line must be settled by, unless it names its own
+#   key_sources      globs holding key builders, besides every <svc>service
+#   roots            messages a server decodes or builds, each with where the design says so
+#   seals            sealed bytes on such a message, each with what it opens to: the walk stops there,
+#                    and the field itself still needs a row, since its ciphertext shows
+#   sealed_messages  messages no root reaches and no seal names, each with why no server reads one
+#   sealed_files     files whose messages stay sealed unless a root reaches them
+#   fields           every reached field, with its row
+#   unset            reached fields that stay empty on whatever a server reads
+#   open             reached fields no row names yet: the row the question proposes, the question's
+#                    file under .stack/questions, and the milestone whose exit it must be settled by
+#   enum_values      Enum.VALUE of a flag or kind a row names, with its row; a mapped enum is mapped whole
+#   values           a value only a row's prose names, in those words, with its row
+#   rows             per live row: planned, the milestone whose exit brings its first value, or server,
+#                    what its store names that server's half holds
+#   not_keys         literals that read as a key and are none, each with what it is
+#
+# An area may keep the fields it adds in a testdata/**/metadata_rows.yml, which testdata/gkm's shows: one
+# line a field, Message.field: {number, type, row, sees} or {number, type, row, pending, until}. sees
+# quotes the row, so a row that stops saying it fails; pending says why the row does not name the
+# field yet; number and type are optional pins. A field sits in one file only, and a message a line
+# names is a root, whole.
+
+landed: M0
+pending_until: M2
+
+key_sources:
+  - host_*.go
+  - evs_repo_place.go
+
+roots:
+  # protocol/envelope.proto
+  Envelope: "peer RPC runs with edges too, and an edge's streams ride it (§6.6, §6.7)"
+  Error: "an RPC's error from an edge, an Envelope's body (§6.5)"
+  # protocol/stream.proto
+  StreamOpen: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  StreamAccept: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  StreamReject: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  StreamData: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  StreamWindow: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  StreamClose: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  StreamReset: "an edge's stream with a listener or a sidecar (§6.7, §13.5, §14.5, §15.4)"
+  # protocol/push.proto
+  PushReset: "resident and api's sync routes build it (§6.8)"
+  PushHint: "resident and api's sync routes build it (§6.8)"
+  PollResponse: "api's GET /sidecar/sync/poll answers with it (§6.8)"
+  # protocol/socket.proto
+  SocketHint: "sockets builds it, in PushHint.hint (§9.5)"
+  SocketTicket: "sockets signs it, and the edge reads the grant it carries (§9.6)"
+  SignedSocketTicket: "sockets signs it, and it rides StreamOpen.ticket (§9.6)"
+  # protocol/tls.proto
+  TlsEdgeOpen: "tlsedge builds it from what it holds (§13.5)"
+  # protocol/smtp.proto
+  SmtpPreamble: "smtpedge reads or answers it (§14.5)"
+  SmtpPreambleResult: "smtpedge reads or answers it (§14.5)"
+  SmtpProof: "smtpedge reads or answers it (§14.5)"
+  SmtpProofResult: "smtpedge reads or answers it (§14.5)"
+  # protocol/mail.proto
+  MailIngress: "mxedge builds it from what it holds (§15.4)"
+  # protocol/gkm.proto
+  GkmCommitHeader: "gkm reads the clear header of every commit (§10.4, §10.6)"
+  UrMlsCredential: "in a KeyPackage's clear credential, which gkm holds (§10.6, gkm-4)"
+  GenRotate: "gkm checks a rotation at its claim (§10.5, §10.6)"
+  ReaderWrap: "gkm's wrap/ object, which it checks and stores (§10.6)"
+  DelegationWrap: "gkm's wrap/ object, which it checks and stores (§10.6)"
+  ReaderKey: "gkm serves it (§10.5, §10.6)"
+  GroupForm: "gkm's chain at gkm/repo/<repo_id>/<seq> (§10.6)"
+  GkmHint: "gkm builds it, in PushHint.hint (§10.14)"
+  # protocol/evs.proto
+  EvsPush: "evs verifies a push's statement (§11.8)"
+  EvsPushPart: "evs reads each part (§11.8)"
+  EvsEntryVersion: "evs folds entry versions into idx/ (§11.7, §11.8)"
+  EvsPathMap: "evs stores and serves pmap/ parts (§11.6)"
+  EvsReseed: "evs applies it at a re-seed (§19.10)"
+  EvsDropHistory: "evs reads a DROP push's payload (format 2; §11.7, §11.13)"
+  EvsUploadReceipt: "evs MACs it and reads it back with the push (§11.13)"
+  EvsPlace: "evs assigns it in the batch (§11.8)"
+  EvsHead: "evs writes and reads the commit point (§11.8)"
+  EvsHeadChanged: "evs builds it, in PushHint.hint (§11.10)"
+  # protocol/bridge/auth.proto
+  AuthEntry: "the body of proj/<network_id>/<n>/_, which api sequences (§7.9)"
+  ProjectionHeader: "a base's Signed header, which api checks (§7.9)"
+  ProjectionRows: "projrows/, which api and every gate read (§7.9)"
+  ApiTick: "api writes it into a TICK entry (§7.9)"
+  Genesis: "api accepts base 1 only with the Genesis it chains to (§7.9's anchor)"
+  MemberRevoke: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  SidecarRevoke: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  GrantRevoke: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  Suspend: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  Unsuspend: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  # protocol/bridge/signed.proto
+  Signed: "every statement a server stores or checks rides it (§6.9)"
+  # protocol/config.proto
+  AdminSet: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  MemberAdmit: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  SidecarAdmit: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  AdmissionConfirm: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  SponsorSet: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  IndexerSet: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RecoveryBind: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RecoveryRebind: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  KeyRegister: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  KeyRevoke: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  Delegation: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  DelegationRevoke: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  AuthorityProposal: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  AuthorityCosign: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RecoveryVeto: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  # protocol/acl.proto
+  AclRows: "ProjectionRows.acl, which server gates read (§8.8, §8.10)"
+  GrantActivate: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  EvsShare: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  OwnerConfirm: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoCreate: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoAdmin: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoGrant: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoRevoke: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoDelete: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoRestore: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  RepoVersioning: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  AuditOptIn: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  AuditOptOut: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  # protocol/bridge/bridge.proto
+  BridgeRows: "AclRows.bridge, which the contract gate reads (§8.10, §17.8)"
+  BridgeAddress: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  BridgeRoute: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  BridgeMap: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  BridgeEgress: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  BridgeAlias: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  BridgeWithdraw: "api's verifier reads every statement before it sequences one (§7.9, §8.8)"
+  # protocol/record.proto
+  ApprovalDecision: "a server gate runs the spend check on it (§8.10, §16.6)"
+  ApprovalCancel: "POST /approval/cancel (§16.6)"
+  CanonicalAction: "GrantActivate.canonical_action, and what a server-gated action presents (§8.8, §16.6)"
+
+seals:
+  BridgeAddress.sealed_body: BridgeAddressBody
+  BridgeRoute.sealed_body: BridgeRouteBody
+  BridgeMap.sealed_body: BridgeMapBody
+  BridgeEgress.sealed_body: BridgeEgressBody
+  BridgeAlias.sealed_body: BridgeAliasBody
+  RecoveryBind.sealed_body: RecoveryBindBody
+  RecoveryRebind.sealed_body: RecoveryBindBody
+  IndexerSet.sealed_services: IndexerServices
+  RepoVersioning.sealed_rules: VersioningRules
+  EvsPushPart.sealed_metadata: EvsImport
+
+sealed_messages:
+  Hello: "peers only, over a Required session: an edge's opens need no Hello (§6.4)"
+  HelloResult: "peers only, as Hello"
+  HeadCheck: "peers only, over a Required session (§6.4)"
+  HeadCheckResult: "peers only, as HeadCheck"
+  HeadCheckProofRequest: "peers only, as HeadCheck"
+  HeadCheckProof: "peers only, as HeadCheck"
+  MailAuthEvidence: "sealed in the deposit header beside MailIngress, for readers (§15.5, §15.7)"
+  ServiceSettings: "kept to config heads, which evs holds as ciphertext (§7.9)"
+  BridgeBlock: "rides a config head, which evs holds as ciphertext (§17.8)"
+  BridgeShareSigner: "a config file, which evs holds as ciphertext (§17.9)"
+  BridgeState: "in process, or DeviceLocalRpc on the device (§18.6)"
+  Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
+  WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"
+  ShareCert: "rides sealed in a WindowDelegation (§17.9)"
+
+sealed_files:
+  protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
+  protocol/evsindex.proto: "plaintext inside index files, which evs seals as any file (§11.14)"
+  protocol/record.proto: "each RecordEntry is a sealed file in its writer's stream (§16.8); the roots above are what a gate reads"
+  protocol/search.proto: "peer to peer over a Required session, so only sizes show (§11.14, connect-5)"
+
+fields:
+  # protocol/envelope.proto
+  # protocol/stream.proto
+  StreamOpen.metadata: tls-1
+  StreamOpen.ticket: sock-2
+  StreamData.data: tls-1
+  # protocol/push.proto
+  PushReset.epoch: connect-4
+  PushReset.versions: connect-4
+  PushReset.complete: connect-4
+  TopicVersion.topic: connect-4
+  TopicVersion.version: connect-4
+  PushHint.seq: connect-4
+  PushHint.topic: connect-4
+  PushHint.version: connect-4
+  PushHint.kind: connect-4
+  PushHint.hint: connect-4
+  PollResponse.cursor: connect-4
+  PollResponse.hints: connect-4
+  PollResponse.reset: connect-4
+  # protocol/socket.proto
+  SocketHint.kind: connect-4
+  SocketHint.listen_id: connect-4
+  SocketTicket.ticket_id: sock-2
+  SocketTicket.network_id: sock-2
+  SocketTicket.name: sock-2
+  SocketTicket.listener_client_id: sock-2
+  SocketTicket.listen_id: sock-2
+  SocketTicket.dialer_client_id: sock-2
+  SocketTicket.dialer_network_id: sock-2
+  SocketTicket.issue_time_millis: sock-2
+  SocketTicket.expire_time_millis: sock-2
+  SocketTicket.policy_version: sock-2
+  SocketTicket.grant_id: sock-2
+  SocketTicket.backup: sock-2
+  SocketTicket.grant_expire_time_millis: sock-2
+  SocketTicket.name_token: sock-2
+  SignedSocketTicket.key_id: sock-2
+  SignedSocketTicket.ticket: sock-2
+  SignedSocketTicket.signature: sock-2
+  # protocol/tls.proto
+  TlsEdgeOpen.client_ip: tls-2
+  TlsEdgeOpen.client_port: tls-2
+  TlsEdgeOpen.server_name: tls-1
+  TlsEdgeOpen.alpn: tls-1
+  TlsEdgeOpen.client_hello_byte_count: tls-1
+  TlsEdgeOpen.connection_id: tls-3
+  TlsEdgeOpen.expire_time_millis: sock-2
+  # protocol/smtp.proto
+  SmtpPreamble.recipient_domain: smtp-1
+  SmtpPreamble.recipient_count: smtp-1
+  SmtpPreamble.message_id: smtp-1
+  SmtpPreamble.header_from_domain: smtp-1
+  SmtpPreamble.dkim_selector: smtp-1
+  SmtpPreamble.message_byte_count: smtp-1
+  SmtpPreamble.retry_of_send_id: smtp-1
+  SmtpPreamble.flags: smtp-1
+  SmtpPreambleResult.code: smtp-2
+  SmtpPreambleResult.retry_after_ms: smtp-2
+  SmtpPreambleResult.send_id: smtp-2
+  SmtpPreambleResult.x_ur_ref: smtp-2
+  SmtpPreambleResult.feedback_id: smtp-2
+  SmtpPreambleResult.helo_name: smtp-2
+  SmtpPreambleResult.mx_host: smtp-2
+  SmtpPreambleResult.dnssec_chain: smtp-2
+  SmtpPreambleResult.ehlo_keywords: smtp-2
+  SmtpProof.send_id: smtp-2
+  SmtpProof.index: smtp-2
+  SmtpProof.mode: smtp-2
+  SmtpProof.first_record: smtp-2
+  SmtpProof.last_record: smtp-2
+  SmtpProof.proof: smtp-2
+  SmtpProof.last: smtp-2
+  SmtpProof.server_record_count: smtp-2
+  SmtpProof.records: smtp-2
+  SmtpProofResult.code: smtp-2
+  # protocol/mail.proto
+  MailIngress.sender_ip: mx-1
+  MailIngress.sender_port: mx-1
+  MailIngress.sni: mx-1
+  MailIngress.ehlo_name: mx-1
+  MailIngress.ptr_name: mx-1
+  MailIngress.ip_listings: mx-1
+  MailIngress.receive_time_millis: mx-1
+  # protocol/evs.proto
+  EvsPush.repo_id: evs-12
+  EvsPush.ref_id: evs-12
+  EvsPush.ref_kind: evs-12
+  EvsPush.owner_sidecar_id: evs-12
+  EvsPush.push_id: evs-12
+  EvsPush.base_version: evs-12
+  EvsPush.base_chain: evs-12
+  EvsPush.changes: evs-12
+  EvsPush.sealed_metadata_sha256: evs-12
+  EvsPush.generation: evs-12
+  EvsPush.path_epoch: evs-12
+  EvsPush.auth: evs-12
+  EvsPush.signer_sidecar_id: evs-12
+  EvsPush.client_id: evs-12
+  EvsPush.time_ms: evs-12
+  EvsPush.flags: evs-12
+  EvsPush.path_map_sha256: evs-12
+  EvsPush.part_count: evs-12
+  EvsPush.parts_sha256: evs-12
+  EvsPush.ref_mode: evs-12
+  EvsPush.group_id: evs-12
+  EvsPush.generation_commitment: evs-12
+  EvsPush.changes_root: evs-12
+  EvsPush.change_count: evs-12
+  EvsPush.changed_prefixes: evs-12
+  EvsPush.new_objects_sha256: evs-12
+  EvsPush.map_source_version: evs-12
+  EvsPush.map_source_chain: evs-12
+  EvsPush.erased_sha256: evs-12
+  EvsPush.path_tail_sha256: evs-12
+  EvsPush.source_paths_sha256: evs-12
+  EvsPush.drop_sha256: evs-12
+  EvsPush.index_epoch: evs-12
+  EvsTokenPath.token: evs-12
+  EvsChange.token_path: evs-12
+  EvsChange.base_entry_version: evs-12
+  EvsChange.entry_sha256: evs-12
+  EvsPushPart.push_id: evs-12
+  EvsPushPart.part: evs-12
+  EvsPushPart.changes: evs-12
+  EvsPushPart.entry_versions: evs-12
+  EvsPushPart.inline_records: evs-12
+  EvsPushPart.sealed_metadata: evs-12
+  EvsPushPart.changes_root: evs-12
+  EvsEntryVersion.version: evs-11
+  EvsEntryVersion.push_id: evs-11
+  EvsEntryVersion.base_version: evs-11
+  EvsEntryVersion.prev_push_id: evs-11
+  EvsEntryVersion.prev_commit_version: evs-11
+  EvsEntryVersion.time_ms: evs-11
+  EvsEntryVersion.kind: evs-11
+  EvsEntryVersion.padded_size: evs-11
+  EvsEntryVersion.sealed_fields: evs-11
+  EvsEntryVersion.chain: evs-11
+  EvsEntryVersion.slot_ids: evs-11
+  EvsEntryVersion.names: evs-11
+  EvsEntryVersion.layout: evs-11
+  EvsEntryVersion.versioning: evs-11
+  EvsNameTable.names: evs-11
+  EvsNameTable.removed_tokens: evs-11
+  EvsName.token: evs-11
+  EvsName.kind: evs-11
+  EvsName.sealed_name: evs-11
+  EvsName.epoch: evs-11
+  EvsLocator.kind: evs-11
+  EvsLocator.id: evs-11
+  EvsLocator.offset: evs-11
+  EvsLocator.length: evs-11
+  EvsLocator.inline: evs-11
+  EvsLocator.staged: evs-11
+  EvsPathMap.repo_id: evs-15
+  EvsPathMap.ref_id: evs-15
+  EvsPathMap.path_epoch: evs-15
+  EvsPathMap.part: evs-15
+  EvsPathMap.parts: evs-15
+  EvsPathMap.moves: evs-15
+  EvsPathMap.source_version: evs-15
+  EvsPathMap.source_chain: evs-15
+  EvsPathMove.new_token_path: evs-15
+  EvsPathMove.sources: evs-15
+  EvsPathMove.sealed_name: evs-15
+  EvsSourcePath.epoch: evs-15
+  EvsSourcePath.token_path: evs-15
+  EvsReseed.repo_id: evs-12
+  EvsReseed.ref_id: evs-12
+  EvsReseed.version: evs-12
+  EvsReseed.chain: evs-12
+  EvsReseed.incident_id: evs-12
+  EvsDropHistory.drop_id: evs-12
+  EvsDropHistory.action: evs-12
+  EvsDropHistory.cancels_drop_id: evs-12
+  EvsDropHistory.cancels_version: evs-12
+  EvsDropHistory.not_before_ms: evs-12
+  EvsDropHistory.paths: evs-12
+  EvsDropHistory.preview_id: evs-12
+  EvsDropPath.lineage: evs-12
+  EvsDropPath.map_parts: evs-12
+  EvsDropPath.through_version: evs-12
+  EvsDropPath.boundary: evs-12
+  EvsDropPath.count: evs-12
+  EvsDropPath.listed_sha256: evs-12
+  EvsUploadReceipt.repo_id: evs-4
+  EvsUploadReceipt.segment_id: evs-4
+  EvsUploadReceipt.padded_size: evs-4
+  EvsUploadReceipt.upload_ms: evs-4
+  EvsUploadReceipt.uploader_sidecar_id: evs-4
+  EvsUploadReceipt.mac: evs-4
+  EvsUploadReceipt.versionless: evs-4
+  EvsPlace.minute: evs-3
+  EvsPlace.instance: evs-3
+  EvsPlace.seq: evs-3
+  EvsPlace.offset: evs-3
+  EvsPlace.length: evs-3
+  EvsHead.version: evs-3
+  EvsHead.chain: evs-3
+  EvsHead.push_id: evs-3
+  EvsHead.ref_kind: evs-2
+  EvsHead.ref_mode: evs-2
+  EvsHead.owner_sidecar_id: evs-2
+  EvsHead.sealed_ref_name: evs-3
+  EvsHead.base: evs-3
+  EvsHead.auth: evs-3
+  EvsHead.group_id: evs-3
+  EvsHead.generation: evs-3
+  EvsHead.generation_commitment: evs-3
+  EvsHead.path_epoch: evs-3
+  EvsHead.window: evs-3
+  EvsHead.fence: evs-3
+  EvsHead.lease: evs-3
+  EvsHead.deleted: evs-3
+  EvsHead.window_base_chain: evs-3
+  EvsHead.folded_through: evs-3
+  EvsHead.written_ms: evs-3
+  EvsHead.fence_ms: evs-3
+  EvsHead.collect: evs-3
+  EvsHead.index_epoch: evs-3
+  EvsHead.refused: evs-3
+  EvsHead.refused_ms: evs-3
+  EvsOverlay.ref_id: evs-3
+  EvsOverlay.version: evs-3
+  EvsSealLease.push_id: evs-3
+  EvsSealLease.until_ms: evs-3
+  EvsPathEpoch.current: evs-3
+  EvsPathEpoch.sources: evs-3
+  EvsPathEpoch.due_generation: evs-3
+  EvsPathEpoch.due_blocks_creation: evs-3
+  EvsPathEpoch.due_by_ms: evs-3
+  EvsPathEpoch.block_until_ms: evs-3
+  EvsEpochSource.epoch: evs-3
+  EvsEpochSource.map_sha256: evs-3
+  EvsCollect.done: evs-3
+  EvsCollect.through: evs-3
+  EvsCollect.until_ms: evs-3
+  EvsHeadChanged.ref_id: connect-4
+  EvsHeadChanged.version: connect-4
+  EvsHeadChanged.chain: connect-4
+  EvsHeadChanged.push_id: connect-4
+  # protocol/bridge/signed.proto
+  Signed.body: api-7
+  Signed.signer_id: api-7
+  Signed.key_id: api-7
+  Signed.signature: api-7
+  Signed.webauthn: api-7
+  Signed.type: api-7
+  WebAuthnEvidence.authenticator_data: api-7
+  WebAuthnEvidence.client_data_json: api-7
+  WebAuthnEvidence.key_id: api-7
+  WebAuthnEvidence.signature: api-7
+  WebAuthnEvidence.act_size: api-7
+  WebAuthnEvidence.act_index: api-7
+  WebAuthnEvidence.act_path: api-7
+  # protocol/bridge/auth.proto
+  StatementHeader.network_id: api-7
+  StatementHeader.at: api-7
+  StatementHeader.nonce: api-7
+  StatementHeader.not_after_ms: api-7
+  AuthEntry.network_id: api-7
+  AuthEntry.n: api-7
+  AuthEntry.prev_chain: api-7
+  AuthEntry.kind: api-7
+  AuthEntry.time_ms: api-7
+  AuthEntry.body: api-7
+  AuthPin.version: api-7
+  AuthPin.chain: api-7
+  ProjectionHeader.network_id: api-7
+  ProjectionHeader.version: api-7
+  ProjectionHeader.prev_chain: api-7
+  ProjectionHeader.folded_through: api-7
+  ProjectionHeader.config_head_sha256: api-7
+  ProjectionHeader.rows_sha256: api-7
+  ProjectionHeader.threshold: api-7
+  ProjectionRows.members: api-7
+  ProjectionRows.sidecars: api-7
+  ProjectionRows.delegations: api-7
+  ProjectionRows.registered_keys: api-7
+  ProjectionRows.acl: api-7
+  MemberRow.member_id: api-7
+  MemberRow.role: api-7
+  MemberRow.recovery_key_sha256: api-7
+  MemberRow.bindings: api-7
+  RecoveryBindingRow.key_sha256: api-7
+  RecoveryBindingRow.signer: api-7
+  RecoveryBindingRow.at: api-7
+  RecoveryBindingRow.reason: api-7
+  SidecarRow.sidecar_id: api-7
+  SidecarRow.admission_sha256: api-7
+  SidecarRow.admission_signers: api-7
+  SidecarRow.admitted_at: api-7
+  SidecarRow.confirm_signer: api-7
+  SidecarRow.confirmed_at: api-7
+  SidecarRow.owner_confirm_signer: api-7
+  SidecarRow.owner_confirmed_at: api-7
+  SidecarRow.revoked_at: api-7
+  SidecarRow.parked_at: api-7
+  SidecarRow.sponsor: api-7
+  SidecarRow.capabilities: api-7
+  SidecarRow.delegation_id: api-7
+  SidecarRow.live_since: api-7
+  SidecarRow.not_after: api-7
+  DelegationRow.delegation_id: api-7
+  DelegationRow.signer: api-7
+  DelegationRow.at: api-7
+  DelegationRow.tag_atoms: api-7
+  DelegationRow.not_after: api-7
+  DelegationRow.key_dropped_at: api-7
+  DelegationRow.ended_at: api-7
+  DelegationRow.admissions: api-7
+  KeyRow.key_id: api-7
+  KeyRow.member_id: api-7
+  KeyRow.alg: api-7
+  KeyRow.public_key: api-7
+  KeyRow.purpose: api-7
+  KeyRow.signer: api-7
+  KeyRow.at: api-7
+  KeyRow.not_after: api-7
+  KeyRow.revoked_at: api-7
+  ApiTick.reaped_sidecar_ids: api-7
+  ApiTick.activated_proposal_ids: api-7
+  MemberRevoke.header: api-7
+  MemberRevoke.member_id: api-7
+  SidecarRevoke.header: api-7
+  SidecarRevoke.sidecar_id: api-7
+  SidecarRevoke.reason: api-7
+  SidecarRevoke.since_n: api-7
+  GrantRevoke.header: api-7
+  GrantRevoke.grant_id: api-7
+  Suspend.header: api-7
+  Suspend.subject: api-7
+  Suspend.suspend_id: api-7
+  Unsuspend.header: api-7
+  Unsuspend.subject: api-7
+  Unsuspend.suspend_id: api-7
+  # protocol/config.proto
+  AdminSet.header: api-7
+  AdminSet.owners: api-7
+  AdminSet.admins: api-7
+  AdminSet.network_admins: api-7
+  AdminSet.it_admins: api-7
+  AdminSet.threshold: api-7
+  MemberAdmit.header: api-7
+  MemberAdmit.member_id: api-7
+  MemberAdmit.role: api-7
+  SidecarAdmit.header: api-7
+  SidecarAdmit.network_id: api-7
+  SidecarAdmit.sidecar_id: api-7
+  SidecarAdmit.identity_public_key: api-7
+  SidecarAdmit.identity_alg: api-7
+  SidecarAdmit.member_id: api-7
+  SidecarAdmit.tag_ids: api-7
+  SidecarAdmit.ephemeral: api-7
+  SidecarAdmit.not_after: api-7
+  SidecarAdmit.capabilities: api-7
+  AdmissionConfirm.header: api-7
+  AdmissionConfirm.sidecar_id: api-7
+  SponsorSet.header: api-7
+  SponsorSet.sidecar_id: api-7
+  SponsorSet.sponsor_member_id: api-7
+  IndexerSet.header: api-7
+  IndexerSet.sidecar_id: api-7
+  IndexerSet.scope: api-7
+  IndexerSet.retire: api-7
+  IndexerSet.sealed_services: api-7
+  RecoveryBind.header: api-7
+  RecoveryBind.member_id: api-7
+  RecoveryBind.prev_sha256: api-7
+  RecoveryBind.ed25519_public_key_sha256: api-7
+  RecoveryBind.sealed_body: api-7
+  RecoveryRebind.header: api-7
+  RecoveryRebind.member_id: api-7
+  RecoveryRebind.prev_sha256: api-7
+  RecoveryRebind.ed25519_public_key_sha256: api-7
+  RecoveryRebind.sealed_body: api-7
+  RecoveryRebind.reason: api-7
+  KeyRegister.header: api-7
+  KeyRegister.member_id: api-7
+  KeyRegister.key_id: api-7
+  KeyRegister.alg: api-7
+  KeyRegister.public_key: api-7
+  KeyRegister.attestation: api-7
+  KeyRegister.purpose: api-7
+  KeyRegister.not_after: api-7
+  KeyRevoke.header: api-7
+  KeyRevoke.key_id: api-7
+  Delegation.header: api-7
+  Delegation.pubkey: api-7
+  Delegation.reader_xwing_public_key: api-7
+  Delegation.tag_ids: api-7
+  Delegation.max_admits: api-7
+  Delegation.not_after: api-7
+  DelegationRevoke.header: api-7
+  DelegationRevoke.delegation_id: api-7
+  DelegationRevoke.since_n: api-7
+  AuthorityProposal.header: api-7
+  AuthorityProposal.statement_type: api-7
+  AuthorityProposal.statement: api-7
+  AuthorityCosign.header: api-7
+  AuthorityCosign.proposal_id: api-7
+  RecoveryVeto.header: api-7
+  RecoveryVeto.proposal_id: api-7
+  # protocol/acl.proto
+  AclRows.has_document: api-7
+  AclRows.atoms: api-7
+  AclRows.rules: api-7
+  AclRows.requests: api-7
+  AclRows.repos: api-7
+  AclRows.bridge: api-7
+  AclRows.audit: api-7
+  AclAtom.atom: api-7
+  AclAtom.member_ids: api-7
+  AclAtom.sidecar_ids: api-7
+  AclPortRange.protocol: api-7
+  AclPortRange.first: api-7
+  AclPortRange.last: api-7
+  AclRule.rule_id: api-7
+  AclRule.src_atoms: api-7
+  AclRule.targets: api-7
+  AclRule.actions: api-7
+  AclRule.ports: api-7
+  AclRule.expires: api-7
+  AclRule.audience: api-7
+  AclRule.app_mode: api-7
+  AclRule.link_spki_sha256: api-7
+  AclRequestRule.rule_id: api-7
+  AclRequestRule.src_atoms: api-7
+  AclRequestRule.targets: api-7
+  AclRequestRule.actions: api-7
+  AclRequestRule.approver_atoms: api-7
+  AclRequestRule.approvers: api-7
+  AclRequestRule.default_expiry_seconds: api-7
+  AclRequestRule.max_expiry_seconds: api-7
+  AclRequestRule.evidence: api-7
+  AclRepo.repo_id: api-7
+  AclRepo.kind: api-7
+  AclRepo.owner_member_id: api-7
+  AclRepo.consented_sidecar_ids: api-7
+  AclRepo.admins: api-7
+  AclRepo.grants: api-7
+  AclRepo.shares: api-7
+  AclRepo.revokes: api-7
+  AclRepo.deletion: api-7
+  AclRepo.lock: api-7
+  AclRepo.holders_shrunk_at: api-7
+  AclRepoAdminRow.sidecar_id: api-7
+  AclRepoAdminRow.signer: api-7
+  AclRepoAdminRow.at: api-7
+  AclRepoGrantRow.subject: api-7
+  AclRepoGrantRow.role: api-7
+  AclRepoGrantRow.expires: api-7
+  AclRepoGrantRow.signer: api-7
+  AclRepoGrantRow.at: api-7
+  AclRepoShareRow.subject: api-7
+  AclRepoShareRow.expires: api-7
+  AclRepoShareRow.signer: api-7
+  AclRepoShareRow.at: api-7
+  AclRepoRevokeRow.subject: api-7
+  AclRepoRevokeRow.signer: api-7
+  AclRepoRevokeRow.at: api-7
+  AclRepoDeletionRow.deletion_id: api-7
+  AclRepoDeletionRow.now: api-7
+  AclRepoDeletionRow.deleted_at: api-7
+  AclRepoDeletionRow.restored_at: api-7
+  AclAudit.reader_atoms: api-7
+  AclAudit.repo_kinds: api-7
+  AclAudit.repo_ids: api-7
+  AclAudit.audit_opt_in: api-7
+  AclTarget.atom: api-7
+  AclTarget.sidecar_id: api-7
+  AclTarget.network_id: api-7
+  AclTarget.repo_id: api-7
+  AclTarget.socket_tokens: api-7
+  AclTarget.socket_prefix: api-7
+  AclTarget.public_name: api-7
+  AclTarget.cidr: api-7
+  AclTarget.mail_send: api-7
+  GrantActivate.header: api-7
+  GrantActivate.grant_id: api-7
+  GrantActivate.canonical_action: api-7
+  GrantActivate.decisions: api-7
+  EvsShare.header: api-7
+  EvsShare.repo_id: api-7
+  EvsShare.subject: api-7
+  EvsShare.expires: api-7
+  OwnerConfirm.header: api-7
+  OwnerConfirm.sidecar_id: api-7
+  RepoCreate.header: api-7
+  RepoCreate.repo_id: api-7
+  RepoCreate.kind: api-7
+  RepoAdmin.header: api-7
+  RepoAdmin.repo_id: api-7
+  RepoAdmin.sidecar_id: api-7
+  RepoAdmin.change: api-7
+  RepoGrant.header: api-7
+  RepoGrant.repo_id: api-7
+  RepoGrant.subject: api-7
+  RepoGrant.role: api-7
+  RepoGrant.expires: api-7
+  RepoRevoke.header: api-7
+  RepoRevoke.repo_id: api-7
+  RepoRevoke.subject: api-7
+  RepoDelete.header: api-7
+  RepoDelete.repo_id: api-7
+  RepoDelete.deletion_id: api-7
+  RepoDelete.now: api-7
+  RepoRestore.header: api-7
+  RepoRestore.repo_id: api-7
+  RepoRestore.deletion_id: api-7
+  RepoVersioning.header: api-7
+  RepoVersioning.repo_id: api-7
+  RepoVersioning.lock: api-7
+  RepoVersioning.sealed_rules: api-7
+  AuditOptIn.header: api-7
+  AuditOptIn.reader_atoms: api-7
+  AuditOptIn.not_after: api-7
+  AuditOptOut.header: api-7
+  # protocol/bridge/bridge.proto
+  BridgeRows.egress: api-7
+  BridgeEgressRow.subject: api-7
+  BridgeEgressRow.mode: api-7
+  BridgeAddress.header: api-7
+  BridgeAddress.sidecar_id: api-7
+  BridgeAddress.sealed_body: api-7
+  BridgeRoute.header: api-7
+  BridgeRoute.route_id: api-7
+  BridgeRoute.advertiser: api-7
+  BridgeRoute.route_rule_ids: api-7
+  BridgeRoute.sealed_body: api-7
+  BridgeMap.header: api-7
+  BridgeMap.map_id: api-7
+  BridgeMap.host: api-7
+  BridgeMap.expires: api-7
+  BridgeMap.sealed_body: api-7
+  BridgeEgress.header: api-7
+  BridgeEgress.subject: api-7
+  BridgeEgress.sealed_body: api-7
+  BridgeAlias.header: api-7
+  BridgeAlias.sealed_body: api-7
+  BridgeWithdraw.header: api-7
+  BridgeWithdraw.rule_id: api-7
+  # protocol/record.proto
+  CanonicalAction.host: api-10
+  CanonicalAction.port: api-10
+  CanonicalAction.audience: api-10
+  CanonicalAction.expires_millis: api-10
+  CanonicalAction.cidrs: api-7
+  CanonicalAction.grant_dst: api-7
+  CanonicalAction.grant_allow: api-7
+  CanonicalAction.dns_name: dns-1
+  CanonicalAction.dns_type: dns-1
+  CanonicalAction.dns_value: dns-1
+  CanonicalAction.dns_ttl: dns-1
+  CanonicalAction.rule_id: api-7
+  CanonicalAction.subject: api-7
+  CanonicalAction.app_mode: api-7
+  CanonicalAction.link_spki_sha256: api-7
+  ApprovalDecision.approval_id: api-10
+  ApprovalDecision.request_sha256: api-10
+  ApprovalDecision.payload_sha256: api-10
+  ApprovalDecision.decision: api-10
+  ApprovalDecision.uses: api-10
+  ApprovalDecision.not_after_millis: api-10
+  ApprovalDecision.approver_member_id: api-10
+  ApprovalDecision.channel: api-10
+  ApprovalDecision.sshsig: api-10
+  ApprovalDecision.evidence_sha256: api-10
+  ApprovalDecision.requester_sidecar_id: api-10
+  ApprovalDecision.auth_pin: api-10
+  ApprovalCancel.approval_id: api-10
+
+unset:
+  CanonicalAction.recipients: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.body_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.preview: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.repo_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.path: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.content_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.base_version: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.alias: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.socket_name: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.local_port: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.weight: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.target_sidecar_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.target_port: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.restore_run_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.restore_paths: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.restore_preview_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.alpn: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.alias_group: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  CanonicalAction.versioning: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+
+open:
+  EvsUploadReceipt.key_id: {row: evs-4, question: protos-services-metadata-rows.md, until: M2}
+  SmtpPreamble.version: {row: smtp-1, question: protos-services-metadata-rows.md, until: M2}
+  MailIngress.version: {row: mx-1, question: protos-services-metadata-rows.md, until: M2}
+  Envelope.version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.type: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.request_id: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.flags: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.stream_id: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.timeout_ms: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.chunk: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Envelope.body: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Chunk.index: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Chunk.count: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Chunk.total_byte_count: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Chunk.sha256: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Error.code: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Error.message: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Error.retry_after_ms: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Error.result_ref: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamOpen.target: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamOpen.window: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamOpen.early_data: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamAccept.window: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamReject.code: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamReject.retry_after_ms: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamData.offset: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamWindow.consumed_offset: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamWindow.max_offset: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamClose.final_offset: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamReset.code: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  StreamReset.final_offset: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Genesis.network_id: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  Genesis.config_repo_id: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  Genesis.owner_member_id: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  Genesis.owner_sidecar_id: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  Genesis.owner_identity_public_key: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  Genesis.time_ms: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  ProjectionHeader.config_version: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  ProjectionHeader.rows_byte_count: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  BridgeWithdraw.mode: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  CanonicalAction.kind: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+  CanonicalAction.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+  CanonicalAction.scope: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+  ApprovalDecision.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+
+enum_values:
+  EvsPushFlag.EVS_PUSH_FLAG_NONE: evs-12
+  EvsPushFlag.EVS_PUSH_FORCE: evs-12
+  EvsPushFlag.EVS_PUSH_DELETE: evs-12
+  EvsPushFlag.EVS_PUSH_BASE: evs-12
+  EvsPushFlag.EVS_PUSH_IMMUTABLE: evs-12
+  EvsPushFlag.EVS_PUSH_CONSUME: evs-12
+  EvsPushFlag.EVS_PUSH_PATH_EPOCH: evs-12
+  EvsPushFlag.EVS_PUSH_ERASE: evs-12
+  EvsPushFlag.EVS_PUSH_CLOSURE: evs-12
+  EvsPushFlag.EVS_PUSH_DROP: evs-12
+  EvsPushFlag.EVS_PUSH_CUT: evs-12
+  EvsLocatorKind.EVS_LOCATOR_KIND_UNSPECIFIED: evs-11
+  EvsLocatorKind.EVS_LOCATOR_SEGMENT: evs-11
+  EvsLocatorKind.EVS_LOCATOR_INLINE: evs-11
+  EvsLocatorKind.EVS_LOCATOR_VERSIONLESS_SEGMENT: evs-11
+  EvsVersioning.EVS_VERSIONING_KEPT: evs-11
+  EvsVersioning.EVS_VERSIONING_VERSIONLESS: evs-11
+  EvsVersioning.EVS_VERSIONING_INDEX: evs-11
+  EvsWindowFlag.EVS_WINDOW_FLAG_NONE: evs-3
+  EvsWindowFlag.EVS_WINDOW_CREATES_PATH: evs-3
+  EvsWindowFlag.EVS_WINDOW_CHANGES_IN_PAYLOAD: evs-3
+  EvsWindowFlag.EVS_WINDOW_PATH_EPOCH: evs-3
+  EvsWindowFlag.EVS_WINDOW_REWRITES_HISTORY: evs-3
+  EvsWindowFlag.EVS_WINDOW_VERSIONLESS_REPLACED: evs-3
+  EvsWindowFlag.EVS_WINDOW_DROP: evs-3
+
+values:
+  "a transfer frame's outer client ids, size, timing, sequence and acks": connect-2
+  "account, sign-in and payment tables": api-1
+  "when a kind-5 segment is purged, about a minute after its version's replacement commits": evs-4
+  "when a versionless path's slot is purged": evs-5
+  "metrics by route template and logs with opaque ids": ops-1
+  "the sidecar dump and the main dumps": ops-2
+  "the rdb bundles of existing Redis families": ops-3
+
+rows:
+  connect-1: {server: [transfer_contract, contract_close, contract_close_report]}
+  connect-3: {server: [network_client_connection, network_client_location]}
+  connect-5: {planned: M10}
+  api-2: {server: [network_name_reclaim]}
+  api-3: {planned: M6}
+  api-4: {server: [network_client, network_client_owner, proxy_device_config]}
+  api-5: {planned: M1}
+  api-6: {planned: M8}
+  api-8: {planned: M1}
+  api-9: {planned: M6}
+  api-11: {server: [account_api_key, auth_code]}
+  api-13: {server: [transfer_balance]}
+  api-14: {planned: M5}
+  api-15: {planned: M2}
+  sock-1: {planned: M5}
+  sock-3: {planned: M5}
+  sock-4: {planned: M5}
+  sock-5: {planned: M5}
+  evs-1: {planned: M2}
+  evs-6: {planned: M2}
+  evs-7: {planned: M2}
+  evs-8: {planned: M2}
+  evs-9: {planned: M2}
+  evs-10: {planned: M2}
+  evs-13: {planned: M2}
+  evs-14: {planned: M2}
+  evs-16: {planned: M2}
+  evs-17: {planned: M2}
+  evs-18: {planned: M1}
+  evs-19: {planned: M2}
+  evs-21: {planned: M2}
+  evs-22: {planned: M2}
+  evs-23: {planned: M2}
+  evs-24: {planned: M2}
+  evs-25: {planned: M2}
+  evs-26: {planned: M10}
+  evs-27: {planned: M6}
+  evs-28: {planned: M10}
+  gkm-5: {planned: M2}
+  gkm-6: {planned: M2}
+  gkm-8: {planned: M2}
+  gkm-9: {planned: M2}
+  gkm-10: {planned: M2}
+  tls-4: {planned: M5}
+  cert-1: {planned: M5}
+  cert-2: {planned: M5}
+  dns-2: {planned: M5}
+  smtp-3: {planned: M9}
+  smtp-4: {planned: M9}
+  smtp-5: {planned: M9}
+  smtp-6: {planned: M9}
+  mx-2: {planned: M7}
+  mx-3: {planned: M7}
+  mx-4: {planned: M5}
+  ext-1: {planned: M5}
+  ext-3: {planned: M7}
+  ext-4: {planned: M7}
+  ext-5: {planned: M9}
+  ext-6: {planned: M5}
+  ext-7: {planned: M6}
+  ext-8: {planned: M8}
+  ext-10: {planned: M1}

@@ -287,8 +287,8 @@ func TestParseMetadataListRefusesARowThatIsNoMapping(t *testing.T) {
 }
 
 func TestParseMetadataListRefusesAnEmptyList(t *testing.T) {
-	wantMetadataListError(t, []byte("# only a comment\n"), "no rows")
-	wantMetadataListError(t, []byte(""), "no rows")
+	wantMetadataListError(t, []byte("# only a comment\n"), "no document")
+	wantMetadataListError(t, []byte(""), "no document")
 	wantMetadataListError(t, []byte("[]\n"), "cannot unmarshal")
 }
 

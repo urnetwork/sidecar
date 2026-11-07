@@ -144,6 +144,11 @@ func LoadMetadataList() (*MetadataList, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readMetadataList(listPath)
+}
+
+// Reads and parses one list.
+func readMetadataList(listPath string) (*MetadataList, error) {
 	data, err := os.ReadFile(listPath)
 	if err != nil {
 		return nil, err
@@ -176,30 +181,39 @@ func findMetadataList() (string, error) {
 	}
 }
 
-// Parses the list's bytes. Any error means the build fails (§22.7).
-func ParseMetadataList(data []byte) (*MetadataList, error) {
-	// a tab inside a plain value is legal YAML, and no row has one: two parsers disagree on the rest
+// Decodes one YAML document into target, refusing what §22.7's strict parser refuses: a duplicate key,
+// a field target has no place for, and any parse error, as yaml.v3 does with KnownFields, and also a tab
+// and a second document, which it lets through. A tab inside a plain value is legal YAML, and two parsers
+// disagree on the rest. Returns the document's root node, for what only a node shows.
+func decodeStrictYaml(data []byte, target any) (*yaml.Node, error) {
 	if index := bytes.IndexByte(data, '\t'); 0 <= index {
 		return nil, fmt.Errorf("line %d holds a tab", 1+bytes.Count(data[:index], []byte("\n")))
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	rowIdRows := map[string]*MetadataRow{}
-	if err := decoder.Decode(&rowIdRows); err != nil {
+	if err := decoder.Decode(target); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("the list holds no rows")
+			return nil, errors.New("it holds no document")
 		}
 		return nil, err
 	}
 	if err := decoder.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("the list holds a second document: %v", err)
+		return nil, fmt.Errorf("it holds a second document: %v", err)
 	}
-
 	document := &yaml.Node{}
 	if err := yaml.Unmarshal(data, document); err != nil {
 		return nil, err
 	}
-	root := document.Content[0]
+	return document.Content[0], nil
+}
+
+// Parses the list's bytes. Any error means the build fails (§22.7).
+func ParseMetadataList(data []byte) (*MetadataList, error) {
+	rowIdRows := map[string]*MetadataRow{}
+	root, err := decodeStrictYaml(data, &rowIdRows)
+	if err != nil {
+		return nil, err
+	}
 	if root.Kind != yaml.MappingNode || len(root.Content) == 0 {
 		return nil, fmt.Errorf("line %d: the list is no mapping of rows", root.Line)
 	}

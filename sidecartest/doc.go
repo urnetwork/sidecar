@@ -9,7 +9,8 @@
 //     kills and restarts. testhooks.go and testhooks_enabled.go install the driver on the root and on
 //     device/ under sidecar_testhooks; without the tag no site in this module reaches it.
 //   - faults.go, a store fault as a plan the next matching operation gets.
-//   - metadata_list.go, §2.8's list and its strict reader (§22.7).
+//   - metadata_list.go, §2.8's list and its strict reader, and schema_guard*.go, §22.7's guard over it,
+//     whose map is testdata/metadata/fields.yml.
 //   - fake_blobs*.go, fake_redis*.go and the other fake_ files, a fake of every interface ServiceHost
 //     holds, gathered by fake_host.go.
 //   - net*.go, connect clients in one process, built on connect's exported API alone (Q-TEST-1).
