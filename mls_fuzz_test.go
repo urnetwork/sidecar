@@ -107,6 +107,7 @@ func FuzzMlsRatchetTree(f *testing.F) {
 	f.Add([]byte{0})
 	f.Add([]byte{1, 0})
 	f.Add([]byte{2, 1, 3})
+	f.Add(mlsTestTreeListingALeafOutside(f))
 	settings := mlsVectorTreeSettings()
 	settings.MaximumLeafCount = 64
 	validation := mlsTestLeafValidation([]byte("group"))

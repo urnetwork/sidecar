@@ -541,7 +541,7 @@ func TestMlsDecodeRefusesAnEmptyTree(t *testing.T) {
 }
 
 // Encodes a node list with its blanks exactly as given.
-func mlsEncodeNodeList(t *testing.T, nodes []mlsTreeNode) []byte {
+func mlsEncodeNodeList(t testing.TB, nodes []mlsTreeNode) []byte {
 	t.Helper()
 	encoder := &mlsEncoder{}
 	encoder.writeVectorOf(func(elements *mlsEncoder) {
@@ -967,6 +967,59 @@ func TestMlsValidateRefusesAnUnmergedLeafNotBelowIt(t *testing.T) {
 		parent.unmergedLeaves = append(slices.Clone(parent.unmergedLeaves), outside)
 	})
 	if err := tree.validate(group.validation); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+}
+
+// A tree anyone can write, since parent hashes need no signature: node 1 lists leaf 100 of a four-leaf
+// tree and is parent-hash valid, linked from leaf 0, and the root above it takes that leaf into a
+// resolution. No fuzzer writes this one, for the link is a hash it would have to invert.
+func mlsTestTreeListingALeafOutside(t testing.TB) []byte {
+	t.Helper()
+	suite := mlsTestSuiteX25519
+	listing := mlsShapeParent("listing", 100)
+	listing.parent.parentHash = []byte{}
+	tree := &mlsRatchetTree{suite: suite}
+	blankLeafHash, err := tree.hashLeaf(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := tree.hashParentHashInput(listing.parent.encryptionKey, listing.parent.parentHash, blankLeafHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := mlsShapeLeaf("member")
+	member.leaf.leafNodeSource = mlsLeafNodeSourceCommit
+	member.leaf.parentHash = link
+	return mlsEncodeNodeList(t, []mlsTreeNode{member, listing, {}, mlsShapeParent("root")})
+}
+
+// A leaf index comes off the wire as a uint32, and 2n must not wrap onto a member's path: a sender this
+// names does not exist, so it has no path to follow.
+func TestMlsFilteredDirectPathOfALeafOutsideTheTreeIsEmpty(t *testing.T) {
+	tree := mlsShapedTree(mlsShapeLeaf("a"), mlsTreeNode{}, mlsShapeLeaf("b"))
+	if path := tree.filteredDirectPath(1); len(path) != 1 {
+		t.Fatalf("leaf 1's path is %v", path)
+	}
+	for _, leaf := range []mlsLeafIndex{2, 1024*1024*1024*2 + 1} {
+		if path := tree.filteredDirectPath(leaf); len(path) != 0 {
+			t.Errorf("leaf %d's path is %v", leaf, path)
+		}
+	}
+}
+
+// Nothing here may trust an unmerged list: validate refuses one like this first, but parent hashes are
+// checked on their own too, and an index into the tree must not be what stops them.
+func TestMlsParentHashesRefuseAnUnmergedLeafOutsideTheTree(t *testing.T) {
+	tree, err := decodeMlsRatchetTree(mlsTestSuiteX25519, mlsVectorTreeSettings(), mlsTestTreeListingALeafOutside(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// so it is the root that reaches the leaf outside, not a refusal below it
+	if err := tree.verifyParentHash(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.verifyParentHashes(); !errors.Is(err, errMlsInvalid) {
 		t.Fatal(err)
 	}
 }

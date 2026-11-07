@@ -276,9 +276,13 @@ type mlsFilteredPathNode struct {
 }
 
 // RFC §4.1.2's filtered direct path of a leaf, leaf to root: the direct path without any node whose
-// copath child has an empty resolution.
+// copath child has an empty resolution. Empty for a leaf outside the tree, which a peer can name and
+// whose node index could wrap back inside it.
 func (self *mlsRatchetTree) filteredDirectPath(leaf mlsLeafIndex) []mlsFilteredPathNode {
 	leafCount := self.leafCount()
+	if leafCount <= uint32(leaf) {
+		return nil
+	}
 	var path []mlsFilteredPathNode
 	node := leaf.node()
 	for {
@@ -417,8 +421,12 @@ func (self *mlsRatchetTree) hashParentHashInput(encryptionKey []byte, parentHash
 // the resolution of one child C, carries P's parent hash with the other child as copath child, and
 // everything else in C's resolution is P's unmerged leaves under C.
 func (self *mlsRatchetTree) verifyParentHash(index mlsNodeIndex) error {
-	// the parent_hash a node carries: a leaf from anything but a commit has none to link with
+	// the parent_hash a node carries: a leaf from anything but a commit has none to link with, and a
+	// node outside the tree, which an unmerged list validate has yet to refuse can name, has none either
 	carriedHash := func(candidate mlsNodeIndex) []byte {
+		if !self.holds(candidate) {
+			return nil
+		}
 		node := &self.nodes[candidate]
 		if node.parent != nil {
 			return node.parent.parentHash
