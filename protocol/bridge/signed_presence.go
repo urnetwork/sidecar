@@ -90,7 +90,7 @@ func PresenceActPath(statementDigests [][sha256.Size]byte, actIndex uint32) ([][
 
 // Checks signed.webauthn as §7.9's presence countersignature by the key its key_id names, keyAlg and publicKey being
 // that key's: hashes signed's own signed bytes as its leaf, walks its inclusion path to the act's root, and runs
-// §16.6's countersign check over the countersigned bytes they give, with UV and the signCount not compared. The
+// §16.6's countersign check over the countersigned bytes they give, UV set and the signCount not compared: the
 // statement's nonce and §7.9's replay row refuse a reuse, and a verifier of one statement holds no counter.
 //
 // A nil says this key countersigned this purpose, type and body in an act of this signer_id, and nothing more. So a

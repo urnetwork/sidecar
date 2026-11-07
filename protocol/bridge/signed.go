@@ -29,6 +29,13 @@ const signedBytesPrefix = "urnetwork-sidecar-v1/"
 // Names the countersigned bytes' domain and is no §6.11 purpose, so signed bytes never reach it.
 const presenceActPurpose = "presence-act"
 
+// The purposes of what the authorization log carries: §7.9's records, §8.8's statements and §17.8's.
+const (
+	SignedPurposeAuthority = "authority"
+	SignedPurposeAcl       = "acl"
+	SignedPurposeBridge    = "bridge"
+)
+
 var (
 	// No Signed was given.
 	ErrSignedMissing = errors.New("no signed statement")
