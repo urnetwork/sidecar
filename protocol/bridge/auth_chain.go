@@ -36,8 +36,8 @@ var ErrAuthChainSize = errors.New("auth chain digest size refused")
 // SHA-256(body)), with no separators (§7.9). body is the entry's as received.
 //
 // Only the fields' fixed widths keep them apart, so a prevChain of any other size, which a received prev_chain can be,
-// refuses rather than hashing into its neighbors. The rest is the formula alone: an entry's kind and position are
-// §7.9's apply row's to judge, and a kind it refuses still has a digest, since a refused statement keeps its position.
+// refuses rather than hashing into its neighbors. The rest is the formula alone: judging an entry's kind and position
+// is §7.9's apply row's, and a statement it refuses keeps its position and so its digest.
 func AuthChainDigest(n uint64, prevChain []byte, kind uint32, timeMs int64, body []byte) ([sha256.Size]byte, error) {
 	if len(prevChain) != sha256.Size {
 		return [sha256.Size]byte{}, fmt.Errorf("%w: %d bytes", ErrAuthChainSize, len(prevChain))
