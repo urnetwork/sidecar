@@ -1,10 +1,11 @@
 // I-18's walk over the service files, as a test: every message either stays sealed or shows a server its fields, and
 // every field shown maps to a §2.8 row or is listed as raised. The walk was once done by hand, took a file's header at
 // its word and so skipped what gates parse in record.proto, so a header's claim is checked here too, and each row's
-// words are read from the design rather than remembered.
+// words are read from metadata_list.yml rather than remembered.
 //
-// This is not §22.7's schema guard, which reads a generated metadata_list.yml that does not exist yet, and it stops at
-// the service files: testUnwalkedFiles names the rest, so a new file has to say which it is.
+// This stands in for the proto half of §22.7's schema guard (TEST-M1-02), which has not landed. When it does, these
+// accounts belong in its field map. It stops at the service files, and testUnwalkedFiles names the rest, so a new file
+// has to say which it is.
 
 package protocol
 
@@ -22,6 +23,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
+
+// §2.8's list as the repository carries it: make metadata copies it byte for byte, and check/ holds the two alike.
+const testMetadataListPath = "../metadata_list.yml"
 
 // The sentence a file's header uses to say it shows a server nothing.
 const testSealedClaim = "no server reads a field"
@@ -294,23 +298,16 @@ var testMessageViews = map[string]testServerView{
 	},
 }
 
-// §2.8's rows as written, by id, read from the design rather than quoted from memory.
+// §2.8's rows as written, by id. sidecartest's strict reader parses these same bytes, and this package only asks whether
+// a row still says something, so it reads them as text.
 func testReadRows(t *testing.T) map[string]string {
-	design, err := os.ReadFile(testDesignPath)
+	list, err := os.ReadFile(testMetadataListPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, list, found := strings.Cut(string(design), "\n# metadata_list.yml")
-	if !found {
-		t.Fatal("the design holds no metadata_list.yml")
-	}
-	list, _, found = strings.Cut(list, "\n```")
-	if !found {
-		t.Fatal("metadata_list.yml's block does not end")
-	}
 	rowTexts := map[string]string{}
 	row := ""
-	for line := range strings.SplitSeq(list, "\n") {
+	for line := range strings.SplitSeq(string(list), "\n") {
 		if testRowId.MatchString(line) {
 			row = strings.TrimSuffix(line, ":")
 			continue
