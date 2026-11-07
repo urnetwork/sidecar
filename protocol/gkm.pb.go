@@ -849,8 +849,9 @@ type GkmEpochObject struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Commit []byte                 `protobuf:"bytes,1,opt,name=commit,proto3" json:"commit,omitempty"` // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
 	Header *GkmCommitHeader       `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"` // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
-	//   one MLS authenticates. At epoch 0, gen/1's generation and auth
-	Uploader        []byte `protobuf:"bytes,3,opt,name=uploader,proto3" json:"uploader,omitempty"`                                        // sidecar_id; at epoch 0 the creator (gkm-1)
+	//   one MLS authenticates. At a creation's epoch 0, gen/1's generation and auth; at a
+	//   re-form's, the form's generation and no auth, its gen/ coming after by the ladder
+	Uploader        []byte `protobuf:"bytes,3,opt,name=uploader,proto3" json:"uploader,omitempty"`                                        // sidecar_id; at epoch 0 the creator or re-former (gkm-1)
 	TimeMs          int64  `protobuf:"varint,4,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"`                             // gkm's clock at the write
 	GenWrap         []byte `protobuf:"bytes,5,opt,name=gen_wrap,json=genWrap,proto3" json:"gen_wrap,omitempty"`                           // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
 	SealedGroupInfo []byte `protobuf:"bytes,6,opt,name=sealed_group_info,json=sealedGroupInfo,proto3" json:"sealed_group_info,omitempty"` // GroupInfo_n in every epoch at most 16 leaves, a generation-0 self-join's included, or
@@ -858,7 +859,7 @@ type GkmEpochObject struct {
 	GroupInfoGeneration uint64 `protobuf:"varint,7,opt,name=group_info_generation,json=groupInfoGeneration,proto3" json:"group_info_generation,omitempty"` // whose K_groupinfo seals it (KF5: "the generation it names"), which at a
 	//   generation-0 self-join is the newest the joiner holds, not header.generation
 	NetworkId     []byte `protobuf:"bytes,8,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`        // epoch 0 only (gkm-1), from the token
-	CipherSuite   uint32 `protobuf:"varint,9,opt,name=cipher_suite,json=cipherSuite,proto3" json:"cipher_suite,omitempty"` // epoch 0 only (gkm-1); 0x0010 (owner decision 44)
+	CipherSuite   uint32 `protobuf:"varint,9,opt,name=cipher_suite,json=cipherSuite,proto3" json:"cipher_suite,omitempty"` // epoch 0 only (gkm-1); 0x0010 (owner decision 44), or the value a re-form after an
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1354,6 +1355,79 @@ func (x *GkmGroupCreateRequest) GetCipherSuite() uint32 {
 	return 0
 }
 
+// POST /gkm/repos/<id>/forms (10.8; D-KEYS-12, D-KEYS-13), which writes the GroupForm, then the new group's epoch/0, each
+// If-None-Match, as POST /gkm/groups does, so a crash resumes where it stopped. It carries no GenRotate: the group's
+// generations follow it by the ladder route, the old group's bytes, so a gen/1 here would clash with the ladder's.
+// gkm writes epoch/0's header as the form's generation with no auth, its group_info_generation as the form's too, and
+// its network_id and uploader from the token.
+type GkmGroupReformRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Form            *bridge.Signed         `protobuf:"bytes,1,opt,name=form,proto3" json:"form,omitempty"`                                                // a GroupForm naming previous_group_id and the newest generation the re-former holds
+	GenWrap         []byte                 `protobuf:"bytes,2,opt,name=gen_wrap,json=genWrap,proto3" json:"gen_wrap,omitempty"`                           // GenWrap_0, of the form's generation
+	SealedGroupInfo []byte                 `protobuf:"bytes,3,opt,name=sealed_group_info,json=sealedGroupInfo,proto3" json:"sealed_group_info,omitempty"` // GroupInfo_0, under the form's generation's K_groupinfo
+	CipherSuite     uint32                 `protobuf:"varint,4,opt,name=cipher_suite,json=cipherSuite,proto3" json:"cipher_suite,omitempty"`              // the new group's, which an IANA renumbering changes (D-KEYS-12)
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GkmGroupReformRequest) Reset() {
+	*x = GkmGroupReformRequest{}
+	mi := &file_protocol_gkm_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GkmGroupReformRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GkmGroupReformRequest) ProtoMessage() {}
+
+func (x *GkmGroupReformRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_gkm_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GkmGroupReformRequest.ProtoReflect.Descriptor instead.
+func (*GkmGroupReformRequest) Descriptor() ([]byte, []int) {
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GkmGroupReformRequest) GetForm() *bridge.Signed {
+	if x != nil {
+		return x.Form
+	}
+	return nil
+}
+
+func (x *GkmGroupReformRequest) GetGenWrap() []byte {
+	if x != nil {
+		return x.GenWrap
+	}
+	return nil
+}
+
+func (x *GkmGroupReformRequest) GetSealedGroupInfo() []byte {
+	if x != nil {
+		return x.SealedGroupInfo
+	}
+	return nil
+}
+
+func (x *GkmGroupReformRequest) GetCipherSuite() uint32 {
+	if x != nil {
+		return x.CipherSuite
+	}
+	return 0
+}
+
 // GET /gkm/groups/<id>.
 type GkmGroupReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1364,7 +1438,7 @@ type GkmGroupReply struct {
 
 func (x *GkmGroupReply) Reset() {
 	*x = GkmGroupReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[18]
+	mi := &file_protocol_gkm_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1376,7 +1450,7 @@ func (x *GkmGroupReply) String() string {
 func (*GkmGroupReply) ProtoMessage() {}
 
 func (x *GkmGroupReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[18]
+	mi := &file_protocol_gkm_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1389,7 +1463,7 @@ func (x *GkmGroupReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmGroupReply.ProtoReflect.Descriptor instead.
 func (*GkmGroupReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{18}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GkmGroupReply) GetForm() *bridge.Signed {
@@ -1412,7 +1486,7 @@ type GkmEpochRequest struct {
 
 func (x *GkmEpochRequest) Reset() {
 	*x = GkmEpochRequest{}
-	mi := &file_protocol_gkm_proto_msgTypes[19]
+	mi := &file_protocol_gkm_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1424,7 +1498,7 @@ func (x *GkmEpochRequest) String() string {
 func (*GkmEpochRequest) ProtoMessage() {}
 
 func (x *GkmEpochRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[19]
+	mi := &file_protocol_gkm_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1437,7 +1511,7 @@ func (x *GkmEpochRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmEpochRequest.ProtoReflect.Descriptor instead.
 func (*GkmEpochRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{19}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GkmEpochRequest) GetCommit() []byte {
@@ -1481,7 +1555,7 @@ type GkmEpochEntry struct {
 
 func (x *GkmEpochEntry) Reset() {
 	*x = GkmEpochEntry{}
-	mi := &file_protocol_gkm_proto_msgTypes[20]
+	mi := &file_protocol_gkm_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1493,7 +1567,7 @@ func (x *GkmEpochEntry) String() string {
 func (*GkmEpochEntry) ProtoMessage() {}
 
 func (x *GkmEpochEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[20]
+	mi := &file_protocol_gkm_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1506,7 +1580,7 @@ func (x *GkmEpochEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmEpochEntry.ProtoReflect.Descriptor instead.
 func (*GkmEpochEntry) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{20}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GkmEpochEntry) GetEpoch() uint64 {
@@ -1539,7 +1613,7 @@ type GkmEpochsReply struct {
 
 func (x *GkmEpochsReply) Reset() {
 	*x = GkmEpochsReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[21]
+	mi := &file_protocol_gkm_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1625,7 @@ func (x *GkmEpochsReply) String() string {
 func (*GkmEpochsReply) ProtoMessage() {}
 
 func (x *GkmEpochsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[21]
+	mi := &file_protocol_gkm_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +1638,7 @@ func (x *GkmEpochsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmEpochsReply.ProtoReflect.Descriptor instead.
 func (*GkmEpochsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{21}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GkmEpochsReply) GetEpochs() []*GkmEpochEntry {
@@ -1586,7 +1660,7 @@ type GkmGenerationsReply struct {
 
 func (x *GkmGenerationsReply) Reset() {
 	*x = GkmGenerationsReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[22]
+	mi := &file_protocol_gkm_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1598,7 +1672,7 @@ func (x *GkmGenerationsReply) String() string {
 func (*GkmGenerationsReply) ProtoMessage() {}
 
 func (x *GkmGenerationsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[22]
+	mi := &file_protocol_gkm_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1611,7 +1685,7 @@ func (x *GkmGenerationsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmGenerationsReply.ProtoReflect.Descriptor instead.
 func (*GkmGenerationsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{22}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GkmGenerationsReply) GetGenerations() []*bridge.Signed {
@@ -1631,7 +1705,7 @@ type GkmFormsReply struct {
 
 func (x *GkmFormsReply) Reset() {
 	*x = GkmFormsReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[23]
+	mi := &file_protocol_gkm_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1643,7 +1717,7 @@ func (x *GkmFormsReply) String() string {
 func (*GkmFormsReply) ProtoMessage() {}
 
 func (x *GkmFormsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[23]
+	mi := &file_protocol_gkm_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1656,7 +1730,7 @@ func (x *GkmFormsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmFormsReply.ProtoReflect.Descriptor instead.
 func (*GkmFormsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{23}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GkmFormsReply) GetForms() []*bridge.Signed {
@@ -1677,7 +1751,7 @@ type GkmLadderRequest struct {
 
 func (x *GkmLadderRequest) Reset() {
 	*x = GkmLadderRequest{}
-	mi := &file_protocol_gkm_proto_msgTypes[24]
+	mi := &file_protocol_gkm_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1689,7 +1763,7 @@ func (x *GkmLadderRequest) String() string {
 func (*GkmLadderRequest) ProtoMessage() {}
 
 func (x *GkmLadderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[24]
+	mi := &file_protocol_gkm_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1702,7 +1776,7 @@ func (x *GkmLadderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmLadderRequest.ProtoReflect.Descriptor instead.
 func (*GkmLadderRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{24}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GkmLadderRequest) GetGenerations() []*bridge.Signed {
@@ -1722,7 +1796,7 @@ type GkmReaderKeysRequest struct {
 
 func (x *GkmReaderKeysRequest) Reset() {
 	*x = GkmReaderKeysRequest{}
-	mi := &file_protocol_gkm_proto_msgTypes[25]
+	mi := &file_protocol_gkm_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1734,7 +1808,7 @@ func (x *GkmReaderKeysRequest) String() string {
 func (*GkmReaderKeysRequest) ProtoMessage() {}
 
 func (x *GkmReaderKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[25]
+	mi := &file_protocol_gkm_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1747,7 +1821,7 @@ func (x *GkmReaderKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmReaderKeysRequest.ProtoReflect.Descriptor instead.
 func (*GkmReaderKeysRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{25}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GkmReaderKeysRequest) GetSidecarIds() [][]byte {
@@ -1766,7 +1840,7 @@ type GkmReaderKeysReply struct {
 
 func (x *GkmReaderKeysReply) Reset() {
 	*x = GkmReaderKeysReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[26]
+	mi := &file_protocol_gkm_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1778,7 +1852,7 @@ func (x *GkmReaderKeysReply) String() string {
 func (*GkmReaderKeysReply) ProtoMessage() {}
 
 func (x *GkmReaderKeysReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[26]
+	mi := &file_protocol_gkm_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1791,7 +1865,7 @@ func (x *GkmReaderKeysReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmReaderKeysReply.ProtoReflect.Descriptor instead.
 func (*GkmReaderKeysReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{26}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GkmReaderKeysReply) GetReaderKeys() []*bridge.Signed {
@@ -1813,7 +1887,7 @@ type GkmWrapBatch struct {
 
 func (x *GkmWrapBatch) Reset() {
 	*x = GkmWrapBatch{}
-	mi := &file_protocol_gkm_proto_msgTypes[27]
+	mi := &file_protocol_gkm_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1825,7 +1899,7 @@ func (x *GkmWrapBatch) String() string {
 func (*GkmWrapBatch) ProtoMessage() {}
 
 func (x *GkmWrapBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[27]
+	mi := &file_protocol_gkm_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1838,7 +1912,7 @@ func (x *GkmWrapBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWrapBatch.ProtoReflect.Descriptor instead.
 func (*GkmWrapBatch) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{27}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GkmWrapBatch) GetDeliveries() [][]byte {
@@ -1858,7 +1932,7 @@ type GkmWrapResult struct {
 
 func (x *GkmWrapResult) Reset() {
 	*x = GkmWrapResult{}
-	mi := &file_protocol_gkm_proto_msgTypes[28]
+	mi := &file_protocol_gkm_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1870,7 +1944,7 @@ func (x *GkmWrapResult) String() string {
 func (*GkmWrapResult) ProtoMessage() {}
 
 func (x *GkmWrapResult) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[28]
+	mi := &file_protocol_gkm_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1883,7 +1957,7 @@ func (x *GkmWrapResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWrapResult.ProtoReflect.Descriptor instead.
 func (*GkmWrapResult) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{28}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GkmWrapResult) GetStatus() uint32 {
@@ -1909,7 +1983,7 @@ type GkmWrapBatchReply struct {
 
 func (x *GkmWrapBatchReply) Reset() {
 	*x = GkmWrapBatchReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[29]
+	mi := &file_protocol_gkm_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1921,7 +1995,7 @@ func (x *GkmWrapBatchReply) String() string {
 func (*GkmWrapBatchReply) ProtoMessage() {}
 
 func (x *GkmWrapBatchReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[29]
+	mi := &file_protocol_gkm_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1934,7 +2008,7 @@ func (x *GkmWrapBatchReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWrapBatchReply.ProtoReflect.Descriptor instead.
 func (*GkmWrapBatchReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{29}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GkmWrapBatchReply) GetResults() []*GkmWrapResult {
@@ -1954,7 +2028,7 @@ type GkmWrapsReply struct {
 
 func (x *GkmWrapsReply) Reset() {
 	*x = GkmWrapsReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[30]
+	mi := &file_protocol_gkm_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1966,7 +2040,7 @@ func (x *GkmWrapsReply) String() string {
 func (*GkmWrapsReply) ProtoMessage() {}
 
 func (x *GkmWrapsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[30]
+	mi := &file_protocol_gkm_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1979,7 +2053,7 @@ func (x *GkmWrapsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWrapsReply.ProtoReflect.Descriptor instead.
 func (*GkmWrapsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{30}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GkmWrapsReply) GetWraps() []*bridge.Signed {
@@ -2001,7 +2075,7 @@ type GkmWelcomeRecipient struct {
 
 func (x *GkmWelcomeRecipient) Reset() {
 	*x = GkmWelcomeRecipient{}
-	mi := &file_protocol_gkm_proto_msgTypes[31]
+	mi := &file_protocol_gkm_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2013,7 +2087,7 @@ func (x *GkmWelcomeRecipient) String() string {
 func (*GkmWelcomeRecipient) ProtoMessage() {}
 
 func (x *GkmWelcomeRecipient) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[31]
+	mi := &file_protocol_gkm_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2026,7 +2100,7 @@ func (x *GkmWelcomeRecipient) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWelcomeRecipient.ProtoReflect.Descriptor instead.
 func (*GkmWelcomeRecipient) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{31}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GkmWelcomeRecipient) GetSidecarId() []byte {
@@ -2053,7 +2127,7 @@ type GkmWelcomeRequest struct {
 
 func (x *GkmWelcomeRequest) Reset() {
 	*x = GkmWelcomeRequest{}
-	mi := &file_protocol_gkm_proto_msgTypes[32]
+	mi := &file_protocol_gkm_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2065,7 +2139,7 @@ func (x *GkmWelcomeRequest) String() string {
 func (*GkmWelcomeRequest) ProtoMessage() {}
 
 func (x *GkmWelcomeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[32]
+	mi := &file_protocol_gkm_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2078,7 +2152,7 @@ func (x *GkmWelcomeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWelcomeRequest.ProtoReflect.Descriptor instead.
 func (*GkmWelcomeRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{32}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GkmWelcomeRequest) GetWelcome() []byte {
@@ -2107,7 +2181,7 @@ type GkmWelcomeEntry struct {
 
 func (x *GkmWelcomeEntry) Reset() {
 	*x = GkmWelcomeEntry{}
-	mi := &file_protocol_gkm_proto_msgTypes[33]
+	mi := &file_protocol_gkm_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2119,7 +2193,7 @@ func (x *GkmWelcomeEntry) String() string {
 func (*GkmWelcomeEntry) ProtoMessage() {}
 
 func (x *GkmWelcomeEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[33]
+	mi := &file_protocol_gkm_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2132,7 +2206,7 @@ func (x *GkmWelcomeEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWelcomeEntry.ProtoReflect.Descriptor instead.
 func (*GkmWelcomeEntry) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{33}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GkmWelcomeEntry) GetKeyPackageRef() []byte {
@@ -2165,7 +2239,7 @@ type GkmWelcomesReply struct {
 
 func (x *GkmWelcomesReply) Reset() {
 	*x = GkmWelcomesReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[34]
+	mi := &file_protocol_gkm_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2177,7 +2251,7 @@ func (x *GkmWelcomesReply) String() string {
 func (*GkmWelcomesReply) ProtoMessage() {}
 
 func (x *GkmWelcomesReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[34]
+	mi := &file_protocol_gkm_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2190,7 +2264,7 @@ func (x *GkmWelcomesReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmWelcomesReply.ProtoReflect.Descriptor instead.
 func (*GkmWelcomesReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{34}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GkmWelcomesReply) GetWelcomes() []*GkmWelcomeEntry {
@@ -2210,7 +2284,7 @@ type GkmAckRequest struct {
 
 func (x *GkmAckRequest) Reset() {
 	*x = GkmAckRequest{}
-	mi := &file_protocol_gkm_proto_msgTypes[35]
+	mi := &file_protocol_gkm_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2222,7 +2296,7 @@ func (x *GkmAckRequest) String() string {
 func (*GkmAckRequest) ProtoMessage() {}
 
 func (x *GkmAckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[35]
+	mi := &file_protocol_gkm_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2235,7 +2309,7 @@ func (x *GkmAckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmAckRequest.ProtoReflect.Descriptor instead.
 func (*GkmAckRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{35}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *GkmAckRequest) GetEpoch() uint64 {
@@ -2260,7 +2334,7 @@ type GkmRecoveryWrap struct {
 
 func (x *GkmRecoveryWrap) Reset() {
 	*x = GkmRecoveryWrap{}
-	mi := &file_protocol_gkm_proto_msgTypes[36]
+	mi := &file_protocol_gkm_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2272,7 +2346,7 @@ func (x *GkmRecoveryWrap) String() string {
 func (*GkmRecoveryWrap) ProtoMessage() {}
 
 func (x *GkmRecoveryWrap) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[36]
+	mi := &file_protocol_gkm_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2285,7 +2359,7 @@ func (x *GkmRecoveryWrap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmRecoveryWrap.ProtoReflect.Descriptor instead.
 func (*GkmRecoveryWrap) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{36}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GkmRecoveryWrap) GetGroupId() []byte {
@@ -2332,7 +2406,7 @@ type GkmRecoveryWrapsReply struct {
 
 func (x *GkmRecoveryWrapsReply) Reset() {
 	*x = GkmRecoveryWrapsReply{}
-	mi := &file_protocol_gkm_proto_msgTypes[37]
+	mi := &file_protocol_gkm_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2344,7 +2418,7 @@ func (x *GkmRecoveryWrapsReply) String() string {
 func (*GkmRecoveryWrapsReply) ProtoMessage() {}
 
 func (x *GkmRecoveryWrapsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[37]
+	mi := &file_protocol_gkm_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2357,7 +2431,7 @@ func (x *GkmRecoveryWrapsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmRecoveryWrapsReply.ProtoReflect.Descriptor instead.
 func (*GkmRecoveryWrapsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{37}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GkmRecoveryWrapsReply) GetWraps() []*GkmRecoveryWrap {
@@ -2380,7 +2454,7 @@ type GkmRecoveryWrapItem struct {
 
 func (x *GkmRecoveryWrapItem) Reset() {
 	*x = GkmRecoveryWrapItem{}
-	mi := &file_protocol_gkm_proto_msgTypes[38]
+	mi := &file_protocol_gkm_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2392,7 +2466,7 @@ func (x *GkmRecoveryWrapItem) String() string {
 func (*GkmRecoveryWrapItem) ProtoMessage() {}
 
 func (x *GkmRecoveryWrapItem) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[38]
+	mi := &file_protocol_gkm_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2405,7 +2479,7 @@ func (x *GkmRecoveryWrapItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmRecoveryWrapItem.ProtoReflect.Descriptor instead.
 func (*GkmRecoveryWrapItem) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{38}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GkmRecoveryWrapItem) GetMemberId() []byte {
@@ -2438,7 +2512,7 @@ type GkmRecoveryWrapBatch struct {
 
 func (x *GkmRecoveryWrapBatch) Reset() {
 	*x = GkmRecoveryWrapBatch{}
-	mi := &file_protocol_gkm_proto_msgTypes[39]
+	mi := &file_protocol_gkm_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2450,7 +2524,7 @@ func (x *GkmRecoveryWrapBatch) String() string {
 func (*GkmRecoveryWrapBatch) ProtoMessage() {}
 
 func (x *GkmRecoveryWrapBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_gkm_proto_msgTypes[39]
+	mi := &file_protocol_gkm_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2463,7 +2537,7 @@ func (x *GkmRecoveryWrapBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GkmRecoveryWrapBatch.ProtoReflect.Descriptor instead.
 func (*GkmRecoveryWrapBatch) Descriptor() ([]byte, []int) {
-	return file_protocol_gkm_proto_rawDescGZIP(), []int{39}
+	return file_protocol_gkm_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GkmRecoveryWrapBatch) GetItems() []*GkmRecoveryWrapItem {
@@ -2595,7 +2669,12 @@ const file_protocol_gkm_proto_rawDesc = "" +
 	"gen_rotate\x18\x02 \x01(\v2\x19.urnetwork.sidecar.SignedR\tgenRotate\x12\x19\n" +
 	"\bgen_wrap\x18\x03 \x01(\fR\agenWrap\x12*\n" +
 	"\x11sealed_group_info\x18\x04 \x01(\fR\x0fsealedGroupInfo\x12!\n" +
-	"\fcipher_suite\x18\x05 \x01(\rR\vcipherSuite\">\n" +
+	"\fcipher_suite\x18\x05 \x01(\rR\vcipherSuite\"\xb0\x01\n" +
+	"\x15GkmGroupReformRequest\x12-\n" +
+	"\x04form\x18\x01 \x01(\v2\x19.urnetwork.sidecar.SignedR\x04form\x12\x19\n" +
+	"\bgen_wrap\x18\x02 \x01(\fR\agenWrap\x12*\n" +
+	"\x11sealed_group_info\x18\x03 \x01(\fR\x0fsealedGroupInfo\x12!\n" +
+	"\fcipher_suite\x18\x04 \x01(\rR\vcipherSuite\">\n" +
 	"\rGkmGroupReply\x12-\n" +
 	"\x04form\x18\x01 \x01(\v2\x19.urnetwork.sidecar.SignedR\x04form\"\xa4\x01\n" +
 	"\x0fGkmEpochRequest\x12\x16\n" +
@@ -2690,7 +2769,7 @@ func file_protocol_gkm_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_gkm_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_protocol_gkm_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_protocol_gkm_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_protocol_gkm_proto_goTypes = []any{
 	(GkmHintKind)(0),                  // 0: urnetwork.sidecar.GkmHintKind
 	(*GkmCommitHeader)(nil),           // 1: urnetwork.sidecar.GkmCommitHeader
@@ -2711,61 +2790,63 @@ var file_protocol_gkm_proto_goTypes = []any{
 	(*GkmKeyPackageClaimRequest)(nil), // 16: urnetwork.sidecar.GkmKeyPackageClaimRequest
 	(*GkmKeyPackageClaimReply)(nil),   // 17: urnetwork.sidecar.GkmKeyPackageClaimReply
 	(*GkmGroupCreateRequest)(nil),     // 18: urnetwork.sidecar.GkmGroupCreateRequest
-	(*GkmGroupReply)(nil),             // 19: urnetwork.sidecar.GkmGroupReply
-	(*GkmEpochRequest)(nil),           // 20: urnetwork.sidecar.GkmEpochRequest
-	(*GkmEpochEntry)(nil),             // 21: urnetwork.sidecar.GkmEpochEntry
-	(*GkmEpochsReply)(nil),            // 22: urnetwork.sidecar.GkmEpochsReply
-	(*GkmGenerationsReply)(nil),       // 23: urnetwork.sidecar.GkmGenerationsReply
-	(*GkmFormsReply)(nil),             // 24: urnetwork.sidecar.GkmFormsReply
-	(*GkmLadderRequest)(nil),          // 25: urnetwork.sidecar.GkmLadderRequest
-	(*GkmReaderKeysRequest)(nil),      // 26: urnetwork.sidecar.GkmReaderKeysRequest
-	(*GkmReaderKeysReply)(nil),        // 27: urnetwork.sidecar.GkmReaderKeysReply
-	(*GkmWrapBatch)(nil),              // 28: urnetwork.sidecar.GkmWrapBatch
-	(*GkmWrapResult)(nil),             // 29: urnetwork.sidecar.GkmWrapResult
-	(*GkmWrapBatchReply)(nil),         // 30: urnetwork.sidecar.GkmWrapBatchReply
-	(*GkmWrapsReply)(nil),             // 31: urnetwork.sidecar.GkmWrapsReply
-	(*GkmWelcomeRecipient)(nil),       // 32: urnetwork.sidecar.GkmWelcomeRecipient
-	(*GkmWelcomeRequest)(nil),         // 33: urnetwork.sidecar.GkmWelcomeRequest
-	(*GkmWelcomeEntry)(nil),           // 34: urnetwork.sidecar.GkmWelcomeEntry
-	(*GkmWelcomesReply)(nil),          // 35: urnetwork.sidecar.GkmWelcomesReply
-	(*GkmAckRequest)(nil),             // 36: urnetwork.sidecar.GkmAckRequest
-	(*GkmRecoveryWrap)(nil),           // 37: urnetwork.sidecar.GkmRecoveryWrap
-	(*GkmRecoveryWrapsReply)(nil),     // 38: urnetwork.sidecar.GkmRecoveryWrapsReply
-	(*GkmRecoveryWrapItem)(nil),       // 39: urnetwork.sidecar.GkmRecoveryWrapItem
-	(*GkmRecoveryWrapBatch)(nil),      // 40: urnetwork.sidecar.GkmRecoveryWrapBatch
-	(*bridge.AuthPin)(nil),            // 41: urnetwork.sidecar.AuthPin
-	(*bridge.Signed)(nil),             // 42: urnetwork.sidecar.Signed
+	(*GkmGroupReformRequest)(nil),     // 19: urnetwork.sidecar.GkmGroupReformRequest
+	(*GkmGroupReply)(nil),             // 20: urnetwork.sidecar.GkmGroupReply
+	(*GkmEpochRequest)(nil),           // 21: urnetwork.sidecar.GkmEpochRequest
+	(*GkmEpochEntry)(nil),             // 22: urnetwork.sidecar.GkmEpochEntry
+	(*GkmEpochsReply)(nil),            // 23: urnetwork.sidecar.GkmEpochsReply
+	(*GkmGenerationsReply)(nil),       // 24: urnetwork.sidecar.GkmGenerationsReply
+	(*GkmFormsReply)(nil),             // 25: urnetwork.sidecar.GkmFormsReply
+	(*GkmLadderRequest)(nil),          // 26: urnetwork.sidecar.GkmLadderRequest
+	(*GkmReaderKeysRequest)(nil),      // 27: urnetwork.sidecar.GkmReaderKeysRequest
+	(*GkmReaderKeysReply)(nil),        // 28: urnetwork.sidecar.GkmReaderKeysReply
+	(*GkmWrapBatch)(nil),              // 29: urnetwork.sidecar.GkmWrapBatch
+	(*GkmWrapResult)(nil),             // 30: urnetwork.sidecar.GkmWrapResult
+	(*GkmWrapBatchReply)(nil),         // 31: urnetwork.sidecar.GkmWrapBatchReply
+	(*GkmWrapsReply)(nil),             // 32: urnetwork.sidecar.GkmWrapsReply
+	(*GkmWelcomeRecipient)(nil),       // 33: urnetwork.sidecar.GkmWelcomeRecipient
+	(*GkmWelcomeRequest)(nil),         // 34: urnetwork.sidecar.GkmWelcomeRequest
+	(*GkmWelcomeEntry)(nil),           // 35: urnetwork.sidecar.GkmWelcomeEntry
+	(*GkmWelcomesReply)(nil),          // 36: urnetwork.sidecar.GkmWelcomesReply
+	(*GkmAckRequest)(nil),             // 37: urnetwork.sidecar.GkmAckRequest
+	(*GkmRecoveryWrap)(nil),           // 38: urnetwork.sidecar.GkmRecoveryWrap
+	(*GkmRecoveryWrapsReply)(nil),     // 39: urnetwork.sidecar.GkmRecoveryWrapsReply
+	(*GkmRecoveryWrapItem)(nil),       // 40: urnetwork.sidecar.GkmRecoveryWrapItem
+	(*GkmRecoveryWrapBatch)(nil),      // 41: urnetwork.sidecar.GkmRecoveryWrapBatch
+	(*bridge.AuthPin)(nil),            // 42: urnetwork.sidecar.AuthPin
+	(*bridge.Signed)(nil),             // 43: urnetwork.sidecar.Signed
 }
 var file_protocol_gkm_proto_depIdxs = []int32{
-	41, // 0: urnetwork.sidecar.GkmCommitHeader.auth:type_name -> urnetwork.sidecar.AuthPin
-	41, // 1: urnetwork.sidecar.GenRotate.auth:type_name -> urnetwork.sidecar.AuthPin
+	42, // 0: urnetwork.sidecar.GkmCommitHeader.auth:type_name -> urnetwork.sidecar.AuthPin
+	42, // 1: urnetwork.sidecar.GenRotate.auth:type_name -> urnetwork.sidecar.AuthPin
 	4,  // 2: urnetwork.sidecar.GenRotate.leaf_wrap:type_name -> urnetwork.sidecar.LeafWrap
-	41, // 3: urnetwork.sidecar.KeyDelivery.auth:type_name -> urnetwork.sidecar.AuthPin
+	42, // 3: urnetwork.sidecar.KeyDelivery.auth:type_name -> urnetwork.sidecar.AuthPin
 	5,  // 4: urnetwork.sidecar.ReaderWrap.wrap:type_name -> urnetwork.sidecar.KeyDelivery
 	5,  // 5: urnetwork.sidecar.DelegationWrap.wrap:type_name -> urnetwork.sidecar.KeyDelivery
 	0,  // 6: urnetwork.sidecar.GkmHint.kind:type_name -> urnetwork.sidecar.GkmHintKind
 	1,  // 7: urnetwork.sidecar.GkmEpochObject.header:type_name -> urnetwork.sidecar.GkmCommitHeader
-	42, // 8: urnetwork.sidecar.GkmGroupCreateRequest.form:type_name -> urnetwork.sidecar.Signed
-	42, // 9: urnetwork.sidecar.GkmGroupCreateRequest.gen_rotate:type_name -> urnetwork.sidecar.Signed
-	42, // 10: urnetwork.sidecar.GkmGroupReply.form:type_name -> urnetwork.sidecar.Signed
-	11, // 11: urnetwork.sidecar.GkmEpochEntry.object:type_name -> urnetwork.sidecar.GkmEpochObject
-	21, // 12: urnetwork.sidecar.GkmEpochsReply.epochs:type_name -> urnetwork.sidecar.GkmEpochEntry
-	42, // 13: urnetwork.sidecar.GkmGenerationsReply.generations:type_name -> urnetwork.sidecar.Signed
-	42, // 14: urnetwork.sidecar.GkmFormsReply.forms:type_name -> urnetwork.sidecar.Signed
-	42, // 15: urnetwork.sidecar.GkmLadderRequest.generations:type_name -> urnetwork.sidecar.Signed
-	42, // 16: urnetwork.sidecar.GkmReaderKeysReply.reader_keys:type_name -> urnetwork.sidecar.Signed
-	29, // 17: urnetwork.sidecar.GkmWrapBatchReply.results:type_name -> urnetwork.sidecar.GkmWrapResult
-	42, // 18: urnetwork.sidecar.GkmWrapsReply.wraps:type_name -> urnetwork.sidecar.Signed
-	32, // 19: urnetwork.sidecar.GkmWelcomeRequest.recipients:type_name -> urnetwork.sidecar.GkmWelcomeRecipient
-	13, // 20: urnetwork.sidecar.GkmWelcomeEntry.pointer:type_name -> urnetwork.sidecar.GkmWelcomePointer
-	34, // 21: urnetwork.sidecar.GkmWelcomesReply.welcomes:type_name -> urnetwork.sidecar.GkmWelcomeEntry
-	37, // 22: urnetwork.sidecar.GkmRecoveryWrapsReply.wraps:type_name -> urnetwork.sidecar.GkmRecoveryWrap
-	39, // 23: urnetwork.sidecar.GkmRecoveryWrapBatch.items:type_name -> urnetwork.sidecar.GkmRecoveryWrapItem
-	24, // [24:24] is the sub-list for method output_type
-	24, // [24:24] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	43, // 8: urnetwork.sidecar.GkmGroupCreateRequest.form:type_name -> urnetwork.sidecar.Signed
+	43, // 9: urnetwork.sidecar.GkmGroupCreateRequest.gen_rotate:type_name -> urnetwork.sidecar.Signed
+	43, // 10: urnetwork.sidecar.GkmGroupReformRequest.form:type_name -> urnetwork.sidecar.Signed
+	43, // 11: urnetwork.sidecar.GkmGroupReply.form:type_name -> urnetwork.sidecar.Signed
+	11, // 12: urnetwork.sidecar.GkmEpochEntry.object:type_name -> urnetwork.sidecar.GkmEpochObject
+	22, // 13: urnetwork.sidecar.GkmEpochsReply.epochs:type_name -> urnetwork.sidecar.GkmEpochEntry
+	43, // 14: urnetwork.sidecar.GkmGenerationsReply.generations:type_name -> urnetwork.sidecar.Signed
+	43, // 15: urnetwork.sidecar.GkmFormsReply.forms:type_name -> urnetwork.sidecar.Signed
+	43, // 16: urnetwork.sidecar.GkmLadderRequest.generations:type_name -> urnetwork.sidecar.Signed
+	43, // 17: urnetwork.sidecar.GkmReaderKeysReply.reader_keys:type_name -> urnetwork.sidecar.Signed
+	30, // 18: urnetwork.sidecar.GkmWrapBatchReply.results:type_name -> urnetwork.sidecar.GkmWrapResult
+	43, // 19: urnetwork.sidecar.GkmWrapsReply.wraps:type_name -> urnetwork.sidecar.Signed
+	33, // 20: urnetwork.sidecar.GkmWelcomeRequest.recipients:type_name -> urnetwork.sidecar.GkmWelcomeRecipient
+	13, // 21: urnetwork.sidecar.GkmWelcomeEntry.pointer:type_name -> urnetwork.sidecar.GkmWelcomePointer
+	35, // 22: urnetwork.sidecar.GkmWelcomesReply.welcomes:type_name -> urnetwork.sidecar.GkmWelcomeEntry
+	38, // 23: urnetwork.sidecar.GkmRecoveryWrapsReply.wraps:type_name -> urnetwork.sidecar.GkmRecoveryWrap
+	40, // 24: urnetwork.sidecar.GkmRecoveryWrapBatch.items:type_name -> urnetwork.sidecar.GkmRecoveryWrapItem
+	25, // [25:25] is the sub-list for method output_type
+	25, // [25:25] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_protocol_gkm_proto_init() }
@@ -2779,7 +2860,7 @@ func file_protocol_gkm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_gkm_proto_rawDesc), len(file_protocol_gkm_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   40,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

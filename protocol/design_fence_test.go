@@ -357,6 +357,7 @@ var testUnfencedDeclarations = map[string]string{
 	"protocol/gkm.proto:GkmRecoveryWrapsReply":     "§10.14's GET /gkm/recovery/<member_id>/wraps",
 	"protocol/gkm.proto:GkmFormsReply":             "GET /gkm/repos/<id>/forms, which §10.14 lacks and members need",
 	"protocol/gkm.proto:GkmLadderRequest":          "POST .../ladder, which a re-form's ladder needs",
+	"protocol/gkm.proto:GkmGroupReformRequest":     "§10.14's POST /gkm/repos/<id>/forms, with 10.8's epoch 0",
 	"protocol/gkm.proto:GkmReaderKeysRequest":      "POST /gkm/reader-keys, for a rotator's batches",
 	"protocol/gkm.proto:GkmReaderKeysReply":        "POST /gkm/reader-keys, for a rotator's batches",
 	"protocol/gkm.proto:GkmWrapBatch":              "§10.14's POST .../wraps/<g>/<c8>, batched",

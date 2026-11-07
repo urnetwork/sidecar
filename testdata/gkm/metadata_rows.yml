@@ -93,6 +93,11 @@ GkmGroupCreateRequest.gen_wrap: {number: 3, type: bytes, row: gkm-2, sees: "GenW
 GkmGroupCreateRequest.sealed_group_info: {number: 4, type: bytes, row: gkm-2, pending: "as GkmEpochObject.sealed_group_info"}
 GkmGroupCreateRequest.cipher_suite: {number: 5, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
 
+GkmGroupReformRequest.form: {number: 1, type: Signed, row: gkm-1, sees: "GroupForm chain"}
+GkmGroupReformRequest.gen_wrap: {number: 2, type: bytes, row: gkm-2, sees: "GenWrap"}
+GkmGroupReformRequest.sealed_group_info: {number: 3, type: bytes, row: gkm-2, pending: "as GkmEpochObject.sealed_group_info"}
+GkmGroupReformRequest.cipher_suite: {number: 4, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
+
 GkmGroupReply.form: {number: 1, type: Signed, row: gkm-1, sees: "GroupForm chain"}
 
 GkmEpochRequest.commit: {number: 1, type: bytes, row: gkm-2, sees: "the commit as PrivateMessage ciphertext"}
