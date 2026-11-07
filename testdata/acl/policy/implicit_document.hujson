@@ -1,0 +1,19 @@
+{ "grants": [  // owner decision 105: untagged sidecars (autogroup:member) and app devices
+               // (autogroup:untagged) keep today's reach, and providers keep allow-all LAN and
+               // loopback, disclosed (owner decisions 50, 120)
+    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["*"], "allow": ["*"] },
+    { "src": ["autogroup:member"], "dst": ["evs:*"], "allow": ["write", "admin"] },
+    { "src": ["autogroup:tagged"], "dst": ["evs:*"], "allow": ["deposit"] },
+    { "src": ["autogroup:tagged"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] } ],
+  "requests": [
+    { "src": ["autogroup:network"], "dst": ["dns:*", "sock:tls/*", "sock:smtp/*"], "allow": ["publish", "listen"],
+      "approver": ["autogroup:admin"], "maxExpiry": "7d" },                             // §13.9
+    { "src": ["autogroup:tagged"], "dst": ["*", "sock:*", "evs:*", "mail:*"],
+      "allow": ["dial", "route", "listen", "read", "write", "send"],
+      "approver": ["autogroup:self"], "maxExpiry": "30d" },                             // owner decision 74
+    { "src": ["network:*"], "dst": ["*"], "allow": ["dial", "route"],
+      "approver": ["autogroup:admin"], "maxExpiry": "30d" },                            // shares (§8.11)
+    { "src": ["autogroup:member", "autogroup:tagged"],                                  // the team directory's
+      "dst": ["autogroup:member", "autogroup:tagged", "sock:*"], "allow": ["dial"],     // reach requests
+      "approver": ["autogroup:dst-owner"], "evidence": ["device", "presence"],          // (§16.11; owner
+      "maxExpiry": "30d" } ] }                                                          // decisions 179, 180)

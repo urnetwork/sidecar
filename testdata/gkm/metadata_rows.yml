@@ -1,7 +1,7 @@
 # Every field of protocol/gkm.proto, for I-18: its number and type, which pin the messages no design fence pins, and
-# the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails TestGkmFieldsNameLiveRows. A
-# field a row does not yet name says so under `pending`, with what §10 requires it for: those wait on a design-records
-# edit of the row, never on the field, and each stays visible here until the row names it.
+# the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails. A field a row does not yet
+# name says so under `pending`, with what §10 requires it for: those wait on a design-records edit of the row, never
+# on the field, and each stays visible here until the row names it.
 
 GkmCommitHeader.generation: {number: 1, type: uint64, row: gkm-2, sees: "generation"}
 GkmCommitHeader.auth: {number: 2, type: AuthPin, row: gkm-2, sees: "auth pin"}

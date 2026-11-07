@@ -1,0 +1,1 @@
+{"format":1,"root":"zone.example.","serial":44,"restore_serial":0,"added_by_n_plus_one":true,"interfaces":[{"name":"edge-1/eth0","ipv4":"192.0.2.10","ipv6":"","added_by_n_plus_one":[1]}],"rows":[{"format":1,"root":"zone.example.","serial":44,"added_by_n_plus_one":"x","deletes":[{"owner":"a.abcdefghij.zone.example.","type":16,"added_by_n_plus_one":{}}]}]}
