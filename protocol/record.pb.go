@@ -2,7 +2,7 @@
 // "every field is sealed" below speaks of. Three of these messages also travel outside an entry, and servers parse
 // them: api and the gates read ApprovalDecision and ApprovalCancel (§2.8's api-10), and whatever a CanonicalAction
 // holds shows wherever a GrantActivate carries it into the log (api-7, §8.8) or a gate takes it beside a decision
-// (api-10, §16.6's spend check). metadata_walk_test.go maps those fields to their rows, and says which have none.
+// (api-10, §16.6's spend check). testdata/metadata/fields.yml maps those fields to their rows, and says which have none.
 //
 // RECORD.md's kinds, class numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.
 //

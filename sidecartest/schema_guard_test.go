@@ -110,6 +110,101 @@ func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
 	}
 }
 
+// §8.8's GrantActivate carries an action as stored, so whatever a kind that activates a grant sets shows in the log,
+// and AD4, which speaks of a server-gated action, cannot call it unset. MCP-M3-02's table sets these on a listen, a
+// publish and a forward. Each is mapped or open until protos-services-canonical-action settles what a grant may carry.
+func TestSchemaGuardLeavesNoFieldOfAGrantUnset(t *testing.T) {
+	guard, err := LoadSchemaGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"socket_name", "local_port", "weight", "target_sidecar_id", "target_port", "alpn", "cidrs", "rule_id", "subject",
+		"grant_dst", "grant_allow", "expires_millis", "app_mode", "link_spki_sha256",
+	} {
+		if reason, unset := guard.fieldMap.Unset["CanonicalAction."+field]; unset {
+			t.Errorf("a GrantActivate can carry %s, and the map calls it unset: %s", field, reason)
+		}
+	}
+}
+
+// The real headers are read, or a guard that found no source would pass every claim unseen.
+func TestSchemaGuardReadsTheRealHeaders(t *testing.T) {
+	guard, err := LoadSchemaGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{
+		"protocol/directory.proto": true,
+		"protocol/evsindex.proto":  true,
+		"protocol/search.proto":    true,
+		"protocol/record.proto":    false,
+		"protocol/gkm.proto":       false,
+	} {
+		claimed, err := guard.headerClaimsSealed(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claimed != want {
+			t.Errorf("%s claims to be sealed: %t, want %t", path, claimed, want)
+		}
+	}
+}
+
+// The sentence record.proto once carried, against the real map and descriptors: it sent I-18's first walk, which was
+// done by hand, past the three messages every gate parses.
+func TestSchemaGuardRefusesRecordProtosOldHeader(t *testing.T) {
+	const oldHeader = "// The record's primitives (§16.8), sealed end to end, so no server reads a field here. RECORD.md's kinds,\n" +
+		"// class numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.\n\n" +
+		"syntax = \"proto3\";\n"
+	listPath, err := findMetadataList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := filepath.Dir(listPath)
+	top := t.TempDir()
+	copyFile := func(relativePath string) {
+		content, err := os.ReadFile(filepath.Join(repository, relativePath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(top, relativePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(metadataListFileName)
+	copyFile(schemaGuardFieldsPath)
+	areaFiles, err := filepath.Glob(filepath.Join(repository, schemaGuardTestdata, "*", schemaGuardAreaFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, areaFile := range areaFiles {
+		relativePath, err := filepath.Rel(repository, areaFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copyFile(relativePath)
+	}
+	path := filepath.Join(top, "protocol", "record.proto")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(oldHeader), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewSchemaGuard(&SchemaGuardSources{RootDirectory: top, Files: protoregistry.GlobalFiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := guard.protoFindings()
+	slices.Sort(findings)
+	wantGuardFindings(t, findings, "message ApprovalCancel", "message ApprovalDecision", "message CanonicalAction")
+}
+
 // The test tree's list: rows for each kind of backing, and one withdrawn.
 const testGuardList = `# metadata_list.yml v1
 evs-1:
@@ -375,6 +470,32 @@ func TestSchemaGuardFailsOnASealedMessageARootReaches(t *testing.T) {
 	root.Field = append(root.Field, testGuardField("peer", 4, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, "PeerOnly"))
 	tree.editMap("  Child.version: evs-2\n", "  Child.version: evs-2\n  Root.peer: evs-1\n  PeerOnly.pin: evs-1\n")
 	wantGuardFindings(t, tree.findings(), "message PeerOnly is called sealed, and root Root reaches it")
+}
+
+// A header that says no server reads the file, wrapped as a comment wraps it, where a root reaches a message.
+func TestSchemaGuardFailsOnAHeaderARootDisproves(t *testing.T) {
+	tree := newTestGuardTree(t)
+	tree.write("protocol/planted.proto", "// Sealed end to end, so no\n// server reads a field here.\n\nsyntax = \"proto3\";\n")
+	wantGuardFindings(t, tree.findings(), "root Root reaches its message Child", "root Root reaches its message Root")
+}
+
+// The same sentence on a file no root reaches is true, and below the syntax statement it is no header.
+func TestSchemaGuardTakesAHeaderNoRootDisproves(t *testing.T) {
+	tree := newTestGuardTree(t)
+	tree.write("protocol/planted.proto", "// A file.\n\nsyntax = \"proto3\";\n\n// so no server reads a field here\n")
+	wantGuardFindings(t, tree.findings())
+
+	tree = newTestGuardTree(t)
+	tree.editMap("  Root: \"a server decodes it\"\n", "")
+	tree.editMap("seals:\n  Root.sealed_body: RootBody\n", "seals:\n")
+	tree.editMap("fields:\n  Root.repo_id: evs-1\n  Root.child: evs-1\n  Root.sealed_body: evs-1\n  Child.version: evs-2\n", "fields:\n")
+	tree.editMap("sealed_messages:\n", "sealed_files:\n  protocol/planted.proto: \"its file\"\nsealed_messages:\n")
+	tree.write("protocol/planted.proto", "// So no server reads a field here.\n\nsyntax = \"proto3\";\n")
+	for _, finding := range tree.findings() {
+		if strings.Contains(finding, schemaGuardSealedClaim) {
+			t.Errorf("a sealed file's true header: %s", finding)
+		}
+	}
 }
 
 func TestSchemaGuardFailsOnASealOnAnythingButBytes(t *testing.T) {

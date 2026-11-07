@@ -2,7 +2,7 @@
 // comparison hold it: a field or value changed here without changing the proto, or there without changing this, fails
 // TestDeclarationsMatchTheirFences. This is the repository's own addition to the design's wire, so a reviewer reads
 // it here, and a new field of one of these has to pass through this file on its way to a release. Where a server
-// reads the field, it needs its §2.8 row first (I-18; metadata_walk_test.go).
+// reads the field, it needs its §2.8 row first (I-18), which §22.7's guard holds it to.
 //
 // The design gives most of these as field lists or names without numbers. They take numbers in the order written,
 // and those numbers stay open until their format freezes: protos-bridge-unwritten-numbers and
