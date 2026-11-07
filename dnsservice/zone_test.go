@@ -657,8 +657,10 @@ func TestZoneCnameBesideDataIsNotAnswered(t *testing.T) {
 	}
 }
 
+// §12.7 refuses documentation addresses, so what must read as public here is invented, and stands for
+// no host of ours or anyone's (connect/CODESTYLE.md:200).
 func TestIsPublicDnsAddress(t *testing.T) {
-	public := []string{"11.22.33.44", "1.1.1.1", "2a0f:ffff::7", "2600::1", "::ffff:11.22.33.44"}
+	public := []string{"11.22.33.44", "2a0f:ffff::7", "::ffff:11.22.33.44"}
 	for _, text := range public {
 		if !isPublicDnsAddress(netip.MustParseAddr(text)) {
 			t.Errorf("%s reads as not public", text)

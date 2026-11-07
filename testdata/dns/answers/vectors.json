@@ -1,5 +1,5 @@
 {
- "comment": "Answer's vectors: rows are '<owner> <ttl> <kind> [<type> <rdata>]', a copy row with no type; rows of one key are one RRset. A step applies its rows as the next serial, sets the healthy set when it names one, then runs its cases. Records read as miekg prints them.",
+ "comment": "Answer's vectors: rows are '<owner> <ttl> <kind> [<type> <rdata>]', a copy row with no type; rows of one key are one RRset. A step applies its rows as the next serial, sets the healthy set when it names one, then runs its cases. Records read as miekg prints them. A user's addresses are invented, since a user may not publish a documentation address; everything else's are documentation addresses.",
  "root": "zone.example.",
  "serial": 100,
  "rows": [
