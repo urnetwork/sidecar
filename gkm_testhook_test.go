@@ -95,6 +95,15 @@ func TestGkmHookSeesEveryUnwrap(t *testing.T) {
 	}
 }
 
+func TestGkmHookSeesTheKek(t *testing.T) {
+	recorder := mlsRecordHooks(t)
+	kek, err := MlsKek(mlsTestExporter{secret: gkmTestBytes("exporter secret", 32)}, gkmTestId("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "KEK_e", kek)
+}
+
 func TestGkmHookSeesEveryPrivateKey(t *testing.T) {
 	recorder := mlsRecordHooks(t)
 	signer := newGkmTestSigner("reader")
