@@ -261,8 +261,8 @@ func TestWorkerHarnessEndsAsItsProgramDoes(t *testing.T) {
 // The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
 // under node's process global net/http never calls fetch, and what the page Worker's transport does
 // with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
-// its fetch tests, the known answers for the mls_ it keeps and mail's vectors, since a run that
-// skipped them would still exit 0.
+// its fetch tests, the known answers for the mls_ and socket_ it keeps and mail's vectors, since a run
+// that skipped them would still exit 0.
 func TestHttpLegPassesInAWorker(t *testing.T) {
 	wasmPath := filepath.Join(t.TempDir(), "sidecar.test.wasm")
 
@@ -283,6 +283,7 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestAuthChainVectors",
 		"TestMlsVectorFilesMatchUpstream",
 		"TestMlsCryptoBasicsVectors",
 		"TestMlsKeyScheduleVectors",
@@ -290,12 +291,17 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestMlsTreeKemVectors",
 		"TestXWingKatDecapsulationThroughHpke",
 		"TestXWingKatEncapsulationThroughHpke",
+		"TestSocketTokenVectors",
+		"TestSocketSealVectors",
+		"TestSocketSealDropVectors",
 		"TestMailVectorsRoundTrip",
 		"TestMailVectorsCoverEveryField",
 		"TestMailVectorNames",
 		"TestMailVectorMonths",
 		"TestMailVectorClocks",
 		"TestMailVectorOrders",
+		"TestKeychainVectorsAreByteEqual",
+		"TestKeychainVectorsOpen",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)

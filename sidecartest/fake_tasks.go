@@ -49,6 +49,8 @@ type FakeTasks struct {
 	pending   []*fakeTask
 	running   map[string]*fakeTask
 	runCounts map[string]int
+	// every request offered, coalesced or not, as a queue's rows hold it
+	requests []*sidecar.TaskRequest
 }
 
 func NewFakeTasks(clock Clock, faults *FaultQueue, settings *FakeTasksSettings) *FakeTasks {
@@ -92,6 +94,8 @@ func (self *FakeTasks) Schedule(ctx context.Context, request *sidecar.TaskReques
 		defer self.stateLock.Unlock()
 		requestCopy := *request
 		requestCopy.Args = bytes.Clone(request.Args)
+		offered := requestCopy
+		self.requests = append(self.requests, &offered)
 		if existing := self.pendingWithLock(request.OnceKey); existing != nil {
 			// asking twice runs once, at the sooner time
 			if requestCopy.RunAt.Before(existing.request.RunAt) {
@@ -104,6 +108,14 @@ func (self *FakeTasks) Schedule(ctx context.Context, request *sidecar.TaskReques
 		self.pending = append(self.pending, &fakeTask{request: &requestCopy, seq: self.seq, waitsForRun: running})
 		return nil
 	})
+}
+
+// Every request ever offered, for CC3's scan: a job's args are stored until its run and past it, so
+// they hold ids and positions only (host_tasks.go).
+func (self *FakeTasks) AllRequests() []*sidecar.TaskRequest {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.requests)
 }
 
 // Requests not yet run, oldest first, each a copy.

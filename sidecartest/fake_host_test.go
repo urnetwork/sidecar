@@ -45,9 +45,20 @@ func TestFakeHostFillsEveryInterface(t *testing.T) {
 	}
 }
 
+// A Principal Principal.Validate passes, good for an hour on clock.
+func validPrincipal(clock Clock) *sidecar.Principal {
+	return &sidecar.Principal{
+		NetworkId: connect.NewId(),
+		ClientId:  connect.NewId(),
+		Audience:  "evs",
+		Scopes:    []string{"repo:r:rw"},
+		ExpiresAt: clock.Now().Add(1 * time.Hour),
+	}
+}
+
 func TestAuthenticatorKnowsOnlyWhatItIssued(t *testing.T) {
-	host, _, _ := newHostFixture(t)
-	jwt := host.Authenticator.Issue(&sidecar.Principal{Audience: "evs", NetworkId: connect.NewId(), Scopes: []string{"repo:r:rw"}})
+	host, clock, _ := newHostFixture(t)
+	jwt := host.Authenticator.Issue(validPrincipal(clock))
 	principal, err := host.Authenticator.Authenticate(t.Context(), "evs", jwt)
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +73,8 @@ func TestAuthenticatorKnowsOnlyWhatItIssued(t *testing.T) {
 
 // §7.8: every service audience shares one key set, so the audience check is what tells them apart.
 func TestAuthenticatorRefusesAnotherAudienceAndNone(t *testing.T) {
-	host, _, _ := newHostFixture(t)
-	jwt := host.Authenticator.Issue(&sidecar.Principal{Audience: "evs"})
+	host, clock, _ := newHostFixture(t)
+	jwt := host.Authenticator.Issue(validPrincipal(clock))
 	for _, audience := range []string{"gkm", ""} {
 		if _, err := host.Authenticator.Authenticate(t.Context(), audience, jwt); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
 			t.Errorf("audience %q: %v", audience, err)
@@ -73,7 +84,7 @@ func TestAuthenticatorRefusesAnotherAudienceAndNone(t *testing.T) {
 
 func TestAuthenticatorRefusesExpiredAndRevoked(t *testing.T) {
 	host, clock, _ := newHostFixture(t)
-	expiring := host.Authenticator.Issue(&sidecar.Principal{Audience: "evs", ExpiresAt: clock.Now().Add(1 * time.Hour)})
+	expiring := host.Authenticator.Issue(validPrincipal(clock))
 	if _, err := host.Authenticator.Authenticate(t.Context(), "evs", expiring); err != nil {
 		t.Fatal(err)
 	}
@@ -82,17 +93,49 @@ func TestAuthenticatorRefusesExpiredAndRevoked(t *testing.T) {
 		t.Errorf("expired: %v", err)
 	}
 
-	revoked := host.Authenticator.Issue(&sidecar.Principal{Audience: "evs"})
+	revoked := host.Authenticator.Issue(validPrincipal(clock))
 	host.Authenticator.Revoke(revoked)
 	if _, err := host.Authenticator.Authenticate(t.Context(), "evs", revoked); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
 		t.Errorf("revoked: %v", err)
 	}
 }
 
+// host_auth.go: a zero ExpiresAt has passed, so a token that names no end has none left.
+func TestATokenWithNoExpiryHasExpired(t *testing.T) {
+	host, clock, _ := newHostFixture(t)
+	principal := validPrincipal(clock)
+	principal.ExpiresAt = time.Time{}
+	jwt := host.Authenticator.Issue(principal)
+	if _, err := host.Authenticator.Authenticate(t.Context(), "evs", jwt); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
+		t.Errorf("err %v", err)
+	}
+}
+
+// host_auth.go: a token that does not name its network and client never authenticates with zero ids,
+// or a removed client's unexpired token would read as not revoked.
+func TestATokenPrincipalValidateRefusesDoesNotAuthenticate(t *testing.T) {
+	host, clock, _ := newHostFixture(t)
+	zeroId := connect.Id{}
+	for name, change := range map[string]func(principal *sidecar.Principal){
+		"no network":     func(principal *sidecar.Principal) { principal.NetworkId = connect.Id{} },
+		"no client":      func(principal *sidecar.Principal) { principal.ClientId = connect.Id{} },
+		"a zero subject": func(principal *sidecar.Principal) { principal.SubjectClientId = &zeroId },
+		"a zero sidecar": func(principal *sidecar.Principal) { principal.SidecarId = &zeroId },
+		"a zero member":  func(principal *sidecar.Principal) { principal.MemberId = &zeroId },
+	} {
+		principal := validPrincipal(clock)
+		change(principal)
+		jwt := host.Authenticator.Issue(principal)
+		if _, err := host.Authenticator.Authenticate(t.Context(), "evs", jwt); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 // The other kind of failure: an engine answers unavailable, so a client retries and stays signed in.
 func TestADroppedAuthenticateIsNoRefusal(t *testing.T) {
-	host, _, faults := newHostFixture(t)
-	jwt := host.Authenticator.Issue(&sidecar.Principal{Audience: "evs"})
+	host, clock, faults := newHostFixture(t)
+	jwt := host.Authenticator.Issue(validPrincipal(clock))
 	if _, err := faults.Add(&FaultPlan{Op: FaultOpHost, KeyPrefix: "authenticator.", Result: FailBeforeApply}); err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +146,8 @@ func TestADroppedAuthenticateIsNoRefusal(t *testing.T) {
 }
 
 func TestAuthenticatorReturnsItsOwnCopy(t *testing.T) {
-	host, _, _ := newHostFixture(t)
-	jwt := host.Authenticator.Issue(&sidecar.Principal{Audience: "evs", Scopes: []string{"repo:r:rw"}})
+	host, clock, _ := newHostFixture(t)
+	jwt := host.Authenticator.Issue(validPrincipal(clock))
 	first, err := host.Authenticator.Authenticate(t.Context(), "evs", jwt)
 	if err != nil {
 		t.Fatal(err)
@@ -116,6 +159,49 @@ func TestAuthenticatorReturnsItsOwnCopy(t *testing.T) {
 	}
 	if second.Scopes[0] != "repo:r:rw" {
 		t.Errorf("scopes %v", second.Scopes)
+	}
+}
+
+// host_quota.go: a zero id is the caller's bug and an error, never a lookup, so nothing is counted.
+func TestAZeroQuotaIdIsAnError(t *testing.T) {
+	host, _, _ := newHostFixture(t)
+	ctx := t.Context()
+	networkId := connect.NewId()
+	zeroId := connect.Id{}
+	host.Quota.SetRateLimit(networkId, "a", 10)
+	if _, err := host.Quota.Limits(ctx, zeroId); err == nil {
+		t.Error("Limits took a zero network")
+	}
+	if _, err := host.Quota.CountRate(ctx, zeroId, map[string]int64{"a": 1}, connect.NewId()); err == nil {
+		t.Error("CountRate took a zero network")
+	}
+	if _, _, err := host.Quota.Lease(ctx, zeroId, "tls"); err == nil {
+		t.Error("Lease took a zero network")
+	}
+	// two debits sharing a zero id would read as one retried, the second counting nothing
+	for range 2 {
+		if _, err := host.Quota.CountRate(ctx, networkId, map[string]int64{"a": 1}, zeroId); err == nil {
+			t.Error("CountRate took a zero debit")
+		}
+	}
+	event := &sidecar.UsageEvent{NetworkId: networkId, Meter: "tls", TransferByteCount: 7}
+	if err := host.Quota.ReportUsage(ctx, &sidecar.UsageBatch{Events: []*sidecar.UsageEvent{event}}); err == nil {
+		t.Error("ReportUsage took a zero batch")
+	}
+	badEvent := &sidecar.UsageEvent{Meter: "tls", TransferByteCount: 7}
+	if err := host.Quota.ReportUsage(ctx, &sidecar.UsageBatch{BatchId: connect.NewId(), Events: []*sidecar.UsageEvent{event, badEvent}}); err == nil {
+		t.Error("ReportUsage took an event for a zero network")
+	}
+	if got := host.Quota.TransferUsed(networkId, "tls"); got != 0 {
+		t.Errorf("a refused batch counted %d", got)
+	}
+	if len(host.Quota.Batches()) != 0 {
+		t.Errorf("batches %d", len(host.Quota.Batches()))
+	}
+	// the cap is untouched, so all of it is still there to count
+	refusal, err := host.Quota.CountRate(ctx, networkId, map[string]int64{"a": 10}, connect.NewId())
+	if err != nil || refusal != nil {
+		t.Errorf("refusal %+v, %v", refusal, err)
 	}
 }
 
@@ -706,6 +792,21 @@ func TestPushFaultsFailTheCall(t *testing.T) {
 	}
 	if len(host.Push.Hints(clientId)) != 0 {
 		t.Error("a failed hint reached the client")
+	}
+}
+
+// host_client.go: a source that cannot fill every field answers an error.
+func TestAServiceClientWithNoUrlIsNoSuccess(t *testing.T) {
+	for _, change := range []func(settings *FakeServiceClientSettings){
+		func(settings *FakeServiceClientSettings) { settings.ApiUrl = "" },
+		func(settings *FakeServiceClientSettings) { settings.PlatformUrl = "" },
+	} {
+		settings := DefaultFakeServiceClientSettings()
+		change(settings)
+		source := NewFakeServiceClientSource(NewFaultQueue(), settings)
+		if auth, err := source.ServiceClient(t.Context(), 0); err == nil {
+			t.Errorf("auth %+v", auth)
+		}
 	}
 }
 

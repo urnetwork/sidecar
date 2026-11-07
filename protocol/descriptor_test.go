@@ -695,3 +695,47 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 		}
 	}
 }
+
+// FS-72 and D-PHASE-9: what §7's three files hold for a later milestone equals the decided list. Their reservations are
+// declared rather than `reserved`: ServiceSettings.directory is a field older readers ignore, and VersioningRules a
+// record and a type format 1 verifies and applies nothing from. So these files keep no `reserved` statement, and each
+// message a reservation touches holds exactly its decided numbers, lest something undecided freeze beside them at M2.
+func TestConfigReservationsEqualTheDecidedList(t *testing.T) {
+	for _, path := range []string{"protocol/bridge/auth.proto", "protocol/bridge/signed.proto", "protocol/config.proto"} {
+		file := testFile(t, path)
+		enums := file.Enums()
+		for i := range enums.Len() {
+			enum := enums.Get(i)
+			if enum.ReservedRanges().Len() != 0 || enum.ReservedNames().Len() != 0 {
+				t.Errorf("%s reserves numbers no decision lists", enum.FullName())
+			}
+		}
+		messages := file.Messages()
+		for i := range messages.Len() {
+			message := messages.Get(i)
+			if message.ReservedRanges().Len() != 0 || message.ReservedNames().Len() != 0 {
+				t.Errorf("%s reserves numbers no decision lists", message.FullName())
+			}
+		}
+	}
+
+	// Each message the reservations touch, whole: a field added beside these is a number no decision made.
+	decided := map[string]map[protoreflect.Name]protoreflect.FieldNumber{
+		"ServiceSettings": {
+			"team_mail": 1, "stale_leaf_days": 2, "self_admit": 3, "witness_bound_hours": 4, "scim_signer": 5, "directory": 6,
+		},
+		"ServiceDirectorySettings": {"runs": 1, "workers": 2},
+		"VersioningRules":          {"rules": 1},
+		"VersioningRule":           {"kinds": 1, "repo_ids": 2, "path_glob": 3, "size_above_bytes": 4, "versioning": 5},
+	}
+	for name, want := range decided {
+		fields := testMessage(t, name).Fields()
+		got := map[protoreflect.Name]protoreflect.FieldNumber{}
+		for i := range fields.Len() {
+			got[fields.Get(i).Name()] = fields.Get(i).Number()
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("%s holds %v, want %v", name, got, want)
+		}
+	}
+}

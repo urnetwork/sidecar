@@ -13,19 +13,24 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Every value SignedType's descriptor holds, 0 included, so a value an owner adds joins by being declared.
-func testDescriptorTypes() []SignedType {
+// §22.6: whatever the body, a statement signed under one type passes as that type alone. It is refused as every other
+// value the descriptor holds, by the type check, and when a relay also rewrites Signed.type to the one expected, which
+// leaves the type check nothing to see, by the signature, or for a countersignature by the leaf that covers the type.
+// The body a seed holds may parse as a statement of both types, which is the case the rule exists for: a GrantRevoke's
+// is an OwnerConfirm's too. protocol's OwnerConfirm is out of this package's reach (§4.4), so its two fields are written
+// by hand here and held equal, and protocol/statement_test.go has the real message.
+func FuzzSignedTypeConfusion(f *testing.F) {
+	origins := testFixtureOrigins(f)
+	// from the descriptor, 0 included, so a value an owner adds joins by being declared
 	values := SignedType(0).Descriptor().Values()
 	signedTypes := make([]SignedType, values.Len())
 	for i := range signedTypes {
 		signedTypes[i] = SignedType(values.Get(i).Number())
 	}
-	return signedTypes
-}
+	for i, signedType := range signedTypes {
+		f.Add(testBody, int32(signedType), int32(signedTypes[(i+1)%len(signedTypes)]))
+	}
 
-// A GrantRevoke whose encoding is an OwnerConfirm's too. protocol's OwnerConfirm is out of this package's reach (§4.4),
-// so this writes its two fields by hand and holds the bodies equal; protocol/statement_test.go has the real message.
-func testGrantRevokeBody(t testing.TB) []byte {
 	header := &StatementHeader{
 		NetworkId:  bytes.Repeat([]byte{0x01}, 16),
 		At:         &AuthPin{Version: 7, Chain: bytes.Repeat([]byte{0x02}, 32)},
@@ -33,35 +38,22 @@ func testGrantRevokeBody(t testing.TB) []byte {
 		NotAfterMs: 1,
 	}
 	id := bytes.Repeat([]byte{0x04}, 16)
-	body, err := proto.Marshal(&GrantRevoke{Header: header, GrantId: id})
+	grantRevokeBody, err := proto.Marshal(&GrantRevoke{Header: header, GrantId: id})
 	if err != nil {
-		t.Fatal(err)
+		f.Fatal(err)
 	}
 	encodedHeader, err := proto.Marshal(header)
 	if err != nil {
-		t.Fatal(err)
+		f.Fatal(err)
 	}
-	var ownerConfirm []byte
-	ownerConfirm = protowire.AppendTag(ownerConfirm, 1, protowire.BytesType)
-	ownerConfirm = protowire.AppendBytes(ownerConfirm, encodedHeader)
-	ownerConfirm = protowire.AppendTag(ownerConfirm, 2, protowire.BytesType)
-	ownerConfirm = protowire.AppendBytes(ownerConfirm, id)
-	if !bytes.Equal(body, ownerConfirm) {
-		t.Fatal("the two statements must encode alike, or this seed proves nothing")
+	var ownerConfirmBody []byte
+	ownerConfirmBody = protowire.AppendTag(ownerConfirmBody, 1, protowire.BytesType)
+	ownerConfirmBody = protowire.AppendBytes(ownerConfirmBody, encodedHeader)
+	ownerConfirmBody = protowire.AppendTag(ownerConfirmBody, 2, protowire.BytesType)
+	ownerConfirmBody = protowire.AppendBytes(ownerConfirmBody, id)
+	if !bytes.Equal(grantRevokeBody, ownerConfirmBody) {
+		f.Fatal("the two statements must encode alike, or this seed proves nothing")
 	}
-	return body
-}
-
-// §22.6: whatever the body, a statement signed under one type passes as that type alone. It is refused as every other
-// value the descriptor holds, by the type check, and when a relay also rewrites Signed.type to the one expected, which
-// leaves the type check nothing to see, by the signature, or for a countersignature by the leaf that covers the type.
-// The body a seed holds may parse as a statement of both types, which is the case the rule exists for.
-func FuzzSignedTypeConfusion(f *testing.F) {
-	signedTypes := testDescriptorTypes()
-	for i, signedType := range signedTypes {
-		f.Add(testBody, int32(signedType), int32(signedTypes[(i+1)%len(signedTypes)]))
-	}
-	grantRevokeBody := testGrantRevokeBody(f)
 	grantRevoke := int32(SignedType_SIGNED_GRANT_REVOKE)
 	ownerConfirm := int32(SignedType_SIGNED_OWNER_CONFIRM)
 	f.Add(grantRevokeBody, grantRevoke, ownerConfirm)
@@ -121,7 +113,7 @@ func FuzzSignedTypeConfusion(f *testing.F) {
 		statements := []*testActStatement{{purpose: purpose, signedType: signedType, body: body}}
 		for _, profile := range profiles {
 			countersigned := testCountersignedAct(t, statements, profile.check)[0]
-			err := VerifyPresenceCountersign(countersigned, purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(countersigned, purpose, profile.alg, profile.publicKey, origins)
 			if registered(signedType) && err != nil {
 				t.Fatalf("%s %d countersigned: %v", profile.name, signedAs, err)
 			}
@@ -134,7 +126,7 @@ func FuzzSignedTypeConfusion(f *testing.F) {
 			}
 			rewritten := proto.CloneOf(countersigned)
 			rewritten.Type = uint32(presentedType)
-			err = VerifyPresenceCountersign(rewritten, purpose, profile.alg, profile.publicKey)
+			err = verifyPresenceCountersign(rewritten, purpose, profile.alg, profile.publicKey, origins)
 			if registered(presentedType) && !profile.refusesOtherBytes(err) {
 				t.Fatalf("%s %d rewritten to %d: %v", profile.name, signedAs, presentedAs, err)
 			}
@@ -149,6 +141,7 @@ func FuzzSignedTypeConfusion(f *testing.F) {
 // of the fixed act at its own index, by its own signer, whatever a mutation did to the rest of the Signed. The seeds
 // start past every branch: each act's statements, and a countersign refusal stopping at each kind of check.
 func FuzzVerifyPresenceCountersign(f *testing.F) {
+	origins := testFixtureOrigins(f)
 	statements := testActStatements(5)
 	profiles := testPresenceProfiles(f)
 	for _, profile := range profiles {
@@ -174,9 +167,9 @@ func FuzzVerifyPresenceCountersign(f *testing.F) {
 		}
 		keyAlg := SignedKeyAlg(alg)
 		// A key record is input too, so this must not panic, whatever it answers: an input may hold its own key.
-		_ = VerifyPresenceCountersign(signed, purpose, keyAlg, signed.GetWebauthn().GetKeyId())
+		_ = verifyPresenceCountersign(signed, purpose, keyAlg, signed.GetWebauthn().GetKeyId(), origins)
 
-		if err := VerifyPresenceCountersign(signed, purpose, keyAlg, publicKey); err != nil {
+		if err := verifyPresenceCountersign(signed, purpose, keyAlg, publicKey, origins); err != nil {
 			return
 		}
 		evidence := signed.GetWebauthn()
@@ -186,7 +179,13 @@ func FuzzVerifyPresenceCountersign(f *testing.F) {
 		statement := statements[evidence.GetActIndex()]
 		if purpose != statement.purpose || signed.GetType() != uint32(statement.signedType) ||
 			!bytes.Equal(signed.GetBody(), statement.body) || !bytes.Equal(signed.GetSignerId(), testSignerId) {
-			t.Fatalf("verified purpose %q, type %d, body %x, signer %x", purpose, signed.GetType(), signed.GetBody(), signed.GetSignerId())
+			t.Fatalf(
+				"verified purpose %q, type %d, body %x, signer %x",
+				purpose,
+				signed.GetType(),
+				signed.GetBody(),
+				signed.GetSignerId(),
+			)
 		}
 	})
 }

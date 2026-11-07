@@ -8,6 +8,7 @@ import (
 	"crypto/aes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"go/parser"
 	"go/token"
 	"os"
@@ -182,6 +183,10 @@ func TestExpandLabelGadgetMatchesTheKeySchedule(t *testing.T) {
 		})
 		if err := testSolved(t, compiled, &testExpandCircuit{Secret: testAssignBits(secret), Context: testAssignBits(c.context), Out: testAssignBits(out)}); err != nil {
 			t.Errorf("%s: %v", c.label, err)
+		}
+		out[0] ^= 1
+		if err := testSolved(t, compiled, &testExpandCircuit{Secret: testAssignBits(secret), Context: testAssignBits(c.context), Out: testAssignBits(out)}); err == nil {
+			t.Errorf("%s: accepted a wrong output", c.label)
 		}
 	}
 }
@@ -459,6 +464,19 @@ func TestZ1CircuitDerivesARealConnectionsKeys(t *testing.T) {
 			if err := testSolved(t, compiled, testKeys13Assignment(statement, witness)); err == nil {
 				t.Errorf("%s: %s: accepted", leg.name, mutation.name)
 			}
+		}
+
+		// a HelloRetryRequest moves H_sh and H_sf onto a message_hash, which the edge must follow
+		retried := *leg
+		retried.name += " after a retry"
+		retried.serverTls = func(t *testing.T) *tls.Config {
+			config := leg.serverTls(t)
+			config.CurvePreferences = []tls.CurveID{tls.CurveP256}
+			return config
+		}
+		statement, witness = testBdatCapture(t, &retried).part(t, 2)
+		if err := testSolved(t, compiled, testKeys13Assignment(statement, witness)); err != nil {
+			t.Errorf("%s: %v", retried.name, err)
 		}
 	}
 }

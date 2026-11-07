@@ -1,0 +1,150 @@
+# Every field of protocol/gkm.proto, for I-18: its number and type, which pin the messages no design fence pins, and
+# the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails. A field a row does not yet
+# name says so under `pending`, with what §10 requires it for: those wait on a design-records edit of the row, never
+# on the field, and each stays visible here until the row names it.
+
+GkmCommitHeader.generation: {number: 1, type: uint64, row: gkm-2, sees: "generation"}
+GkmCommitHeader.auth: {number: 2, type: AuthPin, row: gkm-2, sees: "auth pin"}
+
+UrMlsCredential.sidecar_id: {number: 1, type: bytes, row: gkm-4, sees: "credential: sidecar_id"}
+UrMlsCredential.identity_public_key: {number: 2, type: bytes, row: gkm-4, sees: "identity key"}
+UrMlsCredential.identity_alg: {number: 3, type: string, row: gkm-4, pending: "10.4's field; api-5 already shows a sidecar's algorithm, gkm-4 does not name it"}
+UrMlsCredential.mls_signature_public_key: {number: 4, type: bytes, row: gkm-4, sees: "signature key"}
+UrMlsCredential.cipher_suite: {number: 5, type: uint32, row: gkm-4, sees: "suite"}
+UrMlsCredential.not_after: {number: 6, type: int64, row: gkm-4, sees: "not_after"}
+UrMlsCredential.admission_sha256: {number: 7, type: bytes, row: gkm-4, sees: "admission hash"}
+UrMlsCredential.identity_signature: {number: 8, type: bytes, row: gkm-4, sees: "signature)"}
+
+GenRotate.group_id: {number: 1, type: bytes, row: gkm-7, sees: "GenRotates (group"}
+GenRotate.repo_id: {number: 2, type: bytes, row: gkm-1, sees: "repo_id"}
+GenRotate.generation: {number: 3, type: uint64, row: gkm-7, sees: "GenRotates (group, generation"}
+GenRotate.parent_commitment: {number: 4, type: bytes, row: gkm-7, sees: "parent and own commitments"}
+GenRotate.commitment: {number: 5, type: bytes, row: gkm-7, sees: "parent and own commitments"}
+GenRotate.cause: {number: 6, type: uint32, row: gkm-7, sees: "cause"}
+GenRotate.auth: {number: 7, type: AuthPin, row: gkm-7, sees: "auth pin"}
+GenRotate.time_ms: {number: 8, type: int64, row: gkm-7, sees: "auth pin, time"}
+GenRotate.holders_sha256: {number: 9, type: bytes, row: gkm-7, sees: "holders hash"}
+GenRotate.wrap_count: {number: 10, type: uint32, row: gkm-7, pending: "10.9's staged row reads it; gkm can count the objects, gkm-7 does not name the count"}
+GenRotate.genlink: {number: 11, type: bytes, row: gkm-7, sees: "GenLink"}
+GenRotate.leaf_wrap: {number: 12, type: LeafWrap, row: gkm-7, sees: "leaf-wrap ciphertexts"}
+GenRotate.drop_public_key: {number: 13, type: bytes, row: gkm-7, sees: "the drop public key"}
+GenRotate.drop_not_after_ms: {number: 14, type: int64, row: gkm-7, pending: "10.5's depositor rule reads it; gkm-7 names the key and not its expiry"}
+
+LeafWrap.epoch: {number: 1, type: uint64, row: gkm-2, sees: "group_id, epoch"}
+LeafWrap.ciphertext: {number: 2, type: bytes, row: gkm-7, sees: "leaf-wrap ciphertexts"}
+
+KeyDelivery.group_id: {number: 1, type: bytes, row: gkm-7, sees: "wraps (group"}
+KeyDelivery.generation: {number: 2, type: uint64, row: gkm-7, sees: "wraps (group, generation"}
+KeyDelivery.commitment: {number: 3, type: bytes, row: gkm-7, sees: "generation, commitment"}
+KeyDelivery.recipient: {number: 4, type: bytes, row: gkm-7, sees: "recipient sidecar_id or delegation_id"}
+KeyDelivery.recipient_key_sha256: {number: 5, type: bytes, row: gkm-7, sees: "the SHA-256 of the key sealed to"}
+KeyDelivery.delivery_kind: {number: 6, type: uint32, row: gkm-7, sees: "staged or late"}
+KeyDelivery.auth: {number: 7, type: AuthPin, row: gkm-7, sees: "a late one's auth pin and time"}
+KeyDelivery.time_ms: {number: 8, type: int64, row: gkm-7, sees: "a late one's auth pin and time"}
+KeyDelivery.ciphertext: {number: 9, type: bytes, row: gkm-7, sees: "ciphertext, signer"}
+
+ReaderWrap.wrap: {number: 1, type: KeyDelivery, row: gkm-7, sees: "staged and late wraps"}
+DelegationWrap.wrap: {number: 1, type: KeyDelivery, row: gkm-7, sees: "staged and late wraps"}
+
+ReaderKey.sidecar_id: {number: 1, type: bytes, row: gkm-4, sees: "ReaderKeys"}
+ReaderKey.xwing_public_key: {number: 2, type: bytes, row: gkm-4, sees: "ReaderKeys"}
+ReaderKey.not_after: {number: 3, type: int64, row: gkm-4, sees: "ReaderKeys"}
+
+GroupForm.repo_id: {number: 1, type: bytes, row: gkm-1, sees: "GroupForm chain (repo_id"}
+GroupForm.group_id: {number: 2, type: bytes, row: gkm-1, sees: "group_id"}
+GroupForm.previous_group_id: {number: 3, type: bytes, row: gkm-1, sees: "previous group"}
+GroupForm.generation: {number: 4, type: uint64, row: gkm-1, sees: "previous group, generation"}
+
+GkmHint.group_id: {number: 1, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}
+GkmHint.epoch: {number: 2, type: uint64, row: connect-4, sees: "server-held ids, kinds and versions"}
+GkmHint.kind: {number: 3, type: GkmHintKind, row: connect-4, sees: "server-held ids, kinds and versions"}
+GkmHint.recipient: {number: 4, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}
+
+GkmEpochObject.commit: {number: 1, type: bytes, row: gkm-2, sees: "the commit as PrivateMessage ciphertext"}
+GkmEpochObject.header: {number: 2, type: GkmCommitHeader, row: gkm-2, sees: "generation, auth pin"}
+GkmEpochObject.uploader: {number: 3, type: bytes, row: gkm-2, sees: "uploader sidecar_id"}
+GkmEpochObject.time_ms: {number: 4, type: int64, row: gkm-2, sees: "size, time"}
+GkmEpochObject.gen_wrap: {number: 5, type: bytes, row: gkm-2, sees: "GenWrap"}
+GkmEpochObject.sealed_group_info: {number: 6, type: bytes, row: gkm-2, pending: "10.6's epoch row and D-KEYS-18 put it here at 16 leaves or fewer; gkm-7 names only the sealed GroupInfo above 16"}
+GkmEpochObject.group_info_generation: {number: 7, type: uint64, row: gkm-2, pending: "KF5's 'the generation it names'; gen/ and each header show generations, no row says a sealed GroupInfo names one"}
+GkmEpochObject.network_id: {number: 8, type: bytes, row: gkm-1, sees: "epoch 0 (network_id"}
+GkmEpochObject.cipher_suite: {number: 9, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
+
+GkmGroupInfoObject.epoch: {number: 1, type: uint64, row: gkm-7, sees: "GroupInfo pointers"}
+GkmGroupInfoObject.generation: {number: 2, type: uint64, row: gkm-7, pending: "KF5's 'the generation it names'; gen/ and each epoch's header show generations, gkm-7 does not say a sealed GroupInfo names one"}
+GkmGroupInfoObject.sealed_group_info: {number: 3, type: bytes, row: gkm-7, sees: "above 16 leaves, sealed GroupInfo"}
+
+GkmWelcomePointer.group_id: {number: 1, type: bytes, row: gkm-5, sees: "Welcome objects and pointers"}
+GkmWelcomePointer.epoch: {number: 2, type: uint64, row: gkm-5, sees: "Welcome objects and pointers"}
+
+GkmKeyPackageClaim.group_id: {number: 1, type: bytes, row: gkm-4, sees: "claims (group"}
+GkmKeyPackageClaim.claimer: {number: 2, type: bytes, row: gkm-4, sees: "claims (group, claimer"}
+
+GkmKeyPackagesRequest.key_packages: {number: 1, type: repeated bytes, row: gkm-4, sees: "KeyPackages"}
+
+GkmKeyPackageClaimRequest.group_id: {number: 1, type: bytes, row: gkm-4, sees: "claims (group"}
+GkmKeyPackageClaimRequest.target: {number: 2, type: bytes, row: gkm-4, sees: "claimer, target"}
+GkmKeyPackageClaimReply.key_package_ref: {number: 1, type: bytes, row: gkm-5, sees: "KeyPackageRefs"}
+GkmKeyPackageClaimReply.key_package: {number: 2, type: bytes, row: gkm-4, sees: "KeyPackages"}
+
+GkmGroupCreateRequest.form: {number: 1, type: Signed, row: gkm-1, sees: "GroupForm chain"}
+GkmGroupCreateRequest.gen_rotate: {number: 2, type: Signed, row: gkm-7, sees: "GenRotates"}
+GkmGroupCreateRequest.gen_wrap: {number: 3, type: bytes, row: gkm-2, sees: "GenWrap"}
+GkmGroupCreateRequest.sealed_group_info: {number: 4, type: bytes, row: gkm-2, pending: "as GkmEpochObject.sealed_group_info"}
+GkmGroupCreateRequest.cipher_suite: {number: 5, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
+
+GkmGroupReformRequest.form: {number: 1, type: Signed, row: gkm-1, sees: "GroupForm chain"}
+GkmGroupReformRequest.gen_wrap: {number: 2, type: bytes, row: gkm-2, sees: "GenWrap"}
+GkmGroupReformRequest.sealed_group_info: {number: 3, type: bytes, row: gkm-2, pending: "as GkmEpochObject.sealed_group_info"}
+GkmGroupReformRequest.cipher_suite: {number: 4, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
+
+GkmGroupReply.form: {number: 1, type: Signed, row: gkm-1, sees: "GroupForm chain"}
+
+GkmEpochRequest.commit: {number: 1, type: bytes, row: gkm-2, sees: "the commit as PrivateMessage ciphertext"}
+GkmEpochRequest.gen_wrap: {number: 2, type: bytes, row: gkm-2, sees: "GenWrap"}
+GkmEpochRequest.sealed_group_info: {number: 3, type: bytes, row: gkm-2, pending: "as GkmEpochObject.sealed_group_info"}
+GkmEpochRequest.group_info_generation: {number: 4, type: uint64, row: gkm-2, pending: "as GkmEpochObject.group_info_generation"}
+
+GkmEpochEntry.epoch: {number: 1, type: uint64, row: gkm-2, sees: "group_id, epoch"}
+GkmEpochEntry.size: {number: 2, type: uint64, row: gkm-2, sees: "auth pin, size"}
+GkmEpochEntry.object: {number: 3, type: GkmEpochObject, row: gkm-2, sees: "epoch objects"}
+GkmEpochsReply.epochs: {number: 1, type: repeated GkmEpochEntry, row: gkm-2, sees: "epoch objects"}
+
+GkmGenerationsReply.generations: {number: 1, type: repeated Signed, row: gkm-7, sees: "GenRotates"}
+
+GkmFormsReply.forms: {number: 1, type: repeated Signed, row: gkm-1, sees: "GroupForm chain"}
+
+GkmLadderRequest.generations: {number: 1, type: repeated Signed, row: gkm-7, sees: "GenRotates"}
+
+GkmReaderKeysRequest.sidecar_ids: {number: 1, type: repeated bytes, row: gkm-4, sees: "ReaderKeys"}
+GkmReaderKeysReply.reader_keys: {number: 1, type: repeated Signed, row: gkm-4, sees: "ReaderKeys"}
+
+GkmWrapBatch.deliveries: {number: 1, type: repeated bytes, row: gkm-7, sees: "staged and late wraps"}
+GkmWrapResult.status: {number: 1, type: uint32, row: gkm-7, sees: "staged and late wraps"}
+GkmWrapResult.winner: {number: 2, type: bytes, row: gkm-7, sees: "staged and late wraps"}
+GkmWrapBatchReply.results: {number: 1, type: repeated GkmWrapResult, row: gkm-7, sees: "staged and late wraps"}
+
+GkmWrapsReply.wraps: {number: 1, type: repeated Signed, row: gkm-7, sees: "staged and late wraps"}
+
+GkmWelcomeRecipient.sidecar_id: {number: 1, type: bytes, row: gkm-5, sees: "recipient sidecar_ids"}
+GkmWelcomeRecipient.key_package_ref: {number: 2, type: bytes, row: gkm-5, sees: "KeyPackageRefs"}
+GkmWelcomeRequest.welcome: {number: 1, type: bytes, row: gkm-5, sees: "Welcome objects"}
+GkmWelcomeRequest.recipients: {number: 2, type: repeated GkmWelcomeRecipient, row: gkm-5, sees: "recipient sidecar_ids and KeyPackageRefs"}
+
+GkmWelcomeEntry.key_package_ref: {number: 1, type: bytes, row: gkm-5, sees: "KeyPackageRefs"}
+GkmWelcomeEntry.pointer: {number: 2, type: GkmWelcomePointer, row: gkm-5, sees: "Welcome objects and pointers"}
+GkmWelcomeEntry.welcome: {number: 3, type: bytes, row: gkm-5, sees: "Welcome objects"}
+GkmWelcomesReply.welcomes: {number: 1, type: repeated GkmWelcomeEntry, row: gkm-5, sees: "Welcome objects and pointers"}
+
+GkmAckRequest.epoch: {number: 1, type: uint64, row: gkm-10, sees: "newest applied epoch"}
+
+GkmRecoveryWrap.group_id: {number: 1, type: bytes, row: gkm-8, sees: "member_id, group_id"}
+GkmRecoveryWrap.generation: {number: 2, type: uint64, row: gkm-8, sees: "group_id, generation"}
+GkmRecoveryWrap.commitment_prefix: {number: 3, type: bytes, row: gkm-8, pending: "c8 in 10.6's path, 8 bytes of a commitment gkm-7 shows; gkm-8 lists the binding's prefix and not this one"}
+GkmRecoveryWrap.binding_prefix: {number: 4, type: bytes, row: gkm-8, sees: "an 8-byte prefix of the binding's Ed25519 key hash"}
+GkmRecoveryWrap.ciphertext: {number: 5, type: bytes, row: gkm-8, sees: "HPKE ciphertext"}
+GkmRecoveryWrapsReply.wraps: {number: 1, type: repeated GkmRecoveryWrap, row: gkm-8, sees: "recovery wraps"}
+GkmRecoveryWrapItem.member_id: {number: 1, type: bytes, row: gkm-8, sees: "recovery wraps (member_id"}
+GkmRecoveryWrapItem.binding_prefix: {number: 2, type: bytes, row: gkm-8, sees: "an 8-byte prefix of the binding's Ed25519 key hash"}
+GkmRecoveryWrapItem.ciphertext: {number: 3, type: bytes, row: gkm-8, sees: "HPKE ciphertext"}
+GkmRecoveryWrapBatch.items: {number: 1, type: repeated GkmRecoveryWrapItem, row: gkm-8, sees: "recovery wraps"}
