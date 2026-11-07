@@ -123,10 +123,11 @@ func ParseConfigStatement(purpose string, signedType bridge.SignedType, body []b
 // choice. No signature covers a Signed's wrapper, so a server, which writes the log, can carry one signed statement as
 // a new Signed that every reader verifies and that hashes to a new id. §7.9's replay row then takes it as unseen, inside
 // the window `at` allows, for whatever its type rules do not close: a RepoGrant after its RepoRevoke, an
-// AuthorityProposal after its RecoveryVeto, under a proposal_id the veto does not name, or a Delegation after its
-// DelegationRevoke, with max_admits counting from zero under a new delegation_id. Question
-// protos-bridge-statement-id-wrapper asks whether ids move to bridge.SignedBytesSha256, which every rewrapping of a
-// statement shares. All it takes is here: signed's type and body, and the purpose its type registers.
+// AuthorityProposal after its RecoveryVeto, under a proposal_id the veto does not name, an older SponsorSet or
+// IndexerSet over a newer one, or, if Delegations ride the log, a Delegation after its DelegationRevoke, with max_admits
+// counting from zero under a new delegation_id. Question protos-bridge-statement-id-wrapper asks whether ids move to
+// bridge.SignedBytesSha256, which every rewrapping of a statement shares. All it takes is here: signed's type and body,
+// and the purpose its type registers.
 func configSignedId(signedBytes []byte, expectedType bridge.SignedType) ([sha256.Size]byte, error) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(signedBytes, signed); err != nil {
