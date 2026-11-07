@@ -566,15 +566,16 @@ func (self AclResource) covers(concrete AclResource) bool {
 	return false
 }
 
-// Whether a socket's first segment keeps it from every glob: §9.4's reserved first segments, but for
-// share. A policy reaches tls/ and smtp/ only by writing them out, and the rest it never reaches.
+// Whether a socket's namespace keeps it from every glob: all but application names and share/. A policy
+// reaches tls/ and smtp/ only by writing them out, and the rest it never reaches. This reads §9.4's own
+// namespaces, so a first segment a later §9 reserves stays out of a glob's reach with no change here.
 func aclSocketMustBeNamed(name string) bool {
 	first, _, _ := strings.Cut(name, "/")
-	switch first {
-	case "tls", "smtp", "c", "ur", "sys":
+	if first == "" {
 		return true
 	}
-	return len(first) == 1 || strings.HasPrefix(first, "_")
+	namespace := socketFirstSegmentNamespace(first)
+	return namespace != SocketNamespaceApplication && namespace != SocketNamespaceShare
 }
 
 // Whether text matches pattern, each * taking any run of bytes, an empty one included. Both are one

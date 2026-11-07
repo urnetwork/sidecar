@@ -537,6 +537,37 @@ func TestAclResourceCoversANameParsingNeverMade(t *testing.T) {
 	if socket.covers(AclResource{Kind: AclResourceSocket}) {
 		t.Error("sock:* covered a socket with no name")
 	}
+	noFirstSegment := AclResource{Kind: AclResourceSocket, Name: "/x"}
+	if all.covers(noFirstSegment) || socket.covers(noFirstSegment) {
+		t.Error("a glob covered a socket with no first segment")
+	}
+}
+
+// A glob reaches a socket exactly when §9.4 calls it application or share, so what reserves a name
+// there keeps it from a glob here. Each name goes through ParseSocketName, so this can't drift from it.
+func TestAclGlobsFollowSocketNamespaces(t *testing.T) {
+	all := AclResource{Kind: AclResourceAll}
+	socket := AclResource{Kind: AclResourceSocket, Name: "*"}
+	for _, name := range []string{
+		"db", "db/primary", "a0/b", "share/abcdefghijklmnopqrstuvwxyz", "tls/443/blog", "tls/8443/@", "smtp/25/mx",
+		"ur/smtpedge", "sys/x", "c/x", "x", "x/y", "_x", "_x/y",
+	} {
+		canonical, namespace, err := ParseSocketName(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		concrete, err := parseAclResource("sock:" + canonical)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want := namespace == SocketNamespaceApplication || namespace == SocketNamespaceShare
+		if got := all.covers(concrete); got != want {
+			t.Errorf("* over %s: %t", name, got)
+		}
+		if got := socket.covers(concrete); got != want {
+			t.Errorf("sock:* over %s: %t", name, got)
+		}
+	}
 }
 
 func TestAclGlobMatches(t *testing.T) {
