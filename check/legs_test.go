@@ -2,7 +2,8 @@
 
 // §4.7's legs: every build this repository ships, and the test builds beside them, each read through
 // go list -deps. A leg's closure is what the deps, legs, cgo and hook rows read, so a leg that names
-// the wrong environment would pass them all; TestLegsReadTheirOwnBuildConfiguration holds that.
+// the wrong environment would pass them all; TestLegsReadTheirOwnBuildConfiguration holds that. Each
+// leg also compiles, in legs_compile_test.go.
 
 package check
 

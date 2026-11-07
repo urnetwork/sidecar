@@ -55,6 +55,10 @@ type checkSettings struct {
 	vulnDatabase string
 	// how many legs scan at once. Non-positive means one at a time.
 	vulnScanConcurrency int
+	// how many legs compile at once. Each go command already compiles its own packages in parallel,
+	// so a few at once overlap only what each does alone, such as loading its modules, and a cold
+	// cache holds no more compilers in memory than the machine takes. Non-positive means one at a time.
+	legCompileConcurrency int
 
 	// §18.10, D-SDK-20: the most the device role may add to the ios_extension leg, in bytes
 	iosExtensionAddedMaxByteCount int64
@@ -92,6 +96,7 @@ func defaultCheckSettings() *checkSettings {
 		govulncheckVersion:            "v1.9.0",
 		vulnDatabase:                  "https://vuln.go.dev",
 		vulnScanConcurrency:           8,
+		legCompileConcurrency:         4,
 		iosExtensionAddedMaxByteCount: 1024 * 1024,
 		sidecarHttpGoalByteCount:      40 * 1024 * 1024,
 		sidecarHttpMissByteCount:      74965628,

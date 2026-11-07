@@ -5,6 +5,7 @@
 package check
 
 import (
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -257,4 +258,94 @@ func TestLegsFailsOnAnSdkTableItCannotFind(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.writeSibling("sdk/dependency_boundary_test.go", "package sdk\n\nvar renamedLegs = []int{}\n")
 	wantFindings(t, fixture.open().sdkLegRowFindings(t), "no longer declares messagingBoundaryLegs")
+}
+
+// A body that does not compile, behind whatever constraint a test plants it with.
+const plantedUncompiledBody = "func planted() int {\n\treturn undeclared\n}\n"
+
+// The compile rule over the fixture's legs. Each finding must hold the planted error in the planted
+// file, so a leg failing on anything else does not stand in for the plant.
+func plantedCompileFindings(t *testing.T, fixture *fixture, plantedFile string) []string {
+	t.Helper()
+	findings := fixture.open().legCompileFindings(t)
+	for _, finding := range findings {
+		if !strings.Contains(finding, plantedFile+":") || !strings.Contains(finding, "undefined: undeclared") {
+			t.Errorf("a finding lacks the error planted in %s:\n%s", plantedFile, finding)
+		}
+	}
+	return findings
+}
+
+// Every go test make check runs is on this host's system, so only a compile sees the windows legs.
+func TestLegsFailsOnAFileOnlyWindowsCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64", "root windows/amd64", "tests windows/amd64")
+	fixture.write("planted_windows.go", "package sidecar\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_windows.go"),
+		"root windows/amd64 does not compile",
+		"tests windows/amd64 does not compile")
+}
+
+// A test leg compiles its tests, and the shipped leg beside it builds none.
+func TestLegsFailsOnATestOnlyJsCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm", "tests js/wasm")
+	fixture.write("planted_js_test.go", "package sidecar\n\nimport \"testing\"\n\nfunc TestPlanted(t *testing.T) {\n\t_ = undeclared\n}\n")
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_js_test.go"), "tests js/wasm does not compile")
+}
+
+// The CLI's six release targets each compile, so a file only one of them builds is caught there.
+func TestLegsFailsOnACliFileOnlyWindowsArm64Compiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli windows/amd64", "cli windows/arm64")
+	fixture.write("cli/planted_windows_arm64.go", "package main\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_windows_arm64.go"), "cli windows/arm64 does not compile")
+}
+
+// The page Worker's leg builds files no other leg does.
+func TestLegsFailsOnAPageWorkerFileThatDoesNotCompile(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm", sidecarHttpLegName)
+	fixture.write("planted_http.go", "//go:build sidecar_http\n\npackage sidecar\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_http.go"), sidecarHttpLegName+" does not compile")
+}
+
+// server runs the engines on arm64 as well as amd64.
+func TestLegsFailsOnAnEngineFileOnlyArm64Compiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("engines linux/amd64", "engines linux/arm64")
+	fixture.write("evsservice/engine.go", "package evsservice\n\nimport _ \"@module@\"\n")
+	fixture.write("evsservice/engine_arm64.go", "package evsservice\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "engine_arm64.go"), "engines linux/arm64 does not compile")
+}
+
+// A cgo leg compiles on a host with its system's C toolchain, and fails there. Each other one is
+// reported as not compiled, never passed in silence, so the rule switched off fails this on any host.
+func TestLegsFailsOnACgoFileThisHostCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cgo darwin/arm64", "gomobile ios/arm64", "cgo linux/amd64", "gomobile android/arm64")
+	fixture.write("planted_cgo.go", "//go:build cgo\n\npackage sidecar\n\n"+plantedUncompiledBody)
+	repository := fixture.open()
+	reports := []string{}
+	repository.report = func(format string, arguments ...any) {
+		reports = append(reports, findingf(format, arguments...))
+	}
+	findings := repository.legCompileFindings(t)
+	wants := []string{}
+	for _, leg := range repository.legs {
+		if leg.compilesOn(runtime.GOOS, runtime.GOARCH) {
+			wants = append(wants, leg.name+" does not compile")
+			continue
+		}
+		if !slices.ContainsFunc(reports, func(line string) bool { return strings.HasPrefix(line, leg.name+" is not compiled") }) {
+			t.Errorf("%s went uncompiled and unreported: %v", leg.name, reports)
+		}
+	}
+	slices.Sort(wants)
+	wantFindings(t, findings, wants...)
+	for _, finding := range findings {
+		if !strings.Contains(finding, "planted_cgo.go:") {
+			t.Errorf("a finding lacks the planted file:\n%s", finding)
+		}
+	}
 }

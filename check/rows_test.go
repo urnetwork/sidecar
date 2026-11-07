@@ -193,6 +193,15 @@ var failsOnRows = []failsOnRow{
 		rule:         (*repository).reflectLookupFindings,
 		plantedTests: []string{"TestLegsFailsOnADynamicReflectLookup"},
 	},
+	{
+		row: "legs", item: "a leg that does not compile, on each leg this host has the toolchain for (§22.4's T1)",
+		rule: (*repository).legCompileFindings,
+		plantedTests: []string{
+			"TestLegsFailsOnAFileOnlyWindowsCompiles", "TestLegsFailsOnATestOnlyJsCompiles",
+			"TestLegsFailsOnACliFileOnlyWindowsArm64Compiles", "TestLegsFailsOnAPageWorkerFileThatDoesNotCompile",
+			"TestLegsFailsOnAnEngineFileOnlyArm64Compiles", "TestLegsFailsOnACgoFileThisHostCompiles",
+		},
+	},
 
 	{
 		row: "cgo", item: "CgoFiles anywhere in this repository, except keychain_darwin.go",

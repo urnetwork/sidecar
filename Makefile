@@ -22,8 +22,10 @@ endif
 # cached pass would hide a new violation. Each go test runs under TEST_TIMEOUT, above. check/ runs
 # from its own directory, go test's local mode, so a passing run still prints what it leaned on.
 # RELEASE_BINARIES names built artifacts for the rules to read as well. This needs the module proxy
-# and vuln.go.dev for govulncheck, protoc once a .proto exists, and node, which the sidecar_http
-# leg's tests run in, and fails without them: a rule that did not run has not passed.
+# and vuln.go.dev for govulncheck, protoc once a .proto exists, node, which the sidecar_http leg's
+# tests run in, and on a darwin host Xcode, which the ios legs compile with, and fails without them:
+# a rule that did not run has not passed. Every leg compiles, but a cgo leg only on a host of its own
+# system, and the run's last lines name each leg this host left uncompiled.
 check:
 	@set -e; for module in $(modules); do \
 		echo "go test in $$module"; \
