@@ -288,8 +288,10 @@ func ParseGkmDelivery(signed *bridge.Signed, wrapType GkmWrapType, identityKey G
 }
 
 // RK_g from a delivery to recipient at privateKey, accepted against generation, gen/<g>'s verified statement
-// (§10.9's use row). The delivery must name recipient and the digest of privateKey's public key, and its
-// generation and commitment gen/<g>'s, before anything is decapsulated.
+// (§10.9's use row). The delivery must name recipient and the digest of privateKey's public key, and its group,
+// generation and commitment gen/<g>'s (§10.9's body row), before anything is decapsulated. A re-formed group's
+// deliveries of its old generations name the new group (QD-074(7)), which KEYS-M2-25 admits along the form chain;
+// until then they refuse here.
 func OpenGkmDelivery(delivery *GkmDelivery, generation *GkmGeneration, recipient []byte, privateKey hpke.PrivateKey) (*EvsRepoKey, error) {
 	if delivery == nil || delivery.Body == nil {
 		return nil, fmt.Errorf("%w: no delivery", ErrGkmKeyMissing)
@@ -305,7 +307,7 @@ func OpenGkmDelivery(delivery *GkmDelivery, generation *GkmGeneration, recipient
 	if !bytes.Equal(body.GetRecipientKeySha256(), keySha256[:]) {
 		return nil, fmt.Errorf("%w: a delivery to another key", ErrGkmKeyMissing)
 	}
-	if body.GetGeneration() != generation.Rotate.GetGeneration() ||
+	if !bytes.Equal(body.GetGroupId(), generation.Rotate.GetGroupId()) || body.GetGeneration() != generation.Rotate.GetGeneration() ||
 		!bytes.Equal(body.GetCommitment(), generation.Rotate.GetCommitment()) {
 		return nil, fmt.Errorf("%w: a delivery of another generation", ErrGkmAuthentication)
 	}
@@ -454,13 +456,17 @@ func SealGkmRecoveryWrap(key *EvsRepoKey, args *GkmRecoveryArgs) ([]byte, error)
 }
 
 // RK_g from member m's RecoveryWrap, opened with its recovery key and accepted against generation, gen/<g>'s
-// verified statement. args.RecoveryPublicKey is not read: privateKey is the key.
+// verified statement, whose group args.GroupId must be, as a delivery's is. args.RecoveryPublicKey is not read:
+// privateKey is the key.
 func OpenGkmRecoveryWrap(ciphertext []byte, generation *GkmGeneration, args *GkmRecoveryArgs, privateKey hpke.PrivateKey) (*EvsRepoKey, error) {
 	if generation == nil || generation.Rotate == nil {
 		return nil, fmt.Errorf("%w: no gen/<g> to check a key against", ErrGkmKeyMissing)
 	}
 	if args == nil {
 		return nil, fmt.Errorf("%w: no recovery wrap", ErrGkmMalformed)
+	}
+	if !bytes.Equal(args.GroupId.Bytes(), generation.Rotate.GetGroupId()) {
+		return nil, fmt.Errorf("%w: a recovery wrap of another group", ErrGkmAuthentication)
 	}
 	aad, err := gkmRecoveryAad(args, generation.Rotate.GetGeneration(), generation.Rotate.GetCommitment())
 	if err != nil {

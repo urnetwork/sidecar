@@ -122,6 +122,16 @@ func TestGkmDeliveriesOpenForTheirRecipient(t *testing.T) {
 	if _, err := OpenGkmDelivery(staged, nil, reader.Bytes(), readerKey); !errors.Is(err, ErrGkmKeyMissing) {
 		t.Errorf("no gen/<g>: %v", err)
 	}
+	otherGroup := gkmTestDelivery(t, signer, keys[2], &GkmDeliveryArgs{
+		GroupId:            gkmTestId("another group"),
+		Type:               GkmWrapTypeReader,
+		Recipient:          reader.Bytes(),
+		RecipientPublicKey: readerKey.PublicKey().Bytes(),
+		Kind:               GkmDeliveryStaged,
+	})
+	if _, err := OpenGkmDelivery(otherGroup, generations[2], reader.Bytes(), readerKey); !errors.Is(err, ErrGkmAuthentication) {
+		t.Errorf("a delivery naming another group: %v", err)
+	}
 }
 
 // FI-28: a delivery to K0 never opens under K1. Its body names K0's digest, which wrap_aad binds, so relabeling it
@@ -381,6 +391,16 @@ func TestGkmRecoveryWrapOpensOnlyForItsBinding(t *testing.T) {
 		"b8": func(args *GkmRecoveryArgs) {
 			args.BindingKeySha256 = gkmTestBytes("another binding", gkmDigestByteCount)
 		},
+	}
+	// The AAD binds the group too, which a wrap sealed for another group, opened against this one's gen/<g>, shows.
+	otherGroupArgs := *args
+	otherGroupArgs.GroupId = gkmTestId("another group")
+	otherGroupWrap, err := SealGkmRecoveryWrap(keys[2], &otherGroupArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenGkmRecoveryWrap(otherGroupWrap, generations[2], args, recoveryKey); !errors.Is(err, ErrGkmAuthentication) {
+		t.Errorf("a wrap sealed for another group: %v", err)
 	}
 	for name, mutate := range mutations {
 		changed := *args
