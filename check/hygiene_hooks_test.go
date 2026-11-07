@@ -20,6 +20,7 @@ import (
 	"debug/buildinfo"
 	"go/ast"
 	"go/build/constraint"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -321,6 +322,7 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 				}
 			}
 		}
+		findings = append(findings, innerHookNameFindings(file.syntax, display)...)
 	}
 	for packageName, hooks := range packages {
 		for name, signature := range hookSignatures {
@@ -346,6 +348,63 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 		}
 	}
 	slices.Sort(findings)
+	return findings
+}
+
+// A hook's name declared anywhere below a file's top level: a struct or interface field, a parameter
+// or result, or a local. Each holds what any code of the package may set, in a release too, and a
+// call through it reaches no pair, so a hook's name belongs to the package's functions alone. The
+// top level is hookPairFindings' own.
+func innerHookNameFindings(syntax *ast.File, display string) []string {
+	findings := []string{}
+	topLevelSpecs := map[ast.Spec]bool{}
+	for _, decl := range syntax.Decls {
+		if genDecl, ok := decl.(*ast.GenDecl); ok {
+			for _, spec := range genDecl.Specs {
+				topLevelSpecs[spec] = true
+			}
+		}
+	}
+	isHookName := func(expression ast.Expr) (string, bool) {
+		identifier, ok := expression.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		_, hook := hookSignatures[identifier.Name]
+		return identifier.Name, hook
+	}
+	local := func(expressions ...ast.Expr) {
+		for _, expression := range expressions {
+			if name, hook := isHookName(expression); hook {
+				findings = append(findings, findingf("%s: %s is a local variable, so it can hold something in a release build", display, name))
+			}
+		}
+	}
+	ast.Inspect(syntax, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.Field:
+			for _, name := range typed.Names {
+				if _, hook := hookSignatures[name.Name]; hook {
+					findings = append(findings, findingf("%s: %s is a field or parameter, so it can hold something in a release build", display, name.Name))
+				}
+			}
+		case *ast.AssignStmt:
+			if typed.Tok == token.DEFINE {
+				local(typed.Lhs...)
+			}
+		case *ast.RangeStmt:
+			if typed.Tok == token.DEFINE {
+				local(typed.Key, typed.Value)
+			}
+		case *ast.ValueSpec:
+			if !topLevelSpecs[typed] {
+				for _, name := range typed.Names {
+					local(name)
+				}
+			}
+		}
+		return true
+	})
 	return findings
 }
 

@@ -174,6 +174,30 @@ func TestHygieneFailsOnAnEntryPointDeclaredAsAMethod(t *testing.T) {
 	wantFindings(t, fixture.open().hookPairFindings(t), "planted.go: SetTestHooks exists outside the root's tagged file")
 }
 
+// A field of the hook's name is a variable by another route: anything in the package can set it in
+// a release, and a call through it reaches no pair.
+func TestHygieneFailsOnAHookHeldInAField(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.write("evsservice/planted.go", "package evsservice\n\ntype keys struct {\n\ttestHookSecret func(kind string, secret []byte)\n}\n\nfunc (self *keys) derive(secret []byte) {\n\tself.testHookSecret(\"k\", secret)\n}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/planted.go: testHookSecret is a field or parameter, so it can hold something in a release build")
+}
+
+// So is a parameter: the caller decides what the hook is.
+func TestHygieneFailsOnAHookPassedAsAParameter(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.write("evsservice/planted.go", "package evsservice\n\nfunc derive(secret []byte, testHookBarrier func(name string, key string)) {\n\ttestHookBarrier(\"derive\", \"\")\n}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t), "evsservice/planted.go: testHookBarrier is a field or parameter, so it can hold something in a release build")
+}
+
+// And a local of the hook's name shadows the package's pair for every call after it.
+func TestHygieneFailsOnAHookShadowedByALocal(t *testing.T) {
+	fixture := newHookFixture(t)
+	fixture.write("evsservice/planted.go", "package evsservice\n\nfunc derive(secret []byte) {\n\ttestHookSecret := func(kind string, secret []byte) {\n\t\tprintln(kind)\n\t}\n\ttestHookSecret(\"k\", secret)\n\tvar testHookBarrier = func(name string, key string) {}\n\ttestHookBarrier(\"derive\", \"\")\n}\n")
+	wantFindings(t, fixture.open().hookPairFindings(t),
+		"evsservice/planted.go: testHookBarrier is a local variable, so it can hold something in a release build",
+		"evsservice/planted.go: testHookSecret is a local variable, so it can hold something in a release build")
+}
+
 // With no constraint at all the one body is in every build, the release's included.
 func TestHygieneFailsOnAPackagesHookWithNoTag(t *testing.T) {
 	fixture := newHookFixture(t)

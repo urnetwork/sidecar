@@ -329,7 +329,7 @@ Run `make proto` from the repo root, and commit the `.pb.go` files. Files regist
 
 - From M0's `mls_*` on, call `testHookSecret` at every key creation, derivation and unwrap, and `testHookBarrier` at and around every linearization point. Call each with no state lock held.
 - Both are empty without the `sidecar_testhooks` tag, and no release leg builds with it. `make check` reads every package's pair, not just the root's.
-- A package other than the root that needs them keeps its own unexported pair under these names and this tag: empty under `!sidecar_testhooks`, and under the tag forwarding to the root's `TestHookSecret` and `TestHookBarrier`, and nothing else. `device/` may not import the root, so its tagged file keeps a `SetTestHooks` of its own instead, and `sidecartest` installs on both. Hooks are functions, never variables or methods: a variable can be set in a release, and no pair holds a method empty. `make check` reads every declaration of each half, so a body in one system's file does not hide behind another's empty one.
+- A package other than the root that needs them keeps its own unexported pair under these names and this tag: empty under `!sidecar_testhooks`, and under the tag forwarding to the root's `TestHookSecret` and `TestHookBarrier`, and nothing else. `device/` may not import the root, so its tagged file keeps a `SetTestHooks` of its own instead, and `sidecartest` installs on both. Hooks are package functions, and no variable, field, parameter, local or method takes a hook's name: any but a method can be set in a release, and no pair holds a method empty. `make check` reads every declaration of each half, so a body in one system's file does not hide behind another's empty one.
 
 ## Tests
 

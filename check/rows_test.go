@@ -281,7 +281,8 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnADeviceInstallerWithoutTheTag", "TestHygieneFailsOnADeviceHookWithABody",
 			"TestHygieneFailsOnAHookBodyBesideAnEmptyHalf", "TestHygieneFailsOnATaggedHalfBesideOneForwarding",
 			"TestHygieneFailsOnAHookWithNoBodyOfItsOwn", "TestHygieneFailsOnAHookDeclaredAsAMethod",
-			"TestHygieneFailsOnAnEntryPointDeclaredAsAMethod",
+			"TestHygieneFailsOnAnEntryPointDeclaredAsAMethod", "TestHygieneFailsOnAHookHeldInAField",
+			"TestHygieneFailsOnAHookPassedAsAParameter", "TestHygieneFailsOnAHookShadowedByALocal",
 		},
 	},
 	{
