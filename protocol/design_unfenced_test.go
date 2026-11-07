@@ -337,4 +337,96 @@ enum DmarcVerdict {
   DMARC_VERDICT_UNSPECIFIED = 0; DMARC_PASS = 1; DMARC_FAIL = 2; DMARC_NONE = 3; DMARC_TEMPERROR = 4;
 }
 enum ArcVerdict { ARC_VERDICT_UNSPECIFIED = 0; ARC_NONE = 1; ARC_PASS = 2; ARC_FAIL = 3; ARC_INCOMPLETE = 4; }
+// §15.15's field list and kinds.
+message MailHint { MailHintKind kind = 1; }
+enum MailHintKind { MAIL_HINT_KIND_UNSPECIFIED = 0; MAIL_HINT_DEPOSIT = 1; MAIL_HINT_RECEIVER_NEEDED = 2; }
+// §15.7's deposit list.
+message MailDeposit {
+  uint32 version = 1; MailIngress ingress = 2; MailAuthEvidence evidence = 3; bytes mail_from = 4;
+  bool require_tls = 5; repeated string recipients = 6; uint32 tls_version = 7; uint32 tls_suite = 8;
+  bytes receiver_sidecar_id = 9;
+}
+// §15.7's addr/ and burner/ lists, with their kinds and states.
+message MailAddress {
+  MailAddressKind kind = 1; bytes mailbox = 2; repeated bytes members = 3; bytes creator = 4;
+  bytes effect_key = 5;
+}
+enum MailAddressKind {
+  MAIL_ADDRESS_KIND_UNSPECIFIED = 0; MAIL_ADDRESS_ADMIN = 1; MAIL_ADDRESS_ID = 2; MAIL_ADDRESS_GROUP = 3;
+  MAIL_ADDRESS_AGENT = 4; MAIL_ADDRESS_BURNER = 5; MAIL_ADDRESS_BOUNCE = 6;
+}
+message MailBurner {
+  bytes mailbox = 1; MailBurnerState state = 2; bool replying = 3; uint64 created = 4; bytes effect_key = 5;
+}
+enum MailBurnerState {
+  MAIL_BURNER_STATE_UNSPECIFIED = 0; MAIL_BURNER_LIVE = 1; MAIL_BURNER_PAUSED = 2; MAIL_BURNER_BURNED = 3;
+}
+// §15.7's i/ list and attachments; auth_results as MAIL-FORMAT.md reads it; §15.5's labels and D-MAIL-8's signature;
+// §15.7's tls_basis list and rules; and the i/ row's container, which MAIL-FORMAT.md states.
+message IndexEntry {
+  bytes id = 1; string address = 2; uint64 time = 3; string from = 4; string subject = 5; string snippet = 6;
+  string message_id = 7; bytes thread_key = 8; uint64 size = 9; repeated MailAttachment attachments = 10;
+  MailAuthResults auth_results = 11; MailTlsLabel tls_label = 12; MailTlsBasis tls_basis = 13;
+  uint32 spam_score = 14; string one_time_code = 15;
+}
+message MailAttachment { string name = 1; string type = 2; uint64 size = 3; }
+message MailAuthResults {
+  SpfVerdict spf = 1; DkimVerdict dkim = 2; DmarcVerdict dmarc = 3; ArcVerdict arc = 4;
+  bool checks_incomplete = 5; bool evidence_unavailable = 6;
+}
+enum MailTlsLabel {
+  MAIL_TLS_LABEL_UNSPECIFIED = 0; MAIL_TLS_VALIDATED = 1; MAIL_TLS_OPPORTUNISTIC = 2;
+  MAIL_TLS_MEMBER_SIGNED = 3;
+}
+enum MailTlsRule { MAIL_TLS_RULE_UNSPECIFIED = 0; MAIL_TLS_RULE_REQUIRETLS = 1; MAIL_TLS_RULE_OPERATOR = 2; }
+message MailTlsBasis {
+  MailTlsRule rule = 1; string operator_id = 2; uint32 list_version = 3; bool strict_custom_mx = 4;
+}
+message MailIndexSegment { uint32 version = 1; repeated IndexEntry entries = 2; }
+// §15.7's f/ kinds, and the f/ row's op and container, which MAIL-FORMAT.md states.
+enum MailFlagKind {
+  MAIL_FLAG_KIND_UNSPECIFIED = 0; MAIL_FLAG_SEEN = 1; MAIL_FLAG_FLAGGED = 2; MAIL_FLAG_LABEL = 3;
+  MAIL_FLAG_TRASH = 4;
+}
+message MailFlagOp {
+  bytes message_id = 1; MailFlagKind kind = 2; string label = 3; bool set = 4; uint64 hlc = 5;
+  bytes sidecar_id = 6;
+}
+message MailFlagSegment { uint32 version = 1; repeated MailFlagOp ops = 2; }
+// §15.7's r/ row.
+message MailReference { bytes repo_id = 1; bytes message_id = 2; }
+// §15.8's list, its state, whose burned is §15.9's, its totp list, by RFC 6238's hashes, and its used_at list.
+message VaultEntry {
+  bytes entry_id = 1; string address = 2; string title = 3; string username = 4; string password = 5;
+  repeated string password_history = 6; VaultTotp totp = 7; repeated string urls = 8; string notes = 9;
+  repeated VaultUsedAt used_at = 10; uint64 created = 11; uint64 updated = 12; VaultEntryState state = 13;
+}
+enum VaultEntryState { VAULT_ENTRY_STATE_UNSPECIFIED = 0; VAULT_ENTRY_LIVE = 1; VAULT_ENTRY_BURNED = 2; }
+message VaultTotp { bytes secret = 1; VaultTotpAlgorithm algorithm = 2; uint32 digits = 3; uint32 period = 4; }
+enum VaultTotpAlgorithm {
+  VAULT_TOTP_ALGORITHM_UNSPECIFIED = 0; VAULT_TOTP_SHA1 = 1; VAULT_TOTP_SHA256 = 2; VAULT_TOTP_SHA512 = 3;
+}
+message VaultUsedAt { string registrable_domain = 1; uint64 first = 2; uint64 last = 3; }
+// §15.7's forward and ra/ rows.
+message MailForward { string address = 1; repeated string burners = 2; }
+message MailReverseAlias { string original_sender = 1; string burner_address = 2; }
+// §15.7's o/ row, and §14's D-SMTP-18.
+message MailOutboxEntry {
+  uint32 version = 1; bytes effect_key = 2; string mail_from = 3; repeated string recipients = 4;
+  bytes message = 5; uint32 flags = 6; repeated string tl4_domains = 7; uint64 created = 8;
+  uint64 approval_not_after = 9;
+}
+// §14.5's modes, numbered as SmtpProof.mode, and its outcomes, in the order written; §15.7's or/ row, one file a send.
+enum MailSendMode { MAIL_SEND_MODE_UNSPECIFIED = 0; MAIL_SEND_BDAT = 1; MAIL_SEND_DATA = 2; }
+enum MailOutcomeKind {
+  MAIL_OUTCOME_KIND_UNSPECIFIED = 0; MAIL_OUTCOME_SENT = 1; MAIL_OUTCOME_QUEUED = 2; MAIL_OUTCOME_DEFERRED = 3;
+  MAIL_OUTCOME_TOO_LARGE = 4; MAIL_OUTCOME_REFUSED = 5; MAIL_OUTCOME_TLS_REFUSED = 6; MAIL_OUTCOME_FAILED = 7;
+}
+message MailOutcome {
+  string domain = 1; MailSendMode mode = 2; MailOutcomeKind kind = 3; uint64 message_byte_count = 4;
+  uint64 cap_byte_count = 5; uint32 retry_after_ms = 6; uint32 reply_code = 7; uint32 tls_level = 8;
+}
+message MailOutcomeRecord { repeated MailOutcome outcomes = 1; }
+// §15.7's p/ row.
+message MailProverRecord { uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_second = 2; }
 `

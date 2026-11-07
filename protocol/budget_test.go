@@ -187,7 +187,7 @@ func TestSocketTicketFitsItsBounds(t *testing.T) {
 
 // §6.8: PushHint.hint holds ids, kinds and versions, and is dropped when coalesced.
 func TestHintsFitPushHint(t *testing.T) {
-	for _, message := range []proto.Message{&SocketHint{}, &GkmHint{}, &EvsHeadChanged{}} {
+	for _, message := range []proto.Message{&SocketHint{}, &GkmHint{}, &EvsHeadChanged{}, &MailHint{}} {
 		name := message.ProtoReflect().Descriptor().Name()
 		if err := testFillToWidths(message.ProtoReflect(), testFieldWidths); err != nil {
 			t.Fatal(err)

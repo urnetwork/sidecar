@@ -89,9 +89,10 @@ type testWebAuthnAssertion struct {
 	flags           byte
 	clientType      string
 	challenge       string
+	origin          string
 	clientDataJson  []byte
 	authData        func(authenticatorData []byte) []byte // rewrites the data before it is signed
-	signSignedBytes bool
+	signSignedBytes bool                                  // signs the message itself, not the evidence
 }
 
 // An assertion every check passes, for a test to spoil one input of.
@@ -102,18 +103,13 @@ func testGoodWebAuthnAssertion(purpose string, signedType SignedType, body []byt
 		flags:      webAuthnFlagUserPresent | webAuthnFlagUserVerified,
 		clientType: webAuthnClientDataTypeGet,
 		challenge:  base64.RawURLEncoding.EncodeToString(challenge[:]),
+		origin:     "https://app.example",
 	}
 }
 
-// The Signed this assertion makes, its signature valid over whatever was spoiled, so a refusal comes from the check
-// a test aims at and not from the signature.
-func (self *testWebAuthnAssertion) sign(
-	t testing.TB,
-	key *ecdsa.PrivateKey,
-	purpose string,
-	signedType SignedType,
-	body []byte,
-) *Signed {
+// The evidence and signature this assertion makes over message, the signature valid over whatever was spoiled, so a
+// refusal comes from the check a test aims at and not from the signature.
+func (self *testWebAuthnAssertion) assert(t testing.TB, key *ecdsa.PrivateKey, message []byte) (*WebAuthnEvidence, []byte) {
 	rpIdHash := sha256.Sum256([]byte(self.rpId))
 	authenticatorData := append(rpIdHash[:], self.flags, 0x00, 0x00, 0x00, 0x07)
 	if self.authData != nil {
@@ -123,29 +119,35 @@ func (self *testWebAuthnAssertion) sign(
 	if clientDataJson == nil {
 		clientDataJson = fmt.Appendf(
 			nil,
-			`{"type":%q,"challenge":%q,"origin":"https://app.example"}`,
+			`{"type":%q,"challenge":%q,"origin":%q}`,
 			self.clientType,
 			self.challenge,
+			self.origin,
 		)
 	}
 	clientDataHash := sha256.Sum256(clientDataJson)
 	digest := sha256.New()
 	digest.Write(authenticatorData)
 	digest.Write(clientDataHash[:])
-	message := digest.Sum(nil)
+	signedDigest := digest.Sum(nil)
 	if self.signSignedBytes {
-		signedDigest := sha256.Sum256(SignedBytes(purpose, signedType, body))
-		message = signedDigest[:]
+		messageDigest := sha256.Sum256(message)
+		signedDigest = messageDigest[:]
 	}
-	return &Signed{
-		Body:      body,
-		Signature: testSignDigest(t, key, message),
-		Webauthn: &WebAuthnEvidence{
-			AuthenticatorData: authenticatorData,
-			ClientDataJson:    clientDataJson,
-		},
-		Type: uint32(signedType),
-	}
+	evidence := &WebAuthnEvidence{AuthenticatorData: authenticatorData, ClientDataJson: clientDataJson}
+	return evidence, testSignDigest(t, key, signedDigest)
+}
+
+// The Signed this assertion makes for a statement.
+func (self *testWebAuthnAssertion) sign(
+	t testing.TB,
+	key *ecdsa.PrivateKey,
+	purpose string,
+	signedType SignedType,
+	body []byte,
+) *Signed {
+	evidence, signature := self.assert(t, key, SignedBytes(purpose, signedType, body))
+	return &Signed{Body: body, Signature: signature, Webauthn: evidence, Type: uint32(signedType)}
 }
 
 // Every value but 0, from the enum itself, so a value an owner adds joins each pair test by being declared.
