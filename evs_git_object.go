@@ -8,12 +8,14 @@
 // which also leaves no reading of a commit that this code and git could take differently. A refusal
 // names the fault and never the bytes, since an error may reach a log (I-13).
 //
-// Oids are SHA-1, 20 B: what go-git and a default repository use. Whether a repo may use git's
-// sha256 object format is plan-EVS1-format-bytes's open question, so a sha256 repository stays out
-// until it is answered: nothing here decodes its 32 B ids. crypto/sha1 has no collision detection,
-// which stock git's default build and go-git add, so a blob built to collide hashes here as plain
-// SHA-1, where they would refuse or alter it. An oid is what keeps git compatible, and what binds a
-// file's content is its AEAD and §11.6's SHA-256 chain.
+// Oids are SHA-1, 20 B: what go-git and a default repository use. The owner's answer to
+// plan-EVS1-format-bytes#4 keeps v0 to SHA-1, head mode's codec and export included, so nothing here
+// decodes a sha256 repository's 32 B ids: ur mount add, ur evs import and git-remote-ur are to refuse
+// one before any evs write. Format 1's records keep a 32 B oid with its kind, so sha256 can come later
+// with no format change.
+// crypto/sha1 has no collision detection, which stock git's default build and go-git add, so a blob
+// built to collide hashes here as plain SHA-1, where they would refuse or alter it. An oid is what
+// keeps git compatible, and what binds a file's content is its AEAD and §11.6's SHA-256 chain.
 
 package sidecar
 
