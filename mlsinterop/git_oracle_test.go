@@ -4,8 +4,9 @@
 // Equal has one meaning here: on an input both take, the two give the same bytes and fields, and on
 // any input one refuses, either the other refuses too or the difference is one this file names. The
 // root is stricter than go-git in a few places, each of them named below and held to that exact class,
-// so a new difference fails. No evs code parses a pack stream: stock git does, behind the daemon. So
-// §22.6's pack target is the pack delta, carried in real packs built here and by stock git.
+// so a new difference fails. go-git's ident reader refuses nothing, so an ident compares on what both
+// read. No evs code parses a pack stream: stock git does, behind the daemon. So §22.6's pack target is
+// the pack delta, carried in real packs built here and by stock git.
 
 package mlsinterop
 
@@ -377,15 +378,36 @@ func FuzzEvsGitCommitEqualsGoGit(f *testing.F) {
 	f.Add([]byte(head + committer + author + "\nsubject\n"))
 	f.Add([]byte(head + author + committer))
 	f.Add([]byte(head + author + committer + "\x00\n\nsubject\n"))
+	f.Add([]byte(head + author + committer + " continues nothing\n\nsubject\n"))
 	f.Fuzz(func(t *testing.T, encoded []byte) {
 		commit, err := sidecar.EvsGitCommitDecode(encoded)
-		if err != nil {
+		if err == nil {
+			checkCommitFields(t, commit, memoryObject(plumbing.CommitObject, encoded))
+			if oid, err := commit.Oid(); err != nil || toHash(oid) != plumbing.ComputeHash(plumbing.CommitObject, encoded) {
+				t.Fatalf("%s, %v", oid, err)
+			}
 			return
 		}
-		checkCommitFields(t, commit, memoryObject(plumbing.CommitObject, encoded))
-		if oid, err := commit.Oid(); err != nil || toHash(oid) != plumbing.ComputeHash(plumbing.CommitObject, encoded) {
-			t.Fatalf("%s, %v", oid, err)
+		theirs := &object.Commit{}
+		if theirs.Decode(memoryObject(plumbing.CommitObject, encoded)) != nil {
+			return
 		}
+		// a commit go-git takes and this refuses, which must be one this file names: bytes go-git's own
+		// fields would not give back, which is every repeated, misplaced or missing header and a missing
+		// blank line, or else a NUL in the headers, or a continuation right after the committer
+		reencoded := &plumbing.MemoryObject{}
+		if theirs.Encode(reencoded) != nil || !bytes.Equal(objectBytes(t, reencoded), encoded) {
+			return
+		}
+		headers, _, _ := bytes.Cut(encoded, []byte("\n\n"))
+		if bytes.IndexByte(headers, 0) != -1 {
+			return
+		}
+		_, afterCommitter, _ := bytes.Cut(headers, []byte("\ncommitter "))
+		if _, extraHeaders, _ := bytes.Cut(afterCommitter, []byte{'\n'}); bytes.HasPrefix(extraHeaders, []byte{' '}) {
+			return
+		}
+		t.Fatalf("this refuses a commit go-git takes and could give back: %q: %v", encoded, err)
 	})
 }
 

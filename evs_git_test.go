@@ -679,7 +679,8 @@ func TestEvsGitCommitDecodeRefuses(t *testing.T) {
 		{name: "nothing", encoded: ""},
 		{name: "no tree", encoded: author + committer + "\n"},
 		{name: "a short tree", encoded: "tree cf656b\n" + author + committer + "\n"},
-		{name: "an uppercase tree", encoded: strings.ToUpper(tree[:45]) + "\n" + author + committer + "\n"},
+		{name: "an uppercase tree", encoded: "tree CF656B586D56636FA958E3F794E7C1D98EA15588\n" + author + committer + "\n"},
+		{name: "an uppercase parent", encoded: tree + "parent FE15D1340F7F283A87474F1114513D1B8D96B342\n" + author + committer + "\n"},
 		{name: "a tree of a sha256 repository", encoded: "tree " + strings.Repeat("ab", 32) + "\n" + author + committer + "\n"},
 		{name: "a bad parent", encoded: tree + "parent 123\n" + author + committer + "\n"},
 		{name: "no author", encoded: tree + committer + "\n"},
@@ -849,6 +850,8 @@ func TestEvsGitDeltaApplyRefuses(t *testing.T) {
 		{name: "a result size cut short", base: base, delta: []byte{11, 0x80}},
 		{name: "a base size past 63 bits", base: base, delta: bytes.Repeat([]byte{0x80}, 10)},
 		{name: "a result size past 63 bits", base: base, delta: append([]byte{11}, bytes.Repeat([]byte{0xff}, 10)...)},
+		{name: "a size in ten bytes that would fit in one", base: base, delta: []byte{0x8b, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 1, 1, 'a'}},
+		{name: "a result size that would turn negative", base: base, delta: []byte{11, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}},
 		{name: "a base size not the base's", base: base, delta: evsGitTestDelta(10, 1, 1, 'a')},
 		{name: "a base size past the base", base: base, delta: evsGitTestDelta(12, 1, 1, 'a')},
 		{name: "a base size on an empty base", base: nil, delta: evsGitTestDelta(1, 1, 1, 'a')},
@@ -920,6 +923,32 @@ func TestEvsGitDeltaApplyBoundsTheResultBeforeWriting(t *testing.T) {
 	}
 	if size != 16*1024*1024-1 || int64(result.Len()) != size {
 		t.Errorf("%d and %d", size, result.Len())
+	}
+}
+
+// A caller's bound is checked against the delta's claim, so the claim has to hold: a delta claiming
+// little must not go on to write more, whatever its last instruction would have said.
+func TestEvsGitDeltaApplyWritesNoMoreThanItClaimed(t *testing.T) {
+	base := make([]byte, 1024*1024)
+	baseSize := int64(len(base))
+	for _, c := range []struct {
+		name  string
+		delta []byte
+	}{
+		{name: "a copy", delta: evsGitTestDelta(baseSize, 2, 0xf0, 0xff, 0xff, 0x0f)},
+		{name: "a copy of the default size", delta: evsGitTestDelta(baseSize, 2, 0x80)},
+		{name: "a copy after an insert", delta: evsGitTestDelta(baseSize, 2, 1, 'a', 0x80)},
+		{name: "an insert", delta: evsGitTestDelta(baseSize, 2, 3, 'a', 'b', 'c')},
+		{name: "an insert after a copy", delta: evsGitTestDelta(baseSize, 2, 0x90, 1, 2, 'a', 'b')},
+	} {
+		result := &bytes.Buffer{}
+		_, err := EvsGitDeltaApply(bytes.NewReader(base), bytes.NewReader(c.delta), 2, result, DefaultEvsGitDeltaSettings())
+		if !errors.Is(err, ErrEvsGitDeltaInvalid) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if 2 < result.Len() {
+			t.Errorf("%s: wrote %d B", c.name, result.Len())
+		}
 	}
 }
 
@@ -1073,23 +1102,6 @@ func TestEvsGitDeltaSettingsRefused(t *testing.T) {
 	}
 }
 
-// Rolling a window along a buffer gives what hashing each block gives.
-func TestEvsGitDeltaRollingHashEqualsABlocksHash(t *testing.T) {
-	random := rand.New(rand.NewPCG(3, 4))
-	window := make([]byte, 4096)
-	for index := range window {
-		window[index] = byte(random.Uint32())
-	}
-	blockHash := evsGitDeltaHashBlock(window[:evsGitDeltaBlockSize])
-	for position := 0; position+evsGitDeltaBlockSize < len(window); position += 1 {
-		blockHash = blockHash*evsGitDeltaHashFactor + uint64(window[position+evsGitDeltaBlockSize]) -
-			uint64(window[position])*evsGitDeltaHashFactorPower
-		if want := evsGitDeltaHashBlock(window[position+1 : position+1+evsGitDeltaBlockSize]); blockHash != want {
-			t.Fatalf("at %d: %x, want %x", position, blockHash, want)
-		}
-	}
-}
-
 // Target shapes a real edit makes, built from a base: a mutation may keep, drop, move or repeat runs.
 func evsGitTestMutate(random *rand.Rand, base []byte) []byte {
 	target := []byte{}
@@ -1217,6 +1229,47 @@ func TestEvsGitDeltaOfARepeatedByteUsesLongCopies(t *testing.T) {
 	delta := evsGitTestEncode(t, base, target, DefaultEvsGitDeltaSettings())
 	if 256 < len(delta) {
 		t.Errorf("%d B", len(delta))
+	}
+}
+
+// A run enters the index once, so a long one late in the base stays among the candidates that a short
+// one earlier would otherwise use up.
+func TestEvsGitDeltaOfARepeatedByteFindsItsLongestRun(t *testing.T) {
+	random := rand.New(rand.NewPCG(15, 16))
+	apart := make([]byte, 4096)
+	for index := range apart {
+		apart[index] = byte(random.Uint32())
+	}
+	base := slices.Concat(make([]byte, 1024), apart, make([]byte, 1024*1024))
+	target := make([]byte, 1024*1024)
+	delta := evsGitTestEncode(t, base, target, DefaultEvsGitDeltaSettings())
+	if 512 < len(delta) {
+		t.Errorf("%d B", len(delta))
+	}
+}
+
+// Git's own shortest forms: a field of zero stays out, and a copy of 64 KiB holds no size at all.
+func TestEvsGitDeltaEncodeWritesTheShortestCopies(t *testing.T) {
+	random := rand.New(rand.NewPCG(17, 18))
+	base := make([]byte, 1024*1024)
+	for index := range base {
+		base[index] = byte(random.Uint32())
+	}
+	for _, c := range []struct {
+		name        string
+		target      []byte
+		instruction []byte
+	}{
+		{name: "the longest copy from the start", target: base[:64*1024], instruction: []byte{0x80}},
+		{name: "a copy with one size byte", target: base[:200], instruction: []byte{0x90, 200}},
+		{name: "a copy with a low size byte of zero", target: base[:256], instruction: []byte{0xa0, 1}},
+		{name: "an offset with one byte set", target: base[0x10000 : 0x10000+256], instruction: []byte{0xa4, 1, 1}},
+		{name: "an offset with every byte it needs", target: base[0x012340 : 0x012340+200], instruction: []byte{0x97, 0x40, 0x23, 0x01, 200}},
+	} {
+		want := evsGitTestDelta(int64(len(base)), int64(len(c.target)), c.instruction...)
+		if delta := evsGitTestEncode(t, base, c.target, DefaultEvsGitDeltaSettings()); !bytes.Equal(delta, want) {
+			t.Errorf("%s: %x, want %x", c.name, delta, want)
+		}
 	}
 }
 

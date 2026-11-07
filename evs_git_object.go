@@ -60,15 +60,14 @@ func (self EvsGitOid) String() string {
 	return hex.EncodeToString(self[:])
 }
 
-// An oid from the lowercase hex a commit holds. Git's parser also takes uppercase, which no encoder
-// here would write back, so it is refused.
+// An oid from the hex a commit holds.
 func evsGitOidDecodeHex(text []byte) (EvsGitOid, error) {
 	oid := EvsGitOid{}
 	if len(text) != hex.EncodedLen(len(oid)) {
 		return oid, fmt.Errorf("%w: an oid is not %d hex digits", ErrEvsGitObjectInvalid, hex.EncodedLen(len(oid)))
 	}
-	if _, err := hex.Decode(oid[:], text); err != nil || oid.String() != string(text) {
-		return EvsGitOid{}, fmt.Errorf("%w: an oid is not lowercase hex", ErrEvsGitObjectInvalid)
+	if _, err := hex.Decode(oid[:], text); err != nil {
+		return EvsGitOid{}, fmt.Errorf("%w: an oid is not hex", ErrEvsGitObjectInvalid)
 	}
 	return oid, nil
 }
