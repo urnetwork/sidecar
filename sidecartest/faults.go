@@ -137,7 +137,11 @@ func (self *FaultPlan) validate() error {
 		return fmt.Errorf("fault plan %s: a negative Nth", self)
 	}
 	switch self.Result {
-	case ApplyThenDrop, FailBeforeApply, Delay, CrashBeforeApply, CrashAfterApply:
+	case ApplyThenDrop, FailBeforeApply, CrashBeforeApply, CrashAfterApply:
+	case Delay:
+		if self.Op == FaultOpHost {
+			return fmt.Errorf("fault plan %s: a host fake parks no call", self)
+		}
 	case Precondition:
 		if self.Op != FaultOpPut {
 			return fmt.Errorf("fault plan %s: only a PUT has a condition", self)
