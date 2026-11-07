@@ -270,6 +270,7 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestHygieneFailsOnALegLinkingTheRootHookFile", "TestHygieneFailsOnALegLinkingAPackagesHookFile",
 			"TestHygieneFailsOnAHookFileAnotherConstraintLetsIn", "TestHygieneFailsOnALegLinkingAFileTheRulesSkip",
+			"TestHygieneFailsOnACgoFileAnsweringToTheTag", "TestHygieneFailsOnALegLinkingACgoFileTheRulesSkip",
 		},
 	},
 	{

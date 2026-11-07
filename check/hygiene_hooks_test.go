@@ -133,7 +133,8 @@ func callerGoflagsFindings(goflags string) []string {
 
 // A file a shipped leg compiles that answers to the tag. Read from the leg's own file lists, so it
 // covers the root's hook file, every per-package tagged half, and a file whose constraint would let
-// it in without the tag being set. Only this repository's packages can hold one.
+// it in without the tag being set. Only this repository's packages can hold one. A cgo file is
+// listed apart from the others, and compiled all the same.
 func (self *repository) legHookFileFindings(t testing.TB) []string {
 	t.Helper()
 	bySourcePath := map[string]*sourceFile{}
@@ -146,7 +147,7 @@ func (self *repository) legHookFileFindings(t testing.TB) []string {
 			if _, ours := repositoryRelative(listed.ImportPath); !ours {
 				continue
 			}
-			for _, goFile := range listed.GoFiles {
+			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
 				file, known := bySourcePath[filepath.Join(listed.Dir, goFile)]
 				if !known {
 					// the walks skip testdata and the documents, but an import does not

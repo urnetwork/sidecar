@@ -293,6 +293,26 @@ func TestHygieneFailsOnALegLinkingAFileTheRulesSkip(t *testing.T) {
 	wantFindings(t, fixture.open().legHookFileFindings(t), "cli linux/amd64 links planted.go in @module@/testdata/planted, which no source rule read")
 }
 
+// A cgo file is compiled as surely as any other, and the keychain's is the one a shipped leg holds,
+// so its constraint is read as every other file's is.
+func TestHygieneFailsOnACgoFileAnsweringToTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli darwin/arm64 keychain fallback")
+	fixture.write("cli/keychain_darwin.go", "//go:build (darwin && !ios && !sdk_mobile_bind) || sidecar_testhooks\n\npackage main\n\nimport \"C\"\n")
+	wantFindings(t, fixture.open().legHookFileFindings(t),
+		"cli darwin/arm64 keychain fallback links keychain_darwin.go in @module@/cli, which answers to sidecar_testhooks")
+}
+
+// The same for a cgo file in a directory the walks skip.
+func TestHygieneFailsOnALegLinkingACgoFileTheRulesSkip(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli darwin/arm64 keychain fallback")
+	fixture.write("testdata/planted/keychain_darwin.go", "package planted\n\nimport \"C\"\n")
+	fixture.write("cli/planted.go", "package main\n\nimport _ \"@module@/testdata/planted\"\n")
+	wantFindings(t, fixture.open().legHookFileFindings(t),
+		"cli darwin/arm64 keychain fallback links keychain_darwin.go in @module@/testdata/planted, which no source rule read")
+}
+
 func TestHygieneFailsOnAMakefileBuildingWithTheTag(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("Makefile", "# tests run under sidecar_testhooks too\ncheck:\n\t$(GO) test -tags sidecar_testhooks .\n\tgo test -tags sidecar_leaktest .\n")
