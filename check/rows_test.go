@@ -337,7 +337,11 @@ var failsOnRows = []failsOnRow{
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: what the artifact says of itself",
 		checkoutTest: "TestHygieneReleaseBinary",
-		plantedTests: []string{"TestHygieneFailsOnABinaryBuiltWithTheTag", "TestHygieneFailsOnABinaryItCannotRead"},
+		plantedTests: []string{
+			"TestHygieneFailsOnABinaryBuiltWithTheTag", "TestHygieneFailsOnABinaryItCannotRead",
+			"TestHygieneFailsOnAUrThisHostBuildsWithTheTag", "TestHygieneFailsOnAGoCommandThatAddsTheTag",
+			"TestHygieneFailsOnAUrThisHostCannotBuild",
+		},
 	},
 	{
 		row: "hygiene", item: "govulncheck findings",
@@ -440,16 +444,19 @@ func TestHygieneGovulncheck(t *testing.T) {
 	failFindings(t, "govulncheck", repository.vulnFindings(repository.installGovulncheck(t)))
 }
 
-// §22.4's last reading: the artifact's own build info. make check builds ur for this host, as the
-// release would, and reads it; RELEASE_BINARIES on the make line adds the release's real artifacts.
+// §22.4's last reading: what an artifact says of itself. make check builds ur as a release step on
+// this host builds, with the host's own go configuration rather than the rules' environment, and
+// reads it; RELEASE_BINARIES on the make line adds the release's real artifacts. Nothing passes
+// RELEASE_BINARIES yet, since run.sh runs make check before it builds anything and builds no ur, so a
+// run without it says what it read.
 func TestHygieneReleaseBinary(t *testing.T) {
 	repository := openThisCheckout(t)
-	binaryPath := filepath.Join(t.TempDir(), "ur")
-	if _, err := runGo(repository.module(t, "cli").directory, goEnvironment("CGO_ENABLED=0"), "build", "-o", binaryPath, "."); err != nil {
-		t.Fatal(err)
+	failFindings(t, "hygiene", hostBinaryFindings(t, repository.module(t, "cli").directory, os.Environ()))
+	artifacts := strings.Fields(os.Getenv("RELEASE_BINARIES"))
+	if len(artifacts) == 0 {
+		repository.report("RELEASE_BINARIES named no artifact, so the artifact reading read only the ur this host builds")
 	}
-	failFindings(t, "hygiene", releaseBinaryFindings(binaryPath))
-	for _, artifact := range strings.Fields(os.Getenv("RELEASE_BINARIES")) {
+	for _, artifact := range artifacts {
 		failFindings(t, "hygiene", releaseBinaryFindings(artifact))
 	}
 }

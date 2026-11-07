@@ -7,6 +7,7 @@ package check
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -529,6 +530,49 @@ func TestHygieneFailsOnABinaryBuiltWithTheTag(t *testing.T) {
 func TestHygieneFailsOnABinaryItCannotRead(t *testing.T) {
 	fixture := newFixture(t)
 	wantFindings(t, releaseBinaryFindings(filepath.Join(fixture.directory, "sidecar", "go.mod")), "go.mod")
+}
+
+// The control: a host whose go configuration adds no unshippable tag builds a ur that says none.
+func TestHygieneAllowsTheUrThisHostBuilds(t *testing.T) {
+	fixture := newFixture(t)
+	wantFindings(t, hostBinaryFindings(t, filepath.Join(fixture.directory, "sidecar", "cli"), plantedHostEnvironment(t, "GOFLAGS=-tags=other")))
+}
+
+// The ur make check builds is built as this host builds, so a go env file's tag is in it. Built
+// under the rules' own environment, as it was, it could never carry one.
+func TestHygieneFailsOnAUrThisHostBuildsWithTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	plantedGoEnvFile(t, goEnvPath, "GOFLAGS=-tags=sidecar_testhooks\n")
+	wantFindings(t, hostBinaryFindings(t, filepath.Join(fixture.directory, "sidecar", "cli"), plantedHostEnvironment(t, "GOENV="+goEnvPath)),
+		"was built with sidecar_testhooks")
+}
+
+// A go command that adds the tag itself leaves GOFLAGS clean everywhere, and its artifact still
+// says how it was built.
+func TestHygieneFailsOnAGoCommandThatAddsTheTag(t *testing.T) {
+	fixture := newFixture(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapperDirectory := t.TempDir()
+	wrapper := "#!/bin/sh\nif [ \"$1\" = build ]; then\n\tshift\n\texec " + realGo + " build -tags=sidecar_leaktest \"$@\"\nfi\nexec " + realGo + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(wrapperDirectory, "go"), []byte(wrapper), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", wrapperDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	environment := plantedHostEnvironment(t)
+	repository := fixture.open()
+	wantFindings(t, repository.hostGoflagsFindings(environment))
+	wantFindings(t, hostBinaryFindings(t, filepath.Join(fixture.directory, "sidecar", "cli"), environment), "was built with sidecar_leaktest")
+}
+
+// A host whose go configuration cannot build ur has shown nothing about what it builds.
+func TestHygieneFailsOnAUrThisHostCannotBuild(t *testing.T) {
+	fixture := newFixture(t)
+	wantFindings(t, hostBinaryFindings(t, filepath.Join(fixture.directory, "sidecar", "cli"), plantedHostEnvironment(t, "GOFLAGS=-sidecar-check-no-such-flag")),
+		"building ur as this host builds")
 }
 
 // The root's protocol package as a leg lists it on a release branch, where cli takes the root at

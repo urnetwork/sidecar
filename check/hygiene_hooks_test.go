@@ -602,3 +602,20 @@ func releaseBinaryFindings(binaryPath string) []string {
 	}
 	return findings
 }
+
+// Builds ur from the cli module in cliDirectory as a release step on this host builds, and reads
+// what the binary says of itself. That is the host's own go configuration, from base: its go
+// command, its GOFLAGS wherever it keeps them and its go env files, none of which goEnvironment lets
+// through. Beside them only what changes no tag: CGO_ENABLED=0, as cli's release targets build
+// (§4.10), GOWORK=off and GOTOOLCHAIN=local, and -mod=readonly, so a host's -mod=mod cannot write
+// the checkout. So this fails on whatever makes this host's builds carry a tag, a go command that
+// adds one included, which no reading of GOFLAGS sees.
+func hostBinaryFindings(t testing.TB, cliDirectory string, base []string) []string {
+	t.Helper()
+	binaryPath := filepath.Join(t.TempDir(), "ur")
+	environment := append(slices.Clone(base), "GOWORK=off", "GOTOOLCHAIN=local", "CGO_ENABLED=0")
+	if _, err := runGo(cliDirectory, environment, "build", "-mod=readonly", "-o", binaryPath, "."); err != nil {
+		return []string{findingf("building ur as this host builds: %v", err)}
+	}
+	return releaseBinaryFindings(binaryPath)
+}
