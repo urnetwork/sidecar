@@ -275,6 +275,7 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestAuthChainVectors",
 		"TestMlsVectorFilesMatchUpstream",
 		"TestMlsCryptoBasicsVectors",
 		"TestMlsKeyScheduleVectors",
@@ -291,6 +292,8 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestMailVectorMonths",
 		"TestMailVectorClocks",
 		"TestMailVectorOrders",
+		"TestKeychainVectorsAreByteEqual",
+		"TestKeychainVectorsOpen",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)

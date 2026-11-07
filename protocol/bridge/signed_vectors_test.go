@@ -167,48 +167,6 @@ func testBuildSignedVectors(t testing.TB) *testSignedVectors {
 		})
 	}
 
-	vectors.Statements = testBuildStatementVectors(t)
-
-	for _, size := range []int{1, 2, 3, 7, testActMaxSize} {
-		statementDigests := testRuleDigests(size)
-		root, err := PresenceActRoot(statementDigests)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tree := &testTreeVector{Size: uint32(size), Root: hex.EncodeToString(root[:])}
-		indexes := []int{}
-		if size <= 7 {
-			for index := range size {
-				indexes = append(indexes, index)
-			}
-		} else {
-			indexes = []int{0, 1, 32767, 32768, 65533, 65534}
-		}
-		for _, index := range indexes {
-			actPath, err := PresenceActPath(statementDigests, uint32(index))
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := &testPathVector{Index: uint32(index), Path: []string{}}
-			for _, hash := range actPath {
-				path.Path = append(path.Path, hex.EncodeToString(hash))
-			}
-			tree.Paths = append(tree.Paths, path)
-		}
-		vectors.Trees = append(vectors.Trees, tree)
-	}
-
-	for _, profile := range testPresenceProfiles(t) {
-		for _, size := range []int{1, 5} {
-			vectors.Acts = append(vectors.Acts, testBuildActVector(t, profile, size))
-		}
-		vectors.Refusals = append(vectors.Refusals, testBuildRefusalVectors(t, profile)...)
-	}
-	return vectors
-}
-
-// VerifySigned's answers on each algorithm, the type-confusion pair and the evidence rules included.
-func testBuildStatementVectors(t testing.TB) []*testStatementVector {
 	key, publicKey := testP256Key(t)
 	purpose := "authority"
 	signedType := SignedType_SIGNED_SIDECAR_REVOKE
@@ -226,7 +184,7 @@ func testBuildStatementVectors(t testing.TB) []*testStatementVector {
 	rewritten := proto.CloneOf(ed25519Signed)
 	rewritten.Type = uint32(otherType)
 
-	statements := []*testStatementVector{
+	vectors.Statements = []*testStatementVector{
 		{
 			Name: "ed25519", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
 			ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed),
@@ -281,38 +239,69 @@ func testBuildStatementVectors(t testing.TB) []*testStatementVector {
 			Refusal: "ErrSignedEvidence",
 		},
 	}
-	return statements
-}
 
-// An act of size statements by one profile's key.
-func testBuildActVector(t testing.TB, profile *testPresenceProfile, size int) *testActVector {
-	statements := testActStatements(size)
-	statementDigests := testActDigests(statements)
-	root, err := PresenceActRoot(statementDigests)
-	if err != nil {
-		t.Fatal(err)
+	for _, size := range []int{1, 2, 3, 7, testActMaxSize} {
+		statementDigests := testRuleDigests(size)
+		root, err := PresenceActRoot(statementDigests)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree := &testTreeVector{Size: uint32(size), Root: hex.EncodeToString(root[:])}
+		indexes := []int{}
+		if size <= 7 {
+			for index := range size {
+				indexes = append(indexes, index)
+			}
+		} else {
+			indexes = []int{0, 1, 32767, 32768, 65533, 65534}
+		}
+		for _, index := range indexes {
+			actPath, err := PresenceActPath(statementDigests, uint32(index))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := &testPathVector{Index: uint32(index), Path: []string{}}
+			for _, hash := range actPath {
+				path.Path = append(path.Path, hex.EncodeToString(hash))
+			}
+			tree.Paths = append(tree.Paths, path)
+		}
+		vectors.Trees = append(vectors.Trees, tree)
 	}
-	act := &testActVector{
-		Name:               fmt.Sprintf("%d statements, %s", size, profile.name),
-		KeyAlg:             profile.name,
-		PublicKey:          hex.EncodeToString(profile.publicKey),
-		IdentityPublicKey:  hex.EncodeToString(testEd25519Public()),
-		SignerId:           hex.EncodeToString(testSignerId),
-		KeyId:              hex.EncodeToString(testPresenceKeyId),
-		Size:               uint32(size),
-		Root:               hex.EncodeToString(root[:]),
-		CountersignedBytes: hex.EncodeToString(PresenceActBytes(testSignerId, uint32(size), root)),
+
+	for _, profile := range testPresenceProfiles(t) {
+		for _, size := range []int{1, 5} {
+			statements := testActStatements(size)
+			statementDigests := testActDigests(statements)
+			root, err := PresenceActRoot(statementDigests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			act := &testActVector{
+				Name:               fmt.Sprintf("%d statements, %s", size, profile.name),
+				KeyAlg:             profile.name,
+				PublicKey:          hex.EncodeToString(profile.publicKey),
+				IdentityPublicKey:  hex.EncodeToString(testEd25519Public()),
+				SignerId:           hex.EncodeToString(testSignerId),
+				KeyId:              hex.EncodeToString(testPresenceKeyId),
+				Size:               uint32(size),
+				Root:               hex.EncodeToString(root[:]),
+				CountersignedBytes: hex.EncodeToString(PresenceActBytes(testSignerId, uint32(size), root)),
+			}
+			for i, signed := range testCountersignedAct(t, statements, profile.check) {
+				act.Statements = append(act.Statements, &testActStatementVector{
+					Purpose: statements[i].purpose,
+					Type:    uint32(statements[i].signedType),
+					Body:    hex.EncodeToString(statements[i].body),
+					Digest:  hex.EncodeToString(statementDigests[i][:]),
+					Signed:  testHexSigned(t, signed),
+				})
+			}
+			vectors.Acts = append(vectors.Acts, act)
+		}
+		vectors.Refusals = append(vectors.Refusals, testBuildRefusalVectors(t, profile)...)
 	}
-	for i, signed := range testCountersignedAct(t, statements, profile.check) {
-		act.Statements = append(act.Statements, &testActStatementVector{
-			Purpose: statements[i].purpose,
-			Type:    uint32(statements[i].signedType),
-			Body:    hex.EncodeToString(statements[i].body),
-			Digest:  hex.EncodeToString(statementDigests[i][:]),
-			Signed:  testHexSigned(t, signed),
-		})
-	}
-	return act
+	return vectors
 }
 
 // One profile's refusals, each a statement of a five-statement act with one input spoiled. For a webauthn-es256 check
@@ -327,14 +316,14 @@ func testBuildRefusalVectors(t testing.TB, profile *testPresenceProfile) []*test
 	}
 	otherKey, _ := testOtherP256Key(t)
 
-	refusal := func(name string, refusal string, signed *Signed) *testCountersignRefusal {
+	refusal := func(name string, want string, signed *Signed) *testCountersignRefusal {
 		return &testCountersignRefusal{
 			Name:      name + ", " + profile.name,
 			KeyAlg:    profile.name,
 			PublicKey: hex.EncodeToString(profile.publicKey),
 			Purpose:   statement.purpose,
 			Signed:    testHexSigned(t, signed),
-			Refusal:   refusal,
+			Refusal:   want,
 		}
 	}
 	spoiled := func(mutate func(signed *Signed)) *Signed {
@@ -357,7 +346,11 @@ func testBuildRefusalVectors(t testing.TB, profile *testPresenceProfile) []*test
 	}
 
 	refusals := []*testCountersignRefusal{
-		refusal("no countersignature", "ErrSignedEvidence", testSignEd25519(statement.purpose, statement.signedType, statement.body)),
+		refusal(
+			"no countersignature",
+			"ErrSignedEvidence",
+			testSignEd25519(statement.purpose, statement.signedType, statement.body),
+		),
 		refusal("another key", "ErrSignedSignature", testCountersignedAct(t, statements, otherKeyCheck)[2]),
 		refusal("another act's root", otherBytesRefusal, spoiled(func(signed *Signed) {
 			signed.Webauthn.Signature = otherAct[2].Webauthn.Signature
@@ -422,20 +415,12 @@ func testBuildRefusalVectors(t testing.TB, profile *testPresenceProfile) []*test
 				assertion.challenge = base64.RawURLEncoding.EncodeToString(digest[:])
 			})),
 			refusal("tampered client data", "ErrSignedSignature", spoiled(func(signed *Signed) {
-				signed.Webauthn.ClientDataJson = bytes.Replace(signed.Webauthn.ClientDataJson, []byte(`"origin"`), []byte(`"origin" `), 1)
+				clientDataJson := signed.Webauthn.ClientDataJson
+				signed.Webauthn.ClientDataJson = bytes.Replace(clientDataJson, []byte(`"origin"`), []byte(`"origin" `), 1)
 			})),
 		)
 	}
 	return refusals
-}
-
-// The file as this leg writes it.
-func testEncodeSignedVectors(t testing.TB, vectors *testSignedVectors) []byte {
-	encoded, err := json.MarshalIndent(vectors, "", " ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(encoded, '\n')
 }
 
 // The file as it stands.
@@ -454,7 +439,11 @@ func testReadSignedVectors(t testing.TB) *testSignedVectors {
 // §22's byte-equal rule: this leg's signed bytes, trees, countersigned bytes, signatures and encodings are the file's,
 // to the byte.
 func TestSignedVectorsAreByteEqual(t *testing.T) {
-	built := testEncodeSignedVectors(t, testBuildSignedVectors(t))
+	built, err := json.MarshalIndent(testBuildSignedVectors(t), "", " ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	built = append(built, '\n')
 	if *testUpdateSignedVectors {
 		if err := os.WriteFile(testSignedVectorsPath, built, 0o644); err != nil {
 			t.Fatal(err)

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"requests\": [{\"src\": [\"tag:a\"], \"dst\": [\"dns:*\"], \"allow\": [\"publish\"], \"audience\": \"public\"}]}")

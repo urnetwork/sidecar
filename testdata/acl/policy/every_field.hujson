@@ -1,0 +1,89 @@
+// Every key §8.5 names, each form of each value, and every comment and comma HuJSON allows. All names are
+// synthetic, and every address is a documentation range.
+{
+  /* a block comment
+     across lines */
+  "groups": {
+    "group:eng": ["dana@acme.example", "user:Amir@Acme.Example",],
+    "group:scim-synced@acme.example": ["mei@acme.example"],
+    "group:nobody-yet": [],
+  },
+  "tagOwners": {
+    "tag:recurd": ["group:eng", "autogroup:admin", "dana@acme.example", "user:mei@acme.example"],
+    "tag:nobody-applies": [],
+  },
+  "hosts": {
+    "office": "192.0.2.0/24",
+    "printer": "198.51.100.7",
+    "lab-v6": "2001:db8::/32",
+    "router-v6": "2001:db8::1",
+  },
+  "grants": [
+    {
+      "id": "rule-one", // member-chosen text, kept on devices
+      "src": ["user:dana@acme.example", "group:eng", "tag:recurd", "autogroup:member", "autogroup:public", "autogroup:ephemeral",
+              "sidecar:0190ee54-3a3e-7a1a-8d2f-0123456789ab", "client:0190ee543a3e7a1a8d2f0123456789ac",
+              "role:reviewer", "principal:urn:synthetic:worker", "network:partner-y", "network:*"],
+      "dst": ["tag:recurd", "autogroup:self", "autogroup:internet", "network:partner-y", "*"],
+      "allow": ["dial", "route"],
+      "ip": ["tcp:443", "udp:53", "tcp:8000-8100", "22", "6000-6010", "udp:*", "icmp:*", "*"],
+      "expires": "2026-12-31T00:00:00Z",
+      "note": "one note with /* no comment */ and // none here, \"quoted\"",
+    },
+    {
+      "src": ["autogroup:member"],
+      "dst": ["ip:192.0.2.0/24", "ip:2001:db8::/32", "ip:office", "ip:lab-v6"],
+      "allow": ["route"],
+      "via": ["tag:recurd", "sidecar:0190ee54-3a3e-7a1a-8d2f-0123456789ab", "autogroup:self"],
+    },
+    {
+      "src": ["tag:recurd"],
+      "dst": ["sock:db", "sock:db/primary", "sock:Tls/443/Blog", "sock:tls/*", "sock:tls/443/*-preview", "sock:*", "sock:@/x"],
+      "allow": ["dial", "listen"],
+    },
+    {
+      "src": ["tag:recurd"],
+      "dst": ["evs:repo-x", "evs:repo_y", "evs:repo-*", "evs:*", "evs:0190ee54-3a3e-7a1a-8d2f-0123456789ad"],
+      "allow": ["read", "write", "admin", "deposit"],
+    },
+    {
+      "src": ["tag:recurd"],
+      "dst": ["dns:@", "dns:blog", "dns:*-preview", "dns:*", "dns:blog.team", "dns:*.team"],
+      "allow": ["publish", "admin"],
+      "sock": "sock:tls/443/blog",
+      "audience": "link",
+      "app_mode": "raw",
+      "link_spki_sha256": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "expires": "2026-12-31T01:00:00.5+01:00",
+    },
+    { "src": ["tag:recurd"], "dst": ["dns:blog"], "allow": ["publish"], "audience": "members", "app_mode": "http" },
+    { "src": ["tag:recurd"], "dst": ["dns:blog"], "allow": ["publish"], "audience": "members-device" },
+    { "src": ["tag:recurd"], "dst": ["dns:blog"], "allow": ["publish"], "audience": "public" },
+    { "src": ["tag:recurd"], "dst": ["mail:agent.one", "mail:agent-*", "mail:*"], "allow": ["send", "listen"] },
+    { "src": ["autogroup:member"], "dst": ["*"], "allow": ["*", "dial"] },
+  ],
+  "requests": [
+    {
+      "id": "rule-two",
+      "src": ["autogroup:tagged"],
+      "dst": ["*", "sock:*", "ip:printer"],
+      "allow": ["dial"],
+      "approver": ["autogroup:self", "autogroup:sponsor", "autogroup:dst-owner", "autogroup:admin", "group:eng", "user:dana@acme.example"],
+      "approvers": 2,
+      "maxExpiry": "24h",
+      "evidence": ["device", "presence", "harness"],
+      "note": "a request",
+    },
+    { "src": ["autogroup:network"], "dst": ["dns:*"], "allow": ["publish"], "maxExpiry": "90m" },
+    { "src": ["autogroup:network"], "dst": ["dns:*"], "allow": ["publish"], "maxExpiry": "7d" },
+  ],
+  "audit": { "reader": "tag:audit", "repos": ["kind:team_record", "kind:vault", "kind:mailbox", "evs:repo-x",
+                                              "evs:0190ee54-3a3e-7a1a-8d2f-0123456789ad"] },
+  "tests": [
+    { "src": "dana@acme.example", "accept": ["sock:db#dial", "tag:recurd#dial:tcp:443"], "deny": ["evs:secrets#read"] },
+    { "src": "tag:recurd", "accept": ["ip:office#route:443", "mail:agent.one#send"] },
+    { "src": "user:mei@acme.example", "deny": ["ip:192.0.2.0/24#route", "*#dial:udp:53"] },
+  ],
+  "expiresDefault": "2h",
+  "evidenceDefault": ["device", "presence"],
+}
