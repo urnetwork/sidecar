@@ -43,7 +43,7 @@ func testSocketKeys(t testing.TB, networkId Id, socketKey []byte) *SocketKeys {
 }
 
 // Hex text in a vector file.
-func testHex(t testing.TB, text string) []byte {
+func testSocketHex(t testing.TB, text string) []byte {
 	t.Helper()
 	decoded, err := hex.DecodeString(text)
 	if err != nil {
@@ -310,17 +310,17 @@ func TestSocketTokenVectors(t *testing.T) {
 		t.Fatalf("%d groups", len(vectors.Groups))
 	}
 	for _, group := range vectors.Groups {
-		networkId, err := IdFromBytes(testHex(t, group.NetworkId))
+		networkId, err := IdFromBytes(testSocketHex(t, group.NetworkId))
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys := testSocketKeys(t, networkId, testHex(t, group.SocketKey))
-		if !bytes.Equal(keys.tokenKey, testHex(t, group.TokenKey)) {
+		keys := testSocketKeys(t, networkId, testSocketHex(t, group.SocketKey))
+		if !bytes.Equal(keys.tokenKey, testSocketHex(t, group.TokenKey)) {
 			t.Errorf("%s: K_tok %x", group.NetworkId, keys.tokenKey)
 		}
 		// NewSocketKeys keeps K_seal only inside its AEAD, so compare it with one built from the file's
 		// bytes: equal tags mean equal keys
-		fileAead, err := chacha20poly1305.NewX(testHex(t, group.SealKey))
+		fileAead, err := chacha20poly1305.NewX(testSocketHex(t, group.SealKey))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -337,7 +337,7 @@ func TestSocketTokenVectors(t *testing.T) {
 				t.Errorf("%q: %v", vector.Input, err)
 				continue
 			}
-			if !bytes.Equal(nameToken, testHex(t, vector.NameToken)) {
+			if !bytes.Equal(nameToken, testSocketHex(t, vector.NameToken)) {
 				t.Errorf("%q: name_token %x", vector.Input, nameToken)
 			}
 			if len(nameToken) != len(vector.Tokens)*socketTokenByteCount {
@@ -349,7 +349,7 @@ func TestSocketTokenVectors(t *testing.T) {
 			}
 			for index, token := range vector.Tokens {
 				got := nameToken[index*socketTokenByteCount : (index+1)*socketTokenByteCount]
-				if !bytes.Equal(got, testHex(t, token)) {
+				if !bytes.Equal(got, testSocketHex(t, token)) {
 					t.Errorf("%q: t_%d %x", vector.Input, index+1, got)
 				}
 			}
@@ -360,7 +360,7 @@ func TestSocketTokenVectors(t *testing.T) {
 				t.Errorf("%q: %v", vector.Input, err)
 				continue
 			}
-			if !bytes.Equal(nameToken, testHex(t, vector.NameToken)) {
+			if !bytes.Equal(nameToken, testSocketHex(t, vector.NameToken)) {
 				t.Errorf("%q: prefix %x", vector.Input, nameToken)
 			}
 		}
@@ -387,20 +387,20 @@ type socketSealVectors struct {
 func TestSocketSealVectors(t *testing.T) {
 	var vectors socketSealVectors
 	testSocketVectors(t, "seals.json", &vectors)
-	networkId, err := IdFromBytes(testHex(t, vectors.NetworkId))
+	networkId, err := IdFromBytes(testSocketHex(t, vectors.NetworkId))
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := testSocketKeys(t, networkId, testHex(t, vectors.SocketKey))
+	keys := testSocketKeys(t, networkId, testSocketHex(t, vectors.SocketKey))
 	if len(vectors.Kept) == 0 {
 		t.Fatal("nothing to keep")
 	}
 	for _, vector := range vectors.Kept {
-		want := testHex(t, vector.SealedName)
+		want := testSocketHex(t, vector.SealedName)
 		if len(want) != 152 {
 			t.Errorf("%q: a %d-byte seal", vector.Name, len(want))
 		}
-		sealed, err := keys.sealWithNonce(vector.Name, testHex(t, vector.Nonce))
+		sealed, err := keys.sealWithNonce(vector.Name, testSocketHex(t, vector.Nonce))
 		if err != nil {
 			t.Errorf("%q: %v", vector.Name, err)
 			continue
@@ -408,7 +408,7 @@ func TestSocketSealVectors(t *testing.T) {
 		if !bytes.Equal(sealed, want) {
 			t.Errorf("%q: seal %x", vector.Name, sealed)
 		}
-		name, ok := keys.Open(testHex(t, vector.NameToken), want)
+		name, ok := keys.Open(testSocketHex(t, vector.NameToken), want)
 		if !ok || name != vector.Name {
 			t.Errorf("%q: opened %q %v", vector.Name, name, ok)
 		}
@@ -420,16 +420,16 @@ func TestSocketSealVectors(t *testing.T) {
 func TestSocketSealDropVectors(t *testing.T) {
 	var vectors socketSealVectors
 	testSocketVectors(t, "seals.json", &vectors)
-	networkId, err := IdFromBytes(testHex(t, vectors.NetworkId))
+	networkId, err := IdFromBytes(testSocketHex(t, vectors.NetworkId))
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := testSocketKeys(t, networkId, testHex(t, vectors.SocketKey))
+	keys := testSocketKeys(t, networkId, testSocketHex(t, vectors.SocketKey))
 	if len(vectors.Dropped) < 15 {
 		t.Fatalf("%d drops", len(vectors.Dropped))
 	}
 	for _, vector := range vectors.Dropped {
-		if name, ok := keys.Open(testHex(t, vector.NameToken), testHex(t, vector.SealedName)); ok || name != "" {
+		if name, ok := keys.Open(testSocketHex(t, vector.NameToken), testSocketHex(t, vector.SealedName)); ok || name != "" {
 			t.Errorf("%s: kept %q", vector.Reason, name)
 		}
 	}
