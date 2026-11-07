@@ -75,8 +75,8 @@ func PresenceActRoot(statementDigests [][sha256.Size]byte) ([sha256.Size]byte, e
 }
 
 // RFC 9162 §2.1.3.1's inclusion path of the statement at actIndex, as WebAuthnEvidence.act_path carries it: empty for
-// an act of one. Each call hashes the whole act, so an act of m statements costs m² hashes to path in full, which only
-// an act far past any this design builds would notice.
+// an act of one. Each call hashes the whole act, so a builder that paths all m statements does about m² hashes, which
+// is nothing at the few statements an act signs and minutes near the cap.
 func PresenceActPath(statementDigests [][sha256.Size]byte, actIndex uint32) ([][]byte, error) {
 	leafHashes, err := presenceActLeafHashes(statementDigests)
 	if err != nil {
