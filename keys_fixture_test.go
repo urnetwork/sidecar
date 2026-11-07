@@ -317,3 +317,88 @@ func requireState(t *testing.T, instance *SidecarInstance, want SidecarInstanceS
 		t.Errorf("state %s, want %s", state, want)
 	}
 }
+
+// A medium whose next temp file stops at one step until the test lets it go, as a slow fsync or a slow
+// write does: at its Sync, inside a commit's lock, or at a numbered write, before it. Safe for
+// concurrent use.
+type gateBackend struct {
+	SidecarStoreBackend
+	stateLock sync.Mutex
+	armed     bool
+	// the write, counting from 1, that stops; 0 stops the Sync
+	writeNumber int
+	// closes when the file stops, and the file goes on once release closes
+	entered chan struct{}
+	release chan struct{}
+}
+
+// Over memory, armed for nothing yet.
+func newGateBackend() *gateBackend {
+	return &gateBackend{
+		SidecarStoreBackend: NewSidecarMemoryBackend(),
+		entered:             make(chan struct{}),
+		release:             make(chan struct{}),
+	}
+}
+
+// Stops the next temp file at its Sync.
+func (self *gateBackend) armSync() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.armed = true
+	self.writeNumber = 0
+}
+
+// Stops the next temp file at its write of writeNumber.
+func (self *gateBackend) armWrite(writeNumber int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.armed = true
+	self.writeNumber = writeNumber
+}
+
+// The next temp file takes what is armed.
+func (self *gateBackend) CreateTemp() (SidecarStoreBackendFile, error) {
+	file, err := self.SidecarStoreBackend.CreateTemp()
+	if err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !self.armed {
+		return file, nil
+	}
+	self.armed = false
+	return &gateFile{SidecarStoreBackendFile: file, backend: self, writeNumber: self.writeNumber}, nil
+}
+
+// Waits for the test.
+func (self *gateBackend) stop() {
+	close(self.entered)
+	<-self.release
+}
+
+// A temp file that stops once.
+type gateFile struct {
+	SidecarStoreBackendFile
+	backend     *gateBackend
+	writeNumber int
+	writeCount  int
+}
+
+// Stops at the armed write, before it lands.
+func (self *gateFile) Write(p []byte) (int, error) {
+	self.writeCount += 1
+	if self.writeCount == self.writeNumber {
+		self.backend.stop()
+	}
+	return self.SidecarStoreBackendFile.Write(p)
+}
+
+// Stops if armed at 0.
+func (self *gateFile) Sync() error {
+	if self.writeNumber == 0 {
+		self.backend.stop()
+	}
+	return self.SidecarStoreBackendFile.Sync()
+}

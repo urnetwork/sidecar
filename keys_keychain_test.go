@@ -4,6 +4,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -1045,5 +1046,93 @@ func TestTheStoreSealsWithTheClassKey(t *testing.T) {
 	}
 	if _, err := chacha20poly1305.NewX(classKey); err != nil {
 		t.Error(err)
+	}
+}
+
+// A commit that has not yet taken its keychain's commit lock when the keychain closes, here held at its
+// last chunk's write, refuses its swap: the keychain an unlock opened meanwhile has read the disk, and
+// a rotation it ran has dropped the root this file is sealed under. The swap once went through and
+// answered nil, leaving keychain.ur on a root that was gone.
+func TestACommitAfterTheCloseRefusesItsSwap(t *testing.T) {
+	backend := newGateBackend()
+	keyStore := newFakeKeyStore()
+	instance := newInstanceOn(t, backend, keyStore)
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	enrollTestNetwork(t, instance, testNetworkId)
+	secrets := instance.secrets(testNetworkId, "evs")
+	// keychain.ur's temp file takes its header, then its one chunk
+	backend.armWrite(2)
+	putErr := make(chan error, 1)
+	go func() { putErr <- secrets.Put("w", []byte("synthetic w")) }()
+	<-backend.entered
+	instance.Lock()
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	close(backend.release)
+	requireError(t, <-putErr, ErrSidecarStoreLocked)
+	if _, err := secrets.Get("w"); !errors.Is(err, ErrSidecarStoreAbsent) {
+		t.Errorf("a refused Put reads back: %v", err)
+	}
+	instance.Close()
+	reopened := newInstanceOn(t, backend, keyStore)
+	if err := reopened.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.secrets(testNetworkId, "identity").Get("seed"); err != nil {
+		t.Errorf("after a restart the keychain does not open: %v", err)
+	}
+}
+
+// A removal through a keychain that has closed removes nothing (D-CORE-15).
+func TestARemovalAfterTheCloseRemovesNothing(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	writeStoreFile(t, storeOf(t, instance, testNetworkId, "evs"), "file", []byte("synthetic"))
+	opened, err := instance.keychainFor(testNetworkId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.Lock()
+	requireError(t, opened.removeSealed("evs/file"), ErrSidecarStoreLocked)
+	if _, err := backend.Open(networkFilePath(testNetworkId, "evs/file")); err != nil {
+		t.Errorf("the file went: %v", err)
+	}
+}
+
+// A component's secrets last as long as its generation, across a lock and an unlock, as its store
+// does. They were once bound to one keychain, which a lock closes for good, so after the first
+// auto-lock they answered locked forever.
+func TestSecretsWorkAgainAfterAnUnlock(t *testing.T) {
+	instance, _, _ := enrolledInstance(t)
+	opened, err := instance.keychainFor(testNetworkId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secrets := range []SidecarSecrets{opened.secrets("identity"), instance.secrets(testNetworkId, "identity")} {
+		instance.Lock()
+		if _, err := secrets.Get("seed"); !errors.Is(err, ErrSidecarStoreLocked) {
+			t.Errorf("locked: %v", err)
+		}
+		requireError(t, secrets.Put("other", []byte("synthetic")), ErrSidecarStoreLocked)
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := secrets.Get("seed"); err != nil {
+			t.Errorf("after an unlock: %v", err)
+		}
+		if err := secrets.Put("other", []byte("synthetic")); err != nil {
+			t.Fatal(err)
+		}
+		if names, err := secrets.List(""); err != nil || len(names) != 2 {
+			t.Errorf("names %v, err %v", names, err)
+		}
+		if err := secrets.Delete("other"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

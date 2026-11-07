@@ -130,3 +130,68 @@ func TestLinearizationPointsHaveTheirBarriers(t *testing.T) {
 		}
 	}
 }
+
+// A lock waits out a commit already holding its keychain's commit lock, here held at its fsync, so the
+// keychain an unlock opens next reads that write. The close once went on past it: the Put answered nil,
+// the next keychain never had it, and that keychain's next write dropped it for good.
+func TestALockWaitsOutACommitInFlight(t *testing.T) {
+	backend := newGateBackend()
+	keyStore := newFakeKeyStore()
+	instance := newInstanceOn(t, backend, keyStore)
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	enrollTestNetwork(t, instance, testNetworkId)
+	secrets := instance.secrets(testNetworkId, "evs")
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
+		if name == "keys.keychain_close.wait" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}})
+	t.Cleanup(func() { SetTestHooks(nil) })
+
+	backend.armSync()
+	putErr := make(chan error, 1)
+	go func() { putErr <- secrets.Put("w", []byte("synthetic w")) }()
+	<-backend.entered
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		instance.Lock()
+	}()
+	select {
+	case <-waiting:
+		// the close waits for the commit, which may land now
+		close(backend.release)
+		<-locked
+	case <-locked:
+		// the close went past the commit, so the next keychain opens before the commit lands
+		if err := instance.Unlock(nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := instance.keychainFor(testNetworkId); err != nil {
+			t.Fatal(err)
+		}
+		close(backend.release)
+	}
+	if err := <-putErr; err != nil {
+		t.Fatalf("the Put: %v", err)
+	}
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.Put("y", []byte("synthetic y")); err != nil {
+		t.Fatal(err)
+	}
+	instance.Close()
+	reopened := newInstanceOn(t, backend, keyStore)
+	if err := reopened.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	value, err := reopened.secrets(testNetworkId, "evs").Get("w")
+	if err != nil || string(value) != "synthetic w" {
+		t.Errorf("a Put that answered nil is gone: %q, %v", value, err)
+	}
+}

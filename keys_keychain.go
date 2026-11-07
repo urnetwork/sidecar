@@ -11,9 +11,13 @@
 // <namespace>/. Writing one rewrites the file, which is small: identities, keys and statements in
 // flight, never content.
 //
-// Locks: commitLock orders a file's swap against a rotation's re-seal of that file, and persistLock
-// orders writes of keychain.ur, and both are held across I/O, so neither is stateLock and neither is
-// taken under it. Order: persistLock, then commitLock, then stateLock.
+// Locks: commitLock orders a file's swap against a rotation's re-seal of that file and against close,
+// and persistLock orders writes of keychain.ur, and both are held across I/O, so neither is stateLock
+// and neither is taken under it. Order: persistLock, then commitLock, then stateLock.
+//
+// An unlock opens a new keychain over the same files, so nothing this one writes may land once it has
+// closed: close waits out a swap or a removal already holding commitLock, and every later one finds it
+// closed under commitLock and refuses.
 
 package sidecar
 
@@ -146,9 +150,15 @@ func newKeychain(instance *SidecarInstance, networkId Id, generationRoots map[ui
 	}
 }
 
-// Zeroes everything it holds, as far as Go lets a program. Every later call answers
-// ErrSidecarStoreLocked, a stream's next chunk included.
+// Zeroes everything it holds, as far as Go lets a program, once a swap in flight has landed. Every later
+// call answers ErrSidecarStoreLocked, a stream's next chunk and a later commit included.
 func (self *keychain) close() {
+	if !self.commitLock.TryLock() {
+		// marks that this close, under the instance's operationLock, waits on a swap in flight
+		testHookBarrier("keys.keychain_close.wait", self.hookKey)
+		self.commitLock.Lock()
+	}
+	defer self.commitLock.Unlock()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.closed = true
@@ -388,6 +398,9 @@ func (self *sealedFileWriter) commitFile() error {
 	}
 	self.keychain.commitLock.RLock()
 	defer self.keychain.commitLock.RUnlock()
+	if err := self.keychain.requireOpen(); err != nil {
+		return err
+	}
 	err := commitBackendFile(
 		self.keychain.instance.backend,
 		self.file,
@@ -418,12 +431,12 @@ func (self *sealedFileWriter) Close() error {
 // Takes the file at path away. A locked keychain deletes nothing (D-CORE-15).
 func (self *keychain) removeSealed(path string) error {
 	self.instance.touch()
-	if err := self.requireOpen(); err != nil {
-		return err
-	}
 	backendPath := networkFilePath(self.networkId, path)
 	self.commitLock.RLock()
 	defer self.commitLock.RUnlock()
+	if err := self.requireOpen(); err != nil {
+		return err
+	}
 	if err := self.instance.backend.Remove(backendPath); err != nil {
 		return err
 	}
@@ -494,7 +507,8 @@ func (self *keychain) loadRecords() error {
 
 // Applies edit to a copy of the records, seals the copy into keychain.ur, and only then makes it what
 // this keychain reads, so memory never runs ahead of the disk. A kill leaves the old file or the new one
-// (§22.8).
+// (§22.8). A keychain that closed once the swap had landed answers nil and keeps nothing, since the disk
+// has the write and the keychain opened next reads it; one that closed first refuses the swap.
 func (self *keychain) updateRecords(edit func(nameValues map[string][]byte)) error {
 	testHookBarrier("keys.keychain_write.before", self.hookKey)
 	err := func() error {
@@ -544,15 +558,55 @@ func (self *keychain) updateRecords(edit func(nameValues map[string][]byte)) err
 	return err
 }
 
-// A component's view of the keychain, its names under namespace.
+// The record under recordName, a copy.
+func (self *keychain) getRecord(recordName string) ([]byte, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return nil, ErrSidecarStoreLocked
+	}
+	value, ok := self.records[recordName]
+	if !ok {
+		return nil, ErrSidecarStoreAbsent
+	}
+	return bytes.Clone(value), nil
+}
+
+// The names of the records under namespacePrefix, without it, that start with prefix, sorted.
+func (self *keychain) listRecords(namespacePrefix string, prefix string) ([]string, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return nil, ErrSidecarStoreLocked
+	}
+	names := []string{}
+	for recordName := range self.records {
+		if name, ok := strings.CutPrefix(recordName, namespacePrefix); ok && strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// A component's view of network networkId's keychain, its names under namespace: what SidecarEnv.Secrets
+// carries for a whole generation. Like a store it holds no key, and each call finds the network's
+// keychain, so it answers ErrSidecarStoreLocked while the instance is locked and works again once it
+// opens.
+func (self *SidecarInstance) secrets(networkId Id, namespace string) SidecarSecrets {
+	return &keychainSecrets{instance: self, networkId: networkId, prefix: namespace + "/"}
+}
+
+// The same view, of this keychain's network.
 func (self *keychain) secrets(namespace string) SidecarSecrets {
-	return &keychainSecrets{keychain: self, prefix: namespace + "/"}
+	return self.instance.secrets(self.networkId, namespace)
 }
 
 // The SidecarSecrets implementation.
 type keychainSecrets struct {
-	keychain *keychain
-	prefix   string
+	instance  *SidecarInstance
+	networkId Id
+	prefix    string
 }
 
 // The record name of name, or ErrSidecarStoreName.
@@ -570,17 +624,12 @@ func (self *keychainSecrets) Get(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	self.keychain.instance.touch()
-	self.keychain.stateLock.Lock()
-	defer self.keychain.stateLock.Unlock()
-	if self.keychain.closed {
-		return nil, ErrSidecarStoreLocked
+	self.instance.touch()
+	opened, err := self.instance.keychainFor(self.networkId)
+	if err != nil {
+		return nil, err
 	}
-	value, ok := self.keychain.records[recordName]
-	if !ok {
-		return nil, ErrSidecarStoreAbsent
-	}
-	return bytes.Clone(value), nil
+	return opened.getRecord(recordName)
 }
 
 // Keeps a copy of the value. See SidecarSecrets.
@@ -589,11 +638,15 @@ func (self *keychainSecrets) Put(name string, value []byte) error {
 	if err != nil {
 		return err
 	}
+	opened, err := self.instance.keychainFor(self.networkId)
+	if err != nil {
+		return err
+	}
 	stored := bytes.Clone(value)
 	if stored == nil {
 		stored = []byte{}
 	}
-	return self.keychain.updateRecords(func(nameValues map[string][]byte) {
+	return opened.updateRecords(func(nameValues map[string][]byte) {
 		nameValues[recordName] = stored
 	})
 }
@@ -604,25 +657,21 @@ func (self *keychainSecrets) Delete(name string) error {
 	if err != nil {
 		return err
 	}
-	return self.keychain.updateRecords(func(nameValues map[string][]byte) {
+	opened, err := self.instance.keychainFor(self.networkId)
+	if err != nil {
+		return err
+	}
+	return opened.updateRecords(func(nameValues map[string][]byte) {
 		delete(nameValues, recordName)
 	})
 }
 
 // The names under prefix. See SidecarSecrets.
 func (self *keychainSecrets) List(prefix string) ([]string, error) {
-	self.keychain.instance.touch()
-	self.keychain.stateLock.Lock()
-	defer self.keychain.stateLock.Unlock()
-	if self.keychain.closed {
-		return nil, ErrSidecarStoreLocked
+	self.instance.touch()
+	opened, err := self.instance.keychainFor(self.networkId)
+	if err != nil {
+		return nil, err
 	}
-	names := []string{}
-	for recordName := range self.keychain.records {
-		if name, ok := strings.CutPrefix(recordName, self.prefix); ok && strings.HasPrefix(name, prefix) {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	return names, nil
+	return opened.listRecords(self.prefix, prefix)
 }
