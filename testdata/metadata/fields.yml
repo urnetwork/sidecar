@@ -66,6 +66,7 @@ roots:
   SmtpProofResult: "smtpedge reads or answers it (§14.5)"
   # protocol/mail.proto
   MailIngress: "mxedge builds it from what it holds (§15.4)"
+  MailHint: "a kind in PushHint.hint on topic mail, which the mail service builds (§15.15)"
   # protocol/gkm.proto
   GkmCommitHeader: "gkm reads the clear header of every commit (§10.4, §10.6)"
   UrMlsCredential: "in a KeyPackage's clear credential, which gkm holds (§10.6, gkm-4)"
@@ -161,7 +162,6 @@ sealed_messages:
   HeadCheckResult: "peers only, as HeadCheck"
   HeadCheckProofRequest: "peers only, as HeadCheck"
   HeadCheckProof: "peers only, as HeadCheck"
-  MailAuthEvidence: "sealed in the deposit header beside MailIngress, for readers (§15.5, §15.7)"
   ServiceSettings: "kept to config heads, which evs holds as ciphertext (§7.9)"
   BridgeBlock: "rides a config head, which evs holds as ciphertext (§17.8)"
   BridgeShareSigner: "a config file, which evs holds as ciphertext (§17.9)"
@@ -173,6 +173,7 @@ sealed_messages:
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
   protocol/evsindex.proto: "plaintext inside index files, which evs seals as any file (§11.14)"
+  protocol/mail.proto: "only MailIngress and MailHint pass through a server, and the rest is sealed under §11 (§15.5, §15.7, §15.8)"
   protocol/record.proto: "each RecordEntry is a sealed file in its writer's stream (§16.8); the roots above are what a gate reads"
   protocol/search.proto: "peer to peer over a Required session, so only sizes show (§11.14, connect-5)"
 
@@ -253,6 +254,7 @@ fields:
   SmtpProof.records: smtp-2
   SmtpProofResult.code: smtp-2
   # protocol/mail.proto
+  MailHint.kind: connect-4
   MailIngress.sender_ip: mx-1
   MailIngress.sender_port: mx-1
   MailIngress.sni: mx-1

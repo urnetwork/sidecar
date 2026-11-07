@@ -99,7 +99,7 @@ func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, messageName := range []string{
-		"SearchRequest", "RecordHeader", "ApprovalRequest", "IndexSettings", "DirectoryCard", "MailAuthEvidence",
+		"SearchRequest", "RecordHeader", "ApprovalRequest", "IndexSettings", "DirectoryCard", "MailAuthEvidence", "MailDeposit",
 		"HeadCheck", "BridgeRouteBody", "BridgeState", "WindowDelegation", "RecoveryBindBody", "EvsImport",
 	} {
 		for field := range guard.fieldMap.Fields {
