@@ -358,19 +358,28 @@ type EvsGitCommit struct {
 	// Whatever headers follow the committer, encoding, gpgsig and mergetag among them, in their
 	// exact bytes, each line with its LF and a continuation line with its leading space.
 	ExtraHeaders []byte
+	// The bytes end with the headers: no blank line, so no message, not even an empty one. git writes
+	// the blank line before every message, but stock git stores a commit without one and fsck --strict
+	// passes it ("not having a body is not a crime", fsck.c's verify_headers), so imported history can
+	// hold one, and this keeps its oid. Message is empty when this is set.
+	HeadersOnly bool
 	// Everything after the blank line, as is.
 	Message []byte
 }
 
 // The object's bytes. Refuses fields that would not read back as themselves: an ident with a line
-// break or NUL, and extra headers with a line that has no LF, a blank line, a NUL, a continuation with
-// nothing to continue, or any of the headers a commit holds only at the top. Further down, one of those
-// would be a second answer to who committed, and git and go-git would each settle it their own way.
+// break or NUL, extra headers with a line that has no LF, a blank line, a NUL, a continuation with
+// nothing to continue, or any of the headers a commit holds only at the top, and a message on a commit
+// that ends with its headers. Further down, one of those top headers would be a second answer to who
+// committed, and git and go-git would each settle it their own way.
 func (self *EvsGitCommit) Encode() ([]byte, error) {
 	for _, value := range [][]byte{self.Author, self.Committer} {
 		if bytes.ContainsAny(value, "\n\x00") {
 			return nil, fmt.Errorf("%w: a commit's ident holds a line break or NUL", ErrEvsGitObjectInvalid)
 		}
+	}
+	if self.HeadersOnly && len(self.Message) != 0 {
+		return nil, fmt.Errorf("%w: a commit that ends with its headers holds a message", ErrEvsGitObjectInvalid)
 	}
 	if bytes.IndexByte(self.ExtraHeaders, 0) != -1 {
 		return nil, fmt.Errorf("%w: a commit's headers hold a NUL", ErrEvsGitObjectInvalid)
@@ -396,8 +405,10 @@ func (self *EvsGitCommit) Encode() ([]byte, error) {
 	}
 	encoded = fmt.Appendf(encoded, "author %s\ncommitter %s\n", self.Author, self.Committer)
 	encoded = append(encoded, self.ExtraHeaders...)
-	encoded = append(encoded, '\n')
-	encoded = append(encoded, self.Message...)
+	if !self.HeadersOnly {
+		encoded = append(encoded, '\n')
+		encoded = append(encoded, self.Message...)
+	}
 	return encoded, nil
 }
 
@@ -411,15 +422,14 @@ func (self *EvsGitCommit) Oid() (EvsGitOid, error) {
 }
 
 // A commit from its object's bytes: a tree, its parents, exactly one author and one committer in
-// that order, any extra headers, a blank line and a message. A second header of those kinds, however
-// late, and a NUL before the message are refused, which is stricter than git and go-git, who read
-// the first and drop the rest. Those are the commits that could show a reader one committer and git
-// another. Fields are copies, so encoded may be reused.
+// that order, any extra headers, then a blank line and a message, or else the end, as in a commit
+// with no body, which stock git and go-git both read. A second header of those kinds, however late,
+// and a NUL before the message are refused, which is stricter than git and go-git, who read the first
+// and drop the rest. Those are the commits that could show a reader one committer and git another. A
+// last header with no LF is refused, as fsck refuses it. Fields are copies, so encoded may be reused.
 //
 // The idents are left as read, so history fsck refuses in its dates or names still replays: an
 // importer's commit needs its oid and parents, and the committer check decodes the ident itself.
-// A commit with no blank line after its headers is refused, because go-git's encoder, and this one,
-// would add it, which would change the oid.
 func EvsGitCommitDecode(encoded []byte) (*EvsGitCommit, error) {
 	refused := func(what string) error {
 		return fmt.Errorf("%w: %s", ErrEvsGitObjectInvalid, what)
@@ -468,8 +478,9 @@ func EvsGitCommitDecode(encoded []byte) (*EvsGitCommit, error) {
 	commit.Author = bytes.Clone(author)
 	commit.Committer = bytes.Clone(committer)
 
-	// the blank line, and with it the extra headers: the first line that is empty
-	endOfHeaders := -1
+	// the blank line, and with it the extra headers: the first line that is empty, and with none the
+	// headers run to the end, where Encode refuses a last line that has no LF
+	endOfHeaders := len(rest)
 	for offset := 0; offset < len(rest); {
 		if rest[offset] == '\n' {
 			endOfHeaders = offset
@@ -481,11 +492,12 @@ func EvsGitCommitDecode(encoded []byte) (*EvsGitCommit, error) {
 		}
 		offset += lineSize + 1
 	}
-	if endOfHeaders == -1 {
-		return nil, refused("a commit has no blank line after its headers")
-	}
 	commit.ExtraHeaders = bytes.Clone(rest[:endOfHeaders])
-	commit.Message = bytes.Clone(rest[endOfHeaders+1:])
+	if endOfHeaders == len(rest) {
+		commit.HeadersOnly = true
+	} else {
+		commit.Message = bytes.Clone(rest[endOfHeaders+1:])
+	}
 
 	reencoded, err := commit.Encode()
 	if err != nil {

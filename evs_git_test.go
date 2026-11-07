@@ -511,7 +511,23 @@ const evsGitTestCommitTwo = "tree cf656b586d56636fa958e3f794e7c1d98ea15588\n" +
 	"\n" +
 	"second\n\nwith a body\n"
 
-// Oids stock git's commit-tree gave these.
+// A commit's headers with nothing after them, which stock git stores and fsck --strict passes.
+const evsGitTestNoBodyHeaders = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n" +
+	"author A <a@example.com> 1 +0000\n" +
+	"committer B <b@example.com> 2 +0000\n"
+
+// The fields of evsGitTestNoBodyHeaders, ending there or followed by a blank line and no message.
+func evsGitTestNoBodyCommit(t testing.TB, headersOnly bool) *EvsGitCommit {
+	t.Helper()
+	return &EvsGitCommit{
+		TreeOid:     evsGitTestOid(t, "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+		Author:      []byte("A <a@example.com> 1 +0000"),
+		Committer:   []byte("B <b@example.com> 2 +0000"),
+		HeadersOnly: headersOnly,
+	}
+}
+
+// Oids stock git gave these: commit-tree for each with a blank line, hash-object for the one without.
 func TestEvsGitCommitVectors(t *testing.T) {
 	treeOid := evsGitTestOid(t, "cf656b586d56636fa958e3f794e7c1d98ea15588")
 	parentOid := evsGitTestOid(t, "fe15d1340f7f283a87474f1114513d1b8d96b342")
@@ -553,6 +569,16 @@ func TestEvsGitCommitVectors(t *testing.T) {
 			},
 			encoded: evsGitTestCommitTwo,
 			oid:     "a0915de08cfe98186df28ce4e974dceb2e5cdf7f",
+		},
+		{
+			commit:  evsGitTestNoBodyCommit(t, true),
+			encoded: evsGitTestNoBodyHeaders,
+			oid:     "289a22ea6efbabd7a11aa6cc8a0fe559cfd37863",
+		},
+		{
+			commit:  evsGitTestNoBodyCommit(t, false),
+			encoded: evsGitTestNoBodyHeaders + "\n",
+			oid:     "2c7a590c34a0f7202aa9cc764220f8bd198bb115",
 		},
 	} {
 		encoded, err := c.commit.Encode()
@@ -616,6 +642,10 @@ func TestEvsGitCommitDecodeKeepsEveryByte(t *testing.T) {
 		{name: "a merged tag", tail: "mergetag object fe15d1340f7f283a87474f1114513d1b8d96b342\n type commit\n tag v1\n\nmerge\n"},
 		{name: "a header unknown to git", tail: "x-something value\nx-bare\n\nsubject\n"},
 		{name: "a signed committer line", tail: "gpgsig x\n committer C <c@example.com> 3 +0000\n\nsubject\n"},
+		{name: "no body", tail: ""},
+		{name: "no body after an encoding", tail: "encoding ISO-8859-1\n"},
+		{name: "no body after a signature", tail: "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n"},
+		{name: "no body after a header unknown to git", tail: "x-bare\n"},
 	} {
 		encoded := []byte(head + c.tail)
 		commit, err := EvsGitCommitDecode(encoded)
@@ -637,6 +667,35 @@ func TestEvsGitCommitDecodeKeepsEveryByte(t *testing.T) {
 		}
 		if oid != evsGitObjectOid(evsGitCommitKind, encoded) {
 			t.Errorf("%s: %s", c.name, oid)
+		}
+	}
+}
+
+// A commit that ends with its headers and one with an empty message part by the blank line, and so
+// by oid, and each decodes to its own form, so replaying either keeps the oid git filed it under.
+func TestEvsGitCommitDecodeKeepsAMissingBody(t *testing.T) {
+	for _, c := range []struct {
+		encoded     string
+		headersOnly bool
+		oid         string
+	}{
+		{encoded: evsGitTestNoBodyHeaders, headersOnly: true, oid: "289a22ea6efbabd7a11aa6cc8a0fe559cfd37863"},
+		{encoded: evsGitTestNoBodyHeaders + "\n", headersOnly: false, oid: "2c7a590c34a0f7202aa9cc764220f8bd198bb115"},
+	} {
+		commit, err := EvsGitCommitDecode([]byte(c.encoded))
+		if err != nil {
+			t.Errorf("%q: %v", c.encoded, err)
+			continue
+		}
+		if commit.HeadersOnly != c.headersOnly || len(commit.Message) != 0 || len(commit.ExtraHeaders) != 0 {
+			t.Errorf("%q: %+v", c.encoded, commit)
+		}
+		oid, err := commit.Oid()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if oid.String() != c.oid {
+			t.Errorf("%q: %s, want %s", c.encoded, oid, c.oid)
 		}
 	}
 }
@@ -696,7 +755,6 @@ func TestEvsGitCommitDecodeRefuses(t *testing.T) {
 		{name: "no committer", encoded: tree + author + "\n"},
 		{name: "a committer first", encoded: tree + committer + author + "\n"},
 		{name: "a parent after the author", encoded: tree + author + parent + committer + "\n"},
-		{name: "no blank line", encoded: tree + author + committer},
 		{name: "a line with no end", encoded: tree + author + "committer B <b@example.com> 2 +0000"},
 		{name: "a second tree", encoded: tree + author + committer + tree + "\n"},
 		{name: "a second parent late", encoded: tree + author + committer + parent + "\n"},
@@ -708,6 +766,9 @@ func TestEvsGitCommitDecodeRefuses(t *testing.T) {
 		{name: "a NUL in a header", encoded: tree + author + committer + "x-a b\x00c\n\n"},
 		{name: "a continuation of nothing", encoded: tree + author + committer + " continued\n\n"},
 		{name: "a header with no end", encoded: tree + author + committer + "x-a b"},
+		{name: "no body after a continuation of nothing", encoded: tree + author + committer + " continued\n"},
+		{name: "no body after a continuation with no end", encoded: tree + author + committer + "gpgsig a\n b"},
+		{name: "no body after a second committer", encoded: tree + author + committer + committer},
 	} {
 		if _, err := EvsGitCommitDecode([]byte(c.encoded)); !errors.Is(err, ErrEvsGitObjectInvalid) {
 			t.Errorf("%s: %v", c.name, err)
@@ -727,6 +788,7 @@ func TestEvsGitCommitEncodeRefuses(t *testing.T) {
 		{name: "a committer in extra headers", commit: &EvsGitCommit{ExtraHeaders: []byte("committer x\n")}},
 		{name: "extra headers opening on a continuation", commit: &EvsGitCommit{ExtraHeaders: []byte(" a\n")}},
 		{name: "a NUL in extra headers", commit: &EvsGitCommit{ExtraHeaders: []byte("a\x00\n")}},
+		{name: "a message after headers that end the commit", commit: &EvsGitCommit{HeadersOnly: true, Message: []byte("subject\n")}},
 	} {
 		if _, err := c.commit.Encode(); !errors.Is(err, ErrEvsGitObjectInvalid) {
 			t.Errorf("%s: %v", c.name, err)
@@ -1943,11 +2005,13 @@ func evsGitCommitSeeds() [][]byte {
 		[]byte(evsGitTestCommitTwo),
 		[]byte(strings.Replace(evsGitTestCommitOne, "\n\n", "\ncommitter x\n\n", 1)),
 		[]byte(strings.Replace(evsGitTestCommitOne, "\n\n", "\ngpgsig x\n y\nencoding z\n\n", 1)),
+		[]byte(evsGitTestNoBodyHeaders),
+		[]byte(evsGitTestNoBodyHeaders + "gpgsig x\n y\n"),
 	}
 }
 
-// A commit that decodes encodes back to its bytes, and one that holds a reserved header anywhere but
-// its place never decodes.
+// A commit that decodes encodes back to its bytes, one that holds a reserved header anywhere but its
+// place never decodes, and a decoded one ends with its headers exactly when it holds no blank line.
 func checkEvsGitCommitDecode(t testing.TB, encoded []byte) {
 	t.Helper()
 	commit, err := EvsGitCommitDecode(encoded)
@@ -1969,6 +2033,9 @@ func checkEvsGitCommitDecode(t testing.TB, encoded []byte) {
 	if !bytes.HasPrefix(headers, []byte("tree ")) || bytes.Count(lines, []byte("\ntree ")) != 1 ||
 		bytes.Count(lines, []byte("\nauthor ")) != 1 || bytes.Count(lines, []byte("\ncommitter ")) != 1 {
 		t.Fatalf("%q", headers)
+	}
+	if commit.HeadersOnly == bytes.Contains(encoded, []byte("\n\n")) {
+		t.Fatalf("%q: headers only is %t", encoded, commit.HeadersOnly)
 	}
 }
 
@@ -2163,4 +2230,37 @@ func TestEvsGitObjectsEqualStockGit(t *testing.T) {
 			t.Errorf("stock git's commit is %s, this says %s", stockCommit, commitOid)
 		}
 	}
+
+	// Commits that end with their headers: git's commit writers always add the blank line, but
+	// hash-object files these and fsck --strict passes them, so imported history can hold one. They get
+	// a repository of their own, holding only what they reach, so fsck's verdict is on them alone.
+	bodiless := filepath.Join(t.TempDir(), "bodiless.git")
+	if err := os.Mkdir(bodiless, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	evsGitTestStockGit(t, bodiless, nil, "init", "--quiet", "--bare", "--object-format=sha1")
+	evsGitTestStockGit(t, bodiless, nil, "hash-object", "-t", "tree", "-w", "--stdin")
+	for index, encoded := range []string{
+		evsGitTestNoBodyHeaders,
+		evsGitTestNoBodyHeaders + "encoding ISO-8859-1\n",
+		evsGitTestNoBodyHeaders + "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n",
+	} {
+		commit, err := EvsGitCommitDecode([]byte(encoded))
+		if err != nil {
+			t.Fatalf("%q: %v", encoded, err)
+		}
+		if !commit.HeadersOnly {
+			t.Errorf("%q has a body", encoded)
+		}
+		commitOid, err := commit.Oid()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stockCommit := evsGitTestStockGit(t, bodiless, []byte(encoded), "hash-object", "-t", "commit", "-w", "--stdin")
+		if stockCommit != commitOid.String() {
+			t.Errorf("stock git files %q as %s, this says %s", encoded, stockCommit, commitOid)
+		}
+		evsGitTestStockGit(t, bodiless, nil, "update-ref", fmt.Sprintf("refs/heads/bodiless-%d", index), stockCommit)
+	}
+	evsGitTestStockGit(t, bodiless, nil, "fsck", "--strict", "--no-dangling")
 }
