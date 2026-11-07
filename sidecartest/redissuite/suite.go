@@ -111,6 +111,7 @@ func cases() []*suiteCase {
 		{name: "set-with-a-ttl-expires", run: caseSetTtl},
 		{name: "ttl-zero-never-expires", run: caseTtlZero},
 		{name: "negative-ttl-is-an-error", run: caseNegativeTtl},
+		{name: "caller-bugs-are-errors-on-every-stream-call", run: caseStreamBugs},
 		{name: "set-if-absent-once", run: caseSetIfAbsent},
 		{name: "compare-and-set", run: caseCompareAndSet},
 		{name: "compare-and-delete", run: caseCompareAndDelete},
@@ -120,7 +121,12 @@ func cases() []*suiteCase {
 		{name: "hash-round-trip", run: caseHash},
 		{name: "hash-absent-key", run: caseHashAbsent},
 		{name: "hash-field-ttl", run: caseHashExpire},
+		{name: "hash-field-ttl-must-be-positive", run: caseHashExpireBugs},
+		{name: "hash-set-clears-a-fields-ttl", run: caseHashSetClearsTtl},
 		{name: "wrong-type-is-an-error", run: caseWrongType},
+		{name: "get-many-reads-another-kind-as-absent", run: caseGetManyKinds},
+		{name: "set-if-absent-sees-any-kind", run: caseSetIfAbsentKinds},
+		{name: "increment-of-a-word-is-an-error", run: caseIncrementWord},
 		{name: "stream-ids-ascend", run: caseStreamIds},
 		{name: "stream-range-after", run: caseStreamRange},
 		{name: "stream-maxlen-keeps-at-least", run: caseStreamMaxLength},
@@ -128,7 +134,10 @@ func cases() []*suiteCase {
 		{name: "stream-group-create-twice", run: caseStreamGroupCreateTwice},
 		{name: "stream-group-block-passes-empty", run: caseStreamBlock},
 		{name: "stream-group-ack-and-claim", run: caseStreamClaim},
+		{name: "stream-claim-pages-by-cursor", run: caseStreamClaimPages},
+		{name: "stream-claim-drops-what-a-trim-removed", run: caseStreamClaimTrimmed},
 		{name: "stream-group-missing-is-an-error", run: caseStreamNoGroup},
+		{name: "stream-ack-of-a-missing-group-is-no-error", run: caseStreamAckNoGroup},
 		{name: "script-replies", run: caseScriptReplies},
 		{name: "script-is-atomic-on-its-slot", run: caseScriptAtomic},
 		{name: "script-error-is-the-calls-error", run: caseScriptError},
@@ -139,6 +148,8 @@ func cases() []*suiteCase {
 		{name: "one-tag-spans-keys", run: caseOneTag},
 		{name: "key-events-fire-for-set-and-increment", run: caseKeyEvents},
 		{name: "key-events-skip-hash-and-stream", run: caseKeyEventsSkip},
+		{name: "key-events-fire-as-often-as-a-master-does", run: caseKeyEventCounts},
+		{name: "key-event-fires-when-the-last-field-expires", run: caseKeyEventLastField},
 		{name: "key-event-pattern-needs-a-star", run: caseKeyEventPattern},
 		{name: "key-event-remove-stops-delivery", run: caseKeyEventRemove},
 		{name: "key-event-fires-on-expiry", run: caseKeyEventExpiry},
@@ -233,6 +244,36 @@ func caseNegativeTtl(ctx context.Context, target *Target, keys *keySpace) error 
 		return errors.New("Increment took a negative ttl")
 	}
 	return nil
+}
+
+// host_redis.go: a count that is not positive, a negative length and a negative wait are the caller's
+// bug, and each would mean something else to Redis, so none reaches it.
+func caseStreamBugs(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("s")
+	if err := target.Redis.StreamGroupCreate(ctx, key, "senders"); err != nil {
+		return err
+	}
+	if _, err := target.Redis.StreamAdd(ctx, key, -1, map[string][]byte{"n": []byte("x")}); err == nil {
+		return errors.New("StreamAdd took a negative length")
+	}
+	for _, count := range []int64{0, -1} {
+		if _, err := target.Redis.StreamRange(ctx, key, "", count); err == nil {
+			return fmt.Errorf("StreamRange took a count of %d", count)
+		}
+		if _, err := target.Redis.StreamGroupRead(ctx, key, "senders", "sender-1", count, 0); err == nil {
+			return fmt.Errorf("StreamGroupRead took a count of %d", count)
+		}
+		if _, _, err := target.Redis.StreamGroupClaim(ctx, key, "senders", "sender-1", 0, "", count); err == nil {
+			return fmt.Errorf("StreamGroupClaim took a count of %d", count)
+		}
+	}
+	if _, err := target.Redis.StreamGroupRead(ctx, key, "senders", "sender-1", 1, -1*time.Second); err == nil {
+		return errors.New("StreamGroupRead took a negative block")
+	}
+	if _, _, err := target.Redis.StreamGroupClaim(ctx, key, "senders", "sender-1", -1*time.Second, "", 1); err == nil {
+		return errors.New("StreamGroupClaim took a negative idle")
+	}
+	return target.Redis.Delete(ctx, []string{key})
 }
 
 func caseSetIfAbsent(ctx context.Context, target *Target, keys *keySpace) error {
@@ -434,16 +475,118 @@ func caseHashExpire(ctx context.Context, target *Target, keys *keySpace) error {
 	return target.Redis.Delete(ctx, []string{key})
 }
 
+// HEXPIRE of zero deletes the fields it names, so a refused call must leave them.
+func caseHashExpireBugs(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("leases")
+	if err := target.Redis.HashSet(ctx, key, map[string][]byte{"f": []byte("1")}); err != nil {
+		return err
+	}
+	for _, ttl := range []time.Duration{0, -1 * time.Second} {
+		if err := target.Redis.HashExpire(ctx, key, []string{"f"}, ttl); err == nil {
+			return fmt.Errorf("HashExpire took a ttl of %v", ttl)
+		}
+	}
+	if _, found, err := target.Redis.HashGet(ctx, key, "f"); err != nil || !found {
+		return fmt.Errorf("a refused HashExpire took the field: %v, %v", found, err)
+	}
+	return target.Redis.Delete(ctx, []string{key})
+}
+
+// A lease renewed by HSET alone would otherwise die at the old ttl.
+func caseHashSetClearsTtl(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("leases")
+	if err := target.Redis.HashSet(ctx, key, map[string][]byte{"f": []byte("1")}); err != nil {
+		return err
+	}
+	if err := target.Redis.HashExpire(ctx, key, []string{"f"}, 100*time.Millisecond); err != nil {
+		return err
+	}
+	if err := target.Redis.HashSet(ctx, key, map[string][]byte{"f": []byte("2")}); err != nil {
+		return err
+	}
+	target.Pass(150 * time.Millisecond)
+	value, found, err := target.Redis.HashGet(ctx, key, "f")
+	if err != nil || !found || string(value) != "2" {
+		return fmt.Errorf("value %q, %v, %v", value, found, err)
+	}
+	return target.Redis.Delete(ctx, []string{key})
+}
+
 func caseWrongType(ctx context.Context, target *Target, keys *keySpace) error {
-	key := keys.key("string")
+	key, hashKey := keys.key("string"), keys.key("hash")
 	if err := target.Redis.Set(ctx, key, []byte("v"), 0); err != nil {
 		return err
 	}
-	if _, _, err := target.Redis.HashGet(ctx, key, "f"); err == nil {
-		return errors.New("a hash read of a string passed")
+	if err := target.Redis.HashSet(ctx, hashKey, map[string][]byte{"f": []byte("v")}); err != nil {
+		return err
 	}
-	if _, err := target.Redis.StreamAdd(ctx, key, 0, map[string][]byte{"f": []byte("v")}); err == nil {
-		return errors.New("a stream add to a string passed")
+	if _, _, err := target.Redis.HashGet(ctx, key, "f"); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a hash read of a string: %v", err)
+	}
+	if _, err := target.Redis.StreamAdd(ctx, key, 0, map[string][]byte{"f": []byte("v")}); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a stream add to a string: %v", err)
+	}
+	if err := target.Redis.StreamGroupCreate(ctx, key, "senders"); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a group on a string: %v", err)
+	}
+	if _, _, err := target.Redis.Get(ctx, hashKey); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a string read of a hash: %v", err)
+	}
+	if _, err := target.Redis.Increment(ctx, hashKey, 0); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("an increment of a hash: %v", err)
+	}
+	if _, err := target.Redis.CompareAndSet(ctx, hashKey, []byte("x"), []byte("y"), 0); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a compare of a hash: %v", err)
+	}
+	if _, err := target.Redis.CompareAndDelete(ctx, hashKey, []byte("x")); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a compare and delete of a hash: %v", err)
+	}
+	if err := target.Redis.HashExpire(ctx, key, []string{"f"}, time.Minute); !errors.Is(err, sidecartest.ErrRedisWrongType) {
+		return fmt.Errorf("a field ttl on a string: %v", err)
+	}
+	return target.Redis.Delete(ctx, []string{key, hashKey})
+}
+
+func caseGetManyKinds(ctx context.Context, target *Target, keys *keySpace) error {
+	key, hashKey := keys.key("string"), keys.key("hash")
+	if err := target.Redis.Set(ctx, key, []byte("v"), 0); err != nil {
+		return err
+	}
+	if err := target.Redis.HashSet(ctx, hashKey, map[string][]byte{"f": []byte("v")}); err != nil {
+		return err
+	}
+	values, err := target.Redis.GetMany(ctx, []string{hashKey, key})
+	if err != nil {
+		return err
+	}
+	if len(values) != 2 || values[0] != nil || string(values[1]) != "v" {
+		return fmt.Errorf("values %q", values)
+	}
+	return target.Redis.Delete(ctx, []string{key, hashKey})
+}
+
+func caseSetIfAbsentKinds(ctx context.Context, target *Target, keys *keySpace) error {
+	hashKey := keys.key("hash")
+	if err := target.Redis.HashSet(ctx, hashKey, map[string][]byte{"f": []byte("v")}); err != nil {
+		return err
+	}
+	set, err := target.Redis.SetIfAbsent(ctx, hashKey, []byte("v"), 0)
+	if err != nil || set {
+		return fmt.Errorf("a key of another kind: %v, %v", set, err)
+	}
+	return target.Redis.Delete(ctx, []string{hashKey})
+}
+
+func caseIncrementWord(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("word")
+	if err := target.Redis.Set(ctx, key, []byte("not a number"), 0); err != nil {
+		return err
+	}
+	if _, err := target.Redis.Increment(ctx, key, 0); err == nil {
+		return errors.New("an increment of a word passed")
+	}
+	if _, err := target.Redis.Increment(ctx, key, time.Minute); err == nil {
+		return errors.New("an increment of a word with a ttl passed")
 	}
 	return target.Redis.Delete(ctx, []string{key})
 }
@@ -659,11 +802,95 @@ func caseStreamClaim(ctx context.Context, target *Target, keys *keySpace) error 
 	return target.Redis.Delete(ctx, []string{key})
 }
 
+// One page at a time, each cursor the next entry to look at, and "0-0" after the last.
+func caseStreamClaimPages(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("wakeq")
+	if err := target.Redis.StreamGroupCreate(ctx, key, "senders"); err != nil {
+		return err
+	}
+	entryIds := []string{}
+	for _, name := range []string{"one", "two", "three"} {
+		entryId, err := target.Redis.StreamAdd(ctx, key, 0, map[string][]byte{"n": []byte(name)})
+		if err != nil {
+			return err
+		}
+		entryIds = append(entryIds, entryId)
+	}
+	if _, err := target.Redis.StreamGroupRead(ctx, key, "senders", "dead-sender", 10, 0); err != nil {
+		return err
+	}
+	target.Pass(120 * time.Millisecond)
+	cursor := ""
+	for index, entryId := range entryIds {
+		entries, nextCursor, err := target.Redis.StreamGroupClaim(ctx, key, "senders", "live-sender", 100*time.Millisecond, cursor, 1)
+		if err != nil {
+			return err
+		}
+		if len(entries) != 1 || entries[0].Id != entryId {
+			return fmt.Errorf("page %d: %d entries", index, len(entries))
+		}
+		want := "0-0"
+		if index+1 < len(entryIds) {
+			want = entryIds[index+1]
+		}
+		if nextCursor != want {
+			return fmt.Errorf("page %d: cursor %q, want %q", index, nextCursor, want)
+		}
+		cursor = nextCursor
+	}
+	return target.Redis.Delete(ctx, []string{key})
+}
+
+// A pending entry a MAXLEN trim removed is gone, and a claim neither returns it nor keeps it pending.
+func caseStreamClaimTrimmed(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("wakeq")
+	if err := target.Redis.StreamGroupCreate(ctx, key, "senders"); err != nil {
+		return err
+	}
+	firstId, err := target.Redis.StreamAdd(ctx, key, 0, map[string][]byte{"n": []byte("first")})
+	if err != nil {
+		return err
+	}
+	if _, err := target.Redis.StreamGroupRead(ctx, key, "senders", "dead-sender", 10, 0); err != nil {
+		return err
+	}
+	const maxLength = 100
+	for index := range 300 {
+		if _, err := target.Redis.StreamAdd(ctx, key, maxLength, map[string][]byte{"n": strconv.AppendInt(nil, int64(index), 10)}); err != nil {
+			return err
+		}
+	}
+	entries, err := target.Redis.StreamRange(ctx, key, "", 1)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 1 || entries[0].Id == firstId {
+		return errors.New("the trim kept the first entry, so this case proves nothing")
+	}
+	target.Pass(120 * time.Millisecond)
+	entries, cursor, err := target.Redis.StreamGroupClaim(ctx, key, "senders", "live-sender", 100*time.Millisecond, "", 10)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 || cursor != "0-0" {
+		return fmt.Errorf("claimed %d, cursor %q", len(entries), cursor)
+	}
+	return target.Redis.Delete(ctx, []string{key})
+}
+
 func caseStreamNoGroup(ctx context.Context, target *Target, keys *keySpace) error {
-	if _, err := target.Redis.StreamGroupRead(ctx, keys.key("absent"), "senders", "sender-1", 1, 0); err == nil {
-		return errors.New("a read of a missing group passed")
+	if _, err := target.Redis.StreamGroupRead(ctx, keys.key("absent"), "senders", "sender-1", 1, 0); !errors.Is(err, sidecartest.ErrRedisNoGroup) {
+		return fmt.Errorf("a read of a missing group: %v", err)
+	}
+	if _, _, err := target.Redis.StreamGroupClaim(ctx, keys.key("absent"), "senders", "sender-1", 0, "", 1); !errors.Is(err, sidecartest.ErrRedisNoGroup) {
+		return fmt.Errorf("a claim of a missing group: %v", err)
 	}
 	return nil
+}
+
+// XACK counts what it acknowledged, and a group gone with a lost key has nothing to count.
+func caseStreamAckNoGroup(ctx context.Context, target *Target, keys *keySpace) error {
+	return target.Redis.StreamGroupAck(ctx, keys.key("absent"), "senders", []string{"1-1"})
 }
 
 var (
@@ -970,6 +1197,148 @@ func caseKeyEventsSkip(ctx context.Context, target *Target, keys *keySpace) erro
 			return errors.New("the fence's event never came")
 		}
 	}
+}
+
+// One step of caseKeyEventCounts: what it does, and how many events its key fires.
+type keyEventStep struct {
+	name  string
+	key   string
+	want  int
+	apply func() error
+}
+
+// A consumer that coalesces events sees what a master fires, so a fake must fire as often. Every step
+// runs, then a fence on the same slot, whose event comes after all of theirs.
+func caseKeyEventCounts(ctx context.Context, target *Target, keys *keySpace) error {
+	redis := target.Redis
+	value := []byte("v")
+	setKey, ttlKey, onceKey, counterKey, ttlCounterKey := keys.key("set"), keys.key("ttl"), keys.key("once"), keys.key("n"), keys.key("nt")
+	casKey, ttlCasKey, cadKey, hashKey, streamKey := keys.key("cas"), keys.key("casttl"), keys.key("cad"), keys.key("h"), keys.key("s")
+	seedKeys := []string{casKey, ttlCasKey, cadKey}
+	for _, key := range seedKeys {
+		if err := redis.Set(ctx, key, value, 0); err != nil {
+			return err
+		}
+	}
+	if err := redis.HashSet(ctx, hashKey, map[string][]byte{"a": value, "b": value}); err != nil {
+		return err
+	}
+	events := make(chan sidecar.RedisKeyEvent, 64)
+	remove, err := redis.AddKeyEventCallback(keys.pattern(), func(event sidecar.RedisKeyEvent) {
+		events <- event
+	})
+	if err != nil {
+		return err
+	}
+	defer remove()
+
+	steps := []*keyEventStep{
+		{name: "SET", key: setKey, want: 1, apply: func() error { return redis.Set(ctx, setKey, value, 0) }},
+		{name: "SET with a ttl fires expire too", key: ttlKey, want: 2, apply: func() error { return redis.Set(ctx, ttlKey, value, time.Minute) }},
+		{name: "SET NX with a ttl, then refused", key: onceKey, want: 2, apply: func() error {
+			if _, err := redis.SetIfAbsent(ctx, onceKey, value, time.Minute); err != nil {
+				return err
+			}
+			_, err := redis.SetIfAbsent(ctx, onceKey, value, time.Minute)
+			return err
+		}},
+		{name: "INCR", key: counterKey, want: 1, apply: func() error {
+			_, err := redis.Increment(ctx, counterKey, 0)
+			return err
+		}},
+		{name: "INCR setting a life, then leaving it", key: ttlCounterKey, want: 3, apply: func() error {
+			if _, err := redis.Increment(ctx, ttlCounterKey, time.Minute); err != nil {
+				return err
+			}
+			_, err := redis.Increment(ctx, ttlCounterKey, time.Minute)
+			return err
+		}},
+		{name: "a refused compare, then a matched one", key: casKey, want: 1, apply: func() error {
+			if _, err := redis.CompareAndSet(ctx, casKey, []byte("other"), value, 0); err != nil {
+				return err
+			}
+			_, err := redis.CompareAndSet(ctx, casKey, value, value, 0)
+			return err
+		}},
+		{name: "a compare with a ttl", key: ttlCasKey, want: 2, apply: func() error {
+			_, err := redis.CompareAndSet(ctx, ttlCasKey, value, value, time.Minute)
+			return err
+		}},
+		{name: "a refused compare and delete, then a matched one", key: cadKey, want: 1, apply: func() error {
+			if _, err := redis.CompareAndDelete(ctx, cadKey, []byte("other")); err != nil {
+				return err
+			}
+			_, err := redis.CompareAndDelete(ctx, cadKey, value)
+			return err
+		}},
+		{name: "HDEL of a field, then the last field", key: hashKey, want: 1, apply: func() error {
+			if err := redis.HashDelete(ctx, hashKey, []string{"a"}); err != nil {
+				return err
+			}
+			return redis.HashDelete(ctx, hashKey, []string{"b"})
+		}},
+		{name: "XADD", key: streamKey, want: 0, apply: func() error {
+			_, err := redis.StreamAdd(ctx, streamKey, 0, map[string][]byte{"f": value})
+			return err
+		}},
+	}
+	for _, step := range steps {
+		if err := step.apply(); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
+		}
+	}
+	// EXPIRE and DEL each fire once, and on what is left of setKey they make it 3
+	if _, err := redis.Expire(ctx, setKey, time.Minute); err != nil {
+		return err
+	}
+	if err := redis.Delete(ctx, []string{setKey, keys.key("never-set")}); err != nil {
+		return err
+	}
+	steps[0].want = 3
+
+	fenceKey := keys.key("fence")
+	if err := redis.Set(ctx, fenceKey, value, 0); err != nil {
+		return err
+	}
+	counts := map[string]int{}
+	timeout := time.After(target.EventTimeout)
+	for counts[fenceKey] == 0 {
+		select {
+		case event := <-events:
+			counts[event.Key] += 1
+		case <-timeout:
+			return fmt.Errorf("the fence's event never came: counts %v", counts)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	for _, step := range steps {
+		if counts[step.key] != step.want {
+			return fmt.Errorf("%s: %d events, want %d", step.name, counts[step.key], step.want)
+		}
+	}
+	return redis.Delete(ctx, []string{ttlKey, onceKey, counterKey, ttlCounterKey, casKey, ttlCasKey, streamKey, fenceKey})
+}
+
+// A field's own expiry is class h, which production leaves off, but a hash emptied is a DEL.
+func caseKeyEventLastField(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("leases")
+	if err := target.Redis.HashSet(ctx, key, map[string][]byte{"f": []byte("1")}); err != nil {
+		return err
+	}
+	events := make(chan sidecar.RedisKeyEvent, 16)
+	remove, err := target.Redis.AddKeyEventCallback(keys.pattern(), func(event sidecar.RedisKeyEvent) {
+		events <- event
+	})
+	if err != nil {
+		return err
+	}
+	defer remove()
+	if err := target.Redis.HashExpire(ctx, key, []string{"f"}, 100*time.Millisecond); err != nil {
+		return err
+	}
+	target.Pass(150 * time.Millisecond)
+	return target.awaitKey(ctx, events, key)
 }
 
 func caseKeyEventPattern(ctx context.Context, target *Target, keys *keySpace) error {

@@ -230,7 +230,7 @@ func TestAScriptReadsTheMastersClock(t *testing.T) {
 	}
 }
 
-func TestAScriptsWritesNotifyAfterItEnds(t *testing.T) {
+func TestAScriptsWritesNotifyByTheirClasses(t *testing.T) {
 	fixture := newRedisFixture(t, nil)
 	heard := make(chan sidecar.RedisKeyEvent, 4)
 	remove, err := fixture.redis.AddKeyEventCallback("{a}*", func(event sidecar.RedisKeyEvent) { heard <- event })
@@ -258,11 +258,80 @@ func TestAScriptsWritesNotifyAfterItEnds(t *testing.T) {
 	if err := fixture.redis.AwaitKeyEvents(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	// the INCR notifies and the HSET does not (D-PROTO-12)
+	// the INCR and the life it set notify, and the HSET does not (D-PROTO-12)
+	if len(heard) != 2 {
+		t.Fatalf("heard %d", len(heard))
+	}
+	for range 2 {
+		if event := <-heard; event.Key != "{a}n" {
+			t.Errorf("event %+v", event)
+		}
+	}
+}
+
+// A master fires inside the command, so a write that applied notifies whatever became of its answer.
+func TestAWriteWhoseAnswerIsLostStillNotifies(t *testing.T) {
+	fixture := newRedisFixture(t, nil)
+	ctx := t.Context()
+	heard := make(chan sidecar.RedisKeyEvent, 4)
+	remove, err := fixture.redis.AddKeyEventCallback("{a}*", func(event sidecar.RedisKeyEvent) { heard <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	if _, err := fixture.faults.Add(&FaultPlan{Op: FaultOpRedis, KeyPrefix: "{a}", Result: ApplyThenDrop}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.redis.Set(ctx, "{a}1", []byte("v"), 0); err == nil {
+		t.Fatal("the answer came through")
+	}
+	if err := fixture.redis.AwaitKeyEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if len(heard) != 1 {
 		t.Fatalf("heard %d", len(heard))
 	}
-	if event := <-heard; event.Key != "{a}n" {
+}
+
+// A subscription hears what fires after it, however far behind the subscriber's queue is.
+func TestACallbackHearsNothingFiredBeforeItWasAdded(t *testing.T) {
+	fixture := newRedisFixture(t, nil)
+	ctx := t.Context()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	holder, err := fixture.redis.AddKeyEventCallback("{hold}*", func(event sidecar.RedisKeyEvent) {
+		close(entered)
+		<-release
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder()
+	// holds the subscriber's goroutine, so the next event queues behind it
+	if err := fixture.redis.Set(ctx, "{hold}1", []byte("v"), 0); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if err := fixture.redis.Set(ctx, "{a}1", []byte("v"), 0); err != nil {
+		t.Fatal(err)
+	}
+	heard := make(chan sidecar.RedisKeyEvent, 4)
+	remove, err := fixture.redis.AddKeyEventCallback("{a}*", func(event sidecar.RedisKeyEvent) { heard <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	close(release)
+	if err := fixture.redis.Set(ctx, "{a}2", []byte("v"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.redis.AwaitKeyEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(heard) != 1 {
+		t.Fatalf("heard %d", len(heard))
+	}
+	if event := <-heard; event.Key != "{a}2" {
 		t.Errorf("event %+v", event)
 	}
 }

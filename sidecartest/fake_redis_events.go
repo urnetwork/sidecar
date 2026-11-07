@@ -20,6 +20,13 @@ type fakeKeyEventCallback struct {
 	callback sidecar.RedisKeyEventFunction
 }
 
+// One event on its way, with who was listening when it fired: a subscription hears nothing older than
+// itself, however far behind the queue is.
+type fakeKeyEventDelivery struct {
+	event     sidecar.RedisKeyEvent
+	callbacks []*fakeKeyEventCallback
+}
+
 type fakeKeyEventSubscriber struct {
 	ctx      context.Context
 	settings *FakeRedisSettings
@@ -27,7 +34,7 @@ type fakeKeyEventSubscriber struct {
 
 	stateLock sync.Mutex
 	callbacks []*fakeKeyEventCallback
-	queue     []sidecar.RedisKeyEvent
+	queue     []*fakeKeyEventDelivery
 	// events taken from the queue and not yet delivered
 	delivering int
 	// closed and replaced when the queue or delivering changes
@@ -62,14 +69,26 @@ func (self *fakeKeyEventSubscriber) resync() {
 func (self *fakeKeyEventSubscriber) enqueue(event sidecar.RedisKeyEvent) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.queue = append(self.queue, event)
+	callbacks := []*fakeKeyEventCallback{}
+	for _, callback := range self.callbacks {
+		if event.Resync || redisGlobMatch(callback.pattern, event.Key) {
+			callbacks = append(callbacks, callback)
+		}
+	}
+	self.queue = append(self.queue, &fakeKeyEventDelivery{event: event, callbacks: callbacks})
 	self.notifyWithLock()
+}
+
+// Whether a callback that was listening still is: one removed since hears nothing more.
+func (self *fakeKeyEventSubscriber) stillListening(callback *fakeKeyEventCallback) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Contains(self.callbacks, callback)
 }
 
 func (self *fakeKeyEventSubscriber) run() {
 	for {
-		var event sidecar.RedisKeyEvent
-		var callbacks []*fakeKeyEventCallback
+		var delivery *fakeKeyEventDelivery
 		var changed chan struct{}
 		func() {
 			self.stateLock.Lock()
@@ -78,11 +97,10 @@ func (self *fakeKeyEventSubscriber) run() {
 			if len(self.queue) == 0 {
 				return
 			}
-			event = self.queue[0]
+			delivery = self.queue[0]
 			self.queue = self.queue[1:]
 			self.delivering = 1
 			changed = nil
-			callbacks = slices.Clone(self.callbacks)
 		}()
 		if changed != nil {
 			select {
@@ -92,9 +110,9 @@ func (self *fakeKeyEventSubscriber) run() {
 				return
 			}
 		}
-		for _, callback := range callbacks {
-			if event.Resync || redisGlobMatch(callback.pattern, event.Key) {
-				self.deliver(callback, event)
+		for _, callback := range delivery.callbacks {
+			if self.stillListening(callback) {
+				self.deliver(callback, delivery.event)
 			}
 		}
 		func() {
