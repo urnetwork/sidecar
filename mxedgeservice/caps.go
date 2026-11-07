@@ -1,8 +1,8 @@
 // Session caps (§15.4's last row, readings 1 and 2), all in memory: Redis and the store are never
-// asked, so a sender over a cap costs one lock. Counts are of sessions now open in this process, so a
-// block's caps do not add across blocks, and an entry is deleted when its count reaches zero: the maps
-// hold only what is connected, never more than the process cap allows, and nothing about a sender
-// outlives its connection (§2.8 mx-1).
+// asked, so a sender over a cap costs one lock. Counts are of sessions now open in this process, so
+// each block holds its own, and a sender spread over the fleet can reach a cap once per block. An entry
+// is deleted when its count reaches zero: the maps hold only what is connected, never more than the
+// process cap allows, and nothing about a sender outlives its connection (§2.8 mx-1).
 //
 // A cap has two moments, because a network is known only from SNI, after STARTTLS's 220, when no SMTP
 // reply can follow in the clear. Admit runs before the banner, and past a cap the session gets 421.

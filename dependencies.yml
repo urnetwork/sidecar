@@ -262,7 +262,7 @@ modules:
     leg: [client, engine, cli, test]
   - module: gopkg.in/yaml.v3
     spdx: Apache-2.0 AND MIT
-    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and is sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
+    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and config/<env>/mxedge.yml in mxedgeservice (§15.15), and is sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
     leg: [engine, test]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
