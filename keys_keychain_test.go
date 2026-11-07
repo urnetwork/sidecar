@@ -347,6 +347,28 @@ func TestOneNetworkCannotOpenAnother(t *testing.T) {
 	}
 }
 
+// One network's whole keychain carried into another's directory, wrap and records together, is not
+// taken for the other network's: every piece opens under U, so only the id inside the wrap can tell.
+func TestAKeychainCopiedOverAnotherNetworkIsFailed(t *testing.T) {
+	instance, backend, keyStore := enrolledInstance(t)
+	enrollTestNetwork(t, instance, otherTestNetworkId)
+	instance.Close()
+	for _, name := range []string{keychainWrapName, keychainRecordsName} {
+		content := readBackend(t, backend, networkFilePath(testNetworkId, name))
+		putBackendFile(t, backend, networkFilePath(otherTestNetworkId, name), content)
+	}
+	reopened := newInstanceOn(t, backend, keyStore)
+	if err := reopened.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.keychainFor(otherTestNetworkId); !errors.Is(err, ErrSidecarStoreFailed) {
+		t.Errorf("err %v", err)
+	}
+	if _, err := reopened.keychainFor(testNetworkId); err != nil {
+		t.Errorf("the network copied from: %v", err)
+	}
+}
+
 // A file carried into another network's directory, at the same path and class, fails there.
 func TestAFileMovedBetweenNetworksFails(t *testing.T) {
 	instance, backend, _ := enrolledInstance(t)
@@ -596,6 +618,22 @@ func TestALockStopsASecretWrite(t *testing.T) {
 	requireError(t, opened.secrets("evs").Delete("key"), ErrSidecarStoreLocked)
 	_, err = opened.secrets("evs").List("")
 	requireError(t, err, ErrSidecarStoreLocked)
+}
+
+// A keychain a caller still holds as the lock lands deletes nothing, and lists nothing.
+func TestAClosedKeychainTouchesNoFile(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	writeStoreFile(t, storeOf(t, instance, testNetworkId, "evs"), "file", []byte("synthetic"))
+	opened, err := instance.keychainFor(testNetworkId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.Lock()
+	before := backendSnapshot(t, backend)
+	requireError(t, opened.removeSealed("evs/file"), ErrSidecarStoreLocked)
+	_, err = opened.listSealed("evs/", "")
+	requireError(t, err, ErrSidecarStoreLocked)
+	requireSameBackend(t, before, backend)
 }
 
 func TestStoreFilesRoundTrip(t *testing.T) {

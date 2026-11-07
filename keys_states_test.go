@@ -483,23 +483,60 @@ func TestThePassOpensALostStoreAndPutsItsWrapBack(t *testing.T) {
 	}
 }
 
-// A store that reads Locked after the pass opened U is left alone, and unlock.wrap with it.
+// A store that reads Locked or Failed after the pass opened U is left alone, even one that would take a
+// write, and unlock.wrap with it: only Absent is a store wanting its wrap back.
 func TestAPassUnlockLeavesALockedStoreAlone(t *testing.T) {
+	for _, status := range []SidecarKeyStoreStatus{SidecarKeyStoreLocked, SidecarKeyStoreFailed} {
+		instance, backend, keyStore := enrolledInstance(t)
+		if err := instance.ChangePass(nil, testPass); err != nil {
+			t.Fatal(err)
+		}
+		instance.Close()
+		before := readBackend(t, backend, unlockWrapPath)
+		writeCount := keyStore.writeCount
+		keyStore.readStatus = &status
+
+		reopened := newInstanceOn(t, backend, keyStore)
+		if err := reopened.Unlock(testPass); err != nil {
+			t.Fatal(err)
+		}
+		requireState(t, reopened, SidecarInstanceOpen)
+		if !bytes.Equal(before, readBackend(t, backend, unlockWrapPath)) {
+			t.Errorf("status %d: unlock.wrap changed", status)
+		}
+		if keyStore.writeCount != writeCount {
+			t.Errorf("status %d: the store was written", status)
+		}
+	}
+}
+
+// §5.16's risk: a host reports a lock as absence. The new W finds the store locked, and the wrap that
+// still works stays in the file, so the next unlock needs no person.
+func TestAStoreThatRefusesAWrapBackKeepsTheOldOne(t *testing.T) {
 	instance, backend, keyStore := enrolledInstance(t)
 	if err := instance.ChangePass(nil, testPass); err != nil {
 		t.Fatal(err)
 	}
 	instance.Close()
 	before := readBackend(t, backend, unlockWrapPath)
-	keyStore.answer(SidecarKeyStoreLocked)
 
+	absent := SidecarKeyStoreAbsent
+	locked := SidecarKeyStoreLocked
+	keyStore.readStatus = &absent
+	keyStore.writeStatus = &locked
 	reopened := newInstanceOn(t, backend, keyStore)
 	if err := reopened.Unlock(testPass); err != nil {
 		t.Fatal(err)
 	}
-	requireState(t, reopened, SidecarInstanceOpen)
 	if !bytes.Equal(before, readBackend(t, backend, unlockWrapPath)) {
-		t.Error("unlock.wrap changed in front of a locked store")
+		t.Error("unlock.wrap moved to a W the store never took")
+	}
+	reopened.Close()
+
+	keyStore.recover()
+	again := newInstanceOn(t, backend, keyStore)
+	if err := again.Unlock(nil); err != nil {
+		t.Errorf("the store's wrap stopped working: %v", err)
 	}
 }
 
@@ -836,7 +873,8 @@ func TestARightPassClearsTheAttempts(t *testing.T) {
 	}
 }
 
-// A clock stepped back does not free an attempt.
+// A clock stepped back frees no attempt, and locks the person out for one window, not for as long as
+// the clock was wrong.
 func TestABackwardClockFreesNoAttempt(t *testing.T) {
 	backend := NewSidecarMemoryBackend()
 	settings := cheapKeychainSettings()
@@ -854,6 +892,31 @@ func TestABackwardClockFreesNoAttempt(t *testing.T) {
 	}
 	clock.advance(-24 * time.Hour)
 	requireError(t, reopened.Unlock(testPass), ErrSidecarPassLimited)
+	clock.advance(10*time.Minute - 1*time.Second)
+	requireError(t, reopened.Unlock(testPass), ErrSidecarPassLimited)
+	clock.advance(1 * time.Second)
+	if err := reopened.Unlock(testPass); err != nil {
+		t.Error(err)
+	}
+}
+
+// A refusal past the limit writes nothing once the window is settled, so a loop hammering a locked
+// instance cannot hammer its disk.
+func TestARefusalPastTheLimitWritesNothing(t *testing.T) {
+	backend := NewSidecarMemoryBackend()
+	instance := newInstanceOn(t, backend, nil)
+	if err := instance.Unlock(testPass); err != nil {
+		t.Fatal(err)
+	}
+	instance.Close()
+	reopened := newInstanceOn(t, backend, nil)
+	wrong := []byte("synthetic wrong pass")
+	for i := 0; i < 5; i += 1 {
+		requireError(t, reopened.Unlock(wrong), ErrSidecarPassRefused)
+	}
+	before := backendSnapshot(t, backend)
+	requireError(t, reopened.Unlock(wrong), ErrSidecarPassLimited)
+	requireSameBackend(t, before, backend)
 }
 
 // If the count cannot reach the disk, the guess does not run.

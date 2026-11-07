@@ -484,9 +484,6 @@ func (self *SidecarInstance) unlockWithLock(passphrase []byte) error {
 			// this file holds U under the pass alone, so only the pass opens it
 			return self.settle(SidecarInstanceLocked, ErrSidecarStoreLocked)
 		}
-		if len(value) != localKeyByteCount {
-			return self.settle(SidecarInstanceFailed, errWrappedKeyOpen)
-		}
 		testHookSecret("W", value)
 		unlockKey, err := wrap.store.wrapped.open(value, wrap.store.additionalData(wrap.generation))
 		if err != nil {
@@ -543,25 +540,37 @@ func (self *SidecarInstance) unlockByPassWithLock(wrap *unlockWrap, passphrase [
 }
 
 // Refuses a pass past §5.4's limit, or counts this one, durably. Only a wrong pass stays counted, since
-// the caller clears them on a right one. A clock that stepped back keeps an attempt in the window, never
-// frees one.
+// the caller clears them on a right one. An attempt the clock has stepped back behind is held to now,
+// which frees none of them early, and keeps a clock set wrong for a day from refusing the pass for that
+// day: it is written back even when this refuses, or the next refusal would start over.
 func (self *SidecarInstance) countPassAttemptWithLock() error {
 	now := self.now().UnixMilli()
 	window := self.settings.PassAttemptInterval.Milliseconds()
-	return self.editDocumentWithLock(func(document *sidecarStateDocument) error {
-		attempts := slices.DeleteFunc(document.PassAttemptMillis, func(attemptMillis int64) bool {
-			return attemptMillis+window <= now
-		})
-		for i := range attempts {
-			attempts[i] = min(attempts[i], now)
-		}
+	recorded := self.currentDocument().PassAttemptMillis
+	attempts := slices.DeleteFunc(slices.Clone(recorded), func(attemptMillis int64) bool {
+		return attemptMillis+window <= now
+	})
+	for i := range attempts {
+		attempts[i] = min(attempts[i], now)
+	}
+	limited := self.settings.PassAttemptCount <= len(attempts)
+	if limited && slices.Equal(attempts, recorded) {
+		return ErrSidecarPassLimited
+	}
+	if !limited {
+		attempts = append(attempts, now)
+	}
+	err := self.editDocumentWithLock(func(document *sidecarStateDocument) error {
 		document.PassAttemptMillis = attempts
-		if self.settings.PassAttemptCount <= len(attempts) {
-			return ErrSidecarPassLimited
-		}
-		document.PassAttemptMillis = append(attempts, now)
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if limited {
+		return ErrSidecarPassLimited
+	}
+	return nil
 }
 
 // Clears the attempts once a pass opened U.

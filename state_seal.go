@@ -277,10 +277,8 @@ func (self *sealReader) nextChunk() error {
 			return storeFault(peekErr)
 		}
 	case err == io.EOF || err == io.ErrUnexpectedEOF:
+		// nothing left at all, or less than a tag, fails below like any other chunk
 		final = true
-		if byteCount < sealTagByteCount {
-			return errSealOpen
-		}
 	default:
 		return storeFault(err)
 	}
