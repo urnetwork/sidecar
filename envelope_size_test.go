@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
+	connectprotocol "github.com/urnetwork/connect/protocol"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
@@ -69,10 +70,13 @@ func testSizeStreamHeader(messageType protocol.MessageType) *protocol.Envelope {
 	return header
 }
 
-// What connect's wrapper adds to a payload of this size (connect/subprotocol.go:110-116).
+// What byteCount of payload takes inside connect's wrapper, which connect encodes byte for byte as this
+// message (connect/subprotocol.go:138-142).
 func testSizeWrapped(byteCount int) int {
-	return protowire.SizeTag(1) + protowire.SizeVarint(SubprotocolId) + protowire.SizeTag(2) +
-		protowire.SizeBytes(byteCount)
+	return proto.Size(&connectprotocol.SubprotocolMessage{
+		SubprotocolId: SubprotocolId,
+		MessageBytes:  make([]byte, byteCount),
+	})
 }
 
 // Each envelope's length on the wire, through the codec, which is what refuses one past the limit.
