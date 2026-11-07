@@ -296,13 +296,14 @@ func TestMlsTreeKemVectors(t *testing.T) {
 				if !bytes.Equal(pathSecret, entry.PathSecrets[leaf]) {
 					t.Errorf("vector %d sender %d leaf %d: path secret %x, want %x", index, sender, leaf, pathSecret, entry.PathSecrets[leaf])
 				}
-				commitSecret, err := receiver.adoptPathSecret(merged, sender, updatePath, position, pathSecret)
+				received, err := receiver.derivePathFrom(merged, sender, updatePath, position, pathSecret)
 				if err != nil {
 					t.Fatalf("vector %d sender %d leaf %d: %v", index, sender, leaf, err)
 				}
-				if !bytes.Equal(commitSecret, entry.CommitSecret) {
-					t.Errorf("vector %d sender %d leaf %d: commit secret %x, want %x", index, sender, leaf, commitSecret, entry.CommitSecret)
+				if !bytes.Equal(received.commitSecret, entry.CommitSecret) {
+					t.Errorf("vector %d sender %d leaf %d: commit secret %x, want %x", index, sender, leaf, received.commitSecret, entry.CommitSecret)
 				}
+				received.adopt(receiver)
 				if !receiver.consistentWith(merged) {
 					t.Errorf("vector %d sender %d leaf %d: private state left stale", index, sender, leaf)
 				}
@@ -334,12 +335,12 @@ func TestMlsTreeKemVectors(t *testing.T) {
 				if leaf == sender {
 					continue
 				}
-				commitSecret, err := secrets.cloneForTest().receiveUpdatePath(receiverTree, sender, newPath, groupContext, nil)
+				received, err := secrets.cloneForTest().receiveUpdatePath(receiverTree, sender, newPath, groupContext, nil)
 				if err != nil {
 					t.Fatalf("vector %d sender %d leaf %d: %v", index, sender, leaf, err)
 				}
-				if !bytes.Equal(commitSecret, prepared.commitSecret) {
-					t.Errorf("vector %d sender %d leaf %d: commit secret %x, want %x", index, sender, leaf, commitSecret, prepared.commitSecret)
+				if !bytes.Equal(received.commitSecret, prepared.commitSecret) {
+					t.Errorf("vector %d sender %d leaf %d: commit secret %x, want %x", index, sender, leaf, received.commitSecret, prepared.commitSecret)
 				}
 			}
 		}
