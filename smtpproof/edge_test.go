@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/crypto/cryptobyte"
@@ -180,6 +181,56 @@ func TestE1RefusesEveryClientHelloOutsideItsShape(t *testing.T) {
 	}
 }
 
+func TestE1RefusesAServerNameAnMxCouldReadAnotherWay(t *testing.T) {
+	// E1 compares one name, so a hello that holds a second must not reach an MX that reads the other
+	name := func(extensions *cryptobyte.Builder, names ...string) {
+		extensions.AddUint16(tlsExtensionServerName)
+		extensions.AddUint16LengthPrefixed(func(content *cryptobyte.Builder) {
+			content.AddUint16LengthPrefixed(func(list *cryptobyte.Builder) {
+				for _, entry := range names {
+					list.AddUint8(0)
+					list.AddUint16LengthPrefixed(func(value *cryptobyte.Builder) { value.AddBytes([]byte(entry)) })
+				}
+			})
+		})
+	}
+	cases := []struct {
+		name       string
+		extensions func(extensions *cryptobyte.Builder)
+	}{
+		{name: "a second name in the list", extensions: func(extensions *cryptobyte.Builder) {
+			name(extensions, testMxHost, "other.example")
+		}},
+		{name: "a second server_name extension", extensions: func(extensions *cryptobyte.Builder) {
+			name(extensions, "other.example")
+			name(extensions, testMxHost)
+		}},
+		{name: "a repeated extension of any kind", extensions: func(extensions *cryptobyte.Builder) {
+			name(extensions, testMxHost)
+			extensions.AddUint16(tlsExtensionSupportedGroups)
+			extensions.AddUint16(0)
+			extensions.AddUint16(tlsExtensionSupportedGroups)
+			extensions.AddUint16(0)
+		}},
+	}
+	for _, c := range cases {
+		builder := cryptobyte.NewBuilder(nil)
+		builder.AddUint16(tlsVersion12)
+		builder.AddBytes(make([]byte, tlsRandomBytes))
+		builder.AddUint8(0)
+		builder.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) { child.AddUint16(tlsSuiteAes128GcmSha256) })
+		builder.AddUint8LengthPrefixed(func(child *cryptobyte.Builder) { child.AddUint8(0) })
+		builder.AddUint16LengthPrefixed(c.extensions)
+		body, err := builder.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+		_, err = gate.ClientRecord(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, tlsHandshakeMessage(tlsHandshakeClientHello, body)))
+		testExpectCheck(t, c.name, err, checkE1)
+	}
+}
+
 func TestE1RefusesAServerHelloOutsideItsSuites(t *testing.T) {
 	const tlsSuiteAes256GcmSha384 = 0x1302
 	supportedVersions13 := []byte{0, 43, 0, 2, 0x03, 0x04}
@@ -202,6 +253,20 @@ func TestE1RefusesAServerHelloOutsideItsSuites(t *testing.T) {
 		}
 		testExpectCheck(t, c.name, gate.ServerRecord(c.record), checkE1)
 	}
+}
+
+func TestE1TakesAChangeCipherSpecBeforeAClientHelloOnlyAfterARetry(t *testing.T) {
+	dummy := tlsFrameRecord(tlsRecordChangeCipherSpec, tlsVersion12, []byte{1})
+	gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+	testExpectCheck(t, "before any hello", gate.ServerRecord(dummy), checkE1)
+
+	gate = newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+	gate.helloRetried = true
+	if err := gate.ServerRecord(dummy); err != nil {
+		t.Errorf("after a retry: %v", err)
+	}
+	testExpectCheck(t, "another length", gate.ServerRecord(tlsFrameRecord(tlsRecordChangeCipherSpec, tlsVersion12, []byte{1, 1})), checkE1)
+	testExpectCheck(t, "any other record", gate.ServerRecord(tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 20))), checkE1)
 }
 
 func TestE1RefusesAClientFlightOtherThanFinished(t *testing.T) {
@@ -427,6 +492,21 @@ func testE2FlightMutation(t *testing.T, fixture *testGateFixture, handshakeType 
 	}
 	t.Fatal("the trace disclosed no SHTS")
 	return nil
+}
+
+func TestE2RefusesAnSHTSOfAnotherLength(t *testing.T) {
+	// HMAC pads a short key with zeros, so SHTS with a zero octet added opens the same flight. Z1 would
+	// fail it later; the length is refused here, and before any key is derived from it
+	for _, leg := range testTlsLegs()[:2] {
+		fixture := testBdatGateCapture(t, leg)
+		before, shts, _ := fixture.splitFlight13(t)
+		for _, disclosed := range [][]byte{nil, shts[:len(shts)-1], append(bytes.Clone(shts), 0)} {
+			gate := fixture.gate(&testFixedVerifier{})
+			fixture.feed(t, gate, before)
+			_, err := gate.DiscloseShts(disclosed)
+			testExpectCheck(t, leg.name, err, checkE2)
+		}
+	}
 }
 
 func TestE2RefusesABadServerSignature(t *testing.T) {
@@ -810,6 +890,137 @@ func TestE3RefusesPartsOutOfOrder(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestE3RefusesARecordOfAnotherVersion(t *testing.T) {
+	// SPEC.md section 6 fixes 0303, and an unopened body record is compared with nothing else
+	for _, leg := range testTlsLegs() {
+		open := testOpen(t, testBdatGateCapture(t, leg), &testFixedVerifier{})
+		record := bytes.Clone(open.client[0])
+		record[2] = 1
+		_, err := open.gate.ClientRecord(record)
+		testExpectCheck(t, leg.name, err, checkE1)
+	}
+}
+
+func TestE3RefusesBdatRecordsThatShareASequenceNumber(t *testing.T) {
+	// QUIT proven at the header block's own number would take its place in the gate, and BDAT 0 LAST
+	// and that QUIT would then pass with no header block behind them
+	for _, leg := range testTlsLegs() {
+		fixture := testBdatGateCapture(t, leg)
+		for _, offset := range []uint64{0, 1} {
+			open := testOpen(t, fixture, &testFixedVerifier{})
+			open.verifyThrough(t, 2)
+			part := *fixture.parts[2]
+			for uint64(len(open.gate.serverRecords)) < part.ServerRecordCount {
+				if err := open.gate.ServerRecord(open.server[0]); err != nil {
+					t.Fatal(err)
+				}
+				open.server = open.server[1:]
+			}
+			part.LastRecord = part.FirstRecord + offset
+			_, err := open.gate.VerifyPart(context.Background(), &part)
+			testExpectCheck(t, leg.name, err, checkE3)
+		}
+	}
+}
+
+// Holds the first verification until told, so that another part can pass it.
+type testHeldVerifier struct {
+	stateLock sync.Mutex
+	hold      bool
+	reached   chan struct{}
+	release   chan struct{}
+}
+
+func (self *testHeldVerifier) verifyPart(ctx context.Context, statement *partStatement, proof []byte) error {
+	hold := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		hold := self.hold
+		self.hold = false
+		return hold
+	}()
+	if hold {
+		close(self.reached)
+		<-self.release
+	}
+	return nil
+}
+
+// A gate at pi3, the first part it will see held in verification, and what that call returns.
+func testHeldPart(t *testing.T, fixture *testGateFixture, held *sidecar.SmtpProofPart) (*testOpenGate, *testHeldVerifier, chan error) {
+	t.Helper()
+	verifier := &testHeldVerifier{reached: make(chan struct{}), release: make(chan struct{})}
+	open := testOpen(t, fixture, verifier)
+	open.verifyThrough(t, 2)
+	for uint64(len(open.gate.serverRecords)) < fixture.parts[2].ServerRecordCount {
+		if err := open.gate.ServerRecord(open.server[0]); err != nil {
+			t.Fatal(err)
+		}
+		open.server = open.server[1:]
+	}
+	verifier.stateLock.Lock()
+	verifier.hold = true
+	verifier.stateLock.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := open.gate.VerifyPart(context.Background(), held)
+		done <- err
+	}()
+	<-verifier.reached
+	return open, verifier, done
+}
+
+func TestE3APartVerifiedBesideAnotherCannotReplaceIt(t *testing.T) {
+	// both passed the order checks against pi2, and a replacement's checks never saw the other one, so
+	// the one that lands second must not change what the gate holds
+	for _, leg := range testTlsLegs() {
+		fixture := testBdatGateCapture(t, leg)
+		other := *fixture.parts[2]
+		other.Proof = []byte("another proof")
+		other.Records = testCloneByteSlices(fixture.parts[2].Records)
+		other.Records[1][len(other.Records[1])-1] ^= 1
+		open, verifier, done := testHeldPart(t, fixture, &other)
+		if _, err := open.gate.VerifyPart(context.Background(), fixture.parts[2]); err != nil {
+			t.Fatalf("%s: %v", leg.name, err)
+		}
+		close(verifier.release)
+		err := <-done
+		testExpectCheck(t, leg.name, err, checkE3)
+		if errors.Is(err, sidecar.ErrSmtpRecordCut) {
+			t.Errorf("%s: an overlap is no cut", leg.name)
+		}
+		if !bytes.Equal(open.gate.parts[2].part.Proof, fixture.parts[2].Proof) {
+			t.Errorf("%s: the part that landed second replaced the first", leg.name)
+		}
+	}
+}
+
+func TestE3AResendBesideItsOriginalIsIdempotent(t *testing.T) {
+	// a retried RPC can overlap the call it retries, and an honest send must survive that
+	for _, leg := range testTlsLegs() {
+		fixture := testBdatGateCapture(t, leg)
+		open, verifier, done := testHeldPart(t, fixture, fixture.parts[2])
+		if _, err := open.gate.VerifyPart(context.Background(), fixture.parts[2]); err != nil {
+			t.Fatalf("%s: %v", leg.name, err)
+		}
+		close(verifier.release)
+		if err := <-done; err != nil {
+			t.Errorf("%s: %v", leg.name, err)
+		}
+		if len(open.gate.parts) != 3 {
+			t.Errorf("%s: %d parts", leg.name, len(open.gate.parts))
+		}
+	}
+}
+
+func testCloneByteSlices(values [][]byte) [][]byte {
+	clones := make([][]byte, 0, len(values))
+	for _, value := range values {
+		clones = append(clones, bytes.Clone(value))
+	}
+	return clones
 }
 
 func TestE3ResendingAPartIsIdempotent(t *testing.T) {

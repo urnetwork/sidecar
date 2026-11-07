@@ -1,0 +1,62 @@
+# Every field of protocol/gkm.proto, for I-18: its number and type, which pin the messages no design fence pins, and
+# the §2.8 row that shows it. `sees` quotes that row, so a row that stops saying it fails. A field a row does not yet
+# name says so under `pending`, with what §10 requires it for: those wait on a design-records edit of the row, never
+# on the field, and each stays visible here until the row names it.
+
+GkmCommitHeader.generation: {number: 1, type: uint64, row: gkm-2, sees: "generation"}
+GkmCommitHeader.auth: {number: 2, type: AuthPin, row: gkm-2, sees: "auth pin"}
+
+UrMlsCredential.sidecar_id: {number: 1, type: bytes, row: gkm-4, sees: "credential: sidecar_id"}
+UrMlsCredential.identity_public_key: {number: 2, type: bytes, row: gkm-4, sees: "identity key"}
+UrMlsCredential.identity_alg: {number: 3, type: string, row: gkm-4, pending: "10.4's field; api-5 already shows a sidecar's algorithm, gkm-4 does not name it"}
+UrMlsCredential.mls_signature_public_key: {number: 4, type: bytes, row: gkm-4, sees: "signature key"}
+UrMlsCredential.cipher_suite: {number: 5, type: uint32, row: gkm-4, sees: "suite"}
+UrMlsCredential.not_after: {number: 6, type: int64, row: gkm-4, sees: "not_after"}
+UrMlsCredential.admission_sha256: {number: 7, type: bytes, row: gkm-4, sees: "admission hash"}
+UrMlsCredential.identity_signature: {number: 8, type: bytes, row: gkm-4, sees: "signature)"}
+
+GenRotate.group_id: {number: 1, type: bytes, row: gkm-7, sees: "GenRotates (group"}
+GenRotate.repo_id: {number: 2, type: bytes, row: gkm-1, sees: "repo_id"}
+GenRotate.generation: {number: 3, type: uint64, row: gkm-7, sees: "GenRotates (group, generation"}
+GenRotate.parent_commitment: {number: 4, type: bytes, row: gkm-7, sees: "parent and own commitments"}
+GenRotate.commitment: {number: 5, type: bytes, row: gkm-7, sees: "parent and own commitments"}
+GenRotate.cause: {number: 6, type: uint32, row: gkm-7, sees: "cause"}
+GenRotate.auth: {number: 7, type: AuthPin, row: gkm-7, sees: "auth pin"}
+GenRotate.time_ms: {number: 8, type: int64, row: gkm-7, sees: "auth pin, time"}
+GenRotate.holders_sha256: {number: 9, type: bytes, row: gkm-7, sees: "holders hash"}
+GenRotate.wrap_count: {number: 10, type: uint32, row: gkm-7, pending: "10.9's staged row reads it; gkm can count the objects, gkm-7 does not name the count"}
+GenRotate.genlink: {number: 11, type: bytes, row: gkm-7, sees: "GenLink"}
+GenRotate.leaf_wrap: {number: 12, type: LeafWrap, row: gkm-7, sees: "leaf-wrap ciphertexts"}
+GenRotate.drop_public_key: {number: 13, type: bytes, row: gkm-7, sees: "the drop public key"}
+GenRotate.drop_not_after_ms: {number: 14, type: int64, row: gkm-7, pending: "10.5's depositor rule reads it; gkm-7 names the key and not its expiry"}
+
+LeafWrap.epoch: {number: 1, type: uint64, row: gkm-2, sees: "group_id, epoch"}
+LeafWrap.ciphertext: {number: 2, type: bytes, row: gkm-7, sees: "leaf-wrap ciphertexts"}
+
+KeyDelivery.group_id: {number: 1, type: bytes, row: gkm-7, sees: "wraps (group"}
+KeyDelivery.generation: {number: 2, type: uint64, row: gkm-7, sees: "wraps (group, generation"}
+KeyDelivery.commitment: {number: 3, type: bytes, row: gkm-7, sees: "generation, commitment"}
+KeyDelivery.recipient: {number: 4, type: bytes, row: gkm-7, sees: "recipient sidecar_id or delegation_id"}
+KeyDelivery.recipient_key_sha256: {number: 5, type: bytes, row: gkm-7, sees: "the SHA-256 of the key sealed to"}
+KeyDelivery.delivery_kind: {number: 6, type: uint32, row: gkm-7, sees: "staged or late"}
+KeyDelivery.auth: {number: 7, type: AuthPin, row: gkm-7, sees: "a late one's auth pin and time"}
+KeyDelivery.time_ms: {number: 8, type: int64, row: gkm-7, sees: "a late one's auth pin and time"}
+KeyDelivery.ciphertext: {number: 9, type: bytes, row: gkm-7, sees: "ciphertext, signer"}
+
+ReaderWrap.wrap: {number: 1, type: KeyDelivery, row: gkm-7, sees: "staged and late wraps"}
+
+DelegationWrap.wrap: {number: 1, type: KeyDelivery, row: gkm-7, sees: "staged and late wraps"}
+
+ReaderKey.sidecar_id: {number: 1, type: bytes, row: gkm-4, sees: "ReaderKeys"}
+ReaderKey.xwing_public_key: {number: 2, type: bytes, row: gkm-4, sees: "ReaderKeys"}
+ReaderKey.not_after: {number: 3, type: int64, row: gkm-4, sees: "ReaderKeys"}
+
+GroupForm.repo_id: {number: 1, type: bytes, row: gkm-1, sees: "GroupForm chain (repo_id"}
+GroupForm.group_id: {number: 2, type: bytes, row: gkm-1, sees: "group_id"}
+GroupForm.previous_group_id: {number: 3, type: bytes, row: gkm-1, sees: "previous group"}
+GroupForm.generation: {number: 4, type: uint64, row: gkm-1, sees: "previous group, generation"}
+
+GkmHint.group_id: {number: 1, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}
+GkmHint.epoch: {number: 2, type: uint64, row: connect-4, sees: "server-held ids, kinds and versions"}
+GkmHint.kind: {number: 3, type: GkmHintKind, row: connect-4, sees: "server-held ids, kinds and versions"}
+GkmHint.recipient: {number: 4, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}

@@ -271,7 +271,9 @@ func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuit
 			api.AssertIsEqual(isWsp, 0)
 		}
 		nameStart := api.Mul(lineStart, api.Sub(1, isWsp))
-		api.AssertIsEqual(api.Mul(nameStart, isColon[i]), 0)
+		// nor does a name start with a dot, which an MX reading DATA would delete (RFC 5321 §4.5.2),
+		// leaving a field no fingerprint below saw
+		api.AssertIsEqual(api.Mul(nameStart, api.Add(isColon[i], api.IsZero(api.Sub(values[i], octetDot)))), 0)
 		naming := api.Add(inName, nameStart)
 		api.AssertIsEqual(api.Mul(naming, api.Add(isWsp, crActive[i])), 0)
 		inName = api.Mul(naming, api.Sub(1, isColon[i]))
@@ -503,13 +505,16 @@ func assignBodyRecord(shape *partShape, statement *partStatement, record *partRe
 		return 0, err
 	}
 	contentBytes := len(ciphertext)
-	template := make([]templateOctet, len(ciphertext))
 	if session.version == tlsVersion13 {
 		contentBytes -= tlsInnerTypeBytes
-		template[contentBytes] = templateOctet{kind: templateLiteral, literal: tlsRecordApplicationData}
 	}
-	if contentBytes == 0 {
+	// a hostile sidecar's record can be all tag, which in 1.3 leaves this at -1
+	if contentBytes <= 0 {
 		return 0, errors.New("empty body record")
+	}
+	template := make([]templateOctet, len(ciphertext))
+	if session.version == tlsVersion13 {
+		template[contentBytes] = templateOctet{kind: templateLiteral, literal: tlsRecordApplicationData}
 	}
 	blocks := make([]*poolBlock, len(slots))
 	for i, slot := range slots {

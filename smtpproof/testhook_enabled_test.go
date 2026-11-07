@@ -79,6 +79,19 @@ func TestHooksSeeEveryTls13Secret(t *testing.T) {
 	}
 }
 
+func TestHooksSeeWhatTheEdgeHolds(t *testing.T) {
+	// the edge's one secret and what it derives, so the privacy harness can look for them where they
+	// must not be (D-SMTP-10)
+	fixture := testBdatGateCapture(t, testTlsLegs()[0])
+	log := testInstallHookLog(t)
+	fixture.replayHandshake(t, fixture.gate(&testFixedVerifier{}))
+	for _, kind := range []string{"edge_shts", "edge_server_handshake_key", "edge_server_handshake_iv"} {
+		if len(log.kindSecrets[kind]) == 0 {
+			t.Errorf("%s was never hooked", kind)
+		}
+	}
+}
+
 func TestHooksSeeEveryTls12Secret(t *testing.T) {
 	log := testInstallHookLog(t)
 	pair := testHandshake(t, &tls.Config{
