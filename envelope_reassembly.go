@@ -148,9 +148,10 @@ func newReassembler(
 	return self
 }
 
-// Waits for a first group, then sleeps to the earliest deadline. A group added meanwhile cannot beat
-// that deadline, since every deadline is its last chunk's time plus one timeout, so only an empty set
-// has to be woken.
+// While any group is held, sleeps to the earliest deadline and then drops what is due. A group added
+// during the sleep cannot beat that deadline, since every deadline is its last chunk's time plus one
+// timeout, so only an empty set has to be woken. A group's arrival only wakes run to sleep: every drop
+// follows a wait the clock fired, so whoever moves the clock decides when run drops anything.
 func (self *reassembler) run() {
 	defer close(self.runDone)
 	defer self.dropAll()
@@ -164,15 +165,12 @@ func (self *reassembler) run() {
 			}
 			continue
 		}
-		timeout := self.expire()
-		if timeout <= 0 {
-			continue
-		}
 		select {
 		case <-self.ctx.Done():
 			return
-		case <-self.clock.After(timeout):
+		case <-self.clock.After(self.untilNextDeadline()):
 		}
+		self.expire()
 	}
 }
 
@@ -198,13 +196,32 @@ func (self *reassembler) dropAll() {
 	self.budget.releaseReassembly(freedByteCount)
 }
 
-// Drops every group past its deadline, and says how long until the next one, or 0 when none is left.
-func (self *reassembler) expire() time.Duration {
+// How long from now until the earliest deadline, which is due when this is not positive, and 0 when no
+// group is held.
+func (self *reassembler) untilNextDeadline() time.Duration {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	var nextDeadline time.Time
+	for _, peer := range self.sourceIdPeers {
+		for _, group := range peer.keyGroups {
+			if nextDeadline.IsZero() || group.deadline.Before(nextDeadline) {
+				nextDeadline = group.deadline
+			}
+		}
+	}
+	if nextDeadline.IsZero() {
+		return 0
+	}
+	return nextDeadline.Sub(now)
+}
+
+// Drops every group past its deadline.
+func (self *reassembler) expire() {
 	testHookBarrier("envelope.reassembly_expire.before", "")
 	defer testHookBarrier("envelope.reassembly_expire.after", "")
 	now := self.clock.Now()
 	var freedByteCount int64
-	var nextDeadline time.Time
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -213,17 +230,11 @@ func (self *reassembler) expire() time.Duration {
 				if !now.Before(group.deadline) {
 					freedByteCount += self.removeWithLock(sourceId, key)
 					self.stats.expiredCount += 1
-				} else if nextDeadline.IsZero() || group.deadline.Before(nextDeadline) {
-					nextDeadline = group.deadline
 				}
 			}
 		}
 	}()
 	self.budget.releaseReassembly(freedByteCount)
-	if nextDeadline.IsZero() {
-		return 0
-	}
-	return nextDeadline.Sub(now)
 }
 
 // Takes a group out and says what it reserved, which the caller gives back to the budget once it holds

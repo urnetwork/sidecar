@@ -142,6 +142,36 @@ func TestCapsAreReadAgainAsAGroupGoesIn(t *testing.T) {
 	}
 }
 
+// run drops a group only once its clock fires a wait, never because a group arrived, so whoever moves
+// the clock decides every sweep. The group goes in already due here, its deadline read before the clock
+// moved: run wakes for it and must leave it to the clock, so the sweep the test calls is what takes it.
+func TestRunSweepsOnlyWhenItsClockFires(t *testing.T) {
+	settings := DefaultSidecarProtocolSettings()
+	reassembly := newDefaultTestReassembly(t)
+	held, release := testHoldBarrier(t, "envelope.reassembly_reserve", testPeerA.String())
+	offered := testOfferAsync(reassembly, testPeerA, testFirstChunk(t, 1, 5000))
+	<-held
+	reassembly.clock.Advance(settings.ReassemblyIdleTimeout)
+	release()
+	if result := <-offered; result.whole != nil || result.err != nil {
+		t.Fatalf("whole %v, err %v", result.whole != nil, result.err)
+	}
+	// a group not yet due, so a run that swept as it woke still reaches a wait after the sweep
+	reassembly.offerPending(t, testPeerB, testFirstChunk(t, 2, 6000))
+	reassembly.clock.awaitWaitCount(1)
+	if held := reassembly.heldByteCount(); held != 5000+6000 {
+		t.Fatalf("holds %d B before the clock fired", held)
+	}
+
+	reassembly.reassembler.expire()
+	if held := reassembly.heldByteCount(); held != 6000 {
+		t.Fatalf("holds %d B after the sweep", held)
+	}
+	if stats := reassembly.reassembler.currentStats(); stats.expiredCount != 1 {
+		t.Errorf("stats %+v", stats)
+	}
+}
+
 // close running in the same gap: the group finds the reassembler closed, so it is refused and nothing
 // stays reserved with no owner to give it back.
 func TestCloseInTheGapLeavesNoReservation(t *testing.T) {

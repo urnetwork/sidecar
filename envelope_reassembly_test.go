@@ -30,12 +30,16 @@ type testEnvelopeClockWait struct {
 	fire chan time.Time
 }
 
-// A subprotocolClock a test moves. Advance fires the waits it reaches, and awaitWaitCount is how a test
-// learns that a goroutine has reached its next wait, with no sleep. Safe for concurrent use.
+// A subprotocolClock a test moves, safe for concurrent use. Advance moves the time and fires no wait
+// unless the clock was made to fire them, which only a test of run asks for: run drops a group only once
+// a wait fires, so on any other clock it drops nothing, and the one sweep is the expire a test calls.
+// awaitWaitCount is how a test learns that a goroutine has reached its next wait, with no sleep.
 type testEnvelopeClock struct {
 	stateLock sync.Mutex
 	now       time.Time
-	waits     []testEnvelopeClockWait
+	// whether Advance fires the waits it reaches
+	firesWaits bool
+	waits      []testEnvelopeClockWait
 	// After calls so far
 	waitCount *MonitorValue[int]
 }
@@ -67,11 +71,14 @@ func (self *testEnvelopeClock) After(timeout time.Duration) <-chan time.Time {
 	return fire
 }
 
-// Moves the clock and fires every wait it reaches.
+// Moves the clock, and on a clock that fires its waits, fires every wait it reaches.
 func (self *testEnvelopeClock) Advance(timeout time.Duration) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.now = self.now.Add(timeout)
+	if !self.firesWaits {
+		return
+	}
 	self.waits = slices.DeleteFunc(self.waits, func(wait testEnvelopeClockWait) bool {
 		if self.now.Before(wait.at) {
 			return false
@@ -113,6 +120,18 @@ func newTestReassembly(t testing.TB, settings *SidecarProtocolSettings, memoryBu
 func newDefaultTestReassembly(t testing.TB) *testReassembly {
 	t.Helper()
 	return newTestReassembly(t, DefaultSidecarProtocolSettings(), 128*1024*1024)
+}
+
+// The default reassembly on a clock that fires run's waits as the test moves it, for a test of run.
+func newRunningTestReassembly(t testing.TB) *testReassembly {
+	t.Helper()
+	reassembly := newDefaultTestReassembly(t)
+	func() {
+		reassembly.clock.stateLock.Lock()
+		defer reassembly.clock.stateLock.Unlock()
+		reassembly.clock.firesWaits = true
+	}()
+	return reassembly
 }
 
 // Bytes held for bodies now.
@@ -696,9 +715,7 @@ func TestStalledPeerLeavesAHealthyPeerProceeding(t *testing.T) {
 	}
 
 	reassembly.clock.Advance(settings.ReassemblyIdleTimeout)
-	if timeout := reassembly.reassembler.expire(); timeout != 0 {
-		t.Fatalf("a group is left, due in %v", timeout)
-	}
+	reassembly.reassembler.expire()
 	reassembly.requireEmpty(t)
 }
 
@@ -737,16 +754,15 @@ func TestDeadlineFollowsTheLastChunk(t *testing.T) {
 	reassembly.clock.Advance(timeout - time.Nanosecond)
 	reassembly.offerPending(t, testPeerA, envelopes[1])
 	reassembly.clock.Advance(timeout - time.Nanosecond)
-	if due := reassembly.reassembler.expire(); due != time.Nanosecond {
+	reassembly.reassembler.expire()
+	if due := reassembly.reassembler.untilNextDeadline(); due != time.Nanosecond {
 		t.Fatalf("due in %v", due)
 	}
 	if held := reassembly.heldByteCount(); held == 0 {
 		t.Fatal("expired before its time")
 	}
 	reassembly.clock.Advance(time.Nanosecond)
-	if due := reassembly.reassembler.expire(); due != 0 {
-		t.Fatalf("due in %v", due)
-	}
+	reassembly.reassembler.expire()
 	reassembly.requireEmpty(t)
 	if stats := reassembly.reassembler.currentStats(); stats.expiredCount != 1 {
 		t.Errorf("stats %+v", stats)
@@ -755,26 +771,31 @@ func TestDeadlineFollowsTheLastChunk(t *testing.T) {
 
 // run sleeps to the earliest deadline, whichever group the map gives it first, or a group outlives its
 // timeout by as long as the latest one has left.
-func TestExpireAnswersTheEarliestDeadline(t *testing.T) {
+func TestRunSleepsToTheEarliestDeadline(t *testing.T) {
 	reassembly := newDefaultTestReassembly(t)
 	timeout := DefaultSidecarProtocolSettings().ReassemblyIdleTimeout
 	for peer := range 8 {
 		reassembly.offerPending(t, Id{0x30, byte(peer)}, testFirstChunk(t, 1, 5000))
 		reassembly.clock.Advance(time.Second)
 	}
-	if due := reassembly.reassembler.expire(); due != timeout-8*time.Second {
+	if due := reassembly.reassembler.untilNextDeadline(); due != timeout-8*time.Second {
 		t.Errorf("due in %v", due)
 	}
 }
 
 // The deadline is a rule of offer as well as of the sweep, so run's timing never decides whether a late
-// chunk counts.
+// chunk counts. No sweep runs here, so the group is still held when the late chunk reaches it, and
+// offer's own rule is what drops it.
 func TestChunkPastItsDeadlineIsDroppedBeforeTheSweep(t *testing.T) {
 	settings := DefaultSidecarProtocolSettings()
 	reassembly := newDefaultTestReassembly(t)
-	envelopes := testChunks(t, testEnvelopeHeader(), testEnvelopeBody(2*MaxEnvelopeBodyByteCount+100))
+	byteCount := 2*MaxEnvelopeBodyByteCount + 100
+	envelopes := testChunks(t, testEnvelopeHeader(), testEnvelopeBody(byteCount))
 	reassembly.offerPending(t, testPeerA, envelopes[0])
 	reassembly.clock.Advance(settings.ReassemblyIdleTimeout)
+	if held := reassembly.heldByteCount(); held != int64(byteCount) {
+		t.Fatalf("holds %d B before the late chunk", held)
+	}
 	reassembly.offerFails(t, testPeerA, envelopes[1], errReassemblyDropped)
 	reassembly.requireEmpty(t)
 	if stats := reassembly.reassembler.currentStats(); stats.expiredCount != 1 || stats.droppedCount != 1 {
@@ -782,16 +803,23 @@ func TestChunkPastItsDeadlineIsDroppedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-// So too a cap: what has expired does not count against a first chunk, sweep or no sweep.
+// So too a cap: what has expired does not count against a first chunk, sweep or no sweep. No sweep runs
+// here, so the expired group is still held when the cap is read.
 func TestCapsNeverCountAnExpiredGroup(t *testing.T) {
 	settings := DefaultSidecarProtocolSettings()
 	settings.ReassemblyPeerCount = 1
 	reassembly := newTestReassembly(t, settings, 128*1024*1024)
 	reassembly.offerPending(t, testPeerA, testFirstChunk(t, 1, 5000))
 	reassembly.clock.Advance(settings.ReassemblyIdleTimeout)
+	if held := reassembly.heldByteCount(); held != 5000 {
+		t.Fatalf("holds %d B before the next first chunk", held)
+	}
 	reassembly.offerPending(t, testPeerA, testFirstChunk(t, 2, 5000))
 	if held := reassembly.heldByteCount(); held != 5000 {
 		t.Fatalf("holds %d B", held)
+	}
+	if stats := reassembly.reassembler.currentStats(); stats.expiredCount != 1 {
+		t.Errorf("stats %+v", stats)
 	}
 }
 
@@ -800,7 +828,7 @@ func TestCapsNeverCountAnExpiredGroup(t *testing.T) {
 func TestRunExpiresGroupsOnTheClock(t *testing.T) {
 	settings := DefaultSidecarProtocolSettings()
 	timeout := settings.ReassemblyIdleTimeout
-	reassembly := newDefaultTestReassembly(t)
+	reassembly := newRunningTestReassembly(t)
 
 	reassembly.offerPending(t, testPeerA, testFirstChunk(t, 1, 5000))
 	reassembly.clock.awaitWaitCount(1)
@@ -822,7 +850,7 @@ func TestRunExpiresGroupsOnTheClock(t *testing.T) {
 func TestRunSleepsAgainWhenTheDeadlineMoved(t *testing.T) {
 	settings := DefaultSidecarProtocolSettings()
 	timeout := settings.ReassemblyIdleTimeout
-	reassembly := newDefaultTestReassembly(t)
+	reassembly := newRunningTestReassembly(t)
 	body := testEnvelopeBody(2*MaxEnvelopeBodyByteCount + 100)
 	envelopes := testChunks(t, testEnvelopeHeader(), body)
 
@@ -844,7 +872,7 @@ func TestRunSleepsAgainWhenTheDeadlineMoved(t *testing.T) {
 // gets there first: exactly one more wait follows, and it is the new group's.
 func TestRunWakesForAGroupAfterGoingEmpty(t *testing.T) {
 	settings := DefaultSidecarProtocolSettings()
-	reassembly := newDefaultTestReassembly(t)
+	reassembly := newRunningTestReassembly(t)
 
 	reassembly.offerPending(t, testPeerA, testFirstChunk(t, 1, 5000))
 	reassembly.clock.awaitWaitCount(1)
