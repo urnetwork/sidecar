@@ -16,6 +16,8 @@
 //   - blobsuite and redissuite, the conformance suites, which take a fake or a real store.
 //   - localstack, this module's own clients of the stack in local/, so the suites run on real stores
 //     without go-redis or minio-go, which stay out of this module (§4.5).
+//   - crossslot, §22.4's static lint, which make check runs on this module and server can run on its own
+//     sidecar code.
 //   - dns_store_fake.go and dns_store_suite.go, the seams of dnsservice and their suite, which runs
 //     here on the fake and in server on dnshost.Store.
 //   - fault, the FS schedule runner (§22.8).
