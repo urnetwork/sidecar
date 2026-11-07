@@ -176,7 +176,6 @@ modules:
     spdx: Apache-2.0
     reason: the PROXY-unwrapped listeners engines serve behind (§4.5)
     leg: [engine]
-    planned: true
   - module: github.com/quic-go/qpack
     spdx: MIT
     reason: through quic-go

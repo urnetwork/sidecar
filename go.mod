@@ -5,6 +5,7 @@ go 1.27.3
 tool google.golang.org/protobuf/cmd/protoc-gen-go
 
 require (
+	github.com/pires/go-proxyproto v0.16.0
 	github.com/urnetwork/connect v0.0.0
 	golang.org/x/crypto v0.58.0
 	google.golang.org/protobuf v1.36.11
