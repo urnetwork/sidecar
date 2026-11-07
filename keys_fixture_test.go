@@ -327,6 +327,8 @@ type gateBackend struct {
 	armed     bool
 	// the write, counting from 1, that stops; 0 stops the Sync
 	writeNumber int
+	// the next Remove stops
+	removeArmed bool
 	// closes when the file stops, and the file goes on once release closes
 	entered chan struct{}
 	release chan struct{}
@@ -350,6 +352,28 @@ func newGateBackend() *gateBackend {
 		entered:             make(chan struct{}),
 		release:             make(chan struct{}),
 	}
+}
+
+// Stops the next Remove, before it lands.
+func (self *gateBackend) armRemove() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.removeArmed = true
+}
+
+// Stops if a Remove is armed, then removes.
+func (self *gateBackend) Remove(path string) error {
+	armed := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		armed := self.removeArmed
+		self.removeArmed = false
+		return armed
+	}()
+	if armed {
+		self.stop()
+	}
+	return self.SidecarStoreBackend.Remove(path)
 }
 
 // Stops the next temp file at its Sync.

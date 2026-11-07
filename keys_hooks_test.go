@@ -195,3 +195,77 @@ func TestALockWaitsOutACommitInFlight(t *testing.T) {
 		t.Errorf("a Put that answered nil is gone: %q, %v", value, err)
 	}
 }
+
+// A removal that has not yet taken its keychain's commit lock when the keychain closes, held at that
+// point, removes nothing: a locked keychain deletes nothing (D-CORE-15). The open check once ran before
+// the commit lock, so a close landing between the two let the removal go on under a closed keychain.
+func TestARemovalNotYetUnderTheCommitLockRemovesNothingAfterTheClose(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	store := storeOf(t, instance, testNetworkId, "evs")
+	writeStoreFile(t, store, "file", []byte("synthetic"))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
+		if name == "state.remove.before" {
+			enteredOnce.Do(func() {
+				close(entered)
+				<-release
+			})
+		}
+	}})
+	t.Cleanup(func() { SetTestHooks(nil) })
+
+	removeErr := make(chan error, 1)
+	go func() { removeErr <- store.Remove("file") }()
+	<-entered
+	instance.Lock()
+	close(release)
+	requireError(t, <-removeErr, ErrSidecarStoreLocked)
+	if _, err := backend.Open(networkFilePath(testNetworkId, "evs/file")); err != nil {
+		t.Errorf("a removal after the close took the file: %v", err)
+	}
+}
+
+// A lock waits out a removal already holding its keychain's commit lock, here held inside the medium's
+// Remove, so no removal lands once the lock has returned.
+func TestALockWaitsOutARemovalInFlight(t *testing.T) {
+	backend := newGateBackend()
+	instance := newInstanceOn(t, backend, newFakeKeyStore())
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	enrollTestNetwork(t, instance, testNetworkId)
+	store := storeOf(t, instance, testNetworkId, "evs")
+	writeStoreFile(t, store, "file", []byte("synthetic"))
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
+		if name == "keys.keychain_close.wait" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}})
+	t.Cleanup(func() { SetTestHooks(nil) })
+
+	backend.armRemove()
+	removeErr := make(chan error, 1)
+	go func() { removeErr <- store.Remove("file") }()
+	<-backend.entered
+	locked := make(chan struct{})
+	go func() {
+		defer close(locked)
+		instance.Lock()
+	}()
+	select {
+	case <-waiting:
+		// the close waits for the removal, which may land now
+		close(backend.release)
+		<-locked
+	case <-locked:
+		close(backend.release)
+		t.Error("the lock returned with a removal in flight, which then removed under a closed keychain")
+	}
+	if err := <-removeErr; err != nil {
+		t.Errorf("the removal in flight: %v", err)
+	}
+}

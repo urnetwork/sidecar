@@ -451,19 +451,26 @@ func (self *sealedFileWriter) Close() error {
 	return self.file.Discard()
 }
 
-// Takes the file at path away. A locked keychain deletes nothing (D-CORE-15).
+// Takes the file at path away. A locked keychain deletes nothing (D-CORE-15): the open check runs under
+// the commit lock, so a close either waits this out or is seen by it.
 func (self *keychain) removeSealed(path string) error {
 	self.instance.touch()
 	backendPath := networkFilePath(self.networkId, path)
-	self.commitLock.RLock()
-	defer self.commitLock.RUnlock()
-	if err := self.requireOpen(); err != nil {
-		return err
-	}
-	if err := self.instance.backend.Remove(backendPath); err != nil {
-		return err
-	}
-	return self.instance.backend.SyncDirectory(backendPath)
+	// a removal not yet holding the commit lock, which a close may get ahead of
+	testHookBarrier("state.remove.before", self.hookKey)
+	err := func() error {
+		self.commitLock.RLock()
+		defer self.commitLock.RUnlock()
+		if err := self.requireOpen(); err != nil {
+			return err
+		}
+		if err := self.instance.backend.Remove(backendPath); err != nil {
+			return err
+		}
+		return self.instance.backend.SyncDirectory(backendPath)
+	}()
+	testHookBarrier("state.remove.after", self.hookKey)
+	return err
 }
 
 // ErrSidecarStoreLocked once this keychain has closed.
