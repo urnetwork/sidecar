@@ -581,6 +581,10 @@ fields:
   CanonicalAction.cidrs: api-7
   CanonicalAction.grant_dst: api-7
   CanonicalAction.grant_allow: api-7
+  # protos-services-canonical-action's answer admits field 14 on a version-3 access_request bound for a
+  # GrantActivate or a gate, as a field that path's gate sees, and gives it no new row: api-7's repos,
+  # RepoGrants and EvsShares already show repo ids, so a GrantActivate that carries one shows nothing new.
+  CanonicalAction.repo_id: api-7
   CanonicalAction.dns_name: dns-1
   CanonicalAction.dns_type: dns-1
   CanonicalAction.dns_value: dns-1
@@ -610,7 +614,6 @@ unset:
   CanonicalAction.recipients: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.body_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.preview: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.repo_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.path: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.content_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.base_version: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"

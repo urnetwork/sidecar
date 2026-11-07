@@ -14,10 +14,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The guard passes on the tree as it stands, and says what it leaned on. check/ runs this test too, and
@@ -113,21 +115,50 @@ func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
 	}
 }
 
-// §8.8's GrantActivate carries an action as stored, so whatever a kind that activates a grant sets shows in the log,
-// and AD4, which speaks of a server-gated action, cannot call it unset. MCP-M3-02's table sets these on a listen, a
-// publish and a forward. Each stays mapped or open until §16.8's fence takes protos-services-canonical-action's
-// answer, which lists what a grant may carry and moves local_port, weight and alpn out of the action.
-func TestSchemaGuardLeavesNoFieldOfAGrantUnset(t *testing.T) {
+// §8.8's GrantActivate carries an action as stored, and a gate takes one beside its decision, so what an action
+// bound for either may set shows to a server, and AD4, which speaks of fields a gate already sees, cannot call it
+// unset. protos-services-canonical-action's answer lists those fields per kind, which api, every reader's
+// GrantActivate check and each gate admit, and MCP-M3-02's kind table what each such kind fills until §16.8's fence
+// takes that answer. Both give numbers, so the lists here are numbers read through the descriptor: an entry cannot
+// pass on a name the action lacks, and a number the action stops declaring, as the answer makes of 24, 25 and 34,
+// fails until its list follows.
+func TestSchemaGuardCallsNoFieldAServerMaySeeUnset(t *testing.T) {
 	guard, err := LoadSchemaGuard()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{
-		"socket_name", "local_port", "weight", "target_sidecar_id", "target_port", "alpn", "cidrs", "rule_id", "subject",
-		"grant_dst", "grant_allow", "expires_millis", "app_mode", "link_spki_sha256",
+	actionFields := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor().Fields()
+	for _, admitted := range []struct {
+		kind         string
+		fieldNumbers []protoreflect.FieldNumber
+	}{
+		// the owner's answer
+		{kind: "every action bound for a GrantActivate or a gate", fieldNumbers: []protoreflect.FieldNumber{1, 12, 13}},
+		{kind: "a grant", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 28, 29}},
+		{kind: "a publish's grant", fieldNumbers: []protoreflect.FieldNumber{5, 6, 7, 33, 35}},
+		{kind: "a version-3 access_request", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 14, 26, 27, 29}},
+		{kind: "a dns_* action", fieldNumbers: []protoreflect.FieldNumber{8, 18, 19, 20, 21}},
+		// MCP-M3-02's kind table
+		{kind: "a publish", fieldNumbers: []protoreflect.FieldNumber{5, 6, 7, 8, 10, 11, 28, 29, 33, 34, 35}},
+		{kind: "a socket_listen", fieldNumbers: []protoreflect.FieldNumber{23, 24, 25, 8, 10, 11, 28, 29}},
+		{kind: "a bridge_forward or bridge_expose", fieldNumbers: []protoreflect.FieldNumber{9, 26, 27, 8}},
+		{kind: "a dns_set or dns_delete", fieldNumbers: []protoreflect.FieldNumber{18, 19, 20, 21}},
+		{kind: "an access request", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 14, 26, 27, 29}},
 	} {
-		if reason, unset := guard.fieldMap.Unset["CanonicalAction."+field]; unset {
-			t.Errorf("a GrantActivate can carry %s, and the map calls it unset: %s", field, reason)
+		for _, fieldNumber := range admitted.fieldNumbers {
+			field := actionFields.ByNumber(fieldNumber)
+			if field == nil {
+				t.Errorf("%s may set field %d, and CanonicalAction declares no such field", admitted.kind, fieldNumber)
+				continue
+			}
+			key := schemaGuardFieldKey(field)
+			_, mapped := guard.fieldMap.Fields[key]
+			_, open := guard.fieldMap.Open[key]
+			if reason, unset := guard.fieldMap.Unset[key]; unset {
+				t.Errorf("%s may set %s, field %d, and the map calls it unset: %s", admitted.kind, key, fieldNumber, reason)
+			} else if !mapped && !open {
+				t.Errorf("%s may set %s, field %d, and the map gives it no row", admitted.kind, key, fieldNumber)
+			}
 		}
 	}
 }
