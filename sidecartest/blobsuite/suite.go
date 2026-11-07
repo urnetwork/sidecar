@@ -32,10 +32,17 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// What a settle-capable store lets the suite do: make time pass for the store and read its clock.
+// What a settle-capable store lets the suite do: read its clock, and reach it as a request the network
+// held past its deadline does.
 type Settle struct {
 	// The store's clock, as the suite must read it to set a deadline in the past of it.
 	Now func() time.Time
+	// Target.Cluster through a client that sends each request's x-ur-deadline-ms and never cancels at
+	// it, as a request the network held past its deadline reaches the store (FS-114). A client that
+	// cancels at the deadline never lets a late request reach the store, so a settle case through it
+	// passes whatever the store does. nil fails the settle cases. A fake judging deadlines in the store
+	// itself, with no cancel of its own, is its own.
+	Delayed sidecar.BlobCluster
 }
 
 type Target struct {
@@ -958,10 +965,27 @@ func caseLastModified(ctx context.Context, target *Target, keys *keySpace) error
 	return nil
 }
 
-// A request whose deadline has passed takes no effect, and its caller cannot tell that from a lost
-// response, so a write reports unknown and a read fails. Then the store reads as if it never came.
+// The way to the store a late request takes: Settle.Delayed, on Target.Cluster's cluster.
+func delayedCluster(target *Target) (sidecar.BlobCluster, error) {
+	delayed := target.Settle.Delayed
+	if delayed == nil {
+		return nil, errors.New("no delayed path to the store: a late request cancelled before it arrives proves nothing of the store's deadline check")
+	}
+	if delayed.ClusterId() != target.Cluster.ClusterId() {
+		return nil, fmt.Errorf("the delayed path reaches cluster %q, not %q", delayed.ClusterId(), target.Cluster.ClusterId())
+	}
+	return delayed, nil
+}
+
+// A request that reaches the store past its deadline takes no effect, and its caller cannot tell that
+// from a lost response, so a write reports unknown and a read fails. Then the store reads as if it
+// never came. Each late request goes the delayed way, so it reaches the store.
 func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
+	delayed, err := delayedCluster(target)
+	if err != nil {
+		return err
+	}
 	key := keys.key("marker")
 	etag, err := cluster.PutIfNoneMatch(ctx, key, []byte("v1"), nil)
 	if err != nil {
@@ -969,14 +993,14 @@ func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) er
 	}
 	past := sidecar.WithBlobDeadline(ctx, target.Settle.Now().Add(-1*time.Millisecond))
 	var unknown *sidecar.BlobUnknownError
-	_, err = cluster.PutIfMatch(past, key, etag, []byte("v2"), nil)
+	_, err = delayed.PutIfMatch(past, key, etag, []byte("v2"), nil)
 	if !errors.As(err, &unknown) {
 		return fmt.Errorf("a late PUT: got %v, want an unknown outcome", err)
 	}
 	if err := wantBody(ctx, cluster, key, []byte("v1")); err != nil {
 		return err
 	}
-	if _, err := cluster.Get(past, key); err == nil {
+	if _, err := delayed.Get(past, key); err == nil {
 		return errors.New("a late GET was served")
 	}
 	return nil
@@ -984,13 +1008,17 @@ func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) er
 
 func caseDeadlineDelete(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
+	delayed, err := delayedCluster(target)
+	if err != nil {
+		return err
+	}
 	key := keys.key("marker")
 	if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("v1"), nil); err != nil {
 		return err
 	}
 	past := sidecar.WithBlobDeadline(ctx, target.Settle.Now().Add(-1*time.Millisecond))
 	var unknown *sidecar.BlobUnknownError
-	if err := cluster.Delete(past, key); !errors.As(err, &unknown) {
+	if err := delayed.Delete(past, key); !errors.As(err, &unknown) {
 		return fmt.Errorf("a late DELETE: got %v, want an unknown outcome", err)
 	}
 	return wantBody(ctx, cluster, key, []byte("v1"))

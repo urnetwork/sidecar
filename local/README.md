@@ -40,8 +40,13 @@ quay.io images could not be pulled here on 2026-11-06. `minio --version` reads
 - This image's lineage against PR #21653 is unproven: the suite shows conditional writes on a healthy set,
   not what a read losing quorum does (FS-1, FS-40).
 
-To run the fork once it has a build, set `SIDECAR_LOCAL_MINIO_IMAGE` to its image, and set
-`BlobSettings.SettlePassed` only for a build that has passed §22.9's settle cases.
+To run the fork once it has a build, set `SIDECAR_LOCAL_MINIO_IMAGE` to its image, give
+`TestMinioConforms`'s target a `blobsuite.Settle` whose `Delayed` is `BlobStore.DelayedCluster` of the same
+cluster, and set `BlobSettings.SettlePassed` only for a build that has passed §22.9's settle cases that way.
+`Delayed` sends a late request with its `x-ur-deadline-ms` and never cancels it, as a request the network
+held past its deadline reaches the store. Through the ordinary cluster the client cancels at the deadline
+first, the request never arrives, and a settle case passes whatever the store does
+(`TestTheSettleCasesFailAStoreThatTakesLateRequests`).
 
 ## Not here
 

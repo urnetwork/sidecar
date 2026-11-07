@@ -4,6 +4,11 @@
 // that deadline. Each cluster is a bucket of one process, since §22.4 runs one locally; what is
 // per-cluster in production is only the bucket's name here.
 //
+// DelayedCluster is the one way round that cancel: a request sent with its x-ur-deadline-ms whose
+// cancel never comes, as one the network held past its deadline reaches the store (FS-114). It is how
+// blobsuite's settle cases reach a store's own deadline check, which a client that cancels first never
+// lets them reach.
+//
 // A stock MinIO ignores x-ur-deadline-ms and keeps none of D-OPS-20's settle rules, so SettlePassed
 // stays false until BlobSettings names a build that has passed FS-114. ErrBlobHeld is never returned for
 // the same reason: a stock store holds no key, and until a fork build shows how it answers one, its 503
@@ -183,6 +188,19 @@ func (self *BlobStore) Cluster(clusterId string) (sidecar.BlobCluster, error) {
 	return cluster, nil
 }
 
+// The same cluster through a client that sends each request's x-ur-deadline-ms and never cancels at
+// it, for a test of the store's own deadline check. Nothing but such a test uses it: a caller that
+// outlives its deadline here waits on ctx alone.
+func (self *BlobStore) DelayedCluster(clusterId string) (sidecar.BlobCluster, error) {
+	cluster, ok := self.clusters[clusterId]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", sidecar.ErrBlobClusterUnknown, clusterId)
+	}
+	delayed := *cluster
+	delayed.delayed = true
+	return &delayed, nil
+}
+
 func (self *BlobStore) FirstCluster() (sidecar.BlobCluster, error) {
 	return self.Cluster(self.settings.MetadataClusters[0].ClusterId)
 }
@@ -233,6 +251,8 @@ type blobCluster struct {
 	store     *BlobStore
 	clusterId string
 	bucket    string
+	// Never cancels a request at its deadline (DelayedCluster).
+	delayed bool
 }
 
 func (self *blobCluster) ClusterId() string {
@@ -308,7 +328,9 @@ func (self *blobCluster) send(ctx context.Context, request *blobRequest) (*blobR
 	} else {
 		deadline := sidecar.BlobRequestDeadline(ctx, issued, self.RequestTimeout())
 		httpRequest.Header.Set(blobDeadlineHeader, strconv.FormatInt(deadline.UnixMilli(), 10))
-		stopDeadline = self.store.clock.AfterFunc(deadline.Sub(issued), cancel)
+		if !self.delayed {
+			stopDeadline = self.store.clock.AfterFunc(deadline.Sub(issued), cancel)
+		}
 	}
 	signS3Request(httpRequest, self.store.credentials, issued, payloadSha256)
 	response, err := self.store.client.Do(httpRequest)
