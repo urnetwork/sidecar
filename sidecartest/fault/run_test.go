@@ -913,3 +913,30 @@ func TestEveryWriteUnknownLeavesARowsOwnHold(t *testing.T) {
 		t.Errorf("%d builds: want one to count and one for each write the row does not hold", builds)
 	}
 }
+
+// An actor blocked where no barrier sees it loses the baton at the stall timeout, and the actor behind
+// it runs out of the schedule's order. The run fails rather than pass under an order it did not choose.
+func TestARunInWhichAnActorStalledFails(t *testing.T) {
+	settings := sidecartest.DefaultNetSettings()
+	settings.Barriers.StallTimeout = 1 * time.Millisecond
+	net := sidecartest.NewNet(t.Context(), settings)
+	defer net.Close()
+	gate := make(chan struct{})
+	result := Run(t.Context(), &Schedule{
+		Id: "stall",
+		Steps: []*Step{
+			// started first, so it takes the baton first, and keeps it waiting where no barrier sees
+			{Actor: "writerA", Background: true, Action: func(ctx context.Context, net *Net) error {
+				<-gate
+				return nil
+			}},
+			{Actor: "writerB", Action: func(ctx context.Context, net *Net) error {
+				close(gate)
+				return nil
+			}},
+		},
+	}, net)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "writerA stalled") {
+		t.Errorf("%s", result)
+	}
+}

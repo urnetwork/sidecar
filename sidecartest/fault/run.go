@@ -233,6 +233,22 @@ func (self *runner) check(step int, final bool) error {
 	if violations := self.barriers.Violations(); 0 < len(violations) {
 		return fmt.Errorf("a barrier broke its naming rule: %s", strings.Join(violations, "; "))
 	}
+	return self.stalled()
+}
+
+// An actor that kept the baton past the stall timeout let another run while it ran on, in an order the
+// schedule did not choose and a seed cannot repeat, so the run proves nothing it can be held to (§22.8's
+// determinism row).
+func (self *runner) stalled() error {
+	actorNames := []string{}
+	for _, event := range self.barriers.Trace() {
+		if event.Kind == sidecartest.BarrierStalled && !slices.Contains(actorNames, event.Actor) {
+			actorNames = append(actorNames, event.Actor)
+		}
+	}
+	if 0 < len(actorNames) {
+		return fmt.Errorf("%s stalled, blocked where no barrier sees it, and the run left the schedule's order", strings.Join(actorNames, ", "))
+	}
 	return nil
 }
 
