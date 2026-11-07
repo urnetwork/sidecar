@@ -149,7 +149,9 @@ func testBuildSignedVectors(t testing.TB) *testSignedVectors {
 		Comment: "Fixed vectors for sidecar/protocol/bridge's VerifySigned and VerifyPresenceCountersign (§6.9, §7.9, " +
 			"§16.6; FS-124). All keys are synthetic. Bytes are lowercase hex. Each trees entry is over the leaves " +
 			"d_i = SHA-256(signed bytes of purpose authority, type 0x1206, body u32be(i)); an act's root is RFC 9162's " +
-			"MTH over its statements' digests in act order, so a leaf hash is SHA-256(0x00 || d_i).",
+			"MTH over its statements' digests in act order, so a leaf hash is SHA-256(0x00 || d_i). Every " +
+			"webauthn-es256 assertion's origin is one of testdata/signed/origins.json's fixture origins, and its " +
+			"answer is the one it gets against that list in place of a release's (QD-073).",
 	}
 
 	for _, statement := range []*testActStatement{
@@ -176,8 +178,13 @@ func testBuildSignedVectors(t testing.TB) *testSignedVectors {
 
 	ed25519Signed := testSignEd25519(purpose, signedType, testBody)
 	ecdsaSigned := testSignP256(t, key, purpose, signedType, testBody)
-	assertion := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+	assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
 	webAuthnSigned := assertion.sign(t, key, purpose, signedType, testBody)
+	signedFrom := func(origin string) *Signed {
+		originAssertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
+		originAssertion.origin = origin
+		return originAssertion.sign(t, key, purpose, signedType, testBody)
+	}
 	countersigned := testCountersignedAct(t, testActStatements(3), testEcdsaPresenceCheck(t, key))[0]
 	withAssertion := proto.CloneOf(ed25519Signed)
 	withAssertion.Webauthn = proto.CloneOf(webAuthnSigned.Webauthn)
@@ -196,6 +203,16 @@ func testBuildSignedVectors(t testing.TB) *testSignedVectors {
 		{
 			Name: "webauthn-es256", KeyAlg: "webauthn-es256", PublicKey: p256Public, Purpose: purpose,
 			ExpectedType: uint32(signedType), Signed: testHexSigned(t, webAuthnSigned),
+		},
+		{
+			Name: "webauthn-es256 from the other fixture origin, an android one", KeyAlg: "webauthn-es256",
+			PublicKey: p256Public, Purpose: purpose, ExpectedType: uint32(signedType),
+			Signed: testHexSigned(t, signedFrom(testFixtureOrigins(t)[1])),
+		},
+		{
+			Name: "webauthn-es256 from a debug-signed android build", KeyAlg: "webauthn-es256",
+			PublicKey: p256Public, Purpose: purpose, ExpectedType: uint32(signedType),
+			Signed: testHexSigned(t, signedFrom(testDebugBuildOrigin())), Refusal: "ErrSignedEvidence",
 		},
 		{
 			Name: "ed25519 with a countersignature, which this check does not read", KeyAlg: "ed25519",
@@ -407,6 +424,9 @@ func testBuildRefusalVectors(t testing.TB, profile *testPresenceProfile) []*test
 			refusal("an unlisted origin", "ErrSignedEvidence", spoiledCheck(func(assertion *testWebAuthnAssertion) {
 				assertion.origin = "https://app.example"
 			})),
+			refusal("a debug-signed android build", "ErrSignedEvidence", spoiledCheck(func(assertion *testWebAuthnAssertion) {
+				assertion.origin = testDebugBuildOrigin()
+			})),
 			refusal("another client data type", "ErrSignedEvidence", spoiledCheck(func(assertion *testWebAuthnAssertion) {
 				assertion.clientType = "webauthn.create"
 			})),
@@ -463,6 +483,25 @@ func TestSignedVectorsAreByteEqual(t *testing.T) {
 	}
 }
 
+// Test data carries fixture origins only (QD-073): no origin of a release's table appears in the file, as the hex a
+// Signed is written in or as text, so a rebuild against the release cannot land unseen.
+func TestSignedVectorsCarryNoReleaseOrigin(t *testing.T) {
+	file, err := os.ReadFile(testSignedVectorsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, origin := range webAuthnOrigins {
+		if bytes.Contains(file, []byte(hex.EncodeToString([]byte(origin)))) || bytes.Contains(file, []byte(origin)) {
+			t.Errorf("the vectors carry listed origin %d", i)
+		}
+	}
+	for _, origin := range testFixtureOrigins(t) {
+		if !bytes.Contains(file, []byte(hex.EncodeToString([]byte(origin)))) {
+			t.Errorf("the vectors carry no assertion from fixture origin %q", origin)
+		}
+	}
+}
+
 // A vector's Signed, as it comes off the wire.
 func testParseVectorSigned(t testing.TB, value string) *Signed {
 	signed := &Signed{}
@@ -475,6 +514,7 @@ func testParseVectorSigned(t testing.TB, value string) *Signed {
 // The file as a consumer reads it: every statement answers as it says, and every act verifies statement by statement
 // from nothing but public keys, each in a different order from its build.
 func TestSignedVectorsVerify(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	vectors := testReadSignedVectors(t)
 
 	for _, vector := range vectors.SignedBytes {
@@ -490,12 +530,13 @@ func TestSignedVectorsVerify(t *testing.T) {
 	}
 
 	for _, vector := range vectors.Statements {
-		err := VerifySigned(
+		err := verifySigned(
 			testParseVectorSigned(t, vector.Signed),
 			vector.Purpose,
 			SignedType(vector.ExpectedType),
 			testVectorKeyAlgs[vector.KeyAlg],
 			testFromHex(t, vector.PublicKey),
+			origins,
 		)
 		if !errors.Is(err, testVectorRefusals[vector.Refusal]) {
 			t.Errorf("%s: got %v, want %s", vector.Name, err, vector.Refusal)
@@ -531,11 +572,12 @@ func TestSignedVectorsVerify(t *testing.T) {
 			if err != nil {
 				t.Errorf("%s statement: identity signature: %v", vector.Name, err)
 			}
-			err = VerifyPresenceCountersign(
+			err = verifyPresenceCountersign(
 				signed,
 				statement.Purpose,
 				testVectorKeyAlgs[vector.KeyAlg],
 				testFromHex(t, vector.PublicKey),
+				origins,
 			)
 			if err != nil {
 				t.Errorf("%s statement: %v", vector.Name, err)
@@ -544,11 +586,12 @@ func TestSignedVectorsVerify(t *testing.T) {
 	}
 
 	for _, vector := range vectors.Refusals {
-		err := VerifyPresenceCountersign(
+		err := verifyPresenceCountersign(
 			testParseVectorSigned(t, vector.Signed),
 			vector.Purpose,
 			testVectorKeyAlgs[vector.KeyAlg],
 			testFromHex(t, vector.PublicKey),
+			origins,
 		)
 		if err == nil || !errors.Is(err, testVectorRefusals[vector.Refusal]) {
 			t.Errorf("%s: got %v, want %s", vector.Name, err, vector.Refusal)
