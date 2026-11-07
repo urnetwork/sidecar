@@ -57,6 +57,7 @@ return redis.call('GET', KEYS[1])`,
 	}
 )
 
+// What NewRedis dials, and how long it waits on a store that has stopped answering.
 type RedisSettings struct {
 	// Any nodes of the cluster, as host:port: one that answers finds the rest. Each must pass
 	// CheckStackAddress.
@@ -103,6 +104,7 @@ type redisSlotRange struct {
 	address string
 }
 
+// sidecar.Redis on one cluster. See the file header.
 type Redis struct {
 	ctx      context.Context
 	cancel   context.CancelFunc

@@ -19,9 +19,9 @@ local/stack.sh status
 local/stack.sh down     # stops them and drops what they held
 ```
 
-`test` starts the stack if it is down and stops only what it started. Tracks share one stack, and each
-suite works under keys of its own, so runs side by side do not collide. A run holds the stack while it
-runs, and `down` is refused until it ends.
+`test` starts the stack if it is down, and the last run out stops a stack a test started. A stack started
+with `up` stays up. Tracks share one stack, and each suite works under keys of its own, so runs side by
+side do not collide. A run holds the stack while it runs, and `down` is refused until it ends.
 
 `make check` needs no Docker, so it leaves all this out: the real-store tests carry the
 `sidecar_localstack` tag, and fail, rather than skip, when the stack is down.

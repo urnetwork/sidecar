@@ -1,10 +1,10 @@
 // §22.4's static lint: a call naming two or more Redis keys names them under one hash tag every key
 // carries, by sidecar.RedisKeysShareTag, read from the source. FakeRedis applies the same rule at run
-// time, and T3 runs every script and multi-key call against 3 masters. This one sees a call no test
-// reached, and it runs in make check, as this package's test.
+// time, and §22.4 has T3 run every script and multi-key call against 3 masters, which is built with T3.
+// This one sees a call no test reached, and it runs in make check, as this package's test.
 //
-// A call is a method named as a multi-key sidecar.Redis method with that method's signature, so a
-// narrower interface an engine declares for itself is held too (host_redis.go lets it). Keys are read
+// A call is a method named as a multi-key sidecar.Redis method, with its arity and a []string of keys,
+// so a narrower interface an engine declares for itself is held too (host_redis.go lets it). Keys are read
 // as far as source shows them: constants, +, fmt.Sprintf, a local's assignments and appends, and a
 // builder whose body is one return, followed into its arguments. What cannot be read stands as a value
 // of its own, compared by how it reads, so {scp_<clientId>}ack beside {scp_<clientId>}tok share a tag

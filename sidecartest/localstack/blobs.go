@@ -45,6 +45,7 @@ const (
 // A store's answers that mean a body did not match the checksum it named. Nothing was written.
 var s3ChecksumErrorCodes = []string{"BadDigest", "XAmzContentChecksumMismatch", "XAmzContentSHA256Mismatch"}
 
+// One cluster, which here is one bucket of the store.
 type BlobClusterSettings struct {
 	// Its id in BlobStore.
 	ClusterId string
@@ -52,6 +53,7 @@ type BlobClusterSettings struct {
 	Bucket string
 }
 
+// What NewBlobStore dials, what it signs with and which clusters it holds.
 type BlobSettings struct {
 	// MinIO's S3 endpoint, as http://host:port. Its host and port must pass CheckStackAddress.
 	Endpoint string
@@ -107,6 +109,7 @@ func (self realClock) AfterFunc(timeout time.Duration, function func()) func() b
 	return time.AfterFunc(timeout, function).Stop
 }
 
+// sidecar.BlobStore on one MinIO. See the file header.
 type BlobStore struct {
 	settings    *BlobSettings
 	clock       sidecartest.Clock
