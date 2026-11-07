@@ -142,7 +142,7 @@ WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 // The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
 // under node's process global net/http never calls fetch, and what the page Worker's transport does
 // with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
-// its fetch tests, since a run that skipped them would still exit 0.
+// its fetch tests and §22.5's socket vectors, since a run that skipped them would still exit 0.
 func TestHttpLegPassesInAWorker(t *testing.T) {
 	// a failure and not a skip: a leg that did not run has not passed
 	node, err := exec.LookPath("node")
@@ -178,6 +178,9 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestSocketTokenVectors",
+		"TestSocketSealVectors",
+		"TestSocketSealDropVectors",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
