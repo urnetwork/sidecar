@@ -47,7 +47,7 @@ func mlsRefuseEveryCredential(credential *mlsCredential, signatureKey []byte) er
 	return fmt.Errorf("%w: no admission check exists yet for credential type %#x", errMlsRefused, credential.credentialType)
 }
 
-// Credential (RFC §5.3).
+// A member's claimed identity (RFC §5.3).
 type mlsCredential struct {
 	credentialType uint16
 	// A basic credential's identity.
@@ -80,7 +80,8 @@ func (self *mlsCredential) decode(decoder *mlsDecoder) {
 	}
 }
 
-// Capabilities (RFC §7.2). Unknown values stay, because the list is signed, and mean nothing.
+// What a leaf says it supports (RFC §7.2). Unknown values stay, because the list is signed, and mean
+// nothing.
 type mlsCapabilities struct {
 	versions     []uint16
 	cipherSuites []uint16
@@ -124,7 +125,7 @@ func (self *mlsCapabilities) supportsCredential(credentialType uint16) bool {
 	return slices.Contains(self.credentials, credentialType)
 }
 
-// RequiredCapabilities (RFC §11.1), a GroupContext extension's data.
+// What every member of a group must support (RFC §11.1), a GroupContext extension's data.
 type mlsRequiredCapabilities struct {
 	extensionTypes  []uint16
 	proposalTypes   []uint16
@@ -165,7 +166,7 @@ func (self *mlsCapabilities) satisfies(required *mlsRequiredCapabilities) bool {
 	return true
 }
 
-// Lifetime (RFC §7.2), in seconds since the Unix epoch.
+// The window a KeyPackage's leaf is valid in (RFC §7.2), in seconds since the Unix epoch.
 type mlsLifetime struct {
 	notBefore uint64
 	notAfter  uint64
@@ -189,7 +190,7 @@ func (self *mlsLifetime) contains(at time.Time) bool {
 	return 0 <= seconds && self.notBefore <= uint64(seconds) && uint64(seconds) <= self.notAfter
 }
 
-// LeafNode (RFC §7.2).
+// A member's leaf of the ratchet tree (RFC §7.2).
 type mlsLeafNode struct {
 	encryptionKey  []byte
 	signatureKey   []byte

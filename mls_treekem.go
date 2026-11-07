@@ -27,7 +27,7 @@ import (
 // Public key encryption labels (RFC §17.7).
 const mlsEncryptLabelUpdatePathNode = "UpdatePathNode"
 
-// HPKECiphertext (RFC §7.6).
+// A value sealed to one node's key: the KEM output and the AEAD ciphertext (RFC §7.6).
 type mlsHpkeCiphertext struct {
 	kemOutput  []byte
 	ciphertext []byte
@@ -45,7 +45,7 @@ func (self *mlsHpkeCiphertext) decode(decoder *mlsDecoder) {
 	self.ciphertext = decoder.readVector()
 }
 
-// UpdatePathNode (RFC §7.6): one public key of the path, and its path secret encrypted to each node of
+// One node of a commit's path (RFC §7.6): its public key, and its path secret encrypted to each node of
 // the copath child's resolution.
 type mlsUpdatePathNode struct {
 	encryptionKey        []byte
@@ -72,7 +72,8 @@ func (self *mlsUpdatePathNode) decode(decoder *mlsDecoder) {
 	})
 }
 
-// UpdatePath (RFC §7.6): the committer's new leaf and the nodes of its filtered direct path, in order.
+// What a commit carries to refresh its committer's path (RFC §7.6): the new leaf and the nodes of its
+// filtered direct path, in order.
 type mlsUpdatePath struct {
 	leafNode mlsLeafNode
 	nodes    []mlsUpdatePathNode

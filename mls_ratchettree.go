@@ -55,7 +55,7 @@ type mlsLeafValidation struct {
 	credentialValidator mlsCredentialValidator
 }
 
-// ParentNode (RFC §7.1).
+// An interior node of the ratchet tree (RFC §7.1).
 type mlsParentNode struct {
 	encryptionKey []byte
 	parentHash    []byte
