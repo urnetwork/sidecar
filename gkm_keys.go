@@ -19,7 +19,8 @@
 //
 // Trust runs one way. A key is accepted only against a gen/<g> statement the caller verified (GkmGeneration),
 // when its C_g matches; the newer verified generation authenticates each GenLink, whose AAD carries the cause
-// §11's checkpoint rule reads; and a key that is not there is refused, never defaulted (ePrint 2024/546).
+// §11's checkpoint rule reads; and a key that is not there is refused, never defaulted (ePrint 2024/546), the RK_g
+// of an EvsRepoKey that holds none, as a declared or nil one does not, included.
 // `ref` derives from RK_1 at every generation (D-KEYS-22), so an EvsRepoKey that has not reached generation 1
 // refuses it.
 //
@@ -205,11 +206,24 @@ func (self *EvsRepoKey) HoldsFirst() bool {
 	return self.firstRepoKey != nil
 }
 
+// ErrGkmKeyMissing unless this key holds its RK_g. Only this file's constructors fill one, so an EvsRepoKey any
+// caller declares, or a nil one, holds none, and every use of the secret refuses it here rather than derive or seal
+// from nothing (§10.5; ePrint 2024/546).
+func (self *EvsRepoKey) checkHeld() error {
+	if self == nil || len(self.repoKey) != gkmRepoKeyByteCount {
+		return fmt.Errorf("%w: an EvsRepoKey that holds no RK_g", ErrGkmKeyMissing)
+	}
+	return nil
+}
+
 // The key of one purpose: HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 " || purpose || u64be(g) ||
 // context), 32 bytes (§10.5). Only groupinfo takes a context, exactly GkmGroupInfoContext's, and every
 // other purpose refuses one. ref derives from RK_1 with g = 1 at every generation, and is ErrGkmKeyMissing
-// until the ladder has given this key RK_1. An unknown purpose is refused.
+// until the ladder has given this key RK_1. An unknown purpose is refused, and so is a key that holds no RK_g.
 func (self *EvsRepoKey) DeriveKey(purpose string, context []byte) ([]byte, error) {
+	if err := self.checkHeld(); err != nil {
+		return nil, err
+	}
 	secret := self.repoKey
 	generation := self.generation
 	switch purpose {
@@ -261,6 +275,9 @@ func (self *EvsRepoKey) DropKeyPair() (hpke.PrivateKey, error) {
 // The same key with RK_1 from first, the generation-1 key of its repo, so `ref` derives. A key that already
 // holds RK_1 must hold this one.
 func (self *EvsRepoKey) WithFirst(first *EvsRepoKey) (*EvsRepoKey, error) {
+	if err := self.checkHeld(); err != nil {
+		return nil, err
+	}
 	if first == nil || first.generation != 1 || first.repoId != self.repoId {
 		return nil, fmt.Errorf("%w: not generation 1 of this repo", ErrGkmMalformed)
 	}
@@ -424,8 +441,12 @@ func NewGkmFirstGeneration(repoId Id, groupId Id, args *GkmGenerationArgs) (*Evs
 }
 
 // Generation g+1 after this one: a fresh RK_{g+1}, its commitment, and gen/<g+1>'s statement, unsigned, whose
-// GenLink opens this key (§10.5's Rotate, step 2). Nothing is persisted or claimed here.
+// GenLink opens this key (§10.5's Rotate, step 2). Nothing is persisted or claimed here, and a key that holds no
+// RK_g links to nothing.
 func (self *EvsRepoKey) NextGeneration(args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
+	if err := self.checkHeld(); err != nil {
+		return nil, nil, err
+	}
 	return newGkmGeneration(self.repoId, self.groupId, self, args)
 }
 
@@ -668,6 +689,9 @@ func OpenEvsRepoKey(generation *GkmGeneration, repoKey []byte) (*EvsRepoKey, err
 // this generation names as its parent and the opened key must match (§10.5's ladder). The link's AAD carries
 // g's cause, so a statement whose cause was changed opens nothing.
 func (self *EvsRepoKey) OpenParent(parent *GkmGeneration) (*EvsRepoKey, error) {
+	if err := self.checkHeld(); err != nil {
+		return nil, err
+	}
 	if self.generation <= 1 {
 		return nil, fmt.Errorf("%w: generation 1 has no parent", ErrGkmKeyMissing)
 	}
@@ -705,8 +729,8 @@ func (self *EvsRepoKey) OpenParent(parent *GkmGeneration) (*EvsRepoKey, error) {
 // and each key returned holds RK_1, top's too, last. A gap or a statement out of order is ErrGkmKeyMissing:
 // the walk never skips a generation it cannot open.
 func OpenGkmLadder(top *EvsRepoKey, generations []*GkmGeneration) ([]*EvsRepoKey, error) {
-	if top == nil {
-		return nil, fmt.Errorf("%w: no key to walk from", ErrGkmKeyMissing)
+	if err := top.checkHeld(); err != nil {
+		return nil, err
 	}
 	if uint64(len(generations)) != top.generation-1 {
 		return nil, fmt.Errorf("%w: %d statements below generation %d", ErrGkmKeyMissing, len(generations), top.generation)
@@ -737,6 +761,9 @@ func OpenGkmLadder(top *EvsRepoKey, generations []*GkmGeneration) ([]*EvsRepoKey
 
 // GenWrap_e: this generation's key under KEK_e of groupId's epoch e, for epoch object e (§10.6).
 func SealGkmGenWrap(key *EvsRepoKey, groupId Id, epoch uint64, kek []byte) ([]byte, error) {
+	if err := key.checkHeld(); err != nil {
+		return nil, err
+	}
 	if len(kek) != gkmKekByteCount {
 		return nil, fmt.Errorf("%w: a KEK of %d bytes", ErrGkmMalformed, len(kek))
 	}

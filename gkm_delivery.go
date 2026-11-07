@@ -120,6 +120,9 @@ type GkmDeliveryArgs struct {
 
 // RK_g sealed to one recipient's key as a KeyDelivery, unsigned (§10.5's step 3 and late row).
 func SealGkmDelivery(key *EvsRepoKey, args *GkmDeliveryArgs) (*protocol.KeyDelivery, error) {
+	if err := key.checkHeld(); err != nil {
+		return nil, err
+	}
 	if args == nil {
 		return nil, fmt.Errorf("%w: no delivery", ErrGkmMalformed)
 	}
@@ -441,6 +444,9 @@ func gkmRecoveryAad(args *GkmRecoveryArgs, generation uint64, commitment []byte)
 
 // RecoveryWrap_{m,g}: RK_g to member m's recovery key, unsigned, bare enc || ct (QD-468, §10.8).
 func SealGkmRecoveryWrap(key *EvsRepoKey, args *GkmRecoveryArgs) ([]byte, error) {
+	if err := key.checkHeld(); err != nil {
+		return nil, err
+	}
 	if args == nil {
 		return nil, fmt.Errorf("%w: no recovery wrap", ErrGkmMalformed)
 	}

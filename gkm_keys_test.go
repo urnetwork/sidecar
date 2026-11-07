@@ -278,6 +278,81 @@ func TestGkmLadderRefusesAMissingKey(t *testing.T) {
 	}
 }
 
+// An EvsRepoKey any caller can declare, or a nil one, holds no RK_g, and every use of the secret refuses it as
+// missing, rather than derive public keys from an empty secret or seal nothing (§10.5's missing key; ePrint
+// 2024/546).
+func TestGkmKeyHoldingNoRepoKeyRefusesEveryUse(t *testing.T) {
+	signer := newGkmTestSigner("rotator")
+	keys, generations := gkmTestLadder(t, signer)
+	groupId := keys[2].GroupId()
+	recipientKey := gkmTestRecipientKey(t, "reader")
+	recoveryKey := gkmTestRecipientKey(t, "recovery")
+	kek := gkmTestBytes("kek", gkmKekByteCount)
+	var declared EvsRepoKey
+	var none *EvsRepoKey
+	// a generation-3 key with its parent's commitment but no RK_3, which only OpenParent's own check refuses
+	keyless := &EvsRepoKey{repoId: keys[2].repoId, groupId: groupId, generation: 3, parentCommitment: keys[1].Commitment(), cause: keys[2].cause}
+	if _, err := keyless.OpenParent(generations[1]); !errors.Is(err, ErrGkmKeyMissing) {
+		t.Errorf("a generation-3 key holding no RK_3 opened its parent: %v", err)
+	}
+
+	for name, key := range map[string]*EvsRepoKey{"declared": &declared, "nil": none} {
+		calls := map[string]func() error{
+			"DropKeyPair": func() error { _, err := key.DropKeyPair(); return err },
+			"WithFirst":   func() error { _, err := key.WithFirst(keys[0]); return err },
+			"NextGeneration": func() error {
+				_, _, err := key.NextGeneration(gkmTestArgs(GkmCauseRequest))
+				return err
+			},
+			"OpenParent":    func() error { _, err := key.OpenParent(generations[0]); return err },
+			"OpenGkmLadder": func() error { _, err := OpenGkmLadder(key, nil); return err },
+			"SealGkmGenWrap": func() error {
+				_, err := SealGkmGenWrap(key, groupId, 1, kek)
+				return err
+			},
+			"SealGkmGroupInfo": func() error {
+				_, err := SealGkmGroupInfo(key, groupId, 1, []byte("group info"))
+				return err
+			},
+			"OpenGkmGroupInfo": func() error {
+				_, err := OpenGkmGroupInfo(key, groupId, 1, make([]byte, gkmSealedKeyByteCount))
+				return err
+			},
+			"SealGkmDelivery": func() error {
+				_, err := SealGkmDelivery(key, &GkmDeliveryArgs{
+					GroupId:            groupId,
+					Type:               GkmWrapTypeReader,
+					Recipient:          gkmTestId("reader sidecar").Bytes(),
+					RecipientPublicKey: recipientKey.PublicKey().Bytes(),
+					Kind:               GkmDeliveryStaged,
+				})
+				return err
+			},
+			"SealGkmRecoveryWrap": func() error {
+				_, err := SealGkmRecoveryWrap(key, &GkmRecoveryArgs{
+					MemberId:          gkmTestId("member"),
+					GroupId:           groupId,
+					RecoveryPublicKey: recoveryKey.PublicKey().Bytes(),
+					BindingKeySha256:  gkmTestBytes("binding", gkmDigestByteCount),
+				})
+				return err
+			},
+		}
+		for _, purpose := range gkmTestPurposes {
+			calls["DeriveKey "+purpose] = func() error { _, err := key.DeriveKey(purpose, nil); return err }
+		}
+		calls["DeriveKey groupinfo"] = func() error {
+			_, err := key.DeriveKey(EvsKeyPurposeGroupInfo, GkmGroupInfoContext(groupId, 1))
+			return err
+		}
+		for call, run := range calls {
+			if err := run(); !errors.Is(err, ErrGkmKeyMissing) {
+				t.Errorf("%s key, %s: %v", name, call, err)
+			}
+		}
+	}
+}
+
 // A key is accepted only where gen/<g>'s C_g names it, and a link only toward the parent gen/<g> names.
 func TestGkmLadderRefusesAnotherCommitment(t *testing.T) {
 	signer := newGkmTestSigner("rotator")
