@@ -111,7 +111,6 @@ func TestLayeringAllowsEnginesAndSidecartestToImportEngines(t *testing.T) {
 	wantFindings(t, fixture.open().clientEngineImportFindings(t))
 }
 
-// Each import here is allowed on its own, and the closure still reaches an engine.
 // An engine ships in server, so it may link a peer, but sidecartest's fakes reach no release at all.
 func TestLayeringFailsOnAnEngineLinkingSidecartest(t *testing.T) {
 	fixture := newFixture(t)
@@ -121,6 +120,7 @@ func TestLayeringFailsOnAnEngineLinkingSidecartest(t *testing.T) {
 	wantFindings(t, fixture.open().legEngineFindings(t), "engines linux/amd64 links @module@/sidecartest")
 }
 
+// Each import here is allowed on its own, and the closure still reaches an engine.
 func TestLayeringFailsOnAnEngineThroughSidecartest(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("cli linux/amd64")
