@@ -264,8 +264,8 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		t.Fatalf("go test -c: %v\n%s", err, output)
 	}
 
-	// these read the source tree, which a Worker has no file system for, and a fuzz target's seeds are files
-	skip := "^(TestHookFilesSplitOnTag|TestHooksEmptyWithoutTag|Fuzz.*)$"
+	// these two read the source tree, which a Worker has no file system for
+	skip := "^(TestHookFilesSplitOnTag|TestHooksEmptyWithoutTag)$"
 	output, err := runInWorkerHarness(t, wasmPath, "-test.v", "-test.count=1", "-test.skip", skip)
 	if err != nil {
 		t.Fatalf("the leg's tests failed: %v\n%s", err, output)
