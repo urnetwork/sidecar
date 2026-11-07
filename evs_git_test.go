@@ -163,6 +163,15 @@ func TestEvsGitBlobOidRefusesTheWrongSize(t *testing.T) {
 	}
 }
 
+// The hash refuses the size before it hashes a header no blob has. Every later step would refuse it
+// too, which is why EvsGitBlobOid's own test cannot tell the difference.
+func TestEvsGitBlobHashRefusesANegativeSize(t *testing.T) {
+	blobHash, err := newEvsGitBlobHash(-1)
+	if blobHash != nil || !errors.Is(err, ErrEvsGitObjectInvalid) {
+		t.Errorf("%v, %v", blobHash, err)
+	}
+}
+
 func TestEvsGitBlobHashHoldsItsSizeAfterARefusal(t *testing.T) {
 	blobHash, err := newEvsGitBlobHash(2)
 	if err != nil {
@@ -1295,6 +1304,72 @@ func TestEvsGitDeltaOfATinyBaseIsInserts(t *testing.T) {
 	}
 	if !bytes.Equal(result, target) {
 		t.Error("result differs")
+	}
+}
+
+// The block at offset 0 is a candidate like any other. A match found a block later grows back over
+// it, so only a target that shares the first block and nothing after it shows the difference.
+func TestEvsGitDeltaCopiesTheBasesFirstBlock(t *testing.T) {
+	block := []byte("0123456789abcdef")
+	for _, c := range []struct {
+		name        string
+		base        []byte
+		target      []byte
+		instruction []byte
+	}{
+		{name: "a base of one block", base: block, target: block, instruction: []byte{0x90, 16}},
+		{
+			name:        "a block after bytes the base lacks",
+			base:        slices.Concat(block, []byte("ghijklmnopqrstuv")),
+			target:      slices.Concat([]byte("wxyz"), block),
+			instruction: []byte{4, 'w', 'x', 'y', 'z', 0x90, 16},
+		},
+	} {
+		want := evsGitTestDelta(int64(len(c.base)), int64(len(c.target)), c.instruction...)
+		if delta := evsGitTestEncode(t, c.base, c.target, DefaultEvsGitDeltaSettings()); !bytes.Equal(delta, want) {
+			t.Errorf("%s: %x, want %x", c.name, delta, want)
+		}
+	}
+}
+
+// A candidate that collides with the target's block in its bucket and its check, and parts from it
+// inside the block, is no match: a copy that short costs more than the insert it would replace. No
+// two blocks are known to collide, so the index is set up to name one.
+func TestEvsGitDeltaTakesNoMatchUnderABlock(t *testing.T) {
+	base := []byte("0123456789abcdefghijklmnopqrstuv")
+	target := []byte("01234567zzzzzzzzzzzzzzzzzzzzzzzz")
+	settings := DefaultEvsGitDeltaSettings()
+	baseCache := &evsGitDeltaChunkCache{
+		source:      bytes.NewReader(base),
+		chunk:       make([]byte, settings.ChunkByteCount),
+		chunkOffset: -1,
+	}
+	index, err := newEvsGitDeltaIndex(baseCache, int64(len(base)), settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockHash := evsGitDeltaHashBlock(target[:evsGitDeltaBlockSize])
+	bucket, check := index.locate(blockHash)
+	index.heads[bucket] = 1
+	index.nexts[0] = 0
+	index.checks[0] = check
+	encoder := &evsGitDeltaEncoder{
+		settings:   settings,
+		base:       baseCache,
+		baseReach:  int64(len(base)),
+		index:      index,
+		window:     slices.Clone(target),
+		loadedSize: len(target),
+	}
+	if size, err := encoder.matchSize(0); err != nil || size != 8 {
+		t.Fatalf("the candidate matches %d B: %v", size, err)
+	}
+	offset, size, err := encoder.findMatch(blockHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 {
+		t.Errorf("a match of %d B at %d", size, offset)
 	}
 }
 
