@@ -180,12 +180,19 @@ func tlsParseClientHello(body []byte) (*tlsClientHello, error) {
 		}
 		hello.suites = append(hello.suites, suite)
 	}
+	// E1 compares one server name, so a hello an MX could read as naming another is refused here: RFC
+	// 8446 §4.2 forbids a repeated extension, and this client sends one name
+	seen := map[uint16]bool{}
 	for !extensions.Empty() {
 		var extensionId uint16
 		var extension cryptobyte.String
 		if !extensions.ReadUint16(&extensionId) || !extensions.ReadUint16LengthPrefixed(&extension) {
 			return nil, errors.New("malformed client hello extension")
 		}
+		if seen[extensionId] {
+			return nil, errors.New("client hello repeats an extension")
+		}
+		seen[extensionId] = true
 		hello.extensionIds = append(hello.extensionIds, extensionId)
 		if extensionId == tlsExtensionServerName {
 			var names, name cryptobyte.String
@@ -193,7 +200,9 @@ func tlsParseClientHello(body []byte) (*tlsClientHello, error) {
 			if !extension.ReadUint16LengthPrefixed(&names) ||
 				!names.ReadUint8(&nameType) ||
 				!names.ReadUint16LengthPrefixed(&name) ||
-				nameType != 0 {
+				nameType != 0 ||
+				!names.Empty() ||
+				!extension.Empty() {
 				return nil, errors.New("malformed server name")
 			}
 			hello.serverName = string(name)

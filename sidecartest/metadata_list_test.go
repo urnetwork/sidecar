@@ -266,11 +266,11 @@ func TestParseMetadataListRefusesALiveRowMarkedWithdrawn(t *testing.T) {
 
 func TestParseMetadataListRefusesAnAlias(t *testing.T) {
 	wantMetadataListError(t, plantedMetadataList(t, "  owner: §11.8\n", "  owner: &section §11.8\n  ttl2: *section\n"), "ttl2")
-	wantMetadataListError(t, plantedMetadataList(t, "  ttl: the repo's life\n  owner: §11.8\n", "  ttl: &section the repo's life\n  owner: *section\n"), "no plain string")
+	wantMetadataListError(t, plantedMetadataList(t, "  ttl: the repo's life\n  owner: §11.8\n", "  ttl: &section the repo's life\n  owner: *section\n"), "holds an alias")
 }
 
 func TestParseMetadataListRefusesAMergeKey(t *testing.T) {
-	wantMetadataListError(t, plantedMetadataList(t, "evs-2:\n  withdrawn: no such value now\n", "evs-2:\n  <<: {withdrawn: no such value now}\n"), "evs-2")
+	wantMetadataListError(t, plantedMetadataList(t, "evs-2:\n  withdrawn: no such value now\n", "evs-2:\n  <<: {withdrawn: no such value now}\n"), "a merge key")
 }
 
 func TestParseMetadataListRefusesASecondDocument(t *testing.T) {
@@ -287,8 +287,8 @@ func TestParseMetadataListRefusesARowThatIsNoMapping(t *testing.T) {
 }
 
 func TestParseMetadataListRefusesAnEmptyList(t *testing.T) {
-	wantMetadataListError(t, []byte("# only a comment\n"), "no rows")
-	wantMetadataListError(t, []byte(""), "no rows")
+	wantMetadataListError(t, []byte("# only a comment\n"), "no document")
+	wantMetadataListError(t, []byte(""), "no document")
 	wantMetadataListError(t, []byte("[]\n"), "cannot unmarshal")
 }
 

@@ -144,6 +144,11 @@ func LoadMetadataList() (*MetadataList, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readMetadataList(listPath)
+}
+
+// Reads and parses one list.
+func readMetadataList(listPath string) (*MetadataList, error) {
 	data, err := os.ReadFile(listPath)
 	if err != nil {
 		return nil, err
@@ -176,30 +181,57 @@ func findMetadataList() (string, error) {
 	}
 }
 
-// Parses the list's bytes. Any error means the build fails (§22.7).
-func ParseMetadataList(data []byte) (*MetadataList, error) {
-	// a tab inside a plain value is legal YAML, and no row has one: two parsers disagree on the rest
+// Decodes one YAML document into target, refusing what §22.7's strict parser refuses: a duplicate key,
+// a field target has no place for, and any parse error, as yaml.v3 does with KnownFields, and also what
+// it lets through: a tab, a second document, an alias, an anchor and a merge key. A tab inside a plain
+// value is legal YAML, and two parsers disagree on the rest. Returns the document's root node, for what
+// only a node shows.
+func decodeStrictYaml(data []byte, target any) (*yaml.Node, error) {
 	if index := bytes.IndexByte(data, '\t'); 0 <= index {
 		return nil, fmt.Errorf("line %d holds a tab", 1+bytes.Count(data[:index], []byte("\n")))
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	rowIdRows := map[string]*MetadataRow{}
-	if err := decoder.Decode(&rowIdRows); err != nil {
+	if err := decoder.Decode(target); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("the list holds no rows")
+			return nil, errors.New("it holds no document")
 		}
 		return nil, err
 	}
 	if err := decoder.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("the list holds a second document: %v", err)
+		return nil, fmt.Errorf("it holds a second document: %v", err)
 	}
-
 	document := &yaml.Node{}
 	if err := yaml.Unmarshal(data, document); err != nil {
 		return nil, err
 	}
-	root := document.Content[0]
+	if err := strictYamlNodeError(document); err != nil {
+		return nil, err
+	}
+	return document.Content[0], nil
+}
+
+// An alias, an anchor or a merge key under node: each takes one place's text from another, and a
+// reader of the published file should find every value where it stands.
+func strictYamlNodeError(node *yaml.Node) error {
+	if node.Kind == yaml.AliasNode || node.Anchor != "" || node.Tag == "!!merge" {
+		return fmt.Errorf("line %d holds an alias, an anchor or a merge key", node.Line)
+	}
+	for _, child := range node.Content {
+		if err := strictYamlNodeError(child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Parses the list's bytes. Any error means the build fails (§22.7).
+func ParseMetadataList(data []byte) (*MetadataList, error) {
+	rowIdRows := map[string]*MetadataRow{}
+	root, err := decodeStrictYaml(data, &rowIdRows)
+	if err != nil {
+		return nil, err
+	}
 	if root.Kind != yaml.MappingNode || len(root.Content) == 0 {
 		return nil, fmt.Errorf("line %d: the list is no mapping of rows", root.Line)
 	}
@@ -230,7 +262,7 @@ func ParseMetadataList(data []byte) (*MetadataList, error) {
 
 // True when a node says plainly what it holds, so every parser reads the same text.
 func metadataNodeIsPlainString(node *yaml.Node) bool {
-	return node.Kind == yaml.ScalarNode && node.Tag == "!!str" && node.Anchor == ""
+	return node.Kind == yaml.ScalarNode && node.Tag == "!!str"
 }
 
 // What is wrong with a row's shape: its id, and each key and value being a plain string.
@@ -238,8 +270,8 @@ func metadataRowNodeError(keyNode *yaml.Node, valueNode *yaml.Node) error {
 	if !metadataNodeIsPlainString(keyNode) || !metadataRowIdPattern.MatchString(keyNode.Value) {
 		return fmt.Errorf("line %d: %q is no row id", keyNode.Line, keyNode.Value)
 	}
-	if valueNode.Kind != yaml.MappingNode || valueNode.Anchor != "" {
-		return fmt.Errorf("line %d: %s is no plain mapping", valueNode.Line, keyNode.Value)
+	if valueNode.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: %s is no mapping", valueNode.Line, keyNode.Value)
 	}
 	findings := []error{}
 	for index := 0; index < len(valueNode.Content); index += 2 {
