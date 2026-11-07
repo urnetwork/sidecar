@@ -773,6 +773,11 @@ func TestGkmWrapPathsAreQd442s(t *testing.T) {
 	if _, err := GkmWrapPath(groupId, 3, commitment, GkmWrapTypeDelegation, sidecarId.Bytes(), keySha256); !errors.Is(err, ErrGkmMalformed) {
 		t.Errorf("a sidecar_id as a delegation: %v", err)
 	}
+	for _, wrapType := range []GkmWrapType{0, 3} {
+		if _, err := GkmWrapPath(groupId, 3, commitment, wrapType, nil, keySha256); !errors.Is(err, ErrGkmMalformed) {
+			t.Errorf("wrap type %d: %v", wrapType, err)
+		}
+	}
 	if _, err := GkmWrapPath(groupId, 3, commitment[:8], GkmWrapTypeReader, sidecarId.Bytes(), keySha256); !errors.Is(err, ErrGkmMalformed) {
 		t.Errorf("c8 from a prefix: %v", err)
 	}

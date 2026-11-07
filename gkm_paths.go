@@ -55,7 +55,7 @@ func GkmWrapPath(groupId Id, generation uint64, commitment []byte, wrapType GkmW
 	if err != nil {
 		return "", err
 	}
-	if len(recipient) != wrapType.recipientByteCount() {
+	if wrapType.recipientByteCount() == 0 || len(recipient) != wrapType.recipientByteCount() {
 		return "", fmt.Errorf("%w: a recipient of %d bytes for wrap type %d", ErrGkmMalformed, len(recipient), wrapType)
 	}
 	recipientPrefix := "s:"
