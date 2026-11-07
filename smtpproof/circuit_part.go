@@ -91,7 +91,8 @@ type serverBlock struct {
 	TypeOctet []frontend.Variable `gnark:",public"`
 	// The record's first octet.
 	FirstOctet []frontend.Variable `gnark:",public"`
-	// The 16 octets from here are all content of one record, so a keyword can match at it.
+	// The 16 octets from here are all content of one record, so a keyword can match at it unless that
+	// record is a ticket.
 	WindowActive []frontend.Variable `gnark:",public"`
 	// This block continues the previous block's record.
 	Continues frontend.Variable `gnark:",public"`

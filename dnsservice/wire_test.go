@@ -228,6 +228,14 @@ func TestDnsRowsMalformed(t *testing.T) {
 			set.Rdata = []string{"not an address"}
 		})},
 		{name: "a record repeated", row: withSet(func(set *DnsRecordSet) { set.Rdata = []string{`"one"`, `"one"`} })},
+		{name: "two cnames", row: withSet(func(set *DnsRecordSet) {
+			set.Type = dns.TypeCNAME
+			set.Rdata = []string{"one.other.example.", "two.other.example."}
+		})},
+		{name: "two soas", row: withSet(func(set *DnsRecordSet) {
+			set.Type = dns.TypeSOA
+			set.Rdata = []string{"ns1.zone.example. a.zone.example. 1 2 3 4 5", "ns2.zone.example. a.zone.example. 1 2 3 4 5"}
+		})},
 		{name: "a line break in rdata", row: withSet(func(set *DnsRecordSet) { set.Rdata = []string{"\"one\"\na.zone.example. IN A 192.0.2.1"} })},
 		{name: "a meta-type", row: withSet(func(set *DnsRecordSet) { set.Type = dns.TypeAXFR })},
 		{name: "a signer's type", row: withSet(func(set *DnsRecordSet) {

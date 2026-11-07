@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -36,6 +35,9 @@ type ProverSettings struct {
 	// smtp_data_proof_bytes, measured on each host: a larger message to an MX without CHUNKING is
 	// too_large before MAIL (§14.5). Non-positive refuses every DATA send.
 	DataProofBytes int
+	// Server octets held for parts to cover, as VerifierSettings.MaxServerBytes. A reply that never ends
+	// stops here rather than growing what this send holds.
+	MaxServerBytes int
 	// Sends in DATA mode even where the MX offers CHUNKING, as D-SMTP-16's interop runs do.
 	ForceData bool
 }
@@ -45,6 +47,7 @@ func DefaultProverSettings() *ProverSettings {
 		MaxRecordContentBytes: 16 * 1024,
 		DataPartBytes:         2*1024 - 1,
 		DataProofBytes:        1024 * 1024,
+		MaxServerBytes:        256 * 1024,
 	}
 }
 
@@ -73,14 +76,16 @@ type proverRun struct {
 	preamble *sessionPreamble
 	session  *sessionStatement
 
-	serverIn  chan *proverServerEvent
-	records   []*proverServerRecord
-	stream    []byte
-	nextPart  uint32
-	covered   uint64
-	lastPart  *sidecar.SmtpProofPart
-	lastOpen  [][]byte
-	lastPrior uint64
+	serverIn chan *proverServerEvent
+	records  []*proverServerRecord
+	// Octets of records, against settings.MaxServerBytes.
+	serverBytes int
+	stream      []byte
+	nextPart    uint32
+	covered     uint64
+	lastPart    *sidecar.SmtpProofPart
+	lastOpen    [][]byte
+	lastPrior   uint64
 }
 
 // A record from the reader goroutine, or how it ended.
@@ -131,6 +136,10 @@ func newProverSessionStatement(result *tlsHandshakeResult, preamble *sessionPrea
 func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.SmtpProofJob, channel sidecar.SmtpProofChannel) (*sidecar.SmtpProofResult, error) {
 	if job.Preamble == nil || uint32(len(job.RecipientLocals)) != job.Preamble.RecipientCount || len(job.RecipientLocals) == 0 {
 		return nil, errors.New("smtpproof: job's recipients do not match its preamble")
+	}
+	// the edge refuses the same, so nothing here should reach it
+	if err := checkSessionPreamble(newSessionPreamble(job.Preamble)); err != nil {
+		return nil, fmt.Errorf("smtpproof: %w", err)
 	}
 	declared := job.Preamble.MessageByteCount
 	if declared != uint64(len(job.Message)) && declared != uint64(len(dotStuffed(job.Message))) {
@@ -208,7 +217,7 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	mode := partModeData
 	pipelining := false
 	for i, text := range replies[0].lines {
-		keyword := strings.ToLower(text)
+		keyword := asciiLower([]byte(text))
 		if 0 < i && keyword == keywordChunking && !self.settings.ForceData {
 			mode = partModeBdat
 		}
@@ -299,8 +308,8 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	return self.sendData(ctx, headerBlock, stuffed[headerEnd:])
 }
 
-// A message as DATA carries it: a leading dot doubled on each line (RFC 5321 §4.5.2). The header
-// block is unchanged, since Z5 keeps a dot from starting a line there.
+// A message as DATA carries it: a leading dot doubled on each line (RFC 5321 §4.5.2). Z5.3 refuses a
+// header line that starts with a dot, so a header block that can be proven comes through unchanged.
 func dotStuffed(message []byte) []byte {
 	stuffed := make([]byte, 0, len(message))
 	lineStart := true
@@ -496,6 +505,10 @@ func (self *proverRun) awaitReplies(ctx context.Context, count int) ([]*smtpRepl
 			return nil, event.err
 		}
 		record := event.record
+		self.serverBytes += len(record.raw)
+		if self.settings.MaxServerBytes < self.serverBytes {
+			return nil, errors.New("smtpproof: MX sent more than any part could cover")
+		}
 		plaintext, err := self.plaintextOf(record)
 		if err != nil {
 			return nil, err
