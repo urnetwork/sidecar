@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -733,4 +734,47 @@ type iotestErrReader struct{}
 
 func (iotestErrReader) Read(body []byte) (int, error) {
 	return 0, fmt.Errorf("the uploader went away")
+}
+
+// Every operation that reaches the queue is recorded with what it was given, the ones a plan fails
+// included, which a store's served count leaves out.
+func TestTheFaultQueueRecordsEveryOperation(t *testing.T) {
+	fixture := newBlobFixture(t)
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, Nth: 2, Result: FailBeforeApply})
+	for _, key := range []string{"a/_", "b/_", "c/_"} {
+		fixture.cluster.PutIfNoneMatch(t.Context(), key, []byte("v"), nil)
+	}
+	want := []FaultResult{0, FailBeforeApply, 0}
+	if got := fixture.faults.OpResults(FaultOpPut); !slices.Equal(got, want) {
+		t.Errorf("results %v, want %v", got, want)
+	}
+	if got := fixture.store.RequestCount("meta-1", FaultOpPut); got != 2 {
+		t.Errorf("served %d", got)
+	}
+}
+
+// A displacing plan takes the write an older plan also fires at: the write applies and its caller
+// sees its response lost, and the older plan counts as fired there.
+func TestADisplacingPlanTakesTheWriteAndTheOtherCountsAsFired(t *testing.T) {
+	fixture := newBlobFixture(t)
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, Result: FailBeforeApply})
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, Result: ApplyThenDrop, Displaces: true})
+	_, err := fixture.cluster.PutIfNoneMatch(t.Context(), "a/_", []byte("v"), nil)
+	var unknown *sidecar.BlobUnknownError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("err %v", err)
+	}
+	if got := fixture.body(t, "a/_"); got != "v" {
+		t.Errorf("body %q: the write did not apply", got)
+	}
+	if unfired := fixture.faults.Unfired(); len(unfired) != 0 {
+		t.Errorf("unfired %v", unfired)
+	}
+	// without it, the oldest plan wins as ever
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, Result: FailBeforeApply})
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, Result: ApplyThenDrop})
+	fixture.cluster.PutIfNoneMatch(t.Context(), "b/_", []byte("v"), nil)
+	if !fixture.absent(t, "b/_") {
+		t.Error("a younger plan took the write")
+	}
 }
