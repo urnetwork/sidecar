@@ -21,7 +21,9 @@ import (
 	"testing"
 )
 
-const testAclDesignPath = "DESIGN.md"
+// Where DESIGN.md is from the root package. A release branch keeps it at the repository's top, beside
+// the module moved into v2026/ (§4.9), so there it sits one directory further up.
+var testAclDesignPaths = []string{"DESIGN.md", "../DESIGN.md"}
 
 // The design's example domain, and what test data writes for it (CODESTYLE's test data rule).
 const (
@@ -35,7 +37,10 @@ var testAclHujsonFence = regexp.MustCompile("(?ms)^```hujson\n(.*?)^```$")
 // directory rule.
 func testAclDesignHujson(t *testing.T) []string {
 	t.Helper()
-	design, err := os.ReadFile(testAclDesignPath)
+	design, err := os.ReadFile(testAclDesignPaths[0])
+	if errors.Is(err, os.ErrNotExist) {
+		design, err = os.ReadFile(testAclDesignPaths[1])
+	}
 	if err != nil {
 		t.Fatalf("this test needs the design beside the module: %v", err)
 	}
