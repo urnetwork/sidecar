@@ -14,6 +14,8 @@
 //     holds, gathered by fake_host.go.
 //   - net*.go, connect clients in one process, built on connect's exported API alone (Q-TEST-1).
 //   - blobsuite and redissuite, the conformance suites, which take a fake or a real store.
+//   - dns_store_fake.go and dns_store_suite.go, the seams of dnsservice and their suite, which runs
+//     here on the fake and in server on dnshost.Store.
 //   - fault, the FS schedule runner (§22.8).
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
