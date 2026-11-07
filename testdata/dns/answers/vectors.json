@@ -699,6 +699,15 @@
      "tc": true
     },
     {
+     "name": "and what fits 512 is not truncated",
+     "query": "www.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ],
+     "edns": 20
+    },
+    {
      "name": "over 1232 sets TC at any client size",
      "query": "big.net1.zone.example. TXT",
      "edns": 4096,

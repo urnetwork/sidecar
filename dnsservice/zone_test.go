@@ -135,6 +135,15 @@ func TestZoneApplyRefusesWhole(t *testing.T) {
 			want: ErrDnsRowMalformed,
 		},
 		{
+			// deletes name no owner this view could hold, so only the row's own root gives it away
+			name: "another root's deletes",
+			rows: []DnsJournalRow{{
+				Format: DnsFormat, Root: "other.example.", Serial: 11,
+				Deletes: []DnsRecordKey{{Owner: "a.other.example.", Type: dns.TypeTXT}},
+			}},
+			want: ErrDnsRowMalformed,
+		},
+		{
 			name: "rdata that does not parse beside a good row",
 			rows: []DnsJournalRow{{
 				Format: DnsFormat, Root: testRoot, Serial: 11,
@@ -205,8 +214,7 @@ func TestZoneApplyLeavesEveryEarlierViewWhole(t *testing.T) {
 	}
 }
 
-// Two builds from one view change apart. Nothing does this on purpose, and a retry after a refused
-// self-check would.
+// Two builds from one view change apart, as a retry after a refused self-check makes them.
 func TestZoneApplyFromOneViewTwiceKeepsBothApart(t *testing.T) {
 	view := newTestView(t, 10, append(testApexRows(), testTxt("a.zone.example.", "before"))...)
 	first, err := view.Apply([]DnsJournalRow{testRow(view, testTxt("a.zone.example.", "first"))})
@@ -233,6 +241,43 @@ func TestZoneApplyFromOneViewTwiceKeepsBothApart(t *testing.T) {
 		if got := testText(t, c.view, "a.zone.example."); got != c.want {
 			t.Errorf("reads %q, want %q", got, c.want)
 		}
+	}
+}
+
+// An SOA row's change reaches every answer in the serial that made it: the apex's, and a denial's.
+func TestZoneApplyTakesANewSoa(t *testing.T) {
+	view := newTestView(t, 1, testApexRows()...)
+	next, err := view.Apply([]DnsJournalRow{testRow(view, DnsRecordSet{
+		Owner: testRoot, Type: dns.TypeSOA, Ttl: 30, Kind: DnsRecordKindSystem,
+		Rdata: []string{"ns2.zone.example. hostmaster.zone.example. 1 7200 3600 1209600 60"},
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := testAnswer(t, next, nil, "nosuch.zone.example.", dns.TypeA)
+	if soa := reply.Ns[0].(*dns.SOA); soa.Ns != "ns2.zone.example." || soa.Hdr.Ttl != 30 || soa.Serial != 2 {
+		t.Errorf("soa %v", soa)
+	}
+	reply = testAnswer(t, next, nil, testRoot, dns.TypeSOA)
+	if soa := reply.Answer[0].(*dns.SOA); soa.Ns != "ns2.zone.example." || soa.Hdr.Ttl != 30 {
+		t.Errorf("soa %v", soa)
+	}
+	if soa := testAnswer(t, view, nil, testRoot, dns.TypeSOA).Answer[0].(*dns.SOA); soa.Ns != "ns1.zone.example." {
+		t.Errorf("the earlier view reads %v", soa)
+	}
+}
+
+// An apex that loses its SOA can deny nothing, so it stops answering rather than go on with the old one.
+func TestZoneApplyWithoutAnSoaStopsAnswering(t *testing.T) {
+	view := newTestView(t, 1, append(testApexRows(), testTxt("a.zone.example.", "one"))...)
+	next, err := view.Apply([]DnsJournalRow{{
+		Format: DnsFormat, Root: testRoot, Serial: 2, Deletes: []DnsRecordKey{{Owner: testRoot, Type: dns.TypeSOA}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply := testAnswer(t, next, nil, "a.zone.example.", dns.TypeTXT); reply.Rcode != dns.RcodeServerFailure {
+		t.Errorf("reply %+v", reply)
 	}
 }
 
@@ -545,6 +590,24 @@ func TestZoneWithholdsWhatNoWriterMayHold(t *testing.T) {
 	}
 }
 
+// A copy row at a wildcard with rows of its own answers the rest from the wildcard above it, never from
+// itself. A strong-mode probe's copy at such an owner would read this way.
+func TestZoneCopyAtAWildcardLooksAboveItself(t *testing.T) {
+	view := newTestView(t, 1, append(testApexRows(),
+		DnsRecordSet{Owner: "*.net1.zone.example.", Type: dns.TypeMX, Ttl: 300, Kind: DnsRecordKindSystem, Rdata: []string{"10 mx.net1.zone.example."}},
+		DnsRecordSet{Owner: "*.host.net1.zone.example.", Type: dns.TypeA, Ttl: 60, Kind: DnsRecordKindUser, Rdata: []string{"11.22.33.44"}},
+		DnsRecordSet{Owner: "*.host.net1.zone.example.", Kind: DnsRecordKindCopy},
+	)...)
+	reply := testAnswer(t, view, nil, "x.host.net1.zone.example.", dns.TypeMX)
+	if lines := recordLines(reply.Answer); !slices.Equal(lines, []string{"x.host.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."}) {
+		t.Errorf("answer %q", lines)
+	}
+	reply = testAnswer(t, view, nil, "x.host.net1.zone.example.", dns.TypeA)
+	if lines := recordLines(reply.Answer); !slices.Equal(lines, []string{"x.host.net1.zone.example. 60 IN A 11.22.33.44"}) {
+		t.Errorf("answer %q", lines)
+	}
+}
+
 // A withheld row that goes or is replaced stops counting.
 func TestZoneWithheldCountFollowsTheRows(t *testing.T) {
 	bad := DnsRecordSet{Owner: "a.zone.example.", Type: dns.TypeA, Ttl: 60, Kind: DnsRecordKindUser, Rdata: []string{"10.1.2.3"}}
@@ -694,12 +757,19 @@ func TestZoneReadersNeverSeeHalfARow(t *testing.T) {
 	published.Store(view)
 	done := atomic.Bool{}
 	waitGroup := sync.WaitGroup{}
+	read := func(view *ZoneView, owner string) string {
+		reply := Answer(&DnsQuery{Message: testQuery(owner, dns.TypeTXT)}, view, nil)
+		if len(reply.Answer) == 0 {
+			return ""
+		}
+		return reply.Answer[0].(*dns.TXT).Txt[0]
+	}
 	for range 4 {
 		waitGroup.Go(func() {
 			for !done.Load() {
 				held := published.Load()
-				first := testText(t, held, "a.zone.example.")
-				second := testText(t, held, "b.zone.example.")
+				first := read(held, "a.zone.example.")
+				second := read(held, "b.zone.example.")
 				if first != second || strconv.FormatUint(held.Serial(), 10) != first {
 					t.Errorf("serial %d reads %q and %q", held.Serial(), first, second)
 					return
