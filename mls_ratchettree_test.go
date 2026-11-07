@@ -1246,14 +1246,17 @@ func TestMlsValidateChecksRequiredCapabilities(t *testing.T) {
 func TestMlsValidateChecksGroupContextExtensions(t *testing.T) {
 	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
 	implicit := *group.validation
-	implicit.groupExtensions = []mlsExtension{{extensionType: mlsExtensionTypeExternalSenders}}
+	implicit.groupExtensions = []mlsExtension{{extensionType: mlsExtensionTypeExternalPub}}
 	if err := tree.validate(&implicit); err != nil {
 		t.Fatal(err)
 	}
-	unknown := *group.validation
-	unknown.groupExtensions = []mlsExtension{{extensionType: 0xf00d}}
-	if err := tree.validate(&unknown); !errors.Is(err, errMlsInvalid) {
-		t.Fatal(err)
+	// a type nobody lists, and the default type §10.4 refuses, which no leaf supports
+	for _, extensionType := range []uint16{0xf00d, mlsExtensionTypeExternalSenders} {
+		refused := *group.validation
+		refused.groupExtensions = []mlsExtension{{extensionType: extensionType}}
+		if err := tree.validate(&refused); !errors.Is(err, errMlsInvalid) {
+			t.Errorf("type %#x: %v", extensionType, err)
+		}
 	}
 }
 

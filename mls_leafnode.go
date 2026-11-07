@@ -108,9 +108,13 @@ func (self *mlsCapabilities) decode(decoder *mlsDecoder) {
 	self.credentials = decoder.readUint16Vector()
 }
 
-// Default extension types are implicit (RFC §7.2).
+// Default extension types are implicit (RFC §7.2), but for external_senders: §10.4 refuses it, so no
+// leaf here supports it, listed or not, and a group that carries or requires it fails every leaf.
 func (self *mlsCapabilities) supportsExtension(extensionType uint16) bool {
-	return (mlsExtensionTypeApplicationId <= extensionType && extensionType <= mlsExtensionTypeExternalSenders) ||
+	if extensionType == mlsExtensionTypeExternalSenders {
+		return false
+	}
+	return (mlsExtensionTypeApplicationId <= extensionType && extensionType <= mlsExtensionTypeExternalPub) ||
 		slices.Contains(self.extensions, extensionType)
 }
 

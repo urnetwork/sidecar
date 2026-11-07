@@ -104,10 +104,15 @@ func TestMlsProductionValidatorRefusesEverything(t *testing.T) {
 
 func TestMlsCapabilitiesTreatDefaultsAsImplicit(t *testing.T) {
 	capabilities := &mlsCapabilities{extensions: []uint16{0xf001}, proposals: []uint16{0xf002}, credentials: []uint16{1}}
-	for extensionType := uint16(1); extensionType <= 5; extensionType++ {
+	for extensionType := uint16(1); extensionType <= 4; extensionType++ {
 		if !capabilities.supportsExtension(extensionType) {
 			t.Errorf("default extension %d", extensionType)
 		}
+	}
+	// the fifth default, external_senders, is §10.4's to refuse, even where a leaf lists it
+	listing := &mlsCapabilities{extensions: []uint16{mlsExtensionTypeExternalSenders}}
+	if capabilities.supportsExtension(mlsExtensionTypeExternalSenders) || listing.supportsExtension(mlsExtensionTypeExternalSenders) {
+		t.Error("external senders count as supported")
 	}
 	for proposalType := uint16(1); proposalType <= 7; proposalType++ {
 		if !capabilities.supportsProposal(proposalType) {
