@@ -9,7 +9,9 @@
 // cluster touches nothing else.
 //
 // Time differs by store: a fake moves its clock, a real cluster waits, so ttl cases go through
-// Target.Pass, and only those cases cost real time, and only on a real store.
+// Target.Pass, and only those cases cost real time, and only on a real store. A real store cannot be
+// held still, so a case that must act before a ttl ends leaves a loaded machine a second to do it in,
+// and a case subscribes before it starts the ttl it listens for.
 
 package redissuite
 
@@ -203,13 +205,13 @@ func caseGetMany(ctx context.Context, target *Target, keys *keySpace) error {
 
 func caseSetTtl(ctx context.Context, target *Target, keys *keySpace) error {
 	key := keys.key("ttl")
-	if err := target.Redis.Set(ctx, key, []byte("v"), 200*time.Millisecond); err != nil {
+	if err := target.Redis.Set(ctx, key, []byte("v"), 1*time.Second); err != nil {
 		return err
 	}
 	if _, found, err := target.Redis.Get(ctx, key); err != nil || !found {
 		return fmt.Errorf("before its ttl: found %v, %v", found, err)
 	}
-	target.Pass(250 * time.Millisecond)
+	target.Pass(1100 * time.Millisecond)
 	if _, found, err := target.Redis.Get(ctx, key); err != nil || found {
 		return fmt.Errorf("after its ttl: found %v, %v", found, err)
 	}
@@ -347,16 +349,17 @@ func caseCompareAndDelete(ctx context.Context, target *Target, keys *keySpace) e
 func caseIncrement(ctx context.Context, target *Target, keys *keySpace) error {
 	key := keys.key("n")
 	for want := int64(1); want <= 3; want += 1 {
-		value, err := target.Redis.Increment(ctx, key, 300*time.Millisecond)
+		value, err := target.Redis.Increment(ctx, key, 1500*time.Millisecond)
 		if err != nil {
 			return err
 		}
 		if value != want {
 			return fmt.Errorf("value %d, want %d", value, want)
 		}
-		target.Pass(50 * time.Millisecond)
+		target.Pass(100 * time.Millisecond)
 	}
-	target.Pass(200 * time.Millisecond)
+	// the three passes above and this one reach the first life's end, and a later ttl would outlast it
+	target.Pass(1300 * time.Millisecond)
 	if _, found, err := target.Redis.Get(ctx, key); err != nil || found {
 		return fmt.Errorf("a later increment extended the life: %v, %v", found, err)
 	}
@@ -786,8 +789,8 @@ func caseStreamClaim(ctx context.Context, target *Target, keys *keySpace) error 
 		return fmt.Errorf("claimed %d early, cursor %q", len(entries), cursor)
 	}
 
-	target.Pass(120 * time.Millisecond)
-	entries, cursor, err = target.Redis.StreamGroupClaim(ctx, key, "senders", "live-sender", 100*time.Millisecond, "", 10)
+	target.Pass(1100 * time.Millisecond)
+	entries, cursor, err = target.Redis.StreamGroupClaim(ctx, key, "senders", "live-sender", 1*time.Second, "", 10)
 	if err != nil {
 		return err
 	}
@@ -795,7 +798,7 @@ func caseStreamClaim(ctx context.Context, target *Target, keys *keySpace) error 
 		return fmt.Errorf("claimed %d, cursor %q: the acknowledged one must not return", len(entries), cursor)
 	}
 	// claiming resets idle time, so a second claim finds nothing
-	entries, _, err = target.Redis.StreamGroupClaim(ctx, key, "senders", "third-sender", 100*time.Millisecond, "", 10)
+	entries, _, err = target.Redis.StreamGroupClaim(ctx, key, "senders", "third-sender", 1*time.Second, "", 10)
 	if err != nil {
 		return err
 	}
@@ -1386,9 +1389,6 @@ func caseKeyEventRemove(ctx context.Context, target *Target, keys *keySpace) err
 
 func caseKeyEventExpiry(ctx context.Context, target *Target, keys *keySpace) error {
 	key := keys.key("gone")
-	if err := target.Redis.Set(ctx, key, []byte("1"), 100*time.Millisecond); err != nil {
-		return err
-	}
 	events := make(chan sidecar.RedisKeyEvent, 16)
 	remove, err := target.Redis.AddKeyEventCallback(keys.pattern(), func(event sidecar.RedisKeyEvent) {
 		events <- event
@@ -1397,6 +1397,16 @@ func caseKeyEventExpiry(ctx context.Context, target *Target, keys *keySpace) err
 		return err
 	}
 	defer remove()
+	if err := target.Redis.Set(ctx, key, []byte("1"), 100*time.Millisecond); err != nil {
+		return err
+	}
+	// the Set's own two events come first, so only the event after the key's end counts
+	if err := target.awaitKey(ctx, events, key); err != nil {
+		return err
+	}
+	if err := target.awaitKey(ctx, events, key); err != nil {
+		return err
+	}
 	target.Pass(150 * time.Millisecond)
 	// a read makes a real master notice the key has expired
 	if _, found, err := target.Redis.Get(ctx, key); err != nil || found {
