@@ -264,6 +264,11 @@ func (self *edgeSession) ServerRecord(record []byte) error {
 		defer self.stateLock.Unlock()
 		switch self.phase {
 		case edgePhaseClientHello:
+			// a retry's dummy change_cipher_spec comes ahead of the second ClientHello, which the server
+			// is still waiting for
+			if self.helloRetried && record[0] == tlsRecordChangeCipherSpec && tlsDummyChangeCipherSpec(record) {
+				return nil
+			}
 			return edgeRefuse(checkE1, "server record before ClientHello")
 		case edgePhaseServerHello:
 			return self.serverHelloWithLock(record)

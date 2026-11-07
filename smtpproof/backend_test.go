@@ -688,12 +688,40 @@ func TestZ1CircuitIn12DerivesARealConnectionsKeys(t *testing.T) {
 	}
 }
 
+// S_ckx resumed over a client Finished, on its own: all that depends on the tail's length.
+type testResumeCircuit struct {
+	ClientFinished  []frontend.Variable
+	Chaining        []frontend.Variable `gnark:",public"`
+	ResumeBase      []frontend.Variable `gnark:",public"`
+	ResumeShift     []frontend.Variable `gnark:",public"`
+	ResumeTwoBlocks frontend.Variable   `gnark:",public"`
+	Digest          []frontend.Variable `gnark:",public"`
+}
+
+func (self *testResumeCircuit) Define(api frontend.API) error {
+	inputs := &circuitInputs12{resumeBase: publicBytes(self.ResumeBase), resumeShift: self.ResumeShift, resumeTwoBlocks: self.ResumeTwoBlocks}
+	for i := range inputs.chaining {
+		copy(inputs.chaining[i][:], self.Chaining[32*i:32*i+32])
+	}
+	testAssertBytesEqual(api, inputs.resumedHash(api, testByteWires(api, self.ClientFinished)), testByteWires(api, self.Digest))
+	return nil
+}
+
 func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 	t.Parallel()
 	// the client Finished's offset depends on the transcript's length, and so on which blocks it
-	// falls in: a real handshake lands on one tail length, so this walks all 64 over a synthetic one
+	// falls in: a real handshake lands on one tail length, so this walks all 64 over a synthetic one.
+	// Each runs on the resume alone, which is what varies. The lengths around the one-block limit and
+	// at the ends also run through a whole shape, where the rest of Z1 meets them
 	shape := test12Shape()
 	compiled := testCompileShape(t, shape)
+	resume := testCompile(t, &testResumeCircuit{
+		ClientFinished: make([]frontend.Variable, 8*(4+tlsVerifyData12Bytes)),
+		Chaining:       make([]frontend.Variable, 8*tlsSecretBytes),
+		ResumeBase:     make([]frontend.Variable, 8*2*sha256BlockBytes),
+		ResumeShift:    make([]frontend.Variable, 6),
+		Digest:         make([]frontend.Variable, 8*tlsSecretBytes),
+	})
 	leg := testTlsLegs()[2]
 	capture := testBdatCapture(t, leg)
 	for tail := range 64 {
@@ -713,7 +741,8 @@ func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		serverHash, err := state.finish(tls12FinishedMessage(witness.masterSecret, tlsLabelClientFinished, clientHash))
+		clientFinished := tls12FinishedMessage(witness.masterSecret, tlsLabelClientFinished, clientHash)
+		serverHash, err := state.finish(clientFinished)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -723,8 +752,29 @@ func TestZ1CircuitIn12CoversEveryTailLength(t *testing.T) {
 		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
 			t.Fatalf("tail %d: %v", tail, failures)
 		}
-		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+
+		public := testPartAssignment(t, shape, statement, witness)
+		assignment := func(digest []byte) *testResumeCircuit {
+			return &testResumeCircuit{
+				ClientFinished:  testAssignBits(clientFinished),
+				Chaining:        public.Chaining,
+				ResumeBase:      public.ResumeBase,
+				ResumeShift:     public.ResumeShift,
+				ResumeTwoBlocks: public.ResumeTwoBlocks,
+				Digest:          testAssignBits(digest),
+			}
+		}
+		if err := testSolved(t, resume, assignment(serverHash)); err != nil {
 			t.Errorf("tail %d: %v", tail, err)
+		}
+		serverHash[0] ^= 1
+		if err := testSolved(t, resume, assignment(serverHash)); err == nil {
+			t.Errorf("tail %d: accepted another digest", tail)
+		}
+		if slices.Contains([]int{0, 39, 40, 63}, tail) {
+			if err := testPartSolved(t, compiled, public); err != nil {
+				t.Errorf("tail %d through the whole shape: %v", tail, err)
+			}
 		}
 	}
 }
@@ -887,10 +937,7 @@ func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 // Runs a test-only setup for a shape, which is the slow step here.
 func testSetup(t *testing.T, shape *partShape) *shapeKeys {
 	t.Helper()
-	compiled, err := compilePartShape(shape)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := testCompileShape(t, shape)
 	provingKey, verifyingKey, err := groth16.Setup(compiled)
 	if err != nil {
 		t.Fatal(err)

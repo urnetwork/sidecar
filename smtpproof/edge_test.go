@@ -255,6 +255,20 @@ func TestE1RefusesAServerHelloOutsideItsSuites(t *testing.T) {
 	}
 }
 
+func TestE1TakesAChangeCipherSpecBeforeAClientHelloOnlyAfterARetry(t *testing.T) {
+	dummy := tlsFrameRecord(tlsRecordChangeCipherSpec, tlsVersion12, []byte{1})
+	gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+	testExpectCheck(t, "before any hello", gate.ServerRecord(dummy), checkE1)
+
+	gate = newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+	gate.helloRetried = true
+	if err := gate.ServerRecord(dummy); err != nil {
+		t.Errorf("after a retry: %v", err)
+	}
+	testExpectCheck(t, "another length", gate.ServerRecord(tlsFrameRecord(tlsRecordChangeCipherSpec, tlsVersion12, []byte{1, 1})), checkE1)
+	testExpectCheck(t, "any other record", gate.ServerRecord(tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 20))), checkE1)
+}
+
 func TestE1RefusesAClientFlightOtherThanFinished(t *testing.T) {
 	for _, leg := range testTlsLegs()[:2] {
 		fixture := testBdatGateCapture(t, leg)

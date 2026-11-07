@@ -532,6 +532,22 @@ func TestSendBdatThroughTheGate(t *testing.T) {
 	}
 }
 
+func TestSendThroughTheGateAfterAHelloRetryRequest(t *testing.T) {
+	// an MX preferring another group retries, and Go's server follows the retry with a dummy
+	// change_cipher_spec, which reaches the gate ahead of the second ClientHello
+	for _, leg := range testTlsLegs()[:2] {
+		retried := *leg
+		retried.serverTls = func(t *testing.T) *tls.Config {
+			config := leg.serverTls(t)
+			config.CurvePreferences = []tls.CurveID{tls.CurveP256}
+			return config
+		}
+		job := testJob("one line\r\n", "bob")
+		send := testRunSend(t, &retried, testMxDefaults(), DefaultProverSettings(), job)
+		testExpectOneTransaction(t, &retried, send, job)
+	}
+}
+
 func TestSendBdatBodyLongerThanOneRecord(t *testing.T) {
 	settings := DefaultProverSettings()
 	settings.MaxRecordContentBytes = 1024
