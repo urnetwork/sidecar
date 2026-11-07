@@ -167,8 +167,8 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 	}
 
 	wasmExecPath := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
-	// these two read the source tree, which a Worker has no file system for
-	skip := "^(TestHookFilesSplitOnTag|TestHooksEmptyWithoutTag)$"
+	// these read the source tree, which a Worker has no file system for, and a fuzz target's seeds are files
+	skip := "^(TestHookFilesSplitOnTag|TestHooksEmptyWithoutTag|Fuzz.*)$"
 	output, err := exec.Command(node, harnessPath, wasmPath, wasmExecPath, "-test.v", "-test.count=1", "-test.skip", skip).CombinedOutput()
 	if err != nil {
 		t.Fatalf("the leg's tests failed: %v\n%s", err, output)
@@ -178,6 +178,7 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestAuthChainVectors",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
