@@ -667,6 +667,8 @@ open:
   CanonicalAction.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   CanonicalAction.scope: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   ApprovalDecision.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+  # Answered since: these three leave CanonicalAction for sealed fields once §16.8's fence does, and
+  # record.proto follows that fence, so they stay open to M3's exit rather than gain the row asked for.
   CanonicalAction.local_port: {row: api-7, question: protos-services-canonical-action.md, until: M3}
   CanonicalAction.weight: {row: api-7, question: protos-services-canonical-action.md, until: M3}
   CanonicalAction.alpn: {row: api-7, question: protos-services-canonical-action.md, until: M3}

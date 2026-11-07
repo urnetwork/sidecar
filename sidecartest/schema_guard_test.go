@@ -115,7 +115,8 @@ func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
 
 // §8.8's GrantActivate carries an action as stored, so whatever a kind that activates a grant sets shows in the log,
 // and AD4, which speaks of a server-gated action, cannot call it unset. MCP-M3-02's table sets these on a listen, a
-// publish and a forward. Each is mapped or open until protos-services-canonical-action settles what a grant may carry.
+// publish and a forward. Each stays mapped or open until §16.8's fence takes protos-services-canonical-action's
+// answer, which lists what a grant may carry and moves local_port, weight and alpn out of the action.
 func TestSchemaGuardLeavesNoFieldOfAGrantUnset(t *testing.T) {
 	guard, err := LoadSchemaGuard()
 	if err != nil {

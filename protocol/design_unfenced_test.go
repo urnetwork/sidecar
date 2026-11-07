@@ -5,8 +5,9 @@
 // reads the field, it needs its §2.8 row first (I-18), which §22.7's guard holds it to.
 //
 // The design gives most of these as field lists or names without numbers. They take numbers in the order written,
-// and those numbers stay open until their format freezes: protos-bridge-unwritten-numbers and
-// protos-services-unwritten-numbers ask for them to be ratified.
+// which the answers to the questions that asked, among them protos-bridge-unwritten-numbers,
+// protos-services-unwritten-numbers, keys-wire-route-bodies and mail-proto-format-readings, ratify as landed. They
+// freeze with their formats, and as design-records writes each into the design as a fence, it leaves this file.
 
 package protocol
 
