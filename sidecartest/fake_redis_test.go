@@ -84,10 +84,17 @@ func TestCrossSlotLintRefusesAMatchByLuck(t *testing.T) {
 	}
 }
 
-func TestATagSharedWithABareKeyIsOneTag(t *testing.T) {
+// bar and foo{bar} hash alike, so production passes them, but a bare key carries no tag and the lint
+// holds a call to one tag every key carries (RedisKeysShareTag).
+func TestCrossSlotLintRefusesABareKeyBesideItsTag(t *testing.T) {
 	fixture := newRedisFixture(t, nil)
-	// bar and foo{bar} hash the same bytes, so no reshard can part them
-	if _, err := fixture.redis.GetMany(t.Context(), []string{"bar", "foo{bar}"}); err != nil {
+	if RedisClusterSlot("bar") != RedisClusterSlot("foo{bar}") {
+		t.Fatal("the fixture's keys differ")
+	}
+	if _, err := fixture.redis.GetMany(t.Context(), []string{"bar", "foo{bar}"}); !errors.Is(err, ErrRedisCrossSlot) {
+		t.Errorf("err %v", err)
+	}
+	if _, err := fixture.redis.GetMany(t.Context(), []string{"baz{bar}", "foo{bar}"}); err != nil {
 		t.Errorf("err %v", err)
 	}
 }
