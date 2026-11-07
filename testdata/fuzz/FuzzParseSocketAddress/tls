@@ -1,0 +1,2 @@
+go test fuzz v1
+string("acme:tls/443/blog")
