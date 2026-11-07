@@ -778,3 +778,37 @@ func TestADisplacingPlanTakesTheWriteAndTheOtherCountsAsFired(t *testing.T) {
 		t.Error("a younger plan took the write")
 	}
 }
+
+// A delivery settles each parked request to its own fate, so a write armed never to land stays off the
+// store, and its caller is told nothing it can rely on, as FakeRedis does for its own.
+func TestADeliveryLosesAWriteArmedNeverToLand(t *testing.T) {
+	fixture := newBlobFixture(t)
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, KeyPrefix: "head/a/", Result: Delay, Delay: DelayNeverLands})
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, KeyPrefix: "head/b/", Result: Delay, Delay: DelayInNetwork})
+	lost := startDelayedPut(t, fixture, "head/a/_", "", "never")
+	arriving := make(chan error, 1)
+	go func() {
+		_, err := fixture.cluster.PutIfNoneMatch(t.Context(), "head/b/_", []byte("arrives"), nil)
+		arriving <- err
+	}()
+	// each parked request sets its client's timeout
+	if err := fixture.clock.AwaitTimers(t.Context(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if delivered := fixture.store.DeliverDelayed("meta-1", "head/"); delivered != 2 {
+		t.Fatalf("delivered %d", delivered)
+	}
+	var unknown *sidecar.BlobUnknownError
+	if err := <-lost; !errors.As(err, &unknown) {
+		t.Errorf("the lost write's caller: %v", err)
+	}
+	if !fixture.absent(t, "head/a/_") {
+		t.Errorf("a write armed never to land holds %q", fixture.body(t, "head/a/_"))
+	}
+	if err := <-arriving; err != nil {
+		t.Errorf("the arriving write's caller: %v", err)
+	}
+	if got := fixture.body(t, "head/b/_"); got != "arrives" {
+		t.Errorf("body %q", got)
+	}
+}
