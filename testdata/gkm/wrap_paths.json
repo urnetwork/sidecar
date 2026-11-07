@@ -1,0 +1,43 @@
+[
+  {
+    "name": "gen 1",
+    "group_id": "9d9e4da1e3f0f820fe870ebe21822026",
+    "generation": 1,
+    "path": "gkm/9d9e4da1e3f0f820fe870ebe21822026/gen/00000000000000000001"
+  },
+  {
+    "name": "gen max",
+    "group_id": "9d9e4da1e3f0f820fe870ebe21822026",
+    "generation": 18446744073709551615,
+    "path": "gkm/9d9e4da1e3f0f820fe870ebe21822026/gen/18446744073709551615"
+  },
+  {
+    "name": "reader wrap",
+    "group_id": "9d9e4da1e3f0f820fe870ebe21822026",
+    "generation": 3,
+    "commitment": "19e3d6041b74deab53fcf73423d82c81b4654df9cefa44f9275f856c2af8e787",
+    "wrap_type": 1,
+    "recipient": "0188ab62ff9af74c8466f8db5ea240a6",
+    "recipient_key_sha256": "5308f64a9e532355fab34b14ace597cf36174c3dc136a81d02d1949ddae5d9d8",
+    "path": "gkm/9d9e4da1e3f0f820fe870ebe21822026/wrap/00000000000000000003/19e3d6041b74deab/s:0188ab62ff9af74c8466f8db5ea240a6/5308f64a9e532355"
+  },
+  {
+    "name": "delegation wrap",
+    "group_id": "9d9e4da1e3f0f820fe870ebe21822026",
+    "generation": 3,
+    "commitment": "19e3d6041b74deab53fcf73423d82c81b4654df9cefa44f9275f856c2af8e787",
+    "wrap_type": 2,
+    "recipient": "f9dc09cda106605f08dc4e4610fde3994e7c9e73bcf563eda8c9b59edf22b1b2",
+    "recipient_key_sha256": "84929904825f082633035c9a1c05deff911b9bfcd1fd25efc6de8a09c5eb924e",
+    "path": "gkm/9d9e4da1e3f0f820fe870ebe21822026/wrap/00000000000000000003/19e3d6041b74deab/d:f9dc09cda106605f08dc4e4610fde3994e7c9e73bcf563eda8c9b59edf22b1b2/84929904825f0826"
+  },
+  {
+    "name": "recovery wrap",
+    "group_id": "9d9e4da1e3f0f820fe870ebe21822026",
+    "member_id": "e76b98140a55e6fe7c75fa40099e301a",
+    "generation": 3,
+    "commitment": "19e3d6041b74deab53fcf73423d82c81b4654df9cefa44f9275f856c2af8e787",
+    "binding_key_sha256": "58acdc7719c589df0a3f9181fb217e6ada0d3c36fcaf97772977308d434dbca5",
+    "path": "gkm/recovery/e76b98140a55e6fe7c75fa40099e301a/9d9e4da1e3f0f820fe870ebe21822026/00000000000000000003/19e3d6041b74deab/58acdc7719c589df"
+  }
+]
