@@ -1,6 +1,9 @@
 // FakeRedis's shared key-event subscriber (host_redis.go): one per process, one goroutine, every
 // callback on it in order, as server/connect/key_event_subscriber.go runs them. A callback must note
 // the key and return, so one that holds the goroutine past settings.CallbackTimeout is reported.
+//
+// FakeRedis publishes with its own stateLock held, so an event fires as the write applies. That makes
+// this lock the inner of the two: nothing here calls into FakeRedis while holding it.
 
 package sidecartest
 

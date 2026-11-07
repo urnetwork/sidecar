@@ -256,6 +256,9 @@ func caseStreamBugs(ctx context.Context, target *Target, keys *keySpace) error {
 	if _, err := target.Redis.StreamAdd(ctx, key, -1, map[string][]byte{"n": []byte("x")}); err == nil {
 		return errors.New("StreamAdd took a negative length")
 	}
+	if _, err := target.Redis.StreamAdd(ctx, key, 0, nil); err == nil {
+		return errors.New("StreamAdd took no fields")
+	}
 	for _, count := range []int64{0, -1} {
 		if _, err := target.Redis.StreamRange(ctx, key, "", count); err == nil {
 			return fmt.Errorf("StreamRange took a count of %d", count)

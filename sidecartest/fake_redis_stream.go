@@ -106,6 +106,9 @@ func (self *FakeRedis) streamAddWithLock(key string, maxLength int64, fieldValue
 	if maxLength < 0 {
 		return "", fmt.Errorf("a stream length of %d", maxLength)
 	}
+	if len(fieldValues) == 0 {
+		return "", errors.New("ERR wrong number of arguments for 'xadd' command")
+	}
 	entry, err := self.streamEntryWithLock(key, true)
 	if err != nil {
 		return "", err

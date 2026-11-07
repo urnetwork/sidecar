@@ -189,6 +189,8 @@ func (self *Redis) take(ctx context.Context, address string) (*redisConnection, 
 
 func (self *Redis) give(connection *redisConnection) {
 	if connection.broken {
+		// a reply read cleanly can still leave a cancel racing it, with the socket open
+		connection.close()
 		return
 	}
 	kept := func() bool {

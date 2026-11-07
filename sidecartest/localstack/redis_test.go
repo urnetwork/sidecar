@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -308,6 +309,21 @@ func TestACancelledCallEndsAndItsSocketIsNotReused(t *testing.T) {
 		return len(redis.idleConnections[origin.address])
 	}(); count != 0 {
 		t.Errorf("idle sockets %d", count)
+	}
+}
+
+// A cancel racing a reply leaves a broken socket that nothing else closed.
+func TestABrokenSocketIsClosedNotDropped(t *testing.T) {
+	origin := newScriptedNode(t, nil)
+	origin.answer = func(socket *scriptedSocket, args []string) string {
+		return allSlotsReply(origin.address)
+	}
+	redis := newRedisOn(t, origin.address, nil)
+	near, far := net.Pipe()
+	defer far.Close()
+	redis.give(&redisConnection{address: origin.address, conn: near, broken: true})
+	if _, err := far.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("err %v: the socket is still open", err)
 	}
 }
 
