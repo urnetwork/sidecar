@@ -200,6 +200,7 @@ var failsOnRows = []failsOnRow{
 			"TestLegsFailsOnAFileOnlyWindowsCompiles", "TestLegsFailsOnATestOnlyJsCompiles",
 			"TestLegsFailsOnACliFileOnlyWindowsArm64Compiles", "TestLegsFailsOnAPageWorkerFileThatDoesNotCompile",
 			"TestLegsFailsOnAnEngineFileOnlyArm64Compiles", "TestLegsFailsOnACgoFileThisHostCompiles",
+			"TestLegsFailsOnAFileOnlyAndroidCompiles",
 		},
 	},
 

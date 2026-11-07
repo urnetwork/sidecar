@@ -319,26 +319,33 @@ func TestLegsFailsOnAnEngineFileOnlyArm64Compiles(t *testing.T) {
 	wantFindings(t, plantedCompileFindings(t, fixture, "engine_arm64.go"), "engines linux/arm64 does not compile")
 }
 
-// A cgo leg compiles on a host with its system's C toolchain, and fails there. Each other one is
-// reported as not compiled, never passed in silence, so the rule switched off fails this on any host.
-func TestLegsFailsOnACgoFileThisHostCompiles(t *testing.T) {
-	fixture := newFixture(t)
-	fixture.keepLegs("cgo darwin/arm64", "gomobile ios/arm64", "cgo linux/amd64", "gomobile android/arm64")
-	fixture.write("planted_cgo.go", "//go:build cgo\n\npackage sidecar\n\n"+plantedUncompiledBody)
+// The cgo rule over the fixture's legs, with what it reports.
+func reportedCompileFindings(t *testing.T, fixture *fixture) ([]string, []string) {
+	t.Helper()
 	repository := fixture.open()
 	reports := []string{}
 	repository.report = func(format string, arguments ...any) {
 		reports = append(reports, findingf(format, arguments...))
 	}
-	findings := repository.legCompileFindings(t)
+	return repository.legCompileFindings(t), reports
+}
+
+// A cgo leg compiles as it builds on a host with its system's C toolchain, and fails there. Each other
+// one compiles with cgo off, which leaves the file out, and is reported, never passed as compiled, so
+// the rule switched off fails this on any host.
+func TestLegsFailsOnACgoFileThisHostCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cgo darwin/arm64", "gomobile ios/arm64", "cgo linux/amd64", "gomobile android/arm64")
+	fixture.write("planted_cgo.go", "//go:build cgo\n\npackage sidecar\n\n"+plantedUncompiledBody)
+	findings, reports := reportedCompileFindings(t, fixture)
 	wants := []string{}
-	for _, leg := range repository.legs {
+	for _, leg := range fixture.legs {
 		if leg.compilesOn(runtime.GOOS, runtime.GOARCH) {
-			wants = append(wants, leg.name+" does not compile")
+			wants = append(wants, leg.name+" does not compile: ")
 			continue
 		}
-		if !slices.ContainsFunc(reports, func(line string) bool { return strings.HasPrefix(line, leg.name+" is not compiled") }) {
-			t.Errorf("%s went uncompiled and unreported: %v", leg.name, reports)
+		if !slices.ContainsFunc(reports, func(line string) bool { return strings.HasPrefix(line, leg.name+" compiles with cgo off: ") }) {
+			t.Errorf("%s compiled with cgo off unreported: %v", leg.name, reports)
 		}
 	}
 	slices.Sort(wants)
@@ -347,5 +354,25 @@ func TestLegsFailsOnACgoFileThisHostCompiles(t *testing.T) {
 		if !strings.Contains(finding, "planted_cgo.go:") {
 			t.Errorf("a finding lacks the planted file:\n%s", finding)
 		}
+	}
+}
+
+// No other leg has android's system, and no host here has its C toolchain, so only the cgo-off
+// compile reaches a file only android builds.
+func TestLegsFailsOnAFileOnlyAndroidCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64", "gomobile android/arm64")
+	fixture.write("planted_android.go", "package sidecar\n\n"+plantedUncompiledBody)
+	findings, reports := reportedCompileFindings(t, fixture)
+	wantFindings(t, findings, "gomobile android/arm64 does not compile with cgo off: ")
+	for _, finding := range findings {
+		if !strings.Contains(finding, "planted_android.go:") || !strings.Contains(finding, "undefined: undeclared") {
+			t.Errorf("a finding lacks the error planted in planted_android.go:\n%s", finding)
+		}
+	}
+	if !slices.ContainsFunc(reports, func(line string) bool {
+		return strings.HasPrefix(line, "gomobile android/arm64 compiles with cgo off: ")
+	}) {
+		t.Errorf("the android leg compiled with cgo off unreported: %v", reports)
 	}
 }

@@ -24,8 +24,8 @@ endif
 # RELEASE_BINARIES names built artifacts for the rules to read as well. This needs the module proxy
 # and vuln.go.dev for govulncheck, protoc once a .proto exists, node, which the sidecar_http leg's
 # tests run in, and on a darwin host Xcode, which the ios legs compile with, and fails without them:
-# a rule that did not run has not passed. Every leg compiles, but a cgo leg only on a host of its own
-# system, and the run's last lines name each leg this host left uncompiled.
+# a rule that did not run has not passed. Every leg compiles; a cgo leg whose C toolchain this host
+# lacks compiles with cgo off, and the run's last lines name each one.
 check:
 	@set -e; for module in $(modules); do \
 		echo "go test in $$module"; \
