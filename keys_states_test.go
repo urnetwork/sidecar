@@ -5,6 +5,7 @@ package sidecar
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -1093,6 +1094,41 @@ func TestAPassCostPastTheFormatIsRefused(t *testing.T) {
 		adjust(&settings)
 		_, err := newUnlockPassWrap(bytes.Repeat([]byte{1}, localKeyByteCount), 1, testPass, &settings, bytes.NewReader(make([]byte, 64)))
 		requireError(t, err, errInvalidSettings)
+	}
+}
+
+// A damaged pass wrap asks Argon2id for at most the bounds, since its AEAD can refuse it only once
+// Argon2id has run: one flipped bit in its memory once asked for 2 GiB, and its passes went to 1024.
+// §5.9's own costs fit.
+func TestADamagedPassCostIsRefusedBeforeArgon2idRuns(t *testing.T) {
+	for _, cost := range []unlockPassWrap{
+		{memoryKibiCount: 64 * 1024, iterationCount: 3, threadCount: 4},
+		{memoryKibiCount: 19 * 1024, iterationCount: 2, threadCount: 1},
+	} {
+		if !cost.costFits() {
+			t.Errorf("§5.9's cost %+v is refused", cost)
+		}
+	}
+	wrap := &unlockWrap{generation: 1, pass: &unlockPassWrap{memoryKibiCount: 64 * 1024, iterationCount: 3, threadCount: 4}}
+	encoded := wrap.encode()
+	if _, err := decodeUnlockWrap(encoded); err != nil {
+		t.Fatal(err)
+	}
+	// the pass's memory, then its passes, follow the magic, version, generation and wraps
+	memoryOffset := len(unlockWrapMagic) + 1 + 8 + 1
+	for _, damage := range []struct {
+		offset int
+		value  uint32
+	}{
+		{offset: memoryOffset, value: 0x210000},
+		{offset: memoryOffset, value: passMaxMemoryKibiCount + 1},
+		{offset: memoryOffset + 4, value: 1024},
+		{offset: memoryOffset + 4, value: passMaxIterationCount + 1},
+	} {
+		damaged := bytes.Clone(encoded)
+		binary.BigEndian.PutUint32(damaged[damage.offset:], damage.value)
+		_, err := decodeUnlockWrap(damaged)
+		requireError(t, err, ErrSidecarStoreFailed)
 	}
 }
 

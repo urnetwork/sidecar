@@ -38,8 +38,11 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// The format's values. The bounds refuse parameters no writer here makes, so a damaged file cannot ask a
-// device for more memory than it has. A setting past them is refused at the wrap, not at the open.
+// The format's values. A pass wrap's cost is read before its AEAD can refuse it, since Argon2id makes the
+// key the AEAD needs, so the bounds are all that holds a damaged file's ask: 256 MiB and 16 passes, 4x
+// §5.9's desktop memory and about 5x its passes, which is seconds on a desktop. A phone or a page Worker
+// has less than that, and the ceiling of those hosts is not set here. A setting past the bounds is
+// refused at the wrap, not at the open.
 const (
 	unlockWrapMagic          = "URUW"
 	unlockWrapVersion        = 1
@@ -48,8 +51,8 @@ const (
 	unlockWrapMaxPrevious    = 8
 	unlockWrapMaxByteCount   = 4 * 1024
 	passSaltByteCount        = 16
-	passMaxMemoryKibiCount   = 4 * 1024 * 1024
-	passMaxIterationCount    = 1024
+	passMaxMemoryKibiCount   = 256 * 1024
+	passMaxIterationCount    = 16
 	wrappedKeyNonceByteCount = chacha20poly1305.NonceSizeX
 	wrappedKeyByteCount      = localKeyByteCount + chacha20poly1305.Overhead
 )
