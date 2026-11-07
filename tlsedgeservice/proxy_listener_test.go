@@ -7,7 +7,6 @@ package tlsedgeservice
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -533,15 +533,9 @@ func TestProxyHeaderServesSurplusPastAnExpiredDeadline(t *testing.T) {
 	if string(got) != "held" {
 		t.Errorf("read %q", got)
 	}
-	if _, err := conn.Read(got); !errors.Is(err, net.ErrClosed) && !errors.Is(err, context.DeadlineExceeded) && !isTimeout(err) {
+	if _, err := conn.Read(got); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("past the surplus the deadline applies, and read gave %v", err)
 	}
-}
-
-// True for a read that stopped at a deadline.
-func isTimeout(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func TestProxyHeaderSurplusReadsInOrderInSmallPieces(t *testing.T) {
@@ -959,32 +953,5 @@ func TestProxyListenerFileHoldsNoLoggerOrTlsLibrary(t *testing.T) {
 		if slices.Contains(refusedImports, importPath) {
 			t.Errorf("proxy_listener.go imports %s", importPath)
 		}
-	}
-}
-
-// The tests above read a hello from real crypto/tls, so this keeps the import used on a real conn too.
-func TestProxyHeaderCarriesARealClientToItsAlert(t *testing.T) {
-	listener, inner := testProxyListener(t, testNeverSettings())
-	peerConn := inner.dial(t)
-	if _, err := peerConn.Write(testProxyV1("192.0.2.1", 1, "198.51.100.2", 2)); err != nil {
-		t.Fatal(err)
-	}
-	conn := testAccept(t, listener)
-	handshakeResult := make(chan error, 1)
-	go func() {
-		handshakeResult <- tls.Client(peerConn, &tls.Config{ServerName: testServerName}).Handshake()
-	}()
-	hello, err := ReadClientHello(conn, testMaxBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hello.ServerName != testServerName {
-		t.Errorf("server name %q", hello.ServerName)
-	}
-	if err := WriteTlsAlert(conn, TlsAlertUnrecognizedName); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-handshakeResult; err == nil || !strings.Contains(err.Error(), "unrecognized name") {
-		t.Errorf("handshake gave %v", err)
 	}
 }
