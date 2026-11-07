@@ -1,3 +1,5 @@
+// §5.4's machine, its events and the generation rule (D-SDK-14).
+
 package sidecar
 
 import (
@@ -23,6 +25,7 @@ func plainTransitionTo(state SidecarState, generation int64) sidecarTransition {
 	return transition
 }
 
+// The lifecycle plainTransitionTo arrives at.
 func plainLifecycleAt(state SidecarState, generation int64) sidecarLifecycle {
 	lifecycle := sidecarLifecycle{state: state, generation: generation}
 	if state == SidecarStateRevoked {

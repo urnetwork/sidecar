@@ -90,8 +90,8 @@ type SidecarSecrets interface {
 // each streamed through AEAD in chunks, so a large file needs no second copy in memory and no
 // plaintext reaches the disk, temp files included (§5.4's SidecarEnv.Store).
 //
-// A name is a relative path, with / between segments, and a segment is not empty, is not . or .., does
-// not start with a dot, and holds no \, :, or control character. Anything else answers
+// A name is a relative path, with / between segments. A segment is not empty, does not start with a
+// dot, does not end in a dot or a space, and holds no \, :, or control character. Anything else answers
 // ErrSidecarStoreName. A file opens only at its own path and under its own class, so a moved or
 // swapped file fails. Calls answer ErrSidecarStoreLocked while the keychain is locked, and a stream
 // open at that moment fails at its next chunk. Safe for concurrent use.

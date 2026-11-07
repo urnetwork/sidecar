@@ -191,7 +191,7 @@ type SidecarHeadAlarm string
 
 const (
 	SidecarHeadAlarmFork SidecarHeadAlarm = "fork"
-	// PROOF OF WITHHOLDING, §6.4's name for it.
+	// A peer holds proof that its entries are being withheld (§6.4).
 	SidecarHeadAlarmWithheld   SidecarHeadAlarm = "withheld"
 	SidecarHeadAlarmUnverified SidecarHeadAlarm = "unverified"
 	// 24 h without a consistent witness, or 1 h for a revocation this device signed.
