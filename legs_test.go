@@ -133,7 +133,15 @@ globalThis.fetch = (url, options) => {
 };
 const go = new Go();
 go.argv = [wasmPath, ...testArgs];
-go.exit = (code) => { nodeProcess.exitCode = code; };
+// the runtime can leave a wake armed behind it, and wasm_exec.js takes one firing after the program
+// ended as a crash, which would fail a run whose tests all passed. process.exit is no answer: it joins
+// V8's workers, and one waiting on a collection the main thread will never run holds it there forever
+go.exit = (code) => {
+	nodeProcess.exitCode = code;
+	for (const timeout of go._scheduledTimeouts.values()) {
+		clearTimeout(timeout);
+	}
+};
 WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.then((result) => go.run(result.instance))
 	.catch((err) => { console.error(err); nodeProcess.exitCode = 1; });
@@ -182,6 +190,59 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
 		}
+	}
+}
+
+// Blocks with a Go timer armed, then ends from a JS callback, so the runtime's wake for that timer is
+// still set when the program exits.
+const armedWakeProgram = `package main
+
+import (
+	"syscall/js"
+	"time"
+)
+
+func main() {
+	time.AfterFunc(50*time.Millisecond, func() {})
+	done := make(chan struct{})
+	js.Global().Call("setTimeout", js.FuncOf(func(this js.Value, args []js.Value) any {
+		close(done)
+		return nil
+	}), 1)
+	<-done
+}
+`
+
+// What ending with a wake armed does to the harness above, which once took it for a crash and failed a
+// run whose tests had all passed. The suite reaches this state only when its allocations leave the
+// runtime a timer, so a program that always does holds the harness to it.
+func TestWorkerHarnessOutlivesAWakeArmedAtExit(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatalf("the sidecar_http leg runs in node: %v", err)
+	}
+	goroot, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	programPath := filepath.Join(directory, "main.go")
+	wasmPath := filepath.Join(directory, "armed.wasm")
+	harnessPath := filepath.Join(directory, "worker.js")
+	if err := os.WriteFile(programPath, []byte(armedWakeProgram), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(workerHarness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", wasmPath, programPath)
+	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, output)
+	}
+	wasmExecPath := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
+	if output, err := exec.Command(node, harnessPath, wasmPath, wasmExecPath).CombinedOutput(); err != nil {
+		t.Fatalf("the harness failed a program that passed: %v\n%s", err, output)
 	}
 }
 
