@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("// first\n{ // second\r\n}\n// last")
