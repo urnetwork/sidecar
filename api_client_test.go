@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -90,10 +91,17 @@ func syntheticResponse(request *http.Request, status int, body string, header ht
 
 const testByJwt = "synthetic-client-jwt-canary"
 
+// The instant every test api's clock reads, so a Retry-After date asks for one wait.
+var testApiNow = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+func testApiClock() time.Time {
+	return testApiNow
+}
+
 // A client of the scripted api, with validSidecarSettings's urls and testByJwt installed.
 func newTestSidecarApi(t *testing.T, transport http.RoundTripper) *SidecarApi {
 	t.Helper()
-	api, err := newSidecarApi(validSidecarSettings(), transport)
+	api, err := newSidecarApi(validSidecarSettings(), transport, testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +151,10 @@ func asSidecarApiError(t *testing.T, err error) *SidecarApiError {
 func TestNewSidecarApiRefusesInvalidSettings(t *testing.T) {
 	settings := validSidecarSettings()
 	settings.ApiUrl = ""
-	if _, err := newSidecarApi(settings, answerWith(200, "{}")); !errors.Is(err, errInvalidSettings) {
+	if _, err := newSidecarApi(settings, answerWith(200, "{}"), testApiClock); !errors.Is(err, errInvalidSettings) {
 		t.Errorf("err %v", err)
 	}
-	if _, err := newSidecarApi(nil, answerWith(200, "{}")); !errors.Is(err, errInvalidSettings) {
+	if _, err := newSidecarApi(nil, answerWith(200, "{}"), testApiClock); !errors.Is(err, errInvalidSettings) {
 		t.Errorf("err %v", err)
 	}
 }
@@ -178,7 +186,7 @@ func TestRefreshNotSentWithoutSigner(t *testing.T) {
 
 func TestCallsPresentingATokenAreNotSentWithoutOne(t *testing.T) {
 	transport := answerWith(200, `{}`)
-	api, err := newSidecarApi(validSidecarSettings(), transport)
+	api, err := newSidecarApi(validSidecarSettings(), transport, testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -872,7 +880,7 @@ func TestErrorsAndLogsFromAFake500HoldNoToken(t *testing.T) {
 			return syntheticResponse(request, 500, `{"error":"`+echo+`","detail":"`+echo+`"}`, http.Header{"X-Echo": {echo}}), nil
 		},
 	}
-	api, err := newSidecarApi(settings, transport)
+	api, err := newSidecarApi(settings, transport, testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -992,7 +1000,7 @@ func TestAnAnswerPastItsBoundIsRefused(t *testing.T) {
 	settings := validSidecarSettings()
 	body := `{"generation":1}`
 	settings.ApiResponseByteCount = int64(len(body))
-	api, err := newSidecarApi(settings, answerWith(200, body))
+	api, err := newSidecarApi(settings, answerWith(200, body), testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1002,7 +1010,7 @@ func TestAnAnswerPastItsBoundIsRefused(t *testing.T) {
 	}
 
 	padded := `{"generation":1} `
-	api, err = newSidecarApi(settings, answerWith(200, padded))
+	api, err = newSidecarApi(settings, answerWith(200, padded), testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1012,7 +1020,7 @@ func TestAnAnswerPastItsBoundIsRefused(t *testing.T) {
 	}
 }
 
-// The body's retry_after_ms first, else Retry-After's seconds, clamped to a uint32.
+// The body's retry_after_ms first, else Retry-After's, clamped to a uint32.
 func TestRetryHintIsRead(t *testing.T) {
 	for _, c := range []struct {
 		body       string
@@ -1020,11 +1028,16 @@ func TestRetryHintIsRead(t *testing.T) {
 		ms         uint32
 	}{
 		{body: `{"limit_key":"synthetic","retry_after_ms":1500}`, retryAfter: "7", ms: 1500},
+		{body: `{"limit_key":"synthetic","retry_after_ms":1500}`, retryAfter: testApiNow.Add(time.Minute).Format(http.TimeFormat), ms: 1500},
 		{body: `{"error":"Synthetic."}`, retryAfter: "7", ms: 7000},
 		{body: `{"error":"Synthetic."}`, retryAfter: "86400", ms: 86400000},
 		{body: `{"error":"Synthetic."}`, retryAfter: "99999999999", ms: 4294967295},
+		// a date before the clock's now
 		{body: `{"error":"Synthetic."}`, retryAfter: "Wed, 21 Oct 2015 07:28:00 GMT", ms: 0},
+		{body: `{"error":"Synthetic."}`, retryAfter: testApiNow.Add(time.Minute).Format(http.TimeFormat), ms: 60000},
 		{body: `{"retry_after_ms":-5}`, retryAfter: "", ms: 0},
+		{body: `{"retry_after_ms":1e400}`, retryAfter: "", ms: 0},
+		{body: `{"retry_after_ms":1e12}`, retryAfter: "", ms: 4294967295},
 		{body: `Synthetic text`, retryAfter: "", ms: 0},
 	} {
 		transport := &scriptedApiTransport{
@@ -1036,6 +1049,89 @@ func TestRetryHintIsRead(t *testing.T) {
 		_, err := api.Bind(context.Background(), []byte("synthetic-binding"))
 		if apiErr := asSidecarApiError(t, err); apiErr.Status != 429 || apiErr.RetryAfterMs != c.ms {
 			t.Errorf("%s %q: %+v", c.body, c.retryAfter, apiErr)
+		}
+	}
+}
+
+// The refusal a 429 answer with retryAfter as its Retry-After makes, from api.
+func retryAfterRefusal(t *testing.T, api *SidecarApi, retryAfter string) *SidecarApiError {
+	t.Helper()
+	api.setTransport(&scriptedApiTransport{
+		answer: func(request *http.Request, body []byte) (*http.Response, error) {
+			return syntheticResponse(request, 429, `{"error":"Synthetic."}`, http.Header{"Retry-After": {retryAfter}}), nil
+		},
+	})
+	_, err := api.Bind(context.Background(), []byte("synthetic-binding"))
+	return asSidecarApiError(t, err)
+}
+
+// Retry-After as delay-seconds, digits alone, or as an HTTP-date in any of RFC 9110's three forms,
+// read against the api's clock: a date already past asks for no wait, and one past a uint32 of ms
+// for the longest.
+func TestRetryAfterDateIsReadAgainstTheClock(t *testing.T) {
+	inThirtySeconds := testApiNow.Add(30 * time.Second)
+	for _, c := range []struct {
+		retryAfter string
+		ms         uint32
+	}{
+		{retryAfter: inThirtySeconds.Format(http.TimeFormat), ms: 30000},
+		{retryAfter: inThirtySeconds.Format("Monday, 02-Jan-06 15:04:05 GMT"), ms: 30000},
+		{retryAfter: inThirtySeconds.Format(time.ANSIC), ms: 30000},
+		{retryAfter: testApiNow.Add(90 * time.Minute).Format(http.TimeFormat), ms: 5400000},
+		{retryAfter: testApiNow.Format(http.TimeFormat), ms: 0},
+		{retryAfter: testApiNow.Add(-time.Hour).Format(http.TimeFormat), ms: 0},
+		{retryAfter: testApiNow.Add(50 * 24 * time.Hour).Format(http.TimeFormat), ms: math.MaxUint32},
+		// no zone, so not an HTTP-date
+		{retryAfter: inThirtySeconds.Format("Mon, 02 Jan 2006 15:04:05"), ms: 0},
+		{retryAfter: "30", ms: 30000},
+		{retryAfter: "0", ms: 0},
+		{retryAfter: "+30", ms: 0},
+		{retryAfter: "-30", ms: 0},
+		{retryAfter: "3.5", ms: 0},
+		{retryAfter: "30 ", ms: 0},
+		{retryAfter: "99999999999999999999999", ms: math.MaxUint32},
+	} {
+		api := newTestSidecarApi(t, answerWith(200, `{}`))
+		if apiErr := retryAfterRefusal(t, api, c.retryAfter); apiErr.RetryAfterMs != c.ms {
+			t.Errorf("%q: %d ms, want %d", c.retryAfter, apiErr.RetryAfterMs, c.ms)
+		}
+	}
+}
+
+// A nil clock is real time: a date long past asks for no wait and one far ahead for the longest,
+// which the zero time would read the other way round.
+func TestNilClockReadsRealTime(t *testing.T) {
+	api, err := newSidecarApi(validSidecarSettings(), answerWith(200, `{}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.SetByJwt(testByJwt)
+	if apiErr := retryAfterRefusal(t, api, "Sun, 06 Nov 1994 08:49:37 GMT"); apiErr.RetryAfterMs != 0 {
+		t.Errorf("a past date: %d ms", apiErr.RetryAfterMs)
+	}
+	if apiErr := retryAfterRefusal(t, api, "Fri, 31 Dec 2117 23:59:59 GMT"); apiErr.RetryAfterMs != math.MaxUint32 {
+		t.Errorf("a date far ahead: %d ms", apiErr.RetryAfterMs)
+	}
+}
+
+// A body field of an unexpected type drops only itself: the code beside it is still read, and a
+// retry_after_ms that is not a number leaves the header's hint.
+func TestAMalformedRetryHintKeepsTheCode(t *testing.T) {
+	for _, body := range []string{
+		`{"code":"synthetic_code","retry_after_ms":"soon"}`,
+		`{"code":"synthetic_code","retry_after_ms":{"ms":5}}`,
+		`{"error":{"code":"synthetic_code","retry_after_ms":[1]}}`,
+		`{"error":"synthetic_code","retry_after_ms":null}`,
+	} {
+		transport := &scriptedApiTransport{
+			answer: func(request *http.Request, requestBody []byte) (*http.Response, error) {
+				return syntheticResponse(request, 429, body, http.Header{"Retry-After": {"7"}}), nil
+			},
+		}
+		api := newTestSidecarApi(t, transport)
+		_, err := api.Bind(context.Background(), []byte("synthetic-binding"))
+		if apiErr := asSidecarApiError(t, err); apiErr.Code != "synthetic_code" || apiErr.RetryAfterMs != 7000 {
+			t.Errorf("%s: %+v", body, apiErr)
 		}
 	}
 }

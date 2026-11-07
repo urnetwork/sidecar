@@ -63,7 +63,7 @@ func TestConnectTransportDialsThroughConnectSettings(t *testing.T) {
 
 	settings := validSidecarSettings()
 	settings.ApiUrl = "http://api.example"
-	api, err := newSidecarApi(settings, newSidecarApiTransport(ctx, strategy))
+	api, err := newSidecarApi(settings, newSidecarApiTransport(ctx, strategy), testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestConnectTransportDialsThroughConnectSettings(t *testing.T) {
 // Until the core installs a strategy's transport, a connect leg sends nothing rather than fall back
 // to net/http's default transport.
 func TestConnectLegRefusesWithoutAStrategy(t *testing.T) {
-	api, err := newSidecarApi(validSidecarSettings(), nil)
+	api, err := newSidecarApi(validSidecarSettings(), nil, testApiClock)
 	if err != nil {
 		t.Fatal(err)
 	}

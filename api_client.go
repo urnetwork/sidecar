@@ -31,7 +31,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -79,8 +81,8 @@ const sidecarApiMaxCodeByteCount = 64
 type SidecarApiError struct {
 	// The route as its method and path template, such as "GET /sidecar/identity/<sidecar_id>".
 	Route string
-	// The HTTP status. 200 means a 200 whose body held an error object, as refresh, auth-client and
-	// remove-client answer a refusal.
+	// The HTTP status. 200 also stands for any 2xx whose body held an error object, as refresh,
+	// auth-client and remove-client answer a refusal.
 	Status int
 	// The structured code: the body's code, or an RFC 6749 error code, such as restore_required,
 	// session_revoked, binding_invalid or invalid_grant. Empty when the answer held none, as a plain
@@ -88,7 +90,8 @@ type SidecarApiError struct {
 	// of the server's reaches here.
 	Code string
 	// How long the server asked the caller to wait: the body's retry_after_ms, else Retry-After's
-	// seconds. Zero: no hint.
+	// delay-seconds, or its HTTP-date less the api's clock, a date already past asking for no wait.
+	// Zero: no hint. Past a uint32 is its largest.
 	RetryAfterMs uint32
 }
 
@@ -104,6 +107,8 @@ func (self *SidecarApiError) Error() string {
 type SidecarApi struct {
 	settings *SidecarSettings
 	log      Logger
+	// the clock a Retry-After given as a date is read against; set once, at construction
+	now func() time.Time
 
 	stateLock sync.Mutex
 	// the authenticated jwt
@@ -120,14 +125,19 @@ type SidecarApi struct {
 // A client of api on settings, which must pass validate, so no route builds a url on an empty or
 // relative service url. transport carries every request; nil is the leg's default, which on
 // sidecar_http is fetch and on a connect leg refuses until the core installs its client strategy's
-// with setTransport. Whatever transport is given goes behind absoluteUrlTransport.
-func newSidecarApi(settings *SidecarSettings, transport http.RoundTripper) (*SidecarApi, error) {
+// with setTransport. Whatever transport is given goes behind absoluteUrlTransport. now is the clock a
+// Retry-After given as a date is read against, which a test fixes; nil is real time.
+func newSidecarApi(settings *SidecarSettings, transport http.RoundTripper, now func() time.Time) (*SidecarApi, error) {
 	if err := settings.validate(); err != nil {
 		return nil, err
+	}
+	if now == nil {
+		now = time.Now
 	}
 	return &SidecarApi{
 		settings:  settings,
 		log:       loggerOrDefault(settings.Log),
+		now:       now,
 		transport: wrapSidecarApiTransport(transport),
 	}, nil
 }
@@ -299,7 +309,7 @@ func (self *SidecarApi) send(ctx context.Context, request *sidecarApiRequest) ([
 		self.log.Infof("[api]%s %d\n", request.route, response.StatusCode)
 	}
 	if response.StatusCode < 200 || 300 <= response.StatusCode {
-		return nil, newSidecarApiError(request.route, response, responseBody)
+		return nil, newSidecarApiError(request.route, response, responseBody, self.now)
 	}
 	if tooLarge {
 		return nil, fmt.Errorf("sidecar api %s: %w: past %d bytes", request.route, ErrSidecarApiReply, self.settings.ApiResponseByteCount)
@@ -374,16 +384,17 @@ func sidecarApiCodeOf(raw json.RawMessage) string {
 
 // What a refusal's body may say, in the shapes api answers with: {"error": "<text>", "code":
 // "<code>"}, {"error": {"code": "<code>", ...}}, RFC 6749's {"error": "<code>"}, and a QuotaRefusal's
-// retry_after_ms (§20.7).
+// retry_after_ms (§20.7). Each field is raw, so one of an unexpected type drops only itself, never
+// the others beside it.
 type sidecarApiErrorBody struct {
 	Code         json.RawMessage `json:"code"`
 	Error        json.RawMessage `json:"error"`
-	RetryAfterMs *float64        `json:"retry_after_ms"`
+	RetryAfterMs json.RawMessage `json:"retry_after_ms"`
 }
 
 // The refusal a non-2xx answer carries, read from its body and headers: a code only where one is
-// well formed, and never the body's text.
-func newSidecarApiError(route string, response *http.Response, body []byte) *SidecarApiError {
+// well formed, and never the body's text. now is read only for a Retry-After given as a date.
+func newSidecarApiError(route string, response *http.Response, body []byte, now func() time.Time) *SidecarApiError {
 	apiErr := &SidecarApiError{
 		Route:  route,
 		Status: response.StatusCode,
@@ -400,14 +411,21 @@ func newSidecarApiError(route string, response *http.Response, body []byte) *Sid
 				apiErr.Code = sidecarApiCodeOf(nested.Code)
 			}
 		}
-		if errorBody.RetryAfterMs != nil {
-			apiErr.RetryAfterMs = clampRetryAfterMs(*errorBody.RetryAfterMs)
+		var retryAfterMs float64
+		if json.Unmarshal(errorBody.RetryAfterMs, &retryAfterMs) == nil {
+			apiErr.RetryAfterMs = clampRetryAfterMs(retryAfterMs)
 		}
 	}
 	if apiErr.RetryAfterMs == 0 {
-		// whole seconds; an HTTP-date gives no hint here
-		if seconds, err := strconv.ParseInt(response.Header.Get("Retry-After"), 10, 64); err == nil {
+		// RFC 9110 §10.2.3: delay-seconds, which is digits alone, or an HTTP-date in any of its three
+		// forms; anything else is no hint
+		retryAfter := response.Header.Get("Retry-After")
+		if retryAfter != "" && strings.Trim(retryAfter, "0123456789") == "" {
+			// digits alone, so the one error is past a uint64, which answers the largest
+			seconds, _ := strconv.ParseUint(retryAfter, 10, 64)
 			apiErr.RetryAfterMs = clampRetryAfterMs(float64(seconds) * 1000)
+		} else if retryTime, err := http.ParseTime(retryAfter); err == nil {
+			apiErr.RetryAfterMs = clampRetryAfterMs(float64(retryTime.Sub(now()).Milliseconds()))
 		}
 	}
 	return apiErr
