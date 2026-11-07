@@ -23,7 +23,6 @@ import (
 	"crypto/sha3"
 	"encoding/binary"
 	"errors"
-	"path/filepath"
 	"testing"
 	"testing/cryptotest"
 )
@@ -42,7 +41,7 @@ type mlsXWingVector struct {
 func mlsLoadXWingVectors(t *testing.T) []mlsXWingVector {
 	t.Helper()
 	var vectors []mlsXWingVector
-	mlsLoadVectorFile(t, filepath.Join("testdata", "mls", "xwing", "draft-connolly-cfrg-xwing-kem-11.json"), &vectors)
+	mlsLoadVectorFile(t, "xwing", "draft-connolly-cfrg-xwing-kem-11", &vectors)
 	if len(vectors) != 3 {
 		t.Fatalf("%d vectors, want the draft's three", len(vectors))
 	}
@@ -81,7 +80,7 @@ type mlsHpkePqVector struct {
 func mlsLoadHpkePqVector(t *testing.T) *mlsHpkePqVector {
 	t.Helper()
 	var vectors []*mlsHpkePqVector
-	mlsLoadVectorFile(t, filepath.Join("testdata", "mls", "xwing", "draft-ietf-hpke-pq-05-a5.json"), &vectors)
+	mlsLoadVectorFile(t, "xwing", "draft-ietf-hpke-pq-05-a5", &vectors)
 	if len(vectors) != 1 {
 		t.Fatalf("%d vectors, want one", len(vectors))
 	}

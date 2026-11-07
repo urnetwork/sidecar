@@ -1,5 +1,8 @@
+//go:build !js
+
 // Fuzz targets for everything mls_* decodes (§22.6). Native Go fuzzing, whose seeds run as ordinary
-// tests under go test, and crashers land in testdata/fuzz/ as more seeds (owner decision 101).
+// tests under go test, and crashers land in testdata/fuzz/ as more seeds (owner decision 101). Not on
+// js: testing.F reads its corpus directory before it runs a seed, and js has no directory to open.
 //
 // Each target holds decoding to what §22.6 asks of it: total, memory-bounded, and canonical, so that
 // what decodes re-encodes to the same bytes. These targets check mls_* alone. The differential half of
@@ -25,6 +28,58 @@ func mlsFuzzRoundTrip(t *testing.T, input []byte, value mlsDecodableEncodable) {
 	if !bytes.Equal(encoded, input) {
 		t.Fatalf("%x re-encoded as %x", input, encoded)
 	}
+}
+
+// Every input either fails or re-encodes to the bytes it used: nothing decodes that a canonical
+// encoder would not have produced, and no input panics.
+func FuzzMlsCodecIsCanonical(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Add([]byte{0x03, 0x01, 0x02, 0x03})
+	f.Add([]byte{0x40, 0x40})
+	f.Add([]byte{0x40, 0x3f})
+	f.Add([]byte{0x80, 0x00, 0x40, 0x00})
+	f.Add([]byte{0xc0})
+	f.Add([]byte{0x02, 0x00, 0x00})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		decoder := &mlsDecoder{remaining: input}
+		length := decoder.readLength()
+		if decoder.err != nil {
+			return
+		}
+		used := input[:len(input)-len(decoder.remaining)]
+		encoder := &mlsEncoder{}
+		encoder.writeLength(length)
+		encoded, err := encoder.finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(encoded, used) {
+			t.Fatalf("header %x decoded as %d, which encodes as %x", used, length, encoded)
+		}
+
+		var elements [][]byte
+		vectors := &mlsDecoder{remaining: input}
+		vectors.readVectorOf(func(element *mlsDecoder) {
+			elements = append(elements, element.readVector())
+		})
+		if vectors.err != nil {
+			return
+		}
+		used = input[:len(input)-len(vectors.remaining)]
+		encoder = &mlsEncoder{}
+		encoder.writeVectorOf(func(writer *mlsEncoder) {
+			for _, element := range elements {
+				writer.writeVector(element)
+			}
+		})
+		encoded, err = encoder.finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(encoded, used) {
+			t.Fatalf("vector %x re-encoded as %x", used, encoded)
+		}
+	})
 }
 
 // Seeds from the mlswg's trees, cut down to the suite this package runs.
