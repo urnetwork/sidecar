@@ -123,7 +123,16 @@ func (self indexKeySet) with(other indexKeySet) indexKeySet {
 
 // Whether a key is in both sets.
 func (self indexKeySet) overlaps(other indexKeySet) bool {
-	return len(self.without(other)) != len(self)
+	otherIndex := 0
+	for _, key := range self {
+		for otherIndex < len(other) && other[otherIndex] < key {
+			otherIndex += 1
+		}
+		if otherIndex < len(other) && other[otherIndex] == key {
+			return true
+		}
+	}
+	return false
 }
 
 // What a diff changes: its base's set less removed, plus added. added holds no key of the base, and removed only keys

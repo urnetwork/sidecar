@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 )
 
 // A 64-bit value's longest encoding.
@@ -26,9 +27,9 @@ func indexAppendVByte(dst []byte, value uint64) []byte {
 	return binary.AppendUvarint(dst, value)
 }
 
-// The bytes value encodes to.
+// The bytes value encodes to: seven bits each, and one for zero.
 func indexVByteLength(value uint64) int {
-	return len(indexAppendVByte(make([]byte, 0, indexVByteMaxByteCount), value))
+	return max(1, (bits.Len64(value)+6)/7)
 }
 
 // Reads one value from src's start, taking only the minimal encoding of a value that fits 64 bits, where

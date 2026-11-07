@@ -245,7 +245,7 @@ modules:
     leg: [client, engine, cli, test]
   - module: golang.org/x/text
     spdx: BSD-3-Clause
-    reason: through x/net today; from M10 normalizer 1 of §11.14, pinned to one version on every leg
+    reason: normalizer 1 of §11.14, pinned to one version on every leg
     leg: [client, engine, cli, test]
   - module: golang.org/x/time
     spdx: BSD-3-Clause

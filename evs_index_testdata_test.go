@@ -17,7 +17,7 @@ import (
 
 const testWriteVectorsEnvironment = "SIDECAR_WRITE_VECTORS"
 
-//go:embed testdata/index testdata/fuzz/FuzzIndexNormalize
+//go:embed testdata/index testdata/fuzz/FuzzIndexNormalize testdata/fuzz/FuzzIndexSlot testdata/fuzz/FuzzIndexEntry
 var testIndexFiles embed.FS
 
 // Writes a vector file, for the rewrite mode alone.

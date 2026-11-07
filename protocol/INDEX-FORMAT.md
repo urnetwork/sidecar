@@ -90,7 +90,7 @@ A row is at most 2,048 B in all. Whether `ref_id` is there is not in the file: t
 
 **Values.** `size` is the source's length in bytes: a whole file's on each of its chunks' rows. `chunk` is the chunk number of the doc_key, 0 for the first or only chunk. `trigram count` is n_d, the size of the document's key set, on diffs too. `started` and `expires` are seconds, and zero except on derived rows. A field with several values (§16.8's session ids and tools) joins them with one U+0020.
 
-**Trimming.** A value first has invalid UTF-8 replaced as in step 1, because a row's strings reach `SearchHit`. Then, in the fixed order locator, 1, 2, 3, 4, 6-15, each value keeps the longest prefix ending on a code point that is within its cap (512 B locator, 160 B fields 1-4, 256 B fields 6-15) and that leaves the row within 2,048 B with every later value empty. A field that lost bytes sets its bit. A cut locator sets none, since §11.14 gives it no bit, and such a hit shows but cannot be opened by its locator.
+**Trimming.** A value first has invalid UTF-8 replaced as in step 1, because a row's strings reach `SearchHit`. Then, in the fixed order locator, 1, 2, 3, 4, 6-15, each value keeps the longest prefix ending on a code point that is within its cap (512 B locator, 160 B fields 1-4, 256 B fields 6-15) and that leaves the row within 2,048 B, with every later value counted empty and the flags counted at their widest, 3 B, since a cut can widen them. A field that lost bytes sets its bit. A cut locator sets none, since §11.14 gives it no bit, and such a hit shows but cannot be opened by its locator.
 
 ## Entries
 
