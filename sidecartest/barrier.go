@@ -171,6 +171,8 @@ type BarrierDriver struct {
 	batonSince    time.Time
 	// no waiter takes the baton while set, so a step queues its actors together
 	batonPaused bool
+	// set by Close: an actor's goroutine stops at the next thing it does here
+	closed bool
 	// the explorer's choices; nil: none
 	random *rand.Rand
 }
@@ -292,7 +294,7 @@ func (self *BarrierDriver) Hit(name string, key string) {
 		actorName := ""
 		if run != nil {
 			actorName = run.actor.name
-			if run.actor.Killed() {
+			if self.closed || run.actor.Killed() {
 				self.abandonRunWithLock(run)
 				dead = true
 				return
@@ -354,6 +356,7 @@ func (self *BarrierDriver) abandonRunWithLock(run *actorRun) {
 	run.end()
 	self.batonWaiters = slices.DeleteFunc(self.batonWaiters, func(waiter *actorRun) bool { return waiter == run })
 	self.handBatonWithLock(run)
+	self.notifyWithLock()
 }
 
 // Keeps every actor from taking the baton until Resume, so what a step starts and releases all queues
@@ -426,7 +429,7 @@ func (self *BarrierDriver) handBatonWithLock(run *actorRun) {
 	self.notifyWithLock()
 }
 
-// Waits for the baton: run queues for it, and returns holding it.
+// Waits for the baton: run queues for it, and returns holding it, or never, if the driver closes first.
 func (self *BarrierDriver) awaitBaton(run *actorRun) {
 	var granted chan struct{}
 	func() {
@@ -446,7 +449,11 @@ func (self *BarrierDriver) awaitBaton(run *actorRun) {
 		self.notifyWithLock()
 	}()
 	if granted != nil {
-		<-granted
+		select {
+		case <-granted:
+		case <-self.reaped:
+			self.parkDead()
+		}
 	}
 }
 
@@ -550,6 +557,65 @@ func (self *BarrierDriver) AwaitHeld(ctx context.Context, site string, actorName
 			return hold.matches(site, actorName)
 		})
 	})
+}
+
+// As AwaitHeld, and fails at once if run ends without getting there. run may be nil.
+func (self *BarrierDriver) AwaitHeldOrEnded(ctx context.Context, site string, actorName string, run *ActorRun) error {
+	ended := false
+	err := self.awaitCondition(ctx, fmt.Sprintf("barrier %s", site), func() bool {
+		if slices.ContainsFunc(self.held, func(hold *heldBarrier) bool { return hold.matches(site, actorName) }) {
+			return true
+		}
+		if run != nil {
+			select {
+			case <-run.run.ended:
+				ended = true
+				return true
+			default:
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return err
+	}
+	if ended {
+		if err := run.Err(); err != nil {
+			return fmt.Errorf("ended before barrier %s: %w", site, err)
+		}
+		return fmt.Errorf("ended without reaching barrier %s", site)
+	}
+	return nil
+}
+
+// Waits for channel to close, with the same bound and the same care for a stalled baton as a barrier
+// has, so a schedule's other waits fail with its trace too.
+func (self *BarrierDriver) AwaitChannel(ctx context.Context, what string, channel <-chan struct{}) error {
+	timeout := time.After(self.settings.AwaitTimeout)
+	for {
+		var stallIn time.Duration
+		var changed chan struct{}
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			stallIn = self.checkStallWithLock()
+			changed = self.changed
+		}()
+		var stalled <-chan time.Time
+		if 0 < stallIn {
+			stalled = time.After(stallIn)
+		}
+		select {
+		case <-channel:
+			return nil
+		case <-changed:
+		case <-stalled:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout:
+			return fmt.Errorf("waited %s for %s", self.settings.AwaitTimeout, what)
+		}
+	}
 }
 
 // Waits for done to become true under the state lock, for at most settings.AwaitTimeout. While it
@@ -696,11 +762,13 @@ func (self *BarrierDriver) Violations() []string {
 	return slices.Clone(self.violations)
 }
 
-// Ends a test: whatever is still held parks dead, no site holds any more, and Reap lets them all leave.
+// Ends a test: whatever is held or waiting for the baton parks dead, no site holds any more, and Reap
+// lets them all leave. What a dead goroutine's deferred calls then do, no check reads.
 func (self *BarrierDriver) Close() {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		self.closed = true
 		for _, hold := range self.held {
 			hold.dead = true
 			if hold.run != nil {
@@ -710,6 +778,11 @@ func (self *BarrierDriver) Close() {
 		}
 		self.held = nil
 		self.arms = nil
+		for _, waiter := range self.batonWaiters {
+			waiter.end()
+		}
+		self.batonWaiters = nil
+		self.notifyWithLock()
 	}()
 	self.Reap()
 }
