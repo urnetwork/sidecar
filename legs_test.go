@@ -302,6 +302,10 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestMailVectorOrders",
 		"TestKeychainVectorsAreByteEqual",
 		"TestKeychainVectorsOpen",
+		"TestGkmLadderVectors",
+		"TestGkmWrapAadVectors",
+		"TestGkmWrapPathVectors",
+		"TestUrMlsCredentialRoundTrip",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
