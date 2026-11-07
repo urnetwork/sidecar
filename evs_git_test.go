@@ -876,8 +876,6 @@ func TestEvsGitDeltaApplyRefuses(t *testing.T) {
 		{name: "a copy of the largest size", base: base, delta: evsGitTestDelta(11, 1, 0xf0, 0xff, 0xff, 0xff)},
 		{name: "a copy past the result", base: base, delta: evsGitTestDelta(11, 2, 0x90, 3)},
 		{name: "an insert past the result", base: base, delta: evsGitTestDelta(11, 1, 2, 'a', 'b')},
-		{name: "a copy cut short at its offset", base: base, delta: evsGitTestDelta(11, 1, 0x91)},
-		{name: "a copy cut short at its size", base: base, delta: evsGitTestDelta(11, 1, 0x91, 1)},
 		{name: "an insert cut short", base: base, delta: evsGitTestDelta(11, 3, 3, 'a')},
 		{name: "an insert with no bytes", base: base, delta: evsGitTestDelta(11, 3, 3)},
 		{name: "a result left short", base: base, delta: evsGitTestDelta(11, 2, 1, 'a')},
@@ -885,6 +883,41 @@ func TestEvsGitDeltaApplyRefuses(t *testing.T) {
 		{name: "a copy after the result", base: base, delta: evsGitTestDelta(11, 1, 1, 'a', 0x90, 1)},
 		{name: "bytes after an empty result", base: base, delta: evsGitTestDelta(11, 0, 1, 'a')},
 	} {
+		if _, err := evsGitTestApply(c.base, c.delta); !errors.Is(err, ErrEvsGitDeltaInvalid) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
+
+// A copy cut off inside its operands is refused, as stock git (bad_length) and go-git refuse it, even
+// where the bytes it lacks, read as zero, would give a copy that fits: the size the bytes before the
+// cut spell, or the 64 KiB a size of zero means, which a 64 KiB base and result take whole. So each
+// delta here applies once its missing bytes are written as zero, and only the cut is refused.
+func TestEvsGitDeltaApplyRefusesACopyCutInsideItsOperands(t *testing.T) {
+	text := []byte("hello world")
+	zeros := make([]byte, 64*1024)
+	zerosSize := int64(len(zeros))
+	for _, c := range []struct {
+		name         string
+		base         []byte
+		delta        []byte
+		missingCount int
+	}{
+		{name: "at its second size byte", base: text, delta: evsGitTestDelta(11, 5, 0xb0, 5), missingCount: 1},
+		{name: "at its third size byte", base: text, delta: evsGitTestDelta(11, 5, 0xd0, 5), missingCount: 1},
+		{name: "at its third of three size bytes", base: text, delta: evsGitTestDelta(11, 5, 0xf0, 5, 0), missingCount: 1},
+		{name: "at its second size byte after an offset", base: text, delta: evsGitTestDelta(11, 5, 0xb1, 6, 5), missingCount: 1},
+		{name: "at its only offset byte", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x81), missingCount: 1},
+		{name: "at its fourth offset byte", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x8f, 0, 0, 0), missingCount: 1},
+		{name: "at its only size byte", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x90), missingCount: 1},
+		{name: "before any operand", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x91), missingCount: 2},
+		{name: "at its size after its offset", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x91, 0), missingCount: 1},
+		{name: "at its second size byte of zero", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0xb0, 0), missingCount: 1},
+	} {
+		whole := append(bytes.Clone(c.delta), make([]byte, c.missingCount)...)
+		if _, err := evsGitTestApply(c.base, whole); err != nil {
+			t.Errorf("%s, written whole: %v", c.name, err)
+		}
 		if _, err := evsGitTestApply(c.base, c.delta); !errors.Is(err, ErrEvsGitDeltaInvalid) {
 			t.Errorf("%s: %v", c.name, err)
 		}
@@ -1772,12 +1805,14 @@ func checkEvsPktLineStream(t testing.TB, stream []byte) {
 	}
 }
 
-// Seeds of the delta apply target: the seed files, and copies that need a base of over 64 KiB.
+// Seeds of the delta apply target: the seed files, and copies that need a base of 64 KiB or more,
+// one of them cut inside its offset where a zero read for the missing byte would copy the whole base.
 func evsGitDeltaApplySeeds(t testing.TB) [][]byte {
 	t.Helper()
 	return append(evsGitFuzzSeedFiles(t, "testdata/fuzz/evs_git_delta"),
 		evsGitFuzzJoin(make([]byte, 64*1024), evsGitTestDelta(64*1024, 64*1024, 0x80)),
-		evsGitFuzzJoin(make([]byte, 64*1024+1), evsGitTestDelta(64*1024+1, 64*1024+1, 0xd0, 1, 1)))
+		evsGitFuzzJoin(make([]byte, 64*1024+1), evsGitTestDelta(64*1024+1, 64*1024+1, 0xd0, 1, 1)),
+		evsGitFuzzJoin(make([]byte, 64*1024), evsGitTestDelta(64*1024, 64*1024, 0x81)))
 }
 
 // Whatever apply is given it refuses or answers the size it wrote, under any shape of its reads, and

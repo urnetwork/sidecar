@@ -489,6 +489,9 @@ func FuzzEvsGitDeltaApplyEqualsGoGit(f *testing.F) {
 	for _, seed := range seedFiles(f, "evs_git_delta") {
 		f.Add(seed)
 	}
+	// a 64 KiB base, and a delta of two 64 KiB sizes and a copy cut at its one offset byte, which a zero
+	// read for that byte would make a copy of the whole base
+	f.Add(slices.Concat([]byte{1, 0, 0}, make([]byte, 64*1024), []byte{0x80, 0x80, 0x04, 0x80, 0x80, 0x04, 0x81}))
 	f.Fuzz(func(t *testing.T, input []byte) {
 		base, delta := splitSeed(input)
 		checkApplyEqualsGoGit(t, base, delta)
