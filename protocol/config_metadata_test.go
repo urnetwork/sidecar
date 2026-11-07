@@ -1,7 +1,8 @@
 // §2.8's guard for §7.9's records (I-18): every field a server can read in signed.proto, auth.proto and config.proto is
-// named by the api-7 row of the published list, read here from DESIGN.md. It is the same check sidecartest's schema
-// guard makes of every row once that lands, and this table is what it takes over: a new field fails here until someone
-// says what the list calls it, so a value cannot reach the server unlisted.
+// named by the api-7 row of metadata_list.yml, the published list. It is the check sidecartest's schema guard will make
+// of every row once that lands, and this table is what it takes over: a new field fails here until someone says what
+// the list calls it, so a value cannot reach the server unlisted. The list is read as text, since protocol's tests
+// cannot import sidecartest, whose strict reader holds its shape.
 
 package protocol
 
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 )
+
+const testMetadataListPath = "../metadata_list.yml"
 
 // How a server sees a field: by a phrase of api-7's, or not at all because a seal or the config repo's ciphertext holds it.
 const (
@@ -171,19 +174,19 @@ var testApi7Unlisted = map[string]struct {
 	"ProjectionHeader.rows_byte_count": {question: "team-records-api7-base-header-fields", word: "rows_byte_count"},
 }
 
-// api-7's block of §2.8's list as DESIGN.md prints it.
+// api-7's block of the list.
 func testApi7Row(t *testing.T) string {
-	design, err := os.ReadFile(testDesignPath)
+	list, err := os.ReadFile(testMetadataListPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, rest, found := strings.Cut(string(design), "\napi-7:\n")
+	_, rest, found := strings.Cut(string(list), "\napi-7:\n")
 	if !found {
-		t.Fatal("no api-7 row in DESIGN.md")
+		t.Fatalf("no api-7 row in %s", testMetadataListPath)
 	}
 	row, _, found := strings.Cut(rest, "\napi-8:\n")
 	if !found {
-		t.Fatal("no row after api-7 in DESIGN.md")
+		t.Fatalf("no row after api-7 in %s", testMetadataListPath)
 	}
 	return row
 }
