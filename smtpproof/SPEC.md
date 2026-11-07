@@ -217,7 +217,7 @@ No tag is checked in the circuit. For client records the MX checks it; for serve
 
 1. Every octet of H is HTAB, SP through `~`, CR or LF. CR occurs only before LF, and LF only after CR.
 2. H ends in CRLF CRLF, and no earlier line is empty.
-3. The first line is not a continuation, and every line that does not begin with SP or HTAB begins with one or more octets of 21-7E other than `:`, then `:`. So `From :` is refused rather than left to each receiver's reading of obsolete syntax.
+3. The first line is not a continuation, and every line that does not begin with SP or HTAB begins with one or more octets of 21-7E other than `:`, then `:`, and its first octet is not `.`. So `From :` is refused rather than left to each receiver's reading of obsolete syntax, and `.From:` is refused because an MX reading DATA deletes that dot (RFC 5321 §4.5.2): the field Z5 read as `.from` would reach it as a second From.
 4. Exactly one line has each of the field names `from`, `message-id`, `x-ur-ref` and `feedback-id`, compared without case, and no continuation follows any of them. Each has its literal form:
    - `From: ` [phrase SP] `<` local `@` header_from_domain `>` CRLF, where phrase holds only `local` octets and SP, so `From` holds one address. Encoded words fit in phrase, with no `"`, `,`, `:`, `;`, `<`, `>` or `@`.
    - `Message-ID: <` message_id `>` CRLF
@@ -251,7 +251,7 @@ D-SMTP-16's corpus, FS-31 included. Each row must fail before any effect, with h
 | Record splits, a command split or two in one record | Z3 and Z4: one command per record, template by length |
 | Replayed server replies | Z7: a record decrypts only at its own `seq`, which the edge assigns |
 | A pipelined second transaction | Z4 and E3: every client record is proven; a second MAIL has no part |
-| Smuggled headers, a second From | Z5.3, Z5.4 |
+| Smuggled headers, a second From, one behind a leading dot | Z5.3, Z5.4 |
 | An early or bare-LF DATA end | Z6 |
 | No CHUNKING; CHUNKING only before TLS | Z8, Z9 over the post-TLS reply; the edge's pre-TLS hints are not inputs |
 | No PIPELINING | The sidecar paces records; one part covers them; E3 forwards in order |
@@ -300,6 +300,8 @@ In no case does a body octet reach the MX's command parser.
 
 Every octet is opened. Z6's no-bare-CR-or-LF and no-`.`-line conditions mean no receiver, strict or lax about line endings (CVE-2023-51764), sees an end of data before the proven end mark. A reply arriving after a message record was released, such as a late refusal, holds the next message record (E3 step 5), and a refusal is unprovable, so the connection ends with no further octets.
 
+What the MX stores is not quite what was proven: it deletes each line's leading dot (RFC 5321 §4.5.2). Z5.3 keeps that from touching the header block, whose lines begin with a field name or with SP or HTAB, so the header block Z5 read is the one it stores. The body is unconstrained either way.
+
 ### 9.7 Conclusion
 
 9.3 gives the exact client command stream, Z4 gives its shape, 9.4 gives that the MX acted on it as a transaction, and 9.5 and 9.6 that nothing beyond it reaches the command parser. Z5 and Z6 give the message's properties, each over proven octets. That is section 1's claim.
@@ -307,6 +309,7 @@ Every octet is opened. Z6's no-bare-CR-or-LF and no-`.`-line conditions mean no 
 ### 9.8 Known weak points for the reviewers
 
 - Z5 constrains what receivers parse only as far as receivers agree with RFC 5322 on the normal form. A receiver that treats some other octet as a line ending defeats Z5.3; none is known for the class Z5.1 permits, and the corpus should keep looking.
+- Z5 does not bound a line's length. A hop that breaks a line past 998 octets without folding it would start a new header line mid-field, where Z5 saw none. Postfix and sendmail both fold such a line, as far as their documentation says, and nothing here has tested either. A bound is a counter and a range check per octet, about 50,000 constraints on a 4 KiB header block, if the reviewers want it.
 - 1.2's 128-bit margin (9.2), and BN254's estimated 100 to 110 bits for forging a proof, are the two smallest numbers in this document. Forgery costs abuse control, never confidentiality (10.2).
 - The Groth16 setup's soundness rests on the edge's own contribution (10.3). That is the right party, but a leaked toxic secret is silent. Rotation is a key-management item.
 
@@ -459,6 +462,7 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 15. **The fixed signature leads with `h=`** (Z5.5), since DKIM's tag order is free and a constant prefix makes "exactly one" a sum.
 16. **A chunk short of octet n at QUIT is a record cut** (E3). §14.7 names only a body past octet n, but Z6 requires n exactly and an honest sidecar never falls short.
 17. **Server replies stay parsed only where a part covers them.** A keyword split across records does not count as CHUNKING, so such an MX falls to DATA. That costs coverage, never soundness.
+18. **A header field name never starts with a dot, in either mode** (Z5.3). DATA needs it, since an MX deletes that dot. BDAT does not, and one rule costs an honest message nothing, because RFC 5322 field names in real mail do not start with one.
 
 ## 14. Open
 

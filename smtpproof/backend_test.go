@@ -227,6 +227,7 @@ func TestEnvelopeCircuitAgreesWithTheRelationOnReplies(t *testing.T) {
 		{name: "chunking in the MX's name line", content: "250-CHUNKING\r\n250 OK\r\n"},
 		{name: "chunking inside a longer keyword", content: "250-mx\r\n250-XCHUNKING\r\n250 OK\r\n"},
 		{name: "a keyword starting with chunking", content: "250-mx\r\n250-CHUNKINGX\r\n250 OK\r\n"},
+		{name: "a keyword only Unicode folds to chunking", content: "250-mx\r\n250-CHUN\u212aING\r\n250 OK\r\n"},
 		{name: "a one-line reply", content: "250 mx\r\n"},
 		{name: "another code", content: "251-mx\r\n250-CHUNKING\r\n250 OK\r\n"},
 		{name: "another code on the last line", content: "250-mx\r\n250-CHUNKING\r\n251 OK\r\n"},
@@ -333,6 +334,32 @@ func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
 		witness.serverKey[0] ^= 1
 		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
 			t.Errorf("%s: a substituted server key: accepted", leg.name)
+		}
+	}
+}
+
+func TestEnvelopeCircuitFindsNoKeywordInsideATicket(t *testing.T) {
+	t.Parallel()
+	// a ticket's octets are skipped, so they are no part of the reply Z9 reads, and whatever a ticket
+	// holds cannot stand in for the keyword the EHLO reply lacks
+	for _, leg := range testTlsLegs()[:2] {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		statement, witness := capture.part(t, 2)
+		statement.serverRecords = append(statement.serverRecords[:1], &partRecord{seq: statement.serverRecords[0].seq + 1, raw: bytes.Clone(statement.serverRecords[0].raw)})
+		witness.serverPlaintexts = append(witness.serverPlaintexts[:1], nil)
+		ticket := append([]byte{tlsHandshakeNewSessionTicket, 0, 0, 16}, []byte("\r\n250-CHUNKING\r\n")...)
+		testAuthorServerRecord(t, statement, witness, 0, append(ticket, tlsRecordHandshake))
+		testAuthorServerRecord(t, statement, witness, 1, testServerContent(statement, "250-mx\r\n250 OK\r\n"))
+		testExpectOnly(t, leg.name, statement, witness, checkZ9)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+			t.Errorf("%s: the circuit took a ticket's octets for the keyword", leg.name)
+		}
+
+		// the same reply with the keyword in it is what the check is for
+		testAuthorServerRecord(t, statement, witness, 1, testServerContent(statement, "250-mx\r\n250 CHUNKING\r\n"))
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Errorf("%s: a ticket beside a reply that offers it: %v", leg.name, err)
 		}
 	}
 }
@@ -989,9 +1016,12 @@ func TestMeasureShapes(t *testing.T) {
 	}
 }
 
-// Measures every part of one whole send under real Groth16, through the real gate, with a real
-// test-only setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes;
-// this takes minutes, so it stays out of the ordinary run. Its output is SPEC.md 11.3's source.
+// Measures every part of whole sends under real Groth16, through the real gate, with a real test-only
+// setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes; this takes
+// minutes, so it stays out of the ordinary run. Each leg sends D-SMTP-16's BDAT case, then unless
+// SMTPPROOF_MEASURE_BDAT_ONLY is set a DATA send of the same header block and three body parts, which
+// is enough to price a part: D-SMTP-16's 100 KiB is that part's cost times the parts it takes. Its
+// output is SPEC.md 11.3's source.
 func TestMeasureWholeSend(t *testing.T) {
 	legs := os.Getenv("SMTPPROOF_MEASURE")
 	if legs == "" {
@@ -1004,17 +1034,25 @@ func TestMeasureWholeSend(t *testing.T) {
 		// D-SMTP-16's BDAT case: a 4 KiB header block and 10 recipients
 		recipients := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"}
 		padding := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58)
-		message := padding + testHeaderBlock() + "a body line\r\n"
-		job := testJob("", recipients...)
-		job.Message = []byte(message)
-		job.Preamble.MessageByteCount = uint64(len(message))
-		t.Logf("%s: header block %d octets", leg.name, strings.Index(message, "\r\n\r\n")+4)
-
-		backend := newGroth16Backend()
-		measuring := &testMeasuringBackend{t: t, backend: backend, kinds: map[partShape]bool{}}
-		send := testRunSendWith(t, leg, testMxDefaults(), DefaultProverSettings(), job, measuring, measuring)
-		testExpectOneTransaction(t, leg, send, job)
-		t.Logf("%s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
+		measuring := &testMeasuringBackend{t: t, backend: newGroth16Backend(), kinds: map[partShape]bool{}}
+		send := func(body string, settings *ProverSettings, mode string) {
+			message := padding + testHeaderBlock() + body
+			job := testJob("", recipients...)
+			job.Message = []byte(message)
+			job.Preamble.MessageByteCount = uint64(len(message))
+			t.Logf("%s %s: header block %d octets, body %d octets", leg.name, mode, strings.Index(message, "\r\n\r\n")+4, len(body))
+			measuring.provingTotal = 0
+			measuring.cpuTotal = 0
+			result := testRunSendWith(t, leg, testMxDefaults(), settings, job, measuring, measuring)
+			testExpectOneTransaction(t, leg, result, job)
+			t.Logf("%s %s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, mode, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
+		}
+		send("a body line\r\n", DefaultProverSettings(), "bdat")
+		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") == "" {
+			settings := DefaultProverSettings()
+			settings.ForceData = true
+			send(strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100), settings, "data")
+		}
 	}
 }
 

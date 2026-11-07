@@ -389,6 +389,10 @@ func testSmuggledHeaders(t *testing.T) []testHeaderCase {
 		{name: "a second From", block: fromLine + header},
 		{name: "a second From in another case", block: "FROM: <x@victim.example>\r\n" + header},
 		{name: "From before a colon-spaced name", block: "From : <x@victim.example>\r\n" + header},
+		// an MX reading DATA deletes the dot (RFC 5321 §4.5.2), and what is left is a second field
+		{name: "a second From behind a dot", block: ".From: <x@victim.example>\r\n" + header},
+		{name: "a second Message-ID behind a dot", block: ".Message-ID: <x@victim.example>\r\n" + header},
+		{name: "any field behind a dot", block: replaced("Subject: A", ".Subject: A")},
 		{name: "From in another domain", block: replaced(fromLine, "From: Alice <alice@victim.example>\r\n")},
 		{name: "two addresses in From", block: replaced(fromLine, "From: <x@victim.example>, <alice@"+testNetworkDomain+">\r\n")},
 		{name: "an address hidden in the phrase", block: replaced(fromLine, "From: x@victim.example <alice@"+testNetworkDomain+">\r\n")},
@@ -645,6 +649,7 @@ func TestZ9RefusesBdatToAnMxWithoutChunking(t *testing.T) {
 		{name: "not offered", content: "250-mx\r\n250-PIPELINING\r\n250 SMTPUTF8\r\n"},
 		{name: "only in the MX's name line", content: "250-CHUNKING\r\n250 SMTPUTF8\r\n"},
 		{name: "inside another keyword", content: "250-mx\r\n250-XCHUNKINGX\r\n250 SMTPUTF8\r\n"},
+		{name: "only under Unicode case folding", content: "250-mx\r\n250-CHUN\u212aING\r\n250 SMTPUTF8\r\n"},
 		{name: "a one-line reply", content: "250 mx\r\n"},
 	}
 	for _, leg := range testTlsLegs() {

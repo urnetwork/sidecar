@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -208,7 +207,7 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	mode := partModeData
 	pipelining := false
 	for i, text := range replies[0].lines {
-		keyword := strings.ToLower(text)
+		keyword := asciiLower([]byte(text))
 		if 0 < i && keyword == keywordChunking && !self.settings.ForceData {
 			mode = partModeBdat
 		}
@@ -299,8 +298,8 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	return self.sendData(ctx, headerBlock, stuffed[headerEnd:])
 }
 
-// A message as DATA carries it: a leading dot doubled on each line (RFC 5321 §4.5.2). The header
-// block is unchanged, since Z5 keeps a dot from starting a line there.
+// A message as DATA carries it: a leading dot doubled on each line (RFC 5321 §4.5.2). Z5.3 refuses a
+// header line that starts with a dot, so a header block that can be proven comes through unchanged.
 func dotStuffed(message []byte) []byte {
 	stuffed := make([]byte, 0, len(message))
 	lineStart := true

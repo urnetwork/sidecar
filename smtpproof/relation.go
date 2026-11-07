@@ -292,6 +292,18 @@ func localOctet(octet byte) bool {
 	return bytes.IndexByte([]byte("#$&'*+-/=?^_`{|}~."), octet) != -1
 }
 
+// Letters in lower case and every other octet as it is, which is what forcing bit 5 does in the
+// circuit. bytes.ToLower is no substitute: it also folds the Kelvin sign's three octets to k.
+func asciiLower(octets []byte) string {
+	lower := bytes.Clone(octets)
+	for i, octet := range lower {
+		if 'A' <= octet && octet <= 'Z' {
+			lower[i] = octet + 'a' - 'A'
+		}
+	}
+	return string(lower)
+}
+
 // A record's AEAD ciphertext, without framing, explicit nonce or tag. The AEAD plaintext has this
 // same length.
 func recordCiphertext(version uint16, raw []byte) ([]byte, error) {
@@ -642,7 +654,12 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 				return errors.New("field name holds an octet outside 21-7E")
 			}
 		}
-		name := string(bytes.ToLower(line[:colon]))
+		// an MX reading DATA deletes a line's leading dot (RFC 5321 §4.5.2), so what Z5 read as some
+		// other field would reach it as the field after the dot
+		if line[0] == '.' {
+			return errors.New("field name starts with a dot")
+		}
+		name := asciiLower(line[:colon])
 		continued := i+1 < len(lines) && 0 < len(lines[i+1]) && (lines[i+1][0] == ' ' || lines[i+1][0] == '\t')
 		// rule 4: the four single fields and their literal forms
 		var literal string
@@ -985,7 +1002,7 @@ func relationZ9(statement *partStatement, witness *partWitness) error {
 	}
 	for i, text := range replies[0].lines {
 		// the first line is the MX's name, never a keyword
-		if 0 < i && string(bytes.ToLower([]byte(text))) == keywordChunking {
+		if 0 < i && asciiLower([]byte(text)) == keywordChunking {
 			return nil
 		}
 	}

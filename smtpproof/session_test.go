@@ -871,6 +871,9 @@ func TestProverRefusesAMessageTheRelationRefuses(t *testing.T) {
 		{name: "wrong message id", mutation: func(job *sidecar.SmtpProofJob) {
 			job.Preamble.MessageId = "other@" + testNetworkDomain
 		}},
+		{name: "a field behind a leading dot", mutation: func(job *sidecar.SmtpProofJob) {
+			job.Message = append([]byte(".From: <x@victim.example>\r\n"), job.Message...)
+		}},
 	}
 	for _, leg := range testTlsLegs() {
 		for _, c := range cases {

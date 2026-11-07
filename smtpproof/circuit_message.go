@@ -271,7 +271,9 @@ func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuit
 			api.AssertIsEqual(isWsp, 0)
 		}
 		nameStart := api.Mul(lineStart, api.Sub(1, isWsp))
-		api.AssertIsEqual(api.Mul(nameStart, isColon[i]), 0)
+		// nor does a name start with a dot, which an MX reading DATA would delete (RFC 5321 §4.5.2),
+		// leaving a field no fingerprint below saw
+		api.AssertIsEqual(api.Mul(nameStart, api.Add(isColon[i], api.IsZero(api.Sub(values[i], octetDot)))), 0)
 		naming := api.Add(inName, nameStart)
 		api.AssertIsEqual(api.Mul(naming, api.Add(isWsp, crActive[i])), 0)
 		inName = api.Mul(naming, api.Sub(1, isColon[i]))
