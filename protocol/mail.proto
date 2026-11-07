@@ -218,7 +218,7 @@ enum MailTlsLabel {
   MAIL_TLS_LABEL_UNSPECIFIED = 0;  // a sent copy, or mail no ingest labeled: shown as no label, never as validated
   MAIL_TLS_VALIDATED = 1;
   MAIL_TLS_OPPORTUNISTIC = 2;
-  MAIL_TLS_MEMBER_SIGNED = 3;      // the sender's signature replaces the label (D-MAIL-8)
+  MAIL_TLS_MEMBER_SIGNED = 3;      // the sender's signature replaces the label (D-MAIL-8), if it may send as From
 }
 
 enum MailTlsRule {

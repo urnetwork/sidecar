@@ -1,6 +1,10 @@
-# Fixed bytes of protocol/mail.proto, which MAIL-FORMAT.md states. Each message's hex came from protoc --encode over its
-# text, the C++ encoder, so these and the Go code cannot share a bug. mail_vectors_test.go holds them on every leg it
-# runs on, and fails on a message or field no vector covers. All names and addresses are synthetic.
+# Fixed bytes of protocol/mail.proto, which MAIL-FORMAT.md states. Each message's hex came from protoc over its text, the
+# C++ encoder, so these and the Go code cannot share a bug:
+#
+#   protoc -I=. --encode=urnetwork.sidecar.<type> protocol/mail.proto < <text> | xxd -p | tr -d '\n'
+#
+# run from the repo root. mail_vectors_test.go holds them on every leg it runs on, and fails on a message or field no
+# vector covers. All names and addresses are synthetic.
 #
 # Keep the file to this shape, which that test reads line by line since the root links no YAML parser: sections, each a
 # list of flat items, a value being one plain scalar or the literal block of text.

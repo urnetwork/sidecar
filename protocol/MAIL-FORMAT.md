@@ -48,13 +48,15 @@ Every value here but `MailIngress` and `MailHint` is sealed under §11, so none 
 
 A deposit's sealed header (15.7), one per repo, holding that repo's recipients only, so BCC stays private across repos. The deposit id is the message id. The body is the message as received, and `MailAuthEvidence.message_sha256` names it. How header and body are sealed and laid out is §11's, under plan-MAIL-deposit-shape and plan-EVS1-format-bytes. This note fixes only the header's bytes.
 
-A same-network deposit (D-MAIL-8) has neither `ingress` nor `evidence`, and its `tls_version` and `tls_suite` are 0. A receiver's deposit with no `evidence` is "evidence unavailable". `receiver_sidecar_id` is the depositor in both, and ingest holds it to the push's signer.
+A same-network deposit (D-MAIL-8) has neither `ingress` nor `evidence`, and its `tls_version` and `tls_suite` are 0. A receiver's deposit with no `evidence` is "evidence unavailable". `receiver_sidecar_id` is the depositor in both, and ingest holds it to the push's signer. A direct-MX session has no router, so its receiver builds `ingress` itself (MAIL-M7-23), within the same bound.
+
+Leaving those fields out earns nothing: a deposit takes `MAIL_TLS_MEMBER_SIGNED` only if the push's signer may send as the message's From (`mail:<alias>#send`, §15.10). Anything else without evidence is "evidence unavailable", so a receiver that drops `ingress` and `evidence` gets the weakest label, never the strongest.
 
 A mailbox's deposit ref also takes §16.8's `read` receipts from readers that do not write. Ingest tells those by the depositor's role (§11.12), never by these bytes.
 
 ## `i/`: the message list
 
-A `MailIndexSegment` is `version`, then one `entries` record per message. Encoded, it is the bytes it held before and then one record, so a writer appends: it adds the tag, length and encoded `IndexEntry` to the bytes it read and writes those. It never re-encodes what it read, so a newer writer's fields stay, and §11.7's diff is the record.
+A `MailIndexSegment` is `version`, then one `entries` record per message. Encoded, it is the bytes it held before and then one record, so a writer appends: it adds the tag, length and encoded `IndexEntry` to the bytes it read and writes those. It never re-encodes what it read, so a newer writer's fields stay, and §11.7's git delta against the previous version is a copy and that record.
 
 A writer takes the month's highest `<n>`. It starts `<n>` + 1 when the record would take the segment past 1,048,576 B or past 4,096 entries. A racing write gets evs's path 409, re-reads and starts again. A re-checkpoint (15.7) rewrites a segment without its erased entries and keeps its `<n>`, and a full segment stays under the 1,088 KiB §15.7 lets it re-key.
 
@@ -76,8 +78,8 @@ An entry at these caps takes under 16 KiB, so a segment holds at least 64.
 
 - **`address`** is the first of the deposit's recipients in this repo.
 - **`thread_key`** is the first 16 B of SHA-256 over a message id without its brackets: the first of `References`, else the first of `In-Reply-To`, else the message's own `Message-ID`. A message with none of these takes its `id`. So two devices ingesting one thread agree.
-- **`auth_results`** summarizes the evidence for a list. `dkim` is pass if any selected signature passed, else the first selected one's verdict, else 0. `checks_incomplete` says `limits` was set. `evidence_unavailable` says a receiver sealed none. The `Authentication-Results` header in `m/` has the rest.
-- **`tls_label`** is 0 on a sent copy, which no reception labeled: a sent message's level is `MailOutcome.tls_level`. A reader shows 0 as no label, never as validated. `MAIL_TLS_MEMBER_SIGNED` is same-network mail, whose sender's signature replaces the label (D-MAIL-8).
+- **`auth_results`** summarizes the evidence for a list. `dkim` is pass if any selected signature passed, else the first selected one's verdict, else 0. `checks_incomplete` says `limits` was set. `evidence_unavailable` says a receiver sealed none. The `Authentication-Results` header in `m/` has the rest. `spf` and `dkim` speak for whatever domain the sender chose, so only `dmarc` says anything about From, and a list never shows either as the sender's.
+- **`tls_label`** is 0 on a sent copy, which no reception labeled: a sent message's level is `MailOutcome.tls_level`. A reader shows 0 as no label, never as validated. `MAIL_TLS_MEMBER_SIGNED` is same-network mail, whose sender's signature replaces the label (D-MAIL-8), under the deposit rule above.
 - **`tls_basis`** has `rule` 0 on opportunistic mail and `list_version` on every label decided against the list, so a recheck knows which list it read.
 - **`spam_score`** is parts per thousand, 0 to 1,000, and a reader takes more as 1,000.
 

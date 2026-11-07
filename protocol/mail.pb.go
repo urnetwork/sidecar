@@ -437,7 +437,7 @@ const (
 	MailTlsLabel_MAIL_TLS_LABEL_UNSPECIFIED MailTlsLabel = 0 // a sent copy, or mail no ingest labeled: shown as no label, never as validated
 	MailTlsLabel_MAIL_TLS_VALIDATED         MailTlsLabel = 1
 	MailTlsLabel_MAIL_TLS_OPPORTUNISTIC     MailTlsLabel = 2
-	MailTlsLabel_MAIL_TLS_MEMBER_SIGNED     MailTlsLabel = 3 // the sender's signature replaces the label (D-MAIL-8)
+	MailTlsLabel_MAIL_TLS_MEMBER_SIGNED     MailTlsLabel = 3 // the sender's signature replaces the label (D-MAIL-8), if it may send as From
 )
 
 // Enum value maps for MailTlsLabel.

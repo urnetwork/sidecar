@@ -27,6 +27,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// Embedded so a Worker, which has no file system, runs these too.
+//
 //go:embed testdata/mail/vectors.yml
 var mailVectorsYaml string
 

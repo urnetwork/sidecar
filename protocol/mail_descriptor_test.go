@@ -3,8 +3,8 @@
 // retyped, added or dropped here fails until these tables say so, and nothing here is hand-built, so a field added
 // without a stated width stops the bound tests rather than slipping past them unset.
 //
-// The builders that enforce the bounds are MAIL-M7-09's and MAIL-M7-19's. testBoundMailIngress applies the same
-// order to show the order always ends within the bound, which is the format's half of the promise.
+// The builders that enforce the bounds are MAIL-M7-09's and MAIL-M7-19's. The ingress test applies the same order to
+// show it always ends within the bound, which is the format's half of the promise.
 
 package protocol
 
@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	// Where the registry finds this file.
 	testMailProtoPath = "protocol/mail.proto"
 
 	// §15.5's bounds.
@@ -267,17 +268,6 @@ func testFillWidest(t *testing.T, message protoreflect.Message, fieldNameWidths 
 	}
 }
 
-// MAIL-FORMAT.md's drop order: listings from the end, one at a time, then ptr_name.
-func testBoundMailIngress(t *testing.T, ingress *MailIngress) {
-	t.Helper()
-	for testSize(t, ingress) > testMailIngressBound && len(ingress.IpListings) > 0 {
-		ingress.IpListings = ingress.IpListings[:len(ingress.IpListings)-1]
-	}
-	if testSize(t, ingress) > testMailIngressBound {
-		ingress.PtrName = ""
-	}
-}
-
 // One declaration per name across every file of the package: a second would panic at init wherever both link, and
 // this says so even where a shell has set the conflict policy to warn.
 func TestMailMessagesRegisterOnce(t *testing.T) {
@@ -493,7 +483,13 @@ func TestMailIngressAtItsWidestBuildsWithinItsBound(t *testing.T) {
 	for range 64 {
 		ingress.IpListings = append(ingress.IpListings, strings.Repeat("x", 32))
 	}
-	testBoundMailIngress(t, ingress)
+	// MAIL-FORMAT.md's drop order: listings from the end, one at a time, then ptr_name.
+	for testSize(t, ingress) > testMailIngressBound && len(ingress.IpListings) > 0 {
+		ingress.IpListings = ingress.IpListings[:len(ingress.IpListings)-1]
+	}
+	if testSize(t, ingress) > testMailIngressBound {
+		ingress.PtrName = ""
+	}
 	if size := testSize(t, ingress); size > testMailIngressBound {
 		t.Errorf("a built ingress takes %d B, over %d", size, testMailIngressBound)
 	}
@@ -554,7 +550,7 @@ func TestFlagSegmentFitsAtItsCount(t *testing.T) {
 }
 
 // MAIL-FORMAT.md's append rule: the bytes of a segment are the bytes of it before, then one whole record, so a
-// writer appends without re-encoding and §11.7's diff is that record.
+// writer appends without re-encoding and §11.7's delta against the last version adds only that record.
 func TestMailSegmentsGrowByAppending(t *testing.T) {
 	entry := testFilled((&IndexEntry{}).ProtoReflect().Type()).(*IndexEntry)
 	index := &MailIndexSegment{Version: 1}
