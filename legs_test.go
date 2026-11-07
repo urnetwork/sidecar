@@ -206,7 +206,7 @@ func main() {
 }
 `
 
-// The harness's exit code is how its program ended, the one thing the leg's verdict reads. A run that
+// The harness's exit code is how its program ended, and the leg's verdict starts from it. A run that
 // passed with a timer armed once failed here, and a run that stalled once passed.
 func TestWorkerHarnessEndsAsItsProgramDoes(t *testing.T) {
 	directory := t.TempDir()
