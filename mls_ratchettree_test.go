@@ -934,10 +934,11 @@ func TestMlsValidateRefusesAParentListingTooFewUnmergedLeaves(t *testing.T) {
 	}
 }
 
-func TestMlsValidateRefusesAnUnmergedLeafThatIsBlank(t *testing.T) {
+// A leaf outside the tree altogether, and a value past 2^31 whose node index would wrap. A blank leaf
+// inside the tree is TestMlsValidateRefusesABlankUnmergedLeafInsideTheTree's.
+func TestMlsValidateRefusesAnUnmergedLeafOutsideTheTree(t *testing.T) {
 	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
 	index := mlsUnmergedParentOf(t, tree)
-	// a leaf outside the tree altogether, and a value past 2^31 whose node index would wrap
 	for _, leaf := range []mlsLeafIndex{mlsLeafIndex(tree.leafCount()), 0x80000000} {
 		mlsReplaceParent(tree, index, func(parent *mlsParentNode) {
 			parent.unmergedLeaves = append(slices.Clone(parent.unmergedLeaves), leaf)
@@ -951,6 +952,8 @@ func TestMlsValidateRefusesAnUnmergedLeafThatIsBlank(t *testing.T) {
 	}
 }
 
+// validate refuses this one at the node between, which omits the leaf, so
+// TestMlsValidateRefusesAMemberOutsideTheParentAsUnmerged holds the rule that the leaf be below.
 func TestMlsValidateRefusesAnUnmergedLeafNotBelowIt(t *testing.T) {
 	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
 	root := mlsTreeRoot(tree.leafCount())
@@ -968,6 +971,57 @@ func TestMlsValidateRefusesAnUnmergedLeafNotBelowIt(t *testing.T) {
 		parent.unmergedLeaves = append(slices.Clone(parent.unmergedLeaves), outside)
 	})
 	if err := tree.validate(group.validation); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+}
+
+// A shaped four-leaf tree, leaf 2 its only other member, whose node 1 lists one leaf as unmerged and is
+// parent-hash valid, linked from leaf 0: nothing but the unmerged list's own rules can refuse it.
+func mlsTestTreeListingUnmerged(t *testing.T, listed mlsLeafIndex) *mlsRatchetTree {
+	t.Helper()
+	blank := mlsTreeNode{}
+	tree := mlsShapedTree(blank, blank, blank, blank, mlsShapeLeaf("other"), blank, blank)
+	listing := mlsShapeParent("listing", listed)
+	listing.parent.parentHash = []byte{}
+	tree.setNode(1, listing)
+	sibling, err := tree.originalTreeHash(2, listing.parent.unmergedLeaves)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := tree.hashParentHashInput(listing.parent.encryptionKey, listing.parent.parentHash, sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := mlsShapeLeaf("member")
+	member.leaf.leafNodeSource = mlsLeafNodeSourceCommit
+	member.leaf.parentHash = link
+	tree.setNode(0, member)
+	if err := tree.verifyParentHashes(); err != nil {
+		t.Fatalf("parent hashes: %v", err)
+	}
+	return tree
+}
+
+// RFC §12.4.3.1: an unmerged leaf is a member. Leaf 1 is inside the tree and below node 1, but blank, so
+// node 1's resolution would take in a node nobody can encrypt to.
+func TestMlsValidateRefusesABlankUnmergedLeafInsideTheTree(t *testing.T) {
+	tree := mlsTestTreeListingUnmerged(t, 1)
+	if !slices.Contains(tree.resolution(1), mlsLeafIndex(1).node()) {
+		t.Fatalf("resolution %v", tree.resolution(1))
+	}
+	if err := tree.validateUnmergedLeaves(1); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+}
+
+// RFC §12.4.3.1: an unmerged leaf descends from the parent that lists it. Leaf 2 is a member outside
+// node 1, and no node between them exists to omit it.
+func TestMlsValidateRefusesAMemberOutsideTheParentAsUnmerged(t *testing.T) {
+	tree := mlsTestTreeListingUnmerged(t, 2)
+	if !slices.Contains(tree.resolution(1), mlsLeafIndex(2).node()) {
+		t.Fatalf("resolution %v", tree.resolution(1))
+	}
+	if err := tree.validateUnmergedLeaves(1); !errors.Is(err, errMlsInvalid) {
 		t.Fatal(err)
 	}
 }
@@ -1256,6 +1310,56 @@ func TestMlsValidateChecksGroupContextExtensions(t *testing.T) {
 		refused.groupExtensions = []mlsExtension{{extensionType: extensionType}}
 		if err := tree.validate(&refused); !errors.Is(err, errMlsInvalid) {
 			t.Errorf("type %#x: %v", extensionType, err)
+		}
+	}
+}
+
+// RFC §7.3 step 3 for a leaf entering by Add or commit, as for every leaf of a tree: it must meet the
+// group's required_capabilities and support each GroupContext extension.
+func TestMlsValidateNewLeafChecksTheGroupsParameters(t *testing.T) {
+	suite := mlsTestSuiteX25519
+	group := mlsNewMergedTestGroup(t, suite, 3)
+	tree := group.members[0].tree
+	newcomer := mlsNewTestClient(t, suite, "newcomer")
+	leaf := &newcomer.keyPackage.leafNode
+	if err := tree.validateNewLeaf(leaf, 3, mlsLeafNodeSourceKeyPackage, group.validation); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][]mlsExtension{
+		{mlsRequiredCapabilitiesExtension(t, &mlsRequiredCapabilities{extensionTypes: []uint16{0xf00d}})},
+		{{extensionType: 0xf00d}},
+	}
+	for index, extensions := range cases {
+		validation := *group.validation
+		validation.groupExtensions = extensions
+		if err := tree.validateNewLeaf(leaf, 3, mlsLeafNodeSourceKeyPackage, &validation); !errors.Is(err, errMlsInvalid) {
+			t.Errorf("case %d: %v", index, err)
+		}
+	}
+}
+
+// A maximum width that is no tree's, zero among them, fails closed wherever it is read: no tree
+// decodes or validates, and no Add goes in, not even into a blank leaf.
+func TestMlsTreeSettingsOfNoWidthRefuseEverything(t *testing.T) {
+	group, tree := mlsValidTestTree(t, mlsTestSuiteX25519)
+	encoded, err := mlsMarshal(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newcomer := mlsNewTestClient(t, tree.suite, "newcomer")
+	for _, maximum := range []uint32{0, 1000} {
+		settings := *tree.settings
+		settings.MaximumLeafCount = maximum
+		if _, err := decodeMlsRatchetTree(tree.suite, &settings, encoded); err == nil {
+			t.Errorf("maximum %d: a tree decoded", maximum)
+		}
+		bound := tree.clone()
+		bound.settings = &settings
+		if err := bound.validate(group.validation); !errors.Is(err, errMlsRefused) {
+			t.Errorf("maximum %d: validate: %v", maximum, err)
+		}
+		if _, err := bound.addLeaf(&newcomer.keyPackage.leafNode); !errors.Is(err, errMlsRefused) {
+			t.Errorf("maximum %d: an Add: %v", maximum, err)
 		}
 	}
 }
