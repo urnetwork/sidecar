@@ -119,7 +119,9 @@ func goListDeps(t *testing.T, env []string, args ...string) []string {
 }
 
 // A Worker's globals, in node: no process, so net/http's fetch path runs, and a fetch that records what
-// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths.
+// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. Exit
+// ends node at once: any timer the runtime left armed, as the scavenger does after a large heap, would
+// otherwise fire into a program that has exited, and fail a run that passed.
 const workerHarness = `
 const fs = require("fs");
 const nodeProcess = process;
@@ -133,7 +135,7 @@ globalThis.fetch = (url, options) => {
 };
 const go = new Go();
 go.argv = [wasmPath, ...testArgs];
-go.exit = (code) => { nodeProcess.exitCode = code; };
+go.exit = (code) => { nodeProcess.exit(code); };
 WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.then((result) => go.run(result.instance))
 	.catch((err) => { console.error(err); nodeProcess.exitCode = 1; });
@@ -178,6 +180,8 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestKeychainVectorsAreByteEqual",
+		"TestKeychainVectorsOpen",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
