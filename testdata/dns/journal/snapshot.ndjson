@@ -1,0 +1,4 @@
+{"format":1,"root":"zone.example.","serial":44,"restore_serial":0}
+{"owner":"*.abcdefghij.zone.example.","type":1,"ttl":60,"kind":"edge"}
+{"owner":"zone.example.","type":6,"ttl":3600,"kind":"system","rdata":["ns1.zone.example. hostmaster.zone.example. 44 7200 3600 1209600 60"]}
+{"end":true,"row_count":2}

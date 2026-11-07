@@ -1,0 +1,1 @@
+{"format":1,"root":"zone.example.","serial":44,"restore_serial":0,"rows":[{"format":1,"root":"zone.example.","serial":43,"upserts":[{"owner":"a.abcdefghij.zone.example.","type":16,"ttl":300,"kind":"user","rdata":["\"one\""]}]},{"format":2,"root":"zone.example.","serial":44,"upserts":"no longer a list"}]}

@@ -119,9 +119,10 @@ func goListDeps(t *testing.T, env []string, args ...string) []string {
 }
 
 // A Worker's globals, in node: no process, so net/http's fetch path runs, and a fetch that records what
-// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. Exit
-// ends node at once: any timer the runtime left armed, as the scavenger does after a large heap, would
-// otherwise fire into a program that has exited, and fail a run that passed.
+// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. It ends
+// as the toolchain's wasm_exec_node.js does, whose two exit rules are the verdict's: node goes with the
+// Go program, or a timer the runtime armed fires into a program that has gone and fails a passing run,
+// and node never ends 0 with Go still running, or a suite that stalled would pass.
 const workerHarness = `
 const fs = require("fs");
 const nodeProcess = process;
@@ -135,17 +136,24 @@ globalThis.fetch = (url, options) => {
 };
 const go = new Go();
 go.argv = [wasmPath, ...testArgs];
-go.exit = (code) => { nodeProcess.exit(code); };
+go.exit = (code) => nodeProcess.exit(code);
 WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
-	.then((result) => go.run(result.instance))
-	.catch((err) => { console.error(err); nodeProcess.exitCode = 1; });
+	.then((result) => {
+		nodeProcess.on("exit", (code) => {
+			if (code === 0 && !go.exited) {
+				// an event of id 0 makes Go print the deadlock and its stacks, and exit
+				go._pendingEvent = { id: 0 };
+				go._resume();
+			}
+		});
+		return go.run(result.instance);
+	})
+	.catch((err) => { console.error(err); nodeProcess.exit(1); });
 `
 
-// The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
-// under node's process global net/http never calls fetch, and what the page Worker's transport does
-// with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
-// its fetch tests, since a run that skipped them would still exit 0.
-func TestHttpLegPassesInAWorker(t *testing.T) {
+// Runs a js/wasm binary in the harness, with these arguments after its path.
+func runInWorkerHarness(t *testing.T, wasmPath string, args ...string) ([]byte, error) {
+	t.Helper()
 	// a failure and not a skip: a leg that did not run has not passed
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -155,23 +163,110 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	harnessPath := filepath.Join(t.TempDir(), "worker.js")
+	if err := os.WriteFile(harnessPath, []byte(workerHarness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wasmExecPath := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
+	return exec.Command(node, append([]string{harnessPath, wasmPath, wasmExecPath}, args...)...).CombinedOutput()
+}
+
+// Ends the way its one argument names. armed exits with a runtime timer live in JS: when every goroutine
+// is parked the scheduler hands the sleeper's timer to setTimeout, and main wakes from a JS callback due
+// sooner, so the order is the event loop's and not the scheduler's.
+const workerEndingProgram = `package main
+
+import (
+	"fmt"
+	"os"
+	"syscall/js"
+	"time"
+)
+
+func main() {
+	switch os.Args[1] {
+	case "armed":
+		go time.Sleep(50 * time.Millisecond)
+		woken := make(chan struct{})
+		wake := js.FuncOf(func(js.Value, []js.Value) any {
+			close(woken)
+			return nil
+		})
+		js.Global().Call("setTimeout", wake, 0)
+		<-woken
+		fmt.Println("ended")
+		os.Exit(0)
+	case "failed":
+		fmt.Println("ended")
+		os.Exit(3)
+	case "stalled":
+		fmt.Println("stalling")
+		select {}
+	}
+}
+`
+
+// The harness's exit code is how its program ended, and the leg's verdict starts from it. A run that
+// passed with a timer armed once failed here, and a run that stalled once passed.
+func TestWorkerHarnessEndsAsItsProgramDoes(t *testing.T) {
 	directory := t.TempDir()
-	wasmPath := filepath.Join(directory, "sidecar.test.wasm")
-	harnessPath := filepath.Join(directory, "worker.js")
+	sourcePath := filepath.Join(directory, "main.go")
+	wasmPath := filepath.Join(directory, "ending.wasm")
+	if err := os.WriteFile(sourcePath, []byte(workerEndingProgram), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", wasmPath, sourcePath)
+	build.Dir = directory
+	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, output)
+	}
+
+	cases := []struct {
+		ending     string
+		exitCode   int
+		wantOutput string
+	}{
+		{ending: "armed", exitCode: 0, wantOutput: "ended"},
+		{ending: "failed", exitCode: 3, wantOutput: "ended"},
+		{ending: "stalled", exitCode: 2, wantOutput: "all goroutines are asleep"},
+	}
+	for _, c := range cases {
+		output, err := runInWorkerHarness(t, wasmPath, c.ending)
+		exitCode := 0
+		if err != nil {
+			exitError, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("%s: %v", c.ending, err)
+			}
+			exitCode = exitError.ExitCode()
+		}
+		if exitCode != c.exitCode {
+			t.Errorf("%s: exit code %d, want %d\n%s", c.ending, exitCode, c.exitCode, output)
+		}
+		if !strings.Contains(string(output), c.wantOutput) {
+			t.Errorf("%s: no %q in\n%s", c.ending, c.wantOutput, output)
+		}
+	}
+}
+
+// The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
+// under node's process global net/http never calls fetch, and what the page Worker's transport does
+// with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
+// its fetch tests, the known answers for the mls_ and socket_ it keeps and mail's vectors, since a run
+// that skipped them would still exit 0.
+func TestHttpLegPassesInAWorker(t *testing.T) {
+	wasmPath := filepath.Join(t.TempDir(), "sidecar.test.wasm")
 
 	build := exec.Command("go", "test", "-c", "-tags", "sidecar_http", "-o", wasmPath, ".")
 	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go test -c: %v\n%s", err, output)
 	}
-	if err := os.WriteFile(harnessPath, []byte(workerHarness), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
-	wasmExecPath := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
 	// these two read the source tree, which a Worker has no file system for
 	skip := "^(TestHookFilesSplitOnTag|TestHooksEmptyWithoutTag)$"
-	output, err := exec.Command(node, harnessPath, wasmPath, wasmExecPath, "-test.v", "-test.count=1", "-test.skip", skip).CombinedOutput()
+	output, err := runInWorkerHarness(t, wasmPath, "-test.v", "-test.count=1", "-test.skip", skip)
 	if err != nil {
 		t.Fatalf("the leg's tests failed: %v\n%s", err, output)
 	}
@@ -180,8 +275,23 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
-		"TestKeychainVectorsAreByteEqual",
-		"TestKeychainVectorsOpen",
+		"TestAuthChainVectors",
+		"TestMlsVectorFilesMatchUpstream",
+		"TestMlsCryptoBasicsVectors",
+		"TestMlsKeyScheduleVectors",
+		"TestMlsSecretTreeVectors",
+		"TestMlsTreeKemVectors",
+		"TestXWingKatDecapsulationThroughHpke",
+		"TestXWingKatEncapsulationThroughHpke",
+		"TestSocketTokenVectors",
+		"TestSocketSealVectors",
+		"TestSocketSealDropVectors",
+		"TestMailVectorsRoundTrip",
+		"TestMailVectorsCoverEveryField",
+		"TestMailVectorNames",
+		"TestMailVectorMonths",
+		"TestMailVectorClocks",
+		"TestMailVectorOrders",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
