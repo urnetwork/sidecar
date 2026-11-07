@@ -69,3 +69,9 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
 	src.agwa.name/tlshacks v0.0.4 // indirect
 )
+
+// gnark's go.mod names this tool, and nothing here builds it. Its module cannot be
+// fetched, from the proxy or its origin, so go list -m all could not load the complete
+// graph. A dependency's exclude does not reach this module, so each main module that
+// reaches gnark repeats this one.
+exclude github.com/consensys/gnark-solidity-checker v0.2.0
