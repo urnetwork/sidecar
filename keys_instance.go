@@ -38,6 +38,9 @@ var (
 // past D-CORE-15's table, never a lock or a fault.
 var errNothingLost = errors.New("nothing is lost")
 
+// A record with an id unset, which a reader of sidecar.json would refuse.
+var errNetworkRecord = errors.New("a network record is missing an id")
+
 // What SidecarInstance.State reads, which a Sidecar turns into its own state: Open is what lets one
 // leave Locked, and Lost is Unenrolled(keystore_lost).
 type SidecarInstanceState string
@@ -60,8 +63,9 @@ type SidecarInstanceArgs struct {
 	Backend SidecarStoreBackend
 	// The store holding W. Nil: pass only.
 	KeyStore SidecarKeyStore
-	// This machine's id, which sidecar.json keeps only as a hash salted by the instance id. Empty on
-	// a host with none, where restored or copied state cannot be told.
+	// This machine's id, which sidecar.json keeps only as a hash salted by the instance id:
+	// SidecarMachineId on a desktop. Empty on a host with none, where restored or copied state cannot
+	// be told.
 	MachineId []byte
 	// Read for its KeychainSettings, its service urls and its Log.
 	Settings *SidecarSettings
@@ -258,7 +262,7 @@ func (self *SidecarInstance) Networks() []SidecarNetworkRecord {
 func (self *SidecarInstance) RecordNetwork(record SidecarNetworkRecord) error {
 	if record.NetworkId == (Id{}) || record.ClientId == (Id{}) || record.SidecarId == (Id{}) ||
 		record.ConnectInstanceId == (Id{}) {
-		return ErrSidecarStoreName
+		return errNetworkRecord
 	}
 	testHookBarrier("keys.record_network.before", record.NetworkId.String())
 	err := func() error {

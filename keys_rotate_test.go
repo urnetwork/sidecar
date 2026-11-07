@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -352,6 +353,104 @@ func mustUnlockWrap(t *testing.T, instance *SidecarInstance) *unlockWrap {
 		t.Fatal(err)
 	}
 	return wrap
+}
+
+// A reader that read a header just before a rotation finished finds the file on its new root, and a
+// healthy file never reads as failed for having moved.
+func TestAReadCrossingTheEndOfARotationOpensTheNewFile(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	store := storeOf(t, instance, testNetworkId, "evs")
+	writeStoreFile(t, store, "file", []byte("synthetic"))
+	path := networkFilePath(testNetworkId, "evs/file")
+
+	// the whole rotation lands between the reader's open and its hold on the root
+	instance.backend = &writeOnOpenBackend{
+		SidecarStoreBackend: backend,
+		path:                path,
+		write: func() {
+			instance.backend = backend
+			if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+				t.Error(err)
+			}
+		},
+	}
+	requireStoreFile(t, store, "file", []byte("synthetic"))
+	instance.backend = backend
+	requireRotationFinished(t, instance, backend, testNetworkId)
+}
+
+// A file naming a root the network never had reads as failed, not as a loop.
+func TestAFileOnAnUnknownRootFails(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	store := storeOf(t, instance, testNetworkId, "evs")
+	writeStoreFile(t, store, "file", []byte("synthetic"))
+	path := networkFilePath(testNetworkId, "evs/file")
+	content := readBackend(t, backend, path)
+	// the header's generation is the eight bytes after the magic and the version
+	content[12] = 0x7f
+	putBackendFile(t, backend, path, content)
+	_, err := readStoreFile(store, "file")
+	requireError(t, err, ErrSidecarStoreFailed)
+}
+
+// Writers, readers and a rotation at once, for the race detector and for the end state: each file and
+// secret holds its last value, and every one is on the new root. A stream in the rotation's way
+// answers busy, which the next run takes up, as a person's retry would.
+func TestRotateWithStreamsRunning(t *testing.T) {
+	instance, backend, _ := enrolledInstance(t)
+	store := storeOf(t, instance, testNetworkId, "evs")
+	opened, err := instance.keychainFor(testNetworkId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := opened.secrets("load")
+	const writerCount = 4
+	const writeCount = 16
+	var writers sync.WaitGroup
+	for writer := 0; writer < writerCount; writer += 1 {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			name := fmt.Sprintf("file-%d", writer)
+			for i := 0; i < writeCount; i += 1 {
+				content := []byte(fmt.Sprintf("%s %d", name, i))
+				if err := putStoreFile(store, name, content); err != nil {
+					t.Error(err)
+					return
+				}
+				read, err := readStoreFile(store, name)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !bytes.Equal(read, content) {
+					t.Errorf("%s read %q", name, read)
+				}
+				if err := secrets.Put(name, content); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	err = instance.RotateKeychain(context.Background(), nil)
+	writers.Wait()
+	if err != nil && !errors.Is(err, ErrSidecarRotationBusy) {
+		t.Fatal(err)
+	}
+	if err := instance.RotateKeychain(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	requireRotationFinished(t, instance, backend, testNetworkId)
+	for writer := 0; writer < writerCount; writer += 1 {
+		name := fmt.Sprintf("file-%d", writer)
+		want := []byte(fmt.Sprintf("%s %d", name, writeCount-1))
+		requireStoreFile(t, store, name, want)
+		value, err := secrets.Get(name)
+		if err != nil || !bytes.Equal(value, want) {
+			t.Errorf("%s: value %q, err %v", name, value, err)
+		}
+	}
 }
 
 // A network that cannot rotate holds the old U back and does not stop its neighbors.

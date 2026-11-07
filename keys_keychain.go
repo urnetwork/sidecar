@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -43,6 +44,9 @@ const (
 )
 
 var errKeychainRecordsFormat = fmt.Errorf("%w: keychain records do not decode", ErrSidecarStoreFailed)
+
+// A file's header names a root this keychain does not hold.
+var errKeychainRootGone = fmt.Errorf("%w: a sealed file's root is gone", ErrSidecarStoreFailed)
 
 // keychain.ur's plaintext for these records.
 func encodeKeychainRecords(nameValues map[string][]byte) []byte {
@@ -221,7 +225,7 @@ func (self *keychain) classAead(class string, generation uint64) (cipher.AEAD, e
 }
 
 // Counts a stream on generation, so a rotation keeps its root. Answers the current generation when
-// asked for 0.
+// asked for 0, and errKeychainRootGone for a root this keychain does not hold.
 func (self *keychain) holdGeneration(generation uint64) (uint64, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -230,6 +234,9 @@ func (self *keychain) holdGeneration(generation uint64) (uint64, error) {
 	}
 	if generation == 0 {
 		generation = self.currentGeneration
+	}
+	if _, ok := self.roots[generation]; !ok {
+		return 0, errKeychainRootGone
 	}
 	self.generationStreams[generation] += 1
 	return generation, nil
@@ -248,33 +255,39 @@ func (self *keychain) releaseGeneration(generation uint64) {
 	}
 }
 
-// Streams the file at path, which must be of class. The header's generation picks the root, so a file
-// not yet re-sealed by a rotation still opens.
+// Streams the file at path, which fails at its first chunk unless it is of class, since only that
+// class's key opens it. The header's generation picks the root, so a file not yet re-sealed by a
+// rotation still opens. A rotation can finish between reading a header and
+// holding its root, so a root gone at that moment means the file has moved on: the second read gets
+// the new one. A root still gone then is a file naming a root this network never had.
 func (self *keychain) openSealed(class string, path string) (io.ReadCloser, error) {
 	self.instance.touch()
-	in, err := self.instance.backend.Open(networkFilePath(self.networkId, path))
-	if err != nil {
-		return nil, err
+	open := func() (io.ReadCloser, error) {
+		in, err := self.instance.backend.Open(networkFilePath(self.networkId, path))
+		if err != nil {
+			return nil, err
+		}
+		header, err := readSealHeader(in)
+		if err != nil {
+			in.Close()
+			return nil, err
+		}
+		generation, err := self.holdGeneration(header.generation)
+		if err != nil {
+			in.Close()
+			return nil, err
+		}
+		reader := newSealReader(in, header, path, func() (cipher.AEAD, error) {
+			self.instance.touch()
+			return self.classAead(class, header.generation)
+		})
+		return &sealedFileReader{keychain: self, reader: reader, in: in, generation: generation}, nil
 	}
-	header, err := readSealHeader(in)
-	if err != nil {
-		in.Close()
-		return nil, err
+	reader, err := open()
+	if errors.Is(err, errKeychainRootGone) {
+		reader, err = open()
 	}
-	if header.class != class {
-		in.Close()
-		return nil, errSealOpen
-	}
-	generation, err := self.holdGeneration(header.generation)
-	if err != nil {
-		in.Close()
-		return nil, err
-	}
-	reader := newSealReader(in, header, path, func() (cipher.AEAD, error) {
-		self.instance.touch()
-		return self.classAead(class, header.generation)
-	})
-	return &sealedFileReader{keychain: self, reader: reader, in: in, generation: generation}, nil
+	return reader, err
 }
 
 // A sealed file on its way out.
