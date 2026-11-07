@@ -143,184 +143,6 @@ func testHexSigned(t testing.TB, signed *Signed) string {
 	return hex.EncodeToString(encoded)
 }
 
-// The leg's own answers, built from fixed keys: everything but the key material a consumer never needs.
-func testBuildSignedVectors(t testing.TB) *testSignedVectors {
-	vectors := &testSignedVectors{
-		Comment: "Fixed vectors for sidecar/protocol/bridge's VerifySigned and VerifyPresenceCountersign (§6.9, §7.9, " +
-			"§16.6; FS-124). All keys are synthetic. Bytes are lowercase hex. Each trees entry is over the leaves " +
-			"d_i = SHA-256(signed bytes of purpose authority, type 0x1206, body u32be(i)); an act's root is RFC 9162's " +
-			"MTH over its statements' digests in act order, so a leaf hash is SHA-256(0x00 || d_i). Every " +
-			"webauthn-es256 assertion's origin is one of testdata/signed/origins.json's fixture origins, and its " +
-			"answer is the one it gets against that list in place of a release's (QD-073).",
-	}
-
-	for _, statement := range []*testActStatement{
-		{purpose: "bridge", signedType: SignedType_SIGNED_BRIDGE_WITHDRAW, body: testBody},
-		{purpose: "authority", signedType: SignedType_SIGNED_SIDECAR_REVOKE, body: []byte{}},
-		{purpose: "acl", signedType: SignedType_SIGNED_GRANT_REVOKE, body: []byte{0x00, 0x01, 0xFF}},
-	} {
-		digest := SignedBytesSha256(statement.purpose, statement.signedType, statement.body)
-		vectors.SignedBytes = append(vectors.SignedBytes, &testSignedBytesVector{
-			Purpose:     statement.purpose,
-			Type:        uint32(statement.signedType),
-			Body:        hex.EncodeToString(statement.body),
-			SignedBytes: hex.EncodeToString(SignedBytes(statement.purpose, statement.signedType, statement.body)),
-			Sha256:      hex.EncodeToString(digest[:]),
-		})
-	}
-
-	key, publicKey := testP256Key(t)
-	purpose := "authority"
-	signedType := SignedType_SIGNED_SIDECAR_REVOKE
-	otherType := SignedType_SIGNED_KEY_REVOKE
-	ed25519Public := hex.EncodeToString(testEd25519Public())
-	p256Public := hex.EncodeToString(publicKey)
-
-	ed25519Signed := testSignEd25519(purpose, signedType, testBody)
-	ecdsaSigned := testSignP256(t, key, purpose, signedType, testBody)
-	assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
-	webAuthnSigned := assertion.sign(t, key, purpose, signedType, testBody)
-	signedFrom := func(origin string) *Signed {
-		originAssertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
-		originAssertion.origin = origin
-		return originAssertion.sign(t, key, purpose, signedType, testBody)
-	}
-	countersigned := testCountersignedAct(t, testActStatements(3), testEcdsaPresenceCheck(t, key))[0]
-	withAssertion := proto.CloneOf(ed25519Signed)
-	withAssertion.Webauthn = proto.CloneOf(webAuthnSigned.Webauthn)
-	rewritten := proto.CloneOf(ed25519Signed)
-	rewritten.Type = uint32(otherType)
-
-	vectors.Statements = []*testStatementVector{
-		{
-			Name: "ed25519", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
-			ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed),
-		},
-		{
-			Name: "ecdsa-p256-sha256", KeyAlg: "ecdsa-p256-sha256", PublicKey: p256Public, Purpose: purpose,
-			ExpectedType: uint32(signedType), Signed: testHexSigned(t, ecdsaSigned),
-		},
-		{
-			Name: "webauthn-es256", KeyAlg: "webauthn-es256", PublicKey: p256Public, Purpose: purpose,
-			ExpectedType: uint32(signedType), Signed: testHexSigned(t, webAuthnSigned),
-		},
-		{
-			Name: "webauthn-es256 from the other fixture origin, an android one", KeyAlg: "webauthn-es256",
-			PublicKey: p256Public, Purpose: purpose, ExpectedType: uint32(signedType),
-			Signed: testHexSigned(t, signedFrom(testFixtureOrigins(t)[1])),
-		},
-		{
-			Name: "webauthn-es256 from a debug-signed android build", KeyAlg: "webauthn-es256",
-			PublicKey: p256Public, Purpose: purpose, ExpectedType: uint32(signedType),
-			Signed: testHexSigned(t, signedFrom(testDebugBuildOrigin())), Refusal: "ErrSignedEvidence",
-		},
-		{
-			Name: "ed25519 with a countersignature, which this check does not read", KeyAlg: "ed25519",
-			PublicKey: ed25519Public, Purpose: testActStatements(1)[0].purpose,
-			ExpectedType: uint32(testActStatements(1)[0].signedType), Signed: testHexSigned(t, countersigned),
-		},
-		{
-			Name: "another type expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
-			ExpectedType: uint32(otherType), Signed: testHexSigned(t, ed25519Signed),
-			Refusal: "ErrSignedTypeMismatch",
-		},
-		{
-			Name: "type rewritten to the one expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
-			ExpectedType: uint32(otherType), Signed: testHexSigned(t, rewritten), Refusal: "ErrSignedSignature",
-		},
-		{
-			Name: "type 0 expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
-			ExpectedType: 0, Signed: testHexSigned(t, ed25519Signed), Refusal: "ErrSignedTypeUnknown",
-		},
-		{
-			Name: "an unregistered type expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
-			ExpectedType: 0x12FF, Signed: testHexSigned(t, ed25519Signed), Refusal: "ErrSignedTypeUnknown",
-		},
-		{
-			Name: "the countersigned bytes' purpose", KeyAlg: "ed25519", PublicKey: ed25519Public,
-			Purpose: "presence-act", ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed),
-			Refusal: "ErrSignedPurpose",
-		},
-		{
-			Name: "another purpose", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: "bridge",
-			ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed), Refusal: "ErrSignedSignature",
-		},
-		{
-			Name: "an assertion with no key_id beside an identity key's signature", KeyAlg: "ed25519",
-			PublicKey: ed25519Public, Purpose: purpose, ExpectedType: uint32(signedType),
-			Signed: testHexSigned(t, withAssertion), Refusal: "ErrSignedEvidence",
-		},
-		{
-			Name: "an es256 assertion as ecdsa-p256-sha256", KeyAlg: "ecdsa-p256-sha256", PublicKey: p256Public,
-			Purpose: purpose, ExpectedType: uint32(signedType), Signed: testHexSigned(t, webAuthnSigned),
-			Refusal: "ErrSignedEvidence",
-		},
-	}
-
-	for _, size := range []int{1, 2, 3, 7, testActMaxSize} {
-		statementDigests := testRuleDigests(size)
-		root, err := PresenceActRoot(statementDigests)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tree := &testTreeVector{Size: uint32(size), Root: hex.EncodeToString(root[:])}
-		indexes := []int{}
-		if size <= 7 {
-			for index := range size {
-				indexes = append(indexes, index)
-			}
-		} else {
-			indexes = []int{0, 1, 32767, 32768, 65533, 65534}
-		}
-		for _, index := range indexes {
-			actPath, err := PresenceActPath(statementDigests, uint32(index))
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := &testPathVector{Index: uint32(index), Path: []string{}}
-			for _, hash := range actPath {
-				path.Path = append(path.Path, hex.EncodeToString(hash))
-			}
-			tree.Paths = append(tree.Paths, path)
-		}
-		vectors.Trees = append(vectors.Trees, tree)
-	}
-
-	for _, profile := range testPresenceProfiles(t) {
-		for _, size := range []int{1, 5} {
-			statements := testActStatements(size)
-			statementDigests := testActDigests(statements)
-			root, err := PresenceActRoot(statementDigests)
-			if err != nil {
-				t.Fatal(err)
-			}
-			act := &testActVector{
-				Name:               fmt.Sprintf("%d statements, %s", size, profile.name),
-				KeyAlg:             profile.name,
-				PublicKey:          hex.EncodeToString(profile.publicKey),
-				IdentityPublicKey:  hex.EncodeToString(testEd25519Public()),
-				SignerId:           hex.EncodeToString(testSignerId),
-				KeyId:              hex.EncodeToString(testPresenceKeyId),
-				Size:               uint32(size),
-				Root:               hex.EncodeToString(root[:]),
-				CountersignedBytes: hex.EncodeToString(PresenceActBytes(testSignerId, uint32(size), root)),
-			}
-			for i, signed := range testCountersignedAct(t, statements, profile.check) {
-				act.Statements = append(act.Statements, &testActStatementVector{
-					Purpose: statements[i].purpose,
-					Type:    uint32(statements[i].signedType),
-					Body:    hex.EncodeToString(statements[i].body),
-					Digest:  hex.EncodeToString(statementDigests[i][:]),
-					Signed:  testHexSigned(t, signed),
-				})
-			}
-			vectors.Acts = append(vectors.Acts, act)
-		}
-		vectors.Refusals = append(vectors.Refusals, testBuildRefusalVectors(t, profile)...)
-	}
-	return vectors
-}
-
 // One profile's refusals, each a statement of a five-statement act with one input spoiled. For a webauthn-es256 check
 // spoiled before it was signed, the signature still holds and only the clause can refuse it.
 func testBuildRefusalVectors(t testing.TB, profile *testPresenceProfile) []*testCountersignRefusal {
@@ -459,7 +281,185 @@ func testReadSignedVectors(t testing.TB) *testSignedVectors {
 // §22's byte-equal rule: this leg's signed bytes, trees, countersigned bytes, signatures and encodings are the file's,
 // to the byte.
 func TestSignedVectorsAreByteEqual(t *testing.T) {
-	built, err := json.MarshalIndent(testBuildSignedVectors(t), "", " ")
+	// The leg's own answers, built from fixed keys: everything but the key material a consumer never needs.
+	buildVectors := func() *testSignedVectors {
+		vectors := &testSignedVectors{
+			Comment: "Fixed vectors for sidecar/protocol/bridge's VerifySigned and VerifyPresenceCountersign (§6.9, §7.9, " +
+				"§16.6; FS-124). All keys are synthetic. Bytes are lowercase hex. Each trees entry is over the leaves " +
+				"d_i = SHA-256(signed bytes of purpose authority, type 0x1206, body u32be(i)); an act's root is RFC 9162's " +
+				"MTH over its statements' digests in act order, so a leaf hash is SHA-256(0x00 || d_i). Every " +
+				"webauthn-es256 assertion's origin is one of testdata/signed/origins.json's fixture origins, and its " +
+				"answer is the one it gets against that list in place of a release's (QD-073).",
+		}
+
+		for _, statement := range []*testActStatement{
+			{purpose: "bridge", signedType: SignedType_SIGNED_BRIDGE_WITHDRAW, body: testBody},
+			{purpose: "authority", signedType: SignedType_SIGNED_SIDECAR_REVOKE, body: []byte{}},
+			{purpose: "acl", signedType: SignedType_SIGNED_GRANT_REVOKE, body: []byte{0x00, 0x01, 0xFF}},
+		} {
+			digest := SignedBytesSha256(statement.purpose, statement.signedType, statement.body)
+			vectors.SignedBytes = append(vectors.SignedBytes, &testSignedBytesVector{
+				Purpose:     statement.purpose,
+				Type:        uint32(statement.signedType),
+				Body:        hex.EncodeToString(statement.body),
+				SignedBytes: hex.EncodeToString(SignedBytes(statement.purpose, statement.signedType, statement.body)),
+				Sha256:      hex.EncodeToString(digest[:]),
+			})
+		}
+
+		key, publicKey := testP256Key(t)
+		purpose := "authority"
+		signedType := SignedType_SIGNED_SIDECAR_REVOKE
+		otherType := SignedType_SIGNED_KEY_REVOKE
+		ed25519Public := hex.EncodeToString(testEd25519Public())
+		p256Public := hex.EncodeToString(publicKey)
+
+		ed25519Signed := testSignEd25519(purpose, signedType, testBody)
+		ecdsaSigned := testSignP256(t, key, purpose, signedType, testBody)
+		assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
+		webAuthnSigned := assertion.sign(t, key, purpose, signedType, testBody)
+		signedFrom := func(origin string) *Signed {
+			originAssertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
+			originAssertion.origin = origin
+			return originAssertion.sign(t, key, purpose, signedType, testBody)
+		}
+		countersigned := testCountersignedAct(t, testActStatements(3), testEcdsaPresenceCheck(t, key))[0]
+		withAssertion := proto.CloneOf(ed25519Signed)
+		withAssertion.Webauthn = proto.CloneOf(webAuthnSigned.Webauthn)
+		rewritten := proto.CloneOf(ed25519Signed)
+		rewritten.Type = uint32(otherType)
+
+		vectors.Statements = []*testStatementVector{
+			{
+				Name: "ed25519", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
+				ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed),
+			},
+			{
+				Name: "ecdsa-p256-sha256", KeyAlg: "ecdsa-p256-sha256", PublicKey: p256Public, Purpose: purpose,
+				ExpectedType: uint32(signedType), Signed: testHexSigned(t, ecdsaSigned),
+			},
+			{
+				Name: "webauthn-es256", KeyAlg: "webauthn-es256", PublicKey: p256Public, Purpose: purpose,
+				ExpectedType: uint32(signedType), Signed: testHexSigned(t, webAuthnSigned),
+			},
+			{
+				Name: "webauthn-es256 from the other fixture origin, an android one", KeyAlg: "webauthn-es256",
+				PublicKey: p256Public, Purpose: purpose, ExpectedType: uint32(signedType),
+				Signed: testHexSigned(t, signedFrom(testFixtureOrigins(t)[1])),
+			},
+			{
+				Name: "webauthn-es256 from a debug-signed android build", KeyAlg: "webauthn-es256",
+				PublicKey: p256Public, Purpose: purpose, ExpectedType: uint32(signedType),
+				Signed: testHexSigned(t, signedFrom(testDebugBuildOrigin())), Refusal: "ErrSignedEvidence",
+			},
+			{
+				Name: "ed25519 with a countersignature, which this check does not read", KeyAlg: "ed25519",
+				PublicKey: ed25519Public, Purpose: testActStatements(1)[0].purpose,
+				ExpectedType: uint32(testActStatements(1)[0].signedType), Signed: testHexSigned(t, countersigned),
+			},
+			{
+				Name: "another type expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
+				ExpectedType: uint32(otherType), Signed: testHexSigned(t, ed25519Signed),
+				Refusal: "ErrSignedTypeMismatch",
+			},
+			{
+				Name: "type rewritten to the one expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
+				ExpectedType: uint32(otherType), Signed: testHexSigned(t, rewritten), Refusal: "ErrSignedSignature",
+			},
+			{
+				Name: "type 0 expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
+				ExpectedType: 0, Signed: testHexSigned(t, ed25519Signed), Refusal: "ErrSignedTypeUnknown",
+			},
+			{
+				Name: "an unregistered type expected", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: purpose,
+				ExpectedType: 0x12FF, Signed: testHexSigned(t, ed25519Signed), Refusal: "ErrSignedTypeUnknown",
+			},
+			{
+				Name: "the countersigned bytes' purpose", KeyAlg: "ed25519", PublicKey: ed25519Public,
+				Purpose: "presence-act", ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed),
+				Refusal: "ErrSignedPurpose",
+			},
+			{
+				Name: "another purpose", KeyAlg: "ed25519", PublicKey: ed25519Public, Purpose: "bridge",
+				ExpectedType: uint32(signedType), Signed: testHexSigned(t, ed25519Signed), Refusal: "ErrSignedSignature",
+			},
+			{
+				Name: "an assertion with no key_id beside an identity key's signature", KeyAlg: "ed25519",
+				PublicKey: ed25519Public, Purpose: purpose, ExpectedType: uint32(signedType),
+				Signed: testHexSigned(t, withAssertion), Refusal: "ErrSignedEvidence",
+			},
+			{
+				Name: "an es256 assertion as ecdsa-p256-sha256", KeyAlg: "ecdsa-p256-sha256", PublicKey: p256Public,
+				Purpose: purpose, ExpectedType: uint32(signedType), Signed: testHexSigned(t, webAuthnSigned),
+				Refusal: "ErrSignedEvidence",
+			},
+		}
+
+		for _, size := range []int{1, 2, 3, 7, testActMaxSize} {
+			statementDigests := testRuleDigests(size)
+			root, err := PresenceActRoot(statementDigests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree := &testTreeVector{Size: uint32(size), Root: hex.EncodeToString(root[:])}
+			indexes := []int{}
+			if size <= 7 {
+				for index := range size {
+					indexes = append(indexes, index)
+				}
+			} else {
+				indexes = []int{0, 1, 32767, 32768, 65533, 65534}
+			}
+			for _, index := range indexes {
+				actPath, err := PresenceActPath(statementDigests, uint32(index))
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := &testPathVector{Index: uint32(index), Path: []string{}}
+				for _, hash := range actPath {
+					path.Path = append(path.Path, hex.EncodeToString(hash))
+				}
+				tree.Paths = append(tree.Paths, path)
+			}
+			vectors.Trees = append(vectors.Trees, tree)
+		}
+
+		for _, profile := range testPresenceProfiles(t) {
+			for _, size := range []int{1, 5} {
+				statements := testActStatements(size)
+				statementDigests := testActDigests(statements)
+				root, err := PresenceActRoot(statementDigests)
+				if err != nil {
+					t.Fatal(err)
+				}
+				act := &testActVector{
+					Name:               fmt.Sprintf("%d statements, %s", size, profile.name),
+					KeyAlg:             profile.name,
+					PublicKey:          hex.EncodeToString(profile.publicKey),
+					IdentityPublicKey:  hex.EncodeToString(testEd25519Public()),
+					SignerId:           hex.EncodeToString(testSignerId),
+					KeyId:              hex.EncodeToString(testPresenceKeyId),
+					Size:               uint32(size),
+					Root:               hex.EncodeToString(root[:]),
+					CountersignedBytes: hex.EncodeToString(PresenceActBytes(testSignerId, uint32(size), root)),
+				}
+				for i, signed := range testCountersignedAct(t, statements, profile.check) {
+					act.Statements = append(act.Statements, &testActStatementVector{
+						Purpose: statements[i].purpose,
+						Type:    uint32(statements[i].signedType),
+						Body:    hex.EncodeToString(statements[i].body),
+						Digest:  hex.EncodeToString(statementDigests[i][:]),
+						Signed:  testHexSigned(t, signed),
+					})
+				}
+				vectors.Acts = append(vectors.Acts, act)
+			}
+			vectors.Refusals = append(vectors.Refusals, testBuildRefusalVectors(t, profile)...)
+		}
+		return vectors
+	}
+
+	built, err := json.MarshalIndent(buildVectors(), "", " ")
 	if err != nil {
 		t.Fatal(err)
 	}
