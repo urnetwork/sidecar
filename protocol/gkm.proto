@@ -73,7 +73,7 @@ message DelegationWrap { KeyDelivery wrap = 1; }  // the same, to a Delegation's
 message ReaderKey {              // §6 Signed, purpose reader-key (10.5): every reader keeps a current one
   bytes sidecar_id = 1;
   bytes xwing_public_key = 2;
-  int64 not_after_ms = 3;        // at most 7 days after signing
+  int64 not_after = 3;           // ms since the epoch, at most 7 days after signing
 }
 
 message GroupForm {              // §6 Signed, purpose group-form, at gkm/repo/<repo_id>/<seq> (10.6): gkm-1's fields,
@@ -101,21 +101,21 @@ message GkmHint {                // §6 0x1301, in PushHint.hint
   bytes recipient = 4;           // 10.6's late wraps: the ask's s: or d: recipient, as its wrap path writes it
 }
 
-// gkm/<group_id>/epoch/<n>. gkm writes uploader, time_ms and header itself, from the token, its clock and the commit,
-// so a client's GkmEpochRequest has no such field to state falsely.
+// gkm/<group_id>/epoch/<n>, whose key names its group and epoch. gkm writes uploader, time_ms and header itself, from the
+// token, its clock and the commit, so a client's GkmEpochRequest has no such field to state falsely.
 message GkmEpochObject {
-  bytes group_id = 1;
-  uint64 epoch = 2;
-  bytes commit = 3;              // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
-  GkmCommitHeader header = 4;    // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
+  bytes commit = 1;              // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
+  GkmCommitHeader header = 2;    // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
                                  //   one MLS authenticates. At epoch 0, gen/1's generation and auth
-  bytes uploader = 5;            // sidecar_id; at epoch 0 the creator (gkm-1)
-  int64 time_ms = 6;             // gkm's clock at the write
-  bytes gen_wrap = 7;            // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
-  bytes sealed_group_info = 8;   // GroupInfo_n under header.generation's key, at most 16 leaves; else empty, and empty
-                                 //   at a generation-0 self-join, which no generation seals
-  bytes network_id = 9;          // epoch 0 only (gkm-1), from the token
-  uint32 cipher_suite = 10;      // epoch 0 only (gkm-1); 0x0010 (owner decision 44)
+  bytes uploader = 3;            // sidecar_id; at epoch 0 the creator (gkm-1)
+  int64 time_ms = 4;             // gkm's clock at the write
+  bytes gen_wrap = 5;            // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
+  bytes sealed_group_info = 6;   // GroupInfo_n in every epoch at most 16 leaves, a generation-0 self-join's included, or
+                                 //   recovery with no leaf online finds a newest epoch it cannot join from; else empty
+  uint64 group_info_generation = 7;  // whose K_groupinfo seals it (KF5: "the generation it names"), which at a
+                                     //   generation-0 self-join is the newest the joiner holds, not header.generation
+  bytes network_id = 8;          // epoch 0 only (gkm-1), from the token
+  uint32 cipher_suite = 9;       // epoch 0 only (gkm-1); 0x0010 (owner decision 44)
 }
 
 // gkm/<group_id>/group-info, and the body of POST and GET .../group-info. At most 16 leaves it is the pointer {epoch},
@@ -175,13 +175,15 @@ message GkmEpochRequest {
   bytes commit = 1;
   bytes gen_wrap = 2;
   bytes sealed_group_info = 3;
+  uint64 group_info_generation = 4;
 }
 
 // GET /gkm/groups/<id>/epochs?after=. An answer stops at gkm's bound, so a device asks again after its last epoch
 // until none comes.
 message GkmEpochEntry {
-  GkmEpochObject epoch = 1;
+  uint64 epoch = 1;
   uint64 size = 2;               // the stored object's bytes
+  GkmEpochObject object = 3;
 }
 message GkmEpochsReply {
   repeated GkmEpochEntry epochs = 1;  // in order

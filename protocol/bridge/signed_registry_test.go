@@ -67,7 +67,7 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_READER_WRAP, number: 0x1303},
 		{signedType: SignedType_SIGNED_DELEGATION_WRAP, number: 0x1304},
 		{signedType: SignedType_SIGNED_GROUP_FORM, number: 0x1305},
-		{signedType: SignedType_SIGNED_MLS_CREDENTIAL, number: 0x1306},
+		{signedType: SignedType_SIGNED_UR_MLS_CREDENTIAL, number: 0x1306},
 
 		{signedType: SignedType_SIGNED_EVS_PUSH, number: 0x1401},
 		{signedType: SignedType_SIGNED_EVS_RESEED, number: 0x1402},

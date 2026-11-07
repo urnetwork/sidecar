@@ -48,7 +48,7 @@ DelegationWrap.wrap: {number: 1, type: KeyDelivery, row: gkm-7, sees: "staged an
 
 ReaderKey.sidecar_id: {number: 1, type: bytes, row: gkm-4, sees: "ReaderKeys"}
 ReaderKey.xwing_public_key: {number: 2, type: bytes, row: gkm-4, sees: "ReaderKeys"}
-ReaderKey.not_after_ms: {number: 3, type: int64, row: gkm-4, sees: "ReaderKeys"}
+ReaderKey.not_after: {number: 3, type: int64, row: gkm-4, sees: "ReaderKeys"}
 
 GroupForm.repo_id: {number: 1, type: bytes, row: gkm-1, sees: "GroupForm chain (repo_id"}
 GroupForm.group_id: {number: 2, type: bytes, row: gkm-1, sees: "group_id"}
@@ -60,16 +60,15 @@ GkmHint.epoch: {number: 2, type: uint64, row: connect-4, sees: "server-held ids,
 GkmHint.kind: {number: 3, type: GkmHintKind, row: connect-4, sees: "server-held ids, kinds and versions"}
 GkmHint.recipient: {number: 4, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}
 
-GkmEpochObject.group_id: {number: 1, type: bytes, row: gkm-2, sees: "group_id"}
-GkmEpochObject.epoch: {number: 2, type: uint64, row: gkm-2, sees: "group_id, epoch"}
-GkmEpochObject.commit: {number: 3, type: bytes, row: gkm-2, sees: "the commit as PrivateMessage ciphertext"}
-GkmEpochObject.header: {number: 4, type: GkmCommitHeader, row: gkm-2, sees: "generation, auth pin"}
-GkmEpochObject.uploader: {number: 5, type: bytes, row: gkm-2, sees: "uploader sidecar_id"}
-GkmEpochObject.time_ms: {number: 6, type: int64, row: gkm-2, sees: "size, time"}
-GkmEpochObject.gen_wrap: {number: 7, type: bytes, row: gkm-2, sees: "GenWrap"}
-GkmEpochObject.sealed_group_info: {number: 8, type: bytes, row: gkm-2, pending: "10.6's epoch row and D-KEYS-18 put it here at 16 leaves or fewer; gkm-7 names only the sealed GroupInfo above 16"}
-GkmEpochObject.network_id: {number: 9, type: bytes, row: gkm-1, sees: "epoch 0 (network_id"}
-GkmEpochObject.cipher_suite: {number: 10, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
+GkmEpochObject.commit: {number: 1, type: bytes, row: gkm-2, sees: "the commit as PrivateMessage ciphertext"}
+GkmEpochObject.header: {number: 2, type: GkmCommitHeader, row: gkm-2, sees: "generation, auth pin"}
+GkmEpochObject.uploader: {number: 3, type: bytes, row: gkm-2, sees: "uploader sidecar_id"}
+GkmEpochObject.time_ms: {number: 4, type: int64, row: gkm-2, sees: "size, time"}
+GkmEpochObject.gen_wrap: {number: 5, type: bytes, row: gkm-2, sees: "GenWrap"}
+GkmEpochObject.sealed_group_info: {number: 6, type: bytes, row: gkm-2, pending: "10.6's epoch row and D-KEYS-18 put it here at 16 leaves or fewer; gkm-7 names only the sealed GroupInfo above 16"}
+GkmEpochObject.group_info_generation: {number: 7, type: uint64, row: gkm-2, pending: "KF5's 'the generation it names'; gen/ and each header show generations, no row says a sealed GroupInfo names one"}
+GkmEpochObject.network_id: {number: 8, type: bytes, row: gkm-1, sees: "epoch 0 (network_id"}
+GkmEpochObject.cipher_suite: {number: 9, type: uint32, row: gkm-1, sees: "cipher suite 0x0010"}
 
 GkmGroupInfoObject.epoch: {number: 1, type: uint64, row: gkm-7, sees: "GroupInfo pointers"}
 GkmGroupInfoObject.generation: {number: 2, type: uint64, row: gkm-7, pending: "KF5's 'the generation it names'; gen/ and each epoch's header show generations, gkm-7 does not say a sealed GroupInfo names one"}
@@ -99,9 +98,11 @@ GkmGroupReply.form: {number: 1, type: Signed, row: gkm-1, sees: "GroupForm chain
 GkmEpochRequest.commit: {number: 1, type: bytes, row: gkm-2, sees: "the commit as PrivateMessage ciphertext"}
 GkmEpochRequest.gen_wrap: {number: 2, type: bytes, row: gkm-2, sees: "GenWrap"}
 GkmEpochRequest.sealed_group_info: {number: 3, type: bytes, row: gkm-2, pending: "as GkmEpochObject.sealed_group_info"}
+GkmEpochRequest.group_info_generation: {number: 4, type: uint64, row: gkm-2, pending: "as GkmEpochObject.group_info_generation"}
 
-GkmEpochEntry.epoch: {number: 1, type: GkmEpochObject, row: gkm-2, sees: "epoch objects"}
+GkmEpochEntry.epoch: {number: 1, type: uint64, row: gkm-2, sees: "group_id, epoch"}
 GkmEpochEntry.size: {number: 2, type: uint64, row: gkm-2, sees: "auth pin, size"}
+GkmEpochEntry.object: {number: 3, type: GkmEpochObject, row: gkm-2, sees: "epoch objects"}
 GkmEpochsReply.epochs: {number: 1, type: repeated GkmEpochEntry, row: gkm-2, sees: "epoch objects"}
 
 GkmGenerationsReply.generations: {number: 1, type: repeated Signed, row: gkm-7, sees: "GenRotates"}

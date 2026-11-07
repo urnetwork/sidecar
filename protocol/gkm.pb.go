@@ -650,7 +650,7 @@ type ReaderKey struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId      []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
 	XwingPublicKey []byte                 `protobuf:"bytes,2,opt,name=xwing_public_key,json=xwingPublicKey,proto3" json:"xwing_public_key,omitempty"`
-	NotAfterMs     int64                  `protobuf:"varint,3,opt,name=not_after_ms,json=notAfterMs,proto3" json:"not_after_ms,omitempty"` // at most 7 days after signing
+	NotAfter       int64                  `protobuf:"varint,3,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"` // ms since the epoch, at most 7 days after signing
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -699,9 +699,9 @@ func (x *ReaderKey) GetXwingPublicKey() []byte {
 	return nil
 }
 
-func (x *ReaderKey) GetNotAfterMs() int64 {
+func (x *ReaderKey) GetNotAfter() int64 {
 	if x != nil {
-		return x.NotAfterMs
+		return x.NotAfter
 	}
 	return 0
 }
@@ -843,22 +843,22 @@ func (x *GkmHint) GetRecipient() []byte {
 	return nil
 }
 
-// gkm/<group_id>/epoch/<n>. gkm writes uploader, time_ms and header itself, from the token, its clock and the commit,
-// so a client's GkmEpochRequest has no such field to state falsely.
+// gkm/<group_id>/epoch/<n>, whose key names its group and epoch. gkm writes uploader, time_ms and header itself, from the
+// token, its clock and the commit, so a client's GkmEpochRequest has no such field to state falsely.
 type GkmEpochObject struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	GroupId []byte                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	Epoch   uint64                 `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	Commit  []byte                 `protobuf:"bytes,3,opt,name=commit,proto3" json:"commit,omitempty"` // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
-	Header  *GkmCommitHeader       `protobuf:"bytes,4,opt,name=header,proto3" json:"header,omitempty"` // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Commit []byte                 `protobuf:"bytes,1,opt,name=commit,proto3" json:"commit,omitempty"` // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
+	Header *GkmCommitHeader       `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"` // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
 	//   one MLS authenticates. At epoch 0, gen/1's generation and auth
-	Uploader        []byte `protobuf:"bytes,5,opt,name=uploader,proto3" json:"uploader,omitempty"`                                        // sidecar_id; at epoch 0 the creator (gkm-1)
-	TimeMs          int64  `protobuf:"varint,6,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"`                             // gkm's clock at the write
-	GenWrap         []byte `protobuf:"bytes,7,opt,name=gen_wrap,json=genWrap,proto3" json:"gen_wrap,omitempty"`                           // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
-	SealedGroupInfo []byte `protobuf:"bytes,8,opt,name=sealed_group_info,json=sealedGroupInfo,proto3" json:"sealed_group_info,omitempty"` // GroupInfo_n under header.generation's key, at most 16 leaves; else empty, and empty
-	//   at a generation-0 self-join, which no generation seals
-	NetworkId     []byte `protobuf:"bytes,9,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`         // epoch 0 only (gkm-1), from the token
-	CipherSuite   uint32 `protobuf:"varint,10,opt,name=cipher_suite,json=cipherSuite,proto3" json:"cipher_suite,omitempty"` // epoch 0 only (gkm-1); 0x0010 (owner decision 44)
+	Uploader        []byte `protobuf:"bytes,3,opt,name=uploader,proto3" json:"uploader,omitempty"`                                        // sidecar_id; at epoch 0 the creator (gkm-1)
+	TimeMs          int64  `protobuf:"varint,4,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"`                             // gkm's clock at the write
+	GenWrap         []byte `protobuf:"bytes,5,opt,name=gen_wrap,json=genWrap,proto3" json:"gen_wrap,omitempty"`                           // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
+	SealedGroupInfo []byte `protobuf:"bytes,6,opt,name=sealed_group_info,json=sealedGroupInfo,proto3" json:"sealed_group_info,omitempty"` // GroupInfo_n in every epoch at most 16 leaves, a generation-0 self-join's included, or
+	//   recovery with no leaf online finds a newest epoch it cannot join from; else empty
+	GroupInfoGeneration uint64 `protobuf:"varint,7,opt,name=group_info_generation,json=groupInfoGeneration,proto3" json:"group_info_generation,omitempty"` // whose K_groupinfo seals it (KF5: "the generation it names"), which at a
+	//   generation-0 self-join is the newest the joiner holds, not header.generation
+	NetworkId     []byte `protobuf:"bytes,8,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`        // epoch 0 only (gkm-1), from the token
+	CipherSuite   uint32 `protobuf:"varint,9,opt,name=cipher_suite,json=cipherSuite,proto3" json:"cipher_suite,omitempty"` // epoch 0 only (gkm-1); 0x0010 (owner decision 44)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -891,20 +891,6 @@ func (x *GkmEpochObject) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GkmEpochObject.ProtoReflect.Descriptor instead.
 func (*GkmEpochObject) Descriptor() ([]byte, []int) {
 	return file_protocol_gkm_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *GkmEpochObject) GetGroupId() []byte {
-	if x != nil {
-		return x.GroupId
-	}
-	return nil
-}
-
-func (x *GkmEpochObject) GetEpoch() uint64 {
-	if x != nil {
-		return x.Epoch
-	}
-	return 0
 }
 
 func (x *GkmEpochObject) GetCommit() []byte {
@@ -947,6 +933,13 @@ func (x *GkmEpochObject) GetSealedGroupInfo() []byte {
 		return x.SealedGroupInfo
 	}
 	return nil
+}
+
+func (x *GkmEpochObject) GetGroupInfoGeneration() uint64 {
+	if x != nil {
+		return x.GroupInfoGeneration
+	}
+	return 0
 }
 
 func (x *GkmEpochObject) GetNetworkId() []byte {
@@ -1408,12 +1401,13 @@ func (x *GkmGroupReply) GetForm() *bridge.Signed {
 
 // POST /gkm/groups/<id>/epochs/<n>. Each field means what GkmEpochObject's does.
 type GkmEpochRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Commit          []byte                 `protobuf:"bytes,1,opt,name=commit,proto3" json:"commit,omitempty"`
-	GenWrap         []byte                 `protobuf:"bytes,2,opt,name=gen_wrap,json=genWrap,proto3" json:"gen_wrap,omitempty"`
-	SealedGroupInfo []byte                 `protobuf:"bytes,3,opt,name=sealed_group_info,json=sealedGroupInfo,proto3" json:"sealed_group_info,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Commit              []byte                 `protobuf:"bytes,1,opt,name=commit,proto3" json:"commit,omitempty"`
+	GenWrap             []byte                 `protobuf:"bytes,2,opt,name=gen_wrap,json=genWrap,proto3" json:"gen_wrap,omitempty"`
+	SealedGroupInfo     []byte                 `protobuf:"bytes,3,opt,name=sealed_group_info,json=sealedGroupInfo,proto3" json:"sealed_group_info,omitempty"`
+	GroupInfoGeneration uint64                 `protobuf:"varint,4,opt,name=group_info_generation,json=groupInfoGeneration,proto3" json:"group_info_generation,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *GkmEpochRequest) Reset() {
@@ -1467,12 +1461,20 @@ func (x *GkmEpochRequest) GetSealedGroupInfo() []byte {
 	return nil
 }
 
+func (x *GkmEpochRequest) GetGroupInfoGeneration() uint64 {
+	if x != nil {
+		return x.GroupInfoGeneration
+	}
+	return 0
+}
+
 // GET /gkm/groups/<id>/epochs?after=. An answer stops at gkm's bound, so a device asks again after its last epoch
 // until none comes.
 type GkmEpochEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Epoch         *GkmEpochObject        `protobuf:"bytes,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	Size          uint64                 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"` // the stored object's bytes
+	Object        *GkmEpochObject        `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1507,11 +1509,11 @@ func (*GkmEpochEntry) Descriptor() ([]byte, []int) {
 	return file_protocol_gkm_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *GkmEpochEntry) GetEpoch() *GkmEpochObject {
+func (x *GkmEpochEntry) GetEpoch() uint64 {
 	if x != nil {
 		return x.Epoch
 	}
-	return nil
+	return 0
 }
 
 func (x *GkmEpochEntry) GetSize() uint64 {
@@ -1519,6 +1521,13 @@ func (x *GkmEpochEntry) GetSize() uint64 {
 		return x.Size
 	}
 	return 0
+}
+
+func (x *GkmEpochEntry) GetObject() *GkmEpochObject {
+	if x != nil {
+		return x.Object
+	}
+	return nil
 }
 
 type GkmEpochsReply struct {
@@ -2100,13 +2109,12 @@ const file_protocol_gkm_proto_rawDesc = "" +
 	"ReaderWrap\x122\n" +
 	"\x04wrap\x18\x01 \x01(\v2\x1e.urnetwork.sidecar.KeyDeliveryR\x04wrap\"D\n" +
 	"\x0eDelegationWrap\x122\n" +
-	"\x04wrap\x18\x01 \x01(\v2\x1e.urnetwork.sidecar.KeyDeliveryR\x04wrap\"v\n" +
+	"\x04wrap\x18\x01 \x01(\v2\x1e.urnetwork.sidecar.KeyDeliveryR\x04wrap\"q\n" +
 	"\tReaderKey\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12(\n" +
-	"\x10xwing_public_key\x18\x02 \x01(\fR\x0exwingPublicKey\x12 \n" +
-	"\fnot_after_ms\x18\x03 \x01(\x03R\n" +
-	"notAfterMs\"\x8b\x01\n" +
+	"\x10xwing_public_key\x18\x02 \x01(\fR\x0exwingPublicKey\x12\x1b\n" +
+	"\tnot_after\x18\x03 \x01(\x03R\bnotAfter\"\x8b\x01\n" +
 	"\tGroupForm\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\fR\agroupId\x12*\n" +
@@ -2118,20 +2126,18 @@ const file_protocol_gkm_proto_rawDesc = "" +
 	"\bgroup_id\x18\x01 \x01(\fR\agroupId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x122\n" +
 	"\x04kind\x18\x03 \x01(\x0e2\x1e.urnetwork.sidecar.GkmHintKindR\x04kind\x12\x1c\n" +
-	"\trecipient\x18\x04 \x01(\fR\trecipient\"\xd3\x02\n" +
-	"\x0eGkmEpochObject\x12\x19\n" +
-	"\bgroup_id\x18\x01 \x01(\fR\agroupId\x12\x14\n" +
-	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x16\n" +
-	"\x06commit\x18\x03 \x01(\fR\x06commit\x12:\n" +
-	"\x06header\x18\x04 \x01(\v2\".urnetwork.sidecar.GkmCommitHeaderR\x06header\x12\x1a\n" +
-	"\buploader\x18\x05 \x01(\fR\buploader\x12\x17\n" +
-	"\atime_ms\x18\x06 \x01(\x03R\x06timeMs\x12\x19\n" +
-	"\bgen_wrap\x18\a \x01(\fR\agenWrap\x12*\n" +
-	"\x11sealed_group_info\x18\b \x01(\fR\x0fsealedGroupInfo\x12\x1d\n" +
+	"\trecipient\x18\x04 \x01(\fR\trecipient\"\xd6\x02\n" +
+	"\x0eGkmEpochObject\x12\x16\n" +
+	"\x06commit\x18\x01 \x01(\fR\x06commit\x12:\n" +
+	"\x06header\x18\x02 \x01(\v2\".urnetwork.sidecar.GkmCommitHeaderR\x06header\x12\x1a\n" +
+	"\buploader\x18\x03 \x01(\fR\buploader\x12\x17\n" +
+	"\atime_ms\x18\x04 \x01(\x03R\x06timeMs\x12\x19\n" +
+	"\bgen_wrap\x18\x05 \x01(\fR\agenWrap\x12*\n" +
+	"\x11sealed_group_info\x18\x06 \x01(\fR\x0fsealedGroupInfo\x122\n" +
+	"\x15group_info_generation\x18\a \x01(\x04R\x13groupInfoGeneration\x12\x1d\n" +
 	"\n" +
-	"network_id\x18\t \x01(\fR\tnetworkId\x12!\n" +
-	"\fcipher_suite\x18\n" +
-	" \x01(\rR\vcipherSuite\"v\n" +
+	"network_id\x18\b \x01(\fR\tnetworkId\x12!\n" +
+	"\fcipher_suite\x18\t \x01(\rR\vcipherSuite\"v\n" +
 	"\x12GkmGroupInfoObject\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x1e\n" +
 	"\n" +
@@ -2161,14 +2167,16 @@ const file_protocol_gkm_proto_rawDesc = "" +
 	"\x11sealed_group_info\x18\x04 \x01(\fR\x0fsealedGroupInfo\x12!\n" +
 	"\fcipher_suite\x18\x05 \x01(\rR\vcipherSuite\">\n" +
 	"\rGkmGroupReply\x12-\n" +
-	"\x04form\x18\x01 \x01(\v2\x19.urnetwork.sidecar.SignedR\x04form\"p\n" +
+	"\x04form\x18\x01 \x01(\v2\x19.urnetwork.sidecar.SignedR\x04form\"\xa4\x01\n" +
 	"\x0fGkmEpochRequest\x12\x16\n" +
 	"\x06commit\x18\x01 \x01(\fR\x06commit\x12\x19\n" +
 	"\bgen_wrap\x18\x02 \x01(\fR\agenWrap\x12*\n" +
-	"\x11sealed_group_info\x18\x03 \x01(\fR\x0fsealedGroupInfo\"\\\n" +
-	"\rGkmEpochEntry\x127\n" +
-	"\x05epoch\x18\x01 \x01(\v2!.urnetwork.sidecar.GkmEpochObjectR\x05epoch\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x04R\x04size\"J\n" +
+	"\x11sealed_group_info\x18\x03 \x01(\fR\x0fsealedGroupInfo\x122\n" +
+	"\x15group_info_generation\x18\x04 \x01(\x04R\x13groupInfoGeneration\"t\n" +
+	"\rGkmEpochEntry\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x04R\x04size\x129\n" +
+	"\x06object\x18\x03 \x01(\v2!.urnetwork.sidecar.GkmEpochObjectR\x06object\"J\n" +
 	"\x0eGkmEpochsReply\x128\n" +
 	"\x06epochs\x18\x01 \x03(\v2 .urnetwork.sidecar.GkmEpochEntryR\x06epochs\"R\n" +
 	"\x13GkmGenerationsReply\x12;\n" +
@@ -2274,7 +2282,7 @@ var file_protocol_gkm_proto_depIdxs = []int32{
 	33, // 8: urnetwork.sidecar.GkmGroupCreateRequest.form:type_name -> urnetwork.sidecar.Signed
 	33, // 9: urnetwork.sidecar.GkmGroupCreateRequest.gen_rotate:type_name -> urnetwork.sidecar.Signed
 	33, // 10: urnetwork.sidecar.GkmGroupReply.form:type_name -> urnetwork.sidecar.Signed
-	11, // 11: urnetwork.sidecar.GkmEpochEntry.epoch:type_name -> urnetwork.sidecar.GkmEpochObject
+	11, // 11: urnetwork.sidecar.GkmEpochEntry.object:type_name -> urnetwork.sidecar.GkmEpochObject
 	21, // 12: urnetwork.sidecar.GkmEpochsReply.epochs:type_name -> urnetwork.sidecar.GkmEpochEntry
 	33, // 13: urnetwork.sidecar.GkmGenerationsReply.generations:type_name -> urnetwork.sidecar.Signed
 	33, // 14: urnetwork.sidecar.GkmWrapsReply.wraps:type_name -> urnetwork.sidecar.Signed
