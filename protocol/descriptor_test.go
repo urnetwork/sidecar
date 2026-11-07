@@ -73,7 +73,8 @@ func testMessage(t *testing.T, name string) protoreflect.MessageDescriptor {
 }
 
 // §4.9: files register by their root-relative paths in one package, and a duplicate would have panicked
-// before this ran, so reaching it at all says none exists.
+// before this ran, so reaching it at all says none exists. The list is the package's whole, because the lints
+// below that walk it would otherwise pass a new file by never opening it.
 func TestProtoFilesRegisterFromTheRepoRoot(t *testing.T) {
 	for _, path := range testProtoFiles {
 		file := testFile(t, path)
@@ -83,6 +84,15 @@ func TestProtoFilesRegisterFromTheRepoRoot(t *testing.T) {
 		if file.Syntax() != protoreflect.Proto3 {
 			t.Errorf("%s is not proto3", path)
 		}
+	}
+	registered := []string{}
+	protoregistry.GlobalFiles.RangeFilesByPackage(testProtoPackage, func(file protoreflect.FileDescriptor) bool {
+		registered = append(registered, file.Path())
+		return true
+	})
+	slices.Sort(registered)
+	if listed := slices.Sorted(slices.Values(testProtoFiles)); !slices.Equal(registered, listed) {
+		t.Errorf("the package registers %v, and testProtoFiles lists %v", registered, listed)
 	}
 }
 

@@ -3,9 +3,8 @@
 // its word and so skipped what gates parse in record.proto, so a header's claim is checked here too, and each row's
 // words are read from the design rather than remembered.
 //
-// This is not §22.7's schema guard, which reads a generated metadata_list.yml that does not exist yet, and it does not
-// reach acl.proto, config.proto or protocol/bridge, whose rows protos-bridge-row-fields and
-// TestSealedStatementsShowOnlyIds answer for.
+// This is not §22.7's schema guard, which reads a generated metadata_list.yml that does not exist yet, and it stops at
+// the service files: testUnwalkedFiles names the rest, so a new file has to say which it is.
 
 package protocol
 
@@ -19,6 +18,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
@@ -41,6 +41,20 @@ var testWalkedFiles = []string{
 	"protocol/mail.proto",
 	"protocol/record.proto",
 	"protocol/directory.proto",
+}
+
+// Files this walk leaves to others: protos-bridge-row-fields and TestSealedStatementsShowOnlyIds answer for acl, config
+// and bridge's rows, and nothing yet walks the envelope, stream and push wires against connect-2 and connect-4.
+var testUnwalkedFiles = []string{
+	"protocol/acl.proto",
+	"protocol/config.proto",
+	"protocol/envelope.proto",
+	"protocol/push.proto",
+	"protocol/stream.proto",
+	"protocol/types.proto",
+	"protocol/bridge/auth.proto",
+	"protocol/bridge/bridge.proto",
+	"protocol/bridge/signed.proto",
 }
 
 // Messages no server reads a field of. evsindex.proto's and directory.proto's are files evs seals as it seals any
@@ -69,7 +83,7 @@ type testRowView struct {
 
 // What servers see of a message. Each field is in one place: a view that names it, raised, or sealed. A view with no
 // fields takes every field left over. raised holds what a server reads and no row names, each asked in
-// protos-services-metadata-rows or protos-services-canonical-action, so clearing one there clears it here.
+// protos-services-metadata-rows or protos-services-canonical-action, and an answer moves it to a view.
 type testServerView struct {
 	views  []testRowView
 	raised []string
@@ -260,17 +274,21 @@ var testMessageViews = map[string]testServerView{
 					"which a requested grant's GrantActivate also shows",
 				fields: []string{"app_mode", "link_spki_sha256"},
 			},
-			{row: "api-7", quote: "rules with targets, actions, ports", fields: []string{"target_sidecar_id", "target_port"}},
+			{
+				row:    "api-7",
+				quote:  "rules with targets, actions, ports, the CIDRs of ip targets",
+				fields: []string{"target_sidecar_id", "target_port", "cidrs"},
+			},
 			{row: "api-7", quote: "public names", fields: []string{"socket_name"}},
 		},
 		// dns-1 already holds the dns_* values, and sock-1 weight and ALPN, each as its own service's state.
 		raised: []string{
 			"kind", "version", "scope", "dns_name", "dns_type", "dns_value", "dns_ttl", "local_port", "weight", "alpn",
 		},
-		// api-10: "recipients and previews stay sealed". The rest serve actions a daemon spends itself, and §17.8 seals
-		// a bridge_expose's approval with its rule.
+		// api-10: "recipients and previews stay sealed". The rest serve actions a daemon spends itself: mail, evs writes,
+		// aliases and restores, none of which reaches a gate or a GrantActivate.
 		sealed: []string{
-			"recipients", "body_sha256", "preview", "cidrs", "repo_id", "path", "content_sha256", "base_version", "alias",
+			"recipients", "body_sha256", "preview", "repo_id", "path", "content_sha256", "base_version", "alias",
 			"restore_run_id", "restore_paths", "restore_preview_id", "alias_group", "versioning",
 		},
 	},
@@ -315,6 +333,12 @@ func testWalkDifferences(files *protoregistry.Files, rowTexts map[string]string)
 	report := func(format string, arguments ...any) {
 		differences = append(differences, fmt.Sprintf(format, arguments...))
 	}
+	files.RangeFilesByPackage(testProtoPackage, func(file protoreflect.FileDescriptor) bool {
+		if !slices.Contains(testWalkedFiles, file.Path()) && !slices.Contains(testUnwalkedFiles, file.Path()) {
+			report("%s is neither walked nor left to another account", file.Path())
+		}
+		return true
+	})
 	walked := map[string]bool{}
 	for _, path := range testWalkedFiles {
 		file, err := files.FindFileByPath(path)
@@ -359,8 +383,8 @@ func testWalkDifferences(files *protoregistry.Files, rowTexts map[string]string)
 				fieldCounts[field]++
 			}
 			fields := message.Fields()
-			for i := range fields.Len() {
-				field := string(fields.Get(i).Name())
+			for j := range fields.Len() {
+				field := string(fields.Get(j).Name())
 				if fieldCounts[field] > 1 {
 					report("%s.%s is in %d places", name, field, fieldCounts[field])
 				}
@@ -503,6 +527,17 @@ func TestWalkCatchesPlantedFaults(t *testing.T) {
 			name:   "a message nobody has walked, in a file it read",
 			want:   "protocol/gkm.proto: Stray is sealed false",
 			mutate: addMessage(gkm),
+		},
+		{
+			name: "a new file, which the walk would otherwise never open",
+			want: "protocol/stray.proto is neither walked nor left to another account",
+			mutate: func(fileProtos testFileProtos) {
+				fileProtos["protocol/stray.proto"] = &descriptorpb.FileDescriptorProto{
+					Name:    proto.String("protocol/stray.proto"),
+					Package: proto.String(testProtoPackage),
+					Syntax:  proto.String("proto3"),
+				}
+			},
 		},
 	}
 	rowTexts := testReadRows(t)
