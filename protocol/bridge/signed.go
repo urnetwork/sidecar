@@ -31,6 +31,13 @@ const signedBytesPrefix = "urnetwork-sidecar-v1/"
 // Names the countersigned bytes' domain and is no §6.11 purpose, so signed bytes never reach it.
 const presenceActPurpose = "presence-act"
 
+// The purposes of what the authorization log carries: §7.9's records, §8.8's statements and §17.8's.
+const (
+	SignedPurposeAuthority = "authority"
+	SignedPurposeAcl       = "acl"
+	SignedPurposeBridge    = "bridge"
+)
+
 // §16.6's webauthn-es256 per-use profile. The authenticator data is the rp id's SHA-256, a flags byte,
 // then a 4-byte counter (WebAuthn §6.1).
 const (
