@@ -65,8 +65,9 @@ type reassemblyGroup struct {
 }
 
 // Whether envelope is the chunk this group waits for, repeating everything the first chunk fixed. Its
-// count needs no check here: chunkFitsLayout has held that to its total.
-func (self *reassemblyGroup) extendedBy(envelope *protocol.Envelope) bool {
+// count needs no check here: chunkFitsLayout has held that to its total. The group is the reassembler's
+// state, read under its lock.
+func (self *reassemblyGroup) extendedByWithLock(envelope *protocol.Envelope) bool {
 	return envelope.Version == self.version &&
 		envelope.Type == self.messageType &&
 		envelope.Flags&^EnvelopeFlagMore == self.flags &&
@@ -79,7 +80,7 @@ func (self *reassemblyGroup) extendedBy(envelope *protocol.Envelope) bool {
 // One source's groups and what they reserve. A peer with no group has no entry, so sources that came and
 // went cost nothing.
 type reassemblyPeer struct {
-	groups    map[reassemblyGroupKey]*reassemblyGroup
+	keyGroups map[reassemblyGroupKey]*reassemblyGroup
 	byteCount int64
 }
 
@@ -111,10 +112,10 @@ type reassembler struct {
 	// closes when run has ended and let go of everything
 	runDone chan struct{}
 
-	stateLock sync.Mutex
-	peers     map[Id]*reassemblyPeer
-	closed    bool
-	stats     reassemblyStats
+	stateLock     sync.Mutex
+	sourceIdPeers map[Id]*reassemblyPeer
+	closed        bool
+	stats         reassemblyStats
 	// groups held, which wakes run when the first arrives
 	groupCount *MonitorValue[int]
 }
@@ -133,15 +134,15 @@ func newReassembler(
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &reassembler{
-		ctx:        cancelCtx,
-		cancel:     cancel,
-		settings:   settings,
-		budget:     budget,
-		clock:      clock,
-		log:        log,
-		runDone:    make(chan struct{}),
-		peers:      map[Id]*reassemblyPeer{},
-		groupCount: NewMonitorValue(0),
+		ctx:           cancelCtx,
+		cancel:        cancel,
+		settings:      settings,
+		budget:        budget,
+		clock:         clock,
+		log:           log,
+		runDone:       make(chan struct{}),
+		sourceIdPeers: map[Id]*reassemblyPeer{},
+		groupCount:    NewMonitorValue(0),
 	}
 	go self.run()
 	return self
@@ -188,9 +189,9 @@ func (self *reassembler) dropAll() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.closed = true
-		for source, peer := range self.peers {
-			for key := range peer.groups {
-				freedByteCount += self.removeWithLock(source, key)
+		for sourceId, peer := range self.sourceIdPeers {
+			for key := range peer.keyGroups {
+				freedByteCount += self.removeWithLock(sourceId, key)
 			}
 		}
 	}()
@@ -207,10 +208,10 @@ func (self *reassembler) expire() time.Duration {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		for source, peer := range self.peers {
-			for key, group := range peer.groups {
+		for sourceId, peer := range self.sourceIdPeers {
+			for key, group := range peer.keyGroups {
 				if !now.Before(group.deadline) {
-					freedByteCount += self.removeWithLock(source, key)
+					freedByteCount += self.removeWithLock(sourceId, key)
 					self.stats.expiredCount += 1
 				} else if nextDeadline.IsZero() || group.deadline.Before(nextDeadline) {
 					nextDeadline = group.deadline
@@ -227,20 +228,20 @@ func (self *reassembler) expire() time.Duration {
 
 // Takes a group out and says what it reserved, which the caller gives back to the budget once it holds
 // no lock. A key with no group is 0.
-func (self *reassembler) removeWithLock(source Id, key reassemblyGroupKey) int64 {
-	peer := self.peers[source]
+func (self *reassembler) removeWithLock(sourceId Id, key reassemblyGroupKey) int64 {
+	peer := self.sourceIdPeers[sourceId]
 	if peer == nil {
 		return 0
 	}
-	group := peer.groups[key]
+	group := peer.keyGroups[key]
 	if group == nil {
 		return 0
 	}
-	delete(peer.groups, key)
+	delete(peer.keyGroups, key)
 	byteCount := int64(group.totalByteCount)
 	peer.byteCount -= byteCount
-	if len(peer.groups) == 0 {
-		delete(self.peers, source)
+	if len(peer.keyGroups) == 0 {
+		delete(self.sourceIdPeers, sourceId)
 	}
 	self.groupCount.Update(func(groupCount int) int {
 		return groupCount - 1
@@ -250,12 +251,12 @@ func (self *reassembler) removeWithLock(source Id, key reassemblyGroupKey) int64
 
 // Clears what a first chunk replaces: the group it restarts, and the source's groups past their
 // deadline, so a cap never counts what has already expired.
-func (self *reassembler) clearWithLock(source Id, key reassemblyGroupKey, now time.Time) int64 {
-	freedByteCount := self.removeWithLock(source, key)
-	if peer := self.peers[source]; peer != nil {
-		for otherKey, group := range peer.groups {
+func (self *reassembler) clearWithLock(sourceId Id, key reassemblyGroupKey, now time.Time) int64 {
+	freedByteCount := self.removeWithLock(sourceId, key)
+	if peer := self.sourceIdPeers[sourceId]; peer != nil {
+		for otherKey, group := range peer.keyGroups {
 			if !now.Before(group.deadline) {
-				freedByteCount += self.removeWithLock(source, otherKey)
+				freedByteCount += self.removeWithLock(sourceId, otherKey)
 				self.stats.expiredCount += 1
 			}
 		}
@@ -264,7 +265,7 @@ func (self *reassembler) clearWithLock(source Id, key reassemblyGroupKey, now ti
 }
 
 // Whether one more body of totalByteCount fits the source's caps and its own.
-func (self *reassembler) fitsWithLock(source Id, totalByteCount int64) bool {
+func (self *reassembler) fitsWithLock(sourceId Id, totalByteCount int64) bool {
 	if self.closed {
 		return false
 	}
@@ -272,36 +273,36 @@ func (self *reassembler) fitsWithLock(source Id, totalByteCount int64) bool {
 	if maxBodyByteCount < totalByteCount {
 		return false
 	}
-	peer := self.peers[source]
+	peer := self.sourceIdPeers[sourceId]
 	if peer == nil {
 		return totalByteCount <= self.settings.ReassemblyPeerByteCount
 	}
-	return len(peer.groups) < self.settings.ReassemblyPeerCount &&
+	return len(peer.keyGroups) < self.settings.ReassemblyPeerCount &&
 		totalByteCount <= self.settings.ReassemblyPeerByteCount-peer.byteCount
 }
 
 // Counts a chunk dropped, says why at a level that shows it, and hands back what offer returns.
-func (self *reassembler) dropped(source Id, reason string) error {
+func (self *reassembler) dropped(sourceId Id, reason string) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.stats.droppedCount += 1
 	}()
 	if self.log.V(1).Enabled() {
-		self.log.Infof("[reassembly]%s drop: %s\n", source, reason)
+		self.log.Infof("[reassembly]%s drop: %s\n", sourceId, reason)
 	}
 	return errReassemblyDropped
 }
 
 // Counts a first chunk refused and hands back what offer returns.
-func (self *reassembler) refused(source Id) error {
+func (self *reassembler) refused(sourceId Id) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.stats.refusedCount += 1
 	}()
 	if self.log.V(1).Enabled() {
-		self.log.Infof("[reassembly]%s over a cap\n", source)
+		self.log.Infof("[reassembly]%s over a cap\n", sourceId)
 	}
 	return errReassemblyExhausted
 }
@@ -323,10 +324,10 @@ func (self *reassembler) currentStats() reassemblyStats {
 //   - errReassemblyDropped otherwise, the group gone.
 //
 // envelope and its body are borrowed for the call.
-func (self *reassembler) offer(source Id, envelope *protocol.Envelope) (*protocol.Envelope, error) {
+func (self *reassembler) offer(sourceId Id, envelope *protocol.Envelope) (*protocol.Envelope, error) {
 	if envelope.Chunk == nil {
 		if envelope.Flags&EnvelopeFlagMore != 0 {
-			return nil, self.dropped(source, "more with no chunk")
+			return nil, self.dropped(sourceId, "more with no chunk")
 		}
 		return envelope, nil
 	}
@@ -340,15 +341,15 @@ func (self *reassembler) offer(source Id, envelope *protocol.Envelope) (*protoco
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			freedByteCount = self.removeWithLock(source, key)
+			freedByteCount = self.removeWithLock(sourceId, key)
 		}()
 		self.budget.releaseReassembly(freedByteCount)
-		return nil, self.dropped(source, "chunk off its layout")
+		return nil, self.dropped(sourceId, "chunk off its layout")
 	}
 	if envelope.Chunk.Index == 0 {
-		return nil, self.begin(source, key, envelope)
+		return nil, self.begin(sourceId, key, envelope)
 	}
-	return self.extend(source, key, envelope)
+	return self.extend(sourceId, key, envelope)
 }
 
 // Whether a chunk has the shape its position in its declared length fixes. Only a body past
@@ -378,8 +379,8 @@ func chunkFitsLayout(envelope *protocol.Envelope) bool {
 // Starts a group at its first chunk, replacing any group of that key, since a fresh index 0 means the
 // sender resent the whole message. The budget sits outside this lock, so the caps are read, the budget
 // taken, and the caps read again as the group goes in.
-func (self *reassembler) begin(source Id, key reassemblyGroupKey, envelope *protocol.Envelope) error {
-	sourceKey := source.String()
+func (self *reassembler) begin(sourceId Id, key reassemblyGroupKey, envelope *protocol.Envelope) error {
+	sourceKey := sourceId.String()
 	testHookBarrier("envelope.reassembly_reserve.before", sourceKey)
 	defer testHookBarrier("envelope.reassembly_reserve.after", sourceKey)
 
@@ -390,12 +391,12 @@ func (self *reassembler) begin(source Id, key reassemblyGroupKey, envelope *prot
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		freedByteCount = self.clearWithLock(source, key, now)
-		fits = self.fitsWithLock(source, totalByteCount)
+		freedByteCount = self.clearWithLock(sourceId, key, now)
+		fits = self.fitsWithLock(sourceId, totalByteCount)
 	}()
 	self.budget.releaseReassembly(freedByteCount)
 	if !fits || !self.budget.reserveReassembly(totalByteCount) {
-		return self.refused(source)
+		return self.refused(sourceId)
 	}
 
 	testHookBarrier("envelope.reassembly_reserve", sourceKey)
@@ -414,16 +415,16 @@ func (self *reassembler) begin(source Id, key reassemblyGroupKey, envelope *prot
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		freedByteCount = self.clearWithLock(source, key, now)
-		if !self.fitsWithLock(source, totalByteCount) {
+		freedByteCount = self.clearWithLock(sourceId, key, now)
+		if !self.fitsWithLock(sourceId, totalByteCount) {
 			return
 		}
-		peer := self.peers[source]
+		peer := self.sourceIdPeers[sourceId]
 		if peer == nil {
-			peer = &reassemblyPeer{groups: map[reassemblyGroupKey]*reassemblyGroup{}}
-			self.peers[source] = peer
+			peer = &reassemblyPeer{keyGroups: map[reassemblyGroupKey]*reassemblyGroup{}}
+			self.sourceIdPeers[sourceId] = peer
 		}
-		peer.groups[key] = group
+		peer.keyGroups[key] = group
 		peer.byteCount += totalByteCount
 		self.groupCount.Update(func(groupCount int) int {
 			return groupCount + 1
@@ -433,17 +434,17 @@ func (self *reassembler) begin(source Id, key reassemblyGroupKey, envelope *prot
 	self.budget.releaseReassembly(freedByteCount)
 	if !added {
 		self.budget.releaseReassembly(totalByteCount)
-		return self.refused(source)
+		return self.refused(sourceId)
 	}
 	return nil
 }
 
 // Adds a later chunk to its group, and at the final chunk checks the hash and gives the body back. The
 // hash runs after the group is out and the lock is free, since it reads the whole body.
-func (self *reassembler) extend(source Id, key reassemblyGroupKey, envelope *protocol.Envelope) (*protocol.Envelope, error) {
+func (self *reassembler) extend(sourceId Id, key reassemblyGroupKey, envelope *protocol.Envelope) (*protocol.Envelope, error) {
 	final := envelope.Chunk.Index+1 == envelope.Chunk.Count
 	if final {
-		sourceKey := source.String()
+		sourceKey := sourceId.String()
 		testHookBarrier("envelope.reassembly_complete.before", sourceKey)
 		defer testHookBarrier("envelope.reassembly_complete.after", sourceKey)
 	}
@@ -456,39 +457,39 @@ func (self *reassembler) extend(source Id, key reassemblyGroupKey, envelope *pro
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		var group *reassemblyGroup
-		if peer := self.peers[source]; peer != nil {
-			group = peer.groups[key]
+		if peer := self.sourceIdPeers[sourceId]; peer != nil {
+			group = peer.keyGroups[key]
 		}
 		switch {
 		case group == nil:
 			reason = "no group"
 		case !now.Before(group.deadline):
-			freedByteCount = self.removeWithLock(source, key)
+			freedByteCount = self.removeWithLock(sourceId, key)
 			self.stats.expiredCount += 1
 			reason = "group idle"
-		case !group.extendedBy(envelope):
-			freedByteCount = self.removeWithLock(source, key)
+		case !group.extendedByWithLock(envelope):
+			freedByteCount = self.removeWithLock(sourceId, key)
 			reason = "chunk out of its group"
 		default:
 			group.body = append(group.body, envelope.Body...)
 			group.nextIndex += 1
 			group.deadline = now.Add(self.settings.ReassemblyIdleTimeout)
 			if final {
-				freedByteCount = self.removeWithLock(source, key)
+				freedByteCount = self.removeWithLock(sourceId, key)
 				completed = group
 			}
 		}
 	}()
 	self.budget.releaseReassembly(freedByteCount)
 	if reason != "" {
-		return nil, self.dropped(source, reason)
+		return nil, self.dropped(sourceId, reason)
 	}
 	if completed == nil {
 		return nil, nil
 	}
 	hash := sha256.Sum256(completed.body)
 	if !bytes.Equal(hash[:], envelope.Chunk.Sha256) {
-		return nil, self.dropped(source, "hash")
+		return nil, self.dropped(sourceId, "hash")
 	}
 	func() {
 		self.stateLock.Lock()

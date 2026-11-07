@@ -126,9 +126,9 @@ func testRequireCapsHold(t *testing.T, settings *SidecarProtocolSettings, reasse
 	}
 	reassembly.reassembler.stateLock.Lock()
 	defer reassembly.reassembler.stateLock.Unlock()
-	for source, peer := range reassembly.reassembler.peers {
-		if settings.ReassemblyPeerCount < len(peer.groups) || settings.ReassemblyPeerByteCount < peer.byteCount {
-			t.Fatalf("%s holds %d groups, %d B", source, len(peer.groups), peer.byteCount)
+	for source, peer := range reassembly.reassembler.sourceIdPeers {
+		if settings.ReassemblyPeerCount < len(peer.keyGroups) || settings.ReassemblyPeerByteCount < peer.byteCount {
+			t.Fatalf("%s holds %d groups, %d B", source, len(peer.keyGroups), peer.byteCount)
 		}
 	}
 }
@@ -270,10 +270,10 @@ func testProtocolBodyTypes(t testing.TB) []protoreflect.MessageType {
 // settles. name picks the message, and a mutated name still lands on one.
 func FuzzProtocolBody(f *testing.F) {
 	types := testProtocolBodyTypes(f)
-	typesByName := map[string]protoreflect.MessageType{}
+	nameTypes := map[string]protoreflect.MessageType{}
 	for _, messageType := range types {
 		name := string(messageType.Descriptor().Name())
-		typesByName[name] = messageType
+		nameTypes[name] = messageType
 		f.Add(name, []byte{})
 	}
 
@@ -287,7 +287,7 @@ func FuzzProtocolBody(f *testing.F) {
 		if MaxReassemblyBodyByteCount < len(body) {
 			return
 		}
-		messageType := typesByName[name]
+		messageType := nameTypes[name]
 		if messageType == nil {
 			messageType = types[crc32.ChecksumIEEE([]byte(name))%uint32(len(types))]
 		}

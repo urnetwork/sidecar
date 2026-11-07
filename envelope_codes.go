@@ -34,8 +34,8 @@ func envelopeErrorCode(err error) (protocol.ErrorCode, bool) {
 }
 
 // Whether a sender may have set code. A wire number past int32 wraps negative, which no enum holds.
-func senderCode(names map[int32]string, code uint32) bool {
-	_, named := names[int32(code)]
+func senderCode(codeNames map[int32]string, code uint32) bool {
+	_, named := codeNames[int32(code)]
 	return named && code != 0
 }
 

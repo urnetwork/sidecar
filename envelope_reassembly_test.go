@@ -129,7 +129,7 @@ func (self *testReassembly) requireEmpty(t testing.TB) {
 	func() {
 		self.reassembler.stateLock.Lock()
 		defer self.reassembler.stateLock.Unlock()
-		if peerCount := len(self.reassembler.peers); peerCount != 0 {
+		if peerCount := len(self.reassembler.sourceIdPeers); peerCount != 0 {
 			t.Errorf("%d peers left", peerCount)
 		}
 	}()
