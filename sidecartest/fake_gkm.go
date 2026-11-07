@@ -81,7 +81,8 @@ type FakeGkm struct {
 	blobs    sidecar.BlobStore
 	settings *FakeGkmSettings
 
-	// Held across a rotation's object write, so two rotations of one fake never race on gen/<g+1>.
+	// Held across a rotation's object write, so two rotations of one fake never race on gen/<g+1>. The functions
+	// named WithLock run under it.
 	rotateLock sync.Mutex
 
 	stateLock   sync.Mutex
@@ -219,7 +220,7 @@ func cloneHolders(holders map[sidecar.Id]bool) map[sidecar.Id]bool {
 }
 
 // Writes gen/<g> signed by sign, then the generation's key, GenWrap and holders, under rotateLock.
-func (self *FakeGkm) claim(ctx context.Context, repo *fakeGkmRepo, key *sidecar.EvsRepoKey, rotate *protocol.GenRotate, sign sidecar.GkmSignFunction, holders map[sidecar.Id]bool) error {
+func (self *FakeGkm) claimWithLock(ctx context.Context, repo *fakeGkmRepo, key *sidecar.EvsRepoKey, rotate *protocol.GenRotate, sign sidecar.GkmSignFunction, holders map[sidecar.Id]bool) error {
 	signed, err := sidecar.SignGenRotate(rotate, sign)
 	if err != nil {
 		return err
@@ -369,7 +370,7 @@ func (self *fakeGkmClient) CreateGroup(ctx context.Context, args *sidecar.GkmCre
 	for _, reader := range state.RepoReaders(args.RepoId) {
 		holders[reader] = true
 	}
-	if err := self.gkm.claim(ctx, repo, key, rotate, self.sign, holders); err != nil {
+	if err := self.gkm.claimWithLock(ctx, repo, key, rotate, self.sign, holders); err != nil {
 		return nil, err
 	}
 	return key, nil
@@ -411,14 +412,14 @@ func (self *fakeGkmClient) rotateWithLock(ctx context.Context, repo *fakeGkmRepo
 	for _, reader := range state.RepoReaders(repo.repoId) {
 		holders[reader] = true
 	}
-	if err := self.gkm.claim(ctx, repo, key, rotate, self.sign, holders); err != nil {
+	if err := self.gkm.claimWithLock(ctx, repo, key, rotate, self.sign, holders); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-// The repo and this client's state, once it writes the repo.
-func (self *fakeGkmClient) writable(repoId sidecar.Id) (*fakeGkmRepo, sidecar.GkmAuthView, error) {
+// The repo and this client's state, once it writes the repo. Under rotateLock.
+func (self *fakeGkmClient) writableWithLock(repoId sidecar.Id) (*fakeGkmRepo, sidecar.GkmAuthView, error) {
 	state, err := self.currentState()
 	if err != nil {
 		return nil, nil, err
@@ -437,7 +438,7 @@ func (self *fakeGkmClient) EnsureWritable(ctx context.Context, repoId sidecar.Id
 	key, state, err := func() (*sidecar.EvsRepoKey, sidecar.GkmAuthView, error) {
 		self.gkm.rotateLock.Lock()
 		defer self.gkm.rotateLock.Unlock()
-		repo, state, err := self.writable(repoId)
+		repo, state, err := self.writableWithLock(repoId)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -465,7 +466,7 @@ func (self *fakeGkmClient) EnsureWritable(ctx context.Context, repoId sidecar.Id
 func (self *fakeGkmClient) RotateRepo(ctx context.Context, repoId sidecar.Id) (*sidecar.EvsRepoKey, error) {
 	self.gkm.rotateLock.Lock()
 	defer self.gkm.rotateLock.Unlock()
-	repo, state, err := self.writable(repoId)
+	repo, state, err := self.writableWithLock(repoId)
 	if err != nil {
 		return nil, err
 	}
