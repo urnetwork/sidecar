@@ -7,3 +7,5 @@
 # go build ./... in cli/ writes its lone main package here
 cli/cli
 cli/ur
+# and in sidecarctl/
+sidecarctl/sidecarctl
