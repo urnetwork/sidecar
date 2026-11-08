@@ -33,7 +33,7 @@ usage() {
 # seq is one writer and one instance, each push answered before the next; tiny is a window of 2
 # versions paging out one at a time, so a page-out fits in a short behavior; quiet_but holds still
 # every part a twin's rule never reaches; sim is random simulation, for the twins whose violations
-# lie past 50 steps. Two of the model's twins have no row, since no invariant can see them: NoTailCheck,
+# lie past 30 steps. Two of the model's twins have no row, since no invariant can see them: NoTailCheck,
 # as the model carries nothing a tail holds (a new epoch's tokens for paths created after the map's
 # source), and NoFenceRule, as at the model's hour marks every attempt a fence ends has lapsed (5b)
 # or holds a receipt or map too old to pass (5h, 5e) by then.
@@ -64,9 +64,9 @@ ResolveIgnoresPending  OutcomesHold          $seq MaxPush=1 MaxHour=3 $(quiet_bu
 GcNoFence              GcSafe                $seq MaxPush=1 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref
 GcNoSecondCheck        GcSafe                $seq MaxPush=1 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref
 PageOutUnfolded        NewestFound           $seq MaxPush=3 $tiny $(quiet_but)+gitref
-StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref
-NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref
-NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref
+StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref $sim
+NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref $sim
+NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref $sim
 NoWindowWait           NewestFound           $seq MaxPush=6 MaxVersion=7 $tiny $(quiet_but fold collect)+gitref $sim
 FoldIgnoresWindow      NewestFound           $seq MaxPush=6 MaxVersion=7 $tiny $(quiet_but fold collect)+gitref $sim
 CachedRefusal          OutcomesHold          $seq Writers={w1,w2,w3} MaxAttempts=2 MaxGeneration=2 MaxPush=5 MaxVersion=6 $(quiet_but authority epoch cache stale)+gitref $sim
