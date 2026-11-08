@@ -7,12 +7,14 @@
 // so a view reaches back along its chain: a pin above the tip waits until the log reaches it, one before what the
 // reader retains is not judged and counts against no one, and one off the chain is a fork.
 //
-// KeyHolders, coverage and the gate (KEYS-M2-03) read more of S(n) than this, and add what they read here.
+// §10.5's KeyHolders, §7.9's coverage and §10.6's gate (gkm_holders.go, gkm_gate.go) read the rest: the readers at a
+// given time, the rows of sidecars, members and Delegations, and what §8.6's grants reach for a Delegation's tags.
 
 package sidecar
 
 import (
 	"errors"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -45,4 +47,20 @@ type GkmAuthView interface {
 	RepoReaders(repoId Id) []Id
 	// Every sidecar that §8.6 lets write the repo.
 	RepoWriters(repoId Id) []Id
+	// §8.12's RepoReaders at this state and the time given, sorted: what KeyHolders(R, S, t) reads, so an expiry
+	// shows as t passes with no entry (§7.9). A sidecar no longer reads once every grant it reads by has expired or
+	// its own not_after has passed, and nothing in one state starts a read later, so the set only shrinks as t grows.
+	RepoReadersAt(repoId Id, at time.Time) []Id
+	// A sidecar's row, revoked tombstones included; nil for one the state never admitted.
+	SidecarRow(sidecarId Id) *bridge.SidecarRow
+	// A member's row; nil for an id that names no member of this state.
+	Member(memberId Id) *bridge.MemberRow
+	// Every Delegation the state holds a row for, ended ones included, by delegation_id.
+	Delegations() []*bridge.DelegationRow
+	// The repos a read, write or admin grant naming one of the atoms reads at the time given, sorted: the part of
+	// §10.5's reach(d) the rows decide for a Delegation's tags.
+	ReposGrantedToAtoms(atoms []Id, at time.Time) []Id
+	// Whether a record signed by signer (a sidecar_id, a recovery key's hash or a delegation_id) and carried at
+	// position at rests on what a compromise cascade voids (§7.9's cascade, D-TEAM-26), as AclAuthView's.
+	CascadeVoids(signer []byte, at uint64) bool
 }

@@ -313,6 +313,20 @@ func (self *ConfigState) Delegation(delegationId []byte) *bridge.DelegationRow {
 	return self.delegations[string(delegationId)]
 }
 
+// Every Delegation's row, ended ones included, in delegation_id order. The caller must not change them.
+func (self *ConfigState) Delegations() []*bridge.DelegationRow {
+	delegationIds := make([]string, 0, len(self.delegations))
+	for delegationId := range self.delegations {
+		delegationIds = append(delegationIds, delegationId)
+	}
+	slices.Sort(delegationIds)
+	delegations := make([]*bridge.DelegationRow, 0, len(delegationIds))
+	for _, delegationId := range delegationIds {
+		delegations = append(delegations, self.delegations[delegationId])
+	}
+	return delegations
+}
+
 // A KeyRegister's row by its key_id, or nil. The caller must not change it.
 func (self *ConfigState) RegisteredKey(keyId []byte) *bridge.KeyRow {
 	return self.keys[string(keyId)]
@@ -491,6 +505,25 @@ func (self *ConfigState) RepoWriters(repoId Id) []Id {
 		return nil
 	}
 	return acl.RepoWriters(repoId, time.UnixMilli(self.timeMs))
+}
+
+// §8.12's RepoReaders at this state and the time given, which §10.5's KeyHolders(R, S, t) reads.
+func (self *ConfigState) RepoReadersAt(repoId Id, at time.Time) []Id {
+	acl, err := self.Acl()
+	if err != nil {
+		return nil
+	}
+	return acl.RepoReaders(repoId, at)
+}
+
+// The repos a read, write or admin grant naming one of the atoms reads at the time given: ACL's part of §10.5's
+// reach(d).
+func (self *ConfigState) ReposGrantedToAtoms(atoms []Id, at time.Time) []Id {
+	acl, err := self.Acl()
+	if err != nil {
+		return nil
+	}
+	return acl.ReposGrantedToAtoms(atoms, at)
 }
 
 // Whether an active Suspend names the subject (§8.8), as the acl part folds them.

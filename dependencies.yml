@@ -255,10 +255,9 @@ modules:
     leg: [test]
     planned: true
   - module: github.com/tmc/mls
-    spdx: MIT
-    reason: mlsinterop's differential peer under 0x004F, standing in for 0x0010 (§10.4)
+    spdx: BSD-3-Clause AND MIT
+    reason: mlsinterop's 0x0010 interop peer (§10.4, §22.10), its 0x004F patched to 0x0010 by mlsinterop/overlay for the stacks row, unpatched for the kem row
     leg: [test]
-    planned: true
   - module: github.com/urnetwork/connect
     spdx: MPL-2.0
     reason: the one first-party module sidecar builds on (owner rule 2); a sibling replace

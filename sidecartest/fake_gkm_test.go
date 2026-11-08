@@ -21,6 +21,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// The member every test sidecar is a device of.
+var fakeGkmTestMemberId = sidecar.NewId()
+
 // One test network's fake gkm, its log and its sidecars.
 type fakeGkmTestNet struct {
 	t       *testing.T
@@ -91,22 +94,33 @@ func (self *fakeGkmTestNet) newest() uint64 {
 
 // Appends a position as advance does, and gives it to no client.
 func (self *fakeGkmTestNet) appendState(kind protocol.RepoKind, readers []string, writers []string, shrunkAt uint64) *FakeGkmAuthView {
+	return self.log.Append(self.fixture(kind, readers, writers, shrunkAt))
+}
+
+// The fixture of a position at which readers read and writers write the repo, holders_shrunk_at at shrunkAt.
+func (self *fakeGkmTestNet) fixture(kind protocol.RepoKind, readers []string, writers []string, shrunkAt uint64) *FakeGkmAuthFixture {
 	fixture := &FakeGkmAuthFixture{
 		Rows:         FakeGkmAuthRows(&protocol.AclRepo{RepoId: self.repoId.Bytes(), Kind: kind, HoldersShrunkAt: shrunkAt}),
 		IdentityKeys: map[sidecar.Id][]byte{},
 		RepoReaders:  map[sidecar.Id][]sidecar.Id{},
 		RepoWriters:  map[sidecar.Id][]sidecar.Id{},
 	}
+	sidecarIds := []sidecar.Id{}
 	for _, signer := range self.signers {
 		fixture.IdentityKeys[signer.SidecarId] = signer.PublicKey()
+		sidecarIds = append(sidecarIds, signer.SidecarId)
 	}
+	// every test sidecar a device of one member, so KeyHolders names each reader as a leaf
+	sidecarRows, memberRow := FakeGkmAuthMemberDevices(fakeGkmTestMemberId, sidecarIds...)
+	fixture.Rows.Sidecars = sidecarRows
+	fixture.Rows.Members = []*bridge.MemberRow{memberRow}
 	for _, label := range readers {
 		fixture.RepoReaders[self.repoId] = append(fixture.RepoReaders[self.repoId], self.signers[label].SidecarId)
 	}
 	for _, label := range writers {
 		fixture.RepoWriters[self.repoId] = append(fixture.RepoWriters[self.repoId], self.signers[label].SidecarId)
 	}
-	return self.log.Append(fixture)
+	return fixture
 }
 
 // The repo's group, created by label's client.
@@ -734,5 +748,85 @@ func TestFakeGkmTakesNoLowerState(t *testing.T) {
 	}
 	if _, err := net.clients["writer"].EnsureWritable(ctx, net.repoId); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// FakeGkm's gate agrees with sidecar.GkmGatePasses: each generation EnsureWritable answers passes the gate at the
+// writer's state and now, as evs will judge its pushes, and EnsureWritable rotates with cause REMOVE exactly when the
+// newest no longer passes: after a shrink and after a reader's expiry, and not as time alone passes or at the shrink's
+// own position again. A state that names a reader with no row refuses, as the gate does.
+func TestFakeGkmAgreesWithTheGate(t *testing.T) {
+	kind := protocol.RepoKind_REPO_KIND_GENERAL
+	everyone := []string{"writer", "reader", "leaving", "expiring"}
+	net := newFakeGkmTestNet(t, kind, everyone, []string{"writer"})
+	ctx := t.Context()
+	net.create("writer", kind)
+	writer := net.clients["writer"]
+	newest := uint64(1)
+	// one EnsureWritable at the writer's state: whether the newest passed the gate before it, and what it answered
+	step := func(label string, state *FakeGkmAuthView) {
+		t.Helper()
+		_, generation, _ := net.gkm.Newest(net.repoId)
+		before, err := writer.RepoKey(ctx, net.repoId, generation)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		now := net.clock.Now()
+		passedBefore := sidecar.GkmGatePasses(state, net.repoId, before.Auth(), before.Time(), now)
+		key, err := writer.EnsureWritable(ctx, net.repoId)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if !sidecar.GkmGatePasses(state, net.repoId, key.Auth(), key.Time(), now) {
+			t.Errorf("%s: EnsureWritable answered generation %d, which the gate refuses", label, key.Generation())
+		}
+		rotated := key.Generation() != before.Generation()
+		if rotated == passedBefore {
+			t.Errorf("%s: the newest passed the gate %t and EnsureWritable rotated %t", label, passedBefore, rotated)
+		}
+		if rotated && key.Cause() != sidecar.GkmCauseRemove {
+			t.Errorf("%s: rotated with cause %d", label, key.Cause())
+		}
+		newest = key.Generation()
+	}
+
+	step("nothing changed", net.log.Tip())
+	net.clock.Advance(time.Hour)
+	step("time alone", net.log.Tip())
+
+	shrink := net.advance(kind, []string{"writer", "reader", "expiring"}, []string{"writer"}, 2)
+	step("a shrink", shrink)
+	step("the shrink's position again", shrink)
+
+	fixture := net.fixture(kind, []string{"writer", "reader", "expiring"}, []string{"writer"}, 2)
+	fixture.RepoReaderExpiries = map[sidecar.Id]map[sidecar.Id]time.Time{
+		net.repoId: {net.signers["expiring"].SidecarId: net.clock.Now().Add(time.Hour)},
+	}
+	expiring := net.log.Append(fixture)
+	net.give(expiring, "writer")
+	step("before the expiry", expiring)
+	net.clock.Advance(time.Hour)
+	step("at the expiry", expiring)
+	step("after the expiry's rotation", expiring)
+	if newest != 3 {
+		t.Errorf("the newest generation is %d, want one rotation for the shrink and one for the expiry", newest)
+	}
+
+	// a reader with no row, once time has moved past the newest: the gate cannot name the holders, and neither can
+	// the fake
+	fixture = net.fixture(kind, []string{"writer", "reader"}, []string{"writer"}, 2)
+	fixture.Rows.Sidecars = fixture.Rows.Sidecars[:0]
+	rowless := net.log.Append(fixture)
+	net.give(rowless, "writer")
+	net.clock.Advance(time.Millisecond)
+	if _, err := writer.EnsureWritable(ctx, net.repoId); !errors.Is(err, sidecar.ErrGkmMalformed) {
+		t.Errorf("a state that names no holders: %v", err)
+	}
+	key, err := writer.CurrentRepoKey(ctx, net.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sidecar.GkmGateCheck(rowless, net.repoId, key.Auth(), key.Time(), net.clock.Now()); !errors.Is(err, sidecar.ErrGkmMalformed) {
+		t.Errorf("the gate at a state that names no holders: %v", err)
 	}
 }

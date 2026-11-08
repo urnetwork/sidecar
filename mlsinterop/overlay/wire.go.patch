@@ -1,0 +1,5 @@
+--- github.com/tmc/mls@v0.0.0-20260930074835-1c42a372504a/wire.go
++++ the same file under mlsinterop's overlay (plan-KEYS-interop-independence #1)
+@@ -39 +39 @@
+-	MLKEM768X25519AES128GCMSHA256Ed25519        CipherSuite = 0x004F // TBD1
++	MLKEM768X25519AES128GCMSHA256Ed25519        CipherSuite = 0x0010 // TBD1
