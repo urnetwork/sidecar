@@ -54,6 +54,7 @@ type FakeHostSettings struct {
 	Metrics       *FakeMetricsSettings
 	ServiceClient *FakeServiceClientSettings
 	Gates         *FakeServiceGatesSettings
+	Budget        *FakeWriteBudgetSettings
 }
 
 func DefaultFakeHostSettings() *FakeHostSettings {
@@ -66,6 +67,7 @@ func DefaultFakeHostSettings() *FakeHostSettings {
 		Metrics:       DefaultFakeMetricsSettings(),
 		ServiceClient: DefaultFakeServiceClientSettings(),
 		Gates:         DefaultFakeServiceGatesSettings(),
+		Budget:        DefaultFakeWriteBudgetSettings(),
 	}
 }
 
@@ -83,6 +85,8 @@ type FakeHost struct {
 	ServiceClient *FakeServiceClientSource
 	// Every gate closed until a test sets the file's text.
 	Gates *FakeServiceGates
+	// Admits every write until a test refuses one.
+	Budget *FakeWriteBudget
 	// The clock this host's engines read: the shared one, or a view of it with an offset.
 	Clock Clock
 }
@@ -110,6 +114,7 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 		Push:          NewFakePush(faults),
 		ServiceClient: NewFakeServiceClientSource(faults, settings.ServiceClient),
 		Gates:         NewFakeServiceGates(settings.Gates),
+		Budget:        NewFakeWriteBudget(settings.Budget),
 		Clock:         clock,
 	}
 }
@@ -128,6 +133,7 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 		ServiceClient: self.ServiceClient,
 		Clock:         self.Clock,
 		Gates:         self.Gates,
+		Budget:        self.Budget,
 	}
 }
 
