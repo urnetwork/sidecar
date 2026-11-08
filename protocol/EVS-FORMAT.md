@@ -187,6 +187,8 @@ Sections 1, 2 and 4 to 6 and 9 to 11 are plan-EVS1-format-bytes#7's. The item la
 
 **Staged bytes**, format 2's, follow the last section outside every hash: in a batch record after the payload, and in a request as `staged`.
 
+**What EVS1-M2-05's codec reads into these rows.** A part's changes are its field-3 messages' bytes as the part was received, which its Merkle leaves are, never a re-marshal; parts number from 1 to `part_count`, and each holds at least one change. Section 5 is never carried in format 1: a part cannot hold its own hash and the seal carries no payload, so the seal computes `parts_sha256` from the parts it reads, and a payload or part holding section 5 is refused. Section 12 is present while the head lists sources, an item per change, empty for a change no source may hold. A one-part push's payload passing 1 MiB, or its entry writes passing 1,024, sends the push to parts. `changed_prefixes`' 512 B counts token bytes, 16 per component; a covering prefix may be the empty path, which covers every change, and a writer picks the deepest prefixes that keep the signed statement within 1 KiB. A removal (`entry_sha256` empty) names a version, so one with `base_entry_version` 0 is refused. The checks row refuses as INVALID what needs no head: an entry version naming another push or base version, a locator outside kinds 1 and 2 or out of shape, layout other than 0; it leaves the versions rule to 5g, whose answer is 409. A new slot body is an `EvsSlotObject` with at least one key, one per kind-3 new object in order.
+
 ## Batches
 
 A batch (§11.8) is at most 256 KiB, or one record of up to 1 MiB: header | records | index | trailer (#7).
@@ -276,3 +278,8 @@ For design-records, each is a reading that changes no D- item:
 | Deposit slot keys | HPKE base mode, X-Wing, HKDF-SHA256, AES-128-GCM; info "UR evs 1.0 deposit key", AAD repo_id \| u64 g |
 | Slot objects | Keys in ascending index, all wrapped one way; an emptied slot stays |
 | Name padding | Exactly one step; a carried row's epoch older than its table's |
+| Part hashes | Never carried; the seal computes `parts_sha256` from the parts it reads |
+| Parts | Numbered 1 to `part_count`, each with a change; leaves are field 3's bytes as received |
+| Covering prefixes | 512 B of token bytes; the empty path allowed; the deepest that keep 1 KiB |
+| Window flags | Bits 6 to 15 refused on read |
+| Refusal records | Only codes below 64; until_s the ceiling of the milliseconds over 1,000 |

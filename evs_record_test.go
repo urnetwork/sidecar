@@ -31,10 +31,11 @@ var evsRecordVectorsJson []byte
 //go:embed testdata/evs/segment_vectors.json
 var evsSegmentVectorsJson []byte
 
-// Segment seeds are tamperings of evsFuzzSegment's segment; name-table seeds of evsFuzzNameTable's table.
+// Each target's seeds are tamperings, as evsFuzzTamper reads them, of its fixture: the segment, name table, push and
+// batch the tests build.
 //
-//go:embed testdata/fuzz/evs_segment testdata/fuzz/evs_name_table
-var evsRecordFuzzSeeds embed.FS
+//go:embed testdata/fuzz/evs_segment testdata/fuzz/evs_name_table testdata/fuzz/evs_push testdata/fuzz/evs_batch
+var evsFuzzSeeds embed.FS
 
 // A body no other vector shares: byte i is i mod 251, so another implementation rebuilds it.
 func evsTestBody(byteCount int) []byte {
@@ -1358,15 +1359,15 @@ func checkEvsSegmentTampering(t *testing.T, fixture *evsFuzzSegmentFixture, inpu
 	}
 }
 
-func evsRecordFuzzSeedFiles(t testing.TB, directory string) [][]byte {
+func evsFuzzSeedFiles(t testing.TB, directory string) [][]byte {
 	t.Helper()
-	entries, err := evsRecordFuzzSeeds.ReadDir(directory)
+	entries, err := evsFuzzSeeds.ReadDir(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seeds := [][]byte{}
 	for _, entry := range entries {
-		seed, err := evsRecordFuzzSeeds.ReadFile(directory + "/" + entry.Name())
+		seed, err := evsFuzzSeeds.ReadFile(directory + "/" + entry.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1382,7 +1383,7 @@ func evsRecordFuzzSeedFiles(t testing.TB, directory string) [][]byte {
 func TestEvsSegmentFuzzSeeds(t *testing.T) {
 	fixture := newEvsFuzzSegmentFixture(t)
 	checkEvsSegmentTampering(t, fixture, nil)
-	for _, seed := range evsRecordFuzzSeedFiles(t, "testdata/fuzz/evs_segment") {
+	for _, seed := range evsFuzzSeedFiles(t, "testdata/fuzz/evs_segment") {
 		checkEvsSegmentTampering(t, fixture, seed)
 	}
 }
@@ -1417,7 +1418,7 @@ func TestEvsNameTableFuzzSeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkEvsNameTableTampering(t, built, encoded, nil)
-	for _, seed := range evsRecordFuzzSeedFiles(t, "testdata/fuzz/evs_name_table") {
+	for _, seed := range evsFuzzSeedFiles(t, "testdata/fuzz/evs_name_table") {
 		checkEvsNameTableTampering(t, built, encoded, seed)
 	}
 }
