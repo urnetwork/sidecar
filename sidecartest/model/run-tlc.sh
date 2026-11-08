@@ -66,6 +66,7 @@ GcNoFence              GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=
 GcNoSecondCheck        GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
 PageOutUnfolded        NewestFound           $seq MaxPush=3 $tiny $(quiet_but)+gitref
 StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Script=X.create:X.create:D.create
+ReaderStaleHorizon     ReadsServeNewest      $seq MaxPush=3 $(quiet_but reader fold)+gitref Script=X.create:X.write:D.create
 NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Script=X.create:X.write:D.create
 NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref Script=X.create:D.create:C.create
 NoWindowWait           NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove

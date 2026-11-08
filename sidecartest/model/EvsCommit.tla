@@ -97,7 +97,8 @@ ASSUME
                  "GcNoSecondCheck", "EvacuateBeforeIndex", "PageOutUnfolded", "NoWindowWait",
                  "FoldIgnoresWindow", "VersionRestarts", "NoPinCheck", "PinFalls", "LadderFork",
                  "RestoreAfterShred", "GitPathCas", "NoFenceRule", "NoIfMatchFold", "NoTailCheck",
-                 "EarlyRefusalDrop", "CopyOverwrites", "NoRetryLookup", "ResolveIgnoresPending"}
+                 "EarlyRefusalDrop", "CopyOverwrites", "NoRetryLookup", "ResolveIgnoresPending",
+                 "ReaderStaleHorizon"}
 
 GitRef == "git"
 FileRef == "file"
@@ -1626,7 +1627,9 @@ ReaderHead(src) ==
     IN  /\ reader.stage = "head"
         /\ heldBy[r] = NoHolder
         /\ src = "cluster" \/ ~reader.rerun
-        /\ reader' = [reader EXCEPT !.hd = h, !.hft = IF reader.rerun THEN @ ELSE h.foldedThrough,
+        /\ reader' = [reader EXCEPT !.hd = h,
+                                    !.hft = IF reader.rerun /\ Twin # "ReaderStaleHorizon" THEN @
+                                            ELSE h.foldedThrough,
                                     !.stage = IF reader.rerun THEN "serve" ELSE "cur"]
         /\ UNCHANGED <<heads, stored, authority, lifecycle, statements, att, instanceState, collector, evacuator,
                        gc, copyJob, oracle>>
