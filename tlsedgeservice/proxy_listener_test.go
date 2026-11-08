@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
@@ -396,24 +397,6 @@ func TestProxyHeaderDropsAnOverlongV1LineWithNoLineFeed(t *testing.T) {
 	testRequireDropped(t, peerConn)
 }
 
-func TestProxyHeaderDropsAtItsDeadline(t *testing.T) {
-	settings := DefaultProxyHeaderSettings()
-	settings.Timeout = time.Millisecond
-	cases := [][]byte{
-		nil,
-		[]byte("PROXY TCP4 192.0.2.1"),
-		testProxyV2OfByteCount(300)[:100],
-	}
-	for _, c := range cases {
-		_, inner := testProxyListener(t, settings)
-		peerConn := inner.dial(t)
-		if 0 < len(c) {
-			testWrite(t, peerConn, c)
-		}
-		testRequireDropped(t, peerConn)
-	}
-}
-
 // Records what a connection's read deadline was set to.
 type testDeadlineConn struct {
 	net.Conn
@@ -430,9 +413,10 @@ func (self *testDeadlineConn) SetReadDeadline(deadline time.Time) error {
 	return self.Conn.SetReadDeadline(deadline)
 }
 
-// timeout_s bounds the header as a whole, so a peer feeding it a byte at a time gains nothing, and the
-// deadline is lifted before the hello's own.
-func TestProxyHeaderHoldsOneDeadlineAcrossTheHeader(t *testing.T) {
+// timeout_s is a timer, and a header in time never meets it, however it arrives: the connection
+// reaches Accept with no read deadline ever set, so the hello's own deadline is the caller's alone.
+// proxy_listener_clock_test.go moves the timer.
+func TestProxyHeaderSetsNoDeadlineOnAHeaderInTime(t *testing.T) {
 	listener, inner := testProxyListener(t, testNeverSettings())
 	peerConn, acceptedConn := net.Pipe()
 	defer peerConn.Close()
@@ -449,7 +433,7 @@ func TestProxyHeaderHoldsOneDeadlineAcrossTheHeader(t *testing.T) {
 	}
 	deadlineConn.stateLock.Lock()
 	defer deadlineConn.stateLock.Unlock()
-	if len(deadlineConn.deadlines) != 2 || deadlineConn.deadlines[0].IsZero() || !deadlineConn.deadlines[1].IsZero() {
+	if len(deadlineConn.deadlines) != 0 {
 		t.Errorf("deadlines %v", deadlineConn.deadlines)
 	}
 }
@@ -755,19 +739,6 @@ func (self testTemporaryError) Error() string   { return "temporary" }
 func (self testTemporaryError) Timeout() bool   { return false }
 func (self testTemporaryError) Temporary() bool { return true }
 
-func TestProxyHeaderOutlastsATemporaryAcceptFailure(t *testing.T) {
-	settings := testNeverSettings()
-	settings.AcceptRetryTimeout = time.Nanosecond
-	listener, inner := testProxyListener(t, settings)
-	for range 3 {
-		inner.errs <- testTemporaryError{}
-	}
-	testWrite(t, inner.dial(t), testProxyV1("192.0.2.1", 1000, "198.51.100.2", 443))
-	if conn := testAccept(t, listener); conn.VisitorAddr().Port() != 1000 {
-		t.Errorf("accepted %v", conn.VisitorAddr())
-	}
-}
-
 func TestProxyHeaderCloseCutsAnAcceptRetryShort(t *testing.T) {
 	settings := testNeverSettings()
 	settings.AcceptRetryTimeout = testNeverTimeout
@@ -843,13 +814,14 @@ func TestNewProxyHeaderListenerCopiesItsSettings(t *testing.T) {
 }
 
 // §13.5's first step through real sockets: the lb's line and a visitor's hello in one write, then the
-// alert back through the wrapped conn, as tlsedge's connection path will use them.
+// alert back through the wrapped conn, as tlsedge's connection path will use them. timeout_s is out of
+// reach, since a loaded host must not fail this on real time, and proxy_listener_clock_test.go moves it.
 func TestProxyHeaderComposedOverTcp(t *testing.T) {
 	inner, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := NewProxyHeaderListener(context.Background(), inner, DefaultProxyHeaderSettings())
+	listener, err := NewProxyHeaderListener(context.Background(), inner, testNeverSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -938,13 +910,16 @@ func TestProxyHeaderErrorsHoldNoAddress(t *testing.T) {
 	}
 }
 
-// The file holds no logger, which is how neither address reaches a log, and no TLS library.
+// The file holds no logger, which is how neither address reaches a log, and no TLS library. The root
+// holds a Logger, so the file may name only its Clock and RealClock from there.
 func TestProxyListenerFileHoldsNoLoggerOrTlsLibrary(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "proxy_listener.go", nil, parser.ImportsOnly)
+	file, err := parser.ParseFile(token.NewFileSet(), "proxy_listener.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	refusedImports := []string{"crypto/tls", "crypto/x509", "log", "github.com/" + "urnetwork/glog", "github.com/" + "urnetwork/sidecar"}
+	rootPath := "github.com/" + "urnetwork/sidecar"
+	refusedImports := []string{"crypto/tls", "crypto/x509", "log", "log/slog", "github.com/" + "urnetwork/glog"}
+	rootNames := map[string]bool{}
 	for _, importSpec := range file.Imports {
 		importPath, err := strconv.Unquote(importSpec.Path.Value)
 		if err != nil {
@@ -952,6 +927,30 @@ func TestProxyListenerFileHoldsNoLoggerOrTlsLibrary(t *testing.T) {
 		}
 		if slices.Contains(refusedImports, importPath) {
 			t.Errorf("proxy_listener.go imports %s", importPath)
+		}
+		if importPath == rootPath {
+			rootName := "sidecar"
+			if importSpec.Name != nil {
+				rootName = importSpec.Name.Name
+			}
+			rootNames[rootName] = true
+		}
+	}
+	allowedRootNames := []string{"Clock", "RealClock"}
+	ast.Inspect(file, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if packageIdent, ok := selector.X.(*ast.Ident); ok && rootNames[packageIdent.Name] && !slices.Contains(allowedRootNames, selector.Sel.Name) {
+			t.Errorf("proxy_listener.go names the root's %s", selector.Sel.Name)
+		}
+		return true
+	})
+	// a dot or blank import would hide what the file takes from the root
+	for rootName := range rootNames {
+		if rootName == "." || rootName == "_" {
+			t.Errorf("proxy_listener.go imports the root as %s", rootName)
 		}
 	}
 }

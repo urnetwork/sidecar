@@ -15,7 +15,11 @@
 // the header, rather than a byte at a time, is what keeps a connection to a read or two.
 //
 // Neither address reaches a log (I-13): nothing here logs, and a read error is dropped with its
-// connection, since a net.OpError prints the addresses it failed on.
+// connection, since a net.OpError prints the addresses it failed on. The root is imported for its
+// Clock alone, which TestProxyListenerFileHoldsNoLoggerOrTlsLibrary holds.
+//
+// Every wait is on the settings' Clock (§22.4), never a socket deadline read off the wall clock, so a
+// test moves timeout_s and the accept retry with a fake clock and forces either side of each.
 //
 // A listener and a ProxyHeaderConn are safe for concurrent use, as a net.Listener and net.Conn are.
 
@@ -34,6 +38,8 @@ import (
 	"time"
 
 	proxyproto "github.com/pires/go-proxyproto"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // Wire values, from haproxy's proxy-protocol.txt: "PROXY " and its §2.1 limit on a whole v1 line, CRLF
@@ -53,10 +59,13 @@ var (
 )
 
 // tlsedge.yml's proxy_header (§13.5), and what bounds a listener's own work around it. A value of zero
-// or less in any field is refused, so none reads as no bound.
+// or less in any field is refused, so none reads as no bound. Clock alone may be nil.
 type ProxyHeaderSettings struct {
-	// timeout_s: from accept to the header's last byte, one deadline for the whole header, so a peer
-	// sending it a byte at a time cannot stretch it.
+	// What every wait here is on: the engine's ServiceHost.Clock, and real time when nil, as at every
+	// clock seam (plan-TEST-clock-seam).
+	Clock sidecar.Clock
+	// timeout_s: from accept to the header's last byte, one timer for the whole header, so a peer
+	// sending it a byte at a time cannot stretch it. Its end closes the connection.
 	Timeout time.Duration
 	// max_bytes: the most a header may take. A v2 header's length past this drops the connection
 	// without its bytes being waited for. It also sizes each pending connection's buffer. At least
@@ -73,9 +82,11 @@ type ProxyHeaderSettings struct {
 	AcceptRetryTimeout time.Duration
 }
 
-// The only source of these defaults. timeout_s and max_bytes are §13.5's.
+// The only source of these defaults. timeout_s and max_bytes are §13.5's. Clock is left nil, real time,
+// for the host to set.
 func DefaultProxyHeaderSettings() *ProxyHeaderSettings {
 	return &ProxyHeaderSettings{
+		Clock:              nil,
 		Timeout:            2 * time.Second,
 		MaxByteCount:       2048,
 		MaxPendingCount:    4096,
@@ -218,6 +229,51 @@ func readProxyHeader(reader *bufio.Reader, maxByteCount int) (netip.AddrPort, er
 	return netip.AddrPortFrom(visitorAddr.Addr().Unmap(), visitorAddr.Port()), nil
 }
 
+// A time long past: set as a read deadline, it cuts a blocked read short without reading any clock.
+var proxyHeaderPastDeadline = time.Unix(1, 0)
+
+// timeout_s on one connection's header, as a timer on the listener's Clock. Its end sets a read
+// deadline long past, which cuts the header's read short wherever it is, and the read's own result
+// decides, as under a native deadline: a header whose last byte was read in time passes however late
+// its goroutine resumes, and end lifts a deadline the timer set after that (connect/CODESTYLE.md's
+// completion boundary). Nothing here holds a lock across a call on conn.
+type proxyHeaderTimeout struct {
+	conn net.Conn
+	stop func() bool
+	// closed once the timer's deadline is set
+	fired chan struct{}
+}
+
+// Starts the timer.
+func newProxyHeaderTimeout(clock sidecar.Clock, timeout time.Duration, conn net.Conn) *proxyHeaderTimeout {
+	self := &proxyHeaderTimeout{
+		conn:  conn,
+		fired: make(chan struct{}),
+	}
+	self.stop = clock.AfterFunc(timeout, self.fire)
+	return self
+}
+
+// The timer's end, on the clock's goroutine.
+func (self *proxyHeaderTimeout) fire() {
+	defer close(self.fired)
+	if self.conn.SetReadDeadline(proxyHeaderPastDeadline) != nil {
+		// a connection that takes no deadline is cut short the only other way
+		self.conn.Close()
+	}
+}
+
+// Ends the timeout once the header's read is over, whatever its result: stops a timer still to come,
+// or waits for one that has fired to set its deadline and lifts it. false when the deadline would not
+// lift, and the connection cannot go on. Called once.
+func (self *proxyHeaderTimeout) end() bool {
+	if self.stop() {
+		return true
+	}
+	<-self.fired
+	return self.conn.SetReadDeadline(time.Time{}) == nil
+}
+
 // The wrapper over a net.Listener. run accepts, each connection gets a goroutine for its header, and
 // the unbuffered readyConns hands finished ones to Accept, so a connection is always held by exactly
 // one of those.
@@ -226,6 +282,7 @@ type proxyHeaderListener struct {
 	cancel   context.CancelCauseFunc
 	listener net.Listener
 	settings ProxyHeaderSettings
+	clock    sidecar.Clock
 
 	acceptPort int
 	readyConns chan *ProxyHeaderConn
@@ -249,12 +306,17 @@ func NewProxyHeaderListener(ctx context.Context, listener net.Listener, settings
 	if !ok {
 		return nil, errors.New("a PROXY header listener needs a TCP listener, to know its port")
 	}
+	clock := settings.Clock
+	if clock == nil {
+		clock = sidecar.RealClock{}
+	}
 	listenerCtx, cancel := context.WithCancelCause(ctx)
 	self := &proxyHeaderListener{
 		ctx:          listenerCtx,
 		cancel:       cancel,
 		listener:     listener,
 		settings:     *settings,
+		clock:        clock,
 		acceptPort:   tcpAddr.Port,
 		readyConns:   make(chan *ProxyHeaderConn),
 		pendingSlots: make(chan struct{}, settings.MaxPendingCount),
@@ -283,7 +345,7 @@ func (self *proxyHeaderListener) run() {
 				select {
 				case <-self.ctx.Done():
 					return
-				case <-time.After(self.settings.AcceptRetryTimeout):
+				case <-self.clock.After(self.settings.AcceptRetryTimeout):
 				}
 				continue
 			}
@@ -291,14 +353,15 @@ func (self *proxyHeaderListener) run() {
 			self.cancel(err)
 			return
 		}
-		deadline := time.Now().Add(self.settings.Timeout)
 		select {
 		case self.pendingSlots <- struct{}{}:
+			// timeout_s runs from accept
+			timeout := newProxyHeaderTimeout(self.clock, self.settings.Timeout, conn)
 			self.workGroup.Go(func() {
 				defer func() {
 					<-self.pendingSlots
 				}()
-				self.admit(conn, deadline)
+				self.admit(conn, timeout)
 			})
 		default:
 			conn.Close()
@@ -307,13 +370,15 @@ func (self *proxyHeaderListener) run() {
 }
 
 // Takes one connection's header and hands it to Accept, or drops it, with no alert either way.
-func (self *proxyHeaderListener) admit(conn net.Conn, deadline time.Time) {
-	// a closing listener ends a read at once, rather than at its deadline
+func (self *proxyHeaderListener) admit(conn net.Conn, timeout *proxyHeaderTimeout) {
+	// a closing listener ends a read at once, rather than at its timeout
 	stopClose := context.AfterFunc(self.ctx, func() {
 		conn.Close()
 	})
-	headerConn, err := self.readHeader(conn, deadline)
-	if err != nil {
+	headerConn, err := self.readHeader(conn)
+	// whatever the read gave, so that what reaches Accept has no timer or deadline of this listener's
+	lifted := timeout.end()
+	if err != nil || !lifted {
 		stopClose()
 		conn.Close()
 		return
@@ -326,17 +391,11 @@ func (self *proxyHeaderListener) admit(conn net.Conn, deadline time.Time) {
 	}
 }
 
-// One connection's header and whatever came with it, within the settings' bounds.
-func (self *proxyHeaderListener) readHeader(conn net.Conn, deadline time.Time) (*ProxyHeaderConn, error) {
-	if err := conn.SetReadDeadline(deadline); err != nil {
-		return nil, err
-	}
+// One connection's header and whatever came with it, within max_bytes. timeout_s is the timer run set.
+func (self *proxyHeaderListener) readHeader(conn net.Conn) (*ProxyHeaderConn, error) {
 	reader := bufio.NewReaderSize(conn, self.settings.MaxByteCount)
 	visitorAddr, err := readProxyHeader(reader, self.settings.MaxByteCount)
 	if err != nil {
-		return nil, err
-	}
-	if err := conn.SetReadDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
 	// peeking only what is buffered reads nothing
