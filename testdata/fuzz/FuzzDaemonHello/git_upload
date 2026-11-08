@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"ur_local\":1,\"mode\":\"git\",\"version\":\"synthetic-version\",\"repo\":\"k7q2m9/repo\",\"service\":\"git-upload-pack\"}")

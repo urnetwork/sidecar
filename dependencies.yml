@@ -122,7 +122,6 @@ modules:
     spdx: MIT
     reason: §5.8's named pipe at v0.6.2 for the daemon's control channel on windows
     leg: [client, cli]
-    planned: true
   - module: github.com/modelcontextprotocol/go-sdk
     spdx: Apache-2.0 AND MIT
     reason: v1.7.0 for mcp/ (§16), which server holds at that version; its docs are CC-BY-4.0 and no build links them
