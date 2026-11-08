@@ -193,45 +193,56 @@ func (self *DnsRecordKey) Validate(root string) error {
 // write path holds every row to this, and a reader refuses what fails it. What §12.7 refuses of a
 // user is a later and a moving rule, which DNS-M5-02 holds at the write and a ZoneView at the answer.
 func (self *DnsRecordSet) Validate(root string) error {
+	_, err := self.parse(root)
+	return err
+}
+
+// Validate's work, keeping the records for a caller that goes on to serve them. None on edge, router
+// and copy rows.
+func (self *DnsRecordSet) parse(root string) ([]dns.RR, error) {
 	if err := validateDnsOwner(root, self.Owner); err != nil {
-		return err
+		return nil, err
 	}
 	if !self.Kind.known() {
-		return fmt.Errorf("%w: kind %q", ErrDnsRowMalformed, self.Kind)
+		return nil, fmt.Errorf("%w: kind %q", ErrDnsRowMalformed, self.Kind)
 	}
 	if dnsTtlMaxSeconds < self.Ttl {
-		return fmt.Errorf("%w: ttl %d", ErrDnsRowMalformed, self.Ttl)
+		return nil, fmt.Errorf("%w: ttl %d", ErrDnsRowMalformed, self.Ttl)
 	}
 	switch self.Kind {
 	case DnsRecordKindCopy:
 		if self.Type != DnsCopyType || len(self.Rdata) != 0 {
-			return fmt.Errorf("%w: a copy row holds no type or rdata", ErrDnsRowMalformed)
+			return nil, fmt.Errorf("%w: a copy row holds no type or rdata", ErrDnsRowMalformed)
 		}
-		return nil
+		return nil, nil
 	case DnsRecordKindEdge, DnsRecordKindRouter:
 		if (self.Type != dns.TypeA && self.Type != dns.TypeAAAA) || len(self.Rdata) != 0 {
-			return fmt.Errorf("%w: an %s row is A or AAAA with no rdata", ErrDnsRowMalformed, self.Kind)
+			return nil, fmt.Errorf("%w: an %s row is A or AAAA with no rdata", ErrDnsRowMalformed, self.Kind)
 		}
-		return nil
+		return nil, nil
 	}
 	if !dnsTypeStorable(self.Type) {
-		return fmt.Errorf("%w: type %s", ErrDnsRowMalformed, dnsTypeText(self.Type))
+		return nil, fmt.Errorf("%w: type %s", ErrDnsRowMalformed, dnsTypeText(self.Type))
 	}
 	if len(self.Rdata) == 0 {
-		return fmt.Errorf("%w: %s holds no rdata", ErrDnsRowMalformed, dnsTypeText(self.Type))
+		return nil, fmt.Errorf("%w: %s holds no rdata", ErrDnsRowMalformed, dnsTypeText(self.Type))
+	}
+	// RFC 2181 §10.1 and RFC 1035 §5.2: a name has one canonical name, and a zone one SOA
+	if (self.Type == dns.TypeCNAME || self.Type == dns.TypeSOA) && 1 < len(self.Rdata) {
+		return nil, fmt.Errorf("%w: more than one %s", ErrDnsRowMalformed, dnsTypeText(self.Type))
 	}
 	records, err := self.Records()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for index, record := range records {
 		for _, earlier := range records[:index] {
 			if dns.IsDuplicate(record, earlier) {
-				return fmt.Errorf("%w: %s repeats a record", ErrDnsRowMalformed, dnsTypeText(self.Type))
+				return nil, fmt.Errorf("%w: %s repeats a record", ErrDnsRowMalformed, dnsTypeText(self.Type))
 			}
 		}
 	}
-	return nil
+	return records, nil
 }
 
 // One write's diff: serial n's upserts and deletes, which take the root from n-1 to n whole. An upsert
@@ -250,6 +261,19 @@ type DnsJournalRow struct {
 // Whether a reader can apply this row. A row of a higher format fails with ErrDnsFormatTooNew, and any
 // other fault with ErrDnsRowMalformed.
 func (self *DnsJournalRow) Validate() error {
+	if err := self.validateHead(); err != nil {
+		return err
+	}
+	for index := range self.Upserts {
+		if err := self.Upserts[index].Validate(self.Root); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Validate's work on everything but each upsert's own rules, for a reader that parses those anyway.
+func (self *DnsJournalRow) validateHead() error {
 	if err := checkDnsFormat(self.Format); err != nil {
 		return err
 	}
@@ -271,11 +295,7 @@ func (self *DnsJournalRow) Validate() error {
 		return nil
 	}
 	for index := range self.Upserts {
-		upsert := &self.Upserts[index]
-		if err := upsert.Validate(self.Root); err != nil {
-			return err
-		}
-		if err := note(upsert.Key()); err != nil {
+		if err := note(self.Upserts[index].Key()); err != nil {
 			return err
 		}
 	}
@@ -338,7 +358,7 @@ type DnsLbInterface struct {
 	ReportedVersion uint64 `json:"reported_version,omitempty"`
 	// That version's probe name, <digest[0:12]>.map.probe.invalid.
 	ProbeName string `json:"probe_name,omitempty"`
-	// Hosts that version added which this interface has yet to be probed for.
+	// The hosts that version added, which the route probes take once each (§13.4).
 	AddedHosts []string `json:"added_hosts,omitempty"`
 	// Not current for a version over 20 min old, so edges drop it, never all (§13.4).
 	MapStale bool `json:"map_stale,omitempty"`

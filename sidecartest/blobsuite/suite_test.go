@@ -17,7 +17,7 @@ func newFakeTarget(t *testing.T) (*sidecartest.FakeBlobs, *Target) {
 	return store, &Target{
 		Cluster: cluster,
 		Now:     clock.Now,
-		Settle:  &Settle{Now: clock.Now},
+		Settle:  &Settle{Now: clock.Now, Delayed: cluster},
 	}
 }
 
@@ -40,7 +40,7 @@ func TestFakeBlobsConformOnEveryCluster(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		Run(t, &Target{Cluster: cluster, Now: clock.Now, Settle: &Settle{Now: clock.Now}})
+		Run(t, &Target{Cluster: cluster, Now: clock.Now, Settle: &Settle{Now: clock.Now, Delayed: cluster}})
 	}
 }
 

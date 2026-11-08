@@ -7,8 +7,6 @@ import (
 	"os"
 
 	"github.com/urnetwork/sidecar"
-	// provers are injected here once they exist (§4.7); until then this holds the module's require
-	_ "github.com/urnetwork/sidecar/smtpproof"
 )
 
 func main() {

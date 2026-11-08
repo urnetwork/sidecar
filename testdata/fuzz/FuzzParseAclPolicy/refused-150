@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"hosts\": {\"a\": \"fe80::1%eth0\"}}")

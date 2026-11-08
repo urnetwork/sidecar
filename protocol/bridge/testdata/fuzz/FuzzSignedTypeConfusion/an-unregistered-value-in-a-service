@@ -1,0 +1,4 @@
+go test fuzz v1
+[]byte("a synthetic statement body")
+int32(4863)
+int32(4614)

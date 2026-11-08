@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"grants\": [/*a*/{\"src\"/*b*/:/*c*/[\"tag:a\"/*d*/,/*e*/]/*f*/,\"dst\":[\"*\"],\"allow\":[\"dial\"]}/*g*/,/*h*/]/*i*/}/*j*/")

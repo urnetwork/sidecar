@@ -11,7 +11,7 @@
 //
 // Format values that every reader applies alike are constants beside their formats, not settings
 // (connect/CODESTYLE.md:145). settings_connect.go and settings_http.go declare the connect settings
-// per leg, settings_protocol.go §6's, and settings_mcp.go §16's.
+// per leg, envelope_settings.go §6's, and settings_mcp.go §16's.
 
 package sidecar
 
@@ -79,10 +79,18 @@ type SidecarSettings struct {
 	// The most stream data one StreamData message carries: 4,000 B, the format's limit (§6.5). A
 	// value above it is refused by peers.
 	StreamChunkByteCount int
+	// The most of one api answer's body a SidecarApi reads: 2 MiB, connect's own bound on an api
+	// answer (connect/net_http.go:63's MaxHttpResponseBodyBytes), and far past any body §5's and
+	// §7's routes answer. A longer answer is refused, so api cannot make a sidecar buffer more. §5.4
+	// names no such bound, so this is a reading.
+	ApiResponseByteCount int64
 
 	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
 	// logging at all on the sidecar_http leg.
 	Log Logger
+	// The time the Sidecar reads and waits on (clock.go). Nil, the default, is real time; a test
+	// passes sidecartest's FakeClock. connect's own timers stay real (X9).
+	Clock Clock
 }
 
 // sdk's refresh schedule (§5.4). A token refreshes at a point of its lifetime drawn from the window
@@ -243,7 +251,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 		AppVersion: Version,
 
 		Connect:          defaultSidecarConnectSettings(),
-		ProtocolSettings: defaultSidecarProtocolSettings(),
+		ProtocolSettings: DefaultSidecarProtocolSettings(),
 		TokenRefreshSettings: &SidecarTokenRefreshSettings{
 			RefreshWindowStart:  0.4,
 			RefreshWindowEnd:    0.5,
@@ -308,5 +316,6 @@ func DefaultSidecarSettings() *SidecarSettings {
 		ComponentQueueByteCount:    1024 * 1024,
 		MemoryBudgetByteCount:      128 * 1024 * 1024,
 		StreamChunkByteCount:       4000,
+		ApiResponseByteCount:       2 * 1024 * 1024,
 	}
 }
