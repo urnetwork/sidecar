@@ -1,12 +1,13 @@
 # Every module a leg of this repository links, with its SPDX id, why it is here and the legs that
 # may link it: client, engine, cli, test (§4.7). make check fails a leg linking a module not listed
 # here, or linking it on a leg its row does not name, and reads each id against the module's own
-# license files. This repository's own modules are not listed.
+# license files: those at its top, and those beside or above a package a leg links. This
+# repository's own modules are not listed.
 #
-# Allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0. Ids joined by AND are a module
-# whose files carry several of them. Refused: the GPL family, SSPL, BUSL, custom, unlicensed. A
-# license outside the list stops make check unless check/settings_test.go holds an exception
-# for that module at that version, and that exception names a question for the owner.
+# Allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0, and X11, which is MIT's text
+# plus only its no-advertising clause (QD-240). Ids joined by AND are a module whose files carry
+# several of them. Refused: the GPL family, SSPL, BUSL, custom, unlicensed. A license outside the
+# list stops make check.
 #
 # planned: true marks a module nothing links yet, because §4.7 names it for later or a track has it in
 # flight. Its id was read from its files at the version §4.7, a sibling go.mod or that track gives.
@@ -27,14 +28,22 @@ modules:
     spdx: MIT
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
+  - module: github.com/cloudflare/circl
+    spdx: BSD-3-Clause
+    reason: through go-crypto, in go-git's commit signature checks, which mlsinterop's oracle links and never calls
+    leg: [test]
   - module: github.com/consensys/gnark
-    spdx: Apache-2.0
-    reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject
+    spdx: Apache-2.0 AND MIT
+    reason: the proof system of smtpproof's prover and verifier (§14), which server and cli inject; its frontend/schema links reflectwalk under MIT
     leg: [engine, cli, test]
   - module: github.com/consensys/gnark-crypto
     spdx: Apache-2.0
     reason: gnark's curves and hashes, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/cyphar/filepath-securejoin
+    spdx: BSD-3-Clause AND MPL-2.0
+    reason: through go-billy's osfs, which go-git's object package links for mlsinterop's oracle
+    leg: [test]
   - module: github.com/decred/dcrd/dcrec/secp256k1/v4
     spdx: ISC
     reason: connect's use of secp256k1 signatures
@@ -49,15 +58,31 @@ modules:
     reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12)
     leg: [cli]
     planned: true
+  - module: github.com/emersion/go-smtp
+    spdx: MIT
+    reason: D-MAIL-3's receiver and submission sessions at v0.25.0 (§15.3, §15.5); nothing links it until QD-193's fork is in the tree, and until then mail_smtp_serve.go refuses
+    leg: [client, engine, cli, test]
+    planned: true
+  - module: github.com/emirpasic/gods
+    spdx: BSD-2-Clause AND ISC
+    reason: go-git's commit walkers, linked by the object package for mlsinterop's oracle
+    leg: [test]
   - module: github.com/fxamacker/cbor/v2
     spdx: MIT
     reason: through gnark, for smtpproof's prover (§14)
     leg: [engine, cli, test]
+  - module: github.com/go-git/gcfg
+    spdx: BSD-3-Clause
+    reason: go-git's config reader, linked by the object package for mlsinterop's oracle
+    leg: [test]
+  - module: github.com/go-git/go-billy/v5
+    spdx: Apache-2.0
+    reason: go-git's file system layer, linked by its packfile package for mlsinterop's oracle
+    leg: [test]
   - module: github.com/go-git/go-git/v5
     spdx: Apache-2.0
     reason: mlsinterop's git codec oracle (§22.6)
     leg: [test]
-    planned: true
   - module: github.com/golang-jwt/jwt/v5
     spdx: MIT
     reason: connect reads client tokens with it
@@ -78,6 +103,10 @@ modules:
     spdx: BSD-2-Clause
     reason: connect's websocket transport
     leg: [client, engine, cli, test]
+  - module: github.com/jbenet/go-context
+    spdx: MIT
+    reason: go-git's context-aware readers, linked by its packfile package for mlsinterop's oracle
+    leg: [test]
   - module: github.com/klauspost/compress
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
     reason: through utls, for TLS certificate compression
@@ -98,6 +127,11 @@ modules:
     spdx: MIT
     reason: §5.8's named pipe at v0.6.2 for the daemon's control channel on windows
     leg: [client, cli]
+    planned: true
+  - module: github.com/mjl-/mox
+    spdx: MIT AND MPL-2.0
+    reason: D-MAIL-3's spf, dkim and dmarc at v0.0.17, whose LICENSE.MIT and LICENSE.MPLv2.0 plan-MAIL-mox-subset read; as published it links prometheus, which the deps row refuses, so it links only through QD-193's subset
+    leg: [client, engine, cli, test]
     planned: true
   - module: github.com/modelcontextprotocol/go-sdk
     spdx: Apache-2.0 AND MIT
@@ -172,7 +206,14 @@ modules:
     spdx: Apache-2.0
     reason: the PROXY-unwrapped listeners engines serve behind (§4.5)
     leg: [engine]
-    planned: true
+  - module: github.com/pjbgf/sha1cd
+    spdx: Apache-2.0
+    reason: go-git's SHA-1 with collision detection, for mlsinterop's oracle
+    leg: [test]
+  - module: github.com/ProtonMail/go-crypto
+    spdx: BSD-3-Clause
+    reason: go-git's commit signature checks, which mlsinterop's oracle links and never calls
+    leg: [test]
   - module: github.com/quic-go/qpack
     spdx: MIT
     reason: through quic-go
@@ -193,6 +234,10 @@ modules:
     spdx: MIT
     reason: gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/sergi/go-diff
+    spdx: MIT
+    reason: go-git's file diffs, linked by the object package for mlsinterop's oracle
+    leg: [test]
   - module: github.com/theodorsm/covert-dtls
     spdx: MIT
     reason: connect's DTLS fingerprints
@@ -260,9 +305,13 @@ modules:
     spdx: BSD-3-Clause
     reason: wire types in protocol and protocol/bridge; v1.36.11 pins protoc-gen-go too (§4.9)
     leg: [client, engine, cli, test]
+  - module: gopkg.in/warnings.v0
+    spdx: BSD-2-Clause
+    reason: through go-git's gcfg, for mlsinterop's oracle
+    leg: [test]
   - module: gopkg.in/yaml.v3
     spdx: Apache-2.0 AND MIT
-    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and is sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
+    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and config/<env>/mxedge.yml in mxedgeservice (§15.15), and is sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
     leg: [engine, test]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
@@ -270,5 +319,5 @@ modules:
     leg: [client, engine, cli, test]
   - module: src.agwa.name/tlshacks
     spdx: X11
-    reason: connect's ClientHello parser; MIT text plus an advertising clause, outside §4.7's list and held by an exception
+    reason: connect's ClientHello parser; MIT's text plus X11's no-advertising clause
     leg: [client, engine, cli, test]

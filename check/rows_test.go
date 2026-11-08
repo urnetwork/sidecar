@@ -86,17 +86,17 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestDepsFailsOnASharedVersionMismatch", "TestDepsFailsOnAMissingSibling"},
 	},
 	{
-		row: "deps", item: "a license §4.7 refuses, or a row its module's files do not back",
+		row: "deps", item: "a license §4.7 refuses, or a row its module's files do not back, word for word, beside every package a leg links",
 		rule: (*repository).licenseRowFindings,
 		plantedTests: []string{
 			"TestDepsFailsOnARefusedLicenseId", "TestDepsFailsOnAnUnlicensedModule", "TestDepsFailsOnAGplFileUnderAnMitRow",
-			"TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow", "TestDepsFailsOnAnExceptionAtAnotherVersion",
+			"TestDepsFailsOnAnAdvertisingClauseUnderAnMitRow", "TestDepsFailsOnARefusedLicenseAtOneVersionOfTwo",
+			"TestDepsFailsOnAnX11RowOverPlainMit", "TestDepsFailsOnAnX11ClauseWithoutMitsText",
+			"TestDepsFailsOnASecondAdvertisingClauseUnderAnX11Row", "TestDepsFailsOnAnotherClauseUnderAnX11Row",
+			"TestDepsFailsOnABsd4ClauseUnderABsd3Row", "TestDepsFailsOnAnAddedRestrictionUnderAnMitRow",
+			"TestDepsFailsOnAGplFileBesideALinkedPackage", "TestDepsFailsOnAGplFileAboveALinkedPackage",
+			"TestDepsFailsOnANoteThatNoLongerMatches",
 		},
-	},
-	{
-		row: "deps", item: "a license exception with no row to stand on",
-		rule:         (*repository).licenseExceptionFindings,
-		plantedTests: []string{"TestDepsFailsOnAStaleLicenseException"},
 	},
 
 	{
@@ -124,9 +124,9 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
-		row: "layering", item: "a client or cli leg linking a <svc>service or sidecartest",
+		row: "layering", item: "a client or cli leg linking a <svc>service, or any shipped leg linking sidecartest",
 		rule:         (*repository).legEngineFindings,
-		plantedTests: []string{"TestLayeringFailsOnAnEngineThroughSidecartest"},
+		plantedTests: []string{"TestLayeringFailsOnAnEngineThroughSidecartest", "TestLayeringFailsOnAnEngineLinkingSidecartest"},
 	},
 	{
 		row: "layering", item: "device beyond connect and protocol/bridge (§4.4, D-SDK-20)",
@@ -179,6 +179,11 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "legs", item: "a mail server or verifier library on the sidecar_http leg (R-MAIL-13)",
+		rule:         (*repository).sidecarHttpMailFindings,
+		plantedTests: []string{"TestLegsFailsOnSidecarHttpLinkingAMailLibrary"},
+	},
+	{
 		row: "legs", item: "a host_*.go file on the sidecar_http leg (§18.10)",
 		rule:         (*repository).hostFileFindings,
 		plantedTests: []string{"TestLegsFailsOnAHostFileWithoutTheTag"},
@@ -193,8 +198,24 @@ var failsOnRows = []failsOnRow{
 	},
 	{
 		row: "legs", item: "a dynamic reflect lookup in shipped code (§18.10)",
-		rule:         (*repository).reflectLookupFindings,
-		plantedTests: []string{"TestLegsFailsOnADynamicReflectLookup"},
+		rule: (*repository).reflectLookupFindings,
+		plantedTests: []string{
+			"TestLegsFailsOnADynamicReflectLookup", "TestLegsFailsOnAReflectMethodsIterator", "TestLegsFailsOnAReflectMethodExpression",
+			"TestLegsFailsOnAStoredReflectMethodValue", "TestLegsFailsOnALookupThroughAnInterfaceInAFileWithoutReflect",
+			"TestLegsFailsOnALookupPromotedFromAnEmbeddedField", "TestLegsFailsOnALookupThroughATypeParameter",
+			"TestLegsFailsOnAMethodOfTheLookupsShapeOnAnotherType", "TestLegsFailsOnAReflectLookupOnlyAndroidCompiles",
+			"TestLegsFailsOnALegTheReflectRuleCannotCompile",
+		},
+	},
+	{
+		row: "legs", item: "a leg that does not compile, on each leg this host has the toolchain for (§22.4's T1)",
+		rule: (*repository).legCompileFindings,
+		plantedTests: []string{
+			"TestLegsFailsOnAFileOnlyWindowsCompiles", "TestLegsFailsOnATestOnlyJsCompiles",
+			"TestLegsFailsOnACliFileOnlyWindowsArm64Compiles", "TestLegsFailsOnAPageWorkerFileThatDoesNotCompile",
+			"TestLegsFailsOnAnEngineFileOnlyArm64Compiles", "TestLegsFailsOnACgoFileThisHostCompiles",
+			"TestLegsFailsOnAFileOnlyAndroidCompiles",
+		},
 	},
 
 	{
@@ -209,7 +230,7 @@ var failsOnRows = []failsOnRow{
 		rule: (*repository).cgoLegFindings,
 		plantedTests: []string{
 			"TestCgoFailsOnACgoFileOnALeg", "TestCgoFailsOnTheKeychainFileOutsideTheFallbackLeg",
-			"TestCgoFailsOnANewThirdPartyCgoFile",
+			"TestCgoFailsOnAKeychainFileInAnotherPackageOnTheFallbackLeg", "TestCgoFailsOnANewThirdPartyCgoFile",
 		},
 	},
 
@@ -231,6 +252,23 @@ var failsOnRows = []failsOnRow{
 		row: "hygiene", item: "a go.work file",
 		rule:         (*repository).workFileFindings,
 		plantedTests: []string{"TestHygieneFailsOnAGoWorkFile"},
+	},
+	{
+		row: "hygiene", item: "a package beside cli's or mlsinterop's own, or a file naming either, which the release's rewrite would break (§4.9)",
+		rule: (*repository).untaggedSubpackageFindings,
+		plantedTests: []string{
+			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop",
+			"TestHygieneFailsOnAnExternalTestImportingMlsinterop", "TestHygieneFailsOnAQuotedPathOfCliOutsideAnImport",
+		},
+	},
+	{
+		row: "hygiene", item: "a path the go command refuses in a module zip, which makes a tag no consumer can download (§4.9)",
+		rule: (*repository).moduleZipFindings,
+		plantedTests: []string{
+			"TestHygieneFailsOnAReservedWindowsName", "TestHygieneFailsOnACharacterAModuleZipRefuses",
+			"TestHygieneFailsOnATrailingDot", "TestHygieneFailsOnAPathInANestedModule",
+			"TestHygieneFailsOnTwoPathsThatDifferOnlyInCase",
+		},
 	},
 	{
 		row: "hygiene", item: "registry conflicts",
@@ -257,18 +295,26 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAReleaseLegWithTheHooksTag", "TestHygieneFailsOnAReleaseLegWithTheLeakTag"},
 	},
 	{
-		row: "hygiene", item: "a release leg built with sidecar_testhooks: the caller's GOFLAGS",
+		row: "hygiene", item: "a release leg built with sidecar_testhooks: the host's GOFLAGS, in the variable and every go env file",
 		rule: func(self *repository, t testing.TB) []string {
-			return callerGoflagsFindings(os.Getenv("GOFLAGS"))
+			return self.hostGoflagsFindings(os.Environ())
 		},
-		plantedTests: []string{"TestHygieneFailsOnTheHooksTagInGoflags"},
+		plantedTests: []string{
+			"TestHygieneFailsOnTheHooksTagInGoflags", "TestHygieneFailsOnTheHooksTagInTheGoflagsVariable",
+			"TestHygieneFailsOnTheHooksTagInTheGoEnvFile", "TestHygieneFailsOnTheHooksTagInAGoEnvFileTheVariableHides",
+			"TestHygieneFailsOnTheHooksTagInTheDefaultGoEnvFile", "TestHygieneFailsOnTheHooksTagInGorootsGoEnv",
+			"TestHygieneFailsOnAGoflagsSourceItCannotRead",
+		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a file it compiles that answers to the tag",
 		rule: (*repository).legHookFileFindings,
 		plantedTests: []string{
 			"TestHygieneFailsOnALegLinkingTheRootHookFile", "TestHygieneFailsOnALegLinkingAPackagesHookFile",
-			"TestHygieneFailsOnAHookFileAnotherConstraintLetsIn",
+			"TestHygieneFailsOnAHookFileAnotherConstraintLetsIn", "TestHygieneFailsOnALegLinkingAFileTheRulesSkip",
+			"TestHygieneFailsOnACgoFileAnsweringToTheTag", "TestHygieneFailsOnALegLinkingACgoFileTheRulesSkip",
+			"TestHygieneFailsOnAPlusBuildLineTheRulesDoNotRead", "TestHygieneFailsOnATaggedCopyThatIsNotTheCheckouts",
+			"TestHygieneFailsOnATaggedCopyHoldingAFileTheCheckoutLacks",
 		},
 	},
 	{
@@ -281,17 +327,39 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnAnEntryPointWithoutTheTag", "TestHygieneFailsOnAnEntryPointOutsideTheRoot",
 			"TestHygieneFailsOnAHookWithAnotherSignature", "TestHygieneFailsOnADeviceEntryPoint",
 			"TestHygieneFailsOnADeviceInstallerWithoutTheTag", "TestHygieneFailsOnADeviceHookWithABody",
+			"TestHygieneFailsOnAHookBodyBesideAnEmptyHalf", "TestHygieneFailsOnATaggedHalfBesideOneForwarding",
+			"TestHygieneFailsOnAHookWithNoBodyOfItsOwn", "TestHygieneFailsOnAHookDeclaredAsAMethod",
+			"TestHygieneFailsOnAnEntryPointDeclaredAsAMethod", "TestHygieneFailsOnAHookHeldInAField",
+			"TestHygieneFailsOnAHookPassedAsAParameter", "TestHygieneFailsOnAHookShadowedByALocal",
 		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: a Makefile's build line",
-		rule:         (*repository).makefileTagFindings,
-		plantedTests: []string{"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnGomobileBindingWithTheTag"},
+		rule: (*repository).makefileTagFindings,
+		plantedTests: []string{
+			"TestHygieneFailsOnAMakefileBuildingWithTheTag", "TestHygieneFailsOnAMakefileBuildingBesideATest",
+			"TestHygieneFailsOnGomobileBindingWithTheTag", "TestHygieneFailsOnAConsumerMakefileBuildingWithTheTag",
+			"TestHygieneFailsOnAMissingConsumerMakefile",
+		},
 	},
 	{
 		row: "hygiene", item: "a release leg built with sidecar_testhooks: what the artifact says of itself",
 		checkoutTest: "TestHygieneReleaseBinary",
-		plantedTests: []string{"TestHygieneFailsOnABinaryBuiltWithTheTag", "TestHygieneFailsOnABinaryItCannotRead"},
+		plantedTests: []string{
+			"TestHygieneFailsOnABinaryBuiltWithTheTag", "TestHygieneFailsOnABinaryItCannotRead",
+			"TestHygieneFailsOnAUrThisHostBuildsWithTheTag", "TestHygieneFailsOnAGoCommandThatAddsTheTag",
+			"TestHygieneFailsOnAUrThisHostCannotBuild",
+		},
+	},
+	{
+		row: "hygiene", item: "§22.4's clock rule: time's clock read outside a Clock in the root, an engine, mcp or device, but for a listed exception",
+		rule: (*repository).wallClockFindings,
+		plantedTests: []string{
+			"TestClockFailsOnAWallClockCallInTheRoot", "TestClockFailsOnAWallClockCallInAnEngine",
+			"TestClockFailsOnAWallClockCallInDevice", "TestClockFailsOnAWallClockCallInMcp",
+			"TestClockFailsOnTheWallClockPassedAsAValue", "TestClockFailsOnAnAliasedTimeImport",
+			"TestClockFailsOnACallBesideAListedException", "TestClockFailsOnACallBehindABuildTag",
+		},
 	},
 	{
 		row: "hygiene", item: "govulncheck findings",
@@ -394,16 +462,19 @@ func TestHygieneGovulncheck(t *testing.T) {
 	failFindings(t, "govulncheck", repository.vulnFindings(repository.installGovulncheck(t)))
 }
 
-// §22.4's last reading: the artifact's own build info. make check builds ur for this host, as the
-// release would, and reads it; RELEASE_BINARIES on the make line adds the release's real artifacts.
+// §22.4's last reading: what an artifact says of itself. make check builds ur as a release step on
+// this host builds, with the host's own go configuration rather than the rules' environment, and
+// reads it; RELEASE_BINARIES on the make line adds the release's real artifacts. Nothing passes
+// RELEASE_BINARIES yet, since run.sh runs make check before it builds anything and builds no ur, so a
+// run without it says what it read.
 func TestHygieneReleaseBinary(t *testing.T) {
 	repository := openThisCheckout(t)
-	binaryPath := filepath.Join(t.TempDir(), "ur")
-	if _, err := runGo(repository.module(t, "cli").directory, goEnvironment("CGO_ENABLED=0"), "build", "-o", binaryPath, "."); err != nil {
-		t.Fatal(err)
+	failFindings(t, "hygiene", hostBinaryFindings(t, repository.module(t, "cli").directory, os.Environ()))
+	artifacts := strings.Fields(os.Getenv("RELEASE_BINARIES"))
+	if len(artifacts) == 0 {
+		repository.report("RELEASE_BINARIES named no artifact, so the artifact reading read only the ur this host builds")
 	}
-	failFindings(t, "hygiene", releaseBinaryFindings(binaryPath))
-	for _, artifact := range strings.Fields(os.Getenv("RELEASE_BINARIES")) {
+	for _, artifact := range artifacts {
 		failFindings(t, "hygiene", releaseBinaryFindings(artifact))
 	}
 }
@@ -582,5 +653,33 @@ func TestNoQuotedFirstPartyPathHere(t *testing.T) {
 		if location := pattern.FindIndex(data); location != nil {
 			t.Errorf("%s holds a quoted first-party path at byte %d", file, location[0])
 		}
+	}
+}
+
+// go test's own limit is 10 minutes a package, and smtpproof's circuit tests pass it on a loaded
+// machine, which fails make check on the clock and says nothing about the code. So every go test the
+// Makefile runs names its limit, and a new one cannot quietly fall back to the default.
+func TestMakefileNamesEveryGoTestsTimeout(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for index, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for _, command := range shellCommandEndPattern.Split(line, -1) {
+			if !goTestCommandPattern.MatchString(command) || strings.HasPrefix(strings.TrimSpace(command), "echo") {
+				continue
+			}
+			found += 1
+			if !strings.Contains(command, "-timeout") {
+				t.Errorf("Makefile:%d: this go test falls back to the 10 minute default: %s", index+1, strings.TrimSpace(command))
+			}
+		}
+	}
+	if found == 0 {
+		t.Errorf("the Makefile holds no go test, so nothing here read it")
 	}
 }

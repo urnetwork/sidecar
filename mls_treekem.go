@@ -7,6 +7,10 @@
 // Both sides leave the transcript and the key schedule to their caller, which takes commit_secret
 // from here.
 //
+// Neither side changes the member's private keys until the whole commit validates: like the tree,
+// they are adopted only then, by mlsPreparedPath.adopt or mlsReceivedPath.adopt, so a commit refused
+// after its path checks, by its confirmation tag say, leaves the member as it was (RFC §12.4.2).
+//
 // Private keys live apart from the tree, in mlsTreeSecrets, one per member's view (RFC §4.2). A path
 // secret is erased once nothing still needs it, and any held key the tree no longer shows is
 // forgotten (RFC §7.5).
@@ -27,7 +31,7 @@ import (
 // Public key encryption labels (RFC §17.7).
 const mlsEncryptLabelUpdatePathNode = "UpdatePathNode"
 
-// HPKECiphertext (RFC §7.6).
+// A value sealed to one node's key: the KEM output and the AEAD ciphertext (RFC §7.6).
 type mlsHpkeCiphertext struct {
 	kemOutput  []byte
 	ciphertext []byte
@@ -45,7 +49,7 @@ func (self *mlsHpkeCiphertext) decode(decoder *mlsDecoder) {
 	self.ciphertext = decoder.readVector()
 }
 
-// UpdatePathNode (RFC §7.6): one public key of the path, and its path secret encrypted to each node of
+// One node of a commit's path (RFC §7.6): its public key, and its path secret encrypted to each node of
 // the copath child's resolution.
 type mlsUpdatePathNode struct {
 	encryptionKey        []byte
@@ -72,7 +76,8 @@ func (self *mlsUpdatePathNode) decode(decoder *mlsDecoder) {
 	})
 }
 
-// UpdatePath (RFC §7.6): the committer's new leaf and the nodes of its filtered direct path, in order.
+// What a commit carries to refresh its committer's path (RFC §7.6): the new leaf and the nodes of its
+// filtered direct path, in order.
 type mlsUpdatePath struct {
 	leafNode mlsLeafNode
 	nodes    []mlsUpdatePathNode
@@ -345,17 +350,26 @@ func newMlsTreeSecrets(suite *mlsCipherSuite, leaf mlsLeafIndex, leafKey hpke.Pr
 	}
 }
 
-// Sets one node's key from its path secret, refusing a key that is not the tree's (RFC §12.4.3.1).
-func (self *mlsTreeSecrets) implantPathSecret(tree *mlsRatchetTree, node mlsNodeIndex, pathSecret []byte) error {
+// One node's key from its path secret, refusing a key that is not the tree's (RFC §12.4.3.1).
+func (self *mlsTreeSecrets) pathKeyAt(tree *mlsRatchetTree, node mlsNodeIndex, pathSecret []byte) (hpke.PrivateKey, error) {
 	if !tree.holds(node) {
-		return fmt.Errorf("%w: node %d outside the tree", errMlsInvalid, node)
+		return nil, fmt.Errorf("%w: node %d outside the tree", errMlsInvalid, node)
 	}
 	key, err := self.suite.derivePathKey(pathSecret)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !bytes.Equal(key.PublicKey().Bytes(), tree.nodes[node].encryptionKey()) {
-		return fmt.Errorf("%w: path secret does not match node %d", errMlsInvalid, node)
+		return nil, fmt.Errorf("%w: path secret does not match node %d", errMlsInvalid, node)
+	}
+	return key, nil
+}
+
+// Sets one node's key from its path secret, refusing a key that is not the tree's (RFC §12.4.3.1).
+func (self *mlsTreeSecrets) implantPathSecret(tree *mlsRatchetTree, node mlsNodeIndex, pathSecret []byte) error {
+	key, err := self.pathKeyAt(tree, node, pathSecret)
+	if err != nil {
+		return err
 	}
 	self.nodeIndexKeys[node] = key
 	return nil
@@ -363,8 +377,9 @@ func (self *mlsTreeSecrets) implantPathSecret(tree *mlsRatchetTree, node mlsNode
 
 // A new member's keys above its leaf (RFC §12.4.3.1): a Welcome's path_secret is the path secret of the
 // lowest node shared with the committer, and each node above that on the committer's filtered path
-// follows from it. tree is the tree the Welcome carries, already validated. The caller still owns
-// and erases pathSecret.
+// follows from it. tree is the tree the Welcome carries, already validated. Keys are set only if every
+// node checks, and the secrets are the join's own, so a Welcome refused later goes with them. The
+// caller still owns and erases pathSecret.
 func (self *mlsTreeSecrets) implantWelcomePath(tree *mlsRatchetTree, sender mlsLeafIndex, pathSecret []byte) error {
 	suite := self.suite
 	ancestor := mlsCommonAncestor(self.leaf.node(), sender.node())
@@ -375,12 +390,15 @@ func (self *mlsTreeSecrets) implantWelcomePath(tree *mlsRatchetTree, sender mlsL
 	if position < 0 {
 		return fmt.Errorf("%w: node %d is not on sender %d's path", errMlsInvalid, ancestor, sender)
 	}
+	nodeIndexKeys := map[mlsNodeIndex]hpke.PrivateKey{}
 	current := bytes.Clone(pathSecret)
 	defer func() { clear(current) }()
 	for _, entry := range path[position:] {
-		if err := self.implantPathSecret(tree, entry.node, current); err != nil {
+		key, err := self.pathKeyAt(tree, entry.node, current)
+		if err != nil {
 			return err
 		}
+		nodeIndexKeys[entry.node] = key
 		next, err := suite.nextPathSecret(current)
 		if err != nil {
 			return err
@@ -388,6 +406,7 @@ func (self *mlsTreeSecrets) implantWelcomePath(tree *mlsRatchetTree, sender mlsL
 		clear(current)
 		current = next
 	}
+	maps.Copy(self.nodeIndexKeys, nodeIndexKeys)
 	return nil
 }
 
@@ -444,12 +463,31 @@ func (self *mlsTreeSecrets) decryptPathSecret(tree *mlsRatchetTree, sender mlsLe
 	return 0, nil, fmt.Errorf("%w: leaf %d is below no copath node of sender %d", errMlsInvalid, self.leaf, sender)
 }
 
-// Derives the path from one node up, checks each public key against the UpdatePath (RFC §7.5), and
-// returns commit_secret. Keys are adopted only if the whole path checks. Erases pathSecret.
-func (self *mlsTreeSecrets) adoptPathSecret(tree *mlsRatchetTree, sender mlsLeafIndex, updatePath *mlsUpdatePath, position int, pathSecret []byte) ([]byte, error) {
+// What a receiver learns from a commit's path, held apart from its secrets: the commit can still be
+// refused after the path checks, by its confirmation tag, which needs commit_secret from here, and a
+// refused commit leaves the member as it was (RFC §12.4.2).
+type mlsReceivedPath struct {
+	// The merged tree, which these keys match.
+	tree *mlsRatchetTree
+	// The path's private keys, from the node the member's secret arrived at up.
+	nodeIndexKeys map[mlsNodeIndex]hpke.PrivateKey
+	// The caller's to use and erase.
+	commitSecret []byte
+}
+
+// Hands the path's keys to the member's secrets once the whole commit validates, and drops every key
+// the merged tree no longer shows (RFC §7.5's outdated key pairs), so the secrets match it.
+func (self *mlsReceivedPath) adopt(secrets *mlsTreeSecrets) {
+	maps.Copy(secrets.nodeIndexKeys, self.nodeIndexKeys)
+	secrets.forgetStaleKeys(self.tree)
+}
+
+// Derives the path from one node up and checks each public key against the UpdatePath (RFC §7.5).
+// The member's secrets are not touched. Erases pathSecret.
+func (self *mlsTreeSecrets) derivePathFrom(tree *mlsRatchetTree, sender mlsLeafIndex, updatePath *mlsUpdatePath, position int, pathSecret []byte) (*mlsReceivedPath, error) {
 	suite := self.suite
 	path := tree.filteredDirectPath(sender)
-	derivedKeys := map[mlsNodeIndex]hpke.PrivateKey{}
+	received := &mlsReceivedPath{tree: tree, nodeIndexKeys: map[mlsNodeIndex]hpke.PrivateKey{}}
 	current := pathSecret
 	defer func() { clear(current) }()
 	for index := position; index < len(path); index++ {
@@ -460,7 +498,7 @@ func (self *mlsTreeSecrets) adoptPathSecret(tree *mlsRatchetTree, sender mlsLeaf
 		if !bytes.Equal(key.PublicKey().Bytes(), updatePath.nodes[index].encryptionKey) {
 			return nil, fmt.Errorf("%w: path secret does not match path node %d", errMlsInvalid, index)
 		}
-		derivedKeys[path[index].node] = key
+		received.nodeIndexKeys[path[index].node] = key
 		next, err := suite.nextPathSecret(current)
 		if err != nil {
 			return nil, err
@@ -468,19 +506,18 @@ func (self *mlsTreeSecrets) adoptPathSecret(tree *mlsRatchetTree, sender mlsLeaf
 		clear(current)
 		current = next
 	}
-	commitSecret := bytes.Clone(current)
-	testHookSecret("commit_secret", commitSecret)
-	maps.Copy(self.nodeIndexKeys, derivedKeys)
-	self.forgetStaleKeys(tree)
-	return commitSecret, nil
+	received.commitSecret = bytes.Clone(current)
+	testHookSecret("commit_secret", received.commitSecret)
+	return received, nil
 }
 
-// A receiver's whole step: decrypts, verifies and adopts the path, returning commit_secret. tree must
-// already be merged.
-func (self *mlsTreeSecrets) receiveUpdatePath(tree *mlsRatchetTree, sender mlsLeafIndex, updatePath *mlsUpdatePath, groupContext []byte, newLeaves []mlsLeafIndex) ([]byte, error) {
+// A receiver's step up to the commit's own checks: decrypts and verifies the path, and returns its
+// keys and commit_secret for adopt once the whole commit validates. tree must already be merged. The
+// member's secrets are not touched.
+func (self *mlsTreeSecrets) receiveUpdatePath(tree *mlsRatchetTree, sender mlsLeafIndex, updatePath *mlsUpdatePath, groupContext []byte, newLeaves []mlsLeafIndex) (*mlsReceivedPath, error) {
 	position, pathSecret, err := self.decryptPathSecret(tree, sender, updatePath, groupContext, newLeaves)
 	if err != nil {
 		return nil, err
 	}
-	return self.adoptPathSecret(tree, sender, updatePath, position, pathSecret)
+	return self.derivePathFrom(tree, sender, updatePath, position, pathSecret)
 }

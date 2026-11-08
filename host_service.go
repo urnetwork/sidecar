@@ -33,10 +33,31 @@ type ServiceHost struct {
 	Redis Redis
 	// The segment bucket and each metadata cluster's bucket, by cluster id (X13).
 	Blobs BlobStore
+	// How far this process's clock may be from true time (§19.6).
+	ClockCheck ClockCheck
 	// Server to client (X8).
 	Push Push
 	// jwt and urls for the engine's connect client.
 	ServiceClient ServiceClientSource
+	// The time this engine reads and waits on (clock.go). Nil is real time; a test gives each host its
+	// own view of one fake clock.
+	Clock Clock
+	// §19.11's gates, reread by the host every 60 s (host_gates.go). Nil answers every gate closed, so a
+	// host that forgets them opens nothing.
+	Gates ServiceGates
+}
+
+// The clock a host gave its engines: Clock, or real time when the host set none.
+func (self *ServiceHost) ClockOrReal() Clock {
+	return clockOrReal(self.Clock)
+}
+
+// The gates a host gave its engines: Gates, or every gate closed when the host set none.
+func (self *ServiceHost) GatesOrClosed() ServiceGates {
+	if self.Gates == nil {
+		return ClosedServiceGates{}
+	}
+	return self.Gates
 }
 
 // What every engine a server/cli/<svc> hosts gives its host, which wraps it with readiness, /status,

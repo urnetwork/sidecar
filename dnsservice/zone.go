@@ -28,8 +28,8 @@ import (
 	"github.com/urnetwork/connect"
 )
 
-// Ranges §12.7 refuses in a user's A and AAAA, and those a public address cannot be in at all, so an
-// IPv4-mapped address reads as its IPv4 address. Format values: the registries' and not a setting.
+// Ranges §12.7 refuses in a user's A and AAAA, and the others no public address can be in. Format
+// values, the registries' and not a setting.
 var dnsNonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
@@ -59,7 +59,7 @@ var dnsStandInAddresses = []netip.Addr{
 	netip.MustParseAddr(connect.DefaultDnsUpgradeMaskAddressIpv6),
 }
 
-// Whether §12.7 lets a user publish this address.
+// Whether §12.7 lets a user publish this address. An IPv4-mapped address is judged as its IPv4 one.
 func isPublicDnsAddress(address netip.Addr) bool {
 	address = address.Unmap()
 	if !address.IsValid() || slices.Contains(dnsStandInAddresses, address) {
@@ -427,10 +427,10 @@ func (self *ZoneView) refreshSoa() {
 // swaps it in through an atomic pointer, an answer takes no lock, and a health drop reaches every name
 // answered from it with no journal write. A nil set holds no address.
 type HealthySet struct {
-	edgeIpv4   []netip.Addr
-	edgeIpv6   []netip.Addr
-	routerIpv4 []netip.Addr
-	routerIpv6 []netip.Addr
+	edgeIpv4s   []netip.Addr
+	edgeIpv6s   []netip.Addr
+	routerIpv4s []netip.Addr
+	routerIpv6s []netip.Addr
 }
 
 // Each list's addresses of one family, sorted, so one set answers the same bytes each time.
@@ -452,8 +452,8 @@ func healthyAddresses(interfaces []DnsLbInterface) (ipv4s []netip.Addr, ipv6s []
 // a failed 25 banner drops an interface from mx hosts alone (DNS-M7-01).
 func NewHealthySet(edge []DnsLbInterface, router []DnsLbInterface) *HealthySet {
 	self := &HealthySet{}
-	self.edgeIpv4, self.edgeIpv6 = healthyAddresses(edge)
-	self.routerIpv4, self.routerIpv6 = healthyAddresses(router)
+	self.edgeIpv4s, self.edgeIpv6s = healthyAddresses(edge)
+	self.routerIpv4s, self.routerIpv6s = healthyAddresses(router)
 	return self
 }
 
@@ -464,13 +464,13 @@ func (self *HealthySet) addresses(kind DnsRecordKind, rrType uint16) []netip.Add
 	}
 	switch {
 	case kind == DnsRecordKindEdge && rrType == dns.TypeA:
-		return self.edgeIpv4
+		return self.edgeIpv4s
 	case kind == DnsRecordKindEdge && rrType == dns.TypeAAAA:
-		return self.edgeIpv6
+		return self.edgeIpv6s
 	case kind == DnsRecordKindRouter && rrType == dns.TypeA:
-		return self.routerIpv4
+		return self.routerIpv4s
 	case kind == DnsRecordKindRouter && rrType == dns.TypeAAAA:
-		return self.routerIpv6
+		return self.routerIpv6s
 	}
 	return nil
 }

@@ -1,3 +1,6 @@
+// §22.7's schema guard (I-18), first on the repository as it stands, then on a small tree each test plants one
+// fault in, so every finding the guard can make is shown to fire and to name what it found.
+
 package sidecartest
 
 import (
@@ -11,10 +14,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The guard passes on the tree as it stands, and says what it leaned on. check/ runs this test too, and
@@ -108,6 +113,131 @@ func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
 			}
 		}
 	}
+}
+
+// §8.8's GrantActivate carries an action as stored, and a gate takes one beside its decision, so what an action
+// bound for either may set shows to a server, and AD4, which speaks of fields a gate already sees, cannot call it
+// unset. protos-services-canonical-action's answer lists those fields per kind, which api, every reader's
+// GrantActivate check and each gate admit, and MCP-M3-02's kind table what each such kind fills until §16.8's fence
+// takes that answer. Both give numbers, so the lists here are numbers read through the descriptor: an entry cannot
+// pass on a name the action lacks, and a number the action stops declaring, as the answer makes of 24, 25 and 34,
+// fails until its list follows.
+func TestSchemaGuardCallsNoFieldAServerMaySeeUnset(t *testing.T) {
+	guard, err := LoadSchemaGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionFields := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor().Fields()
+	for _, admitted := range []struct {
+		kind         string
+		fieldNumbers []protoreflect.FieldNumber
+	}{
+		// the owner's answer
+		{kind: "every action bound for a GrantActivate or a gate", fieldNumbers: []protoreflect.FieldNumber{1, 12, 13}},
+		{kind: "a grant", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 28, 29}},
+		{kind: "a publish's grant", fieldNumbers: []protoreflect.FieldNumber{5, 6, 7, 33, 35}},
+		{kind: "a version-3 access_request", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 14, 26, 27, 29}},
+		{kind: "a dns_* action", fieldNumbers: []protoreflect.FieldNumber{8, 18, 19, 20, 21}},
+		// MCP-M3-02's kind table
+		{kind: "a publish", fieldNumbers: []protoreflect.FieldNumber{5, 6, 7, 8, 10, 11, 28, 29, 33, 34, 35}},
+		{kind: "a socket_listen", fieldNumbers: []protoreflect.FieldNumber{23, 24, 25, 8, 10, 11, 28, 29}},
+		{kind: "a bridge_forward or bridge_expose", fieldNumbers: []protoreflect.FieldNumber{9, 26, 27, 8}},
+		{kind: "a dns_set or dns_delete", fieldNumbers: []protoreflect.FieldNumber{18, 19, 20, 21}},
+		{kind: "an access request", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 14, 26, 27, 29}},
+	} {
+		for _, fieldNumber := range admitted.fieldNumbers {
+			field := actionFields.ByNumber(fieldNumber)
+			if field == nil {
+				t.Errorf("%s may set field %d, and CanonicalAction declares no such field", admitted.kind, fieldNumber)
+				continue
+			}
+			key := schemaGuardFieldKey(field)
+			_, mapped := guard.fieldMap.Fields[key]
+			_, open := guard.fieldMap.Open[key]
+			if reason, unset := guard.fieldMap.Unset[key]; unset {
+				t.Errorf("%s may set %s, field %d, and the map calls it unset: %s", admitted.kind, key, fieldNumber, reason)
+			} else if !mapped && !open {
+				t.Errorf("%s may set %s, field %d, and the map gives it no row", admitted.kind, key, fieldNumber)
+			}
+		}
+	}
+}
+
+// The real headers are read, or a guard that found no source would pass every claim unseen.
+func TestSchemaGuardReadsTheRealHeaders(t *testing.T) {
+	guard, err := LoadSchemaGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{
+		"protocol/directory.proto": true,
+		"protocol/evsindex.proto":  true,
+		"protocol/search.proto":    true,
+		"protocol/record.proto":    false,
+		"protocol/gkm.proto":       false,
+	} {
+		claimed, err := guard.headerClaimsSealed(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claimed != want {
+			t.Errorf("%s claims to be sealed: %t, want %t", path, claimed, want)
+		}
+	}
+}
+
+// The sentence record.proto once carried, against the real map and descriptors: it sent I-18's first walk, which was
+// done by hand, past the three messages every gate parses.
+func TestSchemaGuardRefusesRecordProtosOldHeader(t *testing.T) {
+	const oldHeader = "// The record's primitives (§16.8), sealed end to end, so no server reads a field here. RECORD.md's kinds,\n" +
+		"// class numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.\n\n" +
+		"syntax = \"proto3\";\n"
+	listPath, err := findMetadataList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := filepath.Dir(listPath)
+	top := t.TempDir()
+	copyFile := func(relativePath string) {
+		content, err := os.ReadFile(filepath.Join(repository, relativePath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(top, relativePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFile(metadataListFileName)
+	copyFile(schemaGuardFieldsPath)
+	areaFiles, err := filepath.Glob(filepath.Join(repository, schemaGuardTestdata, "*", schemaGuardAreaFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, areaFile := range areaFiles {
+		relativePath, err := filepath.Rel(repository, areaFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copyFile(relativePath)
+	}
+	path := filepath.Join(top, "protocol", "record.proto")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(oldHeader), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewSchemaGuard(&SchemaGuardSources{RootDirectory: top, Files: protoregistry.GlobalFiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := guard.protoFindings()
+	slices.Sort(findings)
+	wantGuardFindings(t, findings, "message ApprovalCancel", "message ApprovalDecision", "message CanonicalAction")
 }
 
 // The test tree's list: rows for each kind of backing, and one withdrawn.
@@ -301,10 +431,12 @@ func wantGuardFindings(t *testing.T, findings []string, wants ...string) {
 	}
 }
 
+// The test tree finds nothing, so each fault planted below is the one thing a finding can come from.
 func TestSchemaGuardPassesACleanTree(t *testing.T) {
 	wantGuardFindings(t, newTestGuardTree(t).findings())
 }
 
+// A field a root gains with no line in the map is a value servers see that §2.8 does not list.
 func TestSchemaGuardFailsOnAProtoFieldNoRowNames(t *testing.T) {
 	tree := newTestGuardTree(t)
 	root := tree.message("Root")
@@ -312,6 +444,7 @@ func TestSchemaGuardFailsOnAProtoFieldNoRowNames(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "proto field Root.new_value, reachable from Root, maps to no row")
 }
 
+// The walk follows message fields, so a field added to what a root holds fails as one on the root would.
 func TestSchemaGuardFailsOnANewFieldTwoMessagesDeep(t *testing.T) {
 	tree := newTestGuardTree(t)
 	child := tree.message("Child")
@@ -319,12 +452,14 @@ func TestSchemaGuardFailsOnANewFieldTwoMessagesDeep(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "proto field Child.flags, reachable from Root")
 }
 
+// A line names a row the list holds.
 func TestSchemaGuardFailsOnAFieldMappedToAnUnknownRow(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("Child.version: evs-2", "Child.version: evs-9")
 	wantGuardFindings(t, tree.findings(), "proto field Child.version maps to row evs-9, which metadata_list.yml does not hold")
 }
 
+// A withdrawn row lists nothing, so a line naming one leaves its field in no live row.
 func TestSchemaGuardFailsOnAFieldMappedToAWithdrawnRow(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("Child.version: evs-2", "Child.version: evs-3")
@@ -369,6 +504,7 @@ func TestSchemaGuardFailsOnAMessageInNoClass(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "message Stray is in no class")
 }
 
+// A message the map calls sealed that a root reaches is one a server reads after all.
 func TestSchemaGuardFailsOnASealedMessageARootReaches(t *testing.T) {
 	tree := newTestGuardTree(t)
 	root := tree.message("Root")
@@ -377,12 +513,40 @@ func TestSchemaGuardFailsOnASealedMessageARootReaches(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "message PeerOnly is called sealed, and root Root reaches it")
 }
 
+// A header that says no server reads the file, wrapped as a comment wraps it, where a root reaches a message.
+func TestSchemaGuardFailsOnAHeaderARootDisproves(t *testing.T) {
+	tree := newTestGuardTree(t)
+	tree.write("protocol/planted.proto", "// Sealed end to end, so no\n// server reads a field here.\n\nsyntax = \"proto3\";\n")
+	wantGuardFindings(t, tree.findings(), "root Root reaches its message Child", "root Root reaches its message Root")
+}
+
+// The same sentence on a file no root reaches is true, and below the syntax statement it is no header.
+func TestSchemaGuardTakesAHeaderNoRootDisproves(t *testing.T) {
+	tree := newTestGuardTree(t)
+	tree.write("protocol/planted.proto", "// A file.\n\nsyntax = \"proto3\";\n\n// so no server reads a field here\n")
+	wantGuardFindings(t, tree.findings())
+
+	tree = newTestGuardTree(t)
+	tree.editMap("  Root: \"a server decodes it\"\n", "")
+	tree.editMap("seals:\n  Root.sealed_body: RootBody\n", "seals:\n")
+	tree.editMap("fields:\n  Root.repo_id: evs-1\n  Root.child: evs-1\n  Root.sealed_body: evs-1\n  Child.version: evs-2\n", "fields:\n")
+	tree.editMap("sealed_messages:\n", "sealed_files:\n  protocol/planted.proto: \"its file\"\nsealed_messages:\n")
+	tree.write("protocol/planted.proto", "// So no server reads a field here.\n\nsyntax = \"proto3\";\n")
+	for _, finding := range tree.findings() {
+		if strings.Contains(finding, schemaGuardSealedClaim) {
+			t.Errorf("a sealed file's true header: %s", finding)
+		}
+	}
+}
+
+// Only ciphertext hides what it holds, so a seal names a bytes field.
 func TestSchemaGuardFailsOnASealOnAnythingButBytes(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("  Root.sealed_body: RootBody\n", "  Root.sealed_body: RootBody\n  Child.version: RootBody\n")
 	wantGuardFindings(t, tree.findings(), "seal on Child.version: a seal is on bytes")
 }
 
+// A root the registry no longer holds would vouch for a message nobody declares.
 func TestSchemaGuardFailsOnARootThatIsGone(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("  Root: \"a server decodes it\"\n", "  Root: \"a server decodes it\"\n  Vanished: \"once\"\n")
@@ -407,6 +571,8 @@ func TestSchemaGuardLetsAnUnsetFieldThrough(t *testing.T) {
 	wantGuardFindings(t, tree.findings())
 }
 
+// A field is mapped, unset or open, only one of them; and the walk does not pass an unset field, so what only
+// that field reached is left with no root and no class.
 func TestSchemaGuardFailsOnAFieldInTwoSections(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("enum_values:", "unset:\n  Root.child: \"a rule\"\nenum_values:")
@@ -438,6 +604,7 @@ func TestSchemaGuardHoldsAnOpenFieldToItsMilestone(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "open field Child.version: M3 has landed and a-question.md is still open")
 }
 
+// An open field waits on a question, so one naming none is a gap nobody was asked to close.
 func TestSchemaGuardFailsOnAnOpenFieldWithNoQuestion(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("  Child.version: evs-2\n", "")
@@ -461,18 +628,21 @@ func TestSchemaGuardFailsOnANewValueOfAMappedEnum(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "enum value Flag.FLAG_CUT maps to no row")
 }
 
+// A line for an enum value the registry no longer holds is a false account of what ships.
 func TestSchemaGuardFailsOnAnEnumValueThatIsGone(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("  Flag.FLAG_DROP: evs-2\n", "  Flag.FLAG_DROP: evs-2\n  Flag.FLAG_GONE: evs-2\n")
 	wantGuardFindings(t, tree.findings(), "enum value Flag.FLAG_GONE is no registered value")
 }
 
+// A live row with no value behind it and no planned milestone promises something the code does not show.
 func TestSchemaGuardFailsOnALiveRowNothingBacks(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("  ext-1: {planned: M5}\n", "")
 	wantGuardFindings(t, tree.findings(), "row ext-1: nothing backs it")
 }
 
+// planned names the exit that brings a row's first value, so once that exit has landed the value is due.
 func TestSchemaGuardFailsOnAPlannedMilestoneThatHasPassed(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("ext-1: {planned: M5}", "ext-1: {planned: M2}")
@@ -489,18 +659,21 @@ func TestSchemaGuardTakesAProseValueAsBacking(t *testing.T) {
 	wantGuardFindings(t, tree.findings(), "row ext-1: nothing backs it", "value what the third party sees maps to row ext-9")
 }
 
+// A row's server backing is something its store names.
 func TestSchemaGuardFailsOnServerBackingTheRowDoesNotName(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("server: [network_thing]", "server: [network_other]")
 	wantGuardFindings(t, tree.findings(), "row api-1 says server's network_other backs it")
 }
 
+// The rows section speaks only of live rows.
 func TestSchemaGuardFailsOnARowsEntryForAWithdrawnRow(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("rows:\n", "rows:\n  evs-3: {planned: M5}\n")
 	wantGuardFindings(t, tree.findings(), "the rows section names row evs-3, which is withdrawn")
 }
 
+// A planned row a value already backs passes, and the reports say it can drop planned.
 func TestSchemaGuardReportsAPlannedRowThatIsBacked(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.editMap("rows:\n", "rows:\n  evs-1: {planned: M5}\n")
@@ -524,6 +697,7 @@ func TestSchemaGuardReportsAPlannedRowThatIsBacked(t *testing.T) {
 	}
 }
 
+// A key builder in an engine that starts a prefix no row names is a new object family.
 func TestSchemaGuardFailsOnANewObjectFamily(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.write("evsservice/objects.go", `package evsservice
@@ -534,6 +708,7 @@ func auditKey(repoId string) string { return "audit/" + repoId }
 	wantGuardFindings(t, tree.findings(), `object family audit/, from "audit/<>" at evsservice/objects.go:4, is in no row`)
 }
 
+// A Redis tag no row names is a new family, whether concatenation or Sprintf builds it.
 func TestSchemaGuardFailsOnANewRedisFamily(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.write("evsservice/redis.go", `package evsservice
@@ -678,6 +853,7 @@ func TestSchemaGuardLetsAPendingLineNameItsMilestone(t *testing.T) {
 	wantGuardFindings(t, tree.findings())
 }
 
+// An area's line either quotes its row or says why the row does not name the field yet.
 func TestSchemaGuardRefusesALineWithNeitherQuoteNorPending(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.write("testdata/evs/"+schemaGuardAreaFileName, "Root.value: {row: evs-1}\n")
@@ -686,6 +862,7 @@ func TestSchemaGuardRefusesALineWithNeitherQuoteNorPending(t *testing.T) {
 	}
 }
 
+// A field an area's file and fields.yml both map has two accounts, which could part.
 func TestSchemaGuardRefusesOneFieldInTwoFiles(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.write("testdata/evs/"+schemaGuardAreaFileName, "Root.repo_id: {row: evs-2, sees: \"a cache\"}\n")
@@ -694,6 +871,7 @@ func TestSchemaGuardRefusesOneFieldInTwoFiles(t *testing.T) {
 	}
 }
 
+// An area's line holds only the keys its format names, so a stray one stops the guard rather than being ignored.
 func TestSchemaGuardReadsAnAreaStrictly(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.write("testdata/evs/"+schemaGuardAreaFileName, "Root.value: {row: evs-1, sees: \"x\", skip: true}\n")
@@ -702,6 +880,8 @@ func TestSchemaGuardReadsAnAreaStrictly(t *testing.T) {
 	}
 }
 
+// The map is read as strictly as the list: a key it does not know, a duplicate, a tab, an alias or a milestone
+// that is none stops the guard rather than being read past.
 func TestSchemaGuardReadsTheMapStrictly(t *testing.T) {
 	for _, planted := range []struct {
 		old  string
@@ -723,6 +903,7 @@ func TestSchemaGuardReadsTheMapStrictly(t *testing.T) {
 	}
 }
 
+// A tree with a list and no map cannot be checked, so no guard is built for it.
 func TestSchemaGuardFailsWithNoMap(t *testing.T) {
 	tree := newTestGuardTree(t)
 	tree.write(metadataListFileName, tree.list)
@@ -777,6 +958,7 @@ func checkTestStores(t *testing.T, blobs *FakeBlobs, redis *FakeRedis) []string 
 	return findings
 }
 
+// Stores holding only the families the list names pass.
 func TestCheckStoresPassesListedFamilies(t *testing.T) {
 	blobs, redis := newTestGuardStores(t)
 	putTestObject(t, blobs, "meta-1", "head/ab/cd")
@@ -794,12 +976,14 @@ func TestCheckStoresCatchesAnUnlistedObjectPrefix(t *testing.T) {
 	wantGuardFindings(t, checkTestStores(t, blobs, redis), "object family hidden/ is in no row of metadata_list.yml: cluster seg-1 holds hidden/ab")
 }
 
+// A Redis key whose family no row names fails at run time, naming the key.
 func TestCheckStoresCatchesAnUnlistedRedisFamily(t *testing.T) {
 	blobs, redis := newTestGuardStores(t)
 	setTestRedisKey(t, redis, "{evsx_ab}")
 	wantGuardFindings(t, checkTestStores(t, blobs, redis), "redis family {evsx_} is in no row of metadata_list.yml: Redis holds {evsx_ab}")
 }
 
+// What follows the tag is part of a family, so {acl_}z is not {acl_}e's.
 func TestCheckStoresKeepsSuffixesApart(t *testing.T) {
 	blobs, redis := newTestGuardStores(t)
 	setTestRedisKey(t, redis, "{acl_ab}e")

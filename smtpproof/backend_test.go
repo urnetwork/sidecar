@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,6 +57,7 @@ var (
 
 func testCompileShape(t *testing.T, shape *partShape) constraint.ConstraintSystem {
 	t.Helper()
+	testNeedCircuits(t)
 	testCompiledLock.Lock()
 	defer testCompiledLock.Unlock()
 	if compiled, ok := testCompiledShapes[*shape]; ok {
@@ -338,6 +340,67 @@ func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
 		witness.serverKey[0] ^= 1
 		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
 			t.Errorf("%s: a substituted server key: accepted", leg.name)
+		}
+	}
+}
+
+func TestEnvelopeCircuitAgreesWithTheRelationOnSplitReplies(t *testing.T) {
+	t.Parallel()
+	// a reply may split anywhere for Z8, and only inside the keyword's window for Z9
+	cases := []struct {
+		name     string
+		contents []string
+		accept   bool
+	}{
+		{name: "split before the keyword's line", contents: []string{"250-mx\r\n250-PIPE", "LINING\r\n250-CHUNKING\r\n250 OK\r\n"}, accept: true},
+		{name: "split inside the keyword", contents: []string{"250-mx\r\n250-CHUN", "KING\r\n250 OK\r\n"}},
+		{name: "split at the keyword's line", contents: []string{"250-mx\r\n", "250-CHUNKING\r\n250 OK\r\n"}},
+		{name: "split after the keyword", contents: []string{"250-mx\r\n250-CHUNKING", "\r\n250 OK\r\n"}},
+	}
+	for _, leg := range testTlsLegs() {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		for _, c := range cases {
+			statement, witness := testEhloRecords(t, capture, c.contents...)
+			if reference := len(relationCheckPart(statement, witness)) == 0; reference != c.accept {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, reference)
+			}
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); (err == nil) != c.accept {
+				t.Errorf("%s: %s: the circuit says %v", leg.name, c.name, err)
+			}
+		}
+	}
+}
+
+func TestEnvelopeCircuitRefusesAReplayAndAPaddedRecord(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs() {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+
+		// the honest twin of both
+		statement, witness := capture.part(t, 2)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Fatalf("%s: %v", leg.name, err)
+		}
+
+		if statement.session.version == tlsVersion13 {
+			// a record the MX really sent, at a sequence number it did not send it: 1.2 carries its nonce
+			// in the record, and the MX's own tag refuses a replay there
+			statement, witness = capture.part(t, 2)
+			statement.serverRecords[0].seq += 1
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: a replayed record: accepted", leg.name)
+			}
+
+			// Z7: padding moves the type octet off the record's last position
+			statement, witness = capture.part(t, 2)
+			padded := append(bytes.Clone(witness.serverPlaintexts[0]), 0, 0)
+			testAuthorServerRecord(t, statement, witness, 0, padded)
+			testExpectOnly(t, leg.name, statement, witness, checkZ7)
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: a padded record: accepted", leg.name)
+			}
 		}
 	}
 }
@@ -890,11 +953,33 @@ func TestVerifierRefusesAPreambleATemplateCouldCarryMoreThan(t *testing.T) {
 		{name: "a Message-ID with two", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MessageId = "a@b@c" }},
 		{name: "an issued reference with a space", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = "1.A B" }},
 		{name: "an issued Feedback-ID with a CRLF", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "a\r\nb" }},
+		// the exact forms of plan-SMTP-small-readings #3 and #4, each broken in one place
+		{name: "a reference of another version", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.XUrRef = "2." + strings.TrimPrefix(testXUrRef, "1.")
+		}},
+		{name: "a reference in upper case", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = strings.ToUpper(testXUrRef) }},
+		{name: "a reference one character short", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] }},
+		{name: "a reference one character long", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef + "a" }},
+		{name: "a reference with padding", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] + "=" }},
+		{name: "a reference outside base32", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] + "1" }},
+		{name: "a reference with a second spelling", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			// the last character carries three bits, so a set low bit spells the same octets again
+			preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] + "5"
+		}},
+		{name: "a Feedback-ID of another class", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "x" + testFeedbackId[1:] }},
+		{name: "a Feedback-ID of another tier", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "n:x" + testFeedbackId[3:] }},
+		{name: "a Feedback-ID with a short token", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.FeedbackId = strings.Replace(testFeedbackId, "h4:", "h:", 1)
+		}},
+		{name: "a Feedback-ID with a fifth field", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = testFeedbackId + ":x" }},
+		{name: "a Feedback-ID with another sender field", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.FeedbackId = strings.TrimSuffix(testFeedbackId, "urnetwork") + "other"
+		}},
 		{name: "an empty HELO name", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.HeloName = "" }},
 		{name: "no envelope domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.EnvelopeDomain = "" }},
 		{name: "no MX host", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MxHost = "" }},
 	}
-	verifier := NewVerifier(DefaultVerifierSettings())
+	verifier := testNoKeysVerifier(t)
 	if _, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble); err != nil {
 		t.Fatalf("an honest preamble: %v", err)
 	}
@@ -924,7 +1009,7 @@ func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 			t.Errorf("%s: %v reached the MX", leg.name, commands)
 		}
 	}
-	verifier := NewVerifier(DefaultVerifierSettings())
+	verifier := testNoKeysVerifier(t)
 	if _, err := verifier.NewSmtpProofSession(&sidecar.SmtpProofPreamble{}); err == nil {
 		t.Error("a session opened without the edge's own values")
 	}
@@ -1046,7 +1131,7 @@ func TestVerifiedSetupGivesKeysThatProve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provingKey, verifyingKey, err := verifySetup(compiled, transcript)
+	provingKey, verifyingKey, err := VerifySetupTranscript(compiled, transcript)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1074,29 +1159,29 @@ func TestVerifySetupRefusesWhatIsNotTheCeremony(t *testing.T) {
 		t.Fatal(err)
 	}
 	// no contribution at all: an edge that offers keys with nothing behind them
-	if _, _, err := verifySetup(compiled, &setupTranscript{beacon: transcript.beacon}); err == nil {
+	if _, _, err := VerifySetupTranscript(compiled, &SetupTranscript{Beacon: transcript.Beacon}); err == nil {
 		t.Error("verified an empty transcript")
 	}
 	// the same transcript verifies twice, so a refusal below is the mutation's and nothing else's
-	if _, _, err := verifySetup(compiled, transcript); err != nil {
+	if _, _, err := VerifySetupTranscript(compiled, transcript); err != nil {
 		t.Fatalf("the honest transcript: %v", err)
 	}
-	if _, _, err := verifySetup(compiled, transcript); err != nil {
+	if _, _, err := VerifySetupTranscript(compiled, transcript); err != nil {
 		t.Fatalf("the honest transcript, again: %v", err)
 	}
 	// a contribution changed by one octet at any depth
 	for _, offset := range []int{40, 100, 200, 500} {
 		for _, phase := range []int{1, 2} {
-			tampered := &setupTranscript{beacon: transcript.beacon, phase1: transcript.phase1, phase2: transcript.phase2}
-			target := &tampered.phase2
+			tampered := &SetupTranscript{Beacon: transcript.Beacon, Phase1: transcript.Phase1, Phase2: transcript.Phase2}
+			target := &tampered.Phase2
 			if phase == 1 {
-				target = &tampered.phase1
+				target = &tampered.Phase1
 			}
 			changed := bytes.Clone((*target)[0])
 			if offset < len(changed) {
 				changed[offset] ^= 1
 				*target = [][]byte{changed}
-				if _, _, err := verifySetup(compiled, tampered); err == nil {
+				if _, _, err := VerifySetupTranscript(compiled, tampered); err == nil {
 					t.Errorf("phase %d: verified with octet %d changed", phase, offset)
 				}
 			}
@@ -1104,17 +1189,17 @@ func TestVerifySetupRefusesWhatIsNotTheCeremony(t *testing.T) {
 	}
 	// a phase 2 contributed for another circuit: keys that are not this relation's
 	other := testCompile(t, &testSetupOtherCircuit{})
-	otherTranscript, err := runSetup(other, transcript.beacon)
+	otherTranscript, err := runSetup(other, transcript.Beacon)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mixed := &setupTranscript{beacon: transcript.beacon, phase1: transcript.phase1, phase2: otherTranscript.phase2}
-	if _, _, err := verifySetup(compiled, mixed); err == nil {
+	mixed := &SetupTranscript{Beacon: transcript.Beacon, Phase1: transcript.Phase1, Phase2: otherTranscript.Phase2}
+	if _, _, err := VerifySetupTranscript(compiled, mixed); err == nil {
 		t.Error("verified another circuit's phase 2")
 	}
 	// another phase 1 under a phase 2 it never fed
-	mixed = &setupTranscript{beacon: transcript.beacon, phase1: otherTranscript.phase1, phase2: transcript.phase2}
-	if _, _, err := verifySetup(compiled, mixed); err == nil {
+	mixed = &SetupTranscript{Beacon: transcript.Beacon, Phase1: otherTranscript.Phase1, Phase2: transcript.Phase2}
+	if _, _, err := VerifySetupTranscript(compiled, mixed); err == nil {
 		t.Error("verified a phase 2 against another phase 1")
 	}
 }
@@ -1159,12 +1244,21 @@ func (self *testCommittingCircuit) Define(api frontend.API) error {
 }
 
 // Compiles every production shape, which takes minutes, so it stays out of the ordinary run: set
-// SMTPPROOF_MEASURE_SHAPES. It holds each to SPEC.md 10.2's rule, and its output is SPEC.md 11.2's.
+// SMTPPROOF_MEASURE_SHAPES, to a suite's number such as 0x1303 to compile that suite's alone. It holds
+// each to SPEC.md 10.2's rule, and its output is SPEC.md 11.2's.
 func TestMeasureShapes(t *testing.T) {
-	if os.Getenv("SMTPPROOF_MEASURE_SHAPES") == "" {
+	only := os.Getenv("SMTPPROOF_MEASURE_SHAPES")
+	if only == "" {
 		t.Skip("set SMTPPROOF_MEASURE_SHAPES to run")
 	}
+	suite, err := strconv.ParseUint(only, 0, 16)
+	if err != nil {
+		suite = 0
+	}
 	for _, shape := range partShapes() {
+		if suite != 0 && uint64(shape.suite) != suite {
+			continue
+		}
 		compiled, err := compilePartShape(shape)
 		if err != nil {
 			t.Fatal(err)
@@ -1182,8 +1276,8 @@ func TestMeasureShapes(t *testing.T) {
 // setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes; this takes
 // minutes, so it stays out of the ordinary run. Each leg sends D-SMTP-16's BDAT case, then unless
 // SMTPPROOF_MEASURE_BDAT_ONLY is set a DATA send of the same header block and three body parts, which
-// is enough to price a part: D-SMTP-16's 100 KiB is that part's cost times the parts it takes. Its
-// output is SPEC.md 11.3's source.
+// is enough to price a part: D-SMTP-16's 100 KiB is that part's cost times the parts it takes.
+// SMTPPROOF_MEASURE_DATA_ONLY runs the DATA send alone. Its output is SPEC.md 11.4's source.
 func TestMeasureWholeSend(t *testing.T) {
 	legs := os.Getenv("SMTPPROOF_MEASURE")
 	if legs == "" {
@@ -1193,27 +1287,81 @@ func TestMeasureWholeSend(t *testing.T) {
 		if !strings.Contains(legs, strings.ReplaceAll(leg.name, " ", "-")) {
 			continue
 		}
-		// D-SMTP-16's BDAT case: a 4 KiB header block and 10 recipients
-		recipients := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"}
-		padding := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58)
 		measuring := &testMeasuringBackend{t: t, backend: newGroth16Backend(), kinds: map[partShape]bool{}}
-		send := func(body string, settings *ProverSettings, mode string) {
-			message := padding + testHeaderBlock() + body
-			job := testJob("", recipients...)
-			job.Message = []byte(message)
-			job.Preamble.MessageByteCount = uint64(len(message))
-			t.Logf("%s %s: header block %d octets, body %d octets", leg.name, mode, strings.Index(message, "\r\n\r\n")+4, len(body))
+		modes := []uint32{partModeBdat, partModeData}
+		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") != "" {
+			modes = modes[:1]
+		}
+		if os.Getenv("SMTPPROOF_MEASURE_DATA_ONLY") != "" {
+			modes = modes[1:]
+		}
+		for _, mode := range modes {
+			job, settings := testSpeedGateJob(mode)
+			headerBytes := bytes.Index(job.Message, []byte("\r\n\r\n")) + 4
+			t.Logf("%s mode %d: header block %d octets, body %d octets", leg.name, mode, headerBytes, len(job.Message)-headerBytes)
 			measuring.provingTotal = 0
 			measuring.cpuTotal = 0
 			result := testRunSendWith(t, leg, testMxDefaults(), settings, job, measuring, measuring)
 			testExpectOneTransaction(t, leg, result, job)
-			t.Logf("%s %s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, mode, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
+			t.Logf("%s mode %d: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, mode, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
 		}
-		send("a body line\r\n", DefaultProverSettings(), "bdat")
-		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") == "" {
-			settings := DefaultProverSettings()
-			settings.ForceData = true
-			send(strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100), settings, "data")
+	}
+}
+
+// D-SMTP-16's BDAT case, a 4 KiB header block and 10 recipients, or in DATA mode the same header block
+// and a body of four DATA parts, which is enough to price a part.
+func testSpeedGateJob(mode uint32) (*sidecar.SmtpProofJob, *ProverSettings) {
+	settings := DefaultProverSettings()
+	body := "a body line\r\n"
+	if mode == partModeData {
+		settings.ForceData = true
+		body = strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100)
+	}
+	message := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58) + testHeaderBlock() + body
+	job := testJob("", "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9")
+	job.Message = []byte(message)
+	job.Preamble.MessageByteCount = uint64(len(message))
+	return job, settings
+}
+
+func TestProductionShapesHoldTheSpeedGatesSends(t *testing.T) {
+	// every part of D-SMTP-16's sends finds a production shape on every leg. Each record starts a fresh
+	// keystream block, so a suite's blocks are counted per record and not by octets alone. Finding a
+	// shape builds an assignment and compiles nothing, so this runs in both legs
+	for _, leg := range testTlsLegs() {
+		for _, mode := range []uint32{partModeBdat, partModeData} {
+			job, settings := testSpeedGateJob(mode)
+			send := testRunSend(t, leg, testMxDefaults(), settings, job)
+			testExpectOneTransaction(t, leg, send, job)
+			if send.result.Mode != mode {
+				t.Errorf("%s: mode %d, want %d", leg.name, send.result.Mode, mode)
+			}
+			for _, statement := range send.backend.statements {
+				if _, err := partShapeFor(statement); err != nil {
+					t.Errorf("%s mode %d: part %d: %v", leg.name, mode, statement.index, err)
+				}
+			}
+		}
+	}
+}
+
+func TestProductionShapesHoldAnEhloReplyWrittenALinePerRecord(t *testing.T) {
+	// a typical post-TLS reply of nine lines, each in a record of its own. The CR LF before CHUNKING is
+	// then in another record, so Z9 cannot prove it and the send is DATA (SPEC.md reading 17)
+	mxSettings := testMxDefaults()
+	mxSettings.keywords = []string{"PIPELINING", "SIZE 10240000", "ETRN", "ENHANCEDSTATUSCODES", "8BITMIME", "DSN", "CHUNKING"}
+	mxSettings.ehloLinePerRecord = true
+	for _, leg := range testTlsLegs() {
+		job, settings := testSpeedGateJob(partModeBdat)
+		send := testRunSend(t, leg, mxSettings, settings, job)
+		testExpectOneTransaction(t, leg, send, job)
+		if send.result.Mode != partModeData {
+			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
+		}
+		for _, statement := range send.backend.statements {
+			if _, err := partShapeFor(statement); err != nil {
+				t.Errorf("%s: part %d: %v", leg.name, statement.index, err)
+			}
 		}
 	}
 }

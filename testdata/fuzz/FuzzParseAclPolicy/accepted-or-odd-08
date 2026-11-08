@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"grants\": [{\"note\": \"\\ud800\", \"src\": [\"role:\\ud83d\\ude00\"]}]}")

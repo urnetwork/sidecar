@@ -166,17 +166,26 @@ func findMetadataList() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for directory := workingDirectory; ; directory = filepath.Dir(directory) {
+	return findMetadataListFrom(workingDirectory, func(listPath string) bool {
+		_, err := os.Stat(listPath)
+		return err == nil
+	})
+}
+
+// The nearest list at or above start, by exists. A test passes an exists that sees only its own
+// directory, since a temporary directory can sit inside a checkout holding the real list.
+func findMetadataListFrom(start string, exists func(listPath string) bool) (string, error) {
+	for directory := start; ; directory = filepath.Dir(directory) {
 		for _, listPath := range []string{
 			filepath.Join(directory, metadataListFileName),
 			filepath.Join(directory, metadataListSiblingName, metadataListFileName),
 		} {
-			if _, err := os.Stat(listPath); err == nil {
+			if exists(listPath) {
 				return listPath, nil
 			}
 		}
 		if directory == filepath.Dir(directory) {
-			return "", fmt.Errorf("no %s above %s", metadataListFileName, workingDirectory)
+			return "", fmt.Errorf("no %s above %s", metadataListFileName, start)
 		}
 	}
 }
