@@ -12,6 +12,12 @@
 // and it holds at an armed site like any other. An actor blocked on something this file cannot see
 // loses the baton after settings.StallTimeout, and the trace says so.
 //
+// A script makes the driver follow a recorded trace instead: each baton choice and each yield the trace
+// shows, as long as the run keeps to it, which is how a failing seed becomes a fixed schedule (§22.8).
+// The trace names who ran, so it repeats an order a seed alone may not, since what a goroutine no actor
+// owns does between barriers can change whom a seed's draw lands on. Where the run leaves the trace,
+// the fixed order takes over and ScriptDeparture says where.
+//
 // Every hook call is checked against the naming rule, and a violation fails the schedule. Waits here
 // bound real time only to fail with a trace (§22.8's 10 s); nothing here sleeps. Safe for concurrent
 // use.
@@ -176,6 +182,11 @@ type BarrierDriver struct {
 	closed bool
 	// the explorer's choices; nil: none
 	random *rand.Rand
+	// a recorded trace's events that actors own, to follow; nil: none, or left
+	script       []*BarrierEvent
+	scriptCursor int
+	// where and why the run left its script; empty while it follows
+	scriptDeparture string
 }
 
 func NewBarrierDriver(settings *BarrierDriverSettings) *BarrierDriver {
@@ -212,8 +223,112 @@ func (self *BarrierDriver) notifyWithLock() {
 }
 
 func (self *BarrierDriver) recordWithLock(kind BarrierEventKind, name string, key string, actor string) {
-	self.trace = append(self.trace, &BarrierEvent{Kind: kind, Name: name, Key: key, Actor: actor})
+	event := &BarrierEvent{Kind: kind, Name: name, Key: key, Actor: actor}
+	self.trace = append(self.trace, event)
+	self.followScriptWithLock(event)
 	self.notifyWithLock()
+}
+
+// Makes the driver follow events, a recorded run's trace: each baton goes to the actor the trace says
+// ran next, and an actor passing a barrier yields where the trace shows another ran. Only the events
+// actors own are followed; a goroutine no actor owns runs free here as it did there. Set it before the
+// run starts, and not with a seed.
+func (self *BarrierDriver) SetScript(events []*BarrierEvent) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.script = []*BarrierEvent{}
+	for _, event := range events {
+		if event.Actor != "" {
+			eventCopy := *event
+			self.script = append(self.script, &eventCopy)
+		}
+	}
+	self.scriptCursor = 0
+	self.scriptDeparture = ""
+	self.leaveAtStallWithLock()
+}
+
+// Where the run left its script and why, or empty while it follows it or has none. A run of the same
+// code as the recording keeps to it to the recording's end; a fixed one leaves it where it differs, or
+// stops short of the recording's end, which read after the run reads as a departure too.
+func (self *BarrierDriver) ScriptDeparture() string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.script != nil && self.scriptCursor < len(self.script) {
+		return fmt.Sprintf("the run stopped at event %d of the trace's %d, before %s", self.scriptCursor, len(self.script), self.script[self.scriptCursor])
+	}
+	return self.scriptDeparture
+}
+
+func (self *BarrierDriver) followScriptWithLock(event *BarrierEvent) {
+	if self.script == nil || event.Actor == "" {
+		return
+	}
+	if len(self.script) <= self.scriptCursor {
+		self.leaveScriptWithLock(fmt.Sprintf("after the trace's last event, the run went on with %s", event))
+		return
+	}
+	want := self.script[self.scriptCursor]
+	if *want != *event {
+		self.leaveScriptWithLock(fmt.Sprintf("at event %d the run did %s where the trace did %s", self.scriptCursor, event, want))
+		return
+	}
+	self.scriptCursor += 1
+	self.leaveAtStallWithLock()
+}
+
+// A stall in the recording is an order no replay can repeat: the fixed order goes on from there.
+func (self *BarrierDriver) leaveAtStallWithLock() {
+	if self.script != nil && self.scriptCursor < len(self.script) && self.script[self.scriptCursor].Kind == BarrierStalled {
+		self.leaveScriptWithLock(fmt.Sprintf("at event %d the recorded run stalled, which no replay repeats", self.scriptCursor))
+	}
+}
+
+func (self *BarrierDriver) leaveScriptWithLock(departure string) {
+	self.script = nil
+	self.scriptDeparture = departure
+}
+
+// The actor the script says takes the baton next, or empty when its next event is something else.
+func (self *BarrierDriver) scriptNextRunWithLock() string {
+	if self.script == nil || len(self.script) <= self.scriptCursor {
+		return ""
+	}
+	if next := self.script[self.scriptCursor]; next.Kind == BarrierRan {
+		return next.Actor
+	}
+	return ""
+}
+
+// sites, a step's Release list, in the order the script releases them: what a replay releases in, where
+// a seed shuffled the list. Sites the script releases nowhere ahead keep their order, after the rest.
+func (self *BarrierDriver) ScriptReleaseOrder(sites []string) []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.script == nil {
+		return sites
+	}
+	position := func(site string) int {
+		actorName := ""
+		if before, after, found := strings.Cut(site, "/"); found {
+			actorName, site = before, after
+		}
+		for index := self.scriptCursor; index < len(self.script); index += 1 {
+			event := self.script[index]
+			if event.Kind != BarrierReleased || (actorName != "" && event.Actor != actorName) {
+				continue
+			}
+			if site == event.Name || site == BarrierSite(event.Name, event.Key) {
+				return index
+			}
+		}
+		return len(self.script)
+	}
+	ordered := slices.Clone(sites)
+	slices.SortStableFunc(ordered, func(a string, b string) int {
+		return position(a) - position(b)
+	})
+	return ordered
 }
 
 // The calling goroutine's id, from its stack header. The only way to tell which actor a hook call
@@ -322,7 +437,7 @@ func (self *BarrierDriver) Hit(name string, key string) {
 			return
 		}
 		self.recordWithLock(BarrierPassed, name, key, actorName)
-		if run != nil && self.random != nil && self.yieldWithLock(run) {
+		if run != nil && (self.random != nil || self.script != nil) && self.yieldWithLock(run) {
 			yielded = run
 		}
 	}()
@@ -376,12 +491,22 @@ func (self *BarrierDriver) Resume() {
 	self.notifyWithLock()
 }
 
-// Whether the seed sends the baton elsewhere, and if so hands it over, leaving run among the waiters.
+// Whether the seed or the script sends the baton elsewhere, and if so hands it over, leaving run among
+// the waiters.
 func (self *BarrierDriver) yieldWithLock(run *actorRun) bool {
 	if self.batonHolder != run || len(self.batonWaiters) == 0 {
 		return false
 	}
-	if self.random.IntN(len(self.batonWaiters)+1) == 0 {
+	if self.script != nil {
+		if next := self.scriptNextRunWithLock(); next == "" || next == run.actor.name {
+			return false
+		}
+		// another ran next either because this actor yielded or because it ended, and only an actor
+		// that yielded shows up in the trace again
+		if !slices.ContainsFunc(self.script[self.scriptCursor+1:], func(event *BarrierEvent) bool { return event.Actor == run.actor.name }) {
+			return false
+		}
+	} else if self.random.IntN(len(self.batonWaiters)+1) == 0 {
 		return false
 	}
 	self.batonWaiters = append(self.batonWaiters, run)
@@ -390,7 +515,8 @@ func (self *BarrierDriver) yieldWithLock(run *actorRun) bool {
 	return true
 }
 
-// Gives the free baton to a waiter, the first or the seed's choice, never except.
+// Gives the free baton to a waiter, the first, the script's or the seed's choice, never except. A script
+// naming an actor that is not waiting is a run that left it, which the ran event then records.
 func (self *BarrierDriver) nextBatonWithLock(except *actorRun) {
 	if self.batonHolder != nil || self.batonPaused {
 		return
@@ -405,7 +531,11 @@ func (self *BarrierDriver) nextBatonWithLock(except *actorRun) {
 		return
 	}
 	chosen := candidates[0]
-	if self.random != nil {
+	if next := self.scriptNextRunWithLock(); next != "" {
+		if index := slices.IndexFunc(candidates, func(index int) bool { return self.batonWaiters[index].actor.name == next }); 0 <= index {
+			chosen = candidates[index]
+		}
+	} else if self.random != nil {
 		chosen = candidates[self.random.IntN(len(candidates))]
 	}
 	next := self.batonWaiters[chosen]
@@ -693,6 +823,15 @@ func (self *BarrierDriver) Release(site string) error {
 		self.held = slices.Delete(self.held, index, index+1)
 		self.recordWithLock(BarrierReleased, hold.name, hold.key, hold.actor)
 		close(hold.release)
+		if hold.run != nil {
+			// queued here, in release order, and not when its goroutine wakes: the step's next baton
+			// choice then has every actor it released to choose from, so a seed or a script picks the
+			// same one every time
+			if self.batonHolder != hold.run && !slices.Contains(self.batonWaiters, hold.run) {
+				self.batonWaiters = append(self.batonWaiters, hold.run)
+			}
+			self.nextBatonWithLock(nil)
+		}
 		return nil
 	}
 	return fmt.Errorf("nothing is held at %s", site)

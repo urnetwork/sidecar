@@ -91,6 +91,18 @@ type MxEdgeSettings struct {
 	// How long Drain waits for sessions to end before Close resets them. Default 10 min, tlsedge's
 	// drain_s (§13.5).
 	DrainTimeout time.Duration `yaml:"drain_timeout"`
+
+	// How often session records go to the store, as one batch (§15.4: 10 s).
+	RecordFlushInterval time.Duration `yaml:"record_flush_interval"`
+	// How long one batch's write may take before it reads as failed and waits for the next flush.
+	// Default 5 s: a batch is one insert, off every session's path.
+	RecordWriteTimeout time.Duration `yaml:"record_write_timeout"`
+	// Session records waiting at most, past which a new one is dropped and counted, so a store that
+	// lags costs a bounded memory and never a session's wait. Default 100,000, ten times a full
+	// process's sessions in one flush.
+	RecordQueueCount int `yaml:"record_queue"`
+	// Session records one write carries at most. Default 10,000.
+	RecordBatchCount int `yaml:"record_batch"`
 }
 
 // The defaults every number here is read from. BannerHostName and DeviationUrl stay empty, so these
@@ -111,6 +123,10 @@ func DefaultMxEdgeSettings() *MxEdgeSettings {
 		ReadyProbeInterval:          10 * time.Second,
 		AcceptRetryDelay:            100 * time.Millisecond,
 		DrainTimeout:                10 * time.Minute,
+		RecordFlushInterval:         10 * time.Second,
+		RecordWriteTimeout:          5 * time.Second,
+		RecordQueueCount:            100000,
+		RecordBatchCount:            10000,
 	}
 }
 

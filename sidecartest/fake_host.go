@@ -24,7 +24,7 @@ func hostCall(ctx context.Context, faults *FaultQueue, method string, serve func
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	plan := faults.take(ctx, FaultOpHost, "", method)
+	plan := faults.take(ctx, FaultOpHost, "", method, false)
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result

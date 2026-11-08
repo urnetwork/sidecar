@@ -57,6 +57,10 @@ type mxMetrics struct {
 	dailyKeyRefreshes sidecar.MetricsCounter
 	// Accepts that failed and were retried.
 	acceptFailures sidecar.MetricsCounter
+	// Session records, written or dropped for a full queue (records.go).
+	records sidecar.MetricsCounter
+	// Writes of a batch of session records, by outcome.
+	recordFlushes sidecar.MetricsCounter
 }
 
 // Declares the families. Two engines in one process share them, as Metrics allows.
@@ -69,5 +73,7 @@ func newMxMetrics(metrics sidecar.Metrics) *mxMetrics {
 		memoryWrites:      metrics.Counter("urnetwork_mxedge_closed_handshake_writes_total", "Writes to the closed-handshake memory, by outcome.", "result"),
 		dailyKeyRefreshes: metrics.Counter("urnetwork_mxedge_daily_key_refreshes_total", "Reads of the closed-handshake memory's daily key, by outcome.", "result"),
 		acceptFailures:    metrics.Counter("urnetwork_mxedge_accept_failures_total", "Accepts that failed and were retried."),
+		records:           metrics.Counter("urnetwork_mxedge_session_records_total", "Session records, written or dropped for a full queue.", "result"),
+		recordFlushes:     metrics.Counter("urnetwork_mxedge_session_record_flushes_total", "Writes of a batch of session records, by outcome.", "result"),
 	}
 }
