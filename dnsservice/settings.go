@@ -15,6 +15,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 	"gopkg.in/yaml.v3"
@@ -78,6 +79,31 @@ type DnsSettings struct {
 	// to the resolver, which bounds a loop and the answer's size. Not in the sketch, which names no
 	// bound. At least 1.
 	CnameChainMaxCount int `yaml:"cname_chain_max_count"`
+	// How online signatures are timed and cached (DNS-M5-04). Not in the sketch, which says only that
+	// RRSIG lifetimes are settings.
+	Signing DnsSigningSettings `yaml:"signing"`
+}
+
+// When an RRSIG made online is valid, and how long one is cached (§12.6's Signing). Seconds. A cached
+// signature serves while it has refresh_s left, and none outlives the released DNSKEY window, so a
+// leaked ZSK's forgeries end with its windows (§12.6's runbook).
+type DnsSigningSettings struct {
+	// How long a fresh RRSIG stays valid, before jitter and the window's end cut it. Four days keeps
+	// a signature valid past ns's one-day TTL, the longest here, with a day to spare. Must exceed
+	// refresh_s plus jitter_s, so a fresh signature never needs refreshing at once.
+	LifetimeSeconds int `yaml:"lifetime_s"`
+	// How far before now an inception sits, so a validator whose clock runs slow still accepts a
+	// fresh signature. Zero puts the inception at now.
+	InceptionOffsetSeconds int `yaml:"inception_offset_s"`
+	// The most a lifetime is cut at random, so signatures cached together expire apart and their
+	// refreshes do not land in one second of the cap. Zero cuts none.
+	JitterSeconds int `yaml:"jitter_s"`
+	// A cached signature with less than this left is made again. Above the longest TTL, so a
+	// resolver can keep an answer and its signature for the whole TTL. Must be positive.
+	RefreshSeconds int `yaml:"refresh_s"`
+	// The most signatures the cache holds, the least recently used going first. About 400 bytes an
+	// entry. Must be positive.
+	CacheEntryCount int `yaml:"cache_entries"`
 }
 
 // Seconds, each as §12.6 gives it: short enough for ACME, failover and takedown (D-DNS-4). None may
@@ -166,6 +192,13 @@ func DefaultDnsSettings() *DnsSettings {
 			IdleTimeoutSeconds: 10,
 		},
 		CnameChainMaxCount: 8,
+		Signing: DnsSigningSettings{
+			LifetimeSeconds:        4 * 24 * 3600,
+			InceptionOffsetSeconds: 3600,
+			JitterSeconds:          6 * 3600,
+			RefreshSeconds:         2 * 24 * 3600,
+			CacheEntryCount:        128 * 1024,
+		},
 	}
 }
 
@@ -264,7 +297,32 @@ func (self *DnsSettings) Validate() error {
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")
 	}
+	if err := self.Signing.validate(); err != nil {
+		return refuse("signing: %v", err)
+	}
 	return nil
+}
+
+// Whether a fresh signature outlives its own refresh, and every value is in range.
+func (self *DnsSigningSettings) validate() error {
+	switch {
+	case self.RefreshSeconds <= 0:
+		return errors.New("refresh_s is not positive")
+	case self.InceptionOffsetSeconds < 0:
+		return errors.New("inception_offset_s is negative")
+	case self.JitterSeconds < 0:
+		return errors.New("jitter_s is negative")
+	case self.LifetimeSeconds <= self.RefreshSeconds+self.JitterSeconds:
+		return errors.New("lifetime_s does not exceed refresh_s plus jitter_s")
+	case self.CacheEntryCount <= 0:
+		return errors.New("cache_entries is not positive")
+	}
+	return nil
+}
+
+// A setting's seconds as a duration.
+func dnsSeconds(seconds int) time.Duration {
+	return time.Duration(seconds) * time.Second
 }
 
 // Whether every TTL is set and §12.6's relations hold.
