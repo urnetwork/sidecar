@@ -205,3 +205,87 @@ func ExportGateVerdict(capture *ExportedCapture) []string {
 	}
 	return nil
 }
+
+// Skips a test that needs a compiled circuit in the leg that compiles none (testNeedCircuits).
+func ExportNeedCircuits(t *testing.T) {
+	t.Helper()
+	testNeedCircuits(t)
+}
+
+// Solves each part's circuit, Z1 left out, over the edge's own statement and the witness set for the
+// part, on a test shape sized to the part with room for a mutation of a few blocks.
+type exportedCircuitVerifier struct {
+	t       *testing.T
+	witness *partWitness
+	refused bool
+}
+
+func (self *exportedCircuitVerifier) verifyPart(ctx context.Context, statement *partStatement, proof []byte) error {
+	self.refused = true
+	if self.witness == nil {
+		return errors.New("no witness")
+	}
+	shape, err := testShapeFitting(statement, 0, 8)
+	if err != nil {
+		return err
+	}
+	compiled := testCompileShape(self.t, shape)
+	circuit, err := partAssignment(shape, statement)
+	if err != nil {
+		return err
+	}
+	assignWitness(circuit, statement, self.witness)
+	if err := testSolved(self.t, compiled, circuit); err != nil {
+		return errors.New("no witness satisfies the part's circuit")
+	}
+	self.refused = false
+	return nil
+}
+
+// What the circuits say of a capture: replayed into a fresh gate whose verifier is the constraint
+// solver, as ExportGateVerdict's is the relation. The index of the first part whose circuit refuses,
+// or 0 if every part's is satisfied, and the gate's own refusal if it refused first for a reason that
+// is no part's.
+func ExportCircuitVerdict(t *testing.T, capture *ExportedCapture) (uint32, error) {
+	t.Helper()
+	preamble := newSessionPreamble(capture.Preamble)
+	if err := checkSessionPreamble(preamble); err != nil {
+		return 0, err
+	}
+	verifier := &exportedCircuitVerifier{t: t}
+	gate := newEdgeSession(defaultEdgeSettings(), preamble, capture.Preamble.MxHost, verifier)
+	for i, event := range capture.Events {
+		var err error
+		switch {
+		case event.Part != nil:
+			verifier.witness = nil
+			verifier.refused = false
+			if witness := capture.Witnesses[i]; witness != nil {
+				verifier.witness = &partWitness{
+					handshakeSecret:  witness.HandshakeSecret,
+					masterSecret:     witness.MasterSecret,
+					clientKey:        witness.ClientKey,
+					clientIv:         witness.ClientIv,
+					serverKey:        witness.ServerKey,
+					serverIv:         witness.ServerIv,
+					clientPlaintexts: witness.ClientPlaintexts,
+					serverPlaintexts: witness.ServerPlaintexts,
+				}
+			}
+			_, err = gate.VerifyPart(context.Background(), event.Part)
+			if err != nil && verifier.refused {
+				return event.Part.Index, nil
+			}
+		case event.Shts != nil:
+			_, err = gate.DiscloseShts(event.Shts)
+		case event.ClientRecord != nil:
+			_, err = gate.ClientRecord(event.ClientRecord)
+		default:
+			err = gate.ServerRecord(event.ServerRecord)
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	return 0, nil
+}
