@@ -17,6 +17,7 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// §6.9's purpose for a header and a RetentionPolicy (§16.8).
 const testRecordPurpose = "record-entry"
 
 // A kind no registry holds: readers keep it, verify it and show it generically, never refuse it.

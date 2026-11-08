@@ -122,6 +122,10 @@ type FaultPlan struct {
 	Actor string
 	// Only this cluster's calls match. Empty: any.
 	ClusterId string
+	// Takes the operation it fires at even from an older plan that fires there too, which then counts
+	// as fired there without its result. How §22.8's unknown rule loses the response of a write the
+	// schedule's own FailBeforeApply fails, which a caller cannot tell apart from a lost response.
+	Displaces bool
 }
 
 func (self *FaultPlan) String() string {
@@ -137,7 +141,11 @@ func (self *FaultPlan) validate() error {
 		return fmt.Errorf("fault plan %s: a negative Nth", self)
 	}
 	switch self.Result {
-	case ApplyThenDrop, FailBeforeApply, Delay, CrashBeforeApply, CrashAfterApply:
+	case ApplyThenDrop, FailBeforeApply, CrashBeforeApply, CrashAfterApply:
+	case Delay:
+		if self.Op == FaultOpHost {
+			return fmt.Errorf("fault plan %s: a host fake parks no call", self)
+		}
 	case Precondition:
 		if self.Op != FaultOpPut {
 			return fmt.Errorf("fault plan %s: only a PUT has a condition", self)
@@ -170,6 +178,9 @@ type FaultQueue struct {
 	stateLock sync.Mutex
 	armed     []*armedFault
 	onFire    func(plan *FaultPlan)
+	// By operation, each one that reached the queue in order, with the result it was given, zero for
+	// none.
+	opResults map[string][]FaultResult
 }
 
 func NewFaultQueue() *FaultQueue {
@@ -197,7 +208,8 @@ func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) 
 }
 
 // For one operation, the plan it gets, or nil. Reading counts a match on every armed plan the
-// operation fits, so Nth means the same whatever else is armed. The oldest plan that fires wins.
+// operation fits, so Nth means the same whatever else is armed. The oldest plan that fires wins,
+// unless a plan that Displaces fires too.
 func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, key string) *FaultPlan {
 	if isInspecting(ctx) {
 		return nil
@@ -208,6 +220,7 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		firing := []*armedFault{}
 		for _, armed := range self.armed {
 			plan := armed.plan
 			if plan.Op != op || !strings.HasPrefix(key, plan.KeyPrefix) {
@@ -220,9 +233,6 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 				continue
 			}
 			armed.matches += 1
-			if taken != nil {
-				continue
-			}
 			first := max(plan.Nth, 1)
 			if armed.matches < first {
 				continue
@@ -230,18 +240,50 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 			if 0 <= plan.Repeat && first+plan.Repeat < armed.matches {
 				continue
 			}
-			taken = plan
+			firing = append(firing, armed)
+		}
+		fire := func(armed *armedFault) {
 			armed.fireCount += 1
 			if armed.fireCount == 1 {
 				close(armed.fired)
 			}
 		}
+		winner := slices.IndexFunc(firing, func(armed *armedFault) bool { return armed.plan.Displaces })
+		if winner < 0 && 0 < len(firing) {
+			winner = 0
+		}
+		result := FaultResult(0)
+		if 0 <= winner {
+			taken = firing[winner].plan
+			result = taken.Result
+			fire(firing[winner])
+			if taken.Displaces {
+				// what it displaced fired here as its schedule armed it to, only without its result
+				for index, armed := range firing {
+					if index != winner {
+						fire(armed)
+					}
+				}
+			}
+		}
+		if self.opResults == nil {
+			self.opResults = map[string][]FaultResult{}
+		}
+		self.opResults[op] = append(self.opResults[op], result)
 		onFire = self.onFire
 	}()
 	if taken != nil && onFire != nil {
 		onFire(taken)
 	}
 	return taken
+}
+
+// Each operation of op that reached the queue, in order, with the result its plan gave, zero for none.
+// What a sweep over a schedule's writes counts from, since a fake counts only what it served.
+func (self *FaultQueue) OpResults(op string) []FaultResult {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.opResults[op])
 }
 
 // Plans armed and never fired: a schedule ending with one proved nothing about it.

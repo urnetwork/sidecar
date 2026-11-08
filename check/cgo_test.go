@@ -36,7 +36,8 @@ func (self *repository) cgoSourceFindings(t testing.TB) []string {
 	return findings
 }
 
-// Each leg's CgoFiles. In this repository only the keychain's file on a fallback leg passes. A
+// Each leg's CgoFiles. In this repository only the keychain's file on a fallback leg passes, in the
+// package cgoSourceFindings allows it in, since a leg can link a directory that walk skips. A
 // third-party file passes where settings name it; std's are the toolchain's own, and are not ours
 // to rule on (net and os/user turn to cgo on any CGO_ENABLED=1 leg).
 func (self *repository) cgoLegFindings(t testing.TB) []string {
@@ -47,10 +48,11 @@ func (self *repository) cgoLegFindings(t testing.TB) []string {
 			if listed.Standard || listed.Module == nil {
 				continue
 			}
-			_, ours := repositoryRelative(listed.ImportPath)
+			relative, ours := repositoryRelative(listed.ImportPath)
 			for _, cgoFile := range listed.CgoFiles {
 				if ours {
-					if cgoFile == keychainCgoFileName && leg.keychainFallback {
+					keychainPackage := relative == "." || relative == "cli"
+					if cgoFile == keychainCgoFileName && keychainPackage && leg.keychainFallback {
 						continue
 					}
 					findings = append(findings, findingf("%s compiles the cgo file %s in %s", leg.name, cgoFile, listed.ImportPath))

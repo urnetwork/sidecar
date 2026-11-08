@@ -1,0 +1,1044 @@
+{
+ "comment": "Answer's vectors: rows are '<owner> <ttl> <kind> [<type> <rdata>]', a copy row with no type; rows of one key are one RRset. A step applies its rows as the next serial, sets the healthy set when it names one, then runs its cases. Records read as miekg prints them. A user's addresses are invented, since a user may not publish a documentation address; everything else's are documentation addresses.",
+ "root": "zone.example.",
+ "serial": 100,
+ "rows": [
+  "zone.example. 3600 system SOA ns1.zone.example. hostmaster.zone.example. 1 7200 3600 1209600 300",
+  "zone.example. 86400 system NS ns1.zone.example.",
+  "zone.example. 86400 system NS ns2.zone.example.",
+  "zone.example. 3600 system TXT \"v=spf1 -all\"",
+  "zone.example. 60 edge A",
+  "zone.example. 60 edge AAAA",
+  "ns1.zone.example. 86400 system A 192.0.2.1",
+  "ns2.zone.example. 86400 system A 192.0.2.2",
+  "canary.zone.example. 60 canary TXT \"tick\"",
+  "net1.zone.example. 300 system MX 0 .",
+  "net1.zone.example. 3600 system TXT \"v=spf1 -all\"",
+  "net1.zone.example. 60 edge A",
+  "net1.zone.example. 60 edge AAAA",
+  "*.net1.zone.example. 300 system MX 10 mx.net1.zone.example.",
+  "*.net1.zone.example. 60 edge A",
+  "*.net1.zone.example. 60 edge AAAA",
+  "mx.net1.zone.example. 300 router A",
+  "mx.net1.zone.example. 300 router AAAA",
+  "_dmarc.net1.zone.example. 3600 system TXT \"v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=s\"",
+  "www.net1.zone.example. 300 user A 11.22.33.44",
+  "www.net1.zone.example. 300 user AAAA 2a0f:ffff::7",
+  "host.net1.zone.example. 120 user TXT \"a host's own text\"",
+  "alias.net1.zone.example. 300 user CNAME www.net1.zone.example.",
+  "outward.net1.zone.example. 300 user CNAME target.other.example.",
+  "dangling.net1.zone.example. 300 user CNAME gone.host.net1.zone.example.",
+  "toempty.net1.zone.example. 300 user CNAME host.net1.zone.example.",
+  "towild.net1.zone.example. 300 user CNAME unknown.net1.zone.example.",
+  "first.net1.zone.example. 300 user CNAME second.net1.zone.example.",
+  "second.net1.zone.example. 300 user CNAME www.net1.zone.example.",
+  "loop1.net1.zone.example. 300 user CNAME loop2.net1.zone.example.",
+  "loop2.net1.zone.example. 300 user CNAME loop1.net1.zone.example.",
+  "_sip._tcp.blog.net1.zone.example. 300 user SRV 10 5 5060 sip.other.example.",
+  "blog.net1.zone.example. 0 copy",
+  "_tcp.blog.net1.zone.example. 0 copy",
+  "_xmpp._tcp.chat.net1.zone.example. 300 user SRV 10 5 5222 chat.other.example.",
+  "replying-1234.net1.zone.example. 0 copy",
+  "sel._domainkey.replying-1234.net1.zone.example. 300 key TXT \"v=DKIM1; k=rsa; p=c3ludGhldGlj\"",
+  "probe.net1.zone.example. 60 canary CAA 0 urcanary \"nonce\"",
+  "probe.net1.zone.example. 0 copy",
+  "*.wild.net1.zone.example. 300 user A 11.22.33.45",
+  "wild.net1.zone.example. 0 copy",
+  "under.host2.net1.zone.example. 300 user TXT \"below a host\"",
+  "host2.net1.zone.example. 300 user TXT \"a host\"",
+  "_tcp.host2.net1.zone.example. 0 copy",
+  "x._tcp.host2.net1.zone.example. 300 user TXT \"deep\"",
+  "medium.net1.zone.example. 300 user TXT \"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\"",
+  "big.net1.zone.example. 300 user TXT \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+  "big.net1.zone.example. 300 user TXT \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
+  "big.net1.zone.example. 300 user TXT \"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\""
+ ],
+ "steps": [
+  {
+   "name": "the zone as loaded",
+   "healthy": {
+    "edge": [
+     "192.0.2.11",
+     "192.0.2.10",
+     "2001:db8::10"
+    ],
+    "router": [
+     "192.0.2.20",
+     "2001:db8::20"
+    ]
+   },
+   "cases": [
+    {
+     "name": "the apex SOA carries the view's serial and the setting's minimum",
+     "query": "zone.example. SOA",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 3600 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "the apex NS",
+     "query": "zone.example. NS",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 86400 IN NS ns1.zone.example.",
+      "zone.example. 86400 IN NS ns2.zone.example."
+     ]
+    },
+    {
+     "name": "the root's @ from the healthy set",
+     "query": "zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 60 IN A 192.0.2.10",
+      "zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "glue is an ordinary record",
+     "query": "ns1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "ns1.zone.example. 86400 IN A 192.0.2.1"
+     ]
+    },
+    {
+     "name": "the canary",
+     "query": "canary.zone.example. TXT",
+     "rcode": "NOERROR",
+     "answer": [
+      "canary.zone.example. 60 IN TXT \"tick\""
+     ]
+    },
+    {
+     "name": "a name no network holds",
+     "query": "nosuch.zone.example. A",
+     "rcode": "NXDOMAIN",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a network's @ is no zone of its own",
+     "query": "net1.zone.example. SOA",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a network's @ holds no NS",
+     "query": "net1.zone.example. NS",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "@ A from the healthy set",
+     "query": "net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 60 IN A 192.0.2.10",
+      "net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "@ AAAA from the healthy set",
+     "query": "net1.zone.example. AAAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 60 IN AAAA 2001:db8::10"
+     ]
+    },
+    {
+     "name": "@ MX",
+     "query": "net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 300 IN MX 0 ."
+     ]
+    },
+    {
+     "name": "@ TXT",
+     "query": "net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 3600 IN TXT \"v=spf1 -all\""
+     ]
+    },
+    {
+     "name": "* A names the queried name",
+     "query": "unknown.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "unknown.net1.zone.example. 60 IN A 192.0.2.10",
+      "unknown.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "* AAAA",
+     "query": "unknown.net1.zone.example. AAAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "unknown.net1.zone.example. 60 IN AAAA 2001:db8::10"
+     ]
+    },
+    {
+     "name": "* itself",
+     "query": "*.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "*.net1.zone.example. 60 IN A 192.0.2.10",
+      "*.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "* holds no TXT",
+     "query": "unknown.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "an unknown burner label falls under * for MX",
+     "query": "fast-1234.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "fast-1234.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."
+     ]
+    },
+    {
+     "name": "a deep name falls under *",
+     "query": "a.b.c.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "a.b.c.net1.zone.example. 60 IN A 192.0.2.10",
+      "a.b.c.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "a deep name's MX",
+     "query": "a.b.c.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "a.b.c.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."
+     ]
+    },
+    {
+     "name": "an owner beside the wildcard answers its own",
+     "query": "host.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "answer": [
+      "host.net1.zone.example. 120 IN TXT \"a host's own text\""
+     ]
+    },
+    {
+     "name": "an owner beside the wildcard is not covered by it",
+     "query": "host.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "nor for MX",
+     "query": "host.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "an owner blocks the wildcard below it",
+     "query": "x.host.net1.zone.example. A",
+     "rcode": "NXDOMAIN",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "user A",
+     "query": "www.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ]
+    },
+    {
+     "name": "user AAAA",
+     "query": "www.net1.zone.example. AAAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "www.net1.zone.example. 300 IN AAAA 2a0f:ffff::7"
+     ]
+    },
+    {
+     "name": "user owner with no such type",
+     "query": "www.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a query's case is kept in the question and the owner",
+     "query": "WWW.Net1.ZONE.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "WWW.Net1.ZONE.example. 300 IN A 11.22.33.44"
+     ]
+    },
+    {
+     "name": "mx from the router set",
+     "query": "mx.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "mx.net1.zone.example. 300 IN A 192.0.2.20"
+     ]
+    },
+    {
+     "name": "mx AAAA from the router set",
+     "query": "mx.net1.zone.example. AAAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "mx.net1.zone.example. 300 IN AAAA 2001:db8::20"
+     ]
+    },
+    {
+     "name": "mx is an owner beside the wildcard",
+     "query": "mx.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "_dmarc",
+     "query": "_dmarc.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "answer": [
+      "_dmarc.net1.zone.example. 3600 IN TXT \"v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=s\""
+     ]
+    },
+    {
+     "name": "a CNAME at a host followed to its target",
+     "query": "alias.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "alias.net1.zone.example. 300 IN CNAME www.net1.zone.example.",
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ]
+    },
+    {
+     "name": "a CNAME asked for itself",
+     "query": "alias.net1.zone.example. CNAME",
+     "rcode": "NOERROR",
+     "answer": [
+      "alias.net1.zone.example. 300 IN CNAME www.net1.zone.example."
+     ]
+    },
+    {
+     "name": "a CNAME leaving the root stops there",
+     "query": "outward.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "outward.net1.zone.example. 300 IN CNAME target.other.example."
+     ]
+    },
+    {
+     "name": "a CNAME to a name that does not exist takes its denial",
+     "query": "dangling.net1.zone.example. A",
+     "rcode": "NXDOMAIN",
+     "answer": [
+      "dangling.net1.zone.example. 300 IN CNAME gone.host.net1.zone.example."
+     ],
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a CNAME to a name without the type",
+     "query": "toempty.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "toempty.net1.zone.example. 300 IN CNAME host.net1.zone.example."
+     ],
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a CNAME to a name under *",
+     "query": "towild.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "towild.net1.zone.example. 300 IN CNAME unknown.net1.zone.example.",
+      "unknown.net1.zone.example. 60 IN A 192.0.2.10",
+      "unknown.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "a chain of two",
+     "query": "first.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "first.net1.zone.example. 300 IN CNAME second.net1.zone.example.",
+      "second.net1.zone.example. 300 IN CNAME www.net1.zone.example.",
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ]
+    },
+    {
+     "name": "a loop stops where it repeats",
+     "query": "loop1.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "loop1.net1.zone.example. 300 IN CNAME loop2.net1.zone.example.",
+      "loop2.net1.zone.example. 300 IN CNAME loop1.net1.zone.example."
+     ]
+    },
+    {
+     "name": "an empty non-terminal's child",
+     "query": "_xmpp._tcp.chat.net1.zone.example. SRV",
+     "rcode": "NOERROR",
+     "answer": [
+      "_xmpp._tcp.chat.net1.zone.example. 300 IN SRV 10 5 5222 chat.other.example."
+     ]
+    },
+    {
+     "name": "an empty non-terminal exists and holds nothing",
+     "query": "chat.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "and it blocks * for MX too",
+     "query": "chat.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "so does the one below it",
+     "query": "_tcp.chat.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "and nothing below it matches *",
+     "query": "x.chat.net1.zone.example. A",
+     "rcode": "NXDOMAIN",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a copy row answers *'s A",
+     "query": "blog.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 60 IN A 192.0.2.10",
+      "blog.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "a copy row answers *'s AAAA",
+     "query": "blog.net1.zone.example. AAAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 60 IN AAAA 2001:db8::10"
+     ]
+    },
+    {
+     "name": "a copy row answers *'s MX",
+     "query": "blog.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."
+     ]
+    },
+    {
+     "name": "a copy row has nothing * does not",
+     "query": "blog.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a copy below a copy reaches the same *",
+     "query": "_tcp.blog.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "_tcp.blog.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."
+     ]
+    },
+    {
+     "name": "a copy row does not answer below itself",
+     "query": "x.blog.net1.zone.example. A",
+     "rcode": "NXDOMAIN",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "the child that made the copy",
+     "query": "_sip._tcp.blog.net1.zone.example. SRV",
+     "rcode": "NOERROR",
+     "answer": [
+      "_sip._tcp.blog.net1.zone.example. 300 IN SRV 10 5 5060 sip.other.example."
+     ]
+    },
+    {
+     "name": "a replying burner keeps its MX",
+     "query": "replying-1234.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "replying-1234.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."
+     ]
+    },
+    {
+     "name": "and its A",
+     "query": "replying-1234.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "replying-1234.net1.zone.example. 60 IN A 192.0.2.10",
+      "replying-1234.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "and its selector",
+     "query": "sel._domainkey.replying-1234.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "answer": [
+      "sel._domainkey.replying-1234.net1.zone.example. 300 IN TXT \"v=DKIM1; k=rsa; p=c3ludGhldGlj\""
+     ]
+    },
+    {
+     "name": "the empty non-terminal between them",
+     "query": "_domainkey.replying-1234.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a probe's CAA answers its own",
+     "query": "probe.net1.zone.example. CAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "probe.net1.zone.example. 60 IN CAA 0 urcanary \"nonce\""
+     ]
+    },
+    {
+     "name": "and the copy beside it answers the rest",
+     "query": "probe.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "probe.net1.zone.example. 60 IN A 192.0.2.10",
+      "probe.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "a user wildcard answers below its host",
+     "query": "a.wild.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "a.wild.net1.zone.example. 300 IN A 11.22.33.45"
+     ]
+    },
+    {
+     "name": "a wildcard's parent is a copy of the * above it",
+     "query": "wild.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "wild.net1.zone.example. 60 IN A 192.0.2.10",
+      "wild.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "a host with rows above a copy ends the walk",
+     "query": "_tcp.host2.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "out of zone",
+     "query": "x.other.example. A",
+     "rcode": "REFUSED"
+    },
+    {
+     "name": "a name that only ends like the root",
+     "query": "notzone.example. A",
+     "rcode": "REFUSED"
+    },
+    {
+     "name": "the DNS root",
+     "query": ". NS",
+     "rcode": "REFUSED"
+    },
+    {
+     "name": "the parent of the root",
+     "query": "example. SOA",
+     "rcode": "REFUSED"
+    },
+    {
+     "name": "class CH",
+     "query": "net1.zone.example. TXT",
+     "rcode": "REFUSED",
+     "class": "CH"
+    },
+    {
+     "name": "class ANY",
+     "query": "net1.zone.example. A",
+     "rcode": "REFUSED",
+     "class": "ANY"
+    },
+    {
+     "name": "AXFR",
+     "query": "zone.example. AXFR",
+     "rcode": "REFUSED"
+    },
+    {
+     "name": "IXFR",
+     "query": "zone.example. IXFR",
+     "rcode": "REFUSED"
+    },
+    {
+     "name": "ANY at a host answers one RRset",
+     "query": "www.net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ]
+    },
+    {
+     "name": "ANY at @ answers the first by type",
+     "query": "net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 60 IN A 192.0.2.10",
+      "net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "ANY under * answers one RRset",
+     "query": "unknown.net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "unknown.net1.zone.example. 60 IN A 192.0.2.10",
+      "unknown.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "ANY at a copy answers one RRset",
+     "query": "blog.net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 60 IN A 192.0.2.10",
+      "blog.net1.zone.example. 60 IN A 192.0.2.11"
+     ]
+    },
+    {
+     "name": "ANY at a host with one type",
+     "query": "_dmarc.net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "_dmarc.net1.zone.example. 3600 IN TXT \"v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=s\""
+     ]
+    },
+    {
+     "name": "ANY at an empty non-terminal is a synthesized HINFO",
+     "query": "chat.net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "chat.net1.zone.example. 60 IN HINFO \"RFC8482\" \"\""
+     ]
+    },
+    {
+     "name": "ANY at a name that does not exist",
+     "query": "x.host.net1.zone.example. ANY",
+     "rcode": "NXDOMAIN",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "over 512 with no EDNS sets TC",
+     "query": "medium.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "tc": true
+    },
+    {
+     "name": "the same fits the EDNS size",
+     "query": "medium.net1.zone.example. TXT",
+     "edns": 1232,
+     "rcode": "NOERROR",
+     "answer_count": 1
+    },
+    {
+     "name": "a client's smaller size holds",
+     "query": "medium.net1.zone.example. TXT",
+     "edns": 600,
+     "rcode": "NOERROR",
+     "tc": true
+    },
+    {
+     "name": "a size below 512 reads as 512",
+     "query": "medium.net1.zone.example. TXT",
+     "edns": 100,
+     "rcode": "NOERROR",
+     "tc": true
+    },
+    {
+     "name": "and what fits 512 is not truncated",
+     "query": "www.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ],
+     "edns": 20
+    },
+    {
+     "name": "over 1232 sets TC at any client size",
+     "query": "big.net1.zone.example. TXT",
+     "edns": 4096,
+     "rcode": "NOERROR",
+     "tc": true
+    },
+    {
+     "name": "TCP takes what UDP cannot",
+     "query": "big.net1.zone.example. TXT",
+     "tcp": true,
+     "rcode": "NOERROR",
+     "answer_count": 3
+    },
+    {
+     "name": "TCP with EDNS too",
+     "query": "big.net1.zone.example. TXT",
+     "tcp": true,
+     "edns": 1232,
+     "rcode": "NOERROR",
+     "answer_count": 3
+    },
+    {
+     "name": "a client subnet option changes nothing and comes back from nowhere",
+     "query": "www.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "www.net1.zone.example. 300 IN A 11.22.33.44"
+     ],
+     "edns": 1232,
+     "ecs": "203.0.113.0/24"
+    },
+    {
+     "name": "an EDNS version above 0",
+     "query": "www.net1.zone.example. A",
+     "edns": 1232,
+     "edns_version": 1,
+     "rcode": "BADVERS"
+    }
+   ]
+  },
+  {
+   "name": "a write to * reaches every copy with no further write",
+   "apply": {
+    "upserts": [
+     "*.net1.zone.example. 600 system MX 20 mx2.other.example."
+    ]
+   },
+   "cases": [
+    {
+     "name": "the wildcard's new MX and TTL",
+     "query": "fast-1234.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "fast-1234.net1.zone.example. 600 IN MX 20 mx2.other.example."
+     ]
+    },
+    {
+     "name": "a copy's",
+     "query": "blog.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 600 IN MX 20 mx2.other.example."
+     ]
+    },
+    {
+     "name": "a deeper copy's",
+     "query": "_tcp.blog.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "_tcp.blog.net1.zone.example. 600 IN MX 20 mx2.other.example."
+     ]
+    },
+    {
+     "name": "a replying burner's",
+     "query": "replying-1234.net1.zone.example. MX",
+     "rcode": "NOERROR",
+     "answer": [
+      "replying-1234.net1.zone.example. 600 IN MX 20 mx2.other.example."
+     ]
+    },
+    {
+     "name": "the serial moved",
+     "query": "zone.example. SOA",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 3600 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a denial carries it too",
+     "query": "blog.net1.zone.example. TXT",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a dropped interface leaves *, @ and every copy with no journal write",
+   "healthy": {
+    "edge": [
+     "192.0.2.10",
+     "2001:db8::10"
+    ],
+    "router": [
+     "192.0.2.20",
+     "2001:db8::20"
+    ]
+   },
+   "cases": [
+    {
+     "name": "@",
+     "query": "net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "*",
+     "query": "unknown.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "unknown.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "a copy",
+     "query": "blog.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "a deep copy",
+     "query": "_tcp.blog.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "_tcp.blog.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "a replying burner",
+     "query": "replying-1234.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "replying-1234.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "the root's @",
+     "query": "zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "mx stays on the router set",
+     "query": "mx.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "mx.net1.zone.example. 300 IN A 192.0.2.20"
+     ]
+    },
+    {
+     "name": "the serial did not move",
+     "query": "zone.example. SOA",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 3600 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a dropped router interface leaves mx and not *",
+   "healthy": {
+    "edge": [
+     "192.0.2.10",
+     "2001:db8::10"
+    ],
+    "router": [
+     "2001:db8::20"
+    ]
+   },
+   "cases": [
+    {
+     "name": "mx has no A left",
+     "query": "mx.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "mx keeps its AAAA",
+     "query": "mx.net1.zone.example. AAAA",
+     "rcode": "NOERROR",
+     "answer": [
+      "mx.net1.zone.example. 300 IN AAAA 2001:db8::20"
+     ]
+    },
+    {
+     "name": "* is untouched",
+     "query": "unknown.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "unknown.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "with no healthy address a name exists and has no data",
+   "healthy": {
+    "edge": [],
+    "router": []
+   },
+   "cases": [
+    {
+     "name": "@",
+     "query": "net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "*",
+     "query": "unknown.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "a copy",
+     "query": "blog.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "authority": [
+      "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 101 7200 3600 1209600 60"
+     ]
+    },
+    {
+     "name": "ANY moves on to the next RRset",
+     "query": "blog.net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 600 IN MX 20 mx2.other.example."
+     ]
+    },
+    {
+     "name": "ANY at @ too",
+     "query": "net1.zone.example. ANY",
+     "rcode": "NOERROR",
+     "answer": [
+      "net1.zone.example. 300 IN MX 0 ."
+     ]
+    }
+   ]
+  },
+  {
+   "name": "rows the feed withdrew are gone, and the names above them with them",
+   "healthy": {
+    "edge": [
+     "192.0.2.10"
+    ],
+    "router": []
+   },
+   "apply": {
+    "deletes": [
+     "host.net1.zone.example. TXT",
+     "_xmpp._tcp.chat.net1.zone.example. SRV",
+     "_sip._tcp.blog.net1.zone.example. SRV",
+     "_tcp.blog.net1.zone.example. COPY",
+     "blog.net1.zone.example. COPY"
+    ]
+   },
+   "cases": [
+    {
+     "name": "a withdrawn host falls under *",
+     "query": "host.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "host.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "so does an empty non-terminal with no child left",
+     "query": "chat.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "chat.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "and what was below it",
+     "query": "x.chat.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "x.chat.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "a copy whose child went answers as * does",
+     "query": "blog.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "blog.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "and now so does the name below it",
+     "query": "x.blog.net1.zone.example. A",
+     "rcode": "NOERROR",
+     "answer": [
+      "x.blog.net1.zone.example. 60 IN A 192.0.2.10"
+     ]
+    },
+    {
+     "name": "the serial moved",
+     "query": "zone.example. SOA",
+     "rcode": "NOERROR",
+     "answer": [
+      "zone.example. 3600 IN SOA ns1.zone.example. hostmaster.zone.example. 102 7200 3600 1209600 60"
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -4,13 +4,22 @@
 // between its call and its answer, in which every answer was right? A write whose outcome is unknown
 // may land anywhere up to its deadline, or never (§19.6). That is D-OPS-20 seen from outside: a write
 // landing past its deadline, an acknowledged write lost, a stale read and a resurrection each leave a
-// history with no such order.
+// history with no such order, and a write the store acknowledged though it was issued past its
+// deadline is refused outright. A LIST is a request on every key under its prefix that it covers, and
+// reads each as a GET would, so a LIST showing a deleted key or missing an acknowledged one is wrong
+// too. The keys it checks a LIST against are the ones the history has other requests on, or a start
+// for: a key nothing else in it touched may have any past.
+//
+// Past a deadline is by the recorder's clock, the sender's, which x-ur-deadline-ms is written in. A
+// store's own clock may sit up to §19.6's 50 ms behind it and take a write issued less than that past
+// its deadline, so a T3 schedule that sends a late write sends it further past than that.
 //
 // Safe for concurrent use.
 
 package sidecartest
 
 import (
+	"cmp"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -65,6 +74,11 @@ type BlobHistoryEntry struct {
 	// A read: what it saw.
 	ReadEtag string
 	Outcome  BlobOutcome
+	// A LIST: Key is its prefix, and it covers the keys after StartAfter, up to the last it returned
+	// when ListTruncated says more follow.
+	StartAfter     string
+	ListedKeyEtags map[string]string
+	ListTruncated  bool
 
 	InvokeSeq uint64
 	// Zero: no answer yet.
@@ -155,7 +169,7 @@ func (self *BlobRecorder) begin(ctx context.Context, entry *BlobHistoryEntry) {
 	self.entries = append(self.entries, entry)
 }
 
-func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome) {
+func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome, readEtag string) {
 	returned := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -163,6 +177,7 @@ func (self *BlobRecorder) end(entry *BlobHistoryEntry, outcome BlobOutcome) {
 	entry.ReturnSeq = self.seq
 	entry.Returned = returned
 	entry.Outcome = outcome
+	entry.ReadEtag = readEtag
 }
 
 func blobOutcomeOf(err error, isWrite bool) BlobOutcome {
@@ -200,7 +215,7 @@ func (self *recordedBlobCluster) PutIfNoneMatch(ctx context.Context, key string,
 	entry.WriteEtag = self.recorder.etagOf(body)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutIfNoneMatch(ctx, key, body, options)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return newEtag, err
 }
 
@@ -210,7 +225,7 @@ func (self *recordedBlobCluster) PutIfMatch(ctx context.Context, key string, eta
 	entry.WriteEtag = self.recorder.etagOf(body)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutIfMatch(ctx, key, etag, body, options)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return newEtag, err
 }
 
@@ -223,7 +238,7 @@ func (self *recordedBlobCluster) PutStream(ctx context.Context, key string, body
 	entry.WriteEtag = self.recorder.etagOf(bodyBytes)
 	self.recorder.begin(ctx, entry)
 	newEtag, err := self.BlobCluster.PutStream(ctx, key, strings.NewReader(string(bodyBytes)), byteCount, checksumSha256)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return newEtag, err
 }
 
@@ -231,10 +246,11 @@ func (self *recordedBlobCluster) Get(ctx context.Context, key string) (*sidecar.
 	entry := self.entry(ctx, BlobHistoryGet, key)
 	self.recorder.begin(ctx, entry)
 	object, err := self.BlobCluster.Get(ctx, key)
+	readEtag := ""
 	if err == nil {
-		entry.ReadEtag = object.Etag
+		readEtag = object.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
 	return object, err
 }
 
@@ -242,10 +258,11 @@ func (self *recordedBlobCluster) GetRange(ctx context.Context, key string, offse
 	entry := self.entry(ctx, BlobHistoryGetRange, key)
 	self.recorder.begin(ctx, entry)
 	object, err := self.BlobCluster.GetRange(ctx, key, offset, byteCount)
+	readEtag := ""
 	if err == nil {
-		entry.ReadEtag = object.Etag
+		readEtag = object.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
 	return object, err
 }
 
@@ -253,18 +270,30 @@ func (self *recordedBlobCluster) Head(ctx context.Context, key string) (*sidecar
 	entry := self.entry(ctx, BlobHistoryHead, key)
 	self.recorder.begin(ctx, entry)
 	info, err := self.BlobCluster.Head(ctx, key)
+	readEtag := ""
 	if err == nil {
-		entry.ReadEtag = info.Etag
+		readEtag = info.Etag
 	}
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	self.recorder.end(entry, blobOutcomeOf(err, false), readEtag)
 	return info, err
 }
 
 func (self *recordedBlobCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
 	entry := self.entry(ctx, BlobHistoryList, keyPrefix)
 	self.recorder.begin(ctx, entry)
+	entry.StartAfter = startAfter
 	objects, more, err := self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
-	self.recorder.end(entry, blobOutcomeOf(err, false))
+	listedKeyEtags := map[string]string{}
+	for _, object := range objects {
+		listedKeyEtags[object.Key] = object.Etag
+	}
+	func() {
+		self.recorder.stateLock.Lock()
+		defer self.recorder.stateLock.Unlock()
+		entry.ListedKeyEtags = listedKeyEtags
+		entry.ListTruncated = more
+	}()
+	self.recorder.end(entry, blobOutcomeOf(err, false), "")
 	return objects, more, err
 }
 
@@ -272,7 +301,7 @@ func (self *recordedBlobCluster) Delete(ctx context.Context, key string) error {
 	entry := self.entry(ctx, BlobHistoryDelete, key)
 	self.recorder.begin(ctx, entry)
 	err := self.BlobCluster.Delete(ctx, key)
-	self.recorder.end(entry, blobOutcomeOf(err, true))
+	self.recorder.end(entry, blobOutcomeOf(err, true), "")
 	return err
 }
 
@@ -291,7 +320,8 @@ func (self *BlobHistoryEntry) nextStates(state blobModelState) []blobModelState 
 		outcome = BlobOutcomeUnknown
 	}
 	switch self.Op {
-	case BlobHistoryGet, BlobHistoryGetRange, BlobHistoryHead:
+	case BlobHistoryGet, BlobHistoryGetRange, BlobHistoryHead, BlobHistoryList:
+		// a LIST here is one key's share of it, as listedEntries makes it
 		switch outcome {
 		case BlobOutcomeOk:
 			if state.exists && state.etag == self.ReadEtag {
@@ -312,8 +342,6 @@ func (self *BlobHistoryEntry) nextStates(state blobModelState) []blobModelState 
 		case BlobOutcomeUnknown:
 			return []blobModelState{{}, state}
 		}
-		return []blobModelState{state}
-	case BlobHistoryList:
 		return []blobModelState{state}
 	}
 	// a PUT, whose condition says whether it could apply
@@ -341,10 +369,51 @@ func (self *BlobHistoryEntry) nextStates(state blobModelState) []blobModelState 
 	return []blobModelState{state}
 }
 
-// Whether this write, with no definite answer, could take effect at all: one issued past its deadline
-// could not, since the store refuses it (§19.6).
+func (self *BlobHistoryEntry) isWrite() bool {
+	switch self.Op {
+	case BlobHistoryPutIfNoneMatch, BlobHistoryPutIfMatch, BlobHistoryPutStream, BlobHistoryDelete:
+		return true
+	}
+	return false
+}
+
+func (self *BlobHistoryEntry) issuedPastDeadline() bool {
+	return !self.Deadline.IsZero() && !self.Invoked.Before(self.Deadline)
+}
+
+// Whether this write, with no acknowledgement, could take effect at all: one issued past its deadline
+// could not, since the store refuses it (§19.6). A read keeps whatever it saw, deadline or not, and
+// an acknowledged write issued past its deadline is a violation of its own (CheckBlobHistory).
 func (self *BlobHistoryEntry) deadOnArrival() bool {
-	return self.Outcome != BlobOutcomeOk && !self.Deadline.IsZero() && !self.Invoked.Before(self.Deadline)
+	return self.isWrite() && self.Outcome != BlobOutcomeOk && self.issuedPastDeadline()
+}
+
+// A LIST's share for each key it covers among keys: a read of that key, finding it with the ETag
+// listed or finding it absent. A LIST with no answer says nothing.
+func (self *BlobHistoryEntry) listedEntries(keys []string) []*BlobHistoryEntry {
+	if self.Outcome != BlobOutcomeOk {
+		return nil
+	}
+	last := ""
+	for key := range self.ListedKeyEtags {
+		last = max(last, key)
+	}
+	entries := []*BlobHistoryEntry{}
+	for _, key := range keys {
+		if !strings.HasPrefix(key, self.Key) || key <= self.StartAfter || (self.ListTruncated && last < key) {
+			continue
+		}
+		entry := *self
+		entry.Key = key
+		entry.ListedKeyEtags = nil
+		if etag, listed := self.ListedKeyEtags[key]; listed {
+			entry.ReadEtag = etag
+		} else {
+			entry.Outcome = BlobOutcomeNotFound
+		}
+		entries = append(entries, &entry)
+	}
+	return entries
 }
 
 // The last seq at which this request can take effect. An answered one, its answer's. One with no
@@ -435,12 +504,41 @@ func checkBlobKeyHistory(keyEntries []*BlobHistoryEntry, initial blobModelState)
 // for a history that begins after its key was written.
 func CheckBlobHistory(entries []*BlobHistoryEntry, initialEtags map[string]string) error {
 	keyEntries := map[string][]*BlobHistoryEntry{}
+	lists := []*BlobHistoryEntry{}
 	for _, entry := range entries {
-		if entry.Op == BlobHistoryList || entry.deadOnArrival() {
+		if entry.isWrite() && entry.Outcome == BlobOutcomeOk && entry.issuedPastDeadline() {
+			return fmt.Errorf("key %q: the store acknowledged a write issued past its deadline (§19.6)\n  %s", entry.Key, entry)
+		}
+		if entry.Op == BlobHistoryList {
+			lists = append(lists, entry)
+			continue
+		}
+		if entry.deadOnArrival() {
 			continue
 		}
 		clusterKey := entry.ClusterId + "\x00" + entry.Key
 		keyEntries[clusterKey] = append(keyEntries[clusterKey], entry)
+	}
+	for _, list := range lists {
+		keys := []string{}
+		for clusterKey := range keyEntries {
+			if clusterId, key, _ := strings.Cut(clusterKey, "\x00"); clusterId == list.ClusterId {
+				keys = append(keys, key)
+			}
+		}
+		for key := range initialEtags {
+			if _, ok := keyEntries[list.ClusterId+"\x00"+key]; !ok {
+				keys = append(keys, key)
+			}
+		}
+		for _, entry := range list.listedEntries(keys) {
+			clusterKey := entry.ClusterId + "\x00" + entry.Key
+			keyEntries[clusterKey] = append(keyEntries[clusterKey], entry)
+		}
+	}
+	for _, each := range keyEntries {
+		// in call order, as the search's seqs expect
+		slices.SortStableFunc(each, func(a *BlobHistoryEntry, b *BlobHistoryEntry) int { return cmp.Compare(a.InvokeSeq, b.InvokeSeq) })
 	}
 	clusterKeys := make([]string, 0, len(keyEntries))
 	for clusterKey := range keyEntries {

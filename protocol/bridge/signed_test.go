@@ -14,10 +14,14 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -34,6 +38,46 @@ var (
 	testEd25519Key = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x11}, ed25519.SeedSize))
 	testP256Scalar = bytes.Repeat([]byte{0x22}, 32)
 )
+
+// Relative to this package, as go test runs it on every leg.
+const testSignedOriginsPath = "../../testdata/signed/origins.json"
+
+// Reads the fixture origins once, since the fuzz targets reach them on every input.
+var testReadFixtureOrigins = sync.OnceValues(func() ([]string, error) {
+	encoded, err := os.ReadFile(testSignedOriginsPath)
+	if err != nil {
+		return nil, err
+	}
+	file := struct {
+		Origins []string `json:"origins"`
+	}{}
+	if err := json.Unmarshal(encoded, &file); err != nil {
+		return nil, err
+	}
+	// the tests take an https origin first and an Android one second, the two forms a release table holds
+	if len(file.Origins) != 2 || !strings.HasPrefix(file.Origins[0], "https://") ||
+		!strings.HasPrefix(file.Origins[1], "android:apk-key-hash:") {
+		return nil, fmt.Errorf("%s: want an https origin, then an android one: %q", testSignedOriginsPath, file.Origins)
+	}
+	return file.Origins, nil
+})
+
+// testdata/signed/origins.json's list, which every test verifies a webauthn-es256 assertion against in place of
+// webAuthnOrigins (QD-073), so no test or vector carries a release's value.
+func testFixtureOrigins(t testing.TB) []string {
+	origins, err := testReadFixtureOrigins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.Clone(origins)
+}
+
+// What a debug-signed build of the Android app reports: the Android form over another certificate than the fixture's
+// release one, so only the origin tells the two builds apart.
+func testDebugBuildOrigin() string {
+	certificateSha256 := sha256.Sum256([]byte("synthetic debug signing certificate"))
+	return "android:apk-key-hash:" + base64.RawURLEncoding.EncodeToString(certificateSha256[:])
+}
 
 // The verifying half of testEd25519Key, as a key record would hold it.
 func testEd25519Public() []byte {
@@ -89,31 +133,27 @@ type testWebAuthnAssertion struct {
 	flags           byte
 	clientType      string
 	challenge       string
+	origin          string
 	clientDataJson  []byte
 	authData        func(authenticatorData []byte) []byte // rewrites the data before it is signed
-	signSignedBytes bool
+	signSignedBytes bool                                  // signs the message itself, not the evidence
 }
 
-// An assertion every check passes, for a test to spoil one input of.
-func testGoodWebAuthnAssertion(purpose string, signedType SignedType, body []byte) *testWebAuthnAssertion {
+// An assertion every check passes against the fixture origins, for a test to spoil one input of.
+func testGoodWebAuthnAssertion(t testing.TB, purpose string, signedType SignedType, body []byte) *testWebAuthnAssertion {
 	challenge := sha256.Sum256(SignedBytes(purpose, signedType, body))
 	return &testWebAuthnAssertion{
 		rpId:       webAuthnRpId,
 		flags:      webAuthnFlagUserPresent | webAuthnFlagUserVerified,
 		clientType: webAuthnClientDataTypeGet,
 		challenge:  base64.RawURLEncoding.EncodeToString(challenge[:]),
+		origin:     testFixtureOrigins(t)[0],
 	}
 }
 
-// The Signed this assertion makes, its signature valid over whatever was spoiled, so a refusal comes from the check
-// a test aims at and not from the signature.
-func (self *testWebAuthnAssertion) sign(
-	t testing.TB,
-	key *ecdsa.PrivateKey,
-	purpose string,
-	signedType SignedType,
-	body []byte,
-) *Signed {
+// The evidence and signature this assertion makes over message, the signature valid over whatever was spoiled, so a
+// refusal comes from the check a test aims at and not from the signature.
+func (self *testWebAuthnAssertion) assert(t testing.TB, key *ecdsa.PrivateKey, message []byte) (*WebAuthnEvidence, []byte) {
 	rpIdHash := sha256.Sum256([]byte(self.rpId))
 	authenticatorData := append(rpIdHash[:], self.flags, 0x00, 0x00, 0x00, 0x07)
 	if self.authData != nil {
@@ -123,29 +163,35 @@ func (self *testWebAuthnAssertion) sign(
 	if clientDataJson == nil {
 		clientDataJson = fmt.Appendf(
 			nil,
-			`{"type":%q,"challenge":%q,"origin":"https://app.example"}`,
+			`{"type":%q,"challenge":%q,"origin":%q}`,
 			self.clientType,
 			self.challenge,
+			self.origin,
 		)
 	}
 	clientDataHash := sha256.Sum256(clientDataJson)
 	digest := sha256.New()
 	digest.Write(authenticatorData)
 	digest.Write(clientDataHash[:])
-	message := digest.Sum(nil)
+	signedDigest := digest.Sum(nil)
 	if self.signSignedBytes {
-		signedDigest := sha256.Sum256(SignedBytes(purpose, signedType, body))
-		message = signedDigest[:]
+		messageDigest := sha256.Sum256(message)
+		signedDigest = messageDigest[:]
 	}
-	return &Signed{
-		Body:      body,
-		Signature: testSignDigest(t, key, message),
-		Webauthn: &WebAuthnEvidence{
-			AuthenticatorData: authenticatorData,
-			ClientDataJson:    clientDataJson,
-		},
-		Type: uint32(signedType),
-	}
+	evidence := &WebAuthnEvidence{AuthenticatorData: authenticatorData, ClientDataJson: clientDataJson}
+	return evidence, testSignDigest(t, key, signedDigest)
+}
+
+// The Signed this assertion makes for a statement.
+func (self *testWebAuthnAssertion) sign(
+	t testing.TB,
+	key *ecdsa.PrivateKey,
+	purpose string,
+	signedType SignedType,
+	body []byte,
+) *Signed {
+	evidence, signature := self.assert(t, key, SignedBytes(purpose, signedType, body))
+	return &Signed{Body: body, Signature: signature, Webauthn: evidence, Type: uint32(signedType)}
 }
 
 // Every value but 0, from the enum itself, so a value an owner adds joins each pair test by being declared.
@@ -181,6 +227,7 @@ func TestSignedBytesLayout(t *testing.T) {
 // Fixed vectors, so a change to the layout or a primitive cannot pass by changing signer and verifier
 // together.
 func TestVerifySignedFixedVectors(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	cases := []struct {
 		alg       SignedKeyAlg
 		publicKey string
@@ -204,13 +251,14 @@ func TestVerifySignedFixedVectors(t *testing.T) {
 			alg: SignedKeyAlgWebAuthnEs256,
 			publicKey: "04d65a93977caa3d1b081852ff57a79e465f1660577304baead505dd3a48589cf3" +
 				"50185e895372df6221ea3a137557e473fddb6755f05bd507c3c533fce9c91285",
-			signature: "30450220376cb2453793faf17a218313aaebf8dfba4c6542d25c032fa3aefba94ac23fee" +
-				"022100dffbf01157c58666a03259dfe9b473f4dd74f1b5d5a83cf42c750a0754acea7d",
+			signature: "3045022100bfb5b55ea81ac12b531db8cea944c9e092c703a7036b4ce5ca463a4b4cad7ff5" +
+				"022058a36f868c21fc42f9fc0b50e4286df7cecd6562926d0e66a7e97cf84da2dd0f",
 			evidence: &WebAuthnEvidence{
 				AuthenticatorData: testFromHex(t, "b70e6f0e528a7b4e942210fb178091e069f512f53fb3ea0c8eb1702ddefcec7d0500000007"),
+				// the first of testdata/signed/origins.json's
 				ClientDataJson: []byte(`{"type":"webauthn.get",` +
 					`"challenge":"Wgf1L4DyViZmREZLUP7fKmjcUFWB9BsnogEEUW0v6fs",` +
-					`"origin":"https://app.example"}`),
+					`"origin":"https://presence.example"}`),
 			},
 		},
 	}
@@ -221,12 +269,13 @@ func TestVerifySignedFixedVectors(t *testing.T) {
 			Webauthn:  c.evidence,
 			Type:      uint32(SignedType_SIGNED_BRIDGE_WITHDRAW),
 		}
-		err := VerifySigned(
+		err := verifySigned(
 			signed,
 			testPurpose,
 			SignedType_SIGNED_BRIDGE_WITHDRAW,
 			c.alg,
 			testFromHex(t, c.publicKey),
+			origins,
 		)
 		if err != nil {
 			t.Errorf("alg %d: %v", c.alg, err)
@@ -389,6 +438,7 @@ func TestVerifySignedRefusesNilSigned(t *testing.T) {
 
 // Every bit of the body and of the signature is covered, on both plain algorithms.
 func TestVerifySignedRefusesEveryBitFlip(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
 	p256Key, p256Public := testP256Key(t)
@@ -401,14 +451,14 @@ func TestVerifySignedRefusesEveryBitFlip(t *testing.T) {
 		{alg: SignedKeyAlgEcdsaP256, publicKey: p256Public, signed: testSignP256(t, p256Key, purpose, signedType, testBody)},
 	}
 	for _, c := range cases {
-		if err := VerifySigned(c.signed, purpose, signedType, c.alg, c.publicKey); err != nil {
+		if err := verifySigned(c.signed, purpose, signedType, c.alg, c.publicKey, origins); err != nil {
 			t.Fatalf("alg %d: %v", c.alg, err)
 		}
 		for _, field := range [][]byte{c.signed.Body, c.signed.Signature} {
 			for i := range field {
 				for bit := range 8 {
 					field[i] ^= 1 << bit
-					if VerifySigned(c.signed, purpose, signedType, c.alg, c.publicKey) == nil {
+					if verifySigned(c.signed, purpose, signedType, c.alg, c.publicKey, origins) == nil {
 						t.Errorf("alg %d: byte %d bit %d flipped and still verified", c.alg, i, bit)
 					}
 					field[i] ^= 1 << bit
@@ -474,6 +524,7 @@ func TestVerifySignedRefusesMalformedEd25519Keys(t *testing.T) {
 
 // Anything but an uncompressed point on the curve is a refusal for both P-256 algorithms, before any signature runs.
 func TestVerifySignedRefusesMalformedP256Keys(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
 	p256Key, p256Public := testP256Key(t)
@@ -486,14 +537,14 @@ func TestVerifySignedRefusesMalformedP256Keys(t *testing.T) {
 	publicKeys := [][]byte{nil, {}, {0x00}, compressed, offCurve, wrongPrefix, p256Public[1:], testEd25519Public()}
 
 	signed := testSignP256(t, p256Key, purpose, signedType, testBody)
-	assertion := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+	assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
 	webAuthnSigned := assertion.sign(t, p256Key, purpose, signedType, testBody)
 	for i, publicKey := range publicKeys {
 		err := VerifySigned(signed, purpose, signedType, SignedKeyAlgEcdsaP256, publicKey)
 		if !errors.Is(err, ErrSignedKey) {
 			t.Errorf("ecdsa key %d: %v", i, err)
 		}
-		err = VerifySigned(webAuthnSigned, purpose, signedType, SignedKeyAlgWebAuthnEs256, publicKey)
+		err = verifySigned(webAuthnSigned, purpose, signedType, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 		if !errors.Is(err, ErrSignedKey) {
 			t.Errorf("webauthn key %d: %v", i, err)
 		}
@@ -502,11 +553,12 @@ func TestVerifySignedRefusesMalformedP256Keys(t *testing.T) {
 
 // Zero is unset, so a caller that forgot to read the key record fails closed.
 func TestVerifySignedRefusesUnknownAlg(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
 	signed := testSignEd25519(purpose, signedType, testBody)
 	for _, alg := range []SignedKeyAlg{0, 4, -1} {
-		err := VerifySigned(signed, purpose, signedType, alg, testEd25519Public())
+		err := verifySigned(signed, purpose, signedType, alg, testEd25519Public(), origins)
 		if !errors.Is(err, ErrSignedKey) {
 			t.Errorf("alg %d: %v", alg, err)
 		}
@@ -536,6 +588,7 @@ func TestVerifySignedRefusesNonDerEcdsaSignatures(t *testing.T) {
 // §6.9's rule: evidence without its key_id only for a webauthn-es256 signer, and with it, a
 // countersignature, only beside an identity key's signature.
 func TestVerifySignedEvidenceMustFit(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := testPurpose
 	signedType := SignedType_SIGNED_BRIDGE_WITHDRAW
 	p256Key, p256Public := testP256Key(t)
@@ -550,7 +603,7 @@ func TestVerifySignedEvidenceMustFit(t *testing.T) {
 		return signed
 	}
 	webAuthnSigned := func(mutate func(evidence *WebAuthnEvidence)) *Signed {
-		assertion := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+		assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
 		signed := assertion.sign(t, p256Key, purpose, signedType, testBody)
 		if mutate != nil {
 			mutate(signed.Webauthn)
@@ -676,7 +729,7 @@ func TestVerifySignedEvidenceMustFit(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		err := VerifySigned(c.signed, purpose, signedType, c.alg, c.publicKey)
+		err := verifySigned(c.signed, purpose, signedType, c.alg, c.publicKey, origins)
 		if !errors.Is(err, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
 		}
@@ -703,18 +756,21 @@ func TestVerifySignedLeavesCountersignatureUnchecked(t *testing.T) {
 }
 
 // Every clause of §16.6's per-use profile that needs no state, each spoiled before signing, so the
-// signature itself stays valid and only the clause can refuse it.
+// signature itself stays valid and only the clause can refuse it. The origin is one of them (QD-073): it
+// must equal a listed one exactly, and a refused origin names itself.
 func TestVerifySignedWebAuthnProfile(t *testing.T) {
 	purpose := "approval"
 	signedType := SignedType_SIGNED_APPROVAL_DECISION
 	otherBytes := sha256.Sum256(SignedBytes(purpose, SignedType_SIGNED_APPROVAL_CANCEL, testBody))
 	body := sha256.Sum256(testBody)
-	good := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+	good := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
+	origins := testFixtureOrigins(t)
 
 	cases := []struct {
 		name   string
 		mutate func(assertion *testWebAuthnAssertion)
 		want   error
+		reason string
 	}{
 		{
 			name: "good",
@@ -831,6 +887,76 @@ func TestVerifySignedWebAuthnProfile(t *testing.T) {
 			want: ErrSignedEvidence,
 		},
 		{
+			name: "the other listed origin, an android one",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = origins[1]
+			},
+		},
+		{
+			name: "an unlisted origin",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = "https://phish.example"
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "no origin",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = ""
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "an origin that only begins a listed one",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = origins[0] + ".example"
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "a subdomain of a listed origin",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = strings.Replace(origins[0], "https://", "https://sub.", 1)
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "a listed origin's host over another scheme",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = strings.Replace(origins[0], "https://", "http://", 1)
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "a listed origin with a path",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = origins[0] + "/"
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "a debug-signed android build",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = testDebugBuildOrigin()
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "the listed android hash padded",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = origins[1] + "="
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
 			name: "signature over the signed bytes, not the evidence",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.signSignedBytes = true
@@ -840,14 +966,14 @@ func TestVerifySignedWebAuthnProfile(t *testing.T) {
 	}
 	p256Key, p256Public := testP256Key(t)
 	for _, c := range cases {
-		assertion := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+		assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
 		if c.mutate != nil {
 			c.mutate(assertion)
 		}
 		signed := assertion.sign(t, p256Key, purpose, signedType, testBody)
-		err := VerifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
-		if !errors.Is(err, c.want) {
-			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+		err := verifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public, origins)
+		if !errors.Is(err, c.want) || (c.reason != "" && !strings.Contains(err.Error(), c.reason)) {
+			t.Errorf("%s: got %v, want %v for %q", c.name, err, c.want, c.reason)
 		}
 	}
 }
@@ -857,24 +983,25 @@ func TestVerifySignedWebAuthnProfile(t *testing.T) {
 // under test, and every assertion is validly signed, so only the size can refuse it. What follows the counter is
 // extension data, which nothing here reads.
 func TestVerifySignedWebAuthnAuthenticatorDataFloor(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := "approval"
 	signedType := SignedType_SIGNED_APPROVAL_DECISION
 	p256Key, p256Public := testP256Key(t)
 	signedOfSize := func(size int) *Signed {
-		assertion := testGoodWebAuthnAssertion(purpose, signedType, testBody)
+		assertion := testGoodWebAuthnAssertion(t, purpose, signedType, testBody)
 		assertion.authData = func(authenticatorData []byte) []byte {
 			return append(authenticatorData, make([]byte, 64)...)[:size]
 		}
 		return assertion.sign(t, p256Key, purpose, signedType, testBody)
 	}
 	for size := range 37 {
-		err := VerifySigned(signedOfSize(size), purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
+		err := verifySigned(signedOfSize(size), purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public, origins)
 		if !errors.Is(err, ErrSignedEvidence) {
 			t.Errorf("%d bytes: %v", size, err)
 		}
 	}
 	for _, size := range []int{37, 38, 64} {
-		err := VerifySigned(signedOfSize(size), purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
+		err := verifySigned(signedOfSize(size), purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public, origins)
 		if err != nil {
 			t.Errorf("%d bytes: %v", size, err)
 		}
@@ -884,22 +1011,25 @@ func TestVerifySignedWebAuthnAuthenticatorDataFloor(t *testing.T) {
 // The evidence is what the signature covers, so changing it after signing is a signature failure, and
 // the challenge in it is what ties it to this statement.
 func TestVerifySignedWebAuthnEvidenceIsSigned(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := "approval"
 	signedType := SignedType_SIGNED_APPROVAL_DECISION
 	p256Key, p256Public := testP256Key(t)
-	signed := testGoodWebAuthnAssertion(purpose, signedType, testBody).sign(t, p256Key, purpose, signedType, testBody)
+	signed := testGoodWebAuthnAssertion(t, purpose, signedType, testBody).sign(t, p256Key, purpose, signedType, testBody)
 
 	// The counter sits past every field the profile reads, so only the signature can see it change.
 	counter := len(signed.Webauthn.AuthenticatorData) - 1
 	signed.Webauthn.AuthenticatorData[counter] ^= 0x01
-	err := VerifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
+	err := verifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public, origins)
 	if !errors.Is(err, ErrSignedSignature) {
 		t.Errorf("counter: %v", err)
 	}
 	signed.Webauthn.AuthenticatorData[counter] ^= 0x01
 
-	signed.Webauthn.ClientDataJson = bytes.Replace(signed.Webauthn.ClientDataJson, []byte("app.example"), []byte("rp2.example"), 1)
-	err = VerifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public)
+	// Another listed origin, so the origin check passes and only the signature can refuse it.
+	clientDataJson := signed.Webauthn.ClientDataJson
+	signed.Webauthn.ClientDataJson = bytes.Replace(clientDataJson, []byte(origins[0]), []byte(origins[1]), 1)
+	err = verifySigned(signed, purpose, signedType, SignedKeyAlgWebAuthnEs256, p256Public, origins)
 	if !errors.Is(err, ErrSignedSignature) {
 		t.Errorf("origin: %v", err)
 	}
@@ -908,13 +1038,14 @@ func TestVerifySignedWebAuthnEvidenceIsSigned(t *testing.T) {
 // §6.9: WebAuthn's challenge is the SHA-256 of the signed bytes, so it covers the type. A statement
 // rewritten to another type carries a challenge for the wrong bytes.
 func TestVerifySignedWebAuthnChallengeCoversType(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := "approval"
 	signedType := SignedType_SIGNED_APPROVAL_DECISION
 	otherType := SignedType_SIGNED_APPROVAL_CANCEL
 	p256Key, p256Public := testP256Key(t)
-	signed := testGoodWebAuthnAssertion(purpose, signedType, testBody).sign(t, p256Key, purpose, signedType, testBody)
+	signed := testGoodWebAuthnAssertion(t, purpose, signedType, testBody).sign(t, p256Key, purpose, signedType, testBody)
 	signed.Type = uint32(otherType)
-	err := VerifySigned(signed, purpose, otherType, SignedKeyAlgWebAuthnEs256, p256Public)
+	err := verifySigned(signed, purpose, otherType, SignedKeyAlgWebAuthnEs256, p256Public, origins)
 	if !errors.Is(err, ErrSignedEvidence) {
 		t.Fatal(err)
 	}
@@ -994,6 +1125,7 @@ func TestSignedBytesSha256FixedVector(t *testing.T) {
 // could carry the grant again after its RepoRevoke. The signed bytes' hash is the same for all of them, so a check
 // keyed on it refuses every one after the first.
 func TestSignedBytesSha256NamesEveryRewrittenSigned(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := testOtherPurpose
 	signedType := SignedType_SIGNED_REPO_GRANT
 	p256Key, p256Public := testP256Key(t)
@@ -1052,7 +1184,7 @@ func TestSignedBytesSha256NamesEveryRewrittenSigned(t *testing.T) {
 		if err := proto.Unmarshal(c.encoded, decoded); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if err := VerifySigned(decoded, purpose, signedType, c.alg, c.publicKey); err != nil {
+		if err := verifySigned(decoded, purpose, signedType, c.alg, c.publicKey, origins); err != nil {
 			t.Errorf("%s: %v", c.name, err)
 		}
 		// Two forms alike would prove less than this claims.
@@ -1256,7 +1388,7 @@ func testFuzzSeeds(t testing.TB) []testFuzzSeed {
 	p256Spoiled := marshal(p256Signed)
 
 	webAuthn := func(mutate func(assertion *testWebAuthnAssertion)) []byte {
-		assertion := testGoodWebAuthnAssertion(purpose, testFuzzType, testBody)
+		assertion := testGoodWebAuthnAssertion(t, purpose, testFuzzType, testBody)
 		if mutate != nil {
 			mutate(assertion)
 		}
@@ -1266,7 +1398,7 @@ func testFuzzSeeds(t testing.TB) []testFuzzSeed {
 	withAssertion := testSignEd25519(purpose, testFuzzType, testBody)
 	withAssertion.Webauthn = &WebAuthnEvidence{AuthenticatorData: []byte("not an assertion")}
 	webAuthnEvidence := func(mutate func(evidence *WebAuthnEvidence)) []byte {
-		signed := testGoodWebAuthnAssertion(purpose, testFuzzType, testBody).sign(t, p256Key, purpose, testFuzzType, testBody)
+		signed := testGoodWebAuthnAssertion(t, purpose, testFuzzType, testBody).sign(t, p256Key, purpose, testFuzzType, testBody)
 		mutate(signed.Webauthn)
 		return marshal(signed)
 	}
@@ -1407,6 +1539,15 @@ func testFuzzSeeds(t testing.TB) []testFuzzSeed {
 			want:     ErrSignedEvidence,
 		},
 		{
+			name: "webauthn, an unlisted origin",
+			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
+				assertion.origin = testDebugBuildOrigin()
+			}),
+			expected: testFuzzType,
+			alg:      SignedKeyAlgWebAuthnEs256,
+			want:     ErrSignedEvidence,
+		},
+		{
 			name: "webauthn, signature over the signed bytes",
 			encoded: webAuthn(func(assertion *testWebAuthnAssertion) {
 				assertion.signSignedBytes = true
@@ -1421,13 +1562,14 @@ func testFuzzSeeds(t testing.TB) []testFuzzSeed {
 // Holds the corpus to its purpose: if a change to a seed or to the target left an algorithm's verifier out of reach,
 // as a single Ed25519 key once did, its seeds would stop answering as written here.
 func TestFuzzSeedsReachEveryCheck(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	publicKeys := testFuzzPublicKeys(t)
 	for _, seed := range testFuzzSeeds(t) {
 		signed := &Signed{}
 		if err := proto.Unmarshal(seed.encoded, signed); err != nil {
 			t.Fatalf("%s: %v", seed.name, err)
 		}
-		err := VerifySigned(signed, testPurpose, seed.expected, seed.alg, publicKeys[seed.alg])
+		err := verifySigned(signed, testPurpose, seed.expected, seed.alg, publicKeys[seed.alg], origins)
 		if !errors.Is(err, seed.want) {
 			t.Errorf("%s: got %v, want %v", seed.name, err, seed.want)
 		}
@@ -1437,6 +1579,7 @@ func TestFuzzSeedsReachEveryCheck(t *testing.T) {
 // Decoding and verifying are total on arbitrary input under every algorithm, and only the fixed statement's own bytes
 // pass: whatever a mutation does to a Signed, a nil result means the body and type are the ones that were signed.
 func FuzzVerifySigned(f *testing.F) {
+	origins := testFixtureOrigins(f)
 	seeds := testFuzzSeeds(f)
 	for _, seed := range seeds {
 		f.Add(seed.encoded, int32(seed.expected), int(seed.alg))
@@ -1454,9 +1597,9 @@ func FuzzVerifySigned(f *testing.F) {
 		expectedType := SignedType(expected)
 		keyAlg := SignedKeyAlg(alg)
 		// A key record is input too, so this must not panic, whatever it answers: an input may hold its own key.
-		_ = VerifySigned(signed, testPurpose, expectedType, keyAlg, signed.GetKeyId())
+		_ = verifySigned(signed, testPurpose, expectedType, keyAlg, signed.GetKeyId(), origins)
 
-		err := VerifySigned(signed, testPurpose, expectedType, keyAlg, publicKeys[keyAlg])
+		err := verifySigned(signed, testPurpose, expectedType, keyAlg, publicKeys[keyAlg], origins)
 		if err != nil {
 			return
 		}

@@ -1,0 +1,3 @@
+go test fuzz v1
+string("PushHint")
+[]byte("\b\xac\x02\b\xad\x02\x12(evs:00000000-0000-0000-0000-000000000000\x12\x03gkm")

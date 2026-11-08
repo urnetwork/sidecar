@@ -47,6 +47,17 @@ func TestCgoFailsOnTheKeychainFileOutsideTheFallbackLeg(t *testing.T) {
 	wantFindings(t, fixture.open().cgoLegFindings(t), "cgo darwin/arm64 compiles the cgo file keychain_darwin.go in @module@")
 }
 
+// The leg reading holds the package as the syntax reading does: on the fallback leg the name passes
+// only in cli/ or the root, and a file in a directory the syntax walk skips is read here alone.
+func TestCgoFailsOnAKeychainFileInAnotherPackageOnTheFallbackLeg(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli darwin/arm64 keychain fallback")
+	fixture.write("testdata/planted/keychain_darwin.go", "package planted\n\nimport \"C\"\n")
+	fixture.write("cli/planted.go", "package main\n\nimport _ \"@module@/testdata/planted\"\n")
+	wantFindings(t, fixture.open().cgoLegFindings(t),
+		"cli darwin/arm64 keychain fallback compiles the cgo file keychain_darwin.go in @module@/testdata/planted")
+}
+
 func TestCgoAllowsTheKeychainFileOnTheFallbackLeg(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("cli darwin/arm64 keychain fallback", "cli darwin/arm64", "cgo linux/amd64", "gomobile macos/arm64")
