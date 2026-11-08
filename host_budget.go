@@ -257,6 +257,7 @@ type WriteBudget interface {
 	CopyOpsPerSecond(clusterId string) int
 }
 
+// The ctx key a write's class rides under.
 type writeClassKey struct{}
 
 // ctx carrying class. Only a WriteBudget calls this, as it passes a write: a write that marks its own
