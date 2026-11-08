@@ -203,42 +203,52 @@ const ClosedServiceGatesRetryAfter = 60 * time.Second
 // network is admitted, and every cluster has passed nothing.
 type ClosedServiceGates struct{}
 
+// Closed, for every service.
 func (self ClosedServiceGates) Service(service string) ServiceGate {
 	return ServiceGate{}
 }
 
+// Admits nothing and deletes nothing.
 func (self ClosedServiceGates) Format2() Format2Gate {
 	return Format2Gate{}
 }
 
+// Off, for every switch.
 func (self ClosedServiceGates) Switch(name string) bool {
 	return false
 }
 
+// The first cluster.
 func (self ClosedServiceGates) PlaceNew() string {
 	return ""
 }
 
+// Off.
 func (self ClosedServiceGates) Reseed() bool {
 	return false
 }
 
+// None.
 func (self ClosedServiceGates) Drained() []string {
 	return nil
 }
 
+// Unset, so the engine keeps its own.
 func (self ClosedServiceGates) SocketsControlQps() (float64, int, bool) {
 	return 0, 0, false
 }
 
+// Unset.
 func (self ClosedServiceGates) UrnetworkEdge() (connect.Id, bool) {
 	return connect.Id{}, false
 }
 
+// Nothing passed.
 func (self ClosedServiceGates) FileCluster(clusterId string) FileClusterGate {
 	return FileClusterGate{}
 }
 
+// §19.11's reread interval.
 func (self ClosedServiceGates) RetryAfter() time.Duration {
 	return ClosedServiceGatesRetryAfter
 }

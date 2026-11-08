@@ -34,14 +34,17 @@ type Clock interface {
 // Real time: the clock a nil Clock reads, and the one place in the root that calls time's clock.
 type RealClock struct{}
 
+// The system's time.
 func (self RealClock) Now() time.Time {
 	return time.Now()
 }
 
+// time.After's channel.
 func (self RealClock) After(timeout time.Duration) <-chan time.Time {
 	return time.After(timeout)
 }
 
+// time.AfterFunc's call, on its own goroutine, stopped by its timer's Stop.
 func (self RealClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
 	return time.AfterFunc(timeout, function).Stop
 }
