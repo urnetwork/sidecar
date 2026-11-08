@@ -39,7 +39,7 @@ func mlsStageExternalCommit(suite *mlsCipherSuite, settings *mlsGroupSettings, c
 	template := &mlsLeafNode{
 		signatureKey:   []byte(identity.signatureKey.Public().(ed25519.PublicKey)),
 		credential:     identity.credential,
-		capabilities:   mlsSubsetCapabilities(suite),
+		capabilities:   identity.leafCapabilities(suite),
 		leafNodeSource: mlsLeafNodeSourceCommit,
 	}
 

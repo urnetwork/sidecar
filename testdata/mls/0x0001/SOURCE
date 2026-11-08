@@ -1,0 +1,34 @@
+Owner decision 43's differential against thomas-vilte/mls-go v1.6.0 under suite 0x0001 (§10.4), in the
+mlswg's passive-client form (test-vectors.md at the commit testdata/mls/mlswg/SOURCE names): cipher_suite,
+key_package, signature_priv, encryption_priv, init_priv, welcome, ratchet_tree, initial_epoch_authenticator,
+and epochs of {proposals, commit, epoch_authenticator}, hex throughout. ratchet_tree is null when the
+Welcome's GroupInfo carries the tree. Every leaf carries a basic credential, every member commit is a
+PrivateMessage, and every key is a fresh test key of the run that recorded it.
+
+mlsgo.json
+    mls-go's writing. One run of mlsinterop's TestMlsGoLifecycle, mls-go v1.6.0 alone, recorded
+    2026-11-08 from the views of its passive members P and Q, who join the first Welcome and commit
+    nothing. Their 12 commits each: path commits, Adds with their Welcomes, Removes, an external
+    commit with ExternalInit, and a resync, an external commit removing its joiner's old leaf.
+    sha256 2350888aa636a86b22b94761422cba7cae02445f6a82dd9f9157c699cba5fd8e
+
+mls.json
+    mls_*'s writing. One run of the root's TestMlsGoContinuation, recorded 2026-11-08 against the
+    mlsgo.json above: mls_* joins that group as P and goes on committing in it. Its first view is Q's,
+    mlsgo.json's 12 commits and then mls_*'s 8: path commits, an Add with no path and its Welcome, a
+    Remove of one of mls-go's members, an external commit with ExternalInit from mls_*'s own
+    GroupInfo, a Remove of that joiner. Its second is R's, the joiner mls_* added, its join alone:
+    mls_*'s Welcome carries no tree (§10.6), and mls-go takes a tree from nowhere else.
+    sha256 7e775b2ce8312e26fd651386b700360f625c6f95106a9c2d5c8253cf9f7695e7
+
+Every test.sh replays each file through both stacks: the root's TestMlsGoTranscripts through mls_*, and
+mlsinterop's TestMlsGoReplaysTheTranscripts through mls-go. A new mls-go pin reruns them, and
+TestMlsGoIsPinned fails until they are recorded again (D-TEST-7).
+
+To record new runs, mlsgo.json first, from mlsinterop/:
+    MLSINTEROP_MLSGO_TRANSCRIPT_OUT=$PWD/../testdata/mls/0x0001/mlsgo.json \
+        go test -count=1 -run TestMlsGoLifecycle .
+then, from the root:
+    SIDECAR_MLS_TRANSCRIPT_OUT=$PWD/testdata/mls/0x0001/mls.json \
+        go test -count=1 -run TestMlsGoContinuation .
+and update the sha256s above.

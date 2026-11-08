@@ -290,7 +290,7 @@ func newMlsGroup(suite *mlsCipherSuite, settings *mlsGroupSettings, credentialVa
 		encryptionKey:  leafKey.PublicKey().Bytes(),
 		signatureKey:   []byte(identity.signatureKey.Public().(ed25519.PublicKey)),
 		credential:     identity.credential,
-		capabilities:   mlsSubsetCapabilities(suite),
+		capabilities:   identity.leafCapabilities(suite),
 		leafNodeSource: mlsLeafNodeSourceKeyPackage,
 		lifetime:       lifetime,
 	}
@@ -413,9 +413,9 @@ type mlsCommitInput struct {
 
 // The proposals a member commit holds, sorted by type, once RFC §12.2's list rules and the subset's hold.
 type mlsCommitProposals struct {
-	adds                   []*mlsKeyPackage
-	removes                []mlsLeafIndex
-	groupContextExtensions []mlsExtension
+	adds                      []*mlsKeyPackage
+	removes                   []mlsLeafIndex
+	groupContextExtensions    []mlsExtension
 	hasGroupContextExtensions bool
 }
 

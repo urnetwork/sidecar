@@ -55,13 +55,21 @@ const (
 // or a Delay parking its caller.
 const FaultFired = "fault.fired"
 
-// A tier a row runs on (§22.4).
+// A tier a row runs on (§22.4): T2's fakes in one process, T3's real stores and server's exchange,
+// T4's device and SDK cells.
 type Tier string
 
 const (
 	TierT2 Tier = "T2"
 	TierT3 Tier = "T3"
+	TierT4 Tier = "T4"
 )
+
+// Makes a fresh Schedule on net each call. Every rule across runs reruns it, the explorer's seeds,
+// every write's lost response, a twin and a replay, so a schedule built once and shared would carry
+// one run's state into the next. A row registers one (Register), and its T2 and T3 tests run the same
+// one.
+type Builder func(net *Net) *Schedule
 
 type Schedule struct {
 	// "FS-1".
