@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"hosts\": {\"Office\": \"192.0.2.1\"}}")

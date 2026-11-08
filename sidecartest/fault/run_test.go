@@ -856,3 +856,110 @@ func (self *lateLandingCluster) PutIfNoneMatch(ctx context.Context, key string, 
 	self.store.pendingBody = body
 	return "", &sidecar.BlobUnknownError{Err: errors.New("the answer never came")}
 }
+
+// Three writes, the row's own fault armed first, each write reread after an unknown or refused answer,
+// as §11.8 says.
+func threeWrites(plan *FaultPlan) *Schedule {
+	return &Schedule{
+		Id: "three-writes",
+		Steps: []*Step{
+			{Fault: plan},
+			{Actor: "evs1", Action: func(ctx context.Context, net *Net) error {
+				cluster, err := net.Host().Blobs.FirstCluster()
+				if err != nil {
+					return err
+				}
+				for _, key := range []string{"a/_", "b/_", "c/_"} {
+					if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("v"), nil); err != nil {
+						if _, err := cluster.Head(ctx, key); err != nil && !errors.Is(err, sidecar.ErrBlobNotFound) {
+							return err
+						}
+					}
+				}
+				return nil
+			}},
+		},
+		Check: []Invariant{UnknownDeletesNothing, FI(30)},
+	}
+}
+
+// Every write runs with its response lost, the one the row fails before apply included: the failure
+// gives way, counted as fired, since its caller could not have told the two apart.
+func TestEveryWriteUnknownCountsAWriteTheRowFaultsItself(t *testing.T) {
+	builds := 0
+	failures := RunEveryWriteUnknown(t.Context(), func(net *Net) *Schedule {
+		builds += 1
+		return threeWrites(&FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "a/", Result: FailBeforeApply})
+	}, nil)
+	for _, failure := range failures {
+		t.Errorf("%s", failure)
+	}
+	if builds != 4 {
+		t.Errorf("%d builds: want one to count and one for each of the 3 writes", builds)
+	}
+}
+
+// A write the row holds keeps its hold, which is the row's own case, and no plan goes unfired.
+func TestEveryWriteUnknownLeavesARowsOwnHold(t *testing.T) {
+	builds := 0
+	failures := RunEveryWriteUnknown(t.Context(), func(net *Net) *Schedule {
+		builds += 1
+		return threeWrites(&FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "b/", Result: Held})
+	}, nil)
+	for _, failure := range failures {
+		t.Errorf("%s", failure)
+	}
+	if builds != 3 {
+		t.Errorf("%d builds: want one to count and one for each write the row does not hold", builds)
+	}
+}
+
+// An actor blocked where no barrier sees it loses the baton at the stall timeout, and the actor behind
+// it runs out of the schedule's order. The run fails rather than pass under an order it did not choose.
+func TestARunInWhichAnActorStalledFails(t *testing.T) {
+	settings := sidecartest.DefaultNetSettings()
+	settings.Barriers.StallTimeout = 1 * time.Millisecond
+	net := sidecartest.NewNet(t.Context(), settings)
+	defer net.Close()
+	gate := make(chan struct{})
+	result := Run(t.Context(), &Schedule{
+		Id: "stall",
+		Steps: []*Step{
+			// started first, so it takes the baton first, and keeps it waiting where no barrier sees
+			{Actor: "writerA", Background: true, Action: func(ctx context.Context, net *Net) error {
+				<-gate
+				return nil
+			}},
+			{Actor: "writerB", Action: func(ctx context.Context, net *Net) error {
+				close(gate)
+				return nil
+			}},
+		},
+	}, net)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "writerA stalled") {
+		t.Errorf("%s", result)
+	}
+}
+
+// A row whose connect clients run on the fake contract issuer and ControlId sink names T3, where a
+// divergence from server's exchange fails (Q-TEST-1). One that does not fails here.
+func TestARowOnThePlatformFakesNamesT3(t *testing.T) {
+	run := func(tiers []Tier) *Result {
+		net := sidecartest.NewNet(t.Context(), nil)
+		defer net.Close()
+		return Run(t.Context(), &Schedule{
+			Id: "platform-fakes",
+			Steps: []*Step{
+				{Actor: "daemonM", Action: func(ctx context.Context, net *Net) error {
+					net.AddClient("m", nil)
+					return nil
+				}},
+			},
+			Tiers: tiers,
+		}, net)
+	}
+	if result := run(nil); result.Err == nil || !strings.Contains(result.Err.Error(), "Q-TEST-1") {
+		t.Errorf("%s", result)
+	}
+	wantPass(t, run([]Tier{TierT2, TierT3}))
+}

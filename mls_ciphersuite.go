@@ -88,14 +88,14 @@ func newMlsCipherSuite(value uint16, kem hpke.KEM) *mlsCipherSuite {
 	}
 }
 
-// Hash.
+// The suite's hash of data.
 func (self *mlsCipherSuite) hash(data []byte) []byte {
 	hasher := self.newHash()
 	hasher.Write(data)
 	return hasher.Sum(nil)
 }
 
-// MAC, the suite's HMAC.
+// The suite's HMAC of data under key.
 func (self *mlsCipherSuite) mac(key []byte, data []byte) []byte {
 	hasher := hmac.New(self.newHash, key)
 	hasher.Write(data)
@@ -117,7 +117,7 @@ func (self *mlsCipherSuite) extract(kind string, salt []byte, inputKey []byte) (
 	return extracted, nil
 }
 
-// ExpandWithLabel (RFC §8).
+// Expands secret under a label and context (RFC §8), hooking the output as kind.
 func (self *mlsCipherSuite) expandWithLabel(kind string, secret []byte, label string, context []byte, length int) ([]byte, error) {
 	if length < 0 || 0xffff < length {
 		return nil, fmt.Errorf("mls: expand length %d", length)
@@ -138,19 +138,19 @@ func (self *mlsCipherSuite) expandWithLabel(kind string, secret []byte, label st
 	return expanded, nil
 }
 
-// DeriveSecret (RFC §8).
+// A secret of the hash's length, expanded under a label with no context (RFC §8).
 func (self *mlsCipherSuite) deriveSecret(kind string, secret []byte, label string) ([]byte, error) {
 	return self.expandWithLabel(kind, secret, label, nil, self.hashLength)
 }
 
-// DeriveTreeSecret (RFC §9.1): the generation is the context, as a big-endian uint32.
+// A secret tree expansion (RFC §9.1): the generation is the context, as a big-endian uint32.
 func (self *mlsCipherSuite) deriveTreeSecret(kind string, secret []byte, label string, generation uint32, length int) ([]byte, error) {
 	encoder := &mlsEncoder{}
 	encoder.writeUint32(generation)
 	return self.expandWithLabel(kind, secret, label, encoder.encoded, length)
 }
 
-// RefHash (RFC §5.2).
+// A labeled hash that names a value by its contents (RFC §5.2).
 func (self *mlsCipherSuite) refHash(label string, value []byte) ([]byte, error) {
 	encoder := &mlsEncoder{}
 	encoder.writeVector([]byte(label))
@@ -162,7 +162,7 @@ func (self *mlsCipherSuite) refHash(label string, value []byte) ([]byte, error) 
 	return self.hash(refHashInput), nil
 }
 
-// MakeKeyPackageRef, over the encoded KeyPackage.
+// The reference that names a KeyPackage (RFC §5.2), over its encoding.
 func (self *mlsCipherSuite) makeKeyPackageRef(encodedKeyPackage []byte) ([]byte, error) {
 	return self.refHash(mlsRefHashLabelKeyPackage, encodedKeyPackage)
 }
@@ -176,7 +176,7 @@ func mlsLabeledContent(label string, content []byte) ([]byte, error) {
 	return encoder.finish()
 }
 
-// SignWithLabel (RFC §5.1.2).
+// Signs content under a label (RFC §5.1.2).
 func (self *mlsCipherSuite) signWithLabel(signatureKey ed25519.PrivateKey, label string, content []byte) ([]byte, error) {
 	if len(signatureKey) != ed25519.PrivateKeySize {
 		return nil, fmt.Errorf("mls: signature private key of %d bytes", len(signatureKey))
@@ -188,7 +188,7 @@ func (self *mlsCipherSuite) signWithLabel(signatureKey ed25519.PrivateKey, label
 	return ed25519.Sign(signatureKey, signContent), nil
 }
 
-// VerifyWithLabel (RFC §5.1.2). A key of the wrong size verifies nothing.
+// Checks a signature over labeled content (RFC §5.1.2). A key of the wrong size verifies nothing.
 func (self *mlsCipherSuite) verifyWithLabel(verificationKey []byte, label string, content []byte, signature []byte) bool {
 	if len(verificationKey) != ed25519.PublicKeySize {
 		return false
@@ -200,8 +200,9 @@ func (self *mlsCipherSuite) verifyWithLabel(verificationKey []byte, label string
 	return ed25519.Verify(ed25519.PublicKey(verificationKey), signContent, signature)
 }
 
-// EncryptWithLabel (RFC §5.1.3): SealBase with an empty AAD. publicKey is an HPKEPublicKey's bytes,
-// so a key that does not parse under the suite's KEM is an error here.
+// Seals plaintext to a public key under a labeled context (RFC §5.1.3): SealBase with an empty AAD.
+// publicKey is an HPKEPublicKey's bytes, so a key that does not parse under the suite's KEM is an
+// error here.
 func (self *mlsCipherSuite) encryptWithLabel(publicKey []byte, label string, context []byte, plaintext []byte) (kemOutput []byte, ciphertext []byte, err error) {
 	recipientKey, err := self.kem.NewPublicKey(publicKey)
 	if err != nil {
@@ -222,8 +223,8 @@ func (self *mlsCipherSuite) encryptWithLabel(publicKey []byte, label string, con
 	return kemOutput, ciphertext, nil
 }
 
-// DecryptWithLabel (RFC §5.1.3): OpenBase with an empty AAD. The plaintext is an unwrapped secret,
-// so kind names it.
+// Opens what was sealed under a labeled context (RFC §5.1.3): OpenBase with an empty AAD. The
+// plaintext is an unwrapped secret, so kind names it.
 func (self *mlsCipherSuite) decryptWithLabel(kind string, privateKey hpke.PrivateKey, label string, context []byte, kemOutput []byte, ciphertext []byte) ([]byte, error) {
 	encryptContext, err := mlsLabeledContent(label, context)
 	if err != nil {

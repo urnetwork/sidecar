@@ -13,7 +13,7 @@ import (
 // Signature labels (RFC §17.6).
 const mlsSignatureLabelKeyPackage = "KeyPackageTBS"
 
-// KeyPackage (RFC §10).
+// What a client publishes so that others can add it to a group (RFC §10).
 type mlsKeyPackage struct {
 	cipherSuite uint16
 	initKey     []byte

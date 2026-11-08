@@ -8,8 +8,12 @@
 package sidecartest
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -24,6 +28,9 @@ import (
 // This module's proto package, which every file of protocol/ and protocol/bridge declares (§4.9).
 // Anything else registered, such as connect's bringyour, is not this guard's.
 const schemaGuardProtoPackage = "urnetwork.sidecar"
+
+// What a .proto's header says when it means no server reads the file.
+const schemaGuardSealedClaim = "no server reads a field"
 
 // A message's name in the map: its full name without its package.
 func schemaGuardMessageName(message protoreflect.MessageDescriptor) string {
@@ -222,6 +229,48 @@ func (self *SchemaGuard) sealFindings(walk *schemaGuardProtoWalk, messages map[s
 	return findings
 }
 
+// Whether a file's header, everything above its syntax statement, says no server reads the file. The
+// sentence may wrap. A tree with no source for a descriptor, as a planted one may have, says nothing.
+func (self *SchemaGuard) headerClaimsSealed(path string) (bool, error) {
+	source, err := os.ReadFile(filepath.Join(self.sources.RootDirectory, filepath.FromSlash(path)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	header, _, _ := strings.Cut(string(source), "\nsyntax = ")
+	words := strings.Join(strings.Fields(strings.ReplaceAll(header, "//", " ")), " ")
+	return strings.Contains(words, schemaGuardSealedClaim), nil
+}
+
+// Each message a root reaches in a file whose header says no server reads it. A header is a sentence,
+// and the walk does not take its word for anything, or the next walk by hand will: record.proto's once
+// sent one past the three messages every gate parses.
+func (self *SchemaGuard) headerFindings(walk *schemaGuardProtoWalk, protoFiles map[string]protoreflect.FileDescriptor) []string {
+	findings := []string{}
+	for path, file := range protoFiles {
+		claimed, err := self.headerClaimsSealed(path)
+		if err != nil {
+			findings = append(findings, fmt.Sprintf("%s: %v", path, err))
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		fileMessages := map[string]protoreflect.MessageDescriptor{}
+		schemaGuardDeclaredMessages(file.Messages(), fileMessages)
+		for messageName := range fileMessages {
+			if rootName, reached := walk.reachedMessageRoots[messageName]; reached {
+				findings = append(findings, fmt.Sprintf(
+					"%s says %s, and root %s reaches its message %s: correct the header", path, schemaGuardSealedClaim, rootName, messageName,
+				))
+			}
+		}
+	}
+	return findings
+}
+
 // Each reached field with no row, each mapped field nothing reaches, each message in no class, and
 // each enum mapped only in part. A row for a field is what the brief makes a precondition, so a finding
 // says where the row comes from.
@@ -233,6 +282,7 @@ func (self *SchemaGuard) protoFindings() []string {
 	}
 	walk, findings := self.walkRoots(messages)
 	findings = append(findings, self.sealFindings(walk, messages, protoFiles)...)
+	findings = append(findings, self.headerFindings(walk, protoFiles)...)
 	findings = append(findings, self.areaFieldFindings(messages)...)
 
 	for key, rootName := range walk.reachedFieldRoots {
