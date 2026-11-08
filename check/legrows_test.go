@@ -23,6 +23,18 @@ import (
 	"testing"
 )
 
+// Mail libraries a page Worker has no use for, since it reads mail and neither receives, serves nor
+// checks it (R-MAIL-13, MAIL.md's build legs). dependencies.yml's client class cannot say this, because
+// that class also covers the root on every other leg. go-message is left out: MAIL-M7-11 puts its one
+// file on every leg, so whether the Worker links it is that task's to settle.
+var sidecarHttpRefusedMailModules = []string{
+	"github.com/emersion/go-imap",
+	"github.com/emersion/go-sasl",
+	"github.com/emersion/go-smtp",
+	"github.com/mjl-/adns",
+	"github.com/mjl-/mox",
+}
+
 // std packages that hold a binary's exported methods alive, so the linker cannot prune them
 // (sdk/build/mobile_method_pruning_test.go:12-22).
 var pruningBreakers = []string{"net/rpc", "text/template", "html/template"}
@@ -63,6 +75,31 @@ func (self *repository) sidecarHttpFindings(t testing.TB) []string {
 			}
 			base := firstPartyBase(listed.Module.Path)
 			if base == connectBasePath || base == sctpBasePath || base == gvisorBasePath {
+				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
+			}
+		}
+	}
+	slices.Sort(findings)
+	return findings
+}
+
+// R-MAIL-13: the leg's closure holds none of sidecarHttpRefusedMailModules, so a mail_ file that links
+// one and forgot !sidecar_http fails here. Each is matched by the module the package comes from, whole
+// elements, so a /v2 path counts.
+func (self *repository) sidecarHttpMailFindings(t testing.TB) []string {
+	t.Helper()
+	findings := []string{}
+	for _, leg := range self.legs {
+		if !leg.hasTag(sidecarHttpTag) {
+			continue
+		}
+		for _, listed := range self.closure(t, leg) {
+			if listed.Module == nil {
+				continue
+			}
+			if slices.ContainsFunc(sidecarHttpRefusedMailModules, func(refused string) bool {
+				return underPath(listed.Module.Path, refused)
+			}) {
 				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
 			}
 		}

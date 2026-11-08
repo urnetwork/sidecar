@@ -104,7 +104,10 @@ enum SignedType {
   SIGNED_EVS_PATH_MAP = 0x1403;
   SIGNED_EVS_IMPORT = 0x1404;
 
-  // 0x15xx §13, 0x16xx §14, 0x17xx §15, 0x1Bxx §12
+  // 0x15xx §13: a device key's attestation, purpose tls-key (§13.8).
+  SIGNED_TLS_KEY_ATTESTATION = 0x1501;
+
+  // 0x16xx §14, 0x17xx §15, 0x1Bxx §12
 
   // 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
   // binding-identity by the identity key over one SignedSidecarIdentityBinding's body.

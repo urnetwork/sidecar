@@ -179,6 +179,11 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "legs", item: "a mail server or verifier library on the sidecar_http leg (R-MAIL-13)",
+		rule:         (*repository).sidecarHttpMailFindings,
+		plantedTests: []string{"TestLegsFailsOnSidecarHttpLinkingAMailLibrary"},
+	},
+	{
 		row: "legs", item: "a host_*.go file on the sidecar_http leg (§18.10)",
 		rule:         (*repository).hostFileFindings,
 		plantedTests: []string{"TestLegsFailsOnAHostFileWithoutTheTag"},

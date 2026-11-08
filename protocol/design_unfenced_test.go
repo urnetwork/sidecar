@@ -6,8 +6,9 @@
 //
 // The design gives most of these as field lists or names without numbers. They take numbers in the order written,
 // which the answers to the questions that asked, among them protos-bridge-unwritten-numbers,
-// protos-services-unwritten-numbers, keys-wire-route-bodies and mail-proto-format-readings, ratify as landed. They
-// freeze with their formats, and as design-records writes each into the design as a fence, it leaves this file.
+// protos-services-unwritten-numbers, keys-wire-route-bodies, mail-proto-format-readings and plan-TLS-small-readings,
+// ratify as landed. They freeze with their formats, and as design-records writes each into the design as a fence, it
+// leaves this file.
 
 package protocol
 
@@ -534,6 +535,15 @@ enum SmtpPreambleCode {
   SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
 }
 enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
+
+// sidecar/protocol/tls.proto
+// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, and #2's attestation body.
+message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
+enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
+message TlsKeyAttestation {
+  bytes network_id = 1; bytes sidecar_id = 2; bytes spki_sha256 = 3; bytes identifier_set_sha256 = 4;
+  uint64 issue_time_millis = 5;
+}
 
 // sidecar/protocol/mail.proto
 // MailAuthEvidence's comments, which name each result's fields in this order.
