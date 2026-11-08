@@ -812,3 +812,65 @@ func TestADeliveryLosesAWriteArmedNeverToLand(t *testing.T) {
 		t.Errorf("body %q", got)
 	}
 }
+
+// PutImmutable on the fake's own faults: a create whose answer is lost after it applied reads back as
+// written, with one create and one read.
+func TestPutImmutableResolvesApplyThenDrop(t *testing.T) {
+	fixture := newBlobFixture(t)
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, KeyPrefix: "log/", Result: ApplyThenDrop})
+	if _, err := sidecar.PutImmutable(t.Context(), fixture.cluster, "log/r/f/0", []byte("page"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fixture.faults.OpResults(FaultOpPut)); got != 1 {
+		t.Errorf("%d creates sent", got)
+	}
+	if got := fixture.body(t, "log/r/f/0"); got != "page" {
+		t.Errorf("body %q", got)
+	}
+}
+
+// One that never reached the store reads back 404 and goes again.
+func TestPutImmutableResolvesFailBeforeApply(t *testing.T) {
+	fixture := newBlobFixture(t)
+	fixture.arm(t, &FaultPlan{Op: FaultOpPut, KeyPrefix: "log/", Result: FailBeforeApply})
+	if _, err := sidecar.PutImmutable(t.Context(), fixture.cluster, "log/r/f/0", []byte("page"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fixture.faults.OpResults(FaultOpPut)); got != 2 {
+		t.Errorf("%d creates sent", got)
+	}
+	if got := fixture.body(t, "log/r/f/0"); got != "page" {
+		t.Errorf("body %q", got)
+	}
+}
+
+// A create parked until its caller gives up has reached its deadline by then, so whichever fate the
+// settle rule gives it, the read-back finds it never landed (D-OPS-20), and the same bytes go again.
+func TestPutImmutableWritesAgainPastAParkedCreatesDeadline(t *testing.T) {
+	for _, delay := range []FaultDelay{DelayLandsBeforeNext, DelayNeverLands} {
+		fixture := newBlobFixture(t)
+		fixture.arm(t, &FaultPlan{Op: FaultOpPut, KeyPrefix: "pb/", Result: Delay, Delay: delay})
+		done := make(chan error, 1)
+		go func() {
+			_, err := sidecar.PutImmutable(t.Context(), fixture.cluster, "pb/h/m/a-b", []byte("batch"), nil)
+			done <- err
+		}()
+		// the parked create's caller gives up at its timeout, unknown
+		if err := fixture.clock.AwaitTimers(t.Context(), 1); err != nil {
+			t.Fatal(err)
+		}
+		fixture.clock.Advance(fixture.cluster.RequestTimeout())
+		if err := <-done; err != nil {
+			t.Errorf("%v: %v", delay, err)
+		}
+		if got := len(fixture.faults.OpResults(FaultOpPut)); got != 2 {
+			t.Errorf("%v: %d creates sent", delay, got)
+		}
+		if got := fixture.body(t, "pb/h/m/a-b"); got != "batch" {
+			t.Errorf("%v: body %q", delay, got)
+		}
+		if got := fixture.store.DelayedCount(); got != 0 {
+			t.Errorf("%v: %d requests still parked", delay, got)
+		}
+	}
+}

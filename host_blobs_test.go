@@ -698,3 +698,214 @@ func TestBlobInvalidOptionsWriteNothing(t *testing.T) {
 		t.Errorf("head: %v", err)
 	}
 }
+
+// What a lossyBlobCluster does to the next create.
+type blobLoss int
+
+const (
+	// The create applies and its answer is lost.
+	blobLossAfterApply blobLoss = iota + 1
+	// The create never reaches the store, and the caller sees the same lost answer.
+	blobLossBeforeApply
+)
+
+// memoryBlobCluster with lost answers: each create takes the next loss in creates, and each read the
+// next in getErrs, so PutImmutable's paths run without a store that loses things. Counts every
+// create it is asked for.
+type lossyBlobCluster struct {
+	*memoryBlobCluster
+	creates     []blobLoss
+	getErrs     []error
+	createCount int
+}
+
+func (self *lossyBlobCluster) PutIfNoneMatch(ctx context.Context, key string, body []byte, options *BlobPutOptions) (string, error) {
+	self.createCount += 1
+	if len(self.creates) == 0 {
+		return self.memoryBlobCluster.PutIfNoneMatch(ctx, key, body, options)
+	}
+	loss := self.creates[0]
+	self.creates = self.creates[1:]
+	if loss == blobLossAfterApply {
+		if _, err := self.memoryBlobCluster.PutIfNoneMatch(ctx, key, body, options); err != nil {
+			return "", err
+		}
+	}
+	return "", &BlobUnknownError{Err: io.ErrUnexpectedEOF}
+}
+
+func (self *lossyBlobCluster) Get(ctx context.Context, key string) (*BlobObject, error) {
+	if 0 < len(self.getErrs) {
+		err := self.getErrs[0]
+		self.getErrs = self.getErrs[1:]
+		return nil, err
+	}
+	return self.memoryBlobCluster.Get(ctx, key)
+}
+
+func wantBlobBody(t *testing.T, cluster BlobCluster, key string, want []byte) {
+	t.Helper()
+	object, err := cluster.Get(context.Background(), key)
+	if body := readBlobObject(t, object, err); !bytes.Equal(body, want) {
+		t.Errorf("%s holds %q, want %q", key, body, want)
+	}
+}
+
+func TestPutImmutableCreates(t *testing.T) {
+	cluster := newMemoryBlobCluster()
+	etag, err := PutImmutable(context.Background(), cluster, "log/repo-1/ref-1/0", []byte("a page"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := cluster.Head(context.Background(), "log/repo-1/ref-1/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Etag != etag {
+		t.Errorf("etag %q, the key holds %q", etag, info.Etag)
+	}
+}
+
+// §11.8's immutable row: a retry of one's own create finds its bytes, and that is success, with the
+// ETag the key holds.
+func TestPutImmutableEqualBytesOnA412AreSuccess(t *testing.T) {
+	ctx := context.Background()
+	cluster := newMemoryBlobCluster()
+	first, err := PutImmutable(ctx, cluster, "pidx/repo-1/ref-1/x", []byte("entry"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := PutImmutable(ctx, cluster, "pidx/repo-1/ref-1/x", []byte("entry"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first {
+		t.Errorf("etag %q, the key holds %q", again, first)
+	}
+}
+
+// Other bytes at an immutable key are a fault, never success, whichever is longer.
+func TestPutImmutableOtherBytesOnA412Alarm(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		held    string
+		written string
+	}{
+		{held: "entry", written: "other"},
+		{held: "entry", written: "entr"},
+		{held: "entr", written: "entry"},
+		{held: "", written: "entry"},
+		{held: "entry", written: ""},
+	} {
+		cluster := newMemoryBlobCluster()
+		if _, err := cluster.PutIfNoneMatch(ctx, "hp/repo-1/p", []byte(c.held), nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PutImmutable(ctx, cluster, "hp/repo-1/p", []byte(c.written), nil); !errors.Is(err, ErrBlobImmutableMismatch) {
+			t.Errorf("%q over %q: %v", c.written, c.held, err)
+		}
+		wantBlobBody(t, cluster, "hp/repo-1/p", []byte(c.held))
+	}
+}
+
+// §11.8's write row: an unknown outcome GETs the key, and equal bytes were written.
+func TestPutImmutableLostAnswerThatLandedIsSuccess(t *testing.T) {
+	cluster := &lossyBlobCluster{memoryBlobCluster: newMemoryBlobCluster(), creates: []blobLoss{blobLossAfterApply}}
+	etag, err := PutImmutable(context.Background(), cluster, "pb/2026110616/30/a-b", []byte("batch"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if etag == "" {
+		t.Error("success with no etag")
+	}
+	if cluster.createCount != 1 {
+		t.Errorf("%d creates for one that landed", cluster.createCount)
+	}
+}
+
+// A 404 after an unknown outcome means it never landed, so the same bytes go again.
+func TestPutImmutableLostCreateIsWrittenAgain(t *testing.T) {
+	cluster := &lossyBlobCluster{memoryBlobCluster: newMemoryBlobCluster(), creates: []blobLoss{blobLossBeforeApply}}
+	if _, err := PutImmutable(context.Background(), cluster, "pb/2026110616/30/a-b", []byte("batch"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.createCount != 2 {
+		t.Errorf("%d creates", cluster.createCount)
+	}
+	wantBlobBody(t, cluster, "pb/2026110616/30/a-b", []byte("batch"))
+}
+
+// Written again once, and no more: a second lost create leaves the outcome the caller's.
+func TestPutImmutableGivesUpUnknownAfterTwoLostCreates(t *testing.T) {
+	cluster := &lossyBlobCluster{
+		memoryBlobCluster: newMemoryBlobCluster(),
+		creates:           []blobLoss{blobLossBeforeApply, blobLossBeforeApply, blobLossBeforeApply},
+	}
+	_, err := PutImmutable(context.Background(), cluster, "pb/2026110616/30/a-b", []byte("batch"), nil)
+	var unknown *BlobUnknownError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("err %v", err)
+	}
+	if cluster.createCount != blobImmutableWriteCount {
+		t.Errorf("%d creates", cluster.createCount)
+	}
+}
+
+// A read that cannot answer leaves the create unknown, so the caller rereads rather than trusts it.
+func TestPutImmutableUnreadableAfterALostAnswerStaysUnknown(t *testing.T) {
+	for _, getErr := range []error{ErrBlobHeld, io.ErrUnexpectedEOF} {
+		cluster := &lossyBlobCluster{
+			memoryBlobCluster: newMemoryBlobCluster(),
+			creates:           []blobLoss{blobLossAfterApply},
+			getErrs:           []error{getErr},
+		}
+		_, err := PutImmutable(context.Background(), cluster, "log/repo-1/ref-1/0", []byte("a page"), nil)
+		var unknown *BlobUnknownError
+		if !errors.As(err, &unknown) {
+			t.Errorf("read %v: err %v", getErr, err)
+		}
+		if cluster.createCount != 1 {
+			t.Errorf("read %v: %d creates", getErr, cluster.createCount)
+		}
+	}
+}
+
+// Another writer's bytes found after a lost answer are the same fault as after a 412.
+func TestPutImmutableOtherBytesAfterALostAnswerAlarm(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lossyBlobCluster{memoryBlobCluster: newMemoryBlobCluster(), creates: []blobLoss{blobLossBeforeApply}}
+	if _, err := cluster.memoryBlobCluster.PutIfNoneMatch(ctx, "log/repo-1/ref-1/0", []byte("theirs"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PutImmutable(ctx, cluster, "log/repo-1/ref-1/0", []byte("mine"), nil); !errors.Is(err, ErrBlobImmutableMismatch) {
+		t.Errorf("err %v", err)
+	}
+}
+
+// A 412 whose key is gone before its read-back stands for nothing: deleted whole, by evacuation or GC.
+func TestPutImmutableKeyGoneAfterA412IsNoSuccess(t *testing.T) {
+	cluster := &lossyBlobCluster{memoryBlobCluster: newMemoryBlobCluster(), getErrs: []error{ErrBlobNotFound}}
+	ctx := context.Background()
+	if _, err := cluster.memoryBlobCluster.PutIfNoneMatch(ctx, "pb/2026110616/30/a-b", []byte("batch"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PutImmutable(ctx, cluster, "pb/2026110616/30/a-b", []byte("batch"), nil); !errors.Is(err, ErrBlobPrecondition) {
+		t.Errorf("err %v", err)
+	}
+}
+
+// A definite refusal is passed through: nothing was written, and the outcome is known.
+func TestPutImmutablePassesDefiniteRefusalsThrough(t *testing.T) {
+	ctx := context.Background()
+	cluster := newMemoryBlobCluster()
+	if _, err := PutImmutable(ctx, cluster, "pb/a", []byte("batch"), &BlobPutOptions{Sha256: []byte{1}}); !errors.Is(err, ErrBlobPutOptions) {
+		t.Errorf("options: %v", err)
+	}
+	other := sha256.Sum256([]byte("other"))
+	if _, err := PutImmutable(ctx, cluster, "pb/a", []byte("batch"), &BlobPutOptions{Sha256: other[:]}); !errors.Is(err, ErrBlobChecksum) {
+		t.Errorf("checksum: %v", err)
+	}
+	if _, err := cluster.Head(ctx, "pb/a"); !errors.Is(err, ErrBlobNotFound) {
+		t.Errorf("head: %v", err)
+	}
+}
