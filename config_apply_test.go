@@ -44,7 +44,7 @@ func testConfigEntryChain(t *testing.T, entryBytes []byte) [sha256.Size]byte {
 	return chain
 }
 
-// FS-14: two readers with one base and different statements at n+1 report FORK with both A_{n+1}, and stop there.
+// FS-14: two readers with one base and different statements at n+1 report a fork with both A_{n+1}, and stop there.
 func TestTwoReadersWithDifferentStatementsAtOnePositionFork(t *testing.T) {
 	net := newTestConfigNet(t)
 	readerB := net.newReader()
@@ -174,8 +174,8 @@ func TestABaseThatFailsItsChecksIsAFork(t *testing.T) {
 	net.source.headError = nil
 }
 
-// The full reader's head check gets exactly the STATEMENT and TICK entries in (the previous base's folded_through,
-// folded_through], each by id and position, BASE entries left out (plan-TEAM-config-head-format #1).
+// The full reader's head check gets exactly the statement and tick entries in (the previous base's folded_through,
+// folded_through], each by id and position, base entries left out (plan-TEAM-config-head-format #1).
 func TestTheHeadCheckGetsExactlyTheFoldedRecords(t *testing.T) {
 	net := newTestConfigNet(t)
 	first := net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("first"))
@@ -627,5 +627,87 @@ func TestRestoreRefusesEntriesThatDoNotChain(t *testing.T) {
 	baseless := &ConfigRetained{SignedGenesis: net.signedGenesis, Entries: [][]byte{net.entries[1], net.entries[2]}}
 	if _, err := RestoreConfigLog(testConfigLogSettings(), baseless, net.source); err == nil {
 		t.Error("no base restored")
+	}
+}
+
+// api's statement row: Check gives the verdict Apply then gives at the next position, accepted or refused, and moves
+// nothing; a repeat of an applied statement is refused there, and FindStatement answers it.
+func TestCheckGivesApplysVerdictWithoutApplying(t *testing.T) {
+	team := newTestConfigTeam(t)
+	memberX := testConfigId("x")
+	team.admitMember(team.owner, memberX, bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	statements := []struct {
+		signer     testConfigDevice
+		signedType bridge.SignedType
+		body       func() proto.Message
+	}{
+		{signer: team.owner, signedType: bridge.SignedType_SIGNED_MEMBER_ADMIT, body: func() proto.Message { return team.memberAdmitStatement("checked") }},
+		{signer: team.owner, signedType: bridge.SignedType_SIGNED_ADMIN_SET, body: func() proto.Message { return team.adminSet(0, memberX) }},
+		{signer: team.owner, signedType: bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, body: func() proto.Message {
+			return &protocol.AuthorityProposal{
+				Header: team.header(), StatementType: uint32(bridge.SignedType_SIGNED_ADMIN_SET), Statement: testConfigMarshal(t, team.adminSet(0, memberX)),
+			}
+		}},
+		{signer: team.adminB, signedType: bridge.SignedType_SIGNED_MEMBER_REVOKE, body: func() proto.Message {
+			return &bridge.MemberRevoke{Header: team.header(), MemberId: team.ownerMemberId.Bytes()}
+		}},
+	}
+	for _, statement := range statements {
+		signedBytes := team.sign(statement.signer, statement.signedType, statement.body())
+		before := team.log.Pin()
+		checked := team.log.Check(signedBytes, team.timeMs+1000)
+		if !proto.Equal(team.log.Pin(), before) {
+			t.Fatal("Check moved the log")
+		}
+		applied := team.push(team.makeEntry(bridge.AuthEntryKindStatement, signedBytes))
+		if checked.Accepted() != applied.Accepted() || checked.StatementId != applied.StatementId || !proto.Equal(checked.Pin, applied.Pin) {
+			t.Errorf("%s: checked %v at %v, applied %v at %v", statement.signedType, checked.Refusal, checked.Pin, applied.Refusal, applied.Pin)
+		}
+		if applied.Accepted() {
+			retry := team.log.Check(signedBytes, team.timeMs+1000)
+			if retry.Accepted() || !errors.Is(retry.Refusal, ErrConfigReplay) {
+				t.Errorf("%s again: %v", statement.signedType, retry.Refusal)
+			}
+			if pin, found := team.log.FindStatement(applied.StatementId); !found || !proto.Equal(pin, applied.Pin) {
+				t.Errorf("%s's retry identity: %v, %t", statement.signedType, pin, found)
+			}
+		}
+	}
+}
+
+// §22.5's config-repo replay in T1: a fresh reader walking a mixed log from genesis stands, at every position, on the
+// state the long-running reader stood on there, bases, proposals, refusals and reaps included.
+func TestConfigRepoReplaysFromGenesisAtEveryPosition(t *testing.T) {
+	team := newTestConfigTeam(t)
+	memberM, first := team.consentedMember("m")
+	second := team.device("m second", memberM)
+	team.admitDevice(first, second, 0)
+	worker := team.device("m worker", memberM)
+	team.mustPost(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT, team.admission(worker, nil, true, team.timeMs+60*60*1000, 0))
+	foldPoint := team.n
+	phone := team.device("owner phone", team.ownerMemberId)
+	_, admitId := team.propose(team.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, team.admission(phone, nil, false, 0, 0))
+	team.post(team.adminB, bridge.SignedType_SIGNED_MEMBER_ADMIT, &protocol.MemberAdmit{
+		Header: team.header(), MemberId: memberM.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_OWNER,
+	})
+	team.cosign(team.adminB, admitId)
+	team.tick(&bridge.ApiTick{ReapedSidecarIds: [][]byte{worker.sidecarId.Bytes()}})
+	team.fold(team.owner, foldPoint, 2)
+	team.mustPost(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, team.revocation(second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	_, openId := team.propose(team.adminC, bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{Header: team.header(), MemberId: memberM.Bytes()})
+	team.fold(team.owner, team.n, 3)
+	if open := team.log.State().OpenProposalIds(); len(open) != 0 {
+		t.Errorf("a proposal the last base folded is open: %x, %x", open, openId)
+	}
+
+	reader, err := NewConfigLog(testConfigLogSettings(), team.signedGenesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, entryBytes := range team.entries {
+		if _, err := reader.Apply(entryBytes, team.source); err != nil {
+			t.Fatalf("entry %d: %v", i+1, err)
+		}
+		testConfigStatesEqual(t, reader.State(), team.statesAt[uint64(i+1)])
 	}
 }

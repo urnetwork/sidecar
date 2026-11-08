@@ -1,4 +1,4 @@
-// The keyless device role's check of a BASE entry (§7.9's BASE row: "keyless device roles check only the signature,
+// The keyless device role's check of a base entry (§7.9's base row: "keyless device roles check only the signature,
 // prev_chain, rows_sha256 and the two versions"). It holds no config key, so it reads no config head; which sidecar
 // signs bases, a config writer at S(n-1), is its caller's to know from the rows it holds, and so is the key passed
 // here. A full reader runs this too, before its own head check (the root's config_base.go).
@@ -23,7 +23,7 @@ const baseRowsMaxByteCount = 4 * 1024 * 1024
 // The base does not pass, wrapped with which check failed.
 var ErrBaseRefused = errors.New("base refused")
 
-// Checks a BASE entry and returns its header: entry's kind; its Signed, of type SIGNED_PROJECTION_HEADER under purpose
+// Checks a base entry and returns its header: entry's kind; its Signed, of type SIGNED_PROJECTION_HEADER under purpose
 // authority, verifying under signerPublicKey, the Ed25519 identity key of the config writer that signed it; the
 // header's network, version and prev_chain equal to the entry's; rows hashing to rows_sha256 at rows_byte_count bytes,
 // at most 4 MiB; folded_through below the entry's position; and, after a previous base, config_version and

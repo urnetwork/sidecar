@@ -1,10 +1,10 @@
-// §7.9's BASE row: a config writer's signed ProjectionHeader that replaces the rows. A base chains on, names rows by
+// §7.9's base row: a config writer's signed ProjectionHeader that replaces the rows. A base chains on, names rows by
 // hash and a config head no older than the previous base's, folds no less, and is signed by a config writer at
-// S(my.n); its rows replace the state's, then the STATEMENT and TICK entries among folded_through+1..n-1 re-apply in
-// order on them, a BASE there skipped, each keeping the verdict it got at its own position, so a later authority
+// S(my.n); its rows replace the state's, then the statement and tick entries among folded_through+1..n-1 re-apply in
+// order on them, a base there skipped, each keeping the verdict it got at its own position, so a later authority
 // change never undoes an earlier revocation, while effects that depend on rows follow the new rows.
 //
-// A base that fails any of this is a FORK, never a refusal: the rows it names would be every later entry's state.
+// A base that fails any of this is a fork, never a refusal: the rows it names would be every later entry's state.
 //
 // The config head is the one part this file cannot read: a full reader opens it through ConfigRowsSource.CheckHead,
 // which TEAM-M2-08's ConfigHead and CompileProjectionRows fill, given the records this log says the head must hold.
@@ -26,8 +26,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// One STATEMENT or TICK a config head holds as a record (plan-TEAM-config-head-format #1's ConfigRecord): the log's
-// entries in (the previous base's folded_through, folded_through], in position order, BASE entries excluded.
+// One statement or tick a config head holds as a record (plan-TEAM-config-head-format #1's ConfigRecord): the log's
+// entries in (the previous base's folded_through, folded_through], in position order, base entries excluded.
 type ConfigFoldRecord struct {
 	// A statement's id (its signed bytes' hash); empty for a tick.
 	Id []byte
@@ -40,7 +40,7 @@ type ConfigFoldRecord struct {
 	Body []byte
 }
 
-// What a full reader's check of one base's config head is given (§7.9's BASE row).
+// What a full reader's check of one base's config head is given (§7.9's base row).
 type ConfigHeadCheck struct {
 	// The state the base lands on, S(n-1): its config writers judge the head's chain, and its base is the one the
 	// head must descend from.
@@ -69,7 +69,7 @@ type ConfigRowsSource interface {
 	Rows(networkId Id, rowsSha256 []byte) ([]byte, error)
 	// Checks the base's config head: it is the previous base's head or a descendant, it chains to genesis through
 	// config writers, it holds exactly check.Folded, each by id with its carrying position, and it compiles to
-	// check.Rows. Any error makes the base a FORK.
+	// check.Rows. Any error makes the base a fork.
 	CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error)
 }
 
@@ -93,7 +93,7 @@ func (self *ConfigLog) baseFork(kept *configKeptEntry, format string, a ...any) 
 	})
 }
 
-// A BASE entry at state, as §7.9's BASE row says. Returns the next state, or a fork.
+// A base entry at state, as §7.9's base row says. Returns the next state, or a fork.
 func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rowsSource ConfigRowsSource) (*ConfigState, error) {
 	if rowsSource == nil {
 		rowsSource = ConfigNoRowsSource{}
@@ -151,7 +151,7 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 	return result, nil
 }
 
-// A BASE entry's Signed and its header, of the one type a base carries.
+// A base entry's Signed and its header, of the one type a base carries.
 func configParseBase(entry *bridge.AuthEntry) (*bridge.Signed, *bridge.ProjectionHeader, error) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(entry.GetBody(), signed); err != nil {
@@ -179,7 +179,7 @@ func configBaseSigner(signed *bridge.Signed) (Id, error) {
 	return signerId, nil
 }
 
-// The records a new base's head must hold: every STATEMENT and TICK in (the previous base's folded_through,
+// The records a new base's head must hold: every statement and tick in (the previous base's folded_through,
 // folded_through], false when this log does not keep them all.
 func (self *ConfigLog) foldedRecords(state *ConfigState, header *bridge.ProjectionHeader) ([]ConfigFoldRecord, bool) {
 	from := uint64(1)
@@ -309,9 +309,9 @@ func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
 	return nil
 }
 
-// Re-applies the STATEMENT and TICK entries among foldedThrough+1..n-1 on next, in order, a BASE among them skipped,
+// Re-applies the statement and tick entries among foldedThrough+1..n-1 on next, in order, a base among them skipped,
 // each keeping the verdict it got at its own position: a refused one stays refused and an applied one applies its
-// effect again on the new rows, an effect the new rows no longer allow dropping (§7.9's BASE row).
+// effect again on the new rows, an effect the new rows no longer allow dropping (§7.9's base row).
 func (self *ConfigLog) reapplyTail(next *configStateBuilder, foldedThrough uint64, n uint64) {
 	for k := foldedThrough + 1; k < n; k += 1 {
 		kept := self.keptEntry(k)

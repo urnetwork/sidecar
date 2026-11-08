@@ -1,6 +1,6 @@
 // §7.9's apply(e): one reader's walk of the authorization log, entry by entry, from its genesis. An entry chains
-// onto the reader's own pin or is a FORK; a BASE replaces the rows (config_base.go); a STATEMENT passes its header,
-// its presence row and its type's rule at S(my.n) or is refused at its position; a TICK passes its content checks.
+// onto the reader's own pin or is a fork; a base replaces the rows (config_base.go); a statement passes its header,
+// its presence row and its type's rule at S(my.n) or is refused at its position; a tick passes its content checks.
 // Each entry yields the next immutable ConfigState, published with one atomic swap.
 //
 // The rule table holds one rule per statement type, so api's verifier and every reader reach one verdict for one
@@ -93,7 +93,7 @@ type ConfigVerdict struct {
 	Pin *bridge.AuthPin
 	// AuthEntry.kind.
 	Kind uint32
-	// A STATEMENT's type and id (its signed bytes' hash, protos-bridge-statement-id-wrapper).
+	// A statement's type and id (its signed bytes' hash, protos-bridge-statement-id-wrapper).
 	SignedType  bridge.SignedType
 	StatementId [sha256.Size]byte
 	// Nil when the entry took effect; else why not, wrapping ErrConfigRefused.
@@ -126,7 +126,7 @@ type configStatement struct {
 	// the Signed as received; nil for a proposal's statement
 	signed *bridge.Signed
 	// a proposal or cosign that completed its proposal here: the proposed statement as it took effect, which a base's
-	// re-application applies again rather than counting anew (§7.9's BASE row keeps each verdict)
+	// re-application applies again rather than counting anew (§7.9's base row keeps each verdict)
 	completes *configStatement
 	// a proposal or cosign that left its proposal open: the proposed statement with its signers so far
 	proposed *configStatement
@@ -243,9 +243,9 @@ type configKeptEntry struct {
 	entry      *bridge.AuthEntry
 	entryBytes []byte
 	verdict    ConfigVerdict
-	// a STATEMENT that took effect, as a base re-applies it
+	// a statement that took effect, as a base re-applies it
 	statement *configStatement
-	// a TICK that took effect
+	// a tick that took effect
 	tick *bridge.ApiTick
 }
 
@@ -331,6 +331,39 @@ func (self *ConfigLog) Pin() *bridge.AuthPin {
 // The fork that stopped this log, or nil.
 func (self *ConfigLog) Fork() *ConfigForkError {
 	return self.fork
+}
+
+// The verdict a statement would get at the next position, sequenced at timeMs, judged on the current state as §7.9's
+// statement row has api verify a statement before it appends one (else 403 with the tip): Apply's judgment, with
+// nothing kept and no state changed. A statement applied among the last 4,096 entries is refused here as a repeat,
+// which api answers with FindStatement's entry instead. For the goroutine that applies, as Apply is.
+func (self *ConfigLog) Check(signedBytes []byte, timeMs int64) ConfigVerdict {
+	state := self.state.Load()
+	entry := &bridge.AuthEntry{
+		NetworkId: self.networkId.Bytes(),
+		N:         state.n + 1,
+		PrevChain: bytes.Clone(state.chain[:]),
+		Kind:      bridge.AuthEntryKindStatement,
+		TimeMs:    timeMs,
+		Body:      signedBytes,
+	}
+	verdict := ConfigVerdict{Kind: bridge.AuthEntryKindStatement}
+	if chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), timeMs, signedBytes); err == nil {
+		verdict.Pin = &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}
+	}
+	if self.fork != nil {
+		verdict.Refusal = fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
+		return verdict
+	}
+	statement, err := self.judgeStatement(state, entry, state.RetentionPoint())
+	if statement != nil {
+		verdict.SignedType, verdict.StatementId = statement.signedType, statement.id
+		if err == nil && statement.completes != nil {
+			verdict.CompletedProposalId = configCompletedProposalId(statement)
+		}
+	}
+	verdict.Refusal = err
+	return verdict
 }
 
 // Where a retry of the same statement landed: the position of an applied statement with this id among the last
@@ -484,7 +517,7 @@ func (self *ConfigLog) ringHolds(n uint64, statementId [sha256.Size]byte) bool {
 	return found && n-ringEntry.n <= configStatementWindow
 }
 
-// A STATEMENT entry: judged at state, then applied, or refused at its position.
+// A statement entry: judged at state, then applied, or refused at its position.
 func (self *ConfigLog) applyStatement(state *ConfigState, kept *configKeptEntry) *ConfigState {
 	statement, err := self.judgeStatement(state, kept.entry, state.RetentionPoint())
 	if statement != nil {
@@ -513,7 +546,7 @@ func configCompletedProposalId(statement *configStatement) []byte {
 	return bytes.Clone(statement.id[:])
 }
 
-// §7.9's STATEMENT row at state: the Signed parses as a type the log carries and verifies under its signer's key,
+// §7.9's statement row at state: the Signed parses as a type the log carries and verifies under its signer's key,
 // then the header's replay rules, at no older than retentionPoint, then read_only, the presence row and the type's
 // rule. Returns the statement, as far as it parsed, and nil or the refusal.
 func (self *ConfigLog) judgeStatement(state *ConfigState, entry *bridge.AuthEntry, retentionPoint uint64) (*configStatement, error) {
@@ -651,7 +684,7 @@ func configApplyStatement(next *configStateBuilder, statement *configStatement, 
 	return rule.apply(next, statement)
 }
 
-// A TICK entry (§7.9's TICK row): every reaped id an ephemeral admission, each revoked at the tick; every activated
+// A tick entry (§7.9's tick row): every reaped id an ephemeral admission, each revoked at the tick; every activated
 // proposal meeting Recovery's window, which TEAM-M2-05 judges, so a tick naming one is refused until it lands. A
 // refused tick changes nothing.
 func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) *ConfigState {

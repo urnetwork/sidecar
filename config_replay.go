@@ -219,11 +219,12 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 	result := next.finish()
 	self.keep(start)
 	self.retainBase(result, rowsBytes)
+	testHookBarrier("config.restore", self.networkId.String())
 	self.state.Store(result)
 	return nil
 }
 
-// A kept STATEMENT's type and id as its Signed gives them, zero when it does not parse as a config statement.
+// A kept statement's type and id as its Signed gives them, zero when it does not parse as a config statement.
 func configEntryStatementId(entry *bridge.AuthEntry) (bridge.SignedType, [sha256.Size]byte) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(entry.GetBody(), signed); err != nil {
