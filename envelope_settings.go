@@ -54,6 +54,9 @@ type SidecarProtocolSettings struct {
 	// The credit a receiver commits before it sends a window, else StreamReject{BUSY}: 256 KiB;
 	// 64 KiB.
 	StreamMinWindowByteCount int64
+	// What a new window commits instead, if less, while the process is above half of GOMEMLIMIT: 64 KiB
+	// (§6.7's window row, §13.6).
+	StreamPressureMinWindowByteCount int64
 	// The most a window grows to while the reader keeps up: 1 MiB; 256 KiB.
 	StreamMaxWindowByteCount int64
 	// Credit across one peer's streams: 8 MiB; 1 MiB. Edge peers: grows with streams, so one slow
@@ -95,34 +98,35 @@ type SidecarProtocolSettings struct {
 // is.
 func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 	return &SidecarProtocolSettings{
-		HelloCacheTimeout:               10 * time.Minute,
-		MarkedKeepaliveInterval:         60 * time.Second,
-		DefaultCallTimeout:              15 * time.Second,
-		PeerQueueMessageCount:           64,
-		ReassemblyMaxBodyByteCount:      256 * 1024,
-		ReassemblyPeerCount:             8,
-		ReassemblyPeerByteCount:         2 * 1024 * 1024,
-		ReassemblyProcessByteCount:      16 * 1024 * 1024,
-		ReassemblyIdleTimeout:           30 * time.Second,
-		IdempotencyTimeout:              10 * time.Minute,
-		IdempotencyPeerByteCount:        256 * 1024,
-		IdempotencyProcessByteCount:     4 * 1024 * 1024,
-		IdempotencyMaxResponseByteCount: 16 * 1024,
-		StreamInitialWindowByteCount:    16 * 1024,
-		StreamMinWindowByteCount:        256 * 1024,
-		StreamMaxWindowByteCount:        1024 * 1024,
-		StreamPeerCreditByteCount:       8 * 1024 * 1024,
-		StreamProcessCreditByteCount:    64 * 1024 * 1024,
-		StreamMaxPeerCreditFraction:     1.0 / 8,
-		PingTimeout:                     15 * time.Second,
-		PeerSilenceTimeout:              45 * time.Second,
-		HeadCheckInterval:               1 * time.Hour,
-		HeadCheckRoundPeerCount:         4,
-		HeadCheckTimeout:                10 * time.Second,
-		HeadCheckFetchTimeout:           10 * time.Minute,
-		HeadCheckUnwitnessedInterval:    10 * time.Minute,
-		WakeInterval:                    1 * time.Hour,
-		SyncRefetchInterval:             1 * time.Hour,
+		HelloCacheTimeout:                10 * time.Minute,
+		MarkedKeepaliveInterval:          60 * time.Second,
+		DefaultCallTimeout:               15 * time.Second,
+		PeerQueueMessageCount:            64,
+		ReassemblyMaxBodyByteCount:       256 * 1024,
+		ReassemblyPeerCount:              8,
+		ReassemblyPeerByteCount:          2 * 1024 * 1024,
+		ReassemblyProcessByteCount:       16 * 1024 * 1024,
+		ReassemblyIdleTimeout:            30 * time.Second,
+		IdempotencyTimeout:               10 * time.Minute,
+		IdempotencyPeerByteCount:         256 * 1024,
+		IdempotencyProcessByteCount:      4 * 1024 * 1024,
+		IdempotencyMaxResponseByteCount:  16 * 1024,
+		StreamInitialWindowByteCount:     16 * 1024,
+		StreamMinWindowByteCount:         256 * 1024,
+		StreamPressureMinWindowByteCount: 64 * 1024,
+		StreamMaxWindowByteCount:         1024 * 1024,
+		StreamPeerCreditByteCount:        8 * 1024 * 1024,
+		StreamProcessCreditByteCount:     64 * 1024 * 1024,
+		StreamMaxPeerCreditFraction:      1.0 / 8,
+		PingTimeout:                      15 * time.Second,
+		PeerSilenceTimeout:               45 * time.Second,
+		HeadCheckInterval:                1 * time.Hour,
+		HeadCheckRoundPeerCount:          4,
+		HeadCheckTimeout:                 10 * time.Second,
+		HeadCheckFetchTimeout:            10 * time.Minute,
+		HeadCheckUnwitnessedInterval:     10 * time.Minute,
+		WakeInterval:                     1 * time.Hour,
+		SyncRefetchInterval:              1 * time.Hour,
 	}
 }
 
