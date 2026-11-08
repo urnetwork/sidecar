@@ -172,6 +172,8 @@ func (self *sidecarTokenManager) scheduledRefreshTimeout(byJwt string) time.Dura
 	return sidecarJwtRefreshTimeout(self.scheduledRefreshTime, self.lastRefreshAttemptTime, now, self.args.Settings)
 }
 
+// The schedule's loop: waits for the token's point or a request, refreshes, and on a failure retries after the
+// jitter, until the generation ends or the manager closes.
 func (self *sidecarTokenManager) run() {
 	defer close(self.done)
 	for {

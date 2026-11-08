@@ -61,6 +61,7 @@ type DaemonRpcError struct {
 	Message string `json:"message"`
 }
 
+// The code and message, as the daemon wrote them.
 func (self *DaemonRpcError) Error() string {
 	return fmt.Sprintf("daemon rpc %d: %s", self.Code, self.Message)
 }
@@ -71,6 +72,7 @@ type DaemonHelloRefusal struct {
 	Version string
 }
 
+// The refusal's code, which holds nothing of the hello.
 func (self *DaemonHelloRefusal) Error() string {
 	return "daemon refused the hello: " + self.Code
 }
@@ -189,10 +191,12 @@ type daemonSessionStream struct {
 	conn   net.Conn
 }
 
+// Reads past the hello, from the buffer it was read through.
 func (self *daemonSessionStream) Read(p []byte) (int, error) {
 	return self.reader.Read(p)
 }
 
+// Writes to the session's connection.
 func (self *daemonSessionStream) Write(p []byte) (int, error) {
 	return self.conn.Write(p)
 }

@@ -56,15 +56,32 @@ type daemonSecretValue interface {
 	daemonSecret()
 }
 
-func (self *AuthKey) daemonSecret()                 {}
-func (self *AuthKeyBundle) daemonSecret()           {}
-func (self *SidecarServiceToken) daemonSecret()     {}
-func (self *SidecarEnrollResult) daemonSecret()     {}
+// A secret no reply carries.
+func (self *AuthKey) daemonSecret() {}
+
+// A secret no reply carries.
+func (self *AuthKeyBundle) daemonSecret() {}
+
+// A secret no reply carries.
+func (self *SidecarServiceToken) daemonSecret() {}
+
+// A secret no reply carries.
+func (self *SidecarEnrollResult) daemonSecret() {}
+
+// A secret no reply carries.
 func (self *SidecarAuthClientResult) daemonSecret() {}
-func (self *sidecarIdentityKeys) daemonSecret()     {}
-func (self *sidecarIdentityRecord) daemonSecret()   {}
-func (self *SidecarApi) daemonSecret()              {}
-func (self *keychain) daemonSecret()                {}
+
+// A secret no reply carries.
+func (self *sidecarIdentityKeys) daemonSecret() {}
+
+// A secret no reply carries.
+func (self *sidecarIdentityRecord) daemonSecret() {}
+
+// A secret no reply carries.
+func (self *SidecarApi) daemonSecret() {}
+
+// A secret no reply carries.
+func (self *keychain) daemonSecret() {}
 
 // Secret types the root does not own, so they cannot carry the method.
 var daemonSecretTypes = map[reflect.Type]bool{

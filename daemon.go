@@ -284,6 +284,7 @@ func (self *Daemon) noteRequest() {
 	self.touchActivity()
 }
 
+// Wakes the idle loop to re-read the sessions and the last activity.
 func (self *Daemon) touchActivity() {
 	self.activity.Update(func(count uint64) uint64 { return count + 1 })
 }
