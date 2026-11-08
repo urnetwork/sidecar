@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("\r\n\r\n\x00\r\nQUIT\n\"\x11\x00\f\xc0\x00\x02\x01\xc63d\x02\xdc\x04\x01\xbb")
+uint16(0)
