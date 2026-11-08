@@ -491,7 +491,7 @@ func parseAclCidr(value string) (netip.Prefix, error) {
 // Whether this dst reaches a concrete socket, repo label, dns host or alias, as §8.4's * reads: * stays
 // within a label or segment, and a bare * takes all of a kind. A dst of one kind reaches only that kind.
 // A subject or ip range is the compile's to expand, so those answer false, as a pattern in concrete
-// does.
+// does. A concrete socket must be §9.4's canonical name, which also bounds what a glob runs over.
 //
 // A socket's last segment of a bare * is the one thing wider: it takes every name below its prefix,
 // since sock:tls/* has to reach tls/443/blog (§8.5) and AclTarget.socket_prefix carries such a prefix.
@@ -505,10 +505,14 @@ func (self AclResource) covers(concrete AclResource) bool {
 	if strings.Contains(concrete.Name, "*") || (concrete.Name == "" && concrete.RepoId == (Id{})) {
 		return false
 	}
-	// A concrete socket is a canonical name, folded as §9.4 folds it. An unfolded TLS/443/x is tls/443/x,
-	// and its first segment would read as an application name that a glob reaches, so it matches nothing.
-	if concrete.Kind == AclResourceSocket && strings.Trim(concrete.Name, aclSocketAlphabet) != "" {
-		return false
+	// A concrete socket is a name §9.4 parses to itself: folded, and in its namespace's form. Anything
+	// else is no socket, so it matches nothing. An unfolded TLS/443/x is tls/443/x, whose first segment
+	// would read as an application name a glob reaches, and ../x or tls/80/x names no socket at all.
+	if concrete.Kind == AclResourceSocket {
+		canonical, _, err := ParseSocketName(concrete.Name)
+		if err != nil || canonical != concrete.Name {
+			return false
+		}
 	}
 	if self.Kind == AclResourceAll {
 		switch concrete.Kind {
