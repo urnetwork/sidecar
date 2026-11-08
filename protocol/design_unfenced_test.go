@@ -545,8 +545,8 @@ enum DmarcVerdict {
   DMARC_VERDICT_UNSPECIFIED = 0; DMARC_PASS = 1; DMARC_FAIL = 2; DMARC_NONE = 3; DMARC_TEMPERROR = 4;
 }
 enum ArcVerdict { ARC_VERDICT_UNSPECIFIED = 0; ARC_NONE = 1; ARC_PASS = 2; ARC_FAIL = 3; ARC_INCOMPLETE = 4; }
-// §15.15's field list and kinds.
-message MailHint { MailHintKind kind = 1; }
+// §15.15's field list and kinds, with plan-MAIL-format-bytes#2's host.
+message MailHint { MailHintKind kind = 1; string host = 2; }
 enum MailHintKind { MAIL_HINT_KIND_UNSPECIFIED = 0; MAIL_HINT_DEPOSIT = 1; MAIL_HINT_RECEIVER_NEEDED = 2; }
 // §15.7's deposit list.
 message MailDeposit {
@@ -590,19 +590,21 @@ enum MailTlsRule { MAIL_TLS_RULE_UNSPECIFIED = 0; MAIL_TLS_RULE_REQUIRETLS = 1; 
 message MailTlsBasis {
   MailTlsRule rule = 1; string operator_id = 2; uint32 list_version = 3; bool strict_custom_mx = 4;
 }
-message MailIndexSegment { uint32 version = 1; repeated IndexEntry entries = 2; }
-// §15.7's f/ kinds, and the f/ row's op and container, which MAIL-FORMAT.md states.
+message MailIndexSegment { repeated IndexEntry entries = 1; }
+// §15.7's f/ kinds, and the f/ row's op and container, as plan-MAIL-format-bytes#5 numbers them, one clock field
+// holding its hlc_ms and hlc_count.
 enum MailFlagKind {
   MAIL_FLAG_KIND_UNSPECIFIED = 0; MAIL_FLAG_SEEN = 1; MAIL_FLAG_FLAGGED = 2; MAIL_FLAG_LABEL = 3;
   MAIL_FLAG_TRASH = 4;
 }
 message MailFlagOp {
-  bytes message_id = 1; MailFlagKind kind = 2; string label = 3; bool set = 4; uint64 hlc = 5;
-  bytes sidecar_id = 6;
+  reserved 6;
+  bytes message_id = 1; MailFlagKind op = 2; bool set = 3; string label = 4; uint64 hlc = 5;
+  bytes sidecar_id = 7;
 }
-message MailFlagSegment { uint32 version = 1; repeated MailFlagOp ops = 2; }
-// §15.7's r/ row.
-message MailReference { bytes repo_id = 1; bytes message_id = 2; }
+message MailFlagSegment { repeated MailFlagOp ops = 1; }
+// §15.7's r/ row, as plan-MAIL-format-bytes#5 names it.
+message MailGroupRef { bytes repo_id = 1; bytes message_id = 2; }
 // §15.8's list, its state, whose burned is §15.9's, its totp list, by RFC 6238's hashes, and its used_at list.
 message VaultEntry {
   bytes entry_id = 1; string address = 2; string title = 3; string username = 4; string password = 5;
@@ -616,13 +618,12 @@ enum VaultTotpAlgorithm {
 }
 message VaultUsedAt { string registrable_domain = 1; uint64 first = 2; uint64 last = 3; }
 // §15.7's forward and ra/ rows.
-message MailForward { string address = 1; repeated string burners = 2; }
+message MailForward { string address = 1; repeated string burners = 2; uint64 verified_time_ms = 3; }
 message MailReverseAlias { string original_sender = 1; string burner_address = 2; }
-// §15.7's o/ row, and §14's D-SMTP-18.
-message MailOutboxEntry {
-  uint32 version = 1; bytes effect_key = 2; string mail_from = 3; repeated string recipients = 4;
-  bytes message = 5; uint32 flags = 6; repeated string tl4_domains = 7; uint64 created = 8;
-  uint64 approval_not_after = 9;
+// §15.7's o/ row, §14's D-SMTP-18 and plan-SMTP-wire-gaps#4, with mail-proto-format-readings' approval_not_after.
+message SmtpOutboxEntry {
+  bytes effect_key = 1; bytes message_sha256 = 2; string sender = 3; repeated string recipients = 4;
+  uint32 flags = 5; repeated string tl4_domains = 6; uint64 create_time_ms = 7; uint64 approval_not_after = 8;
 }
 // §14.5's modes, numbered as SmtpProof.mode, and its outcomes, in the order written; §15.7's or/ row, one file a send.
 enum MailSendMode { MAIL_SEND_MODE_UNSPECIFIED = 0; MAIL_SEND_BDAT = 1; MAIL_SEND_DATA = 2; }
@@ -631,12 +632,15 @@ enum MailOutcomeKind {
   MAIL_OUTCOME_TOO_LARGE = 4; MAIL_OUTCOME_REFUSED = 5; MAIL_OUTCOME_TLS_REFUSED = 6; MAIL_OUTCOME_FAILED = 7;
 }
 message MailOutcome {
-  string domain = 1; MailSendMode mode = 2; MailOutcomeKind kind = 3; uint64 message_byte_count = 4;
-  uint64 cap_byte_count = 5; uint32 retry_after_ms = 6; uint32 reply_code = 7; uint32 tls_level = 8;
+  string domain = 1; MailSendMode mode = 2; uint64 byte_count = 3; uint64 cap_byte_count = 4;
+  MailOutcomeKind outcome = 5; uint32 reply_code = 6; uint32 retry_after_ms = 7; uint64 update_time_ms = 8;
+  uint32 tls_level = 9;
 }
 message MailOutcomeRecord { repeated MailOutcome outcomes = 1; }
 // §15.7's p/ row.
-message MailProverRecord { uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_second = 2; }
+message MailProverRecord {
+  uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_s = 2; uint64 measure_time_ms = 3;
+}
 `
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question

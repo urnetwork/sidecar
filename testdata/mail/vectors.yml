@@ -85,16 +85,18 @@ messages:
         dns_queries: 12
         dropped: 1
       }
-  - name: hint-deposit
-    type: MailHint
-    hex: "0801"
-    text: |
-      kind: MAIL_HINT_DEPOSIT
   - name: hint-receiver-needed
     type: MailHint
-    hex: "0802"
+    hex: "080212026d78"
     text: |
       kind: MAIL_HINT_RECEIVER_NEEDED
+      host: "mx"
+  - name: hint-receiver-needed-scope
+    type: MailHint
+    hex: "080212096d782e64657369676e"
+    text: |
+      kind: MAIL_HINT_RECEIVER_NEEDED
+      host: "mx.design"
   - name: deposit
     type: MailDeposit
     hex: "0801125d08011204c0000219188080032a146d782e61636d652e726f6f742e6578616d706c6542136d61696c2e73656e6465722e6578616d706c654a136d61696c2e73656e6465722e6578616d706c65520370626c52036373735880e89ef19a341a940208011220abababababababababababababababababababababababababababababababab18a8e89ef19a342210019a5b1000007000800000000000000a2a360801120e73656e6465722e6578616d706c651a04c0000219221c763d73706631206970343a3139322e302e322e302f3234202d616c6c32240a0e73656e6465722e6578616d706c65120273311801220c302a300506032b657003210032150a0d6f746865722e6578616d706c651202733218043a120a0672656a6563741201731a01722002280142136d61696c2e73656e6465722e6578616d706c6548015225080212210a0d72656c61792e6578616d706c65120261311a0c302a300506032b65700321005801620c0803100918082001280c30012217736f6d656f6e65ff4073656e6465722e6578616d706c65280132156164614061636d652e726f6f742e6578616d706c65321767726163654061636d652e726f6f742e6578616d706c653884064081264a10019a5b1000007000800000000000000a"
@@ -169,12 +171,11 @@ messages:
       receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
   - name: deposit-same-network
     type: MailDeposit
-    hex: "080122156164614061636d652e726f6f742e6578616d706c65321767726163654061636d652e726f6f742e6578616d706c654a10019a5b1000007000800000000000000b"
+    hex: "080122156164614061636d652e726f6f742e6578616d706c65321767726163654061636d652e726f6f742e6578616d706c65"
     text: |
       version: 1
       mail_from: "ada@acme.root.example"
       recipients: "grace@acme.root.example"
-      receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0b"
   - name: address-group
     type: MailAddress
     hex: "08031210019a5b1000007000800000000000000d1a10019a5b1000007000800000000000000e1a10019a5b1000007000800000000000000f2210019a5b1000007000800000000000000a2a20eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -231,9 +232,8 @@ messages:
       one_time_code: "482913"
   - name: index-segment
     type: MailIndexSegment
-    hex: "080112ff010a101111111111111111111111111111111112156164614061636d652e726f6f742e6578616d706c651880e89ef19a34221f53656e646572203c736f6d656f6e654073656e6465722e6578616d706c653e2a09596f757220636f6465321f5573652034383239313320746f2066696e697368207369676e696e6720696e3a156162633132334073656e6465722e6578616d706c654210a1a2a3a4a5a6a7a8a9aaabacadaeafb048802052210a0b696e766f6963652e706466120f6170706c69636174696f6e2f7064661880105a0c08011001180120012801300160016a170802120f6c69737465642d6f70657261746f721803200170197a0634383239313312320a102222222222222222222222222222222212156164614061636d652e726f6f742e6578616d706c651881e89ef19a346003"
+    hex: "0aff010a101111111111111111111111111111111112156164614061636d652e726f6f742e6578616d706c651880e89ef19a34221f53656e646572203c736f6d656f6e654073656e6465722e6578616d706c653e2a09596f757220636f6465321f5573652034383239313320746f2066696e697368207369676e696e6720696e3a156162633132334073656e6465722e6578616d706c654210a1a2a3a4a5a6a7a8a9aaabacadaeafb048802052210a0b696e766f6963652e706466120f6170706c69636174696f6e2f7064661880105a0c08011001180120012801300160016a170802120f6c69737465642d6f70657261746f721803200170197a063438323931330a320a102222222222222222222222222222222212156164614061636d652e726f6f742e6578616d706c651881e89ef19a346003"
     text: |
-      version: 1
       entries {
         id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
         address: "ada@acme.root.example"
@@ -275,36 +275,35 @@ messages:
       }
   - name: flag-op
     type: MailFlagOp
-    hex: "0a101111111111111111111111111111111110031a047370616d200128818080a0fbc4ebd0013210019a5b1000007000800000000000000a"
+    hex: "0a10111111111111111111111111111111111003180122047370616d28818080a0fbc4ebd0013a10019a5b1000007000800000000000000a"
     text: |
       message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
-      kind: MAIL_FLAG_LABEL
-      label: "spam"
+      op: MAIL_FLAG_LABEL
       set: true
+      label: "spam"
       hlc: 117566550835200001
       sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
   - name: flag-segment
     type: MailFlagSegment
-    hex: "080112320a10111111111111111111111111111111111001200128808080a0fbc4ebd0013210019a5b1000007000800000000000000b12380a101111111111111111111111111111111110031a047370616d200128818080a0fbc4ebd0013210019a5b1000007000800000000000000a"
+    hex: "0a320a10111111111111111111111111111111111001180128808080a0fbc4ebd0013a10019a5b1000007000800000000000000b0a380a10111111111111111111111111111111111003180122047370616d28818080a0fbc4ebd0013a10019a5b1000007000800000000000000a"
     text: |
-      version: 1
       ops {
         message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
-        kind: MAIL_FLAG_SEEN
+        op: MAIL_FLAG_SEEN
         set: true
         hlc: 117566550835200000
         sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0b"
       }
       ops {
         message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
-        kind: MAIL_FLAG_LABEL
-        label: "spam"
+        op: MAIL_FLAG_LABEL
         set: true
+        label: "spam"
         hlc: 117566550835200001
         sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
       }
-  - name: reference
-    type: MailReference
+  - name: group-ref
+    type: MailGroupRef
     hex: "0a10019a5b1000007000800000000000000d121011111111111111111111111111111111"
     text: |
       repo_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0d"
@@ -338,11 +337,12 @@ messages:
       state: VAULT_ENTRY_BURNED
   - name: forward
     type: MailForward
-    hex: "0a19656c73657768657265406f7574736964652e6578616d706c65120a6f747465722d34383231120a6865726f6e2d31303933"
+    hex: "0a19656c73657768657265406f7574736964652e6578616d706c65120a6f747465722d34383231120a6865726f6e2d313039331880e89ef19a34"
     text: |
       address: "elsewhere@outside.example"
       burners: "otter-4821"
       burners: "heron-1093"
+      verified_time_ms: 1793923200000
   - name: reverse-alias
     type: MailReverseAlias
     hex: "0a16736f6d656f6e654073656e6465722e6578616d706c65122173686f70406f747465722d343832312e61636d652e726f6f742e6578616d706c65"
@@ -350,52 +350,81 @@ messages:
       original_sender: "someone@sender.example"
       burner_address: "shop@otter-4821.acme.root.example"
   - name: outbox-entry
-    type: MailOutboxEntry
-    hex: "08011220eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1a21626f756e6365732b74306b656e40622e61636d652e726f6f742e6578616d706c652216736f6d656f6e654073656e6465722e6578616d706c65221668696464656e406f7574736964652e6578616d706c652a3646726f6d3a206164614061636d652e726f6f742e6578616d706c650d0a5375626a6563743a2068656c6c6f0d0a0d0a68656c6c6f0d0a30043a0f6f7574736964652e6578616d706c654080e89ef19a344880c5faf29a34"
+    type: SmtpOutboxEntry
+    hex: "0a20eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1220a79df8f2d5240dd888a3239e3c86d2338d5972ef5372be1a8244bd1a87ccd2581a21626f756e6365732b74306b656e40622e61636d652e726f6f742e6578616d706c652216736f6d656f6e654073656e6465722e6578616d706c65221668696464656e406f7574736964652e6578616d706c652804320f6f7574736964652e6578616d706c653880e89ef19a344080c5faf29a34"
     text: |
-      version: 1
       effect_key: "\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"
-      mail_from: "bounces+t0ken@b.acme.root.example"
+      message_sha256: "\xa7\x9d\xf8\xf2\xd5\x24\x0d\xd8\x88\xa3\x23\x9e\x3c\x86\xd2\x33\x8d\x59\x72\xef\x53\x72\xbe\x1a\x82\x44\xbd\x1a\x87\xcc\xd2\x58"
+      sender: "bounces+t0ken@b.acme.root.example"
       recipients: "someone@sender.example"
       recipients: "hidden@outside.example"
-      message: "From: ada@acme.root.example\r\nSubject: hello\r\n\r\nhello\r\n"
       flags: 4
       tl4_domains: "outside.example"
-      created: 1793923200000
+      create_time_ms: 1793923200000
       approval_not_after: 1793926800000
   - name: outcome
     type: MailOutcome
-    hex: "0a0f6f7574736964652e6578616d706c651002180420808080012880804030e0d40338a6044003"
+    hex: "0a0f6f7574736964652e6578616d706c651002188080800120808040280430a60438e0d4034080e89ef19a344803"
     text: |
       domain: "outside.example"
       mode: MAIL_SEND_DATA
-      kind: MAIL_OUTCOME_TOO_LARGE
-      message_byte_count: 2097152
+      byte_count: 2097152
       cap_byte_count: 1048576
-      retry_after_ms: 60000
+      outcome: MAIL_OUTCOME_TOO_LARGE
       reply_code: 550
+      retry_after_ms: 60000
+      update_time_ms: 1793923200000
       tls_level: 3
   - name: outcome-record
     type: MailOutcomeRecord
-    hex: "0a160a0e73656e6465722e6578616d706c651001180140010a170a0f6f7574736964652e6578616d706c65180330e0d403"
+    hex: "0a1d0a0e73656e6465722e6578616d706c65100128014080e89ef19a3448010a1e0a0f6f7574736964652e6578616d706c65280338e0d4034081e89ef19a34"
     text: |
       outcomes {
         domain: "sender.example"
         mode: MAIL_SEND_BDAT
-        kind: MAIL_OUTCOME_SENT
+        outcome: MAIL_OUTCOME_SENT
+        update_time_ms: 1793923200000
         tls_level: 1
       }
       outcomes {
         domain: "outside.example"
-        kind: MAIL_OUTCOME_DEFERRED
+        outcome: MAIL_OUTCOME_DEFERRED
         retry_after_ms: 60000
+        update_time_ms: 1793923200001
       }
   - name: prover-record
     type: MailProverRecord
-    hex: "08808040109201"
+    hex: "088080401092011880e89ef19a34"
     text: |
       smtp_data_proof_bytes: 1048576
-      data_bytes_per_second: 146
+      data_bytes_per_s: 146
+      measure_time_ms: 1793923200000
+
+# A deposit's plaintext: the message as received, its MailDeposit, then u32be of that MailDeposit's length.
+trailers:
+  - name: trailer-receiver
+    message_bytes: 82
+    plaintext: "46726f6d3a20736f6d656f6e654073656e6465722e6578616d706c650d0a546f3a206164614061636d652e726f6f742e6578616d706c650d0a5375626a6563743a2068656c6c6f0d0a0d0a68656c6c6f0d0a08011a3d080112209b2150744dabe793cb5700345da1310b0b72b487fb603cb497b9dbdbdc1aa6a21880e89ef19a342210019a5b1000007000800000000000000a2216736f6d656f6e654073656e6465722e6578616d706c6532156164614061636d652e726f6f742e6578616d706c653884064081264a10019a5b1000007000800000000000000a00000088"
+    text: |
+      version: 1
+      evidence {
+        version: 1
+        message_sha256: "\x9b\x21\x50\x74\x4d\xab\xe7\x93\xcb\x57\x00\x34\x5d\xa1\x31\x0b\x0b\x72\xb4\x87\xfb\x60\x3c\xb4\x97\xb9\xdb\xdb\xdc\x1a\xa6\xa2"
+        receive_time_millis: 1793923200000
+        receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+      }
+      mail_from: "someone@sender.example"
+      recipients: "ada@acme.root.example"
+      tls_version: 772
+      tls_suite: 4865
+      receiver_sidecar_id: "\x01\x9a\x5b\x10\x00\x00\x70\x00\x80\x00\x00\x00\x00\x00\x00\x0a"
+  - name: trailer-same-network
+    message_bytes: 83
+    plaintext: "46726f6d3a206164614061636d652e726f6f742e6578616d706c650d0a546f3a2067726163654061636d652e726f6f742e6578616d706c650d0a5375626a6563743a206c756e63680d0a0d0a6e6f6f6e3f0d0a080122156164614061636d652e726f6f742e6578616d706c65321767726163654061636d652e726f6f742e6578616d706c6500000032"
+    text: |
+      version: 1
+      mail_from: "ada@acme.root.example"
+      recipients: "grace@acme.root.example"
 
 # <h> over a last name, and the spelling of a binary name.
 names:

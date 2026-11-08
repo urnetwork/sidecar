@@ -66,7 +66,7 @@ roots:
   SmtpProofResult: "smtpedge reads or answers it (§14.5)"
   # protocol/mail.proto
   MailIngress: "mxedge builds it from what it holds (§15.4)"
-  MailHint: "a kind in PushHint.hint on topic mail, which the mail service builds (§15.15)"
+  MailHint: "a kind and an mx host in PushHint.hint on topic mail, which mxedge's router builds (§15.15, §15.6)"
   # protocol/gkm.proto
   GkmCommitHeader: "gkm reads the clear header of every commit (§10.4, §10.6)"
   UrMlsCredential: "in a KeyPackage's clear credential, which gkm holds (§10.6, gkm-4)"
@@ -270,6 +270,7 @@ fields:
   SmtpProofResult.code: smtp-2
   # protocol/mail.proto
   MailHint.kind: connect-4
+  MailHint.host: connect-4
   MailIngress.sender_ip: mx-1
   MailIngress.sender_port: mx-1
   MailIngress.sni: mx-1

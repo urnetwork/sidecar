@@ -68,6 +68,9 @@ var testFieldWidths = map[string]int{
 	"EvsHeadChanged.chain":   testHashSize,
 	"EvsHeadChanged.push_id": testIdSize,
 
+	// mx, a dot and a scope's DNS label (plan-MAIL-format-bytes#2).
+	"MailHint.host": 2 + 1 + 63,
+
 	"DirectoryNotice.request_id":           testIdSize,
 	"DirectoryNotice.requester_sidecar_id": testIdSize,
 	"DirectoryNotice.decisions":            testNoticeDecisions,

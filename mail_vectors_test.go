@@ -1,8 +1,9 @@
 // testdata/mail/vectors.yml on every leg the root's tests run on, the sidecar_http Worker included, which is why the
 // file is embedded and why this sits in the root and not beside protocol/mail.proto: a Worker has no file system.
 // protoc wrote each message's bytes from its text, so a vector proves the wire and not this module's own encoder.
-// Its clock and order rows hold MAIL-FORMAT.md's rules until MailHlc lands (MAIL-M7-06), which takes these rows as its
-// own.
+// Its clock and order rows hold MAIL-FORMAT.md's rules until MailHlc lands (MAIL-M7-06), and its trailer rows the
+// deposit's layout until the receiver (MAIL-M7-14) writes it and ingest (MAIL-M7-15) reads it, each taking these rows
+// as its own.
 
 package sidecar
 
@@ -12,6 +13,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base32"
+	"encoding/binary"
 	"encoding/hex"
 	"math"
 	"strconv"
@@ -196,6 +198,51 @@ func TestMailVectorsCoverEveryField(t *testing.T) {
 			if !coveredFieldNames[fields.Get(j).FullName()] {
 				t.Errorf("no vector sets %s", fields.Get(j).FullName())
 			}
+		}
+	}
+}
+
+// MAIL-FORMAT.md's deposit layout (plan-MAIL-deposit-shape): the message as received, its MailDeposit, then u32be of
+// that MailDeposit's length, so a reader finds the trailer from the last four bytes before reading the body. A
+// receiver's evidence names the message by its SHA-256, and a same-network deposit sets only its three fields.
+func TestMailVectorTrailers(t *testing.T) {
+	items := parseMailVectors(t)["trailers"]
+	if len(items) == 0 {
+		t.Fatal("no trailers")
+	}
+	for _, item := range items {
+		plaintext, err := hex.DecodeString(item["plaintext"])
+		if err != nil || len(plaintext) < 4 {
+			t.Fatalf("%s: %d B, %v", item["name"], len(plaintext), err)
+		}
+		depositEnd := len(plaintext) - 4
+		messageEnd := depositEnd - int(binary.BigEndian.Uint32(plaintext[depositEnd:]))
+		if messageEnd < 0 || uint64(messageEnd) != mailVectorNumber(t, item, "message_bytes") {
+			t.Fatalf("%s: the trailer puts the message's end at %d", item["name"], messageEnd)
+		}
+		deposit := &protocol.MailDeposit{}
+		if err := proto.Unmarshal(plaintext[messageEnd:depositEnd], deposit); err != nil {
+			t.Fatalf("%s: %v", item["name"], err)
+		}
+		fromText := &protocol.MailDeposit{}
+		if err := prototext.Unmarshal([]byte(item["text"]), fromText); err != nil {
+			t.Fatalf("%s: %v", item["name"], err)
+		}
+		if !proto.Equal(deposit, fromText) {
+			t.Errorf("%s: its trailer and its text differ", item["name"])
+		}
+		if deposit.Evidence == nil {
+			deposit.ProtoReflect().Range(func(field protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+				if name := field.Name(); name != "version" && name != "mail_from" && name != "recipients" {
+					t.Errorf("%s: a same-network deposit sets %s", item["name"], name)
+				}
+				return true
+			})
+			continue
+		}
+		sum := sha256.Sum256(plaintext[:messageEnd])
+		if !bytes.Equal(deposit.Evidence.MessageSha256, sum[:]) {
+			t.Errorf("%s: the evidence names another message", item["name"])
 		}
 	}
 }
