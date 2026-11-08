@@ -365,9 +365,10 @@ func NewGkmReaderKey(sidecarId Id, signedAt time.Time, notAfter time.Time, sign 
 	return signed, privateKey, nil
 }
 
-// A ReaderKey private key from its stored 32-byte seed, as a keychain load unwraps it.
+// A ReaderKey private key from its stored 32-byte seed, as a keychain load unwraps it. The key keeps its own
+// copy, since crypto/hpke keeps the slice it is given, so the caller may erase seed.
 func LoadGkmReaderKey(seed []byte) (hpke.PrivateKey, error) {
-	privateKey, err := hpke.MLKEM768X25519().NewPrivateKey(seed)
+	privateKey, err := hpke.MLKEM768X25519().NewPrivateKey(bytes.Clone(seed))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reader key: %w", ErrGkmMalformed, err)
 	}
@@ -378,9 +379,9 @@ func LoadGkmReaderKey(seed []byte) (hpke.PrivateKey, error) {
 }
 
 // A Delegation's reader key from its 32-byte delegation_reader_seed, X-Wing's own seed (QD-466), which opens
-// the DelegationWraps to its reader_xwing_public_key.
+// the DelegationWraps to its reader_xwing_public_key. The key keeps its own copy, so the caller may erase seed.
 func LoadGkmDelegationKey(seed []byte) (hpke.PrivateKey, error) {
-	privateKey, err := hpke.MLKEM768X25519().NewPrivateKey(seed)
+	privateKey, err := hpke.MLKEM768X25519().NewPrivateKey(bytes.Clone(seed))
 	if err != nil {
 		return nil, fmt.Errorf("%w: delegation key: %w", ErrGkmMalformed, err)
 	}

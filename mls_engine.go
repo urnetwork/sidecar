@@ -19,8 +19,8 @@
 // ParseMlsHeader is the one MLS parse gkm runs, with no key (I-1), on mls_framing.go's decoders, so it refuses
 // whatever they refuse. A member's commit, a PrivateMessage, shows its group, epoch and authenticated_data; an
 // external commit, a PublicMessage, shows its joiner's credential and the old leaf it removes as well (gkm-6). A
-// leaf reads no credential type outside tests until KEYS-M2-07 carries 0xF552, so until then every external commit
-// fails to parse, and gkm refuses every resync and recovery self-join, failing closed.
+// leaf carries credential 0xF552 alone outside tests (mls_leafnode.go), so that credential's encoding is what gkm
+// reads of a joiner.
 //
 // On every leg, with no connect import. MlsKek hooks the KEK it exports, and the engines hook their own secrets.
 // An engine's methods are safe for concurrent use; a group, a pending join and a staged commit are not, and one
@@ -62,8 +62,8 @@ type MlsHeader struct {
 // What an external commit, a PublicMessage, shows in the clear beyond its header (gkm-6).
 type MlsExternalCommit struct {
 	// The joiner's credential, as its new leaf carries it, which gkm holds to the uploader (§10.6's checks):
-	// UrMlsCredential's encoding under 0xF552 (§10.4) once KEYS-M2-07 carries it in a leaf, and a basic
-	// credential's identity in the root's tests.
+	// UrMlsCredential's encoding under 0xF552 (§10.4), and a basic credential's identity in the root's tests.
+	// Nothing here checks it: gkm runs CheckUrMlsCredential, and members check it against the log.
 	Credential []byte
 	// The leaf of the old epoch the commit removes, a resync's old leaf; nil for a recovery self-join, which
 	// removes none (§10.9). Without the tree this is only a position, so gkm can bound these but not say whose
@@ -94,7 +94,7 @@ func ParseMlsHeader(encoded []byte) (*MlsHeader, error) {
 	if err != nil {
 		return nil, err
 	}
-	external := &MlsExternalCommit{Credential: bytes.Clone(commit.path.leafNode.credential.identity)}
+	external := &MlsExternalCommit{Credential: bytes.Clone(commit.path.leafNode.credential.body())}
 	if removed != nil {
 		removedLeaf := uint32(*removed)
 		external.RemovedLeaf = &removedLeaf

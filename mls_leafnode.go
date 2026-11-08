@@ -2,12 +2,14 @@
 // §5.3), capabilities and a lifetime. A leaf is the same bytes in a KeyPackage and in the ratchet
 // tree, and everything in it is signed, so what is decoded is kept exactly as it arrived.
 //
-// §10.4's subset takes one credential type on the wire, 0xF552, whose encoding M2's entry review
-// specifies (D-KEYS-10). Until then the decoder refuses it like any type it cannot read. Basic, which
-// the mlswg's vectors and the test groups use, reads only in the test binary, the way suite 0x0001 is
-// built only there, so production refuses it when parsed (D-KEYS-12) and no leaf decodes outside
-// tests yet. Reading is not acceptance either: that is the mlsCredentialValidator's call, and the only
-// production validator there is refuses everything until §7.9's admission check exists.
+// §10.4's subset takes one credential type on the wire, ur_sidecar 0xF552, whose body is UrMlsCredential's
+// encoding as opaque<V> (mls_credential.go), the way a basic credential carries its identity: RFC 9420 §5.3
+// leaves a new type's body to the type, and a vector is what lets a reader find the capabilities after it.
+// Basic, which the mlswg's vectors and the test groups use, reads only in the test binary, the way suite
+// 0x0001 is built only there, so production refuses it when parsed (D-KEYS-12). Reading is not acceptance
+// either: that is the mlsCredentialValidator's call. mlsUrCredentialValidator checks a credential's own
+// signature and that it names the leaf's key, then asks the application's check, KEYS-M2-19's admission and
+// pins, and the validator production has without one refuses everything.
 
 package sidecar
 
@@ -57,30 +59,48 @@ type mlsCredential struct {
 	credentialType uint16
 	// A basic credential's identity.
 	identity []byte
+	// A ur_sidecar credential's body, UrMlsCredential's encoding as it arrived, which is what its
+	// signature covers, so it is checked and read in place and never encoded again.
+	urMlsCredential []byte
 }
 
 // Credential, refusing what decode refuses.
 func (self *mlsCredential) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.credentialType)
-	if self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials {
+	switch {
+	case self.credentialType == mlsCredentialTypeUrSidecar:
+		encoder.writeVector(self.urMlsCredential)
+	case self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials:
 		encoder.writeVector(self.identity)
-		return
+	default:
+		encoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 	}
-	encoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 }
 
-// Every type is refused outside tests: x509 is outside the subset, 0xF552 is not specified yet, basic
-// is the tests' alone, and an unknown type's length cannot be known.
+// Every type but 0xF552 is refused outside tests: x509 is outside the subset, basic is the tests'
+// alone, and an unknown type's length cannot be known.
 func (self *mlsCredential) decode(decoder *mlsDecoder) {
 	self.credentialType = decoder.readUint16()
 	if decoder.err != nil {
 		return
 	}
-	if self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials {
+	switch {
+	case self.credentialType == mlsCredentialTypeUrSidecar:
+		self.urMlsCredential = decoder.readVector()
+	case self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials:
 		self.identity = decoder.readVector()
-		return
+	default:
+		decoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 	}
-	decoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
+}
+
+// What the credential carries for its type: a ur_sidecar credential's UrMlsCredential encoding, or a
+// basic one's identity in tests.
+func (self *mlsCredential) body() []byte {
+	if self.credentialType == mlsCredentialTypeUrSidecar {
+		return self.urMlsCredential
+	}
+	return self.identity
 }
 
 // What a leaf says it supports (RFC §7.2). Unknown values stay, because the list is signed, and mean

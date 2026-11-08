@@ -23,6 +23,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
@@ -284,9 +285,10 @@ func (self *mlsCipherSuite) deriveKemKey(kind string, secret []byte) (hpke.Priva
 	return privateKey, nil
 }
 
-// An HPKE private key from its serialized form, as a state load unwraps it.
+// An HPKE private key from its serialized form, as a state load unwraps it. The key gets its own copy, since
+// crypto/hpke keeps the slice it is given and a caller erases its buffer.
 func (self *mlsCipherSuite) loadKemKey(kind string, encoded []byte) (hpke.PrivateKey, error) {
-	privateKey, err := self.kem.NewPrivateKey(encoded)
+	privateKey, err := self.kem.NewPrivateKey(bytes.Clone(encoded))
 	if err != nil {
 		return nil, fmt.Errorf("mls: hpke private key: %w", err)
 	}

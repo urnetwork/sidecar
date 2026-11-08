@@ -35,10 +35,14 @@ import (
 	"slices"
 )
 
-// WireFormat (RFC §17.2): the two that carry a commit.
+// WireFormat (RFC §17.2): the two that carry a commit, then the three gkm stores bare and a client reads by
+// its own route, each through mlsUnmarshalMessageOf alone.
 const (
 	mlsWireFormatPublicMessage  uint16 = 0x0001
 	mlsWireFormatPrivateMessage uint16 = 0x0002
+	mlsWireFormatWelcome        uint16 = 0x0003
+	mlsWireFormatGroupInfo      uint16 = 0x0004
+	mlsWireFormatKeyPackage     uint16 = 0x0005
 )
 
 // ContentType (RFC §6).
@@ -720,4 +724,27 @@ func (self *mlsMessageProtection) openSenderData(message *mlsPrivateMessage) (*m
 		return nil, err
 	}
 	return senderData, nil
+}
+
+// An MLSMessage of a Welcome, GroupInfo or KeyPackage (RFC §6): version mls10, the wire format, then the body.
+func mlsMarshalMessageOf(wireFormat uint16, body mlsEncodable) ([]byte, error) {
+	encoder := &mlsEncoder{}
+	encoder.writeUint16(mlsProtocolVersion10)
+	encoder.writeUint16(wireFormat)
+	body.encode(encoder)
+	return encoder.finish()
+}
+
+// Fills body from an MLSMessage of exactly this wire format, refusing any version but mls10 and anything left
+// over, so a commit, a Welcome, a GroupInfo and a KeyPackage are never read as one another.
+func mlsUnmarshalMessageOf(encoded []byte, wireFormat uint16, body mlsDecodable) error {
+	decoder := &mlsDecoder{remaining: encoded}
+	if version := decoder.readUint16(); decoder.err == nil && version != mlsProtocolVersion10 {
+		return fmt.Errorf("%w: protocol version %d", errMlsRefused, version)
+	}
+	if found := decoder.readUint16(); decoder.err == nil && found != wireFormat {
+		return fmt.Errorf("%w: wire format %#x where %#x belongs", errMlsRefused, found, wireFormat)
+	}
+	body.decode(decoder)
+	return decoder.finish()
 }
