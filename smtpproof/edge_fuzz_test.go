@@ -140,7 +140,8 @@ func testEditReplay(events []*testReplayEvent, edits []byte) []*testReplayEvent 
 			if event.record != nil && tlsRecordHeaderBytes < len(event.record) {
 				payload := event.record[tlsRecordHeaderBytes:]
 				event.record = tlsFrameRecord(event.record[0], tlsVersion12, payload[:position%len(payload)])
-			} else if event.shts != nil {
+			} else if 0 < len(event.shts) {
+				// a repeated event shares its octets, so an earlier cut may already have emptied them
 				event.shts = event.shts[:position%len(event.shts)]
 			}
 		case 4:
