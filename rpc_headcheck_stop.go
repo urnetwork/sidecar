@@ -298,8 +298,12 @@ func (self *HeadStopState) ReportFork(fork HeadFork) {
 	}
 }
 
-// Adds fork unless the same stop is held, copying its evidence.
+// Adds fork unless the same stop is held, copying its evidence. A generation, epoch or ref fork that
+// names no group stops as widely as an auth fork, since there is no one group to stop.
 func (self *HeadStopState) addForkWithLock(fork HeadFork, at time.Time) bool {
+	if fork.Kind != HeadForkAuth && fork.GroupId == (Id{}) {
+		fork.Kind = HeadForkAuth
+	}
 	for _, held := range self.forks {
 		if held.sameStop(fork) {
 			return false
