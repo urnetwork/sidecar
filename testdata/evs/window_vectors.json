@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "name": "a write",
+      "encoded": "dbd5259ef7f5cc210164e85e1183a3bdb111c6e1d318f203063e5c16bab43c1001c16dc00a0b0c0d00000007000000200000032c000004001000000000020000"
+    },
+    {
+      "name": "a creation under a root",
+      "encoded": "c922f728f7fdc942487809ae352a8f38b111c6e1d318f203063e5c16bab43c1001c16dc00a0b0c0d00000007000000200000032c0000040010010001ffff0003"
+    },
+    {
+      "name": "a forced path epoch",
+      "encoded": "c71200db300ee47c221151058a0f5b4bb111c6e1d318f203063e5c16bab43c1001c16dc00a0b0c0d00000007000000200000032c00000400100000000000000c"
+    }
+  ],
+  "refusals": [
+    {
+      "code": 8,
+      "until_ms": 1767225600001,
+      "encoded": "dbd5259ef7f5cc21b11100086955b901"
+    },
+    {
+      "code": 25,
+      "until_ms": 1767225601000,
+      "encoded": "dbd5259ef7f5cc21b11100196955b901"
+    }
+  ]
+}
