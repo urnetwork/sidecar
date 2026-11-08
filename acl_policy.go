@@ -13,8 +13,10 @@
 // into it, and the reader holds no generic value, so it builds only what the schema names, a fixed
 // multiple of the source.
 //
-// A refusal names a line, a column and a field path, and never repeats a value (I-13): policy text is
-// member-chosen, and a reader's refusal of a bad head may reach a log.
+// A refusal names a field path, and a line and column wherever the reader stands at the fault. An ip:
+// name that hosts does not hold is the one found only once the whole document is read, so it names its
+// path alone. None repeats a value (I-13): policy text is member-chosen, and a reader's refusal of a
+// bad head may reach a log.
 //
 // On every leg, the sidecar_http page Worker's included, since every admitted sidecar compiles policy.
 // No connect type and no build tag.
@@ -174,6 +176,9 @@ type AclPolicyTest struct {
 // One entry of a test's accept or deny: <resource>#<action>, as §8.5 and §15.10 write them, and
 // optionally :<ports> after the action for a subject or ip resource.
 type AclPolicyCheck struct {
+	// May name a set and not one target: a glob, a range, a selector or a bare *. covers reaches no
+	// glob as a concrete name, so a runner matching checks through it would pass every deny over a glob
+	// unseen; how a check reads a set is the test runner's to settle (ACL-M2-11).
 	Resource AclResource
 	Action   protocol.AclAction
 	// Nil for no port.
