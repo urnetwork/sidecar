@@ -184,7 +184,7 @@ func NewFeedLoop(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSe
 			writer:        newDnsSnapshotWriter(file, self.clock, dnsSeconds(settings.Feed.SnapshotWriteSeconds), self.metrics),
 			view:          empty,
 			requireReload: deps.RequireReload,
-			idle:          sidecar.NewMonitorValue(false),
+			park:          sidecar.NewMonitorValue(dnsFeedPark{}),
 		})
 	}
 	for _, root := range self.roots {
@@ -234,19 +234,32 @@ type dnsFeedRoot struct {
 	// Replaced snapshots whose diffs wait for POST /dns/reload-diff.
 	pending []*DnsReplacedSnapshot
 	backoff time.Duration
-	// Whether the loop is parked in a poll or a wait on the clock, with nothing of its own in hand: what
-	// a test reads before it moves a fake clock, so time moves only while the loop is waiting on it.
-	idle *sidecar.MonitorValue[bool]
+	// Where the loop is parked: in a poll, or in a wait on the clock until a time.
+	park *sidecar.MonitorValue[dnsFeedPark]
+}
+
+// Where one of a root's goroutines is parked, with nothing of its own in hand: what a test reads
+// before it moves a fake clock, so time moves only while the loop and its writer wait on it. The zero
+// value is not parked.
+type dnsFeedPark struct {
+	parked bool
+	// When the wait parked in ends, set with its timer: a goroutine whose until the clock has reached
+	// has been woken, though it reads parked until it runs again. Zero for a poll, or for the writer's
+	// wait for a change, whose wakes come from elsewhere.
+	until time.Time
 }
 
 // Waits timeout on the clock. False once the loop has ended.
 func (self *dnsFeedRoot) wait(timeout time.Duration) bool {
-	self.idle.Set(true)
-	defer self.idle.Set(false)
+	timer := self.loop.clock.After(timeout)
+	// the clock is read after the timer is set, so a move in between leaves until no earlier than it
+	self.park.Set(dnsFeedPark{parked: true, until: self.loop.clock.Now().Add(timeout)})
+	defer self.park.Set(dnsFeedPark{})
+	testHookBarrier("dnsservice.feed_wait", "")
 	select {
 	case <-self.loop.ctx.Done():
 		return false
-	case <-self.loop.clock.After(timeout):
+	case <-timer:
 		return true
 	}
 }
@@ -270,9 +283,9 @@ func (self *dnsFeedRoot) run() {
 			// a reload comes next whatever the journal holds, so nothing need hold
 			after = 0
 		}
-		self.idle.Set(true)
+		self.park.Set(dnsFeedPark{parked: true})
 		answer, err := self.loop.deps.Feed.Journal(self.loop.ctx, self.root, after)
-		self.idle.Set(false)
+		self.park.Set(dnsFeedPark{})
 		if err == nil {
 			err = self.checkAnswer(answer)
 		}
@@ -578,9 +591,9 @@ type dnsSnapshotWriter struct {
 	written *sidecar.MonitorValue[uint64]
 	// The serial of the view on disk, zero before the first write.
 	writtenSerial *sidecar.MonitorValue[uint64]
-	// Whether run is parked, waiting for a change or its interval: what a test reads before it moves a
-	// fake clock.
-	idle *sidecar.MonitorValue[bool]
+	// Where run is parked: waiting for a change, which a generation newer than the one written has
+	// woken, or for its interval, until a time.
+	park *sidecar.MonitorValue[dnsFeedPark]
 
 	stateLock  sync.Mutex
 	state      *dnsSavedState
@@ -598,7 +611,7 @@ func newDnsSnapshotWriter(file *SnapshotFile, clock sidecar.Clock, interval time
 		wake:          sidecar.NewMonitorValue[uint64](0),
 		written:       sidecar.NewMonitorValue[uint64](0),
 		writtenSerial: sidecar.NewMonitorValue[uint64](0),
-		idle:          sidecar.NewMonitorValue(false),
+		park:          sidecar.NewMonitorValue(dnsFeedPark{}),
 	}
 }
 
@@ -655,22 +668,25 @@ func (self *dnsSnapshotWriter) run(ctx context.Context) {
 		generation, woken := self.wake.Get()
 		if self.written.Value() < generation {
 			timer := self.clock.After(self.interval)
-			self.idle.Set(true)
+			// the clock is read after the timer is set, as the loop's wait does
+			self.park.Set(dnsFeedPark{parked: true, until: self.clock.Now().Add(self.interval)})
+			testHookBarrier("dnsservice.feed_writer_interval", "")
 			select {
 			case <-ctx.Done():
 				return
 			case <-timer:
 			}
-			self.idle.Set(false)
+			self.park.Set(dnsFeedPark{})
 			self.flush()
 			continue
 		}
-		self.idle.Set(true)
+		self.park.Set(dnsFeedPark{parked: true})
+		testHookBarrier("dnsservice.feed_writer_change", "")
 		select {
 		case <-ctx.Done():
 			return
 		case <-woken:
 		}
-		self.idle.Set(false)
+		self.park.Set(dnsFeedPark{})
 	}
 }

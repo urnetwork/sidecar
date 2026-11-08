@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
@@ -75,6 +76,23 @@ func edgeTcpClosed(conn net.Conn) bool {
 	_, err := edgeTcpRead(conn)
 	var netErr net.Error
 	return err != nil && !(errors.As(err, &netErr) && netErr.Timeout())
+}
+
+// Waits until a timer at at is set: the idle bound a connection arms for its next query. That bound is
+// armed after the answer to the last query is written, so a reply read does not yet mean it is set.
+func (self *testEdge) awaitTimerAt(t testing.TB, at time.Time) {
+	t.Helper()
+	for {
+		pending, added := self.clock.WatchTimers()
+		if slices.ContainsFunc(pending, at.Equal) {
+			return
+		}
+		select {
+		case <-added:
+		case <-t.Context().Done():
+			t.Fatalf("timers %v, want one at %v", pending, at)
+		}
+	}
 }
 
 // Waits until the edge serves count TCP connections.
@@ -174,32 +192,25 @@ func TestEdgeTcpClosesAnIdleConnection(t *testing.T) {
 	idle := time.Duration(edge.settings.Tcp.IdleTimeoutSeconds) * time.Second
 
 	silent := edgeTcpDial(t, address)
-	if err := edge.clock.AwaitTimers(t.Context(), 1); err != nil {
-		t.Fatal(err)
-	}
+	edge.awaitTimerAt(t, edge.clock.Now().Add(idle))
 	edge.clock.Advance(idle)
 	if !edgeTcpClosed(silent) {
 		t.Fatal("a silent connection outlived the idle timeout")
 	}
 	edge.awaitTcpCount(t, 0)
 
+	// a query 0.6 of the bound in, twice, so the second comes past the bound armed at connect. Each
+	// move waits for the bound the last answer armed, at its own time, since moving on the reply alone
+	// can go past a bound not yet armed, which then never fires
 	busy := edgeTcpDial(t, address)
-	if err := edge.clock.AwaitTimers(t.Context(), 1); err != nil {
-		t.Fatal(err)
-	}
-	edge.clock.Advance(idle * 6 / 10)
-	// two answers in turn: once the second is in, the timer armed at connect has been stopped, since
-	// it is stopped before the timer the second query was read under is armed
+	edge.awaitTimerAt(t, edge.clock.Now().Add(idle))
 	for range 2 {
+		edge.clock.Advance(idle * 6 / 10)
 		edgeTcpWrite(t, busy, edgeTestQuery("www.net1."+edgeTestRoot, dns.TypeA, false))
-		if _, err := edgeTcpRead(busy); err != nil {
-			t.Fatal(err)
+		if reply, err := edgeTcpRead(busy); err != nil || len(reply.Answer) != 1 {
+			t.Fatalf("a busy connection inside its idle bound got %v %v", reply, err)
 		}
-	}
-	edge.clock.Advance(idle * 6 / 10)
-	edgeTcpWrite(t, busy, edgeTestQuery("www.net1."+edgeTestRoot, dns.TypeA, false))
-	if reply, err := edgeTcpRead(busy); err != nil || len(reply.Answer) != 1 {
-		t.Fatalf("past the first idle bound a busy connection got %v %v", reply, err)
+		edge.awaitTimerAt(t, edge.clock.Now().Add(idle))
 	}
 	edge.clock.Advance(idle)
 	if !edgeTcpClosed(busy) {

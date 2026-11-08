@@ -158,6 +158,19 @@ func (self *FakeClock) AdvanceTo(at time.Time) {
 func (self *FakeClock) PendingTimers() []time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	return self.pendingTimersWithLock()
+}
+
+// PendingTimers with a channel that closes when the next timer is set, read together, so a test that
+// does not find the timer it wants waits for the next with no sleep, and no timer set between its read
+// and its wait goes unseen.
+func (self *FakeClock) WatchTimers() (pending []time.Time, added chan struct{}) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.pendingTimersWithLock(), self.timerAdded
+}
+
+func (self *FakeClock) pendingTimersWithLock() []time.Time {
 	times := make([]time.Time, 0, len(self.timers))
 	for _, timer := range self.timers {
 		times = append(times, timer.at)

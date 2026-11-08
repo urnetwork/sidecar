@@ -170,6 +170,31 @@ func TestFakeClockAwaitTimersSeesAWaiterArrive(t *testing.T) {
 	<-woke
 }
 
+// WatchTimers reads what is set and arms its channel at once: with nothing set, the channel closes
+// when a waiter sets its timer, and the next read finds it.
+func TestFakeClockWatchTimersSeesATimerSet(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	pending, added := clock.WatchTimers()
+	if len(pending) != 0 {
+		t.Fatalf("pending %v on a fresh clock", pending)
+	}
+	woke := make(chan struct{})
+	go func() {
+		defer close(woke)
+		<-clock.After(5 * time.Second)
+	}()
+	<-added
+	pending, _ = clock.WatchTimers()
+	if len(pending) != 1 || !pending[0].Equal(DefaultClockStart().Add(5*time.Second)) {
+		t.Errorf("pending %v", pending)
+	}
+	clock.Advance(5 * time.Second)
+	<-woke
+	if pending, _ := clock.WatchTimers(); len(pending) != 0 {
+		t.Errorf("pending %v once fired", pending)
+	}
+}
+
 func TestFakeClockAwaitTimersEndsWithItsContext(t *testing.T) {
 	clock := NewFakeClock(DefaultClockStart())
 	ctx, cancel := context.WithCancel(t.Context())
