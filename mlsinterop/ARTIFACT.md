@@ -123,4 +123,94 @@ None of these is a required step. Each is named so the artifact claims nothing i
 - A group past 16 leaves, where GroupInfo moves out of the epoch object (§10.6); this group peaks at 5 members.
 
 The mlswg vectors under 0x0001 cover the subset's logic, and the root runs every file covering a v0 feature,
-but they count toward no part of this artifact (§10.4).
+but they count toward no part of this artifact (§10.4). The next part records them.
+
+# Beside the artifact: §10.4's other M2 evidence
+
+§22.10's M2 exit also asks for the mlswg vectors under 0x0001, owner decision 43's differential runs and the
+fuzz seeds. None of these counts toward the 0x0010 artifact above; each is recorded here with the tests that are
+its evidence, all of which run in every `test.sh`.
+
+## mlswg vectors under 0x0001: every file accounted for
+
+The root's `TestMlsVectorFilesEachHaveAnOutcome` holds the record below: it names each file's tests by value and
+logs each file's counts. Every named test fails on any 0x0001 entry it runs and does not reproduce.
+`TestMlsVectorFilesMatchUpstream` holds the files to the mlswg's bytes.
+
+| file | entries, under 0x0001 | run by | skipped, and why |
+|---|---|---|---|
+| crypto-basics | 7, 1 | `TestMlsCryptoBasicsVectors` | nothing |
+| deserialization | 14, suite-free | `TestMlsVectorHeaderVectors` | nothing |
+| key-schedule | 7, 1 | `TestMlsKeyScheduleVectors` | nothing |
+| message-protection | 7, 1 | `TestMlsMessageProtectionVectors` | every message opens and verifies through a test reader; the production parse refuses the standalone proposals, a member's PublicMessage commit and the application message, and the PrivateMessage commit once it decrypts to a PSK proposal (§10.4) |
+| messages | 300, suite-free | `TestMlsMessagesVectors`, `TestMlsMessagesFramingVectors`, `TestMlsMessagesKeyPackageVectors`, `TestMlsMessagesWelcomeVectors` | syntax alone; Update, PSK and ReInit proposals, every framed message but a PrivateMessage commit, and group secrets naming a PSK are refused when parsed |
+| passive-client-handling-commit | 91, 13 | `TestMlsPassiveClientVectors` | all 13: each Welcome names a PSK |
+| passive-client-random | 1, 1 | `TestMlsPassiveClientVectors` | joins; its first commit is a member's PublicMessage (D-KEYS-3), so the rest goes with it |
+| passive-client-welcome | 56, 8 | `TestMlsPassiveClientVectors` | 4 of 8, whose Welcomes name a PSK; the other 4 join |
+| psk_secret | 77, 11 | none | the whole file: PSKs are refused when parsed, so it covers no v0 feature |
+| secret-tree | 21, 3 | `TestMlsSecretTreeVectors` | nothing |
+| transcript-hashes | 7, 1 | `TestMlsTranscriptHashVectors` | nothing |
+| tree-math | 10, suite-free | `TestMlsTreeMathVectors` | nothing |
+| tree-operations | 5, 5 | `TestMlsTreeOperationsVectors` | the 1 whose proposal is an Update |
+| tree-validation | 98, 14 | `TestMlsTreeValidationVectors` | nothing |
+| treekem | 77, 11 | `TestMlsTreeKemVectors` | nothing |
+| welcome | 7, 1 | `TestMlsWelcomeVectors` | nothing |
+
+So no mlswg vector exercises a commit mls_* processes: every commit in the passive-client files is a member's
+PublicMessage or follows a Welcome naming a PSK. The differential below is where mls_* follows another
+implementation's commits under 0x0001.
+
+## Differential runs: mls-go v1.6.0 under 0x0001, both directions
+
+mls-go has no 0x0010, and mls_* runs 0x0001 and basic credentials only in the root's tests, which import no peer
+(D-REPO-2). The stacks meet through transcripts in the mlswg's passive-client form, `testdata/mls/0x0001/` (its
+`SOURCE` says how each was recorded), each replayed through both stacks:
+
+- **mls-go writes, mls_* reads.** `TestMlsGoLifecycle` runs mls-go alone for 13 epochs, every member commit a
+  PrivateMessage: Adds with Welcomes, path commits, Removes, an external commit with ExternalInit, and a resync,
+  an external commit removing its joiner's old leaf, which the 0x0010 stacks row does not run. Its passive P and
+  Q are `mlsgo.json`; the root's `TestMlsGoTranscripts` follows all 12 commits of each through mls_*.
+- **mls_* writes, mls-go reads.** The root's `TestMlsGoContinuation` joins that group as P and goes on in it
+  through mls_*'s own code: path commits, an Add with its Welcome, a Remove of one of mls-go's members, an
+  external commit with ExternalInit from mls_*'s own GroupInfo, and a Remove of that joiner, 8 commits.
+  `mls.json` is Q's view, mls-go's 12 commits then mls_*'s 8, which `TestMlsGoReplaysTheTranscripts` follows
+  through mls-go, and the joiner's join.
+- `TestMlsGoIsPinned` fails on any other mls-go than v1.6.0 until the transcripts are recorded again (D-TEST-7).
+
+Every epoch_authenticator agrees, in both directions. What the runs are, and what they found:
+
+- They run below the engine, on the group state machine with the vectors' rules: basic credentials and no
+  ur_group, since mls-go keeps no body of a credential type it has no codec for and refuses to join a group
+  whose GroupContext holds an extension it does not implement (RFC 9420 §13.4). They check RFC 9420's mechanics,
+  not the subset's own rules, which the stacks row and the engine's tests hold. mls_*'s leaves advertise basic
+  through `mlsLeafIdentity.capabilities`, which every engine leaves nil, the subset's.
+- mls-go takes a Welcome's tree only from its GroupInfo, and mls_*'s Welcome carries none (§10.6), so mls-go's
+  read of mls_*'s Welcome is its join alone: the group secrets, the GroupInfo they decrypt, its confirmation tag
+  and the joined epoch's authenticator.
+- **Divergence, mls-go's:** v1.6.0 never returns from joining a Welcome with no tree whose group secrets carry a
+  path_secret: it stands in a one-leaf tree and walks the committer's direct path in it forever. The Add whose
+  Welcome mls-go reads therefore carries no path, and the replay refuses such a view before mls-go sees it.
+
+## Fuzz targets: §22.6's MLS row
+
+Five targets, each held to tmc/mls (byte for byte) and mls-go (field by field, where its suite allows), run as
+ordinary tests on their seeds (owner decision 101): `FuzzMlsHeaderAgreesWithPeers` (MLS messages, through
+`ParseMlsHeader`), `FuzzMlsGkmCommitHeaderAgreesWithPeers` and `FuzzMlsWelcomeAgreesWithPeers` in `fuzz_test.go`,
+and `FuzzMlsGroupInfoAgreesWithPeers` and `FuzzMlsRatchetTreeAgreesWithPeers` in `fuzz_hooks_test.go`, under
+`sidecar_testhooks`, the one build in which the root exports those two decoders. Seeds: the 0x0010 and 0x0001
+transcripts, the mlswg's messages, Welcomes and trees, values the exported engine writes, mutations each
+`TestFuzzMls...SeedsReachEveryRule` holds to the rule it reaches, and the files under `testdata/fuzz/mls_*/`.
+A peer decodes only what mls_* reads, since the rule binds nowhere else.
+
+What they found, in seeds and in runs of 20 to 30 seconds each:
+
+- **mls_*, fixed:** nothing held a received GroupContext's `confirmed_transcript_hash` to the suite's hash length;
+  it only feeds the confirmation tag's MAC. mls-go refused such a GroupInfo as it decoded it, and mls_*'s full
+  GroupInfo check took one its signer had signed. `checkHashLengths` now refuses it in `openMlsWelcome` and the
+  full GroupInfo's check (`TestMlsGroupContextHashLengthsAreTheSuites`); the input is
+  `testdata/fuzz/mls_group_info/confirmed_transcript_hash_of_three_bytes`.
+- **mls-go's:** given a ratchet tree cut short by one byte, its decoder falls back to an older format and
+  allocates by the leaf count it reads there, past a gigabyte.
+
+Not done in this draft: fuzz campaigns longer than those runs, a mutation sweep of mls_*, and OpenMLS, which
+§22.10 needs only if a required step has a gap.
