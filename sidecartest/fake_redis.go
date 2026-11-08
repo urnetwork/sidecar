@@ -323,7 +323,7 @@ func (self *FakeRedis) call(ctx context.Context, op string, keys []string, serve
 	if 0 < len(keys) {
 		faultKey = keys[0]
 	}
-	plan := self.faults.take(ctx, FaultOpRedis, "", faultKey)
+	plan := self.faults.take(ctx, FaultOpRedis, "", faultKey, redisCallWrites(op))
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result
@@ -382,6 +382,15 @@ func (self *FakeRedis) callDelayed(ctx context.Context, op string, plan *FaultPl
 	})
 	stopIfDead(ctx)
 	return err
+}
+
+// The calls that only read. Every other call writes, a script included, since a script's body is its
+// own and §22.8's unknown rule would rather lose one read's answer too many than one write's too few.
+var redisReadCalls = []string{"get", "mget", "hget", "hgetall", "xrange"}
+
+// Whether a call, by its count name, writes.
+func redisCallWrites(op string) bool {
+	return !slices.Contains(redisReadCalls, op)
 }
 
 // CROSSSLOT, at run time: §22.4's lint. A call's keys must share a slot, as production demands, and
