@@ -110,8 +110,9 @@ NoMoreCanBegin(w) == CanBegin(w) = {}
 
 \* A coordinator knows whether it acknowledged. A settler does not, so a write that could have held
 \* a write quorum stays held until those hosts answer: reverting it could undo an acknowledged state.
+\* acked is the oracle's, so only a live coordinator's step reads it.
 MayRevert(w) ==
-    /\ ~acked[w]
+    /\ ~orphan[w] => ~acked[w]
     /\ NoMoreCanBegin(w)
     /\ Cardinality(Known(w)) < WriteQuorum
     /\ orphan[w] => past[w]
