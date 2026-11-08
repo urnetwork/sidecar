@@ -26,6 +26,8 @@ type Sidecar struct {
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
 	eventCallbacks *CallbackList[SidecarEventFunction]
+	// ServiceToken's cache, under its own lock (api_service_token.go).
+	serviceTokens sidecarServiceTokens
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
