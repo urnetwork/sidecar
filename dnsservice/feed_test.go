@@ -116,38 +116,63 @@ func awaitServed(t testing.TB, edge *testEdge, serial uint64) {
 	}
 }
 
-// Moves clock a second at a time until done holds, and only while loop and its writer are parked on
-// the clock or the block, so time never runs ahead of work in hand, a slow fsync included.
-func advanceUntil(t testing.TB, clock *sidecartest.FakeClock, loop *dnsservice.FeedLoop, what string, done func() bool) {
+// Waits until loop's local snapshot holds serial.
+func awaitWritten(t testing.TB, loop *dnsservice.FeedLoop, serial uint64) {
 	t.Helper()
-	advanceWhileParked(t, clock, loop, true, what, done)
-}
-
-// advanceUntil, waiting on the loop alone: for a writer a test holds at a barrier, which never parks.
-func advanceWhileParked(t testing.TB, clock *sidecartest.FakeClock, loop *dnsservice.FeedLoop, writerToo bool, what string, done func() bool) {
-	t.Helper()
-	for range 200 * 1000 {
-		if done() {
+	for {
+		current, changed := loop.WrittenSerialForTest(edgeTestRoot)
+		if current == serial {
 			return
 		}
-		for {
-			loopIdle, loopChanged, writerIdle, writerChanged := loop.IdleForTest(edgeTestRoot)
-			if loopIdle && (writerIdle || !writerToo) {
-				break
-			}
+		select {
+		case <-changed:
+		case <-t.Context().Done():
+			t.Fatalf("written %d, want %d", current, serial)
+		}
+	}
+}
+
+// Moves clock until done holds, and only while loop and its writer are parked and not yet woken, so
+// time never runs ahead of work in hand, a slow fsync included. A writer a test holds at a barrier
+// never parks again, so a test moves the clock past that itself.
+//
+// Each move goes to the nearest timer set, so it fires at least one, and with none set this waits
+// for one, or for the loop or the writer to move, leaving the clock alone. The loop's poll still reads
+// parked once the block's hold has woken it, so a move can come before the loop runs, but never more
+// than the timers already set: the loop sets its next only once it runs. The helper used to move a
+// second at a time whenever bare flags read parked, and they read so from a wake until the goroutine
+// ran; on a loaded machine it spent every move before a woken goroutine got to run. Fails once done
+// has not held within 200,000 s of fake time.
+func advanceUntil(t testing.TB, clock *sidecartest.FakeClock, loop *dnsservice.FeedLoop, what string, done func() bool) {
+	t.Helper()
+	deadline := clock.Now().Add(200 * 1000 * time.Second)
+	for !done() {
+		loopIdle, loopChanged, writerIdle, writerChanged := loop.IdleForTest(edgeTestRoot)
+		if !loopIdle || !writerIdle {
 			select {
 			case <-loopChanged:
 			case <-writerChanged:
 			case <-t.Context().Done():
 				t.Fatalf("%s: the loop never parked", what)
 			}
+			continue
 		}
-		if done() {
-			return
+		pending, added := clock.WatchTimers()
+		if len(pending) == 0 {
+			select {
+			case <-added:
+			case <-loopChanged:
+			case <-writerChanged:
+			case <-t.Context().Done():
+				t.Fatalf("%s: no timer to move the clock to", what)
+			}
+			continue
 		}
-		clock.Advance(time.Second)
+		if deadline.Before(pending[0]) {
+			t.Fatalf("%s never held", what)
+		}
+		clock.AdvanceTo(pending[0])
 	}
-	t.Fatalf("%s never held", what)
 }
 
 // What edge answers for a TXT at label, over UDP from a fresh socket.
@@ -519,6 +544,52 @@ func TestFeedLoopRefusesRowsItCannotApply(t *testing.T) {
 	}
 }
 
+// advanceUntil moves the clock only to a timer set, and not at all while none is. The loop parks in a
+// poll the block holds 7 s with the writer's first write done, so the hold's end is the one timer, and
+// the clock reads its start and then that end. The helper used to move a second at a time on bare
+// parked flags: on a loaded machine it spent all 200,000 moves before a woken loop ran, failing
+// "... never held".
+func TestAdvanceUntilMovesTheClockOnlyToATimerSet(t *testing.T) {
+	feed := newTestFeed(t)
+	scripted := newScriptedFeed()
+	loop := feed.start(t, feed.deps(scripted, feed.edge), feed.edge)
+	clock := feed.edge.clock
+	scripted.queue(&dnsservice.DnsFeedAnswer{
+		Format:    dnsservice.DnsFormat,
+		Root:      edgeTestRoot,
+		Serial:    1,
+		Rows:      []dnsservice.DnsJournalRow{{Format: dnsservice.DnsFormat, Root: edgeTestRoot, Serial: 1, Upserts: edgeTestRows()}},
+		KeyWindow: feed.edge.keys.window,
+	}, nil)
+	awaitServed(t, feed.edge, 1)
+	// with the loop polling, the writer's interval is the one timer set; once it writes, it parks
+	// with none
+	if err := clock.AwaitTimers(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Duration(feed.edge.settings.Feed.SnapshotWriteSeconds) * time.Second)
+	awaitWritten(t, loop, 1)
+
+	start := clock.Now()
+	holdEnd := start.Add(7 * time.Second)
+	scripted.queueHeld(clock.After(holdEnd.Sub(start)), &dnsservice.DnsFeedAnswer{
+		Format:    dnsservice.DnsFormat,
+		Root:      edgeTestRoot,
+		Serial:    1,
+		KeyWindow: feed.edge.keys.window,
+	})
+	readings := []time.Time{}
+	advanceUntil(t, clock, loop, "the held poll answered", func() bool {
+		if now := clock.Now(); len(readings) == 0 || !readings[len(readings)-1].Equal(now) {
+			readings = append(readings, now)
+		}
+		return feed.edge.host.Metrics.Value("urnetwork_dnsedge_feed_polls_total", "empty") == 1
+	})
+	if !slices.EqualFunc(readings, []time.Time{start, holdEnd}, time.Time.Equal) {
+		t.Errorf("the clock read %d times, %v to %v, want %v and then the hold's end %v", len(readings), readings[0], readings[len(readings)-1], start, holdEnd)
+	}
+}
+
 // RrsetDiff names each RRset in one view and not the other, or in both and changed, sorted.
 func TestRrsetDiff(t *testing.T) {
 	settings := edgeTestSettings(t)
@@ -535,10 +606,11 @@ func TestRrsetDiff(t *testing.T) {
 	}
 }
 
-// One scripted answer.
+// One scripted answer, given only once hold fires when it has one.
 type scriptedAnswer struct {
 	answer *dnsservice.DnsFeedAnswer
 	err    error
+	hold   <-chan time.Time
 }
 
 // A DnsFeed a test drives: each poll takes the next answer queued, waiting for one, or fails at once
@@ -557,6 +629,12 @@ func newScriptedFeed() *scriptedFeed {
 
 func (self *scriptedFeed) queue(answer *dnsservice.DnsFeedAnswer, err error) {
 	self.answers <- scriptedAnswer{answer: answer, err: err}
+}
+
+// Queues answer for the poll that takes it to give once hold fires, as the block gives an answer at
+// the end of its hold.
+func (self *scriptedFeed) queueHeld(hold <-chan time.Time, answer *dnsservice.DnsFeedAnswer) {
+	self.answers <- scriptedAnswer{answer: answer, hold: hold}
 }
 
 func (self *scriptedFeed) failAll() {
@@ -595,6 +673,13 @@ func (self *scriptedFeed) Journal(ctx context.Context, root string, after uint64
 	}
 	select {
 	case answer := <-self.answers:
+		if answer.hold != nil {
+			select {
+			case <-answer.hold:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		return answer.answer, answer.err
 	case <-ctx.Done():
 		return nil, ctx.Err()

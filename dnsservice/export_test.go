@@ -56,15 +56,28 @@ func (self *FeedLoop) WrittenSerialForTest(root string) (uint64, chan struct{}) 
 	return 0, closed
 }
 
-// Whether root's loop and its writer are each parked, with a channel for each that closes when it
-// changes.
+// Whether root's loop and its writer are each parked and not yet woken, with a channel for each that
+// closes when where it is parked changes. A wait on the clock is woken once the clock reaches its
+// end, and the writer's wait for a change once a generation newer than the one written is handed
+// over, though either still reads parked until it runs. The loop's poll counts as parked throughout:
+// what wakes it is the block's to know.
 func (self *FeedLoop) IdleForTest(root string) (loopIdle bool, loopChanged chan struct{}, writerIdle bool, writerChanged chan struct{}) {
 	for _, feedRoot := range self.roots {
-		if feedRoot.root == root {
-			loopIdle, loopChanged = feedRoot.idle.Get()
-			writerIdle, writerChanged = feedRoot.writer.idle.Get()
-			return loopIdle, loopChanged, writerIdle, writerChanged
+		if feedRoot.root != root {
+			continue
 		}
+		now := self.clock.Now()
+		waiting := func(park dnsFeedPark) bool {
+			return park.parked && (park.until.IsZero() || now.Before(park.until))
+		}
+		loopPark, loopChanged := feedRoot.park.Get()
+		writerPark, writerChanged := feedRoot.writer.park.Get()
+		writerIdle = waiting(writerPark)
+		if writerIdle && writerPark.until.IsZero() {
+			_, generation := feedRoot.writer.current()
+			writerIdle = generation <= feedRoot.writer.written.Value()
+		}
+		return waiting(loopPark), loopChanged, writerIdle, writerChanged
 	}
 	closed := make(chan struct{})
 	close(closed)
