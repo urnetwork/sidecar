@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -88,7 +89,8 @@ type privacyMatcher struct {
 	decode       *privacyDecodeSettings
 }
 
-func newPrivacyMatcher(needles []*privacyNeedle) *privacyMatcher {
+// A matcher for needles, leaving out the patterns of withoutForms, which only a mutant sets.
+func newPrivacyMatcher(needles []*privacyNeedle, withoutForms []string) *privacyMatcher {
 	matcher := &privacyMatcher{
 		exact:  newPrivacyPrefilter(),
 		folded: newPrivacyPrefilter(),
@@ -96,6 +98,9 @@ func newPrivacyMatcher(needles []*privacyNeedle) *privacyMatcher {
 	}
 	for _, needle := range needles {
 		for _, pattern := range needlePatterns(needle) {
+			if slices.Contains(withoutForms, pattern.form) {
+				continue
+			}
 			if pattern.folded {
 				matcher.folded.add(pattern)
 			} else {
