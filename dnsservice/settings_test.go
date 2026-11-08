@@ -203,3 +203,36 @@ ttl: {challenge: 30}
 		t.Errorf("settings %+v", settings)
 	}
 }
+
+// The signing block's defaults hold together, and a file can only tighten them into something that
+// still does.
+func TestDnsSigningSettings(t *testing.T) {
+	signing := DefaultDnsSettings().Signing
+	if signing.LifetimeSeconds <= signing.RefreshSeconds+signing.JitterSeconds {
+		t.Errorf("defaults %+v", signing)
+	}
+	if signing.RefreshSeconds < int(DefaultDnsSettings().Ttl.Ns) {
+		t.Errorf("refresh_s %d is below the longest TTL", signing.RefreshSeconds)
+	}
+	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "signing: {lifetime_s: 7200, refresh_s: 3600, jitter_s: 0}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Signing.LifetimeSeconds != 7200 || settings.Signing.CacheEntryCount != signing.CacheEntryCount {
+		t.Errorf("signing %+v", settings.Signing)
+	}
+	for _, block := range []string{
+		"signing: {lifetime_s: 3600, refresh_s: 3600, jitter_s: 0}",
+		"signing: {lifetime_s: 7200, refresh_s: 3600, jitter_s: 3600}",
+		"signing: {refresh_s: 0}",
+		"signing: {jitter_s: -1}",
+		"signing: {inception_offset_s: -1}",
+		"signing: {cache_entries: 0}",
+		"signing: {lifetime: 7200}",
+	} {
+		_, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n"))
+		if !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}

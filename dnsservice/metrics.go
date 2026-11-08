@@ -1,6 +1,6 @@
 // urnetwork_dnsedge_* (§19.8): what an edge counts, declared once from ServiceHost.Metrics. Labels
-// carry only an rcode and a reason, each from the closed sets here and never from a request, so no
-// name, address or network reaches a metric (I-13, dns-2).
+// carry only an rcode, a reason, a source or a transport, each from the closed sets here and never
+// from a request, so no name, address or network reaches a metric (I-13, dns-2).
 
 package dnsservice
 
@@ -20,6 +20,12 @@ const (
 	dnsFeedRefusedOther     = "other"
 )
 
+// Where a signature on an answer came from, the values of signatures' source label.
+const (
+	dnsSignatureSourceCache = "cache"
+	dnsSignatureSourceFresh = "fresh"
+)
+
 // The label for EDNS's BADVERS.
 const dnsRcodeBadVersLabel = "BADVERS"
 
@@ -34,6 +40,10 @@ type dnsMetrics struct {
 	feedRefusals sidecar.MetricsCounter
 	// RRsets a view holds and will not answer, which only a write path's fault can leave there.
 	withheldRrsets sidecar.MetricsGauge
+	// Signatures put on answers, by source: the cache or the ZSK just now.
+	signatures sidecar.MetricsCounter
+	// Answers refused at signatures_per_second, by transport: TC over UDP, SERVFAIL over TCP.
+	signatureCapped sidecar.MetricsCounter
 }
 
 // Declares the families. Two edges in one process share them, as Metrics allows.
@@ -42,6 +52,9 @@ func newDnsMetrics(metrics sidecar.Metrics) *dnsMetrics {
 		answers:        metrics.Counter("urnetwork_dnsedge_answers_total", "Answers sent, by rcode.", "rcode"),
 		feedRefusals:   metrics.Counter("urnetwork_dnsedge_feed_refused_total", "Rows and snapshots refused, by reason.", "reason"),
 		withheldRrsets: metrics.Gauge("urnetwork_dnsedge_withheld_rrsets", "RRsets held in the view and not answered."),
+		signatures:     metrics.Counter("urnetwork_dnsedge_signatures_total", "Signatures put on answers, by source.", "source"),
+		signatureCapped: metrics.Counter("urnetwork_dnsedge_signature_capped_total",
+			"Answers refused at signatures_per_second, by transport.", "transport"),
 	}
 }
 

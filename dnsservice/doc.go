@@ -10,6 +10,9 @@
 //   - store.go, DnsStore and DnsFeed: the only ways an engine reaches §12.14's tables and an edge
 //     reaches the block, so each part here runs on sidecartest's fakes before its real half exists.
 //   - zone.go, zone_trie.go and answer.go, a root held at one serial and the unsigned answers it gives.
+//   - keyset.go, sign.go, denial.go and selfcheck.go, online signing under DO: the ZSK and the released
+//     DNSKEY window, signatures with their cache and cap, compact denial, and the check every zone
+//     build and key set passes before it serves.
 //   - metrics.go, the metric families and their closed label values.
 //
 // This package never opens Postgres or Redis itself, and an edge holds neither, so with the core

@@ -356,8 +356,10 @@ func (self *SmtpDkimKeys) Current(ctx context.Context, domain string) (*SmtpDkim
 		case current == nil || smtpDkimStoreError(err):
 			return nil, err
 		default:
-			// a rotation left unanswered: the old selector is still in DNS
+			// a rotation left unanswered: the old selector is still in DNS, and the same call goes
+			// again next time, never a second rotation beside it
 			self.logRotationFailure(current.Selector, err)
+			return self.pinWithPublishLock(current), nil
 		}
 	}
 	switch {
