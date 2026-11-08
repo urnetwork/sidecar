@@ -159,6 +159,10 @@ func cases() []*suiteCase {
 		{name: "put-stream-names-its-checksum", run: casePutStreamNoChecksum},
 		{name: "empty-and-large-bodies", run: caseBodySizes},
 		{name: "last-modified-is-the-stores-clock", run: caseLastModified},
+		{name: "put-immutable-creates-and-retries-on-equal-bytes", run: casePutImmutableEqual},
+		{name: "put-immutable-alarms-on-other-bytes", run: casePutImmutableOther},
+		{name: "put-immutable-lost-answer-that-landed", run: casePutImmutableLostAnswerLanded},
+		{name: "put-immutable-lost-create-goes-again", run: casePutImmutableLostCreate},
 	}
 }
 
@@ -963,6 +967,113 @@ func caseLastModified(ctx context.Context, target *Target, keys *keySpace) error
 		return fmt.Errorf("LastModified %v outside %v to %v", info.LastModified, before, after)
 	}
 	return nil
+}
+
+// What the suite's lost answers say: a client cannot tell a reset from a timeout or an EOF.
+var errLostAnswer = errors.New("the suite dropped this answer")
+
+// Target.Cluster with the next create's answer lost, as a reset connection loses it: sent to the store
+// first when applied is true, never sent otherwise. Every later call goes straight through, so
+// PutImmutable's read-back meets the store's own answers.
+type lostAnswerCluster struct {
+	sidecar.BlobCluster
+	applied bool
+
+	stateLock   sync.Mutex
+	lost        bool
+	createCount int
+}
+
+func (self *lostAnswerCluster) PutIfNoneMatch(ctx context.Context, key string, body []byte, options *sidecar.BlobPutOptions) (string, error) {
+	lose := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.createCount += 1
+		lose := !self.lost
+		self.lost = true
+		return lose
+	}()
+	if !lose {
+		return self.BlobCluster.PutIfNoneMatch(ctx, key, body, options)
+	}
+	if self.applied {
+		if _, err := self.BlobCluster.PutIfNoneMatch(ctx, key, body, options); err != nil {
+			return "", err
+		}
+	}
+	return "", &sidecar.BlobUnknownError{Err: errLostAnswer}
+}
+
+// §11.8's immutable row: a create, then a retry of it that finds its own bytes and calls that success,
+// with the ETag the key holds.
+func casePutImmutableEqual(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("page")
+	body := []byte("a log page")
+	etag, err := sidecar.PutImmutable(ctx, target.Cluster, key, body, nil)
+	if err != nil {
+		return err
+	}
+	again, err := sidecar.PutImmutable(ctx, target.Cluster, key, body, nil)
+	if err != nil {
+		return fmt.Errorf("the retry: %w", err)
+	}
+	if again != etag {
+		return fmt.Errorf("the retry answered etag %q, the create %q", again, etag)
+	}
+	return wantBody(ctx, target.Cluster, key, body)
+}
+
+// Other bytes at an immutable key are a fault, and the key keeps its first bytes.
+func casePutImmutableOther(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("page")
+	held := []byte("a log page")
+	if _, err := target.Cluster.PutIfNoneMatch(ctx, key, held, nil); err != nil {
+		return err
+	}
+	for _, other := range [][]byte{[]byte("another page"), held[:len(held)-1], append(slices.Clone(held), 'x')} {
+		_, err := sidecar.PutImmutable(ctx, target.Cluster, key, other, nil)
+		if err := wantError(fmt.Sprintf("%q over %q", other, held), err, sidecar.ErrBlobImmutableMismatch); err != nil {
+			return err
+		}
+	}
+	return wantBody(ctx, target.Cluster, key, held)
+}
+
+// §11.8's write row: an unknown outcome reads the key back, and equal bytes were written.
+func casePutImmutableLostAnswerLanded(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := &lostAnswerCluster{BlobCluster: target.Cluster, applied: true}
+	key := keys.key("batch")
+	body := []byte("a batch")
+	sum := sha256.Sum256(body)
+	etag, err := sidecar.PutImmutable(ctx, cluster, key, body, &sidecar.BlobPutOptions{Sha256: sum[:]})
+	if err != nil {
+		return err
+	}
+	info, err := target.Cluster.Head(ctx, key)
+	if err != nil {
+		return err
+	}
+	if info.Etag != etag {
+		return fmt.Errorf("answered etag %q, the key holds %q", etag, info.Etag)
+	}
+	if cluster.createCount != 1 {
+		return fmt.Errorf("%d creates for one that landed", cluster.createCount)
+	}
+	return nil
+}
+
+// A 404 after an unknown outcome means the create never landed, so the same bytes go once more.
+func casePutImmutableLostCreate(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := &lostAnswerCluster{BlobCluster: target.Cluster}
+	key := keys.key("batch")
+	body := []byte("a batch")
+	if _, err := sidecar.PutImmutable(ctx, cluster, key, body, nil); err != nil {
+		return err
+	}
+	if cluster.createCount != 2 {
+		return fmt.Errorf("%d creates", cluster.createCount)
+	}
+	return wantBody(ctx, target.Cluster, key, body)
 }
 
 // The way to the store a late request takes: Settle.Delayed, on Target.Cluster's cluster.
