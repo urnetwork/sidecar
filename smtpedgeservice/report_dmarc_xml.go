@@ -62,10 +62,24 @@ type SmtpAggregateRow struct {
 	FailureCount uint64
 }
 
-// Whether data declares a DTD or an entity, in any case.
+// Whether data declares a DTD or an entity, in any case. It reads data in place, since an uppercased
+// copy of invalid UTF-8 can be three times its size.
 func smtpXmlDeclaresDtd(data []byte) bool {
-	upper := bytes.ToUpper(data)
-	return bytes.Contains(upper, []byte("<!DOCTYPE")) || bytes.Contains(upper, []byte("<!ENTITY"))
+	declares := func(rest []byte, word string) bool {
+		return len(word) <= len(rest) && bytes.EqualFold(rest[:len(word)], []byte(word))
+	}
+	for at := bytes.Index(data, []byte("<!")); 0 <= at; {
+		rest := data[at+2:]
+		if declares(rest, "DOCTYPE") || declares(rest, "ENTITY") {
+			return true
+		}
+		next := bytes.Index(rest, []byte("<!"))
+		if next < 0 {
+			return false
+		}
+		at += 2 + next
+	}
+	return false
 }
 
 // One record's values as they are met.

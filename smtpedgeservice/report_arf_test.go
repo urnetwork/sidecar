@@ -414,3 +414,17 @@ func TestMimeSkipsABoundaryInsideContent(t *testing.T) {
 		t.Fatalf("parts %q", parts.Parts[0].Body)
 	}
 }
+
+func TestArfReceivedWithInvalidUtf8KeepsItsIndexes(t *testing.T) {
+	// FuzzSmtpArf's crasher: lowering invalid UTF-8 changes its length, which once moved " by "'s index
+	// past the end of the field
+	for _, value := range []string{"\xbb\xbb\xbb BY ", "from x \xbb([192.0.2.10]) \xff by y; Tue, 03 Nov 2026 10:00:01 +0000"} {
+		address, _, ok := smtpReceivedHop(value)
+		if strings.HasPrefix(value, "from") && (!ok || address != netip.MustParseAddr("192.0.2.10")) {
+			t.Errorf("%q: %v, %v", value, address, ok)
+		}
+	}
+	if got := smtpAsciiLower("A\xbbB Ä"); got != "a\xbbb Ä" {
+		t.Fatalf("%q", got)
+	}
+}

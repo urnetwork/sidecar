@@ -276,6 +276,18 @@ func smtpPrintableAscii(value string) bool {
 	return true
 }
 
+// value with only its ASCII capitals lowered, byte for byte, so its length and every index into it are
+// value's.
+func smtpAsciiLower(value string) string {
+	lowered := []byte(value)
+	for i, c := range lowered {
+		if 'A' <= c && c <= 'Z' {
+			lowered[i] = c + ('a' - 'A')
+		}
+	}
+	return string(lowered)
+}
+
 // The domain of a From field's first address, lowercased, when it is an LDH name, else empty. The
 // display name is never decoded: only the addr-spec is read, inside the first angle brackets when there
 // are any.
@@ -307,7 +319,9 @@ func smtpAddressDomain(value string) string {
 // the by clause (RFC 5321 §4.4's TCP-info), and the date after the last semicolon.
 func smtpReceivedHop(value string) (netip.Addr, time.Time, bool) {
 	fromClause := value
-	if by := strings.Index(strings.ToLower(value), " by "); 0 <= by {
+	// searched in an ASCII-lowered copy, which keeps every byte where it was: strings.ToLower rewrites
+	// invalid UTF-8, so an index into its result need not be an index into value
+	if by := strings.Index(smtpAsciiLower(value), " by "); 0 <= by {
 		fromClause = value[:by]
 	}
 	open := strings.IndexByte(fromClause, '[')
