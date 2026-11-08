@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/urnetwork/sidecar"
 )
 
 var testPolicyStart = time.Date(2026, time.November, 2, 9, 0, 0, 0, time.UTC)
@@ -169,4 +171,47 @@ func TestCertIdsCarryTheClocksTime(t *testing.T) {
 	if !certsIdTime(a).Equal(at) || !certsIdTime(b).Equal(at) || a == b {
 		t.Fatalf("%s and %s at %s", a, b, at)
 	}
+}
+
+// One service's ids rise strictly in the order it mints them, within one millisecond and across a clock
+// that stepped back, so its queue keeps acceptance order: the admission pass's order and
+// SetIssuedBefore's read on it.
+func TestCertIdsRiseWithinOneMillisecond(t *testing.T) {
+	service := &CertsService{clock: &testFixedClock{now: testPolicyStart}}
+	ids := []sidecar.Id{}
+	for range 200 {
+		ids = append(ids, service.newCertId())
+	}
+	service.clock.(*testFixedClock).now = testPolicyStart.Add(-time.Hour)
+	ids = append(ids, service.newCertId())
+	for index := 1; index < len(ids); index += 1 {
+		if ids[index].Cmp(ids[index-1]) <= 0 {
+			t.Fatalf("id %d, %s, does not rise past %s", index, ids[index], ids[index-1])
+		}
+	}
+	if !certsIdTime(ids[len(ids)-1]).Equal(testPolicyStart) {
+		t.Fatalf("a clock that stepped back moved the ids' time to %s", certsIdTime(ids[len(ids)-1]))
+	}
+	// the counter carries into the millisecond only when its 80 bits run out
+	full := sidecar.Id{0, 0, 0, 0, 0, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	if next := certsIdAfter(full); next != (sidecar.Id{0, 0, 0, 0, 0, 2}) {
+		t.Fatalf("after %s came %s", full, next)
+	}
+}
+
+// A clock that stands where a test puts it.
+type testFixedClock struct {
+	now time.Time
+}
+
+func (self *testFixedClock) Now() time.Time {
+	return self.now
+}
+
+func (self *testFixedClock) After(timeout time.Duration) <-chan time.Time {
+	return make(chan time.Time)
+}
+
+func (self *testFixedClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	return func() bool { return true }
 }

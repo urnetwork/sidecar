@@ -177,6 +177,8 @@ type CertsService struct {
 	clock    sidecar.Clock
 
 	stateLock sync.Mutex
+	// the newest cert_id minted here (newCertId)
+	lastCertId sidecar.Id
 	// each CA's Retry-After, its margin added
 	caHolds map[CertsCa]time.Time
 	// each name's failed authorizations inside the window

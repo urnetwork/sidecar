@@ -137,6 +137,34 @@ func certsNewId(now time.Time) sidecar.Id {
 	return id
 }
 
+// The id one above id: its 80 entropy bits as a counter, carrying into the millisecond only when they
+// overflow.
+func certsIdAfter(id sidecar.Id) sidecar.Id {
+	next := id
+	for index := len(next) - 1; 0 <= index; index -= 1 {
+		next[index] += 1
+		if next[index] != 0 {
+			break
+		}
+	}
+	return next
+}
+
+// A cert_id above every one this service minted before, at its clock's millisecond where that is newer.
+// The queue is read in id order and SetIssuedBefore compares ids, so one service's orders keep the order
+// they were accepted in even within one millisecond. Ids of two processes in one millisecond have no
+// order between them, as any two ULID sources have none (connect/CODESTYLE.md's identifiers).
+func (self *CertsService) newCertId() sidecar.Id {
+	id := certsNewId(self.clock.Now())
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if id.Cmp(self.lastCertId) <= 0 {
+		id = certsIdAfter(self.lastCertId)
+	}
+	self.lastCertId = id
+	return id
+}
+
 // An id's millisecond timestamp, the order time of a row.
 func certsIdTime(id sidecar.Id) time.Time {
 	var ms uint64
@@ -200,7 +228,7 @@ func (self *CertsService) Accept(ctx context.Context, request *CertsOrderRequest
 		}
 	}
 	row := &sidecar.TlsCertRecord{
-		CertId:              certsNewId(now),
+		CertId:              self.newCertId(),
 		NetworkId:           request.NetworkId,
 		ClientId:            request.ClientId,
 		SidecarId:           request.SidecarId,
