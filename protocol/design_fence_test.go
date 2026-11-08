@@ -1,7 +1,9 @@
 // Every fenced proto block in DESIGN.md, read against what this package registers, so a field number, type or
 // reservation that leaves the design fails here. A fence and its descriptor must agree exactly, in both
 // directions. Whatever a file declares beyond the fences has to be named in testUnfencedDeclarations, with why,
-// which is where a reviewer reads what this repository added to the design's wire.
+// which is where a reviewer reads what this repository added to the design's wire. A field an owner's answer adds
+// to a fenced message before design-records folds it into DESIGN.md is named in testFenceAdditions, with the question
+// that holds the answer.
 
 package protocol
 
@@ -184,7 +186,47 @@ func testReadFences(t *testing.T) *testFences {
 	if count < 27 || len(fences.messages) < 120 {
 		t.Fatalf("found %d fences and %d messages, too few to have read the design", count, len(fences.messages))
 	}
+	for _, addition := range testFenceAdditions {
+		message := fences.messages[addition.message]
+		if message == nil {
+			t.Errorf("%s gains %s by %s, and the design fences no such message", addition.message, addition.field.name, addition.question)
+			continue
+		}
+		written := slices.ContainsFunc(message.fields, func(field testFenceField) bool {
+			return field.name == addition.field.name || field.number == addition.field.number
+		})
+		if written || slices.Contains(message.reservedNumbers, addition.field.number) {
+			t.Errorf("the design now writes %s.%s or its number %d: drop its line from testFenceAdditions (%s)", addition.message, addition.field.name, addition.field.number, addition.question)
+			continue
+		}
+		message.fields = append(message.fields, addition.field)
+	}
 	return fences
+}
+
+// Fields the owner's answers add to fenced messages ahead of design-records' fold, each with the question that
+// holds its answer. Each joins the fence it extends, so both directions stay exact, and one the design comes to
+// write fails until its line here leaves.
+var testFenceAdditions = []struct {
+	message  string
+	field    testFenceField
+	question string
+}{
+	{
+		message:  "EvsPush",
+		field:    testFenceField{name: "consumed_through", number: 35, typeName: "uint64"},
+		question: "plan-RECORD-depositor-spool",
+	},
+	{
+		message:  "EvsPushPart",
+		field:    testFenceField{name: "sections", number: 8, typeName: "bytes"},
+		question: "plan-EVS2-drop-list-parts",
+	},
+	{
+		message:  "EvsHead",
+		field:    testFenceField{name: "consumed_through", number: 27, typeName: "uint64"},
+		question: "plan-RECORD-depositor-spool",
+	},
 }
 
 // A message's reserved ranges, each number written out.
@@ -361,6 +403,58 @@ var testUnfencedDeclarations = map[string]string{
 	"protocol/evs.proto:EvsLocatorKind": "EvsLocator.kind's comment, numbers as written",
 	"protocol/evs.proto:EvsVersioning":  "EvsEntryVersion.versioning's comment, numbers as written",
 	"protocol/evs.proto:EvsWindowFlag":  "§11.8's entry row, bits as written",
+
+	// plan-EVS1-format-bytes's answer, rows 3 and 6 to 9, and the answers EVS-FORMAT.md cites beside it.
+	"protocol/evs.proto:EvsRefKind":         "11.8's refs table, numbered by plan-EVS1-format-bytes#6",
+	"protocol/evs.proto:EvsRefMode":         "EvsPush.ref_mode's comment, numbers as written",
+	"protocol/evs.proto:EvsEntryKind":       "EvsEntryVersion.kind and EvsName.kind, numbered by plan-EVS1-format-bytes#6",
+	"protocol/evs.proto:EvsRecordKind":      "11.6's records row, numbered by plan-EVS1-format-bytes#6",
+	"protocol/evs.proto:EvsKeyRefKind":      "11.6's record row's key ref, numbered by plan-EVS1-format-bytes#3",
+	"protocol/evs.proto:EvsOidKind":         "11.6's record row's oid, numbered by plan-EVS1-format-bytes#3",
+	"protocol/evs.proto:EvsBatchRecordType": "11.8's record row, numbered by plan-EVS1-format-bytes#6",
+	"protocol/evs.proto:EvsPayloadSection":  "11.6's payload row, numbered by plan-EVS1-format-bytes#7",
+	"protocol/evs.proto:EvsNewObjectKind":   "11.6's payload row's new objects, numbered by plan-EVS1-format-bytes#7",
+	"protocol/evs.proto:EvsRepoState":       "11.12's state row, numbered by plan-EVS1-format-bytes#6",
+	"protocol/evs.proto:EvsRefusalCode":     "11.8's fixed code table, from plan-EVS1-format-bytes#6 and EVS-FORMAT.md",
+	"protocol/evs.proto:EvsPushOutcome":     "11.8's 503 {push_id, outcome: unknown}",
+	"protocol/evs.proto:EvsReadPathState":   "11.9's reply row, numbered by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsReadObjectKind":  "11.9's request row: ranges, slots, maps, log pages and push records",
+	"protocol/evs.proto:EvsRepoObject":      "11.8's repo/ row, by plan-EVS1-format-bytes#9 and plan-EVSB-repo-network",
+	"protocol/evs.proto:EvsRepoPlacement":   "11.8's place row, by plan-EVS1-format-bytes#9",
+	"protocol/evs.proto:EvsSlotObject":      "11.8's slot/ row, by plan-EVS1-format-bytes#9",
+	"protocol/evs.proto:EvsSlotKey":         "11.8's slot/ row, by plan-EVS1-format-bytes#9",
+	"protocol/evs.proto:EvsIndexEntry":      "11.7's entry rows, by plan-EVS1-format-bytes#9",
+	"protocol/evs.proto:EvsIndexVersion":    "11.7's entry rows: a folded committed version",
+	"protocol/evs.proto:EvsRemovalMarker":   "11.7's removal row",
+	"protocol/evs.proto:EvsDropMark":        "11.7's drop mark, {drop_id, through_version}",
+	"protocol/evs.proto:EvsLogPage":         "11.8's log/ row",
+	"protocol/evs.proto:EvsSealedFields":    "EvsEntryVersion.sealed_fields' comment, by plan-EVS1-format-bytes#9",
+	"protocol/evs.proto:EvsSealedMetadata":  "EvsPush.sealed_metadata_sha256's comment and 11.7's mapping to git",
+	"protocol/evs.proto:EvsProvenance":      "11.6's records row",
+	"protocol/evs.proto:EvsSealedCommit":    "11.7's mapping to git: each commit with its sealed changes",
+	"protocol/evs.proto:EvsSealedChange":    "11.7's mapping to git: each commit with its sealed changes",
+	"protocol/evs.proto:EvsPushRequest":     "11.8's push and seal rows, by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsPartRequest":     "11.8's parts row, by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsLeaseRequest":    "11.8's lease row, by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsPushReply":       "11.8's 200 {v+1} and 200 {place}, by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsRefusalReply":    "11.20's push refusals, by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsQuotaRefusal":    "§20.7's QuotaRefusal",
+	"protocol/evs.proto:EvsDepositHead":     "plan-EVS1-deposit-head and plan-RECORD-depositor-spool",
+	"protocol/evs.proto:EvsReadRequest":     "11.9's request and streams rows",
+	"protocol/evs.proto:EvsReadPath":        "11.9's request row",
+	"protocol/evs.proto:EvsReadRange":       "11.9's request row",
+	"protocol/evs.proto:EvsReadMap":         "11.9's request row",
+	"protocol/evs.proto:EvsReadPush":        "11.9's request row",
+	"protocol/evs.proto:EvsReadRef":         "11.9's streams row",
+	"protocol/evs.proto:EvsReadFrame":       "11.9's reply row, by plan-EVS1-format-bytes#8",
+	"protocol/evs.proto:EvsHeadSummary":     "11.8's fill row and 11.9's head summary",
+	"protocol/evs.proto:EvsReadStatement":   "11.9's reply row",
+	"protocol/evs.proto:EvsReadPathReply":   "11.9's reply row, and protos-services-read-states",
+	"protocol/evs.proto:EvsMerkleProof":     "11.6's merkle row and 11.9's proofs",
+	"protocol/evs.proto:EvsAbsenceProof":    "11.6's merkle row and 11.9's adjacent-leaf proofs",
+	"protocol/evs.proto:EvsReadObject":      "11.9's reply row: the records and slots a path names",
+	"protocol/evs.proto:EvsRefsReply":       "11.9's moved row and 11.10's sequence row",
+	"protocol/evs.proto:EvsLogReply":        "11.9's reply row and 11.10's gap row",
 
 	"protocol/smtp.proto:SmtpPreambleCode": "§6.11's edge codes, numbers as written",
 	"protocol/smtp.proto:SmtpProofCode":    "§6.11's edge codes, numbers as written",

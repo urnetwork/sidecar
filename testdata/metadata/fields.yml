@@ -87,6 +87,20 @@ roots:
   EvsPlace: "evs assigns it in the batch (§11.8)"
   EvsHead: "evs writes and reads the commit point (§11.8)"
   EvsHeadChanged: "evs builds it, in PushHint.hint (§11.10)"
+  EvsRepoObject: "evs writes and reads repo/ (§11.8, §11.12)"
+  EvsRepoPlacement: "evs writes place/, and evs and gkm resolve it (§11.8)"
+  EvsSlotObject: "evs stores slot/ and rewrites it to drop erased keys (§11.8, §11.12)"
+  EvsIndexEntry: "evs folds committed versions into idx/ (§11.7)"
+  EvsLogPage: "evs pages the window into log/ (§11.8)"
+  EvsPushRequest: "evs reads POST .../push, a push or a seal (§11.8)"
+  EvsPartRequest: "evs reads POST .../push/<push_id>/<k> (§11.8)"
+  EvsLeaseRequest: "evs reads POST .../push/<push_id>/lease (§11.8)"
+  EvsPushReply: "evs answers a push, part or seal with it (§11.8)"
+  EvsRefusalReply: "evs answers every request it refuses with it (§11.8, §11.20)"
+  EvsReadRequest: "evs reads POST .../read (§11.9)"
+  EvsReadFrame: "evs answers a read with these frames (§11.9)"
+  EvsRefsReply: "evs answers GET .../refs (§11.9, §11.10)"
+  EvsLogReply: "evs answers GET .../log (§11.9)"
   # protocol/bridge/auth.proto
   AuthEntry: "the body of proj/<network_id>/<n>/_, which api sequences (§7.9)"
   ProjectionHeader: "a base's Signed header, which api checks (§7.9)"
@@ -153,7 +167,8 @@ seals:
   RecoveryRebind.sealed_body: RecoveryBindBody
   IndexerSet.sealed_services: IndexerServices
   RepoVersioning.sealed_rules: VersioningRules
-  EvsPushPart.sealed_metadata: EvsImport
+  EvsPushPart.sealed_metadata: EvsSealedMetadata
+  EvsEntryVersion.sealed_fields: EvsSealedFields
 
 sealed_messages:
   Hello: "peers only, over a Required session: an edge's opens need no Hello (§6.4)"
@@ -169,6 +184,7 @@ sealed_messages:
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
   WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"
   ShareCert: "rides sealed in a WindowDelegation (§17.9)"
+  EvsImport: "a Signed EvsImport rides as bytes in EvsSealedMetadata.signed_import, inside a push's sealed metadata (§11.6, §11.11)"
 
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
@@ -726,23 +742,16 @@ rows:
   sock-3: {planned: M5}
   sock-4: {planned: M5}
   sock-5: {planned: M5}
-  evs-1: {planned: M2}
   evs-6: {planned: M2}
-  evs-7: {planned: M2}
   evs-8: {planned: M2}
-  evs-9: {planned: M2}
   evs-10: {planned: M2}
   evs-13: {planned: M2}
-  evs-14: {planned: M2}
   evs-16: {planned: M2}
   evs-17: {planned: M2}
   evs-18: {planned: M1}
   evs-19: {planned: M2}
   evs-21: {planned: M2}
-  evs-22: {planned: M2}
   evs-23: {planned: M2}
-  evs-24: {planned: M2}
-  evs-25: {planned: M2}
   evs-26: {planned: M10}
   evs-27: {planned: M6}
   evs-28: {planned: M10}
