@@ -135,6 +135,31 @@ func (self *mlsCipherSuite) deriveEpochSecrets(joinerSecret []byte, pskSecret []
 	return secrets, nil
 }
 
+// welcome_secret alone, from joiner_secret and the zero psk_secret, for a Welcome's recipient, which needs it to
+// read the GroupContext the rest of the schedule binds (RFC §12.4.3.1). The caller owns and erases both.
+func (self *mlsCipherSuite) deriveWelcomeSecret(joinerSecret []byte) ([]byte, error) {
+	extracted, err := self.extract("member_extract", joinerSecret, make([]byte, self.hashLength))
+	if err != nil {
+		return nil, err
+	}
+	defer clear(extracted)
+	return self.deriveSecret("welcome_secret", extracted, "welcome")
+}
+
+// welcome_key and welcome_nonce (RFC §12.4.3.1), which seal a Welcome's GroupInfo.
+func (self *mlsCipherSuite) deriveWelcomeKey(welcomeSecret []byte) (key []byte, nonce []byte, err error) {
+	key, err = self.expandWithLabel("welcome_key", welcomeSecret, "key", nil, self.aeadKeyLength)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce, err = self.expandWithLabel("welcome_nonce", welcomeSecret, "nonce", nil, self.aeadNonceLength)
+	if err != nil {
+		clear(key)
+		return nil, nil, err
+	}
+	return key, nonce, nil
+}
+
 // Epoch 0 of a new group (RFC §11): epoch_secret is fresh, so there is no joiner or welcome secret, and
 // the GroupContext enters only through what later epochs derive.
 func (self *mlsCipherSuite) newGroupEpochSecrets() (*mlsEpochSecrets, error) {

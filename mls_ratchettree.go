@@ -95,6 +95,38 @@ type mlsTreeNode struct {
 	parent *mlsParentNode
 }
 
+// optional<Node>, one ratchet_tree entry (RFC §12.4.3.3).
+func (self *mlsTreeNode) encode(encoder *mlsEncoder) {
+	encoder.writeOptional(!self.blank())
+	switch {
+	case self.leaf != nil:
+		encoder.writeUint8(mlsNodeTypeLeaf)
+		self.leaf.encode(encoder)
+	case self.parent != nil:
+		encoder.writeUint8(mlsNodeTypeParent)
+		self.parent.encode(encoder)
+	}
+}
+
+// optional<Node>, refusing a node type RFC §7.8 does not define.
+func (self *mlsTreeNode) decode(decoder *mlsDecoder) {
+	if !decoder.readOptional() {
+		return
+	}
+	switch nodeType := decoder.readUint8(); nodeType {
+	case mlsNodeTypeLeaf:
+		self.leaf = &mlsLeafNode{}
+		self.leaf.decode(decoder)
+	case mlsNodeTypeParent:
+		self.parent = &mlsParentNode{}
+		self.parent.decode(decoder)
+	default:
+		if decoder.err == nil {
+			decoder.fail(fmt.Errorf("%w: node type %d", errMlsMalformed, nodeType))
+		}
+	}
+}
+
 // Whether the position holds no value.
 func (self *mlsTreeNode) blank() bool {
 	return self.leaf == nil && self.parent == nil
@@ -147,25 +179,27 @@ func decodeMlsRatchetTree(suite *mlsCipherSuite, settings *mlsTreeSettings, enco
 			return
 		}
 		var node mlsTreeNode
-		if element.readOptional() {
-			switch nodeType := element.readUint8(); nodeType {
-			case mlsNodeTypeLeaf:
-				node.leaf = &mlsLeafNode{}
-				node.leaf.decode(element)
-			case mlsNodeTypeParent:
-				node.parent = &mlsParentNode{}
-				node.parent.decode(element)
-			default:
-				element.fail(fmt.Errorf("%w: node type %d", errMlsMalformed, nodeType))
-				return
-			}
+		node.decode(element)
+		if element.err != nil {
+			return
 		}
 		nodes = append(nodes, node)
 	})
 	if err := decoder.finish(); err != nil {
 		return nil, err
 	}
+	return newMlsRatchetTreeFromNodes(suite, settings, nodes)
+}
 
+// A tree from ratchet_tree's entries, however they were read: the last entry must be non-blank, the array is
+// extended to a full tree with blanks, and each position must hold its own kind of node. Takes nodes.
+func newMlsRatchetTreeFromNodes(suite *mlsCipherSuite, settings *mlsTreeSettings, nodes []mlsTreeNode) (*mlsRatchetTree, error) {
+	if !mlsTreeLeafCountValid(settings.MaximumLeafCount) {
+		return nil, fmt.Errorf("mls: maximum of %d leaves is not a tree", settings.MaximumLeafCount)
+	}
+	if int(mlsTreeWidth(settings.MaximumLeafCount)) < len(nodes) {
+		return nil, fmt.Errorf("%w: tree wider than %d leaves", errMlsRefused, settings.MaximumLeafCount)
+	}
 	if len(nodes) == 0 || nodes[len(nodes)-1].blank() {
 		return nil, fmt.Errorf("%w: tree ends in a blank node or is empty", errMlsMalformed)
 	}
@@ -198,16 +232,7 @@ func (self *mlsRatchetTree) encode(encoder *mlsEncoder) {
 	}
 	encoder.writeVectorOf(func(elements *mlsEncoder) {
 		for index := 0; index <= last; index++ {
-			node := &self.nodes[index]
-			elements.writeOptional(!node.blank())
-			switch {
-			case node.leaf != nil:
-				elements.writeUint8(mlsNodeTypeLeaf)
-				node.leaf.encode(elements)
-			case node.parent != nil:
-				elements.writeUint8(mlsNodeTypeParent)
-				node.parent.encode(elements)
-			}
+			self.nodes[index].encode(elements)
 		}
 	})
 }

@@ -2,11 +2,17 @@ package mlssuite
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -301,4 +307,68 @@ func TestTheSuiteCatchesPlantedBreaks(t *testing.T) {
 			t.Errorf("%s: FakeMls itself fails: %v", c.name, err)
 		}
 	}
+}
+
+// The real engine keeps the seam's behavior too (KEYS-M2-08), each sidecar its own identity key and store, every
+// credential checked against the engines this test admitted.
+func TestRealMlsPassesTheEngineSuite(t *testing.T) {
+	Run(t, realEngines)
+}
+
+// Real engines for one test, each its own sidecar, admitted to one another.
+func realEngines(t *testing.T, count int) []sidecar.MlsEngine {
+	admitted := &suiteAdmissions{sidecarIdKeys: map[sidecar.Id]ed25519.PublicKey{}}
+	engines := []sidecar.MlsEngine{}
+	for index := 0; index < count; index += 1 {
+		publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sidecarId := sidecar.NewId()
+		admitted.admit(sidecarId, publicKey)
+		admission := sha256.Sum256(append([]byte("admission of "), sidecarId.Bytes()...))
+		engine, err := sidecar.NewMlsEngine(&sidecar.MlsEngineArgs{
+			SidecarId:         sidecarId,
+			IdentityPublicKey: publicKey,
+			AdmissionSha256:   admission[:],
+			Sign: func(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error) {
+				return &bridge.Signed{
+					Body:      bytes.Clone(body),
+					SignerId:  sidecarId.Bytes(),
+					Signature: ed25519.Sign(privateKey, bridge.SignedBytes(purpose, signedType, body)),
+					Type:      uint32(signedType),
+				}, nil
+			},
+			Store:           sidecartest.NewFakeStore().Root(),
+			CheckCredential: admitted.check,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engines = append(engines, engine)
+	}
+	return engines
+}
+
+// The identity keys a test admitted, standing in for KEYS-M2-19's check against the log.
+type suiteAdmissions struct {
+	stateLock     sync.Mutex
+	sidecarIdKeys map[sidecar.Id]ed25519.PublicKey
+}
+
+func (self *suiteAdmissions) admit(sidecarId sidecar.Id, publicKey ed25519.PublicKey) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.sidecarIdKeys[sidecarId] = publicKey
+}
+
+// Refuses a credential for a sidecar not admitted, or under another identity key.
+func (self *suiteAdmissions) check(credential *protocol.UrMlsCredential) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	publicKey, ok := self.sidecarIdKeys[sidecar.Id(credential.GetSidecarId())]
+	if !ok || !bytes.Equal(publicKey, credential.GetIdentityPublicKey()) {
+		return errors.New("not admitted")
+	}
+	return nil
 }
