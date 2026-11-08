@@ -737,15 +737,18 @@ var testFenceAdditions = []struct {
 	},
 }
 
-// Values the owner's answers add to enums the design fences, ahead of design-records' fold, each with the question
-// that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
-// to write fails until its line here leaves.
-var testFenceValueAdditions = []struct {
+// One value an owner's answer adds to an enum the design fences.
+type testFenceValueAddition struct {
 	enum     string
 	name     string
 	number   int32
 	question string
-}{
+}
+
+// Values the owner's answers add to enums the design fences, ahead of design-records' fold, each with the question
+// that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
+// to write fails until its line here leaves.
+var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
 	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
 }
