@@ -96,6 +96,7 @@ A 429 and a 503 carry `retry_after_ms` and a Retry-After header of the same dela
 
 - **Ref ids.** `ref_id = HMAC-SHA256(K_ref, "ref" || ref name bytes)[:16]` (§11.6). The ref name bytes are `<b>` for `refs/heads/<b>`, the full `refs/tags/<t>` for a tag, and the bare name for every other ref, such as `main`, `ur/<sidecar_id>/…`, `ur/index`, `ur/lfs` and `cards`; `<sidecar_id>` inside a name is `Id.String()`, 36 characters, and a conflict ref's `<time>` is UTC `yyyymmddThhmmssZ` (plan-EVS1-ref-name-bytes#1 and #2).
 - **Deposit ref ids** are the first 16 B of SHA-256(repo_id || sidecar_id), and the erasure ref's id is the first 16 B of SHA-256("UR evs 1.0 erasure" || repo_id) (plan-EVS1-ref-name-bytes#3). Deposit and erasure refs stay at path epoch 1 for life, their entries named by random 16 B ids (plan-EVS1-epoch-kinds#2).
+- **Tokens.** t_i = HMAC-SHA256(K_path_p, t_(i-1) || name_i)[:16], t_0 sixteen zero bytes, over a component's raw bytes: nothing is normalized, so NFC and NFD spellings are two paths, and a component that is empty or holds a slash or NUL, which git's tree format cannot hold, is refused. A token path is 1 to 32 components in a change; a covering prefix may be shorter, down to the empty path, which covers every change. Deposit and erasure-ref entries take random 16 B ids in tokens' place (§11.6, plan-EVS1-epoch-kinds#2).
 - **In object keys** repo, ref, slot and parcel ids are lowercase hex with no dashes; segment ids lowercase hex of their 32 B; tokens 26 lowercase RFC 4648 base32 characters, unpadded; versions, epochs, page numbers and parts decimal, zero-padded to 20 digits. A map's `<map>` is its `path_map_sha256` in lowercase hex. A batch's `<instance>` and `<seq>` are 8 lowercase hex digits each (§11.8's batches). The deepest `idx/` key is 956 B, within §11.3's 1,024 (plan-EVS1-format-bytes#9).
 - **Entry state.** Objects carry no user metadata, except an `idx/` entry's state while its head lists sources: the key `entry-state`, whose value is `carried:<source epoch in decimal>`, `fresh` or `removed`, read by HEAD (plan-EVS1-entry-state-metadata).
 
@@ -103,7 +104,9 @@ A 429 and a 503 carry `retry_after_ms` and a Retry-After header of the same dela
 
 - C_0 = SHA-256("UR evs 1.0 ref" || repo_id || ref_id); C_v = SHA-256(C_(v-1) || push_id_v || statement_sha256_v) (§11.8).
 - The paths digest is a 64-bit Bloom filter, k = 2: for each token path it covers, h = SHA-256("UR evs digest" || token path), and it sets bits u32(h[0:4]) mod 64 and u32(h[4:8]) mod 64. It is written as a u64 whose bit i is index i (#7).
+  It covers each changed token path and, when the change list is not inline, each covering prefix in `changed_prefixes`. A query asks of a path and of each prefix holding it down to its first component; the empty path is no query, since no change names it. A miss on all of them proves the push changed neither the path nor a directory holding it, and a match only sends the asker to the change list.
 - Merkle trees are RFC 9162's: leaf SHA-256(0x00 || bytes), node SHA-256(0x01 || left || right). A change's leaf is its `EvsChange` bytes as listed. Changes sort by their token paths' bytes, each part a contiguous run in part order; a part's `changes_root` is over its changes, and a statement's over its parts' roots as 32 B leaves (§11.6's merkle row).
+  A one-part push whose change list is not inline states `changes_root` over its changes directly, so an inclusion proof is one RFC 9162 path there and two, part level last, in parts. The order is strict: a path listed twice is refused as out of order. The empty tree's root is SHA-256 of no bytes. An absence proof (§11.9) speaks for one token path: its leaves sort on either side of it, and they are adjacent in one part, the last and first of adjacent parts, or, with one side empty, the list's first or last leaf. A one-part proof's tree size must equal the statement's `change_count` and a part-level proof's its `part_count`; a part's own size is signed nowhere, so the two leaves of one part must claim one size, and RFC 9162's split of leaves from nodes lets no other leaf stand where a part's first or last does. A reader asks for absence proofs of the path and of each prefix holding it that a covering prefix covers.
 
 ## Segments, object keys and record headers
 
@@ -254,3 +257,8 @@ For design-records, each is a reading that changes no D- item:
 | `EvsSealedMetadata` | `GroupHead`, provenance, commits with their changes, the signed import |
 | Read reply | `EvsReadRequest`, `EvsReadFrame`, `EvsHeadSummary`, `EvsReadPathReply`, the two proof messages and `EvsReadObject` as `evs.proto` writes them |
 | Listings | `EvsRefsReply` with the repo's format and push sequence; `EvsLogReply` with the next version |
+| Path components | Empty, slash and NUL refused, as git's tree format refuses them; nothing else |
+| Digest queries | A path and each prefix down to its first component, never the empty path |
+| One-part `changes_root` | Over the changes directly, so a proof there is one level |
+| Absence proofs | One per token path; sizes held to `change_count` and `part_count`, a part's two leaves to one claimed size |
+| Padmé | Lengths 0 to 3 pad to themselves; past 2^63 nothing is computed |
