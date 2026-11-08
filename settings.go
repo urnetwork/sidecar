@@ -108,6 +108,14 @@ type SidecarTokenRefreshSettings struct {
 	// After a failed refresh the next attempt waits a uniform draw from [0, this): 15 min, which
 	// spreads clients that failed together.
 	RefreshRetryTimeout time.Duration
+	// How long after it is first scheduled a token with no readable exp refreshes: 7 days, sdk's,
+	// so a token without an expiration is revalidated weekly rather than kept for good.
+	NoExpirationRefreshTimeout time.Duration
+	// How long ServiceToken keeps a service token for its audience and scopes before it exchanges
+	// again: 10 min, a reading of §5.6's "under 15 min", which leaves a token handed out at the end
+	// of its stay 5 min of its 15 (§7.8). A token whose expires_in is shorter is kept no longer
+	// than that.
+	ServiceTokenCacheTimeout time.Duration
 }
 
 // The pass's Argon2id cost (§5.9) and the rules around it. Opening a keychain reads the parameters
@@ -253,10 +261,12 @@ func DefaultSidecarSettings() *SidecarSettings {
 		Connect:          defaultSidecarConnectSettings(),
 		ProtocolSettings: DefaultSidecarProtocolSettings(),
 		TokenRefreshSettings: &SidecarTokenRefreshSettings{
-			RefreshWindowStart:  0.4,
-			RefreshWindowEnd:    0.5,
-			MinRefreshTimeout:   5 * time.Minute,
-			RefreshRetryTimeout: 15 * time.Minute,
+			RefreshWindowStart:         0.4,
+			RefreshWindowEnd:           0.5,
+			MinRefreshTimeout:          5 * time.Minute,
+			RefreshRetryTimeout:        15 * time.Minute,
+			NoExpirationRefreshTimeout: 7 * 24 * time.Hour,
+			ServiceTokenCacheTimeout:   10 * time.Minute,
 		},
 		KeychainSettings: &SidecarKeychainSettings{
 			PassMemoryByteCount: 64 * 1024 * 1024,

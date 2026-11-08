@@ -5,6 +5,7 @@ go 1.27.3
 tool google.golang.org/protobuf/cmd/protoc-gen-go
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/miekg/dns v1.1.72
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/urnetwork/connect v0.0.0

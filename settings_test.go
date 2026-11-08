@@ -28,10 +28,12 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 			name: "TokenRefreshSettings",
 			got:  *settings.TokenRefreshSettings,
 			want: SidecarTokenRefreshSettings{
-				RefreshWindowStart:  0.4,
-				RefreshWindowEnd:    0.5,
-				MinRefreshTimeout:   5 * time.Minute,
-				RefreshRetryTimeout: 15 * time.Minute,
+				RefreshWindowStart:         0.4,
+				RefreshWindowEnd:           0.5,
+				MinRefreshTimeout:          5 * time.Minute,
+				RefreshRetryTimeout:        15 * time.Minute,
+				NoExpirationRefreshTimeout: 7 * 24 * time.Hour,
+				ServiceTokenCacheTimeout:   10 * time.Minute,
 			},
 		},
 		// §5.9's pass; auto-lock is a reading

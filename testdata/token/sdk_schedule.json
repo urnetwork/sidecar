@@ -1,0 +1,162 @@
+[
+  {
+    "name": "jti",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJzeW50aGV0aWMtanRpLTEiLCJpYXQiOjE3NzI1OTcxNjcsImV4cCI6MTc3MzIwMTk2NywiY2xpZW50X2lkIjoiYyIsImRldmljZV9pZCI6ImQifQ.c2lnbmF0dXJl",
+    "draw": 0.2140706464839226,
+    "refresh_unix_nano": 1772852033992699347,
+    "timeout_no_previous": 251266992699347,
+    "timeout_after_attempt": 251266992699347
+  },
+  {
+    "name": "no jti",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzI1OTcxNjcsImV4cCI6MTc3MzIwMTk2N30.c2lnbmF0dXJlLTI",
+    "draw": 0.3438728610919224,
+    "refresh_unix_nano": 1772859884430638839,
+    "timeout_no_previous": 259117430638839,
+    "timeout_after_attempt": 259117430638839
+  },
+  {
+    "name": "no jti no signature",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzI1OTcxNjcsImV4cCI6MTc3MzIwMTk2N30.",
+    "draw": 0.33176873370712423,
+    "refresh_unix_nano": 1772859152373014606,
+    "timeout_no_previous": 258385373014606,
+    "timeout_after_attempt": 258385373014606
+  },
+  {
+    "name": "not a jwt",
+    "token": "synthetic-not-a-jwt",
+    "draw": 0.054765177449120905,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "unknown alg",
+    "token": "eyJhbGciOiJYWDk5In0.eyJqdGkiOiJqIiwiaWF0IjoxNzcyNTk3MTY3LCJleHAiOjE3NzMyMDE5Njd9.c2ln",
+    "draw": 0.7532684744239527,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "no exp",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqMiIsImlhdCI6MTc3MjU5NzE2N30.c2ln",
+    "draw": 0.6211220510093077,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "no iat",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqMyIsImV4cCI6MTc3MzIwMTk2N30.c2ln",
+    "draw": 0.4504538469101229,
+    "refresh_unix_nano": 1772868328285276236,
+    "timeout_no_previous": 267561285276236,
+    "timeout_after_attempt": 267561285276236
+  },
+  {
+    "name": "iat after exp",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqNCIsImlhdCI6MTc3MzIwMTk3NywiZXhwIjoxNzczMjAxOTY3fQ.c2ln",
+    "draw": 0.826345491934051,
+    "refresh_unix_nano": 1772890926890975075,
+    "timeout_no_previous": 290159890975075,
+    "timeout_after_attempt": 290159890975075
+  },
+  {
+    "name": "fractional exp",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqNSIsImlhdCI6MTc3MjU5NzE2Ny43NSwiZXhwIjoxNzczMjAxOTY3LjV9.c2ln",
+    "draw": 0.17836675434002547,
+    "refresh_unix_nano": 1772849874621302484,
+    "timeout_no_previous": 249107621302484,
+    "timeout_after_attempt": 249107621302484
+  },
+  {
+    "name": "zero exp",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqNiIsImlhdCI6MCwiZXhwIjowfQ.c2ln",
+    "draw": 0.4509088065263729,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "string exp",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqNyIsImV4cCI6InNvb24ifQ.c2ln",
+    "draw": 0.4391575224924914,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "null claims",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.bnVsbA.c2lnbmF0dXJlLTM",
+    "draw": 0.35303419176671524,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "padded header",
+    "token": "eyJhbGciOiJFUzI1NiJ9.eyJqdGkiOiJqOCJ9.c2ln",
+    "draw": 0.2714448155833886,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "trailing claims",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqOSJ9IHRyYWlsaW5n.c2ln",
+    "draw": 0.8943733871636823,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "trailing header",
+    "token": "eyJhbGciOiJFUzI1NiJ9IHg.eyJqdGkiOiJqMTAifQ.c2ln",
+    "draw": 0.9820993294131388,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "expired",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqMTEiLCJpYXQiOjE3NzE1OTcxNjcsImV4cCI6MTc3MjA5NzE2N30.c2ln",
+    "draw": 0.06241770072414632,
+    "refresh_unix_nano": 1771800287885036207,
+    "timeout_no_previous": 0,
+    "timeout_after_attempt": 240000000000
+  },
+  {
+    "name": "bad signature",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqMTIiLCJpYXQiOjE3NzI1OTcxNjcsImV4cCI6MTc3MzIwMTk2N30.c2ln!",
+    "draw": 0.32827856562538893,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "padded signature",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqMTMiLCJpYXQiOjE3NzI1OTcxNjcsImV4cCI6MTc3MzIwMTk2N30.c2lnbg==",
+    "draw": 0.45222521162402873,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "four parts",
+    "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJqMTQifQ.c2ln.extra",
+    "draw": 0.8814665716043487,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  },
+  {
+    "name": "no alg",
+    "token": "eyJ0eXAiOiJKV1QifQ.eyJqdGkiOiJqMTUifQ.c2ln",
+    "draw": 0.1555195465621183,
+    "refresh_unix_nano": 1773205567000000000,
+    "timeout_no_previous": 604800000000000,
+    "timeout_after_attempt": 604800000000000
+  }
+]
