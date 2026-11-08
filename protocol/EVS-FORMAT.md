@@ -140,15 +140,23 @@ A **record** is a 160 B header, then its body in 64 KiB STREAM frames under its 
 | 100 | oid_kind |
 | 101-119 | nonce_prefix, 19 B |
 
-The widths of the frame AAD's generation and index are this file's. EVS1-M2-04 owns the record and segment codecs and pins these in `testdata/evs/record_vectors.json` and `segment_vectors.json`.
+The widths of the frame AAD's generation and index are this file's. The header's `generation` is the one its frames' AAD names: the container's g for key_ref_kind 0, which a reader holds to the segment header's or the inline chain's, and for key_ref_kind 1 the slot key's own generation, which a reader holds to that key's `EvsSlotKey.generation`, so a versionless path's slot key keeps opening after a rotation. A body of L bytes is max(1, ceil(L / 64 KiB)) frames, every one but the last full and the last the remainder, empty only when L is 0; a whole record is 160 + L + 16 per frame bytes, which a locator's length must equal; and L is at most 8 MiB, since a record lives in a segment or inline. kind 1 to 3, key_ref_kind 0 or 1, oid_kind 1 (SHA-1, plan-EVS1-format-bytes#4), a generation from 1, a slot only for key_ref_kind 1 with key_index below 64, and a base only for a diff; a reader refuses any other header as tampering.
+
+An **inline record** (§11.7: a chain that pads to at most 16 KiB) is its locator's bytes: for the chain's first record the block of a fresh key under fek of the push's generation, then the record; for a later one the record alone, under the chain's key and with the chain's generation in its header; either then random bytes to Padmé of its length, as a segment pads, so an entry version, which evs sees, shows no exact record length. A locator's bytes are at most 16 KiB.
+
+EVS1-M2-04 owns the record and segment codecs and pins these in `testdata/evs/record_vectors.json` and `segment_vectors.json`.
 
 **Deposits.** A depositor holds no manifest key, so a deposit seals its record header, its entries' `sealed_fields` and its push's sealed metadata under K_dep = HKDF-SHA256(object key, salt repo_id, info "UR evs 1.0 deposit"), the object key being the deposit's own, which its slot wraps by HPKE to the drop key. The header uses #3's layout with key_ref_kind 1; a push's sealed metadata goes under the K_dep of its first entry; bodies stay under the object key. `sealed_ref_name` stays empty and deposit entries carry no name row. A reader takes the slot from the entry's cleartext `slot_ids`, opens it with the drop private key, then derives K_dep (plan-EVS1-format-bytes#5).
+
+A deposit's slot key is HPKE in base mode with §10.6's wraps' suite, X-Wing (`MLKEM768X25519`), HKDF-SHA256 and AES-128-GCM, info "UR evs 1.0 deposit key" and AAD repo_id || u64be(g), g the drop key's generation, which `EvsSlotKey.generation` carries: enc 1,120 B | the 32 B key sealed | 16 B tag, 1,168 B. A **slot object** lists its keys in ascending `key_index`, all wrapped one way, under fek or to a drop key; a slot every key of which was erased stays, holding none.
 
 ## Sealed values and names
 
 - `EvsEntryVersion.sealed_fields` opens to `EvsSealedFields`, and a push's sealed metadata to `EvsSealedMetadata`. Each is sealed as 24 B nonce | ciphertext | 16 B tag under manifest_g, g the push's generation, AAD "UR evs 1.0 fields" or "UR evs 1.0 metadata" || repo_id || u64be(g) (#9). `content_sha256` is set for versioning 1 and 2 only, which are format 2's.
 - `EvsSealedMetadata` holds §10's (group_id, epoch, epoch_authenticator) the writer pins, as §6's `GroupHead`; the provenance, §5.5's agent id and format 2's tainted bit, which format 1 ignores; in git mode every commit of the update, oldest first, each with its sealed changes against its first parent, so export rebuilds every original oid (§11.7's mapping to git); and an import's Signed `EvsImport`.
 - A name (§11.7's name row) is sealed alone: the name, then 0x80 and zeros to the next multiple of 64 B, under a random 24 B nonce with a 16 B tag, AAD repo_id || u64be(p) || parent token || child token, p the path epoch whose tokens the row uses, under manifest_p. The key's generation and the AAD's widths are this file's reading, for EVS1-M2-04's vectors to pin.
+  The padding is exactly one step: a reader refuses a marker outside the last 64 B, or a non-zero byte after it, and then recomputes the child's token from the parent's and the name, refusing a mismatch. A carried row (`EvsName.epoch`) opens under its source epoch's manifest and path keys and its directory's token in that epoch, an epoch older than its table's. A table that lists a token twice, or a kind other than file and directory, is refused whole. The 448 KiB bound counts each row as the table encodes it with its epoch cleared.
+- A file's sealed fields hold a 16 B `file_id`, a git file mode (100644, 100664, 100755, 120000 or 160000; a directory is no file) and a SHA-1 oid; format 1 refuses `content_sha256` as FORMAT_UNSUPPORTED.
 
 ## Statements and payloads
 
@@ -207,7 +215,7 @@ A record's body is its items in the order §11.8's record row lists them, each u
 | `head/<repo>/<ref>` | `EvsHead` | server-internal: readers get `EvsHeadSummary` |
 | `log/<repo>/<ref>/<n>` | `EvsLogPage` | built alike by any writer, so a 412 on equal bytes is success; this message is this file's |
 | `idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e` | `EvsIndexEntry` | per file up to four `EvsIndexVersion`s, newest first, all but the newest elided; a directory's table with `names_through`; a removal's marker; a drop mark, which format-1 writers keep |
-| `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys; an erased key leaves the list and no index shifts (#9); a key's `wrapped` is the 72 B wrapped-key block a segment carries, under fek of the key's generation, and a deposit's is HPKE-XWing to that generation's drop key, whose parameters EVS1-M2-04's slot codec fixes |
+| `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys in ascending index; an erased key leaves the list and no index shifts (#9); a key's `wrapped` is the 72 B wrapped-key block a segment carries, under fek of the key's generation, and a deposit's is HPKE-XWing to that generation's drop key, as above |
 | `pmap/<repo>/<ref>/<p>/<map>/<part>/_` | a Signed `EvsPathMap` part | |
 
 EVSB's plan adds `EvsPidxEntry` for `pidx/` here when EVSB-M2-10 lands. `pb/` holds batches above, and `seg/` segments.
@@ -262,3 +270,9 @@ For design-records, each is a reading that changes no D- item:
 | One-part `changes_root` | Over the changes directly, so a proof there is one level |
 | Absence proofs | One per token path; sizes held to `change_count` and `part_count`, a part's two leaves to one claimed size |
 | Padmé | Lengths 0 to 3 pad to themselves; past 2^63 nothing is computed |
+| Record `generation` | The frames' AAD generation: the container's, or the slot key's own |
+| Frames | max(1, ceil(L / 64 KiB)), only the last short; L at most 8 MiB |
+| Inline records | The first carries the chain's key block; each locator pads to Padmé with random bytes, at most 16 KiB |
+| Deposit slot keys | HPKE base mode, X-Wing, HKDF-SHA256, AES-128-GCM; info "UR evs 1.0 deposit key", AAD repo_id \| u64 g |
+| Slot objects | Keys in ascending index, all wrapped one way; an emptied slot stays |
+| Name padding | Exactly one step; a carried row's epoch older than its table's |
