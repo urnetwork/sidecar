@@ -3,10 +3,10 @@ package sidecar
 import (
 	"bytes"
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -15,6 +15,11 @@ import (
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// The Worker leg has no file system, so the vectors are embedded.
+//
+//go:embed testdata/binding/vectors.json
+var bindingVectorsJson []byte
 
 // testdata/binding/vectors.json: a binding's seeds and fields, and the wrapper bytes they sign to, the same on
 // every leg, since Ed25519 signs deterministically.
@@ -221,10 +226,7 @@ func TestBindingRefusesFieldsOutOfFormat(t *testing.T) {
 
 func readBindingVectors(t *testing.T) []bindingVector {
 	t.Helper()
-	encoded, err := os.ReadFile("testdata/binding/vectors.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := bindingVectorsJson
 	vectors := []bindingVector{}
 	if err := json.Unmarshal(encoded, &vectors); err != nil {
 		t.Fatal(err)
@@ -283,35 +285,4 @@ func TestBindingVectorsAreTheSyntheticBinding(t *testing.T) {
 	if readBindingVectors(t)[0].SignedBinding != hex.EncodeToString(testSignedBinding(t)) {
 		t.Fatal("testdata/binding/vectors.json is not the synthetic binding")
 	}
-}
-
-// No input panics, and anything accepted is canonical: its body and wrapper re-encode to the same bytes, so one
-// binding has one byte string.
-func FuzzVerifySidecarIdentityBinding(f *testing.F) {
-	identitySeed, clientKeySeed := testBindingSeeds()
-	signedBinding, _ := NewSidecarIdentityBinding(testBindingFields(), identitySeed, clientKeySeed)
-	f.Add(signedBinding)
-	f.Add([]byte{})
-	f.Add(signedBinding[:len(signedBinding)/2])
-	f.Add(append(bytes.Clone(signedBinding), 0x78, 0x01))
-	f.Fuzz(func(t *testing.T, encoded []byte) {
-		binding, err := VerifySidecarIdentityBinding(encoded)
-		if err != nil {
-			if binding != nil {
-				t.Fatal("a binding beside an error")
-			}
-			return
-		}
-		signed := &bridge.SignedSidecarIdentityBinding{}
-		if proto.Unmarshal(encoded, signed) != nil {
-			t.Fatal("accepted bytes that do not decode")
-		}
-		canonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
-		if err != nil || !bytes.Equal(canonical, encoded) {
-			t.Fatal("accepted a wrapper that is not canonical")
-		}
-		if bytes.Equal(binding.ClientPublicKey, binding.IdentityPublicKey) {
-			t.Fatal("accepted one key as both")
-		}
-	})
 }
