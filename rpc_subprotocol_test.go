@@ -531,8 +531,19 @@ func TestApplySidecarClientSettings(t *testing.T) {
 	}
 }
 
-// §4.4: every rpc_ file but the hook's is off the sidecar_http leg, and the hook's, which ACL's
-// every-leg engine fills, names no connect package.
+// The rpc_ files that build on every leg, and who needs them there. Each names no connect package.
+var rpcEveryLegFiles = map[string]string{
+	// ACL's every-leg engine fills the hook
+	"rpc_inbound.go": "ACL's engine",
+	// HeadCheck's sources, reconcile engine and relay, which HeadStopState runs and TEAM-M2-10's
+	// every-leg ConfigClient reaches (PROTO-M2-04)
+	"rpc_headcheck_sources.go": "TEAM's ConfigClient",
+	"rpc_headcheck_state.go":   "TEAM's ConfigClient",
+	"rpc_headcheck_relay.go":   "TEAM's ConfigClient",
+}
+
+// §4.4: every rpc_ file but those of rpcEveryLegFiles is off the sidecar_http leg, and those, which
+// every-leg code reaches, name no connect package.
 func TestRpcFilesKeepToTheirLegs(t *testing.T) {
 	buildContext := sidecarHttpBuildContext()
 	fileSet := token.NewFileSet()
@@ -546,14 +557,15 @@ func TestRpcFilesKeepToTheirLegs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if goFile != "rpc_inbound.go" {
+		needer, everyLeg := rpcEveryLegFiles[goFile]
+		if !everyLeg {
 			if matched {
 				t.Errorf("%s builds on the sidecar_http leg", goFile)
 			}
 			continue
 		}
 		if !matched {
-			t.Errorf("%s is off the sidecar_http leg, where ACL's engine needs it", goFile)
+			t.Errorf("%s is off the sidecar_http leg, where %s needs it", goFile, needer)
 		}
 		file, err := parser.ParseFile(fileSet, goFile, nil, parser.ImportsOnly)
 		if err != nil {
