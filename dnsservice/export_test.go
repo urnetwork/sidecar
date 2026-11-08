@@ -70,3 +70,8 @@ func (self *FeedLoop) IdleForTest(root string) (loopIdle bool, loopChanged chan 
 	close(closed)
 	return true, closed, true, closed
 }
+
+// Long-polls parked in their wait, and a channel that closes when that changes.
+func (self *DnsApi) ParkedForTest() (int, chan struct{}) {
+	return self.parkedCount.Get()
+}
