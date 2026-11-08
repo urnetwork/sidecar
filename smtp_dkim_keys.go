@@ -113,10 +113,12 @@ type smtpDkimRecord struct {
 	PublicKey []byte `json:"public_key"`
 }
 
+// Where a selector's record lives in the namespace.
 func smtpDkimSelectorRecordName(selector string) string {
 	return smtpDkimSelectorRecordPrefix + selector
 }
 
+// Where a selector's private key lives in the namespace.
 func smtpDkimKeyRecordName(selector string) string {
 	return smtpDkimKeyRecordPrefix + selector
 }
@@ -315,6 +317,7 @@ func (self *SmtpDkimKeys) pinWithPublishLock(record *smtpDkimRecord) *SmtpDkimSe
 	}
 }
 
+// Whether a send holds the selector.
 func (self *SmtpDkimKeys) pinned(selector string) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
