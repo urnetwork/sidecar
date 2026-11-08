@@ -9,8 +9,11 @@ package sidecar
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io/fs"
 	"path"
+	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -95,4 +98,43 @@ func TestMlsInteropTranscripts(t *testing.T) {
 		}
 	}
 	t.Logf("%d transcript files, %d commits followed", len(paths), totalEpochs)
+}
+
+// Every transcript under testdata/mls/0x0010/ and 0x0001/ is the run its SOURCE describes: SOURCE names each file
+// and gives its sha256, so a file recorded again without its provenance written down fails here.
+func TestMlsTranscriptSourcesNameTheirFiles(t *testing.T) {
+	for _, directory := range []string{"0x0010", "0x0001"} {
+		source, err := mlsVectorFiles.ReadFile(path.Join("testdata", "mls", directory, "SOURCE"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nameSums := map[string]string{}
+		name := ""
+		for _, line := range strings.Split(string(source), "\n") {
+			trimmed := strings.TrimSpace(line)
+			switch {
+			case line == trimmed && strings.HasSuffix(line, ".json"):
+				name = line
+			case name != "" && strings.HasPrefix(trimmed, "sha256 "):
+				nameSums[name] = strings.TrimPrefix(trimmed, "sha256 ")
+				name = ""
+			}
+		}
+		paths, err := fs.Glob(mlsVectorFiles, path.Join("testdata", "mls", directory, "*.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(paths) == 0 || len(paths) != len(nameSums) {
+			t.Errorf("%s: %d files, %d named in SOURCE", directory, len(paths), len(nameSums))
+		}
+		for _, filePath := range paths {
+			encoded, err := mlsVectorFiles.ReadFile(filePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sum := fmt.Sprintf("%x", sha256.Sum256(encoded)); nameSums[path.Base(filePath)] != sum {
+				t.Errorf("%s: sha256 %s, SOURCE gives %q", filePath, sum, nameSums[path.Base(filePath)])
+			}
+		}
+	}
 }

@@ -46,6 +46,14 @@ func (self *mlsHexBytes) UnmarshalJSON(encoded []byte) error {
 	return nil
 }
 
+// Hex text, or null for nil, as the mlswg writes an absent value.
+func (self mlsHexBytes) MarshalJSON() ([]byte, error) {
+	if self == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(hex.EncodeToString(self))
+}
+
 // Reads one file under testdata/mls/ into target.
 func mlsLoadVectorFile(t testing.TB, directory string, name string, target any) {
 	t.Helper()
