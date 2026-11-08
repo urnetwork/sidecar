@@ -255,7 +255,7 @@ modules:
     leg: [test]
     planned: true
   - module: github.com/tmc/mls
-    spdx: MIT
+    spdx: BSD-3-Clause AND MIT
     reason: mlsinterop's 0x0010 interop peer (§10.4, §22.10), its 0x004F patched to 0x0010 by mlsinterop/overlay for the stacks row, unpatched for the kem row
     leg: [test]
   - module: github.com/urnetwork/connect
