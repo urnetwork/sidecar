@@ -96,7 +96,7 @@ type mlsGoMember struct {
 	group        *group.Group
 }
 
-func newMlsGoMember(t *testing.T, name string) *mlsGoMember {
+func newMlsGoMember(t testing.TB, name string) *mlsGoMember {
 	t.Helper()
 	credential, signatureKey, err := credentials.GenerateCredentialWithKeyForCS([]byte("mls-go "+name), mlsGoSuite)
 	if err != nil {
@@ -120,7 +120,7 @@ func (self *mlsGoMember) leaf() group.LeafNodeIndex {
 
 // The lifecycle's members now, and the passive members' views as they grow.
 type mlsGoLifecycle struct {
-	t       *testing.T
+	t       testing.TB
 	members []*mlsGoMember
 	// the passive members, whose views are the transcript
 	passives    []*mlsGoMember

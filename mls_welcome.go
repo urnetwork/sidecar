@@ -238,6 +238,9 @@ func openMlsWelcome(suite *mlsCipherSuite, welcome *mlsWelcome, held *mlsHeldKey
 	if groupInfo.groupContext.cipherSuite != suite.value {
 		return nil, fmt.Errorf("%w: a group info of suite %#x", errMlsInvalid, groupInfo.groupContext.cipherSuite)
 	}
+	if err := groupInfo.groupContext.checkHashLengths(suite); err != nil {
+		return nil, err
+	}
 	encodedGroupContext, err := mlsMarshal(&groupInfo.groupContext)
 	if err != nil {
 		return nil, err

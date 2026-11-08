@@ -19,7 +19,7 @@
 modules:
   - module: github.com/andybalholm/brotli
     spdx: MIT
-    reason: through utls, for TLS certificate compression in connect's fingerprinted dials
+    reason: through utls, for TLS certificate compression in connect's fingerprinted dials; and sidecartest's privacy scan, which opens brotli to look inside (§22.7)
     leg: [client, engine, cli, test]
   - module: github.com/bits-and-blooms/bitset
     spdx: BSD-3-Clause
@@ -117,7 +117,7 @@ modules:
     leg: [test]
   - module: github.com/klauspost/compress
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
-    reason: through utls, for TLS certificate compression
+    reason: through utls, for TLS certificate compression; and sidecartest's privacy scan, which opens zstd to look inside (§22.7)
     leg: [client, engine, cli, test]
   - module: github.com/mattn/go-colorable
     spdx: MIT
@@ -320,7 +320,7 @@ modules:
     leg: [test]
   - module: gopkg.in/yaml.v3
     spdx: Apache-2.0 AND MIT
-    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and config/<env>/mxedge.yml in mxedgeservice (§15.15), is sidecartest's strict reader of metadata_list.yml (§22.7), and reads services.yml and the builder's cloudflare credentials in sidecarctl's certs renew (C-23); sdk, sn and server require this version
+    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and config/<env>/mxedge.yml in mxedgeservice (§15.15), is sidecartest's strict reader of metadata_list.yml (§22.7) and sidecartest/fault's of catalog.yml (§22.8), and reads services.yml and the builder's cloudflare credentials in sidecarctl's certs renew (C-23); sdk, sn and server require this version
     leg: [engine, test, sidecarctl]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
