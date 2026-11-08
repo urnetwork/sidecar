@@ -62,17 +62,6 @@ func NewInvariant(id string, check func(ctx context.Context, oracle *Oracle) err
 	return &invariantFunction{id: id, check: check}
 }
 
-// §22.8's names, FI-1 to FI-30.
-var invariantNames = map[int]string{
-	1: "closure", 2: "outcomes", 3: "commit-point authorization", 4: "one ladder", 5: "lifecycle",
-	6: "visibility", 7: "effects", 8: "attribution", 9: "git", 10: "witnesses",
-	11: "path integrity", 12: "recovery", 13: "accounting", 14: "write budget", 15: "file-mode CAS",
-	16: "purge", 17: "versioning", 18: "index results", 19: "index erasure", 20: "roll-up",
-	21: "search scope and taint", 22: "determinism", 23: "fetch privacy", 24: "remote search",
-	25: "directory authorship", 26: "request soundness", 27: "drop history", 28: "deliveries",
-	29: "copies", 30: "store settle",
-}
-
 var (
 	invariantLock   sync.Mutex
 	invariantChecks = map[int]func(ctx context.Context, oracle *Oracle) error{}
@@ -81,11 +70,11 @@ var (
 // Binds FI-n's check. An owner calls this from a package-level var in fi<n>.go. Binding one twice is
 // a bug, so it panics. Returns n so the var has a value.
 func RegisterInvariant(n int, check func(ctx context.Context, oracle *Oracle) error) int {
-	invariantLock.Lock()
-	defer invariantLock.Unlock()
-	if _, ok := invariantNames[n]; !ok {
+	if DefaultCatalog().Invariant(n) == nil {
 		panic(fmt.Sprintf("no FI-%d in §22.8", n))
 	}
+	invariantLock.Lock()
+	defer invariantLock.Unlock()
 	if _, ok := invariantChecks[n]; ok {
 		panic(fmt.Sprintf("a second check for FI-%d", n))
 	}
@@ -96,15 +85,20 @@ func RegisterInvariant(n int, check func(ctx context.Context, oracle *Oracle) er
 // A check nobody wrote yet, which fails with this.
 var ErrInvariantUnbuilt = errors.New("no check is built for this invariant")
 
-// FI-n as a schedule names it. One with no registered check fails when run.
+// FI-n as a schedule names it, answered by whichever oracle bound FI-n, so a row names an invariant
+// the same way whoever wrote it. One with no bound check fails when run, and an n §22.8 does not hold
+// panics, since a schedule naming it is wrong where it was written.
 func FI(n int) Invariant {
-	id := fmt.Sprintf("FI-%d", n)
-	return NewInvariant(id, func(ctx context.Context, oracle *Oracle) error {
+	catalogInvariant := DefaultCatalog().Invariant(n)
+	if catalogInvariant == nil {
+		panic(fmt.Sprintf("no FI-%d in §22.8", n))
+	}
+	return NewInvariant(catalogInvariant.Id, func(ctx context.Context, oracle *Oracle) error {
 		invariantLock.Lock()
 		check, ok := invariantChecks[n]
 		invariantLock.Unlock()
 		if !ok {
-			return fmt.Errorf("%s %s: %w", id, invariantNames[n], ErrInvariantUnbuilt)
+			return fmt.Errorf("%s %s (%s's oracle): %w", catalogInvariant.Id, catalogInvariant.Name, catalogInvariant.Oracle, ErrInvariantUnbuilt)
 		}
 		return check(ctx, oracle)
 	})
