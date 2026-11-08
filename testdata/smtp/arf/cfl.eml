@@ -1,0 +1,46 @@
+From: feedbackloop@cfl.loop.example
+To: root@rpt.report.example
+Subject: Complaint
+Date: Tue, 03 Nov 2026 12:15:00 +0000
+Message-ID: <cfl-1@cfl.loop.example>
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=feedback-report; boundary="----=_Part_CFL"
+
+------=_Part_CFL
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is a CFL report.
+
+------=_Part_CFL
+Content-Type: message/feedback-report
+Content-Transfer-Encoding: 7bit
+
+Feedback-Type: abuse
+User-Agent: Yahoo!-Mail-Feedback/2.0
+Version: 0.1
+Original-Mail-From: <bounce@b.quietnet.root.example>
+Original-Rcpt-To: <recipient@receiver.example>
+Received-Date: Tue, 03 Nov 2026 10:00:01 +0000
+Reported-Domain: quietnet.root.example
+Authentication-Results: mta.receiver.example  from=quietnet.root.example; domainkeys=neutral (no sig); from=quietnet.root.example; dkim=pass (ok)
+
+------=_Part_CFL
+Content-Type: text/rfc822-headers
+Content-Transfer-Encoding: 7bit
+
+Received: from 192.0.2.10 (EHLO o1.out.report.example) (192.0.2.10)
+	by mta.receiver.example with SMTPS; Tue, 03 Nov 2026 10:00:01 +0000
+Received: from o1.out.report.example (o1.out.report.example [192.0.2.10])
+	by mta.receiver.example with ESMTPS; Tue, 03 Nov 2026 10:00:01 +0000
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=quietnet.root.example;
+	s=abcdefghijklmnopqrstuvwxyz; h=from:date:message-id:x-ur-ref:feedback-id;
+	bh=AAAA; b=AAAA
+From: sender@quietnet.root.example
+To: recipient@receiver.example
+Subject: SUBJECT-CANARY
+Date: Tue, 03 Nov 2026 10:00:00 +0000
+Message-ID: <aaaabbbbccccddddeeeeffffgg@quietnet.root.example>
+Feedback-ID: n:c:abcdefghijklmnopqrstuvwxyz:urnetwork
+
+------=_Part_CFL--
