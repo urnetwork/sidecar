@@ -58,7 +58,6 @@ modules:
     spdx: Apache-2.0
     reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12)
     leg: [cli]
-    planned: true
   - module: github.com/emersion/go-smtp
     spdx: MIT
     reason: D-MAIL-3's receiver and submission sessions at v0.25.0 (§15.3, §15.5); nothing links it until QD-193's fork is in the tree, and until then mail_smtp_serve.go refuses
@@ -84,6 +83,10 @@ modules:
     spdx: Apache-2.0
     reason: mlsinterop's git codec oracle (§22.6)
     leg: [test]
+  - module: github.com/godbus/dbus/v5
+    spdx: BSD-2-Clause
+    reason: v5.1.0 reaches the Secret Service over the session D-Bus for the Linux desktop key store, from cli (§5.9), which §4.7's initial list omits
+    leg: [cli]
   - module: github.com/golang-jwt/jwt/v5
     spdx: MIT
     reason: connect reads client tokens with it
