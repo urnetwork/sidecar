@@ -1,7 +1,8 @@
 // smtpproof/checker against the gate and the relation, as an outside party would hold them: the same
 // connections, honest and then broken in one place each, and the same checks named on both sides. This
 // is an external test package, so it may import the checker; the captures come through
-// export_test.go.
+// export_test.go, from this package's own MX and from sidecartest's ScriptedMx and RecordMx, the
+// latter a TLS server none of the three shares code with.
 
 package smtpproof_test
 
@@ -9,8 +10,10 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +22,7 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 
+	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/smtpproof"
 	"github.com/urnetwork/sidecar/smtpproof/checker"
 )
@@ -192,16 +196,20 @@ func testRewriteClientRecord(t *testing.T, c *testLegCase, capture *smtpproof.Ex
 	}
 }
 
-func TestCheckerAndTheGateNameTheSameChecks(t *testing.T) {
-	type mutation struct {
-		name   string
-		want   func(c *testLegCase) []string
-		mutate func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture)
-	}
+// One break of an honest capture, and the checks it must fail, which may depend on the leg and mode.
+type testCheckerMutation struct {
+	name   string
+	want   func(c *testLegCase) []string
+	mutate func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture)
+}
+
+// The breaks the gate and the checker must name alike, each in one place.
+func testCheckerMutations() []*testCheckerMutation {
+	type mutation = testCheckerMutation
 	fixed := func(checks ...string) func(c *testLegCase) []string {
 		return func(c *testLegCase) []string { return checks }
 	}
-	mutations := []mutation{
+	mutations := []*mutation{
 		{name: "no recipient", want: fixed("preamble"), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
 			preamble := *capture.Preamble
 			preamble.RecipientCount = 0
@@ -319,7 +327,7 @@ func TestCheckerAndTheGateNameTheSameChecks(t *testing.T) {
 		}},
 	}
 	if !testing.Short() {
-		mutations = append(mutations, mutation{name: "a disclosed SHTS one bit off", want: func(c *testLegCase) []string {
+		mutations = append(mutations, &mutation{name: "a disclosed SHTS one bit off", want: func(c *testLegCase) []string {
 			if c.tls12 {
 				return nil
 			}
@@ -333,17 +341,26 @@ func TestCheckerAndTheGateNameTheSameChecks(t *testing.T) {
 			}
 		}})
 	}
-	for _, m := range mutations {
+	return mutations
+}
+
+// Breaks one capture with m and holds the gate and the checker to the same checks.
+func testExpectSameChecks(t *testing.T, m *testCheckerMutation, c *testLegCase, capture *smtpproof.ExportedCapture) {
+	t.Helper()
+	m.mutate(t, c, capture)
+	want := m.want(c)
+	slices.Sort(want)
+	gate := testGateVerdict(capture)
+	ours := testCheckerVerdict(capture)
+	if !slices.Equal(gate, want) || !slices.Equal(ours, want) {
+		t.Errorf("%s, %s: the gate names %v and the checker %v, want %v", m.name, c.name, gate, ours, want)
+	}
+}
+
+func TestCheckerAndTheGateNameTheSameChecks(t *testing.T) {
+	for _, m := range testCheckerMutations() {
 		for _, c := range testLegCases() {
-			capture := smtpproof.ExportCapture(t, c.leg, c.data)
-			m.mutate(t, c, capture)
-			want := m.want(c)
-			slices.Sort(want)
-			gate := testGateVerdict(capture)
-			ours := testCheckerVerdict(capture)
-			if !slices.Equal(gate, want) || !slices.Equal(ours, want) {
-				t.Errorf("%s, %s: the gate names %v and the checker %v, want %v", m.name, c.name, gate, ours, want)
-			}
+			testExpectSameChecks(t, m, c, smtpproof.ExportCapture(t, c.leg, c.data))
 		}
 	}
 }
@@ -370,6 +387,93 @@ func TestWriteCheckerVectors(t *testing.T) {
 		name := strings.ReplaceAll(c.name, " ", "-") + ".json"
 		if err := os.WriteFile(filepath.Join(directory, name), encoded, 0o644); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// An MX of each of sidecartest's kinds for a leg: ScriptedMx behind crypto/tls's server, and RecordMx
+// behind the server written apart from both.
+func testAgreementMxs(t *testing.T, leg *smtpproof.ExportedMxLeg) map[string]sidecartest.MxServer {
+	t.Helper()
+	scripted, err := sidecartest.NewScriptedMx("mx.recipient.example", nil, &sidecartest.ScriptedMxSettings{
+		MinVersion:   leg.Version,
+		MaxVersion:   leg.Version,
+		CipherSuites: []uint16{leg.Suite},
+		RsaKey:       leg.Suite == tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := sidecartest.NewRecordMx("mx.recipient.example", nil, &sidecartest.RecordMxSettings{Version: leg.Version, Suite: leg.Suite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]sidecartest.MxServer{"scripted": scripted, "record": record}
+}
+
+// SMTP-M9-02's fixtures as the honest corpus: every leg, both modes, both MXs, whose TLS the checker
+// and this module share no code with, and the gate and the checker each pass every send.
+func TestCheckerAgreesOnHonestSendsThroughSidecartestsMxs(t *testing.T) {
+	for _, leg := range smtpproof.ExportMxLegs() {
+		for _, data := range []bool{false, true} {
+			for kind, mx := range testAgreementMxs(t, leg) {
+				capture := smtpproof.ExportMxCapture(t, leg.Name, data, mx)
+				name := fmt.Sprintf("%s %s data=%t", leg.Name, kind, data)
+				if verdict := testGateVerdict(capture); len(verdict) != 0 {
+					t.Errorf("%s: the gate refuses an honest send: %v", name, verdict)
+				}
+				for _, failure := range checker.Check(testCheckerInput(capture)) {
+					t.Errorf("%s: the checker refuses an honest send: %v", name, failure)
+				}
+			}
+		}
+	}
+}
+
+// What only RecordMx sends: a NewSessionTicket the client never asked for, which Z7 skips, ahead of
+// each of the first replies, and replies split across records. The gate and the checker pass each.
+func TestCheckerAgreesThroughALateTicketAndSplitReplies(t *testing.T) {
+	for _, leg := range smtpproof.ExportMxLegs() {
+		if leg.Version != tls.VersionTLS13 {
+			continue
+		}
+		for _, settings := range []*sidecartest.RecordMxSettings{
+			{TicketBeforeReply: 1}, {TicketBeforeReply: 2}, {TicketBeforeReply: 3}, {SplitRepliesAt: 5},
+		} {
+			settings.Version, settings.Suite = leg.Version, leg.Suite
+			mx, err := sidecartest.NewRecordMx("mx.recipient.example", nil, settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			capture := smtpproof.ExportMxCapture(t, leg.Name, false, mx)
+			name := fmt.Sprintf("%s ticket before reply %d, split at %d", leg.Name, settings.TicketBeforeReply, settings.SplitRepliesAt)
+			if verdict := testGateVerdict(capture); len(verdict) != 0 {
+				t.Errorf("%s: the gate refuses an honest send: %v", name, verdict)
+			}
+			for _, failure := range checker.Check(testCheckerInput(capture)) {
+				t.Errorf("%s: the checker refuses an honest send: %v", name, failure)
+			}
+		}
+	}
+}
+
+// The same breaks over captures through RecordMx, a TLS server written apart from the checker and
+// from this module, on every leg, ECDHE-RSA included, which this package's own MX never runs.
+func TestCheckerAndTheGateNameTheSameChecksThroughARecordMx(t *testing.T) {
+	for _, leg := range smtpproof.ExportMxLegs() {
+		certificate, err := sidecartest.NewMxCertificate("mx.recipient.example", leg.Suite == tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, data := range []bool{false, true} {
+			c := &testLegCase{name: fmt.Sprintf("%s record data=%t", leg.Name, data), data: data, tls12: leg.Version == tls.VersionTLS12}
+			for _, m := range testCheckerMutations() {
+				mx, err := sidecartest.NewRecordMx("mx.recipient.example", nil, &sidecartest.RecordMxSettings{Version: leg.Version, Suite: leg.Suite, Certificate: &certificate})
+				if err != nil {
+					t.Fatal(err)
+				}
+				testExpectSameChecks(t, m, c, smtpproof.ExportMxCapture(t, leg.Name, data, mx))
+			}
 		}
 	}
 }
