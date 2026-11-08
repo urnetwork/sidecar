@@ -299,3 +299,22 @@ func TestDnsProbeSettings(t *testing.T) {
 		}
 	}
 }
+
+// The feed block's waits are each positive, and its backoff grows.
+func TestDnsFeedSettings(t *testing.T) {
+	feed := DefaultDnsSettings().Feed
+	if feed.ReplacedKeepSeconds != 24*3600 || feed.RetryMinSeconds <= 0 || feed.RetryMaxSeconds < feed.RetryMinSeconds {
+		t.Errorf("defaults %+v", feed)
+	}
+	for _, block := range []string{
+		"feed: {retry_min_s: 0}",
+		"feed: {retry_min_s: 10, retry_max_s: 5}",
+		"feed: {empty_poll_s: 0}",
+		"feed: {snapshot_write_s: 0}",
+		"feed: {replaced_keep_s: 0}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}

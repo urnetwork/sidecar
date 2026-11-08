@@ -43,3 +43,30 @@ func ProbeClientHelloForTest(serverName string) ([]byte, error) {
 func ProbeAnswerPassesForTest(reader io.Reader) bool {
 	return dnsProbeAnswerPasses(reader)
 }
+
+// The serial of the view root's local snapshot holds, and a channel that closes when it changes.
+func (self *FeedLoop) WrittenSerialForTest(root string) (uint64, chan struct{}) {
+	for _, feedRoot := range self.roots {
+		if feedRoot.root == root {
+			return feedRoot.writer.writtenSerial.Get()
+		}
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return 0, closed
+}
+
+// Whether root's loop and its writer are each parked, with a channel for each that closes when it
+// changes.
+func (self *FeedLoop) IdleForTest(root string) (loopIdle bool, loopChanged chan struct{}, writerIdle bool, writerChanged chan struct{}) {
+	for _, feedRoot := range self.roots {
+		if feedRoot.root == root {
+			loopIdle, loopChanged = feedRoot.idle.Get()
+			writerIdle, writerChanged = feedRoot.writer.idle.Get()
+			return loopIdle, loopChanged, writerIdle, writerChanged
+		}
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return true, closed, true, closed
+}
