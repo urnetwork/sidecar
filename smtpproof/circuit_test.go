@@ -12,7 +12,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -22,8 +24,19 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 )
 
+// Skips a test that needs a compiled circuit when the sidecar_testhooks tag is set. No circuit holds a
+// hook, so the tag cannot change what one does, and these tests are nearly all of this module's time:
+// make check runs every test twice, on every track that lands here.
+func testNeedCircuits(t testing.TB) {
+	t.Helper()
+	if !testCircuitsRun {
+		t.Skip("circuits hold no hook, so these run in the untagged leg")
+	}
+}
+
 func testCompile(t *testing.T, circuit frontend.Circuit) constraint.ConstraintSystem {
 	t.Helper()
+	testNeedCircuits(t)
 	compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit)
 	if err != nil {
 		t.Fatal(err)
@@ -261,13 +274,57 @@ func TestGoModPinsGnarkToServersVersions(t *testing.T) {
 	}
 }
 
+// The root module's go.mod, from this module's directory. In development it is the parent's. A
+// release branch moves the root into v2026/ and this module into its own v2026/ (§4.9), so there it
+// is two directories up, in the root's directory of the version this module's path ends in.
+func testRootGoModPath(t *testing.T) string {
+	t.Helper()
+	goMod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^module\s+(\S+)`).FindSubmatch(goMod)
+	if match == nil {
+		t.Fatal("this module's go.mod names no module")
+	}
+	if version := path.Base(string(match[1])); regexp.MustCompile(`^v[0-9]+$`).MatchString(version) {
+		return filepath.Join("..", "..", version, "go.mod")
+	}
+	return filepath.Join("..", "go.mod")
+}
+
 func TestRootNeverRequiresThisModule(t *testing.T) {
-	goMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
+	goMod, err := os.ReadFile(testRootGoModPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(goMod), "smtpproof") {
 		t.Error("the root's go.mod names smtpproof (D-REPO-2)")
+	}
+}
+
+// make check runs this module's tests from smtpproof/v2026/ on a release branch, where its parent
+// holds no go.mod and the root's is in v2026/ at the top.
+func TestRootGoModPathFollowsTheReleaseLayout(t *testing.T) {
+	top := t.TempDir()
+	for name, content := range map[string]string{
+		"v2026/go.mod":           "module example.com/root/v2026\n",
+		"smtpproof/v2026/go.mod": "module example.com/root/smtpproof/v2026\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(top, name)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(top, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(filepath.Join(top, "smtpproof", "v2026"))
+	rootGoMod := testRootGoModPath(t)
+	if want := filepath.Join("..", "..", "v2026", "go.mod"); rootGoMod != want {
+		t.Fatalf("the root's go.mod is %s, want %s", rootGoMod, want)
+	}
+	if _, err := os.Stat(rootGoMod); err != nil {
+		t.Fatal(err)
 	}
 }
 

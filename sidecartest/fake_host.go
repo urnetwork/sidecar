@@ -47,6 +47,7 @@ func hostCall(ctx context.Context, faults *FaultQueue, method string, serve func
 
 type FakeHostSettings struct {
 	Blobs         *FakeBlobsSettings
+	ClockCheck    *FakeClockCheckSettings
 	Redis         *FakeRedisSettings
 	Tasks         *FakeTasksSettings
 	Quota         *FakeQuotaSettings
@@ -57,6 +58,7 @@ type FakeHostSettings struct {
 func DefaultFakeHostSettings() *FakeHostSettings {
 	return &FakeHostSettings{
 		Blobs:         DefaultFakeBlobsSettings(),
+		ClockCheck:    DefaultFakeClockCheckSettings(),
 		Redis:         DefaultFakeRedisSettings(),
 		Tasks:         DefaultFakeTasksSettings(),
 		Quota:         DefaultFakeQuotaSettings(),
@@ -74,6 +76,7 @@ type FakeHost struct {
 	Tasks         *FakeTasks
 	Redis         *FakeRedis
 	Blobs         *FakeBlobs
+	ClockCheck    *FakeClockCheck
 	Push          *FakePush
 	ServiceClient *FakeServiceClientSource
 }
@@ -97,6 +100,7 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 		Tasks:         NewFakeTasks(clock, faults, settings.Tasks),
 		Redis:         NewFakeRedis(ctx, clock, faults, barriers, settings.Redis),
 		Blobs:         NewFakeBlobs(clock, faults, barriers, settings.Blobs),
+		ClockCheck:    NewFakeClockCheck(settings.ClockCheck),
 		Push:          NewFakePush(faults),
 		ServiceClient: NewFakeServiceClientSource(faults, settings.ServiceClient),
 	}
@@ -111,12 +115,14 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 		Tasks:         self.Tasks,
 		Redis:         self.Redis,
 		Blobs:         self.Blobs,
+		ClockCheck:    self.ClockCheck,
 		Push:          self.Push,
 		ServiceClient: self.ServiceClient,
 	}
 }
 
-// CC3 and CC4 as far as the fakes hold them: every Redis value, object, metric, hint and usage event.
+// CC3 and CC4 as far as the fakes hold them: every Redis value, object, metric, hint, usage event and
+// task request.
 func (self *FakeHost) privacyItems() []*PrivacyItem {
 	items := []*PrivacyItem{}
 	for key, value := range self.Redis.Dump() {
@@ -133,6 +139,18 @@ func (self *FakeHost) privacyItems() []*PrivacyItem {
 			Class: "CC4",
 			Name:  "hint to " + hint.ClientId.String(),
 			Body:  append([]byte(hint.Hint.Topic+"\x00"), hint.Hint.Body...),
+		})
+	}
+	for _, batch := range self.Quota.Batches() {
+		for _, event := range batch.Events {
+			items = append(items, &PrivacyItem{Class: "CC3", Name: "usage from " + batch.Producer, Body: []byte(event.Meter)})
+		}
+	}
+	for _, request := range self.Tasks.AllRequests() {
+		items = append(items, &PrivacyItem{
+			Class: "CC3",
+			Name:  "task " + request.Name,
+			Body:  append([]byte(request.OnceKey+"\x00"), request.Args...),
 		})
 	}
 	return items

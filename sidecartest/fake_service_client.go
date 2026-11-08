@@ -5,6 +5,7 @@ package sidecartest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -43,6 +44,10 @@ func NewFakeServiceClientSource(faults *FaultQueue, settings *FakeServiceClientS
 func (self *FakeServiceClientSource) ServiceClient(ctx context.Context, clientIndex int) (*sidecar.ServiceClientAuth, error) {
 	if clientIndex < 0 {
 		return nil, fmt.Errorf("client index %d", clientIndex)
+	}
+	// host_client.go: an empty url is never a success
+	if self.settings.ApiUrl == "" || self.settings.PlatformUrl == "" {
+		return nil, errors.New("a service client needs both urls")
 	}
 	var auth *sidecar.ServiceClientAuth
 	err := hostCall(ctx, self.faults, "serviceclient.ServiceClient", func() error {

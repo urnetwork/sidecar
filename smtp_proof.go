@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"time"
 )
 
 // The seam to the nested module smtpproof (§14.9). The root never requires that module (D-REPO-2):
@@ -63,7 +64,8 @@ type SmtpProofVerifier interface {
 // direction. Each that returns records returns those now cleared for the MX, in order, and the gate's
 // order is the MX's: a caller writes them before the next such call returns, so ClientRecord,
 // DiscloseShts and VerifyPart share one lock or one goroutine around the write. An error ends the
-// connection, and is ErrSmtpRecordCut only for §14.7's cuts.
+// connection, and is ErrSmtpRecordCut only for §14.7's cuts. The session ends with it: every later
+// call is refused, and nothing is returned for the MX after a refusal.
 type SmtpProofSession interface {
 	// A whole record from the sidecar. It may be held for a part that has yet to verify.
 	ClientRecord(record []byte) ([][]byte, error)
@@ -75,6 +77,9 @@ type SmtpProofSession interface {
 	DiscloseShts(shts []byte) ([][]byte, error)
 	// Checks a part. A record the part clears may be returned here.
 	VerifyPart(ctx context.Context, part *SmtpProofPart) ([][]byte, error)
+	// Whether the MAIL record has been returned for the MX, which is when §14.7 charges the
+	// connection a unit. The engine cannot read records, so the gate says. It never turns false.
+	MailForwarded() bool
 }
 
 // One connection's worth of mail for a prover to send, in the form SPEC.md section 4 fixes.
@@ -103,8 +108,10 @@ type SmtpProofResult struct {
 	RefusedCode string
 	// DATA mode and over the prover's smtp_data_proof_bytes, decided before MAIL (§14.5).
 	TooLarge bool
-	// Set when the declared count was BDAT's and the MX needs DATA, whose dot-stuffing makes the count
-	// this: nothing was sent past EHLO, and a new connection must declare it.
+	// Set when the mode the MX's EHLO reply selects cannot meet the declared count, BDAT's being the
+	// message's length and DATA's its dot-stuffed length. Nothing was sent past EHLO, and one new
+	// connection declares this count, after which a second mismatch is deferred
+	// (plan-SMTP-preamble-byte-count).
 	ReconnectByteCount uint64
 }
 
@@ -114,8 +121,23 @@ type SmtpProofChannel interface {
 	SubmitPart(ctx context.Context, part *SmtpProofPart) error
 }
 
+// A prover host's own DATA speed (D-SMTP-20), which it records at p/<sidecar_id> (§15.7) so that a
+// phone's composer can show the cap of the hosts that send for it.
+type SmtpProverMeasure struct {
+	// smtp_data_proof_bytes: the octets a DATA connection proves in its 2 h. A larger message to an MX
+	// without CHUNKING is too_large. 0 when a part cannot prove within 2 minutes.
+	DataProofBytes uint64
+	// DATA octets proven per second.
+	DataBytesPerSecond uint64
+	MeasureTime        time.Time
+}
+
 // Runs one connection over the stream the edge spliced to the MX: the TLS handshake, every proof and
-// every record. It holds all keys and plaintext, so only the sending device runs it.
+// every record. It holds all keys and plaintext, so only the sending device runs it. An error can quote
+// the message or the MX's replies, so it stays on the device and no SmtpOutcome carries its text.
 type SmtpProver interface {
 	SendSmtp(ctx context.Context, conn net.Conn, job *SmtpProofJob, channel SmtpProofChannel) (*SmtpProofResult, error)
+	// Proves at idle what a DATA part costs this host, and holds later sends to it. It takes seconds
+	// to minutes, and fails where no keys are loaded.
+	Measure(ctx context.Context) (*SmtpProverMeasure, error)
 }

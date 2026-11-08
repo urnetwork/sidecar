@@ -1,0 +1,67 @@
+# Format 1's reservations: the numbers format 1 holds for format 2 and later formats, which FS-72's descriptor lint
+# (protocol/evs_reserved_test.go) finds protocol/evs.proto declaring exactly (§11.6's kinds row, D-PHASE-9, owner
+# decisions 163, 165, 167, 173 and 174, and plan-EVS1-format-bytes#8 for the read states). No number serves
+# keep-last-n, and EvsEntryVersion has no field 15 (owner decisions 165, 167), which the lint checks apart.
+#
+# held     numbers reserved and never declared, by message or enum
+# fields   format 2's fields, which format 1 declares and refuses in use as FORMAT_UNSUPPORTED {needs_format: 2}
+# values   format 2's enum values, refused alike
+# ignored  of those, what format-1 code reads past, applying nothing, rather than refusing
+# kept     of those, what format-1 writers and copies carry unchanged, rather than refusing
+# layouts  format 2's numbers in fixed layouts, which their codecs hold to this list (EVS-FORMAT.md)
+#
+# EVS2-M2-01 walks format 2's writes against this list before format 1's bytes freeze at M2's exit, and adds what
+# it finds.
+
+held:
+  EvsPush: [21]
+  EvsHead: [10]
+  EvsLocatorKind: [3, 4]
+
+fields:
+  EvsPush.drop_sha256: 33
+  EvsPush.index_epoch: 34
+  EvsHead.index_epoch: 24
+  EvsEntryVersion.versioning: 14
+  EvsLocator.staged: 6
+  EvsUploadReceipt.versionless: 8
+  EvsSealedFields.content_sha256: 6
+  EvsProvenance.tainted: 2
+  EvsIndexEntry.drop_mark: 5
+  EvsRemovalMarker.segment_ids: 4
+  EvsRemovalMarker.slot_ids: 5
+  EvsHeadSummary.index_epoch: 15
+  EvsReadPathReply.state: 11
+  EvsReadPathReply.drop_id: 12
+  EvsReadPathReply.not_before_ms: 13
+  EvsReadPathReply.drop_version: 14
+
+values:
+  EvsPushFlag.EVS_PUSH_DROP: 256
+  EvsPushFlag.EVS_PUSH_CUT: 512
+  EvsLocatorKind.EVS_LOCATOR_VERSIONLESS_SEGMENT: 5
+  EvsVersioning.EVS_VERSIONING_VERSIONLESS: 1
+  EvsVersioning.EVS_VERSIONING_INDEX: 2
+  EvsWindowFlag.EVS_WINDOW_VERSIONLESS_REPLACED: 16
+  EvsWindowFlag.EVS_WINDOW_DROP: 32
+  EvsNewObjectKind.EVS_NEW_OBJECT_STAGED_SEGMENT: 2
+  EvsPayloadSection.EVS_PAYLOAD_DROP_BODY: 9
+  EvsPayloadSection.EVS_PAYLOAD_DROP_LISTS: 10
+  EvsReadPathState.EVS_READ_PATH_COLLECTED: 1
+  EvsReadPathState.EVS_READ_PATH_DROP_PENDING: 2
+  EvsReadPathState.EVS_READ_PATH_DROPPED: 3
+
+ignored:
+  - EvsWindowFlag.EVS_WINDOW_VERSIONLESS_REPLACED
+  - EvsWindowFlag.EVS_WINDOW_DROP
+  - EvsProvenance.tainted
+
+kept:
+  - EvsIndexEntry.drop_mark
+  - EvsRemovalMarker.segment_ids
+  - EvsRemovalMarker.slot_ids
+
+layouts:
+  batch header format: 2
+  segment header format: 2
+  repo/ format: 2

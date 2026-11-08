@@ -35,6 +35,10 @@ type testMxSettings struct {
 	dataReply string
 	// Treats a bare-LF "." line as the end of DATA, like receivers vulnerable to SMTP smuggling.
 	laxDataEnd bool
+	// Splits the EHLO reply into two records at this many octets. 0 sends it whole.
+	splitEhloAt int
+	// Writes the EHLO reply a line per record, after any split.
+	ehloLinePerRecord bool
 	// Has the edge forge server records from this application record on, 1 being the first. A
 	// malicious edge can relay anything, and has no key to make it verify.
 	edgeForgesFrom int
@@ -98,7 +102,19 @@ func (self *testMx) serve(conn *tls.Conn) {
 			for _, keyword := range self.settings.keywords {
 				reply += "\r\n250-" + keyword
 			}
-			write(reply + "\r\n250 SMTPUTF8")
+			reply += "\r\n250 SMTPUTF8"
+			if self.settings.splitEhloAt != 0 {
+				conn.Write([]byte(reply[:self.settings.splitEhloAt]))
+				reply = reply[self.settings.splitEhloAt:]
+			}
+			if self.settings.ehloLinePerRecord {
+				lines := strings.SplitAfter(reply, "\r\n")
+				for _, line := range lines[:len(lines)-1] {
+					conn.Write([]byte(line))
+				}
+				reply = lines[len(lines)-1]
+			}
+			write(reply)
 		case strings.HasPrefix(strings.ToUpper(command), "MAIL FROM:"):
 			if self.settings.mailReply != "" {
 				write(self.settings.mailReply)
@@ -371,8 +387,8 @@ const (
 	testHeloName        = "o1.out.relay.example"
 	testMessageId       = "abcdefghijklmnopqrstuvwxyz@net.root.example"
 	testSelector        = "s1"
-	testXUrRef          = "1.AAAABBBBCCCCDDDD"
-	testFeedbackId      = "transactional:community:token:urnetwork"
+	testXUrRef          = "1.aeibceqtcqkrmfyydenbxifbukr2jjngu4"
+	testFeedbackId      = "n:c:gaytemzugu3doobzhi5typj6h4:urnetwork"
 )
 
 // A message whose header block meets Z5.
@@ -577,6 +593,32 @@ func TestSendDataWhereTheMxLacksChunking(t *testing.T) {
 	}
 }
 
+func TestSendFallsToDataWhereTheKeywordSpansTwoRecords(t *testing.T) {
+	// Z9 reads the keyword inside one record, so BDAT here could never be proven, and an MX that wrote
+	// its reply this way must still get its mail
+	lineStart := len("250-" + testMxHost + "\r\n250-PIPELINING\r\n")
+	for _, c := range []struct {
+		name    string
+		splitAt int
+		mode    uint32
+	}{
+		{name: "inside the keyword", splitAt: lineStart + len("250-CHUN"), mode: partModeData},
+		{name: "at the line's start, so that its CR LF is in the other record", splitAt: lineStart, mode: partModeData},
+		{name: "before the line before it", splitAt: lineStart - len("LINING\r\n"), mode: partModeBdat},
+	} {
+		for _, leg := range testTlsLegs() {
+			settings := testMxDefaults()
+			settings.splitEhloAt = c.splitAt
+			job := testJob("one line\r\n", "bob")
+			send := testRunSend(t, leg, settings, DefaultProverSettings(), job)
+			testExpectOneTransaction(t, leg, send, job)
+			if send.result.Mode != c.mode {
+				t.Errorf("%s: %s: mode %d, want %d", leg.name, c.name, send.result.Mode, c.mode)
+			}
+		}
+	}
+}
+
 func TestSendDataForcedWhereChunkingIsOffered(t *testing.T) {
 	settings := DefaultProverSettings()
 	settings.ForceData = true
@@ -603,16 +645,53 @@ func TestSendDataStuffsEveryLeadingDot(t *testing.T) {
 	}
 }
 
-func TestSendDataOnADeclaredStuffedCountEvenWhereChunkingIsOffered(t *testing.T) {
-	// only DATA can meet this count, so the prover does not take the MX's CHUNKING
+func TestSendAsksForANewConnectionWhenTheCountFitsOnlyData(t *testing.T) {
+	// the count does not choose the mode (plan-SMTP-preamble-byte-count): an MX offering CHUNKING gets
+	// BDAT, and a count only DATA can meet means a new connection declaring BDAT's
 	for _, leg := range testTlsLegs() {
 		job := testJob(".leading dot\r\n", "bob")
 		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
 		send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.ReconnectByteCount != uint64(len(job.Message)) || send.result.Mode != partModeBdat {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+		for _, command := range send.mx.seen() {
+			if !strings.HasPrefix(command, "EHLO") {
+				t.Errorf("%s: %q reached the MX", leg.name, command)
+			}
+		}
+
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
 		testExpectOneTransaction(t, leg, send, job)
-		if send.result.Mode != partModeData {
+		if send.result.Mode != partModeBdat {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
+	}
+}
+
+func TestSendIsNeverTooLargeWhereChunkingIsOffered(t *testing.T) {
+	// a stuffed count once chose DATA here, and DATA's measured cap then called the message too_large,
+	// although BDAT carries it at any size
+	settings := DefaultProverSettings()
+	settings.DataProofBytes = 100
+	for _, leg := range testTlsLegs() {
+		job := testJob(".a leading dot\r\n"+strings.Repeat("a body line\r\n", 100), "bob")
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+		send := testRunSend(t, leg, testMxDefaults(), settings, job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.TooLarge || send.result.ReconnectByteCount != uint64(len(job.Message)) {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, testMxDefaults(), settings, job)
+		testExpectOneTransaction(t, leg, send, job)
 	}
 }
 

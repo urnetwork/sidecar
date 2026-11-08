@@ -1,0 +1,21 @@
+{
+  "groups":    { "group:eng": ["dana@acme.example", "amir@acme.example"] },
+  "tagOwners": { "tag:recurd": ["group:eng"], "tag:db": ["autogroup:admin"],
+                 "tag:api": ["autogroup:admin"], "tag:audit": ["autogroup:admin"] },
+  "grants": [
+    { "src": ["autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] }, // 1 laptop→phone
+    { "src": ["tag:recurd"], "dst": ["evs:repo-x"], "allow": ["write"] },                     // 2
+    { "src": ["group:eng"], "dst": ["sock:db"], "allow": ["dial"] },                          // 3
+    { "src": ["tag:db"],    "dst": ["sock:db"], "allow": ["listen"] },
+    { "src": ["network:partner-y"], "dst": ["tag:api"], "allow": ["dial"], "ip": ["tcp:443"], // 4 share over §17's
+      "expires": "2026-12-31T00:00:00Z" },                                                  // IP path (owner decision 86)
+    { "src": ["tag:recurd"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+  ],
+  "requests": [ // 5: ur bridge public-tls app-preview:3000 publishes app-preview.<net>.<root> for up to
+                //    24 h, approved from a device or presence key, never a harness prompt
+    { "src": ["tag:recurd"], "dst": ["dns:*-preview", "sock:tls/443/*-preview"], "allow": ["publish", "listen"],
+      "approver": ["autogroup:sponsor"], "maxExpiry": "24h", "evidence": ["device", "presence"] },
+  ],
+  "audit": { "reader": "tag:audit", "repos": ["kind:team_record", "kind:vault", "kind:mailbox"] }, // 6 Team
+  "tests": [ { "src": "dana@acme.example", "accept": ["sock:db#dial"], "deny": ["evs:secrets#read"] } ],
+}

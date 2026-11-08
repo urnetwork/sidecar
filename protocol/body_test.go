@@ -224,18 +224,18 @@ func TestEveryBodyRoundTrips(t *testing.T) {
 // §22.6's seeds as assertions: three encodings no writer here produces, each the same message, and each differing
 // from the canonical bytes wherever its message gives it a field to differ on.
 func TestEveryBodyDecodesAlikeHoweverEncoded(t *testing.T) {
-	differed := map[string]int{}
+	differedVariantCounts := map[string]int{}
 	for _, messageType := range testBodyTypes(t) {
 		message := testFilled(messageType)
 		canonical := testEncode(t, message)
-		variants := map[string][]byte{
+		variantEncodings := map[string][]byte{
 			"reordered":   testReordered(t, canonical),
 			"non-minimal": testNonMinimal(t, canonical),
 			"unpacked":    testUnpacked(t, messageType.Descriptor(), canonical),
 		}
-		for variant, encoded := range variants {
+		for variant, encoded := range variantEncodings {
 			if !bytes.Equal(encoded, canonical) {
-				differed[variant]++
+				differedVariantCounts[variant]++
 			}
 			decoded := messageType.New().Interface()
 			if err := proto.Unmarshal(encoded, decoded); err != nil {
@@ -252,7 +252,7 @@ func TestEveryBodyDecodesAlikeHoweverEncoded(t *testing.T) {
 	}
 	// A variant that never changed a byte would prove nothing about the parser.
 	for _, variant := range []string{"reordered", "non-minimal", "unpacked"} {
-		if differed[variant] == 0 {
+		if differedVariantCounts[variant] == 0 {
 			t.Errorf("no message's %s encoding differed", variant)
 		}
 	}
@@ -304,10 +304,10 @@ func TestEveryBodyKeepsUnknownFields(t *testing.T) {
 // the message, and a mutated name still lands on one, so a run spends its time in decoders.
 func FuzzBody(f *testing.F) {
 	types := testBodyTypes(f)
-	typesByName := map[string]protoreflect.MessageType{}
+	nameMessageTypes := map[string]protoreflect.MessageType{}
 	for _, messageType := range types {
 		name := string(messageType.Descriptor().Name())
-		typesByName[name] = messageType
+		nameMessageTypes[name] = messageType
 		canonical := testEncode(f, testFilled(messageType))
 		f.Add(name, canonical)
 		f.Add(name, testReordered(f, canonical))
@@ -317,7 +317,7 @@ func FuzzBody(f *testing.F) {
 		f.Add(name, append(slices.Clone(canonical), testUnknownField()...))
 	}
 	f.Fuzz(func(t *testing.T, name string, body []byte) {
-		messageType := typesByName[name]
+		messageType := nameMessageTypes[name]
 		if messageType == nil {
 			messageType = types[crc32.ChecksumIEEE([]byte(name))%uint32(len(types))]
 		}

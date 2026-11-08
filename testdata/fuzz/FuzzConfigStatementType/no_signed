@@ -1,0 +1,4 @@
+go test fuzz v1
+string("acl")
+uint32(4354)
+[]byte("\n\xff")
