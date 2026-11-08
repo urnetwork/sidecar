@@ -53,6 +53,7 @@ type FakeHostSettings struct {
 	Quota         *FakeQuotaSettings
 	Metrics       *FakeMetricsSettings
 	ServiceClient *FakeServiceClientSettings
+	Gates         *FakeServiceGatesSettings
 }
 
 func DefaultFakeHostSettings() *FakeHostSettings {
@@ -64,6 +65,7 @@ func DefaultFakeHostSettings() *FakeHostSettings {
 		Quota:         DefaultFakeQuotaSettings(),
 		Metrics:       DefaultFakeMetricsSettings(),
 		ServiceClient: DefaultFakeServiceClientSettings(),
+		Gates:         DefaultFakeServiceGatesSettings(),
 	}
 }
 
@@ -79,6 +81,10 @@ type FakeHost struct {
 	ClockCheck    *FakeClockCheck
 	Push          *FakePush
 	ServiceClient *FakeServiceClientSource
+	// Every gate closed until a test sets the file's text.
+	Gates *FakeServiceGates
+	// The clock this host's engines read: the shared one, or a view of it with an offset.
+	Clock Clock
 }
 
 // Everything shares clock, faults and barriers. A nil settings takes the defaults, and a nil barriers
@@ -103,6 +109,8 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 		ClockCheck:    NewFakeClockCheck(settings.ClockCheck),
 		Push:          NewFakePush(faults),
 		ServiceClient: NewFakeServiceClientSource(faults, settings.ServiceClient),
+		Gates:         NewFakeServiceGates(settings.Gates),
+		Clock:         clock,
 	}
 }
 
@@ -118,6 +126,8 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 		ClockCheck:    self.ClockCheck,
 		Push:          self.Push,
 		ServiceClient: self.ServiceClient,
+		Clock:         self.Clock,
+		Gates:         self.Gates,
 	}
 }
 
