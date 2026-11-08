@@ -6,13 +6,13 @@
 #   run-tlc.sh model <Spec> [Name=value ...]          the model, at its cfg's bounds or these
 #   run-tlc.sh twins <Spec> [Name=value ...]          every twin of the model, in turn
 #   run-tlc.sh twin <Spec> <Twin> [Name=value ...]    one twin
-#   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, which must pass
-#   run-tlc.sh live <Spec> [Name=value ...]           the liveness properties, without symmetry or view
+#   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, to pass
+#   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
 #
-# <Spec> is EvsCommit or StoreSettle. A Name=value replaces a constant of the spec's cfg, and
-# Quiet=a+b leaves the named processes out (quiet_EvsCommit below). TLC names a command that runs
-# tlc2.TLC, as in
+# <Spec> is EvsCommit or StoreSettle. A Name=value replaces a constant of the spec's cfg;
+# Quiet=a+b leaves the named processes out (quiet_EvsCommit below), and Script and Simulate shape a
+# run further (with_constants below). TLC names a command that runs tlc2.TLC, as in
 #   TLC="java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC" run-tlc.sh model StoreSettle
 # and TLC_FLAGS adds flags, as in TLC_FLAGS="-workers 8". Each run works in a fresh directory under
 # TMPDIR, so no state or trace file lands beside the specs. TLC prints its revision first: name it
@@ -32,14 +32,16 @@ usage() {
 # enough that breadth-first search reaches the violation; a twin's run checks only its invariant.
 # seq is one writer and one instance, each push answered before the next; tiny is a window of 2
 # versions paging out one at a time, so a page-out fits in a short behavior; quiet_but holds still
-# every part a twin's rule never reaches; a Script fixes the story of a twin whose violation lies
-# past 30 steps, which open signing does not reach; Simulate runs one by random simulation where even
-# a story leaves too many interleavings to search. Three of the model's twins have no row, since no invariant can see them:
-# NoTailCheck, as the model carries nothing a tail holds (a new epoch's tokens for paths created
-# after the map's source); and NoFenceRule and ResolveIgnoresPending, as at the model's hour marks a
-# statement has lapsed (5b) before its batch is old enough to evacuate or its receipt or map too old
-# to pass (5h, 5e) before GC or a map's reclaim acts, so every attempt a fence would end is refused
-# anyway, and a stalled one holds the key that Resolve's and the fence's head reads wait on.
+# every part a twin's rule never reaches. A Script fixes the story of a twin whose violation lies
+# past 30 steps, which open signing does not reach, and Simulate runs one by random simulation
+# where even a story leaves too many interleavings to search.
+#
+# Three of the model's twins have no row, since no invariant can see them: NoTailCheck, as the
+# model carries nothing a tail holds (a new epoch's tokens for paths created after the map's
+# source); and NoFenceRule and ResolveIgnoresPending, as at the model's hour marks a statement has
+# lapsed (5b) before its batch is old enough to evacuate, or its receipt or map is too old to pass
+# (5h, 5e) before GC or a map's reclaim acts, so every attempt a fence would end is refused anyway,
+# and a stalled one holds the key that Resolve's and the fence's head reads wait on.
 seq_EvsCommit="Writers={w1} Instances={i1} Segments={s1} MaxAttempts=1 MaxFaults=0 MaxHour=0 MaxGeneration=1 MaxVersion=4"
 tiny_EvsCommit="FoldTrigger=1 FoldSize=1 BaseRange=0 WindowLimit=2 WindowMax=3"
 quiet_but() {
@@ -98,9 +100,9 @@ properties_EvsCommit="RemovalGates DueEpochCommits"
 properties_StoreSettle="HeldKeyReleased"
 
 # Quiet=a+b leaves processes out of a run: a module extending the spec holds each named part still
-# by an action constraint, so the spec stays the design's. A run with any part quiet covers less, and
-# its report must say which. newrefstall leaves out a stalled first commit to a ref with no head,
-# which segment GC does not fence (a question raised on §11.13's orphan GC row).
+# by an action constraint, so the spec stays the design's. A run with any part quiet covers less,
+# and its report must say which. newrefstall leaves out a stalled first commit to a ref with no
+# head, which segment GC does not fence (a question raised on §11.13's orphan GC row).
 quiet_EvsCommit() {
   cat <<'EOF'
 reader     reader' = reader
@@ -136,11 +138,11 @@ EOF
 
 # The cfg with each Name=value replacing that constant's line; an unknown name is refused. Quiet
 # names parts to leave out, gathered for quieten. Simulate=<depth> runs TLC's random simulation in
-# place of breadth-first search, at most Traces=<n> behaviors from Seed=<s>: for a twin whose
-# violation lies deeper than search reaches it finds a trace, and for a control it shows only that
-# n random behaviors kept every invariant. Script=X.create:X.remove:epoch fixes what each
-# statement signed in turn changes, its path and operation or a PATH_EPOCH, so search covers every
-# interleaving of one story, for twins whose violations lie deeper than open signing reaches.
+# place of breadth-first search, at most Traces=<n> behaviors on each worker from Seed=<s>, which
+# repeats exactly only on one worker: for a twin whose violation lies deeper than search reaches it
+# finds a trace, and for a control it shows only that those behaviors kept every invariant.
+# Script=X.create:X.remove:epoch fixes what each statement signed in turn changes, its path and
+# operation or a PATH_EPOCH, so search covers every interleaving of one story.
 quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
 with_constants() {
   local cfg=$1 pair name value
@@ -196,7 +198,8 @@ Signed(k) ==
        ELSE \\E c \\in push'[k].changes : c.path = Story[k][1] /\\ c.op = Story[k][2]
 "
   fi
-  printf -- '---- MODULE MC ----\nEXTENDS %s\n%sQuiet ==\n%s====\n' "$spec" "$story" "$body" > "$work/MC.tla"
+  printf -- '---- MODULE MC ----\nEXTENDS %s\n%sQuiet ==\n%s====\n' "$spec" "$story" "$body" \
+    > "$work/MC.tla"
   echo "ACTION_CONSTRAINT Quiet" >> "$cfg"
   module=MC
 }
@@ -204,22 +207,28 @@ Signed(k) ==
 # One TLC run; prints its output and a summary line, and says whether it ended as expected: a pass,
 # or the named invariant violated.
 check() {
-  local label=$1 cfg=$2 expect=$3 out=$work/$1.out code violated distinct depth took search="" facts
+  local label=$1 cfg=$2 expect=$3 out=$work/$1.out code violated distinct depth generated took
+  local search="" facts
   quieten "$cfg"
   if [ -n "$sim_depth" ]; then
     search="-simulate num=${sim_traces:-10000000} -depth $sim_depth -seed ${sim_seed:-1}"
   fi
-  echo "== $label: $(grep -v '^\\\*' "$cfg" | tr '\n' ' ' | sed 's/  */ /g')${quiet_parts:+ Quiet $quiet_parts}${script:+ Script $script}${search:+ $search}"
+  local shown
+  shown=$(grep -v '^\\\*' "$cfg" | tr '\n' ' ' | sed 's/  */ /g')
+  shown="$shown${quiet_parts:+ Quiet $quiet_parts}${script:+ Script $script}"
+  echo "== $label: $shown${search:+ $search}"
   # shellcheck disable=SC2086
   (cd "$work" && $TLC ${TLC_FLAGS:-} $search -config "$cfg" "$module.tla") 2>&1 | tee "$out"
   code=${PIPESTATUS[0]}
   violated=$(sed -n 's/^Error: Invariant \(.*\) is violated.*/\1/p' "$out" | head -1)
   took=$(sed -n 's/^Finished in \(.*\) at .*/\1/p' "$out" | tail -1)
   if [ -n "$search" ]; then
-    facts="exit $code, simulation, $(sed -n 's/^The number of states generated: \([0-9,]*\).*/\1/p' "$out" | tail -1) states generated"
+    generated=$(sed -n 's/^The number of states generated: \([0-9,]*\).*/\1/p' "$out" | tail -1)
+    facts="exit $code, simulation, $generated states generated"
   else
     distinct=$(sed -n 's/.* \([0-9,]*\) distinct states found.*/\1/p' "$out" | tail -1)
-    depth=$(sed -n 's/^The depth of the complete state graph search is \([0-9]*\).*/\1/p' "$out" | tail -1)
+    depth=$(sed -n 's/^The depth of the complete state graph search is \([0-9]*\).*/\1/p' "$out" \
+      | tail -1)
     facts="exit $code, ${distinct:-?} distinct states, depth ${depth:-?}"
   fi
   [ -z "$violated" ] || facts="$facts, a trace of $(grep -c '^State [0-9]*:' "$out") states"
