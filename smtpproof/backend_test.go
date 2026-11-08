@@ -979,7 +979,7 @@ func TestVerifierRefusesAPreambleATemplateCouldCarryMoreThan(t *testing.T) {
 		{name: "no envelope domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.EnvelopeDomain = "" }},
 		{name: "no MX host", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MxHost = "" }},
 	}
-	verifier := NewVerifier(DefaultVerifierSettings())
+	verifier := testNoKeysVerifier(t)
 	if _, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble); err != nil {
 		t.Fatalf("an honest preamble: %v", err)
 	}
@@ -1009,7 +1009,7 @@ func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 			t.Errorf("%s: %v reached the MX", leg.name, commands)
 		}
 	}
-	verifier := NewVerifier(DefaultVerifierSettings())
+	verifier := testNoKeysVerifier(t)
 	if _, err := verifier.NewSmtpProofSession(&sidecar.SmtpProofPreamble{}); err == nil {
 		t.Error("a session opened without the edge's own values")
 	}
@@ -1131,7 +1131,7 @@ func TestVerifiedSetupGivesKeysThatProve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provingKey, verifyingKey, err := verifySetup(compiled, transcript)
+	provingKey, verifyingKey, err := VerifySetupTranscript(compiled, transcript)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1159,29 +1159,29 @@ func TestVerifySetupRefusesWhatIsNotTheCeremony(t *testing.T) {
 		t.Fatal(err)
 	}
 	// no contribution at all: an edge that offers keys with nothing behind them
-	if _, _, err := verifySetup(compiled, &setupTranscript{beacon: transcript.beacon}); err == nil {
+	if _, _, err := VerifySetupTranscript(compiled, &SetupTranscript{Beacon: transcript.Beacon}); err == nil {
 		t.Error("verified an empty transcript")
 	}
 	// the same transcript verifies twice, so a refusal below is the mutation's and nothing else's
-	if _, _, err := verifySetup(compiled, transcript); err != nil {
+	if _, _, err := VerifySetupTranscript(compiled, transcript); err != nil {
 		t.Fatalf("the honest transcript: %v", err)
 	}
-	if _, _, err := verifySetup(compiled, transcript); err != nil {
+	if _, _, err := VerifySetupTranscript(compiled, transcript); err != nil {
 		t.Fatalf("the honest transcript, again: %v", err)
 	}
 	// a contribution changed by one octet at any depth
 	for _, offset := range []int{40, 100, 200, 500} {
 		for _, phase := range []int{1, 2} {
-			tampered := &setupTranscript{beacon: transcript.beacon, phase1: transcript.phase1, phase2: transcript.phase2}
-			target := &tampered.phase2
+			tampered := &SetupTranscript{Beacon: transcript.Beacon, Phase1: transcript.Phase1, Phase2: transcript.Phase2}
+			target := &tampered.Phase2
 			if phase == 1 {
-				target = &tampered.phase1
+				target = &tampered.Phase1
 			}
 			changed := bytes.Clone((*target)[0])
 			if offset < len(changed) {
 				changed[offset] ^= 1
 				*target = [][]byte{changed}
-				if _, _, err := verifySetup(compiled, tampered); err == nil {
+				if _, _, err := VerifySetupTranscript(compiled, tampered); err == nil {
 					t.Errorf("phase %d: verified with octet %d changed", phase, offset)
 				}
 			}
@@ -1189,17 +1189,17 @@ func TestVerifySetupRefusesWhatIsNotTheCeremony(t *testing.T) {
 	}
 	// a phase 2 contributed for another circuit: keys that are not this relation's
 	other := testCompile(t, &testSetupOtherCircuit{})
-	otherTranscript, err := runSetup(other, transcript.beacon)
+	otherTranscript, err := runSetup(other, transcript.Beacon)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mixed := &setupTranscript{beacon: transcript.beacon, phase1: transcript.phase1, phase2: otherTranscript.phase2}
-	if _, _, err := verifySetup(compiled, mixed); err == nil {
+	mixed := &SetupTranscript{Beacon: transcript.Beacon, Phase1: transcript.Phase1, Phase2: otherTranscript.Phase2}
+	if _, _, err := VerifySetupTranscript(compiled, mixed); err == nil {
 		t.Error("verified another circuit's phase 2")
 	}
 	// another phase 1 under a phase 2 it never fed
-	mixed = &setupTranscript{beacon: transcript.beacon, phase1: otherTranscript.phase1, phase2: transcript.phase2}
-	if _, _, err := verifySetup(compiled, mixed); err == nil {
+	mixed = &SetupTranscript{Beacon: transcript.Beacon, Phase1: otherTranscript.Phase1, Phase2: transcript.Phase2}
+	if _, _, err := VerifySetupTranscript(compiled, mixed); err == nil {
 		t.Error("verified a phase 2 against another phase 1")
 	}
 }

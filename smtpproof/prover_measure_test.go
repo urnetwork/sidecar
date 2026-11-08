@@ -150,7 +150,7 @@ func TestMeasureSkipsSuitesWithoutKeysAndFailsWithNone(t *testing.T) {
 	}
 
 	// what cli/ holds before keys load: the measure fails, and the settings' unmeasured limits stand
-	unloaded := NewProver(DefaultProverSettings())
+	unloaded := NewProver(DefaultProverSettings(), nil, "")
 	if _, err := unloaded.Measure(context.Background()); !errors.Is(err, errNoKeys) {
 		t.Errorf("err %v", err)
 	}

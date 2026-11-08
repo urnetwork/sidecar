@@ -120,11 +120,18 @@ type shapeKeys struct {
 	verifyingKey groth16.VerifyingKey
 }
 
-// Proves and verifies parts under the keys it holds, and refuses every other part. Safe for
-// concurrent use.
+// Where a backend finds keys it does not hold, such as a prover host's cache of verified keys. It
+// answers errNoKeys for a shape it has none for. Safe for concurrent use.
+type shapeKeySource interface {
+	keysFor(shape *partShape) (*shapeKeys, error)
+}
+
+// Proves and verifies parts under the keys it holds or its source gives, and refuses every other
+// part. Safe for concurrent use.
 type groth16Backend struct {
 	stateLock sync.Mutex
 	keys      map[partShape]*shapeKeys
+	source    shapeKeySource
 }
 
 func newGroth16Backend() *groth16Backend {
@@ -138,13 +145,18 @@ func (self *groth16Backend) addKeys(keys *shapeKeys) {
 }
 
 func (self *groth16Backend) keysFor(shape *partShape) (*shapeKeys, error) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	keys, ok := self.keys[*shape]
-	if !ok {
+	keys, source := func() (*shapeKeys, shapeKeySource) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.keys[*shape], self.source
+	}()
+	if keys != nil {
+		return keys, nil
+	}
+	if source == nil {
 		return nil, errNoKeys
 	}
-	return keys, nil
+	return source.keysFor(shape)
 }
 
 // provePart of partProver. r and s come from crypto/rand inside gnark: a repeated pair would break
