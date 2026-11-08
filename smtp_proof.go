@@ -63,7 +63,8 @@ type SmtpProofVerifier interface {
 // direction. Each that returns records returns those now cleared for the MX, in order, and the gate's
 // order is the MX's: a caller writes them before the next such call returns, so ClientRecord,
 // DiscloseShts and VerifyPart share one lock or one goroutine around the write. An error ends the
-// connection, and is ErrSmtpRecordCut only for §14.7's cuts.
+// connection, and is ErrSmtpRecordCut only for §14.7's cuts. The session ends with it: every later
+// call is refused, and nothing is returned for the MX after a refusal.
 type SmtpProofSession interface {
 	// A whole record from the sidecar. It may be held for a part that has yet to verify.
 	ClientRecord(record []byte) ([][]byte, error)
@@ -75,6 +76,9 @@ type SmtpProofSession interface {
 	DiscloseShts(shts []byte) ([][]byte, error)
 	// Checks a part. A record the part clears may be returned here.
 	VerifyPart(ctx context.Context, part *SmtpProofPart) ([][]byte, error)
+	// Whether the MAIL record has been returned for the MX, which is when §14.7 charges the
+	// connection a unit. The engine cannot read records, so the gate says. It never turns false.
+	MailForwarded() bool
 }
 
 // One connection's worth of mail for a prover to send, in the form SPEC.md section 4 fixes.

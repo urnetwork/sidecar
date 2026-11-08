@@ -136,6 +136,9 @@ type edgeSession struct {
 	heldRecords       [][]byte
 	heldBytes         int
 	nextClientSeq     uint64
+	// nextClientSeq as of the last call that handed records to its caller. A call that ends in a cut
+	// returns none of the records it cleared before the cut, and those never reach the MX.
+	handedClientSeq uint64
 	// The first application record's sequence number in each direction: 1.2's Finished takes 0.
 	firstSeq uint64
 	parts    []*edgePart
@@ -182,32 +185,55 @@ func edgeCheckFraming(record []byte) error {
 	return nil
 }
 
+// Ends the gate, so that nothing passes after a refusal. The caller ends the connection on any error,
+// and a gate that went on would leave "nothing after a refusal" to the caller alone.
+func (self *edgeSession) endWithLock() {
+	self.phase = edgePhaseEnded
+}
+
+// As endWithLock, from outside the lock.
+func (self *edgeSession) end() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.endWithLock()
+}
+
 // ClientRecord of sidecar.SmtpProofSession.
 func (self *edgeSession) ClientRecord(record []byte) ([][]byte, error) {
-	if err := edgeCheckFraming(record); err != nil {
-		return nil, err
-	}
 	testHookBarrier("edge.client_record.before", "")
 	forward, err := func() ([][]byte, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		switch self.phase {
-		case edgePhaseClientHello:
-			return self.clientHelloWithLock(record)
-		case edgePhaseServerHello, edgePhaseFlight12, edgePhaseServerFinished12:
-			return nil, edgeRefuse(checkE1, "client record out of turn")
-		case edgePhaseFlight13, edgePhaseClientFinished13:
-			return self.clientFlight13WithLock(record)
-		case edgePhaseClientFlight12:
-			return self.clientFlight12WithLock(record)
-		case edgePhaseApplication:
-			return self.clientApplicationWithLock(record)
-		default:
-			return nil, errors.New("connection has ended")
+		forward, err := self.clientRecordWithLock(record)
+		if err != nil {
+			self.endWithLock()
+			return nil, err
 		}
+		self.handedClientSeq = self.nextClientSeq
+		return forward, nil
 	}()
 	testHookBarrier("edge.client_record.after", "")
 	return forward, err
+}
+
+func (self *edgeSession) clientRecordWithLock(record []byte) ([][]byte, error) {
+	if err := edgeCheckFraming(record); err != nil {
+		return nil, err
+	}
+	switch self.phase {
+	case edgePhaseClientHello:
+		return self.clientHelloWithLock(record)
+	case edgePhaseServerHello, edgePhaseFlight12, edgePhaseServerFinished12:
+		return nil, edgeRefuse(checkE1, "client record out of turn")
+	case edgePhaseFlight13, edgePhaseClientFinished13:
+		return self.clientFlight13WithLock(record)
+	case edgePhaseClientFlight12:
+		return self.clientFlight12WithLock(record)
+	case edgePhaseApplication:
+		return self.clientApplicationWithLock(record)
+	default:
+		return nil, errors.New("connection has ended")
+	}
 }
 
 func (self *edgeSession) clientHelloWithLock(record []byte) ([][]byte, error) {
@@ -256,50 +282,58 @@ func (self *edgeSession) clientHelloWithLock(record []byte) ([][]byte, error) {
 
 // ServerRecord of sidecar.SmtpProofSession.
 func (self *edgeSession) ServerRecord(record []byte) error {
-	if err := edgeCheckFraming(record); err != nil {
-		return err
-	}
 	testHookBarrier("edge.server_record.before", "")
 	err := func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		switch self.phase {
-		case edgePhaseClientHello:
-			// a retry's dummy change_cipher_spec comes ahead of the second ClientHello, which the server
-			// is still waiting for
-			if self.helloRetried && record[0] == tlsRecordChangeCipherSpec && tlsDummyChangeCipherSpec(record) {
-				return nil
-			}
-			return edgeRefuse(checkE1, "server record before ClientHello")
-		case edgePhaseServerHello:
-			return self.serverHelloWithLock(record)
-		case edgePhaseClientFlight12:
-			return edgeRefuse(checkE1, "server record out of turn")
-		case edgePhaseFlight13:
-			if record[0] == tlsRecordChangeCipherSpec && tlsDummyChangeCipherSpec(record) {
-				return nil
-			}
-			if record[0] != tlsRecordApplicationData {
-				return edgeRefuse(checkE1, "unexpected record type %d in the flight", record[0])
-			}
-			self.flightRecords = append(self.flightRecords, record)
-			self.serverRecordBytes += len(record)
-			if self.settings.maxServerBytes < self.serverRecordBytes {
-				return edgeRefuse(checkE1, "server flight too long")
-			}
-			return nil
-		case edgePhaseFlight12:
-			return self.serverFlight12WithLock(record)
-		case edgePhaseServerFinished12:
-			return self.serverFinished12WithLock(record)
-		case edgePhaseClientFinished13, edgePhaseApplication:
-			return self.serverApplicationWithLock(record)
-		default:
-			return errors.New("connection has ended")
+		if err := self.serverRecordWithLock(record); err != nil {
+			self.endWithLock()
+			return err
 		}
+		return nil
 	}()
 	testHookBarrier("edge.server_record.after", "")
 	return err
+}
+
+func (self *edgeSession) serverRecordWithLock(record []byte) error {
+	if err := edgeCheckFraming(record); err != nil {
+		return err
+	}
+	switch self.phase {
+	case edgePhaseClientHello:
+		// a retry's dummy change_cipher_spec comes ahead of the second ClientHello, which the server is
+		// still waiting for
+		if self.helloRetried && record[0] == tlsRecordChangeCipherSpec && tlsDummyChangeCipherSpec(record) {
+			return nil
+		}
+		return edgeRefuse(checkE1, "server record before ClientHello")
+	case edgePhaseServerHello:
+		return self.serverHelloWithLock(record)
+	case edgePhaseClientFlight12:
+		return edgeRefuse(checkE1, "server record out of turn")
+	case edgePhaseFlight13:
+		if record[0] == tlsRecordChangeCipherSpec && tlsDummyChangeCipherSpec(record) {
+			return nil
+		}
+		if record[0] != tlsRecordApplicationData {
+			return edgeRefuse(checkE1, "unexpected record type %d in the flight", record[0])
+		}
+		self.flightRecords = append(self.flightRecords, record)
+		self.serverRecordBytes += len(record)
+		if self.settings.maxServerBytes < self.serverRecordBytes {
+			return edgeRefuse(checkE1, "server flight too long")
+		}
+		return nil
+	case edgePhaseFlight12:
+		return self.serverFlight12WithLock(record)
+	case edgePhaseServerFinished12:
+		return self.serverFinished12WithLock(record)
+	case edgePhaseClientFinished13, edgePhaseApplication:
+		return self.serverApplicationWithLock(record)
+	default:
+		return errors.New("connection has ended")
+	}
 }
 
 func (self *edgeSession) serverHelloWithLock(record []byte) error {
@@ -313,6 +347,10 @@ func (self *edgeSession) serverHelloWithLock(record []byte) error {
 	self.serverBuffer.add(record[tlsRecordHeaderBytes:])
 	message := self.serverBuffer.next()
 	if message == nil {
+		// a ServerHello can declare up to 16 MiB, and an MX is anyone a sidecar mails
+		if self.settings.maxHandshakeBytes < len(self.serverBuffer.pending) {
+			return edgeRefuse(checkE1, "handshake too long")
+		}
 		return nil
 	}
 	if message[0] != tlsHandshakeServerHello {
@@ -542,6 +580,7 @@ func (self *edgeSession) serverFinished12WithLock(record []byte) error {
 func (self *edgeSession) DiscloseShts(shts []byte) ([][]byte, error) {
 	// HMAC pads a short key with zeros, so any other length of the same secret would open the flight
 	if len(shts) != tlsSecretBytes {
+		self.end()
 		return nil, edgeRefuse(checkE2, "SHTS has the wrong length")
 	}
 	testHookSecret("edge_shts", shts)
@@ -557,6 +596,16 @@ func (self *edgeSession) DiscloseShts(shts []byte) ([][]byte, error) {
 
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	forward, err := self.discloseShtsWithLock(shts, key, iv)
+	if err != nil {
+		self.endWithLock()
+		return nil, err
+	}
+	return forward, nil
+}
+
+// E2 over the 1.3 flight under the server handshake key and IV that shts gives.
+func (self *edgeSession) discloseShtsWithLock(shts []byte, key []byte, iv []byte) ([][]byte, error) {
 	if self.phase != edgePhaseFlight13 {
 		return nil, edgeRefuse(checkE2, "SHTS disclosed out of turn")
 	}
@@ -961,12 +1010,17 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 	err := func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		if self.phase == edgePhaseEnded {
+			return errors.New("connection has ended")
+		}
 		if self.mxClosed {
 			moot = true
 			return nil
 		}
 		var err error
-		gated, err = self.preparePartWithLock(part)
+		if gated, err = self.preparePartWithLock(part); err != nil {
+			self.endWithLock()
+		}
 		return err
 	}()
 	if err != nil {
@@ -981,6 +1035,7 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 	err = self.verifier.verifyPart(ctx, gated.statement, part.Proof)
 	testHookBarrier("edge.verify.after", "")
 	if err != nil {
+		self.end()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -991,15 +1046,21 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 	forward, err := func() ([][]byte, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		// a refusal elsewhere while this verified ended the gate, and it releases nothing after one
+		if self.phase == edgePhaseEnded {
+			return nil, errors.New("connection has ended")
+		}
 		// the order checks ran against what stood before this verification. A part that landed since has
 		// taken this index, so only an exact resend of that part may pass, as a no-op: anything else
 		// would change what the gate holds with none of a replacement's checks
 		if gated.commits != self.partCommits {
 			again, err := self.preparePartWithLock(part)
 			if err != nil {
+				self.endWithLock()
 				return nil, err
 			}
 			if again != nil {
+				self.endWithLock()
 				return nil, edgeRefuse(checkE3, "part %d arrived while another verified", part.Index)
 			}
 			return nil, nil
@@ -1013,8 +1074,23 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 		if self.coveredServer < part.ServerRecordCount {
 			self.coveredServer = part.ServerRecordCount
 		}
-		return self.releaseWithLock()
+		forward, err := self.releaseWithLock()
+		if err != nil {
+			self.endWithLock()
+			return nil, err
+		}
+		self.handedClientSeq = self.nextClientSeq
+		return forward, nil
 	}()
 	testHookBarrier("edge.commit.after", "")
 	return forward, err
+}
+
+// MailForwarded of sidecar.SmtpProofSession: whether the gate has handed its caller the MAIL record,
+// pi2's first, which is when §14.7 charges the connection a unit.
+func (self *edgeSession) MailForwarded() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	// parts land in index order and a replacement keeps its place, so the second is pi2
+	return 2 <= len(self.parts) && self.parts[1].part.FirstRecord < self.handedClientSeq
 }
