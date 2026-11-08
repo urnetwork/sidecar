@@ -32,8 +32,9 @@ usage() {
 # enough that breadth-first search reaches the violation; a twin's run checks only its invariant.
 # seq is one writer and one instance, each push answered before the next; tiny is a window of 2
 # versions paging out one at a time, so a page-out fits in a short behavior; quiet_but holds still
-# every part a twin's rule never reaches; sim is random simulation, for the twins whose violations
-# lie past 30 steps. Two of the model's twins have no row, since no invariant can see them: NoTailCheck,
+# every part a twin's rule never reaches; a Script fixes the story of a twin whose violation lies
+# past 30 steps, which open signing does not reach; sim is random simulation, for running any row
+# deeper than its bounds. Two of the model's twins have no row, since no invariant can see them: NoTailCheck,
 # as the model carries nothing a tail holds (a new epoch's tokens for paths created after the map's
 # source), and NoFenceRule, as at the model's hour marks every attempt a fence ends has lapsed (5b)
 # or holds a receipt or map too old to pass (5h, 5e) by then.
@@ -48,7 +49,7 @@ quiet_but() {
   echo "Quiet=$out"
 }
 twins_EvsCommit() {
-  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit sim="Simulate=200 Traces=3000000 Seed=1"
+  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit sim="Simulate=200 Traces=40000 Seed=1"
   cat <<EOF
 RestoreAfterShred      LifecycleHolds        $seq MaxPush=1 $(quiet_but lifecycle)
 VersionRestarts        VersionsRise          $seq MaxPush=3 $(quiet_but)+gitref
@@ -60,17 +61,17 @@ UnrecordedRefusal      OutcomesHold          $seq MaxAttempts=2 MaxPush=1 $(quie
 EarlyRefusalDrop       OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxPush=2 $(quiet_but lifecycle)+gitref
 AnswerDeletes          AnswersDeleteNothing  $seq Writers={w1,w2} Instances={i1,i2} MaxPush=2 $(quiet_but slots)+gitref
 EvacuateBeforeIndex    ClosureHolds          $seq MaxPush=1 MaxHour=3 $(quiet_but evac)+gitref
-ResolveIgnoresPending  OutcomesHold          $seq MaxPush=1 MaxHour=3 $(quiet_but evac)+gitref
-GcNoFence              GcSafe                $seq MaxPush=1 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref
-GcNoSecondCheck        GcSafe                $seq MaxPush=1 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref
+ResolveIgnoresPending  OutcomesHold          $seq MaxPush=1 MaxHour=3 MaxFaults=1 $(quiet_but evac)+gitref
+GcNoFence              GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
+GcNoSecondCheck        GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
 PageOutUnfolded        NewestFound           $seq MaxPush=3 $tiny $(quiet_but)+gitref
-StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref $sim
-NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref $sim
-NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref $sim
-NoWindowWait           NewestFound           $seq MaxPush=6 MaxVersion=7 $tiny $(quiet_but fold collect)+gitref $sim
-FoldIgnoresWindow      NewestFound           $seq MaxPush=6 MaxVersion=7 $tiny $(quiet_but fold collect)+gitref $sim
-CachedRefusal          OutcomesHold          $seq Writers={w1,w2,w3} MaxAttempts=2 MaxGeneration=2 MaxPush=5 MaxVersion=6 $(quiet_but authority epoch cache stale)+gitref $sim
-CopyOverwrites         NewestFound           $seq Writers={w1,w2,w3} MaxGeneration=2 MaxPush=5 MaxVersion=6 $(quiet_but authority epoch fold)+gitref $sim
+StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Script=X.create:X.create:D.create
+NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Script=X.create:X.write:D.create
+NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref Script=X.create:D.create:C.create
+NoWindowWait           NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
+FoldIgnoresWindow      NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
+CachedRefusal          OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxGeneration=2 MaxPush=3 MaxVersion=4 $(quiet_but authority epoch cache stale fold)+gitref Script=X.create:epoch:X.write
+CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref Script=X.create:epoch:X.write:D.create
 EOF
 }
 
@@ -96,7 +97,8 @@ properties_StoreSettle="HeldKeyReleased"
 
 # Quiet=a+b leaves processes out of a run: a module extending the spec holds each named part still
 # by an action constraint, so the spec stays the design's. A run with any part quiet covers less, and
-# its report must say which.
+# its report must say which. newrefstall leaves out a stalled first commit to a ref with no head,
+# which segment GC does not fence (a question raised on §11.13's orphan GC row).
 quiet_EvsCommit() {
   cat <<'EOF'
 reader     reader' = reader
@@ -114,6 +116,7 @@ slots      pushCount' > pushCount => ~push'[pushCount'].newSlot
 uploads    pushCount' > pushCount => push'[pushCount'].seg = NoSegment
 gitref     pushCount' > pushCount => push'[pushCount'].ref # GitRef
 fileref    pushCount' > pushCount => push'[pushCount'].ref # FileRef
+newrefstall \A r \in Refs : heldBy[r] = NoHolder /\ heldBy'[r] # NoHolder => head[r].version + head[r].fence > 0
 EOF
 }
 
@@ -130,8 +133,10 @@ EOF
 # names parts to leave out, gathered for quieten. Simulate=<depth> runs TLC's random simulation in
 # place of breadth-first search, at most Traces=<n> behaviors from Seed=<s>: for a twin whose
 # violation lies deeper than search reaches it finds a trace, and for a control it shows only that
-# n random behaviors kept every invariant.
-quiet_parts="" sim_depth="" sim_traces="" sim_seed=""
+# n random behaviors kept every invariant. Script=X.create:X.remove:epoch fixes what each
+# statement signed in turn changes, its path and operation or a PATH_EPOCH, so search covers every
+# interleaving of one story, for twins whose violations lie deeper than open signing reaches.
+quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
 with_constants() {
   local cfg=$1 pair name value
   shift
@@ -143,6 +148,7 @@ with_constants() {
       Simulate) sim_depth=$value; continue ;;
       Traces) sim_traces=$value; continue ;;
       Seed) sim_seed=$value; continue ;;
+      Script) script=$value; continue ;;
     esac
     if ! grep -q "^    $name = " "$cfg"; then
       echo "run-tlc.sh: $spec.cfg has no constant $name" >&2
@@ -165,15 +171,27 @@ replace_invariants() {
 # With parts quiet, writes MC.tla, which extends the spec and holds those parts still, and has the
 # cfg constrain every step by it; the run then checks MC.
 quieten() {
-  local cfg=$1 part conj body=""
+  local cfg=$1 part conj body="" item story=""
   module=$spec
-  [ -n "$quiet_parts" ] || return 0
+  [ -n "$quiet_parts$script" ] || return 0
   for part in ${quiet_parts//+/ }; do
     conj=$("quiet_$spec" | awk -v p="$part" '$1 == p { $1 = ""; sub(/^ +/, ""); print }')
     [ -n "$conj" ] || { echo "run-tlc.sh: $spec has no quiet part $part" >&2; exit 64; }
     body="$body    /\\ $conj"$'\n'
   done
-  printf -- '---- MODULE MC ----\nEXTENDS %s\nQuiet ==\n%s====\n' "$spec" "$body" > "$work/MC.tla"
+  if [ -n "$script" ]; then
+    for item in ${script//:/ }; do
+      story="${story:+$story, }<<\"${item%%.*}\", \"${item#*.}\">>"
+    done
+    body="$body    /\\ pushCount' > pushCount => Signed(pushCount')"$'\n'
+    story="Story == <<$story>>
+Signed(k) ==
+    /\\ k <= Len(Story)
+    /\\ IF Story[k][1] = \"epoch\" THEN push'[k].kind = \"epoch\"
+       ELSE \\E c \\in push'[k].changes : c.path = Story[k][1] /\\ c.op = Story[k][2]
+"
+  fi
+  printf -- '---- MODULE MC ----\nEXTENDS %s\n%sQuiet ==\n%s====\n' "$spec" "$story" "$body" > "$work/MC.tla"
   echo "ACTION_CONSTRAINT Quiet" >> "$cfg"
   module=MC
 }
@@ -186,7 +204,7 @@ check() {
   if [ -n "$sim_depth" ]; then
     search="-simulate num=${sim_traces:-10000000} -depth $sim_depth -seed ${sim_seed:-1}"
   fi
-  echo "== $label: $(grep -v '^\\\*' "$cfg" | tr '\n' ' ' | sed 's/  */ /g')${quiet_parts:+ Quiet $quiet_parts}${search:+ $search}"
+  echo "== $label: $(grep -v '^\\\*' "$cfg" | tr '\n' ' ' | sed 's/  */ /g')${quiet_parts:+ Quiet $quiet_parts}${script:+ Script $script}${search:+ $search}"
   # shellcheck disable=SC2086
   (cd "$work" && $TLC ${TLC_FLAGS:-} $search -config "$cfg" "$module.tla") 2>&1 | tee "$out"
   code=${PIPESTATUS[0]}
@@ -220,7 +238,7 @@ check() {
 run_twin() {
   local twin=$1 invariant=$2 cfg
   shift 2
-  quiet_parts="" sim_depth="" sim_traces="" sim_seed=""
+  quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
   cfg=$work/twin-$twin.cfg
   cp "$here/$spec.cfg" "$cfg"
   with_constants "$cfg" "Twin=\"$twin\"" "$@"

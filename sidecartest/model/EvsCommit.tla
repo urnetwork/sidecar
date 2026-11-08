@@ -1680,8 +1680,11 @@ ReaderServe ==
 (* Time.                                                                    *)
 (***************************************************************************)
 
-\* A long mark passes, and with it every short timer. A step 7 already issued may stay stalled, as
-\* FS-59's does; only its If-Match and the fence stand in its way.
+\* A long mark passes, and with it every short timer, the store's request deadline among them: a step
+\* 7 issued and not landed never will, and its attempt reads the head again (§19.6; 11.13's "every
+\* adoption commits within 24 h of the upload, plus 5 s and the store's request deadline"). One whose
+\* drive commits stalled holds its key (heldBy) until §19.6 settles it, as FS-59's does; only its
+\* If-Match and the fence stand in its way.
 Tick ==
     /\ hour < MaxHour
     /\ hour' = hour + 1
@@ -1689,11 +1692,12 @@ Tick ==
     /\ blockLive' = [r \in Refs |-> FALSE]
     /\ window' = [r \in Refs |-> "closed"]
     /\ authView' = [i \in Instances |-> proj.n]
+    /\ att' = [i \in Instances |-> IF att[i].stage = "put" THEN Reread(att[i]) ELSE att[i]]
     /\ foldJob' = [i \in Instances |-> IF foldJob[i].stage \in {"get", "put"} THEN NoJob ELSE foldJob[i]]
     /\ collector' = IF collector.stage = "idle" THEN collector
                     ELSE AfterLapse(collector, collector.ref)
     /\ UNCHANGED <<head, cache, heldBy, stored, authority, lifecycle, faultsLeft, push, pushCount, attemptsMade,
-                   att, batchSeq, foldedTo, evacuator, gc, copyJob, reader, oracle>>
+                   batchSeq, foldedTo, evacuator, gc, copyJob, reader, oracle>>
 
 \* A twin's answer-time cleanup: 11.8 forbids it.
 AnswerCleans(P) ==
