@@ -3,8 +3,8 @@
 // the fake keeps working on the real thing. It speaks only through the seam, and crafts by hand only messages the
 // subset must refuse, whose bytes RFC 9420 §6 fixes.
 //
-// One rule waits on KEYS-M2-05: an external commit's header, which sidecar.ParseMlsHeader refuses until that
-// framing lands, so the suite reads the header of members' commits alone.
+// One rule waits on KEYS-M2-07: an external commit's header, which sidecar.ParseMlsHeader refuses outside the
+// root's tests until a leaf carries credential 0xF552, so the suite reads the header of members' commits alone.
 //
 // A case is a plain function returning its first failure, and Run loops over them, since the cases are variations
 // of one engine's behavior (connect/CODESTYLE.md:216). A failure in one does not stop the next.

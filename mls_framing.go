@@ -4,13 +4,14 @@
 // whose clear header shows group_id, epoch, content type and authenticated_data. An external commit
 // comes from a sender holding no key of the epoch, so it is a PublicMessage, which RFC §6.2 gives no
 // membership tag when its sender is new. Everything else RFC §6 frames is refused when parsed:
-// application data, standalone proposals, external senders and a member's PublicMessage. The
-// refusals sit in the decoders of the two messages, so nothing reaches a key or a signature check
-// without passing them.
+// application data, standalone proposals, external senders and a member's PublicMessage. So is an
+// external commit holding anything but RFC §12.4.3.2's one ExternalInit, at most one Remove and a
+// path, PSKs being outside the subset. The refusals sit in the decoders of the two messages, so
+// nothing reaches a key or a signature check, or gkm's header, without passing them.
 //
 // authenticated_data is clear, which lets gkm read a commit's GkmCommitHeader with no key
-// (ParseMlsHeader; I-1), and bound into the AEAD and the signature, which lets every member catch a
-// server that changed it.
+// (ParseMlsHeader in mls_engine.go; I-1), and bound into the AEAD and the signature, which lets every
+// member catch a server that changed it.
 //
 // A commit is signed before its tag can exist, because the signature enters the transcript hash that
 // keys the epoch the tag comes from (mls_transcript.go). So a committer fills in one
@@ -56,9 +57,6 @@ const (
 )
 
 const (
-	// What MlsHeader.ContentType holds, the one content §10.4 frames.
-	MlsContentTypeCommit = mlsContentTypeCommit
-
 	// Signature labels (RFC §17.6).
 	mlsSignatureLabelFramedContent = "FramedContentTBS"
 
@@ -287,11 +285,43 @@ func (self *mlsPublicMessage) decode(decoder *mlsDecoder) {
 		decoder.fail(fmt.Errorf("%w: a PublicMessage from a member", errMlsRefused))
 		return
 	}
-	if self.content.commit().path == nil {
+	commit := self.content.commit()
+	if commit.path == nil {
 		decoder.fail(fmt.Errorf("%w: an external commit with no path", errMlsInvalid))
 		return
 	}
+	if _, err := mlsExternalCommitRemoval(commit); err != nil {
+		decoder.fail(err)
+		return
+	}
 	self.auth.decode(decoder, self.content.contentType)
+}
+
+// The leaf an external commit removes, nil for one that removes none, once its proposals are what RFC
+// §12.4.3.2 lets it hold less the PSKs §10.4 refuses: one ExternalInit and at most one Remove, the
+// joiner's old leaf in a resync (§10.9's External row). Whose leaf a Remove names is the group state's
+// to judge, against the tree.
+func mlsExternalCommitRemoval(commit *mlsCommit) (*mlsLeafIndex, error) {
+	externalInitCount := 0
+	var removed *mlsLeafIndex
+	for index := range commit.proposals {
+		proposal := &commit.proposals[index]
+		switch proposal.proposalType {
+		case mlsProposalTypeExternalInit:
+			externalInitCount += 1
+		case mlsProposalTypeRemove:
+			if removed != nil {
+				return nil, fmt.Errorf("%w: an external commit removing two leaves", errMlsInvalid)
+			}
+			removed = &proposal.removed
+		default:
+			return nil, fmt.Errorf("%w: an external commit with proposal type %#x", errMlsInvalid, proposal.proposalType)
+		}
+	}
+	if externalInitCount != 1 {
+		return nil, fmt.Errorf("%w: an external commit with %d ExternalInit proposals", errMlsInvalid, externalInitCount)
+	}
+	return removed, nil
 }
 
 // PrivateMessage (RFC §6.3).
@@ -690,71 +720,4 @@ func (self *mlsMessageProtection) openSenderData(message *mlsPrivateMessage) (*m
 		return nil, err
 	}
 	return senderData, nil
-}
-
-// What an MLS message shows with no key, which is all gkm reads of one (§10.6, I-1). Nothing here is
-// authenticated, because a server has no key to authenticate it with: members check the same values
-// when they open the message.
-type MlsHeader struct {
-	GroupId []byte
-	Epoch   uint64
-	// MlsContentTypeCommit, since anything else is refused.
-	ContentType uint8
-	// A commit's GkmCommitHeader, left encoded (D-KEYS-3).
-	AuthenticatedData []byte
-	// Set for an external commit, nil for a PrivateMessage, whose proposals nobody but a member reads.
-	ExternalCommit *MlsExternalCommit
-}
-
-// What an external commit shows in the clear (gkm-6).
-type MlsExternalCommit struct {
-	// Of the joiner's credential, which gkm holds to the uploader.
-	Identity []byte
-	// In the commit's order.
-	Proposals []MlsExternalProposal
-}
-
-// One proposal of an external commit.
-type MlsExternalProposal struct {
-	// As RFC §17.4 numbers them.
-	ProposalType uint16
-	// The leaf a Remove names, nil for any other proposal. Without the tree this is only a position, so
-	// gkm can count these but not check whose leaf one is.
-	RemovedLeaf *uint32
-}
-
-// The clear header of an encoded MLSMessage, with no key. Refuses what the subset refuses, so
-// a message that gets through here is a commit in one of its two framings.
-func ParseMlsHeader(encoded []byte) (*MlsHeader, error) {
-	message := &mlsMessage{}
-	if err := mlsUnmarshal(encoded, message); err != nil {
-		return nil, err
-	}
-	if private := message.privateMessage; private != nil {
-		return &MlsHeader{
-			GroupId:           private.groupId,
-			Epoch:             private.epoch,
-			ContentType:       private.contentType,
-			AuthenticatedData: private.authenticatedData,
-		}, nil
-	}
-
-	content := &message.publicMessage.content
-	commit := content.commit()
-	external := &MlsExternalCommit{Identity: commit.path.leafNode.credential.identity}
-	for index := range commit.proposals {
-		proposal := MlsExternalProposal{ProposalType: commit.proposals[index].proposalType}
-		if proposal.ProposalType == mlsProposalTypeRemove {
-			removedLeaf := uint32(commit.proposals[index].removed)
-			proposal.RemovedLeaf = &removedLeaf
-		}
-		external.Proposals = append(external.Proposals, proposal)
-	}
-	return &MlsHeader{
-		GroupId:           content.groupId,
-		Epoch:             content.epoch,
-		ContentType:       content.contentType,
-		AuthenticatedData: content.authenticatedData,
-		ExternalCommit:    external,
-	}, nil
 }

@@ -16,9 +16,11 @@
 // commit's, takes a group to an epoch at or below the newest this engine reached of it, held or since left (I-16).
 // The last-resort KeyPackage, which is kept, is held back by that second rule alone.
 //
-// ParseMlsHeader is the one MLS parse gkm runs, with no key (I-1). It reads a member's commit, a PrivateMessage,
-// and refuses a PublicMessage, an external commit, until KEYS-M2-05's framing reads one; so gkm refuses every
-// resync and recovery self-join until then, failing closed.
+// ParseMlsHeader is the one MLS parse gkm runs, with no key (I-1), on mls_framing.go's decoders, so it refuses
+// whatever they refuse. A member's commit, a PrivateMessage, shows its group, epoch and authenticated_data; an
+// external commit, a PublicMessage, shows its joiner's credential and the old leaf it removes as well (gkm-6). A
+// leaf reads no credential type outside tests until KEYS-M2-07 carries 0xF552, so until then every external commit
+// fails to parse, and gkm refuses every resync and recovery self-join, failing closed.
 //
 // On every leg, with no connect import. MlsKek hooks the KEK it exports, and the engines hook their own secrets.
 // An engine's methods are safe for concurrent use; a group, a pending join and a staged commit are not, and one
@@ -27,17 +29,11 @@
 package sidecar
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
 	"github.com/urnetwork/sidecar/protocol"
-)
-
-// MLSMessage's version and wire formats (RFC 9420 §6, §17.2), and the one content §10.4 frames.
-const (
-	mlsHeaderWireFormatPublicMessage  uint16 = 0x0001
-	mlsHeaderWireFormatPrivateMessage uint16 = 0x0002
-	mlsHeaderContentTypeCommit        uint8  = 3
 )
 
 var (
@@ -58,43 +54,58 @@ type MlsHeader struct {
 	ContentType uint8
 	// The commit's GkmCommitHeader, left encoded (D-KEYS-3).
 	AuthenticatedData []byte
+	// What an external commit shows besides (gkm-6), nil for a member's commit, whose proposals, credentials and
+	// tree only a member reads (owner decision 59).
+	External *MlsExternalCommit
 }
 
-// The clear header of an encoded MLSMessage, with no key: a member's commit, framed as a PrivateMessage. Refuses
-// what the subset refuses (application data and standalone proposals) and every other wire format, and refuses a
-// PublicMessage until KEYS-M2-05's framing reads an external commit's.
+// What an external commit, a PublicMessage, shows in the clear beyond its header (gkm-6).
+type MlsExternalCommit struct {
+	// The joiner's credential, as its new leaf carries it, which gkm holds to the uploader (§10.6's checks):
+	// UrMlsCredential's encoding under 0xF552 (§10.4) once KEYS-M2-07 carries it in a leaf, and a basic
+	// credential's identity in the root's tests.
+	Credential []byte
+	// The leaf of the old epoch the commit removes, a resync's old leaf; nil for a recovery self-join, which
+	// removes none (§10.9). Without the tree this is only a position, so gkm can bound these but not say whose
+	// leaf one is: members do.
+	RemovedLeaf *uint32
+}
+
+// The clear header of an encoded MLSMessage, with no key: a member's commit framed as a PrivateMessage, or an
+// external commit framed as a PublicMessage. Refuses what the subset refuses, every other wire format, and an
+// external commit with anything but one ExternalInit, at most one Remove and a path. What it returns is copied, so
+// the caller may reuse encoded.
 func ParseMlsHeader(encoded []byte) (*MlsHeader, error) {
-	decoder := &mlsDecoder{remaining: encoded}
-	version := decoder.readUint16()
-	wireFormat := decoder.readUint16()
-	if decoder.err != nil {
-		return nil, decoder.err
-	}
-	if version != mlsProtocolVersion10 {
-		return nil, fmt.Errorf("%w: protocol version %d", errMlsRefused, version)
-	}
-	switch wireFormat {
-	case mlsHeaderWireFormatPrivateMessage:
-	case mlsHeaderWireFormatPublicMessage:
-		return nil, fmt.Errorf("%w: an external commit's header is read once its framing lands (KEYS-M2-05)", errMlsRefused)
-	default:
-		return nil, fmt.Errorf("%w: wire format %d is no commit", errMlsRefused, wireFormat)
-	}
-	header := &MlsHeader{}
-	header.GroupId = decoder.readVector()
-	header.Epoch = decoder.readUint64()
-	header.ContentType = decoder.readUint8()
-	header.AuthenticatedData = decoder.readVector()
-	// encrypted_sender_data and ciphertext, which only a member opens
-	decoder.readVector()
-	decoder.readVector()
-	if err := decoder.finish(); err != nil {
+	message := &mlsMessage{}
+	if err := mlsUnmarshal(encoded, message); err != nil {
 		return nil, err
 	}
-	if header.ContentType != mlsHeaderContentTypeCommit {
-		return nil, fmt.Errorf("%w: content type %d", errMlsRefused, header.ContentType)
+	if private := message.privateMessage; private != nil {
+		return &MlsHeader{
+			GroupId:           bytes.Clone(private.groupId),
+			Epoch:             private.epoch,
+			ContentType:       private.contentType,
+			AuthenticatedData: bytes.Clone(private.authenticatedData),
+		}, nil
 	}
-	return header, nil
+	content := &message.publicMessage.content
+	commit := content.commit()
+	removed, err := mlsExternalCommitRemoval(commit)
+	if err != nil {
+		return nil, err
+	}
+	external := &MlsExternalCommit{Credential: bytes.Clone(commit.path.leafNode.credential.identity)}
+	if removed != nil {
+		removedLeaf := uint32(*removed)
+		external.RemovedLeaf = &removedLeaf
+	}
+	return &MlsHeader{
+		GroupId:           bytes.Clone(content.groupId),
+		Epoch:             content.epoch,
+		ContentType:       content.contentType,
+		AuthenticatedData: bytes.Clone(content.authenticatedData),
+		External:          external,
+	}, nil
 }
 
 // ur_group, what a group is for (§10.5; QD-469), fixed at its creation and bound by its key schedule.

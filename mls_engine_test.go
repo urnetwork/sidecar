@@ -1,5 +1,5 @@
-// ParseMlsHeader reads a member's commit with no key and refuses everything the subset refuses, and an external
-// commit until KEYS-M2-05's framing lands.
+// ParseMlsHeader reads a member's commit with no key and refuses everything the subset refuses. mls_framing_test.go
+// reads both framings through it, on messages the framing seals.
 
 package sidecar
 
@@ -14,7 +14,7 @@ func mlsTestPrivateMessage(t *testing.T, contentType uint8, authenticatedData []
 	t.Helper()
 	encoder := &mlsEncoder{}
 	encoder.writeUint16(mlsProtocolVersion10)
-	encoder.writeUint16(mlsHeaderWireFormatPrivateMessage)
+	encoder.writeUint16(mlsWireFormatPrivateMessage)
 	encoder.writeVector(gkmTestId("group").Bytes())
 	encoder.writeUint64(41)
 	encoder.writeUint8(contentType)
@@ -30,7 +30,7 @@ func mlsTestPrivateMessage(t *testing.T, contentType uint8, authenticatedData []
 
 func TestParseMlsHeaderReadsAMembersCommit(t *testing.T) {
 	authenticatedData := []byte("a GkmCommitHeader")
-	header, err := ParseMlsHeader(mlsTestPrivateMessage(t, mlsHeaderContentTypeCommit, authenticatedData))
+	header, err := ParseMlsHeader(mlsTestPrivateMessage(t, mlsContentTypeCommit, authenticatedData))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,26 +41,26 @@ func TestParseMlsHeaderReadsAMembersCommit(t *testing.T) {
 }
 
 func TestParseMlsHeaderRefusesWhatTheSubsetRefuses(t *testing.T) {
-	commit := mlsTestPrivateMessage(t, mlsHeaderContentTypeCommit, []byte("header"))
+	commit := mlsTestPrivateMessage(t, mlsContentTypeCommit, []byte("header"))
 	withWireFormat := func(wireFormat uint16) []byte {
 		changed := bytes.Clone(commit)
 		changed[2], changed[3] = byte(wireFormat>>8), byte(wireFormat)
 		return changed
 	}
 	refusals := map[string][]byte{
-		"application data":         mlsTestPrivateMessage(t, 1, nil),
-		"a standalone proposal":    mlsTestPrivateMessage(t, 2, nil),
-		"content type 0":           mlsTestPrivateMessage(t, 0, nil),
-		"an external commit":       withWireFormat(mlsHeaderWireFormatPublicMessage),
-		"a Welcome":                withWireFormat(3),
-		"a GroupInfo":              withWireFormat(4),
-		"a KeyPackage":             withWireFormat(5),
-		"wire format 0":            withWireFormat(0),
-		"version 2":                append([]byte{0, 2}, commit[2:]...),
-		"a byte past the message":  append(bytes.Clone(commit), 0),
-		"a message cut short":      commit[:len(commit)-1],
-		"nothing":                  {},
-		"a three-byte header only": commit[:3],
+		"application data":                            mlsTestPrivateMessage(t, 1, nil),
+		"a standalone proposal":                       mlsTestPrivateMessage(t, 2, nil),
+		"content type 0":                              mlsTestPrivateMessage(t, 0, nil),
+		"a PrivateMessage's bytes as a PublicMessage": withWireFormat(mlsWireFormatPublicMessage),
+		"a Welcome":                                   withWireFormat(3),
+		"a GroupInfo":                                 withWireFormat(4),
+		"a KeyPackage":                                withWireFormat(5),
+		"wire format 0":                               withWireFormat(0),
+		"version 2":                                   append([]byte{0, 2}, commit[2:]...),
+		"a byte past the message":                     append(bytes.Clone(commit), 0),
+		"a message cut short":                         commit[:len(commit)-1],
+		"nothing":                                     {},
+		"a three-byte header only":                    commit[:3],
 	}
 	for name, message := range refusals {
 		if _, err := ParseMlsHeader(message); err == nil {

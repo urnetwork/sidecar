@@ -652,11 +652,11 @@ func TestMlsCommitFramingThroughTheKeySchedule(t *testing.T) {
 		if err := receiverTree.mergeUpdatePath(0, received.path, nil, group.validation); err != nil {
 			t.Fatal(err)
 		}
-		commitSecret, err := member.secrets.cloneForTest().receiveUpdatePath(receiverTree, 0, received.path, group.provisionalContext(receiverTree), nil)
+		receivedPath, err := member.secrets.receiveUpdatePath(receiverTree, 0, received.path, group.provisionalContext(receiverTree), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		memberSecrets, memberConfirmed := nextEpoch(opened, receiverTree, commitSecret)
+		memberSecrets, memberConfirmed := nextEpoch(opened, receiverTree, receivedPath.commitSecret)
 		if !suite.verifyConfirmationTag(memberSecrets.confirmationKey, memberConfirmed, opened.auth.confirmationTag) {
 			t.Fatalf("suite %#x: the confirmation tag does not verify", suite.value)
 		}
@@ -1409,15 +1409,15 @@ func TestMlsHeaderReadsAPrivateMessageWithNoKey(t *testing.T) {
 	if header.Epoch != epoch.groupContext.epoch {
 		t.Errorf("epoch %d", header.Epoch)
 	}
-	if header.ContentType != MlsContentTypeCommit {
+	if header.ContentType != mlsContentTypeCommit {
 		t.Errorf("content type %d", header.ContentType)
 	}
 	if !bytes.Equal(header.AuthenticatedData, []byte("header")) {
 		t.Errorf("authenticated data %q", header.AuthenticatedData)
 	}
 	// owner decision 59: a member commit shows no proposal, credential or tree
-	if header.ExternalCommit != nil {
-		t.Errorf("a PrivateMessage showed %+v", header.ExternalCommit)
+	if header.External != nil {
+		t.Errorf("a PrivateMessage showed %+v", header.External)
 	}
 }
 
@@ -1435,22 +1435,117 @@ func TestMlsHeaderReadsAnExternalCommitWithNoKey(t *testing.T) {
 	if header.Epoch != epoch.groupContext.epoch || !bytes.Equal(header.AuthenticatedData, []byte("header")) {
 		t.Errorf("header %+v", header)
 	}
-	external := header.ExternalCommit
+	external := header.External
 	if external == nil {
 		t.Fatal("no external commit")
 	}
-	if !bytes.Equal(external.Identity, []byte("external joiner")) {
-		t.Errorf("identity %q", external.Identity)
+	if !bytes.Equal(external.Credential, []byte("external joiner")) {
+		t.Errorf("credential %q", external.Credential)
 	}
-	if len(external.Proposals) != 2 {
-		t.Fatalf("%d proposals", len(external.Proposals))
+	if external.RemovedLeaf == nil || *external.RemovedLeaf != 1 {
+		t.Errorf("removed leaf %v", external.RemovedLeaf)
 	}
-	if proposal := external.Proposals[0]; proposal.ProposalType != mlsProposalTypeExternalInit || proposal.RemovedLeaf != nil {
-		t.Errorf("first proposal %+v", proposal)
+}
+
+// A recovery self-join removes no leaf (§10.9's External row), so gkm reads none from it; and RFC
+// §12.4.3.2 fixes no order between an ExternalInit and a Remove.
+func TestMlsHeaderReadsARecoverySelfJoinAndEitherOrder(t *testing.T) {
+	epoch := mlsNewTestEpoch(t, mlsSuite, 3)
+	_, message := epoch.externalCommit(2)
+	commit := message.content.commit()
+	externalInit, remove := commit.proposals[0], commit.proposals[1]
+	removedLeaf := uint32(2)
+	cases := []struct {
+		name      string
+		proposals []mlsProposal
+		removed   *uint32
+	}{
+		{name: "a self-join", proposals: []mlsProposal{externalInit}, removed: nil},
+		{name: "a Remove first", proposals: []mlsProposal{remove, externalInit}, removed: &removedLeaf},
 	}
-	proposal := external.Proposals[1]
-	if proposal.ProposalType != mlsProposalTypeRemove || proposal.RemovedLeaf == nil || *proposal.RemovedLeaf != 1 {
-		t.Errorf("second proposal %+v", proposal)
+	for _, c := range cases {
+		commit.proposals = c.proposals
+		encoded, err := mlsMarshal(&mlsMessage{wireFormat: mlsWireFormatPublicMessage, publicMessage: message})
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, err := ParseMlsHeader(encoded)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := header.External.RemovedLeaf; (got == nil) != (c.removed == nil) || (got != nil && *got != *c.removed) {
+			t.Errorf("%s: removed leaf %v", c.name, got)
+		}
+		if !bytes.Equal(header.External.Credential, []byte("external joiner")) {
+			t.Errorf("%s: credential %q", c.name, header.External.Credential)
+		}
+	}
+}
+
+// RFC §12.4.3.2, less §10.4's PSKs: an external commit holds one ExternalInit and at most one Remove,
+// and anything else is refused when parsed, before gkm reads its header or a member checks it.
+func TestMlsExternalCommitHoldsOneExternalInitAndAtMostOneRemove(t *testing.T) {
+	epoch := mlsNewTestEpoch(t, mlsSuite, 3)
+	added := mlsNewTestClient(t, mlsSuite, "added")
+	externalInit := mlsProposal{proposalType: mlsProposalTypeExternalInit, kemOutput: []byte("kem output")}
+	remove := func(leaf mlsLeafIndex) mlsProposal {
+		return mlsProposal{proposalType: mlsProposalTypeRemove, removed: leaf}
+	}
+	cases := []struct {
+		name      string
+		proposals []mlsProposal
+	}{
+		{name: "no proposal", proposals: nil},
+		{name: "a Remove alone", proposals: []mlsProposal{remove(1)}},
+		{name: "two ExternalInits", proposals: []mlsProposal{externalInit, externalInit}},
+		{name: "two Removes", proposals: []mlsProposal{externalInit, remove(1), remove(2)}},
+		{name: "an Add", proposals: []mlsProposal{externalInit, {proposalType: mlsProposalTypeAdd, keyPackage: added.keyPackage}}},
+		{name: "a GroupContextExtensions", proposals: []mlsProposal{externalInit, {proposalType: mlsProposalTypeGroupContextExtensions}}},
+	}
+	for _, c := range cases {
+		_, message := epoch.externalCommit(1)
+		message.content.commit().proposals = c.proposals
+		encoded, err := mlsMarshal(&mlsMessage{wireFormat: mlsWireFormatPublicMessage, publicMessage: message})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mlsUnmarshal(encoded, &mlsMessage{}); !errors.Is(err, errMlsInvalid) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if _, err := ParseMlsHeader(encoded); !errors.Is(err, errMlsInvalid) {
+			t.Errorf("header of %s: %v", c.name, err)
+		}
+	}
+}
+
+// The header owns what it returns, so gkm may reuse the buffer a request arrived in.
+func TestMlsHeaderCopiesWhatItReturns(t *testing.T) {
+	epoch := mlsNewTestEpoch(t, mlsSuite, 3)
+	_, public := epoch.externalCommit(1)
+	for _, value := range []*mlsMessage{
+		{wireFormat: mlsWireFormatPrivateMessage, privateMessage: epoch.sealed(epoch.protection(0), 0)},
+		{wireFormat: mlsWireFormatPublicMessage, publicMessage: public},
+	} {
+		encoded, err := mlsMarshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, err := ParseMlsHeader(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		groupId, authenticatedData := bytes.Clone(header.GroupId), bytes.Clone(header.AuthenticatedData)
+		var credential []byte
+		if header.External != nil {
+			credential = bytes.Clone(header.External.Credential)
+		}
+		clear(encoded)
+		if !bytes.Equal(header.GroupId, groupId) || !bytes.Equal(header.AuthenticatedData, authenticatedData) {
+			t.Errorf("wire format %#x: the header changed with its buffer", value.wireFormat)
+		}
+		if header.External != nil && !bytes.Equal(header.External.Credential, credential) {
+			t.Error("the credential changed with its buffer")
+		}
 	}
 }
 
