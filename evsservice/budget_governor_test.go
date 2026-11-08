@@ -37,6 +37,14 @@ func testReport(processId string) *WriteBudgetReport {
 	return &WriteBudgetReport{ProcessId: processId, StartMs: governorTestStart().UnixMilli()}
 }
 
+// Steps governor at now with reports written just before it, as a process writes them.
+func stepAt(governor *Governor, now time.Time, measuredByteCount int64, reports ...*WriteBudgetReport) *WriteBudgetAllowance {
+	for _, report := range reports {
+		report.TimeMs = now.UnixMilli()
+	}
+	return governor.Step(now, measuredByteCount, reports)
+}
+
 func ranks(rank sidecar.WriteP2Rank, byteCount int64) []int64 {
 	byteCounts := make([]int64, sidecar.WriteP2RankCount)
 	byteCounts[rank] = byteCount
@@ -51,12 +59,12 @@ func TestGovernorBucketRefillsToItsDepth(t *testing.T) {
 	var allowance *WriteBudgetAllowance
 	for range 800 {
 		now = now.Add(settings.Interval)
-		allowance = governor.Step(now, 0, nil)
+		allowance = stepAt(governor, now, 0)
 	}
 	if allowance.BucketByteCount != 720000 || allowance.DepthByteCount != 720000 {
 		t.Errorf("B %d of D %d", allowance.BucketByteCount, allowance.DepthByteCount)
 	}
-	allowance = governor.Step(now.Add(settings.Interval), 1500, nil)
+	allowance = stepAt(governor, now.Add(settings.Interval), 1500)
 	if allowance.BucketByteCount != 719500 {
 		t.Errorf("B %d after 1,500 measured", allowance.BucketByteCount)
 	}
@@ -76,7 +84,7 @@ func TestGovernorAllowanceFollowsTheBucketsFactor(t *testing.T) {
 		{bucketByteCount: 720000, want: 1000},
 	} {
 		governor := newTestGovernor(settings, c.bucketByteCount, 0)
-		allowance := governor.Step(governorTestStart().Add(settings.Interval), 0, nil)
+		allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 0)
 		if allowance.TotalByteCount != c.want {
 			t.Errorf("B %d: T %d, want %d", c.bucketByteCount, allowance.TotalByteCount, c.want)
 		}
@@ -92,7 +100,7 @@ func TestGovernorAllowanceLeavesWhatIsInFlight(t *testing.T) {
 	governor := newTestGovernor(settings, 0, 0)
 	report := testReport("evs-1")
 	report.InFlightByteCount = 900
-	allowance := governor.Step(governorTestStart().Add(settings.Interval), 0, []*WriteBudgetReport{report})
+	allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 0, report)
 	if allowance.TotalByteCount != 100 {
 		t.Errorf("T %d with 900 in flight and B at 1,000", allowance.TotalByteCount)
 	}
@@ -107,7 +115,7 @@ func TestGovernorForgivesP0sExcessByKind(t *testing.T) {
 	report.P0ByteCounts = map[sidecar.WriteP0Kind]int64{sidecar.WriteP0KindRemove: 3000, sidecar.WriteP0KindRotation: 1000}
 	// the process started after the last step, so all of it is this interval's
 	report.StartMs = governorTestStart().Add(time.Second).UnixMilli()
-	allowance := governor.Step(governorTestStart().Add(settings.Interval), 7000, []*WriteBudgetReport{report})
+	allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 7000, report)
 	if allowance.BucketByteCount != 0 || allowance.TotalByteCount != 0 {
 		t.Errorf("B %d, T %d", allowance.BucketByteCount, allowance.TotalByteCount)
 	}
@@ -119,7 +127,7 @@ func TestGovernorForgivesP0sExcessByKind(t *testing.T) {
 		t.Errorf("pricing error %d", allowance.PricingErrorByteCount)
 	}
 	// the storm ends: B refills by the difference, nothing repaid
-	allowance = governor.Step(governorTestStart().Add(2*settings.Interval), 0, []*WriteBudgetReport{report})
+	allowance = stepAt(governor, governorTestStart().Add(2*settings.Interval), 0, report)
 	if allowance.BucketByteCount != 1000 {
 		t.Errorf("B %d after the storm", allowance.BucketByteCount)
 	}
@@ -132,7 +140,7 @@ func TestGovernorCountsOtherOvershootAsPricingError(t *testing.T) {
 	report := testReport("evs-1")
 	report.StartMs = governorTestStart().Add(time.Second).UnixMilli()
 	report.P1ByteCount = 1000
-	allowance := governor.Step(governorTestStart().Add(settings.Interval), 1100, []*WriteBudgetReport{report})
+	allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 1100, report)
 	if allowance.PricingErrorByteCount != 100 || len(allowance.P0ExcessByteCounts) != 0 || allowance.BucketByteCount != 0 {
 		t.Errorf("error %d, excess %v, B %d", allowance.PricingErrorByteCount, allowance.P0ExcessByteCounts, allowance.BucketByteCount)
 	}
@@ -152,11 +160,11 @@ func TestGovernorPaysFundedP2FromTheWalletAlone(t *testing.T) {
 	taskworker.FundedBacklogByteCounts = ranks(sidecar.WriteP2RankEvacuation, 5000)
 	now := governorTestStart().Add(settings.Interval)
 	// the first sight of each is its baseline
-	governor.Step(now, 1000, []*WriteBudgetReport{evs, taskworker})
+	stepAt(governor, now, 1000, evs, taskworker)
 	evs.P1ByteCount *= 2
 	evs.CreditByteCount *= 2
 	taskworker.FundedByteCount *= 2
-	allowance := governor.Step(now.Add(settings.Interval), 1000, []*WriteBudgetReport{evs, taskworker})
+	allowance := stepAt(governor, now.Add(settings.Interval), 1000, evs, taskworker)
 	if allowance.TotalByteCount != 1000 || allowance.P1ByteCount != 1000 || allowance.UnfundedByteCount != 0 {
 		t.Errorf("T %d, A1 %d, A_U %d", allowance.TotalByteCount, allowance.P1ByteCount, allowance.UnfundedByteCount)
 	}
@@ -173,7 +181,7 @@ func TestGovernorPaysFundedP2FromTheWalletAlone(t *testing.T) {
 
 	// the backlog shrinks: W's credit for work that will not run lapses
 	taskworker.FundedBacklogByteCounts = ranks(sidecar.WriteP2RankEvacuation, 2000)
-	allowance = governor.Step(now.Add(2*settings.Interval), 1000, []*WriteBudgetReport{evs, taskworker})
+	allowance = stepAt(governor, now.Add(2*settings.Interval), 1000, evs, taskworker)
 	if allowance.WalletByteCount != 2000 {
 		t.Errorf("W %d past a backlog of 2,000", allowance.WalletByteCount)
 	}
@@ -186,7 +194,7 @@ func TestGovernorFundedP2SpendsOnlyWhatTheBucketHoldsBeyondT(t *testing.T) {
 	taskworker := testReport("taskworker-1")
 	taskworker.FundedDemandByteCounts = ranks(sidecar.WriteP2RankEvacuation, 100000)
 	taskworker.FundedBacklogByteCounts = ranks(sidecar.WriteP2RankEvacuation, 100000)
-	allowance := governor.Step(governorTestStart().Add(settings.Interval), 0, []*WriteBudgetReport{taskworker})
+	allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 0, taskworker)
 	// B 2,500 after the refill, T 205.6 at f a hair over a fifth, so A2 is what is left, rounded down
 	if allowance.BucketByteCount != 2500 || allowance.TotalByteCount != 205 || allowance.FundedByteCount != 2294 {
 		t.Errorf("B %d, T %d, A2 %d", allowance.BucketByteCount, allowance.TotalByteCount, allowance.FundedByteCount)
@@ -209,7 +217,7 @@ func TestGovernorUnfundedTakesAtMostItsShare(t *testing.T) {
 		taskworker := testReport("taskworker-1")
 		taskworker.UnfundedDemandByteCounts = ranks(sidecar.WriteP2RankGc, c.demand)
 		taskworker.UnfundedBacklogByteCounts = ranks(sidecar.WriteP2RankGc, c.backlog)
-		allowance := governor.Step(governorTestStart().Add(settings.Interval), 0, []*WriteBudgetReport{taskworker})
+		allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 0, taskworker)
 		if allowance.UnfundedByteCount != c.want || allowance.P1ByteCount != allowance.TotalByteCount-c.want {
 			t.Errorf("demand %d: A_U %d, A1 %d of T %d", c.demand, allowance.UnfundedByteCount, allowance.P1ByteCount, allowance.TotalByteCount)
 		}
@@ -229,7 +237,7 @@ func TestGovernorRunsUncoveredFundedWorkAsUnfunded(t *testing.T) {
 	// long enough for B to pass half of D, so T is all of an interval's refill and A_U's cap is 400
 	for range 400 {
 		now = now.Add(settings.Interval)
-		allowance = governor.Step(now, 0, []*WriteBudgetReport{taskworker})
+		allowance = stepAt(governor, now, 0, taskworker)
 	}
 	if allowance.TotalByteCount != 1000 || allowance.WalletByteCount != 0 || allowance.FundedByteCount != 0 {
 		t.Errorf("T %d, W %d, A2 %d", allowance.TotalByteCount, allowance.WalletByteCount, allowance.FundedByteCount)
@@ -246,13 +254,13 @@ func TestGovernorCalibrationFollowsTheMeasuredBytes(t *testing.T) {
 	governor := newTestGovernor(settings, 720000, 0)
 	evs := testReport("evs-1")
 	now := governorTestStart()
-	governor.Step(now.Add(settings.Interval), 0, []*WriteBudgetReport{evs})
+	stepAt(governor, now.Add(settings.Interval), 0, evs)
 	now = now.Add(settings.Interval)
 	var allowance *WriteBudgetAllowance
 	for range 120 {
 		now = now.Add(settings.Interval)
 		evs.P1ByteCount += 1000
-		allowance = governor.Step(now, 1100, []*WriteBudgetReport{evs})
+		allowance = stepAt(governor, now, 1100, evs)
 	}
 	if math.Abs(allowance.Calibration-1.1) > 1e-9 || allowance.TotalByteCount != 909 {
 		t.Errorf("k %v, T %d", allowance.Calibration, allowance.TotalByteCount)
@@ -261,7 +269,7 @@ func TestGovernorCalibrationFollowsTheMeasuredBytes(t *testing.T) {
 	// it are priced as before
 	for range 240 {
 		now = now.Add(settings.Interval)
-		allowance = governor.Step(now, 900, []*WriteBudgetReport{evs})
+		allowance = stepAt(governor, now, 900, evs)
 	}
 	if math.Abs(allowance.Calibration-1.1) > 1e-9 {
 		t.Errorf("k %v after 20 idle minutes", allowance.Calibration)
@@ -270,7 +278,7 @@ func TestGovernorCalibrationFollowsTheMeasuredBytes(t *testing.T) {
 	for range 120 {
 		now = now.Add(settings.Interval)
 		evs.P1ByteCount += 200
-		allowance = governor.Step(now, 2000, []*WriteBudgetReport{evs})
+		allowance = stepAt(governor, now, 2000, evs)
 	}
 	if allowance.Calibration != settings.CalibrationMax {
 		t.Errorf("k %v at ten times the table", allowance.Calibration)
@@ -285,7 +293,7 @@ func TestGovernorSplitsP1ByDemand(t *testing.T) {
 	gkm := testReport("gkm-1")
 	api := testReport("api-1")
 	now := governorTestStart().Add(settings.Interval)
-	allowance := governor.Step(now, 0, []*WriteBudgetReport{evs, gkm, api})
+	allowance := stepAt(governor, now, 0, evs, gkm, api)
 	for _, processId := range []string{"evs-1", "gkm-1", "api-1"} {
 		if share := allowance.Shares[processId]; share.P1ByteCount != 333 {
 			t.Errorf("idle %s: %+v", processId, share)
@@ -294,7 +302,7 @@ func TestGovernorSplitsP1ByDemand(t *testing.T) {
 	evs.P1QueuedByteCount = 300
 	evs.P1ByteCount = 400
 	gkm.P1QueuedByteCount = 300
-	allowance = governor.Step(now.Add(settings.Interval), 400, []*WriteBudgetReport{evs, gkm, api})
+	allowance = stepAt(governor, now.Add(settings.Interval), 400, evs, gkm, api)
 	if allowance.Shares["evs-1"].P1ByteCount != 700 || allowance.Shares["gkm-1"].P1ByteCount != 300 || allowance.Shares["api-1"].P1ByteCount != 0 {
 		t.Errorf("shares %+v %+v %+v", allowance.Shares["evs-1"], allowance.Shares["gkm-1"], allowance.Shares["api-1"])
 	}
@@ -310,7 +318,7 @@ func TestGovernorSplitsFundedP2RankByRank(t *testing.T) {
 	evacuation := testReport("taskworker-1")
 	evacuation.FundedDemandByteCounts = ranks(sidecar.WriteP2RankEvacuation, 600)
 	evacuation.FundedBacklogByteCounts = ranks(sidecar.WriteP2RankEvacuation, 600)
-	allowance := governor.Step(governorTestStart().Add(settings.Interval), 0, []*WriteBudgetReport{folds, evacuation})
+	allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 0, folds, evacuation)
 	if allowance.FundedByteCount != 1000 || allowance.Shares["taskworker-1"].FundedByteCount != 600 || allowance.Shares["evs-1"].FundedByteCount != 400 {
 		t.Errorf("A2 %d: evacuation %+v, folds %+v", allowance.FundedByteCount, allowance.Shares["taskworker-1"], allowance.Shares["evs-1"])
 	}
@@ -330,7 +338,7 @@ func TestGovernorTakesARunningProcessAsItsBaseline(t *testing.T) {
 	running.CreditByteCount = 9000000
 	running.FundedBacklogByteCounts = ranks(sidecar.WriteP2RankFold, 9000000)
 	now := governorTestStart()
-	allowance := governor.Step(now, 0, []*WriteBudgetReport{running})
+	allowance := stepAt(governor, now, 0, running)
 	if allowance.WalletByteCount != 0 {
 		t.Errorf("W %d from a running process's totals", allowance.WalletByteCount)
 	}
@@ -338,7 +346,7 @@ func TestGovernorTakesARunningProcessAsItsBaseline(t *testing.T) {
 	started.StartMs = now.Add(time.Second).UnixMilli()
 	started.CreditByteCount = 500
 	started.FundedBacklogByteCounts = ranks(sidecar.WriteP2RankFold, 500)
-	allowance = governor.Step(now.Add(settings.Interval), 0, []*WriteBudgetReport{running, started})
+	allowance = stepAt(governor, now.Add(settings.Interval), 0, running, started)
 	if allowance.WalletByteCount != 500 {
 		t.Errorf("W %d from a process started since", allowance.WalletByteCount)
 	}
@@ -354,8 +362,24 @@ func TestGovernorDropsAReportItCannotUse(t *testing.T) {
 	negative.CreditByteCount = -1
 	tooManyRanks := testReport("evs-3")
 	tooManyRanks.FundedDemandByteCounts = make([]int64, sidecar.WriteP2RankCount+1)
-	allowance := governor.Step(governorTestStart().Add(settings.Interval), 0, []*WriteBudgetReport{bad, negative, tooManyRanks, testReport("")})
+	allowance := stepAt(governor, governorTestStart().Add(settings.Interval), 0, bad, negative, tooManyRanks, testReport(""))
 	if len(allowance.Shares) != 0 {
+		t.Errorf("shares %v", allowance.Shares)
+	}
+}
+
+// A report older than ReportTtl is a process gone, whatever Redis still holds.
+func TestGovernorDropsAReportPastItsTtl(t *testing.T) {
+	settings := governorTestSettings()
+	governor := newTestGovernor(settings, 720000, 0)
+	stale := testReport("evs-1")
+	stale.P1QueuedByteCount = 5000
+	now := governorTestStart().Add(settings.Interval)
+	stale.TimeMs = now.Add(-settings.ReportTtl - time.Millisecond).UnixMilli()
+	fresh := testReport("evs-2")
+	fresh.TimeMs = now.UnixMilli()
+	allowance := governor.Step(now, 0, []*WriteBudgetReport{stale, fresh})
+	if _, ok := allowance.Shares["evs-1"]; ok || allowance.Shares["evs-2"].P1ByteCount != 1000 {
 		t.Errorf("shares %v", allowance.Shares)
 	}
 }
@@ -370,7 +394,7 @@ func TestGovernorCopyRateRisesWithSpareP1(t *testing.T) {
 	for range 13 {
 		now = now.Add(settings.Interval)
 		evs.P1ByteCount += 900
-		allowance = governor.Step(now, 900, []*WriteBudgetReport{evs})
+		allowance = stepAt(governor, now, 900, evs)
 	}
 	if allowance.CopyOpsPerSecond != 250 {
 		t.Errorf("busy: %d", allowance.CopyOpsPerSecond)
@@ -378,7 +402,7 @@ func TestGovernorCopyRateRisesWithSpareP1(t *testing.T) {
 	for range 13 {
 		now = now.Add(settings.Interval)
 		evs.P1ByteCount += 500
-		allowance = governor.Step(now, 500, []*WriteBudgetReport{evs})
+		allowance = stepAt(governor, now, 500, evs)
 	}
 	if allowance.CopyOpsPerSecond != 1000 {
 		t.Errorf("spare: %d", allowance.CopyOpsPerSecond)
@@ -393,7 +417,7 @@ func TestGovernorStateResumesExactly(t *testing.T) {
 	taskworker := testReport("taskworker-1")
 	now := governorTestStart()
 	step := func(governor *Governor, at time.Time) *WriteBudgetAllowance {
-		return governor.Step(at, 1200, []*WriteBudgetReport{evs, taskworker})
+		return stepAt(governor, at, 1200, evs, taskworker)
 	}
 	for i := range 30 {
 		now = now.Add(settings.Interval)
