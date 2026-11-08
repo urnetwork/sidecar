@@ -1,0 +1,18 @@
+{
+  "name": "scoped: a consented device of the member admits, a read_only one or another member's does not",
+  "members": [{"id": "owner", "role": "owner"}, {"id": "admin", "role": "admin"}],
+  "genesis": {"sidecar": "laptop", "member": "owner"},
+  "sidecars": [
+    {"id": "laptop", "member": "owner", "admitted_at": 1},
+    {"id": "phone", "member": "owner", "admitted_at": 2, "signers": ["laptop"]},
+    {"id": "worker", "member": "owner", "admitted_at": 3, "signers": ["laptop"], "read_only": true},
+    {"id": "by-worker", "member": "owner", "admitted_at": 4, "signers": ["worker"]},
+    {"id": "admin-laptop", "member": "admin", "admitted_at": 5, "signers": ["laptop"], "invited": true},
+    {"id": "by-admin", "member": "owner", "admitted_at": 6, "signers": ["admin-laptop"]},
+    {"id": "one-of-k", "member": "owner", "admitted_at": 7, "signers": ["admin-laptop", "phone"]}
+  ],
+  "consented": ["laptop", "phone", "worker", "admin-laptop", "one-of-k"],
+  "not_consented": ["by-worker", "by-admin"],
+  "approval_capable": ["laptop", "phone", "admin-laptop", "one-of-k"],
+  "not_approval_capable": ["worker", "by-admin"]
+}

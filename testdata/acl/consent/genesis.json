@@ -1,0 +1,12 @@
+{
+  "name": "the owner's first device signed Genesis; a device an admin admitted under the owner is not consented",
+  "members": [{"id": "owner", "role": "owner"}, {"id": "admin", "role": "admin"}],
+  "genesis": {"sidecar": "first", "member": "owner"},
+  "sidecars": [
+    {"id": "first", "member": "owner", "admitted_at": 1},
+    {"id": "admin-laptop", "member": "admin", "admitted_at": 2, "signers": ["first"], "invited": true},
+    {"id": "minted", "member": "owner", "admitted_at": 3, "signers": ["admin-laptop"]}
+  ],
+  "consented": ["first", "admin-laptop"],
+  "not_consented": ["minted"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "a signer counts only if consented before it signed: a confirmation from a device consented later restores nothing",
+  "members": [{"id": "owner", "role": "owner"}, {"id": "admin", "role": "admin"}],
+  "genesis": {"sidecar": "laptop", "member": "owner"},
+  "sidecars": [
+    {"id": "laptop", "member": "owner", "admitted_at": 1},
+    {"id": "admin-laptop", "member": "admin", "admitted_at": 2, "signers": ["laptop"], "invited": true},
+    {"id": "tablet", "member": "owner", "admitted_at": 3, "signers": ["admin-laptop"], "owner_confirm": {"signer": "laptop", "at": 8}},
+    {"id": "phone", "member": "owner", "admitted_at": 4, "signers": ["admin-laptop"], "owner_confirm": {"signer": "tablet", "at": 6}},
+    {"id": "watch", "member": "owner", "admitted_at": 5, "signers": ["admin-laptop"], "owner_confirm": {"signer": "tablet", "at": 9}}
+  ],
+  "consented": ["laptop", "admin-laptop", "tablet", "watch"],
+  "not_consented": ["phone"]
+}
