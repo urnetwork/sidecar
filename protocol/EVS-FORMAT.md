@@ -204,7 +204,7 @@ A record's body is its items in the order §11.8's record row lists them, each u
 | `head/<repo>/<ref>` | `EvsHead` | server-internal: readers get `EvsHeadSummary` |
 | `log/<repo>/<ref>/<n>` | `EvsLogPage` | built alike by any writer, so a 412 on equal bytes is success; this message is this file's |
 | `idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e` | `EvsIndexEntry` | per file up to four `EvsIndexVersion`s, newest first, all but the newest elided; a directory's table with `names_through`; a removal's marker; a drop mark, which format-1 writers keep |
-| `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys; an erased key leaves the list and no index shifts (#9) |
+| `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys; an erased key leaves the list and no index shifts (#9); a key's `wrapped` is the 72 B wrapped-key block a segment carries, under fek of the key's generation, and a deposit's is HPKE-XWing to that generation's drop key, whose parameters EVS1-M2-04's slot codec fixes |
 | `pmap/<repo>/<ref>/<p>/<map>/<part>/_` | a Signed `EvsPathMap` part | |
 
 EVSB's plan adds `EvsPidxEntry` for `pidx/` here when EVSB-M2-10 lands. `pb/` holds batches above, and `seg/` segments.
@@ -247,6 +247,7 @@ For design-records, each is a reading that changes no D- item:
 | Segment public header | "URvs" \| format u8 \| flags u8 \| 2 zero bytes \| repo_id \| u64 generation; flags 0 |
 | Frame AAD widths | u64 generation, u32 frame index |
 | Names | Under manifest_p, p the row's path epoch; AAD repo_id \| u64 p \| parent token \| child token |
+| Slot keys | A fek-wrapped key is the segment's 72 B wrapped-key block, its AAD included |
 | Payload items | Sections 7, 8, 12, 13 and 14 as tabled above |
 | Batch record bodies | Items in §11.8's order, each u32 length \| bytes |
 | `log/` | `EvsLogPage` |
