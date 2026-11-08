@@ -212,10 +212,21 @@ func ExportNeedCircuits(t *testing.T) {
 	testNeedCircuits(t)
 }
 
-// Solves each part's circuit, Z1 left out, over the edge's own statement and the witness set for the
-// part, on a test shape sized to the part with room for a mutation of a few blocks.
+// Whether this leg compiles circuits (testNeedCircuits), for a test that runs its other halves in
+// both legs.
+func ExportCircuitsRun() bool {
+	return testCircuitsRun
+}
+
+// Solves each part's circuit over the edge's own statement and the witness set for the part. A test
+// shape sized to the part, with room for a mutation of a few blocks, leaves Z1 out and takes the keys
+// as given. With keyed set, pi1 solves on its production shape instead, whose keys come from the
+// witness's HS or master secret and the edge's own handshake inputs, so a secret the keys no longer
+// follow from is refused where a test shape cannot see it. Later parts keep their test shapes: their
+// Z1 is millions of constraints, and pi1's is the same derivation under the same inputs.
 type exportedCircuitVerifier struct {
 	t       *testing.T
+	keyed   bool
 	witness *partWitness
 	refused bool
 }
@@ -225,7 +236,13 @@ func (self *exportedCircuitVerifier) verifyPart(ctx context.Context, statement *
 	if self.witness == nil {
 		return errors.New("no witness")
 	}
-	shape, err := testShapeFitting(statement, 0, 8)
+	var shape *partShape
+	var err error
+	if self.keyed && statement.index == 1 {
+		shape, err = partShapeFor(statement)
+	} else {
+		shape, err = testShapeFitting(statement, 0, 8)
+	}
 	if err != nil {
 		return err
 	}
@@ -248,11 +265,22 @@ func (self *exportedCircuitVerifier) verifyPart(ctx context.Context, statement *
 // is no part's.
 func ExportCircuitVerdict(t *testing.T, capture *ExportedCapture) (uint32, error) {
 	t.Helper()
+	return exportCircuitVerdict(t, capture, false)
+}
+
+// As ExportCircuitVerdict, with Z1 in pi1's circuit (exportedCircuitVerifier).
+func ExportKeyedCircuitVerdict(t *testing.T, capture *ExportedCapture) (uint32, error) {
+	t.Helper()
+	return exportCircuitVerdict(t, capture, true)
+}
+
+func exportCircuitVerdict(t *testing.T, capture *ExportedCapture, keyed bool) (uint32, error) {
+	t.Helper()
 	preamble := newSessionPreamble(capture.Preamble)
 	if err := checkSessionPreamble(preamble); err != nil {
 		return 0, err
 	}
-	verifier := &exportedCircuitVerifier{t: t}
+	verifier := &exportedCircuitVerifier{t: t, keyed: keyed}
 	gate := newEdgeSession(defaultEdgeSettings(), preamble, capture.Preamble.MxHost, verifier)
 	for i, event := range capture.Events {
 		var err error

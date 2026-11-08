@@ -941,6 +941,12 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 		if err := edgeCheckFraming(record); err != nil {
 			return nil, err
 		}
+		// the outer type is public and the circuit sees only ciphertext, so this is the gate's to check
+		// before any verification, as for a template no plaintext fills: such a record could never equal
+		// one E1 lets through, and Z3 has nothing else to say of it in 1.2
+		if record[0] != tlsRecordApplicationData {
+			return nil, edgeRefuse(checkE3, "a part's record %d is not application_data", i)
+		}
 		seq := part.FirstRecord + uint64(i)
 		if part.Mode == partModeBdat && 3 <= part.Index && i == len(part.Records)-1 {
 			seq = part.LastRecord
