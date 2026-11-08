@@ -101,6 +101,7 @@ type SidecarCapability int32
 const (
 	SidecarCapability_SIDECAR_CAPABILITY_NONE      SidecarCapability = 0
 	SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY SidecarCapability = 2 // bit 1: page Workers (D-TEAM-24)
+	SidecarCapability_SIDECAR_CAPABILITY_INVITED   SidecarCapability = 4 // bit 2: set by the admitting device once the invite's join MAC verifies
 )
 
 // Enum value maps for SidecarCapability.
@@ -108,10 +109,12 @@ var (
 	SidecarCapability_name = map[int32]string{
 		0: "SIDECAR_CAPABILITY_NONE",
 		2: "SIDECAR_CAPABILITY_READ_ONLY",
+		4: "SIDECAR_CAPABILITY_INVITED",
 	}
 	SidecarCapability_value = map[string]int32{
 		"SIDECAR_CAPABILITY_NONE":      0,
 		"SIDECAR_CAPABILITY_READ_ONLY": 2,
+		"SIDECAR_CAPABILITY_INVITED":   4,
 	}
 )
 
@@ -1998,10 +2001,11 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x14MEMBER_ROLE_IT_ADMIN\x10\x04\x12\x1d\n" +
 	"\x19MEMBER_ROLE_BILLING_ADMIN\x10\x05\x12\x17\n" +
 	"\x13MEMBER_ROLE_AUDITOR\x10\x06\x12\x16\n" +
-	"\x12MEMBER_ROLE_MEMBER\x10\a*R\n" +
+	"\x12MEMBER_ROLE_MEMBER\x10\a*r\n" +
 	"\x11SidecarCapability\x12\x1b\n" +
 	"\x17SIDECAR_CAPABILITY_NONE\x10\x00\x12 \n" +
-	"\x1cSIDECAR_CAPABILITY_READ_ONLY\x10\x02*u\n" +
+	"\x1cSIDECAR_CAPABILITY_READ_ONLY\x10\x02\x12\x1e\n" +
+	"\x1aSIDECAR_CAPABILITY_INVITED\x10\x04*u\n" +
 	"\x06KeyAlg\x12\x17\n" +
 	"\x13KEY_ALG_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16KEY_ALG_WEBAUTHN_ES256\x10\x01\x12\x1d\n" +

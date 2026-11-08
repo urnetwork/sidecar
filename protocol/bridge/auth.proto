@@ -145,6 +145,8 @@ enum MemberRole {
 enum SidecarCapability {
   SIDECAR_CAPABILITY_NONE = 0;
   SIDECAR_CAPABILITY_READ_ONLY = 2;  // bit 1: page Workers (D-TEAM-24)
+  SIDECAR_CAPABILITY_INVITED = 4;    // bit 2: set by the admitting device once the invite's join MAC verifies
+                                     // (§7.5, §7.6); §8.5's invited clause (plan-ACL-invited-consent-evidence)
 }
 
 enum KeyAlg {

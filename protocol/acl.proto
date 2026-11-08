@@ -22,12 +22,24 @@ message AclRows {
   repeated AclRepo repos = 5;
   bytes bridge = 6;                       // §17's id-only section
   AclAudit audit = 7;                     // owner decision 63; Team only
+  repeated AclSuspension suspensions = 8; // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
+  repeated AclSpentGrant spent_grants = 9; // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
 }
 
+// A tag or group atom, or a selector with no table name compiled to a derived atom: the first 16 bytes of
+// SHA-256("urnetwork-sidecar-v1/acl-atom" || 0x00 || kind || 0x00 || value), kind one byte (1 member,
+// 2 sidecar, 3 client, 4 network, 5 role, 6 principal), each value already server-visible
+// (plan-ACL-nonsidecar-subjects). A tag atom's member_ids stays empty, and its sidecar_ids lists the
+// sidecars carrying it (plan-ACL-atom-and-rule-ids #4).
 message AclAtom {
   bytes atom = 1;
   repeated bytes member_ids = 2;
   repeated bytes sidecar_ids = 3;
+  repeated bytes tag_owner_member_ids = 4;  // a tag atom's tagOwners, expanded to member_ids at compile
+  repeated bytes client_ids = 5;            // client:<id> for a client no binding names
+  repeated bytes network_ids = 6;           // network:<net>, its label resolved at save
+  string role = 7;                          // role:<name>, on Embed networks
+  string principal = 8;                     // principal:<name>, on Embed networks
 }
 
 // §8.4's autogroups as atoms, autogroup:dst-owner fixed at M2 because the implicit document's directory
@@ -96,6 +108,8 @@ message AclRule {
   AclAppMode app_mode = 8;
   bytes link_spki_sha256 = 9;             // the pin in full, as a requested grant's GrantActivate shows it to
                                           // api anyway (§16.6 AD4)
+  bytes source_rule_id = 10;              // an activated grant's: the requests rule its CanonicalAction names,
+                                          // whose deletion ends it (plan-ACL-folded-grant-state #2)
 }
 
 message AclRequestRule {
@@ -207,6 +221,25 @@ message AclTarget {                       // exactly one kind set
   string public_name = 7;                 // tls/ and smtp/ sockets, dns hosts
   bytes cidr = 8;
   bool mail_send = 9;
+  bytes client_id = 10;                   // a client no binding names, under an unrestricted grant
+                                          // (D-ACL-5; plan-ACL-nonsidecar-subjects)
+}
+
+// An active Suspend a fold keeps until an Unsuspend of its own suspend_id lands. signer_class settles who may
+// lift it: 1 owner or sponsor, 2 admin, 3 k of n (plan-ACL-folded-grant-state #1).
+message AclSuspension {
+  bytes subject = 1;
+  bytes suspend_id = 2;
+  uint32 signer_class = 3;
+  bytes signer = 4;
+  uint64 at = 5;
+}
+
+// A grant_id an activation or revocation spent, kept until the newest ConfigRecord.time_ms in the head passes
+// retain_until_ms; 0 keeps it for the network's life (plan-ACL-folded-grant-state #3).
+message AclSpentGrant {
+  bytes grant_id = 1;
+  int64 retain_until_ms = 2;
 }
 
 // §8.8's statements: §6 Signed, purpose acl unless noted, each opening with a StatementHeader.
