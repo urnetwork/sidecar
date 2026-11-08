@@ -2,8 +2,8 @@
 // SPKI and the identifier set together, so a chain for another key or for other names never verifies, and it is what
 // the CT watch reads a certificate back against (D-TLS-8), so an operator that can pass DNS-01 still cannot attest.
 //
-// Signing goes through a function value, as Sidecar.Sign will be, and no key is created, derived or unwrapped here, so
-// nothing calls testHookSecret. Package-level functions are safe for concurrent use.
+// Signing goes through a function value in Sidecar.Sign's shape (CORE-M1-05), and no key is created, derived or
+// unwrapped here, so nothing calls testHookSecret. Package-level functions are safe for concurrent use.
 //
 // Errors name fields, never their values (I-13).
 
@@ -31,9 +31,10 @@ var (
 	ErrTlsKeyAttestationMismatch = errors.New("tls key attestation mismatch")
 )
 
-// Signs a statement with the device's identity key and answers §6.9's Signed, signer_id the sidecar_id, as Sidecar.Sign
-// does once its agent is bound. May be called from any goroutine.
-type TlsKeyAttestationSignFunction func(purpose string, signedType bridge.SignedType, body []byte) (*bridge.Signed, error)
+// Signs a statement with the device's identity key and answers §6.9's Signed, signer_id the sidecar_id, in the shape
+// of Sidecar.Sign (CORE-M1-05), so a Sidecar's method value is one. agentId is a label there and selects no key, and an
+// attestation passes nil, since only the identity key attests. May be called from any goroutine.
+type TlsKeyAttestationSignFunction func(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error)
 
 // Refuses an attestation whose fields cannot be one, on both sides of the signature.
 func checkTlsKeyAttestation(attestation *protocol.TlsKeyAttestation) error {
@@ -61,12 +62,14 @@ func SignTlsKeyAttestation(attestation *protocol.TlsKeyAttestation, sign TlsKeyA
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTlsKeyAttestationMalformed, err)
 	}
-	signed, err := sign(TlsKeyAttestationPurpose, signedType, body)
+	signed, err := sign(TlsKeyAttestationPurpose, signedType, body, nil)
 	if err != nil {
 		return nil, err
 	}
-	// a nil or another statement from sign would otherwise reach certs as an attestation that only fails there
-	if signed.GetType() != uint32(signedType) || !bytes.Equal(signed.GetBody(), body) {
+	// a nil, another statement or another signer from sign would otherwise reach certs as an attestation that only
+	// fails there
+	if signed.GetType() != uint32(signedType) || !bytes.Equal(signed.GetBody(), body) ||
+		!bytes.Equal(signed.GetSignerId(), attestation.GetSidecarId()) {
 		return nil, fmt.Errorf("%w: sign answered another statement", ErrTlsKeyAttestationMalformed)
 	}
 	return proto.MarshalOptions{Deterministic: true}.Marshal(signed)
