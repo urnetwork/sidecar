@@ -52,7 +52,7 @@ func SenderPrefixes(sender netip.Addr) (netip.Prefix, netip.Prefix) {
 }
 
 // The memory on one Redis, holding no k until its first Refresh.
-func NewClosedHandshakes(redis sidecar.Redis, ttl time.Duration, clock MxEdgeClock) *ClosedHandshakes {
+func NewClosedHandshakes(redis sidecar.Redis, ttl time.Duration, clock sidecar.Clock) *ClosedHandshakes {
 	return newMxClosedHandshakes(redis, ttl, clock)
 }
 

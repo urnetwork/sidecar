@@ -109,7 +109,7 @@ func mxClosedHandshakeKey(dayKey []byte, aggregate netip.Prefix) string {
 type mxClosedHandshakes struct {
 	redis sidecar.Redis
 	ttl   time.Duration
-	clock MxEdgeClock
+	clock sidecar.Clock
 	// The UTC day of the newest k a Refresh has held, 0 before the first, so a wait can see one land.
 	keyDay *sidecar.MonitorValue[int64]
 
@@ -121,7 +121,7 @@ type mxClosedHandshakes struct {
 }
 
 // A memory holding no k: it answers recent and writes nothing until a Refresh succeeds.
-func newMxClosedHandshakes(redis sidecar.Redis, ttl time.Duration, clock MxEdgeClock) *mxClosedHandshakes {
+func newMxClosedHandshakes(redis sidecar.Redis, ttl time.Duration, clock sidecar.Clock) *mxClosedHandshakes {
 	return &mxClosedHandshakes{
 		redis:      redis,
 		ttl:        ttl,

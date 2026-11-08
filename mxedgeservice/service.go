@@ -5,8 +5,8 @@
 // address, EHLO name or SNI (I-13), and a connection's error text is not logged either, since a
 // net.OpError carries both addresses.
 //
-// Every wait is on MxEdgeClock, never a real deadline on a context or socket, so a schedule moves them
-// all.
+// Every wait is on a sidecar.Clock, never a real deadline on a context or socket, so a schedule moves
+// them all.
 
 package mxedgeservice
 
@@ -25,35 +25,6 @@ var _ sidecar.StreamEngine = (*MxEdgeService)(nil)
 
 // A time long past: setting it as a read deadline interrupts a blocked read without reading any clock.
 var mxPastDeadline = time.Unix(1, 0)
-
-// Time as the engine reads it, with sidecartest.Clock's methods, so a FakeClock fits as it stands.
-// TEST-M0-02's sidecar.Clock replaces this once it lands.
-type MxEdgeClock interface {
-	Now() time.Time
-	// Fires once the clock reaches now plus timeout.
-	After(timeout time.Duration) <-chan time.Time
-	// Calls function once the clock reaches now plus timeout. stop returns false once function has
-	// been called or stopped.
-	AfterFunc(timeout time.Duration, function func()) (stop func() bool)
-}
-
-// Real time, what a nil MxEdgeDeps.Clock means.
-type mxRealClock struct{}
-
-// The wall clock.
-func (self mxRealClock) Now() time.Time {
-	return time.Now()
-}
-
-// A real timer.
-func (self mxRealClock) After(timeout time.Duration) <-chan time.Time {
-	return time.After(timeout)
-}
-
-// A real timer, stopped through its own Stop.
-func (self mxRealClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
-	return time.AfterFunc(timeout, function).Stop
-}
 
 // TLS alert descriptions a closed handshake may send (RFC 8446 §6).
 type MxTlsAlert uint8
@@ -91,7 +62,7 @@ type MxEdgeDeps struct {
 	// 530, so a sender retries once it opens (§22.5). OPS-M1-03's ServiceHost.Gates feeds this.
 	GateOpen func() bool
 	// nil is real time.
-	Clock MxEdgeClock
+	Clock sidecar.Clock
 	// nil discards.
 	Log sidecar.Logger
 }
@@ -113,7 +84,7 @@ type MxEdgeService struct {
 	store            MxEdgeStore
 	deps             *MxEdgeDeps
 	settings         *MxEdgeSettings
-	clock            MxEdgeClock
+	clock            sidecar.Clock
 	log              sidecar.Logger
 	metrics          *mxMetrics
 	replies          *mxDialogReplies
@@ -166,7 +137,7 @@ func NewMxEdgeService(
 	}
 	clock := deps.Clock
 	if clock == nil {
-		clock = mxRealClock{}
+		clock = sidecar.RealClock{}
 	}
 	log := deps.Log
 	if log == nil {
