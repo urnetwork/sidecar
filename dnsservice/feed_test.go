@@ -270,8 +270,10 @@ func TestFeedLoopReloadsAcrossARestoreAndPostsItsDiff(t *testing.T) {
 	lost := feed.write(t, []dnsservice.DnsRecordSet{feedTestTxt("lost", "after the dump")}, nil)
 	awaitServed(t, feed.edge, lost)
 
-	// the first post fails, so the replaced snapshot stays until the next
-	if _, err := feed.faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: sidecartest.FaultDnsFeedReloadDiff, Result: sidecartest.FailBeforeApply}); err != nil {
+	// every post fails until the plan is cleared, so the replaced snapshot stays. The loop posts again
+	// at the top of its next turn, at once after the reload, so a plan for one post alone would leave
+	// the check below racing that retry.
+	if _, err := feed.faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: sidecartest.FaultDnsFeedReloadDiff, Result: sidecartest.FailBeforeApply, Repeat: -1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := feed.store.SetRestoring(t.Context(), edgeTestRoot, true); err != nil {
@@ -296,7 +298,8 @@ func TestFeedLoopReloadsAcrossARestoreAndPostsItsDiff(t *testing.T) {
 	if paths := replacedPaths(); len(paths) != 1 {
 		t.Errorf("replaced %v after a failed post", paths)
 	}
-	// the next poll, at the end of its hold, posts again
+	// the next post after the block takes them again, at the latest once the hold ends, lands
+	feed.faults.Clear()
 	var diffs []*dnsservice.DnsReloadDiff
 	advanceUntil(t, feed.edge.clock, loop, "a posted diff", func() bool {
 		diffs, err = feed.store.ReloadDiffs(t.Context(), edgeTestRoot)
