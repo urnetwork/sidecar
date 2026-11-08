@@ -476,30 +476,46 @@ func TestVersioningRulesParsePackedOrNot(t *testing.T) {
 
 // The design's definition, on bytes no encoder writes: a Signed's fields highest first and its type's varint padded.
 // The id is of what arrived, so a layer that re-marshaled would name it differently, which is why bytes are kept.
-func TestStatementIdHashesTheSignedAsReceived(t *testing.T) {
-	canonical := testConfigSignedBytes(t, bridge.SignedType_SIGNED_REPO_GRANT)
+// An id is the signed bytes' hash of the body as received (protos-bridge-statement-id-wrapper): a wrapper encoded
+// another way keeps it, and a body encoded another way is another statement, whose signature would fail.
+func TestStatementIdHashesTheSignedBytesAsReceived(t *testing.T) {
+	signedType := bridge.SignedType_SIGNED_REPO_GRANT
+	purpose := configStatementTypes[signedType].purpose
+	canonical := testConfigSignedBytes(t, signedType)
 	received := testConfigNonMinimal(t, testConfigReordered(t, canonical))
 	if bytes.Equal(received, canonical) {
 		t.Fatal("the fixture must differ from its re-marshal, or this proves nothing")
+	}
+	decoded := &bridge.Signed{}
+	if err := proto.Unmarshal(received, decoded); err != nil {
+		t.Fatal(err)
 	}
 	id, err := StatementId(received)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != sha256.Sum256(received) {
+	if id != bridge.SignedBytesSha256(purpose, signedType, decoded.GetBody()) {
 		t.Errorf("got %x", id)
-	}
-
-	decoded := &bridge.Signed{}
-	if err := proto.Unmarshal(received, decoded); err != nil {
-		t.Fatal(err)
 	}
 	remarshaledId, err := StatementId(testConfigEncode(t, decoded))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remarshaledId == id {
-		t.Error("a re-marshal kept its id")
+	if remarshaledId != id {
+		t.Error("a re-marshaled wrapper changed the id")
+	}
+
+	reencoded := proto.Clone(decoded).(*bridge.Signed)
+	reencoded.Body = testConfigNonMinimal(t, testConfigReordered(t, decoded.GetBody()))
+	if bytes.Equal(reencoded.GetBody(), decoded.GetBody()) {
+		t.Fatal("the body must differ from its re-encoding, or this proves nothing")
+	}
+	reencodedId, err := StatementId(testConfigEncode(t, reencoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reencodedId == id {
+		t.Error("a body encoded another way kept its id")
 	}
 }
 
@@ -577,12 +593,10 @@ func TestIdsRefuseWhatIsNoStatement(t *testing.T) {
 	}
 }
 
-// The exposure configSignedId names, stated as a fact so it cannot be forgotten. No signature covers these
-// wrappers, so each carries the one statement a server already holds, each verifies and parses to the same thing, and
-// each is a new id, which §7.9's replay row would pass and a RecoveryVeto or DelegationRevoke would not name. Only
-// SignedBytesSha256 sees through them. When question protos-bridge-statement-id-wrapper is answered, this test states
-// the answer instead: under its first option every id below is one id.
-func TestRewrappedStatementGetsANewIdUntilTheWrapperQuestionIsAnswered(t *testing.T) {
+// No signature covers a Signed's wrapper, so a server can carry one statement as many Signeds that each verify and
+// parse alike. protos-bridge-statement-id-wrapper's answer gives them one id, so §7.9's replay row, a RecoveryVeto and a
+// DelegationRevoke see one statement whatever wrapper carries it.
+func TestRewrappedStatementKeepsItsId(t *testing.T) {
 	cases := []struct {
 		signedType bridge.SignedType
 		id         func(signedBytes []byte) ([sha256.Size]byte, error)
@@ -610,8 +624,7 @@ func TestRewrappedStatementGetsANewIdUntilTheWrapperQuestionIsAnswered(t *testin
 			"a countersignature no row asks for": testConfigEncode(t, countersigned),
 			"other signer_id and key_id":         testConfigEncode(t, otherIds),
 		}
-		wantSha256 := bridge.SignedBytesSha256(purpose, c.signedType, body)
-		idWrappers := map[[sha256.Size]byte]string{}
+		wantId := bridge.SignedBytesSha256(purpose, c.signedType, body)
 		for wrapper, encoded := range wrappers {
 			received := &bridge.Signed{}
 			if err := proto.Unmarshal(encoded, received); err != nil {
@@ -628,18 +641,14 @@ func TestRewrappedStatementGetsANewIdUntilTheWrapperQuestionIsAnswered(t *testin
 			if !bytes.Equal(testConfigEncode(t, message), body) {
 				t.Errorf("%s %s parsed to another statement", c.signedType, wrapper)
 			}
-			if got := bridge.SignedBytesSha256(purpose, c.signedType, received.GetBody()); got != wantSha256 {
-				t.Errorf("%s %s has other signed bytes", c.signedType, wrapper)
-			}
 			id, err := c.id(encoded)
 			if err != nil {
 				t.Errorf("%s %s: %v", c.signedType, wrapper, err)
 				continue
 			}
-			if other, ok := idWrappers[id]; ok {
-				t.Errorf("%s: %s and %s share an id: the wrapper question has been answered, so state its answer here", c.signedType, wrapper, other)
+			if id != wantId {
+				t.Errorf("%s %s has its own id", c.signedType, wrapper)
 			}
-			idWrappers[id] = wrapper
 		}
 	}
 }
