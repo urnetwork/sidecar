@@ -536,6 +536,13 @@ enum SmtpPreambleCode {
 }
 enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
 
+// sidecar/protocol/socket.proto
+// §9.5's Claim, the tuple its comment lists, in that order, its name or token path written as SocketTicket's two.
+message SocketRegistrationClaim {
+  bytes network_id = 1; string name = 2; bytes name_token = 3; bytes listen_id = 4; string protocol = 5;
+  string app_mode = 6;
+}
+
 // sidecar/protocol/tls.proto
 // plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, and #2's attestation body.
 message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
