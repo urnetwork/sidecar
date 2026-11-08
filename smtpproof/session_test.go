@@ -37,6 +37,8 @@ type testMxSettings struct {
 	laxDataEnd bool
 	// Splits the EHLO reply into two records at this many octets. 0 sends it whole.
 	splitEhloAt int
+	// Writes the EHLO reply a line per record, after any split.
+	ehloLinePerRecord bool
 	// Has the edge forge server records from this application record on, 1 being the first. A
 	// malicious edge can relay anything, and has no key to make it verify.
 	edgeForgesFrom int
@@ -104,6 +106,13 @@ func (self *testMx) serve(conn *tls.Conn) {
 			if self.settings.splitEhloAt != 0 {
 				conn.Write([]byte(reply[:self.settings.splitEhloAt]))
 				reply = reply[self.settings.splitEhloAt:]
+			}
+			if self.settings.ehloLinePerRecord {
+				lines := strings.SplitAfter(reply, "\r\n")
+				for _, line := range lines[:len(lines)-1] {
+					conn.Write([]byte(line))
+				}
+				reply = lines[len(lines)-1]
 			}
 			write(reply)
 		case strings.HasPrefix(strings.ToUpper(command), "MAIL FROM:"):

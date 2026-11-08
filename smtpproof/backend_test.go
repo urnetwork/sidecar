@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1221,12 +1222,21 @@ func (self *testCommittingCircuit) Define(api frontend.API) error {
 }
 
 // Compiles every production shape, which takes minutes, so it stays out of the ordinary run: set
-// SMTPPROOF_MEASURE_SHAPES. It holds each to SPEC.md 10.2's rule, and its output is SPEC.md 11.2's.
+// SMTPPROOF_MEASURE_SHAPES, to a suite's number such as 0x1303 to compile that suite's alone. It holds
+// each to SPEC.md 10.2's rule, and its output is SPEC.md 11.2's.
 func TestMeasureShapes(t *testing.T) {
-	if os.Getenv("SMTPPROOF_MEASURE_SHAPES") == "" {
+	only := os.Getenv("SMTPPROOF_MEASURE_SHAPES")
+	if only == "" {
 		t.Skip("set SMTPPROOF_MEASURE_SHAPES to run")
 	}
+	suite, err := strconv.ParseUint(only, 0, 16)
+	if err != nil {
+		suite = 0
+	}
 	for _, shape := range partShapes() {
+		if suite != 0 && uint64(shape.suite) != suite {
+			continue
+		}
 		compiled, err := compilePartShape(shape)
 		if err != nil {
 			t.Fatal(err)
@@ -1255,27 +1265,78 @@ func TestMeasureWholeSend(t *testing.T) {
 		if !strings.Contains(legs, strings.ReplaceAll(leg.name, " ", "-")) {
 			continue
 		}
-		// D-SMTP-16's BDAT case: a 4 KiB header block and 10 recipients
-		recipients := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"}
-		padding := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58)
 		measuring := &testMeasuringBackend{t: t, backend: newGroth16Backend(), kinds: map[partShape]bool{}}
-		send := func(body string, settings *ProverSettings, mode string) {
-			message := padding + testHeaderBlock() + body
-			job := testJob("", recipients...)
-			job.Message = []byte(message)
-			job.Preamble.MessageByteCount = uint64(len(message))
-			t.Logf("%s %s: header block %d octets, body %d octets", leg.name, mode, strings.Index(message, "\r\n\r\n")+4, len(body))
+		modes := []uint32{partModeBdat, partModeData}
+		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") != "" {
+			modes = modes[:1]
+		}
+		for _, mode := range modes {
+			job, settings := testSpeedGateJob(mode)
+			headerBytes := bytes.Index(job.Message, []byte("\r\n\r\n")) + 4
+			t.Logf("%s mode %d: header block %d octets, body %d octets", leg.name, mode, headerBytes, len(job.Message)-headerBytes)
 			measuring.provingTotal = 0
 			measuring.cpuTotal = 0
 			result := testRunSendWith(t, leg, testMxDefaults(), settings, job, measuring, measuring)
 			testExpectOneTransaction(t, leg, result, job)
-			t.Logf("%s %s: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, mode, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
+			t.Logf("%s mode %d: whole send proved and accepted; proving took %v wall, %v cpu", leg.name, mode, measuring.provingTotal.Round(10*time.Millisecond), measuring.cpuTotal.Round(10*time.Millisecond))
 		}
-		send("a body line\r\n", DefaultProverSettings(), "bdat")
-		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") == "" {
-			settings := DefaultProverSettings()
-			settings.ForceData = true
-			send(strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100), settings, "data")
+	}
+}
+
+// D-SMTP-16's BDAT case, a 4 KiB header block and 10 recipients, or in DATA mode the same header block
+// and a body of four DATA parts, which is enough to price a part.
+func testSpeedGateJob(mode uint32) (*sidecar.SmtpProofJob, *ProverSettings) {
+	settings := DefaultProverSettings()
+	body := "a body line\r\n"
+	if mode == partModeData {
+		settings.ForceData = true
+		body = strings.Repeat("a line of body text, whole and ending as a DATA record must\r\n", 100)
+	}
+	message := strings.Repeat("X-Padding: a line of filler to reach the gate's header size\r\n", 58) + testHeaderBlock() + body
+	job := testJob("", "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9")
+	job.Message = []byte(message)
+	job.Preamble.MessageByteCount = uint64(len(message))
+	return job, settings
+}
+
+func TestProductionShapesHoldTheSpeedGatesSends(t *testing.T) {
+	// every part of D-SMTP-16's sends finds a production shape on every leg. Each record starts a fresh
+	// keystream block, so a suite's blocks are counted per record and not by octets alone. Finding a
+	// shape builds an assignment and compiles nothing, so this runs in both legs
+	for _, leg := range testTlsLegs() {
+		for _, mode := range []uint32{partModeBdat, partModeData} {
+			job, settings := testSpeedGateJob(mode)
+			send := testRunSend(t, leg, testMxDefaults(), settings, job)
+			testExpectOneTransaction(t, leg, send, job)
+			if send.result.Mode != mode {
+				t.Errorf("%s: mode %d, want %d", leg.name, send.result.Mode, mode)
+			}
+			for _, statement := range send.backend.statements {
+				if _, err := partShapeFor(statement); err != nil {
+					t.Errorf("%s mode %d: part %d: %v", leg.name, mode, statement.index, err)
+				}
+			}
+		}
+	}
+}
+
+func TestProductionShapesHoldAnEhloReplyWrittenALinePerRecord(t *testing.T) {
+	// a typical post-TLS reply of nine lines, each in a record of its own. The CR LF before CHUNKING is
+	// then in another record, so Z9 cannot prove it and the send is DATA (SPEC.md reading 17)
+	mxSettings := testMxDefaults()
+	mxSettings.keywords = []string{"PIPELINING", "SIZE 10240000", "ETRN", "ENHANCEDSTATUSCODES", "8BITMIME", "DSN", "CHUNKING"}
+	mxSettings.ehloLinePerRecord = true
+	for _, leg := range testTlsLegs() {
+		job, settings := testSpeedGateJob(partModeBdat)
+		send := testRunSend(t, leg, mxSettings, settings, job)
+		testExpectOneTransaction(t, leg, send, job)
+		if send.result.Mode != partModeData {
+			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
+		}
+		for _, statement := range send.backend.statements {
+			if _, err := partShapeFor(statement); err != nil {
+				t.Errorf("%s: part %d: %v", leg.name, statement.index, err)
+			}
 		}
 	}
 }

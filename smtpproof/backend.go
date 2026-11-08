@@ -38,19 +38,25 @@ const (
 )
 
 // The shapes this build proves. A part outside them is refused, on both sides.
+//
+// Every record starts a fresh keystream block, so blocks count records as well as octets. A one-line
+// reply takes one or two of AES's 16-octet blocks and one of ChaCha20's 64-octet blocks, so ChaCha20's
+// 12 server blocks hold as many such replies as AES's 24, and its 12 client blocks as many commands of
+// up to 63 octets as AES's 48.
 func partShapes() []*partShape {
 	return []*partShape{
 		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4},
 		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 1},
-		// sized for D-SMTP-16's 10 recipients and a typical EHLO reply
+		// sized for D-SMTP-16's 10 recipients and a typical EHLO reply, whole or a line per record
 		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
-		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 12, serverBlocks: 6, localOctets: true},
-		// D-SMTP-16's 4 KiB header block, the envelope's replies, and BDAT and QUIT or DATA's end
+		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 12, serverBlocks: 12, localOctets: true},
+		// D-SMTP-16's 4 KiB header block, the envelope's 1 + 10 replies and DATA's 354, each in a record
+		// of its own, and BDAT and QUIT or DATA's end
 		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
-		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 6, headerBlocks: 64},
+		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 12, headerBlocks: 64},
 		// DATA with a 2 KiB first body part beside the header block
 		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
-		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 6, headerBlocks: 64, bodyBlocks: 32},
+		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 12, headerBlocks: 64, bodyBlocks: 32},
 		// a later DATA part. A server record in one has no circuit yet, so it fails closed
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, bodyBlocks: 32},
