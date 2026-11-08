@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -38,10 +39,25 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// The root's seed directory for one of §22.6's targets.
+// A require of the root by its versioned path, which only a release branch's go.mod holds. Its
+// subpackages, smtpproof's module among them, do not match.
+var versionedRootRequire = regexp.MustCompile(`(?m)^\s*(?:require\s+)?github\.com/urnetwork/sidecar/(v[0-9]+)\s`)
+
+// The root's seed directory for one of §22.6's targets. In development the root is this module's
+// parent. A release branch moves the root, its testdata with it, into v2026/ and leaves this module
+// where it is (§4.9), and this module's go.mod then requires the root by that versioned path, so the
+// seeds are read from the directory the require names.
 func seedFiles(t testing.TB, directory string) [][]byte {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join("..", "testdata", "fuzz", directory, "*"))
+	goMod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootDirectory := ".."
+	if match := versionedRootRequire.FindSubmatch(goMod); match != nil {
+		rootDirectory = filepath.Join("..", string(match[1]))
+	}
+	paths, err := filepath.Glob(filepath.Join(rootDirectory, "testdata", "fuzz", directory, "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +73,58 @@ func seedFiles(t testing.TB, directory string) [][]byte {
 		seeds = append(seeds, seed)
 	}
 	return seeds
+}
+
+// make check runs this module's tests from mlsinterop/ in both layouts. On a release branch the root's
+// seeds are in v2026/ and none are at the top, so reading the parent there finds no seeds and fails a
+// release after its tags exist. The release go.mod also holds the smtpproof require that
+// sidecar_cli_release_edit adds, as it does before go mod tidy drops it.
+func TestSeedFilesFindTheRootInEitherLayout(t *testing.T) {
+	for _, layout := range []struct {
+		name  string
+		goMod string
+		seed  string
+	}{
+		{
+			name: "development",
+			goMod: `module github.com/urnetwork/sidecar/mlsinterop
+
+go 1.27.3
+
+require github.com/urnetwork/sidecar v0.0.0
+
+replace github.com/urnetwork/sidecar => ../
+`,
+			seed: "testdata/fuzz/evs_git_delta/seed",
+		},
+		{
+			name: "release",
+			goMod: `module github.com/urnetwork/sidecar/mlsinterop
+
+go 1.27.3
+
+require (
+	github.com/urnetwork/sidecar/smtpproof/v2026 v2026.11.6-1234567
+	github.com/urnetwork/sidecar/v2026 v2026.11.6-1234567
+)
+`,
+			seed: "v2026/testdata/fuzz/evs_git_delta/seed",
+		},
+	} {
+		top := t.TempDir()
+		for name, content := range map[string]string{"mlsinterop/go.mod": layout.goMod, layout.seed: layout.name} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(top, name)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(top, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Chdir(filepath.Join(top, "mlsinterop"))
+		if seeds := seedFiles(t, "evs_git_delta"); len(seeds) != 1 || string(seeds[0]) != layout.name {
+			t.Errorf("%s: the seeds read are %q, want the one at %s", layout.name, seeds, layout.seed)
+		}
+	}
 }
 
 // A delta seed's two halves: a three-byte base length, high byte first, then that many bytes, or as
