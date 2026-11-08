@@ -1,6 +1,7 @@
 package sidecartest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -9,6 +10,9 @@ import (
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/sidecar"
 )
+
+// A context, by a name the engine and process builders below read well with.
+type contextForTest = context.Context
 
 func newTestNet(t *testing.T) *Net {
 	net := NewNet(t.Context(), nil)
@@ -37,7 +41,7 @@ func TestNetDeliversOnlySealedFrames(t *testing.T) {
 	messages := make(chan *NetMessage, 16)
 	defer b.ReceiveMessages(messages)()
 
-	canary := net.Capture().Canary("message body")
+	canary := net.Capture().CanaryText("message body")
 	if err := a.SendMessage(b.ClientId, canary); err != nil {
 		t.Fatal(err)
 	}
