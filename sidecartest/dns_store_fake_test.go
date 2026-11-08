@@ -223,9 +223,10 @@ func TestFakeDnsFeedAnswersRowsAtOnce(t *testing.T) {
 	}
 }
 
-// Starts a poll, returning what it answers, once it has reached its hold.
+// Starts a poll, returning what it answers, once it has read nothing and reached its hold.
 func startFakeDnsPoll(t *testing.T, ctx context.Context, clock *FakeClock, feed *FakeDnsFeed, after uint64) <-chan *dnsservice.DnsFeedAnswer {
 	t.Helper()
+	pendingCount := len(clock.PendingTimers())
 	answers := make(chan *dnsservice.DnsFeedAnswer, 1)
 	go func() {
 		answer, err := feed.Journal(ctx, fakeDnsTestRoot, after)
@@ -234,7 +235,7 @@ func startFakeDnsPoll(t *testing.T, ctx context.Context, clock *FakeClock, feed 
 		}
 		answers <- answer
 	}()
-	if err := clock.AwaitTimers(ctx, len(clock.PendingTimers())+1); err != nil {
+	if err := clock.AwaitTimers(ctx, pendingCount+1); err != nil {
 		t.Fatal(err)
 	}
 	return answers
@@ -401,6 +402,31 @@ func TestFakeDnsFeedSnapshotAndDiffReachTheStore(t *testing.T) {
 	}
 	if len(diffs) != 1 {
 		t.Errorf("diffs %+v", diffs)
+	}
+}
+
+// A long journal comes in pieces, each continuing where the last stopped.
+func TestFakeDnsFeedHoldsAnAnswerToItsRowLimit(t *testing.T) {
+	ctx, clock, store := newFakeDnsTestStore(t)
+	settings := DefaultFakeDnsFeedSettings()
+	settings.RowLimit = 2
+	feed := NewFakeDnsFeed(store, clock, nil, settings)
+	if _, err := dnsSuiteWrites(ctx, store, fakeDnsTestRoot, 3); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := feed.Journal(ctx, fakeDnsTestRoot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Rows) != 2 || answer.Serial != 3 {
+		t.Errorf("answer %+v", answer)
+	}
+	answer, err = feed.Journal(ctx, fakeDnsTestRoot, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Rows) != 1 || answer.Rows[0].Serial != 3 {
+		t.Errorf("answer %+v", answer)
 	}
 }
 

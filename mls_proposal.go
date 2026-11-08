@@ -19,7 +19,8 @@ const (
 	mlsProposalTypeGroupContextExtensions uint16 = 0x0007
 )
 
-// Proposal (RFC §12.1). proposalType says which of the fields below it holds.
+// One change a commit makes to its group (RFC §12.1). proposalType says which of the fields below it
+// holds.
 type mlsProposal struct {
 	proposalType uint16
 

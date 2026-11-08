@@ -1,5 +1,10 @@
-// The record's primitives (§16.8), sealed end to end, so no server reads a field here. RECORD.md's kinds, class
-// numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.
+// The record's primitives (§16.8). An entry is a sealed file, so evs parses none of it, and that is all the fence's
+// "every field is sealed" below speaks of. Three of these messages also travel outside an entry, and servers parse
+// them: api and the gates read ApprovalDecision and ApprovalCancel (§2.8's api-10), and whatever a CanonicalAction
+// holds shows wherever a GrantActivate carries it into the log (api-7, §8.8) or a gate takes it beside a decision
+// (api-10, §16.6's spend check). testdata/metadata/fields.yml maps those fields to their rows, and says which have none.
+//
+// RECORD.md's kinds, class numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.
 //
 // CanonicalAction's field 37 is reserved in D-PHASE-9's sense: declared here, and set only in version 2, for
 // format 2's evs_write, so an approver that does not know that version refuses it (§16.8).

@@ -1,19 +1,22 @@
-// §6.6's subprotocol bounds. Timings and policy sizes are settings; protocol values such as the
-// 4,080 B envelope are constants (D-PROTO-16). Process-wide caps sit inside
-// SidecarSettings.MemoryBudgetByteCount and answer RESOURCE_EXHAUSTED. Every number here must be
-// positive, as settings.go's header says, which holds for the head checks above all: a zero there
-// would read as no witness ever asked for.
+// §6.6's subprotocol bounds, on every leg. Timings and policy sizes are settings; protocol values such
+// as the 4,080 B envelope are constants (D-PROTO-16), in envelope_constants.go. Process-wide caps sit
+// inside SidecarSettings.MemoryBudgetByteCount and answer RESOURCE_EXHAUSTED (envelope_budget.go). Every
+// number here must be positive, as settings.go's header says, which holds for the head checks above
+// all: a zero there would read as no witness ever asked for.
 
 package sidecar
 
 import (
+	"fmt"
 	"time"
 )
 
 // §6.6's table. Defaults are the desktop's; a mobile value follows a semicolon.
 type SidecarProtocolSettings struct {
-	// How long a peer's Hello stands: 10 min, or until the sequence exits; a pair in a §6.10 window
-	// keeps it while the window is open and no 120 s pass without a keepalive.
+	// How long a peer's Hello stands: 10 min. Since connect signals no sequence exit, it ends sooner at
+	// any change of the peer's C15 key, checked per frame, or on a send's ack error
+	// (plan-PROTO-small-readings.md's reading 1). A pair in a §6.10 window keeps it while the window is
+	// open and no 120 s pass without a keepalive.
 	HelloCacheTimeout time.Duration
 	// How often an app host Pings an indexer whose §6.10 window is open, while in the foreground, on
 	// a grid from the window's start: 60 s, under connect's 120 s receive idle.
@@ -79,16 +82,18 @@ type SidecarProtocolSettings struct {
 	// How often a round runs while a revocation this device signed is unwitnessed: 10 min.
 	HeadCheckUnwitnessedInterval time.Duration
 	// The least time between wakes of one device: 1 h, as the api enforces; woken sidecars check
-	// first. The 24 h witness alarm and the stop at ServiceSettings.witness_bound_hours are per-network
-	// config (§7.9; owner decision 129), never local settings.
+	// first. Neither witness bound is a local setting: the stop at ServiceSettings.witness_bound_hours
+	// is per-network config (§7.9), and the 24 h alarm is a protocol constant fixed by owner decision 129
+	// (plan-PROTO-small-readings.md's reading 3).
 	WakeInterval time.Duration
 	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
 	// (§6.8).
 	SyncRefetchInterval time.Duration
 }
 
-// A fresh value each call, as DefaultSidecarSettings's is.
-func defaultSidecarProtocolSettings() *SidecarProtocolSettings {
+// The one source of §6.6's defaults, the desktop's. A fresh value each call, as DefaultSidecarSettings's
+// is.
+func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 	return &SidecarProtocolSettings{
 		HelloCacheTimeout:               10 * time.Minute,
 		MarkedKeepaliveInterval:         60 * time.Second,
@@ -119,4 +124,31 @@ func defaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		WakeInterval:                    1 * time.Hour,
 		SyncRefetchInterval:             1 * time.Hour,
 	}
+}
+
+// §6.6's values after each semicolon, for a host that runs on a phone, as sdk's
+// applyMobileLowMemoryClientSettings narrows connect's defaults (§18.4). Exported so that host keeps no
+// second copy of a number, and it leaves every field §6.6 gives one value alone.
+func ApplyMobileSidecarProtocolSettings(settings *SidecarProtocolSettings) {
+	settings.ReassemblyPeerCount = 4
+	settings.ReassemblyPeerByteCount = 512 * 1024
+	settings.ReassemblyProcessByteCount = 2 * 1024 * 1024
+	settings.IdempotencyPeerByteCount = 64 * 1024
+	settings.IdempotencyProcessByteCount = 512 * 1024
+	settings.StreamMinWindowByteCount = 64 * 1024
+	settings.StreamMaxWindowByteCount = 256 * 1024
+	settings.StreamPeerCreditByteCount = 1024 * 1024
+	settings.StreamProcessCreditByteCount = 8 * 1024 * 1024
+}
+
+// §6.6's protocol maximums, which no adjustment may pass: a call past MaxCallTimeout outlives its
+// sequence, and a body past MaxReassemblyBodyByteCount is no peer's to take.
+func (self *SidecarProtocolSettings) validate() error {
+	if MaxCallTimeout < self.DefaultCallTimeout {
+		return fmt.Errorf("%w: ProtocolSettings.DefaultCallTimeout is past the protocol's maximum", errInvalidSettings)
+	}
+	if MaxReassemblyBodyByteCount < self.ReassemblyMaxBodyByteCount {
+		return fmt.Errorf("%w: ProtocolSettings.ReassemblyMaxBodyByteCount is past the protocol's maximum", errInvalidSettings)
+	}
+	return nil
 }

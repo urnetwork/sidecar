@@ -19,8 +19,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// §4.9: one protobuf package across protocol and protocol/bridge, never connect's "bringyour".
 const testProtoPackage = "urnetwork.sidecar"
 
+// §4.4's files and those the service sections add, each registered by its root-relative path.
 var testProtoFiles = []string{
 	"protocol/acl.proto",
 	"protocol/config.proto",
@@ -71,7 +73,8 @@ func testMessage(t *testing.T, name string) protoreflect.MessageDescriptor {
 }
 
 // §4.9: files register by their root-relative paths in one package, and a duplicate would have panicked
-// before this ran, so reaching it at all says none exists.
+// before this ran, so reaching it at all says none exists. The list is the package's whole, because the lints
+// below that walk it would otherwise pass a new file by never opening it.
 func TestProtoFilesRegisterFromTheRepoRoot(t *testing.T) {
 	for _, path := range testProtoFiles {
 		file := testFile(t, path)
@@ -81,6 +84,15 @@ func TestProtoFilesRegisterFromTheRepoRoot(t *testing.T) {
 		if file.Syntax() != protoreflect.Proto3 {
 			t.Errorf("%s is not proto3", path)
 		}
+	}
+	registered := []string{}
+	protoregistry.GlobalFiles.RangeFilesByPackage(testProtoPackage, func(file protoreflect.FileDescriptor) bool {
+		registered = append(registered, file.Path())
+		return true
+	})
+	slices.Sort(registered)
+	if listed := slices.Sorted(slices.Values(testProtoFiles)); !slices.Equal(registered, listed) {
+		t.Errorf("the package registers %v, and testProtoFiles lists %v", registered, listed)
 	}
 }
 
@@ -119,43 +131,7 @@ func TestBridgeProtosImportOnlyBridgeProtos(t *testing.T) {
 	}
 }
 
-// §6.11 and §22.5: no oneof in envelope, stream or push messages or anything they carry, walking from each
-// message those files declare, so a new message joins the lint by being declared. The allowlist is empty
-// in v0.
-func TestNoOneofInEnvelopeStreamOrPush(t *testing.T) {
-	visited := map[protoreflect.FullName]bool{}
-	var walk func(message protoreflect.MessageDescriptor)
-	walk = func(message protoreflect.MessageDescriptor) {
-		if visited[message.FullName()] {
-			return
-		}
-		visited[message.FullName()] = true
-		if message.Oneofs().Len() != 0 {
-			t.Errorf("%s holds a oneof", message.FullName())
-		}
-		fields := message.Fields()
-		for i := range fields.Len() {
-			if fieldMessage := fields.Get(i).Message(); fieldMessage != nil {
-				walk(fieldMessage)
-			}
-		}
-	}
-	for _, path := range []string{"protocol/envelope.proto", "protocol/stream.proto", "protocol/push.proto"} {
-		messages := testFile(t, path).Messages()
-		if messages.Len() == 0 {
-			t.Fatalf("%s declares no message", path)
-		}
-		for i := range messages.Len() {
-			walk(messages.Get(i))
-		}
-	}
-	// The walk must reach through HeadCheck into protocol/bridge, or it proves less than it claims.
-	if !visited[protoreflect.FullName(testProtoPackage+".AuthPin")] {
-		t.Fatal("the walk never reached AuthPin")
-	}
-}
-
-// §6.11's rule reaches what rides those messages as bytes, which the walk above cannot follow: hints in
+// §6.11's rule reaches what rides those messages as bytes, which registry_test.go's walk cannot follow: hints in
 // PushHint.hint, tickets in StreamOpen.ticket and edge metadata in StreamOpen.metadata. search.proto states the rule
 // for itself, and evs.proto's statements are parsed on every push.
 func TestNoOneofInWhatStreamsAndPushesCarry(t *testing.T) {
@@ -728,6 +704,50 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 		slices.Sort(names)
 		if !slices.Equal(names, c.fields) {
 			t.Errorf("%s shows %v, want %v", c.message, names, c.fields)
+		}
+	}
+}
+
+// FS-72 and D-PHASE-9: what §7's three files hold for a later milestone equals the decided list. Their reservations are
+// declared rather than `reserved`: ServiceSettings.directory is a field older readers ignore, and VersioningRules a
+// record and a type format 1 verifies and applies nothing from. So these files keep no `reserved` statement, and each
+// message a reservation touches holds exactly its decided numbers, lest something undecided freeze beside them at M2.
+func TestConfigReservationsEqualTheDecidedList(t *testing.T) {
+	for _, path := range []string{"protocol/bridge/auth.proto", "protocol/bridge/signed.proto", "protocol/config.proto"} {
+		file := testFile(t, path)
+		enums := file.Enums()
+		for i := range enums.Len() {
+			enum := enums.Get(i)
+			if enum.ReservedRanges().Len() != 0 || enum.ReservedNames().Len() != 0 {
+				t.Errorf("%s reserves numbers no decision lists", enum.FullName())
+			}
+		}
+		messages := file.Messages()
+		for i := range messages.Len() {
+			message := messages.Get(i)
+			if message.ReservedRanges().Len() != 0 || message.ReservedNames().Len() != 0 {
+				t.Errorf("%s reserves numbers no decision lists", message.FullName())
+			}
+		}
+	}
+
+	// Each message the reservations touch, whole: a field added beside these is a number no decision made.
+	decided := map[string]map[protoreflect.Name]protoreflect.FieldNumber{
+		"ServiceSettings": {
+			"team_mail": 1, "stale_leaf_days": 2, "self_admit": 3, "witness_bound_hours": 4, "scim_signer": 5, "directory": 6,
+		},
+		"ServiceDirectorySettings": {"runs": 1, "workers": 2},
+		"VersioningRules":          {"rules": 1},
+		"VersioningRule":           {"kinds": 1, "repo_ids": 2, "path_glob": 3, "size_above_bytes": 4, "versioning": 5},
+	}
+	for name, want := range decided {
+		fields := testMessage(t, name).Fields()
+		got := map[protoreflect.Name]protoreflect.FieldNumber{}
+		for i := range fields.Len() {
+			got[fields.Get(i).Name()] = fields.Get(i).Number()
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("%s holds %v, want %v", name, got, want)
 		}
 	}
 }

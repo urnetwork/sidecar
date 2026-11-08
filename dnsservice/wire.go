@@ -358,7 +358,7 @@ type DnsLbInterface struct {
 	ReportedVersion uint64 `json:"reported_version,omitempty"`
 	// That version's probe name, <digest[0:12]>.map.probe.invalid.
 	ProbeName string `json:"probe_name,omitempty"`
-	// Hosts that version added which this interface has yet to be probed for.
+	// The hosts that version added, which the route probes take once each (§13.4).
 	AddedHosts []string `json:"added_hosts,omitempty"`
 	// Not current for a version over 20 min old, so edges drop it, never all (§13.4).
 	MapStale bool `json:"map_stale,omitempty"`

@@ -10,18 +10,14 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // What an actor reads time from: the shared FakeClock, or a view of it with an offset, as a host whose
-// clock runs fast has (FS-1's evs2).
-type Clock interface {
-	Now() time.Time
-	// Fires once the clock reaches now plus timeout. A timeout that is not positive fires at once.
-	After(timeout time.Duration) <-chan time.Time
-	// Calls function once the clock reaches now plus timeout, on the goroutine that moved the clock.
-	// stop returns false once function has been called or stopped.
-	AfterFunc(timeout time.Duration, function func()) (stop func() bool)
-}
+// clock runs fast has (FS-1's evs2). The root's Clock, so a FakeClock or a view of one goes straight
+// into ServiceHost.Clock and SidecarSettings.Clock (TEST-M0-02).
+type Clock = sidecar.Clock
 
 type clockTimer struct {
 	at   time.Time

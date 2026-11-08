@@ -1,0 +1,68 @@
+{
+	"proofs": [
+		{
+			"name": "refresh",
+			"seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			"method": "GET",
+			"url": "https://api.example/auth/refresh",
+			"token": "synthetic-client-jwt-1",
+			"jti_bytes": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+			"iat": 1767225600,
+			"public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+			"ath": "Tlk1dToHxZNq4yEupi2JZBqo-1TatBwrG0tsHWKd9bM",
+			"htu": "https://api.example/auth/refresh",
+			"jti": "oaGhoaGhoaGhoaGhoaGhoQ",
+			"header": "{\"alg\":\"EdDSA\",\"jwk\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg\"},\"typ\":\"dpop+jwt\"}",
+			"claims": "{\"ath\":\"Tlk1dToHxZNq4yEupi2JZBqo-1TatBwrG0tsHWKd9bM\",\"htm\":\"GET\",\"htu\":\"https://api.example/auth/refresh\",\"iat\":1767225600,\"jti\":\"oaGhoaGhoaGhoaGhoaGhoQ\"}",
+			"proof": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkE2RUh2X1BPRUw0ZGNOMFk1MHZBbVdmazFqQ2JwUTFmSGR5R1pCSlZNYmcifSwidHlwIjoiZHBvcCtqd3QifQ.eyJhdGgiOiJUbGsxZFRvSHhaTnE0eUV1cGkySlpCcW8tMVRhdEJ3ckcwdHNIV0tkOWJNIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS9hdXRoL3JlZnJlc2giLCJpYXQiOjE3NjcyMjU2MDAsImp0aSI6Im9hR2hvYUdob2FHaG9hR2hvYUdob1EifQ.81p8O3aU4BRsicqhf6dDRxHiQbPMRzDiR35oVz8DYO3JIwXGhg5r4qsENj8jnOQN5cOvNavOuj1mZTCmi4s7DA"
+		},
+		{
+			"name": "exchange",
+			"seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			"method": "POST",
+			"url": "https://auth.example/oauth/token",
+			"token": "synthetic-client-jwt-1",
+			"jti_bytes": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+			"iat": 1767225660,
+			"public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+			"ath": "Tlk1dToHxZNq4yEupi2JZBqo-1TatBwrG0tsHWKd9bM",
+			"htu": "https://auth.example/oauth/token",
+			"jti": "srKysrKysrKysrKysrKysg",
+			"header": "{\"alg\":\"EdDSA\",\"jwk\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg\"},\"typ\":\"dpop+jwt\"}",
+			"claims": "{\"ath\":\"Tlk1dToHxZNq4yEupi2JZBqo-1TatBwrG0tsHWKd9bM\",\"htm\":\"POST\",\"htu\":\"https://auth.example/oauth/token\",\"iat\":1767225660,\"jti\":\"srKysrKysrKysrKysrKysg\"}",
+			"proof": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkE2RUh2X1BPRUw0ZGNOMFk1MHZBbVdmazFqQ2JwUTFmSGR5R1pCSlZNYmcifSwidHlwIjoiZHBvcCtqd3QifQ.eyJhdGgiOiJUbGsxZFRvSHhaTnE0eUV1cGkySlpCcW8tMVRhdEJ3ckcwdHNIV0tkOWJNIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXV0aC5leGFtcGxlL29hdXRoL3Rva2VuIiwiaWF0IjoxNzY3MjI1NjYwLCJqdGkiOiJzckt5c3JLeXNyS3lzckt5c3JLeXNnIn0.vtfOpJBP4NvbKrI1xAMXt8OFkoIIqglP3IGLN0wMdPRrxZjbosDzM7dwEXKYqpSI6ts-TMPAFwSmq-tZNgfXAA"
+		},
+		{
+			"name": "auth-client, query and fragment dropped",
+			"seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			"method": "POST",
+			"url": "https://api.example/network/auth-client?synthetic=1\u0026b=2#fragment",
+			"token": "synthetic-client-jwt-2",
+			"jti_bytes": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+			"iat": 1767225720,
+			"public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+			"ath": "5IDWyqVKr0rKfQUFSdYg7yrSg4OZdmlcRqQvqCJMsRs",
+			"htu": "https://api.example/network/auth-client",
+			"jti": "w8PDw8PDw8PDw8PDw8PDww",
+			"header": "{\"alg\":\"EdDSA\",\"jwk\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg\"},\"typ\":\"dpop+jwt\"}",
+			"claims": "{\"ath\":\"5IDWyqVKr0rKfQUFSdYg7yrSg4OZdmlcRqQvqCJMsRs\",\"htm\":\"POST\",\"htu\":\"https://api.example/network/auth-client\",\"iat\":1767225720,\"jti\":\"w8PDw8PDw8PDw8PDw8PDww\"}",
+			"proof": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkE2RUh2X1BPRUw0ZGNOMFk1MHZBbVdmazFqQ2JwUTFmSGR5R1pCSlZNYmcifSwidHlwIjoiZHBvcCtqd3QifQ.eyJhdGgiOiI1SURXeXFWS3IwcktmUVVGU2RZZzd5clNnNE9aZG1sY1JxUXZxQ0pNc1JzIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUvbmV0d29yay9hdXRoLWNsaWVudCIsImlhdCI6MTc2NzIyNTcyMCwianRpIjoidzhQRHc4UER3OFBEdzhQRHc4UER3dyJ9.AqEZZjsKbtJICUtxcFD2GnYo3bqSblXz5K1PLXZM7MnIAAnAonA5w1wu28_1WFQR8Fm_dBF9CM8Bu6XhxVzyDg"
+		},
+		{
+			"name": "another key, a port and an \u0026 in the path",
+			"seed": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+			"method": "GET",
+			"url": "https://api.example:8443/auth/refresh\u0026synthetic",
+			"token": "synthetic-client-jwt-3",
+			"jti_bytes": "000102030405060708090a0b0c0d0e0f",
+			"iat": 1767225780,
+			"public_key": "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0",
+			"ath": "ZL-j0fMhI_msQbw5fNddEaUv2B-QOjTT-SRmLluhX8Q",
+			"htu": "https://api.example:8443/auth/refresh\u0026synthetic",
+			"jti": "AAECAwQFBgcICQoLDA0ODw",
+			"header": "{\"alg\":\"EdDSA\",\"jwk\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"DXVQdU4IAKXSN-71gmA1dmubPloVhoqUCrKJlYeI47A\"},\"typ\":\"dpop+jwt\"}",
+			"claims": "{\"ath\":\"ZL-j0fMhI_msQbw5fNddEaUv2B-QOjTT-SRmLluhX8Q\",\"htm\":\"GET\",\"htu\":\"https://api.example:8443/auth/refresh\u0026synthetic\",\"iat\":1767225780,\"jti\":\"AAECAwQFBgcICQoLDA0ODw\"}",
+			"proof": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkRYVlFkVTRJQUtYU04tNzFnbUExZG11YlBsb1Zob3FVQ3JLSmxZZUk0N0EifSwidHlwIjoiZHBvcCtqd3QifQ.eyJhdGgiOiJaTC1qMGZNaElfbXNRYnc1Zk5kZEVhVXYyQi1RT2pUVC1TUm1MbHVoWDhRIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZTo4NDQzL2F1dGgvcmVmcmVzaCZzeW50aGV0aWMiLCJpYXQiOjE3NjcyMjU3ODAsImp0aSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.W0Boqw7QCRj6falvuMQ8pEuJaiUP2u1OZyTdR36Q-r1ExtM6vozZRBv708oXQHEqnPgKB_Aa2dSlEP1e9YYzDQ"
+		}
+	]
+}

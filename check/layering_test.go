@@ -114,17 +114,18 @@ func (self *repository) clientEngineImportFindings(t testing.TB) []string {
 
 // The closure's reading of the same rule, for a route the import rule cannot see: a client that is
 // allowed to import sidecartest, which is allowed to import an engine. Only server links an engine,
-// and sidecartest's fakes reach no release.
+// and sidecartest's fakes reach no release, server's included, so an engine leg answers only for
+// that.
 func (self *repository) legEngineFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
 	for _, leg := range self.shippedLegs() {
-		if leg.class == classEngine {
-			continue
-		}
 		for _, listed := range self.closure(t, leg) {
 			relative, ours := repositoryRelative(listed.ImportPath)
-			if ours && clientRuleExempt(relative) {
+			if !ours || !clientRuleExempt(relative) {
+				continue
+			}
+			if leg.class != classEngine || !isEnginePackage(relative) {
 				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
 			}
 		}
