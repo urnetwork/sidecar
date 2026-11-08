@@ -234,7 +234,8 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	// (plan-SMTP-preamble-byte-count). BDAT's n is the message's length and DATA's count its stuffed
 	// length, which differ when a line starts with a dot. The mode is chosen above and never by the
 	// count: where it cannot meet the count, nothing goes past EHLO and a new connection declares this
-	// mode's, so an MX offering CHUNKING gets BDAT and is never reported too_large
+	// mode's. So an MX offering CHUNKING gets BDAT unless DATA is forced for interop, and too_large means
+	// DATA was the only mode
 	stuffed := dotStuffed(self.job.Message)
 	count := uint64(len(self.job.Message))
 	if mode == partModeData {
