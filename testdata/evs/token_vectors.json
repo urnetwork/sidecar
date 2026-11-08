@@ -1,0 +1,416 @@
+{
+  "repo_id": "c009c8e84635cf85e09798393fcb8310",
+  "epochs": [
+    {
+      "epoch": 1,
+      "repo_key": "3408b6a049d2843aa0c38e2b301dafd9374c8226639fced0ac689b78881428d7",
+      "path_key": "6e3efc634d29f33c7b34ea22faeceec30d3e2f5ce4ae1dc42782d9834ec73f49",
+      "paths": [
+        {
+          "names": [
+            "524541444d452e6d64"
+          ],
+          "tokens": [
+            "073e0ffc3f5e0c02522aba1150c9b933"
+          ],
+          "keys": [
+            "a47a77b7lygaeurkxiivbsnzgm"
+          ]
+        },
+        {
+          "names": [
+            "737263",
+            "6d61696e2e676f"
+          ],
+          "tokens": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "aeff8c12506340f6c7cce51550107977"
+          ],
+          "keys": [
+            "4alljznwme6hfbarw2h7pondeq",
+            "v37yyesqmnapnr6m4ukvaedzo4"
+          ]
+        },
+        {
+          "names": [
+            "737263",
+            "657673",
+            "746f6b656e2e676f"
+          ],
+          "tokens": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "88b32195b4f94638fb568048066876e2",
+            "d60faab872fa5578bfc2568d606c98dc"
+          ],
+          "keys": [
+            "4alljznwme6hfbarw2h7pondeq",
+            "rczsdfnu7fddr62wqbeam2dw4i",
+            "2yh2vods7jkxrp6ck2gwa3ey3q"
+          ]
+        },
+        {
+          "names": [
+            "636166c3a92e747874"
+          ],
+          "tokens": [
+            "9d0d778dad5bbc55e1c15d0c93e9c7bc"
+          ],
+          "keys": [
+            "tugxpdnnlo6flyoblugjh2ohxq"
+          ]
+        },
+        {
+          "names": [
+            "63616665cc812e747874"
+          ],
+          "tokens": [
+            "92ceee172bfbfb08637f789c86b41500"
+          ],
+          "keys": [
+            "slho4fzl7p5qqy37pcoinnavaa"
+          ]
+        },
+        {
+          "names": [
+            "62696e",
+            "fffe20726177"
+          ],
+          "tokens": [
+            "c2a11ec14dd330cd704ddd978055ef11",
+            "399bd0ddac8813e135e502ba180b760a"
+          ],
+          "keys": [
+            "ykqr5qkn2mym24cn3wlyavppce",
+            "hgn5bxnmraj6cnpfak5bqc3wbi"
+          ]
+        }
+      ]
+    },
+    {
+      "epoch": 2,
+      "repo_key": "0e1feac1f12e20aab8a9d89c7030a1ce82644d77b91801bf9b137d297c2729ae",
+      "path_key": "5b1930c29282032b9e3cd573dd87126c0bcd4444ff1aead116a3b9fa930b003b",
+      "paths": [
+        {
+          "names": [
+            "524541444d452e6d64"
+          ],
+          "tokens": [
+            "ef5b75bdab20c995d60c5a1dc9f081b0"
+          ],
+          "keys": [
+            "55nxlpnledezlvqmlio4t4ebwa"
+          ]
+        },
+        {
+          "names": [
+            "737263",
+            "6d61696e2e676f"
+          ],
+          "tokens": [
+            "f15819ea9cbd460c712ca8c126e3b627",
+            "45cb70a74751fa58a50f7fcae23ac556"
+          ],
+          "keys": [
+            "6fmbt2u4xvday4jmvdasny5we4",
+            "ixfxbj2hkh5frjipp7foeowfky"
+          ]
+        },
+        {
+          "names": [
+            "737263",
+            "657673",
+            "746f6b656e2e676f"
+          ],
+          "tokens": [
+            "f15819ea9cbd460c712ca8c126e3b627",
+            "c657ccf93745aff0ac4d711d5a8c2187",
+            "f5176e7983bad8652ac31f09e6ac3ee5"
+          ],
+          "keys": [
+            "6fmbt2u4xvday4jmvdasny5we4",
+            "yzl4z6jxiwx7blcnoeovvdbbq4",
+            "6ulw46mdxlmgkkwdd4e6nlb64u"
+          ]
+        },
+        {
+          "names": [
+            "636166c3a92e747874"
+          ],
+          "tokens": [
+            "1d40c017359e49171387dc98f30aa89f"
+          ],
+          "keys": [
+            "dvamafzvtzeroe4h3smpgcvit4"
+          ]
+        },
+        {
+          "names": [
+            "63616665cc812e747874"
+          ],
+          "tokens": [
+            "946d46ff1115f0d21af91c08a86b9194"
+          ],
+          "keys": [
+            "srwun7yrcxynegxzdqekq24rsq"
+          ]
+        },
+        {
+          "names": [
+            "62696e",
+            "fffe20726177"
+          ],
+          "tokens": [
+            "51554d0a205309e796ba3ab63f695f98",
+            "cbeb86c326c7c0fdbe46ed27b7b8c1c1"
+          ],
+          "keys": [
+            "kfku2crakme6pfv2hk3d62k7ta",
+            "zpvynqzgy7ap3psg5ut3pogbye"
+          ]
+        }
+      ]
+    }
+  ],
+  "refs": {
+    "first_repo_key": "3408b6a049d2843aa0c38e2b301dafd9374c8226639fced0ac689b78881428d7",
+    "ref_key": "4e7ba64fb7f86e5b286bc1340878cce12c5ea792c1b20af73edc823512737ff4",
+    "named": [
+      {
+        "name": "6d61696e",
+        "ref_id": "c0e5cf775841f814e7c06b985f264bff"
+      },
+      {
+        "name": "72656c65617365",
+        "ref_id": "575591718bbd5c70aa6b3d233f690d92"
+      },
+      {
+        "name": "726566732f746167732f76312e30",
+        "ref_id": "c691c3ba975dfb457fad33b39c8e0218"
+      },
+      {
+        "name": "75722f696e646578",
+        "ref_id": "9a6aea1abd88d754751b4d064bc25287"
+      },
+      {
+        "name": "75722f6c6673",
+        "ref_id": "e611fae6e814512ccc009eb091f224fb"
+      },
+      {
+        "name": "6361726473",
+        "ref_id": "f2a39efff6fa0c6b1d3ee46efe6f1817"
+      },
+      {
+        "name": "75722f37323935363339392d346535332d646531392d373138332d6632633635353032393337362f73637261746368",
+        "ref_id": "db8529d1345c2775c4a70bdc1809ef64"
+      }
+    ],
+    "deposits": [
+      {
+        "sidecar_id": "fb8551ee5befb1c37ff6a3746eb4f950",
+        "ref_id": "ef344088e671224a0c7660f1c60ca440"
+      },
+      {
+        "sidecar_id": "868837f5ef8ded78aabd3e1c6ef79a37",
+        "ref_id": "63ee2b8506f102c992be4470bd40da1f"
+      }
+    ],
+    "erasure_ref_id": "4f13f238d0877c5f866d7554bf6d01ea",
+    "git_refs": [
+      {
+        "git_ref": "refs/heads/main",
+        "ref_name": "main"
+      },
+      {
+        "git_ref": "refs/heads/feature/x",
+        "ref_name": "feature/x"
+      },
+      {
+        "git_ref": "refs/tags/v1.0",
+        "ref_name": "refs/tags/v1.0"
+      }
+    ],
+    "owned": [
+      {
+        "sidecar_id": "729563994e53de197183f2c655029376",
+        "rest": "scratch",
+        "name": "ur/72956399-4e53-de19-7183-f2c655029376/scratch"
+      },
+      {
+        "sidecar_id": "729563994e53de197183f2c655029376",
+        "rest": "main",
+        "name": "ur/72956399-4e53-de19-7183-f2c655029376/main",
+        "time_ms": 1767225600000,
+        "conflict_name": "ur/72956399-4e53-de19-7183-f2c655029376/conflicts/main/20260101T000000Z"
+      }
+    ]
+  },
+  "digests": [
+    {
+      "changed": [
+        [
+          "e016b4e5b6613c728411b68ff7b9a324",
+          "aeff8c12506340f6c7cce51550107977"
+        ]
+      ],
+      "digest": "0002000000040000",
+      "queries": [
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "aeff8c12506340f6c7cce51550107977"
+          ],
+          "matches": true,
+          "may_change": true
+        },
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "88b32195b4f94638fb568048066876e2",
+            "d60faab872fa5578bfc2568d606c98dc"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "27c4089268284610721a5050e26fa046",
+            "3508da4c425881c6c98ee26a09a15b19"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "073e0ffc3f5e0c02522aba1150c9b933"
+          ],
+          "matches": false,
+          "may_change": false
+        }
+      ]
+    },
+    {
+      "changed": [
+        [
+          "e016b4e5b6613c728411b68ff7b9a324",
+          "88b32195b4f94638fb568048066876e2",
+          "d60faab872fa5578bfc2568d606c98dc"
+        ],
+        [
+          "073e0ffc3f5e0c02522aba1150c9b933"
+        ]
+      ],
+      "digest": "8000080002000001",
+      "queries": [
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "aeff8c12506340f6c7cce51550107977"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "88b32195b4f94638fb568048066876e2",
+            "d60faab872fa5578bfc2568d606c98dc"
+          ],
+          "matches": true,
+          "may_change": true
+        },
+        {
+          "token_path": [
+            "27c4089268284610721a5050e26fa046",
+            "3508da4c425881c6c98ee26a09a15b19"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "073e0ffc3f5e0c02522aba1150c9b933"
+          ],
+          "matches": true,
+          "may_change": true
+        }
+      ]
+    },
+    {
+      "changed": [
+        [
+          "e016b4e5b6613c728411b68ff7b9a324",
+          "88b32195b4f94638fb568048066876e2",
+          "d60faab872fa5578bfc2568d606c98dc"
+        ],
+        [
+          "e016b4e5b6613c728411b68ff7b9a324",
+          "88b32195b4f94638fb568048066876e2",
+          "cf34132dae1abcde81844758609e1407"
+        ]
+      ],
+      "covering": [
+        [
+          "e016b4e5b6613c728411b68ff7b9a324",
+          "88b32195b4f94638fb568048066876e2"
+        ]
+      ],
+      "digest": "8004100000040401",
+      "queries": [
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "aeff8c12506340f6c7cce51550107977"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "e016b4e5b6613c728411b68ff7b9a324",
+            "88b32195b4f94638fb568048066876e2",
+            "d60faab872fa5578bfc2568d606c98dc"
+          ],
+          "matches": true,
+          "may_change": true
+        },
+        {
+          "token_path": [
+            "27c4089268284610721a5050e26fa046",
+            "3508da4c425881c6c98ee26a09a15b19"
+          ],
+          "matches": false,
+          "may_change": false
+        },
+        {
+          "token_path": [
+            "073e0ffc3f5e0c02522aba1150c9b933"
+          ],
+          "matches": false,
+          "may_change": false
+        }
+      ]
+    }
+  ]
+}
