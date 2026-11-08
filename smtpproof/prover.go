@@ -452,6 +452,12 @@ func (self *proverRun) sendData(ctx context.Context, headerBlock []byte, body []
 	}
 	for {
 		last := len(runs) == 0
+		// pi3 follows the 354, so only later parts can find a record here
+		if reply, err := self.drainServerRecords(); err != nil {
+			return nil, err
+		} else if reply != nil {
+			return &sidecar.SmtpProofResult{Mode: partModeData, RefusedCode: reply.code}, nil
+		}
 		var sealed []*tlsSealedRecord
 		var plaintexts [][]byte
 		for _, content := range contents {
@@ -528,36 +534,68 @@ func (self *proverRun) awaitReplies(ctx context.Context, count int) ([]*smtpRepl
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		if event.err != nil {
-			return nil, event.err
-		}
-		record := event.record
-		self.serverBytes += len(record.raw)
-		if self.settings.MaxServerBytes < self.serverBytes {
-			return nil, errors.New("smtpproof: MX sent more than any part could cover")
-		}
-		plaintext, err := self.plaintextOf(record)
+		ticket, err := self.takeServerRecord(event)
 		if err != nil {
 			return nil, err
 		}
-		self.records = append(self.records, &proverServerRecord{
-			public:    &partRecord{seq: record.seq, raw: record.raw},
-			plaintext: plaintext,
-		})
-		switch record.recordType {
-		case tlsRecordApplicationData:
-			self.stream = append(self.stream, record.content...)
-		case tlsRecordHandshake:
-			if len(record.content) == 0 || record.content[0] != tlsHandshakeNewSessionTicket {
-				return nil, errors.New("smtpproof: MX sent a handshake record other than a ticket")
+		if ticket && self.lastPart != nil && self.lastPart.Mode != partModeNone && 3 <= self.lastPart.Index {
+			if err := self.proveAgain(ctx); err != nil {
+				return nil, err
 			}
-			if self.lastPart != nil && self.lastPart.Mode != partModeNone && 3 <= self.lastPart.Index {
-				if err := self.proveAgain(ctx); err != nil {
-					return nil, err
-				}
+		}
+	}
+}
+
+// Keeps a server record for the parts to cover, and says whether it is a ticket, which holds no reply.
+func (self *proverRun) takeServerRecord(event *proverServerEvent) (bool, error) {
+	if event.err != nil {
+		return false, event.err
+	}
+	record := event.record
+	self.serverBytes += len(record.raw)
+	if self.settings.MaxServerBytes < self.serverBytes {
+		return false, errors.New("smtpproof: MX sent more than any part could cover")
+	}
+	plaintext, err := self.plaintextOf(record)
+	if err != nil {
+		return false, err
+	}
+	self.records = append(self.records, &proverServerRecord{
+		public:    &partRecord{seq: record.seq, raw: record.raw},
+		plaintext: plaintext,
+	})
+	switch record.recordType {
+	case tlsRecordApplicationData:
+		self.stream = append(self.stream, record.content...)
+		return false, nil
+	case tlsRecordHandshake:
+		if len(record.content) == 0 || record.content[0] != tlsHandshakeNewSessionTicket {
+			return false, errors.New("smtpproof: MX sent a handshake record other than a ticket")
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("smtpproof: MX sent a record of type %d", record.recordType)
+	}
+}
+
+// Takes every server record the reader already holds, without waiting, so the next DATA part covers
+// them: server records still flow during DATA, and each later part covers those past the previous
+// count (§14.5). Otherwise a late ticket would hold every later part's records at the edge (E3 step 5)
+// until the end of the message, past the MX's timeout. A reply during the body is the MX ending the
+// send, and is returned. A record still on its way is the next part's, or the last part's again.
+func (self *proverRun) drainServerRecords() (*smtpReply, error) {
+	for {
+		select {
+		case event := <-self.serverIn:
+			if _, err := self.takeServerRecord(event); err != nil {
+				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("smtpproof: MX sent a record of type %d", record.recordType)
+			if replies, consumed := splitReplies(self.stream, 1); replies != nil {
+				self.stream = self.stream[consumed:]
+				return replies[0], nil
+			}
+			return nil, nil
 		}
 	}
 }
