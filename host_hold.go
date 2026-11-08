@@ -69,6 +69,7 @@ const (
 	HoldKindReport2258a HoldKind = "report_2258a"
 )
 
+// Whether this build knows the kind's deadline.
 func (self HoldKind) known() bool {
 	return self == HoldKindPreserve2703f || self == HoldKindReport2258a
 }
@@ -342,6 +343,7 @@ type HoldSetSettings struct {
 	CacheNetworkCount int
 }
 
+// §11.13's 5 s reread.
 func DefaultHoldSetSettings() *HoldSetSettings {
 	return &HoldSetSettings{
 		RereadInterval:    5 * time.Second,
