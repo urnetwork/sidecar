@@ -2,11 +2,16 @@
 
 // §4.7's hygiene row, the module files: replaces other than §4.7's, and the go and tool lines of its
 // block. A replace is the one go.mod line that decides where code comes from without showing in a
-// version, and Go does not inherit one, so each module's list is checked on its own.
+// version, and Go does not inherit one, so each module's list is checked on its own. Beside them, a
+// go.work, and the one shape §4.9's release needs of the modules it never tags: one package each,
+// which no file names by its path.
 
 package check
 
 import (
+	"io/fs"
+	"maps"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -153,6 +158,83 @@ func (self *repository) workFileFindings(t testing.TB) []string {
 	findings := []string{}
 	for _, match := range matches {
 		findings = append(findings, findingf("%s changes what builds resolve, out of the rules' sight", self.displayPath(match)))
+	}
+	return findings
+}
+
+// The modules a release leaves unversioned in place, never tagged (§4.9).
+var untaggedModuleNames = []string{"cli", "mlsinterop"}
+
+// A quoted path of this repository, as the release's rewrite finds one, up to what ends a path: a
+// Makefile's go install path@version, say, or a second word in the quotes.
+var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sidecarBasePath) + `[^"\s@]*)`)
+
+// cli and mlsinterop each stay one package, and no file names either by its path. The release
+// rewrites every quoted path under the root's to .../sidecar/v2026 in every .go file and Makefile
+// (build/all/run.sh's go_edit_require_subpackages, which sidecar_release_edit runs), and these modules
+// keep their unversioned paths. So a package beside a module's own is one the rewrite would import
+// as nothing provides, and so is the module's own package wherever a file names it: an external test
+// of mlsinterop, in package mlsinterop_test, would import .../sidecar/v2026/mlsinterop. Each file is
+// read as the rewrite leaves it, which on a release branch is as it stands.
+func (self *repository) untaggedSubpackageFindings(t testing.TB) []string {
+	t.Helper()
+	packageNames := map[string]bool{}
+	filePaths := []string{}
+	for _, file := range self.sourceFiles(t) {
+		filePaths = append(filePaths, file.path)
+		for _, name := range untaggedModuleNames {
+			if strings.HasPrefix(file.packageName, name+"/") {
+				packageNames[file.packageName] = true
+			}
+		}
+	}
+	findings := []string{}
+	for _, packageName := range slices.Sorted(maps.Keys(packageNames)) {
+		module, _, _ := strings.Cut(packageName, "/")
+		findings = append(findings, findingf("%s: a package beside %s's own, which the release's rewrite would import as one under .../sidecar/v2026 that nothing provides", packageName, module))
+	}
+	// the rewrite's other files, which find(1) names by -iname 'Makefile'
+	err := filepath.WalkDir(self.topDirectory, func(walkPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if skippedDirectoryNames[entry.Name()] && walkPath != self.topDirectory {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.EqualFold(entry.Name(), "Makefile") {
+			filePaths = append(filePaths, walkPath)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := self.releaseSuffix
+	if suffix == "" {
+		suffix = releaseSuffix
+	}
+	for _, filePath := range filePaths {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// smtpproof's pass runs before the root's, as sidecar_release_edit has it
+		rewritten := releaseRewritePath(string(data), sidecarBasePath+"/smtpproof", suffix)
+		rewritten = releaseRewritePath(rewritten, sidecarBasePath, suffix)
+		for index, line := range strings.Split(rewritten, "\n") {
+			for _, match := range quotedRepositoryPathPattern.FindAllStringSubmatch(line, -1) {
+				quotedPath := match[1]
+				base := firstPartyBase(quotedPath)
+				for _, name := range untaggedModuleNames {
+					if underPath(base, sidecarBasePath+"/"+name) && quotedPath != base {
+						findings = append(findings, findingf("%s:%d: the release's rewrite makes this %q, which nothing provides: %s keeps its unversioned path", self.displayPath(filePath), index+1, quotedPath, name))
+					}
+				}
+			}
+		}
 	}
 	return findings
 }

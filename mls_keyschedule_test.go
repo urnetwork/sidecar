@@ -6,6 +6,7 @@ package sidecar
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -228,9 +229,9 @@ func TestMlsGroupContextRefusesOtherVersions(t *testing.T) {
 func TestMlsExtensionListRefusesARepeatedType(t *testing.T) {
 	encoder := &mlsEncoder{}
 	encoder.writeExtensions([]mlsExtension{
-		{extensionType: 5, extensionData: []byte("a")},
+		{extensionType: 1, extensionData: []byte("a")},
 		{extensionType: 6, extensionData: []byte("b")},
-		{extensionType: 5, extensionData: []byte("c")},
+		{extensionType: 1, extensionData: []byte("c")},
 	})
 	encoded, err := encoder.finish()
 	if err != nil {
@@ -240,6 +241,67 @@ func TestMlsExtensionListRefusesARepeatedType(t *testing.T) {
 	decoder.readExtensions()
 	if err := decoder.finish(); !errors.Is(err, errMlsMalformed) {
 		t.Fatal(err)
+	}
+}
+
+// §10.4 refuses external senders, so an external_senders extension is refused in any list, read or
+// written: neither a GroupContext nor a GroupContextExtensions proposal brings one in, and nothing here
+// writes one out.
+func TestMlsExternalSendersAreRefusedInEveryList(t *testing.T) {
+	externalSenders := mlsExtension{extensionType: mlsExtensionTypeExternalSenders, extensionData: []byte("senders")}
+	list := &mlsEncoder{}
+	list.writeVectorOf(func(elements *mlsEncoder) {
+		externalSenders.encode(elements)
+	})
+	encodedList, err := list.finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoder := &mlsDecoder{remaining: encodedList}
+	decoder.readExtensions()
+	if err := decoder.finish(); !errors.Is(err, errMlsRefused) {
+		t.Errorf("a list: %v", err)
+	}
+	proposal := &mlsEncoder{}
+	proposal.writeUint16(mlsProposalTypeGroupContextExtensions)
+	proposal.writeFixed(encodedList)
+	if err := mlsUnmarshal(proposal.encoded, &mlsProposal{}); !errors.Is(err, errMlsRefused) {
+		t.Errorf("a proposal: %v", err)
+	}
+	groupContext := &mlsGroupContext{
+		cipherSuite:             mlsSuite.value,
+		groupId:                 []byte("group"),
+		treeHash:                []byte("tree"),
+		confirmedTranscriptHash: []byte("transcript"),
+	}
+	encodedContext, err := mlsMarshal(groupContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the extensions come last, here an empty list of one byte
+	withSenders := append(slices.Clone(encodedContext[:len(encodedContext)-1]), encodedList...)
+	if err := mlsUnmarshal(withSenders, &mlsGroupContext{}); !errors.Is(err, errMlsRefused) {
+		t.Errorf("a GroupContext: %v", err)
+	}
+
+	client := mlsNewTestClient(t, mlsTestSuiteX25519, "client")
+	keyPackage := *client.keyPackage
+	leafNode := client.keyPackage.leafNode
+	values := []mlsEncodable{groupContext, &mlsProposal{proposalType: mlsProposalTypeGroupContextExtensions}, &keyPackage, &leafNode}
+	for index, value := range values {
+		if _, err := mlsMarshal(value); err != nil {
+			t.Fatalf("value %d without external senders: %v", index, err)
+		}
+	}
+	groupContext.extensions = []mlsExtension{externalSenders}
+	values[1].(*mlsProposal).extensions = []mlsExtension{externalSenders}
+	keyPackage.extensions = []mlsExtension{externalSenders}
+	leafNode.extensions = []mlsExtension{externalSenders}
+	for index, value := range values {
+		if _, err := mlsMarshal(value); !errors.Is(err, errMlsRefused) {
+			t.Errorf("value %d encoded: %v", index, err)
+		}
 	}
 }
 

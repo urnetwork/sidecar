@@ -35,7 +35,6 @@ func (self *FakeRedis) RegisterScript(name string, function FakeRedisScriptFunct
 
 func (self *FakeRedis) RunScript(ctx context.Context, script *sidecar.RedisScript, keys []string, args []string) (*sidecar.RedisReply, error) {
 	var reply *sidecar.RedisReply
-	publishedKeys := []string{}
 	err := self.call(ctx, "script:"+script.Name, keys, func() error {
 		twin, ok := self.twins[script.Name]
 		if !ok {
@@ -44,14 +43,10 @@ func (self *FakeRedis) RunScript(ctx context.Context, script *sidecar.RedisScrip
 		call := &FakeRedisScriptCall{redis: self, Keys: slices.Clone(keys), Args: slices.Clone(args)}
 		var err error
 		reply, err = twin(call)
-		publishedKeys = call.publishedKeys
 		return err
 	})
 	if err != nil {
 		return nil, err
-	}
-	for _, key := range publishedKeys {
-		self.subscriber.publish(key)
 	}
 	return reply, nil
 }
@@ -63,8 +58,6 @@ type FakeRedisScriptCall struct {
 	Keys []string
 	// ARGV.
 	Args []string
-	// keys to notify once the fake's lock is released
-	publishedKeys []string
 }
 
 var errRedisKeyNotDeclared = errors.New("ERR Script attempted to access a key not in KEYS")
@@ -101,7 +94,6 @@ func (self *FakeRedisScriptCall) Set(key string, value []byte, ttl time.Duration
 		return err
 	}
 	self.redis.setWithLock(key, value, ttl)
-	self.publishedKeys = append(self.publishedKeys, key)
 	return nil
 }
 
@@ -109,12 +101,7 @@ func (self *FakeRedisScriptCall) Increment(key string, ttl time.Duration) (int64
 	if err := self.check(key); err != nil {
 		return 0, err
 	}
-	value, err := self.redis.incrementWithLock(key, ttl)
-	if err != nil {
-		return 0, err
-	}
-	self.publishedKeys = append(self.publishedKeys, key)
-	return value, nil
+	return self.redis.incrementWithLock(key, ttl)
 }
 
 func (self *FakeRedisScriptCall) Delete(key string) error {
@@ -123,7 +110,7 @@ func (self *FakeRedisScriptCall) Delete(key string) error {
 	}
 	if _, exists := self.redis.entries[key]; exists {
 		delete(self.redis.entries, key)
-		self.publishedKeys = append(self.publishedKeys, key)
+		self.redis.subscriber.publish(key)
 	}
 	return nil
 }
@@ -138,6 +125,7 @@ func (self *FakeRedisScriptCall) Expire(key string, ttl time.Duration) (bool, er
 	entry, exists := self.redis.entries[key]
 	if exists {
 		self.redis.setExpiryWithLock(key, entry, ttl)
+		self.redis.subscriber.publish(key)
 	}
 	return exists, nil
 }

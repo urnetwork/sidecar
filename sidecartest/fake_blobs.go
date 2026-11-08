@@ -214,9 +214,10 @@ func (self *FakeBlobs) Violations() []string {
 	return slices.Clone(self.violations)
 }
 
-// Delivers parked requests under keyPrefix on clusterId, in the order they were parked: each reaches
-// the store now and is judged now. Returns how many arrived, so a schedule can tell a request it means
-// to deliver from one that never parked.
+// Delivers parked requests under keyPrefix on clusterId, in the order they were parked, each to its
+// fate: one in the network reaches the store now and is judged now, one the store took lands, and one
+// armed never to land is lost. Returns how many arrived, so a schedule can tell a request it means to
+// deliver from one that never parked.
 func (self *FakeBlobs) DeliverDelayed(clusterId string, keyPrefix string) int {
 	cluster := self.clusters[clusterId]
 	cluster.stateLock.Lock()
@@ -224,7 +225,7 @@ func (self *FakeBlobs) DeliverDelayed(clusterId string, keyPrefix string) int {
 	delivered := 0
 	for _, request := range slices.Clone(cluster.delayed) {
 		if strings.HasPrefix(request.key, keyPrefix) {
-			cluster.landWithLock(request)
+			cluster.settleRequestWithLock(request)
 			delivered += 1
 		}
 	}
@@ -351,12 +352,21 @@ func (self *fakeBlobCluster) settleWithLock(matches func(key string) bool) {
 		if request.delay == DelayInNetwork || !matches(request.key) {
 			continue
 		}
-		if request.delay == DelayNeverLands {
-			self.loseWithLock(request)
-			continue
-		}
-		self.landWithLock(request)
+		self.settleRequestWithLock(request)
 	}
+}
+
+// Settles one parked request to its fate, unless something settled it first: one armed never to land
+// is lost, and any other lands.
+func (self *fakeBlobCluster) settleRequestWithLock(request *delayedBlobRequest) {
+	if !slices.Contains(self.delayed, request) {
+		return
+	}
+	if request.delay == DelayNeverLands {
+		self.loseWithLock(request)
+		return
+	}
+	self.landWithLock(request)
 }
 
 func (self *fakeBlobCluster) removeDelayedWithLock(request *delayedBlobRequest) {

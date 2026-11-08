@@ -17,7 +17,8 @@ import (
 	"testing"
 )
 
-// Both move with the root module on a release branch, so each is relative to it.
+// The list moves with the root module on a release branch, so it is relative to the module. design/
+// stays at the repository's top, beside that module (§4.9), so the section is relative to the top.
 const (
 	metadataListFileName    = "metadata_list.yml"
 	metadataListSectionPath = "design/source/sections/02-TRUST.md"
@@ -63,9 +64,10 @@ func firstDifferentLine(a []byte, b []byte) int {
 	return 1 + min(len(aLines), len(bLines))
 }
 
-// Whether the list in moduleDirectory is §2.8's block.
-func metadataListFindings(moduleDirectory string) []string {
-	section, err := os.ReadFile(filepath.Join(moduleDirectory, metadataListSectionPath))
+// Whether the list in moduleDirectory is the block of §2.8 in topDirectory. The two are one directory
+// in development and differ on a release branch.
+func metadataListFindings(topDirectory string, moduleDirectory string) []string {
+	section, err := os.ReadFile(filepath.Join(topDirectory, metadataListSectionPath))
 	if err != nil {
 		return []string{findingf("reading §2.8: %v", err)}
 	}
@@ -84,7 +86,8 @@ func metadataListFindings(moduleDirectory string) []string {
 }
 
 func TestMetadataListIsSection2sBlock(t *testing.T) {
-	failFindings(t, "metadata list", metadataListFindings(openThisCheckout(t).moduleDirectory))
+	repository := openThisCheckout(t)
+	failFindings(t, "metadata list", metadataListFindings(repository.topDirectory, repository.moduleDirectory))
 }
 
 // A module directory holding what make metadata reads, and a list it would write.
@@ -105,7 +108,22 @@ func plantMetadataList(t *testing.T) string {
 }
 
 func TestMetadataListPassesTheBlockItself(t *testing.T) {
-	failFindings(t, "metadata list", metadataListFindings(plantMetadataList(t)))
+	directory := plantMetadataList(t)
+	failFindings(t, "metadata list", metadataListFindings(directory, directory))
+}
+
+// A release branch's shape: the section at the top, and the list one directory down in v2026/.
+func TestMetadataListReadsTheSectionBesideAReleaseModule(t *testing.T) {
+	topDirectory := plantMetadataList(t)
+	moduleDirectory := filepath.Join(topDirectory, "v2026")
+	if err := os.Mkdir(moduleDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(topDirectory, metadataListFileName), filepath.Join(moduleDirectory, metadataListFileName)); err != nil {
+		t.Fatal(err)
+	}
+	failFindings(t, "metadata list", metadataListFindings(topDirectory, moduleDirectory))
+	wantFindings(t, metadataListFindings(moduleDirectory, moduleDirectory), "reading §2.8")
 }
 
 func TestMetadataListRefusesAHandEdit(t *testing.T) {
@@ -113,7 +131,7 @@ func TestMetadataListRefusesAHandEdit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, metadataListFileName), []byte("# metadata_list.yml v1\nevs-1:\n  withdrawn: edited\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantFindings(t, metadataListFindings(directory), "differs from §2.8's block at line 3")
+	wantFindings(t, metadataListFindings(directory, directory), "differs from §2.8's block at line 3")
 }
 
 func TestMetadataListRefusesAnEditedComment(t *testing.T) {
@@ -121,7 +139,7 @@ func TestMetadataListRefusesAnEditedComment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, metadataListFileName), []byte("# metadata_list.yml v2\nevs-1:\n  withdrawn: gone\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantFindings(t, metadataListFindings(directory), "differs from §2.8's block at line 1")
+	wantFindings(t, metadataListFindings(directory, directory), "differs from §2.8's block at line 1")
 }
 
 func TestMetadataListRefusesAMissingList(t *testing.T) {
@@ -129,7 +147,7 @@ func TestMetadataListRefusesAMissingList(t *testing.T) {
 	if err := os.Remove(filepath.Join(directory, metadataListFileName)); err != nil {
 		t.Fatal(err)
 	}
-	wantFindings(t, metadataListFindings(directory), "make metadata writes it")
+	wantFindings(t, metadataListFindings(directory, directory), "make metadata writes it")
 }
 
 func TestMetadataListRefusesASectionWithNoBlock(t *testing.T) {
@@ -137,7 +155,7 @@ func TestMetadataListRefusesASectionWithNoBlock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, metadataListSectionPath), []byte("### 2.8\n\nNo list here.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantFindings(t, metadataListFindings(directory), "holds no fenced block")
+	wantFindings(t, metadataListFindings(directory, directory), "holds no fenced block")
 }
 
 // A block §2.8 opened and never closed is no block.
@@ -146,7 +164,7 @@ func TestMetadataListRefusesAnUnclosedBlock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, metadataListSectionPath), []byte("**The list**\n\n```yaml\nevs-1:\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantFindings(t, metadataListFindings(directory), "holds no fenced block")
+	wantFindings(t, metadataListFindings(directory, directory), "holds no fenced block")
 }
 
 // The real Makefile on a planted section, so make metadata and this rule are shown to read one block.
@@ -175,7 +193,7 @@ func TestMakeMetadataRestoresAHandEdit(t *testing.T) {
 	if err := runMakeMetadata(t, directory); err != nil {
 		t.Fatal(err)
 	}
-	failFindings(t, "metadata list", metadataListFindings(directory))
+	failFindings(t, "metadata list", metadataListFindings(directory, directory))
 }
 
 // With no block to copy it fails, and an empty list never replaces a real one.

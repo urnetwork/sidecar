@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -1507,7 +1508,11 @@ func TestRecordMdReferencesResolve(t *testing.T) {
 		}
 	}
 
+	// a release branch keeps DESIGN.md at the repository's top, beside the module moved into v2026/
 	design, err := os.ReadFile("DESIGN.md")
+	if errors.Is(err, os.ErrNotExist) {
+		design, err = os.ReadFile("../DESIGN.md")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

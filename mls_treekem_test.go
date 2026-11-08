@@ -10,6 +10,7 @@ import (
 	"crypto/hpke"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -207,15 +208,18 @@ func (self *mlsTestGroup) commit(committer mlsLeafIndex, removed []mlsLeafIndex,
 			if err := tree.mergeUpdatePath(committer, updatePath, newLeaves, self.validation); err != nil {
 				t.Fatalf("leaf %d merging leaf %d's path: %v", leaf, committer, err)
 			}
-			commitSecret, err := member.secrets.receiveUpdatePath(tree, committer, updatePath, self.provisionalContext(tree), newLeaves)
+			received, err := member.secrets.receiveUpdatePath(tree, committer, updatePath, self.provisionalContext(tree), newLeaves)
 			if err != nil {
 				t.Fatalf("leaf %d receiving leaf %d's path: %v", leaf, committer, err)
 			}
-			if !bytes.Equal(commitSecret, prepared.commitSecret) {
+			if !bytes.Equal(received.commitSecret, prepared.commitSecret) {
 				t.Fatalf("leaf %d: commit secret differs from leaf %d's", leaf, committer)
 			}
+			// adopt alone must leave the secrets matching the tree, which checkInvariants holds it to
+			received.adopt(member.secrets)
+		} else {
+			member.secrets.forgetStaleKeys(tree)
 		}
-		member.secrets.forgetStaleKeys(tree)
 		member.tree = tree
 	}
 	for _, leaf := range removed {
@@ -224,8 +228,9 @@ func (self *mlsTestGroup) commit(committer mlsLeafIndex, removed []mlsLeafIndex,
 
 	if withPath {
 		prepared.adopt(committerMember.secrets)
+	} else {
+		committerMember.secrets.forgetStaleKeys(committerTree)
 	}
-	committerMember.secrets.forgetStaleKeys(committerTree)
 	committerMember.tree = committerTree
 
 	// Welcome: the tree on the wire, then the path secret at the lowest node shared with the committer
@@ -809,6 +814,172 @@ func TestMlsOutdatedKeysAreForgotten(t *testing.T) {
 	}
 }
 
+// A commit can still be refused once its path checks, by its confirmation tag, which needs the
+// commit_secret the path gives (RFC §12.4.2). The receiver's keys must then be as they were, so the
+// epoch's real commit still opens for it.
+func TestMlsRefusedCommitLeavesTheReceiversKeys(t *testing.T) {
+	for _, suite := range mlsTestSuites {
+		group := mlsNewMergedTestGroup(t, suite, 4)
+		receiver := group.members[3]
+		before := receiver.secrets.cloneForTest()
+
+		refusedPath, _, refusedTree := mlsPreparedCommit(t, group, 2)
+		if err := refusedTree.mergeUpdatePath(2, refusedPath, nil, group.validation); err != nil {
+			t.Fatal(err)
+		}
+		received, err := receiver.secrets.receiveUpdatePath(refusedTree, 2, refusedPath, group.provisionalContext(refusedTree), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(received.commitSecret) == 0 || len(received.nodeIndexKeys) == 0 {
+			t.Fatalf("suite %#x: the path gave nothing to adopt", suite.value)
+		}
+		// the commit is refused here, so nothing is adopted
+		if !maps.Equal(receiver.secrets.nodeIndexKeys, before.nodeIndexKeys) {
+			t.Fatalf("suite %#x: a commit never adopted changed the receiver's keys", suite.value)
+		}
+
+		// the epoch's real commit, which every member must still process
+		group.commit(0, nil, 0, true)
+	}
+}
+
+// A Remove in the same commit blanks a node the committer's path does not fill again: leaf 3's going
+// blanks the node over leaves 2 and 3, off leaf 0's path. Leaf 2 held its key, and adopting the path
+// must drop it.
+func TestMlsReceiverForgetsKeysTheCommitBlanks(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsTestSuiteX25519, 4)
+	receiver := group.members[2]
+	shared := mlsCommonAncestor(mlsLeafIndex(2).node(), mlsLeafIndex(3).node())
+	if receiver.secrets.nodeIndexKeys[shared] == nil {
+		t.Fatal("no key to forget")
+	}
+	group.commit(0, []mlsLeafIndex{3}, 0, true)
+	if _, held := receiver.secrets.nodeIndexKeys[shared]; held {
+		t.Fatalf("leaf 2 kept node %d's key, which the Remove blanked", shared)
+	}
+}
+
+// The committer's side of the same: removing its sibling blanks their parent, which its filtered path
+// then skips, so adopting its own path must drop the parent's old key.
+func TestMlsCommitterForgetsKeysItsCommitBlanks(t *testing.T) {
+	group := mlsNewMergedTestGroup(t, mlsTestSuiteX25519, 4)
+	committer := group.members[0]
+	shared := mlsCommonAncestor(mlsLeafIndex(0).node(), mlsLeafIndex(1).node())
+	if committer.secrets.nodeIndexKeys[shared] == nil {
+		t.Fatal("no key to forget")
+	}
+	group.commit(0, []mlsLeafIndex{1}, 0, true)
+	if _, held := committer.secrets.nodeIndexKeys[shared]; held {
+		t.Fatalf("the committer kept node %d's key, which its Remove blanked", shared)
+	}
+}
+
+// A Welcome's tree that breaks the committer's path above the node it shares with the joiner: the
+// shared node's key checks and the root's does not. The joiner must hold none of the path, not the
+// part below the break.
+func TestMlsWelcomePathIsImplantedWholeOrNotAtAll(t *testing.T) {
+	suite := mlsTestSuiteX25519
+	group := mlsNewMergedTestGroup(t, suite, 5)
+	committer := group.members[4]
+	tree := committer.tree.clone()
+	joiner := mlsNewTestClient(t, suite, "joiner")
+	leaf, err := tree.addLeaf(&joiner.keyPackage.leafNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := tree.prepareUpdatePath(4, tree.leafNode(4), committer.signatureKey, group.groupId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathSecret := prepared.pathSecretAt(mlsCommonAncestor(leaf.node(), mlsLeafIndex(4).node()))
+
+	whole := newMlsTreeSecrets(suite, leaf, joiner.leafKey)
+	if err := whole.implantWelcomePath(tree, 4, pathSecret); err != nil {
+		t.Fatal(err)
+	}
+	if len(whole.nodeIndexKeys) != 3 {
+		t.Fatalf("the leaf and %d path keys, want two path keys to break between", len(whole.nodeIndexKeys)-1)
+	}
+
+	broken := tree.clone()
+	other, err := suite.generateKemKey("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mlsReplaceParent(broken, mlsTreeRoot(broken.leafCount()), func(parent *mlsParentNode) {
+		parent.encryptionKey = other.PublicKey().Bytes()
+	})
+	secrets := newMlsTreeSecrets(suite, leaf, joiner.leafKey)
+	if err := secrets.implantWelcomePath(broken, 4, pathSecret); !errors.Is(err, errMlsInvalid) {
+		t.Fatal(err)
+	}
+	if len(secrets.nodeIndexKeys) != 1 {
+		t.Fatalf("a refused Welcome left %d keys", len(secrets.nodeIndexKeys))
+	}
+}
+
+// RFC §7.9.2 asks only that some descendant carry a parent's hash, so a member can sign a link to a
+// parent whose copath side has no members, and the tree validates with that parent off the member's
+// filtered path. The committer blanks it with the rest of its direct path (RFC §7.5), so a receiver
+// must too, or their trees, and every later epoch, disagree.
+func TestMlsReceiverBlanksTheWholeDirectPath(t *testing.T) {
+	suite := mlsTestSuiteX25519
+	group := mlsNewMergedTestGroup(t, suite, 3)
+	// leaf 1 goes, so the node over leaves 0 and 1 has nobody on leaf 0's copath side
+	group.commit(2, []mlsLeafIndex{1}, 0, true)
+
+	sender := group.members[0]
+	tree := sender.tree.clone()
+	root := mlsTreeRoot(tree.leafCount())
+	forged := mlsCommonAncestor(mlsLeafIndex(0).node(), mlsLeafIndex(1).node())
+	link := func(parent mlsNodeIndex, sibling mlsNodeIndex) []byte {
+		node := tree.nodes[parent].parent
+		siblingHash, err := tree.originalTreeHash(sibling, node.unmergedLeaves)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := tree.hashParentHashInput(node.encryptionKey, node.parentHash, siblingHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hash
+	}
+	forgedKey, err := suite.generateKemKey("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRight, _ := root.right()
+	tree.setNode(forged, mlsTreeNode{parent: &mlsParentNode{
+		encryptionKey: forgedKey.PublicKey().Bytes(),
+		parentHash:    link(root, rootRight),
+	}})
+	forgedRight, _ := forged.right()
+	leafNode := *tree.leafNode(0)
+	leafNode.parentHash = link(forged, forgedRight)
+	if err := leafNode.sign(suite, sender.signatureKey, group.groupId, 0); err != nil {
+		t.Fatal(err)
+	}
+	tree.setNode(mlsLeafIndex(0).node(), mlsTreeNode{leaf: &leafNode})
+	if err := tree.validate(group.validation); err != nil {
+		t.Fatalf("the forged tree: %v", err)
+	}
+	if slices.ContainsFunc(tree.filteredDirectPath(0), func(entry mlsFilteredPathNode) bool { return entry.node == forged }) {
+		t.Fatal("the forged node is on leaf 0's filtered path")
+	}
+	for _, member := range group.members {
+		member.tree = tree.clone()
+	}
+
+	// every member's tree must come out the committer's, which commit checks
+	group.commit(0, nil, 0, true)
+	for leaf, member := range group.members {
+		if !member.tree.nodes[forged].blank() {
+			t.Errorf("leaf %d kept node %d", leaf, forged)
+		}
+	}
+}
+
 func TestMlsErasedPreparedPathKeepsNoPathSecrets(t *testing.T) {
 	group := mlsNewMergedTestGroup(t, mlsSuite, 4)
 	_, prepared, _ := mlsPreparedCommit(t, group, 0)
@@ -889,11 +1060,11 @@ func TestMlsExternalCommitPath(t *testing.T) {
 		if err := tree.mergeUpdatePath(leaf, updatePath, nil, group.validation); err != nil {
 			t.Fatal(err)
 		}
-		commitSecret, err := member.secrets.receiveUpdatePath(tree, leaf, updatePath, group.provisionalContext(tree), nil)
+		received, err := member.secrets.receiveUpdatePath(tree, leaf, updatePath, group.provisionalContext(tree), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(commitSecret, prepared.commitSecret) {
+		if !bytes.Equal(received.commitSecret, prepared.commitSecret) {
 			t.Fatalf("suite %#x: commit secrets differ", suite.value)
 		}
 		if err := tree.validate(group.validation); err != nil {

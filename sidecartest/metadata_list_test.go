@@ -266,11 +266,11 @@ func TestParseMetadataListRefusesALiveRowMarkedWithdrawn(t *testing.T) {
 
 func TestParseMetadataListRefusesAnAlias(t *testing.T) {
 	wantMetadataListError(t, plantedMetadataList(t, "  owner: §11.8\n", "  owner: &section §11.8\n  ttl2: *section\n"), "ttl2")
-	wantMetadataListError(t, plantedMetadataList(t, "  ttl: the repo's life\n  owner: §11.8\n", "  ttl: &section the repo's life\n  owner: *section\n"), "no plain string")
+	wantMetadataListError(t, plantedMetadataList(t, "  ttl: the repo's life\n  owner: §11.8\n", "  ttl: &section the repo's life\n  owner: *section\n"), "holds an alias")
 }
 
 func TestParseMetadataListRefusesAMergeKey(t *testing.T) {
-	wantMetadataListError(t, plantedMetadataList(t, "evs-2:\n  withdrawn: no such value now\n", "evs-2:\n  <<: {withdrawn: no such value now}\n"), "evs-2")
+	wantMetadataListError(t, plantedMetadataList(t, "evs-2:\n  withdrawn: no such value now\n", "evs-2:\n  <<: {withdrawn: no such value now}\n"), "a merge key")
 }
 
 func TestParseMetadataListRefusesASecondDocument(t *testing.T) {
@@ -287,8 +287,8 @@ func TestParseMetadataListRefusesARowThatIsNoMapping(t *testing.T) {
 }
 
 func TestParseMetadataListRefusesAnEmptyList(t *testing.T) {
-	wantMetadataListError(t, []byte("# only a comment\n"), "no rows")
-	wantMetadataListError(t, []byte(""), "no rows")
+	wantMetadataListError(t, []byte("# only a comment\n"), "no document")
+	wantMetadataListError(t, []byte(""), "no document")
 	wantMetadataListError(t, []byte("[]\n"), "cannot unmarshal")
 }
 
@@ -316,10 +316,34 @@ func TestLoadMetadataListFindsTheSibling(t *testing.T) {
 	}
 }
 
+// From nowhere near a list the walk fails. What it may see is confined to the test's own directory:
+// a temporary directory can sit inside a checkout holding the real list, as one under the monoroot's
+// scratch directory does, and a walk free to climb reads that list. Both are planted here.
 func TestLoadMetadataListFailsWithNoList(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if list, err := LoadMetadataList(); err == nil {
-		t.Errorf("read %d rows from nowhere", len(list.Rows))
+	root := t.TempDir()
+	above := filepath.Join(root, metadataListSiblingName, metadataListFileName)
+	if err := os.MkdirAll(filepath.Dir(above), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(above, []byte(testMetadataListBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(root, "scratch", "tmp")
+	if err := os.MkdirAll(own, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	onDisk := func(listPath string) bool {
+		_, err := os.Stat(listPath)
+		return err == nil
+	}
+	if listPath, err := findMetadataListFrom(own, onDisk); err != nil || listPath != above {
+		t.Fatalf("a free walk read %q, %v, so the list above is not where this test needs it", listPath, err)
+	}
+	confined := func(listPath string) bool {
+		return strings.HasPrefix(listPath, own+string(filepath.Separator)) && onDisk(listPath)
+	}
+	if listPath, err := findMetadataListFrom(own, confined); err == nil {
+		t.Errorf("read %s from nowhere", listPath)
 	}
 }
 
