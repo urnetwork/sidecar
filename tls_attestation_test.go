@@ -564,3 +564,25 @@ func TestTlsKeyAttestationTypeIs0x1501(t *testing.T) {
 		t.Errorf("type %#x", got)
 	}
 }
+
+// A Sidecar's Sign is a sign function as it stands, so a device attests through its identity key and no other path.
+func TestSignTlsKeyAttestationTakesSidecarSign(t *testing.T) {
+	sidecar, _, keys := newIdentityTestSidecar(t)
+	binding := testBindingFields()
+	identifierSetSha256 := testTlsIdentifierSetHash([]string{"*.k7m2q9xa.ur.example", "k7m2q9xa.ur.example"})
+	spkiSha256 := sha256.Sum256([]byte("a device key's SPKI"))
+	signed, err := SignTlsKeyAttestation(&protocol.TlsKeyAttestation{
+		NetworkId:           binding.NetworkId.Bytes(),
+		SidecarId:           binding.SidecarId.Bytes(),
+		SpkiSha256:          spkiSha256[:],
+		IdentifierSetSha256: identifierSetSha256[:],
+		IssueTimeMillis:     1767225600000,
+	}, sidecar.Sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = VerifyTlsKeyAttestation(signed, keys.identityPublicKey(), binding.NetworkId, binding.SidecarId, spkiSha256, identifierSetSha256)
+	if err != nil {
+		t.Error(err)
+	}
+}

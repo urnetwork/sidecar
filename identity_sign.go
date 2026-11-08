@@ -72,6 +72,9 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 	case bridge.SignedType_SIGNED_EVS_IMPORT:
 		return "evs-import", true
 
+	case bridge.SignedType_SIGNED_TLS_KEY_ATTESTATION:
+		return TlsKeyAttestationPurpose, true
+
 	case bridge.SignedType_SIGNED_RECORD_HEADER, bridge.SignedType_SIGNED_RETENTION_POLICY:
 		return "record-entry", true
 	case bridge.SignedType_SIGNED_APPROVAL_DECISION, bridge.SignedType_SIGNED_APPROVAL_CANCEL:
