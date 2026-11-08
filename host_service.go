@@ -45,6 +45,8 @@ type ServiceHost struct {
 	// §19.11's gates, reread by the host every 60 s (host_gates.go). Nil answers every gate closed, so a
 	// host that forgets them opens nothing.
 	Gates ServiceGates
+	// §11.13's write budget, one per process (host_budget.go).
+	Budget WriteBudget
 }
 
 // The clock a host gave its engines: Clock, or real time when the host set none.

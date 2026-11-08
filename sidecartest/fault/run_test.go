@@ -333,12 +333,12 @@ func TestAnUnbuiltInvariantFailsClosed(t *testing.T) {
 
 func TestEveryFiIsCataloged(t *testing.T) {
 	for n := 1; n <= 30; n += 1 {
-		if invariantNames[n] == "" {
+		if invariant := DefaultCatalog().Invariant(n); invariant == nil || invariant.Name == "" {
 			t.Errorf("FI-%d has no name", n)
 		}
 	}
-	if len(invariantNames) != 30 {
-		t.Errorf("%d names", len(invariantNames))
+	if count := len(DefaultCatalog().Invariants); count != 30 {
+		t.Errorf("%d names", count)
 	}
 	if built := BuiltInvariants(); !slices.Contains(built, 30) {
 		t.Errorf("built %v", built)
