@@ -62,7 +62,8 @@ const (
 // NSEC3's owner labels: RFC 4648's extended hex alphabet in lowercase, unpadded.
 var smtpDnssecBase32Hex = base32.NewEncoding("0123456789abcdefghijklmnopqrstuv").WithPadding(base32.NoPadding)
 
-// How much work one chain may cost. Every number must be positive.
+// How much work one chain may cost. Every number must be positive but MaxNsec3IterationCount, whose zero
+// takes only RFC 9276's zero iterations.
 type SmtpDaneSettings struct {
 	// Records one chain may hold: 512, far past a chain of a dozen zones.
 	MaxRrCount int
@@ -88,7 +89,7 @@ func DefaultSmtpDaneSettings() *SmtpDaneSettings {
 	}
 }
 
-// Whether every limit is positive.
+// Whether every limit is in range: positive, and the NSEC3 bound not negative.
 func (self *SmtpDaneSettings) valid() bool {
 	return self != nil && 0 < self.MaxRrCount && 0 < self.MaxRrsetCount && 0 < self.MaxSignatureCheckCount &&
 		0 < self.MaxCnameDepth && 0 <= self.MaxNsec3IterationCount
