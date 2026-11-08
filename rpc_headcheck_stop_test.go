@@ -436,12 +436,15 @@ func TestHeadStopReportedForksStopTheirGroup(t *testing.T) {
 	if cause := fixture.cause(testHeadSharedGroup); cause != HeadStopFork {
 		t.Fatalf("shared group: %q", cause)
 	}
-	// a kind this build does not know stops as widely as an auth fork
-	fresh := newTestHeadStop(t)
-	fresh.stop.ReportFork(HeadFork{Kind: HeadForkKind(9), Local: local, Remote: remote})
-	fresh.alarm()
-	if cause := fresh.cause(testHeadSharedGroup); cause != HeadStopFork {
-		t.Fatalf("unknown kind: %q", cause)
+	// a kind this build does not know stops as widely as an auth fork, and so does a ref fork naming no
+	// group
+	for _, fork := range []HeadFork{{Kind: HeadForkKind(9), Local: local, Remote: remote}, {Kind: HeadForkRef, Local: local, Remote: remote}} {
+		fresh := newTestHeadStop(t)
+		fresh.stop.ReportFork(fork)
+		fresh.alarm()
+		if cause := fresh.cause(testHeadSharedGroup); cause != HeadStopFork {
+			t.Fatalf("kind %d: %q", fork.Kind, cause)
+		}
 	}
 }
 
