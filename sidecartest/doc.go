@@ -24,6 +24,9 @@
 //   - dns_store_fake.go and dns_store_suite.go, the seams of dnsservice and their suite, which runs
 //     here on the fake and in server on dnshost.Store.
 //   - mxedge_store_fake.go, mxedgeservice's seam, which MAIL-M7-21's real store replaces.
+//   - fake_record_streams.go and fake_record_auth.go, the record's seams (record_seam.go): evs's record-class refs,
+//     §7.9's and §8's state at a pin, and §16.6's run files; record_streams_suite.go, the suite RECORD-M3-12's
+//     binding passes on T2.
 //   - smtp_*_fake.go, the sender's and the engine's seams in memory (§14): FakeSmtpProver,
 //     FakeSmtpProofVerifier and FakeSmtpMailbox, whose suite is smtp_mailbox_suite.go.
 //   - smtp_mx*.go, the outside world outbound mail meets: ScriptedMx behind crypto/tls, RecordMx behind
