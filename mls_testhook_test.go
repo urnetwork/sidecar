@@ -260,3 +260,44 @@ func TestMlsHookKeepsItsCopyPastAnErase(t *testing.T) {
 	secrets.erase()
 	recorder.require(t, "encryption_secret", want)
 }
+
+// The engine's own paths reach the hook by value: a KeyPackage's keys, a Welcome's group secrets and the keys its
+// schedule derives, a path's new signature key, the exporter's output, and every key and secret a reload unwraps
+// from disk.
+func TestMlsHookSeesTheEngine(t *testing.T) {
+	recorder := mlsRecordHooks(t)
+	world := newMlsTestWorld(t)
+	creator, joiner := world.sidecar(nil), world.sidecar(nil)
+	groups := mlsTestGroupOf(t, creator, joiner)
+	recorder.requireKinds(t, "init_priv", "leaf_priv", "signature_priv", "group_secrets", "joiner_secret", "welcome_secret", "welcome_key", "welcome_nonce")
+
+	staged, err := groups[1].Commit(&MlsCommitArgs{Path: true, AuthenticatedData: []byte("update")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := staged.Adopt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kek, err := MlsKek(adopted, gkmTestId("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.require(t, "exported_secret", kek)
+	recorder.require(t, "signature_priv", adopted.(*mlsRealGroup).state.signatureKey.Seed())
+
+	recorder.kindSecrets = map[string][][]byte{}
+	joiner.restart(t)
+	loaded, err := joiner.engine.LoadGroup(adopted.GroupId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := loaded.(*mlsRealGroup).state
+	recorder.require(t, "init_secret", state.initSecret)
+	recorder.require(t, "exporter_secret", state.exporterSecret)
+	recorder.require(t, "external_secret", state.externalSecret)
+	recorder.require(t, "encryption_secret", state.encryptionSecret)
+	recorder.require(t, "sender_data_secret", state.senderDataSecret)
+	recorder.require(t, "signature_priv", state.signatureKey.Seed())
+	recorder.requireKinds(t, "leaf_priv", "node_priv")
+}
