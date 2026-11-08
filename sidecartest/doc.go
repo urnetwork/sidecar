@@ -29,6 +29,8 @@
 //     binding passes on T2.
 //   - smtp_*_fake.go, the sender's and the engine's seams in memory (§14): FakeSmtpProver,
 //     FakeSmtpProofVerifier and FakeSmtpMailbox, whose suite is smtp_mailbox_suite.go.
+//   - headcheck_fakes.go, §6.4's HeadCheck sources (rpc_headcheck_sources.go): a network's authorization
+//     log as api holds it, which withholds and forks, and each device's log, pins and peers.
 //   - smtp_mx*.go, the outside world outbound mail meets: ScriptedMx behind crypto/tls, RecordMx behind
 //     a TLS server written from the RFCs, and MxWorld, a signed fixture DNS and dialer, all on
 //     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
