@@ -398,13 +398,23 @@ func TestSocketTicketSizeBoundsAtBothLimits(t *testing.T) {
 // signing, and the verifier takes exactly 512 bytes and not one more.
 func TestSocketTicketSignedBoundIsExact(t *testing.T) {
 	ticket := testNamedSocketTicket()
-	overhead := proto.Size(&protocol.SignedSocketTicket{
-		KeyId:     "k",
-		Ticket:    testSignedTicketBody(t, ticket),
-		Signature: make([]byte, ed25519.SignatureSize),
-	}) - 1
-
-	fitting := strings.Repeat("k", signedSocketTicketMaxByteCount-overhead-2)
+	body := testSignedTicketBody(t, ticket)
+	// the key id's length is a varint, so the size skips a value where it takes a second byte: search
+	fitting := ""
+	for keyIdByteCount := 1; keyIdByteCount < signedSocketTicketMaxByteCount && fitting == ""; keyIdByteCount += 1 {
+		keyId := strings.Repeat("k", keyIdByteCount)
+		size := proto.Size(&protocol.SignedSocketTicket{
+			KeyId:     keyId,
+			Ticket:    body,
+			Signature: make([]byte, ed25519.SignatureSize),
+		})
+		if size == signedSocketTicketMaxByteCount {
+			fitting = keyId
+		}
+	}
+	if fitting == "" {
+		t.Fatal("no key id brings this ticket to the bound")
+	}
 	signedTicket, err := SignSocketTicket(fitting, testSocketTicketPrivateKey, ticket)
 	if err != nil {
 		t.Fatal(err)

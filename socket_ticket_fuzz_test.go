@@ -34,8 +34,10 @@ func FuzzSocketTicket(f *testing.F) {
 	}
 	f.Add([]byte{}, []byte{})
 
-	keys := append(vectors.ticketKeys(f), testSocketTicketPublicKeys()...)
+	// the file's keys hold at its clock, and testSocketTicketPrivateKey's at its own, which is long before
+	keys := vectors.ticketKeys(f)
 	nowMillis := vectors.NowMillis
+	syntheticKeys := testSocketTicketPublicKeys()
 	publicKeys := map[string]ed25519.PublicKey{}
 	for _, key := range keys {
 		publicKeys[key.KeyId] = key.PublicKey
@@ -74,7 +76,7 @@ func FuzzSocketTicket(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ticket, err = VerifySocketTicket(encoded, keys, nowMillis)
+		ticket, err = VerifySocketTicket(encoded, syntheticKeys, testSocketTicketNow)
 		parsed := &protocol.SocketTicket{}
 		allowed := len(encoded) <= signedSocketTicketMaxByteCount &&
 			proto.Unmarshal(ticketBytes, parsed) == nil && checkSocketTicket(parsed) == nil
@@ -103,7 +105,7 @@ func FuzzSocketTicket(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := VerifySocketTicket(encoded, keys, nowMillis); err == nil {
+		if _, err := VerifySocketTicket(encoded, syntheticKeys, testSocketTicketNow); err == nil {
 			t.Fatalf("%x verified over its re-marshal", ticketBytes)
 		}
 	})
