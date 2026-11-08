@@ -16,6 +16,9 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
+// See testNeedCircuits.
+const testCircuitsRun = false
+
 // Records what the hooks report. Hooks run on the client's goroutine and the server's, so this locks.
 type testHookLog struct {
 	stateLock   sync.Mutex

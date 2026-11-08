@@ -22,8 +22,19 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 )
 
+// Skips a test that needs a compiled circuit when the sidecar_testhooks tag is set. No circuit holds a
+// hook, so the tag cannot change what one does, and these tests are nearly all of this module's time:
+// make check runs every test twice, on every track that lands here.
+func testNeedCircuits(t testing.TB) {
+	t.Helper()
+	if !testCircuitsRun {
+		t.Skip("circuits hold no hook, so these run in the untagged leg")
+	}
+}
+
 func testCompile(t *testing.T, circuit frontend.Circuit) constraint.ConstraintSystem {
 	t.Helper()
+	testNeedCircuits(t)
 	compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit)
 	if err != nil {
 		t.Fatal(err)

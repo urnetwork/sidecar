@@ -56,6 +56,7 @@ var (
 
 func testCompileShape(t *testing.T, shape *partShape) constraint.ConstraintSystem {
 	t.Helper()
+	testNeedCircuits(t)
 	testCompiledLock.Lock()
 	defer testCompiledLock.Unlock()
 	if compiled, ok := testCompiledShapes[*shape]; ok {

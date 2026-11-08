@@ -129,6 +129,7 @@ func testKeystreamShape(suite uint16) *partShape {
 
 func testCompileKeystream(t testing.TB, shape *partShape) (constraint.ConstraintSystem, error) {
 	t.Helper()
+	testNeedCircuits(t)
 	return frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &testKeystreamCircuit{
 		shape:    shape,
 		Key:      make([]frontend.Variable, 8*shape.keyBytes()),
@@ -279,6 +280,7 @@ func (self *testCompressCircuit) Define(api frontend.API) error {
 
 func testCompileCompress(t testing.TB) constraint.ConstraintSystem {
 	t.Helper()
+	testNeedCircuits(t)
 	compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &testCompressCircuit{
 		State: make([]frontend.Variable, 256),
 		Block: make([]frontend.Variable, 8*sha256BlockBytes),
