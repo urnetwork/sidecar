@@ -151,7 +151,10 @@ func clientContent(version uint16, plaintext []byte) ([]byte, error) {
 	return plaintext[:len(plaintext)-1], nil
 }
 
-// The roles a part's records play (SPEC.md 4.3's table), and the check a part outside it fails.
+// The roles a part's records play (SPEC.md 4.3's table), and the check a part outside it fails. Roles
+// follow from public values alone, so a part with a record count its index has no roles for is refused
+// before any verification, which is the edge's refusal, E3, as for a template no plaintext of a
+// record's length can fill (SPEC.md readings 23 and 28).
 func partRoles(preamble *Preamble, part *Part) ([]role, string, error) {
 	count := len(part.Records)
 	repeat := func(r role, times int) []role {
@@ -164,7 +167,7 @@ func partRoles(preamble *Preamble, part *Part) ([]role, string, error) {
 	switch {
 	case part.Index == 1:
 		if count != 1 {
-			return nil, "Z4", errors.New("pi1 opens one record, EHLO")
+			return nil, "E3", errors.New("pi1 opens one record, EHLO")
 		}
 		return []role{roleEhlo}, "", nil
 	case part.Index == 2:
@@ -173,12 +176,12 @@ func partRoles(preamble *Preamble, part *Part) ([]role, string, error) {
 			roles = append(roles, roleData)
 		}
 		if uint64(count) != 1+uint64(preamble.RecipientCount)+map[bool]uint64{true: 1}[part.Mode == modeData] {
-			return nil, "Z4", fmt.Errorf("pi2 opens %d records for %d recipients", count, preamble.RecipientCount)
+			return nil, "E3", fmt.Errorf("pi2 opens %d records for %d recipients", count, preamble.RecipientCount)
 		}
 		return roles, "", nil
 	case part.Index == 3 && part.Mode == modeBdat:
 		if count != 3 || !part.Last {
-			return nil, "Z4", errors.New("BDAT's pi3 opens BDAT, the header block and QUIT, and is the last")
+			return nil, "E3", errors.New("BDAT's pi3 opens BDAT, the header block and QUIT, and is the last")
 		}
 		return []role{roleBdat, roleHeader, roleQuit}, "", nil
 	case part.Mode == modeData && 3 <= part.Index:
@@ -191,7 +194,7 @@ func partRoles(preamble *Preamble, part *Part) ([]role, string, error) {
 			ends = 2
 		}
 		if count < len(roles)+ends || (!part.Last && count == len(roles) && part.Index != 3) || count == 0 {
-			return nil, "Z6", errors.New("a DATA part without its records or its end")
+			return nil, "E3", errors.New("a DATA part without its records or its end")
 		}
 		roles = append(roles, repeat(roleBody, count-len(roles)-ends)...)
 		if part.Last {
@@ -199,7 +202,7 @@ func partRoles(preamble *Preamble, part *Part) ([]role, string, error) {
 		}
 		return roles, "", nil
 	default:
-		return nil, "Z4", fmt.Errorf("no part %d in mode %d", part.Index, part.Mode)
+		return nil, "E3", fmt.Errorf("no part %d in mode %d", part.Index, part.Mode)
 	}
 }
 

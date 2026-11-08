@@ -34,6 +34,12 @@ Written by `TestMutatedWitnessTable` from `mutate_test.go`'s registry, which fai
 | E3 | 1.3 ChaCha20-Poly1305 | DATA | gate | a part's record of another outer type, which the circuit cannot see | TestMutatedWitnessE3 |
 | E3 | 1.2 ECDHE-ECDSA AES-128-GCM | BDAT | gate | a part's record of another outer type, which the circuit cannot see | TestMutatedWitnessE3 |
 | E3 | 1.2 ECDHE-ECDSA AES-128-GCM | DATA | gate | a part's record of another outer type, which the circuit cannot see | TestMutatedWitnessE3 |
+| E3 | 1.3 AES-128-GCM | BDAT | gate | a part opening one record more than its index has roles for | TestMutatedWitnessE3 |
+| E3 | 1.3 AES-128-GCM | DATA | gate | a part opening one record more than its index has roles for | TestMutatedWitnessE3 |
+| E3 | 1.3 ChaCha20-Poly1305 | BDAT | gate | a part opening one record more than its index has roles for | TestMutatedWitnessE3 |
+| E3 | 1.3 ChaCha20-Poly1305 | DATA | gate | a part opening one record more than its index has roles for | TestMutatedWitnessE3 |
+| E3 | 1.2 ECDHE-ECDSA AES-128-GCM | BDAT | gate | a part opening one record more than its index has roles for | TestMutatedWitnessE3 |
+| E3 | 1.2 ECDHE-ECDSA AES-128-GCM | DATA | gate | a part opening one record more than its index has roles for | TestMutatedWitnessE3 |
 | Z1 | 1.3 AES-128-GCM | BDAT | pi1, Z1 in its circuit | another HS or master secret, the keys it gave kept | TestMutatedWitnessZ1 |
 | Z1 | 1.3 AES-128-GCM | DATA | pi1, Z1 in its circuit | another HS or master secret, the keys it gave kept | TestMutatedWitnessZ1 |
 | Z1 | 1.3 ChaCha20-Poly1305 | BDAT | pi1, Z1 in its circuit | another HS or master secret, the keys it gave kept | TestMutatedWitnessZ1 |
