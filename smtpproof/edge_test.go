@@ -113,6 +113,11 @@ func testExpectCheck(t *testing.T, name string, err error, check relationCheck) 
 	if !errors.As(err, &failure) || failure.check != check {
 		t.Errorf("%s: want %s to refuse, got %v", name, check, err)
 	}
+	// E1 and E2 end before any application record is forwarded, so their refusals are never cuts
+	// (SPEC.md section 6), and never count toward §14.8's halt
+	if (check == checkE1 || check == checkE2) && errors.Is(err, sidecar.ErrSmtpRecordCut) {
+		t.Errorf("%s: %s refused with a record cut", name, check)
+	}
 }
 
 func testExpectCut(t *testing.T, name string, err error) {

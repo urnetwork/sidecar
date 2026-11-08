@@ -6,9 +6,12 @@ package smtpproof
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // Real connections captured once per process and shared read-only: FuzzEdgeHandshake and
@@ -154,12 +157,17 @@ func testEditReplay(events []*testReplayEvent, edits []byte) []*testReplayEvent 
 }
 
 // Replays events into a fresh gate, under a verifier that accepts every proof, and fails the test if
-// anything passes after the gate's first refusal or the gate outgrows its bounds.
+// anything passes after the gate's first refusal, the gate outgrows its bounds, or a refusal before
+// application data is a cut: no client record has gone for a part to cover then, and every proof here
+// verifies, so §14.7 names nothing there that cuts.
 func testReplayHostile(t *testing.T, fixture *testGateFixture, events []*testReplayEvent) {
 	t.Helper()
 	gate := fixture.gate(&testFixedVerifier{})
 	refused := false
 	for _, event := range events {
+		gate.stateLock.Lock()
+		handshaking := gate.phase < edgePhaseApplication
+		gate.stateLock.Unlock()
 		var forwarded [][]byte
 		var err error
 		switch {
@@ -174,6 +182,9 @@ func testReplayHostile(t *testing.T, fixture *testGateFixture, events []*testRep
 		}
 		if refused && len(forwarded) != 0 {
 			t.Fatalf("%d records passed after a refusal", len(forwarded))
+		}
+		if handshaking && errors.Is(err, sidecar.ErrSmtpRecordCut) {
+			t.Fatalf("a refusal during the handshake was a cut: %v", err)
 		}
 		refused = refused || err != nil
 		testExpectGateBounds(t, gate)
