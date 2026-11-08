@@ -155,6 +155,50 @@ func TestHmacGadgetMatchesCryptoHmac(t *testing.T) {
 	}
 }
 
+func TestHmacGadgetMatchesCryptoHmacAtBlockBoundaries(t *testing.T) {
+	// the inner hash resumes from the ipad state, so its padding turns over at 55 and 119 octets of
+	// message, not of the hashed whole: a sum padded as if from the initial state would pass the test
+	// above and fail here. Each size beside a flipped output bit
+	cases := []struct {
+		keySize      int
+		messageBytes int
+	}{
+		{keySize: tlsSecretBytes, messageBytes: 0},
+		{keySize: tlsSecretBytes, messageBytes: 55},
+		{keySize: tlsSecretBytes, messageBytes: 56},
+		{keySize: tlsSecretBytes, messageBytes: 64},
+		{keySize: tlsSecretBytes, messageBytes: 119},
+		{keySize: tlsSecretBytes, messageBytes: 120},
+		{keySize: tlsMasterSecretBytes, messageBytes: 55},
+		{keySize: tlsMasterSecretBytes, messageBytes: 56},
+	}
+	for _, c := range cases {
+		key := make([]byte, c.keySize)
+		for i := range key {
+			key[i] = byte(5*i + 3)
+		}
+		message := make([]byte, c.messageBytes)
+		for i := range message {
+			message[i] = byte(11*i + c.messageBytes)
+		}
+		mac := hmac.New(sha256.New, key)
+		mac.Write(message)
+		sum := mac.Sum(nil)
+		compiled := testCompile(t, &testHmacCircuit{
+			Key:     make([]frontend.Variable, 8*c.keySize),
+			Message: make([]frontend.Variable, 8*c.messageBytes),
+			Mac:     make([]frontend.Variable, 8*sha256.Size),
+		})
+		if err := testSolved(t, compiled, &testHmacCircuit{Key: testAssignBits(key), Message: testAssignBits(message), Mac: testAssignBits(sum)}); err != nil {
+			t.Errorf("key %d, message %d: %v", c.keySize, c.messageBytes, err)
+		}
+		sum[sha256.Size-1] ^= 0x80
+		if err := testSolved(t, compiled, &testHmacCircuit{Key: testAssignBits(key), Message: testAssignBits(message), Mac: testAssignBits(sum)}); err == nil {
+			t.Errorf("key %d, message %d: accepted a wrong MAC", c.keySize, c.messageBytes)
+		}
+	}
+}
+
 type testExpandCircuit struct {
 	Secret  []frontend.Variable
 	Context []frontend.Variable
