@@ -1,6 +1,6 @@
 # smtpproof: what the outbound-mail proofs prove
 
-*Draft 1, 2026-11-06. Not frozen: this specification freezes at M9's entry review and its bytes at M9's exit review (DESIGN.md §22.10, D-PHASE-7). Until then every field, encoding and shape here may change.*
+*Draft 2, the freeze candidate for M9's entry review, 2026-11-08; draft 1 was 2026-11-06. Not frozen: this specification freezes at M9's entry review and its bytes at M9's exit review (DESIGN.md §22.10, D-PHASE-7), and nothing here does either. Until then every field, encoding and shape here may change. `testdata/vectors/` holds the bytes the exit review would freeze (5.1), and `testdata/mutations/table.md` the evidence that each check does work no other does (section 8).*
 
 This document states the relation behind X7: what a sending sidecar proves to `smtpedge`, against which public values, and why that is sound against a malicious sidecar and zero knowledge against a malicious edge. It is the document D-SMTP-16 names. DESIGN.md §14.4 and §14.5 are the source; where this draft and DESIGN.md disagree, DESIGN.md wins and the disagreement is a bug here. Section 13 lists every reading taken where DESIGN.md was not explicit, and section 14 what is still open.
 
@@ -142,7 +142,32 @@ Each is a value the edge already holds or computes. None comes from the prover e
 
 For example the template of a 40-octet MAIL record is `lit("MAIL FROM:<")`, then `local` up to the suffix, then `lit("@" envelope_domain ">" CRLF)`, which fixes the length of `local` from the record's length. A template whose `local` run falls outside 1 to 64 octets has no satisfying plaintext, and the edge refuses the part without verifying it.
 
-The statement a circuit proves is this vector, encoded as field elements in the order the shape defines. Encoding is frozen with the bytes at M9's exit.
+The statement a circuit proves is this vector, encoded as field elements in the order the shape defines (5.1). Encoding is frozen with the bytes at M9's exit.
+
+### 5.1 The statement as field elements
+
+Groth16's verifier takes the statement as elements of BN254's scalar field, one for each public wire of the shape's circuit, in the order the circuit declares them: `partCircuit`'s fields in declaration order, depth first, as gnark's schema walks a struct, private wires skipped (`circuit_part.go`, `circuit_message.go`). The edge computes every element from section 5's values (`partAssignment`), so nothing in the statement comes from the prover but the records it opens. A hash, random or other octet string enters as eight elements an octet, least significant bit first; a ciphertext or literal octet as one element from 0 to 255; a flag as 0 or 1.
+
+| In order | Elements | What the edge puts there |
+|---|---|---|
+| `ShtsHash`, `HelloHash`, `FinishedHash` | 256 each, 1.3 only | H_shts, H_sh, H_sf |
+| Each client pool block: `Counter`, `Cipher`, `Literal`, `IsLiteral`, then `IsLocal` on a shape with the local table | 1, then one a block's octet for each of the rest | the block's counter (below), its ciphertext, and the template: lit's octet, 1 where the position is lit, 1 where it is local. Only π2's shapes carry the local table |
+| Each server block: `Counter`, `Cipher`, `Active`, `TypeOctet`, `FirstOctet`, `WindowActive`, `Continues` | 1, one a block's octet for each of the next five, 1 | the counter and ciphertext, then what record lengths fix: a content octet, 1.3's type octet, a record's first octet, a position whose next 16 octets lie in one record's content (Z9's window), and whether the block continues its predecessor's record |
+| The header scan (π3): its pool blocks, then `Active` and `Field`, then the Message-ID, X-UR-Ref, Feedback-ID, From address and DKIM tag literals, each as `Expected` then `Used`, then `Bulk` | pool blocks as above, with no `IsLocal`; one a header octet for each of `Active` and `Field`; 124, 124, 124, 93 and 93 for each of `Expected` and `Used`; 1 | Z5's public side: a content octet, a position before the final CRLF CRLF, each literal's octets and which of them are used, and the BULK flag |
+| Each body block: its pool block, then `Active`, `Start`, `End` | as above, with no `IsLocal`; then one a block's octet for each | Z6's public side: a content octet, a record's first octet, a record's last octet |
+| `ExpectedReplies`, `RequireChunking`, `DataMode` | 1 each | 1 at π2, and 1 + R at π3 with 1 more in DATA mode; 1 at BDAT's π2; 1 at DATA's π3; 0 elsewhere |
+| `ClientRandom`, `ServerRandom`, `ClientFinishedHash`, `Chaining`, `ResumeBase`, `ResumeShift`, `ResumeTwoBlocks` | 256, 256, 256, 256, 1,024, 6 and 1, the first six 1.2 only | 1.2's Z1 inputs: r_c, r_s, SHA-256 of ClientHello .. ClientKeyExchange, S_ckx's chaining value (each 32-bit word least significant bit first), its unhashed tail followed by room for the client Finished and SHA-256's padding, the tail's length, and whether that takes two blocks. `ResumeTwoBlocks` is in every shape, and 0 in 1.3 |
+| SF's `Counter`, `Cipher` | 1 and 16, 1.2 only | the server Finished record as relayed |
+
+A block's counter is one element: the record's `seq` in 1.3 or its explicit nonce in 1.2, times 2^32, plus Z2's block counter, 2 + j under AES-GCM and 1 + j under ChaCha20. Unused blocks are zero throughout.
+
+Every public wire is read by some constraint (`TestEveryPublicWireIsConstrained`). Groth16 weighs each public input by its own element of the verifying key, and for a wire no constraint reads that element is the identity, so such a wire would verify at any value (reading 29). `TestGroth16RefusesEachPublicInputOneBitOff` holds a real π1 proof to this one input at a time.
+
+The vectors, recomputed on every run:
+
+- `testdata/vectors/connection-*.json` are six honest connections, fixed once: both versions, both 1.3 suites, both modes, with each part's witness.
+- `testdata/vectors/statements.json` gives each of their parts' production shape by its KeySet name, its count of public inputs, the SHA-256 of its elements each written as 32 octets big-endian, and the template of each command record it opens, a run of local octets written `⟨local×n⟩` (`TestSpecVectorsReproduce`).
+- `testdata/vectors/pi1-tls13-chacha.proof` is one π1 proof of the ChaCha20 BDAT connection, and `pi1-tls13-chacha.vk` the verifying key of the single-party test setup it was made under. Together they pin the proof's 164 octets (10.1) and the verifying key's encoding beside the statement: the proof verifies against its own statement and fails with a public input moved (`TestSpecPi1ProofVectorVerifies`). The key is a test's, never a release's.
 
 ## 6. Checks at the edge
 
@@ -181,7 +206,7 @@ The statement a circuit proves is this vector, encoded as field elements in the 
 5. A **message record** (BDAT's command and chunk, DATA's octets) is held until verified parts cover every server record relayed before it. Holding is not a cut.
 6. After the final QUIT no client record is forwarded. A later one, such as close_notify, ends the connection and is not a cut.
 
-Parts are accepted in `index` order. `first_record` continues from the previous part, `mode` never changes from π2 on, and `server_record_count` never falls and never exceeds what was relayed. The records a part opens are in strictly increasing `seq`: BDAT's QUIT names its own, and at one the head already holds it would stand in for that record, passing `BDAT 0 LAST` with no header block. An opened record holds at least its type octet in 1.3. A part resent under its `send_id` and `index` is idempotent. One proven again with a later `server_record_count` replaces it. Once the MX has closed, outstanding parts are moot.
+Parts are accepted in `index` order. `first_record` continues from the previous part, `mode` never changes from π2 on, and `server_record_count` never falls and never exceeds what was relayed. The records a part opens are in strictly increasing `seq`: BDAT's QUIT names its own, and at one the head already holds it would stand in for that record, passing `BDAT 0 LAST` with no header block. An opened record holds at least its type octet in 1.3, and its outer type is application_data: that octet is public, and the circuit sees only ciphertext, so the gate checks it before verifying (reading 26). A part resent under its `send_id` and `index` is idempotent. One proven again with a later `server_record_count` replaces it. Once the MX has closed, outstanding parts are moot.
 
 A verification runs with no lock held, so another part may land during it. Then only an exact resend of what landed passes, as a no-op. Anything else ends the connection and is no cut, because its order checks ran against what no longer stands.
 
@@ -223,7 +248,7 @@ CHACHA20-POLY1305  keystream block j = ChaCha20(key, N, counter 1 + j), 64 octet
 
 No tag is checked in the circuit. For client records the MX checks it; for server records the edge relays what the MX sent, and the key is already bound by Z1.
 
-**Z3, framing.** 1.3: each opened client record's plaintext, of length `len - 16`, ends in the octet 17 at its final position, which with section 4.2's templates rules out padding and every other inner type, KeyUpdate included. 1.2: the outer type is application_data (E1), and the plaintext length is `len - 24`.
+**Z3, framing.** 1.3: each opened client record's plaintext, of length `len - 16`, ends in the octet 17 at its final position, which with section 4.2's templates rules out padding and every other inner type, KeyUpdate included. 1.2: the outer type is application_data (E1), and the plaintext length is `len - 24`. The outer type is public in both versions, so the edge checks it, on the stream by E1 and on a part's records by E3, and in 1.2 Z3 holds nothing a witness could break (reading 26).
 
 **Z4, envelope.** The opened records match, in order, the templates for `EHLO`, `MAIL`, exactly `recipient_count` × `RCPT`, then `BDAT n LAST` or `DATA`. With the part's contiguous ranges and E3, these are all the client records before the message: one transaction.
 
@@ -245,7 +270,7 @@ No tag is checked in the circuit. For client records the MX checks it; for serve
 - BDAT: the head's chunk octets are exact (opened), the body's are bounded by E3's count, and together they reach `message_byte_count` exactly at a record boundary, which the edge checks as records stream. The record at `last_record` opens to exactly `QUIT` CRLF.
 - DATA: `message_byte_count` counts the octets of the header-block and body records. Every such record begins at a line start and ends in CRLF, holds no bare CR or LF, and no line in it is exactly `.`. The final records open to exactly `.` CRLF and `QUIT` CRLF. A record boundary is therefore always the scan state "at line start", so §14.5's carried state is that constant.
 
-**Z7, server records.** The private server key and IV of Z1 decrypt every server record the part adds, at its `seq`. Each is either application data, whose content joins the reply stream, or in 1.3 a NewSessionTicket: inner type 16, first octet 04, content skipped. Which is which stays private. Any other inner type, a KeyUpdate included, fails. In 1.3 each server record is unpadded: a padded one is unprovable and ends the send.
+**Z7, server records.** The private server key and IV of Z1 decrypt every server record the part adds, at its `seq`. Each is either application data, whose content joins the reply stream, or in 1.3 a NewSessionTicket: inner type 16, first octet 04, content skipped. Which is which stays private. Any other inner type, a KeyUpdate included, fails. In 1.3 each server record is unpadded: a padded one is unprovable and ends the send. In 1.2 a server record's type is public, and E1 passes only application_data after the handshake. `relation.go` and the checker count a server record's opening at its `seq` under Z2, as a client record's (reading 27).
 
 **Z8, replies.** The reply stream parses as RFC 5321 reply lines: three digits, then `-` or SP with text, or CRLF directly; text holds no CR or LF. A reply is its lines through one without `-`. Then:
 
@@ -258,6 +283,8 @@ No tag is checked in the circuit. For client records the MX checks it; for serve
 ## 8. Which adversarial case each check stops
 
 D-SMTP-16's corpus, FS-31 included. Each row must fail before any effect, with honest controls passing.
+
+What §22.10 asks of each check is shown by `testdata/mutations/table.md` (SMTP-M9-29): for each of E1 to E3 and Z1 to Z9, in each TLS version and mode the check applies to, a break of one honest connection that only that check refuses. The relation, through the gate, and `smtpproof/checker` name the one check alike; then the circuit refuses the part, or the gate refuses on its own with the solver as its verifier as well. The table also lists the cells no witness can break alone, and why: 1.2's Z3 and Z7, whose content is public (reading 26), and DATA's Z9, which has no condition.
 
 | Case | Stopped by |
 |---|---|
@@ -491,7 +518,7 @@ Some readings of these:
 - Z5's automaton costs about 178 constraints an octet beyond the keystream, a quarter of AES's 729, so a 4 KiB header block spends about 730,000 on Z5 and about 3M on its keystream. Counting the one-click field by name (reading 25) added 6 an octet.
 - A recipient costs π2 its RCPT record, 3 AES blocks for an address of up to 35 octets, and π3 its reply, 1 or 2 server blocks. So 100 recipients add about 3.8M constraints to π2 under AES and 1.3M to 2.6M to π3 (10.4, section 14).
 
-### 11.3 First measurements, and what they say
+### 11.3 The first measurement
 
 A scratch Groth16 run over chained compressions, gnark v0.15.0, Apple M4 Pro (14 cores), on a machine shared with other builds, so noisy:
 
@@ -504,15 +531,9 @@ A scratch Groth16 run over chained compressions, gnark v0.15.0, Apple M4 Pro (14
 
 Verification took 2.4 ms. Setup took 2 min 37 s. Peak memory was 10.5 GB, with compile and setup in the same process, so it overstates proving alone.
 
-Neither reference machine was measured. Taking ORIGO's own figure for the m5.large (400k constraints in 9.8 s, so about 41,000 per second) and assuming roughly 250,000 per second for an M1, the budgets are about 7.5M constraints for π1 to π3 on the M1 and **about 2.4M on the m5.large**.
+Draft 1 drew its budgets from this run and from ORIGO's own m5.large figure, 400,000 constraints in 9.8 s, before any shape existed. 11.2's gadgets and 11.4's whole sends, measured on the real shapes, replace those estimates. Neither reference machine has been measured yet: that is SMTP-M9-32's bench, and the m5.large's figure stays ORIGO's until it runs there (section 14).
 
-BDAT at the speed gate's size, under 10's rules, comes to roughly 6M to 7M constraints with AES, because Z1 alone costs 3 × 768,000 ≈ 2.3M and the 4 KiB header block about 3M. So on these estimates, which 11.4's measurements revise:
-
-- The M1 bar is plausible but close.
-- **The m5.large bar is missed by about 2.5×.** Removing lookups was a choice for soundness and simplicity; putting them back (10.1, 10.2) would roughly halve AES and still miss.
-- Memory on the 8 GB M1 for a 4M-constraint π3 is unproven and may force π3 to split.
-
-Levers, none taken: a hiding commitment to the keys, proven once, so that later parts skip Z1 (saves about 1.5M, but D-SMTP-22 forbids it as written); lookups under a reviewed commitment argument; sharing AES's first round across blocks of a record; a designated-verifier prover (Later). See section 14.
+Levers, none taken: a hiding commitment to the keys, proven once, so that later parts skip Z1 (saves about 1.4M of a BDAT send's constraints, but D-SMTP-22 forbids it as written, and the owner kept it so); lookups under a reviewed commitment argument (10.1, 10.2); sharing AES's first round across blocks of a record; a designated-verifier prover (Later). See section 14.
 
 ### 11.4 Whole sends, measured
 
@@ -561,7 +582,34 @@ At load averages of 22 to 35, beside a real-size ceremony in another process, DA
 
 Setup took 25 s to 3 min 5 s a shape. These runs used the later-part shapes without server blocks. The 1.3 shapes over a late ticket (section 12) compile, with no commitment, to 2,501,943 constraints under AES and 1,623,719 under ChaCha20, about a fifth more than their plain twins; none has been proven or timed, since no MX here sends a ticket.
 
-Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes. These counts predate reading 25, which adds about 25,000 constraints to each π3 shape, 6 an octet over its 4 KiB header block; the tables above were not measured again.
+Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes. These counts predate reading 25, which adds about 25,000 constraints to each π3 shape, 6 an octet over its 4 KiB header block, and reading 29, which drops the 16 or 64 `IsLocal` inputs of every block that cannot hold a local part and adds a constraint or two a shape: π1's AES shape, for one, has 968 public inputs now, 969 counting gnark's constant wire as the column above does, not 1,033, and AES's BDAT π3 24,789, not 28,950. The tables above were not measured again. Every production shape was compiled again on 2026-11-08, after both readings, on the same shared M4 Pro (`TestMeasureShapes`, 260 s for all 22, none carrying a commitment); public inputs here count gnark's constant wire, as above, and `testdata/vectors/statements.json` gives them without it:
+
+| Shape | TLS and suite | Constraints | Public inputs |
+|---|---|---|---|
+| π1 | 1.3 AES-128-GCM | 566,338 | 969 |
+| π1 | 1.3 ChaCha20 | 538,367 | 966 |
+| π2 | 1.3 AES-128-GCM | 1,623,070 | 5,861 |
+| π2 | 1.3 ChaCha20 | 1,326,927 | 7,721 |
+| π3, BDAT | 1.3 AES-128-GCM | 4,788,371 | 24,790 |
+| π3, BDAT | 1.3 ChaCha20 | 3,200,550 | 26,684 |
+| π3, DATA | 1.3 AES-128-GCM | 6,349,074 | 37,206 |
+| π3, DATA | 1.3 ChaCha20 | 3,966,533 | 39,004 |
+| later DATA part | 1.3 AES-128-GCM | 2,103,103 | 13,287 |
+| later DATA part | 1.3 ChaCha20 | 1,327,391 | 13,479 |
+| later DATA part over a ticket | 1.3 AES-128-GCM | 2,501,946 | 14,599 |
+| later DATA part over a ticket | 1.3 ChaCha20 | 1,623,722 | 14,767 |
+| π1 | 1.2 ECDHE-RSA | 719,906 | 2,272 |
+| π1 | 1.2 ECDHE-ECDSA | 719,906 | 2,272 |
+| π2 | 1.2 ECDHE-RSA | 1,579,134 | 7,164 |
+| π2 | 1.2 ECDHE-ECDSA | 1,579,134 | 7,164 |
+| π3, BDAT | 1.2 ECDHE-RSA | 4,730,867 | 26,093 |
+| π3, BDAT | 1.2 ECDHE-ECDSA | 4,730,867 | 26,093 |
+| π3, DATA | 1.2 ECDHE-RSA | 6,283,378 | 38,509 |
+| π3, DATA | 1.2 ECDHE-ECDSA | 6,283,378 | 38,509 |
+| later DATA part | 1.2 ECDHE-RSA | 2,248,607 | 14,590 |
+| later DATA part | 1.2 ECDHE-ECDSA | 2,248,607 | 14,590 |
+
+Each is within three constraints of the figure above for the same shape, reading 25's 24,555 on every π3 aside, so the times above stand as the best measure of these shapes there is until SMTP-M9-32's bench runs on the reference machines. `BenchmarkPi3Memory` ran once on the new ChaCha20 BDAT π3, at a load average of about 25: the process that only loads the key and proves took 22.3 s and peaked at 3,608 MiB, beside 3,271 MiB on lightly loaded cores above.
 
 What this says, neither reference machine having been measured:
 
@@ -581,10 +629,14 @@ Kept honest as the module grows. Anything not listed as built fails closed.
 |---|---|
 | `tls_*.go`: the TLS client, 1.3 and 1.2, HelloRetryRequest, CertificateRequest | Built. Checked against Go's `crypto/tls` server, whose key log confirms HS and the master secret regenerate its own secrets; against RFC 8448's trace through HS, MS, SHTS, CHTS, the handshake keys, the server application key and IV and the resumption secret; against NIST ACVP's TLS 1.3 KDF vector, which gives both application traffic secrets from MS; and against the TLS 1.2 PRF's published vector. RFC 8448's application traffic secrets are not derived from its MS: that needs its hash through the server's Finished, and no copy of the RFC was at hand. `FuzzTlsParse` runs the four parsers over one stream split at every offset, from a committed corpus of real flights, and compares each ClientHello with `crypto/tls`'s server's reading and each ServerHello with how `crypto/tls`'s client answers it: no ServerHello the parser takes is one `crypto/tls` cannot decode, reads at an unsupported version, or refuses for a 1.2 suite E1 covers |
 | `relation.go`: Z1-Z9 over plain Go values | Built, both versions and modes. Each check has mutated witnesses that it alone refuses |
-| `edge.go`: E1-E3 | Built, as one state machine per connection that ends at its first refusal. Each check has refusals of its own, over replayed real connections. `TestEdgeInputsEqualServerKeyLog` holds Z1's inputs to the MX's own key log, after a HelloRetryRequest too; every run of the handshake, 1.3's sealed flight included, passes split across two records at every offset with Z1's inputs unchanged; a SHA-1 signature that verifies is refused in both versions; `FuzzEdgeHandshake` edits real handshakes and holds the gate to its bounds, to passing nothing after a refusal and to no cut before application data; `FuzzEdgeRecordOrder` interleaves records, parts, late server records and parts proven again, and holds every message record behind coverage. `MailForwarded` tells the engine when MAIL went |
-| `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving. `Measure` proves one full later DATA part per suite with keys and holds later sends to the slowest suite's cap |
+| `mutate_*_test.go`, `testdata/mutations/table.md`: §22.10's mutated witnesses | Built (SMTP-M9-29). For each of E1-E3 and Z1-Z9, on every leg and in each mode the check applies to, a break of one honest connection that the gate's relation and the checker each pin on that check alone, refused by the circuit at its part (π1's with Z1 in its circuit) or by the gate on its own; the table is held to the registry and lists the cells no witness can break alone. Holding the two readers to one table found two disagreements, now settled: the gate passed a part's record of another outer type to its verifier, where a real proof would have verified it (reading 26), and the checker named a part with a record count its index has no roles for Z4 or Z6, where the gate refused it as E3 (reading 28) |
+| `edge.go`: E1-E3 | Built, as one state machine per connection that ends at its first refusal, refusing a part's record of another outer type before verifying it (reading 26). Each check has refusals of its own, over replayed real connections. `TestEdgeInputsEqualServerKeyLog` holds Z1's inputs to the MX's own key log, after a HelloRetryRequest too; every run of the handshake, 1.3's sealed flight included, passes split across two records at every offset with Z1's inputs unchanged; a SHA-1 signature that verifies is refused in both versions; `FuzzEdgeHandshake` edits real handshakes and holds the gate to its bounds, to passing nothing after a refusal and to no cut before application data; `FuzzEdgeRecordOrder` interleaves records, parts, late server records and parts proven again, and holds every message record behind coverage. `MailForwarded` tells the engine when MAIL went |
+| `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving. `Measure` first proves a part of each keyed suite's largest shape, DATA's π3, so a host that cannot records nothing (reading 22), then one full later DATA part per suite with keys, and holds later sends to the slowest suite's cap |
 | `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z2-Z9 differentially against `relation.go`, each case through the relation and the solver alike: the envelope at 1, 10 and 100 recipients and every template break of SMTP-M9-22's list (`circuit_records_test.go`); the sender's own assembled and signed messages as Z5's corpus, and every break of SMTP-M9-23's list in both modes (`circuit_headers_test.go`); every break of SMTP-M9-24's list beside an honest twin, CHUNKING offered only before TLS through sidecartest's ScriptedMx among them (`circuit_replies_test.go`). The header-block breaks also go through the gate and the independent checker beside the circuit (`circuit_agreement_test.go`). 11.2's sizes are measured and held by `TestGadgetSizesAreSpecMds` and the per-block tests it names; 10.4's shapes by `TestSpecMdNamesEveryProductionShape` |
-| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests. `TestMeasureWholeSend` has proved whole sends that the gate accepted, BDAT and DATA on all three legs (11.4) |
+| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests, and fails one bit off in any of its 965 public inputs (`TestGroth16RefusesEachPublicInputOneBitOff`); no shape carries a public wire that no constraint reads (`TestEveryPublicWireIsConstrained`, reading 29). Every leg's honest BDAT and DATA connection passes the gate, the checker and each part's circuit through `edgeSession`, π1's with Z1 in it (`TestMutatedWitnessHonestTwins`). `TestMeasureWholeSend` has proved whole sends that the gate accepted, BDAT and DATA on all three legs (11.4). `BenchmarkPi3Memory` measures π3's peak in a process that only proves, as a host would; it has run once on the shared M4 Pro (11.4), never on the M1 |
+| BDAT's unopened body (9.5) | A sidecar that pads its body records or puts a KeyUpdate among them, and sends the proven QUIT without waiting, smuggles nothing through a `crypto/tls` MX: past QUIT's 6 octets of padding the chunk never completes; short of them the MX takes a message of the declared length with the proven header block and reads at most 5 octets as a command; a KeyUpdate kills the connection at QUIT's tag (`part_bdat_test.go`) |
+| DATA at D-SMTP-16's size | A 100 KiB message, leading dots stuffed, goes through the gate in 54 parts on every leg, each fitting a production shape (`TestSendDataOf100KiBInPartsThroughTheGate`) |
+| `spec_test.go`, `testdata/vectors/`: this document held to the code | Built (SMTP-M9-33). `TestSpecNamesEveryCheck` requires each of E1-E3 and Z1-Z9 to have its definition here, tests of its own and a row in the mutation table; the vectors of 5.1 reproduce on every run |
 | `setup.go`, `setup_keys.go`, `setup/`: the ceremony, its verification and the KeySet | Built and tested end to end on small circuits: a tampered file, another circuit's transcript, keys the transcript does not fix and a changed cache file are each refused. `TestAKeySetProvesARealEhlo` ran it once at π1's real size under ChaCha20, 538,366 constraints over a domain of 2^20: the ceremony, the prover host's check and a proof the edge's own key accepted took 56 minutes and about 130 CPU-minutes on the shared M4 Pro, so the 22 production shapes, up to 2^23, will take many hours. Never run at production size |
 | `checker/`: the public relation, written apart | Drafted from this document and DESIGN.md alone, importing nothing from this module. It passes every leg's honest BDAT and DATA connection, and names the same failing checks as the gate and `relation.go` over a set of mutations (`checker_agreement_test.go`). Written by an agent, not by an engineer outside the circuits' authorship, which §22.10 asks for |
 | `smtp_proof.go` in the root: the injection seam | Built, with `MailForwarded` and `Measure`. `cli/smtp_prover.go` builds the prover from the pinned KeySet; nothing calls it yet, and server does not inject a verifier, because `ur daemon`, `SmtpSender` and `smtpedgeservice` do not exist |
@@ -594,7 +646,8 @@ Not built, each failing closed as stated:
 - **Keys.** No production setup has run, so no release pins a KeySet, ur injects no prover and server no verifier, and both sides would refuse every part. The ur.io download path is not built: it waits for its §2.8 row (section 14).
 - **More than one late ticket in a later DATA part.** A later part over a late NewSessionTicket takes a 1.3 shape holding one ticket of up to 255 octets (`TestALaterDataPartCoversALateTicketAndNoReply`); a longer ticket, or several, finds no shape and the send fails. 1.2 sends no ticket here, and any reply during the body stays unprovable (Z8). π3 handles tickets within its server blocks.
 - **Larger capacities.** Shapes hold a 4 KiB header block, about 10 recipients and a 2 KiB DATA part (10.4). Anything larger finds no shape and fails before MAIL or at the part. `smtp_recipients_per_message` allows 100, and whether a class or the sender holds more is the owner's call (section 14). Server blocks count records as well as octets: AES's 24 hold 12 replies only while each is under 32 octets, and replies that carry a queue or trace id run longer, so at about 5 recipients such an MX finds no shape. M7's census should size these. `TestProductionShapesHoldTheSpeedGatesSends` holds D-SMTP-16's sends to the shapes on every leg.
-- **Scripted MXs for the rest of FS-31.** The scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand. Those cases are tested at the relation and gate, not end to end.
+- **Scripted MXs for the rest of FS-31.** The scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand. Those cases are tested at the relation and gate, and through RecordMx for tickets and padded replies, not end to end through the circuits. A client's padded or KeyUpdate body records are tested end to end (above), and FS-31's full matrix is SMTP-M9-30's.
+- **Classes past the speed gate's send**, until `smtp-m9-22-recipient-classes` is answered (section 14).
 
 **Names.** The plan's tasks SMTP-M0-03 to SMTP-M9-25 name their Provides before the code existed; the code took these names, and where the two differ this document's are the ones that stand:
 
@@ -615,10 +668,12 @@ Not built, each failing closed as stated:
 | `shapeEnvelope`, `shapeHeaders`, `shapeReplies`, `shapeBdatPi1` to `shapeBdatPi3`, `shapeDataPart` | entries of `partShapes()`, by kind and dimensions (`backend.go`) |
 | `circuitPartProver`, `circuitPartVerifier` | `groth16Backend`'s `provePart` and `verifyPart` (`backend.go`) |
 | `SmtpProverMeasure`, `Prover.Measure` | as named: the root type and `SmtpProver.Measure`, `Prover.Measure` (`prover_measure.go`) |
+| `TestMutatedWitness*`, the M9 evidence table | as named, one test a check (`mutate_edge_test.go`, `mutate_circuit_test.go`), and `testdata/mutations/table.md` |
+| `smtpproof/testdata/vectors/` | as named, with `statements.json`, six fixed connections and one π1 proof (5.1) |
 
 ## 13. Readings taken
 
-Each is one reading of a point DESIGN.md leaves open, followed because it changes no D- item, format or invariant. A reviewer should challenge them.
+Each is one reading of a point DESIGN.md leaves open, followed because it changes no D- item, format or invariant. A reviewer should challenge them. Reconciled with the owner's answers as of draft 2: reading 14 is now the owner's decision, the forms of reading 19 for the issued values are plan-SMTP-small-readings #3 and #4 as answered, and no answer touches the others.
 
 1. **One command per record** (4.2). Z3's "lengths fix offsets" and §2.8 smtp-2's "each command's length, every RCPT TO's included" imply it.
 2. **The header block is one record, ending at its CRLF CRLF** (4.2, Z5). It bounds the header block at the TLS record maximum of 16 KiB and adds nothing to what smtp-2 already lists.
@@ -641,10 +696,14 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 19. **The preamble's forms** (section 6). §14.5 calls these values proven and says the edge resolves `recipient_domain`, but states no syntax. The proofs mean what the design says only if a template holds one command, so the forms are refused here, whatever the engine's own gate does.
 20. **The gate ends at its first refusal** (section 6). §14.7 says a refused record or part cuts the connection, and the root's seam says an error ends it; the gate now ends itself too, so nothing is released after a refusal even where a caller would go on.
 21. **MAIL counts as forwarded when a call hands it out** (`MailForwarded`). A record cleared by a call that then cuts is returned to no caller and never written, so the unit §14.7 charges "once its MAIL record is forwarded" is not charged for it.
-22. **A host's DATA cap is the slowest suite's** (`Measure`). A later part's circuit is fixed, so its cost does not depend on what it carries: the host proves one full part per suite it holds keys for, its rate is a part's octets over the slowest suite's time, `smtp_data_proof_bytes` is that rate over §14.4's 2 h, and a host whose part takes longer than 2 minutes sends nothing in DATA mode. π1 to π3 are left out of the 2 h, a few parts' worth. `Measure` is on `SmtpProver`, since the sender that records `p/` holds only that seam.
+22. **A host's DATA cap is the slowest suite's** (`Measure`). A later part's circuit is fixed, so its cost does not depend on what it carries: the host proves one full part per suite it holds keys for, its rate is a part's octets over the slowest suite's time, `smtp_data_proof_bytes` is that rate over §14.4's 2 h, and a host whose part takes longer than 2 minutes sends nothing in DATA mode. π1 to π3 are left out of the 2 h, a few parts' worth. Before any of this the host proves one part of each suite's largest shape, DATA's π3, over a session made up for it, as plan-SMTP-small-readings #19 has it: a host that cannot, for want of memory most likely, records no `p/` and only queues. `Measure` is on `SmtpProver`, since the sender that records `p/` holds only that seam.
 23. **A template no plaintext of the record's length can fill is refused as E3** (section 5). The edge refuses such a part before verifying it, so it is the gate's refusal, and the independent checker names it so too, though the relation would fail Z4 on it.
 24. **`smtpproof/setup` stays where SMTP-M9-27 puts it.** C-23 moves into `sidecarctl` the commands plans put under `bringyourctl` or `warpctl`; this one the plan puts under `smtpproof`, and the root module cannot require `smtpproof`. Its work is `RunSetup`, which `sidecarctl` could call if the owner wants it there.
 25. **On a BULK message `List-Unsubscribe-Post` is a single field** (Z5.6). DESIGN.md's Z5 asks for the field when BULK is set, and RFC 8058 §3.1 says it holds the single key/value pair `List-Unsubscribe=One-Click`. Counting only lines equal to that literal, as draft 1 did, let a continuation turn the field's value into something else, or a second field of another value stand beside it, and the relation, the circuits and the checker all passed both. So the field is counted by name, as rule 4 counts its four, held to the literal and to no continuation. A message without BULK keeps whatever such fields MAIL wrote.
+26. **Z3's outer type, and all of 1.2's Z3, are the edge's** (sections 6 and 7). A record's outer type is public and the circuit sees only ciphertext, so a part whose record is not application_data is refused before verification, as E3, as the checker refuses it: the relation named it Z3, while a real proof of it would have verified, its record able only to meet E1. In 1.2 Z3 holds nothing more, the plaintext's length being the record's, so no witness can break Z3 alone there; and Z7's 1.2 half, a server record's type, is E1's likewise. The mutation table lists these cells as no witness's (section 8).
+27. **A server record's opening is Z2's** in `relation.go` and the checker, as a client record's is, and Z7 is what an opened server record may hold. Z7's text names the opening too; section 8's row for replayed server replies means it, and the relation's Z2 is where a replay fails.
+28. **A part whose record count its index has no roles for is refused as E3** (4.3's table). Roles follow from public values, so the edge refuses such a part before verifying it, as reading 23 has it for a template. The checker named it Z4 or Z6 until SMTP-M9-29 held the two readers to one table.
+29. **Every public wire is read by some constraint** (5.1). Groth16 weighs each public input by its own element of the verifying key, the identity for a wire no constraint reads, so such a wire verifies at any value. That was harmless where the edge always assigns the wire zero, as it does every wire found unread, but a verifier written apart from this one could not know it. So a shape carries `IsLocal` only on blocks that can hold a local part, and binds `DataMode` where only π3 reads it, `ResumeTwoBlocks` in 1.3 and a body pool's last `Start` to that zero. This changes public input counts (11.4) and no gadget's cost.
 
 ## 14. Open
 
@@ -665,4 +724,6 @@ Evidence M9 still needs, none of which this draft provides (§22.10):
 - two non-authors' written soundness argument;
 - a checker of the public relation by an engineer who did not write the circuits: `checker/` is a draft of it, written apart from the prover tree but by an agent of this track;
 - D-SMTP-16's speed, coverage and interop runs on its named hardware and census MXs;
-- FS-31 and FS-123 on T2 and T3.
+- FS-31 and FS-123 on T2 and T3;
+- `BenchmarkPi3Memory` on the 8 GB M1, which decides whether π3 fits there or a host caps its parallelism (11.4);
+- a review of the vectors of 5.1 against an implementation written apart, the bytes the exit review freezes.

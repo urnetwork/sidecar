@@ -7,6 +7,7 @@ package smtpproof
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
@@ -179,5 +180,43 @@ func TestAReplyDuringTheBodyEndsTheSendWithItsCode(t *testing.T) {
 		if err != nil || reply == nil || reply.code != "451" {
 			t.Errorf("%s: reply %v, %v", leg.name, reply, err)
 		}
+	}
+}
+
+func TestSendDataOf100KiBInPartsThroughTheGate(t *testing.T) {
+	// D-SMTP-16's DATA size: every octet opened, in parts of DataPartBytes, leading dots stuffed, through
+	// the real gate with the relation as its verifier, to the MX as one transaction of the message
+	// itself. Every part finds a production shape, so the circuits as built hold such a send
+	var body strings.Builder
+	for i := 0; body.Len() < 100*1024; i += 1 {
+		if i%25 == 0 {
+			body.WriteString(".a line that begins with a dot, which DATA stuffs and the MX unstuffs\r\n")
+		} else {
+			body.WriteString("a line of a hundred-kibibyte message, whole and under RFC 5322's 998 octets\r\n")
+		}
+	}
+	for _, leg := range testTlsLegs() {
+		job := testJob(body.String(), "bob", "carol")
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+		settings := DefaultProverSettings()
+		settings.ForceData = true
+		send := testRunSend(t, leg, testMxDefaults(), settings, job)
+		testExpectOneTransaction(t, leg, send, job)
+		if send.result.Mode != partModeData {
+			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
+		}
+		// pi1, pi2, then parts of at most DataPartBytes of the stuffed message, the end mark and QUIT on
+		// the last
+		parts := len(send.backend.statements)
+		least := 2 + (int(job.Preamble.MessageByteCount)+settings.DataPartBytes-1)/settings.DataPartBytes
+		if parts < least {
+			t.Errorf("%s: %d parts for %d octets, want at least %d", leg.name, parts, job.Preamble.MessageByteCount, least)
+		}
+		for _, statement := range send.backend.statements {
+			if _, err := partShapeFor(statement); err != nil {
+				t.Errorf("%s: part %d: %v", leg.name, statement.index, err)
+			}
+		}
+		t.Logf("%s: %d octets in %d parts", leg.name, job.Preamble.MessageByteCount, parts)
 	}
 }

@@ -28,6 +28,10 @@ import (
 // the module moved into v2026/ (§4.9), so there it sits one directory further up.
 var testDesignPaths = []string{"../DESIGN.md", "../../DESIGN.md"}
 
+// Where RECORD.md is from this directory, which writes record.proto's entry bodies as its own fences (§16.8's kinds
+// row). It sits beside the module, and the second path serves a tree that moves it as DESIGN.md moves.
+var testRecordMdPaths = []string{"../RECORD.md", "../../RECORD.md"}
+
 // Written so a fence's string, identifier, number and punctuation each stay one token.
 var testFenceToken = regexp.MustCompile(`"[^"]*"|[A-Za-z_][A-Za-z0-9_.]*|0x[0-9A-Fa-f]+|[0-9]+|[{};=,<>]`)
 
@@ -51,6 +55,14 @@ var testFirstDeclarationFiles = map[string]string{
 	"MailAuthEvidence": "protocol/mail.proto",
 	"BridgeRows":       "protocol/bridge/bridge.proto",
 	"WindowDelegation": "protocol/bridge/bridge.proto",
+	// RECORD.md's fences after its first name no file, and each is record.proto's.
+	"RecordDepositBatch": "protocol/record.proto",
+	"LedgerScopeBody":    "protocol/record.proto",
+	"LogSettingsBody":    "protocol/record.proto",
+	"DisclosurePacket":   "protocol/record.proto",
+	"AttestationBody":    "protocol/record.proto",
+	"ModelManifest":      "protocol/record.proto",
+	"RunCostBody":        "protocol/record.proto",
 }
 
 // A field as a fence writes it. A map's typeName reads map<key,value>.
@@ -237,16 +249,23 @@ func testReadDesign(t testing.TB) []byte {
 	return design
 }
 
-// Every fenced proto block in DESIGN.md, then testUnfencedFence, read into one set of declarations, with
-// testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend. A declaration that
-// later gains a fence is then written twice, which says to take it out of testUnfencedFence, and an added field or
-// value the design comes to write fails until its line leaves its list.
-func testReadFences(t *testing.T) *testFences {
-	design := testReadDesign(t)
-	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
+// RECORD.md's bytes, from the first of testRecordMdPaths that holds it.
+func testReadRecordMd(t testing.TB) []byte {
+	recordMd, err := os.ReadFile(testRecordMdPaths[0])
+	if errors.Is(err, os.ErrNotExist) {
+		recordMd, err = os.ReadFile(testRecordMdPaths[1])
+	}
+	if err != nil {
+		t.Fatalf("this test needs RECORD.md beside the module: %v", err)
+	}
+	return recordMd
+}
+
+// Each fenced proto block in a document, read into fences, and how many there were.
+func testParseFences(t *testing.T, fences *testFences, document []byte) int {
 	var fence *strings.Builder
 	count := 0
-	for line := range strings.SplitSeq(string(design), "\n") {
+	for line := range strings.SplitSeq(string(document), "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case fence == nil && trimmed == "```proto":
@@ -259,9 +278,24 @@ func testReadFences(t *testing.T) *testFences {
 			fence.WriteString(line + "\n")
 		}
 	}
+	return count
+}
+
+// Every fenced proto block in DESIGN.md and RECORD.md, then testUnfencedFence, read into one set of declarations,
+// with testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend. A declaration
+// that later gains a fence is then written twice, which says to take it out of testUnfencedFence, and an added field
+// or value the design comes to write fails until its line leaves its list.
+func testReadFences(t *testing.T) *testFences {
+	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
+	count := testParseFences(t, fences, testReadDesign(t))
 	// A parser that found nothing would pass everything below.
 	if count < 27 || len(fences.messages) < 120 {
 		t.Fatalf("found %d fences and %d messages, too few to have read the design", count, len(fences.messages))
+	}
+	designMessageCount := len(fences.messages)
+	recordMdCount := testParseFences(t, fences, testReadRecordMd(t))
+	if recordMdCount < 8 || len(fences.messages)-designMessageCount < 40 {
+		t.Fatalf("found %d fences and %d messages in RECORD.md, too few to have read it", recordMdCount, len(fences.messages)-designMessageCount)
 	}
 	testParseFence(t, fences, testUnfencedFence)
 	for _, addition := range testFenceAdditions {

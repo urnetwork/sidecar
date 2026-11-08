@@ -1,10 +1,16 @@
-// The record's primitives (§16.8). An entry is a sealed file, so evs parses none of it, and that is all the fence's
-// "every field is sealed" below speaks of. Three of these messages also travel outside an entry, and servers parse
-// them: api and the gates read ApprovalDecision and ApprovalCancel (§2.8's api-10), and whatever a CanonicalAction
-// holds shows wherever a GrantActivate carries it into the log (api-7, §8.8) or a gate takes it beside a decision
-// (api-10, §16.6's spend check). testdata/metadata/fields.yml maps those fields to their rows, and says which have none.
+// The record's primitives (§16.8), then RECORD.md's entry bodies. An entry is a sealed file, so evs parses none of it,
+// and that is all the fence's "every field is sealed" below speaks of. Three of §16.8's messages also travel outside
+// an entry, and servers parse them: api and the gates read ApprovalDecision and ApprovalCancel (§2.8's api-10), and
+// whatever a CanonicalAction holds shows wherever a GrantActivate carries it into the log (api-7, §8.8) or a gate takes
+// it beside a decision (api-10, §16.6's spend check). testdata/metadata/fields.yml maps those fields to their rows, and
+// says which have none. RECORD.md's messages travel only sealed, in an entry or a deposit, or in a packet a person
+// hands to someone outside the log, so none of them needs a row (RECORD.md section 18; I-18).
 //
-// RECORD.md's kinds, class numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.
+// The four enums after §16.8's messages name the values CanonicalAction.kind, ApprovalRequest.risk and
+// ApprovalDecision.decision and .channel carry, and those fields stay uint32 on the wire, as §16.8 writes them
+// (plan-MCP-wire-enum-numbers). RECORD.md's kind numbers and classes are record_kind.go's rather than enums here: a
+// header carries a kind as a number, and a reader keeps a kind it does not know (§16.8). A bare section number, as in
+// 16.6, is DESIGN.md's, and "section n" is RECORD.md's.
 //
 // CanonicalAction's field 37 is reserved in D-PHASE-9's sense: declared here, and set only in version 2, for
 // format 2's evs_write, so an approver that does not know that version refuses it (§16.8).
@@ -99,7 +105,8 @@ message ApprovalDecision {                  // inside §6 Signed, purpose approv
   uint32 channel = 8;                       // evidence: device, presence or harness (owner decision 75)
   bytes sshsig = 9;
   bytes evidence_sha256 = 10;               // harness: the matched hook event, which stays in the record;
-                                            // presence: the WebAuthn assertion
+                                            // device and presence: empty, a presence decision's assertion riding
+                                            // in Signed.webauthn (record-md-presence-evidence-sha256)
   bytes requester_sidecar_id = 11;          // the only sidecar that may spend it (16.6)
   AuthPin auth_pin = 12;                    // §7.9's pin the approver evaluated the request under
   uint32 version = 13;                      // 1
@@ -119,4 +126,308 @@ message Coverage {                          // at run end, or after 10 min idle 
 message RetentionPolicy {                   // Signed (purpose record-entry) by the log's admin
   bytes log_id = 1; uint32 class = 2;       // a kind class, announce among them (keep_days 30, 16.11)
   uint32 keep_days = 3; uint32 searchable_days = 4; bool archive = 5;
+}
+
+// plan-MCP-wire-enum-numbers: names for what §16.8's uint32 fields carry, 0 unspecified and written by no one. An
+// approver, spender or gate refuses 0 or a value it does not know in any of them; §16.8's "unknown kinds are kept"
+// speaks of RecordHeader.kind alone.
+// CanonicalAction.kind: §5.4's SidecarActionKind in its order, one verb a value, 16.7's restore appended, and new
+// kinds append. publish and listen cover tls/ and smtp/ alike, since host and socket_name say which.
+enum SidecarActionKind {
+  SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
+  SIDECAR_ACTION_KIND_PUBLISH = 1; SIDECAR_ACTION_KIND_LISTEN = 2; SIDECAR_ACTION_KIND_FORWARD = 3;
+  SIDECAR_ACTION_KIND_EXPOSE = 4; SIDECAR_ACTION_KIND_EGRESS_CHANGE = 5; SIDECAR_ACTION_KIND_INVITE = 6;
+  SIDECAR_ACTION_KIND_SHARE = 7; SIDECAR_ACTION_KIND_ALIAS_CREATE = 8; SIDECAR_ACTION_KIND_ALIAS_DELETE = 9;
+  SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE = 10; SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE = 11;
+  SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
+  SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
+}
+// ApprovalRequest.risk: numeric order is the max §5.4 takes, and an agent may only raise it.
+enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }
+// ApprovalDecision.decision.
+enum ApprovalVerdict { APPROVAL_VERDICT_UNSPECIFIED = 0; APPROVAL_VERDICT_APPROVE = 1; APPROVAL_VERDICT_DENY = 2; }
+// ApprovalDecision.channel and AclRequestRule.evidence, as RECORD.md section 6.2 numbers them.
+enum ApprovalChannel {
+  APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
+  APPROVAL_CHANNEL_HARNESS = 3;
+}
+
+// RECORD.md section 5.4: a deposit file's one message, sealed under its object key (§11.12).
+message RecordDepositBatch { repeated RecordDeposit entries = 1; }   // <= 64 entries; <= 1 MiB unless one entry alone
+message RecordDeposit {
+  bytes entry = 1;                          // RecordEntry bytes; key_slot_id empty, key_index 0
+  bytes key = 2; bytes salt = 3;            // the body key and salt, which the ingester re-slots
+}
+
+// RECORD.md section 6.4: the new kinds' bodies, beside §16.8's messages (M3 unless a comment says otherwise).
+message CoordinationBody {                  // claim, handoff, ask, answer, check, note
+  string text = 1;                          // prose: claim and handoff <= 512 B, the others <= 1,024 B
+  repeated string targets = 2;              // <= 16; section 6.4's targets grammar
+  int64 expires_millis = 3;                 // claim, ask; else 0
+  bytes claim_id = 4;                       // a claim restated: the opening entry's entry_id; empty when opening
+  uint32 claim_state = 5;                   // claim: 1 active, 2 released (§16.11's Claim.state)
+  uint32 result = 6;                        // check: 1 pass, 2 fail, 3 objection (a person's "no")
+}
+message ContextBody {                       // context
+  uint32 stage = 1;                         // 1 start, 2 restatement (section 4.3)
+  string harness = 2; string harness_version = 3;
+  string agent_label = 4;                   // [a-z0-9-]{1,64}, as §16.11's AnnounceWho
+  repeated string session_ids = 5;          // <= 4, each <= 64 B
+  string model = 6;                         // an identifier <= 64 B, or empty
+  string permission_mode = 7;               // the harness's own string, <= 32 B
+  bytes repo_id = 8;                        // the run's evs repo, else empty
+  string project = 9;                       // §16.11's project key rule, <= 128 B; T: empty when the repo is private
+  string branch = 10;                       // V: a git ref name <= 128 B
+  string title = 11;                        // V: §16.10's run title, <= 120 B after redaction
+  repeated InstructionFile instruction_files = 12;  // <= 64
+  repeated string truncations = 13;         // V: <= 16 warnings, each <= 128 B: a base name and its cut
+  bytes config_sha256 = 14;                 // the harness config hash §16.6 checks
+  bytes continues_run_id = 15; bytes continues_entry_id = 16;
+}
+message InstructionFile {
+  uint32 scope = 1;                         // 1 managed, 2 user, 3 project
+  string name = 2;                          // V: the file's base name, <= 128 B; T keeps the hash (§16.7)
+  bytes sha256 = 3; uint64 size = 4;
+}
+message ChangeBody {                        // change: one scan's changes (§16.7), the tree's manifest
+  bytes repo_id = 1; string project = 2;    // as ContextBody
+  string base_commit = 3;                   // the git oid the interval started from
+  repeated string commits = 4;              // <= 64 commits the run made in the interval: commit-to-run links
+  uint32 path_count = 5;                    // changed paths in all
+  uint32 edit_count = 6; uint32 shell_count = 7; uint32 foreign_count = 8;  // by §16.7's attribution
+  uint32 capture = 9;                       // bits: 1 hooks, 2 scan, 4 file events
+  repeated ChangedPath paths = 10;          // <= 4,096; past it path_count stands, and coverage has truncation
+}
+message ChangedPath {                       // in T a row keeps its hashes, as §16.7's `change` entry with hashes
+  string path = 1;                          // V: relative to the worktree
+  bytes before_sha256 = 2; bytes after_sha256 = 3;  // §16.7's ledger; empty when absent or unknown
+  uint32 mode = 4;                          // git's file mode
+  uint32 attribution = 5;                   // 1 edit, 2 shell, 3 foreign (§16.7)
+  bytes blob_entry_id = 6;                  // V: the blob with the after bytes; empty past §16.7's 8 MiB
+}
+message PermissionBody {                    // permission: a harness's own step, never an I-8 decision
+  uint32 decision = 1;                      // 0 unknown, 1 asked, 2 allowed, 3 denied
+  uint32 decided_by = 2;                    // 0 unknown, 1 user, 2 config, 3 hook, 4 classifier
+  string permission_mode = 3;
+  uint32 tool_class = 4;                    // 1 shell, 2 edit, 3 mcp, 4 web, 5 other
+  string tool_name = 5;                     // V: <= 64 B
+  bytes arguments_sha256 = 6;               // V: §16.6's hash of the arguments
+}
+message ApprovalUseBody {                   // approval_use: §16.6's "an approval entry per use"
+  bytes approval_id = 1; uint32 use_index = 2; bytes payload_sha256 = 3; bytes effect_key = 4;
+  uint32 state = 5;                         // §16.6's Outcome: 1 done, 2 not_done, 3 uncertain
+  bytes effect_ref = 6; int64 reserved_millis = 7; int64 outcome_millis = 8;
+}
+message RouteBody {                         // route (M4)
+  uint32 event = 1;                         // 1 opened, 2 closed
+  uint32 kind = 2;                          // 1 forward, 2 expose, 3 route, 4 map (§17.8)
+  bytes rule_id = 3;                        // bridge rules; a forward's grant is the header's grant_id
+  bytes target_sidecar_id = 4; uint32 target_port = 5; repeated string cidrs = 6;
+  int64 expires_millis = 7; bytes approval_id = 8;
+  uint32 reason = 9;                        // closed: 1 expired, 2 revoked, 3 withdrawn, 4 suspended
+}
+message PublishBody {                       // publish (M5)
+  uint32 event = 1;                         // 1 opened, 2 closed
+  string host = 2; uint32 port = 3; uint32 audience = 4; uint32 app_mode = 5;
+  int64 expires_millis = 6; bytes approval_id = 7; uint32 reason = 8;  // reason as RouteBody
+}
+message RestoreBody {                       // restore: one apply of run_restore (§16.7)
+  bytes restored_run_id = 1; bytes preview_id = 2;
+  bytes approval_id = 3;                    // a tainted run's, or shell paths', else empty
+  uint32 restored_count = 4; uint32 conflict_count = 5;
+  repeated RestoredPath paths = 6;          // V: <= 4,096
+}
+message RestoredPath {
+  string path = 1;
+  string result = 2;                        // restored, or §16.7's conflict name
+  repeated string copies = 3;               // <= 2: §16.7's copies beside the path
+}
+message MembershipBody {                    // membership: §16.8's mirror of §5.4's SidecarEvents, by their names
+  uint32 event = 1;                         // 1 member_added, 2 member_removed, 3 admission_alarm, 4 recovery_rebind,
+                                            // 5 recovery_window, 6 recovery_unseen
+  bytes member_id = 2; bytes sidecar_id = 3; bytes group_id = 4;
+  uint64 auth_position = 5;                 // the statement's log position; 0 for an alarm
+  bytes statement_sha256 = 6;               // the statement's Signed as stored
+  uint32 evidence = 7;                      // a member's own device revocation (§5.6): 1 presence, 2 confirmation
+  bytes assertion = 8;                      // evidence 1: the WebAuthnEvidence as stored (§6.9)
+  uint32 reason = 9;                        // the revocation's reason, as its statement gives it
+  uint32 signed_type = 10;                  // §6.11's SignedType of the statement that raised it, such as SidecarAdmit
+}
+message KeyBody {                           // key: §5.4's key_changed
+  uint32 event = 1;                         // 1 key_changed
+  bytes group_id = 2; uint64 generation = 3; uint32 cause = 4;  // a rotation: §10.5's GenRotate cause
+  bytes key_id = 5; uint64 auth_position = 6; bytes statement_sha256 = 7;
+  uint32 signed_type = 8;                   // §6.11's SignedType: KeyRegister, KeyRevoke, RecoveryBind or
+                                            // RecoveryRebind; 0 for a rotation
+}
+message ReadBody {                          // read: §16.8's read receipt
+  repeated bytes object_ids = 1;            // <= 64: a 16 B entry_id, or a 32 B index file's content_sha256 (§11.14)
+  uint32 purpose = 2;                       // 1 read, 2 search, 3 export, 4 disclosure
+  bytes read_log_id = 3;                    // in T: the log read; else empty
+}
+message ErasureBody {                       // erasure: §16.8's entry in the eraser's stream
+  bytes erasure_id = 1;                     // §11.12's id; its ERASE and CLOSURE notes name it
+  repeated bytes entry_ids = 2;             // <= 1,024; a larger erasure writes several
+  uint32 reason = 3;                        // 1 person, 2 retention, 3 moderation, 4 revocation
+  bytes request_id = 4;                     // reason 4: the DirectoryErasureRequest
+}
+message InventoryBody {                     // inventory: one a sidecar a UTC day it ran anything
+  bytes sponsor_member_id = 1;              // the member, or a tagged sidecar's sponsor
+  uint32 day = 2;                           // days since 1970-01-01, UTC
+  bytes credential_ref = 3;                 // a delegation_id or auth key id; never a value (I-7)
+  repeated InventoryAgent agents = 4;       // <= 64
+}
+message InventoryAgent {
+  bytes agent_id = 1; string agent_label = 2; uint32 agent_source = 3;
+  repeated string harnesses = 4;            // <= 8, each name/version
+  repeated string models = 5;               // <= 16
+  repeated bytes repo_ids = 6; repeated string projects = 7;  // <= 64 each; a private repo's id, with no project
+  uint32 runs = 8; int64 first_seen_millis = 9; int64 last_seen_millis = 10;
+}
+message AgentSignedBody {                   // the sealed plaintext of RecordEntry.version 2 (M6; section 5.3)
+  bytes body = 1; bytes agent_id = 2; bytes key_id = 3; bytes signature = 4;
+}
+message Opening {                           // an entry with what opens it
+  bytes header = 1;                         // RecordEntry.header, the whole Signed, as stored
+  bytes salt = 2; bytes body = 3;           // both empty: the header alone
+}
+message CopyBody { repeated Opening entries = 1; }  // copy (M6): <= 64 entries the daemon deposited to T
+message TranscriptBody {                    // transcript: a chunk of §16.7's tail
+  uint64 first_line = 1; uint32 line_count = 2;
+  bytes lines = 3;                          // the harness's JSONL lines after redaction, <= 1 MiB
+  bool truncated = 4;
+}
+message ToolCallBody {                      // tool_call: §16.7's PostToolUse family and the daemon's MCP calls
+  string tool_name = 1; string tool_use_id = 2; uint32 tool_class = 3;  // tool_class as PermissionBody
+  bytes input = 4; bytes output = 5;        // after redaction, <= 1 MiB together (§16.7)
+  int64 started_millis = 6; int64 ended_millis = 7; int32 exit_code = 8;
+  repeated string paths = 9;                // <= 256: the paths the call names
+  bool truncated = 10;
+}
+message HookEventBody {                     // hook_event: the payload ur hook passed, after redaction, <= 1 MiB
+  string event = 1;                         // the harness's event name
+  bytes payload = 2;
+  bytes arguments_sha256 = 3;               // §16.6's hash, for harness_ok's match
+}
+message FileEventBody {                     // file_event (M6)
+  string path = 1; uint32 op = 2;           // 1 create, 2 write, 3 delete, 4 rename
+  bytes after_sha256 = 3; int64 millis = 4;
+}
+message BlobBody {                          // blob: one changed file's after bytes
+  string path = 1; bytes content = 2;       // after redaction, <= 8 MiB (§16.7)
+  bytes sha256 = 3;                         // the bytes as captured, before redaction: the ledger's after_sha256
+  bool redacted = 4; uint64 size = 5;
+}
+
+// RECORD.md section 6.5: an R log's scope (M6).
+message LedgerScopeBody {                   // ledger_scope (M6)
+  repeated bytes repo_ids = 1;              // <= 256
+  repeated string projects = 2;             // <= 256, §16.11's project keys
+  repeated uint32 kinds = 3;                // the kinds copied here, from context, change, the approval family,
+                                            // restore and coverage; empty: all of them; cost joins this list only
+                                            // once Q-RECORD-6 sends it past V, and a writer leaves it out till then
+}
+
+// RECORD.md section 10.1: the verifiable log's settings and checkpoints (M6).
+message LogSettingsBody {                   // log_settings
+  string origin = 1;                        // ur.io/recurd/log/<log_id hex>: a name, never dialed
+  bytes checkpointer_sidecar_id = 2;        // a device with rw on the log: an admin's device or indexer
+  bytes note_public_key = 3;                // its Ed25519 log key, 32 B
+  uint32 interval_seconds = 4;              // 3,600 by default; 300 to 86,400; 0 turns the log off
+  repeated LogWitness witnesses = 5;        // <= 8; empty while Q-RECORD-8 is open
+  uint64 from_batch = 6;                    // the first batch this entry governs
+}
+message LogWitness {
+  string name = 1;                          // its cosigner name
+  string url = 2;                           // its submission prefix, https only (c2sp.org/tlog-witness)
+  string vkey = 3;                          // its verifier key
+}
+message LogCheckpointBody {                 // checkpoint
+  uint64 batch = 1;                         // from 1, +1 each
+  uint64 first_index = 2;                   // the tree index of this batch's first leaf
+  repeated LogFrontier frontier = 3;        // sorted by ref_id
+  bytes leaves = 4;                         // this batch's leaves, 32 B each, in order
+  bytes note = 5;                           // the signed checkpoint, by the log key alone (section 10.2's steps)
+  repeated LogCosigned cosigned = 6;        // the cosignature lines got since the last entry
+}
+message LogFrontier { bytes ref_id = 1; uint64 version = 2; bytes chain = 3; }  // chain is C_v (§11.8)
+message LogCosigned {
+  uint64 batch = 1;                         // the batch whose note these lines cosign
+  bytes lines = 2;                          // each witness's signature lines, as it returned them
+}
+
+// RECORD.md section 11: disclosure packets and the log's record of them (M6).
+message DisclosurePacket {                  // one file; the verifier needs no other
+  uint32 version = 1;                       // 1
+  bytes log_id = 2; string origin = 3; int64 created_millis = 4;
+  repeated DisclosedEntry entries = 5;      // <= 1,024
+  repeated bytes checkpoints = 6;           // signed notes, each with the lines of its cosigned rows appended
+  repeated DisclosedKey keys = 7;
+  string purpose = 8;                       // <= 512 B, as the person typed it
+}
+message DisclosedEntry {
+  Opening opening = 1;                      // section 6.4; salt and body empty for a header alone
+  uint64 leaf_index = 2; uint32 checkpoint = 3;  // checkpoint: an index into checkpoints
+  repeated bytes inclusion_path = 4;        // RFC 9162 §2.1.3, <= 63 hashes
+  repeated Opening content = 5;             // the author's openings of its ContentRefs, if given
+}
+message DisclosedKey {
+  bytes key_id = 1; bytes sidecar_id = 2; uint32 alg = 3; bytes public_key = 4;
+  string label = 5;                         // the person or device, as the team states it
+}
+message DisclosureBody {                    // disclosure: the log's own record of the act
+  uint32 act = 1;                           // 1 packet, 2 opening, 3 export
+  bytes packet_sha256 = 2;                  // acts 1, 2: the file's SHA-256
+  repeated bytes entry_ids = 3;             // acts 1, 2: <= 1,024
+  string recipient = 4;                     // <= 128 B (prose), as typed
+  string purpose = 5;                       // <= 512 B (prose)
+  int64 since_millis = 6; int64 until_millis = 7;  // act 3: the range, 0 where none was given
+  uint32 format = 8;                        // act 3: 1 jsonl, 2 ocsf, 3 otel, 4 git (ur evs export)
+  bool bodies = 9;                          // act 3: bodies left the log
+  repeated uint32 kinds = 10;               // act 3: --kind's list, empty for all
+  bytes run_id = 11;                        // act 3: --run, else empty
+}
+
+// RECORD.md section 11: a person's statement about commits (M6).
+message AttestationBody {                   // attestation (M6), by a person's device
+  uint32 statement = 1;                     // 1 reviewed, 2 tested, 3 approved
+  repeated string commits = 2;              // <= 64 git oids
+  bytes repo_id = 3; string note = 4;       // note <= 512 B (prose)
+  bytes sshsig = 5;                         // section 5.1's attestation sshsig
+}
+
+// RECORD.md section 12: model receipts (M6).
+message ModelManifest {                     // model (M6), by the model host's daemon
+  uint32 port = 1;                          // the local port: a forward's target_port
+  ModelField served_name = 2;               // the name clients ask for
+  ModelField engine = 3;                    // vllm, sglang, ollama, llama.cpp or other
+  ModelField engine_version = 4;
+  ModelField quantization = 5;
+  ModelField weights_digest = 6;            // section 5.1's weights_digest, in lowercase hex
+  uint64 weights_bytes = 7;
+}
+message ModelField {
+  string value = 1;                         // an identifier <= 128 B
+  uint32 evidence = 2;                      // section 12's evidence: 1 declared, 2 reported, 3 measured, 4 attested
+}
+message ModelCallBody {                     // model_call (M6)
+  string model = 1; string provider = 2; string request_id = 3;  // each <= 128 B, as the harness reports them
+  uint64 input_tokens = 4; uint64 output_tokens = 5;
+  uint64 cache_read_tokens = 6; uint64 cache_write_tokens = 7;
+  uint64 reported_micro_usd = 8;            // the harness's own amount, else 0
+  int64 started_millis = 9; uint32 duration_millis = 10;
+}
+
+// RECORD.md section 13.1: run cost (M6).
+message RunCostBody {                       // cost (M6): written with each coverage entry, which supersedes as it does
+  repeated ModelUsage usage = 1;            // <= 16, by model
+  uint64 metered_bytes = 2;                 // the sum of the run's tool results' metered_bytes (§16.6)
+}
+message ModelUsage {
+  string model = 1;
+  uint64 input_tokens = 2; uint64 output_tokens = 3;
+  uint64 cache_read_tokens = 4; uint64 cache_write_tokens = 5;
+  uint64 calls = 6;
+  uint64 reported_micro_usd = 7;            // the sum of what the harness reported, else 0
+  bool complete = 8;                        // false where coverage has a gap that may hide calls
 }

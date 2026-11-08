@@ -34,6 +34,8 @@ func (self *testClock) advance(by time.Duration) {
 type testClockedBackend struct {
 	clock *testClock
 	costs map[uint16]time.Duration
+	// When set, the error a statement's proof ends in, as a host short of memory or keys would see.
+	refuse func(statement *partStatement) error
 	// The statements it was asked to prove.
 	statements []*partStatement
 }
@@ -44,6 +46,11 @@ func (self *testClockedBackend) provePart(ctx context.Context, statement *partSt
 		return nil, errNoKeys
 	}
 	self.statements = append(self.statements, statement)
+	if self.refuse != nil {
+		if err := self.refuse(statement); err != nil {
+			return nil, err
+		}
+	}
 	self.clock.advance(cost)
 	return []byte("measured"), nil
 }
@@ -72,6 +79,72 @@ func TestMeasurePartsFillTheirShapesAndSatisfyTheRelation(t *testing.T) {
 			t.Errorf("%#x %#x: found %+v, %v", shape.version, shape.suite, found, err)
 		}
 	}
+	// and so is each suite's DATA pi3, the largest of its shapes
+	largest := measureLargestShapes()
+	if len(largest) != 4 {
+		t.Fatalf("%d suites' largest shapes", len(largest))
+	}
+	for _, shape := range largest {
+		if shape.kind != partKindMessage || shape.bodyBlocks == 0 {
+			t.Errorf("%#x: the largest shape is %+v, not DATA's pi3", shape.suite, *shape)
+		}
+		statement, witness, err := newMeasureMessagePart(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
+			t.Errorf("%#x %#x: pi3: %v", shape.version, shape.suite, failures)
+		}
+		found, err := partShapeFor(statement)
+		if err != nil || *found != *shape {
+			t.Errorf("%#x %#x: pi3 found %+v, %v", shape.version, shape.suite, found, err)
+		}
+	}
+}
+
+func TestMeasureProvesEachSuitesLargestShapeFirst(t *testing.T) {
+	prover, backend := testMeasuringProver(map[uint16]time.Duration{
+		tlsSuiteAes128GcmSha256:           10 * time.Second,
+		tlsSuiteChacha20Poly1305Sha256:    5 * time.Second,
+		tlsSuiteEcdheRsaAes128GcmSha256:   20 * time.Second,
+		tlsSuiteEcdheEcdsaAes128GcmSha256: 20 * time.Second,
+	})
+	if _, err := prover.Measure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.statements) != 8 {
+		t.Fatalf("proved %d parts, want each suite's pi3 and then its later part", len(backend.statements))
+	}
+	for i, statement := range backend.statements {
+		want := uint32(measurePartIndex)
+		if i < 4 {
+			want = 3
+		}
+		if statement.index != want || statement.mode != partModeData {
+			t.Errorf("part %d: index %d mode %d", i, statement.index, statement.mode)
+		}
+	}
+}
+
+func TestMeasureRecordsNothingWhereTheLargestShapeCannotProve(t *testing.T) {
+	// plan-SMTP-small-readings #19: a host that cannot prove its largest shape records no p/ and only
+	// queues. A host out of memory dies in the attempt; any other failure ends Measure with no result
+	prover, backend := testMeasuringProver(map[uint16]time.Duration{tlsSuiteAes128GcmSha256: time.Second})
+	backend.refuse = func(statement *partStatement) error {
+		if statement.index == 3 {
+			return errors.New("out of memory")
+		}
+		return nil
+	}
+	if measure, err := prover.Measure(context.Background()); err == nil {
+		t.Fatalf("measured %+v", measure)
+	}
+	if len(backend.statements) != 1 {
+		t.Errorf("proved %d parts after the largest failed", len(backend.statements))
+	}
+	if settings := prover.sendSettings(); settings.DataProofBytes != DefaultProverSettings().DataProofBytes || settings.DataPartBytes != DefaultProverSettings().DataPartBytes {
+		t.Errorf("a failed measure set part %d and cap %d", settings.DataPartBytes, settings.DataProofBytes)
+	}
 }
 
 func TestMeasureSetsTheDataLimitsByTheSlowestSuite(t *testing.T) {
@@ -85,8 +158,8 @@ func TestMeasureSetsTheDataLimitsByTheSlowestSuite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 4 {
-		t.Errorf("proved %d parts, want one per later-part shape", len(backend.statements))
+	if len(backend.statements) != 8 {
+		t.Errorf("proved %d parts, want each suite's largest and one per later-part shape", len(backend.statements))
 	}
 	// 1.3's part carries one octet fewer, for its inner type, so the smallest part is 2047 octets, and
 	// the slowest suite takes 20 s for one
@@ -145,7 +218,7 @@ func TestMeasureSkipsSuitesWithoutKeysAndFailsWithNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(backend.statements) != 1 || measure.DataBytesPerSecond != 2047/4 {
+	if len(backend.statements) != 2 || measure.DataBytesPerSecond != 2047/4 {
 		t.Errorf("%d parts, rate %d", len(backend.statements), measure.DataBytesPerSecond)
 	}
 

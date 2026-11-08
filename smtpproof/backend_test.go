@@ -1036,8 +1036,7 @@ func TestGroth16ProofOfARealEhlo(t *testing.T) {
 		t.Skip("runs a real setup")
 	}
 	leg := testTlsLegs()[1]
-	shape := partShapes()[1]
-	keys := testSetup(t, shape)
+	keys := testRealEhloKeys(t)
 	backend := newGroth16Backend()
 	backend.addKeys(keys)
 

@@ -45,10 +45,9 @@ type Sidecar struct {
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,
 // and refused, so a value left unset never reads as one.
 //
-// §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order, the reading
-// plan-MCP-wire-enum-numbers.md recommends. Nothing hashes or sends them yet: RECORD-M2-01 and
-// MCP-M3-02 take them into record.proto, and they freeze with it at M3. §16.7's restore is the
-// next number, which MCP-M3-02 adds.
+// §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order with §16.7's
+// restore appended, as plan-MCP-wire-enum-numbers.md fills them. record.proto's SidecarActionKind
+// holds the same values, which record_kind_test.go checks, and they freeze with it at M3.
 type SidecarActionKind uint32
 
 const (
@@ -86,6 +85,8 @@ const (
 	SidecarActionAccessRequest SidecarActionKind = 15
 	// A payment.
 	SidecarActionPayment SidecarActionKind = 16
+	// A run_restore apply, which puts a run's files back (§16.7).
+	SidecarActionRestore SidecarActionKind = 17
 )
 
 // How much an outward action could cost, the larger of policy's and the daemon's classifier's

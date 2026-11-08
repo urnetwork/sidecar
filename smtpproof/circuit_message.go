@@ -99,7 +99,7 @@ func newHeaderScan(shape *partShape) *headerScan {
 		FromAt:    make([]frontend.Variable, size),
 	}
 	for range shape.headerBlocks {
-		scan.Blocks = append(scan.Blocks, newPoolBlock(shape.blockBytes()))
+		scan.Blocks = append(scan.Blocks, newPoolBlock(shape.blockBytes(), false))
 	}
 	return scan
 }
@@ -110,6 +110,8 @@ func zeroPoolBlock(block *poolBlock) {
 		block.Cipher[i] = 0
 		block.Literal[i] = 0
 		block.IsLiteral[i] = 0
+	}
+	for i := range block.IsLocal {
 		block.IsLocal[i] = 0
 	}
 }
@@ -454,7 +456,7 @@ type bodyBlock struct {
 
 func newBodyBlock(blockBytes int) *bodyBlock {
 	return &bodyBlock{
-		Block:  newPoolBlock(blockBytes),
+		Block:  newPoolBlock(blockBytes, false),
 		Active: make([]frontend.Variable, blockBytes),
 		Start:  make([]frontend.Variable, blockBytes),
 		End:    make([]frontend.Variable, blockBytes),
@@ -487,6 +489,10 @@ func checkBody(api frontend.API, stream *circuitKeystream, blocks []*bodyBlock) 
 	size := len(crActive)
 	api.AssertIsEqual(lfActive[0], 0)
 	api.AssertIsEqual(crActive[size-1], 0)
+	// a record starting at the pool's last octet could hold no CRLF, so no assignment marks it; bound
+	// here because the dot rule below never reads it, and a public wire no constraint reads would
+	// verify at any value
+	api.AssertIsEqual(starts[size-1], 0)
 	for i := range size {
 		if i+1 < size {
 			api.AssertIsEqual(crActive[i], lfActive[i+1])
