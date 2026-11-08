@@ -387,8 +387,8 @@ const (
 	testHeloName        = "o1.out.relay.example"
 	testMessageId       = "abcdefghijklmnopqrstuvwxyz@net.root.example"
 	testSelector        = "s1"
-	testXUrRef          = "1.AAAABBBBCCCCDDDD"
-	testFeedbackId      = "transactional:community:token:urnetwork"
+	testXUrRef          = "1.aeibceqtcqkrmfyydenbxifbukr2jjngu4"
+	testFeedbackId      = "n:c:gaytemzugu3doobzhi5typj6h4:urnetwork"
 )
 
 // A message whose header block meets Z5.

@@ -953,6 +953,28 @@ func TestVerifierRefusesAPreambleATemplateCouldCarryMoreThan(t *testing.T) {
 		{name: "a Message-ID with two", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MessageId = "a@b@c" }},
 		{name: "an issued reference with a space", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = "1.A B" }},
 		{name: "an issued Feedback-ID with a CRLF", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "a\r\nb" }},
+		// the exact forms of plan-SMTP-small-readings #3 and #4, each broken in one place
+		{name: "a reference of another version", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.XUrRef = "2." + strings.TrimPrefix(testXUrRef, "1.")
+		}},
+		{name: "a reference in upper case", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = strings.ToUpper(testXUrRef) }},
+		{name: "a reference one character short", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] }},
+		{name: "a reference one character long", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef + "a" }},
+		{name: "a reference with padding", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] + "=" }},
+		{name: "a reference outside base32", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] + "1" }},
+		{name: "a reference with a second spelling", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			// the last character carries three bits, so a set low bit spells the same octets again
+			preamble.XUrRef = testXUrRef[:len(testXUrRef)-1] + "5"
+		}},
+		{name: "a Feedback-ID of another class", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "x" + testFeedbackId[1:] }},
+		{name: "a Feedback-ID of another tier", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = "n:x" + testFeedbackId[3:] }},
+		{name: "a Feedback-ID with a short token", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.FeedbackId = strings.Replace(testFeedbackId, "h4:", "h:", 1)
+		}},
+		{name: "a Feedback-ID with a fifth field", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.FeedbackId = testFeedbackId + ":x" }},
+		{name: "a Feedback-ID with another sender field", mutation: func(preamble *sidecar.SmtpProofPreamble) {
+			preamble.FeedbackId = strings.TrimSuffix(testFeedbackId, "urnetwork") + "other"
+		}},
 		{name: "an empty HELO name", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.HeloName = "" }},
 		{name: "no envelope domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.EnvelopeDomain = "" }},
 		{name: "no MX host", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MxHost = "" }},

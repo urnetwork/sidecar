@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/sha256"
 	"encoding"
+	"encoding/base32"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -68,7 +69,52 @@ const (
 	labelMaxBytes  = 63
 	// What every 1.3 server record after Finished holds as its first octet if it is a ticket.
 	tlsInnerTypeBytes = 1
+
+	// X-UR-Ref's bytes (§14.6, plan-SMTP-small-readings #3): the version, then lowercase unpadded
+	// base32 of key_id (1 octet), send_id (12) and the HMAC's first 8 octets.
+	xUrRefVersion = "1."
+	xUrRefOctets  = 1 + 12 + 8
+	// Feedback-ID's fields (§14.6, plan-SMTP-small-readings #4): class, tier, the network's report
+	// token in lowercase unpadded base32 of 16 octets (plan-SMTP-net-token), and this constant.
+	feedbackIdSuffix = "urnetwork"
+	netTokenOctets   = 16
 )
+
+// Unpadded base32 (RFC 4648 §6). X-UR-Ref and the network token write it in lowercase.
+var unpaddedBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// Whether a value is the lowercase unpadded base32 of exactly octetCount octets, its unused low bits
+// zero, so that each value has one spelling. Go's decoder ignores those bits, so the octets are
+// encoded again and compared.
+func lowerBase32Form(value string, octetCount int) bool {
+	if len(value) != unpaddedBase32.EncodedLen(octetCount) {
+		return false
+	}
+	for i := range len(value) {
+		if !('a' <= value[i] && value[i] <= 'z' || '2' <= value[i] && value[i] <= '7') {
+			return false
+		}
+	}
+	upper := strings.ToUpper(value)
+	decoded, err := unpaddedBase32.DecodeString(upper)
+	return err == nil && len(decoded) == octetCount && unpaddedBase32.EncodeToString(decoded) == upper
+}
+
+// Whether a value is X-UR-Ref's 36 characters.
+func xUrRefForm(value string) bool {
+	token, found := strings.CutPrefix(value, xUrRefVersion)
+	return found && lowerBase32Form(token, xUrRefOctets)
+}
+
+// Whether a value is Feedback-ID's 40 characters: n or b, then c, p or t, then the token.
+func feedbackIdForm(value string) bool {
+	fields := strings.Split(value, ":")
+	return len(fields) == 4 &&
+		(fields[0] == "n" || fields[0] == "b") &&
+		(fields[1] == "c" || fields[1] == "p" || fields[1] == "t") &&
+		lowerBase32Form(fields[2], netTokenOctets) &&
+		fields[3] == feedbackIdSuffix
+}
 
 const (
 	literalCrlf            = "\r\n"
@@ -129,19 +175,6 @@ func domainForm(name string) bool {
 	return true
 }
 
-// Whether a value is one or more visible octets, so that it stays on its line as one token.
-func visibleForm(value string) bool {
-	if value == "" {
-		return false
-	}
-	for i := range len(value) {
-		if value[i] <= ' ' || '~' < value[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // Refuses a preamble no template may be built from (SPEC.md section 6). A template is a literal, and
 // the circuit proves a record equals it, so a declared value holding the end of a path or a line
 // would have the proof vouch for a command of the sidecar's own.
@@ -174,8 +207,10 @@ func checkSessionPreamble(preamble *sessionPreamble) error {
 		{name: "envelope_domain", ok: domainForm(preamble.envelopeDomain)},
 		{name: "helo_name", ok: domainForm(preamble.heloName)},
 		{name: "message_id", ok: messageIdForm(preamble.messageId)},
-		{name: "x_ur_ref", ok: visibleForm(preamble.xUrRef)},
-		{name: "feedback_id", ok: visibleForm(preamble.feedbackId)},
+		// the edge issues both, so these check the edge itself; their exact forms keep each line's
+		// length fixed before the mode is known (plan-SMTP-preamble-byte-count)
+		{name: "x_ur_ref", ok: xUrRefForm(preamble.xUrRef)},
+		{name: "feedback_id", ok: feedbackIdForm(preamble.feedbackId)},
 	} {
 		if !entry.ok {
 			return fmt.Errorf("preamble's %s is outside its form", entry.name)
