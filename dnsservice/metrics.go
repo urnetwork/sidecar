@@ -53,6 +53,11 @@ type dnsMetrics struct {
 	tcpRefused sidecar.MetricsCounter
 	// TCP connections held now.
 	tcpConnections sidecar.MetricsGauge
+	// Whether each lb interface's address of a family is in the healthy set, by inventory name and
+	// family, which OPS's page for a failing split probe reads.
+	interfaceHealthy sidecar.MetricsGauge
+	// Whether never-all is keeping a family's last set, by set (edge or router) and family.
+	healthyHeld sidecar.MetricsGauge
 }
 
 // Declares the families. Two edges in one process share them, as Metrics allows.
@@ -69,6 +74,10 @@ func newDnsMetrics(metrics sidecar.Metrics) *dnsMetrics {
 		dropped:        metrics.Counter("urnetwork_dnsedge_dropped_total", "Packets answered with nothing, by reason.", "reason"),
 		tcpRefused:     metrics.Counter("urnetwork_dnsedge_tcp_refused_total", "TCP connections closed at accept, by reason.", "reason"),
 		tcpConnections: metrics.Gauge("urnetwork_dnsedge_tcp_connections", "TCP connections held now."),
+		interfaceHealthy: metrics.Gauge("urnetwork_dnsedge_interface_healthy",
+			"Whether an lb interface's address of a family is answered, by interface and family.", "interface", "family"),
+		healthyHeld: metrics.Gauge("urnetwork_dnsedge_healthy_held",
+			"Whether every address of a family failed and the last set is kept, by set and family.", "set", "family"),
 	}
 }
 

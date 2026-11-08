@@ -15,6 +15,7 @@
 //     build and key set passes before it serves.
 //   - edge.go and rrl.go, dnsedge: UDP and TCP 53 answered from the view FeedLoop publishes, with
 //     response-rate limiting and no query log.
+//   - probe.go and probe_tls.go, the lb interface probes and the healthy set edge rows answer from.
 //   - metrics.go, the metric families and their closed label values.
 //
 // This package never opens Postgres or Redis itself, and an edge holds neither, so with the core
