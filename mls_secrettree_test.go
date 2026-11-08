@@ -373,6 +373,25 @@ func TestMlsTreeSecretsFollowTheDeletionSchedule(t *testing.T) {
 	}
 }
 
+// RFC §9.2: a leaf's tree secret goes once its two ratchets exist. Leaf 3's waits in the frontier once
+// leaf 2's ratchets are derived, until its own are.
+func TestMlsLeafSecretIsOverwrittenOnceItsRatchetsExist(t *testing.T) {
+	tree := mlsNewTestSecretTree(t, mlsSuite)
+	if _, err := tree.ratchets(2); err != nil {
+		t.Fatal(err)
+	}
+	leafSecret := tree.nodeIndexSecrets[mlsLeafIndex(3).node()]
+	if len(leafSecret) == 0 {
+		t.Fatal("leaf 3's secret is not in the frontier")
+	}
+	if _, err := tree.ratchets(3); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(leafSecret, make([]byte, mlsSuite.hashLength)) {
+		t.Error("leaf 3's tree secret survived its ratchets")
+	}
+}
+
 // Consuming one leaf's path must not cost any other leaf its secret.
 func TestMlsEveryLeafStaysReachable(t *testing.T) {
 	suite := mlsSuite
@@ -455,12 +474,15 @@ func TestMlsEraseClearsTheTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ratchetSecret := ratchets.handshake.secret
+	handshakeSecret := ratchets.handshake.secret
+	applicationSecret := ratchets.application.secret
 	frontierSecret := tree.nodeIndexSecrets[mlsLeafIndex(1).node()]
 	tree.erase()
 	zero := make([]byte, mlsSuite.hashLength)
-	if !bytes.Equal(ratchetSecret, zero) || !bytes.Equal(frontierSecret, zero) {
-		t.Fatal("a secret survived")
+	for name, secret := range map[string][]byte{"handshake": handshakeSecret, "application": applicationSecret, "frontier": frontierSecret} {
+		if !bytes.Equal(secret, zero) {
+			t.Errorf("the %s secret survived", name)
+		}
 	}
 	if len(tree.nodeIndexSecrets) != 0 || len(tree.leafIndexRatchets) != 0 {
 		t.Fatal("the tree still lists secrets")

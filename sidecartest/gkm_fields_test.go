@@ -30,13 +30,14 @@ var testGkmRowsWithoutFields = map[string]string{
 	"gkm-9": "the service log, which no message carries",
 }
 
-// One line of metadata_rows.yml. Exactly one of Sees and Pending is set.
+// One line of metadata_rows.yml, the form schemaGuardAreaField reads. Exactly one of Sees and Pending is set.
 type testGkmField struct {
 	Number  int32  `yaml:"number"`
 	Type    string `yaml:"type"`
 	Row     string `yaml:"row"`
 	Sees    string `yaml:"sees"`
 	Pending string `yaml:"pending"`
+	Until   string `yaml:"until"`
 }
 
 // metadata_rows.yml by Message.field, read as strictly as the list it points into: a duplicate, an unknown key or a line

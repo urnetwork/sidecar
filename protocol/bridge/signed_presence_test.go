@@ -90,15 +90,15 @@ func testEcdsaPresenceCheck(t testing.TB, key *ecdsa.PrivateKey) testPresenceChe
 	}
 }
 
-// An assertion every countersign check passes, for a test to spoil one input of.
-func testGoodCountersignAssertion(countersignedBytes []byte) *testWebAuthnAssertion {
+// An assertion every countersign check passes against the fixture origins, for a test to spoil one input of.
+func testGoodCountersignAssertion(t testing.TB, countersignedBytes []byte) *testWebAuthnAssertion {
 	challenge := sha256.Sum256(countersignedBytes)
 	return &testWebAuthnAssertion{
 		rpId:       webAuthnRpId,
 		flags:      webAuthnFlagUserPresent | webAuthnFlagUserVerified,
 		clientType: webAuthnClientDataTypeGet,
 		challenge:  base64.RawURLEncoding.EncodeToString(challenge[:]),
-		origin:     webAuthnOrigins[0],
+		origin:     testFixtureOrigins(t)[0],
 	}
 }
 
@@ -109,7 +109,7 @@ func testWebAuthnPresenceCheck(
 	mutate func(assertion *testWebAuthnAssertion),
 ) testPresenceCheck {
 	return func(countersignedBytes []byte) *WebAuthnEvidence {
-		assertion := testGoodCountersignAssertion(countersignedBytes)
+		assertion := testGoodCountersignAssertion(t, countersignedBytes)
 		if mutate != nil {
 			mutate(assertion)
 		}
@@ -214,6 +214,7 @@ func TestPresenceActBytesLayout(t *testing.T) {
 // statements land and in whatever order, with its identity signature beside it. Each crosses the wire first, as it
 // does in fact, with an unknown field a later release might add.
 func TestVerifyPresenceCountersignFiveStatementAct(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	for _, profile := range testPresenceProfiles(t) {
 		act := testCountersignedAct(t, statements, profile.check)
@@ -233,7 +234,8 @@ func TestVerifyPresenceCountersignFiveStatementAct(t *testing.T) {
 			if err != nil {
 				t.Errorf("%s statement %d: identity signature: %v", profile.name, i, err)
 			}
-			if err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey); err != nil {
+			err = verifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey, origins)
+			if err != nil {
 				t.Errorf("%s statement %d: %v", profile.name, i, err)
 			}
 		}
@@ -242,13 +244,15 @@ func TestVerifyPresenceCountersignFiveStatementAct(t *testing.T) {
 
 // An act of one has no path, and its root is its leaf hash.
 func TestVerifyPresenceCountersignActOfOne(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(1)
 	for _, profile := range testPresenceProfiles(t) {
 		signed := testCountersignedAct(t, statements, profile.check)[0]
 		if len(signed.GetWebauthn().GetActPath()) != 0 {
 			t.Fatalf("%s: a path of %d hashes", profile.name, len(signed.GetWebauthn().GetActPath()))
 		}
-		if err := VerifyPresenceCountersign(signed, statements[0].purpose, profile.alg, profile.publicKey); err != nil {
+		err := verifyPresenceCountersign(signed, statements[0].purpose, profile.alg, profile.publicKey, origins)
+		if err != nil {
 			t.Errorf("%s: %v", profile.name, err)
 		}
 	}
@@ -257,6 +261,7 @@ func TestVerifyPresenceCountersignActOfOne(t *testing.T) {
 // §16.6: a countersign check does not compare signCount, because a verifier of one statement holds no counter, so a
 // counter that ran backward or sits at 0 is no fault. Nothing here reads the counter, so any value passes.
 func TestVerifyPresenceCountersignIgnoresSignCount(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(3)
 	key, publicKey := testP256Key(t)
 	for _, signCount := range []uint32{0, 1, 7, 0x7FFFFFFF, 0xFFFFFFFF} {
@@ -267,7 +272,7 @@ func TestVerifyPresenceCountersignIgnoresSignCount(t *testing.T) {
 			}
 		})
 		for i, signed := range testCountersignedAct(t, statements, check) {
-			err := VerifyPresenceCountersign(signed, statements[i].purpose, SignedKeyAlgWebAuthnEs256, publicKey)
+			err := verifyPresenceCountersign(signed, statements[i].purpose, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 			if err != nil {
 				t.Errorf("signCount %d statement %d: %v", signCount, i, err)
 			}
@@ -278,31 +283,32 @@ func TestVerifyPresenceCountersignIgnoresSignCount(t *testing.T) {
 // A caller that holds no statement, and a statement with no countersignature or an empty one, get a refusal and no
 // panic. A statement with webauthn evidence but no key_id is no countersignature at all, whatever else it holds.
 func TestVerifyPresenceCountersignRefusesNoCountersignature(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	statement := statements[2]
 	_, publicKey := testP256Key(t)
 	for _, profile := range testPresenceProfiles(t) {
-		err := VerifyPresenceCountersign(nil, statement.purpose, profile.alg, publicKey)
+		err := verifyPresenceCountersign(nil, statement.purpose, profile.alg, publicKey, origins)
 		if !errors.Is(err, ErrSignedMissing) {
 			t.Errorf("%s nil: %v", profile.name, err)
 		}
 
 		bare := testSignEd25519(statement.purpose, statement.signedType, statement.body)
-		err = VerifyPresenceCountersign(bare, statement.purpose, profile.alg, publicKey)
+		err = verifyPresenceCountersign(bare, statement.purpose, profile.alg, publicKey, origins)
 		if !errors.Is(err, ErrSignedEvidence) {
 			t.Errorf("%s no evidence: %v", profile.name, err)
 		}
 
 		empty := proto.CloneOf(bare)
 		empty.Webauthn = &WebAuthnEvidence{}
-		err = VerifyPresenceCountersign(empty, statement.purpose, profile.alg, publicKey)
+		err = verifyPresenceCountersign(empty, statement.purpose, profile.alg, publicKey, origins)
 		if !errors.Is(err, ErrSignedEvidence) {
 			t.Errorf("%s empty evidence: %v", profile.name, err)
 		}
 
 		noKeyId := proto.CloneOf(testCountersignedAct(t, statements, profile.check)[2])
 		noKeyId.Webauthn.KeyId = nil
-		err = VerifyPresenceCountersign(noKeyId, statement.purpose, profile.alg, publicKey)
+		err = verifyPresenceCountersign(noKeyId, statement.purpose, profile.alg, publicKey, origins)
 		if !errors.Is(err, ErrSignedEvidence) {
 			t.Errorf("%s no key_id: %v", profile.name, err)
 		}
@@ -311,6 +317,7 @@ func TestVerifyPresenceCountersignRefusesNoCountersignature(t *testing.T) {
 
 // An act is one signer's, and countersigned bytes with no signer in them would be nobody's.
 func TestVerifyPresenceCountersignRefusesNoSignerId(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statement := testActStatements(1)[0]
 	for _, profile := range testPresenceProfiles(t) {
 		leaf := presenceActLeafHash(SignedBytesSha256(statement.purpose, statement.signedType, statement.body))
@@ -318,7 +325,7 @@ func TestVerifyPresenceCountersignRefusesNoSignerId(t *testing.T) {
 		signed.SignerId = nil
 		signed.Webauthn = profile.check(PresenceActBytes(nil, 1, leaf))
 		signed.Webauthn.ActSize = 1
-		err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey)
+		err := verifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey, origins)
 		if !errors.Is(err, ErrSignedEvidence) {
 			t.Errorf("%s: %v", profile.name, err)
 		}
@@ -328,13 +335,14 @@ func TestVerifyPresenceCountersignRefusesNoSignerId(t *testing.T) {
 // §6.11's refusals hold here as in VerifySigned, even with no type to expect. Each statement really is countersigned
 // under that value, so only the enum can refuse it, and a value above int32's range must not wrap onto a registered one.
 func TestVerifyPresenceCountersignRefusesUnknownTypes(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	purpose := "authority"
 	for _, profile := range testPresenceProfiles(t) {
 		for _, number := range []uint32{0, 1, 0x1100, 0x12FF, 0x7FFFFFFF, 0x80001206, 0xFFFFFFFF} {
 			statements := []*testActStatement{{purpose: purpose, signedType: SignedType(number), body: testBody}}
 			signed := testCountersignedAct(t, statements, profile.check)[0]
 			signed.Type = number
-			err := VerifyPresenceCountersign(signed, purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(signed, purpose, profile.alg, profile.publicKey, origins)
 			if !errors.Is(err, ErrSignedTypeUnknown) {
 				t.Errorf("%s type %#x: %v", profile.name, number, err)
 			}
@@ -345,13 +353,14 @@ func TestVerifyPresenceCountersignRefusesUnknownTypes(t *testing.T) {
 // A purpose VerifySigned refuses is refused here, or a leaf could be built from the countersigned bytes' own domain.
 // Each act really is countersigned under that purpose, so only the rule can refuse it.
 func TestVerifyPresenceCountersignRefusesUnusablePurposes(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	for _, profile := range testPresenceProfiles(t) {
 		for _, purpose := range []string{"", "presence-act", "\x00", "authority\x00", "authority\x00\x00\x00\x12\x06"} {
 			statements := []*testActStatement{
 				{purpose: purpose, signedType: SignedType_SIGNED_SIDECAR_REVOKE, body: testBody},
 			}
 			signed := testCountersignedAct(t, statements, profile.check)[0]
-			err := VerifyPresenceCountersign(signed, purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(signed, purpose, profile.alg, profile.publicKey, origins)
 			if !errors.Is(err, ErrSignedPurpose) {
 				t.Errorf("%s purpose %q: %v", profile.name, purpose, err)
 			}
@@ -361,11 +370,12 @@ func TestVerifyPresenceCountersignRefusesUnusablePurposes(t *testing.T) {
 
 // The purpose a statement was signed under is in its leaf, so one presented under another reaches another root.
 func TestVerifyPresenceCountersignRefusesAnotherPurpose(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	for _, profile := range testPresenceProfiles(t) {
 		for i, signed := range testCountersignedAct(t, statements, profile.check) {
 			otherPurpose := "bridge"
-			err := VerifyPresenceCountersign(signed, otherPurpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(signed, otherPurpose, profile.alg, profile.publicKey, origins)
 			if !profile.refusesOtherBytes(err) {
 				t.Errorf("%s statement %d: %v", profile.name, i, err)
 			}
@@ -376,6 +386,7 @@ func TestVerifyPresenceCountersignRefusesAnotherPurpose(t *testing.T) {
 // A path that misses its leaf, each way a relay can write one: other bytes under the path, or a path that walks
 // somewhere else. Where the path could be an act's, only the signature over the root can refuse it.
 func TestVerifyPresenceCountersignRefusesAPathThatMissesItsLeaf(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	statement := statements[2]
 	cases := []struct {
@@ -496,7 +507,7 @@ func TestVerifyPresenceCountersignRefusesAPathThatMissesItsLeaf(t *testing.T) {
 		for _, c := range cases {
 			signed := proto.CloneOf(act[2])
 			c.mutate(signed)
-			err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey, origins)
 			if c.shape {
 				if !errors.Is(err, ErrSignedAct) {
 					t.Errorf("%s %s: %v", profile.name, c.name, err)
@@ -511,6 +522,7 @@ func TestVerifyPresenceCountersignRefusesAPathThatMissesItsLeaf(t *testing.T) {
 // Neither half of two acts makes a third: a statement keeps its own path, but the check that signed another act's root
 // rides it, and the other way a statement rides another act's path and check whole.
 func TestVerifyPresenceCountersignRefusesAnotherActsRoot(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	otherStatements := testActStatements(5)
 	for _, statement := range otherStatements {
@@ -524,14 +536,14 @@ func TestVerifyPresenceCountersignRefusesAnotherActsRoot(t *testing.T) {
 		signed.Webauthn.Signature = otherAct[1].Webauthn.Signature
 		signed.Webauthn.AuthenticatorData = otherAct[1].Webauthn.AuthenticatorData
 		signed.Webauthn.ClientDataJson = otherAct[1].Webauthn.ClientDataJson
-		err := VerifyPresenceCountersign(signed, statements[1].purpose, profile.alg, profile.publicKey)
+		err := verifyPresenceCountersign(signed, statements[1].purpose, profile.alg, profile.publicKey, origins)
 		if !profile.refusesOtherBytes(err) {
 			t.Errorf("%s another act's check: %v", profile.name, err)
 		}
 
 		signed = proto.CloneOf(act[1])
 		signed.Webauthn = proto.CloneOf(otherAct[1].Webauthn)
-		err = VerifyPresenceCountersign(signed, statements[1].purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(signed, statements[1].purpose, profile.alg, profile.publicKey, origins)
 		if !profile.refusesOtherBytes(err) {
 			t.Errorf("%s another act's path and check: %v", profile.name, err)
 		}
@@ -541,12 +553,13 @@ func TestVerifyPresenceCountersignRefusesAnotherActsRoot(t *testing.T) {
 // signer_id is in the countersigned bytes though no identity signature covers it, so a check one signer ran stands for
 // no other, and a relay cannot move it.
 func TestVerifyPresenceCountersignRefusesAnotherSignersAct(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	for _, profile := range testPresenceProfiles(t) {
 		for i, signed := range testCountersignedAct(t, statements, profile.check) {
 			moved := proto.CloneOf(signed)
 			moved.SignerId = []byte("another-synthetic-signer")
-			err := VerifyPresenceCountersign(moved, statements[i].purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(moved, statements[i].purpose, profile.alg, profile.publicKey, origins)
 			if !profile.refusesOtherBytes(err) {
 				t.Errorf("%s statement %d: %v", profile.name, i, err)
 			}
@@ -557,6 +570,7 @@ func TestVerifyPresenceCountersignRefusesAnotherSignersAct(t *testing.T) {
 // A key_id resolves to a key record, so a check by any other key meets the record's key and fails. The caller resolves
 // the id, which is why this takes the key and not the id.
 func TestVerifyPresenceCountersignRefusesAnotherKey(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(3)
 	key, _ := testP256Key(t)
 	_, otherPublic := testOtherP256Key(t)
@@ -565,7 +579,7 @@ func TestVerifyPresenceCountersignRefusesAnotherKey(t *testing.T) {
 		{name: "webauthn-es256", alg: SignedKeyAlgWebAuthnEs256, check: testWebAuthnPresenceCheck(t, key, nil)},
 	} {
 		for i, signed := range testCountersignedAct(t, statements, profile.check) {
-			err := VerifyPresenceCountersign(signed, statements[i].purpose, profile.alg, otherPublic)
+			err := verifyPresenceCountersign(signed, statements[i].purpose, profile.alg, otherPublic, origins)
 			if !errors.Is(err, ErrSignedSignature) {
 				t.Errorf("%s statement %d: %v", profile.name, i, err)
 			}
@@ -576,6 +590,7 @@ func TestVerifyPresenceCountersignRefusesAnotherKey(t *testing.T) {
 // Every bit of the signature and of each path hash is covered, on both profiles, and for webauthn-es256 every bit of
 // the signed evidence. The walk runs before the signature, so a flip in a path reaches another root.
 func TestVerifyPresenceCountersignRefusesEveryBitFlip(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(5)
 	statement := statements[3]
 	for _, profile := range testPresenceProfiles(t) {
@@ -584,17 +599,20 @@ func TestVerifyPresenceCountersignRefusesEveryBitFlip(t *testing.T) {
 
 		refuseFlips := func(name string, field func(signed *Signed) []byte) {
 			signed := proto.CloneOf(good)
+			verify := func() error {
+				return verifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey, origins)
+			}
 			target := field(signed)
 			for i := range target {
 				for bit := range 8 {
 					target[i] ^= 1 << bit
-					if err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey); err == nil {
+					if verify() == nil {
 						t.Errorf("%s %s bit %d of byte %d verified", profile.name, name, bit, i)
 					}
 					target[i] ^= 1 << bit
 				}
 			}
-			if err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey); err != nil {
+			if err := verify(); err != nil {
 				t.Errorf("%s %s restored: %v", profile.name, name, err)
 			}
 		}
@@ -617,6 +635,7 @@ func TestVerifyPresenceCountersignRefusesEveryBitFlip(t *testing.T) {
 // §7.9's bounds, each against a countersignature that is otherwise whole, so only the bound can refuse it. A presence
 // key signs what its client gives it, so an act past the bounds can carry a real signature.
 func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statement := testActStatements(1)[0]
 	leafDigest := SignedBytesSha256(statement.purpose, statement.signedType, statement.body)
 
@@ -636,7 +655,7 @@ func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
 		if len(over.Webauthn.ActPath) != 16 {
 			t.Fatalf("a path of %d hashes", len(over.Webauthn.ActPath))
 		}
-		err := VerifyPresenceCountersign(over, statement.purpose, profile.alg, profile.publicKey)
+		err := verifyPresenceCountersign(over, statement.purpose, profile.alg, profile.publicKey, origins)
 		if !errors.Is(err, ErrSignedAct) {
 			t.Errorf("%s an act of 65,536: %v", profile.name, err)
 		}
@@ -645,7 +664,7 @@ func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
 		leaf := presenceActLeafHash(leafDigest)
 		none := testSignEd25519(statement.purpose, statement.signedType, statement.body)
 		none.Webauthn = profile.check(PresenceActBytes(testSignerId, 0, leaf))
-		err = VerifyPresenceCountersign(none, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(none, statement.purpose, profile.alg, profile.publicKey, origins)
 		if !errors.Is(err, ErrSignedAct) {
 			t.Errorf("%s an act of 0: %v", profile.name, err)
 		}
@@ -653,12 +672,12 @@ func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
 		// index past the end of an act of one, whose path is empty, so the walk alone would pass it
 		past := proto.CloneOf(testCountersignedAct(t, []*testActStatement{statement}, profile.check)[0])
 		past.Webauthn.ActIndex = 1
-		err = VerifyPresenceCountersign(past, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(past, statement.purpose, profile.alg, profile.publicKey, origins)
 		if !errors.Is(err, ErrSignedAct) {
 			t.Errorf("%s index 1 of 1: %v", profile.name, err)
 		}
 		past.Webauthn.ActIndex = 0xFFFFFFFF
-		err = VerifyPresenceCountersign(past, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(past, statement.purpose, profile.alg, profile.publicKey, origins)
 		if !errors.Is(err, ErrSignedAct) {
 			t.Errorf("%s the highest index: %v", profile.name, err)
 		}
@@ -680,12 +699,12 @@ func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
 		if len(seventeen.Webauthn.ActPath) != 16 {
 			t.Fatalf("a path of %d hashes", len(seventeen.Webauthn.ActPath))
 		}
-		err = VerifyPresenceCountersign(seventeen, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(seventeen, statement.purpose, profile.alg, profile.publicKey, origins)
 		if err != nil {
 			t.Errorf("%s the deepest act: %v", profile.name, err)
 		}
 		seventeen.Webauthn.ActPath = append(seventeen.Webauthn.ActPath, make([]byte, sha256.Size))
-		err = VerifyPresenceCountersign(seventeen, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(seventeen, statement.purpose, profile.alg, profile.publicKey, origins)
 		if !errors.Is(err, ErrSignedAct) || !strings.Contains(err.Error(), "17 hashes") {
 			t.Errorf("%s 17 hashes: %v", profile.name, err)
 		}
@@ -693,17 +712,20 @@ func TestVerifyPresenceCountersignBoundsAnAct(t *testing.T) {
 }
 
 // Every clause of §16.6's countersign check over a webauthn-es256 assertion, each spoiled before signing, so the
-// signature stays valid and only the clause can refuse it. origin is the clause VerifySigned leaves to its caller.
+// signature stays valid and only the clause can refuse it. The origin clause is VerifySigned's too, and a refused origin
+// names itself.
 func TestVerifyPresenceCountersignWebAuthnProfile(t *testing.T) {
 	statements := testActStatements(3)
 	statement := statements[0]
 	signedBytes := sha256.Sum256(SignedBytes(statement.purpose, statement.signedType, statement.body))
 	body := sha256.Sum256(statement.body)
+	origins := testFixtureOrigins(t)
 
 	cases := []struct {
 		name   string
 		mutate func(assertion *testWebAuthnAssertion)
 		want   error
+		reason string
 	}{
 		{
 			name: "good",
@@ -785,39 +807,58 @@ func TestVerifyPresenceCountersignWebAuthnProfile(t *testing.T) {
 			want: ErrSignedEvidence,
 		},
 		{
+			name: "the other listed origin, an android one",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = origins[1]
+			},
+		},
+		{
 			name: "an unlisted origin",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.origin = "https://app.example"
 			},
-			want: ErrSignedEvidence,
+			want:   ErrSignedEvidence,
+			reason: "origin",
 		},
 		{
 			name: "no origin",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.origin = ""
 			},
-			want: ErrSignedEvidence,
+			want:   ErrSignedEvidence,
+			reason: "origin",
 		},
 		{
 			name: "an origin that only begins a listed one",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.origin += ".example"
 			},
-			want: ErrSignedEvidence,
+			want:   ErrSignedEvidence,
+			reason: "origin",
 		},
 		{
 			name: "an origin that only ends a listed one",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.origin = strings.Replace(assertion.origin, "https://", "https://sub.", 1)
 			},
-			want: ErrSignedEvidence,
+			want:   ErrSignedEvidence,
+			reason: "origin",
 		},
 		{
 			name: "a listed origin's host over another scheme",
 			mutate: func(assertion *testWebAuthnAssertion) {
 				assertion.origin = strings.Replace(assertion.origin, "https://", "http://", 1)
 			},
-			want: ErrSignedEvidence,
+			want:   ErrSignedEvidence,
+			reason: "origin",
+		},
+		{
+			name: "a debug-signed android build",
+			mutate: func(assertion *testWebAuthnAssertion) {
+				assertion.origin = testDebugBuildOrigin()
+			},
+			want:   ErrSignedEvidence,
+			reason: "origin",
 		},
 		{
 			name: "client data not json",
@@ -844,9 +885,51 @@ func TestVerifyPresenceCountersignWebAuthnProfile(t *testing.T) {
 	key, publicKey := testP256Key(t)
 	for _, c := range cases {
 		signed := testCountersignedAct(t, statements, testWebAuthnPresenceCheck(t, key, c.mutate))[0]
-		err := VerifyPresenceCountersign(signed, statement.purpose, SignedKeyAlgWebAuthnEs256, publicKey)
-		if !errors.Is(err, c.want) {
-			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+		err := verifyPresenceCountersign(signed, statement.purpose, SignedKeyAlgWebAuthnEs256, publicKey, origins)
+		if !errors.Is(err, c.want) || (c.reason != "" && !strings.Contains(err.Error(), c.reason)) {
+			t.Errorf("%s: got %v, want %v for %q", c.name, err, c.want, c.reason)
+		}
+	}
+}
+
+// The exported checks read webAuthnOrigins and refuse every other origin alike (QD-073), the fixture origins included,
+// so no test passes against the release by way of a fixture. The one test that reads the table: each of its entries
+// verifies per use and as a countersignature, and every other origin, each validly signed, is refused by both.
+func TestVerifiersReadTheReleaseOriginTable(t *testing.T) {
+	statements := testActStatements(1)
+	statement := statements[0]
+	key, publicKey := testP256Key(t)
+	// the per-use answer, then the countersignature's
+	verifyBoth := func(origin string) []error {
+		perUse := testGoodWebAuthnAssertion(t, statement.purpose, statement.signedType, statement.body)
+		perUse.origin = origin
+		signed := perUse.sign(t, key, statement.purpose, statement.signedType, statement.body)
+		check := testWebAuthnPresenceCheck(t, key, func(assertion *testWebAuthnAssertion) {
+			assertion.origin = origin
+		})
+		countersigned := testCountersignedAct(t, statements, check)[0]
+		return []error{
+			VerifySigned(signed, statement.purpose, statement.signedType, SignedKeyAlgWebAuthnEs256, publicKey),
+			VerifyPresenceCountersign(countersigned, statement.purpose, SignedKeyAlgWebAuthnEs256, publicKey),
+		}
+	}
+
+	if len(webAuthnOrigins) == 0 {
+		t.Fatal("no origin is listed, so every passkey would be refused")
+	}
+	for i, origin := range webAuthnOrigins {
+		for _, err := range verifyBoth(origin) {
+			if err != nil {
+				t.Errorf("listed origin %d: %v", i, err)
+			}
+		}
+	}
+	refusedOrigins := append(testFixtureOrigins(t), "https://phish.example", testDebugBuildOrigin(), "")
+	for _, origin := range refusedOrigins {
+		for _, err := range verifyBoth(origin) {
+			if !errors.Is(err, ErrSignedEvidence) || !strings.Contains(err.Error(), "origin") {
+				t.Errorf("%q: %v", origin, err)
+			}
 		}
 	}
 }
@@ -854,24 +937,26 @@ func TestVerifyPresenceCountersignWebAuthnProfile(t *testing.T) {
 // The same floor as a per-use assertion's, sizes written here and each assertion validly signed, so only the size can
 // refuse it.
 func TestVerifyPresenceCountersignAuthenticatorDataFloor(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(1)
 	key, publicKey := testP256Key(t)
-	signedOfSize := func(size int) *Signed {
+	verifyOfSize := func(size int) error {
 		check := testWebAuthnPresenceCheck(t, key, func(assertion *testWebAuthnAssertion) {
 			assertion.authData = func(authenticatorData []byte) []byte {
 				return append(authenticatorData, make([]byte, 64)...)[:size]
 			}
 		})
-		return testCountersignedAct(t, statements, check)[0]
+		signed := testCountersignedAct(t, statements, check)[0]
+		return verifyPresenceCountersign(signed, statements[0].purpose, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 	}
 	for size := range 37 {
-		err := VerifyPresenceCountersign(signedOfSize(size), statements[0].purpose, SignedKeyAlgWebAuthnEs256, publicKey)
+		err := verifyOfSize(size)
 		if !errors.Is(err, ErrSignedEvidence) {
 			t.Errorf("%d bytes: %v", size, err)
 		}
 	}
 	for _, size := range []int{37, 38, 64} {
-		err := VerifyPresenceCountersign(signedOfSize(size), statements[0].purpose, SignedKeyAlgWebAuthnEs256, publicKey)
+		err := verifyOfSize(size)
 		if err != nil {
 			t.Errorf("%d bytes: %v", size, err)
 		}
@@ -881,6 +966,7 @@ func TestVerifyPresenceCountersignAuthenticatorDataFloor(t *testing.T) {
 // The key record fixes the algorithm, never the message: a countersignature of one profile refuses under the other, and
 // nothing but a P-256 presence profile countersigns (§16.6).
 func TestVerifyPresenceCountersignEvidenceMustFit(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(3)
 	statement := statements[1]
 	key, publicKey := testP256Key(t)
@@ -1007,7 +1093,7 @@ func TestVerifyPresenceCountersignEvidenceMustFit(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		err := VerifyPresenceCountersign(c.signed, statement.purpose, c.alg, c.publicKey)
+		err := verifyPresenceCountersign(c.signed, statement.purpose, c.alg, c.publicKey, origins)
 		if !errors.Is(err, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
 		}
@@ -1018,6 +1104,7 @@ func TestVerifyPresenceCountersignEvidenceMustFit(t *testing.T) {
 // leaf, those bytes cut short, another size or the layout with no size in it is refused, each with the act fields whole,
 // and only the bytes themselves pass.
 func TestVerifyPresenceCountersignSignsTheActsBytesAlone(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statement := testActStatements(1)[0]
 	signedBytes := SignedBytes(statement.purpose, statement.signedType, statement.body)
 	leaf := presenceActLeafHash(sha256.Sum256(signedBytes))
@@ -1033,7 +1120,7 @@ func TestVerifyPresenceCountersignSignsTheActsBytesAlone(t *testing.T) {
 			signed := testSignEd25519(statement.purpose, statement.signedType, statement.body)
 			signed.Webauthn = profile.check(message)
 			signed.Webauthn.ActSize = 1
-			err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey, origins)
 			if !profile.refusesOtherBytes(err) {
 				t.Errorf("%s over %x: %v", profile.name, message, err)
 			}
@@ -1041,7 +1128,8 @@ func TestVerifyPresenceCountersignSignsTheActsBytesAlone(t *testing.T) {
 		signed := testSignEd25519(statement.purpose, statement.signedType, statement.body)
 		signed.Webauthn = profile.check(actBytes)
 		signed.Webauthn.ActSize = 1
-		if err := VerifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey); err != nil {
+		err := verifyPresenceCountersign(signed, statement.purpose, profile.alg, profile.publicKey, origins)
+		if err != nil {
 			t.Errorf("%s over the act's bytes: %v", profile.name, err)
 		}
 	}
@@ -1051,6 +1139,7 @@ func TestVerifyPresenceCountersignSignsTheActsBytesAlone(t *testing.T) {
 // exactly, so if VerifySigned took the purpose, a presence key's countersignature would verify as a statement of its
 // own by that key. The purpose rule is the only thing that stops it.
 func TestCountersignedBytesNeverVerifyAsAStatement(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	signedType := SignedType_SIGNED_SIDECAR_REVOKE
 	signerId := binary.BigEndian.AppendUint32(nil, uint32(signedType))
 	signerId = append(signerId, []byte("rest of a synthetic signer id")...)
@@ -1069,10 +1158,10 @@ func TestCountersignedBytesNeverVerifyAsAStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertion := testGoodCountersignAssertion(actBytes)
+	assertion := testGoodCountersignAssertion(t, actBytes)
 	evidence, signature := assertion.assert(t, key, actBytes)
 	signed = &Signed{Body: body, Signature: signature, Webauthn: evidence, Type: uint32(signedType)}
-	err = VerifySigned(signed, presenceActPurpose, signedType, SignedKeyAlgWebAuthnEs256, publicKey)
+	err = verifySigned(signed, presenceActPurpose, signedType, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 	if !errors.Is(err, ErrSignedPurpose) {
 		t.Fatal(err)
 	}
@@ -1081,14 +1170,14 @@ func TestCountersignedBytesNeverVerifyAsAStatement(t *testing.T) {
 // Each check's assertion stands for its own message: a per-use assertion over a statement's signed bytes is no
 // countersignature of it, and a countersignature's assertion, its act fields gone, is no per-use signature.
 func TestAssertionsDoNotCrossBetweenChecks(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(1)
 	statement := statements[0]
 	key, publicKey := testP256Key(t)
 
-	perUse := testGoodWebAuthnAssertion(statement.purpose, statement.signedType, statement.body)
-	perUse.origin = webAuthnOrigins[0]
+	perUse := testGoodWebAuthnAssertion(t, statement.purpose, statement.signedType, statement.body)
 	signed := perUse.sign(t, key, statement.purpose, statement.signedType, statement.body)
-	err := VerifySigned(signed, statement.purpose, statement.signedType, SignedKeyAlgWebAuthnEs256, publicKey)
+	err := verifySigned(signed, statement.purpose, statement.signedType, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1096,7 +1185,7 @@ func TestAssertionsDoNotCrossBetweenChecks(t *testing.T) {
 	signed.Webauthn.KeyId = testPresenceKeyId
 	signed.Webauthn.Signature = signed.Signature
 	signed.Webauthn.ActSize = 1
-	err = VerifyPresenceCountersign(signed, statement.purpose, SignedKeyAlgWebAuthnEs256, publicKey)
+	err = verifyPresenceCountersign(signed, statement.purpose, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 	if !errors.Is(err, ErrSignedEvidence) || !strings.Contains(err.Error(), "challenge") {
 		t.Errorf("a per-use assertion as a countersignature: %v", err)
 	}
@@ -1111,7 +1200,7 @@ func TestAssertionsDoNotCrossBetweenChecks(t *testing.T) {
 		},
 		Type: countersigned.Type,
 	}
-	err = VerifySigned(reused, statement.purpose, statement.signedType, SignedKeyAlgWebAuthnEs256, publicKey)
+	err = verifySigned(reused, statement.purpose, statement.signedType, SignedKeyAlgWebAuthnEs256, publicKey, origins)
 	if !errors.Is(err, ErrSignedEvidence) || !strings.Contains(err.Error(), "challenge") {
 		t.Errorf("a countersignature as a per-use assertion: %v", err)
 	}
@@ -1120,6 +1209,7 @@ func TestAssertionsDoNotCrossBetweenChecks(t *testing.T) {
 // What VerifySigned's evidence rule makes of a statement that carries one: the identity signature stands apart from
 // the countersignature, so a bad one refuses here and not there, and a good one vouches for no identity signature.
 func TestCountersignatureAndIdentitySignatureAreApart(t *testing.T) {
+	origins := testFixtureOrigins(t)
 	statements := testActStatements(3)
 	statement := statements[0]
 	for _, profile := range testPresenceProfiles(t) {
@@ -1131,7 +1221,7 @@ func TestCountersignatureAndIdentitySignatureAreApart(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s a spoiled countersignature in VerifySigned: %v", profile.name, err)
 		}
-		err = VerifyPresenceCountersign(spoiled, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(spoiled, statement.purpose, profile.alg, profile.publicKey, origins)
 		if err == nil {
 			t.Errorf("%s a spoiled countersignature verified", profile.name)
 		}
@@ -1145,7 +1235,7 @@ func TestCountersignatureAndIdentitySignatureAreApart(t *testing.T) {
 		if !errors.Is(err, ErrSignedSignature) {
 			t.Errorf("%s another identity's signature: %v", profile.name, err)
 		}
-		err = VerifyPresenceCountersign(forged, statement.purpose, profile.alg, profile.publicKey)
+		err = verifyPresenceCountersign(forged, statement.purpose, profile.alg, profile.publicKey, origins)
 		if err != nil {
 			t.Errorf("%s the countersignature beside it: %v", profile.name, err)
 		}

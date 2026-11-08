@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("a body of few bytes, repeated")
+[]byte("\xc8\x00\x00\x00\x00")

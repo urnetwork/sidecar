@@ -24,6 +24,7 @@ const (
 	testFuzzSeedDirectory = "testdata/fuzz/FuzzBody"
 )
 
+// Writes the seeds, for a message that has none yet.
 var testUpdateFuzzSeeds = flag.Bool(
 	"update-fuzz-seeds", false, "write gkm.proto's seeds under testdata/fuzz/FuzzBody instead of checking for them",
 )
@@ -44,6 +45,49 @@ func TestGkmProtoImportsOnlyBridge(t *testing.T) {
 		if path := imports.Get(i).Path(); !strings.HasPrefix(path, "protocol/bridge/") {
 			t.Errorf("%s imports %s", testGkmProtoPath, path)
 		}
+	}
+}
+
+// 10.6's checks and 10.8: a re-form writes its new group's epoch 0 with its form, as KF1 writes a creation's, so each
+// field of epoch 0 a client supplies rides both routes' requests, of the same kind. Only a creation carries a
+// GenRotate: a re-form's generations come by the ladder, the old group's bytes, which a gen/1 written here would clash
+// with.
+func TestGkmReformCarriesEpochZero(t *testing.T) {
+	message := func(name string) protoreflect.MessageDescriptor {
+		messageType, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(testProtoPackage + "." + name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return messageType.Descriptor()
+	}
+	// what gkm writes into an epoch object itself, from the token, its clock, the commit and the form
+	gkmWrittenNames := []protoreflect.Name{"commit", "header", "uploader", "time_ms", "group_info_generation", "network_id"}
+	epochFields := message("GkmEpochObject").Fields()
+	for _, gkmWrittenName := range gkmWrittenNames {
+		if epochFields.ByName(gkmWrittenName) == nil {
+			t.Fatalf("GkmEpochObject has no %s", gkmWrittenName)
+		}
+	}
+	for _, requestName := range []string{"GkmGroupCreateRequest", "GkmGroupReformRequest"} {
+		requestFields := message(requestName).Fields()
+		if form := requestFields.ByName("form"); form == nil || form.Message() == nil || form.Message().Name() != "Signed" {
+			t.Errorf("%s carries no Signed form", requestName)
+		}
+		for i := range epochFields.Len() {
+			epochField := epochFields.Get(i)
+			if slices.Contains(gkmWrittenNames, epochField.Name()) {
+				continue
+			}
+			requestField := requestFields.ByName(epochField.Name())
+			if requestField == nil {
+				t.Errorf("%s does not carry epoch 0's %s", requestName, epochField.Name())
+			} else if requestField.Kind() != epochField.Kind() || requestField.Cardinality() != epochField.Cardinality() {
+				t.Errorf("%s.%s is not of epoch 0's kind", requestName, epochField.Name())
+			}
+		}
+	}
+	if message("GkmGroupReformRequest").Fields().ByName("gen_rotate") != nil {
+		t.Error("GkmGroupReformRequest carries a GenRotate, which the ladder's gen/1 would clash with")
 	}
 }
 

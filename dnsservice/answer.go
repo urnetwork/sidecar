@@ -12,7 +12,6 @@
 package dnsservice
 
 import (
-	"net"
 	"slices"
 
 	"github.com/miekg/dns"
@@ -171,15 +170,6 @@ func (self *ZoneView) copySource(name string) *zoneNode {
 	return nil
 }
 
-// A fresh record at owner for address.
-func dnsAddressRecord(owner string, rrType uint16, ttl uint32, ip net.IP) dns.RR {
-	header := dns.RR_Header{Name: owner, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl}
-	if rrType == dns.TypeA {
-		return &dns.A{Hdr: header, A: ip}
-	}
-	return &dns.AAAA{Hdr: header, AAAA: ip}
-}
-
 // The SOA as it goes out: the view's serial, and a MINIMUM no higher than R-DNS-7's setting.
 func (self *ZoneView) soaRecord() *dns.SOA {
 	soa := dns.Copy(self.soa).(*dns.SOA)
@@ -202,9 +192,14 @@ func (self *ZoneView) rrsetRecords(rrset *zoneRrset, owner string, healthy *Heal
 	switch {
 	case set.Kind == DnsRecordKindEdge || set.Kind == DnsRecordKindRouter:
 		addresses := healthy.addresses(set.Kind, set.Type)
+		header := dns.RR_Header{Name: owner, Rrtype: set.Type, Class: dns.ClassINET, Ttl: set.Ttl}
 		records := make([]dns.RR, 0, len(addresses))
 		for _, address := range addresses {
-			records = append(records, dnsAddressRecord(owner, set.Type, set.Ttl, address.AsSlice()))
+			if set.Type == dns.TypeA {
+				records = append(records, &dns.A{Hdr: header, A: address.AsSlice()})
+			} else {
+				records = append(records, &dns.AAAA{Hdr: header, AAAA: address.AsSlice()})
+			}
 		}
 		return records
 	case set.Type == dns.TypeSOA:

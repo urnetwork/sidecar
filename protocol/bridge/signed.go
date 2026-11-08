@@ -111,9 +111,23 @@ func SignedBytesSha256(purpose string, signedType SignedType, body []byte) [sha2
 // ignores it.
 //
 // For webauthn-es256 this checks everything in §16.6's per-use profile that needs no state: the rp id
-// hash, UP and UV, the client data's type and challenge, and the signature. Two checks stay with the
-// caller: the signCount against the stored one, and the origin against the profile's per-platform list.
+// hash, UP and UV, the client data's type and challenge, its origin against the per-platform list
+// (webAuthnOrigins, QD-073), and the signature. One check stays with the caller: the signCount against
+// the stored one.
 func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAlg SignedKeyAlg, publicKey []byte) error {
+	return verifySigned(signed, purpose, expectedType, keyAlg, publicKey, webAuthnOrigins[:])
+}
+
+// VerifySigned's checks with origins in place of webAuthnOrigins. Only tests pass another list, the fixture
+// origins in testdata/, so no test needs a release's value (QD-073).
+func verifySigned(
+	signed *Signed,
+	purpose string,
+	expectedType SignedType,
+	keyAlg SignedKeyAlg,
+	publicKey []byte,
+	origins []string,
+) error {
 	if signed == nil {
 		return ErrSignedMissing
 	}
@@ -164,7 +178,8 @@ func VerifySigned(signed *Signed, purpose string, expectedType SignedType, keyAl
 		}
 
 		// The challenge is the SHA-256 of the signed bytes, so it covers the type.
-		if _, err := checkWebAuthnAssertion(evidence, SignedBytes(purpose, expectedType, signed.GetBody())); err != nil {
+		signedBytes := SignedBytes(purpose, expectedType, signed.GetBody())
+		if err := checkWebAuthnAssertion(evidence, signedBytes, origins); err != nil {
 			return err
 		}
 		return verifyWebAuthnSignature(evidence, signed.GetSignature(), publicKey)
