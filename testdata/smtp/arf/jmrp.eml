@@ -1,0 +1,58 @@
+From: staff@hotmail.example
+To: root@rpt.report.example
+Subject: complaint about message from 192.0.2.10
+Date: Tue, 03 Nov 2026 11:30:00 +0000
+Message-ID: <jmrp-1@hotmail.example>
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=feedback-report; boundary="--boundary_jmrp"
+
+----boundary_jmrp
+Content-Type: text/plain
+
+This is an email abuse report for an email message received from IP 192.0.2.10.
+For more information about this format please see http://www.mipassoc.example/arf/.
+
+----boundary_jmrp
+Content-Type: message/feedback-report
+
+Feedback-Type: abuse
+User-Agent: Hotmail FBL
+Version: 0.1
+Original-Mail-From: <bounce@b.quietnet.root.example>
+Arrival-Date: Tue, 03 Nov 2026 10:00:02 +0000
+Source-IP: 192.0.2.10
+
+----boundary_jmrp
+Content-Type: message/rfc822
+Content-Disposition: inline
+
+Received: from STOREHOST01.receiver.example (2001:db8:10::5) by
+	EDGEHOST02.receiver.example with Microsoft SMTP Server; Tue, 03 Nov 2026 10:00:03 +0000
+Received: from INGRESS03.receiver.example (198.51.100.20) by
+	STOREHOST01.receiver.example with Microsoft SMTP Server id 15.20; Tue, 03 Nov 2026 10:00:02 +0000
+Received: from o1.out.report.example (o1.out.report.example [192.0.2.10])
+	by INGRESS03.receiver.example with ESMTPS id 7c1d; Tue, 3 Nov 2026 10:00:01 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=quietnet.root.example;
+	s=abcdefghijklmnopqrstuvwxyz; h=from:to:subject:date:message-id:from;
+	bh=AAAA; b=AAAA
+From: =?utf-8?b?U2VuZGVy?= <sender@quietnet.root.example>
+To: recipient@receiver.example
+Subject: SUBJECT-CANARY
+Date: Tue, 03 Nov 2026 10:00:00 +0000
+Message-ID: <aaaabbbbccccddddeeeeffffgg@quietnet.root.example>
+X-UR-Ref: 1.abcdefghijklmnopqrstuvwxyz234567ab
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="inner"
+
+--inner
+Content-Type: text/plain
+
+BODY-CANARY in the first part.
+--inner
+Content-Type: application/octet-stream; name="a.bin"
+Content-Transfer-Encoding: base64
+
+Qk9EWS1DQU5BUlk=
+--inner--
+
+----boundary_jmrp--
