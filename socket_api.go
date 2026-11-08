@@ -135,21 +135,18 @@ type SocketRegistrationsResult struct {
 	Error *SocketError `json:"error,omitempty"`
 }
 
-// Why a dialer gave up on a ticket, for §9.10's failure_reports_total. Each is a dialer's own word, and
-// an edge sends only timeout (§9.6).
+// Why a dialer gave up on a ticket, for §9.10's failure_reports_total, as a dialer's own word. §2.8's
+// sock-2 shows the failed tickets a retry reports and which were accept timeouts, and nothing finer, so a
+// listener's code stays with the dialer until that row names it (I-18). An edge sends only timeout
+// (§9.6).
 type SocketFailedReason string
 
 const (
 	// No accept within the dial's accept timeout.
 	SocketFailedReasonTimeout SocketFailedReason = "timeout"
-	// The listener answered retry.
-	SocketFailedReasonRetry SocketFailedReason = "retry"
-	// The listener answered busy.
-	SocketFailedReasonBusy SocketFailedReason = "busy"
-	// The listener answered invalid, or a code a dialer takes as invalid.
-	SocketFailedReasonInvalid SocketFailedReason = "invalid"
-	// The ticket's claim failed the dialer's own check, so it never opened (§9.6).
-	SocketFailedReasonClaim SocketFailedReason = "claim"
+	// Refused before an accept: the listener answered retry, busy, invalid or a code taken as invalid, or
+	// the ticket's claim failed the dialer's own check, so it never opened (§9.6).
+	SocketFailedReasonRefused SocketFailedReason = "refused"
 )
 
 // A ticket that failed its holder. The service verifies it and that the caller is its dialer, so only a

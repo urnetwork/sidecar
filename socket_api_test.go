@@ -211,10 +211,7 @@ func TestSocketRouteValues(t *testing.T) {
 		{got: string(SocketErrorCodeStale), want: "stale"},
 		{got: string(SocketErrorCodeInvalid), want: "invalid"},
 		{got: string(SocketFailedReasonTimeout), want: "timeout"},
-		{got: string(SocketFailedReasonRetry), want: "retry"},
-		{got: string(SocketFailedReasonBusy), want: "busy"},
-		{got: string(SocketFailedReasonInvalid), want: "invalid"},
-		{got: string(SocketFailedReasonClaim), want: "claim"},
+		{got: string(SocketFailedReasonRefused), want: "refused"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
