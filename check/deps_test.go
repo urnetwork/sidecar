@@ -36,6 +36,10 @@ var refusedModules = map[string]string{
 // The first-party modules a sidecar module may require beside this repository's own (§4.7).
 var allowedFirstPartyModules = []string{connectBasePath, glogBasePath}
 
+// The first-party modules sidecarctl alone may require beside those: C-23 lets the operations binary
+// read warp's configuration through warp's own packages, as warpctl does.
+var sidecarctlFirstPartyModules = []string{warpBasePath}
+
 // One dependencies.yml row.
 type dependencyRow struct {
 	module string
@@ -233,7 +237,7 @@ func (self *repository) rootRequireFindings(t testing.TB) []string {
 
 // §4.7's imports bullet at the module-file level, where a require no package reaches still shows:
 // no sidecar module requires a refused module, or any first-party module beside this repository's
-// own, connect and connect's replaced forks.
+// own, connect and connect's replaced forks, and warp for sidecarctl (C-23).
 func (self *repository) firstPartyRequireFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
@@ -241,6 +245,9 @@ func (self *repository) firstPartyRequireFindings(t testing.TB) []string {
 		for _, require := range module.file.Require {
 			base := firstPartyBase(require.Path)
 			if underPath(base, sidecarBasePath) || slices.Contains(allowedFirstPartyModules, base) {
+				continue
+			}
+			if module.relativeName == "sidecarctl" && slices.Contains(sidecarctlFirstPartyModules, base) {
 				continue
 			}
 			what, refused := refusedModule(base)

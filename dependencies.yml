@@ -1,6 +1,6 @@
 # Every module a leg of this repository links, with its SPDX id, why it is here and the legs that
 # may link it: client, engine, cli, test (§4.7), and sidecarctl, the operations binary (C-23), which
-# links nothing outside the standard library yet. make check fails a leg linking a module not listed
+# links warp's services loader and what that links. make check fails a leg linking a module not listed
 # here, or linking it on a leg its row does not name, and reads each id against the module's own
 # license files: those at its top, and those beside or above a package a leg links. This
 # repository's own modules are not listed.
@@ -41,6 +41,10 @@ modules:
     spdx: Apache-2.0
     reason: gnark's curves and hashes, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/coreos/go-semver
+    spdx: Apache-2.0
+    reason: orders tls versions in sidecarctl's certs renew as warpctl's lb build does, and through warp's services loader (C-23); server requires this version
+    leg: [sidecarctl]
   - module: github.com/cyphar/filepath-securejoin
     spdx: BSD-3-Clause AND MPL-2.0
     reason: through go-billy's osfs, which go-git's object package links for mlsinterop's oracle
@@ -263,6 +267,10 @@ modules:
     spdx: Apache-2.0
     reason: connect's logging fork; a sibling replace
     leg: [client, engine, cli, test]
+  - module: github.com/urnetwork/warp
+    spdx: Apache-2.0
+    reason: sidecarctl's certs renew reads services.yml through warp's own loader, so that it renews the names warpctl certs issue issues (C-23); a sibling replace
+    leg: [sidecarctl]
   - module: github.com/wlynxg/anet
     spdx: BSD-3-Clause
     reason: Android interface listing for connect and pion
@@ -277,8 +285,8 @@ modules:
     leg: [client, engine, cli, test]
   - module: golang.org/x/exp
     spdx: BSD-3-Clause
-    reason: through gVisor's netstack
-    leg: [client, engine, cli, test]
+    reason: through gVisor's netstack, and in sidecarctl through warp's services loader
+    leg: [client, engine, cli, test, sidecarctl]
   - module: golang.org/x/net
     spdx: BSD-3-Clause
     reason: connect's and quic-go's networking
@@ -314,8 +322,8 @@ modules:
     leg: [test]
   - module: gopkg.in/yaml.v3
     spdx: Apache-2.0 AND MIT
-    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and config/<env>/mxedge.yml in mxedgeservice (§15.15), and is sidecartest's strict reader of metadata_list.yml (§22.7); sdk, sn and server require this version
-    leg: [engine, test]
+    reason: reads config/<env>/dns.yml in dnsservice (§12.6) and config/<env>/mxedge.yml in mxedgeservice (§15.15), is sidecartest's strict reader of metadata_list.yml (§22.7), and reads services.yml and the builder's cloudflare credentials in sidecarctl's certs renew (C-23); sdk, sn and server require this version
+    leg: [engine, test, sidecarctl]
   - module: gvisor.dev/gvisor
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
     reason: connect's IP stack, kept out of the sidecar_http leg; a sibling replace
