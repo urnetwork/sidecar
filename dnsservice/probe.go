@@ -11,8 +11,8 @@
 // keeps that family's last set and says so (§12.6).
 //
 // Router interfaces serve mx hosts. Their own probe is the 25 banner, which lands in DNS-M7-01 on this
-// loop, as route probes land in DNS-M6-04; until then a router interface leaves the mx set only while
-// drained.
+// loop, as probe_route.go's route probes run on it; until then a router interface leaves the mx set
+// only while drained. A route probe's result goes to the block and never moves the healthy set.
 //
 // The set swaps through the edge's atomic pointer, so the answer path takes no lock. The prober logs no
 // address, and its per-interface gauge is labeled by inventory name and family only (I-13).
@@ -47,6 +47,9 @@ type dnsProbeKey struct {
 type ProberDeps struct {
 	// How probes reach the lb. Required.
 	Dialer DnsProbeDialer
+	// Where each round's route probes go: NewDnsRouteProbeSinkHttp on a host, or a fake. nil sends no
+	// route probe (probe_route.go).
+	RouteProbes DnsRouteProbeSink
 	// Lifecycle only: nothing here logs an address. nil discards.
 	Log sidecar.Logger
 }
@@ -64,6 +67,8 @@ type Prober struct {
 	publish  func(healthy *HealthySet)
 	// The hello each root's probes send, made once.
 	hellos [][]byte
+	// The custom-host map's route probes, which run in each round's pool.
+	routes *dnsRouteProbes
 	// Rounds finished, each counted once the wait for the next is armed, so a test sees one land and
 	// can then move a fake clock past the next.
 	roundCount *sidecar.MonitorValue[int]
@@ -98,7 +103,7 @@ func NewProber(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 	}
 	hellos := [][]byte{}
 	for _, root := range settings.Roots {
-		hello, err := dnsProbeClientHello(dnsProbeServerName(root))
+		hello, err := dnsProbeClientHello(dnsProbeServerName(root), nil)
 		if err != nil {
 			return nil, fmt.Errorf("the probe hello: %w", err)
 		}
@@ -119,6 +124,7 @@ func NewProber(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 		roundCount: sidecar.NewMonitorValue(0),
 		failures:   map[dnsProbeKey]int{},
 	}
+	self.routes = newDnsRouteProbes(settings, self.clock, self.metrics, deps.RouteProbes)
 	go self.run()
 	return self, nil
 }
@@ -163,17 +169,20 @@ func (self *Prober) run() {
 	}
 }
 
-// One round: every interface's every address on every port, for every root, at most
-// probe.concurrency at once; then the counts move and the set is published.
+// One round: every interface's every address on every port, for every root, and the route probes the
+// feed's map fields ask for, at most probe.concurrency at once; then the counts move, the set is
+// published and the route probes' results go to the block.
 func (self *Prober) round() {
 	type probeTask struct {
 		key     dnsProbeKey
 		address netip.AddrPort
 	}
 	tasks := []probeTask{}
+	var interfaces []DnsLbInterface
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		interfaces = slices.Clone(self.interfaces)
 		for index := range self.interfaces {
 			lbInterface := &self.interfaces[index]
 			for _, port := range self.settings.Probe.Ports {
@@ -190,19 +199,25 @@ func (self *Prober) round() {
 			}
 		}
 	}()
-	if len(tasks) == 0 {
+	routeProbes := self.routes.probes(interfaces)
+	if len(tasks) == 0 && len(routeProbes) == 0 {
 		return
 	}
 	passed := make([]bool, len(tasks))
 	slots := make(chan struct{}, self.settings.Probe.ConcurrencyCount)
 	var group sync.WaitGroup
 	timeout := dnsSeconds(self.settings.Probe.TimeoutSeconds)
-	for index := range tasks {
+	start := func(probe func()) {
 		group.Add(1)
 		slots <- struct{}{}
 		go func() {
 			defer group.Done()
 			defer func() { <-slots }()
+			probe()
+		}()
+	}
+	for index := range tasks {
+		start(func() {
 			pass := true
 			for _, hello := range self.hellos {
 				if !dnsProbeOnce(self.ctx, self.clock, timeout, self.dialer, tasks[index].address, hello) {
@@ -211,10 +226,20 @@ func (self *Prober) round() {
 				}
 			}
 			passed[index] = pass
-		}()
+		})
+	}
+	for _, routeProbe := range routeProbes {
+		start(func() {
+			routeProbe.passed = routeProbe.hello != nil &&
+				dnsProbeOnce(self.ctx, self.clock, timeout, self.dialer, routeProbe.address, routeProbe.hello)
+		})
 	}
 	group.Wait()
 	if self.ctx.Err() != nil {
+		return
+	}
+	defer self.routes.report(self.ctx, routeProbes)
+	if len(tasks) == 0 {
 		return
 	}
 	func() {

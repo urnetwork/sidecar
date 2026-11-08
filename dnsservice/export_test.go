@@ -36,7 +36,12 @@ func (self *HealthySet) RouterAddressesForTest() []netip.Addr {
 
 // The hello a probe sends for serverName.
 func ProbeClientHelloForTest(serverName string) ([]byte, error) {
-	return dnsProbeClientHello(serverName)
+	return dnsProbeClientHello(serverName, nil)
+}
+
+// The hello a route probe sends for name.
+func RouteProbeClientHelloForTest(name string) ([]byte, error) {
+	return dnsRouteProbeClientHello(name)
 }
 
 // Whether what reader sends back passes a probe.

@@ -43,8 +43,9 @@ func dnsProbeServerName(root string) string {
 	return dnsProbeEdgeLabel + "." + root[:len(root)-1]
 }
 
-// The first record crypto/tls writes as a client for serverName: its ClientHello, whole.
-func dnsProbeClientHello(serverName string) ([]byte, error) {
+// The first record crypto/tls writes as a client for serverName offering alpnIds, in their order and
+// none when nil: its ClientHello, whole.
+func dnsProbeClientHello(serverName string, alpnIds []string) ([]byte, error) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
@@ -52,7 +53,7 @@ func dnsProbeClientHello(serverName string) ([]byte, error) {
 	go func() {
 		defer close(handshakeDone)
 		// the far side closes after one record, so this always fails, and only the hello matters
-		tls.Client(clientConn, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12}).Handshake()
+		tls.Client(clientConn, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12, NextProtos: alpnIds}).Handshake()
 	}()
 	header := make([]byte, dnsTlsRecordHeaderByteCount)
 	if _, err := io.ReadFull(serverConn, header); err != nil {
