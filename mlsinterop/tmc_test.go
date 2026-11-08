@@ -45,36 +45,12 @@ import (
 	"time"
 
 	"github.com/tmc/mls"
-	"github.com/tmc/mls/tlssyntax"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
-
-// The subset's credential and ur_group (§10.4).
-const (
-	tmcCredentialTypeUrSidecar mls.CredentialType = 0xf552
-	tmcExtensionTypeUrGroup    mls.ExtensionType  = 0xf553
-)
-
-func init() {
-	mls.RegisterCredential(tmcCredentialTypeUrSidecar, func() mls.CredentialCodec { return &tmcUrCredential{} })
-}
-
-// 0xF552's body: opaque<V> of UrMlsCredential's encoding (§10.4).
-type tmcUrCredential struct {
-	encoded []byte
-}
-
-func (self *tmcUrCredential) MarshalTLS(w *tlssyntax.Writer) {
-	w.WriteOpaque(self.encoded)
-}
-
-func (self *tmcUrCredential) UnmarshalTLS(r *tlssyntax.Reader) {
-	self.encoded = r.ReadOpaque()
-}
 
 // The suite mls_* runs, as tmc/mls numbers it under the overlay.
 const tmcSuite = mls.MLKEM768X25519AES128GCMSHA256Ed25519
@@ -761,24 +737,10 @@ func TestTmcLifecycleInBothDirections(t *testing.T) {
 	}
 }
 
-// The root's testdata/mls/0x0010/, wherever the layout puts the root (seedFiles's rule).
-func tmcTranscriptDirectory(t *testing.T) string {
-	t.Helper()
-	goMod, err := os.ReadFile("go.mod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootDirectory := ".."
-	if match := versionedRootRequire.FindSubmatch(goMod); match != nil {
-		rootDirectory = filepath.Join("..", string(match[1]))
-	}
-	return filepath.Join(rootDirectory, "testdata", "mls", "0x0010")
-}
-
 // Every checked-in transcript replays through tmc/mls as its passive client: it joins the Welcome on the tree beside
 // it, and each commit lands it on the epoch_authenticator the transcript names.
 func TestTmcReplaysTheInteropTranscripts(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join(tmcTranscriptDirectory(t), "*.json"))
+	paths, err := filepath.Glob(filepath.Join(interopRootDirectory(t), "testdata", "mls", "0x0010", "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
