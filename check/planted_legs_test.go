@@ -92,6 +92,60 @@ func TestLegsFailsOnSidecarHttpThroughProtocol(t *testing.T) {
 	}
 }
 
+// One package of a module, by the path a mail_ file would import.
+type plantedMailLibrary struct {
+	modulePath  string
+	version     string
+	sibling     string
+	importPath  string
+	packageName string
+}
+
+// One of each module sidecarHttpRefusedMailModules names, the versioned path included.
+var plantedMailLibraries = []plantedMailLibrary{
+	{modulePath: "github.com/emersion/go-imap/v2", version: "v2.0.0", sibling: "goimap", importPath: "github.com/emersion/go-imap/v2/imapserver", packageName: "imapserver"},
+	{modulePath: "github.com/emersion/go-sasl", version: "v0.0.0", sibling: "gosasl", importPath: "github.com/emersion/go-sasl/plain", packageName: "plain"},
+	{modulePath: "github.com/emersion/go-smtp", version: "v0.25.0", sibling: "gosmtp", importPath: "github.com/emersion/go-smtp/server", packageName: "server"},
+	{modulePath: "github.com/mjl-/adns", version: "v0.0.0", sibling: "adns", importPath: "github.com/mjl-/adns/resolve", packageName: "resolve"},
+	{modulePath: "github.com/mjl-/mox", version: "v0.0.17", sibling: "mox", importPath: "github.com/mjl-/mox/dkim", packageName: "dkim"},
+}
+
+// Plants the library in a file behind the constraint, and reads the rule.
+func plantMailLibrary(t *testing.T, planted plantedMailLibrary, constraintLine string) []string {
+	t.Helper()
+	fixture := newFixture(t)
+	fixture.keepLegs(sidecarHttpLegName)
+	fixture.writeSibling(planted.sibling+"/go.mod", "module "+planted.modulePath+"\n\ngo 1.27.3\n")
+	fixture.writeSibling(planted.sibling+"/"+planted.packageName+"/"+planted.packageName+".go", "package "+planted.packageName+"\n")
+	fixture.requireLocal(planted.modulePath, planted.version, planted.sibling)
+	fixture.write("mail_planted.go", "//go:build "+constraintLine+"\n\npackage sidecar\n\nimport _ \""+planted.importPath+"\"\n")
+	return fixture.open().sidecarHttpMailFindings(t)
+}
+
+func TestLegsFailsOnSidecarHttpLinkingAMailLibrary(t *testing.T) {
+	for _, planted := range plantedMailLibraries {
+		wantFindings(t, plantMailLibrary(t, planted, "sidecar_http"), sidecarHttpLegName+" links "+planted.importPath)
+	}
+}
+
+// The tag every receiver file carries is what keeps the rule quiet.
+func TestLegsAllowsAMailLibraryOffTheHttpLeg(t *testing.T) {
+	for _, planted := range plantedMailLibraries {
+		wantFindings(t, plantMailLibrary(t, planted, "!sidecar_http"))
+	}
+}
+
+// A module added to the rule without a plant above is a rule nothing has proved.
+func TestEveryRefusedMailModuleIsPlanted(t *testing.T) {
+	for _, refused := range sidecarHttpRefusedMailModules {
+		if !slices.ContainsFunc(plantedMailLibraries, func(planted plantedMailLibrary) bool {
+			return underPath(planted.modulePath, refused)
+		}) {
+			t.Errorf("no plant covers %s", refused)
+		}
+	}
+}
+
 func TestLegsFailsOnAHostFileWithoutTheTag(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs(sidecarHttpLegName)
