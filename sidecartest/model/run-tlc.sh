@@ -33,11 +33,12 @@ usage() {
 # seq is one writer and one instance, each push answered before the next; tiny is a window of 2
 # versions paging out one at a time, so a page-out fits in a short behavior; quiet_but holds still
 # every part a twin's rule never reaches; a Script fixes the story of a twin whose violation lies
-# past 30 steps, which open signing does not reach; sim is random simulation, for running any row
-# deeper than its bounds. Two of the model's twins have no row, since no invariant can see them: NoTailCheck,
-# as the model carries nothing a tail holds (a new epoch's tokens for paths created after the map's
-# source), and NoFenceRule, as at the model's hour marks every attempt a fence ends has lapsed (5b)
-# or holds a receipt or map too old to pass (5h, 5e) by then.
+# past 30 steps, which open signing does not reach. Three of the model's twins have no row, since no invariant can see them:
+# NoTailCheck, as the model carries nothing a tail holds (a new epoch's tokens for paths created
+# after the map's source); and NoFenceRule and ResolveIgnoresPending, as at the model's hour marks a
+# statement has lapsed (5b) before its batch is old enough to evacuate or its receipt or map too old
+# to pass (5h, 5e) before GC or a map's reclaim acts, so every attempt a fence would end is refused
+# anyway, and a stalled one holds the key that Resolve's and the fence's head reads wait on.
 seq_EvsCommit="Writers={w1} Instances={i1} Segments={s1} MaxAttempts=1 MaxFaults=0 MaxHour=0 MaxGeneration=1 MaxVersion=4"
 tiny_EvsCommit="FoldTrigger=1 FoldSize=1 BaseRange=0 WindowLimit=2 WindowMax=3"
 quiet_but() {
@@ -49,7 +50,7 @@ quiet_but() {
   echo "Quiet=$out"
 }
 twins_EvsCommit() {
-  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit sim="Simulate=200 Traces=40000 Seed=1"
+  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit
   cat <<EOF
 RestoreAfterShred      LifecycleHolds        $seq MaxPush=1 $(quiet_but lifecycle)
 VersionRestarts        VersionsRise          $seq MaxPush=3 $(quiet_but)+gitref
@@ -61,7 +62,6 @@ UnrecordedRefusal      OutcomesHold          $seq MaxAttempts=2 MaxPush=1 $(quie
 EarlyRefusalDrop       OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxPush=2 $(quiet_but lifecycle)+gitref
 AnswerDeletes          AnswersDeleteNothing  $seq Writers={w1,w2} Instances={i1,i2} MaxPush=2 $(quiet_but slots)+gitref
 EvacuateBeforeIndex    ClosureHolds          $seq MaxPush=1 MaxHour=3 $(quiet_but evac)+gitref
-ResolveIgnoresPending  OutcomesHold          $seq MaxPush=1 MaxHour=3 MaxFaults=1 $(quiet_but evac)+gitref
 GcNoFence              GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
 GcNoSecondCheck        GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
 PageOutUnfolded        NewestFound           $seq MaxPush=3 $tiny $(quiet_but)+gitref

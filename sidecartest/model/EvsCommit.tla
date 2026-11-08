@@ -1976,8 +1976,11 @@ LiveSpec == Spec /\ Fairness
 RemovalGates ==
     (proj.shrunkAt # 0) ~> (\A i \in Instances : authView[i] >= proj.shrunkAt)
 
-\* Every due path epoch eventually commits, while the repo lives to commit it.
+\* Every due path epoch eventually commits, while the repo lives to commit it and the run's bounds
+\* leave a statement and a version to commit it with.
 DueEpochCommits ==
-    \A r \in Refs : (head[r].dueGen # 0) ~> (head[r].dueGen = 0 \/ repo.state # "active")
+    \A r \in Refs :
+        (head[r].dueGen # 0) ~>
+            (head[r].dueGen = 0 \/ repo.state # "active" \/ pushCount = MaxPush \/ Committed(r) = MaxVersion)
 
 =============================================================================
