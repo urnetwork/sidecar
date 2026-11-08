@@ -238,7 +238,7 @@ No tag is checked in the circuit. For client records the MX checks it; for serve
    - `X-UR-Ref: ` x_ur_ref CRLF
    - `Feedback-ID: ` feedback_id CRLF
 5. Exactly one line begins with the constant `DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; h=from:date:message-id:x-ur-ref:feedback-id; `, and it continues `d=` header_from_domain `; s=` dkim_selector `; `. This is §14.6's second signature, the one that survives masked reports. `h=` comes first because DKIM's tag order is free, and a constant prefix is what makes "exactly one" cheap to count in the circuit. The fuller signature and any other are unconstrained.
-6. If BULK is set, exactly one line is `List-Unsubscribe-Post: List-Unsubscribe=One-Click` CRLF.
+6. If BULK is set, exactly one line has the field name `list-unsubscribe-post`, compared without case, no continuation follows it, and it is `List-Unsubscribe-Post: List-Unsubscribe=One-Click` CRLF. Without BULK the field is unconstrained.
 
 **Z6, the end of the message.**
 
@@ -268,6 +268,7 @@ D-SMTP-16's corpus, FS-31 included. Each row must fail before any effect, with h
 | A declared value that carries a command, or no recipient at all | The preamble's forms, before any template is built (section 6) |
 | A part's records stood on one number, to drop the header block | E3: `seq` strictly increases within a part |
 | Smuggled headers, a second From, one behind a leading dot | Z5.3, Z5.4 |
+| A BULK message whose one-click field is continued, doubled or of another value | Z5.6 |
 | An early or bare-LF DATA end | Z6 |
 | No CHUNKING; CHUNKING only before TLS | Z8, Z9 over the post-TLS reply; the edge's pre-TLS hints are not inputs |
 | No PIPELINING | The sidecar paces records; one part covers them; E3 forwards in order |
@@ -475,6 +476,7 @@ Measured from the code with gnark v0.15.0, and held to these figures by `TestGad
 | Z1, TLS 1.2 (25 compressions, SF's AES block and its schedule) | 669,147 | per part | about 675,000 |
 | Z2-Z4, a pool block with the local table (π2's envelope) | 12,545 under AES, 25,345 under ChaCha20 | per block, about 55 an octet beyond the keystream | |
 | Z2-Z4, a pool block of literals only (π1, and π3's commands) | 11,969 under AES, 23,041 under ChaCha20 | per block, about 19 an octet beyond the keystream | |
+| Z5, the header scan with its keystream | 58,071 under AES, 33,236 under ChaCha20 | per 64 header octets, about 178 an octet beyond the keystream | well under AES's 725 an octet |
 
 Some readings of these:
 
@@ -483,6 +485,7 @@ Some readings of these:
 - Each part re-proves Z1 (D-SMTP-22), so a BDAT send spends 515,322 + 2 × 708,498 = 1,932,318 constraints on it under 1.3, a little under 11.3's 2.3M.
 - H_sh and H_sf enter HMAC messages, and gnark's `Xor` asserts its inputs boolean, so 512 constraints of 1.3's Z1 are booleans on public wires the verifier computes. Marking those wires boolean without a constraint would save them; it is not done.
 - The 1.2 figure adds back what the twin's private IV costs over the real one: a 1.2 IV is the salt and 8 zero octets, so the real shape's nonce takes the explicit nonce without a XOR, 64 constraints a pool block.
+- Z5's automaton costs about 178 constraints an octet beyond the keystream, a quarter of AES's 729, so a 4 KiB header block spends about 730,000 on Z5 and about 3M on its keystream. Counting the one-click field by name (reading 25) added 6 an octet.
 - A recipient costs π2 its RCPT record, 3 AES blocks for an address of up to 35 octets, and π3 its reply, 1 or 2 server blocks. So 100 recipients add about 3.8M constraints to π2 under AES and 1.3M to 2.6M to π3 (10.4, section 14).
 
 ### 11.3 First measurements, and what they say
@@ -555,7 +558,7 @@ At load averages of 22 to 35, beside a real-size ceremony in another process, DA
 
 Setup took 25 s to 3 min 5 s a shape. These runs used the later-part shapes without server blocks. The 1.3 shapes over a late ticket (section 12) compile, with no commitment, to 2,501,943 constraints under AES and 1,623,719 under ChaCha20, about a fifth more than their plain twins; none has been proven or timed, since no MX here sends a ticket.
 
-Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes.
+Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes. These counts predate reading 25, which adds about 25,000 constraints to each π3 shape, 6 an octet over its 4 KiB header block; the tables above were not measured again.
 
 What this says, neither reference machine having been measured:
 
@@ -638,6 +641,7 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 22. **A host's DATA cap is the slowest suite's** (`Measure`). A later part's circuit is fixed, so its cost does not depend on what it carries: the host proves one full part per suite it holds keys for, its rate is a part's octets over the slowest suite's time, `smtp_data_proof_bytes` is that rate over §14.4's 2 h, and a host whose part takes longer than 2 minutes sends nothing in DATA mode. π1 to π3 are left out of the 2 h, a few parts' worth. `Measure` is on `SmtpProver`, since the sender that records `p/` holds only that seam.
 23. **A template no plaintext of the record's length can fill is refused as E3** (section 5). The edge refuses such a part before verifying it, so it is the gate's refusal, and the independent checker names it so too, though the relation would fail Z4 on it.
 24. **`smtpproof/setup` stays where SMTP-M9-27 puts it.** C-23 moves into `sidecarctl` the commands plans put under `bringyourctl` or `warpctl`; this one the plan puts under `smtpproof`, and the root module cannot require `smtpproof`. Its work is `RunSetup`, which `sidecarctl` could call if the owner wants it there.
+25. **On a BULK message `List-Unsubscribe-Post` is a single field** (Z5.6). DESIGN.md's Z5 asks for the field when BULK is set, and RFC 8058 §3.1 says it holds the single key/value pair `List-Unsubscribe=One-Click`. Counting only lines equal to that literal, as draft 1 did, let a continuation turn the field's value into something else, or a second field of another value stand beside it, and the relation, the circuits and the checker all passed both. So the field is counted by name, as rule 4 counts its four, held to the literal and to no continuation. A message without BULK keeps whatever such fields MAIL wrote.
 
 ## 14. Open
 
