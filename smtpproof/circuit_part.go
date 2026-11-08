@@ -78,7 +78,9 @@ type poolBlock struct {
 	Cipher    []frontend.Variable `gnark:",public"`
 	Literal   []frontend.Variable `gnark:",public"`
 	IsLiteral []frontend.Variable `gnark:",public"`
-	IsLocal   []frontend.Variable `gnark:",public"`
+	// Only on a block that can hold a local part, a shape's client blocks when it carries the local
+	// table: a public wire no constraint reads would verify at any value (SPEC.md 5.1).
+	IsLocal []frontend.Variable `gnark:",public"`
 }
 
 // One keystream block of server records, with what the edge knows of each position from lengths.
@@ -146,13 +148,16 @@ type partCircuit struct {
 	ServerIv  []frontend.Variable
 }
 
-func newPoolBlock(blockBytes int) *poolBlock {
-	return &poolBlock{
+func newPoolBlock(blockBytes int, local bool) *poolBlock {
+	block := &poolBlock{
 		Cipher:    make([]frontend.Variable, blockBytes),
 		Literal:   make([]frontend.Variable, blockBytes),
 		IsLiteral: make([]frontend.Variable, blockBytes),
-		IsLocal:   make([]frontend.Variable, blockBytes),
 	}
+	if local {
+		block.IsLocal = make([]frontend.Variable, blockBytes)
+	}
+	return block
 }
 
 func newPartCircuit(shape *partShape) *partCircuit {
@@ -179,7 +184,7 @@ func newPartCircuit(shape *partShape) *partCircuit {
 		circuit.MasterSecret = make([]frontend.Variable, 8*tlsMasterSecretBytes)
 	}
 	for range shape.clientBlocks {
-		circuit.Client = append(circuit.Client, newPoolBlock(shape.blockBytes()))
+		circuit.Client = append(circuit.Client, newPoolBlock(shape.blockBytes(), shape.localOctets))
 	}
 	for range shape.serverBlocks {
 		circuit.Server = append(circuit.Server, newServerBlock(shape.blockBytes()))
@@ -361,11 +366,20 @@ func (self *partCircuit) Define(api frontend.API) error {
 	}
 	if shape.needsServerKeys() {
 		checkReplies(api, shape, newCircuitKeystream(api, shape, keys.serverKey, keys.serverIv), self)
+		// only pi3 reads DataMode; elsewhere it is part of the statement all the same, and a public wire
+		// no constraint reads would verify at any value
+		if shape.kind != partKindMessage {
+			api.AssertIsEqual(self.DataMode, 0)
+		}
 	} else {
 		// no reply here; these public wires are still part of the statement
 		api.AssertIsEqual(self.ExpectedReplies, 0)
 		api.AssertIsEqual(self.RequireChunking, 0)
 		api.AssertIsEqual(self.DataMode, 0)
+	}
+	if shape.version == tlsVersion13 {
+		// 1.2's alone, and a wire of every shape
+		api.AssertIsEqual(self.ResumeTwoBlocks, 0)
 	}
 	return nil
 }
@@ -416,13 +430,15 @@ func assignRecordBlocks(shape *partShape, statement *partStatement, record *part
 				slot.Cipher[i] = ciphertext[offset+i]
 				slot.Literal[i] = position.literal
 				slot.IsLiteral[i] = 0
-				slot.IsLocal[i] = 0
+				if slot.IsLocal != nil {
+					slot.IsLocal[i] = 0
+				}
 				switch position.kind {
 				case templateLiteral:
 					slot.IsLiteral[i] = 1
 				case templateLocal:
-					// a shape without the local table would ignore this wire, and pass any octet
-					if !shape.localOctets {
+					// a block without the local table has no wire for this, and would pass any octet
+					if !shape.localOctets || slot.IsLocal == nil {
 						return 0, errors.New("this shape does not check local octets")
 					}
 					slot.IsLocal[i] = 1
@@ -619,7 +635,7 @@ func assignHandshake12(shape *partShape, statement *partStatement, circuit *part
 	// SF's opened octets, as a one-block record with no template of its own
 	record := &partRecord{raw: session.serverFinishedRecord}
 	template := make([]templateOctet, 4+tlsVerifyData12Bytes)
-	block := newPoolBlock(shape.blockBytes())
+	block := newPoolBlock(shape.blockBytes(), false)
 	if _, err := assignRecordBlocks(shape, statement, record, template, []*poolBlock{block}); err != nil {
 		return err
 	}

@@ -248,6 +248,13 @@ func testMutations() []*testMutation {
 			part.Records[0][0] = 22
 			event.Part = &part
 		}},
+		{check: "E3", name: "a part opening one record more than its index has roles for", mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {
+			event := capture.Events[testPartEvents(capture)[2]]
+			part := *event.Part
+			part.Records = append(slices.Clone(part.Records), part.Records[len(part.Records)-1])
+			part.LastRecord += 1
+			event.Part = &part
+		}},
 
 		// Z1
 		{check: "Z1", name: "another HS or master secret, the keys it gave kept", part: testPartAt(1), mutate: func(t *testing.T, c *testLegCase, capture *smtpproof.ExportedCapture) {

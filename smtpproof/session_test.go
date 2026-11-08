@@ -245,6 +245,11 @@ type testEdge struct {
 	forwardLock sync.Mutex
 	// As testMxSettings.edgeForgesFrom.
 	forgesFrom int
+	// When set, what a malicious sidecar sends in place of each record the prover wrote: none, that
+	// record, another, or more than one.
+	rewriteClient func(record []byte) [][]byte
+	// When set, called after each call into the gate has written what it released.
+	afterForward func()
 	// Both relay goroutines, so a test reads the trace only once it is whole.
 	relays sync.WaitGroup
 
@@ -313,6 +318,9 @@ func (self *testEdge) forward(call func() ([][]byte, error)) error {
 			return err
 		}
 	}
+	if self.afterForward != nil {
+		self.afterForward()
+	}
 	return nil
 }
 
@@ -326,10 +334,16 @@ func (self *testEdge) run() {
 				self.fail(nil)
 				return
 			}
-			self.addTrace(&testTraceEntry{fromClient: true, record: record})
-			if err := self.forward(func() ([][]byte, error) { return self.session.ClientRecord(record) }); err != nil {
-				self.fail(err)
-				return
+			records := [][]byte{record}
+			if self.rewriteClient != nil {
+				records = self.rewriteClient(record)
+			}
+			for _, record := range records {
+				self.addTrace(&testTraceEntry{fromClient: true, record: record})
+				if err := self.forward(func() ([][]byte, error) { return self.session.ClientRecord(record) }); err != nil {
+					self.fail(err)
+					return
+				}
 			}
 		}
 	}()
@@ -483,6 +497,12 @@ func testRunSend(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, prov
 // As testRunSend, under a given proof system.
 func testRunSendWith(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier) *testSend {
 	t.Helper()
+	return testRunSendThrough(t, leg, mxSettings, proverSettings, job, partProver, partVerifier, nil)
+}
+
+// As testRunSendWith, with the relay set up by configure, when given, before anything flows.
+func testRunSendThrough(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, proverSettings *ProverSettings, job *sidecar.SmtpProofJob, partProver partProver, partVerifier partVerifier, configure func(edge *testEdge)) *testSend {
+	t.Helper()
 	sidecarConn, edgeSidecarConn := testPipe()
 	edgeMxConn, mxConn := testPipe()
 
@@ -502,6 +522,9 @@ func testRunSendWith(t *testing.T, leg *testTlsLeg, mxSettings *testMxSettings, 
 		sidecarConn: edgeSidecarConn,
 		mxConn:      edgeMxConn,
 		forgesFrom:  mxSettings.edgeForgesFrom,
+	}
+	if configure != nil {
+		configure(edge)
 	}
 	edge.run()
 
