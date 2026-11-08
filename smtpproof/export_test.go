@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // One thing the edge saw, as the external tests read it. Exactly one field is set.
@@ -54,8 +55,14 @@ func ExportCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
 	send := testRunSend(t, leg, testMxDefaults(), settings, job)
 	testExpectOneTransaction(t, leg, send, job)
 	fixture := &testGateFixture{leg: leg, preamble: newSessionPreamble(job.Preamble), trace: send.edge.trace, parts: send.edge.parts}
-	if len(send.backend.proved) != len(fixture.parts) {
-		t.Fatalf("%d witnesses for %d parts", len(send.backend.proved), len(fixture.parts))
+	return exportCapture(t, fixture, job, send.backend)
+}
+
+// A capture of a finished send: each event as the edge saw it, and each part's witness by its event.
+func exportCapture(t *testing.T, fixture *testGateFixture, job *sidecar.SmtpProofJob, backend *testWitnessBackend) *ExportedCapture {
+	t.Helper()
+	if len(backend.proved) != len(fixture.parts) {
+		t.Fatalf("%d witnesses for %d parts", len(backend.proved), len(fixture.parts))
 	}
 	capture := &ExportedCapture{Preamble: job.Preamble, Witnesses: map[int]*ExportedWitness{}}
 	for i, event := range testReplayEvents(fixture) {
@@ -63,7 +70,7 @@ func ExportCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
 		switch {
 		case event.part != 0:
 			exported.Part = fixture.parts[event.part-1]
-			witness := send.backend.proved[event.part-1]
+			witness := backend.proved[event.part-1]
 			capture.Witnesses[i] = &ExportedWitness{
 				HandshakeSecret:  witness.handshakeSecret,
 				MasterSecret:     witness.masterSecret,
@@ -83,6 +90,47 @@ func ExportCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
 		capture.Events = append(capture.Events, exported)
 	}
 	return capture
+}
+
+// One of sidecartest's MX legs, as ExportMxCapture takes it.
+type ExportedMxLeg struct {
+	Name    string
+	Version uint16
+	Suite   uint16
+}
+
+// The legs testMxLegs runs, each named tls13 or tls12 first.
+func ExportMxLegs() []*ExportedMxLeg {
+	var legs []*ExportedMxLeg
+	for _, leg := range testMxLegs() {
+		legs = append(legs, &ExportedMxLeg{Name: leg.name, Version: leg.version, Suite: leg.suite})
+	}
+	return legs
+}
+
+// Captures an honest send through one of sidecartest's MXs (SMTP-M9-02) on a leg ExportMxLegs names,
+// BDAT or DATA, with several DATA parts, as ExportCapture does through this package's own MX.
+func ExportMxCapture(t *testing.T, legName string, data bool, mx sidecartest.MxServer) *ExportedCapture {
+	t.Helper()
+	var leg *testMxLeg
+	for _, candidate := range testMxLegs() {
+		if candidate.name == legName {
+			leg = candidate
+		}
+	}
+	if leg == nil {
+		t.Fatalf("no leg %s", legName)
+	}
+	job := testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol")
+	if data {
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+	}
+	send := testRunSendToMx(t, leg.suites, mx, testMxModeSettings(data), job)
+	if send.err != nil || !send.result.Accepted {
+		t.Fatalf("%s: %+v, %v (edge: %v)", legName, send.result, send.err, send.edge.failure())
+	}
+	fixture := &testGateFixture{leg: &testTlsLeg{name: leg.name}, preamble: newSessionPreamble(job.Preamble), trace: send.edge.trace, parts: send.edge.parts}
+	return exportCapture(t, fixture, job, send.backend)
 }
 
 // Verifies each part by relationCheckPart over the capture's witness for it, and keeps the checks
