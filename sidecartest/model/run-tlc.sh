@@ -73,7 +73,7 @@ NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,
 NoWindowWait           NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
 FoldIgnoresWindow      NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
 CachedRefusal          OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxGeneration=2 MaxPush=3 MaxVersion=4 $(quiet_but authority epoch cache stale fold)+gitref Script=X.create:epoch:X.write Simulate=150 Traces=40000 Seed=1
-CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref Script=X.create:epoch:X.write:D.create Simulate=150 Traces=40000 Seed=1
+CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref+gkm+block Script=X.create:epoch:X.write:D.create
 EOF
 }
 
@@ -119,6 +119,9 @@ uploads    pushCount' > pushCount => push'[pushCount'].seg = NoSegment
 gitref     pushCount' > pushCount => push'[pushCount'].ref # GitRef
 fileref    pushCount' > pushCount => push'[pushCount'].ref # FileRef
 newrefstall \A r \in Refs : heldBy[r] = NoHolder /\ heldBy'[r] # NoHolder => head[r].version + head[r].fence > 0
+gkm        epoch' = epoch \/ epoch' = <<>>
+copy       copyJob' = copyJob
+block      \A r \in Refs : blockLive'[r] => blockLive[r]
 EOF
 }
 

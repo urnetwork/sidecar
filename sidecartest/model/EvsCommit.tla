@@ -1974,6 +1974,8 @@ Fairness ==
     /\ \A r \in Refs : WF_vars(MapUpload(r))
     /\ \A r \in Refs : WF_vars(\E w \in Writers, m \in pmap[r] : EpochSign(w, r, m))
     /\ \A i \in Instances : WF_vars(\E P \in 1..pushCount : Arrive(i, P))
+    \* §19.6 settles a stalled write once its drives answer (StoreSettle.tla's HeldKeyReleased)
+    /\ \A r \in Refs, i \in Instances : WF_vars(StallLands(r, i) \/ StallReverts(r, i))
 
 LiveSpec == Spec /\ Fairness
 
@@ -1981,11 +1983,19 @@ LiveSpec == Spec /\ Fairness
 RemovalGates ==
     (proj.shrunkAt # 0) ~> (\A i \in Instances : authView[i] >= proj.shrunkAt)
 
+\* A run's bounds leave a due epoch nothing to commit with: no statement or version is left to sign,
+\* and every PATH_EPOCH statement of the ref has used its attempts, none still running.
+EpochOutOfRoom(r) ==
+    /\ pushCount = MaxPush \/ Committed(r) = MaxVersion
+    /\ \A P \in 1..pushCount :
+           push[P].kind = "epoch" /\ push[P].ref = r =>
+               /\ attemptsMade[P] >= MaxAttempts
+               /\ \A i \in Instances : att[i].stage = "idle" \/ att[i].push # P
+
 \* Every due path epoch eventually commits, while the repo lives to commit it and the run's bounds
-\* leave a statement and a version to commit it with.
+\* leave room to.
 DueEpochCommits ==
     \A r \in Refs :
-        (head[r].dueGen # 0) ~>
-            (head[r].dueGen = 0 \/ repo.state # "active" \/ pushCount = MaxPush \/ Committed(r) = MaxVersion)
+        (head[r].dueGen # 0) ~> (head[r].dueGen = 0 \/ repo.state # "active" \/ EpochOutOfRoom(r))
 
 =============================================================================
