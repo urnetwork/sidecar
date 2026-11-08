@@ -232,10 +232,12 @@ var recordKindRows = map[RecordKind]recordKindRow{
 	RecordKindRepo:   {name: "repo"},
 }
 
+// The one body of claim, handoff, ask, answer, check and note.
 func newRecordCoordinationBody() proto.Message {
 	return &protocol.CoordinationBody{}
 }
 
+// The stored body of approval_decision, approval_cancel and retention, which NewSignedBody opens.
 func newRecordSignedBody() proto.Message {
 	return &bridge.Signed{}
 }
