@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"testing"
 	"testing/cryptotest"
@@ -422,6 +423,110 @@ func TestMlsTreeKemAtFullGroupWidth(t *testing.T) {
 	}
 	if err := creator.tree.validate(group.validation); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// D-KEYS-14's widest group: 1,000 leaves under the real KEM with every parent a path can reach filled,
+// encoded as the ratchet_tree a sealed GroupInfo carries, then decoded and validated as a joiner takes
+// it. §10.6 sizes that tree at up to 2.83 MB, which a test credential, smaller than 0xF552's, keeps
+// under; decoding must cost memory in proportion to the bytes. The log records the size and the
+// memory, which §22.8 measures again at M2.
+func TestMlsTreeOfAThousandLeavesRoundTrips(t *testing.T) {
+	suite := mlsSuite
+	cryptotest.SetGlobalRandom(t, 3)
+	memberCount := 1000
+	groupId := []byte("mls-base test group")
+	validation := mlsTestLeafValidation(groupId)
+	settings := defaultMlsTreeSettings()
+
+	clients := make([]*mlsTestClient, memberCount)
+	for index := range clients {
+		clients[index] = mlsNewTestClient(t, suite, fmt.Sprintf("client-%d", index))
+	}
+	tree := newMlsRatchetTree(suite, settings, &clients[0].keyPackage.leafNode)
+	for _, client := range clients[1:] {
+		if _, err := tree.addLeaf(&client.keyPackage.leafNode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// every subtree of two leaves or more holds an even leaf, so the paths of the even leaves reach
+	// every parent whose right child holds a member, which is every parent any path can reach
+	for leaf := 0; leaf < memberCount; leaf += 2 {
+		prepared, err := tree.prepareUpdatePath(mlsLeafIndex(leaf), tree.leafNode(mlsLeafIndex(leaf)), clients[leaf].signatureKey, groupId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared.erase()
+	}
+	parentCount := 0
+	for index := 1; index < len(tree.nodes); index += 2 {
+		// a parent's right child begins at leaf (index+1)/2
+		reachable := (index+1)/2 < memberCount
+		if filled := tree.nodes[index].parent != nil; filled != reachable {
+			t.Fatalf("parent %d filled %v, reachable %v", index, filled, reachable)
+		}
+		if reachable {
+			parentCount += 1
+		}
+	}
+	if parentCount != memberCount-1 {
+		t.Fatalf("%d parents filled", parentCount)
+	}
+	if err := tree.validate(validation); err != nil {
+		t.Fatal(err)
+	}
+
+	encoded, err := mlsMarshal(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// each parent is 1,252 bytes behind its two node bytes (TestMlsParentNodeSizeUnderXWing), and each
+	// leaf at least its 1,216-byte X-Wing key behind them
+	if minimum := parentCount*(2+1252) + memberCount*(2+1216); len(encoded) < minimum {
+		t.Errorf("a full tree of %d bytes, under the %d its keys alone take", len(encoded), minimum)
+	}
+	if maximum := 2830 * 1000; maximum < len(encoded) {
+		t.Errorf("a full tree of %d bytes, past §10.6's %d", len(encoded), maximum)
+	}
+
+	var before, after, settled runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	decoded, err := decodeMlsRatchetTree(suite, settings, encoded)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&settled)
+	allocatedByteCount := after.TotalAlloc - before.TotalAlloc
+	liveByteCount := int64(settled.HeapAlloc) - int64(before.HeapAlloc)
+	runtime.KeepAlive(decoded)
+	t.Logf("a ratchet_tree of %d leaves and %d parents: %d bytes; decoding allocated %d bytes and kept %d live", memberCount, parentCount, len(encoded), allocatedByteCount, liveByteCount)
+	if 3*uint64(len(encoded)) < allocatedByteCount {
+		t.Errorf("decoding %d bytes allocated %d", len(encoded), allocatedByteCount)
+	}
+
+	if err := decoded.validate(validation); err != nil {
+		t.Fatal(err)
+	}
+	treeHash, err := tree.treeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedTreeHash, err := decoded.treeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decodedTreeHash, treeHash) {
+		t.Error("the decoded tree hashes differently")
+	}
+	reencoded, err := mlsMarshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reencoded, encoded) {
+		t.Error("the decoded tree re-encodes differently")
 	}
 }
 
