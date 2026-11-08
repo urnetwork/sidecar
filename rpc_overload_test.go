@@ -123,9 +123,15 @@ func TestInlineRefusalAllocatesNothing(t *testing.T) {
 	fixture.receive(sourceId, request, peer)
 	fixture.nextSent(t)
 	fixture.receive(sourceId, request, peer)
-	allocs := testing.AllocsPerRun(100, func() {
-		fixture.receive(sourceId, request, peer)
-	})
+	// AllocsPerRun counts the whole process, and the worker still finishing the second request, or a
+	// goroutine an earlier test left, can allocate while the refusals run. A refusal that allocates
+	// does so every time, so the least of three measures is the refusal path's own count.
+	measure := func() float64 {
+		return testing.AllocsPerRun(100, func() {
+			fixture.receive(sourceId, request, peer)
+		})
+	}
+	allocs := min(measure(), measure(), measure())
 	if 0 < allocs {
 		t.Errorf("%.1f allocations per refusal", allocs)
 	}
