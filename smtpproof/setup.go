@@ -15,17 +15,20 @@ import (
 
 // The setup (SPEC.md 10.2, 10.3), by gnark's two-phase ceremony. The edge is the party soundness
 // protects, so it may contribute alone. Zero knowledge against that same edge cannot rest on its
-// honesty, so a prover host takes keys only from verifySetup, which recomputes them from a transcript
-// over the circuit it compiled itself. A key that verification did not produce is never used.
+// honesty, so a prover host takes keys only from VerifySetupTranscript, which recomputes them from a
+// transcript over the circuit it compiled itself. A key that verification did not produce is never
+// used. setup_keys.go holds a release's keys and the ceremony over every production shape.
 
 // A ceremony's public record for one shape, which is all a prover needs to trust its keys. It holds
 // contributions as bytes because gnark's verification assumes what ReadFrom checks, and modifies the
 // last contribution it is given: so each verification decodes its own copies.
-type setupTranscript struct {
+type SetupTranscript struct {
 	// A public value fixed after contributions end, so no contributor can grind the result.
-	beacon []byte
-	phase1 [][]byte
-	phase2 [][]byte
+	Beacon []byte
+	// Each contribution in order, as gnark's mpcsetup encodes it: phase 1 for the shape's domain size,
+	// then phase 2 for the shape.
+	Phase1 [][]byte
+	Phase2 [][]byte
 }
 
 func encodeContribution(contribution io.WriterTo) ([]byte, error) {
@@ -80,19 +83,19 @@ func setupR1cs(compiled constraint.ConstraintSystem) (*cs.R1CS, error) {
 
 // Runs a one-contributor ceremony, as the edge does. Its secrets live and die inside gnark's
 // Contribute, which draws them from crypto/rand.
-func runSetup(compiled constraint.ConstraintSystem, beacon []byte) (*setupTranscript, error) {
+func runSetup(compiled constraint.ConstraintSystem, beacon []byte) (*SetupTranscript, error) {
 	r1cs, err := setupR1cs(compiled)
 	if err != nil {
 		return nil, err
 	}
-	transcript := &setupTranscript{beacon: beacon}
+	transcript := &SetupTranscript{Beacon: beacon}
 	first := mpcsetup.NewPhase1(setupDomainSize(compiled))
 	first.Contribute()
 	encoded, err := encodeContribution(first)
 	if err != nil {
 		return nil, err
 	}
-	transcript.phase1 = [][]byte{encoded}
+	transcript.Phase1 = [][]byte{encoded}
 	commons, err := verifyPhase1(compiled, transcript)
 	if err != nil {
 		return nil, err
@@ -103,16 +106,16 @@ func runSetup(compiled constraint.ConstraintSystem, beacon []byte) (*setupTransc
 	if encoded, err = encodeContribution(second); err != nil {
 		return nil, err
 	}
-	transcript.phase2 = [][]byte{encoded}
+	transcript.Phase2 = [][]byte{encoded}
 	return transcript, nil
 }
 
-func verifyPhase1(compiled constraint.ConstraintSystem, transcript *setupTranscript) (*mpcsetup.SrsCommons, error) {
-	contributions, err := decodePhase1(transcript.phase1)
+func verifyPhase1(compiled constraint.ConstraintSystem, transcript *SetupTranscript) (*mpcsetup.SrsCommons, error) {
+	contributions, err := decodePhase1(transcript.Phase1)
 	if err != nil {
 		return nil, fmt.Errorf("smtpproof: phase 1: %w", err)
 	}
-	commons, err := mpcsetup.VerifyPhase1(setupDomainSize(compiled), transcript.beacon, contributions...)
+	commons, err := mpcsetup.VerifyPhase1(setupDomainSize(compiled), transcript.Beacon, contributions...)
 	if err != nil {
 		return nil, fmt.Errorf("smtpproof: phase 1: %w", err)
 	}
@@ -122,23 +125,23 @@ func verifyPhase1(compiled constraint.ConstraintSystem, transcript *setupTranscr
 // Checks a transcript against a circuit compiled from this build's own source, and returns the keys
 // it fixes. Those keys have the form Groth16's zero knowledge needs, for whatever trapdoor the
 // contributors hold (SPEC.md 10.2). Any flaw is an error, and no keys.
-func verifySetup(compiled constraint.ConstraintSystem, transcript *setupTranscript) (groth16.ProvingKey, groth16.VerifyingKey, error) {
+func VerifySetupTranscript(compiled constraint.ConstraintSystem, transcript *SetupTranscript) (groth16.ProvingKey, groth16.VerifyingKey, error) {
 	r1cs, err := setupR1cs(compiled)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(transcript.phase1) == 0 || len(transcript.phase2) == 0 {
+	if len(transcript.Phase1) == 0 || len(transcript.Phase2) == 0 {
 		return nil, nil, errors.New("smtpproof: setup transcript holds no contribution")
 	}
 	commons, err := verifyPhase1(compiled, transcript)
 	if err != nil {
 		return nil, nil, err
 	}
-	contributions, err := decodePhase2(transcript.phase2)
+	contributions, err := decodePhase2(transcript.Phase2)
 	if err != nil {
 		return nil, nil, fmt.Errorf("smtpproof: phase 2: %w", err)
 	}
-	provingKey, verifyingKey, err := mpcsetup.VerifyPhase2(r1cs, commons, transcript.beacon, contributions...)
+	provingKey, verifyingKey, err := mpcsetup.VerifyPhase2(r1cs, commons, transcript.Beacon, contributions...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("smtpproof: phase 2: %w", err)
 	}

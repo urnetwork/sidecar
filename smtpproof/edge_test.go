@@ -260,13 +260,21 @@ func TestE1TakesAChangeCipherSpecBeforeAClientHelloOnlyAfterARetry(t *testing.T)
 	gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
 	testExpectCheck(t, "before any hello", gate.ServerRecord(dummy), checkE1)
 
-	gate = newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
-	gate.helloRetried = true
-	if err := gate.ServerRecord(dummy); err != nil {
-		t.Errorf("after a retry: %v", err)
+	retried := func() *edgeSession {
+		gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+		gate.helloRetried = true
+		if err := gate.ServerRecord(dummy); err != nil {
+			t.Errorf("after a retry: %v", err)
+		}
+		return gate
 	}
+	gate = retried()
 	testExpectCheck(t, "another length", gate.ServerRecord(tlsFrameRecord(tlsRecordChangeCipherSpec, tlsVersion12, []byte{1, 1})), checkE1)
-	testExpectCheck(t, "any other record", gate.ServerRecord(tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 20))), checkE1)
+	// a refusal ends the gate: even the record it took a moment ago is refused now
+	if err := gate.ServerRecord(dummy); err == nil {
+		t.Error("the gate went on after a refusal")
+	}
+	testExpectCheck(t, "any other record", retried().ServerRecord(tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 20))), checkE1)
 }
 
 func TestE1RefusesAClientFlightOtherThanFinished(t *testing.T) {

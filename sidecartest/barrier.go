@@ -98,8 +98,9 @@ type BarrierDriverSettings struct {
 	AwaitTimeout time.Duration
 	// How long in real time an actor may keep the baton while others wait or a schedule wants to
 	// settle, before it counts as blocked on something the driver cannot see. Long enough that a
-	// busy machine does not reach it between two barriers, since passing it costs determinism and
-	// not correctness. Non-positive disables it, so such an actor fails the schedule at AwaitTimeout.
+	// busy machine does not reach it between two barriers: passing it costs determinism, so fault.Run
+	// fails a run in which an actor stalled. Non-positive disables it, so such an actor fails the
+	// schedule at AwaitTimeout.
 	StallTimeout time.Duration
 }
 

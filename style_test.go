@@ -124,7 +124,7 @@ func settingsCommentFindings(file *ast.File) []string {
 func TestEveryTunableHasItsComment(t *testing.T) {
 	settingsFileCount := 0
 	for goFile, file := range parseRootFiles(t) {
-		if !strings.HasPrefix(goFile, "settings") {
+		if !strings.HasPrefix(goFile, "settings") && goFile != "envelope_settings.go" {
 			continue
 		}
 		settingsFileCount += 1

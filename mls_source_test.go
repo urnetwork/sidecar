@@ -51,6 +51,54 @@ func TestMlsProductionCodeBuildsOneSuite(t *testing.T) {
 	}
 }
 
+// Basic credentials read only in the test binary, the way suite 0x0001 is built only there: no file
+// that production builds, under any tag, sets the switch that lets them.
+func TestMlsProductionCodeReadsNoBasicCredential(t *testing.T) {
+	const name = "mlsTestReadsBasicCredentials"
+	paths, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	declared := 0
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.ValueSpec:
+				for _, ident := range node.Names {
+					if ident.Name == name {
+						declared++
+						if len(node.Values) != 0 {
+							t.Errorf("%s: declared with a value", fileSet.Position(ident.Pos()))
+						}
+					}
+				}
+			case *ast.AssignStmt:
+				for _, left := range node.Lhs {
+					if ident, ok := left.(*ast.Ident); ok && ident.Name == name {
+						t.Errorf("%s: set", fileSet.Position(ident.Pos()))
+					}
+				}
+			case *ast.UnaryExpr:
+				if ident, ok := node.X.(*ast.Ident); ok && node.Op == token.AND && ident.Name == name {
+					t.Errorf("%s: its address taken", fileSet.Position(ident.Pos()))
+				}
+			}
+			return true
+		})
+	}
+	if declared != 1 {
+		t.Fatalf("declared %d times", declared)
+	}
+}
+
 // A key the hook never saw is a key the privacy harness cannot catch leaking (§22.7). So everything in
 // the standard library that produces key material is reachable only from the few functions that hook
 // it, and each of those does, and every caller names what it asks for with a literal.

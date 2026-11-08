@@ -87,11 +87,15 @@ enum SignedType {
   SIGNED_RECOVERY_VETO = 0x1214;
   SIGNED_PROJECTION_HEADER = 0x1215;
 
-  // 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5).
+  // 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5). Then
+  // the two §6.11's list omits: GroupForm, purpose group-form, and UrMlsCredential, purpose mls-credential, whose
+  // signed body is its bytes up to identity_signature, the one signature here no Signed carries (§10.4).
   SIGNED_GEN_ROTATE = 0x1301;
   SIGNED_READER_KEY = 0x1302;
   SIGNED_READER_WRAP = 0x1303;
   SIGNED_DELEGATION_WRAP = 0x1304;
+  SIGNED_GROUP_FORM = 0x1305;
+  SIGNED_UR_MLS_CREDENTIAL = 0x1306;
 
   // 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
   // purposes evs-path-epoch and evs-import.

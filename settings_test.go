@@ -217,6 +217,10 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	if settings.Mcp.SessionWriteRate.Burst != 20 {
 		t.Errorf("SessionWriteRate.Burst %d", settings.Mcp.SessionWriteRate.Burst)
 	}
+	// connect's MaxHttpResponseBodyBytes, the bound connect puts on an api answer
+	if settings.ApiResponseByteCount != 2*1024*1024 {
+		t.Errorf("ApiResponseByteCount %d", settings.ApiResponseByteCount)
+	}
 
 	// why those numbers hold together: a hook payload at its limit fits in one request with room for
 	// JSON's escaping, a local request gets a call's time, and a full queue of 4,080 B envelopes fits

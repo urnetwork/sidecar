@@ -123,8 +123,9 @@ type DnsStore interface {
 	// Deletes journal rows committed before before, oldest first, leaving a gap readers report
 	// (§12.14's 7 days). Returns how many went.
 	PurgeJournal(ctx context.Context, root string, before time.Time) (purgedCount int, err error)
-	// Sets or clears dns_root.restoring (§19.10). Setting it forgets the last restore's incident, so a
-	// reload waits for this restore's own transaction.
+	// Sets or clears dns_root.restoring (§19.10). Setting it while clear forgets the last restore's
+	// incident, so a reload waits for this restore's own transaction, and setting it while set changes
+	// nothing, so a rerun after a crash keeps what the transaction recorded.
 	SetRestoring(ctx context.Context, root string, restoring bool) error
 	// §12.6's restore transaction: serial and restore_serial become the highest of the restored
 	// serial, observedSerial and {dns}serial:<root>, plus DnsRestoreSerialJump, recording incidentId

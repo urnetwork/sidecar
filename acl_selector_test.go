@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	// 26 bytes of base32's lowercase alphabet, §9.9's share token form
+	testShareToken    = "abcdefghijklmnopqrstuvwxyz"
 	testSidecarIdText = "0190ee54-3a3e-7a1a-8d2f-0123456789ab"
 	testClientIdText  = "0190ee543a3e7a1a8d2f0123456789ac"
 	testRepoIdText    = "0190ee54-3a3e-7a1a-8d2f-0123456789ad"
@@ -450,7 +452,7 @@ func TestAclResourceCovers(t *testing.T) {
 		// a bare * and a first-segment glob take application sockets only: tls/ and smtp/ are named
 		{pattern: "sock:*", concrete: "sock:db", want: true},
 		{pattern: "sock:*", concrete: "sock:db/primary", want: true},
-		{pattern: "sock:*", concrete: "sock:share/a0b1", want: true},
+		{pattern: "sock:*", concrete: "sock:share/" + testShareToken, want: true},
 		{pattern: "sock:*", concrete: "sock:tls/443/blog", want: false},
 		{pattern: "sock:*", concrete: "sock:smtp/25/mx", want: false},
 		{pattern: "sock:*", concrete: "sock:ur/smtpedge", want: false},
@@ -463,7 +465,7 @@ func TestAclResourceCovers(t *testing.T) {
 		{pattern: "sock:*/25/mx", concrete: "sock:smtp/25/mx", want: false},
 		{pattern: "sock:*/primary", concrete: "sock:db/primary", want: true},
 		{pattern: "*", concrete: "sock:db", want: true},
-		{pattern: "*", concrete: "sock:share/a0b1", want: true},
+		{pattern: "*", concrete: "sock:share/" + testShareToken, want: true},
 		{pattern: "*", concrete: "sock:tls/443/blog", want: false},
 		{pattern: "*", concrete: "sock:smtp/25/mx", want: false},
 		{pattern: "*", concrete: "sock:ur/smtpedge", want: false},
@@ -537,6 +539,129 @@ func TestAclResourceCoversANameParsingNeverMade(t *testing.T) {
 	if socket.covers(AclResource{Kind: AclResourceSocket}) {
 		t.Error("sock:* covered a socket with no name")
 	}
+	noFirstSegment := AclResource{Kind: AclResourceSocket, Name: "/x"}
+	if all.covers(noFirstSegment) || socket.covers(noFirstSegment) {
+		t.Error("a glob covered a socket with no first segment")
+	}
+}
+
+// A glob reaches a socket exactly when §9.4 calls it application or share, so what reserves a name
+// there keeps it from a glob here. Each name goes through ParseSocketName, so this can't drift from it.
+func TestAclGlobsFollowSocketNamespaces(t *testing.T) {
+	all := AclResource{Kind: AclResourceAll}
+	socket := AclResource{Kind: AclResourceSocket, Name: "*"}
+	for _, name := range []string{
+		"db", "db/primary", "a0/b", "share/" + testShareToken, "tls/443/blog", "tls/8443/@", "smtp/25/mx",
+		"ur/smtpedge", "sys/x", "c/x", "x", "x/y", "_x", "_x/y",
+	} {
+		canonical, namespace, err := ParseSocketName(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		concrete, err := parseAclResource("sock:" + canonical)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want := namespace == SocketNamespaceApplication || namespace == SocketNamespaceShare
+		if got := all.covers(concrete); got != want {
+			t.Errorf("* over %s: %t", name, got)
+		}
+		if got := socket.covers(concrete); got != want {
+			t.Errorf("sock:* over %s: %t", name, got)
+		}
+	}
+}
+
+// A socket name handed to covers unfolded is still §9.4's folded name, so TLS/443/blog is tls/443/blog.
+// Read as an application name, a glob would reach it, so an unfolded or foreign byte matches nothing.
+func TestAclResourceCoversNoUnfoldedSocket(t *testing.T) {
+	patterns := []AclResource{
+		{Kind: AclResourceAll},
+		{Kind: AclResourceSocket, Name: "*"},
+		{Kind: AclResourceSocket, Name: "*/*"},
+		{Kind: AclResourceSocket, Name: "t*/*"},
+		{Kind: AclResourceSocket, Name: "tls/*"},
+		{Kind: AclResourceSocket, Name: "db"},
+	}
+	for _, name := range []string{"TLS/443/blog", "Tls/443/blog", "SMTP/25/mx", "Ur/x", "SYS/x", "Db", "db\x00", "db primary"} {
+		concrete := AclResource{Kind: AclResourceSocket, Name: name}
+		for _, pattern := range patterns {
+			if pattern.covers(concrete) {
+				t.Errorf("%s covered %q", pattern, name)
+			}
+		}
+	}
+	// the folded spellings are reached as the namespace test says
+	if !(AclResource{Kind: AclResourceSocket, Name: "tls/*"}).covers(AclResource{Kind: AclResourceSocket, Name: "tls/443/blog"}) {
+		t.Error("sock:tls/* missed tls/443/blog")
+	}
+	if !(AclResource{Kind: AclResourceAll}).covers(AclResource{Kind: AclResourceSocket, Name: "db"}) {
+		t.Error("* missed db")
+	}
+}
+
+// A folded name §9.4 refuses is no socket either: a path's dot segments, an empty segment, an @ inside
+// one, an owner's form with the wrong shape, and a name past its bounds. Each sits in the folded
+// alphabet, so a glob whose prefix it shares would reach it if only the bytes were checked.
+func TestAclResourceCoversOnlyNamesSocketNameParses(t *testing.T) {
+	cases := []struct {
+		pattern  string
+		concrete string
+	}{
+		{pattern: "*", concrete: "../x"},
+		{pattern: "sock:*", concrete: "../x"},
+		{pattern: "sock:*", concrete: "db/../x"},
+		{pattern: "sock:db/*", concrete: "db/./x"},
+		{pattern: "sock:db/*", concrete: "db//x"},
+		{pattern: "sock:*", concrete: "db/"},
+		{pattern: "sock:*", concrete: "db@x"},
+		{pattern: "sock:db/*", concrete: "db/a@b"},
+		{pattern: "sock:tls/*", concrete: "tls/80/blog"},
+		{pattern: "sock:tls/*", concrete: "tls/443/a.b.c"},
+		{pattern: "sock:tls/*", concrete: "tls/443/blog/x"},
+		{pattern: "sock:tls/443/*", concrete: "tls/443"},
+		{pattern: "sock:smtp/*", concrete: "smtp/25/blog.team"},
+		{pattern: "sock:smtp/*", concrete: "smtp/587/mx"},
+		{pattern: "sock:ur/*", concrete: "ur/a/b"},
+		{pattern: "*", concrete: "share/a0b1"},
+		{pattern: "sock:share/*", concrete: "share/" + testShareToken + "/x"},
+		{pattern: "*", concrete: strings.Repeat("a", 64)},
+		{pattern: "*", concrete: strings.Repeat("a/", 8) + "a"},
+		{pattern: "*", concrete: strings.Repeat("a", 63) + "/" + strings.Repeat("b", 49)},
+	}
+	for _, c := range cases {
+		pattern, err := parseAclResource(c.pattern)
+		if err != nil {
+			t.Fatalf("%s: %v", c.pattern, err)
+		}
+		if _, _, err := ParseSocketName(c.concrete); err == nil {
+			t.Fatalf("%s parses as a socket name", c.concrete)
+		}
+		if pattern.covers(AclResource{Kind: AclResourceSocket, Name: c.concrete}) {
+			t.Errorf("%s covered %s", c.pattern, c.concrete)
+		}
+	}
+	// what each pattern does reach, so the cases above cannot pass by reaching nothing
+	for _, c := range []struct {
+		pattern  string
+		concrete string
+	}{
+		{pattern: "*", concrete: "db/x"},
+		{pattern: "sock:db/*", concrete: "db/x"},
+		{pattern: "sock:tls/*", concrete: "tls/443/blog.team"},
+		{pattern: "sock:tls/443/*", concrete: "tls/443/blog"},
+		{pattern: "sock:smtp/*", concrete: "smtp/25/mx.team"},
+		{pattern: "sock:ur/*", concrete: "ur/smtpedge"},
+		{pattern: "sock:share/*", concrete: "share/" + testShareToken},
+	} {
+		pattern, err := parseAclResource(c.pattern)
+		if err != nil {
+			t.Fatalf("%s: %v", c.pattern, err)
+		}
+		if !pattern.covers(AclResource{Kind: AclResourceSocket, Name: c.concrete}) {
+			t.Errorf("%s missed %s", c.pattern, c.concrete)
+		}
+	}
 }
 
 func TestAclGlobMatches(t *testing.T) {
@@ -609,6 +734,24 @@ func TestParseAclPortRange(t *testing.T) {
 			t.Errorf("%q passed as %+v", text, got)
 		} else if !errors.Is(err, ErrAclPolicyInvalid) {
 			t.Errorf("%q: %v", text, err)
+		}
+	}
+}
+
+// Each name takes every byte of its alphabet, so no letter or digit drops out of one unseen.
+func TestAclNamesTakeTheirWholeAlphabet(t *testing.T) {
+	const alphanumerics = "abcdefghijklmnopqrstuvwxyz0123456789"
+	for _, text := range []string{"tag:" + alphanumerics + "-", "group:" + alphanumerics + "._-x"} {
+		if _, err := parseAclSelector(text, aclPositionSrc); err != nil {
+			t.Errorf("%s: %v", text, err)
+		}
+	}
+	for _, text := range []string{
+		"sock:" + alphanumerics + "-_.", "evs:" + alphanumerics + "-_", "mail:" + alphanumerics + "._-",
+		"dns:" + alphanumerics + "-x", "ip:" + alphanumerics + "-x",
+	} {
+		if _, err := parseAclResource(text); err != nil {
+			t.Errorf("%s: %v", text, err)
 		}
 	}
 }

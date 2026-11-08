@@ -66,7 +66,7 @@ roots:
   SmtpProofResult: "smtpedge reads or answers it (§14.5)"
   # protocol/mail.proto
   MailIngress: "mxedge builds it from what it holds (§15.4)"
-  MailHint: "a kind in PushHint.hint on topic mail, which the mail service builds (§15.15)"
+  MailHint: "a kind and an mx host in PushHint.hint on topic mail, which mxedge's router builds (§15.15, §15.6)"
   # protocol/gkm.proto
   GkmCommitHeader: "gkm reads the clear header of every commit (§10.4, §10.6)"
   UrMlsCredential: "in a KeyPackage's clear credential, which gkm holds (§10.6, gkm-4)"
@@ -87,6 +87,20 @@ roots:
   EvsPlace: "evs assigns it in the batch (§11.8)"
   EvsHead: "evs writes and reads the commit point (§11.8)"
   EvsHeadChanged: "evs builds it, in PushHint.hint (§11.10)"
+  EvsRepoObject: "evs writes and reads repo/ (§11.8, §11.12)"
+  EvsRepoPlacement: "evs writes place/, and evs and gkm resolve it (§11.8)"
+  EvsSlotObject: "evs stores slot/ and rewrites it to drop erased keys (§11.8, §11.12)"
+  EvsIndexEntry: "evs folds committed versions into idx/ (§11.7)"
+  EvsLogPage: "evs pages the window into log/ (§11.8)"
+  EvsPushRequest: "evs reads POST .../push, a push or a seal (§11.8)"
+  EvsPartRequest: "evs reads POST .../push/<push_id>/<k> (§11.8)"
+  EvsLeaseRequest: "evs reads POST .../push/<push_id>/lease (§11.8)"
+  EvsPushReply: "evs answers a push, part or seal with it (§11.8)"
+  EvsRefusalReply: "evs answers every request it refuses with it (§11.8, §11.20)"
+  EvsReadRequest: "evs reads POST .../read (§11.9)"
+  EvsReadFrame: "evs answers a read with these frames (§11.9)"
+  EvsRefsReply: "evs answers GET .../refs (§11.9, §11.10)"
+  EvsLogReply: "evs answers GET .../log (§11.9)"
   # protocol/bridge/auth.proto
   AuthEntry: "the body of proj/<network_id>/<n>/_, which api sequences (§7.9)"
   ProjectionHeader: "a base's Signed header, which api checks (§7.9)"
@@ -153,7 +167,8 @@ seals:
   RecoveryRebind.sealed_body: RecoveryBindBody
   IndexerSet.sealed_services: IndexerServices
   RepoVersioning.sealed_rules: VersioningRules
-  EvsPushPart.sealed_metadata: EvsImport
+  EvsPushPart.sealed_metadata: EvsSealedMetadata
+  EvsEntryVersion.sealed_fields: EvsSealedFields
 
 sealed_messages:
   Hello: "peers only, over a Required session: an edge's opens need no Hello (§6.4)"
@@ -169,6 +184,7 @@ sealed_messages:
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
   WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"
   ShareCert: "rides sealed in a WindowDelegation (§17.9)"
+  EvsImport: "a Signed EvsImport rides as bytes in EvsSealedMetadata.signed_import, inside a push's sealed metadata (§11.6, §11.11)"
 
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
@@ -235,7 +251,6 @@ fields:
   SmtpPreamble.retry_of_send_id: smtp-1
   SmtpPreamble.flags: smtp-1
   SmtpPreambleResult.code: smtp-2
-  SmtpPreambleResult.retry_after_ms: smtp-2
   SmtpPreambleResult.send_id: smtp-2
   SmtpPreambleResult.x_ur_ref: smtp-2
   SmtpPreambleResult.feedback_id: smtp-2
@@ -255,6 +270,7 @@ fields:
   SmtpProofResult.code: smtp-2
   # protocol/mail.proto
   MailHint.kind: connect-4
+  MailHint.host: connect-4
   MailIngress.sender_ip: mx-1
   MailIngress.sender_port: mx-1
   MailIngress.sni: mx-1
@@ -582,10 +598,17 @@ fields:
   CanonicalAction.cidrs: api-7
   CanonicalAction.grant_dst: api-7
   CanonicalAction.grant_allow: api-7
+  # protos-services-canonical-action's answer admits field 14 on a version-3 access_request bound for a
+  # GrantActivate or a gate, as a field that path's gate sees, and gives it no new row: api-7's repos,
+  # RepoGrants and EvsShares already show repo ids, so a GrantActivate that carries one shows nothing new.
+  CanonicalAction.repo_id: api-7
   CanonicalAction.dns_name: dns-1
   CanonicalAction.dns_type: dns-1
   CanonicalAction.dns_value: dns-1
   CanonicalAction.dns_ttl: dns-1
+  CanonicalAction.socket_name: api-7
+  CanonicalAction.target_sidecar_id: api-7
+  CanonicalAction.target_port: api-7
   CanonicalAction.rule_id: api-7
   CanonicalAction.subject: api-7
   CanonicalAction.app_mode: api-7
@@ -608,20 +631,13 @@ unset:
   CanonicalAction.recipients: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.body_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.preview: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.repo_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.path: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.content_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.base_version: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.alias: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.socket_name: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.local_port: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.weight: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.target_sidecar_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.target_port: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.restore_run_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.restore_paths: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.restore_preview_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.alpn: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.alias_group: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.versioning: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
 
@@ -629,6 +645,7 @@ open:
   EvsUploadReceipt.key_id: {row: evs-4, question: protos-services-metadata-rows.md, until: M2}
   SmtpPreamble.version: {row: smtp-1, question: protos-services-metadata-rows.md, until: M2}
   MailIngress.version: {row: mx-1, question: protos-services-metadata-rows.md, until: M2}
+  SmtpPreambleResult.retry_after_ms: {row: smtp-2, question: protos-services-metadata-rows.md, until: M2}
   Envelope.version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.type: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.request_id: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
@@ -670,6 +687,11 @@ open:
   CanonicalAction.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   CanonicalAction.scope: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   ApprovalDecision.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+  # Answered since: these three leave CanonicalAction for sealed fields once §16.8's fence does, and
+  # record.proto follows that fence, so they stay open to M3's exit rather than gain the row asked for.
+  CanonicalAction.local_port: {row: api-7, question: protos-services-canonical-action.md, until: M3}
+  CanonicalAction.weight: {row: api-7, question: protos-services-canonical-action.md, until: M3}
+  CanonicalAction.alpn: {row: api-7, question: protos-services-canonical-action.md, until: M3}
 
 enum_values:
   EvsPushFlag.EVS_PUSH_FLAG_NONE: evs-12
@@ -726,23 +748,16 @@ rows:
   sock-3: {planned: M5}
   sock-4: {planned: M5}
   sock-5: {planned: M5}
-  evs-1: {planned: M2}
   evs-6: {planned: M2}
-  evs-7: {planned: M2}
   evs-8: {planned: M2}
-  evs-9: {planned: M2}
   evs-10: {planned: M2}
   evs-13: {planned: M2}
-  evs-14: {planned: M2}
   evs-16: {planned: M2}
   evs-17: {planned: M2}
   evs-18: {planned: M1}
   evs-19: {planned: M2}
   evs-21: {planned: M2}
-  evs-22: {planned: M2}
   evs-23: {planned: M2}
-  evs-24: {planned: M2}
-  evs-25: {planned: M2}
   evs-26: {planned: M10}
   evs-27: {planned: M6}
   evs-28: {planned: M10}

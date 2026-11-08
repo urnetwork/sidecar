@@ -414,8 +414,8 @@ func testSmuggledHeaders(t *testing.T) []testHeaderCase {
 		{name: "no From", block: replaced(fromLine, "")},
 		{name: "another Message-ID", block: replaced(testMessageId, "other@"+testNetworkDomain)},
 		{name: "a second Message-ID", block: "Message-ID: <x@" + testNetworkDomain + ">\r\n" + header},
-		{name: "another X-UR-Ref", block: replaced(testXUrRef, "1.ZZZZ")},
-		{name: "another Feedback-ID", block: replaced(testFeedbackId, "x:y:z:urnetwork")},
+		{name: "another X-UR-Ref", block: replaced(testXUrRef, "1.aeibceqtcqkrmfyydenbxifbukr2jjngaa")},
+		{name: "another Feedback-ID", block: replaced(testFeedbackId, "b:c:gaytemzugu3doobzhi5typj6h4:urnetwork")},
 		{name: "no fixed DKIM signature", block: replaced("DKIM-Signature: v=1;", "X-Not-Dkim: v=1;")},
 		{name: "DKIM under another d=", block: replaced("d="+testNetworkDomain, "d=victim.example")},
 		{name: "DKIM under another s=", block: replaced("s="+testSelector, "s=other")},
@@ -674,6 +674,41 @@ func TestZ9RefusesBdatToAnMxWithoutChunking(t *testing.T) {
 			witness.serverPlaintexts = witness.serverPlaintexts[:1]
 			testAuthorServerRecord(t, statement, witness, 0, testServerContent(statement, c.content))
 			testExpectOnly(t, leg.name+": "+c.name, statement, witness, checkZ9)
+		}
+	}
+}
+
+// Part 2 with its EHLO reply as these records' contents, each in a record of its own.
+func testEhloRecords(t *testing.T, capture *testCapturedParts, contents ...string) (*partStatement, *partWitness) {
+	t.Helper()
+	statement, witness := capture.part(t, 2)
+	first := statement.serverRecords[0]
+	statement.serverRecords = nil
+	witness.serverPlaintexts = nil
+	for i, content := range contents {
+		statement.serverRecords = append(statement.serverRecords, &partRecord{seq: first.seq + uint64(i), raw: bytes.Clone(first.raw)})
+		witness.serverPlaintexts = append(witness.serverPlaintexts, nil)
+		testAuthorServerRecord(t, statement, witness, i, testServerContent(statement, content))
+	}
+	return statement, witness
+}
+
+func TestZ9ReadsTheKeywordInsideOneRecord(t *testing.T) {
+	// the reply parses across records (Z8), but the circuit's keyword window does not, and the relation
+	// is what the circuit must agree with
+	for _, leg := range testTlsLegs() {
+		capture := testBdatCapture(t, leg)
+		for _, contents := range [][]string{
+			{"250-mx\r\n250-CHUN", "KING\r\n250 OK\r\n"},
+			{"250-mx\r\n", "250-CHUNKING\r\n250 OK\r\n"},
+			{"250-mx\r\n250-CHUNKING", "\r\n250 OK\r\n"},
+		} {
+			statement, witness := testEhloRecords(t, capture, contents...)
+			testExpectOnly(t, leg.name, statement, witness, checkZ9)
+		}
+		statement, witness := testEhloRecords(t, capture, "250-mx\r\n250-PIPE", "LINING\r\n250-CHUNKING\r\n250 OK\r\n")
+		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
+			t.Errorf("%s: a reply split before the keyword's line: %v", leg.name, failures)
 		}
 	}
 }

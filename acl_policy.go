@@ -13,8 +13,10 @@
 // into it, and the reader holds no generic value, so it builds only what the schema names, a fixed
 // multiple of the source.
 //
-// A refusal names a line, a column and a field path, and never repeats a value (I-13): policy text is
-// member-chosen, and a reader's refusal of a bad head may reach a log.
+// A refusal names a field path, and a line and column wherever the reader stands at the fault. An ip:
+// name that hosts does not hold is the one found only once the whole document is read, so it names its
+// path alone. None repeats a value (I-13): policy text is member-chosen, and a reader's refusal of a
+// bad head may reach a log.
 //
 // On every leg, the sidecar_http page Worker's included, since every admitted sidecar compiles policy.
 // No connect type and no build tag.
@@ -117,9 +119,11 @@ type AclGrant struct {
 	Expires time.Time
 	// The socket a publish binds (§8.4), an AclResourceSocket. Nil for none.
 	Sock *AclResource
-	// A publish's. Zero, as in protocol, reads as members.
+	// A publish's. Zero, as in protocol, is members, whether written or not, so the parse never gives
+	// AclAudience_ACL_AUDIENCE_MEMBERS.
 	Audience protocol.AclAudience
-	// A publish's. Zero, as in protocol, reads as http.
+	// A publish's. Zero, as in protocol, is http, whether written or not, so the parse never gives
+	// AclAppMode_ACL_APP_MODE_HTTP.
 	AppMode protocol.AclAppMode
 	// The 32 bytes a raw link's grant pins (§13.7). Nil for none.
 	LinkSpkiSha256 []byte
@@ -172,6 +176,9 @@ type AclPolicyTest struct {
 // One entry of a test's accept or deny: <resource>#<action>, as §8.5 and §15.10 write them, and
 // optionally :<ports> after the action for a subject or ip resource.
 type AclPolicyCheck struct {
+	// May name a set and not one target: a glob, a range, a selector or a bare *. covers reaches no
+	// glob as a concrete name, so a runner matching checks through it would pass every deny over a glob
+	// unseen; how a check reads a set is the test runner's to settle (ACL-M2-11).
 	Resource AclResource
 	Action   protocol.AclAction
 	// Nil for no port.
@@ -711,11 +718,13 @@ func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 				return err
 			}
 		case "audience":
+			// members, the default, reads as zero whether written or left out, as http does below: every
+			// default here reads the same either way, so writing one out changes no value
 			return func() (err error) {
 				grant.Audience, err = aclPolicyRead(self, func(text string) (protocol.AclAudience, error) {
 					switch text {
 					case "members":
-						return protocol.AclAudience_ACL_AUDIENCE_MEMBERS, nil
+						return protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED, nil
 					case "members-device":
 						return protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE, nil
 					case "link":
@@ -732,7 +741,7 @@ func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 				grant.AppMode, err = aclPolicyRead(self, func(text string) (protocol.AclAppMode, error) {
 					switch text {
 					case "http":
-						return protocol.AclAppMode_ACL_APP_MODE_HTTP, nil
+						return protocol.AclAppMode_ACL_APP_MODE_UNSPECIFIED, nil
 					case "raw":
 						return protocol.AclAppMode_ACL_APP_MODE_RAW, nil
 					}

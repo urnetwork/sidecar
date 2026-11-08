@@ -491,7 +491,7 @@ func parseAclCidr(value string) (netip.Prefix, error) {
 // Whether this dst reaches a concrete socket, repo label, dns host or alias, as §8.4's * reads: * stays
 // within a label or segment, and a bare * takes all of a kind. A dst of one kind reaches only that kind.
 // A subject or ip range is the compile's to expand, so those answer false, as a pattern in concrete
-// does.
+// does. A concrete socket must be §9.4's canonical name, which also bounds what a glob runs over.
 //
 // A socket's last segment of a bare * is the one thing wider: it takes every name below its prefix,
 // since sock:tls/* has to reach tls/443/blog (§8.5) and AclTarget.socket_prefix carries such a prefix.
@@ -504,6 +504,15 @@ func parseAclCidr(value string) (netip.Prefix, error) {
 func (self AclResource) covers(concrete AclResource) bool {
 	if strings.Contains(concrete.Name, "*") || (concrete.Name == "" && concrete.RepoId == (Id{})) {
 		return false
+	}
+	// A concrete socket is a name §9.4 parses to itself: folded, and in its namespace's form. Anything
+	// else is no socket, so it matches nothing. An unfolded TLS/443/x is tls/443/x, whose first segment
+	// would read as an application name a glob reaches, and ../x or tls/80/x names no socket at all.
+	if concrete.Kind == AclResourceSocket {
+		canonical, _, err := ParseSocketName(concrete.Name)
+		if err != nil || canonical != concrete.Name {
+			return false
+		}
 	}
 	if self.Kind == AclResourceAll {
 		switch concrete.Kind {
@@ -566,15 +575,16 @@ func (self AclResource) covers(concrete AclResource) bool {
 	return false
 }
 
-// Whether a socket's first segment keeps it from every glob: §9.4's reserved first segments, but for
-// share. A policy reaches tls/ and smtp/ only by writing them out, and the rest it never reaches.
+// Whether a socket's namespace keeps it from every glob: all but application names and share/. A policy
+// reaches tls/ and smtp/ only by writing them out, and the rest it never reaches. This reads §9.4's own
+// namespaces, so a first segment a later §9 reserves stays out of a glob's reach with no change here.
 func aclSocketMustBeNamed(name string) bool {
 	first, _, _ := strings.Cut(name, "/")
-	switch first {
-	case "tls", "smtp", "c", "ur", "sys":
+	if first == "" {
 		return true
 	}
-	return len(first) == 1 || strings.HasPrefix(first, "_")
+	namespace := socketFirstSegmentNamespace(first)
+	return namespace != SocketNamespaceApplication && namespace != SocketNamespaceShare
 }
 
 // Whether text matches pattern, each * taking any run of bytes, an empty one included. Both are one
