@@ -751,6 +751,9 @@ values:
   "the sidecar dump and the main dumps": ops-2
   "the rdb bundles of existing Redis families": ops-3
 
+not_keys:
+  "http/1.1": "an ALPN id, the second a route probe's hello offers, which the lb's http branch selects (§13.4)"
+
 rows:
   connect-1: {server: [transfer_contract, contract_close, contract_close_report]}
   connect-3: {server: [network_client_connection, network_client_location]}

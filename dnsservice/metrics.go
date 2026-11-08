@@ -66,6 +66,10 @@ type dnsMetrics struct {
 	reloadDiffs sidecar.MetricsCounter
 	// Writes of the local snapshot, by result.
 	snapshotWrites sidecar.MetricsCounter
+	// Route probes of the custom-host map, by result: pass or fail.
+	routeProbes sidecar.MetricsCounter
+	// Rounds' route-probe reports, by result: posted, or failed and to be probed again.
+	routeReports sidecar.MetricsCounter
 }
 
 // Declares the families. Two edges in one process share them, as Metrics allows.
@@ -91,6 +95,9 @@ func newDnsMetrics(metrics sidecar.Metrics) *dnsMetrics {
 		reloadDiffs: metrics.Counter("urnetwork_dnsedge_reload_diffs_total",
 			"Replaced snapshots' diffs, by what became of them.", "result"),
 		snapshotWrites: metrics.Counter("urnetwork_dnsedge_snapshot_writes_total", "Writes of the local snapshot, by result.", "result"),
+		routeProbes:    metrics.Counter("urnetwork_dnsedge_route_probes_total", "Route probes of the custom-host map, by result.", "result"),
+		routeReports: metrics.Counter("urnetwork_dnsedge_route_reports_total",
+			"Rounds' route-probe reports, by result.", "result"),
 	}
 }
 
