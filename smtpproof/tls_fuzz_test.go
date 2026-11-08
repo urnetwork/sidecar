@@ -1,8 +1,9 @@
 // The four handshake parsers the client and the edge share, fuzzed together over a stream of
 // handshake messages: a bug in them is on both sides of the trust boundary. Each input is also split
-// at every offset, as records may fragment it, and every ClientHello both sides accept is compared
-// with what crypto/tls's server read from the same octets. The seeds in testdata/fuzz/FuzzTlsParse are
-// real flights, written by TestWriteTlsParseCorpus.
+// at every offset, as records may fragment it. Every ClientHello this side accepts is compared with
+// what crypto/tls's server read from the same octets, and every ServerHello with how crypto/tls's
+// client answered it. The seeds in testdata/fuzz/FuzzTlsParse are real flights, written by
+// TestWriteTlsParseCorpus.
 
 package smtpproof
 
@@ -11,6 +12,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,6 +20,92 @@ import (
 	"strings"
 	"testing"
 )
+
+// The alerts crypto/tls's client sends at the two decisions it shares with this parser (RFC 8446 §6).
+const (
+	testAlertDecodeError     = 50
+	testAlertProtocolVersion = 70
+	// crypto/tls's maxHandshake: a ServerHello declaring more is refused for its size, before decoding.
+	testCryptoTlsMaxHandshakeBytes = 65536
+)
+
+// How crypto/tls's client answered one ServerHello message: the description of the first alert it
+// sent, or -1 for none, and the error its handshake ended with.
+type testCryptoTlsAnswer struct {
+	alert int
+	err   error
+}
+
+// Runs crypto/tls's client against a server whose whole first flight is message, then end of stream.
+// It offers the covered 1.2 suites alone, so its suite decision is E1's, and its own 1.3 suites.
+func testCryptoTlsAnswersServerHello(t *testing.T, message []byte) *testCryptoTlsAnswer {
+	t.Helper()
+	clientConn, serverConn := testPipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	for offset := 0; offset < len(message); offset += tlsMaxPlaintextBytes {
+		serverConn.Write(tlsFrameRecord(tlsRecordHandshake, tlsVersion12, message[offset:min(offset+tlsMaxPlaintextBytes, len(message))]))
+	}
+	// the stream is buffered, so the flight waits for the client, and its end stops the client at the
+	// message after the ServerHello
+	serverConn.writeStream.close()
+	client := tls.Client(clientConn, &tls.Config{
+		ServerName:   testMxHost,
+		CipherSuites: []uint16{tlsSuiteEcdheEcdsaAes128GcmSha256, tlsSuiteEcdheRsaAes128GcmSha256},
+	})
+	answer := &testCryptoTlsAnswer{alert: -1, err: client.Handshake()}
+	clientConn.writeStream.close()
+	written, err := io.ReadAll(serverConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// its ClientHello, perhaps a change_cipher_spec, then any alert, which is in clear: no fuzzed
+	// ServerHello gets crypto/tls past its checks to the handshake keys
+	for tlsRecordHeaderBytes <= len(written) {
+		size := tlsRecordHeaderBytes + (int(written[3])<<8 | int(written[4]))
+		if len(written) < size {
+			break
+		}
+		if written[0] == tlsRecordAlert && size == tlsRecordHeaderBytes+2 {
+			answer.alert = int(written[tlsRecordHeaderBytes+1])
+			break
+		}
+		written = written[size:]
+	}
+	return answer
+}
+
+// Where this parser takes a ServerHello, crypto/tls's client must decode it as well and read alike
+// what E1 decides on. Its version is observable as the alert crypto/tls sends when it reads one it does
+// not support, and its 1.2 suite as the refusal of a suite it was not offered. Its 1.3 suite is not:
+// crypto/tls first requires its own random session id echoed, which no fuzzed hello does.
+func testExpectServerHelloAsCryptoTls(t *testing.T, message []byte, hello *tlsServerHello) {
+	t.Helper()
+	if testCryptoTlsMaxHandshakeBytes < len(message)-4 {
+		return
+	}
+	answer := testCryptoTlsAnswersServerHello(t, message)
+	if answer.alert == testAlertDecodeError {
+		t.Errorf("this parser took a ServerHello crypto/tls cannot decode: %v", answer.err)
+		return
+	}
+	covered := hello.version == tlsVersion12 || hello.version == tlsVersion13
+	if covered && answer.alert == testAlertProtocolVersion {
+		t.Errorf("version %#x, which crypto/tls read as one it does not support: %v", hello.version, answer.err)
+	}
+	if hello.version != tlsVersion12 || hello.retryRequest {
+		return
+	}
+	// a downgrade mark stops crypto/tls before the suite, and E1 refuses nothing for it: the client does
+	tail := string(hello.random[tlsRandomBytes-len(tlsDowngrade12):])
+	if tail == string(tlsDowngrade12) || tail == string(tlsDowngrade11) {
+		return
+	}
+	refusedSuite := answer.err != nil && strings.Contains(answer.err.Error(), "unconfigured cipher suite")
+	if tlsSuiteCovered(tlsVersion12, hello.suite) == refusedSuite {
+		t.Errorf("suite %#x: E1 covers it %v, crypto/tls refused it %v: %v", hello.suite, tlsSuiteCovered(tlsVersion12, hello.suite), refusedSuite, answer.err)
+	}
+}
 
 // Every whole message a stream holds, and what is left over, when records split it at offset.
 func testSplitHandshake(stream []byte, offset int) ([][]byte, []byte) {
@@ -101,7 +189,9 @@ func FuzzTlsParse(f *testing.F) {
 					testExpectClientHelloAsCryptoTls(t, message, hello)
 				}
 			case tlsHandshakeServerHello:
-				tlsParseServerHello(body)
+				if hello, err := tlsParseServerHello(body); err == nil {
+					testExpectServerHelloAsCryptoTls(t, message, hello)
+				}
 			case tlsHandshakeCertificate:
 				tlsParseCertificate(tlsVersion13, body)
 				tlsParseCertificate(tlsVersion12, body)
@@ -163,6 +253,66 @@ func TestTlsParseReadsWhatCryptoTlsNegotiated(t *testing.T) {
 		if leg.suites[0] != suite {
 			t.Errorf("%s: crypto/tls chose %#x", leg.name, suite)
 		}
+		// and the same hello as crypto/tls's client reads it, through the fuzzer's comparison
+		testExpectServerHelloAsCryptoTls(t, serverMessages[0], serverHello)
+	}
+}
+
+func TestServerHelloParserRefusesWhatCryptoTlsCannotDecode(t *testing.T) {
+	// one malformed extension at a time in a 1.2 hello E1 would otherwise take, and the well-formed
+	// twin of each, which both parsers take
+	random := make([]byte, tlsRandomBytes)
+	retry := func(extensions ...[]byte) []byte {
+		return testServerHelloBody(tlsHelloRetryRandom, tlsSuiteAes128GcmSha256, slices.Concat(append([][]byte{{0, 43, 0, 2, 3, 4}}, extensions...)...))
+	}
+	cases := []struct {
+		name string
+		body []byte
+		// crypto/tls decodes a few forms this parser refuses, reading them as other fields
+		cryptoTlsDecodes bool
+	}{
+		{name: "a repeated supported_versions", body: testServerHelloBody(random, tlsSuiteAes128GcmSha256, []byte{0, 43, 0, 2, 3, 4, 0, 43, 0, 2, 3, 3})},
+		{name: "a repeated unknown extension", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0x12, 0x34, 0, 0, 0x12, 0x34, 0, 0})},
+		{name: "an empty cookie", body: retry([]byte{0, 51, 0, 2, 0, 23}, []byte{0, 44, 0, 2, 0, 0})},
+		{name: "a retry's key_share with a share", body: retry([]byte{0, 51, 0, 4, 0, 23, 0, 0}), cryptoTlsDecodes: true},
+		{name: "a server_name acknowledgement with content", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 0, 0, 1, 0})},
+		{name: "a status_request with content", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 5, 0, 1, 0})},
+		{name: "a session_ticket with content", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 35, 0, 1, 0})},
+		{name: "an extended_master_secret with content", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 23, 0, 1, 0})},
+		{name: "a short renegotiation_info", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0xff, 0x01, 0, 2, 5, 0})},
+		{name: "no point format", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 11, 0, 1, 0})},
+		{name: "two protocols in alpn", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 16, 0, 6, 0, 4, 1, 'a', 1, 'b'})},
+		{name: "no signed timestamp", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0, 18, 0, 2, 0, 0})},
+		{name: "a short pre_shared_key", body: testServerHelloBody(random, tlsSuiteAes128GcmSha256, []byte{0, 43, 0, 2, 3, 4, 0, 41, 0, 1, 0})},
+	}
+	for _, c := range cases {
+		if _, err := tlsParseServerHello(c.body); err == nil {
+			t.Errorf("%s: taken", c.name)
+		}
+		answer := testCryptoTlsAnswersServerHello(t, tlsHandshakeMessage(tlsHandshakeServerHello, c.body))
+		if decodes := answer.alert != testAlertDecodeError; decodes != c.cryptoTlsDecodes {
+			t.Errorf("%s: crypto/tls decodes it %v: %v", c.name, decodes, answer.err)
+		}
+	}
+
+	twins := []struct {
+		name string
+		body []byte
+	}{
+		{name: "the acknowledgements and the point formats", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{
+			0, 0, 0, 0, 0, 23, 0, 0, 0xff, 0x01, 0, 1, 0, 0, 11, 0, 2, 1, 0,
+		})},
+		{name: "an unknown extension once", body: testServerHelloBody(random, tlsSuiteEcdheEcdsaAes128GcmSha256, []byte{0x12, 0x34, 0, 1, 7})},
+		{name: "a retry with a group and a cookie", body: retry([]byte{0, 51, 0, 2, 0, 23}, []byte{0, 44, 0, 4, 0, 2, 1, 2})},
+	}
+	for _, c := range twins {
+		message := tlsHandshakeMessage(tlsHandshakeServerHello, c.body)
+		hello, err := tlsParseServerHello(c.body)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		testExpectServerHelloAsCryptoTls(t, message, hello)
 	}
 }
 

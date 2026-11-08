@@ -46,9 +46,12 @@ const (
 	tlsHandshakeMessageHash        uint8 = 254
 
 	tlsExtensionServerName          uint16 = 0
+	tlsExtensionStatusRequest       uint16 = 5
 	tlsExtensionSupportedGroups     uint16 = 10
 	tlsExtensionEcPointFormats      uint16 = 11
 	tlsExtensionSignatureAlgorithms uint16 = 13
+	tlsExtensionAlpn                uint16 = 16
+	tlsExtensionSignedTimestamps    uint16 = 18
 	tlsExtensionExtendedMaster      uint16 = 23
 	tlsExtensionSessionTicket       uint16 = 35
 	tlsExtensionPreSharedKey        uint16 = 41
@@ -235,6 +238,11 @@ func (self *tlsServerHello) hasExtension(extensionId uint16) bool {
 
 // The body of a ServerHello, without its handshake header. version is the negotiated version, from
 // supported_versions when present.
+//
+// It refuses every ServerHello crypto/tls's client refuses to decode, so no MX's hello means one thing
+// to this client and the edge and nothing to a mainstream client: no extension repeats (RFC 8446 §4.2,
+// RFC 5246 §7.4.1.4), a cookie is not empty, a HelloRetryRequest's key_share names a group and nothing
+// more, and the extensions read nowhere else keep the shapes their specifications give.
 func tlsParseServerHello(body []byte) (*tlsServerHello, error) {
 	input := cryptobyte.String(body)
 	hello := &tlsServerHello{}
@@ -260,12 +268,18 @@ func tlsParseServerHello(body []byte) (*tlsServerHello, error) {
 	if !input.ReadUint16LengthPrefixed(&extensions) || !input.Empty() {
 		return nil, errors.New("malformed server hello extensions")
 	}
+	seen := map[uint16]bool{}
 	for !extensions.Empty() {
 		var extensionId uint16
 		var extension cryptobyte.String
 		if !extensions.ReadUint16(&extensionId) || !extensions.ReadUint16LengthPrefixed(&extension) {
 			return nil, errors.New("malformed server hello extension")
 		}
+		// a repeat would leave the reading to whichever copy a reader takes
+		if seen[extensionId] {
+			return nil, errors.New("server hello repeats an extension")
+		}
+		seen[extensionId] = true
 		hello.extensionIds = append(hello.extensionIds, extensionId)
 		switch extensionId {
 		case tlsExtensionSupportedVersions:
@@ -276,23 +290,68 @@ func tlsParseServerHello(body []byte) (*tlsServerHello, error) {
 			if !extension.ReadUint16(&hello.keyShareGroup) {
 				return nil, errors.New("malformed key_share")
 			}
-			// a HelloRetryRequest names only the group
+			// a HelloRetryRequest names only the group (RFC 8446 §4.2.8)
 			if !hello.retryRequest {
 				var share cryptobyte.String
-				if !extension.ReadUint16LengthPrefixed(&share) || !extension.Empty() {
+				if !extension.ReadUint16LengthPrefixed(&share) {
 					return nil, errors.New("malformed key_share")
 				}
 				hello.keyShare = []byte(share)
 			}
+			if !extension.Empty() {
+				return nil, errors.New("malformed key_share")
+			}
 		case tlsExtensionCookie:
 			var cookie cryptobyte.String
-			if !extension.ReadUint16LengthPrefixed(&cookie) || !extension.Empty() {
+			if !extension.ReadUint16LengthPrefixed(&cookie) || cookie.Empty() || !extension.Empty() {
 				return nil, errors.New("malformed cookie")
 			}
 			hello.cookie = []byte(cookie)
+		default:
+			if !tlsServerHelloExtensionWellFormed(extensionId, extension) {
+				return nil, fmt.Errorf("malformed server hello extension %d", extensionId)
+			}
 		}
 	}
 	return hello, nil
+}
+
+// Whether a ServerHello extension that nothing here reads has the shape its specification gives. These
+// are crypto/tls's client's own decoding checks; an extension it does not decode passes.
+func tlsServerHelloExtensionWellFormed(extensionId uint16, content cryptobyte.String) bool {
+	switch extensionId {
+	case tlsExtensionServerName, tlsExtensionStatusRequest, tlsExtensionSessionTicket, tlsExtensionExtendedMaster:
+		// acknowledgements, which carry nothing in a ServerHello
+		return content.Empty()
+	case tlsExtensionRenegotiationInfo:
+		var renegotiated cryptobyte.String
+		return content.ReadUint8LengthPrefixed(&renegotiated) && content.Empty()
+	case tlsExtensionEcPointFormats:
+		var formats cryptobyte.String
+		return content.ReadUint8LengthPrefixed(&formats) && !formats.Empty() && content.Empty()
+	case tlsExtensionPreSharedKey:
+		var identity uint16
+		return content.ReadUint16(&identity) && content.Empty()
+	case tlsExtensionAlpn:
+		// a server names exactly one protocol (RFC 7301 §3.1)
+		var protocols, protocol cryptobyte.String
+		return content.ReadUint16LengthPrefixed(&protocols) && content.Empty() &&
+			protocols.ReadUint8LengthPrefixed(&protocol) && !protocol.Empty() && protocols.Empty()
+	case tlsExtensionSignedTimestamps:
+		var timestamps cryptobyte.String
+		if !content.ReadUint16LengthPrefixed(&timestamps) || timestamps.Empty() || !content.Empty() {
+			return false
+		}
+		for !timestamps.Empty() {
+			var timestamp cryptobyte.String
+			if !timestamps.ReadUint16LengthPrefixed(&timestamp) || timestamp.Empty() {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
 }
 
 // The certificates of a Certificate message, leaf first, in DER. 1.3 wraps each in an entry with

@@ -6,6 +6,7 @@ package smtpproof
 import (
 	"bytes"
 	"crypto/ecdh"
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -23,9 +24,15 @@ func testSpacedHex(t *testing.T, spaced string) []byte {
 
 // RFC 8448 section 3, the simple 1-RTT handshake: TLS_AES_128_GCM_SHA256 over x25519, through the
 // handshake secrets and MS. Every function Z1 mirrors runs here: tls13HandshakeSecret,
-// tls13MasterSecret, tls13TrafficSecret and tls13TrafficKeys. The trace's application traffic
-// secrets are not reproduced: this machine holds no copy of the RFC to check their transcript hash
-// against, and a value recalled wrong would only be replaced by this code's own output.
+// tls13MasterSecret, tls13TrafficSecret and tls13TrafficKeys.
+//
+// Of the trace's application values, two are checked: its server application traffic secret gives
+// its key and IV, and MS over the hash of the handshake through the client's Finished gives its
+// resumption master secret, which is Derive-Secret at MS over a whole handshake, as the application
+// secrets are. The application secrets are not derived from MS here: that needs the hash through the
+// server's Finished, which no copy of the RFC on this machine holds, and a value recalled wrong would
+// only be replaced by this code's own output. The ACVP vector below derives them from a published MS
+// and transcript instead.
 type testRfc8448Trace struct {
 	clientPrivate string
 	serverPublic  string
@@ -44,6 +51,12 @@ type testRfc8448Trace struct {
 	clientHsKey   string
 	clientHsIv    string
 	serverFinKey  string
+	// Transcript-Hash(ClientHello .. client Finished), and resumption_master_secret under it.
+	clientFinishedHash string
+	resumption         string
+	serverApTraffic    string
+	serverApKey        string
+	serverApIv         string
 }
 
 func testRfc8448() *testRfc8448Trace {
@@ -64,6 +77,12 @@ func testRfc8448() *testRfc8448Trace {
 		clientHsKey:   "db fa a6 93 d1 76 2c 5b 66 6a f5 d9 50 25 8d 01",
 		clientHsIv:    "5b d3 c7 1b 83 6e 0b 76 bb 73 26 5f",
 		serverFinKey:  "00 8d 3b 66 f8 16 ea 55 9f 96 b5 37 e8 85 c3 1f c0 68 bf 49 2c 65 2f 01 f2 88 a1 d8 cd c1 9f c8",
+
+		clientFinishedHash: "20 91 45 a9 6e e8 e2 a1 22 ff 81 00 47 cc 95 26 84 65 8d 60 49 e8 64 29 42 6d b8 7c 54 ad 14 3d",
+		resumption:         "7d f2 35 f2 03 1d 2a 05 12 87 d0 2b 02 41 b0 bf da f8 6c c8 56 23 1f 2d 5a ba 46 c4 34 ec 19 6c",
+		serverApTraffic:    "a1 1a f9 f0 55 31 f8 56 ad 47 11 6b 45 a9 50 32 82 04 b4 f4 4b fb 6b 3a 4b 4f 1f 3f cb 63 16 43",
+		serverApKey:        "9f 02 28 3b 6c 9c 07 ef c2 6b b9 f2 ac 92 e3 56",
+		serverApIv:         "cf 78 2b 88 dd 83 54 9a ad f1 e9 84",
 	}
 }
 
@@ -118,6 +137,14 @@ func TestKeyScheduleReproducesRfc8448(t *testing.T) {
 	testExpectOctets(t, "client handshake iv", iv, octets(trace.clientHsIv))
 	testExpectOctets(t, "server finished key", tlsExpandLabel(shts, "finished", nil, tlsSecretBytes), octets(trace.serverFinKey))
 
+	// past the handshake keys: Derive-Secret at the MS this code derived, over a whole handshake's
+	// hash, and an application traffic secret's key and IV
+	ms := tls13MasterSecret(hs)
+	testExpectOctets(t, "resumption master secret", tls13TrafficSecret(ms, "res master", octets(trace.clientFinishedHash)), octets(trace.resumption))
+	key, iv = tls13TrafficKeys(tlsSuiteAes128GcmSha256, octets(trace.serverApTraffic))
+	testExpectOctets(t, "server application key", key, octets(trace.serverApKey))
+	testExpectOctets(t, "server application iv", iv, octets(trace.serverApIv))
+
 	// Z1's binding: the hash of the trace's SHTS is what the edge would hold as H_shts, and HS with
 	// H_sh reproduces it while a neighbouring HS does not
 	other := bytes.Clone(hs)
@@ -125,6 +152,45 @@ func TestKeyScheduleReproducesRfc8448(t *testing.T) {
 	if bytes.Equal(tls13TrafficSecret(other, "s hs traffic", helloHash), shts) {
 		t.Error("another HS gave the trace's SHTS")
 	}
+}
+
+func TestKeyScheduleReproducesTheAcvpVector(t *testing.T) {
+	// NIST ACVP's TLS 1.3 KDF test (ACVP-Server commit 3a7333f63, gen-val/json-files/
+	// TLS-v1.3-KDF-RFC8446, prompt.json lines 428-436 and expectedResults.json lines 571-581), as Go's
+	// crypto/tls key_schedule_test.go carries it. Its transcript is the hash of the four randoms
+	// written in turn, and its early secret has a PSK, so HS is built here from the steps
+	// tls13HandshakeSecret folds for the zero PSK. What it adds to RFC 8448's trace is the step Z1 takes
+	// after MS: both application traffic secrets from MS under a whole handshake's hash.
+	octets := func(text string) []byte {
+		return testHex(t, strings.ToLower(text))
+	}
+	psk := octets("56288B726C73829F7A3E47B103837C8139ACF552E7530C7A710B35ED41191698")
+	dhe := octets("EFFE9EC26AA29FD750DFA6A10B944D74071595B27EE88887D5E11C84590B5CC3")
+	helloClientRandom := octets("E9137679E582BA7C1DB41CF725F86C6D09C8C05F297BAD9A65B552EAF524FDE4")
+	helloServerRandom := octets("23ECCFD030790748C8F8D8A656FD98D717F1B62AF3712F97211D2070B499F98A")
+	finishedClientRandom := octets("62A62FA75563ED4FDCAA0BC16567B314871C304ACF06B0FFC3F08C1797594D43")
+	finishedServerRandom := octets("C750EDA6696CD101B142BD79E00E6AC8C5F2C0ABC78DD64F4D991326659E9299")
+	transcriptHash := func(parts ...[]byte) []byte {
+		sum := sha256.Sum256(bytes.Join(parts, nil))
+		return sum[:]
+	}
+
+	earlySecret := tlsExtract(nil, psk)
+	testExpectOctets(t, "client early traffic secret", tls13TrafficSecret(earlySecret, "c e traffic", transcriptHash(helloClientRandom)),
+		octets("3272189698C3594D18F58EFA3F12B638A249515099BE7A2FA9836BABE74F0111"))
+	hs := tlsExtract(tlsExpandLabel(earlySecret, "derived", tlsEmptyHash(), tlsSecretBytes), dhe)
+
+	helloHash := transcriptHash(helloClientRandom, helloServerRandom)
+	testExpectOctets(t, "CHTS", tls13TrafficSecret(hs, "c hs traffic", helloHash), octets("B32306C3CE9932C460A1FE6C0F060593974842036B96FA45049B7352E71C2AD2"))
+	testExpectOctets(t, "SHTS", tls13TrafficSecret(hs, "s hs traffic", helloHash), octets("22787F8CA269D34BC549AC8BA19F2040938A3AA370D7CC9D60F720882B88D01B"))
+
+	ms := tls13MasterSecret(hs)
+	finishedHash := transcriptHash(helloClientRandom, helloServerRandom, finishedServerRandom)
+	testExpectOctets(t, "CATS", tls13TrafficSecret(ms, "c ap traffic", finishedHash), octets("47D7EA08397B5871154B0FE85584BCC30A87C69E84D69B56007C5B21F76493BA"))
+	testExpectOctets(t, "SATS", tls13TrafficSecret(ms, "s ap traffic", finishedHash), octets("EFBDB0C873C0480DA57307083839A8984BE25B9A8545E4FCA029940FE2800565"))
+	testExpectOctets(t, "exporter master secret", tls13TrafficSecret(ms, "exp master", finishedHash), octets("8A43D787EE3804EAD4A2A5B32972F9896B696295645D7222E1FD081DDD939834"))
+	testExpectOctets(t, "resumption master secret", tls13TrafficSecret(ms, "res master", transcriptHash(helloClientRandom, helloServerRandom, finishedServerRandom, finishedClientRandom)),
+		octets("5F4C961329C91044011ACBECB0B289282E0E3FED045CB3EA924DFFE5FE654B3D"))
 }
 
 func TestExpandLabelInfoIsRfc8448s(t *testing.T) {
