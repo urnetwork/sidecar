@@ -54,6 +54,20 @@ func (self *mlsGroupContext) decode(decoder *mlsDecoder) {
 	self.extensions = decoder.readExtensions()
 }
 
+// RFC §7.8's tree_hash and §8.2's confirmed_transcript_hash are the suite's hash outputs, the latter the empty
+// string at epoch 0 alone. Decoding cannot check this, since it reads the suite from the same bytes, so a received
+// GroupContext is held to it once its suite is known, before anything derives from it: nothing else would refuse a
+// confirmed_transcript_hash of another length, which only feeds the confirmation tag's MAC.
+func (self *mlsGroupContext) checkHashLengths(suite *mlsCipherSuite) error {
+	if len(self.treeHash) != suite.hashLength {
+		return fmt.Errorf("%w: a tree_hash of %d bytes", errMlsInvalid, len(self.treeHash))
+	}
+	if len(self.confirmedTranscriptHash) != suite.hashLength && (self.epoch != 0 || len(self.confirmedTranscriptHash) != 0) {
+		return fmt.Errorf("%w: a confirmed_transcript_hash of %d bytes at epoch %d", errMlsInvalid, len(self.confirmedTranscriptHash), self.epoch)
+	}
+	return nil
+}
+
 // What one epoch keeps of the schedule, as RFC §8's table 4 names it, with the two secrets a commit
 // also produces. epoch_secret itself is consumed here (RFC §9.2). The caller retains what its role
 // needs and erases the rest.

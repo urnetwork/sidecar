@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"testing"
 
 	"github.com/thomas-vilte/mls-go/ciphersuite"
@@ -96,7 +97,7 @@ type mlsGoMember struct {
 	group        *group.Group
 }
 
-func newMlsGoMember(t *testing.T, name string) *mlsGoMember {
+func newMlsGoMember(t testing.TB, name string) *mlsGoMember {
 	t.Helper()
 	credential, signatureKey, err := credentials.GenerateCredentialWithKeyForCS([]byte("mls-go "+name), mlsGoSuite)
 	if err != nil {
@@ -120,7 +121,7 @@ func (self *mlsGoMember) leaf() group.LeafNodeIndex {
 
 // The lifecycle's members now, and the passive members' views as they grow.
 type mlsGoLifecycle struct {
-	t       *testing.T
+	t       testing.TB
 	members []*mlsGoMember
 	// the passive members, whose views are the transcript
 	passives    []*mlsGoMember
@@ -189,7 +190,7 @@ func (self *mlsGoLifecycle) deliver(committer *mlsGoMember, commit []byte, remov
 	t := self.t
 	t.Helper()
 	for _, member := range self.members {
-		if member == committer || mlsGoContains(removed, member) || member.group == nil {
+		if member == committer || slices.Contains(removed, member) || member.group == nil {
 			continue
 		}
 		if err := mlsGoProcess(member.group, commit); err != nil {
@@ -198,7 +199,7 @@ func (self *mlsGoLifecycle) deliver(committer *mlsGoMember, commit []byte, remov
 	}
 	remaining := []*mlsGoMember{}
 	for _, member := range self.members {
-		if !mlsGoContains(removed, member) {
+		if !slices.Contains(removed, member) {
 			remaining = append(remaining, member)
 		}
 	}
@@ -317,15 +318,6 @@ func mlsGoWelcomeCarriesPathSecret(t *testing.T, welcome []byte, initKey *ecdh.P
 	return false
 }
 
-func mlsGoContains(members []*mlsGoMember, member *mlsGoMember) bool {
-	for _, other := range members {
-		if other == member {
-			return true
-		}
-	}
-	return false
-}
-
 // The scripted lifecycle: mls-go alone, every kind of step mls_* takes, past 10 epochs.
 func TestMlsGoLifecycle(t *testing.T) {
 	life := &mlsGoLifecycle{t: t}
@@ -431,7 +423,7 @@ func TestMlsGoLifecycle(t *testing.T) {
 	}
 	x.credential, x.signatureKey = credential, signatureKey
 	x.group = nil
-	life.members = slicesWithout(life.members, x)
+	life.members = slices.DeleteFunc(life.members, func(member *mlsGoMember) bool { return member == x })
 	commit = external(x, c, &old)
 	life.deliver(x, commit)
 	life.members = append(life.members, x)
@@ -459,7 +451,7 @@ func TestMlsGoLifecycle(t *testing.T) {
 		t.Errorf("the lifecycle reached epoch %d, want 10 or more", life.epochs)
 	}
 	for _, passive := range life.passives {
-		if !mlsGoContains(life.members, passive) {
+		if !slices.Contains(life.members, passive) {
 			t.Fatalf("passive %s left the group", passive.name)
 		}
 	}
@@ -473,16 +465,6 @@ func TestMlsGoLifecycle(t *testing.T) {
 		}
 		t.Logf("wrote P's and Q's views, %d epochs each, to %s", len(life.transcripts[0].Epochs), path)
 	}
-}
-
-func slicesWithout(members []*mlsGoMember, member *mlsGoMember) []*mlsGoMember {
-	remaining := []*mlsGoMember{}
-	for _, other := range members {
-		if other != member {
-			remaining = append(remaining, other)
-		}
-	}
-	return remaining
 }
 
 // Every checked-in 0x0001 transcript replays through mls-go as its passive client: the Welcome joins and lands on the
@@ -502,7 +484,7 @@ func TestMlsGoReplaysTheTranscripts(t *testing.T) {
 		names = append(names, filepath.Base(path))
 	}
 	for _, want := range []string{"mlsgo.json", "mls.json"} {
-		if !containsString(names, want) {
+		if !slices.Contains(names, want) {
 			t.Fatalf("testdata/mls/0x0001/%s is not checked in", want)
 		}
 	}
@@ -577,13 +559,4 @@ func TestMlsGoReplaysTheTranscripts(t *testing.T) {
 		}
 	}
 	t.Logf("%d commits followed, %d joins alone", followed, joinsOnly)
-}
-
-func containsString(values []string, value string) bool {
-	for _, other := range values {
-		if other == value {
-			return true
-		}
-	}
-	return false
 }

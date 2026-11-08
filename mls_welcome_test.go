@@ -354,6 +354,56 @@ func mlsTestForgedGroupInfos(t *testing.T, encoded []byte) map[string][]byte {
 	return forgeries
 }
 
+// tree_hash and confirmed_transcript_hash are the suite's hash outputs, the latter empty at epoch 0 alone; nothing
+// else held the confirmed_transcript_hash to that, since it only feeds the confirmation tag's MAC. mlsinterop's
+// GroupInfo fuzz target found it: mls-go refuses a GroupInfo whose confirmed_transcript_hash is three bytes when it
+// decodes one, and mls_*'s full GroupInfo check took one its signer had signed.
+func TestMlsGroupContextHashLengthsAreTheSuites(t *testing.T) {
+	context := func(epoch uint64, treeHash int, confirmedTranscriptHash int) *mlsGroupContext {
+		return &mlsGroupContext{cipherSuite: mlsSuite.value, epoch: epoch, treeHash: make([]byte, treeHash), confirmedTranscriptHash: make([]byte, confirmedTranscriptHash)}
+	}
+	for _, c := range []struct {
+		context *mlsGroupContext
+		valid   bool
+	}{
+		{context: context(3, 32, 32), valid: true},
+		{context: context(0, 32, 0), valid: true},
+		{context: context(0, 32, 32), valid: true},
+		{context: context(3, 32, 3), valid: false},
+		{context: context(3, 32, 0), valid: false},
+		{context: context(3, 31, 32), valid: false},
+		{context: context(0, 0, 0), valid: false},
+	} {
+		if err := c.context.checkHashLengths(mlsSuite); (err == nil) != c.valid {
+			t.Errorf("epoch %d, a tree_hash of %d bytes and a confirmed_transcript_hash of %d: %v", c.context.epoch,
+				len(c.context.treeHash), len(c.context.confirmedTranscriptHash), err)
+		}
+	}
+
+	world := newMlsTestWorld(t)
+	groups := mlsTestGroupOf(t, world.sidecar(nil), world.sidecar(nil))
+	state := groups[0].(*mlsRealGroup).state
+	groupInfo, err := state.groupInfo(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupInfo.groupContext.confirmedTranscriptHash = []byte{1, 2, 3}
+	if err := groupInfo.sign(mlsSuite, state.signatureKey); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := mlsMarshalMessageOf(mlsWireFormatGroupInfo, groupInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := &mlsGroupInfo{}
+	if err := mlsUnmarshalMessageOf(encoded, mlsWireFormatGroupInfo, decoded); err != nil {
+		t.Fatalf("the decoder leaves lengths to the check: %v", err)
+	}
+	if _, err := decoded.checkTree(mlsSuite, defaultMlsTreeSettings(), mlsUrCredentialValidator(world.admissions.check)); !errors.Is(err, errMlsInvalid) {
+		t.Errorf("a signed GroupInfo with a confirmed_transcript_hash of three bytes passes the check: %v", err)
+	}
+}
+
 // A GroupInfo's signature covers its extensions, its tag and its signer, and verifies only under its signer's key.
 func TestMlsGroupInfoSignatureBindsEveryField(t *testing.T) {
 	world := newMlsTestWorld(t)
