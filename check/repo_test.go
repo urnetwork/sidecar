@@ -43,6 +43,7 @@ const (
 	serverBasePath  = urnetworkPrefix + "server"
 	sdkBasePath     = urnetworkPrefix + "sdk"
 	snBasePath      = urfoundationPrefix + "sn"
+	warpBasePath    = urnetworkPrefix + "warp"
 
 	// connect's replaced forks (§4.7)
 	sctpBasePath   = "github.com/pion/sctp"

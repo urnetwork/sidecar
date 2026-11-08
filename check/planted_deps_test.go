@@ -160,6 +160,16 @@ func TestDepsFailsOnANestedModuleRequiringProxy(t *testing.T) {
 	wantFindings(t, fixture.open().firstPartyRequireFindings(t), "cli requires @proxy@, proxy")
 }
 
+// C-23 lets sidecarctl read warp's configuration through warp's packages, and no other module.
+func TestDepsLetsSidecarctlAloneRequireWarp(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.edit("sidecarctl/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire "+warpBasePath+" v0.0.0\n")
+	wantFindings(t, fixture.open().firstPartyRequireFindings(t))
+
+	fixture.edit("cli/go.mod", "require @connect@ v0.0.0 // indirect", "require @connect@ v0.0.0 // indirect\n\nrequire "+warpBasePath+" v0.0.0 // indirect")
+	wantFindings(t, fixture.open().firstPartyRequireFindings(t), "cli requires "+warpBasePath+", a first-party module §4.7 does not name")
+}
+
 // A require nothing imports reaches no leg's closure, and still enters consumers' graphs.
 func TestDepsFailsOnARequireNoPackageReaches(t *testing.T) {
 	fixture := newFixture(t)
