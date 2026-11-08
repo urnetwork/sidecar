@@ -72,8 +72,8 @@ NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(
 NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref Script=X.create:D.create:C.create
 NoWindowWait           NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
 FoldIgnoresWindow      NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
-CachedRefusal          OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxGeneration=2 MaxPush=3 MaxVersion=4 $(quiet_but authority epoch cache stale fold)+gitref Script=X.create:epoch:X.write
-CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref Script=X.create:epoch:X.write:D.create
+CachedRefusal          OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxGeneration=2 MaxPush=3 MaxVersion=4 $(quiet_but authority epoch cache stale fold)+gitref Script=X.create:epoch:X.write Simulate=150 Traces=40000 Seed=1
+CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref Script=X.create:epoch:X.write:D.create Simulate=150 Traces=40000 Seed=1
 EOF
 }
 
