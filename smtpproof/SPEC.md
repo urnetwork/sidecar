@@ -493,7 +493,7 @@ At load averages of 22 to 35, beside a real-size ceremony in another process, DA
 | | Each later part | 2,248,606 | 336 MiB | 18.5 to 19.8 s | 2.4 to 2.5 s | 3,199 MiB |
 | | π1 to π6 | | | 117.0 s | 18.7 s | |
 
-Setup took 25 s to 3 min 5 s a shape. These runs used the later-part shapes without server blocks; the 1.3 shapes over a late ticket (section 12) have not been measured, and no MX here sends a ticket.
+Setup took 25 s to 3 min 5 s a shape. These runs used the later-part shapes without server blocks. The 1.3 shapes over a late ticket (section 12) compile, with no commitment, to 2,501,943 constraints under AES and 1,623,719 under ChaCha20, about a fifth more than their plain twins; none has been proven or timed, since no MX here sends a ticket.
 
 Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes.
 
