@@ -483,12 +483,13 @@ func smtpBodySafe(body []byte) bool {
 			if i == 0 || body[i-1] != '\r' {
 				return false
 			}
-			lineByteCount = -1
-		}
-		lineByteCount += 1
-		// the CR of a line's end is counted, so a line of exactly 998 octets reaches 999 here
-		if smtpLineMaxByteCount+1 < lineByteCount {
-			return false
+			lineByteCount = 0
+		default:
+			// a line's octets, its CRLF not among them, whether or not one ends it
+			lineByteCount += 1
+			if smtpLineMaxByteCount < lineByteCount {
+				return false
+			}
 		}
 	}
 	return true

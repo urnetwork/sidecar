@@ -401,6 +401,14 @@ func TestAssembleWrapsALongLine(t *testing.T) {
 	if err != nil || string(decoded) != long+"\r\n" {
 		t.Errorf("decoded %d octets: %v", len(decoded), err)
 	}
+	// a last line with no CRLF is held to the same bound
+	message = testAssembleCrlf("From: joe@n1.root.example", "Message-ID: <"+testAssembleMessageId+">", "", long)
+	_, signed = testAssembleSigned(t, testAssembleArgs(message))
+	for _, line := range strings.Split(string(signed), "\r\n") {
+		if 998 < len(line) {
+			t.Fatalf("a %d-octet last line", len(line))
+		}
+	}
 	// 998 octets fit, and stay as they are
 	fits := strings.Repeat("w", 998)
 	message = testAssembleCrlf("From: joe@n1.root.example", "Message-ID: <"+testAssembleMessageId+">", "", fits, "")
