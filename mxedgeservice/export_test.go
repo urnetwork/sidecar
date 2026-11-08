@@ -5,8 +5,10 @@
 package mxedgeservice
 
 import (
+	"maps"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/urnetwork/sidecar"
@@ -27,8 +29,9 @@ const (
 	CapRefusalNetwork         = mxCapRefusalNetwork
 	CapRefusalNetworkSender   = mxCapRefusalNetworkSender
 
-	ClosedHandshakeSecretMinByteCount = mxClosedHandshakeSecretMinByteCount
-	ReadyProbeKey                     = mxReadyProbeKey
+	DailyKeyPrefix    = mxDailyKeyPrefix
+	DailyKeyByteCount = mxDailyKeyByteCount
+	DailyKeyTtl       = mxDailyKeyTtl
 )
 
 // Caps on settings' numbers.
@@ -48,15 +51,58 @@ func SenderPrefixes(sender netip.Addr) (netip.Prefix, netip.Prefix) {
 	return mxSenderPrefixes(sender)
 }
 
-// The memory on one Redis.
-func NewClosedHandshakes(redis sidecar.Redis, secret []byte, ttl time.Duration, clock MxEdgeClock) *ClosedHandshakes {
-	return newMxClosedHandshakes(redis, secret, ttl, clock)
+// The memory on one Redis, holding no k until its first Refresh.
+func NewClosedHandshakes(redis sidecar.Redis, ttl time.Duration, clock MxEdgeClock) *ClosedHandshakes {
+	return newMxClosedHandshakes(redis, ttl, clock)
 }
 
-// The key for sender's /24 or /48 under day's k.
-func (self *mxClosedHandshakes) Key(sender netip.Addr, day time.Time) string {
+// The UTC day t falls in, as days since the epoch.
+func UtcDay(t time.Time) int64 {
+	return mxUtcDay(t)
+}
+
+// Where the k of the day t falls in lives in Redis.
+func DailyKeyName(t time.Time) string {
+	return mxDailyKeyName(mxUtcDay(t))
+}
+
+// The memory's key for sender's /24 or /48 under dayKey.
+func ClosedHandshakeKey(dayKey []byte, sender netip.Addr) string {
 	_, aggregate := mxSenderPrefixes(sender)
-	return self.key(aggregate, day)
+	return mxClosedHandshakeKey(dayKey, aggregate)
+}
+
+// The key for sender's /24 or /48 under the k held for the day t falls in, empty with none held.
+func (self *mxClosedHandshakes) Key(sender netip.Addr, t time.Time) string {
+	dayKey := self.heldKey(mxUtcDay(t))
+	if dayKey == nil {
+		return ""
+	}
+	return ClosedHandshakeKey(dayKey, sender)
+}
+
+// The days whose k is held, and the days known to have none, each in order.
+func (self *mxClosedHandshakes) HeldDays() (heldDays []int64, absentDays []int64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Sorted(maps.Keys(self.dayKeys)), slices.Sorted(maps.Keys(self.absentDays))
+}
+
+// Returns once a Refresh has held the k of the day t falls in.
+func (self *mxClosedHandshakes) AwaitKeyDay(t time.Time) {
+	day := mxUtcDay(t)
+	for {
+		keyDay, update := self.keyDay.Get()
+		if day <= keyDay {
+			return
+		}
+		<-update
+	}
+}
+
+// Returns once the engine's probe has held the k of the day t falls in.
+func (self *MxEdgeService) AwaitKeyDay(t time.Time) {
+	self.closedHandshakes.AwaitKeyDay(t)
 }
 
 // The sender a conn's peer address gives.
@@ -79,6 +125,28 @@ func (self *MxEdgeService) AwaitStoresReachable(want bool) {
 	for {
 		reachable, update := self.storesReachable.Get()
 		if reachable == want {
+			return
+		}
+		<-update
+	}
+}
+
+// What the last probe found.
+func (self *MxEdgeService) StoresReachable() bool {
+	return self.storesReachable.Value()
+}
+
+// Probes finished so far.
+func (self *MxEdgeService) ProbeCount() int {
+	return self.probeCount.Value()
+}
+
+// Returns once count probes have finished, the last with the wait for the next armed, so a fake clock
+// moved after this reaches that wait.
+func (self *MxEdgeService) AwaitProbeCount(count int) {
+	for {
+		probeCount, update := self.probeCount.Get()
+		if count <= probeCount {
 			return
 		}
 		<-update

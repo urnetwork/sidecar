@@ -22,8 +22,8 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// Synthetic, at the length the fleet's secret must have.
-var testSecret = []byte("mxedge test secret, not a key...")
+// A synthetic daily k, at the length one has.
+var testDailyKey = []byte("mxedge daily key for tests, fake")
 
 // RFC 5737 and RFC 3849 documentation addresses.
 const (
@@ -213,10 +213,15 @@ type testEngineOptions struct {
 	host     *sidecartest.FakeHost
 	settings *mxedgeservice.MxEdgeSettings
 	deps     func(deps *mxedgeservice.MxEdgeDeps)
+	// Leaves today's k unmade, so the engine's first probe makes it.
+	unseeded bool
+	// Takes a first probe that finds no store or no k, which otherwise fails the test.
+	unready bool
 }
 
-// An engine serving a test listener, past its first probe, with the mxedge gate open. Two engines given
-// one clock and host are two processes of a fleet.
+// An engine serving a test listener, past its first probe, with the mxedge gate open. Today's k is in
+// Redis already, testDailyKey, as another process would have made it. Two engines given one clock and
+// host are two processes of a fleet.
 func newTestEngine(t *testing.T, options *testEngineOptions) *testEngine {
 	t.Helper()
 	if options == nil {
@@ -246,28 +251,33 @@ func newTestEngine(t *testing.T, options *testEngineOptions) *testEngine {
 	self.store = sidecartest.NewFakeMxEdgeStore(self.host.Redis.Faults())
 	self.gateOpen.Store(true)
 	deps := &mxedgeservice.MxEdgeDeps{
-		ReadClientHello:       testReadClientHello,
-		NormalizeSni:          testNormalizeSni,
-		WriteTlsAlert:         testWriteTlsAlert,
-		ClosedHandshakeSecret: testSecret,
-		GateOpen:              self.gateOpen.Load,
-		Clock:                 self.clock,
-		Log:                   self.log,
+		ReadClientHello: testReadClientHello,
+		NormalizeSni:    testNormalizeSni,
+		WriteTlsAlert:   testWriteTlsAlert,
+		GateOpen:        self.gateOpen.Load,
+		Clock:           self.clock,
+		Log:             self.log,
 	}
 	if options.deps != nil {
 		options.deps(deps)
 	}
-	timerCount := len(self.clock.PendingTimers())
+	if !options.unseeded {
+		// as an oracle, so no op is counted, and a second engine on one host finds it there already
+		_, err := self.host.Redis.SetIfAbsent(sidecartest.InspectContext(ctx), mxedgeservice.DailyKeyName(self.clock.Now()), testDailyKey, mxedgeservice.DailyKeyTtl)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	service, err := mxedgeservice.NewMxEdgeService(ctx, self.host.ServiceHost(), self.store, deps, self.settings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	self.service = service
 	t.Cleanup(service.Close)
-	service.AwaitStoresReachable(true)
-	// the probe's own timer is gone by now, so the next one to appear is its loop's
-	if err := self.clock.AwaitTimers(ctx, timerCount+1); err != nil {
-		t.Fatal(err)
+	// the first probe has published, and its loop waits for the next
+	service.AwaitProbeCount(1)
+	if !options.unready && !service.StoresReachable() {
+		t.Fatal("the first probe found no store or no k")
 	}
 	listener := self.listener
 	go func() {

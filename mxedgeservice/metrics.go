@@ -37,7 +37,7 @@ const (
 	mxMemoryResultRecent  = "recent"
 	mxMemoryResultAbsent  = "absent"
 	mxMemoryResultWritten = "written"
-	// Redis did not answer, or the fleet secret is missing.
+	// Redis did not answer, or today's k is not held.
 	mxMemoryResultFailed = "failed"
 )
 
@@ -53,6 +53,8 @@ type mxMetrics struct {
 	memoryReads sidecar.MetricsCounter
 	// Writes to the closed-handshake memory, by outcome.
 	memoryWrites sidecar.MetricsCounter
+	// Reads of the memory's daily k, one each probe, by how each went.
+	dailyKeyRefreshes sidecar.MetricsCounter
 	// Accepts that failed and were retried.
 	acceptFailures sidecar.MetricsCounter
 }
@@ -65,6 +67,7 @@ func newMxMetrics(metrics sidecar.Metrics) *mxMetrics {
 		plaintextSessions: metrics.Counter("urnetwork_mxedge_plaintext_sessions_total", "Sessions that tried a plaintext transaction, by the refusal.", "result"),
 		memoryReads:       metrics.Counter("urnetwork_mxedge_closed_handshake_reads_total", "Reads of the closed-handshake memory, by answer.", "result"),
 		memoryWrites:      metrics.Counter("urnetwork_mxedge_closed_handshake_writes_total", "Writes to the closed-handshake memory, by outcome.", "result"),
+		dailyKeyRefreshes: metrics.Counter("urnetwork_mxedge_daily_key_refreshes_total", "Reads of the closed-handshake memory's daily key, by outcome.", "result"),
 		acceptFailures:    metrics.Counter("urnetwork_mxedge_accept_failures_total", "Accepts that failed and were retried."),
 	}
 }

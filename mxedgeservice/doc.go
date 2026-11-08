@@ -6,7 +6,8 @@
 //   - store.go, MxEdgeStore: the only way this engine reaches Postgres.
 //   - dialog.go, the pre-TLS dialog, a state machine that does no I/O.
 //   - caps.go, the session caps, in memory.
-//   - closed_handshake.go, the fleet's closed-handshake memory in {mxc_}.
+//   - closed_handshake.go, the fleet's closed-handshake memory in {mxc_}, under the daily k in
+//     {vhk}mx:.
 //   - service.go, the engine: Serve, a session's path, readiness and drain.
 //   - metrics.go, the metric families and their closed label values.
 //

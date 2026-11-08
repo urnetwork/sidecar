@@ -27,9 +27,10 @@ const (
 	mxHostLabelMaxByteCount = 63
 	// A 530's line has to fit RFC 5321's 512 B, CRLF included, with its fixed text around the url.
 	mxDeviationUrlMaxByteCount = 400
-	// The closed-handshake memory reads today's key and yesterday's and no other, so an entry must
-	// not outlive one UTC day (reading 5).
-	mxClosedHandshakeTtlMax = 24 * time.Hour
+	// An entry must not outlive the daily k it is under, or no read finds it. k lives 25 h from its
+	// creation, which may come at the first moment of its day, so an entry may outlive the day by an
+	// hour at most.
+	mxClosedHandshakeTtlMax = mxDailyKeyTtl - mxSecondsPerDay*time.Second
 )
 
 // An mxedge.yml that cannot be served from. The wrapping error names the field.
@@ -75,13 +76,15 @@ type MxEdgeSettings struct {
 	// The most ClientHello bytes read. Default 16 KiB, tlsedge's (§13.5).
 	ClientHelloByteCount int `yaml:"client_hello_max_bytes"`
 
-	// How long a closed handshake is remembered (§15.4). Default 1 h, and at most one UTC day.
+	// How long a closed handshake is remembered (§15.4). Default 1 h, as §15.4 has it, and at most that,
+	// since an entry may not outlive its daily k.
 	ClosedHandshakeTtl time.Duration `yaml:"closed_handshake_ttl"`
 	// How long a Redis or store call may take before it reads as an error. Default 1 s: a 451 waits
 	// on this, and an unanswered read tells the sender to retry anyway.
 	StoreTimeout time.Duration `yaml:"store_timeout"`
-	// How often Redis and the store are probed for Ready. Default 10 s, so a block leaves the lb
-	// soon after losing either.
+	// How often Redis and the store are probed for Ready. A probe reads the memory's daily k again,
+	// and one also runs at each UTC date change. Default 10 s, so a block leaves the lb soon after
+	// losing either, and k is read at least each minute, as the fleet's daily keys are.
 	ReadyProbeInterval time.Duration `yaml:"ready_probe_interval"`
 	// The pause after a failed Accept, which keeps a run of them from spinning. Default 100 ms.
 	AcceptRetryDelay time.Duration `yaml:"accept_retry_delay"`
@@ -180,7 +183,7 @@ func (self *MxEdgeSettings) Validate() error {
 		}
 	}
 	if mxClosedHandshakeTtlMax < self.ClosedHandshakeTtl {
-		return fmt.Errorf("%w: closed_handshake_ttl is over a UTC day", ErrMxEdgeSettingsRefused)
+		return fmt.Errorf("%w: closed_handshake_ttl would outlive its daily key", ErrMxEdgeSettingsRefused)
 	}
 	return nil
 }

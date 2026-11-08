@@ -23,12 +23,6 @@ import (
 
 var _ sidecar.StreamEngine = (*MxEdgeService)(nil)
 
-const (
-	// A read of this key answers whether Redis does. Nothing writes it, so no key exists, and a hash
-	// is hex, so no sender's key can be this.
-	mxReadyProbeKey = "{mxc_ready}"
-)
-
 // A time long past: setting it as a read deadline interrupts a blocked read without reading any clock.
 var mxPastDeadline = time.Unix(1, 0)
 
@@ -83,7 +77,8 @@ type MxClientHello struct {
 
 // What §4.4 forbids this engine importing, as functions (TLS reading 15), and what only a host holds.
 // server/mxedgehost wires tlsedgeservice's functions here. The engine is not ready without the three
-// functions and the secret, and a session then still fails closed.
+// functions, and a session then still fails closed. The memory's daily k is no dependency: the engine
+// reads it from ServiceHost.Redis itself, so a host supplies no secret for it.
 type MxEdgeDeps struct {
 	// TLS-M5-06's ReadClientHello: reads one hello, at most maxByteCount bytes.
 	ReadClientHello func(conn net.Conn, maxByteCount int) (*MxClientHello, error)
@@ -91,8 +86,6 @@ type MxEdgeDeps struct {
 	NormalizeSni func(serverName string) (normalized string, ok bool)
 	// TLS-M5-06's WriteTlsAlert: one plaintext fatal alert.
 	WriteTlsAlert func(conn net.Conn, alert MxTlsAlert) error
-	// The fleet-wide key k is drawn from (reading 5), at least 32 bytes, from vault's secret_files.
-	ClosedHandshakeSecret []byte
 	// Whether §19.11's mxedge gate is open, read at each plaintext transaction. nil reads as closed,
 	// since config/<env>/sidecar.yml's gates are dark when absent, and a closed gate answers 451, never
 	// 530, so a sender retries once it opens (§22.5). OPS-M1-03's ServiceHost.Gates feeds this.
@@ -136,6 +129,9 @@ type MxEdgeService struct {
 
 	// What the last probe found.
 	storesReachable *sidecar.MonitorValue[bool]
+	// Probes finished, each counted once the wait for the next is armed, so a wait can see one land
+	// and a fake clock can then move past the next.
+	probeCount *sidecar.MonitorValue[int]
 	// Sessions running, for Drain.
 	sessionCount *sidecar.MonitorValue[int]
 	sessionGroup sync.WaitGroup
@@ -149,8 +145,9 @@ type MxEdgeService struct {
 	liveConnections map[net.Conn]bool
 }
 
-// Starts the engine, which stays not ready until its first probe answers, and runs until ctx ends or
-// Close. host needs Redis and Metrics. A nil store or deps is allowed and leaves the engine not ready.
+// Starts the engine, which stays not ready until a probe has found the store and today's k, and runs
+// until ctx ends or Close. host needs Redis and Metrics. A nil store or deps is allowed and leaves the
+// engine not ready.
 func NewMxEdgeService(
 	ctx context.Context,
 	host *sidecar.ServiceHost,
@@ -188,21 +185,22 @@ func NewMxEdgeService(
 		metrics:          newMxMetrics(host.Metrics),
 		replies:          newMxDialogReplies(settings),
 		caps:             newMxCaps(settings),
-		closedHandshakes: newMxClosedHandshakes(host.Redis, deps.ClosedHandshakeSecret, settings.ClosedHandshakeTtl, clock),
+		closedHandshakes: newMxClosedHandshakes(host.Redis, settings.ClosedHandshakeTtl, clock),
 		storesReachable:  sidecar.NewMonitorValue(false),
+		probeCount:       sidecar.NewMonitorValue(0),
 		sessionCount:     sidecar.NewMonitorValue(0),
 		released:         make(chan struct{}),
 		liveListeners:    map[net.Listener]bool{},
 		liveConnections:  map[net.Conn]bool{},
 	}
-	self.depsComplete = deps.ReadClientHello != nil && deps.NormalizeSni != nil && deps.WriteTlsAlert != nil &&
-		self.closedHandshakes.Available()
+	self.depsComplete = deps.ReadClientHello != nil && deps.NormalizeSni != nil && deps.WriteTlsAlert != nil
 	self.handoff = self.closeHandshake
 	go self.run()
 	return self, nil
 }
 
-// Probes the stores until the engine ends, then releases everything it holds. This loop is the one
+// Probes the stores until the engine ends, then releases everything it holds. A probe reads the
+// memory's daily k, which is how it learns Redis answers, then pings the store. This loop is the one
 // caller of the store until MAIL-M7-21's batch, so the store stays off the connection path.
 func (self *MxEdgeService) run() {
 	defer close(self.released)
@@ -212,16 +210,22 @@ func (self *MxEdgeService) run() {
 		reachable := func() bool {
 			ctx, done := self.storeContext()
 			defer done()
-			if _, _, err := self.host.Redis.Get(ctx, mxReadyProbeKey); err != nil {
+			result, err := self.closedHandshakes.Refresh(ctx)
+			self.metrics.dailyKeyRefreshes.Add(1, result)
+			if err != nil {
 				return false
 			}
 			return self.store != nil && self.store.Ping(ctx) == nil
 		}()
 		self.storesReachable.Set(reachable)
+		// a probe at the date change too, so a new day's k is read before a session needs it
+		now := self.clock.Now()
+		probeTimer := self.clock.After(min(self.settings.ReadyProbeInterval, mxUtcDayStart(mxUtcDay(now)+1).Sub(now)))
+		self.probeCount.Update(func(count int) int { return count + 1 })
 		select {
 		case <-self.ctx.Done():
 			return
-		case <-self.clock.After(self.settings.ReadyProbeInterval):
+		case <-probeTimer:
 		}
 	}
 }

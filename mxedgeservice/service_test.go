@@ -5,6 +5,7 @@ package mxedgeservice_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -234,12 +235,41 @@ func TestPlaintextGets451AcrossMidnightUtc(t *testing.T) {
 	if clock.Now().Day() == writeTime.Day() {
 		t.Fatal("the clock has not crossed midnight")
 	}
+	// both probes ran at the date change, so the 451 below is the memory's and not a missing k's
+	first.service.AwaitKeyDay(clock.Now())
+	second.service.AwaitKeyDay(clock.Now())
 	if code := second.plaintextReplyTo(testSender); code != "451" {
 		t.Errorf("at 00:10 got %s", code)
+	}
+	if count := second.metric("closed_handshake_reads_total", "recent"); count != 1 {
+		t.Errorf("%v reads found the memory", count)
 	}
 	clock.AdvanceTo(writeTime.Add(61 * time.Minute))
 	if code := second.plaintextReplyTo(testSender); code != "530" {
 		t.Errorf("at 00:51 got %s", code)
+	}
+}
+
+// The probe that comes at the date change reads the new day's k then, not a probe interval later, and
+// the first process to get there makes it.
+func TestProbeReadsTheNewDaysKeyAtTheDateChange(t *testing.T) {
+	start := time.Date(2026, time.March, 31, 23, 59, 0, 0, time.UTC)
+	engine := newTestEngine(t, &testEngineOptions{clock: sidecartest.NewFakeClock(start)})
+	probeCount := engine.service.ProbeCount()
+	engine.clock.AdvanceTo(start.Add(time.Minute))
+	engine.service.AwaitProbeCount(probeCount + 1)
+	engine.service.AwaitKeyDay(engine.clock.Now())
+	if _, found := engine.host.Redis.Dump()["{vhk}mx:20260401"]; !found {
+		t.Error("no k for the new day")
+	}
+	if count := engine.metric("daily_key_refreshes_total", "created"); count != 1 {
+		t.Errorf("made %v", count)
+	}
+	if code := engine.plaintextReplyTo(testSender); code != "530" {
+		t.Errorf("got %s", code)
+	}
+	if count := engine.metric("closed_handshake_reads_total", "absent"); count != 1 {
+		t.Errorf("%v reads answered", count)
 	}
 }
 
@@ -316,8 +346,9 @@ func TestRedisStallTellsASenderToRetry(t *testing.T) {
 	client.expect(strings.TrimSuffix(testReply451, "\r\n"))
 }
 
-// §22.5's op count: a plaintext session costs two reads, however many commands it tries.
-func TestPlaintextSessionCostsTwoRedisReads(t *testing.T) {
+// §22.5's op count: a plaintext session costs one read past a day's first hour, and two within it,
+// however many commands it tries. closed_handshake_test.go counts the first hour's.
+func TestPlaintextSessionCostsOneRedisReadPastTheFirstHour(t *testing.T) {
 	engine := newTestEngine(t, nil)
 	engine.host.Redis.ResetOpCounts()
 	client := engine.open(testSender)
@@ -325,7 +356,7 @@ func TestPlaintextSessionCostsTwoRedisReads(t *testing.T) {
 		client.write(line)
 		client.expect(strings.TrimSuffix(testReply530, "\r\n"))
 	}
-	if counts := engine.host.Redis.OpCounts(); counts["get"] != 2 || len(counts) != 1 {
+	if counts := engine.host.Redis.OpCounts(); counts["get"] != 1 || len(counts) != 1 {
 		t.Errorf("calls: %v", counts)
 	}
 }
@@ -457,10 +488,9 @@ func TestRealSenderFailsInTheHandshake(t *testing.T) {
 			byteCount, err := conn.Read(buffer)
 			return &mxedgeservice.MxClientHello{RawBytes: buffer[:byteCount]}, err
 		},
-		NormalizeSni:          testNormalizeSni,
-		WriteTlsAlert:         testWriteTlsAlert,
-		ClosedHandshakeSecret: testSecret,
-		GateOpen:              func() bool { return true },
+		NormalizeSni:  testNormalizeSni,
+		WriteTlsAlert: testWriteTlsAlert,
+		GateOpen:      func() bool { return true },
 	}, testSettings())
 	if err != nil {
 		t.Fatal(err)
@@ -490,8 +520,8 @@ func TestRealSenderFailsInTheHandshake(t *testing.T) {
 		t.Errorf("the handshake ended with %v", err)
 	}
 	service.AwaitSessionCount(0)
-	if keyCount := len(host.Redis.Dump()); keyCount != 1 {
-		t.Errorf("%d keys", keyCount)
+	if keys := memoryKeys(host.Redis.Dump()); len(keys) != 1 {
+		t.Errorf("%d keys", len(keys))
 	}
 }
 
@@ -821,10 +851,9 @@ func TestReadyAfterItsFirstProbe(t *testing.T) {
 // Each of what a host must supply, left out.
 func TestNotReadyWithoutWhatItNeeds(t *testing.T) {
 	for name, withhold := range map[string]func(deps *mxedgeservice.MxEdgeDeps){
-		"ReadClientHello":       func(deps *mxedgeservice.MxEdgeDeps) { deps.ReadClientHello = nil },
-		"NormalizeSni":          func(deps *mxedgeservice.MxEdgeDeps) { deps.NormalizeSni = nil },
-		"WriteTlsAlert":         func(deps *mxedgeservice.MxEdgeDeps) { deps.WriteTlsAlert = nil },
-		"ClosedHandshakeSecret": func(deps *mxedgeservice.MxEdgeDeps) { deps.ClosedHandshakeSecret = nil },
+		"ReadClientHello": func(deps *mxedgeservice.MxEdgeDeps) { deps.ReadClientHello = nil },
+		"NormalizeSni":    func(deps *mxedgeservice.MxEdgeDeps) { deps.NormalizeSni = nil },
+		"WriteTlsAlert":   func(deps *mxedgeservice.MxEdgeDeps) { deps.WriteTlsAlert = nil },
 	} {
 		engine := newTestEngine(t, &testEngineOptions{deps: withhold})
 		if engine.service.Ready() {
@@ -840,21 +869,76 @@ func TestNotReadyWithoutAStore(t *testing.T) {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
 	service, err := mxedgeservice.NewMxEdgeService(ctx, host.ServiceHost(), nil, &mxedgeservice.MxEdgeDeps{
-		ReadClientHello:       testReadClientHello,
-		NormalizeSni:          testNormalizeSni,
-		WriteTlsAlert:         testWriteTlsAlert,
-		ClosedHandshakeSecret: testSecret,
-		Clock:                 clock,
+		ReadClientHello: testReadClientHello,
+		NormalizeSni:    testNormalizeSni,
+		WriteTlsAlert:   testWriteTlsAlert,
+		Clock:           clock,
 	}, testSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	if err := clock.AwaitTimers(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
+	service.AwaitProbeCount(1)
 	if service.Ready() {
 		t.Error("ready")
+	}
+}
+
+// A block that cannot read today's k stays out of the lb, and what reaches it anyway fails closed: a
+// plaintext sender is told to retry, and a closed handshake writes nothing under a k no one else holds.
+func TestNotReadyWithoutTheDailyKey(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	_, err := host.Redis.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpRedis, KeyPrefix: mxedgeservice.DailyKeyPrefix, Result: sidecartest.FailBeforeApply, Repeat: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := newTestEngine(t, &testEngineOptions{clock: clock, host: host, unseeded: true, unready: true})
+	if engine.service.Ready() {
+		t.Error("ready with no k")
+	}
+	if count := engine.metric("daily_key_refreshes_total", "failed"); count != 1 {
+		t.Errorf("counted %v", count)
+	}
+	if code := engine.plaintextReplyTo(testSender); code != "451" {
+		t.Errorf("got %s", code)
+	}
+	if count := engine.metric("closed_handshake_reads_total", "failed"); count != 1 {
+		t.Errorf("counted %v failed reads", count)
+	}
+	engine.closeHandshakeFrom(testSender)
+	if count := engine.memoryKeyCount(); count != 0 {
+		t.Errorf("%d keys", count)
+	}
+	if count := engine.metric("closed_handshake_writes_total", "failed"); count != 1 {
+		t.Errorf("counted %v failed writes", count)
+	}
+}
+
+// With no k in Redis, as on the day's first block, the engine makes it at its first probe.
+func TestFirstEngineMakesTheDailyKey(t *testing.T) {
+	engine := newTestEngine(t, &testEngineOptions{unseeded: true})
+	if !engine.service.Ready() {
+		t.Error("not ready")
+	}
+	if count := engine.metric("daily_key_refreshes_total", "created"); count != 1 {
+		t.Errorf("made %v", count)
+	}
+	dayKey, found := engine.host.Redis.Dump()[mxedgeservice.DailyKeyName(engine.clock.Now())]
+	if !found || len(dayKey) != mxedgeservice.DailyKeyByteCount || bytes.Equal(dayKey, testDailyKey) {
+		t.Errorf("Redis holds %d bytes, found %v", len(dayKey), found)
+	}
+	second := newTestEngine(t, &testEngineOptions{clock: engine.clock, host: engine.host, unseeded: true})
+	if count := second.metric("daily_key_refreshes_total", "read"); count != 1 {
+		t.Errorf("the second read %v", count)
+	}
+	engine.closeHandshakeFrom(testSender)
+	if code := second.plaintextReplyTo(testSender); code != "451" {
+		t.Errorf("got %s", code)
 	}
 }
 
@@ -868,9 +952,10 @@ func TestClosedGateStaysReady(t *testing.T) {
 }
 
 // Losing a store takes the block out of the lb at the next probe, and finding it again brings it back.
+// Redis is found through the probe's read of today's k.
 func TestReadyFollowsItsStores(t *testing.T) {
 	for _, plan := range []*sidecartest.FaultPlan{
-		{Op: sidecartest.FaultOpRedis, KeyPrefix: mxedgeservice.ReadyProbeKey, Result: sidecartest.FailBeforeApply, Repeat: -1},
+		{Op: sidecartest.FaultOpRedis, KeyPrefix: mxedgeservice.DailyKeyPrefix, Result: sidecartest.FailBeforeApply, Repeat: -1},
 		{Op: sidecartest.FaultOpHost, KeyPrefix: "mxedge.Ping", Result: sidecartest.FailBeforeApply, Repeat: -1},
 	} {
 		settings := testSettings()
@@ -880,18 +965,15 @@ func TestReadyFollowsItsStores(t *testing.T) {
 		if _, err := faults.Add(plan); err != nil {
 			t.Fatal(err)
 		}
+		probeCount := engine.service.ProbeCount()
 		engine.clock.Advance(settings.ReadyProbeInterval)
-		engine.service.AwaitStoresReachable(false)
+		engine.service.AwaitProbeCount(probeCount + 1)
 		if engine.service.Ready() {
 			t.Errorf("%s: ready with its store down", plan)
 		}
 		faults.Clear()
-		// the loop's next timer, armed once that probe has finished
-		if err := engine.clock.AwaitTimers(engine.ctx, 1); err != nil {
-			t.Fatal(err)
-		}
 		engine.clock.Advance(settings.ReadyProbeInterval)
-		engine.service.AwaitStoresReachable(true)
+		engine.service.AwaitProbeCount(probeCount + 2)
 		if !engine.service.Ready() {
 			t.Errorf("%s: not ready with its store back", plan)
 		}
@@ -1128,10 +1210,11 @@ func TestNoLogMetricOrKeyHoldsAnAddressEhloNameOrSni(t *testing.T) {
 	for _, line := range engine.host.Metrics.Dump() {
 		capture.AddItem(&sidecartest.PrivacyItem{Class: "CC4", Name: "metric", Body: []byte(line)})
 	}
+	// the one {mxc_} key and the day's k
 	for key, value := range engine.host.Redis.Dump() {
 		capture.AddItem(&sidecartest.PrivacyItem{Class: "CC3", Name: "redis", Body: append([]byte(key), value...)})
 	}
-	if count := capture.ItemCount("CC3"); count != 1 {
+	if count := capture.ItemCount("CC3"); count != 2 {
 		t.Errorf("%d Redis items", count)
 	}
 	if hits := capture.Scan(); len(hits) != 0 {
@@ -1152,6 +1235,7 @@ func TestMetricsCarryResultsOnly(t *testing.T) {
 		`plaintext_sessions_total (451|530)|` +
 		`closed_handshake_reads_total (recent|absent|failed)|` +
 		`closed_handshake_writes_total (written|failed)|` +
+		`daily_key_refreshes_total (created|read|failed)|` +
 		`accept_failures_total ` +
 		`)$`)
 	lines := engine.host.Metrics.Dump()

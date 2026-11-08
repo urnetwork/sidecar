@@ -125,7 +125,7 @@ func TestLoadRefuses(t *testing.T) {
 		{name: "a zero duration", document: testRequiredSettings + "dialog_timeout: 0s\n"},
 		{name: "a negative duration", document: testRequiredSettings + "drain_timeout: -5s\n"},
 		{name: "a duration with no unit", document: testRequiredSettings + "drain_timeout: 600\n"},
-		{name: "a memory past one UTC day", document: testRequiredSettings + "closed_handshake_ttl: 24h1s\n"},
+		{name: "a memory that outlives its daily key", document: testRequiredSettings + "closed_handshake_ttl: 1h1s\n"},
 		{name: "a host with a space", document: "banner_host: mx example\ndeviation_url: " + testDeviationUrl + "\n"},
 		{name: "a host with a line break", document: "banner_host: \"mx.example\\r\\n250 fake\"\ndeviation_url: " + testDeviationUrl + "\n"},
 		{name: "a host with an empty label", document: "banner_host: mx..example\ndeviation_url: " + testDeviationUrl + "\n"},
@@ -167,11 +167,20 @@ func TestValidateNamesTheKeyAndNotItsValue(t *testing.T) {
 	}
 }
 
-func TestValidateTakesAMemoryOfExactlyOneDay(t *testing.T) {
+// k lives 25 h from a creation that may come at its day's first moment, so an hour is the most an
+// entry under it can live and still be read.
+func TestValidateTakesAMemoryOfExactlyAnHourAndNoMore(t *testing.T) {
 	settings := testSettings()
-	settings.ClosedHandshakeTtl = 24 * time.Hour
+	settings.ClosedHandshakeTtl = time.Hour
 	if err := settings.Validate(); err != nil {
 		t.Error(err)
+	}
+	settings.ClosedHandshakeTtl = time.Hour + time.Nanosecond
+	if err := settings.Validate(); !errors.Is(err, mxedgeservice.ErrMxEdgeSettingsRefused) {
+		t.Errorf("validate said %v", err)
+	}
+	if mxedgeservice.DailyKeyTtl != 25*time.Hour {
+		t.Errorf("k lives %v, not the resolution's EX 90000", mxedgeservice.DailyKeyTtl)
 	}
 }
 
