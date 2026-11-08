@@ -415,15 +415,31 @@ D-SMTP-16, at p95: BDAT with a 4 KiB header block and 10 recipients, ≤ 10 s fo
 
 ### 11.2 Gadget sizes
 
-| Gadget | Constraints | Unit |
-|---|---|---|
-| SHA-256 compression | 26,482 | Measured, scratch prototype |
-| Z1, TLS 1.3, both directions (29 compressions) | about 768,000 | Estimated |
-| Z1, TLS 1.2 (25 compressions plus one AES block) | about 675,000 | Estimated |
-| AES-128 keystream, no lookups | about 11,600 per 16 octets | Estimated; about 725 per octet |
-| ChaCha20 keystream | about 22,000 per 64 octets | Estimated; about 340 per octet |
+Measured from the code with gnark v0.15.0, and held to these figures by `TestGadgetSizesAreSpecMds`, which fails on any change to a gadget until this table follows it. A gadget is measured alone, less the constraints its test harness adds, one for each boolean it asserts on an input or output bit and one for each output bit it compares. Z1 is measured as a part spends it: a shape against its twin that takes the keys as private bits, those bits' booleans added back. The first draft's estimates are kept beside them.
 
-The code's measured figures replace these as gadgets land; see section 12.
+| Gadget | Constraints | Unit | First estimate |
+|---|---|---|---|
+| SHA-256 compression, private state and block | 26,480 | one compression | 26,482, scratch prototype |
+| HMAC-SHA-256 pad states, private 32-octet key | 51,208 | once per key | |
+| HMAC-SHA-256 sum, up to 55 private octets | 51,770 | per sum, after the pad states | |
+| HKDF-Expand-Label to 32 octets, 32-octet context | 51,789 | per label, after the pad states | |
+| TLS 1.2 PRF, 40-octet key block | 337,761 | pad states included | |
+| AES-128 key schedule, private key | 3,136 | once per key | |
+| AES-128 block | 11,504 | 16 octets | |
+| ChaCha20 block, private key and nonce | 21,664 | 64 octets | |
+| AES-128-GCM keystream, Z2's nonce included | 11,665 | per 16 octets, about 729 an octet, plus the schedule once per key | about 11,600, 725 an octet |
+| ChaCha20 keystream, Z2's nonce included | 21,825 | per 64 octets, about 341 an octet | about 22,000, 340 an octet |
+| Z1, TLS 1.3, client keys only (21 compressions) | 515,322 | per π1 | |
+| Z1, TLS 1.3, both directions (29 compressions) | 708,498 | per later part, either suite | about 768,000 |
+| Z1, TLS 1.2 (25 compressions, SF's AES block and its schedule) | 669,147 | per part | about 675,000 |
+
+Some readings of these:
+
+- A key's length does not move Z1: AES's 16-octet key and ChaCha20's 32-octet key each come from one HMAC, so both suites' Z1 cost the same.
+- A compression over the constant initial state, as each HMAC pad state is, costs a little less than one over a private state, since gnark folds the constant terms.
+- Each part re-proves Z1 (D-SMTP-22), so a BDAT send spends 515,322 + 2 × 708,498 = 1,932,318 constraints on it under 1.3, a little under 11.3's 2.3M.
+- H_sh and H_sf enter HMAC messages, and gnark's `Xor` asserts its inputs boolean, so 512 constraints of 1.3's Z1 are booleans on public wires the verifier computes. Marking those wires boolean without a constraint would save them; it is not done.
+- The 1.2 figure adds back what the twin's private IV costs over the real one: a 1.2 IV is the salt and 8 zero octets, so the real shape's nonce takes the explicit nonce without a XOR, 64 constraints a pool block.
 
 ### 11.3 First measurements, and what they say
 
@@ -513,11 +529,11 @@ Kept honest as the module grows. Anything not listed as built fails closed.
 
 | Piece | State |
 |---|---|
-| `tls_*.go`: the TLS client, 1.3 and 1.2, HelloRetryRequest, CertificateRequest | Built. Checked against Go's `crypto/tls` server, whose key log confirms HS and the master secret regenerate its own secrets, and against RFC 8448's trace through HS, MS, SHTS, CHTS and the handshake keys, and the TLS 1.2 PRF's published vector. RFC 8448's application traffic secrets are not reproduced: no copy of the RFC was at hand to check their transcript hash. `FuzzTlsParse` runs the four parsers over one stream split at every offset and compares each ClientHello with `crypto/tls`'s reading, from a committed corpus of real flights |
+| `tls_*.go`: the TLS client, 1.3 and 1.2, HelloRetryRequest, CertificateRequest | Built. Checked against Go's `crypto/tls` server, whose key log confirms HS and the master secret regenerate its own secrets; against RFC 8448's trace through HS, MS, SHTS, CHTS, the handshake keys, the server application key and IV and the resumption secret; against NIST ACVP's TLS 1.3 KDF vector, which gives both application traffic secrets from MS; and against the TLS 1.2 PRF's published vector. RFC 8448's application traffic secrets are not derived from its MS: that needs its hash through the server's Finished, and no copy of the RFC was at hand. `FuzzTlsParse` runs the four parsers over one stream split at every offset, from a committed corpus of real flights, and compares each ClientHello with `crypto/tls`'s server's reading and each ServerHello with how `crypto/tls`'s client answers it: no ServerHello the parser takes is one `crypto/tls` cannot decode, reads at an unsupported version, or refuses for a 1.2 suite E1 covers |
 | `relation.go`: Z1-Z9 over plain Go values | Built, both versions and modes. Each check has mutated witnesses that it alone refuses |
-| `edge.go`: E1-E3 | Built, as one state machine per connection that ends at its first refusal. Each check has refusals of its own, over replayed real connections. `TestEdgeInputsEqualServerKeyLog` holds Z1's inputs to the MX's own key log; `FuzzEdgeHandshake` edits real handshakes and holds the gate to its bounds and to passing nothing after a refusal; `FuzzEdgeRecordOrder` interleaves records, parts, late server records and parts proven again, and holds every message record behind coverage. `MailForwarded` tells the engine when MAIL went |
+| `edge.go`: E1-E3 | Built, as one state machine per connection that ends at its first refusal. Each check has refusals of its own, over replayed real connections. `TestEdgeInputsEqualServerKeyLog` holds Z1's inputs to the MX's own key log, after a HelloRetryRequest too; every run of the handshake, 1.3's sealed flight included, passes split across two records at every offset with Z1's inputs unchanged; a SHA-1 signature that verifies is refused in both versions; `FuzzEdgeHandshake` edits real handshakes and holds the gate to its bounds, to passing nothing after a refusal and to no cut before application data; `FuzzEdgeRecordOrder` interleaves records, parts, late server records and parts proven again, and holds every message record behind coverage. `MailForwarded` tells the engine when MAIL went |
 | `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving. `Measure` proves one full later DATA part per suite with keys and holds later sends to the slowest suite's cap |
-| `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z4-Z9 differentially against `relation.go` |
+| `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z4-Z9 differentially against `relation.go`. 11.2's sizes are measured and held by `TestGadgetSizesAreSpecMds` |
 | `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests. `TestMeasureWholeSend` has proved whole sends that the gate accepted, BDAT and DATA on all three legs (11.4) |
 | `setup.go`, `setup_keys.go`, `setup/`: the ceremony, its verification and the KeySet | Built and tested end to end on small circuits: a tampered file, another circuit's transcript, keys the transcript does not fix and a changed cache file are each refused. `TestAKeySetProvesARealEhlo` ran it once at π1's real size under ChaCha20, 538,366 constraints over a domain of 2^20: the ceremony, the prover host's check and a proof the edge's own key accepted took 56 minutes and about 130 CPU-minutes on the shared M4 Pro, so the 22 production shapes, up to 2^23, will take many hours. Never run at production size |
 | `checker/`: the public relation, written apart | Drafted from this document and DESIGN.md alone, importing nothing from this module. It passes every leg's honest BDAT and DATA connection, and names the same failing checks as the gate and `relation.go` over a set of mutations (`checker_agreement_test.go`). Written by an agent, not by an engineer outside the circuits' authorship, which §22.10 asks for |
