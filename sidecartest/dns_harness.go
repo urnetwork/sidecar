@@ -617,14 +617,23 @@ func (self *DnsHarness) buildEdge(ctx context.Context, ns string, host *sidecar.
 	if err != nil {
 		return nil, err
 	}
+	client := &http.Client{Transport: self.transport}
+	bearer := self.classBearers[dnsservice.DnsCallerEdge]
+	// the block answers route-probes only once DNS-M6-03 adds the route, so a report fails until then
+	routeProbes, err := dnsservice.NewDnsRouteProbeSinkHttp(self.apiUrl, bearer, client, self.dnsSettings)
+	if err != nil {
+		edge.Close()
+		return nil, err
+	}
 	prober, err := dnsservice.NewProber(ctx, processHost, self.dnsSettings, &dnsservice.ProberDeps{
-		Dialer: &dnsHarnessProbeDialer{harness: self},
+		Dialer:      &dnsHarnessProbeDialer{harness: self},
+		RouteProbes: routeProbes,
 	}, edge.SetHealthySet)
 	if err != nil {
 		edge.Close()
 		return nil, err
 	}
-	feed, err := dnsservice.NewDnsFeedHttp(self.apiUrl, self.classBearers[dnsservice.DnsCallerEdge], &http.Client{Transport: self.transport}, self.dnsSettings)
+	feed, err := dnsservice.NewDnsFeedHttp(self.apiUrl, bearer, client, self.dnsSettings)
 	if err != nil {
 		prober.Close()
 		edge.Close()

@@ -273,7 +273,8 @@ func TestDnsEdgeSettingsRefusals(t *testing.T) {
 // The probe block defaults to §12.6's prose and refuses what would leave a round unfinished.
 func TestDnsProbeSettings(t *testing.T) {
 	probe := DefaultDnsSettings().Probe
-	if probe.IntervalSeconds != 10 || probe.FailureCount != 3 || !reflect.DeepEqual(probe.Ports, []int{443, 8443, 8883, 5671}) {
+	if probe.IntervalSeconds != 10 || probe.FailureCount != 3 || !reflect.DeepEqual(probe.Ports, []int{443, 8443, 8883, 5671}) ||
+		probe.RoutePort != 443 || probe.RouteHostCount != 16 || probe.ReportTimeoutSeconds != 3 {
 		t.Errorf("defaults %+v", probe)
 	}
 	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "probe: {ports: [443]}\n"))
@@ -293,6 +294,11 @@ func TestDnsProbeSettings(t *testing.T) {
 		"probe: {ports: [0]}",
 		"probe: {ports: [65536]}",
 		"probe: {concurrency: 0}",
+		"probe: {route_port: 0}",
+		"probe: {route_port: 65536}",
+		"probe: {route_hosts: 0}",
+		"probe: {report_timeout_s: 0}",
+		"probe: {report_timeout_s: 10}",
 	} {
 		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
 			t.Errorf("%s: %v", block, err)
