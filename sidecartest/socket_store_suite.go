@@ -47,8 +47,9 @@ type socketSuiteCase struct {
 // Makes a store for one case on clock with settings. Each case makes its own.
 type SocketStoreFactory func(clock sidecar.Clock, settings *socketsservice.SocketStoreSettings) socketsservice.SocketStore
 
-// Runs every case, each on a store newStore makes.
-func RunSocketStoreSuite(t *testing.T, newStore SocketStoreFactory) {
+// Runs every case, each on a store newStore makes. t is a testing.TB so that server's T3 test can run it
+// inside its test environment's callback.
+func RunSocketStoreSuite(t testing.TB, newStore SocketStoreFactory) {
 	t.Helper()
 	for _, suiteCase := range socketSuiteCases() {
 		func() {
@@ -77,6 +78,7 @@ func socketSuiteCases() []socketSuiteCase {
 		{name: "an exclusive registration into a shared group is taken", run: caseSocketExclusiveIntoSharedGroup},
 		{name: "a pick answers no_listener and busy as the scheduler does", run: caseSocketPickOutcomes},
 		{name: "a pick matches PickSocketListeners on what the store holds", run: caseSocketPickMatchesScheduler},
+		{name: "a pick matches PickSocketListeners at load ties and at the clamp", run: caseSocketPickMatchesSchedulerAtItsEdges},
 		{name: "a dialer adds at most c to est, and its share decays with the ticket", run: caseSocketIssuedShareDecays},
 		{name: "a report excludes the listener for its dialer alone", run: caseSocketReportExcludes},
 		{name: "ejection needs reporters from two networks and takes at most half a group", run: caseSocketEjection},
@@ -723,6 +725,99 @@ func caseSocketPickMatchesScheduler(env *socketSuiteEnv) error {
 			}
 		}
 		env.clock.Advance(time.Duration(random.IntN(700)) * time.Millisecond)
+	}
+	return nil
+}
+
+// Compares one store pick with PickSocketListeners on what ListListeners shows just before it.
+func (self *socketSuiteEnv) pickAgainstScheduler(request *socketsservice.SocketStorePickRequest) (*socketsservice.SocketStorePickResult, error) {
+	listeners, err := self.store.ListListeners(self.ctx, request.NetworkId, request.NameKey)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []*socketsservice.SocketCandidate{}
+	for _, listener := range listeners {
+		candidates = append(candidates, listener.Candidate)
+	}
+	want := socketsservice.PickSocketListeners(candidates, &socketsservice.SocketPickRequest{
+		DialerClientId: request.DialerClientId,
+		Protocol:       request.Protocol,
+		MinVersion:     request.MinVersion,
+		Alpns:          request.Alpns,
+		NowMillis:      self.clock.Now().UnixMilli(),
+		FirstDraw:      request.FirstDraw,
+		SecondDraw:     request.SecondDraw,
+	}, self.settings.Scheduler)
+	got, err := self.store.Pick(self.ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if got.Outcome != want.Outcome {
+		return nil, fmt.Errorf("outcome %v, the scheduler's %v", got.Outcome, want.Outcome)
+	}
+	if want.Outcome == socketsservice.SocketPickFound {
+		if got.Primary.Candidate.ListenerClientId != want.Primary.ListenerClientId {
+			return nil, errors.New("another primary")
+		}
+		if (got.Backup == nil) != (want.Backup == nil) || (want.Backup != nil && got.Backup.Candidate.ListenerClientId != want.Backup.ListenerClientId) {
+			return nil, errors.New("another backup")
+		}
+	}
+	return got, nil
+}
+
+func caseSocketPickMatchesSchedulerAtItsEdges(env *socketSuiteEnv) error {
+	// equal loads and weights: the first sampled stays the primary
+	networkId := socketSuiteId()
+	tiedNameKey := socketSuiteBytes(16)
+	for range 4 {
+		registration := socketSuiteRegistration("")
+		registration.NameToken = tiedNameKey
+		registration.Inflight = 10
+		if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
+			return err
+		}
+	}
+	random := mathrand.New(mathrand.NewPCG(3, 4))
+	for round := range 24 {
+		_, err := env.pickAgainstScheduler(&socketsservice.SocketStorePickRequest{
+			NetworkId:       networkId,
+			NameKey:         tiedNameKey,
+			DialerClientId:  socketSuiteId(),
+			DialerNetworkId: networkId,
+			FirstDraw:       random.Uint32(),
+			SecondDraw:      random.Uint32(),
+		})
+		if err != nil {
+			return fmt.Errorf("tied round %d: %w", round, err)
+		}
+		// each round's issue ends before the next, so every round starts tied
+		env.clock.Advance(env.settings.Scheduler.TicketLifetime)
+	}
+
+	// one dialer up to and past c on a listener whose last c slots are all it has left
+	clampedNameKey := socketSuiteBytes(16)
+	registration := socketSuiteRegistration("")
+	registration.NameToken = clampedNameKey
+	clampCount := socketsservice.SocketClampCount(registration.MaxStreams, env.settings.Scheduler)
+	registration.Inflight = registration.MaxStreams - clampCount - 1
+	if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
+		return err
+	}
+	dialerId := socketSuiteId()
+	for round := range clampCount + 5 {
+		pick, err := env.pickAgainstScheduler(&socketsservice.SocketStorePickRequest{
+			NetworkId:       networkId,
+			NameKey:         clampedNameKey,
+			DialerClientId:  dialerId,
+			DialerNetworkId: networkId,
+		})
+		if err != nil {
+			return fmt.Errorf("clamped round %d: %w", round, err)
+		}
+		if pick.Outcome != socketsservice.SocketPickFound {
+			return fmt.Errorf("clamped round %d: one dialer's tickets filled the listener", round)
+		}
 	}
 	return nil
 }

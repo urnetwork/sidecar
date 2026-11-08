@@ -765,10 +765,10 @@ rows:
   api-13: {server: [transfer_balance]}
   api-14: {planned: M5}
   api-15: {planned: M2}
-  sock-1: {planned: M5}
-  sock-3: {planned: M5}
-  sock-4: {planned: M5}
-  sock-5: {planned: M5}
+  sock-1: {server: ["{sg_}", "{sg_}ix"]}
+  sock-3: {server: ["{svc_}"]}
+  sock-4: {server: ["{sn_}names"]}
+  sock-5: {server: ["{sc_}set"]}
   evs-6: {planned: M2}
   evs-8: {planned: M2}
   evs-10: {planned: M2}
