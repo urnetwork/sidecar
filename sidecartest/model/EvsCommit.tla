@@ -1976,6 +1976,8 @@ Fairness ==
     /\ \A i \in Instances : WF_vars(\E P \in 1..pushCount : Arrive(i, P))
     \* §19.6 settles a stalled write once its drives answer (StoreSettle.tla's HeldKeyReleased)
     /\ \A r \in Refs, i \in Instances : WF_vars(StallLands(r, i) \/ StallReverts(r, i))
+    \* a step 7 whose If-Match no longer holds gets its 412
+    /\ \A i \in Instances : WF_vars(PutFails(i))
 
 LiveSpec == Spec /\ Fairness
 
