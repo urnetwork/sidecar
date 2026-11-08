@@ -1,0 +1,36 @@
+{
+  "comment": "RECORD-M2-02's vectors: RECORD.md section 20's commitment, leaves and tool action_id, then §16.6's payload_sha256, action_id, effect_key and request_sha256 over a fixed stored dns_set action and its request. Inputs are stored bytes, never re-encoded. go test -run TestRecordHashVectors -update-record-vectors rewrites this file.",
+  "body_commitment": {
+    "salt": "1111111111111111111111111111111111111111111111111111111111111111",
+    "body": "0a0568656c6c6f",
+    "commitment": "a5905f7dcb65b2715e3909811e0ca83cdee12b11fefd3abeb43ba7684d2d9d90"
+  },
+  "leaves": [
+    {
+      "signed_body": "6830",
+      "leaf": "350510645fd65ddae8f5b9098665088df2d026b30b9325df11dcec0fa27eb7c2"
+    },
+    {
+      "signed_body": "6831",
+      "leaf": "124c9798d584477abb8fb018dfb61be5d436dc834970e19f60c72a12a21a4c8a"
+    },
+    {
+      "signed_body": "6832",
+      "leaf": "1b803349c53bd6865827b68e585171787b948fbad01e52c0336f901f7be944f5"
+    }
+  ],
+  "tool_action_id": {
+    "run_id": "77777777777777777777777777777777",
+    "tool_use_id": "toolu_01",
+    "action_id": "c0ba9574399cb5e0db7500d93a58122e5d9e3d6a87a2650ee38442df46fcbf1a"
+  },
+  "approval": {
+    "approval_id": "22222222222222222222222222222222",
+    "canonical_action": "080c408090dab3a53360019201037777779a010141a2010a3139322e302e322e3130a801ac02",
+    "payload_sha256": "588b54d6752e8c0bc4ecf81cdf57282c1290d594050207fc30f6a43edeb19221",
+    "action_id": "8a7366cad800140cea992f581e53cb8b515e03a8144b1216fbf3f83bf77af387",
+    "effect_key": "e3d0a3cafcb40dfaeef5b3d002ff7d9120f7f3da07ba18f9283066f566b7354e",
+    "request": "0a102222222222222222222222222222222212208a7366cad800140cea992f581e53cb8b515e03a8144b1216fbf3f83bf77af3871a10777777777777777777777777777777772210888888888888888888888888888888882a26080c408090dab3a53360019201037777779a010141a2010a3139322e302e322e3130a801ac023220588b54d6752e8c0bc4ecf81cdf57282c1290d594050207fc30f6a43edeb192213a19706f696e742077777720617420746865206e657720686f737440014a10555555555555555555555555555555555a1066666666666666666666666666666666608090dab3a5336801",
+    "request_sha256": "4084c72c0ad232f8f185463a5809b7b9d835bf060ffb3cce3ea40befe81105b0"
+  }
+}
