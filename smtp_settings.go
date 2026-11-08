@@ -47,6 +47,9 @@ type SmtpSenderSettings struct {
 	// keeps the selector in DNS (§14.6), so a send that pinned it before a rotation still signs and
 	// still verifies. A pinned selector outlives this until its send releases it.
 	DkimRetiredKeepTimeout time.Duration
+	// How long a DKIM signature stays valid: x= is t= plus 7 days (§14.6), and a report about the
+	// message joins on the fixed signature only while it holds.
+	DkimExpireTimeout time.Duration
 }
 
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
@@ -62,6 +65,7 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		OutboxTakeoverTimeout:      10 * time.Minute,
 		DkimRotateTimeout:          90 * 24 * time.Hour,
 		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
+		DkimExpireTimeout:          7 * 24 * time.Hour,
 	}
 }
 
