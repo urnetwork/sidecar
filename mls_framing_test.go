@@ -1381,11 +1381,14 @@ func TestMlsProtectionCopiesItsSecrets(t *testing.T) {
 	}
 }
 
+// A GroupContext no signature could cover builds no protection. external_senders is refused in every
+// list written (§10.4), which fails the encoding as cheaply on wasm as anywhere, where a vector past
+// the codec's maximum would take a gigabyte to build.
 func TestMlsProtectionRefusesAnUnencodableContext(t *testing.T) {
 	tree := mlsShapedTree(mlsShapeLeaf("a"))
-	groupContext := &mlsGroupContext{extensions: []mlsExtension{{extensionData: make([]byte, mlsVectorLengthMaximum+1)}}}
-	if _, err := newMlsMessageProtection(mlsSuite, defaultMlsMessageSettings(), groupContext, tree, nil, nil); err == nil {
-		t.Fatal("no error")
+	groupContext := &mlsGroupContext{extensions: []mlsExtension{{extensionType: mlsExtensionTypeExternalSenders}}}
+	if _, err := newMlsMessageProtection(mlsSuite, defaultMlsMessageSettings(), groupContext, tree, nil, nil); !errors.Is(err, errMlsRefused) {
+		t.Fatal(err)
 	}
 }
 
