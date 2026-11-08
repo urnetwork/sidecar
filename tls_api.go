@@ -24,7 +24,7 @@ const (
 	TlsCertStateOrdering TlsCertState = "ordering"
 	// Its challenge is written, and the order waits on GET /dns/ready and §12.6's canary.
 	TlsCertStateWaitingDns TlsCertState = "waiting_dns"
-	// Its chain is here.
+	// The CA issued it.
 	TlsCertStateIssued TlsCertState = "issued"
 	// No CA gave it a certificate, and nothing will retry it.
 	TlsCertStateFailed TlsCertState = "failed"
