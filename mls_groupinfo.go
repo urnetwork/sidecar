@@ -147,6 +147,9 @@ func (self *mlsGroupInfo) checkTree(suite *mlsCipherSuite, settings *mlsTreeSett
 	if context.cipherSuite != suite.value {
 		return nil, fmt.Errorf("%w: group info of suite %#x", errMlsInvalid, context.cipherSuite)
 	}
+	if err := context.checkHashLengths(suite); err != nil {
+		return nil, err
+	}
 	if _, err := mlsCheckSubsetGroupExtensions(context.extensions); err != nil {
 		return nil, err
 	}
