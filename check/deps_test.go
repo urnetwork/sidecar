@@ -119,7 +119,7 @@ func parseDependencies(data string) ([]*dependencyRow, []string) {
 		}
 		seen[row.module] = true
 		for _, class := range row.legs {
-			if !slices.Contains([]string{classClient, classEngine, classCli, classTest}, class) {
+			if !slices.Contains([]string{classClient, classEngine, classCli, classSidecarctl, classTest}, class) {
 				findings = append(findings, findingf("dependencies.yml:%d: %s is not a leg", row.line, class))
 			}
 		}
@@ -255,14 +255,14 @@ func (self *repository) firstPartyRequireFindings(t testing.TB) []string {
 	return findings
 }
 
-// §4.7's module table: these four and no other, each covered by a leg. A module added here is either
-// given a leg or fails, so nothing builds out of the rows' sight.
+// §4.7's module table and C-23's sidecarctl: these five and no other, each covered by a leg. A module
+// added here is either given a leg or fails, so nothing builds out of the rows' sight.
 func (self *repository) moduleSetFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
 	seen := map[string]bool{}
 	for _, module := range self.modules(t) {
-		if !slices.Contains([]string{".", "cli", "smtpproof", "mlsinterop"}, module.relativeName) {
+		if !slices.Contains([]string{".", "cli", "smtpproof", "mlsinterop", "sidecarctl"}, module.relativeName) {
 			findings = append(findings, findingf("%s is the module %s, which is not in §4.7's table", self.displayPath(module.directory), module.file.Module.Path))
 		}
 		if seen[module.relativeName] {

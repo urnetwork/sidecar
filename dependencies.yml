@@ -1,5 +1,6 @@
 # Every module a leg of this repository links, with its SPDX id, why it is here and the legs that
-# may link it: client, engine, cli, test (§4.7). make check fails a leg linking a module not listed
+# may link it: client, engine, cli, test (§4.7), and sidecarctl, the operations binary (C-23), which
+# links nothing outside the standard library yet. make check fails a leg linking a module not listed
 # here, or linking it on a leg its row does not name, and reads each id against the module's own
 # license files: those at its top, and those beside or above a package a leg links. This
 # repository's own modules are not listed.
