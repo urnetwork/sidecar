@@ -570,6 +570,34 @@ func TestAclGlobsFollowSocketNamespaces(t *testing.T) {
 	}
 }
 
+// A socket name handed to covers unfolded is still §9.4's folded name, so TLS/443/blog is tls/443/blog.
+// Read as an application name, a glob would reach it, so an unfolded or foreign byte matches nothing.
+func TestAclResourceCoversNoUnfoldedSocket(t *testing.T) {
+	patterns := []AclResource{
+		{Kind: AclResourceAll},
+		{Kind: AclResourceSocket, Name: "*"},
+		{Kind: AclResourceSocket, Name: "*/*"},
+		{Kind: AclResourceSocket, Name: "t*/*"},
+		{Kind: AclResourceSocket, Name: "tls/*"},
+		{Kind: AclResourceSocket, Name: "db"},
+	}
+	for _, name := range []string{"TLS/443/blog", "Tls/443/blog", "SMTP/25/mx", "Ur/x", "SYS/x", "Db", "db\x00", "db primary"} {
+		concrete := AclResource{Kind: AclResourceSocket, Name: name}
+		for _, pattern := range patterns {
+			if pattern.covers(concrete) {
+				t.Errorf("%s covered %q", pattern, name)
+			}
+		}
+	}
+	// the folded spellings are reached as the namespace test says
+	if !(AclResource{Kind: AclResourceSocket, Name: "tls/*"}).covers(AclResource{Kind: AclResourceSocket, Name: "tls/443/blog"}) {
+		t.Error("sock:tls/* missed tls/443/blog")
+	}
+	if !(AclResource{Kind: AclResourceAll}).covers(AclResource{Kind: AclResourceSocket, Name: "db"}) {
+		t.Error("* missed db")
+	}
+}
+
 func TestAclGlobMatches(t *testing.T) {
 	cases := []struct {
 		pattern string

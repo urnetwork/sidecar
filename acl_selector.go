@@ -505,6 +505,11 @@ func (self AclResource) covers(concrete AclResource) bool {
 	if strings.Contains(concrete.Name, "*") || (concrete.Name == "" && concrete.RepoId == (Id{})) {
 		return false
 	}
+	// A concrete socket is a canonical name, folded as §9.4 folds it. An unfolded TLS/443/x is tls/443/x,
+	// and its first segment would read as an application name that a glob reaches, so it matches nothing.
+	if concrete.Kind == AclResourceSocket && strings.Trim(concrete.Name, aclSocketAlphabet) != "" {
+		return false
+	}
 	if self.Kind == AclResourceAll {
 		switch concrete.Kind {
 		case AclResourceSocket:
