@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/go-git/go-git/v5 v5.19.3
+	github.com/thomas-vilte/mls-go v1.6.0
 	github.com/tmc/mls v0.0.0-20260930074835-1c42a372504a
 	github.com/urnetwork/sidecar v0.0.0
 	golang.org/x/crypto v0.58.0

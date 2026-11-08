@@ -251,9 +251,8 @@ modules:
     leg: [client, engine, cli, test]
   - module: github.com/thomas-vilte/mls-go
     spdx: MIT
-    reason: v1.6.0 is mlsinterop's differential peer under 0x0001 (§10.4)
+    reason: v1.6.0 is mlsinterop's differential peer (§10.4, §22.6), its framing decoder beside tmc/mls's in the MLS messages fuzz target
     leg: [test]
-    planned: true
   - module: github.com/tmc/mls
     spdx: BSD-3-Clause AND MIT
     reason: mlsinterop's 0x0010 interop peer (§10.4, §22.10), its 0x004F patched to 0x0010 by mlsinterop/overlay for the stacks row, unpatched for the kem row
