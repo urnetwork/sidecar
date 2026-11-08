@@ -439,9 +439,9 @@ Levers, none taken: a hiding commitment to the keys, proven once, so that later 
 
 ### 11.4 Whole sends, measured
 
-`TestMeasureWholeSend` sends `testSpeedGateJob`'s messages through the real prover, gate and a `crypto/tls` MX under real Groth16 and a single-party test setup. The header block is 3,979 octets, with 10 recipients. The machine was the shared M4 Pro of 11.3, at load averages of 130 to 200 on 14 cores, so wall times are inflated and CPU time is the figure to read. Peak memory comes from a separate process that loads one key and proves, as a prover host would.
+`TestMeasureWholeSend` sends `testSpeedGateJob`'s messages through the real prover, gate and a `crypto/tls` MX under real Groth16 and a single-party test setup. The header block is 3,979 octets, with 10 recipients. The machine is the shared M4 Pro of 11.3, with 14 cores and 64 GiB. Wall time depends on what else it runs, so CPU time is the steadier figure. Peak memory comes from a separate process that loads one key and proves, as a prover host would.
 
-TLS 1.3, AES-128-GCM, BDAT:
+At load averages of 130 to 200, TLS 1.3 with AES-128-GCM, BDAT:
 
 | Part | Constraints | Public inputs | Proving key | Prove, CPU | Prove, wall | Peak memory |
 |---|---|---|---|---|---|---|
@@ -452,16 +452,29 @@ TLS 1.3, AES-128-GCM, BDAT:
 
 The same header block in DATA mode, with a 6,100-octet body: π3 holds the first 2 KiB of body at 6,324,518 constraints and an 866 MiB key, 53.6 s CPU. Each later part is 2,103,101 constraints with a 323 MiB key, about 20.4 s CPU and 1,778 MiB peak. The whole send, π1 to π6, took 131.4 s CPU. Verification took 2 to 443 ms a part. Setup took 1.5 to 46 minutes a shape at that load.
 
-Partial runs, each cut short (ChaCha20's by the shape fault below, TLS 1.2's when its process ended): ChaCha20 π1 538,366 constraints in 5.4 s CPU and π2 1,169,712 in 10.5 s; TLS 1.2 π1 719,906 in 5.6 s and π2 1,579,133 in 10.8 s.
+At load averages of 25 to 37, BDAT on the other two legs, with ChaCha20's shapes as they now are (below):
 
-Every production shape compiled, and none carries a commitment (`TestMeasureShapes`). Since those runs, ChaCha20's envelope and message shapes hold 12 server blocks rather than 6, because a record starts a fresh keystream block and 6 could not hold D-SMTP-16's 11 one-line replies. That moved them to 1,326,925, 3,175,995 and, with a body, 3,941,977 constraints. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes.
+| Leg | Part | Constraints | Proving key | Prove, CPU | Prove, wall | Peak memory |
+|---|---|---|---|---|---|---|
+| TLS 1.3, ChaCha20 | π1 | 538,366 | 75 MiB | 5.0 s | 2.5 s | 844 MiB |
+| | π2 | 1,326,925 | 186 MiB | 11.7 s | 3.5 s | 1,707 MiB |
+| | π3 | 3,175,995 | 450 MiB | 25.7 s | 9.4 s | 3,271 MiB |
+| | Whole send | 5,041,286 | 711 MiB | 42.4 s | 15.4 s | |
+| TLS 1.2, AES-128-GCM | π1 | 719,906 | 91 MiB | 5.7 s | 1.2 s | 956 MiB |
+| | π2 | 1,579,133 | 207 MiB | 11.7 s | 4.2 s | 2,122 MiB |
+| | π3 | 4,706,313 | 710 MiB | 44.5 s | 8.5 s | 6,260 MiB |
+| | Whole send | 7,005,352 | 1,008 MiB | 61.9 s | 13.9 s | |
+
+Setup there took 24 s to 4 min 24 s a shape. Neither leg has been measured in DATA mode.
+
+Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes.
 
 What this says, neither reference machine having been measured:
 
-- π1 to π3 cost 64 s of CPU here. The M1 has four performance cores, each slower than an M4 Pro's, so its 30 s bar needs nearly all of them busy throughout. Groth16's multi-scalar multiplications spread well across cores, so the bar is plausible, close and unproven.
+- A whole BDAT send costs 42 to 64 s of CPU, and on this machine's 14 lightly loaded cores it took 14 to 15 s. The M1's eight cores likely do a third to a half of that parallel work, so its 30 s bar is close and may be missed.
 - The m5.large's 2 vCPUs are the two hyperthreads of one server core, which likely does under half the work of an M4 Pro performance core. On that guess π1 to π3 take about two minutes there, so the 60 s bar is likely missed by about 2×, near 11.3's estimate.
-- π3 peaks below 2 GB, so the 8 GB M1 does not force π3 to split.
-- DATA at 100 KiB is π1 to π3 and about 48 later parts, about 17 minutes of CPU here. Against the bars of 10 minutes on the M1 and 20 on the m5.large, that needs several cores on both.
+- Peak memory grows with the cores the prover gets: AES's π3 peaked at 1.7 GB under heavy load, TLS 1.2's at 6.3 GB on lightly loaded cores. Whether π3 fits the 8 GB M1 beside everything else it runs is unproven, and a prover host may need to cap its parallelism.
+- DATA at 100 KiB is π1 to π3 and about 48 later parts, about 17 minutes of CPU here. The M1 meets its 10 minutes only by keeping most of its cores busy, and the m5.large's one core likely misses its 20, as it misses 60 s for BDAT.
 
 The owner's answer to `smtpproof-start-z1-reproof-cost` keeps D-SMTP-22 as written and has SMTP-M9-32's bench measure both machines. If the m5.large misses, its row of D-SMTP-16 is relaxed to the measured number.
 
@@ -476,7 +489,7 @@ Kept honest as the module grows. Anything not listed as built fails closed.
 | `edge.go`: E1-E3 | Built, as one state machine per connection. Each check has refusals of its own, over replayed real connections |
 | `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving |
 | `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z4-Z9 differentially against `relation.go` |
-| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests, and a whole send under real proofs in `TestMeasureWholeSend` |
+| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests. `TestMeasureWholeSend` has proved whole sends that the gate accepted: BDAT on all three legs and DATA on TLS 1.3 with AES (11.4) |
 | `setup.go`: the ceremony and its verification | Built and tested at small size. Never run at production size |
 | `smtp_proof.go` in the root: the injection seam | Built. `cli/` and server do not inject yet: `SmtpSender` and `smtpedgeservice` do not exist |
 
