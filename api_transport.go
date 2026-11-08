@@ -41,3 +41,11 @@ func (self *absoluteUrlTransport) RoundTrip(request *http.Request) (*http.Respon
 	}
 	return self.transport.RoundTrip(request)
 }
+
+// Drops the idle connections of the transport below, where it keeps any, as http.Client's own
+// CloseIdleConnections asks of a transport.
+func (self *absoluteUrlTransport) CloseIdleConnections() {
+	if closer, ok := self.transport.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}

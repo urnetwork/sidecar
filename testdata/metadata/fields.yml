@@ -235,7 +235,6 @@ fields:
   SmtpPreamble.retry_of_send_id: smtp-1
   SmtpPreamble.flags: smtp-1
   SmtpPreambleResult.code: smtp-2
-  SmtpPreambleResult.retry_after_ms: smtp-2
   SmtpPreambleResult.send_id: smtp-2
   SmtpPreambleResult.x_ur_ref: smtp-2
   SmtpPreambleResult.feedback_id: smtp-2
@@ -582,10 +581,17 @@ fields:
   CanonicalAction.cidrs: api-7
   CanonicalAction.grant_dst: api-7
   CanonicalAction.grant_allow: api-7
+  # protos-services-canonical-action's answer admits field 14 on a version-3 access_request bound for a
+  # GrantActivate or a gate, as a field that path's gate sees, and gives it no new row: api-7's repos,
+  # RepoGrants and EvsShares already show repo ids, so a GrantActivate that carries one shows nothing new.
+  CanonicalAction.repo_id: api-7
   CanonicalAction.dns_name: dns-1
   CanonicalAction.dns_type: dns-1
   CanonicalAction.dns_value: dns-1
   CanonicalAction.dns_ttl: dns-1
+  CanonicalAction.socket_name: api-7
+  CanonicalAction.target_sidecar_id: api-7
+  CanonicalAction.target_port: api-7
   CanonicalAction.rule_id: api-7
   CanonicalAction.subject: api-7
   CanonicalAction.app_mode: api-7
@@ -608,20 +614,13 @@ unset:
   CanonicalAction.recipients: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.body_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.preview: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.repo_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.path: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.content_sha256: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.base_version: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.alias: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.socket_name: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.local_port: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.weight: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.target_sidecar_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.target_port: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.restore_run_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.restore_paths: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.restore_preview_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
-  CanonicalAction.alpn: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.alias_group: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.versioning: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
 
@@ -629,6 +628,7 @@ open:
   EvsUploadReceipt.key_id: {row: evs-4, question: protos-services-metadata-rows.md, until: M2}
   SmtpPreamble.version: {row: smtp-1, question: protos-services-metadata-rows.md, until: M2}
   MailIngress.version: {row: mx-1, question: protos-services-metadata-rows.md, until: M2}
+  SmtpPreambleResult.retry_after_ms: {row: smtp-2, question: protos-services-metadata-rows.md, until: M2}
   Envelope.version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.type: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.request_id: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
@@ -670,6 +670,11 @@ open:
   CanonicalAction.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   CanonicalAction.scope: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   ApprovalDecision.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
+  # Answered since: these three leave CanonicalAction for sealed fields once §16.8's fence does, and
+  # record.proto follows that fence, so they stay open to M3's exit rather than gain the row asked for.
+  CanonicalAction.local_port: {row: api-7, question: protos-services-canonical-action.md, until: M3}
+  CanonicalAction.weight: {row: api-7, question: protos-services-canonical-action.md, until: M3}
+  CanonicalAction.alpn: {row: api-7, question: protos-services-canonical-action.md, until: M3}
 
 enum_values:
   EvsPushFlag.EVS_PUSH_FLAG_NONE: evs-12

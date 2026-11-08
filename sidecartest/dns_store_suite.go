@@ -638,10 +638,21 @@ func caseDnsRestoringForgetsIncident(ctx context.Context, store dnsservice.DnsSt
 	if _, err := store.CommitRestore(ctx, root, sidecar.NewId(), 0); err != nil {
 		return err
 	}
-	if err := store.SetRestoring(ctx, root, false); err != nil {
+	// a rerun of the step keeps what the transaction recorded
+	if err := store.SetRestoring(ctx, root, true); err != nil {
 		return err
 	}
 	state, err := store.RootState(ctx, root)
+	if err != nil {
+		return err
+	}
+	if state.RestoreIncidentId == nil {
+		return errors.New("setting restoring again forgot the incident")
+	}
+	if err := store.SetRestoring(ctx, root, false); err != nil {
+		return err
+	}
+	state, err = store.RootState(ctx, root)
 	if err != nil {
 		return err
 	}

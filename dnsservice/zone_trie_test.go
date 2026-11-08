@@ -79,6 +79,17 @@ func TestZoneNamesRemoveWhatIsNotThere(t *testing.T) {
 	}
 }
 
+// A name that is not there copies nothing, however far down its path runs before it ends.
+func TestZoneBranchRemovalOfAMissingNameKeepsTheBranch(t *testing.T) {
+	first := &zoneName{hash: 1, name: "a", node: &zoneNode{}}
+	// shares a's first level, so the two sit in a branch below it
+	second := &zoneName{hash: 1 + 32, name: "b", node: &zoneNode{}}
+	branch := zoneTrieWith(1, first, second)
+	if replacement := branch.without(2, 1+64, "c", 0); replacement != any(branch) {
+		t.Errorf("a missing name left %v", replacement)
+	}
+}
+
 // A trie by hand, on chosen hashes.
 func zoneTrieWith(generation uint64, entries ...*zoneName) *zoneBranch {
 	branch := &zoneBranch{}

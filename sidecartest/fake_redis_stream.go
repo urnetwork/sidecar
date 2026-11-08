@@ -5,6 +5,7 @@ package sidecartest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -93,7 +94,21 @@ func (self *FakeRedis) streamEntryWithLock(key string, create bool) (*fakeRedisE
 	return entry, nil
 }
 
+// Refuses what host_redis.go calls a caller's bug: COUNT 0 means something else on each stream command.
+func checkRedisCount(count int64) error {
+	if count <= 0 {
+		return fmt.Errorf("a count of %d", count)
+	}
+	return nil
+}
+
 func (self *FakeRedis) streamAddWithLock(key string, maxLength int64, fieldValues map[string][]byte) (string, error) {
+	if maxLength < 0 {
+		return "", fmt.Errorf("a stream length of %d", maxLength)
+	}
+	if len(fieldValues) == 0 {
+		return "", errors.New("ERR wrong number of arguments for 'xadd' command")
+	}
 	entry, err := self.streamEntryWithLock(key, true)
 	if err != nil {
 		return "", err
@@ -136,6 +151,9 @@ func (self *FakeRedis) StreamAdd(ctx context.Context, key string, maxLength int6
 }
 
 func (self *FakeRedis) StreamRange(ctx context.Context, key string, afterEntryId string, count int64) ([]*sidecar.RedisStreamEntry, error) {
+	if err := checkRedisCount(count); err != nil {
+		return nil, err
+	}
 	var after fakeRedisStreamId
 	if afterEntryId != "" {
 		var err error
@@ -201,7 +219,7 @@ func (self *FakeRedis) groupReadWithLock(key string, group string, consumer stri
 	}
 	entries := []*sidecar.RedisStreamEntry{}
 	for _, streamEntry := range entry.stream.entries {
-		if 0 < count && int64(len(entries)) == count {
+		if int64(len(entries)) == count {
 			break
 		}
 		if !streamEntry.id.after(groupState.lastDelivered) {
@@ -219,6 +237,12 @@ func (self *FakeRedis) groupReadWithLock(key string, group string, consumer stri
 }
 
 func (self *FakeRedis) StreamGroupRead(ctx context.Context, key string, group string, consumer string, count int64, block time.Duration) ([]*sidecar.RedisStreamEntry, error) {
+	if err := checkRedisCount(count); err != nil {
+		return nil, err
+	}
+	if err := checkRedisTtl(block); err != nil {
+		return nil, err
+	}
 	var timedOut <-chan time.Time
 	if 0 < block {
 		timedOut = self.clock.After(block)
@@ -269,6 +293,10 @@ func (self *FakeRedis) StreamGroupAck(ctx context.Context, key string, group str
 	}
 	return self.call(ctx, "xack", []string{key}, func() error {
 		_, groupState, err := self.groupWithLock(key, group)
+		if errors.Is(err, ErrRedisNoGroup) {
+			// XACK counts what it acknowledged, and a group that is gone has nothing to count
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -280,6 +308,12 @@ func (self *FakeRedis) StreamGroupAck(ctx context.Context, key string, group str
 }
 
 func (self *FakeRedis) StreamGroupClaim(ctx context.Context, key string, group string, consumer string, minIdle time.Duration, cursor string, count int64) ([]*sidecar.RedisStreamEntry, string, error) {
+	if err := checkRedisCount(count); err != nil {
+		return nil, "", err
+	}
+	if err := checkRedisTtl(minIdle); err != nil {
+		return nil, "", err
+	}
 	start := fakeRedisStreamId{}
 	if cursor != "" {
 		var err error
@@ -308,7 +342,7 @@ func (self *FakeRedis) StreamGroupClaim(ctx context.Context, key string, group s
 			if start.after(pending.id) {
 				continue
 			}
-			if 0 < count && int64(len(entries)) == count {
+			if int64(len(entries)) == count {
 				nextCursor = pending.id.String()
 				break
 			}

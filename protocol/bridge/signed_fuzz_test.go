@@ -20,6 +20,7 @@ import (
 // is an OwnerConfirm's too. protocol's OwnerConfirm is out of this package's reach (§4.4), so its two fields are written
 // by hand here and held equal, and protocol/statement_test.go has the real message.
 func FuzzSignedTypeConfusion(f *testing.F) {
+	origins := testFixtureOrigins(f)
 	// from the descriptor, 0 included, so a value an owner adds joins by being declared
 	values := SignedType(0).Descriptor().Values()
 	signedTypes := make([]SignedType, values.Len())
@@ -112,7 +113,7 @@ func FuzzSignedTypeConfusion(f *testing.F) {
 		statements := []*testActStatement{{purpose: purpose, signedType: signedType, body: body}}
 		for _, profile := range profiles {
 			countersigned := testCountersignedAct(t, statements, profile.check)[0]
-			err := VerifyPresenceCountersign(countersigned, purpose, profile.alg, profile.publicKey)
+			err := verifyPresenceCountersign(countersigned, purpose, profile.alg, profile.publicKey, origins)
 			if registered(signedType) && err != nil {
 				t.Fatalf("%s %d countersigned: %v", profile.name, signedAs, err)
 			}
@@ -125,7 +126,7 @@ func FuzzSignedTypeConfusion(f *testing.F) {
 			}
 			rewritten := proto.CloneOf(countersigned)
 			rewritten.Type = uint32(presentedType)
-			err = VerifyPresenceCountersign(rewritten, purpose, profile.alg, profile.publicKey)
+			err = verifyPresenceCountersign(rewritten, purpose, profile.alg, profile.publicKey, origins)
 			if registered(presentedType) && !profile.refusesOtherBytes(err) {
 				t.Fatalf("%s %d rewritten to %d: %v", profile.name, signedAs, presentedAs, err)
 			}
@@ -140,6 +141,7 @@ func FuzzSignedTypeConfusion(f *testing.F) {
 // of the fixed act at its own index, by its own signer, whatever a mutation did to the rest of the Signed. The seeds
 // start past every branch: each act's statements, and a countersign refusal stopping at each kind of check.
 func FuzzVerifyPresenceCountersign(f *testing.F) {
+	origins := testFixtureOrigins(f)
 	statements := testActStatements(5)
 	profiles := testPresenceProfiles(f)
 	for _, profile := range profiles {
@@ -165,9 +167,9 @@ func FuzzVerifyPresenceCountersign(f *testing.F) {
 		}
 		keyAlg := SignedKeyAlg(alg)
 		// A key record is input too, so this must not panic, whatever it answers: an input may hold its own key.
-		_ = VerifyPresenceCountersign(signed, purpose, keyAlg, signed.GetWebauthn().GetKeyId())
+		_ = verifyPresenceCountersign(signed, purpose, keyAlg, signed.GetWebauthn().GetKeyId(), origins)
 
-		if err := VerifyPresenceCountersign(signed, purpose, keyAlg, publicKey); err != nil {
+		if err := verifyPresenceCountersign(signed, purpose, keyAlg, publicKey, origins); err != nil {
 			return
 		}
 		evidence := signed.GetWebauthn()
