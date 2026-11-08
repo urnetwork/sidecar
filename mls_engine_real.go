@@ -352,18 +352,32 @@ func (self *mlsEngine) JoinExternal(groupInfo []byte, args *MlsCommitArgs) (MlsS
 func (self *mlsEngine) LoadGroup(groupId Id) (MlsGroup, error) {
 	self.transitionLock.Lock()
 	defer self.transitionLock.Unlock()
-	head, err := self.headWithLock(groupId)
-	if err != nil {
-		return nil, err
-	}
-	if !head.held {
+	head, cached := self.groupIdHeads[groupId]
+	if cached && !head.held {
 		return nil, ErrMlsGroupUnknown
 	}
+	// one read, which also fills the head the first time
 	state, err := self.store.state(groupId, self.suite, self.groupSettings, self.credentialValidator)
+	if errors.Is(err, ErrSidecarStoreAbsent) {
+		if _, err := self.headWithLock(groupId); err != nil {
+			return nil, err
+		}
+		return nil, ErrMlsGroupUnknown
+	}
 	if err != nil {
 		return nil, err
 	}
-	if state.epoch() != head.epoch {
+	if !cached {
+		reached, reachedAny, err := self.store.reached(groupId)
+		if err != nil {
+			state.erase()
+			return nil, err
+		}
+		head = &mlsGroupHead{held: true, epoch: state.epoch(), epochAuthenticator: bytes.Clone(state.epochAuthenticator), reached: reached, reachedAny: reachedAny}
+		self.groupIdHeads[groupId] = head
+	}
+	if state.epoch() != head.epoch || !bytes.Equal(state.epochAuthenticator, head.epochAuthenticator) {
+		state.erase()
 		return nil, fmt.Errorf("%w: a state of epoch %d where %d is held", errMlsStateFormat, state.epoch(), head.epoch)
 	}
 	if state.handshakeGeneration, err = self.store.sent(groupId, state.epoch()); err != nil {
@@ -528,12 +542,10 @@ func (self *mlsEngine) putDraft(base *mlsGroupState, staged *mlsStagedState) err
 func (self *mlsEngine) matchingDraft(base *mlsGroupState, message []byte) *mlsStagedState {
 	self.transitionLock.Lock()
 	defer self.transitionLock.Unlock()
-	draft, err := self.store.draft(Id(base.groupId()), self.suite, self.groupSettings, self.credentialValidator)
+	draft, err := self.store.draft(Id(base.groupId()), self.suite, self.groupSettings, self.credentialValidator, func(staged *mlsStagedState) bool {
+		return staged.baseEpoch == base.epoch() && bytes.Equal(staged.baseEpochAuthenticator, base.epochAuthenticator) && bytes.Equal(staged.message, message)
+	})
 	if err != nil {
-		return nil
-	}
-	if draft.baseEpoch != base.epoch() || !bytes.Equal(draft.baseEpochAuthenticator, base.epochAuthenticator) || !bytes.Equal(draft.message, message) {
-		draft.next.erase()
 		return nil
 	}
 	return draft
@@ -597,12 +609,12 @@ func (self *mlsEngine) discardDraft(base *mlsGroupState, staged *mlsStagedState)
 	self.transitionLock.Lock()
 	defer self.transitionLock.Unlock()
 	groupId := Id(base.groupId())
-	draft, err := self.store.draft(groupId, self.suite, self.groupSettings, self.credentialValidator)
-	if err != nil {
-		return
-	}
-	defer draft.next.erase()
-	if bytes.Equal(draft.message, staged.message) {
+	matched := false
+	self.store.draft(groupId, self.suite, self.groupSettings, self.credentialValidator, func(draft *mlsStagedState) bool {
+		matched = bytes.Equal(draft.message, staged.message)
+		return false
+	})
+	if matched {
 		self.store.removeDraft(groupId)
 	}
 }

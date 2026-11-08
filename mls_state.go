@@ -601,47 +601,59 @@ func (self *mlsStateStore) putDraft(groupId Id, staged *mlsStagedState) error {
 	})
 }
 
-// This member's draft on a group: ErrSidecarStoreAbsent when none is there.
-func (self *mlsStateStore) draft(groupId Id, suite *mlsCipherSuite, settings *mlsGroupSettings, credentialValidator mlsCredentialValidator) (*mlsStagedState, error) {
-	staged := &mlsStagedState{}
-	err := self.get(mlsStateGroupName(groupId, "draft"), func(reader io.Reader) error {
-		header, err := mlsReadStateSection(reader)
-		if err != nil {
-			return err
-		}
-		decoder, err := mlsStateDecoder(header)
-		if err != nil {
-			return err
-		}
-		staged.baseEpoch = decoder.readUint64()
-		staged.baseEpochAuthenticator = decoder.readVector()
-		staged.message = decoder.readVector()
-		staged.welcome = decoder.readVector()
-		staged.authenticatedData = decoder.readVector()
-		staged.committer = mlsLeafIndex(decoder.readUint32())
-		staged.committerLeaf = &mlsLeafNode{}
-		staged.committerLeaf.decode(decoder)
-		decoder.readVectorOf(func(element *mlsDecoder) {
-			staged.added = append(staged.added, mlsLeafIndex(element.readUint32()))
-		})
-		decoder.readVectorOf(func(element *mlsDecoder) {
-			removed := mlsRemovedLeaf{index: mlsLeafIndex(element.readUint32()), leaf: &mlsLeafNode{}}
-			removed.leaf.decode(element)
-			staged.removed = append(staged.removed, removed)
-		})
-		if err := mlsStateFinish(decoder); err != nil {
-			return err
-		}
-		if len(staged.welcome) == 0 {
-			staged.welcome = nil
-		}
-		staged.next, err = mlsReadGroupState(reader, suite, settings, credentialValidator)
-		return err
-	})
+// This member's draft on a group whose header want takes: ErrSidecarStoreAbsent when none is there, and nil with no
+// error when want refuses it, read no further than its header section, so matching a commit against a draft never
+// loads the draft's next epoch. A draft want takes is read to its end, as every file here is, before anything of
+// it is used.
+func (self *mlsStateStore) draft(groupId Id, suite *mlsCipherSuite, settings *mlsGroupSettings, credentialValidator mlsCredentialValidator, want func(staged *mlsStagedState) bool) (*mlsStagedState, error) {
+	reader, err := self.store.Open(mlsStateGroupName(groupId, "draft"))
 	if err != nil {
 		return nil, err
 	}
+	defer reader.Close()
+	header, err := mlsReadStateSection(reader)
+	if err != nil {
+		return nil, err
+	}
+	decoder, err := mlsStateDecoder(header)
+	if err != nil {
+		return nil, err
+	}
+	staged := &mlsStagedState{}
+	staged.baseEpoch = decoder.readUint64()
+	staged.baseEpochAuthenticator = decoder.readVector()
+	staged.message = decoder.readVector()
+	staged.welcome = decoder.readVector()
+	staged.authenticatedData = decoder.readVector()
+	staged.committer = mlsLeafIndex(decoder.readUint32())
+	staged.committerLeaf = &mlsLeafNode{}
+	staged.committerLeaf.decode(decoder)
+	decoder.readVectorOf(func(element *mlsDecoder) {
+		staged.added = append(staged.added, mlsLeafIndex(element.readUint32()))
+	})
+	decoder.readVectorOf(func(element *mlsDecoder) {
+		removed := mlsRemovedLeaf{index: mlsLeafIndex(element.readUint32()), leaf: &mlsLeafNode{}}
+		removed.leaf.decode(element)
+		staged.removed = append(staged.removed, removed)
+	})
+	if err := mlsStateFinish(decoder); err != nil {
+		return nil, err
+	}
+	if len(staged.welcome) == 0 {
+		staged.welcome = nil
+	}
+	if !want(staged) {
+		return nil, nil
+	}
+	if staged.next, err = mlsReadGroupState(reader, suite, settings, credentialValidator); err != nil {
+		return nil, err
+	}
+	if err := mlsReadStateEnd(reader); err != nil {
+		staged.next.erase()
+		return nil, err
+	}
 	if staged.next.epoch() != staged.baseEpoch+1 || !bytes.Equal(staged.next.groupId(), groupId.Bytes()) {
+		staged.next.erase()
 		return nil, fmt.Errorf("%w: a draft not of its group's next epoch", errMlsStateFormat)
 	}
 	return staged, nil

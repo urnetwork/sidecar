@@ -546,3 +546,43 @@ func TestMlsStateRefusesDamagedSections(t *testing.T) {
 		}
 	}
 }
+
+// Damages the bytes of the file at a path ending in suffix, past its first section, in a test store.
+func mlsTestDamageTail(t *testing.T, store *mlsTestStore, suffix string) {
+	t.Helper()
+	store.shared.stateLock.Lock()
+	defer store.shared.stateLock.Unlock()
+	for path, content := range store.shared.pathContents {
+		if strings.HasSuffix(path, suffix) {
+			content[len(content)-10] ^= 1
+			return
+		}
+	}
+	t.Fatalf("no %s", suffix)
+}
+
+// Matching a commit against the draft reads the draft's header alone: with its next epoch damaged, another's commit
+// still processes, while its own commit, whose draft must then be read whole, is refused rather than adopted from a
+// damaged state.
+func TestMlsStateDraftMatchReadsOnlyItsHeader(t *testing.T) {
+	world := newMlsTestWorld(t)
+	a, b := world.sidecar(nil), world.sidecar(nil)
+	groups := mlsTestGroupOf(t, a, b)
+	own, err := groups[0].Commit(&MlsCommitArgs{Path: true, AuthenticatedData: []byte("own")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mlsTestDamageTail(t, a.store.(*mlsTestStore), "/draft")
+	if _, err := groups[0].Process(own.Message()); err == nil {
+		t.Error("a draft with a damaged next epoch was taken")
+	}
+	other, err := groups[1].Commit(&MlsCommitArgs{Path: true, AuthenticatedData: []byte("other")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := other.Adopt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mlsTestAgree(t, mlsTestFollow(t, groups, 1, adopted, other.Message()))
+}

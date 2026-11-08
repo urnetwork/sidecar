@@ -3,10 +3,10 @@
 // §7.9's log applier tells it each new state. §10.14 names the first four calls; CreateGroup, RotateRepo,
 // AuthAdvanced and ForgetRepo are KF1, `ur keys rotate`, the applier's call and §11.12's shred.
 //
-// The real client lands with KEYS-M2-18 to KEYS-M2-22, on the engine KEYS-M2-08 wires in. Until then a sidecar's
-// client is gkmRefusingClient, which refuses every call, so nothing reads as keyed while no engine exists, and
+// The real client lands with KEYS-M2-18 to KEYS-M2-22, on NewMlsEngine's engine. Until then a sidecar's client is
+// gkmRefusingClient, which refuses every call, so nothing reads as keyed while no client exists, and
 // sidecartest.FakeGkm stands in for tests. NewSidecar (CORE-M1-08) does not exist yet; when it does, it hands out
-// newGkmRefusingClient until the real client replaces it.
+// newGkmRefusingClient until the real client replaces it, and builds the engine with KEYS-M2-19's admission check.
 //
 // Implementations are safe for concurrent use.
 

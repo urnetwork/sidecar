@@ -325,3 +325,102 @@ func mlsTestAgree(t *testing.T, groups []MlsGroup) {
 		}
 	}
 }
+
+// One engine driven from several goroutines at once, each with its own group, KeyPackages and commits, as a daemon's
+// components share an engine: nothing races, and every group ends where its goroutine left it.
+func TestMlsEngineIsSafeForConcurrentUse(t *testing.T) {
+	world := newMlsTestWorld(t)
+	shared := world.sidecar(nil)
+	const goroutineCount = 8
+	errs := make(chan error, goroutineCount)
+	groupIds := make([]Id, goroutineCount)
+	var waitGroup sync.WaitGroup
+	for index := range goroutineCount {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			errs <- func() error {
+				if _, err := shared.engine.CreateKeyPackage(index%2 == 0); err != nil {
+					return err
+				}
+				group, err := shared.engine.CreateGroup(NewId(), mlsTestUrGroup())
+				if err != nil {
+					return err
+				}
+				groupIds[index] = group.GroupId()
+				for range 3 {
+					staged, err := group.Commit(&MlsCommitArgs{Path: true, AuthenticatedData: []byte("update")})
+					if err != nil {
+						return err
+					}
+					if group, err = staged.Adopt(); err != nil {
+						return err
+					}
+				}
+				loaded, err := shared.engine.LoadGroup(group.GroupId())
+				if err != nil {
+					return err
+				}
+				if loaded.Epoch() != 3 || !bytes.Equal(loaded.EpochAuthenticator(), group.EpochAuthenticator()) {
+					return errors.New("a group loaded at another epoch")
+				}
+				return nil
+			}()
+		}()
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	shared.restart(t)
+	for _, groupId := range groupIds {
+		loaded, err := shared.engine.LoadGroup(groupId)
+		if err != nil || loaded.Epoch() != 3 {
+			t.Errorf("after a restart: %v", err)
+		}
+	}
+}
+
+// gkm's one parse reads a real external commit with no key: its group, epoch, header and joiner's credential, which
+// names the joiner, and the old leaf a resync removes, and none of a recovery self-join's (gkm-6).
+func TestMlsHeaderReadsARealExternalCommit(t *testing.T) {
+	world := newMlsTestWorld(t)
+	a, b, c := world.sidecar(nil), world.sidecar(nil), world.sidecar(nil)
+	groups := mlsTestGroupOf(t, a, b)
+	groupInfo, err := groups[0].GroupInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := groups[1].Self().LeafIndex
+	resync, err := b.engine.JoinExternal(groupInfo, &MlsCommitArgs{Removes: []uint32{stale}, Path: true, AuthenticatedData: []byte("GkmCommitHeader")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := ParseMlsHeader(resync.Message())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(header.GroupId, groups[0].GroupId().Bytes()) || header.Epoch != 1 || header.ContentType != mlsContentTypeCommit ||
+		!bytes.Equal(header.AuthenticatedData, []byte("GkmCommitHeader")) || header.External == nil {
+		t.Fatalf("header %+v", header)
+	}
+	credential, err := CheckUrMlsCredential(header.External.Credential)
+	if err != nil || Id(credential.GetSidecarId()) != b.signer.sidecarId {
+		t.Errorf("the joiner's credential: %v", err)
+	}
+	if header.External.RemovedLeaf == nil || *header.External.RemovedLeaf != stale {
+		t.Errorf("the removed leaf %v", header.External.RemovedLeaf)
+	}
+
+	selfJoin, err := c.engine.JoinExternal(groupInfo, &MlsCommitArgs{Path: true, AuthenticatedData: []byte("self-join")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err = ParseMlsHeader(selfJoin.Message())
+	if err != nil || header.External == nil || header.External.RemovedLeaf != nil {
+		t.Errorf("a self-join's header %+v: %v", header, err)
+	}
+}

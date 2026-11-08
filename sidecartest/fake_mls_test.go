@@ -215,8 +215,7 @@ func TestFakeMlsDerivesKeksOnlyForMembers(t *testing.T) {
 }
 
 // A member's commit carries RFC 9420's PrivateMessage clear header, which ParseMlsHeader reads with no key, and an
-// external commit is a PublicMessage, which it refuses: FakeMls's carries no Commit, and outside the root's tests no
-// leaf reads a credential until KEYS-M2-07.
+// external commit is a PublicMessage, which it refuses: FakeMls's carries no Commit, where a real one's does.
 func TestFakeMlsFramesCommitsAsParseMlsHeaderReads(t *testing.T) {
 	engines, groups := fakeMlsTestGroup(t, 2)
 	staged, err := groups[0].Commit(&sidecar.MlsCommitArgs{Path: true, AuthenticatedData: []byte("a GkmCommitHeader")})
