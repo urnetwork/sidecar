@@ -1,0 +1,25 @@
+# The AclRows fields the owner's answers added before §2.8's api-7 names them, for I-18: each answer decided the
+# field, its number and that api-7's rows show it, and design-records writes those words into the list. Until it
+# does, each stays pending here and fails at M2's exit, so no format freezes with a field the list lacks.
+
+AclRows.suspensions: {number: 8, type: repeated AclSuspension, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
+AclRows.spent_grants: {number: 9, type: repeated AclSpentGrant, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}
+
+AclAtom.tag_owner_member_ids: {number: 4, type: repeated bytes, row: api-7, pending: "plan-ACL-atom-and-rule-ids #4: api-7 adds tag owners"}
+AclAtom.client_ids: {number: 5, type: repeated bytes, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to atoms"}
+AclAtom.network_ids: {number: 6, type: repeated bytes, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to atoms"}
+AclAtom.role: {number: 7, type: string, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to atoms"}
+AclAtom.principal: {number: 8, type: string, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to atoms"}
+
+AclRule.source_rule_id: {number: 10, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #2: an activated grant's requests rule, which its GrantActivate shows api anyway"}
+
+AclTarget.client_id: {number: 10, type: bytes, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to targets"}
+
+AclSuspension.subject: {number: 1, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
+AclSuspension.suspend_id: {number: 2, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
+AclSuspension.signer_class: {number: 3, type: uint32, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
+AclSuspension.signer: {number: 4, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
+AclSuspension.at: {number: 5, type: uint64, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
+
+AclSpentGrant.grant_id: {number: 1, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}
+AclSpentGrant.retain_until_ms: {number: 2, type: int64, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}

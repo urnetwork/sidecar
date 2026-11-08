@@ -28,14 +28,24 @@ message HeadCheckResult {
 }
 
 // sidecar/protocol/acl.proto
-// §8.8's rows, which its AclRows comments list.
-message AclAtom { bytes atom = 1; repeated bytes member_ids = 2; repeated bytes sidecar_ids = 3; }
+// §8.8's rows, which its AclRows comments list. AclAtom's fields 4 to 8 are plan-ACL-atom-and-rule-ids #4's and
+// plan-ACL-nonsidecar-subjects', AclRule's source_rule_id plan-ACL-folded-grant-state #2's, and AclSuspension
+// and AclSpentGrant its #1 and #3, each decided by the owner with its number.
+message AclAtom {
+  bytes atom = 1; repeated bytes member_ids = 2; repeated bytes sidecar_ids = 3;
+  repeated bytes tag_owner_member_ids = 4; repeated bytes client_ids = 5; repeated bytes network_ids = 6;
+  string role = 7; string principal = 8;
+}
 message AclPortRange { uint32 protocol = 1; uint32 first = 2; uint32 last = 3; }
 message AclRule {
   bytes rule_id = 1; repeated bytes src_atoms = 2; repeated AclTarget targets = 3; repeated uint32 actions = 4;
   repeated AclPortRange ports = 5; int64 expires = 6; AclAudience audience = 7; AclAppMode app_mode = 8;
-  bytes link_spki_sha256 = 9;
+  bytes link_spki_sha256 = 9; bytes source_rule_id = 10;
 }
+message AclSuspension {
+  bytes subject = 1; bytes suspend_id = 2; uint32 signer_class = 3; bytes signer = 4; uint64 at = 5;
+}
+message AclSpentGrant { bytes grant_id = 1; int64 retain_until_ms = 2; }
 message AclRepo {
   bytes repo_id = 1; RepoKind kind = 2; bytes owner_member_id = 3; repeated bytes consented_sidecar_ids = 4;
   repeated AclRepoAdminRow admins = 5; repeated AclRepoGrantRow grants = 6; repeated AclRepoShareRow shares = 7;
@@ -227,7 +237,10 @@ enum MemberRole {
   MEMBER_ROLE_UNSPECIFIED = 0; MEMBER_ROLE_OWNER = 1; MEMBER_ROLE_ADMIN = 2; MEMBER_ROLE_NETWORK_ADMIN = 3;
   MEMBER_ROLE_IT_ADMIN = 4; MEMBER_ROLE_BILLING_ADMIN = 5; MEMBER_ROLE_AUDITOR = 6; MEMBER_ROLE_MEMBER = 7;
 }
-enum SidecarCapability { SIDECAR_CAPABILITY_NONE = 0; SIDECAR_CAPABILITY_READ_ONLY = 2; }
+// SIDECAR_CAPABILITY_INVITED is plan-ACL-invited-consent-evidence's, decided by the owner with its bit.
+enum SidecarCapability {
+  SIDECAR_CAPABILITY_NONE = 0; SIDECAR_CAPABILITY_READ_ONLY = 2; SIDECAR_CAPABILITY_INVITED = 4;
+}
 enum KeyAlg {
   KEY_ALG_UNSPECIFIED = 0; KEY_ALG_WEBAUTHN_ES256 = 1; KEY_ALG_ECDSA_P256_SHA256 = 2; KEY_ALG_SSH_ED25519 = 3;
 }
@@ -693,5 +706,20 @@ var testFenceAdditions = []struct {
 		message:  "EvsHead",
 		field:    testFenceField{name: "consumed_through", number: 27, typeName: "uint64"},
 		question: "plan-RECORD-depositor-spool",
+	},
+	{
+		message:  "AclRows",
+		field:    testFenceField{name: "suspensions", number: 8, typeName: "AclSuspension", repeated: true},
+		question: "plan-ACL-folded-grant-state",
+	},
+	{
+		message:  "AclRows",
+		field:    testFenceField{name: "spent_grants", number: 9, typeName: "AclSpentGrant", repeated: true},
+		question: "plan-ACL-folded-grant-state",
+	},
+	{
+		message:  "AclTarget",
+		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
+		question: "plan-ACL-nonsidecar-subjects",
 	},
 }
