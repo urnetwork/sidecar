@@ -142,6 +142,22 @@ message DelegationRevoke {
   uint64 since_n = 3;                  // 0, or for a leaked bundle the position from which it parks
 }
 
+// The client-only #<bundle> of a pre-approved auth key (§7.8): ur-authkey-<id>-<secret>#<base64url of this>,
+// about 200 B, which QR and MDM carry as the same string. Never sent, logged or passed to MCP (D-TEAM-22): no
+// request has a field for it, and the client splits it off before anything else runs. The daemon signs its own
+// SidecarAdmit with the Delegation's signing key, keeps only the reader seed and erases the rest (§5.6); every
+// other copy of the string keeps both seeds. No server decodes it. §7.8 writes it as a field list without
+// numbers, so these are in the order written.
+message AuthKeyBundle {
+  uint32  version = 1;                 // 1
+  bytes   genesis_sha256 = 2;          // A_0 = SHA-256(Signed Genesis)
+  AuthPin head = 3;                    // the log position the creating device stood at (§7.9)
+  bytes   delegation_id = 4;
+  bytes   delegation_signing_seed = 5; // 32 B: the Delegation's Ed25519 key, which signs SidecarAdmit
+  bytes   delegation_reader_seed = 6;  // 32 B: the Delegation's X-Wing reader key (§10.5)
+  repeated bytes tag_ids = 7;          // the Delegation's keyed tag ids, 16 B each, never names
+}
+
 enum TeamMailMode {
   TEAM_MAIL_MODE_UNSPECIFIED = 0;      // no choice made: §7.9 writes no default, see ServiceSettings
   TEAM_MAIL_MODE_INDEXERS = 1;         // owner decisions 58, 150; §15.5, §15.6
