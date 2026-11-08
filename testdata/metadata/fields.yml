@@ -184,6 +184,7 @@ sealed_messages:
   ServiceSettings: "kept to config heads, which evs holds as ciphertext (§7.9)"
   BridgeBlock: "rides a config head, which evs holds as ciphertext (§17.8)"
   BridgeShareSigner: "a config file, which evs holds as ciphertext (§17.9)"
+  SocketKeyFile: "a config file, socket/key, which evs holds as ciphertext (§7.9, §9.4)"
   BridgeState: "in process, or DeviceLocalRpc on the device (§18.6)"
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
   WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"

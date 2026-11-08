@@ -1713,6 +1713,71 @@ func (x *VersioningRule) GetVersioning() VersioningMode {
 	return VersioningMode_VERSIONING_MODE_UNSPECIFIED
 }
 
+// §9.4's K_sock, the config repo's single-record file socket/key (plan-SOCK-ksock-rotation #2): a config
+// writer creates it with the repo, and only config writers' heads change it (§8.8). It rides heads only,
+// carries no header, and no server reads it: evs holds the head as ciphertext (§7.9). previous_key and
+// rotated_at_ms are set from a rotation until the first writer head at or after rotated_at_ms + 10 min,
+// which clears both.
+type SocketKeyFile struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CurrentKey    []byte                 `protobuf:"bytes,1,opt,name=current_key,json=currentKey,proto3" json:"current_key,omitempty"`       // 32 B
+	PreviousKey   []byte                 `protobuf:"bytes,2,opt,name=previous_key,json=previousKey,proto3" json:"previous_key,omitempty"`    // 32 B during a rotation's overlap, else empty
+	RotatedAtMs   int64                  `protobuf:"varint,3,opt,name=rotated_at_ms,json=rotatedAtMs,proto3" json:"rotated_at_ms,omitempty"` // the rotating head's time, with previous_key, else 0
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SocketKeyFile) Reset() {
+	*x = SocketKeyFile{}
+	mi := &file_protocol_config_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SocketKeyFile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SocketKeyFile) ProtoMessage() {}
+
+func (x *SocketKeyFile) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SocketKeyFile.ProtoReflect.Descriptor instead.
+func (*SocketKeyFile) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SocketKeyFile) GetCurrentKey() []byte {
+	if x != nil {
+		return x.CurrentKey
+	}
+	return nil
+}
+
+func (x *SocketKeyFile) GetPreviousKey() []byte {
+	if x != nil {
+		return x.PreviousKey
+	}
+	return nil
+}
+
+func (x *SocketKeyFile) GetRotatedAtMs() int64 {
+	if x != nil {
+		return x.RotatedAtMs
+	}
+	return 0
+}
+
 // An Owner, Admin or Network admin. Ordered, first match wins, unmatched paths staying versioned; absent,
 // the platform rule [{size_above_bytes: 64 MiB, off}]. v1, its type reserved at M2: format-1 readers apply
 // nothing from it but still apply the head holding it (owner decision 164; §11.7).
@@ -1725,7 +1790,7 @@ type VersioningRules struct {
 
 func (x *VersioningRules) Reset() {
 	*x = VersioningRules{}
-	mi := &file_protocol_config_proto_msgTypes[18]
+	mi := &file_protocol_config_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1737,7 +1802,7 @@ func (x *VersioningRules) String() string {
 func (*VersioningRules) ProtoMessage() {}
 
 func (x *VersioningRules) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_config_proto_msgTypes[18]
+	mi := &file_protocol_config_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1750,7 +1815,7 @@ func (x *VersioningRules) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersioningRules.ProtoReflect.Descriptor instead.
 func (*VersioningRules) Descriptor() ([]byte, []int) {
-	return file_protocol_config_proto_rawDescGZIP(), []int{18}
+	return file_protocol_config_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *VersioningRules) GetRules() []*VersioningRule {
@@ -1772,7 +1837,7 @@ type AuthorityProposal struct {
 
 func (x *AuthorityProposal) Reset() {
 	*x = AuthorityProposal{}
-	mi := &file_protocol_config_proto_msgTypes[19]
+	mi := &file_protocol_config_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1784,7 +1849,7 @@ func (x *AuthorityProposal) String() string {
 func (*AuthorityProposal) ProtoMessage() {}
 
 func (x *AuthorityProposal) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_config_proto_msgTypes[19]
+	mi := &file_protocol_config_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1797,7 +1862,7 @@ func (x *AuthorityProposal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorityProposal.ProtoReflect.Descriptor instead.
 func (*AuthorityProposal) Descriptor() ([]byte, []int) {
-	return file_protocol_config_proto_rawDescGZIP(), []int{19}
+	return file_protocol_config_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AuthorityProposal) GetHeader() *bridge.StatementHeader {
@@ -1831,7 +1896,7 @@ type AuthorityCosign struct {
 
 func (x *AuthorityCosign) Reset() {
 	*x = AuthorityCosign{}
-	mi := &file_protocol_config_proto_msgTypes[20]
+	mi := &file_protocol_config_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1843,7 +1908,7 @@ func (x *AuthorityCosign) String() string {
 func (*AuthorityCosign) ProtoMessage() {}
 
 func (x *AuthorityCosign) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_config_proto_msgTypes[20]
+	mi := &file_protocol_config_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1856,7 +1921,7 @@ func (x *AuthorityCosign) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorityCosign.ProtoReflect.Descriptor instead.
 func (*AuthorityCosign) Descriptor() ([]byte, []int) {
-	return file_protocol_config_proto_rawDescGZIP(), []int{20}
+	return file_protocol_config_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AuthorityCosign) GetHeader() *bridge.StatementHeader {
@@ -1884,7 +1949,7 @@ type RecoveryVeto struct {
 
 func (x *RecoveryVeto) Reset() {
 	*x = RecoveryVeto{}
-	mi := &file_protocol_config_proto_msgTypes[21]
+	mi := &file_protocol_config_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1896,7 +1961,7 @@ func (x *RecoveryVeto) String() string {
 func (*RecoveryVeto) ProtoMessage() {}
 
 func (x *RecoveryVeto) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_config_proto_msgTypes[21]
+	mi := &file_protocol_config_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1909,7 +1974,7 @@ func (x *RecoveryVeto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecoveryVeto.ProtoReflect.Descriptor instead.
 func (*RecoveryVeto) Descriptor() ([]byte, []int) {
-	return file_protocol_config_proto_rawDescGZIP(), []int{21}
+	return file_protocol_config_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RecoveryVeto) GetHeader() *bridge.StatementHeader {
@@ -2051,7 +2116,12 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x10size_above_bytes\x18\x04 \x01(\x04R\x0esizeAboveBytes\x12A\n" +
 	"\n" +
 	"versioning\x18\x05 \x01(\x0e2!.urnetwork.sidecar.VersioningModeR\n" +
-	"versioning\"J\n" +
+	"versioning\"w\n" +
+	"\rSocketKeyFile\x12\x1f\n" +
+	"\vcurrent_key\x18\x01 \x01(\fR\n" +
+	"currentKey\x12!\n" +
+	"\fprevious_key\x18\x02 \x01(\fR\vpreviousKey\x12\"\n" +
+	"\rrotated_at_ms\x18\x03 \x01(\x03R\vrotatedAtMs\"J\n" +
 	"\x0fVersioningRules\x127\n" +
 	"\x05rules\x18\x01 \x03(\v2!.urnetwork.sidecar.VersioningRuleR\x05rules\"\x94\x01\n" +
 	"\x11AuthorityProposal\x12:\n" +
@@ -2110,7 +2180,7 @@ func file_protocol_config_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_protocol_config_proto_goTypes = []any{
 	(IndexerScope)(0),                // 0: urnetwork.sidecar.IndexerScope
 	(IndexerService)(0),              // 1: urnetwork.sidecar.IndexerService
@@ -2137,37 +2207,38 @@ var file_protocol_config_proto_goTypes = []any{
 	(*ServiceDirectorySettings)(nil), // 22: urnetwork.sidecar.ServiceDirectorySettings
 	(*ServiceSettings)(nil),          // 23: urnetwork.sidecar.ServiceSettings
 	(*VersioningRule)(nil),           // 24: urnetwork.sidecar.VersioningRule
-	(*VersioningRules)(nil),          // 25: urnetwork.sidecar.VersioningRules
-	(*AuthorityProposal)(nil),        // 26: urnetwork.sidecar.AuthorityProposal
-	(*AuthorityCosign)(nil),          // 27: urnetwork.sidecar.AuthorityCosign
-	(*RecoveryVeto)(nil),             // 28: urnetwork.sidecar.RecoveryVeto
-	(*bridge.StatementHeader)(nil),   // 29: urnetwork.sidecar.StatementHeader
-	(bridge.MemberRole)(0),           // 30: urnetwork.sidecar.MemberRole
-	(bridge.RecoveryRebindReason)(0), // 31: urnetwork.sidecar.RecoveryRebindReason
-	(bridge.KeyAlg)(0),               // 32: urnetwork.sidecar.KeyAlg
-	(bridge.KeyPurpose)(0),           // 33: urnetwork.sidecar.KeyPurpose
-	(*bridge.AuthPin)(nil),           // 34: urnetwork.sidecar.AuthPin
+	(*SocketKeyFile)(nil),            // 25: urnetwork.sidecar.SocketKeyFile
+	(*VersioningRules)(nil),          // 26: urnetwork.sidecar.VersioningRules
+	(*AuthorityProposal)(nil),        // 27: urnetwork.sidecar.AuthorityProposal
+	(*AuthorityCosign)(nil),          // 28: urnetwork.sidecar.AuthorityCosign
+	(*RecoveryVeto)(nil),             // 29: urnetwork.sidecar.RecoveryVeto
+	(*bridge.StatementHeader)(nil),   // 30: urnetwork.sidecar.StatementHeader
+	(bridge.MemberRole)(0),           // 31: urnetwork.sidecar.MemberRole
+	(bridge.RecoveryRebindReason)(0), // 32: urnetwork.sidecar.RecoveryRebindReason
+	(bridge.KeyAlg)(0),               // 33: urnetwork.sidecar.KeyAlg
+	(bridge.KeyPurpose)(0),           // 34: urnetwork.sidecar.KeyPurpose
+	(*bridge.AuthPin)(nil),           // 35: urnetwork.sidecar.AuthPin
 }
 var file_protocol_config_proto_depIdxs = []int32{
-	29, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
-	29, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	31, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
+	30, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
 	0,  // 7: urnetwork.sidecar.IndexerSet.scope:type_name -> urnetwork.sidecar.IndexerScope
 	1,  // 8: urnetwork.sidecar.IndexerServices.services:type_name -> urnetwork.sidecar.IndexerService
-	29, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
-	31, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
-	29, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
-	32, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
-	33, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	29, // 15: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 16: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 17: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 18: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	30, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
+	32, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
+	30, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
+	33, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
+	34, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
+	30, // 15: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 16: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 17: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 18: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
 	4,  // 19: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
 	5,  // 20: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
 	2,  // 21: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
@@ -2175,9 +2246,9 @@ var file_protocol_config_proto_depIdxs = []int32{
 	22, // 23: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
 	6,  // 24: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
 	24, // 25: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	29, // 26: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 27: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // 28: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 26: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 27: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 28: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
 	29, // [29:29] is the sub-list for method output_type
 	29, // [29:29] is the sub-list for method input_type
 	29, // [29:29] is the sub-list for extension type_name
@@ -2196,7 +2267,7 @@ func file_protocol_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_config_proto_rawDesc), len(file_protocol_config_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   22,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
