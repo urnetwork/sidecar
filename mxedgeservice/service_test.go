@@ -231,13 +231,17 @@ func TestPlaintextGets451AcrossMidnightUtc(t *testing.T) {
 	second := newTestEngine(t, &testEngineOptions{clock: clock, host: first.host})
 	first.closeHandshakeFrom(testSender)
 
-	clock.AdvanceTo(writeTime.Add(20 * time.Minute))
+	// the clock stops at midnight while both probes read the new day's k: a move straight past it would
+	// fire a probe's own store bound mid-read, failing the probe, whose next is a day away
+	midnight := writeTime.Add(10 * time.Minute)
+	clock.AdvanceTo(midnight)
 	if clock.Now().Day() == writeTime.Day() {
 		t.Fatal("the clock has not crossed midnight")
 	}
 	// both probes ran at the date change, so the 451 below is the memory's and not a missing k's
-	first.service.AwaitKeyDay(clock.Now())
-	second.service.AwaitKeyDay(clock.Now())
+	first.service.AwaitKeyDay(midnight)
+	second.service.AwaitKeyDay(midnight)
+	clock.AdvanceTo(writeTime.Add(20 * time.Minute))
 	if code := second.plaintextReplyTo(testSender); code != "451" {
 		t.Errorf("at 00:10 got %s", code)
 	}
