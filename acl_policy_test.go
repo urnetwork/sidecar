@@ -325,7 +325,8 @@ func TestParseAclPolicyEveryField(t *testing.T) {
 	if want := time.Date(2026, time.December, 31, 0, 0, 0, 500_000_000, time.UTC); !publish.Expires.Equal(want) || publish.Expires.Location() != time.UTC {
 		t.Errorf("expires %s", publish.Expires)
 	}
-	if got := policy.Grants[5]; got.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS || got.AppMode != protocol.AclAppMode_ACL_APP_MODE_HTTP {
+	// members and http written out read as the zero values a grant leaving them out gets
+	if got := policy.Grants[5]; got.Audience != protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED || got.AppMode != protocol.AclAppMode_ACL_APP_MODE_UNSPECIFIED {
 		t.Errorf("audience %d, app mode %d", got.Audience, got.AppMode)
 	}
 	if got := policy.Grants[6].Audience; got != protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE {
@@ -413,6 +414,35 @@ func TestParseAclPolicyDefaults(t *testing.T) {
 	}
 	if request.Evidence != nil {
 		t.Errorf("evidence %+v", request.Evidence)
+	}
+}
+
+// A default written out reads as the same value as one left out, so writing it changes nothing a
+// compile could see. A rule's own evidence is the one exception, kept apart on purpose: harness counts
+// in a tainted run only where the rule itself names it (owner decision 142).
+func TestParseAclPolicyWrittenDefaultsReadAsLeftOut(t *testing.T) {
+	grant := `"src": ["tag:a"], "dst": ["dns:blog"], "allow": ["publish"]`
+	request := `"src": ["tag:a"], "dst": ["sock:db"], "allow": ["dial"]`
+	cases := []struct {
+		written string
+		leftOut string
+	}{
+		{written: `{"grants": [{` + grant + `, "audience": "members"}]}`, leftOut: `{"grants": [{` + grant + `}]}`},
+		{written: `{"grants": [{` + grant + `, "app_mode": "http"}]}`, leftOut: `{"grants": [{` + grant + `}]}`},
+		{written: `{"requests": [{` + request + `, "approver": ["autogroup:self"]}]}`, leftOut: `{"requests": [{` + request + `}]}`},
+		{written: `{"requests": [{` + request + `, "approvers": 1}]}`, leftOut: `{"requests": [{` + request + `}]}`},
+		{written: `{"requests": [{` + request + `, "maxExpiry": "30d"}]}`, leftOut: `{"requests": [{` + request + `}]}`},
+		{written: `{"expiresDefault": "1h"}`, leftOut: `{}`},
+		{written: `{"evidenceDefault": ["device", "presence", "harness"]}`, leftOut: `{}`},
+	}
+	for _, c := range cases {
+		if written, leftOut := testParseAclPolicy(t, []byte(c.written)), testParseAclPolicy(t, []byte(c.leftOut)); !reflect.DeepEqual(written, leftOut) {
+			t.Errorf("%s reads as %+v, and %s as %+v", c.written, written, c.leftOut, leftOut)
+		}
+	}
+	named := testParseAclPolicy(t, []byte(`{"requests": [{`+request+`, "evidence": ["device", "presence", "harness"]}]}`))
+	if leftOut := testParseAclPolicy(t, []byte(`{"requests": [{`+request+`}]}`)); reflect.DeepEqual(named, leftOut) {
+		t.Error("a rule naming every channel reads as one naming none")
 	}
 }
 

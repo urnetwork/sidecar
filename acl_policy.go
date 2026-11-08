@@ -117,9 +117,11 @@ type AclGrant struct {
 	Expires time.Time
 	// The socket a publish binds (§8.4), an AclResourceSocket. Nil for none.
 	Sock *AclResource
-	// A publish's. Zero, as in protocol, reads as members.
+	// A publish's. Zero, as in protocol, is members, whether written or not, so the parse never gives
+	// AclAudience_ACL_AUDIENCE_MEMBERS.
 	Audience protocol.AclAudience
-	// A publish's. Zero, as in protocol, reads as http.
+	// A publish's. Zero, as in protocol, is http, whether written or not, so the parse never gives
+	// AclAppMode_ACL_APP_MODE_HTTP.
 	AppMode protocol.AclAppMode
 	// The 32 bytes a raw link's grant pins (§13.7). Nil for none.
 	LinkSpkiSha256 []byte
@@ -711,11 +713,13 @@ func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 				return err
 			}
 		case "audience":
+			// members, the default, reads as zero whether written or left out, as http does below: every
+			// default here reads the same either way, so writing one out changes no value
 			return func() (err error) {
 				grant.Audience, err = aclPolicyRead(self, func(text string) (protocol.AclAudience, error) {
 					switch text {
 					case "members":
-						return protocol.AclAudience_ACL_AUDIENCE_MEMBERS, nil
+						return protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED, nil
 					case "members-device":
 						return protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE, nil
 					case "link":
@@ -732,7 +736,7 @@ func (self *aclPolicyReader) readGrant() (AclGrant, error) {
 				grant.AppMode, err = aclPolicyRead(self, func(text string) (protocol.AclAppMode, error) {
 					switch text {
 					case "http":
-						return protocol.AclAppMode_ACL_APP_MODE_HTTP, nil
+						return protocol.AclAppMode_ACL_APP_MODE_UNSPECIFIED, nil
 					case "raw":
 						return protocol.AclAppMode_ACL_APP_MODE_RAW, nil
 					}
