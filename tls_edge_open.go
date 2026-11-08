@@ -48,9 +48,9 @@ var ErrTlsEdgeOpen = errors.New("tls edge open refused")
 // out to be, since Find's ticket gives expire_time_millis only after Find took this list.
 //
 // An id that is not UTF-8 is left out, since a proto3 string cannot hold it and encoding would then refuse the whole
-// message: RFC 8701's GREASE ids are not, and a visitor offering one is an ordinary visitor. The listener decides from
-// the real hello, so this list is informational, and an id trimmed here costs at most a Find with no listener, the
-// closed direction.
+// message: half of RFC 8701's GREASE ids, 0x8A8A to 0xFAFA, are not, and a visitor offering one is an ordinary
+// visitor. The listener decides from the real hello, so this list is informational, and an id trimmed here costs at
+// most a Find with no listener, the closed direction.
 func TrimTlsEdgeOpenAlpn(serverName string, offeredAlpn []string) []string {
 	byteCount := tlsEdgeOpenFixedMaxByteCount +
 		protowire.SizeTag(tlsEdgeOpenServerNameField) + protowire.SizeBytes(len(serverName))
