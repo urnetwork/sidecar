@@ -197,7 +197,6 @@ modules:
     spdx: Apache-2.0
     reason: the PROXY-unwrapped listeners engines serve behind (§4.5)
     leg: [engine]
-    planned: true
   - module: github.com/pjbgf/sha1cd
     spdx: Apache-2.0
     reason: go-git's SHA-1 with collision detection, for mlsinterop's oracle

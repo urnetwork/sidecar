@@ -1,0 +1,15 @@
+# The identity binding's fields, for I-18: api decodes SignedSidecarIdentityBinding at POST /sidecar/bind, checks its
+# body against the bearer, and stores the wrapper's bytes in sidecar_identity_binding (§5.15, plan-CORE-binding-wire),
+# so each field is a value api-5 shows. The numbers pin plan-CORE-binding-wire #1's.
+
+SignedSidecarIdentityBinding.body: {number: 1, type: bytes, row: api-5, sees: "append-only bindings (generation, client_id, client public key, dual signatures, time)"}
+SignedSidecarIdentityBinding.client_signature: {number: 2, type: bytes, row: api-5, sees: "dual signatures"}
+SignedSidecarIdentityBinding.identity_signature: {number: 3, type: bytes, row: api-5, sees: "dual signatures"}
+
+SidecarIdentityBinding.network_id: {number: 1, type: bytes, row: api-5, sees: "sidecar_id, network_id"}
+SidecarIdentityBinding.sidecar_id: {number: 2, type: bytes, row: api-5, sees: "sidecar_id, network_id"}
+SidecarIdentityBinding.client_id: {number: 3, type: bytes, row: api-5, sees: "append-only bindings (generation, client_id, client public key, dual signatures, time)"}
+SidecarIdentityBinding.generation: {number: 4, type: int64, row: api-5, sees: "append-only bindings (generation, client_id, client public key, dual signatures, time)"}
+SidecarIdentityBinding.client_public_key: {number: 5, type: bytes, row: api-5, sees: "append-only bindings (generation, client_id, client public key, dual signatures, time)"}
+SidecarIdentityBinding.identity_public_key: {number: 6, type: bytes, row: api-5, sees: "identity public key and algorithm"}
+SidecarIdentityBinding.issued_at_ms: {number: 7, type: int64, row: api-5, sees: "append-only bindings (generation, client_id, client public key, dual signatures, time)"}

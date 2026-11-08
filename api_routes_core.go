@@ -14,7 +14,6 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -96,8 +95,9 @@ type sidecarEnrollReply struct {
 
 // POST /network/enroll (§7.8): creates the sidecar's top-level client from an auth key. Public, so it
 // presents no token. Refuses before sending an auth key holding # or naming a urn_ API key, and any
-// request body holding #, so a bundle cannot ride in another field (§7.8, D-TEAM-22). Until
-// TEAM-M2-16 lands no admission is sent, which tagged and ephemeral enrollments need past base 1.
+// request body CheckAuthKeyBody refuses, so a bundle cannot ride in another field (§7.8, D-TEAM-22).
+// Until TEAM-M2-16 lands no admission is sent, which tagged and ephemeral enrollments need past base
+// 1.
 func (self *SidecarApi) Enroll(ctx context.Context, args *SidecarEnrollArgs) (*SidecarEnrollResult, error) {
 	route := "POST /network/enroll"
 	if args == nil || args.AuthKey == "" || args.DeviceSpec == "" || len(args.ClientPublicKey) != ed25519.PublicKeySize {
@@ -119,7 +119,7 @@ func (self *SidecarApi) Enroll(ctx context.Context, args *SidecarEnrollArgs) (*S
 		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiArgs)
 	}
 	// encoding/json writes # as itself, so a bundle in any field shows here
-	if bytes.IndexByte(body, '#') != -1 {
+	if err := CheckAuthKeyBody(body); err != nil {
 		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiBundle)
 	}
 

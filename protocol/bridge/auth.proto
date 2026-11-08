@@ -215,3 +215,26 @@ message Unsuspend {
   bytes subject = 2;
   bytes suspend_id = 3;
 }
+
+// One client generation of a sidecar (§5.5, plan-CORE-binding-wire #1): the body SignedSidecarIdentityBinding's
+// two signatures cover. Each new client binds generation n+1 under the same sidecar_id and identity key, so a peer
+// resolves a client to its sidecar from signed bytes (§17.9), and §6's Hello checks it (D-PROTO-13).
+message SidecarIdentityBinding {
+  bytes network_id = 1;
+  bytes sidecar_id = 2;
+  bytes client_id = 3;
+  int64 generation = 4;                // 1 for a sidecar_id's first binding, then the newest plus one
+  bytes client_public_key = 5;         // the ClientKey, Ed25519, 32 B
+  bytes identity_public_key = 6;       // the identity key, Ed25519, 32 B
+  int64 issued_at_ms = 7;
+}
+
+// What Hello.binding and POST /sidecar/bind carry, and what §5.15's signatures column stores verbatim, since the
+// table's other columns cannot rebuild it. Each signature is Ed25519 over §6.9's signed bytes of body as received,
+// type SIGNED_SIDECAR_BINDING: purpose binding-client by the ClientKey, binding-identity by the identity key.
+// Verifiers check body as received, never a re-marshal.
+message SignedSidecarIdentityBinding {
+  bytes body = 1;                      // SidecarIdentityBinding
+  bytes client_signature = 2;
+  bytes identity_signature = 3;
+}
