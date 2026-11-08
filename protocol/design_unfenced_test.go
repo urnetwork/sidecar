@@ -192,7 +192,8 @@ enum DirectoryWorkersMode {
 enum VersioningMode { VERSIONING_MODE_UNSPECIFIED = 0; VERSIONING_MODE_ON = 1; VERSIONING_MODE_OFF = 2; }
 
 // sidecar/protocol/bridge/auth.proto
-// §7.9's rows, as ProjectionRows' comments list them; protos-bridge-row-fields asks what else they carry.
+// §7.9's rows, as ProjectionRows' comments list them, with what protos-bridge-row-fields #1 and #2 add:
+// SidecarRow's fields 16 to 20 and DelegationRow's 9 to 11, decided by the owner with their numbers.
 message MemberRow {
   bytes member_id = 1; MemberRole role = 2; bytes recovery_key_sha256 = 3;
   repeated RecoveryBindingRow bindings = 4;
@@ -205,10 +206,13 @@ message SidecarRow {
   uint64 admitted_at = 4; bytes confirm_signer = 5; uint64 confirmed_at = 6; bytes owner_confirm_signer = 7;
   uint64 owner_confirmed_at = 8; uint64 revoked_at = 9; uint64 parked_at = 10; bytes sponsor = 11;
   uint32 capabilities = 12; bytes delegation_id = 13; uint64 live_since = 14; int64 not_after = 15;
+  bytes identity_public_key = 16; string identity_alg = 17; bytes member_id = 18; repeated bytes tag_ids = 19;
+  bool ephemeral = 20;
 }
 message DelegationRow {
   bytes delegation_id = 1; bytes signer = 2; uint64 at = 3; repeated bytes tag_atoms = 4; int64 not_after = 5;
-  uint64 key_dropped_at = 6; uint64 ended_at = 7; uint32 admissions = 8;
+  uint64 key_dropped_at = 6; uint64 ended_at = 7; uint32 admissions = 8; bytes pubkey = 9;
+  bytes reader_xwing_public_key = 10; uint32 max_admits = 11;
 }
 message KeyRow {
   bytes key_id = 1; bytes member_id = 2; KeyAlg alg = 3; bytes public_key = 4; KeyPurpose purpose = 5;

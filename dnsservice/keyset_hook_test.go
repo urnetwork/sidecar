@@ -32,3 +32,25 @@ func TestLoadZskHandsTheScalarToTheHarness(t *testing.T) {
 		t.Errorf("calls %v", calls)
 	}
 }
+
+// An internal bearer reaches the privacy harness as it is read, current and previous alike.
+func TestLoadDnsInternalCredentialHandsTheBearerToTheHarness(t *testing.T) {
+	current := apiTestBearers[dnsservice.DnsCallerEdge]
+	previous := apiTestBearers[dnsservice.DnsCallerCerts]
+	secrets := [][]byte{}
+	remove, err := sidecartest.InstallTestHooks(func(kind string, secret []byte) {
+		if kind == "dns_internal_credential" {
+			secrets = append(secrets, bytes.Clone(secret))
+		}
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	if _, err := dnsservice.LoadDnsInternalCredential([]byte("current: " + current + "\nprevious: " + previous + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 2 || string(secrets[0]) != current || string(secrets[1]) != previous {
+		t.Errorf("secrets %q", secrets)
+	}
+}

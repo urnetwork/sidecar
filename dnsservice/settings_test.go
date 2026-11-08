@@ -318,3 +318,29 @@ func TestDnsFeedSettings(t *testing.T) {
 		}
 	}
 }
+
+// The block's holds stay under the lb's 30 s, and its bounds are positive.
+func TestDnsApiSettings(t *testing.T) {
+	api := DefaultDnsSettings().Api
+	if api.JournalHoldSeconds != 25 || api.ReadyHoldSeconds != 25 || api.CanaryFreshSeconds != 180 {
+		t.Errorf("defaults %+v", api)
+	}
+	for _, block := range []string{
+		"api: {journal_hold_s: 30}",
+		"api: {journal_hold_s: 0}",
+		"api: {ready_hold_s: 31}",
+		"api: {row_limit: 0}",
+		"api: {soa_read_interval_s: 0}",
+		"api: {soa_read_timeout_s: 0}",
+		"api: {canary_fresh_s: 0}",
+		"api: {diff_max_bytes: 0}",
+		"api: {answer_max_bytes: 1024}",
+		"api: {store_probe_s: 0}",
+		"api: {store_timeout_s: 0}",
+		"api: {drain_s: -1}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}

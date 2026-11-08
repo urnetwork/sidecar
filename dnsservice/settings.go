@@ -89,6 +89,39 @@ type DnsSettings struct {
 	Probe DnsProbeSettings `yaml:"probe"`
 	// How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06). Not in the sketch.
 	Feed DnsFeedSettings `yaml:"feed"`
+	// How the API block holds, reads and bounds its routes (DNS-M5-08). Not in the sketch.
+	Api DnsApiSettings `yaml:"api"`
+}
+
+// How the API block holds, reads and bounds its routes (DNS-M5-08, §12.8).
+type DnsApiSettings struct {
+	// Seconds GET journal holds a poll with nothing new: §12.6's 25. Must be positive and below the
+	// lb's 30 s proxy_read_timeout.
+	JournalHoldSeconds int `yaml:"journal_hold_s"`
+	// Seconds GET ready holds while a running NS is behind: §12.8's 25, under the same bound.
+	ReadyHoldSeconds int `yaml:"ready_hold_s"`
+	// The most journal rows one answer carries; an edge asks again for the rest. Must be positive.
+	RowLimit int `yaml:"row_limit"`
+	// Seconds at least between two rounds of SOA reads of one root's NS, however many requests wait.
+	// Must be positive.
+	SoaReadIntervalSeconds int `yaml:"soa_read_interval_s"`
+	// Seconds one SOA read may take before its NS reads as not answering. Must be positive.
+	SoaReadTimeoutSeconds int `yaml:"soa_read_timeout_s"`
+	// Seconds a canary verdict counts: plan-DNS-canary-route-state's 180. Must be positive.
+	CanaryFreshSeconds int `yaml:"canary_fresh_s"`
+	// The most bytes a POST reload-diff body may hold: an (owner, type) a changed RRset, for a whole
+	// zone after a restore. Must be positive.
+	DiffMaxByteCount int `yaml:"diff_max_bytes"`
+	// The most bytes an edge reads of one journal answer. Must hold row_limit rows of the largest
+	// RRset: at least 64 KiB, and the default is far above.
+	AnswerMaxByteCount int `yaml:"answer_max_bytes"`
+	// Seconds between the block's reads of every root's dns_root row, which Ready reports. Must be
+	// positive.
+	StoreProbeSeconds int `yaml:"store_probe_s"`
+	// Seconds one probe read may take. Must be positive.
+	StoreTimeoutSeconds int `yaml:"store_timeout_s"`
+	// Seconds Drain waits for holds it ended to answer. Zero waits for none.
+	DrainSeconds int `yaml:"drain_s"`
 }
 
 // How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06).
@@ -287,6 +320,19 @@ func DefaultDnsSettings() *DnsSettings {
 			SnapshotWriteSeconds: 5,
 			ReplacedKeepSeconds:  24 * 3600,
 		},
+		Api: DnsApiSettings{
+			JournalHoldSeconds:     25,
+			ReadyHoldSeconds:       25,
+			RowLimit:               1024,
+			SoaReadIntervalSeconds: 1,
+			SoaReadTimeoutSeconds:  2,
+			CanaryFreshSeconds:     180,
+			DiffMaxByteCount:       64 * 1024 * 1024,
+			AnswerMaxByteCount:     256 * 1024 * 1024,
+			StoreProbeSeconds:      10,
+			StoreTimeoutSeconds:    5,
+			DrainSeconds:           5,
+		},
 	}
 }
 
@@ -403,6 +449,9 @@ func (self *DnsSettings) Validate() error {
 	if err := self.Feed.validate(); err != nil {
 		return refuse("feed: %v", err)
 	}
+	if err := self.Api.validate(); err != nil {
+		return refuse("api: %v", err)
+	}
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")
 	}
@@ -467,6 +516,35 @@ func (self *DnsFeedSettings) validate() error {
 		return errors.New("snapshot_write_s is not positive")
 	case self.ReplacedKeepSeconds <= 0:
 		return errors.New("replaced_keep_s is not positive")
+	}
+	return nil
+}
+
+// Whether every hold stays under the lb's read timeout and every bound is positive.
+func (self *DnsApiSettings) validate() error {
+	switch {
+	case self.JournalHoldSeconds <= 0 || dnsLbProxyReadTimeoutSeconds <= self.JournalHoldSeconds:
+		return fmt.Errorf("journal_hold_s is not positive and under the lb's %d s", dnsLbProxyReadTimeoutSeconds)
+	case self.ReadyHoldSeconds <= 0 || dnsLbProxyReadTimeoutSeconds <= self.ReadyHoldSeconds:
+		return fmt.Errorf("ready_hold_s is not positive and under the lb's %d s", dnsLbProxyReadTimeoutSeconds)
+	case self.RowLimit <= 0:
+		return errors.New("row_limit is not positive")
+	case self.SoaReadIntervalSeconds <= 0:
+		return errors.New("soa_read_interval_s is not positive")
+	case self.SoaReadTimeoutSeconds <= 0:
+		return errors.New("soa_read_timeout_s is not positive")
+	case self.CanaryFreshSeconds <= 0:
+		return errors.New("canary_fresh_s is not positive")
+	case self.DiffMaxByteCount <= 0:
+		return errors.New("diff_max_bytes is not positive")
+	case self.AnswerMaxByteCount < 64*1024:
+		return errors.New("answer_max_bytes is below 64 KiB")
+	case self.StoreProbeSeconds <= 0:
+		return errors.New("store_probe_s is not positive")
+	case self.StoreTimeoutSeconds <= 0:
+		return errors.New("store_timeout_s is not positive")
+	case self.DrainSeconds < 0:
+		return errors.New("drain_s is negative")
 	}
 	return nil
 }

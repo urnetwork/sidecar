@@ -884,8 +884,9 @@ func (x *RecoveryBindingRow) GetReason() RecoveryRebindReason {
 	return RecoveryRebindReason_RECOVERY_REBIND_REASON_UNSPECIFIED
 }
 
-// The fields §7.9 lists. §2.8's api-7 also shows identity keys, member or keyed tag ids and ephemeral
-// flags in these rows; they stay out until the two sections agree, and later numbers can add them.
+// The fields §7.9 lists, then the admission's identity key, member or keyed tag ids and ephemeral flag,
+// which api-7 shows and protos-bridge-row-fields #1 numbers, so a reader holding only rows knows what
+// each admission names.
 type SidecarRow struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId          []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
@@ -901,8 +902,13 @@ type SidecarRow struct {
 	Sponsor            []byte                 `protobuf:"bytes,11,opt,name=sponsor,proto3" json:"sponsor,omitempty"`
 	Capabilities       uint32                 `protobuf:"varint,12,opt,name=capabilities,proto3" json:"capabilities,omitempty"` // SidecarCapability bits
 	DelegationId       []byte                 `protobuf:"bytes,13,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
-	LiveSince          uint64                 `protobuf:"varint,14,opt,name=live_since,json=liveSince,proto3" json:"live_since,omitempty"` // the config leaf rank (leaves)
-	NotAfter           int64                  `protobuf:"varint,15,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`    // ms since the epoch: a revoked row stays a tombstone until it
+	LiveSince          uint64                 `protobuf:"varint,14,opt,name=live_since,json=liveSince,proto3" json:"live_since,omitempty"`                          // the config leaf rank (leaves)
+	NotAfter           int64                  `protobuf:"varint,15,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`                             // ms since the epoch: a revoked row stays a tombstone until it
+	IdentityPublicKey  []byte                 `protobuf:"bytes,16,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"` // the SidecarAdmit's, or for the first device the Genesis's
+	IdentityAlg        string                 `protobuf:"bytes,17,opt,name=identity_alg,json=identityAlg,proto3" json:"identity_alg,omitempty"`                     // ed25519 in v0
+	MemberId           []byte                 `protobuf:"bytes,18,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`                              // an untagged admission's member; or tag_ids
+	TagIds             [][]byte               `protobuf:"bytes,19,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`                                    // a tagged admission's keyed tag ids, 16 B each
+	Ephemeral          bool                   `protobuf:"varint,20,opt,name=ephemeral,proto3" json:"ephemeral,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1042,20 +1048,58 @@ func (x *SidecarRow) GetNotAfter() int64 {
 	return 0
 }
 
-// The fields §7.9 lists. §2.8's api-7 also shows the signing and reader public keys and max_admits in
-// these rows; they stay out until the two sections agree, and later numbers can add them.
+func (x *SidecarRow) GetIdentityPublicKey() []byte {
+	if x != nil {
+		return x.IdentityPublicKey
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetIdentityAlg() string {
+	if x != nil {
+		return x.IdentityAlg
+	}
+	return ""
+}
+
+func (x *SidecarRow) GetMemberId() []byte {
+	if x != nil {
+		return x.MemberId
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetTagIds() [][]byte {
+	if x != nil {
+		return x.TagIds
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetEphemeral() bool {
+	if x != nil {
+		return x.Ephemeral
+	}
+	return false
+}
+
+// The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
+// shows and protos-bridge-row-fields #2 numbers.
 type DelegationRow struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DelegationId  []byte                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
-	Signer        []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
-	At            uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
-	TagAtoms      [][]byte               `protobuf:"bytes,4,rep,name=tag_atoms,json=tagAtoms,proto3" json:"tag_atoms,omitempty"`
-	NotAfter      int64                  `protobuf:"varint,5,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`               // ms since the epoch
-	KeyDroppedAt  uint64                 `protobuf:"varint,6,opt,name=key_dropped_at,json=keyDroppedAt,proto3" json:"key_dropped_at,omitempty"` // §10.5
-	EndedAt       uint64                 `protobuf:"varint,7,opt,name=ended_at,json=endedAt,proto3" json:"ended_at,omitempty"`
-	Admissions    uint32                 `protobuf:"varint,8,opt,name=admissions,proto3" json:"admissions,omitempty"` // those it has made, counted in log order for its life
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	DelegationId         []byte                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	Signer               []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
+	At                   uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
+	TagAtoms             [][]byte               `protobuf:"bytes,4,rep,name=tag_atoms,json=tagAtoms,proto3" json:"tag_atoms,omitempty"`
+	NotAfter             int64                  `protobuf:"varint,5,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`               // ms since the epoch
+	KeyDroppedAt         uint64                 `protobuf:"varint,6,opt,name=key_dropped_at,json=keyDroppedAt,proto3" json:"key_dropped_at,omitempty"` // §10.5
+	EndedAt              uint64                 `protobuf:"varint,7,opt,name=ended_at,json=endedAt,proto3" json:"ended_at,omitempty"`
+	Admissions           uint32                 `protobuf:"varint,8,opt,name=admissions,proto3" json:"admissions,omitempty"`                                                     // those it has made, counted in log order for its life
+	Pubkey               []byte                 `protobuf:"bytes,9,opt,name=pubkey,proto3" json:"pubkey,omitempty"`                                                              // the Ed25519 key that signs its SidecarAdmits
+	ReaderXwingPublicKey []byte                 `protobuf:"bytes,10,opt,name=reader_xwing_public_key,json=readerXwingPublicKey,proto3" json:"reader_xwing_public_key,omitempty"` // §10.5
+	MaxAdmits            uint32                 `protobuf:"varint,11,opt,name=max_admits,json=maxAdmits,proto3" json:"max_admits,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *DelegationRow) Reset() {
@@ -1140,6 +1184,27 @@ func (x *DelegationRow) GetEndedAt() uint64 {
 func (x *DelegationRow) GetAdmissions() uint32 {
 	if x != nil {
 		return x.Admissions
+	}
+	return 0
+}
+
+func (x *DelegationRow) GetPubkey() []byte {
+	if x != nil {
+		return x.Pubkey
+	}
+	return nil
+}
+
+func (x *DelegationRow) GetReaderXwingPublicKey() []byte {
+	if x != nil {
+		return x.ReaderXwingPublicKey
+	}
+	return nil
+}
+
+func (x *DelegationRow) GetMaxAdmits() uint32 {
+	if x != nil {
+		return x.MaxAdmits
 	}
 	return 0
 }
@@ -1896,7 +1961,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"key_sha256\x18\x01 \x01(\fR\tkeySha256\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
 	"\x02at\x18\x03 \x01(\x04R\x02at\x12?\n" +
-	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xa9\x04\n" +
+	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xd0\x05\n" +
 	"\n" +
 	"SidecarRow\x12\x1d\n" +
 	"\n" +
@@ -1918,7 +1983,12 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\rdelegation_id\x18\r \x01(\fR\fdelegationId\x12\x1d\n" +
 	"\n" +
 	"live_since\x18\x0e \x01(\x04R\tliveSince\x12\x1b\n" +
-	"\tnot_after\x18\x0f \x01(\x03R\bnotAfter\"\xf7\x01\n" +
+	"\tnot_after\x18\x0f \x01(\x03R\bnotAfter\x12.\n" +
+	"\x13identity_public_key\x18\x10 \x01(\fR\x11identityPublicKey\x12!\n" +
+	"\fidentity_alg\x18\x11 \x01(\tR\videntityAlg\x12\x1b\n" +
+	"\tmember_id\x18\x12 \x01(\fR\bmemberId\x12\x17\n" +
+	"\atag_ids\x18\x13 \x03(\fR\x06tagIds\x12\x1c\n" +
+	"\tephemeral\x18\x14 \x01(\bR\tephemeral\"\xe5\x02\n" +
 	"\rDelegationRow\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\fR\fdelegationId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
@@ -1929,7 +1999,12 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\bended_at\x18\a \x01(\x04R\aendedAt\x12\x1e\n" +
 	"\n" +
 	"admissions\x18\b \x01(\rR\n" +
-	"admissions\"\xa5\x02\n" +
+	"admissions\x12\x16\n" +
+	"\x06pubkey\x18\t \x01(\fR\x06pubkey\x125\n" +
+	"\x17reader_xwing_public_key\x18\n" +
+	" \x01(\fR\x14readerXwingPublicKey\x12\x1d\n" +
+	"\n" +
+	"max_admits\x18\v \x01(\rR\tmaxAdmits\"\xa5\x02\n" +
 	"\x06KeyRow\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\fR\x05keyId\x12\x1b\n" +
 	"\tmember_id\x18\x02 \x01(\fR\bmemberId\x12+\n" +
