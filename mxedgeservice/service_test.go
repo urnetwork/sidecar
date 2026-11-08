@@ -1167,10 +1167,10 @@ func TestAcceptFailureThatStaysEndsServe(t *testing.T) {
 func TestNoLogMetricOrKeyHoldsAnAddressEhloNameOrSni(t *testing.T) {
 	engine := newTestEngine(t, nil)
 	capture := sidecartest.NewPrivacyCapture()
-	ehloName := capture.Canary("ehlo name")
-	serverName := capture.Canary("sni")
+	ehloName := capture.CanaryText("ehlo name")
+	serverName := capture.CanaryText("sni")
 	for _, text := range []string{testSender, "203.0.113", testSenderIp6, "2001:db8:1"} {
-		capture.AddSecret("address", []byte(text))
+		capture.Forbid("address", []byte(text))
 	}
 
 	client := engine.open(testSender)
