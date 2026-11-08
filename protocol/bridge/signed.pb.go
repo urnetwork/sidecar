@@ -88,6 +88,8 @@ const (
 	SignedType_SIGNED_EVS_RESEED   SignedType = 5122
 	SignedType_SIGNED_EVS_PATH_MAP SignedType = 5123
 	SignedType_SIGNED_EVS_IMPORT   SignedType = 5124
+	// 0x15xx §13: a device key's attestation, purpose tls-key (§13.8).
+	SignedType_SIGNED_TLS_KEY_ATTESTATION SignedType = 5377
 	// 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
 	// purpose approval; §16.11's directory items, purpose directory, the last two, reserved for format 2.
 	SignedType_SIGNED_RECORD_HEADER     SignedType = 6145
@@ -159,6 +161,7 @@ var (
 		5122: "SIGNED_EVS_RESEED",
 		5123: "SIGNED_EVS_PATH_MAP",
 		5124: "SIGNED_EVS_IMPORT",
+		5377: "SIGNED_TLS_KEY_ATTESTATION",
 		6145: "SIGNED_RECORD_HEADER",
 		6146: "SIGNED_APPROVAL_DECISION",
 		6147: "SIGNED_APPROVAL_CANCEL",
@@ -223,6 +226,7 @@ var (
 		"SIGNED_EVS_RESEED":          5122,
 		"SIGNED_EVS_PATH_MAP":        5123,
 		"SIGNED_EVS_IMPORT":          5124,
+		"SIGNED_TLS_KEY_ATTESTATION": 5377,
 		"SIGNED_RECORD_HEADER":       6145,
 		"SIGNED_APPROVAL_DECISION":   6146,
 		"SIGNED_APPROVAL_CANCEL":     6147,
@@ -470,7 +474,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xfb\f\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\x9c\r\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -519,7 +523,8 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x0fSIGNED_EVS_PUSH\x10\x81(\x12\x16\n" +
 	"\x11SIGNED_EVS_RESEED\x10\x82(\x12\x18\n" +
 	"\x13SIGNED_EVS_PATH_MAP\x10\x83(\x12\x16\n" +
-	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x19\n" +
+	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x1f\n" +
+	"\x1aSIGNED_TLS_KEY_ATTESTATION\x10\x81*\x12\x19\n" +
 	"\x14SIGNED_RECORD_HEADER\x10\x810\x12\x1d\n" +
 	"\x18SIGNED_APPROVAL_DECISION\x10\x820\x12\x1b\n" +
 	"\x16SIGNED_APPROVAL_CANCEL\x10\x830\x12\x1c\n" +
