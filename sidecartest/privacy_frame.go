@@ -25,6 +25,25 @@ type privacyPair struct {
 	destination connect.Id
 }
 
+// The application bytes a frame carries in the clear, each its own view, so a payload that is a
+// compressed stream opens from its start. A sealed frame's are ciphertext, and none is returned.
+func plaintextFrameMessages(frame []byte) [][]byte {
+	transferFrame := &protocol.TransferFrame{}
+	if err := proto.Unmarshal(frame, transferFrame); err != nil {
+		return nil
+	}
+	messages := [][]byte{}
+	if transferFrame.Frame != nil {
+		messages = append(messages, transferFrame.Frame.MessageBytes)
+	}
+	if transferFrame.Pack != nil {
+		for _, packFrame := range transferFrame.Pack.Frames {
+			messages = append(messages, packFrame.MessageBytes)
+		}
+	}
+	return messages
+}
+
 // Why a frame to destination is not sealed, or empty when it keeps CC2's rule.
 func unsealedFrameReason(destination connect.Id, frame []byte) string {
 	if destination == connect.ControlId {
@@ -67,6 +86,7 @@ func unsealedFrameReason(destination connect.Id, frame []byte) string {
 func (self *PrivacyCapture) AddFrame(source connect.Id, destination connect.Id, frame []byte) {
 	name := fmt.Sprintf("frame %s to %s", source, destination)
 	reason := unsealedFrameReason(destination, frame)
+	messages := plaintextFrameMessages(frame)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	pair := privacyPair{source: source, destination: destination}
@@ -75,6 +95,9 @@ func (self *PrivacyCapture) AddFrame(source connect.Id, destination connect.Id, 
 	}
 	self.frameSizes[pair] = append(self.frameSizes[pair], len(frame))
 	self.items = append(self.items, &PrivacyItem{Class: PrivacyClassFrame, Name: name, Body: bytes.Clone(frame)})
+	for index, message := range messages {
+		self.items = append(self.items, &PrivacyItem{Class: PrivacyClassFrame, Name: fmt.Sprintf("%s message %d", name, index), Body: bytes.Clone(message)})
+	}
 	if reason != "" {
 		self.ruleFindings = append(self.ruleFindings, &PrivacyFinding{
 			Needle:     name,
