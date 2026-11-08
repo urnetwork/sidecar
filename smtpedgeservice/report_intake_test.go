@@ -311,7 +311,7 @@ func TestReportIntakeUnknownTokenDropsUnread(t *testing.T) {
 func TestReportIntakeWithNoMailKeyKeepsFieldsAndDropsTheRawBytes(t *testing.T) {
 	ti := newTestIntake(t, false)
 	capture := sidecartest.NewPrivacyCapture()
-	canary := capture.Canary("aggregate org name")
+	canary := capture.CanaryText("aggregate org name")
 	networkId := sidecar.NewId()
 	recipient := ti.tokens.Add(networkId) + "@rpt.report.example"
 	if outcome := ti.accept(t, recipient, dmarcAggregate(ti.reporterKey, recipient, canary, "report-3", intakeDmarcRecords())); outcome != smtpedgeservice.SmtpReportOutcomeCounted {
@@ -538,8 +538,8 @@ func TestReportIntakeArfBodyCanaryInNoLogRowOrMetric(t *testing.T) {
 	for _, withKey := range []bool{false, true} {
 		ti := newTestIntake(t, true)
 		capture := sidecartest.NewPrivacyCapture()
-		bodyCanary := capture.Canary("enclosed body")
-		subjectCanary := capture.Canary("enclosed subject")
+		bodyCanary := capture.CanaryText("enclosed body")
+		subjectCanary := capture.CanaryText("enclosed subject")
 		networkId := sidecar.NewId()
 		if withKey {
 			ti.keys.Add(networkId)

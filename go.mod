@@ -6,6 +6,8 @@ tool google.golang.org/protobuf/cmd/protoc-gen-go
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/andybalholm/brotli v1.2.7
+	github.com/klauspost/compress v1.20.2
 	github.com/miekg/dns v1.1.72
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/urnetwork/connect v0.0.0
@@ -16,13 +18,11 @@ require (
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/ice/v4 v4.4.1 // indirect
