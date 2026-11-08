@@ -240,8 +240,9 @@ func TestEnumNumbersStable(t *testing.T) {
 	}
 }
 
-// §22.5's stability for the service files: §9's, §11.14's and §6.11's numbers as written, then evs.proto's bit and
-// kind values, whose reserved ones evs_descriptor_test.go reads again, then the values §10 and §15 write as names.
+// §22.5's stability for the service files: §9's, §11.14's and §6.11's numbers as written, with TlsHint's kinds as
+// plan-TLS-small-readings#1 numbers them, then evs.proto's bit and kind values, whose reserved ones
+// evs_descriptor_test.go reads again, then the values §10 and §15 write as names.
 func TestServiceEnumNumbersStable(t *testing.T) {
 	cases := []struct {
 		name string
@@ -252,6 +253,13 @@ func TestServiceEnumNumbersStable(t *testing.T) {
 			name: "SocketHintKind",
 			got:  SocketHintKind_value,
 			want: map[string]int32{"SOCKET_HINT_KIND_UNSPECIFIED": 0, "SOCKET_HINT_REVOKED": 1, "SOCKET_HINT_DRAIN": 2},
+		},
+		{
+			name: "TlsHintKind",
+			got:  TlsHintKind_value,
+			want: map[string]int32{
+				"TLS_HINT_KIND_UNSPECIFIED": 0, "TLS_HINT_ORDER": 1, "TLS_HINT_ISSUED": 2, "TLS_HINT_REVOKED": 3,
+			},
 		},
 		{
 			name: "SearchStatus",

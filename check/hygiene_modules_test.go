@@ -162,14 +162,15 @@ func (self *repository) workFileFindings(t testing.TB) []string {
 	return findings
 }
 
-// The modules a release leaves unversioned in place, never tagged (§4.9).
-var untaggedModuleNames = []string{"cli", "mlsinterop"}
+// The modules a release leaves unversioned in place, never tagged (§4.9), sidecarctl among them
+// (C-23).
+var untaggedModuleNames = []string{"cli", "mlsinterop", "sidecarctl"}
 
 // A quoted path of this repository, as the release's rewrite finds one, up to what ends a path: a
 // Makefile's go install path@version, say, or a second word in the quotes.
 var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sidecarBasePath) + `[^"\s@]*)`)
 
-// cli and mlsinterop each stay one package, and no file names either by its path. The release
+// cli, mlsinterop and sidecarctl each stay one package, and no file names one by its path. The release
 // rewrites every quoted path under the root's to .../sidecar/v2026 in every .go file and Makefile
 // (build/all/run.sh's go_edit_require_subpackages, which sidecar_release_edit runs), and these modules
 // keep their unversioned paths. So a package beside a module's own is one the rewrite would import

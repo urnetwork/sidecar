@@ -768,7 +768,6 @@ rows:
   gkm-9: {planned: M2}
   gkm-10: {planned: M2}
   tls-4: {planned: M5}
-  cert-1: {planned: M5}
   cert-2: {planned: M5}
   dns-2: {planned: M5}
   smtp-3: {planned: M9}

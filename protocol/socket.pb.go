@@ -1,6 +1,7 @@
-// §9's protobuf wire: the hint that revokes or drains a listener (§9.5), and the ticket a Find signs and a
-// dialer presents (§9.6). Numbers are §9's as written. Registrations and Find are JSON on §9's routes, so
-// they are not here, and neither is a registration's Claim, which §9.5 writes as a tuple.
+// §9's protobuf wire: the hint that revokes or drains a listener (§9.5), the claim a listener signs and a
+// dialer checks (§9.5), and the ticket a Find signs and a dialer presents (§9.6). Numbers are §9's as
+// written, and the claim's follow §9.5's tuple, which gives none. Registrations and Find are JSON on §9's
+// routes, so they are not here.
 //
 // No oneof: SocketHint rides PushHint.hint and SignedSocketTicket StreamOpen.ticket (§6.11).
 
@@ -130,6 +131,91 @@ func (x *SocketHint) GetListenId() []byte {
 	return nil
 }
 
+type SocketRegistrationClaim struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// identity key, purpose socket-registration; Find returns it with tickets
+	NetworkId     []byte `protobuf:"bytes,1,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                            // tls/, smtp/ and ur/ names only
+	NameToken     []byte `protobuf:"bytes,3,opt,name=name_token,json=nameToken,proto3" json:"name_token,omitempty"` // other names: the token path (9.4)
+	ListenId      []byte `protobuf:"bytes,4,opt,name=listen_id,json=listenId,proto3" json:"listen_id,omitempty"`    // 16 B
+	Protocol      string `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	AppMode       string `protobuf:"bytes,6,opt,name=app_mode,json=appMode,proto3" json:"app_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SocketRegistrationClaim) Reset() {
+	*x = SocketRegistrationClaim{}
+	mi := &file_protocol_socket_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SocketRegistrationClaim) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SocketRegistrationClaim) ProtoMessage() {}
+
+func (x *SocketRegistrationClaim) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_socket_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SocketRegistrationClaim.ProtoReflect.Descriptor instead.
+func (*SocketRegistrationClaim) Descriptor() ([]byte, []int) {
+	return file_protocol_socket_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SocketRegistrationClaim) GetNetworkId() []byte {
+	if x != nil {
+		return x.NetworkId
+	}
+	return nil
+}
+
+func (x *SocketRegistrationClaim) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SocketRegistrationClaim) GetNameToken() []byte {
+	if x != nil {
+		return x.NameToken
+	}
+	return nil
+}
+
+func (x *SocketRegistrationClaim) GetListenId() []byte {
+	if x != nil {
+		return x.ListenId
+	}
+	return nil
+}
+
+func (x *SocketRegistrationClaim) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *SocketRegistrationClaim) GetAppMode() string {
+	if x != nil {
+		return x.AppMode
+	}
+	return ""
+}
+
 type SocketTicket struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
 	TicketId              []byte                 `protobuf:"bytes,1,opt,name=ticket_id,json=ticketId,proto3" json:"ticket_id,omitempty"` // 16 random bytes, single use
@@ -152,7 +238,7 @@ type SocketTicket struct {
 
 func (x *SocketTicket) Reset() {
 	*x = SocketTicket{}
-	mi := &file_protocol_socket_proto_msgTypes[1]
+	mi := &file_protocol_socket_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -164,7 +250,7 @@ func (x *SocketTicket) String() string {
 func (*SocketTicket) ProtoMessage() {}
 
 func (x *SocketTicket) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_socket_proto_msgTypes[1]
+	mi := &file_protocol_socket_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -177,7 +263,7 @@ func (x *SocketTicket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SocketTicket.ProtoReflect.Descriptor instead.
 func (*SocketTicket) Descriptor() ([]byte, []int) {
-	return file_protocol_socket_proto_rawDescGZIP(), []int{1}
+	return file_protocol_socket_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SocketTicket) GetTicketId() []byte {
@@ -289,7 +375,7 @@ type SignedSocketTicket struct {
 
 func (x *SignedSocketTicket) Reset() {
 	*x = SignedSocketTicket{}
-	mi := &file_protocol_socket_proto_msgTypes[2]
+	mi := &file_protocol_socket_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -301,7 +387,7 @@ func (x *SignedSocketTicket) String() string {
 func (*SignedSocketTicket) ProtoMessage() {}
 
 func (x *SignedSocketTicket) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_socket_proto_msgTypes[2]
+	mi := &file_protocol_socket_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -314,7 +400,7 @@ func (x *SignedSocketTicket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignedSocketTicket.ProtoReflect.Descriptor instead.
 func (*SignedSocketTicket) Descriptor() ([]byte, []int) {
-	return file_protocol_socket_proto_rawDescGZIP(), []int{2}
+	return file_protocol_socket_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SignedSocketTicket) GetKeyId() string {
@@ -346,7 +432,16 @@ const file_protocol_socket_proto_rawDesc = "" +
 	"\n" +
 	"SocketHint\x125\n" +
 	"\x04kind\x18\x01 \x01(\x0e2!.urnetwork.sidecar.SocketHintKindR\x04kind\x12\x1b\n" +
-	"\tlisten_id\x18\x02 \x01(\fR\blistenId\"\x91\x04\n" +
+	"\tlisten_id\x18\x02 \x01(\fR\blistenId\"\xbf\x01\n" +
+	"\x17SocketRegistrationClaim\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x01 \x01(\fR\tnetworkId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
+	"\n" +
+	"name_token\x18\x03 \x01(\fR\tnameToken\x12\x1b\n" +
+	"\tlisten_id\x18\x04 \x01(\fR\blistenId\x12\x1a\n" +
+	"\bprotocol\x18\x05 \x01(\tR\bprotocol\x12\x19\n" +
+	"\bapp_mode\x18\x06 \x01(\tR\aappMode\"\x91\x04\n" +
 	"\fSocketTicket\x12\x1b\n" +
 	"\tticket_id\x18\x01 \x01(\fR\bticketId\x12\x1d\n" +
 	"\n" +
@@ -387,12 +482,13 @@ func file_protocol_socket_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_socket_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_protocol_socket_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_protocol_socket_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_protocol_socket_proto_goTypes = []any{
-	(SocketHintKind)(0),        // 0: urnetwork.sidecar.SocketHintKind
-	(*SocketHint)(nil),         // 1: urnetwork.sidecar.SocketHint
-	(*SocketTicket)(nil),       // 2: urnetwork.sidecar.SocketTicket
-	(*SignedSocketTicket)(nil), // 3: urnetwork.sidecar.SignedSocketTicket
+	(SocketHintKind)(0),             // 0: urnetwork.sidecar.SocketHintKind
+	(*SocketHint)(nil),              // 1: urnetwork.sidecar.SocketHint
+	(*SocketRegistrationClaim)(nil), // 2: urnetwork.sidecar.SocketRegistrationClaim
+	(*SocketTicket)(nil),            // 3: urnetwork.sidecar.SocketTicket
+	(*SignedSocketTicket)(nil),      // 4: urnetwork.sidecar.SignedSocketTicket
 }
 var file_protocol_socket_proto_depIdxs = []int32{
 	0, // 0: urnetwork.sidecar.SocketHint.kind:type_name -> urnetwork.sidecar.SocketHintKind
@@ -414,7 +510,7 @@ func file_protocol_socket_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_socket_proto_rawDesc), len(file_protocol_socket_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

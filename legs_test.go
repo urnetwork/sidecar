@@ -366,7 +366,7 @@ func TestWorkerHarnessFinishesEachGcCycleBeforeItsProgramGoesOn(t *testing.T) {
 // The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
 // under node's process global net/http never calls fetch, and what the page Worker's transport does
 // with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
-// its fetch tests, the known answers for the mls_ and socket_ it keeps and mail's vectors, since a run
+// its fetch tests, the known answers for the mls_ and socket_ it keeps, mail's and tls's vectors, since a run
 // that skipped them would still exit 0. The run is held to a quarter of wasm's 4 GiB, where it needs
 // under 200 MB, so memory a change adds fails here by name rather than as an out-of-memory death on
 // some later run.
@@ -401,6 +401,10 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestSocketTokenVectors",
 		"TestSocketSealVectors",
 		"TestSocketSealDropVectors",
+		"TestSocketTicketVectorsSign",
+		"TestSocketTicketVectorsVerify",
+		"TestSocketTicketVerifiesOverReceivedBytes",
+		"TestSocketTicketVectorRefusals",
 		"TestMailVectorsRoundTrip",
 		"TestMailVectorsCoverEveryField",
 		"TestMailVectorNames",
@@ -415,6 +419,8 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestUrMlsCredentialRoundTrip",
 		"TestDpopVectorsAreByteEqual",
 		"TestDpopVectorsVerify",
+		"TestTlsKeyAttestationVectorsAreByteEqual",
+		"TestTlsKeyAttestationVectorsVerify",
 		"TestRefreshNotSentWithoutSigner",
 		"TestEnrollRefusesBundle",
 		"TestExchangeTokenPostsItsFormAndProof",

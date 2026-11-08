@@ -9,10 +9,11 @@ TEST_TIMEOUT ?= 30m
 
 # The nested modules sit beside this file in development. A release branch moves the root module
 # into v2026/ beside them and smtpproof into its own v2026/ (§4.9), and make check runs there too.
+# sidecarctl is the operations binary (CONTRACTS.md C-23).
 ifneq ($(wildcard cli/go.mod),)
-modules := . cli smtpproof mlsinterop
+modules := . cli smtpproof mlsinterop sidecarctl
 else
-modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop
+modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop ../sidecarctl
 endif
 
 .PHONY: check size proto metadata stack-test

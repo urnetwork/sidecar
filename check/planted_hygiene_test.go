@@ -74,6 +74,13 @@ func TestHygieneFailsOnASubpackageOfCli(t *testing.T) {
 	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "cli/daemon: a package beside cli's own")
 }
 
+// sidecarctl keeps its unversioned path too, and every command stays a file of its one package.
+func TestHygieneFailsOnASubpackageOfSidecarctl(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("sidecarctl/certs/swap.go", "package certs\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "sidecarctl/certs: a package beside sidecarctl's own")
+}
+
 // One finding a package, its tests included, and testdata is no package.
 func TestHygieneFailsOnASubpackageOfMlsinterop(t *testing.T) {
 	fixture := newFixture(t)

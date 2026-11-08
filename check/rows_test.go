@@ -65,7 +65,7 @@ var failsOnRows = []failsOnRow{
 	{
 		row: "deps", item: "a module outside §4.7's table, or one no leg reads",
 		rule:         (*repository).moduleSetFindings,
-		plantedTests: []string{"TestDepsFailsOnAFifthModule", "TestDepsFailsOnAnAlternateModuleFile", "TestDepsFailsOnAModuleNoLegReads"},
+		plantedTests: []string{"TestDepsFailsOnAModuleOutsideTheTable", "TestDepsFailsOnAnAlternateModuleFile", "TestDepsFailsOnAModuleNoLegReads"},
 	},
 	{
 		row: "deps", item: "from M10, a leg selecting a golang.org/x/text other than normalizer 1's",
@@ -179,6 +179,11 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "legs", item: "a mail server or verifier library on the sidecar_http leg (R-MAIL-13)",
+		rule:         (*repository).sidecarHttpMailFindings,
+		plantedTests: []string{"TestLegsFailsOnSidecarHttpLinkingAMailLibrary"},
+	},
+	{
 		row: "legs", item: "a host_*.go file on the sidecar_http leg (§18.10)",
 		rule:         (*repository).hostFileFindings,
 		plantedTests: []string{"TestLegsFailsOnAHostFileWithoutTheTag"},
@@ -249,10 +254,10 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAGoWorkFile"},
 	},
 	{
-		row: "hygiene", item: "a package beside cli's or mlsinterop's own, or a file naming either, which the release's rewrite would break (§4.9)",
+		row: "hygiene", item: "a package beside cli's, mlsinterop's or sidecarctl's own, or a file naming one, which the release's rewrite would break (§4.9)",
 		rule: (*repository).untaggedSubpackageFindings,
 		plantedTests: []string{
-			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop",
+			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop", "TestHygieneFailsOnASubpackageOfSidecarctl",
 			"TestHygieneFailsOnAnExternalTestImportingMlsinterop", "TestHygieneFailsOnAQuotedPathOfCliOutsideAnImport",
 		},
 	},

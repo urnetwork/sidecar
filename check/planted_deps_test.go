@@ -167,7 +167,8 @@ func TestDepsFailsOnARequireNoPackageReaches(t *testing.T) {
 	wantFindings(t, fixture.open().firstPartyRequireFindings(t), "a first-party module §4.7 does not name")
 }
 
-func TestDepsFailsOnAFifthModule(t *testing.T) {
+// A module beyond §4.7's four and C-23's sidecarctl.
+func TestDepsFailsOnAModuleOutsideTheTable(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("tools/go.mod", "module @module@/tools\n\ngo 1.27.3\n")
 	wantFindings(t, fixture.open().moduleSetFindings(t),
