@@ -279,10 +279,20 @@ func testReadFences(t *testing.T) *testFences {
 		}
 		message.fields = append(message.fields, addition.field)
 	}
-	for _, addition := range testFenceValueAdditions {
+	for _, finding := range testApplyValueAdditions(fences, testFenceValueAdditions) {
+		t.Error(finding)
+	}
+	return fences
+}
+
+// Joins each value to the enum it extends, and says which cannot join: an enum no fence writes, or a
+// value or number the design now writes itself, whose line should leave the list.
+func testApplyValueAdditions(fences *testFences, additions []testFenceValueAddition) []string {
+	findings := []string{}
+	for _, addition := range additions {
 		enum := fences.enums[addition.enum]
 		if enum == nil {
-			t.Errorf("%s gains %s by %s, and no fence writes that enum", addition.enum, addition.name, addition.question)
+			findings = append(findings, fmt.Sprintf("%s gains %s by %s, and no fence writes that enum", addition.enum, addition.name, addition.question))
 			continue
 		}
 		_, written := enum.values[addition.name]
@@ -290,12 +300,36 @@ func testReadFences(t *testing.T) *testFences {
 			written = written || number == addition.number
 		}
 		if written || slices.Contains(enum.reservedNumbers, addition.number) {
-			t.Errorf("the design now writes %s.%s or its number %#x: drop its line from testFenceValueAdditions (%s)", addition.enum, addition.name, addition.number, addition.question)
+			findings = append(findings, fmt.Sprintf("the design now writes %s.%s or its number %#x: drop its line from testFenceValueAdditions (%s)", addition.enum, addition.name, addition.number, addition.question))
 			continue
 		}
 		enum.values[addition.name] = addition.number
 	}
-	return fences
+	return findings
+}
+
+// The value list's own checks, on fences planted for it: a value joins, and a value or number already
+// written, or an enum no fence writes, is a finding rather than a second copy.
+func TestFenceValueAdditionsJoinOnlyWhatTheDesignLeavesOut(t *testing.T) {
+	planted := func() *testFences {
+		return &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{
+			"Planted": {path: "protocol/types.proto", values: map[string]int32{"PLANTED_NONE": 0, "PLANTED_ONE": 1}, reservedNumbers: []int32{9}},
+		}}
+	}
+	fences := planted()
+	if findings := testApplyValueAdditions(fences, []testFenceValueAddition{{enum: "Planted", name: "PLANTED_TWO", number: 2, question: "q"}}); len(findings) != 0 || fences.enums["Planted"].values["PLANTED_TWO"] != 2 {
+		t.Errorf("a new value: %v", findings)
+	}
+	for _, addition := range []testFenceValueAddition{
+		{enum: "Planted", name: "PLANTED_ONE", number: 3, question: "q"},
+		{enum: "Planted", name: "PLANTED_THREE", number: 1, question: "q"},
+		{enum: "Planted", name: "PLANTED_NINE", number: 9, question: "q"},
+		{enum: "Unwritten", name: "UNWRITTEN_ONE", number: 1, question: "q"},
+	} {
+		if findings := testApplyValueAdditions(planted(), []testFenceValueAddition{addition}); len(findings) != 1 {
+			t.Errorf("%s.%s: %v", addition.enum, addition.name, findings)
+		}
+	}
 }
 
 // A message's reserved ranges, each number written out.
