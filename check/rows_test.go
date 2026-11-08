@@ -347,6 +347,16 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "hygiene", item: "§22.4's clock rule: time's clock read outside a Clock in the root, an engine, mcp or device, but for a listed exception",
+		rule: (*repository).wallClockFindings,
+		plantedTests: []string{
+			"TestClockFailsOnAWallClockCallInTheRoot", "TestClockFailsOnAWallClockCallInAnEngine",
+			"TestClockFailsOnAWallClockCallInDevice", "TestClockFailsOnAWallClockCallInMcp",
+			"TestClockFailsOnTheWallClockPassedAsAValue", "TestClockFailsOnAnAliasedTimeImport",
+			"TestClockFailsOnACallBesideAListedException", "TestClockFailsOnACallBehindABuildTag",
+		},
+	},
+	{
 		row: "hygiene", item: "govulncheck findings",
 		checkoutTest: "TestHygieneGovulncheck",
 		plantedTests: []string{"TestHygieneFailsOnAVulnerableCallOnALeg", "TestHygieneFailsOnAnUnreachableVulnDatabase"},
