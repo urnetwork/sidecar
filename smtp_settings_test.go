@@ -20,6 +20,9 @@ func TestDefaultSmtpSenderSettingsMatchDesign(t *testing.T) {
 		PinTimeout:                 90 * 24 * time.Hour,
 		OutboxProgressInterval:     5 * time.Minute,
 		OutboxTakeoverTimeout:      10 * time.Minute,
+		DkimRotateTimeout:          90 * 24 * time.Hour,
+		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
+		DkimExpireTimeout:          7 * 24 * time.Hour,
 	}
 	if !reflect.DeepEqual(settings, want) {
 		t.Errorf("%+v", settings)

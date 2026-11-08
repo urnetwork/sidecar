@@ -40,6 +40,16 @@ type SmtpSenderSettings struct {
 	// How long an entry's or/ goes unchanged before the next host takes the send over: 10 min. A crash
 	// can still send twice, which §22.7 allows.
 	OutboxTakeoverTimeout time.Duration
+	// How long a DKIM selector signs before one POST /smtp/dkim-keys publishes its successor and
+	// retires it: 90 days (§14.6).
+	DkimRotateTimeout time.Duration
+	// How long a retired selector's private key stays in the keychain: 7 days, as long as the server
+	// keeps the selector in DNS (§14.6), so a send that pinned it before a rotation still signs and
+	// still verifies. A pinned selector outlives this until its send releases it.
+	DkimRetiredKeepTimeout time.Duration
+	// How long a DKIM signature stays valid: x= is t= plus 7 days (§14.6), and a report about the
+	// message joins on the fixed signature only while it holds.
+	DkimExpireTimeout time.Duration
 }
 
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
@@ -53,6 +63,9 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		PinTimeout:                 90 * 24 * time.Hour,
 		OutboxProgressInterval:     5 * time.Minute,
 		OutboxTakeoverTimeout:      10 * time.Minute,
+		DkimRotateTimeout:          90 * 24 * time.Hour,
+		DkimRetiredKeepTimeout:     7 * 24 * time.Hour,
+		DkimExpireTimeout:          7 * 24 * time.Hour,
 	}
 }
 
