@@ -9,14 +9,15 @@
 // versioned paths for now, so no vault entry or lb image reads tls/current. Every lb deployed today
 // reads the version's names from versioned paths, which this refuses before it changes anything.
 //
-// It runs on one lb host, against that host's flat vault ($WARP_VAULT_HOME, else
-// $WARP_HOME/vault, as warpctl finds it), after the version it names has reached the host. Links
-// are relative, because the vault mounts at another path in the lb container, and there is one per
-// name, because a pair has to change in one step and each name's newest version can differ. nginx
-// reads a link only at start and reload, so a moved link changes nothing a client sees until the
-// reload that follows it. Docker Desktop's file sharing has failed an nginx reload right after a
-// link moved, where ext4 did not, so a swap against a macOS bind mount says nothing about one on a
-// host.
+// It runs on one lb host, after the version it names has reached the host, against the flat vault
+// warpctl mounts into an lb there: warp.json's vaultHome, else $WARP_VAULT_HOME, else
+// $WARP_HOME/vault, as warpctl's RequireVaultHome finds it. So it needs the WARP_HOME the host's
+// units run warpctl with, and refuses without one. Links are relative, because the vault mounts at
+// another path in the lb container, and there is one per name, because a pair has to change in one
+// step and each name's newest version can differ. nginx reads a link only at start and reload, so a
+// moved link changes nothing a client sees until the reload that follows it. Docker Desktop's file
+// sharing has failed an nginx reload right after a link moved, where ext4 did not, so a swap
+// against a macOS bind mount says nothing about one on a host.
 //
 // Neither half of that is taken on trust. nginx reloads happily with a config that never reads
 // tls/current, or from a vault that is not this one, and answers 0 to a reload it then ignores. So
@@ -26,9 +27,12 @@
 // them back: a refused version left in the links would stop the next lb start.
 //
 // All it knows of warp is warp's layout, which the constants below name: the labels warpctl run
-// stamps on a container and the vault mount it gives an lb (warpctl/run.go), the config lb/main.go
-// starts nginx from for a block, and the lines `warpctl lb create-config` writes for a pair, which
-// warpctl's TestNginxConfigWritesTlsLinesTheSwapReads holds to lbTlsPathRegex's shape.
+// stamps on a container and the vault mount it gives an lb (warpctl/run.go), where warpctl finds
+// that vault (warpctl/docker.go), the config lb/main.go starts nginx from for a block, and the
+// lines `warpctl lb create-config` writes there. warpctl's
+// TestNginxConfigWritesTlsLinesTheSwapReads holds its pair lines to lbTlsPathRegex's shape, and
+// TestNginxConfigWritesWorkerCountsTheSwapReads its worker count to what lbWorkerProcessesRegex
+// and lbWorkerProcessesLineRegex read.
 //
 // tls/current must stay out of what the vault copy ships to a host, which follows links in the
 // destination: it would overwrite the version a host's link points at, and a version's key is also
@@ -86,12 +90,19 @@ const (
 	nginxShutdownWorkerTitle = "nginx: worker process is shutting down"
 )
 
+// How many workers nginx runs for a config that sets no count, its built-in default.
+const nginxDefaultWorkerCount = 1
+
 // A tls path in an lb config. A line that is commented out does not match.
 var lbTlsPathRegex = regexp.MustCompile(`(?m)^\s*ssl_certificate(?:_key)?\s+([^\s;]+)\s*;`)
 
-// How many workers an lb config runs, which warpctl writes as a number for each block. auto, or
-// anything else, does not match.
+// How many workers an lb config runs, as warpctl writes it for a block sized for its load: a
+// number, opening its line. auto, or anything else, does not match.
 var lbWorkerProcessesRegex = regexp.MustCompile(`(?m)^\s*worker_processes\s+([0-9]+)\s*;`)
+
+// A line that sets the worker count in any shape, the directive anywhere before a comment. warpctl
+// writes none for a block without capacity sizing, whose nginx then runs its default.
+var lbWorkerProcessesLineRegex = regexp.MustCompile(`(?m)^[^#\n]*\bworker_processes\b`)
 
 // A version as `warpctl certs issue` names every one it writes, yyyy.m.d: three numbers and nothing
 // else. warp and server take any semver as a version, so refusing the rest fails closed, and it
@@ -113,7 +124,8 @@ type certsSwapSettings struct {
 	// Moves the links and touches no lb and no docker daemon, for a host with no lb a reload would
 	// reach: a new host before its first lb start, or a host whose lb is down, where this is the
 	// rollback. Nothing but the pair checks judges the version then, and a running lb keeps its old
-	// pair until its next reload or start.
+	// pair until its next reload or start. Nor does any lb confirm the vault: that rests on finding
+	// it as warpctl does, from the environment the host's units give warpctl (runCertsSwap).
 	noReload bool
 	// Bounds each docker call, so that a wedged daemon fails the swap instead of hanging the job
 	// that ran it. A reload parses the whole lb config first. Non-positive expires every call at
@@ -168,11 +180,13 @@ type lbContainer struct {
 	block       string
 	// the names of this version the lb reads through tls/current
 	reachedNames []string
-	// the workers its config runs, which an lb with no reload under way runs exactly
+	// the workers it runs exactly when no reload is under way: the count its config sets, or
+	// nginx's default where it sets none
 	workerCount int
 }
 
-// `sidecarctl certs swap <env> <version> [--no-reload]`.
+// `sidecarctl certs swap <env> <version> [--no-reload]`, in the vault warpctl would mount into an
+// lb it ran with this environment.
 func runCertsSwap(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("certs swap", flag.ContinueOnError)
 	noReload := flags.Bool("no-reload", false, "move the links and touch no lb")
@@ -183,13 +197,13 @@ func runCertsSwap(args []string, out io.Writer) error {
 	if len(positionals) != 2 {
 		return sidecarctlUsageErrorf("want <env> and <version>, got %q", positionals)
 	}
-	vaultHome := os.Getenv("WARP_VAULT_HOME")
-	if vaultHome == "" {
-		warpHome := os.Getenv("WARP_HOME")
-		if warpHome == "" {
-			return errors.New("neither WARP_VAULT_HOME nor WARP_HOME is set, so there is no vault to swap in")
-		}
-		vaultHome = filepath.Join(warpHome, "vault")
+
+	// warpctl's RequireVaultHome (warpctl/docker.go), which every lb's vault mount comes from. With
+	// --no-reload nothing after this checks that the links move where an lb reads them, so where
+	// warpctl could find another vault this refuses.
+	vaultHome, err := findWarpVaultHome()
+	if err != nil {
+		return err
 	}
 	settings := defaultCertsSwapSettings()
 	settings.noReload = *noReload
@@ -361,12 +375,25 @@ func swapTlsCurrent(vaultHome string, env string, version string, settings *cert
 		if err != nil {
 			return fmt.Errorf("read the tls paths of %s: %w", lb.block, err)
 		}
-		workerCountMatches := lbWorkerProcessesRegex.FindAllSubmatch(output, -1)
-		if len(workerCountMatches) == 1 {
-			lb.workerCount, _ = strconv.Atoi(string(workerCountMatches[0][1]))
+		// warpctl writes the count once for a block sized for its load and not at all for one
+		// without capacity sizing, and nginx runs one worker for a config that sets none. A count
+		// set some other way, as auto or twice, cannot be read. One set where this grep does not
+		// look, as in an include, which the lb image leaves empty, would differ from what nginx
+		// runs, and the wait before the signal refuses a count the lb does not settle at.
+		switch len(lbWorkerProcessesLineRegex.FindAll(output, -1)) {
+		case 0:
+			lb.workerCount = nginxDefaultWorkerCount
+		case 1:
+			// a count past an int is refused here, where Atoi would give the largest int with its
+			// error, and the wait before the signal would look for that many workers
+			if match := lbWorkerProcessesRegex.FindSubmatch(output); match != nil {
+				if workerCount, err := strconv.Atoi(string(match[1])); err == nil {
+					lb.workerCount = workerCount
+				}
+			}
 		}
 		if lb.workerCount <= 0 {
-			return fmt.Errorf("%s does not run a fixed number of nginx workers, so its reload cannot be told from an earlier one's", lb.block)
+			return fmt.Errorf("%s sets its count of nginx workers in a way this cannot read, so its reload cannot be told from an earlier one's", lb.block)
 		}
 		currentNames := map[string]bool{}
 		otherNamePaths := map[string]string{}

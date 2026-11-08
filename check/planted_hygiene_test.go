@@ -32,6 +32,21 @@ func TestHygieneFailsOnAMissingReplace(t *testing.T) {
 	wantFindings(t, fixture.open().replaceFindings(t), ".: no replace for @glog@, which §4.7 has it repeat")
 }
 
+// C-23 lets sidecarctl, and no other module, replace warp with its sibling checkout.
+func TestHygieneLetsSidecarctlAloneReplaceWarp(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.edit("sidecarctl/go.mod", "replace gvisor.dev/gvisor => ../../gvisor\n", "replace gvisor.dev/gvisor => ../../gvisor\n\nreplace "+warpBasePath+" => ../../warp\n")
+	wantFindings(t, fixture.open().replaceFindings(t))
+
+	fixture.edit("sidecarctl/go.mod", "replace "+warpBasePath+" => ../../warp\n", "replace "+warpBasePath+" => ../../warp-fork\n")
+	wantFindings(t, fixture.open().replaceFindings(t), "sidecarctl: replace "+warpBasePath+" => ../../warp-fork, and C-23's is ../../warp")
+
+	fixture.edit("cli/go.mod", "replace gvisor.dev/gvisor => ../../gvisor\n", "replace gvisor.dev/gvisor => ../../gvisor\n\nreplace "+warpBasePath+" => ../../warp\n")
+	wantFindings(t, fixture.open().replaceFindings(t),
+		"cli: replace "+warpBasePath+" => ../../warp is not one of §4.7's",
+		"sidecarctl: replace "+warpBasePath+" => ../../warp-fork, and C-23's is ../../warp")
+}
+
 // Go does not inherit a replace, so each nested module is read on its own.
 func TestHygieneFailsOnANestedModuleNotRepeatingAReplace(t *testing.T) {
 	fixture := newFixture(t)
