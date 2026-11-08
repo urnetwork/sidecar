@@ -678,6 +678,41 @@ func TestZ9RefusesBdatToAnMxWithoutChunking(t *testing.T) {
 	}
 }
 
+// Part 2 with its EHLO reply as these records' contents, each in a record of its own.
+func testEhloRecords(t *testing.T, capture *testCapturedParts, contents ...string) (*partStatement, *partWitness) {
+	t.Helper()
+	statement, witness := capture.part(t, 2)
+	first := statement.serverRecords[0]
+	statement.serverRecords = nil
+	witness.serverPlaintexts = nil
+	for i, content := range contents {
+		statement.serverRecords = append(statement.serverRecords, &partRecord{seq: first.seq + uint64(i), raw: bytes.Clone(first.raw)})
+		witness.serverPlaintexts = append(witness.serverPlaintexts, nil)
+		testAuthorServerRecord(t, statement, witness, i, testServerContent(statement, content))
+	}
+	return statement, witness
+}
+
+func TestZ9ReadsTheKeywordInsideOneRecord(t *testing.T) {
+	// the reply parses across records (Z8), but the circuit's keyword window does not, and the relation
+	// is what the circuit must agree with
+	for _, leg := range testTlsLegs() {
+		capture := testBdatCapture(t, leg)
+		for _, contents := range [][]string{
+			{"250-mx\r\n250-CHUN", "KING\r\n250 OK\r\n"},
+			{"250-mx\r\n", "250-CHUNKING\r\n250 OK\r\n"},
+			{"250-mx\r\n250-CHUNKING", "\r\n250 OK\r\n"},
+		} {
+			statement, witness := testEhloRecords(t, capture, contents...)
+			testExpectOnly(t, leg.name, statement, witness, checkZ9)
+		}
+		statement, witness := testEhloRecords(t, capture, "250-mx\r\n250-PIPE", "LINING\r\n250-CHUNKING\r\n250 OK\r\n")
+		if failures := relationCheckPart(statement, witness); len(failures) != 0 {
+			t.Errorf("%s: a reply split before the keyword's line: %v", leg.name, failures)
+		}
+	}
+}
+
 func TestZ9AcceptsChunkingInAnyCaseAndPosition(t *testing.T) {
 	for _, leg := range testTlsLegs() {
 		capture := testBdatCapture(t, leg)

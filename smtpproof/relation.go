@@ -1071,6 +1071,36 @@ func relationZ8(statement *partStatement, witness *partWitness) error {
 	return nil
 }
 
+// Whether an application record among a part's server plaintexts holds a whole CHUNKING line that is
+// not its reply's first. The circuit matches CR LF, 250, a separator, the keyword and CR LF at positions
+// inside one record, so a line at a record's edge does not count (SPEC.md reading 17), and this is that
+// same test, so that the two agree. A ticket's octets are no part of the reply stream.
+func offersChunking(version uint16, plaintexts [][]byte) bool {
+	const prefix = "\r\n250"
+	windowBytes := len(prefix) + 1 + len(keywordChunking) + len(literalCrlf)
+	matches := func(window []byte) bool {
+		separator := window[len(prefix)]
+		word := window[len(prefix)+1 : windowBytes-len(literalCrlf)]
+		return string(window[:len(prefix)]) == prefix && (separator == '-' || separator == ' ') &&
+			asciiLower(word) == keywordChunking && string(window[windowBytes-len(literalCrlf):]) == literalCrlf
+	}
+	for _, plaintext := range plaintexts {
+		content := plaintext
+		if version == tlsVersion13 {
+			if len(plaintext) == 0 || plaintext[len(plaintext)-1] != tlsRecordApplicationData {
+				continue
+			}
+			content = plaintext[:len(plaintext)-tlsInnerTypeBytes]
+		}
+		for i := 0; i+windowBytes <= len(content); i += 1 {
+			if matches(content[i : i+windowBytes]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Z9: BDAT only to an MX whose post-TLS EHLO reply offers CHUNKING.
 func relationZ9(statement *partStatement, witness *partWitness) error {
 	if statement.index != 2 || statement.mode != partModeBdat {
@@ -1085,11 +1115,8 @@ func relationZ9(statement *partStatement, witness *partWitness) error {
 		// Z8's to refuse
 		return nil
 	}
-	for i, text := range replies[0].lines {
-		// the first line is the MX's name, never a keyword
-		if 0 < i && asciiLower([]byte(text)) == keywordChunking {
-			return nil
-		}
+	if offersChunking(statement.session.version, witness.serverPlaintexts) {
+		return nil
 	}
 	return errors.New("BDAT to an MX whose EHLO reply lacks CHUNKING")
 }

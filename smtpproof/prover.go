@@ -214,14 +214,19 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 		return &sidecar.SmtpProofResult{RefusedCode: replies[0].code}, nil
 	}
 
+	// the mode is what Z9 can prove, which is the keyword inside one record, and not merely what the
+	// reply says: an MX whose line spans two records gets DATA (SPEC.md reading 17)
 	mode := partModeData
+	received := make([][]byte, 0, len(self.records))
+	for _, record := range self.records {
+		received = append(received, record.plaintext)
+	}
+	if offersChunking(self.result.version, received) && !self.settings.ForceData {
+		mode = partModeBdat
+	}
 	pipelining := false
 	for i, text := range replies[0].lines {
-		keyword := asciiLower([]byte(text))
-		if 0 < i && keyword == keywordChunking && !self.settings.ForceData {
-			mode = partModeBdat
-		}
-		if 0 < i && keyword == "pipelining" {
+		if 0 < i && asciiLower([]byte(text)) == "pipelining" {
 			pipelining = true
 		}
 	}

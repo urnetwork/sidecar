@@ -342,6 +342,67 @@ func TestEnvelopeCircuitChecksRecordKinds(t *testing.T) {
 	}
 }
 
+func TestEnvelopeCircuitAgreesWithTheRelationOnSplitReplies(t *testing.T) {
+	t.Parallel()
+	// a reply may split anywhere for Z8, and only inside the keyword's window for Z9
+	cases := []struct {
+		name     string
+		contents []string
+		accept   bool
+	}{
+		{name: "split before the keyword's line", contents: []string{"250-mx\r\n250-PIPE", "LINING\r\n250-CHUNKING\r\n250 OK\r\n"}, accept: true},
+		{name: "split inside the keyword", contents: []string{"250-mx\r\n250-CHUN", "KING\r\n250 OK\r\n"}},
+		{name: "split at the keyword's line", contents: []string{"250-mx\r\n", "250-CHUNKING\r\n250 OK\r\n"}},
+		{name: "split after the keyword", contents: []string{"250-mx\r\n250-CHUNKING", "\r\n250 OK\r\n"}},
+	}
+	for _, leg := range testTlsLegs() {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+		for _, c := range cases {
+			statement, witness := testEhloRecords(t, capture, c.contents...)
+			if reference := len(relationCheckPart(statement, witness)) == 0; reference != c.accept {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, reference)
+			}
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); (err == nil) != c.accept {
+				t.Errorf("%s: %s: the circuit says %v", leg.name, c.name, err)
+			}
+		}
+	}
+}
+
+func TestEnvelopeCircuitRefusesAReplayAndAPaddedRecord(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs() {
+		shape, compiled := testEnvelopeCircuit(t, leg)
+		capture := testBdatCapture(t, leg)
+
+		// the honest twin of both
+		statement, witness := capture.part(t, 2)
+		if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err != nil {
+			t.Fatalf("%s: %v", leg.name, err)
+		}
+
+		if statement.session.version == tlsVersion13 {
+			// a record the MX really sent, at a sequence number it did not send it: 1.2 carries its nonce
+			// in the record, and the MX's own tag refuses a replay there
+			statement, witness = capture.part(t, 2)
+			statement.serverRecords[0].seq += 1
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: a replayed record: accepted", leg.name)
+			}
+
+			// Z7: padding moves the type octet off the record's last position
+			statement, witness = capture.part(t, 2)
+			padded := append(bytes.Clone(witness.serverPlaintexts[0]), 0, 0)
+			testAuthorServerRecord(t, statement, witness, 0, padded)
+			testExpectOnly(t, leg.name, statement, witness, checkZ7)
+			if err := testPartSolved(t, compiled, testPartAssignment(t, shape, statement, witness)); err == nil {
+				t.Errorf("%s: a padded record: accepted", leg.name)
+			}
+		}
+	}
+}
+
 func TestEnvelopeCircuitFindsNoKeywordInsideATicket(t *testing.T) {
 	t.Parallel()
 	// a ticket's octets are skipped, so they are no part of the reply Z9 reads, and whatever a ticket

@@ -249,7 +249,7 @@ No tag is checked in the circuit. For client records the MX checks it; for serve
 - π3's holds exactly 1 + R replies, each coded 2xx, then in DATA mode one reply coded 354.
 - Later parts add no reply: a server record past the message's start is unprovable, and so the part cannot release more message records. In BDAT mode this ends at the chunk; in DATA mode the sidecar stops.
 
-**Z9, mode.** `mode` is public and fixed from π2. For BDAT, the EHLO reply of Z8 holds a line that is exactly `250-CHUNKING` or `250 CHUNKING`, keyword compared without case, and it is not the reply's first line. BDAT to an MX lacking it is unsatisfiable. DATA has no such condition: DATA to an MX offering CHUNKING is allowed, and interop forces it (§14.5).
+**Z9, mode.** `mode` is public and fixed from π2. For BDAT, the EHLO reply of Z8 holds a line that is exactly `250-CHUNKING` or `250 CHUNKING`, keyword compared without case, and it is not the reply's first line. That line and the CRLF before it lie in one application record, and a ticket's octets do not count. BDAT to an MX lacking it is unsatisfiable. DATA has no such condition: DATA to an MX offering CHUNKING is allowed, and interop forces it (§14.5).
 
 ## 8. Which adversarial case each check stops
 
@@ -477,7 +477,7 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 14. **The declared count follows `plan-SMTP-preamble-byte-count`'s option 1** (`prover.go`). A count only DATA can meet means DATA. A count only BDAT can meet, at an MX that needs DATA, stops before MAIL and names the count for a new connection.
 15. **The fixed signature leads with `h=`** (Z5.5), since DKIM's tag order is free and a constant prefix makes "exactly one" a sum.
 16. **A chunk short of octet n at QUIT is a record cut** (E3). §14.7 names only a body past octet n, but Z6 requires n exactly and an honest sidecar never falls short.
-17. **Server replies stay parsed only where a part covers them.** A keyword split across records does not count as CHUNKING, so such an MX falls to DATA. That costs coverage, never soundness.
+17. **Z9 reads its keyword inside one record** (Z9). The window holds the CRLF before the line, the line and its own CRLF, so a line at a record's edge does not count, and the sidecar, which applies the same test, sends such an MX DATA. That costs coverage, never soundness, and the census will show how many MXs write a line per record.
 18. **A header field name never starts with a dot, in either mode** (Z5.3). DATA needs it, since an MX deletes that dot. BDAT does not, but one rule is simpler, and a sidecar writing the header block has no reason to emit such a name. RFC 5322 allows one, so a message a mail client wrote that way fails the send.
 19. **The preamble's forms** (section 6). §14.5 calls these values proven and says the edge resolves `recipient_domain`, but states no syntax. The proofs mean what the design says only if a template holds one command, so the forms are refused here, whatever the engine's own gate does.
 

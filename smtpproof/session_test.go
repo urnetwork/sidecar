@@ -35,6 +35,8 @@ type testMxSettings struct {
 	dataReply string
 	// Treats a bare-LF "." line as the end of DATA, like receivers vulnerable to SMTP smuggling.
 	laxDataEnd bool
+	// Splits the EHLO reply into two records at this many octets. 0 sends it whole.
+	splitEhloAt int
 	// Has the edge forge server records from this application record on, 1 being the first. A
 	// malicious edge can relay anything, and has no key to make it verify.
 	edgeForgesFrom int
@@ -98,7 +100,12 @@ func (self *testMx) serve(conn *tls.Conn) {
 			for _, keyword := range self.settings.keywords {
 				reply += "\r\n250-" + keyword
 			}
-			write(reply + "\r\n250 SMTPUTF8")
+			reply += "\r\n250 SMTPUTF8"
+			if self.settings.splitEhloAt != 0 {
+				conn.Write([]byte(reply[:self.settings.splitEhloAt]))
+				reply = reply[self.settings.splitEhloAt:]
+			}
+			write(reply)
 		case strings.HasPrefix(strings.ToUpper(command), "MAIL FROM:"):
 			if self.settings.mailReply != "" {
 				write(self.settings.mailReply)
@@ -573,6 +580,32 @@ func TestSendDataWhereTheMxLacksChunking(t *testing.T) {
 		// the message splits across parts, each proven before its records go
 		if got := len(send.backend.statements); got < 5 {
 			t.Errorf("%s: %d parts, want later DATA parts too", leg.name, got)
+		}
+	}
+}
+
+func TestSendFallsToDataWhereTheKeywordSpansTwoRecords(t *testing.T) {
+	// Z9 reads the keyword inside one record, so BDAT here could never be proven, and an MX that wrote
+	// its reply this way must still get its mail
+	lineStart := len("250-" + testMxHost + "\r\n250-PIPELINING\r\n")
+	for _, c := range []struct {
+		name    string
+		splitAt int
+		mode    uint32
+	}{
+		{name: "inside the keyword", splitAt: lineStart + len("250-CHUN"), mode: partModeData},
+		{name: "at the line's start, so that its CR LF is in the other record", splitAt: lineStart, mode: partModeData},
+		{name: "before the line before it", splitAt: lineStart - len("LINING\r\n"), mode: partModeBdat},
+	} {
+		for _, leg := range testTlsLegs() {
+			settings := testMxDefaults()
+			settings.splitEhloAt = c.splitAt
+			job := testJob("one line\r\n", "bob")
+			send := testRunSend(t, leg, settings, DefaultProverSettings(), job)
+			testExpectOneTransaction(t, leg, send, job)
+			if send.result.Mode != c.mode {
+				t.Errorf("%s: %s: mode %d, want %d", leg.name, c.name, send.result.Mode, c.mode)
+			}
 		}
 	}
 }
