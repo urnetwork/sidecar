@@ -96,8 +96,9 @@ type DnsHarnessSettings struct {
 	// The lb inventory every feed answer names: one fake interface each, answering tlsedge's alert
 	// on every port until failed.
 	Interfaces []dnsservice.DnsLbInterface
-	// Each edge's local snapshot sits in a directory of its own below this one. Required: a test
-	// passes t.TempDir().
+	// Each edge's local snapshot sits in a directory of its own below this one. Required. An edge
+	// writes there until it stops, so the directory goes only after Close: a test passes t.TempDir()
+	// and then registers t.Cleanup(harness.Close), which runs first.
 	Directory string
 	// The block's store. nil makes a FakeDnsStore on the Net's clock and fault queue; T3 passes
 	// dnshost.Store.
@@ -216,6 +217,8 @@ type DnsHarness struct {
 	interfaces     []dnsservice.DnsLbInterface
 	failedNames    map[string]bool
 	requireReloads map[string]bool
+	// Set by Close: nothing here runs any more.
+	closed bool
 
 	// Held across rendering sidecar.yml and setting it, so two changes land in the order made.
 	gatesLock    sync.Mutex
@@ -276,25 +279,36 @@ func NewDnsHarness(ctx context.Context, net *Net, settings *DnsHarnessSettings) 
 		}
 		rootSerials[root] = serial
 	}
-	if _, err := net.AddEngine(self.ApiProcess(), self.buildApi); err != nil {
+	if err := self.start(ctx, rootSerials); err != nil {
+		// what started stops, so a caller's directory can go
+		self.Close()
 		return nil, err
+	}
+	return self, nil
+}
+
+// Adds the block, waits for it to read its store, adds the edges, and waits for each to serve every
+// root at the serial its store held.
+func (self *DnsHarness) start(ctx context.Context, rootSerials map[string]uint64) error {
+	if _, err := self.net.AddEngine(self.ApiProcess(), self.buildApi); err != nil {
+		return err
 	}
 	if err := self.awaitApiReady(ctx); err != nil {
-		return nil, err
+		return err
 	}
 	for _, ns := range self.dnsSettings.Ns {
-		if _, err := net.AddEngine(self.EdgeProcess(ns), func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
+		if _, err := self.net.AddEngine(self.EdgeProcess(ns), func(ctx context.Context, host *sidecar.ServiceHost) (sidecar.Engine, error) {
 			return self.buildEdge(ctx, ns, host)
 		}); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	for root, serial := range rootSerials {
 		if err := self.AwaitServed(ctx, root, serial); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return self, nil
+	return nil
 }
 
 // What NewDnsHarness refuses before it starts anything.
@@ -481,7 +495,7 @@ func (self *DnsHarness) EdgeMetrics(ns string) *FakeMetrics {
 func (self *DnsHarness) runningApi() *dnsHarnessApi {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if self.api == nil || self.api.ctx.Err() != nil {
+	if self.closed || self.api == nil || self.api.ctx.Err() != nil {
 		return nil
 	}
 	return self.api
@@ -491,10 +505,40 @@ func (self *DnsHarness) runningEdge(ns string) *dnsHarnessEdge {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	edge := self.nsEdges[ns]
-	if edge == nil || edge.ctx.Err() != nil {
+	if self.closed || edge == nil || edge.ctx.Err() != nil {
 		return nil
 	}
 	return edge
+}
+
+// Closes every running process here, the edges first, so each writes its local snapshot and stops
+// writing, then the block, and returns once each has stopped: what a test runs before Directory goes.
+// A killed edge's goroutines end with its context, and Close does not wait for them, since a schedule
+// may hold one at a barrier until its end. The Net's Close closes these again, which does nothing
+// more. Safe more than once.
+func (self *DnsHarness) Close() {
+	edges := []*dnsHarnessEdge{}
+	var block *dnsHarnessApi
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.closed = true
+		for _, ns := range self.dnsSettings.Ns {
+			if edge := self.nsEdges[ns]; edge != nil && edge.ctx.Err() == nil {
+				edges = append(edges, edge)
+			}
+		}
+		if self.api != nil && self.api.ctx.Err() == nil {
+			block = self.api
+		}
+	}()
+	for _, edge := range edges {
+		edge.Close()
+	}
+	if block != nil {
+		block.api.Close()
+	}
+	self.bumpInstances()
 }
 
 // The host one process runs on: the Net's, with the Net's clock, this harness's gates and metrics of

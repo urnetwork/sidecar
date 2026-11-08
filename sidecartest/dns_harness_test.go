@@ -3,6 +3,8 @@ package sidecartest
 import (
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -21,6 +23,8 @@ func newTestDnsHarness(t *testing.T, net *Net, name string) *DnsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// before the directory goes, which an edge writes until it stops
+	t.Cleanup(harness.Close)
 	return harness
 }
 
@@ -347,4 +351,42 @@ func TestDnsHarnessReadyReadsBothEdges(t *testing.T) {
 	if err != nil || answer.Answer != dnsservice.DnsReadyReady || answer.Serial != serial {
 		t.Errorf("with a clean verdict: %v %v", answer, err)
 	}
+}
+
+// Close stops every edge's writes before it returns, the local snapshots written, so the directory can
+// go while the Net still runs, and nothing answers afterwards.
+func TestDnsHarnessCloseStopsEveryWriteBeforeItReturns(t *testing.T) {
+	net := newTestNet(t)
+	settings := DefaultDnsHarnessSettings()
+	settings.Directory = t.TempDir()
+	harness, err := NewDnsHarness(t.Context(), net, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.WriteServed(t.Context(), &dnsservice.DnsZoneWrite{Upserts: harness.NetworkRows("", "net1")}); err != nil {
+		t.Fatal(err)
+	}
+	// moves the clock past the snapshot writers' interval, so their writes are in flight
+	if err := harness.ProbeRounds(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	harness.Close()
+	for _, ns := range harness.Settings().Ns {
+		matches, err := filepath.Glob(filepath.Join(settings.Directory, harness.EdgeProcess(ns), "*", "*"))
+		if err != nil || len(matches) == 0 {
+			t.Errorf("%s left no local snapshot: %v %v", ns, matches, err)
+		}
+	}
+	if err := os.RemoveAll(settings.Directory); err != nil {
+		t.Fatal(err)
+	}
+	query := &dns.Msg{}
+	query.SetQuestion(harness.Root(), dns.TypeSOA)
+	if _, err := harness.Query(t.Context(), "ns1", query); !errors.Is(err, ErrDnsHarnessDown) {
+		t.Errorf("a closed harness answered: %v", err)
+	}
+	if _, err := os.Stat(settings.Directory); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something wrote after Close: %v", err)
+	}
+	harness.Close()
 }
