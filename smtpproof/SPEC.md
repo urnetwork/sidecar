@@ -394,6 +394,8 @@ A sidecar must never know a trapdoor, which holds because it contributes nothing
 3. Publish the transcript and resulting keys, release-pinned by hash.
 4. A prover host verifies once per release (10.2), then caches.
 
+Where the bytes live is the owner's answer to `smtpproof-start-key-distribution`: keys and transcripts download on a host's first send from a public path on ur.io, with no token and no account, pinned by hash in the release. Verification makes the path need no trust. The server behind it sees which IPs fetch, which marks a prover host, so §2.8 gains a row for it. Before the first production setup the 20 shapes are cut to what M7's census justifies.
+
 ## 11. Costs
 
 ### 11.1 Gates
@@ -427,13 +429,41 @@ Verification took 2.4 ms. Setup took 2 min 37 s. Peak memory was 10.5 GB, with c
 
 Neither reference machine was measured. Taking ORIGO's own figure for the m5.large (400k constraints in 9.8 s, so about 41,000 per second) and assuming roughly 250,000 per second for an M1, the budgets are about 7.5M constraints for π1 to π3 on the M1 and **about 2.4M on the m5.large**.
 
-BDAT at the speed gate's size, under 10's rules, comes to roughly 6M to 7M constraints with AES, because Z1 alone costs 3 × 768,000 ≈ 2.3M and the 4 KiB header block about 3M. So on these estimates:
+BDAT at the speed gate's size, under 10's rules, comes to roughly 6M to 7M constraints with AES, because Z1 alone costs 3 × 768,000 ≈ 2.3M and the 4 KiB header block about 3M. So on these estimates, which 11.4's measurements revise:
 
 - The M1 bar is plausible but close.
 - **The m5.large bar is missed by about 2.5×.** Removing lookups was a choice for soundness and simplicity; putting them back (10.1, 10.2) would roughly halve AES and still miss.
 - Memory on the 8 GB M1 for a 4M-constraint π3 is unproven and may force π3 to split.
 
 Levers, none taken: a hiding commitment to the keys, proven once, so that later parts skip Z1 (saves about 1.5M, but D-SMTP-22 forbids it as written); lookups under a reviewed commitment argument; sharing AES's first round across blocks of a record; a designated-verifier prover (Later). See section 14.
+
+### 11.4 Whole sends, measured
+
+`TestMeasureWholeSend` sends `testSpeedGateJob`'s messages through the real prover, gate and a `crypto/tls` MX under real Groth16 and a single-party test setup. The header block is 3,979 octets, with 10 recipients. The machine was the shared M4 Pro of 11.3, at load averages of 130 to 200 on 14 cores, so wall times are inflated and CPU time is the figure to read. Peak memory comes from a separate process that loads one key and proves, as a prover host would.
+
+TLS 1.3, AES-128-GCM, BDAT:
+
+| Part | Constraints | Public inputs | Proving key | Prove, CPU | Prove, wall | Peak memory |
+|---|---|---|---|---|---|---|
+| π1 | 566,337 | 1,033 | 77 MiB | 5.3 s | 11.9 s | 788 MiB |
+| π2 | 1,623,068 | 5,861 | 209 MiB | 11.6 s | 34.8 s | 1,138 MiB |
+| π3 | 4,763,816 | 28,950 | 713 MiB | 47.0 s | 84.7 s | 1,715 MiB |
+| Whole send | 6,953,221 | | 999 MiB | 63.9 s | 131.4 s | |
+
+The same header block in DATA mode, with a 6,100-octet body: π3 holds the first 2 KiB of body at 6,324,518 constraints and an 866 MiB key, 53.6 s CPU. Each later part is 2,103,101 constraints with a 323 MiB key, about 20.4 s CPU and 1,778 MiB peak. The whole send, π1 to π6, took 131.4 s CPU. Verification took 2 to 443 ms a part. Setup took 1.5 to 46 minutes a shape at that load.
+
+Partial runs, each cut short (ChaCha20's by the shape fault below, TLS 1.2's when its process ended): ChaCha20 π1 538,366 constraints in 5.4 s CPU and π2 1,169,712 in 10.5 s; TLS 1.2 π1 719,906 in 5.6 s and π2 1,579,133 in 10.8 s.
+
+Every production shape compiled, and none carries a commitment (`TestMeasureShapes`). Since those runs, ChaCha20's envelope and message shapes hold 12 server blocks rather than 6, because a record starts a fresh keystream block and 6 could not hold D-SMTP-16's 11 one-line replies. That moved them to 1,326,925, 3,175,995 and, with a body, 3,941,977 constraints. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes.
+
+What this says, neither reference machine having been measured:
+
+- π1 to π3 cost 64 s of CPU here. The M1 has four performance cores, each slower than an M4 Pro's, so its 30 s bar needs nearly all of them busy throughout. Groth16's multi-scalar multiplications spread well across cores, so the bar is plausible, close and unproven.
+- The m5.large's 2 vCPUs are the two hyperthreads of one server core, which likely does under half the work of an M4 Pro performance core. On that guess π1 to π3 take about two minutes there, so the 60 s bar is likely missed by about 2×, near 11.3's estimate.
+- π3 peaks below 2 GB, so the 8 GB M1 does not force π3 to split.
+- DATA at 100 KiB is π1 to π3 and about 48 later parts, about 17 minutes of CPU here. Against the bars of 10 minutes on the M1 and 20 on the m5.large, that needs several cores on both.
+
+The owner's answer to `smtpproof-start-z1-reproof-cost` keeps D-SMTP-22 as written and has SMTP-M9-32's bench measure both machines. If the m5.large misses, its row of D-SMTP-16 is relaxed to the measured number.
 
 ## 12. State of the code
 
@@ -454,7 +484,7 @@ Not built, each failing closed as stated:
 
 - **Keys.** Nothing loads keys into a `Prover` or `Verifier`, so both refuse every part. See section 14.
 - **Late server records in a later DATA part.** Its shapes hold no server blocks, so a late ticket during a DATA body makes the part unprovable and the send fails. π3 handles one.
-- **Larger capacities.** Shapes hold a 4 KiB header block, about 10 recipients and a 2 KiB DATA part. Anything larger finds no shape and fails. `smtp_recipients_per_message` allows 100.
+- **Larger capacities.** Shapes hold a 4 KiB header block, about 10 recipients and a 2 KiB DATA part. Anything larger finds no shape and fails. `smtp_recipients_per_message` allows 100. Server blocks count records as well as octets: AES's 24 hold 12 replies only while each is under 32 octets, and replies that carry a queue or trace id run longer, so at 10 recipients such an MX finds no shape. M7's census should size these. `TestProductionShapesHoldTheSpeedGatesSends` holds D-SMTP-16's sends to the shapes on every leg.
 - **Scripted MXs for the rest of FS-31.** The scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand. Those cases are tested at the relation and gate, not end to end.
 
 ## 13. Readings taken
@@ -483,7 +513,13 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 
 ## 14. Open
 
-Raised to the owner (`.stack/questions/`, one file each): `smtpproof-start-shts-wire` (no message in §14.5 has a field for SHTS), `smtpproof-start-key-distribution` (where keys live, given their size and count) and `smtpproof-start-z1-reproof-cost` (what to do about the m5.large bar, given 11.3). `plan-SMTP-preamble-byte-count` and `plan-SMTP-data-connection-lifetime` carry two more that touch this module.
+Raised to the owner (`.stack/questions/`, one file each), and answered in `.stack/decisions/RESOLUTIONS.md`:
+
+- `smtpproof-start-shts-wire`: `SmtpHandshake{send_id = 1, shts = 2}` as `SMTP_HANDSHAKE = 0x1607`, sidecar to edge as soon as the handshake ends, answered by `SmtpHandshakeResult{code = 1}` as `0x1608`, 1 OK and 2 INVALID, on which the edge ends the connection. TLS 1.2 sends none. SMTP-M9-01 adds them to `protocol/smtp.proto`; the root's `DiscloseShts` on either side already carries them.
+- `smtpproof-start-key-distribution`: as 10.3 now states. Until SMTP-M9-27 loads a `KeySet`, no prover is injected, hosts only queue, and the verifier refuses every part.
+- `smtpproof-start-z1-reproof-cost`: keep D-SMTP-22 as written, measure both reference machines with SMTP-M9-32's bench, and relax the m5.large row if it misses (11.4).
+- `plan-SMTP-preamble-byte-count`: applied in `prover.go` (reading 14).
+- `plan-SMTP-data-connection-lifetime`: grants become per `ur/` service, SOCK-M9-01's, with nothing in this module.
 
 Evidence M9 still needs, none of which this draft provides (§22.10):
 
