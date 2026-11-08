@@ -1,5 +1,6 @@
-// Fixtures for smtpedgeservice's report intake (§14.8): DNS for reporters' keys, a DKIM signer, and
-// builders of ARF and aggregate reports. The signer canonicalizes with code of its own, written apart
+// Fixtures for smtpedgeservice's report intake (§14.8): DNS for reporters' keys, a DKIM signer,
+// builders of ARF and aggregate reports, and fakes of the intake's seams: tokens, labels, mail keys,
+// SMTP-M9-15's join and §21's abuse sink. The signer canonicalizes with code of its own, written apart
 // from smtpedgeservice's, so a canonicalization slip in either fails the verifier's tests rather than
 // cancelling out. Names are .example, addresses RFC 5737's, and keys are made per process, never kept
 // in the repository. Safe for concurrent use.
@@ -13,10 +14,12 @@ import (
 	"context"
 	"crypto"
 	"crypto/ed25519"
+	"crypto/hpke"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base32"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -520,4 +523,203 @@ func BuildSmtpAggregateMessage(reporterDomain string, recipient string, mediaTyp
 		"",
 	}
 	return []byte(strings.Join(lines, "\r\n") + "\r\n" + wrapped.String() + "--" + SmtpFixtureBoundary + "--\r\n")
+}
+
+var _ smtpedgeservice.SmtpAbuseSink = (*FakeSmtpAbuseSink)(nil)
+var _ smtpedgeservice.SmtpNetTokenSource = (*FakeSmtpNetTokens)(nil)
+var _ smtpedgeservice.SmtpLabelSource = (*FakeSmtpLabels)(nil)
+var _ smtpedgeservice.SmtpReportKeySource = (*FakeSmtpReportKeys)(nil)
+var _ smtpedgeservice.SmtpReportJoin = (*FakeSmtpReportJoin)(nil)
+
+// §21's case flow, recording each report it is handed: what ABUSE-M5-09's real sink stands in for.
+type FakeSmtpAbuseSink struct {
+	stateLock sync.Mutex
+	reports   []*smtpedgeservice.SmtpAbuseReport
+	// The error the next calls answer, until cleared.
+	failure error
+}
+
+// Records everything.
+func NewFakeSmtpAbuseSink() *FakeSmtpAbuseSink {
+	return &FakeSmtpAbuseSink{}
+}
+
+// Makes the sink fail with err, or answer again with nil.
+func (self *FakeSmtpAbuseSink) SetFailure(err error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.failure = err
+}
+
+// See SmtpAbuseSink.
+func (self *FakeSmtpAbuseSink) OpenSmtpCase(ctx context.Context, report *smtpedgeservice.SmtpAbuseReport) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.failure != nil {
+		return self.failure
+	}
+	kept := *report
+	self.reports = append(self.reports, &kept)
+	return nil
+}
+
+// Every report handed over, in order, as copies.
+func (self *FakeSmtpAbuseSink) Reports() []*smtpedgeservice.SmtpAbuseReport {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	reports := []*smtpedgeservice.SmtpAbuseReport{}
+	for _, report := range self.reports {
+		kept := *report
+		reports = append(reports, &kept)
+	}
+	return reports
+}
+
+// network_dns_zone.report_token in memory.
+type FakeSmtpNetTokens struct {
+	stateLock sync.Mutex
+	networks  map[string]sidecar.Id
+	lookups   []string
+}
+
+// No tokens.
+func NewFakeSmtpNetTokens() *FakeSmtpNetTokens {
+	return &FakeSmtpNetTokens{networks: map[string]sidecar.Id{}}
+}
+
+// A fresh token for networkId, as zone creation draws one: 26 lowercase base32 characters.
+func (self *FakeSmtpNetTokens) Add(networkId sidecar.Id) string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		panic(err)
+	}
+	token := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw))
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.networks[token] = networkId
+	return token
+}
+
+// Every token looked up, in order.
+func (self *FakeSmtpNetTokens) Lookups() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return append([]string{}, self.lookups...)
+}
+
+// See SmtpNetTokenSource.
+func (self *FakeSmtpNetTokens) NetworkForReportToken(ctx context.Context, token string) (sidecar.Id, bool, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lookups = append(self.lookups, token)
+	networkId, ok := self.networks[token]
+	return networkId, ok, nil
+}
+
+// §12's label map in memory.
+type FakeSmtpLabels struct {
+	stateLock sync.Mutex
+	networks  map[string]sidecar.Id
+}
+
+// No labels.
+func NewFakeSmtpLabels() *FakeSmtpLabels {
+	return &FakeSmtpLabels{networks: map[string]sidecar.Id{}}
+}
+
+// Maps label to networkId.
+func (self *FakeSmtpLabels) Set(label string, networkId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.networks[label] = networkId
+}
+
+// See SmtpLabelSource.
+func (self *FakeSmtpLabels) NetworkForLabel(ctx context.Context, label string) (sidecar.Id, bool, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	networkId, ok := self.networks[label]
+	return networkId, ok, nil
+}
+
+// Network mail keys in memory, each made here with its private half kept for the test to open copies.
+type FakeSmtpReportKeys struct {
+	stateLock   sync.Mutex
+	publicKeys  map[sidecar.Id][]byte
+	privateKeys map[sidecar.Id]hpke.PrivateKey
+}
+
+// No keys: what every network has before M7.
+func NewFakeSmtpReportKeys() *FakeSmtpReportKeys {
+	return &FakeSmtpReportKeys{publicKeys: map[sidecar.Id][]byte{}, privateKeys: map[sidecar.Id]hpke.PrivateKey{}}
+}
+
+// Makes networkId an X-Wing mail key and returns its private half.
+func (self *FakeSmtpReportKeys) Add(networkId sidecar.Id) hpke.PrivateKey {
+	privateKey, err := hpke.MLKEM768X25519().GenerateKey()
+	if err != nil {
+		panic(err)
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.publicKeys[networkId] = privateKey.PublicKey().Bytes()
+	self.privateKeys[networkId] = privateKey
+	return privateKey
+}
+
+// See SmtpReportKeySource.
+func (self *FakeSmtpReportKeys) ReportSealKey(ctx context.Context, networkId sidecar.Id) ([]byte, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return bytes.Clone(self.publicKeys[networkId]), nil
+}
+
+// SMTP-M9-15's attribution, faked: a report attributes when its enclosed From domain was set here, and
+// to what was set.
+type FakeSmtpReportJoin struct {
+	stateLock     sync.Mutex
+	byFromDomain  map[string]*smtpedgeservice.SmtpComplaint
+	joinedReports int
+}
+
+// Attributes nothing.
+func NewFakeSmtpReportJoin() *FakeSmtpReportJoin {
+	return &FakeSmtpReportJoin{byFromDomain: map[string]*smtpedgeservice.SmtpComplaint{}}
+}
+
+// Reports from fromDomain attribute to networkId, at confidence joinResult.
+func (self *FakeSmtpReportJoin) Attribute(fromDomain string, networkId sidecar.Id, joinResult string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.byFromDomain[fromDomain] = &smtpedgeservice.SmtpComplaint{NetworkId: networkId, Domain: fromDomain, JoinResult: joinResult}
+}
+
+// How many reports reached the join.
+func (self *FakeSmtpReportJoin) JoinedReports() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.joinedReports
+}
+
+// See SmtpReportJoin.
+func (self *FakeSmtpReportJoin) JoinReport(ctx context.Context, report *smtpedgeservice.SmtpArfReport) (*smtpedgeservice.SmtpComplaint, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.joinedReports += 1
+	if report.Headers == nil {
+		return nil, nil
+	}
+	complaint, ok := self.byFromDomain[report.Headers.FromDomain]
+	if !ok {
+		return nil, nil
+	}
+	kept := *complaint
+	if 0 < len(report.Headers.DkimSignatures) {
+		kept.DkimDomain = report.Headers.DkimSignatures[0].Domain
+		kept.DkimSelector = report.Headers.DkimSignatures[0].Selector
+	}
+	kept.MessageIdHash = smtpedgeservice.SmtpMessageIdHash(report.Headers.MessageId)
+	kept.XUrRef = report.Headers.XUrRef
+	kept.FeedbackId = report.Headers.FeedbackId
+	return &kept, nil
 }
