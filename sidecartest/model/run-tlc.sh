@@ -9,7 +9,9 @@
 #   run-tlc.sh live <Spec> [Name=value ...]           the liveness properties, without symmetry or view
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
 #
-# <Spec> is EvsCommit or StoreSettle. TLC names a command that runs tlc2.TLC, as in
+# <Spec> is EvsCommit or StoreSettle. A Name=value replaces a constant of the spec's cfg, and
+# Quiet=a+b leaves the named processes out (quiet_EvsCommit below). TLC names a command that runs
+# tlc2.TLC, as in
 #   TLC="java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC" run-tlc.sh model StoreSettle
 # and TLC_FLAGS adds flags, as in TLC_FLAGS="-workers 8". Each run works in a fresh directory under
 # TMPDIR, so no state or trace file lands beside the specs. TLC prints its revision first: name it
@@ -55,21 +57,52 @@ ResolveIgnoresPending  OutcomesHold
 EOF
 }
 
+# The design fails NoStaleQuorum once two DELETEs' drive commits stall past their deadlines, a
+# question raised on §19.6's rule (3), so these twins run without DELETEs.
+small_StoreSettle="DriveCount=4 Writes={w1,w2} HostFailures=1 Quiet=deletes"
 twins_StoreSettle() {
-  cat <<'EOF'
-ReleaseOnCancel        NoStaleQuorum
-NoDeadlineCheck        LateWritesNeverRead
-NoVersionCheck         NoStaleQuorum
-RevertBelowQuorumOnly  LateWritesNeverRead
-SettlerRevertsUnseen   NoStaleQuorum
-HealMinority           NoStaleQuorum
-NoDriveLock            NoStaleQuorum
-AbsentCountsForDelete  NoStaleQuorum
+  cat <<EOF
+ReleaseOnCancel        NoStaleQuorum        $small_StoreSettle
+NoDeadlineCheck        LateWritesNeverRead  $small_StoreSettle
+NoVersionCheck         NoStaleQuorum        $small_StoreSettle
+RevertBelowQuorumOnly  LateWritesNeverRead  $small_StoreSettle
+SettlerRevertsUnseen   NoStaleQuorum        $small_StoreSettle
+HealMinority           NoStaleQuorum        $small_StoreSettle
+NoDriveLock            NoStaleQuorum        $small_StoreSettle
 EOF
 }
 
 properties_EvsCommit="RemovalGates DueEpochCommits"
 properties_StoreSettle="HeldKeyReleased"
+
+# Quiet=a+b leaves processes out of a run: a module extending the spec holds each named part still
+# by an action constraint, so the spec stays the design's. A run with any part quiet covers less, and
+# its report must say which.
+quiet_EvsCommit() {
+  cat <<'EOF'
+reader     reader' = reader
+fold       foldJob' = foldJob
+collect    collector' = collector
+evac       evacuator' = evacuator
+gc         gc' = gc
+lifecycle  repo' = repo
+authority  rev' = rev /\ proj' = proj /\ (epoch' = epoch \/ epoch' = <<>>)
+epoch      pmap' = pmap
+cache      cache' = cache
+stale      pushCount' > pushCount => push'[pushCount'].base = head[push'[pushCount'].ref].version
+parts      pushCount' > pushCount => push'[pushCount'].kind # "parts"
+slots      pushCount' > pushCount => ~push'[pushCount'].newSlot
+uploads    pushCount' > pushCount => push'[pushCount'].seg = NoSegment
+EOF
+}
+
+quiet_StoreSettle() {
+  cat <<'EOF'
+deletes    kind' = kind
+heal       healing' = healing
+cancel     cancelled' = cancelled
+EOF
+}
 
 [ $# -ge 2 ] || usage
 mode=$1
@@ -86,13 +119,19 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/run-tlc.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
 cp "$here/$spec.tla" "$work/"
 
-# The cfg with each Name=value replacing that constant's line; an unknown name is refused.
+# The cfg with each Name=value replacing that constant's line; an unknown name is refused. Quiet
+# names parts to leave out, gathered for quieten.
+quiet_parts=""
 with_constants() {
   local cfg=$1 pair name value
   shift
   for pair in "$@"; do
     name=${pair%%=*}
     value=${pair#*=}
+    if [ "$name" = Quiet ]; then
+      quiet_parts=${quiet_parts:+$quiet_parts+}$value
+      continue
+    fi
     if ! grep -q "^    $name = " "$cfg"; then
       echo "run-tlc.sh: $spec.cfg has no constant $name" >&2
       exit 64
@@ -111,13 +150,30 @@ replace_invariants() {
   ' "$cfg" > "$cfg.next" && mv "$cfg.next" "$cfg"
 }
 
+# With parts quiet, writes MC.tla, which extends the spec and holds those parts still, and has the
+# cfg constrain every step by it; the run then checks MC.
+quieten() {
+  local cfg=$1 part conj body=""
+  module=$spec
+  [ -n "$quiet_parts" ] || return 0
+  for part in ${quiet_parts//+/ }; do
+    conj=$("quiet_$spec" | awk -v p="$part" '$1 == p { $1 = ""; sub(/^ +/, ""); print }')
+    [ -n "$conj" ] || { echo "run-tlc.sh: $spec has no quiet part $part" >&2; exit 64; }
+    body="$body    /\\ $conj"$'\n'
+  done
+  printf -- '---- MODULE MC ----\nEXTENDS %s\nQuiet ==\n%s====\n' "$spec" "$body" > "$work/MC.tla"
+  echo "ACTION_CONSTRAINT Quiet" >> "$cfg"
+  module=MC
+}
+
 # One TLC run; prints its output and a summary line, and says whether it ended as expected: a pass,
 # or the named invariant violated.
 check() {
   local label=$1 cfg=$2 expect=$3 out=$work/$1.out code violated distinct depth took
-  echo "== $label: $(grep -v '^\\\*' "$cfg" | tr '\n' ' ' | sed 's/  */ /g')"
+  quieten "$cfg"
+  echo "== $label: $(grep -v '^\\\*' "$cfg" | tr '\n' ' ' | sed 's/  */ /g')${quiet_parts:+ Quiet $quiet_parts}"
   # shellcheck disable=SC2086
-  (cd "$work" && $TLC ${TLC_FLAGS:-} -config "$cfg" "$spec.tla") 2>&1 | tee "$out"
+  (cd "$work" && $TLC ${TLC_FLAGS:-} -config "$cfg" "$module.tla") 2>&1 | tee "$out"
   code=${PIPESTATUS[0]}
   violated=$(sed -n 's/^Error: Invariant \(.*\) is violated.*/\1/p' "$out" | head -1)
   distinct=$(sed -n 's/.* \([0-9,]*\) distinct states found.*/\1/p' "$out" | tail -1)
@@ -143,6 +199,7 @@ check() {
 run_twin() {
   local twin=$1 invariant=$2 cfg
   shift 2
+  quiet_parts=""
   cfg=$work/twin-$twin.cfg
   cp "$here/$spec.cfg" "$cfg"
   with_constants "$cfg" "Twin=\"$twin\"" "$@"

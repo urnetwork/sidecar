@@ -57,7 +57,7 @@ ASSUME
     /\ DriveCount % DrivesPerHost = 0
     /\ CoordinatorCount <= DriveCount \div DrivesPerHost
     /\ Twin \in {"none", "ReleaseOnCancel", "NoDeadlineCheck", "NoVersionCheck", "RevertBelowQuorumOnly",
-                 "SettlerRevertsUnseen", "HealMinority", "NoDriveLock", "AbsentCountsForDelete"}
+                 "SettlerRevertsUnseen", "HealMinority", "NoDriveLock"}
 
 VARIABLES
     drive,        \* drive[d]: the version drive d holds
@@ -175,17 +175,18 @@ Take(w, c, k) ==
                    healing, current, readBad>>
 
 \* Rule (2)'s check, under the drive's own lock: only while the drive still holds what the
-\* coordinator read and its deadline has not passed, else stale, changing nothing. A cancel stops
-\* a PUT on the coordinator's own drives. No request reaches a down host, but one may have reached
-\* it first: a host that does not answer may still be committing.
+\* coordinator read, or still lacks the key, and its deadline has not passed, else stale, changing
+\* nothing. A DELETE of a key the drive lacked takes nothing and counts as committed, as rule (2)'s
+\* "or its absence" reads and the build does. A cancel stops a PUT on the coordinator's own drives.
+\* No request reaches a down host, but one may have reached it first: a host that does not answer
+\* may still be committing.
 Check(w, d) ==
     /\ commit[w][d] = "sent"
     /\ driveLock[d] = NoHolder \/ Twin = "NoDriveLock"
     /\ LET expired == past[w] /\ Twin # "NoDeadlineCheck"
            moved == drive[d] # expect[w][d] /\ Twin # "NoVersionCheck"
-           absentDelete == kind[w] = "delete" /\ expect[w][d] = Absent /\ Twin # "AbsentCountsForDelete"
            stopped == cancelled[w] /\ kind[w] = "put" /\ HostOf(d) = coordinator[w]
-       IN  IF expired \/ moved \/ stopped \/ absentDelete
+       IN  IF expired \/ moved \/ stopped
            THEN /\ commit' = [commit EXCEPT ![w][d] = "clear"]
                 /\ UNCHANGED driveLock
            ELSE /\ commit' = [commit EXCEPT ![w][d] = "checked"]
@@ -262,10 +263,13 @@ Revert(w, d) ==
     /\ UNCHANGED <<driveLock, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked,
                    expect, down, downLeft, crashesLeft, healing, current, readBad>>
 
-\* Rule (3)'s release of a write that can never be read.
+\* Rule (3)'s release of a write that can never be read: every drive that took it and answers has
+\* been reverted, so the version before it loses only the drives it stalled on or could not reach,
+\* and those that may still hold it number under a read quorum.
 ReleaseFailed(w) ==
     /\ keyHolder = w
     /\ MayRevert(w)
+    /\ Known(w) = {}
     /\ Cardinality(MayHold(w)) < ReadQuorum \/
            (Twin = "RevertBelowQuorumOnly" /\ Cardinality(MayHold(w)) < WriteQuorum)
     /\ keyHolder' = NoHolder
