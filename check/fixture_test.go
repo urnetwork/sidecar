@@ -18,10 +18,75 @@ import (
 	"testing"
 )
 
+// Whole licenses, as a module's file holds them, for the rule that reads each word.
 const (
-	fixtureMitLicense = "Copyright (c) 2026 Example\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software.\n"
-	fixtureMplLicense = "This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.\n"
-	fixtureApache     = "Apache License\nVersion 2.0, January 2004\n"
+	fixtureMitLicense = `Copyright (c) 2026 Example Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`
+	// X11's one clause past MIT's text, in tlshacks's words
+	fixtureX11Clause  = "Except as contained in this notice, the name(s) of the above copyright\nholders shall not be used in advertising or otherwise to promote the\nsale, use or other dealings in this Software without prior written\nauthorization.\n"
+	fixtureMplLicense = "This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the\nMPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.\n"
+	// Apache-2.0's notice, which a file may carry in place of the license's text
+	fixtureApache = `Copyright 2026 Example Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+`
+	// BSD-3-Clause, as Go's own modules carry it
+	fixtureBsd3License = `Copyright 2026 Example Authors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Example Authors nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+`
 )
 
 // What a fixture's text may spell with a token.
@@ -114,11 +179,14 @@ var fixtureFiles = map[string]string{
 	"sdk/go.mod":                      "module @sdk@\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/sdk.go":                      "package sdk\n",
 	"sdk/build/Makefile":              "build_ios:\n\tgomobile bind -tags sdk_mobile_bind,ios_extension\n",
+	"sdk/cgo/Makefile":                "build:\n\tgo build -buildmode=c-shared\n",
+	"sdk/js/Makefile":                 "build:\n\tGOOS=js GOARCH=wasm go build\n",
 	"sdk/js/go.mod":                   "module @sdk@/js\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/cgo/go.mod":                  "module @sdk@/cgo\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/build/go.mod":                "module @sdk@/build\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
 	"server/go.mod":                   "module @server@\n\ngo 1.27.3\n",
 	"server/model/model.go":           "package model\n",
+	"server/cli/api/Makefile":         "build:\n\tgo build\n",
 	"sn/go.mod":                       "module @sn@\n\ngo 1.27.3\n",
 	"sn/sn.go":                        "package sn\n",
 	"proxy/go.mod":                    "module @proxy@\n\ngo 1.27.3\n",
@@ -190,9 +258,6 @@ func newFixture(t testing.TB) *fixture {
 		settings:  defaultCheckSettings(),
 		legs:      defaultBuildLegs(),
 	}
-	// a fixture's connect is not the sibling that fills the exception's row, and one the fixture
-	// never lists would be reported as a stale exception
-	self.settings.licenseExceptions = map[string]licenseException{}
 	for name, content := range fixtureFiles {
 		self.writeSibling(name, content)
 	}

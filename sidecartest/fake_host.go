@@ -121,7 +121,8 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 	}
 }
 
-// CC3 and CC4 as far as the fakes hold them: every Redis value, object, metric, hint and usage event.
+// CC3 and CC4 as far as the fakes hold them: every Redis value, object, metric, hint, usage event and
+// task request.
 func (self *FakeHost) privacyItems() []*PrivacyItem {
 	items := []*PrivacyItem{}
 	for key, value := range self.Redis.Dump() {
@@ -138,6 +139,18 @@ func (self *FakeHost) privacyItems() []*PrivacyItem {
 			Class: "CC4",
 			Name:  "hint to " + hint.ClientId.String(),
 			Body:  append([]byte(hint.Hint.Topic+"\x00"), hint.Hint.Body...),
+		})
+	}
+	for _, batch := range self.Quota.Batches() {
+		for _, event := range batch.Events {
+			items = append(items, &PrivacyItem{Class: "CC3", Name: "usage from " + batch.Producer, Body: []byte(event.Meter)})
+		}
+	}
+	for _, request := range self.Tasks.AllRequests() {
+		items = append(items, &PrivacyItem{
+			Class: "CC3",
+			Name:  "task " + request.Name,
+			Body:  append([]byte(request.OnceKey+"\x00"), request.Args...),
 		})
 	}
 	return items

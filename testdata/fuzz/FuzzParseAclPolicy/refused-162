@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"grants\": [{\"expires\": \"2026-12-31\"}]}")

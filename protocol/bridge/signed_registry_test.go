@@ -13,9 +13,9 @@ import (
 	"testing"
 )
 
-// Numbers as the design writes them, or for 0x10xx, 0x13xx and 0x14xx as §6.11's list orders them, §11.6's two more
-// statements after it, and 0x11xx and 0x12xx as §8.8's and §7.9's rows do. Values are permanent once released, so a
-// change here is a change to the wire.
+// Numbers as the design writes them, or for 0x10xx, 0x13xx and 0x14xx as §6.11's list orders them, with §10's two and
+// §11.6's two more statements after it, and 0x11xx and 0x12xx as §8.8's and §7.9's rows do. Values are permanent once
+// released, so a change here is a change to the wire.
 func TestSignedTypeNumbersStable(t *testing.T) {
 	cases := []struct {
 		signedType SignedType
@@ -66,6 +66,8 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_READER_KEY, number: 0x1302},
 		{signedType: SignedType_SIGNED_READER_WRAP, number: 0x1303},
 		{signedType: SignedType_SIGNED_DELEGATION_WRAP, number: 0x1304},
+		{signedType: SignedType_SIGNED_GROUP_FORM, number: 0x1305},
+		{signedType: SignedType_SIGNED_UR_MLS_CREDENTIAL, number: 0x1306},
 
 		{signedType: SignedType_SIGNED_EVS_PUSH, number: 0x1401},
 		{signedType: SignedType_SIGNED_EVS_RESEED, number: 0x1402},
