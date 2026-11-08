@@ -737,3 +737,21 @@ func TestParseAclPortRange(t *testing.T) {
 		}
 	}
 }
+
+// Each name takes every byte of its alphabet, so no letter or digit drops out of one unseen.
+func TestAclNamesTakeTheirWholeAlphabet(t *testing.T) {
+	const alphanumerics = "abcdefghijklmnopqrstuvwxyz0123456789"
+	for _, text := range []string{"tag:" + alphanumerics + "-", "group:" + alphanumerics + "._-x"} {
+		if _, err := parseAclSelector(text, aclPositionSrc); err != nil {
+			t.Errorf("%s: %v", text, err)
+		}
+	}
+	for _, text := range []string{
+		"sock:" + alphanumerics + "-_.", "evs:" + alphanumerics + "-_", "mail:" + alphanumerics + "._-",
+		"dns:" + alphanumerics + "-x", "ip:" + alphanumerics + "-x",
+	} {
+		if _, err := parseAclResource(text); err != nil {
+			t.Errorf("%s: %v", text, err)
+		}
+	}
+}

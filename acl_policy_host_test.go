@@ -168,10 +168,13 @@ func TestParseAclPolicyMemoryIsBounded(t *testing.T) {
 	}
 }
 
-// Exactly the bound passes, and a byte past it is refused before any work.
+// Exactly the bound passes, and a byte past it is refused before any work. The bound is §8.8's 4 MiB,
+// written out here and not read from the constant, since every reader must refuse the same heads: a
+// constant moved by a byte fails this.
 func TestParseAclPolicySourceBound(t *testing.T) {
+	const byteCount = 4 * 1024 * 1024
 	shell := `{"grants": []}`
-	fits := append([]byte(shell), bytes.Repeat([]byte(" "), aclPolicySourceMaxByteCount-len(shell))...)
+	fits := append([]byte(shell), bytes.Repeat([]byte(" "), byteCount-len(shell))...)
 	if _, err := ParseAclPolicy(fits); err != nil {
 		t.Errorf("at the bound: %v", err)
 	}
