@@ -71,6 +71,16 @@ type SocketRegistration struct {
 	Claim []byte `json:"claim"`
 }
 
+// What a registration sorts and pages by (§9.5): an edge name's bytes, or a blinded name's token path.
+// Pages, the client's set and the listing all order by these bytes, and a registration naming both or
+// neither has no key, which the service refuses as invalid.
+func (self *SocketRegistration) NameKey() []byte {
+	if self.Name != "" {
+		return []byte(self.Name)
+	}
+	return self.NameToken
+}
+
 // How one entry of a page stands. Anything but ok holds no lease, an unknown value included.
 type SocketRegistrationStatus string
 
