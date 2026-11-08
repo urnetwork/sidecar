@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,10 +57,14 @@ func (self testHeadChain) pin(version uint64) *bridge.AuthPin {
 	return &bridge.AuthPin{Version: version, Chain: self.digest(version)}
 }
 
-// One device's sources, held in memory. Its acts refuse: a pure step must not call them.
+// One device's sources, held in memory. Its acts refuse: a pure step must not call them. Its pin and
+// digests are safe for concurrent use, since HeadStopState's run loop reads the pin as a test moves it;
+// a test sets the rest before anything else reads them.
 type testHeadCheckDevice struct {
 	sidecarId Id
 	networkId Id
+
+	stateLock sync.Mutex
 	pin       *bridge.AuthPin
 	// the digests kept, from keptFrom to the pin
 	chains map[uint64][]byte
@@ -86,6 +91,8 @@ func newTestHeadCheckDevice(sidecarId Id) *testHeadCheckDevice {
 
 // Keeps chain's digests from keptFrom through version, at which its pin now stands.
 func (self *testHeadCheckDevice) follow(chain testHeadChain, keptFrom uint64, version uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	self.chains = map[uint64][]byte{}
 	for k := keptFrom; k <= version; k += 1 {
 		self.chains[k] = chain.digest(k)
@@ -118,11 +125,22 @@ func (self *testHeadCheckDevice) message(pin *bridge.AuthPin) *protocol.HeadChec
 
 // The pin.
 func (self *testHeadCheckDevice) Pin() *bridge.AuthPin {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	return self.pin
+}
+
+// Clears the pin, as a device with no verified state has none.
+func (self *testHeadCheckDevice) forget() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.pin = nil
 }
 
 // A kept digest.
 func (self *testHeadCheckDevice) ChainAt(version uint64) ([]byte, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	chain, kept := self.chains[version]
 	return chain, kept
 }
@@ -769,7 +787,7 @@ func TestHeadCheckRefusesPeersWithoutStanding(t *testing.T) {
 		t.Errorf("suspended: err %v forks %+v", err, step.forks)
 	}
 	// with no verified state there is nothing to compare
-	device.pin = nil
+	device.forget()
 	if _, _, err := headCheckReconcile(headCheckState{}, device.mine(testHeadStart), testHeadPeer, device.message(testMainChain.pin(10))); !errors.Is(err, errHeadCheckNoState) {
 		t.Errorf("no state: err %v", err)
 	}
@@ -839,7 +857,7 @@ func TestWitnessNamesExactlyTheStateCompared(t *testing.T) {
 		message := device.message(testMainChain.pin(version))
 		state, step := testReconcile(t, device, headCheckState{}, testHeadPeer, message, testHeadStart)
 		witness := testWitness(device, state, testHeadPeer, message, step.forked)
-		if witness == nil || !headCheckPinEqual(witness.pin, device.pin) || witness.peerId != testHeadPeer || !witness.at.Equal(testHeadStart) {
+		if witness == nil || !headCheckPinEqual(witness.pin, device.Pin()) || witness.peerId != testHeadPeer || !witness.at.Equal(testHeadStart) {
 			t.Fatalf("at %d: witness %+v", version, witness)
 		}
 	}
@@ -853,7 +871,7 @@ func TestStalePeerCannotMakeFreshness(t *testing.T) {
 	for version := uint64(1); version <= 40; version += 1 {
 		for _, chain := range []testHeadChain{testMainChain, testForkChain(version / 2)} {
 			pin := chain.pin(version)
-			if headCheckPinEqual(pin, device.pin) {
+			if headCheckPinEqual(pin, device.Pin()) {
 				continue
 			}
 			message := device.message(pin)

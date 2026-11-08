@@ -15,7 +15,7 @@ import (
 
 // What device sends peerId: its pin and what its state relays.
 func testHeadCheckOut(device *testHeadCheckDevice, state headCheckState, peerId Id) *protocol.HeadCheck {
-	message := device.message(device.pin)
+	message := device.message(device.Pin())
 	message.Proven, message.Unverified = state.relayed(peerId)
 	return message
 }

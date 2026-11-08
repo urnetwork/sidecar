@@ -540,6 +540,10 @@ var rpcEveryLegFiles = map[string]string{
 	"rpc_headcheck_sources.go": "TEAM's ConfigClient",
 	"rpc_headcheck_state.go":   "TEAM's ConfigClient",
 	"rpc_headcheck_relay.go":   "TEAM's ConfigClient",
+	// HeadStopState, which TEAM-M2-10's ConfigClient reports forks to
+	"rpc_headcheck_stop.go":    "TEAM's ConfigClient",
+	"rpc_headcheck_witness.go": "TEAM's ConfigClient",
+	"rpc_headcheck_revoker.go": "TEAM's ConfigClient",
 }
 
 // §4.4: every rpc_ file but those of rpcEveryLegFiles is off the sidecar_http leg, and those, which

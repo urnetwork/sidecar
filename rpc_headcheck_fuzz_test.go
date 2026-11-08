@@ -120,7 +120,7 @@ func FuzzHeadCheckState(f *testing.F) {
 				}
 				state = nextState
 			case testHeadOpServe:
-				if through := uint64(next() % 50); device.pin.GetVersion() < through {
+				if through := uint64(next() % 50); device.Pin().GetVersion() < through {
 					device.follow(testMainChain, 1, through)
 				}
 				state, _ = headCheckFetched(state, device.mine(now))
@@ -155,7 +155,7 @@ func FuzzHeadCheckState(f *testing.F) {
 			testHeadCheckBounds(t, device, state)
 			if len(state.unverified) != 0 {
 				for _, peerId := range peerIds {
-					if headCheckWitnessFor(state, device.mine(now), peerId, device.message(device.pin), false) != nil {
+					if headCheckWitnessFor(state, device.mine(now), peerId, device.message(device.Pin()), false) != nil {
 						t.Fatal("a witness while holding an UNVERIFIED pin")
 					}
 				}
@@ -175,7 +175,7 @@ func FuzzHeadCheckState(f *testing.F) {
 		}
 		fresh := Id{0x30}
 		device.admit(fresh)
-		message := device.message(device.pin)
+		message := device.message(device.Pin())
 		state, step := testReconcile(t, device, state, fresh, message, now.Add(time.Hour))
 		if headCheckWitnessFor(state, device.mine(now.Add(time.Hour)), fresh, message, step.forked) == nil {
 			t.Fatal("a converged device did not count a peer at its pin")
