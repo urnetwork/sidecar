@@ -200,14 +200,6 @@ func defaultCheckSettings() *checkSettings {
 				since: "2026-11-08",
 				why:   "device.RealClock is the device role's real time",
 			},
-			"envelope_reassembly.go time.Now": {
-				since: "2026-11-08",
-				why:   "§6's reassembly clock defaults to real time, until its owner reads SidecarSettings.Clock",
-			},
-			"envelope_reassembly.go time.After": {
-				since: "2026-11-08",
-				why:   "§6's reassembly clock defaults to real time, until its owner reads SidecarSettings.Clock",
-			},
 			"api_client.go time.Now": {
 				since: "2026-11-08",
 				why:   "SidecarApi's now defaults to real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
