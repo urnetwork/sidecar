@@ -21,6 +21,17 @@ import (
 type mlsLeafIdentity struct {
 	signatureKey ed25519.PrivateKey
 	credential   mlsCredential
+	// What its leaves advertise. Nil, as every engine leaves it, is the subset's (mlsSubsetCapabilities). Only the
+	// root's tests set it, for basic-credential leaves under 0x0001 that a peer without 0xF552 can read.
+	capabilities *mlsCapabilities
+}
+
+// The capabilities a new leaf of this identity carries under suite.
+func (self *mlsLeafIdentity) leafCapabilities(suite *mlsCipherSuite) mlsCapabilities {
+	if self.capabilities != nil {
+		return *self.capabilities
+	}
+	return mlsSubsetCapabilities(suite)
 }
 
 // A KeyPackage this sidecar made, with the private keys only it holds.
@@ -51,7 +62,7 @@ func newMlsHeldKeyPackage(suite *mlsCipherSuite, identity *mlsLeafIdentity, life
 		encryptionKey:  leafKey.PublicKey().Bytes(),
 		signatureKey:   []byte(identity.signatureKey.Public().(ed25519.PublicKey)),
 		credential:     identity.credential,
-		capabilities:   mlsSubsetCapabilities(suite),
+		capabilities:   identity.leafCapabilities(suite),
 		leafNodeSource: mlsLeafNodeSourceKeyPackage,
 		lifetime:       lifetime,
 	}

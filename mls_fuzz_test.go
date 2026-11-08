@@ -6,7 +6,7 @@
 //
 // Each target holds decoding to what §22.6 asks of it: total, memory-bounded, and canonical, so that
 // what decodes re-encodes to the same bytes. These targets check mls_* alone. The differential half of
-// §22.6's row, against mls-go and tmc/mls, waits for mlsinterop/.
+// §22.6's row, against mls-go and tmc/mls, is mlsinterop/fuzz_test.go's, since the root imports no peer.
 
 package sidecar
 
