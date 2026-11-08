@@ -750,7 +750,12 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 	}
 	lines := bytes.Split(block[:len(block)-len(end)], []byte(literalCrlf))
 	counts := map[string]int{}
-	var dkimCount, unsubscribeCount int
+	singleNames := []string{"from", "message-id", "x-ur-ref", "feedback-id"}
+	bulk := preamble.flags&preambleFlagBulk != 0
+	if bulk {
+		singleNames = append(singleNames, "list-unsubscribe-post")
+	}
+	dkimCount := 0
 	dkimPrefix := []byte(literalDkimPrefix)
 	dkimLiteral := []byte(literalDkimPrefix + dkimTags(preamble))
 	for i, line := range lines {
@@ -780,7 +785,7 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 		}
 		name := asciiLower(line[:colon])
 		continued := i+1 < len(lines) && 0 < len(lines[i+1]) && (lines[i+1][0] == ' ' || lines[i+1][0] == '\t')
-		// rule 4: the four single fields and their literal forms
+		// rule 4: the single fields and their literal forms
 		var literal string
 		switch name {
 		case "from":
@@ -793,6 +798,13 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 			literal = literalXUrRefPrefix + preamble.xUrRef
 		case "feedback-id":
 			literal = literalFeedbackPrefix + preamble.feedbackId
+		case "list-unsubscribe-post":
+			// rule 6: on a BULK message this field is single too, since a continuation or a second
+			// field leaves it no longer RFC 8058's single key/value pair
+			if !bulk {
+				name = ""
+			}
+			literal = literalUnsubscribePost
 		default:
 			name = ""
 		}
@@ -812,21 +824,14 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 				return errors.New("the fixed DKIM signature has another d= or s=")
 			}
 		}
-		// rule 6
-		if string(line) == literalUnsubscribePost {
-			unsubscribeCount += 1
-		}
 	}
-	for _, name := range []string{"from", "message-id", "x-ur-ref", "feedback-id"} {
+	for _, name := range singleNames {
 		if counts[name] != 1 {
 			return fmt.Errorf("%d %s fields, want 1", counts[name], name)
 		}
 	}
 	if dkimCount != 1 {
 		return fmt.Errorf("%d fixed DKIM signatures, want 1", dkimCount)
-	}
-	if preamble.flags&preambleFlagBulk != 0 && unsubscribeCount != 1 {
-		return fmt.Errorf("%d List-Unsubscribe-Post fields on a BULK message, want 1", unsubscribeCount)
 	}
 	return nil
 }

@@ -269,3 +269,52 @@ func TestDnsEdgeSettingsRefusals(t *testing.T) {
 		}
 	}
 }
+
+// The probe block defaults to §12.6's prose and refuses what would leave a round unfinished.
+func TestDnsProbeSettings(t *testing.T) {
+	probe := DefaultDnsSettings().Probe
+	if probe.IntervalSeconds != 10 || probe.FailureCount != 3 || !reflect.DeepEqual(probe.Ports, []int{443, 8443, 8883, 5671}) {
+		t.Errorf("defaults %+v", probe)
+	}
+	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "probe: {ports: [443]}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(settings.Probe.Ports, []int{443}) || settings.Probe.IntervalSeconds != 10 {
+		t.Errorf("probe %+v", settings.Probe)
+	}
+	for _, block := range []string{
+		"probe: {interval_s: 0}",
+		"probe: {timeout_s: 10}",
+		"probe: {timeout_s: 0}",
+		"probe: {failures: 0}",
+		"probe: {ports: []}",
+		"probe: {ports: [443, 443]}",
+		"probe: {ports: [0]}",
+		"probe: {ports: [65536]}",
+		"probe: {concurrency: 0}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}
+
+// The feed block's waits are each positive, and its backoff grows.
+func TestDnsFeedSettings(t *testing.T) {
+	feed := DefaultDnsSettings().Feed
+	if feed.ReplacedKeepSeconds != 24*3600 || feed.RetryMinSeconds <= 0 || feed.RetryMaxSeconds < feed.RetryMinSeconds {
+		t.Errorf("defaults %+v", feed)
+	}
+	for _, block := range []string{
+		"feed: {retry_min_s: 0}",
+		"feed: {retry_min_s: 10, retry_max_s: 5}",
+		"feed: {empty_poll_s: 0}",
+		"feed: {snapshot_write_s: 0}",
+		"feed: {replaced_keep_s: 0}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}

@@ -84,6 +84,31 @@ type DnsSettings struct {
 	Signing DnsSigningSettings `yaml:"signing"`
 	// How dnsedge reads its sockets and drains (DNS-M5-05). Not in the sketch.
 	Edge DnsEdgeSettings `yaml:"edge"`
+	// How dnsedge probes the lb interfaces (DNS-M5-07). Not in the sketch, whose prose gives the
+	// interval, the ports and the failures these default to.
+	Probe DnsProbeSettings `yaml:"probe"`
+	// How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06). Not in the sketch.
+	Feed DnsFeedSettings `yaml:"feed"`
+}
+
+// How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06).
+type DnsFeedSettings struct {
+	// Seconds the first wait after a failed poll, reload or apply takes, doubling to retry_max_s. Must
+	// be positive.
+	RetryMinSeconds int `yaml:"retry_min_s"`
+	// The longest that wait grows to. At least retry_min_s.
+	RetryMaxSeconds int `yaml:"retry_max_s"`
+	// Seconds at least between the starts of two polls that both came back with nothing, so a block
+	// that answers at once cannot make the loop spin. A block holds each poll up to 25 s first. Must
+	// be positive.
+	EmptyPollSeconds int `yaml:"empty_poll_s"`
+	// Seconds the local snapshot's writer waits after a change before it writes, so a burst of rows
+	// costs one write of the zone; a restart within it serves a view that much older until the feed
+	// catches it up. A reload's view is written at once. Must be positive.
+	SnapshotWriteSeconds int `yaml:"snapshot_write_s"`
+	// Seconds a replaced snapshot older than restore_serial is kept for its diff: dns-1's 24 h. Must be
+	// positive.
+	ReplacedKeepSeconds int `yaml:"replaced_keep_s"`
 }
 
 // When an RRSIG made online is valid, and how long one is cached (§12.6's Signing). Seconds. A cached
@@ -172,6 +197,22 @@ type DnsTcpSettings struct {
 	ConnectionCount int `yaml:"connections"`
 }
 
+// How dnsedge probes the lb interfaces (DNS-M5-07, §12.6, §13.4).
+type DnsProbeSettings struct {
+	// Seconds between rounds: owner decision 34's 10. Must be positive.
+	IntervalSeconds int `yaml:"interval_s"`
+	// Seconds one probe may take, dial to tlsedge's alert, before it fails. Must be positive and
+	// below interval_s, so a round ends before the next is due.
+	TimeoutSeconds int `yaml:"timeout_s"`
+	// Consecutive failures on any one port that drop an address: reading 7's 3. At least 1.
+	FailureCount int `yaml:"failures"`
+	// The ports tlsedge answers on: 443, and 8443, 8883 and 5671 unsplit (§13.4; owner decision 121).
+	// Each once, from 1 to 65535.
+	Ports []int `yaml:"ports"`
+	// Probes in flight at once in a round, across interfaces, families and ports. Must be positive.
+	ConcurrencyCount int `yaml:"concurrency"`
+}
+
 // How dnsedge reads its sockets and drains (DNS-M5-05).
 type DnsEdgeSettings struct {
 	// Goroutines reading each UDP socket, each answering what it reads. Zero or less takes one for each
@@ -231,6 +272,20 @@ func DefaultDnsSettings() *DnsSettings {
 			UdpReaderCount:    0,
 			RetryMilliseconds: 100,
 			DrainSeconds:      5,
+		},
+		Probe: DnsProbeSettings{
+			IntervalSeconds:  10,
+			TimeoutSeconds:   3,
+			FailureCount:     3,
+			Ports:            []int{443, 8443, 8883, 5671},
+			ConcurrencyCount: 64,
+		},
+		Feed: DnsFeedSettings{
+			RetryMinSeconds:      1,
+			RetryMaxSeconds:      30,
+			EmptyPollSeconds:     1,
+			SnapshotWriteSeconds: 5,
+			ReplacedKeepSeconds:  24 * 3600,
 		},
 	}
 }
@@ -342,6 +397,12 @@ func (self *DnsSettings) Validate() error {
 	if self.Edge.DrainSeconds < 0 {
 		return refuse("edge.drain_s is negative")
 	}
+	if err := self.Probe.validate(); err != nil {
+		return refuse("probe: %v", err)
+	}
+	if err := self.Feed.validate(); err != nil {
+		return refuse("feed: %v", err)
+	}
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")
 	}
@@ -364,6 +425,48 @@ func (self *DnsSigningSettings) validate() error {
 		return errors.New("lifetime_s does not exceed refresh_s plus jitter_s")
 	case self.CacheEntryCount <= 0:
 		return errors.New("cache_entries is not positive")
+	}
+	return nil
+}
+
+// Whether a round can finish before the next, and every port is one.
+func (self *DnsProbeSettings) validate() error {
+	switch {
+	case self.IntervalSeconds <= 0:
+		return errors.New("interval_s is not positive")
+	case self.TimeoutSeconds <= 0 || self.IntervalSeconds <= self.TimeoutSeconds:
+		return errors.New("timeout_s is not positive and below interval_s")
+	case self.FailureCount < 1:
+		return errors.New("failures is below 1")
+	case len(self.Ports) == 0:
+		return errors.New("ports is empty")
+	case self.ConcurrencyCount <= 0:
+		return errors.New("concurrency is not positive")
+	}
+	for index, port := range self.Ports {
+		if port < 1 || 65535 < port {
+			return fmt.Errorf("port %d is no port", port)
+		}
+		if slices.Contains(self.Ports[:index], port) {
+			return fmt.Errorf("port %d is listed twice", port)
+		}
+	}
+	return nil
+}
+
+// Whether every wait is positive and the backoff grows.
+func (self *DnsFeedSettings) validate() error {
+	switch {
+	case self.RetryMinSeconds <= 0:
+		return errors.New("retry_min_s is not positive")
+	case self.RetryMaxSeconds < self.RetryMinSeconds:
+		return errors.New("retry_max_s is below retry_min_s")
+	case self.EmptyPollSeconds <= 0:
+		return errors.New("empty_poll_s is not positive")
+	case self.SnapshotWriteSeconds <= 0:
+		return errors.New("snapshot_write_s is not positive")
+	case self.ReplacedKeepSeconds <= 0:
+		return errors.New("replaced_keep_s is not positive")
 	}
 	return nil
 }

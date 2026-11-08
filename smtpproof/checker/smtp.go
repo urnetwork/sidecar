@@ -383,12 +383,23 @@ func checkHeaderBlock(preamble *Preamble, block []byte) error {
 	if signatures != 1 {
 		return fmt.Errorf("Z5.5: %d fixed signatures", signatures)
 	}
-	// 6: List-Unsubscribe-Post once when BULK
+	// 6: when BULK, one line named list-unsubscribe-post, uncontinued, and it is the literal
 	if preamble.Flags&flagBulk != 0 {
 		posts := 0
-		for _, line := range lines {
-			if line == "List-Unsubscribe-Post: List-Unsubscribe=One-Click" {
-				posts += 1
+		for i, line := range lines {
+			if continuation(line) {
+				continue
+			}
+			name, _, _ := strings.Cut(line, ":")
+			if strings.ToLower(name) != "list-unsubscribe-post" {
+				continue
+			}
+			posts += 1
+			if line != "List-Unsubscribe-Post: List-Unsubscribe=One-Click" {
+				return fmt.Errorf("Z5.6: %q is not in its literal form", line)
+			}
+			if i+1 < len(lines) && continuation(lines[i+1]) {
+				return errors.New("Z5.6: List-Unsubscribe-Post is continued")
 			}
 		}
 		if posts != 1 {
