@@ -44,6 +44,15 @@ type dnsMetrics struct {
 	signatures sidecar.MetricsCounter
 	// Answers refused at signatures_per_second, by transport: TC over UDP, SERVFAIL over TCP.
 	signatureCapped sidecar.MetricsCounter
+	// Responses RRL held back, by class and action: dropped, or slipped out empty with TC.
+	rrlLimited sidecar.MetricsCounter
+	// Packets answered with nothing, by reason: one that does not parse, or a root not yet ready.
+	dropped sidecar.MetricsCounter
+	// TCP connections closed at accept, by reason: a source at its cap, every connection taken, or a
+	// draining edge.
+	tcpRefused sidecar.MetricsCounter
+	// TCP connections held now.
+	tcpConnections sidecar.MetricsGauge
 }
 
 // Declares the families. Two edges in one process share them, as Metrics allows.
@@ -55,6 +64,11 @@ func newDnsMetrics(metrics sidecar.Metrics) *dnsMetrics {
 		signatures:     metrics.Counter("urnetwork_dnsedge_signatures_total", "Signatures put on answers, by source.", "source"),
 		signatureCapped: metrics.Counter("urnetwork_dnsedge_signature_capped_total",
 			"Answers refused at signatures_per_second, by transport.", "transport"),
+		rrlLimited: metrics.Counter("urnetwork_dnsedge_rrl_limited_total", "Responses RRL held back, by class and action.",
+			"class", "action"),
+		dropped:        metrics.Counter("urnetwork_dnsedge_dropped_total", "Packets answered with nothing, by reason.", "reason"),
+		tcpRefused:     metrics.Counter("urnetwork_dnsedge_tcp_refused_total", "TCP connections closed at accept, by reason.", "reason"),
+		tcpConnections: metrics.Gauge("urnetwork_dnsedge_tcp_connections", "TCP connections held now."),
 	}
 }
 

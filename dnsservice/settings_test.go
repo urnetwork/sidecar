@@ -236,3 +236,36 @@ func TestDnsSigningSettings(t *testing.T) {
 		}
 	}
 }
+
+// The edge's own values, beside the sketch's: each refused out of range.
+func TestDnsEdgeSettingsRefusals(t *testing.T) {
+	settings := DefaultDnsSettings()
+	if settings.Rrl.WindowSeconds != 15 || settings.Rrl.BucketCount <= 0 || settings.Tcp.ConnectionCount <= 0 ||
+		settings.Edge.RetryMilliseconds <= 0 || settings.Edge.DrainSeconds < 0 {
+		t.Errorf("defaults %+v %+v %+v", settings.Rrl, settings.Tcp, settings.Edge)
+	}
+	for _, block := range []string{
+		"edge: {retry_ms: 0}",
+		"edge: {drain_s: -1}",
+		"edge: {udp_reader: 2}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+	for _, replacement := range []string{
+		"tcp: {connections_per_source: 8, idle_timeout_s: 10, connections: 0}",
+		"tcp: {connections_per_source: 8, idle_timeout_s: 10, connections: -1}",
+	} {
+		data := sketchWith(t, "tcp: {connections_per_source: 8, idle_timeout_s: 10}", replacement)
+		if _, err := LoadDnsSettings(data); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", replacement, err)
+		}
+	}
+	for _, replacement := range []string{", window_s: -1, responses_per_second: 20", ", buckets: 0, responses_per_second: 20"} {
+		data := sketchWith(t, ", responses_per_second: 20", replacement)
+		if _, err := LoadDnsSettings(data); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", replacement, err)
+		}
+	}
+}
