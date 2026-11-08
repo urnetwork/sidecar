@@ -293,13 +293,17 @@ type governorLive struct {
 }
 
 // The live processes' deltas, in process id order, the latest report of each id kept and every one the
-// governor cannot use dropped. A process it has not seen counts from its start only if it started
+// governor cannot use, or older than ReportTtl, dropped. A process it has not seen counts from its start only if it started
 // after the last step, so a governor that lost its state takes a running process's totals as its
 // baseline rather than as one interval's work.
 func (self *Governor) takeReports(nowMs int64, reports []*WriteBudgetReport) []*governorLive {
 	processIdReports := map[string]*WriteBudgetReport{}
 	for _, report := range reports {
 		if report == nil || report.validate() != nil {
+			continue
+		}
+		// a report whose ttl never landed outlives its process: past ReportTtl it is gone
+		if self.settings.ReportTtl.Milliseconds() < nowMs-report.TimeMs {
 			continue
 		}
 		if previous, ok := processIdReports[report.ProcessId]; !ok || previous.TimeMs < report.TimeMs {

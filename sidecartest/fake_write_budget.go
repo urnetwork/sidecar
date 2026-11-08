@@ -120,6 +120,14 @@ func (self *FakeWriteBudget) AdmitP1(ctx context.Context, clusterId string, netw
 		}()
 		return nil, err
 	}
+	if networkId == (connect.Id{}) {
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.violateWithLock("P1 with no network")
+		}()
+		return nil, fmt.Errorf("%w: a P1 admission names no network", sidecar.ErrWriteCost)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
