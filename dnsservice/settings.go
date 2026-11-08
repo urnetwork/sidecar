@@ -82,6 +82,8 @@ type DnsSettings struct {
 	// How online signatures are timed and cached (DNS-M5-04). Not in the sketch, which says only that
 	// RRSIG lifetimes are settings.
 	Signing DnsSigningSettings `yaml:"signing"`
+	// How dnsedge reads its sockets and drains (DNS-M5-05). Not in the sketch.
+	Edge DnsEdgeSettings `yaml:"edge"`
 }
 
 // When an RRSIG made online is valid, and how long one is cached (§12.6's Signing). Seconds. A cached
@@ -149,6 +151,13 @@ type DnsRrlSettings struct {
 	// Responses a bucket sends per second in one class. Left unset by §12.6, whose sketch names no
 	// rate. A file that does not set it above zero is refused.
 	ResponsesPerSecond int `yaml:"responses_per_second"`
+	// Seconds' worth of responses a bucket may owe, so a prefix that floods stays limited this long
+	// after it stops, and how long an idle bucket is kept. BIND's default. Not in the sketch. Zero owes
+	// nothing, so a flood is limited only while it lasts.
+	WindowSeconds int `yaml:"window_s"`
+	// The most buckets held, the least recently used dropped first, so a spoofed spread of prefixes
+	// costs bounded memory: about 150 bytes a bucket. Not in the sketch. Must be positive.
+	BucketCount int `yaml:"buckets"`
 }
 
 // §12.6's tcp block.
@@ -158,6 +167,22 @@ type DnsTcpSettings struct {
 	ConnectionsPerSource int `yaml:"connections_per_source"`
 	// Seconds a connection may sit silent before the edge closes it. Must be above zero.
 	IdleTimeoutSeconds int `yaml:"idle_timeout_s"`
+	// The most connections an edge holds at once from every source together, so many sources cannot
+	// hold every descriptor. Not in the sketch. Must be positive.
+	ConnectionCount int `yaml:"connections"`
+}
+
+// How dnsedge reads its sockets and drains (DNS-M5-05).
+type DnsEdgeSettings struct {
+	// Goroutines reading each UDP socket, each answering what it reads. Zero or less takes one for each
+	// processor Go schedules on.
+	UdpReaderCount int `yaml:"udp_readers"`
+	// Milliseconds an accept or a read waits after a fault other than its socket closing, so a fault
+	// that persists cannot spin. Must be positive.
+	RetryMilliseconds int `yaml:"retry_ms"`
+	// Seconds Drain waits for TCP connections to finish their queries before Close cuts them. Zero
+	// waits for none.
+	DrainSeconds int `yaml:"drain_s"`
 }
 
 // §12.6's values. Roots has no default, since that is a deployment's to say, and the three numbers
@@ -180,16 +205,19 @@ func DefaultDnsSettings() *DnsSettings {
 			Ptr:        3600,
 		},
 		Rrl: DnsRrlSettings{
-			Ipv4Prefix: 24,
-			Ipv6Prefix: 56,
-			Slip:       2,
-			Classes:    []string{DnsRrlClassAnswer, DnsRrlClassDenial, DnsRrlClassError},
+			Ipv4Prefix:    24,
+			Ipv6Prefix:    56,
+			Slip:          2,
+			Classes:       []string{DnsRrlClassAnswer, DnsRrlClassDenial, DnsRrlClassError},
+			WindowSeconds: 15,
+			BucketCount:   256 * 1024,
 		},
 		EdnsUdpSize:  1232,
 		Any:          DnsAnyMinimal,
 		ClientSubnet: DnsClientSubnetIgnore,
 		Tcp: DnsTcpSettings{
 			IdleTimeoutSeconds: 10,
+			ConnectionCount:    16 * 1024,
 		},
 		CnameChainMaxCount: 8,
 		Signing: DnsSigningSettings{
@@ -198,6 +226,11 @@ func DefaultDnsSettings() *DnsSettings {
 			JitterSeconds:          6 * 3600,
 			RefreshSeconds:         2 * 24 * 3600,
 			CacheEntryCount:        128 * 1024,
+		},
+		Edge: DnsEdgeSettings{
+			UdpReaderCount:    0,
+			RetryMilliseconds: 100,
+			DrainSeconds:      5,
 		},
 	}
 }
@@ -293,6 +326,21 @@ func (self *DnsSettings) Validate() error {
 	}
 	if self.Tcp.IdleTimeoutSeconds <= 0 {
 		return refuse("tcp.idle_timeout_s is not positive")
+	}
+	if self.Tcp.ConnectionCount <= 0 {
+		return refuse("tcp.connections is not positive")
+	}
+	if self.Rrl.WindowSeconds < 0 {
+		return refuse("rrl.window_s is negative")
+	}
+	if self.Rrl.BucketCount <= 0 {
+		return refuse("rrl.buckets is not positive")
+	}
+	if self.Edge.RetryMilliseconds <= 0 {
+		return refuse("edge.retry_ms is not positive")
+	}
+	if self.Edge.DrainSeconds < 0 {
+		return refuse("edge.drain_s is negative")
 	}
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")
