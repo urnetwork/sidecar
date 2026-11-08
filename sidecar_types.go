@@ -14,18 +14,30 @@ import (
 // One network's sidecar: its own Required client, durable sidecar_id and identity key (D-CORE-4,
 // D-CORE-5). Safe for concurrent use.
 //
-// §5.4's other fields arrive with what they name: sidecarApi with CORE-M1-04, keychain with
-// CORE-M1-02, identity with CORE-M1-05, and leg and NewSidecar with CORE-M1-08.
+// §5.4's other fields arrive with what they name: keychain with CORE-M1-02, and leg and NewSidecar
+// with CORE-M1-08, which also sets sidecarApi and coreSecrets.
 type Sidecar struct {
 	host     SidecarHost
 	settings *SidecarSettings
 	log      Logger
+	// The sidecar's client of api, on every leg, holding its jwt and DPoP signer (api_client.go).
+	// Set once at construction.
+	sidecarApi *SidecarApi
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
 	eventCallbacks *CallbackList[SidecarEventFunction]
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
+	// raised and not yet delivered, oldest first
+	eventQueue []SidecarEvent
+	// a goroutine is delivering eventQueue, which every later event joins
+	eventDelivering bool
+	// The core's namespace of this network's keychain.ur, which holds the identity key, the ClientKey
+	// seed and the newest binding (identity_keys.go). Nil until the sidecar knows its network.
+	coreSecrets SidecarSecrets
+	// Ids, generation and public keys, never a private key. Nil until the keychain holds an identity.
+	identity *SidecarIdentity
 }
 
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,
@@ -191,7 +203,7 @@ type SidecarHeadAlarm string
 
 const (
 	SidecarHeadAlarmFork SidecarHeadAlarm = "fork"
-	// PROOF OF WITHHOLDING, §6.4's name for it.
+	// A peer holds proof that its entries are being withheld (§6.4).
 	SidecarHeadAlarmWithheld   SidecarHeadAlarm = "withheld"
 	SidecarHeadAlarmUnverified SidecarHeadAlarm = "unverified"
 	// 24 h without a consistent witness, or 1 h for a revocation this device signed.
@@ -284,7 +296,7 @@ type SidecarStatus struct {
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire
-// form is plan-CORE-binding-wire.md's to settle, and CORE-M1-05 owns the encoding.
+// form is plan-CORE-binding-wire #1's SignedSidecarIdentityBinding (identity_binding.go).
 type SidecarIdentityBinding struct {
 	NetworkId Id
 	SidecarId Id

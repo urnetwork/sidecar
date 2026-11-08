@@ -35,6 +35,10 @@ type testMxSettings struct {
 	dataReply string
 	// Treats a bare-LF "." line as the end of DATA, like receivers vulnerable to SMTP smuggling.
 	laxDataEnd bool
+	// Splits the EHLO reply into two records at this many octets. 0 sends it whole.
+	splitEhloAt int
+	// Writes the EHLO reply a line per record, after any split.
+	ehloLinePerRecord bool
 	// Has the edge forge server records from this application record on, 1 being the first. A
 	// malicious edge can relay anything, and has no key to make it verify.
 	edgeForgesFrom int
@@ -98,7 +102,19 @@ func (self *testMx) serve(conn *tls.Conn) {
 			for _, keyword := range self.settings.keywords {
 				reply += "\r\n250-" + keyword
 			}
-			write(reply + "\r\n250 SMTPUTF8")
+			reply += "\r\n250 SMTPUTF8"
+			if self.settings.splitEhloAt != 0 {
+				conn.Write([]byte(reply[:self.settings.splitEhloAt]))
+				reply = reply[self.settings.splitEhloAt:]
+			}
+			if self.settings.ehloLinePerRecord {
+				lines := strings.SplitAfter(reply, "\r\n")
+				for _, line := range lines[:len(lines)-1] {
+					conn.Write([]byte(line))
+				}
+				reply = lines[len(lines)-1]
+			}
+			write(reply)
 		case strings.HasPrefix(strings.ToUpper(command), "MAIL FROM:"):
 			if self.settings.mailReply != "" {
 				write(self.settings.mailReply)
@@ -371,8 +387,8 @@ const (
 	testHeloName        = "o1.out.relay.example"
 	testMessageId       = "abcdefghijklmnopqrstuvwxyz@net.root.example"
 	testSelector        = "s1"
-	testXUrRef          = "1.AAAABBBBCCCCDDDD"
-	testFeedbackId      = "transactional:community:token:urnetwork"
+	testXUrRef          = "1.aeibceqtcqkrmfyydenbxifbukr2jjngu4"
+	testFeedbackId      = "n:c:gaytemzugu3doobzhi5typj6h4:urnetwork"
 )
 
 // A message whose header block meets Z5.
@@ -532,6 +548,22 @@ func TestSendBdatThroughTheGate(t *testing.T) {
 	}
 }
 
+func TestSendThroughTheGateAfterAHelloRetryRequest(t *testing.T) {
+	// an MX preferring another group retries, and Go's server follows the retry with a dummy
+	// change_cipher_spec, which reaches the gate ahead of the second ClientHello
+	for _, leg := range testTlsLegs()[:2] {
+		retried := *leg
+		retried.serverTls = func(t *testing.T) *tls.Config {
+			config := leg.serverTls(t)
+			config.CurvePreferences = []tls.CurveID{tls.CurveP256}
+			return config
+		}
+		job := testJob("one line\r\n", "bob")
+		send := testRunSend(t, &retried, testMxDefaults(), DefaultProverSettings(), job)
+		testExpectOneTransaction(t, &retried, send, job)
+	}
+}
+
 func TestSendBdatBodyLongerThanOneRecord(t *testing.T) {
 	settings := DefaultProverSettings()
 	settings.MaxRecordContentBytes = 1024
@@ -557,6 +589,32 @@ func TestSendDataWhereTheMxLacksChunking(t *testing.T) {
 		// the message splits across parts, each proven before its records go
 		if got := len(send.backend.statements); got < 5 {
 			t.Errorf("%s: %d parts, want later DATA parts too", leg.name, got)
+		}
+	}
+}
+
+func TestSendFallsToDataWhereTheKeywordSpansTwoRecords(t *testing.T) {
+	// Z9 reads the keyword inside one record, so BDAT here could never be proven, and an MX that wrote
+	// its reply this way must still get its mail
+	lineStart := len("250-" + testMxHost + "\r\n250-PIPELINING\r\n")
+	for _, c := range []struct {
+		name    string
+		splitAt int
+		mode    uint32
+	}{
+		{name: "inside the keyword", splitAt: lineStart + len("250-CHUN"), mode: partModeData},
+		{name: "at the line's start, so that its CR LF is in the other record", splitAt: lineStart, mode: partModeData},
+		{name: "before the line before it", splitAt: lineStart - len("LINING\r\n"), mode: partModeBdat},
+	} {
+		for _, leg := range testTlsLegs() {
+			settings := testMxDefaults()
+			settings.splitEhloAt = c.splitAt
+			job := testJob("one line\r\n", "bob")
+			send := testRunSend(t, leg, settings, DefaultProverSettings(), job)
+			testExpectOneTransaction(t, leg, send, job)
+			if send.result.Mode != c.mode {
+				t.Errorf("%s: %s: mode %d, want %d", leg.name, c.name, send.result.Mode, c.mode)
+			}
 		}
 	}
 }
@@ -587,16 +645,53 @@ func TestSendDataStuffsEveryLeadingDot(t *testing.T) {
 	}
 }
 
-func TestSendDataOnADeclaredStuffedCountEvenWhereChunkingIsOffered(t *testing.T) {
-	// only DATA can meet this count, so the prover does not take the MX's CHUNKING
+func TestSendAsksForANewConnectionWhenTheCountFitsOnlyData(t *testing.T) {
+	// the count does not choose the mode (plan-SMTP-preamble-byte-count): an MX offering CHUNKING gets
+	// BDAT, and a count only DATA can meet means a new connection declaring BDAT's
 	for _, leg := range testTlsLegs() {
 		job := testJob(".leading dot\r\n", "bob")
 		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
 		send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.ReconnectByteCount != uint64(len(job.Message)) || send.result.Mode != partModeBdat {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+		for _, command := range send.mx.seen() {
+			if !strings.HasPrefix(command, "EHLO") {
+				t.Errorf("%s: %q reached the MX", leg.name, command)
+			}
+		}
+
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
 		testExpectOneTransaction(t, leg, send, job)
-		if send.result.Mode != partModeData {
+		if send.result.Mode != partModeBdat {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
+	}
+}
+
+func TestSendIsNeverTooLargeWhereChunkingIsOffered(t *testing.T) {
+	// a stuffed count once chose DATA here, and DATA's measured cap then called the message too_large,
+	// although BDAT carries it at any size
+	settings := DefaultProverSettings()
+	settings.DataProofBytes = 100
+	for _, leg := range testTlsLegs() {
+		job := testJob(".a leading dot\r\n"+strings.Repeat("a body line\r\n", 100), "bob")
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+		send := testRunSend(t, leg, testMxDefaults(), settings, job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.TooLarge || send.result.ReconnectByteCount != uint64(len(job.Message)) {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, testMxDefaults(), settings, job)
+		testExpectOneTransaction(t, leg, send, job)
 	}
 }
 
@@ -668,6 +763,7 @@ func TestALateTicketIsProvenAgainOverItsRecord(t *testing.T) {
 			original.Records = append(original.Records, record.raw)
 		}
 		run := &proverRun{
+			settings:  DefaultProverSettings(),
 			backend:   backend,
 			channel:   channel,
 			session:   session,
@@ -859,6 +955,48 @@ func TestOversizeMessageToAnMxWithoutChunkingStopsBeforeMail(t *testing.T) {
 	}
 }
 
+func TestSendStopsOnABadPreambleBeforeAnyEffect(t *testing.T) {
+	leg := testTlsLegs()[0]
+	job := testJob("one line\r\n", "bob")
+	job.Preamble.RecipientDomain = "a.example>\r\nRCPT TO:<victim@other.example"
+	send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+	if send.err == nil {
+		t.Fatal("sent")
+	}
+	if 0 < len(send.mx.transactions()) || 0 < len(send.edge.parts) {
+		t.Errorf("%d transactions, %d parts", len(send.mx.transactions()), len(send.edge.parts))
+	}
+}
+
+func TestProverBoundsWhatAnMxCanMakeItHold(t *testing.T) {
+	// a reply that never ends would otherwise grow without limit, and a part could never cover it
+	settings := DefaultProverSettings()
+	settings.MaxServerBytes = 1024
+	run := &proverRun{
+		settings: settings,
+		result:   &tlsHandshakeResult{version: tlsVersion12},
+		serverIn: make(chan *proverServerEvent),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			record := &tlsServerRecord{recordType: tlsRecordApplicationData, raw: make([]byte, 100), content: []byte("250-more")}
+			select {
+			case run.serverIn <- &proverServerEvent{record: record}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	if _, err := run.awaitReplies(ctx, 1); err == nil {
+		t.Error("the prover kept reading")
+	}
+	if settings.MaxServerBytes+100 < run.serverBytes {
+		t.Errorf("held %d octets", run.serverBytes)
+	}
+}
+
 func TestProverRefusesAMessageTheRelationRefuses(t *testing.T) {
 	// the prover checks itself first, so a bad message never reaches the MX as a transaction
 	cases := []struct {
@@ -870,6 +1008,9 @@ func TestProverRefusesAMessageTheRelationRefuses(t *testing.T) {
 		}},
 		{name: "wrong message id", mutation: func(job *sidecar.SmtpProofJob) {
 			job.Preamble.MessageId = "other@" + testNetworkDomain
+		}},
+		{name: "a field behind a leading dot", mutation: func(job *sidecar.SmtpProofJob) {
+			job.Message = append([]byte(".From: <x@victim.example>\r\n"), job.Message...)
 		}},
 	}
 	for _, leg := range testTlsLegs() {

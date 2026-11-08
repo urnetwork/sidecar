@@ -16,6 +16,9 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
+// See testNeedCircuits.
+const testCircuitsRun = false
+
 // Records what the hooks report. Hooks run on the client's goroutine and the server's, so this locks.
 type testHookLog struct {
 	stateLock   sync.Mutex
@@ -75,6 +78,19 @@ func TestHooksSeeEveryTls13Secret(t *testing.T) {
 	for _, name := range []string{"tls.handshake.before", "tls.handshake.after"} {
 		if !slices.Contains(log.names, name) {
 			t.Errorf("barrier %s never reached", name)
+		}
+	}
+}
+
+func TestHooksSeeWhatTheEdgeHolds(t *testing.T) {
+	// the edge's one secret and what it derives, so the privacy harness can look for them where they
+	// must not be (D-SMTP-10)
+	fixture := testBdatGateCapture(t, testTlsLegs()[0])
+	log := testInstallHookLog(t)
+	fixture.replayHandshake(t, fixture.gate(&testFixedVerifier{}))
+	for _, kind := range []string{"edge_shts", "edge_server_handshake_key", "edge_server_handshake_iv"} {
+		if len(log.kindSecrets[kind]) == 0 {
+			t.Errorf("%s was never hooked", kind)
 		}
 	}
 }

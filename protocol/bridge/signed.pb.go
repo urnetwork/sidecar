@@ -77,17 +77,26 @@ const (
 	SignedType_SIGNED_AUTHORITY_COSIGN   SignedType = 4627
 	SignedType_SIGNED_RECOVERY_VETO      SignedType = 4628
 	SignedType_SIGNED_PROJECTION_HEADER  SignedType = 4629
-	// 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5).
-	SignedType_SIGNED_GEN_ROTATE      SignedType = 4865
-	SignedType_SIGNED_READER_KEY      SignedType = 4866
-	SignedType_SIGNED_READER_WRAP     SignedType = 4867
-	SignedType_SIGNED_DELEGATION_WRAP SignedType = 4868
+	// 0x13xx §10 in §6.11's order: purposes gen-rotate, reader-key, and reader-wrap for both wraps (§10.5). Then
+	// the two §6.11's list omits: GroupForm, purpose group-form, and UrMlsCredential, purpose mls-credential, whose
+	// signed body is its bytes up to identity_signature, the one signature here no Signed carries (§10.4).
+	SignedType_SIGNED_GEN_ROTATE        SignedType = 4865
+	SignedType_SIGNED_READER_KEY        SignedType = 4866
+	SignedType_SIGNED_READER_WRAP       SignedType = 4867
+	SignedType_SIGNED_DELEGATION_WRAP   SignedType = 4868
+	SignedType_SIGNED_GROUP_FORM        SignedType = 4869
+	SignedType_SIGNED_UR_MLS_CREDENTIAL SignedType = 4870
 	// 0x14xx §11: §6.11's two in its order, purposes evs-push and evs-reseed, then the two more §11.6 signs,
 	// purposes evs-path-epoch and evs-import.
 	SignedType_SIGNED_EVS_PUSH     SignedType = 5121
 	SignedType_SIGNED_EVS_RESEED   SignedType = 5122
 	SignedType_SIGNED_EVS_PATH_MAP SignedType = 5123
 	SignedType_SIGNED_EVS_IMPORT   SignedType = 5124
+	// 0x15xx §13: a device key's attestation, purpose tls-key (§13.8).
+	SignedType_SIGNED_TLS_KEY_ATTESTATION SignedType = 5377
+	// 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
+	// binding-identity by the identity key over one SignedSidecarIdentityBinding's body.
+	SignedType_SIGNED_SIDECAR_BINDING SignedType = 6657
 	// 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
 	// purpose approval; §16.11's directory items, purpose directory, the last two, reserved for format 2.
 	SignedType_SIGNED_RECORD_HEADER     SignedType = 6145
@@ -155,10 +164,14 @@ var (
 		4866: "SIGNED_READER_KEY",
 		4867: "SIGNED_READER_WRAP",
 		4868: "SIGNED_DELEGATION_WRAP",
+		4869: "SIGNED_GROUP_FORM",
+		4870: "SIGNED_UR_MLS_CREDENTIAL",
 		5121: "SIGNED_EVS_PUSH",
 		5122: "SIGNED_EVS_RESEED",
 		5123: "SIGNED_EVS_PATH_MAP",
 		5124: "SIGNED_EVS_IMPORT",
+		5377: "SIGNED_TLS_KEY_ATTESTATION",
+		6657: "SIGNED_SIDECAR_BINDING",
 		6145: "SIGNED_RECORD_HEADER",
 		6146: "SIGNED_APPROVAL_DECISION",
 		6147: "SIGNED_APPROVAL_CANCEL",
@@ -219,10 +232,14 @@ var (
 		"SIGNED_READER_KEY":          4866,
 		"SIGNED_READER_WRAP":         4867,
 		"SIGNED_DELEGATION_WRAP":     4868,
+		"SIGNED_GROUP_FORM":          4869,
+		"SIGNED_UR_MLS_CREDENTIAL":   4870,
 		"SIGNED_EVS_PUSH":            5121,
 		"SIGNED_EVS_RESEED":          5122,
 		"SIGNED_EVS_PATH_MAP":        5123,
 		"SIGNED_EVS_IMPORT":          5124,
+		"SIGNED_TLS_KEY_ATTESTATION": 5377,
+		"SIGNED_SIDECAR_BINDING":     6657,
 		"SIGNED_RECORD_HEADER":       6145,
 		"SIGNED_APPROVAL_DECISION":   6146,
 		"SIGNED_APPROVAL_CANCEL":     6147,
@@ -470,7 +487,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\xfb\f\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xf0\r\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -515,11 +532,15 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x11SIGNED_GEN_ROTATE\x10\x81&\x12\x16\n" +
 	"\x11SIGNED_READER_KEY\x10\x82&\x12\x17\n" +
 	"\x12SIGNED_READER_WRAP\x10\x83&\x12\x1b\n" +
-	"\x16SIGNED_DELEGATION_WRAP\x10\x84&\x12\x14\n" +
+	"\x16SIGNED_DELEGATION_WRAP\x10\x84&\x12\x16\n" +
+	"\x11SIGNED_GROUP_FORM\x10\x85&\x12\x1d\n" +
+	"\x18SIGNED_UR_MLS_CREDENTIAL\x10\x86&\x12\x14\n" +
 	"\x0fSIGNED_EVS_PUSH\x10\x81(\x12\x16\n" +
 	"\x11SIGNED_EVS_RESEED\x10\x82(\x12\x18\n" +
 	"\x13SIGNED_EVS_PATH_MAP\x10\x83(\x12\x16\n" +
-	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x19\n" +
+	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x1f\n" +
+	"\x1aSIGNED_TLS_KEY_ATTESTATION\x10\x81*\x12\x1b\n" +
+	"\x16SIGNED_SIDECAR_BINDING\x10\x814\x12\x19\n" +
 	"\x14SIGNED_RECORD_HEADER\x10\x810\x12\x1d\n" +
 	"\x18SIGNED_APPROVAL_DECISION\x10\x820\x12\x1b\n" +
 	"\x16SIGNED_APPROVAL_CANCEL\x10\x830\x12\x1c\n" +

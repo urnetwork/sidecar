@@ -170,6 +170,19 @@ func TestScanReadsEveryFakeStore(t *testing.T) {
 		func(canary string) {
 			net.Fakes().Push.Hint(ctx, []connect.Id{connect.NewId()}, &sidecar.ClientHint{Topic: "core", Body: []byte(canary)})
 		},
+		func(canary string) {
+			net.Fakes().Quota.ReportUsage(ctx, &sidecar.UsageBatch{
+				BatchId:  connect.NewId(),
+				Producer: "evs",
+				Events:   []*sidecar.UsageEvent{{NetworkId: connect.NewId(), Meter: canary}},
+			})
+		},
+		func(canary string) {
+			net.Fakes().Tasks.Schedule(ctx, &sidecar.TaskRequest{Name: "job", OnceKey: "once", Args: []byte(canary)})
+		},
+		func(canary string) {
+			net.Fakes().Tasks.Schedule(ctx, &sidecar.TaskRequest{Name: "job", OnceKey: canary})
+		},
 	}
 	for index, leak := range leaks {
 		// a label of its own, since an earlier leak stays in the store

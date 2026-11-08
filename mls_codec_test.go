@@ -96,6 +96,22 @@ func TestMlsVectorHeaderBoundaries(t *testing.T) {
 	}
 }
 
+// RFC §2.1.2: a header with the prefix 0b11 is refused for what it is, not for running short or
+// leaving bytes behind, so these are whole under any reading that took it for a four-byte header.
+func TestMlsVectorHeaderRefusesThePrefix11(t *testing.T) {
+	for _, c := range []string{"c0000000", "c000000161"} {
+		encoded, err := hex.DecodeString(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoder := &mlsDecoder{remaining: encoded}
+		decoder.readVector()
+		if err := decoder.finish(); !errors.Is(err, errMlsMalformed) {
+			t.Errorf("%q: %v", c, err)
+		}
+	}
+}
+
 func TestMlsVectorHeaderRefusesNonCanonicalForms(t *testing.T) {
 	cases := []string{
 		"4000",     // 0 in two bytes

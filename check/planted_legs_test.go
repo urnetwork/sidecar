@@ -5,6 +5,10 @@
 package check
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -214,6 +218,173 @@ func TestLegsFailsOnADynamicReflectLookup(t *testing.T) {
 	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:6: a dynamic reflect lookup, MethodByName")
 }
 
+// The Methods iterators call Method for every index, which keeps every exported method as surely.
+func TestLegsFailsOnAReflectMethodsIterator(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted(value any) {\n\tfor method := range reflect.TypeOf(value).Methods() {\n\t\t_ = method\n\t}\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:6: a dynamic reflect lookup, Methods")
+}
+
+// A method expression is the lookup held for later, under whatever name the file gives reflect.
+func TestLegsFailsOnAReflectMethodExpression(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\nimport mirror \"reflect\"\n\nvar lookup = mirror.Value.MethodByName\n\nvar index = (*mirror.Value).Method\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t),
+		"planted.go:5: a dynamic reflect lookup, MethodByName",
+		"planted.go:7: a dynamic reflect lookup, Method")
+}
+
+// A field of the same name is no lookup, in a file that imports reflect for something else.
+func TestLegsAllowAFieldNamedMethod(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted.go", "package sidecar\n\nimport \"reflect\"\n\ntype request struct {\n\tMethod string\n}\n\nfunc planted(value request) string {\n\t_ = reflect.TypeOf(value)\n\treturn value.Method\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t))
+}
+
+// A method value held in a field or a variable, to be called later, is the lookup itself: the compiler
+// wraps it in a function that makes the call, and that function is what the linker sees.
+func TestLegsFailsOnAStoredReflectMethodValue(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type finder struct {
+	find func(string) reflect.Value
+}
+
+func planted(value any) finder {
+	return finder{find: reflect.ValueOf(value).MethodByName}
+}
+
+func plantedIndex(value any) func(int) reflect.Method {
+	lookup := reflect.TypeOf(value).Method
+	return lookup
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t),
+		"planted.go:10: a dynamic reflect lookup, MethodByName",
+		"planted.go:14: a dynamic reflect lookup, Method")
+}
+
+// An interface of the lookup's shape, which a reflect.Value satisfies, makes the same call, and the
+// file that calls it need not import reflect.
+func TestLegsFailsOnALookupThroughAnInterfaceInAFileWithoutReflect(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted_lookup.go", "package sidecar\n\nimport \"reflect\"\n\ntype lookuper interface {\n\tMethodByName(name string) reflect.Value\n}\n")
+	fixture.write("planted.go", "package sidecar\n\nfunc planted(lookup lookuper, name string) {\n\tlookup.MethodByName(name)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:4: a dynamic reflect lookup, MethodByName")
+}
+
+// A type that embeds reflect.Type has its Methods, promoted.
+func TestLegsFailsOnALookupPromotedFromAnEmbeddedField(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type wrapped struct {
+	reflect.Type
+}
+
+func planted(value any) {
+	for method := range (wrapped{Type: reflect.TypeOf(value)}).Methods() {
+		_ = method
+	}
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:10: a dynamic reflect lookup, Methods")
+}
+
+// A type parameter constrained to the shape, which reflect.Value instantiates.
+func TestLegsFailsOnALookupThroughATypeParameter(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted[T interface{ Method(int) reflect.Value }](value T, index int) reflect.Value {\n\treturn value.Method(index)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:6: a dynamic reflect lookup, Method")
+}
+
+// The compiler marks a call of any type's method with the lookup's shape, not reflect's alone, so a
+// type of ours with one is the same break.
+func TestLegsFailsOnAMethodOfTheLookupsShapeOnAnotherType(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type registry struct{}
+
+func (self registry) MethodByName(name string) reflect.Value {
+	return reflect.Value{}
+}
+
+func planted(name string) reflect.Value {
+	return registry{}.MethodByName(name)
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted.go:12: a dynamic reflect lookup, MethodByName")
+}
+
+// A method named as a lookup is but shaped otherwise is no lookup, in a file that imports reflect.
+func TestLegsAllowAMethodOfAnotherShapeNamedMethod(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted.go", `package sidecar
+
+import "reflect"
+
+type registry struct{}
+
+func (self registry) Method(name string) string {
+	return name
+}
+
+func (self registry) Methods() []string {
+	return nil
+}
+
+func planted(value any) string {
+	_ = reflect.TypeOf(value)
+	_ = registry{}.Methods()
+	return registry{}.Method("synthetic")
+}
+`)
+	wantFindings(t, fixture.open().reflectLookupFindings(t))
+}
+
+// Each leg reads its own files: a lookup only android compiles is found on android's leg.
+func TestLegsFailsOnAReflectLookupOnlyAndroidCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm", "gomobile android/arm64")
+	fixture.write("planted_android.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted(value any, name string) {\n\treflect.ValueOf(value).MethodByName(name)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t), "planted_android.go:6: a dynamic reflect lookup, MethodByName")
+}
+
+// The row binds what reaches a phone or a page, as the pruning row does: a desktop leg may hold one.
+func TestLegsAllowAReflectLookupOnlyADesktopLegCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("planted_windows.go", "package sidecar\n\nimport \"reflect\"\n\nfunc planted(value any, name string) {\n\treflect.ValueOf(value).MethodByName(name)\n}\n")
+	wantFindings(t, fixture.open().reflectLookupFindings(t))
+}
+
+// A leg this rule cannot compile has had nothing read, which is not a pass.
+func TestLegsFailsOnALegTheReflectRuleCannotCompile(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm")
+	fixture.write("planted_js.go", "package sidecar\n\n"+plantedUncompiledBody)
+	findings := fixture.open().reflectLookupFindings(t)
+	wantFindings(t, findings, "no reflect lookup was read on a leg that does not compile: js/wasm does not compile: ")
+	for _, finding := range findings {
+		if !strings.Contains(finding, "planted_js.go:") || !strings.Contains(finding, "undefined: undeclared") {
+			t.Errorf("a finding lacks the error planted in planted_js.go:\n%s", finding)
+		}
+	}
+}
+
 // A marker package behind each part of a leg's configuration: a runner that dropped GOOS, a tag,
 // cgo or -test would read the wrong set, and the caller's own environment must not reach the leg.
 func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {
@@ -251,6 +422,132 @@ func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {
 		slices.Sort(found)
 		if !slices.Equal(found, c.want) {
 			t.Errorf("%s: found %v, want %v", c.name, found, c.want)
+		}
+	}
+}
+
+// The same through the go env file, which go env -w writes and the go command reads for any setting
+// whose variable is empty: a GOEXPERIMENT and a GOAMD64 there would each add a build tag to every leg.
+func TestLegsReadNoGoEnvFile(t *testing.T) {
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(goEnvPath, []byte("GOEXPERIMENT=arenas\nGOAMD64=v3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOENV", goEnvPath)
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64")
+	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.3\n")
+	for _, mark := range []string{"experiment", "level"} {
+		fixture.writeSibling("marks/"+mark+"/"+mark+".go", "package "+mark+"\n")
+	}
+	fixture.requireLocal("example.com/marks", "v1.0.0", "marks")
+	fixture.write("mark_experiment.go", "//go:build goexperiment.arenas\n\npackage sidecar\n\nimport _ \"example.com/marks/experiment\"\n")
+	fixture.write("mark_level.go", "//go:build amd64.v3\n\npackage sidecar\n\nimport _ \"example.com/marks/level\"\n")
+	repository := fixture.open()
+	for _, listed := range repository.closure(t, repository.legs[0]) {
+		if strings.HasPrefix(listed.ImportPath, "example.com/marks/") {
+			t.Errorf("root linux/amd64 links %s, which only the go env file's settings turn on", listed.ImportPath)
+		}
+	}
+}
+
+// Every setting goEnvironment clears, planted in a go env file at a value no default has, reads as
+// the go command's own default under goEnvironment, and GOFLAGS as goEnvironment sets it.
+func TestGoEnvironmentReadsNoGoEnvFile(t *testing.T) {
+	keys := append(slices.Clone(goEnvironmentCleared), "GOFLAGS", "GOWORK", "GOTOOLCHAIN")
+	read := func(base []string) map[string]string {
+		t.Helper()
+		output, err := runGo(t.TempDir(), goEnvironmentOver(base), append([]string{"env", "-json"}, keys...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := map[string]string{}
+		if err := json.Unmarshal(output, &values); err != nil {
+			t.Fatal(err)
+		}
+		return values
+	}
+	defaults := read(os.Environ())
+	plantedCgo := "0"
+	if defaults["CGO_ENABLED"] == "0" {
+		plantedCgo = "1"
+	}
+	planted := map[string]string{
+		"GOOS": "plan9", "GOARCH": "386", "CGO_ENABLED": plantedCgo, "GOEXPERIMENT": "arenas", "GO111MODULE": "off",
+		"GOFIPS140": "v1.0.0", "GO386": "softfloat", "GOAMD64": "v3", "GOARM": "7", "GOARM64": "v9.0",
+		"GOMIPS": "softfloat", "GOMIPS64": "softfloat", "GOPPC64": "power9", "GORISCV64": "rva22u64", "GOWASM": "satconv",
+		"GO_EXTLINK_ENABLED": "0", "GOFLAGS": "-tags=sidecar_testhooks", "GOTOOLCHAIN": "go1.99.0",
+	}
+	lines := []string{}
+	for _, key := range keys {
+		value, ok := planted[key]
+		if !ok {
+			// the compilers, their flags and the flag lists, which take any word
+			value = "-Dplanted_" + strings.ToLower(key)
+		}
+		lines = append(lines, key+"="+value)
+	}
+	goEnvPath := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(goEnvPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withFile := read(append(os.Environ(), "GOENV="+goEnvPath))
+	for _, key := range keys {
+		if withFile[key] != defaults[key] {
+			t.Errorf("%s reads %q with a go env file and %q without one", key, withFile[key], defaults[key])
+		}
+	}
+	if withFile["GOFLAGS"] != "-trimpath" {
+		t.Errorf("GOFLAGS reads %q", withFile["GOFLAGS"])
+	}
+}
+
+// The go command's own list of what it reads (internal/cfg's KnownEnv), each decided once: set,
+// cleared, kept or only reported. A setting a later Go adds fails here until someone decides it, so
+// goEnvironment's claim that a leg is what it names survives a toolchain bump.
+func TestGoEnvironmentDecidesEveryGoSetting(t *testing.T) {
+	output, err := runGo(t.TempDir(), goEnvironment(), "env", "GOROOT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(output)), "src", "internal", "cfg", "cfg.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, found := strings.Cut(string(data), "const KnownEnv = `")
+	block, _, closed := strings.Cut(rest, "`")
+	if !found || !closed {
+		t.Fatalf("the toolchain's internal/cfg no longer declares KnownEnv")
+	}
+	known := strings.Fields(block)
+	setKeys := []string{}
+	for _, entry := range goEnvironmentSet {
+		key, _, _ := strings.Cut(entry, "=")
+		setKeys = append(setKeys, key)
+	}
+	decided := map[string]string{}
+	for _, list := range []struct {
+		name string
+		keys []string
+	}{
+		{name: "set", keys: setKeys}, {name: "cleared", keys: goEnvironmentCleared},
+		{name: "kept", keys: goEnvironmentKept}, {name: "computed", keys: goEnvironmentComputed},
+	} {
+		for _, key := range list.keys {
+			if previous, twice := decided[key]; twice {
+				t.Errorf("%s is both %s and %s", key, previous, list.name)
+			}
+			decided[key] = list.name
+		}
+	}
+	for _, key := range known {
+		if _, ok := decided[key]; !ok {
+			t.Errorf("the go command reads %s, which goEnvironment neither sets, clears nor keeps", key)
+		}
+	}
+	for key := range decided {
+		if !slices.Contains(known, key) {
+			t.Errorf("goEnvironment decides %s, which the go command does not read", key)
 		}
 	}
 }
@@ -311,4 +608,121 @@ func TestLegsFailsOnAnSdkTableItCannotFind(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.writeSibling("sdk/dependency_boundary_test.go", "package sdk\n\nvar renamedLegs = []int{}\n")
 	wantFindings(t, fixture.open().sdkLegRowFindings(t), "no longer declares messagingBoundaryLegs")
+}
+
+// A body that does not compile, behind whatever constraint a test plants it with.
+const plantedUncompiledBody = "func planted() int {\n\treturn undeclared\n}\n"
+
+// The compile rule over the fixture's legs. Each finding must hold the planted error in the planted
+// file, so a leg failing on anything else does not stand in for the plant.
+func plantedCompileFindings(t *testing.T, fixture *fixture, plantedFile string) []string {
+	t.Helper()
+	findings := fixture.open().legCompileFindings(t)
+	for _, finding := range findings {
+		if !strings.Contains(finding, plantedFile+":") || !strings.Contains(finding, "undefined: undeclared") {
+			t.Errorf("a finding lacks the error planted in %s:\n%s", plantedFile, finding)
+		}
+	}
+	return findings
+}
+
+// Every go test make check runs is on this host's system, so only a compile sees the windows legs.
+func TestLegsFailsOnAFileOnlyWindowsCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64", "root windows/amd64", "tests windows/amd64")
+	fixture.write("planted_windows.go", "package sidecar\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_windows.go"),
+		"root windows/amd64 does not compile",
+		"tests windows/amd64 does not compile")
+}
+
+// A test leg compiles its tests, and the shipped leg beside it builds none.
+func TestLegsFailsOnATestOnlyJsCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm", "tests js/wasm")
+	fixture.write("planted_js_test.go", "package sidecar\n\nimport \"testing\"\n\nfunc TestPlanted(t *testing.T) {\n\t_ = undeclared\n}\n")
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_js_test.go"), "tests js/wasm does not compile")
+}
+
+// The CLI's six release targets each compile, so a file only one of them builds is caught there.
+func TestLegsFailsOnACliFileOnlyWindowsArm64Compiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cli windows/amd64", "cli windows/arm64")
+	fixture.write("cli/planted_windows_arm64.go", "package main\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_windows_arm64.go"), "cli windows/arm64 does not compile")
+}
+
+// The page Worker's leg builds files no other leg does.
+func TestLegsFailsOnAPageWorkerFileThatDoesNotCompile(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("js/wasm", sidecarHttpLegName)
+	fixture.write("planted_http.go", "//go:build sidecar_http\n\npackage sidecar\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "planted_http.go"), sidecarHttpLegName+" does not compile")
+}
+
+// server runs the engines on arm64 as well as amd64.
+func TestLegsFailsOnAnEngineFileOnlyArm64Compiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("engines linux/amd64", "engines linux/arm64")
+	fixture.write("evsservice/engine.go", "package evsservice\n\nimport _ \"@module@\"\n")
+	fixture.write("evsservice/engine_arm64.go", "package evsservice\n\n"+plantedUncompiledBody)
+	wantFindings(t, plantedCompileFindings(t, fixture, "engine_arm64.go"), "engines linux/arm64 does not compile")
+}
+
+// The cgo rule over the fixture's legs, with what it reports.
+func reportedCompileFindings(t *testing.T, fixture *fixture) ([]string, []string) {
+	t.Helper()
+	repository := fixture.open()
+	reports := []string{}
+	repository.report = func(format string, arguments ...any) {
+		reports = append(reports, findingf(format, arguments...))
+	}
+	return repository.legCompileFindings(t), reports
+}
+
+// A cgo leg compiles as it builds on a host with its system's C toolchain, and fails there. Each other
+// one compiles with cgo off, which leaves the file out, and is reported, never passed as compiled, so
+// the rule switched off fails this on any host.
+func TestLegsFailsOnACgoFileThisHostCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("cgo darwin/arm64", "gomobile ios/arm64", "cgo linux/amd64", "gomobile android/arm64")
+	fixture.write("planted_cgo.go", "//go:build cgo\n\npackage sidecar\n\n"+plantedUncompiledBody)
+	findings, reports := reportedCompileFindings(t, fixture)
+	wants := []string{}
+	for _, leg := range fixture.legs {
+		if leg.compilesOn(runtime.GOOS, runtime.GOARCH) {
+			wants = append(wants, leg.name+" does not compile: ")
+			continue
+		}
+		if !slices.ContainsFunc(reports, func(line string) bool { return strings.HasPrefix(line, leg.name+" compiles with cgo off: ") }) {
+			t.Errorf("%s compiled with cgo off unreported: %v", leg.name, reports)
+		}
+	}
+	slices.Sort(wants)
+	wantFindings(t, findings, wants...)
+	for _, finding := range findings {
+		if !strings.Contains(finding, "planted_cgo.go:") {
+			t.Errorf("a finding lacks the planted file:\n%s", finding)
+		}
+	}
+}
+
+// No other leg has android's system, and no host here has its C toolchain, so only the cgo-off
+// compile reaches a file only android builds.
+func TestLegsFailsOnAFileOnlyAndroidCompiles(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("root linux/amd64", "gomobile android/arm64")
+	fixture.write("planted_android.go", "package sidecar\n\n"+plantedUncompiledBody)
+	findings, reports := reportedCompileFindings(t, fixture)
+	wantFindings(t, findings, "gomobile android/arm64 does not compile with cgo off: ")
+	for _, finding := range findings {
+		if !strings.Contains(finding, "planted_android.go:") || !strings.Contains(finding, "undefined: undeclared") {
+			t.Errorf("a finding lacks the error planted in planted_android.go:\n%s", finding)
+		}
+	}
+	if !slices.ContainsFunc(reports, func(line string) bool {
+		return strings.HasPrefix(line, "gomobile android/arm64 compiles with cgo off: ")
+	}) {
+		t.Errorf("the android leg compiled with cgo off unreported: %v", reports)
+	}
 }

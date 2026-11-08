@@ -1,5 +1,5 @@
-// The key schedule (RFC 9420 §8): the GroupContext it binds, one epoch's secrets, the exporter,
-// external initialization and the transcript hashes (RFC §8.2).
+// The key schedule (RFC 9420 §8): the GroupContext it binds, one epoch's secrets, the exporter and
+// external initialization.
 //
 // Hook kinds name the values as RFC §8's table 4 and diagram do. The two extractions the diagram leaves
 // unnamed are "joiner_extract" and "member_extract".
@@ -217,27 +217,4 @@ func (self *mlsCipherSuite) externalInitOpen(externalPrivateKey hpke.PrivateKey,
 	}
 	testHookSecret("init_secret", initSecret)
 	return initSecret, nil
-}
-
-// confirmed_transcript_hash_[epoch] (RFC §8.2). The input is the encoded
-// ConfirmedTranscriptHashInput of the commit that starts the epoch.
-func (self *mlsCipherSuite) nextConfirmedTranscriptHash(interimTranscriptHash []byte, confirmedTranscriptHashInput []byte) []byte {
-	return self.hash(append(append([]byte{}, interimTranscriptHash...), confirmedTranscriptHashInput...))
-}
-
-// interim_transcript_hash_[epoch] (RFC §8.2), whose InterimTranscriptHashInput is the tag as a MAC<V>.
-func (self *mlsCipherSuite) nextInterimTranscriptHash(confirmedTranscriptHash []byte, confirmationTag []byte) ([]byte, error) {
-	encoder := &mlsEncoder{}
-	encoder.writeFixed(confirmedTranscriptHash)
-	encoder.writeVector(confirmationTag)
-	encoded, err := encoder.finish()
-	if err != nil {
-		return nil, err
-	}
-	return self.hash(encoded), nil
-}
-
-// The confirmation_tag of RFC §6.1: confirmation_key over the confirmed transcript hash.
-func (self *mlsCipherSuite) confirmationTag(confirmationKey []byte, confirmedTranscriptHash []byte) []byte {
-	return self.mac(confirmationKey, confirmedTranscriptHash)
 }

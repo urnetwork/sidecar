@@ -129,23 +129,28 @@ func tls12CircuitKeys(api frontend.API, masterSecret []circuitByte, inputs *circ
 	finishedHeader := bytesConstant([]byte{tlsHandshakeFinished, 0, 0, tlsVerifyData12Bytes})
 	clientFinished := append(append([]circuitByte{}, finishedHeader...), master.prf(api, tlsLabelClientFinished, inputs.clientFinishedHash, tlsVerifyData12Bytes)...)
 
-	// resume S_ckx over the tail and the client's Finished
-	placed := shiftBytes(api, clientFinished, inputs.resumeShift, 2*sha256BlockBytes)
+	serverFinished := append(append([]circuitByte{}, finishedHeader...), master.prf(api, tlsLabelServerFinished, inputs.resumedHash(api, clientFinished), tlsVerifyData12Bytes)...)
+	return keys, serverFinished
+}
+
+// S_ckx resumed over its tail and the client's Finished: the transcript hash the server's Finished
+// signs.
+func (self *circuitInputs12) resumedHash(api frontend.API, clientFinished []circuitByte) []circuitByte {
+	placed := shiftBytes(api, clientFinished, self.resumeShift, 2*sha256BlockBytes)
 	blocks := make([]circuitByte, len(placed))
 	for i := range blocks {
 		for bit := range blocks[i] {
 			// disjoint by the edge's construction of resumeBase, so a sum is a bit
-			blocks[i][bit] = api.Add(inputs.resumeBase[i][bit], placed[i][bit])
+			blocks[i][bit] = api.Add(self.resumeBase[i][bit], placed[i][bit])
 		}
 	}
-	first := sha256Compress(api, inputs.chaining, blocks[:sha256BlockBytes])
+	first := sha256Compress(api, self.chaining, blocks[:sha256BlockBytes])
 	second := sha256Compress(api, first, blocks[sha256BlockBytes:])
 	var resumed circuitHashState
 	for i := range resumed {
 		for bit := range resumed[i] {
-			resumed[i][bit] = api.Select(inputs.resumeTwoBlocks, second[i][bit], first[i][bit])
+			resumed[i][bit] = api.Select(self.resumeTwoBlocks, second[i][bit], first[i][bit])
 		}
 	}
-	serverFinished := append(append([]circuitByte{}, finishedHeader...), master.prf(api, tlsLabelServerFinished, hashStateBytes(resumed), tlsVerifyData12Bytes)...)
-	return keys, serverFinished
+	return hashStateBytes(resumed)
 }
