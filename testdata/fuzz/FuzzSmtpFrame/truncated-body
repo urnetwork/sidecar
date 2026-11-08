@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\x00\x00\x00p\x16\x01\b\x01\x12\fmail.example\x18\x02\"*qvsc2zbwd5c3m5rbnvzxjzpnay@n1.root.example*\x0fn1.root.example2\x1aabcdefghijklmnopqrstuvwxyz8\x80 H")
