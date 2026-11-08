@@ -9,7 +9,9 @@ import (
 	"context"
 	"maps"
 	"sync"
+	"time"
 
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/mxedgeservice"
 )
 
@@ -82,4 +84,15 @@ func (self *FakeMxEdgeStore) ResetOpCounts() {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	clear(self.opCounts)
+}
+
+// networkId's rows starting at since or later, as copies: RunMxEdgeStoreSuite's reader.
+func (self *FakeMxEdgeStore) ReadRecords(ctx context.Context, networkId sidecar.Id, since time.Time) ([]*mxedgeservice.MxConnectionRecord, error) {
+	records := []*mxedgeservice.MxConnectionRecord{}
+	for _, record := range self.Records() {
+		if record.NetworkId == networkId && !record.StartTime.Before(since) {
+			records = append(records, record)
+		}
+	}
+	return records, nil
 }

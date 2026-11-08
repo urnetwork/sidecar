@@ -76,3 +76,9 @@ func TestFakeMxEdgeStoreTakesFaults(t *testing.T) {
 		t.Errorf("a dropped answer applied %d rows", len(records))
 	}
 }
+
+// The fake keeps what store.go promises, as server's Postgres store must.
+func TestFakeMxEdgeStorePassesTheSuite(t *testing.T) {
+	store := NewFakeMxEdgeStore(nil)
+	RunMxEdgeStoreSuite(t, store, store.ReadRecords)
+}

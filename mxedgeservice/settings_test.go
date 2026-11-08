@@ -16,13 +16,14 @@ const (
 	testRequiredSettings = "banner_host: " + testBannerHostName + "\ndeviation_url: " + testDeviationUrl + "\n"
 )
 
-// Settings that pass Validate. The readiness probe is parked far off, so only a test about it moves
-// it, and timers a test counts stay still.
+// Settings that pass Validate. The readiness probe and the session records' flush are parked far off,
+// so only a test about one moves it, and timers a test counts stay still.
 func testSettings() *mxedgeservice.MxEdgeSettings {
 	settings := mxedgeservice.DefaultMxEdgeSettings()
 	settings.BannerHostName = testBannerHostName
 	settings.DeviationUrl = testDeviationUrl
 	settings.ReadyProbeInterval = 1000 * time.Hour
+	settings.RecordFlushInterval = 1000 * time.Hour
 	return settings
 }
 
@@ -33,6 +34,9 @@ func TestDefaultsHoldTheDesignsNumbers(t *testing.T) {
 	}
 	if settings.ClosedHandshakeTtl != time.Hour {
 		t.Errorf("§15.4 remembers a closed handshake for 1 h, not %v", settings.ClosedHandshakeTtl)
+	}
+	if settings.RecordFlushInterval != 10*time.Second {
+		t.Errorf("§15.4 writes session records in 10 s batches, not %v", settings.RecordFlushInterval)
 	}
 	if settings.SenderSessionCount != 8 || settings.SenderAggregateSessionCount != 32 || settings.NetworkSessionCount != 256 {
 		t.Errorf("reading 2 proposes 8, 32 and 256, not %d, %d and %d",
@@ -67,6 +71,10 @@ store_timeout: 2s
 ready_probe_interval: 30s
 accept_retry_delay: 1500ms
 drain_timeout: 2m
+record_flush_interval: 20s
+record_write_timeout: 3s
+record_queue: 9
+record_batch: 4
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +96,10 @@ drain_timeout: 2m
 		ReadyProbeInterval:          30 * time.Second,
 		AcceptRetryDelay:            1500 * time.Millisecond,
 		DrainTimeout:                2 * time.Minute,
+		RecordFlushInterval:         20 * time.Second,
+		RecordWriteTimeout:          3 * time.Second,
+		RecordQueueCount:            9,
+		RecordBatchCount:            4,
 	}
 	if *settings != *want {
 		t.Errorf("loaded %+v, want %+v", settings, want)
@@ -215,6 +227,10 @@ func TestValidateRefusesEveryNumberAtZero(t *testing.T) {
 		"ready_probe_interval":      func(settings *mxedgeservice.MxEdgeSettings) { settings.ReadyProbeInterval = 0 },
 		"accept_retry_delay":        func(settings *mxedgeservice.MxEdgeSettings) { settings.AcceptRetryDelay = 0 },
 		"drain_timeout":             func(settings *mxedgeservice.MxEdgeSettings) { settings.DrainTimeout = 0 },
+		"record_flush_interval":     func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordFlushInterval = 0 },
+		"record_write_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordWriteTimeout = 0 },
+		"record_queue":              func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordQueueCount = 0 },
+		"record_batch":              func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordBatchCount = 0 },
 	} {
 		settings := testSettings()
 		clear(settings)
