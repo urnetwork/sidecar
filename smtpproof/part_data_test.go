@@ -1,0 +1,104 @@
+// A later DATA part over a late NewSessionTicket: the body's parts go on behind it, since a ticket is
+// no reply, while any reply in a later part stays unprovable (Z7, Z8). The circuit runs on a quick
+// shape with the same blocks, and the production shapes are checked to hold such a part.
+
+package smtpproof
+
+import (
+	"bytes"
+	"testing"
+)
+
+// A DATA send cut into several later parts, so part 4 is a body part that is not the last.
+func testLaterPartCapture(t *testing.T, leg *testTlsLeg) *testCapturedParts {
+	t.Helper()
+	settings := DefaultProverSettings()
+	settings.ForceData = true
+	settings.DataPartBytes = 12
+	return testCapture(t, leg, testMxDefaults(), settings, testJob("one line\r\nanother line\r\nand a third\r\n", "bob", "carol"))
+}
+
+// Part 4 with one more server record after its count, holding plaintext as the MX would have sealed it.
+func testLaterPartWithServerRecord(t *testing.T, capture *testCapturedParts, plaintext []byte) (*partStatement, *partWitness) {
+	t.Helper()
+	statement, witness := capture.part(t, 4)
+	if statement.last || 0 < len(statement.serverRecords) {
+		t.Fatalf("part 4 is the last or covers %d server records", len(statement.serverRecords))
+	}
+	statement.serverRecords = []*partRecord{{seq: statement.previousServerRecordCount, raw: tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 1))}}
+	statement.serverRecordCount = statement.previousServerRecordCount + 1
+	witness.serverPlaintexts = [][]byte{nil}
+	testAuthorServerRecord(t, statement, witness, 0, plaintext)
+	return statement, witness
+}
+
+// A 1.3 NewSessionTicket's plaintext: its handshake header, a body and the inner type.
+func testTicket(bodyBytes int) []byte {
+	ticket := []byte{tlsHandshakeNewSessionTicket, 0, byte(bodyBytes >> 8), byte(bodyBytes)}
+	ticket = append(ticket, bytes.Repeat([]byte{7}, bodyBytes)...)
+	return append(ticket, tlsRecordHandshake)
+}
+
+func TestALaterDataPartCoversALateTicketAndNoReply(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs()[:2] {
+		shape := &partShape{kind: partKindBody, version: tlsVersion13, suite: leg.suites[0], clientBlocks: 2, serverBlocks: 7, bodyBlocks: 2, withoutKeySchedule: true}
+		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
+			shape.serverBlocks = 2
+			shape.bodyBlocks = 1
+		}
+		compiled := testCompileShape(t, shape)
+		capture := testLaterPartCapture(t, leg)
+		cases := []struct {
+			name      string
+			plaintext []byte
+			check     relationCheck
+		}{
+			{name: "a late ticket", plaintext: testTicket(96)},
+			{name: "a reply during the body", plaintext: append([]byte("250 2.0.0 Ok\r\n"), tlsRecordApplicationData), check: checkZ8},
+			{name: "a KeyUpdate", plaintext: []byte{tlsHandshakeKeyUpdate, 0, 0, 1, 0, tlsRecordHandshake}, check: checkZ7},
+			{name: "a padded ticket", plaintext: append(testTicket(96), 0, 0), check: checkZ7},
+		}
+		for _, c := range cases {
+			statement, witness := testLaterPartWithServerRecord(t, capture, c.plaintext)
+			failures := relationCheckPart(statement, witness)
+			if c.check == "" && len(failures) != 0 || c.check != "" && (len(failures) != 1 || failures[0].check != c.check) {
+				t.Errorf("%s: %s: the relation says %v", leg.name, c.name, failures)
+			}
+			assignment, err := partAssignment(shape, statement)
+			if err != nil {
+				// a record the shape cannot even hold is refused before any proof, as unprovable
+				if c.check == "" {
+					t.Errorf("%s: %s: %v", leg.name, c.name, err)
+				}
+				continue
+			}
+			assignWitness(assignment, statement, witness)
+			if err := testPartSolved(t, compiled, assignment); (err == nil) != (c.check == "") {
+				t.Errorf("%s: %s: the circuit says %v", leg.name, c.name, err)
+			}
+		}
+	}
+}
+
+func TestProductionShapesHoldALateTicketInALaterDataPart(t *testing.T) {
+	// finding a shape builds an assignment and compiles nothing, so this runs in both legs
+	for _, leg := range testTlsLegs()[:2] {
+		capture := testLaterPartCapture(t, leg)
+		plain, _ := capture.part(t, 4)
+		withTicket, _ := testLaterPartWithServerRecord(t, capture, testTicket(250))
+		plainShape, err := partShapeFor(plain)
+		if err != nil || plainShape.serverBlocks != 0 {
+			t.Errorf("%s: a part with no server record takes %+v, %v", leg.name, plainShape, err)
+		}
+		ticketShape, err := partShapeFor(withTicket)
+		if err != nil || ticketShape.serverBlocks == 0 || ticketShape.kind != partKindBody {
+			t.Errorf("%s: a part over a ticket takes %+v, %v", leg.name, ticketShape, err)
+		}
+		// past one ticket of 255 octets there is no shape, and the send fails closed
+		tooLong, _ := testLaterPartWithServerRecord(t, capture, testTicket(300))
+		if shape, err := partShapeFor(tooLong); err == nil {
+			t.Errorf("%s: a 300-octet ticket took %+v", leg.name, shape)
+		}
+	}
+}

@@ -398,7 +398,7 @@ A sidecar must never know a trapdoor, which holds because it contributes nothing
 3. Publish the transcript and resulting keys, release-pinned by hash.
 4. A prover host verifies once per release (10.2), then caches.
 
-Where the bytes live is the owner's answer to `smtpproof-start-key-distribution`: keys and transcripts download on a host's first send from a public path on ur.io, with no token and no account, pinned by hash in the release. Verification makes the path need no trust. The server behind it sees which IPs fetch, which marks a prover host, so §2.8 gains a row for it. Before the first production setup the 20 shapes are cut to what M7's census justifies.
+Where the bytes live is the owner's answer to `smtpproof-start-key-distribution`: keys and transcripts download on a host's first send from a public path on ur.io, with no token and no account, pinned by hash in the release. Verification makes the path need no trust. The server behind it sees which IPs fetch, which marks a prover host, so §2.8 gains a row for it. Before the first production setup the 22 shapes are cut to what M7's census justifies.
 
 **The KeySet** (`setup_keys.go`). A release's keys are one directory: `keyset.json`, which names the beacon, each domain size's phase 1 contributions, and per shape its phase 2 contributions, proving key and verifying key, each file by its SHA-256; and those files. The release pins `keyset.json` by its own SHA-256, so every file is pinned through it. A shape's name in it spells every dimension of the shape, so a changed shape is another name.
 
@@ -508,7 +508,7 @@ Kept honest as the module grows. Anything not listed as built fails closed.
 Not built, each failing closed as stated:
 
 - **Keys.** No production setup has run, so no release pins a KeySet, ur injects no prover and server no verifier, and both sides would refuse every part. The ur.io download path is not built: it waits for its §2.8 row (section 14).
-- **Late server records in a later DATA part.** Its shapes hold no server blocks, so a late ticket during a DATA body makes the part unprovable and the send fails. π3 handles one.
+- **More than one late ticket in a later DATA part.** A later part over a late NewSessionTicket takes a 1.3 shape holding one ticket of up to 255 octets (`TestALaterDataPartCoversALateTicketAndNoReply`); a longer ticket, or several, finds no shape and the send fails. 1.2 sends no ticket here, and any reply during the body stays unprovable (Z8). π3 handles tickets within its server blocks.
 - **Larger capacities.** Shapes hold a 4 KiB header block, about 10 recipients and a 2 KiB DATA part. Anything larger finds no shape and fails. `smtp_recipients_per_message` allows 100. Server blocks count records as well as octets: AES's 24 hold 12 replies only while each is under 32 octets, and replies that carry a queue or trace id run longer, so at 10 recipients such an MX finds no shape. M7's census should size these. `TestProductionShapesHoldTheSpeedGatesSends` holds D-SMTP-16's sends to the shapes on every leg.
 - **Scripted MXs for the rest of FS-31.** The scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand. Those cases are tested at the relation and gate, not end to end.
 

@@ -57,7 +57,7 @@ func testMeasuringProver(costs map[uint16]time.Duration) (*Prover, *testClockedB
 func TestMeasurePartsFillTheirShapesAndSatisfyTheRelation(t *testing.T) {
 	// a measuring part is a real later DATA part of its shape, so its cost is that shape's
 	for _, shape := range partShapes() {
-		if shape.kind != partKindBody {
+		if shape.kind != partKindBody || 0 < shape.serverBlocks {
 			continue
 		}
 		statement, witness, err := newMeasurePart(shape)

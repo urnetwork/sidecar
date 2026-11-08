@@ -36,7 +36,8 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 	capacity := 0
 	measured := false
 	for _, shape := range partShapes() {
-		if shape.kind != partKindBody {
+		// a shape over a late ticket proves only the rare part that covers one, so it sets no cap
+		if shape.kind != partKindBody || 0 < shape.serverBlocks {
 			continue
 		}
 		statement, witness, err := newMeasurePart(shape)

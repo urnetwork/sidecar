@@ -57,9 +57,14 @@ func partShapes() []*partShape {
 		// DATA with a 2 KiB first body part beside the header block
 		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
 		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 12, headerBlocks: 64, bodyBlocks: 32},
-		// a later DATA part. A server record in one has no circuit yet, so it fails closed
+		// a later DATA part
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
 		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, bodyBlocks: 32},
+		// a later DATA part over a late NewSessionTicket. No reply may come during the body (Z8), so the
+		// only server record such a part can cover is a ticket: these hold one of up to 255 octets. A part
+		// with no server record takes the cheaper shape above, which comes first. 1.2 has no ticket here
+		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, serverBlocks: 16, bodyBlocks: 128},
+		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 4, bodyBlocks: 32},
 		// TLS 1.2, for Exchange Online among others: AES-128-GCM alone, under each of its two suites
 		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4},
 		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4},
