@@ -476,7 +476,24 @@ At load averages of 25 to 37, BDAT on the other two legs, with ChaCha20's shapes
 | | π3 | 4,706,313 | 710 MiB | 44.5 s | 8.5 s | 6,260 MiB |
 | | Whole send | 7,005,352 | 1,008 MiB | 61.9 s | 13.9 s | |
 
-Setup there took 24 s to 4 min 24 s a shape. Neither leg has been measured in DATA mode.
+Setup there took 24 s to 4 min 24 s a shape.
+
+At load averages of 22 to 35, beside a real-size ceremony in another process, DATA on those two legs, with the same header block and a 6,100-octet body:
+
+| Leg | Part | Constraints | Proving key | Prove, CPU | Prove, wall | Peak memory |
+|---|---|---|---|---|---|---|
+| TLS 1.3, ChaCha20 | π1 | 538,366 | 75 MiB | 5.0 s | 1.4 s | 723 MiB |
+| | π2 | 1,326,925 | 186 MiB | 11.3 s | 3.6 s | 1,717 MiB |
+| | π3 | 3,941,977 | 532 MiB | 24.5 s | 3.3 s | 3,890 MiB |
+| | Each later part | 1,327,389 | 192 MiB | 11.3 to 11.7 s | 2.2 to 3.4 s | 1,762 MiB |
+| | π1 to π6 | | | 75.1 s | 16.8 s | |
+| TLS 1.2, AES-128-GCM | π1 | 719,906 | 91 MiB | 5.4 s | 4.1 s | 934 MiB |
+| | π2 | 1,579,133 | 207 MiB | 9.9 s | 1.3 s | 2,126 MiB |
+| | π3 | 6,258,823 | 862 MiB | 44.7 s | 6.1 s | 7,019 MiB |
+| | Each later part | 2,248,606 | 336 MiB | 18.5 to 19.8 s | 2.4 to 2.5 s | 3,199 MiB |
+| | π1 to π6 | | | 117.0 s | 18.7 s | |
+
+Setup took 25 s to 3 min 5 s a shape. These runs used the later-part shapes without server blocks; the 1.3 shapes over a late ticket (section 12) have not been measured, and no MX here sends a ticket.
 
 Every production shape compiles, and none carries a commitment (`TestMeasureShapes`). ChaCha20's envelope and message shapes hold 12 server blocks, not the first draft's 6: a record starts a fresh keystream block, and 6 could not hold D-SMTP-16's 11 one-line replies, so the first ChaCha20 run failed at π3. The change costs about 158,000 constraints a shape. Body octets cost about 762 constraints each under AES and 374 under ChaCha20, by subtracting shapes.
 
@@ -485,7 +502,8 @@ What this says, neither reference machine having been measured:
 - A whole BDAT send costs 42 to 64 s of CPU, and on this machine's 14 lightly loaded cores it took 14 to 15 s. The M1's eight cores likely do a third to a half of that parallel work, so its 30 s bar is close and may be missed.
 - The m5.large's 2 vCPUs are the two hyperthreads of one server core, which likely does under half the work of an M4 Pro performance core. On that guess π1 to π3 take about two minutes there, so the 60 s bar is likely missed by about 2×, near 11.3's estimate.
 - Peak memory grows with the cores the prover gets: AES's π3 peaked at 1.7 GB under heavy load, TLS 1.2's at 6.3 GB on lightly loaded cores. Whether π3 fits the 8 GB M1 beside everything else it runs is unproven, and a prover host may need to cap its parallelism.
-- DATA at 100 KiB is π1 to π3 and about 48 later parts, about 17 minutes of CPU here. The M1 meets its 10 minutes only by keeping most of its cores busy, and the m5.large's one core likely misses its 20, as it misses 60 s for BDAT.
+- DATA at 100 KiB is π1 to π3 and about 48 later parts: about 17 minutes of CPU here under 1.3 with AES, 10 with ChaCha20 and 16 under 1.2. The M1 meets its 10 minutes only by keeping most of its cores busy, and the m5.large's one core likely misses its 20, as it misses 60 s for BDAT.
+- TLS 1.2's DATA π3 peaked at 7.0 GB on lightly loaded cores, within 1 GB of the M1's 8 GB, so on an M1 that part needs its parallelism capped or its shape split before 1.2 DATA can be relied on there.
 
 The owner's answer to `smtpproof-start-z1-reproof-cost` keeps D-SMTP-22 as written and has SMTP-M9-32's bench measure both machines. If the m5.large misses, its row of D-SMTP-16 is relaxed to the measured number.
 
@@ -500,7 +518,7 @@ Kept honest as the module grows. Anything not listed as built fails closed.
 | `edge.go`: E1-E3 | Built, as one state machine per connection that ends at its first refusal. Each check has refusals of its own, over replayed real connections. `TestEdgeInputsEqualServerKeyLog` holds Z1's inputs to the MX's own key log; `FuzzEdgeHandshake` edits real handshakes and holds the gate to its bounds and to passing nothing after a refusal; `FuzzEdgeRecordOrder` interleaves records, parts, late server records and parts proven again, and holds every message record behind coverage. `MailForwarded` tells the engine when MAIL went |
 | `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving. `Measure` proves one full later DATA part per suite with keys and holds later sends to the slowest suite's cap |
 | `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z4-Z9 differentially against `relation.go` |
-| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests. `TestMeasureWholeSend` has proved whole sends that the gate accepted: BDAT on all three legs and DATA on TLS 1.3 with AES (11.4) |
+| `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests. `TestMeasureWholeSend` has proved whole sends that the gate accepted, BDAT and DATA on all three legs (11.4) |
 | `setup.go`, `setup_keys.go`, `setup/`: the ceremony, its verification and the KeySet | Built and tested end to end on small circuits: a tampered file, another circuit's transcript, keys the transcript does not fix and a changed cache file are each refused. `TestAKeySetProvesARealEhlo` runs it at π1's real size. Never run at production size |
 | `checker/`: the public relation, written apart | Drafted from this document and DESIGN.md alone, importing nothing from this module. It passes every leg's honest BDAT and DATA connection, and names the same failing checks as the gate and `relation.go` over a set of mutations (`checker_agreement_test.go`). Written by an agent, not by an engineer outside the circuits' authorship, which §22.10 asks for |
 | `smtp_proof.go` in the root: the injection seam | Built, with `MailForwarded` and `Measure`. `cli/smtp_prover.go` builds the prover from the pinned KeySet; nothing calls it yet, and server does not inject a verifier, because `ur daemon`, `SmtpSender` and `smtpedgeservice` do not exist |
