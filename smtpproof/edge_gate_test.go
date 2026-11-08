@@ -269,3 +269,50 @@ func TestE3RefusesAServerRecordCountThatFalls(t *testing.T) {
 		testExpectCheck(t, leg.name, err, checkE3)
 	}
 }
+
+func TestE3CutsAChunkOneOctetPastNAndPassesOneThatEndsAtN(t *testing.T) {
+	// E3 step 4 at its boundary: the relayed body records bring BDAT's chunk to octet n exactly, and
+	// pass with QUIT after them; the same records with the last one octet longer pass n by one and cut
+	// there, forwarding nothing more
+	for _, leg := range testTlsLegs() {
+		fixture := testBdatGateCapture(t, leg)
+		for _, over := range []bool{false, true} {
+			open := testOpen(t, fixture, &testFixedVerifier{})
+			open.verifyThrough(t, 3)
+			// EHLO, MAIL, RCPT, BDAT and the header block, then the unopened body, then QUIT
+			lastBody := len(open.client) - 2
+			if lastBody < 5 {
+				t.Fatalf("%s: %d client records, no body between the head and QUIT", leg.name, len(open.client))
+			}
+			handed := 0
+			for i, record := range open.client {
+				if over && i == lastBody {
+					longer := append(bytes.Clone(record), 0)
+					size := len(longer) - tlsRecordHeaderBytes
+					longer[3], longer[4] = byte(size>>8), byte(size)
+					forwarded, err := open.gate.ClientRecord(longer)
+					if len(forwarded) != 0 {
+						t.Errorf("%s: %d records passed with the chunk one octet past n", leg.name, len(forwarded))
+					}
+					testExpectCut(t, leg.name, err)
+					break
+				}
+				forwarded, err := open.gate.ClientRecord(record)
+				if err != nil {
+					t.Fatalf("%s: record %d: %v", leg.name, i, err)
+				}
+				handed += len(forwarded)
+			}
+			if over {
+				continue
+			}
+			open.gate.stateLock.Lock()
+			chunkOctets, finished := open.gate.chunkOctets, open.gate.finished
+			open.gate.stateLock.Unlock()
+			if handed != len(open.client) || chunkOctets != open.fixture.preamble.messageByteCount || !finished {
+				t.Errorf("%s: %d of %d records handed, chunk at %d of %d, finished %v",
+					leg.name, handed, len(open.client), chunkOctets, open.fixture.preamble.messageByteCount, finished)
+			}
+		}
+	}
+}
