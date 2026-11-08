@@ -724,7 +724,15 @@ func caseSocketPickMatchesScheduler(env *socketSuiteEnv) error {
 				return fmt.Errorf("round %d: another backup", round)
 			}
 		}
-		env.clock.Advance(time.Duration(random.IntN(700)) * time.Millisecond)
+		// at most 36 s over the run, inside one lease, so every round picks among live listeners
+		env.clock.Advance(time.Duration(random.IntN(300)) * time.Millisecond)
+	}
+	listeners, err := env.store.ListListeners(env.ctx, networkId, nameKey)
+	if err != nil {
+		return err
+	}
+	if len(listeners) != 9 {
+		return fmt.Errorf("%d of 9 leases lived through the run", len(listeners))
 	}
 	return nil
 }
@@ -770,17 +778,26 @@ func caseSocketPickMatchesSchedulerAtItsEdges(env *socketSuiteEnv) error {
 	// equal loads and weights: the first sampled stays the primary
 	networkId := socketSuiteId()
 	tiedNameKey := socketSuiteBytes(16)
+	tiedListenerIds := []connect.Id{}
+	tiedRegistrations := []*sidecar.SocketRegistration{}
 	for range 4 {
 		registration := socketSuiteRegistration("")
 		registration.NameToken = tiedNameKey
 		registration.Inflight = 10
-		if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
-			return err
-		}
+		tiedListenerIds = append(tiedListenerIds, socketSuiteId())
+		tiedRegistrations = append(tiedRegistrations, registration)
 	}
 	random := mathrand.New(mathrand.NewPCG(3, 4))
 	for round := range 24 {
-		_, err := env.pickAgainstScheduler(&socketsservice.SocketStorePickRequest{
+		// a heartbeat a millisecond on reports anew, so no earlier issue counts and every round starts
+		// tied, its leases fresh
+		env.clock.Advance(time.Millisecond)
+		for index, registration := range tiedRegistrations {
+			if err := env.mustApplyWhole(networkId, tiedListenerIds[index], uint64(round+1), registration); err != nil {
+				return err
+			}
+		}
+		pick, err := env.pickAgainstScheduler(&socketsservice.SocketStorePickRequest{
 			NetworkId:       networkId,
 			NameKey:         tiedNameKey,
 			DialerClientId:  socketSuiteId(),
@@ -791,8 +808,9 @@ func caseSocketPickMatchesSchedulerAtItsEdges(env *socketSuiteEnv) error {
 		if err != nil {
 			return fmt.Errorf("tied round %d: %w", round, err)
 		}
-		// each round's issue ends before the next, so every round starts tied
-		env.clock.Advance(env.settings.Scheduler.TicketLifetime)
+		if pick.Outcome != socketsservice.SocketPickFound || pick.Backup == nil {
+			return fmt.Errorf("tied round %d: %v", round, pick.Outcome)
+		}
 	}
 
 	// one dialer up to and past c on a listener whose last c slots are all it has left
