@@ -24,6 +24,11 @@
 //   - dns_store_fake.go and dns_store_suite.go, the seams of dnsservice and their suite, which runs
 //     here on the fake and in server on dnshost.Store.
 //   - mxedge_store_fake.go, mxedgeservice's seam, which MAIL-M7-21's real store replaces.
+//   - smtp_*_fake.go, the sender's and the engine's seams in memory (§14): FakeSmtpProver,
+//     FakeSmtpProofVerifier and FakeSmtpMailbox, whose suite is smtp_mailbox_suite.go.
+//   - smtp_mx*.go, the outside world outbound mail meets: ScriptedMx behind crypto/tls, RecordMx behind
+//     a TLS server written from the RFCs, and MxWorld, a signed fixture DNS and dialer, all on
+//     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
 //   - fault, the FS schedule runner (§22.8).
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
