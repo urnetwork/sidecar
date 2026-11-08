@@ -422,6 +422,54 @@ func TestSmtpDkimUnansweredPublishSendsTheSameKey(t *testing.T) {
 	}
 }
 
+// A rotation whose answer never came is sent again, the same key, and no second rotation is made
+// beside it while the old selector keeps signing.
+func TestSmtpDkimUnansweredRotationIsNeverDoubled(t *testing.T) {
+	_, secrets := newSmtpDkimTestSecrets(t)
+	publisher := &smtpDkimTestPublisher{}
+	clock := newSmtpDkimTestClock()
+	keys := newSmtpDkimTestKeys(secrets, publisher, clock)
+	old, err := keys.Current(context.Background(), testDkimNetworkDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Release()
+	clock.advance(91 * 24 * time.Hour)
+	publisher.setErr(errors.New("synthetic transport failure"))
+	for range 3 {
+		kept, err := keys.Current(context.Background(), testDkimNetworkDomain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept.Release()
+		if kept.Selector != old.Selector {
+			t.Fatal("an unanswered rotation dropped the old selector")
+		}
+	}
+	rotation := publisher.lastCall().Publish[0]
+	for _, call := range publisher.calls[1:] {
+		if len(call.Publish) != 1 || call.Publish[0].Selector != rotation.Selector || !bytes.Equal(call.Publish[0].PublicKey, rotation.PublicKey) {
+			t.Fatal("a second rotation beside the unanswered one")
+		}
+	}
+	keyNames, err := secrets.List(smtpDkimKeyRecordPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keyNames) != 2 {
+		t.Errorf("keys %v", keyNames)
+	}
+	publisher.setErr(nil)
+	rotated, err := keys.Current(context.Background(), testDkimNetworkDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotated.Release()
+	if rotated.Selector != rotation.Selector {
+		t.Errorf("rotated to %s, not the unanswered %s", rotated.Selector, rotation.Selector)
+	}
+}
+
 // §14.6: a refused publish, past 64 device selectors, is the send's failed outcome with the server's
 // reason, and leaves no key behind.
 func TestSmtpDkimRefusedPublishSurfacesItsReason(t *testing.T) {
