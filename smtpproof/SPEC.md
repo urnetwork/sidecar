@@ -477,6 +477,8 @@ Measured from the code with gnark v0.15.0, and held to these figures by `TestGad
 | Z2-Z4, a pool block with the local table (π2's envelope) | 12,545 under AES, 25,345 under ChaCha20 | per block, about 55 an octet beyond the keystream | |
 | Z2-Z4, a pool block of literals only (π1, and π3's commands) | 11,969 under AES, 23,041 under ChaCha20 | per block, about 19 an octet beyond the keystream | |
 | Z5, the header scan with its keystream | 58,071 under AES, 33,236 under ChaCha20 | per 64 header octets, about 178 an octet beyond the keystream | well under AES's 725 an octet |
+| Z7-Z9, π2's server records with their keystream | 51,046 under AES, 26,202 under ChaCha20 | per 64 octets, about 68 an octet beyond the keystream, Z9's window included | |
+| Z7-Z8, π3's server records with their keystream | 51,302 under AES, 26,458 under ChaCha20 | per 64 octets, about 72 an octet beyond the keystream | |
 
 Some readings of these:
 
