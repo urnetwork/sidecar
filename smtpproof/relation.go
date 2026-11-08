@@ -142,28 +142,27 @@ func visibleForm(value string) bool {
 	return true
 }
 
-// Whether a Message-ID, without its angle brackets, is left and right of one @ in the local set.
-func messageIdForm(value string) bool {
-	left, right, found := strings.Cut(value, "@")
-	if !found || left == "" || right == "" {
-		return false
-	}
-	for _, half := range []string{left, right} {
-		for i := range len(half) {
-			if !localOctet(half[i]) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // Refuses a preamble no template may be built from (SPEC.md section 6). A template is a literal, and
 // the circuit proves a record equals it, so a declared value holding the end of a path or a line
 // would have the proof vouch for a command of the sidecar's own.
 func checkSessionPreamble(preamble *sessionPreamble) error {
 	if preamble.recipientCount == 0 {
 		return errors.New("preamble declares no recipient")
+	}
+	// without its angle brackets: one @, with a run of the local set on either side
+	messageIdForm := func(value string) bool {
+		left, right, found := strings.Cut(value, "@")
+		if !found || left == "" || right == "" {
+			return false
+		}
+		for _, half := range []string{left, right} {
+			for i := range len(half) {
+				if !localOctet(half[i]) {
+					return false
+				}
+			}
+		}
+		return true
 	}
 	for _, entry := range []struct {
 		name string

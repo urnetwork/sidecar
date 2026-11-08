@@ -22,7 +22,8 @@ import (
 //
 // All state is under stateLock, so "relayed before it" in E3 has one meaning: the order in which
 // clientRecord and serverRecord took the lock. A proof is verified with no lock held, and the gate
-// re-reads its state on return. Safe for concurrent use, one goroutine per direction.
+// re-reads its state on return, so a part that landed meanwhile cannot be replaced unchecked. Safe for
+// concurrent use, one goroutine per direction.
 
 // What an edgeSession may hold. Start from defaultEdgeSettings.
 type edgeSettings struct {

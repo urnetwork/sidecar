@@ -466,7 +466,11 @@ func BenchmarkCircuitKeystream(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		b.Run(tlsSuiteName(suite), func(b *testing.B) {
+		name := "aes128"
+		if suite == tlsSuiteChacha20Poly1305Sha256 {
+			name = "chacha20"
+		}
+		b.Run(name, func(b *testing.B) {
 			for b.Loop() {
 				if err := compiled.IsSolved(full); err != nil {
 					b.Fatal(err)
@@ -475,11 +479,4 @@ func BenchmarkCircuitKeystream(b *testing.B) {
 			b.ReportMetric(float64(compiled.GetNbConstraints())/float64(len(want)), "constraints/octet")
 		})
 	}
-}
-
-func tlsSuiteName(suite uint16) string {
-	if suite == tlsSuiteChacha20Poly1305Sha256 {
-		return "chacha20"
-	}
-	return "aes128"
 }
