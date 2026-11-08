@@ -70,6 +70,8 @@ type MxEdgeDeps struct {
 // One session on TCP 25, from the banner on. Its goroutine owns it.
 type mxSession struct {
 	conn net.Conn
+	// When the engine accepted it, a session record's start.
+	startTime time.Time
 	// The peer the host's PROXY listener reports, unmapped. Connection memory only (§2.8 mx-1).
 	sender netip.Addr
 	hold   *mxCapHold
@@ -90,6 +92,8 @@ type MxEdgeService struct {
 	replies          *mxDialogReplies
 	caps             *mxCaps
 	closedHandshakes *mxClosedHandshakes
+	// mx-2's session records, written in batches off every session's path (records.go).
+	records *mxConnectionRecords
 	// Every dependency Ready needs from deps was given.
 	depsComplete bool
 	// What follows STARTTLS's 220, returning a session result. Set once, at construction.
@@ -164,15 +168,17 @@ func NewMxEdgeService(
 		liveListeners:    map[net.Listener]bool{},
 		liveConnections:  map[net.Conn]bool{},
 	}
+	self.records = newMxConnectionRecords(store, settings, clock, self.metrics, log)
 	self.depsComplete = deps.ReadClientHello != nil && deps.NormalizeSni != nil && deps.WriteTlsAlert != nil
 	self.handoff = self.closeHandshake
+	self.records.start(cancelCtx)
 	go self.run()
 	return self, nil
 }
 
 // Probes the stores until the engine ends, then releases everything it holds. A probe reads the
-// memory's daily k, which is how it learns Redis answers, then pings the store. This loop is the one
-// caller of the store until MAIL-M7-21's batch, so the store stays off the connection path.
+// memory's daily k, which is how it learns Redis answers, then pings the store. This loop and the
+// session records' writer are the store's only callers, so the store stays off the connection path.
 func (self *MxEdgeService) run() {
 	defer close(self.released)
 	defer self.release()
@@ -233,6 +239,22 @@ func (self *MxEdgeService) release() {
 		conn.Close()
 	}
 	self.sessionGroup.Wait()
+	// every session has left its record, so one last write keeps the queue's tail, bounded by the
+	// write's own timeout since the engine's context has ended
+	<-self.records.done
+	self.records.flush(context.WithoutCancel(self.ctx))
+}
+
+// Queues the record of a session whose SNI named networkId, as the router does at a session's end
+// (MAIL-M7-19), without waiting. byteCount is what the session passed both ways, and result one of the
+// session result words. A session that named no network calls nothing, so it leaves no row.
+func (self *MxEdgeService) recordSession(session *mxSession, networkId sidecar.Id, byteCount int64, result string) bool {
+	return self.records.Add(&MxConnectionRecord{
+		NetworkId: networkId,
+		StartTime: session.startTime,
+		ByteCount: byteCount,
+		Result:    result,
+	})
 }
 
 // See sidecar.Engine. A closed gate stays ready, as §19.11 has it.
@@ -346,6 +368,7 @@ func (self *MxEdgeService) serveConnection(conn net.Conn) {
 		self.sessionCount.Update(func(count int) int { return count - 1 })
 		self.sessionGroup.Done()
 	}()
+	startTime := self.clock.Now()
 	// bounds everything before TLS, a refusal's write included: closing conn ends any blocked call
 	stopWatchdog := self.clock.AfterFunc(self.settings.DialogTimeout, func() {
 		conn.Close()
@@ -376,7 +399,7 @@ func (self *MxEdgeService) serveConnection(conn net.Conn) {
 
 		bannerRefused := self.bannerRefused != nil && self.bannerRefused(sender)
 		dialog := newMxDialog(self.replies, func() bool { return self.plaintextRecent(sender) }, bannerRefused)
-		session := &mxSession{conn: conn, sender: sender, hold: hold, dialog: dialog}
+		session := &mxSession{conn: conn, startTime: startTime, sender: sender, hold: hold, dialog: dialog}
 		result, readyForTls := self.runDialog(session)
 		if !readyForTls {
 			return result

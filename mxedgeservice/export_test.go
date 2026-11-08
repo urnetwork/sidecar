@@ -5,6 +5,7 @@
 package mxedgeservice
 
 import (
+	"context"
 	"maps"
 	"net"
 	"net/netip"
@@ -162,4 +163,53 @@ func (self *MxEdgeService) AwaitSessionCount(want int) {
 		}
 		<-update
 	}
+}
+
+// The session record queue, on metrics of its own.
+type ConnectionRecords = mxConnectionRecords
+
+// A queue writing to store, on settings' numbers.
+func NewConnectionRecords(store MxEdgeStore, settings *MxEdgeSettings, clock sidecar.Clock, metrics sidecar.Metrics) *ConnectionRecords {
+	return newMxConnectionRecords(store, settings, clock, newMxMetrics(metrics), sidecar.NewNoopLogger())
+}
+
+// Writes what waits now.
+func (self *mxConnectionRecords) Flush(ctx context.Context) error {
+	return self.flush(ctx)
+}
+
+// Starts the writer, its first wait armed on return.
+func (self *mxConnectionRecords) Start(ctx context.Context) {
+	self.start(ctx)
+}
+
+// Closed once the writer has returned.
+func (self *mxConnectionRecords) Done() <-chan struct{} {
+	return self.done
+}
+
+// Returns once count waits have been armed: the first, and one after each flush.
+func (self *mxConnectionRecords) AwaitFlushCount(count int) {
+	for {
+		flushCount, update := self.flushCount.Get()
+		if count <= flushCount {
+			return
+		}
+		<-update
+	}
+}
+
+// The waits armed so far.
+func (self *mxConnectionRecords) FlushCount() int {
+	return self.flushCount.Value()
+}
+
+// The engine's queue.
+func (self *MxEdgeService) ConnectionRecords() *ConnectionRecords {
+	return self.records
+}
+
+// What the router does at the end of a session that named networkId and began at startTime.
+func (self *MxEdgeService) RecordSession(startTime time.Time, networkId sidecar.Id, byteCount int64, result string) bool {
+	return self.recordSession(&mxSession{startTime: startTime}, networkId, byteCount, result)
 }

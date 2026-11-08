@@ -1,7 +1,19 @@
 // The FS schedule runner (§22.8, D-TEST-10): a fault schedule is a deterministic sequence of actor
 // steps, barriers, store faults and clock moves, checked against FI invariants after every step and at
-// the end. One Schedule per FS row. Owners write their rows as fs<n>_test.go here, against engines this
-// package knows nothing about, and their invariants as fi<n>.go.
+// the end. One Schedule per FS row, case by case as catalog.yml lists them.
+//
+// The contract for schedule authors, which register.go, twin.go and rules.go hold them to:
+//
+//  1. A row is an exported Builder in a non-test file here, fs<n>.go, registered with Register, since
+//     server's T3 test cannot import a _test.go file and runs the same builder through sidecart3. The
+//     thin T2 test in fs<n>_test.go calls RunRow (plan-TEST-small-readings reading 1).
+//  2. A builder makes a fresh schedule each call: every rule across runs reruns it.
+//  3. Each refusal sets Refuses and names its twin, which must succeed, through Twin.
+//  4. Check names fault.FI(n), and an area's oracle binds FI-n with RegisterInvariant in fi<n>.go.
+//  5. Time comes from the Net's clock (sidecar.Clock), never time.Now.
+//  6. Barriers are literals of the form <file prefix>.<step>, with an opaque key.
+//  7. A row's later parts are the catalog's named cases, so a gate reports one case without
+//     implying another.
 //
 // What a step does, in this order, whichever fields it sets:
 //
@@ -81,8 +93,20 @@ type Schedule struct {
 	Check []Invariant
 	// The tiers its row names, beside the T2 this runs it on (§22.8's cadence rule). A row that adds a
 	// connect client runs on sidecartest's fake contract issuer and ControlId sink, so it names T3 too,
-	// where a divergence from server's exchange fails (Q-TEST-1), and Run fails one that does not.
+	// where a divergence from server's exchange fails (Q-TEST-1), and Run fails one that does not,
+	// unless it is forged and its twin carries T3.
 	Tiers []Tier
+	// What a refusal schedule expects refused, such as "the second push's 409 naming the path". Set on
+	// every refusal schedule: one runs only beside a Twin that must succeed, and Run fails it alone,
+	// since a feature switched off refuses everything and would pass it (§22.8's twins).
+	Refuses string
+	// The schedule that must succeed beside this refusal, which Twin sets.
+	Twin Builder
+	// The server forges, withholds or forks state here, so this runs on T2 alone and its twin carries
+	// T3 (§22.8's cadence rule; the catalog's forged flag).
+	Forged bool
+	// The trace whose choices this run makes, which Replay sets: a failing seed's order, fixed.
+	Replay *Trace
 }
 
 type Step struct {

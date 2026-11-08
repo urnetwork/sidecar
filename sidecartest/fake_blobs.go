@@ -441,7 +441,7 @@ func (self *fakeBlobCluster) request(
 		return blobClientError(err, isWrite)
 	}
 
-	plan := self.store.faults.take(ctx, op, self.clusterId, key)
+	plan := self.store.faults.take(ctx, op, self.clusterId, key, isWrite)
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result
