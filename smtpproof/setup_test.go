@@ -291,3 +291,37 @@ func TestAKeySetProvesARealEhlo(t *testing.T) {
 		t.Errorf("the edge refused a proof under keys from its own KeySet: %v", err)
 	}
 }
+
+func TestAKeySetRefusesAManifestOutOfShape(t *testing.T) {
+	// even pinned, a keyset.json whose hash could name a path, or whose shape lacks a key, is refused
+	// before anything reads a file it names
+	for name, edit := range map[string]func(manifest *keySetManifest){
+		"a hash that walks out of the cache": func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey.Sha256 = "../../outside" },
+		"an upper-case hash":                 func(manifest *keySetManifest) { manifest.Shapes[0].VerifyingKey.Sha256 = strings.ToUpper(manifest.Shapes[0].VerifyingKey.Sha256) },
+		"no proving key":                     func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey = nil },
+		"no contribution":                    func(manifest *keySetManifest) { manifest.Shapes[1].Contributions = nil },
+		"a shape twice":                      func(manifest *keySetManifest) { manifest.Shapes[1].Name = manifest.Shapes[0].Name },
+		"a phase 1 with no contribution":     func(manifest *keySetManifest) { manifest.Phase1[0].Contributions = nil },
+	} {
+		keySet, _ := testKeySet(t)
+		encoded, err := os.ReadFile(filepath.Join(keySet.directory, keySetManifestName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest := &keySetManifest{}
+		if err := json.Unmarshal(encoded, manifest); err != nil {
+			t.Fatal(err)
+		}
+		edit(manifest)
+		if encoded, err = json.Marshal(manifest); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(keySet.directory, keySetManifestName), encoded, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pin := sha256.Sum256(encoded)
+		if _, err := openKeySet(keySet.directory, pin[:], keySet.circuits); err == nil {
+			t.Errorf("%s: opened", name)
+		}
+	}
+}

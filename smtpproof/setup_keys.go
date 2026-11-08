@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -130,7 +131,37 @@ func openKeySet(directory string, pin []byte, circuits []*keySetCircuit) (*KeySe
 	if err != nil || len(beacon) == 0 {
 		return nil, errors.New("smtpproof: keyset.json has no beacon")
 	}
+	if err := checkKeySetManifest(manifest); err != nil {
+		return nil, fmt.Errorf("smtpproof: keyset.json: %w", err)
+	}
 	return &KeySet{directory: directory, manifest: manifest, beacon: beacon, circuits: circuits}, nil
+}
+
+// A pinned keyset.json is the release's, but its shape is still checked before anything follows it:
+// every file is named with a hash of 64 hex digits, since a proving key's hash names its cache file,
+// and every shape names its contributions and both keys, once.
+func checkKeySetManifest(manifest *keySetManifest) error {
+	fileForm := func(file *keySetFile) bool {
+		if file == nil || len(file.Sha256) != 2*sha256.Size {
+			return false
+		}
+		decoded, err := hex.DecodeString(file.Sha256)
+		return err == nil && hex.EncodeToString(decoded) == file.Sha256
+	}
+	for _, phase1 := range manifest.Phase1 {
+		if len(phase1.Contributions) == 0 || slices.IndexFunc(phase1.Contributions, func(file *keySetFile) bool { return !fileForm(file) }) != -1 {
+			return fmt.Errorf("phase 1 of domain size %d", phase1.DomainSize)
+		}
+	}
+	names := map[string]bool{}
+	for _, entry := range manifest.Shapes {
+		if names[entry.Name] || len(entry.Contributions) == 0 || !fileForm(entry.ProvingKey) || !fileForm(entry.VerifyingKey) ||
+			slices.IndexFunc(entry.Contributions, func(file *keySetFile) bool { return !fileForm(file) }) != -1 {
+			return fmt.Errorf("shape %q", entry.Name)
+		}
+		names[entry.Name] = true
+	}
+	return nil
 }
 
 // Reads a KeySet file, and refuses it unless it hashes to what keyset.json says.
@@ -253,8 +284,9 @@ func (self *KeySet) verifyProvingKey(circuit *keySetCircuit, entry *keySetShape,
 	if err != nil {
 		return err
 	}
-	// the transcript's keys must be the published ones, or the edge holds a verifying key no proof here
-	// would pass, and the cache would hold a key keyset.json does not name
+	// both of the transcript's keys must be the published ones, or the edge holds a verifying key no
+	// proof here would pass, and the cache would hold a key keyset.json does not name
+	var encodedProvingKey []byte
 	for _, check := range []struct {
 		key  io.WriterTo
 		file *keySetFile
@@ -267,21 +299,19 @@ func (self *KeySet) verifyProvingKey(circuit *keySetCircuit, entry *keySetShape,
 			return err
 		}
 		sum := sha256.Sum256(encoded)
-		if check.file == nil || hex.EncodeToString(sum[:]) != check.file.Sha256 {
+		if hex.EncodeToString(sum[:]) != check.file.Sha256 {
 			return errors.New("the transcript's keys are not the ones keyset.json names")
 		}
 		if check.file == entry.ProvingKey {
-			// written whole under another name first, so a cut write never stands as verified
-			path := cachedProvingKeyPath(cacheDirectory, entry)
-			if err := os.WriteFile(path+".partial", encoded, 0o600); err != nil {
-				return err
-			}
-			if err := os.Rename(path+".partial", path); err != nil {
-				return err
-			}
+			encodedProvingKey = encoded
 		}
 	}
-	return nil
+	// written whole under another name first, so a cut write never stands as verified
+	path := cachedProvingKeyPath(cacheDirectory, entry)
+	if err := os.WriteFile(path+".partial", encodedProvingKey, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(path+".partial", path)
 }
 
 // Loads a shape's verified proving key from a prover host's cache, and compiles the circuit to prove
