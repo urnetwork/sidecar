@@ -208,7 +208,12 @@ const (
 
 // Answer at now, for a caller that holds the time: SelfCheck's probes.
 func (self *Signer) answerAt(query *DnsQuery, view *ZoneView, keys *DnsSigningKeys, healthy *HealthySet, now time.Time) *dns.Msg {
-	reply := Answer(query, view, healthy)
+	return self.signReply(query, Answer(query, view, healthy), view, keys, healthy, now)
+}
+
+// Signs reply, which is Answer's for query from view at healthy, in place, and returns it: the edge
+// asks Answer first, so RRL can drop a response before anything is signed for it.
+func (self *Signer) signReply(query *DnsQuery, reply *dns.Msg, view *ZoneView, keys *DnsSigningKeys, healthy *HealthySet, now time.Time) *dns.Msg {
 	if reply == nil || (reply.Rcode != dns.RcodeSuccess && reply.Rcode != dns.RcodeNameError) {
 		return reply
 	}

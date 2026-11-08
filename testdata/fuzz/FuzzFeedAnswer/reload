@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"format\":1,\"root\":\"zone.example.\",\"serial\":16777260,\"restore_serial\":16777216,\"reload\":true,\"interfaces\":[{\"name\":\"edge-1/eth0\",\"ipv4\":\"192.0.2.10\",\"ipv6\":\"2001:db8::10\"}]}")
