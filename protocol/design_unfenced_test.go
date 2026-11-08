@@ -548,6 +548,19 @@ enum SmtpPreambleCode {
   SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
 }
 enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
+// §14.8's self-report and §14.14's status, as plan-SMTP-wire-gaps#1 and #2 number them.
+message SmtpOutcome {
+  bytes send_id = 1; uint32 tls_level = 2; uint32 mode = 3; repeated uint32 reply_codes = 4; uint32 dsn_count = 5;
+  uint32 hard_bounce_count = 6; bool downgrade_refused = 7;
+}
+message SmtpStatus { uint32 kind = 1; uint32 retry_after_ms = 2; }
+enum SmtpStatusKind {
+  SMTP_STATUS_KIND_UNSPECIFIED = 0; SMTP_STATUS_HALTED = 1; SMTP_STATUS_QUOTA = 2; SMTP_STATUS_CLEAR = 3;
+}
+// E2's disclosed SHTS, as smtpproof-start-shts-wire numbers it.
+message SmtpHandshake { bytes send_id = 1; bytes shts = 2; }
+message SmtpHandshakeResult { uint32 code = 1; }
+enum SmtpHandshakeCode { SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0; SMTP_HANDSHAKE_OK = 1; SMTP_HANDSHAKE_INVALID = 2; }
 
 // sidecar/protocol/socket.proto
 // §9.5's Claim, the tuple its comment lists, in that order, its name or token path written as SocketTicket's two.
@@ -722,4 +735,17 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
 		question: "plan-ACL-nonsidecar-subjects",
 	},
+}
+
+// Values the owner's answers add to enums the design fences, ahead of design-records' fold, each with the question
+// that holds its answer. Each joins the fence it extends, as testFenceAdditions' fields do, and one the design comes
+// to write fails until its line here leaves.
+var testFenceValueAdditions = []struct {
+	enum     string
+	name     string
+	number   int32
+	question string
+}{
+	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
+	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
 }

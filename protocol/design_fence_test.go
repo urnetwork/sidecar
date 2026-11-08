@@ -238,9 +238,9 @@ func testReadDesign(t testing.TB) []byte {
 }
 
 // Every fenced proto block in DESIGN.md, then testUnfencedFence, read into one set of declarations, with
-// testFenceAdditions' fields joining the fences they extend. A declaration that later gains a fence is then written
-// twice, which says to take it out of testUnfencedFence, and an added field the design comes to write fails until its
-// line leaves testFenceAdditions.
+// testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend. A declaration that
+// later gains a fence is then written twice, which says to take it out of testUnfencedFence, and an added field or
+// value the design comes to write fails until its line leaves its list.
 func testReadFences(t *testing.T) *testFences {
 	design := testReadDesign(t)
 	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
@@ -278,6 +278,22 @@ func testReadFences(t *testing.T) *testFences {
 			continue
 		}
 		message.fields = append(message.fields, addition.field)
+	}
+	for _, addition := range testFenceValueAdditions {
+		enum := fences.enums[addition.enum]
+		if enum == nil {
+			t.Errorf("%s gains %s by %s, and no fence writes that enum", addition.enum, addition.name, addition.question)
+			continue
+		}
+		_, written := enum.values[addition.name]
+		for _, number := range enum.values {
+			written = written || number == addition.number
+		}
+		if written || slices.Contains(enum.reservedNumbers, addition.number) {
+			t.Errorf("the design now writes %s.%s or its number %#x: drop its line from testFenceValueAdditions (%s)", addition.enum, addition.name, addition.number, addition.question)
+			continue
+		}
+		enum.values[addition.name] = addition.number
 	}
 	return fences
 }

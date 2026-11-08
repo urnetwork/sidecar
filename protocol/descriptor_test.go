@@ -226,7 +226,7 @@ func TestEnumNumbersStable(t *testing.T) {
 				"EVS_HEAD_CHANGED": 0x1401, "SEARCH": 0x1404, "SEARCH_RESULT": 0x1405,
 				"TLS_EDGE_OPEN": 0x1501, "TLS_HINT": 0x1502,
 				"SMTP_PREAMBLE": 0x1601, "SMTP_PREAMBLE_RESULT": 0x1602, "SMTP_OUTCOME": 0x1603, "SMTP_STATUS": 0x1604,
-				"SMTP_PROOF": 0x1605, "SMTP_PROOF_RESULT": 0x1606,
+				"SMTP_PROOF": 0x1605, "SMTP_PROOF_RESULT": 0x1606, "SMTP_HANDSHAKE": 0x1607, "SMTP_HANDSHAKE_RESULT": 0x1608,
 				"MAIL_INGRESS": 0x1701, "MAIL_HINT": 0x1702,
 				"CORE_HINT":        0x1A01,
 				"DNS_ZONE_CHANGED": 0x1B01,
@@ -291,6 +291,18 @@ func TestServiceEnumNumbersStable(t *testing.T) {
 			name: "SmtpProofCode",
 			got:  SmtpProofCode_value,
 			want: map[string]int32{"SMTP_PROOF_CODE_UNSPECIFIED": 0, "SMTP_PROOF_OK": 1, "SMTP_PROOF_INVALID": 2},
+		},
+		{
+			name: "SmtpStatusKind",
+			got:  SmtpStatusKind_value,
+			want: map[string]int32{
+				"SMTP_STATUS_KIND_UNSPECIFIED": 0, "SMTP_STATUS_HALTED": 1, "SMTP_STATUS_QUOTA": 2, "SMTP_STATUS_CLEAR": 3,
+			},
+		},
+		{
+			name: "SmtpHandshakeCode",
+			got:  SmtpHandshakeCode_value,
+			want: map[string]int32{"SMTP_HANDSHAKE_CODE_UNSPECIFIED": 0, "SMTP_HANDSHAKE_OK": 1, "SMTP_HANDSHAKE_INVALID": 2},
 		},
 		{
 			name: "EvsPushFlag",
@@ -378,6 +390,7 @@ func TestResultTypeIsRequestPlusOne(t *testing.T) {
 		MessageType_HEAD_CHECK_PROOF_REQUEST: MessageType_HEAD_CHECK_PROOF,
 		MessageType_SEARCH:                   MessageType_SEARCH_RESULT,
 		MessageType_SMTP_PROOF:               MessageType_SMTP_PROOF_RESULT,
+		MessageType_SMTP_HANDSHAKE:           MessageType_SMTP_HANDSHAKE_RESULT,
 	} {
 		if result != request+1 {
 			t.Errorf("%s + 1 is not %s", request, result)

@@ -64,6 +64,10 @@ roots:
   SmtpPreambleResult: "smtpedge reads or answers it (§14.5)"
   SmtpProof: "smtpedge reads or answers it (§14.5)"
   SmtpProofResult: "smtpedge reads or answers it (§14.5)"
+  SmtpOutcome: "smtpedge reads it from the connection's dialer (§14.8, plan-SMTP-wire-gaps#1)"
+  SmtpStatus: "smtpedge's halt job builds it, in PushHint.hint on topic mail (§14.8, plan-SMTP-wire-gaps#2)"
+  SmtpHandshake: "smtpedge reads or answers it (§14.5's E2, smtpproof-start-shts-wire)"
+  SmtpHandshakeResult: "smtpedge reads or answers it (§14.5's E2, smtpproof-start-shts-wire)"
   # protocol/mail.proto
   MailIngress: "mxedge builds it from what it holds (§15.4)"
   MailHint: "a kind and an mx host in PushHint.hint on topic mail, which mxedge's router builds (§15.15, §15.6)"
@@ -269,6 +273,20 @@ fields:
   SmtpProof.server_record_count: smtp-2
   SmtpProof.records: smtp-2
   SmtpProofResult.code: smtp-2
+  # smtp-2 sees "the self-reported SmtpOutcome", whole
+  SmtpOutcome.send_id: smtp-2
+  SmtpOutcome.tls_level: smtp-2
+  SmtpOutcome.mode: smtp-2
+  SmtpOutcome.reply_codes: smtp-2
+  SmtpOutcome.dsn_count: smtp-2
+  SmtpOutcome.hard_bounce_count: smtp-2
+  SmtpOutcome.downgrade_refused: smtp-2
+  # a kind in a mail hint, as MailHint.kind is
+  SmtpStatus.kind: connect-4
+  # smtp-2 sees "the server handshake secret the sidecar discloses" and the issued send_id
+  SmtpHandshake.send_id: smtp-2
+  SmtpHandshake.shts: smtp-2
+  SmtpHandshakeResult.code: smtp-2
   # protocol/mail.proto
   MailHint.kind: connect-4
   MailHint.host: connect-4
@@ -647,6 +665,8 @@ open:
   SmtpPreamble.version: {row: smtp-1, question: protos-services-metadata-rows.md, until: M2}
   MailIngress.version: {row: mx-1, question: protos-services-metadata-rows.md, until: M2}
   SmtpPreambleResult.retry_after_ms: {row: smtp-2, question: protos-services-metadata-rows.md, until: M2}
+  # the same retry delay smtpedge sets from smtp-4's counters and halts, which that answer adds to smtp-2
+  SmtpStatus.retry_after_ms: {row: smtp-2, question: protos-services-metadata-rows.md, until: M2}
   Envelope.version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.type: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.request_id: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
