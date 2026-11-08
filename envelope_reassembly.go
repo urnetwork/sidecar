@@ -21,25 +21,12 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// What the subprotocol reads time from, so a test holds every wait on a clock it moves. sidecartest's
-// clocks fit this.
+// What reassembly reads time from: the two methods of Clock it uses, so a test holds every wait on a
+// clock it moves. The Subprotocol passes its own Clock, SubprotocolEnv.Clock or real time.
 type subprotocolClock interface {
 	Now() time.Time
 	// Fires once the clock reaches now plus timeout.
 	After(timeout time.Duration) <-chan time.Time
-}
-
-// The wall clock.
-type systemSubprotocolClock struct{}
-
-// Reads the wall clock.
-func (self systemSubprotocolClock) Now() time.Time {
-	return time.Now()
-}
-
-// Waits on the wall clock.
-func (self systemSubprotocolClock) After(timeout time.Duration) <-chan time.Time {
-	return time.After(timeout)
 }
 
 // Names one body from one source: (source, request_id, RESPONSE), the source being the map above this

@@ -29,26 +29,18 @@ type SidecarConnectSettings struct {
 	SmtpProver SmtpProver
 }
 
-// A fresh value each call, as DefaultSidecarSettings's is.
+// A fresh value each call, as DefaultSidecarSettings's is. ApplySidecarClientSettings (rpc_subprotocol.go)
+// is what makes the client a sidecar's, whatever connect's defaults become, and validateLeg refuses
+// settings a host adjusted away from it.
 func defaultSidecarConnectSettings() *SidecarConnectSettings {
 	clientSettings := connect.DefaultClientSettings()
-	applySidecarClientSettings(clientSettings)
+	ApplySidecarClientSettings(clientSettings)
 	return &SidecarConnectSettings{
 		ClientStrategySettings:    connect.DefaultClientStrategySettings(),
 		ClientSettings:            clientSettings,
 		PlatformTransportSettings: connect.DefaultPlatformTransportSettings(),
 		SmtpSender:                DefaultSmtpSenderSettings(),
 	}
-}
-
-// What makes a connect client a sidecar's, whatever connect's defaults become. validateLeg refuses
-// settings that do not hold to it.
-func applySidecarClientSettings(clientSettings *connect.ClientSettings) {
-	// I-3: never Opportunistic or Off, so a peer that cannot seal gets no application data
-	clientSettings.EncryptionSettings.Mode = connect.EncryptionModeRequired
-	// sidecar clients never ask for a P2P stream, so pairs stay relay-only until C3 is tested
-	// (D-PROTO-10)
-	clientSettings.DefaultTransferOpts.ForceStream = false
 }
 
 // What validate adds on connect legs: the client's url, a client that is a sidecar's, and the

@@ -1,0 +1,155 @@
+//go:build !sidecar_http
+
+// What the dispatcher sends: its own answers, through one bounded reply queue and the sender goroutine
+// that owns it, and the one call into connect's send path. The inline handler never sends, since a
+// send may wait and a receive callback must not (connect/CODESTYLE.md, receive callbacks), so it
+// offers a refusal to the queue with zero wait, and a full queue drops it and counts it. Workers queue
+// their Pongs and refusals the same way.
+//
+// The sender serves every peer, so it never waits on one: it hands connect each reply with a zero
+// timeout and drops what connect cannot take at once. Every answer here is one a caller can live
+// without, since a lost refusal or Pong fails the call at its own deadline, which the caller retries
+// with its request_id (§6.6). A reply goes to the request's source, on the request's lane and
+// encryption session (peer.TransferKey), as a non-companion contract.
+
+package sidecar
+
+import (
+	"errors"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar/protocol"
+)
+
+var (
+	// connect refused a send and said nothing more: a full queue, or a session the zero wait did not
+	// reach.
+	errSubprotocolSendRefused = errors.New("subprotocol send refused")
+)
+
+// Sends one envelope to destinationId, waiting at most timeout for connect to take it, with opts as
+// connect's send options: connect.SendSubprotocolWithTimeout's contract, which internal tests stand in
+// for.
+type subprotocolSendFunction func(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) (bool, error)
+
+// One answer the dispatcher gives itself: a refusal, as type ERROR with an Error of code, or a Pong.
+// Bodies are built by the sender, so queueing one copies a value and allocates nothing.
+type subprotocolReply struct {
+	// the request's source
+	destinationId connect.Id
+	// the request's peer.TransferKey, which replyTransferKey turns into the reply's send option
+	transferKey connect.TransferKey
+	// ERROR or PONG
+	messageType protocol.MessageType
+	requestId   uint64
+	streamId    uint64
+	// for ERROR: never ERR_OK, which no sender sets (§6.5)
+	code protocol.ErrorCode
+}
+
+// The answer to a request, named by its request_id and stream_id, that this side refuses with code.
+func refusalReply(destinationId connect.Id, transferKey connect.TransferKey, requestId uint64, streamId uint64, code protocol.ErrorCode) subprotocolReply {
+	return subprotocolReply{
+		destinationId: destinationId,
+		transferKey:   transferKey,
+		messageType:   protocol.MessageType_ERROR,
+		requestId:     requestId,
+		streamId:      streamId,
+		code:          code,
+	}
+}
+
+// Queues reply with zero wait, or drops it and counts it when the queue is full.
+func (self *Subprotocol) offerReply(reply subprotocolReply) {
+	select {
+	case self.replies <- reply:
+		self.stats.replyQueuedCount.Add(1)
+	default:
+		self.stats.replyDroppedCount.Add(1)
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[subprotocol]reply to %s dropped: queue full\n", reply.destinationId)
+		}
+	}
+}
+
+// Sends what the queue holds until the Subprotocol closes. Each wait is on the queue or the context,
+// so the loop never spins. What is still queued at the end holds no pool buffer, so it is left.
+func (self *Subprotocol) runSender() {
+	defer close(self.senderDone)
+	for {
+		select {
+		case <-self.ctx.Done():
+			return
+		case reply := <-self.replies:
+			self.sendReply(reply)
+		}
+	}
+}
+
+// Builds reply's envelope and hands it to connect with zero wait.
+func (self *Subprotocol) sendReply(reply subprotocolReply) {
+	envelope := &protocol.Envelope{
+		Version:   WireVersionMajor,
+		Type:      uint32(reply.messageType),
+		RequestId: reply.requestId,
+		Flags:     EnvelopeFlagResponse,
+		StreamId:  reply.streamId,
+	}
+	if reply.messageType == protocol.MessageType_ERROR {
+		body, err := proto.Marshal(&protocol.Error{Code: uint32(reply.code)})
+		if err != nil {
+			self.stats.replyFailedCount.Add(1)
+			self.log.Errorf("[subprotocol]reply error body = %s\n", err)
+			return
+		}
+		envelope.Flags |= EnvelopeFlagError
+		envelope.Body = body
+	}
+	if err := self.sendEnvelope(reply.destinationId, envelope, 0, replyTransferKey(reply.transferKey)); err != nil {
+		self.stats.replyFailedCount.Add(1)
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[subprotocol]reply to %s = %s\n", reply.destinationId, err)
+		}
+		return
+	}
+	self.stats.replySentCount.Add(1)
+}
+
+// The send option a reply rides: the request's own lane and encryption session, as connect's reply
+// rule has it (connect/CODESTYLE.md, routing keys), on a contract that is no companion, since a
+// same-network reply rides the reach rules like any other send (plan-ACL-network-reply-contracts),
+// and that asks for no stream, since a sidecar never requests P2P (D-PROTO-10).
+func replyTransferKey(transferKey connect.TransferKey) connect.TransferKey {
+	transferKey.CompanionContract = false
+	transferKey.ForceStream = false
+	return transferKey
+}
+
+// The one place this layer hands connect an envelope: to destinationId, waiting at most timeout for
+// connect to take it, 0 meaning not at all. connect encodes envelope into a pool buffer it takes on
+// success and returns on failure, so envelope and its body stay the caller's either way. A refusal
+// comes back as connect's error, or errSubprotocolSendRefused when connect gave none.
+func (self *Subprotocol) sendEnvelope(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) error {
+	sent, err := self.send(destinationId, envelope, timeout, opts...)
+	if err != nil {
+		return err
+	}
+	if !sent {
+		return errSubprotocolSendRefused
+	}
+	return nil
+}
+
+// Sends through connect, the envelope's size held to §6.5 by envelopeCodec.
+func (self *Subprotocol) connectSend(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) (bool, error) {
+	return connect.SendSubprotocolWithTimeout(self.client, SubprotocolId, envelope, destinationId, ignoreSubprotocolAck, timeout, opts...)
+}
+
+// The ack callback of a reply: a transfer ack says connect delivered a frame, never that anyone acted on
+// it (R-PROTO-10), and nothing waits on a refusal's or a Pong's.
+func ignoreSubprotocolAck(err error) {
+}
