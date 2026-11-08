@@ -104,7 +104,11 @@ enum SignedType {
   SIGNED_EVS_PATH_MAP = 0x1403;
   SIGNED_EVS_IMPORT = 0x1404;
 
-  // 0x15xx §13, 0x16xx §14, 0x17xx §15, 0x1Axx §5, 0x1Bxx §12
+  // 0x15xx §13, 0x16xx §14, 0x17xx §15, 0x1Bxx §12
+
+  // 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
+  // binding-identity by the identity key over one SignedSidecarIdentityBinding's body.
+  SIGNED_SIDECAR_BINDING = 0x1A01;
 
   // 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
   // purpose approval; §16.11's directory items, purpose directory, the last two, reserved for format 2.

@@ -156,6 +156,11 @@ message VersioningRules { repeated VersioningRule rules = 1; }
 message AuthorityProposal { StatementHeader header = 1; uint32 statement_type = 2; bytes statement = 3; }
 message AuthorityCosign { StatementHeader header = 1; bytes proposal_id = 2; }
 message RecoveryVeto { StatementHeader header = 1; bytes proposal_id = 2; }
+// §7.8's client-only bundle, a field list without numbers.
+message AuthKeyBundle {
+  uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;
+  bytes delegation_signing_seed = 5; bytes delegation_reader_seed = 6; repeated bytes tag_ids = 7;
+}
 // §7.9's and §16.11's settings, in the order written.
 enum IndexerScope { INDEXER_SCOPE_UNSPECIFIED = 0; INDEXER_SCOPE_NETWORK = 1; INDEXER_SCOPE_MEMBER = 2; }
 enum IndexerService {
@@ -210,6 +215,12 @@ message SidecarRevoke {
 message GrantRevoke { StatementHeader header = 1; bytes grant_id = 2; }
 message Suspend { StatementHeader header = 1; bytes subject = 2; bytes suspend_id = 3; }
 message Unsuspend { StatementHeader header = 1; bytes subject = 2; bytes suspend_id = 3; }
+// §5.5's identity binding, as plan-CORE-binding-wire #1 numbers it.
+message SidecarIdentityBinding {
+  bytes network_id = 1; bytes sidecar_id = 2; bytes client_id = 3; int64 generation = 4;
+  bytes client_public_key = 5; bytes identity_public_key = 6; int64 issued_at_ms = 7;
+}
+message SignedSidecarIdentityBinding { bytes body = 1; bytes client_signature = 2; bytes identity_signature = 3; }
 // §7.5's roles and §7.9's names, in the order written.
 enum MemberRole {
   MEMBER_ROLE_UNSPECIFIED = 0; MEMBER_ROLE_OWNER = 1; MEMBER_ROLE_ADMIN = 2; MEMBER_ROLE_NETWORK_ADMIN = 3;

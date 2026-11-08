@@ -14,8 +14,8 @@ import (
 // One network's sidecar: its own Required client, durable sidecar_id and identity key (D-CORE-4,
 // D-CORE-5). Safe for concurrent use.
 //
-// §5.4's other fields arrive with what they name: keychain with CORE-M1-02, identity with
-// CORE-M1-05, and leg and NewSidecar with CORE-M1-08, which also sets sidecarApi.
+// §5.4's other fields arrive with what they name: keychain with CORE-M1-02, and leg and NewSidecar
+// with CORE-M1-08, which also sets sidecarApi and coreSecrets.
 type Sidecar struct {
 	host     SidecarHost
 	settings *SidecarSettings
@@ -33,6 +33,11 @@ type Sidecar struct {
 	eventQueue []SidecarEvent
 	// a goroutine is delivering eventQueue, which every later event joins
 	eventDelivering bool
+	// The core's namespace of this network's keychain.ur, which holds the identity key, the ClientKey
+	// seed and the newest binding (identity_keys.go). Nil until the sidecar knows its network.
+	coreSecrets SidecarSecrets
+	// Ids, generation and public keys, never a private key. Nil until the keychain holds an identity.
+	identity *SidecarIdentity
 }
 
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,
@@ -291,7 +296,7 @@ type SidecarStatus struct {
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire
-// form is plan-CORE-binding-wire.md's to settle, and CORE-M1-05 owns the encoding.
+// form is plan-CORE-binding-wire #1's SignedSidecarIdentityBinding (identity_binding.go).
 type SidecarIdentityBinding struct {
 	NetworkId Id
 	SidecarId Id
