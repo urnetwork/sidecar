@@ -164,6 +164,8 @@ message VersioningRule {
   VersioningMode versioning = 5;
 }
 message VersioningRules { repeated VersioningRule rules = 1; }
+// plan-SOCK-ksock-rotation #2's K_sock file, which the owner's answer gives with its numbers.
+message SocketKeyFile { bytes current_key = 1; bytes previous_key = 2; int64 rotated_at_ms = 3; }
 message AuthorityProposal { StatementHeader header = 1; uint32 statement_type = 2; bytes statement = 3; }
 message AuthorityCosign { StatementHeader header = 1; bytes proposal_id = 2; }
 message RecoveryVeto { StatementHeader header = 1; bytes proposal_id = 2; }

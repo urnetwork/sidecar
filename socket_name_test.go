@@ -19,7 +19,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-//go:embed testdata/socket/tokens.json testdata/socket/seals.json
+//go:embed testdata/socket/tokens.json testdata/socket/seals.json testdata/socket/key_file.json
 var socketVectorFiles embed.FS
 
 // Fixed test ids and keys, none of which come from the vector files.
