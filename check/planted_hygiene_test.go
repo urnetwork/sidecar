@@ -66,6 +66,62 @@ func TestHygieneFailsOnAGoWorkFile(t *testing.T) {
 	wantFindings(t, fixture.open().workFileFindings(t), "go.work changes what builds resolve")
 }
 
+// cli keeps its unversioned path at release, and the release's sed turns an import of
+// .../sidecar/cli/daemon into one under .../sidecar/v2026, which the root's tag does not hold.
+func TestHygieneFailsOnASubpackageOfCli(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("cli/daemon/daemon.go", "package daemon\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "cli/daemon: a package beside cli's own")
+}
+
+// One finding a package, its tests included, and testdata is no package.
+func TestHygieneFailsOnASubpackageOfMlsinterop(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("mlsinterop/peer/peer.go", "package peer\n")
+	fixture.write("mlsinterop/peer/peer_test.go", "package peer\n")
+	fixture.write("mlsinterop/testdata/vectors/vector.go", "package vectors\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "mlsinterop/peer: a package beside mlsinterop's own")
+}
+
+// An external test of mlsinterop imports mlsinterop's own path, which the release's rewrite turns
+// into one under .../sidecar/v2026: the development tree lists, and the release tree does not.
+func TestHygieneFailsOnAnExternalTestImportingMlsinterop(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.keepLegs("tests mlsinterop linux/amd64")
+	fixture.write("mlsinterop/doc_test.go", "package mlsinterop_test\n\nimport _ \"@module@/mlsinterop\"\n")
+	repository := fixture.open()
+	wantFindings(t, repository.untaggedSubpackageFindings(t),
+		"mlsinterop/doc_test.go:3: the release's rewrite makes this \"@module@/v2026/mlsinterop\", which nothing provides: mlsinterop keeps its unversioned path")
+	if _, err := repository.listLeg(repository.legs[0]); err != nil {
+		t.Fatalf("the development tree does not list: %v", err)
+	}
+
+	fixture.toRelease()
+	release := fixture.openRelease()
+	if _, err := release.listLeg(release.legs[0]); err == nil {
+		t.Errorf("the release tree lists, so this is no break")
+	}
+	wantFindings(t, release.untaggedSubpackageFindings(t),
+		"mlsinterop/doc_test.go:3: the release's rewrite makes this \"@module@/v2026/mlsinterop\"")
+}
+
+// The rewrite reads every quoted string, not just imports, and every Makefile.
+func TestHygieneFailsOnAQuotedPathOfCliOutsideAnImport(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("cli/version.go", "package main\n\nvar modulePath = \"@module@/cli\"\n")
+	fixture.write("cli/Makefile", "install:\n\tgo install \"@module@/cli@latest\"\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t),
+		"cli/version.go:3: the release's rewrite makes this \"@module@/v2026/cli\"",
+		"cli/Makefile:2: the release's rewrite makes this \"@module@/v2026/cli\"")
+}
+
+// The control: what the rewrite versions correctly, and a line it leaves alone, which holds /vN.
+func TestHygieneAllowsQuotedPathsTheRewriteKeeps(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.write("cli/paths.go", "package main\n\nvar paths = []string{\"@module@/protocol\", \"@module@/smtpproof\"}\n\n// \"@module@/mlsinterop\" beside example.com/x/v2\n")
+	wantFindings(t, fixture.open().untaggedSubpackageFindings(t))
+}
+
 const (
 	plantedBridgeProto = `syntax = "proto3";
 package urnetwork.sidecar;

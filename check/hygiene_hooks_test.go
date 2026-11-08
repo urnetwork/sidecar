@@ -5,7 +5,8 @@
 // installed, and testHookBarrier can hold a protocol step. So the rule has four readings, because a
 // leg can come to link a hook in four ways:
 //
-//   - the leg asks for the tag (the leg table, the caller's GOFLAGS, a Makefile's build line);
+//   - the leg asks for the tag (the leg table, the host's GOFLAGS in the variable or a go env file,
+//     a Makefile's build line);
 //   - a file compiled on a release leg answers to the tag some other way (an || constraint);
 //   - a package's pair is wrong, so its untagged half is not empty, which needs no tag at all. This
 //     covers every package and module, not just the root: testhook.go tells each package that needs
@@ -17,9 +18,12 @@
 package check
 
 import (
+	"bytes"
 	"debug/buildinfo"
+	"fmt"
 	"go/ast"
 	"go/build/constraint"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -117,23 +121,95 @@ func (self *repository) legTagFindings() []string {
 	return findings
 }
 
-// The caller's GOFLAGS, which every go command here clears so a leg stays what it names. A tag in
-// it is a tag on whatever else that environment builds, the release's own steps included. Read as
-// whole words, because GOFLAGS may quote a -tags value.
-func callerGoflagsFindings(goflags string) []string {
+// A tag in one place's GOFLAGS, read as whole words, because GOFLAGS may quote a -tags value.
+func goflagsTagFindings(place string, goflags string) []string {
 	findings := []string{}
 	for _, tag := range unshippableTags {
 		word := regexp.MustCompile(`(^|[^a-z0-9_])` + tag + `($|[^a-z0-9_])`)
 		if word.MatchString(goflags) {
-			findings = append(findings, findingf("GOFLAGS carries %s, so a release built here is built with it", tag))
+			findings = append(findings, findingf("GOFLAGS in %s carries %s, so a release built here is built with it", place, tag))
 		}
+	}
+	return findings
+}
+
+// One place the go command takes GOFLAGS from, and what it holds there.
+type goflagsSource struct {
+	place   string
+	goflags string
+}
+
+// Every place a go command on this host takes GOFLAGS from, each read by the go command itself in
+// the caller's environment. The go command reads the variable, then while that is empty the go env
+// file GOENV names, which go env -w writes, then while that holds none GOROOT's go.env. Every go
+// command the rules run sets the variable, which hides both files from them, and a release step on
+// this host need not run as make check does: it may leave the variable unset where lowgo sets it, or
+// GOENV at its default. So each place is read on its own, the default go env file too when this
+// environment moves GOENV, and a tag in any of them reaches some build here.
+func hostGoflagsSources(directory string, environment []string) ([]goflagsSource, error) {
+	variable := func(key string) string {
+		value := ""
+		for _, entry := range environment {
+			if name, entryValue, found := strings.Cut(entry, "="); found && name == key {
+				value = entryValue
+			}
+		}
+		return value
+	}
+	// GOFLAGS with its variable empty, the go env file and GOROOT, as the go command reads them with
+	// the overrides on top of the caller's environment
+	read := func(overrides ...string) (goflags string, envFile string, goroot string, err error) {
+		readEnvironment := append(slices.Clone(environment), "GOTOOLCHAIN=local", "GOFLAGS=")
+		output, err := runGo(directory, append(readEnvironment, overrides...), "env", "GOFLAGS", "GOENV", "GOROOT")
+		if err != nil {
+			return "", "", "", err
+		}
+		lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+		if len(lines) != 3 {
+			return "", "", "", fmt.Errorf("go env GOFLAGS GOENV GOROOT printed %q", output)
+		}
+		return lines[0], lines[1], lines[2], nil
+	}
+	sources := []goflagsSource{{place: "the environment", goflags: variable("GOFLAGS")}}
+	rootGoflags, _, goroot, err := read("GOENV=off")
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources, goflagsSource{place: filepath.Join(goroot, "go.env"), goflags: rootGoflags})
+	userOverrides := [][]string{nil}
+	if variable("GOENV") != "" {
+		userOverrides = append(userOverrides, []string{"GOENV="})
+	}
+	for _, overrides := range userOverrides {
+		goflags, envFile, _, err := read(overrides...)
+		if err != nil {
+			return nil, err
+		}
+		// a file holding no GOFLAGS reads as GOROOT's, which is already here
+		if envFile != "off" && goflags != rootGoflags {
+			sources = append(sources, goflagsSource{place: "the go env file " + envFile, goflags: goflags})
+		}
+	}
+	return sources, nil
+}
+
+// An unshippable tag in any place a go command on this host takes GOFLAGS from.
+func (self *repository) hostGoflagsFindings(environment []string) []string {
+	sources, err := hostGoflagsSources(self.moduleDirectory, environment)
+	if err != nil {
+		return []string{findingf("reading where this host's go command takes GOFLAGS from: %v", err)}
+	}
+	findings := []string{}
+	for _, source := range sources {
+		findings = append(findings, goflagsTagFindings(source.place, source.goflags)...)
 	}
 	return findings
 }
 
 // A file a shipped leg compiles that answers to the tag. Read from the leg's own file lists, so it
 // covers the root's hook file, every per-package tagged half, and a file whose constraint would let
-// it in without the tag being set. Only this repository's packages can hold one.
+// it in without the tag being set. Only this repository's packages can hold one. A cgo file is
+// listed apart from the others, and compiled all the same.
 func (self *repository) legHookFileFindings(t testing.TB) []string {
 	t.Helper()
 	bySourcePath := map[string]*sourceFile{}
@@ -146,16 +222,56 @@ func (self *repository) legHookFileFindings(t testing.TB) []string {
 			if _, ours := repositoryRelative(listed.ImportPath); !ours {
 				continue
 			}
-			for _, goFile := range listed.GoFiles {
-				file, known := bySourcePath[filepath.Join(listed.Dir, goFile)]
-				if !known || file.constraint == nil {
-					continue
-				}
-				for _, tag := range unshippableTags {
-					if answersToTag(file.constraint, tag, false) {
-						findings = append(findings, findingf("%s links %s in %s, which answers to %s", leg.name, goFile, listed.ImportPath, tag))
-					}
-				}
+			findings = append(findings, self.linkedFileFindings(t, leg.name, listed, bySourcePath)...)
+		}
+	}
+	return findings
+}
+
+// One package of ours a leg links, file by file, against what the source walks read. A module of
+// this repository that the leg takes at a tag comes from the module cache, as the root and smtpproof
+// do for cli and mlsinterop on a release branch once sidecar_cli_release_edit drops their replaces.
+// The tag holds this checkout's tree (run.sh's sidecar_release_publish proves it), so such a file is
+// read as its checkout twin, and held to that twin's bytes.
+func (self *repository) linkedFileFindings(t testing.TB, legName string, listed *listedPackage, bySourcePath map[string]*sourceFile) []string {
+	t.Helper()
+	directory := listed.Dir
+	fromCache := false
+	if listed.Module != nil && listed.Module.Dir != "" {
+		for _, module := range self.modules(t) {
+			if module.basePath != firstPartyBase(listed.Module.Path) || module.directory == listed.Module.Dir {
+				continue
+			}
+			relative, err := filepath.Rel(listed.Module.Dir, listed.Dir)
+			if err != nil || !filepath.IsLocal(relative) {
+				return []string{findingf("%s links %s from %s, which is outside its module at %s", legName, listed.ImportPath, listed.Dir, listed.Module.Dir)}
+			}
+			directory = filepath.Join(module.directory, relative)
+			fromCache = true
+		}
+	}
+	findings := []string{}
+	for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
+		file, known := bySourcePath[filepath.Join(directory, goFile)]
+		if !known {
+			// the walks skip testdata and the documents, but an import does not
+			findings = append(findings, findingf("%s links %s in %s, which no source rule read", legName, goFile, listed.ImportPath))
+			continue
+		}
+		if fromCache {
+			linked, linkedErr := os.ReadFile(filepath.Join(listed.Dir, goFile))
+			checkedOut, checkedOutErr := os.ReadFile(file.path)
+			if linkedErr != nil || checkedOutErr != nil || !bytes.Equal(linked, checkedOut) {
+				findings = append(findings, findingf("%s links %s in %s from %s, which is not this checkout's %s", legName, goFile, listed.ImportPath, listed.Dir, self.displayPath(file.path)))
+				continue
+			}
+		}
+		if file.constraint == nil {
+			continue
+		}
+		for _, tag := range unshippableTags {
+			if answersToTag(file.constraint, tag, false) {
+				findings = append(findings, findingf("%s links %s in %s, which answers to %s", legName, goFile, listed.ImportPath, tag))
 			}
 		}
 	}
@@ -245,15 +361,17 @@ func forwardsTo(decl *ast.FuncDecl, rootName string, entry string, parameters []
 func (self *repository) hookPairFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
+	// every declaration of each half: a package may split one by system, and each is then some
+	// system's build, so holding only the last one read would leave the others unread
 	type packageHooks struct {
-		tagged   map[string]hookDeclaration
-		untagged map[string]hookDeclaration
+		tagged   map[string][]hookDeclaration
+		untagged map[string][]hookDeclaration
 	}
 	packages := map[string]*packageHooks{}
 	hooksOf := func(packageName string) *packageHooks {
 		hooks, ok := packages[packageName]
 		if !ok {
-			hooks = &packageHooks{tagged: map[string]hookDeclaration{}, untagged: map[string]hookDeclaration{}}
+			hooks = &packageHooks{tagged: map[string][]hookDeclaration{}, untagged: map[string][]hookDeclaration{}}
 			packages[packageName] = hooks
 		}
 		return hooks
@@ -286,15 +404,16 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 					}
 				}
 			case *ast.FuncDecl:
-				if typed.Recv != nil {
-					continue
-				}
 				name := typed.Name.Name
 				if slices.Contains(tagOnlyRootNames, name) && !file.holdsEntryPoint(name) {
 					findings = append(findings, findingf("%s: %s exists outside the root's tagged file", display, name))
 				}
 				signature, hook := hookSignatures[name]
 				if !hook {
+					continue
+				}
+				if typed.Recv != nil {
+					findings = append(findings, findingf("%s: %s is a method, so no pair holds it empty in a release build", display, name))
 					continue
 				}
 				parameters := parameterTexts(typed.Type.Params)
@@ -304,30 +423,36 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 				hooks := hooksOf(file.packageName)
 				switch {
 				case file.tagOnly(sidecarTestHooksTag):
-					hooks.tagged[name] = hookDeclaration{file: file, decl: typed}
+					hooks.tagged[name] = append(hooks.tagged[name], hookDeclaration{file: file, decl: typed})
 				case file.constraint != nil && excludesTag(file.constraint, sidecarTestHooksTag):
-					hooks.untagged[name] = hookDeclaration{file: file, decl: typed}
+					hooks.untagged[name] = append(hooks.untagged[name], hookDeclaration{file: file, decl: typed})
 				default:
 					findings = append(findings, findingf("%s: %s builds with and without %s, so its body reaches a release", display, name, sidecarTestHooksTag))
 				}
 			}
 		}
+		findings = append(findings, innerHookNameFindings(file.syntax, display)...)
 	}
 	for packageName, hooks := range packages {
 		for name, signature := range hookSignatures {
-			untagged, hasUntagged := hooks.untagged[name]
-			tagged, hasTagged := hooks.tagged[name]
-			if !hasUntagged {
+			if len(hooks.untagged[name]) == 0 {
 				findings = append(findings, findingf("%s keeps %s with no empty half under !%s", packageName, name, sidecarTestHooksTag))
-			} else if len(untagged.decl.Body.List) != 0 {
-				findings = append(findings, findingf("%s: %s has a body in the untagged build", self.displayPath(untagged.file.path), name))
 			}
-			if !hasTagged {
+			for _, untagged := range hooks.untagged[name] {
+				// no body at all is not empty: go:linkname or assembly decides what it runs
+				if untagged.decl.Body == nil {
+					findings = append(findings, findingf("%s: %s has no body of its own in the untagged build", self.displayPath(untagged.file.path), name))
+				} else if len(untagged.decl.Body.List) != 0 {
+					findings = append(findings, findingf("%s: %s has a body in the untagged build", self.displayPath(untagged.file.path), name))
+				}
+			}
+			if len(hooks.tagged[name]) == 0 {
 				findings = append(findings, findingf("%s keeps %s with no half under %s", packageName, name, sidecarTestHooksTag))
-				continue
 			}
-			if packageName != "." && packageName != deviceHooksPackage && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
-				findings = append(findings, findingf("%s: %s does not forward to the root's %s, as testhook.go has a package do", self.displayPath(tagged.file.path), name, hookEntryPoints[name]))
+			for _, tagged := range hooks.tagged[name] {
+				if packageName != "." && packageName != deviceHooksPackage && !forwardsTo(tagged.decl, rootImportName(tagged.file), hookEntryPoints[name], signature[:]) {
+					findings = append(findings, findingf("%s: %s does not forward to the root's %s, as testhook.go has a package do", self.displayPath(tagged.file.path), name, hookEntryPoints[name]))
+				}
 			}
 		}
 	}
@@ -335,11 +460,72 @@ func (self *repository) hookPairFindings(t testing.TB) []string {
 	return findings
 }
 
+// A hook's name declared anywhere below a file's top level: a struct or interface field, a parameter
+// or result, or a local. Each holds what any code of the package may set, in a release too, and a
+// call through it reaches no pair, so a hook's name belongs to the package's functions alone. The
+// top level is hookPairFindings' own.
+func innerHookNameFindings(syntax *ast.File, display string) []string {
+	findings := []string{}
+	topLevelSpecs := map[ast.Spec]bool{}
+	for _, decl := range syntax.Decls {
+		if genDecl, ok := decl.(*ast.GenDecl); ok {
+			for _, spec := range genDecl.Specs {
+				topLevelSpecs[spec] = true
+			}
+		}
+	}
+	isHookName := func(expression ast.Expr) (string, bool) {
+		identifier, ok := expression.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		_, hook := hookSignatures[identifier.Name]
+		return identifier.Name, hook
+	}
+	local := func(expressions ...ast.Expr) {
+		for _, expression := range expressions {
+			if name, hook := isHookName(expression); hook {
+				findings = append(findings, findingf("%s: %s is a local variable, so it can hold something in a release build", display, name))
+			}
+		}
+	}
+	ast.Inspect(syntax, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.Field:
+			for _, name := range typed.Names {
+				if _, hook := hookSignatures[name.Name]; hook {
+					findings = append(findings, findingf("%s: %s is a field or parameter, so it can hold something in a release build", display, name.Name))
+				}
+			}
+		case *ast.AssignStmt:
+			if typed.Tok == token.DEFINE {
+				local(typed.Lhs...)
+			}
+		case *ast.RangeStmt:
+			if typed.Tok == token.DEFINE {
+				local(typed.Key, typed.Value)
+			}
+		case *ast.ValueSpec:
+			if !topLevelSpecs[typed] {
+				for _, name := range typed.Names {
+					local(name)
+				}
+			}
+		}
+		return true
+	})
+	return findings
+}
+
 // A go test command, however the Makefile spells go.
 var goTestCommandPattern = regexp.MustCompile(`(^|[^[:alnum:]_/-])(go|lowgo|\$\(GO\))\s+test\b`)
 
-// A Makefile line carrying an unshippable tag that is not a go test line: go test is how the hooks
-// are exercised, and anything else, a go build or a GOFLAGS export, makes something that can ship.
+// What ends one shell command on a Makefile line.
+var shellCommandEndPattern = regexp.MustCompile(`&&|\|\||[;|]`)
+
+// A shell command on a Makefile line carrying an unshippable tag that is not go test: go test is how
+// the hooks are exercised, and anything else, a go build or a GOFLAGS export, makes something that
+// can ship. Read per command, because go test excuses only itself, not a build beside it.
 func (self *repository) makefileTagFindings(t testing.TB) []string {
 	t.Helper()
 	makefiles, err := filepath.Glob(filepath.Join(self.topDirectory, "Makefile"))
@@ -355,11 +541,22 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			makefiles = append(makefiles, matches...)
 		}
 	}
-	// gomobile's legs are built by sdk's Makefile, not by anything here
-	makefiles = append(makefiles, self.siblingPath("sdk/build/Makefile"))
+	findings := []string{}
+	// what ships is also built outside this repository: sdk's gomobile, c-shared and wasm legs, and
+	// the engines in each of server's services
+	for _, makefile := range []string{"sdk/build/Makefile", "sdk/cgo/Makefile", "sdk/js/Makefile"} {
+		makefiles = append(makefiles, self.siblingPath(makefile))
+	}
+	serverMakefiles, err := filepath.Glob(filepath.Join(self.siblingPath("server/cli"), "*", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serverMakefiles) == 0 {
+		findings = append(findings, "no Makefile under server/cli, so nothing shows how the engines are built")
+	}
+	makefiles = append(makefiles, serverMakefiles...)
 	slices.Sort(makefiles)
 	makefiles = slices.Compact(makefiles)
-	findings := []string{}
 	for _, makefile := range makefiles {
 		data, err := os.ReadFile(makefile)
 		if err != nil {
@@ -367,12 +564,17 @@ func (self *repository) makefileTagFindings(t testing.TB) []string {
 			continue
 		}
 		for index, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "#") || goTestCommandPattern.MatchString(line) {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
 				continue
 			}
-			for _, tag := range unshippableTags {
-				if strings.Contains(line, tag) {
-					findings = append(findings, findingf("%s:%d: builds with %s", self.displayPath(makefile), index+1, tag))
+			for _, command := range shellCommandEndPattern.Split(line, -1) {
+				if goTestCommandPattern.MatchString(command) {
+					continue
+				}
+				for _, tag := range unshippableTags {
+					if strings.Contains(command, tag) {
+						findings = append(findings, findingf("%s:%d: builds with %s", self.displayPath(makefile), index+1, tag))
+					}
 				}
 			}
 		}
@@ -399,4 +601,21 @@ func releaseBinaryFindings(binaryPath string) []string {
 		}
 	}
 	return findings
+}
+
+// Builds ur from the cli module in cliDirectory as a release step on this host builds, and reads
+// what the binary says of itself. That is the host's own go configuration, from base: its go
+// command, its GOFLAGS wherever it keeps them and its go env files, none of which goEnvironment lets
+// through. Beside them only what changes no tag: CGO_ENABLED=0, as cli's release targets build
+// (§4.10), GOWORK=off and GOTOOLCHAIN=local, and -mod=readonly, so a host's -mod=mod cannot write
+// the checkout. So this fails on whatever makes this host's builds carry a tag, a go command that
+// adds one included, which no reading of GOFLAGS sees.
+func hostBinaryFindings(t testing.TB, cliDirectory string, base []string) []string {
+	t.Helper()
+	binaryPath := filepath.Join(t.TempDir(), "ur")
+	environment := append(slices.Clone(base), "GOWORK=off", "GOTOOLCHAIN=local", "CGO_ENABLED=0")
+	if _, err := runGo(cliDirectory, environment, "build", "-mod=readonly", "-o", binaryPath, "."); err != nil {
+		return []string{findingf("building ur as this host builds: %v", err)}
+	}
+	return releaseBinaryFindings(binaryPath)
 }

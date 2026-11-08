@@ -1,0 +1,75 @@
+# The local stack of §22.4: production's shape, on loopback above port 50000. Run it through stack.sh,
+# which also forms the cluster. README.md says what is here and what waits.
+#
+# Containers and ports are fixed, so there is one stack per machine, and tracks share it.
+
+name: sidecar-test-stack
+
+x-redis-node: &redis-node
+  image: redis:8.10.2@sha256:97ec88159e6d7cfb5ddef9015386087d58a912de80112f06ebdfa78fa5989901
+  restart: "no"
+  networks: [stack]
+  # Each node listens on the port the host dials, and the cluster names that port with 127.0.0.1 as its
+  # endpoint, so a MOVED sends a client on the host to a port published here. Nodes reach each other's
+  # bus across the stack network by ip. Keyspace classes are production's (server/connect/resident.go:693).
+  # Soft state only, so nothing is saved.
+  command:
+    - sh
+    - -c
+    - >-
+      exec redis-server --port $$NODE_PORT --cluster-port $$NODE_BUS_PORT
+      --cluster-enabled yes --cluster-node-timeout 5000
+      --cluster-announce-hostname 127.0.0.1 --cluster-preferred-endpoint-type hostname
+      --notify-keyspace-events 'Kg$$sx' --save '' --appendonly no
+      --bind '* -::*' --protected-mode no
+  healthcheck:
+    test: ["CMD-SHELL", "redis-cli -p $$NODE_PORT ping | grep -q PONG"]
+    interval: 1s
+    timeout: 2s
+    retries: 30
+
+services:
+  redis-0:
+    <<: *redis-node
+    container_name: sidecar-test-redis-cluster-0
+    ports: ["127.0.0.1:56401:56401"]
+    environment: {NODE_PORT: "56401", NODE_BUS_PORT: "56411"}
+  redis-1:
+    <<: *redis-node
+    container_name: sidecar-test-redis-cluster-1
+    ports: ["127.0.0.1:56402:56402"]
+    environment: {NODE_PORT: "56402", NODE_BUS_PORT: "56412"}
+  redis-2:
+    <<: *redis-node
+    container_name: sidecar-test-redis-cluster-2
+    ports: ["127.0.0.1:56403:56403"]
+    environment: {NODE_PORT: "56403", NODE_BUS_PORT: "56413"}
+
+  # One process, 8 drive directories, EC:4. A stock image until the fork has a build: README.md.
+  minio:
+    image: ${SIDECAR_LOCAL_MINIO_IMAGE:-cgr.dev/chainguard/minio@sha256:aea6c163749e1caca37f907976dcf337177ddf5f558808f2aa591618fd3a6eef}
+    container_name: sidecar-test-minio
+    restart: "no"
+    networks: [stack]
+    # the image's own user cannot write a fresh volume's root
+    user: "0:0"
+    ports: ["127.0.0.1:59000:59000"]
+    command: [server, "/drives/drive{1...8}", --address, ":59000"]
+    environment:
+      # synthetic, on loopback only, and what localstack.DefaultBlobSettings signs with
+      MINIO_ROOT_USER: sidecar-local-test
+      MINIO_ROOT_PASSWORD: sidecar-local-test-only
+      MINIO_STORAGE_CLASS_STANDARD: EC:4
+      # §19.6's MinIO row
+      MINIO_SCANNER_SPEED: slow
+      MINIO_BROWSER: "off"
+    volumes:
+      - minio-drives:/drives
+
+networks:
+  stack:
+    name: sidecar-test-stack
+
+volumes:
+  minio-drives:
+    name: sidecar-test-minio-drives

@@ -3,10 +3,11 @@
 // tree, and everything in it is signed, so what is decoded is kept exactly as it arrived.
 //
 // §10.4's subset takes one credential type on the wire, 0xF552, whose encoding M2's entry review
-// specifies (D-KEYS-10). Until then the decoder refuses it like any type it cannot read, and takes
-// only basic, which the mlswg's vectors and tests use. A basic credential is no way in: whether a
-// credential is acceptable is the mlsCredentialValidator's call, and the only production validator
-// there is refuses everything until §7.9's admission check exists.
+// specifies (D-KEYS-10). Until then the decoder refuses it like any type it cannot read. Basic, which
+// the mlswg's vectors and the test groups use, reads only in the test binary, the way suite 0x0001 is
+// built only there, so production refuses it when parsed (D-KEYS-12) and no leaf decodes outside
+// tests yet. Reading is not acceptance either: that is the mlsCredentialValidator's call, and the only
+// production validator there is refuses everything until §7.9's admission check exists.
 
 package sidecar
 
@@ -47,7 +48,11 @@ func mlsRefuseEveryCredential(credential *mlsCredential, signatureKey []byte) er
 	return fmt.Errorf("%w: no admission check exists yet for credential type %#x", errMlsRefused, credential.credentialType)
 }
 
-// Credential (RFC §5.3).
+// Whether basic credentials encode and decode. Production leaves this false. The test binary sets it,
+// and TestMlsProductionCodeReadsNoBasicCredential holds every other file to leaving it alone.
+var mlsTestReadsBasicCredentials bool
+
+// A member's claimed identity (RFC §5.3).
 type mlsCredential struct {
 	credentialType uint16
 	// A basic credential's identity.
@@ -57,30 +62,29 @@ type mlsCredential struct {
 // Credential, refusing what decode refuses.
 func (self *mlsCredential) encode(encoder *mlsEncoder) {
 	encoder.writeUint16(self.credentialType)
-	switch self.credentialType {
-	case mlsCredentialTypeBasic:
+	if self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials {
 		encoder.writeVector(self.identity)
-	default:
-		encoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
+		return
 	}
+	encoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 }
 
-// Any other type is refused: x509 is outside the subset, 0xF552 is not specified yet, and an unknown
-// type's length cannot be known.
+// Every type is refused outside tests: x509 is outside the subset, 0xF552 is not specified yet, basic
+// is the tests' alone, and an unknown type's length cannot be known.
 func (self *mlsCredential) decode(decoder *mlsDecoder) {
 	self.credentialType = decoder.readUint16()
 	if decoder.err != nil {
 		return
 	}
-	switch self.credentialType {
-	case mlsCredentialTypeBasic:
+	if self.credentialType == mlsCredentialTypeBasic && mlsTestReadsBasicCredentials {
 		self.identity = decoder.readVector()
-	default:
-		decoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
+		return
 	}
+	decoder.fail(fmt.Errorf("%w: credential type %#x", errMlsRefused, self.credentialType))
 }
 
-// Capabilities (RFC §7.2). Unknown values stay, because the list is signed, and mean nothing.
+// What a leaf says it supports (RFC §7.2). Unknown values stay, because the list is signed, and mean
+// nothing.
 type mlsCapabilities struct {
 	versions     []uint16
 	cipherSuites []uint16
@@ -107,9 +111,13 @@ func (self *mlsCapabilities) decode(decoder *mlsDecoder) {
 	self.credentials = decoder.readUint16Vector()
 }
 
-// Default extension types are implicit (RFC §7.2).
+// Default extension types are implicit (RFC §7.2), but for external_senders: §10.4 refuses it, so no
+// leaf here supports it, listed or not, and a group that carries or requires it fails every leaf.
 func (self *mlsCapabilities) supportsExtension(extensionType uint16) bool {
-	return (mlsExtensionTypeApplicationId <= extensionType && extensionType <= mlsExtensionTypeExternalSenders) ||
+	if extensionType == mlsExtensionTypeExternalSenders {
+		return false
+	}
+	return (mlsExtensionTypeApplicationId <= extensionType && extensionType <= mlsExtensionTypeExternalPub) ||
 		slices.Contains(self.extensions, extensionType)
 }
 
@@ -124,7 +132,7 @@ func (self *mlsCapabilities) supportsCredential(credentialType uint16) bool {
 	return slices.Contains(self.credentials, credentialType)
 }
 
-// RequiredCapabilities (RFC §11.1), a GroupContext extension's data.
+// What every member of a group must support (RFC §11.1), a GroupContext extension's data.
 type mlsRequiredCapabilities struct {
 	extensionTypes  []uint16
 	proposalTypes   []uint16
@@ -165,7 +173,7 @@ func (self *mlsCapabilities) satisfies(required *mlsRequiredCapabilities) bool {
 	return true
 }
 
-// Lifetime (RFC §7.2), in seconds since the Unix epoch.
+// The window a KeyPackage's leaf is valid in (RFC §7.2), in seconds since the Unix epoch.
 type mlsLifetime struct {
 	notBefore uint64
 	notAfter  uint64
@@ -189,7 +197,7 @@ func (self *mlsLifetime) contains(at time.Time) bool {
 	return 0 <= seconds && self.notBefore <= uint64(seconds) && uint64(seconds) <= self.notAfter
 }
 
-// LeafNode (RFC §7.2).
+// A member's leaf of the ratchet tree (RFC §7.2).
 type mlsLeafNode struct {
 	encryptionKey  []byte
 	signatureKey   []byte

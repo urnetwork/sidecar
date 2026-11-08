@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"requests\": [{\"src\": [\"tag:a\"], \"dst\": [\"*\"], \"allow\": [\"dial\"], \"approvers\": 4294967295, \"maxExpiry\": \"106751d\"}]}")
