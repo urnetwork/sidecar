@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"time"
 )
 
 // The seam to the nested module smtpproof (§14.9). The root never requires that module (D-REPO-2):
@@ -120,9 +121,23 @@ type SmtpProofChannel interface {
 	SubmitPart(ctx context.Context, part *SmtpProofPart) error
 }
 
+// A prover host's own DATA speed (D-SMTP-20), which it records at p/<sidecar_id> (§15.7) so that a
+// phone's composer can show the cap of the hosts that send for it.
+type SmtpProverMeasure struct {
+	// smtp_data_proof_bytes: the octets a DATA connection proves in its 2 h. A larger message to an MX
+	// without CHUNKING is too_large. 0 when a part cannot prove within 2 minutes.
+	DataProofBytes uint64
+	// DATA octets proven per second.
+	DataBytesPerSecond uint64
+	MeasureTime        time.Time
+}
+
 // Runs one connection over the stream the edge spliced to the MX: the TLS handshake, every proof and
 // every record. It holds all keys and plaintext, so only the sending device runs it. An error can quote
 // the message or the MX's replies, so it stays on the device and no SmtpOutcome carries its text.
 type SmtpProver interface {
 	SendSmtp(ctx context.Context, conn net.Conn, job *SmtpProofJob, channel SmtpProofChannel) (*SmtpProofResult, error)
+	// Proves at idle what a DATA part costs this host, and holds later sends to it. It takes seconds
+	// to minutes, and fails where no keys are loaded.
+	Measure(ctx context.Context) (*SmtpProverMeasure, error)
 }

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -28,13 +30,21 @@ type partProver interface {
 type ProverSettings struct {
 	// Largest content of one client record. The protocol's limit is 16 KiB.
 	MaxRecordContentBytes int
-	// DATA octets proven per part, which must fit a shape's body blocks. The sidecar sizes this by its
-	// measured speed to prove within 2 minutes (§14.5). partShapes holds 2 KiB, one octet of it for
-	// TLS 1.3's inner type.
+	// DATA octets proven per part, which must fit a shape's body blocks. partShapes holds 2 KiB, one
+	// octet of it for TLS 1.3's inner type. A part's circuit is fixed, so it costs the same however much
+	// it carries: Measure sets this to a whole part, or 0 when a part cannot prove within DataPartTime.
+	// Until a Measure, this default stands.
 	DataPartBytes int
-	// smtp_data_proof_bytes, measured on each host: a larger message to an MX without CHUNKING is
-	// too_large before MAIL (§14.5). Non-positive refuses every DATA send.
+	// smtp_data_proof_bytes: a larger message to an MX without CHUNKING is too_large before MAIL
+	// (§14.5). Measure replaces this unmeasured default with the host's own figure. Non-positive refuses
+	// every DATA send.
 	DataProofBytes int
+	// How long one DATA part may take to prove: §14.5's 2 minutes, inside the MX's 5-minute timeout. A
+	// host whose part takes longer sends nothing in DATA mode.
+	DataPartTime time.Duration
+	// How long a DATA connection proves for: §14.4's 2 h. With the measured rate it gives
+	// smtp_data_proof_bytes.
+	DataConnectionTime time.Duration
 	// Server octets held for parts to cover, as VerifierSettings.MaxServerBytes. A reply that never ends
 	// stops here rather than growing what this send holds.
 	MaxServerBytes int
@@ -47,16 +57,24 @@ func DefaultProverSettings() *ProverSettings {
 		MaxRecordContentBytes: 16 * 1024,
 		DataPartBytes:         2*1024 - 1,
 		DataProofBytes:        1024 * 1024,
+		DataPartTime:          2 * time.Minute,
+		DataConnectionTime:    2 * time.Hour,
 		MaxServerBytes:        256 * 1024,
 	}
 }
 
-// Implements sidecar.SmtpProver. Safe for concurrent use: all state is per send.
+// Implements sidecar.SmtpProver. Safe for concurrent use: all state is per send, except the last
+// Measure's limits under stateLock.
 type Prover struct {
 	settings *ProverSettings
 	backend  partProver
 	// The suites offered, or nil for the client's default. Tests pin one to cover each.
 	tlsSuites []uint16
+	// Measure's clock, or nil for the wall clock. Tests give a fake one.
+	clock func() time.Time
+
+	stateLock sync.Mutex
+	measured  *proverMeasured
 }
 
 // A server record as the prover keeps it: its public form, and its plaintext for the witness.
@@ -152,7 +170,7 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 		settings.suites = self.tlsSuites
 	}
 	run := &proverRun{
-		settings: self.settings,
+		settings: self.sendSettings(),
 		backend:  self.backend,
 		job:      job,
 		channel:  channel,
@@ -240,7 +258,8 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 	count := uint64(len(self.job.Message))
 	if mode == partModeData {
 		count = uint64(len(stuffed))
-		if uint64(max(self.settings.DataProofBytes, 0)) < count {
+		// a host whose part cannot prove within its time has no DATA part size, and sends no DATA
+		if self.settings.DataPartBytes <= 0 || uint64(max(self.settings.DataProofBytes, 0)) < count {
 			return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
 		}
 	}
