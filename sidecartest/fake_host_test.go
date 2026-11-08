@@ -31,6 +31,7 @@ var (
 	_ sidecar.Tasks               = (*FakeTasks)(nil)
 	_ sidecar.Redis               = (*FakeRedis)(nil)
 	_ sidecar.BlobStore           = (*FakeBlobs)(nil)
+	_ sidecar.ClockCheck          = (*FakeClockCheck)(nil)
 	_ sidecar.Push                = (*FakePush)(nil)
 	_ sidecar.ServiceClientSource = (*FakeServiceClientSource)(nil)
 )
@@ -40,7 +41,7 @@ func TestFakeHostFillsEveryInterface(t *testing.T) {
 	serviceHost := host.ServiceHost()
 	if serviceHost.Authenticator == nil || serviceHost.Quota == nil || serviceHost.Metrics == nil ||
 		serviceHost.Tasks == nil || serviceHost.Redis == nil || serviceHost.Blobs == nil ||
-		serviceHost.Push == nil || serviceHost.ServiceClient == nil {
+		serviceHost.ClockCheck == nil || serviceHost.Push == nil || serviceHost.ServiceClient == nil {
 		t.Errorf("host %+v", serviceHost)
 	}
 }

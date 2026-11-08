@@ -47,6 +47,7 @@ func hostCall(ctx context.Context, faults *FaultQueue, method string, serve func
 
 type FakeHostSettings struct {
 	Blobs         *FakeBlobsSettings
+	ClockCheck    *FakeClockCheckSettings
 	Redis         *FakeRedisSettings
 	Tasks         *FakeTasksSettings
 	Quota         *FakeQuotaSettings
@@ -57,6 +58,7 @@ type FakeHostSettings struct {
 func DefaultFakeHostSettings() *FakeHostSettings {
 	return &FakeHostSettings{
 		Blobs:         DefaultFakeBlobsSettings(),
+		ClockCheck:    DefaultFakeClockCheckSettings(),
 		Redis:         DefaultFakeRedisSettings(),
 		Tasks:         DefaultFakeTasksSettings(),
 		Quota:         DefaultFakeQuotaSettings(),
@@ -74,6 +76,7 @@ type FakeHost struct {
 	Tasks         *FakeTasks
 	Redis         *FakeRedis
 	Blobs         *FakeBlobs
+	ClockCheck    *FakeClockCheck
 	Push          *FakePush
 	ServiceClient *FakeServiceClientSource
 }
@@ -97,6 +100,7 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 		Tasks:         NewFakeTasks(clock, faults, settings.Tasks),
 		Redis:         NewFakeRedis(ctx, clock, faults, barriers, settings.Redis),
 		Blobs:         NewFakeBlobs(clock, faults, barriers, settings.Blobs),
+		ClockCheck:    NewFakeClockCheck(settings.ClockCheck),
 		Push:          NewFakePush(faults),
 		ServiceClient: NewFakeServiceClientSource(faults, settings.ServiceClient),
 	}
@@ -111,6 +115,7 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 		Tasks:         self.Tasks,
 		Redis:         self.Redis,
 		Blobs:         self.Blobs,
+		ClockCheck:    self.ClockCheck,
 		Push:          self.Push,
 		ServiceClient: self.ServiceClient,
 	}

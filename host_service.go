@@ -33,6 +33,8 @@ type ServiceHost struct {
 	Redis Redis
 	// The segment bucket and each metadata cluster's bucket, by cluster id (X13).
 	Blobs BlobStore
+	// How far this process's clock may be from true time (§19.6).
+	ClockCheck ClockCheck
 	// Server to client (X8).
 	Push Push
 	// jwt and urls for the engine's connect client.
