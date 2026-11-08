@@ -153,7 +153,7 @@ The statement a circuit proves is this vector, encoded as field elements in the 
 - `recipient_count` is 0. BDAT with no RCPT draws a refusal, an MX that then reads the chunk as commands runs the unopened body, and π3 would be satisfiable with one reply (9.4). This is also why `partRoles` refuses it, so no statement of that count has a satisfying witness;
 - `recipient_domain`, `header_from_domain`, `dkim_selector`, `envelope_domain` or `helo_name` is not RFC 5321's Domain: labels of 1 to 63 octets of letters, digits and hyphens, no hyphen at either end, 255 octets in all;
 - `message_id` is not one `@` between two non-empty runs of section 4.2's `local` set;
-- `x_ur_ref` or `feedback_id` is empty or holds an octet outside 21-7E. The edge issues both, so this is a check on itself.
+- `x_ur_ref` or `feedback_id` is not in its exact form: X-UR-Ref is `1.` then the lowercase unpadded base32 of 21 octets, 36 characters, and Feedback-ID is `n` or `b`, `:`, `c`, `p` or `t`, `:`, the lowercase unpadded base32 of the 16-octet report token, `:urnetwork`, 40 characters (§14.6; plan-SMTP-small-readings #3 and #4). Each has one spelling: base32's unused low bits are zero. The edge issues both, so this is a check on itself, and their fixed lengths are what let the sidecar declare the octet count before the mode is known (plan-SMTP-preamble-byte-count).
 
 **E1, handshake shape.** Over the relayed handshake:
 
@@ -184,6 +184,10 @@ The statement a circuit proves is this vector, encoded as field elements in the 
 Parts are accepted in `index` order. `first_record` continues from the previous part, `mode` never changes from π2 on, and `server_record_count` never falls and never exceeds what was relayed. The records a part opens are in strictly increasing `seq`: BDAT's QUIT names its own, and at one the head already holds it would stand in for that record, passing `BDAT 0 LAST` with no header block. An opened record holds at least its type octet in 1.3. A part resent under its `send_id` and `index` is idempotent. One proven again with a later `server_record_count` replaces it. Once the MX has closed, outstanding parts are moot.
 
 A verification runs with no lock held, so another part may land during it. Then only an exact resend of what landed passes, as a no-op. Anything else ends the connection and is no cut, because its order checks ran against what no longer stands.
+
+Every refusal and every cut ends the gate, whichever of E1-E3 it came from: each later call is refused, and nothing more is released for the MX, not even by a part that finishes verifying afterwards. The engine ends the connection on any error too, so this does not rest on the engine alone.
+
+The engine cannot read records, so the gate tells it when it has handed out the MAIL record, π2's first, which is when §14.7 charges the connection a unit (`MailForwarded`). Records cleared by a call that ends in a cut are never handed out, and do not count.
 
 The edge stores none of this past the connection (D-SMTP-10).
 
@@ -396,6 +400,13 @@ A sidecar must never know a trapdoor, which holds because it contributes nothing
 
 Where the bytes live is the owner's answer to `smtpproof-start-key-distribution`: keys and transcripts download on a host's first send from a public path on ur.io, with no token and no account, pinned by hash in the release. Verification makes the path need no trust. The server behind it sees which IPs fetch, which marks a prover host, so §2.8 gains a row for it. Before the first production setup the 20 shapes are cut to what M7's census justifies.
 
+**The KeySet** (`setup_keys.go`). A release's keys are one directory: `keyset.json`, which names the beacon, each domain size's phase 1 contributions, and per shape its phase 2 contributions, proving key and verifying key, each file by its SHA-256; and those files. The release pins `keyset.json` by its own SHA-256, so every file is pinned through it. A shape's name in it spells every dimension of the shape, so a changed shape is another name.
+
+- The edge runs `smtpproof/setup -out <dir> -beacon <hex>`, which is `RunSetup`: phase 1 once per domain size, phase 2 per shape, and the keys each transcript fixes, derived by the same `VerifySetupTranscript` a prover host runs. It prints the pin.
+- `NewVerifier` takes the KeySet's verifying keys, each checked against its hash. The edge ran the ceremony, so it needs no transcript check.
+- A prover host runs `KeySet.VerifyProvingKeys` once per release, at idle: for each shape it compiles the circuit from its own source, checks the transcript against it, and caches the proving key the check produced, only if it is the key `keyset.json` names. `NewProver` then loads each shape's key from that cache on first use, by its hash. A shape not yet verified, or a cached file changed since, has no keys, so its parts are refused and the host queues its mail.
+- Nothing downloads yet: a host points `OpenKeySet` at a directory. The ur.io path waits for its §2.8 row, and no release pins a KeySet until the first production setup.
+
 ## 11. Costs
 
 ### 11.1 Gates
@@ -484,21 +495,42 @@ Kept honest as the module grows. Anything not listed as built fails closed.
 
 | Piece | State |
 |---|---|
-| `tls_*.go`: the TLS client, 1.3 and 1.2, HelloRetryRequest, CertificateRequest | Built. Checked against Go's `crypto/tls` server, whose key log confirms HS and the master secret regenerate its own secrets |
+| `tls_*.go`: the TLS client, 1.3 and 1.2, HelloRetryRequest, CertificateRequest | Built. Checked against Go's `crypto/tls` server, whose key log confirms HS and the master secret regenerate its own secrets, and against RFC 8448's trace through HS, MS, SHTS, CHTS and the handshake keys, and the TLS 1.2 PRF's published vector. RFC 8448's application traffic secrets are not reproduced: no copy of the RFC was at hand to check their transcript hash. `FuzzTlsParse` runs the four parsers over one stream split at every offset and compares each ClientHello with `crypto/tls`'s reading, from a committed corpus of real flights |
 | `relation.go`: Z1-Z9 over plain Go values | Built, both versions and modes. Each check has mutated witnesses that it alone refuses |
-| `edge.go`: E1-E3 | Built, as one state machine per connection. Each check has refusals of its own, over replayed real connections |
-| `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving |
+| `edge.go`: E1-E3 | Built, as one state machine per connection that ends at its first refusal. Each check has refusals of its own, over replayed real connections. `TestEdgeInputsEqualServerKeyLog` holds Z1's inputs to the MX's own key log; `FuzzEdgeHandshake` edits real handshakes and holds the gate to its bounds and to passing nothing after a refusal; `FuzzEdgeRecordOrder` interleaves records, parts, late server records and parts proven again, and holds every message record behind coverage. `MailForwarded` tells the engine when MAIL went |
+| `prover.go`: a whole connection | Built: BDAT, DATA, pipelined or paced, a part proven again over a late ticket. It checks its own witness before proving. `Measure` proves one full later DATA part per suite with keys and holds later sends to the slowest suite's cap |
 | `circuit_*.go`: Z1-Z9 in R1CS | Built for every suite. Each gadget is tested against the standard library, and Z4-Z9 differentially against `relation.go` |
 | `backend.go`: Groth16 prove and verify | Built. One real proof of π1 runs in the ordinary tests. `TestMeasureWholeSend` has proved whole sends that the gate accepted: BDAT on all three legs and DATA on TLS 1.3 with AES (11.4) |
-| `setup.go`: the ceremony and its verification | Built and tested at small size. Never run at production size |
-| `smtp_proof.go` in the root: the injection seam | Built. `cli/` and server do not inject yet: `SmtpSender` and `smtpedgeservice` do not exist |
+| `setup.go`, `setup_keys.go`, `setup/`: the ceremony, its verification and the KeySet | Built and tested end to end on small circuits: a tampered file, another circuit's transcript, keys the transcript does not fix and a changed cache file are each refused. `TestAKeySetProvesARealEhlo` runs it at π1's real size. Never run at production size |
+| `checker/`: the public relation, written apart | Drafted from this document and DESIGN.md alone, importing nothing from this module. It passes every leg's honest BDAT and DATA connection, and names the same failing checks as the gate and `relation.go` over a set of mutations (`checker_agreement_test.go`). Written by an agent, not by an engineer outside the circuits' authorship, which §22.10 asks for |
+| `smtp_proof.go` in the root: the injection seam | Built, with `MailForwarded` and `Measure`. `cli/smtp_prover.go` builds the prover from the pinned KeySet; nothing calls it yet, and server does not inject a verifier, because `ur daemon`, `SmtpSender` and `smtpedgeservice` do not exist |
 
 Not built, each failing closed as stated:
 
-- **Keys.** Nothing loads keys into a `Prover` or `Verifier`, so both refuse every part. See section 14.
+- **Keys.** No production setup has run, so no release pins a KeySet, ur injects no prover and server no verifier, and both sides would refuse every part. The ur.io download path is not built: it waits for its §2.8 row (section 14).
 - **Late server records in a later DATA part.** Its shapes hold no server blocks, so a late ticket during a DATA body makes the part unprovable and the send fails. π3 handles one.
 - **Larger capacities.** Shapes hold a 4 KiB header block, about 10 recipients and a 2 KiB DATA part. Anything larger finds no shape and fails. `smtp_recipients_per_message` allows 100. Server blocks count records as well as octets: AES's 24 hold 12 replies only while each is under 32 octets, and replies that carry a queue or trace id run longer, so at 10 recipients such an MX finds no shape. M7's census should size these. `TestProductionShapesHoldTheSpeedGatesSends` holds D-SMTP-16's sends to the shapes on every leg.
 - **Scripted MXs for the rest of FS-31.** The scripted MX runs over `crypto/tls`, which cannot send a late ticket, a KeyUpdate or a padded record on demand. Those cases are tested at the relation and gate, not end to end.
+
+**Names.** The plan's tasks SMTP-M0-03 to SMTP-M9-25 name their Provides before the code existed; the code took these names, and where the two differ this document's are the ones that stand:
+
+| Plan's name | In the code |
+|---|---|
+| `circuitSha256Compress`, `circuitSha256` | `sha256Compress`; `sha256Padded`, `sha256Absorb`, `sha256Sum` (`circuit_sha256.go`) |
+| `circuitHmac`, `circuitHkdfExpandLabel`, `circuitTls12Prf` | `circuitHmacKey` with `sum`, `expandLabel` and `prf` (`circuit_sha256.go`, `circuit_keys.go`) |
+| `circuitWord` | `circuitWord`, with `circuitByte` (`circuit_bits.go`) |
+| `circuitAes128Block`, `circuitChacha20Block` | `aesEncrypt` over `aesExpandKey`'s round keys; `chachaBlock` (`circuit_cipher.go`) |
+| `circuitAesKeystream`, `circuitChachaKeystream`, `circuitNonce13` | `circuitKeystream`: `newCircuitKeystream` and `block`, whose nonce is the IV XOR the counter's upper 64 bits (`circuit_part.go`) |
+| `circuitXorOpen` | `openBlock` (`circuit_part.go`) |
+| `circuitKeys13`, `circuitKeys12`, `circuitSessionKeys` | `tls13CircuitKeys`, `tls12CircuitKeys`, `circuitKeys` (`circuit_keys.go`) |
+| `witnessKeys`, `newWitnessKeys`, `witnessRecords`, `witnessHeaderBlock`, `witnessReplies` | `assignWitness` over `partWitness`; `assignRecordBlocks`, `assignHeaderPublic` and `assignHeaderPrivate`, `assignServerRecords` (`circuit_part.go`, `circuit_message.go`, `circuit_replies.go`) |
+| `circuitRecords`, `circuitTemplate` | `checkPool` over `clientRecordTemplate`'s templates (`circuit_part.go`) |
+| `circuitHeaderBlock` | `checkHeaderBlockCircuit` (`circuit_message.go`) |
+| `circuitServerRecords`, `circuitReplies` | the server blocks of `partCircuit` and `checkReplies` (`circuit_part.go`, `circuit_replies.go`) |
+| `circuitTail`, `circuitDataLines` | QUIT's and the end mark's templates in `clientRecordTemplate`, and `checkBody` (`circuit_message.go`) |
+| `shapeEnvelope`, `shapeHeaders`, `shapeReplies`, `shapeBdatPi1` to `shapeBdatPi3`, `shapeDataPart` | entries of `partShapes()`, by kind and dimensions (`backend.go`) |
+| `circuitPartProver`, `circuitPartVerifier` | `groth16Backend`'s `provePart` and `verifyPart` (`backend.go`) |
+| `SmtpProverMeasure`, `Prover.Measure` | as named: the root type and `SmtpProver.Measure`, `Prover.Measure` (`prover_measure.go`) |
 
 ## 13. Readings taken
 
@@ -523,13 +555,18 @@ Each is one reading of a point DESIGN.md leaves open, followed because it change
 17. **Z9 reads its keyword inside one record** (Z9). The window holds the CRLF before the line, the line and its own CRLF, so a line at a record's edge does not count, and the sidecar, which applies the same test, sends such an MX DATA. That costs coverage, never soundness, and the census will show how many MXs write a line per record.
 18. **A header field name never starts with a dot, in either mode** (Z5.3). DATA needs it, since an MX deletes that dot. BDAT does not, but one rule is simpler, and a sidecar writing the header block has no reason to emit such a name. RFC 5322 allows one, so a message a mail client wrote that way fails the send.
 19. **The preamble's forms** (section 6). §14.5 calls these values proven and says the edge resolves `recipient_domain`, but states no syntax. The proofs mean what the design says only if a template holds one command, so the forms are refused here, whatever the engine's own gate does.
+20. **The gate ends at its first refusal** (section 6). §14.7 says a refused record or part cuts the connection, and the root's seam says an error ends it; the gate now ends itself too, so nothing is released after a refusal even where a caller would go on.
+21. **MAIL counts as forwarded when a call hands it out** (`MailForwarded`). A record cleared by a call that then cuts is returned to no caller and never written, so the unit §14.7 charges "once its MAIL record is forwarded" is not charged for it.
+22. **A host's DATA cap is the slowest suite's** (`Measure`). A later part's circuit is fixed, so its cost does not depend on what it carries: the host proves one full part per suite it holds keys for, its rate is a part's octets over the slowest suite's time, `smtp_data_proof_bytes` is that rate over §14.4's 2 h, and a host whose part takes longer than 2 minutes sends nothing in DATA mode. π1 to π3 are left out of the 2 h, a few parts' worth. `Measure` is on `SmtpProver`, since the sender that records `p/` holds only that seam.
+23. **A template no plaintext of the record's length can fill is refused as E3** (section 5). The edge refuses such a part before verifying it, so it is the gate's refusal, and the independent checker names it so too, though the relation would fail Z4 on it.
+24. **`smtpproof/setup` stays where SMTP-M9-27 puts it.** C-23 moves into `sidecarctl` the commands plans put under `bringyourctl` or `warpctl`; this one the plan puts under `smtpproof`, and the root module cannot require `smtpproof`. Its work is `RunSetup`, which `sidecarctl` could call if the owner wants it there.
 
 ## 14. Open
 
 Raised to the owner (`.stack/questions/`, one file each), and answered in `.stack/decisions/RESOLUTIONS.md`:
 
 - `smtpproof-start-shts-wire`: `SmtpHandshake{send_id = 1, shts = 2}` as `SMTP_HANDSHAKE = 0x1607`, sidecar to edge as soon as the handshake ends, answered by `SmtpHandshakeResult{code = 1}` as `0x1608`, 1 OK and 2 INVALID, on which the edge ends the connection. TLS 1.2 sends none. SMTP-M9-01 adds them to `protocol/smtp.proto`; the root's `DiscloseShts` on either side already carries them.
-- `smtpproof-start-key-distribution`: as 10.3 now states. Until SMTP-M9-27 loads a `KeySet`, no prover is injected, hosts only queue, and the verifier refuses every part.
+- `smtpproof-start-key-distribution`: as 10.3 now states. The KeySet and its loading are built; the ur.io download path waits for its §2.8 row, which is the design-records track's to add. Until a release pins a KeySet, no prover is injected, hosts only queue, and the verifier refuses every part.
 - `smtpproof-start-z1-reproof-cost`: keep D-SMTP-22 as written, measure both reference machines with SMTP-M9-32's bench, and relax the m5.large row if it misses (11.4).
 - `plan-SMTP-preamble-byte-count`: applied in `prover.go` (reading 14).
 - `plan-SMTP-data-connection-lifetime`: grants become per `ur/` service, SOCK-M9-01's, with nothing in this module.
@@ -537,6 +574,6 @@ Raised to the owner (`.stack/questions/`, one file each), and answered in `.stac
 Evidence M9 still needs, none of which this draft provides (§22.10):
 
 - two non-authors' written soundness argument;
-- a checker of the public relation written apart from the prover tree;
+- a checker of the public relation by an engineer who did not write the circuits: `checker/` is a draft of it, written apart from the prover tree but by an agent of this track;
 - D-SMTP-16's speed, coverage and interop runs on its named hardware and census MXs;
 - FS-31 and FS-123 on T2 and T3.

@@ -253,3 +253,29 @@ func TestTheCheckerImportsNothingFromTheProverTree(t *testing.T) {
 		}
 	}
 }
+
+func TestTheCheckerHoldsTheIssuedValuesToTheirSpelling(t *testing.T) {
+	preamble := func() *Preamble {
+		return &Preamble{
+			RecipientDomain: "recipient.example", RecipientCount: 1, MessageId: "a@b", HeaderFromDomain: "net.example",
+			DkimSelector: "s1", HeloName: "o1.example", EnvelopeDomain: "b.net.example",
+			XUrRef: "1.aeibceqtcqkrmfyydenbxifbukr2jjngu4", FeedbackId: "n:c:gaytemzugu3doobzhi5typj6h4:urnetwork",
+		}
+	}
+	if err := checkPreambleForms(preamble()); err != nil {
+		t.Fatalf("honest values: %v", err)
+	}
+	for name, mutate := range map[string]func(p *Preamble){
+		"a reference with a set unused bit": func(p *Preamble) { p.XUrRef = p.XUrRef[:len(p.XUrRef)-1] + "5" },
+		"a reference in upper case":         func(p *Preamble) { p.XUrRef = strings.ToUpper(p.XUrRef) },
+		"a short reference":                 func(p *Preamble) { p.XUrRef = p.XUrRef[:len(p.XUrRef)-1] },
+		"another tier":                      func(p *Preamble) { p.FeedbackId = "n:x" + p.FeedbackId[3:] },
+		"a token of 15 octets":              func(p *Preamble) { p.FeedbackId = "n:c:gaytemzugu3doobzhi5typj6:urnetwork" },
+	} {
+		value := preamble()
+		mutate(value)
+		if checkPreambleForms(value) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

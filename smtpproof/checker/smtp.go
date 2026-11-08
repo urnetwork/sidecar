@@ -74,9 +74,7 @@ func domainForm(name string) bool {
 	return true
 }
 
-// SPEC.md section 6's forms, refused before any template is built. Reading: X-UR-Ref and Feedback-ID
-// are held to octets 21-7E here, as SPEC.md states them; their exact §14.6 forms are the edge's own
-// check on itself.
+// SPEC.md section 6's forms, refused before any template is built.
 func checkPreambleForms(preamble *Preamble) error {
 	if preamble.RecipientCount == 0 {
 		return errors.New("no recipient")
@@ -93,12 +91,39 @@ func checkPreambleForms(preamble *Preamble) error {
 	if !found || strings.Contains(right, "@") || !localRun(left) || !localRun(right) {
 		return errors.New("message_id is not one @ between two runs of the local set")
 	}
-	for name, value := range map[string]string{"x_ur_ref": preamble.XUrRef, "feedback_id": preamble.FeedbackId} {
-		if value == "" || strings.IndexFunc(value, func(r rune) bool { return r < 0x21 || 0x7e < r }) >= 0 {
-			return fmt.Errorf("%s holds an octet outside 21-7E", name)
-		}
+	reference, found := strings.CutPrefix(preamble.XUrRef, "1.")
+	if !found || !base32Spelling(reference, 21) {
+		return errors.New("x_ur_ref is not 1. and the base32 of 21 octets")
+	}
+	fields := strings.Split(preamble.FeedbackId, ":")
+	if len(fields) != 4 || (fields[0] != "n" && fields[0] != "b") || (fields[1] != "c" && fields[1] != "p" && fields[1] != "t") ||
+		!base32Spelling(fields[2], 16) || fields[3] != "urnetwork" {
+		return errors.New("feedback_id is not class, tier, token and urnetwork")
 	}
 	return nil
+}
+
+// Whether a value is the one lowercase unpadded base32 spelling (RFC 4648 §6) of octetCount octets:
+// ceil(8 n / 5) characters of a-z and 2-7, the last character's unused low bits zero.
+func base32Spelling(value string, octetCount int) bool {
+	bitCount := 8 * octetCount
+	if len(value) != (bitCount+4)/5 {
+		return false
+	}
+	last := 0
+	for i := range len(value) {
+		octet := value[i]
+		switch {
+		case 'a' <= octet && octet <= 'z':
+			last = int(octet - 'a')
+		case '2' <= octet && octet <= '7':
+			last = int(octet-'2') + 26
+		default:
+			return false
+		}
+	}
+	unused := 5*len(value) - bitCount
+	return last&(1<<unused-1) == 0
 }
 
 // A non-empty run of the local set, of any length.

@@ -1276,8 +1276,8 @@ func TestMeasureShapes(t *testing.T) {
 // setup. SMTPPROOF_MEASURE names the legs to run, as tls13-aes, tls13-chacha, tls12-aes; this takes
 // minutes, so it stays out of the ordinary run. Each leg sends D-SMTP-16's BDAT case, then unless
 // SMTPPROOF_MEASURE_BDAT_ONLY is set a DATA send of the same header block and three body parts, which
-// is enough to price a part: D-SMTP-16's 100 KiB is that part's cost times the parts it takes. Its
-// output is SPEC.md 11.3's source.
+// is enough to price a part: D-SMTP-16's 100 KiB is that part's cost times the parts it takes.
+// SMTPPROOF_MEASURE_DATA_ONLY runs the DATA send alone. Its output is SPEC.md 11.4's source.
 func TestMeasureWholeSend(t *testing.T) {
 	legs := os.Getenv("SMTPPROOF_MEASURE")
 	if legs == "" {
@@ -1291,6 +1291,9 @@ func TestMeasureWholeSend(t *testing.T) {
 		modes := []uint32{partModeBdat, partModeData}
 		if os.Getenv("SMTPPROOF_MEASURE_BDAT_ONLY") != "" {
 			modes = modes[:1]
+		}
+		if os.Getenv("SMTPPROOF_MEASURE_DATA_ONLY") != "" {
+			modes = modes[1:]
 		}
 		for _, mode := range modes {
 			job, settings := testSpeedGateJob(mode)
