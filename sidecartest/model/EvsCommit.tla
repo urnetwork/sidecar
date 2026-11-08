@@ -93,6 +93,8 @@ ASSUME
     /\ FoldSize <= FoldTrigger
     /\ BaseRange + 1 <= WindowLimit - FoldSize + 1
     /\ WindowLimit < WindowMax
+    \* NoTailCheck, NoFenceRule and ResolveIgnoresPending stay for a finer model: at this one's hour
+    \* marks and without tokens no invariant can see them broken (run-tlc.sh says why).
     /\ Twin \in {"none", "StaleHorizon", "UnrecordedRefusal", "CachedRefusal", "AnswerDeletes", "GcNoFence",
                  "GcNoSecondCheck", "EvacuateBeforeIndex", "PageOutUnfolded", "NoWindowWait",
                  "FoldIgnoresWindow", "VersionRestarts", "NoPinCheck", "PinFalls", "LadderFork",

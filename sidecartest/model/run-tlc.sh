@@ -33,7 +33,8 @@ usage() {
 # seq is one writer and one instance, each push answered before the next; tiny is a window of 2
 # versions paging out one at a time, so a page-out fits in a short behavior; quiet_but holds still
 # every part a twin's rule never reaches; a Script fixes the story of a twin whose violation lies
-# past 30 steps, which open signing does not reach. Three of the model's twins have no row, since no invariant can see them:
+# past 30 steps, which open signing does not reach; Simulate runs one by random simulation where even
+# a story leaves too many interleavings to search. Three of the model's twins have no row, since no invariant can see them:
 # NoTailCheck, as the model carries nothing a tail holds (a new epoch's tokens for paths created
 # after the map's source); and NoFenceRule and ResolveIgnoresPending, as at the model's hour marks a
 # statement has lapsed (5b) before its batch is old enough to evacuate or its receipt or map too old
@@ -65,7 +66,7 @@ EvacuateBeforeIndex    ClosureHolds          $seq MaxPush=1 MaxHour=3 $(quiet_bu
 GcNoFence              GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
 GcNoSecondCheck        GcSafe                $seq MaxPush=2 MaxHour=3 MaxFaults=1 $(quiet_but gc uploads)+gitref+newrefstall
 PageOutUnfolded        NewestFound           $seq MaxPush=3 $tiny $(quiet_but)+gitref
-StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Script=X.create:X.create:D.create
+StaleHorizon           FileCas               $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Simulate=100 Traces=40000 Seed=1
 ReaderStaleHorizon     ReadsServeNewest      $seq MaxPush=3 $(quiet_but reader fold)+gitref Script=X.create:X.write:D.create
 NoIfMatchFold          NewestFound           $seq Instances={i1,i2} MaxPush=3 $(quiet_but fold)+gitref Script=X.create:X.write:D.create
 NoRetryLookup          OutcomesHold          $seq Writers={w1,w2} Instances={i1,i2} MaxPush=3 $tiny $(quiet_but fold)+gitref Script=X.create:D.create:C.create
