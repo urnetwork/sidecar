@@ -93,6 +93,8 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_BRIDGE_WITHDRAW, number: 0x1907},
 		{signedType: SignedType_SIGNED_WINDOW_DELEGATION, number: 0x1908},
 		{signedType: SignedType_SIGNED_SHARE_CERT, number: 0x1909},
+
+		{signedType: SignedType_SIGNED_SIDECAR_BINDING, number: 0x1A01},
 	}
 	for _, c := range cases {
 		if int32(c.signedType) != c.number {
