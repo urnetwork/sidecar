@@ -103,8 +103,10 @@ type SmtpProofResult struct {
 	RefusedCode string
 	// DATA mode and over the prover's smtp_data_proof_bytes, decided before MAIL (§14.5).
 	TooLarge bool
-	// Set when the declared count was BDAT's and the MX needs DATA, whose dot-stuffing makes the count
-	// this: nothing was sent past EHLO, and a new connection must declare it.
+	// Set when the mode the MX's EHLO reply selects cannot meet the declared count, BDAT's being the
+	// message's length and DATA's its dot-stuffed length. Nothing was sent past EHLO, and one new
+	// connection declares this count, after which a second mismatch is deferred
+	// (plan-SMTP-preamble-byte-count).
 	ReconnectByteCount uint64
 }
 

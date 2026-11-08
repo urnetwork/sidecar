@@ -645,16 +645,53 @@ func TestSendDataStuffsEveryLeadingDot(t *testing.T) {
 	}
 }
 
-func TestSendDataOnADeclaredStuffedCountEvenWhereChunkingIsOffered(t *testing.T) {
-	// only DATA can meet this count, so the prover does not take the MX's CHUNKING
+func TestSendAsksForANewConnectionWhenTheCountFitsOnlyData(t *testing.T) {
+	// the count does not choose the mode (plan-SMTP-preamble-byte-count): an MX offering CHUNKING gets
+	// BDAT, and a count only DATA can meet means a new connection declaring BDAT's
 	for _, leg := range testTlsLegs() {
 		job := testJob(".leading dot\r\n", "bob")
 		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
 		send := testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.ReconnectByteCount != uint64(len(job.Message)) || send.result.Mode != partModeBdat {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+		for _, command := range send.mx.seen() {
+			if !strings.HasPrefix(command, "EHLO") {
+				t.Errorf("%s: %q reached the MX", leg.name, command)
+			}
+		}
+
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, testMxDefaults(), DefaultProverSettings(), job)
 		testExpectOneTransaction(t, leg, send, job)
-		if send.result.Mode != partModeData {
+		if send.result.Mode != partModeBdat {
 			t.Errorf("%s: mode %d", leg.name, send.result.Mode)
 		}
+	}
+}
+
+func TestSendIsNeverTooLargeWhereChunkingIsOffered(t *testing.T) {
+	// a stuffed count once chose DATA here, and DATA's measured cap then called the message too_large,
+	// although BDAT carries it at any size
+	settings := DefaultProverSettings()
+	settings.DataProofBytes = 100
+	for _, leg := range testTlsLegs() {
+		job := testJob(".a leading dot\r\n"+strings.Repeat("a body line\r\n", 100), "bob")
+		job.Preamble.MessageByteCount = uint64(len(dotStuffed(job.Message)))
+		send := testRunSend(t, leg, testMxDefaults(), settings, job)
+		if send.err != nil {
+			t.Fatalf("%s: %v", leg.name, send.err)
+		}
+		if send.result.TooLarge || send.result.ReconnectByteCount != uint64(len(job.Message)) {
+			t.Errorf("%s: %+v", leg.name, send.result)
+		}
+
+		job.Preamble.MessageByteCount = send.result.ReconnectByteCount
+		send = testRunSend(t, leg, testMxDefaults(), settings, job)
+		testExpectOneTransaction(t, leg, send, job)
 	}
 }
 

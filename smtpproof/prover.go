@@ -230,19 +230,21 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 			pipelining = true
 		}
 	}
-	// the count was declared before the mode was known (plan-SMTP-preamble-byte-count). BDAT's n and
-	// DATA's stuffed count differ when a line starts with a dot: a count only DATA can meet means
-	// DATA, and a count only BDAT can meet at an MX that needs DATA means a new connection
+	// the count was declared before the mode was known, for the mode the sidecar expected
+	// (plan-SMTP-preamble-byte-count). BDAT's n is the message's length and DATA's count its stuffed
+	// length, which differ when a line starts with a dot. The mode is chosen above and never by the
+	// count: where it cannot meet the count, nothing goes past EHLO and a new connection declares this
+	// mode's, so an MX offering CHUNKING gets BDAT and is never reported too_large
 	stuffed := dotStuffed(self.job.Message)
-	declared := self.preamble.messageByteCount
-	if declared != uint64(len(self.job.Message)) {
-		mode = partModeData
+	count := uint64(len(self.job.Message))
+	if mode == partModeData {
+		count = uint64(len(stuffed))
+		if uint64(max(self.settings.DataProofBytes, 0)) < count {
+			return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
+		}
 	}
-	if mode == partModeData && uint64(max(self.settings.DataProofBytes, 0)) < uint64(len(stuffed)) {
-		return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
-	}
-	if mode == partModeData && declared != uint64(len(stuffed)) {
-		return &sidecar.SmtpProofResult{Mode: mode, ReconnectByteCount: uint64(len(stuffed))}, nil
+	if self.preamble.messageByteCount != count {
+		return &sidecar.SmtpProofResult{Mode: mode, ReconnectByteCount: count}, nil
 	}
 
 	// pi2: the envelope
