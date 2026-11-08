@@ -88,6 +88,9 @@ type SidecarSettings struct {
 	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
 	// logging at all on the sidecar_http leg.
 	Log Logger
+	// The time the Sidecar reads and waits on (clock.go). Nil, the default, is real time; a test
+	// passes sidecartest's FakeClock. connect's own timers stay real (X9).
+	Clock Clock
 }
 
 // sdk's refresh schedule (§5.4). A token refreshes at a point of its lifetime drawn from the window
