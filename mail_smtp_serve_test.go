@@ -1,9 +1,9 @@
 //go:build !js && !sidecar_http
 
-// What mailSmtpServe holds while plan-MAIL-go-smtp-fork is unanswered: a session is refused, the peer
-// gets no byte, and the connection does not outlive the call. The rows MAIL-M5-02 names for a live
-// session (no 220, EHLO answered, REQUIRETLS advertised, STARTTLS and AUTH not, Close ending it) need
-// ServeConn, so they arrive with it.
+// What mailSmtpServe holds without the fork: a server lacking its method refuses, the peer gets no
+// byte, and the connection does not outlive the call. A server with that method is a fake here, so
+// this proves the assertion and not a session. The rows MAIL-M5-02 names for a live session (no 220,
+// EHLO answered, REQUIRETLS advertised, STARTTLS and AUTH not, Close ending it) arrive with the fork.
 
 package sidecar
 
@@ -81,31 +81,86 @@ func mailSmtpServeHandshake(t *testing.T) (*tls.Conn, <-chan []byte) {
 	return server, readBytes
 }
 
-func TestMailSmtpServeRefusesAHandshakenConnection(t *testing.T) {
-	server, readBytes := mailSmtpServeHandshake(t)
-	err := mailSmtpServe(server)
-	<-readBytes
-	if !errors.Is(err, errMailSmtpServeRefused) {
-		t.Fatalf("mailSmtpServe: %v", err)
+// A server with the fork's method, as *smtp.Server will have it. Holds the conn it was given and
+// answers sessionErr.
+type testMailSmtpConnServer struct {
+	conn       *tls.Conn
+	sessionErr error
+}
+
+func (self *testMailSmtpConnServer) ServeTlsConn(conn *tls.Conn) error {
+	self.conn = conn
+	return self.sessionErr
+}
+
+// Upstream's server has Serve and no ServeTlsConn, which is what the release fixture links.
+type testMailSmtpUpstreamServer struct{}
+
+func (self *testMailSmtpUpstreamServer) Serve(listener net.Listener) error {
+	return nil
+}
+
+func TestMailSmtpServeRefusesAServerWithoutTheForksMethod(t *testing.T) {
+	for _, server := range []any{&testMailSmtpUpstreamServer{}, nil} {
+		conn, readBytes := mailSmtpServeHandshake(t)
+		err := mailSmtpServe(server, conn)
+		<-readBytes
+		if !errors.Is(err, errMailSmtpServeRefused) {
+			t.Errorf("mailSmtpServe(%T): %v", server, err)
+		}
 	}
 }
 
 // RFC 3207 §4.2: nothing may follow the handshake unprompted. io.ReadAll ending without error is the
 // close_notify, so this also shows the refusal ended the connection in order.
 func TestMailSmtpServeRefusalWritesNoByte(t *testing.T) {
-	server, readBytes := mailSmtpServeHandshake(t)
-	mailSmtpServe(server)
+	conn, readBytes := mailSmtpServeHandshake(t)
+	mailSmtpServe(&testMailSmtpUpstreamServer{}, conn)
 	if received := <-readBytes; len(received) != 0 {
 		t.Fatalf("the peer read %q", received)
 	}
 }
 
 func TestMailSmtpServeRefusalClosesTheConnection(t *testing.T) {
-	server, readBytes := mailSmtpServeHandshake(t)
-	mailSmtpServe(server)
+	conn, readBytes := mailSmtpServeHandshake(t)
+	mailSmtpServe(&testMailSmtpUpstreamServer{}, conn)
 	<-readBytes
-	if _, err := server.Write([]byte("220 mx.example\r\n")); !errors.Is(err, net.ErrClosed) {
+	if _, err := conn.Write([]byte("220 mx.example\r\n")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("a write after the refusal: %v", err)
+	}
+}
+
+func TestMailSmtpServeRunsAServerWithTheForksMethod(t *testing.T) {
+	conn, readBytes := mailSmtpServeHandshake(t)
+	server := &testMailSmtpConnServer{}
+	err := mailSmtpServe(server, conn)
+	<-readBytes
+	if err != nil {
+		t.Fatalf("mailSmtpServe: %v", err)
+	}
+	if server.conn != conn {
+		t.Fatal("the server did not get the conn")
+	}
+}
+
+// A session's error is not a refusal, so a caller can tell a server that ran from one that could not.
+func TestMailSmtpServeAnswersASessionsError(t *testing.T) {
+	conn, readBytes := mailSmtpServeHandshake(t)
+	sessionErr := errors.New("session ended")
+	err := mailSmtpServe(&testMailSmtpConnServer{sessionErr: sessionErr}, conn)
+	<-readBytes
+	if !errors.Is(err, sessionErr) || errors.Is(err, errMailSmtpServeRefused) {
+		t.Fatalf("mailSmtpServe: %v", err)
+	}
+}
+
+// The contract holds even for a server that leaves the conn open when its session ends.
+func TestMailSmtpServeClosesTheConnectionAfterASession(t *testing.T) {
+	conn, readBytes := mailSmtpServeHandshake(t)
+	mailSmtpServe(&testMailSmtpConnServer{}, conn)
+	<-readBytes
+	if _, err := conn.Write([]byte("250 ok\r\n")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("a write after the session: %v", err)
 	}
 }
 

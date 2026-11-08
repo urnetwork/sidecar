@@ -6,9 +6,10 @@
 // writes a 220, and a conn wrapped to dodge that is no longer a *tls.Conn, so TLSConnectionState fails
 // and REQUIRETLS is never advertised. Neither is a fallback.
 //
-// There is no ServeConn to call yet: plan-MAIL-go-smtp-fork asks where the patch may live, since §4.7
-// allows no replace for it. Until that is answered every session here refuses. This links no go-smtp,
-// and the signature grows what the session needs when the answer lands.
+// The root names no symbol of the fork, because §4.9's release fixture builds it with no replaces,
+// against upstream go-smtp. It asks a server for mailSmtpConnServer instead, which upstream's lacks,
+// so there a session refuses, closed (QD-193). The fork is not in the tree yet and this file links no
+// go-smtp, so today every real session refuses.
 //
 // Off the sidecar_http leg, since a page Worker reads mail and never receives it (R-MAIL-13).
 
@@ -24,10 +25,22 @@ import (
 // is never given and a second 220 is never written.
 var errMailSmtpServeRefused = errors.New("mail smtp session refused")
 
-// Runs one session on conn, whose TLS handshake is done, with no greeting first. Takes conn, which is
-// closed by the time this returns, so a refusal leaves no session open behind its caller.
-func mailSmtpServe(conn *tls.Conn) error {
-	// nothing is written before the close: a sender may read any byte as the 220 it must not get
-	conn.Close()
-	return errMailSmtpServeRefused
+// What the fork adds to *smtp.Server, over its ServeConn(conn, ServeConnOptions{AfterStartTls: true}):
+// a session on a connection whose handshake is done, with no greeting first. Returns when the session
+// ends, on Server.Close and Shutdown as Serve's connections do.
+type mailSmtpConnServer interface {
+	ServeTlsConn(conn *tls.Conn) error
+}
+
+// Runs one session on conn, whose TLS handshake is done. server is the *smtp.Server to run it on, and
+// anything without mailSmtpConnServer refuses. Takes conn, which is closed by the time this returns on
+// every path, so neither a refusal nor a session's end leaves a connection behind its caller.
+func mailSmtpServe(server any, conn *tls.Conn) error {
+	// nothing is written on a refusal: a sender may read any byte as the 220 it must not get
+	defer conn.Close()
+	connServer, ok := server.(mailSmtpConnServer)
+	if !ok {
+		return errMailSmtpServeRefused
+	}
+	return connServer.ServeTlsConn(conn)
 }
