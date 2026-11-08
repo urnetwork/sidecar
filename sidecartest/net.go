@@ -113,6 +113,7 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 	self.AddEngines(self.fakes.ServiceHost())
 	self.exchange = newNetExchange(cancelCtx, self)
 	self.capture.AddSource(self.fakes.privacyItems)
+	self.capture.AddSource(processEnvironmentItems)
 	if HooksLinked {
 		remove, err := InstallTestHooks(self.capture.AddSecret, barriers.Hit)
 		if err != nil {
