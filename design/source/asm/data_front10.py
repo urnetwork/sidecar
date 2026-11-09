@@ -57,6 +57,17 @@ _i176 = [r[0] for r in INDEX].index(176)
 INDEX[_i176] = (176, INDEX[_i176][1],
                 "Connect rounds the byte reports of phone-to-indexer search contracts up to 128 KiB, hiding up to five "
                 "search pages an hour. Amended by @@OD:188@@.")
+# Owner decision 197 amends 87's and 12's answers, which their rows note as 176's does.
+for _n, _old_end, _note in [
+        (87, "network processes hold only the keyless device role.",
+         " Amended by @@OD:197@@: every app's VPN component runs the device's IP and port forwarding, self-contained "
+         "with its own forwarding key, and nothing else of sidecar."),
+        (12, "no hosted or TEE receiver.",
+         " Amended by @@OD:197@@: Android with the VPN on is no receiver; the Android app, like the iOS app, receives "
+         "only while open.")]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert INDEX[_i][2].endswith(_old_end), _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
 assert [r[0] for r in INDEX] == list(range(1, 198))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
