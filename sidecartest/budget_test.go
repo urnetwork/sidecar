@@ -133,8 +133,8 @@ func TestParseBenchOutputNeedsBenchmem(t *testing.T) {
 	}
 }
 
-// The benchmark functions a directory's test files declare.
-func declaredBenchmarks(t *testing.T, directory string) []string {
+// The benchmark and test functions a directory's test files declare.
+func declaredMeasures(t *testing.T, directory string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(directory)
 	if err != nil {
@@ -150,7 +150,7 @@ func declaredBenchmarks(t *testing.T, directory string) []string {
 			t.Fatal(err)
 		}
 		for _, declaration := range file.Decls {
-			if function, ok := declaration.(*ast.FuncDecl); ok && function.Recv == nil && strings.HasPrefix(function.Name.Name, "Benchmark") {
+			if function, ok := declaration.(*ast.FuncDecl); ok && function.Recv == nil && (strings.HasPrefix(function.Name.Name, "Benchmark") || strings.HasPrefix(function.Name.Name, "Test")) {
 				names = append(names, function.Name.Name)
 			}
 		}
@@ -158,9 +158,9 @@ func declaredBenchmarks(t *testing.T, directory string) []string {
 	return names
 }
 
-// Each of this module's bench rows names a benchmark its package declares once its owner lands it, and
-// a row whose benchmark is not there yet reads missing, never held. The rows whose owners have landed
-// resolve now.
+// Each of this module's bench and size rows names a benchmark or size gate its package declares once
+// its owner lands it, and a row whose measure is not there yet reads missing, never held. The rows whose
+// owners have landed resolve now.
 func TestEveryBenchRowResolvesOrReadsMissing(t *testing.T) {
 	ledger, err := LoadBudgets()
 	if err != nil {
@@ -173,16 +173,16 @@ func TestEveryBenchRowResolvesOrReadsMissing(t *testing.T) {
 	top := filepath.Dir(filepath.Dir(path))
 	resolved := []string{}
 	for _, budget := range ledger.Budgets {
-		if budget.Kind != BudgetKindBench || budget.Module != "sidecar" {
+		if (budget.Kind != BudgetKindBench && budget.Kind != BudgetKindSize) || budget.Module != "sidecar" {
 			continue
 		}
-		if slices.Contains(declaredBenchmarks(t, filepath.Join(top, budget.Package)), budget.Name) {
+		if slices.Contains(declaredMeasures(t, filepath.Join(top, budget.Package)), budget.Name) {
 			resolved = append(resolved, budget.Id)
 			continue
 		}
 		t.Logf("missing, which is never a pass: %s's %s is not in %s yet (%s)", budget.Id, budget.Name, budget.Package, budget.Owner)
 	}
-	for _, id := range []string{"acl-gate-reach", "acl-gate-may-dial", "acl-gate-evs-access", "bridge-classify"} {
+	for _, id := range []string{"acl-gate-reach", "acl-gate-may-dial", "acl-gate-evs-access", "bridge-classify", "ios-extension-device-role", "page-worker-wasm"} {
 		if !slices.Contains(resolved, id) {
 			t.Errorf("%s's benchmark has landed and the row does not resolve to it", id)
 		}
