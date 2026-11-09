@@ -1,5 +1,5 @@
 // RECORD.md section 5.4's ingest, on every leg: a device with rw on a log, for a vault a consented device of its
-// author (§11.12), takes each deposit ref's deposits in version order and writes what passes into its own stream, since
+// author, for the team record a log admin's device or a designated indexer writing it (§11.12, RECORD-M6-01), takes each deposit ref's deposits in version order and writes what passes into its own stream, since
 // an owned stream takes only its sidecar's pushes (§11.8). An entry's bytes and its writer's chain stay as written:
 // only key_slot_id and key_index change, to a row of the ingester's next push's slot object (record_slot.go's
 // recordEntryReslot). Several ingesters may run.
@@ -85,7 +85,7 @@ func (self *RecordIngester) Ingest(ctx context.Context, logId Id) error {
 	self.ingestLock.Lock()
 	defer self.ingestLock.Unlock()
 	auth := self.writer.auth()
-	if !auth.Consented(logId, self.sidecarId) || !auth.Writes(logId, self.sidecarId) {
+	if !recordIngests(auth, self.sidecarId, logId) {
 		return fmt.Errorf("%w: %s", ErrRecordNotIngester, logId)
 	}
 	// what the log's streams hold, this ingester's own among them, so a leaf already written is found

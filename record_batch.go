@@ -158,9 +158,19 @@ func recordPushEntryCount(settings *SidecarRecordSettings) int {
 	return min(settings.PushEntryCount, recordSlotRowCount)
 }
 
-// How this sidecar reaches logId now, by the state's rights: its own stream as a consented writer, else deposits.
-// False when it may do neither, and its entries wait.
+// How this sidecar reaches logId now, by the state's rights: its own stream as a consented writer of a vault, or as a
+// writer of a team log, which has no owner to consent; else deposits. False when it may do neither, and its entries
+// wait.
 func recordLogMode(auth RecordAuthView, sidecarId Id, logId Id) (bool, bool) {
+	if recordIsTeamLog(auth, logId) {
+		if auth.Writes(logId, sidecarId) {
+			return false, true
+		}
+		if auth.Deposits(logId, sidecarId) && !auth.ReceiptOnly(logId, sidecarId) {
+			return true, true
+		}
+		return false, false
+	}
 	if auth.Consented(logId, sidecarId) && auth.Writes(logId, sidecarId) {
 		return false, true
 	}
