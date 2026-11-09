@@ -25,6 +25,7 @@
 package evsservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -333,7 +334,9 @@ func (self *BatchWriter) put(batch *pendingBatch) error {
 	}
 	if self.records != nil {
 		for _, place := range batch.places {
-			self.records.Put(batch.clusterId, place, batchBytes[place.GetOffset():place.GetOffset()+place.GetLength()])
+			// a copy, so a cached record pins its own bytes and not its whole batch's, which the cache's bound
+			// would not count
+			self.records.Put(batch.clusterId, place, bytes.Clone(batchBytes[place.GetOffset():place.GetOffset()+place.GetLength()]))
 		}
 	}
 	return nil

@@ -380,3 +380,25 @@ func TestReadRecordByRangeThenFromTheCache(t *testing.T) {
 		t.Errorf("a short place: %v", err)
 	}
 }
+
+// A cached record holds its own bytes, not a slice of its whole batch, so the cache's byte bound counts what it pins.
+func TestBatchCachesEachRecordApartFromItsBatch(t *testing.T) {
+	fixture := newBatchFixture(t, func(settings *EvsSettings) {
+		settings.BatchLightLoadRecordCount = 1
+	})
+	first := fixture.appendAsync("meta-1", testRecord("push-1", 100))
+	second := fixture.appendAsync("meta-1", testRecord("push-2", 100))
+	fixture.awaitAppended(2)
+	fixture.clock.Advance(20 * time.Millisecond)
+	places := []*protocol.EvsPlace{awaitResult(t, first).place, awaitResult(t, second).place}
+	for _, place := range places {
+		cached, ok := fixture.records.Get("meta-1", place)
+		if !ok || len(cached) != int(place.GetLength()) {
+			t.Fatalf("not cached: %v", place)
+		}
+		// a slice of the batch would reach to its end, past both records
+		if 2*len(cached) <= cap(cached) {
+			t.Errorf("a cached record of %d bytes pins %d", len(cached), cap(cached))
+		}
+	}
+}
