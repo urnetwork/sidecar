@@ -56,30 +56,6 @@ func testAwait[T any](t testing.TB, values <-chan T, what string) T {
 	}
 }
 
-// What Clock adds to the reassembly tests' clock: a call once a wait fires. The dispatcher schedules
-// none, so this completes the interface and no test here reaches it.
-func (self *testEnvelopeClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
-	fire := self.After(timeout)
-	stopped := make(chan struct{})
-	var done atomic.Bool
-	go func() {
-		select {
-		case <-fire:
-			if done.CompareAndSwap(false, true) {
-				function()
-			}
-		case <-stopped:
-		}
-	}()
-	return func() bool {
-		if done.CompareAndSwap(false, true) {
-			close(stopped)
-			return true
-		}
-		return false
-	}
-}
-
 // A store nothing in the dispatcher opens: PROTO-M1-04's pins are its first reader.
 type testUnusedStore struct{}
 
@@ -167,6 +143,7 @@ func testResponse(messageType protocol.MessageType, requestId uint64, flags uint
 type testSentEnvelope struct {
 	destinationId connect.Id
 	envelope      *protocol.Envelope
+	ack           connect.AckFunction
 	timeout       time.Duration
 	opts          []any
 }
@@ -266,7 +243,7 @@ func newTestRequiredClient(t testing.TB, ctx context.Context) *connect.Client {
 }
 
 // The fixture's send: records a copy, then waits at the gate if one is set.
-func (self *testSubprotocol) send(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) (bool, error) {
+func (self *testSubprotocol) send(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) (bool, error) {
 	var gate chan struct{}
 	refused := false
 	func() {
@@ -278,6 +255,7 @@ func (self *testSubprotocol) send(destinationId connect.Id, envelope *protocol.E
 	self.sent <- &testSentEnvelope{
 		destinationId: destinationId,
 		envelope:      proto.Clone(envelope).(*protocol.Envelope),
+		ack:           ack,
 		timeout:       timeout,
 		opts:          slices.Clone(opts),
 	}
@@ -643,8 +621,8 @@ func TestOtherVersionNotAnsweredWhereNothingIsAsked(t *testing.T) {
 }
 
 // Step 5 (D-PROTO-13): with no verified Hello, every request but Hello is refused UNAUTHENTICATED and
-// reaches nothing, and every response but the Hello exchange's is dropped. Hello itself passes the gate,
-// and with nothing registered for it yet it is answered UNIMPLEMENTED, so nothing opens the gate.
+// reaches nothing, and every response but the Hello exchange's is dropped. Hello itself passes the gate
+// to its check, which refuses one that does not decode, so nothing opens the gate.
 func TestNothingBeforeAVerifiedHello(t *testing.T) {
 	fixture := newTestSubprotocol(t, nil)
 	sourceId := connect.NewId()
@@ -669,11 +647,11 @@ func TestNothingBeforeAVerifiedHello(t *testing.T) {
 	hello := testRequest(protocol.MessageType_HELLO, []byte{1})
 	fixture.receive(sourceId, hello, peer)
 	sent := fixture.nextSent(t)
-	if code := sent.errorCode(t); code != protocol.ErrorCode_ERR_UNIMPLEMENTED || sent.envelope.RequestId != hello.RequestId {
+	if code := sent.errorCode(t); code != protocol.ErrorCode_ERR_INVALID_ARGUMENT || sent.envelope.RequestId != hello.RequestId {
 		t.Errorf("hello: code %v", code)
 	}
-	if err := fixture.subprotocol.ensurePeerVerified(context.Background(), sourceId); !errors.Is(err, errPeerUnverified) {
-		t.Errorf("a call to an unverified peer: err %v", err)
+	if fixture.subprotocol.peerVerified(sourceId) {
+		t.Errorf("a malformed Hello opened the gate")
 	}
 	fixture.closeBalanced(t)
 	if len(held) != 0 {
@@ -684,46 +662,42 @@ func TestNothingBeforeAVerifiedHello(t *testing.T) {
 	}
 }
 
-// The Hello exchange passes the closed gate whole: a Hello to its function, and a HelloResult or an
-// Error answering one of this side's Hellos to the response dispatch, which is how PROTO-M1-04 learns
-// the outcome of its own.
+// The Hello exchange passes the closed gate whole: a Hello to its check, which answers it, and a
+// HelloResult or an Error to the response dispatch, which drops one that echoes no request this side
+// sent; a HelloResult that is no response is refused at the gate.
 func TestHelloExchangePassesTheClosedGate(t *testing.T) {
 	fixture := newTestSubprotocol(t, nil)
 	sourceId := connect.NewId()
 	peer := testNetworkPeer("a")
-	hellos := fixture.collect(t, protocol.MessageType_HELLO)
-	responses := make(chan *subprotocolMessage, 8)
-	remove, err := fixture.subprotocol.setResponseDispatch(func(ctx context.Context, message *subprotocolMessage) {
-		responses <- testCopyMessage(message)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove()
 
 	hello := testRequest(protocol.MessageType_HELLO, []byte{1})
 	fixture.receive(sourceId, hello, peer)
-	got := testAwait(t, hellos, "hello")
-	if got.envelope.RequestId != hello.RequestId || got.sourceId != sourceId {
-		t.Errorf("hello %d from %s", got.envelope.RequestId, got.sourceId)
+	if sent := fixture.nextSent(t); sent.envelope.RequestId != hello.RequestId || sent.errorCode(t) != protocol.ErrorCode_ERR_INVALID_ARGUMENT {
+		t.Errorf("hello answered %d", sent.envelope.RequestId)
 	}
-	if !got.hasClientPublicKey || got.clientPublicKey != testClientKey("a") {
-		t.Error("hello dispatched without the C15 key Hello's check compares")
-	}
+	unrouted := fixture.subprotocol.stats.unroutedCount.Load()
 	fixture.receive(sourceId, testResponse(protocol.MessageType_HELLO_RESULT, 11, 0), peer)
 	fixture.receive(sourceId, testResponse(protocol.MessageType_ERROR, 12, EnvelopeFlagError), peer)
-	for _, want := range []uint64{11, 12} {
-		if response := testAwait(t, responses, "response"); response.envelope.RequestId != want {
-			t.Errorf("response %d, want %d", response.envelope.RequestId, want)
-		}
-	}
 	// a HelloResult that is no response is no part of the exchange
 	notResponse := testRequest(protocol.MessageType_HELLO_RESULT, nil)
 	fixture.receive(sourceId, notResponse, peer)
 	if code := fixture.nextSent(t).errorCode(t); code != protocol.ErrorCode_ERR_UNAUTHENTICATED {
 		t.Errorf("code %v", code)
 	}
+	// a second Hello rides the same worker behind the two responses, so its answer means both were
+	// dispatched
+	second := testRequest(protocol.MessageType_HELLO, []byte{1})
+	fixture.receive(sourceId, second, peer)
+	if sent := fixture.nextSent(t); sent.envelope.RequestId != second.RequestId {
+		t.Errorf("answer to %d", sent.envelope.RequestId)
+	}
 	fixture.closeBalanced(t)
+	if count := fixture.subprotocol.stats.unroutedCount.Load() - unrouted; count != 2 {
+		t.Errorf("%d responses reached the response dispatch and were dropped, want 2", count)
+	}
+	if count := fixture.subprotocol.stats.identityRefusedCount.Load(); count != 1 {
+		t.Errorf("refused %d at the gate", count)
+	}
 }
 
 // An open gate admits the frames of the session it opened under, and closes for good on another key,
@@ -746,8 +720,8 @@ func TestIdentityGateFollowsTheVerifiedKey(t *testing.T) {
 	}
 
 	fixture.verify(sourceId, "a")
-	if err := fixture.subprotocol.ensurePeerVerified(context.Background(), sourceId); err != nil {
-		t.Errorf("verified: err %v", err)
+	if !fixture.subprotocol.peerVerified(sourceId) {
+		t.Errorf("verified, and the gate reads closed")
 	}
 	if code := ping("a"); code != protocol.ErrorCode_ERR_OK {
 		t.Errorf("verified key: %v", code)
@@ -771,8 +745,8 @@ func TestIdentityGateFollowsTheVerifiedKey(t *testing.T) {
 		t.Errorf("before the cache ends: %v", code)
 	}
 	fixture.clock.Advance(time.Nanosecond)
-	if err := fixture.subprotocol.ensurePeerVerified(context.Background(), sourceId); !errors.Is(err, errPeerUnverified) {
-		t.Errorf("expired: err %v", err)
+	if fixture.subprotocol.peerVerified(sourceId) {
+		t.Errorf("expired, and the gate reads open")
 	}
 	if code := ping("c"); code != protocol.ErrorCode_ERR_UNAUTHENTICATED {
 		t.Errorf("after the cache ends: %v", code)
@@ -914,16 +888,14 @@ func TestDispatchRegistration(t *testing.T) {
 	}
 	again()
 
-	removeResponses, err := fixture.subprotocol.setResponseDispatch(function)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// the dispatcher's own: every response, Hello and Cancel
 	if _, err := fixture.subprotocol.setResponseDispatch(function); !errors.Is(err, errSubprotocolDispatchTaken) {
-		t.Errorf("second response dispatch: err %v", err)
+		t.Errorf("a second response dispatch: err %v", err)
 	}
-	removeResponses()
-	if _, err := fixture.subprotocol.setResponseDispatch(function); err != nil {
-		t.Errorf("after remove: err %v", err)
+	for _, messageType := range []protocol.MessageType{protocol.MessageType_HELLO, protocol.MessageType_CANCEL} {
+		if _, err := fixture.subprotocol.setMessageTypeDispatch(messageType, function); !errors.Is(err, errSubprotocolDispatchTaken) {
+			t.Errorf("%v: err %v", messageType, err)
+		}
 	}
 }
 

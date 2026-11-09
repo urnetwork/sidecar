@@ -514,12 +514,17 @@ func (x *BridgeShareKey) GetPublicKey() []byte {
 	return nil
 }
 
+// legacy -> pending. The sidecar's id and identity key, stored with the anchor, are how the device role knows its own
+// sign-out: only a Signed SidecarRevoke of that id, signed by that id under that key, wipes the posture back to legacy
+// (plan-SDK-pending-sidecar-id). They travel in process or over the device RPC, never to a server.
 type Pending struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NetworkId     []byte                 `protobuf:"bytes,1,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
-	GenesisSha256 []byte                 `protobuf:"bytes,2,opt,name=genesis_sha256,json=genesisSha256,proto3" json:"genesis_sha256,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	NetworkId         []byte                 `protobuf:"bytes,1,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	GenesisSha256     []byte                 `protobuf:"bytes,2,opt,name=genesis_sha256,json=genesisSha256,proto3" json:"genesis_sha256,omitempty"`
+	SidecarId         []byte                 `protobuf:"bytes,3,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
+	IdentityPublicKey []byte                 `protobuf:"bytes,4,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"` // Ed25519, 32 B
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Pending) Reset() {
@@ -562,6 +567,20 @@ func (x *Pending) GetNetworkId() []byte {
 func (x *Pending) GetGenesisSha256() []byte {
 	if x != nil {
 		return x.GenesisSha256
+	}
+	return nil
+}
+
+func (x *Pending) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *Pending) GetIdentityPublicKey() []byte {
+	if x != nil {
+		return x.IdentityPublicKey
 	}
 	return nil
 }
@@ -1809,11 +1828,14 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x0eBridgeShareKey\x12\x19\n" +
 	"\bshare_id\x18\x01 \x01(\fR\ashareId\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\x02 \x01(\fR\tpublicKey\"O\n" +
+	"public_key\x18\x02 \x01(\fR\tpublicKey\"\x9e\x01\n" +
 	"\aPending\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\fR\tnetworkId\x12%\n" +
-	"\x0egenesis_sha256\x18\x02 \x01(\fR\rgenesisSha256\"\xca\x02\n" +
+	"\x0egenesis_sha256\x18\x02 \x01(\fR\rgenesisSha256\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x03 \x01(\fR\tsidecarId\x12.\n" +
+	"\x13identity_public_key\x18\x04 \x01(\fR\x11identityPublicKey\"\xca\x02\n" +
 	"\x10WindowDelegation\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\fR\tnetworkId\x12,\n" +

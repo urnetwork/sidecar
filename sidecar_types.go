@@ -211,10 +211,35 @@ const (
 	SidecarEventErasure SidecarEventKind = "erasure"
 	// An internet send's outcome for a recipient domain changed (§14.5).
 	SidecarEventMailSend SidecarEventKind = "mail_send"
+	// A local git ref the sync engine could not move, its commits kept under the conflict ref Path names
+	// (§11.11's restart row; plan-EVS1-evs-events).
+	SidecarEventEvsConflict SidecarEventKind = "evs_conflict"
+	// An evs read or replay failed a check, named by EvsAlarm (plan-EVS1-evs-events). A head not extending a pin is
+	// head_alarm's fork instead.
+	SidecarEventEvsAlarm SidecarEventKind = "evs_alarm"
+	// A head reader re-pinned past §11.9's catch-up budget: VerifiedSince is the re-pin's time
+	// (g0-recheck-0-head-reader-read-paths#3).
+	SidecarEventEvsGap SidecarEventKind = "evs_gap"
 	// A store on this host holds a readable network credential (D-TRUST-3; plan-CORE-host-store-refusal #3),
 	// raised by an enrolled sidecar at each start and each SyncRefetchInterval. It names no path or value: `ur
 	// status` names the store's kind.
 	SidecarEventCredentialStore SidecarEventKind = "credential_store"
+)
+
+// Why an evs_alarm fired (plan-EVS1-evs-events): a closed set.
+type SidecarEvsAlarm string
+
+const (
+	// A path's newest version whose content evs does not serve (§11.7, §11.9's collected row).
+	SidecarEvsAlarmMissingSegment SidecarEvsAlarm = "missing_segment"
+	// A failed entry hash, AEAD, oid or statement.
+	SidecarEvsAlarmTamper SidecarEvsAlarm = "tamper"
+	// A version off §11.7's rule: a creation not at max(b, m) + 1, a write not at its base + 1.
+	SidecarEvsAlarmVersionRule SidecarEvsAlarm = "version_rule"
+	// A writer an hour past a path epoch's due_by_ms (§11.6).
+	SidecarEvsAlarmEpochOverdue SidecarEvsAlarm = "epoch_overdue"
+	// From M6: a stream push off its prefix rule (§16.11).
+	SidecarEvsAlarmPrefixRule SidecarEvsAlarm = "prefix_rule"
 )
 
 // A drop's state as a device reports it (§11.7).
@@ -268,14 +293,15 @@ type SidecarEvent struct {
 	GroupId *Id
 	// Membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
 	// recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer; index
-	// alarms and history_drop: the signer; search_alarm: the indexer.
+	// alarms and history_drop: the signer; search_alarm: the indexer; evs_alarm: the signer of what failed,
+	// where one is known.
 	SidecarId *Id
-	// Index alarms, search_alarm, history_drop, directory_erasure, erasure.
+	// Index alarms, search_alarm, history_drop, directory_erasure, erasure, evs_conflict, evs_alarm, evs_gap.
 	RepoId *Id
-	// Index alarms, history_drop.
+	// Index alarms, history_drop, evs_conflict, evs_alarm, evs_gap.
 	RefId *Id
 	// Index alarms: the alarmed path; history_drop: its first listed path, §18.5's Drops listing
-	// all.
+	// all; evs_conflict: the local conflict ref; evs_alarm: the path, where one is named.
 	Path string
 	// history_drop.
 	DropId *Id
@@ -301,6 +327,10 @@ type SidecarEvent struct {
 	Evidence [2][]byte
 	// erasure: its id, state and what is left (§11.12, §11.13's wait).
 	Erasure *SidecarErasure
+	// evs_alarm.
+	EvsAlarm SidecarEvsAlarm
+	// evs_gap: the newest re-pin past the catch-up budget.
+	VerifiedSince time.Time
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait

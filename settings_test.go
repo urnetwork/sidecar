@@ -168,6 +168,7 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 		HelloCacheTimeout:                10 * time.Minute,
 		MarkedKeepaliveInterval:          60 * time.Second,
 		DefaultCallTimeout:               15 * time.Second,
+		CallSendRetryInterval:            250 * time.Millisecond,
 		PeerQueueMessageCount:            64,
 		ReassemblyMaxBodyByteCount:       256 * 1024,
 		ReassemblyPeerCount:              8,

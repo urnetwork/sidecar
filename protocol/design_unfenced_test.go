@@ -810,6 +810,16 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "pad", number: 14, typeName: "bytes"},
 		question: "plan-RECORD-m6-carrier",
 	},
+	{
+		message:  "Pending",
+		field:    testFenceField{name: "sidecar_id", number: 3, typeName: "bytes"},
+		question: "plan-SDK-pending-sidecar-id",
+	},
+	{
+		message:  "Pending",
+		field:    testFenceField{name: "identity_public_key", number: 4, typeName: "bytes"},
+		question: "plan-SDK-pending-sidecar-id",
+	},
 }
 
 // One value an owner's answer adds to an enum the design fences.
