@@ -130,7 +130,9 @@ func TestIndexBucketsIgnoreAReadersSkew(t *testing.T) {
 	if !slices.Equal(first, second) {
 		t.Fatalf("placement changed between runs: %v, %v", first, second)
 	}
-	want := []indexBucketWindow{{20340, 30}, {20340, 30}, {testBoundaryDay, 30}, {20340, 30}, {testBoundaryDay, 30}, {testBoundaryDay, 30}}
+	older := indexBucketWindow{startDay: 20340, days: 30}
+	newer := indexBucketWindow{startDay: testBoundaryDay, days: 30}
+	want := []indexBucketWindow{older, older, newer, older, newer, newer}
 	if !slices.Equal(first, want) {
 		t.Errorf("placement %v, want %v", first, want)
 	}
