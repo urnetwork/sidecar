@@ -1,0 +1,299 @@
+# §22.9's conformance ledger (D-TEST-7: "conformance peers are pinned and rerun per pin change";
+# R-TEST-7; TEST-M2-17). One entry per §22.9 row, each listing that row's peers with the version each is
+# pinned at, the task and test that run them, and every run recorded. check/conformance_test.go's
+# TestConformanceLedger reads this file against design/source/sections/22-TEST.md.
+#
+# rows        one per bold row of §22.9, in its order.
+#   row       the row's bold name, as §22.9 writes it.
+#   design    the row's parenthesized peer list, verbatim. A change to §22.9's list fails the check
+#             until someone reads it and updates peers here, so a peer the design adds cannot go unseen.
+#   owners    the tasks whose tests run the row's peers.
+#   milestone the gate the row first counts at.
+#   tests     the owning tests' names, once their tasks land them; empty means no test runs the row yet,
+#             which a gate reads as missing.
+#   peers     each peer the design names, as one or more entries.
+#     peer      what the peer is.
+#     pin       the version it is pinned at: a version, never "latest". Empty with unpinned set means no
+#               owner has pinned it yet, which reads open.
+#     latest    the design asks for the newest release (§22.9's "latest"): the peer is pinned at each run,
+#               which records what it got, and no pin is set here.
+#     source    where the pin comes from.
+#     unpinned  why there is no pin yet, and who sets one.
+#     runs      each run, newest last.
+#       at      the day, yyyy-mm-dd.
+#       host    where it ran: a host this repository names, never an address.
+#       pin     the pin it ran at; a latest peer's run records got instead.
+#       got     what a latest peer resolved to on that run, a version.
+#       result  pass, fail or open. open means this host lacks the peer, which is never a pass.
+#       test    the test that ran it.
+#       commit  the sidecar commit it ran on.
+#
+# The check fails on a §22.9 row with no entry, on an entry §22.9 does not hold, on a design text that
+# no longer matches, and on a pin that changed with no run recorded at it since. A peer never run, or
+# unpinned, reads open in its report: open is never pass.
+
+rows:
+  - row: git
+    design: "2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH"
+    owners: [EVS1-M2-43]
+    milestone: M2
+    tests: []
+    peers:
+      - peer: git, as Ubuntu 22.04 ships it
+        pin: "2.34.1"
+        source: "§22.9's 2.34, Ubuntu 22.04's: jammy's git package is upstream 2.34.1"
+        runs: []
+      - peer: git, as Ubuntu 24.04 and Claude Code cloud ship it
+        pin: "2.43.0"
+        source: "§22.9's 2.43, Ubuntu 24.04's: noble's git package is upstream 2.43.0"
+        runs: []
+      - peer: git, the latest release
+        latest: true
+        runs: []
+      - peer: git for Windows
+        unpinned: "EVS1-M2-43 pins the Windows build it runs"
+        runs: []
+      - peer: git as Xcode ships it
+        unpinned: "EVS1-M2-43 pins the Xcode version it runs"
+        runs: []
+      - peer: go-git
+        pin: "v5.19.3"
+        source: "mlsinterop/go.mod's require of github.com/go-git/go-git/v5"
+        runs: []
+      - peer: JGit
+        unpinned: "EVS1-M2-43 pins the JGit release it runs"
+        runs: []
+      - peer: libgit2
+        unpinned: "EVS1-M2-43 pins the libgit2 release it runs"
+        runs: []
+      - peer: OpenSSH
+        unpinned: "EVS1-M2-43 pins the OpenSSH release its ssh transport runs against"
+        runs: []
+
+  - row: git-lfs
+    design: "3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`"
+    owners: [EVS2-M10-29]
+    milestone: M10
+    tests: []
+    peers:
+      - peer: git-lfs, as Ubuntu 22.04 ships it
+        pin: "3.0.2"
+        source: "§22.9's 3.x as Ubuntu 22.04 ships it: jammy's git-lfs package is upstream 3.0.2"
+        runs: []
+      - peer: git-lfs, as Ubuntu 24.04 ships it
+        pin: "3.4.1"
+        source: "§22.9's 3.x as Ubuntu 24.04 ships it: noble's git-lfs package is upstream 3.4.1"
+        runs: []
+      - peer: git-lfs, the latest release
+        latest: true
+        runs: []
+      - peer: git-lfs with lfs.standalonetransferagent set
+        unpinned: "EVS2-M10-29 runs it on each git-lfs pinned above and records which"
+        runs: []
+      - peer: git-lfs with GIT_LFS_SKIP_SMUDGE set
+        unpinned: "EVS2-M10-29 runs it on each git-lfs pinned above and records which"
+        runs: []
+
+  - row: Restore
+    design: "darwin on APFS; linux on ext4, xfs and an NFS mount; windows on NTFS; a FAT volume on each; symlinks on each, Windows with and without the symlink privilege"
+    owners: [MCP-M3-27]
+    milestone: M3
+    tests: []
+    peers:
+      - peer: darwin on APFS
+        unpinned: "MCP-M3-27 pins the macOS release its runner has"
+        runs: []
+      - peer: linux on ext4
+        unpinned: "MCP-M3-27 pins the kernel and e2fsprogs its runner has"
+        runs: []
+      - peer: linux on xfs
+        unpinned: "MCP-M3-27 pins the kernel and xfsprogs its runner has"
+        runs: []
+      - peer: linux on an NFS mount
+        unpinned: "MCP-M3-27 pins the NFS server and protocol version it mounts"
+        runs: []
+      - peer: windows on NTFS
+        unpinned: "MCP-M3-27 pins the Windows build its runner has"
+        runs: []
+      - peer: a FAT volume on darwin, linux and windows
+        unpinned: "MCP-M3-27 pins each system above"
+        runs: []
+      - peer: symlinks on each system, Windows with and without the symlink privilege
+        unpinned: "MCP-M3-27 pins each system above"
+        runs: []
+
+  - row: File clusters
+    design: "D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4"
+    owners: [EVSB-M2-17]
+    milestone: M2
+    tests: []
+    peers:
+      - peer: D-OPS-20's in-house MinIO build
+        unpinned: "EVSB-M2-17 pins the minio fork's sidecar commit each build runs; every build, upgrade and new cluster is a run"
+        runs: []
+
+  - row: MTAs
+    design: "Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail"
+    owners: [MAIL-M7-26, SMTP-M9-31]
+    milestone: M7
+    tests: []
+    peers:
+      - peer: Postfix at smtp_tls_security_level may
+        unpinned: "MAIL-M7-26 pins the Postfix release it runs"
+        runs: []
+      - peer: Postfix at smtp_tls_security_level dane
+        unpinned: "MAIL-M7-26 pins the Postfix release it runs"
+        runs: []
+      - peer: Exim
+        unpinned: "MAIL-M7-26 pins the Exim release it runs"
+        runs: []
+      - peer: Gmail
+        latest: true
+        runs: []
+      - peer: Outlook.com
+        latest: true
+        runs: []
+      - peer: Microsoft 365
+        latest: true
+        runs: []
+      - peer: Yahoo
+        latest: true
+        runs: []
+      - peer: iCloud
+        latest: true
+        runs: []
+      - peer: SES
+        latest: true
+        runs: []
+      - peer: Proton
+        latest: true
+        runs: []
+      - peer: Fastmail
+        latest: true
+        runs: []
+
+  - row: ZK preamble
+    design: "`smtpproof`, BDAT and DATA (owner decision 125), on D-SMTP-16's hardware; census MXs"
+    owners: [SMTP-M9-30]
+    milestone: M9
+    tests: []
+    peers:
+      - peer: smtpproof over BDAT
+        unpinned: "SMTP-M9-30 records the smtpproof commit each run proves with"
+        runs: []
+      - peer: smtpproof over DATA
+        unpinned: "SMTP-M9-30 records the smtpproof commit each run proves with"
+        runs: []
+      - peer: D-SMTP-16's hardware
+        unpinned: "SMTP-M9-30 names the host D-SMTP-16 times on"
+        runs: []
+      - peer: census MXs
+        latest: true
+        runs: []
+
+  - row: ACME
+    design: "Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL"
+    owners: [TLS-M5-15]
+    milestone: M5
+    tests: []
+    peers:
+      - peer: Pebble with 5% bad nonces
+        unpinned: "TLS-M5-15 pins the Pebble release T2 and T3 run"
+        runs: []
+      - peer: Let's Encrypt staging
+        latest: true
+        runs: []
+      - peer: Google Trust Services
+        latest: true
+        runs: []
+      - peer: ZeroSSL
+        latest: true
+        runs: []
+
+  - row: DNS
+    design: "zonemaster; Unbound, BIND, Knot Resolver; two public resolvers"
+    owners: [DNS-M5-24]
+    milestone: M5
+    tests: []
+    peers:
+      - peer: zonemaster
+        unpinned: "DNS-M5-24 pins the zonemaster release it runs"
+        runs: []
+      - peer: Unbound
+        unpinned: "DNS-M5-24 pins the Unbound release it runs"
+        runs: []
+      - peer: BIND
+        unpinned: "DNS-M5-24 pins the BIND release it runs"
+        runs: []
+      - peer: Knot Resolver
+        unpinned: "DNS-M5-24 pins the Knot Resolver release it runs"
+        runs: []
+      - peer: two public resolvers
+        latest: true
+        runs: []
+
+  - row: Browsers
+    design: "Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion"
+    owners: [SDK-M4-09]
+    milestone: M4
+    tests: []
+    peers:
+      - peer: Chrome
+        unpinned: "SDK-M4-09 pins the Chrome release it runs"
+        runs: []
+      - peer: Firefox
+        unpinned: "SDK-M4-09 pins the Firefox release it runs"
+        runs: []
+      - peer: Safari
+        unpinned: "SDK-M4-09 pins the Safari release it runs"
+        runs: []
+      - peer: curl
+        unpinned: "SDK-M4-09 pins the curl release it runs"
+        runs: []
+      - peer: Playwright on the page Worker and the native companion
+        unpinned: "SDK-M4-09 pins the Playwright release it runs"
+        runs: []
+
+  - row: Memory, size
+    design: "darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts"
+    owners: [SDK-M8-15, BRIDGE-M8-03]
+    milestone: M8
+    tests: []
+    peers:
+      - peer: darwin/arm64 under the iOS settings in T4
+        unpinned: "SDK-M8-15 pins the host and Go toolchain its cell runs"
+        runs: []
+      - peer: ios32 surrogate cells, one with a link
+        unpinned: "SDK-M8-15 and BRIDGE-M8-03 pin each cell's settings"
+        runs: []
+      - peer: §18.4's other hosts
+        unpinned: "SDK-M8-15 pins each host"
+        runs: []
+
+  - row: Index determinism
+    design: "darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari"
+    owners: [SEARCH-M10-41]
+    milestone: M10
+    tests: []
+    peers:
+      - peer: darwin/arm64
+        pin: "go1.27.3"
+        source: "D-TEST-15: one Go toolchain on every leg, go.mod's go line"
+        runs: []
+      - peer: linux/amd64 and linux/arm64
+        pin: "go1.27.3"
+        source: "D-TEST-15: one Go toolchain on every leg, go.mod's go line"
+        runs: []
+      - peer: windows/amd64
+        pin: "go1.27.3"
+        source: "D-TEST-15: one Go toolchain on every leg, go.mod's go line"
+        runs: []
+      - peer: gomobile android/arm64 and the iOS settings
+        unpinned: "SEARCH-M10-41 pins the gomobile and NDK versions SDK-M10-06's cells build with"
+        runs: []
+      - peer: js/wasm in Node
+        unpinned: "SEARCH-M10-41 pins the Node release the wasm leg runs in"
+        runs: []
+      - peer: Chrome, Firefox and Safari through Playwright
+        unpinned: "SEARCH-M10-41 pins the browsers and Playwright release it runs"
+        runs: []
