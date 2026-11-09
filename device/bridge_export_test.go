@@ -47,3 +47,23 @@ func PendingPostureStoreForTest(t testing.TB) PostureStore {
 func EmptyPostureStoreForTest() PostureStore {
 	return newMemoryPostureStore()
 }
+
+// The live pin a packet's pair holds for entry, 0 for none, without touching it.
+func (self *BridgePinTable) PairPinForTest(entry *BridgeEntryState, packet []byte) BridgeLinkId {
+	parsed, ok := bridgePinPacketOf(packet)
+	if !ok {
+		return 0
+	}
+	key1 := parsed.pairKey1 | uint64(entry.entryId)<<bridgePinEntryIdShift
+	link, _, _ := self.lookup(parsed.key0, key1, self.seconds(self.clock.Now()))
+	return link
+}
+
+// How many writes the table's slots have taken, each a sequence step of two.
+func (self *BridgePinTable) WriteCountForTest() uint64 {
+	writeCount := uint64(0)
+	for index := range self.slots {
+		writeCount += self.slots[index].sequence.Load() / 2
+	}
+	return writeCount
+}

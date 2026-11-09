@@ -27,7 +27,7 @@ type BridgeSettings struct {
 	// The same for UDP, ICMP and every other protocol: 5 min. Positive.
 	PinIdleTimeout time.Duration
 	// The least time between two writes of one pin's last-seen time, so a busy pair costs at most one atomic store a
-	// second (§17.5's record row). Non-negative; 0 writes on every packet.
+	// second (§17.5's record row). Pins keep whole seconds, so it rounds up to one; 0 is one second. Non-negative.
 	PinTouchInterval time.Duration
 
 	// How long a refusal or a connect timeout marks a link down (§17.5's health row): 30 s. A down link takes no new

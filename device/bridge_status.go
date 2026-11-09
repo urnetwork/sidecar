@@ -65,10 +65,10 @@ type BridgeStatus struct {
 	// Rows past their expiry or their drain at the last check of the clock, which stop admitting anything new.
 	ExpiredCount int
 
-	// The sender's pin table (§17.5): the pairs it holds, and the pairs routed by the hash, unpinned, because it was
-	// full (owner decision 66), since the bridge started.
+	// The sender's pin table (§17.5): the pairs it holds now, and the picks since the bridge started that found it full
+	// and routed by the hash, unpinned, refusing nothing (owner decision 66). An unpinned pair counts once a packet.
 	PinnedPairCount   int
-	UnpinnedPairCount uint64
+	UnpinnedPickCount uint64
 
 	// What the bridge waits on.
 	Waits []BridgeWait

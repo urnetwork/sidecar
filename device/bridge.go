@@ -33,6 +33,8 @@ type Bridge struct {
 	clock    Clock
 	host     BridgeHost
 	posture  *Posture
+	// the sender's pins, for every entry this bridge routes
+	pins *BridgePinTable
 
 	// the next time a row's meaning changes, zero for none; run waits on it
 	deadline *connect.MonitorValue[time.Time]
@@ -69,6 +71,7 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		clock:    settings.clock(),
 		host:     host,
 		posture:  posture,
+		pins:     NewBridgePinTable(settings),
 		deadline: connect.NewMonitorValue(time.Time{}),
 		done:     make(chan struct{}),
 	}
@@ -139,16 +142,20 @@ func (self *Bridge) run() {
 	}
 }
 
-// What the bridge has in force and what it found, at the last adopt or check of the clock.
+// What the bridge has in force and what it found, at the last adopt or check of the clock. Counts the live pins by a
+// scan, so call it off the packet path.
 func (self *Bridge) Status() BridgeStatus {
+	pinnedPairCount := self.pins.PinnedCount()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
-		State:         self.decision.State,
-		DrainingCount: self.drainingCount,
-		ExpiredCount:  self.expiredCount,
-		PostureAlarms: append([]PostureAlarm(nil), self.decision.Alarms...),
-		Alarms:        append([]BridgeAlarm(nil), self.alarms...),
+		State:             self.decision.State,
+		DrainingCount:     self.drainingCount,
+		ExpiredCount:      self.expiredCount,
+		PinnedPairCount:   pinnedPairCount,
+		UnpinnedPickCount: self.pins.UnpinnedPickCount(),
+		PostureAlarms:     append([]PostureAlarm(nil), self.decision.Alarms...),
+		Alarms:            append([]BridgeAlarm(nil), self.alarms...),
 	}
 	if self.decision.Pin != nil {
 		status.PinN = self.decision.Pin.GetVersion()
