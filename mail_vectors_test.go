@@ -1,21 +1,19 @@
 // testdata/mail/vectors.yml on every leg the root's tests run on, the sidecar_http Worker included, which is why the
 // file is embedded and why this sits in the root and not beside protocol/mail.proto: a Worker has no file system.
 // protoc wrote each message's bytes from its text, so a vector proves the wire and not this module's own encoder.
-// Its clock and order rows hold MAIL-FORMAT.md's rules until MailHlc lands (MAIL-M7-06), and its trailer rows the
-// deposit's layout until the receiver (MAIL-M7-14) writes it and ingest (MAIL-M7-15) reads it, each taking these rows
-// as its own.
+// Its clock and order rows hold MailHlcTick and MailFlagOpCompare (MAIL-M7-06), its flag merges MAIL-M7-06's merger
+// (mail_flags_test.go), and its trailer rows the deposit's layout until the receiver (MAIL-M7-14) writes it and ingest
+// (MAIL-M7-15) reads it, each taking these rows as its own.
 
 package sidecar
 
 import (
 	"bytes"
-	"cmp"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
-	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -296,16 +294,9 @@ func TestMailVectorClocks(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatal("no clocks")
 	}
-	tick := func(last uint64, nowMillis uint64) uint64 {
-		next := last
-		if last != math.MaxUint64 {
-			next = last + 1
-		}
-		return max(nowMillis<<16, next)
-	}
 	for _, item := range items {
 		last := mailVectorNumber(t, item, "last")
-		got := tick(last, mailVectorNumber(t, item, "now"))
+		got := MailHlcTick(last, mailVectorNumber(t, item, "now"))
 		if want := mailVectorNumber(t, item, "hlc"); got != want {
 			t.Errorf("after %d: %d, want %d", last, got, want)
 		}
@@ -318,37 +309,23 @@ func TestMailVectorOrders(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatal("no orders")
 	}
-	type op struct {
-		hlc       uint64
-		sidecarId []byte
-		set       bool
-	}
-	compare := func(a op, b op) int {
-		rank := func(set bool) int {
-			if set {
-				return 1
-			}
-			return 0
-		}
-		return cmp.Or(cmp.Compare(a.hlc, b.hlc), bytes.Compare(a.sidecarId, b.sidecarId), cmp.Compare(rank(a.set), rank(b.set)))
-	}
-	read := func(item mailVectorItem, side string) op {
+	read := func(item mailVectorItem, side string) *protocol.MailFlagOp {
 		sidecarId, err := hex.DecodeString(item[side+"_sidecar"])
 		if err != nil {
 			t.Fatal(err)
 		}
-		return op{hlc: mailVectorNumber(t, item, side+"_hlc"), sidecarId: sidecarId, set: item[side+"_set"] == "true"}
+		return &protocol.MailFlagOp{Hlc: mailVectorNumber(t, item, side+"_hlc"), SidecarId: sidecarId, Set: item[side+"_set"] == "true"}
 	}
 	for number, item := range items {
 		a, b := read(item, "a"), read(item, "b")
 		winner := "a"
-		if compare(a, b) < 0 {
+		if MailFlagOpCompare(a, b) < 0 {
 			winner = "b"
 		}
 		if winner != item["wins"] {
 			t.Errorf("order %d: %s won", number, winner)
 		}
-		if compare(a, b) != -compare(b, a) || compare(a, b) == 0 {
+		if MailFlagOpCompare(a, b) != -MailFlagOpCompare(b, a) || MailFlagOpCompare(a, b) == 0 {
 			t.Errorf("order %d is not total", number)
 		}
 	}
