@@ -148,11 +148,74 @@ func (s *Server) Serve(l net.Listener) error {
 	}
 }
 
+// ServeConnOptions holds the options of ServeConn.
+type ServeConnOptions struct {
+	// AfterStartTls marks a connection whose STARTTLS exchange happened
+	// before it reached the server, such as in a proxy that answered the
+	// plaintext EHLO and STARTTLS itself. The connection must be a
+	// *tls.Conn. The server sends no greeting, since after the TLS
+	// handshake the client speaks first (RFC 3207 section 4.2), and it
+	// waits for the client's EHLO.
+	AfterStartTls bool
+}
+
+// ErrServeConnNotTls is returned by ServeConn when AfterStartTls is set and
+// the connection is not a *tls.Conn.
+var ErrServeConnNotTls = errors.New("smtp: AfterStartTls needs a *tls.Conn")
+
+// ServeConn serves one connection accepted elsewhere, and returns when its
+// session ends. From the call on, the server owns c as it owns the
+// connections Serve accepts: Close closes it, Shutdown waits for it, and it
+// is closed when ServeConn returns. Once the server is closed, ServeConn
+// closes c without writing to it and returns ErrServerClosed.
+//
+// The server must come from NewServer.
+func (s *Server) ServeConn(c net.Conn, opts ServeConnOptions) error {
+	if _, isTLS := c.(*tls.Conn); opts.AfterStartTls && !isTLS {
+		c.Close()
+		return ErrServeConnNotTls
+	}
+
+	conn := newConn(c, s)
+
+	// Close and Shutdown close done before they take the lock, so either
+	// this sees done closed, or they see conn and count it in wg.
+	s.locker.Lock()
+	select {
+	case <-s.done:
+		s.locker.Unlock()
+		c.Close()
+		return ErrServerClosed
+	default:
+	}
+	s.wg.Add(1)
+	s.conns[conn] = struct{}{}
+	s.locker.Unlock()
+
+	defer s.wg.Done()
+
+	return s.serveConn(conn, !opts.AfterStartTls)
+}
+
+// ServeTlsConn serves one connection whose STARTTLS exchange happened before
+// it reached the server, as ServeConn does with AfterStartTls set. If the
+// TLS handshake has not run yet, it runs before the session starts.
+func (s *Server) ServeTlsConn(c *tls.Conn) error {
+	return s.ServeConn(c, ServeConnOptions{AfterStartTls: true})
+}
+
 func (s *Server) handleConn(c *Conn) error {
 	s.locker.Lock()
 	s.conns[c] = struct{}{}
 	s.locker.Unlock()
 
+	return s.serveConn(c, true)
+}
+
+// serveConn runs the session on c, which the caller has added to s.conns,
+// and removes it from there when the session ends. A session after
+// STARTTLS elsewhere starts without the greeting.
+func (s *Server) serveConn(c *Conn, greet bool) error {
 	defer func() {
 		c.Close()
 
@@ -173,7 +236,9 @@ func (s *Server) handleConn(c *Conn) error {
 		}
 	}
 
-	c.greet()
+	if greet {
+		c.greet()
+	}
 
 	for {
 		line, err := c.readLine()
