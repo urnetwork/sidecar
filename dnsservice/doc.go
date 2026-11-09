@@ -22,7 +22,8 @@
 //   - feed.go and snapshot_file.go, the edge's feed loop: rows applied and checked before they serve,
 //     reloads and their diffs, and the local snapshot a restart serves from.
 //   - api.go, api_feed.go and api_ready.go, the API block's internal routes: the feed, GET ready and
-//     the bearer check; feed_http.go, DnsFeed over HTTP for the edges.
+//     the bearer check; api_challenge.go, certs' DNS-01 writes through the host's DnsChallengeWriter;
+//     feed_http.go, DnsFeed over HTTP for the edges.
 //   - metrics.go, the metric families and their closed label values.
 //
 // This package never opens Postgres or Redis itself, and an edge holds neither, so with the core

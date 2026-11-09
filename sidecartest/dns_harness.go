@@ -103,6 +103,9 @@ type DnsHarnessSettings struct {
 	// The block's store. nil makes a FakeDnsStore on the Net's clock and fault queue; T3 passes
 	// dnshost.Store.
 	Store dnsservice.DnsStore
+	// certs' challenge writes through the block. nil makes a FakeDnsChallenges over the store; T3
+	// passes dnshost's, over the model.
+	Challenges dnsservice.DnsChallengeWriter
 	// Writes ApexRows to each root still at serial zero at the start, so every edge has an apex to
 	// serve and self-check.
 	SeedApex bool
@@ -197,6 +200,7 @@ type DnsHarness struct {
 	dnsSettings *dnsservice.DnsSettings
 	store       dnsservice.DnsStore
 	fakeStore   *FakeDnsStore
+	challenges  dnsservice.DnsChallengeWriter
 	gates       *FakeServiceGates
 	readyStore  *dnsHarnessReadyStore
 	transport   *dnsHarnessTransport
@@ -264,6 +268,10 @@ func NewDnsHarness(ctx context.Context, net *Net, settings *DnsHarnessSettings) 
 	if self.store == nil {
 		self.fakeStore = NewFakeDnsStore(net.Clock(), net.Faults())
 		self.store = self.fakeStore
+	}
+	self.challenges = settings.Challenges
+	if self.challenges == nil {
+		self.challenges = NewFakeDnsChallenges(self.store)
 	}
 	if err := self.makeCredentials(); err != nil {
 		return nil, err
@@ -573,6 +581,7 @@ func (self *DnsHarness) buildApi(ctx context.Context, host *sidecar.ServiceHost)
 		KeyWindow:  self.keys.releasedWindow,
 		ReadyStore: self.readyStore,
 		SoaReader:  &dnsHarnessSoaReader{harness: self},
+		Challenges: self.challenges,
 	})
 	if err != nil {
 		return nil, err
@@ -1045,6 +1054,33 @@ func (self *DnsHarness) Ready(ctx context.Context, root string, serial uint64) (
 		return nil, err
 	}
 	return answer, nil
+}
+
+// POST acme-challenge as certs: values at _acme-challenge.<name> in root, or their removal with none.
+// Returns the serial the block answers.
+func (self *DnsHarness) PutChallenge(ctx context.Context, root string, name string, values []string) (uint64, error) {
+	body, err := json.Marshal(&dnsservice.DnsChallengeRequest{Root: root, Name: name, Values: values})
+	if err != nil {
+		return 0, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, self.apiUrl+dnsservice.DnsAcmeChallengePath, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("Authorization", "Bearer "+self.classBearers[dnsservice.DnsCallerCerts])
+	response, err := (&http.Client{Transport: self.transport}).Do(request)
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("acme-challenge answered %d", response.StatusCode)
+	}
+	answer := &dnsservice.DnsChallengeAnswer{}
+	if err := json.NewDecoder(response.Body).Decode(answer); err != nil {
+		return 0, err
+	}
+	return answer.Serial, nil
 }
 
 // Stops or starts ns for root in dns_ns's stand-in, as `dns ns stop` writes it (plan-DNS-running-ns).

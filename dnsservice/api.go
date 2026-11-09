@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -216,6 +217,9 @@ type DnsApiDeps struct {
 	// Reads an NS's SOA over TCP for GET ready. nil reads every NS as not answering, so ready holds and
 	// answers waiting.
 	SoaReader DnsSoaReader
+	// certs' challenge writes through §12.6's one write path (DNS-M5-13). nil answers every challenge
+	// 503, so nothing is written around the path.
+	Challenges DnsChallengeWriter
 	// Lifecycle only. nil discards.
 	Log sidecar.Logger
 }
@@ -307,7 +311,7 @@ func NewDnsApi(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 
 // Every route the block serves. A later task adds its own list here.
 func (self *DnsApi) routes() []*dnsApiRoute {
-	return append(self.feedRoutes(), self.readyRoutes()...)
+	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes())
 }
 
 // The handler every route runs behind: the bearer's class, then the gate.
@@ -460,12 +464,15 @@ type dnsApiMetrics struct {
 	holds sidecar.MetricsCounter
 	// SOA reads of an NS, by result.
 	soaReads sidecar.MetricsCounter
+	// certs' challenge writes, by result.
+	challenges sidecar.MetricsCounter
 }
 
 func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
 	return &dnsApiMetrics{
-		refused:  metrics.Counter("urnetwork_dns_internal_refused_total", "Internal requests refused before their route, by reason.", "reason"),
-		holds:    metrics.Counter("urnetwork_dns_holds_total", "Long-polls answered, by route and end.", "route", "result"),
-		soaReads: metrics.Counter("urnetwork_dns_soa_reads_total", "SOA reads of an NS, by result.", "result"),
+		refused:    metrics.Counter("urnetwork_dns_internal_refused_total", "Internal requests refused before their route, by reason.", "reason"),
+		holds:      metrics.Counter("urnetwork_dns_holds_total", "Long-polls answered, by route and end.", "route", "result"),
+		soaReads:   metrics.Counter("urnetwork_dns_soa_reads_total", "SOA reads of an NS, by result.", "result"),
+		challenges: metrics.Counter("urnetwork_dns_challenges_total", "Challenge writes certs asked for, by result.", "result"),
 	}
 }
