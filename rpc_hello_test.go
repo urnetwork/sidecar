@@ -182,6 +182,8 @@ type testRpcSide struct {
 	presentedKey *[ed25519.PublicKeySize]byte
 	// frames carry no C15 key at all
 	presentsNoKey bool
+	// the class C13 sealed on the contract this side's frames ride; data unless a test sets another
+	contractClass connectprotocol.ContractClass
 }
 
 // The side's identity for a new side: fresh seeds and ids.
@@ -250,6 +252,7 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 		settings:      settings,
 		events:        make(chan SidecarEvent, 16),
 		cancel:        cancel,
+		contractClass: connectprotocol.ContractClass_ContractClassData,
 	}
 	copy(side.clientPublicKey[:], verified.ClientPublicKey)
 	client := newTestRequiredClient(t, ctx)
@@ -282,8 +285,8 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 	return side
 }
 
-// The Peer a frame from this side arrives with: same network, on h1, under its binding's client key
-// or the one presentedKey names.
+// The Peer a frame from this side arrives with: same network, on h1, on the contract class set, under
+// its binding's client key or the one presentedKey names.
 func (self *testRpcSide) peer() connect.Peer {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -297,9 +300,17 @@ func (self *testRpcSide) peer() connect.Peer {
 	}
 	return connect.Peer{
 		ProvideMode:   connectprotocol.ProvideMode_Network,
+		ContractClass: self.contractClass,
 		TransportType: connect.TransportTypeH1,
 		Principal:     principal,
 	}
+}
+
+// Sets the class of the contract this side's frames ride from now on, as a pair's contracts change.
+func (self *testRpcSide) setContractClass(class connectprotocol.ContractClass) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.contractClass = class
 }
 
 // The side's send: refuses while refuseCount lasts, else records the envelope and hands a copy to the
