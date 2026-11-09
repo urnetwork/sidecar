@@ -6,8 +6,8 @@
 //
 // In order: the fixed schedule; its twin, when it refuses something; the explorer's seeds over both;
 // every write's lost response, for a row on the unknown list; and a replay of every trace committed
-// for the case. Each run checks the row's invariants after every step. A failure is reported once, as
-// it happened: nothing reruns a failed attempt to see whether it passes (R-TEST-9).
+// for the case and for its twin. Each run checks the row's invariants after every step. A failure is
+// reported once, as it happened: nothing reruns a failed attempt to see whether it passes (R-TEST-9).
 //
 // T3 runs the same registration's builder through server's sidecart3, with the nightly seeds.
 
@@ -109,8 +109,13 @@ func CheckRow(ctx context.Context, registration *Registration, settings *RuleSet
 		return schedule
 	}
 
-	// the traces committed for the case, read before the explorer writes this run's own
+	// the traces committed for the case and its twin, read before the explorer writes this run's own;
+	// a twin's seeds leave theirs under the twin's name
 	traces, err := Traces(settings.SeedsDirectory, testCase.String())
+	if err != nil {
+		report.Errors = append(report.Errors, err)
+	}
+	twinTraces, err := Traces(settings.SeedsDirectory, testCase.String()+" twin")
 	if err != nil {
 		report.Errors = append(report.Errors, err)
 	}
@@ -152,6 +157,13 @@ func CheckRow(ctx context.Context, registration *Registration, settings *RuleSet
 		result := runBuilt(ctx, Replay(builder, trace), settings.Net, nil)
 		report.Replays = append(report.Replays, result)
 		report.fail(result)
+	}
+	if twin != nil {
+		for _, trace := range twinTraces {
+			result := runBuilt(ctx, Replay(twin, trace), settings.Net, nil)
+			report.Replays = append(report.Replays, result)
+			report.fail(result)
+		}
 	}
 	return report
 }
