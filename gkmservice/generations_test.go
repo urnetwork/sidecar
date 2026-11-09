@@ -265,4 +265,3 @@ func TestGkmDepositScopeReachesTheDropKeyRouteAlone(t *testing.T) {
 		t.Errorf("renewal hints an hour later: %d", count)
 	}
 }
-
