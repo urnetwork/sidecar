@@ -2,7 +2,7 @@
 // this package (fs<n>.go), registered from a package-level var, so the T2 test beside it and server's
 // T3 test run the same builder, never two hand copies (plan-TEST-small-readings reading 1):
 //
-//	var Fs2 = fault.Register("FS-2", "", []fault.Tier{fault.TierT2, fault.TierT3}, fault.Twin(fs2Refusal, fs2Disjoint))
+//	var Fs2 = Register("FS-2", "", []Tier{TierT2, TierT3}, Twin(Fs2Refusal, Fs2Disjoint))
 //
 // A registration names a row and a case the catalog holds and tiers the case runs on, or it fails,
 // and the first registration of a (row, case, tier) is the only one. Missing lists what no builder
