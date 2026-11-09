@@ -464,15 +464,22 @@ func (self *RecordDraft) check() error {
 }
 
 // The body as it will be sealed: the stored bytes, or the message marshaled once, deterministically. Held to section
-// 6.4's caps either way.
+// 6.4's caps either way, and a directory kind's to §16.11's redaction row, so no field it covers is sealed holding a
+// secret.
 func (self *RecordDraft) bodyBytes() ([]byte, error) {
 	if self.StoredBody != nil {
 		if err := RecordBodyValidateStored(self.Kind, self.StoredBody); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
 		}
+		if err := directoryRefuseUnredacted(self.Kind, nil, self.StoredBody); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
+		}
 		return bytes.Clone(self.StoredBody), nil
 	}
 	if err := RecordBodyValidate(self.Kind, self.Body); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
+	}
+	if err := directoryRefuseUnredacted(self.Kind, self.Body, nil); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
 	}
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(self.Body)

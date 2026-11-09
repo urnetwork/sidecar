@@ -9,6 +9,8 @@
 // given and redacts nothing itself, so a credential is kept out by the redactor before sealing (I-7). Bodies of the
 // kinds M6 adds (model, cost, attestation, disclosure, the log upkeep, file_event, model_call) have their caps in
 // RECORD.md sections 10 to 13 and their own tasks; until those land they pass here unchecked, and nothing writes one.
+// The directory's kinds, announce, request, decision and erasure_request, take §16.11's classes and caps from
+// directory_fields.go, a stored one through directory_decode.go's bounded decoders.
 //
 // Package-level functions are safe for concurrent use.
 
@@ -179,6 +181,10 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 	if want, ok := kind.NewBody(); ok && proto.MessageName(want) != proto.MessageName(body) {
 		return recordBodyRule(false, "kind %s takes %s, not %s", kind, proto.MessageName(want), proto.MessageName(body))
 	}
+	// the directory's kinds take §16.11's classes and caps (directory_fields.go)
+	if directory, err := directoryValidateBody(kind, body); directory {
+		return err
+	}
 	switch typed := body.(type) {
 	case *protocol.CoordinationBody:
 		return recordCoordinationValidate(kind, typed)
@@ -288,6 +294,10 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 func RecordBodyValidateStored(kind RecordKind, stored []byte) error {
 	if _, _, signed := kind.NewSignedBody(); signed {
 		return nil
+	}
+	// the directory's kinds through their bounded decoders (directory_decode.go)
+	if directory, err := directoryValidateStoredBody(kind, stored); directory {
+		return err
 	}
 	body, ok := kind.NewBody()
 	if !ok {
