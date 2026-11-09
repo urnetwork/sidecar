@@ -825,3 +825,69 @@ func caseConfigLogConcurrentAppenders(env *configLogSuiteEnv) error {
 	}
 	return nil
 }
+
+// One network's signers for a test outside the suite, server's among them: its genesis, base 1 and statements, made
+// as the suite's cases make them, on a network id of its own.
+type ConfigLogSuiteWorld struct {
+	env *configLogSuiteEnv
+}
+
+// A fresh network over cluster, whose appends the test sends to a sequencer of its own.
+func NewConfigLogSuiteWorld(ctx context.Context, cluster sidecar.BlobCluster) *ConfigLogSuiteWorld {
+	return &ConfigLogSuiteWorld{env: newConfigLogSuiteEnv(ctx, cluster, nil)}
+}
+
+// A network of networkId whose owner is ownerMemberId (its user, in a personal network) and whose first device, the
+// genesis owner, is ownerSidecarId: a route test's network and bound sidecar.
+func NewConfigLogSuiteWorldFor(ctx context.Context, cluster sidecar.BlobCluster, networkId sidecar.Id, ownerMemberId sidecar.Id, ownerSidecarId sidecar.Id) *ConfigLogSuiteWorld {
+	env := newConfigLogSuiteEnv(ctx, cluster, nil)
+	env.networkId = networkId
+	env.ownerMemberId = ownerMemberId
+	env.owner.memberId = ownerMemberId
+	env.owner.sidecarId = ownerSidecarId
+	env.signedGenesis = env.genesis(env.owner)
+	return &ConfigLogSuiteWorld{env: env}
+}
+
+// Base 1 as its first device posts it: the Signed header, the rows and the Signed Genesis.
+func (self *ConfigLogSuiteWorld) BaseOne() (signedHeader []byte, rows []byte, signedGenesis []byte) {
+	genesisChain := bridge.GenesisChain(self.env.signedGenesis)
+	rows = self.env.baseOneRows(self.env.owner)
+	return self.env.base(self.env.owner, &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}, rows, 0, 1), rows, self.env.signedGenesis
+}
+
+// The owner's MemberAdmit of a fresh member, signed at the tip the world last saw.
+func (self *ConfigLogSuiteWorld) MemberAdmit() []byte {
+	return self.env.memberAdmit()
+}
+
+// Moves the tip the world signs at to pin, as an append's answer gives it.
+func (self *ConfigLogSuiteWorld) SetTip(pin *bridge.AuthPin) {
+	self.env.tip = proto.Clone(pin).(*bridge.AuthPin)
+	self.env.clock.Advance(time.Second)
+}
+
+// The network's id.
+func (self *ConfigLogSuiteWorld) NetworkId() sidecar.Id {
+	return self.env.networkId
+}
+
+// The clock its statements are signed by, which a sequencer it appends through must share, or they expire.
+func (self *ConfigLogSuiteWorld) Clock() *FakeClock {
+	return self.env.clock
+}
+
+// The network's Signed Genesis.
+func (self *ConfigLogSuiteWorld) SignedGenesis() []byte {
+	return self.env.signedGenesis
+}
+
+// Base 1 with the genesis, through sequencer.
+func (self *ConfigLogSuiteWorld) Start(sequencer ConfigLogSequencer) error {
+	return self.env.start(sequencer)
+}
+
+// The owner's MemberAdmit of a fresh member at the tip, through sequencer.
+func (self *ConfigLogSuiteWorld) PostMemberAdmit(sequencer ConfigLogSequencer) (*bridge.AuthPin, error) {
+	return self.env.post(sequencer, self.env.memberAdmit())
+}

@@ -44,15 +44,17 @@
 (*   only under a key no ERASE destroyed.                                   *)
 (* - An ERASE is the step that destroys keys, on the content ref.           *)
 (*                                                                          *)
-(* Three rules of §11.14 as written fail here, each with a question raised *)
+(* Four rules of §11.14 as written fail here, each with a question raised  *)
 (* and held out of the passing configuration by a constant: Supersede =     *)
 (* "index" lets a journaled entry outlast the roll-up that dropped a newer  *)
 (* tombstone of its document (search-m10-07-late-journal-tombstone);        *)
 (* RollupFence = "files" lets a merge of a newer bucket race a roll-up's    *)
-(* step 4 (search-m10-07-rollup-merge-race); and MergeCompose = "newest"    *)
-(* leaves a merge nothing to compose for a stale sealed diff whose base an  *)
-(* earlier merge dropped (search-m10-07-merge-stale-diff). The cfg runs     *)
-(* each question's first option: "content", "manifests" and "composable".   *)
+(* step 4 (search-m10-07-rollup-merge-race); MergeCompose = "newest" leaves *)
+(* a merge nothing to compose for a stale sealed diff whose base an earlier *)
+(* merge dropped (search-m10-07-merge-stale-diff); and KeepBase = "all"     *)
+(* lets a backfilled full copy defeat keep-a-base while a composed diff is  *)
+(* in flight (search-m10-07-keep-base-full-copy). The cfg runs each         *)
+(* question's first option: "content", "manifests", "composable", "any".   *)
 (*                                                                          *)
 (* The lock is a fence the file CAS already backs: a second roll-up's       *)
 (* removal of the bucket's files fails on their versions, so I-EVS-12 holds *)
@@ -78,6 +80,7 @@ CONSTANTS
     Supersede,      \* "index": the design as written; "content": question search-m10-07-late-journal-tombstone
     RollupFence,    \* "files": the design as written; "manifests": question search-m10-07-rollup-merge-race
     MergeCompose,   \* "newest": the design as written; "composable": question search-m10-07-merge-stale-diff
+    KeepBase,       \* "all": the design as written; "any": question search-m10-07-keep-base-full-copy
     Still,          \* processes held still: any of "backfill", "merge", "rollup", "erase", "crash", "lapse"
     Twin            \* "none", or the rule a twin config breaks
 
@@ -102,6 +105,7 @@ ASSUME
     /\ Supersede \in {"index", "content"}
     /\ RollupFence \in {"files", "manifests"}
     /\ MergeCompose \in {"newest", "composable"}
+    /\ KeepBase \in {"all", "any"}
 
 \* The content commits, in order: each at or after its window, and each one the journaler journals
 \* unless it skips the index (an old client), left for the backfiller.
@@ -389,15 +393,21 @@ HeadCommit(w) ==
 \* The version a merge keeps of d from inputs In, given the heads' entries H: the newest, unless d's
 \* newest entries in heads, at a version no input exceeds, are all diffs with a base among the
 \* inputs, and then the oldest such base, so no merge drops a base a current head entry needs.
+\* Read so (KeepBase = "all"), a backfilled full copy of the head's version beside a writer's diff
+\* lets a merge drop the base that writer's next composed diff, built before the merge, then names:
+\* the current diff's chain no longer resolves (ChainsResolve). Question
+\* search-m10-07-keep-base-full-copy asks for a rule; "any" is its first option, the oldest base any
+\* of those newest head diffs names being kept.
 MergeVersion(In, H, d) ==
     LET top == Top(In, d)
         hTop == Top(H, d)
         hn == {e \in Of(H, d) : e.v = hTop}
+        hd == {e \in hn : e.k = "diff" /\ \E i \in Of(In, d) : i.v = e.base}
     IN  IF /\ Twin # "MergeDropsBase"
            /\ hTop >= top
-           /\ hn # {}
-           /\ \A e \in hn : e.k = "diff" /\ \E i \in Of(In, d) : i.v = e.base
-        THEN Min({e.base : e \in hn})
+           /\ hd # {}
+           /\ KeepBase = "any" \/ hd = hn
+        THEN Min({e.base : e \in hd})
         ELSE top
 
 \* The design's merge composes each document's newest input (MergeCompose = "newest"). An earlier merge

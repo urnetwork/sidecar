@@ -479,3 +479,37 @@ func TestCheckBaseRefusesWithoutForking(t *testing.T) {
 		t.Error("a refused base forked the log")
 	}
 }
+
+// A store that cannot serve a base's rows now has withheld them (§7.9's retain row): a run holding that base is
+// refused whole with ErrConfigRowsUnavailable, the gate's log neither forked nor moved, and the same run applies once
+// the rows are served.
+func TestARunWhoseBaseRowsAreWithheldIsRefusedWhole(t *testing.T) {
+	net := newTestConfigNet(t)
+	gate, err := NewConfigLogRowsOnly(testConfigLogSettings(), net.signedGenesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.ApplyRun(net.entries, net.rowsOnlySource()); err != nil {
+		t.Fatal(err)
+	}
+	held := gate.Pin()
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("before the base"))
+	net.fold(net.owner, net.n, 2)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("after the base"))
+	run := net.entries[held.GetVersion():]
+
+	withholding := ConfigRowsOnlySource(func(networkId Id, rowsSha256 []byte) ([]byte, error) {
+		return nil, errors.New("the store is away")
+	})
+	verdicts, err := gate.ApplyRun(run, withholding)
+	if !errors.Is(err, ErrConfigRowsUnavailable) || len(verdicts) != 0 {
+		t.Fatalf("a run with withheld rows: %v, %d verdicts", err, len(verdicts))
+	}
+	if gate.Fork() != nil || !proto.Equal(gate.Pin(), held) {
+		t.Fatal("withheld rows forked or moved the log")
+	}
+	verdicts, err = gate.ApplyRun(run, net.rowsOnlySource())
+	if err != nil || len(verdicts) != 3 || !proto.Equal(gate.Pin(), net.log.Pin()) {
+		t.Errorf("the run once served: %v, %d verdicts", err, len(verdicts))
+	}
+}

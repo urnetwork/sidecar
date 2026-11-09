@@ -44,6 +44,9 @@ var (
 	ErrConfigRunRefused = errors.New("config entry run refused")
 	// A log a cold start would build ends below the pin the process last held for the network: a lower n (§8.9).
 	ErrConfigBelowPin = errors.New("config log below the reader's own pin")
+	// A base in a run names rows the source cannot serve now: the run is refused whole and the log goes on, since
+	// what a reader cannot fetch is withheld, not forked (§7.9's retain row). The caller reads again later.
+	ErrConfigRowsUnavailable = errors.New("config base rows unavailable")
 )
 
 // Why a run was refused: the position, what this log holds there and what the run carried there. For a second A_n at
@@ -197,6 +200,24 @@ func (self *ConfigLog) ApplyRun(entryBytes [][]byte, rowsSource ConfigRowsSource
 	if first == state.n+1 && !bytes.Equal(run[0].entry.GetPrevChain(), state.chain[:]) {
 		return nil, refuse(&ConfigRunError{N: first, LocalChain: state.chain, HasLocalChain: true, Reason: "prev_chain is not this log's A_n"})
 	}
+	// each base's rows before any of the run applies: Apply reads a base whose rows it cannot fetch as a fork, and a
+	// store that cannot serve them now has withheld them, so the run is refused whole and read again later
+	prefetched := configPrefetchedRowsSource{rows: map[[sha256.Size]byte][]byte{}, next: rowsSource}
+	for _, runEntry := range run {
+		if runEntry.entry.GetN() <= state.n || runEntry.entry.GetKind() != bridge.AuthEntryKindBase || rowsSource == nil {
+			continue
+		}
+		_, header, err := configParseBase(runEntry.entry)
+		if err != nil || len(header.GetRowsSha256()) != sha256.Size {
+			// Apply judges it, a fork
+			continue
+		}
+		rows, err := rowsSource.Rows(self.networkId, header.GetRowsSha256())
+		if err != nil {
+			return nil, fmt.Errorf("%w: base %d: %w", ErrConfigRowsUnavailable, runEntry.entry.GetN(), err)
+		}
+		prefetched.rows[[sha256.Size]byte(header.GetRowsSha256())] = rows
+	}
 	testHookBarrier("config.run.checked", self.networkId.String())
 
 	verdicts := []ConfigVerdict{}
@@ -204,13 +225,40 @@ func (self *ConfigLog) ApplyRun(entryBytes [][]byte, rowsSource ConfigRowsSource
 		if runEntry.entry.GetN() <= state.n {
 			continue
 		}
-		verdict, err := self.Apply(runEntry.entryBytes, rowsSource)
+		verdict, err := self.Apply(runEntry.entryBytes, prefetched)
 		if err != nil {
 			return verdicts, err
 		}
 		verdicts = append(verdicts, verdict)
 	}
 	return verdicts, nil
+}
+
+// The rows a run fetched before applying, then the source's own.
+type configPrefetchedRowsSource struct {
+	rows map[[sha256.Size]byte][]byte
+	next ConfigRowsSource
+}
+
+// The fetched rows, else the source's.
+func (self configPrefetchedRowsSource) Rows(networkId Id, rowsSha256 []byte) ([]byte, error) {
+	if len(rowsSha256) == sha256.Size {
+		if rows, found := self.rows[[sha256.Size]byte(rowsSha256)]; found {
+			return rows, nil
+		}
+	}
+	if self.next == nil {
+		return nil, errors.New("no rows source")
+	}
+	return self.next.Rows(networkId, rowsSha256)
+}
+
+// The source's check.
+func (self configPrefetchedRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
+	if self.next == nil {
+		return nil, errors.New("no config head reader")
+	}
+	return self.next.CheckHead(check)
 }
 
 // A rows source for a reader that opens no config head: Rows from the function given, CheckHead refused, which a
