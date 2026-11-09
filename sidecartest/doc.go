@@ -42,6 +42,9 @@
 //     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
 //   - fault, the FS schedule runner (§22.8), with catalog.yml, §22.8's rows and §23.6's gates, and
 //     §22.8's rules across runs: twins, every write's lost response, the explorer and replays.
+//   - load, §22.8's harness conventions: an open-loop driver, the one report shape, and a sampler of
+//     heap, goroutines and Redis keys; testdata/targets.yml is R-TEST-7's ledger of what each run shows,
+//     which targets_test.go holds.
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
 package sidecartest
