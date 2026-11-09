@@ -233,6 +233,7 @@ type recordWriter struct {
 	adoptedLogs map[Id]bool
 }
 
+// A writer over args, reading nothing until its first Append or pump.
 func newRecordWriter(args *SidecarRecordArgs) *recordWriter {
 	streams := args.Streams
 	if streams == nil {
@@ -291,6 +292,7 @@ func (self *recordWriter) boundStreams() RecordStreams {
 	return self.streams
 }
 
+// SidecarRecord.Bind's: a new binding lets every log adopt again, and wakes the loop.
 func (self *recordWriter) bind(streams RecordStreams, auth func() RecordAuthView) {
 	func() {
 		self.stateLock.Lock()
@@ -307,6 +309,7 @@ func (self *recordWriter) bind(streams RecordStreams, auth func() RecordAuthView
 	self.signal()
 }
 
+// SidecarRecord.SetSpoolHandlers'.
 func (self *recordWriter) setSpoolHandlers(taint func(id SpoolRecordId, record *SpoolRecord) error, other func(id SpoolRecordId, record *SpoolRecord) error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

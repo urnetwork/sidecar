@@ -28,6 +28,7 @@ func NewRecordComponent(record *SidecarRecord) SidecarComponent {
 	return &recordComponent{record: record}
 }
 
+// The record's own name, its keychain namespace and directory.
 func (self *recordComponent) Name() string {
 	return recordComponentName
 }

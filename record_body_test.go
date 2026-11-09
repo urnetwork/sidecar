@@ -50,32 +50,32 @@ func TestRecordBodyCapsAtAndPastEachLimit(t *testing.T) {
 		at   proto.Message
 		past proto.Message
 	}{
-		{"claim text", RecordKindClaim, &protocol.CoordinationBody{Text: strings.Repeat("a", 512)}, &protocol.CoordinationBody{Text: strings.Repeat("a", 513)}},
-		{"note text", RecordKindNote, &protocol.CoordinationBody{Text: strings.Repeat("a", 1024)}, &protocol.CoordinationBody{Text: strings.Repeat("a", 1025)}},
-		{"targets", RecordKindNote, &protocol.CoordinationBody{Targets: testRecordStrings(16, 8)}, &protocol.CoordinationBody{Targets: testRecordStrings(17, 8)}},
-		{"check result", RecordKindCheck, &protocol.CoordinationBody{Result: 3}, &protocol.CoordinationBody{Result: 4}},
-		{"title", RecordKindContext, &protocol.ContextBody{Stage: 1, Title: strings.Repeat("t", 120)}, &protocol.ContextBody{Stage: 1, Title: strings.Repeat("t", 121)}},
-		{"session ids", RecordKindContext, &protocol.ContextBody{Stage: 1, SessionIds: testRecordStrings(4, 64)}, &protocol.ContextBody{Stage: 1, SessionIds: testRecordStrings(5, 64)}},
-		{"session id length", RecordKindContext, &protocol.ContextBody{Stage: 2, SessionIds: testRecordStrings(1, 64)}, &protocol.ContextBody{Stage: 2, SessionIds: testRecordStrings(1, 65)}},
-		{"agent label", RecordKindContext, &protocol.ContextBody{Stage: 1, AgentLabel: strings.Repeat("a", 64)}, &protocol.ContextBody{Stage: 1, AgentLabel: "Agent"}},
-		{"branch", RecordKindContext, &protocol.ContextBody{Stage: 1, Branch: strings.Repeat("b", 128)}, &protocol.ContextBody{Stage: 1, Branch: strings.Repeat("b", 129)}},
-		{"truncations", RecordKindContext, &protocol.ContextBody{Stage: 1, Truncations: testRecordStrings(16, 128)}, &protocol.ContextBody{Stage: 1, Truncations: testRecordStrings(17, 128)}},
-		{"commits", RecordKindChange, &protocol.ChangeBody{Commits: testRecordStrings(64, 40)}, &protocol.ChangeBody{Commits: testRecordStrings(65, 40)}},
-		{"changed paths", RecordKindChange, &protocol.ChangeBody{Paths: make([]*protocol.ChangedPath, 4096)}, &protocol.ChangeBody{Paths: make([]*protocol.ChangedPath, 4097)}},
-		{"tool name", RecordKindPermission, &protocol.PermissionBody{ToolName: strings.Repeat("t", 64)}, &protocol.PermissionBody{ToolName: strings.Repeat("t", 65)}},
-		{"read objects", RecordKindRead, &protocol.ReadBody{Purpose: 1, ObjectIds: testRecordByteStrings(64, 16)}, &protocol.ReadBody{Purpose: 1, ObjectIds: testRecordByteStrings(65, 16)}},
-		{"read object length", RecordKindRead, &protocol.ReadBody{Purpose: 2, ObjectIds: testRecordByteStrings(1, 32)}, &protocol.ReadBody{Purpose: 2, ObjectIds: testRecordByteStrings(1, 20)}},
-		{"erased entries", RecordKindErasure, &protocol.ErasureBody{ErasureId: NewId().Bytes(), Reason: 1, EntryIds: testRecordByteStrings(1024, 16)}, &protocol.ErasureBody{ErasureId: NewId().Bytes(), Reason: 1, EntryIds: testRecordByteStrings(1025, 16)}},
-		{"inventory agents", RecordKindInventory, &protocol.InventoryBody{Agents: make([]*protocol.InventoryAgent, 64)}, &protocol.InventoryBody{Agents: make([]*protocol.InventoryAgent, 65)}},
-		{"restored paths", RecordKindRestore, &protocol.RestoreBody{RestoredRunId: NewId().Bytes(), Paths: make([]*protocol.RestoredPath, 4096)}, &protocol.RestoreBody{RestoredRunId: NewId().Bytes(), Paths: make([]*protocol.RestoredPath, 4097)}},
-		{"transcript", RecordKindTranscript, &protocol.TranscriptBody{Lines: make([]byte, 1024*1024)}, &protocol.TranscriptBody{Lines: make([]byte, 1024*1024+1)}},
-		{"tool call", RecordKindToolCall, &protocol.ToolCallBody{Input: make([]byte, 512*1024), Output: make([]byte, 512*1024)}, &protocol.ToolCallBody{Input: make([]byte, 512*1024), Output: make([]byte, 512*1024+1)}},
-		{"tool paths", RecordKindToolCall, &protocol.ToolCallBody{Paths: testRecordStrings(256, 4)}, &protocol.ToolCallBody{Paths: testRecordStrings(257, 4)}},
-		{"hook payload", RecordKindHookEvent, &protocol.HookEventBody{Payload: make([]byte, 1024*1024)}, &protocol.HookEventBody{Payload: make([]byte, 1024*1024+1)}},
-		{"blob", RecordKindBlob, &protocol.BlobBody{Content: make([]byte, 8*1024*1024)}, &protocol.BlobBody{Content: make([]byte, 8*1024*1024+1)}},
-		{"copy", RecordKindCopy, &protocol.CopyBody{Entries: make([]*protocol.Opening, 64)}, &protocol.CopyBody{Entries: make([]*protocol.Opening, 65)}},
-		{"membership evidence", RecordKindMembership, &protocol.MembershipBody{Event: 2, Evidence: 1, Assertion: []byte{1}}, &protocol.MembershipBody{Event: 2, Evidence: 1}},
-		{"coverage gap", RecordKindCoverage, &protocol.Coverage{Gaps: []string{"no_vault:2"}}, &protocol.Coverage{Gaps: []string{"no_vault /home/a"}}},
+		{name: "claim text", kind: RecordKindClaim, at: &protocol.CoordinationBody{Text: strings.Repeat("a", 512)}, past: &protocol.CoordinationBody{Text: strings.Repeat("a", 513)}},
+		{name: "note text", kind: RecordKindNote, at: &protocol.CoordinationBody{Text: strings.Repeat("a", 1024)}, past: &protocol.CoordinationBody{Text: strings.Repeat("a", 1025)}},
+		{name: "targets", kind: RecordKindNote, at: &protocol.CoordinationBody{Targets: testRecordStrings(16, 8)}, past: &protocol.CoordinationBody{Targets: testRecordStrings(17, 8)}},
+		{name: "check result", kind: RecordKindCheck, at: &protocol.CoordinationBody{Result: 3}, past: &protocol.CoordinationBody{Result: 4}},
+		{name: "title", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, Title: strings.Repeat("t", 120)}, past: &protocol.ContextBody{Stage: 1, Title: strings.Repeat("t", 121)}},
+		{name: "session ids", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, SessionIds: testRecordStrings(4, 64)}, past: &protocol.ContextBody{Stage: 1, SessionIds: testRecordStrings(5, 64)}},
+		{name: "session id length", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 2, SessionIds: testRecordStrings(1, 64)}, past: &protocol.ContextBody{Stage: 2, SessionIds: testRecordStrings(1, 65)}},
+		{name: "agent label", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, AgentLabel: strings.Repeat("a", 64)}, past: &protocol.ContextBody{Stage: 1, AgentLabel: "Agent"}},
+		{name: "branch", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, Branch: strings.Repeat("b", 128)}, past: &protocol.ContextBody{Stage: 1, Branch: strings.Repeat("b", 129)}},
+		{name: "truncations", kind: RecordKindContext, at: &protocol.ContextBody{Stage: 1, Truncations: testRecordStrings(16, 128)}, past: &protocol.ContextBody{Stage: 1, Truncations: testRecordStrings(17, 128)}},
+		{name: "commits", kind: RecordKindChange, at: &protocol.ChangeBody{Commits: testRecordStrings(64, 40)}, past: &protocol.ChangeBody{Commits: testRecordStrings(65, 40)}},
+		{name: "changed paths", kind: RecordKindChange, at: &protocol.ChangeBody{Paths: make([]*protocol.ChangedPath, 4096)}, past: &protocol.ChangeBody{Paths: make([]*protocol.ChangedPath, 4097)}},
+		{name: "tool name", kind: RecordKindPermission, at: &protocol.PermissionBody{ToolName: strings.Repeat("t", 64)}, past: &protocol.PermissionBody{ToolName: strings.Repeat("t", 65)}},
+		{name: "read objects", kind: RecordKindRead, at: &protocol.ReadBody{Purpose: 1, ObjectIds: testRecordByteStrings(64, 16)}, past: &protocol.ReadBody{Purpose: 1, ObjectIds: testRecordByteStrings(65, 16)}},
+		{name: "read object length", kind: RecordKindRead, at: &protocol.ReadBody{Purpose: 2, ObjectIds: testRecordByteStrings(1, 32)}, past: &protocol.ReadBody{Purpose: 2, ObjectIds: testRecordByteStrings(1, 20)}},
+		{name: "erased entries", kind: RecordKindErasure, at: &protocol.ErasureBody{ErasureId: NewId().Bytes(), Reason: 1, EntryIds: testRecordByteStrings(1024, 16)}, past: &protocol.ErasureBody{ErasureId: NewId().Bytes(), Reason: 1, EntryIds: testRecordByteStrings(1025, 16)}},
+		{name: "inventory agents", kind: RecordKindInventory, at: &protocol.InventoryBody{Agents: make([]*protocol.InventoryAgent, 64)}, past: &protocol.InventoryBody{Agents: make([]*protocol.InventoryAgent, 65)}},
+		{name: "restored paths", kind: RecordKindRestore, at: &protocol.RestoreBody{RestoredRunId: NewId().Bytes(), Paths: make([]*protocol.RestoredPath, 4096)}, past: &protocol.RestoreBody{RestoredRunId: NewId().Bytes(), Paths: make([]*protocol.RestoredPath, 4097)}},
+		{name: "transcript", kind: RecordKindTranscript, at: &protocol.TranscriptBody{Lines: make([]byte, 1024*1024)}, past: &protocol.TranscriptBody{Lines: make([]byte, 1024*1024+1)}},
+		{name: "tool call", kind: RecordKindToolCall, at: &protocol.ToolCallBody{Input: make([]byte, 512*1024), Output: make([]byte, 512*1024)}, past: &protocol.ToolCallBody{Input: make([]byte, 512*1024), Output: make([]byte, 512*1024+1)}},
+		{name: "tool paths", kind: RecordKindToolCall, at: &protocol.ToolCallBody{Paths: testRecordStrings(256, 4)}, past: &protocol.ToolCallBody{Paths: testRecordStrings(257, 4)}},
+		{name: "hook payload", kind: RecordKindHookEvent, at: &protocol.HookEventBody{Payload: make([]byte, 1024*1024)}, past: &protocol.HookEventBody{Payload: make([]byte, 1024*1024+1)}},
+		{name: "blob", kind: RecordKindBlob, at: &protocol.BlobBody{Content: make([]byte, 8*1024*1024)}, past: &protocol.BlobBody{Content: make([]byte, 8*1024*1024+1)}},
+		{name: "copy", kind: RecordKindCopy, at: &protocol.CopyBody{Entries: make([]*protocol.Opening, 64)}, past: &protocol.CopyBody{Entries: make([]*protocol.Opening, 65)}},
+		{name: "membership evidence", kind: RecordKindMembership, at: &protocol.MembershipBody{Event: 2, Evidence: 1, Assertion: []byte{1}}, past: &protocol.MembershipBody{Event: 2, Evidence: 1}},
+		{name: "coverage gap", kind: RecordKindCoverage, at: &protocol.Coverage{Gaps: []string{"no_vault:2"}}, past: &protocol.Coverage{Gaps: []string{"no_vault /home/a"}}},
 	}
 	for _, c := range cases {
 		// nil slots in a repeated message field marshal as empty messages: fill them
@@ -150,7 +150,7 @@ func TestRecordProjectForTeamHoldsNoVaultField(t *testing.T) {
 		kind RecordKind
 		body proto.Message
 	}{
-		{RecordKindContext, &protocol.ContextBody{
+		{kind: RecordKindContext, body: &protocol.ContextBody{
 			Stage:            1,
 			Harness:          "claude-code",
 			Title:            secrets[0],
@@ -159,12 +159,12 @@ func TestRecordProjectForTeamHoldsNoVaultField(t *testing.T) {
 			Truncations:      []string{secrets[1] + " cut at 1 MiB"},
 			InstructionFiles: []*protocol.InstructionFile{{Scope: 3, Name: secrets[4], Sha256: hash, Size: 10}},
 		}},
-		{RecordKindChange, &protocol.ChangeBody{
+		{kind: RecordKindChange, body: &protocol.ChangeBody{
 			Project: secrets[5],
 			Paths:   []*protocol.ChangedPath{{Path: secrets[1], BeforeSha256: hash, AfterSha256: hash, Attribution: 1, BlobEntryId: NewId().Bytes()}},
 		}},
-		{RecordKindPermission, &protocol.PermissionBody{Decision: 2, ToolName: secrets[3], ArgumentsSha256: hash}},
-		{RecordKindRestore, &protocol.RestoreBody{RestoredRunId: NewId().Bytes(), Paths: []*protocol.RestoredPath{{Path: secrets[1], Result: "restored"}}}},
+		{kind: RecordKindPermission, body: &protocol.PermissionBody{Decision: 2, ToolName: secrets[3], ArgumentsSha256: hash}},
+		{kind: RecordKindRestore, body: &protocol.RestoreBody{RestoredRunId: NewId().Bytes(), Paths: []*protocol.RestoredPath{{Path: secrets[1], Result: "restored"}}}},
 	}
 	for _, item := range bodies {
 		before, _ := proto.Marshal(item.body)
