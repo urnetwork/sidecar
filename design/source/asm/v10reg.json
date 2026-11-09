@@ -30,7 +30,8 @@
   "D-MAIL-14": "Receivers seal bounded reception-time authentication evidence in the deposit; readers label, score and forward from it, never from later DNS.",
   "D-TEST-10": "Every state machine of §7-§21 is tested by deterministic fault schedules against FI-1 to FI-30, beside TLA+ and Porcupine checks.",
   "D-EVS-12": "11.6-11.7's token tree, re-keyed at once on removal or compromise, else within 24 h or, deferred, once a source drops.",
-  "D-TEST-17": "FS-86 gates the directory against 16.11's cost table: its M6 case at M6's Gn-out, its card case later."
+  "D-TEST-17": "FS-86 gates the directory against 16.11's cost table: its M6 case at M6's Gn-out, its card case later.",
+  "D-SDK-1": "Two roles: the sidecar role in the app or `ur daemon`; only forwarding, with its own key, in VPN components."
  },
  "Q": {
   "Q-EVS-24": [
@@ -40,6 +41,14 @@
   "Q-PROTO-4": [
    "Should connect keep remote search's byte totals per contract, which show roughly how many search pages ran in each contract hour?",
    "(b), owner decisions 176, 188, 191: marked pairs report windows at a 256 KiB floor."
+  ],
+  "Q-SDK-2": [
+   "Where does the sidecar run beside a network process (PLAN.md:28, :31)?",
+   "(a), amended by owner decision 197: VPN components run forwarding only, self-contained."
+  ],
+  "Q-MAIL-2": [
+   "[X6 residual] Which devices receive mail?",
+   "Always-on receivers; the iOS and Android apps receive only while open (owner decision 197)."
   ]
  }
 }

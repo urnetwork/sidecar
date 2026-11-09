@@ -910,6 +910,21 @@ The owner answered the questions HANDOFF.md left for them, and those the build r
     - Not taken: moving those changes later.
     - Raised by HANDOFF.md section 10.
 
+## Building the apps' integration: owner question (2026-11-09)
+
+197. **Q-SDK-2, amended: the apps' network extensions run only IP and port forwarding, always on and self-contained.**
+    - Question: owner decision 87 put a keyless device role in network processes (the iOS tunnel, the desktop VPN service). It enforces the bridge rules and names its sidecar role compiles, gets each link's signed `WindowDelegation` from that role, and waits for it to build new links. On Android both roles share the app's process, so mail, sockets, search and file sync ran in the background while the VPN ran. Which parts of sidecar belong in the apps' network extension, and how independent of the app should they be?
+    - Answer, in the owner's words: "On the apps, the only part of sidecar that i want to push into the network extension is the ip and port forwarding. I want that to be always on with the network extension." Asked the points that left open, the owner chose:
+      1. Self-contained: forwarding runs fully inside the extension, with its own forwarding key, and takes rule changes directly, so it never waits on the app. Nothing else of sidecar goes in.
+      2. All of the device's forwarding: its overlay IP address (§17.4), port forwards into the device (§17.6's port mapping), routes to other devices' subnets (§17.7), and advertising its own subnet.
+      3. Every app's VPN component: Apple's network extension on iOS and macOS, Android's VPN service, and the Windows and Linux app services.
+      4. On Android, mail, sockets, search and file sync (evs) run only while the app is open, as on iOS.
+    - "Always on" means that whenever the VPN component runs, forwarding runs; no setting turns it off.
+    - Owner decision 87 still holds for everything but forwarding: the iOS app and the desktop `ur daemon` host the sidecar. Point 4 also amends owner decision 12: Android with the VPN on is no longer an always-on receiver, so an Android app is no mail indexer (owner decision 150).
+    - Cost: the VPN component follows the config repo and compiles its rules itself, so it links the sidecar's config follower, policy engine and bridge compiler, which today's 1 MiB budget for the iOS tunnel cannot hold; each app device keeps a forwarding key, a forwarding Delegation in the authorization log and a forwarding client; Android-only users, like iOS-only users, receive mail only while the app is open.
+    - Not taken: keeping the keyless device role, where the extension forwards with the rules and signed links the app last gave it and new links wait for the app; Apple's extension only; keeping Android's mail, sockets, search and file sync running in the background with the VPN.
+    - Raised in planning the apps' integration (the build's ledger, QD-597).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.
