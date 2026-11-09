@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // RECORD-M6-12's fake and real views on one fixture: sidecartest's FakeDirectoryAuth, written from what the shared
 // network's log holds, answers every directory question as NewDirectoryAuthView does over TEAM's ConfigState, so a
 // test on the fake judges what a reader judges. The log is folded past retention first, so positions before the tip

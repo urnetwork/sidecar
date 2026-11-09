@@ -260,6 +260,7 @@ func directoryAuthError(err error) error {
 	return err
 }
 
+// The state's (n, A_n).
 func (self *configDirectoryAuth) Pin() *bridge.AuthPin {
 	return self.state.Pin()
 }
@@ -276,6 +277,7 @@ func (self *configDirectoryAuth) stateAt(pin *bridge.AuthPin) (*ConfigState, err
 	return state, nil
 }
 
+// The view over StateAt's state at pin.
 func (self *configDirectoryAuth) At(pin *bridge.AuthPin) (DirectoryAuthView, error) {
 	if pin == nil {
 		return nil, fmt.Errorf("%w: no pin", ErrDirectoryAuthOffChain)
@@ -332,6 +334,7 @@ func directoryOfState(state *ConfigState) (*protocol.AclRepo, bool) {
 	return found, found != nil
 }
 
+// The state's live directory, by its RepoCreate's position.
 func (self *configDirectoryAuth) Directory() (Id, bool) {
 	repo, ok := directoryOfState(self.state)
 	if !ok {
@@ -372,6 +375,7 @@ func directoryStandingIn(state *ConfigState, sidecarId Id) DirectoryStanding {
 	return DirectoryStandingStanding
 }
 
+// The standing in StateAt's state at pin.
 func (self *configDirectoryAuth) SignerStanding(sidecarId Id, pin *bridge.AuthPin) (DirectoryStanding, error) {
 	if pin == nil {
 		return DirectoryStandingUnjudged, fmt.Errorf("%w: no pin", ErrDirectoryAuthOffChain)
@@ -412,6 +416,7 @@ func (self *configDirectoryAuth) stateAtPosition(position uint64) (*ConfigState,
 	return state, true, nil
 }
 
+// Judged in the state at position while the log retains it, else from this state's positions.
 func (self *configDirectoryAuth) RepoAdminRight(repoId Id, sidecarId Id, position uint64) (bool, error) {
 	state, held, err := self.stateAtPosition(position)
 	if err != nil {
@@ -492,6 +497,7 @@ func directoryRepoCreatedAt(repo *protocol.AclRepo) uint64 {
 	return createdAt
 }
 
+// The admins of StateAt's state at pin, this state's own for a nil pin.
 func (self *configDirectoryAuth) DirectoryAdmins(pin *bridge.AuthPin) ([]Id, error) {
 	state, err := self.stateAt(pin)
 	if err != nil {
@@ -524,6 +530,7 @@ func directoryAdminsIn(state *ConfigState) []Id {
 	return admins
 }
 
+// §16.11's Requests table in StateAt's state at pin.
 func (self *configDirectoryAuth) EligibleApprovers(request *protocol.DirectoryRequest, requesterSidecarId Id, pin *bridge.AuthPin) (*DirectoryApprovers, error) {
 	state, err := self.stateAt(pin)
 	if err != nil {
@@ -594,6 +601,7 @@ func directoryApproversIn(state *ConfigState, request *protocol.DirectoryRequest
 	return approvers, nil
 }
 
+// The approvers at pin, and the decider among them there.
 func (self *configDirectoryAuth) Decides(request *protocol.DirectoryRequest, requesterSidecarId Id, deciderSidecarId Id, pin *bridge.AuthPin) (bool, error) {
 	state, err := self.stateAt(pin)
 	if err != nil {
@@ -619,6 +627,7 @@ func (self *configDirectoryAuth) Decides(request *protocol.DirectoryRequest, req
 	return acl.Approves(&AclApprovers{MemberIds: approvers.MemberIds, Autogroups: approvers.Autogroups}, memberId), nil
 }
 
+// The member the admission names, while a member.
 func (self *configDirectoryAuth) MemberOf(sidecarId Id) (Id, bool) {
 	sidecar := self.state.Sidecar(sidecarId)
 	if sidecar == nil || len(sidecar.TagIds) != 0 || sidecar.MemberId == (Id{}) || self.state.Member(sidecar.MemberId) == nil {
@@ -627,10 +636,12 @@ func (self *configDirectoryAuth) MemberOf(sidecarId Id) (Id, bool) {
 	return sidecar.MemberId, true
 }
 
+// ConfigState's sponsor.
 func (self *configDirectoryAuth) SponsorOf(sidecarId Id) (Id, bool) {
 	return self.state.Sponsor(sidecarId)
 }
 
+// Whether its row is revoked at or before this state.
 func (self *configDirectoryAuth) Masked(sidecarId Id) bool {
 	row := self.state.SidecarRow(sidecarId)
 	return row != nil && row.GetRevokedAt() != 0 && row.GetRevokedAt() <= self.state.n

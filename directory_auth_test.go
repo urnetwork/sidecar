@@ -363,7 +363,7 @@ func TestDirectoryAuthEligibleApprovers(t *testing.T) {
 	for _, c := range []struct {
 		decider Id
 		want    bool
-	}{{network.MemberDevice, true}, {network.AdminDevice, false}, {network.OwnerDevice, false}} {
+	}{{decider: network.MemberDevice, want: true}, {decider: network.AdminDevice, want: false}, {decider: network.OwnerDevice, want: false}} {
 		if decides, err := view.Decides(general, requester, c.decider, network.Pin()); err != nil || decides != c.want {
 			t.Errorf("decider %s of the general repo: %v, %v", c.decider, decides, err)
 		}
@@ -377,8 +377,8 @@ func TestDirectoryAuthEligibleApprovers(t *testing.T) {
 		decider Id
 		want    bool
 	}{
-		{network.MemberDevice, true}, {network.Confirmed, true}, {network.Unconsented, false}, {network.ReadOnly, false},
-		{network.AdminDevice, false}, {network.OwnerDevice, false},
+		{decider: network.MemberDevice, want: true}, {decider: network.Confirmed, want: true}, {decider: network.Unconsented, want: false},
+		{decider: network.ReadOnly, want: false}, {decider: network.AdminDevice, want: false}, {decider: network.OwnerDevice, want: false},
 	} {
 		if decides, err := view.Decides(vault, requester, c.decider, network.Pin()); err != nil || decides != c.want {
 			t.Errorf("decider %s of the vault: %v, %v", c.decider, decides, err)
