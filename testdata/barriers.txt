@@ -11,6 +11,12 @@ barrier bridge.adopt.after device/bridge_state.go
 barrier bridge.adopt.before device/bridge_state.go
 barrier bridge_egress.publish.after device/bridge_egress.go
 barrier bridge_egress.publish.before device/bridge_egress.go
+barrier bridge_link.close.after device/bridge_link.go
+barrier bridge_link.close.before device/bridge_link.go
+barrier bridge_link.publish.after device/bridge_link.go
+barrier bridge_link.publish.before device/bridge_link.go
+barrier bridge_link_generator.retire.after device/bridge_link_generator.go
+barrier bridge_link_generator.retire.before device/bridge_link_generator.go
 barrier bridge_pin.write device/bridge_pin.go
 barrier bridge_pin_entry.mark_down.after device/bridge_pin_entry.go
 barrier bridge_pin_entry.mark_down.before device/bridge_pin_entry.go
@@ -144,6 +150,8 @@ barrier record.reserve.after record_ledger.go
 barrier record.reserve.before record_ledger.go
 barrier record.taint.after record_run.go
 barrier record.taint.before record_run.go
+barrier revocation.read.after config_rev.go
+barrier revocation.read.before config_rev.go
 barrier rpc.call_send.after rpc_call.go
 barrier rpc.call_send.before rpc_call.go
 barrier rpc.dispatch.after rpc_subprotocol.go
