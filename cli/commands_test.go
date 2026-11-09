@@ -280,6 +280,21 @@ func TestGitRemoteUrDispatches(t *testing.T) {
 	}
 }
 
+// Windows runs the zip's copy as git-remote-ur.exe, in whatever case the file name holds, and that
+// reaches the same entry (REPO-M1-01).
+func TestGitRemoteUrDispatchesOnItsWindowsNames(t *testing.T) {
+	for _, name := range []string{"/u/git-remote-ur.exe", "/u/GIT-REMOTE-UR.EXE", "/u/Git-Remote-Ur.Exe", "git-remote-ur"} {
+		cli, _, stderr := newTestUrCli("unused")
+		if code := cli.main(context.Background(), []string{name, "origin", "ur://x"}); code != urExitFailed || !strings.Contains(stderr.String(), "git remote helper") {
+			t.Errorf("%s: exit %d, %q", name, code, stderr.String())
+		}
+	}
+	cli, _, stderr := newTestUrCli("unused")
+	if code := cli.main(context.Background(), []string{"/u/git-remote-ur-other", "origin"}); code == urExitFailed && strings.Contains(stderr.String(), "git remote helper") {
+		t.Errorf("another name reached the git remote helper")
+	}
+}
+
 // A fake of what the daemon's methods act on, recording what reached it.
 type testUrDaemonTarget struct {
 	stateLock   sync.Mutex
