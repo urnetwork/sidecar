@@ -400,21 +400,7 @@ func (self *sidecarConnectGeneration) install(byJwt string) {
 
 // The dispatcher's counters, as they stand.
 func (self *sidecarConnectGeneration) subprotocolStats() SidecarSubprotocolStats {
-	stats := &self.subprotocol.stats
-	return SidecarSubprotocolStats{
-		VersionRefusedCount:     stats.versionRefusedCount.Load(),
-		SourceDroppedCount:      stats.sourceDroppedCount.Load(),
-		ProvideModeDroppedCount: stats.provideModeDroppedCount.Load(),
-		IdentityRefusedCount:    stats.identityRefusedCount.Load(),
-		InboundRefusedCount:     stats.inboundRefusedCount.Load(),
-		QueueFullCount:          stats.queueFullCount.Load(),
-		QueuedCount:             stats.queuedCount.Load(),
-		DispatchedCount:         stats.dispatchedCount.Load(),
-		UnroutedCount:           stats.unroutedCount.Load(),
-		PanicCount:              stats.panicCount.Load(),
-		ReplyDroppedCount:       stats.replyDroppedCount.Load(),
-		ReplySentCount:          stats.replySentCount.Load(),
-	}
+	return self.subprotocol.Stats()
 }
 
 // Detaches every component, then closes the dispatcher, the client and its connection, and the api, joining each.

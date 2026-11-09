@@ -245,6 +245,26 @@ type subprotocolStats struct {
 	heldBufferCount atomic.Int64
 }
 
+// The dispatcher's counters as they stand, each a running total since NewSubprotocol: what Sidecar.Stats
+// shows for the running generation, and what a test on another module's exchange reads.
+func (self *Subprotocol) Stats() SidecarSubprotocolStats {
+	stats := &self.stats
+	return SidecarSubprotocolStats{
+		VersionRefusedCount:     stats.versionRefusedCount.Load(),
+		SourceDroppedCount:      stats.sourceDroppedCount.Load(),
+		ProvideModeDroppedCount: stats.provideModeDroppedCount.Load(),
+		IdentityRefusedCount:    stats.identityRefusedCount.Load(),
+		InboundRefusedCount:     stats.inboundRefusedCount.Load(),
+		QueueFullCount:          stats.queueFullCount.Load(),
+		QueuedCount:             stats.queuedCount.Load(),
+		DispatchedCount:         stats.dispatchedCount.Load(),
+		UnroutedCount:           stats.unroutedCount.Load(),
+		PanicCount:              stats.panicCount.Load(),
+		ReplyDroppedCount:       stats.replyDroppedCount.Load(),
+		ReplySentCount:          stats.replySentCount.Load(),
+	}
+}
+
 // The settings a sidecar's connect client runs on, set here and nowhere else (D-PROTO-6, D-PROTO-10):
 // Required, never Opportunistic or Off, so a peer that cannot seal gets no application data (I-3); C15's
 // verified key exposed on every Peer, which Hello's identity check compares (D-PROTO-13); and no P2P
