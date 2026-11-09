@@ -274,8 +274,12 @@ func MatchAclRequest(state *AclState, ask *AclGrantAsk, now time.Time) (*AclRequ
 func (self *AclState) requestTakes(rule *protocol.AclRequestRule, requester *aclSidecarState, ask *AclGrantAsk) bool {
 	inSrc := false
 	for _, atomBytes := range rule.GetSrcAtoms() {
-		atomIndex, found := self.atomIndexes[Id(atomBytes)]
-		if !found || len(atomBytes) != aclAtomByteCount {
+		atom, err := IdFromBytes(atomBytes)
+		if err != nil {
+			continue
+		}
+		atomIndex, found := self.atomIndexes[atom]
+		if !found {
 			continue
 		}
 		if _, holds := slices.BinarySearch(requester.atoms, atomIndex); holds {
@@ -301,6 +305,13 @@ func (self *AclState) requestTakes(rule *protocol.AclRequestRule, requester *acl
 	return true
 }
 
+// The id an id field holds, false for a field of any other size: request rules are no part of what NewAclState
+// checks, and an ask's targets are its caller's, so neither is trusted to be well formed.
+func aclTargetId(idBytes []byte) (Id, bool) {
+	id, err := IdFromBytes(idBytes)
+	return id, err == nil
+}
+
 // Whether a requests rule's target takes one destination of a grant, for the requester.
 func (self *AclState) requestTargetCovers(ruleTarget *protocol.AclTarget, target *protocol.AclTarget, requester *aclSidecarState) bool {
 	switch {
@@ -310,9 +321,10 @@ func (self *AclState) requestTargetCovers(ruleTarget *protocol.AclTarget, target
 			return false
 		}
 		if autogroup, isAutogroup := aclAtomAutogroup(atom); isAutogroup && autogroup == protocol.AclAutogroup_ACL_AUTOGROUP_SELF {
-			destination := self.sidecarState(Id(target.GetSidecarId()))
-			return len(target.GetSidecarId()) != 0 && destination != nil && destination.valid && destination.hasOwner &&
-				requester.hasOwner && destination.owner == requester.owner
+			destinationId, ok := aclTargetId(target.GetSidecarId())
+			destination := self.sidecarState(destinationId)
+			return ok && destination != nil && destination.valid && destination.hasOwner && requester.hasOwner &&
+				destination.owner == requester.owner
 		}
 		atomIndex, found := self.atomIndexes[atom]
 		if !found {
@@ -322,33 +334,41 @@ func (self *AclState) requestTargetCovers(ruleTarget *protocol.AclTarget, target
 		case bytes.Equal(target.GetAtom(), ruleTarget.GetAtom()):
 			return true
 		case len(target.GetSidecarId()) != 0:
-			destination := self.sidecarState(Id(target.GetSidecarId()))
-			if destination == nil {
+			destinationId, ok := aclTargetId(target.GetSidecarId())
+			destination := self.sidecarState(destinationId)
+			if !ok || destination == nil {
 				return false
 			}
 			_, holds := slices.BinarySearch(destination.atoms, atomIndex)
 			return holds
 		case len(target.GetNetworkId()) != 0:
-			return slices.Contains(self.networkAtoms[Id(target.GetNetworkId())], atomIndex)
+			networkId, ok := aclTargetId(target.GetNetworkId())
+			return ok && slices.Contains(self.networkAtoms[networkId], atomIndex)
 		case len(target.GetClientId()) != 0:
-			return slices.Contains(self.clientAtoms[Id(target.GetClientId())], atomIndex)
+			clientId, ok := aclTargetId(target.GetClientId())
+			return ok && slices.Contains(self.clientAtoms[clientId], atomIndex)
 		}
 		return false
 	case len(ruleTarget.GetSidecarId()) != 0:
-		return bytes.Equal(ruleTarget.GetSidecarId(), target.GetSidecarId())
+		_, ok := aclTargetId(target.GetSidecarId())
+		return ok && bytes.Equal(ruleTarget.GetSidecarId(), target.GetSidecarId())
 	case len(ruleTarget.GetNetworkId()) != 0:
-		return bytes.Equal(ruleTarget.GetNetworkId(), target.GetNetworkId())
+		_, ok := aclTargetId(target.GetNetworkId())
+		return ok && bytes.Equal(ruleTarget.GetNetworkId(), target.GetNetworkId())
 	case len(ruleTarget.GetClientId()) != 0:
-		return bytes.Equal(ruleTarget.GetClientId(), target.GetClientId())
+		_, ok := aclTargetId(target.GetClientId())
+		return ok && bytes.Equal(ruleTarget.GetClientId(), target.GetClientId())
 	case len(ruleTarget.GetRepoId()) != 0:
-		if len(target.GetRepoId()) == 0 {
+		repoId, ok := aclTargetId(target.GetRepoId())
+		ruleRepoId, ruleOk := aclTargetId(ruleTarget.GetRepoId())
+		if !ok || !ruleOk {
 			return false
 		}
-		if bytes.Equal(ruleTarget.GetRepoId(), target.GetRepoId()) {
+		if repoId == ruleRepoId {
 			return true
 		}
-		repo := self.repos[Id(target.GetRepoId())]
-		return Id(ruleTarget.GetRepoId()) == (Id{}) && repo != nil && aclRepoKindGeneral(repo.kind)
+		repo := self.repos[repoId]
+		return ruleRepoId == (Id{}) && repo != nil && aclRepoKindGeneral(repo.kind)
 	case len(ruleTarget.GetSocketTokens()) != 0 || ruleTarget.GetSocketPrefix():
 		if len(target.GetSocketTokens()) != 1 {
 			return false

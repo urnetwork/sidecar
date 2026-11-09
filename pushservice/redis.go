@@ -6,6 +6,7 @@
 //	{scp_<C>}hint   stream: seq, topic, version, kind and hint, MAXLEN ~256
 //	{scp_<C>}n      string: the INCR whose value is a hint's seq and whose event is the trigger
 //	{scp_<C>}tok    §18.7's wake token projection, which the hint script only reads (absent until M8)
+//	{scp_<C>}tokrev the revision tok projects, which only wake_token.go's apply script writes
 //	{scp_<C>}live   §18.7's resident marker, which the hint script only reads (absent until M8)
 //	{scp_<C>}ack    §18.7's highest acked stream id, which the ack script raises
 //	{scp_<C>}hb     §18.8's poll marker, which api's long-poll sets

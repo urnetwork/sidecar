@@ -207,13 +207,21 @@ func aclFoldStatement(rows *protocol.AclRows, statement *AclStatement, verdict *
 	case *bridge.GrantRevoke:
 		return aclFoldGrantRevoke(rows, body, verdict), effect, nil
 	case *bridge.Suspend:
+		subjectId, err := aclSuspendIds(body.GetSubject(), body.GetSuspendId())
+		if err != nil {
+			return nil, effect, err
+		}
 		next := aclFoldSuspend(rows, statement, body, verdict)
-		effect.SuspendedSubjectIds = []Id{Id(body.GetSubject())}
+		effect.SuspendedSubjectIds = []Id{subjectId}
 		return next, effect, nil
 	case *bridge.Unsuspend:
+		subjectId, err := aclSuspendIds(body.GetSubject(), body.GetSuspendId())
+		if err != nil {
+			return nil, effect, err
+		}
 		next, lifted := aclFoldUnsuspend(rows, body)
 		if lifted {
-			effect.UnsuspendedSubjectIds = []Id{Id(body.GetSubject())}
+			effect.UnsuspendedSubjectIds = []Id{subjectId}
 		}
 		return next, effect, nil
 	case *protocol.OwnerConfirm:

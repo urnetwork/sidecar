@@ -188,7 +188,7 @@ func aclRowsSuspension(rows *protocol.AclRows, subject []byte, suspendId []byte)
 // Whether any active Suspend names the subject.
 func aclRowsSuspends(rows *protocol.AclRows, subjectId Id) bool {
 	for _, suspension := range rows.GetSuspensions() {
-		if Id(suspension.GetSubject()) == subjectId {
+		if bytes.Equal(suspension.GetSubject(), subjectId.Bytes()) {
 			return true
 		}
 	}
