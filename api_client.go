@@ -182,6 +182,14 @@ func (self *SidecarApi) setDpopSigner(dpopSigner func(method string, url string,
 	self.dpopSigner = dpopSigner
 }
 
+// The transport every call goes through, behind absoluteUrlTransport: what another client of a service, such as
+// evs's (EvsClientArgs.Transport), dials with, so it binds to the same egress and never reaches net/http's default.
+func (self *SidecarApi) Transport() http.RoundTripper {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.transport
+}
+
 // Replaces the transport, as a connect leg does with each client strategy's
 // (newSidecarApiTransport), and drops the old one's idle connections. nil is the leg's default.
 func (self *SidecarApi) setTransport(transport http.RoundTripper) {
