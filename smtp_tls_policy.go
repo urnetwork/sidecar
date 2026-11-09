@@ -257,9 +257,10 @@ func (self *SmtpTlsPolicy) lookupMx(ctx context.Context, domain string) *smtpTls
 }
 
 // Readies one connection's check: the names held to their form, the host's pin read, and TL2's policy
-// and TL3's MX view looked up from the device, side by side. Its errors are ErrSmtpTlsRequest and the
+// and TL3's MX view looked up from the device, side by side. Its errors are ErrSmtpTlsRequest, the
 // store's, on which the sender holds the send, since a pin or policy it cannot read could be one that
-// refuses this MX. A DoH or HTTPS failure is no error: the level it would have given is out of reach.
+// refuses this MX, and ctx's once it has ended. A DoH or HTTPS failure is no error: the level it would
+// have given is out of reach.
 func (self *SmtpTlsPolicy) Authenticate(ctx context.Context, request *SmtpTlsRequest) (*SmtpTlsAuthentication, error) {
 	if request == nil || request.Flags&^SmtpFlagsKnown != 0 {
 		return nil, ErrSmtpTlsRequest
@@ -295,6 +296,10 @@ func (self *SmtpTlsPolicy) Authenticate(ctx context.Context, request *SmtpTlsReq
 	lookups.Wait()
 	if policyErr != nil {
 		return nil, policyErr
+	}
+	// a lookup the caller ended found nothing, which must not read as a domain without a policy or an MX
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return authentication, nil
 }
