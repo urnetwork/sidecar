@@ -417,3 +417,62 @@ func TestSmtpMtaStsCacheSurvivesARestart(t *testing.T) {
 		t.Errorf("an enforce policy with no mx: %v", err)
 	}
 }
+
+// A fetch the caller's context ends is no failure of the policy host, so it holds the next fetch back
+// for nothing: the next send fetches at once.
+func TestSmtpMtaStsCancelledFetchHoldsNothingBack(t *testing.T) {
+	world := newTestMtaStsWorld(t)
+	world.publish(t, "id1", testMtaStsPolicy)
+	ctx, cancel := context.WithCancel(context.Background())
+	world.transport.setAnswer(func(request *http.Request) *http.Response {
+		cancel()
+		<-request.Context().Done()
+		return &http.Response{StatusCode: http.StatusGatewayTimeout, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(nil)), Request: request}
+	})
+	if policy, err := world.mtaSts.Policy(ctx, testMtaStsDomain); err != nil || policy != nil {
+		t.Fatalf("the cancelled fetch: %+v %v", policy, err)
+	}
+	world.transport.setAnswer(nil)
+	if policy := world.policy(t); policy == nil || policy.Id != "id1" || len(world.transport.fetches()) != 2 {
+		t.Errorf("the next fetch: %+v, %d fetches", policy, len(world.transport.fetches()))
+	}
+}
+
+// §22.6's rule for what the network sends: no policy body panics the parser, and what parses holds to
+// §3.2's forms, each mx pattern naming a host it matches.
+func FuzzSmtpMtaStsPolicy(f *testing.F) {
+	for _, seed := range []string{
+		testMtaStsPolicy,
+		"version: STSv1\nmode: none\nmax_age: 0\n",
+		"version: STSv1\nmode: testing\nmx: *.mail.example\nmax_age: 31557600\n",
+		"version: STSv1\r\nmode: enforce\r\nmx: *.\r\nmax_age: 1\r\n",
+		"",
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, body []byte) {
+		policy, err := sidecar.ParseSmtpMtaStsPolicy(body)
+		if err != nil {
+			if !errors.Is(err, sidecar.ErrSmtpMtaStsPolicyInvalid) {
+				t.Fatalf("an error that is not invalid: %v", err)
+			}
+			return
+		}
+		if policy.Mode < sidecar.SmtpMtaStsModeEnforce || sidecar.SmtpMtaStsModeNone < policy.Mode ||
+			policy.MaxAge < 0 || 31557600*time.Second < policy.MaxAge {
+			t.Fatalf("%+v", policy)
+		}
+		if policy.Mode != sidecar.SmtpMtaStsModeNone && len(policy.MxPatterns) == 0 {
+			t.Fatalf("no mx: %+v", policy)
+		}
+		for _, pattern := range policy.MxPatterns {
+			host, wildcard := strings.CutPrefix(pattern, "*.")
+			if wildcard {
+				host = "a." + host
+			}
+			if len(host) <= 255 && !policy.MatchesMx(host) {
+				t.Fatalf("pattern %q does not match %q", pattern, host)
+			}
+		}
+	})
+}

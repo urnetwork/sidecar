@@ -12,7 +12,8 @@
 // its id, and also while no usable TXT record answers, since a missing record is no reason to drop a
 // policy. A record naming another id, or one with nothing cached, fetches; a fetch that fails, a body
 // that does not parse among the ways, leaves the cached policy if one is young enough, else no policy,
-// and the same id is not fetched again for MtaStsFetchRetryTimeout. A fetched policy replaces the
+// and the same id is not fetched again for MtaStsFetchRetryTimeout, unless it was the caller's context
+// that ended the fetch, which says nothing of the policy host. A fetched policy replaces the
 // cached one whatever its mode, so mode: none clears an enforce policy as §8.3 intends. Only mode:
 // enforce makes TL2 (SmtpTlsPolicy); testing and none apply nothing.
 //
@@ -565,6 +566,10 @@ func (self *SmtpMtaSts) Policy(ctx context.Context, recipientDomain string) (*Sm
 	}
 	policy, err := self.fetch(ctx, domain)
 	if err != nil {
+		if ctx.Err() != nil {
+			// the caller ended the fetch, which says nothing of the policy host
+			return cached, nil
+		}
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()

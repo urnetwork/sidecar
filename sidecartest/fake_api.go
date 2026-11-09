@@ -1,8 +1,9 @@
 // T2's api (§22.4): the routes sidecars and gates call on server's api, in memory, on the Net's clock and fault
 // queue, with the first metadata cluster on the Net's fake Blobs. server cannot be imported here, so each route copies
 // only the steps a schedule relies on, and T3 reruns the same schedules on server's real routes (Q-TEST-1): a
-// divergence fails. fake_api_config.go adds §7.9's authorization log, fake_api_exchange.go §7.8's token exchange, and
-// fake_api_core.go enrollment, a client's mint and removal, the identity binding and its lookups, and refresh.
+// divergence fails. fake_api_config.go adds §7.9's authorization log, fake_api_exchange.go §7.8's token exchange,
+// fake_api_core.go enrollment, a client's mint and removal, the identity binding and its lookups, and refresh, and
+// fake_api_sync.go §6.8's poll and versions routes.
 //
 // Requests reach it through Transport, an http.RoundTripper that serves in process, so a client of api built with it
 // (SidecarApi's transport, a gate's source) sends real requests with no socket. It answers at two origins, api's and
@@ -130,6 +131,8 @@ type FakeApi struct {
 	exchange fakeApiExchangeState
 	// fake_api_core.go's state
 	core fakeApiCoreState
+	// fake_api_sync.go's hint state, set by Net.AddApi
+	sync fakeApiSyncState
 	// counts every client token minted, for a test waiting on one
 	mints *sidecar.MonitorValue[uint64]
 }
@@ -164,6 +167,7 @@ func newFakeApi(ctx context.Context, clock Clock, faults *FaultQueue, barriers *
 	self.addConfigRoutes()
 	self.addExchangeRoutes()
 	self.addCoreRoutes()
+	self.addSyncRoutes()
 	return self
 }
 
@@ -177,6 +181,8 @@ func (self *Net) AddApi(settings *FakeApiSettings) (*FakeApi, error) {
 	}
 	api := newFakeApi(self.ctx, self.clock, self.faults, self.barriers, cluster, self.fakes.Authenticator, settings)
 	api.secretSink = self.capture.AddSecret
+	// §6.8's sync routes from the Net's hint state (fake_api_sync.go)
+	api.sync.push = self.push
 	return api, nil
 }
 

@@ -769,3 +769,14 @@ func TestSmtpTlsLevelLabels(t *testing.T) {
 		}
 	}
 }
+
+// A check whose context ended during its lookups answers the context's error, never a check that read
+// the cut lookups as a domain with no policy and no MX.
+func TestSmtpTlsEndedContextIsNoCheck(t *testing.T) {
+	world := newTestTlsWorld(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if authentication, err := world.policy().Authenticate(ctx, &sidecar.SmtpTlsRequest{RecipientDomain: testTlsDomain, MxHost: testTlsHost}); !errors.Is(err, context.Canceled) {
+		t.Errorf("%v %v", authentication, err)
+	}
+}

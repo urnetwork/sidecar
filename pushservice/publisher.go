@@ -431,7 +431,7 @@ func (self *publisherRun) nextEpoch() uint64 {
 
 // Sends one push message, nil ack for none. A refused send's buffer is returned here.
 func (self *publisherRun) sendFrame(messageType protocol.MessageType, message proto.Message, ack connect.AckFunction) error {
-	frame, err := newPushFrame(messageType, message, mathrand.Uint64())
+	frame, err := PushFrame(messageType, message, mathrand.Uint64())
 	if err != nil {
 		self.publisher.stats.sendRefusedCount.Add(1)
 		return errors.Join(errPublisherSendRefused, err)
