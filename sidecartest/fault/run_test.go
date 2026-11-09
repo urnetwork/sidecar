@@ -924,7 +924,10 @@ func TestEveryWriteUnknownLeavesARowsOwnHold(t *testing.T) {
 // it runs out of the schedule's order. The run fails rather than pass under an order it did not choose.
 func TestARunInWhichAnActorStalledFails(t *testing.T) {
 	settings := sidecartest.DefaultNetSettings()
-	settings.Barriers.StallTimeout = 1 * time.Millisecond
+	// writerA stalls however long this is. writerB only closes the gate, but on a loaded machine it can
+	// keep the baton past a 1 ms timeout and be named as well, so it gets room here, and the check asks
+	// only that writerA is among those named.
+	settings.Barriers.StallTimeout = 50 * time.Millisecond
 	net := sidecartest.NewNet(t.Context(), settings)
 	defer net.Close()
 	gate := make(chan struct{})
@@ -942,7 +945,14 @@ func TestARunInWhichAnActorStalledFails(t *testing.T) {
 			}},
 		},
 	}, net)
-	if result.Err == nil || !strings.Contains(result.Err.Error(), "writerA stalled") {
+	stalled := ""
+	if result.Err != nil {
+		stalled, _, _ = strings.Cut(result.Err.Error(), " stalled, blocked where no barrier sees it")
+		if i := strings.LastIndex(stalled, ": "); 0 <= i {
+			stalled = stalled[i+2:]
+		}
+	}
+	if !slices.Contains(strings.Split(stalled, ", "), "writerA") {
 		t.Errorf("%s", result)
 	}
 }
