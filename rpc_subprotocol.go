@@ -140,6 +140,8 @@ type Subprotocol struct {
 	idempotency *idempotencyCache
 	// one per handler run or joined retry, which Close waits for
 	handlers sync.WaitGroup
+	// the PushClient serving this dispatcher's push, which Subscribe reaches (push_client.go)
+	pushClient atomic.Pointer[PushClient]
 
 	stats subprotocolStats
 }

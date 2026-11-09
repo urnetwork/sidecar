@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,6 +87,30 @@ func (self *testEnvelopeClock) Advance(timeout time.Duration) {
 		wait.fire <- self.now
 		return true
 	})
+}
+
+// What Clock adds to the reassembly tests' clock: a call once a wait fires, which a handler's deadline
+// and the push feed's waits use.
+func (self *testEnvelopeClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
+	fire := self.After(timeout)
+	stopped := make(chan struct{})
+	var done atomic.Bool
+	go func() {
+		select {
+		case <-fire:
+			if done.CompareAndSwap(false, true) {
+				function()
+			}
+		case <-stopped:
+		}
+	}()
+	return func() bool {
+		if done.CompareAndSwap(false, true) {
+			close(stopped)
+			return true
+		}
+		return false
+	}
 }
 
 // Blocks until After has been called count times.

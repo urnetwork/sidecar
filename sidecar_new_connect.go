@@ -240,6 +240,35 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		closePlatform()
 		return nil, err
 	}
+	// §6.8's push: the resident's frames to the machine, its versions kept beside the pins, and core's
+	// notices to the core, every one a bare resync until a body carries more (plan-CORE-core-hint-body)
+	pushClientSettings := DefaultPushClientSettings()
+	pushClientSettings.SyncRefetchInterval = settings.ProtocolSettings.SyncRefetchInterval
+	pushClient, err := NewPushClient(generation.ctx, &PushClientEnv{
+		Subprotocol: subprotocol,
+		Store:       store,
+		Api:         self.sidecar.sidecarApi,
+		Settings:    pushClientSettings,
+		Clock:       self.sidecar.clock,
+		Log:         self.sidecar.log,
+		Event:       self.sidecar.emitEvent,
+	})
+	if err != nil {
+		subprotocol.Close()
+		api.Close()
+		closePlatform()
+		return nil, err
+	}
+	generationNumber := generation.generation
+	if _, err := subprotocol.Subscribe(PushTopicCore, func(notice PushNotice) {
+		self.sidecar.receiveCoreHint(generationNumber, notice.Hint)
+	}); err != nil {
+		pushClient.Close()
+		subprotocol.Close()
+		api.Close()
+		closePlatform()
+		return nil, err
+	}
 
 	connectGeneration := &sidecarConnectGeneration{
 		leg:            self,
@@ -248,6 +277,7 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		api:            api,
 		auth:           auth,
 		subprotocol:    subprotocol,
+		pushClient:     pushClient,
 		closePlatform:  closePlatform,
 		watchDone:      make(chan struct{}),
 		attachments:    map[string]*sidecarComponentAttachment{},
@@ -287,9 +317,11 @@ type sidecarConnectGeneration struct {
 	platformClient *SidecarPlatformClient
 	api            *connect.BringYourApi
 	subprotocol    *Subprotocol
-	closePlatform  func()
-	watchStarted   atomic.Bool
-	watchDone      chan struct{}
+	// §6.8's push on subprotocol, which a reconnect resyncs
+	pushClient    *PushClient
+	closePlatform func()
+	watchStarted  atomic.Bool
+	watchDone     chan struct{}
 
 	stateLock   sync.Mutex
 	auth        *connect.ClientAuth
@@ -312,6 +344,10 @@ func (self *sidecarConnectGeneration) watchConnection() {
 	for {
 		connected, changed := self.platformClient.Connected()
 		if first || connected != reported {
+			// a reconnect resyncs every topic: what was hinted while away is gone (§6.8)
+			if connected && !first {
+				self.pushClient.Resync()
+			}
 			first = false
 			reported = connected
 			self.generation.connectionChanged(connected)
@@ -364,6 +400,7 @@ func (self *sidecarConnectGeneration) closeAndWait() {
 	if self.watchStarted.Load() {
 		<-self.watchDone
 	}
+	self.pushClient.Close()
 	self.subprotocol.Close()
 	self.closePlatform()
 	self.api.Close()
