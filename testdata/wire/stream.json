@@ -1,0 +1,19 @@
+{
+  "comment": [
+    "§6's wire as M2 froze it (D-PROTO-20): each vector's bytes are proto.Marshal's of its fields, which",
+    "envelope_wire_test.go builds and holds byte-equal on every leg. A vector's bytes never change: a new vector",
+    "is added with SIDECAR_REGENERATE_WIRE_GOLDENS=1, which refuses to change one already here."
+  ],
+  "vectors": [
+    {"name":"an open with every field","message":"urnetwork.sidecar.StreamOpen","fields":{"target":"examplenet:tls/443/blog","metadata":"EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=","ticket":"QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+fw==","window":262144,"early_data":"FgMBgIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5w="},"wire":"0a176578616d706c656e65743a746c732f3434332f626c6f671220101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f1a40404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f208080102a20160301808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c"},
+    {"name":"an open with a target and a window","message":"urnetwork.sidecar.StreamOpen","fields":{"target":"examplenet:ur/agent","window":65536},"wire":"0a136578616d706c656e65743a75722f6167656e7420808004"},
+    {"name":"an accept","message":"urnetwork.sidecar.StreamAccept","fields":{"window":262144},"wire":"08808010"},
+    {"name":"a reject","message":"urnetwork.sidecar.StreamReject","fields":{"code":2,"retry_after_ms":5000},"wire":"0802108827"},
+    {"name":"data","message":"urnetwork.sidecar.StreamData","fields":{"offset":"2048","data":"ICEiIyQlJicoKSorLC0uLw=="},"wire":"0880101210202122232425262728292a2b2c2d2e2f"},
+    {"name":"data far along","message":"urnetwork.sidecar.StreamData","fields":{"offset":"1099511627776","data":"MDEyMw=="},"wire":"08808080808020120430313233"},
+    {"name":"a window","message":"urnetwork.sidecar.StreamWindow","fields":{"consumed_offset":"65536","max_offset":"327680"},"wire":"0880800410808014"},
+    {"name":"a close","message":"urnetwork.sidecar.StreamClose","fields":{"final_offset":"70000"},"wire":"08f0a204"},
+    {"name":"a reset","message":"urnetwork.sidecar.StreamReset","fields":{"code":8,"final_offset":"4096"},"wire":"0808108020"},
+    {"name":"a reset before any byte","message":"urnetwork.sidecar.StreamReset","fields":{"code":3},"wire":"0803"}
+  ]
+}
