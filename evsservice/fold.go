@@ -127,6 +127,10 @@ type foldRefState struct {
 	lastTriggerAt time.Time
 	stopIdle      func() bool
 	running       bool
+	// the versions it holds unfolded, as its cluster's sum counts them
+	unfoldedCount uint64
+	// not in the map, FoldRefStateCount keeping none, so no sum counts it
+	unkept bool
 }
 
 // One process's folds. See the file header.
@@ -148,6 +152,8 @@ type Folder struct {
 
 	stateLock sync.Mutex
 	refStates map[foldRef]*foldRefState
+	// by cluster, the versions its refs' states hold unfolded, which the backlog declared to the budget prices
+	clusterUnfoldedCounts map[string]uint64
 	// background folds finished, for a test to wait on before it reads what they wrote
 	backgroundCount *sidecar.MonitorValue[int]
 }
@@ -168,20 +174,21 @@ func NewFolder(
 	log sidecar.Logger,
 ) *Folder {
 	return &Folder{
-		ctx:             ctx,
-		clock:           clock,
-		clockCheck:      clockCheck,
-		blobs:           blobs,
-		budget:          budget,
-		heads:           heads,
-		records:         records,
-		repos:           repos,
-		logPages:        NewLogPageCache(settings),
-		priceTable:      priceTable,
-		settings:        settings,
-		log:             log,
-		refStates:       map[foldRef]*foldRefState{},
-		backgroundCount: sidecar.NewMonitorValue(0),
+		ctx:                   ctx,
+		clock:                 clock,
+		clockCheck:            clockCheck,
+		blobs:                 blobs,
+		budget:                budget,
+		heads:                 heads,
+		records:               records,
+		repos:                 repos,
+		logPages:              NewLogPageCache(settings),
+		priceTable:            priceTable,
+		settings:              settings,
+		log:                   log,
+		refStates:             map[foldRef]*foldRefState{},
+		clusterUnfoldedCounts: map[string]uint64{},
+		backgroundCount:       sidecar.NewMonitorValue(0),
 	}
 }
 
@@ -233,12 +240,13 @@ func (self *Folder) refStateWithLock(ref foldRef, clusterId string) *foldRefStat
 			if evicted.stopIdle != nil {
 				evicted.stopIdle()
 			}
+			self.clusterUnfoldedCounts[evicted.clusterId] -= evicted.unfoldedCount
 			delete(self.refStates, evictedRef)
 			break
 		}
 	}
-	state = &foldRefState{clusterId: clusterId}
-	if 0 < self.settings.FoldRefStateCount {
+	state = &foldRefState{clusterId: clusterId, unkept: self.settings.FoldRefStateCount <= 0}
+	if !state.unkept {
 		self.refStates[ref] = state
 	}
 	return state
@@ -250,6 +258,7 @@ func (self *Folder) finished(ref foldRef, clusterId string, epoch uint64, from u
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	state := self.refStateWithLock(ref, clusterId)
+	defer self.countUnfoldedWithLock(state)
 	if state.epoch == epoch && from <= state.foldedThrough && state.foldedFrom <= through && state.foldedThrough != 0 {
 		state.foldedFrom = min(state.foldedFrom, from)
 		state.foldedThrough = max(state.foldedThrough, through)
@@ -258,6 +267,25 @@ func (self *Folder) finished(ref foldRef, clusterId string, epoch uint64, from u
 	state.epoch = epoch
 	state.foldedFrom = from
 	state.foldedThrough = through
+}
+
+// Recounts the versions the ref's state holds unfolded into its cluster's sum: its newest committed version past
+// the horizon its last commit carried, or past this process's folds where they reach it.
+func (self *Folder) countUnfoldedWithLock(state *foldRefState) {
+	if state.unkept {
+		return
+	}
+	horizon := state.seenFoldedThrough
+	if state.foldedFrom <= horizon && horizon < state.foldedThrough {
+		horizon = state.foldedThrough
+	}
+	unfoldedCount := uint64(0)
+	if horizon < state.seenVersion {
+		unfoldedCount = state.seenVersion - horizon
+	}
+	self.clusterUnfoldedCounts[state.clusterId] -= state.unfoldedCount
+	self.clusterUnfoldedCounts[state.clusterId] += unfoldedCount
+	state.unfoldedCount = unfoldedCount
 }
 
 // Folds the request's range. See the file header. A fold with nothing to do answers at once; one another fold
@@ -538,18 +566,15 @@ func (self *foldRun) pathOf(tokenPath sidecar.EvsTokenPath) *foldPath {
 }
 
 // Whether the path's newest own write before version is a file's. False when no write of it in the range comes
-// before version.
+// before version. The events need not be sorted yet.
 func (self *foldPath) fileBefore(version uint64) bool {
-	file := false
+	var newest *foldEvent
 	for _, event := range self.events {
-		if version <= event.commitVersion {
-			break
-		}
-		if event.kind == foldEventWrite {
-			file = event.entryVersion.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY)
+		if event.kind == foldEventWrite && event.commitVersion < version && (newest == nil || newest.commitVersion < event.commitVersion) {
+			newest = event
 		}
 	}
-	return file
+	return newest != nil && newest.entryVersion.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY)
 }
 
 // Whether a fold must write the path whatever later versions do: a directory's deltas, which a newer delta never
@@ -758,6 +783,10 @@ func (self *foldRun) put(tokenPath sidecar.EvsTokenPath, read *EvsEntryRead, ent
 	}
 	defer grant.Close()
 	writeCtx := sidecar.WithBlobDeadline(grant.Context(), self.staleDeadline)
+	if !self.request.Deadline.IsZero() {
+		// a page-out's write that would land past step 7's window is worth nothing to it
+		writeCtx = sidecar.WithBlobDeadline(writeCtx, self.request.Deadline)
+	}
 	if hook := self.folder.beforeEntryWrite; hook != nil {
 		hook(IndexEntryKey(self.request.RepoId, self.request.RefId, self.epoch, tokenPath))
 	}
@@ -1046,9 +1075,9 @@ func (self *Folder) NoteCommit(clusterId string, repoId sidecar.Id, refId sideca
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		state := self.refStateWithLock(ref, clusterId)
-		state.clusterId = clusterId
 		state.seenVersion = max(state.seenVersion, committed.GetVersion())
 		state.seenFoldedThrough = max(state.seenFoldedThrough, committed.GetFoldedThrough())
+		self.countUnfoldedWithLock(state)
 		if state.stopIdle != nil {
 			state.stopIdle()
 			state.stopIdle = nil
@@ -1157,18 +1186,7 @@ func (self *Folder) declareBacklog(clusterId string) {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		for _, state := range self.refStates {
-			if state.clusterId != clusterId {
-				continue
-			}
-			horizon := state.seenFoldedThrough
-			if state.foldedFrom <= horizon && horizon < state.foldedThrough {
-				horizon = state.foldedThrough
-			}
-			if horizon < state.seenVersion {
-				unfoldedCount += state.seenVersion - horizon
-			}
-		}
+		unfoldedCount = self.clusterUnfoldedCounts[clusterId]
 	}()
 	price, err := self.priceTable.Price(WriteOperation{Kind: WriteOperationOverwrite, Count: float64(unfoldedCount)})
 	if err != nil {

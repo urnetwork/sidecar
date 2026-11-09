@@ -448,9 +448,13 @@ func (self *Folder) PageOut(ctx context.Context, request *EvsPageOutRequest) (*E
 		return behind(ErrEvsFoldDeferred)
 	}
 	defer grant.Close()
+	writeCtx := grant.Context()
+	if !request.Deadline.IsZero() {
+		writeCtx = sidecar.WithBlobDeadline(writeCtx, request.Deadline)
+	}
 	barrierKey := barrierRefKey(request.RepoId, request.RefId)
 	testHookBarrier(BarrierLogPagePutBefore, barrierKey)
-	_, err = sidecar.PutImmutable(grant.Context(), request.Cluster, LogPageKey(request.RepoId, request.RefId, page), logPage.Bytes, nil)
+	_, err = sidecar.PutImmutable(writeCtx, request.Cluster, LogPageKey(request.RepoId, request.RefId, page), logPage.Bytes, nil)
 	testHookBarrier(BarrierLogPagePutAfter, barrierKey)
 	if errors.Is(err, sidecar.ErrBlobImmutableMismatch) {
 		self.log.Errorf("[evs] alarm log_page_mismatch: repo %s ref %s page %d holds other bytes", sidecar.EvsKeyId(request.RepoId), sidecar.EvsKeyId(request.RefId), page)
