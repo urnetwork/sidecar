@@ -111,6 +111,9 @@ type EvsEngine struct {
 	priceTable *PriceTable
 	places     *sidecar.EvsRepoPlaceResolver
 	repos      *RepoCache
+	heads      *HeadStore
+	batches    *BatchWriter
+	records    *RecordCache
 	metrics    *evsMetrics
 	handler    http.Handler
 
@@ -178,6 +181,9 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 		inFlightCount:   sidecar.NewMonitorValue(0),
 		draining:        make(chan struct{}),
 	}
+	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
+	self.records = NewRecordCache(settings)
+	self.batches = NewBatchWriter(cancelCtx, clock, blobs, self.records, settings, log)
 	mux := http.NewServeMux()
 	for _, route := range self.routes() {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
@@ -210,6 +216,21 @@ func (self *EvsEngine) Places() *sidecar.EvsRepoPlaceResolver {
 // The process's repo/ cache.
 func (self *EvsEngine) Repos() *RepoCache {
 	return self.repos
+}
+
+// The process's head store.
+func (self *EvsEngine) Heads() *HeadStore {
+	return self.heads
+}
+
+// The process's batch writer.
+func (self *EvsEngine) Batches() *BatchWriter {
+	return self.batches
+}
+
+// The process's record cache.
+func (self *EvsEngine) Records() *RecordCache {
+	return self.records
 }
 
 // One handler for every route.
@@ -282,7 +303,8 @@ func (self *EvsEngine) Drain() {
 	}
 }
 
-// Ends everything at once: the probe and requests' work under the engine's ctx. Safe after Drain, and more than once.
+// Ends everything at once: the probe, batches waiting to flush (their waiters answered 503) and requests' work
+// under the engine's ctx. Safe after Drain, and more than once.
 func (self *EvsEngine) Close() {
 	self.drainingOnce.Do(func() { close(self.draining) })
 	self.cancel()

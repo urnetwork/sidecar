@@ -12,6 +12,8 @@
 package evsservice
 
 import (
+	"fmt"
+
 	"github.com/urnetwork/sidecar"
 )
 
@@ -25,6 +27,23 @@ const (
 	BarrierRepoPutAfter  = "evs.repo.put.after"
 )
 
+// EVS1-M2-08: the head and its cache (§11.8, §11.9), keyed by <repo>:<ref>, and batches, keyed by the batch.
+const (
+	// Around a cluster GET of a head.
+	BarrierHeadReadBefore = "evs.head.read.before"
+	BarrierHeadReadAfter  = "evs.head.read.after"
+	// Around a head's If-Match or If-None-Match: the commit point of every push and the fence of every write that
+	// commits nothing.
+	BarrierHeadCasBefore = "evs.head.cas.before"
+	BarrierHeadCasAfter  = "evs.head.cas.after"
+	// Around {evsh_}'s write after a commit.
+	BarrierHeadCacheWriteBefore = "evs.head.cache_write.before"
+	BarrierHeadCacheWriteAfter  = "evs.head.cache_write.after"
+	// Around a batch's PUT: every record waiting on it is in flight here.
+	BarrierBatchPutBefore = "evs.batch.put.before"
+	BarrierBatchPutAfter  = "evs.batch.put.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
@@ -33,4 +52,9 @@ func barrierRepoKey(repoId sidecar.Id) string {
 // A ref's barrier key: <repo>:<ref>.
 func barrierRefKey(repoId sidecar.Id, refId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId) + ":" + sidecar.EvsKeyId(refId)
+}
+
+// A batch's barrier key: <minute>-<instance>-<seq> in hex, unique as its key is.
+func barrierBatchKey(minute uint32, instance uint32, seq uint32) string {
+	return fmt.Sprintf("%08x-%08x-%08x", minute, instance, seq)
 }
