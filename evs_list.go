@@ -86,7 +86,12 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 		return nil, err
 	}
 	for _, delta := range verified.Deltas {
-		if err := apply(delta.Entry.GetNames(), max(1, delta.Statement.Push.GetPathEpoch())); err != nil {
+		// a delta below the pin has no statement here, and its rows are in the head's epoch
+		deltaEpoch := headEpoch
+		if delta.Statement != nil {
+			deltaEpoch = max(1, delta.Statement.Push.GetPathEpoch())
+		}
+		if err := apply(delta.Entry.GetNames(), deltaEpoch); err != nil {
 			return nil, err
 		}
 	}

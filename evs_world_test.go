@@ -26,7 +26,9 @@ import (
 
 // The verified config state of the world: one state that judges every pin.
 type evsTestConfig struct {
-	stateLock    sync.Mutex
+	stateLock sync.Mutex
+	// what At answers, nil for this one state
+	atErr        error
 	identityKeys map[Id][]byte
 	writers      []Id
 	readers      []Id
@@ -36,7 +38,14 @@ type evsTestConfig struct {
 func (self *evsTestConfig) Pin() *bridge.AuthPin {
 	return &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)}
 }
-func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) { return self, nil }
+func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.atErr != nil {
+		return nil, self.atErr
+	}
+	return self, nil
+}
 func (self *evsTestConfig) OnChain(pin *bridge.AuthPin) bool            { return true }
 func (self *evsTestConfig) IdentityKey(sidecarId Id) []byte {
 	self.stateLock.Lock()

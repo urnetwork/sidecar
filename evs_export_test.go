@@ -1,3 +1,5 @@
+//go:build !js
+
 // EVS1-M2-32's tests: a git-mode ref exported with its original commit oids, git fsck clean, provenance in
 // refs/notes/ur, and equal oids from two exporters; a file-mode version's commit deterministic; an erased entry's stub;
 // a file-mode ref refused while its root's names have no home; a tampered tree refused.
