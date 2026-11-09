@@ -61,11 +61,11 @@ type pushSuiteCase struct {
 	run  func(env *pushSuiteEnv) error
 }
 
-// Runs every case on target. t is a testing.TB so that server's test can run it inside its test
-// environment's callback.
+// Runs every case on target, §18.7's wake token cases (push_token_suite.go) among them. t is a testing.TB
+// so that server's test can run it inside its test environment's callback.
 func RunPushStoreSuite(t testing.TB, target *PushStoreTarget) {
 	t.Helper()
-	for _, suiteCase := range pushSuiteCases() {
+	for _, suiteCase := range slices.Concat(pushSuiteCases(), pushTokenSuiteCases()) {
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), pushSuiteCaseTimeout)
 			defer cancel()
