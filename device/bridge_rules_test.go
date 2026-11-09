@@ -200,6 +200,8 @@ func TestParseBridgeRulesRefusesEachMalformedRow(t *testing.T) {
 		{"entry with no prefix", func(rules *bridge.BridgeRules) { rules.Entries[3].Prefix = nil }},
 		{"entry with host bits", func(rules *bridge.BridgeRules) { rules.Entries[4].Prefix = prefix(0xC0000201, 24) }},
 		{"entry's prefix twice", func(rules *bridge.BridgeRules) { rules.Entries[5].Prefix = rules.Entries[4].Prefix }},
+		{"a host entry in the services", func(rules *bridge.BridgeRules) { rules.Entries[3].Prefix = prefix(block|0x35, 32) }},
+		{"a host entry ending in 255", func(rules *bridge.BridgeRules) { rules.Entries[3].Prefix = prefix(block|0x01FF, 32) }},
 		{"entry of no kind", func(rules *bridge.BridgeRules) { rules.Entries[3].Kind = 0 }},
 		{"entry of an unknown kind", func(rules *bridge.BridgeRules) { rules.Entries[3].Kind = 9 }},
 		{"unassigned outside every block", func(rules *bridge.BridgeRules) { rules.Entries[0].Prefix = prefix(0xC0000200, 24) }},
