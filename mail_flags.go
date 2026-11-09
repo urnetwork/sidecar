@@ -122,6 +122,7 @@ type mailFlagMessage struct {
 	trash   mailFlagWinner
 }
 
+// One label's key on one message.
 type mailFlagLabelKey struct {
 	messageId Id
 	label     string
@@ -165,6 +166,7 @@ func (self *mailFlagMerger) beats(a mailFlagWinner, b mailFlagWinner) bool {
 	)
 }
 
+// set over cleared, as a number to compare.
 func mailFlagRank(set bool) int {
 	if set {
 		return 1

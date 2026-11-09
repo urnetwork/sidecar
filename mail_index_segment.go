@@ -199,6 +199,7 @@ type MailIndexWriter struct {
 	settings *MailStoreSettings
 }
 
+// A writer appending to store's i/.
 func NewMailIndexWriter(store mailStore, settings *MailStoreSettings) *MailIndexWriter {
 	return &MailIndexWriter{store: store, settings: settings}
 }

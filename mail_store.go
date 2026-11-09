@@ -43,6 +43,7 @@ func (self *MailStoreConflictError) Error() string {
 	return fmt.Sprintf("%s: %d paths", ErrMailStoreConflict, len(self.Paths))
 }
 
+// ErrMailStoreConflict, which every conflict is.
 func (self *MailStoreConflictError) Unwrap() error {
 	return ErrMailStoreConflict
 }
@@ -117,6 +118,7 @@ type mailBoundedBuffer struct {
 	maxByteCount int
 }
 
+// Keeps data, or refuses all of it with ErrMailStoreTooLarge where it would pass the bound.
 func (self *mailBoundedBuffer) Write(data []byte) (int, error) {
 	if self.maxByteCount < self.buffer.Len()+len(data) {
 		return 0, ErrMailStoreTooLarge

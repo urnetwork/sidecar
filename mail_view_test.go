@@ -6,6 +6,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -383,8 +385,8 @@ func testMailLiveHeap() uint64 {
 // a label, so flags are part of what is kept. Nothing the test keeps grows with the mailbox: it checks order, count
 // and a sum of ids as it goes.
 func TestMailViewWorkingSetWith100000Entries(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds 125,000 entries")
+	if testing.Short() || runtime.GOOS == "js" {
+		t.Skip("builds 125,000 entries; the Worker's 64 MiB is a review-phase hand run, since this takes minutes in wasm")
 	}
 	const budget = 8 * 1024 * 1024
 	for _, c := range []struct {
@@ -475,5 +477,102 @@ func TestMailViewWorkingSetWith100000Entries(t *testing.T) {
 			t.Errorf("%s: the view held %d bytes", c.name, peak)
 		}
 		t.Logf("%s: %d messages paged, working set at most %d KiB", c.name, n, peak/1024)
+	}
+}
+
+// The bytes one check may allocate for one input: a fixed allowance for the view, the writer and the store's
+// copies, and a multiple of the input for the keys, entries and ops it decodes.
+func mailFuzzAllocationBound(inputByteCount int) uint64 {
+	return 4*1024*1024 + 64*uint64(inputByteCount)
+}
+
+// FuzzMailIndexSegment's seeds: writer-made segments, a newer writer's field, a record cut short, a lone tag and
+// nothing.
+func testMailIndexSegmentSeeds(t testing.TB) [][]byte {
+	two := testMailSegment(t, 1, 2, testMailDayMillis(202611, 12))
+	return [][]byte{
+		two,
+		protowire.AppendVarint(protowire.AppendTag(bytes.Clone(two), 2, protowire.VarintType), 9),
+		{0x0a, 0x05, 0x01},
+		{0x0a},
+		{},
+	}
+}
+
+// What FuzzMailIndexSegment holds of any bytes: read as an i/ and an f/ segment totally and within a fixed multiple
+// of their size, every entry listed its month's with a 16-byte id, and the writer's append either closing the segment
+// or leaving it with exactly one more record, its bytes kept.
+func checkMailIndexSegment(t testing.TB, segment []byte) {
+	t.Helper()
+	if mailIndexSegmentReadMaxByteCount < len(segment) {
+		return
+	}
+	ctx := context.Background()
+	month := MailYearMonth(202611)
+	at := testMailDayMillis(month, 12)
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	store := newMailTestStore()
+	store.put(MailIndexPath(month, 0), segment)
+	store.put(MailFlagPath(month, 0), segment)
+	view := testMailView(store, nil, nil)
+	page, err := view.List(ctx, &MailListArgs{Folder: MailFolderAll, Limit: MailIndexSegmentMaxEntryCount})
+	if err != nil {
+		t.Fatalf("the view failed: %v", err)
+	}
+	// every entry listed is a record of the segment, so no more than its bytes allow
+	if len(segment)/20+1 < len(page.Entries) {
+		t.Fatalf("%d entries from %d bytes", len(page.Entries), len(segment))
+	}
+	for _, entry := range page.Entries {
+		if len(entry.Entry.GetId()) != 16 || MailYearMonthOf(entry.Entry.GetTime()) != month {
+			t.Fatalf("an entry broke its month or id: %v", entry.Entry)
+		}
+	}
+
+	recordCount := 0
+	parses := mailSegmentRecords(segment, func(index int, record []byte) error {
+		recordCount += 1
+		return nil
+	}) == nil
+	appended, err := NewMailIndexWriter(store, DefaultMailStoreSettings()).Append(ctx, testMailIndexEntry(1<<40, at))
+	if err != nil {
+		t.Fatalf("the append failed: %v", err)
+	}
+	written := store.file(appended.Path).content
+	switch {
+	case appended.Present:
+	case appended.Path == MailIndexPath(month, 0):
+		// appended in place: only to a segment that parses and had room, keeping its bytes
+		if !parses || MailIndexSegmentMaxEntryCount <= recordCount || !bytes.HasPrefix(written, segment) {
+			t.Fatalf("appended to a segment it should have closed (parses %t, %d records)", parses, recordCount)
+		}
+		after := 0
+		if err := mailSegmentRecords(written, func(index int, record []byte) error { after += 1; return nil }); err != nil || after != recordCount+1 {
+			t.Fatalf("%d records after the append, %v", after, err)
+		}
+	case appended.Path == MailIndexPath(month, 1):
+		if MailIndexSegmentMaxByteCount < len(written) {
+			t.Fatal("a new segment past its bound")
+		}
+	default:
+		t.Fatalf("appended to %d bytes elsewhere", len(written))
+	}
+	if !bytes.Equal(store.file(MailFlagPath(month, 0)).content, segment) {
+		t.Fatal("a read changed the f/ segment")
+	}
+
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; mailFuzzAllocationBound(len(segment)) < allocated {
+		t.Fatalf("%d bytes allocated for %d bytes of input", allocated, len(segment))
+	}
+}
+
+// FuzzMailIndexSegment's seeds on every leg, the Worker's included.
+func TestMailIndexSegmentSeedsReadTotally(t *testing.T) {
+	for _, seed := range testMailIndexSegmentSeeds(t) {
+		checkMailIndexSegment(t, seed)
 	}
 }

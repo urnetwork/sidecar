@@ -173,6 +173,7 @@ type MailView struct {
 	segments []*mailViewSegment
 }
 
+// A view over args' stores, holding nothing until it lists.
 func NewMailView(args *MailViewArgs) *MailView {
 	return &MailView{args: args}
 }
