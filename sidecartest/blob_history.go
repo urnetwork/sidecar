@@ -243,6 +243,10 @@ func (self *recordedBlobCluster) PutStream(ctx context.Context, key string, body
 }
 
 func (self *recordedBlobCluster) Get(ctx context.Context, key string) (*sidecar.BlobObject, error) {
+	// an oracle's look under InspectContext is no request a client made, so FI-30 never reads it
+	if isInspecting(ctx) {
+		return self.BlobCluster.Get(ctx, key)
+	}
 	entry := self.entry(ctx, BlobHistoryGet, key)
 	self.recorder.begin(ctx, entry)
 	object, err := self.BlobCluster.Get(ctx, key)
@@ -255,6 +259,10 @@ func (self *recordedBlobCluster) Get(ctx context.Context, key string) (*sidecar.
 }
 
 func (self *recordedBlobCluster) GetRange(ctx context.Context, key string, offset int64, byteCount int64) (*sidecar.BlobObject, error) {
+	// an oracle's look under InspectContext is no request a client made, so FI-30 never reads it
+	if isInspecting(ctx) {
+		return self.BlobCluster.GetRange(ctx, key, offset, byteCount)
+	}
 	entry := self.entry(ctx, BlobHistoryGetRange, key)
 	self.recorder.begin(ctx, entry)
 	object, err := self.BlobCluster.GetRange(ctx, key, offset, byteCount)
@@ -267,6 +275,10 @@ func (self *recordedBlobCluster) GetRange(ctx context.Context, key string, offse
 }
 
 func (self *recordedBlobCluster) Head(ctx context.Context, key string) (*sidecar.BlobInfo, error) {
+	// an oracle's look under InspectContext is no request a client made, so FI-30 never reads it
+	if isInspecting(ctx) {
+		return self.BlobCluster.Head(ctx, key)
+	}
 	entry := self.entry(ctx, BlobHistoryHead, key)
 	self.recorder.begin(ctx, entry)
 	info, err := self.BlobCluster.Head(ctx, key)
@@ -279,6 +291,10 @@ func (self *recordedBlobCluster) Head(ctx context.Context, key string) (*sidecar
 }
 
 func (self *recordedBlobCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
+	// an oracle's look under InspectContext is no request a client made, so FI-30 never reads it
+	if isInspecting(ctx) {
+		return self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
+	}
 	entry := self.entry(ctx, BlobHistoryList, keyPrefix)
 	self.recorder.begin(ctx, entry)
 	entry.StartAfter = startAfter

@@ -42,7 +42,10 @@
 //     a TLS server written from the RFCs, and MxWorld, a signed fixture DNS and dialer, all on
 //     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
 //   - fault, the FS schedule runner (§22.8), with catalog.yml, §22.8's rows and §23.6's gates, and
-//     §22.8's rules across runs: twins, every write's lost response, the explorer and replays.
+//     §22.8's rules across runs: twins, every write's lost response, the explorer and replays; the
+//     oracle's StoreView over every store and readers' keys (store_view*.go, oracle.go); and GateFile,
+//     the gate tool's gates.yml generated from the catalog and each gate's sweep (gate*.go).
+//   - held_secrets.go, what each actor held, as testHookSecret gave it, which the StoreView opens with.
 //   - model, §22.8's TLA+ models with run-tlc.sh, and around them, under sidecar_tlc, the runner that
 //     checks each model, its mutants and liveness, modelled.yml's sources a gate reruns them on, and
 //     mutants/mutants.yml, each invariant's refusing twins.

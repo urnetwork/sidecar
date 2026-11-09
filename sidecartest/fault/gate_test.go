@@ -262,3 +262,27 @@ func TestGateCaseCamelAndTestNames(t *testing.T) {
 		}
 	}
 }
+
+// G0 and every entry review open with D-ARCH-4's assembly check, which server's gate tool runs; no exit review
+// carries it.
+func TestGateFileRunsTheAssemblyAtEveryEntryReview(t *testing.T) {
+	data, err := GateFile(DefaultCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := parseGateFileForTest(t, data)
+	for _, gate := range GateNames() {
+		found := false
+		for _, row := range file.Gates[gate] {
+			if strings.HasPrefix(row.Item, "D-ARCH-4's assembly check") {
+				found = true
+				if len(row.Commands) != 1 || row.Commands[0].Repo != "server" || !slices.Equal(row.Commands[0].Command, []string{"go", "run", "./local/sidecar-gate", "assembly"}) {
+					t.Errorf("%s's assembly row runs %+v", gate, row.Commands)
+				}
+			}
+		}
+		if want := gate == "G0" || strings.HasSuffix(gate, "-in"); found != want {
+			t.Errorf("%s carries the assembly row: %t, want %t", gate, found, want)
+		}
+	}
+}

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // §22.5's §18 row at the core (CORE-M8-01): an sdk host's TokenSource refreshes once it holds the core's signer, and
@@ -305,10 +304,8 @@ func TestHostReregistersOnRestoreRequired(t *testing.T) {
 	if err := world.enroll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// the generation's token is installed before its status, as a host re-registers only with one held
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
-	// a host re-registers after its source answered, so with the generation's token held, which the source hands
-	// over after the status names the generation
-	awaitSidecarApiToken(t, world.sidecar)
 	bound := len(world.api.requestedPaths())
 	world.sidecar.Reregister(context.Background())
 	// The new generation's push client asks for a resync on its own (§6.8), so its /sidecar/sync/ requests may
@@ -342,23 +339,5 @@ func TestHostReregistersOnRestoreRequired(t *testing.T) {
 	}()
 	if err := json.Unmarshal(body, wire); err != nil || !bytes.Equal(wire.Binding, record.binding) {
 		t.Fatalf("the re-posted binding is not the newest one: %v", err)
-	}
-}
-
-// Waits until the sidecar's api client holds a token: a generation installs its token in the api before it is
-// published as running, so the running generation's monitor announces it.
-func awaitSidecarApiToken(t *testing.T, sidecar *Sidecar) {
-	t.Helper()
-	deadline := time.After(sidecarTestTimeout)
-	for {
-		running, changed := sidecar.runningGenerationNumber.Get()
-		if running != 0 && sidecar.sidecarApi.currentByJwt() != "" {
-			return
-		}
-		select {
-		case <-changed:
-		case <-deadline:
-			t.Fatal("the sidecar api never held a token")
-		}
 	}
 }

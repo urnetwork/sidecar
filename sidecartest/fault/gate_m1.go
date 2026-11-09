@@ -18,7 +18,7 @@ var gateFs54Tests = []*GateTest{
 	{Repo: "server", Package: "./local/sidecar-migrations", Names: []string{"TestPromoteMovesOnlyItsOwnGroup", "TestPromoteRefusesOutOfOrder", "TestPromoteResultCompilesOnBothLegs"}},
 }
 
-var GateM1Sweep = RegisterGateSweep(&GateSweep{
+var gateM1Sweep = RegisterGateSweep(&GateSweep{
 	Gate:  "M1",
 	Cases: map[string][]*GateTest{"FS-54": gateFs54Tests},
 	Items: []*GateItem{
@@ -94,7 +94,7 @@ var GateM1Sweep = RegisterGateSweep(&GateSweep{
 })
 
 // M1's entry review reads its design closure, which a person signs.
-var GateM1InSweep = RegisterGateSweep(&GateSweep{
+var gateM1InSweep = RegisterGateSweep(&GateSweep{
 	Gate: "M1-in",
 	Items: []*GateItem{
 		{
@@ -105,7 +105,7 @@ var GateM1InSweep = RegisterGateSweep(&GateSweep{
 })
 
 // FS-55 at every Gn-out (OPS-M1-07): server's binaries built at N and N+1 against main's schema.
-var GateEverySweep = RegisterGateSweep(&GateSweep{
+var gateEverySweep = RegisterGateSweep(&GateSweep{
 	Gate: "every",
 	Cases: map[string][]*GateTest{
 		"FS-55": {
@@ -117,25 +117,25 @@ var GateEverySweep = RegisterGateSweep(&GateSweep{
 // The items OPS-M1-07's hand-written gates.yml held for later gates, kept until TEST-M2-19, TEST-M3-02,
 // TEST-M5-02 and TEST-M7-01 move each into its own sweep.
 var (
-	GateM2CarriedSweep = RegisterGateSweep(&GateSweep{
+	gateM2CarriedSweep = RegisterGateSweep(&GateSweep{
 		Gate: "M2",
 		Items: []*GateItem{
 			{Item: "the nvme run (D-TEST-11)", External: "hardware: the production hosts' PM9A3 staging set, before M2's exit"},
 			{Item: "§22.10's 0x0010 interop artifact"},
 		},
 	})
-	GateM3CarriedSweep = RegisterGateSweep(&GateSweep{
+	gateM3CarriedSweep = RegisterGateSweep(&GateSweep{
 		Gate: "M3",
 		Items: []*GateItem{
 			{Item: "the nvme and hdd runs on production, the hdd run's admitted mix included", External: "production: the production hosts"},
 			{Item: "one restore of a real dump generation", External: "production and people: a real sidecar dump generation and the owner's drill"},
 		},
 	})
-	GateM5CarriedSweep = RegisterGateSweep(&GateSweep{
+	gateM5CarriedSweep = RegisterGateSweep(&GateSweep{
 		Gate:  "M5",
 		Items: []*GateItem{{Item: "S7's SNI-less abuse@<root> case"}},
 	})
-	GateM7CarriedSweep = RegisterGateSweep(&GateSweep{
+	gateM7CarriedSweep = RegisterGateSweep(&GateSweep{
 		Gate:  "M7",
 		Items: []*GateItem{{Item: "D-MAIL-9's census run, with §14's outbound probe", External: "production: the production edges"}},
 	})

@@ -11,9 +11,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-
-	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 type Invariant interface {
@@ -22,25 +19,6 @@ type Invariant interface {
 	// Runs after every step and at the end. ctx is an inspecting context, so reads through it take
 	// no fault and count nothing.
 	Check(ctx context.Context, oracle *Oracle) error
-}
-
-// What an invariant reads. On T2 a read goes around every fault; on T3 it goes to the real store.
-type Oracle struct {
-	Net *Net
-	// The step just done, counting from 0, or len(Steps) at the end.
-	Step int
-	// True for the check at the end, where nothing is left in flight.
-	Final bool
-}
-
-// Every store, as an engine sees it.
-func (self *Oracle) Host() *sidecar.ServiceHost {
-	return self.Net.Host()
-}
-
-// Every store request so far.
-func (self *Oracle) BlobHistory() []*sidecartest.BlobHistoryEntry {
-	return self.Net.BlobHistory()
 }
 
 type invariantFunction struct {

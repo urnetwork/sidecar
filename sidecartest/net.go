@@ -45,6 +45,15 @@ type NetSettings struct {
 	// when they may. T3 sets it, so a T3 run whose row reached them, as a sidecar does until server's api
 	// carries its enrollment, fails rather than passing on T2's platform (Q-TEST-1).
 	RefusePlatformFakes string
+	// What the oracle reads Postgres through (fault's StoreView): server's, which T3 (sidecart3) sets. Nil on
+	// T2, which has no Postgres.
+	Postgres PostgresReader
+}
+
+// Read access to a tier's Postgres for an oracle: one query's rows, each its columns' values. Read-only by
+// contract.
+type PostgresReader interface {
+	Rows(ctx context.Context, query string, args ...any) ([][]any, error)
 }
 
 func DefaultNetSettings() *NetSettings {
@@ -87,6 +96,8 @@ type Net struct {
 	barriers *BarrierDriver
 	actors   *ActorTable
 	capture  *PrivacyCapture
+	// what each actor held, as testHookSecret gave it (fault's StoreView opens with these)
+	secrets *HeldSecrets
 
 	fakes       *FakeHost
 	blobs       *BlobRecorder
@@ -140,6 +151,7 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 		barriers:      barriers,
 		actors:        NewActorTable(clock, barriers),
 		capture:       NewPrivacyCapture(),
+		secrets:       NewHeldSecrets(),
 		builders:      map[string]ProcessBuilder{},
 		processes:     map[string]any{},
 		engines:       map[string]sidecar.Engine{},
@@ -161,7 +173,10 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 	self.capture.AddSource(self.fakes.privacyItems)
 	self.capture.AddSource(processEnvironmentItems)
 	if HooksLinked {
-		remove, err := InstallTestHooks(self.capture.AddSecret, barriers.Hit)
+		remove, err := InstallTestHooks(func(kind string, secret []byte) {
+			self.capture.AddSecret(kind, secret)
+			self.secrets.Add(barriers.CurrentActor(), kind, secret)
+		}, barriers.Hit)
 		if err != nil {
 			panic(err)
 		}
@@ -216,6 +231,16 @@ func (self *Net) Barriers() *BarrierDriver {
 
 func (self *Net) Actors() *ActorTable {
 	return self.actors
+}
+
+// What each actor held, as testHookSecret gave it: empty without sidecar_testhooks.
+func (self *Net) HeldSecrets() *HeldSecrets {
+	return self.secrets
+}
+
+// The tier's Postgres for an oracle, or nil on T2.
+func (self *Net) Postgres() PostgresReader {
+	return self.settings.Postgres
 }
 
 // The fakes by their types. On T3 these exist and nothing talks to them.
