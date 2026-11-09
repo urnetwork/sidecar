@@ -156,8 +156,12 @@ type recordReadLog struct {
 	erasedEntryIds map[Id]bool
 }
 
-// A reader over args, reading nothing until its first Sync.
+// A reader over args, reading nothing until its first Sync. Store is required; nil settings are the defaults.
 func NewRecordReader(args *RecordReaderArgs) *RecordReader {
+	settings := args.Settings
+	if settings == nil {
+		settings = defaultSidecarRecordSettings()
+	}
 	log := args.Log
 	if log == nil {
 		log = NewNoopLogger()
@@ -177,7 +181,7 @@ func NewRecordReader(args *RecordReaderArgs) *RecordReader {
 		auth:      auth,
 		alarm:     args.Alarm,
 		clock:     clockOrReal(args.Clock),
-		settings:  args.Settings,
+		settings:  settings,
 		log:       log,
 		logs:      map[Id]*recordReadLog{},
 	}
