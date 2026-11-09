@@ -53,8 +53,17 @@ func RestoreConfigLog(settings *ConfigLogSettings, retained *ConfigRetained, row
 	if err != nil {
 		return nil, err
 	}
+	if err := self.restore(retained, rowsSource); err != nil {
+		return nil, err
+	}
+	return self, nil
+}
+
+// Starts a log at S(0) at the newest base among retained.Entries and applies every entry after it, as
+// RestoreConfigLog says, a full reader's or a rows-only one's.
+func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSource) error {
 	if len(retained.Entries) == 0 {
-		return self, nil
+		return nil
 	}
 	if rowsSource == nil {
 		rowsSource = ConfigNoRowsSource{}
@@ -67,19 +76,19 @@ func RestoreConfigLog(settings *ConfigLogSettings, retained *ConfigRetained, row
 	for i, entryBytes := range retained.Entries {
 		entry := &bridge.AuthEntry{}
 		if err := proto.Unmarshal(entryBytes, entry); err != nil {
-			return nil, fmt.Errorf("%w: kept entry %d: %w", ErrConfigEntryMalformed, i, err)
+			return fmt.Errorf("%w: kept entry %d: %w", ErrConfigEntryMalformed, i, err)
 		}
 		if !bytes.Equal(entry.GetNetworkId(), self.networkId.Bytes()) {
-			return nil, fmt.Errorf("%w: kept entry %d is another network's", ErrConfigEntryMalformed, i)
+			return fmt.Errorf("%w: kept entry %d is another network's", ErrConfigEntryMalformed, i)
 		}
 		if 0 < i {
 			if entry.GetN() != entries[i-1].GetN()+1 || !bytes.Equal(entry.GetPrevChain(), chains[i-1][:]) {
-				return nil, fmt.Errorf("%w: kept entry %d does not chain onto the one before", ErrConfigFork, entry.GetN())
+				return fmt.Errorf("%w: kept entry %d does not chain onto the one before", ErrConfigFork, entry.GetN())
 			}
 		}
 		chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody())
 		if err != nil {
-			return nil, fmt.Errorf("%w: kept entry %d: %w", ErrConfigEntryMalformed, i, err)
+			return fmt.Errorf("%w: kept entry %d: %w", ErrConfigEntryMalformed, i, err)
 		}
 		entries[i], chains[i] = entry, chain
 		if entry.GetKind() == bridge.AuthEntryKindBase {
@@ -87,21 +96,21 @@ func RestoreConfigLog(settings *ConfigLogSettings, retained *ConfigRetained, row
 		}
 	}
 	if baseIndex < 0 {
-		return nil, fmt.Errorf("%w: the kept entries hold no base", ErrConfigEntryMalformed)
+		return fmt.Errorf("%w: the kept entries hold no base", ErrConfigEntryMalformed)
 	}
 	if entries[0].GetN() == 1 && !bytes.Equal(entries[0].GetPrevChain(), self.state.Load().chain[:]) {
-		return nil, fmt.Errorf("%w: entry 1 does not chain onto the genesis", ErrConfigFork)
+		return fmt.Errorf("%w: entry 1 does not chain onto the genesis", ErrConfigFork)
 	}
 
 	if err := self.startAtBase(entries, chains, retained.Entries, baseIndex, source); err != nil {
-		return nil, err
+		return err
 	}
 	for i := baseIndex + 1; i < len(entries); i += 1 {
 		if _, err := self.Apply(retained.Entries[i], source); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return self, nil
+	return nil
 }
 
 // Builds S(b) for the base at baseIndex from its rows, the kept entries before it chained to its prev_chain, and the
@@ -115,6 +124,12 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 	signerId, err := configBaseSigner(signed)
 	if err != nil {
 		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseEntry.GetN(), err)
+	}
+	// S(b) is b's rows with its tail re-applied, so entries that start after the tail's first position would give a
+	// state missing what the tail did, a revocation among it: refused, never built short
+	if tailFrom := header.GetFoldedThrough() + 1; tailFrom < baseEntry.GetN() && tailFrom < entries[0].GetN() {
+		return fmt.Errorf("%w: the kept entries start at %d, after base %d's tail from %d", ErrConfigEntryMalformed,
+			entries[0].GetN(), baseEntry.GetN(), tailFrom)
 	}
 	rowsBytes, err := rowsSource.Rows(self.networkId, header.GetRowsSha256())
 	if err != nil {
@@ -220,6 +235,8 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 	self.keep(start)
 	self.retainBase(result, rowsBytes)
 	testHookBarrier("config.restore", self.networkId.String())
+	// StateAt's window starts here: no state before b was built
+	self.history.reset(result, start)
 	self.state.Store(result)
 	return nil
 }

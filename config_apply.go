@@ -231,9 +231,11 @@ type ConfigLog struct {
 	baseRows map[[sha256.Size]byte][]byte
 	// once set, every Apply returns it
 	fork *ConfigForkError
-	// a rows-only reader opens no config head (TEAM-M2-11): its bases skip the head check and its settings are
-	// unknown
+	// a rows-only reader opens no config head (config_rows_only.go): its bases skip the head check and its settings
+	// are unknown
 	rowsOnly bool
+	// the states StateAt serves, shared with every state this log makes (config_state_at.go)
+	history *configStateHistory
 }
 
 // One retained entry and what it came to.
@@ -278,6 +280,7 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		ringIds:       map[[configRetainedIdSize]byte]configRingEntry{},
 		baseRows:      map[[sha256.Size]byte][]byte{},
 	}
+	self.history = newConfigStateHistory(settings, networkId, self.log)
 	state := &ConfigState{
 		networkId:    networkId,
 		genesis:      genesis,
@@ -290,7 +293,9 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		proposals:    map[[sha256.Size]byte]*configProposal{},
 		chains:       [][sha256.Size]byte{genesisChain},
 		chainsFrom:   0,
+		history:      self.history,
 	}
+	self.history.reset(state, nil)
 	self.state.Store(state)
 	return self, nil
 }
@@ -454,6 +459,7 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	}
 	self.keep(kept)
 	testHookBarrier("config.apply", barrierKey)
+	self.history.push(next, kept)
 	self.state.Store(next)
 	return kept.verdict, nil
 }
