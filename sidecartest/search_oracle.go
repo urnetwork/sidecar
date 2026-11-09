@@ -73,6 +73,9 @@ var (
 	ErrSearchOracleUnsupported = errors.New("search oracle: not supported yet")
 	// A query §16.10's limits refuse, for which a search must find nothing.
 	ErrSearchOracleQueryRefused = errors.New("search oracle: query refused")
+	// A scope that would make every answer empty whatever the ledger holds: no reader, no repo or no
+	// network named. A schedule built on one would pass without checking anything.
+	ErrSearchOracleScope = errors.New("search oracle: scope names nothing")
 )
 
 // A row's doc kind (INDEX-FORMAT.md's Rows).
@@ -689,9 +692,15 @@ func searchOracleScopeRefs(ledger *SearchLedger, scope *SearchScope) ([]*searchO
 		}
 		return slices.Contains(repo.ReaderIds, scope.ReaderId)
 	}
+	if scope.ReaderId == (sidecar.Id{}) {
+		return nil, fmt.Errorf("%w: no reader", ErrSearchOracleScope)
+	}
 	pairs := []*searchOracleRefPair{}
 	switch scope.Breadth {
 	case SearchBreadthRepo:
+		if len(scope.Repos) == 0 {
+			return nil, fmt.Errorf("%w: repo breadth names no repo", ErrSearchOracleScope)
+		}
 		for _, named := range scope.Repos {
 			repo, ok := ledger.repoIdRepos[named.RepoId]
 			if !ok {
@@ -708,7 +717,10 @@ func searchOracleScopeRefs(ledger *SearchLedger, scope *SearchScope) ([]*searchO
 		}
 	case SearchBreadthNetwork, SearchBreadthAll:
 		if scope.Breadth == SearchBreadthNetwork && len(scope.NetworkIds) != 1 {
-			return nil, fmt.Errorf("%w: network breadth names one network, not %d", ErrSearchLedgerInvalid, len(scope.NetworkIds))
+			return nil, fmt.Errorf("%w: network breadth names one network, not %d", ErrSearchOracleScope, len(scope.NetworkIds))
+		}
+		if len(scope.NetworkIds) == 0 {
+			return nil, fmt.Errorf("%w: all breadth names no network", ErrSearchOracleScope)
 		}
 		for _, repoId := range slices.SortedFunc(maps.Keys(ledger.repoIdRepos), func(a sidecar.Id, b sidecar.Id) int {
 			return a.Cmp(b)
@@ -866,6 +878,7 @@ func (self *SearchOracle) placeEntries(repo *SearchLedgerRepo, refKey []byte, re
 	for _, i := range cover {
 		entry := commits[i]
 		day := uint32(entry.indexedAt.Unix() / int64(searchOracleDayDuration/time.Second))
+		// a ref DELETE's ref tombstone is an entry too, which may open a bucket
 		entries := []placing{}
 		for _, change := range entry.commit.Changes {
 			chunks := max(pathChunks[change.Path][change.Version], previousChunks(change.Path, change.Version))

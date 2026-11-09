@@ -429,6 +429,30 @@ func TestSearchLedgerRefusesWhatEvsWould(t *testing.T) {
 	}
 }
 
+// A scope that would make every answer empty is refused, so no schedule passes on it unchecked.
+func TestSearchOracleRefusesScopesNamingNothing(t *testing.T) {
+	hand := writeSearchHand(t)
+	noReader := hand.network()
+	noReader.ReaderId = sidecar.Id{}
+	noRepo := &SearchScope{Breadth: SearchBreadthRepo, ReaderId: hand.readerId}
+	noNetwork := &SearchScope{Breadth: SearchBreadthAll, ReaderId: hand.readerId}
+	twoNetworks := hand.network()
+	twoNetworks.NetworkIds = []sidecar.Id{hand.network1, hand.network2}
+	for i, scope := range []*SearchScope{noReader, noRepo, noNetwork, twoNetworks} {
+		if _, _, err := hand.oracle.Judge("budget", scope); !errors.Is(err, ErrSearchOracleScope) {
+			t.Errorf("scope %d: %v, want ErrSearchOracleScope", i, err)
+		}
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("Matches answered a scope naming no reader")
+			}
+		}()
+		hand.oracle.Matches("budget", noReader)
+	}()
+}
+
 func TestSearchOracleNormalizerSteps(t *testing.T) {
 	cases := []struct {
 		in   string
