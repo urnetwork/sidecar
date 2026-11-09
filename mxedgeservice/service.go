@@ -101,6 +101,8 @@ type MxEdgeService struct {
 	// Whether a sender gets 554 at the banner. nil rejects nothing, as §15.4 has it with the feed
 	// down, and MAIL-M7-20's listings set this.
 	bannerRefused func(sender netip.Addr) bool
+	// The platform role's state, nil for the router (platform.go).
+	platform *mxPlatform
 
 	// What the last probe found.
 	storesReachable *sidecar.MonitorValue[bool]
@@ -129,6 +131,19 @@ func NewMxEdgeService(
 	store MxEdgeStore,
 	deps *MxEdgeDeps,
 	settings *MxEdgeSettings,
+) (*MxEdgeService, error) {
+	return newMxEdgeService(ctx, host, store, deps, settings, nil)
+}
+
+// The engine, with role setting the role's fields before anything starts, so no goroutine sees them
+// change. A nil role is the router's.
+func newMxEdgeService(
+	ctx context.Context,
+	host *sidecar.ServiceHost,
+	store MxEdgeStore,
+	deps *MxEdgeDeps,
+	settings *MxEdgeSettings,
+	role func(self *MxEdgeService),
 ) (*MxEdgeService, error) {
 	if host == nil || host.Redis == nil || host.Metrics == nil {
 		return nil, errors.New("mxedge needs a host with Redis and Metrics")
@@ -171,6 +186,9 @@ func NewMxEdgeService(
 	self.records = newMxConnectionRecords(store, settings, clock, self.metrics, log)
 	self.depsComplete = deps.ReadClientHello != nil && deps.NormalizeSni != nil && deps.WriteTlsAlert != nil
 	self.handoff = self.closeHandshake
+	if role != nil {
+		role(self)
+	}
 	self.records.start(cancelCtx)
 	go self.run()
 	return self, nil
@@ -191,6 +209,10 @@ func (self *MxEdgeService) run() {
 			self.metrics.dailyKeyRefreshes.Add(1, result)
 			if err != nil {
 				return false
+			}
+			// the platform role names no network, so it writes no session record and needs no store
+			if self.platform != nil {
+				return true
 			}
 			return self.store != nil && self.store.Ping(ctx) == nil
 		}()
@@ -237,6 +259,9 @@ func (self *MxEdgeService) release() {
 	}
 	for _, conn := range connections {
 		conn.Close()
+	}
+	if self.platform != nil {
+		self.platform.close()
 	}
 	self.sessionGroup.Wait()
 	// every session has left its record, so one last write keeps the queue's tail, bounded by the
@@ -515,20 +540,23 @@ func (self *MxEdgeService) closeHandshake(session *mxSession) string {
 	} else if _, err := self.deps.ReadClientHello(conn, self.settings.ClientHelloByteCount); err != nil {
 		alert = MxTlsAlertDecodeError
 	}
-	// a failure is only counted: see Record
-	func() {
-		ctx, done := self.storeContext()
-		defer done()
-		if err := self.closedHandshakes.Record(ctx, session.sender); err != nil {
-			self.metrics.memoryWrites.Add(1, mxMemoryResultFailed)
-			return
-		}
-		self.metrics.memoryWrites.Add(1, mxMemoryResultWritten)
-	}()
+	self.recordClosedHandshake(session)
 	if self.deps.WriteTlsAlert != nil {
 		self.deps.WriteTlsAlert(conn, alert)
 	}
 	return mxSessionResultClosedHandshake
+}
+
+// Writes the sender's /24 or /48 to the closed-handshake memory, within StoreTimeout. A failure is only
+// counted: see Record.
+func (self *MxEdgeService) recordClosedHandshake(session *mxSession) {
+	ctx, done := self.storeContext()
+	defer done()
+	if err := self.closedHandshakes.Record(ctx, session.sender); err != nil {
+		self.metrics.memoryWrites.Add(1, mxMemoryResultFailed)
+		return
+	}
+	self.metrics.memoryWrites.Add(1, mxMemoryResultWritten)
 }
 
 // The sender behind addr, unmapped, with no zone. The host's listeners have already taken any PROXY
