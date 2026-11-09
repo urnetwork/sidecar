@@ -420,6 +420,13 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestGkmLadderVectors",
 		"TestGkmWrapAadVectors",
 		"TestGkmWrapPathVectors",
+		// gkm's client runs on every leg, the page Worker's included (KEYS-M2-18)
+		"TestGkmApiBatchesRepoScopesSixtyFourAToken",
+		"TestGkmApiMapsAnswers",
+		"TestGkmHintsCoalesceABurstIntoOneWake",
+		"TestGkmHintsLostHintRecoveredAtResync",
+		"TestGkmUpkeepKeepsAReaderKeyEverySixDaysAndAcksDaily",
+		"TestGkmUpkeepKeepsAPrivateKeyExactlyThirtyDaysPastItsNotAfter",
 		"TestEvsTokenVectors",
 		"TestEvsDigestVectors",
 		"TestEvsChainVectors",
