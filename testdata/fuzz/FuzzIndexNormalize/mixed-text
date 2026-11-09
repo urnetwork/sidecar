@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte(" ﬁne ＡＢＣ１２３ x² ① ｶﾞ ㌔ Ⅷ ﷺ Straße STRAẞE σίσυφος ΣΙΣΥΦΟΣ İstanbul ısı K Å ᾳ Ꭰ ꭰ Ᏸ ᏸ café café Việt ą̣́̈ ἀρχή йод مَرْحَبًا שָׁלוֹם が が กิน हिन्दी 한글 한 .́ aः́ ก́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́ á́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́́ a--b a , . ; b ...x... \t\r\n  €100 a_b don't user@example.com soft\u00adhyphen ٣٤ ½ a\xffb \xc3 a\xe2\x82 \xed\xa0\x80 \xc0\x80 a�b ג̇ ך̇ גּ̇ ךּ̇ 𐁄̇ ")
+int(17)

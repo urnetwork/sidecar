@@ -13,8 +13,12 @@
 // is an error, never a fresh chain, since a fresh chain would sign seqs readers already pinned (I-16).
 //
 // The fsync of a journal record is the linearization point, record.chain.fsync, with .before and .after around it,
-// keyed by the log. One log's appends run one at a time through it, holding that log's append lock across the take,
-// the signature and the fsync and never while waiting on anything else; different logs' run side by side.
+// keyed by the log. One log's appends run one at a time through it, since each chains on the one before, and a
+// schedule holding one there stalls only that log's next append and adoption: Head, Pending and Acknowledge go on, and
+// different logs' appends run side by side. Writes of a head file pass record.chain.head the same way.
+//
+// One chain store owns its directory: two on one directory would hand out the same seqs, so the record component makes
+// one, and §5.8's lock keeps one process to an instance.
 //
 // On a restart the writer replays Pending, re-sending each entry whose push outcome it does not know, and a direct
 // writer then takes the higher of its head here and its stream's newest entry of this chain (AdoptStream). A
@@ -69,7 +73,7 @@ type RecordChainHead struct {
 	Leaf [sha256.Size]byte
 }
 
-// The record component's chains, one a log, for one writer: this sidecar.
+// The record component's chains, one a log, for one writer: this sidecar. The only one on its directory.
 type RecordChainStore struct {
 	store           SidecarStore
 	writerSidecarId Id
@@ -78,17 +82,23 @@ type RecordChainStore struct {
 	logChains map[Id]*recordChain
 }
 
-// One log's chain. appendLock serializes every step that reads or writes its files, a load, an append's take,
-// signature and journal, an acknowledgment and an adoption, and is held across the store's I/O, never while waiting
-// on anything else; every field below it is read and written under it.
+// One log's chain, under four locks taken in this order. appendLock serializes appends and adoptions, from an append's
+// take through its fsync, so a barrier held there stalls only what must follow it. headLock serializes writes of the
+// head file, so it only rises. loadLock serializes the one load. Each is held across the store's I/O and never while
+// waiting on anything else, and loadLock is released before headLock is taken. stateLock guards the fields below it,
+// never across I/O or a barrier.
 type recordChain struct {
 	logId   Id
 	hookKey string
 
 	appendLock sync.Mutex
-	loaded     bool
-	head       RecordChainHead
-	// the head file's own seq, which a compaction raises
+	headLock   sync.Mutex
+	loadLock   sync.Mutex
+
+	stateLock sync.Mutex
+	loaded    bool
+	head      RecordChainHead
+	// the head file's own seq, which a compaction or an adoption raises
 	headFileSeq uint64
 	// journal records not yet acknowledged: seq to leaf
 	pendingSeqLeafs map[uint64][sha256.Size]byte
@@ -265,47 +275,81 @@ func (self *RecordChainStore) journalSeqs(logId Id) ([]uint64, error) {
 	return seqs, nil
 }
 
-// Reads the log's head file and journal into chain, once: the head is the higher of the head file's and the
-// journal's newest record, and two records at adjacent seqs must chain.
-func (self *RecordChainStore) loadWithLock(chain *recordChain) error {
-	if chain.loaded {
+// What a log's files hold: its head, the higher of the head file's and the journal's newest record; the head file's
+// seq; and the journal's records not yet acknowledged.
+type recordChainFiles struct {
+	head            RecordChainHead
+	headFileSeq     uint64
+	pendingSeqLeafs map[uint64][sha256.Size]byte
+}
+
+// Loads the log's chain from its files, once, before any step that writes them, so nothing writes them while they
+// are read.
+func (self *RecordChainStore) ensureLoaded(chain *recordChain) error {
+	loaded := func() bool {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		return chain.loaded
+	}
+	if loaded() {
 		return nil
 	}
-	head := RecordChainHead{}
-	content, err := self.readFile(recordChainHeadName(chain.logId))
+	chain.loadLock.Lock()
+	defer chain.loadLock.Unlock()
+	if loaded() {
+		return nil
+	}
+	files, err := self.readChain(chain.logId)
 	if err != nil {
 		return err
+	}
+	chain.stateLock.Lock()
+	defer chain.stateLock.Unlock()
+	chain.head = files.head
+	chain.headFileSeq = files.headFileSeq
+	chain.pendingSeqLeafs = files.pendingSeqLeafs
+	chain.loaded = true
+	return nil
+}
+
+// Reads a log's head file and journal: two records at adjacent seqs must chain, as must the record just above the
+// head file on it, and a record at the head file's seq must hold its leaf.
+func (self *RecordChainStore) readChain(logId Id) (*recordChainFiles, error) {
+	head := RecordChainHead{}
+	content, err := self.readFile(recordChainHeadName(logId))
+	if err != nil {
+		return nil, err
 	}
 	if content != nil {
 		document := &recordChainHeadDocument{}
 		if err := recordChainDecode(content, document); err != nil {
-			return fmt.Errorf("%w: head: %v", ErrRecordChainCorrupt, err)
+			return nil, fmt.Errorf("%w: head: %v", ErrRecordChainCorrupt, err)
 		}
-		if document.Version != recordChainFileVersion || document.LogId != chain.logId ||
+		if document.Version != recordChainFileVersion || document.LogId != logId ||
 			document.WriterSidecarId != self.writerSidecarId || document.Seq == 0 || len(document.Leaf) != sha256.Size {
-			return fmt.Errorf("%w: the head is not this chain's", ErrRecordChainCorrupt)
+			return nil, fmt.Errorf("%w: the head is not this chain's", ErrRecordChainCorrupt)
 		}
 		head = RecordChainHead{Seq: document.Seq, Leaf: [sha256.Size]byte(document.Leaf)}
 	}
 	headFile := head
 
-	seqs, err := self.journalSeqs(chain.logId)
+	seqs, err := self.journalSeqs(logId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pendingSeqLeafs := map[uint64][sha256.Size]byte{}
 	var previous *recordJournalDocument
 	for _, seq := range seqs {
-		content, err := self.readFile(recordJournalName(chain.logId, seq))
+		content, err := self.readFile(recordJournalName(logId, seq))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if content == nil {
-			return fmt.Errorf("%w: journal record %d went while it was read", ErrRecordChainCorrupt, seq)
+			return nil, fmt.Errorf("%w: journal record %d went while it was read", ErrRecordChainCorrupt, seq)
 		}
-		document, err := self.decodeJournal(chain.logId, seq, content)
+		document, err := self.decodeJournal(logId, seq, content)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		leaf := [sha256.Size]byte(document.Leaf)
 		// a record chains on the record or head file at the seq below it, whichever holds that seq
@@ -319,11 +363,11 @@ func (self *RecordChainStore) loadWithLock(chain *recordChain) error {
 		if below != nil {
 			prev, err := recordJournalPrev(document)
 			if err != nil || !bytes.Equal(prev[:], below) {
-				return fmt.Errorf("%w: journal record %d does not chain on seq %d", ErrRecordChainCorrupt, seq, seq-1)
+				return nil, fmt.Errorf("%w: journal record %d does not chain on seq %d", ErrRecordChainCorrupt, seq, seq-1)
 			}
 		}
 		if seq == head.Seq && leaf != head.Leaf {
-			return fmt.Errorf("%w: journal record %d is not the head's entry", ErrRecordChainCorrupt, seq)
+			return nil, fmt.Errorf("%w: journal record %d is not the head's entry", ErrRecordChainCorrupt, seq)
 		}
 		if head.Seq < seq {
 			head = RecordChainHead{Seq: seq, Leaf: leaf}
@@ -333,21 +377,17 @@ func (self *RecordChainStore) loadWithLock(chain *recordChain) error {
 		clear(document.Key)
 		clear(document.Salt)
 	}
-	chain.head = head
-	chain.headFileSeq = headFile.Seq
-	chain.pendingSeqLeafs = pendingSeqLeafs
-	chain.loaded = true
-	return nil
+	return &recordChainFiles{head: head, headFileSeq: headFile.Seq, pendingSeqLeafs: pendingSeqLeafs}, nil
 }
 
 // The log's chain head: seq 0 for a log this writer has never written.
 func (self *RecordChainStore) Head(logId Id) (RecordChainHead, error) {
 	chain := self.chain(logId)
-	chain.appendLock.Lock()
-	defer chain.appendLock.Unlock()
-	if err := self.loadWithLock(chain); err != nil {
+	if err := self.ensureLoaded(chain); err != nil {
 		return RecordChainHead{}, err
 	}
+	chain.stateLock.Lock()
+	defer chain.stateLock.Unlock()
 	return chain.head, nil
 }
 
@@ -358,14 +398,20 @@ func (self *RecordChainStore) append(logId Id, build func(seq uint64, prev [sha2
 	chain := self.chain(logId)
 	chain.appendLock.Lock()
 	defer chain.appendLock.Unlock()
-	if err := self.loadWithLock(chain); err != nil {
+	if err := self.ensureLoaded(chain); err != nil {
 		return nil, err
 	}
-	if chain.head.Seq == ^uint64(0) {
+	// only an append or an adoption moves the head, and either holds appendLock
+	head := func() RecordChainHead {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		return chain.head
+	}()
+	if head.Seq == ^uint64(0) {
 		return nil, fmt.Errorf("%w: the chain has no seq left", ErrRecordSealInvalid)
 	}
-	seq := chain.head.Seq + 1
-	entry, err := build(seq, chain.head.Leaf)
+	seq := head.Seq + 1
+	entry, err := build(seq, head.Leaf)
 	if err != nil {
 		return nil, err
 	}
@@ -393,8 +439,12 @@ func (self *RecordChainStore) append(logId Id, build func(seq uint64, prev [sha2
 		return nil, fmt.Errorf("record chain: journal: %w", err)
 	}
 	testHookBarrier("record.chain.fsync.after", chain.hookKey)
-	chain.head = RecordChainHead{Seq: seq, Leaf: entry.Leaf}
-	chain.pendingSeqLeafs[seq] = entry.Leaf
+	func() {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		chain.head = RecordChainHead{Seq: seq, Leaf: entry.Leaf}
+		chain.pendingSeqLeafs[seq] = entry.Leaf
+	}()
 	return entry, nil
 }
 
@@ -403,15 +453,24 @@ func (self *RecordChainStore) append(logId Id, build func(seq uint64, prev [sha2
 // salt, which the caller clears once it is done with them.
 func (self *RecordChainStore) Pending(logId Id) ([]*RecordSealedEntry, error) {
 	chain := self.chain(logId)
-	chain.appendLock.Lock()
-	defer chain.appendLock.Unlock()
-	if err := self.loadWithLock(chain); err != nil {
+	if err := self.ensureLoaded(chain); err != nil {
 		return nil, err
 	}
-	seqs := make([]uint64, 0, len(chain.pendingSeqLeafs))
-	for seq := range chain.pendingSeqLeafs {
-		seqs = append(seqs, seq)
+	pending := func(seq uint64) bool {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		_, ok := chain.pendingSeqLeafs[seq]
+		return ok
 	}
+	seqs := func() []uint64 {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		seqs := make([]uint64, 0, len(chain.pendingSeqLeafs))
+		for seq := range chain.pendingSeqLeafs {
+			seqs = append(seqs, seq)
+		}
+		return seqs
+	}()
 	slices.Sort(seqs)
 	entries := make([]*RecordSealedEntry, 0, len(seqs))
 	for _, seq := range seqs {
@@ -420,6 +479,10 @@ func (self *RecordChainStore) Pending(logId Id) ([]*RecordSealedEntry, error) {
 			return nil, err
 		}
 		if content == nil {
+			// an acknowledgment takes a seq out of the pending set before it removes its record
+			if !pending(seq) {
+				continue
+			}
 			return nil, fmt.Errorf("%w: journal record %d is gone", ErrRecordChainCorrupt, seq)
 		}
 		document, err := self.decodeJournal(logId, seq, content)
@@ -473,36 +536,54 @@ func (self *RecordChainStore) PendingLogIds() ([]Id, error) {
 // record. A seq the journal does not hold is skipped, so an acknowledgment may repeat.
 func (self *RecordChainStore) Acknowledge(logId Id, seqs []uint64) error {
 	chain := self.chain(logId)
-	chain.appendLock.Lock()
-	defer chain.appendLock.Unlock()
-	if err := self.loadWithLock(chain); err != nil {
+	if err := self.ensureLoaded(chain); err != nil {
 		return err
 	}
+	chain.headLock.Lock()
+	defer chain.headLock.Unlock()
 	held := []uint64{}
-	for _, seq := range seqs {
-		if _, ok := chain.pendingSeqLeafs[seq]; ok && !slices.Contains(held, seq) {
-			held = append(held, seq)
+	var highest RecordChainHead
+	var headFileSeq uint64
+	func() {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		for _, seq := range seqs {
+			leaf, ok := chain.pendingSeqLeafs[seq]
+			if ok && !slices.Contains(held, seq) {
+				held = append(held, seq)
+				if highest.Seq < seq {
+					highest = RecordChainHead{Seq: seq, Leaf: leaf}
+				}
+			}
 		}
-	}
+		headFileSeq = chain.headFileSeq
+	}()
 	if len(held) == 0 {
 		return nil
 	}
-	highest := slices.Max(held)
-	if chain.headFileSeq < highest {
-		if err := self.writeHeadWithLock(chain, RecordChainHead{Seq: highest, Leaf: chain.pendingSeqLeafs[highest]}); err != nil {
+	if headFileSeq < highest.Seq {
+		if err := self.writeHeadWithLock(chain, highest); err != nil {
 			return err
 		}
 	}
+	// out of the pending set first, so a Pending racing the removal skips a record it finds gone; a removal that
+	// fails leaves a record the next life replays, and an entry already committed is only found there again
+	func() {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		for _, seq := range held {
+			delete(chain.pendingSeqLeafs, seq)
+		}
+	}()
 	for _, seq := range held {
 		if err := self.store.Remove(recordJournalName(logId, seq)); err != nil {
 			return fmt.Errorf("record chain: %w", err)
 		}
-		delete(chain.pendingSeqLeafs, seq)
 	}
 	return nil
 }
 
-// Writes head as the log's head file, durably.
+// Writes head as the log's head file, durably, under headLock, so the head file only rises.
 func (self *RecordChainStore) writeHeadWithLock(chain *recordChain, head RecordChainHead) error {
 	content, err := json.Marshal(&recordChainHeadDocument{
 		Version:         recordChainFileVersion,
@@ -519,7 +600,9 @@ func (self *RecordChainStore) writeHeadWithLock(chain *recordChain, head RecordC
 		return fmt.Errorf("record chain: head: %w", err)
 	}
 	testHookBarrier("record.chain.head.after", chain.hookKey)
-	chain.headFileSeq = head.Seq
+	chain.stateLock.Lock()
+	defer chain.stateLock.Unlock()
+	chain.headFileSeq = max(chain.headFileSeq, head.Seq)
 	return nil
 }
 
@@ -531,21 +614,30 @@ func (self *RecordChainStore) Adopt(logId Id, head RecordChainHead) (bool, error
 	chain := self.chain(logId)
 	chain.appendLock.Lock()
 	defer chain.appendLock.Unlock()
-	if err := self.loadWithLock(chain); err != nil {
+	if err := self.ensureLoaded(chain); err != nil {
 		return false, err
 	}
-	if head.Seq == chain.head.Seq && head.Leaf != chain.head.Leaf {
-		return false, fmt.Errorf("%w: seq %d", ErrRecordChainForked, head.Seq)
-	}
-	if leaf, ok := chain.pendingSeqLeafs[head.Seq]; ok && leaf != head.Leaf {
-		return false, fmt.Errorf("%w: seq %d", ErrRecordChainForked, head.Seq)
-	}
-	if head.Seq <= chain.head.Seq {
-		return false, nil
+	chain.headLock.Lock()
+	defer chain.headLock.Unlock()
+	raise, err := func() (bool, error) {
+		chain.stateLock.Lock()
+		defer chain.stateLock.Unlock()
+		if head.Seq == chain.head.Seq && head.Leaf != chain.head.Leaf {
+			return false, fmt.Errorf("%w: seq %d", ErrRecordChainForked, head.Seq)
+		}
+		if leaf, ok := chain.pendingSeqLeafs[head.Seq]; ok && leaf != head.Leaf {
+			return false, fmt.Errorf("%w: seq %d", ErrRecordChainForked, head.Seq)
+		}
+		return chain.head.Seq < head.Seq, nil
+	}()
+	if err != nil || !raise {
+		return false, err
 	}
 	if err := self.writeHeadWithLock(chain, head); err != nil {
 		return false, err
 	}
+	chain.stateLock.Lock()
+	defer chain.stateLock.Unlock()
 	chain.head = head
 	return true, nil
 }
