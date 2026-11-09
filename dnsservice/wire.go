@@ -488,6 +488,11 @@ type DnsReloadDiff struct {
 	ReplacedSerial uint64         `json:"replaced_serial"`
 	Serial         uint64         `json:"serial"`
 	Rrsets         []DnsRecordKey `json:"rrsets"`
+	// Each RRset's kind, in Rrsets' order: the new view's where it holds the RRset, else the replaced
+	// one's. The step leaves challenges and canaries out of its lists by these, since a key alone does not
+	// tell a probe's CAA canary from a retiring name's CAA (DNS-M5-15). Absent from an edge that sends
+	// none, when every RRset is listed.
+	Kinds []DnsRecordKind `json:"kinds,omitempty"`
 }
 
 // The first line of a snapshot: one root at one serial, every row of which follows.

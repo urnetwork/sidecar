@@ -48,6 +48,15 @@ barrier dnsservice.feed_swap.before dnsservice/feed.go
 barrier dnsservice.feed_wait dnsservice/feed.go
 barrier dnsservice.feed_writer_change dnsservice/feed.go
 barrier dnsservice.feed_writer_interval dnsservice/feed.go
+barrier dnsservice.restore_clear.after dnsservice/restore.go
+barrier dnsservice.restore_clear.before dnsservice/restore.go
+barrier dnsservice.restore_commit.after dnsservice/restore.go
+barrier dnsservice.restore_commit.before dnsservice/restore.go
+barrier dnsservice.restore_list.after dnsservice/restore.go
+barrier dnsservice.restore_list.before dnsservice/restore.go
+barrier dnsservice.restore_served dnsservice/restore.go
+barrier dnsservice.restore_soa_read.after dnsservice/restore.go
+barrier dnsservice.restore_soa_read.before dnsservice/restore.go
 barrier dnsservice.route_report.after dnsservice/probe_route.go
 barrier dnsservice.route_report.before dnsservice/probe_route.go
 barrier dnsservice.snapshot_write dnsservice/snapshot_file.go

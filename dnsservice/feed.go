@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -65,27 +66,31 @@ const (
 
 // The RRsets that differ between replaced, the view a reload replaced, and current, its new one: in one
 // and not the other, or in both with another TTL, kind or rdata. Sorted by owner, then type, so two
-// edges with the same views post the same diff.
+// edges with the same views post the same diff, each with its kind, current's where it holds the RRset.
 func RrsetDiff(replaced *ZoneView, current *ZoneView) *DnsReloadDiff {
 	before := map[DnsRecordKey]*DnsRecordSet{}
 	for set := range replaced.Rows() {
 		before[set.Key()] = set
 	}
-	keys := []DnsRecordKey{}
+	keyKinds := map[DnsRecordKey]DnsRecordKind{}
 	for set := range current.Rows() {
 		key := set.Key()
 		if old, ok := before[key]; !ok || !reflect.DeepEqual(old, set) {
-			keys = append(keys, key)
+			keyKinds[key] = set.Kind
 		}
 		delete(before, key)
 	}
-	for key := range before {
-		keys = append(keys, key)
+	for key, set := range before {
+		keyKinds[key] = set.Kind
 	}
-	slices.SortFunc(keys, func(a DnsRecordKey, b DnsRecordKey) int {
+	keys := slices.SortedFunc(maps.Keys(keyKinds), func(a DnsRecordKey, b DnsRecordKey) int {
 		return cmp.Or(cmp.Compare(a.Owner, b.Owner), cmp.Compare(a.Type, b.Type))
 	})
-	return &DnsReloadDiff{Root: current.root, ReplacedSerial: replaced.serial, Serial: current.serial, Rrsets: keys}
+	kinds := make([]DnsRecordKind, 0, len(keys))
+	for _, key := range keys {
+		kinds = append(kinds, keyKinds[key])
+	}
+	return &DnsReloadDiff{Root: current.root, ReplacedSerial: replaced.serial, Serial: current.serial, Rrsets: keys, Kinds: kinds}
 }
 
 // Whether two windows are one. nil is a window of its own.
