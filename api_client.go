@@ -154,9 +154,12 @@ func wrapSidecarApiTransport(transport http.RoundTripper) http.RoundTripper {
 }
 
 // Installs the token every later call presents. The token manager calls it only after persisting
-// the token to the keychain (D-CORE-8), and calls in flight keep the token they started with.
+// the token to the keychain (D-CORE-8), and calls in flight keep the token they started with. An
+// empty token, a generation's end, removes it, and is no secret to report.
 func (self *SidecarApi) SetByJwt(byJwt string) {
-	testHookSecret("by_client_jwt", []byte(byJwt))
+	if byJwt != "" {
+		testHookSecret("by_client_jwt", []byte(byJwt))
+	}
 	testHookBarrier("api.set_by_jwt.before", "")
 	func() {
 		self.stateLock.Lock()
