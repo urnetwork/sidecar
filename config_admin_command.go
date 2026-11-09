@@ -21,6 +21,7 @@ package sidecar
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -31,6 +32,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -443,4 +445,71 @@ func ValidateAdminConsentCode(code string) error {
 		}
 	}
 	return nil
+}
+
+// RFC 7638's thumbprint of an Ed25519 key as a DPoP proof's jwk names it (RFC 8037 §2):
+// base64url(SHA-256({"crv":"Ed25519","kty":"OKP","x":<x>})), unpadded. An authorization request's dpop_jkt and an
+// admin token's cnf.jkt hold it, and server's session.DpopKeyThumbprint computes the same.
+func DpopKeyThumbprint(publicKey ed25519.PublicKey) string {
+	canonical := `{"crv":"Ed25519","kty":"OKP","x":"` + base64.RawURLEncoding.EncodeToString(publicKey) + `"}`
+	hash := sha256.Sum256([]byte(canonical))
+	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+// A DPoP key ur-cli makes for one admin token and keeps in its own process alone (§7.8, RFC 9449): its thumbprint
+// is the authorization request's dpop_jkt, so the code redeems only with its proof, and the token's cnf.jkt, so the
+// token works only with it. Erase zeroes it once the command has run. Not safe for concurrent use.
+type AdminDpopKey struct {
+	// DpopKeyThumbprint of the public key.
+	Thumbprint string
+	privateKey ed25519.PrivateKey
+	header     []byte
+	now        func() time.Time
+	random     io.Reader
+}
+
+// A new key from random, its proofs' iat read from now.
+func NewAdminDpopKey(random io.Reader, now func() time.Time) (*AdminDpopKey, error) {
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := io.ReadFull(random, seed); err != nil {
+		return nil, err
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	clear(seed)
+	testHookSecret("AdminDpopKey", privateKey)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	return &AdminDpopKey{
+		Thumbprint: DpopKeyThumbprint(publicKey),
+		privateKey: privateKey,
+		header:     dpopHeader(publicKey),
+		now:        now,
+		random:     random,
+	}, nil
+}
+
+// A proof of a request by method to requestUrl presenting token: htu the url with no query or fragment, and ath
+// over token, the admin token at the api or the code at the token endpoint.
+func (self *AdminDpopKey) Sign(method string, requestUrl string, token string) (string, error) {
+	if self.privateKey == nil {
+		return "", fmt.Errorf("%w: the key was erased", errDpopProof)
+	}
+	if !isDpopMethod(method) {
+		return "", fmt.Errorf("%w: the method is not an uppercase token", errDpopProof)
+	}
+	htu, err := dpopHtu(requestUrl)
+	if err != nil {
+		return "", err
+	}
+	jtiBytes := make([]byte, dpopJtiByteCount)
+	if _, err := io.ReadFull(self.random, jtiBytes); err != nil {
+		return "", fmt.Errorf("%w: no jti: %w", errDpopProof, err)
+	}
+	claims := dpopClaims(dpopAth(token), method, htu, self.now().Unix(), base64.RawURLEncoding.EncodeToString(jtiBytes))
+	return dpopSign(self.privateKey, self.header, claims), nil
+}
+
+// Zeroes the private key, after which Sign refuses.
+func (self *AdminDpopKey) Erase() {
+	clear(self.privateKey)
+	self.privateKey = nil
 }
