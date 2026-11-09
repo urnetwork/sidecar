@@ -44,13 +44,15 @@
 (*   only under a key no ERASE destroyed.                                   *)
 (* - An ERASE is the step that destroys keys, on the content ref.           *)
 (*                                                                          *)
-(* Two rules of §11.14 as written fail here, each with a question raised   *)
+(* Three rules of §11.14 as written fail here, each with a question raised *)
 (* and held out of the passing configuration by a constant: Supersede =     *)
 (* "index" lets a journaled entry outlast the roll-up that dropped a newer  *)
-(* tombstone of its document (search-m10-07-late-journal-tombstone), and    *)
+(* tombstone of its document (search-m10-07-late-journal-tombstone);        *)
 (* RollupFence = "files" lets a merge of a newer bucket race a roll-up's    *)
-(* step 4 (search-m10-07-rollup-merge-race). The cfg runs each question's   *)
-(* first option, "content" and "manifests".                                 *)
+(* step 4 (search-m10-07-rollup-merge-race); and MergeCompose = "newest"    *)
+(* leaves a merge nothing to compose for a stale sealed diff whose base an  *)
+(* earlier merge dropped (search-m10-07-merge-stale-diff). The cfg runs     *)
+(* each question's first option: "content", "manifests" and "composable".   *)
 (*                                                                          *)
 (* The lock is a fence the file CAS already backs: a second roll-up's       *)
 (* removal of the bucket's files fails on their versions, so I-EVS-12 holds *)
@@ -75,6 +77,7 @@ CONSTANTS
     Skew,           \* whether a push's signed time may fall in the window before the current one
     Supersede,      \* "index": the design as written; "content": question search-m10-07-late-journal-tombstone
     RollupFence,    \* "files": the design as written; "manifests": question search-m10-07-rollup-merge-race
+    MergeCompose,   \* "newest": the design as written; "composable": question search-m10-07-merge-stale-diff
     Still,          \* processes held still: any of "backfill", "merge", "rollup", "erase", "crash", "lapse"
     Twin            \* "none", or the rule a twin config breaks
 
@@ -98,6 +101,7 @@ ASSUME
     /\ Still \subseteq {"backfill", "merge", "rollup", "erase", "crash", "lapse"}
     /\ Supersede \in {"index", "content"}
     /\ RollupFence \in {"files", "manifests"}
+    /\ MergeCompose \in {"newest", "composable"}
 
 \* The content commits, in order: each at or after its window, and each one the journaler journals
 \* unless it skips the index (an old client), left for the backfiller.
@@ -396,10 +400,26 @@ MergeVersion(In, H, d) ==
         THEN Min({e.base : e \in hn})
         ELSE top
 
+\* The design's merge composes each document's newest input (MergeCompose = "newest"). An earlier merge
+\* keeps only a base the newest head entries need, so a diff below a newer head entry, which §11.14's
+\* chains row lets lose its base, can later be sealed and become a merge's newest input with no base
+\* among the inputs: the merge cannot compose it (ChainsResolve's broken). Question
+\* search-m10-07-merge-stale-diff asks for a rule; "composable" is its first option: such a diff,
+\* below a head's newer entry, is no candidate there either, and the merge keeps the document's newest
+\* version that composes, or no row.
+Composable(In, d) == {e.v : e \in {y \in Of(In, d) : ComposesIn(In, d, y.v)}}
+MergeKept(In, H, d) ==
+    LET v == MergeVersion(In, H, d) IN
+    IF /\ MergeCompose = "composable"
+       /\ ~ComposesIn(In, d, v)
+       /\ Top(H, d) > v
+    THEN IF Composable(In, d) = {} THEN 0 ELSE Max(Composable(In, d))
+    ELSE v
+
 \* Each document's kept version, a live one as a full row and a tombstone kept for the older
 \* partitions until the roll-up.
 MergeRows(In, H) ==
-    LET kept == {Row(In, d, MergeVersion(In, H, d)) : d \in {e.d : e \in In}} IN
+    LET kept == {Row(In, d, MergeKept(In, H, d)) : d \in {doc \in {e.d : e \in In} : MergeKept(In, H, doc) > 0}} IN
     IF Twin = "MergeDropsTombstone" THEN {r \in kept : r.k # "tomb"} ELSE kept
 
 MergeBuild(b) ==
@@ -415,7 +435,8 @@ MergeBuild(b) ==
                       Max({man[b].abs[w]} \cup {file[p].seq : p \in Sealed(b) \cap SlotPaths(b, w)})]
        IN  /\ mpend' = [kind |-> "merge", b |-> b, shard |-> file[ShardPath(b)].ver, man |-> man[b].ver,
                         rows |-> MergeRows(In, H), abs |-> abs, epoch |-> ep, t |-> clock]
-           /\ broken' = (broken \/ \E d \in {e.d : e \in In} : ~ComposesIn(In, d, MergeVersion(In, H, d)))
+           /\ broken' = (broken \/ \E d \in {e.d : e \in In} :
+                             MergeKept(In, H, d) > 0 /\ ~ComposesIn(In, d, MergeKept(In, H, d)))
     /\ UNCHANGED <<storeVars, worldVars, wpend, rphase, rheld, rpend, ephase, epend, budgetVars,
                    eraseVars, indexed, stored1, rollCommits, leaked, epochBad, fenceBad>>
 
