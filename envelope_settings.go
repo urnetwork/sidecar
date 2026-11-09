@@ -21,6 +21,10 @@ type SidecarProtocolSettings struct {
 	// How often an app host Pings an indexer whose §6.10 window is open, while in the foreground, on
 	// a grid from the window's start: 60 s, under connect's 120 s receive idle.
 	MarkedKeepaliveInterval time.Duration
+	// How long a marked pair's session lives without a Pong, at the requester, or a Ping, at the
+	// indexer: 120 s, connect's receive idle, past which §6.10's session row calls it lost and a Hello
+	// re-establishes it. §6.6's comment on HelloCacheTimeout names the value; this field holds it.
+	MarkedSessionTimeout time.Duration
 	// A call's timeout when its caller sets none: 15 s. The protocol's maximum is 55 s, before the 60 s
 	// sequence exit (§6.6).
 	DefaultCallTimeout time.Duration
@@ -104,6 +108,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 	return &SidecarProtocolSettings{
 		HelloCacheTimeout:                10 * time.Minute,
 		MarkedKeepaliveInterval:          60 * time.Second,
+		MarkedSessionTimeout:             120 * time.Second,
 		DefaultCallTimeout:               15 * time.Second,
 		CallSendRetryInterval:            250 * time.Millisecond,
 		PeerQueueMessageCount:            64,
