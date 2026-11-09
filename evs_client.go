@@ -88,10 +88,17 @@ type EvsClient struct {
 	log      Logger
 	http     *evsHttp
 	pins     *EvsPinStore
+	verifier *EvsVerifier
 
 	stateLock sync.Mutex
 	// the newest ref version a hint named, per repo and ref, which sends the next read past evs's head cache
 	hintedVersions map[evsRefKey]uint64
+	// each ref's path epoch as the last verified head gave it
+	refEpochs map[evsRefKey]*protocol.EvsPathEpoch
+	// the receipt gate, nil for the default that refuses (evs_read.go)
+	preDecryptHook EvsPreDecryptFunction
+	// RefHeads' rotation (evs_witness.go)
+	witnessCursors evsWitnessCursors
 }
 
 // A ref of a repo.
@@ -132,7 +139,9 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		},
 		pins:           NewEvsPinStore(args.Store, args.Settings),
 		hintedVersions: map[evsRefKey]uint64{},
+		refEpochs:      map[evsRefKey]*protocol.EvsPathEpoch{},
 	}
+	self.verifier = newEvsVerifier(self)
 	return self, nil
 }
 
@@ -144,6 +153,11 @@ func (self *EvsClient) NetworkId() Id {
 // The client's pins and read records.
 func (self *EvsClient) Pins() *EvsPinStore {
 	return self.pins
+}
+
+// The client's verifying reader.
+func (self *EvsClient) Verifier() *EvsVerifier {
+	return self.verifier
 }
 
 // The repo's client. Nothing is read or checked until a call needs it.

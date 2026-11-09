@@ -242,22 +242,6 @@ type EvsMountInfo struct {
 	BareDir string
 }
 
-// Reads the newest committed version of a file, or an older one, verifying it against its signed statement and
-// pinning the head before writing a byte to out (§11.9). EVS1-M2-24 builds it.
-func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Writer) (*EvsFileInfo, error) {
-	return nil, fmt.Errorf("%w: ReadHead is EVS1-M2-24's", ErrEvsNotBuilt)
-}
-
-// A directory's children, verified (§11.7, §11.9). EVS1-M2-24 builds it.
-func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, error) {
-	return nil, fmt.Errorf("%w: List is EVS1-M2-24's", ErrEvsNotBuilt)
-}
-
-// A path's versions, walking prev_push_id and prev_commit_version. EVS1-M2-24 builds it.
-func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistory, error) {
-	return nil, fmt.Errorf("%w: History is EVS1-M2-24's", ErrEvsNotBuilt)
-}
-
 // Writes or removes one file on a file-mode ref. EVS1-M2-25 and EVS1-M2-26 build it.
 func (self *EvsRepo) Write(ctx context.Context, args *EvsWriteArgs) (*EvsWriteResult, error) {
 	return nil, fmt.Errorf("%w: Write is EVS1-M2-25's and EVS1-M2-26's", ErrEvsNotBuilt)
@@ -286,11 +270,6 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 // Imports a git repository's history under a signed EvsImport. EVS1-M2-34 builds it.
 func (self *EvsRepo) Import(ctx context.Context, args *EvsImportArgs) (*EvsImportResult, error) {
 	return nil, fmt.Errorf("%w: Import is EVS1-M2-34's", ErrEvsNotBuilt)
-}
-
-// Rebuilds plain git from the repo (§11.12's export row). EVS1-M2-32 builds it.
-func (self *EvsRepo) Export(ctx context.Context, args *EvsExportArgs) (*EvsExportResult, error) {
-	return nil, fmt.Errorf("%w: Export is EVS1-M2-32's", ErrEvsNotBuilt)
 }
 
 // Serves the repo to stock git from a plaintext bare repository (§11.11). EVS1-M2-33 builds it.
