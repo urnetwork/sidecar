@@ -134,13 +134,16 @@ type zoneNode struct {
 	rrsets []*zoneRrset
 	// The copy row, which stands for every type the wildcard holds and this name does not.
 	copyRow *zoneRrset
+	// A suspended host's withheld owner, which denies every type while it stands, the copy row's
+	// included (§12.9).
+	withheldRow *zoneRrset
 	// Names one label below this one that exist.
 	childCount int
 }
 
 // Whether this name holds nothing and has no child, and so does not exist.
 func (self *zoneNode) empty() bool {
-	return len(self.rrsets) == 0 && self.copyRow == nil && self.childCount == 0
+	return len(self.rrsets) == 0 && self.copyRow == nil && self.withheldRow == nil && self.childCount == 0
 }
 
 // A copy of this node, or an empty one for a name not there yet, ready to change.
@@ -181,13 +184,28 @@ func (self *zoneNode) holds(key DnsRecordKey) bool {
 	if key.Type == DnsCopyType {
 		return self.copyRow != nil
 	}
+	if key.Type == DnsWithheldType {
+		return self.withheldRow != nil
+	}
 	_, found := self.rrsetIndex(key.Type)
 	return found
 }
 
-// Whether this name holds a row of its own, a copy row aside, withheld or not.
+// Whether this name holds a row of its own, a copy row aside, withheld or not. A suspended host's
+// withheld owner is its own, so it blocks every wildcard above it as an owner with rows does.
 func (self *zoneNode) holdsOwnRows() bool {
-	return len(self.rrsets) != 0
+	return len(self.rrsets) != 0 || self.withheldOwner()
+}
+
+// Whether this name answers from its wildcard for the types it lacks: it holds a copy row and no
+// suspension withholds it.
+func (self *zoneNode) copies() bool {
+	return self.copyRow != nil && self.withheldRow == nil
+}
+
+// Whether a suspension withholds this name: it exists, and answers no data of any type (§12.9).
+func (self *zoneNode) withheldOwner() bool {
+	return self.withheldRow != nil
 }
 
 // The name one label up. name is below the root, so there is one.
@@ -275,6 +293,9 @@ func (self *ZoneView) Rows() iter.Seq[*DnsRecordSet] {
 			if node.copyRow != nil && !yield(&node.copyRow.set) {
 				return
 			}
+			if node.withheldRow != nil && !yield(&node.withheldRow.set) {
+				return
+			}
 		}
 	}
 }
@@ -331,7 +352,10 @@ func (self *ZoneView) upsert(generation uint64, set *DnsRecordSet) error {
 	rrset := &zoneRrset{set: set.Clone(), records: records, withheld: isWithheldRow(self.root, set, records)}
 	before := self.names.get(set.Owner)
 	node := before.clone()
-	if set.Kind == DnsRecordKindCopy {
+	if set.Kind == DnsRecordKindWithheld {
+		self.countOut(node.withheldRow)
+		node.withheldRow = rrset
+	} else if set.Kind == DnsRecordKindCopy {
 		self.countOut(node.copyRow)
 		node.copyRow = rrset
 	} else if index, found := node.rrsetIndex(set.Type); found {
@@ -371,6 +395,12 @@ func (self *ZoneView) remove(generation uint64, key DnsRecordKey) {
 		}
 		self.countOut(node.copyRow)
 		node.copyRow = nil
+	} else if key.Type == DnsWithheldType {
+		if node.withheldRow == nil {
+			return
+		}
+		self.countOut(node.withheldRow)
+		node.withheldRow = nil
 	} else {
 		index, found := node.rrsetIndex(key.Type)
 		if !found {

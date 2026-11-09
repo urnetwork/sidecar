@@ -72,17 +72,26 @@ const (
 	DnsRecordKindCanary DnsRecordKind = "canary"
 	// A record naming a device's key: TLSA or DKIM TXT (§12.8).
 	DnsRecordKindKey DnsRecordKind = "key"
+	// A suspended host's withheld owner (§12.9; RESOLUTIONS plan-DNS-metadata-rows #5): one row an owner,
+	// of type DnsWithheldType with no rdata, which makes the host exist with no data, so it answers
+	// NODATA for every type, ANY included, and * no longer covers it or any name below it. It stands
+	// beside the owner's copy row, if any, which answers again once the suspension lifts.
+	DnsRecordKindWithheld DnsRecordKind = "withheld"
 )
 
 // The type a copy row holds, since one row stands for every type at the wildcard. RFC 1035 reserves
 // type zero, so it can name no real RRset.
 const DnsCopyType uint16 = dns.TypeNone
 
+// The type a withheld owner holds, since one row stands for every type it denies. RFC 6895 reserves
+// 65535, so it can name no real RRset either, and it keys apart from the owner's copy row.
+const DnsWithheldType uint16 = dns.TypeReserved
+
 // Whether this is a kind this release answers.
 func (self DnsRecordKind) known() bool {
 	switch self {
 	case DnsRecordKindUser, DnsRecordKindSystem, DnsRecordKindCopy, DnsRecordKindEdge, DnsRecordKindRouter,
-		DnsRecordKindChallenge, DnsRecordKindCanary, DnsRecordKindKey:
+		DnsRecordKindChallenge, DnsRecordKindCanary, DnsRecordKindKey, DnsRecordKindWithheld:
 		return true
 	}
 	return false
@@ -158,7 +167,8 @@ func (self *DnsRecordSet) Records() ([]dns.RR, error) {
 func dnsTypeStorable(rrType uint16) bool {
 	switch rrType {
 	case dns.TypeNone, dns.TypeOPT, dns.TypeTSIG, dns.TypeTKEY, dns.TypeAXFR, dns.TypeIXFR, dns.TypeMAILA, dns.TypeMAILB,
-		dns.TypeANY, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeNSEC3PARAM, dns.TypeDNSKEY, dns.TypeNXNAME:
+		dns.TypeANY, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeNSEC3PARAM, dns.TypeDNSKEY, dns.TypeNXNAME,
+		dns.TypeReserved:
 		return false
 	}
 	return true
@@ -183,7 +193,7 @@ func (self *DnsRecordKey) Validate(root string) error {
 	if err := validateDnsOwner(root, self.Owner); err != nil {
 		return err
 	}
-	if self.Type != DnsCopyType && !dnsTypeStorable(self.Type) {
+	if self.Type != DnsCopyType && self.Type != DnsWithheldType && !dnsTypeStorable(self.Type) {
 		return fmt.Errorf("%w: type %s", ErrDnsRowMalformed, dnsTypeText(self.Type))
 	}
 	return nil
@@ -213,6 +223,11 @@ func (self *DnsRecordSet) parse(root string) ([]dns.RR, error) {
 	case DnsRecordKindCopy:
 		if self.Type != DnsCopyType || len(self.Rdata) != 0 {
 			return nil, fmt.Errorf("%w: a copy row holds no type or rdata", ErrDnsRowMalformed)
+		}
+		return nil, nil
+	case DnsRecordKindWithheld:
+		if self.Type != DnsWithheldType || len(self.Rdata) != 0 {
+			return nil, fmt.Errorf("%w: a withheld owner holds no type or rdata", ErrDnsRowMalformed)
 		}
 		return nil, nil
 	case DnsRecordKindEdge, DnsRecordKindRouter:
