@@ -5,9 +5,9 @@
 // hint on evs:<repo_id> (§11.10) reaches the client through the generation's own queue, with zero wait on the way in
 // (D-CORE-3), and ends with it.
 //
-// Hints arrive by PROTO-M1-06's Subprotocol.Subscribe on the evs: family, which is not on sidecar yet: until it lands
-// nothing calls ReceiveHint, so reads find a moved head only by reading, which every read verifies anyway. Hints carry
-// no authority either way (§6.8).
+// Hints arrive through the generation's Subprotocol.Subscribe on the evs: family (§6.8): a notice carrying an
+// EvsHeadChanged goes to ReceiveHint, and a resync notice changes nothing here, since every read verifies whatever it
+// finds. Hints carry no authority either way.
 //
 // connect legs only: the sidecar_http leg runs no component (§18.10). Safe for concurrent use.
 
@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The evs component.
@@ -44,15 +46,27 @@ func (self *EvsComponent) Client() *EvsClient {
 	return self.client
 }
 
-// Follows one generation: its queue carries hints until env.Ctx ends.
+// Follows one generation: subscribes to its push feed's evs: family, whose hints its queue carries until env.Ctx
+// ends. A generation whose dispatcher has no push client yet attaches without hints.
 func (self *EvsComponent) Attach(env *SidecarEnv) error {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.env = env
 	}()
+	remove := func() {}
+	if env.Subprotocol != nil {
+		if unsubscribe, err := env.Subprotocol.Subscribe(PushTopicEvsPrefix, func(notice PushNotice) {
+			if notice.Kind == uint32(protocol.MessageType_EVS_HEAD_CHANGED) && 0 < len(notice.Hint) {
+				self.ReceiveHint(notice.Topic, notice.Version, notice.Hint)
+			}
+		}); err == nil {
+			remove = unsubscribe
+		}
+	}
 	go func() {
 		<-env.Ctx.Done()
+		remove()
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.env == env {
