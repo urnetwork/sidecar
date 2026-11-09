@@ -56,11 +56,15 @@ type SidecarIngestSettings struct {
 	RestoreHoldByteCount int64
 }
 
-// §16.8's record defaults.
+// §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
+// (plan-RECORD-small-readings#1).
 type SidecarRecordSettings struct {
-	// Entries one push carries into a stream: 64.
+	// Entries one push carries into a stream: 64, which is also the most one slot object holds, so a push
+	// past it still carries 64.
 	PushEntryCount int
-	// How long a push waits for more entries, whichever comes first: 1 s.
+	// How long a push waits for more entries, whichever comes first: 1 s. Also the first wait before a push
+	// or deposit whose outcome is unknown, or that evs refused, goes again, doubling up to DepositInterval,
+	// since §16.8 names no backoff of its own.
 	PushCoalesce time.Duration
 	// ReachReceipts coalesce per (grant, peer) over this: 5 min.
 	ReachReceiptCoalesce time.Duration
@@ -71,6 +75,38 @@ type SidecarRecordSettings struct {
 	TeamRecordKeepDays int
 	// How much of that stays searchable: 90 days.
 	TeamRecordSearchableDays int
+	// A deposit batch waits this long for more entries, unless an approval-family entry, a run's end, sleep
+	// or exit sends it at once: 5 min, the slower pace owner decision 172 sets companion pushes (RECORD.md
+	// section 5.3's deposits row).
+	DepositInterval time.Duration
+	// The most one deposit batch carries, unless one entry alone passes it: 1 MiB (section 5.4).
+	DepositByteCount int
+	// An entry whose time_millis is past its push's time_ms by more than this reads as skewed: 10 min
+	// (section 5.3's time row). An ingester takes the same tolerance for section 5.4's right step, §16.11's
+	// 10 min between a log entry ending a depositor's right and the deposit's push.
+	TimeSkewTimeout time.Duration
+	// A depositing writer's chain gap stays open this long before it alarms, since one ingester's push can
+	// land before another's: 1 h (section 5.5's chain step).
+	ChainGapTimeout time.Duration
+	// A run card is re-projected this often: 5 min (§16.10's re-index).
+	CardInterval time.Duration
+	// The expiry pass runs this often on a log admin's daemon: 24 h (section 8).
+	ExpiryInterval time.Duration
+	// Up to this long after first syncing the work, so admins' daemons do not all start at once: 10 min
+	// (section 8).
+	ExpiryDelay time.Duration
+	// An admin BASE re-lists a log's live set this often: 7 d (section 8).
+	BaseInterval time.Duration
+	// A checkpoint batch is cut this often, interval_seconds' default: 1 h (section 10.1).
+	CheckpointInterval time.Duration
+	// How long a witness has to cosign: 60 s (section 10.2).
+	WitnessTimeout time.Duration
+	// A cosignature older than this is not fresh: 24 h (section 10.2).
+	WitnessFreshInterval time.Duration
+	// Misses before a witness alarms: 3 (section 10.2).
+	WitnessMissCount int
+	// Leaves one checkpoint batch takes at most: 32,768 (section 10.2).
+	LeafBatchCount int
 }
 
 // A fresh value each call, as DefaultSidecarSettings's is.
@@ -111,5 +147,18 @@ func defaultSidecarRecordSettings() *SidecarRecordSettings {
 		CoverageIdleTimeout:      10 * time.Minute,
 		TeamRecordKeepDays:       400,
 		TeamRecordSearchableDays: 90,
+		DepositInterval:          5 * time.Minute,
+		DepositByteCount:         1024 * 1024,
+		TimeSkewTimeout:          10 * time.Minute,
+		ChainGapTimeout:          1 * time.Hour,
+		CardInterval:             5 * time.Minute,
+		ExpiryInterval:           24 * time.Hour,
+		ExpiryDelay:              10 * time.Minute,
+		BaseInterval:             7 * 24 * time.Hour,
+		CheckpointInterval:       1 * time.Hour,
+		WitnessTimeout:           60 * time.Second,
+		WitnessFreshInterval:     24 * time.Hour,
+		WitnessMissCount:         3,
+		LeafBatchCount:           32768,
 	}
 }

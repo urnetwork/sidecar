@@ -46,6 +46,8 @@ type FakeRecordAuthFixture struct {
 	Logs *sidecar.RecordLogIds
 	// Each member's vault.
 	Vaults map[sidecar.Id]sidecar.Id
+	// The time_ms of the entry that made this position, which RightEnded answers.
+	TimeMillis int64
 }
 
 // A deep copy, so a test changing its fixture later changes no appended view.
@@ -100,6 +102,7 @@ func (self *FakeRecordAuthFixture) clone() *FakeRecordAuthFixture {
 	for memberId, vaultId := range self.Vaults {
 		cloned.Vaults[memberId] = vaultId
 	}
+	cloned.TimeMillis = self.TimeMillis
 	return cloned
 }
 
@@ -177,6 +180,38 @@ func (self *fakeRecordAuthView) At(pin *bridge.AuthPin) (sidecar.RecordAuthView,
 		return nil, sidecar.ErrRecordAuthOffChain
 	}
 	return view, nil
+}
+
+func (self *fakeRecordAuthView) AtPosition(version uint64) (sidecar.RecordAuthView, error) {
+	if version == 0 || self.pin.GetVersion() < version {
+		return nil, sidecar.ErrRecordAuthAhead
+	}
+	self.auth.stateLock.Lock()
+	defer self.auth.stateLock.Unlock()
+	if version < self.auth.retainedFrom {
+		return nil, sidecar.ErrRecordAuthNotRetained
+	}
+	return self.auth.views[version-1], nil
+}
+
+// The first position after after, up to this one, at which the sidecar neither writes nor deposits repo while it did
+// at after.
+func (self *fakeRecordAuthView) RightEnded(repoId sidecar.Id, sidecarId sidecar.Id, after uint64) (int64, bool) {
+	self.auth.stateLock.Lock()
+	defer self.auth.stateLock.Unlock()
+	holds := func(view *fakeRecordAuthView) bool {
+		return view.Writes(repoId, sidecarId) || view.Deposits(repoId, sidecarId)
+	}
+	if after == 0 || self.pin.GetVersion() < after || !holds(self.auth.views[after-1]) {
+		return 0, false
+	}
+	for version := after + 1; version <= self.pin.GetVersion(); version += 1 {
+		view := self.auth.views[version-1]
+		if !holds(view) {
+			return view.fixture.TimeMillis, true
+		}
+	}
+	return 0, false
 }
 
 func (self *fakeRecordAuthView) IdentityKey(sidecarId sidecar.Id) []byte {

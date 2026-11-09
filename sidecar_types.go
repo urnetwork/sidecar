@@ -232,6 +232,43 @@ const (
 	// raised by an enrolled sidecar at each start and each SyncRefetchInterval. It names no path or value: `ur
 	// status` names the store's kind.
 	SidecarEventCredentialStore SidecarEventKind = "credential_store"
+	// The record found what it alarms on, named by RecordAlarm, in the log RepoId, from the writer or signer
+	// SidecarId where one is known (plan-RECORD-alarm-kinds). A storage failure is evs_alarm's, and a head not
+	// extending a pin head_alarm's.
+	SidecarEventRecordAlarm SidecarEventKind = "record_alarm"
+)
+
+// Why a record_alarm fired (plan-RECORD-alarm-kinds): a closed set of 14.
+type SidecarRecordAlarm string
+
+const (
+	// A writer's chain skips seqs: at once from a writer with no deposit ref on the log, past ChainGapTimeout from one
+	// that deposits (RECORD.md section 5.5's chain step).
+	SidecarRecordAlarmChainGap SidecarRecordAlarm = "chain_gap"
+	// Two entries at one seq of a writer's chain, or a stream wound back below what this device read.
+	SidecarRecordAlarmChainFork SidecarRecordAlarm = "chain_fork"
+	// An entry that fails a check: RECORD.md section 5.4's steps 1 to 4, section 5.5's steps 1 to 3, 5 and 6.
+	SidecarRecordAlarmBadEntry SidecarRecordAlarm = "bad_entry"
+	// A receipt-only depositor's entry of another kind (section 5.4's class step).
+	SidecarRecordAlarmDepositorKind SidecarRecordAlarm = "depositor_kind"
+	// A BASE or ERASE taking an entry before keep_days, or a class 7 entry.
+	SidecarRecordAlarmEarlyRemoval SidecarRecordAlarm = "early_removal"
+	SidecarRecordAlarmPathRule     SidecarRecordAlarm = "path_rule"
+	// A device admitted without the author's consent, which only deposits (§16.8).
+	SidecarRecordAlarmParkedWriter SidecarRecordAlarm = "parked_writer"
+	// A body past section 6.4's caps.
+	SidecarRecordAlarmOverCap SidecarRecordAlarm = "over_cap"
+	// §16.11's limits row.
+	SidecarRecordAlarmOverLimit SidecarRecordAlarm = "over_limit"
+	// plan-RECORD-small-readings#2.
+	SidecarRecordAlarmIdReuse SidecarRecordAlarm = "id_reuse"
+	// An ERASE, CUT or CLOSURE from another signer, or an erasure_request that fails its check.
+	SidecarRecordAlarmBadErasure  SidecarRecordAlarm = "bad_erasure"
+	SidecarRecordAlarmBadDecision SidecarRecordAlarm = "bad_decision"
+	// RECORD.md section 10.2.
+	SidecarRecordAlarmLogCheck SidecarRecordAlarm = "log_check"
+	// Shown as a notice.
+	SidecarRecordAlarmModeration SidecarRecordAlarm = "moderation"
 )
 
 // Why an evs_alarm fired (plan-EVS1-evs-events): a closed set.
@@ -302,9 +339,10 @@ type SidecarEvent struct {
 	// Membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
 	// recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer; index
 	// alarms and history_drop: the signer; search_alarm: the indexer; evs_alarm: the signer of what failed,
-	// where one is known.
+	// where one is known; record_alarm: the writer or signer, where one is known.
 	SidecarId *Id
-	// Index alarms, search_alarm, history_drop, directory_erasure, erasure, evs_conflict, evs_alarm, evs_gap.
+	// Index alarms, search_alarm, history_drop, directory_erasure, erasure, evs_conflict, evs_alarm, evs_gap,
+	// record_alarm (the log).
 	RepoId *Id
 	// Index alarms, history_drop, evs_conflict, evs_alarm, evs_gap.
 	RefId *Id
@@ -339,6 +377,8 @@ type SidecarEvent struct {
 	EvsAlarm SidecarEvsAlarm
 	// evs_gap: the newest re-pin past the catch-up budget.
 	VerifiedSince time.Time
+	// record_alarm.
+	RecordAlarm SidecarRecordAlarm
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait

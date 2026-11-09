@@ -125,6 +125,8 @@ type recordJournalDocument struct {
 	SealedBody      []byte `json:"sealed_body"`
 	Key             []byte `json:"key"`
 	Salt            []byte `json:"salt"`
+	// the writer's id of a spooled capture this entry seals (RecordSealArgs.CaptureId), when it has one
+	CaptureId []byte `json:"capture_id,omitempty"`
 }
 
 // The chains of writerSidecarId, this sidecar, in store, the record component's sealed directory.
@@ -429,6 +431,7 @@ func (self *RecordChainStore) append(logId Id, build func(seq uint64, prev [sha2
 		SealedBody:      entry.SealedBody,
 		Key:             entry.Key,
 		Salt:            entry.Salt,
+		CaptureId:       entry.CaptureId,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("record chain: %w", err)
@@ -502,6 +505,7 @@ func (self *RecordChainStore) Pending(logId Id) ([]*RecordSealedEntry, error) {
 			SealedBody: document.SealedBody,
 			Key:        document.Key,
 			Salt:       document.Salt,
+			CaptureId:  document.CaptureId,
 		})
 	}
 	return entries, nil

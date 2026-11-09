@@ -647,6 +647,8 @@ type sidecarRecords struct {
 	approvalLedger *ApprovalLedger
 	runs           *RunStore
 	spool          *Spool
+	// the record's writer and push loop (RECORD-M3-02), built by Sidecar.Record
+	record *SidecarRecord
 }
 
 // The network's sealed local state, net/<network_id>/ (§5.9): Directory(name, class) reaches §16's approvals/, runs/
@@ -699,5 +701,6 @@ func (self *sidecarRecords) forNetworkWithLock(networkId Id) {
 		self.approvalLedger = nil
 		self.runs = nil
 		self.spool = nil
+		self.record = nil
 	}
 }

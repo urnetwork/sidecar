@@ -97,6 +97,10 @@ type DnsSettings struct {
 	// <root>'s records no route. A root with none keeps no records of its own, so its edges serve
 	// nothing until it has an SOA.
 	RootRecords map[string]*DnsRootRecordSettings `yaml:"root_records"`
+	// Each root's KSK DNSKEYs, one presentation-form RDATA each: the trust anchors an edge's SelfCheck
+	// holds a released window to (§12.6's Keys), which the monitor validates against too. Public keys,
+	// so config and not secret_files. An edge whose root has none serves nothing.
+	TrustAnchors map[string][]string `yaml:"trust_anchors"`
 }
 
 // One root's own records (§12.4, §12.7, §13.8, §14.6): what DnsReconcileRootRecords writes at <root>,
@@ -401,6 +405,13 @@ func LoadDnsSettings(data []byte) (*DnsSettings, error) {
 		}
 		settings.RootRecords = canonical
 	}
+	if settings.TrustAnchors != nil {
+		canonical := map[string][]string{}
+		for root, anchors := range settings.TrustAnchors {
+			canonical[dns.CanonicalName(root)] = anchors
+		}
+		settings.TrustAnchors = canonical
+	}
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
@@ -506,6 +517,14 @@ func (self *DnsSettings) Validate() error {
 	}
 	if err := self.Signing.validate(); err != nil {
 		return refuse("signing: %v", err)
+	}
+	for root, anchors := range self.TrustAnchors {
+		if !slices.Contains(self.Roots, root) {
+			return refuse("trust_anchors: %s is no root", root)
+		}
+		if _, err := ParseDnsTrustAnchors(root, anchors); err != nil {
+			return refuse("trust_anchors: %s: %v", root, err)
+		}
 	}
 	for root, records := range self.RootRecords {
 		if !slices.Contains(self.Roots, root) {

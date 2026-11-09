@@ -286,6 +286,14 @@ type RecordAuthView interface {
 	// The state at an earlier pin on this chain: ErrRecordAuthAhead, ErrRecordAuthNotRetained or
 	// ErrRecordAuthOffChain otherwise.
 	At(pin *bridge.AuthPin) (RecordAuthView, error)
+	// The state at an earlier position of this chain by its version alone: where an ingested entry's
+	// policy_version places its writer, which no chain value accompanies (RECORD.md section 5.5's right step).
+	// ErrRecordAuthAhead or ErrRecordAuthNotRetained otherwise.
+	AtPosition(version uint64) (RecordAuthView, error)
+	// The time_ms of the first log entry after position after, up to this state, that ended the sidecar's right
+	// to write or deposit in repo; false when none did. An ingester holds a deposit declared at an earlier pin to
+	// it (RECORD.md section 5.4's right step).
+	RightEnded(repoId Id, sidecarId Id, after uint64) (int64, bool)
 	// The identity key the log admits for a sidecar, nil for none. A revoked sidecar keeps it, for what it signed
 	// while admitted.
 	IdentityKey(sidecarId Id) []byte
@@ -326,6 +334,16 @@ func (self RecordAuthUnavailable) Pin() *bridge.AuthPin {
 // Ahead of every pin, so a caller waits rather than judges.
 func (self RecordAuthUnavailable) At(pin *bridge.AuthPin) (RecordAuthView, error) {
 	return nil, ErrRecordAuthAhead
+}
+
+// Ahead of every position.
+func (self RecordAuthUnavailable) AtPosition(version uint64) (RecordAuthView, error) {
+	return nil, ErrRecordAuthAhead
+}
+
+// Ended at the epoch, so no deposit declared at an earlier pin stands on this state.
+func (self RecordAuthUnavailable) RightEnded(repoId Id, sidecarId Id, after uint64) (int64, bool) {
+	return 0, true
 }
 
 // None.

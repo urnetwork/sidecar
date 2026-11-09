@@ -95,8 +95,16 @@ type RecordSealArgs struct {
 	// The grant the action ran under (AclGrantId, 32 bytes), or empty.
 	GrantId []byte
 	// The kind's one body message (section 6.4), marshaled once here with Deterministic: true: for approval_decision,
-	// approval_cancel and retention a Signed of the kind's own type.
+	// approval_cancel and retention a Signed of the kind's own type. Exactly one of Body and StoredBody.
 	Body proto.Message
+	// The body as stored, sealed exactly as given and never re-encoded: an ApprovalRequest, or a decision's or a
+	// cancel's Signed, whose request_sha256 and payload_sha256 bind these bytes (§16.8), and a spooled draft's body,
+	// marshaled once when it was captured. It must parse as the kind's message.
+	StoredBody []byte
+	// Opaque to the seal and the chain, and kept in the entry's journal record: the writer's id for a capture it
+	// replays from the spool, so a replay after a kill tells a capture it sealed from a new one. Never leaves the
+	// device.
+	CaptureId []byte
 }
 
 // What RecordSeal needs of its sidecar.
@@ -127,6 +135,8 @@ type RecordSealedEntry struct {
 	// deposited.
 	Key  []byte
 	Salt []byte
+	// RecordSealArgs.CaptureId, as the journal kept it.
+	CaptureId []byte
 }
 
 // The stored header, parsed from the entry's Signed with the bytes its leaf and signature cover.
@@ -227,15 +237,22 @@ func (self *RecordSealArgs) check() error {
 			return fmt.Errorf("%w: a content ref whose ids or commitment are not their lengths", ErrRecordSealInvalid)
 		}
 	}
-	if self.Body == nil {
-		return fmt.Errorf("%w: no body", ErrRecordSealInvalid)
+	if (self.Body == nil) == (self.StoredBody == nil) {
+		return fmt.Errorf("%w: a body, either as a message or as stored", ErrRecordSealInvalid)
 	}
 	wantBody, _ := self.Kind.NewBody()
-	if proto.MessageName(self.Body) != proto.MessageName(wantBody) {
-		return fmt.Errorf("%w: kind %s takes %s, not %s", ErrRecordSealInvalid, self.Kind, proto.MessageName(wantBody), proto.MessageName(self.Body))
+	body := self.Body
+	if self.StoredBody != nil {
+		if err := proto.Unmarshal(self.StoredBody, wantBody); err != nil {
+			return fmt.Errorf("%w: a stored body that is no %s: %v", ErrRecordSealInvalid, proto.MessageName(wantBody), err)
+		}
+		body = wantBody
+	}
+	if proto.MessageName(body) != proto.MessageName(wantBody) {
+		return fmt.Errorf("%w: kind %s takes %s, not %s", ErrRecordSealInvalid, self.Kind, proto.MessageName(wantBody), proto.MessageName(body))
 	}
 	if _, signedType, ok := self.Kind.NewSignedBody(); ok {
-		signed, _ := self.Body.(*bridge.Signed)
+		signed, _ := body.(*bridge.Signed)
 		if signed == nil || signed.GetType() != uint32(signedType) {
 			return fmt.Errorf("%w: kind %s takes a Signed of type %#x", ErrRecordSealInvalid, self.Kind, int32(signedType))
 		}
@@ -287,9 +304,13 @@ func RecordSeal(env *RecordSealEnv, args *RecordSealArgs) (*RecordSealedEntry, e
 	if err := args.check(); err != nil {
 		return nil, err
 	}
-	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(args.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: body: %v", ErrRecordSealInvalid, err)
+	body := bytes.Clone(args.StoredBody)
+	if args.StoredBody == nil {
+		marshaled, err := proto.MarshalOptions{Deterministic: true}.Marshal(args.Body)
+		if err != nil {
+			return nil, fmt.Errorf("%w: body: %v", ErrRecordSealInvalid, err)
+		}
+		body = marshaled
 	}
 
 	random := env.Random
@@ -351,6 +372,7 @@ func RecordSeal(env *RecordSealEnv, args *RecordSealArgs) (*RecordSealedEntry, e
 			SealedBody: sealedBody,
 			Key:        key,
 			Salt:       salt,
+			CaptureId:  bytes.Clone(args.CaptureId),
 		}, nil
 	})
 }
