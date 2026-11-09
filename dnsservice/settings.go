@@ -95,6 +95,8 @@ type DnsSettings struct {
 	// How a ceremony lays out the DNSKEY windows and the API block releases them (DNS-M5-19). Not in
 	// the sketch, whose prose gives the 14 days and the 7 d the monitor holds.
 	Keys DnsKeySettings `yaml:"keys"`
+	// How §12.6's restore step waits for the NS and their diffs (DNS-M5-15). Not in the sketch.
+	Restore DnsRestoreSettings `yaml:"restore"`
 	// Each root's own records (§12.7's <root> set, plan reading 19), by root, which the API block
 	// reconciles through §12.6's write path at start (DNS-M5-11). Not in the sketch, which gives
 	// <root>'s records no route. A root with none keeps no records of its own, so its edges serve
@@ -181,6 +183,17 @@ type DnsKeySettings struct {
 	MinLeftSeconds int `yaml:"min_left_s"`
 	// The DNSKEY RRset's TTL, which the KSK signs into each window. Must be positive.
 	DnskeyTtl uint32 `yaml:"dnskey_ttl"`
+}
+
+// How the restore step waits (DNS-M5-15, §12.6), in seconds. SOA reads take api.soa_read_timeout_s.
+type DnsRestoreSettings struct {
+	// Between two rounds of SOA reads, or reads of the posted diffs, while the step waits for the
+	// running NS to serve restore_serial and post their diffs. Must be positive.
+	PollSeconds int `yaml:"poll_s"`
+	// How long the step waits, once every running NS serves restore_serial, for a diff from each before
+	// it lists what came; a rerun lists what comes later. An edge posts its diff as it reloads, retrying
+	// from feed.retry_min_s. Zero lists at once.
+	DiffWaitSeconds int `yaml:"diff_wait_s"`
 }
 
 // How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06).
@@ -410,6 +423,10 @@ func DefaultDnsSettings() *DnsSettings {
 			MinLeftSeconds:      7 * 24 * 3600,
 			DnskeyTtl:           3600,
 		},
+		Restore: DnsRestoreSettings{
+			PollSeconds:     1,
+			DiffWaitSeconds: 60,
+		},
 	}
 }
 
@@ -545,6 +562,12 @@ func (self *DnsSettings) Validate() error {
 	}
 	if err := self.Keys.validate(); err != nil {
 		return refuse("keys: %v", err)
+	}
+	if self.Restore.PollSeconds <= 0 {
+		return refuse("restore.poll_s is not positive")
+	}
+	if self.Restore.DiffWaitSeconds < 0 {
+		return refuse("restore.diff_wait_s is negative")
 	}
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")

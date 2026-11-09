@@ -202,7 +202,8 @@ func (self *DnsApi) serveReloadDiff(writer http.ResponseWriter, request *http.Re
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-// Whether a diff names a root served here, a reload that raised its serial, and keys of that root.
+// Whether a diff names a root served here, a reload that raised its serial, keys of that root, and,
+// when it has kinds, one known kind a key.
 func (self *DnsApi) validateReloadDiff(diff *DnsReloadDiff) error {
 	known := false
 	for _, root := range self.settings.Roots {
@@ -217,6 +218,14 @@ func (self *DnsApi) validateReloadDiff(diff *DnsReloadDiff) error {
 	for index := range diff.Rrsets {
 		if err := diff.Rrsets[index].Validate(diff.Root); err != nil {
 			return fmt.Errorf("a diff naming a key that is no key")
+		}
+	}
+	if len(diff.Kinds) != 0 && len(diff.Kinds) != len(diff.Rrsets) {
+		return fmt.Errorf("a diff with %d kinds for %d keys", len(diff.Kinds), len(diff.Rrsets))
+	}
+	for _, kind := range diff.Kinds {
+		if !kind.known() {
+			return fmt.Errorf("a diff naming a kind that is no kind")
 		}
 	}
 	return nil
