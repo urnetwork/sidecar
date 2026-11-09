@@ -913,7 +913,7 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 		Sign:              self.Sign,
 		Spool:             spool,
 		// taint read at sealing, true whenever the run store cannot answer (D-MCP-16)
-		Runs: RecordRunViewFunc(self.RunTainted),
+		Runs: self,
 		Alarm: func(alarm *RecordAlarm) {
 			logId := alarm.LogId
 			self.emitEvent(SidecarEvent{Kind: SidecarEventRecordAlarm, RepoId: &logId, SidecarId: alarm.SidecarId, RecordAlarm: alarm.Reason})
@@ -933,14 +933,15 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
+	// NewSidecar did not build raises no events to mirror.
+	if self.eventCallbacks != nil {
+		self.AddEventCallback(func(event SidecarEvent) {
+			if mirrored, ok := RecordAccountingEventOf(event); ok {
+				record.Accounting().Queue(mirrored)
+			}
+		})
+	}
 	self.records.record = record
 	return record, nil
-}
-
-// A RecordRunView over a function, such as Sidecar.RunTainted.
-type RecordRunViewFunc func(runId Id) bool
-
-// The function's answer.
-func (self RecordRunViewFunc) RunTainted(runId Id) bool {
-	return self(runId)
 }
