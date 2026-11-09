@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // §22.5's §18 row at the core (CORE-M8-01): an sdk host's TokenSource refreshes once it holds the core's signer, and
@@ -305,11 +306,26 @@ func TestHostReregistersOnRestoreRequired(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+	// a host re-registers after its source answered, so with the generation's token held, which the source hands
+	// over after the status names the generation
+	awaitSidecarApiToken(t, world.sidecar)
 	bound := len(world.api.requestedPaths())
 	world.sidecar.Reregister(context.Background())
-	paths := world.api.requestedPaths()[bound:]
-	if len(paths) == 0 || paths[0] != "/sidecar/bind" {
-		t.Fatalf("requests %v", paths)
+	// The new generation's push client asks for a resync on its own (§6.8), so its /sidecar/sync/ requests may
+	// come between. They are not the re-registration's.
+	paths := world.api.requestedPaths()
+	bindAt := -1
+	for i := bound; i < len(paths); i++ {
+		if strings.HasPrefix(paths[i], "/sidecar/sync/") {
+			continue
+		}
+		if paths[i] == "/sidecar/bind" {
+			bindAt = i
+		}
+		break
+	}
+	if bindAt < 0 {
+		t.Fatalf("requests %v", paths[bound:])
 	}
 	record, err := loadSidecarIdentity(world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace))
 	if err != nil {
@@ -319,7 +335,32 @@ func TestHostReregistersOnRestoreRequired(t *testing.T) {
 	wire := &struct {
 		Binding []byte `json:"binding"`
 	}{}
-	if err := json.Unmarshal(world.api.bodies[bound], wire); err != nil || !bytes.Equal(wire.Binding, record.binding) {
+	body := func() []byte {
+		world.api.stateLock.Lock()
+		defer world.api.stateLock.Unlock()
+		return world.api.bodies[bindAt]
+	}()
+	if err := json.Unmarshal(body, wire); err != nil || !bytes.Equal(wire.Binding, record.binding) {
 		t.Fatalf("the re-posted binding is not the newest one: %v", err)
+	}
+}
+
+// Waits until the sidecar's api client holds a token, which nothing announces.
+func awaitSidecarApiToken(t *testing.T, sidecar *Sidecar) {
+	t.Helper()
+	deadline := time.Now().Add(sidecarTestTimeout)
+	for {
+		held := func() bool {
+			sidecar.sidecarApi.stateLock.Lock()
+			defer sidecar.sidecarApi.stateLock.Unlock()
+			return sidecar.sidecarApi.byJwt != ""
+		}()
+		if held {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sidecar api never held a token")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
