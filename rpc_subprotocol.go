@@ -86,6 +86,10 @@ type SubprotocolEnv struct {
 	Binding []byte
 	// Where Hello raises key_changed. Nil drops events.
 	Event SidecarEventFunction
+	// The verified state Hello's admission check reads (rpc_admission.go): from M2 a peer's identity key
+	// must be its SidecarAdmit's, and a sidecar not itself admitted takes no peer. Nil keeps M1's
+	// first-use pins (§2.8 EX6), which only a dispatcher with no state behind it runs on.
+	Admissions SubprotocolAdmissions
 }
 
 // One client generation's dispatcher. See the file header.
@@ -134,6 +138,8 @@ type Subprotocol struct {
 	binding   []byte
 	event     SidecarEventFunction
 	pins      identityPinSource
+	// what the admission check reads; nil under M1's first-use pins
+	admissions SubprotocolAdmissions
 	// core's live raise of the secure floor, 0 for none (QD-032)
 	raisedSecureFloor atomic.Uint32
 	// mutating handlers' answers (rpc_idempotency.go)
@@ -142,6 +148,8 @@ type Subprotocol struct {
 	handlers sync.WaitGroup
 	// the PushClient serving this dispatcher's push, which Subscribe reaches (push_client.go)
 	pushClient atomic.Pointer[PushClient]
+	// HeadCheck's transport while one is attached (rpc_headcheck.go)
+	headCheck atomic.Pointer[headCheckTransport]
 
 	stats subprotocolStats
 }
@@ -303,6 +311,7 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		binding:               bytes.Clone(env.Binding),
 		event:                 env.Event,
 		pins:                  seams.pins,
+		admissions:            env.Admissions,
 		idempotency:           newIdempotencyCache(env.Settings, env.Budget, clock),
 	}
 	if self.clientPublicKeyOf == nil {
@@ -312,7 +321,11 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		self.send = self.connectSend
 	}
 	if self.pins == nil {
-		self.pins = newFirstUseIdentityPins(env.Store)
+		if env.Admissions != nil {
+			self.pins = newAdmissionIdentityPins(cancelCtx, env.Admissions, env.Store, env.Settings, clock, self.raiseEvent)
+		} else {
+			self.pins = newFirstUseIdentityPins(env.Store)
+		}
 	}
 	// the dispatcher's own: Hello's check, Cancel and every response
 	for _, register := range []func() error{
@@ -475,6 +488,15 @@ func (self *Subprotocol) process(item *subprotocolInbound, barrierKey string) {
 		hasClientPublicKey: item.hasClientPublicKey,
 		envelope:           whole,
 		arrivalTime:        item.arrivalTime,
+	}
+	// a peer whose admission the state has since revoked or parked loses its gate here, off the inline
+	// path, before anything of it is dispatched (rpc_admission.go)
+	if item.sourceId != connect.ControlId && !helloExchange(whole.Type, whole.Flags) && !self.peerAdmissionStands(item.sourceId) {
+		self.stats.identityRefusedCount.Add(1)
+		if message.answerable() {
+			self.offerReply(refusalReply(item.sourceId, item.transferKey, whole.RequestId, whole.StreamId, protocol.ErrorCode_ERR_UNAUTHENTICATED))
+		}
+		return
 	}
 	testHookBarrier("rpc.dispatch.before", barrierKey)
 	self.dispatch(message)

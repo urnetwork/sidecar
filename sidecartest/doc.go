@@ -19,8 +19,8 @@
 //     with its gates, owners and registered tests, which a Gn-out sweep reads for what is missing.
 //   - metadata_list.go, §2.8's list and its strict reader, and schema_guard*.go, §22.7's guard over it,
 //     whose map is testdata/metadata/fields.yml.
-//   - fake_blobs*.go, fake_redis*.go and the other fake_ files, a fake of every interface ServiceHost
-//     holds, gathered by fake_host.go.
+//   - fake_blobs*.go, fake_redis*.go and the other fake_ files, with abuse_gate_fake.go, a fake of every
+//     interface ServiceHost holds, gathered by fake_host.go.
 //   - net*.go, connect clients in one process, built on connect's exported API alone (Q-TEST-1).
 //   - blobsuite and redissuite, the conformance suites, which take a fake or a real store.
 //   - localstack, this module's own clients of the stack in local/, so the suites run on real stores
