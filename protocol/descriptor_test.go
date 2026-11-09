@@ -107,6 +107,8 @@ func TestDeviceRoleTypesLiveInBridge(t *testing.T) {
 		"BridgeState", "BridgeIdentity", "BridgeShareKey", "Pending", "BridgeRows", "WindowDelegation", "ShareCert",
 		"BridgeShareSigner", "BridgeBlock", "BridgeAddress", "BridgeRoute", "BridgeMap", "BridgeEgress",
 		"BridgeAlias", "BridgeWithdraw",
+		"BridgeRules", "BridgeRuleEntry", "BridgeRuleLink", "BridgeRuleMap", "BridgeRuleServed", "BridgeRuleSubject",
+		"BridgeRuleReach", "BridgeRuleEgress", "BridgeRuleEntryKind",
 	} {
 		path := testDescriptor(t, name).ParentFile().Path()
 		if !strings.HasPrefix(path, "protocol/bridge/") {

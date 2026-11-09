@@ -165,7 +165,9 @@ func testNonMinimal(t testing.TB, encoded []byte) []byte {
 	return rewritten
 }
 
-// Each packed list of varints written one element at a time, which a proto3 parser must take as the same list.
+// Each packed list written one element at a time, which a proto3 parser must take as the same list. Elements keep
+// their own wire type: varints, or the four and eight bytes of a fixed32 or fixed64 list, such as
+// BridgeRules.addresses.
 func testUnpacked(t testing.TB, descriptor protoreflect.MessageDescriptor, encoded []byte) []byte {
 	rewritten := []byte{}
 	for _, record := range testSplitFields(t, encoded) {
@@ -175,14 +177,21 @@ func testUnpacked(t testing.TB, descriptor protoreflect.MessageDescriptor, encod
 			rewritten = append(rewritten, record...)
 			continue
 		}
+		elementWireType := protowire.VarintType
+		switch field.Kind() {
+		case protoreflect.Fixed32Kind, protoreflect.Sfixed32Kind, protoreflect.FloatKind:
+			elementWireType = protowire.Fixed32Type
+		case protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind, protoreflect.DoubleKind:
+			elementWireType = protowire.Fixed64Type
+		}
 		packed, _ := protowire.ConsumeBytes(record[tagLength:])
 		for len(packed) > 0 {
-			value, length := protowire.ConsumeVarint(packed)
+			length := protowire.ConsumeFieldValue(number, elementWireType, packed)
 			if length < 0 {
 				t.Fatalf("%s: a packed value does not parse", field.FullName())
 			}
-			rewritten = protowire.AppendTag(rewritten, number, protowire.VarintType)
-			rewritten = protowire.AppendVarint(rewritten, value)
+			rewritten = protowire.AppendTag(rewritten, number, elementWireType)
+			rewritten = append(rewritten, packed[:length]...)
 			packed = packed[length:]
 		}
 	}
