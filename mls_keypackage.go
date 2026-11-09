@@ -15,6 +15,8 @@ import (
 	"crypto/hpke"
 	"fmt"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // A leaf's signature key and the credential naming it, which the identity key signed.
@@ -110,6 +112,53 @@ func mlsDecodeKeyPackage(suite *mlsCipherSuite, settings *mlsTreeSettings, crede
 		return nil, err
 	}
 	return keyPackage, nil
+}
+
+// What gkm reads of an uploaded KeyPackage (§10.6's KeyPackages): its ref, whether it is last-resort, its lifetime,
+// and its 0xF552 credential, once RFC 9420 §10.1's checks pass under suite 0x0010 with the tree's 90-day bound on
+// its lifetime, the credential's own checks pass (CheckUrMlsCredential), and the leaf's signature key is the one the
+// credential names. Whether the log admits the credential's identity key for its sidecar is the caller's: gkm holds
+// it to the uploader's, and members to the log (KEYS-M2-19).
+type MlsKeyPackageInfo struct {
+	// KeyPackageRef (RFC 9420 §5.2), <ref> in gkm's keys.
+	Ref        []byte
+	LastResort bool
+	// The leaf's lifetime, to the second.
+	NotBefore  time.Time
+	NotAfter   time.Time
+	Credential *protocol.UrMlsCredential
+}
+
+// Reads a KeyPackage's MLSMessage, as a sidecar uploads it and gkm stores it at kp/<sidecar_id>/<ref>, held to the
+// checks MlsKeyPackageInfo names. Nothing returned shares encoded.
+func ParseMlsKeyPackage(encoded []byte) (*MlsKeyPackageInfo, error) {
+	var credential *protocol.UrMlsCredential
+	validator := mlsUrCredentialValidator(func(parsed *protocol.UrMlsCredential) error {
+		credential = parsed
+		return nil
+	})
+	keyPackage, err := mlsDecodeKeyPackage(mlsSuite, defaultMlsTreeSettings(), validator, encoded, nil)
+	if err != nil {
+		return nil, err
+	}
+	if credential == nil {
+		return nil, fmt.Errorf("%w: a key package with no credential", errMlsInvalid)
+	}
+	ref, err := keyPackage.ref(mlsSuite)
+	if err != nil {
+		return nil, err
+	}
+	lifetime := keyPackage.leafNode.lifetime
+	if lifetime.notAfter > uint64(1)<<62 {
+		return nil, fmt.Errorf("%w: lifetime past any time", errMlsInvalid)
+	}
+	return &MlsKeyPackageInfo{
+		Ref:        ref,
+		LastResort: mlsIsLastResort(keyPackage.extensions),
+		NotBefore:  time.Unix(int64(lifetime.notBefore), 0),
+		NotAfter:   time.Unix(int64(lifetime.notAfter), 0),
+		Credential: credential,
+	}, nil
 }
 
 // The window a new leaf is valid in: from skew before now for maximum, and never past the tree's bound.

@@ -88,6 +88,42 @@ func TestMlsKeyPackageCarriesCredential0xF552(t *testing.T) {
 	}
 }
 
+// What gkm reads of an upload: the ref the engine named, the last-resort mark, the lifetime and the credential, and
+// nothing from bytes that are not a whole, checked KeyPackage.
+func TestMlsParseKeyPackageReadsWhatGkmStores(t *testing.T) {
+	signer := newGkmTestSigner("parse key package")
+	lifetime := newMlsLifetime(mlsTestTime, 10*time.Minute, 90*24*time.Hour)
+	for _, lastResort := range []bool{false, true} {
+		held, err := newMlsHeldKeyPackage(mlsSuite, mlsTestLeafIdentity(t, signer), lifetime, lastResort)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := ParseMlsKeyPackage(held.encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(info.Ref, held.ref) || info.LastResort != lastResort {
+			t.Errorf("ref %x last resort %v", info.Ref, info.LastResort)
+		}
+		if Id(info.Credential.GetSidecarId()) != signer.sidecarId || !bytes.Equal(info.Credential.GetIdentityPublicKey(), signer.publicKey()) {
+			t.Error("the credential names another sidecar or key")
+		}
+		if info.NotBefore.Unix() != int64(lifetime.notBefore) || info.NotAfter.Unix() != int64(lifetime.notAfter) {
+			t.Errorf("lifetime %s to %s", info.NotBefore, info.NotAfter)
+		}
+		for _, broken := range [][]byte{held.encoded[:len(held.encoded)-1], append(bytes.Clone(held.encoded), 0)} {
+			if _, err := ParseMlsKeyPackage(broken); err == nil {
+				t.Error("a cut or padded KeyPackage parsed")
+			}
+		}
+		tampered := bytes.Clone(held.encoded)
+		tampered[len(tampered)-1] ^= 1
+		if _, err := ParseMlsKeyPackage(tampered); err == nil {
+			t.Error("a KeyPackage with a broken signature parsed")
+		}
+	}
+}
+
 // A leaf's lifetime starts a little before now and spans exactly the tree's bound, so a committer whose clock runs
 // behind adds it and the tree takes its span.
 func TestMlsKeyPackageLifetimeStartsBeforeNow(t *testing.T) {
