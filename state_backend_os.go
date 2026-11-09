@@ -191,6 +191,90 @@ func (self *osStoreBackend) RemoveTemp() error {
 	return nil
 }
 
+// Opens the file at path 0600 at its end, or makes it, with its directories, when it is absent. An
+// existing file opens first, so making one is the only step that can race another opener, which O_EXCL
+// settles.
+func (self *osStoreBackend) OpenAppend(storePath string) (SidecarStoreBackendAppendFile, bool, error) {
+	osPath, err := self.osPath(storePath)
+	if err != nil {
+		return nil, false, err
+	}
+	file, err := os.OpenFile(osPath, os.O_WRONLY|os.O_APPEND, osBackendFileMode)
+	if err == nil {
+		return &osAppendFile{file: file}, false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, false, storeFault(err)
+	}
+	if err := makeOsDirectory(filepath.Dir(osPath)); err != nil {
+		return nil, false, err
+	}
+	file, err = os.OpenFile(osPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL, osBackendFileMode)
+	if errors.Is(err, fs.ErrExist) {
+		file, err = os.OpenFile(osPath, os.O_WRONLY|os.O_APPEND, osBackendFileMode)
+		if err != nil {
+			return nil, false, storeFault(err)
+		}
+		return &osAppendFile{file: file}, false, nil
+	}
+	if err != nil {
+		return nil, false, storeFault(err)
+	}
+	return &osAppendFile{file: file}, true, nil
+}
+
+// A file opened O_APPEND, whose errors lose their path.
+type osAppendFile struct {
+	file   *os.File
+	closed bool
+}
+
+// Appends p.
+func (self *osAppendFile) Write(p []byte) (int, error) {
+	n, err := self.file.Write(p)
+	if err != nil {
+		return n, storeFault(err)
+	}
+	return n, nil
+}
+
+// Stats the open file, so a rename over its path does not change the answer.
+func (self *osAppendFile) Size() (int64, error) {
+	info, err := self.file.Stat()
+	if err != nil {
+		return 0, storeFault(err)
+	}
+	return info.Size(), nil
+}
+
+// ftruncate, after which O_APPEND writes land at the new end.
+func (self *osAppendFile) Truncate(byteCount int64) error {
+	if err := self.file.Truncate(byteCount); err != nil {
+		return storeFault(err)
+	}
+	return nil
+}
+
+// fsyncs the file, which on darwin is F_FULLFSYNC.
+func (self *osAppendFile) Sync() error {
+	if err := self.file.Sync(); err != nil {
+		return storeFault(err)
+	}
+	return nil
+}
+
+// Closes the file once.
+func (self *osAppendFile) Close() error {
+	if self.closed {
+		return nil
+	}
+	self.closed = true
+	if err := self.file.Close(); err != nil {
+		return storeFault(err)
+	}
+	return nil
+}
+
 // Makes directory and whatever is missing above it, fsyncing each new one's parent so a power cut
 // cannot take a directory out from under a file renamed into it.
 func makeOsDirectory(directory string) error {

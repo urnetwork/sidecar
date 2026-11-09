@@ -20,6 +20,12 @@ type SidecarMcpSettings struct {
 	// When a call times out: 30 s, under Codex's 60 s tool_timeout_sec default. A call awaiting a
 	// person returns pending at once.
 	CallTimeout time.Duration
+	// How long an approval's ledger file stays past its not_after: 30 days (§16.6's retention row),
+	// long after a local use stops completing at not_after + 10 min.
+	ApprovalFileRetention time.Duration
+	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
+	// for restore (§16.7). A later Coverage starts it again.
+	RunFileRetention time.Duration
 }
 
 // §16.7's capture bounds. Every cut, missed event or changed config is a coverage gap.
@@ -64,10 +70,12 @@ type SidecarRecordSettings struct {
 // A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	return &SidecarMcpSettings{
-		SessionCallCount: 8,
-		SessionWriteRate: SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
-		ResultByteCount:  256 * 1024,
-		CallTimeout:      30 * time.Second,
+		SessionCallCount:      8,
+		SessionWriteRate:      SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
+		ResultByteCount:       256 * 1024,
+		CallTimeout:           30 * time.Second,
+		ApprovalFileRetention: 30 * 24 * time.Hour,
+		RunFileRetention:      30 * 24 * time.Hour,
 	}
 }
 
