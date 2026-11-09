@@ -308,6 +308,12 @@ func (self *netExchange) addClient(ctx context.Context, name string, clientId co
 	return netClient
 }
 
+// Why a client may not run on the fake contract issuer and ControlId sink here, empty when it may: what
+// NetSettings.RefusePlatformFakes says. A run that added one on such a Net fails (fault.Run).
+func (self *Net) RefusesPlatformFakes() string {
+	return self.settings.RefusePlatformFakes
+}
+
 // Whether a client was added, each of which runs on the fake contract issuer and the ControlId sink, so
 // a row that added one names T3 too (Q-TEST-1).
 func (self *Net) UsesPlatformFakes() bool {

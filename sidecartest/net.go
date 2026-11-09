@@ -36,6 +36,10 @@ type NetSettings struct {
 	// plans reach them, with what closes it at the Net's end, after the engines close. An error panics
 	// in NewNet, since a Net with no host has nothing to run its engines on.
 	Engines func(ctx context.Context, net *Net) (host *sidecar.ServiceHost, closeHost func(), err error)
+	// Why this Net's connect clients may not run on the fake contract issuer and ControlId sink, empty
+	// when they may. T3 sets it until server's exchange carries its clients, so a T3 run whose row
+	// added a client or a sidecar fails rather than passing on T2's platform (Q-TEST-1).
+	RefusePlatformFakes string
 }
 
 func DefaultNetSettings() *NetSettings {

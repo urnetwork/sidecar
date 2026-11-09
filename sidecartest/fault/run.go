@@ -303,6 +303,9 @@ func (self *runner) finish() error {
 	if unfired := self.net.Faults().Unfired(); 0 < len(unfired) {
 		return fmt.Errorf("never fired: %v", unfired)
 	}
+	if refusal := self.net.RefusesPlatformFakes(); refusal != "" && self.net.UsesPlatformFakes() {
+		return fmt.Errorf("the row ran a client on the fake contract issuer and ControlId sink, which this Net refuses: %s", refusal)
+	}
 	if self.net.UsesPlatformFakes() && !slices.Contains(self.schedule.Tiers, TierT3) && !(self.schedule.Forged && self.schedule.Twin != nil) {
 		return errors.New("the row ran on the fake contract issuer and ControlId sink, so it names T3 too (Q-TEST-1)")
 	}

@@ -979,3 +979,30 @@ func TestARowOnThePlatformFakesNamesT3(t *testing.T) {
 	}
 	wantPass(t, run([]Tier{TierT2, TierT3}))
 }
+
+// A Net that refuses the platform fakes, as T3's does until server's exchange carries its clients, fails a
+// row that added a client there, whatever tiers it names; a row adding none passes on it.
+func TestANetRefusingThePlatformFakesFailsARowOnThem(t *testing.T) {
+	run := func(addClient bool) *Result {
+		settings := sidecartest.DefaultNetSettings()
+		settings.RefusePlatformFakes = "T3's clients ride server's exchange"
+		net := sidecartest.NewNet(t.Context(), settings)
+		defer net.Close()
+		return Run(t.Context(), &Schedule{
+			Id: "platform-fakes-refused",
+			Steps: []*Step{
+				{Actor: "daemonM", Action: func(ctx context.Context, net *Net) error {
+					if addClient {
+						net.AddClient("m", nil)
+					}
+					return nil
+				}},
+			},
+			Tiers: []Tier{TierT2, TierT3},
+		}, net)
+	}
+	if result := run(true); result.Err == nil || !strings.Contains(result.Err.Error(), "T3's clients ride server's exchange") {
+		t.Errorf("%s", result)
+	}
+	wantPass(t, run(false))
+}
