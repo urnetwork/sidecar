@@ -504,6 +504,14 @@ message EvsRepoObject {
   bytes state_signer = 6; bytes deletion_id = 7; uint32 format = 8; bytes sealed_name = 9; bytes network_id = 10;
 }
 message EvsRepoPlacement { string cluster_id = 1; bytes creator_sidecar_id = 2; }
+// 11.13's index row, by EVSB-M2-10's plan line: pidx/ entries and the containers they name.
+message EvsPidxEntry {
+  EvsContainerKind container_kind = 1; bytes container_id = 2; uint64 first_version = 3; uint64 last_version = 4;
+  repeated EvsPidxRecord records = 5; repeated EvsPidxLogPage log_pages = 6; repeated bytes segment_ids = 7;
+}
+message EvsPidxRecord { uint64 version = 1; EvsBatchRecordType type = 2; uint64 offset = 3; uint32 length = 4; EvsPlace place = 5; }
+message EvsPidxLogPage { uint64 page = 1; uint64 offset = 2; uint32 length = 3; }
+enum EvsContainerKind { EVS_CONTAINER_KIND_UNSPECIFIED = 0; EVS_CONTAINER_PACK = 1; EVS_CONTAINER_PARCEL = 2; }
 message EvsSlotObject { repeated EvsSlotKey keys = 1; }
 message EvsSlotKey { uint32 key_index = 1; uint64 generation = 2; bytes wrapped = 3; }
 // 11.7's index entries, removal row and drop mark, by plan-EVS1-format-bytes#9.

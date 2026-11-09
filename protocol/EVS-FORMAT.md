@@ -220,7 +220,11 @@ A record's body is its items in the order §11.8's record row lists them, each u
 | `slot/<repo>/<slot_id>` | `EvsSlotObject` | up to 64 keys in ascending index; an erased key leaves the list and no index shifts (#9); a key's `wrapped` is the 72 B wrapped-key block a segment carries, under fek of the key's generation, and a deposit's is HPKE-XWing to that generation's drop key, as above |
 | `pmap/<repo>/<ref>/<p>/<map>/<part>/_` | a Signed `EvsPathMap` part | |
 
-EVSB's plan adds `EvsPidxEntry` for `pidx/` here when EVSB-M2-10 lands. `pb/` holds batches above, and `seg/` segments.
+| `pidx/<repo>/<ref>/<v_first>-<id>` | `EvsPidxEntry` | create-only, never extended: one container's records of one ref, each with its version (a part its seal's), batch record type, offset and length in the container and its batch `EvsPlace`, the log pages a pack holds and the segment ids its records introduce; `v_first` zero-padded to 20 digits and `<id>` the container's id, so keys under a ref share one length (EVSB-M2-10) |
+| `pack/<repo>/<pack_id>`, on the segment cluster | a container | records and log pages, written by a streamed PUT with its SHA-256 (plan-EVSB-pack-put) |
+| `hp/<repo>/<parcel_id>` | a container | records only (plan-EVSB-parcel-log-pages), If-None-Match with its SHA-256 |
+
+A container is a 16 B header, "URpk" for a pack or "URhp" for a parcel \| format u8 (1) \| 3 zero bytes \| item_count u32 \| 4 zero bytes, then its items: kind u8 (1 record, 2 log page) \| 3 zero bytes \| ref_id 16 \| number u64 (a record's version, a log page's page) \| length u32 \| bytes. A record's bytes are its batch record's as the batch held them, so a range read parses as a read at its place did. Items go records first, by ref, version and place, then log pages by ref and page, so a rerun over the same inputs gives equal bytes; the container's id is the first 16 B of SHA-256 over them. `testdata/evs/pidx/pack_vector.json` pins one. `pb/` holds batches above, and `seg/` segments.
 
 ## HTTP bodies
 
