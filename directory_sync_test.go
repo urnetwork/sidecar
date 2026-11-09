@@ -557,6 +557,29 @@ func TestDirectorySyncLostReadDeletesTheStore(t *testing.T) {
 	}
 }
 
+// A stream evs lists below what the copy holds was wound back: the sync alarms chain_fork, reads nothing of it, and
+// the copy keeps every entry it verified (I-16).
+func TestDirectorySyncAlarmsAStreamWoundBack(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	writer := world.writer()
+	world.publish()
+	writer.push(3)
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	before := world.cards.Counts()
+	world.cards.ListStreamAt(world.directoryId, writer.sidecarId, 1)
+	reader.mustSync(t)
+	if alarms := reader.alarmReasons(); len(alarms) != 1 || alarms[0] != sidecar.SidecarRecordAlarmChainFork {
+		t.Errorf("alarms %v", alarms)
+	}
+	if after := world.cards.Counts(); after.StreamReads != before.StreamReads {
+		t.Errorf("a wound-back stream was read: %+v", after)
+	}
+	if entries := reader.client.Entries(); len(entries) != 3 {
+		t.Errorf("%d entries after the wind-back", len(entries))
+	}
+}
+
 // A restart reads nothing again: a new client over the same copy syncs with a moved listing and reads no stream, and its
 // reader verifies what the copy holds.
 func TestDirectorySyncRestartKeepsTheCopy(t *testing.T) {
