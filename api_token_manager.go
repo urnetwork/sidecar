@@ -60,6 +60,9 @@ type sidecarTokenManagerArgs struct {
 	Restore func(ctx context.Context) error
 	// The retry wait after a failed refresh, a uniform draw below RefreshRetryTimeout. Nil draws one; a test fixes it.
 	RetryTimeout func() time.Duration
+	// The host's token source refreshes, holding this generation's signer (api_token_source.go, CORE-M8-01): the
+	// schedule does not run, and the manager carries only the generation's end.
+	HostRefreshes bool
 }
 
 // What one refresh came to.
@@ -176,6 +179,10 @@ func (self *sidecarTokenManager) scheduledRefreshTimeout(byJwt string) time.Dura
 // jitter, until the generation ends or the manager closes.
 func (self *sidecarTokenManager) run() {
 	defer close(self.done)
+	if self.args.HostRefreshes {
+		<-self.ctx.Done()
+		return
+	}
 	for {
 		// subscribe and read in one step, then read the token, so a request between them is never lost
 		requestCount, notify := self.requests.Get()

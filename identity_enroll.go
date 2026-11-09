@@ -89,6 +89,12 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 		return fmt.Errorf("%w: no credential", ErrSidecarApiArgs)
 	}
 	defer credential.Erase()
+	if credential.MintChild != nil {
+		if credential.ChildJwt != "" || credential.AuthKey != "" || credential.Bundle != nil {
+			return fmt.Errorf("%w: a child enrollment takes its mint alone", ErrSidecarApiArgs)
+		}
+		return self.enrollChild(ctx, credential)
+	}
 	if credential.ChildJwt != "" {
 		return ErrSidecarEnrollChild
 	}

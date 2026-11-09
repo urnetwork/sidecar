@@ -135,11 +135,17 @@ barrier gkm.wrap_put.before gkmservice/wraps.go
 barrier hold.list.after host_hold.go
 barrier hold.list.before host_hold.go
 barrier identity.bind.after identity_enroll.go
+barrier identity.bind.after identity_enroll_child.go
 barrier identity.bind.before identity_enroll.go
+barrier identity.bind.before identity_enroll_child.go
 barrier identity.enroll.after identity_enroll.go
 barrier identity.enroll.before identity_enroll.go
+barrier identity.enroll_child.mint.after identity_enroll_child.go
+barrier identity.enroll_child.mint.before identity_enroll_child.go
 barrier identity.logout.remove.after identity_logout.go
 barrier identity.logout.remove.before identity_logout.go
+barrier identity.logout.sign_out.after identity_revoke_self.go
+barrier identity.logout.sign_out.before identity_revoke_self.go
 barrier identity.persist.after identity_keys.go
 barrier identity.persist.before identity_keys.go
 barrier identity.post.after identity_pending.go
@@ -300,6 +306,7 @@ secret auth_key config_authkey.go
 secret by_client_jwt api_client.go
 secret by_client_jwt api_routes_core.go
 secret by_client_jwt api_token_manager.go
+secret by_jwt api_token_source.go
 secret close api_routes_core.go
 secret commit_secret mls_treekem.go
 secret delegation_reader_seed config_authkey.go

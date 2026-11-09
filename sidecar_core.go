@@ -212,7 +212,7 @@ func (self *Sidecar) reconcileOpen() {
 		self.leaveForUnenrolled("")
 		return
 	}
-	connectInstanceId, ok := self.connectInstanceIdOf(*networkId)
+	connectInstanceId, child, ok := self.networkRecordOf(*networkId)
 	if !ok {
 		// enrollment records the network last, so an identity with no record is an enrollment a kill cut short
 		self.log.Warningf("[sidecar]an identity with no network record does not start")
@@ -229,7 +229,18 @@ func (self *Sidecar) reconcileOpen() {
 		clientKeySeed:     record.keys.clientKeySeedCopy(),
 		binding:           bytes.Clone(record.binding),
 		secrets:           secrets,
+		child:             child,
 	})
+}
+
+// The connect InstanceId and child flag sidecar.json keeps for the network.
+func (self *Sidecar) networkRecordOf(networkId Id) (Id, bool, bool) {
+	for _, record := range self.instance.Networks() {
+		if record.NetworkId == networkId {
+			return record.ConnectInstanceId, record.Child, true
+		}
+	}
+	return Id{}, false, false
 }
 
 // The connect InstanceId sidecar.json keeps for the network, so a restart keeps the resident (§5.9).

@@ -107,9 +107,10 @@ func (self connectSidecarPlatform) OpenClient(ctx context.Context, args *Sidecar
 }
 
 // A running Sidecar on settings with components attached (D-CORE-2: there is no Start). host.Store() must be a
-// SidecarInstance's, which names the network once it is enrolled; a host TokenSource is refused until CORE-M8-01
-// builds the sdk host's child. The Sidecar starts Locked and leaves Locked once the instance opens: a host that has
-// not unlocked it calls Unlock. Close or CloseAndWait ends it; the instance stays the host's.
+// SidecarInstance's, which names the network once it is enrolled; a host TokenSource refreshes each generation's
+// token once it holds that generation's signer (api_token_source.go). The Sidecar starts Locked and leaves Locked once
+// the instance opens: a host that has not unlocked it calls Unlock. Close or CloseAndWait ends it; the instance stays
+// the host's.
 func NewSidecar(ctx context.Context, host SidecarHost, components []SidecarComponent, settings *SidecarSettings) (*Sidecar, error) {
 	if err := settings.validate(); err != nil {
 		return nil, err
@@ -120,9 +121,6 @@ func NewSidecar(ctx context.Context, host SidecarHost, components []SidecarCompo
 	instance, networkId, ok := sidecarInstanceOfStore(host.Store())
 	if !ok {
 		return nil, fmt.Errorf("%w: the host's store is not a SidecarInstance's", errInvalidSettings)
-	}
-	if host.TokenSource() != nil {
-		return nil, fmt.Errorf("%w: a host TokenSource arrives with the sdk host's child (CORE-M8-01)", errInvalidSettings)
 	}
 	self := newSidecarBase(host, settings)
 	cancelCtx, cancel := context.WithCancel(ctx)

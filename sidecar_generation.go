@@ -56,6 +56,8 @@ type sidecarGenerationArgs struct {
 	binding []byte
 	// the core's namespace of the network's keychain
 	secrets SidecarSecrets
+	// the client is a child of a device client (sidecar.json's record)
+	child bool
 }
 
 // One running client generation.
@@ -158,15 +160,22 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		install = generation.leg.install
 	}
 	secrets := args.secrets
+	persist := func(byJwt string) error {
+		return persistSidecarByJwt(secrets, byJwt)
+	}
+	// an sdk host's token source refreshes once it holds this generation's signer, and only then does the core's
+	// refresher stand down (CORE-M8-01)
+	source := self.hostTokenSource()
+	hostRefreshes := self.handOffDpopSigner(source, signer)
 	manager := newSidecarTokenManager(generationCtx, &sidecarTokenManagerArgs{
-		Api:        self.sidecarApi,
-		Settings:   self.settings.TokenRefreshSettings,
-		Clock:      self.clock,
-		Log:        self.log,
-		Generation: generationNumber,
-		Persist: func(byJwt string) error {
-			return persistSidecarByJwt(secrets, byJwt)
-		},
+		Api:           self.sidecarApi,
+		Settings:      self.settings.TokenRefreshSettings,
+		Clock:         self.clock,
+		Log:           self.log,
+		Generation:    generationNumber,
+		Child:         args.child,
+		HostRefreshes: hostRefreshes,
+		Persist:       persist,
 		Install: install,
 		Refused: func(refusedGeneration int64, reason SidecarStateReason) {
 			self.tokenRefused(refusedGeneration, reason)
@@ -181,6 +190,9 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		},
 	})
 	generation.tokenManager.Store(manager)
+	if hostRefreshes {
+		self.followTokenSource(generationCtx, source, generationNumber, args.identity, persist, install, manager.end)
+	}
 	// made before the generation is published, so whoever reads the generation can wait on its repost below
 	generation.pendingDone = make(chan struct{})
 	func() {
