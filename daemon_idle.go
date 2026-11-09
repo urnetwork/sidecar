@@ -25,21 +25,26 @@ func (self *Sidecar) Busy() bool {
 	if leg, ok := self.leg.(interface{ componentsActive() bool }); ok && leg.componentsActive() {
 		return true
 	}
-	return 0 < len(self.IndexerDesignations())
+	designations, _ := self.IndexerDesignations()
+	return 0 < len(designations)
 }
 
-// The designations naming this device that stand, from the verified state: none before enrollment, with no verified
-// state installed, or from an authority that answers none.
-func (self *Sidecar) IndexerDesignations() []SidecarIndexerDesignation {
+// The designations naming this device that stand, from the verified state: none before enrollment or from an authority
+// that answers none, and ErrSidecarActNoAuthority with no verified state installed, which a caller never reads as none.
+func (self *Sidecar) IndexerDesignations() ([]SidecarIndexerDesignation, error) {
 	identity := self.currentIdentity()
 	if identity == nil {
-		return nil
+		return nil, nil
 	}
-	indexers, ok := self.authority().(SidecarIndexerAuthority)
+	authority := self.authority()
+	if authority == nil || authority.Pin() == nil {
+		return nil, ErrSidecarActNoAuthority
+	}
+	indexers, ok := authority.(SidecarIndexerAuthority)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return indexers.IndexerDesignations(identity.SidecarId)
+	return indexers.IndexerDesignations(identity.SidecarId), nil
 }
 
 // Retires every designation naming this device, one IndexerSet{retire} each in one act, as the person confirmed it
@@ -55,9 +60,9 @@ func (self *Sidecar) RetireIndexer(ctx context.Context) (int, error) {
 	if authority == nil || authority.Pin() == nil {
 		return 0, ErrSidecarActNoAuthority
 	}
-	designations := self.IndexerDesignations()
-	if len(designations) == 0 {
-		return 0, nil
+	designations, err := self.IndexerDesignations()
+	if err != nil || len(designations) == 0 {
+		return 0, err
 	}
 	act, err := self.newAct(SidecarActConfirmed)
 	if err != nil {
