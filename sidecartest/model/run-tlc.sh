@@ -8,6 +8,7 @@
 #   run-tlc.sh twin <Spec> <Twin> [Name=value ...]    one twin
 #   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, to pass
 #   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
+#   run-tlc.sh stories <Spec> [Name=value ...]        EvsCommit's M10 stories, each at its bounds
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
 #
 # <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
@@ -25,7 +26,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-  sed -n '6,11p' "$0" | sed 's/^# //' >&2
+  sed -n '6,12p' "$0" | sed 's/^# //' >&2
   exit 64
 }
 
@@ -137,6 +138,22 @@ EOF
 }
 
 properties_EvsCommit="RemovalGates DueEpochCommits F2DropsEnd"
+
+# EvsCommit's M10 part runs story by story (F2Run), each small enough for breadth-first search: the
+# purge stories on the committing instance alone and three long marks, enough for a record's
+# evacuation, the drop stories on two instances, whose late step 7s race the fence, and four marks.
+stories_EvsCommit() {
+  cat <<'STORIES'
+purgeA   F2Run="purgeA" Instances={i1} F2MaxHour=3
+purgeB   F2Run="purgeB" Instances={i1} F2MaxHour=3
+purgeC   F2Run="purgeC" Instances={i1} F2MaxHour=3
+purgeD   F2Run="purgeD" Instances={i1} F2MaxHour=3
+purgeE   F2Run="purgeE" Instances={i1} F2MaxHour=3
+dropA    F2Run="dropA"
+dropB    F2Run="dropB"
+dropC    F2Run="dropC"
+STORIES
+}
 properties_StoreSettle="HeldKeyReleased"
 properties_IndexRollup="BucketRolls ErasureFinishes"
 
@@ -362,6 +379,17 @@ main() {
         with_constants "$cfg" $bounds "$@"
         check "control-$want" "$cfg" pass || failed=1
       fi
+      ;;
+    stories)
+      [ "$spec" = EvsCommit ] || usage
+      while read -r story bounds; do
+        quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
+        cfg=$work/story-$story.cfg
+        cp "$here/$spec.cfg" "$cfg"
+        # shellcheck disable=SC2086
+        with_constants "$cfg" $bounds "$@"
+        check "story-$story" "$cfg" pass || failed=1
+      done < <(stories_EvsCommit)
       ;;
     twins)
       while read -r twin invariant bounds; do
