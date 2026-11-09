@@ -110,10 +110,39 @@ func (self *gkmGenerationCache) forgetGroup(groupId sidecar.Id) {
 	}
 }
 
-// gen/<g>'s bytes as stored: sidecar.ErrBlobNotFound for none.
-func (self *GkmEngine) readGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64) ([]byte, error) {
+// gen/<g>'s bytes as stored: sidecar.ErrBlobNotFound for none. The one read of gen/ the engine and the reconciler
+// make, where a gen pack's fallback goes (§10.16).
+func readGkmGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64) ([]byte, error) {
 	objectBytes, _, err := readGkmObject(ctx, cluster, GkmGenerationKey(groupId, generation), gkmStatementMaxByteCount)
 	return objectBytes, err
+}
+
+// The generations a group holds after since, ascending: the one listing of gen/, where a gen pack's fallback lists
+// its packs too (§10.16).
+func listGkmGenerations(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, since uint64, pageCount int) ([]uint64, error) {
+	prefix := GkmGenerationPrefix(groupId)
+	startAfter := ""
+	if 0 < since {
+		startAfter = GkmGenerationKey(groupId, since)
+	}
+	infos, err := listGkmKeysAfter(ctx, cluster, prefix, startAfter, pageCount, gkmGenerationListMaxCount)
+	if err != nil {
+		return nil, err
+	}
+	generations := make([]uint64, 0, len(infos))
+	for _, info := range infos {
+		generation, ok := parseGkmKeyNumber(strings.TrimPrefix(info.Key, prefix))
+		if !ok {
+			return nil, errors.Join(errGkmStoreFault, errors.New("a gen key out of form"))
+		}
+		generations = append(generations, generation)
+	}
+	return generations, nil
+}
+
+// gen/<g>'s bytes as stored, through the accessor.
+func (self *GkmEngine) readGeneration(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, generation uint64) ([]byte, error) {
+	return readGkmGeneration(ctx, cluster, groupId, generation)
 }
 
 // gen/<g>'s facts, from this process's cache or one GET: sidecar.ErrBlobNotFound for none.
@@ -168,27 +197,9 @@ func (self *GkmEngine) createGeneration(ctx context.Context, cluster sidecar.Blo
 // rotations stay far below it.
 const gkmGenerationListMaxCount = 64 * 1024
 
-// The generations a group holds after since, ascending, as one paged LIST of gen/ finds them. A gen pack's
-// fallback (§10.16) lists its packs here too.
+// The generations a group holds after since, ascending, through the accessor.
 func (self *GkmEngine) generationNumbers(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, since uint64) ([]uint64, error) {
-	prefix := GkmGenerationPrefix(groupId)
-	startAfter := ""
-	if 0 < since {
-		startAfter = GkmGenerationKey(groupId, since)
-	}
-	infos, err := listGkmKeysAfter(ctx, cluster, prefix, startAfter, self.settings.ListPageCount, gkmGenerationListMaxCount)
-	if err != nil {
-		return nil, err
-	}
-	generations := make([]uint64, 0, len(infos))
-	for _, info := range infos {
-		generation, ok := parseGkmKeyNumber(strings.TrimPrefix(info.Key, prefix))
-		if !ok {
-			return nil, errors.Join(errGkmStoreFault, errors.New("a gen key out of form"))
-		}
-		generations = append(generations, generation)
-	}
-	return generations, nil
+	return listGkmGenerations(ctx, cluster, groupId, since, self.settings.ListPageCount)
 }
 
 // The Signed GenRotates of generations, in order, each read through the accessor. One deleted since its LIST, which

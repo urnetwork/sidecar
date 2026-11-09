@@ -12,4 +12,7 @@
 // acks (groups.go, epochs.go, welcomes.go, groupinfo.go, acks.go), KEYS-M2-15 generations, wraps, drop keys and
 // recovery wraps (generations.go, wraps.go, dropkey.go, recovery.go), and KEYS-M2-25 the ladder. A route whose
 // handler has not landed answers 501 once the guard has passed it, so nothing reads as served before it is.
+//
+// KEYS-M2-16's reconciler runs in taskworker, not in the engine: its pending hints (reconciler.go), its sweeps of
+// retention, staged GC and §2.8's TTLs (retention.go), and ShredGroup, which §11.12's shred calls (shred.go).
 package gkmservice

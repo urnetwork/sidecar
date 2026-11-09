@@ -105,7 +105,9 @@ barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.kp_claim.after gkmservice/keypackages.go
 barrier gkm.kp_claim.before gkmservice/keypackages.go
 barrier gkm.pointer_put.after gkmservice/groupinfo.go
+barrier gkm.pointer_put.after gkmservice/retention.go
 barrier gkm.pointer_put.before gkmservice/groupinfo.go
+barrier gkm.pointer_put.before gkmservice/retention.go
 barrier gkm.welcome_put.after gkmservice/welcomes.go
 barrier gkm.welcome_put.before gkmservice/welcomes.go
 barrier gkm.wrap_put.after gkmservice/recovery.go
