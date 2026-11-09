@@ -54,6 +54,23 @@ const (
 	BarrierEntryStateAfter  = "evs.entry.state.after"
 )
 
+// EVS1-M2-10: folds, markers and log pages (§11.7, §11.8 step 6), keyed by <repo>:<ref>.
+const (
+	// Around a fold's wait for its P2 budget: FS-58's first fold held in P2's queue while a second folds its range.
+	BarrierFoldAcquireBefore = "evs.fold.acquire.before"
+	BarrierFoldAcquireAfter  = "evs.fold.acquire.after"
+	// Around each entry write of a fold: a folded version's, a delta's or a marker's If-Match or If-None-Match, each
+	// carrying the stale rule's deadline.
+	BarrierFoldEntryWriteBefore = "evs.fold.entry_write.before"
+	BarrierFoldEntryWriteAfter  = "evs.fold.entry_write.after"
+	// Around the LIST of the current epoch's entries below a removed path, which follows the path's own marker.
+	BarrierFoldListBefore = "evs.fold.list.before"
+	BarrierFoldListAfter  = "evs.fold.list.after"
+	// Around a page-out's log/<n> create.
+	BarrierLogPagePutBefore = "evs.log_page.put.before"
+	BarrierLogPagePutAfter  = "evs.log_page.put.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

@@ -91,6 +91,10 @@ type SidecarSettings struct {
 	// §7's routes answer. A longer answer is refused, so api cannot make a sidecar buffer more. §5.4
 	// names no such bound, so this is a reading.
 	ApiResponseByteCount int64
+	// How long a statement this sidecar signs may wait to land: its StatementHeader's not_after, and so how long a
+	// kill or a lost answer leaves it pending, retried with the same bytes (§5.6's sign row, §5.9). 7 days, §7.9's
+	// most, a reading: §5.6 sets none shorter, and a cosign at k > 1 needs the whole of it.
+	StatementTimeout time.Duration
 
 	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
 	// logging at all on the sidecar_http leg.
@@ -459,5 +463,6 @@ func DefaultSidecarSettings() *SidecarSettings {
 		MemoryBudgetByteCount:      128 * 1024 * 1024,
 		StreamChunkByteCount:       4000,
 		ApiResponseByteCount:       2 * 1024 * 1024,
+		StatementTimeout:           7 * 24 * time.Hour,
 	}
 }
