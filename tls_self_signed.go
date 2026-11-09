@@ -72,6 +72,7 @@ type tlsDeviceState struct {
 	selfSignedLeaves map[string]*tls.Certificate
 }
 
+// A Sidecar's state with no source installed and no leaf made.
 func newTlsDeviceState(settings *SidecarTlsSettings) *tlsDeviceState {
 	return &tlsDeviceState{
 		settings:         settings,
