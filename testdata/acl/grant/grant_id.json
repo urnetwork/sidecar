@@ -1,0 +1,23 @@
+{
+  "comment": "grant_id = SHA-256(\"urnetwork-sidecar-v1/grant\" || approval_id || payload_sha256) (\u00a78.8), computed by Python's hashlib, independent of the Go code",
+  "vectors": [
+    {
+      "name": "zeros",
+      "approval_id": "00000000000000000000000000000000",
+      "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "grant_id": "36575df52b2b903f3538d65b17272b84b0b44d4a52a1e4a7460f603aa25d37fb"
+    },
+    {
+      "name": "counting",
+      "approval_id": "000102030405060708090a0b0c0d0e0f",
+      "payload_sha256": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "grant_id": "2843fca06714e2c302ca7911d5b1d703b8bd280b1b2eba446fa6b7d5e7f0b48b"
+    },
+    {
+      "name": "ascii",
+      "approval_id": "617070726f76616c2d30303030303031",
+      "payload_sha256": "b57263b64167786f3874b0b3d1933567e4028e64b3cffff907b7f6c5c234a428",
+      "grant_id": "294659b60315715077511c0d0ed005160f85ab38d76c54ee89bc484c1958f844"
+    }
+  ]
+}

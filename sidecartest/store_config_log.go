@@ -994,6 +994,14 @@ func (self *ConfigLogSuiteWorld) MemberAdmit() []byte {
 	return self.env.memberAdmit()
 }
 
+// The owner's RepoCreate of a fresh repo of kind, signed at the tip the world last saw: the directory's is what api
+// alone refuses outside the team tier (§8.8).
+func (self *ConfigLogSuiteWorld) RepoCreate(kind protocol.RepoKind) []byte {
+	return self.env.sign(self.env.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		Header: self.env.header(), RepoId: configLogSuiteId().Bytes(), Kind: kind,
+	})
+}
+
 // Moves the tip the world signs at to pin, as an append's answer gives it.
 func (self *ConfigLogSuiteWorld) SetTip(pin *bridge.AuthPin) {
 	self.env.tip = proto.Clone(pin).(*bridge.AuthPin)

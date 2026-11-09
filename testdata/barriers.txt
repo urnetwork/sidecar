@@ -3,6 +3,9 @@
 # fails make check until this file is regenerated, so each new linearization point and hooked key shows
 # in review. Regenerate with
 #   SIDECAR_REGENERATE_BARRIERS=1 go test -tags sidecar_check -run '^TestBarrierInventoryIsCurrent$' ./check
+barrier acl_gate.install acl_gate.go
+barrier acl_gate.install.after acl_gate.go
+barrier acl_gate.install.before acl_gate.go
 barrier api.send.after api_client.go
 barrier api.send.before api_client.go
 barrier api.set_by_jwt.after api_client.go
@@ -45,6 +48,15 @@ barrier dnsservice.feed_swap.before dnsservice/feed.go
 barrier dnsservice.feed_wait dnsservice/feed.go
 barrier dnsservice.feed_writer_change dnsservice/feed.go
 barrier dnsservice.feed_writer_interval dnsservice/feed.go
+barrier dnsservice.restore_clear.after dnsservice/restore.go
+barrier dnsservice.restore_clear.before dnsservice/restore.go
+barrier dnsservice.restore_commit.after dnsservice/restore.go
+barrier dnsservice.restore_commit.before dnsservice/restore.go
+barrier dnsservice.restore_list.after dnsservice/restore.go
+barrier dnsservice.restore_list.before dnsservice/restore.go
+barrier dnsservice.restore_served dnsservice/restore.go
+barrier dnsservice.restore_soa_read.after dnsservice/restore.go
+barrier dnsservice.restore_soa_read.before dnsservice/restore.go
 barrier dnsservice.route_report.after dnsservice/probe_route.go
 barrier dnsservice.route_report.before dnsservice/probe_route.go
 barrier dnsservice.snapshot_write dnsservice/snapshot_file.go
@@ -281,6 +293,7 @@ secret delegation_signing_seed identity_admission.go
 secret dkim_private_key smtp_dkim_keys.go
 secret dkim_private_key smtp_dkim_rotate.go
 secret dns_internal_credential dnsservice/api.go
+secret dns_zsk dnsservice/ceremony.go
 secret dns_zsk dnsservice/keyset.go
 secret edge_server_handshake_iv smtpproof/edge.go
 secret edge_server_handshake_key smtpproof/edge.go

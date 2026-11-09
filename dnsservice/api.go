@@ -220,18 +220,25 @@ type DnsApiDeps struct {
 	// certs' challenge writes through §12.6's one write path (DNS-M5-13). nil answers every challenge
 	// 503, so nothing is written around the path.
 	Challenges DnsChallengeWriter
+	// The site monitor's canary writes through the same path (DNS-M5-17). nil answers every canary 503.
+	Canaries DnsCanaryWriter
+	// dns_canary_verdict, where the monitors' reports go (DNS-M5-17). nil answers every report 503 and
+	// keeps no verdict, so ready answers canary_failing: plan-DNS-canary-route-state's interim until the
+	// table's §2.8 row lands.
+	CanaryVerdicts DnsCanaryVerdictStore
 	// Lifecycle only. nil discards.
 	Log sidecar.Logger
 }
 
-// One internal route: its method, path, the one class it takes, whether it changes zone data, and its
-// handler.
+// One internal route: its method, path, the class it takes, a second class for the one route two
+// callers share (canary-report), whether it changes zone data, and its handler.
 type dnsApiRoute struct {
-	method string
-	path   string
-	class  DnsCallerClass
-	write  bool
-	serve  func(writer http.ResponseWriter, request *http.Request)
+	method    string
+	path      string
+	class     DnsCallerClass
+	alsoClass DnsCallerClass
+	write     bool
+	serve     func(writer http.ResponseWriter, request *http.Request)
 }
 
 // The block. Safe for concurrent use.
@@ -311,7 +318,7 @@ func NewDnsApi(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 
 // Every route the block serves. A later task adds its own list here.
 func (self *DnsApi) routes() []*dnsApiRoute {
-	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes())
+	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes())
 }
 
 // The handler every route runs behind: the bearer's class, then the gate.
@@ -323,7 +330,7 @@ func (self *DnsApi) guard(route *dnsApiRoute) http.HandlerFunc {
 			return
 		}
 		class, ok := self.deps.Auth.Authenticate(request)
-		if !ok || class != route.class {
+		if !ok || (class != route.class && (route.alsoClass == "" || class != route.alsoClass)) {
 			self.metrics.refused.Add(1, dnsApiRefusedCredential)
 			http.Error(writer, "forbidden", http.StatusForbidden)
 			return
@@ -466,6 +473,8 @@ type dnsApiMetrics struct {
 	soaReads sidecar.MetricsCounter
 	// certs' challenge writes, by result.
 	challenges sidecar.MetricsCounter
+	// The monitors' canary writes and reports, by result.
+	canaries sidecar.MetricsCounter
 }
 
 func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
@@ -474,5 +483,6 @@ func newDnsApiMetrics(metrics sidecar.Metrics) *dnsApiMetrics {
 		holds:      metrics.Counter("urnetwork_dns_holds_total", "Long-polls answered, by route and end.", "route", "result"),
 		soaReads:   metrics.Counter("urnetwork_dns_soa_reads_total", "SOA reads of an NS, by result.", "result"),
 		challenges: metrics.Counter("urnetwork_dns_challenges_total", "Challenge writes certs asked for, by result.", "result"),
+		canaries:   metrics.Counter("urnetwork_dns_canaries_total", "Canary writes and verdict reports the monitors sent, by result.", "result"),
 	}
 }

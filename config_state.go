@@ -62,6 +62,9 @@ type ConfigLogSettings struct {
 	// How many rebuilt states StateAt keeps for the next call at the same position, since checks at one pin come in
 	// runs, a push's or a delivery's. 8. Non-positive keeps none.
 	StateAtCacheCount int
+	// §16.6's spend check, which each decision a GrantActivate carries must pass at every reader and at api (ACL-M2-07).
+	// Nil refuses every decision, so no GrantActivate takes effect until MCP-M3-03's check is installed here.
+	AclSpendCheck AclSpendCheck
 }
 
 // §7.9's values.
