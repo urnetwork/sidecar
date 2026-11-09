@@ -116,6 +116,9 @@ type Net struct {
 	// the hint state residents and the api's long-poll read (push_net.go), made at first use
 	pushLock  sync.Mutex
 	pushPlane *netPush
+
+	// the networks of sidecars with HeadCheck attached (headcheck_net.go), which FI-10's oracle reads
+	headCheckNets []*HeadCheckNet
 }
 
 // A fresh world. settings may be nil for the defaults. The caller closes it. Under sidecar_testhooks
