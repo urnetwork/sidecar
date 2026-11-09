@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -757,10 +758,16 @@ func TestFoldWritesOverACoveredMarkerOnlyPastTheCollectionWindow(t *testing.T) {
 		defer close(done)
 		result, err = world.folder.Fold(world.ctx, request(false))
 	}()
-	if err := world.clock.AwaitTimers(world.ctx, 1); err != nil {
-		t.Fatal(err)
+	// the fold waits on a timer at 150 ms past until_ms, and the test moves the clock only once it is set
+	writableAt := time.UnixMilli(untilMs).Add(150 * time.Millisecond)
+	for {
+		pending, added := world.clock.WatchTimers()
+		if slices.ContainsFunc(pending, func(at time.Time) bool { return at.Equal(writableAt) }) {
+			break
+		}
+		awaitClosed(t, added, "the fold's wait for the window")
 	}
-	world.clock.AdvanceTo(time.UnixMilli(untilMs).Add(149 * time.Millisecond))
+	world.clock.AdvanceTo(writableAt.Add(-time.Millisecond))
 	select {
 	case <-done:
 		t.Fatal("the fold wrote inside the margin")
