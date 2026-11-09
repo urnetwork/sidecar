@@ -1,0 +1,5 @@
+go test fuzz v1
+string("<p>hello</p>")
+[]byte("plain words")
+string("=?UTF-8?Q?n=C3=A9.txt?=")
+uint8(5)

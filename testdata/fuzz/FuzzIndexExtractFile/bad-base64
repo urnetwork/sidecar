@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\nSGVsbG8!!!d29ybGQ=")
