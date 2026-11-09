@@ -150,9 +150,10 @@ func TestGuardDropsWhatComesFromTheWrongSide(t *testing.T) {
 	}
 }
 
-// Step 4: Network only, until PROTO-M5-02 and PROTO-M6-01 add Service and FriendsAndFamily. Another
-// mode is dropped before the gate, unanswered, even from a verified peer.
-func TestProvideModeNetworkOnly(t *testing.T) {
+// Step 4: Network, and Service for what an edge sends (PROTO-M5-02), until PROTO-M6-01 adds
+// FriendsAndFamily. Another mode is dropped before the gate, unanswered, even from a verified peer, and
+// so is a Service-mode source's Hello, HeadCheck or SEARCH, which only sidecars of one network exchange.
+func TestProvideModeNetworkAndEdgeService(t *testing.T) {
 	fixture := newTestSubprotocol(t, nil)
 	peerId := connect.NewId()
 	fixture.verify(peerId, "a")
@@ -162,20 +163,35 @@ func TestProvideModeNetworkOnly(t *testing.T) {
 		connectprotocol.ProvideMode_Public,
 		connectprotocol.ProvideMode_Stream,
 		connectprotocol.ProvideMode_PublicStream,
-		connectprotocol.ProvideMode(6),
+		connectprotocol.ProvideMode(7),
 	}
 	for _, mode := range modes {
 		peer := testNetworkPeer("a")
 		peer.ProvideMode = mode
 		fixture.receive(peerId, testRequest(protocol.MessageType_PING, nil), peer)
 	}
+	service := testNetworkPeer("a")
+	service.ProvideMode = connectprotocol.ProvideMode_Service
+	sidecarOnly := []protocol.MessageType{
+		protocol.MessageType_HELLO, protocol.MessageType_HEAD_CHECK, protocol.MessageType_HEAD_CHECK_PROOF_REQUEST,
+		protocol.MessageType_SEARCH, testHeldMessageType,
+	}
+	for _, messageType := range sidecarOnly {
+		fixture.receive(peerId, testRequest(messageType, []byte{1}), service)
+	}
 	stats := &fixture.subprotocol.stats
-	if stats.provideModeDroppedCount.Load() != uint64(len(modes)) || stats.identityRefusedCount.Load() != 0 || stats.replyQueuedCount.Load() != 0 {
+	if stats.provideModeDroppedCount.Load() != uint64(len(modes)+len(sidecarOnly)) || stats.identityRefusedCount.Load() != 0 || stats.replyQueuedCount.Load() != 0 {
 		t.Errorf("dropped %d, refused %d, replies %d", stats.provideModeDroppedCount.Load(), stats.identityRefusedCount.Load(), stats.replyQueuedCount.Load())
 	}
 	fixture.receive(peerId, testRequest(protocol.MessageType_PING, nil), testNetworkPeer("a"))
 	if pong := fixture.nextSent(t); pong.envelope.Type != uint32(protocol.MessageType_PONG) {
 		t.Errorf("network: type %d", pong.envelope.Type)
+	}
+	// an edge's keepalive passes with no Hello of its own: edges send none
+	edgeId := connect.NewId()
+	fixture.receive(edgeId, testRequest(protocol.MessageType_PING, nil), service)
+	if pong := fixture.nextSent(t); pong.envelope.Type != uint32(protocol.MessageType_PONG) || pong.destinationId != edgeId {
+		t.Errorf("service: type %d", pong.envelope.Type)
 	}
 	fixture.closeBalanced(t)
 }

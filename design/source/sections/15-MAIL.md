@@ -410,7 +410,7 @@ mail_connection_record(network_id, start_time, byte_count, result) -- router ses
 |---|---|---|---|
 | Senders without SNI (Yahoo, AOL, Proton by anecdote; SES unknown) lose sign-up codes | High | High | DANE, D-MAIL-9's gate, direct MX, copy |
 | A phone alone cannot reliably receive (the iOS and Android apps listen only while open), so phone-only users miss codes (owner decisions 12, 197) | High | High | indexer prompt, wake hold, copy |
-| A site loss erases an iOS-only user's message bodies; logins, burners and `i/` survive on the phone (§11.13) | Low | High | the owner's indexer mirrors the mailbox (§11.13); copy |
+| A site loss erases a phone-only user's message bodies, on iOS or Android (owner decision 197); logins, burners and `i/` survive on the phone (§11.13) | Low | High | the owner's indexer mirrors the mailbox (§11.13); copy |
 | Sites block `<root>` sign-ups as disposable, and network mail shares that reputation (owner decision 32) | High | High | abuse caps and burns (§21); no full mitigation |
 | Owner decision 135's operator match trusts mxedge's sender address and the author's DKIM domain, not the delivering hop, so an intercepting mxedge can win "validated" for some opportunistic mail, and needs no fake for an operator listed only for MTA-STS enforcement, whose burner mail is "validated" though burner domains publish no policy; REQUIRETLS is exact only as the final hop's requirement, which an operator that read the first hop can add | Low | High | disclosed (§2.8 EX3, §2.18); no UI or API asserts path confidentiality, or MTA-STS for burner mail; `tls_basis` |
 | Spam loads devices; the edge filters no content | Medium | Medium | banner rejects, prefix caps, `max_streams`, burn |

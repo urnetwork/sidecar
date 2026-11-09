@@ -1028,7 +1028,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 ### 18.14 Departures from PLAN.md
 
-- **PLAN.md:13 ("all service code goes in the root").** The device role is the leaf package `sidecar/device`, as §4.15 records (Q-SDK-5, closed by peer review; D-SDK-20).
+- **PLAN.md:13 ("all service code goes in the root").** The forwarding role's packet side is the leaf package `sidecar/device`, which apps' VPN components link with only the root's forwarding files, as §4.15 records (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).
 - **PLAN.md:28 ("in the background ... as a web worker").** The extension's Worker follows ur.io's page Worker (M4) and its native companion (M8); Firefox's is session-scoped (Q-SDK-1).
 - **PLAN.md:28 ("used directly by the apps").** Desktop apps use the `ur daemon`; iOS runs the sidecar in the app, not the tunnel, and every app's VPN component runs only forwarding (Q-SDK-2; owner decisions 87, 197).
 - **PLAN.md:31 ("initial goal", abstractions "that the Sidecar struct implements").** `device.Bridge`, not the whole `Sidecar`, implements `deviceBridge` (Q-SDK-2, Q-SDK-5), and sdk exposure arrives at M8, after M4's dark seams (Q-PHASE-1).

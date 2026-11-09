@@ -47,9 +47,18 @@ func sourceAdmits(source connect.TransferPath, messageType uint32, transportType
 	return !pushMessageType(messageType)
 }
 
-// Step 4, the provide mode: Network only. Cross-network peers reach sidecars only by IP (§6.4); edges
-// arrive as Service once PROTO-M5-02 admits it, and shares as FriendsAndFamily with PROTO-M6-01.
-// Anything else is dropped unanswered, so a peer this sidecar does not serve learns nothing from it.
-func provideModeAdmits(provideMode connectprotocol.ProvideMode) bool {
-	return provideMode == connectprotocol.ProvideMode_Network
+// Step 4, the provide mode: Network for a sidecar's peers, and a Service-mode source for the traffic an
+// edge's relationship carries (stream_edge.go): at a sidecar an edge's streams, keepalive and answers, at an
+// edge whatever a sidecar sends it but Hello, HeadCheck and SEARCH. An edge takes no Network source.
+// Cross-network peers reach sidecars only by IP (§6.4), and shares arrive as FriendsAndFamily with
+// PROTO-M6-01. Anything else is dropped unanswered, so a peer this sidecar does not serve learns nothing
+// from it.
+func provideModeAdmits(role SubprotocolRole, provideMode connectprotocol.ProvideMode, messageType uint32, flags uint32) bool {
+	switch provideMode {
+	case connectprotocol.ProvideMode_Network:
+		return role == SubprotocolRoleSidecar
+	case connectprotocol.ProvideMode_Service:
+		return serviceMessageAdmits(role, messageType, flags)
+	}
+	return false
 }

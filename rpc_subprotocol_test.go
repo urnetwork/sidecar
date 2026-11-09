@@ -388,6 +388,9 @@ func TestNewSubprotocolRefusesAnIncompleteEnv(t *testing.T) {
 		{name: "no queue", adjust: func(env *SubprotocolEnv) { env.Settings.PeerQueueMessageCount = 0 }, want: errInvalidSettings},
 		{name: "no hello cache", adjust: func(env *SubprotocolEnv) { env.Settings.HelloCacheTimeout = 0 }, want: errInvalidSettings},
 		{name: "call past 55 s", adjust: func(env *SubprotocolEnv) { env.Settings.DefaultCallTimeout = 56 * time.Second }, want: errInvalidSettings},
+		{name: "no role", adjust: func(env *SubprotocolEnv) { env.Role = SubprotocolRole(2) }, want: errSubprotocolEnv},
+		// an edge needs no store, which a sidecar's pins need
+		{name: "an edge with no store", adjust: func(env *SubprotocolEnv) { env.Role = SubprotocolRoleEdge; env.Store = nil }},
 	}
 	for _, c := range cases {
 		settings := DefaultSidecarProtocolSettings()
@@ -401,7 +404,7 @@ func TestNewSubprotocolRefusesAnIncompleteEnv(t *testing.T) {
 		}
 		c.adjust(env)
 		subprotocol, err := NewSubprotocol(ctx, env)
-		if !errors.Is(err, c.want) {
+		if (c.want == nil && err != nil) || !errors.Is(err, c.want) {
 			t.Errorf("%s: err %v", c.name, err)
 		}
 		if subprotocol != nil {
@@ -506,6 +509,10 @@ func TestApplySidecarClientSettings(t *testing.T) {
 		}
 		if settings.DefaultTransferOpts.ForceStream {
 			t.Error("ForceStream stayed on")
+		}
+		// C9: a Service-mode source reaches 21842 alone
+		if len(settings.ServiceSubprotocolIds) != 1 || settings.ServiceSubprotocolIds[0] != connect.SubprotocolId(SubprotocolId) {
+			t.Errorf("service ids %v", settings.ServiceSubprotocolIds)
 		}
 	}
 }
@@ -650,8 +657,19 @@ func TestNothingBeforeAVerifiedHello(t *testing.T) {
 		testHeldMessageType,
 	} {
 		request := testRequest(messageType, []byte{1, 2, 3})
+		request.StreamId = 7
 		fixture.receive(sourceId, request, peer)
 		sent := fixture.nextSent(t)
+		if messageType == protocol.MessageType_STREAM_OPEN {
+			// an open is rejected INVALID, a stream frame naming its stream (§6.4)
+			reject := &protocol.StreamReject{}
+			if sent.envelope.Type != uint32(protocol.MessageType_STREAM_REJECT) || sent.envelope.Flags != EnvelopeFlagNoReply ||
+				sent.envelope.StreamId != request.StreamId || proto.Unmarshal(sent.envelope.Body, reject) != nil ||
+				reject.Code != uint32(protocol.StreamRejectCode_SR_INVALID) {
+				t.Errorf("open: answered type %d flags %d stream %d", sent.envelope.Type, sent.envelope.Flags, sent.envelope.StreamId)
+			}
+			continue
+		}
 		if code := sent.errorCode(t); code != protocol.ErrorCode_ERR_UNAUTHENTICATED || sent.envelope.RequestId != request.RequestId {
 			t.Errorf("%v: code %v id %d", messageType, code, sent.envelope.RequestId)
 		}
