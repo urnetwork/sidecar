@@ -193,8 +193,9 @@ func (self *Bridge) apply(call func() (PostureDecision, bool, error)) error {
 // Takes what the posture decided: its state's rules parsed once, Revoke's narrowing that the state has not passed,
 // and, when anything the hook reads changed or force says the clock moved, the hook's next state published and the
 // tags it no longer keeps returned. Rebuilds what Route reads every time, so a link's change or a held entry's end
-// reaches it too, and signs links as the posture's identity. Sets the counts and the next deadline either way. Returns
-// the tags, and whether it published or changed the route export, which the change callbacks hear of.
+// reaches it too, signs links as the posture's identity, and swaps in the state's private names. Sets the counts and
+// the next deadline either way. Returns the tags, and whether it published or changed the route export or the names,
+// which the change callbacks hear of.
 func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint64, bool) {
 	previous, previousRules, previousAlarms := func() (PostureDecision, *bridge.BridgeRules, []BridgeAlarm) {
 		self.stateLock.Lock()
@@ -264,6 +265,15 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 		routes = routeState.routes
 	}
 	routesChanged := !slices.Equal(previousRoutes, routes)
+	// §12.9's names, versioned with the rules: a new zone for each state in force, none outside enforcing
+	zoneChanged := false
+	if decision.BridgeState != previous.BridgeState || decision.State != previous.State {
+		var zone *BridgeZone
+		if decision.State.Enforcing() && decision.BridgeState != nil {
+			zone = NewBridgeZone(decision.BridgeState.GetNames(), decision.BridgeState.GetNameZones(), self.settings)
+		}
+		zoneChanged = self.zone.Swap(zone) != zone
+	}
 	next := times.next
 	if !routeNext.IsZero() && (next.IsZero() || routeNext.Before(next)) {
 		next = routeNext
@@ -283,5 +293,5 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 	}()
 	testHookBarrier("bridge.adopt.after", "")
 	self.deadline.Set(next)
-	return closeTags, changed || routesChanged
+	return closeTags, changed || routesChanged || zoneChanged
 }

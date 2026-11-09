@@ -1,7 +1,8 @@
 // device.Bridge (§17.10, D-SDK-20): one network's bridge on one device, the keyless device role's half of §17. It
 // satisfies §18.6's deviceBridge: the sender's router (bridge_route.go) over its table and pins (bridge_table.go,
-// bridge_pin*.go) and its links (bridge_link*.go, through a BridgeHost), the route export (bridge_export.go), the
-// provider hook (bridge_egress*.go) and the zone.
+// bridge_pin*.go) and its links (bridge_link*.go, through a BridgeHost), its rejects (bridge_reject.go), the route
+// export (bridge_export.go), the provider hook (bridge_egress*.go), and the private names: the zone and `ur tun`'s
+// resolver (bridge_zone.go, bridge_resolver.go).
 //
 // It embeds the posture (posture.go), so §17.8's states are one machine with §18.6's (D-SDK-13, D-BRIDGE-18): what is
 // in force is what the posture decided, and the bridge turns that decision into what it enforces (bridge_state.go). A
@@ -43,8 +44,11 @@ type Bridge struct {
 	// every adoption rebuilds
 	links      *BridgeLinkManager
 	reject     *BridgeRejectClient
-	resolver   connect.UserNatClient
+	resolver   *BridgeResolverClient
 	routeState atomic.Pointer[bridgeRouteState]
+	// §12.9's names of the state in force, nil for none, and the LocalZone that reads them
+	zone     atomic.Pointer[BridgeZone]
+	zoneView *bridgeZoneView
 	// removes the bridge's callbacks from its link manager
 	linkCallbackRemovals []func()
 	// the provider hook, the one value EgressHook returns, and the NATs it is installed on, which CloseFlows reaches
@@ -119,8 +123,8 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 		heldRejects:       map[netip.Prefix]time.Time{},
 		overlayDrainSince: map[string]time.Time{},
 	}
-	// the resolver answers at BRIDGE-M4-14: until then a query to <block>.0.53 is refused as any service address is
-	self.resolver = self.reject
+	self.zoneView = &bridgeZoneView{bridge: self}
+	self.resolver = NewBridgeResolverClient(cancelCtx, self.zone.Load, nil, settings)
 	self.hook = &bridgeEgressHook{BridgeEgressPolicy: self.policy, bridge: self}
 	self.linkCallbackRemovals = []func(){
 		self.links.AddDownCallback(self.markLinkDown),
@@ -144,6 +148,7 @@ func (self *Bridge) Close() {
 		remove()
 	}
 	self.links.Close()
+	self.resolver.Close()
 }
 
 // Where packets the bridge answers itself enter the tun: rejects (§17.5's rejects row) and, under `ur tun`, the
@@ -151,6 +156,7 @@ func (self *Bridge) Close() {
 // DeviceLocal and the CLI set it to their tun's write.
 func (self *Bridge) SetReceivePacket(receive connect.ReceivePacketFunction) {
 	self.reject.SetReceive(receive)
+	self.resolver.SetReceive(receive)
 }
 
 // Rebuilds what Route reads after the link manager changed a target's links: a rebuild replaced one, or one drained.
@@ -186,6 +192,11 @@ func (self *Bridge) Status() BridgeStatus {
 	verifiedCount, mismatchCount := self.policy.principalCounts()
 	linkOpenCount, linkBuildingCount := self.links.counts()
 	rejectSentCount, rejectUnsentCount := self.reject.Counts()
+	resolverAnsweredCount, resolverPassedCount, resolverDroppedCount := self.resolver.Counts()
+	nameCount := 0
+	if zone := self.zone.Load(); zone != nil {
+		nameCount = zone.NameCount()
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
@@ -204,6 +215,10 @@ func (self *Bridge) Status() BridgeStatus {
 		HeldRejectCount:        self.routeFindings.heldCount,
 		RouteConflictCount:     self.routeFindings.conflictCount,
 		EgressMode:             self.egressMode,
+		NameCount:              nameCount,
+		ResolverAnsweredCount:  resolverAnsweredCount,
+		ResolverPassedCount:    resolverPassedCount,
+		ResolverDroppedCount:   resolverDroppedCount,
 		PostureAlarms:          append([]PostureAlarm(nil), self.decision.Alarms...),
 		Alarms:                 append([]BridgeAlarm(nil), self.alarms...),
 	}
