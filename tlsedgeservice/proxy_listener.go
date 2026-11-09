@@ -277,6 +277,11 @@ func (self *proxyHeaderTimeout) end() bool {
 // The wrapper over a net.Listener. run accepts, each connection gets a goroutine for its header, and
 // the unbuffered readyConns hands finished ones to Accept, so a connection is always held by exactly
 // one of those.
+//
+// Until Accept returns a connection, the listener's close ends it: each one's goroutine arms that
+// close on ctx, and Accept stops it before the connection is the caller's. A close that lands in the
+// handoff then either finds the connection still the listener's, ending it while Accept refuses it,
+// or finds its close stopped, so no connection Accept returned is one a close can end.
 type proxyHeaderListener struct {
 	ctx      context.Context
 	cancel   context.CancelCauseFunc
@@ -285,7 +290,7 @@ type proxyHeaderListener struct {
 	clock    sidecar.Clock
 
 	acceptPort int
-	readyConns chan *ProxyHeaderConn
+	readyConns chan *proxyHeaderHandoff
 	// one token per connection between accept and Accept
 	pendingSlots chan struct{}
 	// run and every connection's goroutine
@@ -318,7 +323,7 @@ func NewProxyHeaderListener(ctx context.Context, listener net.Listener, settings
 		settings:     *settings,
 		clock:        clock,
 		acceptPort:   tcpAddr.Port,
-		readyConns:   make(chan *ProxyHeaderConn),
+		readyConns:   make(chan *proxyHeaderHandoff),
 		pendingSlots: make(chan struct{}, settings.MaxPendingCount),
 	}
 	// ending the context is what stops run, which is blocked in the inner Accept
@@ -384,11 +389,19 @@ func (self *proxyHeaderListener) admit(conn net.Conn, timeout *proxyHeaderTimeou
 		return
 	}
 	select {
-	case self.readyConns <- headerConn:
-		stopClose()
+	case self.readyConns <- &proxyHeaderHandoff{conn: headerConn, stopClose: stopClose}:
+		// Accept stops the close: this goroutine stopping it now would leave the connection the
+		// caller's while a close could still end it
 	case <-self.ctx.Done():
 		conn.Close()
 	}
+}
+
+// A connection whose header is read, on its way to Accept, with the stop of the listener's close of
+// it, which Accept calls before the connection is the caller's.
+type proxyHeaderHandoff struct {
+	conn      *ProxyHeaderConn
+	stopClose func() bool
 }
 
 // One connection's header and whatever came with it, within max_bytes. timeout_s is the timer run set.
@@ -415,20 +428,26 @@ func (self *proxyHeaderListener) readHeader(conn net.Conn) (*ProxyHeaderConn, er
 // listener is closed or its context ended, and with the inner listener's error if that failed for
 // good.
 func (self *proxyHeaderListener) Accept() (net.Conn, error) {
-	select {
-	case conn := <-self.readyConns:
-		return conn, nil
-	case <-self.ctx.Done():
-		if err := context.Cause(self.ctx); !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
+	closedErr := func() error {
+		if err := context.Cause(self.ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
-		return nil, net.ErrClosed
+		return net.ErrClosed
+	}
+	select {
+	case handoff := <-self.readyConns:
+		if !handoff.stopClose() {
+			// the listener ended as this one was handed over, and its close has it
+			return nil, closedErr()
+		}
+		return handoff.conn, nil
+	case <-self.ctx.Done():
+		return nil, closedErr()
 	}
 }
 
-// Closes the inner listener and every connection that has not reached Accept, and returns once they
-// are gone. Connections already accepted are the caller's, but for one in the instant of its handoff,
-// which a close that lands then may end too.
+// Closes the inner listener and every connection Accept has not returned, and returns once they are
+// gone. A connection Accept returned is the caller's, which a close never ends.
 func (self *proxyHeaderListener) Close() error {
 	self.cancel(net.ErrClosed)
 	self.closeListener()

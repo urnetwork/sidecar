@@ -689,6 +689,33 @@ func TestProxyHeaderCloseLeavesAcceptedConnectionsOpen(t *testing.T) {
 	}
 }
 
+// Accept stops a connection's close before the connection is the caller's, so a close in the handoff
+// either finds it stopped or has the connection, and then Accept refuses it rather than return a
+// connection the close is ending. Here the close has it: Accept answers net.ErrClosed, and the
+// connection ends.
+func TestProxyHeaderAcceptRefusesAConnectionItsCloseHas(t *testing.T) {
+	listener, _ := testProxyListener(t, testNeverSettings())
+	serverConn, peerConn := net.Pipe()
+	defer peerConn.Close()
+	closeCtx, cancelClose := context.WithCancel(context.Background())
+	stopClose := context.AfterFunc(closeCtx, func() {
+		serverConn.Close()
+	})
+	// the close has started, so its stop reports it could not stop it
+	cancelClose()
+	go func() {
+		listener.(*proxyHeaderListener).readyConns <- &proxyHeaderHandoff{conn: &ProxyHeaderConn{Conn: serverConn}, stopClose: stopClose}
+	}()
+	conn, err := listener.Accept()
+	if conn != nil || !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("accept gave %v, %v", conn, err)
+	}
+	peerConn.SetReadDeadline(time.Now().Add(testGuardTimeout))
+	if _, err := peerConn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("the refused connection read %v", err)
+	}
+}
+
 func TestProxyHeaderCloseUnblocksAccept(t *testing.T) {
 	listener, _ := testProxyListener(t, testNeverSettings())
 	result := make(chan error, 1)
