@@ -304,6 +304,12 @@ func (self *urDaemonNetwork) logout(ctx context.Context, networkId sidecar.Id) e
 	if removed := self.daemon.RemoveSidecar(networkId); removed != nil && self.stop != nil {
 		self.stop(removed)
 	}
+	if len(self.hosted()) == 0 {
+		// the next ur login has an unenrolled Sidecar to take, and status a state to show
+		if _, err := self.furtherSidecar(); err != nil {
+			return fmt.Errorf("logged out, and no sidecar runs: %w", err)
+		}
+	}
 	return nil
 }
 
