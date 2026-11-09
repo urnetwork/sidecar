@@ -221,6 +221,18 @@ func (self *FakeRedisScriptCall) StreamAdd(key string, maxLength int64, fieldVal
 	return self.redis.streamAddWithLock(key, maxLength, fieldValues)
 }
 
+// XREVRANGE + - COUNT 1: the stream's last entry, found false while the stream is absent or empty.
+func (self *FakeRedisScriptCall) StreamLast(key string) (*sidecar.RedisStreamEntry, bool, error) {
+	if err := self.check(key); err != nil {
+		return nil, false, err
+	}
+	entry, err := self.redis.streamEntryWithLock(key, false)
+	if err != nil || entry == nil || len(entry.stream.entries) == 0 {
+		return nil, false, err
+	}
+	return entry.stream.entries[len(entry.stream.entries)-1].reply(), true, nil
+}
+
 func (self *FakeRedis) violateWithLock(violation string) {
 	self.violations = append(self.violations, violation)
 	if self.settings.Report != nil {

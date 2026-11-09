@@ -6,7 +6,9 @@ package sidecartest
 
 import (
 	"errors"
+	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -14,10 +16,43 @@ import (
 	"github.com/urnetwork/sidecar/pushservice"
 )
 
-// Registers both twins on redis, which then runs pushservice.HintScript and HintAckScript.
+// Registers every twin on redis, which then runs pushservice.HintScript, HintAckScript and
+// HintTailScript.
 func RegisterPushScripts(redis *FakeRedis) {
 	redis.RegisterScript(pushservice.HintScript.Name, pushHintTwin)
 	redis.RegisterScript(pushservice.HintAckScript.Name, pushHintAckTwin)
+	redis.RegisterScript(pushservice.HintTailScript.Name, pushHintTailTwin)
+}
+
+// The fields of a hint entry in the order the hint script's XADD writes them, which a real stream keeps
+// and XREVRANGE gives back.
+var pushTwinEntryFields = []string{"seq", "topic", "version", "kind", "hint"}
+
+// pushservice.HintTailScript: the entry as XREVRANGE gives it, its fields in XADD's order, any others
+// after them by name.
+func pushHintTailTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	if len(call.Keys) != 1 || len(call.Args) != 0 {
+		return nil, errPushTwinArguments
+	}
+	entry, found, err := call.StreamLast(call.Keys[0])
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return RedisNilReply(), nil
+	}
+	fields := make([]*sidecar.RedisReply, 0, 2*len(entry.FieldValues))
+	for _, field := range pushTwinEntryFields {
+		if value, ok := entry.FieldValues[field]; ok {
+			fields = append(fields, RedisBulkReply([]byte(field)), RedisBulkReply(value))
+		}
+	}
+	for _, field := range slices.Sorted(maps.Keys(entry.FieldValues)) {
+		if !slices.Contains(pushTwinEntryFields, field) {
+			fields = append(fields, RedisBulkReply([]byte(field)), RedisBulkReply(entry.FieldValues[field]))
+		}
+	}
+	return RedisArrayReply(RedisBulkReply([]byte(entry.Id)), RedisArrayReply(fields...)), nil
 }
 
 var (

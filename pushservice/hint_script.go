@@ -1,9 +1,10 @@
-// §6.8's two scripts on a client's slot, the only writes this package makes to ver, hint, n and ack.
-// Each reads every key from KEYS and builds none (host_redis.go), and each holds a version or stream id
-// only as a string: a comparison splits it into runs of at most 10 digits, each exact as a Lua double,
-// by version.go's rule, so no whole value ever passes through tonumber or arithmetic (D-PROTO-12).
-// The one arithmetic is HINCRBY, which Redis does on an int64, and its result is read back with HGET,
-// never through a Lua number.
+// §6.8's scripts on a client's slot: the two that are the only writes this package makes to ver, hint,
+// n and ack, and the read of the hint stream's tail that a publisher's reset starts from. Each reads
+// every key from KEYS and builds none (host_redis.go), and each holds a version or stream id only as a
+// string: a comparison splits it into runs of at most 10 digits, each exact as a Lua double, by
+// version.go's rule, so no whole value ever passes through tonumber or arithmetic (D-PROTO-12). The one
+// arithmetic is HINCRBY, which Redis does on an int64, and its result is read back with HGET, never
+// through a Lua number.
 //
 // sidecartest registers a Go twin of each under its Name for T2's FakeRedis, and PushStoreSuite runs
 // both against the twin and against a real Redis, so the twin stays honest (D-TEST-2).
@@ -135,5 +136,21 @@ if stored then
 end
 redis.call('SET', ack, id, 'EX', ARGV[2])
 return 1
+`,
+}
+
+// The hint stream's last entry, which a publisher's reset reads before ver (PROTO-M1-08), so a hint
+// that lands between the two reads repeats rather than vanishes. KEYS: hint, of {scp_<C>}. No ARGV.
+// Returns nil while the stream is absent or empty, else the entry as XREVRANGE gives it: {id, {field,
+// value, ...}}. XREVRANGE has no method on sidecar.Redis, and one script reads the tail alone, where
+// XRANGE would read the whole stream to reach it. It writes nothing.
+var HintTailScript = &sidecar.RedisScript{
+	Name: "pushservice.hint_tail",
+	Source: `
+local last = redis.call('XREVRANGE', KEYS[1], '+', '-', 'COUNT', 1)
+if #last == 0 then
+  return false
+end
+return last[1]
 `,
 }
