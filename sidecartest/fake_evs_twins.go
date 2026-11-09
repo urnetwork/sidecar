@@ -16,9 +16,59 @@ import (
 // evsservice.HeadCachePutScript's Name.
 const evsHeadCachePutScriptName = "evs_head_cache_put"
 
+// The budget and hdd loops' lease scripts' Names (evsservice/budget_loop.go).
+const (
+	evsBudgetLeaseTakeScriptName    = "evs_budget_lease_take"
+	evsBudgetLeaseReleaseScriptName = "evs_budget_lease_release"
+)
+
 // Registers every evs twin on redis. Call it once per fake.
 func RegisterEvsTwins(redis *FakeRedis) {
 	redis.RegisterScript(evsHeadCachePutScriptName, evsHeadCachePutTwin)
+	redis.RegisterScript(evsBudgetLeaseTakeScriptName, evsBudgetLeaseTakeTwin)
+	redis.RegisterScript(evsBudgetLeaseReleaseScriptName, evsBudgetLeaseReleaseTwin)
+}
+
+// A lease field taken or renewed: set to the holder while absent or already the holder's, with its own ttl.
+// KEYS[1] the cluster's {nvb_} key; ARGV the field, the holder, the ttl in ms. 1 when held.
+func evsBudgetLeaseTakeTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	field, holder, ttlText := call.Args[0], call.Args[1], call.Args[2]
+	current, found, err := call.HashGet(key, field)
+	if err != nil {
+		return nil, err
+	}
+	if found && string(current) != holder {
+		return RedisIntegerReply(0), nil
+	}
+	if err := call.HashSet(key, map[string][]byte{field: []byte(holder)}); err != nil {
+		return nil, err
+	}
+	ttlMs, err := strconv.ParseInt(ttlText, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := call.HashExpire(key, []string{field}, time.Duration(ttlMs)*time.Millisecond); err != nil {
+		return nil, err
+	}
+	return RedisIntegerReply(1), nil
+}
+
+// A lease field released only while the holder holds it. KEYS[1] the key; ARGV the field, the holder.
+func evsBudgetLeaseReleaseTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	field, holder := call.Args[0], call.Args[1]
+	current, found, err := call.HashGet(key, field)
+	if err != nil {
+		return nil, err
+	}
+	if !found || string(current) != holder {
+		return RedisIntegerReply(0), nil
+	}
+	if err := call.HashDelete(key, []string{field}); err != nil {
+		return nil, err
+	}
+	return RedisIntegerReply(1), nil
 }
 
 // Whether canonical decimal a is above b, compared by length then by bytes, as the Lua compares them.

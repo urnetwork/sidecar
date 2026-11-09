@@ -65,7 +65,8 @@ type RunSettings struct {
 	// docker, for the container legs; empty looks it up on PATH
 	Docker string
 	// the linux image a container leg runs its binaries in. A static test binary needs only a shell
-	// and /tmp; an image this host lacks leaves the leg not run, since nothing here fetches one.
+	// and /tmp; an image this host lacks leaves the leg not run, since nothing here fetches one. The
+	// repository is mounted read-only at its own path, since tests read files beside their package.
 	ContainerImage string
 	// passed to each binary as -test.run; empty runs every test
 	RunPattern string
@@ -321,7 +322,7 @@ func runBinary(ctx context.Context, settings *RunSettings, leg *Leg, runnerPath 
 		arguments := []string{
 			"run", "--rm", "--network", "none", "--name", "sidecar-test-legs-" + hex.EncodeToString(suffix),
 			"--platform", leg.Goos + "/" + leg.Goarch,
-			"-v", binary + ":/sidecar-legs/test:ro", "-v", packageDirectory + ":" + packageDirectory + ":ro",
+			"-v", binary + ":/sidecar-legs/test:ro", "-v", settings.Directory + ":" + settings.Directory + ":ro",
 			"-w", packageDirectory, "-e", "TMPDIR=/tmp",
 		}
 		for _, entry := range environment {

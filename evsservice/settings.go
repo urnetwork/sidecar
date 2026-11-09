@@ -23,6 +23,14 @@ const evsRepoCacheMaxTtl = 5 * time.Second
 // §11.9's cache row: a cached head is served only within 10 min of its cache time, which evs-24 publishes.
 const evsHeadCacheMaxServeAge = 10 * time.Minute
 
+// §11.7's stale row: a fold write's store deadline, 15 s after its head read, which the collection window's 15.3 s
+// wait counts on, so a setting may shorten it and never stretch it.
+const evsFoldMaxStaleDeadline = 15 * time.Second
+
+// §11.7's collect row: a fold writes over a covered marker only 150 ms past until_ms by its clock, so a setting may
+// lengthen the margin and never shorten it.
+const evsFoldMinCollectMargin = 150 * time.Millisecond
+
 // The engine's settings. Every field is read where it is used, from one instance.
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
@@ -82,6 +90,41 @@ type EvsSettings struct {
 	// The overlay chains a process keeps (§11.7's versions row: read at the ref's creation and cached).
 	// Non-positive keeps none, every creation rereading the chain's heads.
 	OverlayCacheCount int
+
+	// §11.7's stale row: every fold write carries a store deadline this long after the fold issued the cluster read
+	// of the head it relies on, 15 s, which a collection window's 15.3 s wait rests on. At most 15 s; positive.
+	FoldStaleDeadline time.Duration
+	// How long before that deadline a fold reads the head again rather than issue a write the store may refuse past
+	// it, 1 s. At least zero and below FoldStaleDeadline.
+	FoldHeadRereadMargin time.Duration
+	// §11.7's when row (1): a commit leaving this many versions unfolded has its process fold the oldest
+	// FoldVersionCount, off the reply path, 96. Non-positive never triggers it.
+	FoldUnfoldedTriggerCount int
+	// How many versions trigger (1) folds, 64. Positive.
+	FoldVersionCount int
+	// Trigger (1) runs at most once per ref per this, 10 s, and an idle fold that finds a fold of its ref running
+	// tries again this long later. Positive.
+	FoldTriggerInterval time.Duration
+	// §11.7's when row (2): this long after a ref's last commit by this process, the process folds the rest, 10 min.
+	// Non-positive never.
+	FoldIdleDelay time.Duration
+	// §11.7's collect row: a fold that read a head whose collection window is open writes over no marker the window
+	// covers until this long past until_ms by its own clock, 150 ms, which keeps it 100 ms past in UTC on a clock
+	// within 50 ms. At least 150 ms.
+	FoldCollectMargin time.Duration
+	// retry_after_ms of §11.7's lag row's 429 FOLD_BEHIND, 1 s. Positive.
+	FoldBehindRetryAfter time.Duration
+	// How many times a fold reads one entry again after a 412 or an unknown outcome before it gives the fold up, 16.
+	// Positive.
+	FoldEntryRetryCount int
+	// The keys one LIST returns below a removed path, 1,000. Positive.
+	FoldListPageCount int
+	// How many refs a process keeps fold state for: its horizon, its triggers, its idle timer. Past it one idle
+	// ref's is dropped, costing only a horizon raise. Non-positive keeps none.
+	FoldRefStateCount int
+	// The bytes of log pages a process keeps, which never change (§11.8's Resolve row), 16 MiB. Non-positive keeps
+	// none.
+	LogPageCacheByteCount int64
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -106,6 +149,18 @@ func DefaultEvsSettings() *EvsSettings {
 		BatchWriteInFlightCount:   2,
 		RecordCacheByteCount:      64 * 1024 * 1024,
 		OverlayCacheCount:         100 * 1000,
+		FoldStaleDeadline:         15 * time.Second,
+		FoldHeadRereadMargin:      time.Second,
+		FoldUnfoldedTriggerCount:  96,
+		FoldVersionCount:          64,
+		FoldTriggerInterval:       10 * time.Second,
+		FoldIdleDelay:             10 * time.Minute,
+		FoldCollectMargin:         150 * time.Millisecond,
+		FoldBehindRetryAfter:      time.Second,
+		FoldEntryRetryCount:       16,
+		FoldListPageCount:         1000,
+		FoldRefStateCount:         100 * 1000,
+		LogPageCacheByteCount:     16 * 1024 * 1024,
 	}
 }
 
@@ -134,6 +189,19 @@ func (self *EvsSettings) Validate() error {
 	}
 	if _, err := DefaultPriceTable(self.PriceBlockByteCount); err != nil {
 		return fmt.Errorf("%w: %v", ErrEvsSettings, err)
+	}
+	if self.FoldStaleDeadline <= 0 || evsFoldMaxStaleDeadline < self.FoldStaleDeadline {
+		return fmt.Errorf("%w: a fold write's deadline %s, outside (0, %s]", ErrEvsSettings, self.FoldStaleDeadline, evsFoldMaxStaleDeadline)
+	}
+	if self.FoldHeadRereadMargin < 0 || self.FoldStaleDeadline <= self.FoldHeadRereadMargin {
+		return fmt.Errorf("%w: a fold's reread margin %s against its deadline %s", ErrEvsSettings, self.FoldHeadRereadMargin, self.FoldStaleDeadline)
+	}
+	if self.FoldCollectMargin < evsFoldMinCollectMargin {
+		return fmt.Errorf("%w: a fold's collection margin %s, below §11.7's %s", ErrEvsSettings, self.FoldCollectMargin, evsFoldMinCollectMargin)
+	}
+	if self.FoldVersionCount <= 0 || self.FoldTriggerInterval <= 0 || self.FoldBehindRetryAfter <= 0 ||
+		self.FoldEntryRetryCount <= 0 || self.FoldListPageCount <= 0 {
+		return fmt.Errorf("%w: a fold's version count, trigger interval, retry after, retry count and list page must be positive", ErrEvsSettings)
 	}
 	return nil
 }

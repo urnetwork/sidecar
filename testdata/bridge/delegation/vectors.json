@@ -1,0 +1,87 @@
+{
+  "comment": "WindowDelegation vectors (sidecar design §17.9, D-BRIDGE-17): each case's signed is the Signed bytes a contract carries, verified against the host's view below, subject_sidecar_id being the one admitted identity, at now_ms; refusal names the check that refuses it, empty for one that verifies. Synthetic ids and keys from fixed seeds.",
+  "now_ms": 1800000000000,
+  "subject_sidecar_id": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "subject_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+  "network_id": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+  "window_client_id": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+  "window_client_public_key": "acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a106228",
+  "target_sidecar_id": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+  "cases": [
+    {
+      "name": "valid",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a224006a50da24885ffe05574618833ec1f87f593871af024716f67e94a132054f654cf692efa3307defd6ce6faec2dc86341f06991e0c859263a97829b11c0092306308832",
+      "refusal": ""
+    },
+    {
+      "name": "window client key mismatched",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220332ebe8d27cb7323b3a401c1c13b5dd64bccc0e10ecda1c2b5d11a03779a85e52a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a2240966878f2665a9ae5f7f11954bdee5f3835cb8a0c195f632313320b5a2c4fd67ba0f1df03a07ff826759955120f888f4fb2322b384b9af78f5677ed6837aae90f308832",
+      "refusal": "mismatch"
+    },
+    {
+      "name": "expired",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a0f1c2b13412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a22403e32f92132e8959272f34dfb1f3676d151db51def6795de97267bbce743b9edfcdf5a0d1d78256bfc3967f206dc3ae72a74857569e477de6b724541f5f3b7303308832",
+      "refusal": "expired"
+    },
+    {
+      "name": "wrong target",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a103b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a22402df6244cb26b6fd7ec79bc020bab6b77ce8bbf366ecbebba3c4950c000fbe369ddc9cb3035882c698a2c8660c759c3e7a99bb773e885e5cc9a13c4f87e3c6e0a308832",
+      "refusal": "mismatch"
+    },
+    {
+      "name": "wrong network",
+      "signed": "0a710a100e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a2240a0da66cd253330867bd10f3a2155ed259c4464d8e01806d5b23dbb1504c49622bb8fd8d77e824a98cc3304544ef3b0c762a9af269094057f0ecd6077bc95100d308832",
+      "refusal": "mismatch"
+    },
+    {
+      "name": "wrong source",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a103b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b2220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a2240cc544ae98e7503de3d24fcdcfa4f2faaface5f7f10c5ed20a4e1919cb0b35945db89630f2468131221642b003a6515f12b67631662219c1f0de132c9647b3008308832",
+      "refusal": "mismatch"
+    },
+    {
+      "name": "share certificate type",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a2240452d23077ac2a3f3e044321e5e7708d7a8b3a025c54e90bf46bfc6826029472ece96e3942adcfeaacdd97162e6ddd4cd5b419691bd280cf9f086ae22a1dfd607308932",
+      "refusal": "type"
+    },
+    {
+      "name": "bad signature",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a224007a50da24885ffe05574618833ec1f87f593871af024716f67e94a132054f654cf692efa3307defd6ce6faec2dc86341f06991e0c859263a97829b11c0092306308832",
+      "refusal": "signature"
+    },
+    {
+      "name": "another key under the subject's id",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a2240cabd880383a8e416c40c4fd45f296b54a955d8015726e78c480d6c60ae054acc348e76ac2de11727752cfbf1ffe5ac90250088909805242dcbf0fe69da87b402308832",
+      "refusal": "signature"
+    },
+    {
+      "name": "share certificate relabeled as a delegation",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a2240452d23077ac2a3f3e044321e5e7708d7a8b3a025c54e90bf46bfc6826029472ece96e3942adcfeaacdd97162e6ddd4cd5b419691bd280cf9f086ae22a1dfd607308832",
+      "refusal": "signature"
+    },
+    {
+      "name": "a subject not admitted",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12103b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412103b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b22409ba186e61850e002f1f4b805ff4823e332fe16a71c83e41f6f3601809e4bdd2d7c868eb0dd71b43123ccb75b7f6b33fd000d7ac862c0caec4cbab9dd93ee0d0b308832",
+      "refusal": "signer"
+    },
+    {
+      "name": "signed by another than its subject",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12103b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a224023442e0b84798e1775ba55d71fdb005625c5ae24e94ea34cb5baf9ccc99a35cf70e7fe2568296d2410551dad2e0176d2cc0895d82cb089a553934669c54eed08308832",
+      "refusal": "signer"
+    },
+    {
+      "name": "a share",
+      "signed": "0a83010a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b3343a103b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a22403cae0f1c95f06ee9f44e89d69c59b48bb35c9ca68a622b4b92a010c365470129050cefb7c6d26c6ea39ee638c7eb1c7075934f25898db82a5afc011edcaff804308832",
+      "refusal": "share"
+    },
+    {
+      "name": "a share signer's key_id",
+      "signed": "0a710a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33412105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a204b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b224006a50da24885ffe05574618833ec1f87f593871af024716f67e94a132054f654cf692efa3307defd6ce6faec2dc86341f06991e0c859263a97829b11c0092306308832",
+      "refusal": "share"
+    },
+    {
+      "name": "a field the verifier does not know",
+      "signed": "0a740a100d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d12105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a1a10c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c02220acdcc8494d458f44a7aaac1d6a84ec624daee88436db2ae26e67ba645a1062282a107a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a3080a8a3e3b33498060112105a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a22409f9fd02627c0aa140dd0bb7b4d5b167027dd185ecfe385b1b5d654eb7fb43e6325d0a2cb104fe3b522785dfe0f71e79f2eb52a9cc20d5af62265c77a0c16d70e308832",
+      "refusal": "malformed"
+    }
+  ]
+}

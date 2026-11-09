@@ -106,6 +106,10 @@ func (self *postureHeld) statePinN() uint64 {
 // What is in force, without this call's alarms.
 func (self *postureHeld) decision() PostureDecision {
 	decision := PostureDecision{State: self.postureState()}
+	if decision.State != PostureLegacy {
+		decision.NetworkId = self.networkId
+		decision.SidecarId = self.sidecarId
+	}
 	if decision.State.Enforcing() {
 		decision.BridgeState = self.bridgeState
 		decision.Overlay = slices.Clone(self.overlay)

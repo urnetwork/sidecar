@@ -387,6 +387,9 @@ func cfgInvariants(t *testing.T, spec string) []string {
 // run-tlc.sh's twin table for spec, as its list mode prints it: twin to the invariant it must break.
 func twinTable(t *testing.T, spec string) map[string]string {
 	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("not run: this leg cannot run run-tlc.sh: %v", err)
+	}
 	output, err := exec.Command("bash", "run-tlc.sh", "list", spec).Output()
 	if err != nil {
 		t.Fatalf("run-tlc.sh list %s: %v", spec, err)
