@@ -36,3 +36,14 @@ func FuzzEvsFormat2Batch(f *testing.F) {
 	})
 }
 
+// The DROP target (§22.6's EvsDropHistory and its lists): a tampered body or lists that still check adopt exactly the
+// original's.
+func FuzzEvsDrop(f *testing.F) {
+	for _, seed := range evsDropFuzzSeedFiles(f, "testdata/fuzz/evs_drop") {
+		f.Add(seed)
+	}
+	push, body, lists := evsTestTwoPathDrop(f)
+	f.Fuzz(func(t *testing.T, input []byte) {
+		checkEvsDropTampering(t, push, body, lists, input)
+	})
+}

@@ -208,9 +208,8 @@ vectors:
     windows: "each window entry: name, its 64 bytes hex, flags, and its bits 4 and 5 as read"
     staged: "each staged framing: name, its bytes hex, and its segments"
   testdata/evs/format2/drop_vectors.json:
-    push: "hex, the Signed EvsPush every case's sections check against, as received"
-    cases: "each DROP: name, its statement's push fields that differ, body hex, lists hex, the lists' slices over parts, and want: ok or the refusal code's name"
-    membership: "each question EvsDropLists answers of the first case's body: epoch, token_path, version, removal, and the lineage index listing it or -1"
+    cases: "each DROP: name, its EvsPush's bytes (push), body and lists hex, the lists' slices over parts when split (slices), and want: ok or the refusal code's name"
+    membership: "each question EvsDropLists answers of the first case's body: epoch, token_path, version, removal, and the index of the path listing it, or -1"
   testdata/evs/citation/:
     name: "the case"
     citations: "each new version: token_path, version, and its path's base version or null; a version is {versioning, chain [{kind, id, staged}], slot_ids}"
