@@ -22,8 +22,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// What a component name may not be: the core's own namespace and class names (§5.9).
-var sidecarReservedComponentNames = []string{sidecarCoreSecretsNamespace, keychainRecordsClass, sidecarSubprotocolStoreName}
+// What a component name may not be: the core's own namespace and class names (§5.9), the index cache's file class and
+// directory among them.
+var sidecarReservedComponentNames = []string{sidecarCoreSecretsNamespace, keychainRecordsClass, sidecarSubprotocolStoreName,
+	SidecarSearchFileClass}
 
 // One of a Sidecar's components (§5.4).
 type SidecarComponent interface {

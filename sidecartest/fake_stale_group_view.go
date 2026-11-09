@@ -85,6 +85,7 @@ func (self *FakeStaleGroupView) Commits() []FakeStaleRemove {
 	return slices.Clone(self.commits)
 }
 
+// Each asked Worker's leaves as set, copies, after the step SetBeforeAnswer gave.
 func (self *FakeStaleGroupView) StaleLeaves(ctx context.Context, workerIds []sidecar.Id) ([]*sidecar.SidecarStaleLeaf, error) {
 	self.stateLock.Lock()
 	beforeAnswer := self.beforeAnswer
