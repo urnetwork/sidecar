@@ -1,0 +1,57 @@
+{
+  "name": "the record's room falling to marked",
+  "replaced": [
+    {
+      "token_path": "19ad88c5abe4bbb9f1b115f5e91b41ce",
+      "version": {
+        "version": 9,
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "efe361d93b07fa7f6e1b8b6374e6cc7451c3e676bbbb4600b68b28f7e5deb1cb"
+          },
+          {
+            "kind": 5,
+            "id": "3a10d9bb4c1b48b386fe085229512aa27cc0c21c8760893ebc8cdc7c8ec7e871"
+          },
+          {
+            "kind": 5,
+            "id": "552b8529103d593b6abd46e80427398cfa2b02936eca9f31cd35573cbe3b2e43"
+          },
+          {
+            "kind": 5,
+            "id": "5a6b91d7effc24ca72b948b9b76fb43d57476f7bb0a5f98dc08963f1a1ecb208"
+          },
+          {
+            "kind": 5,
+            "id": "0306a11b3c374443d2f285401e34cd6dcc9f494f86b1ac96cc109463c9207ff0"
+          },
+          {
+            "kind": 5,
+            "id": "52540b64f6f6c72c362d375ba2d8dd30c5e3db041083b4909b3f387c9c0c4b44"
+          },
+          {
+            "kind": 5,
+            "id": "d335470f08d8bba73d896e05e3dae14bfbf7e30d3278c60ec123f89706ae1717"
+          },
+          {
+            "kind": 5,
+            "id": "c7df6851be2d82cd17c1c8a55e722ec6695c2b7addbf36b1f682d2d87c5576a7"
+          },
+          {
+            "kind": 5,
+            "id": "19ff81c8481bf4165117629ddcf3421445e9bd41cf7bd79f70e79547f2ae7ca0"
+          },
+          {
+            "kind": 5,
+            "id": "82de90735132eff02c22f0da5b42696094a68ee6f0a1ed8e8042fe471f03f34c"
+          }
+        ]
+      }
+    }
+  ],
+  "push_versions": [],
+  "room_byte_count": 100,
+  "want": "1001"
+}

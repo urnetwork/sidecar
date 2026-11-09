@@ -27,6 +27,11 @@ import (
 //go:embed testdata/evs/format2/drop_vectors.json
 var evsDropVectorsJson []byte
 
+// The purge's vectors, which evsservice's tests check against PurgeCandidates; here only their shape.
+//
+//go:embed testdata/evs/purge
+var evsPurgeVectorFiles embed.FS
+
 // The DROP target's seeds: tamperings, as evsFuzzTamper reads them, of the test drop's body (an even first byte) or
 // lists (an odd one).
 //
@@ -631,6 +636,33 @@ func TestEvsFormat2VectorFilesMatchTheSchema(t *testing.T) {
 		"testdata/evs/format2/segment_vectors.json": evsFormat2SegmentVectorsJson,
 		"testdata/evs/format2/batch_vectors.json":   evsFormat2BatchVectorsJson,
 		"testdata/evs/format2/drop_vectors.json":    evsDropVectorsJson,
+	}
+	for _, directory := range []struct {
+		files embed.FS
+		path  string
+	}{{files: evsCitationVectorFiles, path: "testdata/evs/citation"}, {files: evsPurgeVectorFiles, path: "testdata/evs/purge"}} {
+		keys, ok := schema.Vectors[directory.path+"/"]
+		if !ok {
+			t.Errorf("the schema names no %s/", directory.path)
+			continue
+		}
+		entries, err := directory.files.ReadDir(directory.path)
+		if err != nil || len(entries) == 0 {
+			t.Fatalf("%s: %v", directory.path, err)
+		}
+		for _, entry := range entries {
+			data, err := directory.files.ReadFile(directory.path + "/" + entry.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := map[string]json.RawMessage{}
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.EqualFunc(fields, keys, func(json.RawMessage, string) bool { return true }) {
+				t.Errorf("%s/%s holds %v, and the schema names %v", directory.path, entry.Name(), slices.Sorted(maps.Keys(fields)), slices.Sorted(maps.Keys(keys)))
+			}
+		}
 	}
 	for path, data := range files {
 		keys, ok := schema.Vectors[path]

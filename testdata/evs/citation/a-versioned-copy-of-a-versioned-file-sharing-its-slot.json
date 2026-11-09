@@ -1,0 +1,46 @@
+{
+  "name": "a versioned copy of a versioned file sharing its slot",
+  "citations": [
+    {
+      "token_path": "bc5cf9b0d3fb4076c340253149dd4a41",
+      "version": {
+        "versioning": 0,
+        "chain": [
+          {
+            "kind": 1,
+            "id": "622df26917701e81bc232f641edcad90c573d6c83dab588e94039e246357854d"
+          }
+        ],
+        "slot_ids": [
+          "0213c94f846bd99d740de216746d50b9"
+        ]
+      },
+      "base": null
+    }
+  ],
+  "sources": {
+    "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+    "staged": [],
+    "versionless_uploads": [],
+    "removed": [],
+    "reuse": [
+      {
+        "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+        "token_path": "72792bf96f3860463af974efc5ca7b79",
+        "version": {
+          "versioning": 0,
+          "chain": [
+            {
+              "kind": 1,
+              "id": "622df26917701e81bc232f641edcad90c573d6c83dab588e94039e246357854d"
+            }
+          ],
+          "slot_ids": [
+            "0213c94f846bd99d740de216746d50b9"
+          ]
+        }
+      }
+    ]
+  },
+  "want": "ok"
+}
