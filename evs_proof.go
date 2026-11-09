@@ -221,8 +221,18 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, tokenPath EvsTokenP
 		}
 		last = delta.GetCommitVersion()
 		deltaPath := &EvsVerifiedPath{TokenPath: tokenPath}
-		// a delta's statement after the pin is in the walk; one below it travels as the reply's own statement is
-		// not, so it is refused unless the walk holds it
+		if _, walked := head.StatementAt(delta.GetCommitVersion()); !walked {
+			// a delta at or below the read's pin carries no statement: what it adds is evs's word, as a never-read
+			// path's version is (Q-EVS-6), and its names are still checked against their tokens
+			entry := &protocol.EvsEntryVersion{}
+			if delta.GetElided() || proto.Unmarshal(delta.GetEntryVersion(), entry) != nil ||
+				entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) || head.Version < delta.GetCommitVersion() {
+				return fmt.Errorf("%w: a delta that is not a directory's", ErrEvsEntryRefused)
+			}
+			deltaPath.EntryBytes, deltaPath.Entry, deltaPath.CommitVersion = delta.GetEntryVersion(), entry, delta.GetCommitVersion()
+			verified.Deltas = append(verified.Deltas, deltaPath)
+			continue
+		}
 		if err := self.verifyVersion(head, tokenPath, delta, nil, nil, deltaPath); err != nil {
 			return err
 		}
