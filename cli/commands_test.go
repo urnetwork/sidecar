@@ -118,6 +118,10 @@ func newTestUrCli(socketPath string) (*urCli, *bytes.Buffer, *bytes.Buffer) {
 	cli.spawnDaemon = func(args []string) error { return errors.New("nothing spawns in this test") }
 	cli.getenv = func(name string) string { return "" }
 	cli.settings.SpawnRetryInterval = time.Millisecond
+	// no test reads the embedded host table or dials a host it names
+	cli.serviceUrls = func(settings *sidecar.SidecarSettings) error { return errors.New("no service urls in this test") }
+	cli.hostList = func() (*sidecar.SidecarHostList, error) { return nil, errors.New("no host table in this test") }
+	cli.hostProber = newRefusingTestHostProber()
 	return cli, stdout, stderr
 }
 

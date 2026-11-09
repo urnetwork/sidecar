@@ -1,7 +1,8 @@
 // ur status (§5.4, §18.5): the Sidecar's state, its reason and the bound client generation, which store wraps U,
 // and any store on this host holding a network credential (D-TRUST-3); --stats adds SidecarStats' counters, which
 // carry no requester, repo or query label (I-13). The daemon's reply never holds a token, a key or the pass, which
-// its reply walk refuses (daemon_rpc.go).
+// its reply walk refuses (daemon_rpc.go). Then §18.9's host probes, the rung and any interception
+// (cmd_status_hosts.go).
 
 package main
 
@@ -27,11 +28,18 @@ func init() {
 func runUrStatus(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	stats, _ := options.Bool("--stats")
 	reply := &urStatusReply{}
-	if err := cli.callDaemon(ctx, urMethodStatus, &urStatusParams{Stats: stats}, false, reply); err != nil {
-		return err
+	callErr := cli.callDaemon(ctx, urMethodStatus, &urStatusParams{Stats: stats}, false, reply)
+	if callErr == nil {
+		printUrStatus(cli, reply)
 	}
-	printUrStatus(cli, reply)
-	return nil
+	// §18.9's probes run whether or not a daemon answered, since a host out of reach is often why none did
+	list, err := cli.hostList()
+	if err != nil {
+		fmt.Fprintf(cli.stdout, "hosts:      not probed: %s\n", err)
+	} else {
+		printUrHostReport(cli, cli.reportHosts(ctx, list))
+	}
+	return callErr
 }
 
 // The reply, as a person reads it.

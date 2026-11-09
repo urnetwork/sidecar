@@ -6,9 +6,10 @@
 //
 // --auto-spawned is the relay's: such a daemon exits when idle. --unit is its unit's (install-daemon), and never
 // idles out; neither does a daemon a person runs by hand. --ephemeral keeps everything in memory, for an ephemeral
-// enrollment (§5.6). Service urls come from §18.9's host table, the one copy of those names (QD-119); until that table
-// lands no Sidecar runs, and status says why. --port and --listen arrive with the local services they place (§11,
-// §15; plan-CORE-cli-ui-missing #6).
+// enrollment (§5.6). Service urls come from §18.9's host table, the one copy of those names (QD-119), and every dial
+// goes through HTTPS_PROXY when it names a proxy (https_proxy.go); a table or a proxy ur cannot use runs no Sidecar,
+// and status says why. --port and --listen arrive with the local services they place (§11, §15;
+// plan-CORE-cli-ui-missing #6).
 
 package main
 
@@ -293,10 +294,14 @@ func (self *urSidecarHost) TokenSource() sidecar.SidecarTokenSource {
 	return nil
 }
 
-// Fills settings' service urls from §18.9's embedded host table, the one copy of those names (QD-119). That table is
-// SDK-M4-07's and has not landed, so this refuses, and no Sidecar runs: validate refuses empty urls on every leg.
+// Fills settings' service urls from §18.9's embedded host table, the one copy of those names (QD-119). A table that
+// does not parse or misses a service fills nothing, and validate refuses the empty urls on every leg.
 func urServiceUrlsFromHostTable(settings *sidecar.SidecarSettings) error {
-	return errors.New("no service urls: §18.9's host table has not landed")
+	list, err := sidecar.SidecarHostListV1()
+	if err != nil {
+		return fmt.Errorf("no service urls: %w", err)
+	}
+	return list.ApplyServiceUrls(settings)
 }
 
 // Runs the daemon until ctx ends, Close, or an auto-spawned daemon's idle exit.
@@ -313,6 +318,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	settings.Instance = cli.instance
 	settings.Log = log
 	urlsErr := cli.serviceUrls(settings)
+	if urlsErr == nil {
+		// a proxy ur cannot use runs no Sidecar, rather than a direct one
+		urlsErr = applyUrHttpsProxy(cli.getenv, settings)
+	}
 
 	var keyStore sidecar.SidecarKeyStore
 	keyStoreKind := osKeyStorePass

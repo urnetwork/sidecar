@@ -78,6 +78,9 @@ type urSettings struct {
 	// How long a control call may take, a person's confirmation aside: SidecarLocalSettings.RequestTimeout's 30 s
 	// and a little more, so the daemon's own bound answers first.
 	CallTimeout time.Duration
+	// How long ur status's host probes run, all at once, each a dial and a tls handshake: 10 s, past a cold dial
+	// through a proxy on a slow link (cmd_status_hosts.go).
+	HostProbeTimeout time.Duration
 }
 
 // The defaults, a fresh value each call.
@@ -86,6 +89,7 @@ func defaultUrSettings() *urSettings {
 		SpawnWaitTimeout:   10 * time.Second,
 		SpawnRetryInterval: 50 * time.Millisecond,
 		CallTimeout:        35 * time.Second,
+		HostProbeTimeout:   10 * time.Second,
 	}
 }
 
@@ -116,12 +120,16 @@ type urCli struct {
 	offerPresenceKey func(ctx context.Context, cli *urCli) error
 	// fills a daemon's service urls from §18.9's host table (cmd_daemon.go)
 	serviceUrls func(settings *sidecar.SidecarSettings) error
+	// §18.9's host table, which ur status probes (cmd_status_hosts.go)
+	hostList func() (*sidecar.SidecarHostList, error)
+	// how ur status probes each host
+	hostProber *urHostProber
 	// where and as whom a unit installs, and what runs its commands (unit.go)
 	unitEnv    func() (*unitEnv, error)
 	unitRunner func(cli *urCli) unitRunner
 	// <state> of an instance
 	stateDirectory func(instance string) (string, error)
-	// a process's environment, for UR_INSTANCE
+	// a process's environment, for UR_INSTANCE and HTTPS_PROXY
 	getenv func(name string) string
 	// the working directory and pid a hello names
 	cwd func() (string, error)
@@ -142,6 +150,8 @@ func newUrCli() *urCli {
 		spawnDaemon:     spawnDetachedDaemon,
 		login:           urcliLoginEntry,
 		serviceUrls:     urServiceUrlsFromHostTable,
+		hostList:        sidecar.SidecarHostListV1,
+		hostProber:      newUrHostProber(),
 		unitEnv:         hostUnitEnv,
 		unitRunner:      execUnitRunner,
 		stateDirectory:  sidecar.SidecarStateDirectory,
