@@ -1,0 +1,42 @@
+{
+  "name": "a slot-keyed versionless path keeping its slot",
+  "citations": [
+    {
+      "token_path": "0f65c987bccc41caabd28ac1bd1de724",
+      "version": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "52a8a898a3e84650520bd42069c8ef42e3cf7f3bd6935b18e2088d2acfac3608"
+          }
+        ],
+        "slot_ids": [
+          "193cffb358eb37616786b3fedb51baef"
+        ]
+      },
+      "base": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "bdbf6406c05146d8851bde1ac1328d8636ec6cab250f156c8c2ac976be4907fb"
+          }
+        ],
+        "slot_ids": [
+          "193cffb358eb37616786b3fedb51baef"
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+    "staged": [],
+    "versionless_uploads": [
+      "52a8a898a3e84650520bd42069c8ef42e3cf7f3bd6935b18e2088d2acfac3608"
+    ],
+    "removed": [],
+    "reuse": []
+  },
+  "want": "ok"
+}

@@ -1,0 +1,38 @@
+{
+  "name": "a slot no longer named",
+  "replaced": [
+    {
+      "token_path": "260936311fc541f6127f7230f5451ffc",
+      "version": {
+        "version": 2,
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "685b888e572d5289ff8f8a0d2bf059f65c5f29626dbd2674836a17971867c1cd"
+          }
+        ],
+        "slot_ids": [
+          "ba2f4d5f46bf27bf534ac2730f632211"
+        ]
+      }
+    }
+  ],
+  "push_versions": [
+    {
+      "version": 3,
+      "versioning": 1,
+      "chain": [
+        {
+          "kind": 5,
+          "id": "685b888e572d5289ff8f8a0d2bf059f65c5f29626dbd2674836a17971867c1cd"
+        }
+      ],
+      "slot_ids": [
+        "4afa7b76d2c3b41a06f0b5548aae81d1"
+      ]
+    }
+  ],
+  "room_byte_count": 1048576,
+  "want": "0a260a10260936311fc541f6127f7230f5451ffc10022a10ba2f4d5f46bf27bf534ac2730f632211"
+}

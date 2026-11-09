@@ -1,0 +1,35 @@
+{
+  "name": "the base's staged segment cited again as unstaged",
+  "citations": [
+    {
+      "token_path": "0f65c987bccc41caabd28ac1bd1de724",
+      "version": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "1d031812c64900b43a6614f0faa7a3f6b0a5b5cf07d70149fef8ec0089051c60"
+          }
+        ]
+      },
+      "base": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "1d031812c64900b43a6614f0faa7a3f6b0a5b5cf07d70149fef8ec0089051c60",
+            "staged": true
+          }
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+    "staged": [],
+    "versionless_uploads": [],
+    "removed": [],
+    "reuse": []
+  },
+  "want": "VERSIONING"
+}

@@ -1,0 +1,21 @@
+{
+  "name": "a versioned version replaced",
+  "replaced": [
+    {
+      "token_path": "fe97e01005f5447fa0ccfb996b3fd355",
+      "version": {
+        "version": 7,
+        "versioning": 0,
+        "chain": [
+          {
+            "kind": 1,
+            "id": "c7919b03cd668ff4e6627b20b3795d0a0e7aa437b2f6f8e76d363d52f7eb3ed4"
+          }
+        ]
+      }
+    }
+  ],
+  "push_versions": [],
+  "room_byte_count": 1048576,
+  "want": ""
+}

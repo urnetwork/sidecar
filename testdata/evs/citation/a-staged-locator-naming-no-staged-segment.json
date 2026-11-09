@@ -1,0 +1,27 @@
+{
+  "name": "a staged locator naming no staged segment",
+  "citations": [
+    {
+      "token_path": "bc5cf9b0d3fb4076c340253149dd4a41",
+      "version": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "1b247aba13a5d9f901b464e0d7b88bf99cc22d1dfedae86de37fbc106752ac1e",
+            "staged": true
+          }
+        ]
+      },
+      "base": null
+    }
+  ],
+  "sources": {
+    "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+    "staged": [],
+    "versionless_uploads": [],
+    "removed": [],
+    "reuse": []
+  },
+  "want": "VERSIONING"
+}
