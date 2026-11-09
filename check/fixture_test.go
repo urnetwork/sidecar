@@ -11,6 +11,7 @@ package check
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -271,7 +272,30 @@ func newFixture(t testing.TB) *fixture {
 	for _, module := range []string{"sidecar", "sidecar/cli", "sidecar/smtpproof", "sidecar/mlsinterop"} {
 		self.writeSibling(module+"/go.sum", string(goSum))
 	}
+	self.gitConnect("init", "-q", "-b", "main")
+	self.commitConnect("the fixture's connect")
 	return self
+}
+
+// Runs git in the fixture's connect, with no configuration of the host's: no hooks, no signing.
+func (self *fixture) gitConnect(arguments ...string) {
+	self.t.Helper()
+	command := exec.Command("git", append([]string{
+		"-c", "user.name=Check Fixture", "-c", "user.email=check-fixture@example.invalid",
+		"-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + os.DevNull,
+	}, arguments...)...)
+	command.Dir = filepath.Join(self.directory, "connect")
+	command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+	if output, err := command.CombinedOutput(); err != nil {
+		self.t.Fatalf("git %v in the fixture's connect: %v\n%s", arguments, err, output)
+	}
+}
+
+// Commits the fixture's connect as it stands, which a plant then changes as HEAD against main.
+func (self *fixture) commitConnect(message string) {
+	self.t.Helper()
+	self.gitConnect("add", "-A")
+	self.gitConnect("commit", "-q", "--allow-empty", "-m", message)
 }
 
 // Writes a file from the fixture's top, after the tokens.

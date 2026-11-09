@@ -58,6 +58,9 @@ func (self *SidecarSettings) validate() error {
 	if err := self.ProtocolSettings.validate(); err != nil {
 		return err
 	}
+	if err := self.Gkm.validate(); err != nil {
+		return err
+	}
 	if MaxStreamDataByteCount < self.StreamChunkByteCount {
 		return fmt.Errorf("%w: StreamChunkByteCount is past StreamData's limit", errInvalidSettings)
 	}
