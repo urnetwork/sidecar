@@ -25,7 +25,8 @@ import (
 	connectprotocol "github.com/urnetwork/connect/protocol"
 )
 
-// The network directory and seal class of §6's dispatcher's own state, PROTO-M1-04's first-use pins among it.
+// The network directory and seal class of §6's dispatcher's own state: PROTO-M2-01's generation floors, and the
+// first-use pins PROTO-M1-04 kept before them, which the admission check drops.
 const sidecarSubprotocolStoreName = "subprotocol"
 
 // How a client generation reaches the platform. Nil in SidecarConnectSettings.Platform is connect's own: an
@@ -253,6 +254,9 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		NetworkId: generation.networkId,
 		Binding:   generation.binding,
 		Event:     self.sidecar.emitEvent,
+		// M2's admission check: a peer's identity key is its SidecarAdmit's, and until the installed
+		// state admits this sidecar it gets no peer (§5.6, §6.4)
+		Admissions: sidecarSubprotocolAdmissions{sidecar: self.sidecar},
 	})
 	if err != nil {
 		api.Close()

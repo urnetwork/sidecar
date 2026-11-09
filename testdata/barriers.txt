@@ -190,7 +190,11 @@ barrier rpc.call_send.after rpc_call.go
 barrier rpc.call_send.before rpc_call.go
 barrier rpc.dispatch.after rpc_subprotocol.go
 barrier rpc.dispatch.before rpc_subprotocol.go
+barrier rpc.hello_catch_up.after rpc_admission.go
+barrier rpc.hello_catch_up.before rpc_admission.go
+barrier rpc.hello_pin.after rpc_admission.go
 barrier rpc.hello_pin.after rpc_pins.go
+barrier rpc.hello_pin.before rpc_admission.go
 barrier rpc.hello_pin.before rpc_pins.go
 barrier rpc.peer_take.before rpc_peer.go
 barrier rpc.seal_stop rpc_headcheck_stop.go
