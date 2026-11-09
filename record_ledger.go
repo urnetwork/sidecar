@@ -639,13 +639,14 @@ func (self *ApprovalLedger) Sweep(ctx context.Context) (int, error) {
 }
 
 // What a Sidecar keeps of §16's local state, built once its network is known: one ledger, so one mutex per approval,
-// and one run store, so one memory of taint. Safe for concurrent use.
+// one run store, so one memory of taint, and one spool, so one epoch and one cap. Safe for concurrent use.
 type sidecarRecords struct {
 	stateLock sync.Mutex
 	// the network these were built for
 	networkId      *Id
 	approvalLedger *ApprovalLedger
 	runs           *RunStore
+	spool          *Spool
 }
 
 // The network's sealed local state, net/<network_id>/ (§5.9): Directory(name, class) reaches §16's approvals/, runs/
@@ -697,5 +698,6 @@ func (self *sidecarRecords) forNetworkWithLock(networkId Id) {
 		self.networkId = &networkId
 		self.approvalLedger = nil
 		self.runs = nil
+		self.spool = nil
 	}
 }

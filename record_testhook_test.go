@@ -1,12 +1,13 @@
 //go:build sidecar_testhooks
 
-// The record's barriers, under the tag: record.reserve.before sits outside the approval's mutex, so a schedule parks
-// every racer there, as FS-25 does, and record.taint.before comes after the run's memory flag, so a reader racing a
-// taint parked there reads tainted.
+// The record's hooks, under the tag: record.reserve.before sits outside the approval's mutex, so a schedule parks
+// every racer there, as FS-25 does; record.taint.before comes after the run's memory flag, so a reader racing a taint
+// parked there reads tainted; and the spool's keys reach the secret hook and never the medium.
 
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -84,5 +85,43 @@ func TestTaintBarrierFollowsTheMemoryFlag(t *testing.T) {
 	close(release)
 	if err := <-returned; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Both halves of an epoch's key pair and the redaction key reach the privacy harness's hook, and the medium holds the
+// public half alone: no private seed and no redaction key, sealed or not, in any file.
+func TestSpoolKeysReachTheHook(t *testing.T) {
+	var stateLock sync.Mutex
+	kindSecrets := map[string][][]byte{}
+	t.Cleanup(func() { SetTestHooks(nil) })
+	SetTestHooks(&TestHooks{
+		Secret: func(kind string, secret []byte) {
+			stateLock.Lock()
+			defer stateLock.Unlock()
+			kindSecrets[kind] = append(kindSecrets[kind], secret)
+		},
+	})
+	instance, backend, spool := newTestSpool(t, testSpoolSettings())
+	spoolTestTexts(t, spool, "unlocked")
+	lockTestInstance(t, instance)
+	spoolTestTexts(t, spool, "locked")
+	unlockTestInstance(t, instance)
+	drainTestSpool(t, spool)
+	stateLock.Lock()
+	defer stateLock.Unlock()
+	for _, kind := range []string{"spool_private_key", "spool_public_key", "K_redact"} {
+		if len(kindSecrets[kind]) == 0 {
+			t.Errorf("no %s reached the hook", kind)
+		}
+	}
+	snapshot := backendSnapshot(t, backend)
+	for _, kind := range []string{"spool_private_key", "K_redact"} {
+		for _, secret := range kindSecrets[kind] {
+			for path, content := range snapshot {
+				if bytes.Contains(content, secret) {
+					t.Errorf("%s holds a %s", path, kind)
+				}
+			}
+		}
 	}
 }
