@@ -40,6 +40,8 @@ type EvsVerifiedPath struct {
 	Removal *protocol.EvsRemovalMarker
 	// An overlay's path it holds no version of: the base ref and version to read instead (§11.7).
 	Base *protocol.EvsOverlay
+	// A path the ref never wrote, or none evs holds a version or removal of, unchanged through the walk.
+	Absent bool
 	// A directory's folded table as of NamesThrough, and its deltas after it, each verified as a version is.
 	Names        *protocol.EvsNameTable
 	NamesThrough uint64
@@ -80,8 +82,12 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, tokenPath EvsTokenPat
 				return nil, err
 			}
 		}
+	case len(reply.GetNames().GetNames()) != 0 || len(reply.GetDeltas()) != 0 || len(reply.GetStatement()) != 0 || len(reply.GetProof()) != 0:
+		return nil, fmt.Errorf("%w: a reply with no version, removal or base beside what only those carry", ErrEvsEntryRefused)
 	default:
-		return nil, fmt.Errorf("%w: a reply with no version, removal or base", ErrEvsEntryRefused)
+		// a path never written: no walked statement may change it (below); before the walk it is evs's word, which a
+		// writer's push meets at evs's own CAS (§11.8's 5g) and which a read record of a version refutes (evs_read.go)
+		verified.Absent = true
 	}
 	// a directory's own later writes are its deltas, each of which the walk must account for
 	deltaVersions := map[uint64]bool{}
@@ -253,7 +259,10 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath E
 		push := walked.Statement.Push
 		if len(push.GetChangesRoot()) == 0 {
 			for _, change := range walked.Statement.Changes {
-				if tokenPath.HasPrefix(change.TokenPath) {
+				// the path itself, or a prefix's removal, which ends every path below it; a prefix's delta does not
+				// change the path (§11.7's newest row)
+				removesPrefix := tokenPath.HasPrefix(change.TokenPath) && len(change.Change.GetEntrySha256()) == 0
+				if change.TokenPath.Equal(tokenPath) || removesPrefix {
 					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 					return fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
 				}

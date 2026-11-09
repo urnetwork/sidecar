@@ -359,8 +359,9 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 		if err != nil {
 			return nil, err
 		}
-		// an older version asked for by number is history, not a rollback
-		if version == 0 && path.record != nil && verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion {
+		// an older version asked for by number is history, not a rollback, and a path this device read a version of
+		// is never absent: removed at most
+		if version == 0 && path.record != nil && (verified.Absent || (verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion)) {
 			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, path.path, nil)
 			return nil, fmt.Errorf("%w: a version below the one this device read", ErrEvsEntryRefused)
 		}
@@ -488,7 +489,7 @@ func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Wri
 	switch {
 	case verified.Base != nil:
 		return nil, ErrEvsOverlayBase
-	case verified.Removal != nil:
+	case verified.Removal != nil, verified.Absent:
 		return nil, ErrEvsPathAbsent
 	case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
 		return nil, fmt.Errorf("%w: a directory, which List reads", ErrEvsTokenInvalid)
