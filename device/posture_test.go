@@ -689,3 +689,65 @@ func TestStateOnItsBaseResyncsADivergedPosture(t *testing.T) {
 		t.Errorf("restored %v, %v", restored.Pin, restored.Alarms)
 	}
 }
+
+// After an admin's revocation and a new enrollment, a Pending for the same network and anchor replaces the stored id
+// and key and changes no state; then the new sidecar's own sign-out wipes, and the old one's no longer does
+// (plan-SDK-pending-sidecar-id).
+func TestLaterPendingReplacesTheSignOutIdentity(t *testing.T) {
+	fixture := newPostureFixture(t)
+	store := newMemoryPostureStore()
+	posture := fixture.enforcing(store, true)
+	renewed := &postureFixtureSidecar{id: postureFixtureId(0x16), key: postureFixtureKey(0x16), member: fixture.owner}
+	pending := fixture.pending()
+	pending.SidecarId, pending.IdentityPublicKey = renewed.id, renewed.publicKey()
+	decision, err := posture.SetPending(pending)
+	if err != nil || decision.State != PostureEnforcingDocument || decision.Changed {
+		t.Fatalf("the new enrollment's Pending: %v, %v, changed %v", err, decision.State, decision.Changed)
+	}
+	old := fixture.sidecarRevoke(fixture.self, fixture.self, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+	decision, err = posture.ApplyDeltas(fixture.log(old, old))
+	if err != nil || decision.State != PostureEnforcingDocument {
+		t.Fatalf("the old sidecar's sign-out: %v, %v", err, decision.State)
+	}
+	// the restart keeps the new id, so its own sign-out still wipes
+	posture, _ = fixture.open(store.survivor())
+	fresh := fixture.sidecarRevoke(renewed, renewed, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED)
+	decision, err = posture.ApplyDeltas(fixture.log(fresh, fresh))
+	if err != nil || decision.State != PostureLegacy {
+		t.Errorf("the new sidecar's sign-out: %v, %v", err, decision.State)
+	}
+}
+
+// A share certificate's generation only rises, and survives a restart, so a restarted host refuses one below it.
+func TestShareCertGenerationOnlyRises(t *testing.T) {
+	fixture := newPostureFixture(t)
+	store := newMemoryPostureStore()
+	posture, _ := fixture.open(store)
+	shareId := postureFixtureId(0x90)
+	if err := posture.RaiseShareCert(shareId, 1, []byte("cert 1")); !errors.Is(err, ErrPostureRefused) {
+		t.Errorf("a legacy posture kept a share certificate: %v", err)
+	}
+	posture = fixture.enforcing(store, true)
+	if err := posture.RaiseShareCert(shareId, 3, []byte("cert 3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := posture.RaiseShareCert(shareId, 2, []byte("cert 2")); !errors.Is(err, ErrPostureRefused) {
+		t.Errorf("a lower generation: %v", err)
+	}
+	if err := posture.RaiseShareCert(shareId, 3, []byte("cert 3, again")); err != nil {
+		t.Errorf("the same generation: %v", err)
+	}
+	restarted, _ := fixture.open(store.survivor())
+	if generation, ok := restarted.ShareCertGeneration(shareId); !ok || generation != 3 {
+		t.Errorf("restored generation %d, %v", generation, ok)
+	}
+	if _, ok := restarted.ShareCertGeneration(postureFixtureId(0x91)); ok {
+		t.Error("a share never kept has a generation")
+	}
+	if err := restarted.RaiseShareCert(shareId, 4, []byte("cert 4")); err != nil {
+		t.Fatal(err)
+	}
+	if generation, _ := restarted.ShareCertGeneration(shareId); generation != 4 {
+		t.Errorf("raised to %d", generation)
+	}
+}
