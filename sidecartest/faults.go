@@ -181,6 +181,8 @@ type FaultQueue struct {
 	stateLock sync.Mutex
 	armed     []*armedFault
 	onFire    func(plan *FaultPlan)
+	// what the stores behind the queue cannot carry out, beside validate's rules: nil on T2
+	check func(plan *FaultPlan) error
 	// By operation, each one that reached the queue in order, with the result it was given, zero for
 	// none.
 	opResults map[string][]FaultResult
@@ -199,6 +201,16 @@ func (self *FaultQueue) SetOnFire(onFire func(plan *FaultPlan)) {
 	self.onFire = onFire
 }
 
+// Refuses, at Add, each plan check returns an error for: what the stores behind this queue cannot
+// carry out beyond what validate already refuses. Server's T3 sets it (sidecart3), since a real store
+// parks no request on a schedule's word, so a schedule asking for that fails where it was written, as
+// it does on a fake. nil checks nothing more.
+func (self *FaultQueue) SetCheck(check func(plan *FaultPlan) error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.check = check
+}
+
 // Arms plan. A plan a fake cannot carry out is an error here, so a schedule fails where it was
 // written. The returned channel closes when the plan first fires.
 func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) {
@@ -207,9 +219,22 @@ func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) 
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if self.check != nil {
+		if err := self.check(plan); err != nil {
+			return nil, fmt.Errorf("fault plan %s: %w", plan, err)
+		}
+	}
 	armed := &armedFault{plan: plan, fired: make(chan struct{})}
 	self.armed = append(self.armed, armed)
 	return armed.fired, nil
+}
+
+// For a store, Redis or api wrapper outside this package, such as server's T3 wrappers (sidecart3):
+// the plan one operation gets, or nil, exactly as a fake here takes one. op is a FaultOp, clusterId the
+// operation's cluster or empty, key its key or what stands for one, and write whether it writes. Under
+// InspectContext nothing is taken or counted.
+func (self *FaultQueue) Take(ctx context.Context, op string, clusterId string, key string, write bool) *FaultPlan {
+	return self.take(ctx, op, clusterId, key, write)
 }
 
 // For one operation, the plan it gets, or nil. Reading counts a match on every armed plan the
