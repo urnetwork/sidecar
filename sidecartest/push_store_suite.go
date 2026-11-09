@@ -36,7 +36,7 @@ const pushSuiteCaseTimeout = 2 * time.Minute
 
 // The store the suite runs on.
 type PushStoreTarget struct {
-	// The store, with pushservice.HintScript and HintAckScript runnable on it.
+	// The store, with pushservice.HintScript, HintAckScript and HintTailScript runnable on it.
 	Redis pushservice.PublisherRedis
 	// Moves time on by at least d: a fake clock's Advance, or a real wait on a real store.
 	Pass func(d time.Duration)
@@ -93,6 +93,7 @@ func pushSuiteCases() []pushSuiteCase {
 		{name: "a raised clock goes past the stored value, and the hint carries the raised value", run: casePushClockRaised},
 		{name: "seq is n's INCR, each entry's, rising by one", run: casePushSeqRises},
 		{name: "the stream trims to about its length", run: casePushStreamTrims},
+		{name: "the tail script reads the stream's last entry whole, nothing while it is absent", run: casePushTailReadsTheLastEntry},
 		{name: "after the keys expire, ver and hint are gone and n restarts at 1", run: casePushExpiryRestartsSeq},
 		{name: "each key's expiry starts once per generation, and only n's INCR is a trigger", run: casePushTriggerEvents},
 		{name: "the script returns tok and live from the slot, nil while absent", run: casePushTokenAndLive},
@@ -446,6 +447,47 @@ func casePushSeqRises(env *pushSuiteEnv) error {
 	return nil
 }
 
+// The tail script reads nothing while the stream is absent, then the entry XRANGE ends on, whole, after
+// writes and after a trim; and it writes nothing.
+func casePushTailReadsTheLastEntry(env *pushSuiteEnv) error {
+	clientId := pushSuiteClientId()
+	if _, found, err := pushservice.ReadHintTail(env.ctx, env.target.Redis, clientId); err != nil || found {
+		return fmt.Errorf("an absent stream's tail: found %t, %v", found, err)
+	}
+	for _, hintCount := range []uint64{1, 3, 400} {
+		for version := uint64(1); version <= hintCount; version += 1 {
+			if _, err := env.hint(clientId, sidecar.PushTopicDns, version); err != nil {
+				return err
+			}
+		}
+		entries, err := env.entries(clientId)
+		if err != nil {
+			return err
+		}
+		tail, found, err := pushservice.ReadHintTail(env.ctx, env.target.Redis, clientId)
+		if err != nil || !found {
+			return fmt.Errorf("the tail after %d hints: found %t, %v", hintCount, found, err)
+		}
+		last := entries[len(entries)-1]
+		if tail.Id != last.Id || len(tail.FieldValues) != len(last.FieldValues) {
+			return fmt.Errorf("the tail is %s with %d fields, XRANGE ends on %s with %d", tail.Id, len(tail.FieldValues), last.Id, len(last.FieldValues))
+		}
+		for field, value := range last.FieldValues {
+			if string(tail.FieldValues[field]) != string(value) {
+				return fmt.Errorf("the tail's %s is %q, XRANGE's %q", field, tail.FieldValues[field], value)
+			}
+		}
+		again, err := env.entries(clientId)
+		if err != nil {
+			return err
+		}
+		if len(again) != len(entries) {
+			return fmt.Errorf("reading the tail changed the stream: %d entries, then %d", len(entries), len(again))
+		}
+	}
+	return nil
+}
+
 func casePushStreamTrims(env *pushSuiteEnv) error {
 	clientId := pushSuiteClientId()
 	const hintCount = 700
@@ -704,7 +746,8 @@ func casePushKeysShareTag(env *pushSuiteEnv) error {
 	clientId := pushSuiteClientId()
 	hintKeys, _ := pushSuiteRawHint(clientId, sidecar.PushTopicCore, "1", env.target.KeyTimeout)
 	ackKeys := []string{pushservice.HintAckKey(clientId), pushservice.HintTokenKey(clientId)}
-	for _, keys := range [][]string{hintKeys, ackKeys} {
+	tailKeys := []string{pushservice.HintStreamKey(clientId)}
+	for _, keys := range [][]string{hintKeys, ackKeys, tailKeys} {
 		if !sidecar.RedisKeysShareTag(keys) {
 			return fmt.Errorf("%v do not share a tag", keys)
 		}

@@ -71,7 +71,8 @@ type LeaseTouchFunction func(ctx context.Context, clientId connect.Id) error
 
 // §6.6's SidecarPublisherSettings.LongPollHoldTimeout and the long-poll's other bounds.
 type LongPollSettings struct {
-	// How long a poll holds with nothing to answer: 25 s, under the lb's 30 s proxy_read_timeout.
+	// How long a poll holds with nothing to answer: SidecarPublisherSettings.LongPollHoldTimeout's 25 s,
+	// under the lb's 30 s proxy_read_timeout.
 	HoldTimeout time.Duration
 	// Polls one process holds at once. A poll past it is refused at once, so a burst costs refusals,
 	// not memory: 20,000.
@@ -85,10 +86,10 @@ type LongPollSettings struct {
 	LeaseTimeout time.Duration
 }
 
-// The defaults.
+// The defaults, the hold §6.6's.
 func DefaultLongPollSettings() *LongPollSettings {
 	return &LongPollSettings{
-		HoldTimeout:      25 * time.Second,
+		HoldTimeout:      DefaultSidecarPublisherSettings().LongPollHoldTimeout,
 		MaxHeldPollCount: 20000,
 		BusyRetryAfter:   5 * time.Second,
 		HintCount:        256,

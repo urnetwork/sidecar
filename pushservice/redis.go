@@ -35,9 +35,9 @@ type HintRedis interface {
 	RunScript(ctx context.Context, script *sidecar.RedisScript, keys []string, args []string) (*sidecar.RedisReply, error)
 }
 
-// What a publisher reads and writes (§6.8's PublisherEnv.Redis): GET, HGETALL, XRANGE, the ack script
-// and §18.7's live refresh. ServiceHost.Redis satisfies it, and so does server's model adapter. Safe for
-// concurrent use.
+// What a publisher reads and writes (§6.8's PublisherEnv.Redis): GET, HGETALL, XRANGE, the tail and ack
+// scripts and §18.7's live refresh. ServiceHost.Redis satisfies it, and so does server's model adapter.
+// Safe for concurrent use.
 type PublisherRedis interface {
 	HintRedis
 	// See sidecar.Redis.
@@ -169,6 +169,49 @@ func ParseHintEntry(entry *sidecar.RedisStreamEntry) (*protocol.PushHint, error)
 		hint.Hint = append([]byte(nil), body...)
 	}
 	return hint, nil
+}
+
+// The client's hint stream's last entry, by HintTailScript, and false while the stream is absent or
+// empty: where a publisher's reset starts (PROTO-M1-08).
+func ReadHintTail(ctx context.Context, redis HintRedis, clientId connect.Id) (*sidecar.RedisStreamEntry, bool, error) {
+	reply, err := redis.RunScript(ctx, HintTailScript, []string{HintStreamKey(clientId)}, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	return parseHintTailReply(reply)
+}
+
+// HintTailScript's nil, or {id, {field, value, ...}}.
+func parseHintTailReply(reply *sidecar.RedisReply) (*sidecar.RedisStreamEntry, bool, error) {
+	if reply == nil {
+		return nil, false, errHintReply
+	}
+	switch reply.Kind {
+	case sidecar.RedisReplyNil:
+		return nil, false, nil
+	case sidecar.RedisReplyArray:
+	default:
+		return nil, false, errHintReply
+	}
+	if len(reply.Replies) != 2 || reply.Replies[0].Kind != sidecar.RedisReplyBulk || reply.Replies[1].Kind != sidecar.RedisReplyArray {
+		return nil, false, errHintReply
+	}
+	entryId := string(reply.Replies[0].Bulk)
+	if _, _, err := ParseStreamId(entryId); err != nil {
+		return nil, false, errHintReply
+	}
+	fields := reply.Replies[1].Replies
+	if len(fields)%2 != 0 {
+		return nil, false, errHintReply
+	}
+	fieldValues := make(map[string][]byte, len(fields)/2)
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i].Kind != sidecar.RedisReplyBulk || fields[i+1].Kind != sidecar.RedisReplyBulk {
+			return nil, false, errHintReply
+		}
+		fieldValues[string(fields[i].Bulk)] = append([]byte(nil), fields[i+1].Bulk...)
+	}
+	return &sidecar.RedisStreamEntry{Id: entryId, FieldValues: fieldValues}, true, nil
 }
 
 // The versions a client's ver hash holds, each parsed: a field whose value is not a canonical version is
