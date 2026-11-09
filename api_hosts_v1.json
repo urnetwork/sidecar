@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "hosts": [
+    {
+      "host": "api.bringyour.com",
+      "tcp": 443,
+      "need": "required: enrollment, /sidecar, /acl, /tls, /mail, long-poll",
+      "service": "api",
+      "requirement": "required"
+    },
+    {
+      "host": "auth.bringyour.com",
+      "tcp": 443,
+      "need": "required: login, token exchange",
+      "service": "auth",
+      "requirement": "required"
+    },
+    {
+      "host": "evs.bringyour.com",
+      "tcp": 443,
+      "need": "required: storage",
+      "service": "evs",
+      "requirement": "required"
+    },
+    {
+      "host": "gkm.bringyour.com",
+      "tcp": 443,
+      "need": "required: MLS",
+      "service": "gkm",
+      "requirement": "required"
+    },
+    {
+      "host": "connect.bringyour.com",
+      "tcp": 443,
+      "need": "rungs 1-2: RPC, streams, sockets, mail, bridge; UDP 443 (H3) optional",
+      "service": "platform",
+      "requirement": "streams"
+    },
+    {
+      "host": "sockets.bringyour.com",
+      "tcp": 443,
+      "need": "with sockets",
+      "service": "sockets",
+      "requirement": "sockets"
+    },
+    {
+      "host": "dns.bringyour.com",
+      "tcp": 443,
+      "need": "with records or TLSA",
+      "service": "dns",
+      "requirement": "dns"
+    },
+    {
+      "host": "api.certspotter.com",
+      "tcp": 443,
+      "need": "with tls: the CT watch",
+      "requirement": "tls"
+    },
+    {
+      "host": "crt.sh",
+      "tcp": 443,
+      "need": "with tls: the CT watch",
+      "requirement": "tls"
+    },
+    {
+      "host": "ur.io",
+      "tcp": 443,
+      "need": "optional: install.sh, the release key, this list",
+      "requirement": "optional"
+    }
+  ]
+}

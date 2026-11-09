@@ -8,6 +8,7 @@
 #   run-tlc.sh twin <Spec> <Twin> [Name=value ...]    one twin
 #   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, to pass
 #   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
+#   run-tlc.sh stories <Spec> [Name=value ...]        EvsCommit's M10 stories, each at its bounds
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
 #
 # <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
@@ -25,7 +26,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-  sed -n '6,11p' "$0" | sed 's/^# //' >&2
+  sed -n '6,12p' "$0" | sed 's/^# //' >&2
   exit 64
 }
 
@@ -44,6 +45,14 @@ usage() {
 # (5h, 5e) before GC or a map's reclaim acts, so every attempt a fence would end is refused anyway,
 # and a stalled one holds the key that Resolve's and the fence's head reads wait on.
 seq_EvsCommit="Writers={w1} Instances={i1} Segments={s1} MaxAttempts=1 MaxFaults=0 MaxHour=0 MaxGeneration=1 MaxVersion=4"
+# The M10 part's twins run its stories (F2Run): a purge story on the committing instance alone, which
+# holds the purge's queue, and a drop story on two, whose late step 7s race the fence. PurgeUnseen
+# breaks two rules at once, queueing a push's candidates before its commit is seen and deleting them
+# with no reread of the newest version: either alone deletes nothing a version needs, since the reread
+# keeps what a push that never committed did not replace, and a queue of seen commits holds only what
+# they replaced.
+purge_EvsCommit="F2Run=\"purgeA\" Instances={i1} F2MaxHour=3"
+drop_EvsCommit="F2Run=\"dropB\""
 tiny_EvsCommit="FoldTrigger=1 FoldSize=1 BaseRange=0 WindowLimit=2 WindowMax=3"
 quiet_but() {
   local part kept out=""
@@ -54,7 +63,7 @@ quiet_but() {
   echo "Quiet=$out"
 }
 twins_EvsCommit() {
-  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit
+  local seq=$seq_EvsCommit tiny=$tiny_EvsCommit m10purge=$purge_EvsCommit m10drop=$drop_EvsCommit
   cat <<EOF
 RestoreAfterShred      LifecycleHolds        $seq MaxPush=1 $(quiet_but lifecycle)
 VersionRestarts        VersionsRise          $seq MaxPush=3 $(quiet_but)+gitref
@@ -77,6 +86,13 @@ NoWindowWait           NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $
 FoldIgnoresWindow      NewestFound           $seq MaxPush=5 MaxVersion=6 $tiny $(quiet_but fold collect)+gitref Script=X.create:X.remove:D.create:X.create:D.remove
 CachedRefusal          OutcomesHold          $seq Writers={w1,w2} MaxAttempts=2 MaxGeneration=2 MaxPush=3 MaxVersion=4 $(quiet_but authority epoch cache stale fold)+gitref Script=X.create:epoch:X.write Simulate=150 Traces=40000 Seed=1
 CopyOverwrites         NewestFound           $seq Writers={w1,w2} MaxGeneration=2 MaxPush=4 MaxVersion=5 $(quiet_but authority epoch fold)+gitref+gkm+block Script=X.create:epoch:X.write:D.create
+PurgeNoAllowance       F2DeletesKeepRules    $m10purge
+PurgeIgnoresHold       F2DeletesKeepRules    $m10purge
+PurgeUnseen            F2Closure             $m10purge
+EvacDropsNewest        F2Closure             $m10purge
+DropNoFence            F2FenceHolds          $m10drop
+DropNoAgeCheck         F2Closure             $m10drop
+DropIgnoresHold        F2DeletesKeepRules    $m10drop
 EOF
 }
 
@@ -121,7 +137,23 @@ DiffOnHeadDiff         ChainsResolve        $sim Still={"erase","rollup"} Foreig
 EOF
 }
 
-properties_EvsCommit="RemovalGates DueEpochCommits"
+properties_EvsCommit="RemovalGates DueEpochCommits F2DropsEnd"
+
+# EvsCommit's M10 part runs story by story (F2Run), each small enough for breadth-first search: the
+# purge stories on the committing instance alone and three long marks, enough for a record's
+# evacuation, the drop stories on two instances, whose late step 7s race the fence, and four marks.
+stories_EvsCommit() {
+  cat <<'STORIES'
+purgeA   F2Run="purgeA" Instances={i1} F2MaxHour=3
+purgeB   F2Run="purgeB" Instances={i1} F2MaxHour=3
+purgeC   F2Run="purgeC" Instances={i1} F2MaxHour=3
+purgeD   F2Run="purgeD" Instances={i1} F2MaxHour=3
+purgeE   F2Run="purgeE" Instances={i1} F2MaxHour=3
+dropA    F2Run="dropA"
+dropB    F2Run="dropB"
+dropC    F2Run="dropC"
+STORIES
+}
 properties_StoreSettle="HeldKeyReleased"
 properties_IndexRollup="BucketRolls ErasureFinishes"
 
@@ -347,6 +379,17 @@ main() {
         with_constants "$cfg" $bounds "$@"
         check "control-$want" "$cfg" pass || failed=1
       fi
+      ;;
+    stories)
+      [ "$spec" = EvsCommit ] || usage
+      while read -r story bounds; do
+        quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
+        cfg=$work/story-$story.cfg
+        cp "$here/$spec.cfg" "$cfg"
+        # shellcheck disable=SC2086
+        with_constants "$cfg" $bounds "$@"
+        check "story-$story" "$cfg" pass || failed=1
+      done < <(stories_EvsCommit)
       ;;
     twins)
       while read -r twin invariant bounds; do
