@@ -61,7 +61,7 @@ var repoMatrix = map[string][]repoEvidence{
 		{rule: "CgoFiles anywhere in this repository, except keychain_darwin.go"},
 	},
 	"R-REPO-7": {
-		{path: "LICENSE"}, {path: "NOTICE"},
+		{path: "LICENSE"}, {path: "NOTICE"}, {path: "cli/Makefile"},
 		{test: "TestHygieneReleaseBinary"},
 		{test: "TestToReleaseAndTheReleaseStepAreOneTransformation"},
 	},
@@ -103,7 +103,7 @@ var repoMatrix = map[string][]repoEvidence{
 		{test: "TestX9ReadyForMain"},
 	},
 	"D-REPO-7": {
-		{path: "LICENSE"}, {path: "CODESTYLE.md"}, {path: ".githooks/commit-msg"},
+		{path: "LICENSE"}, {path: "CODESTYLE.md"}, {path: ".githooks/commit-msg"}, {path: "cli/Makefile"}, {path: "README.md"},
 		{rule: "a license §4.7 refuses, or a row its module's files do not back, word for word, beside every package a leg links"},
 		{test: "TestHygieneReleaseBinary"},
 	},
