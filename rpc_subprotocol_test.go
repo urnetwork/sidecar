@@ -650,8 +650,19 @@ func TestNothingBeforeAVerifiedHello(t *testing.T) {
 		testHeldMessageType,
 	} {
 		request := testRequest(messageType, []byte{1, 2, 3})
+		request.StreamId = 7
 		fixture.receive(sourceId, request, peer)
 		sent := fixture.nextSent(t)
+		if messageType == protocol.MessageType_STREAM_OPEN {
+			// an open is rejected INVALID, a stream frame naming its stream (§6.4)
+			reject := &protocol.StreamReject{}
+			if sent.envelope.Type != uint32(protocol.MessageType_STREAM_REJECT) || sent.envelope.Flags != EnvelopeFlagNoReply ||
+				sent.envelope.StreamId != request.StreamId || proto.Unmarshal(sent.envelope.Body, reject) != nil ||
+				reject.Code != uint32(protocol.StreamRejectCode_SR_INVALID) {
+				t.Errorf("open: answered type %d flags %d stream %d", sent.envelope.Type, sent.envelope.Flags, sent.envelope.StreamId)
+			}
+			continue
+		}
 		if code := sent.errorCode(t); code != protocol.ErrorCode_ERR_UNAUTHENTICATED || sent.envelope.RequestId != request.RequestId {
 			t.Errorf("%v: code %v id %d", messageType, code, sent.envelope.RequestId)
 		}
