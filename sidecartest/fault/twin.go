@@ -27,14 +27,12 @@ func Twin(refusal Builder, success Builder) Builder {
 	}
 }
 
-// The twin of a schedule, as it runs: it must succeed, so one that expects a refusal fails, and a
-// forged schedule's twin names T3.
+// The twin of a schedule, as it runs: named for the schedule, so its seeds' traces are found by that
+// name; it must succeed, so one that expects a refusal fails; and a forged schedule's twin names T3.
 func twinBuilder(schedule *Schedule) Builder {
 	return func(net *Net) *Schedule {
 		twin := schedule.Twin(net)
-		if twin.Id == "" || twin.Id == schedule.Id {
-			twin.Id = schedule.Id + " twin"
-		}
+		twin.Id = schedule.Id + " twin"
 		if schedule.Forged && !slices.Contains(twin.Tiers, TierT3) {
 			twin.Tiers = append(slices.Clone(twin.Tiers), TierT3)
 		}
