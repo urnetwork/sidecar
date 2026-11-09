@@ -17,11 +17,14 @@ import (
 )
 
 // Registers every twin on redis, which then runs pushservice.HintScript, HintAckScript and
-// HintTailScript.
+// HintTailScript, and the wake token scripts, WakeTokenTimeScript and WakeTokenApplyScript
+// (push_token_twins.go).
 func RegisterPushScripts(redis *FakeRedis) {
 	redis.RegisterScript(pushservice.HintScript.Name, pushHintTwin)
 	redis.RegisterScript(pushservice.HintAckScript.Name, pushHintAckTwin)
 	redis.RegisterScript(pushservice.HintTailScript.Name, pushHintTailTwin)
+	redis.RegisterScript(pushservice.WakeTokenTimeScript.Name, pushTokenTimeTwin)
+	redis.RegisterScript(pushservice.WakeTokenApplyScript.Name, pushTokenApplyTwin)
 }
 
 // The fields of a hint entry in the order the hint script's XADD writes them, which a real stream keeps
