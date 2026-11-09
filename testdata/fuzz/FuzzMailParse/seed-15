@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("Content-Type: message/rfc822\r\n\r\nFrom: inner@sender.example\r\nSubject: inner\r\n\r\ninner body\r\n")

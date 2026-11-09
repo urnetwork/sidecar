@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("From: x@sender.example\r\nSubject: =?utf-8?Q?hi=0D=0ABcc:_evil@attacker.example?=\r\n\r\nx")
