@@ -199,11 +199,15 @@ func (self *recordWriter) queueLogIds() []Id {
 	return logIds
 }
 
-// Carries journaled entries to evs until ctx ends. See the file's header.
-func (self *recordWriter) Run(ctx context.Context) {
+// Carries journaled entries to evs until ctx ends, calling tend, when given, at each pass before it pumps. See the
+// file's header.
+func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context)) {
 	self.runLock.Lock()
 	defer self.runLock.Unlock()
 	for {
+		if tend != nil {
+			tend(ctx)
+		}
 		if self.backlogged() {
 			if err := self.drainSpool(ctx); err != nil && self.log.V(1).Enabled() {
 				self.log.Infof("[record]the spool is not drained: %s", err)

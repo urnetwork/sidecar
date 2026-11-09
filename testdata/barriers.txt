@@ -146,12 +146,16 @@ barrier record.chain.fsync.after record_chain.go
 barrier record.chain.fsync.before record_chain.go
 barrier record.chain.head.after record_chain.go
 barrier record.chain.head.before record_chain.go
+barrier record.consume.after record_ingest.go
+barrier record.consume.before record_ingest.go
 barrier record.plan.after record_slot.go
 barrier record.plan.before record_slot.go
 barrier record.presence_count.after record_presence.go
 barrier record.presence_count.before record_presence.go
 barrier record.push.after record_batch.go
 barrier record.push.before record_batch.go
+barrier record.read.after record_reader.go
+barrier record.read.before record_reader.go
 barrier record.reserve.after record_ledger.go
 barrier record.reserve.before record_ledger.go
 barrier record.taint.after record_run.go

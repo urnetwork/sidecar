@@ -144,10 +144,19 @@ type SidecarRecordArgs struct {
 	Log    Logger
 }
 
-// One network's record on this sidecar: its writer, and the push loop that carries what it writes. Safe for concurrent
-// use.
+// One network's record on this sidecar: its writer, its reader, its ingester, the approval family's log and the
+// accounting mirror, sharing one binding of evs and of the authorization state, and the loop that carries what the
+// writer holds, ingests deposits and mirrors queued events. Safe for concurrent use.
 type SidecarRecord struct {
-	writer *recordWriter
+	writer     *recordWriter
+	reader     *RecordReader
+	ingester   *RecordIngester
+	approvals  *RecordApprovals
+	accounting *RecordAccounting
+
+	stateLock sync.Mutex
+	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
+	ingestDue bool
 }
 
 // A record over args. Nothing is read until the first Append or Run.
@@ -156,7 +165,26 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 		return nil, fmt.Errorf("%w: a record needs a store, a signer and settings", ErrRecordDraftInvalid)
 	}
 	writer := newRecordWriter(args)
-	return &SidecarRecord{writer: writer}, nil
+	reader := NewRecordReader(&RecordReaderArgs{
+		SidecarId: args.SidecarId,
+		Store:     args.Store,
+		Streams:   writer.boundStreams,
+		Auth:      writer.auth,
+		Alarm:     args.Alarm,
+		Clock:     args.Clock,
+		Settings:  args.Settings,
+		Log:       args.Log,
+	})
+	self := &SidecarRecord{
+		writer:     writer,
+		reader:     reader,
+		ingester:   newRecordIngester(writer, reader),
+		approvals:  &RecordApprovals{writer: writer, reader: reader},
+		accounting: &RecordAccounting{writer: writer, reader: reader},
+		ingestDue:  true,
+	}
+	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
+	return self, nil
 }
 
 // The record's writer.
@@ -164,10 +192,72 @@ func (self *SidecarRecord) Writer() RecordWriter {
 	return self.writer
 }
 
-// Carries journaled entries to evs until ctx ends: one client generation's push loop. A second Run waits for the
-// first to return.
+// The record's reader (RECORD-M3-03).
+func (self *SidecarRecord) Reader() *RecordReader {
+	return self.reader
+}
+
+// The record's ingester (RECORD-M3-04).
+func (self *SidecarRecord) Ingester() *RecordIngester {
+	return self.ingester
+}
+
+// The approval family's log (RECORD-M3-07).
+func (self *SidecarRecord) Approvals() *RecordApprovals {
+	return self.approvals
+}
+
+// The membership and key mirror (RECORD-M3-08).
+func (self *SidecarRecord) Accounting() *RecordAccounting {
+	return self.accounting
+}
+
+// Notes that a deposit may wait, and wakes the loop.
+func (self *SidecarRecord) markIngestDue() {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.ingestDue = true
+	}()
+	self.writer.signal()
+}
+
+// Takes the ingest flag.
+func (self *SidecarRecord) takeIngestDue() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	due := self.ingestDue
+	self.ingestDue = false
+	return due
+}
+
+// One pass of the loop's own work before the writer pumps: queued events mirrored, and this device's vault ingested
+// when it writes there as a consented device and a deposit may wait.
+func (self *SidecarRecord) tend(ctx context.Context) {
+	self.accounting.mirrorQueued(ctx)
+	route, err := recordVaultRoute(self.writer.auth(), self.writer.sidecarId)
+	if err != nil || route.deposit || !self.takeIngestDue() {
+		return
+	}
+	if err := self.ingester.Ingest(ctx, route.logId); err != nil && self.writer.log.V(1).Enabled() {
+		self.writer.log.Infof("[record]an ingest pass stopped: %s", err)
+	}
+}
+
+// Carries journaled entries to evs, ingests this device's vault's deposits and mirrors queued events until ctx ends:
+// one client generation's loop. A second Run waits for the first to return.
 func (self *SidecarRecord) Run(ctx context.Context) {
-	self.writer.Run(ctx)
+	self.markIngestDue()
+	var unsubscribe func()
+	if route, err := recordVaultRoute(self.writer.auth(), self.writer.sidecarId); err == nil && !route.deposit {
+		unsubscribe = self.writer.boundStreams().Subscribe(route.logId, func(repoId Id) { self.markIngestDue() })
+	}
+	defer func() {
+		if unsubscribe != nil {
+			unsubscribe()
+		}
+	}()
+	self.writer.run(ctx, self.tend)
 }
 
 // Pushes and deposits everything queued now, retrying nothing that fails, and answers the first failure: what sleep
