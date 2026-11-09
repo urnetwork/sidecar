@@ -52,6 +52,9 @@
 //   - load, §22.8's harness conventions: an open-loop driver, the one report shape, and a sampler of
 //     heap, goroutines and Redis keys; testdata/targets.yml is R-TEST-7's ledger of what each run shows,
 //     which targets_test.go holds.
+//   - crasher.go, §22.6's crashers: CrasherSeed moves one into its target's corpus, where every go test
+//     runs it as a seed, and names its regression test beside it; testdata/fuzz/registry.yml lists
+//     every target, which check/fuzz_registry_test.go holds to the code and to §22.6.
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
 package sidecartest
