@@ -161,6 +161,62 @@ func TestRecordChainBarriersNameTheirLog(t *testing.T) {
 	}
 }
 
+// A schedule holding an append at its fsync stalls only what must follow it: the same log's Head, Pending and
+// Acknowledge answer meanwhile, another log appends, and the held append then lands at the next seq on the leaf
+// before it.
+func TestRecordChainHeldFsyncStallsOnlyItsLogsAppends(t *testing.T) {
+	writer := newTestRecordWriter(t)
+	logId := sidecar.NewId()
+	env := writer.open()
+	first := writer.seal(env, logId, 1)
+
+	logKey := hex.EncodeToString(logId[:])
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	var held atomic.Bool
+	_, remove := installTestRecordHooks(t, func(name string, key string) {
+		if name == "record.chain.fsync.before" && key == logKey && held.CompareAndSwap(false, true) {
+			close(arrived)
+			<-release
+		}
+	})
+	defer remove()
+	sealed := make(chan *sidecar.RecordSealedEntry, 1)
+	go func() {
+		entry, err := sidecar.RecordSeal(env, testChainNote(logId, "held at the fsync"))
+		if err != nil {
+			t.Error(err)
+		}
+		sealed <- entry
+	}()
+	<-arrived
+
+	head, err := env.Chain.Head(logId)
+	if err != nil || head.Seq != 1 {
+		t.Errorf("the head while an append is held is seq %d: %v", head.Seq, err)
+	}
+	pending, err := env.Chain.Pending(logId)
+	if err != nil || len(pending) != 1 || pending[0].Seq != 1 {
+		t.Errorf("%d pending while an append is held: %v", len(pending), err)
+	}
+	if err := env.Chain.Acknowledge(logId, []uint64{1}); err != nil {
+		t.Error(err)
+	}
+	other := writer.seal(env, sidecar.NewId(), 1)
+	testRequireChain(t, other, 1, [32]byte{})
+
+	close(release)
+	entry := <-sealed
+	if entry == nil {
+		t.Fatal("the held append failed")
+	}
+	testRequireChain(t, []*sidecar.RecordSealedEntry{entry}, 2, first[0].Leaf)
+	head, err = writer.open().Chain.Head(logId)
+	if err != nil || head.Seq != 2 || head.Leaf != entry.Leaf {
+		t.Errorf("the next life's head is seq %d: %v", head.Seq, err)
+	}
+}
+
 // RECORD.md section 20's chains case: a writer killed at each step between signing and pushing. Killed before the
 // fsync, the entry never existed, and the next life signs that seq afresh; killed after it, the next life finds the
 // entry pending and sends it as signed. Either way the chain has no gap and no seq is signed twice where a reader
