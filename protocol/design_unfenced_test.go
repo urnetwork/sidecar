@@ -315,6 +315,44 @@ enum BridgeWithdrawMode {
   BRIDGE_WITHDRAW_MODE_UNSPECIFIED = 0; BRIDGE_WITHDRAW_MODE_RESET = 1; BRIDGE_WITHDRAW_MODE_DRAIN = 2;
 }
 
+// sidecar/protocol/bridge/bridge.proto
+// §17.8's opaque BridgeState.rules as BridgeRules and its rows, numbered as BRIDGE-M4-06 first wrote them
+// (plan-BRIDGE-small-readings #2). They never reach a server, so no §2.8 row.
+message BridgeRules {
+  BridgeIpv4Prefix block = 1; BridgeIpv4Prefix previous_block = 2; int64 previous_block_drain_until = 3;
+  repeated fixed32 addresses = 4; repeated BridgeRuleEntry entries = 5; repeated BridgeRuleMap maps = 6;
+  repeated BridgeRuleServed served = 7; repeated BridgeRuleSubject subjects = 8; BridgeRuleEgress egress = 9;
+}
+message BridgeRuleEntry {
+  BridgeIpv4Prefix prefix = 1; BridgeRuleEntryKind kind = 2; repeated BridgeRuleLink links = 3;
+}
+message BridgeRuleLink {
+  bytes target_client_id = 1; bytes target_sidecar_id = 2; bytes target_identity_public_key = 3;
+  bytes target_member_id = 4; bytes rule_id = 5; uint32 weight = 6; bytes site_id = 7; int64 draining_since = 8;
+  int64 drain_until = 9;
+}
+message BridgeRuleMap {
+  bytes map_id = 1; BridgeIpv4Prefix match_prefix = 2; uint32 protocol = 3; repeated BridgePortRange ports = 4;
+  bytes target = 5; uint32 target_port = 6; int64 expires = 7; int64 draining_since = 8; int64 drain_until = 9;
+}
+message BridgeRuleServed {
+  bytes route_id = 1; BridgeRouteKind kind = 2; BridgeIpv4Prefix prefix = 3; BridgeIpv4Prefix exposed_prefix = 4;
+  int64 draining_since = 5; int64 drain_until = 6;
+}
+message BridgeRuleSubject {
+  bytes sidecar_id = 1; bytes member_id = 2; repeated bytes client_ids = 3; bool tagged = 4;
+  repeated BridgeRuleReach dial = 5; repeated BridgeRuleReach route = 6; repeated BridgeRuleReach exit = 7;
+}
+message BridgeRuleReach {
+  bytes grant_id = 1; BridgeIpv4Prefix prefix = 2; uint32 protocol = 3; repeated BridgePortRange ports = 4;
+  int64 expires = 5;
+}
+message BridgeRuleEgress { BridgeEgressMode mode = 1; repeated BridgeRuleLink exits = 2; }
+enum BridgeRuleEntryKind {
+  BRIDGE_RULE_ENTRY_KIND_UNSPECIFIED = 0; BRIDGE_RULE_ENTRY_KIND_LINK = 1; BRIDGE_RULE_ENTRY_KIND_UNASSIGNED = 2;
+  BRIDGE_RULE_ENTRY_KIND_CARVED = 3; BRIDGE_RULE_ENTRY_KIND_SERVICE = 4;
+}
+
 // sidecar/protocol/gkm.proto
 // §10.5's list; not_after holds ms, so it stays 64 bits.
 message ReaderKey { bytes sidecar_id = 1; bytes xwing_public_key = 2; int64 not_after = 3; }
