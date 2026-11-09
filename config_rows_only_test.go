@@ -285,7 +285,7 @@ func TestAForgedCacheEntryFailsChainVerification(t *testing.T) {
 	// links each entry after the first onto the one before it, as a forger who changed the first would
 	rechain := func(run [][]byte) [][]byte {
 		for i := 1; i < len(run); i += 1 {
-			previous := testConfigEntryChainTB(t, run[i-1])
+			previous := testConfigEntryChain(t, run[i-1])
 			run[i] = tamper(run[i], func(entry *bridge.AuthEntry) { entry.PrevChain = bytes.Clone(previous[:]) })
 		}
 		return run
