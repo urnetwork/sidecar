@@ -197,6 +197,13 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if knownNetworkId != nil && *knownNetworkId != networkId {
 		return abandon(fmt.Errorf("%w: the key is another network's than this sidecar's", ErrSidecarEnrolled))
 	}
+	if knownNetworkId == nil {
+		if _, recorded := self.connectInstanceIdOf(networkId); recorded {
+			// a network this instance holds already is its own Sidecar's to re-enroll: a second identity there would take
+			// that network's keychain (CORE-M6-01)
+			return abandon(fmt.Errorf("%w: this instance is enrolled in that network already; re-enroll it by name", ErrSidecarEnrolled))
+		}
+	}
 
 	signedBinding, err := NewSidecarIdentityBinding(&SidecarIdentityBinding{
 		NetworkId:  networkId,
@@ -320,6 +327,11 @@ func (self *Sidecar) checkEnrollable(credential *SidecarEnrollCredential) error 
 		return ErrSidecarHostCredentialStore
 	}
 	return nil
+}
+
+// The network this sidecar is enrolled in, a copy, or nil before enrollment and after a logout.
+func (self *Sidecar) NetworkId() *Id {
+	return self.enrolledNetworkId()
 }
 
 // The network this sidecar is enrolled in, a copy, or nil.
