@@ -1,0 +1,3 @@
+go test fuzz v1
+string("root.example")
+string("r-k5mzq7x2@otter-4821.acme-labs.root.example")

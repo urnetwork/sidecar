@@ -489,3 +489,44 @@ orders:
     b_sidecar: "01010101010101010101010101010101"
     b_set: false
     wins: a
+
+# Whole paths of each family (MAIL-M7-02), from Python's hashlib and base64 over the names above, so mail_paths.go and
+# these share no code. millis is the sealed receive time of the dated families, and hex the binary name.
+paths:
+  - name: message
+    millis: 1798761599999
+    hex: "11111111111111111111111111111111"
+    path: "m/202612/12/ceirceirceirceirceirceirce"
+  - name: group_ref
+    millis: 1798761599999
+    hex: "11111111111111111111111111111111"
+    path: "r/202612/12/ceirceirceirceirceirceirce"
+  - name: index
+    millis: 1798761599999
+    n: 0
+    path: "i/202612/0"
+  - name: flag
+    millis: 1798761599999
+    n: 4095
+    path: "f/202612/4095"
+  - name: vault
+    hex: "11111111111111111111111111111111"
+    path: "vault/12/ceirceirceirceirceirceirce"
+  - name: outbox
+    hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    path: "o/29/53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xa"
+  - name: outcome
+    hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    path: "or/29/53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xo53xa"
+  - name: prover
+    hex: "019a5b1000007000800000000000000a"
+    path: "p/agnfweaaabyabaaaaaaaaaaabi"
+  - name: reverse_alias
+    token: k5mzq7x2
+    path: "ra/ed/k5mzq7x2"
+  - name: address
+    address: "ada@acme.root.example"
+    path: "addr/88/ada@acme.root.example"
+  - name: burner
+    label: otter-4821
+    path: "burner/f4/otter-4821"
