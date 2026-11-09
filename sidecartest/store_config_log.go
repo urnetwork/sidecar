@@ -837,10 +837,13 @@ func NewConfigLogSuiteWorld(ctx context.Context, cluster sidecar.BlobCluster) *C
 	return &ConfigLogSuiteWorld{env: newConfigLogSuiteEnv(ctx, cluster, nil)}
 }
 
-// A network of networkId whose first device, the genesis owner, is ownerSidecarId: a route test's bound sidecar.
-func NewConfigLogSuiteWorldFor(ctx context.Context, cluster sidecar.BlobCluster, networkId sidecar.Id, ownerSidecarId sidecar.Id) *ConfigLogSuiteWorld {
+// A network of networkId whose owner is ownerMemberId (its user, in a personal network) and whose first device, the
+// genesis owner, is ownerSidecarId: a route test's network and bound sidecar.
+func NewConfigLogSuiteWorldFor(ctx context.Context, cluster sidecar.BlobCluster, networkId sidecar.Id, ownerMemberId sidecar.Id, ownerSidecarId sidecar.Id) *ConfigLogSuiteWorld {
 	env := newConfigLogSuiteEnv(ctx, cluster, nil)
 	env.networkId = networkId
+	env.ownerMemberId = ownerMemberId
+	env.owner.memberId = ownerMemberId
 	env.owner.sidecarId = ownerSidecarId
 	env.signedGenesis = env.genesis(env.owner)
 	return &ConfigLogSuiteWorld{env: env}
