@@ -76,6 +76,8 @@ type sidecarGeneration struct {
 	// schedule covers a token that close was about
 	tokenManager atomic.Pointer[sidecarTokenManager]
 	leg          sidecarLegGeneration
+	// closed once the start's post of pending statements has returned (identity_pending.go)
+	pendingDone chan struct{}
 }
 
 // connect's AuthorizationClosed for this generation's client: a close for unavailability is ignored, and anything
@@ -191,6 +193,15 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		// and Online names a generation Status and the components already see
 		generation.leg.start()
 	}
+	// what a kill or a lost answer left pending goes again, the same bytes, on the new generation's token (§5.6's
+	// sign row); one still pending waits for the next start or a caller's PostPendingStatements
+	generation.pendingDone = make(chan struct{})
+	go func() {
+		defer close(generation.pendingDone)
+		if err := self.PostPendingStatements(generationCtx); err != nil && generationCtx.Err() == nil {
+			self.log.Infof("[identity]pending statements stay pending: %s", err)
+		}
+	}()
 	if self.log.V(1).Enabled() {
 		self.log.Infof("[sidecar]generation %d started", generationNumber)
 	}
@@ -222,6 +233,9 @@ func (self *Sidecar) stopGeneration() {
 	}
 	testHookBarrier("sidecar.generation.stop.before", generation.identity.SidecarId.String())
 	generation.cancel()
+	if generation.pendingDone != nil {
+		<-generation.pendingDone
+	}
 	if generation.leg != nil {
 		generation.leg.closeAndWait()
 	}

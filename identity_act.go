@@ -73,6 +73,9 @@ var (
 	ErrSidecarActRefused = errors.New("api refused the statement")
 	// An act with no statement, or one run twice.
 	ErrSidecarActState = errors.New("the act has no statement, or has run")
+	// The act signed and kept its statements, and a post's answer was lost or api was unavailable: they stay pending
+	// and go again with the same bytes (PostPendingStatements). The decision is made; nothing is to be signed again.
+	ErrSidecarActPending = errors.New("the statements are signed and pending: their post goes again")
 )
 
 // §5.8's own-resource filings, signed from any mode: a GrantActivate of this sidecar's own approved request, a
@@ -298,8 +301,8 @@ func (self *sidecarAct) Countersign(evidence *bridge.WebAuthnEvidence) error {
 // Countersign already took evidence; then signs every statement, keeps each in the pending records, and posts each.
 // Answers each statement's entry (n, A_n), in act order. A failed, refused or non-verifying check signs nothing
 // (ErrSidecarActPresence); an act needing presence with no check is the same. A statement api refuses is dropped
-// (ErrSidecarActRefused); one whose answer is lost stays pending, and the error says so: PostPendingStatements retries
-// the same bytes.
+// (ErrSidecarActRefused); one whose answer is lost stays pending, ErrSidecarActPending, and PostPendingStatements
+// retries the same bytes.
 func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]*bridge.AuthPin, error) {
 	if len(self.statements) == 0 || self.ran {
 		return nil, ErrSidecarActState
@@ -352,7 +355,10 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 	for _, pending := range signedStatements {
 		pin, err := self.sidecar.postPendingStatement(ctx, pending)
 		if err != nil {
-			return pins, err
+			if errors.Is(err, ErrSidecarActRefused) {
+				return pins, err
+			}
+			return pins, fmt.Errorf("%w: %w", ErrSidecarActPending, err)
 		}
 		pins = append(pins, pin)
 	}

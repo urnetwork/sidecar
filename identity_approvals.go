@@ -358,8 +358,8 @@ func (self *Sidecar) PendingApprovals() ([]*SidecarApprovalItem, error) {
 
 // Decides one open item: decision is one the item's kind takes and this device may make, origin a person's
 // confirmation, never MCP, a hook or an unconfirmed control call (D-CORE-13), and check the presence check a covered
-// act runs. The item closes once its decision's statement has landed, or at once for a dismissal; one whose post was
-// lost stays open, its statement pending (identity_pending.go).
+// act runs. The item closes once its decision's statement is signed and kept, or at once for a dismissal; a post whose
+// answer was lost answers ErrSidecarActPending, its statement going again with the same bytes (identity_pending.go).
 func (self *Sidecar) DecideApproval(ctx context.Context, approvalId Id, decision string, origin SidecarActOrigin, check SidecarPresenceCheck) error {
 	if origin != SidecarActConfirmed {
 		return ErrSidecarActMode
@@ -393,8 +393,10 @@ func (self *Sidecar) DecideApproval(ctx context.Context, approvalId Id, decision
 	if !slices.Contains(kind.eligible(self, authority, item), decision) {
 		return ErrSidecarApprovalNotEligible
 	}
-	if err := kind.decide(ctx, self, authority, item, decision, origin, check); err != nil {
-		return err
+	// a statement signed and pending is a decision made: the item closes, and its post goes again on its own
+	decideErr := kind.decide(ctx, self, authority, item, decision, origin, check)
+	if decideErr != nil && !errors.Is(decideErr, ErrSidecarActPending) {
+		return decideErr
 	}
 	self.alarms.stateLock.Lock()
 	defer self.alarms.stateLock.Unlock()
@@ -408,7 +410,10 @@ func (self *Sidecar) DecideApproval(ctx context.Context, approvalId Id, decision
 			held.Decision = decision
 		}
 	}
-	return self.persistAlarmRecord(record)
+	if err := self.persistAlarmRecord(record); err != nil {
+		return err
+	}
+	return decideErr
 }
 
 // Opens an admission item for a new device of this device's member, which PendingApprovals lists with its safety
