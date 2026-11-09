@@ -377,18 +377,3 @@ func (self *Sidecar) isClosed() bool {
 	defer self.stateLock.Unlock()
 	return self.closed
 }
-
-// A core push (§6.8's core topic) of generation's client: hint is PushHint.hint, whose CoreHint body
-// (plan-CORE-core-hint-body #1) carries no authority (§5.6). At M1 nothing on the device reads the core topic's state:
-// no config verifies a revocation claim (CORE-M2-07), no floor is applied from it (PROTO-M1-04, owner decision on
-// QD-032) and no gate reads it (OPS-M1-03). So every hint is a bare resync, which changes nothing here, and a hint
-// never moves this sidecar to Revoked. PROTO-M1-06's Subscribe(PushTopicCore) is what calls this once it lands.
-func (self *Sidecar) receiveCoreHint(generation int64, hint []byte) {
-	if generation < self.lifecycleGeneration() {
-		return
-	}
-	self.stats.coreHintCount.Add(1)
-	if self.log.V(1).Enabled() {
-		self.log.Infof("[sidecar]core hint of %d bytes, a bare resync", len(hint))
-	}
-}

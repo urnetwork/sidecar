@@ -1,11 +1,14 @@
-// Sidecar.Logout, `ur logout` at M1 (§5.6): the sidecar's client is removed (POST /network/remove-client) and this
-// network's state is wiped, its keychain and directory and its sidecar.json record, so the instance holds nothing of
-// the network and a later enrollment is a first one. CORE-M2-07 adds the SidecarRevoke{removed} it signs and posts
-// first, and `--purge`.
+// Sidecar.Logout, `ur logout` (§5.6, CORE-M2-07): the sidecar signs SidecarRevoke{removed} for its own sidecar_id and
+// posts it (identity_revoke_self.go), removes its client (POST /network/remove-client), and wipes this network's state,
+// its keychain and directory and its sidecar.json record, in that order, so the instance holds nothing of the network
+// and a later enrollment is a first one.
 //
-// The removal comes first and a failed one wipes nothing, so a person can try again: wiping first would leave a live
-// client nobody holds the keys of. A generation a confirmed rejection already ended has no client to remove, so its
-// state is wiped at once. Nothing here names a connect type, so it builds on every leg.
+// Each step waits for the one before. A sign-out api does not answer stays pending in keychain.ur and nothing is
+// removed or wiped, since a wipe first would strand the statement there: the person runs ur logout again, which posts
+// the same bytes. A failed removal wipes nothing, so a person can try again: wiping first would leave a live client
+// nobody holds the keys of. A generation a confirmed rejection already ended has no client to remove, and no token to
+// post with, so its state is wiped at once, and its devices see it revoked only when another device revokes it as lost.
+// Nothing here names a connect type, so it builds on every leg.
 
 package sidecar
 
@@ -15,8 +18,10 @@ import (
 	"slices"
 )
 
-// Removes this sidecar's client and wipes this network's state. ErrSidecarNoIdentity when nothing is enrolled; the
-// instance's own errors while it is locked, failed or lost; api's refusal of the removal, which wipes nothing.
+// Signs this sidecar out of its network, removes its client and wipes this network's state. ErrSidecarNoIdentity when
+// nothing is enrolled; the instance's own errors while it is locked, failed or lost; ErrSidecarLogoutPending and
+// ErrSidecarLogoutUnverified while the sign-out cannot land; api's refusal of the sign-out or the removal. Each refusal
+// wipes nothing.
 func (self *Sidecar) Logout(ctx context.Context) error {
 	if self.instance == nil || self.sidecarApi == nil {
 		return ErrSidecarClosed
@@ -40,6 +45,10 @@ func (self *Sidecar) Logout(ctx context.Context) error {
 		return err
 	}
 	if record != nil && self.clientLive() {
+		// the sign-out lands before the client goes, and it needs that client's token to post
+		if err := self.signOut(ctx, record.identity); err != nil {
+			return err
+		}
 		byJwt, err := loadSidecarByJwt(secrets)
 		if err != nil && !errors.Is(err, ErrSidecarStoreAbsent) {
 			return err

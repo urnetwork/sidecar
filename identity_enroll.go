@@ -212,6 +212,12 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	boundGeneration, err := enrollApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.bind.after", sidecarId.String())
 	if err != nil {
+		if previous != nil && isSidecarRevokedRefusal(err) {
+			// api holds this identity revoked: a claim the config must verify before it means Revoked (CORE-M2-07)
+			if revoked, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr == nil && revoked {
+				return abandon(ErrSidecarRevoked)
+			}
+		}
 		return abandon(err)
 	}
 	if boundGeneration != generation {

@@ -400,6 +400,12 @@ func (self *Sidecar) restoreRegistrations(ctx context.Context, restorers []Sidec
 	}
 	record.keys.erase()
 	if _, err := self.sidecarApi.Bind(ctx, record.binding); err != nil {
+		if isSidecarRevokedRefusal(err) {
+			// a claim, checked against the config and never taken on api's word (CORE-M2-07)
+			if _, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr != nil {
+				self.log.Infof("[identity]a refused bind's revocation claim was not checked: %s", verifyErr)
+			}
+		}
 		return err
 	}
 	for _, restorer := range restorers {
