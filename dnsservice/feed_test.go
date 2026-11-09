@@ -593,18 +593,29 @@ func TestAdvanceUntilMovesTheClockOnlyToATimerSet(t *testing.T) {
 	}
 }
 
-// RrsetDiff names each RRset in one view and not the other, or in both and changed, sorted.
+// RrsetDiff names each RRset in one view and not the other, or in both and changed, sorted, each with
+// its kind: the new view's where it holds the RRset, else the replaced one's, so the restore step can
+// leave a challenge out whichever side it is on.
 func TestRrsetDiff(t *testing.T) {
 	settings := edgeTestSettings(t)
-	before := edgeTestView(t, settings, 5, append(edgeTestRows(), feedTestTxt("same", "x"), feedTestTxt("changed", "old"), feedTestTxt("gone", "x")))
-	after := edgeTestView(t, settings, 9, append(edgeTestRows(), feedTestTxt("same", "x"), feedTestTxt("changed", "new"), feedTestTxt("added", "x")))
+	challenge := func(label string, value string) dnsservice.DnsRecordSet {
+		set := feedTestTxt(label, value)
+		set.Kind = dnsservice.DnsRecordKindChallenge
+		return set
+	}
+	before := edgeTestView(t, settings, 5, append(edgeTestRows(), feedTestTxt("same", "x"), feedTestTxt("changed", "old"), feedTestTxt("gone", "x"), challenge("lost", "x")))
+	after := edgeTestView(t, settings, 9, append(edgeTestRows(), feedTestTxt("same", "x"), feedTestTxt("changed", "new"), feedTestTxt("added", "x"), challenge("won", "x")))
 	diff := dnsservice.RrsetDiff(before, after)
 	want := []dnsservice.DnsRecordKey{
 		{Owner: "added.net1." + edgeTestRoot, Type: dns.TypeTXT},
 		{Owner: "changed.net1." + edgeTestRoot, Type: dns.TypeTXT},
 		{Owner: "gone.net1." + edgeTestRoot, Type: dns.TypeTXT},
+		{Owner: "lost.net1." + edgeTestRoot, Type: dns.TypeTXT},
+		{Owner: "won.net1." + edgeTestRoot, Type: dns.TypeTXT},
 	}
-	if diff.Root != edgeTestRoot || diff.ReplacedSerial != 5 || diff.Serial != 9 || !slices.Equal(diff.Rrsets, want) {
+	user := feedTestTxt("x", "x").Kind
+	wantKinds := []dnsservice.DnsRecordKind{user, user, user, dnsservice.DnsRecordKindChallenge, dnsservice.DnsRecordKindChallenge}
+	if diff.Root != edgeTestRoot || diff.ReplacedSerial != 5 || diff.Serial != 9 || !slices.Equal(diff.Rrsets, want) || !slices.Equal(diff.Kinds, wantKinds) {
 		t.Errorf("diff %+v", diff)
 	}
 }
