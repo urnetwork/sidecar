@@ -169,6 +169,17 @@ func TestSocketKeyRingRegistersBothPathsOnlyInsideTheOverlap(t *testing.T) {
 	if paths, _ := ring.CompileTokenPaths(name); len(paths) != 2 {
 		t.Fatal("a compile read a clock")
 	}
+	// the registrar wakes at the overlap's end, and a file with no previous key has none
+	if untilMs, ok := ring.RegisterBothUntilMs(); !ok || untilMs != overlapEndMs {
+		t.Errorf("both until %d, %v", untilMs, ok)
+	}
+	settled, err := NewSocketKeyRing(networkId, &protocol.SocketKeyFile{CurrentKey: files["rotating"].GetCurrentKey()}, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := settled.RegisterBothUntilMs(); ok {
+		t.Errorf("a ring with no previous key registers both")
+	}
 }
 
 // A lister opens a seal under the previous key only while the file holds it.

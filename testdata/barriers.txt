@@ -195,6 +195,8 @@ barrier smtpedge.report_accept.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_accept.before smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.before smtpedgeservice/report_intake.go
+barrier socket.registrations.after socket_registrar.go
+barrier socket.registrations.before socket_registrar.go
 barrier sockets.probe.after socketsservice/service.go
 barrier sockets.probe.before socketsservice/service.go
 barrier state.commit.after keys_keychain.go
