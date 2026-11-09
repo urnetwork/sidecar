@@ -98,6 +98,10 @@ modules:
     spdx: Apache-2.0
     reason: mlsinterop's git codec oracle (§22.6)
     leg: [test]
+  - module: github.com/go-jose/go-jose/v4
+    spdx: Apache-2.0 AND BSD-3-Clause
+    reason: through Pebble, sidecartest's ACME server for certs' T2 rows (§22.9), at v4.1.6 as server requires it; its json package keeps Go's BSD-3-Clause, read from json/LICENSE
+    leg: [test]
   - module: github.com/godbus/dbus/v5
     spdx: BSD-2-Clause
     reason: v5.1.0 reaches the Secret Service over the session D-Bus for the Linux desktop key store, from cli (§5.9), which §4.7's initial list omits
@@ -130,6 +134,14 @@ modules:
     spdx: Apache-2.0 AND BSD-3-Clause AND MIT
     reason: through utls, for TLS certificate compression; and sidecartest's privacy scan, which opens zstd to look inside (§22.7)
     leg: [client, engine, cli, test]
+  - module: github.com/letsencrypt/challtestsrv
+    spdx: MPL-2.0
+    reason: through Pebble's validation authority, which reads one of its OIDs, for certs' T2 rows (§22.9); read from its LICENSE
+    leg: [test]
+  - module: github.com/letsencrypt/pebble/v2
+    spdx: MPL-2.0
+    reason: v2.10.1 is sidecartest.StartPebble's in-process ACME server, §22.9's Pebble with 5% bad nonces, for certs' T2 rows (TLS-M5-15); read from its LICENSE
+    leg: [test]
   - module: github.com/mattn/go-colorable
     spdx: MIT
     reason: through gnark's logger, for smtpproof (§14)
@@ -138,6 +150,10 @@ modules:
     spdx: MIT
     reason: through gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/mholt/acmez/v3
+    spdx: Apache-2.0
+    reason: v3.1.7 is certs' ACME client (§13.8, TLS-M5-15), its ARI, replaces, EAB and key rollover; TLS-M6-05's desktops add the cli leg (reading 17); read from its LICENSE, its THIRD-PARTY notice quoting x/crypto's BSD terms for a file it adapted
+    leg: [engine, test]
   - module: github.com/miekg/dns
     spdx: BSD-3-Clause
     reason: v1.1.72 is dnsservice's message, zone-file and RRSIG code (§12.6); it has TypeNXNAME for compact denial

@@ -28,6 +28,9 @@ type CertsCaSettings struct {
 	// Whether §13.8's repeated-set rule holds at this CA. It models LE's duplicate-certificate limit,
 	// so a set spent there moves on to the next CA, as a team adding devices quickly needs (§13.16).
 	RepeatSetLimited bool
+	// The CA's ACME directory, from certs.yml. No default: a production URL, which the host sets. Empty:
+	// no order reaches this CA, so the policy may admit to it and its order fails.
+	DirectoryUrl string
 }
 
 // What certs runs on. Safe to read concurrently once built, and never changed after.
@@ -68,6 +71,36 @@ type CertsSettings struct {
 	OrderRetryAfter time.Duration
 	// How long one store, budget or DNS call may take before it reads as failed. Positive.
 	CallTimeout time.Duration
+
+	// ACME's (TLS-M5-15).
+
+	// How often acmez polls an authorization or an order the CA did not give a Retry-After for.
+	// Default 1 s.
+	AcmePollInterval time.Duration
+	// How long acmez polls one authorization or order before it gives up. Default 5 min.
+	AcmePollTimeout time.Duration
+	// How long one order may take from its account to its chain, DNS waits included. Default 30 min,
+	// past which the order fails and its chain queues it again.
+	AcmeOrderTimeout time.Duration
+	// How long one request to a CA may take, and one ARI read, revocation or account change. Default 1 min.
+	AcmeRequestTimeout time.Duration
+	// The first wait after a /dns/* route answered 503 or did not answer, doubling to DnsRetryMaxDelay.
+	// Defaults 1 s and 1 min.
+	DnsRetryDelay    time.Duration
+	DnsRetryMaxDelay time.Duration
+	// The wait after GET /dns/ready answered waiting, before asking again. The route holds a request
+	// itself, so this only keeps a fast answer from spinning. Default 1 s.
+	DnsWaitingDelay time.Duration
+	// The wait after the canary read failing or unknown, before asking again with no new write. Default
+	// 30 s, the canary's own cadence.
+	CanaryRetryDelay time.Duration
+	// How long removing an order's challenges may take, on a context of its own. Default 30 s.
+	DnsCleanupTimeout time.Duration
+	// How old an account key is when it rolls over (RFC 8555 §7.3.5). Default a year (§13.8).
+	AccountRolloverAge time.Duration
+	// How far into its validity a certificate with no ARI window renews (§13.8: two thirds). Between 0
+	// and 1.
+	RenewalLifetimeFraction float64
 }
 
 // The design's numbers. RootDomain stays empty, so these alone do not pass Validate.
@@ -102,6 +135,17 @@ func DefaultCertsSettings() *CertsSettings {
 		AdmitBatchCount:           100,
 		OrderRetryAfter:           30 * time.Second,
 		CallTimeout:               10 * time.Second,
+		AcmePollInterval:          1 * time.Second,
+		AcmePollTimeout:           5 * time.Minute,
+		AcmeOrderTimeout:          30 * time.Minute,
+		AcmeRequestTimeout:        1 * time.Minute,
+		DnsRetryDelay:             1 * time.Second,
+		DnsRetryMaxDelay:          1 * time.Minute,
+		DnsWaitingDelay:           1 * time.Second,
+		CanaryRetryDelay:          30 * time.Second,
+		DnsCleanupTimeout:         30 * time.Second,
+		AccountRolloverAge:        365 * 24 * time.Hour,
+		RenewalLifetimeFraction:   2.0 / 3.0,
 	}
 }
 
@@ -159,10 +203,23 @@ func (self *CertsSettings) Validate() error {
 		"AdmitBatchCount":           int64(self.AdmitBatchCount),
 		"OrderRetryAfter":           int64(self.OrderRetryAfter),
 		"CallTimeout":               int64(self.CallTimeout),
+		"AcmePollInterval":          int64(self.AcmePollInterval),
+		"AcmePollTimeout":           int64(self.AcmePollTimeout),
+		"AcmeOrderTimeout":          int64(self.AcmeOrderTimeout),
+		"AcmeRequestTimeout":        int64(self.AcmeRequestTimeout),
+		"DnsRetryDelay":             int64(self.DnsRetryDelay),
+		"DnsRetryMaxDelay":          int64(self.DnsRetryMaxDelay),
+		"DnsWaitingDelay":           int64(self.DnsWaitingDelay),
+		"CanaryRetryDelay":          int64(self.CanaryRetryDelay),
+		"DnsCleanupTimeout":         int64(self.DnsCleanupTimeout),
+		"AccountRolloverAge":        int64(self.AccountRolloverAge),
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%w: %s is not positive", ErrCertsSettingsRefused, name)
 		}
+	}
+	if !(0 < self.RenewalLifetimeFraction && self.RenewalLifetimeFraction < 1) {
+		return fmt.Errorf("%w: RenewalLifetimeFraction is not between 0 and 1", ErrCertsSettingsRefused)
 	}
 	return nil
 }
