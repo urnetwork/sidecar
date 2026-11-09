@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("From: Ada Lovelace <ada@sender.example>\r\nSubject: Lunch\r\nMessage-ID: <m1@sender.example>\r\n\r\nHi Grace,\r\nnoon?\r\n")

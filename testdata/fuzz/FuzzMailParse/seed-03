@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("Subject: =?iso-8859-1?Q?Gr=FC=DFe?=\r\nContent-Type: text/plain; charset=iso-8859-1\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nGr=FC=DFe=\r\n und mehr\r\n")

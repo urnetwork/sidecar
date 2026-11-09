@@ -62,6 +62,10 @@ const (
 	mailYearMonthLast  = MailYearMonth(999912)
 )
 
+// 9999-12-31T23:59:59.999Z, the last time a four-digit year spells, in ms since the epoch: what a path's month and
+// a Received field's date are held to.
+const mailLastMillis = 253402300799999
+
 // A name a path family cannot hold, such as an effect key of the wrong length or an address with a slash. The error
 // never repeats the name (I-13).
 var ErrMailPathInvalid = errors.New("mail path name invalid")
@@ -80,9 +84,7 @@ type MailYearMonth uint32
 // The UTC month of timeMillis, ms since the epoch, held to 9999-12 at the top, the last month <yyyymm> spells, so
 // every sealed time names a path and readers that hold one time agree on it.
 func MailYearMonthOf(timeMillis uint64) MailYearMonth {
-	// 9999-12-31T23:59:59.999Z
-	const lastMillis = 253402300799999
-	if lastMillis < timeMillis {
+	if mailLastMillis < timeMillis {
 		return mailYearMonthLast
 	}
 	moment := time.UnixMilli(int64(timeMillis)).UTC()

@@ -1,5 +1,6 @@
 // ur install-daemon and ur uninstall-daemon (§5.8, R-CORE-6): the instance's daemon as a unit of the OS's service
-// manager, as the user, never idling out (unit.go). At M1, uninstall-daemon --purge has the daemon remove its client
+// manager, as the user, never idling out (unit.go), and for the default instance the native host's manifests, which
+// let URnetwork's extension reach it (native_host_manifest.go). At M1, uninstall-daemon --purge has the daemon remove its client
 // and wipe its network's state (ur logout's M1 half) before the unit goes, then deletes <state>; the SidecarRevoke
 // --purge signs is CORE-M2-07's, and retiring indexer designations CORE-M2-09's.
 
@@ -43,7 +44,34 @@ func runUrInstallDaemon(ctx context.Context, cli *urCli, options docopt.Opts) er
 		return err
 	}
 	cli.printf("the daemon of instance %s runs from its unit\n", cli.instance)
+	plan, err := cli.nativeHostPlan(env, executable)
+	if err != nil {
+		return err
+	}
+	if err := installNativeHostPlan(ctx, cli.unitRunner(cli), plan); err != nil {
+		return err
+	}
+	if plan != nil {
+		cli.printf("URnetwork's extension reaches it through ur native-host\n")
+	}
 	return nil
+}
+
+// The native host's manifests for this instance, nil when it is not the default instance or no extension id is
+// configured (native_host_manifest.go).
+func (self *urCli) nativeHostPlan(env *unitEnv, executable string) (*nativeHostPlan, error) {
+	if self.instance != nativeHostInstance {
+		return nil, nil
+	}
+	ids, err := self.nativeHostIds()
+	if err != nil {
+		return nil, err
+	}
+	stateDirectory, err := self.stateDirectory(self.instance)
+	if err != nil {
+		return nil, err
+	}
+	return nativeHostPlanFor(env, stateDirectory, self.instance, executable, ids)
 }
 
 func runUrUninstallDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
@@ -71,6 +99,13 @@ func runUrUninstallDaemon(ctx context.Context, cli *urCli, options docopt.Opts) 
 		}
 	}
 	if err := uninstallDaemonUnit(ctx, env, cli.unitRunner(cli), cli.instance, executable); err != nil {
+		return err
+	}
+	plan, err := cli.nativeHostPlan(env, executable)
+	if err != nil {
+		return err
+	}
+	if err := uninstallNativeHostPlan(ctx, cli.unitRunner(cli), plan); err != nil {
 		return err
 	}
 	if purge {
