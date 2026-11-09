@@ -1,5 +1,7 @@
-// ur logout (§5.6): at M1 it removes the sidecar's client and wipes this network's state; CORE-M2-07 adds the
-// SidecarRevoke{removed} it signs first.
+// ur logout (§5.6, CORE-M2-07): signs this device's SidecarRevoke{removed} for one network and posts it, removes its
+// client and wipes that network's state, in that order, leaving the instance's other networks running (CORE-M6-01).
+// The network is --network, else the project's .ur, else the only one (§5.8). While the sign-out cannot land, as when
+// api is out of reach, nothing is removed or wiped, and the next ur logout posts the same signed bytes.
 
 package main
 
@@ -12,14 +14,15 @@ import (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "logout",
-		usage:   "  ur logout",
-		summary: "remove this device's client and wipe its network state",
+		usage:   "  ur logout [--network=<name>]",
+		summary: "sign this device out of a network, remove its client and wipe its network state",
 		run:     runUrLogout,
 	})
 }
 
 func runUrLogout(ctx context.Context, cli *urCli, options docopt.Opts) error {
-	confirmed, err := confirmOnTty(cli, "remove this device's client and delete its keys for the network?")
+	network, _ := options.String("--network")
+	confirmed, err := confirmOnTty(cli, "sign this device out, remove its client and delete its keys for the network?")
 	if err != nil {
 		return err
 	}
@@ -27,7 +30,7 @@ func runUrLogout(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		cli.printf("nothing changed\n")
 		return nil
 	}
-	if err := cli.callDaemon(ctx, urMethodLogout, nil, true, nil); err != nil {
+	if err := cli.callDaemon(ctx, urMethodLogout, &urNetworkParams{Network: network}, true, nil); err != nil {
 		return err
 	}
 	cli.printf("logged out\n")

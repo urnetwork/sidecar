@@ -1,0 +1,23 @@
+// The core topic's hint (§5.6, §6.8; plan-CORE-core-hint-body #1): PushHint.kind CORE_HINT, its body this message, under
+// 256 B. No field carries authority (§5.6): a revocation is one only once a SidecarRevoke verifies against the config,
+// and an unknown kind or a dropped body is a bare resync. No oneof, as in push.proto.
+
+syntax = "proto3";
+package urnetwork.sidecar;
+
+option go_package = "github.com/urnetwork/sidecar/protocol";
+
+message CoreHint {
+  CoreHintKind kind = 1;
+  bytes sidecar_id = 2;            // REVOCATION only: this client's own sidecar_id
+  uint32 min_secure_version = 3;   // MIN_SECURE only
+}
+
+enum CoreHintKind {
+  CORE_HINT_KIND_UNSPECIFIED = 0;
+  CORE_HINT_KIND_REVOCATION = 1;
+  CORE_HINT_KIND_RESYNC = 2;
+  CORE_HINT_KIND_WAKE = 3;
+  CORE_HINT_KIND_MIN_SECURE = 4;
+  CORE_HINT_KIND_GATES = 5;
+}

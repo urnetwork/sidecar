@@ -304,7 +304,8 @@ func (self *Daemon) touchActivity() {
 }
 
 // The idle exit (§5.8): an auto-spawned daemon with IdleExitTimeout set closes once no session is open and none has
-// made a request for that long, unless Busy holds. Never for a unit-run daemon.
+// made a request for that long, unless something keeps it busy (daemon_idle.go), which it asks again each timeout.
+// Never for a unit-run daemon.
 func (self *Daemon) idle() {
 	timeout := self.settings.Local.IdleExitTimeout
 	if !self.settings.AutoSpawned || timeout <= 0 {
@@ -312,17 +313,9 @@ func (self *Daemon) idle() {
 	}
 	for {
 		_, changed := self.activity.Get()
-		var sessionCount int
-		var idleFor time.Duration
-		func() {
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			sessionCount = len(self.sessions)
-			idleFor = self.clock.Now().Sub(self.lastActivity)
-		}()
-		wait := timeout - idleFor
-		if sessionCount == 0 && wait <= 0 {
-			if self.settings.Busy != nil && self.settings.Busy() {
+		wait, idle := self.idleWait()
+		if idle && wait <= 0 {
+			if self.busy() {
 				wait = timeout
 			} else {
 				self.log.Infof("[daemon]idle for %s, exiting", timeout)
@@ -330,7 +323,7 @@ func (self *Daemon) idle() {
 				return
 			}
 		}
-		if 0 < sessionCount {
+		if !idle {
 			select {
 			case <-self.ctx.Done():
 				return

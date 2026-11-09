@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -143,6 +144,19 @@ type SidecarAuthority interface {
 	ProposedSince(lostAt time.Time) (n uint64, at time.Time, ok bool)
 	// Calls callback with each entry applied from now on; the answer removes it.
 	AddEntryCallback(callback SidecarAuthorityEntryFunction) func()
+}
+
+// One of §7.9's IndexerSet designations naming a device that stands: not retired.
+type SidecarIndexerDesignation struct {
+	// network: every member's searches and mirrors; member: its member's own.
+	Scope protocol.IndexerScope
+}
+
+// An authority that also answers §7.9's IndexerSet designations: TEAM's adapter once ConfigState applies them (FS-82).
+// Optional: an authority without it stands no device as an indexer.
+type SidecarIndexerAuthority interface {
+	// The designations naming sidecarId that stand, retired ones left out.
+	IndexerDesignations(sidecarId Id) []SidecarIndexerDesignation
 }
 
 // The Sidecar's installed authority, under its own lock.

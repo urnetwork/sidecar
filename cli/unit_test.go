@@ -191,3 +191,109 @@ func TestUninstallRemovesUnit(t *testing.T) {
 		}
 	}
 }
+
+// A daemon target standing this device as an indexer, recording when its designations retire into a log the unit
+// runner shares, so a test reads the order.
+type testIndexerUrDaemonTarget struct {
+	testUrDaemonTarget
+	order        *testUnitRunner
+	designations int
+	unknown      string
+	retireErr    error
+}
+
+func (self *testIndexerUrDaemonTarget) indexerDesignations() (int, string) {
+	return self.designations, self.unknown
+}
+
+func (self *testIndexerUrDaemonTarget) retireIndexers(ctx context.Context) (int, error) {
+	self.order.run(ctx, "retire")
+	if self.retireErr != nil {
+		return 0, self.retireErr
+	}
+	retired := self.designations
+	self.designations = 0
+	return retired, nil
+}
+
+// A ur whose unit installs into home on this host's OS, its commands recorded by runner.
+func newUnitTestUrCli(t *testing.T, socketPath string, home string, runner *testUnitRunner) *urCli {
+	t.Helper()
+	cli, _, _ := newTestUrCli(socketPath)
+	env := testUnitEnvs(home)[0]
+	cli.unitEnv = func() (*unitEnv, error) { return env, nil }
+	cli.unitRunner = func(cli *urCli) unitRunner { return runner.run }
+	return cli
+}
+
+// uninstall-daemon retires the device's indexer designations first, confirmed on the terminal, and only then takes
+// the unit away; a retire that cannot land, a no, or designations that cannot be read stop it, the unit standing.
+func TestUninstallRetiresFirst(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, failure := range []string{"", "refused", "unknown", "declined"} {
+		home := t.TempDir()
+		runner := &testUnitRunner{}
+		target := &testIndexerUrDaemonTarget{order: runner, designations: 2}
+		switch failure {
+		case "refused":
+			target.retireErr = errors.New("the presence check failed")
+		case "unknown":
+			target.unknown = "network synthetic: no verified config state"
+		}
+		daemon := startTestControlDaemon(t, target, nil)
+		cli := newUnitTestUrCli(t, daemon.socketPath, home, runner)
+		answer := "yes"
+		if failure == "declined" {
+			answer = "n"
+		}
+		cli.openTty = func() (urTty, error) { return &testTty{lines: []string{answer}}, nil }
+		env, _ := cli.unitEnv()
+		if err := installDaemonUnit(context.Background(), env, runner.run, "work", executable); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := unitPlanFor(env, "work", executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		installed := len(runner.ran())
+
+		code := cli.main(context.Background(), []string{"ur", "--instance", "work", "uninstall-daemon"})
+		after := runner.ran()[installed:]
+		_, statErr := os.Stat(plan.path)
+		if failure == "" {
+			if code != urExitOk || len(after) == 0 || after[0] != "retire" || target.designations != 0 {
+				t.Fatalf("a retiring uninstall: exit %d, ran %v", code, after)
+			}
+			if !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("the unit stayed: %v", statErr)
+			}
+			continue
+		}
+		if code == urExitOk || statErr != nil {
+			t.Errorf("%s: exit %d, the unit file %v", failure, code, statErr)
+		}
+		for _, command := range after {
+			if command != "retire" {
+				t.Errorf("%s: ran %q after a retire that did not land", failure, command)
+			}
+		}
+	}
+}
+
+// ur indexer add's unit: installed when absent, left alone when there.
+func TestIndexerInstallsUnitIfAbsent(t *testing.T) {
+	home := t.TempDir()
+	runner := &testUnitRunner{}
+	cli := newUnitTestUrCli(t, filepath.Join(home, "no.sock"), home, runner)
+	cli.instance = "work"
+	if installed, err := installDaemonUnitIfAbsent(context.Background(), cli); err != nil || !installed {
+		t.Fatalf("absent: %v %v", installed, err)
+	}
+	ran := len(runner.ran())
+	if installed, err := installDaemonUnitIfAbsent(context.Background(), cli); err != nil || installed || len(runner.ran()) != ran {
+		t.Fatalf("present: %v %v, ran %v", installed, err, runner.ran()[ran:])
+	}
+}

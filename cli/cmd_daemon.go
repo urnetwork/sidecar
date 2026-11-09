@@ -1,15 +1,17 @@
 // ur daemon (§5.8, D-CORE-9): one per instance, holding <state>/lock, serving the instance's socket or pipe to
-// callers of its own uid. It wires SidecarInstance on the OS backend and newOsKeyStore's wrap of U, the Daemon, and
-// one Sidecar, of the network sidecar.json records (a second waits for CORE-M6-01), unlocked by the key store's wrap
-// at start when it can be. Its control methods are the person's commands; the mcp and git modes are §16's and §11's
-// to register. Its logs go to stderr, never stdout.
+// callers of its own uid. It wires SidecarInstance on the OS backend and newOsKeyStore's wrap of U, the Daemon, and a
+// Sidecar per network sidecar.json records, all on the one instance, so one U opens every network (CORE-M6-01), plus
+// one unenrolled Sidecar a further network's enrollment takes. Each is unlocked by the key store's wrap at start when
+// it can be. Its control methods are the person's commands, a network-scoped one acting on its network argument, else
+// .ur's, else the only network (CORE-M3-05); the git mode resolves a session's <net> and hands it to §11's git service,
+// and the mcp mode is §16's to register. Its logs go to stderr, never stdout.
 //
 // --auto-spawned is the relay's: such a daemon exits when idle. --unit is its unit's (install-daemon), and never
 // idles out; neither does a daemon a person runs by hand. --ephemeral keeps everything in memory, for an ephemeral
-// enrollment (§5.6). Service urls come from §18.9's host table, the one copy of those names (QD-119), and every dial
-// goes through HTTPS_PROXY when it names a proxy (https_proxy.go); a table or a proxy ur cannot use runs no Sidecar,
-// and status says why. --port and --listen arrive with the local services they place (§11, §15;
-// plan-CORE-cli-ui-missing #6).
+// enrollment (§5.6). --port sets the first port of the local services and --listen the addresses they bind, every
+// interface otherwise (owner decision 84; plan-CORE-cli-ui-missing #6). Service urls come from §18.9's host table, the
+// one copy of those names (QD-119), and every dial goes through HTTPS_PROXY when it names a proxy (https_proxy.go); a
+// table or a proxy ur cannot use runs no Sidecar, and status says why.
 
 package main
 
@@ -19,6 +21,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/docopt/docopt-go"
@@ -43,11 +47,15 @@ const urKeyStoreDirectoryName = "keystore"
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "daemon",
-		usage:   "  ur daemon [--auto-spawned | --unit] [--ephemeral]",
+		usage:   "  ur daemon [--auto-spawned | --unit] [--ephemeral] [--port=<port>] [--listen=<ip>...]",
 		summary: "run the instance's daemon in the foreground",
 		run:     runUrDaemon,
 	})
 }
+
+// §11's git service, which EVS1-M2-38 assigns (EvsClient.ServeGit): nil until then, and the git mode refuses every
+// session with git's ERR line.
+var urDaemonGitService sidecar.DaemonGitService
 
 // status's params.
 type urStatusParams struct {
@@ -67,6 +75,19 @@ type urStatusReply struct {
 	// app, extension: stores on this host holding a network credential (D-TRUST-3), by kind alone.
 	CredentialStores []string              `json:"credential_stores,omitempty"`
 	Stats            *sidecar.SidecarStats `json:"stats,omitempty"`
+	// Each network the daemon hosts, a failed one among them (CORE-M6-01).
+	Networks []urNetworkStatus `json:"networks,omitempty"`
+	// The local services' listeners, those the LAN reaches marked (§22.5).
+	LocalListeners []sidecar.DaemonLocalListenerStatus `json:"local_listeners,omitempty"`
+}
+
+// One hosted network in status: ids and its state, nothing secret.
+type urNetworkStatus struct {
+	NetworkId  sidecar.Id  `json:"network_id"`
+	SidecarId  *sidecar.Id `json:"sidecar_id,omitempty"`
+	State      string      `json:"state"`
+	Reason     string      `json:"reason,omitempty"`
+	Generation int64       `json:"generation,omitempty"`
 }
 
 // A pass, from the terminal, in a request: a request may carry one, a reply never does.
@@ -80,12 +101,19 @@ type urPassChangeParams struct {
 	NewPass []byte `json:"new_pass"`
 }
 
-// An enrollment's request: the auth key it spends, once.
+// An enrollment's request: the auth key it spends, once, and the hosted network it re-enrolls, empty for whichever the
+// daemon picks (urDaemonNetwork.enroll).
 type urEnrollParams struct {
 	AuthKey        string `json:"auth_key"`
 	Ephemeral      bool   `json:"ephemeral,omitempty"`
 	Replace        bool   `json:"replace,omitempty"`
 	DeclaresEgress bool   `json:"declares_egress,omitempty"`
+	Network        string `json:"network,omitempty"`
+}
+
+// A network-scoped call's params: the network argument, empty for .ur's or the only one (§5.8).
+type urNetworkParams struct {
+	Network string `json:"network,omitempty"`
 }
 
 // An enrollment's reply.
@@ -93,67 +121,190 @@ type urEnrollReply struct {
 	Generation int64 `json:"generation"`
 }
 
-// What the control methods act on: the instance and, once service urls exist, its Sidecar. A test stands a fake in.
+// What the control methods act on: the instance and, once service urls exist, its Sidecars. A test stands a fake in.
 type urDaemonTarget interface {
-	// The Sidecar's status, or why none runs.
+	// The first hosted network's status, or why none runs.
 	status() (sidecar.SidecarStatus, string)
 	stats() sidecar.SidecarStats
 	unlock(pass []byte) error
 	lock()
-	enroll(ctx context.Context, credential *sidecar.SidecarEnrollCredential) (int64, error)
-	logout(ctx context.Context) error
+	// Enrolls into network, a hosted one by name, or, empty, the one urDaemonNetwork.enroll picks.
+	enroll(ctx context.Context, credential *sidecar.SidecarEnrollCredential, network string) (int64, error)
+	// Logs the hosted network networkId out, leaving the others running.
+	logout(ctx context.Context, networkId sidecar.Id) error
 	changePass(oldPass []byte, newPass []byte) error
 	rotateKeychain(ctx context.Context, pass []byte) error
 }
 
-// The daemon's instance and Sidecar.
+// A target that hosts several networks and local listeners, for status's lists.
+type urNetworksTarget interface {
+	networkStatuses() []urNetworkStatus
+	localListeners() []sidecar.DaemonLocalListenerStatus
+}
+
+// The daemon's instance and its Sidecars, one per network (CORE-M6-01), and the unenrolled one a further network's
+// enrollment takes, which joins the daemon's registry once it has a network. Safe for concurrent use.
 type urDaemonNetwork struct {
 	instance  *sidecar.SidecarInstance
-	sidecar   *sidecar.Sidecar
+	daemon    *sidecar.Daemon
 	noSidecar string
+	// a running Sidecar on the instance's store of networkId, nil for one not enrolled yet
+	start func(networkId *sidecar.Id) (*sidecar.Sidecar, error)
+	// ends a Sidecar the daemon no longer hosts
+	stop func(running *sidecar.Sidecar)
+
+	// one enrollment at a time, since the further network's Sidecar joins the registry when it lands
+	enrollLock sync.Mutex
+
+	stateLock sync.Mutex
+	further   *sidecar.Sidecar
+}
+
+// The hosted Sidecars, in network order.
+func (self *urDaemonNetwork) hosted() []sidecar.DaemonNetwork {
+	if self.daemon == nil {
+		return nil
+	}
+	return self.daemon.Sidecars()
+}
+
+// The Sidecar a further network's enrollment takes, started when there is none.
+func (self *urDaemonNetwork) furtherSidecar() (*sidecar.Sidecar, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.further != nil {
+		return self.further, nil
+	}
+	if self.start == nil {
+		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	}
+	further, err := self.start(nil)
+	if err != nil {
+		return nil, err
+	}
+	self.further = further
+	return further, nil
 }
 
 func (self *urDaemonNetwork) status() (sidecar.SidecarStatus, string) {
-	if self.sidecar == nil {
-		return sidecar.SidecarStatus{}, self.noSidecar
+	if hosted := self.hosted(); 0 < len(hosted) {
+		return hosted[0].Sidecar.Status(), ""
 	}
-	return self.sidecar.Status(), ""
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.further != nil {
+		return self.further.Status(), ""
+	}
+	return sidecar.SidecarStatus{}, self.noSidecar
+}
+
+func (self *urDaemonNetwork) networkStatuses() []urNetworkStatus {
+	statuses := []urNetworkStatus{}
+	for _, network := range self.hosted() {
+		status := network.Sidecar.Status()
+		networkStatus := urNetworkStatus{
+			NetworkId:  network.NetworkId,
+			State:      string(status.State),
+			Reason:     string(status.Reason),
+			Generation: status.Generation,
+		}
+		if identity := network.Sidecar.Identity(); identity != nil {
+			networkStatus.SidecarId = &identity.SidecarId
+		}
+		statuses = append(statuses, networkStatus)
+	}
+	return statuses
+}
+
+func (self *urDaemonNetwork) localListeners() []sidecar.DaemonLocalListenerStatus {
+	if self.daemon == nil {
+		return nil
+	}
+	return self.daemon.LocalListeners()
 }
 
 func (self *urDaemonNetwork) stats() sidecar.SidecarStats {
-	if self.sidecar == nil {
-		return sidecar.SidecarStats{}
+	if hosted := self.hosted(); 0 < len(hosted) {
+		return hosted[0].Sidecar.Stats()
 	}
-	return self.sidecar.Stats()
+	return sidecar.SidecarStats{}
 }
 
+// U opens every network's keychain at once (§5.9): the instance's unlock, then each Sidecar looks again.
 func (self *urDaemonNetwork) unlock(pass []byte) error {
-	if self.sidecar != nil {
-		return self.sidecar.Unlock(pass)
+	if err := self.instance.Unlock(pass); err != nil {
+		return err
 	}
-	return self.instance.Unlock(pass)
+	for _, network := range self.hosted() {
+		network.Sidecar.Unlock(nil)
+	}
+	return nil
 }
 
 func (self *urDaemonNetwork) lock() {
 	self.instance.Lock()
 }
 
-func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.SidecarEnrollCredential) (int64, error) {
-	if self.sidecar == nil {
-		credential.Erase()
-		return 0, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+// Enrolls credential: into the hosted network named, re-enrolling it; else, with no network named, into the only
+// hosted network when it waits to re-enroll, and otherwise as a further network through the unenrolled Sidecar, which
+// then joins the registry under the network its enrollment names. A further enrollment whose key is for a network
+// the instance holds is refused (Sidecar.Enroll), naming the way to re-enroll that one.
+func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.SidecarEnrollCredential, network string) (int64, error) {
+	self.enrollLock.Lock()
+	defer self.enrollLock.Unlock()
+	hosted := self.hosted()
+	var target *sidecar.Sidecar
+	switch {
+	case network != "":
+		networkId, err := self.daemon.ResolveNetwork(&sidecar.DaemonHello{Mode: sidecar.DaemonModeControl}, network)
+		if err != nil {
+			credential.Erase()
+			return 0, err
+		}
+		target, _ = self.daemon.SidecarForNetwork(networkId)
+	case len(hosted) == 1 && hosted[0].Sidecar.Status().State == sidecar.SidecarStateUnenrolled:
+		target = hosted[0].Sidecar
 	}
-	if err := self.sidecar.Enroll(ctx, credential); err != nil {
+	further := target == nil
+	if further {
+		var err error
+		target, err = self.furtherSidecar()
+		if err != nil {
+			credential.Erase()
+			return 0, err
+		}
+	}
+	if err := target.Enroll(ctx, credential); err != nil {
 		return 0, err
 	}
-	return self.sidecar.Status().Generation, nil
+	if further {
+		networkId := target.NetworkId()
+		if networkId == nil {
+			return 0, errors.New("the enrollment named no network")
+		}
+		if err := self.daemon.AddSidecar(*networkId, target); err != nil {
+			return 0, err
+		}
+		self.stateLock.Lock()
+		self.further = nil
+		self.stateLock.Unlock()
+	}
+	return target.Status().Generation, nil
 }
 
-func (self *urDaemonNetwork) logout(ctx context.Context) error {
-	if self.sidecar == nil {
-		return fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+// Logs networkId out (CORE-M2-07) and stops hosting it; the other networks run on.
+func (self *urDaemonNetwork) logout(ctx context.Context, networkId sidecar.Id) error {
+	running, ok := self.daemon.SidecarForNetwork(networkId)
+	if !ok {
+		return fmt.Errorf("no sidecar runs for network %s", networkId)
 	}
-	return self.sidecar.Logout(ctx)
+	if err := running.Logout(ctx); err != nil {
+		return err
+	}
+	if removed := self.daemon.RemoveSidecar(networkId); removed != nil && self.stop != nil {
+		self.stop(removed)
+	}
+	return nil
 }
 
 func (self *urDaemonNetwork) changePass(oldPass []byte, newPass []byte) error {
@@ -162,6 +313,23 @@ func (self *urDaemonNetwork) changePass(oldPass []byte, newPass []byte) error {
 
 func (self *urDaemonNetwork) rotateKeychain(ctx context.Context, pass []byte) error {
 	return self.instance.RotateKeychain(ctx, pass)
+}
+
+// The only hosted network's Sidecar, for a method that does not name one yet: ur approve's. Several answer
+// FAILED_PRECONDITION's error naming them (CORE-M3-05).
+func (self *urDaemonNetwork) onlySidecar() (*sidecar.Sidecar, error) {
+	if self.daemon == nil {
+		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	}
+	networkId, err := self.daemon.ResolveNetwork(&sidecar.DaemonHello{Mode: sidecar.DaemonModeControl}, "")
+	if err != nil {
+		return nil, err
+	}
+	running, ok := self.daemon.SidecarForNetwork(networkId)
+	if !ok {
+		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	}
+	return running, nil
 }
 
 // Registers the control methods on daemon, over target. keyStoreKind is what status names, and hostStores the scan
@@ -212,6 +380,10 @@ func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind os
 				for _, store := range hostStores() {
 					reply.CredentialStores = append(reply.CredentialStores, store.Kind)
 				}
+				if networks, ok := target.(urNetworksTarget); ok {
+					reply.Networks = networks.networkStatuses()
+					reply.LocalListeners = networks.localListeners()
+				}
 				if params.Stats {
 					stats := target.stats()
 					reply.Stats = &stats
@@ -251,7 +423,7 @@ func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind os
 					DeclaresEgress: params.DeclaresEgress,
 				}
 				params.AuthKey = ""
-				generation, err := target.enroll(ctx, credential)
+				generation, err := target.enroll(ctx, credential, params.Network)
 				if err != nil {
 					return nil, err
 				}
@@ -259,9 +431,10 @@ func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind os
 			},
 		},
 		{
-			Name: urMethodLogout,
+			Name:    urMethodLogout,
+			Network: true,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
-				return nil, target.logout(ctx)
+				return nil, target.logout(ctx, call.NetworkId)
 			},
 		},
 		{
@@ -369,12 +542,22 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		machineId = sidecar.SidecarMachineId()
 	}
 
+	if port, _ := options.String("--port"); port != "" {
+		firstPort, err := strconv.Atoi(port)
+		if err != nil || firstPort < 1 || 65535-3 < firstPort {
+			return fmt.Errorf("--port takes a port from 1 to %d", 65535-3)
+		}
+		settings.LocalSettings.FirstPort = firstPort
+	}
+	listen, _ := options["--listen"].([]string)
+
 	daemon, err := sidecar.NewDaemon(ctx, &sidecar.DaemonSettings{
 		Instance:       cli.instance,
 		StateDirectory: stateDirectory,
 		Local:          settings.LocalSettings,
 		AutoSpawned:    autoSpawned,
 		Version:        sidecar.Version,
+		Listen:         listen,
 		Log:            log,
 	})
 	if err != nil {
@@ -395,35 +578,70 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}
 	defer instance.Close()
 
-	network := &urDaemonNetwork{instance: instance}
+	// every Sidecar this daemon starts, closed at its end
+	var runningLock sync.Mutex
+	runningSidecars := map[*sidecar.Sidecar]bool{}
+	closeSidecar := func(running *sidecar.Sidecar) {
+		runningLock.Lock()
+		delete(runningSidecars, running)
+		runningLock.Unlock()
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		running.CloseAndWait(closeCtx)
+	}
+	defer func() {
+		runningLock.Lock()
+		remaining := []*sidecar.Sidecar{}
+		for running := range runningSidecars {
+			remaining = append(remaining, running)
+		}
+		runningLock.Unlock()
+		for _, running := range remaining {
+			closeSidecar(running)
+		}
+	}()
+	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar}
 	if urlsErr != nil {
 		network.noSidecar = urlsErr.Error()
 		log.Warningf("[ur]%s", urlsErr)
 	} else {
-		var networkId *sidecar.Id
-		records := instance.Networks()
-		if 0 < len(records) {
-			networkId = &records[0].NetworkId
-			if 1 < len(records) {
-				log.Warningf("[ur]%d networks are recorded, and one daemon runs one until several networks land", len(records))
+		network.start = func(networkId *sidecar.Id) (*sidecar.Sidecar, error) {
+			running, err := sidecar.NewSidecar(ctx, &urSidecarHost{store: instance.Store(networkId), keyStore: keyStore}, nil, settings)
+			if err != nil {
+				return nil, err
+			}
+			runningLock.Lock()
+			runningSidecars[running] = true
+			runningLock.Unlock()
+			return running, nil
+		}
+		// a Sidecar per recorded network, each on the one instance, so the key store's wrap of U opens them all
+		for _, record := range instance.Networks() {
+			networkId := record.NetworkId
+			running, err := network.start(&networkId)
+			if err != nil {
+				log.Warningf("[ur]network %s runs no sidecar: %s", networkId, err)
+				continue
+			}
+			if err := daemon.AddSidecar(networkId, running); err != nil {
+				log.Warningf("[ur]network %s: %s", networkId, err)
+				closeSidecar(running)
 			}
 		}
-		running, err := sidecar.NewSidecar(ctx, &urSidecarHost{store: instance.Store(networkId), keyStore: keyStore}, nil, settings)
-		if err != nil {
-			network.noSidecar = err.Error()
-			log.Warningf("[ur]no sidecar runs: %s", err)
-		} else {
-			network.sidecar = running
-			defer func() {
-				closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				running.CloseAndWait(closeCtx)
-			}()
-			// the key store's wrap of U; a pass-only instance stays Locked until ur unlock
-			if err := running.Unlock(nil); err != nil && log.V(1).Enabled() {
-				log.Infof("[ur]the keychain stays locked: %s", err)
+		if len(daemon.Sidecars()) == 0 {
+			if _, err := network.furtherSidecar(); err != nil {
+				network.noSidecar = err.Error()
+				log.Warningf("[ur]no sidecar runs: %s", err)
 			}
 		}
+		// the key store's wrap of U; a pass-only instance stays Locked until ur unlock
+		if err := instance.Unlock(nil); err != nil && log.V(1).Enabled() {
+			log.Infof("[ur]the keychain stays locked: %s", err)
+		}
+	}
+	if err := daemon.RegisterMode(sidecar.DaemonModeGit, sidecar.NewDaemonGitMode(daemon, urDaemonGitService)); err != nil {
+		daemon.Close()
+		return err
 	}
 	if err := registerUrDaemonMethods(daemon, cli.instance, network, keyStoreKind, sidecar.HostCredentialStores); err != nil {
 		daemon.Close()

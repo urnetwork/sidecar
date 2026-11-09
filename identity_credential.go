@@ -6,6 +6,7 @@
 package sidecar
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -14,8 +15,9 @@ var (
 	// A pre-approved key's bundle, which signs this sidecar's own SidecarAdmit (§5.6), refused whole until the verified
 	// log can give its Delegation's row (TEAM-M2-10), rather than half-applied: FAILED_PRECONDITION.
 	ErrSidecarEnrollBundle = errors.New("a pre-approved auth key's bundle cannot be applied until admission lands")
-	// An sdk host's child token (§5.6's sdk host row), refused until CORE-M8-01.
-	ErrSidecarEnrollChild = errors.New("a child enrollment arrives with sdk hosts")
+	// A child token minted elsewhere, which carries no admin_refused this sidecar saw (D-CORE-7): an sdk host enrolls
+	// through MintChild (CORE-M8-01), and a pairing's token waits for CORE-M8-02.
+	ErrSidecarEnrollChild = errors.New("a child token alone cannot be enrolled: its mint must be this sidecar's")
 	// api did not confirm admin_refused, so nothing was kept and the client was removed, best effort (D-CORE-7): the
 	// daemon must not start on a client that could administer the network.
 	ErrSidecarEnrollNotAdminRefused = errors.New("api did not confirm the client refuses administration")
@@ -44,9 +46,14 @@ type SidecarEnrollCredential struct {
 	// A pre-approved key's decoded #<bundle>, client-only, which a caller that parsed the key itself may set
 	// (TEAM-M1-05's ParseAuthKey). Refused until CORE-M2-01, as one in AuthKey is.
 	Bundle *AuthKeyBundle
-	// An sdk host's child token, which the device's token minted with admin_refused (§5.6). CORE-M8-01's: refused
-	// until then.
+	// A child token minted elsewhere, as a pairing's would be (§5.8). It carries no mint answer this sidecar saw
+	// confirm admin_refused (D-CORE-7), so Enroll refuses it alone; an sdk host enrolls through MintChild.
 	ChildJwt string
+	// An sdk host's mint of this sidecar's client as a child of its device client (§5.6's sdk host row, CORE-M8-01):
+	// POST /network/auth-client on the device's token, admin_refused and strict_exp, naming clientPublicKey, this
+	// generation's ClientKey. The device's token stays the host's; only the child's answer comes back, and Enroll keeps
+	// nothing unless it confirms both marks.
+	MintChild func(ctx context.Context, clientPublicKey []byte) (*SidecarAuthClientResult, error)
 	// The keychain stays in memory and is never written: the instance must be on a memory backend (§5.6). Reaping
 	// the client revokes it (§7.10).
 	Ephemeral bool
@@ -77,6 +84,7 @@ type SidecarEnrollAnchor struct {
 func (self *SidecarEnrollCredential) Erase() {
 	self.AuthKey = ""
 	self.ChildJwt = ""
+	self.MintChild = nil
 	if self.Bundle != nil {
 		self.Bundle.Erase()
 	}
@@ -85,7 +93,7 @@ func (self *SidecarEnrollCredential) Erase() {
 // Says what kind of credential it is, never any of it.
 func (self *SidecarEnrollCredential) String() string {
 	switch {
-	case self.ChildJwt != "":
+	case self.ChildJwt != "" || self.MintChild != nil:
 		return "SidecarEnrollCredential{child}"
 	case self.Bundle != nil:
 		return "SidecarEnrollCredential{auth key, pre-approved}"

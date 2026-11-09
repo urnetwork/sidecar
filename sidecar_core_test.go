@@ -728,7 +728,7 @@ func TestComponentNamesAreChecked(t *testing.T) {
 	}
 }
 
-// A host whose store is no instance's, or that brings its own TokenSource before CORE-M8-01, is refused.
+// A host whose store is no instance's, or no host at all, is refused.
 func TestNewSidecarRefusesWhatItCannotRun(t *testing.T) {
 	settings := testSidecarSettings(newTestSidecarPlatform())
 	if _, err := NewSidecar(context.Background(), &testSidecarHost{store: refusingTestStore{}}, nil, settings); err == nil {

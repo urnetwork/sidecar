@@ -62,6 +62,8 @@ type Sidecar struct {
 	headCheckStatuses sidecarHeadCheckStatuses
 	// §16's ledger and spend check behind Authorize (sidecar_gate.go).
 	gates sidecarGates
+	// A core hint's revocation claim being checked (identity_revoke_self.go).
+	revocationClaims sidecarRevocationClaims
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle

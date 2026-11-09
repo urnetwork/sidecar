@@ -89,6 +89,12 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 		return fmt.Errorf("%w: no credential", ErrSidecarApiArgs)
 	}
 	defer credential.Erase()
+	if credential.MintChild != nil {
+		if credential.ChildJwt != "" || credential.AuthKey != "" || credential.Bundle != nil {
+			return fmt.Errorf("%w: a child enrollment takes its mint alone", ErrSidecarApiArgs)
+		}
+		return self.enrollChild(ctx, credential)
+	}
 	if credential.ChildJwt != "" {
 		return ErrSidecarEnrollChild
 	}
@@ -197,6 +203,13 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if knownNetworkId != nil && *knownNetworkId != networkId {
 		return abandon(fmt.Errorf("%w: the key is another network's than this sidecar's", ErrSidecarEnrolled))
 	}
+	if knownNetworkId == nil {
+		if _, recorded := self.connectInstanceIdOf(networkId); recorded {
+			// a network this instance holds already is its own Sidecar's to re-enroll: a second identity there would take
+			// that network's keychain (CORE-M6-01)
+			return abandon(fmt.Errorf("%w: this instance is enrolled in that network already; re-enroll it by name", ErrSidecarEnrolled))
+		}
+	}
 
 	signedBinding, err := NewSidecarIdentityBinding(&SidecarIdentityBinding{
 		NetworkId:  networkId,
@@ -212,6 +225,12 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	boundGeneration, err := enrollApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.bind.after", sidecarId.String())
 	if err != nil {
+		if previous != nil && isSidecarRevokedRefusal(err) {
+			// api holds this identity revoked: a claim the config must verify before it means Revoked (CORE-M2-07)
+			if revoked, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr == nil && revoked {
+				return abandon(ErrSidecarRevoked)
+			}
+		}
 		return abandon(err)
 	}
 	if boundGeneration != generation {
@@ -314,6 +333,11 @@ func (self *Sidecar) checkEnrollable(credential *SidecarEnrollCredential) error 
 		return ErrSidecarHostCredentialStore
 	}
 	return nil
+}
+
+// The network this sidecar is enrolled in, a copy, or nil before enrollment and after a logout.
+func (self *Sidecar) NetworkId() *Id {
+	return self.enrolledNetworkId()
 }
 
 // The network this sidecar is enrolled in, a copy, or nil.

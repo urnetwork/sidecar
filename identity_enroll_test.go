@@ -96,6 +96,9 @@ type testEnrollApi struct {
 	bindRefusal   *testApiRefusal
 	onBind        func()
 	generationsBy map[Id]int64
+	// POST /network/config/delta's next answers, "ok", "lost" or "refused", ok when they run out; and its posts
+	deltaAnswers []string
+	deltaPosts   [][]byte
 	// what it saw
 	paths    []string
 	bodies   [][]byte
@@ -176,6 +179,26 @@ func (self *testEnrollApi) RoundTrip(request *http.Request) (*http.Response, err
 		}
 		self.generationsBy[binding.SidecarId] = binding.Generation
 		return testApiAnswer(http.StatusOK, map[string]int64{"generation": binding.Generation})
+	case "/network/config/delta":
+		wire := &sidecarConfigDeltaWire{}
+		if err := json.Unmarshal(body, wire); err != nil {
+			return testApiAnswer(http.StatusBadRequest, map[string]string{"error": "bad", "code": "bad_request"})
+		}
+		self.deltaPosts = append(self.deltaPosts, wire.Signed)
+		answer := "ok"
+		if 0 < len(self.deltaAnswers) {
+			answer = self.deltaAnswers[0]
+			self.deltaAnswers = self.deltaAnswers[1:]
+		}
+		switch answer {
+		case "lost":
+			return nil, errors.New("the answer was lost")
+		case "refused":
+			return testApiAnswer(http.StatusForbidden, map[string]string{"error": "refused at the tip", "code": "config_refused"})
+		}
+		chain := make([]byte, 32)
+		chain[0] = byte(len(self.deltaPosts))
+		return testApiAnswer(http.StatusOK, map[string]any{"n": 100 + len(self.deltaPosts), "chain": chain})
 	case "/network/remove-client":
 		if self.removeRefusal != nil {
 			return testApiAnswer(self.removeRefusal.status, map[string]string{"error": "synthetic refusal", "code": self.removeRefusal.code})
@@ -647,6 +670,8 @@ func TestLogoutRemovesTheClientAndWipes(t *testing.T) {
 	if len(networkFiles(t, world.backend, identity.NetworkId)) == 0 {
 		t.Fatal("the enrollment wrote no network files")
 	}
+	// a verified log that never admitted it: nothing to sign out of (CORE-M2-07)
+	world.installAuthority(t, nil)
 
 	if err := world.sidecar.Logout(context.Background()); err != nil {
 		t.Fatal(err)
@@ -681,6 +706,7 @@ func TestLogoutKeepsEverythingWhenRemovalFails(t *testing.T) {
 	}
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
 	identity := world.sidecar.currentIdentity()
+	world.installAuthority(t, nil)
 	before := backendSnapshot(t, world.backend)
 	world.api.removeRefusal = &testApiRefusal{status: http.StatusServiceUnavailable, code: "unavailable"}
 	if err := world.sidecar.Logout(context.Background()); err == nil {

@@ -26,6 +26,7 @@ const testProtoPackage = "urnetwork.sidecar"
 var testProtoFiles = []string{
 	"protocol/acl.proto",
 	"protocol/config.proto",
+	"protocol/core.proto",
 	"protocol/directory.proto",
 	"protocol/envelope.proto",
 	"protocol/evs.proto",

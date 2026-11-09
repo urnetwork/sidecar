@@ -38,6 +38,24 @@ type SidecarComponent interface {
 	Close()
 }
 
+// Optional beside SidecarComponent: whether the component keeps its daemon from idling out, as mail, sockets and bridge
+// do while they serve (§5.8). The daemon's idle rule asks each component this, never a list of names
+// (daemon_idle.go). A component without it keeps nothing up.
+type SidecarActiveComponent interface {
+	// Whether it serves now. Called from the daemon's idle loop: it must not block.
+	Active() bool
+}
+
+// Whether any listed component is active.
+func (self *sidecarConnectLeg) componentsActive() bool {
+	for _, component := range self.componentList() {
+		if active, ok := component.(SidecarActiveComponent); ok && active.Active() {
+			return true
+		}
+	}
+	return false
+}
+
 // One component's view of one client generation (§5.4). Immutable: a new generation brings a new env.
 type SidecarEnv struct {
 	// Ends with the generation, or when the component is removed.

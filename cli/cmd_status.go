@@ -1,8 +1,8 @@
-// ur status (§5.4, §18.5): the Sidecar's state, its reason and the bound client generation, which store wraps U,
-// and any store on this host holding a network credential (D-TRUST-3); --stats adds SidecarStats' counters, which
-// carry no requester, repo or query label (I-13). The daemon's reply never holds a token, a key or the pass, which
-// its reply walk refuses (daemon_rpc.go). Then §18.9's host probes, the rung and any interception
-// (cmd_status_hosts.go).
+// ur status (§5.4, §18.5): each network's state, its reason and the bound client generation, a failed network among
+// them (CORE-M6-01), which store wraps U, any store on this host holding a network credential (D-TRUST-3), and each
+// local listener the LAN can reach, marked LAN-exposed (§22.5, D-TRUST-8); --stats adds SidecarStats' counters, which
+// carry no requester, repo or query label (I-13). The daemon's reply never holds a token, a key or the pass, which its
+// reply walk refuses (daemon_rpc.go). Then §18.9's host probes, the rung and any interception (cmd_status_hosts.go).
 
 package main
 
@@ -55,6 +55,20 @@ func printUrStatus(cli *urCli, reply *urStatusReply) {
 		}
 		fmt.Fprintf(out, "state:      %s\n", state)
 		fmt.Fprintf(out, "generation: %d\n", reply.Generation)
+	}
+	for _, network := range reply.Networks {
+		state := network.State
+		if network.Reason != "" {
+			state += " (" + network.Reason + ")"
+		}
+		fmt.Fprintf(out, "network:    %s  %s, generation %d\n", network.NetworkId, state, network.Generation)
+	}
+	for _, listener := range reply.LocalListeners {
+		exposure := "loopback only"
+		if listener.LanExposed {
+			exposure = "LAN-exposed"
+		}
+		fmt.Fprintf(out, "listening:  %s on %s (%s)\n", listener.Service, strings.Join(listener.Addresses, ", "), exposure)
 	}
 	keyStore := reply.KeyStore
 	if keyStore == string(osKeyStoreKeyFile) {

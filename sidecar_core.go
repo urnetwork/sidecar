@@ -212,7 +212,7 @@ func (self *Sidecar) reconcileOpen() {
 		self.leaveForUnenrolled("")
 		return
 	}
-	connectInstanceId, ok := self.connectInstanceIdOf(*networkId)
+	connectInstanceId, child, ok := self.networkRecordOf(*networkId)
 	if !ok {
 		// enrollment records the network last, so an identity with no record is an enrollment a kill cut short
 		self.log.Warningf("[sidecar]an identity with no network record does not start")
@@ -229,7 +229,18 @@ func (self *Sidecar) reconcileOpen() {
 		clientKeySeed:     record.keys.clientKeySeedCopy(),
 		binding:           bytes.Clone(record.binding),
 		secrets:           secrets,
+		child:             child,
 	})
+}
+
+// The connect InstanceId and child flag sidecar.json keeps for the network.
+func (self *Sidecar) networkRecordOf(networkId Id) (Id, bool, bool) {
+	for _, record := range self.instance.Networks() {
+		if record.NetworkId == networkId {
+			return record.ConnectInstanceId, record.Child, true
+		}
+	}
+	return Id{}, false, false
 }
 
 // The connect InstanceId sidecar.json keeps for the network, so a restart keeps the resident (§5.9).
@@ -376,19 +387,4 @@ func (self *Sidecar) isClosed() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.closed
-}
-
-// A core push (§6.8's core topic) of generation's client: hint is PushHint.hint, whose CoreHint body
-// (plan-CORE-core-hint-body #1) carries no authority (§5.6). At M1 nothing on the device reads the core topic's state:
-// no config verifies a revocation claim (CORE-M2-07), no floor is applied from it (PROTO-M1-04, owner decision on
-// QD-032) and no gate reads it (OPS-M1-03). So every hint is a bare resync, which changes nothing here, and a hint
-// never moves this sidecar to Revoked. PROTO-M1-06's Subscribe(PushTopicCore) is what calls this once it lands.
-func (self *Sidecar) receiveCoreHint(generation int64, hint []byte) {
-	if generation < self.lifecycleGeneration() {
-		return
-	}
-	self.stats.coreHintCount.Add(1)
-	if self.log.V(1).Enabled() {
-		self.log.Infof("[sidecar]core hint of %d bytes, a bare resync", len(hint))
-	}
 }

@@ -37,6 +37,9 @@ type SidecarNetworkRecord struct {
 	// connect's InstanceId, kept so a restart keeps the resident (§5.9). Never the instance id
 	// above it, which stays on this device.
 	ConnectInstanceId Id `json:"connect_instance_id"`
+	// The client is a child of a device client, an sdk host's or a pairing's, so a confirmed rejection
+	// of it reads as parent_lost (plan-CORE-parent-lost-signal).
+	Child bool `json:"child,omitempty"`
 }
 
 // The service urls an instance was set up against.
