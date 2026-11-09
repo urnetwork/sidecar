@@ -1,17 +1,20 @@
 //go:build !sidecar_http && !js && !ios && !android && !sdk_mobile_bind
 
 // EVS1-M2-33's tests: a mount created and reopened from the sealed store, its bare repository's settings and its
-// clone's committer; a ref lock held by sync blocking receive until released; a git below 2.34 refused by name.
+// clone's committer; the bare repository beside its sealed mirror, in <state>'s modes, gone with the network; a stored
+// record naming no path; a ref lock held by sync blocking receive until released; a git below 2.34 refused by name.
 
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +98,9 @@ func TestEvsMountCreatesAndReopens(t *testing.T) {
 	if got := config(info.BareDir, "core.hooksPath", false); !strings.HasSuffix(got, ".hooks") {
 		t.Errorf("hooksPath %q", got)
 	}
+	if got := config(info.BareDir, "core.sharedRepository", false); got != "0600" {
+		t.Errorf("sharedRepository %q", got)
+	}
 	// absent is sha1, git's default; only a sha256 repository names the extension
 	if out, err := git.Run(context.Background(), info.BareDir, "rev-parse", "--show-object-format"); err != nil || strings.TrimSpace(string(out)) != "sha1" {
 		t.Errorf("object format %q %v", out, err)
@@ -123,6 +129,138 @@ func TestEvsMountCreatesAndReopens(t *testing.T) {
 	}
 	mount, ok := again.Get(repoId)
 	if !ok || mount.BareDir != info.BareDir || mount.Dir != clone || mount.AgentLabel != "agent one" {
+		t.Errorf("reopened %+v", mount)
+	}
+}
+
+// The sealed mirror layout on a desktop: a mount's bare repository and hooks sit in the network's plaintext git tree
+// under <state>, beside the evs component's sealed directory that holds the repo's mirror and never inside it, with
+// <state>'s 0700 and 0600 modes on what git writes later too; and leaving the network takes the plaintext with the
+// sealed state.
+func TestEvsMountSitsBesideItsSealedMirror(t *testing.T) {
+	git := evsTestGitRunner(t)
+	state := t.TempDir()
+	backend, err := NewSidecarOsBackend(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := newInstanceOn(t, backend, newFakeKeyStore())
+	if err := instance.Unlock(nil); err != nil {
+		t.Fatal(err)
+	}
+	enrollTestNetwork(t, instance, testNetworkId)
+	store := storeOf(t, instance, testNetworkId, evsComponentName)
+	test := newEvsTestClient(t, http.NotFoundHandler(), store)
+	mounts, err := NewEvsMounts(test.client, state, git)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkDir := filepath.Join(state, "net", testNetworkId.String())
+	if mounts.GitTree() != filepath.Join(networkDir, "git") {
+		t.Errorf("git tree %s", mounts.GitTree())
+	}
+	repoId := evsTestId("mounted repo")
+	if _, err := test.client.Repo(repoId).Mount(context.Background(), &EvsMountArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	mount, ok := mounts.Get(repoId)
+	if !ok {
+		t.Fatal("no mount")
+	}
+	if mount.BareDir != filepath.Join(networkDir, "git", evsUrlId(repoId)+".git") ||
+		mount.HooksDir != filepath.Join(networkDir, "git", evsUrlId(repoId)+".hooks") {
+		t.Errorf("bare %s hooks %s", mount.BareDir, mount.HooksDir)
+	}
+	mirror, err := test.client.Mirror(repoId)
+	if err != nil || mount.Mirror != mirror {
+		t.Fatalf("the mount's mirror is not the client's: %v", err)
+	}
+	refId := evsTestId("ref")
+	if err := mirror.Put(EvsMirrorStatementKey(refId, 1), bytes.NewReader([]byte("a statement"))); err != nil {
+		t.Fatal(err)
+	}
+	statementFile := filepath.Join(networkDir, "evs", "mirror", evsUrlId(repoId), "stmt", evsUrlId(refId), "00000000000000000001")
+	if _, err := os.Stat(statementFile); err != nil {
+		t.Errorf("the mirror's statement: %v", err)
+	}
+	// the sealed directory holds no file of git's, and the registry lists its one record
+	entries, err := store.List("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name, "mirror/") && !strings.HasPrefix(entry.Name, "mounts/") {
+			t.Errorf("the sealed directory holds %s", entry.Name)
+		}
+	}
+	if records, err := store.List(evsMountDirectory); err != nil || len(records) != 1 {
+		t.Errorf("mount records %d %v", len(records), err)
+	}
+
+	if runtime.GOOS != "windows" {
+		blob := filepath.Join(t.TempDir(), "blob")
+		if err := os.WriteFile(blob, []byte("plaintext like the working tree\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := mount.Git(context.Background(), "hash-object", "-w", blob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oid := strings.TrimSpace(string(out))
+		// the user's alone: no group or other bit, on the tree and on an object git wrote after init (read-only)
+		for _, path := range []string{
+			filepath.Join(networkDir, "git"),
+			mount.BareDir,
+			mount.HooksDir,
+			filepath.Join(mount.BareDir, "config"),
+			filepath.Join(mount.BareDir, "objects", oid[:2]),
+			filepath.Join(mount.BareDir, "objects", oid[:2], oid[2:]),
+		} {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Errorf("%s: %v", path, err)
+				continue
+			}
+			if info.Mode().Perm()&0o077 != 0 {
+				t.Errorf("%s: mode %o", path, info.Mode().Perm())
+			}
+		}
+	}
+
+	if err := instance.forgetNetwork(testNetworkId); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(mount.BareDir, "HEAD"), filepath.Join(mount.BareDir, "config"), statementFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s outlives the network: %v", path, err)
+		}
+	}
+}
+
+// A mount's paths come from the layout alone: a stored record naming a bare repository elsewhere, as an older record
+// or a tampered one might, does not send git there.
+func TestEvsMountRecordNamesNoPath(t *testing.T) {
+	git := evsTestGitRunner(t)
+	store := newEvsTestStore(t)
+	test := newEvsTestClient(t, http.NotFoundHandler(), store)
+	state := t.TempDir()
+	mounts, err := NewEvsMounts(test.client, state, git)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoId := evsTestId("mounted repo")
+	elsewhere := t.TempDir()
+	record := `{"dir":"","bare_dir":"` + elsewhere + `","hooks_dir":"` + elsewhere + `","agent_label":"agent one"}`
+	writeStoreFile(t, store, evsMountDirectory+repoId.String(), []byte(record))
+	if err := mounts.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mount, ok := mounts.Get(repoId)
+	if !ok {
+		t.Fatal("no mount")
+	}
+	if mount.BareDir != filepath.Join(mounts.GitTree(), evsUrlId(repoId)+".git") || strings.HasPrefix(mount.BareDir, elsewhere) ||
+		strings.HasPrefix(mount.HooksDir, elsewhere) || mount.AgentLabel != "agent one" {
 		t.Errorf("reopened %+v", mount)
 	}
 }
