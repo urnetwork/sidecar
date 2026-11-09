@@ -6,10 +6,10 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -351,15 +351,17 @@ func TestCompileProjectionRowsIsDeterministicAndBounded(t *testing.T) {
 	}
 }
 
+// Fixed rows and their bytes and rows_sha256, embedded so the page Worker's leg reads them too.
+//
+//go:embed testdata/config/rows/vectors.json
+var testConfigRowsVectors []byte
+
 // testdata/config/rows/vectors.json: fixed rows and their bytes and rows_sha256, the same on every leg.
 func TestCompileProjectionRowsVectors(t *testing.T) {
 	net := newTestConfigNet(t)
 	registerTestConfigAclCompiler(t)
 	head := testConfigHead(t, net)
-	data, err := os.ReadFile("testdata/config/rows/vectors.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := testConfigRowsVectors
 	vectors := []struct {
 		Name       string `json:"name"`
 		Rows       string `json:"rows"`

@@ -72,6 +72,7 @@ func NewConfigSealContext(signedType bridge.SignedType, header *bridge.Statement
 	}
 }
 
+// Whether the context names what a seal is bound to: a signed type, a 16-byte network id and a 16-byte nonce.
 func (self *ConfigSealContext) check() error {
 	if self == nil || len(self.NetworkId) != len(Id{}) || len(self.Nonce) != configNonceByteCount {
 		return fmt.Errorf("%w: the record's header names no network or nonce", ErrConfigSealInvalid)
