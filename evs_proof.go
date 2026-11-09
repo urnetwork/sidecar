@@ -94,7 +94,7 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, tokenPath EvsTokenPat
 	for _, delta := range verified.Deltas {
 		deltaVersions[delta.CommitVersion] = true
 	}
-	if err := self.verifyUnchangedSince(head, tokenPath, verified.CommitVersion, reply.GetAbsences(), deltaVersions); err != nil {
+	if err := self.verifyUnchangedSince(head, tokenPath, verified.CommitVersion, reply.GetAbsences(), deltaVersions, verified.Absent); err != nil {
 		return nil, err
 	}
 	return verified, nil
@@ -129,10 +129,19 @@ func (self *EvsVerifier) statementAt(head *EvsVerifiedHead, version uint64, push
 func evsChangeOf(statement *EvsStatement, tokenPath EvsTokenPath, proofs []*protocol.EvsMerkleProof, prefixOk bool) (*protocol.EvsChange, EvsTokenPath, error) {
 	push := statement.Push
 	if len(push.GetChangesRoot()) == 0 {
+		// the path's own change first; else, where a prefix may stand for it, the removal of a prefix holding it, never
+		// a prefix's delta, which a removal below the root carries beside it
+		var prefixRemoval *EvsCheckedChange
 		for _, change := range statement.Changes {
-			if change.TokenPath.Equal(tokenPath) || (prefixOk && tokenPath.HasPrefix(change.TokenPath)) {
+			if change.TokenPath.Equal(tokenPath) {
 				return change.Change, change.TokenPath, nil
 			}
+			if prefixOk && prefixRemoval == nil && tokenPath.HasPrefix(change.TokenPath) && !change.WritesEntry() {
+				prefixRemoval = change
+			}
+		}
+		if prefixRemoval != nil {
+			return prefixRemoval.Change, prefixRemoval.TokenPath, nil
 		}
 		return nil, nil, fmt.Errorf("%w: a statement that does not change the path", ErrEvsEntryRefused)
 	}
@@ -251,7 +260,7 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, tokenPath EvsTokenP
 // changes, a change list under changes_root by the adjacent-leaf proofs evs sent for each path its covering prefixes
 // reach (EvsAbsencePaths). A directory's own later writes are its deltas, at deltaVersions, already verified; any
 // other is a delta evs left out.
-func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath EvsTokenPath, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool) error {
+func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath EvsTokenPath, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool, absent bool) error {
 	for _, walked := range head.Statements {
 		if walked.Version <= since || deltaVersions[walked.Version] {
 			continue
@@ -261,7 +270,8 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath E
 			for _, change := range walked.Statement.Changes {
 				// the path itself, or a prefix's removal, which ends every path below it; a prefix's delta does not
 				// change the path (§11.7's newest row)
-				removesPrefix := tokenPath.HasPrefix(change.TokenPath) && len(change.Change.GetEntrySha256()) == 0
+				// a path served absent stays absent through a prefix's removal, which only a standing path contradicts
+				removesPrefix := tokenPath.HasPrefix(change.TokenPath) && len(change.Change.GetEntrySha256()) == 0 && !absent
 				if change.TokenPath.Equal(tokenPath) || removesPrefix {
 					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 					return fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
