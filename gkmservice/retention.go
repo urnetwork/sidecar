@@ -367,8 +367,12 @@ func (self *GkmReconciler) retainEpochs(ctx context.Context, cluster sidecar.Blo
 			return nil
 		}
 		if _, named := deletable[pointer.GetEpoch()]; named && len(pointer.GetSealedGroupInfo()) == 0 {
-			// before the epoch the pointer names goes, the pointer moves to the newest epoch carrying a GroupInfo
-			if !self.movePointer(ctx, cluster, groupId, epochs, info.Etag) {
+			// before the epoch the pointer names goes, the pointer moves to the newest epoch carrying a GroupInfo,
+			// which then stays however old it is
+			moved, ok := self.movePointer(ctx, cluster, groupId, epochs, info.Etag)
+			if ok {
+				delete(deletable, moved)
+			} else {
 				delete(deletable, pointer.GetEpoch())
 			}
 		}
@@ -386,32 +390,32 @@ func (self *GkmReconciler) retainEpochs(ctx context.Context, cluster sidecar.Blo
 	return nil
 }
 
-// Rewrites a group's pointer, If-Match on etag, to the newest of epochs whose object carries a sealed GroupInfo.
-// false when none does, or the write did not land, so the epoch it names stays.
-func (self *GkmReconciler) movePointer(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, epochs []*gkmListedEpoch, etag string) bool {
+// Rewrites a group's pointer, If-Match on etag, to the newest of epochs whose object carries a sealed GroupInfo, and
+// answers that epoch. false when none does, or the write did not land, so the epoch the pointer names stays.
+func (self *GkmReconciler) movePointer(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, epochs []*gkmListedEpoch, etag string) (uint64, bool) {
 	for i := len(epochs) - 1; 0 <= i; i -= 1 {
 		objectBytes, _, err := readGkmObject(ctx, cluster, epochs[i].info.Key, self.settings.Service.ObjectMaxByteCount)
 		if err != nil {
-			return false
+			return 0, false
 		}
 		object, err := parseGkmEpochObject(objectBytes)
 		if err != nil {
-			return false
+			return 0, false
 		}
 		if len(object.GetSealedGroupInfo()) == 0 {
 			continue
 		}
 		pointerBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmGroupInfoObject{Epoch: epochs[i].epoch})
 		if err != nil {
-			return false
+			return 0, false
 		}
 		barrierKey := gkmBarrierGroupKey(groupId)
 		testHookBarrier(BarrierPointerPutBefore, barrierKey)
 		err = replaceGkmObject(ctx, cluster, GkmGroupInfoKey(groupId), etag, pointerBytes)
 		testHookBarrier(BarrierPointerPutAfter, barrierKey)
-		return err == nil
+		return epochs[i].epoch, err == nil
 	}
-	return false
+	return 0, false
 }
 
 // gkm-7's deliveries and §10.6's staged GC for one group.

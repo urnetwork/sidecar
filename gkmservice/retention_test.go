@@ -97,6 +97,34 @@ func TestGkmRetentionDeletesEpochsByAcks(t *testing.T) {
 	}
 }
 
+// Retention never deletes the epoch the pointer moves to: when the newest epoch carrying a GroupInfo is old enough to
+// go, as above 16 leaves no newer epoch carries one, it stays with the pointer on it.
+func TestGkmRetentionKeepsTheEpochThePointerMovesTo(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	world.key1 = world.putGeneration(nil, fakeGkmPin(1))
+	for epoch := uint64(0); epoch <= 5; epoch += 1 {
+		object := &protocol.GkmEpochObject{Header: &protocol.GkmCommitHeader{Generation: 1, Auth: fakeGkmPin(1)}}
+		if epoch <= 2 {
+			object.SealedGroupInfo = []byte("a sealed GroupInfo")
+			object.GroupInfoGeneration = 1
+		}
+		fixture.put("meta-2", GkmEpochKey(world.groupId, epoch), fixture.marshal(object))
+	}
+	fixture.put("meta-2", GkmGroupInfoKey(world.groupId), fixture.marshal(&protocol.GkmGroupInfoObject{Epoch: 1}))
+	world.putAck(testId("sc-leaf-z"), 1, fixture.clock.Now())
+	fixture.clock.Advance(30*24*time.Hour + time.Hour)
+	world.putAck(testId("sc-leaf-x"), 3, fixture.clock.Now())
+	world.sweep()
+	if standing := world.standingEpochs(5); !slicesEqual(standing, []uint64{2, 4, 5}) {
+		t.Errorf("epochs after retention: %v", standing)
+	}
+	pointer, err := parseGkmGroupInfoObject(fixture.object("meta-2", GkmGroupInfoKey(world.groupId)))
+	if err != nil || pointer.GetEpoch() != 2 {
+		t.Errorf("the pointer does not name the epoch it moved to: %v", err)
+	}
+}
+
 // Whether two lists hold the same numbers in order.
 func slicesEqual(a []uint64, b []uint64) bool {
 	if len(a) != len(b) {
