@@ -63,6 +63,8 @@ type SidecarSettings struct {
 	Search *SidecarSearchSettings
 	// §16.11's team directory.
 	Directory *SidecarDirectorySettings
+	// §11's client: its calls, verifying reader and local tier.
+	Evs *EvsSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -321,6 +323,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			PhoneMeteredByteCount: 8 * 1024 * 1024,
 			RenewJitter:           5 * time.Minute,
 		},
+		Evs: DefaultEvsSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
