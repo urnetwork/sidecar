@@ -10,9 +10,10 @@
 #   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
 #
-# <Spec> is EvsCommit or StoreSettle. A Name=value replaces a constant of the spec's cfg;
-# Quiet=a+b leaves the named processes out (quiet_EvsCommit below), and Script and Simulate shape a
-# run further (with_constants below). TLC names a command that runs tlc2.TLC, as in
+# <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
+# cfg; Quiet=a+b leaves the named processes out (quiet_EvsCommit below; IndexRollup holds its
+# processes still by its own Still constant instead), and Script and Simulate shape a run further
+# (with_constants below). TLC names a command that runs tlc2.TLC, as in
 #   TLC="java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC" run-tlc.sh model StoreSettle
 # and TLC_FLAGS adds flags, as in TLC_FLAGS="-workers 8". Each run works in a fresh directory under
 # TMPDIR, so no state or trace file lands beside the specs. TLC prints its revision first: name it
@@ -96,8 +97,33 @@ NoDriveLock            NoStaleQuorum        $small Quiet=deletes+heal+cancel
 EOF
 }
 
+# IndexRollup's twins run by seeded simulation over the whole story, where breadth-first search does
+# not reach their violations in time. MergeDropsBase and DiffOnHeadDiff need the journaler's
+# consecutive diffs and a backfilled copy between them, so they run with the roll-up and the erasure
+# held still. Its two design findings are not twins but constants: Supersede="index" and
+# RollupFence="files" are §11.14 as written, which TLC refuses (questions
+# search-m10-07-late-journal-tombstone and search-m10-07-rollup-merge-race), and the cfg runs their
+# candidate rules.
+twins_IndexRollup() {
+  local sim="Simulate=140 Seed=1"
+  cat <<EOF
+NoEpochCheck           CutFences            $sim
+BuildIgnoresSet        CutFences            $sim
+MergeDropsTombstone    ResultsHold          $sim
+NoStep4                BucketsExact         $sim
+EraseLiveFirst         ResultsHold          $sim
+EarlyComplete          ErasedUnreadable     $sim
+ClosureNoCas           ResultsHold          $sim
+ReuseUnabsorbed        ResultsHold          $sim
+RollupForgetsHeads     ResultsHold          $sim
+MergeDropsBase         ChainsResolve        $sim Still={"erase","rollup"} ForeignCuts=0
+DiffOnHeadDiff         ChainsResolve        $sim Still={"erase","rollup"} ForeignCuts=0
+EOF
+}
+
 properties_EvsCommit="RemovalGates DueEpochCommits"
 properties_StoreSettle="HeldKeyReleased"
+properties_IndexRollup="BucketRolls ErasureFinishes"
 
 # Quiet=a+b leaves processes out of a run: a module extending the spec holds each named part still
 # by an action constraint, so the spec stays the design's. A run with any part quiet covers less,
@@ -125,6 +151,11 @@ gkm        epoch' = epoch \/ epoch' = <<>>
 copy       copyJob' = copyJob
 block      \A r \in Refs : blockLive'[r] => blockLive[r]
 EOF
+}
+
+# IndexRollup has no quiet parts: its Still constant holds processes still inside the spec.
+quiet_IndexRollup() {
+  :
 }
 
 quiet_StoreSettle() {
@@ -266,7 +297,7 @@ main() {
   mode=$1
   spec=$2
   shift 2
-  case $spec in EvsCommit|StoreSettle) ;; *) usage ;; esac
+  case $spec in EvsCommit|StoreSettle|IndexRollup) ;; *) usage ;; esac
   if [ "$mode" = list ]; then
     "twins_$spec"
     exit 0

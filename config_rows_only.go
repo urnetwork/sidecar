@@ -1,0 +1,225 @@
+// §7.9's apply(e) for the gates: api, evs, gkm and every other gate service hold no config key, so they cannot open a
+// config head or recompile one (§8.9). Rows-only mode is ConfigLog's own walk with that one step left out: a base
+// applies by bridge.VerifyBaseKeyless (the signature, prev_chain, rows by rows_sha256 and size, and neither version
+// below the previous base's, so no base rolls back policy or the fold), its signer a config writer at S(my.n), then
+// its rows replace the state's and its tail re-applies keeping each verdict; statements and ticks apply by the
+// ordinary rules at S(my.n). So a rows-only verdict is a full reader's, save where a rule reads what only the head
+// holds: a ServiceSettings value, which a rows-only state reports unknown and the rule fails closed on (question
+// team-m2-02-self-admit-at-rows-only-readers).
+//
+// Gates read the log from wherever is cheapest: the verified read cache {acl_<networkId>}e when it records {acl_}v's
+// current value and holds every position they need, else proj/ on the first metadata cluster (§7.9, ACL-M2-13's
+// AclGateDirectSource), or api's read surface for the other gates (plan-SOCK-gate-data). None of those decides
+// anything: ApplyRun checks a whole run against the process's own pin before any of it applies, refusing a run whose
+// links break or that carries at a position the log holds an A_n other than the one held there, and the log goes on
+// from its own pin, so a stale or forged copy costs a re-read and never moves the log, and a stale copy is no lower
+// n: nothing here ever lowers a log. A cold start (RestoreConfigLogRowsOnly) is held to a floor, the pin the process
+// last held for the network, so a restart of the cache from a stale copy cannot land below it either.
+//
+// The one fork a run cannot hide: an unsigned TICK chains onto the pin it names, so a copy that forged one at the
+// next position moves the log onto a chain proj/ does not hold, and the next run from proj/ is refused as a second
+// A_n. Only api writes {acl_}e, so that copy is api's, which can write proj/ too (§7.9's read row).
+//
+// Rows-only code reads no Postgres (I-12), carries no connect type and runs on every leg, though its callers, the gate
+// services, are !sidecar_http. Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
+
+package sidecar
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
+)
+
+var (
+	// A run of entries refused whole, none of it applied: ConfigRunError says why. The log goes on from its own pin.
+	ErrConfigRunRefused = errors.New("config entry run refused")
+	// A log a cold start would build ends below the pin the process last held for the network: a lower n (§8.9).
+	ErrConfigBelowPin = errors.New("config log below the reader's own pin")
+)
+
+// Why a run was refused: the position, what this log holds there and what the run carried there. For a second A_n at
+// a position this log holds, both digests are the evidence an alarm carries; for a broken link, RemoteChain is the
+// digest the entry before it gave.
+type ConfigRunError struct {
+	// The position.
+	N uint64
+	// A_N as this log holds it, when it holds one.
+	LocalChain    [sha256.Size]byte
+	HasLocalChain bool
+	// A_N as the run carries it.
+	RemoteChain [sha256.Size]byte
+	// What did not hold, ids and positions only (I-13).
+	Reason string
+}
+
+// The position and both digests.
+func (self *ConfigRunError) Error() string {
+	return fmt.Sprintf("%s at %d: %s (local %x, run %x)", ErrConfigRunRefused, self.N, self.Reason, self.LocalChain[:8], self.RemoteChain[:8])
+}
+
+// ErrConfigRunRefused.
+func (self *ConfigRunError) Unwrap() error {
+	return ErrConfigRunRefused
+}
+
+// A log at S(0) for a reader that holds no config key: NewConfigLog's, whose bases skip the config head's check and
+// whose states report ServiceSettings unknown. A gate starts one at the network's newest base with
+// RestoreConfigLogRowsOnly instead, since entries before the retention point are gone.
+func NewConfigLogRowsOnly(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog, error) {
+	self, err := NewConfigLog(settings, signedGenesis)
+	if err != nil {
+		return nil, err
+	}
+	self.rowsOnly = true
+	return self, nil
+}
+
+// A rows-only log from a run of entries, as a gate starts cold: at the newest base among retained.Entries, which must
+// reach back to that base's tail (folded_through + 1), then every entry after it, as RestoreConfigLog does for a new
+// device. The base's signer must be a config writer in its own rows, the one thing a reader that never saw the
+// entries before it takes on trust; its chain onward is checked entry by entry.
+//
+// floor is the pin the process last held for the network, nil for none: a log ending below it is ErrConfigBelowPin,
+// and one holding a different A_n at its position is ErrConfigRunRefused, so no restart from a stale copy lands lower
+// (§8.9). A floor before what the run holds checks its number alone.
+func RestoreConfigLogRowsOnly(settings *ConfigLogSettings, retained *ConfigRetained, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, error) {
+	self, err := NewConfigLogRowsOnly(settings, retained.SignedGenesis)
+	if err != nil {
+		return nil, err
+	}
+	if err := self.restore(retained, rowsSource); err != nil {
+		return nil, err
+	}
+	if floor != nil {
+		state := self.state.Load()
+		if state.n < floor.GetVersion() {
+			return nil, fmt.Errorf("%w: %d below %d", ErrConfigBelowPin, state.n, floor.GetVersion())
+		}
+		if chain, ok := state.chainAt(floor.GetVersion()); ok && !bytes.Equal(chain[:], floor.GetChain()) {
+			runError := &ConfigRunError{N: floor.GetVersion(), RemoteChain: chain, Reason: "a second A_n at the reader's own pin"}
+			if len(floor.GetChain()) == sha256.Size {
+				runError.LocalChain, runError.HasLocalChain = [sha256.Size]byte(floor.GetChain()), true
+			}
+			self.log.Errorf("[config]%s cold start refused at %d: %s", self.networkId, floor.GetVersion(), runError.Reason)
+			return nil, runError
+		}
+	}
+	return self, nil
+}
+
+// Whether this log holds no config key: its bases skip the head check and its states report ServiceSettings unknown.
+func (self *ConfigLog) RowsOnly() bool {
+	return self.rowsOnly
+}
+
+// One entry of a run, parsed, with the digest it gives.
+type configRunEntry struct {
+	entry      *bridge.AuthEntry
+	entryBytes []byte
+	chain      [sha256.Size]byte
+}
+
+// Applies a run of entries, verbatim and in position order, from wherever a gate read them (§8.9). The run is checked
+// whole first, and refused whole with a ConfigRunError when it breaks: each entry is this network's, at the position
+// after the one before it and chaining onto that one's digest; the run starts no further on than this log's next
+// position; and at each position this log holds, the run carries the A_n held there. Then the entries past this
+// log's position apply in order, as Apply does each, and their verdicts come back. A run ending at or below this
+// log's position, a stale copy's, applies nothing and lowers nothing. An error from Apply (a fork, or a base whose
+// rows rowsSource cannot serve) stops the run where it happened, the entries before it applied.
+//
+// For the log's one applying goroutine, as Apply is.
+func (self *ConfigLog) ApplyRun(entryBytes [][]byte, rowsSource ConfigRowsSource) ([]ConfigVerdict, error) {
+	if self.fork != nil {
+		return nil, self.fork
+	}
+	if len(entryBytes) == 0 {
+		return nil, nil
+	}
+	refuse := func(runError *ConfigRunError) error {
+		self.log.Errorf("[config]%s run refused at %d: %s", self.networkId, runError.N, runError.Reason)
+		return runError
+	}
+
+	run := make([]configRunEntry, len(entryBytes))
+	for i, oneEntryBytes := range entryBytes {
+		entry := &bridge.AuthEntry{}
+		if err := proto.Unmarshal(oneEntryBytes, entry); err != nil {
+			return nil, refuse(&ConfigRunError{Reason: fmt.Sprintf("entry %d of the run does not parse", i)})
+		}
+		if !bytes.Equal(entry.GetNetworkId(), self.networkId.Bytes()) {
+			return nil, refuse(&ConfigRunError{N: entry.GetN(), Reason: "another network's entry"})
+		}
+		chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody())
+		if err != nil {
+			return nil, refuse(&ConfigRunError{N: entry.GetN(), Reason: "an entry with no digest"})
+		}
+		if 0 < i {
+			previous := run[i-1]
+			if entry.GetN() != previous.entry.GetN()+1 {
+				return nil, refuse(&ConfigRunError{N: entry.GetN(), Reason: fmt.Sprintf("a gap after %d", previous.entry.GetN())})
+			}
+			if !bytes.Equal(entry.GetPrevChain(), previous.chain[:]) {
+				return nil, refuse(&ConfigRunError{N: entry.GetN(), RemoteChain: previous.chain, Reason: "prev_chain is not the run's own A_{n-1}"})
+			}
+		}
+		run[i] = configRunEntry{entry: entry, entryBytes: oneEntryBytes, chain: chain}
+	}
+
+	state := self.state.Load()
+	first := run[0].entry.GetN()
+	if state.n+1 < first {
+		return nil, fmt.Errorf("%w: the run starts at %d after %d", ErrConfigEntryAhead, first, state.n)
+	}
+	// each position this log holds: the run's A_n must be the one held there, and the first held one anchors the
+	// rest of the run, which chains on from it
+	for _, runEntry := range run {
+		n := runEntry.entry.GetN()
+		if state.n < n {
+			break
+		}
+		if local, ok := state.chainAt(n); ok && local != runEntry.chain {
+			return nil, refuse(&ConfigRunError{N: n, LocalChain: local, HasLocalChain: true, RemoteChain: runEntry.chain,
+				Reason: "a second A_n at a position this log holds"})
+		}
+	}
+	if last := run[len(run)-1].entry.GetN(); last <= state.n {
+		return nil, nil
+	}
+	if first == state.n+1 && !bytes.Equal(run[0].entry.GetPrevChain(), state.chain[:]) {
+		return nil, refuse(&ConfigRunError{N: first, LocalChain: state.chain, HasLocalChain: true, Reason: "prev_chain is not this log's A_n"})
+	}
+	testHookBarrier("config.run.checked", self.networkId.String())
+
+	verdicts := []ConfigVerdict{}
+	for _, runEntry := range run {
+		if runEntry.entry.GetN() <= state.n {
+			continue
+		}
+		verdict, err := self.Apply(runEntry.entryBytes, rowsSource)
+		if err != nil {
+			return verdicts, err
+		}
+		verdicts = append(verdicts, verdict)
+	}
+	return verdicts, nil
+}
+
+// A rows source for a reader that opens no config head: Rows from the function given, CheckHead refused, which a
+// rows-only log never calls.
+type ConfigRowsOnlySource func(networkId Id, rowsSha256 []byte) ([]byte, error)
+
+// The function's rows.
+func (self ConfigRowsOnlySource) Rows(networkId Id, rowsSha256 []byte) ([]byte, error) {
+	return self(networkId, rowsSha256)
+}
+
+// Refused: a rows-only reader opens no config head.
+func (self ConfigRowsOnlySource) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
+	return nil, errors.New("a rows-only source opens no config head")
+}

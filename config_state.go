@@ -53,12 +53,23 @@ type ConfigLogSettings struct {
 	// Where refusals and forks are logged, ids only (I-13). Nil is the leg's default: glog, or nowhere on the
 	// sidecar_http leg.
 	Log Logger
+	// How many positions apart StateAt keeps a state between bases (config_state_at.go): S(k) at each base and at
+	// every multiple of this, the rest rebuilt on demand from the nearest kept one below, at most this many minus
+	// one entries a call. 64 keeps a window of two fold spans (§7.9's fold, about 2,048 entries) to some 32 states,
+	// each holding its own copy of every map an entry wrote, while a rebuild stays short. One or less keeps every
+	// state.
+	StateAtCheckpointInterval int
+	// How many rebuilt states StateAt keeps for the next call at the same position, since checks at one pin come in
+	// runs, a push's or a delivery's. 8. Non-positive keeps none.
+	StateAtCacheCount int
 }
 
 // §7.9's values.
 func DefaultConfigLogSettings() *ConfigLogSettings {
 	return &ConfigLogSettings{
-		BasePinRetention: 30 * 24 * time.Hour,
+		BasePinRetention:          30 * 24 * time.Hour,
+		StateAtCheckpointInterval: 64,
+		StateAtCacheCount:         8,
 	}
 }
 
@@ -162,6 +173,9 @@ type ConfigState struct {
 	chainsFrom uint64
 	basePins   []configBasePin
 
+	// the log's kept states, which StateAt reads; nil for a state no log made
+	history *configStateHistory
+
 	aclOnce  sync.Once
 	acl      *AclState
 	aclError error
@@ -233,23 +247,14 @@ func (self *ConfigState) OnChain(pin *bridge.AuthPin) bool {
 	return pin.GetVersion() == 0 && bytes.Equal(self.genesisChain[:], pin.GetChain())
 }
 
-// GkmAuthView's state at pin: this state at its own pin. An older state is TEAM-M2-11's ConfigLog.StateAt; until it
-// lands an older pin on the chain is not judged here and counts against no one.
+// GkmAuthView's state at pin: StateAt's, any pin from the previous base to this state's position
+// (config_state_at.go). Its errors wrap ErrGkmAuthAhead, ErrGkmAuthNotRetained and ErrGkmAuthOffChain.
 func (self *ConfigState) At(pin *bridge.AuthPin) (GkmAuthView, error) {
-	switch {
-	case pin == nil:
-		return nil, ErrGkmAuthOffChain
-	case self.n < pin.GetVersion():
-		return nil, ErrGkmAuthAhead
-	case !self.OnChain(pin):
-		if _, ok := self.chainAt(pin.GetVersion()); ok {
-			return nil, ErrGkmAuthOffChain
-		}
-		return nil, ErrGkmAuthNotRetained
-	case pin.GetVersion() == self.n:
-		return self, nil
+	state, err := self.StateAt(pin)
+	if err != nil {
+		return nil, err
 	}
-	return nil, ErrGkmAuthNotRetained
+	return state, nil
 }
 
 // A member's row, or nil when the id names no member of this state. The caller must not change it.
@@ -622,6 +627,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 		chains:        state.chains,
 		chainsFrom:    state.chainsFrom,
 		basePins:      state.basePins,
+		history:       state.history,
 	}
 }
 

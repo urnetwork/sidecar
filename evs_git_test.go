@@ -511,7 +511,23 @@ const evsGitTestCommitTwo = "tree cf656b586d56636fa958e3f794e7c1d98ea15588\n" +
 	"\n" +
 	"second\n\nwith a body\n"
 
-// Oids stock git's commit-tree gave these.
+// A commit's headers with nothing after them, which stock git stores and fsck --strict passes.
+const evsGitTestNoBodyHeaders = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n" +
+	"author A <a@example.com> 1 +0000\n" +
+	"committer B <b@example.com> 2 +0000\n"
+
+// The fields of evsGitTestNoBodyHeaders, ending there or followed by a blank line and no message.
+func evsGitTestNoBodyCommit(t testing.TB, headersOnly bool) *EvsGitCommit {
+	t.Helper()
+	return &EvsGitCommit{
+		TreeOid:     evsGitTestOid(t, "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+		Author:      []byte("A <a@example.com> 1 +0000"),
+		Committer:   []byte("B <b@example.com> 2 +0000"),
+		HeadersOnly: headersOnly,
+	}
+}
+
+// Oids stock git gave these: commit-tree for each with a blank line, hash-object for the one without.
 func TestEvsGitCommitVectors(t *testing.T) {
 	treeOid := evsGitTestOid(t, "cf656b586d56636fa958e3f794e7c1d98ea15588")
 	parentOid := evsGitTestOid(t, "fe15d1340f7f283a87474f1114513d1b8d96b342")
@@ -553,6 +569,16 @@ func TestEvsGitCommitVectors(t *testing.T) {
 			},
 			encoded: evsGitTestCommitTwo,
 			oid:     "a0915de08cfe98186df28ce4e974dceb2e5cdf7f",
+		},
+		{
+			commit:  evsGitTestNoBodyCommit(t, true),
+			encoded: evsGitTestNoBodyHeaders,
+			oid:     "289a22ea6efbabd7a11aa6cc8a0fe559cfd37863",
+		},
+		{
+			commit:  evsGitTestNoBodyCommit(t, false),
+			encoded: evsGitTestNoBodyHeaders + "\n",
+			oid:     "2c7a590c34a0f7202aa9cc764220f8bd198bb115",
 		},
 	} {
 		encoded, err := c.commit.Encode()
@@ -616,6 +642,10 @@ func TestEvsGitCommitDecodeKeepsEveryByte(t *testing.T) {
 		{name: "a merged tag", tail: "mergetag object fe15d1340f7f283a87474f1114513d1b8d96b342\n type commit\n tag v1\n\nmerge\n"},
 		{name: "a header unknown to git", tail: "x-something value\nx-bare\n\nsubject\n"},
 		{name: "a signed committer line", tail: "gpgsig x\n committer C <c@example.com> 3 +0000\n\nsubject\n"},
+		{name: "no body", tail: ""},
+		{name: "no body after an encoding", tail: "encoding ISO-8859-1\n"},
+		{name: "no body after a signature", tail: "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n"},
+		{name: "no body after a header unknown to git", tail: "x-bare\n"},
 	} {
 		encoded := []byte(head + c.tail)
 		commit, err := EvsGitCommitDecode(encoded)
@@ -637,6 +667,35 @@ func TestEvsGitCommitDecodeKeepsEveryByte(t *testing.T) {
 		}
 		if oid != evsGitObjectOid(evsGitCommitKind, encoded) {
 			t.Errorf("%s: %s", c.name, oid)
+		}
+	}
+}
+
+// A commit that ends with its headers and one with an empty message part by the blank line, and so
+// by oid, and each decodes to its own form, so replaying either keeps the oid git filed it under.
+func TestEvsGitCommitDecodeKeepsAMissingBody(t *testing.T) {
+	for _, c := range []struct {
+		encoded     string
+		headersOnly bool
+		oid         string
+	}{
+		{encoded: evsGitTestNoBodyHeaders, headersOnly: true, oid: "289a22ea6efbabd7a11aa6cc8a0fe559cfd37863"},
+		{encoded: evsGitTestNoBodyHeaders + "\n", headersOnly: false, oid: "2c7a590c34a0f7202aa9cc764220f8bd198bb115"},
+	} {
+		commit, err := EvsGitCommitDecode([]byte(c.encoded))
+		if err != nil {
+			t.Errorf("%q: %v", c.encoded, err)
+			continue
+		}
+		if commit.HeadersOnly != c.headersOnly || len(commit.Message) != 0 || len(commit.ExtraHeaders) != 0 {
+			t.Errorf("%q: %+v", c.encoded, commit)
+		}
+		oid, err := commit.Oid()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if oid.String() != c.oid {
+			t.Errorf("%q: %s, want %s", c.encoded, oid, c.oid)
 		}
 	}
 }
@@ -696,7 +755,6 @@ func TestEvsGitCommitDecodeRefuses(t *testing.T) {
 		{name: "no committer", encoded: tree + author + "\n"},
 		{name: "a committer first", encoded: tree + committer + author + "\n"},
 		{name: "a parent after the author", encoded: tree + author + parent + committer + "\n"},
-		{name: "no blank line", encoded: tree + author + committer},
 		{name: "a line with no end", encoded: tree + author + "committer B <b@example.com> 2 +0000"},
 		{name: "a second tree", encoded: tree + author + committer + tree + "\n"},
 		{name: "a second parent late", encoded: tree + author + committer + parent + "\n"},
@@ -708,6 +766,9 @@ func TestEvsGitCommitDecodeRefuses(t *testing.T) {
 		{name: "a NUL in a header", encoded: tree + author + committer + "x-a b\x00c\n\n"},
 		{name: "a continuation of nothing", encoded: tree + author + committer + " continued\n\n"},
 		{name: "a header with no end", encoded: tree + author + committer + "x-a b"},
+		{name: "no body after a continuation of nothing", encoded: tree + author + committer + " continued\n"},
+		{name: "no body after a continuation with no end", encoded: tree + author + committer + "gpgsig a\n b"},
+		{name: "no body after a second committer", encoded: tree + author + committer + committer},
 	} {
 		if _, err := EvsGitCommitDecode([]byte(c.encoded)); !errors.Is(err, ErrEvsGitObjectInvalid) {
 			t.Errorf("%s: %v", c.name, err)
@@ -727,6 +788,7 @@ func TestEvsGitCommitEncodeRefuses(t *testing.T) {
 		{name: "a committer in extra headers", commit: &EvsGitCommit{ExtraHeaders: []byte("committer x\n")}},
 		{name: "extra headers opening on a continuation", commit: &EvsGitCommit{ExtraHeaders: []byte(" a\n")}},
 		{name: "a NUL in extra headers", commit: &EvsGitCommit{ExtraHeaders: []byte("a\x00\n")}},
+		{name: "a message after headers that end the commit", commit: &EvsGitCommit{HeadersOnly: true, Message: []byte("subject\n")}},
 	} {
 		if _, err := c.commit.Encode(); !errors.Is(err, ErrEvsGitObjectInvalid) {
 			t.Errorf("%s: %v", c.name, err)
@@ -876,8 +938,6 @@ func TestEvsGitDeltaApplyRefuses(t *testing.T) {
 		{name: "a copy of the largest size", base: base, delta: evsGitTestDelta(11, 1, 0xf0, 0xff, 0xff, 0xff)},
 		{name: "a copy past the result", base: base, delta: evsGitTestDelta(11, 2, 0x90, 3)},
 		{name: "an insert past the result", base: base, delta: evsGitTestDelta(11, 1, 2, 'a', 'b')},
-		{name: "a copy cut short at its offset", base: base, delta: evsGitTestDelta(11, 1, 0x91)},
-		{name: "a copy cut short at its size", base: base, delta: evsGitTestDelta(11, 1, 0x91, 1)},
 		{name: "an insert cut short", base: base, delta: evsGitTestDelta(11, 3, 3, 'a')},
 		{name: "an insert with no bytes", base: base, delta: evsGitTestDelta(11, 3, 3)},
 		{name: "a result left short", base: base, delta: evsGitTestDelta(11, 2, 1, 'a')},
@@ -885,6 +945,41 @@ func TestEvsGitDeltaApplyRefuses(t *testing.T) {
 		{name: "a copy after the result", base: base, delta: evsGitTestDelta(11, 1, 1, 'a', 0x90, 1)},
 		{name: "bytes after an empty result", base: base, delta: evsGitTestDelta(11, 0, 1, 'a')},
 	} {
+		if _, err := evsGitTestApply(c.base, c.delta); !errors.Is(err, ErrEvsGitDeltaInvalid) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
+
+// A copy cut off inside its operands is refused, as stock git (bad_length) and go-git refuse it, even
+// where the bytes it lacks, read as zero, would give a copy that fits: the size the bytes before the
+// cut spell, or the 64 KiB a size of zero means, which a 64 KiB base and result take whole. So each
+// delta here applies once its missing bytes are written as zero, and only the cut is refused.
+func TestEvsGitDeltaApplyRefusesACopyCutInsideItsOperands(t *testing.T) {
+	text := []byte("hello world")
+	zeros := make([]byte, 64*1024)
+	zerosSize := int64(len(zeros))
+	for _, c := range []struct {
+		name         string
+		base         []byte
+		delta        []byte
+		missingCount int
+	}{
+		{name: "at its second size byte", base: text, delta: evsGitTestDelta(11, 5, 0xb0, 5), missingCount: 1},
+		{name: "at its third size byte", base: text, delta: evsGitTestDelta(11, 5, 0xd0, 5), missingCount: 1},
+		{name: "at its third of three size bytes", base: text, delta: evsGitTestDelta(11, 5, 0xf0, 5, 0), missingCount: 1},
+		{name: "at its second size byte after an offset", base: text, delta: evsGitTestDelta(11, 5, 0xb1, 6, 5), missingCount: 1},
+		{name: "at its only offset byte", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x81), missingCount: 1},
+		{name: "at its fourth offset byte", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x8f, 0, 0, 0), missingCount: 1},
+		{name: "at its only size byte", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x90), missingCount: 1},
+		{name: "before any operand", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x91), missingCount: 2},
+		{name: "at its size after its offset", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0x91, 0), missingCount: 1},
+		{name: "at its second size byte of zero", base: zeros, delta: evsGitTestDelta(zerosSize, zerosSize, 0xb0, 0), missingCount: 1},
+	} {
+		whole := append(bytes.Clone(c.delta), make([]byte, c.missingCount)...)
+		if _, err := evsGitTestApply(c.base, whole); err != nil {
+			t.Errorf("%s, written whole: %v", c.name, err)
+		}
 		if _, err := evsGitTestApply(c.base, c.delta); !errors.Is(err, ErrEvsGitDeltaInvalid) {
 			t.Errorf("%s: %v", c.name, err)
 		}
@@ -1184,6 +1279,37 @@ func TestEvsGitDeltaIsDeterministic(t *testing.T) {
 	}
 }
 
+// Counts what is read of it, which in an apply is what the copies take from the base.
+type evsGitCountingSource struct {
+	*bytes.Reader
+	readSize int64
+}
+
+func (self *evsGitCountingSource) ReadAt(buffer []byte, offset int64) (int, error) {
+	readSize, err := self.Reader.ReadAt(buffer, offset)
+	self.readSize += int64(readSize)
+	return readSize, err
+}
+
+// Applies delta to base, checks that it gives target, and answers how many of target's bytes it
+// inserts rather than copies: all that apply writes, less what it reads of the base.
+func evsGitTestInsertedSize(t testing.TB, base []byte, target []byte, delta []byte) int64 {
+	t.Helper()
+	source := &evsGitCountingSource{Reader: bytes.NewReader(base)}
+	result := &bytes.Buffer{}
+	size, err := EvsGitDeltaApply(source, bytes.NewReader(delta), int64(len(target)), result, DefaultEvsGitDeltaSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(result.Bytes(), target) {
+		t.Fatal("result differs")
+	}
+	return size - source.readSize
+}
+
+// One changed byte costs one inserted byte. Every block of a 1 MiB base is indexed, and the change is
+// the first byte of one, so the next match is a block on, and the copy found there grows back over the
+// 15 B before it to the change.
 func TestEvsGitDeltaOfOneChangedByteIsSmall(t *testing.T) {
 	random := rand.New(rand.NewPCG(9, 10))
 	base := make([]byte, 1024*1024)
@@ -1193,21 +1319,21 @@ func TestEvsGitDeltaOfOneChangedByteIsSmall(t *testing.T) {
 	target := bytes.Clone(base)
 	target[len(target)/2] ^= 1
 	delta := evsGitTestEncode(t, base, target, DefaultEvsGitDeltaSettings())
-	// 16 copies of 64 KiB and a few bytes around the change
-	if 256 < len(delta) {
+	if insertedSize := evsGitTestInsertedSize(t, base, target, delta); insertedSize != 1 {
+		t.Errorf("%d B inserted", insertedSize)
+	}
+	// the 6 B of sizes, 16 copies of 1 B to 3 B but for the 5 B one ending the change's window, and the
+	// 2 B insert: 43 B
+	if 48 < len(delta) {
 		t.Errorf("%d B", len(delta))
-	}
-	result, err := evsGitTestApply(base, delta)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(result, target) {
-		t.Error("result differs")
 	}
 }
 
-// A base past what the index covers block by block is sampled, and its copies still reach back to the
-// start of each common run.
+// A base past what the index covers block by block is sampled, here a block every 128 B of 8 MiB, and
+// its copies still reach back to the start of each common run, so the delta inserts no byte the base
+// holds where the target needs it. Each run starts off the sampling stride, 77 B, 1 B and 127 B past
+// it, so a copy found at a run's first sampled block grows back to the run's start over up to 127 B,
+// and so does each copy that picks a run up again where a window ended inside it.
 func TestEvsGitDeltaOfASampledBaseIsSmall(t *testing.T) {
 	random := rand.New(rand.NewPCG(11, 12))
 	base := make([]byte, 8*1024*1024)
@@ -1216,17 +1342,16 @@ func TestEvsGitDeltaOfASampledBaseIsSmall(t *testing.T) {
 	}
 	// a stretch cut out, one inserted and two halves swapped
 	half := len(base) / 2
-	target := slices.Concat(base[half:half+1024*1024], []byte("inserted"), base[:half-4096], base[half+1024*1024+4096:])
+	inserted := []byte("inserted")
+	target := slices.Concat(base[half+77:half+1024*1024], inserted, base[1:half-4096], base[half+1024*1024+4096+127:])
 	delta := evsGitTestEncode(t, base, target, DefaultEvsGitDeltaSettings())
-	if 4096 < len(delta) {
+	if insertedSize := evsGitTestInsertedSize(t, base, target, delta); int64(len(inserted)) < insertedSize {
+		t.Errorf("%d B inserted, where the base lacks %d B", insertedSize, len(inserted))
+	}
+	// the sizes, copies of at most 5 B for each 64 KiB and a few more where runs and windows end, and
+	// the insert
+	if 1024 < len(delta) {
 		t.Errorf("%d B", len(delta))
-	}
-	result, err := evsGitTestApply(base, delta)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(result, target) {
-		t.Error("result differs")
 	}
 }
 
@@ -1772,12 +1897,14 @@ func checkEvsPktLineStream(t testing.TB, stream []byte) {
 	}
 }
 
-// Seeds of the delta apply target: the seed files, and copies that need a base of over 64 KiB.
+// Seeds of the delta apply target: the seed files, and copies that need a base of 64 KiB or more,
+// one of them cut inside its offset where a zero read for the missing byte would copy the whole base.
 func evsGitDeltaApplySeeds(t testing.TB) [][]byte {
 	t.Helper()
 	return append(evsGitFuzzSeedFiles(t, "testdata/fuzz/evs_git_delta"),
 		evsGitFuzzJoin(make([]byte, 64*1024), evsGitTestDelta(64*1024, 64*1024, 0x80)),
-		evsGitFuzzJoin(make([]byte, 64*1024+1), evsGitTestDelta(64*1024+1, 64*1024+1, 0xd0, 1, 1)))
+		evsGitFuzzJoin(make([]byte, 64*1024+1), evsGitTestDelta(64*1024+1, 64*1024+1, 0xd0, 1, 1)),
+		evsGitFuzzJoin(make([]byte, 64*1024), evsGitTestDelta(64*1024, 64*1024, 0x81)))
 }
 
 // Whatever apply is given it refuses or answers the size it wrote, under any shape of its reads, and
@@ -1878,11 +2005,13 @@ func evsGitCommitSeeds() [][]byte {
 		[]byte(evsGitTestCommitTwo),
 		[]byte(strings.Replace(evsGitTestCommitOne, "\n\n", "\ncommitter x\n\n", 1)),
 		[]byte(strings.Replace(evsGitTestCommitOne, "\n\n", "\ngpgsig x\n y\nencoding z\n\n", 1)),
+		[]byte(evsGitTestNoBodyHeaders),
+		[]byte(evsGitTestNoBodyHeaders + "gpgsig x\n y\n"),
 	}
 }
 
-// A commit that decodes encodes back to its bytes, and one that holds a reserved header anywhere but
-// its place never decodes.
+// A commit that decodes encodes back to its bytes, one that holds a reserved header anywhere but its
+// place never decodes, and a decoded one ends with its headers exactly when it holds no blank line.
 func checkEvsGitCommitDecode(t testing.TB, encoded []byte) {
 	t.Helper()
 	commit, err := EvsGitCommitDecode(encoded)
@@ -1904,6 +2033,9 @@ func checkEvsGitCommitDecode(t testing.TB, encoded []byte) {
 	if !bytes.HasPrefix(headers, []byte("tree ")) || bytes.Count(lines, []byte("\ntree ")) != 1 ||
 		bytes.Count(lines, []byte("\nauthor ")) != 1 || bytes.Count(lines, []byte("\ncommitter ")) != 1 {
 		t.Fatalf("%q", headers)
+	}
+	if commit.HeadersOnly == bytes.Contains(encoded, []byte("\n\n")) {
+		t.Fatalf("%q: headers only is %t", encoded, commit.HeadersOnly)
 	}
 }
 
@@ -2098,4 +2230,37 @@ func TestEvsGitObjectsEqualStockGit(t *testing.T) {
 			t.Errorf("stock git's commit is %s, this says %s", stockCommit, commitOid)
 		}
 	}
+
+	// Commits that end with their headers: git's commit writers always add the blank line, but
+	// hash-object files these and fsck --strict passes them, so imported history can hold one. They get
+	// a repository of their own, holding only what they reach, so fsck's verdict is on them alone.
+	bodiless := filepath.Join(t.TempDir(), "bodiless.git")
+	if err := os.Mkdir(bodiless, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	evsGitTestStockGit(t, bodiless, nil, "init", "--quiet", "--bare", "--object-format=sha1")
+	evsGitTestStockGit(t, bodiless, nil, "hash-object", "-t", "tree", "-w", "--stdin")
+	for index, encoded := range []string{
+		evsGitTestNoBodyHeaders,
+		evsGitTestNoBodyHeaders + "encoding ISO-8859-1\n",
+		evsGitTestNoBodyHeaders + "gpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n",
+	} {
+		commit, err := EvsGitCommitDecode([]byte(encoded))
+		if err != nil {
+			t.Fatalf("%q: %v", encoded, err)
+		}
+		if !commit.HeadersOnly {
+			t.Errorf("%q has a body", encoded)
+		}
+		commitOid, err := commit.Oid()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stockCommit := evsGitTestStockGit(t, bodiless, []byte(encoded), "hash-object", "-t", "commit", "-w", "--stdin")
+		if stockCommit != commitOid.String() {
+			t.Errorf("stock git files %q as %s, this says %s", encoded, stockCommit, commitOid)
+		}
+		evsGitTestStockGit(t, bodiless, nil, "update-ref", fmt.Sprintf("refs/heads/bodiless-%d", index), stockCommit)
+	}
+	evsGitTestStockGit(t, bodiless, nil, "fsck", "--strict", "--no-dangling")
 }
