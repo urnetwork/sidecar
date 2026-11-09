@@ -108,7 +108,7 @@ func CheckConfigPushes(configRepoId Id, previous *bridge.ProjectionHeader, heade
 	return nil
 }
 
-// CheckConfigPushes on the log's tip: the newest base's header and Genesis's config repo, for a base whose header
+// The walk above at the log's tip: from the newest base's header, in Genesis's config repo, for a base whose header
 // CheckBase took. For the goroutine that applies, as Apply is.
 func (self *ConfigLog) CheckConfigPushes(signedHeader []byte, configPushes [][]byte) error {
 	signed := &bridge.Signed{}
