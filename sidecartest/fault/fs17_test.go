@@ -47,6 +47,14 @@ func TestFs17RelayedProofStopsTheWriter(t *testing.T) {
 	fs17Run(t, Fs17RelayedProof)
 }
 
+func TestFs17ChainOfRelaysStopsTheWriterTwoHopsOn(t *testing.T) {
+	fs17Run(t, Fs17ChainOfRelays)
+}
+
+func TestFs17RelayedProofDroppedStopsAtTheBound(t *testing.T) {
+	fs17Run(t, Fs17RelayedProofDropped)
+}
+
 func TestFs17PhoneHolderServesFromItsNewestEntries(t *testing.T) {
 	fs17Run(t, Fs17PhoneHolder)
 }

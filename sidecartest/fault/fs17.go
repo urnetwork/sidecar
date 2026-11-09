@@ -13,7 +13,9 @@
 //     witnessed_at, its peer counts it for nothing, and W stops at witness_bound_hours;
 //   - Fs17RelayedProof: holder R, CLI peer X and writer W at X's pin, the server dropping W-R: X sends
 //     R's withheld tip as proven, never counts as W's witness, and W stops at its next HeadCheck with X;
-//     Fs17PhoneHolder the same with R a phone serving from its newest 64 KiB;
+//     Fs17RelayedProofDropped the same with X's proof dropped too, so W stops at witness_bound_hours;
+//     Fs17ChainOfRelays the same as R-X-Y-W, Y verifying X's relayed proof and W stopping at its next
+//     HeadCheck with Y; Fs17PhoneHolder the same with R a phone serving from its newest 64 KiB;
 //   - Fs17PhoneNotFound: a phone R whose kept entries do not reach back to X's n answers NOT_FOUND, X
 //     holds the tip UNVERIFIED with R as claimant and counts for no one, W relaying it counts no one, and
 //     the relayed copy clears once a sidecar on its path is revoked;
@@ -466,6 +468,95 @@ func fs17Relayed(id string, retainByteCount int) *Schedule {
 			fs17FetchTimesOut("w"),
 			fs17Alarmed(world, "w", sidecar.SidecarHeadAlarmWithheld),
 			fs17Seal(world, "w", sidecar.HeadStopWithheld),
+		},
+	}
+}
+
+// The relayed proof over two hops, R-X-Y-W: y verifies the proof x relays and sends proven in turn, and
+// w, which reaches neither r nor x, stops at its next HeadCheck with y; x and y never count as w's
+// witnesses.
+func Fs17ChainOfRelays(net *Net) *Schedule {
+	world := &fs17World{}
+	return &Schedule{
+		Id:     "FS-17 chain of relays",
+		Check:  []Invariant{FI(10)},
+		Tiers:  []Tier{TierT2},
+		Forged: true,
+		Twin:   Fs17Honest,
+		Steps: []*Step{
+			fs17Setup(world, []string{"r", "x", "y", "w"}, 10, nil),
+			{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
+				for _, name := range []string{"x", "y", "w"} {
+					world.headCheck.Api.Withhold(world.side(name).SidecarId, 10)
+				}
+				world.headCheck.Api.Append(5)
+				// the server drops every pair but r-x, x-y and y-w
+				world.headCheck.Partition(world.side("w"), world.side("r"), true)
+				world.headCheck.Partition(world.side("w"), world.side("x"), true)
+				world.headCheck.Partition(world.side("y"), world.side("r"), true)
+				return world.side("r").Device.Auth.ReachFromApi(15)
+			}},
+			fs17Exchange(world, "x", "r", false),
+			fs17FetchTimesOut("x"),
+			fs17Alarmed(world, "x", sidecar.SidecarHeadAlarmWithheld),
+			fs17Exchange(world, "y", "x", false),
+			fs17FetchTimesOut("y"),
+			fs17Alarmed(world, "y", sidecar.SidecarHeadAlarmWithheld),
+			fs17Exchange(world, "w", "y", false),
+			fs17Seal(world, "w", ""),
+			fs17FetchTimesOut("w"),
+			fs17Alarmed(world, "w", sidecar.SidecarHeadAlarmWithheld),
+			fs17Seal(world, "w", sidecar.HeadStopWithheld),
+		},
+	}
+}
+
+// The relayed proof without x's proof: the server drops w-x too once w has learned x's proven tip, so
+// w's proof request goes unanswered; w holds the tip UNVERIFIED with x its claimant, alarms, refreshes no
+// witnessed_at, and stops at witness_bound_hours from its last witness instead of at once.
+func Fs17RelayedProofDropped(net *Net) *Schedule {
+	world := &fs17World{}
+	bound := time.Duration(sidecar.WitnessBoundDefaultHours) * time.Hour
+	var witnessedAt time.Time
+	return &Schedule{
+		Id:     "FS-17 relayed proof dropped",
+		Check:  []Invariant{FI(10)},
+		Tiers:  []Tier{TierT2},
+		Forged: true,
+		Twin:   Fs17Honest,
+		Steps: []*Step{
+			fs17Setup(world, []string{"r", "x", "w"}, 10, nil),
+			fs17Exchange(world, "w", "x", true),
+			{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
+				witnessedAt = world.side("w").Stop.WitnessedAt()
+				for _, name := range []string{"x", "w"} {
+					world.headCheck.Api.Withhold(world.side(name).SidecarId, 10)
+				}
+				world.headCheck.Api.Append(5)
+				world.headCheck.Partition(world.side("w"), world.side("r"), true)
+				return world.side("r").Device.Auth.ReachFromApi(15)
+			}},
+			fs17Exchange(world, "x", "r", false),
+			fs17FetchTimesOut("x"),
+			fs17Alarmed(world, "x", sidecar.SidecarHeadAlarmWithheld),
+			fs17Exchange(world, "w", "x", false),
+			{Actor: "setup", Action: func(ctx context.Context, net *Net) error {
+				world.headCheck.Partition(world.side("w"), world.side("x"), true)
+				return nil
+			}},
+			fs17FetchTimesOut("w"),
+			fs17CallTimesOut("w"),
+			fs17Alarmed(world, "w", sidecar.SidecarHeadAlarmUnverified),
+			fs17NotAlarmed(world, "w", sidecar.SidecarHeadAlarmWithheld),
+			fs17Seal(world, "w", ""),
+			{Actor: "w", Action: func(ctx context.Context, net *Net) error {
+				if !world.side("w").Stop.WitnessedAt().Equal(witnessedAt) {
+					return fmt.Errorf("w's witnessed_at moved from %s to %s", witnessedAt, world.side("w").Stop.WitnessedAt())
+				}
+				net.Clock().AdvanceTo(witnessedAt.Add(bound))
+				return nil
+			}},
+			fs17Seal(world, "w", sidecar.HeadStopUnwitnessed),
 		},
 	}
 }
