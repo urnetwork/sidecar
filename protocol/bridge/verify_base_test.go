@@ -117,3 +117,29 @@ func TestVerifyBaseKeylessRefusesRowsOver4MiB(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+// The digest form passes what the rows form passes and refuses a digest or byte count off by one, so a streaming
+// caller is held to the same checks.
+func TestVerifyBaseKeylessDigestHoldsTheRowsForm(t *testing.T) {
+	base := newTestBase()
+	rowsSha256 := sha256.Sum256(base.rows)
+	key := testBaseKey.Public().(ed25519.PublicKey)
+	header, err := VerifyBaseKeylessDigest(base.entry(t), key, rowsSha256[:], int64(len(base.rows)), testPreviousBase())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(header, base.header) {
+		t.Errorf("got %v", header)
+	}
+	otherSha256 := bytes.Clone(rowsSha256[:])
+	otherSha256[0] ^= 0x01
+	if _, err := VerifyBaseKeylessDigest(base.entry(t), key, otherSha256, int64(len(base.rows)), testPreviousBase()); !errors.Is(err, ErrBaseRefused) {
+		t.Errorf("another digest: %v", err)
+	}
+	if _, err := VerifyBaseKeylessDigest(base.entry(t), key, rowsSha256[:], int64(len(base.rows))-1, testPreviousBase()); !errors.Is(err, ErrBaseRefused) {
+		t.Errorf("another byte count: %v", err)
+	}
+	if _, err := VerifyBaseKeylessDigest(base.entry(t), key, rowsSha256[:], -1, testPreviousBase()); !errors.Is(err, ErrBaseRefused) {
+		t.Errorf("a negative byte count: %v", err)
+	}
+}
