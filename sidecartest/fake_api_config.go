@@ -4,8 +4,9 @@
 // what both do.
 //
 // Verification is the real one: each network's log is a rows-only ConfigLog at this api's tip, which judges a
-// statement with ConfigLog.Check and a base with ConfigLog.CheckBase, since api holds no config key. Sequencing is the
-// copy, §7.9's statement, base and uncertain rows:
+// statement with ConfigLog.Check and a base with ConfigLog.CheckBase and its config head's descent with
+// ConfigLog.CheckConfigPushes, since api holds no config key and never reads the config repo. Sequencing is the copy,
+// §7.9's statement, base and uncertain rows:
 //
 //	verify     the retry identity first: a statement whose id an applied entry among the last 4,096 holds, or a base
 //	           this log holds, answers that entry's {n, A_n}; then the verdict at the tip, a refusal answering 403 (a
@@ -14,9 +15,10 @@
 //	412        another appender won the position: read its entry, apply it, and verify again at the new tip
 //	unknown    a timeout or lost response: GET the position; the same bytes are success, another entry a loss (apply
 //	           it and go on at the next position), 404 repeats the PUT with the same bytes
-//	base       its rows first (projrows/, an equal object answering 200), then the entry; base 1 needs the Signed
-//	           Genesis, written at position 0 after entry 1, its commit point, and a retry of base 1 repeats a missing
-//	           step (plan-TEAM-genesis-custody)
+//	base       its config pushes walk from the newest base's head to its own (plan-TEAM-api-config-head-reach), then
+//	           its rows (projrows/, an equal object answering 200), then the entry; base 1 needs the Signed Genesis,
+//	           written at position 0 after entry 1, its commit point, and a retry of base 1 repeats a missing step
+//	           (plan-TEAM-genesis-custody)
 //
 // SequenceAnyway appends what api would refuse, as a malicious sequencer does (FS-102, FS-124), and DropEntry withholds
 // an entry from reads. Reads come from the store, never from this api's memory, so two fake apis over one cluster
@@ -405,9 +407,10 @@ func (self *FakeApi) AppendStatement(ctx context.Context, networkId sidecar.Id, 
 	})
 }
 
-// §7.9's base row: a retry of the same base answers its entry; else the verdict at the tip, the rows, then the entry,
-// and for base 1 the genesis after it (plan-TEAM-genesis-custody). genesis is nil but for base 1.
-func (self *FakeApi) AppendBase(ctx context.Context, networkId sidecar.Id, signedHeader []byte, rows []byte, genesis []byte) (*bridge.AuthPin, error) {
+// §7.9's base row: a retry of the same base answers its entry; else the verdict at the tip and the config head's
+// descent from configPushes, the rows, then the entry, and for base 1 the genesis after it (plan-TEAM-genesis-custody).
+// genesis is nil but for base 1.
+func (self *FakeApi) AppendBase(ctx context.Context, networkId sidecar.Id, signedHeader []byte, rows []byte, genesis []byte, configPushes [][]byte) (*bridge.AuthPin, error) {
 	signed := &bridge.Signed{}
 	header := &bridge.ProjectionHeader{}
 	if err := proto.Unmarshal(signedHeader, signed); err != nil {
@@ -434,7 +437,10 @@ func (self *FakeApi) AppendBase(ctx context.Context, networkId sidecar.Id, signe
 			if pin := configLog.basePins[bodyId]; pin != nil {
 				return pin, nil
 			}
-			return nil, configLog.log.CheckBase(signedHeader, rows)
+			if err := configLog.log.CheckBase(signedHeader, rows); err != nil {
+				return nil, err
+			}
+			return nil, configLog.log.CheckConfigPushes(signedHeader, configPushes)
 		},
 		before: func(ctx context.Context, cluster sidecar.BlobCluster) error {
 			rowsSha256 := sha256.Sum256(rows)
@@ -699,8 +705,8 @@ func (self *FakeApi) handleConfigDelta(writer http.ResponseWriter, request *http
 	fakeApiWriteJson(writer, http.StatusOK, fakeApiPinJson(pin))
 }
 
-// POST /network/config/projection {signed_header, rows, genesis?}: a config writer's base. config_pushes, api's
-// descent check (plan-TEAM-api-config-head-reach), is taken and not judged here, as on server until it lands.
+// POST /network/config/projection {signed_header, rows, genesis?, config_pushes}: a config writer's base, its config
+// head reached by walking config_pushes (plan-TEAM-api-config-head-reach).
 func (self *FakeApi) handleConfigProjectionPublish(writer http.ResponseWriter, request *http.Request) {
 	client := self.client(request)
 	if client == nil {
@@ -715,7 +721,7 @@ func (self *FakeApi) handleConfigProjectionPublish(writer http.ResponseWriter, r
 		fakeApiRefuse(writer, http.StatusForbidden, "config_unadmitted", "An unadmitted client publishes no base.", nil)
 		return
 	}
-	pin, err := self.AppendBase(request.Context(), client.networkId, args.SignedHeader, args.Rows, args.Genesis)
+	pin, err := self.AppendBase(request.Context(), client.networkId, args.SignedHeader, args.Rows, args.Genesis, args.ConfigPushes)
 	if err != nil {
 		fakeApiAppendFailure(writer, err)
 		return

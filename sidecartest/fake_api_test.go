@@ -112,7 +112,7 @@ func TestFakeApiRoutesServeTheLog(t *testing.T) {
 	rows := env.baseOneRows(env.owner)
 	pin := &fakeApiConfigPin{}
 	status, refusal, err := world.call(http.MethodPost, "/network/config/projection", owner, &fakeApiConfigProjectionPublishArgs{
-		SignedHeader: env.base(env.owner, env.tip, rows, 0, 1), Rows: rows, Genesis: env.signedGenesis,
+		SignedHeader: env.base(env.owner, env.tip, rows, 0, 1), Rows: rows, Genesis: env.signedGenesis, ConfigPushes: env.configRepo.pushes(0, 1),
 	}, pin)
 	if err != nil || status != http.StatusOK || pin.N != 1 {
 		t.Fatalf("base 1: %d %v %v", status, refusal, err)

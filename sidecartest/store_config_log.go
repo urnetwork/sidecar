@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -44,8 +45,9 @@ const configLogSuiteCaseTimeout = 120 * time.Second
 type ConfigLogSequencer interface {
 	// §7.9's statement row.
 	AppendStatement(ctx context.Context, networkId sidecar.Id, signed []byte) (*bridge.AuthPin, error)
-	// §7.9's base row; genesis is the Signed Genesis base 1 carries, nil for every other base.
-	AppendBase(ctx context.Context, networkId sidecar.Id, signedHeader []byte, rows []byte, genesis []byte) (*bridge.AuthPin, error)
+	// §7.9's base row; genesis is the Signed Genesis base 1 carries, nil for every other base, and configPushes the
+	// Signed EvsPush of each config version the base adds, oldest first (plan-TEAM-api-config-head-reach).
+	AppendBase(ctx context.Context, networkId sidecar.Id, signedHeader []byte, rows []byte, genesis []byte, configPushes [][]byte) (*bridge.AuthPin, error)
 	// §7.9's tick row.
 	AppendTick(ctx context.Context, networkId sidecar.Id, tick *bridge.ApiTick) (*bridge.AuthPin, error)
 }
@@ -86,6 +88,7 @@ func configLogSuiteCases() []configLogSuiteCase {
 		{name: "a timeout with another entry there is a loss, and the statement lands next", run: caseConfigLogTimeoutLoss},
 		{name: "a statement refused at the tip answers 403 with the tip and writes nothing", run: caseConfigLogRefused},
 		{name: "a base lands, one signed at an old tip answers 409, and a stale compile 403", run: caseConfigLogBases},
+		{name: "a base whose config pushes do not walk to its head answers 403 and writes nothing", run: caseConfigLogDescent},
 		{name: "two genesis race base 1 and one wins", run: caseConfigLogGenesisRace},
 		{name: "a base 1 whose genesis step failed finishes on its retry", run: caseConfigLogGenesisRetry},
 		{name: "a tick lands as api's fact", run: caseConfigLogTick},
@@ -203,6 +206,8 @@ type configLogSuiteEnv struct {
 	networkId     sidecar.Id
 	ownerMemberId sidecar.Id
 	owner         configLogSuiteDevice
+	// the config repo the genesis names, whose main ref's pushes the bases' heads walk
+	configRepo    *configLogSuiteConfigRepo
 	signedGenesis []byte
 	nonce         uint64
 	// the tip as the case last saw it
@@ -227,7 +232,8 @@ func newConfigLogSuiteEnv(ctx context.Context, cluster sidecar.BlobCluster, newS
 		ownerMemberId: configLogSuiteId(),
 	}
 	self.owner = self.device(self.ownerMemberId)
-	self.signedGenesis = self.genesis(self.owner)
+	self.configRepo = newConfigLogSuiteConfigRepo(self.owner)
+	self.signedGenesis = self.genesis(self.owner, self.configRepo)
 	return self
 }
 
@@ -244,6 +250,66 @@ func (self *configLogSuiteEnv) device(memberId sidecar.Id) configLogSuiteDevice 
 	return configLogSuiteDevice{sidecarId: configLogSuiteId(), memberId: memberId, key: key}
 }
 
+// A config repo's main ref as its writers push it (§11.8): each version's Signed EvsPush, made on demand, and the chain
+// value after it, which a base names as its config head. api's walk reads only the repo, ref, push id and the head each
+// push read, so the pushes carry those and their signer, the network's first device, signing as a config writer does.
+type configLogSuiteConfigRepo struct {
+	repoId sidecar.Id
+	refId  sidecar.Id
+	signer configLogSuiteDevice
+	// versionPushes[v-1] makes version v, and chains[v] is C_v
+	versionPushes [][]byte
+	chains        [][sha256.Size]byte
+}
+
+func newConfigLogSuiteConfigRepo(signer configLogSuiteDevice) *configLogSuiteConfigRepo {
+	repoId := configLogSuiteId()
+	refId := configLogSuiteId()
+	return &configLogSuiteConfigRepo{
+		repoId: repoId,
+		refId:  refId,
+		signer: signer,
+		chains: [][sha256.Size]byte{sidecar.EvsChainStart(repoId, refId)},
+	}
+}
+
+// Makes every version through version.
+func (self *configLogSuiteConfigRepo) through(version uint64) {
+	for uint64(len(self.versionPushes)) < version {
+		read := uint64(len(self.versionPushes))
+		pushId := configLogSuiteId()
+		body, _ := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsPush{
+			RepoId:          self.repoId.Bytes(),
+			RefId:           self.refId.Bytes(),
+			PushId:          pushId.Bytes(),
+			BaseVersion:     read,
+			BaseChain:       bytes.Clone(self.chains[read][:]),
+			SignerSidecarId: self.signer.sidecarId.Bytes(),
+		})
+		signed, _ := proto.MarshalOptions{Deterministic: true}.Marshal(&bridge.Signed{
+			Body:     body,
+			SignerId: self.signer.sidecarId.Bytes(),
+			// §6.11's evs-push purpose
+			Signature: ed25519.Sign(self.signer.key, bridge.SignedBytes("evs-push", bridge.SignedType_SIGNED_EVS_PUSH, body)),
+			Type:      uint32(bridge.SignedType_SIGNED_EVS_PUSH),
+		})
+		self.versionPushes = append(self.versionPushes, signed)
+		self.chains = append(self.chains, sidecar.EvsChainNext(self.chains[read], pushId, sidecar.EvsStatementSha256(signed)))
+	}
+}
+
+// C_version.
+func (self *configLogSuiteConfigRepo) head(version uint64) [sha256.Size]byte {
+	self.through(version)
+	return self.chains[version]
+}
+
+// The pushes of the versions after from through to, oldest first.
+func (self *configLogSuiteConfigRepo) pushes(from uint64, to uint64) [][]byte {
+	self.through(to)
+	return slices.Clone(self.versionPushes[from:to])
+}
+
 // body signed by the device's identity key under its type's purpose, as a Signed's bytes.
 func (self *configLogSuiteEnv) sign(signer configLogSuiteDevice, signedType bridge.SignedType, body proto.Message) []byte {
 	bodyBytes, _ := proto.MarshalOptions{Deterministic: true}.Marshal(body)
@@ -258,11 +324,11 @@ func (self *configLogSuiteEnv) sign(signer configLogSuiteDevice, signedType brid
 	return signedBytes
 }
 
-// The network's Signed Genesis, its first device owner's.
-func (self *configLogSuiteEnv) genesis(owner configLogSuiteDevice) []byte {
+// The network's Signed Genesis, its first device owner's, naming configRepo.
+func (self *configLogSuiteEnv) genesis(owner configLogSuiteDevice, configRepo *configLogSuiteConfigRepo) []byte {
 	return self.sign(owner, bridge.SignedType_SIGNED_GENESIS, &bridge.Genesis{
 		NetworkId:              self.networkId.Bytes(),
-		ConfigRepoId:           configLogSuiteId().Bytes(),
+		ConfigRepoId:           configRepo.repoId.Bytes(),
 		OwnerMemberId:          owner.memberId.Bytes(),
 		OwnerSidecarId:         owner.sidecarId.Bytes(),
 		OwnerIdentityPublicKey: owner.key.Public().(ed25519.PublicKey),
@@ -285,10 +351,14 @@ func (self *configLogSuiteEnv) baseOneRows(owner configLogSuiteDevice) []byte {
 	return rows
 }
 
-// A base signed by signer at the tip given, over rows.
+// A base signed by signer at the tip given, over rows, naming the head of the env's config repo at configVersion.
 func (self *configLogSuiteEnv) base(signer configLogSuiteDevice, tip *bridge.AuthPin, rows []byte, foldedThrough uint64, configVersion uint64) []byte {
+	return self.baseNaming(signer, tip, rows, foldedThrough, configVersion, self.configRepo.head(configVersion))
+}
+
+// A base as base makes it, naming headSha256 as its config head.
+func (self *configLogSuiteEnv) baseNaming(signer configLogSuiteDevice, tip *bridge.AuthPin, rows []byte, foldedThrough uint64, configVersion uint64, headSha256 [sha256.Size]byte) []byte {
 	rowsSha256 := sha256.Sum256(rows)
-	headSha256 := sha256.Sum256(binary.BigEndian.AppendUint64([]byte("suite head"), configVersion))
 	return self.sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, &bridge.ProjectionHeader{
 		NetworkId:        self.networkId.Bytes(),
 		Version:          tip.GetVersion() + 1,
@@ -392,7 +462,7 @@ func (self *configLogSuiteEnv) start(sequencer ConfigLogSequencer) error {
 	genesisChain := bridge.GenesisChain(self.signedGenesis)
 	self.tip = &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}
 	pin, err := sequencer.AppendBase(self.ctx, self.networkId, self.base(self.owner, self.tip, self.baseOneRows(self.owner), 0, 1),
-		self.baseOneRows(self.owner), self.signedGenesis)
+		self.baseOneRows(self.owner), self.signedGenesis, self.configRepo.pushes(0, 1))
 	if err != nil {
 		return fmt.Errorf("base 1: %w", err)
 	}
@@ -670,7 +740,7 @@ func caseConfigLogBases(env *configLogSuiteEnv) error {
 		return err
 	}
 	// signed at the old tip: the tip moved
-	_, err := sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, oldTip, rows, 2, 2), rows, nil)
+	_, err := sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, oldTip, rows, 2, 2), rows, nil, env.configRepo.pushes(1, 2))
 	refusal, err := configLogSuiteRefusal(err, http.StatusConflict)
 	if err != nil {
 		return fmt.Errorf("a base at an old tip: %w", err)
@@ -680,7 +750,7 @@ func caseConfigLogBases(env *configLogSuiteEnv) error {
 	}
 	// re-signed at the tip, it lands
 	signedHeader := env.base(env.owner, env.tip, rows, 2, 2)
-	pin, err := sequencer.AppendBase(env.ctx, env.networkId, signedHeader, rows, nil)
+	pin, err := sequencer.AppendBase(env.ctx, env.networkId, signedHeader, rows, nil, env.configRepo.pushes(1, 2))
 	if err != nil {
 		return fmt.Errorf("the re-signed base: %w", err)
 	}
@@ -691,20 +761,72 @@ func caseConfigLogBases(env *configLogSuiteEnv) error {
 	env.clock.Advance(time.Second)
 	// a stale compile: a lower fold, then an older head
 	for _, stale := range [][2]uint64{{1, 2}, {2, 1}} {
-		_, err := sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, env.tip, rows, stale[0], stale[1]), rows, nil)
+		_, err := sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, env.tip, rows, stale[0], stale[1]), rows, nil, nil)
 		if _, err := configLogSuiteRefusal(err, http.StatusForbidden); err != nil {
 			return fmt.Errorf("a stale compile folding %d at version %d: %w", stale[0], stale[1], err)
 		}
 	}
 	// rows that do not hash to rows_sha256
-	_, err = sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, env.tip, rows, 2, 2), append(bytes.Clone(rows), 0), nil)
+	_, err = sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, env.tip, rows, 2, 2), append(bytes.Clone(rows), 0), nil, nil)
 	if _, err := configLogSuiteRefusal(err, http.StatusForbidden); err != nil {
 		return fmt.Errorf("rows off their hash: %w", err)
 	}
 	// a retry of the landed base answers its entry
-	again, err := env.sequencer().AppendBase(env.ctx, env.networkId, signedHeader, rows, nil)
+	again, err := env.sequencer().AppendBase(env.ctx, env.networkId, signedHeader, rows, nil, env.configRepo.pushes(1, 2))
 	if err != nil || !proto.Equal(again, pin) {
 		return fmt.Errorf("a retry of the landed base: %v", err)
+	}
+	return nil
+}
+
+func caseConfigLogDescent(env *configLogSuiteEnv) error {
+	sequencer := env.sequencer()
+	if err := env.start(sequencer); err != nil {
+		return err
+	}
+	rows := env.baseOneRows(env.owner)
+	before, err := env.positions()
+	if err != nil {
+		return err
+	}
+	pushes := env.configRepo.pushes(1, 3)
+	other := newConfigLogSuiteConfigRepo(env.owner)
+	refusals := []struct {
+		name         string
+		signedHeader []byte
+		pushes       [][]byte
+	}{
+		{name: "a push short", signedHeader: env.base(env.owner, env.tip, rows, 1, 3), pushes: pushes[:1]},
+		{name: "two pushes swapped", signedHeader: env.base(env.owner, env.tip, rows, 1, 3), pushes: [][]byte{pushes[1], pushes[0]}},
+		{name: "another repo's pushes", signedHeader: env.baseNaming(env.owner, env.tip, rows, 1, 3, other.head(3)), pushes: other.pushes(1, 3)},
+		{name: "an unchanged version naming another head", signedHeader: env.baseNaming(env.owner, env.tip, rows, 1, 1, other.head(1)), pushes: nil},
+	}
+	for _, refused := range refusals {
+		_, err := sequencer.AppendBase(env.ctx, env.networkId, refused.signedHeader, rows, nil, refused.pushes)
+		if _, err := configLogSuiteRefusal(err, http.StatusForbidden); err != nil {
+			return fmt.Errorf("%s: %w", refused.name, err)
+		}
+	}
+	after, err := env.positions()
+	if err != nil {
+		return err
+	}
+	if len(after) != len(before) {
+		return fmt.Errorf("refused bases wrote %d entries", len(after)-len(before))
+	}
+	// the walk that reaches the head lands, and then an unchanged version naming the same head
+	signedHeader := env.base(env.owner, env.tip, rows, 1, 3)
+	pin, err := sequencer.AppendBase(env.ctx, env.networkId, signedHeader, rows, nil, pushes)
+	if err != nil {
+		return fmt.Errorf("the base the walk reaches: %w", err)
+	}
+	if err := env.checkEntry(pin, bridge.AuthEntryKindBase, signedHeader); err != nil {
+		return err
+	}
+	env.tip = pin
+	env.clock.Advance(time.Second)
+	if _, err := sequencer.AppendBase(env.ctx, env.networkId, env.base(env.owner, env.tip, rows, 1, 3), rows, nil, nil); err != nil {
+		return fmt.Errorf("an unchanged version naming its head: %w", err)
 	}
 	return nil
 }
@@ -715,10 +837,12 @@ func caseConfigLogGenesisRace(env *configLogSuiteEnv) error {
 		return err
 	}
 	rival := env.device(configLogSuiteId())
-	rivalGenesis := env.genesis(rival)
+	rivalRepo := newConfigLogSuiteConfigRepo(rival)
+	rivalGenesis := env.genesis(rival, rivalRepo)
 	rivalChain := bridge.GenesisChain(rivalGenesis)
 	rows := env.baseOneRows(rival)
-	_, err := second.AppendBase(env.ctx, env.networkId, env.base(rival, &bridge.AuthPin{Version: 0, Chain: rivalChain[:]}, rows, 0, 1), rows, rivalGenesis)
+	rivalBase := env.baseNaming(rival, &bridge.AuthPin{Version: 0, Chain: rivalChain[:]}, rows, 0, 1, rivalRepo.head(1))
+	_, err := second.AppendBase(env.ctx, env.networkId, rivalBase, rows, rivalGenesis, rivalRepo.pushes(0, 1))
 	if err == nil {
 		return errors.New("a second genesis took base 1")
 	}
@@ -845,15 +969,24 @@ func NewConfigLogSuiteWorldFor(ctx context.Context, cluster sidecar.BlobCluster,
 	env.ownerMemberId = ownerMemberId
 	env.owner.memberId = ownerMemberId
 	env.owner.sidecarId = ownerSidecarId
-	env.signedGenesis = env.genesis(env.owner)
+	env.configRepo = newConfigLogSuiteConfigRepo(env.owner)
+	env.signedGenesis = env.genesis(env.owner, env.configRepo)
 	return &ConfigLogSuiteWorld{env: env}
 }
 
-// Base 1 as its first device posts it: the Signed header, the rows and the Signed Genesis.
-func (self *ConfigLogSuiteWorld) BaseOne() (signedHeader []byte, rows []byte, signedGenesis []byte) {
+// Base 1 as its first device posts it: the Signed header, the rows, the Signed Genesis and the config head's first
+// push.
+func (self *ConfigLogSuiteWorld) BaseOne() (signedHeader []byte, rows []byte, signedGenesis []byte, configPushes [][]byte) {
 	genesisChain := bridge.GenesisChain(self.env.signedGenesis)
 	rows = self.env.baseOneRows(self.env.owner)
-	return self.env.base(self.env.owner, &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}, rows, 0, 1), rows, self.env.signedGenesis
+	signedHeader = self.env.base(self.env.owner, &bridge.AuthPin{Version: 0, Chain: genesisChain[:]}, rows, 0, 1)
+	return signedHeader, rows, self.env.signedGenesis, self.env.configRepo.pushes(0, 1)
+}
+
+// The Signed EvsPush of each version of the network's config head after from through to, as a base adding them
+// carries them.
+func (self *ConfigLogSuiteWorld) ConfigPushes(from uint64, to uint64) [][]byte {
+	return self.env.configRepo.pushes(from, to)
 }
 
 // The owner's MemberAdmit of a fresh member, signed at the tip the world last saw.
