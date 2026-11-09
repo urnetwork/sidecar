@@ -152,9 +152,8 @@ var _ = RegisterLeak(&Leak{Class: PrivacyClassRedis, Binary: true, Put: func(t t
 
 var _ = RegisterLeak(&Leak{Class: PrivacyClassUsage, Binary: true, Put: func(t testing.TB, net *Net, value []byte) {
 	batch := &sidecar.UsageBatch{BatchId: connect.NewId(), Producer: "evs", Events: []*sidecar.UsageEvent{{NetworkId: connect.NewId(), Meter: string(value)}}}
-	if err := net.Host().Quota.ReportUsage(t.Context(), batch); err != nil {
-		t.Fatal(err)
-	}
+	// api refuses a meter it does not know only once it has read the batch, and the read is the leak
+	net.Host().Quota.ReportUsage(t.Context(), batch)
 }})
 
 var _ = RegisterLeak(&Leak{Class: PrivacyClassTask, Binary: true, Put: func(t testing.TB, net *Net, value []byte) {

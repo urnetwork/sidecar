@@ -130,7 +130,7 @@ func TestWriteBudgetHeaviestNetworkIsByQueuedBytesPerWeight(t *testing.T) {
 func TestWriteBudgetWeightsComeFromQuotaAndGoStale(t *testing.T) {
 	settings := governorTestSettings()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
-	quota := sidecartest.NewFakeQuota(sidecartest.NewFaultQueue(), nil)
+	quota := sidecartest.NewFakeQuota(clock, sidecartest.NewFaultQueue(), nil)
 	team := connect.NewId()
 	absent := connect.NewId()
 	quota.SetLimits(team, &sidecar.QuotaLimits{Tier: "team", Limits: map[string]int64{"store_weight": 16}})
