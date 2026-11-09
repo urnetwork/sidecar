@@ -538,3 +538,32 @@ func TestPinConcurrentPicksDuringEntrySwaps(t *testing.T) {
 	default:
 	}
 }
+
+// §17.5's removed row, per protocol: with every link draining, a new pair hashes over the links that still serve its
+// own protocol, so a UDP pair never lands on a link whose UDP drain has ended while its TCP drain runs on.
+func TestPinDrainingLinksServeEachProtocolTheirOwnWhile(t *testing.T) {
+	clock, settings := bridgePinTestSettings(1024)
+	table := device.NewBridgePinTable(settings)
+	start := clock.Now()
+	entry := device.NewBridgeEntryState([]device.BridgeEntryLink{
+		{Link: 1, Weight: 1, DrainingSince: start, DrainUntil: start.Add(400 * time.Second)},
+		{Link: 2, Weight: 1, DrainingSince: start, DrainUntil: start.Add(100 * time.Second)},
+	}, settings)
+	// at 350 s link 2 serves TCP to 600 s and UDP no longer, past its 5 min floor; link 1 serves both to 400 s
+	clock.Advance(350 * time.Second)
+	tcpSeen := map[device.BridgeLinkId]bool{}
+	for i := range 100 {
+		if link := table.Pick(entry, bridgePinTestUdp(bridgePinTestSource(i), 0, false)); link != 1 {
+			t.Fatalf("a UDP pair took %d", link)
+		}
+		tcpSeen[table.Pick(entry, bridgePinTestTcp(bridgePinTestSource(1000+i), 50000, 443, false))] = true
+	}
+	if !tcpSeen[1] || !tcpSeen[2] || tcpSeen[0] {
+		t.Fatalf("TCP pairs went to %v", tcpSeen)
+	}
+	// past 600 s nothing serves, and a pair is answered with no link
+	clock.Advance(251 * time.Second)
+	if link := table.Pick(entry, bridgePinTestTcp(bridgePinTestSource(5000), 50000, 443, false)); link != 0 {
+		t.Fatalf("a drained entry gave %d", link)
+	}
+}
