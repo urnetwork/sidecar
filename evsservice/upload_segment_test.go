@@ -191,6 +191,22 @@ func TestUploadSegmentRefusesABadHeaderOrChecksum(t *testing.T) {
 	}
 }
 
+// A segment the cluster stores counts one PUT toward the cluster's rate (§19.8's urnetwork_filecluster_hdd_puts);
+// a re-upload's 412, bytes that are not their id and an upload refused before the write count none.
+func TestUploadSegmentCountsOnlyStoredPuts(t *testing.T) {
+	fixture := newUploadFixture(t)
+	segment := testSegment(fixture.repoId, 4096, 6)
+	segmentId := sha256.Sum256(segment)
+	fixture.receipt(fixture.upload(fixture.writer, "rw", segment, segmentId, false))
+	fixture.receipt(fixture.upload(fixture.writer, "rw", segment, segmentId, false))
+	wrongId := sha256.Sum256([]byte("not these bytes"))
+	requireRefusal(t, fixture.upload(fixture.writer, "rw", segment, wrongId, false), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	requireRefusal(t, fixture.upload(fixture.reader, "r", segment, segmentId, false), http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	if got := fixture.hdd.putCount.Load(); got != 1 {
+		t.Fatalf("%d PUTs counted, want the one stored", got)
+	}
+}
+
 // At the storage limit an upload gets §20.7's QuotaRefusal, and past the HDD line 503 with Retry-After, the
 // quota first.
 func TestUploadSegmentRefusesAtTheLimitAndPastTheHddLine(t *testing.T) {

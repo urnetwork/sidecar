@@ -13,9 +13,10 @@
 //     header FORMAT_UNSUPPORTED {needs_format: 2}, and format 2 adds 409 VERSIONING and the versionless mark at M10.
 //
 // A stored segment answers 200 {EvsUploadReceipt} (upload_receipt.go), adds its size to the repo network's stored
-// bytes through the usage batcher, and writes nothing to the metadata cluster. One that exists (412) is HEADed
-// once: its LastModified is upload_ms, or 409 SEGMENT_STALE past 23 h, so the client re-seals. The checksum is the
-// store's to verify, and a body that is not the id it names writes nothing (400).
+// bytes through the usage batcher, counts toward the segment cluster's PUTs a second (HddAdmission.CountPut), and
+// writes nothing to the metadata cluster. One that exists (412) is HEADed once: its LastModified is upload_ms, or
+// 409 SEGMENT_STALE past 23 h, so the client re-seals. The checksum is the store's to verify, and a body that is
+// not the id it names writes nothing (400).
 
 package evsservice
 
@@ -215,6 +216,10 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 	uploadTime := request.Now()
 	_, err = segmentCluster.PutStream(request.Ctx, key, io.MultiReader(bytes.NewReader(header), request.Http.Body), byteCount, segmentId[:])
 	stored := err == nil
+	if stored && deps.Hdd != nil {
+		// the cluster took the PUT whatever the answer below
+		deps.Hdd.CountPut()
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, sidecar.ErrBlobChecksum):
