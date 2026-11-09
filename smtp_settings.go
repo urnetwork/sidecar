@@ -34,6 +34,24 @@ type SmtpSenderSettings struct {
 	// How long an MX host's best TLS level and its post-TLS mode stay pinned: 90 days (§14.4, §14.5).
 	// Nothing is sent below a pin while it holds.
 	PinTimeout time.Duration
+	// How many MX hosts' pins, and how many recipient domains' last sessions, the pin store keeps:
+	// 4,096 each, the one closest to lapsing leaving first past it, so the sealed file stays small
+	// enough to rewrite on every send.
+	PinMaxCount int
+	// How long one of TL2's or TL3's DoH lookups, the _mta-sts TXT or the recipient domain's MX, may
+	// take before that level counts as unavailable for the send: 15 s, well inside the 5 minutes an MX
+	// waits for the ClientHello after STARTTLS's 220.
+	TlsLookupTimeout time.Duration
+	// How long the HTTPS fetch of an MTA-STS policy may take: 1 min, RFC 8461 §3.3's suggestion.
+	MtaStsFetchTimeout time.Duration
+	// The largest MTA-STS policy body taken: 64 KiB, RFC 8461 §3.3's suggestion.
+	MtaStsPolicyMaxByteCount int
+	// How long after a failed fetch for one policy id the next fetch waits: 5 min, RFC 8461 §3.3's
+	// floor, so a broken policy host is not asked again on every send.
+	MtaStsFetchRetryTimeout time.Duration
+	// How many recipient domains' MTA-STS policies stay cached: 4,096, the one closest to its max_age
+	// leaving first past it.
+	MtaStsPolicyMaxCount int
 	// How often a prover host rewrites or/ while a send it took runs: 5 min, so another host can see
 	// it is alive (plan-SMTP-small-readings#10).
 	OutboxProgressInterval time.Duration
@@ -61,6 +79,12 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		RetryUnitsPerMessagePerDay: 2,
 		ProverConcurrency:          1,
 		PinTimeout:                 90 * 24 * time.Hour,
+		PinMaxCount:                4096,
+		TlsLookupTimeout:           15 * time.Second,
+		MtaStsFetchTimeout:         time.Minute,
+		MtaStsPolicyMaxByteCount:   64 * 1024,
+		MtaStsFetchRetryTimeout:    5 * time.Minute,
+		MtaStsPolicyMaxCount:       4096,
 		OutboxProgressInterval:     5 * time.Minute,
 		OutboxTakeoverTimeout:      10 * time.Minute,
 		DkimRotateTimeout:          90 * 24 * time.Hour,
