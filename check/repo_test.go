@@ -64,14 +64,17 @@ const (
 	iosExtensionTag     = "ios_extension"
 )
 
-// Names the walks do not enter: git's objects, documents that hold no Go, and fixtures another
-// test owns.
+// Names the walks do not enter: git's objects, documents that hold no Go, fixtures another test owns,
+// and third_party/, whose modules are QD-193's forks of others' code under their own paths, not
+// modules of this repository. A leg that links a fork still reads it, through the go command, as
+// the third-party module it is: its dependencies.yml row, its license files and its closure.
 var skippedDirectoryNames = map[string]bool{
 	".git":           true,
 	"design":         true,
 	"node_modules":   true,
 	"research_notes": true,
 	"testdata":       true,
+	"third_party":    true,
 }
 
 // A path element of the release's kind, such as v2026.

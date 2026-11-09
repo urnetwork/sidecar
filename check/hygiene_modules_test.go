@@ -41,8 +41,17 @@ var repositoryReplaces = map[string]string{
 	sidecarBasePath + "/smtpproof": "../smtpproof",
 }
 
+// The third-party modules this repository carries a fork of, by the fork's directory from the root
+// module's (QD-193): D-MAIL-3's go-smtp and plan-MAIL-mox-subset's mox. A module whose graph holds one
+// replaces it with the fork, since Go does not inherit a replace and upstream's go-smtp refuses every
+// session. A module may also name a fork before its graph holds it, as each names mox's.
+var forkReplaces = map[string]string{
+	"github.com/emersion/go-smtp": "third_party/go-smtp",
+	"github.com/mjl-/mox":         "third_party/mox",
+}
+
 // §4.7's replaces, development layout: the four siblings exactly, one level further up in a nested
-// module, which may also point at this repository's own modules.
+// module, which may also point at this repository's own modules, and QD-193's forks.
 func replaceFindingsDevelopment(module *repositoryModule) []string {
 	findings := []string{}
 	targets := map[string]string{}
@@ -64,6 +73,27 @@ func replaceFindingsDevelopment(module *repositoryModule) []string {
 		}
 		if got != target {
 			findings = append(findings, findingf("%s: replace %s => %s, and §4.7's is %s", module.relativeName, old, got, target))
+		}
+		delete(targets, old)
+	}
+	required := map[string]bool{}
+	for _, require := range module.file.Require {
+		required[require.Path] = true
+	}
+	for old, directory := range forkReplaces {
+		target := "./" + directory
+		if module.relativeName != "." {
+			target = "../" + directory
+		}
+		got, found := targets[old]
+		if !found {
+			if required[old] {
+				findings = append(findings, findingf("%s: requires %s and does not replace it with QD-193's fork at %s", module.relativeName, old, target))
+			}
+			continue
+		}
+		if got != target {
+			findings = append(findings, findingf("%s: replace %s => %s, and QD-193's is %s", module.relativeName, old, got, target))
 		}
 		delete(targets, old)
 	}
@@ -92,12 +122,24 @@ var versionElementSuffixPattern = regexp.MustCompile(`/v[0-9]+$`)
 
 // §4.7's replaces, release layout. The release step drops connect's and glog's for tagged requires
 // (build/all/run.sh:1546-1549), points gVisor at the urnetwork fork (:1551) and rebases what stays
-// (:1568), so each may be absent, and a path may climb further, but nothing else may appear.
+// (:1568), so each may be absent, and a path may climb further, but nothing else may appear. A fork's
+// replace stays a local path that ends at its directory, wherever the step leaves third_party/: the
+// root's moves with the root into v2026/, and a nested module's climbs as far as it must.
 func replaceFindingsRelease(module *repositoryModule) []string {
 	findings := []string{}
 	for _, replace := range module.file.Replace {
 		old := firstPartyBase(replace.Old.Path)
 		newPath := replace.New.Path
+		if directory, fork := forkReplaces[old]; fork {
+			cleaned := path.Clean(newPath)
+			local := strings.HasPrefix(newPath, "./") || strings.HasPrefix(newPath, "../")
+			if replace.New.Version != "" || !local {
+				findings = append(findings, findingf("%s: replace %s => %s %s is not a local path", module.relativeName, replace.Old.Path, newPath, replace.New.Version))
+			} else if cleaned != directory && !strings.HasSuffix(cleaned, "/"+directory) {
+				findings = append(findings, findingf("%s: replace %s => %s does not end at %s", module.relativeName, replace.Old.Path, newPath, directory))
+			}
+			continue
+		}
 		_, sibling := siblingReplaces[old]
 		_, own := repositoryReplaces[old]
 		sidecarctlTarget, sidecarctlSibling := sidecarctlSiblingReplaces[old]
