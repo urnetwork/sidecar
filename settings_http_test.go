@@ -24,3 +24,18 @@ func TestConnectSettingsAreEmptyOnThisLeg(t *testing.T) {
 		t.Error("nil, where a host may read the field on every leg")
 	}
 }
+
+// §5.9's wasm cost: OWASP's 19 MiB, t=2, p=1.
+const (
+	testLegPassMemoryByteCount = 19 * 1024 * 1024
+	testLegPassIterationCount  = 2
+	testLegPassThreadCount     = 1
+)
+
+// The page Worker's pass costs §5.9's wasm Argon2id, so a keychain open on one thread stays short.
+func TestPassCostOnThisLeg(t *testing.T) {
+	settings := DefaultSidecarSettings().KeychainSettings
+	if settings.PassMemoryByteCount != 19*1024*1024 || settings.PassIterationCount != 2 || settings.PassThreadCount != 1 {
+		t.Errorf("Argon2id at %d B, t=%d, p=%d", settings.PassMemoryByteCount, settings.PassIterationCount, settings.PassThreadCount)
+	}
+}

@@ -47,6 +47,12 @@ func defaultSidecarConnectSettings() *SidecarConnectSettings {
 	}
 }
 
+// Argon2id's cost on connect legs: RFC 9106 §4's 64 MiB, t=3, p=4 (§5.9). An sdk mobile host lowers it to OWASP's 19
+// MiB, t=2, p=1 as it adjusts its other settings (§18.4).
+func defaultSidecarPassCost() (memoryByteCount int64, iterationCount int, threadCount int) {
+	return 64 * 1024 * 1024, 3, 4
+}
+
 // What validate adds on connect legs: the client's url, a client that is a sidecar's, and the
 // sender's settings. A host adjusts these settings, so I-3's mode is checked here and not only set
 // above. A nil SmtpProver is a valid host, one that only queues.
