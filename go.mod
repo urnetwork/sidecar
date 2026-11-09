@@ -7,6 +7,7 @@ tool google.golang.org/protobuf/cmd/protoc-gen-go
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/andybalholm/brotli v1.2.7
+	github.com/emersion/go-message v0.18.2
 	github.com/emersion/go-smtp v0.25.1
 	github.com/klauspost/compress v1.20.2
 	github.com/miekg/dns v1.1.72

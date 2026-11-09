@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("From ada@sender.example Mon Nov  9 10:00:00 2026\r\n continuation first\r\nno colon\r\nSubject: s\r\nBad Key: v\r\n\r\nbody")
