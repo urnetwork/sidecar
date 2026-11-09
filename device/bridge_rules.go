@@ -356,6 +356,15 @@ func checkBridgeRulesEntries(rules *bridge.BridgeRules, blocks *bridgeRulesBlock
 		seen[prefix] = true
 		switch entry.GetKind() {
 		case bridge.BridgeRuleEntryKind_BRIDGE_RULE_ENTRY_KIND_LINK:
+			// in a block, a link entry is a host's /32 or a remapped range, and §17.4 keeps both off its services
+			if block, ok := blocks.blockOf(prefix); ok {
+				if bridgeServicePrefix(block).Overlaps(prefix) {
+					return bridgeRulesFault(row, "a link entry over the block's services")
+				}
+				if lastOctet := prefix.Addr().As4()[3]; prefix.IsSingleIP() && (lastOctet == 0 || lastOctet == 255) {
+					return bridgeRulesFault(row, "a host ending in 0 or 255")
+				}
+			}
 			err := checkBridgeRuleLinks(row, entry.GetLinks())
 			if err != nil {
 				return err

@@ -7,6 +7,8 @@ package sidecartest
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -403,6 +405,33 @@ func TestSearchOracleHandCorpusCovered(t *testing.T) {
 	}
 }
 
+// A ref DELETE is a ref tombstone above every earlier version of the ref's documents, and a document the
+// ref re-creates after it stays (§11.14's version row).
+func TestSearchOracleRefDeleteMasksEarlierDocuments(t *testing.T) {
+	hand := newSearchHand(t)
+	hand.commit("notes", 0, false, put("notes/a.md", 1, "alphaword\n"), put("notes/b.md", 1, "alphaword betaword\n"))
+	notes := hand.repos["notes"].repo
+	hand.refVer["notes"] += 1
+	err := hand.ledger.Commit(&SearchCommit{
+		RepoId:     notes.RepoId,
+		RefId:      notes.RefId,
+		RefVersion: hand.refVer["notes"],
+		Time:       hand.at.Add(24 * time.Hour),
+		DeleteRef:  true,
+		Indexed:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hand.oracle.Matches("alphaword", hand.network()); len(got) != 0 {
+		t.Errorf("documents before the DELETE still found: %v", hand.names(got))
+	}
+	hand.commit("notes", 2, false, put("notes/b.md", 2, "betaword again\n"))
+	if got := hand.names(hand.oracle.Matches("betaword", hand.network())); !slices.Equal(got, []string{"notes:notes/b.md"}) {
+		t.Errorf("the re-created document = %v", got)
+	}
+}
+
 func TestSearchLedgerRefusesWhatEvsWould(t *testing.T) {
 	hand := newSearchHand(t)
 	hand.commit("notes", 0, false, put("notes/a.md", 2, "a"))
@@ -494,6 +523,42 @@ func TestSearchOracleNormalizerSteps(t *testing.T) {
 	fields[1] = []byte(strings.Repeat("日", 400))
 	if got := searchOracleDocumentText(fields); !strings.HasPrefix(got, " "+strings.Repeat("日", 341)+" ") {
 		t.Errorf("a field not cut on a code point: %q", got[:20])
+	}
+}
+
+// The oracle's normalizer, written apart from the index's, gives testdata/index/normalize's outputs: two
+// readings of INDEX-FORMAT.md agreeing. A difference fails here, and its cause is found in the format's
+// text, never by copying either side into the other.
+func TestSearchOracleAgreesWithIndexNormalizeVectors(t *testing.T) {
+	raw, err := os.ReadFile("../testdata/index/normalize/vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Vectors []struct {
+			Name          string `json:"name"`
+			TextHex       string `json:"text_hex"`
+			NormalizedHex string `json:"normalized_hex"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Vectors) == 0 {
+		t.Fatal("no vectors to compare")
+	}
+	for _, vector := range file.Vectors {
+		text, err := hex.DecodeString(vector.TextHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := hex.DecodeString(vector.NormalizedHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := searchOracleNormalize(text); got != string(want) {
+			t.Errorf("%s: the oracle reads %q, the index's vector %q", vector.Name, got, want)
+		}
 	}
 }
 

@@ -100,10 +100,10 @@ EOF
 # IndexRollup's twins run by seeded simulation over the whole story, where breadth-first search does
 # not reach their violations in time. MergeDropsBase and DiffOnHeadDiff need the journaler's
 # consecutive diffs and a backfilled copy between them, so they run with the roll-up and the erasure
-# held still. Its two design findings are not twins but constants: Supersede="index" and
-# RollupFence="files" are §11.14 as written, which TLC refuses (questions
-# search-m10-07-late-journal-tombstone and search-m10-07-rollup-merge-race), and the cfg runs their
-# candidate rules.
+# held still. Its three design findings are not twins but constants: Supersede="index",
+# RollupFence="files" and MergeCompose="newest" are §11.14 as written, which TLC refuses (questions
+# search-m10-07-late-journal-tombstone, search-m10-07-rollup-merge-race and
+# search-m10-07-merge-stale-diff), and the cfg runs their candidate rules.
 twins_IndexRollup() {
   local sim="Simulate=140 Seed=1"
   cat <<EOF
