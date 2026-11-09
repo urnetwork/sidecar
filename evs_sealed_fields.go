@@ -4,6 +4,10 @@
 // push's generation, AAD "UR evs 1.0 fields" or "UR evs 1.0 metadata" || repo_id || u64be(g) (plan-EVS1-format-bytes#9);
 // on a deposit ref under the deposit's K_dep, which takes manifest's place (#5). evs stores them and never opens one.
 //
+// Format 2 adds content_sha256, the SHA-256 of the file's whole plaintext, which a versionless file's sealed fields
+// carry and a versioned file's do not (§11.6, §11.7's content row): EvsSealFieldsFormat2 and EvsOpenFieldsFormat2 take
+// the version's versioning and hold the fields to it, one missing or out of place failing as tampering.
+//
 // Also the AEAD every evs seal shares: XChaCha20-Poly1305 with a random 24-byte nonce drawn per seal, so writers share
 // no counter and nothing is encrypted deterministically (§11.6's nonces row).
 //
@@ -13,6 +17,7 @@ package sidecar
 
 import (
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -92,6 +97,29 @@ func checkEvsSealedFields(fields *protocol.EvsSealedFields) error {
 	if len(fields.GetContentSha256()) != 0 {
 		return fmt.Errorf("%w: content_sha256 in a file's sealed fields", ErrEvsFormatUnsupported)
 	}
+	return checkEvsSealedFieldsCommon(fields)
+}
+
+// What format 2 holds a file's sealed fields to for a version of versioning: content_sha256 of 32 bytes for versioning
+// 1 and 2, none for 0, and format 1's rules besides; a versioning past 2 seals nothing.
+func checkEvsSealedFieldsFormat2(fields *protocol.EvsSealedFields, versioning uint32) error {
+	switch versioning {
+	case uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT):
+		if len(fields.GetContentSha256()) != 0 {
+			return fmt.Errorf("%w: content_sha256 in a versioned file's sealed fields", ErrEvsSealInvalid)
+		}
+	case uint32(protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS), uint32(protocol.EvsVersioning_EVS_VERSIONING_INDEX):
+		if len(fields.GetContentSha256()) != sha256.Size {
+			return fmt.Errorf("%w: a versionless file's content_sha256 of %d bytes", ErrEvsSealInvalid, len(fields.GetContentSha256()))
+		}
+	default:
+		return fmt.Errorf("%w: versioning %d", ErrEvsSealInvalid, versioning)
+	}
+	return checkEvsSealedFieldsCommon(fields)
+}
+
+// The rules both formats hold a file's sealed fields to.
+func checkEvsSealedFieldsCommon(fields *protocol.EvsSealedFields) error {
 	if len(fields.GetFileId()) != 16 {
 		return fmt.Errorf("%w: a file_id of %d bytes", ErrEvsSealInvalid, len(fields.GetFileId()))
 	}
@@ -134,6 +162,42 @@ func EvsOpenFields(manifestKey *EvsManifestKey, sealed []byte) (*protocol.EvsSea
 		return nil, fmt.Errorf("%w: sealed fields that do not parse", ErrEvsSealInvalid)
 	}
 	if err := checkEvsSealedFields(fields); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
+// A format-2 file's sealed_fields for a version of versioning under manifestKey, as EvsSealFields seals format 1's:
+// content_sha256 set for versioning 1 and 2 and absent for 0.
+func EvsSealFieldsFormat2(manifestKey *EvsManifestKey, fields *protocol.EvsSealedFields, versioning uint32) ([]byte, error) {
+	if err := manifestKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	if err := checkEvsSealedFieldsFormat2(fields, versioning); err != nil {
+		return nil, err
+	}
+	plaintext, err := proto.MarshalOptions{Deterministic: true}.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("evs: sealed fields: %w", err)
+	}
+	return evsSeal(manifestKey.key, plaintext, evsLabeledAad(evsFieldsAadLabel, manifestKey.repoId, manifestKey.generation))
+}
+
+// A format-2 file's sealed fields opened and held to the version's versioning: ErrEvsSealInvalid for a seal that does
+// not open, a value no file has, or a content_sha256 missing from a versionless version or set on a versioned one.
+func EvsOpenFieldsFormat2(manifestKey *EvsManifestKey, sealed []byte, versioning uint32) (*protocol.EvsSealedFields, error) {
+	if err := manifestKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	plaintext, err := evsOpen(manifestKey.key, sealed, evsLabeledAad(evsFieldsAadLabel, manifestKey.repoId, manifestKey.generation))
+	if err != nil {
+		return nil, err
+	}
+	fields := &protocol.EvsSealedFields{}
+	if err := proto.Unmarshal(plaintext, fields); err != nil {
+		return nil, fmt.Errorf("%w: sealed fields that do not parse", ErrEvsSealInvalid)
+	}
+	if err := checkEvsSealedFieldsFormat2(fields, versioning); err != nil {
 		return nil, err
 	}
 	return fields, nil

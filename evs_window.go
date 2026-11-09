@@ -3,7 +3,10 @@
 // statement_sha256[0:16] | place 20 | paths_digest u64 | flags u32 (plan-EVS1-format-bytes#7). The flags' bits are
 // EvsWindowFlag's: 0 the push creates a path, 1 its change list is in the payload under changes_root, 2 PATH_EPOCH, 3
 // FORCE, DELETE, BASE or ERASE; 4 and 5 are format 2's, which format 1 ignores on read; 6 to 15 are none, and a reader
-// refuses them; 16 to 31 hold the change count, saturating.
+// refuses them; 16 to 31 hold the change count, saturating. In format 2, bit 4 marks a push that replaces or removes a
+// versionless version, its record listing the purge's candidates or marked, which evs sets as it lists them, and bit
+// 5 a DROP push, a cancel included, set from the statement's flag; a reader takes both as hints, the statement
+// deciding.
 //
 // A place, where a batch record's bytes are, packs to 20 bytes: minute, instance, seq, offset and length, each u32.
 // A log page holds its versions' entries the same way, so readers check statements against them.
@@ -95,6 +98,10 @@ func NewEvsWindowEntry(statementSha256 [sha256.Size]byte, push *protocol.EvsPush
 	if push.GetFlags()&rewrites != 0 {
 		entry.Flags |= uint32(protocol.EvsWindowFlag_EVS_WINDOW_REWRITES_HISTORY)
 	}
+	// format 2's bit 5; format 1 never commits flag 256, so it never writes it
+	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) != 0 {
+		entry.Flags |= uint32(protocol.EvsWindowFlag_EVS_WINDOW_DROP)
+	}
 	changeCount := uint64(len(push.GetChanges()))
 	if len(push.GetChangesRoot()) != 0 {
 		changeCount = uint64(push.GetChangeCount())
@@ -131,6 +138,22 @@ func (self *EvsWindowEntry) PathEpoch() bool {
 // Whether it was FORCE, DELETE, BASE or ERASE: bit 3.
 func (self *EvsWindowEntry) RewritesHistory() bool {
 	return self.Flags&uint32(protocol.EvsWindowFlag_EVS_WINDOW_REWRITES_HISTORY) != 0
+}
+
+// Whether the push replaced or removed a versionless version, its record listing the purge's candidates: format 2's
+// bit 4, a hint.
+func (self *EvsWindowEntry) ReplacesVersionless() bool {
+	return self.Flags&uint32(protocol.EvsWindowFlag_EVS_WINDOW_VERSIONLESS_REPLACED) != 0
+}
+
+// Sets bit 4, which evs does for a push whose step 5 found versionless versions it replaces or removes.
+func (self *EvsWindowEntry) SetReplacesVersionless() {
+	self.Flags |= uint32(protocol.EvsWindowFlag_EVS_WINDOW_VERSIONLESS_REPLACED)
+}
+
+// Whether it is a DROP push, a cancel included: format 2's bit 5, a hint whose body 5h's fence reads.
+func (self *EvsWindowEntry) Drop() bool {
+	return self.Flags&uint32(protocol.EvsWindowFlag_EVS_WINDOW_DROP) != 0
 }
 
 // Its change count, saturating at 65,535.

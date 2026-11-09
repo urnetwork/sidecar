@@ -4,7 +4,8 @@
 // header's generation (plan-EVS1-format-bytes#2); then its records; then random bytes to Padmé of its length, so evs
 // sees a padded size and nothing finer. Format 1 writes format 1 and flags 0 and refuses anything else; format 2's
 // 48 B kind-5 header is refused as FORMAT_UNSUPPORTED. evs checks only the header's repo and generation, the size and
-// the id, which the store checks as it streams (§11.13's uploads).
+// the id, which the store checks as it streams (§11.13's uploads). evs_segment_kind5.go builds and reads format 2's
+// kind-5 segments through the same builder and reader.
 //
 // A locator names a record by its offset and length in the segment, so a reader opens just that record and never
 // scans; padding is never parsed. A record keyed by the segment's own key names key_ref_kind 0 and the segment's
@@ -143,6 +144,8 @@ type EvsSegmentBuilder struct {
 	places       []EvsRecordPlace
 	finished     bool
 	err          error
+	// a kind-5 segment's push (evs_segment_kind5.go), nil for format 1's
+	kind5PushId *Id
 }
 
 // What a builder's record writes go through: out and the digest, counted.
@@ -208,10 +211,15 @@ func newEvsSegmentBuilder(out io.Writer, manifestKey *EvsManifestKey) *EvsSegmen
 	}
 }
 
-// Writes the header and the block, if any.
+// Writes the header, format 1's or a kind-5 one, and the block, if any.
 func (self *EvsSegmentBuilder) writeStart(block []byte) error {
 	sink := evsSegmentSink{builder: self}
-	if _, err := sink.Write(self.header.encode()); err != nil {
+	headerBytes := self.header.encode()
+	if self.kind5PushId != nil {
+		kind5 := &EvsKind5SegmentHeader{EvsSegmentHeader: self.header, PushId: *self.kind5PushId}
+		headerBytes = kind5.encode()
+	}
+	if _, err := sink.Write(headerBytes); err != nil {
 		return err
 	}
 	if block != nil {
@@ -266,6 +274,9 @@ func (self *EvsSegmentBuilder) beginRecord(manifestKey *EvsManifestKey, objectKe
 	}
 	if self.inRecord || self.finished {
 		return nil, fmt.Errorf("%w: a record already open or the segment finished", ErrEvsSegmentInvalid)
+	}
+	if self.kind5PushId != nil && len(self.places) != 0 {
+		return nil, fmt.Errorf("%w: a kind-5 segment holds one record", ErrEvsSegmentInvalid)
 	}
 	if err := header.check(); err != nil {
 		return nil, err
@@ -356,9 +367,13 @@ type EvsSlotKeyFunction func(slotId Id, keyIndex uint16, generation uint64) (*Ev
 
 // Opens records of one segment by their places, through an io.ReaderAt.
 type EvsSegmentReader struct {
-	in           io.ReaderAt
-	size         uint64
-	header       EvsSegmentHeader
+	in     io.ReaderAt
+	size   uint64
+	header EvsSegmentHeader
+	// the public header's length: format 1's 32, or a kind-5 header's 48
+	headerByteCount uint64
+	// a kind-5 header's push, nil for format 1's
+	kind5PushId  *Id
 	objectKey    *EvsObjectKey
 	recordReader *EvsRecordReader
 }
@@ -370,25 +385,33 @@ func NewEvsSegmentReader(in io.ReaderAt, size uint64, fekKey *EvsFekKey) (*EvsSe
 	if err != nil {
 		return nil, err
 	}
-	if err := fekKey.checkHeld(); err != nil {
+	if err := reader.unwrapKey(fekKey); err != nil {
 		return nil, err
 	}
-	if fekKey.generation != reader.header.Generation || fekKey.repoId != reader.header.RepoId {
-		return nil, fmt.Errorf("%w: fek of generation %d for a segment of %d", ErrEvsKeyMissing, fekKey.generation, reader.header.Generation)
+	return reader, nil
+}
+
+// Unwraps the segment's key from the block after its header under fekKey, of the header's generation.
+func (self *EvsSegmentReader) unwrapKey(fekKey *EvsFekKey) error {
+	if err := fekKey.checkHeld(); err != nil {
+		return err
 	}
-	if size < evsSegmentKeyedRecordsOffset {
-		return nil, fmt.Errorf("%w: no room for a wrapped key", ErrEvsSegmentInvalid)
+	if fekKey.generation != self.header.Generation || fekKey.repoId != self.header.RepoId {
+		return fmt.Errorf("%w: fek of generation %d for a segment of %d", ErrEvsKeyMissing, fekKey.generation, self.header.Generation)
+	}
+	if self.size < self.headerByteCount+EvsWrappedKeyByteCount {
+		return fmt.Errorf("%w: no room for a wrapped key", ErrEvsSegmentInvalid)
 	}
 	block := make([]byte, EvsWrappedKeyByteCount)
-	if _, err := in.ReadAt(block, EvsSegmentHeaderByteCount); err != nil {
-		return nil, err
+	if _, err := self.in.ReadAt(block, int64(self.headerByteCount)); err != nil {
+		return err
 	}
 	objectKey, err := EvsUnwrapObjectKey(fekKey, block)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	reader.objectKey = objectKey
-	return reader, nil
+	self.objectKey = objectKey
+	return nil
 }
 
 // A segment whose records each name a slot key.
@@ -409,7 +432,7 @@ func newEvsSegmentReader(in io.ReaderAt, size uint64) (*EvsSegmentReader, error)
 	if err != nil {
 		return nil, err
 	}
-	return &EvsSegmentReader{in: in, size: size, header: *header, recordReader: NewEvsRecordReader()}, nil
+	return &EvsSegmentReader{in: in, size: size, header: *header, headerByteCount: EvsSegmentHeaderByteCount, recordReader: NewEvsRecordReader()}, nil
 }
 
 // The segment's public header.
@@ -421,9 +444,9 @@ func (self *EvsSegmentReader) Header() EvsSegmentHeader {
 // place's length, then its body under the segment's key or, for a slot-keyed record, the key slotKey gives for what
 // the header names. The body's reader is this reader's and serves until the next OpenRecord.
 func (self *EvsSegmentReader) OpenRecord(manifestKey *EvsManifestKey, place EvsRecordPlace, fileId Id, slotKey EvsSlotKeyFunction) (*EvsRecordHeader, io.Reader, error) {
-	recordsOffset := uint64(EvsSegmentHeaderByteCount)
+	recordsOffset := self.headerByteCount
 	if self.objectKey != nil {
-		recordsOffset = evsSegmentKeyedRecordsOffset
+		recordsOffset += EvsWrappedKeyByteCount
 	}
 	if uint64(place.Offset) < recordsOffset || uint64(place.Length) < EvsRecordHeaderByteCount ||
 		self.size < uint64(place.Offset)+uint64(place.Length) {

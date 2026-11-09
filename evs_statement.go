@@ -12,6 +12,10 @@
 // parts when the push passes 1 MiB or 1,024 entry writes, and signs through the caller's identity key. ParseEvsStatement
 // is evs's and readers' half, holding a statement to format 1's shape before any check that needs the head.
 //
+// Format 2 (EVS-FORMAT.md's format 2 chapter) parses through ParseEvsStatementFormat2 and builds through BuildFormat2,
+// which take flags 256 DROP and 512 CUT and fields 33 and 34: a DROP sets flag 256 alone, drop_sha256 over its body
+// and index_epoch 0, and its body and lists ride as payload sections 9 and 10 (evs_drop_payload.go).
+//
 // On every leg. Package-level functions are safe for concurrent use, and so is an EvsStatementBuilder whose sign
 // function is.
 
@@ -83,6 +87,18 @@ func checkEvsHash(name string, value []byte, optional bool) error {
 // list is; changes inline and strictly sorted, or under changes_root with a count and covering prefixes of at most
 // 512 B; a part count of 0 or 2 to 1,024 with parts_sha256 beside it. The signature is Verify's.
 func ParseEvsStatement(statementBytes []byte) (*EvsStatement, error) {
+	return parseEvsStatement(statementBytes, false)
+}
+
+// A statement's bytes held to format 2's shape: format 1's, with flag 256 DROP, alone, and drop_sha256 present
+// exactly when it is, and flag 512 CUT and index_epoch taken. A DROP's index_epoch is 0. What a CUT and an index
+// push's index_epoch must equal is 5d's, which needs the head.
+func ParseEvsStatementFormat2(statementBytes []byte) (*EvsStatement, error) {
+	return parseEvsStatement(statementBytes, true)
+}
+
+// A statement's bytes held to its format's shape.
+func parseEvsStatement(statementBytes []byte, format2 bool) (*EvsStatement, error) {
 	if EvsStatementMaxByteCount < len(statementBytes) {
 		return nil, fmt.Errorf("%w: a statement of %d bytes, past 1 KiB", ErrEvsPushInvalid, len(statementBytes))
 	}
@@ -99,14 +115,14 @@ func ParseEvsStatement(statementBytes []byte) (*EvsStatement, error) {
 		return nil, fmt.Errorf("%w: a push that does not parse", ErrEvsPushInvalid)
 	}
 	statement := &EvsStatement{Bytes: statementBytes, Sha256: sha256.Sum256(statementBytes), Signed: signed, Push: push}
-	if err := statement.checkShape(); err != nil {
+	if err := statement.checkShape(format2); err != nil {
 		return nil, err
 	}
 	return statement, nil
 }
 
-// Format 1's shape of the push.
-func (self *EvsStatement) checkShape() error {
+// The push's shape: format 1's, or with format2 format 2's.
+func (self *EvsStatement) checkShape(format2 bool) error {
 	push := self.Push
 	for name, value := range map[string][]byte{
 		"repo_id": push.GetRepoId(), "ref_id": push.GetRefId(), "push_id": push.GetPushId(),
@@ -140,10 +156,24 @@ func (self *EvsStatement) checkShape() error {
 		return fmt.Errorf("%w: ref kind %d or mode %d", ErrEvsPushInvalid, push.GetRefKind(), push.GetRefMode())
 	}
 	flags := push.GetFlags()
-	if flags&evsFormat2PushFlags != 0 || len(push.GetDropSha256()) != 0 || push.GetIndexEpoch() != 0 {
+	knownFlags := evsFormat1PushFlags
+	if !format2 && (flags&evsFormat2PushFlags != 0 || len(push.GetDropSha256()) != 0 || push.GetIndexEpoch() != 0) {
 		return fmt.Errorf("%w: DROP, CUT or their fields", ErrEvsFormatUnsupported)
 	}
-	if flags&^evsFormat1PushFlags != 0 {
+	if format2 {
+		knownFlags |= evsFormat2PushFlags
+		drop := flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) != 0
+		if err := checkEvsHash("drop_sha256", push.GetDropSha256(), true); err != nil {
+			return err
+		}
+		if drop != (len(push.GetDropSha256()) != 0) {
+			return fmt.Errorf("%w: drop_sha256 without flag 256, or flag 256 without it", ErrEvsPushInvalid)
+		}
+		if drop && (flags != uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) || push.GetIndexEpoch() != 0) {
+			return fmt.Errorf("%w: a DROP with other flags or an index_epoch", ErrEvsPushInvalid)
+		}
+	}
+	if flags&^knownFlags != 0 {
 		return fmt.Errorf("%w: flags %#x", ErrEvsPushInvalid, flags)
 	}
 	hasFlag := func(flag protocol.EvsPushFlag) bool {
@@ -267,6 +297,10 @@ type EvsPushPlan struct {
 	// a PATH_EPOCH push's tail: each EvsPathMove's bytes
 	TailMoves [][]byte
 	ReuseList []*EvsReuse
+	// format 2, a DROP's: its EvsDropHistory bytes, section 9, which drop_sha256 is set over, and its lists, section 10
+	// (EvsBuildDropLists)
+	DropBody  []byte
+	DropLists []byte
 }
 
 // A push built and signed: its statement as signed, and its payload for one part or its parts for several, with the
@@ -368,9 +402,21 @@ func evsStateChangeRoot(push *protocol.EvsPush, root [sha256.Size]byte, changeCo
 // Builds the push plan describes and signs its statement: its changes inline if the signed statement stays within
 // 1 KiB, else under changes_root; one payload while it stays within 1 MiB and 1,024 entry writes, else parts.
 func (self *EvsStatementBuilder) Build(plan *EvsPushPlan) (*EvsBuiltPush, error) {
-	if plan.Flags&evsFormat2PushFlags != 0 {
+	if plan.Flags&evsFormat2PushFlags != 0 || len(plan.DropBody) != 0 || len(plan.DropLists) != 0 {
 		return nil, fmt.Errorf("%w: DROP or CUT", ErrEvsFormatUnsupported)
 	}
+	return self.build(plan, false)
+}
+
+// Builds a format-2 push as Build builds a format-1 one, a DROP's body and lists among its sections, drop_sha256 set
+// over its body, and its statement parsed back as format 2. Its staged bytes are the caller's (EvsEncodeStaged), which
+// a part's bound must count beside the part (plan-EVS2-small-readings#13).
+func (self *EvsStatementBuilder) BuildFormat2(plan *EvsPushPlan) (*EvsBuiltPush, error) {
+	return self.build(plan, true)
+}
+
+// Builds a push of either format.
+func (self *EvsStatementBuilder) build(plan *EvsPushPlan, format2 bool) (*EvsBuiltPush, error) {
 	changes := make([]*evsBuildChange, 0, len(plan.Changes))
 	entryWriteCount := 0
 	for _, planned := range plan.Changes {
@@ -415,6 +461,8 @@ func (self *EvsStatementBuilder) Build(plan *EvsPushPlan) (*EvsBuiltPush, error)
 		erasedItems = append(erasedItems, binary.BigEndian.AppendUint16(erased.SlotId.Bytes(), erased.KeyIndex))
 	}
 	common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST, evsJoinItems(erasedItems))
+	common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, plan.DropBody)
+	common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS, plan.DropLists)
 	common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_TAIL_MOVES, evsJoinItems(plan.TailMoves))
 	reuseItems := [][]byte{}
 	for _, reuse := range plan.ReuseList {
@@ -436,6 +484,7 @@ func (self *EvsStatementBuilder) Build(plan *EvsPushPlan) (*EvsBuiltPush, error)
 		push.ErasedSha256 = hashOf(common.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST))
 		push.PathTailSha256 = hashOf(common.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_TAIL_MOVES))
 		push.SourcePathsSha256 = hashOf(sources)
+		push.DropSha256 = hashOf(common.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY))
 	}
 	sourcesSection := []byte{}
 	if plan.SourcesStand {
@@ -448,17 +497,17 @@ func (self *EvsStatementBuilder) Build(plan *EvsPushPlan) (*EvsBuiltPush, error)
 	statePayloadHashes(sourcesSection)
 
 	if entryWriteCount <= EvsPartMaxEntryWriteCount {
-		built, err := self.buildOnePart(push, changes, common, sourcesSection)
+		built, err := self.buildOnePart(push, changes, common, sourcesSection, format2)
 		if err == nil || !errors.Is(err, errEvsPayloadTooLarge) {
 			return built, err
 		}
 	}
-	return self.buildParts(push, changes, common, sourcesSection)
+	return self.buildParts(push, changes, common, sourcesSection, format2)
 }
 
 // A one-part push: its payload with the change list and proofs, refused as errEvsPayloadTooLarge past 1 MiB, so the
 // caller goes to parts; then inline instead if the signed statement stays within 1 KiB.
-func (self *EvsStatementBuilder) buildOnePart(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte) (*EvsBuiltPush, error) {
+func (self *EvsStatementBuilder) buildOnePart(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte, format2 bool) (*EvsBuiltPush, error) {
 	payload := &EvsPayload{sections: common.sections}
 	entryVersions := [][]byte{}
 	leaves := make([][]byte, len(changes))
@@ -500,7 +549,7 @@ func (self *EvsStatementBuilder) buildOnePart(push *protocol.EvsPush, changes []
 		built.Payload = listedBytes
 		built.ChangeTree = tree
 	}
-	statement, err := self.signStatement(push)
+	statement, err := self.signStatementOf(push, format2)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +595,7 @@ type evsBuildPart struct {
 // A push in parts: changes split into contiguous runs within 1,024 entry writes and 1 MiB, each with its entry
 // versions, source paths and proofs to its own root; then the sealed metadata and the other sections spread over the
 // parts' room in order, each slice anywhere.
-func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte) (*EvsBuiltPush, error) {
+func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte, format2 bool) (*EvsBuiltPush, error) {
 	if len(changes) < evsMinPartCount {
 		return nil, fmt.Errorf("%w: a push in parts needs a change for each of at least two parts", ErrEvsPushInvalid)
 	}
@@ -602,6 +651,7 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 	for _, sectionType := range []protocol.EvsPayloadSection{
 		protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA, protocol.EvsPayloadSection_EVS_PAYLOAD_NEW_OBJECTS,
 		protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES, protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST,
+		protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS,
 		protocol.EvsPayloadSection_EVS_PAYLOAD_TAIL_MOVES, protocol.EvsPayloadSection_EVS_PAYLOAD_REUSE_LIST,
 	} {
 		if sectionBytes := common.Section(sectionType); len(sectionBytes) != 0 {
@@ -677,7 +727,7 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 	if err := evsStateChangeRoot(push, tree.Root(), len(changes), paths); err != nil {
 		return nil, err
 	}
-	statement, err := self.signStatement(push)
+	statement, err := self.signStatementOf(push, format2)
 	if err != nil {
 		return nil, err
 	}
@@ -687,6 +737,11 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 
 // Signs push as an EvsPush and parses the result back as evs will, refusing one past 1 KiB.
 func (self *EvsStatementBuilder) signStatement(push *protocol.EvsPush) (*EvsStatement, error) {
+	return self.signStatementOf(push, false)
+}
+
+// Signs push as signStatement does, parsing it back as its format.
+func (self *EvsStatementBuilder) signStatementOf(push *protocol.EvsPush, format2 bool) (*EvsStatement, error) {
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(push)
 	if err != nil {
 		return nil, fmt.Errorf("evs: push: %w", err)
@@ -699,5 +754,5 @@ func (self *EvsStatementBuilder) signStatement(push *protocol.EvsPush) (*EvsStat
 	if err != nil {
 		return nil, fmt.Errorf("evs: statement: %w", err)
 	}
-	return ParseEvsStatement(statementBytes)
+	return parseEvsStatement(statementBytes, format2)
 }

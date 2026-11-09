@@ -107,10 +107,17 @@ func EvsRefusalRefusesNothing(code protocol.EvsRefusalCode) bool {
 }
 
 // The refusal code an error from this package's codecs answers with: FORMAT_UNSUPPORTED for a format-2 construct,
-// INVALID for anything else they refuse.
+// format 2's VERSIONING, DROP_LIST and DROP_STATE for what its codecs refuse so, and INVALID for anything else.
 func EvsRefusalCodeOf(err error) protocol.EvsRefusalCode {
-	if errors.Is(err, ErrEvsFormatUnsupported) {
+	switch {
+	case errors.Is(err, ErrEvsFormatUnsupported):
 		return protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED
+	case errors.Is(err, ErrEvsVersioning):
+		return protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING
+	case errors.Is(err, ErrEvsDropList):
+		return protocol.EvsRefusalCode_EVS_REFUSAL_DROP_LIST
+	case errors.Is(err, ErrEvsDropState):
+		return protocol.EvsRefusalCode_EVS_REFUSAL_DROP_STATE
 	}
 	return protocol.EvsRefusalCode_EVS_REFUSAL_INVALID
 }

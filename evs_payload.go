@@ -16,6 +16,12 @@
 // sealed name or an overlay's base (questions/evs1-m2-01-ref-creation-fields). Format 2's DROP sections and staged
 // segments are refused as FORMAT_UNSUPPORTED.
 //
+// Format 2 (EVS-FORMAT.md's format 2 chapter) runs the same checks through EvsCheckPayloadFormat2, EvsCheckPartFormat2
+// and EvsCheckSealFormat2, which take what format 1 refuses as needing format 2: versioning 1 and 2, kind-5 and staged
+// locators, staged new objects with their staged bytes, which each must match (evs_staged.go), and versionless
+// receipts. Its DROP sections are evs_drop_payload.go's. Whether a version may cite what it names is §11.7's citation
+// rule, EvsCheckCitation's, which needs the versions step 4 reads.
+//
 // On every leg. Package-level functions are safe for concurrent use.
 
 package sidecar
@@ -67,6 +73,11 @@ type EvsPayload struct {
 // The sections of a payload's bytes: ascending types 1 to 14, each once and none empty, nothing after the last.
 // Format 2's DROP sections are ErrEvsFormatUnsupported.
 func ParseEvsPayload(payloadBytes []byte) (*EvsPayload, error) {
+	return parseEvsPayload(payloadBytes, false)
+}
+
+// The sections of a payload's bytes as ParseEvsPayload reads them, a format-2 payload's DROP sections taken.
+func parseEvsPayload(payloadBytes []byte, format2 bool) (*EvsPayload, error) {
 	payload := &EvsPayload{}
 	last := 0
 	for at := 0; at < len(payloadBytes); {
@@ -84,7 +95,9 @@ func ParseEvsPayload(payloadBytes []byte) (*EvsPayload, error) {
 		}
 		switch protocol.EvsPayloadSection(sectionType) {
 		case protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS:
-			return nil, fmt.Errorf("%w: a DROP section", ErrEvsFormatUnsupported)
+			if !format2 {
+				return nil, fmt.Errorf("%w: a DROP section", ErrEvsFormatUnsupported)
+			}
 		}
 		payload.sections[sectionType] = payloadBytes[at : at+length]
 		at += length
@@ -170,6 +183,12 @@ func (self *EvsNewObject) encode() []byte {
 // One new-objects item held to format 1: a segment of a Padmé size within 8 MiB uploaded on a day, or a slot.
 // Format 2's staged segment is ErrEvsFormatUnsupported.
 func decodeEvsNewObject(item []byte) (*EvsNewObject, error) {
+	return decodeEvsNewObjectOf(item, false)
+}
+
+// One new-objects item as decodeEvsNewObject holds it, format 2 adding a staged segment: a 32 B id, a Padmé size of
+// at most 16 KiB that holds a kind-5 header and a record header, and upload day 0.
+func decodeEvsNewObjectOf(item []byte, format2 bool) (*EvsNewObject, error) {
 	if len(item) == 0 {
 		return nil, fmt.Errorf("%w: an empty new-objects item", ErrEvsPushInvalid)
 	}
@@ -184,7 +203,12 @@ func decodeEvsNewObject(item []byte) (*EvsNewObject, error) {
 			return nil, fmt.Errorf("%w: a slot item of %d bytes", ErrEvsPushInvalid, len(item))
 		}
 	case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
-		return nil, fmt.Errorf("%w: a staged segment", ErrEvsFormatUnsupported)
+		if !format2 {
+			return nil, fmt.Errorf("%w: a staged segment", ErrEvsFormatUnsupported)
+		}
+		if len(item) != evsNewSegmentItemByteCount {
+			return nil, fmt.Errorf("%w: a staged item of %d bytes", ErrEvsPushInvalid, len(item))
+		}
 	default:
 		return nil, fmt.Errorf("%w: new object kind %d", ErrEvsPushInvalid, kind)
 	}
@@ -195,12 +219,20 @@ func decodeEvsNewObject(item []byte) (*EvsNewObject, error) {
 		PaddedSize: binary.BigEndian.Uint64(item[1+idLength : 9+idLength]),
 		UploadDay:  binary.BigEndian.Uint32(item[9+idLength:]),
 	}
-	if kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT {
+	switch kind {
+	case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT:
 		if !EvsIsPadme(object.PaddedSize) || EvsSegmentMaxByteCount < object.PaddedSize || object.UploadDay == 0 {
 			return nil, fmt.Errorf("%w: a segment of %d bytes on day %d", ErrEvsPushInvalid, object.PaddedSize, object.UploadDay)
 		}
-	} else if object.PaddedSize != 0 || object.UploadDay != 0 {
-		return nil, fmt.Errorf("%w: a slot with a size or day", ErrEvsPushInvalid)
+	case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
+		if !EvsIsPadme(object.PaddedSize) || EvsStagedSegmentMaxByteCount < object.PaddedSize ||
+			object.PaddedSize < EvsKind5SegmentHeaderByteCount+EvsRecordHeaderByteCount || object.UploadDay != 0 {
+			return nil, fmt.Errorf("%w: a staged segment of %d bytes on day %d", ErrEvsPushInvalid, object.PaddedSize, object.UploadDay)
+		}
+	default:
+		if object.PaddedSize != 0 || object.UploadDay != 0 {
+			return nil, fmt.Errorf("%w: a slot with a size or day", ErrEvsPushInvalid)
+		}
 	}
 	return object, nil
 }
@@ -267,6 +299,10 @@ type EvsCheckedPayload struct {
 	ReuseList      []*EvsReuse
 	// a change creating a path, or a directory delta adding a name: the window's bit 0
 	CreatesPath bool
+	// format 2: the staged segments, one per kind-2 new-objects item and in that order
+	Staged []*EvsStagedSegment
+	// format 2: a DROP's body and lists, as EvsCheckDropPayload checked them; nil for any other push
+	Drop *EvsCheckedDrop
 }
 
 // Each change's token path, for the window's digest.
@@ -295,12 +331,24 @@ func checkEvsChange(change *protocol.EvsChange) (EvsTokenPath, error) {
 // Format 2's versioning, kind-5 locators and staged segments are ErrEvsFormatUnsupported; locator kinds 3 and 4 and
 // any layout but 0 are reserved, so refused. Whether it adds a name, for the window's bit 0.
 func checkEvsEntryVersion(entryBytes []byte, push *protocol.EvsPush) (bool, error) {
+	return checkEvsEntryVersionOf(entryBytes, push, false)
+}
+
+// An entry version as checkEvsEntryVersion holds it, format 2 adding versioning 1 and 2 on a file, past 2 malformed,
+// and kind-5 and staged locators. Which versions may carry which locators is EvsCheckCitation's, answering 409.
+func checkEvsEntryVersionOf(entryBytes []byte, push *protocol.EvsPush, format2 bool) (bool, error) {
 	entry := &protocol.EvsEntryVersion{}
 	if err := proto.Unmarshal(entryBytes, entry); err != nil {
 		return false, fmt.Errorf("%w: an entry version that does not parse", ErrEvsPushInvalid)
 	}
 	if entry.GetVersioning() != 0 {
-		return false, fmt.Errorf("%w: versioning %d", ErrEvsFormatUnsupported, entry.GetVersioning())
+		if !format2 {
+			return false, fmt.Errorf("%w: versioning %d", ErrEvsFormatUnsupported, entry.GetVersioning())
+		}
+		if uint32(protocol.EvsVersioning_EVS_VERSIONING_INDEX) < entry.GetVersioning() ||
+			entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE) {
+			return false, fmt.Errorf("%w: versioning %d on kind %d", ErrEvsPushInvalid, entry.GetVersioning(), entry.GetKind())
+		}
 	}
 	// the version rule is 5g's, which answers 409 on the head it reads, so it is not checked here
 	if !bytes.Equal(entry.GetPushId(), push.GetPushId()) || entry.GetBaseVersion() != push.GetBaseVersion() {
@@ -320,7 +368,7 @@ func checkEvsEntryVersion(entryBytes []byte, push *protocol.EvsPush) (bool, erro
 			return false, fmt.Errorf("%w: a file without sealed fields or a chain, or with names", ErrEvsPushInvalid)
 		}
 		for _, locator := range entry.GetChain() {
-			if err := checkEvsLocator(locator); err != nil {
+			if err := checkEvsLocatorOf(locator, format2); err != nil {
 				return false, err
 			}
 		}
@@ -338,8 +386,20 @@ func checkEvsEntryVersion(entryBytes []byte, push *protocol.EvsPush) (bool, erro
 // A locator format 1 writes: a segment by its 32 B id and a record's place in it, or a record inline of at most
 // 16 KiB.
 func checkEvsLocator(locator *protocol.EvsLocator) error {
+	return checkEvsLocatorOf(locator, false)
+}
+
+// A locator as checkEvsLocator holds it, format 2 adding kind 5, a versionless segment by its 32 B id and the place
+// of its one record after the kind-5 header, staged only on kind 5 and then within 16 KiB.
+func checkEvsLocatorOf(locator *protocol.EvsLocator, format2 bool) error {
 	if locator.GetStaged() {
-		return fmt.Errorf("%w: a staged locator", ErrEvsFormatUnsupported)
+		if !format2 {
+			return fmt.Errorf("%w: a staged locator", ErrEvsFormatUnsupported)
+		}
+		if protocol.EvsLocatorKind(locator.GetKind()) != protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT ||
+			EvsStagedSegmentMaxByteCount < uint64(locator.GetOffset())+uint64(locator.GetLength()) {
+			return fmt.Errorf("%w: a staged locator out of shape", ErrEvsPushInvalid)
+		}
 	}
 	switch protocol.EvsLocatorKind(locator.GetKind()) {
 	case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT:
@@ -353,7 +413,15 @@ func checkEvsLocator(locator *protocol.EvsLocator) error {
 			return fmt.Errorf("%w: an inline locator out of shape", ErrEvsPushInvalid)
 		}
 	case protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT:
-		return fmt.Errorf("%w: a versionless segment's locator", ErrEvsFormatUnsupported)
+		if !format2 {
+			return fmt.Errorf("%w: a versionless segment's locator", ErrEvsFormatUnsupported)
+		}
+		if len(locator.GetId()) != sha256.Size || len(locator.GetInline()) != 0 ||
+			uint64(locator.GetOffset()) < EvsKind5SegmentHeaderByteCount ||
+			uint64(locator.GetLength()) < EvsRecordByteCount(0) ||
+			EvsSegmentMaxByteCount < uint64(locator.GetOffset())+uint64(locator.GetLength()) {
+			return fmt.Errorf("%w: a versionless segment locator out of shape", ErrEvsPushInvalid)
+		}
 	default:
 		return fmt.Errorf("%w: locator kind %d is reserved", ErrEvsPushInvalid, locator.GetKind())
 	}
@@ -394,6 +462,11 @@ func checkEvsHashedSection(name string, sectionBytes []byte, statementHash []byt
 
 // Attaches entry versions, in change order, to the changes writing one, each hashing to its change's entry_sha256.
 func attachEvsEntryVersions(push *protocol.EvsPush, changes []*EvsCheckedChange, entryVersions [][]byte) (bool, error) {
+	return attachEvsEntryVersionsOf(push, changes, entryVersions, false)
+}
+
+// Attaches entry versions as attachEvsEntryVersions does, of either format.
+func attachEvsEntryVersionsOf(push *protocol.EvsPush, changes []*EvsCheckedChange, entryVersions [][]byte, format2 bool) (bool, error) {
 	createsPath := false
 	next := 0
 	for _, change := range changes {
@@ -412,7 +485,7 @@ func attachEvsEntryVersions(push *protocol.EvsPush, changes []*EvsCheckedChange,
 		if !bytes.Equal(digest[:], change.Change.GetEntrySha256()) {
 			return false, fmt.Errorf("%w: an entry version that does not hash to its change's entry_sha256", ErrEvsPushInvalid)
 		}
-		addsName, err := checkEvsEntryVersion(entryBytes, push)
+		addsName, err := checkEvsEntryVersionOf(entryBytes, push, format2)
 		if err != nil {
 			return false, err
 		}
@@ -432,6 +505,12 @@ func attachEvsEntryVersions(push *protocol.EvsPush, changes []*EvsCheckedChange,
 // version's Merkle proof when the change list is not inline. partRoots gives each change's root and its tree's size
 // for the proofs: the statement's for one part, its part's for several.
 func checkEvsSections(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64)) error {
+	return checkEvsSectionsOf(statement, payload, checked, partRoots, false)
+}
+
+// The sections past the change list as checkEvsSections checks them, of either format: format 2 takes staged
+// new-objects items. A DROP's sections are the callers', through evsCheckDropSlices.
+func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64), format2 bool) error {
 	push := statement.Push
 	if len(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS)) != 0 {
 		return fmt.Errorf("%w: inline records in the payload, which questions/evs1-m2-01-inline-record-home holds to the locators", ErrEvsPushInvalid)
@@ -452,7 +531,7 @@ func checkEvsSections(statement *EvsStatement, payload *EvsPayload, checked *Evs
 	}
 	slotCount := 0
 	for _, item := range newObjectItems {
-		object, err := decodeEvsNewObject(item)
+		object, err := decodeEvsNewObjectOf(item, format2)
 		if err != nil {
 			return err
 		}
@@ -620,6 +699,29 @@ func checkEvsPathMove(move *protocol.EvsPathMove, pathEpoch uint64) error {
 // change list is the statement's own, or under changes_root in section 4; every section matches its statement
 // hash; nothing the statement does not state rides along.
 func EvsCheckPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedPayload, error) {
+	return evsCheckPayloadOf(statement, payloadBytes, false)
+}
+
+// EvsCheckPayload's checks over a format-2 one-part push and its staged bytes as received, which ride outside every
+// hash: format 2's values taken, a DROP's sections checked, and the staged segments matched to the kind-2 new-objects
+// items, one each and in order (§11.6's checks row, EVS-FORMAT.md).
+func EvsCheckPayloadFormat2(statement *EvsStatement, payloadBytes []byte, stagedBytes []byte) (*EvsCheckedPayload, error) {
+	checked, err := evsCheckPayloadOf(statement, payloadBytes, true)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := EvsDecodeStaged(stagedBytes)
+	if err != nil {
+		return nil, err
+	}
+	if checked.Staged, err = evsMatchStaged(statement.Push, checked.NewObjects, segments); err != nil {
+		return nil, err
+	}
+	return checked, nil
+}
+
+// A one-part push's checks, of either format.
+func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 bool) (*EvsCheckedPayload, error) {
 	push := statement.Push
 	if push.GetPartCount() != 0 {
 		return nil, fmt.Errorf("%w: a push in parts has no one-part payload", ErrEvsPushInvalid)
@@ -627,7 +729,7 @@ func EvsCheckPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedP
 	if EvsPayloadMaxByteCount < len(payloadBytes) {
 		return nil, fmt.Errorf("%w: a payload of %d bytes", ErrEvsPushInvalid, len(payloadBytes))
 	}
-	payload, err := ParseEvsPayload(payloadBytes)
+	payload, err := parseEvsPayload(payloadBytes, format2)
 	if err != nil {
 		return nil, err
 	}
@@ -680,12 +782,18 @@ func EvsCheckPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedP
 	if EvsPartMaxEntryWriteCount < len(entryVersions) {
 		return nil, fmt.Errorf("%w: %d entry writes in one part", ErrEvsPushInvalid, len(entryVersions))
 	}
-	if checked.CreatesPath, err = attachEvsEntryVersions(push, checked.Changes, entryVersions); err != nil {
+	if checked.CreatesPath, err = attachEvsEntryVersionsOf(push, checked.Changes, entryVersions, format2); err != nil {
 		return nil, err
 	}
 	changeCount := uint64(len(checked.Changes))
-	if err := checkEvsSections(statement, payload, checked, func(int) ([]byte, uint64) { return root, changeCount }); err != nil {
+	if err := checkEvsSectionsOf(statement, payload, checked, func(int) ([]byte, uint64) { return root, changeCount }, format2); err != nil {
 		return nil, err
+	}
+	if format2 {
+		lists := [][]byte{payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS)}
+		if checked.Drop, err = evsCheckDropSlices(statement, payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY), lists); err != nil {
+			return nil, err
+		}
 	}
 	return checked, nil
 }
@@ -724,11 +832,13 @@ func parseEvsPushPart(partBytes []byte) (*protocol.EvsPushPart, [][]byte, error)
 // One part as checked when it arrives: its number, its changes with their entry versions, its root, and its slices
 // of sealed metadata and of the other sections, which only the seal can join and check.
 type EvsCheckedPart struct {
-	Part         uint32
-	Changes      []*EvsCheckedChange
-	Root         [sha256.Size]byte
-	Sha256       [sha256.Size]byte
-	CreatesPath  bool
+	Part        uint32
+	Changes     []*EvsCheckedChange
+	Root        [sha256.Size]byte
+	Sha256      [sha256.Size]byte
+	CreatesPath bool
+	// format 2: its staged segments, each checked alone; the seal matches them to the new-objects items
+	Staged       []*EvsStagedSegment
 	metadata     []byte
 	sections     *EvsPayload
 	changeLeaves [][]byte
@@ -738,6 +848,33 @@ type EvsCheckedPart struct {
 // and a part number it has, its changes non-empty and strictly sorted, each entry version hashing to its change,
 // changes_root over its changes, and its sections slice framed as a payload holding no section its fields carry.
 func EvsCheckPart(statement *EvsStatement, partBytes []byte) (*EvsCheckedPart, error) {
+	return evsCheckPartOf(statement, partBytes, false)
+}
+
+// EvsCheckPart's checks over a part of a format-2 push and its staged bytes as received: format 2's values taken, and
+// each staged segment a kind-5 segment of this repo naming this push within 16 KiB. Which items they are is the
+// seal's, which reads every part.
+func EvsCheckPartFormat2(statement *EvsStatement, partBytes []byte, stagedBytes []byte) (*EvsCheckedPart, error) {
+	checked, err := evsCheckPartOf(statement, partBytes, true)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := EvsDecodeStaged(stagedBytes)
+	if err != nil {
+		return nil, err
+	}
+	for _, segment := range segments {
+		staged, err := EvsStagedSegmentOf(segment, Id(statement.Push.GetRepoId()), Id(statement.Push.GetPushId()))
+		if err != nil {
+			return nil, err
+		}
+		checked.Staged = append(checked.Staged, staged)
+	}
+	return checked, nil
+}
+
+// A part's checks, of either format.
+func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*EvsCheckedPart, error) {
 	push := statement.Push
 	if push.GetPartCount() == 0 {
 		return nil, fmt.Errorf("%w: a part of a one-part push", ErrEvsPushInvalid)
@@ -783,10 +920,10 @@ func EvsCheckPart(statement *EvsStatement, partBytes []byte) (*EvsCheckedPart, e
 	if EvsPartMaxEntryWriteCount < len(part.GetEntryVersions()) {
 		return nil, fmt.Errorf("%w: %d entry writes in a part", ErrEvsPushInvalid, len(part.GetEntryVersions()))
 	}
-	if checked.CreatesPath, err = attachEvsEntryVersions(push, checked.Changes, part.GetEntryVersions()); err != nil {
+	if checked.CreatesPath, err = attachEvsEntryVersionsOf(push, checked.Changes, part.GetEntryVersions(), format2); err != nil {
 		return nil, err
 	}
-	sections, err := ParseEvsPayload(part.GetSections())
+	sections, err := parseEvsPayload(part.GetSections(), format2)
 	if err != nil {
 		return nil, err
 	}
@@ -812,6 +949,21 @@ func (self *EvsCheckedPart) FirstTokenPath() EvsTokenPath {
 // change_count their total, changed_prefixes cover every change, and the parts' slices joined in order are a one-part
 // payload whose sections match their hashes, each entry version's proof reaching its part's root.
 func EvsCheckSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+	return evsCheckSealOf(statement, parts, nil, false)
+}
+
+// EvsCheckSeal's checks over every part of a format-2 push and each part's staged bytes, in part order as their
+// records hold them: format 2's values taken, a DROP's sections checked over the parts' slices, and the staged
+// segments, joined in part order, matched to the joined new-objects list's kind-2 items, one each and in order.
+func EvsCheckSealFormat2(statement *EvsStatement, parts [][]byte, partStaged [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+	if len(partStaged) != len(parts) {
+		return nil, nil, fmt.Errorf("%w: staged bytes for %d of %d parts", ErrEvsPushInvalid, len(partStaged), len(parts))
+	}
+	return evsCheckSealOf(statement, parts, partStaged, true)
+}
+
+// A seal's checks, of either format.
+func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte, format2 bool) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
 	push := statement.Push
 	if push.GetPartCount() == 0 || uint32(len(parts)) != push.GetPartCount() {
 		return nil, nil, fmt.Errorf("%w: %d parts for a count of %d", ErrEvsPushInvalid, len(parts), push.GetPartCount())
@@ -820,7 +972,13 @@ func EvsCheckSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, 
 	partHashes := make([]byte, 0, len(parts)*sha256.Size)
 	partLeaves := make([][][]byte, len(parts))
 	for i, partBytes := range parts {
-		checkedPart, err := EvsCheckPart(statement, partBytes)
+		var checkedPart *EvsCheckedPart
+		var err error
+		if format2 {
+			checkedPart, err = EvsCheckPartFormat2(statement, partBytes, partStaged[i])
+		} else {
+			checkedPart, err = EvsCheckPart(statement, partBytes)
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -848,6 +1006,7 @@ func EvsCheckSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, 
 	joined := &EvsPayload{}
 	metadata := []byte{}
 	changeParts := []int{}
+	stagedSegments := [][]byte{}
 	for i, checkedPart := range checkedParts {
 		checked.Changes = append(checked.Changes, checkedPart.Changes...)
 		checked.CreatesPath = checked.CreatesPath || checkedPart.CreatesPath
@@ -856,9 +1015,16 @@ func EvsCheckSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, 
 			changeParts = append(changeParts, i)
 		}
 		for sectionType := range joined.sections {
+			// a DROP's lists are streamed from each part's slice by evsCheckDropSlices, never joined
+			if sectionType == int(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS) {
+				continue
+			}
 			if slice := checkedPart.sections.sections[sectionType]; len(slice) != 0 {
 				joined.sections[sectionType] = append(joined.sections[sectionType], slice...)
 			}
+		}
+		for _, staged := range checkedPart.Staged {
+			stagedSegments = append(stagedSegments, staged.Bytes)
 		}
 	}
 	if !evsPrefixesCover(statement.ChangedPrefixes, checked.Changes) {
@@ -868,6 +1034,23 @@ func EvsCheckSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, 
 	partRoots := func(change int) ([]byte, uint64) {
 		part := checkedParts[changeParts[change]]
 		return part.Root[:], uint64(len(part.Changes))
+	}
+	if format2 {
+		listSlices := [][]byte{}
+		for _, checkedPart := range checkedParts {
+			listSlices = append(listSlices, checkedPart.sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS))
+		}
+		if err := checkEvsSectionsOf(statement, joined, checked, partRoots, true); err != nil {
+			return nil, nil, err
+		}
+		var err error
+		if checked.Drop, err = evsCheckDropSlices(statement, joined.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY), listSlices); err != nil {
+			return nil, nil, err
+		}
+		if checked.Staged, err = evsMatchStaged(push, checked.NewObjects, stagedSegments); err != nil {
+			return nil, nil, err
+		}
+		return checked, checkedParts, nil
 	}
 	if err := checkEvsSections(statement, joined, checked, partRoots); err != nil {
 		return nil, nil, err
@@ -882,11 +1065,22 @@ const EvsPathMapMaxByteCount = 8 * 1024 * 1024
 // segment id, a Padmé size within 8 MiB, an upload time and a 16 B MAC. The MAC itself is evs's to check with its
 // receipt keys (EVSB-M2-09); format 2's versionless receipt is ErrEvsFormatUnsupported.
 func DecodeEvsUploadReceipt(receiptBytes []byte) (*protocol.EvsUploadReceipt, error) {
+	return decodeEvsUploadReceiptOf(receiptBytes, false)
+}
+
+// A receipt held to its shape as DecodeEvsUploadReceipt holds it, format 2 taking a versionless one: its segment's
+// header is a kind-5 header naming the receipt's push, and the MAC covers the mark (§11.13's receipt row).
+func DecodeEvsUploadReceiptFormat2(receiptBytes []byte) (*protocol.EvsUploadReceipt, error) {
+	return decodeEvsUploadReceiptOf(receiptBytes, true)
+}
+
+// A receipt's shape, of either format.
+func decodeEvsUploadReceiptOf(receiptBytes []byte, format2 bool) (*protocol.EvsUploadReceipt, error) {
 	receipt := &protocol.EvsUploadReceipt{}
 	if err := proto.Unmarshal(receiptBytes, receipt); err != nil {
 		return nil, fmt.Errorf("%w: a receipt that does not parse", ErrEvsPushInvalid)
 	}
-	if receipt.GetVersionless() {
+	if receipt.GetVersionless() && !format2 {
 		return nil, fmt.Errorf("%w: a versionless receipt", ErrEvsFormatUnsupported)
 	}
 	if len(receipt.GetRepoId()) != 16 || len(receipt.GetUploaderSidecarId()) != 16 || len(receipt.GetSegmentId()) != sha256.Size ||

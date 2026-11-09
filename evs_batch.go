@@ -17,8 +17,9 @@
 // window entry names, so a second copy of it is dead weight.
 //
 // Format 1 writes format 1. A batch of format 2, which holds staged segments or purge candidates, is refused as
-// ErrEvsFormatUnsupported, so an evacuator that does not know it leaves it with an alarm; anything else unknown is
-// ErrEvsPushInvalid.
+// ErrEvsFormatUnsupported, so an evacuator that does not know it leaves it with an alarm, and so is a format-2 record,
+// whose header's byte 1 is 2; anything else unknown is ErrEvsPushInvalid. evs_batch_format2.go writes and reads
+// format 2's records and batches through the same parse.
 //
 // On every leg. Package-level functions are safe for concurrent use; an EvsBatchWriter is not.
 
@@ -86,23 +87,34 @@ func (self *EvsBatchRecord) encode() []byte {
 }
 
 // A record from exactly its bytes, as a read at its place gets them: a type format 1 has, its zero bytes zero, and a
-// length that is the rest.
+// length that is the rest. A format-2 record is ErrEvsFormatUnsupported.
 func ParseEvsBatchRecord(recordBytes []byte) (*EvsBatchRecord, error) {
+	record, _, err := parseEvsBatchRecord(recordBytes, false)
+	return record, err
+}
+
+// A record as ParseEvsBatchRecord reads it, and with format2 a format-2 record too, whose tail is split off its body
+// (evs_batch_format2.go).
+func parseEvsBatchRecord(recordBytes []byte, format2 bool) (*EvsBatchRecord, *EvsBatchRecordTail, error) {
 	if len(recordBytes) < EvsBatchRecordHeaderByteCount {
-		return nil, fmt.Errorf("%w: a record of %d bytes", ErrEvsPushInvalid, len(recordBytes))
+		return nil, nil, fmt.Errorf("%w: a record of %d bytes", ErrEvsPushInvalid, len(recordBytes))
 	}
 	recordType := protocol.EvsBatchRecordType(recordBytes[0])
 	if recordType < protocol.EvsBatchRecordType_EVS_BATCH_PUSH || protocol.EvsBatchRecordType_EVS_BATCH_RESEED < recordType {
-		return nil, fmt.Errorf("%w: record type %d", ErrEvsPushInvalid, recordType)
+		return nil, nil, fmt.Errorf("%w: record type %d", ErrEvsPushInvalid, recordType)
 	}
-	if recordBytes[1] != 0 || recordBytes[2] != 0 || recordBytes[3] != 0 {
-		return nil, fmt.Errorf("%w: a record's reserved bytes set", ErrEvsPushInvalid)
+	recordFormat := recordBytes[evsBatchRecordFormatByte]
+	if recordFormat == evsBatchRecordFormat2 && !format2 {
+		return nil, nil, fmt.Errorf("%w: a record of format 2", ErrEvsFormatUnsupported)
+	}
+	if (recordFormat != 0 && recordFormat != evsBatchRecordFormat2) || recordBytes[2] != 0 || recordBytes[3] != 0 {
+		return nil, nil, fmt.Errorf("%w: a record's reserved bytes set", ErrEvsPushInvalid)
 	}
 	length := binary.BigEndian.Uint32(recordBytes[76:80])
 	if uint64(len(recordBytes)-EvsBatchRecordHeaderByteCount) != uint64(length) {
-		return nil, fmt.Errorf("%w: a record of %d body bytes stating %d", ErrEvsPushInvalid, len(recordBytes)-EvsBatchRecordHeaderByteCount, length)
+		return nil, nil, fmt.Errorf("%w: a record of %d body bytes stating %d", ErrEvsPushInvalid, len(recordBytes)-EvsBatchRecordHeaderByteCount, length)
 	}
-	return &EvsBatchRecord{
+	record := &EvsBatchRecord{
 		Type:            recordType,
 		RepoId:          Id(recordBytes[4:20]),
 		RefId:           Id(recordBytes[20:36]),
@@ -110,7 +122,16 @@ func ParseEvsBatchRecord(recordBytes []byte) (*EvsBatchRecord, error) {
 		SignerSidecarId: Id(recordBytes[52:68]),
 		TimeMs:          int64(binary.BigEndian.Uint64(recordBytes[68:76])),
 		Body:            recordBytes[EvsBatchRecordHeaderByteCount:],
-	}, nil
+	}
+	if recordFormat != evsBatchRecordFormat2 {
+		return record, nil, nil
+	}
+	body, tail, err := splitEvsBatchRecordTail(recordType, record.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	record.Body = body
+	return record, tail, nil
 }
 
 // Collects one batch's records and writes its bytes: header, records as added, index, trailer.
@@ -192,21 +213,30 @@ type EvsBatch struct {
 	Header  EvsBatchHeader
 	Records []*EvsBatchRecord
 	Places  []*protocol.EvsPlace
+	// format 2: each record's tail, nil for a record of format 1's form; nil from a format-1 read
+	Tails []*EvsBatchRecordTail
 }
 
 // A batch's bytes, checked whole: "URpb" of format 1 (format 2 is ErrEvsFormatUnsupported), within its bound, its
 // trailer's hash over every byte before it, and its index naming record_count records that tile the space between
 // the header and the index, each parsing.
 func ParseEvsBatch(batchBytes []byte) (*EvsBatch, error) {
+	return parseEvsBatch(batchBytes, false)
+}
+
+// A batch as ParseEvsBatch reads it, and with format2 a format-2 batch too: one holding a format-2 record, whose
+// tails come back in Tails, a format past 2 ErrEvsFormatUnsupported, which an evacuator leaves.
+func parseEvsBatch(batchBytes []byte, format2 bool) (*EvsBatch, error) {
 	if len(batchBytes) < EvsBatchHeaderByteCount+EvsBatchTrailerByteCount || !bytes.HasPrefix(batchBytes, []byte(evsBatchMagic)) {
 		return nil, fmt.Errorf("%w: no URpb batch", ErrEvsPushInvalid)
 	}
-	switch batchBytes[4] {
-	case evsBatchFormat1:
-	case evsBatchFormat2:
-		return nil, fmt.Errorf("%w: a batch of format 2", ErrEvsFormatUnsupported)
+	switch format := batchBytes[4]; {
+	case format == evsBatchFormat1:
+	case format == evsBatchFormat2 && format2:
+	case format == evsBatchFormat2 || (evsBatchFormat2 < format && format2):
+		return nil, fmt.Errorf("%w: a batch of format %d", ErrEvsFormatUnsupported, format)
 	default:
-		return nil, fmt.Errorf("%w: batch format %d", ErrEvsPushInvalid, batchBytes[4])
+		return nil, fmt.Errorf("%w: batch format %d", ErrEvsPushInvalid, format)
 	}
 	if EvsBatchMaxRecordByteCount+EvsBatchHeaderByteCount+evsBatchIndexEntryByteCount+EvsBatchTrailerByteCount < len(batchBytes) {
 		return nil, fmt.Errorf("%w: a batch of %d bytes", ErrEvsPushInvalid, len(batchBytes))
@@ -236,15 +266,22 @@ func ParseEvsBatch(batchBytes []byte) (*EvsBatch, error) {
 		return nil, fmt.Errorf("%w: a batch of %d records and %d bytes", ErrEvsPushInvalid, recordCount, len(batchBytes))
 	}
 	next := EvsBatchHeaderByteCount
+	format2Count := 0
 	for at := indexOffset; at < trailerAt; at += evsBatchIndexEntryByteCount {
 		offset := int(binary.BigEndian.Uint32(batchBytes[at : at+4]))
 		length := int(binary.BigEndian.Uint32(batchBytes[at+4 : at+8]))
 		if offset != next || indexOffset-offset < length {
 			return nil, fmt.Errorf("%w: records that do not tile the batch", ErrEvsPushInvalid)
 		}
-		record, err := ParseEvsBatchRecord(batchBytes[offset : offset+length])
+		record, tail, err := parseEvsBatchRecord(batchBytes[offset:offset+length], format2)
 		if err != nil {
 			return nil, err
+		}
+		if format2 {
+			batch.Tails = append(batch.Tails, tail)
+			if tail != nil {
+				format2Count += 1
+			}
 		}
 		batch.Records = append(batch.Records, record)
 		batch.Places = append(batch.Places, &protocol.EvsPlace{
@@ -255,6 +292,9 @@ func ParseEvsBatch(batchBytes []byte) (*EvsBatch, error) {
 	}
 	if next != indexOffset {
 		return nil, fmt.Errorf("%w: bytes between the records and the index", ErrEvsPushInvalid)
+	}
+	if format2 && (batch.Header.Format == evsBatchFormat2) != (0 < format2Count) {
+		return nil, fmt.Errorf("%w: a batch of format %d holding %d format-2 records", ErrEvsPushInvalid, batch.Header.Format, format2Count)
 	}
 	return batch, nil
 }
