@@ -26,6 +26,10 @@ type worldChange struct {
 	// a directory delta's names added and tokens removed
 	names         []sidecar.EvsToken
 	removedTokens []sidecar.EvsToken
+	// while sources stand, the EvsSourcePath encodings naming the path in a source epoch
+	sourcePaths [][]byte
+	// the entry version's bytes as a test built them, in place of the world's own
+	entryVersionBytes []byte
 }
 
 // One committed push of the world, as the brute force reads history.
@@ -171,6 +175,16 @@ func (self *evsWorld) entryVersion(pushId sidecar.Id, baseVersion uint64, change
 // Commits a push of changes at the head's next version, its record through the batch writer and its window entry
 // appended, and returns that version.
 func (self *evsWorld) push(changes ...*worldChange) uint64 {
+	version, err := self.commit(nil, changes...)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return version
+}
+
+// As push, with stepSix run on the prior head and the next one before the head CAS, as step 6's page-out runs
+// (§11.8): an error from it commits nothing and is returned.
+func (self *evsWorld) commit(stepSix func(prior *EvsStoredHead, next *protocol.EvsHead) error, changes ...*worldChange) (uint64, error) {
 	self.pushSeq += 1
 	pushId := testId(fmt.Sprintf("push-%d", self.pushSeq))
 	baseVersion := self.head.Version()
@@ -178,16 +192,24 @@ func (self *evsWorld) push(changes ...*worldChange) uint64 {
 	if !self.head.Absent() && 0 < baseVersion {
 		baseChain = [32]byte(self.head.Head.GetChain())
 	}
+	pathEpoch := uint64(1)
+	if !self.head.Absent() {
+		pathEpoch = EvsHeadCurrentEpoch(self.head.Head)
+	}
 	plan := &sidecar.EvsPushPlan{
 		RepoId: self.repoId, RefId: self.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
 		PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain, Generation: 1, GroupId: testId("group"),
-		GenerationCommitment: make([]byte, 32), PathEpoch: 1, Auth: &bridge.AuthPin{Version: 1, Chain: make([]byte, 32)},
+		GenerationCommitment: make([]byte, 32), PathEpoch: pathEpoch, Auth: &bridge.AuthPin{Version: 1, Chain: make([]byte, 32)},
 		SignerSidecarId: self.signerId, ClientId: testId("client"), TimeMs: self.clock.Now().UnixMilli(),
 		SealedMetadata: []byte("sealed metadata"),
+		SourcesStand:   !self.head.Absent() && 0 < len(self.head.Head.GetPathEpoch().GetSources()),
 	}
 	for _, change := range changes {
-		planned := &sidecar.EvsPlannedChange{TokenPath: change.path, BaseEntryVersion: change.base}
-		if change.version != 0 {
+		planned := &sidecar.EvsPlannedChange{TokenPath: change.path, BaseEntryVersion: change.base, SourcePaths: change.sourcePaths}
+		switch {
+		case change.entryVersionBytes != nil:
+			planned.EntryVersion = change.entryVersionBytes
+		case change.version != 0:
 			planned.EntryVersion = self.entryVersion(pushId, baseVersion, change)
 		}
 		plan.Changes = append(plan.Changes, planned)
@@ -227,13 +249,18 @@ func (self *evsWorld) push(changes ...*worldChange) uint64 {
 	next.Chain = chain[:]
 	next.PushId = pushId.Bytes()
 	next.Window = append(bytes.Clone(next.GetWindow()), windowEntry.Encode()...)
+	if stepSix != nil {
+		if err := stepSix(self.head, next); err != nil {
+			return 0, err
+		}
+	}
 	written, err := self.heads.Commit(self.ctx, self.cluster, self.repoId, self.refId, self.head, next)
 	if err != nil {
 		self.t.Fatal(err)
 	}
 	self.head = written
 	self.history = append(self.history, &worldPush{version: next.Version, changes: changes})
-	return next.Version
+	return next.Version, nil
 }
 
 // Drops the window's versions at or below through, as a page-out leaves them in log pages: the window then starts

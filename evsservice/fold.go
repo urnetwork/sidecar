@@ -4,7 +4,8 @@
 // and, per path:
 //
 //   - a file takes its newest version or removal in (f, u], its own or a prefix's, and is skipped when a window
-//     version after u changes the file itself again;
+//     version after u changes the file itself again, unless its own removal is in (f, u]: a removal's marker is
+//     always written (I-EVS-6);
 //   - a directory takes every delta in (f, u] past what its entry holds, in version order, since a newer delta never
 //     replaces an older one (fold_directory.go);
 //   - a creation, base_entry_version 0, replaces what the entry held, carrying nothing, and an entry keeps four
@@ -551,10 +552,13 @@ func (self *foldPath) fileBefore(version uint64) bool {
 	return file
 }
 
-// Whether any of the path's events is a directory's delta, which a fold never skips.
-func (self *foldPath) hasDelta() bool {
+// Whether a fold must write the path whatever later versions do: a directory's deltas, which a newer delta never
+// replaces, and the path's own removal, whose marker must stand before the removal leaves the window (I-EVS-6) and
+// before the LIST below it, so that while sources stand no read falls back to a source under it.
+func (self *foldPath) neverSkipped() bool {
 	return slices.ContainsFunc(self.events, func(event *foldEvent) bool {
-		return event.kind == foldEventWrite && event.entryVersion.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY)
+		return event.kind == foldEventRemoval ||
+			(event.kind == foldEventWrite && event.entryVersion.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY))
 	})
 }
 
@@ -583,11 +587,11 @@ func (self *foldPath) sourcePaths() [][]byte {
 }
 
 // Marks each file path a window version after u changes itself again, which that version's fold takes (§11.7's
-// fold row). A directory's deltas are never skipped. The digest filters, and the change list decides.
+// fold row), unless neverSkipped. The digest filters, and the change list decides.
 func (self *foldRun) planSkips(window []*sidecar.EvsWindowEntry, firstVersion uint64) error {
 	for _, pathId := range self.sortedIds {
 		path := self.paths[pathId]
-		if path.hasDelta() {
+		if path.neverSkipped() {
 			continue
 		}
 		for version := self.through + 1; version <= self.head.Version(); version += 1 {
@@ -1099,7 +1103,8 @@ func (self *Folder) runIdleFold(ref foldRef) {
 		start = true
 	}()
 	if start {
-		self.runBackgroundFold(ref, clusterId, func(head *EvsStoredHead, horizon uint64) uint64 {
+		// off the clock's goroutine, which a fold waiting on the clock must not hold
+		go self.runBackgroundFold(ref, clusterId, func(head *EvsStoredHead, horizon uint64) uint64 {
 			return head.Version()
 		})
 	}
