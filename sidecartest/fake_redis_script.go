@@ -130,6 +130,33 @@ func (self *FakeRedisScriptCall) Expire(key string, ttl time.Duration) (bool, er
 	return exists, nil
 }
 
+// EXPIRE NX: sets the key's ttl only while it has none, and fires the g event only then, as a master
+// does, so a key's expiry starts once per key generation (§6.8).
+func (self *FakeRedisScriptCall) ExpireIfNone(key string, ttl time.Duration) (bool, error) {
+	if err := self.check(key); err != nil {
+		return false, err
+	}
+	if ttl <= 0 {
+		return false, fmt.Errorf("an expire of %v would delete the key", ttl)
+	}
+	entry, exists := self.redis.entries[key]
+	if !exists || !entry.expiresAt.IsZero() {
+		return false, nil
+	}
+	self.redis.setExpiryWithLock(key, entry, ttl)
+	self.redis.subscriber.publish(key)
+	return true, nil
+}
+
+// EXISTS of one key, of any kind.
+func (self *FakeRedisScriptCall) Exists(key string) (bool, error) {
+	if err := self.check(key); err != nil {
+		return false, err
+	}
+	_, exists := self.redis.entries[key]
+	return exists, nil
+}
+
 func (self *FakeRedisScriptCall) HashGet(key string, field string) ([]byte, bool, error) {
 	if err := self.check(key); err != nil {
 		return nil, false, err
