@@ -58,7 +58,9 @@ type netExchange struct {
 	links     map[netLinkKey]*LinkConditions
 	// the class the issuer seals into a pair's contracts, data where none is set (subprotocol_net.go)
 	contractClasses map[netLinkKey]protocol.ContractClass
-	workers         sync.WaitGroup
+	// each client's resident, by the client it serves (push_net.go)
+	residents map[connect.Id]*NetResident
+	workers   sync.WaitGroup
 }
 
 func newNetExchange(ctx context.Context, net *Net) *netExchange {
@@ -71,18 +73,27 @@ func newNetExchange(ctx context.Context, net *Net) *netExchange {
 		clients:         map[connect.Id]*NetClient{},
 		links:           map[netLinkKey]*LinkConditions{},
 		contractClasses: map[netLinkKey]protocol.ContractClass{},
+		residents:       map[connect.Id]*NetResident{},
 	}
 }
 
 func (self *netExchange) close() {
 	var clients []*NetClient
+	var residents []*NetResident
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		for _, client := range self.clients {
 			clients = append(clients, client)
 		}
+		for _, resident := range self.residents {
+			residents = append(residents, resident)
+		}
 	}()
+	// residents first, so no publisher outlives its client or the Redis it reads
+	for _, resident := range residents {
+		resident.Close()
+	}
 	for _, client := range clients {
 		client.Client.Cancel()
 	}
@@ -410,9 +421,10 @@ func (self *netExchange) passes(source connect.Id, destination connect.Id) bool 
 	return link.LossProbability <= self.random.Float64()
 }
 
-// §22.4's ControlId sink: frames for the platform end here, kept for a test to read. Nothing answers,
-// and a client's control sync retries, as it does with a platform that is slow. Runs until ctx or the
-// exchange ends.
+// §22.4's ControlId sink: frames for the platform end here, kept for a test to read. A client with a
+// resident (push_net.go) has its frames carried on to it over h1, as the platform's carriers carry them,
+// so the resident's sends are acked; otherwise nothing answers, and a client's control sync retries, as
+// it does with a platform that is slow. Runs until ctx or the exchange ends.
 func (self *netExchange) sinkControl(ctx context.Context, source *NetClient, route connect.Route) {
 	for {
 		select {
@@ -425,7 +437,19 @@ func (self *netExchange) sinkControl(ctx context.Context, source *NetClient, rou
 				return
 			}
 			self.net.capture.AddFrame(source.ClientId, connect.ControlId, frame)
-			connect.MessagePoolReturn(frame)
+			resident := self.resident(source.ClientId)
+			if resident == nil || !self.passes(source.ClientId, connect.ControlId) {
+				connect.MessagePoolReturn(frame)
+				continue
+			}
+			select {
+			case resident.netClient.receiveRoute(connect.TransportTypeH1) <- frame:
+			case <-resident.netClient.ctx.Done():
+				// a resident that ended reads nothing more
+				connect.MessagePoolReturn(frame)
+			case <-self.ctx.Done():
+				connect.MessagePoolReturn(frame)
+			}
 		}
 	}
 }

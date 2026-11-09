@@ -27,8 +27,9 @@ import (
 var errPushFrameTooLarge = errors.New("sidecar publisher: a push message past one envelope")
 
 // The frame of one push message, whose bytes are a pool buffer the caller owns. requestId only tells
-// envelopes apart: nothing answers a push.
-func newPushFrame(messageType protocol.MessageType, message proto.Message, requestId uint64) (*connectprotocol.Frame, error) {
+// envelopes apart: nothing answers a push. A resident's publisher sends these, and sidecartest's residents
+// send them by hand, so a test's frame is byte for byte one a resident would send.
+func PushFrame(messageType protocol.MessageType, message proto.Message, requestId uint64) (*connectprotocol.Frame, error) {
 	body, err := proto.Marshal(message)
 	if err != nil {
 		return nil, err

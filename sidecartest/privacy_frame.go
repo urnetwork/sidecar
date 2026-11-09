@@ -1,6 +1,7 @@
 // CC2 (§22.7): every TransferFrame through the exchange, and the rule each must keep: a frame to a peer
 // is sealed, an encryptedTransferFrame and nothing beside it, or an ack, or the handshake's
-// EncryptedControl carrier, and only a frame to ControlId, the platform, is read in the clear. The
+// EncryptedControl carrier; a frame to ControlId, the platform, is read in the clear; and a frame from
+// ControlId, a resident's (push_net.go), holds acks and hint fields alone (R-PROTO-8). The
 // exchange taps frames with connect's exported API alone (net_connect.go), the way
 // connect/transfer_encrypt_contract_test.go taps ControlId; a frame kind that needed connect's
 // unexported state to classify would be an X9 row for the owner (Q-TEST-1), never a copied helper.
@@ -44,10 +45,13 @@ func plaintextFrameMessages(frame []byte) [][]byte {
 	return messages
 }
 
-// Why a frame to destination is not sealed, or empty when it keeps CC2's rule.
-func unsealedFrameReason(destination connect.Id, frame []byte) string {
+// Why a frame from source to destination breaks CC2's rule, or empty when it keeps it.
+func unsealedFrameReason(source connect.Id, destination connect.Id, frame []byte) string {
 	if destination == connect.ControlId {
 		return ""
+	}
+	if source == connect.ControlId {
+		return controlFrameReason(frame)
 	}
 	transferFrame := &protocol.TransferFrame{}
 	if err := proto.Unmarshal(frame, transferFrame); err != nil {
@@ -85,7 +89,7 @@ func unsealedFrameReason(destination connect.Id, frame []byte) string {
 // peer that is not sealed is a finding.
 func (self *PrivacyCapture) AddFrame(source connect.Id, destination connect.Id, frame []byte) {
 	name := fmt.Sprintf("frame %s to %s", source, destination)
-	reason := unsealedFrameReason(destination, frame)
+	reason := unsealedFrameReason(source, destination, frame)
 	messages := plaintextFrameMessages(frame)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
