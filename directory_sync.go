@@ -11,7 +11,8 @@
 //	          remove: at M6 only notices, q/<h>/<tgt>/<rid>; from format 2 cards and repo files too
 //	listing   GET .../refs?moved_after=<the sequence the last sync ended at>; at the first sync of each UTC day no
 //	          moved_after, since a commit whose raise a crash lost shows only at its ref's next commit; a sequence
-//	          restart, or a ref the head cache lost, answers every ref
+//	          restart, or a ref the head cache lost, answers every ref; a stream listed below what the copy holds
+//	          was wound back, and alarms chain_fork while the copy keeps what it verified (I-16)
 //	streams   the moved streams past what this daemon holds, 64 to a request, following more and paging the log for
 //	          behind, each version kept in the store before the stream's position moves, so ceil(n/64) requests read
 //	          n moved streams and a kill re-reads at most what was not kept
@@ -298,8 +299,15 @@ func (self *DirectoryClient) syncFrom(ctx context.Context, cards DirectoryCards,
 	for _, ref := range listing.Refs {
 		switch ref.Kind {
 		case DirectoryRefStream:
-			if held := state.StreamVersions[ref.WriterSidecarId]; held < ref.Version {
+			held := state.StreamVersions[ref.WriterSidecarId]
+			switch {
+			case held < ref.Version:
 				reads = append(reads, &DirectoryStreamRead{WriterSidecarId: ref.WriterSidecarId, PinVersion: held})
+			case ref.Version < held:
+				// evs lists less of the stream than this copy holds: wound back (I-16), so the copy keeps what it
+				// verified and alarms, as the reader does for any log (record_reader.go)
+				writerId := ref.WriterSidecarId
+				self.raise(SidecarRecordAlarmChainFork, directoryId, &writerId)
 			}
 		case DirectoryRefErasure:
 			erasureMoved = erasureMoved || state.ErasureVersion < ref.Version

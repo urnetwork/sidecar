@@ -10,7 +10,9 @@
 //   - the cards ref: one shared file-mode ref per repo, its statements read after a pin CardsPageCount a page, and
 //     writes and removals by path CAS at rw, 409 PATH_CONFLICT otherwise, a path's versions never restarting;
 //   - leases: any prefix, as evs, which sees no path, takes them; each commit under a leased prefix calls its holder
-//     with no lock held; Leases lists every lease ever taken, so a test sees one on the cards ref itself.
+//     with no lock held; Leases lists every lease ever taken, so a test sees one on the cards ref itself;
+//   - a wound-back listing on demand: ListStreamAt makes listings name a stream at a version below its head, as a
+//     server rolling a stream back would.
 //
 // Each call is counted by kind, so a test holds a sync to its requests (FS-86). Reads take read, writes rw, by the
 // world's scopes. Contents are the caller's plaintext: nothing is sealed or tokenized. Safe for concurrent use.
@@ -81,6 +83,8 @@ type FakeDirectoryCards struct {
 
 	stateLock sync.Mutex
 	repos     map[sidecar.Id]*fakeDirectoryCardsRepo
+	// streams listings name at a forced version, by repo and writer
+	listedAt  map[sidecar.Id]map[sidecar.Id]uint64
 	counts    FakeDirectoryCardsCounts
 	leases    []FakeDirectoryLease
 	nextLease uint64
@@ -110,7 +114,26 @@ func NewFakeDirectoryCards(streams *FakeRecordStreams, settings *FakeDirectoryCa
 	if settings == nil {
 		settings = DefaultFakeDirectoryCardsSettings()
 	}
-	return &FakeDirectoryCards{streams: streams, settings: settings, repos: map[sidecar.Id]*fakeDirectoryCardsRepo{}}
+	return &FakeDirectoryCards{
+		streams:  streams,
+		settings: settings,
+		repos:    map[sidecar.Id]*fakeDirectoryCardsRepo{},
+		listedAt: map[sidecar.Id]map[sidecar.Id]uint64{},
+	}
+}
+
+// Makes every later listing of repoId name writerId's stream at version, whatever its head, raising the sequence so
+// a moved listing names it: a server winding the stream back.
+func (self *FakeDirectoryCards) ListStreamAt(repoId sidecar.Id, writerId sidecar.Id, version uint64) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.listedAt[repoId] == nil {
+			self.listedAt[repoId] = map[sidecar.Id]uint64{}
+		}
+		self.listedAt[repoId][writerId] = version
+	}()
+	self.streams.RaiseSequence(repoId, "wound back "+writerId.String())
 }
 
 // What sidecarId reaches, carrying its scope in the world.
@@ -202,12 +225,26 @@ func (self *fakeDirectoryCardsClient) Refs(ctx context.Context, repoId sidecar.I
 	if err != nil {
 		return nil, err
 	}
+	listedAt := func() map[sidecar.Id]uint64 {
+		self.fake.stateLock.Lock()
+		defer self.fake.stateLock.Unlock()
+		listed := map[sidecar.Id]uint64{}
+		for writerId, version := range self.fake.listedAt[repoId] {
+			listed[writerId] = version
+		}
+		return listed
+	}()
 	refs := []*sidecar.DirectoryRef{}
 	for _, head := range heads {
-		refs = append(refs, &sidecar.DirectoryRef{
+		ref := &sidecar.DirectoryRef{
 			Kind: sidecar.DirectoryRefStream, WriterSidecarId: head.SidecarId, Version: head.Version,
 			Sequence: sequence.Refs[FakeRecordRef{Kind: FakeRecordRefStream, SidecarId: head.SidecarId}],
-		})
+		}
+		if version, ok := listedAt[head.SidecarId]; ok {
+			ref.Version = version
+			ref.Sequence = sequence.Sequence
+		}
+		refs = append(refs, ref)
 	}
 	if 0 < len(erasures) {
 		refs = append(refs, &sidecar.DirectoryRef{

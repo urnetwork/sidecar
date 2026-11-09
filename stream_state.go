@@ -142,6 +142,8 @@ type streamState struct {
 	// the window aimed for, max_offset - consumed_offset after each StreamWindow
 	window int64
 	buffer streamBuffer
+	// the reader stopped (stopReading): what arrives is consumed at once and dropped
+	readStopped bool
 
 	// the send half
 	sentOffset         uint64
@@ -356,6 +358,9 @@ func (self *streamState) receiveData(data *protocol.StreamData) (streamFrames, e
 	}
 	self.buffer.append(payload[self.receivedOffset-offset:])
 	self.receivedOffset = end
+	if self.readStopped {
+		return self.consumeHeld(), nil
+	}
 	return streamFrames{}, nil
 }
 
@@ -402,6 +407,9 @@ func (self *streamState) receiveClose(close *protocol.StreamClose) (streamFrames
 	if room := int64(finalOffset - self.consumedOffset); room < self.committed {
 		self.credit.release(self.committed - room)
 		self.committed = room
+	}
+	if self.readStopped {
+		return self.consumeHeld(), nil
 	}
 	self.finishIfDone()
 	return streamFrames{}, nil
@@ -499,6 +507,37 @@ func (self *streamState) read(p []byte) (streamFrames, int, error) {
 		}
 	}
 	return frames, n, nil
+}
+
+// Stops the reader, as Close does: what is held, and what arrives from now on, is consumed at once and
+// dropped, its credit given back and the window moved on as a reader that keeps up moves it, so the peer
+// is never held waiting and finishes its half; the stream then ends as a clean finish does. Answers the
+// window to send, if any.
+func (self *streamState) stopReading() streamFrames {
+	if self.phase == streamPhaseDone {
+		return streamFrames{}
+	}
+	self.readStopped = true
+	return self.consumeHeld()
+}
+
+// Consumes every byte held, as a read of them all would, without copying them anywhere.
+func (self *streamState) consumeHeld() streamFrames {
+	n := self.buffer.discard()
+	self.consumedOffset += uint64(n)
+	self.committed -= n
+	self.credit.release(n)
+	frames := streamFrames{window: self.extendWindow(true)}
+	if self.finalKnown && self.consumedOffset == self.finalOffset {
+		if !self.finalAcked {
+			self.finalAcked = true
+			if frames.window == nil {
+				frames.window = &protocol.StreamWindow{ConsumedOffset: self.consumedOffset, MaxOffset: self.maxOffset}
+			}
+		}
+		self.finishIfDone()
+	}
+	return frames
 }
 
 // A StreamWindow once the room left, max_offset - consumed_offset, falls below half the window aimed

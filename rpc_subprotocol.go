@@ -13,15 +13,19 @@
 //  1. size: envelopeCodec refused a frame past §6.5's limits before connect called the handler;
 //  2. the version major, else Error{VERSION};
 //  3. the source guard (D-PROTO-8, rpc_guard.go);
-//  4. the provide mode, Network only (rpc_guard.go);
-//  5. the identity gate (rpc_peer.go), closed to a peer until its Hello verifies (D-PROTO-13);
+//  4. the provide mode: Network, and an edge's Service-mode traffic (rpc_guard.go, stream_edge.go);
+//  5. the identity gate (rpc_peer.go), closed to a peer until its Hello verifies (D-PROTO-13); an edge's
+//     frames pass it, since edges send no Hello, and a frame of an open stream is held instead to the
+//     key its stream opened under (stream_peer.go);
 //  6. the contract class C13 sealed, control's narrow list on a control or unset class (rpc_contract_class.go);
 //  7. SubprotocolEnv.Inbound, §8's hook (rpc_inbound.go).
 //
-// An envelope through all seven is copied into a pool buffer and offered to its source's bounded queue
-// with zero wait (rpc_peer.go). Refusing a request answers it through the reply queue (rpc_send.go);
-// refusing anything else drops it. Both are counted. A worker per active source drains its queue in
-// order, reassembles chunked bodies (envelope_reassembly.go) and dispatches by Envelope.type: a Ping
+// A stream frame through all seven goes straight to its stream (stream_peer.go), never through a queue,
+// since stream bytes cannot be dropped and skipped. Any other envelope through all seven is copied into a
+// pool buffer and offered to its source's bounded queue with zero wait (rpc_peer.go). Refusing a request
+// answers it through the reply queue (rpc_send.go); refusing anything else drops it. Both are counted. A
+// worker per active source drains its queue in order, reassembles chunked bodies
+// (envelope_reassembly.go) and dispatches by Envelope.type: a Ping
 // gets its Pong here, a Hello its check (rpc_hello.go), a Cancel the run it names (rpc_handle.go), a
 // response the request it echoes (rpc_call.go), and a request the function its type registered
 // (Handle), or UNIMPLEMENTED.
@@ -45,6 +49,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/connect"
+	connectprotocol "github.com/urnetwork/connect/protocol"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -90,6 +95,9 @@ type SubprotocolEnv struct {
 	// must be its SidecarAdmit's, and a sidecar not itself admitted takes no peer. Nil keeps M1's
 	// first-use pins (§2.8 EX6), which only a dispatcher with no state behind it runs on.
 	Admissions SubprotocolAdmissions
+	// The dispatcher's side of §6.10.1 (stream_edge.go): a sidecar, the zero value, or an edge's engine,
+	// which runs no Hello and no HeadCheck and needs no Store, Binding or NetworkId.
+	Role SubprotocolRole
 }
 
 // One client generation's dispatcher. See the file header.
@@ -160,6 +168,21 @@ type Subprotocol struct {
 	keepaliveMark *MonitorValue[uint64]
 	// under stateLock: the keepalive loop runs, and Close joins it with the handlers
 	keepaliveStarted bool
+
+	// §6.10.1's side this dispatcher runs as (stream_edge.go)
+	role SubprotocolRole
+	// §6.7's streams: each peer's, the listeners and the stream sender's queue (stream_peer.go)
+	streams subprotocolStreams
+	// the provide modes owners hold on top of the client's own (stream_edge.go)
+	provideModes subprotocolProvideModes
+	// the client id peers reach this side at, which internal tests set where the client's own is not the
+	// one their pair routes by; zero reads the client's
+	streamClientId connect.Id
+	// the credit's memory pressure reading, which internal tests set; nil reads the process's
+	streamPressureOf func() bool
+	// the time the stream keepalive's armed wait ends at, zero for none, so a test steps its clock to it
+	// with no sleep (stream_keepalive.go)
+	streamKeepaliveArmed *MonitorValue[time.Time]
 
 	stats subprotocolStats
 }
@@ -267,8 +290,9 @@ func (self *Subprotocol) Stats() SidecarSubprotocolStats {
 
 // The settings a sidecar's connect client runs on, set here and nowhere else (D-PROTO-6, D-PROTO-10):
 // Required, never Opportunistic or Off, so a peer that cannot seal gets no application data (I-3); C15's
-// verified key exposed on every Peer, which Hello's identity check compares (D-PROTO-13); and no P2P
-// stream asked for, so pairs stay relay-only until P2P is tested (FS-126). CORE-M1-08's client
+// verified key exposed on every Peer, which Hello's identity check compares (D-PROTO-13); no P2P stream
+// asked for, so pairs stay relay-only until P2P is tested (FS-126); and 21842 the one id a Service-mode
+// source reaches it on (C9). CORE-M1-08's client
 // generations and the edges' platform clients call it on the settings they build a client from. A nil
 // EncryptionSettings gets connect's defaults first.
 func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
@@ -278,6 +302,9 @@ func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
 	clientSettings.EncryptionSettings.Mode = connect.EncryptionModeRequired
 	clientSettings.EncryptionSettings.ExposeVerifiedPeerClientKey = true
 	clientSettings.DefaultTransferOpts.ForceStream = false
+	// a Service-mode source reaches this client on id 21842 alone, and nothing else of it, IP included,
+	// gets in (C9; stream_edge.go); connect names no id, so the owner lists its own
+	clientSettings.ServiceSubprotocolIds = []connect.SubprotocolId{SubprotocolId}
 }
 
 // What internal tests put in place of connect's side of the dispatcher: how a frame's C15 key is read,
@@ -287,6 +314,8 @@ type subprotocolSeams struct {
 	send              subprotocolSendFunction
 	pins              identityPinSource
 	peerWindows       subprotocolPeerWindows
+	clientId          connect.Id
+	streamPressure    func() bool
 }
 
 // A running dispatcher, registered on env.Client's id 21842 with C3's opt-in for ControlId's frames
@@ -299,8 +328,17 @@ func NewSubprotocol(ctx context.Context, env *SubprotocolEnv) (*Subprotocol, err
 
 // NewSubprotocol, with seams.
 func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocolSeams) (*Subprotocol, error) {
-	if env == nil || env.Client == nil || env.Store == nil || env.Settings == nil || env.Budget == nil {
-		return nil, fmt.Errorf("%w: Client, Store, Settings and Budget are required", errSubprotocolEnv)
+	if env == nil || env.Client == nil || env.Settings == nil || env.Budget == nil {
+		return nil, fmt.Errorf("%w: Client, Settings and Budget are required", errSubprotocolEnv)
+	}
+	switch env.Role {
+	case SubprotocolRoleSidecar:
+		if env.Store == nil {
+			return nil, fmt.Errorf("%w: a sidecar's Store is required", errSubprotocolEnv)
+		}
+	case SubprotocolRoleEdge:
+	default:
+		return nil, fmt.Errorf("%w: role %d", errSubprotocolEnv, env.Role)
 	}
 	if env.Inbound == nil {
 		return nil, fmt.Errorf("%w: no Inbound function, which is never read as allow", errSubprotocolEnv)
@@ -349,6 +387,14 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		peerWindows:           seams.peerWindows,
 		markedPair:            NewMonitorValue(subprotocolMarkedPair{}),
 		keepaliveMark:         NewMonitorValue[uint64](0),
+		role:                  env.Role,
+		streams: subprotocolStreams{
+			outboundWake: make(chan struct{}, 1),
+			change:       NewMonitorValue[uint64](0),
+		},
+		streamClientId:       seams.clientId,
+		streamPressureOf:     seams.streamPressure,
+		streamKeepaliveArmed: NewMonitorValue(time.Time{}),
 	}
 	if self.peerWindows == nil {
 		self.peerWindows = env.Client.ContractManager()
@@ -360,15 +406,21 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		self.send = self.connectSend
 	}
 	if self.pins == nil {
-		if env.Admissions != nil {
+		if env.Role == SubprotocolRoleEdge {
+			// an edge checks no Hello, and one that reached a check would find nothing pinned
+			self.pins = edgeIdentityPins{}
+		} else if env.Admissions != nil {
 			self.pins = newAdmissionIdentityPins(cancelCtx, env.Admissions, env.Store, env.Settings, clock, self.raiseEvent)
 		} else {
 			self.pins = newFirstUseIdentityPins(env.Store)
 		}
 	}
-	// the dispatcher's own: Hello's check, Cancel and every response
+	// the dispatcher's own: Hello's check, which an edge runs with no one, Cancel and every response
 	for _, register := range []func() error{
 		func() error {
+			if env.Role == SubprotocolRoleEdge {
+				return nil
+			}
 			_, err := self.setMessageTypeDispatch(protocol.MessageType_HELLO, self.dispatchHello)
 			return err
 		},
@@ -417,6 +469,8 @@ func (self *Subprotocol) Close() {
 			self.closed = true
 		}()
 		self.unregister()
+		// every stream ends here, so its readers and writers return before the join
+		self.closeStreams()
 		self.stop()
 	})
 }
@@ -463,15 +517,29 @@ func (self *Subprotocol) receive(source connect.TransferPath, envelope *protocol
 	var clientPublicKey [ed25519.PublicKeySize]byte
 	hasClientPublicKey := false
 	if sourceId != connect.ControlId {
-		// (4) the provide mode
-		if !provideModeAdmits(peer.ProvideMode) {
+		// (4) the provide mode: Network, and a Service-mode source for what an edge sends (stream_edge.go)
+		if !provideModeAdmits(self.role, peer.ProvideMode, envelope.Type, envelope.Flags) {
 			self.stats.provideModeDroppedCount.Add(1)
 			return
 		}
+		// the stream keepalive's inbound traffic: the peer's client is sending, whatever the gate says
+		self.noteStreamInbound(sourceId)
 		// (5) the identity gate (D-PROTO-13)
 		clientPublicKey, hasClientPublicKey = self.clientPublicKeyOf(peer)
-		if !self.identityAdmits(sourceId, envelope.Type, envelope.Flags, clientPublicKey, hasClientPublicKey) {
+		switch {
+		case peer.ProvideMode == connectprotocol.ProvideMode_Service || self.role == SubprotocolRoleEdge:
+			// an edge sends no Hello and carries no binding (§6.4): its open is admitted on its ticket by
+			// the listener, and step 4 kept the rest to its streams, keepalive and answers
+		case streamMessageType(envelope.Type) && protocol.MessageType(envelope.Type) != protocol.MessageType_STREAM_OPEN:
+			// a frame of a stream already open is held to the C15 key the stream opened under
+			// (stream_peer.go), so the stream outlives the Hello that opened it
+		case !self.identityAdmits(sourceId, envelope.Type, envelope.Flags, clientPublicKey, hasClientPublicKey):
 			self.stats.identityRefusedCount.Add(1)
+			if protocol.MessageType(envelope.Type) == protocol.MessageType_STREAM_OPEN {
+				// no stream before a verified Hello: an open is rejected INVALID (§6.4)
+				self.offerReply(streamRejectReply(sourceId, peer.TransferKey, envelope.StreamId, protocol.StreamRejectCode_SR_INVALID))
+				return
+			}
 			refuse(protocol.ErrorCode_ERR_UNAUTHENTICATED)
 			return
 		}
@@ -500,7 +568,16 @@ func (self *Subprotocol) receive(source connect.TransferPath, envelope *protocol
 		}
 		if !self.inbound(inbound) {
 			self.stats.inboundRefusedCount.Add(1)
+			if protocol.MessageType(envelope.Type) == protocol.MessageType_STREAM_OPEN {
+				self.offerReply(streamRejectReply(sourceId, peer.TransferKey, envelope.StreamId, protocol.StreamRejectCode_SR_DENIED))
+				return
+			}
 			refuse(protocol.ErrorCode_ERR_PERMISSION_DENIED)
+			return
+		}
+		// stream frames go straight to their streams' buffers, never through the queue (stream_peer.go)
+		if streamMessageType(envelope.Type) {
+			self.receiveStreamFrame(source, envelope, peer, clientPublicKey, hasClientPublicKey)
 			return
 		}
 	}

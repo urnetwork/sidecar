@@ -122,6 +122,10 @@ func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if self.role == SubprotocolRoleEdge {
+		// an edge shows no binding and checks none (stream_edge.go)
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_FAILED_PRECONDITION, Message: errSubprotocolEdgeRole.Error()}
+	}
 	// a standing Hello whose peer the state has since revoked or parked is closed first (rpc_admission.go)
 	self.peerAdmissionStands(clientId)
 	var flight *helloFlight
