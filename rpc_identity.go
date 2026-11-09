@@ -13,16 +13,19 @@
 //  4. its client_id is the frame's authenticated source;
 //  5. its client_public_key is C15's key on this frame's Peer, an empty key being a refusal, never a pass;
 //  6. its identity_public_key is the pin for its sidecar_id and its generation is no lower than the
-//     highest seen (rpc_pins.go), else UNAUTHENTICATED, and a key that differs raises key_changed.
+//     highest seen, else UNAUTHENTICATED, and a key that differs raises key_changed. The pin is M1's
+//     first use (rpc_pins.go) or, from M2, the peer's SidecarAdmit (rpc_admission.go), which must also
+//     stand: neither revoked nor parked, else UNAUTHENTICATED. A side with no verified state, or not
+//     itself admitted, takes no peer and answers UNAVAILABLE.
 //
 // The floor, the version range, Required, the Signed rules and the chunk limits are never gated by a
-// feature bit (D-PROTO-16): a Hello's features are recorded and grant nothing. They are 0 until
-// PROTO-M10-01.
+// feature bit (D-PROTO-16): a Hello's features are recorded and grant nothing (rpc_features.go).
 
 package sidecar
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -69,6 +72,13 @@ type SubprotocolPeerIdentity struct {
 	InitialWindow uint32
 	// The largest body the peer reassembles, past which a call to it is TOO_LARGE here.
 	MaxBodyByteCount uint32
+	// The peer's admission as this side's verified state held it when its Hello verified (§6.4,
+	// rpc_admission.go): its SidecarAdmit's row, with the member or tags it names. Neither revoked nor
+	// parked then. Nil under M1's first-use pins, which know of no admission.
+	Admission *AclSidecar
+	// The position n of the state Admission was read at. A gate that finds the state past it reads the
+	// admission again before it lets another frame through (rpc_admission.go).
+	AdmissionVersion uint64
 }
 
 // A copy sharing no slice.
@@ -76,6 +86,7 @@ func (self *SubprotocolPeerIdentity) clone() *SubprotocolPeerIdentity {
 	clone := *self
 	clone.IdentityPublicKey = bytes.Clone(self.IdentityPublicKey)
 	clone.Binding = bytes.Clone(self.Binding)
+	clone.Admission = cloneAclSidecar(self.Admission)
 	return &clone
 }
 
@@ -133,8 +144,9 @@ func (self *Subprotocol) SetRaisedSecureFloor(floor uint32) {
 
 // Runs the file header's checks on a Hello or HelloResult from sourceId whose frame carried
 // clientPublicKey. The answer is the verified peer, or the code to refuse with and why. A pin that names
-// another key raises key_changed.
+// another key raises key_changed. ctx bounds the admission source's one catch-up of the config.
 func (self *Subprotocol) checkHello(
+	ctx context.Context,
 	sourceId connect.Id,
 	fields *helloFields,
 	clientPublicKey [ed25519.PublicKeySize]byte,
@@ -164,20 +176,24 @@ func (self *Subprotocol) checkHello(
 	if !hasClientPublicKey || !bytes.Equal(binding.ClientPublicKey, clientPublicKey[:]) {
 		return nil, protocol.ErrorCode_ERR_UNAUTHENTICATED, errHelloSessionKey
 	}
-	// (6) the pin and the generation
-	if err := self.pins.checkPin(binding.SidecarId, binding.IdentityPublicKey, binding.Generation); err != nil {
-		if errors.Is(err, errHelloPinMismatch) {
+	// (6) the pin and the generation, and from M2 the admission standing
+	admission, err := self.pins.checkPin(ctx, binding.SidecarId, binding.IdentityPublicKey, binding.Generation)
+	if err != nil {
+		switch {
+		case errors.Is(err, errHelloPinMismatch):
 			sidecarId := binding.SidecarId
 			self.raiseEvent(SidecarEvent{Kind: SidecarEventKeyChanged, SidecarId: &sidecarId})
 			return nil, protocol.ErrorCode_ERR_UNAUTHENTICATED, err
-		}
-		if errors.Is(err, errHelloGenerationBelow) {
+		case errors.Is(err, errHelloGenerationBelow), errors.Is(err, errHelloUnadmitted),
+			errors.Is(err, errHelloRevoked), errors.Is(err, errHelloParked):
 			return nil, protocol.ErrorCode_ERR_UNAUTHENTICATED, err
+		case errors.Is(err, errHelloNotAdmitted):
+			return nil, protocol.ErrorCode_ERR_UNAVAILABLE, err
 		}
-		// a store that cannot answer pins nothing and opens nothing
+		// a store that cannot answer, or a catch-up that failed, pins nothing and opens nothing
 		return nil, protocol.ErrorCode_ERR_UNAVAILABLE, fmt.Errorf("hello: pin: %w", err)
 	}
-	return &SubprotocolPeerIdentity{
+	peer := &SubprotocolPeerIdentity{
 		SidecarId:         binding.SidecarId,
 		IdentityPublicKey: bytes.Clone(binding.IdentityPublicKey),
 		Generation:        binding.Generation,
@@ -185,7 +201,12 @@ func (self *Subprotocol) checkHello(
 		Features:          fields.features,
 		InitialWindow:     fields.initialWindow,
 		MaxBodyByteCount:  fields.maxBodyByteCount,
-	}, protocol.ErrorCode_ERR_OK, nil
+	}
+	if admission != nil {
+		peer.Admission = admission.admission
+		peer.AdmissionVersion = admission.stateVersion
+	}
+	return peer, protocol.ErrorCode_ERR_OK, nil
 }
 
 // Hands an event to the host, if it gave a sink.

@@ -719,3 +719,43 @@ func TestEvsBatchKeysNameTheirUtcHourAndMinute(t *testing.T) {
 		t.Errorf("key %s", key)
 	}
 }
+
+// The route table a host reads is the router's, in its order, with every handler withheld: a copy changed by its
+// reader changes nothing the engine serves.
+func TestEvsEngineRoutesAreTheRoutersTableWithNoHandler(t *testing.T) {
+	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
+	fixture := newEvsFixture(t, probe.route)
+	routes := fixture.engine.Routes()
+	names := []string{}
+	for _, route := range routes {
+		if route.Serve != nil {
+			t.Errorf("%s %s: a handler past the guard", route.Method, route.Pattern)
+		}
+		names = append(names, route.Method+" "+route.Pattern)
+	}
+	want := []string{
+		"PUT /evs/v1/repos/{repo_id}",
+		"PUT /evs/v1/repos/{repo_id}/segments/{segment_id}",
+		"GET /evs/v1/repos/{repo_id}/probe",
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("routes %v, want %v", names, want)
+	}
+	for _, route := range routes {
+		if route.Name == "" || route.Name == "probe" {
+			continue
+		}
+		if route.Name != route.Method+" "+route.Pattern {
+			t.Errorf("route %s named %s: not its method and pattern", route.Method+" "+route.Pattern, route.Name)
+		}
+	}
+	routes[0].Pattern = "/evs/v1/elsewhere"
+	if again := fixture.engine.Routes(); again[0].Pattern != "/evs/v1/repos/{repo_id}" {
+		t.Errorf("a reader's change reached the engine's table: %s", again[0].Pattern)
+	}
+	// the probe still answers through the guard, and only there
+	repoId := testId("repo-1")
+	if recorder := fixture.serve(http.MethodGet, "/evs/v1/repos/"+sidecar.EvsKeyId(repoId)+"/probe", "", nil); recorder.Code != http.StatusUnauthorized || probe.calls != 0 {
+		t.Errorf("an unauthenticated probe answered %d after %d calls", recorder.Code, probe.calls)
+	}
+}

@@ -122,6 +122,8 @@ func (self *Subprotocol) ensurePeerVerifiedWithin(ctx context.Context, clientId 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// a standing Hello whose peer the state has since revoked or parked is closed first (rpc_admission.go)
+	self.peerAdmissionStands(clientId)
 	var flight *helloFlight
 	owner := false
 	now := self.clock.Now()
@@ -173,6 +175,10 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 		// with no binding to show, no peer could verify this side
 		return &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED, Message: "no binding to show"}
 	}
+	if !self.selfAdmitted() {
+		// until a SidecarAdmit names this sidecar in its own verified state, it gets no peer (§5.6)
+		return &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE, Message: "this sidecar is not admitted"}
+	}
 	body, err := proto.Marshal(self.ownHelloFields().hello())
 	if err != nil {
 		return err
@@ -205,7 +211,7 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 			self.forgetPeer(clientId)
 			return errHelloMalformed
 		}
-		peer, _, err := self.checkHello(clientId, helloFieldsOfResult(result), response.clientPublicKey, response.hasClientPublicKey)
+		peer, _, err := self.checkHello(ctx, clientId, helloFieldsOfResult(result), response.clientPublicKey, response.hasClientPublicKey)
 		if err != nil {
 			self.forgetPeer(clientId)
 			return err
@@ -237,7 +243,7 @@ func (self *Subprotocol) dispatchHello(ctx context.Context, message *subprotocol
 		refuse(protocol.ErrorCode_ERR_INVALID_ARGUMENT)
 		return
 	}
-	peer, code, err := self.checkHello(message.sourceId, helloFieldsOf(hello), message.clientPublicKey, message.hasClientPublicKey)
+	peer, code, err := self.checkHello(ctx, message.sourceId, helloFieldsOf(hello), message.clientPublicKey, message.hasClientPublicKey)
 	if err != nil {
 		self.stats.helloRefusedCount.Add(1)
 		if self.log.V(1).Enabled() {

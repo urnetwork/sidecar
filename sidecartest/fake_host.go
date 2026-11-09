@@ -87,6 +87,8 @@ type FakeHost struct {
 	Gates *FakeServiceGates
 	// Admits every write until a test refuses one.
 	Budget *FakeWriteBudget
+	// No network loaded, so every gate reading it refuses, until a test loads one.
+	Abuse *FakeAbuseGate
 	// The clock this host's engines read: the shared one, or a view of it with an offset.
 	Clock Clock
 }
@@ -115,6 +117,7 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 		ServiceClient: NewFakeServiceClientSource(faults, settings.ServiceClient),
 		Gates:         NewFakeServiceGates(settings.Gates),
 		Budget:        NewFakeWriteBudget(settings.Budget),
+		Abuse:         NewFakeAbuseGate(),
 		Clock:         clock,
 	}
 }
@@ -134,6 +137,7 @@ func (self *FakeHost) ServiceHost() *sidecar.ServiceHost {
 		Clock:         self.Clock,
 		Gates:         self.Gates,
 		Budget:        self.Budget,
+		Abuse:         self.Abuse,
 	}
 }
 

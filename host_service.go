@@ -47,6 +47,9 @@ type ServiceHost struct {
 	Gates ServiceGates
 	// §11.13's write budget, one per process (host_budget.go).
 	Budget WriteBudget
+	// §21.7's standing and network_verified, from memory the host fills off the path (host_abuse.go).
+	// Nil has loaded no network, so a host that forgets it has every gate that reads it refuse.
+	Abuse AbuseGate
 }
 
 // The clock a host gave its engines: Clock, or real time when the host set none.
@@ -60,6 +63,15 @@ func (self *ServiceHost) GatesOrClosed() ServiceGates {
 		return ClosedServiceGates{}
 	}
 	return self.Gates
+}
+
+// The abuse gate a host gave its engines: Abuse, or one that has loaded no network when the host set
+// none.
+func (self *ServiceHost) AbuseOrUnloaded() AbuseGate {
+	if self.Abuse == nil {
+		return UnloadedAbuseGate{}
+	}
+	return self.Abuse
 }
 
 // What every engine a server/cli/<svc> hosts gives its host, which wraps it with readiness, /status,

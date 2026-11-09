@@ -147,6 +147,9 @@ type testRpcPair struct {
 	// what delivery does to each envelope: nil delivers it as sent; a hook may rewrite it, or drop it by
 	// answering nil
 	deliver func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope
+	// the network's verified state every side added from now on reads for M2's admission check; nil
+	// runs M1's first-use pins (rpc_admission_test.go)
+	authority *testAdmissionAuthority
 }
 
 func newTestRpcPair(t testing.TB) *testRpcPair {
@@ -263,6 +266,7 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 		Event: func(event SidecarEvent) {
 			side.events <- event
 		},
+		Admissions: self.admissionsFor(identity.sidecarId, clock),
 	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send})
 	if err != nil {
 		t.Fatal(err)
