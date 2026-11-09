@@ -35,8 +35,8 @@ type worldPush struct {
 }
 
 // A ref's committed history on fake clusters: real statements and records through the batch writer, a head moved
-// by HeadStore, and folds into idx/ as §11.7's fold row writes them, so the newest rule runs over what evs would
-// read. The brute force replays history alone.
+// by HeadStore, and folds into idx/ by the real Folder (fold.go), so the newest rule runs over what evs would read.
+// The brute force replays history alone.
 type evsWorld struct {
 	t        *testing.T
 	ctx      context.Context
@@ -54,6 +54,10 @@ type evsWorld struct {
 	head     *EvsStoredHead
 	history  []*worldPush
 	pushSeq  int
+	// the folds' process, and the metadata cluster as the engine sees it, writes held to the budget
+	folder       *Folder
+	budgetedBlob sidecar.BlobStore
+	foldCluster  sidecar.BlobCluster
 }
 
 func newEvsWorld(t *testing.T) *evsWorld {
@@ -86,7 +90,40 @@ func newEvsWorld(t *testing.T) *evsWorld {
 		signerId: signerId,
 		head:     &EvsStoredHead{},
 	}
+	world.budgetedBlob = NewBudgetedBlobs(host.Blobs)
+	world.foldCluster, err = world.budgetedBlob.Cluster("meta-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	priceTable, err := DefaultPriceTable(settings.PriceBlockByteCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.folder = NewFolder(ctx, clock, host.ClockCheck, world.budgetedBlob, host.Budget, world.heads, NewRecordCache(settings),
+		NewRepoCache(clock, settings), priceTable, settings, sidecar.NewNoopLogger())
+	world.putRepo(protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	return world
+}
+
+// Writes the repo's repo/ in state, which every fold write rereads (§11.13's skip row).
+func (self *evsWorld) putRepo(state protocol.EvsRepoState) {
+	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
+		RepoId: self.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: state, Format: 1,
+		NetworkId: testId("network-a").Bytes(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	object, err := self.cluster.Head(self.ctx, RepoKey(self.repoId))
+	switch {
+	case errors.Is(err, sidecar.ErrBlobNotFound):
+		_, err = self.cluster.PutIfNoneMatch(self.paidCtx, RepoKey(self.repoId), repoBytes, nil)
+	case err == nil:
+		_, err = self.cluster.PutIfMatch(self.paidCtx, RepoKey(self.repoId), object.Etag, repoBytes, nil)
+	}
+	if err != nil {
+		self.t.Fatal(err)
+	}
 }
 
 // A token from a label.
@@ -285,128 +322,38 @@ func (self *evsWorld) bruteForce(through uint64) map[string]*bruteState {
 	return states
 }
 
-// Folds the window's versions in (head's folded_through, through] into idx/ as §11.7's fold row does, then raises
-// folded_through by a fence write.
+// Folds the window's versions through through by the real fold, then raises folded_through to the folder's horizon
+// by a fence write, standing in for the folding process's next commit (§11.7's horizon row).
 func (self *evsWorld) fold(through uint64) {
-	from := self.head.Head.GetFoldedThrough()
-	for _, push := range self.history {
-		if push.version <= from || through < push.version {
-			continue
-		}
-		pushId := testId(fmt.Sprintf("push-%d", push.version))
-		for _, change := range push.changes {
-			self.foldChange(push.version, pushId, change)
-		}
+	self.t.Helper()
+	result, err := self.folder.Fold(self.ctx, &EvsFoldRequest{
+		Cluster: self.foldCluster, RepoId: self.repoId, RefId: self.refId, Through: through, Rank: sidecar.WriteP2RankFold,
+	})
+	if err != nil {
+		self.t.Fatalf("fold through %d: %v", through, err)
+	}
+	if result.Superseded {
+		self.t.Fatalf("fold through %d superseded", through)
+	}
+	self.raiseHorizon()
+}
+
+// Raises the head's folded_through to the folder's horizon by a fence write, as the folding process's next commit
+// would.
+func (self *evsWorld) raiseHorizon() {
+	self.t.Helper()
+	horizon := self.folder.Horizon(self.repoId, self.refId, self.head.Head)
+	if horizon <= self.head.Head.GetFoldedThrough() {
+		return
 	}
 	next := CloneEvsHead(self.head.Head)
-	next.FoldedThrough = through
+	next.FoldedThrough = horizon
 	next.Fence += 1
 	written, err := self.heads.Commit(self.ctx, self.cluster, self.repoId, self.refId, self.head, next)
 	if err != nil {
 		self.t.Fatal(err)
 	}
 	self.head = written
-}
-
-// One change folded into its entry, and a removal's markers below it.
-func (self *evsWorld) foldChange(version uint64, pushId sidecar.Id, change *worldChange) {
-	read, err := ReadEntry(self.ctx, self.cluster, self.repoId, self.refId, 1, change.path, 0)
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	entry := &protocol.EvsIndexEntry{}
-	if !read.Absent() {
-		entry = proto.Clone(read.Entry).(*protocol.EvsIndexEntry)
-	}
-	switch {
-	case change.version == 0:
-		pathVersion := change.base + 1
-		entry.Marker = &protocol.EvsRemovalMarker{PushId: pushId.Bytes(), RemovalVersion: version, PathVersion: pathVersion}
-		self.markBelow(version, pushId, change.path)
-	case change.directory:
-		if change.base == 0 {
-			entry = &protocol.EvsIndexEntry{Names: &protocol.EvsNameTable{}}
-		}
-		if entry.Names == nil {
-			entry.Names = &protocol.EvsNameTable{}
-		}
-		delta := &protocol.EvsEntryVersion{}
-		if err := proto.Unmarshal(self.entryVersion(pushId, 0, change), delta); err != nil {
-			self.t.Fatal(err)
-		}
-		kept := []*protocol.EvsName{}
-		for _, name := range entry.Names.Names {
-			removed := false
-			for _, token := range change.removedTokens {
-				removed = removed || bytes.Equal(name.Token, token[:])
-			}
-			if !removed {
-				kept = append(kept, name)
-			}
-		}
-		entry.Names.Names = append(kept, delta.GetNames().GetNames()...)
-		entry.NamesThrough = version
-		entry.Marker = nil
-	default:
-		indexVersion := &protocol.EvsIndexVersion{PushId: pushId.Bytes(), CommitVersion: version, EntryVersion: self.foldedEntryVersion(version, change)}
-		if change.base == 0 {
-			// a creation replaces what the entry held, carrying nothing
-			entry = &protocol.EvsIndexEntry{}
-		}
-		entry.Versions = append([]*protocol.EvsIndexVersion{indexVersion}, entry.Versions...)
-		if 4 < len(entry.Versions) {
-			entry.Versions = entry.Versions[:4]
-		}
-		entry.Marker = nil
-	}
-	if _, err := PutEntry(self.ctx, self.cluster, self.repoId, self.refId, 1, change.path, read, entry, EvsEntryStateValue{}); err != nil {
-		self.t.Fatal(err)
-	}
-}
-
-// The entry version bytes the push at version wrote for change, from its record, as a fold reads them.
-func (self *evsWorld) foldedEntryVersion(version uint64, change *worldChange) []byte {
-	source := NewRecordPushSource(NewRecordCache(self.settings), self.cluster, self.repoId, self.refId)
-	window, _ := EvsHeadWindow(self.head.Head)
-	first := EvsHeadWindowFirstVersion(self.head.Head)
-	changes, err := source.ChangesAt(self.ctx, version, window[version-first], change.path)
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	for _, committed := range changes {
-		if committed.TokenPath.Equal(change.path) {
-			return committed.EntryVersion
-		}
-	}
-	self.t.Fatalf("no change at %d", version)
-	return nil
-}
-
-// A removal's markers on every entry below the removed path holding a version older than it.
-func (self *evsWorld) markBelow(version uint64, pushId sidecar.Id, removed sidecar.EvsTokenPath) {
-	objects, _, err := self.cluster.List(self.ctx, IndexChildrenPrefix(self.repoId, self.refId, 1, removed), "", 1000)
-	if err != nil {
-		self.t.Fatal(err)
-	}
-	for _, object := range objects {
-		tokenPath, err := IndexEntryTokenPath(IndexEpochPrefix(self.repoId, self.refId, 1), object.Key)
-		if err != nil {
-			self.t.Fatal(err)
-		}
-		read, err := ReadEntry(self.ctx, self.cluster, self.repoId, self.refId, 1, tokenPath, 0)
-		if err != nil || read.Absent() || read.Entry.GetMarker() != nil {
-			continue
-		}
-		entry := proto.Clone(read.Entry).(*protocol.EvsIndexEntry)
-		last := newestPathVersion(entry.GetVersions())
-		entry.Marker = &protocol.EvsRemovalMarker{PushId: pushId.Bytes(), RemovalVersion: version, PathVersion: last + 1}
-		if entry.GetNames() != nil {
-			entry.Marker.PathVersion = 1
-		}
-		if _, err := PutEntry(self.ctx, self.cluster, self.repoId, self.refId, 1, tokenPath, read, entry, EvsEntryStateValue{}); err != nil {
-			self.t.Fatal(err)
-		}
-	}
 }
 
 // The newest of path at the world's head, its entry read after the head.
