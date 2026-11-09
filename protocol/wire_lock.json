@@ -1,0 +1,418 @@
+{
+  "comment": [
+    "§6's wire, frozen at M2's Gn-out (D-PROTO-20, D-PROTO-7): every released field number of §6's messages with its name and",
+    "kind, and every released value of MessageType, ErrorCode, StreamRejectCode, StreamResetCode and SignedType, with the",
+    "reservations each keeps. wire_lock_test.go fails when one moves, changes kind or goes; a new one is additive, and",
+    "SIDECAR_REGENERATE_WIRE_LOCK=1 go test -run '^TestWireLockHolds$' ./protocol adds it here, changing no line already",
+    "here. Kinds read 'repeated ' first for a list, and a message's or enum's full name after its kind."
+  ],
+  "messages": [
+    {
+      "name": "urnetwork.sidecar.Envelope",
+      "fields": [
+        {"number":1,"name":"version","kind":"uint32"},
+        {"number":2,"name":"type","kind":"uint32"},
+        {"number":3,"name":"request_id","kind":"fixed64"},
+        {"number":4,"name":"flags","kind":"uint32"},
+        {"number":5,"name":"stream_id","kind":"uint64"},
+        {"number":6,"name":"timeout_ms","kind":"uint32"},
+        {"number":7,"name":"chunk","kind":"message urnetwork.sidecar.Chunk"},
+        {"number":15,"name":"body","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.Chunk",
+      "fields": [
+        {"number":1,"name":"index","kind":"uint32"},
+        {"number":2,"name":"count","kind":"uint32"},
+        {"number":3,"name":"total_byte_count","kind":"uint32"},
+        {"number":4,"name":"sha256","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.Error",
+      "fields": [
+        {"number":1,"name":"code","kind":"uint32"},
+        {"number":2,"name":"message","kind":"string"},
+        {"number":3,"name":"retry_after_ms","kind":"uint32"},
+        {"number":4,"name":"result_ref","kind":"bytes"},
+        {"number":5,"name":"min_version","kind":"uint32"},
+        {"number":6,"name":"max_version","kind":"uint32"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.Hello",
+      "fields": [
+        {"number":1,"name":"min_version","kind":"uint32"},
+        {"number":2,"name":"max_version","kind":"uint32"},
+        {"number":3,"name":"secure_version","kind":"uint32"},
+        {"number":4,"name":"features","kind":"uint64"},
+        {"number":5,"name":"max_body_byte_count","kind":"uint32"},
+        {"number":6,"name":"initial_window","kind":"uint32"},
+        {"number":7,"name":"binding","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.HelloResult",
+      "fields": [
+        {"number":1,"name":"min_version","kind":"uint32"},
+        {"number":2,"name":"max_version","kind":"uint32"},
+        {"number":3,"name":"secure_version","kind":"uint32"},
+        {"number":4,"name":"features","kind":"uint64"},
+        {"number":5,"name":"max_body_byte_count","kind":"uint32"},
+        {"number":6,"name":"initial_window","kind":"uint32"},
+        {"number":7,"name":"binding","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.HeadCheck",
+      "fields": [
+        {"number":1,"name":"network_id","kind":"bytes"},
+        {"number":2,"name":"auth","kind":"message urnetwork.sidecar.AuthPin"},
+        {"number":3,"name":"groups","kind":"repeated message urnetwork.sidecar.GroupHead"},
+        {"number":4,"name":"gens","kind":"repeated message urnetwork.sidecar.GenHead"},
+        {"number":5,"name":"refs","kind":"repeated message urnetwork.sidecar.RefHead"},
+        {"number":6,"name":"vetoes","kind":"repeated bytes"},
+        {"number":7,"name":"proven","kind":"message urnetwork.sidecar.AuthPin"},
+        {"number":8,"name":"unverified","kind":"repeated message urnetwork.sidecar.UnverifiedPin"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.HeadCheckResult",
+      "fields": [
+        {"number":1,"name":"network_id","kind":"bytes"},
+        {"number":2,"name":"auth","kind":"message urnetwork.sidecar.AuthPin"},
+        {"number":3,"name":"groups","kind":"repeated message urnetwork.sidecar.GroupHead"},
+        {"number":4,"name":"gens","kind":"repeated message urnetwork.sidecar.GenHead"},
+        {"number":5,"name":"refs","kind":"repeated message urnetwork.sidecar.RefHead"},
+        {"number":6,"name":"vetoes","kind":"repeated bytes"},
+        {"number":7,"name":"proven","kind":"message urnetwork.sidecar.AuthPin"},
+        {"number":8,"name":"unverified","kind":"repeated message urnetwork.sidecar.UnverifiedPin"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.UnverifiedPin",
+      "fields": [
+        {"number":1,"name":"pin","kind":"message urnetwork.sidecar.AuthPin"},
+        {"number":2,"name":"path","kind":"repeated bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.GroupHead",
+      "fields": [
+        {"number":1,"name":"group_id","kind":"bytes"},
+        {"number":2,"name":"epoch","kind":"uint64"},
+        {"number":3,"name":"epoch_authenticator","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.GenHead",
+      "fields": [
+        {"number":1,"name":"group_id","kind":"bytes"},
+        {"number":2,"name":"generation","kind":"uint64"},
+        {"number":3,"name":"commitment","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.RefHead",
+      "fields": [
+        {"number":1,"name":"repo_id","kind":"bytes"},
+        {"number":2,"name":"ref_id","kind":"bytes"},
+        {"number":3,"name":"version","kind":"uint64"},
+        {"number":4,"name":"chain","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.HeadCheckProofRequest",
+      "fields": [
+        {"number":1,"name":"after","kind":"uint64"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.HeadCheckProof",
+      "fields": [
+        {"number":1,"name":"entries","kind":"repeated bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.AuthPin",
+      "fields": [
+        {"number":1,"name":"version","kind":"uint64"},
+        {"number":2,"name":"chain","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamOpen",
+      "fields": [
+        {"number":1,"name":"target","kind":"string"},
+        {"number":2,"name":"metadata","kind":"bytes"},
+        {"number":3,"name":"ticket","kind":"bytes"},
+        {"number":4,"name":"window","kind":"uint32"},
+        {"number":5,"name":"early_data","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamAccept",
+      "fields": [
+        {"number":1,"name":"window","kind":"uint32"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamReject",
+      "fields": [
+        {"number":1,"name":"code","kind":"uint32"},
+        {"number":2,"name":"retry_after_ms","kind":"uint32"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamData",
+      "fields": [
+        {"number":1,"name":"offset","kind":"uint64"},
+        {"number":2,"name":"data","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamWindow",
+      "fields": [
+        {"number":1,"name":"consumed_offset","kind":"uint64"},
+        {"number":2,"name":"max_offset","kind":"uint64"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamClose",
+      "fields": [
+        {"number":1,"name":"final_offset","kind":"uint64"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamReset",
+      "fields": [
+        {"number":1,"name":"code","kind":"uint32"},
+        {"number":2,"name":"final_offset","kind":"uint64"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.PushReset",
+      "fields": [
+        {"number":1,"name":"epoch","kind":"uint64"},
+        {"number":2,"name":"versions","kind":"repeated message urnetwork.sidecar.TopicVersion"},
+        {"number":3,"name":"complete","kind":"bool"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.TopicVersion",
+      "fields": [
+        {"number":1,"name":"topic","kind":"string"},
+        {"number":2,"name":"version","kind":"uint64"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.PushHint",
+      "fields": [
+        {"number":1,"name":"seq","kind":"uint64"},
+        {"number":2,"name":"topic","kind":"string"},
+        {"number":3,"name":"version","kind":"uint64"},
+        {"number":4,"name":"kind","kind":"uint32"},
+        {"number":5,"name":"hint","kind":"bytes"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.PollResponse",
+      "fields": [
+        {"number":1,"name":"cursor","kind":"bytes"},
+        {"number":2,"name":"hints","kind":"repeated message urnetwork.sidecar.PushHint"},
+        {"number":3,"name":"reset","kind":"message urnetwork.sidecar.PushReset"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.Signed",
+      "fields": [
+        {"number":1,"name":"body","kind":"bytes"},
+        {"number":2,"name":"signer_id","kind":"bytes"},
+        {"number":3,"name":"key_id","kind":"bytes"},
+        {"number":4,"name":"signature","kind":"bytes"},
+        {"number":5,"name":"webauthn","kind":"message urnetwork.sidecar.WebAuthnEvidence"},
+        {"number":6,"name":"type","kind":"uint32"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.WebAuthnEvidence",
+      "fields": [
+        {"number":1,"name":"authenticator_data","kind":"bytes"},
+        {"number":2,"name":"client_data_json","kind":"bytes"},
+        {"number":3,"name":"key_id","kind":"bytes"},
+        {"number":4,"name":"signature","kind":"bytes"},
+        {"number":5,"name":"act_size","kind":"uint32"},
+        {"number":6,"name":"act_index","kind":"uint32"},
+        {"number":7,"name":"act_path","kind":"repeated bytes"}
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "urnetwork.sidecar.MessageType",
+      "values": [
+        {"number":0,"name":"MESSAGE_TYPE_NONE"},
+        {"number":1,"name":"HELLO"},
+        {"number":2,"name":"HELLO_RESULT"},
+        {"number":3,"name":"PING"},
+        {"number":4,"name":"PONG"},
+        {"number":5,"name":"CANCEL"},
+        {"number":6,"name":"ERROR"},
+        {"number":7,"name":"HEAD_CHECK"},
+        {"number":8,"name":"HEAD_CHECK_RESULT"},
+        {"number":9,"name":"HEAD_CHECK_PROOF_REQUEST"},
+        {"number":10,"name":"HEAD_CHECK_PROOF"},
+        {"number":257,"name":"PUSH_RESET"},
+        {"number":258,"name":"PUSH_HINT"},
+        {"number":513,"name":"STREAM_OPEN"},
+        {"number":514,"name":"STREAM_ACCEPT"},
+        {"number":515,"name":"STREAM_REJECT"},
+        {"number":516,"name":"STREAM_DATA"},
+        {"number":517,"name":"STREAM_WINDOW"},
+        {"number":518,"name":"STREAM_CLOSE"},
+        {"number":519,"name":"STREAM_RESET"},
+        {"number":4097,"name":"SOCKET_HINT"},
+        {"number":4609,"name":"MEMBERSHIP_CHANGED"},
+        {"number":4610,"name":"APPROVAL_REQUESTED"},
+        {"number":4611,"name":"AUTHORITY_HEAD_CHANGED"},
+        {"number":4865,"name":"GKM_HINT"},
+        {"number":5121,"name":"EVS_HEAD_CHANGED"},
+        {"number":5124,"name":"SEARCH"},
+        {"number":5125,"name":"SEARCH_RESULT"},
+        {"number":5377,"name":"TLS_EDGE_OPEN"},
+        {"number":5378,"name":"TLS_HINT"},
+        {"number":5633,"name":"SMTP_PREAMBLE"},
+        {"number":5634,"name":"SMTP_PREAMBLE_RESULT"},
+        {"number":5635,"name":"SMTP_OUTCOME"},
+        {"number":5636,"name":"SMTP_STATUS"},
+        {"number":5637,"name":"SMTP_PROOF"},
+        {"number":5638,"name":"SMTP_PROOF_RESULT"},
+        {"number":5639,"name":"SMTP_HANDSHAKE"},
+        {"number":5640,"name":"SMTP_HANDSHAKE_RESULT"},
+        {"number":5889,"name":"MAIL_INGRESS"},
+        {"number":5890,"name":"MAIL_HINT"},
+        {"number":6657,"name":"CORE_HINT"},
+        {"number":6913,"name":"DNS_ZONE_CHANGED"}
+      ],
+      "reserved_numbers": [[5122,5123]],
+      "reserved_names": ["EVS_HEAD_CHECK","EVS_HEAD_CHECK_RESULT"]
+    },
+    {
+      "name": "urnetwork.sidecar.ErrorCode",
+      "values": [
+        {"number":0,"name":"ERR_OK"},
+        {"number":1,"name":"ERR_CANCELLED"},
+        {"number":2,"name":"ERR_INVALID_ARGUMENT"},
+        {"number":3,"name":"ERR_DEADLINE_EXCEEDED"},
+        {"number":4,"name":"ERR_NOT_FOUND"},
+        {"number":5,"name":"ERR_ALREADY_EXISTS"},
+        {"number":6,"name":"ERR_PERMISSION_DENIED"},
+        {"number":7,"name":"ERR_RESOURCE_EXHAUSTED"},
+        {"number":8,"name":"ERR_FAILED_PRECONDITION"},
+        {"number":9,"name":"ERR_ABORTED"},
+        {"number":10,"name":"ERR_UNAVAILABLE"},
+        {"number":11,"name":"ERR_UNIMPLEMENTED"},
+        {"number":12,"name":"ERR_UNAUTHENTICATED"},
+        {"number":13,"name":"ERR_TOO_LARGE"},
+        {"number":14,"name":"ERR_VERSION"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamRejectCode",
+      "values": [
+        {"number":0,"name":"SR_UNSPECIFIED"},
+        {"number":1,"name":"SR_RETRY"},
+        {"number":2,"name":"SR_BUSY"},
+        {"number":3,"name":"SR_DENIED"},
+        {"number":4,"name":"SR_INVALID"},
+        {"number":5,"name":"SR_QUOTA"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.StreamResetCode",
+      "values": [
+        {"number":0,"name":"RST_UNSPECIFIED"},
+        {"number":1,"name":"RST_DRAINING"},
+        {"number":2,"name":"RST_REVOKED"},
+        {"number":3,"name":"RST_PEER_TIMEOUT"},
+        {"number":4,"name":"RST_TRANSFER_FAILED"},
+        {"number":5,"name":"RST_PROTOCOL"},
+        {"number":6,"name":"RST_CANCELLED"},
+        {"number":7,"name":"RST_QUOTA"},
+        {"number":8,"name":"RST_IDENTITY"}
+      ]
+    },
+    {
+      "name": "urnetwork.sidecar.SignedType",
+      "values": [
+        {"number":0,"name":"SIGNED_TYPE_NONE"},
+        {"number":4097,"name":"SIGNED_SOCKET_REGISTRATION"},
+        {"number":4098,"name":"SIGNED_SOCKET_TICKET"},
+        {"number":4353,"name":"SIGNED_GRANT_ACTIVATE"},
+        {"number":4354,"name":"SIGNED_GRANT_REVOKE"},
+        {"number":4355,"name":"SIGNED_SUSPEND"},
+        {"number":4356,"name":"SIGNED_UNSUSPEND"},
+        {"number":4357,"name":"SIGNED_EVS_SHARE"},
+        {"number":4358,"name":"SIGNED_OWNER_CONFIRM"},
+        {"number":4359,"name":"SIGNED_REPO_CREATE"},
+        {"number":4360,"name":"SIGNED_REPO_ADMIN"},
+        {"number":4361,"name":"SIGNED_REPO_GRANT"},
+        {"number":4362,"name":"SIGNED_REPO_REVOKE"},
+        {"number":4363,"name":"SIGNED_REPO_DELETE"},
+        {"number":4364,"name":"SIGNED_REPO_RESTORE"},
+        {"number":4365,"name":"SIGNED_REPO_VERSIONING"},
+        {"number":4366,"name":"SIGNED_AUDIT_OPT_IN"},
+        {"number":4367,"name":"SIGNED_AUDIT_OPT_OUT"},
+        {"number":4609,"name":"SIGNED_GENESIS"},
+        {"number":4610,"name":"SIGNED_ADMIN_SET"},
+        {"number":4611,"name":"SIGNED_MEMBER_ADMIT"},
+        {"number":4612,"name":"SIGNED_MEMBER_REVOKE"},
+        {"number":4613,"name":"SIGNED_SIDECAR_ADMIT"},
+        {"number":4614,"name":"SIGNED_SIDECAR_REVOKE"},
+        {"number":4615,"name":"SIGNED_ADMISSION_CONFIRM"},
+        {"number":4616,"name":"SIGNED_SPONSOR_SET"},
+        {"number":4617,"name":"SIGNED_INDEXER_SET"},
+        {"number":4618,"name":"SIGNED_RECOVERY_BIND"},
+        {"number":4619,"name":"SIGNED_RECOVERY_REBIND"},
+        {"number":4620,"name":"SIGNED_KEY_REGISTER"},
+        {"number":4621,"name":"SIGNED_KEY_REVOKE"},
+        {"number":4622,"name":"SIGNED_DELEGATION"},
+        {"number":4623,"name":"SIGNED_DELEGATION_REVOKE"},
+        {"number":4624,"name":"SIGNED_SERVICE_SETTINGS"},
+        {"number":4625,"name":"SIGNED_VERSIONING_RULES"},
+        {"number":4626,"name":"SIGNED_AUTHORITY_PROPOSAL"},
+        {"number":4627,"name":"SIGNED_AUTHORITY_COSIGN"},
+        {"number":4628,"name":"SIGNED_RECOVERY_VETO"},
+        {"number":4629,"name":"SIGNED_PROJECTION_HEADER"},
+        {"number":4865,"name":"SIGNED_GEN_ROTATE"},
+        {"number":4866,"name":"SIGNED_READER_KEY"},
+        {"number":4867,"name":"SIGNED_READER_WRAP"},
+        {"number":4868,"name":"SIGNED_DELEGATION_WRAP"},
+        {"number":4869,"name":"SIGNED_GROUP_FORM"},
+        {"number":4870,"name":"SIGNED_UR_MLS_CREDENTIAL"},
+        {"number":5121,"name":"SIGNED_EVS_PUSH"},
+        {"number":5122,"name":"SIGNED_EVS_RESEED"},
+        {"number":5123,"name":"SIGNED_EVS_PATH_MAP"},
+        {"number":5124,"name":"SIGNED_EVS_IMPORT"},
+        {"number":5377,"name":"SIGNED_TLS_KEY_ATTESTATION"},
+        {"number":6145,"name":"SIGNED_RECORD_HEADER"},
+        {"number":6146,"name":"SIGNED_APPROVAL_DECISION"},
+        {"number":6147,"name":"SIGNED_APPROVAL_CANCEL"},
+        {"number":6148,"name":"SIGNED_RETENTION_POLICY"},
+        {"number":6149,"name":"SIGNED_DIRECTORY_CARD"},
+        {"number":6150,"name":"SIGNED_DIRECTORY_REPO"},
+        {"number":6401,"name":"SIGNED_BRIDGE_BLOCK"},
+        {"number":6402,"name":"SIGNED_BRIDGE_ADDRESS"},
+        {"number":6403,"name":"SIGNED_BRIDGE_ROUTE"},
+        {"number":6404,"name":"SIGNED_BRIDGE_MAP"},
+        {"number":6405,"name":"SIGNED_BRIDGE_EGRESS"},
+        {"number":6406,"name":"SIGNED_BRIDGE_ALIAS"},
+        {"number":6407,"name":"SIGNED_BRIDGE_WITHDRAW"},
+        {"number":6408,"name":"SIGNED_WINDOW_DELEGATION"},
+        {"number":6409,"name":"SIGNED_SHARE_CERT"},
+        {"number":6657,"name":"SIGNED_SIDECAR_BINDING"}
+      ]
+    }
+  ]
+}

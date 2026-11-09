@@ -1,0 +1,16 @@
+{
+  "comment": [
+    "§6's wire as M2 froze it (D-PROTO-20): each vector's bytes are proto.Marshal's of its fields, which",
+    "envelope_wire_test.go builds and holds byte-equal on every leg. A vector's bytes never change: a new vector",
+    "is added with SIDECAR_REGENERATE_WIRE_GOLDENS=1, which refuses to change one already here."
+  ],
+  "vectors": [
+    {"name":"a complete reset","message":"urnetwork.sidecar.PushReset","fields":{"epoch":"1767323045000","versions":[{"topic":"core","version":"1767323045123456"},{"topic":"evs:10111213-1415-1617-1819-1a1b1c1d1e1f","version":"1786000000000000123"}],"complete":true},"wire":"088899a6e5b733120f0a04636f72651080abbbb2efeb910312340a286576733a31303131313231332d313431352d313631372d313831392d31613162316331643165316610fb80e48699b1c9e4181801"},
+    {"name":"a reset in part","message":"urnetwork.sidecar.PushReset","fields":{"epoch":"1767323045000","versions":[{"topic":"team","version":"42"}]},"wire":"088899a6e5b73312080a047465616d102a"},
+    {"name":"a topic version","message":"urnetwork.sidecar.TopicVersion","fields":{"topic":"dns","version":"2026110901"},"wire":"0a03646e7310b5ff8fc607"},
+    {"name":"a hint","message":"urnetwork.sidecar.PushHint","fields":{"seq":"17","topic":"gkm","version":"1767323045123457","kind":4865,"hint":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3"},"wire":"08111203676b6d1881abbbb2efeb91032081262a18202122232425262728292a2b2c2d2e2f3031323334353637"},
+    {"name":"a coalesced hint, its bytes dropped","message":"urnetwork.sidecar.PushHint","fields":{"seq":"18","topic":"evs:10111213-1415-1617-1819-1a1b1c1d1e1f","version":"1786000000000000124","kind":5121},"wire":"081212286576733a31303131313231332d313431352d313631372d313831392d31613162316331643165316618fc80e48699b1c9e418208128"},
+    {"name":"a poll answered with hints","message":"urnetwork.sidecar.PollResponse","fields":{"cursor":"MTc2NzMyMzA0NTEyMy0w","hints":[{"seq":"17","topic":"gkm","version":"1767323045123457","kind":4865,"hint":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3"},{"seq":"18","topic":"evs:10111213-1415-1617-1819-1a1b1c1d1e1f","version":"1786000000000000124","kind":5121}],"reset":{"epoch":"1767323045000","versions":[{"topic":"core","version":"1767323045123456"},{"topic":"evs:10111213-1415-1617-1819-1a1b1c1d1e1f","version":"1786000000000000123"}],"complete":true}},"wire":"0a0f313736373332333034353132332d30122d08111203676b6d1881abbbb2efeb91032081262a18202122232425262728292a2b2c2d2e2f30313233343536371239081212286576733a31303131313231332d313431352d313631372d313831392d31613162316331643165316618fc80e48699b1c9e4182081281a50088899a6e5b733120f0a04636f72651080abbbb2efeb910312340a286576733a31303131313231332d313431352d313631372d313831392d31613162316331643165316610fb80e48699b1c9e4181801"},
+    {"name":"a poll after an empty hold","message":"urnetwork.sidecar.PollResponse","fields":{"cursor":"MTc2NzMyMzA0NTEyMy0w"},"wire":"0a0f313736373332333034353132332d30"}
+  ]
+}

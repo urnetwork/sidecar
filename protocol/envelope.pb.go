@@ -289,6 +289,8 @@ type Error struct {
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	RetryAfterMs  uint32                 `protobuf:"varint,3,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"` // RESOURCE_EXHAUSTED, UNAVAILABLE
 	ResultRef     []byte                 `protobuf:"bytes,4,opt,name=result_ref,json=resultRef,proto3" json:"result_ref,omitempty"`             // ALREADY_EXISTS for an uncached response
+	MinVersion    uint32                 `protobuf:"varint,5,opt,name=min_version,json=minVersion,proto3" json:"min_version,omitempty"`         // VERSION only: the receiver's range, with Hello's meaning
+	MaxVersion    uint32                 `protobuf:"varint,6,opt,name=max_version,json=maxVersion,proto3" json:"max_version,omitempty"`         //   (plan-PROTO-version-error-range, QD-459)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -349,6 +351,20 @@ func (x *Error) GetResultRef() []byte {
 		return x.ResultRef
 	}
 	return nil
+}
+
+func (x *Error) GetMinVersion() uint32 {
+	if x != nil {
+		return x.MinVersion
+	}
+	return 0
+}
+
+func (x *Error) GetMaxVersion() uint32 {
+	if x != nil {
+		return x.MaxVersion
+	}
+	return 0
 }
 
 type Hello struct {
@@ -1089,13 +1105,17 @@ const file_protocol_envelope_proto_rawDesc = "" +
 	"\x05index\x18\x01 \x01(\rR\x05index\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\rR\x05count\x12(\n" +
 	"\x10total_byte_count\x18\x03 \x01(\rR\x0etotalByteCount\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\fR\x06sha256\"z\n" +
+	"\x06sha256\x18\x04 \x01(\fR\x06sha256\"\xbc\x01\n" +
 	"\x05Error\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\rR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12$\n" +
 	"\x0eretry_after_ms\x18\x03 \x01(\rR\fretryAfterMs\x12\x1d\n" +
 	"\n" +
-	"result_ref\x18\x04 \x01(\fR\tresultRef\"\xfc\x01\n" +
+	"result_ref\x18\x04 \x01(\fR\tresultRef\x12\x1f\n" +
+	"\vmin_version\x18\x05 \x01(\rR\n" +
+	"minVersion\x12\x1f\n" +
+	"\vmax_version\x18\x06 \x01(\rR\n" +
+	"maxVersion\"\xfc\x01\n" +
 	"\x05Hello\x12\x1f\n" +
 	"\vmin_version\x18\x01 \x01(\rR\n" +
 	"minVersion\x12\x1f\n" +

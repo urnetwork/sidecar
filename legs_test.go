@@ -456,6 +456,12 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestRefreshNotSentWithoutSigner",
 		"TestEnrollRefusesBundle",
 		"TestExchangeTokenPostsItsFormAndProof",
+		// §6's wire freeze, byte-equal on this leg too (PROTO-M2-06)
+		"TestWireGoldensAreByteEqual",
+		"TestWireDecodersSkipUnknownFields",
+		"TestWireLockedErrorCodesRead",
+		"TestWireLockedRejectCodesRead",
+		"TestWireLockedResetCodesRead",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)

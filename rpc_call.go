@@ -58,6 +58,10 @@ type SubprotocolError struct {
 	RequestId uint64
 	// Why this side answered UNAVAILABLE: SubprotocolReasonEncryption, or empty.
 	Reason string
+	// VERSION from the peer: the wire majors it speaks, with Hello's meaning, zero when it named none
+	// (plan-PROTO-version-error-range).
+	MinVersion uint32
+	MaxVersion uint32
 }
 
 // The code, and this side's reason, never the peer's message.
@@ -191,13 +195,19 @@ func responseError(envelope *protocol.Envelope, requestId uint64) error {
 	if !ok {
 		return ErrSubprotocolResponse
 	}
-	return &SubprotocolError{
+	subprotocolError := &SubprotocolError{
 		Code:       code,
 		Message:    refusal.Message,
 		RetryAfter: time.Duration(refusal.RetryAfterMs) * time.Millisecond,
 		ResultRef:  refusal.ResultRef,
 		RequestId:  requestId,
 	}
+	if code == protocol.ErrorCode_ERR_VERSION {
+		// the range rides only VERSION; on any other code it is no one's to read
+		subprotocolError.MinVersion = refusal.MinVersion
+		subprotocolError.MaxVersion = refusal.MaxVersion
+	}
+	return subprotocolError
 }
 
 // A send that failed, as the call reports it: a Required peer with no session is UNAVAILABLE with

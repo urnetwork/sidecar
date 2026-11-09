@@ -34,6 +34,8 @@ message Error {
   string message = 2;
   uint32 retry_after_ms = 3;   // RESOURCE_EXHAUSTED, UNAVAILABLE
   bytes result_ref = 4;        // ALREADY_EXISTS for an uncached response
+  uint32 min_version = 5;      // VERSION only: the receiver's range, with Hello's meaning
+  uint32 max_version = 6;      //   (plan-PROTO-version-error-range, QD-459)
 }
 
 // Permanent once released (D-PROTO-20); prose drops the ERR_ prefix; OK is never sent, and an Error
