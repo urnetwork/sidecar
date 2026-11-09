@@ -1059,6 +1059,7 @@ Two design questions are open, both the owner's, raised on 2026-11-09 in designi
 - **Never re-checked.** Twelve earlier entries lay outside the final panel's clusters and were never re-checked (ten were fixes; T4-22 and T5-34 were declined as already fixed): T2-17, T2-32, T2-35, T2-36, T2-37, T4-22, T5-06, T5-20, T5-25, T5-30, T5-34 and T5-35.
 - **Not yet confirmed.** Every meta-review entry, the v1 additions and the two SDK fixes are "fixed in design, not resolved": no reviewer has confirmed them yet.
 - **May be reopened.** Reviewers may reopen the 12 questions that the internal design review of 2026-11-03 closed (§3.11).
+- **Newer than the ledger.** The ledger answers the build of 2026-11-06 under owner decisions 1-191. Owner decision 197 came later, so where the ledger's T3-20, its Q-SDK-5 row, section 6.6's M4 row and its K03 and K05 presence entry name the keyless device role or `make size`'s 1 MiB gate, re-check against DESIGN.md: the forwarding role and Q-SDK-7's budget.
 
 **Accepted residuals worth knowing** (the ledger's §7.2 and §7.3; DESIGN.md §2.10):
 
