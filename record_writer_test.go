@@ -39,6 +39,8 @@ type testRecordSpool struct {
 	nextIndex uint64
 	waiting   []*testRecordSpooled
 	consumed  []*testRecordSpooled
+	// Drain calls, refused or not
+	drainCount int
 }
 
 type testRecordSpooled struct {
@@ -69,6 +71,7 @@ func (self *testRecordSpool) Drain(ctx context.Context, consume func(id sidecar.
 	ordered := func() []*testRecordSpooled {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		self.drainCount += 1
 		if self.locked {
 			return nil
 		}
@@ -720,5 +723,57 @@ func TestRecordWriterResendsAPlannedPushUnchangedAfterAKill(t *testing.T) {
 	}
 	if got := testRecordTexts(t, world.storedEntries(device.sidecarId)); !slices.Equal(got, []string{"one", "two"}) {
 		t.Fatalf("the stream holds %v", got)
+	}
+}
+
+// A taint record no handler takes stops every drain, failing closed: nothing spooled behind it seals, and each draft
+// after it spools too. A drain that failed is not tried again until PushCoalesce has passed, so a run of Appends reads
+// the spool once, not once each.
+func TestRecordWriterTriesAFailedDrainOncePerCoalesce(t *testing.T) {
+	world := newTestRecordWorld(t)
+	device := world.device(true)
+	record := device.open()
+	runId := sidecar.NewId()
+	if err := device.spool.Append(&sidecar.SpoolRecord{Kind: sidecar.SpoolRecordTaint, RunId: runId, Bytes: []byte("taint")}); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 10 {
+		ref := testRecordAppend(t, record, testRecordNote(nil, fmt.Sprintf("behind the taint %d", index)))
+		if !ref.Spooled {
+			t.Fatalf("draft %d sealed ahead of an unapplied taint record", index)
+		}
+	}
+	device.spool.stateLock.Lock()
+	drainCount := device.spool.drainCount
+	device.spool.stateLock.Unlock()
+	if drainCount != 1 {
+		t.Fatalf("%d drains for 10 appends", drainCount)
+	}
+	world.clock.Advance(device.settings.PushCoalesce)
+	testRecordAppend(t, record, testRecordNote(nil, "after the wait"))
+	device.spool.stateLock.Lock()
+	drainCount = device.spool.drainCount
+	device.spool.stateLock.Unlock()
+	if drainCount != 2 {
+		t.Fatalf("%d drains after the wait", drainCount)
+	}
+	// MCP-M3-15's handler, once installed, applies the taint first, and the rest seal in capture order
+	applied := []sidecar.Id{}
+	record.SetSpoolHandlers(func(id sidecar.SpoolRecordId, spooled *sidecar.SpoolRecord) error {
+		applied = append(applied, spooled.RunId)
+		world.runs.Taint(spooled.RunId)
+		return nil
+	}, nil)
+	if err := record.DrainSpool(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(applied, []sidecar.Id{runId}) {
+		t.Errorf("taints applied %v", applied)
+	}
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if stored := world.storedEntries(device.sidecarId); len(stored) != 11 {
+		t.Errorf("%d entries sealed", len(stored))
 	}
 }

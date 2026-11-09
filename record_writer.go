@@ -315,6 +315,9 @@ type recordWriter struct {
 	logQueues map[Id]*recordLogQueue
 	// whether the spool may hold drafts: true until a drain finds none
 	spoolBacklog bool
+	// no drain is tried before this, Unix milliseconds: a drain that failed waits PushCoalesce, so a run of Appends
+	// does not read the whole spool once each
+	drainRetryMillis int64
 	// the newest spooled capture sealed, nil before any
 	captureMark *SpoolRecordId
 	spoolTaint  func(id SpoolRecordId, record *SpoolRecord) error
@@ -598,6 +601,9 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 	}
 	if self.backlogged() {
 		// anything still spooled is older, so it seals first, or this draft waits behind it
+		if !self.drainDue() {
+			return self.spoolDraft(spoolDraft, "")
+		}
 		if err := self.drainSpool(context.Background()); err != nil {
 			return self.spoolDraft(spoolDraft, "")
 		}
@@ -640,6 +646,14 @@ func (self *recordWriter) sealAndQueue(draft *recordSpoolDraft, route *recordRou
 	}
 	self.enqueue(route, sealed, RecordKind(draft.Kind))
 	return ref, nil
+}
+
+// Whether a drain may be tried now: none failed within PushCoalesce.
+func (self *recordWriter) drainDue() bool {
+	nowMillis := self.clock.Now().UnixMilli()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.drainRetryMillis <= nowMillis
 }
 
 // Whether the spool may hold drafts that must seal before a new one.
@@ -743,12 +757,17 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
+		retryMillis := self.clock.Now().Add(self.settings.PushCoalesce).UnixMilli()
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.drainRetryMillis = retryMillis
 		return err
 	}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.spoolBacklog = false
+		self.drainRetryMillis = 0
 	}()
 	self.signal()
 	return nil
@@ -855,7 +874,7 @@ func (self *recordWriter) load() error {
 					queue.flushThroughSeq = max(queue.flushThroughSeq, entry.Seq)
 				}
 			}
-			if 0 < len(entries) {
+			if 0 < len(entries) && queue.firstWaitingMillis == 0 {
 				queue.firstWaitingMillis = self.clock.Now().UnixMilli()
 			}
 		}
