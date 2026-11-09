@@ -1,8 +1,8 @@
 // T2's api (§22.4): the routes sidecars and gates call on server's api, in memory, on the Net's clock and fault
 // queue, with the first metadata cluster on the Net's fake Blobs. server cannot be imported here, so each route copies
 // only the steps a schedule relies on, and T3 reruns the same schedules on server's real routes (Q-TEST-1): a
-// divergence fails. fake_api_config.go adds §7.9's authorization log and fake_api_exchange.go §7.8's token exchange;
-// CORE-M1-13 adds enrollment, bind and refresh in its own file.
+// divergence fails. fake_api_config.go adds §7.9's authorization log, fake_api_exchange.go §7.8's token exchange, and
+// fake_api_core.go enrollment, a client's mint and removal, the identity binding and its lookups, and refresh.
 //
 // Requests reach it through Transport, an http.RoundTripper that serves in process, so a client of api built with it
 // (SidecarApi's transport, a gate's source) sends real requests with no socket. It answers at two origins, api's and
@@ -10,9 +10,10 @@
 // fault plan of FaultOpHttp keyed by its path: ApplyThenDrop serves it and loses the answer, FailBeforeApply loses the
 // request, and the crash results serve it or not and never answer, until the request's context ends.
 //
-// A bearer names a client of a network, which ClientToken mints as a sidecar's strict_exp token (§7.4): a request
-// without one known here, with one past its exp or with one of a removed client is 401, as api answers a bad token.
-// Safe for concurrent use.
+// A bearer names a client of a network, which ClientToken and the core routes mint as a sidecar's strict_exp token
+// (§7.4), JWT-shaped so a sidecar reads its claims as it reads server's: a request without one known here, with one
+// past its exp, of a removed client or of a session api ended is 401, as api answers a bad token. Safe for concurrent
+// use.
 
 package sidecartest
 
@@ -83,7 +84,7 @@ func DefaultFakeApiSettings() *FakeApiSettings {
 	}
 }
 
-// One client a bearer names.
+// One client a bearer names. Never changed once a token maps to it: a bind maps the client's tokens to a copy.
 type fakeApiClient struct {
 	networkId sidecar.Id
 	clientId  sidecar.Id
@@ -92,6 +93,16 @@ type fakeApiClient struct {
 	sidecarId sidecar.Id
 	// the token's exp, on the api's clock
 	expireTime time.Time
+	// the token's device and session claims, which a refresh keeps
+	deviceId  sidecar.Id
+	sessionId sidecar.Id
+	// §7.4's marks, which a client's children inherit
+	strictExp    bool
+	adminRefused bool
+	// the parent of a child client, zero for a top-level one
+	sourceClientId sidecar.Id
+	// the token's create_time, which a refresh keeps (server's RenewSessionCredential)
+	createTime time.Time
 }
 
 type FakeApi struct {
@@ -105,9 +116,11 @@ type FakeApi struct {
 	mux      *http.ServeMux
 	// mints the exchange's service tokens: the Net host's, which T2's engines authenticate with
 	authenticator *FakeAuthenticator
+	// where each client token and auth key this api mints goes as a secret: the Net's capture, which scans for it
+	// (§22.7's S1); nil for none
+	secretSink func(kind string, secret []byte)
 
 	stateLock     sync.Mutex
-	clientCount   int
 	bearerClients map[string]*fakeApiClient
 	// clients removed or reaped, whose tokens no longer authenticate
 	removedClientIds map[sidecar.Id]bool
@@ -115,6 +128,10 @@ type FakeApi struct {
 	configLogs map[sidecar.Id]*fakeApiConfigLog
 	// fake_api_exchange.go's state
 	exchange fakeApiExchangeState
+	// fake_api_core.go's state
+	core fakeApiCoreState
+	// counts every client token minted, for a test waiting on one
+	mints *sidecar.MonitorValue[uint64]
 }
 
 // An api on the first metadata cluster given, its clock, fault queue and barriers a test's or the Net's; barriers may
@@ -141,21 +158,26 @@ func newFakeApi(ctx context.Context, clock Clock, faults *FaultQueue, barriers *
 		removedClientIds: map[sidecar.Id]bool{},
 		configLogs:       map[sidecar.Id]*fakeApiConfigLog{},
 		exchange:         newFakeApiExchangeState(),
+		core:             newFakeApiCoreState(),
+		mints:            sidecar.NewMonitorValue[uint64](0),
 	}
 	self.addConfigRoutes()
 	self.addExchangeRoutes()
+	self.addCoreRoutes()
 	return self
 }
 
 // An api on the Net's host: its Blobs' first cluster, its clock, faults and barriers, and its exchange minting with
-// the Net's FakeHost authenticator, so the engines on the Net take the service tokens it issues. settings may be nil
-// for the defaults.
+// the Net's FakeHost authenticator, so the engines on the Net take the service tokens it issues. Each client token and
+// auth key it mints is a secret the Net's capture scans for. settings may be nil for the defaults.
 func (self *Net) AddApi(settings *FakeApiSettings) (*FakeApi, error) {
 	cluster, err := self.Host().Blobs.FirstCluster()
 	if err != nil {
 		return nil, err
 	}
-	return newFakeApi(self.ctx, self.clock, self.faults, self.barriers, cluster, self.fakes.Authenticator, settings), nil
+	api := newFakeApi(self.ctx, self.clock, self.faults, self.barriers, cluster, self.fakes.Authenticator, settings)
+	api.secretSink = self.capture.AddSecret
+	return api, nil
 }
 
 // The origin requests name.
@@ -174,16 +196,21 @@ func (self *FakeApi) Authenticator() *FakeAuthenticator {
 }
 
 // A bearer for a client of networkId, bound to sidecarId when it is not zero, as a sidecar's strict_exp token: it
-// expires ClientTokenTimeout after now on the api's clock, and every route refuses it after (§7.4). The string is
-// opaque and synthetic, as no real api could have made it.
+// expires ClientTokenTimeout after now on the api's clock, and every route refuses it after (§7.4). The token is
+// JWT-shaped, its claims server's names, and signed by a key of this api's alone, so it is synthetic and no real api
+// could have made it.
 func (self *FakeApi) ClientToken(networkId sidecar.Id, clientId sidecar.Id, sidecarId sidecar.Id) string {
-	expireTime := self.clock.Now().Add(self.settings.ClientTokenTimeout)
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.clientCount += 1
-	bearer := fmt.Sprintf("fake-client-token-%d", self.clientCount)
-	self.bearerClients[bearer] = &fakeApiClient{networkId: networkId, clientId: clientId, sidecarId: sidecarId, expireTime: expireTime}
-	return bearer
+	now := self.clock.Now()
+	return self.mintClientToken(&fakeApiClient{
+		networkId:    networkId,
+		clientId:     clientId,
+		sidecarId:    sidecarId,
+		deviceId:     sidecar.NewId(),
+		sessionId:    sidecar.NewId(),
+		strictExp:    true,
+		adminRefused: true,
+		createTime:   now,
+	})
 }
 
 // Removes the client, as POST /network/remove-client or the reaper does: none of its tokens authenticates after, at
@@ -194,16 +221,26 @@ func (self *FakeApi) RemoveClient(clientId sidecar.Id) {
 	self.removedClientIds[clientId] = true
 }
 
-// The client bearer names, nil for none: an unknown token, one past its exp, or one of a removed client.
+// The client bearer names, nil for none: an unknown token, one past its exp, one of a removed client or one whose
+// session api ended.
 func (self *FakeApi) clientOfToken(bearer string) *fakeApiClient {
+	client, _ := self.clientOfTokenRefusal(bearer)
+	return client
+}
+
+// The client bearer names, or nil and the code its 401 carries: session_revoked for a session api ended, else none.
+func (self *FakeApi) clientOfTokenRefusal(bearer string) (*fakeApiClient, string) {
 	now := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	client := self.bearerClients[bearer]
 	if client == nil || !now.Before(client.expireTime) || self.removedClientIds[client.clientId] {
-		return nil
+		return nil, ""
 	}
-	return client
+	if self.core.endedSessionClientIds[client.clientId] {
+		return nil, fakeApiCodeSessionRevoked
+	}
+	return client, ""
 }
 
 // The client a request's bearer names, nil for none.

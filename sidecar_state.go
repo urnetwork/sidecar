@@ -160,6 +160,10 @@ func nextSidecarLifecycle(current sidecarLifecycle, transition sidecarTransition
 // A Sidecar with its machine at Locked and nothing bound, which NewSidecar builds on. settings must
 // have passed validate.
 func newSidecarBase(host SidecarHost, settings *SidecarSettings) *Sidecar {
+	hostStores := HostCredentialStores
+	if scanner, ok := host.(SidecarHostCredentialScanner); ok {
+		hostStores = scanner.HostCredentialStores
+	}
 	return &Sidecar{
 		host:                    host,
 		settings:                settings,
@@ -169,7 +173,7 @@ func newSidecarBase(host SidecarHost, settings *SidecarSettings) *Sidecar {
 		wakes:                   NewMonitorValue[uint64](0),
 		runningGenerationNumber: NewMonitorValue[int64](0),
 		clock:                   settings.ClockOrReal(),
-		hostStores:              HostCredentialStores,
+		hostStores:              hostStores,
 		lifecycle:               sidecarLifecycle{state: SidecarStateLocked},
 	}
 }

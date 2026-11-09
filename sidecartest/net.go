@@ -84,6 +84,12 @@ type Net struct {
 
 	exchange *netExchange
 
+	// the api AddSidecar enrolls through and the network it enrolls in, made at first use (core_enroll.go), and
+	// every sidecar started, which Close ends
+	api              *FakeApi
+	defaultNetworkId sidecar.Id
+	testSidecars     []*TestSidecar
+
 	// what the world's searches are judged against (search_oracle.go), made at first use
 	searchLedger *SearchLedger
 	searchOracle *SearchOracle
@@ -128,8 +134,9 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 	return self
 }
 
-// Ends everything: engines close, held and parked goroutines leave, and the hooks come off.
+// Ends everything: sidecars and engines close, held and parked goroutines leave, and the hooks come off.
 func (self *Net) Close() {
+	self.closeTestSidecars()
 	var engines []sidecar.Engine
 	func() {
 		self.stateLock.Lock()

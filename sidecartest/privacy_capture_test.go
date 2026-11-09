@@ -120,13 +120,19 @@ func toyPut(ctx context.Context, net *Net, objectId string, body []byte) (*http.
 func TestTwoSidecarsExchangingCanariesScanClean(t *testing.T) {
 	net := newTestNet(t)
 	capture := net.Capture()
-	laptop := net.AddSidecar("laptop", nil)
-	phone := net.AddSidecar("phone", nil)
+	laptop, err := net.AddSidecar("laptop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phone, err := net.AddSidecar("phone", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	messages := make(chan *NetMessage, 16)
-	defer phone.Client.ReceiveMessages(messages)()
+	defer phone.Client().ReceiveMessages(messages)()
 
 	canary := capture.CanaryText("message body")
-	if err := laptop.Client.SendMessage(phone.Client.ClientId, canary); err != nil {
+	if err := laptop.Client().SendMessage(phone.Client().ClientId, canary); err != nil {
 		t.Fatal(err)
 	}
 	if message := awaitMessage(t, messages); message.Content != canary {
@@ -149,7 +155,7 @@ func TestTwoSidecarsExchangingCanariesScanClean(t *testing.T) {
 	if findings := capture.Scan(); len(findings) != 0 {
 		t.Errorf("%v", findings)
 	}
-	if len(capture.FrameSizes(laptop.Client.ClientId, phone.Client.ClientId)) == 0 || len(capture.FrameSizes(phone.Client.ClientId, laptop.Client.ClientId)) == 0 {
+	if len(capture.FrameSizes(laptop.Client().ClientId, phone.Client().ClientId)) == 0 || len(capture.FrameSizes(phone.Client().ClientId, laptop.Client().ClientId)) == 0 {
 		t.Error("no frame sizes for the pair")
 	}
 }

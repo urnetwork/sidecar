@@ -60,6 +60,14 @@ const (
 	SidecarKeyStoreLocked SidecarKeyStoreStatus = 4
 )
 
+// A SidecarHost that reports its own machine's credential stores for D-TRUST-3's check (plan-CORE-host-store-refusal),
+// in place of HostCredentialStores' scan of this user's directories: a host that knows there are none, such as a test's
+// in-process world, or one whose stores are its own. Safe for concurrent use.
+type SidecarHostCredentialScanner interface {
+	// Each store holding a readable network credential, by kind only, never a path or value.
+	HostCredentialStores() []SidecarHostCredentialStore
+}
+
 // The OS or app store that wraps U (§5.9's platform table): the data protection keychain, DPAPI,
 // Secret Service, a 0600 key file, or an app's own (§18.5). Each call gives one terminal answer and
 // never panics across the host boundary (D-SDK-15). Safe for concurrent use.
