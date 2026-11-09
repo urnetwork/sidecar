@@ -45,6 +45,10 @@ type Sidecar struct {
 	cancel   context.CancelFunc
 	// Closed once the run loop has returned, with every generation joined and every component closed.
 	done chan struct{}
+	// D-TRUST-3's scan of this host's credential stores (identity_host_stores.go), which a test replaces.
+	hostStores func() []SidecarHostCredentialStore
+	// One enrollment at a time, held across its requests, so never stateLock (identity_enroll.go).
+	enrollLock sync.Mutex
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
@@ -202,6 +206,10 @@ const (
 	SidecarEventErasure SidecarEventKind = "erasure"
 	// An internet send's outcome for a recipient domain changed (§14.5).
 	SidecarEventMailSend SidecarEventKind = "mail_send"
+	// A store on this host holds a readable network credential (D-TRUST-3; plan-CORE-host-store-refusal #3),
+	// raised by an enrolled sidecar at each start and each SyncRefetchInterval. It names no path or value: `ur
+	// status` names the store's kind.
+	SidecarEventCredentialStore SidecarEventKind = "credential_store"
 )
 
 // A drop's state as a device reports it (§11.7).

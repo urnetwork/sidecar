@@ -31,6 +31,9 @@ type sidecarLeg interface {
 
 // The leg's half of one generation.
 type sidecarLegGeneration interface {
+	// Begins what reports on or uses the generation, once the run loop has published it: the watch on the
+	// connection and each component's Attach, so a report or a removal always finds the generation it names.
+	start()
 	// Installs a refreshed token in the leg's holders: connect's api, transport and out-of-band control.
 	install(byJwt string)
 	// Brings the attached components in line with the leg's list.
@@ -178,8 +181,9 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	}()
 	self.stats.generationCount.Add(1)
 	if generation.leg != nil {
-		// published first, so a component removed meanwhile is detached from this generation or never attached
-		generation.leg.reconcileComponents()
+		// published first, so a component removed meanwhile is detached from this generation or never attached,
+		// and Online names a generation Status and the components already see
+		generation.leg.start()
 	}
 	if self.log.V(1).Enabled() {
 		self.log.Infof("[sidecar]generation %d started", generationNumber)
