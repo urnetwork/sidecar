@@ -120,9 +120,68 @@ func GkmWrapGenerationPrefix(groupId sidecar.Id, generation uint64) string {
 	return GkmGroupPrefix(groupId) + "wrap/" + gkmKeyNumber(generation) + "/"
 }
 
+// gkm/<group_id>/wrap/<g>/<c8>/<recipient>/: one recipient's deliveries of generation g under commitment prefix
+// c8, by LIST, recipient being s:<sidecar_id> or d:<delegation_id> as the wrap path writes it.
+func GkmWrapRecipientPrefix(groupId sidecar.Id, generation uint64, c8 string, recipient string) string {
+	return GkmWrapGenerationPrefix(groupId, generation) + c8 + "/" + recipient + "/"
+}
+
 // gkm/recovery/<member_id>/: a member's recovery wraps, on each cluster.
 func GkmRecoveryMemberPrefix(memberId sidecar.Id) string {
 	return gkmRecoveryKeyPrefix + sidecar.EvsKeyId(memberId) + "/"
+}
+
+// gkm/recovery/<member_id>/<group_id>/<g>/<c8>/<b8>: one RecoveryWrap, from the hex prefixes a route names, the same
+// key sidecar.GkmRecoveryWrapPath builds from the whole digests.
+func GkmRecoveryWrapKey(memberId sidecar.Id, groupId sidecar.Id, generation uint64, c8 string, b8 string) string {
+	return GkmRecoveryMemberPrefix(memberId) + sidecar.EvsKeyId(groupId) + "/" + gkmKeyNumber(generation) + "/" + c8 + "/" + b8
+}
+
+// A recovery wrap's key under a member's prefix, read back: its group, generation, c8 and b8, or false for a key in
+// no form this family writes.
+func parseGkmRecoveryWrapKey(prefix string, key string) (groupId sidecar.Id, generation uint64, c8 string, b8 string, ok bool) {
+	rest, found := strings.CutPrefix(key, prefix)
+	if !found {
+		return sidecar.Id{}, 0, "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 4 || !gkmHexPrefixForm(parts[2]) || !gkmHexPrefixForm(parts[3]) {
+		return sidecar.Id{}, 0, "", "", false
+	}
+	groupId, err := parseGkmHexId(parts[0])
+	if err != nil {
+		return sidecar.Id{}, 0, "", "", false
+	}
+	generation, ok = parseGkmKeyNumber(parts[1])
+	if !ok {
+		return sidecar.Id{}, 0, "", "", false
+	}
+	return groupId, generation, parts[2], parts[3], true
+}
+
+// The hex characters of a digest's first 8 bytes in a key: c8, k8 or b8 (QD-442).
+const gkmHexPrefixLength = 16
+
+// Whether text is c8's, k8's or b8's form: 16 lowercase hex characters.
+func gkmHexPrefixForm(text string) bool {
+	if len(text) != gkmHexPrefixLength || strings.ToLower(text) != text {
+		return false
+	}
+	_, err := hex.DecodeString(text)
+	return err == nil
+}
+
+// The hex prefix of a 32-byte digest, c8's or k8's form, or false for a digest of another size.
+func gkmDigestPrefix(digest []byte) (string, bool) {
+	if len(digest) != 32 {
+		return "", false
+	}
+	return hex.EncodeToString(digest[:gkmHexPrefixLength/2]), true
+}
+
+// {gka_<group_id>}: a group's acks in Redis, one field per leaf's sidecar_id and since (§10.6, gkm-10).
+func GkmAckRedisKey(groupId sidecar.Id) string {
+	return "{gka_" + sidecar.EvsKeyId(groupId) + "}"
 }
 
 // A KeyPackageRef in a key: 64 lowercase hex characters, or an error for any other length.

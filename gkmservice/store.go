@@ -268,8 +268,10 @@ func (self *gkmRepoCache) read(ctx context.Context, cluster sidecar.BlobCluster,
 // One GroupForm as gkm stored it: a Signed, purpose group-form, whose signer §10.6's form rule checked when it was
 // filed (KEYS-M2-14).
 type gkmForm struct {
-	Seq     uint64
-	Signed  *bridge.Signed
+	Seq    uint64
+	Signed *bridge.Signed
+	// The object's bytes as stored, which a creation's or re-form's retry repeats exactly.
+	Raw     []byte
 	Body    *protocol.GroupForm
 	GroupId sidecar.Id
 }
@@ -295,7 +297,7 @@ func parseGkmForm(repoId sidecar.Id, seq uint64, objectBytes []byte) (*gkmForm, 
 	if err != nil || groupId == (sidecar.Id{}) {
 		return nil, fmt.Errorf("%w: a GroupForm's group of %d bytes", errGkmStoreFault, len(body.GetGroupId()))
 	}
-	return &gkmForm{Seq: seq, Signed: signed, Body: body, GroupId: groupId}, nil
+	return &gkmForm{Seq: seq, Signed: signed, Raw: objectBytes, Body: body, GroupId: groupId}, nil
 }
 
 // One repo's forms as a read found them, oldest first, good until expiresAt.

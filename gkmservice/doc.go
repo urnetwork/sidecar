@@ -8,7 +8,8 @@
 // newest verified state (auth.go), §10.6's scopes block as one route table (routes.go), the object keys (objects.go),
 // placement, repo/ and GroupForm resolution (store.go), per-process rate counters (rate.go), GkmHint sending
 // (hints.go) and the barriers schedules hold (testhook.go). Each route's handler is its own task's: KEYS-M2-13 the
-// per-sidecar routes (keypackages.go, readerkey.go, welcomes.go), KEYS-M2-14 groups, epochs, GroupInfo and acks,
-// KEYS-M2-15 generations, wraps, drop keys and recovery wraps. A route whose handler has not landed answers 501
-// once the guard has passed it, so nothing reads as served before it is.
+// per-sidecar routes (keypackages.go, readerkey.go, welcomes.go), KEYS-M2-14 groups, epochs, Welcomes, GroupInfo and
+// acks (groups.go, epochs.go, welcomes.go, groupinfo.go, acks.go), KEYS-M2-15 generations, wraps, drop keys and
+// recovery wraps (generations.go, wraps.go, dropkey.go, recovery.go), and KEYS-M2-25 the ladder. A route whose
+// handler has not landed answers 501 once the guard has passed it, so nothing reads as served before it is.
 package gkmservice

@@ -113,6 +113,64 @@ type GkmServiceSettings struct {
 	ReaderKeysReadConcurrency int
 	// The most Welcomes one GET /gkm/welcomes answers. The client asks again once it has joined or acked them.
 	WelcomesReplyMaxCount int
+
+	// The most epoch objects one GET .../epochs answers, and the most of their bytes: the answer stops at the first
+	// bound it meets, and the client asks again after its last epoch until none comes (QD-526 row 7). One epoch
+	// always goes, whatever its size, so a page never comes back empty while epochs remain.
+	EpochsReplyMaxCount     int
+	EpochsReplyMaxByteCount int64
+	// The most bytes of a sealed GroupInfo inside an epoch object: §10.6 puts one there only at 16 leaves or fewer,
+	// under 50 KB (§10.6's sizes), so a larger one is refused, and above 16 leaves it goes to POST group-info.
+	EpochGroupInfoMaxByteCount int64
+	// How long a group-info read stays cached for an epoch PUT's pointer check: §10.6's store operations price it as
+	// a "5 s cache". At most 5 s; non-positive caches nothing.
+	GroupInfoCacheTtl time.Duration
+	// The groups whose group-info read one process caches. Non-positive caches none.
+	GroupInfoCacheCount int
+	// How far an epoch carrying a sealed GroupInfo may run past the pointer before gkm rewrites the pointer to it, so
+	// a crash between an epoch and its pointer heals at the next commit and a resyncing device probes about this many
+	// epochs past the pointer (§10.6's group-info row: 16).
+	GroupInfoPointerLagCount uint64
+	// How often, per group and process, a read that wants a newer GroupInfo than gkm holds hints wrap-pending to the
+	// repo's writers (§10.6's GroupInfo row: every 60 s).
+	GroupInfoWantHintInterval time.Duration
+	// The groups whose newest epoch one process remembers, so a claim's commit hint lists only epoch keys past it.
+	NewestEpochCacheCount int
+	// The most recipients one Welcome names: a 1,000-leaf group's first Add (§10.6's sizes).
+	WelcomeRecipientMaxCount int
+	// An ack is written at most once per this per leaf and group (§10.6: at most daily); an ack inside it answers 200
+	// and writes nothing.
+	AckInterval time.Duration
+	// How long {gka_<group_id>} lives past its last write (§2.8's gkm-10: 31 d).
+	AckTtl time.Duration
+
+	// The most GenRotates one GET .../gen answers; the client asks again after its last (QD-526 row 7).
+	GenerationsReplyMaxCount int
+	// The generations whose commitment and auth pin one process remembers: gen/ is create-only, so an entry never
+	// goes stale, and an evicted one costs a GET.
+	GenerationCacheCount int
+	// Deliveries one batch PUTs at once (QD-066: 16).
+	WrapPutConcurrency int
+	// How far into a batch request gkm still starts a PUT, under the lb's 30 s; later items answer 0, not tried
+	// (QD-066: 20 s).
+	WrapBatchStartDeadline time.Duration
+	// The most deliveries one GET .../wraps/<g> answers.
+	WrapsReplyMaxCount int
+	// A late delivery's ask widens its wrap-pending hint from the repo's writers to other holders once its since is
+	// this old, to at most LateAskOtherHolderMaxCount of them (§10.6's late wraps: 15 min, 64).
+	LateAskWidenAge            time.Duration
+	LateAskOtherHolderMaxCount int
+	// A recipient's late asks for one generation hint at most once per this per process, as its client asks at most
+	// once a minute (§10.6's late wraps), so a client that asks faster costs the writers nothing more.
+	LateAskHintInterval time.Duration
+	// A drop key with under this left before drop_not_after_ms hints pending to the repo's writers at a drop-key read,
+	// at most once per DropKeyRenewalHintInterval per group and process (QD-065: 7 days, 1 h).
+	DropKeyRenewalWindow       time.Duration
+	DropKeyRenewalHintInterval time.Duration
+	// The most recovery wraps one GET /gkm/recovery/<member_id>/wraps answers, the newest per group and binding.
+	RecoveryWrapsReplyMaxCount int
+	// The most keys one member's recovery/ prefix may hold on one cluster before a read of it alarms.
+	RecoveryWrapListMaxCount int
 }
 
 // The production defaults.
@@ -154,6 +212,31 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		ReaderKeyUploadInterval:   24 * time.Hour,
 		ReaderKeysReadConcurrency: 16,
 		WelcomesReplyMaxCount:     1024,
+
+		EpochsReplyMaxCount:        256,
+		EpochsReplyMaxByteCount:    8 * 1024 * 1024,
+		EpochGroupInfoMaxByteCount: 64 * 1024,
+		GroupInfoCacheTtl:          5 * time.Second,
+		GroupInfoCacheCount:        100 * 1000,
+		GroupInfoPointerLagCount:   16,
+		GroupInfoWantHintInterval:  60 * time.Second,
+		NewestEpochCacheCount:      100 * 1000,
+		WelcomeRecipientMaxCount:   1024,
+		AckInterval:                24 * time.Hour,
+		AckTtl:                     31 * 24 * time.Hour,
+
+		GenerationsReplyMaxCount:   1024,
+		GenerationCacheCount:       256 * 1024,
+		WrapPutConcurrency:         16,
+		WrapBatchStartDeadline:     20 * time.Second,
+		WrapsReplyMaxCount:         64,
+		LateAskWidenAge:            15 * time.Minute,
+		LateAskOtherHolderMaxCount: 64,
+		LateAskHintInterval:        1 * time.Minute,
+		DropKeyRenewalWindow:       7 * 24 * time.Hour,
+		DropKeyRenewalHintInterval: 1 * time.Hour,
+		RecoveryWrapsReplyMaxCount: 4096,
+		RecoveryWrapListMaxCount:   64 * 1024,
 	}
 }
 
@@ -165,8 +248,11 @@ func (self *GkmServiceSettings) Validate() error {
 	if self.Place.NotFoundTtl < 0 {
 		return fmt.Errorf("%w: a negative place/ 404 ttl", ErrGkmSettings)
 	}
-	if gkmRepoCacheMaxTtl < self.RepoCacheTtl || gkmRepoCacheMaxTtl < self.FormCacheTtl {
-		return fmt.Errorf("%w: repo/ or GroupForms cached past §10.6's %s", ErrGkmSettings, gkmRepoCacheMaxTtl)
+	if gkmRepoCacheMaxTtl < self.RepoCacheTtl || gkmRepoCacheMaxTtl < self.FormCacheTtl || gkmRepoCacheMaxTtl < self.GroupInfoCacheTtl {
+		return fmt.Errorf("%w: repo/, GroupForms or group-info cached past §10.6's %s", ErrGkmSettings, gkmRepoCacheMaxTtl)
+	}
+	if self.GroupInfoPointerLagCount == 0 {
+		return fmt.Errorf("%w: GroupInfoPointerLagCount must be positive", ErrGkmSettings)
 	}
 	for _, count := range []struct {
 		name  string
@@ -188,6 +274,19 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "ReaderKeyUploadInterval", value: int64(self.ReaderKeyUploadInterval)},
 		{name: "ReaderKeysReadConcurrency", value: int64(self.ReaderKeysReadConcurrency)},
 		{name: "WelcomesReplyMaxCount", value: int64(self.WelcomesReplyMaxCount)},
+		{name: "EpochsReplyMaxCount", value: int64(self.EpochsReplyMaxCount)},
+		{name: "EpochsReplyMaxByteCount", value: self.EpochsReplyMaxByteCount},
+		{name: "EpochGroupInfoMaxByteCount", value: self.EpochGroupInfoMaxByteCount},
+		{name: "WelcomeRecipientMaxCount", value: int64(self.WelcomeRecipientMaxCount)},
+		{name: "AckInterval", value: int64(self.AckInterval)},
+		{name: "AckTtl", value: int64(self.AckTtl)},
+		{name: "GenerationsReplyMaxCount", value: int64(self.GenerationsReplyMaxCount)},
+		{name: "WrapPutConcurrency", value: int64(self.WrapPutConcurrency)},
+		{name: "WrapBatchStartDeadline", value: int64(self.WrapBatchStartDeadline)},
+		{name: "WrapsReplyMaxCount", value: int64(self.WrapsReplyMaxCount)},
+		{name: "LateAskOtherHolderMaxCount", value: int64(self.LateAskOtherHolderMaxCount)},
+		{name: "RecoveryWrapsReplyMaxCount", value: int64(self.RecoveryWrapsReplyMaxCount)},
+		{name: "RecoveryWrapListMaxCount", value: int64(self.RecoveryWrapListMaxCount)},
 	} {
 		if count.value <= 0 {
 			return fmt.Errorf("%w: %s must be positive", ErrGkmSettings, count.name)

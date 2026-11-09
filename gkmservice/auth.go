@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The audience gkm's tokens carry (§7.8).
@@ -64,6 +65,11 @@ type GkmSidecarFacts struct {
 	MemberDevice bool
 	// The member an untagged admission names; nil for a tagged one.
 	MemberId *sidecar.Id
+	// Admitted by its member's recovery key (§10.8): the one device whose external commit may say generation 0 and
+	// carry no GenWrap (§10.6's epoch PUT check). False refuses that exception.
+	RecoveryAdmitted bool
+	// The live Delegation that admitted and covers it, whose d: deliveries it reads (§10.6's read row); nil for none.
+	CoveringDelegationId []byte
 }
 
 // One repo a sidecar reads, and who a pending hint about it goes to (§10.6's pending changes): the repo's writers,
@@ -91,6 +97,25 @@ type GkmAuthState interface {
 	// Each repo sidecarId reads at now, with who a pending hint about it goes to (§10.6's KeyPackages and pending
 	// changes rows).
 	PendingTargets(principal *sidecar.Principal, sidecarId sidecar.Id, now time.Time) ([]*GkmPendingTarget, GkmAuthAnswer)
+	// Every sidecar that reads repoId at now (§8.12's RepoReaders), sorted: who a commit hint on gkm:<group_id> goes
+	// to, so a rotation without a commit is seen (D-KEYS-19).
+	RepoReaders(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, GkmAuthAnswer)
+	// Who a pending or wrap-pending hint about repoId goes to, sorted: its writers, or in the directory group the
+	// config writers (§10.6's late wraps and GroupInfo rows, §10.9's directory row).
+	RepoWriters(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, GkmAuthAnswer)
+	// Whether pin names a position of the token's network's log the newest verified state judges and agrees with: at
+	// or past its previous base's position, at or below its own, and A_n there equal to pin's chain (§7.9's retain
+	// row; §10.6's "auth matches proj/ at that version"). Unknown for a pin past the newest state, which gkm has not
+	// reached yet; Denied for one before the previous base or off the chain.
+	CheckPin(principal *sidecar.Principal, pin *bridge.AuthPin) GkmAuthAnswer
+	// Whether a Delegation is live at now and its reach holds repoId (§10.5's live and reach): a late DelegationWrap's
+	// recipient must, as a ReaderWrap's must read R (§10.6's late row).
+	DelegationReads(principal *sidecar.Principal, repoId sidecar.Id, delegationId []byte, now time.Time) GkmAuthAnswer
+	// The holders a late delivery's ask widens its hint to once its since is 15 minutes old (§10.6's late wraps):
+	// sidecars that hold repoId's key at now and may deliver, so none read_only, the recipient's member's devices
+	// first (an agent's or a Delegation's sponsor's), then by identity bytes. recipient is the ask's, as its wrap
+	// path writes it: s:<sidecar_id> or d:<delegation_id>.
+	LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, GkmAuthAnswer)
 }
 
 // A scope's role, as §7.8 spells it after repo:<id>:.

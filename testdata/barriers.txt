@@ -94,8 +94,18 @@ barrier evs.place.put.after evsservice/place.go
 barrier evs.place.put.before evsservice/place.go
 barrier evs.repo.put.after evsservice/place.go
 barrier evs.repo.put.before evsservice/place.go
+barrier gkm.ack_write.after gkmservice/acks.go
+barrier gkm.ack_write.before gkmservice/acks.go
+barrier gkm.epoch_put.after gkmservice/epochs.go
+barrier gkm.epoch_put.before gkmservice/epochs.go
+barrier gkm.group_create.after gkmservice/groups.go
+barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.kp_claim.after gkmservice/keypackages.go
 barrier gkm.kp_claim.before gkmservice/keypackages.go
+barrier gkm.pointer_put.after gkmservice/groupinfo.go
+barrier gkm.pointer_put.before gkmservice/groupinfo.go
+barrier gkm.welcome_put.after gkmservice/welcomes.go
+barrier gkm.welcome_put.before gkmservice/welcomes.go
 barrier hold.list.after host_hold.go
 barrier hold.list.before host_hold.go
 barrier identity.bind.after identity_enroll.go
@@ -195,6 +205,8 @@ barrier smtpedge.report_accept.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_accept.before smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.before smtpedgeservice/report_intake.go
+barrier socket.registrations.after socket_registrar.go
+barrier socket.registrations.before socket_registrar.go
 barrier sockets.probe.after socketsservice/service.go
 barrier sockets.probe.before socketsservice/service.go
 barrier state.commit.after keys_keychain.go

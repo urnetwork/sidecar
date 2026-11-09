@@ -124,16 +124,16 @@ var gkmRoutes = []*GkmRoute{
 	{Pattern: "GET /gkm/welcomes", Scope: gkmScopeRead, Target: gkmTargetNone, Serve: (*GkmEngine).serveWelcomes},
 
 	// KEYS-M2-14: groups, epochs, Welcomes, GroupInfo and acks
-	{Pattern: "POST /gkm/groups", Scope: gkmScopeAdmin, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateKeying},
-	{Pattern: "GET /gkm/groups/{group_id}", Scope: gkmScopeRead, Target: gkmTargetPathGroup},
-	{Pattern: "GET /gkm/repos/{repo_id}/forms", Scope: gkmScopeRead, Target: gkmTargetPathRepo},
-	{Pattern: "POST /gkm/repos/{repo_id}/forms", Scope: gkmScopeAdmin, Target: gkmTargetPathRepo, Write: true, RepoState: gkmRepoStateReseed},
-	{Pattern: "GET /gkm/groups/{group_id}/epochs", Scope: gkmScopeRead, Target: gkmTargetPathGroup},
-	{Pattern: "POST /gkm/groups/{group_id}/epochs/{n}", Scope: gkmScopeLeaf, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive},
-	{Pattern: "POST /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive},
-	{Pattern: "GET /gkm/groups/{group_id}/group-info", Scope: gkmScopeRead, Target: gkmTargetPathGroup},
-	{Pattern: "POST /gkm/groups/{group_id}/group-info", Scope: gkmScopeInfo, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive},
-	{Pattern: "POST /gkm/groups/{group_id}/ack", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Write: true},
+	{Pattern: "POST /gkm/groups", Scope: gkmScopeAdmin, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateKeying, Serve: (*GkmEngine).serveGroupCreate},
+	{Pattern: "GET /gkm/groups/{group_id}", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGroupRead},
+	{Pattern: "GET /gkm/repos/{repo_id}/forms", Scope: gkmScopeRead, Target: gkmTargetPathRepo, Serve: (*GkmEngine).serveFormsRead},
+	{Pattern: "POST /gkm/repos/{repo_id}/forms", Scope: gkmScopeAdmin, Target: gkmTargetPathRepo, Write: true, RepoState: gkmRepoStateReseed, Serve: (*GkmEngine).serveReform},
+	{Pattern: "GET /gkm/groups/{group_id}/epochs", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveEpochsRead},
+	{Pattern: "POST /gkm/groups/{group_id}/epochs/{n}", Scope: gkmScopeLeaf, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveEpochCommit},
+	{Pattern: "POST /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveWelcomeWrite},
+	{Pattern: "GET /gkm/groups/{group_id}/group-info", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGroupInfoRead},
+	{Pattern: "POST /gkm/groups/{group_id}/group-info", Scope: gkmScopeInfo, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveGroupInfoWrite},
+	{Pattern: "POST /gkm/groups/{group_id}/ack", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Write: true, Serve: (*GkmEngine).serveAck},
 
 	// KEYS-M2-15: generations, wraps, drop keys and recovery wraps; KEYS-M2-25: the ladder
 	{Pattern: "GET /gkm/groups/{group_id}/gen", Scope: gkmScopeRead, Target: gkmTargetPathGroup},

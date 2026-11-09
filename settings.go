@@ -70,6 +70,8 @@ type SidecarSettings struct {
 	Tls *SidecarTlsSettings
 	// §10's client: its calls to gkm, its hints and its key upkeep.
 	Gkm *GkmSettings
+	// §9.5's registrar: its heartbeats, eager load reports and waits after a refusal.
+	Sockets *SidecarSocketSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -385,6 +387,70 @@ func (self *GkmSettings) validate() error {
 	return nil
 }
 
+// §9.5's registrar (socket_registrar.go): when it renews the client's leases, when it reports load between renewals,
+// and how it waits after a refusal. §9.5 sets the heartbeat, its jitter and the eager report; the call's timeout and
+// the waits after a failure are readings, each with its reason. A page's 1,024 entries is §9.5's format limit
+// (SocketRegistrationPageMaxEntryCount), and K_sock's 10 min overlap the ring's (SocketKeyRingSettings), so neither
+// is here. The tls component's sibling: declared on every leg so that SidecarSettings is one shape everywhere, and
+// read only where a component runs.
+type SidecarSocketSettings struct {
+	// How often the whole set renews its 45 s leases: 15 s (§9.5, D-SOCK-3), so two lost heartbeats still leave each
+	// lease standing.
+	HeartbeatInterval time.Duration
+	// ±this fraction, drawn uniformly, on each heartbeat and each wait after a failure: 0.2, §9.5's ±20%, so clients
+	// that started together spread out. Below 1, so no wait reaches zero.
+	Jitter float64
+	// The least time from one eager load report to the next: 2 s (§9.5).
+	EagerReportInterval time.Duration
+	// An entry reports its in-flight count early once the count has moved from what the service last saw by at least
+	// this many streams: 8, §9.5's max(8, ...).
+	EagerReportMinMove int
+	// ...and by at least this fraction of the entry's max_streams: 0.25, §9.5's 25%. At most 1.
+	EagerReportMoveFraction float64
+	// The longest one registrations call may take: 10 s, a reading: inside one heartbeat, so a call that hangs costs
+	// no lease, and far past what a page of 1,024 entries needs.
+	RequestTimeout time.Duration
+	// The first wait after a failed call that names no retry_after_ms: 1 s, a reading, doubling with each failure in
+	// a row.
+	RetryInterval time.Duration
+	// Where that doubling stops: 15 s, a reading, one heartbeat, so a failing service sees no more calls from a
+	// client than a healthy one, and a 45 s lease outlasts two failures in a row.
+	RetryMaxInterval time.Duration
+	// The longest retry_after_ms the registrar waits out before it calls again: 5 min, a reading: §2.8's sock-5 keeps
+	// a client's set 5 min after its last call, so a longer wait gains nothing that starting over does not, and a
+	// bogus hint cannot silence the registrar for days.
+	RetryAfterMaxWait time.Duration
+}
+
+// The desktop daemon's registrar settings, the only source of their defaults.
+func DefaultSidecarSocketSettings() *SidecarSocketSettings {
+	return &SidecarSocketSettings{
+		HeartbeatInterval:       15 * time.Second,
+		Jitter:                  0.2,
+		EagerReportInterval:     2 * time.Second,
+		EagerReportMinMove:      8,
+		EagerReportMoveFraction: 0.25,
+		RequestTimeout:          10 * time.Second,
+		RetryInterval:           1 * time.Second,
+		RetryMaxInterval:        15 * time.Second,
+		RetryAfterMaxWait:       5 * time.Minute,
+	}
+}
+
+// What the walk of numbers cannot hold: a jitter that never takes a wait to zero, a move fraction no larger than the
+// whole, and a backoff that starts at or below where it stops.
+func (self *SidecarSocketSettings) validate() error {
+	switch {
+	case 1 <= self.Jitter:
+		return fmt.Errorf("%w: Sockets.Jitter is not below 1", errInvalidSettings)
+	case 1 < self.EagerReportMoveFraction:
+		return fmt.Errorf("%w: Sockets.EagerReportMoveFraction is past 1", errInvalidSettings)
+	case self.RetryMaxInterval < self.RetryInterval:
+		return fmt.Errorf("%w: Sockets.RetryInterval is past RetryMaxInterval", errInvalidSettings)
+	}
+	return nil
+}
+
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
 func DefaultSidecarSettings() *SidecarSettings {
 	return &SidecarSettings{
@@ -454,9 +520,10 @@ func DefaultSidecarSettings() *SidecarSettings {
 			PhoneMeteredByteCount: 8 * 1024 * 1024,
 			RenewJitter:           5 * time.Minute,
 		},
-		Evs: DefaultEvsSettings(),
-		Tls: DefaultSidecarTlsSettings(),
-		Gkm: DefaultGkmSettings(),
+		Evs:     DefaultEvsSettings(),
+		Tls:     DefaultSidecarTlsSettings(),
+		Gkm:     DefaultGkmSettings(),
+		Sockets: DefaultSidecarSocketSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,

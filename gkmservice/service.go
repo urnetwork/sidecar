@@ -87,6 +87,10 @@ type GkmEngine struct {
 	metrics    *gkmMetrics
 	handler    http.Handler
 
+	newestEpochs *gkmNewestEpochs
+	groupInfos   *gkmGroupInfoCache
+	generations  *gkmGenerationCache
+
 	hintQueue        chan *gkmQueuedHint
 	hintPendingCount *sidecar.MonitorValue[int]
 
@@ -142,6 +146,9 @@ func NewGkmEngine(ctx context.Context, host *sidecar.ServiceHost, settings *GkmS
 		rates:            newGkmRateCounters(settings.RateEntryCount),
 		kinds:            newGkmKeyPackageKinds(settings.KeyPackageKindCacheCount),
 		metrics:          newGkmMetrics(host.Metrics),
+		newestEpochs:     newGkmNewestEpochs(settings.NewestEpochCacheCount),
+		groupInfos:       newGkmGroupInfoCache(clock, settings),
+		generations:      newGkmGenerationCache(settings.GenerationCacheCount),
 		hintQueue:        make(chan *gkmQueuedHint, settings.HintQueueCount),
 		hintPendingCount: sidecar.NewMonitorValue(0),
 		storesReachable:  sidecar.NewMonitorValue(false),
