@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
@@ -156,5 +157,30 @@ func TestStoreViewOpenFailsClosedForAKeyNeverHeld(t *testing.T) {
 	}
 	if _, err := view.Postgres(t.Context(), "SELECT 1"); !errors.Is(err, ErrStoreViewNoStore) {
 		t.Fatalf("T2's Postgres: %v", err)
+	}
+}
+
+// A Redis look takes no plan, and a write through the view is refused, leaving the key as it was.
+func TestStoreViewRedisReadsAndRefusesWrites(t *testing.T) {
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	if err := net.Host().Redis.Set(t.Context(), "{view}k", []byte("v"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := net.Faults().Add(&FaultPlan{Op: sidecartest.FaultOpRedis, KeyPrefix: "{view}", Result: sidecartest.FailBeforeApply}); err != nil {
+		t.Fatal(err)
+	}
+	redis := NewStoreView(net, nil).Redis()
+	if value, found, err := redis.Get(t.Context(), "{view}k"); err != nil || !found || string(value) != "v" {
+		t.Fatalf("a look: %q, %t, %v", value, found, err)
+	}
+	if unfired := net.Faults().Unfired(); len(unfired) != 1 {
+		t.Fatalf("a look fired the plan: %d unfired", len(unfired))
+	}
+	if err := redis.Set(t.Context(), "{view}k", []byte("w"), time.Minute); !errors.Is(err, errStoreViewReadOnly) {
+		t.Fatalf("a write through the view: %v", err)
+	}
+	if value, _, err := net.Host().Redis.Get(sidecartest.InspectContext(t.Context()), "{view}k"); err != nil || string(value) != "v" {
+		t.Fatalf("the key after a refused write: %q, %v", value, err)
 	}
 }

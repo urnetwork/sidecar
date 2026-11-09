@@ -191,9 +191,10 @@ func (self *StoreView) RepoClusterId(ctx context.Context, repoId sidecar.Id) (st
 	return place.ClusterId, nil
 }
 
-// The host's Redis, every call under InspectContext, so a look takes no plan and counts nothing.
+// The host's Redis, every read under InspectContext, so a look takes no plan and counts nothing, and every write
+// refused.
 func (self *StoreView) Redis() sidecar.Redis {
-	return &inspectRedis{Redis: self.net.Host().Redis}
+	return &inspectRedis{redis: self.net.Host().Redis}
 }
 
 // T3's Postgres, or ErrStoreViewNoStore on T2.
@@ -253,23 +254,101 @@ func (self *StoreView) Open(reader string, ladder []*sidecar.GkmGeneration, gene
 	return nil, fmt.Errorf("%w: %q held no RK_g of gen/%d or above", ErrStoreViewNotHeld, reader, generation)
 }
 
-// sidecar.Redis with every call under InspectContext.
+// sidecar.Redis as an oracle reads it: every read under InspectContext, so a look takes no plan and counts nothing,
+// and every write refused, since an oracle that wrote would change the run it checks.
 type inspectRedis struct {
-	sidecar.Redis
+	redis sidecar.Redis
 }
 
+// What an oracle gets for a write.
+var errStoreViewReadOnly = errors.New("the oracle's store view is read-only")
+
 func (self *inspectRedis) Get(ctx context.Context, key string) ([]byte, bool, error) {
-	return self.Redis.Get(sidecartest.InspectContext(ctx), key)
+	return self.redis.Get(sidecartest.InspectContext(ctx), key)
 }
 
 func (self *inspectRedis) GetMany(ctx context.Context, keys []string) ([][]byte, error) {
-	return self.Redis.GetMany(sidecartest.InspectContext(ctx), keys)
+	return self.redis.GetMany(sidecartest.InspectContext(ctx), keys)
 }
 
 func (self *inspectRedis) HashGet(ctx context.Context, key string, field string) ([]byte, bool, error) {
-	return self.Redis.HashGet(sidecartest.InspectContext(ctx), key, field)
+	return self.redis.HashGet(sidecartest.InspectContext(ctx), key, field)
 }
 
 func (self *inspectRedis) HashGetAll(ctx context.Context, key string) (map[string][]byte, error) {
-	return self.Redis.HashGetAll(sidecartest.InspectContext(ctx), key)
+	return self.redis.HashGetAll(sidecartest.InspectContext(ctx), key)
+}
+
+func (self *inspectRedis) StreamRange(ctx context.Context, key string, afterEntryId string, count int64) ([]*sidecar.RedisStreamEntry, error) {
+	return self.redis.StreamRange(sidecartest.InspectContext(ctx), key, afterEntryId, count)
+}
+
+func (self *inspectRedis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	return errStoreViewReadOnly
+}
+
+func (self *inspectRedis) SetIfAbsent(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	return false, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) CompareAndSet(ctx context.Context, key string, expected []byte, value []byte, ttl time.Duration) (bool, error) {
+	return false, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) CompareAndDelete(ctx context.Context, key string, expected []byte) (bool, error) {
+	return false, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) Increment(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	return 0, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) Delete(ctx context.Context, keys []string) error {
+	return errStoreViewReadOnly
+}
+
+func (self *inspectRedis) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	return false, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) HashSet(ctx context.Context, key string, fieldValues map[string][]byte) error {
+	return errStoreViewReadOnly
+}
+
+func (self *inspectRedis) HashDelete(ctx context.Context, key string, fields []string) error {
+	return errStoreViewReadOnly
+}
+
+func (self *inspectRedis) HashExpire(ctx context.Context, key string, fields []string, ttl time.Duration) error {
+	return errStoreViewReadOnly
+}
+
+func (self *inspectRedis) StreamAdd(ctx context.Context, key string, maxLength int64, fieldValues map[string][]byte) (string, error) {
+	return "", errStoreViewReadOnly
+}
+
+func (self *inspectRedis) StreamGroupCreate(ctx context.Context, key string, group string) error {
+	return errStoreViewReadOnly
+}
+
+// A group read moves the group's cursor, so it is a write here.
+func (self *inspectRedis) StreamGroupRead(ctx context.Context, key string, group string, consumer string, count int64, block time.Duration) ([]*sidecar.RedisStreamEntry, error) {
+	return nil, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) StreamGroupAck(ctx context.Context, key string, group string, entryIds []string) error {
+	return errStoreViewReadOnly
+}
+
+func (self *inspectRedis) StreamGroupClaim(ctx context.Context, key string, group string, consumer string, minIdle time.Duration, cursor string, count int64) ([]*sidecar.RedisStreamEntry, string, error) {
+	return nil, "", errStoreViewReadOnly
+}
+
+// A script may write, and no oracle needs one.
+func (self *inspectRedis) RunScript(ctx context.Context, script *sidecar.RedisScript, keys []string, args []string) (*sidecar.RedisReply, error) {
+	return nil, errStoreViewReadOnly
+}
+
+func (self *inspectRedis) AddKeyEventCallback(keyPattern string, callback sidecar.RedisKeyEventFunction) (func(), error) {
+	return nil, errStoreViewReadOnly
 }
