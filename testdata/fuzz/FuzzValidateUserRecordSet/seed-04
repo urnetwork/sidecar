@@ -1,0 +1,5 @@
+go test fuzz v1
+string("@")
+uint16(1)
+uint32(60)
+string("11.22.33.44|11.22.33.45")

@@ -1,0 +1,78 @@
+// ur status (§5.4, §18.5): the Sidecar's state, its reason and the bound client generation, which store wraps U,
+// and any store on this host holding a network credential (D-TRUST-3); --stats adds SidecarStats' counters, which
+// carry no requester, repo or query label (I-13). The daemon's reply never holds a token, a key or the pass, which
+// its reply walk refuses (daemon_rpc.go).
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/docopt/docopt-go"
+
+	"github.com/urnetwork/sidecar"
+)
+
+func init() {
+	registerUrCommand(&urCommand{
+		name:    "status",
+		usage:   "  ur status [--stats]",
+		summary: "the sidecar's state, its reason and its generation",
+		run:     runUrStatus,
+	})
+}
+
+func runUrStatus(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	stats, _ := options.Bool("--stats")
+	reply := &urStatusReply{}
+	if err := cli.callDaemon(ctx, urMethodStatus, &urStatusParams{Stats: stats}, false, reply); err != nil {
+		return err
+	}
+	printUrStatus(cli, reply)
+	return nil
+}
+
+// The reply, as a person reads it.
+func printUrStatus(cli *urCli, reply *urStatusReply) {
+	out := cli.stdout
+	fmt.Fprintf(out, "instance:   %s\n", reply.Instance)
+	if reply.NoSidecar != "" {
+		fmt.Fprintf(out, "sidecar:    none: %s\n", reply.NoSidecar)
+	} else {
+		state := reply.State
+		if reply.Reason != "" {
+			state += " (" + reply.Reason + ")"
+		}
+		fmt.Fprintf(out, "state:      %s\n", state)
+		fmt.Fprintf(out, "generation: %d\n", reply.Generation)
+	}
+	keyStore := reply.KeyStore
+	if keyStore == string(osKeyStoreKeyFile) {
+		keyStore += " (warning: a 0600 key file wraps the unlock key, which any process of this user can read)"
+	}
+	fmt.Fprintf(out, "key store:  %s\n", keyStore)
+	if 0 < len(reply.CredentialStores) {
+		fmt.Fprintf(out, "warning:    a URnetwork %s on this host holds a network credential; enrollment is refused until it is gone\n",
+			strings.Join(reply.CredentialStores, " and "))
+	}
+	if reply.Stats != nil {
+		printUrStats(cli, reply.Stats)
+	}
+}
+
+// --stats' counters.
+func printUrStats(cli *urCli, stats *sidecar.SidecarStats) {
+	out := cli.stdout
+	fmt.Fprintf(out, "generations started: %d\n", stats.GenerationCount)
+	fmt.Fprintf(out, "core hints:          %d\n", stats.CoreHintCount)
+	for _, component := range stats.Components {
+		fmt.Fprintf(out, "component %s: queued %d, ran %d, dropped %d (%d bytes), panics %d\n", component.Name,
+			component.QueuedCount, component.RanCount, component.DroppedCount, component.DroppedByteCount, component.PanicCount)
+	}
+	subprotocol := stats.Subprotocol
+	fmt.Fprintf(out, "subprotocol: queued %d, dispatched %d, refused %d by identity, %d by policy, %d at a full queue, replies %d sent, %d dropped\n",
+		subprotocol.QueuedCount, subprotocol.DispatchedCount, subprotocol.IdentityRefusedCount, subprotocol.InboundRefusedCount,
+		subprotocol.QueueFullCount, subprotocol.ReplySentCount, subprotocol.ReplyDroppedCount)
+}

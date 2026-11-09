@@ -35,6 +35,9 @@ type Sidecar struct {
 	// Raised for each change the run loop must look at that the instance's state does not show: an
 	// enrollment, a generation's end, a component added or removed, a close.
 	wakes *MonitorValue[uint64]
+	// The number of the generation running, 0 when none: what a caller waits on for a generation to have
+	// ended and been joined.
+	runningGenerationNumber *MonitorValue[int64]
 
 	// Set once by NewSidecar. instance holds U and this network's keychain, shared with the
 	// instance's other Sidecars; leg is what only the leg runs.

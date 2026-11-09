@@ -9,6 +9,8 @@
 //   - wire.go, what the journal, snapshots and the feed carry between the block and its edges.
 //   - store.go, DnsStore and DnsFeed: the only ways an engine reaches §12.14's tables and an edge
 //     reaches the block, so each part here runs on sidecartest's fakes before its real half exists.
+//   - validate.go and copy_rows.go, what every writer runs before its transaction: §12.7's user table,
+//     the zone lint and DMARC rule, and the copy rows that keep * answering at empty non-terminals.
 //   - zone.go, zone_trie.go and answer.go, a root held at one serial and the unsigned answers it gives.
 //   - keyset.go, sign.go, denial.go and selfcheck.go, online signing under DO: the ZSK and the released
 //     DNSKEY window, signatures with their cache and cap, compact denial, and the check every zone
