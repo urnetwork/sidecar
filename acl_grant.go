@@ -232,8 +232,9 @@ func (self *AclState) grantTouches(ask *AclGrantAsk, audience protocol.AclAudien
 	for _, target := range ask.Dst {
 		switch {
 		case len(target.GetSidecarId()) != 0:
-			destination := self.sidecarState(Id(target.GetSidecarId()))
-			if destination == nil || !destination.valid {
+			destinationId, ok := aclTargetId(target.GetSidecarId())
+			destination := self.sidecarState(destinationId)
+			if !ok || destination == nil || !destination.valid {
 				adminOnly = true
 				continue
 			}
