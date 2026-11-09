@@ -53,8 +53,13 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 
+	"github.com/urnetwork/connect"
+
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// connect's own cache is what a daemon hands the policy.
+var _ SmtpDohForwarder = (*connect.DohCache)(nil)
 
 // The question that holds AllowUnauthenticated.
 const smtpTlsAllowanceQuestion = "smtp-m9-06-tl4-allowance-action"
