@@ -208,7 +208,7 @@ func (self *recordWriter) run(ctx context.Context, tend func(ctx context.Context
 		if tend != nil {
 			tend(ctx)
 		}
-		if self.backlogged() {
+		if self.backlogged() && self.drainDue() {
 			if err := self.drainSpool(ctx); err != nil && self.log.V(1).Enabled() {
 				self.log.Infof("[record]the spool is not drained: %s", err)
 			}
@@ -330,6 +330,8 @@ func (self *recordWriter) pumpLog(ctx context.Context, logId Id, force bool) (bo
 			return false, nil
 		}
 		if !ok {
+			// waits, backing off, so the loop does not wake for it at once again
+			self.backoff(logId)
 			return false, fmt.Errorf("record: log %s takes neither this sidecar's stream nor its deposits now", logId)
 		}
 		if !deposit {
@@ -344,6 +346,8 @@ func (self *recordWriter) pumpLog(ctx context.Context, logId Id, force bool) (bo
 			return false, err
 		}
 		if built == nil {
+			// what waits cannot go this way now, such as ingested entries once this device only deposits
+			self.backoff(logId)
 			return false, nil
 		}
 		plan = built

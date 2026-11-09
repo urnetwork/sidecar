@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,10 +31,12 @@ import (
 const testPublisherTimeout = 10 * time.Second
 
 // FakeRedis, telling the test each call the publisher makes, by its op or script name, once it has
-// answered.
+// answered. A hook set in afterRange runs once, after the next XRANGE has answered and before the
+// publisher sees the answer.
 type testPublisherRedis struct {
 	*sidecartest.FakeRedis
-	calls chan string
+	calls      chan string
+	afterRange atomic.Pointer[func()]
 }
 
 func (self *testPublisherRedis) record(call string) {
@@ -64,6 +67,9 @@ func (self *testPublisherRedis) HashGetAll(ctx context.Context, key string) (map
 
 func (self *testPublisherRedis) StreamRange(ctx context.Context, key string, afterEntryId string, count int64) ([]*sidecar.RedisStreamEntry, error) {
 	entries, err := self.FakeRedis.StreamRange(ctx, key, afterEntryId, count)
+	if hook := self.afterRange.Swap(nil); hook != nil {
+		(*hook)()
+	}
 	self.record("xrange")
 	return entries, err
 }
@@ -612,7 +618,9 @@ func TestPublisherNMovedUnderAnEmptyReadResets(t *testing.T) {
 		t.Fatalf("n did not restart: seq %d", restarted.Seq)
 	}
 	env.passWindow()
+	// the read finds nothing, n has moved, and a second read still finds nothing
 	env.awaitIdleRead()
+	env.awaitCall("xrange")
 	env.awaitCall(pushservice.HintTailScript.Name)
 	env.awaitCall("hgetall")
 	if versions := testResetVersions(t, env.awaitReset()); len(versions) != 1 || versions[sidecar.PushTopicDns] != 9 {
@@ -622,6 +630,34 @@ func TestPublisherNMovedUnderAnEmptyReadResets(t *testing.T) {
 	env.awaitIdleRead()
 	env.expectNoMessage()
 	if stats := env.publisher.Stats(); stats.GapCount != 1 || stats.ResetCount != 2 {
+		t.Errorf("stats %+v", stats)
+	}
+}
+
+// A hint written between a read that found nothing and n's read moves n, but its entry follows the
+// position: the publisher reads again and sends it, with no reset.
+func TestPublisherHintBetweenAnEmptyReadAndNIsNoGap(t *testing.T) {
+	env := newTestPublisherEnv(t, nil)
+	env.startIdle(nil)
+	hook := func() {
+		if _, err := env.writer.HintClient(context.Background(), env.clientId, &sidecar.ClientHint{Topic: sidecar.PushTopicTeam, Version: 1, Body: []byte("t")}); err != nil {
+			t.Errorf("the hint between the reads: %v", err)
+		}
+	}
+	env.redis.afterRange.Store(&hook)
+	env.publisher.Kick()
+	env.passWindow()
+	env.awaitCall("xrange")
+	env.awaitCall("get")
+	env.awaitCall("xrange")
+	if hint := env.awaitHints(1)[0].hint; hint.Seq != 1 || hint.Version != 1 || string(hint.Hint) != "t" {
+		t.Errorf("the hint is %v", hint)
+	}
+	env.publisher.Kick()
+	env.passWindow()
+	env.awaitIdleRead()
+	env.expectNoMessage()
+	if stats := env.publisher.Stats(); stats.GapCount != 0 || stats.ResetCount != 1 || stats.HintCount != 1 {
 		t.Errorf("stats %+v", stats)
 	}
 }

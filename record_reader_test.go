@@ -420,3 +420,31 @@ func TestRecordReaderPinsCatchAStreamWoundBack(t *testing.T) {
 		t.Errorf("a stream wound back raised %v", reasons)
 	}
 }
+
+// A reader built with no settings or alarm sink reads with the defaults rather than failing.
+func TestRecordReaderTakesDefaultSettings(t *testing.T) {
+	world := newTestRecordWorld(t)
+	device := world.device(true)
+	record := device.open()
+	testRecordAppend(t, record, testRecordNote(nil, "one"))
+	if err := record.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	files := sidecartest.NewFakeStore()
+	store, err := files.Root().Directory("record", "record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := sidecar.NewRecordReader(&sidecar.RecordReaderArgs{
+		SidecarId: world.readerId,
+		Store:     store,
+		Streams:   func() sidecar.RecordStreams { return world.streams.For(world.readerId) },
+		Auth:      func() sidecar.RecordAuthView { return world.auth.Tip() },
+	})
+	if err := reader.Sync(t.Context(), world.vaultId); err != nil {
+		t.Fatal(err)
+	}
+	if entries := reader.Entries(world.vaultId); len(entries) != 1 || entries[0].Body == nil {
+		t.Fatalf("%d entries", len(entries))
+	}
+}
