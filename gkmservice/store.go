@@ -102,8 +102,12 @@ func readGkmObject(ctx context.Context, cluster sidecar.BlobCluster, key string,
 // Every key under prefix, a page of pageCount at a time, at most maxCount of them: errGkmStoreFault past it, so a
 // family that has grown past its bound alarms rather than costing unbounded work.
 func listGkmKeys(ctx context.Context, cluster sidecar.BlobCluster, prefix string, pageCount int, maxCount int) ([]*sidecar.BlobInfo, error) {
+	return listGkmKeysAfter(ctx, cluster, prefix, "", pageCount, maxCount)
+}
+
+// listGkmKeys from the first key past startAfter.
+func listGkmKeysAfter(ctx context.Context, cluster sidecar.BlobCluster, prefix string, startAfter string, pageCount int, maxCount int) ([]*sidecar.BlobInfo, error) {
 	infos := []*sidecar.BlobInfo{}
-	startAfter := ""
 	for {
 		page, more, err := cluster.List(ctx, prefix, startAfter, pageCount)
 		if err != nil {

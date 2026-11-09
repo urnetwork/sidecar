@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("Content-Type: text/plain; name*0*=UTF-8''%E2; name*1*=%ZZ\r\n\r\nx")

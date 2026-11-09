@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("From: a@example.com\r\nTo: b@example.com\r\nSubject: hello\r\n\tworld\r\n\r\nJust text, no MIME header at all.\r\n")
