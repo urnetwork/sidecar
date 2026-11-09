@@ -62,6 +62,18 @@ const (
 	SmtpTlsLevelUnauthenticated SmtpTlsLevel = 4
 )
 
+// §2.8 EX4's label, which mail sent at TL4 carries message by message (I-11).
+const SmtpTlsLabelUnauthenticated = "readable by an active URnetwork edge"
+
+// The label a message sent at this level carries (I-11): EX4's at TL4, and none at TL1 to TL3, which
+// exclude even an active edge, or when no level was reached.
+func (self SmtpTlsLevel) Label() string {
+	if self == SmtpTlsLevelUnauthenticated {
+		return SmtpTlsLabelUnauthenticated
+	}
+	return ""
+}
+
 // One recipient domain's result of a send (§14.5's outcomes).
 type SmtpOutcomeKind uint32
 
