@@ -146,6 +146,10 @@ type PostureOverlayEntry struct {
 // What a posture has in force, which device.Bridge publishes (BRIDGE-M4-11). Callers must not change what it holds.
 type PostureDecision struct {
 	State PostureState
+	// The network and this device's sidecar_id, from the Pending that anchored the posture; nil before one, as in
+	// legacy. A host holds a delegation's target to SidecarId (§17.9's verify row).
+	NetworkId []byte
+	SidecarId []byte
 	// The verified state while enforcing: its rules, names, identities, share keys and listeners. Nil otherwise.
 	BridgeState *bridge.BridgeState
 	// What verified entries after BridgeState's pin add, oldest first.
