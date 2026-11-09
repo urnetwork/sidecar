@@ -111,3 +111,18 @@ func TestDefaultConnectSettingsShareNothing(t *testing.T) {
 		t.Error("connect settings are shared between calls")
 	}
 }
+
+// RFC 9106 §4's cost (§5.9).
+const (
+	testLegPassMemoryByteCount = 64 * 1024 * 1024
+	testLegPassIterationCount  = 3
+	testLegPassThreadCount     = 4
+)
+
+// A daemon's pass costs RFC 9106 §4's Argon2id; an sdk mobile host lowers it, as it adjusts its other settings.
+func TestPassCostOnThisLeg(t *testing.T) {
+	settings := DefaultSidecarSettings().KeychainSettings
+	if settings.PassMemoryByteCount != 64*1024*1024 || settings.PassIterationCount != 3 || settings.PassThreadCount != 4 {
+		t.Errorf("Argon2id at %d B, t=%d, p=%d", settings.PassMemoryByteCount, settings.PassIterationCount, settings.PassThreadCount)
+	}
+}

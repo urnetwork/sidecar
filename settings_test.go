@@ -36,14 +36,14 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ServiceTokenCacheTimeout:   10 * time.Minute,
 			},
 		},
-		// §5.9's pass; auto-lock is a reading
+		// §5.9's pass, at the leg's Argon2id cost (TestPassCostOnThisLeg); auto-lock is a reading
 		{
 			name: "KeychainSettings",
 			got:  *settings.KeychainSettings,
 			want: SidecarKeychainSettings{
-				PassMemoryByteCount: 64 * 1024 * 1024,
-				PassIterationCount:  3,
-				PassThreadCount:     4,
+				PassMemoryByteCount: testLegPassMemoryByteCount,
+				PassIterationCount:  testLegPassIterationCount,
+				PassThreadCount:     testLegPassThreadCount,
 				PassAttemptCount:    5,
 				PassAttemptInterval: 10 * time.Minute,
 				AutoLockTimeout:     settings.KeychainSettings.AutoLockTimeout,

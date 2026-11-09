@@ -456,8 +456,10 @@ func (self *SidecarSocketSettings) validate() error {
 	return nil
 }
 
-// A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
+// A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151). The pass's Argon2id cost
+// is the leg's (defaultSidecarPassCost).
 func DefaultSidecarSettings() *SidecarSettings {
+	passMemoryByteCount, passIterationCount, passThreadCount := defaultSidecarPassCost()
 	return &SidecarSettings{
 		Instance:   "default",
 		AppVersion: Version,
@@ -473,9 +475,9 @@ func DefaultSidecarSettings() *SidecarSettings {
 			ServiceTokenCacheTimeout:   10 * time.Minute,
 		},
 		KeychainSettings: &SidecarKeychainSettings{
-			PassMemoryByteCount: 64 * 1024 * 1024,
-			PassIterationCount:  3,
-			PassThreadCount:     4,
+			PassMemoryByteCount: passMemoryByteCount,
+			PassIterationCount:  passIterationCount,
+			PassThreadCount:     passThreadCount,
 			PassAttemptCount:    5,
 			PassAttemptInterval: 10 * time.Minute,
 			AutoLockTimeout:     10 * time.Minute,

@@ -154,8 +154,13 @@ func (self *headCheckTransport) run() {
 		}
 		lastRound = self.clock.Now()
 		self.round(self.ctx)
+		// armed before the round is counted, so whoever waits on roundCount finds the next round's timer set
+		interval := self.clock.After(self.settings.HeadCheckInterval)
+		self.roundCount.Update(func(count uint64) uint64 {
+			return count + 1
+		})
 		select {
-		case <-self.clock.After(self.settings.HeadCheckInterval):
+		case <-interval:
 		case <-self.roundRequests:
 		case <-self.ctx.Done():
 			return
@@ -196,9 +201,6 @@ func (self *headCheckTransport) round(ctx context.Context) {
 		}()
 	}
 	wait.Wait()
-	self.roundCount.Update(func(count uint64) uint64 {
-		return count + 1
-	})
 }
 
 // Drops what is kept of peers past an interval: rotations and exchange times of peers no exchange has

@@ -217,6 +217,37 @@ func (self *sidecarApprovalRecord) admissionRequest() (*SidecarAdmissionRequest,
 	}, nil
 }
 
+// Signs an admission's or an OwnerConfirm's statement as an act of origin's, the presence check where the log covers it.
+// When it admits or confirms a page Worker, workerId, the act also carries §7.10's stale revocations of that member's
+// other Workers this device sees as stale, posted first (identity_act_stale.go). A group view that cannot answer
+// revokes nothing, and the admission goes on: no revocation is signed without the evidence.
+func (self *Sidecar) runAdmissionAct(ctx context.Context, origin SidecarActOrigin, check SidecarPresenceCheck, memberId Id,
+	workerId *Id, signedType bridge.SignedType, statement proto.Message) error {
+	act, err := self.newAct(origin)
+	if err != nil {
+		return err
+	}
+	if err := act.Add(signedType, statement); err != nil {
+		return err
+	}
+	if workerId != nil {
+		revocations, err := act.AddStaleRevocations(ctx, memberId, workerId)
+		switch {
+		case err != nil:
+			self.log.Infof("[identity]no stale Worker revoked with this admission: %s", err)
+		case self.log.V(1).Enabled():
+			self.log.Infof("[identity]%d stale Workers revoked with this admission, %d offered", len(revocations.Revoked), len(revocations.Offered))
+		}
+	}
+	_, err = act.Run(ctx, check)
+	return err
+}
+
+// Whether the device is a page Worker: admitted, or to be admitted, read_only (§18.8).
+func sidecarIsPageWorker(capabilities uint32) bool {
+	return capabilities&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) != 0
+}
+
 // Signs one statement as an act of origin's, the presence check where the log covers it.
 func (self *Sidecar) runOneStatement(ctx context.Context, origin SidecarActOrigin, check SidecarPresenceCheck, signedType bridge.SignedType, statement proto.Message) error {
 	act, err := self.newAct(origin)
@@ -247,9 +278,14 @@ func sidecarDecideAdmission(ctx context.Context, self *Sidecar, authority Sideca
 	if !self.consentedFor(authority, request.MemberId) {
 		return ErrSidecarApprovalAuthority
 	}
+	// a page Worker's admission carries §7.10's stale revocations of its member's other Workers (D-TEAM-29)
+	var workerId *Id
+	if sidecarIsPageWorker(request.Capabilities) {
+		workerId = &request.SidecarId
+	}
 	// after an admission the signer commits the device's Add or first wrap in the config group (§5.6's reads row),
 	// which GkmClient's config-group commit does once KEYS lands it: any writer leaf commits it meanwhile
-	return self.runOneStatement(ctx, origin, check, bridge.SignedType_SIGNED_SIDECAR_ADMIT, &protocol.SidecarAdmit{
+	return self.runAdmissionAct(ctx, origin, check, request.MemberId, workerId, bridge.SignedType_SIGNED_SIDECAR_ADMIT, &protocol.SidecarAdmit{
 		NetworkId:         identity.NetworkId.Bytes(),
 		SidecarId:         request.SidecarId.Bytes(),
 		IdentityPublicKey: request.IdentityPublicKey,
@@ -267,7 +303,18 @@ func sidecarDecideAdmissionAlarm(ctx context.Context, self *Sidecar, authority S
 		if item.SidecarId == nil {
 			return ErrSidecarApprovalUnknown
 		}
-		return self.runOneStatement(ctx, origin, check, bridge.SignedType_SIGNED_OWNER_CONFIRM, &protocol.OwnerConfirm{SidecarId: item.SidecarId.Bytes()})
+		// the member's OwnerConfirm of an admin-admitted page Worker carries §7.10's stale revocations its groups show
+		var workerId *Id
+		if admission := authority.Admission(*item.SidecarId); item.MemberId != nil && admission != nil && admission.Row != nil &&
+			sidecarIsPageWorker(admission.Row.GetCapabilities()) {
+			workerId = item.SidecarId
+		}
+		memberId := Id{}
+		if item.MemberId != nil {
+			memberId = *item.MemberId
+		}
+		return self.runAdmissionAct(ctx, origin, check, memberId, workerId, bridge.SignedType_SIGNED_OWNER_CONFIRM,
+			&protocol.OwnerConfirm{SidecarId: item.SidecarId.Bytes()})
 	case SidecarDecisionRevoke:
 		return fmt.Errorf("%w: RevokeDevice is CORE-M3-03's", ErrSidecarApprovalUnbuilt)
 	}
