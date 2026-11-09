@@ -105,7 +105,7 @@ func NewFakeHost(ctx context.Context, clock Clock, faults *FaultQueue, barriers 
 	}
 	return &FakeHost{
 		Authenticator: NewFakeAuthenticator(clock, faults),
-		Quota:         NewFakeQuota(faults, settings.Quota),
+		Quota:         NewFakeQuota(clock, faults, settings.Quota),
 		Metrics:       NewFakeMetrics(settings.Metrics),
 		Tasks:         NewFakeTasks(clock, faults, settings.Tasks),
 		Redis:         NewFakeRedis(ctx, clock, faults, barriers, settings.Redis),
@@ -157,7 +157,8 @@ func (self *FakeHost) privacyItems() []*PrivacyItem {
 			Body:  append([]byte(hint.Hint.Topic+"\x00"), hint.Hint.Body...),
 		})
 	}
-	for _, batch := range self.Quota.Batches() {
+	// every batch that reached the host, a refused one too: api read it before it refused it
+	for _, batch := range self.Quota.SentBatches() {
 		for _, event := range batch.Events {
 			items = append(items, &PrivacyItem{Class: PrivacyClassUsage, Name: "usage from " + batch.Producer, Body: []byte(event.Meter)})
 		}

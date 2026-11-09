@@ -400,6 +400,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		daemon.Close()
 		return err
 	}
+	// an interrupt or a terminate ends the run, which Accept alone would not see
+	stopOnSignal := context.AfterFunc(ctx, daemon.Close)
+	defer stopOnSignal()
 	log.Infof("[ur]daemon of instance %s serving", cli.instance)
 	err = daemon.Run()
 	if err != nil && !errors.Is(err, os.ErrClosed) {

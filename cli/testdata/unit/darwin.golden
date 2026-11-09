@@ -1,0 +1,29 @@
+path: /home/synthetic/Library/LaunchAgents/network.ur.ur.work.plist
+--- content
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>network.ur.ur.work</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/urnetwork/bin/ur</string>
+		<string>daemon</string>
+		<string>--instance</string>
+		<string>work</string>
+		<string>--unit</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
+--- install
+launchctl bootout gui/501/network.ur.ur.work
+launchctl bootstrap gui/501 /home/synthetic/Library/LaunchAgents/network.ur.ur.work.plist
+--- uninstall
+launchctl bootout gui/501/network.ur.ur.work

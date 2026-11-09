@@ -116,6 +116,11 @@ type urCli struct {
 	offerPresenceKey func(ctx context.Context, cli *urCli) error
 	// fills a daemon's service urls from §18.9's host table (cmd_daemon.go)
 	serviceUrls func(settings *sidecar.SidecarSettings) error
+	// where and as whom a unit installs, and what runs its commands (unit.go)
+	unitEnv    func() (*unitEnv, error)
+	unitRunner func(cli *urCli) unitRunner
+	// <state> of an instance
+	stateDirectory func(instance string) (string, error)
 	// a process's environment, for UR_INSTANCE
 	getenv func(name string) string
 	// the working directory and pid a hello names
@@ -137,6 +142,9 @@ func newUrCli() *urCli {
 		spawnDaemon:     spawnDetachedDaemon,
 		login:           urcliLoginEntry,
 		serviceUrls:     urServiceUrlsFromHostTable,
+		unitEnv:         hostUnitEnv,
+		unitRunner:      execUnitRunner,
+		stateDirectory:  sidecar.SidecarStateDirectory,
 		getenv:          os.Getenv,
 		cwd:             os.Getwd,
 		pid:             os.Getpid(),
