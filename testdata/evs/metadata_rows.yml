@@ -168,3 +168,19 @@ EvsRefsReply.push_sequence: {number: 2, type: uint64, row: evs-24, sees: "each r
 EvsRefsReply.refs: {number: 3, type: repeated EvsHeadSummary, row: evs-2, sees: "ref ids"}
 EvsLogReply.statements: {number: 1, type: repeated EvsReadStatement, row: evs-14, sees: "their Signed EvsPush statements"}
 EvsLogReply.next_version: {number: 2, type: uint64, row: evs-14, sees: "versions 64n to 64n+63"}
+
+EvsPidxEntry.container_kind: {number: 1, type: EvsContainerKind, row: evs-17, sees: "a pack's or parcel's offsets"}
+EvsPidxEntry.container_id: {number: 2, type: bytes, row: evs-17, sees: "a pack's or parcel's offsets"}
+EvsPidxEntry.first_version: {number: 3, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
+EvsPidxEntry.last_version: {number: 4, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
+EvsPidxEntry.records: {number: 5, type: repeated EvsPidxRecord, row: evs-17, sees: "offsets for the versions and log pages it holds"}
+EvsPidxEntry.log_pages: {number: 6, type: repeated EvsPidxLogPage, row: evs-17, sees: "offsets for the versions and log pages it holds"}
+EvsPidxEntry.segment_ids: {number: 7, type: repeated bytes, row: evs-17, sees: "the segment ids its records introduce"}
+EvsPidxRecord.version: {number: 1, type: uint64, row: evs-17, sees: "offsets for the versions"}
+EvsPidxRecord.type: {number: 2, type: EvsBatchRecordType, row: evs-17, sees: "the record kinds it holds"}
+EvsPidxRecord.offset: {number: 3, type: uint64, row: evs-17, sees: "offsets for the versions"}
+EvsPidxRecord.length: {number: 4, type: uint32, row: evs-17, sees: "offsets for the versions"}
+EvsPidxRecord.place: {number: 5, type: EvsPlace, row: evs-17, pending: "EVSB-M2-10 keeps each record's batch place, so a seal finds its named part by place after the batch is gone; evs-17 names offsets and kinds, and evs-3 the place in a window entry, but neither the place in pidx/ (question evsb-m2-07-pidx-place-row)"}
+EvsPidxLogPage.page: {number: 1, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
+EvsPidxLogPage.offset: {number: 2, type: uint64, row: evs-17, sees: "offsets for the versions and log pages it holds"}
+EvsPidxLogPage.length: {number: 3, type: uint32, row: evs-17, sees: "offsets for the versions and log pages it holds"}
