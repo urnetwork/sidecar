@@ -177,6 +177,8 @@ type repository struct {
 	modulesOnce     func() ([]*repositoryModule, error)
 	sourceFilesOnce func() ([]*sourceFile, error)
 	stdPackagesOnce func() (map[string]bool, error)
+	// connect as X9's rules read it (x9_test.go)
+	connectScanOnce func() (*x9ConnectScan, error)
 }
 
 // Opens the checkout whose root module is in moduleDirectory.
@@ -217,6 +219,7 @@ func openRepository(moduleDirectory string, settings *checkSettings, legs []*bui
 	self.modulesOnce = sync.OnceValues(self.readModules)
 	self.sourceFilesOnce = sync.OnceValues(self.readSourceFiles)
 	self.stdPackagesOnce = sync.OnceValues(self.readStdPackages)
+	self.connectScanOnce = sync.OnceValues(self.readConnectScan)
 	return self, nil
 }
 

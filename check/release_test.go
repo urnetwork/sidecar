@@ -61,7 +61,8 @@ func (self *fixture) toRelease() {
 	rewrite(filepath.Join(self.directory, "connect"), connectBasePath, glogBasePath)
 	rewrite(top, smtpproofPath, sidecarBasePath, connectBasePath, glogBasePath)
 
-	// moves a tree into v2026/, leaving what holds its own go.mod where it is, and the documents
+	// moves a tree into v2026/, leaving what holds its own go.mod where it is, and the documents. As
+	// go_mod_fork_prepare's zsh `for f in *` does, a dotfile stays, so a checkout's .git keeps its place.
 	move := func(directory string) {
 		versioned := filepath.Join(directory, strings.TrimPrefix(releaseSuffix, "/"))
 		entries, err := os.ReadDir(directory)
@@ -75,7 +76,7 @@ func (self *fixture) toRelease() {
 			if _, err := os.Stat(filepath.Join(directory, entry.Name(), "go.mod")); err == nil {
 				continue
 			}
-			if releaseDocumentPattern.MatchString(entry.Name()) {
+			if releaseDocumentPattern.MatchString(entry.Name()) || strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
 			if err := os.Rename(filepath.Join(directory, entry.Name()), filepath.Join(versioned, entry.Name())); err != nil {
