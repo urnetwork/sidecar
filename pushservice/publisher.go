@@ -14,8 +14,9 @@
 //
 // Whatever shows the stream moved on without it sends a reset instead of the batch: a first entry whose
 // seq does not follow the last one sent, which a trim or the keys' hourly restart leaves (reading 5), an
-// n that moved while a read found nothing, which a stream recreated below the last id leaves, or an
-// entry that does not parse. So does a batch past QueueByteCount, so a client far behind costs a reset,
+// n that moved while a read and the read after it found nothing, which a stream recreated below the
+// last id leaves (one read again tells it from a hint written between the read and n's), or an entry
+// that does not parse. So does a batch past QueueByteCount, so a client far behind costs a reset,
 // never a queue that grows; so does a send the resident refused, after a wait; and so does Reset. A
 // reset is always followed by a read, so a hint that landed before the resident's listener was there
 // still goes out.
@@ -54,7 +55,7 @@ import (
 
 var (
 	// The stream moved on without the publisher: a first entry whose seq does not follow the last one
-	// sent, an n that moved while a read found nothing, or an entry that does not parse.
+	// sent, an n that moved while two reads found nothing, or an entry that does not parse.
 	errPublisherGap = errors.New("sidecar publisher: the hint stream moved past the last entry sent")
 	// A batch past QueueByteCount.
 	errPublisherOverflow = errors.New("sidecar publisher: a batch past its bytes")
@@ -513,59 +514,25 @@ func (self *publisherRun) sendReset() error {
 // Reads the stream past the position and sends what it holds as one batch, or answers why a reset must
 // go instead. The position follows each frame sent.
 func (self *publisherRun) sendHints() error {
-	settings := self.publisher.settings
-	redis := self.env.Redis
-	streamKey := HintStreamKey(self.env.ClientId)
-	batch := []*publisherHint{}
-	byteCount := int64(0)
-	after := self.position.streamId
-	for {
-		testHookBarrier("pushservice.publisher.read.before", self.barrierKey)
-		entries, err := redis.StreamRange(self.ctx, streamKey, after, settings.ReadHintCount)
-		testHookBarrier("pushservice.publisher.read.after", self.barrierKey)
-		if err != nil {
-			self.publisher.stats.redisErrorCount.Add(1)
-			return err
-		}
-		for _, entry := range entries {
-			hint, err := ParseHintEntry(entry)
-			if err != nil {
-				self.publisher.stats.gapCount.Add(1)
-				return errPublisherGap
-			}
-			if len(batch) == 0 && self.position.hasSeq && hint.Seq != self.position.seq+1 {
-				// trimmed past the position, or n restarted with the keys' hour
-				self.publisher.stats.gapCount.Add(1)
-				return errPublisherGap
-			}
-			byteCount += int64(proto.Size(hint))
-			if settings.QueueByteCount < byteCount {
-				self.publisher.stats.overflowCount.Add(1)
-				return errPublisherOverflow
-			}
-			batch = append(batch, &publisherHint{streamId: entry.Id, hint: hint})
-		}
-		if int64(len(entries)) < settings.ReadHintCount {
-			break
-		}
-		after = entries[len(entries)-1].Id
+	batch, err := self.readBatch()
+	if err != nil {
+		return err
 	}
-
 	if len(batch) == 0 {
-		// nothing past the position: n must still be where the position left it, or the stream was made
-		// again below the last id sent
-		value, found, err := redis.Get(self.ctx, HintSeqKey(self.env.ClientId))
-		if err != nil {
-			self.publisher.stats.redisErrorCount.Add(1)
+		// nothing past the position: n must still be where the position left it. A hint written between
+		// the read and n's read moves n too, so a moved n reads again, and only a stream that still shows
+		// nothing past the position was made again below the last id sent
+		moved, err := self.seqMoved()
+		if err != nil || !moved {
 			return err
 		}
-		if found && self.position.hasSeq {
-			if seq, err := strconv.ParseUint(string(value), 10, 64); err != nil || seq != self.position.seq {
-				self.publisher.stats.gapCount.Add(1)
-				return errPublisherGap
-			}
+		if batch, err = self.readBatch(); err != nil {
+			return err
 		}
-		return nil
+		if len(batch) == 0 {
+			self.publisher.stats.gapCount.Add(1)
+			return errPublisherGap
+		}
 	}
 
 	// every hint of a topic but the batch's last of it loses its bytes; a topic the client is not told
@@ -598,6 +565,62 @@ func (self *publisherRun) sendHints() error {
 		self.position = publisherPosition{streamId: item.streamId, seq: item.hint.Seq, hasSeq: true}
 	}
 	return nil
+}
+
+// Every entry past the position, read page after page, or why a reset must go instead: a first entry
+// whose seq does not follow the position's, an entry that does not parse, or more than QueueByteCount.
+func (self *publisherRun) readBatch() ([]*publisherHint, error) {
+	settings := self.publisher.settings
+	streamKey := HintStreamKey(self.env.ClientId)
+	batch := []*publisherHint{}
+	byteCount := int64(0)
+	after := self.position.streamId
+	for {
+		testHookBarrier("pushservice.publisher.read.before", self.barrierKey)
+		entries, err := self.env.Redis.StreamRange(self.ctx, streamKey, after, settings.ReadHintCount)
+		testHookBarrier("pushservice.publisher.read.after", self.barrierKey)
+		if err != nil {
+			self.publisher.stats.redisErrorCount.Add(1)
+			return nil, err
+		}
+		for _, entry := range entries {
+			hint, err := ParseHintEntry(entry)
+			if err != nil {
+				self.publisher.stats.gapCount.Add(1)
+				return nil, errPublisherGap
+			}
+			if len(batch) == 0 && self.position.hasSeq && hint.Seq != self.position.seq+1 {
+				// trimmed past the position, or n restarted with the keys' hour
+				self.publisher.stats.gapCount.Add(1)
+				return nil, errPublisherGap
+			}
+			byteCount += int64(proto.Size(hint))
+			if settings.QueueByteCount < byteCount {
+				self.publisher.stats.overflowCount.Add(1)
+				return nil, errPublisherOverflow
+			}
+			batch = append(batch, &publisherHint{streamId: entry.Id, hint: hint})
+		}
+		if int64(len(entries)) < settings.ReadHintCount {
+			return batch, nil
+		}
+		after = entries[len(entries)-1].Id
+	}
+}
+
+// Whether n is no longer the position's seq. An absent n, the keys gone with their hour, has not moved:
+// the next hint makes them again, and its first entry's seq shows the restart.
+func (self *publisherRun) seqMoved() (bool, error) {
+	value, found, err := self.env.Redis.Get(self.ctx, HintSeqKey(self.env.ClientId))
+	if err != nil {
+		self.publisher.stats.redisErrorCount.Add(1)
+		return false, err
+	}
+	if !found || !self.position.hasSeq {
+		return false, nil
+	}
+	seq, err := strconv.ParseUint(string(value), 10, 64)
+	return err != nil || seq != self.position.seq, nil
 }
 
 // Raises ack to the highest acked batch end, once each and only upward. A script that fails is not
