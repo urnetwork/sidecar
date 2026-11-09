@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -237,11 +238,18 @@ func (self *testEnrollment) bind(t *testing.T, generation int64, keys *sidecarId
 	if _, err := persistSidecarIdentity(self.secrets, keys, signedBinding); err != nil {
 		t.Fatal(err)
 	}
-	// a token that refreshes days from now, so no refresh runs in a test
-	self.byJwt = testClientJwtAt(NewId().String(), time.Now(), 7*24*time.Hour)
+	// a token of this client that refreshes days from now, so no refresh runs in a test
+	self.byJwt = testClientTokenOf(self.networkId, self.clientId)
 	if err := persistSidecarByJwt(self.secrets, self.byJwt); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A client token of networkId's clientId, issued now for 7 days, with its own jti.
+func testClientTokenOf(networkId Id, clientId Id) string {
+	now := time.Now()
+	return testClientJwt(fmt.Sprintf(`{"jti":%q,"iat":%d,"exp":%d,"network_id":%q,"client_id":%q,"device_id":%q}`,
+		NewId().String(), now.Unix(), now.Add(7*24*time.Hour).Unix(), networkId, clientId, NewId()))
 }
 
 // Settings for a test Sidecar on platform.
@@ -756,4 +764,18 @@ func TestCoreHintIsABareResync(t *testing.T) {
 // A store that is not a SidecarInstance's.
 type refusingTestStore struct {
 	SidecarStore
+}
+
+// A token of another client beside the identity, which an enrollment a kill cut short can leave, starts nothing.
+func TestTokenOfAnotherClientStartsNothing(t *testing.T) {
+	instance, enrollment := newTestEnrolledInstance(t)
+	if err := persistSidecarByJwt(enrollment.secrets, testClientTokenOf(enrollment.networkId, NewId())); err != nil {
+		t.Fatal(err)
+	}
+	platform := newTestSidecarPlatform()
+	sidecar := newTestRunningSidecar(t, instance, &enrollment.networkId, testSidecarSettings(platform))
+	awaitSidecarStatus(t, sidecar, atStatus(SidecarStateUnenrolled, 1))
+	if len(platform.openedClients()) != 0 {
+		t.Error("a token of another client started a generation")
+	}
 }

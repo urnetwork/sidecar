@@ -54,6 +54,8 @@ func (self *Sidecar) run() {
 			self.leg.close()
 		}
 	}()
+	// D-TRUST-3's alarm runs at the start and each SyncRefetchInterval after
+	hostStoreScan := self.clock.After(0)
 	for {
 		_, wakeChanged := self.wakes.Get()
 		instanceState, instanceChanged := self.instance.State()
@@ -66,7 +68,31 @@ func (self *Sidecar) run() {
 			return
 		case <-wakeChanged:
 		case <-instanceChanged:
+		case <-hostStoreScan:
+			self.alarmHostCredentialStores()
+			hostStoreScan = self.clock.After(self.settings.ProtocolSettings.SyncRefetchInterval)
 		}
+	}
+}
+
+// The stores on this host holding a readable network credential (D-TRUST-3).
+func (self *Sidecar) hostCredentialStores() []SidecarHostCredentialStore {
+	if self.hostStores == nil {
+		return nil
+	}
+	return self.hostStores()
+}
+
+// An enrolled sidecar's alarm while a store on this host holds a readable network credential: one credential_store
+// event, naming no path or value (plan-CORE-host-store-refusal). By state, with no signal to wait for, so a host the
+// releases cleaned stops alarming by itself.
+func (self *Sidecar) alarmHostCredentialStores() {
+	if self.currentIdentity() == nil {
+		return
+	}
+	if stores := self.hostCredentialStores(); 0 < len(stores) {
+		self.log.Warningf("[sidecar]a URnetwork app or extension on this host holds a network credential")
+		self.emitEvent(SidecarEvent{Kind: SidecarEventCredentialStore})
 	}
 }
 
@@ -173,6 +199,14 @@ func (self *Sidecar) reconcileOpen() {
 		if !errors.Is(err, ErrSidecarStoreAbsent) {
 			self.log.Warningf("[sidecar]the client token did not load: %s", err)
 		}
+		self.stopGeneration()
+		self.leaveForUnenrolled("")
+		return
+	}
+	if _, tokenClientId, ok := sidecarJwtClient(byJwt); !ok || tokenClientId != identity.ClientId {
+		// the identity and its token are written one after the other, so an enrollment a kill cut short can leave
+		// one generation's token beside another's binding: that runs no client
+		self.log.Warningf("[sidecar]the client token is not generation %d's", identity.Generation)
 		self.stopGeneration()
 		self.leaveForUnenrolled("")
 		return

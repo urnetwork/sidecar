@@ -1,0 +1,2 @@
+go test fuzz v1
+string("by-us-fmt-1-edge-0")

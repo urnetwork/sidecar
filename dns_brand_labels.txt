@@ -1,0 +1,61 @@
+# The brands §12.5's confusable rule protects (R-DNS-6): a name one of whose - tokens reads as one
+# of these after the rule's mapping is refused, and each is also a reserved label. One brand a line,
+# lowercase letters and digits only, since names are compared a token at a time. Lines that are
+# blank or start with # say nothing.
+#
+# This is the list's data and not its policy: ABUSE-M5-01's screen extends it with each brand's
+# domains, and choosing and keeping the curated list is the abuse desk's (§21.6).
+
+# URnetwork's own, from §12.5's block
+ur
+urnetwork
+bringyour
+recurd
+burner
+
+# a seed of the brands public phishing reports name most often, for the curated list §12.5 asks for
+adobe
+airbnb
+alibaba
+aliexpress
+amazon
+americanexpress
+apple
+bankofamerica
+binance
+chase
+citibank
+coinbase
+dhl
+docusign
+dropbox
+ebay
+facebook
+fedex
+gmail
+google
+hsbc
+icloud
+instagram
+linkedin
+mastercard
+meta
+metamask
+microsoft
+netflix
+office365
+onedrive
+outlook
+paypal
+roblox
+santander
+spotify
+telegram
+twitter
+ups
+usps
+visa
+walmart
+wellsfargo
+whatsapp
+yahoo

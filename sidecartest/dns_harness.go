@@ -516,6 +516,11 @@ func (self *DnsHarness) runningEdge(ns string) *dnsHarnessEdge {
 // A killed edge's goroutines end with its context, and Close does not wait for them, since a schedule
 // may hold one at a barrier until its end. The Net's Close closes these again, which does nothing
 // more. Safe more than once.
+//
+// Whether a process still runs is the Net's to say, since it forgets a killed one. Its context
+// cannot say: the end of a test cancels t.Context, and every process context with it, before the
+// test's cleanups run, so a Close in a cleanup would see every edge as killed and leave each to
+// write its last snapshot while Directory goes.
 func (self *DnsHarness) Close() {
 	edges := []*dnsHarnessEdge{}
 	var block *dnsHarnessApi
@@ -524,18 +529,18 @@ func (self *DnsHarness) Close() {
 		defer self.stateLock.Unlock()
 		self.closed = true
 		for _, ns := range self.dnsSettings.Ns {
-			if edge := self.nsEdges[ns]; edge != nil && edge.ctx.Err() == nil {
+			if edge := self.nsEdges[ns]; edge != nil {
 				edges = append(edges, edge)
 			}
 		}
-		if self.api != nil && self.api.ctx.Err() == nil {
-			block = self.api
-		}
+		block = self.api
 	}()
 	for _, edge := range edges {
-		edge.Close()
+		if self.net.Process(self.EdgeProcess(edge.ns)) == edge {
+			edge.Close()
+		}
 	}
-	if block != nil {
+	if block != nil && self.net.Process(self.ApiProcess()) == block.api {
 		block.api.Close()
 	}
 	self.bumpInstances()

@@ -69,6 +69,9 @@ func (self *SidecarServiceToken) daemonSecret() {}
 func (self *SidecarEnrollResult) daemonSecret() {}
 
 // A secret no reply carries.
+func (self *SidecarEnrollCredential) daemonSecret() {}
+
+// A secret no reply carries.
 func (self *SidecarAuthClientResult) daemonSecret() {}
 
 // A secret no reply carries.

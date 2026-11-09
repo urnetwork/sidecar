@@ -168,6 +168,7 @@ func newSidecarBase(host SidecarHost, settings *SidecarSettings) *Sidecar {
 		eventCallbacks: NewCallbackList[SidecarEventFunction](),
 		wakes:          NewMonitorValue[uint64](0),
 		clock:          settings.ClockOrReal(),
+		hostStores:     HostCredentialStores,
 		lifecycle:      sidecarLifecycle{state: SidecarStateLocked},
 	}
 }
