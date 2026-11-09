@@ -242,8 +242,16 @@ type DnsProbeSettings struct {
 	// The ports tlsedge answers on: 443, and 8443, 8883 and 5671 unsplit (§13.4; owner decision 121).
 	// Each once, from 1 to 65535.
 	Ports []int `yaml:"ports"`
-	// Probes in flight at once in a round, across interfaces, families and ports. Must be positive.
+	// Probes in flight at once in a round, across interfaces, families, ports and route probes. Must be
+	// positive.
 	ConcurrencyCount int `yaml:"concurrency"`
+	// The port route probes reach the split on: 443, where §13.4's map runs. From 1 to 65535.
+	RoutePort int `yaml:"route_port"`
+	// The most added hosts of one reported map version an edge route-probes: §13.4's 16. At least 1.
+	RouteHostCount int `yaml:"route_hosts"`
+	// Seconds the post of a round's route-probe report may take before the round gives it up, its
+	// passes to be probed again. Must be positive and below interval_s.
+	ReportTimeoutSeconds int `yaml:"report_timeout_s"`
 }
 
 // How dnsedge reads its sockets and drains (DNS-M5-05).
@@ -307,11 +315,14 @@ func DefaultDnsSettings() *DnsSettings {
 			DrainSeconds:      5,
 		},
 		Probe: DnsProbeSettings{
-			IntervalSeconds:  10,
-			TimeoutSeconds:   3,
-			FailureCount:     3,
-			Ports:            []int{443, 8443, 8883, 5671},
-			ConcurrencyCount: 64,
+			IntervalSeconds:      10,
+			TimeoutSeconds:       3,
+			FailureCount:         3,
+			Ports:                []int{443, 8443, 8883, 5671},
+			ConcurrencyCount:     64,
+			RoutePort:            443,
+			RouteHostCount:       16,
+			ReportTimeoutSeconds: 3,
 		},
 		Feed: DnsFeedSettings{
 			RetryMinSeconds:      1,
@@ -491,6 +502,12 @@ func (self *DnsProbeSettings) validate() error {
 		return errors.New("ports is empty")
 	case self.ConcurrencyCount <= 0:
 		return errors.New("concurrency is not positive")
+	case self.RoutePort < 1 || 65535 < self.RoutePort:
+		return fmt.Errorf("route_port %d is no port", self.RoutePort)
+	case self.RouteHostCount < 1:
+		return errors.New("route_hosts is below 1")
+	case self.ReportTimeoutSeconds <= 0 || self.IntervalSeconds <= self.ReportTimeoutSeconds:
+		return errors.New("report_timeout_s is not positive and below interval_s")
 	}
 	for index, port := range self.Ports {
 		if port < 1 || 65535 < port {

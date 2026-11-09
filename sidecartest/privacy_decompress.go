@@ -4,6 +4,13 @@
 // it decodes cleanly, or, for a format whose header says what it is, when it decoded something before
 // it stopped; a headerless format that fails says nothing, since deflate and brotli read random bytes
 // as some output before they fail. Bounds hold a decompression bomb to them.
+//
+// Where a stream may start: gzip and zstd wherever their magic appears, and zlib wherever one of the
+// four headers a 32 KiB window gives appears; any zlib header, deflate and brotli, which carry no magic,
+// at the body's start and after each NUL, the separator the fakes put between an item's fields (a
+// Redis key and its value, a task's key and arguments). A deflate or brotli stream inside text, a log
+// line's or a JSON document's, is not opened: §22.7's self-test leaks those forms only through paths
+// that hand a value over whole (leak_enabled.go's Embeds).
 
 package sidecartest
 
@@ -39,7 +46,13 @@ type privacyView struct {
 	body []byte
 }
 
-var zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+var (
+	zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+	// gzip's two magic bytes and its one compression method, deflate
+	gzipMagic = []byte{0x1f, 0x8b, 0x08}
+	// zlib's headers for a 32 KiB window, at each of its four levels
+	zlibMagics = [][]byte{{0x78, 0x01}, {0x78, 0x5e}, {0x78, 0x9c}, {0x78, 0xda}}
+)
 
 // Reads what reader decodes, to the bound. ok when it decoded cleanly, or, if partial is allowed, when
 // it decoded something at all.
@@ -54,6 +67,37 @@ func readPrivacyView(reader io.Reader, settings *privacyDecodeSettings, partial 
 	return body, true
 }
 
+// How many starts of one format a body's views are opened at, so a body full of a magic's bytes costs a
+// bounded number of decodes.
+const privacyViewStartCount = 16
+
+// Where a stream of a format may start in body: every index of magic, or, with no magic, the start and
+// each byte after a NUL.
+func privacyViewStarts(body []byte, magic []byte) []int {
+	starts := []int{}
+	if magic != nil {
+		for offset := 0; len(starts) < privacyViewStartCount; {
+			index := bytes.Index(body[offset:], magic)
+			if index < 0 {
+				break
+			}
+			starts = append(starts, offset+index)
+			offset += index + 1
+		}
+		return starts
+	}
+	starts = append(starts, 0)
+	for offset := 0; len(starts) < privacyViewStartCount; {
+		index := bytes.IndexByte(body[offset:], 0)
+		if index < 0 || len(body) <= offset+index+1 {
+			break
+		}
+		starts = append(starts, offset+index+1)
+		offset += index + 1
+	}
+	return starts
+}
+
 // The views body opens, one level down.
 func openPrivacyViews(body []byte, settings *privacyDecodeSettings) []*privacyView {
 	if len(body) < 2 || settings.MaxViewByteCount < len(body) {
@@ -65,30 +109,47 @@ func openPrivacyViews(body []byte, settings *privacyDecodeSettings) []*privacyVi
 			views = append(views, &privacyView{name: name, body: view})
 		}
 	}
-	if body[0] == 0x1f && body[1] == 0x8b {
-		if reader, err := gzip.NewReader(bytes.NewReader(body)); err == nil {
+	for _, start := range privacyViewStarts(body, gzipMagic) {
+		if reader, err := gzip.NewReader(bytes.NewReader(body[start:])); err == nil {
+			// one member: a second gzip after it is its own start
+			reader.Multistream(false)
 			view, ok := readPrivacyView(reader, settings, true)
 			add("gzip", view, ok)
 		}
 	}
-	// zlib's header: deflate with a window, and a check over its two bytes
-	if body[0]&0x0f == 8 && (uint16(body[0])<<8|uint16(body[1]))%31 == 0 {
-		if reader, err := zlib.NewReader(bytes.NewReader(body)); err == nil {
+	zlibStarts := map[int]bool{}
+	for _, magic := range zlibMagics {
+		for _, start := range privacyViewStarts(body, magic) {
+			zlibStarts[start] = true
+		}
+	}
+	for _, start := range privacyViewStarts(body, nil) {
+		field := body[start:]
+		// zlib's header: deflate with a window, and a check over its two bytes
+		if 2 <= len(field) && field[0]&0x0f == 8 && (uint16(field[0])<<8|uint16(field[1]))%31 == 0 {
+			zlibStarts[start] = true
+		}
+	}
+	for start := range zlibStarts {
+		if reader, err := zlib.NewReader(bytes.NewReader(body[start:])); err == nil {
 			view, ok := readPrivacyView(reader, settings, true)
 			add("zlib", view, ok)
 		}
 	}
-	if bytes.HasPrefix(body, zstdMagic) {
-		if decoder, err := zstd.NewReader(bytes.NewReader(body), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(uint64(settings.MaxViewByteCount))); err == nil {
+	for _, start := range privacyViewStarts(body, zstdMagic) {
+		if decoder, err := zstd.NewReader(bytes.NewReader(body[start:]), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(uint64(settings.MaxViewByteCount))); err == nil {
 			view, ok := readPrivacyView(decoder, settings, true)
 			add("zstd", view, ok)
 			decoder.Close()
 		}
 	}
-	view, ok := readPrivacyView(flate.NewReader(bytes.NewReader(body)), settings, false)
-	add("deflate", view, ok)
-	view, ok = readPrivacyView(brotli.NewReader(bytes.NewReader(body)), settings, false)
-	add("brotli", view, ok)
+	for _, start := range privacyViewStarts(body, nil) {
+		field := body[start:]
+		view, ok := readPrivacyView(flate.NewReader(bytes.NewReader(field)), settings, false)
+		add("deflate", view, ok)
+		view, ok = readPrivacyView(brotli.NewReader(bytes.NewReader(field)), settings, false)
+		add("brotli", view, ok)
+	}
 	if view, ok := decodeQuotedPrintable(body); ok {
 		add("quoted-printable", view, true)
 	}

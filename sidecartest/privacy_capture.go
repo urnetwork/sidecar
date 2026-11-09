@@ -22,8 +22,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-
-	"github.com/urnetwork/connect"
 )
 
 // §22.7: canaries are 32 random bytes.
@@ -146,8 +144,11 @@ func (self *PrivacyFinding) String() string {
 	return fmt.Sprintf("%s %s in %s %s at %d as %s", self.NeedleKind, self.Needle, self.Class, where, self.Offset, self.Form)
 }
 
-// A finding's NeedleKind for a secret the scan refused.
-const privacyNeedleRefused = "refused"
+// A finding's NeedleKind for what a rule found: a secret the scan refused, a frame not sealed.
+const (
+	privacyNeedleRefused  = "refused"
+	privacyNeedleUnsealed = "unsealed frame"
+)
 
 // A value a server may see, by §2.8's row: hits of its kind in its class pass.
 type privacyDeclaration struct {
@@ -157,15 +158,22 @@ type privacyDeclaration struct {
 }
 
 type PrivacyCapture struct {
-	stateLock    sync.Mutex
-	needles      []*privacyNeedle
-	refusals     []*PrivacyFinding
+	stateLock sync.Mutex
+	needles   []*privacyNeedle
+	// what a rule found rather than a needle: a secret refused, a frame not sealed
+	ruleFindings []*PrivacyFinding
 	items        []*PrivacyItem
 	sources      []func() []*PrivacyItem
 	declarations []*privacyDeclaration
+	// each request a server took, in order (RequestLog)
+	requests []*privacyRequest
+	// each frame's size, by pair, in order (FrameSizes)
+	frameSizes map[privacyPair][]int
 	// built from needles when Scan first needs it, and again when needles change
 	matcher            *privacyMatcher
 	matcherNeedleCount int
+	// forms the scanner leaves out, which only the self-test's mutants set (leak_test.go)
+	withoutForms []string
 }
 
 func NewPrivacyCapture() *PrivacyCapture {
@@ -206,7 +214,7 @@ func (self *PrivacyCapture) AddSecret(kind string, secret []byte) {
 	if len(secret) < privacySecretMinByteCount {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.refusals = append(self.refusals, &PrivacyFinding{
+		self.ruleFindings = append(self.ruleFindings, &PrivacyFinding{
 			Needle:     kind,
 			NeedleKind: privacyNeedleRefused,
 			Form:       fmt.Sprintf("a %d-byte secret is under %d bytes, so its encodings turn up by chance: give the hook the key itself", len(secret), privacySecretMinByteCount),
@@ -223,7 +231,7 @@ func (self *PrivacyCapture) Forbid(label string, value []byte) {
 	if len(value) < privacyValueMinByteCount {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		self.refusals = append(self.refusals, &PrivacyFinding{
+		self.ruleFindings = append(self.ruleFindings, &PrivacyFinding{
 			Needle:     label,
 			NeedleKind: privacyNeedleRefused,
 			Form:       fmt.Sprintf("a %d-byte value is under the scan's %d", len(value), privacyValueMinByteCount),
@@ -283,11 +291,6 @@ func (self *PrivacyCapture) AddSource(source func() []*PrivacyItem) {
 	self.sources = append(self.sources, source)
 }
 
-// CC2: one frame through the exchange. It is copied, since the sender's pool owns the original.
-func (self *PrivacyCapture) AddFrame(source connect.Id, destination connect.Id, frame []byte) {
-	self.Add(PrivacyClassFrame, fmt.Sprintf("frame %s to %s", source, destination), bytes.Clone(frame))
-}
-
 // How many items of a class the capture holds now, so a test can see the scan had something to read.
 // A bare point counts every class under it.
 func (self *PrivacyCapture) ItemCount(class PrivacyClass) int {
@@ -325,11 +328,11 @@ func (self *PrivacyCapture) Scan() []*PrivacyFinding {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.matcher == nil || self.matcherNeedleCount != len(self.needles) {
-			self.matcher = newPrivacyMatcher(self.needles)
+			self.matcher = newPrivacyMatcher(self.needles, self.withoutForms)
 			self.matcherNeedleCount = len(self.needles)
 		}
 		matcher = self.matcher
-		refusals = slices.Clone(self.refusals)
+		refusals = slices.Clone(self.ruleFindings)
 		declarations = slices.Clone(self.declarations)
 	}()
 	findings := slices.Clone(refusals)

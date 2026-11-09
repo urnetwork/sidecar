@@ -706,3 +706,22 @@ func TestTheRepositoryHasASeedsDirectory(t *testing.T) {
 		t.Errorf("%s has no README: %v", directory, err)
 	}
 }
+
+// A twin's seeds leave their traces under the twin's name, and the row's run replays them too.
+func TestCheckRowReplaysATwinsCommittedTraces(t *testing.T) {
+	quota := &toyQuota{enabled: true}
+	settings := toyRuleSettings(t)
+	twinRun := runBuilt(t.Context(), toyQuotaSuccess(quota), nil, func(schedule *Schedule) { schedule.Seed = 3 })
+	if twinRun.Err != nil {
+		t.Fatalf("%s", twinRun)
+	}
+	trace := TraceOf(twinRun)
+	trace.Id = "FS-2 twin"
+	if _, err := WriteTrace(settings.SeedsDirectory, trace); err != nil {
+		t.Fatal(err)
+	}
+	report := CheckRow(t.Context(), &Registration{Row: "FS-2", Tiers: []Tier{TierT2}, Build: Twin(toyQuotaRefusal(quota), toyQuotaSuccess(quota))}, settings)
+	if report.Failed() || len(report.Replays) != 1 || report.Replays[0].Id != "FS-2 twin" {
+		t.Errorf("%s; replays %v", report, report.Replays)
+	}
+}

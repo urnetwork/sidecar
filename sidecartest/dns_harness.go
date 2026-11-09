@@ -617,14 +617,23 @@ func (self *DnsHarness) buildEdge(ctx context.Context, ns string, host *sidecar.
 	if err != nil {
 		return nil, err
 	}
+	client := &http.Client{Transport: self.transport}
+	bearer := self.classBearers[dnsservice.DnsCallerEdge]
+	// the block answers route-probes only once DNS-M6-03 adds the route, so a report fails until then
+	routeProbes, err := dnsservice.NewDnsRouteProbeSinkHttp(self.apiUrl, bearer, client, self.dnsSettings)
+	if err != nil {
+		edge.Close()
+		return nil, err
+	}
 	prober, err := dnsservice.NewProber(ctx, processHost, self.dnsSettings, &dnsservice.ProberDeps{
-		Dialer: &dnsHarnessProbeDialer{harness: self},
+		Dialer:      &dnsHarnessProbeDialer{harness: self},
+		RouteProbes: routeProbes,
 	}, edge.SetHealthySet)
 	if err != nil {
 		edge.Close()
 		return nil, err
 	}
-	feed, err := dnsservice.NewDnsFeedHttp(self.apiUrl, self.classBearers[dnsservice.DnsCallerEdge], &http.Client{Transport: self.transport}, self.dnsSettings)
+	feed, err := dnsservice.NewDnsFeedHttp(self.apiUrl, bearer, client, self.dnsSettings)
 	if err != nil {
 		prober.Close()
 		edge.Close()
@@ -1114,22 +1123,28 @@ func newDnsHarnessKeys(net *Net, settings *DnsHarnessSettings) (*dnsHarnessKeys,
 		rootAnchors: map[string][]*dns.DNSKEY{},
 		rootWindows: map[string]map[int64]*dnsservice.DnsKeyWindow{},
 	}
+	// miekg/dns will not sign under a key whose tag is 0, and about one random key in 65536 has
+	// that tag, so such a key is drawn again.
 	newKey := func(flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey, error) {
-		record := &dns.DNSKEY{
-			Hdr:       dns.RR_Header{Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: settings.Keys.DnskeyTtl},
-			Flags:     flags,
-			Protocol:  3,
-			Algorithm: dns.ECDSAP256SHA256,
+		for {
+			record := &dns.DNSKEY{
+				Hdr:       dns.RR_Header{Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: settings.Keys.DnskeyTtl},
+				Flags:     flags,
+				Protocol:  3,
+				Algorithm: dns.ECDSAP256SHA256,
+			}
+			private, err := record.Generate(256)
+			if err != nil {
+				return nil, nil, err
+			}
+			key, ok := private.(*ecdsa.PrivateKey)
+			if !ok {
+				return nil, nil, errors.New("miekg made no ecdsa key")
+			}
+			if record.KeyTag() != 0 {
+				return record, key, nil
+			}
 		}
-		private, err := record.Generate(256)
-		if err != nil {
-			return nil, nil, err
-		}
-		key, ok := private.(*ecdsa.PrivateKey)
-		if !ok {
-			return nil, nil, errors.New("miekg made no ecdsa key")
-		}
-		return record, key, nil
 	}
 	kskRecord, kskPrivate, err := newKey(dns.ZONE | dns.SEP)
 	if err != nil {

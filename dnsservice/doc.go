@@ -15,7 +15,8 @@
 //     build and key set passes before it serves.
 //   - edge.go and rrl.go, dnsedge: UDP and TCP 53 answered from the view FeedLoop publishes, with
 //     response-rate limiting and no query log.
-//   - probe.go and probe_tls.go, the lb interface probes and the healthy set edge rows answer from.
+//   - probe.go and probe_tls.go, the lb interface probes and the healthy set edge rows answer from;
+//     probe_route.go, the custom-host map's route probes on the same rounds, posted to the block.
 //   - feed.go and snapshot_file.go, the edge's feed loop: rows applied and checked before they serve,
 //     reloads and their diffs, and the local snapshot a restart serves from.
 //   - api.go, api_feed.go and api_ready.go, the API block's internal routes: the feed, GET ready and
