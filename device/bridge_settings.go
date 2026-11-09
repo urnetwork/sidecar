@@ -7,6 +7,7 @@ package device
 
 import (
 	"errors"
+	"net/netip"
 	"time"
 )
 
@@ -76,12 +77,20 @@ type BridgeSettings struct {
 	LinkTargetKey BridgeTargetKeyFunction
 
 	// The per-source token bucket a reject enters the tun through (§17.5's rejects row): 20 a second, a burst of 40,
-	// since connect writes policy resets unthrottled. Both positive.
+	// since connect writes policy resets unthrottled. Both positive, and the burst at most 16,383.
 	RejectPerSecond int
 	RejectBurst     int
+	// The sources whose buckets a bridge keeps at once: 256, rounded up to a power of two. A source whose hash finds
+	// every slot it may take held by another source short of a full bucket sends no reject, which is counted.
+	// Positive.
+	RejectSourceSlotCount int
 	// How long an entry whose last advertiser was revoked answers its packets with a reset or a prohibited reply
 	// before it leaves the table (§17.8's revocation row): 600 s. Positive.
 	RejectEntryHoldTimeout time.Duration
+	// The device's interface subnets, which a granted subnet route may not overlap (§17.7's sender conflicts): nil
+	// reads connect.LocalIpv4Networks, which is itself nil where interfaces cannot be enumerated, and then only the
+	// carve of Bridge.SetLocalAddresses applies.
+	LocalIpv4Networks func() []netip.Prefix
 
 	// The largest marshalled BridgeRules ParseBridgeRules reads: 8 MiB, as large as the posture keeps a state. Positive.
 	RulesMaxByteCount int
@@ -106,6 +115,7 @@ func DefaultBridgeSettings() *BridgeSettings {
 		LinkRoomIdleTimeout:    60 * time.Second,
 		RejectPerSecond:        20,
 		RejectBurst:            40,
+		RejectSourceSlotCount:  256,
 		RejectEntryHoldTimeout: 600 * time.Second,
 		RulesMaxByteCount:      8 * 1024 * 1024,
 		RulesMaxFieldCount:     1024 * 1024,
@@ -154,6 +164,7 @@ func (self *BridgeSettings) validate() error {
 		{name: "PinSlotCount", value: self.PinSlotCount},
 		{name: "RejectPerSecond", value: self.RejectPerSecond},
 		{name: "RejectBurst", value: self.RejectBurst},
+		{name: "RejectSourceSlotCount", value: self.RejectSourceSlotCount},
 		{name: "RulesMaxByteCount", value: self.RulesMaxByteCount},
 		{name: "RulesMaxFieldCount", value: self.RulesMaxFieldCount},
 		{name: "RevocationMaxCount", value: self.RevocationMaxCount},
@@ -165,6 +176,9 @@ func (self *BridgeSettings) validate() error {
 	}
 	if self.PinTouchInterval < 0 {
 		return errors.Join(ErrBridgeSettingsInvalid, errors.New("PinTouchInterval is negative"))
+	}
+	if bridgeRejectTokensMax < self.RejectBurst {
+		return errors.Join(ErrBridgeSettingsInvalid, errors.New("RejectBurst is past what a bucket holds"))
 	}
 	return nil
 }

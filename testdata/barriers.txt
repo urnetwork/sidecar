@@ -24,6 +24,8 @@ barrier bridge_pin_entry.swap.after device/bridge_pin_entry.go
 barrier bridge_pin_entry.swap.before device/bridge_pin_entry.go
 barrier bridge_state.close.after device/bridge_state.go
 barrier bridge_state.close.before device/bridge_state.go
+barrier bridge_state.route_swap.after device/bridge_state.go
+barrier bridge_state.route_swap.before device/bridge_state.go
 barrier certs.accept.write certsservice/order.go
 barrier certs.admit.transition certsservice/queue.go
 barrier config.apply config_apply.go

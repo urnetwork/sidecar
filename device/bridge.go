@@ -1,6 +1,7 @@
 // device.Bridge (§17.10, D-SDK-20): one network's bridge on one device, the keyless device role's half of §17. It
-// satisfies §18.6's deviceBridge as the tasks after this one add its parts: the sender's table and pins
-// (bridge_table.go, bridge_pin*.go), links through a BridgeHost, the provider hook, routes and the zone.
+// satisfies §18.6's deviceBridge: the sender's router (bridge_route.go) over its table and pins (bridge_table.go,
+// bridge_pin*.go) and its links (bridge_link*.go, through a BridgeHost), the route export (bridge_export.go), the
+// provider hook (bridge_egress*.go) and the zone.
 //
 // It embeds the posture (posture.go), so §17.8's states are one machine with §18.6's (D-SDK-13, D-BRIDGE-18): what is
 // in force is what the posture decided, and the bridge turns that decision into what it enforces (bridge_state.go). A
@@ -18,7 +19,9 @@ package device
 
 import (
 	"context"
+	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/urnetwork/connect"
@@ -36,6 +39,14 @@ type Bridge struct {
 	posture  *Posture
 	// the sender's pins, for every entry this bridge routes
 	pins *BridgePinTable
+	// the sender's links, its reject client and what Route hands the resolver's queries, and what Route reads, which
+	// every adoption rebuilds
+	links      *BridgeLinkManager
+	reject     *BridgeRejectClient
+	resolver   connect.UserNatClient
+	routeState atomic.Pointer[bridgeRouteState]
+	// removes the bridge's callbacks from its link manager
+	linkCallbackRemovals []func()
 	// the provider hook, the one value EgressHook returns, and the NATs it is installed on, which CloseFlows reaches
 	policy          *BridgeEgressPolicy
 	hook            *bridgeEgressHook
@@ -54,6 +65,14 @@ type Bridge struct {
 	revocations []PostureOverlayEntry
 	// when the hook's state was last published; under operationLock
 	publishedAt time.Time
+	// under operationLock: this device's local addresses, nil while unknown (SetLocalAddresses); each link entry's
+	// pins by prefix, and the exits'; the entries held as rejects, since they lost their last advertiser; and the
+	// overlay's drained rule ids, since the bridge first saw each
+	localAddrs        []netip.Addr
+	entryStates       map[netip.Prefix]*BridgeEntryState
+	egressState       *BridgeEntryState
+	heldRejects       map[netip.Prefix]time.Time
+	overlayDrainSince map[string]time.Time
 
 	stateLock sync.Mutex
 	// the posture's decision the bridge last adopted
@@ -64,6 +83,9 @@ type Bridge struct {
 	// what the last check of the clock found
 	drainingCount int
 	expiredCount  int
+	// what the last build of the route state found
+	routeFindings bridgeRouteFindings
+	egressMode    bridge.BridgeEgressMode
 }
 
 // Restores the posture from store and publishes its decision before it returns, then starts run. host builds links and
@@ -79,20 +101,31 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 	posture, decision := NewPosture(store, settings.PostureSettings)
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &Bridge{
-		ctx:             cancelCtx,
-		cancel:          cancel,
-		settings:        settings,
-		clock:           settings.clock(),
-		host:            host,
-		posture:         posture,
-		pins:            NewBridgePinTable(settings),
-		policy:          NewBridgeEgressPolicy(settings.PolicyProfile, settings),
-		closers:         connect.NewCallbackList[connect.EgressFlowCloser](),
-		changeCallbacks: connect.NewCallbackList[func()](),
-		deadline:        connect.NewMonitorValue(time.Time{}),
-		done:            make(chan struct{}),
+		ctx:               cancelCtx,
+		cancel:            cancel,
+		settings:          settings,
+		clock:             settings.clock(),
+		host:              host,
+		posture:           posture,
+		pins:              NewBridgePinTable(settings),
+		links:             NewBridgeLinkManager(cancelCtx, host, settings),
+		reject:            NewBridgeRejectClient(nil, settings),
+		policy:            NewBridgeEgressPolicy(settings.PolicyProfile, settings),
+		closers:           connect.NewCallbackList[connect.EgressFlowCloser](),
+		changeCallbacks:   connect.NewCallbackList[func()](),
+		deadline:          connect.NewMonitorValue(time.Time{}),
+		done:              make(chan struct{}),
+		entryStates:       map[netip.Prefix]*BridgeEntryState{},
+		heldRejects:       map[netip.Prefix]time.Time{},
+		overlayDrainSince: map[string]time.Time{},
 	}
+	// the resolver answers at BRIDGE-M4-14: until then a query to <block>.0.53 is refused as any service address is
+	self.resolver = self.reject
 	self.hook = &bridgeEgressHook{BridgeEgressPolicy: self.policy, bridge: self}
+	self.linkCallbackRemovals = []func(){
+		self.links.AddDownCallback(self.markLinkDown),
+		self.links.AddChangeCallback(self.relink),
+	}
 	// no hook is installed yet, so no flow exists to end
 	func() {
 		self.operationLock.Lock()
@@ -103,10 +136,28 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 	return self, nil
 }
 
-// Stops run and waits for it. The posture's store is the caller's.
+// Stops run and waits for it, then closes the links. The posture's store is the caller's.
 func (self *Bridge) Close() {
 	self.cancel()
 	<-self.done
+	for _, remove := range self.linkCallbackRemovals {
+		remove()
+	}
+	self.links.Close()
+}
+
+// Where packets the bridge answers itself enter the tun: rejects (§17.5's rejects row) and, under `ur tun`, the
+// resolver's replies (§17.10). receive borrows each packet; nil drops them, a reject counting as unsent. The sdk's
+// DeviceLocal and the CLI set it to their tun's write.
+func (self *Bridge) SetReceivePacket(receive connect.ReceivePacketFunction) {
+	self.reject.SetReceive(receive)
+}
+
+// Rebuilds what Route reads after the link manager changed a target's links: a rebuild replaced one, or one drained.
+func (self *Bridge) relink() {
+	self.apply(func() (PostureDecision, bool, error) {
+		return self.posture.Decision(), false, nil
+	})
 }
 
 // Waits for the next time a row's meaning changes, and publishes again then, until the bridge closes.
@@ -133,6 +184,8 @@ func (self *Bridge) run() {
 func (self *Bridge) Status() BridgeStatus {
 	pinnedPairCount := self.pins.PinnedCount()
 	verifiedCount, mismatchCount := self.policy.principalCounts()
+	linkOpenCount, linkBuildingCount := self.links.counts()
+	rejectSentCount, rejectUnsentCount := self.reject.Counts()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
@@ -144,8 +197,30 @@ func (self *Bridge) Status() BridgeStatus {
 		ExpiredCount:           self.expiredCount,
 		PinnedPairCount:        pinnedPairCount,
 		UnpinnedPickCount:      self.pins.UnpinnedPickCount(),
+		LinkOpenCount:          linkOpenCount,
+		LinkBuildingCount:      linkBuildingCount,
+		RejectSentCount:        rejectSentCount,
+		RejectUnsentCount:      rejectUnsentCount,
+		HeldRejectCount:        self.routeFindings.heldCount,
+		RouteConflictCount:     self.routeFindings.conflictCount,
+		EgressMode:             self.egressMode,
 		PostureAlarms:          append([]PostureAlarm(nil), self.decision.Alarms...),
 		Alarms:                 append([]BridgeAlarm(nil), self.alarms...),
+	}
+	if 0 < self.routeFindings.carvedAddressCount {
+		status.Alarms = append(status.Alarms, BridgeAlarm{
+			Kind:   BridgeAlarmCarvedAddress,
+			Reason: "a local address the physical path needs is a host's overlay address; cycle the block",
+		})
+	}
+	if 0 < self.routeFindings.conflictCount {
+		status.Alarms = append(status.Alarms, BridgeAlarm{
+			Kind:   BridgeAlarmRouteConflict,
+			Reason: "subnet routes overlapping a local network were dropped",
+		})
+	}
+	if 0 < linkBuildingCount {
+		status.Waits = append(status.Waits, BridgeWait{Kind: BridgeWaitLink, Count: linkBuildingCount})
 	}
 	if 0 < mismatchCount {
 		status.Alarms = append(status.Alarms, BridgeAlarm{
