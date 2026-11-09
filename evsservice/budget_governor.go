@@ -171,6 +171,14 @@ type WriteBudgetAllowance struct {
 	CopyProcessCount int `json:"copy_processes"`
 	// §19.9's line, which the loop sets from FileClusterAdminInfo (plan-EVSB-nvb-fields).
 	AtLimit bool `json:"at_limit"`
+	// This interval's figures for §19.8's liabilities, priced bytes: what the processes reported issued since
+	// the last step, P1's immediate and deferred parts together, and what they hold queued or outstanding.
+	P1IssuedByteCount        int64 `json:"p1_issued"`
+	FundedIssuedByteCount    int64 `json:"p2f_issued"`
+	UnfundedIssuedByteCount  int64 `json:"p2u_issued"`
+	P1QueuedByteCount        int64 `json:"p1_queued"`
+	FundedBacklogByteCount   int64 `json:"p2f_backlog"`
+	UnfundedBacklogByteCount int64 `json:"p2u_backlog"`
 	// By process id.
 	Shares map[string]*WriteBudgetShare `json:"shares,omitempty"`
 }
@@ -216,6 +224,10 @@ type GovernorState struct {
 	// The loop's drive counter readings, kept here so B and the readings it was taken at stay together.
 	// The governor does not read them.
 	CounterReadings map[string]uint64 `json:"counters,omitempty"`
+	// The loop's running total of each drive's written bytes, a fall or a new drive counting from zero, and
+	// its snapshots, for §19.8's DWPD windows (budget_loop.go). The governor does not read them either.
+	DriveTotals    map[string]uint64        `json:"totals,omitempty"`
+	DriveSnapshots []*GovernorDriveSnapshot `json:"snapshots,omitempty"`
 }
 
 // A deep copy.
@@ -239,6 +251,8 @@ func (self *GovernorState) clone() *GovernorState {
 		state.Processes[processId] = &copied
 	}
 	state.CounterReadings = maps.Clone(self.CounterReadings)
+	state.DriveTotals = maps.Clone(self.DriveTotals)
+	state.DriveSnapshots = cloneGovernorDriveSnapshots(self.DriveSnapshots)
 	return &state
 }
 
@@ -247,6 +261,16 @@ type Governor struct {
 	clusterId string
 	settings  *WriteBudgetSettings
 	state     *GovernorState
+	// funded backlog the loop counts beyond the processes' reports, priced bytes
+	standingFundedByteCount int64
+}
+
+// Sets the funded backlog the loop counts beyond what the processes report, for the steps that follow:
+// evacuation's batches still standing on the cluster, which their admissions paid for 25 h before the work
+// runs (budget_loop.go, §11.13's wallet row). It holds W's credit against the clamp and is no process's
+// demand, so it takes no share.
+func (self *Governor) SetStandingFundedBacklog(byteCount int64) {
+	self.standingFundedByteCount = max(0, byteCount)
 }
 
 // A governor resuming state, or starting B and W at zero when state is nil. settings may be nil for
@@ -429,7 +453,9 @@ func (self *Governor) Step(now time.Time, measuredByteCount int64, reports []*Wr
 	p0KindByteCounts := map[sidecar.WriteP0Kind]int64{}
 	var p0ByteCount, p1ByteCount, creditByteCount, unfundedByteCount, fundedByteCount, inFlightByteCount int64
 	var fundedDemandByteCount, fundedBacklogByteCount, unfundedDemandByteCount, unfundedBacklogByteCount int64
+	var p1QueuedByteCount int64
 	for _, live := range lives {
+		p1QueuedByteCount += live.report.P1QueuedByteCount
 		for kind, byteCount := range live.p0ByteCounts {
 			p0KindByteCounts[kind] += byteCount
 			p0ByteCount += byteCount
@@ -447,6 +473,8 @@ func (self *Governor) Step(now time.Time, measuredByteCount int64, reports []*Wr
 		fundedBacklogByteCount += max(fundedDemand, sumByteCounts(live.report.FundedBacklogByteCounts))
 		unfundedBacklogByteCount += max(unfundedDemand, sumByteCounts(live.report.UnfundedBacklogByteCounts))
 	}
+
+	fundedBacklogByteCount += self.standingFundedByteCount
 
 	// k, over the priced bytes issued to the drives: P0's, P1's immediate part and P2's
 	pricedByteCount := p0ByteCount + p1ByteCount + unfundedByteCount + fundedByteCount
@@ -631,5 +659,12 @@ func (self *Governor) Step(now time.Time, measuredByteCount int64, reports []*Wr
 		CopyOpsPerSecond:      copyOpsPerSecond,
 		CopyProcessCount:      copyProcessCount,
 		Shares:                shares,
+
+		P1IssuedByteCount:        p1Debit,
+		FundedIssuedByteCount:    fundedByteCount,
+		UnfundedIssuedByteCount:  unfundedByteCount,
+		P1QueuedByteCount:        p1QueuedByteCount,
+		FundedBacklogByteCount:   fundedBacklogByteCount,
+		UnfundedBacklogByteCount: unfundedBacklogByteCount,
 	}
 }
