@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -101,6 +102,9 @@ func TestEmbeddedHostListIsACopyEachCall(t *testing.T) {
 
 // ur.io's published copy is PublishedJson of the embedded table, byte for byte (SDK-M4-06 publishes it from mmm).
 func TestHostListMatchesPublished(t *testing.T) {
+	if runtime.GOOS == "js" {
+		t.Skip("a Worker has no files: the native legs compare the published copy")
+	}
 	path := filepath.Join("..", "mmm", "ur.io", "astro", "public", "recurd", "hosts", "v1.json")
 	published, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

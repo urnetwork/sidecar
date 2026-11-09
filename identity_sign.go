@@ -151,6 +151,13 @@ func (self *Sidecar) currentIdentity() *SidecarIdentity {
 	return self.identity.clone()
 }
 
+// This sidecar's ids, generation and public keys, a copy holding no private key, for a host such as §18.5's
+// GetSidecarId: nil before the keychain holds an identity, so while Locked before its first unlock and before
+// enrollment.
+func (self *Sidecar) Identity() *SidecarIdentity {
+	return self.currentIdentity()
+}
+
 // Points the sidecar at secrets, the core's namespace of its network's keychain, and reads the identity it holds:
 // what NewSidecar and an unlock do (CORE-M1-08), and enrollment once it has persisted one (CORE-M1-09).
 // ErrSidecarNoIdentity leaves the sidecar pointed at secrets with no identity, as before enrollment.
