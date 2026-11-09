@@ -148,6 +148,8 @@ type Subprotocol struct {
 	handlers sync.WaitGroup
 	// the PushClient serving this dispatcher's push, which Subscribe reaches (push_client.go)
 	pushClient atomic.Pointer[PushClient]
+	// HeadCheck's transport while one is attached (rpc_headcheck.go)
+	headCheck atomic.Pointer[headCheckTransport]
 
 	stats subprotocolStats
 }

@@ -259,6 +259,8 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 			}
 			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED, RequestId: requestId}
 		}
+		// the first RPC with a peer each HeadCheckInterval starts a HeadCheck beside it (rpc_headcheck_rounds.go)
+		self.headCheckOnExchange(peerId, messageType)
 		response, err := self.callOnce(ctx, peerId, messageType, body, requestId, deadline)
 		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_UNAUTHENTICATED && attempt == 0 {
 			self.forgetPeer(peerId)
