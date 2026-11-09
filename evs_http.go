@@ -91,6 +91,7 @@ type EvsError struct {
 	DepositHead *protocol.EvsDepositHead
 }
 
+// The status and code, and whether the refusal was recorded or its outcome is unknown.
 func (self *EvsError) Error() string {
 	text := fmt.Sprintf("evs refused: %d %s", self.Status, self.Code)
 	if self.Recorded {
@@ -290,6 +291,7 @@ type evsHttpBody struct {
 	done func()
 }
 
+// Closes the body and ends the call's deadline.
 func (self *evsHttpBody) Close() error {
 	err := self.ReadCloser.Close()
 	self.done()

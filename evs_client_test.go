@@ -207,53 +207,53 @@ func TestEvsTransportMapsEveryRefusalClass(t *testing.T) {
 		reply  *protocol.EvsRefusalReply
 		check  func(evsError *EvsError) bool
 	}{
-		{"scope", 403, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE},
-			func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE }},
-		{"quota payment", 402, &protocol.EvsRefusalReply{
+		{name: "scope", status: 403, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE},
+			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE }},
+		{name: "quota payment", status: 402, reply: &protocol.EvsRefusalReply{
 			Code:  protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT,
 			Quota: &protocol.EvsQuotaRefusal{LimitKey: "storage_bytes", Limit: 10, Used: 11, Upgrade: true},
-		}, func(e *EvsError) bool { return e.Quota.GetLimitKey() == "storage_bytes" && e.Quota.GetUpgrade() }},
-		{"quota limit", 403, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT},
-			func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT }},
-		{"path conflict", 409, &protocol.EvsRefusalReply{
+		}, check: func(e *EvsError) bool { return e.Quota.GetLimitKey() == "storage_bytes" && e.Quota.GetUpgrade() }},
+		{name: "quota limit", status: 403, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT},
+			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT }},
+		{name: "path conflict", status: 409, reply: &protocol.EvsRefusalReply{
 			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT,
 			Paths: []*protocol.EvsTokenPath{path.Proto()},
-		}, func(e *EvsError) bool {
+		}, check: func(e *EvsError) bool {
 			return len(e.Paths) == 1 && e.Paths[0].Equal(path) && e.PushId != nil && *e.PushId == pushId && !e.Recorded
 		}},
-		{"recorded", 409, &protocol.EvsRefusalReply{
+		{name: "recorded", status: 409, reply: &protocol.EvsRefusalReply{
 			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_DIRECTORY_FULL, Recorded: true,
-		}, func(e *EvsError) bool {
+		}, check: func(e *EvsError) bool {
 			return e.Recorded && e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_DIRECTORY_FULL
 		}},
-		{"format", 409, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED, NeedsFormat: 2},
-			func(e *EvsError) bool { return e.NeedsFormat == 2 }},
-		{"base stale", 409, &protocol.EvsRefusalReply{
+		{name: "format", status: 409, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED, NeedsFormat: 2},
+			check: func(e *EvsError) bool { return e.NeedsFormat == 2 }},
+		{name: "base stale", status: 409, reply: &protocol.EvsRefusalReply{
 			Code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE, DepositHead: &protocol.EvsDepositHead{Version: 7},
-		}, func(e *EvsError) bool { return e.DepositHead.GetVersion() == 7 }},
-		{"gate", 412, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED},
-			func(e *EvsError) bool {
+		}, check: func(e *EvsError) bool { return e.DepositHead.GetVersion() == 7 }},
+		{name: "gate", status: 412, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED},
+			check: func(e *EvsError) bool {
 				return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED && !e.RefusesNothing()
 			}},
-		{"path epoch due", 412, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE},
-			func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE }},
-		{"busy", 429, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BUSY, RetryAfterMs: 1500},
-			func(e *EvsError) bool { return e.RetryAfter == 1500*time.Millisecond && e.RefusesNothing() }},
-		{"unknown", 503, &protocol.EvsRefusalReply{
+		{name: "path epoch due", status: 412, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE},
+			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE }},
+		{name: "busy", status: 429, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BUSY, RetryAfterMs: 1500},
+			check: func(e *EvsError) bool { return e.RetryAfter == 1500*time.Millisecond && e.RefusesNothing() }},
+		{name: "unknown", status: 503, reply: &protocol.EvsRefusalReply{
 			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE,
 			Outcome: protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN,
-		}, func(e *EvsError) bool { return e.OutcomeUnknown && !e.RefusesNothing() }},
-		{"cluster full", 507, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL},
-			func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL }},
+		}, check: func(e *EvsError) bool { return e.OutcomeUnknown && !e.RefusesNothing() }},
+		{name: "cluster full", status: 507, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL},
+			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL }},
 		// a code whose status is not its own is not believed
-		{"mismatched code", 409, &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BUSY},
-			func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED }},
+		{name: "mismatched code", status: 409, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BUSY},
+			check: func(e *EvsError) bool { return e.Code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED }},
 	}
 	for _, c := range cases {
 		test := newEvsTestClient(t, evsRefusingHandler(t, c.status, c.reply, nil), newEvsTestStore(t))
 		err := test.client.http.callMessage(context.Background(), &evsCall{
 			route: "POST /evs/v1/repos/{repo_id}/push", method: http.MethodPost,
-			path: "/evs/v1/repos/" + evsTestId("repo").String() + "/push", repoId: evsTestId("repo"), role: evsScopeWrite,
+			path: "/evs/v1/repos/" + EvsKeyId(evsTestId("repo")) + "/push", repoId: evsTestId("repo"), role: evsScopeWrite,
 		}, nil)
 		evsError, ok := EvsErrorOf(err)
 		if !ok || evsError.Status != c.status || !c.check(evsError) {
@@ -271,7 +271,7 @@ func TestEvsTransportUnauthorizedAndForeignBodies(t *testing.T) {
 		writer.WriteHeader(http.StatusUnauthorized)
 	}), newEvsTestStore(t))
 	call := &evsCall{route: "GET /evs/v1/repos/{repo_id}/refs", method: http.MethodGet,
-		path: "/evs/v1/repos/" + evsTestId("repo").String() + "/refs", repoId: evsTestId("repo"), role: evsScopeRead}
+		path: "/evs/v1/repos/" + EvsKeyId(evsTestId("repo")) + "/refs", repoId: evsTestId("repo"), role: evsScopeRead}
 	if err := test.client.http.callMessage(context.Background(), call, nil); !errors.Is(err, ErrEvsUnauthorized) {
 		t.Errorf("401: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestEvsTransportRetriesOnlyWhatRefusesNothing(t *testing.T) {
 	}), newEvsTestStore(t))
 	reply := &protocol.EvsRefsReply{}
 	call := &evsCall{route: "GET /evs/v1/repos/{repo_id}/refs", method: http.MethodGet,
-		path: "/evs/v1/repos/" + evsTestId("repo").String() + "/refs", repoId: evsTestId("repo"), role: evsScopeRead, retry: true}
+		path: "/evs/v1/repos/" + EvsKeyId(evsTestId("repo")) + "/refs", repoId: evsTestId("repo"), role: evsScopeRead, retry: true}
 	if err := test.client.http.callMessage(context.Background(), call, reply); err != nil || reply.GetPushSequence() != 42 {
 		t.Fatalf("read: %v %v", err, reply)
 	}
@@ -348,11 +348,11 @@ func TestEvsTransportScopesAndUrls(t *testing.T) {
 		writer.WriteHeader(http.StatusOK)
 	}), newEvsTestStore(t))
 	call := &evsCall{route: "DELETE /evs/v1/repos/{repo_id}", method: http.MethodDelete,
-		path: "/evs/v1/repos/" + repoId.String() + "?now=1", repoId: repoId, role: evsScopeAdmin}
+		path: "/evs/v1/repos/" + EvsKeyId(repoId) + "?now=1", repoId: repoId, role: evsScopeAdmin}
 	if err := test.client.http.callMessage(context.Background(), call, nil); err != nil {
 		t.Fatal(err)
 	}
-	if seenPath != "https://evs.example/evs/v1/repos/"+repoId.String()+"?now=1" {
+	if seenPath != "https://evs.example/evs/v1/repos/"+EvsKeyId(repoId)+"?now=1" {
 		t.Errorf("url %s", seenPath)
 	}
 	if len(test.tokens.scopes) != 1 || len(test.tokens.scopes[0]) != 1 ||
@@ -467,7 +467,7 @@ func TestEvsReadRecordsBoundLeastRecentlyUsed(t *testing.T) {
 	for _, kept := range []struct {
 		repoId Id
 		path   string
-	}{{otherRepoId, "b"}, {repoId, "c"}} {
+	}{{repoId: otherRepoId, path: "b"}, {repoId: repoId, path: "c"}} {
 		if _, ok, _ := pins.ReadRecord(kept.repoId, refId, kept.path); !ok {
 			t.Errorf("%s was evicted", kept.path)
 		}
@@ -495,7 +495,7 @@ func TestEvsCreateRepoFilesThenPlacesThenActivates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoPath := "/evs/v1/repos/" + repo.RepoId().String()
+	repoPath := "/evs/v1/repos/" + EvsKeyId(repo.RepoId())
 	want := []string{"PUT " + repoPath, "PUT " + repoPath, "POST " + repoPath + "/activate"}
 	if strings.Join(routes, ",") != strings.Join(want, ",") {
 		t.Errorf("routes %v", routes)
@@ -537,7 +537,7 @@ func TestEvsDeleteAndShredStayThin(t *testing.T) {
 	if err := repo.Shred(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 1 || routes[0] != "DELETE https://evs.example/evs/v1/repos/"+repo.RepoId().String()+"?now=1" {
+	if len(routes) != 1 || routes[0] != "DELETE https://evs.example/evs/v1/repos/"+EvsKeyId(repo.RepoId())+"?now=1" {
 		t.Errorf("routes %v", routes)
 	}
 	deletion := test.poster.bodies[0].(*protocol.RepoDelete)

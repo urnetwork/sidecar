@@ -318,7 +318,7 @@ func (self *EvsRepo) Delete(ctx context.Context, now bool) error {
 	if err := self.client.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_DELETE, deletion); err != nil {
 		return fmt.Errorf("evs: RepoDelete: %w", err)
 	}
-	path := "/evs/v1/repos/" + self.repoId.String()
+	path := "/evs/v1/repos/" + EvsKeyId(self.repoId)
 	if now {
 		path += "?now=1"
 	}
@@ -355,7 +355,7 @@ func (self *EvsRepo) Restore(ctx context.Context) error {
 	return self.callLifecycle(ctx, &evsCall{
 		route:  "POST /evs/v1/repos/{repo_id}/restore",
 		method: http.MethodPost,
-		path:   "/evs/v1/repos/" + self.repoId.String() + "/restore",
+		path:   "/evs/v1/repos/" + EvsKeyId(self.repoId) + "/restore",
 		repoId: self.repoId,
 		role:   evsScopeAdmin,
 	})
