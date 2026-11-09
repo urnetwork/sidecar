@@ -1,0 +1,23 @@
+0x0010 interop transcripts (§22.10's vectors row), in the mlswg's passive-client form (test-vectors.md at
+the commit testdata/mls/mlswg/SOURCE names): cipher_suite, key_package, signature_priv, encryption_priv,
+init_priv, welcome, ratchet_tree, initial_epoch_authenticator, and epochs of {proposals, commit,
+epoch_authenticator}, hex throughout.
+
+lifecycle.json
+    One run of mlsinterop's TestTmcLifecycleInBothDirections, mls_* against tmc/mls
+    v0.0.0-20260930074835-1c42a372504a with its suite renumbered 0x0010 (mlsinterop/overlay/wire.go.patch),
+    recorded 2026-11-08 from the view of its passive member P, a tmc/mls leaf carrying credential 0xF552
+    that joins mls_*'s first Welcome and commits nothing. Its ratchet_tree comes from mls_*'s GroupInfo,
+    since mls_*'s Welcome carries none (§10.6). Its 12 commits are every winning commit of the run after
+    P's join: member commits as PrivateMessages from both stacks (an Add with a Welcome each way, path
+    commits, a Remove each way) and an external commit with ExternalInit from each. The commits that lost
+    their epoch's race are not in it. Every key in it is a fresh test key of that run.
+    sha256 7b365d6b1c65f2b5c312d326616d7574c662d69c897c6eb85539b260820bc95f
+
+Every test.sh replays each file twice: the root's TestMlsInteropTranscripts through mls_*, and
+mlsinterop's TestTmcReplaysTheInteropTranscripts through tmc/mls under the same patch.
+
+To record a new run, from mlsinterop/:
+    MLSINTEROP_TRANSCRIPT_OUT=$PWD/../testdata/mls/0x0010/lifecycle.json \
+        go test -count=1 -run TestTmcStacksUnderTheSuitePatch .
+and update the sha256 above.

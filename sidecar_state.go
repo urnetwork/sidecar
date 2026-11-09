@@ -161,12 +161,16 @@ func nextSidecarLifecycle(current sidecarLifecycle, transition sidecarTransition
 // have passed validate.
 func newSidecarBase(host SidecarHost, settings *SidecarSettings) *Sidecar {
 	return &Sidecar{
-		host:           host,
-		settings:       settings,
-		log:            loggerOrDefault(settings.Log),
-		state:          NewMonitorValue(SidecarStateLocked),
-		eventCallbacks: NewCallbackList[SidecarEventFunction](),
-		lifecycle:      sidecarLifecycle{state: SidecarStateLocked},
+		host:                    host,
+		settings:                settings,
+		log:                     loggerOrDefault(settings.Log),
+		state:                   NewMonitorValue(SidecarStateLocked),
+		eventCallbacks:          NewCallbackList[SidecarEventFunction](),
+		wakes:                   NewMonitorValue[uint64](0),
+		runningGenerationNumber: NewMonitorValue[int64](0),
+		clock:                   settings.ClockOrReal(),
+		hostStores:              HostCredentialStores,
+		lifecycle:               sidecarLifecycle{state: SidecarStateLocked},
 	}
 }
 
@@ -202,27 +206,90 @@ func (self *Sidecar) applyTransition(transition sidecarTransition) bool {
 
 // The one entry other root files use to raise §5.4's kinds. An event of an older client generation
 // is dropped (D-SDK-14), and one naming no generation, which no client raised, is stamped with the
-// current one. Runs every callback on this goroutine, with no lock held.
+// current one.
+//
+// Events reach the callbacks in the order they were raised, so no subscriber sees an older generation's
+// event after a newer one's. One raised while another is being delivered, on any goroutine or from
+// inside a callback, joins a queue that the delivering goroutine runs next, and this returns at once;
+// otherwise this goroutine delivers it, and anything raised meanwhile. A callback runs with no lock
+// held, and an event that a newer generation overtook while it waited is dropped at each subscriber it
+// had not reached.
 func (self *Sidecar) emitEvent(event SidecarEvent) {
-	var generation int64
+	queued := false
+	deliver := false
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		generation = self.lifecycle.generation
-	}()
-	if event.Generation == 0 {
-		event.Generation = generation
-	}
-	if event.Generation < generation {
-		if self.log.V(2).Enabled() {
-			self.log.Infof("[sidecar]dropped a %s event of generation %d", event.Kind, event.Generation)
+		if event.Generation == 0 {
+			event.Generation = self.lifecycle.generation
 		}
+		if event.Generation < self.lifecycle.generation {
+			return
+		}
+		queued = true
+		self.eventQueue = append(self.eventQueue, event)
+		if !self.eventDelivering {
+			self.eventDelivering = true
+			deliver = true
+		}
+	}()
+	if !queued {
+		self.logDroppedEvent(event)
 		return
 	}
-	if self.log.V(2).Enabled() {
-		self.log.Infof("[sidecar]event %s generation %d", event.Kind, event.Generation)
+	if deliver {
+		self.deliverEvents()
 	}
-	for _, callback := range self.eventCallbacks.Get() {
-		callback(event)
+}
+
+// Delivers the queue until it is empty. A callback that panics leaves the rest to the next event raised.
+func (self *Sidecar) deliverEvents() {
+	delivering := true
+	defer func() {
+		if delivering {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.eventDelivering = false
+		}
+	}()
+	for {
+		var event SidecarEvent
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if len(self.eventQueue) == 0 {
+				self.eventQueue = nil
+				self.eventDelivering = false
+				delivering = false
+				return
+			}
+			event = self.eventQueue[0]
+			self.eventQueue = self.eventQueue[1:]
+		}()
+		if !delivering {
+			return
+		}
+		if self.log.V(2).Enabled() {
+			self.log.Infof("[sidecar]event %s generation %d", event.Kind, event.Generation)
+		}
+		for _, callback := range self.eventCallbacks.Get() {
+			overtaken := func() bool {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				return event.Generation < self.lifecycle.generation
+			}()
+			if overtaken {
+				self.logDroppedEvent(event)
+				break
+			}
+			callback(event)
+		}
+	}
+}
+
+// Notes an event of an older generation, which goes nowhere.
+func (self *Sidecar) logDroppedEvent(event SidecarEvent) {
+	if self.log.V(2).Enabled() {
+		self.log.Infof("[sidecar]dropped a %s event of generation %d", event.Kind, event.Generation)
 	}
 }

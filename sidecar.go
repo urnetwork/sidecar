@@ -10,11 +10,12 @@
 // are <svc>service child packages that import the root, and the root never imports device/.
 package sidecar
 
-// The release version, yyyy.m.d-code, empty in a development build.
+// The release version, yyyy.m.d+code as binaries carry it, empty in a development build. Tags and
+// artifact names spell the same version with a - (build/all/run.sh's note on versions).
 //
 // The release fills this in with a sed over this file on its version branch, as it does for
-// sdk.Version (build/all/run.sh). That sed matches this declaration's exact text and reports nothing
-// when it misses, so keep the explicit type and empty initializer. A linker flag can also set it:
-// -ldflags "-X github.com/urnetwork/sidecar.Version=$WARP_VERSION-$WARP_VERSION_CODE"
-// Keep it a var, because -X is silently a no-op against a const.
+// sdk.Version (build/all/run.sh). That sed matches this declaration's exact text, so keep the
+// explicit type and empty initializer: the step fails when the sed misses. A linker flag can also
+// set it: -ldflags "-X github.com/urnetwork/sidecar.Version=$WARP_VERSION", where WARP_VERSION
+// already carries the code. Keep it a var, because -X is silently a no-op against a const.
 var Version string = ""

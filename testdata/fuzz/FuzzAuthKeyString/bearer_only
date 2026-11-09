@@ -1,0 +1,2 @@
+go test fuzz v1
+string("ur-authkey-aebagbafaydqqcikbmga2dqpca-eaqseizeeutcokbjfivsyljof4ydcmrtgq2tmnzyhe5dwpb5hy7q")

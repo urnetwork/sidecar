@@ -1,0 +1,48 @@
+{
+  "name": "fs68 off citing kind-1 chunks from a reuse source",
+  "citations": [
+    {
+      "token_path": "0f65c987bccc41caabd28ac1bd1de724",
+      "version": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 1,
+            "id": "2bc0daa9c844d0c5109883dd0e4b02620d7dcf32b8fb9960a2542674d7ebee9a"
+          }
+        ]
+      },
+      "base": {
+        "versioning": 0,
+        "chain": [
+          {
+            "kind": 1,
+            "id": "a740e217abf586665c34f315774c92260f05ee6b709255e880c09e9d122d9b5f"
+          }
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+    "staged": [],
+    "versionless_uploads": [],
+    "removed": [],
+    "reuse": [
+      {
+        "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+        "token_path": "72792bf96f3860463af974efc5ca7b79",
+        "version": {
+          "versioning": 0,
+          "chain": [
+            {
+              "kind": 1,
+              "id": "2bc0daa9c844d0c5109883dd0e4b02620d7dcf32b8fb9960a2542674d7ebee9a"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "want": "VERSIONING"
+}

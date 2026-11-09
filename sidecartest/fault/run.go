@@ -25,6 +25,10 @@ type Result struct {
 	FailedStep int
 	// Every barrier event, in order: what a failing seed becomes a fixed schedule from.
 	Trace []string
+	// The same events, for a trace file (Replay).
+	Events []*sidecartest.BarrierEvent
+	// For a replay, where the run left the trace it followed and why: empty when it kept to it.
+	LeftTrace string
 }
 
 func (self *Result) String() string {
@@ -34,6 +38,9 @@ func (self *Result) String() string {
 		text.WriteString(" passed\n")
 	} else {
 		fmt.Fprintf(&text, " failed at step %d: %v\n", self.FailedStep, self.Err)
+	}
+	if self.LeftTrace != "" {
+		fmt.Fprintf(&text, "  the replay left its trace: %s\n", self.LeftTrace)
 	}
 	for _, line := range self.Trace {
 		text.WriteString("  ")
@@ -56,17 +63,33 @@ type runner struct {
 	paused bool
 }
 
-// Runs schedule on net, which it leaves to its caller to close.
+// Runs schedule on net, which it leaves to its caller to close. A refusal schedule with no twin fails
+// before it starts, and so does a replay that also names a seed.
 func Run(ctx context.Context, schedule *Schedule, net *Net) *Result {
 	self := &runner{ctx: ctx, schedule: schedule, net: net, barriers: net.Barriers()}
 	result := &Result{Id: schedule.Id, Seed: schedule.Seed, FailedStep: -1}
+	if schedule.Refuses != "" && schedule.Twin == nil {
+		result.Err = fmt.Errorf("%s expects %s refused and names no twin that must succeed (§22.8's twins)", schedule.Id, schedule.Refuses)
+		return result
+	}
+	if schedule.Replay != nil && schedule.Seed != 0 {
+		result.Err = fmt.Errorf("%s replays a trace and names seed %d: a replay takes its order from the trace alone", schedule.Id, schedule.Seed)
+		return result
+	}
 	if schedule.Seed != 0 {
 		self.barriers.SetSeed(schedule.Seed)
 		self.random = rand.New(rand.NewPCG(uint64(schedule.Seed), 0xfa17))
 	}
+	if schedule.Replay != nil {
+		self.barriers.SetScript(schedule.Replay.Events)
+	}
 	result.Err = self.run(result)
-	for _, event := range self.barriers.Trace() {
+	result.Events = self.barriers.Trace()
+	for _, event := range result.Events {
 		result.Trace = append(result.Trace, event.String())
+	}
+	if schedule.Replay != nil {
+		result.LeftTrace = self.barriers.ScriptDeparture()
 	}
 	// after the last check: what a dead actor's deferred calls do, nothing reads
 	self.barriers.Close()
@@ -143,6 +166,10 @@ func (self *runner) runStep(step *Step) error {
 		// the explorer's other choice: the order of a Release is the schedule's only in a fixed run
 		release = slices.Clone(release)
 		self.random.Shuffle(len(release), func(i int, j int) { release[i], release[j] = release[j], release[i] })
+	}
+	if self.schedule.Replay != nil {
+		// and in a replay, the order the trace released in
+		release = self.barriers.ScriptReleaseOrder(release)
 	}
 	for _, site := range release {
 		if err := self.barriers.Release(site); err != nil {
@@ -233,6 +260,22 @@ func (self *runner) check(step int, final bool) error {
 	if violations := self.barriers.Violations(); 0 < len(violations) {
 		return fmt.Errorf("a barrier broke its naming rule: %s", strings.Join(violations, "; "))
 	}
+	return self.stalled()
+}
+
+// An actor that kept the baton past the stall timeout let another run while it ran on, in an order the
+// schedule did not choose and a seed cannot repeat, so the run proves nothing it can be held to (§22.8's
+// determinism row).
+func (self *runner) stalled() error {
+	actorNames := []string{}
+	for _, event := range self.barriers.Trace() {
+		if event.Kind == sidecartest.BarrierStalled && !slices.Contains(actorNames, event.Actor) {
+			actorNames = append(actorNames, event.Actor)
+		}
+	}
+	if 0 < len(actorNames) {
+		return fmt.Errorf("%s stalled, blocked where no barrier sees it, and the run left the schedule's order", strings.Join(actorNames, ", "))
+	}
 	return nil
 }
 
@@ -260,78 +303,8 @@ func (self *runner) finish() error {
 	if unfired := self.net.Faults().Unfired(); 0 < len(unfired) {
 		return fmt.Errorf("never fired: %v", unfired)
 	}
+	if self.net.UsesPlatformFakes() && !slices.Contains(self.schedule.Tiers, TierT3) && !(self.schedule.Forged && self.schedule.Twin != nil) {
+		return errors.New("the row ran on the fake contract issuer and ControlId sink, so it names T3 too (Q-TEST-1)")
+	}
 	return nil
-}
-
-// §22.8's explorer: runs one schedule under each seed, on a fresh Net from build each time. Every
-// failure comes back with its seed and trace, from which it becomes a fixed schedule.
-func Explore(ctx context.Context, seeds []int64, build func(net *Net) *Schedule, settings *sidecartest.NetSettings) []*Result {
-	failures := []*Result{}
-	for _, seed := range seeds {
-		func() {
-			net := sidecartest.NewNet(ctx, settings)
-			defer net.Close()
-			schedule := build(net)
-			schedule.Seed = seed
-			if result := Run(ctx, schedule, net); result.Err != nil {
-				failures = append(failures, result)
-			}
-		}()
-	}
-	return failures
-}
-
-// §22.8's seeds for a T2 row at each merge: 1 to 10.
-func MergeSeeds() []int64 {
-	return []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-}
-
-// §22.8's unknown rule: every write in the named rows also runs with ApplyThenDrop. This runs the
-// schedule once to count its writes, then once for each, with that write's response lost, and returns
-// the failures. A fake counts the writes, so this is T2's; a T3 row sets its own plans.
-func RunEveryWriteUnknown(ctx context.Context, build func(net *Net) *Schedule, settings *sidecartest.NetSettings) []*Result {
-	var putCount, deleteCount int
-	failures := []*Result{}
-	func() {
-		net := sidecartest.NewNet(ctx, settings)
-		defer net.Close()
-		result := Run(ctx, build(net), net)
-		if result.Err != nil {
-			failures = append(failures, result)
-		}
-		for _, clusterId := range clusterIds(net) {
-			putCount += net.Fakes().Blobs.RequestCount(clusterId, sidecartest.FaultOpPut)
-			deleteCount += net.Fakes().Blobs.RequestCount(clusterId, sidecartest.FaultOpDelete)
-		}
-	}()
-	if 0 < len(failures) {
-		return failures
-	}
-	runLost := func(op string, nth int) {
-		net := sidecartest.NewNet(ctx, settings)
-		defer net.Close()
-		schedule := build(net)
-		schedule.Steps = append([]*Step{{Fault: &FaultPlan{Op: op, Nth: nth, Result: ApplyThenDrop}}}, schedule.Steps...)
-		schedule.Id = fmt.Sprintf("%s with %s %d's response lost", schedule.Id, op, nth)
-		if result := Run(ctx, schedule, net); result.Err != nil {
-			failures = append(failures, result)
-		}
-	}
-	for nth := 1; nth <= putCount; nth += 1 {
-		runLost(sidecartest.FaultOpPut, nth)
-	}
-	for nth := 1; nth <= deleteCount; nth += 1 {
-		runLost(sidecartest.FaultOpDelete, nth)
-	}
-	return failures
-}
-
-func clusterIds(net *Net) []string {
-	blobs := net.Fakes().Blobs
-	clusterIds := blobs.MetadataClusterIds()
-	segment, err := blobs.SegmentCluster()
-	if err == nil {
-		clusterIds = append(clusterIds, segment.ClusterId())
-	}
-	return clusterIds
 }

@@ -12,7 +12,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -22,8 +24,19 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 )
 
+// Skips a test that needs a compiled circuit when the sidecar_testhooks tag is set. No circuit holds a
+// hook, so the tag cannot change what one does, and these tests are nearly all of this module's time:
+// make check runs every test twice, on every track that lands here.
+func testNeedCircuits(t testing.TB) {
+	t.Helper()
+	if !testCircuitsRun {
+		t.Skip("circuits hold no hook, so these run in the untagged leg")
+	}
+}
+
 func testCompile(t *testing.T, circuit frontend.Circuit) constraint.ConstraintSystem {
 	t.Helper()
+	testNeedCircuits(t)
 	compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit)
 	if err != nil {
 		t.Fatal(err)
@@ -138,6 +151,50 @@ func TestHmacGadgetMatchesCryptoHmac(t *testing.T) {
 		assignment = &testHmacCircuit{Key: testAssignBits(key), Message: testAssignBits(message), Mac: testAssignBits(sum)}
 		if err := testSolved(t, compiled, assignment); err == nil {
 			t.Errorf("key size %d: accepted a wrong key", keySize)
+		}
+	}
+}
+
+func TestHmacGadgetMatchesCryptoHmacAtBlockBoundaries(t *testing.T) {
+	// the inner hash resumes from the ipad state, so its padding turns over at 55 and 119 octets of
+	// message, not of the hashed whole: a sum padded as if from the initial state would pass the test
+	// above and fail here. Each size beside a flipped output bit
+	cases := []struct {
+		keySize      int
+		messageBytes int
+	}{
+		{keySize: tlsSecretBytes, messageBytes: 0},
+		{keySize: tlsSecretBytes, messageBytes: 55},
+		{keySize: tlsSecretBytes, messageBytes: 56},
+		{keySize: tlsSecretBytes, messageBytes: 64},
+		{keySize: tlsSecretBytes, messageBytes: 119},
+		{keySize: tlsSecretBytes, messageBytes: 120},
+		{keySize: tlsMasterSecretBytes, messageBytes: 55},
+		{keySize: tlsMasterSecretBytes, messageBytes: 56},
+	}
+	for _, c := range cases {
+		key := make([]byte, c.keySize)
+		for i := range key {
+			key[i] = byte(5*i + 3)
+		}
+		message := make([]byte, c.messageBytes)
+		for i := range message {
+			message[i] = byte(11*i + c.messageBytes)
+		}
+		mac := hmac.New(sha256.New, key)
+		mac.Write(message)
+		sum := mac.Sum(nil)
+		compiled := testCompile(t, &testHmacCircuit{
+			Key:     make([]frontend.Variable, 8*c.keySize),
+			Message: make([]frontend.Variable, 8*c.messageBytes),
+			Mac:     make([]frontend.Variable, 8*sha256.Size),
+		})
+		if err := testSolved(t, compiled, &testHmacCircuit{Key: testAssignBits(key), Message: testAssignBits(message), Mac: testAssignBits(sum)}); err != nil {
+			t.Errorf("key %d, message %d: %v", c.keySize, c.messageBytes, err)
+		}
+		sum[sha256.Size-1] ^= 0x80
+		if err := testSolved(t, compiled, &testHmacCircuit{Key: testAssignBits(key), Message: testAssignBits(message), Mac: testAssignBits(sum)}); err == nil {
+			t.Errorf("key %d, message %d: accepted a wrong MAC", c.keySize, c.messageBytes)
 		}
 	}
 }
@@ -261,13 +318,57 @@ func TestGoModPinsGnarkToServersVersions(t *testing.T) {
 	}
 }
 
+// The root module's go.mod, from this module's directory. In development it is the parent's. A
+// release branch moves the root into v2026/ and this module into its own v2026/ (§4.9), so there it
+// is two directories up, in the root's directory of the version this module's path ends in.
+func testRootGoModPath(t *testing.T) string {
+	t.Helper()
+	goMod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^module\s+(\S+)`).FindSubmatch(goMod)
+	if match == nil {
+		t.Fatal("this module's go.mod names no module")
+	}
+	if version := path.Base(string(match[1])); regexp.MustCompile(`^v[0-9]+$`).MatchString(version) {
+		return filepath.Join("..", "..", version, "go.mod")
+	}
+	return filepath.Join("..", "go.mod")
+}
+
 func TestRootNeverRequiresThisModule(t *testing.T) {
-	goMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
+	goMod, err := os.ReadFile(testRootGoModPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(goMod), "smtpproof") {
 		t.Error("the root's go.mod names smtpproof (D-REPO-2)")
+	}
+}
+
+// make check runs this module's tests from smtpproof/v2026/ on a release branch, where its parent
+// holds no go.mod and the root's is in v2026/ at the top.
+func TestRootGoModPathFollowsTheReleaseLayout(t *testing.T) {
+	top := t.TempDir()
+	for name, content := range map[string]string{
+		"v2026/go.mod":           "module example.com/root/v2026\n",
+		"smtpproof/v2026/go.mod": "module example.com/root/smtpproof/v2026\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(top, name)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(top, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(filepath.Join(top, "smtpproof", "v2026"))
+	rootGoMod := testRootGoModPath(t)
+	if want := filepath.Join("..", "..", "v2026", "go.mod"); rootGoMod != want {
+		t.Fatalf("the root's go.mod is %s, want %s", rootGoMod, want)
+	}
+	if _, err := os.Stat(rootGoMod); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -30,15 +30,6 @@ type rowSwitches struct {
 	sidecarHttpSizeGate bool
 }
 
-// A module whose license §4.7 does not name, let through for one exact version while the question
-// that names it waits for the owner. Everything else about the row is still checked.
-type licenseException struct {
-	version string
-	spdx    string
-	// the file under .stack/questions
-	question string
-}
-
 // Read by every rule. There is one value, from defaultCheckSettings; a test may change a copy.
 type checkSettings struct {
 	switches rowSwitches
@@ -50,10 +41,18 @@ type checkSettings struct {
 	// §11.14: one x/text module version on every leg, which the search index's headers record
 	normalizerOneXTextVersion string
 
-	// §4.7's allowed licenses, as SPDX ids
+	// §4.7's allowed licenses, as SPDX ids, each with its text in licenseTextsDirectory. X11 is MIT's
+	// text plus only its no-advertising clause (QD-240).
 	allowedLicenses []string
-	// by module path; see licenseException
-	licenseExceptions map[string]licenseException
+	// the most words a license's <<...>> part takes for one copy. A holder's name is a few words, and
+	// this bounds what such a part could hide, so it is no longer than a name needs.
+	licenseVariableMaxWordCount int
+	// how many words a finding quotes from where a license file leaves its licenses' texts
+	licenseDepartureWordCount int
+	// a module's words beyond its licenses' own, by module path, each read by a person and kept with
+	// why it stands: what a file says of which license covers which of its files. Each passage is
+	// matched as a license's text is, so a changed word fails the row until someone reads the change.
+	licenseNotes map[string]licenseNote
 	// cgo files in a third-party package, as <import path>/<file>, each with why it stands. §4.7's
 	// cgo row binds this repository's packages (R-REPO-6), and a third-party file is listed here
 	// so a new one needs a reader, rather than passing unseen.
@@ -65,6 +64,10 @@ type checkSettings struct {
 	vulnDatabase string
 	// how many legs scan at once. Non-positive means one at a time.
 	vulnScanConcurrency int
+	// how many legs compile at once. Each go command already compiles its own packages in parallel,
+	// so a few at once overlap only what each does alone, such as loading its modules, and a cold
+	// cache holds no more compilers in memory than the machine takes. Non-positive means one at a time.
+	legCompileConcurrency int
 
 	// §18.10, D-SDK-20: the most the device role may add to the ios_extension leg, in bytes
 	iosExtensionAddedMaxByteCount int64
@@ -77,6 +80,18 @@ type checkSettings struct {
 	sidecarHttpGoalSlipRecorded bool
 	// -iosversion in sdk/build/Makefile, which gomobile turns into -miphoneos-version-min
 	iosMinimumVersion string
+
+	// §22.4's clock rule's exceptions (clock_rule_test.go), by file and time function, as "id.go
+	// time.Now", each with the day it was granted and why. An exception that matches nothing fails, so
+	// the list only shrinks.
+	wallClockExceptions map[string]wallClockException
+}
+
+// What a module's license file says beyond its licenses' own words, read by a person.
+type licenseNote struct {
+	why string
+	// each in the file's own words, as a license's text is written in licenseTextsDirectory
+	passages []string
 }
 
 // The only source of defaults.
@@ -93,14 +108,68 @@ func defaultCheckSettings() *checkSettings {
 		protocGenGoTool:           "google.golang.org/protobuf/cmd/protoc-gen-go",
 		normalizerOneXTextVersion: "v0.43.0",
 		allowedLicenses: []string{
-			"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "MPL-2.0",
+			"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "MPL-2.0", "X11",
 		},
-		licenseExceptions: map[string]licenseException{
-			// connect's net_tls.go parses a ClientHello with it, so it is in every connect leg
-			"src.agwa.name/tlshacks": {
-				version:  "v0.0.4",
-				spdx:     "X11",
-				question: "make-check-tlshacks-x11.md",
+		licenseVariableMaxWordCount: 8,
+		licenseDepartureWordCount:   12,
+		licenseNotes: map[string]licenseNote{
+			"gopkg.in/yaml.v3": {
+				why: "says which of its files each of its two licenses covers",
+				passages: []string{
+					"This project is covered by two different licenses: MIT and Apache. #### MIT License #### " +
+						"The following files were ported to Go from C files of libyaml, and thus are still covered by " +
+						"their original MIT license, with the additional copyright staring in 2011 when the project " +
+						"was ported over: apic.go emitterc.go parserc.go readerc.go scannerc.go writerc.go yamlh.go yamlprivateh.go",
+					"### Apache License ### All the remaining project files are covered by the Apache license:",
+				},
+			},
+			"gvisor.dev/gvisor": {
+				why: "says that some of its files carry MIT's and BSD-3-Clause's texts below its Apache-2.0",
+				passages: []string{
+					"Some files carry the following license, noted at the top of each file:",
+					"Some files carry the \"BSD\" license, noted at the top of each file:",
+				},
+			},
+			"github.com/cyphar/filepath-securejoin": {
+				why: "COPYING.md says which of its files each of its two licenses covers, for pkg.go.dev's " +
+					"scan, and repeats both texts, which LICENSE.BSD and LICENSE.MPL-2.0 also hold",
+				passages: []string{
+					"## COPYING ## `SPDX-License-Identifier: BSD-3-Clause AND MPL-2.0` This project is made up of code " +
+						"licensed under different licenses. Which code you use will have an impact on whether only one or " +
+						"both licenses apply to your usage of this library. Note that **each file** in this project " +
+						"individually has a code comment at the start describing the license of that particular file -- " +
+						"this is the most accurate license information of this project; in case there is any conflict " +
+						"between this document and the comment at the start of a file, the comment shall take precedence. " +
+						"The only purpose of this document is to work around [a known technical limitation of " +
+						"pkg.go.dev's license checking tool when dealing with non-trivial project licenses][go75067]. " +
+						"[go75067]: https://go.dev/issue/75067",
+					"### `BSD-3-Clause` ### At time of writing, the following files and directories are licensed under " +
+						"the BSD-3-Clause license: * `doc.go` * `join*.go` * `vfs.go` * `internal/consts/*.go` " +
+						"* `pathrs-lite/internal/gocompat/*.go` * `pathrs-lite/internal/kernelversion/*.go` The text of " +
+						"the BSD-3-Clause license used by this project is the following (the text is also available from " +
+						"the [`LICENSE.BSD`](./LICENSE.BSD) file):",
+					"### `MPL-2.0` ### All other files (unless otherwise marked) are licensed under the Mozilla Public " +
+						"License (version 2.0). The text of the Mozilla Public License (version 2.0) is the following " +
+						"(the text is also available from the [`LICENSE.MPL-2.0`](./LICENSE.MPL-2.0) file):",
+				},
+			},
+			"github.com/emirpasic/gods": {
+				why:      "heads its second license, ISC's, with the one package that license covers",
+				passages: []string{"AVL Tree:"},
+			},
+			"github.com/go-git/gcfg": {
+				why: "breaks its copyright notice across two lines, so the notice's last word falls on a line of its " +
+					"own, outside the notice line the comparison leaves out",
+				passages: []string{"Authors."},
+			},
+			"github.com/klauspost/compress": {
+				why: "names the directories each license in its file covers",
+				passages: []string{
+					"Files: gzhttp/*",
+					"Files: s2/cmd/internal/readahead/*",
+					"Files: snappy/* Files: internal/snapref/*",
+					"Files: s2/cmd/internal/filepathx/*",
+				},
 			},
 		},
 		thirdPartyCgoFiles: map[string]string{
@@ -110,11 +179,40 @@ func defaultCheckSettings() *checkSettings {
 		govulncheckVersion:            "v1.9.0",
 		vulnDatabase:                  "https://vuln.go.dev",
 		vulnScanConcurrency:           8,
+		legCompileConcurrency:         4,
 		iosExtensionAddedMaxByteCount: 1024 * 1024,
 		sidecarHttpGoalByteCount:      40 * 1024 * 1024,
 		sidecarHttpMissByteCount:      74965628,
 		sidecarHttpGoalSlipRecorded:   false,
 		iosMinimumVersion:             "16.0",
+		wallClockExceptions: map[string]wallClockException{
+			"id.go time.Now": {
+				since: "2026-11-08",
+				why: "a ULID carries its minter's clock in its high bits by design (CODESTYLE's identifiers), so ids " +
+					"order by real creation time and never by a test's clock",
+			},
+			"clock.go time.Now":          {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock.go time.After":        {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock.go time.AfterFunc":    {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"device/clock.go time.Now":   {since: "2026-11-08", why: "device.RealClock is the device role's real time"},
+			"device/clock.go time.After": {since: "2026-11-08", why: "device.RealClock is the device role's real time"},
+			"device/clock.go time.AfterFunc": {
+				since: "2026-11-08",
+				why:   "device.RealClock is the device role's real time",
+			},
+			"api_client.go time.Now": {
+				since: "2026-11-08",
+				why:   "SidecarApi's now defaults to real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+			"keys_instance.go time.Now": {
+				since: "2026-11-08",
+				why:   "the instance lock reads real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+			"keys_instance.go time.After": {
+				since: "2026-11-08",
+				why:   "the instance lock waits in real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+		},
 	}
 }
 

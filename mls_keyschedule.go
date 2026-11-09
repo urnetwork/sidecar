@@ -1,5 +1,5 @@
-// The key schedule (RFC 9420 §8): the GroupContext it binds, one epoch's secrets, the exporter,
-// external initialization and the transcript hashes (RFC §8.2).
+// The key schedule (RFC 9420 §8): the GroupContext it binds, one epoch's secrets, the exporter and
+// external initialization.
 //
 // Hook kinds name the values as RFC §8's table 4 and diagram do. The two extractions the diagram leaves
 // unnamed are "joiner_extract" and "member_extract".
@@ -52,6 +52,20 @@ func (self *mlsGroupContext) decode(decoder *mlsDecoder) {
 	self.treeHash = decoder.readVector()
 	self.confirmedTranscriptHash = decoder.readVector()
 	self.extensions = decoder.readExtensions()
+}
+
+// RFC §7.8's tree_hash and §8.2's confirmed_transcript_hash are the suite's hash outputs, the latter the empty
+// string at epoch 0 alone. Decoding cannot check this, since it reads the suite from the same bytes, so a received
+// GroupContext is held to it once its suite is known, before anything derives from it: nothing else would refuse a
+// confirmed_transcript_hash of another length, which only feeds the confirmation tag's MAC.
+func (self *mlsGroupContext) checkHashLengths(suite *mlsCipherSuite) error {
+	if len(self.treeHash) != suite.hashLength {
+		return fmt.Errorf("%w: a tree_hash of %d bytes", errMlsInvalid, len(self.treeHash))
+	}
+	if len(self.confirmedTranscriptHash) != suite.hashLength && (self.epoch != 0 || len(self.confirmedTranscriptHash) != 0) {
+		return fmt.Errorf("%w: a confirmed_transcript_hash of %d bytes at epoch %d", errMlsInvalid, len(self.confirmedTranscriptHash), self.epoch)
+	}
+	return nil
 }
 
 // What one epoch keeps of the schedule, as RFC §8's table 4 names it, with the two secrets a commit
@@ -133,6 +147,31 @@ func (self *mlsCipherSuite) deriveEpochSecrets(joinerSecret []byte, pskSecret []
 	secrets.joinerSecret = bytes.Clone(joinerSecret)
 	secrets.welcomeSecret = welcomeSecret
 	return secrets, nil
+}
+
+// welcome_secret alone, from joiner_secret and the zero psk_secret, for a Welcome's recipient, which needs it to
+// read the GroupContext the rest of the schedule binds (RFC §12.4.3.1). The caller owns and erases both.
+func (self *mlsCipherSuite) deriveWelcomeSecret(joinerSecret []byte) ([]byte, error) {
+	extracted, err := self.extract("member_extract", joinerSecret, make([]byte, self.hashLength))
+	if err != nil {
+		return nil, err
+	}
+	defer clear(extracted)
+	return self.deriveSecret("welcome_secret", extracted, "welcome")
+}
+
+// welcome_key and welcome_nonce (RFC §12.4.3.1), which seal a Welcome's GroupInfo.
+func (self *mlsCipherSuite) deriveWelcomeKey(welcomeSecret []byte) (key []byte, nonce []byte, err error) {
+	key, err = self.expandWithLabel("welcome_key", welcomeSecret, "key", nil, self.aeadKeyLength)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce, err = self.expandWithLabel("welcome_nonce", welcomeSecret, "nonce", nil, self.aeadNonceLength)
+	if err != nil {
+		clear(key)
+		return nil, nil, err
+	}
+	return key, nonce, nil
 }
 
 // Epoch 0 of a new group (RFC §11): epoch_secret is fresh, so there is no joiner or welcome secret, and
@@ -217,27 +256,4 @@ func (self *mlsCipherSuite) externalInitOpen(externalPrivateKey hpke.PrivateKey,
 	}
 	testHookSecret("init_secret", initSecret)
 	return initSecret, nil
-}
-
-// confirmed_transcript_hash_[epoch] (RFC §8.2). The input is the encoded
-// ConfirmedTranscriptHashInput of the commit that starts the epoch.
-func (self *mlsCipherSuite) nextConfirmedTranscriptHash(interimTranscriptHash []byte, confirmedTranscriptHashInput []byte) []byte {
-	return self.hash(append(append([]byte{}, interimTranscriptHash...), confirmedTranscriptHashInput...))
-}
-
-// interim_transcript_hash_[epoch] (RFC §8.2), whose InterimTranscriptHashInput is the tag as a MAC<V>.
-func (self *mlsCipherSuite) nextInterimTranscriptHash(confirmedTranscriptHash []byte, confirmationTag []byte) ([]byte, error) {
-	encoder := &mlsEncoder{}
-	encoder.writeFixed(confirmedTranscriptHash)
-	encoder.writeVector(confirmationTag)
-	encoded, err := encoder.finish()
-	if err != nil {
-		return nil, err
-	}
-	return self.hash(encoded), nil
-}
-
-// The confirmation_tag of RFC §6.1: confirmation_key over the confirmed transcript hash.
-func (self *mlsCipherSuite) confirmationTag(confirmationKey []byte, confirmedTranscriptHash []byte) []byte {
-	return self.mac(confirmationKey, confirmedTranscriptHash)
 }

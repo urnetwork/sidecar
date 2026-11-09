@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"format\":1,\"root\":\"zone.example.\",\"serial\":44,\"restore_serial\":0}")

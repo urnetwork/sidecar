@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\x00\x00\x00\xac\x16\x02\b\x01\x1a\f\a\a\a\a\a\a\a\a\a\a\a\a\"$1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa*(n:c:bbbbbbbbbbbbbbbbbbbbbbbbbb:urnetwork2\x13o1.out.root.example:\x10mx1.mail.exampleB\x03\x01\x02\x03J\nPIPELININGJ\bCHUNKINGJ\bSTARTTLS")

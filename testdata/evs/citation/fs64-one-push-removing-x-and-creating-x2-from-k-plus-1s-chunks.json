@@ -1,0 +1,71 @@
+{
+  "name": "fs64 one push removing x and creating x2 from k+1's chunks",
+  "citations": [
+    {
+      "token_path": "ee23fb4ae77519d095d5cc432776ea97",
+      "version": {
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "bdbf6406c05146d8851bde1ac1328d8636ec6cab250f156c8c2ac976be4907fb"
+          },
+          {
+            "kind": 5,
+            "id": "52a8a898a3e84650520bd42069c8ef42e3cf7f3bd6935b18e2088d2acfac3608"
+          },
+          {
+            "kind": 5,
+            "id": "f8804fbfb45ffd592f735059086dee598036fd91d6b08a80c961819a1180b22d"
+          },
+          {
+            "kind": 5,
+            "id": "a17fe63c36d301b62ac70dff7ea24ccff951fe43cbb223cb47d273011f6225c4"
+          },
+          {
+            "kind": 5,
+            "id": "84dfde2a78ab4cbeb259fd9e86c9d66de7c2ef26d77d7ec2cb3dcc9c7a98249d"
+          }
+        ]
+      },
+      "base": null
+    }
+  ],
+  "sources": {
+    "ref_id": "11df5bbad6855aaa3368dc99d3c1ea9b",
+    "staged": [],
+    "versionless_uploads": [],
+    "removed": [
+      {
+        "token_path": "0f65c987bccc41caabd28ac1bd1de724",
+        "version": {
+          "versioning": 1,
+          "chain": [
+            {
+              "kind": 5,
+              "id": "bdbf6406c05146d8851bde1ac1328d8636ec6cab250f156c8c2ac976be4907fb"
+            },
+            {
+              "kind": 5,
+              "id": "52a8a898a3e84650520bd42069c8ef42e3cf7f3bd6935b18e2088d2acfac3608"
+            },
+            {
+              "kind": 5,
+              "id": "f8804fbfb45ffd592f735059086dee598036fd91d6b08a80c961819a1180b22d"
+            },
+            {
+              "kind": 5,
+              "id": "a17fe63c36d301b62ac70dff7ea24ccff951fe43cbb223cb47d273011f6225c4"
+            },
+            {
+              "kind": 5,
+              "id": "84dfde2a78ab4cbeb259fd9e86c9d66de7c2ef26d77d7ec2cb3dcc9c7a98249d"
+            }
+          ]
+        }
+      }
+    ],
+    "reuse": []
+  },
+  "want": "ok"
+}

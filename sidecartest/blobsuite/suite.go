@@ -32,10 +32,17 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// What a settle-capable store lets the suite do: make time pass for the store and read its clock.
+// What a settle-capable store lets the suite do: read its clock, and reach it as a request the network
+// held past its deadline does.
 type Settle struct {
 	// The store's clock, as the suite must read it to set a deadline in the past of it.
 	Now func() time.Time
+	// Target.Cluster through a client that sends each request's x-ur-deadline-ms and never cancels at
+	// it, as a request the network held past its deadline reaches the store (FS-114). A client that
+	// cancels at the deadline never lets a late request reach the store, so a settle case through it
+	// passes whatever the store does. nil fails the settle cases. A fake judging deadlines in the store
+	// itself, with no cancel of its own, is its own.
+	Delayed sidecar.BlobCluster
 }
 
 type Target struct {
@@ -124,12 +131,15 @@ func cases() []*suiteCase {
 		{name: "if-match-replaces", run: caseIfMatchReplaces},
 		{name: "stale-etag-writes-nothing", run: caseStaleEtag},
 		{name: "if-match-on-a-missing-key", run: caseIfMatchMissingKey},
+		{name: "if-match-after-a-delete", run: caseIfMatchAfterDelete},
 		{name: "empty-etag-sends-nothing", run: caseEmptyEtag},
 		{name: "racing-if-match-has-one-winner", run: caseRacingIfMatch},
 		{name: "etag-follows-the-bytes", run: caseEtagFollowsBytes},
 		{name: "read-after-write", run: caseReadAfterWrite},
 		{name: "missing-key-is-not-found", run: caseMissingKey},
 		{name: "ranged-get", run: caseRangedGet},
+		{name: "ranged-get-of-an-empty-object", run: caseRangedGetEmpty},
+		{name: "key-bytes-survive", run: caseKeyBytes},
 		{name: "head-describes-without-a-body", run: caseHead},
 		{name: "list-order-and-start-after", run: caseListOrder},
 		{name: "list-pages", run: caseListPages},
@@ -139,6 +149,7 @@ func cases() []*suiteCase {
 		{name: "delete-of-a-missing-key", run: caseDeleteMissing},
 		{name: "delete-then-create", run: caseDeleteThenCreate},
 		{name: "metadata-rides-put", run: caseMetadata},
+		{name: "metadata-at-its-limit", run: caseMetadataLimit},
 		{name: "invalid-options-write-nothing", run: caseInvalidOptions},
 		{name: "checksum-is-verified", run: caseChecksum},
 		{name: "put-stream", run: casePutStream},
@@ -148,6 +159,10 @@ func cases() []*suiteCase {
 		{name: "put-stream-names-its-checksum", run: casePutStreamNoChecksum},
 		{name: "empty-and-large-bodies", run: caseBodySizes},
 		{name: "last-modified-is-the-stores-clock", run: caseLastModified},
+		{name: "put-immutable-creates-and-retries-on-equal-bytes", run: casePutImmutableEqual},
+		{name: "put-immutable-alarms-on-other-bytes", run: casePutImmutableOther},
+		{name: "put-immutable-lost-answer-that-landed", run: casePutImmutableLostAnswerLanded},
+		{name: "put-immutable-lost-create-goes-again", run: casePutImmutableLostCreate},
 	}
 }
 
@@ -292,6 +307,25 @@ func caseIfMatchMissingKey(ctx context.Context, target *Target, keys *keySpace) 
 	sum := "d41d8cd98f00b204e9800998ecf8427e"
 	_, err := cluster.PutIfMatch(ctx, key, sum, []byte("v1"), nil)
 	if err := wantError("missing key", err, sidecar.ErrBlobPrecondition); err != nil {
+		return err
+	}
+	_, err = cluster.Head(ctx, key)
+	return wantError("head after", err, sidecar.ErrBlobNotFound)
+}
+
+// The etag a key held says nothing once the key is gone.
+func caseIfMatchAfterDelete(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	key := keys.key("head")
+	etag, err := cluster.PutIfNoneMatch(ctx, key, []byte("v1"), nil)
+	if err != nil {
+		return err
+	}
+	if err := cluster.Delete(ctx, key); err != nil {
+		return err
+	}
+	_, err = cluster.PutIfMatch(ctx, key, etag, []byte("v2"), nil)
+	if err := wantError("after a delete", err, sidecar.ErrBlobPrecondition); err != nil {
 		return err
 	}
 	_, err = cluster.Head(ctx, key)
@@ -478,6 +512,40 @@ func caseRangedGet(ctx context.Context, target *Target, keys *keySpace) error {
 		_, err := cluster.GetRange(ctx, key, offset, 1)
 		if err := wantError(fmt.Sprintf("range at %d", offset), err, sidecar.ErrBlobRange); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// Every offset of an empty object starts at or past its end.
+func caseRangedGetEmpty(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	key := keys.key("empty")
+	if _, err := cluster.PutIfNoneMatch(ctx, key, nil, nil); err != nil {
+		return err
+	}
+	_, err := cluster.GetRange(ctx, key, 0, 1)
+	return wantError("range of nothing", err, sidecar.ErrBlobRange)
+}
+
+// Keys are opaque ids and tokens, so whatever a token's alphabet holds comes back as it went in, and a
+// listing finds it under that spelling.
+func caseKeyBytes(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	for _, name := range []string{"a+b", "a=b", "a~b", "a_b", "a.b", "a%41b", "a b", "a:b"} {
+		key := keys.key(name)
+		if _, err := cluster.PutIfNoneMatch(ctx, key, []byte(name), nil); err != nil {
+			return fmt.Errorf("%q: %w", name, err)
+		}
+		if err := wantBody(ctx, cluster, key, []byte(name)); err != nil {
+			return fmt.Errorf("%q: %w", name, err)
+		}
+		objects, _, err := cluster.List(ctx, key, "", 2)
+		if err != nil {
+			return fmt.Errorf("%q: %w", name, err)
+		}
+		if got := listedKeys(objects); !slices.Equal(got, []string{key}) {
+			return fmt.Errorf("%q: listed %q", name, got)
 		}
 	}
 	return nil
@@ -740,6 +808,28 @@ func caseMetadata(ctx context.Context, target *Target, keys *keySpace) error {
 	return nil
 }
 
+// The store takes 2 KiB of metadata, each key with the header prefix it travels under, and the two
+// sides agree where that ends: a store refusing what Validate passed would fail only at T3.
+func caseMetadataLimit(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	const limit = 2 * 1024
+	name := "state"
+	value := strings.Repeat("x", limit-len("x-amz-meta-")-len(name))
+	key := keys.key("entry")
+	if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("x"), &sidecar.BlobPutOptions{Metadata: map[string]string{name: value}}); err != nil {
+		return fmt.Errorf("at the limit: %w", err)
+	}
+	info, err := cluster.Head(ctx, key)
+	if err != nil {
+		return err
+	}
+	if info.Metadata[name] != value {
+		return fmt.Errorf("a %d byte value came back as %d", len(value), len(info.Metadata[name]))
+	}
+	_, err = cluster.PutIfNoneMatch(ctx, keys.key("over"), []byte("x"), &sidecar.BlobPutOptions{Metadata: map[string]string{name: value + "x"}})
+	return wantError("past the limit", err, sidecar.ErrBlobPutOptions)
+}
+
 func caseInvalidOptions(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
 	key := keys.key("entry")
@@ -879,10 +969,134 @@ func caseLastModified(ctx context.Context, target *Target, keys *keySpace) error
 	return nil
 }
 
-// A request whose deadline has passed takes no effect, and its caller cannot tell that from a lost
-// response, so a write reports unknown and a read fails. Then the store reads as if it never came.
+// What the suite's lost answers say: a client cannot tell a reset from a timeout or an EOF.
+var errLostAnswer = errors.New("the suite dropped this answer")
+
+// Target.Cluster with the next create's answer lost, as a reset connection loses it: sent to the store
+// first when applied is true, never sent otherwise. Every later call goes straight through, so
+// PutImmutable's read-back meets the store's own answers.
+type lostAnswerCluster struct {
+	sidecar.BlobCluster
+	applied bool
+
+	stateLock   sync.Mutex
+	lost        bool
+	createCount int
+}
+
+func (self *lostAnswerCluster) PutIfNoneMatch(ctx context.Context, key string, body []byte, options *sidecar.BlobPutOptions) (string, error) {
+	lose := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.createCount += 1
+		lose := !self.lost
+		self.lost = true
+		return lose
+	}()
+	if !lose {
+		return self.BlobCluster.PutIfNoneMatch(ctx, key, body, options)
+	}
+	if self.applied {
+		if _, err := self.BlobCluster.PutIfNoneMatch(ctx, key, body, options); err != nil {
+			return "", err
+		}
+	}
+	return "", &sidecar.BlobUnknownError{Err: errLostAnswer}
+}
+
+// §11.8's immutable row: a create, then a retry of it that finds its own bytes and calls that success,
+// with the ETag the key holds.
+func casePutImmutableEqual(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("page")
+	body := []byte("a log page")
+	etag, err := sidecar.PutImmutable(ctx, target.Cluster, key, body, nil)
+	if err != nil {
+		return err
+	}
+	again, err := sidecar.PutImmutable(ctx, target.Cluster, key, body, nil)
+	if err != nil {
+		return fmt.Errorf("the retry: %w", err)
+	}
+	if again != etag {
+		return fmt.Errorf("the retry answered etag %q, the create %q", again, etag)
+	}
+	return wantBody(ctx, target.Cluster, key, body)
+}
+
+// Other bytes at an immutable key are a fault, and the key keeps its first bytes.
+func casePutImmutableOther(ctx context.Context, target *Target, keys *keySpace) error {
+	key := keys.key("page")
+	held := []byte("a log page")
+	if _, err := target.Cluster.PutIfNoneMatch(ctx, key, held, nil); err != nil {
+		return err
+	}
+	for _, other := range [][]byte{[]byte("another page"), held[:len(held)-1], append(slices.Clone(held), 'x')} {
+		_, err := sidecar.PutImmutable(ctx, target.Cluster, key, other, nil)
+		if err := wantError(fmt.Sprintf("%q over %q", other, held), err, sidecar.ErrBlobImmutableMismatch); err != nil {
+			return err
+		}
+	}
+	return wantBody(ctx, target.Cluster, key, held)
+}
+
+// §11.8's write row: an unknown outcome reads the key back, and equal bytes were written.
+func casePutImmutableLostAnswerLanded(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := &lostAnswerCluster{BlobCluster: target.Cluster, applied: true}
+	key := keys.key("batch")
+	body := []byte("a batch")
+	sum := sha256.Sum256(body)
+	etag, err := sidecar.PutImmutable(ctx, cluster, key, body, &sidecar.BlobPutOptions{Sha256: sum[:]})
+	if err != nil {
+		return err
+	}
+	info, err := target.Cluster.Head(ctx, key)
+	if err != nil {
+		return err
+	}
+	if info.Etag != etag {
+		return fmt.Errorf("answered etag %q, the key holds %q", etag, info.Etag)
+	}
+	if cluster.createCount != 1 {
+		return fmt.Errorf("%d creates for one that landed", cluster.createCount)
+	}
+	return nil
+}
+
+// A 404 after an unknown outcome means the create never landed, so the same bytes go once more.
+func casePutImmutableLostCreate(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := &lostAnswerCluster{BlobCluster: target.Cluster}
+	key := keys.key("batch")
+	body := []byte("a batch")
+	if _, err := sidecar.PutImmutable(ctx, cluster, key, body, nil); err != nil {
+		return err
+	}
+	if cluster.createCount != 2 {
+		return fmt.Errorf("%d creates", cluster.createCount)
+	}
+	return wantBody(ctx, target.Cluster, key, body)
+}
+
+// The way to the store a late request takes: Settle.Delayed, on Target.Cluster's cluster.
+func delayedCluster(target *Target) (sidecar.BlobCluster, error) {
+	delayed := target.Settle.Delayed
+	if delayed == nil {
+		return nil, errors.New("no delayed path to the store: a late request cancelled before it arrives proves nothing of the store's deadline check")
+	}
+	if delayed.ClusterId() != target.Cluster.ClusterId() {
+		return nil, fmt.Errorf("the delayed path reaches cluster %q, not %q", delayed.ClusterId(), target.Cluster.ClusterId())
+	}
+	return delayed, nil
+}
+
+// A request that reaches the store past its deadline takes no effect, and its caller cannot tell that
+// from a lost response, so a write reports unknown and a read fails. Then the store reads as if it
+// never came. Each late request goes the delayed way, so it reaches the store.
 func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
+	delayed, err := delayedCluster(target)
+	if err != nil {
+		return err
+	}
 	key := keys.key("marker")
 	etag, err := cluster.PutIfNoneMatch(ctx, key, []byte("v1"), nil)
 	if err != nil {
@@ -890,14 +1104,14 @@ func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) er
 	}
 	past := sidecar.WithBlobDeadline(ctx, target.Settle.Now().Add(-1*time.Millisecond))
 	var unknown *sidecar.BlobUnknownError
-	_, err = cluster.PutIfMatch(past, key, etag, []byte("v2"), nil)
+	_, err = delayed.PutIfMatch(past, key, etag, []byte("v2"), nil)
 	if !errors.As(err, &unknown) {
 		return fmt.Errorf("a late PUT: got %v, want an unknown outcome", err)
 	}
 	if err := wantBody(ctx, cluster, key, []byte("v1")); err != nil {
 		return err
 	}
-	if _, err := cluster.Get(past, key); err == nil {
+	if _, err := delayed.Get(past, key); err == nil {
 		return errors.New("a late GET was served")
 	}
 	return nil
@@ -905,13 +1119,17 @@ func caseDeadlineRefused(ctx context.Context, target *Target, keys *keySpace) er
 
 func caseDeadlineDelete(ctx context.Context, target *Target, keys *keySpace) error {
 	cluster := target.Cluster
+	delayed, err := delayedCluster(target)
+	if err != nil {
+		return err
+	}
 	key := keys.key("marker")
 	if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("v1"), nil); err != nil {
 		return err
 	}
 	past := sidecar.WithBlobDeadline(ctx, target.Settle.Now().Add(-1*time.Millisecond))
 	var unknown *sidecar.BlobUnknownError
-	if err := cluster.Delete(past, key); !errors.As(err, &unknown) {
+	if err := delayed.Delete(past, key); !errors.As(err, &unknown) {
 		return fmt.Errorf("a late DELETE: got %v, want an unknown outcome", err)
 	}
 	return wantBody(ctx, cluster, key, []byte("v1"))

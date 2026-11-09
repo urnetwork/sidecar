@@ -1,0 +1,16 @@
+{
+  "name": "invited: the member's first device neither ephemeral nor read_only, carrying the bit, as a JIT member's from the admin's invite",
+  "members": [{"id": "admin", "role": "admin"}, {"id": "jit", "role": "member"}, {"id": "late", "role": "member"}],
+  "genesis": {"sidecar": "admin-laptop", "member": "admin"},
+  "sidecars": [
+    {"id": "admin-laptop", "member": "admin", "admitted_at": 1},
+    {"id": "jit-burner", "member": "jit", "admitted_at": 2, "signers": ["admin-laptop"], "ephemeral": true, "invited": true},
+    {"id": "jit-worker", "member": "jit", "admitted_at": 3, "signers": ["admin-laptop"], "read_only": true, "invited": true},
+    {"id": "jit-first", "member": "jit", "admitted_at": 4, "signers": ["admin-laptop"], "invited": true},
+    {"id": "jit-second", "member": "jit", "admitted_at": 5, "signers": ["admin-laptop"], "invited": true},
+    {"id": "late-first", "member": "late", "admitted_at": 6, "signers": ["admin-laptop"]},
+    {"id": "late-second", "member": "late", "admitted_at": 7, "signers": ["admin-laptop"], "invited": true}
+  ],
+  "consented": ["admin-laptop", "jit-first"],
+  "not_consented": ["jit-burner", "jit-worker", "jit-second", "late-first", "late-second"]
+}

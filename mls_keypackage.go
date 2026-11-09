@@ -1,19 +1,130 @@
 // KeyPackage (RFC 9420 §10): a client's published offer to join a group, one leaf and one init key
 // under one suite. KeyPackages are public, and their leaves enter trees unchanged.
+//
+// A sidecar makes its own (§10.6's KeyPackages): fresh init, leaf and signature keys, a leaf carrying
+// credential 0xF552 for that signature key, the subset's capabilities, and a lifetime of 90 days, which
+// starts a little before now so a peer whose clock runs behind can still add it. Being public, its
+// credential names no member, tag or client (§10.4). The last-resort one says so in its own extensions
+// (mls_extension.go) and is kept; a one-time one is dropped once a Welcome under it joins.
 
 package sidecar
 
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/hpke"
 	"fmt"
 	"time"
 )
 
+// A leaf's signature key and the credential naming it, which the identity key signed.
+type mlsLeafIdentity struct {
+	signatureKey ed25519.PrivateKey
+	credential   mlsCredential
+	// What its leaves advertise. Nil, as every engine leaves it, is the subset's (mlsSubsetCapabilities). Only the
+	// root's tests set it, for basic-credential leaves under 0x0001 that a peer without 0xF552 can read.
+	capabilities *mlsCapabilities
+}
+
+// The capabilities a new leaf of this identity carries under suite.
+func (self *mlsLeafIdentity) leafCapabilities(suite *mlsCipherSuite) mlsCapabilities {
+	if self.capabilities != nil {
+		return *self.capabilities
+	}
+	return mlsSubsetCapabilities(suite)
+}
+
+// A KeyPackage this sidecar made, with the private keys only it holds.
+type mlsHeldKeyPackage struct {
+	keyPackage *mlsKeyPackage
+	// Its MLSMessage, which gkm stores at kp/<sidecar_id>/<ref>.
+	encoded    []byte
+	ref        []byte
+	lastResort bool
+
+	initKey      hpke.PrivateKey
+	leafKey      hpke.PrivateKey
+	signatureKey ed25519.PrivateKey
+}
+
+// A fresh KeyPackage for identity's leaf, valid over lifetime. The init and leaf keys are new and hooked,
+// and the signature key is identity's.
+func newMlsHeldKeyPackage(suite *mlsCipherSuite, identity *mlsLeafIdentity, lifetime mlsLifetime, lastResort bool) (*mlsHeldKeyPackage, error) {
+	initKey, err := suite.generateKemKey("init_priv")
+	if err != nil {
+		return nil, err
+	}
+	leafKey, err := suite.generateKemKey("leaf_priv")
+	if err != nil {
+		return nil, err
+	}
+	leafNode := mlsLeafNode{
+		encryptionKey:  leafKey.PublicKey().Bytes(),
+		signatureKey:   []byte(identity.signatureKey.Public().(ed25519.PublicKey)),
+		credential:     identity.credential,
+		capabilities:   identity.leafCapabilities(suite),
+		leafNodeSource: mlsLeafNodeSourceKeyPackage,
+		lifetime:       lifetime,
+	}
+	if err := leafNode.sign(suite, identity.signatureKey, nil, 0); err != nil {
+		return nil, err
+	}
+	keyPackage := &mlsKeyPackage{
+		cipherSuite: suite.value,
+		initKey:     initKey.PublicKey().Bytes(),
+		leafNode:    leafNode,
+	}
+	if lastResort {
+		keyPackage.extensions = []mlsExtension{{extensionType: mlsExtensionTypeLastResort}}
+	}
+	if err := keyPackage.sign(suite, identity.signatureKey); err != nil {
+		return nil, err
+	}
+	encoded, err := mlsMarshalMessageOf(mlsWireFormatKeyPackage, keyPackage)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := keyPackage.ref(suite)
+	if err != nil {
+		return nil, err
+	}
+	return &mlsHeldKeyPackage{
+		keyPackage:   keyPackage,
+		encoded:      encoded,
+		ref:          ref,
+		lastResort:   lastResort,
+		initKey:      initKey,
+		leafKey:      leafKey,
+		signatureKey: identity.signatureKey,
+	}, nil
+}
+
+// A KeyPackage's MLSMessage, as an Add names it, decoded and checked against suite (RFC §10.1) with
+// sendingAt as validate takes it.
+func mlsDecodeKeyPackage(suite *mlsCipherSuite, settings *mlsTreeSettings, credentialValidator mlsCredentialValidator, encoded []byte, sendingAt *time.Time) (*mlsKeyPackage, error) {
+	keyPackage := &mlsKeyPackage{}
+	if err := mlsUnmarshalMessageOf(encoded, mlsWireFormatKeyPackage, keyPackage); err != nil {
+		return nil, err
+	}
+	if err := keyPackage.validate(suite, settings, credentialValidator, sendingAt); err != nil {
+		return nil, err
+	}
+	return keyPackage, nil
+}
+
+// The window a new leaf is valid in: from skew before now for maximum, and never past the tree's bound.
+func newMlsLifetime(now time.Time, skew time.Duration, maximum time.Duration) mlsLifetime {
+	notBefore := now.Add(-skew).Unix()
+	if notBefore < 0 {
+		notBefore = 0
+	}
+	return mlsLifetime{notBefore: uint64(notBefore), notAfter: uint64(notBefore) + uint64(maximum/time.Second)}
+}
+
 // Signature labels (RFC §17.6).
 const mlsSignatureLabelKeyPackage = "KeyPackageTBS"
 
-// KeyPackage (RFC §10).
+// What a client publishes so that others can add it to a group (RFC §10).
 type mlsKeyPackage struct {
 	cipherSuite uint16
 	initKey     []byte

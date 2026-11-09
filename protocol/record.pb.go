@@ -1,5 +1,16 @@
-// The record's primitives (§16.8), sealed end to end, so no server reads a field here. RECORD.md's kinds, class
-// numbers and entry bodies are not here. A bare section number, as in 16.6, is DESIGN.md's.
+// The record's primitives (§16.8), then RECORD.md's entry bodies. An entry is a sealed file, so evs parses none of it,
+// and that is all the fence's "every field is sealed" below speaks of. Three of §16.8's messages also travel outside
+// an entry, and servers parse them: api and the gates read ApprovalDecision and ApprovalCancel (§2.8's api-10), and
+// whatever a CanonicalAction holds shows wherever a GrantActivate carries it into the log (api-7, §8.8) or a gate takes
+// it beside a decision (api-10, §16.6's spend check). testdata/metadata/fields.yml maps those fields to their rows, and
+// says which have none. RECORD.md's messages travel only sealed, in an entry or a deposit, or in a packet a person
+// hands to someone outside the log, so none of them needs a row (RECORD.md section 18; I-18).
+//
+// The four enums after §16.8's messages name the values CanonicalAction.kind, ApprovalRequest.risk and
+// ApprovalDecision.decision and .channel carry, and those fields stay uint32 on the wire, as §16.8 writes them
+// (plan-MCP-wire-enum-numbers). RECORD.md's kind numbers and classes are record_kind.go's rather than enums here: a
+// header carries a kind as a number, and a reader keeps a kind it does not know (§16.8). A bare section number, as in
+// 16.6, is DESIGN.md's, and "section n" is RECORD.md's.
 //
 // CanonicalAction's field 37 is reserved in D-PHASE-9's sense: declared here, and set only in version 2, for
 // format 2's evs_write, so an approver that does not know that version refuses it (§16.8).
@@ -27,6 +38,258 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// plan-MCP-wire-enum-numbers: names for what §16.8's uint32 fields carry, 0 unspecified and written by no one. An
+// approver, spender or gate refuses 0 or a value it does not know in any of them; §16.8's "unknown kinds are kept"
+// speaks of RecordHeader.kind alone.
+// CanonicalAction.kind: §5.4's SidecarActionKind in its order, one verb a value, 16.7's restore appended, and new
+// kinds append. publish and listen cover tls/ and smtp/ alike, since host and socket_name say which.
+type SidecarActionKind int32
+
+const (
+	SidecarActionKind_SIDECAR_ACTION_KIND_UNSPECIFIED         SidecarActionKind = 0
+	SidecarActionKind_SIDECAR_ACTION_KIND_PUBLISH             SidecarActionKind = 1
+	SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN              SidecarActionKind = 2
+	SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD             SidecarActionKind = 3
+	SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE              SidecarActionKind = 4
+	SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE       SidecarActionKind = 5
+	SidecarActionKind_SIDECAR_ACTION_KIND_INVITE              SidecarActionKind = 6
+	SidecarActionKind_SIDECAR_ACTION_KIND_SHARE               SidecarActionKind = 7
+	SidecarActionKind_SIDECAR_ACTION_KIND_ALIAS_CREATE        SidecarActionKind = 8
+	SidecarActionKind_SIDECAR_ACTION_KIND_ALIAS_DELETE        SidecarActionKind = 9
+	SidecarActionKind_SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE  SidecarActionKind = 10
+	SidecarActionKind_SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE SidecarActionKind = 11
+	SidecarActionKind_SIDECAR_ACTION_KIND_DNS_SET             SidecarActionKind = 12
+	SidecarActionKind_SIDECAR_ACTION_KIND_DNS_DELETE          SidecarActionKind = 13
+	SidecarActionKind_SIDECAR_ACTION_KIND_MAIL_SEND           SidecarActionKind = 14
+	SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST      SidecarActionKind = 15
+	SidecarActionKind_SIDECAR_ACTION_KIND_PAYMENT             SidecarActionKind = 16
+	SidecarActionKind_SIDECAR_ACTION_KIND_RESTORE             SidecarActionKind = 17
+)
+
+// Enum value maps for SidecarActionKind.
+var (
+	SidecarActionKind_name = map[int32]string{
+		0:  "SIDECAR_ACTION_KIND_UNSPECIFIED",
+		1:  "SIDECAR_ACTION_KIND_PUBLISH",
+		2:  "SIDECAR_ACTION_KIND_LISTEN",
+		3:  "SIDECAR_ACTION_KIND_FORWARD",
+		4:  "SIDECAR_ACTION_KIND_EXPOSE",
+		5:  "SIDECAR_ACTION_KIND_EGRESS_CHANGE",
+		6:  "SIDECAR_ACTION_KIND_INVITE",
+		7:  "SIDECAR_ACTION_KIND_SHARE",
+		8:  "SIDECAR_ACTION_KIND_ALIAS_CREATE",
+		9:  "SIDECAR_ACTION_KIND_ALIAS_DELETE",
+		10: "SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE",
+		11: "SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE",
+		12: "SIDECAR_ACTION_KIND_DNS_SET",
+		13: "SIDECAR_ACTION_KIND_DNS_DELETE",
+		14: "SIDECAR_ACTION_KIND_MAIL_SEND",
+		15: "SIDECAR_ACTION_KIND_ACCESS_REQUEST",
+		16: "SIDECAR_ACTION_KIND_PAYMENT",
+		17: "SIDECAR_ACTION_KIND_RESTORE",
+	}
+	SidecarActionKind_value = map[string]int32{
+		"SIDECAR_ACTION_KIND_UNSPECIFIED":         0,
+		"SIDECAR_ACTION_KIND_PUBLISH":             1,
+		"SIDECAR_ACTION_KIND_LISTEN":              2,
+		"SIDECAR_ACTION_KIND_FORWARD":             3,
+		"SIDECAR_ACTION_KIND_EXPOSE":              4,
+		"SIDECAR_ACTION_KIND_EGRESS_CHANGE":       5,
+		"SIDECAR_ACTION_KIND_INVITE":              6,
+		"SIDECAR_ACTION_KIND_SHARE":               7,
+		"SIDECAR_ACTION_KIND_ALIAS_CREATE":        8,
+		"SIDECAR_ACTION_KIND_ALIAS_DELETE":        9,
+		"SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE":  10,
+		"SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE": 11,
+		"SIDECAR_ACTION_KIND_DNS_SET":             12,
+		"SIDECAR_ACTION_KIND_DNS_DELETE":          13,
+		"SIDECAR_ACTION_KIND_MAIL_SEND":           14,
+		"SIDECAR_ACTION_KIND_ACCESS_REQUEST":      15,
+		"SIDECAR_ACTION_KIND_PAYMENT":             16,
+		"SIDECAR_ACTION_KIND_RESTORE":             17,
+	}
+)
+
+func (x SidecarActionKind) Enum() *SidecarActionKind {
+	p := new(SidecarActionKind)
+	*p = x
+	return p
+}
+
+func (x SidecarActionKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SidecarActionKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_record_proto_enumTypes[0].Descriptor()
+}
+
+func (SidecarActionKind) Type() protoreflect.EnumType {
+	return &file_protocol_record_proto_enumTypes[0]
+}
+
+func (x SidecarActionKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SidecarActionKind.Descriptor instead.
+func (SidecarActionKind) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{0}
+}
+
+// ApprovalRequest.risk: numeric order is the max §5.4 takes, and an agent may only raise it.
+type SidecarRisk int32
+
+const (
+	SidecarRisk_SIDECAR_RISK_UNSPECIFIED SidecarRisk = 0
+	SidecarRisk_SIDECAR_RISK_NORMAL      SidecarRisk = 1
+	SidecarRisk_SIDECAR_RISK_HIGH        SidecarRisk = 2
+)
+
+// Enum value maps for SidecarRisk.
+var (
+	SidecarRisk_name = map[int32]string{
+		0: "SIDECAR_RISK_UNSPECIFIED",
+		1: "SIDECAR_RISK_NORMAL",
+		2: "SIDECAR_RISK_HIGH",
+	}
+	SidecarRisk_value = map[string]int32{
+		"SIDECAR_RISK_UNSPECIFIED": 0,
+		"SIDECAR_RISK_NORMAL":      1,
+		"SIDECAR_RISK_HIGH":        2,
+	}
+)
+
+func (x SidecarRisk) Enum() *SidecarRisk {
+	p := new(SidecarRisk)
+	*p = x
+	return p
+}
+
+func (x SidecarRisk) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SidecarRisk) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_record_proto_enumTypes[1].Descriptor()
+}
+
+func (SidecarRisk) Type() protoreflect.EnumType {
+	return &file_protocol_record_proto_enumTypes[1]
+}
+
+func (x SidecarRisk) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SidecarRisk.Descriptor instead.
+func (SidecarRisk) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{1}
+}
+
+// ApprovalDecision.decision.
+type ApprovalVerdict int32
+
+const (
+	ApprovalVerdict_APPROVAL_VERDICT_UNSPECIFIED ApprovalVerdict = 0
+	ApprovalVerdict_APPROVAL_VERDICT_APPROVE     ApprovalVerdict = 1
+	ApprovalVerdict_APPROVAL_VERDICT_DENY        ApprovalVerdict = 2
+)
+
+// Enum value maps for ApprovalVerdict.
+var (
+	ApprovalVerdict_name = map[int32]string{
+		0: "APPROVAL_VERDICT_UNSPECIFIED",
+		1: "APPROVAL_VERDICT_APPROVE",
+		2: "APPROVAL_VERDICT_DENY",
+	}
+	ApprovalVerdict_value = map[string]int32{
+		"APPROVAL_VERDICT_UNSPECIFIED": 0,
+		"APPROVAL_VERDICT_APPROVE":     1,
+		"APPROVAL_VERDICT_DENY":        2,
+	}
+)
+
+func (x ApprovalVerdict) Enum() *ApprovalVerdict {
+	p := new(ApprovalVerdict)
+	*p = x
+	return p
+}
+
+func (x ApprovalVerdict) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApprovalVerdict) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_record_proto_enumTypes[2].Descriptor()
+}
+
+func (ApprovalVerdict) Type() protoreflect.EnumType {
+	return &file_protocol_record_proto_enumTypes[2]
+}
+
+func (x ApprovalVerdict) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApprovalVerdict.Descriptor instead.
+func (ApprovalVerdict) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{2}
+}
+
+// ApprovalDecision.channel and AclRequestRule.evidence, as RECORD.md section 6.2 numbers them.
+type ApprovalChannel int32
+
+const (
+	ApprovalChannel_APPROVAL_CHANNEL_UNSPECIFIED ApprovalChannel = 0
+	ApprovalChannel_APPROVAL_CHANNEL_DEVICE      ApprovalChannel = 1
+	ApprovalChannel_APPROVAL_CHANNEL_PRESENCE    ApprovalChannel = 2
+	ApprovalChannel_APPROVAL_CHANNEL_HARNESS     ApprovalChannel = 3
+)
+
+// Enum value maps for ApprovalChannel.
+var (
+	ApprovalChannel_name = map[int32]string{
+		0: "APPROVAL_CHANNEL_UNSPECIFIED",
+		1: "APPROVAL_CHANNEL_DEVICE",
+		2: "APPROVAL_CHANNEL_PRESENCE",
+		3: "APPROVAL_CHANNEL_HARNESS",
+	}
+	ApprovalChannel_value = map[string]int32{
+		"APPROVAL_CHANNEL_UNSPECIFIED": 0,
+		"APPROVAL_CHANNEL_DEVICE":      1,
+		"APPROVAL_CHANNEL_PRESENCE":    2,
+		"APPROVAL_CHANNEL_HARNESS":     3,
+	}
+)
+
+func (x ApprovalChannel) Enum() *ApprovalChannel {
+	p := new(ApprovalChannel)
+	*p = x
+	return p
+}
+
+func (x ApprovalChannel) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApprovalChannel) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_record_proto_enumTypes[3].Descriptor()
+}
+
+func (ApprovalChannel) Type() protoreflect.EnumType {
+	return &file_protocol_record_proto_enumTypes[3]
+}
+
+func (x ApprovalChannel) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApprovalChannel.Descriptor instead.
+func (ApprovalChannel) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{3}
+}
 
 // sidecar/protocol/record.proto; frozen at M3's entry review (D-MCP-6). Frozen means wire-stable: numbers and
 // meanings never change, versions add fields; every hash and signature covers stored bytes. Every field is
@@ -843,7 +1106,8 @@ type ApprovalDecision struct {
 	Channel          uint32 `protobuf:"varint,8,opt,name=channel,proto3" json:"channel,omitempty"` // evidence: device, presence or harness (owner decision 75)
 	Sshsig           []byte `protobuf:"bytes,9,opt,name=sshsig,proto3" json:"sshsig,omitempty"`
 	EvidenceSha256   []byte `protobuf:"bytes,10,opt,name=evidence_sha256,json=evidenceSha256,proto3" json:"evidence_sha256,omitempty"` // harness: the matched hook event, which stays in the record;
-	// presence: the WebAuthn assertion
+	// device and presence: empty, a presence decision's assertion riding
+	// in Signed.webauthn (record-md-presence-evidence-sha256)
 	RequesterSidecarId []byte          `protobuf:"bytes,11,opt,name=requester_sidecar_id,json=requesterSidecarId,proto3" json:"requester_sidecar_id,omitempty"` // the only sidecar that may spend it (16.6)
 	AuthPin            *bridge.AuthPin `protobuf:"bytes,12,opt,name=auth_pin,json=authPin,proto3" json:"auth_pin,omitempty"`                                    // §7.9's pin the approver evaluated the request under
 	Version            uint32          `protobuf:"varint,13,opt,name=version,proto3" json:"version,omitempty"`                                                  // 1
@@ -1301,6 +1565,3523 @@ func (x *RetentionPolicy) GetArchive() bool {
 	return false
 }
 
+// RECORD.md section 5.4: a deposit file's one message, sealed under its object key (§11.12).
+type RecordDepositBatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*RecordDeposit       `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordDepositBatch) Reset() {
+	*x = RecordDepositBatch{}
+	mi := &file_protocol_record_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordDepositBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordDepositBatch) ProtoMessage() {}
+
+func (x *RecordDepositBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordDepositBatch.ProtoReflect.Descriptor instead.
+func (*RecordDepositBatch) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RecordDepositBatch) GetEntries() []*RecordDeposit {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type RecordDeposit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entry         []byte                 `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"` // RecordEntry bytes; key_slot_id empty, key_index 0
+	Key           []byte                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Salt          []byte                 `protobuf:"bytes,3,opt,name=salt,proto3" json:"salt,omitempty"` // the body key and salt, which the ingester re-slots
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordDeposit) Reset() {
+	*x = RecordDeposit{}
+	mi := &file_protocol_record_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordDeposit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordDeposit) ProtoMessage() {}
+
+func (x *RecordDeposit) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordDeposit.ProtoReflect.Descriptor instead.
+func (*RecordDeposit) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RecordDeposit) GetEntry() []byte {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+func (x *RecordDeposit) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *RecordDeposit) GetSalt() []byte {
+	if x != nil {
+		return x.Salt
+	}
+	return nil
+}
+
+// RECORD.md section 6.4: the new kinds' bodies, beside §16.8's messages (M3 unless a comment says otherwise).
+type CoordinationBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`                                         // prose: claim and handoff <= 512 B, the others <= 1,024 B
+	Targets       []string               `protobuf:"bytes,2,rep,name=targets,proto3" json:"targets,omitempty"`                                   // <= 16; section 6.4's targets grammar
+	ExpiresMillis int64                  `protobuf:"varint,3,opt,name=expires_millis,json=expiresMillis,proto3" json:"expires_millis,omitempty"` // claim, ask; else 0
+	ClaimId       []byte                 `protobuf:"bytes,4,opt,name=claim_id,json=claimId,proto3" json:"claim_id,omitempty"`                    // a claim restated: the opening entry's entry_id; empty when opening
+	ClaimState    uint32                 `protobuf:"varint,5,opt,name=claim_state,json=claimState,proto3" json:"claim_state,omitempty"`          // claim: 1 active, 2 released (§16.11's Claim.state)
+	Result        uint32                 `protobuf:"varint,6,opt,name=result,proto3" json:"result,omitempty"`                                    // check: 1 pass, 2 fail, 3 objection (a person's "no")
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoordinationBody) Reset() {
+	*x = CoordinationBody{}
+	mi := &file_protocol_record_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoordinationBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoordinationBody) ProtoMessage() {}
+
+func (x *CoordinationBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoordinationBody.ProtoReflect.Descriptor instead.
+func (*CoordinationBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CoordinationBody) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *CoordinationBody) GetTargets() []string {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *CoordinationBody) GetExpiresMillis() int64 {
+	if x != nil {
+		return x.ExpiresMillis
+	}
+	return 0
+}
+
+func (x *CoordinationBody) GetClaimId() []byte {
+	if x != nil {
+		return x.ClaimId
+	}
+	return nil
+}
+
+func (x *CoordinationBody) GetClaimState() uint32 {
+	if x != nil {
+		return x.ClaimState
+	}
+	return 0
+}
+
+func (x *CoordinationBody) GetResult() uint32 {
+	if x != nil {
+		return x.Result
+	}
+	return 0
+}
+
+type ContextBody struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Stage            uint32                 `protobuf:"varint,1,opt,name=stage,proto3" json:"stage,omitempty"` // 1 start, 2 restatement (section 4.3)
+	Harness          string                 `protobuf:"bytes,2,opt,name=harness,proto3" json:"harness,omitempty"`
+	HarnessVersion   string                 `protobuf:"bytes,3,opt,name=harness_version,json=harnessVersion,proto3" json:"harness_version,omitempty"`
+	AgentLabel       string                 `protobuf:"bytes,4,opt,name=agent_label,json=agentLabel,proto3" json:"agent_label,omitempty"`                    // [a-z0-9-]{1,64}, as §16.11's AnnounceWho
+	SessionIds       []string               `protobuf:"bytes,5,rep,name=session_ids,json=sessionIds,proto3" json:"session_ids,omitempty"`                    // <= 4, each <= 64 B
+	Model            string                 `protobuf:"bytes,6,opt,name=model,proto3" json:"model,omitempty"`                                                // an identifier <= 64 B, or empty
+	PermissionMode   string                 `protobuf:"bytes,7,opt,name=permission_mode,json=permissionMode,proto3" json:"permission_mode,omitempty"`        // the harness's own string, <= 32 B
+	RepoId           []byte                 `protobuf:"bytes,8,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`                                // the run's evs repo, else empty
+	Project          string                 `protobuf:"bytes,9,opt,name=project,proto3" json:"project,omitempty"`                                            // §16.11's project key rule, <= 128 B; T: empty when the repo is private
+	Branch           string                 `protobuf:"bytes,10,opt,name=branch,proto3" json:"branch,omitempty"`                                             // V: a git ref name <= 128 B
+	Title            string                 `protobuf:"bytes,11,opt,name=title,proto3" json:"title,omitempty"`                                               // V: §16.10's run title, <= 120 B after redaction
+	InstructionFiles []*InstructionFile     `protobuf:"bytes,12,rep,name=instruction_files,json=instructionFiles,proto3" json:"instruction_files,omitempty"` // <= 64
+	Truncations      []string               `protobuf:"bytes,13,rep,name=truncations,proto3" json:"truncations,omitempty"`                                   // V: <= 16 warnings, each <= 128 B: a base name and its cut
+	ConfigSha256     []byte                 `protobuf:"bytes,14,opt,name=config_sha256,json=configSha256,proto3" json:"config_sha256,omitempty"`             // the harness config hash §16.6 checks
+	ContinuesRunId   []byte                 `protobuf:"bytes,15,opt,name=continues_run_id,json=continuesRunId,proto3" json:"continues_run_id,omitempty"`
+	ContinuesEntryId []byte                 `protobuf:"bytes,16,opt,name=continues_entry_id,json=continuesEntryId,proto3" json:"continues_entry_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ContextBody) Reset() {
+	*x = ContextBody{}
+	mi := &file_protocol_record_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContextBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContextBody) ProtoMessage() {}
+
+func (x *ContextBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContextBody.ProtoReflect.Descriptor instead.
+func (*ContextBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ContextBody) GetStage() uint32 {
+	if x != nil {
+		return x.Stage
+	}
+	return 0
+}
+
+func (x *ContextBody) GetHarness() string {
+	if x != nil {
+		return x.Harness
+	}
+	return ""
+}
+
+func (x *ContextBody) GetHarnessVersion() string {
+	if x != nil {
+		return x.HarnessVersion
+	}
+	return ""
+}
+
+func (x *ContextBody) GetAgentLabel() string {
+	if x != nil {
+		return x.AgentLabel
+	}
+	return ""
+}
+
+func (x *ContextBody) GetSessionIds() []string {
+	if x != nil {
+		return x.SessionIds
+	}
+	return nil
+}
+
+func (x *ContextBody) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ContextBody) GetPermissionMode() string {
+	if x != nil {
+		return x.PermissionMode
+	}
+	return ""
+}
+
+func (x *ContextBody) GetRepoId() []byte {
+	if x != nil {
+		return x.RepoId
+	}
+	return nil
+}
+
+func (x *ContextBody) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *ContextBody) GetBranch() string {
+	if x != nil {
+		return x.Branch
+	}
+	return ""
+}
+
+func (x *ContextBody) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ContextBody) GetInstructionFiles() []*InstructionFile {
+	if x != nil {
+		return x.InstructionFiles
+	}
+	return nil
+}
+
+func (x *ContextBody) GetTruncations() []string {
+	if x != nil {
+		return x.Truncations
+	}
+	return nil
+}
+
+func (x *ContextBody) GetConfigSha256() []byte {
+	if x != nil {
+		return x.ConfigSha256
+	}
+	return nil
+}
+
+func (x *ContextBody) GetContinuesRunId() []byte {
+	if x != nil {
+		return x.ContinuesRunId
+	}
+	return nil
+}
+
+func (x *ContextBody) GetContinuesEntryId() []byte {
+	if x != nil {
+		return x.ContinuesEntryId
+	}
+	return nil
+}
+
+type InstructionFile struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scope         uint32                 `protobuf:"varint,1,opt,name=scope,proto3" json:"scope,omitempty"` // 1 managed, 2 user, 3 project
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`    // V: the file's base name, <= 128 B; T keeps the hash (§16.7)
+	Sha256        []byte                 `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	Size          uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstructionFile) Reset() {
+	*x = InstructionFile{}
+	mi := &file_protocol_record_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstructionFile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstructionFile) ProtoMessage() {}
+
+func (x *InstructionFile) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstructionFile.ProtoReflect.Descriptor instead.
+func (*InstructionFile) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *InstructionFile) GetScope() uint32 {
+	if x != nil {
+		return x.Scope
+	}
+	return 0
+}
+
+func (x *InstructionFile) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *InstructionFile) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+func (x *InstructionFile) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+type ChangeBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RepoId        []byte                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	Project       string                 `protobuf:"bytes,2,opt,name=project,proto3" json:"project,omitempty"`                         // as ContextBody
+	BaseCommit    string                 `protobuf:"bytes,3,opt,name=base_commit,json=baseCommit,proto3" json:"base_commit,omitempty"` // the git oid the interval started from
+	Commits       []string               `protobuf:"bytes,4,rep,name=commits,proto3" json:"commits,omitempty"`                         // <= 64 commits the run made in the interval: commit-to-run links
+	PathCount     uint32                 `protobuf:"varint,5,opt,name=path_count,json=pathCount,proto3" json:"path_count,omitempty"`   // changed paths in all
+	EditCount     uint32                 `protobuf:"varint,6,opt,name=edit_count,json=editCount,proto3" json:"edit_count,omitempty"`
+	ShellCount    uint32                 `protobuf:"varint,7,opt,name=shell_count,json=shellCount,proto3" json:"shell_count,omitempty"`
+	ForeignCount  uint32                 `protobuf:"varint,8,opt,name=foreign_count,json=foreignCount,proto3" json:"foreign_count,omitempty"` // by §16.7's attribution
+	Capture       uint32                 `protobuf:"varint,9,opt,name=capture,proto3" json:"capture,omitempty"`                               // bits: 1 hooks, 2 scan, 4 file events
+	Paths         []*ChangedPath         `protobuf:"bytes,10,rep,name=paths,proto3" json:"paths,omitempty"`                                   // <= 4,096; past it path_count stands, and coverage has truncation
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeBody) Reset() {
+	*x = ChangeBody{}
+	mi := &file_protocol_record_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeBody) ProtoMessage() {}
+
+func (x *ChangeBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeBody.ProtoReflect.Descriptor instead.
+func (*ChangeBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ChangeBody) GetRepoId() []byte {
+	if x != nil {
+		return x.RepoId
+	}
+	return nil
+}
+
+func (x *ChangeBody) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *ChangeBody) GetBaseCommit() string {
+	if x != nil {
+		return x.BaseCommit
+	}
+	return ""
+}
+
+func (x *ChangeBody) GetCommits() []string {
+	if x != nil {
+		return x.Commits
+	}
+	return nil
+}
+
+func (x *ChangeBody) GetPathCount() uint32 {
+	if x != nil {
+		return x.PathCount
+	}
+	return 0
+}
+
+func (x *ChangeBody) GetEditCount() uint32 {
+	if x != nil {
+		return x.EditCount
+	}
+	return 0
+}
+
+func (x *ChangeBody) GetShellCount() uint32 {
+	if x != nil {
+		return x.ShellCount
+	}
+	return 0
+}
+
+func (x *ChangeBody) GetForeignCount() uint32 {
+	if x != nil {
+		return x.ForeignCount
+	}
+	return 0
+}
+
+func (x *ChangeBody) GetCapture() uint32 {
+	if x != nil {
+		return x.Capture
+	}
+	return 0
+}
+
+func (x *ChangeBody) GetPaths() []*ChangedPath {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+type ChangedPath struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"` // V: relative to the worktree
+	BeforeSha256  []byte                 `protobuf:"bytes,2,opt,name=before_sha256,json=beforeSha256,proto3" json:"before_sha256,omitempty"`
+	AfterSha256   []byte                 `protobuf:"bytes,3,opt,name=after_sha256,json=afterSha256,proto3" json:"after_sha256,omitempty"`   // §16.7's ledger; empty when absent or unknown
+	Mode          uint32                 `protobuf:"varint,4,opt,name=mode,proto3" json:"mode,omitempty"`                                   // git's file mode
+	Attribution   uint32                 `protobuf:"varint,5,opt,name=attribution,proto3" json:"attribution,omitempty"`                     // 1 edit, 2 shell, 3 foreign (§16.7)
+	BlobEntryId   []byte                 `protobuf:"bytes,6,opt,name=blob_entry_id,json=blobEntryId,proto3" json:"blob_entry_id,omitempty"` // V: the blob with the after bytes; empty past §16.7's 8 MiB
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangedPath) Reset() {
+	*x = ChangedPath{}
+	mi := &file_protocol_record_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangedPath) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangedPath) ProtoMessage() {}
+
+func (x *ChangedPath) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangedPath.ProtoReflect.Descriptor instead.
+func (*ChangedPath) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ChangedPath) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ChangedPath) GetBeforeSha256() []byte {
+	if x != nil {
+		return x.BeforeSha256
+	}
+	return nil
+}
+
+func (x *ChangedPath) GetAfterSha256() []byte {
+	if x != nil {
+		return x.AfterSha256
+	}
+	return nil
+}
+
+func (x *ChangedPath) GetMode() uint32 {
+	if x != nil {
+		return x.Mode
+	}
+	return 0
+}
+
+func (x *ChangedPath) GetAttribution() uint32 {
+	if x != nil {
+		return x.Attribution
+	}
+	return 0
+}
+
+func (x *ChangedPath) GetBlobEntryId() []byte {
+	if x != nil {
+		return x.BlobEntryId
+	}
+	return nil
+}
+
+type PermissionBody struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Decision        uint32                 `protobuf:"varint,1,opt,name=decision,proto3" json:"decision,omitempty"`                    // 0 unknown, 1 asked, 2 allowed, 3 denied
+	DecidedBy       uint32                 `protobuf:"varint,2,opt,name=decided_by,json=decidedBy,proto3" json:"decided_by,omitempty"` // 0 unknown, 1 user, 2 config, 3 hook, 4 classifier
+	PermissionMode  string                 `protobuf:"bytes,3,opt,name=permission_mode,json=permissionMode,proto3" json:"permission_mode,omitempty"`
+	ToolClass       uint32                 `protobuf:"varint,4,opt,name=tool_class,json=toolClass,proto3" json:"tool_class,omitempty"`                  // 1 shell, 2 edit, 3 mcp, 4 web, 5 other
+	ToolName        string                 `protobuf:"bytes,5,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`                      // V: <= 64 B
+	ArgumentsSha256 []byte                 `protobuf:"bytes,6,opt,name=arguments_sha256,json=argumentsSha256,proto3" json:"arguments_sha256,omitempty"` // V: §16.6's hash of the arguments
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PermissionBody) Reset() {
+	*x = PermissionBody{}
+	mi := &file_protocol_record_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PermissionBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PermissionBody) ProtoMessage() {}
+
+func (x *PermissionBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PermissionBody.ProtoReflect.Descriptor instead.
+func (*PermissionBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *PermissionBody) GetDecision() uint32 {
+	if x != nil {
+		return x.Decision
+	}
+	return 0
+}
+
+func (x *PermissionBody) GetDecidedBy() uint32 {
+	if x != nil {
+		return x.DecidedBy
+	}
+	return 0
+}
+
+func (x *PermissionBody) GetPermissionMode() string {
+	if x != nil {
+		return x.PermissionMode
+	}
+	return ""
+}
+
+func (x *PermissionBody) GetToolClass() uint32 {
+	if x != nil {
+		return x.ToolClass
+	}
+	return 0
+}
+
+func (x *PermissionBody) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *PermissionBody) GetArgumentsSha256() []byte {
+	if x != nil {
+		return x.ArgumentsSha256
+	}
+	return nil
+}
+
+type ApprovalUseBody struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ApprovalId     []byte                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	UseIndex       uint32                 `protobuf:"varint,2,opt,name=use_index,json=useIndex,proto3" json:"use_index,omitempty"`
+	PayloadSha256  []byte                 `protobuf:"bytes,3,opt,name=payload_sha256,json=payloadSha256,proto3" json:"payload_sha256,omitempty"`
+	EffectKey      []byte                 `protobuf:"bytes,4,opt,name=effect_key,json=effectKey,proto3" json:"effect_key,omitempty"`
+	State          uint32                 `protobuf:"varint,5,opt,name=state,proto3" json:"state,omitempty"` // §16.6's Outcome: 1 done, 2 not_done, 3 uncertain
+	EffectRef      []byte                 `protobuf:"bytes,6,opt,name=effect_ref,json=effectRef,proto3" json:"effect_ref,omitempty"`
+	ReservedMillis int64                  `protobuf:"varint,7,opt,name=reserved_millis,json=reservedMillis,proto3" json:"reserved_millis,omitempty"`
+	OutcomeMillis  int64                  `protobuf:"varint,8,opt,name=outcome_millis,json=outcomeMillis,proto3" json:"outcome_millis,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ApprovalUseBody) Reset() {
+	*x = ApprovalUseBody{}
+	mi := &file_protocol_record_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApprovalUseBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApprovalUseBody) ProtoMessage() {}
+
+func (x *ApprovalUseBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApprovalUseBody.ProtoReflect.Descriptor instead.
+func (*ApprovalUseBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ApprovalUseBody) GetApprovalId() []byte {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return nil
+}
+
+func (x *ApprovalUseBody) GetUseIndex() uint32 {
+	if x != nil {
+		return x.UseIndex
+	}
+	return 0
+}
+
+func (x *ApprovalUseBody) GetPayloadSha256() []byte {
+	if x != nil {
+		return x.PayloadSha256
+	}
+	return nil
+}
+
+func (x *ApprovalUseBody) GetEffectKey() []byte {
+	if x != nil {
+		return x.EffectKey
+	}
+	return nil
+}
+
+func (x *ApprovalUseBody) GetState() uint32 {
+	if x != nil {
+		return x.State
+	}
+	return 0
+}
+
+func (x *ApprovalUseBody) GetEffectRef() []byte {
+	if x != nil {
+		return x.EffectRef
+	}
+	return nil
+}
+
+func (x *ApprovalUseBody) GetReservedMillis() int64 {
+	if x != nil {
+		return x.ReservedMillis
+	}
+	return 0
+}
+
+func (x *ApprovalUseBody) GetOutcomeMillis() int64 {
+	if x != nil {
+		return x.OutcomeMillis
+	}
+	return 0
+}
+
+type RouteBody struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Event           uint32                 `protobuf:"varint,1,opt,name=event,proto3" json:"event,omitempty"`                // 1 opened, 2 closed
+	Kind            uint32                 `protobuf:"varint,2,opt,name=kind,proto3" json:"kind,omitempty"`                  // 1 forward, 2 expose, 3 route, 4 map (§17.8)
+	RuleId          []byte                 `protobuf:"bytes,3,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"` // bridge rules; a forward's grant is the header's grant_id
+	TargetSidecarId []byte                 `protobuf:"bytes,4,opt,name=target_sidecar_id,json=targetSidecarId,proto3" json:"target_sidecar_id,omitempty"`
+	TargetPort      uint32                 `protobuf:"varint,5,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
+	Cidrs           []string               `protobuf:"bytes,6,rep,name=cidrs,proto3" json:"cidrs,omitempty"`
+	ExpiresMillis   int64                  `protobuf:"varint,7,opt,name=expires_millis,json=expiresMillis,proto3" json:"expires_millis,omitempty"`
+	ApprovalId      []byte                 `protobuf:"bytes,8,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	Reason          uint32                 `protobuf:"varint,9,opt,name=reason,proto3" json:"reason,omitempty"` // closed: 1 expired, 2 revoked, 3 withdrawn, 4 suspended
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RouteBody) Reset() {
+	*x = RouteBody{}
+	mi := &file_protocol_record_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteBody) ProtoMessage() {}
+
+func (x *RouteBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteBody.ProtoReflect.Descriptor instead.
+func (*RouteBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RouteBody) GetEvent() uint32 {
+	if x != nil {
+		return x.Event
+	}
+	return 0
+}
+
+func (x *RouteBody) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+func (x *RouteBody) GetRuleId() []byte {
+	if x != nil {
+		return x.RuleId
+	}
+	return nil
+}
+
+func (x *RouteBody) GetTargetSidecarId() []byte {
+	if x != nil {
+		return x.TargetSidecarId
+	}
+	return nil
+}
+
+func (x *RouteBody) GetTargetPort() uint32 {
+	if x != nil {
+		return x.TargetPort
+	}
+	return 0
+}
+
+func (x *RouteBody) GetCidrs() []string {
+	if x != nil {
+		return x.Cidrs
+	}
+	return nil
+}
+
+func (x *RouteBody) GetExpiresMillis() int64 {
+	if x != nil {
+		return x.ExpiresMillis
+	}
+	return 0
+}
+
+func (x *RouteBody) GetApprovalId() []byte {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return nil
+}
+
+func (x *RouteBody) GetReason() uint32 {
+	if x != nil {
+		return x.Reason
+	}
+	return 0
+}
+
+type PublishBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Event         uint32                 `protobuf:"varint,1,opt,name=event,proto3" json:"event,omitempty"` // 1 opened, 2 closed
+	Host          string                 `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
+	Port          uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	Audience      uint32                 `protobuf:"varint,4,opt,name=audience,proto3" json:"audience,omitempty"`
+	AppMode       uint32                 `protobuf:"varint,5,opt,name=app_mode,json=appMode,proto3" json:"app_mode,omitempty"`
+	ExpiresMillis int64                  `protobuf:"varint,6,opt,name=expires_millis,json=expiresMillis,proto3" json:"expires_millis,omitempty"`
+	ApprovalId    []byte                 `protobuf:"bytes,7,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	Reason        uint32                 `protobuf:"varint,8,opt,name=reason,proto3" json:"reason,omitempty"` // reason as RouteBody
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublishBody) Reset() {
+	*x = PublishBody{}
+	mi := &file_protocol_record_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishBody) ProtoMessage() {}
+
+func (x *PublishBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishBody.ProtoReflect.Descriptor instead.
+func (*PublishBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PublishBody) GetEvent() uint32 {
+	if x != nil {
+		return x.Event
+	}
+	return 0
+}
+
+func (x *PublishBody) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *PublishBody) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *PublishBody) GetAudience() uint32 {
+	if x != nil {
+		return x.Audience
+	}
+	return 0
+}
+
+func (x *PublishBody) GetAppMode() uint32 {
+	if x != nil {
+		return x.AppMode
+	}
+	return 0
+}
+
+func (x *PublishBody) GetExpiresMillis() int64 {
+	if x != nil {
+		return x.ExpiresMillis
+	}
+	return 0
+}
+
+func (x *PublishBody) GetApprovalId() []byte {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return nil
+}
+
+func (x *PublishBody) GetReason() uint32 {
+	if x != nil {
+		return x.Reason
+	}
+	return 0
+}
+
+type RestoreBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RestoredRunId []byte                 `protobuf:"bytes,1,opt,name=restored_run_id,json=restoredRunId,proto3" json:"restored_run_id,omitempty"`
+	PreviewId     []byte                 `protobuf:"bytes,2,opt,name=preview_id,json=previewId,proto3" json:"preview_id,omitempty"`
+	ApprovalId    []byte                 `protobuf:"bytes,3,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"` // a tainted run's, or shell paths', else empty
+	RestoredCount uint32                 `protobuf:"varint,4,opt,name=restored_count,json=restoredCount,proto3" json:"restored_count,omitempty"`
+	ConflictCount uint32                 `protobuf:"varint,5,opt,name=conflict_count,json=conflictCount,proto3" json:"conflict_count,omitempty"`
+	Paths         []*RestoredPath        `protobuf:"bytes,6,rep,name=paths,proto3" json:"paths,omitempty"` // V: <= 4,096
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RestoreBody) Reset() {
+	*x = RestoreBody{}
+	mi := &file_protocol_record_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestoreBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestoreBody) ProtoMessage() {}
+
+func (x *RestoreBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestoreBody.ProtoReflect.Descriptor instead.
+func (*RestoreBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RestoreBody) GetRestoredRunId() []byte {
+	if x != nil {
+		return x.RestoredRunId
+	}
+	return nil
+}
+
+func (x *RestoreBody) GetPreviewId() []byte {
+	if x != nil {
+		return x.PreviewId
+	}
+	return nil
+}
+
+func (x *RestoreBody) GetApprovalId() []byte {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return nil
+}
+
+func (x *RestoreBody) GetRestoredCount() uint32 {
+	if x != nil {
+		return x.RestoredCount
+	}
+	return 0
+}
+
+func (x *RestoreBody) GetConflictCount() uint32 {
+	if x != nil {
+		return x.ConflictCount
+	}
+	return 0
+}
+
+func (x *RestoreBody) GetPaths() []*RestoredPath {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+type RestoredPath struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Result        string                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"` // restored, or §16.7's conflict name
+	Copies        []string               `protobuf:"bytes,3,rep,name=copies,proto3" json:"copies,omitempty"` // <= 2: §16.7's copies beside the path
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RestoredPath) Reset() {
+	*x = RestoredPath{}
+	mi := &file_protocol_record_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestoredPath) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestoredPath) ProtoMessage() {}
+
+func (x *RestoredPath) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestoredPath.ProtoReflect.Descriptor instead.
+func (*RestoredPath) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *RestoredPath) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *RestoredPath) GetResult() string {
+	if x != nil {
+		return x.Result
+	}
+	return ""
+}
+
+func (x *RestoredPath) GetCopies() []string {
+	if x != nil {
+		return x.Copies
+	}
+	return nil
+}
+
+type MembershipBody struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Event uint32                 `protobuf:"varint,1,opt,name=event,proto3" json:"event,omitempty"` // 1 member_added, 2 member_removed, 3 admission_alarm, 4 recovery_rebind,
+	// 5 recovery_window, 6 recovery_unseen
+	MemberId        []byte `protobuf:"bytes,2,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
+	SidecarId       []byte `protobuf:"bytes,3,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
+	GroupId         []byte `protobuf:"bytes,4,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	AuthPosition    uint64 `protobuf:"varint,5,opt,name=auth_position,json=authPosition,proto3" json:"auth_position,omitempty"`         // the statement's log position; 0 for an alarm
+	StatementSha256 []byte `protobuf:"bytes,6,opt,name=statement_sha256,json=statementSha256,proto3" json:"statement_sha256,omitempty"` // the statement's Signed as stored
+	Evidence        uint32 `protobuf:"varint,7,opt,name=evidence,proto3" json:"evidence,omitempty"`                                     // a member's own device revocation (§5.6): 1 presence, 2 confirmation
+	Assertion       []byte `protobuf:"bytes,8,opt,name=assertion,proto3" json:"assertion,omitempty"`                                    // evidence 1: the WebAuthnEvidence as stored (§6.9)
+	Reason          uint32 `protobuf:"varint,9,opt,name=reason,proto3" json:"reason,omitempty"`                                         // the revocation's reason, as its statement gives it
+	SignedType      uint32 `protobuf:"varint,10,opt,name=signed_type,json=signedType,proto3" json:"signed_type,omitempty"`              // §6.11's SignedType of the statement that raised it, such as SidecarAdmit
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *MembershipBody) Reset() {
+	*x = MembershipBody{}
+	mi := &file_protocol_record_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MembershipBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MembershipBody) ProtoMessage() {}
+
+func (x *MembershipBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MembershipBody.ProtoReflect.Descriptor instead.
+func (*MembershipBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *MembershipBody) GetEvent() uint32 {
+	if x != nil {
+		return x.Event
+	}
+	return 0
+}
+
+func (x *MembershipBody) GetMemberId() []byte {
+	if x != nil {
+		return x.MemberId
+	}
+	return nil
+}
+
+func (x *MembershipBody) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *MembershipBody) GetGroupId() []byte {
+	if x != nil {
+		return x.GroupId
+	}
+	return nil
+}
+
+func (x *MembershipBody) GetAuthPosition() uint64 {
+	if x != nil {
+		return x.AuthPosition
+	}
+	return 0
+}
+
+func (x *MembershipBody) GetStatementSha256() []byte {
+	if x != nil {
+		return x.StatementSha256
+	}
+	return nil
+}
+
+func (x *MembershipBody) GetEvidence() uint32 {
+	if x != nil {
+		return x.Evidence
+	}
+	return 0
+}
+
+func (x *MembershipBody) GetAssertion() []byte {
+	if x != nil {
+		return x.Assertion
+	}
+	return nil
+}
+
+func (x *MembershipBody) GetReason() uint32 {
+	if x != nil {
+		return x.Reason
+	}
+	return 0
+}
+
+func (x *MembershipBody) GetSignedType() uint32 {
+	if x != nil {
+		return x.SignedType
+	}
+	return 0
+}
+
+type KeyBody struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Event           uint32                 `protobuf:"varint,1,opt,name=event,proto3" json:"event,omitempty"` // 1 key_changed
+	GroupId         []byte                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	Generation      uint64                 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	Cause           uint32                 `protobuf:"varint,4,opt,name=cause,proto3" json:"cause,omitempty"` // a rotation: §10.5's GenRotate cause
+	KeyId           []byte                 `protobuf:"bytes,5,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	AuthPosition    uint64                 `protobuf:"varint,6,opt,name=auth_position,json=authPosition,proto3" json:"auth_position,omitempty"`
+	StatementSha256 []byte                 `protobuf:"bytes,7,opt,name=statement_sha256,json=statementSha256,proto3" json:"statement_sha256,omitempty"`
+	SignedType      uint32                 `protobuf:"varint,8,opt,name=signed_type,json=signedType,proto3" json:"signed_type,omitempty"` // §6.11's SignedType: KeyRegister, KeyRevoke, RecoveryBind or
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *KeyBody) Reset() {
+	*x = KeyBody{}
+	mi := &file_protocol_record_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KeyBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KeyBody) ProtoMessage() {}
+
+func (x *KeyBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KeyBody.ProtoReflect.Descriptor instead.
+func (*KeyBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *KeyBody) GetEvent() uint32 {
+	if x != nil {
+		return x.Event
+	}
+	return 0
+}
+
+func (x *KeyBody) GetGroupId() []byte {
+	if x != nil {
+		return x.GroupId
+	}
+	return nil
+}
+
+func (x *KeyBody) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *KeyBody) GetCause() uint32 {
+	if x != nil {
+		return x.Cause
+	}
+	return 0
+}
+
+func (x *KeyBody) GetKeyId() []byte {
+	if x != nil {
+		return x.KeyId
+	}
+	return nil
+}
+
+func (x *KeyBody) GetAuthPosition() uint64 {
+	if x != nil {
+		return x.AuthPosition
+	}
+	return 0
+}
+
+func (x *KeyBody) GetStatementSha256() []byte {
+	if x != nil {
+		return x.StatementSha256
+	}
+	return nil
+}
+
+func (x *KeyBody) GetSignedType() uint32 {
+	if x != nil {
+		return x.SignedType
+	}
+	return 0
+}
+
+type ReadBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ObjectIds     [][]byte               `protobuf:"bytes,1,rep,name=object_ids,json=objectIds,proto3" json:"object_ids,omitempty"`   // <= 64: a 16 B entry_id, or a 32 B index file's content_sha256 (§11.14)
+	Purpose       uint32                 `protobuf:"varint,2,opt,name=purpose,proto3" json:"purpose,omitempty"`                       // 1 read, 2 search, 3 export, 4 disclosure
+	ReadLogId     []byte                 `protobuf:"bytes,3,opt,name=read_log_id,json=readLogId,proto3" json:"read_log_id,omitempty"` // in T: the log read; else empty
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadBody) Reset() {
+	*x = ReadBody{}
+	mi := &file_protocol_record_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadBody) ProtoMessage() {}
+
+func (x *ReadBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadBody.ProtoReflect.Descriptor instead.
+func (*ReadBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ReadBody) GetObjectIds() [][]byte {
+	if x != nil {
+		return x.ObjectIds
+	}
+	return nil
+}
+
+func (x *ReadBody) GetPurpose() uint32 {
+	if x != nil {
+		return x.Purpose
+	}
+	return 0
+}
+
+func (x *ReadBody) GetReadLogId() []byte {
+	if x != nil {
+		return x.ReadLogId
+	}
+	return nil
+}
+
+type ErasureBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ErasureId     []byte                 `protobuf:"bytes,1,opt,name=erasure_id,json=erasureId,proto3" json:"erasure_id,omitempty"` // §11.12's id; its ERASE and CLOSURE notes name it
+	EntryIds      [][]byte               `protobuf:"bytes,2,rep,name=entry_ids,json=entryIds,proto3" json:"entry_ids,omitempty"`    // <= 1,024; a larger erasure writes several
+	Reason        uint32                 `protobuf:"varint,3,opt,name=reason,proto3" json:"reason,omitempty"`                       // 1 person, 2 retention, 3 moderation, 4 revocation
+	RequestId     []byte                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // reason 4: the DirectoryErasureRequest
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ErasureBody) Reset() {
+	*x = ErasureBody{}
+	mi := &file_protocol_record_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ErasureBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ErasureBody) ProtoMessage() {}
+
+func (x *ErasureBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ErasureBody.ProtoReflect.Descriptor instead.
+func (*ErasureBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ErasureBody) GetErasureId() []byte {
+	if x != nil {
+		return x.ErasureId
+	}
+	return nil
+}
+
+func (x *ErasureBody) GetEntryIds() [][]byte {
+	if x != nil {
+		return x.EntryIds
+	}
+	return nil
+}
+
+func (x *ErasureBody) GetReason() uint32 {
+	if x != nil {
+		return x.Reason
+	}
+	return 0
+}
+
+func (x *ErasureBody) GetRequestId() []byte {
+	if x != nil {
+		return x.RequestId
+	}
+	return nil
+}
+
+type InventoryBody struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SponsorMemberId []byte                 `protobuf:"bytes,1,opt,name=sponsor_member_id,json=sponsorMemberId,proto3" json:"sponsor_member_id,omitempty"` // the member, or a tagged sidecar's sponsor
+	Day             uint32                 `protobuf:"varint,2,opt,name=day,proto3" json:"day,omitempty"`                                                 // days since 1970-01-01, UTC
+	CredentialRef   []byte                 `protobuf:"bytes,3,opt,name=credential_ref,json=credentialRef,proto3" json:"credential_ref,omitempty"`         // a delegation_id or auth key id; never a value (I-7)
+	Agents          []*InventoryAgent      `protobuf:"bytes,4,rep,name=agents,proto3" json:"agents,omitempty"`                                            // <= 64
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *InventoryBody) Reset() {
+	*x = InventoryBody{}
+	mi := &file_protocol_record_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InventoryBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InventoryBody) ProtoMessage() {}
+
+func (x *InventoryBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InventoryBody.ProtoReflect.Descriptor instead.
+func (*InventoryBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *InventoryBody) GetSponsorMemberId() []byte {
+	if x != nil {
+		return x.SponsorMemberId
+	}
+	return nil
+}
+
+func (x *InventoryBody) GetDay() uint32 {
+	if x != nil {
+		return x.Day
+	}
+	return 0
+}
+
+func (x *InventoryBody) GetCredentialRef() []byte {
+	if x != nil {
+		return x.CredentialRef
+	}
+	return nil
+}
+
+func (x *InventoryBody) GetAgents() []*InventoryAgent {
+	if x != nil {
+		return x.Agents
+	}
+	return nil
+}
+
+type InventoryAgent struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	AgentId         []byte                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	AgentLabel      string                 `protobuf:"bytes,2,opt,name=agent_label,json=agentLabel,proto3" json:"agent_label,omitempty"`
+	AgentSource     uint32                 `protobuf:"varint,3,opt,name=agent_source,json=agentSource,proto3" json:"agent_source,omitempty"`
+	Harnesses       []string               `protobuf:"bytes,4,rep,name=harnesses,proto3" json:"harnesses,omitempty"` // <= 8, each name/version
+	Models          []string               `protobuf:"bytes,5,rep,name=models,proto3" json:"models,omitempty"`       // <= 16
+	RepoIds         [][]byte               `protobuf:"bytes,6,rep,name=repo_ids,json=repoIds,proto3" json:"repo_ids,omitempty"`
+	Projects        []string               `protobuf:"bytes,7,rep,name=projects,proto3" json:"projects,omitempty"` // <= 64 each; a private repo's id, with no project
+	Runs            uint32                 `protobuf:"varint,8,opt,name=runs,proto3" json:"runs,omitempty"`
+	FirstSeenMillis int64                  `protobuf:"varint,9,opt,name=first_seen_millis,json=firstSeenMillis,proto3" json:"first_seen_millis,omitempty"`
+	LastSeenMillis  int64                  `protobuf:"varint,10,opt,name=last_seen_millis,json=lastSeenMillis,proto3" json:"last_seen_millis,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *InventoryAgent) Reset() {
+	*x = InventoryAgent{}
+	mi := &file_protocol_record_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InventoryAgent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InventoryAgent) ProtoMessage() {}
+
+func (x *InventoryAgent) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InventoryAgent.ProtoReflect.Descriptor instead.
+func (*InventoryAgent) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *InventoryAgent) GetAgentId() []byte {
+	if x != nil {
+		return x.AgentId
+	}
+	return nil
+}
+
+func (x *InventoryAgent) GetAgentLabel() string {
+	if x != nil {
+		return x.AgentLabel
+	}
+	return ""
+}
+
+func (x *InventoryAgent) GetAgentSource() uint32 {
+	if x != nil {
+		return x.AgentSource
+	}
+	return 0
+}
+
+func (x *InventoryAgent) GetHarnesses() []string {
+	if x != nil {
+		return x.Harnesses
+	}
+	return nil
+}
+
+func (x *InventoryAgent) GetModels() []string {
+	if x != nil {
+		return x.Models
+	}
+	return nil
+}
+
+func (x *InventoryAgent) GetRepoIds() [][]byte {
+	if x != nil {
+		return x.RepoIds
+	}
+	return nil
+}
+
+func (x *InventoryAgent) GetProjects() []string {
+	if x != nil {
+		return x.Projects
+	}
+	return nil
+}
+
+func (x *InventoryAgent) GetRuns() uint32 {
+	if x != nil {
+		return x.Runs
+	}
+	return 0
+}
+
+func (x *InventoryAgent) GetFirstSeenMillis() int64 {
+	if x != nil {
+		return x.FirstSeenMillis
+	}
+	return 0
+}
+
+func (x *InventoryAgent) GetLastSeenMillis() int64 {
+	if x != nil {
+		return x.LastSeenMillis
+	}
+	return 0
+}
+
+type AgentSignedBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Body          []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
+	AgentId       []byte                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	KeyId         []byte                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentSignedBody) Reset() {
+	*x = AgentSignedBody{}
+	mi := &file_protocol_record_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentSignedBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentSignedBody) ProtoMessage() {}
+
+func (x *AgentSignedBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentSignedBody.ProtoReflect.Descriptor instead.
+func (*AgentSignedBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *AgentSignedBody) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *AgentSignedBody) GetAgentId() []byte {
+	if x != nil {
+		return x.AgentId
+	}
+	return nil
+}
+
+func (x *AgentSignedBody) GetKeyId() []byte {
+	if x != nil {
+		return x.KeyId
+	}
+	return nil
+}
+
+func (x *AgentSignedBody) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type Opening struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Header        []byte                 `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"` // RecordEntry.header, the whole Signed, as stored
+	Salt          []byte                 `protobuf:"bytes,2,opt,name=salt,proto3" json:"salt,omitempty"`
+	Body          []byte                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"` // both empty: the header alone
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Opening) Reset() {
+	*x = Opening{}
+	mi := &file_protocol_record_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Opening) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Opening) ProtoMessage() {}
+
+func (x *Opening) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Opening.ProtoReflect.Descriptor instead.
+func (*Opening) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *Opening) GetHeader() []byte {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
+func (x *Opening) GetSalt() []byte {
+	if x != nil {
+		return x.Salt
+	}
+	return nil
+}
+
+func (x *Opening) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+type CopyBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*Opening             `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CopyBody) Reset() {
+	*x = CopyBody{}
+	mi := &file_protocol_record_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CopyBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CopyBody) ProtoMessage() {}
+
+func (x *CopyBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CopyBody.ProtoReflect.Descriptor instead.
+func (*CopyBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *CopyBody) GetEntries() []*Opening {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type TranscriptBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FirstLine     uint64                 `protobuf:"varint,1,opt,name=first_line,json=firstLine,proto3" json:"first_line,omitempty"`
+	LineCount     uint32                 `protobuf:"varint,2,opt,name=line_count,json=lineCount,proto3" json:"line_count,omitempty"`
+	Lines         []byte                 `protobuf:"bytes,3,opt,name=lines,proto3" json:"lines,omitempty"` // the harness's JSONL lines after redaction, <= 1 MiB
+	Truncated     bool                   `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TranscriptBody) Reset() {
+	*x = TranscriptBody{}
+	mi := &file_protocol_record_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TranscriptBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TranscriptBody) ProtoMessage() {}
+
+func (x *TranscriptBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TranscriptBody.ProtoReflect.Descriptor instead.
+func (*TranscriptBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *TranscriptBody) GetFirstLine() uint64 {
+	if x != nil {
+		return x.FirstLine
+	}
+	return 0
+}
+
+func (x *TranscriptBody) GetLineCount() uint32 {
+	if x != nil {
+		return x.LineCount
+	}
+	return 0
+}
+
+func (x *TranscriptBody) GetLines() []byte {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
+func (x *TranscriptBody) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+type ToolCallBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolUseId     string                 `protobuf:"bytes,2,opt,name=tool_use_id,json=toolUseId,proto3" json:"tool_use_id,omitempty"`
+	ToolClass     uint32                 `protobuf:"varint,3,opt,name=tool_class,json=toolClass,proto3" json:"tool_class,omitempty"` // tool_class as PermissionBody
+	Input         []byte                 `protobuf:"bytes,4,opt,name=input,proto3" json:"input,omitempty"`
+	Output        []byte                 `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"` // after redaction, <= 1 MiB together (§16.7)
+	StartedMillis int64                  `protobuf:"varint,6,opt,name=started_millis,json=startedMillis,proto3" json:"started_millis,omitempty"`
+	EndedMillis   int64                  `protobuf:"varint,7,opt,name=ended_millis,json=endedMillis,proto3" json:"ended_millis,omitempty"`
+	ExitCode      int32                  `protobuf:"varint,8,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Paths         []string               `protobuf:"bytes,9,rep,name=paths,proto3" json:"paths,omitempty"` // <= 256: the paths the call names
+	Truncated     bool                   `protobuf:"varint,10,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolCallBody) Reset() {
+	*x = ToolCallBody{}
+	mi := &file_protocol_record_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolCallBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolCallBody) ProtoMessage() {}
+
+func (x *ToolCallBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolCallBody.ProtoReflect.Descriptor instead.
+func (*ToolCallBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ToolCallBody) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolCallBody) GetToolUseId() string {
+	if x != nil {
+		return x.ToolUseId
+	}
+	return ""
+}
+
+func (x *ToolCallBody) GetToolClass() uint32 {
+	if x != nil {
+		return x.ToolClass
+	}
+	return 0
+}
+
+func (x *ToolCallBody) GetInput() []byte {
+	if x != nil {
+		return x.Input
+	}
+	return nil
+}
+
+func (x *ToolCallBody) GetOutput() []byte {
+	if x != nil {
+		return x.Output
+	}
+	return nil
+}
+
+func (x *ToolCallBody) GetStartedMillis() int64 {
+	if x != nil {
+		return x.StartedMillis
+	}
+	return 0
+}
+
+func (x *ToolCallBody) GetEndedMillis() int64 {
+	if x != nil {
+		return x.EndedMillis
+	}
+	return 0
+}
+
+func (x *ToolCallBody) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *ToolCallBody) GetPaths() []string {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+func (x *ToolCallBody) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+type HookEventBody struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Event           string                 `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"` // the harness's event name
+	Payload         []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
+	ArgumentsSha256 []byte                 `protobuf:"bytes,3,opt,name=arguments_sha256,json=argumentsSha256,proto3" json:"arguments_sha256,omitempty"` // §16.6's hash, for harness_ok's match
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *HookEventBody) Reset() {
+	*x = HookEventBody{}
+	mi := &file_protocol_record_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookEventBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookEventBody) ProtoMessage() {}
+
+func (x *HookEventBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookEventBody.ProtoReflect.Descriptor instead.
+func (*HookEventBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *HookEventBody) GetEvent() string {
+	if x != nil {
+		return x.Event
+	}
+	return ""
+}
+
+func (x *HookEventBody) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *HookEventBody) GetArgumentsSha256() []byte {
+	if x != nil {
+		return x.ArgumentsSha256
+	}
+	return nil
+}
+
+type FileEventBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Op            uint32                 `protobuf:"varint,2,opt,name=op,proto3" json:"op,omitempty"` // 1 create, 2 write, 3 delete, 4 rename
+	AfterSha256   []byte                 `protobuf:"bytes,3,opt,name=after_sha256,json=afterSha256,proto3" json:"after_sha256,omitempty"`
+	Millis        int64                  `protobuf:"varint,4,opt,name=millis,proto3" json:"millis,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileEventBody) Reset() {
+	*x = FileEventBody{}
+	mi := &file_protocol_record_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileEventBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileEventBody) ProtoMessage() {}
+
+func (x *FileEventBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileEventBody.ProtoReflect.Descriptor instead.
+func (*FileEventBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *FileEventBody) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FileEventBody) GetOp() uint32 {
+	if x != nil {
+		return x.Op
+	}
+	return 0
+}
+
+func (x *FileEventBody) GetAfterSha256() []byte {
+	if x != nil {
+		return x.AfterSha256
+	}
+	return nil
+}
+
+func (x *FileEventBody) GetMillis() int64 {
+	if x != nil {
+		return x.Millis
+	}
+	return 0
+}
+
+type BlobBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Content       []byte                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"` // after redaction, <= 8 MiB (§16.7)
+	Sha256        []byte                 `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`   // the bytes as captured, before redaction: the ledger's after_sha256
+	Redacted      bool                   `protobuf:"varint,4,opt,name=redacted,proto3" json:"redacted,omitempty"`
+	Size          uint64                 `protobuf:"varint,5,opt,name=size,proto3" json:"size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BlobBody) Reset() {
+	*x = BlobBody{}
+	mi := &file_protocol_record_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BlobBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlobBody) ProtoMessage() {}
+
+func (x *BlobBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlobBody.ProtoReflect.Descriptor instead.
+func (*BlobBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *BlobBody) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *BlobBody) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+func (x *BlobBody) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+func (x *BlobBody) GetRedacted() bool {
+	if x != nil {
+		return x.Redacted
+	}
+	return false
+}
+
+func (x *BlobBody) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+// RECORD.md section 6.5: an R log's scope (M6).
+type LedgerScopeBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RepoIds       [][]byte               `protobuf:"bytes,1,rep,name=repo_ids,json=repoIds,proto3" json:"repo_ids,omitempty"` // <= 256
+	Projects      []string               `protobuf:"bytes,2,rep,name=projects,proto3" json:"projects,omitempty"`              // <= 256, §16.11's project keys
+	Kinds         []uint32               `protobuf:"varint,3,rep,packed,name=kinds,proto3" json:"kinds,omitempty"`            // the kinds copied here, from context, change, the approval family,
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LedgerScopeBody) Reset() {
+	*x = LedgerScopeBody{}
+	mi := &file_protocol_record_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LedgerScopeBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LedgerScopeBody) ProtoMessage() {}
+
+func (x *LedgerScopeBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LedgerScopeBody.ProtoReflect.Descriptor instead.
+func (*LedgerScopeBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *LedgerScopeBody) GetRepoIds() [][]byte {
+	if x != nil {
+		return x.RepoIds
+	}
+	return nil
+}
+
+func (x *LedgerScopeBody) GetProjects() []string {
+	if x != nil {
+		return x.Projects
+	}
+	return nil
+}
+
+func (x *LedgerScopeBody) GetKinds() []uint32 {
+	if x != nil {
+		return x.Kinds
+	}
+	return nil
+}
+
+// RECORD.md section 10.1: the verifiable log's settings and checkpoints (M6).
+type LogSettingsBody struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Origin                string                 `protobuf:"bytes,1,opt,name=origin,proto3" json:"origin,omitempty"`                                                              // ur.io/recurd/log/<log_id hex>: a name, never dialed
+	CheckpointerSidecarId []byte                 `protobuf:"bytes,2,opt,name=checkpointer_sidecar_id,json=checkpointerSidecarId,proto3" json:"checkpointer_sidecar_id,omitempty"` // a device with rw on the log: an admin's device or indexer
+	NotePublicKey         []byte                 `protobuf:"bytes,3,opt,name=note_public_key,json=notePublicKey,proto3" json:"note_public_key,omitempty"`                         // its Ed25519 log key, 32 B
+	IntervalSeconds       uint32                 `protobuf:"varint,4,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`                    // 3,600 by default; 300 to 86,400; 0 turns the log off
+	Witnesses             []*LogWitness          `protobuf:"bytes,5,rep,name=witnesses,proto3" json:"witnesses,omitempty"`                                                        // <= 8; empty while Q-RECORD-8 is open
+	FromBatch             uint64                 `protobuf:"varint,6,opt,name=from_batch,json=fromBatch,proto3" json:"from_batch,omitempty"`                                      // the first batch this entry governs
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *LogSettingsBody) Reset() {
+	*x = LogSettingsBody{}
+	mi := &file_protocol_record_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogSettingsBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogSettingsBody) ProtoMessage() {}
+
+func (x *LogSettingsBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogSettingsBody.ProtoReflect.Descriptor instead.
+func (*LogSettingsBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *LogSettingsBody) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *LogSettingsBody) GetCheckpointerSidecarId() []byte {
+	if x != nil {
+		return x.CheckpointerSidecarId
+	}
+	return nil
+}
+
+func (x *LogSettingsBody) GetNotePublicKey() []byte {
+	if x != nil {
+		return x.NotePublicKey
+	}
+	return nil
+}
+
+func (x *LogSettingsBody) GetIntervalSeconds() uint32 {
+	if x != nil {
+		return x.IntervalSeconds
+	}
+	return 0
+}
+
+func (x *LogSettingsBody) GetWitnesses() []*LogWitness {
+	if x != nil {
+		return x.Witnesses
+	}
+	return nil
+}
+
+func (x *LogSettingsBody) GetFromBatch() uint64 {
+	if x != nil {
+		return x.FromBatch
+	}
+	return 0
+}
+
+type LogWitness struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // its cosigner name
+	Url           string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`   // its submission prefix, https only (c2sp.org/tlog-witness)
+	Vkey          string                 `protobuf:"bytes,3,opt,name=vkey,proto3" json:"vkey,omitempty"` // its verifier key
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogWitness) Reset() {
+	*x = LogWitness{}
+	mi := &file_protocol_record_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogWitness) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogWitness) ProtoMessage() {}
+
+func (x *LogWitness) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogWitness.ProtoReflect.Descriptor instead.
+func (*LogWitness) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *LogWitness) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *LogWitness) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *LogWitness) GetVkey() string {
+	if x != nil {
+		return x.Vkey
+	}
+	return ""
+}
+
+type LogCheckpointBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Batch         uint64                 `protobuf:"varint,1,opt,name=batch,proto3" json:"batch,omitempty"`                             // from 1, +1 each
+	FirstIndex    uint64                 `protobuf:"varint,2,opt,name=first_index,json=firstIndex,proto3" json:"first_index,omitempty"` // the tree index of this batch's first leaf
+	Frontier      []*LogFrontier         `protobuf:"bytes,3,rep,name=frontier,proto3" json:"frontier,omitempty"`                        // sorted by ref_id
+	Leaves        []byte                 `protobuf:"bytes,4,opt,name=leaves,proto3" json:"leaves,omitempty"`                            // this batch's leaves, 32 B each, in order
+	Note          []byte                 `protobuf:"bytes,5,opt,name=note,proto3" json:"note,omitempty"`                                // the signed checkpoint, by the log key alone (section 10.2's steps)
+	Cosigned      []*LogCosigned         `protobuf:"bytes,6,rep,name=cosigned,proto3" json:"cosigned,omitempty"`                        // the cosignature lines got since the last entry
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogCheckpointBody) Reset() {
+	*x = LogCheckpointBody{}
+	mi := &file_protocol_record_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogCheckpointBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogCheckpointBody) ProtoMessage() {}
+
+func (x *LogCheckpointBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogCheckpointBody.ProtoReflect.Descriptor instead.
+func (*LogCheckpointBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *LogCheckpointBody) GetBatch() uint64 {
+	if x != nil {
+		return x.Batch
+	}
+	return 0
+}
+
+func (x *LogCheckpointBody) GetFirstIndex() uint64 {
+	if x != nil {
+		return x.FirstIndex
+	}
+	return 0
+}
+
+func (x *LogCheckpointBody) GetFrontier() []*LogFrontier {
+	if x != nil {
+		return x.Frontier
+	}
+	return nil
+}
+
+func (x *LogCheckpointBody) GetLeaves() []byte {
+	if x != nil {
+		return x.Leaves
+	}
+	return nil
+}
+
+func (x *LogCheckpointBody) GetNote() []byte {
+	if x != nil {
+		return x.Note
+	}
+	return nil
+}
+
+func (x *LogCheckpointBody) GetCosigned() []*LogCosigned {
+	if x != nil {
+		return x.Cosigned
+	}
+	return nil
+}
+
+type LogFrontier struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RefId         []byte                 `protobuf:"bytes,1,opt,name=ref_id,json=refId,proto3" json:"ref_id,omitempty"`
+	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Chain         []byte                 `protobuf:"bytes,3,opt,name=chain,proto3" json:"chain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogFrontier) Reset() {
+	*x = LogFrontier{}
+	mi := &file_protocol_record_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogFrontier) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogFrontier) ProtoMessage() {}
+
+func (x *LogFrontier) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogFrontier.ProtoReflect.Descriptor instead.
+func (*LogFrontier) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *LogFrontier) GetRefId() []byte {
+	if x != nil {
+		return x.RefId
+	}
+	return nil
+}
+
+func (x *LogFrontier) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *LogFrontier) GetChain() []byte {
+	if x != nil {
+		return x.Chain
+	}
+	return nil
+}
+
+type LogCosigned struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Batch         uint64                 `protobuf:"varint,1,opt,name=batch,proto3" json:"batch,omitempty"` // the batch whose note these lines cosign
+	Lines         []byte                 `protobuf:"bytes,2,opt,name=lines,proto3" json:"lines,omitempty"`  // each witness's signature lines, as it returned them
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogCosigned) Reset() {
+	*x = LogCosigned{}
+	mi := &file_protocol_record_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogCosigned) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogCosigned) ProtoMessage() {}
+
+func (x *LogCosigned) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogCosigned.ProtoReflect.Descriptor instead.
+func (*LogCosigned) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *LogCosigned) GetBatch() uint64 {
+	if x != nil {
+		return x.Batch
+	}
+	return 0
+}
+
+func (x *LogCosigned) GetLines() []byte {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
+// RECORD.md section 11: disclosure packets and the log's record of them (M6).
+type DisclosurePacket struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"` // 1
+	LogId         []byte                 `protobuf:"bytes,2,opt,name=log_id,json=logId,proto3" json:"log_id,omitempty"`
+	Origin        string                 `protobuf:"bytes,3,opt,name=origin,proto3" json:"origin,omitempty"`
+	CreatedMillis int64                  `protobuf:"varint,4,opt,name=created_millis,json=createdMillis,proto3" json:"created_millis,omitempty"`
+	Entries       []*DisclosedEntry      `protobuf:"bytes,5,rep,name=entries,proto3" json:"entries,omitempty"`         // <= 1,024
+	Checkpoints   [][]byte               `protobuf:"bytes,6,rep,name=checkpoints,proto3" json:"checkpoints,omitempty"` // signed notes, each with the lines of its cosigned rows appended
+	Keys          []*DisclosedKey        `protobuf:"bytes,7,rep,name=keys,proto3" json:"keys,omitempty"`
+	Purpose       string                 `protobuf:"bytes,8,opt,name=purpose,proto3" json:"purpose,omitempty"` // <= 512 B, as the person typed it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisclosurePacket) Reset() {
+	*x = DisclosurePacket{}
+	mi := &file_protocol_record_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisclosurePacket) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisclosurePacket) ProtoMessage() {}
+
+func (x *DisclosurePacket) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisclosurePacket.ProtoReflect.Descriptor instead.
+func (*DisclosurePacket) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *DisclosurePacket) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *DisclosurePacket) GetLogId() []byte {
+	if x != nil {
+		return x.LogId
+	}
+	return nil
+}
+
+func (x *DisclosurePacket) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *DisclosurePacket) GetCreatedMillis() int64 {
+	if x != nil {
+		return x.CreatedMillis
+	}
+	return 0
+}
+
+func (x *DisclosurePacket) GetEntries() []*DisclosedEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *DisclosurePacket) GetCheckpoints() [][]byte {
+	if x != nil {
+		return x.Checkpoints
+	}
+	return nil
+}
+
+func (x *DisclosurePacket) GetKeys() []*DisclosedKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *DisclosurePacket) GetPurpose() string {
+	if x != nil {
+		return x.Purpose
+	}
+	return ""
+}
+
+type DisclosedEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Opening       *Opening               `protobuf:"bytes,1,opt,name=opening,proto3" json:"opening,omitempty"` // section 6.4; salt and body empty for a header alone
+	LeafIndex     uint64                 `protobuf:"varint,2,opt,name=leaf_index,json=leafIndex,proto3" json:"leaf_index,omitempty"`
+	Checkpoint    uint32                 `protobuf:"varint,3,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`                           // checkpoint: an index into checkpoints
+	InclusionPath [][]byte               `protobuf:"bytes,4,rep,name=inclusion_path,json=inclusionPath,proto3" json:"inclusion_path,omitempty"` // RFC 9162 §2.1.3, <= 63 hashes
+	Content       []*Opening             `protobuf:"bytes,5,rep,name=content,proto3" json:"content,omitempty"`                                  // the author's openings of its ContentRefs, if given
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisclosedEntry) Reset() {
+	*x = DisclosedEntry{}
+	mi := &file_protocol_record_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisclosedEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisclosedEntry) ProtoMessage() {}
+
+func (x *DisclosedEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisclosedEntry.ProtoReflect.Descriptor instead.
+func (*DisclosedEntry) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *DisclosedEntry) GetOpening() *Opening {
+	if x != nil {
+		return x.Opening
+	}
+	return nil
+}
+
+func (x *DisclosedEntry) GetLeafIndex() uint64 {
+	if x != nil {
+		return x.LeafIndex
+	}
+	return 0
+}
+
+func (x *DisclosedEntry) GetCheckpoint() uint32 {
+	if x != nil {
+		return x.Checkpoint
+	}
+	return 0
+}
+
+func (x *DisclosedEntry) GetInclusionPath() [][]byte {
+	if x != nil {
+		return x.InclusionPath
+	}
+	return nil
+}
+
+func (x *DisclosedEntry) GetContent() []*Opening {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+type DisclosedKey struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	KeyId         []byte                 `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	SidecarId     []byte                 `protobuf:"bytes,2,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
+	Alg           uint32                 `protobuf:"varint,3,opt,name=alg,proto3" json:"alg,omitempty"`
+	PublicKey     []byte                 `protobuf:"bytes,4,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	Label         string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"` // the person or device, as the team states it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisclosedKey) Reset() {
+	*x = DisclosedKey{}
+	mi := &file_protocol_record_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisclosedKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisclosedKey) ProtoMessage() {}
+
+func (x *DisclosedKey) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisclosedKey.ProtoReflect.Descriptor instead.
+func (*DisclosedKey) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *DisclosedKey) GetKeyId() []byte {
+	if x != nil {
+		return x.KeyId
+	}
+	return nil
+}
+
+func (x *DisclosedKey) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *DisclosedKey) GetAlg() uint32 {
+	if x != nil {
+		return x.Alg
+	}
+	return 0
+}
+
+func (x *DisclosedKey) GetPublicKey() []byte {
+	if x != nil {
+		return x.PublicKey
+	}
+	return nil
+}
+
+func (x *DisclosedKey) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+type DisclosureBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Act           uint32                 `protobuf:"varint,1,opt,name=act,proto3" json:"act,omitempty"`                                      // 1 packet, 2 opening, 3 export
+	PacketSha256  []byte                 `protobuf:"bytes,2,opt,name=packet_sha256,json=packetSha256,proto3" json:"packet_sha256,omitempty"` // acts 1, 2: the file's SHA-256
+	EntryIds      [][]byte               `protobuf:"bytes,3,rep,name=entry_ids,json=entryIds,proto3" json:"entry_ids,omitempty"`             // acts 1, 2: <= 1,024
+	Recipient     string                 `protobuf:"bytes,4,opt,name=recipient,proto3" json:"recipient,omitempty"`                           // <= 128 B (prose), as typed
+	Purpose       string                 `protobuf:"bytes,5,opt,name=purpose,proto3" json:"purpose,omitempty"`                               // <= 512 B (prose)
+	SinceMillis   int64                  `protobuf:"varint,6,opt,name=since_millis,json=sinceMillis,proto3" json:"since_millis,omitempty"`
+	UntilMillis   int64                  `protobuf:"varint,7,opt,name=until_millis,json=untilMillis,proto3" json:"until_millis,omitempty"` // act 3: the range, 0 where none was given
+	Format        uint32                 `protobuf:"varint,8,opt,name=format,proto3" json:"format,omitempty"`                              // act 3: 1 jsonl, 2 ocsf, 3 otel, 4 git (ur evs export)
+	Bodies        bool                   `protobuf:"varint,9,opt,name=bodies,proto3" json:"bodies,omitempty"`                              // act 3: bodies left the log
+	Kinds         []uint32               `protobuf:"varint,10,rep,packed,name=kinds,proto3" json:"kinds,omitempty"`                        // act 3: --kind's list, empty for all
+	RunId         []byte                 `protobuf:"bytes,11,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`                   // act 3: --run, else empty
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisclosureBody) Reset() {
+	*x = DisclosureBody{}
+	mi := &file_protocol_record_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisclosureBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisclosureBody) ProtoMessage() {}
+
+func (x *DisclosureBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisclosureBody.ProtoReflect.Descriptor instead.
+func (*DisclosureBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *DisclosureBody) GetAct() uint32 {
+	if x != nil {
+		return x.Act
+	}
+	return 0
+}
+
+func (x *DisclosureBody) GetPacketSha256() []byte {
+	if x != nil {
+		return x.PacketSha256
+	}
+	return nil
+}
+
+func (x *DisclosureBody) GetEntryIds() [][]byte {
+	if x != nil {
+		return x.EntryIds
+	}
+	return nil
+}
+
+func (x *DisclosureBody) GetRecipient() string {
+	if x != nil {
+		return x.Recipient
+	}
+	return ""
+}
+
+func (x *DisclosureBody) GetPurpose() string {
+	if x != nil {
+		return x.Purpose
+	}
+	return ""
+}
+
+func (x *DisclosureBody) GetSinceMillis() int64 {
+	if x != nil {
+		return x.SinceMillis
+	}
+	return 0
+}
+
+func (x *DisclosureBody) GetUntilMillis() int64 {
+	if x != nil {
+		return x.UntilMillis
+	}
+	return 0
+}
+
+func (x *DisclosureBody) GetFormat() uint32 {
+	if x != nil {
+		return x.Format
+	}
+	return 0
+}
+
+func (x *DisclosureBody) GetBodies() bool {
+	if x != nil {
+		return x.Bodies
+	}
+	return false
+}
+
+func (x *DisclosureBody) GetKinds() []uint32 {
+	if x != nil {
+		return x.Kinds
+	}
+	return nil
+}
+
+func (x *DisclosureBody) GetRunId() []byte {
+	if x != nil {
+		return x.RunId
+	}
+	return nil
+}
+
+// RECORD.md section 11: a person's statement about commits (M6).
+type AttestationBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Statement     uint32                 `protobuf:"varint,1,opt,name=statement,proto3" json:"statement,omitempty"` // 1 reviewed, 2 tested, 3 approved
+	Commits       []string               `protobuf:"bytes,2,rep,name=commits,proto3" json:"commits,omitempty"`      // <= 64 git oids
+	RepoId        []byte                 `protobuf:"bytes,3,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	Note          string                 `protobuf:"bytes,4,opt,name=note,proto3" json:"note,omitempty"`     // note <= 512 B (prose)
+	Sshsig        []byte                 `protobuf:"bytes,5,opt,name=sshsig,proto3" json:"sshsig,omitempty"` // section 5.1's attestation sshsig
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestationBody) Reset() {
+	*x = AttestationBody{}
+	mi := &file_protocol_record_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestationBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestationBody) ProtoMessage() {}
+
+func (x *AttestationBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestationBody.ProtoReflect.Descriptor instead.
+func (*AttestationBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *AttestationBody) GetStatement() uint32 {
+	if x != nil {
+		return x.Statement
+	}
+	return 0
+}
+
+func (x *AttestationBody) GetCommits() []string {
+	if x != nil {
+		return x.Commits
+	}
+	return nil
+}
+
+func (x *AttestationBody) GetRepoId() []byte {
+	if x != nil {
+		return x.RepoId
+	}
+	return nil
+}
+
+func (x *AttestationBody) GetNote() string {
+	if x != nil {
+		return x.Note
+	}
+	return ""
+}
+
+func (x *AttestationBody) GetSshsig() []byte {
+	if x != nil {
+		return x.Sshsig
+	}
+	return nil
+}
+
+// RECORD.md section 12: model receipts (M6).
+type ModelManifest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Port          uint32                 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`                              // the local port: a forward's target_port
+	ServedName    *ModelField            `protobuf:"bytes,2,opt,name=served_name,json=servedName,proto3" json:"served_name,omitempty"` // the name clients ask for
+	Engine        *ModelField            `protobuf:"bytes,3,opt,name=engine,proto3" json:"engine,omitempty"`                           // vllm, sglang, ollama, llama.cpp or other
+	EngineVersion *ModelField            `protobuf:"bytes,4,opt,name=engine_version,json=engineVersion,proto3" json:"engine_version,omitempty"`
+	Quantization  *ModelField            `protobuf:"bytes,5,opt,name=quantization,proto3" json:"quantization,omitempty"`
+	WeightsDigest *ModelField            `protobuf:"bytes,6,opt,name=weights_digest,json=weightsDigest,proto3" json:"weights_digest,omitempty"` // section 5.1's weights_digest, in lowercase hex
+	WeightsBytes  uint64                 `protobuf:"varint,7,opt,name=weights_bytes,json=weightsBytes,proto3" json:"weights_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelManifest) Reset() {
+	*x = ModelManifest{}
+	mi := &file_protocol_record_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelManifest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelManifest) ProtoMessage() {}
+
+func (x *ModelManifest) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelManifest.ProtoReflect.Descriptor instead.
+func (*ModelManifest) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *ModelManifest) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *ModelManifest) GetServedName() *ModelField {
+	if x != nil {
+		return x.ServedName
+	}
+	return nil
+}
+
+func (x *ModelManifest) GetEngine() *ModelField {
+	if x != nil {
+		return x.Engine
+	}
+	return nil
+}
+
+func (x *ModelManifest) GetEngineVersion() *ModelField {
+	if x != nil {
+		return x.EngineVersion
+	}
+	return nil
+}
+
+func (x *ModelManifest) GetQuantization() *ModelField {
+	if x != nil {
+		return x.Quantization
+	}
+	return nil
+}
+
+func (x *ModelManifest) GetWeightsDigest() *ModelField {
+	if x != nil {
+		return x.WeightsDigest
+	}
+	return nil
+}
+
+func (x *ModelManifest) GetWeightsBytes() uint64 {
+	if x != nil {
+		return x.WeightsBytes
+	}
+	return 0
+}
+
+type ModelField struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Value         string                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`        // an identifier <= 128 B
+	Evidence      uint32                 `protobuf:"varint,2,opt,name=evidence,proto3" json:"evidence,omitempty"` // section 12's evidence: 1 declared, 2 reported, 3 measured, 4 attested
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelField) Reset() {
+	*x = ModelField{}
+	mi := &file_protocol_record_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelField) ProtoMessage() {}
+
+func (x *ModelField) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelField.ProtoReflect.Descriptor instead.
+func (*ModelField) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *ModelField) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *ModelField) GetEvidence() uint32 {
+	if x != nil {
+		return x.Evidence
+	}
+	return 0
+}
+
+type ModelCallBody struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Model            string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	Provider         string                 `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
+	RequestId        string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // each <= 128 B, as the harness reports them
+	InputTokens      uint64                 `protobuf:"varint,4,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	OutputTokens     uint64                 `protobuf:"varint,5,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	CacheReadTokens  uint64                 `protobuf:"varint,6,opt,name=cache_read_tokens,json=cacheReadTokens,proto3" json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens uint64                 `protobuf:"varint,7,opt,name=cache_write_tokens,json=cacheWriteTokens,proto3" json:"cache_write_tokens,omitempty"`
+	ReportedMicroUsd uint64                 `protobuf:"varint,8,opt,name=reported_micro_usd,json=reportedMicroUsd,proto3" json:"reported_micro_usd,omitempty"` // the harness's own amount, else 0
+	StartedMillis    int64                  `protobuf:"varint,9,opt,name=started_millis,json=startedMillis,proto3" json:"started_millis,omitempty"`
+	DurationMillis   uint32                 `protobuf:"varint,10,opt,name=duration_millis,json=durationMillis,proto3" json:"duration_millis,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ModelCallBody) Reset() {
+	*x = ModelCallBody{}
+	mi := &file_protocol_record_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelCallBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelCallBody) ProtoMessage() {}
+
+func (x *ModelCallBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelCallBody.ProtoReflect.Descriptor instead.
+func (*ModelCallBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *ModelCallBody) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ModelCallBody) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ModelCallBody) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ModelCallBody) GetInputTokens() uint64 {
+	if x != nil {
+		return x.InputTokens
+	}
+	return 0
+}
+
+func (x *ModelCallBody) GetOutputTokens() uint64 {
+	if x != nil {
+		return x.OutputTokens
+	}
+	return 0
+}
+
+func (x *ModelCallBody) GetCacheReadTokens() uint64 {
+	if x != nil {
+		return x.CacheReadTokens
+	}
+	return 0
+}
+
+func (x *ModelCallBody) GetCacheWriteTokens() uint64 {
+	if x != nil {
+		return x.CacheWriteTokens
+	}
+	return 0
+}
+
+func (x *ModelCallBody) GetReportedMicroUsd() uint64 {
+	if x != nil {
+		return x.ReportedMicroUsd
+	}
+	return 0
+}
+
+func (x *ModelCallBody) GetStartedMillis() int64 {
+	if x != nil {
+		return x.StartedMillis
+	}
+	return 0
+}
+
+func (x *ModelCallBody) GetDurationMillis() uint32 {
+	if x != nil {
+		return x.DurationMillis
+	}
+	return 0
+}
+
+// RECORD.md section 13.1: run cost (M6).
+type RunCostBody struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Usage         []*ModelUsage          `protobuf:"bytes,1,rep,name=usage,proto3" json:"usage,omitempty"`                                    // <= 16, by model
+	MeteredBytes  uint64                 `protobuf:"varint,2,opt,name=metered_bytes,json=meteredBytes,proto3" json:"metered_bytes,omitempty"` // the sum of the run's tool results' metered_bytes (§16.6)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunCostBody) Reset() {
+	*x = RunCostBody{}
+	mi := &file_protocol_record_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunCostBody) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunCostBody) ProtoMessage() {}
+
+func (x *RunCostBody) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunCostBody.ProtoReflect.Descriptor instead.
+func (*RunCostBody) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *RunCostBody) GetUsage() []*ModelUsage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
+}
+
+func (x *RunCostBody) GetMeteredBytes() uint64 {
+	if x != nil {
+		return x.MeteredBytes
+	}
+	return 0
+}
+
+type ModelUsage struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Model            string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	InputTokens      uint64                 `protobuf:"varint,2,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	OutputTokens     uint64                 `protobuf:"varint,3,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	CacheReadTokens  uint64                 `protobuf:"varint,4,opt,name=cache_read_tokens,json=cacheReadTokens,proto3" json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens uint64                 `protobuf:"varint,5,opt,name=cache_write_tokens,json=cacheWriteTokens,proto3" json:"cache_write_tokens,omitempty"`
+	Calls            uint64                 `protobuf:"varint,6,opt,name=calls,proto3" json:"calls,omitempty"`
+	ReportedMicroUsd uint64                 `protobuf:"varint,7,opt,name=reported_micro_usd,json=reportedMicroUsd,proto3" json:"reported_micro_usd,omitempty"` // the sum of what the harness reported, else 0
+	Complete         bool                   `protobuf:"varint,8,opt,name=complete,proto3" json:"complete,omitempty"`                                           // false where coverage has a gap that may hide calls
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ModelUsage) Reset() {
+	*x = ModelUsage{}
+	mi := &file_protocol_record_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelUsage) ProtoMessage() {}
+
+func (x *ModelUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_record_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelUsage.ProtoReflect.Descriptor instead.
+func (*ModelUsage) Descriptor() ([]byte, []int) {
+	return file_protocol_record_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *ModelUsage) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ModelUsage) GetInputTokens() uint64 {
+	if x != nil {
+		return x.InputTokens
+	}
+	return 0
+}
+
+func (x *ModelUsage) GetOutputTokens() uint64 {
+	if x != nil {
+		return x.OutputTokens
+	}
+	return 0
+}
+
+func (x *ModelUsage) GetCacheReadTokens() uint64 {
+	if x != nil {
+		return x.CacheReadTokens
+	}
+	return 0
+}
+
+func (x *ModelUsage) GetCacheWriteTokens() uint64 {
+	if x != nil {
+		return x.CacheWriteTokens
+	}
+	return 0
+}
+
+func (x *ModelUsage) GetCalls() uint64 {
+	if x != nil {
+		return x.Calls
+	}
+	return 0
+}
+
+func (x *ModelUsage) GetReportedMicroUsd() uint64 {
+	if x != nil {
+		return x.ReportedMicroUsd
+	}
+	return 0
+}
+
+func (x *ModelUsage) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
 var File_protocol_record_proto protoreflect.FileDescriptor
 
 const file_protocol_record_proto_rawDesc = "" +
@@ -1451,7 +5232,377 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\x05class\x18\x02 \x01(\rR\x05class\x12\x1b\n" +
 	"\tkeep_days\x18\x03 \x01(\rR\bkeepDays\x12'\n" +
 	"\x0fsearchable_days\x18\x04 \x01(\rR\x0esearchableDays\x12\x18\n" +
-	"\aarchive\x18\x05 \x01(\bR\aarchiveB'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
+	"\aarchive\x18\x05 \x01(\bR\aarchive\"P\n" +
+	"\x12RecordDepositBatch\x12:\n" +
+	"\aentries\x18\x01 \x03(\v2 .urnetwork.sidecar.RecordDepositR\aentries\"K\n" +
+	"\rRecordDeposit\x12\x14\n" +
+	"\x05entry\x18\x01 \x01(\fR\x05entry\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\x12\x12\n" +
+	"\x04salt\x18\x03 \x01(\fR\x04salt\"\xbb\x01\n" +
+	"\x10CoordinationBody\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x18\n" +
+	"\atargets\x18\x02 \x03(\tR\atargets\x12%\n" +
+	"\x0eexpires_millis\x18\x03 \x01(\x03R\rexpiresMillis\x12\x19\n" +
+	"\bclaim_id\x18\x04 \x01(\fR\aclaimId\x12\x1f\n" +
+	"\vclaim_state\x18\x05 \x01(\rR\n" +
+	"claimState\x12\x16\n" +
+	"\x06result\x18\x06 \x01(\rR\x06result\"\xb8\x04\n" +
+	"\vContextBody\x12\x14\n" +
+	"\x05stage\x18\x01 \x01(\rR\x05stage\x12\x18\n" +
+	"\aharness\x18\x02 \x01(\tR\aharness\x12'\n" +
+	"\x0fharness_version\x18\x03 \x01(\tR\x0eharnessVersion\x12\x1f\n" +
+	"\vagent_label\x18\x04 \x01(\tR\n" +
+	"agentLabel\x12\x1f\n" +
+	"\vsession_ids\x18\x05 \x03(\tR\n" +
+	"sessionIds\x12\x14\n" +
+	"\x05model\x18\x06 \x01(\tR\x05model\x12'\n" +
+	"\x0fpermission_mode\x18\a \x01(\tR\x0epermissionMode\x12\x17\n" +
+	"\arepo_id\x18\b \x01(\fR\x06repoId\x12\x18\n" +
+	"\aproject\x18\t \x01(\tR\aproject\x12\x16\n" +
+	"\x06branch\x18\n" +
+	" \x01(\tR\x06branch\x12\x14\n" +
+	"\x05title\x18\v \x01(\tR\x05title\x12O\n" +
+	"\x11instruction_files\x18\f \x03(\v2\".urnetwork.sidecar.InstructionFileR\x10instructionFiles\x12 \n" +
+	"\vtruncations\x18\r \x03(\tR\vtruncations\x12#\n" +
+	"\rconfig_sha256\x18\x0e \x01(\fR\fconfigSha256\x12(\n" +
+	"\x10continues_run_id\x18\x0f \x01(\fR\x0econtinuesRunId\x12,\n" +
+	"\x12continues_entry_id\x18\x10 \x01(\fR\x10continuesEntryId\"g\n" +
+	"\x0fInstructionFile\x12\x14\n" +
+	"\x05scope\x18\x01 \x01(\rR\x05scope\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06sha256\x18\x03 \x01(\fR\x06sha256\x12\x12\n" +
+	"\x04size\x18\x04 \x01(\x04R\x04size\"\xce\x02\n" +
+	"\n" +
+	"ChangeBody\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12\x18\n" +
+	"\aproject\x18\x02 \x01(\tR\aproject\x12\x1f\n" +
+	"\vbase_commit\x18\x03 \x01(\tR\n" +
+	"baseCommit\x12\x18\n" +
+	"\acommits\x18\x04 \x03(\tR\acommits\x12\x1d\n" +
+	"\n" +
+	"path_count\x18\x05 \x01(\rR\tpathCount\x12\x1d\n" +
+	"\n" +
+	"edit_count\x18\x06 \x01(\rR\teditCount\x12\x1f\n" +
+	"\vshell_count\x18\a \x01(\rR\n" +
+	"shellCount\x12#\n" +
+	"\rforeign_count\x18\b \x01(\rR\fforeignCount\x12\x18\n" +
+	"\acapture\x18\t \x01(\rR\acapture\x124\n" +
+	"\x05paths\x18\n" +
+	" \x03(\v2\x1e.urnetwork.sidecar.ChangedPathR\x05paths\"\xc3\x01\n" +
+	"\vChangedPath\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12#\n" +
+	"\rbefore_sha256\x18\x02 \x01(\fR\fbeforeSha256\x12!\n" +
+	"\fafter_sha256\x18\x03 \x01(\fR\vafterSha256\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\rR\x04mode\x12 \n" +
+	"\vattribution\x18\x05 \x01(\rR\vattribution\x12\"\n" +
+	"\rblob_entry_id\x18\x06 \x01(\fR\vblobEntryId\"\xdb\x01\n" +
+	"\x0ePermissionBody\x12\x1a\n" +
+	"\bdecision\x18\x01 \x01(\rR\bdecision\x12\x1d\n" +
+	"\n" +
+	"decided_by\x18\x02 \x01(\rR\tdecidedBy\x12'\n" +
+	"\x0fpermission_mode\x18\x03 \x01(\tR\x0epermissionMode\x12\x1d\n" +
+	"\n" +
+	"tool_class\x18\x04 \x01(\rR\ttoolClass\x12\x1b\n" +
+	"\ttool_name\x18\x05 \x01(\tR\btoolName\x12)\n" +
+	"\x10arguments_sha256\x18\x06 \x01(\fR\x0fargumentsSha256\"\x9a\x02\n" +
+	"\x0fApprovalUseBody\x12\x1f\n" +
+	"\vapproval_id\x18\x01 \x01(\fR\n" +
+	"approvalId\x12\x1b\n" +
+	"\tuse_index\x18\x02 \x01(\rR\buseIndex\x12%\n" +
+	"\x0epayload_sha256\x18\x03 \x01(\fR\rpayloadSha256\x12\x1d\n" +
+	"\n" +
+	"effect_key\x18\x04 \x01(\fR\teffectKey\x12\x14\n" +
+	"\x05state\x18\x05 \x01(\rR\x05state\x12\x1d\n" +
+	"\n" +
+	"effect_ref\x18\x06 \x01(\fR\teffectRef\x12'\n" +
+	"\x0freserved_millis\x18\a \x01(\x03R\x0ereservedMillis\x12%\n" +
+	"\x0eoutcome_millis\x18\b \x01(\x03R\routcomeMillis\"\x91\x02\n" +
+	"\tRouteBody\x12\x14\n" +
+	"\x05event\x18\x01 \x01(\rR\x05event\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\rR\x04kind\x12\x17\n" +
+	"\arule_id\x18\x03 \x01(\fR\x06ruleId\x12*\n" +
+	"\x11target_sidecar_id\x18\x04 \x01(\fR\x0ftargetSidecarId\x12\x1f\n" +
+	"\vtarget_port\x18\x05 \x01(\rR\n" +
+	"targetPort\x12\x14\n" +
+	"\x05cidrs\x18\x06 \x03(\tR\x05cidrs\x12%\n" +
+	"\x0eexpires_millis\x18\a \x01(\x03R\rexpiresMillis\x12\x1f\n" +
+	"\vapproval_id\x18\b \x01(\fR\n" +
+	"approvalId\x12\x16\n" +
+	"\x06reason\x18\t \x01(\rR\x06reason\"\xe2\x01\n" +
+	"\vPublishBody\x12\x14\n" +
+	"\x05event\x18\x01 \x01(\rR\x05event\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\x12\x1a\n" +
+	"\baudience\x18\x04 \x01(\rR\baudience\x12\x19\n" +
+	"\bapp_mode\x18\x05 \x01(\rR\aappMode\x12%\n" +
+	"\x0eexpires_millis\x18\x06 \x01(\x03R\rexpiresMillis\x12\x1f\n" +
+	"\vapproval_id\x18\a \x01(\fR\n" +
+	"approvalId\x12\x16\n" +
+	"\x06reason\x18\b \x01(\rR\x06reason\"\xfa\x01\n" +
+	"\vRestoreBody\x12&\n" +
+	"\x0frestored_run_id\x18\x01 \x01(\fR\rrestoredRunId\x12\x1d\n" +
+	"\n" +
+	"preview_id\x18\x02 \x01(\fR\tpreviewId\x12\x1f\n" +
+	"\vapproval_id\x18\x03 \x01(\fR\n" +
+	"approvalId\x12%\n" +
+	"\x0erestored_count\x18\x04 \x01(\rR\rrestoredCount\x12%\n" +
+	"\x0econflict_count\x18\x05 \x01(\rR\rconflictCount\x125\n" +
+	"\x05paths\x18\x06 \x03(\v2\x1f.urnetwork.sidecar.RestoredPathR\x05paths\"R\n" +
+	"\fRestoredPath\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
+	"\x06result\x18\x02 \x01(\tR\x06result\x12\x16\n" +
+	"\x06copies\x18\x03 \x03(\tR\x06copies\"\xc0\x02\n" +
+	"\x0eMembershipBody\x12\x14\n" +
+	"\x05event\x18\x01 \x01(\rR\x05event\x12\x1b\n" +
+	"\tmember_id\x18\x02 \x01(\fR\bmemberId\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x03 \x01(\fR\tsidecarId\x12\x19\n" +
+	"\bgroup_id\x18\x04 \x01(\fR\agroupId\x12#\n" +
+	"\rauth_position\x18\x05 \x01(\x04R\fauthPosition\x12)\n" +
+	"\x10statement_sha256\x18\x06 \x01(\fR\x0fstatementSha256\x12\x1a\n" +
+	"\bevidence\x18\a \x01(\rR\bevidence\x12\x1c\n" +
+	"\tassertion\x18\b \x01(\fR\tassertion\x12\x16\n" +
+	"\x06reason\x18\t \x01(\rR\x06reason\x12\x1f\n" +
+	"\vsigned_type\x18\n" +
+	" \x01(\rR\n" +
+	"signedType\"\xf8\x01\n" +
+	"\aKeyBody\x12\x14\n" +
+	"\x05event\x18\x01 \x01(\rR\x05event\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\fR\agroupId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\x12\x14\n" +
+	"\x05cause\x18\x04 \x01(\rR\x05cause\x12\x15\n" +
+	"\x06key_id\x18\x05 \x01(\fR\x05keyId\x12#\n" +
+	"\rauth_position\x18\x06 \x01(\x04R\fauthPosition\x12)\n" +
+	"\x10statement_sha256\x18\a \x01(\fR\x0fstatementSha256\x12\x1f\n" +
+	"\vsigned_type\x18\b \x01(\rR\n" +
+	"signedType\"c\n" +
+	"\bReadBody\x12\x1d\n" +
+	"\n" +
+	"object_ids\x18\x01 \x03(\fR\tobjectIds\x12\x18\n" +
+	"\apurpose\x18\x02 \x01(\rR\apurpose\x12\x1e\n" +
+	"\vread_log_id\x18\x03 \x01(\fR\treadLogId\"\x80\x01\n" +
+	"\vErasureBody\x12\x1d\n" +
+	"\n" +
+	"erasure_id\x18\x01 \x01(\fR\terasureId\x12\x1b\n" +
+	"\tentry_ids\x18\x02 \x03(\fR\bentryIds\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\rR\x06reason\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\fR\trequestId\"\xaf\x01\n" +
+	"\rInventoryBody\x12*\n" +
+	"\x11sponsor_member_id\x18\x01 \x01(\fR\x0fsponsorMemberId\x12\x10\n" +
+	"\x03day\x18\x02 \x01(\rR\x03day\x12%\n" +
+	"\x0ecredential_ref\x18\x03 \x01(\fR\rcredentialRef\x129\n" +
+	"\x06agents\x18\x04 \x03(\v2!.urnetwork.sidecar.InventoryAgentR\x06agents\"\xc6\x02\n" +
+	"\x0eInventoryAgent\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\fR\aagentId\x12\x1f\n" +
+	"\vagent_label\x18\x02 \x01(\tR\n" +
+	"agentLabel\x12!\n" +
+	"\fagent_source\x18\x03 \x01(\rR\vagentSource\x12\x1c\n" +
+	"\tharnesses\x18\x04 \x03(\tR\tharnesses\x12\x16\n" +
+	"\x06models\x18\x05 \x03(\tR\x06models\x12\x19\n" +
+	"\brepo_ids\x18\x06 \x03(\fR\arepoIds\x12\x1a\n" +
+	"\bprojects\x18\a \x03(\tR\bprojects\x12\x12\n" +
+	"\x04runs\x18\b \x01(\rR\x04runs\x12*\n" +
+	"\x11first_seen_millis\x18\t \x01(\x03R\x0ffirstSeenMillis\x12(\n" +
+	"\x10last_seen_millis\x18\n" +
+	" \x01(\x03R\x0elastSeenMillis\"u\n" +
+	"\x0fAgentSignedBody\x12\x12\n" +
+	"\x04body\x18\x01 \x01(\fR\x04body\x12\x19\n" +
+	"\bagent_id\x18\x02 \x01(\fR\aagentId\x12\x15\n" +
+	"\x06key_id\x18\x03 \x01(\fR\x05keyId\x12\x1c\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\"I\n" +
+	"\aOpening\x12\x16\n" +
+	"\x06header\x18\x01 \x01(\fR\x06header\x12\x12\n" +
+	"\x04salt\x18\x02 \x01(\fR\x04salt\x12\x12\n" +
+	"\x04body\x18\x03 \x01(\fR\x04body\"@\n" +
+	"\bCopyBody\x124\n" +
+	"\aentries\x18\x01 \x03(\v2\x1a.urnetwork.sidecar.OpeningR\aentries\"\x82\x01\n" +
+	"\x0eTranscriptBody\x12\x1d\n" +
+	"\n" +
+	"first_line\x18\x01 \x01(\x04R\tfirstLine\x12\x1d\n" +
+	"\n" +
+	"line_count\x18\x02 \x01(\rR\tlineCount\x12\x14\n" +
+	"\x05lines\x18\x03 \x01(\fR\x05lines\x12\x1c\n" +
+	"\ttruncated\x18\x04 \x01(\bR\ttruncated\"\xb3\x02\n" +
+	"\fToolCallBody\x12\x1b\n" +
+	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x1e\n" +
+	"\vtool_use_id\x18\x02 \x01(\tR\ttoolUseId\x12\x1d\n" +
+	"\n" +
+	"tool_class\x18\x03 \x01(\rR\ttoolClass\x12\x14\n" +
+	"\x05input\x18\x04 \x01(\fR\x05input\x12\x16\n" +
+	"\x06output\x18\x05 \x01(\fR\x06output\x12%\n" +
+	"\x0estarted_millis\x18\x06 \x01(\x03R\rstartedMillis\x12!\n" +
+	"\fended_millis\x18\a \x01(\x03R\vendedMillis\x12\x1b\n" +
+	"\texit_code\x18\b \x01(\x05R\bexitCode\x12\x14\n" +
+	"\x05paths\x18\t \x03(\tR\x05paths\x12\x1c\n" +
+	"\ttruncated\x18\n" +
+	" \x01(\bR\ttruncated\"j\n" +
+	"\rHookEventBody\x12\x14\n" +
+	"\x05event\x18\x01 \x01(\tR\x05event\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\x12)\n" +
+	"\x10arguments_sha256\x18\x03 \x01(\fR\x0fargumentsSha256\"n\n" +
+	"\rFileEventBody\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x0e\n" +
+	"\x02op\x18\x02 \x01(\rR\x02op\x12!\n" +
+	"\fafter_sha256\x18\x03 \x01(\fR\vafterSha256\x12\x16\n" +
+	"\x06millis\x18\x04 \x01(\x03R\x06millis\"\x80\x01\n" +
+	"\bBlobBody\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
+	"\acontent\x18\x02 \x01(\fR\acontent\x12\x16\n" +
+	"\x06sha256\x18\x03 \x01(\fR\x06sha256\x12\x1a\n" +
+	"\bredacted\x18\x04 \x01(\bR\bredacted\x12\x12\n" +
+	"\x04size\x18\x05 \x01(\x04R\x04size\"^\n" +
+	"\x0fLedgerScopeBody\x12\x19\n" +
+	"\brepo_ids\x18\x01 \x03(\fR\arepoIds\x12\x1a\n" +
+	"\bprojects\x18\x02 \x03(\tR\bprojects\x12\x14\n" +
+	"\x05kinds\x18\x03 \x03(\rR\x05kinds\"\x90\x02\n" +
+	"\x0fLogSettingsBody\x12\x16\n" +
+	"\x06origin\x18\x01 \x01(\tR\x06origin\x126\n" +
+	"\x17checkpointer_sidecar_id\x18\x02 \x01(\fR\x15checkpointerSidecarId\x12&\n" +
+	"\x0fnote_public_key\x18\x03 \x01(\fR\rnotePublicKey\x12)\n" +
+	"\x10interval_seconds\x18\x04 \x01(\rR\x0fintervalSeconds\x12;\n" +
+	"\twitnesses\x18\x05 \x03(\v2\x1d.urnetwork.sidecar.LogWitnessR\twitnesses\x12\x1d\n" +
+	"\n" +
+	"from_batch\x18\x06 \x01(\x04R\tfromBatch\"F\n" +
+	"\n" +
+	"LogWitness\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12\x12\n" +
+	"\x04vkey\x18\x03 \x01(\tR\x04vkey\"\xee\x01\n" +
+	"\x11LogCheckpointBody\x12\x14\n" +
+	"\x05batch\x18\x01 \x01(\x04R\x05batch\x12\x1f\n" +
+	"\vfirst_index\x18\x02 \x01(\x04R\n" +
+	"firstIndex\x12:\n" +
+	"\bfrontier\x18\x03 \x03(\v2\x1e.urnetwork.sidecar.LogFrontierR\bfrontier\x12\x16\n" +
+	"\x06leaves\x18\x04 \x01(\fR\x06leaves\x12\x12\n" +
+	"\x04note\x18\x05 \x01(\fR\x04note\x12:\n" +
+	"\bcosigned\x18\x06 \x03(\v2\x1e.urnetwork.sidecar.LogCosignedR\bcosigned\"T\n" +
+	"\vLogFrontier\x12\x15\n" +
+	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
+	"\x05chain\x18\x03 \x01(\fR\x05chain\"9\n" +
+	"\vLogCosigned\x12\x14\n" +
+	"\x05batch\x18\x01 \x01(\x04R\x05batch\x12\x14\n" +
+	"\x05lines\x18\x02 \x01(\fR\x05lines\"\xb0\x02\n" +
+	"\x10DisclosurePacket\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\x12\x15\n" +
+	"\x06log_id\x18\x02 \x01(\fR\x05logId\x12\x16\n" +
+	"\x06origin\x18\x03 \x01(\tR\x06origin\x12%\n" +
+	"\x0ecreated_millis\x18\x04 \x01(\x03R\rcreatedMillis\x12;\n" +
+	"\aentries\x18\x05 \x03(\v2!.urnetwork.sidecar.DisclosedEntryR\aentries\x12 \n" +
+	"\vcheckpoints\x18\x06 \x03(\fR\vcheckpoints\x123\n" +
+	"\x04keys\x18\a \x03(\v2\x1f.urnetwork.sidecar.DisclosedKeyR\x04keys\x12\x18\n" +
+	"\apurpose\x18\b \x01(\tR\apurpose\"\xe2\x01\n" +
+	"\x0eDisclosedEntry\x124\n" +
+	"\aopening\x18\x01 \x01(\v2\x1a.urnetwork.sidecar.OpeningR\aopening\x12\x1d\n" +
+	"\n" +
+	"leaf_index\x18\x02 \x01(\x04R\tleafIndex\x12\x1e\n" +
+	"\n" +
+	"checkpoint\x18\x03 \x01(\rR\n" +
+	"checkpoint\x12%\n" +
+	"\x0einclusion_path\x18\x04 \x03(\fR\rinclusionPath\x124\n" +
+	"\acontent\x18\x05 \x03(\v2\x1a.urnetwork.sidecar.OpeningR\acontent\"\x8b\x01\n" +
+	"\fDisclosedKey\x12\x15\n" +
+	"\x06key_id\x18\x01 \x01(\fR\x05keyId\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\x12\x10\n" +
+	"\x03alg\x18\x03 \x01(\rR\x03alg\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x04 \x01(\fR\tpublicKey\x12\x14\n" +
+	"\x05label\x18\x05 \x01(\tR\x05label\"\xbf\x02\n" +
+	"\x0eDisclosureBody\x12\x10\n" +
+	"\x03act\x18\x01 \x01(\rR\x03act\x12#\n" +
+	"\rpacket_sha256\x18\x02 \x01(\fR\fpacketSha256\x12\x1b\n" +
+	"\tentry_ids\x18\x03 \x03(\fR\bentryIds\x12\x1c\n" +
+	"\trecipient\x18\x04 \x01(\tR\trecipient\x12\x18\n" +
+	"\apurpose\x18\x05 \x01(\tR\apurpose\x12!\n" +
+	"\fsince_millis\x18\x06 \x01(\x03R\vsinceMillis\x12!\n" +
+	"\funtil_millis\x18\a \x01(\x03R\vuntilMillis\x12\x16\n" +
+	"\x06format\x18\b \x01(\rR\x06format\x12\x16\n" +
+	"\x06bodies\x18\t \x01(\bR\x06bodies\x12\x14\n" +
+	"\x05kinds\x18\n" +
+	" \x03(\rR\x05kinds\x12\x15\n" +
+	"\x06run_id\x18\v \x01(\fR\x05runId\"\x8e\x01\n" +
+	"\x0fAttestationBody\x12\x1c\n" +
+	"\tstatement\x18\x01 \x01(\rR\tstatement\x12\x18\n" +
+	"\acommits\x18\x02 \x03(\tR\acommits\x12\x17\n" +
+	"\arepo_id\x18\x03 \x01(\fR\x06repoId\x12\x12\n" +
+	"\x04note\x18\x04 \x01(\tR\x04note\x12\x16\n" +
+	"\x06sshsig\x18\x05 \x01(\fR\x06sshsig\"\x8e\x03\n" +
+	"\rModelManifest\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\rR\x04port\x12>\n" +
+	"\vserved_name\x18\x02 \x01(\v2\x1d.urnetwork.sidecar.ModelFieldR\n" +
+	"servedName\x125\n" +
+	"\x06engine\x18\x03 \x01(\v2\x1d.urnetwork.sidecar.ModelFieldR\x06engine\x12D\n" +
+	"\x0eengine_version\x18\x04 \x01(\v2\x1d.urnetwork.sidecar.ModelFieldR\rengineVersion\x12A\n" +
+	"\fquantization\x18\x05 \x01(\v2\x1d.urnetwork.sidecar.ModelFieldR\fquantization\x12D\n" +
+	"\x0eweights_digest\x18\x06 \x01(\v2\x1d.urnetwork.sidecar.ModelFieldR\rweightsDigest\x12#\n" +
+	"\rweights_bytes\x18\a \x01(\x04R\fweightsBytes\">\n" +
+	"\n" +
+	"ModelField\x12\x14\n" +
+	"\x05value\x18\x01 \x01(\tR\x05value\x12\x1a\n" +
+	"\bevidence\x18\x02 \x01(\rR\bevidence\"\x80\x03\n" +
+	"\rModelCallBody\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12!\n" +
+	"\finput_tokens\x18\x04 \x01(\x04R\vinputTokens\x12#\n" +
+	"\routput_tokens\x18\x05 \x01(\x04R\foutputTokens\x12*\n" +
+	"\x11cache_read_tokens\x18\x06 \x01(\x04R\x0fcacheReadTokens\x12,\n" +
+	"\x12cache_write_tokens\x18\a \x01(\x04R\x10cacheWriteTokens\x12,\n" +
+	"\x12reported_micro_usd\x18\b \x01(\x04R\x10reportedMicroUsd\x12%\n" +
+	"\x0estarted_millis\x18\t \x01(\x03R\rstartedMillis\x12'\n" +
+	"\x0fduration_millis\x18\n" +
+	" \x01(\rR\x0edurationMillis\"g\n" +
+	"\vRunCostBody\x123\n" +
+	"\x05usage\x18\x01 \x03(\v2\x1d.urnetwork.sidecar.ModelUsageR\x05usage\x12#\n" +
+	"\rmetered_bytes\x18\x02 \x01(\x04R\fmeteredBytes\"\xa4\x02\n" +
+	"\n" +
+	"ModelUsage\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12!\n" +
+	"\finput_tokens\x18\x02 \x01(\x04R\vinputTokens\x12#\n" +
+	"\routput_tokens\x18\x03 \x01(\x04R\foutputTokens\x12*\n" +
+	"\x11cache_read_tokens\x18\x04 \x01(\x04R\x0fcacheReadTokens\x12,\n" +
+	"\x12cache_write_tokens\x18\x05 \x01(\x04R\x10cacheWriteTokens\x12\x14\n" +
+	"\x05calls\x18\x06 \x01(\x04R\x05calls\x12,\n" +
+	"\x12reported_micro_usd\x18\a \x01(\x04R\x10reportedMicroUsd\x12\x1a\n" +
+	"\bcomplete\x18\b \x01(\bR\bcomplete*\x97\x05\n" +
+	"\x11SidecarActionKind\x12#\n" +
+	"\x1fSIDECAR_ACTION_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bSIDECAR_ACTION_KIND_PUBLISH\x10\x01\x12\x1e\n" +
+	"\x1aSIDECAR_ACTION_KIND_LISTEN\x10\x02\x12\x1f\n" +
+	"\x1bSIDECAR_ACTION_KIND_FORWARD\x10\x03\x12\x1e\n" +
+	"\x1aSIDECAR_ACTION_KIND_EXPOSE\x10\x04\x12%\n" +
+	"!SIDECAR_ACTION_KIND_EGRESS_CHANGE\x10\x05\x12\x1e\n" +
+	"\x1aSIDECAR_ACTION_KIND_INVITE\x10\x06\x12\x1d\n" +
+	"\x19SIDECAR_ACTION_KIND_SHARE\x10\a\x12$\n" +
+	" SIDECAR_ACTION_KIND_ALIAS_CREATE\x10\b\x12$\n" +
+	" SIDECAR_ACTION_KIND_ALIAS_DELETE\x10\t\x12*\n" +
+	"&SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE\x10\n" +
+	"\x12+\n" +
+	"'SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE\x10\v\x12\x1f\n" +
+	"\x1bSIDECAR_ACTION_KIND_DNS_SET\x10\f\x12\"\n" +
+	"\x1eSIDECAR_ACTION_KIND_DNS_DELETE\x10\r\x12!\n" +
+	"\x1dSIDECAR_ACTION_KIND_MAIL_SEND\x10\x0e\x12&\n" +
+	"\"SIDECAR_ACTION_KIND_ACCESS_REQUEST\x10\x0f\x12\x1f\n" +
+	"\x1bSIDECAR_ACTION_KIND_PAYMENT\x10\x10\x12\x1f\n" +
+	"\x1bSIDECAR_ACTION_KIND_RESTORE\x10\x11*[\n" +
+	"\vSidecarRisk\x12\x1c\n" +
+	"\x18SIDECAR_RISK_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13SIDECAR_RISK_NORMAL\x10\x01\x12\x15\n" +
+	"\x11SIDECAR_RISK_HIGH\x10\x02*l\n" +
+	"\x0fApprovalVerdict\x12 \n" +
+	"\x1cAPPROVAL_VERDICT_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18APPROVAL_VERDICT_APPROVE\x10\x01\x12\x19\n" +
+	"\x15APPROVAL_VERDICT_DENY\x10\x02*\x8d\x01\n" +
+	"\x0fApprovalChannel\x12 \n" +
+	"\x1cAPPROVAL_CHANNEL_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17APPROVAL_CHANNEL_DEVICE\x10\x01\x12\x1d\n" +
+	"\x19APPROVAL_CHANNEL_PRESENCE\x10\x02\x12\x1c\n" +
+	"\x18APPROVAL_CHANNEL_HARNESS\x10\x03B'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
 
 var (
 	file_protocol_record_proto_rawDescOnce sync.Once
@@ -1465,30 +5616,97 @@ func file_protocol_record_proto_rawDescGZIP() []byte {
 	return file_protocol_record_proto_rawDescData
 }
 
-var file_protocol_record_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_protocol_record_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_protocol_record_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
 var file_protocol_record_proto_goTypes = []any{
-	(*RecordHeader)(nil),     // 0: urnetwork.sidecar.RecordHeader
-	(*ContentRef)(nil),       // 1: urnetwork.sidecar.ContentRef
-	(*RecordEntry)(nil),      // 2: urnetwork.sidecar.RecordEntry
-	(*CanonicalAction)(nil),  // 3: urnetwork.sidecar.CanonicalAction
-	(*ApprovalRequest)(nil),  // 4: urnetwork.sidecar.ApprovalRequest
-	(*ApprovalDecision)(nil), // 5: urnetwork.sidecar.ApprovalDecision
-	(*ApprovalCancel)(nil),   // 6: urnetwork.sidecar.ApprovalCancel
-	(*ReachReceipt)(nil),     // 7: urnetwork.sidecar.ReachReceipt
-	(*Coverage)(nil),         // 8: urnetwork.sidecar.Coverage
-	(*RetentionPolicy)(nil),  // 9: urnetwork.sidecar.RetentionPolicy
-	(*bridge.Signed)(nil),    // 10: urnetwork.sidecar.Signed
-	(*bridge.AuthPin)(nil),   // 11: urnetwork.sidecar.AuthPin
+	(SidecarActionKind)(0),     // 0: urnetwork.sidecar.SidecarActionKind
+	(SidecarRisk)(0),           // 1: urnetwork.sidecar.SidecarRisk
+	(ApprovalVerdict)(0),       // 2: urnetwork.sidecar.ApprovalVerdict
+	(ApprovalChannel)(0),       // 3: urnetwork.sidecar.ApprovalChannel
+	(*RecordHeader)(nil),       // 4: urnetwork.sidecar.RecordHeader
+	(*ContentRef)(nil),         // 5: urnetwork.sidecar.ContentRef
+	(*RecordEntry)(nil),        // 6: urnetwork.sidecar.RecordEntry
+	(*CanonicalAction)(nil),    // 7: urnetwork.sidecar.CanonicalAction
+	(*ApprovalRequest)(nil),    // 8: urnetwork.sidecar.ApprovalRequest
+	(*ApprovalDecision)(nil),   // 9: urnetwork.sidecar.ApprovalDecision
+	(*ApprovalCancel)(nil),     // 10: urnetwork.sidecar.ApprovalCancel
+	(*ReachReceipt)(nil),       // 11: urnetwork.sidecar.ReachReceipt
+	(*Coverage)(nil),           // 12: urnetwork.sidecar.Coverage
+	(*RetentionPolicy)(nil),    // 13: urnetwork.sidecar.RetentionPolicy
+	(*RecordDepositBatch)(nil), // 14: urnetwork.sidecar.RecordDepositBatch
+	(*RecordDeposit)(nil),      // 15: urnetwork.sidecar.RecordDeposit
+	(*CoordinationBody)(nil),   // 16: urnetwork.sidecar.CoordinationBody
+	(*ContextBody)(nil),        // 17: urnetwork.sidecar.ContextBody
+	(*InstructionFile)(nil),    // 18: urnetwork.sidecar.InstructionFile
+	(*ChangeBody)(nil),         // 19: urnetwork.sidecar.ChangeBody
+	(*ChangedPath)(nil),        // 20: urnetwork.sidecar.ChangedPath
+	(*PermissionBody)(nil),     // 21: urnetwork.sidecar.PermissionBody
+	(*ApprovalUseBody)(nil),    // 22: urnetwork.sidecar.ApprovalUseBody
+	(*RouteBody)(nil),          // 23: urnetwork.sidecar.RouteBody
+	(*PublishBody)(nil),        // 24: urnetwork.sidecar.PublishBody
+	(*RestoreBody)(nil),        // 25: urnetwork.sidecar.RestoreBody
+	(*RestoredPath)(nil),       // 26: urnetwork.sidecar.RestoredPath
+	(*MembershipBody)(nil),     // 27: urnetwork.sidecar.MembershipBody
+	(*KeyBody)(nil),            // 28: urnetwork.sidecar.KeyBody
+	(*ReadBody)(nil),           // 29: urnetwork.sidecar.ReadBody
+	(*ErasureBody)(nil),        // 30: urnetwork.sidecar.ErasureBody
+	(*InventoryBody)(nil),      // 31: urnetwork.sidecar.InventoryBody
+	(*InventoryAgent)(nil),     // 32: urnetwork.sidecar.InventoryAgent
+	(*AgentSignedBody)(nil),    // 33: urnetwork.sidecar.AgentSignedBody
+	(*Opening)(nil),            // 34: urnetwork.sidecar.Opening
+	(*CopyBody)(nil),           // 35: urnetwork.sidecar.CopyBody
+	(*TranscriptBody)(nil),     // 36: urnetwork.sidecar.TranscriptBody
+	(*ToolCallBody)(nil),       // 37: urnetwork.sidecar.ToolCallBody
+	(*HookEventBody)(nil),      // 38: urnetwork.sidecar.HookEventBody
+	(*FileEventBody)(nil),      // 39: urnetwork.sidecar.FileEventBody
+	(*BlobBody)(nil),           // 40: urnetwork.sidecar.BlobBody
+	(*LedgerScopeBody)(nil),    // 41: urnetwork.sidecar.LedgerScopeBody
+	(*LogSettingsBody)(nil),    // 42: urnetwork.sidecar.LogSettingsBody
+	(*LogWitness)(nil),         // 43: urnetwork.sidecar.LogWitness
+	(*LogCheckpointBody)(nil),  // 44: urnetwork.sidecar.LogCheckpointBody
+	(*LogFrontier)(nil),        // 45: urnetwork.sidecar.LogFrontier
+	(*LogCosigned)(nil),        // 46: urnetwork.sidecar.LogCosigned
+	(*DisclosurePacket)(nil),   // 47: urnetwork.sidecar.DisclosurePacket
+	(*DisclosedEntry)(nil),     // 48: urnetwork.sidecar.DisclosedEntry
+	(*DisclosedKey)(nil),       // 49: urnetwork.sidecar.DisclosedKey
+	(*DisclosureBody)(nil),     // 50: urnetwork.sidecar.DisclosureBody
+	(*AttestationBody)(nil),    // 51: urnetwork.sidecar.AttestationBody
+	(*ModelManifest)(nil),      // 52: urnetwork.sidecar.ModelManifest
+	(*ModelField)(nil),         // 53: urnetwork.sidecar.ModelField
+	(*ModelCallBody)(nil),      // 54: urnetwork.sidecar.ModelCallBody
+	(*RunCostBody)(nil),        // 55: urnetwork.sidecar.RunCostBody
+	(*ModelUsage)(nil),         // 56: urnetwork.sidecar.ModelUsage
+	(*bridge.Signed)(nil),      // 57: urnetwork.sidecar.Signed
+	(*bridge.AuthPin)(nil),     // 58: urnetwork.sidecar.AuthPin
 }
 var file_protocol_record_proto_depIdxs = []int32{
-	1,  // 0: urnetwork.sidecar.RecordHeader.content:type_name -> urnetwork.sidecar.ContentRef
-	10, // 1: urnetwork.sidecar.RecordEntry.header:type_name -> urnetwork.sidecar.Signed
-	11, // 2: urnetwork.sidecar.ApprovalDecision.auth_pin:type_name -> urnetwork.sidecar.AuthPin
-	3,  // [3:3] is the sub-list for method output_type
-	3,  // [3:3] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	5,  // 0: urnetwork.sidecar.RecordHeader.content:type_name -> urnetwork.sidecar.ContentRef
+	57, // 1: urnetwork.sidecar.RecordEntry.header:type_name -> urnetwork.sidecar.Signed
+	58, // 2: urnetwork.sidecar.ApprovalDecision.auth_pin:type_name -> urnetwork.sidecar.AuthPin
+	15, // 3: urnetwork.sidecar.RecordDepositBatch.entries:type_name -> urnetwork.sidecar.RecordDeposit
+	18, // 4: urnetwork.sidecar.ContextBody.instruction_files:type_name -> urnetwork.sidecar.InstructionFile
+	20, // 5: urnetwork.sidecar.ChangeBody.paths:type_name -> urnetwork.sidecar.ChangedPath
+	26, // 6: urnetwork.sidecar.RestoreBody.paths:type_name -> urnetwork.sidecar.RestoredPath
+	32, // 7: urnetwork.sidecar.InventoryBody.agents:type_name -> urnetwork.sidecar.InventoryAgent
+	34, // 8: urnetwork.sidecar.CopyBody.entries:type_name -> urnetwork.sidecar.Opening
+	43, // 9: urnetwork.sidecar.LogSettingsBody.witnesses:type_name -> urnetwork.sidecar.LogWitness
+	45, // 10: urnetwork.sidecar.LogCheckpointBody.frontier:type_name -> urnetwork.sidecar.LogFrontier
+	46, // 11: urnetwork.sidecar.LogCheckpointBody.cosigned:type_name -> urnetwork.sidecar.LogCosigned
+	48, // 12: urnetwork.sidecar.DisclosurePacket.entries:type_name -> urnetwork.sidecar.DisclosedEntry
+	49, // 13: urnetwork.sidecar.DisclosurePacket.keys:type_name -> urnetwork.sidecar.DisclosedKey
+	34, // 14: urnetwork.sidecar.DisclosedEntry.opening:type_name -> urnetwork.sidecar.Opening
+	34, // 15: urnetwork.sidecar.DisclosedEntry.content:type_name -> urnetwork.sidecar.Opening
+	53, // 16: urnetwork.sidecar.ModelManifest.served_name:type_name -> urnetwork.sidecar.ModelField
+	53, // 17: urnetwork.sidecar.ModelManifest.engine:type_name -> urnetwork.sidecar.ModelField
+	53, // 18: urnetwork.sidecar.ModelManifest.engine_version:type_name -> urnetwork.sidecar.ModelField
+	53, // 19: urnetwork.sidecar.ModelManifest.quantization:type_name -> urnetwork.sidecar.ModelField
+	53, // 20: urnetwork.sidecar.ModelManifest.weights_digest:type_name -> urnetwork.sidecar.ModelField
+	56, // 21: urnetwork.sidecar.RunCostBody.usage:type_name -> urnetwork.sidecar.ModelUsage
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_protocol_record_proto_init() }
@@ -1501,13 +5719,14 @@ func file_protocol_record_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_record_proto_rawDesc), len(file_protocol_record_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   10,
+			NumEnums:      4,
+			NumMessages:   53,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_protocol_record_proto_goTypes,
 		DependencyIndexes: file_protocol_record_proto_depIdxs,
+		EnumInfos:         file_protocol_record_proto_enumTypes,
 		MessageInfos:      file_protocol_record_proto_msgTypes,
 	}.Build()
 	File_protocol_record_proto = out.File

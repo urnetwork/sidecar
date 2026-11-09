@@ -575,14 +575,18 @@ func (self *FakeDnsFeed) answer(ctx context.Context, root string, after uint64) 
 }
 
 // Answers at once with what is there, or holds until a raise, the hold's end or ctx. The hold's end
-// rereads, which is what catches a lost raise.
+// rereads, which is what catches a lost raise. Its timer starts after the first read found nothing, so
+// a test that awaits the timer knows any write of its own lands inside the hold.
 func (self *FakeDnsFeed) hold(ctx context.Context, root string, after uint64) (*dnsservice.DnsFeedAnswer, error) {
-	holdEnded := self.clock.After(self.settings.HoldTimeout)
+	var holdEnded <-chan time.Time
 	for {
 		raised := self.store.SerialRaised(root)
 		answer, err := self.answer(ctx, root, after)
 		if err != nil || answer.Reload || len(answer.Rows) != 0 {
 			return answer, err
+		}
+		if holdEnded == nil {
+			holdEnded = self.clock.After(self.settings.HoldTimeout)
 		}
 		select {
 		case <-raised:

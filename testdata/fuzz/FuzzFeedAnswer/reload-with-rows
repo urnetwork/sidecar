@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"format\":1,\"root\":\"zone.example.\",\"serial\":50,\"reload\":true,\"rows\":[{\"format\":1,\"root\":\"zone.example.\",\"serial\":43,\"deletes\":[{\"owner\":\"zone.example.\",\"type\":6}]}]}")

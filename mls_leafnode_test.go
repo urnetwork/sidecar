@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// The test binary reads basic credentials, which the mlswg's vectors and every test group use.
+// Production never does: TestMlsProductionRefusesBasicCredentials.
+func init() {
+	mlsTestReadsBasicCredentials = true
+}
+
 // Leaf bytes round-trip for each source, and the source decides which fields travel.
 func TestMlsLeafNodeRoundTrip(t *testing.T) {
 	suite := mlsSuite
@@ -79,7 +85,7 @@ func TestMlsLeafNodeRefusesAnUnknownSource(t *testing.T) {
 
 // Whatever cannot be read must not be skipped: its length is unknown, and it is outside §10.4.
 func TestMlsCredentialRefusesEveryOtherType(t *testing.T) {
-	for _, credentialType := range []uint16{0, 2, mlsCredentialTypeUrSidecar, 0x0a0a, 0xffff} {
+	for _, credentialType := range []uint16{0, 2, 0xf553, 0x0a0a, 0xffff} {
 		encoder := &mlsEncoder{}
 		encoder.writeUint16(credentialType)
 		encoder.writeVector([]byte("body"))
@@ -89,6 +95,32 @@ func TestMlsCredentialRefusesEveryOtherType(t *testing.T) {
 		if _, err := mlsMarshal(&mlsCredential{credentialType: credentialType}); !errors.Is(err, errMlsRefused) {
 			t.Errorf("type %#x encoded: %v", credentialType, err)
 		}
+	}
+}
+
+// §10.4 takes 0xF552 alone, so outside the test binary basic is refused like any other type, when
+// read and when written, and a KeyPackage carrying it does not decode.
+func TestMlsProductionRefusesBasicCredentials(t *testing.T) {
+	credential := &mlsCredential{credentialType: mlsCredentialTypeBasic, identity: []byte("anyone")}
+	encoded, err := mlsMarshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedKeyPackage, err := mlsMarshal(mlsNewTestClient(t, mlsTestSuiteX25519, "client").keyPackage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mlsTestReadsBasicCredentials = false
+	t.Cleanup(func() { mlsTestReadsBasicCredentials = true })
+	if err := mlsUnmarshal(encoded, &mlsCredential{}); !errors.Is(err, errMlsRefused) {
+		t.Errorf("decoded: %v", err)
+	}
+	if _, err := mlsMarshal(credential); !errors.Is(err, errMlsRefused) {
+		t.Errorf("encoded: %v", err)
+	}
+	if err := mlsUnmarshal(encodedKeyPackage, &mlsKeyPackage{}); !errors.Is(err, errMlsRefused) {
+		t.Errorf("a KeyPackage decoded: %v", err)
 	}
 }
 
@@ -104,10 +136,15 @@ func TestMlsProductionValidatorRefusesEverything(t *testing.T) {
 
 func TestMlsCapabilitiesTreatDefaultsAsImplicit(t *testing.T) {
 	capabilities := &mlsCapabilities{extensions: []uint16{0xf001}, proposals: []uint16{0xf002}, credentials: []uint16{1}}
-	for extensionType := uint16(1); extensionType <= 5; extensionType++ {
+	for extensionType := uint16(1); extensionType <= 4; extensionType++ {
 		if !capabilities.supportsExtension(extensionType) {
 			t.Errorf("default extension %d", extensionType)
 		}
+	}
+	// the fifth default, external_senders, is §10.4's to refuse, even where a leaf lists it
+	listing := &mlsCapabilities{extensions: []uint16{mlsExtensionTypeExternalSenders}}
+	if capabilities.supportsExtension(mlsExtensionTypeExternalSenders) || listing.supportsExtension(mlsExtensionTypeExternalSenders) {
+		t.Error("external senders count as supported")
 	}
 	for proposalType := uint16(1); proposalType <= 7; proposalType++ {
 		if !capabilities.supportsProposal(proposalType) {

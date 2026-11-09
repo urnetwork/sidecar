@@ -1,0 +1,20 @@
+Failing explorer seeds, kept as traces (§22.8's explorer row; TEST-M0-03).
+
+When a seed of fault.Explore fails a row, the run writes its barrier trace here as
+<row>-<seed>.trace, where <row> is the case's name with "'s " made a hyphen: FS-1-7.trace,
+FS-19-config-read-3.trace. Commit the file with the fix. From then on every run of the row
+(fault.RunRow, fault.CheckRow) replays it through fault.Replay, which makes the trace's
+choices: the actor each baton went to, where each actor yielded, and the order each step
+released its barriers in. The same code fails the same way every time; fixed code passes,
+and the replay's LeftTrace says where the fix took the run off the trace.
+
+The trace is kept, not the seed alone: a goroutine no actor owns runs free, so a seed may not
+order the actors the same way twice. A trace whose run stalled is followed to the stall and no
+further, since a stall is an order no replay repeats; the file marks it.
+
+Format: comment lines start with "# " and carry the id, the seed and the failure; every other
+line is one event: its kind (ran, passed, held, released, killed, stalled), its actor or -,
+and its site (name or name@key) or -.
+
+A seed that passes proves only the orders it reached: reports say how many seeds ran, never
+that a row has no race. Nothing reruns a failed seed to see it pass (R-TEST-9).

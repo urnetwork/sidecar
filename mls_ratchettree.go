@@ -31,7 +31,8 @@ const (
 type mlsTreeSettings struct {
 	// Widest tree taken, in leaves, a power of two. A group holds at most 1,000 leaves (D-KEYS-2),
 	// which 1,024 fits, and Adds fill the leftmost blank leaf, so no honest tree is wider. This bounds
-	// what a decoded tree can make a client allocate and hash.
+	// what a decoded tree can make a client allocate and hash. Zero, or any other value that is not a
+	// power of two, is no width a tree can have, so every tree and every Add is refused.
 	MaximumLeafCount uint32
 	// Longest span a leaf's lifetime may cover, which RFC §7.2 has the application set: KeyPackages are
 	// valid 90 days (§10.6). Non-positive disables the bound, which only tests do, because the mlswg's
@@ -55,7 +56,7 @@ type mlsLeafValidation struct {
 	credentialValidator mlsCredentialValidator
 }
 
-// ParentNode (RFC §7.1).
+// An interior node of the ratchet tree (RFC §7.1).
 type mlsParentNode struct {
 	encryptionKey []byte
 	parentHash    []byte
@@ -92,6 +93,38 @@ func (self *mlsParentNode) decode(decoder *mlsDecoder) {
 type mlsTreeNode struct {
 	leaf   *mlsLeafNode
 	parent *mlsParentNode
+}
+
+// optional<Node>, one ratchet_tree entry (RFC §12.4.3.3).
+func (self *mlsTreeNode) encode(encoder *mlsEncoder) {
+	encoder.writeOptional(!self.blank())
+	switch {
+	case self.leaf != nil:
+		encoder.writeUint8(mlsNodeTypeLeaf)
+		self.leaf.encode(encoder)
+	case self.parent != nil:
+		encoder.writeUint8(mlsNodeTypeParent)
+		self.parent.encode(encoder)
+	}
+}
+
+// optional<Node>, refusing a node type RFC §7.8 does not define.
+func (self *mlsTreeNode) decode(decoder *mlsDecoder) {
+	if !decoder.readOptional() {
+		return
+	}
+	switch nodeType := decoder.readUint8(); nodeType {
+	case mlsNodeTypeLeaf:
+		self.leaf = &mlsLeafNode{}
+		self.leaf.decode(decoder)
+	case mlsNodeTypeParent:
+		self.parent = &mlsParentNode{}
+		self.parent.decode(decoder)
+	default:
+		if decoder.err == nil {
+			decoder.fail(fmt.Errorf("%w: node type %d", errMlsMalformed, nodeType))
+		}
+	}
 }
 
 // Whether the position holds no value.
@@ -146,25 +179,27 @@ func decodeMlsRatchetTree(suite *mlsCipherSuite, settings *mlsTreeSettings, enco
 			return
 		}
 		var node mlsTreeNode
-		if element.readOptional() {
-			switch nodeType := element.readUint8(); nodeType {
-			case mlsNodeTypeLeaf:
-				node.leaf = &mlsLeafNode{}
-				node.leaf.decode(element)
-			case mlsNodeTypeParent:
-				node.parent = &mlsParentNode{}
-				node.parent.decode(element)
-			default:
-				element.fail(fmt.Errorf("%w: node type %d", errMlsMalformed, nodeType))
-				return
-			}
+		node.decode(element)
+		if element.err != nil {
+			return
 		}
 		nodes = append(nodes, node)
 	})
 	if err := decoder.finish(); err != nil {
 		return nil, err
 	}
+	return newMlsRatchetTreeFromNodes(suite, settings, nodes)
+}
 
+// A tree from ratchet_tree's entries, however they were read: the last entry must be non-blank, the array is
+// extended to a full tree with blanks, and each position must hold its own kind of node. Takes nodes.
+func newMlsRatchetTreeFromNodes(suite *mlsCipherSuite, settings *mlsTreeSettings, nodes []mlsTreeNode) (*mlsRatchetTree, error) {
+	if !mlsTreeLeafCountValid(settings.MaximumLeafCount) {
+		return nil, fmt.Errorf("mls: maximum of %d leaves is not a tree", settings.MaximumLeafCount)
+	}
+	if int(mlsTreeWidth(settings.MaximumLeafCount)) < len(nodes) {
+		return nil, fmt.Errorf("%w: tree wider than %d leaves", errMlsRefused, settings.MaximumLeafCount)
+	}
 	if len(nodes) == 0 || nodes[len(nodes)-1].blank() {
 		return nil, fmt.Errorf("%w: tree ends in a blank node or is empty", errMlsMalformed)
 	}
@@ -197,16 +232,7 @@ func (self *mlsRatchetTree) encode(encoder *mlsEncoder) {
 	}
 	encoder.writeVectorOf(func(elements *mlsEncoder) {
 		for index := 0; index <= last; index++ {
-			node := &self.nodes[index]
-			elements.writeOptional(!node.blank())
-			switch {
-			case node.leaf != nil:
-				elements.writeUint8(mlsNodeTypeLeaf)
-				node.leaf.encode(elements)
-			case node.parent != nil:
-				elements.writeUint8(mlsNodeTypeParent)
-				node.parent.encode(elements)
-			}
+			self.nodes[index].encode(elements)
 		}
 	})
 }
@@ -550,6 +576,9 @@ func (self *mlsRatchetTree) validateNewLeaf(leaf *mlsLeafNode, position mlsLeafI
 // parent-hash valid. Lifetimes are not held against a tree: a member may hold a long-expired
 // KeyPackage leaf and be no less a member (RFC §7.3 makes this check only recommended).
 func (self *mlsRatchetTree) validate(validation *mlsLeafValidation) error {
+	if !mlsTreeLeafCountValid(self.settings.MaximumLeafCount) {
+		return fmt.Errorf("%w: maximum of %d leaves is not a tree", errMlsRefused, self.settings.MaximumLeafCount)
+	}
 	if !mlsTreeLeafCountValid(self.leafCount()) || self.settings.MaximumLeafCount < self.leafCount() {
 		return fmt.Errorf("%w: tree of %d leaves", errMlsRefused, self.leafCount())
 	}
@@ -636,8 +665,11 @@ func (self *mlsRatchetTree) validateUnmergedLeaves(index mlsNodeIndex) error {
 }
 
 // The leftmost blank leaf, extending the tree when there is none (RFC §7.7, RFC §12.1.1). Refuses
-// to pass the widest tree the settings allow.
+// to pass the widest tree the settings allow, and refuses everything when that is no width at all.
 func (self *mlsRatchetTree) reserveLeaf() (mlsLeafIndex, error) {
+	if !mlsTreeLeafCountValid(self.settings.MaximumLeafCount) {
+		return 0, fmt.Errorf("%w: maximum of %d leaves is not a tree", errMlsRefused, self.settings.MaximumLeafCount)
+	}
 	leafCount := self.leafCount()
 	for index := range leafCount {
 		if self.nodes[mlsLeafIndex(index).node()].leaf == nil {

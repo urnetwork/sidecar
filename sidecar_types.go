@@ -6,6 +6,7 @@
 package sidecar
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -14,27 +15,75 @@ import (
 // One network's sidecar: its own Required client, durable sidecar_id and identity key (D-CORE-4,
 // D-CORE-5). Safe for concurrent use.
 //
-// §5.4's other fields arrive with what they name: sidecarApi with CORE-M1-04, keychain with
-// CORE-M1-02, identity with CORE-M1-05, and leg and NewSidecar with CORE-M1-08.
+// §5.4's keychain is the instance's, reached through coreSecrets (keys_keychain.go), so the Sidecar
+// keeps no root key of its own. NewSidecar (sidecar_new_connect.go on connect legs) sets what is set
+// once, and the run loop (sidecar_core.go) alone starts and ends the client generations.
 type Sidecar struct {
 	host     SidecarHost
 	settings *SidecarSettings
 	log      Logger
+	// The sidecar's client of api, on every leg, holding its jwt and DPoP signer (api_client.go).
+	// Set once at construction.
+	sidecarApi *SidecarApi
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
 	eventCallbacks *CallbackList[SidecarEventFunction]
+	// ServiceToken's cache, under its own lock (api_service_token.go).
+	serviceTokens sidecarServiceTokens
+	// Running totals for `ur status --stats` (sidecar_stats.go).
+	stats sidecarStats
+	// Raised for each change the run loop must look at that the instance's state does not show: an
+	// enrollment, a generation's end, a component added or removed, a close.
+	wakes *MonitorValue[uint64]
+	// The number of the generation running, 0 when none: what a caller waits on for a generation to have
+	// ended and been joined.
+	runningGenerationNumber *MonitorValue[int64]
+
+	// Set once by NewSidecar. instance holds U and this network's keychain, shared with the
+	// instance's other Sidecars; leg is what only the leg runs.
+	instance *SidecarInstance
+	clock    Clock
+	leg      sidecarLeg
+	ctx      context.Context
+	cancel   context.CancelFunc
+	// Closed once the run loop has returned, with every generation joined and every component closed.
+	done chan struct{}
+	// D-TRUST-3's scan of this host's credential stores (identity_host_stores.go), which a test replaces.
+	hostStores func() []SidecarHostCredentialStore
+	// One enrollment at a time, held across its requests, so never stateLock (identity_enroll.go).
+	enrollLock sync.Mutex
+	// §16's approval ledger and run store, under their own lock (record_ledger.go).
+	records sidecarRecords
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
+	// raised and not yet delivered, oldest first
+	eventQueue []SidecarEvent
+	// a goroutine is delivering eventQueue, which every later event joins
+	eventDelivering bool
+	// The core's namespace of this network's keychain.ur, which holds the identity key, the ClientKey
+	// seed and the newest binding (identity_keys.go). Nil until the sidecar knows its network.
+	coreSecrets SidecarSecrets
+	// Ids, generation and public keys, never a private key. Nil until the keychain holds an identity.
+	identity *SidecarIdentity
+	// The network this sidecar is enrolled in: the host store's, or the one Enroll recorded. Nil before.
+	networkId *Id
+	// The client generation running, which only the run loop starts and ends. Nil when none runs.
+	generation *sidecarGeneration
+	// The newest generation a confirmed rejection ended. It does not start again: a re-enrollment binds
+	// the next one (D-CORE-8).
+	endedGeneration int64
+	// The instance state the run loop last acted on, so Failed alarms once each time it is entered.
+	instanceState SidecarInstanceState
+	closed        bool
 }
 
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,
 // and refused, so a value left unset never reads as one.
 //
-// §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order, the reading
-// plan-MCP-wire-enum-numbers.md recommends. Nothing hashes or sends them yet: RECORD-M2-01 and
-// MCP-M3-02 take them into record.proto, and they freeze with it at M3. §16.7's restore is the
-// next number, which MCP-M3-02 adds.
+// §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order with §16.7's
+// restore appended, as plan-MCP-wire-enum-numbers.md fills them. record.proto's SidecarActionKind
+// holds the same values, which record_kind_test.go checks, and they freeze with it at M3.
 type SidecarActionKind uint32
 
 const (
@@ -72,6 +121,8 @@ const (
 	SidecarActionAccessRequest SidecarActionKind = 15
 	// A payment.
 	SidecarActionPayment SidecarActionKind = 16
+	// A run_restore apply, which puts a run's files back (§16.7).
+	SidecarActionRestore SidecarActionKind = 17
 )
 
 // How much an outward action could cost, the larger of policy's and the daemon's classifier's
@@ -160,6 +211,10 @@ const (
 	SidecarEventErasure SidecarEventKind = "erasure"
 	// An internet send's outcome for a recipient domain changed (§14.5).
 	SidecarEventMailSend SidecarEventKind = "mail_send"
+	// A store on this host holds a readable network credential (D-TRUST-3; plan-CORE-host-store-refusal #3),
+	// raised by an enrolled sidecar at each start and each SyncRefetchInterval. It names no path or value: `ur
+	// status` names the store's kind.
+	SidecarEventCredentialStore SidecarEventKind = "credential_store"
 )
 
 // A drop's state as a device reports it (§11.7).
@@ -191,7 +246,7 @@ type SidecarHeadAlarm string
 
 const (
 	SidecarHeadAlarmFork SidecarHeadAlarm = "fork"
-	// PROOF OF WITHHOLDING, §6.4's name for it.
+	// A peer holds proof that its entries are being withheld (§6.4).
 	SidecarHeadAlarmWithheld   SidecarHeadAlarm = "withheld"
 	SidecarHeadAlarmUnverified SidecarHeadAlarm = "unverified"
 	// 24 h without a consistent witness, or 1 h for a revocation this device signed.
@@ -284,7 +339,7 @@ type SidecarStatus struct {
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire
-// form is plan-CORE-binding-wire.md's to settle, and CORE-M1-05 owns the encoding.
+// form is plan-CORE-binding-wire #1's SignedSidecarIdentityBinding (identity_binding.go).
 type SidecarIdentityBinding struct {
 	NetworkId Id
 	SidecarId Id

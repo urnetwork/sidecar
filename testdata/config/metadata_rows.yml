@@ -1,0 +1,192 @@
+# Every field of §7.9's records a server reads, for I-18: its number and type, which pin the messages no design fence
+# pins, config.proto's all among them, ahead of their freeze at M2, and the words of api-7 that show it. A row that stops
+# saying them fails, and so does a number that moves. Genesis and two ProjectionHeader fields stay in fields.yml's open
+# section, as question metadata-list-unnamed-fields asks for their words. What a seal or a config head holds stays out:
+# fields.yml's seals and sealed_messages say so, and a message named here would be a root.
+
+StatementHeader.network_id: {number: 1, type: bytes, row: api-7, sees: "the authorization log's signed id-only entries"}
+StatementHeader.at: {number: 2, type: AuthPin, row: api-7, sees: "signer's pin"}
+StatementHeader.nonce: {number: 3, type: bytes, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+StatementHeader.not_after_ms: {number: 4, type: int64, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+
+AuthEntry.network_id: {number: 1, type: bytes, row: api-7, sees: "the authorization log's signed id-only entries"}
+AuthEntry.n: {number: 2, type: uint64, row: api-7, sees: "(position, chain digest, kind, time)"}
+AuthEntry.prev_chain: {number: 3, type: bytes, row: api-7, sees: "(position, chain digest, kind, time)"}
+AuthEntry.kind: {number: 4, type: uint32, row: api-7, sees: "(position, chain digest, kind, time)"}
+AuthEntry.time_ms: {number: 5, type: int64, row: api-7, sees: "(position, chain digest, kind, time)"}
+AuthEntry.body: {number: 6, type: bytes, row: api-7, sees: "statements with their types"}
+
+AuthPin.version: {number: 1, type: uint64, row: api-7, sees: "(position, chain digest, kind, time)"}
+AuthPin.chain: {number: 2, type: bytes, row: api-7, sees: "(position, chain digest, kind, time)"}
+
+ProjectionHeader.network_id: {number: 1, type: bytes, row: api-7, sees: "the authorization log's signed id-only entries"}
+ProjectionHeader.version: {number: 2, type: uint64, row: api-7, sees: "(position, chain digest, kind, time)"}
+ProjectionHeader.prev_chain: {number: 3, type: bytes, row: api-7, sees: "(position, chain digest, kind, time)"}
+ProjectionHeader.folded_through: {number: 4, type: uint64, row: api-7, sees: "folded_through"}
+ProjectionHeader.config_head_sha256: {number: 6, type: bytes, row: api-7, sees: "config head hash"}
+ProjectionHeader.rows_sha256: {number: 7, type: bytes, row: api-7, sees: "rows hash"}
+ProjectionHeader.threshold: {number: 9, type: uint32, row: api-7, sees: "threshold"}
+
+ProjectionRows.members: {number: 1, type: repeated MemberRow, row: api-7, sees: "members with roles"}
+ProjectionRows.sidecars: {number: 2, type: repeated SidecarRow, row: api-7, sees: "sidecar admissions with identity keys"}
+ProjectionRows.delegations: {number: 3, type: repeated DelegationRow, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+ProjectionRows.registered_keys: {number: 4, type: repeated KeyRow, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+ProjectionRows.acl: {number: 5, type: bytes, row: api-7, sees: "their AclRows"}
+
+MemberRow.member_id: {number: 1, type: bytes, row: api-7, sees: "members with roles"}
+MemberRow.role: {number: 2, type: MemberRole, row: api-7, sees: "members with roles"}
+MemberRow.recovery_key_sha256: {number: 3, type: bytes, row: api-7, sees: "recovery bindings newest first (key hash, reason)"}
+MemberRow.bindings: {number: 4, type: repeated RecoveryBindingRow, row: api-7, sees: "recovery bindings newest first (key hash, reason)"}
+
+RecoveryBindingRow.key_sha256: {number: 1, type: bytes, row: api-7, sees: "recovery bindings newest first (key hash, reason)"}
+RecoveryBindingRow.signer: {number: 2, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+RecoveryBindingRow.at: {number: 3, type: uint64, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+RecoveryBindingRow.reason: {number: 4, type: RecoveryRebindReason, row: api-7, sees: "recovery bindings newest first (key hash, reason)"}
+
+SidecarRow.sidecar_id: {number: 1, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarRow.admission_sha256: {number: 2, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarRow.admission_signers: {number: 3, type: repeated bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+SidecarRow.admitted_at: {number: 4, type: uint64, row: api-7, sees: "admission, revocation and park positions"}
+SidecarRow.confirm_signer: {number: 5, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+SidecarRow.confirmed_at: {number: 6, type: uint64, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+SidecarRow.owner_confirm_signer: {number: 7, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+SidecarRow.owner_confirmed_at: {number: 8, type: uint64, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+SidecarRow.revoked_at: {number: 9, type: uint64, row: api-7, sees: "admission, revocation and park positions"}
+SidecarRow.parked_at: {number: 10, type: uint64, row: api-7, sees: "admission, revocation and park positions"}
+SidecarRow.sponsor: {number: 11, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.capabilities: {number: 12, type: uint32, row: api-7, sees: "capabilities"}
+SidecarRow.delegation_id: {number: 13, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+SidecarRow.live_since: {number: 14, type: uint64, row: api-7, sees: "live_since"}
+SidecarRow.not_after: {number: 15, type: int64, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.identity_public_key: {number: 16, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarRow.identity_alg: {number: 17, type: string, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarRow.member_id: {number: 18, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.tag_ids: {number: 19, type: repeated bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.ephemeral: {number: 20, type: bool, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+
+DelegationRow.delegation_id: {number: 1, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.signer: {number: 2, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+DelegationRow.at: {number: 3, type: uint64, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+DelegationRow.tag_atoms: {number: 4, type: repeated bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.not_after: {number: 5, type: int64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.key_dropped_at: {number: 6, type: uint64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.ended_at: {number: 7, type: uint64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.admissions: {number: 8, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.pubkey: {number: 9, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.reader_xwing_public_key: {number: 10, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.max_admits: {number: 11, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+
+KeyRow.key_id: {number: 1, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRow.member_id: {number: 2, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRow.alg: {number: 3, type: KeyAlg, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRow.public_key: {number: 4, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRow.purpose: {number: 5, type: KeyPurpose, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRow.signer: {number: 6, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+KeyRow.at: {number: 7, type: uint64, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
+KeyRow.not_after: {number: 8, type: int64, row: api-7, sees: "key registrations"}
+KeyRow.revoked_at: {number: 9, type: uint64, row: api-7, sees: "admission, revocation and park positions"}
+
+ApiTick.reaped_sidecar_ids: {number: 1, type: repeated bytes, row: api-7, sees: "reaped ephemeral sidecar ids"}
+ApiTick.activated_proposal_ids: {number: 2, type: repeated bytes, row: api-7, sees: "activated proposal ids"}
+
+MemberRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+MemberRevoke.member_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+
+SidecarRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+SidecarRevoke.sidecar_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+SidecarRevoke.reason: {number: 3, type: SidecarRevokeReason, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+SidecarRevoke.since_n: {number: 4, type: uint64, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+
+GrantRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+GrantRevoke.grant_id: {number: 2, type: bytes, row: api-7, sees: "grant activations and revocations"}
+
+Suspend.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+Suspend.subject: {number: 2, type: bytes, row: api-7, sees: "suspensions and unsuspensions"}
+Suspend.suspend_id: {number: 3, type: bytes, row: api-7, sees: "suspensions and unsuspensions"}
+
+Unsuspend.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+Unsuspend.subject: {number: 2, type: bytes, row: api-7, sees: "suspensions and unsuspensions"}
+Unsuspend.suspend_id: {number: 3, type: bytes, row: api-7, sees: "suspensions and unsuspensions"}
+
+AdminSet.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+AdminSet.owners: {number: 2, type: repeated bytes, row: api-7, sees: "members with roles"}
+AdminSet.admins: {number: 3, type: repeated bytes, row: api-7, sees: "members with roles"}
+AdminSet.network_admins: {number: 4, type: repeated bytes, row: api-7, sees: "members with roles"}
+AdminSet.it_admins: {number: 5, type: repeated bytes, row: api-7, sees: "members with roles"}
+AdminSet.threshold: {number: 6, type: uint32, row: api-7, sees: "threshold"}
+
+MemberAdmit.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+MemberAdmit.member_id: {number: 2, type: bytes, row: api-7, sees: "members with roles"}
+MemberAdmit.role: {number: 3, type: MemberRole, row: api-7, sees: "members with roles"}
+
+SidecarAdmit.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+SidecarAdmit.network_id: {number: 2, type: bytes, row: api-7, sees: "the authorization log's signed id-only entries"}
+SidecarAdmit.sidecar_id: {number: 3, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarAdmit.identity_public_key: {number: 4, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarAdmit.identity_alg: {number: 5, type: string, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarAdmit.member_id: {number: 6, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.tag_ids: {number: 7, type: repeated bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.ephemeral: {number: 8, type: bool, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.not_after: {number: 9, type: int64, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarAdmit.capabilities: {number: 10, type: uint32, row: api-7, sees: "capabilities"}
+
+AdmissionConfirm.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+AdmissionConfirm.sidecar_id: {number: 2, type: bytes, row: api-7, sees: "OwnerConfirms and AdmissionConfirms"}
+
+SponsorSet.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+SponsorSet.sidecar_id: {number: 2, type: bytes, row: api-7, sees: "SponsorSets"}
+SponsorSet.sponsor_member_id: {number: 3, type: bytes, row: api-7, sees: "SponsorSets"}
+
+IndexerSet.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+IndexerSet.sidecar_id: {number: 2, type: bytes, row: api-7, sees: "indexer designations as ids (signer, subject, scope, retire; services sealed"}
+IndexerSet.scope: {number: 3, type: IndexerScope, row: api-7, sees: "indexer designations as ids (signer, subject, scope, retire; services sealed"}
+IndexerSet.retire: {number: 4, type: bool, row: api-7, sees: "indexer designations as ids (signer, subject, scope, retire; services sealed"}
+IndexerSet.sealed_services: {number: 5, type: bytes, row: api-7, sees: "indexer designations as ids (signer, subject, scope, retire; services sealed"}
+
+RecoveryBind.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+RecoveryBind.member_id: {number: 2, type: bytes, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+RecoveryBind.prev_sha256: {number: 3, type: bytes, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+RecoveryBind.ed25519_public_key_sha256: {number: 4, type: bytes, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+RecoveryBind.sealed_body: {number: 5, type: bytes, row: api-7, sees: "the rest, X-Wing key and genesis signature included, sealed"}
+
+RecoveryRebind.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+RecoveryRebind.member_id: {number: 2, type: bytes, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+RecoveryRebind.prev_sha256: {number: 3, type: bytes, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+RecoveryRebind.ed25519_public_key_sha256: {number: 4, type: bytes, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+RecoveryRebind.sealed_body: {number: 5, type: bytes, row: api-7, sees: "the rest, X-Wing key and genesis signature included, sealed"}
+RecoveryRebind.reason: {number: 6, type: RecoveryRebindReason, row: api-7, sees: "recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes)"}
+
+KeyRegister.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+KeyRegister.member_id: {number: 2, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRegister.key_id: {number: 3, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRegister.alg: {number: 4, type: KeyAlg, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRegister.public_key: {number: 5, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRegister.attestation: {number: 6, type: bytes, row: api-7, sees: "key registrations"}
+KeyRegister.purpose: {number: 7, type: KeyPurpose, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
+KeyRegister.not_after: {number: 8, type: int64, row: api-7, sees: "key registrations"}
+KeyRegister.key_signature: {number: 9, type: bytes, row: api-7, pending: "protos-bridge-presence-gaps #3 (QD-086): api-7 gains a key registration's proof"}
+KeyRegister.key_webauthn: {number: 10, type: WebAuthnEvidence, row: api-7, pending: "protos-bridge-presence-gaps #3 (QD-086): api-7 gains a key registration's proof"}
+
+KeyRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+KeyRevoke.key_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+
+Delegation.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+Delegation.pubkey: {number: 2, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+Delegation.reader_xwing_public_key: {number: 3, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+Delegation.tag_ids: {number: 4, type: repeated bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+Delegation.max_admits: {number: 5, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+Delegation.not_after: {number: 6, type: int64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+
+DelegationRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+DelegationRevoke.delegation_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+DelegationRevoke.since_n: {number: 3, type: uint64, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
+
+AuthorityProposal.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+AuthorityProposal.statement_type: {number: 2, type: uint32, row: api-7, sees: "authority proposals, cosigns and vetoes"}
+AuthorityProposal.statement: {number: 3, type: bytes, row: api-7, sees: "authority proposals, cosigns and vetoes"}
+
+AuthorityCosign.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+AuthorityCosign.proposal_id: {number: 2, type: bytes, row: api-7, sees: "authority proposals, cosigns and vetoes"}
+
+RecoveryVeto.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
+RecoveryVeto.proposal_id: {number: 2, type: bytes, row: api-7, sees: "authority proposals, cosigns and vetoes"}

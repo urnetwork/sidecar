@@ -66,6 +66,8 @@ const (
 	MessageType_SMTP_STATUS            MessageType = 5636 // §14; push mail
 	MessageType_SMTP_PROOF             MessageType = 5637
 	MessageType_SMTP_PROOF_RESULT      MessageType = 5638 // §14; BDAT and DATA proofs, RPC to smtpedge, M9
+	MessageType_SMTP_HANDSHAKE         MessageType = 5639
+	MessageType_SMTP_HANDSHAKE_RESULT  MessageType = 5640 // §14; TLS 1.3's disclosed SHTS, RPC to smtpedge, M9
 	MessageType_MAIL_INGRESS           MessageType = 5889
 	MessageType_MAIL_HINT              MessageType = 5890 // §15; StreamOpen metadata; push mail
 	// 0x18 §16 MCP: none in v0 or v1; the directory's notices ride §11's hints (§16.11)
@@ -113,6 +115,8 @@ var (
 		5636: "SMTP_STATUS",
 		5637: "SMTP_PROOF",
 		5638: "SMTP_PROOF_RESULT",
+		5639: "SMTP_HANDSHAKE",
+		5640: "SMTP_HANDSHAKE_RESULT",
 		5889: "MAIL_INGRESS",
 		5890: "MAIL_HINT",
 		6657: "CORE_HINT",
@@ -155,6 +159,8 @@ var (
 		"SMTP_STATUS":              5636,
 		"SMTP_PROOF":               5637,
 		"SMTP_PROOF_RESULT":        5638,
+		"SMTP_HANDSHAKE":           5639,
+		"SMTP_HANDSHAKE_RESULT":    5640,
 		"MAIL_INGRESS":             5889,
 		"MAIL_HINT":                5890,
 		"CORE_HINT":                6657,
@@ -193,7 +199,7 @@ var File_protocol_types_proto protoreflect.FileDescriptor
 
 const file_protocol_types_proto_rawDesc = "" +
 	"\n" +
-	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xaf\x06\n" +
+	"\x14protocol/types.proto\x12\x11urnetwork.sidecar*\xe0\x06\n" +
 	"\vMessageType\x12\x15\n" +
 	"\x11MESSAGE_TYPE_NONE\x10\x00\x12\t\n" +
 	"\x05HELLO\x10\x01\x12\x10\n" +
@@ -235,7 +241,9 @@ const file_protocol_types_proto_rawDesc = "" +
 	"\vSMTP_STATUS\x10\x84,\x12\x0f\n" +
 	"\n" +
 	"SMTP_PROOF\x10\x85,\x12\x16\n" +
-	"\x11SMTP_PROOF_RESULT\x10\x86,\x12\x11\n" +
+	"\x11SMTP_PROOF_RESULT\x10\x86,\x12\x13\n" +
+	"\x0eSMTP_HANDSHAKE\x10\x87,\x12\x1a\n" +
+	"\x15SMTP_HANDSHAKE_RESULT\x10\x88,\x12\x11\n" +
 	"\fMAIL_INGRESS\x10\x81.\x12\x0e\n" +
 	"\tMAIL_HINT\x10\x82.\x12\x0e\n" +
 	"\tCORE_HINT\x10\x814\x12\x15\n" +

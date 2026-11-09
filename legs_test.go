@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -119,10 +120,23 @@ func goListDeps(t *testing.T, env []string, args ...string) []string {
 }
 
 // A Worker's globals, in node: no process, so net/http's fetch path runs, and a fetch that records what
-// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. It ends
-// as the toolchain's wasm_exec_node.js does, whose two exit rules are the verdict's: node goes with the
-// Go program, or a timer the runtime armed fires into a program that has gone and fails a passing run,
-// and node never ends 0 with Go still running, or a suite that stalled would pass.
+// it is handed and then fails, so nothing leaves. The test binary's flags follow the two paths. It keeps
+// the two exit rules of the toolchain's wasm_exec_node.js, which are the verdict's: node goes with the Go
+// program, or a timer the runtime armed fires into a program that has gone and fails a passing run, and
+// node never ends 0 with Go still running, or a suite that stalled would pass. Going with the program
+// means dropping those timers and letting node end, where wasm_exec_node.js calls process.exit: that
+// joins V8's workers, and one waiting on a collection the main thread will never run hangs it there,
+// which a run allocating this much reaches about one time in ten.
+//
+// It also runs each GC cycle to its end before the program goes on, by the one variable it gives the
+// program, GODEBUG=gcstoptheworld=1. js/wasm has one thread and no preemption, so the background mark
+// worker runs only when the program blocks. Until then a cycle marks only in the assists that
+// allocations pay, which fall far behind a loop of large blocks and stop altogether once the GC CPU
+// limiter turns them off. Whatever a test allocates meanwhile is marked live, and the next cycle's
+// goal is twice that: the leg's suite, whose largest test holds 65 MB live, grew to 2.8 GB of wasm's
+// 4 GiB that way, and one run died of it partway, every test before it passing. The harness ends by
+// reporting what linear memory grew to, which a program never gives back, so a run can be held to a
+// bound.
 const workerHarness = `
 const fs = require("fs");
 const nodeProcess = process;
@@ -136,9 +150,18 @@ globalThis.fetch = (url, options) => {
 };
 const go = new Go();
 go.argv = [wasmPath, ...testArgs];
-go.exit = (code) => nodeProcess.exit(code);
+go.env = ` + workerHarnessGoEnv + `;
+let memory = null;
+go.exit = (code) => {
+	nodeProcess.exitCode = code;
+	console.error("worker harness: wasm memory " + memory.buffer.byteLength + " bytes");
+	for (const timeout of go._scheduledTimeouts.values()) {
+		clearTimeout(timeout);
+	}
+};
 WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.then((result) => {
+		memory = result.instance.exports.mem;
 		nodeProcess.on("exit", (code) => {
 			if (code === 0 && !go.exited) {
 				// an event of id 0 makes Go print the deadlock and its stacks, and exit
@@ -151,8 +174,20 @@ WebAssembly.instantiate(fs.readFileSync(wasmPath), go.importObject)
 	.catch((err) => { console.error(err); nodeProcess.exit(1); });
 `
 
+// The environment the harness gives a program, where a Worker's has none: workerHarness says why.
+const workerHarnessGoEnv = `{GODEBUG: "gcstoptheworld=1"}`
+
+// The line the harness ends with, which names the bytes of linear memory the run grew to.
+var workerHarnessMemoryPattern = regexp.MustCompile(`worker harness: wasm memory ([0-9]+) bytes`)
+
 // Runs a js/wasm binary in the harness, with these arguments after its path.
 func runInWorkerHarness(t *testing.T, wasmPath string, args ...string) ([]byte, error) {
+	t.Helper()
+	return runInHarness(t, workerHarness, wasmPath, args...)
+}
+
+// Runs a js/wasm binary in harness, which is workerHarness or a test's variant of it.
+func runInHarness(t *testing.T, harness string, wasmPath string, args ...string) ([]byte, error) {
 	t.Helper()
 	// a failure and not a skip: a leg that did not run has not passed
 	node, err := exec.LookPath("node")
@@ -164,11 +199,40 @@ func runInWorkerHarness(t *testing.T, wasmPath string, args ...string) ([]byte, 
 		t.Fatal(err)
 	}
 	harnessPath := filepath.Join(t.TempDir(), "worker.js")
-	if err := os.WriteFile(harnessPath, []byte(workerHarness), 0o600); err != nil {
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	wasmExecPath := filepath.Join(strings.TrimSpace(string(goroot)), "lib", "wasm", "wasm_exec.js")
 	return exec.Command(node, append([]string{harnessPath, wasmPath, wasmExecPath}, args...)...).CombinedOutput()
+}
+
+// The bytes of linear memory a run in the harness grew to, or false when its output does not end the
+// harness's way.
+func workerHarnessMemoryByteCount(output []byte) (int64, bool) {
+	match := workerHarnessMemoryPattern.FindSubmatch(output)
+	if match == nil {
+		return 0, false
+	}
+	byteCount, err := strconv.ParseInt(string(match[1]), 10, 64)
+	return byteCount, err == nil
+}
+
+// Builds a one-file program for js/wasm, which the harness can then run.
+func buildWorkerProgram(t *testing.T, source string) string {
+	t.Helper()
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "main.go")
+	wasmPath := filepath.Join(directory, "program.wasm")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", wasmPath, sourcePath)
+	build.Dir = directory
+	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, output)
+	}
+	return wasmPath
 }
 
 // Ends the way its one argument names. armed exits with a runtime timer live in JS: when every goroutine
@@ -207,20 +271,10 @@ func main() {
 `
 
 // The harness's exit code is how its program ended, and the leg's verdict starts from it. A run that
-// passed with a timer armed once failed here, and a run that stalled once passed.
+// passed with a timer armed once failed here, and a run that stalled once passed. Each ending also
+// reports linear memory, which the leg's bound reads.
 func TestWorkerHarnessEndsAsItsProgramDoes(t *testing.T) {
-	directory := t.TempDir()
-	sourcePath := filepath.Join(directory, "main.go")
-	wasmPath := filepath.Join(directory, "ending.wasm")
-	if err := os.WriteFile(sourcePath, []byte(workerEndingProgram), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	build := exec.Command("go", "build", "-o", wasmPath, sourcePath)
-	build.Dir = directory
-	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, output)
-	}
+	wasmPath := buildWorkerProgram(t, workerEndingProgram)
 
 	cases := []struct {
 		ending     string
@@ -247,14 +301,75 @@ func TestWorkerHarnessEndsAsItsProgramDoes(t *testing.T) {
 		if !strings.Contains(string(output), c.wantOutput) {
 			t.Errorf("%s: no %q in\n%s", c.ending, c.wantOutput, output)
 		}
+		if _, ok := workerHarnessMemoryByteCount(output); !ok {
+			t.Errorf("%s: no memory report in\n%s", c.ending, output)
+		}
+	}
+}
+
+// What a long test does to the runtime: it marks a heap of pointers, as every cycle must, while a loop
+// that never blocks allocates 256 MiB of garbage in 64 KiB blocks.
+const workerGcProgram = `package main
+
+type node struct {
+	next  *node
+	links [7]*node
+}
+
+var live *node
+
+var garbage []byte
+
+func main() {
+	for i := 0; i < 64*1024; i += 1 {
+		live = &node{next: live}
+	}
+	for i := 0; i < 4*1024; i += 1 {
+		garbage = make([]byte, 64*1024)
+	}
+}
+`
+
+// The harness's GC setting, both ways on one program. Under the harness each cycle ends where it
+// starts, and the program needs about 12 MB, its 4 MiB heap of pointers and a little garbage. Without
+// the setting the loop runs ahead of every cycle, each block a cycle saw allocated is marked live, and
+// the program holds over 200 MB, nearly all the garbage it made: the leg's suite out of memory, in
+// small. That half shows it is the setting the first half holds.
+func TestWorkerHarnessFinishesEachGcCycleBeforeItsProgramGoesOn(t *testing.T) {
+	wasmPath := buildWorkerProgram(t, workerGcProgram)
+	memoryByteCount := func(harness string) int64 {
+		t.Helper()
+		output, err := runInHarness(t, harness, wasmPath)
+		if err != nil {
+			t.Fatalf("the program failed: %v\n%s", err, output)
+		}
+		byteCount, ok := workerHarnessMemoryByteCount(output)
+		if !ok {
+			t.Fatalf("no memory report in\n%s", output)
+		}
+		return byteCount
+	}
+
+	if byteCount := memoryByteCount(workerHarness); 64*1024*1024 < byteCount {
+		t.Errorf("under the harness the program grew wasm memory to %d bytes: a cycle let it run on with its garbage", byteCount)
+	}
+	setEnv := "go.env = " + workerHarnessGoEnv + ";"
+	unsetHarness := strings.Replace(workerHarness, setEnv, "go.env = {};", 1)
+	if unsetHarness == workerHarness {
+		t.Fatalf("the harness holds no %q to take out", setEnv)
+	}
+	if byteCount := memoryByteCount(unsetHarness); byteCount < 128*1024*1024 {
+		t.Errorf("without the GC setting the program grew wasm memory to only %d bytes, so this no longer shows what the setting does", byteCount)
 	}
 }
 
 // The whole sidecar_http suite on the leg itself, in a Worker's shape, which go_js_wasm_exec is not:
 // under node's process global net/http never calls fetch, and what the page Worker's transport does
 // with a url is a fetch matter (api_transport.go). So this is what proves §18.10's leg, and it names
-// its fetch tests, the known answers for the mls_ it keeps and mail's vectors, since a run that
-// skipped them would still exit 0.
+// its fetch tests, the known answers for the mls_ and socket_ it keeps, mail's, tls's, evs's, the index's and presence's vectors, since a run
+// that skipped them would still exit 0. The run is held to a quarter of wasm's 4 GiB, where it needs
+// under 200 MB, so memory a change adds fails here by name rather than as an out-of-memory death on
+// some later run.
 func TestHttpLegPassesInAWorker(t *testing.T) {
 	wasmPath := filepath.Join(t.TempDir(), "sidecar.test.wasm")
 
@@ -275,6 +390,7 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestWorkerFetchTakesARelativeUrlFromNetHttp",
 		"TestWorkerFetchGetsAnAbsoluteUrl",
 		"TestValidSettingsPass",
+		"TestAuthChainVectors",
 		"TestMlsVectorFilesMatchUpstream",
 		"TestMlsCryptoBasicsVectors",
 		"TestMlsKeyScheduleVectors",
@@ -286,16 +402,63 @@ func TestHttpLegPassesInAWorker(t *testing.T) {
 		"TestNormalizationVectors",
 		"TestEntryVectors",
 		"TestSlotVectors",
+		"TestSocketTokenVectors",
+		"TestSocketSealVectors",
+		"TestSocketSealDropVectors",
+		"TestSocketTicketVectorsSign",
+		"TestSocketTicketVectorsVerify",
+		"TestSocketTicketVerifiesOverReceivedBytes",
+		"TestSocketTicketVectorRefusals",
 		"TestMailVectorsRoundTrip",
 		"TestMailVectorsCoverEveryField",
 		"TestMailVectorNames",
 		"TestMailVectorMonths",
 		"TestMailVectorClocks",
 		"TestMailVectorOrders",
+		"TestKeychainVectorsAreByteEqual",
+		"TestKeychainVectorsOpen",
+		"TestGkmLadderVectors",
+		"TestGkmWrapAadVectors",
+		"TestGkmWrapPathVectors",
+		"TestEvsTokenVectors",
+		"TestEvsDigestVectors",
+		"TestEvsChainVectors",
+		"TestEvsNfcAndNfdNamesAreTwoPaths",
+		"TestEvsAnyReaderDerivesMainsRefId",
+		"TestEvsMerkleKnownAnswers",
+		"TestEvsPadmeTable",
+		"TestEvsRecordVectors",
+		"TestEvsSegmentVectors",
+		"TestEvsSegmentFuzzSeeds",
+		"TestEvsNameTableFuzzSeeds",
+		"TestEvsPushVectors",
+		"TestEvsBatchVectors",
+		"TestEvsWindowVectors",
+		"TestEvsPushFuzzSeeds",
+		"TestEvsBatchFuzzSeeds",
+		"TestUrMlsCredentialRoundTrip",
+		"TestDpopVectorsAreByteEqual",
+		"TestDpopVectorsVerify",
+		"TestTlsKeyAttestationVectorsAreByteEqual",
+		"TestTlsKeyAttestationVectorsVerify",
+		"TestPresenceVectorsAreByteEqual",
+		"TestPresenceVectorsVerify",
+		"TestPresenceAttestationVectorsAreByteEqual",
+		"TestPresenceAttestationVectorsVerify",
+		"TestPresenceCborRefusesNonCanonicalForms",
+		"TestRefreshNotSentWithoutSigner",
+		"TestEnrollRefusesBundle",
+		"TestExchangeTokenPostsItsFormAndProof",
 	} {
 		if !strings.Contains(string(output), "--- PASS: "+name+" ") {
 			t.Errorf("%s did not pass\n%s", name, output)
 		}
+	}
+	memoryByteCount, ok := workerHarnessMemoryByteCount(output)
+	if !ok {
+		t.Errorf("no memory report in\n%s", output)
+	} else if maxByteCount := int64(1024 * 1024 * 1024); maxByteCount < memoryByteCount {
+		t.Errorf("the leg's tests grew wasm memory to %d bytes, past %d", memoryByteCount, maxByteCount)
 	}
 }
 

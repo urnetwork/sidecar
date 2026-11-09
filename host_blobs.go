@@ -32,6 +32,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -61,7 +62,16 @@ var (
 	ErrBlobClusterUnknown = errors.New("blob cluster unknown")
 	// A PUT's arguments fail their rules, so nothing was sent.
 	ErrBlobPutOptions = errors.New("blob put options invalid")
+	// An immutable key holds bytes other than the ones a create of it carried: two writers disagree on
+	// what a key created once holds, a fault the caller alarms (§11.8's immutable and write rows).
+	// Nothing was written.
+	ErrBlobImmutableMismatch = errors.New("blob immutable key holds other bytes")
 )
+
+// How many times PutImmutable sends one create: once, and once more after a read shows an unknown
+// outcome never landed (§11.8's write row, "404 written again with the same bytes"). A protocol step
+// and not a tunable: past it the outcome stays the caller's to resolve, as its section says.
+const blobImmutableWriteCount = 2
 
 // The store's limits on a PUT's metadata (minio/cmd/generic-handlers.go, maxUserDataSize): 2 KiB,
 // counting each key with the header prefix it travels under. Format values, not settings.
@@ -115,6 +125,81 @@ func BlobRequestDeadline(ctx context.Context, issued time.Time, requestTimeout t
 		return own
 	}
 	return deadline
+}
+
+// §11.8's create of an immutable key (place/, log/, pb/, hp/, pmap/, pidx/, spidx/, dropscan/ and any
+// other family its immutable row names): creates key holding body and returns the ETag it holds. The
+// one helper every family's writer calls, so each answers a lost response alike (D-EVS-13):
+//
+//   - A 412 reads the key back. Equal bytes are success, as a retry of one's own create finds them;
+//     other bytes are ErrBlobImmutableMismatch, which the caller alarms.
+//   - An unknown outcome reads the key back too, since the settle rule makes that read tell what
+//     happened (D-OPS-20): equal bytes were written, other bytes are ErrBlobImmutableMismatch, and a 404
+//     means the create never landed and never will, so the same bytes go once more.
+//   - When the read cannot tell, or the second create's outcome is unknown too, the BlobUnknownError
+//     comes back: the key may yet hold body, and the caller rereads as its section says (§11.8's
+//     unknown row).
+//   - A 412 whose read-back finds no key is ErrBlobPrecondition: what stood there was deleted whole, as
+//     only evacuation, packing and GC delete immutable keys, so neither its bytes nor these stand.
+//
+// Bytes alone are compared, since an immutable family carries no object metadata (§19.6). options
+// rides each create, so a checksum is verified on the second as on the first. Segments and packs
+// stream, and take PutStream's own 412 rule.
+func PutImmutable(ctx context.Context, cluster BlobCluster, key string, body []byte, options *BlobPutOptions) (etag string, err error) {
+	// what the key holds now: found false for none, and ErrBlobImmutableMismatch for other bytes
+	readBack := func() (heldEtag string, found bool, err error) {
+		object, err := cluster.Get(ctx, key)
+		if errors.Is(err, ErrBlobNotFound) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+		defer object.Body.Close()
+		// one byte past body is enough to tell a longer object
+		held, err := io.ReadAll(io.LimitReader(object.Body, int64(len(body))+1))
+		if err != nil {
+			return "", false, err
+		}
+		if !bytes.Equal(held, body) {
+			return "", true, fmt.Errorf("%w: %s", ErrBlobImmutableMismatch, key)
+		}
+		return object.Etag, true, nil
+	}
+
+	for writeCount := 1; ; writeCount += 1 {
+		newEtag, err := cluster.PutIfNoneMatch(ctx, key, body, options)
+		var unknown *BlobUnknownError
+		switch {
+		case err == nil:
+			return newEtag, nil
+		case errors.Is(err, ErrBlobPrecondition):
+			heldEtag, found, readErr := readBack()
+			if readErr != nil {
+				return "", readErr
+			}
+			if !found {
+				return "", fmt.Errorf("%w: %s existed and is gone", ErrBlobPrecondition, key)
+			}
+			return heldEtag, nil
+		case errors.As(err, &unknown):
+			heldEtag, found, readErr := readBack()
+			switch {
+			case errors.Is(readErr, ErrBlobImmutableMismatch):
+				return "", readErr
+			case readErr != nil:
+				// the read could not tell, so the create's outcome stays unknown
+				return "", err
+			case found:
+				return heldEtag, nil
+			case blobImmutableWriteCount <= writeCount:
+				return "", err
+			}
+			// it never landed, and by the settle rule it never will: send the same bytes again
+		default:
+			return "", err
+		}
+	}
 }
 
 // The clusters of one deployment, by cluster id: the names sidecar.yml uses, such as place_new's

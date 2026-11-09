@@ -2,7 +2,8 @@
 
 // §4.7's legs: every build this repository ships, and the test builds beside them, each read through
 // go list -deps. A leg's closure is what the deps, legs, cgo and hook rows read, so a leg that names
-// the wrong environment would pass them all; TestLegsReadTheirOwnBuildConfiguration holds that.
+// the wrong environment would pass them all; TestLegsReadTheirOwnBuildConfiguration holds that. Each
+// leg also compiles, in legs_compile_test.go.
 
 package check
 
@@ -23,12 +24,14 @@ import (
 	"testing"
 )
 
-// The value of dependencies.yml's leg field a closure answers to (§4.7).
+// The value of dependencies.yml's leg field a closure answers to (§4.7), and sidecarctl's, the
+// operations binary CONTRACTS.md C-23 adds as a module of its own.
 const (
-	classClient = "client"
-	classEngine = "engine"
-	classCli    = "cli"
-	classTest   = "test"
+	classClient     = "client"
+	classEngine     = "engine"
+	classCli        = "cli"
+	classSidecarctl = "sidecarctl"
+	classTest       = "test"
 )
 
 // One build, as go list -deps resolves it.
@@ -78,9 +81,9 @@ var deviceRolePatterns = []string{"./protocol/bridge", "./device"}
 var allPatterns = []string{"./..."}
 
 // Every leg. This mirrors sdk/dependency_boundary_test.go:81-92, which
-// TestLegsCoverEverySdkLeg holds, and adds §4.7's sidecar_http js leg and the CLI's six release
-// targets, then a leg for each module nothing else reads. Each row's cgo is explicit where sdk
-// leaves it to the host, because a leg is what it names on any machine.
+// sdkLegRowFindings holds, and adds §4.7's sidecar_http js leg and the CLI's six release
+// targets, sidecarctl's two, then a leg for each module nothing else reads. Each row's cgo is
+// explicit where sdk leaves it to the host, because a leg is what it names on any machine.
 func defaultBuildLegs() []*buildLeg {
 	clientLeg := func(name string, goos string, goarch string, cgoEnabled bool, tags ...string) *buildLeg {
 		return &buildLeg{
@@ -99,6 +102,12 @@ func defaultBuildLegs() []*buildLeg {
 		return &buildLeg{
 			name: "cli " + goos + "/" + goarch, moduleName: "cli", goos: goos, goarch: goarch,
 			patterns: allPatterns, class: classCli, ships: true,
+		}
+	}
+	sidecarctlLeg := func(goarch string) *buildLeg {
+		return &buildLeg{
+			name: "sidecarctl linux/" + goarch, moduleName: "sidecarctl", goos: "linux", goarch: goarch,
+			patterns: allPatterns, class: classSidecarctl, ships: true,
 		}
 	}
 	keychainFallbackLeg := func(goarch string) *buildLeg {
@@ -148,6 +157,10 @@ func defaultBuildLegs() []*buildLeg {
 		keychainFallbackLeg("amd64"),
 		keychainFallbackLeg("arm64"),
 
+		// sidecarctl, on the linux hosts operators run it on (C-23)
+		sidecarctlLeg("amd64"),
+		sidecarctlLeg("arm64"),
+
 		// what server links: the root module's engines on server's two targets, and the prover it
 		// injects (server/cli/api/Makefile:15-16)
 		{
@@ -174,6 +187,7 @@ func defaultBuildLegs() []*buildLeg {
 		testLeg("tests cli linux/amd64", "cli", "linux", "amd64", false),
 		testLeg("tests smtpproof linux/amd64", "smtpproof", "linux", "amd64", false),
 		testLeg("tests mlsinterop linux/amd64", "mlsinterop", "linux", "amd64", false),
+		testLeg("tests sidecarctl linux/amd64", "sidecarctl", "linux", "amd64", false),
 	}
 }
 

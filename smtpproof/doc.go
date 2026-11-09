@@ -6,6 +6,7 @@
 // and backend and setup are Groth16 and its keys.
 //
 // A nested module so its requirements stay out of consumers' module graphs: cli/ and server inject
-// it through root interfaces, and the root never requires it (§4.7). No keys ship yet, so a Prover
-// or Verifier built here refuses every part (SPEC.md section 12).
+// it through root interfaces, and the root never requires it (§4.7). A Prover or Verifier holds the
+// keys of a KeySet the release pins; no production setup has run yet, so none ships, and both refuse
+// every part (SPEC.md section 12).
 package smtpproof

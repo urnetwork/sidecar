@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/sha256"
 	"encoding"
+	"encoding/base32"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -68,7 +69,52 @@ const (
 	labelMaxBytes  = 63
 	// What every 1.3 server record after Finished holds as its first octet if it is a ticket.
 	tlsInnerTypeBytes = 1
+
+	// X-UR-Ref's bytes (§14.6, plan-SMTP-small-readings #3): the version, then lowercase unpadded
+	// base32 of key_id (1 octet), send_id (12) and the HMAC's first 8 octets.
+	xUrRefVersion = "1."
+	xUrRefOctets  = 1 + 12 + 8
+	// Feedback-ID's fields (§14.6, plan-SMTP-small-readings #4): class, tier, the network's report
+	// token in lowercase unpadded base32 of 16 octets (plan-SMTP-net-token), and this constant.
+	feedbackIdSuffix = "urnetwork"
+	netTokenOctets   = 16
 )
+
+// Unpadded base32 (RFC 4648 §6). X-UR-Ref and the network token write it in lowercase.
+var unpaddedBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// Whether a value is the lowercase unpadded base32 of exactly octetCount octets, its unused low bits
+// zero, so that each value has one spelling. Go's decoder ignores those bits, so the octets are
+// encoded again and compared.
+func lowerBase32Form(value string, octetCount int) bool {
+	if len(value) != unpaddedBase32.EncodedLen(octetCount) {
+		return false
+	}
+	for i := range len(value) {
+		if !('a' <= value[i] && value[i] <= 'z' || '2' <= value[i] && value[i] <= '7') {
+			return false
+		}
+	}
+	upper := strings.ToUpper(value)
+	decoded, err := unpaddedBase32.DecodeString(upper)
+	return err == nil && len(decoded) == octetCount && unpaddedBase32.EncodeToString(decoded) == upper
+}
+
+// Whether a value is X-UR-Ref's 36 characters.
+func xUrRefForm(value string) bool {
+	token, found := strings.CutPrefix(value, xUrRefVersion)
+	return found && lowerBase32Form(token, xUrRefOctets)
+}
+
+// Whether a value is Feedback-ID's 40 characters: n or b, then c, p or t, then the token.
+func feedbackIdForm(value string) bool {
+	fields := strings.Split(value, ":")
+	return len(fields) == 4 &&
+		(fields[0] == "n" || fields[0] == "b") &&
+		(fields[1] == "c" || fields[1] == "p" || fields[1] == "t") &&
+		lowerBase32Form(fields[2], netTokenOctets) &&
+		fields[3] == feedbackIdSuffix
+}
 
 const (
 	literalCrlf            = "\r\n"
@@ -129,41 +175,27 @@ func domainForm(name string) bool {
 	return true
 }
 
-// Whether a value is one or more visible octets, so that it stays on its line as one token.
-func visibleForm(value string) bool {
-	if value == "" {
-		return false
-	}
-	for i := range len(value) {
-		if value[i] <= ' ' || '~' < value[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// Whether a Message-ID, without its angle brackets, is left and right of one @ in the local set.
-func messageIdForm(value string) bool {
-	left, right, found := strings.Cut(value, "@")
-	if !found || left == "" || right == "" {
-		return false
-	}
-	for _, half := range []string{left, right} {
-		for i := range len(half) {
-			if !localOctet(half[i]) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // Refuses a preamble no template may be built from (SPEC.md section 6). A template is a literal, and
 // the circuit proves a record equals it, so a declared value holding the end of a path or a line
 // would have the proof vouch for a command of the sidecar's own.
 func checkSessionPreamble(preamble *sessionPreamble) error {
 	if preamble.recipientCount == 0 {
 		return errors.New("preamble declares no recipient")
+	}
+	// without its angle brackets: one @, with a run of the local set on either side
+	messageIdForm := func(value string) bool {
+		left, right, found := strings.Cut(value, "@")
+		if !found || left == "" || right == "" {
+			return false
+		}
+		for _, half := range []string{left, right} {
+			for i := range len(half) {
+				if !localOctet(half[i]) {
+					return false
+				}
+			}
+		}
+		return true
 	}
 	for _, entry := range []struct {
 		name string
@@ -175,8 +207,10 @@ func checkSessionPreamble(preamble *sessionPreamble) error {
 		{name: "envelope_domain", ok: domainForm(preamble.envelopeDomain)},
 		{name: "helo_name", ok: domainForm(preamble.heloName)},
 		{name: "message_id", ok: messageIdForm(preamble.messageId)},
-		{name: "x_ur_ref", ok: visibleForm(preamble.xUrRef)},
-		{name: "feedback_id", ok: visibleForm(preamble.feedbackId)},
+		// the edge issues both, so these check the edge itself; their exact forms keep each line's
+		// length fixed before the mode is known (plan-SMTP-preamble-byte-count)
+		{name: "x_ur_ref", ok: xUrRefForm(preamble.xUrRef)},
+		{name: "feedback_id", ok: feedbackIdForm(preamble.feedbackId)},
 	} {
 		if !entry.ok {
 			return fmt.Errorf("preamble's %s is outside its form", entry.name)
@@ -716,7 +750,12 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 	}
 	lines := bytes.Split(block[:len(block)-len(end)], []byte(literalCrlf))
 	counts := map[string]int{}
-	var dkimCount, unsubscribeCount int
+	singleNames := []string{"from", "message-id", "x-ur-ref", "feedback-id"}
+	bulk := preamble.flags&preambleFlagBulk != 0
+	if bulk {
+		singleNames = append(singleNames, "list-unsubscribe-post")
+	}
+	dkimCount := 0
 	dkimPrefix := []byte(literalDkimPrefix)
 	dkimLiteral := []byte(literalDkimPrefix + dkimTags(preamble))
 	for i, line := range lines {
@@ -746,7 +785,7 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 		}
 		name := asciiLower(line[:colon])
 		continued := i+1 < len(lines) && 0 < len(lines[i+1]) && (lines[i+1][0] == ' ' || lines[i+1][0] == '\t')
-		// rule 4: the four single fields and their literal forms
+		// rule 4: the single fields and their literal forms
 		var literal string
 		switch name {
 		case "from":
@@ -759,6 +798,13 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 			literal = literalXUrRefPrefix + preamble.xUrRef
 		case "feedback-id":
 			literal = literalFeedbackPrefix + preamble.feedbackId
+		case "list-unsubscribe-post":
+			// rule 6: on a BULK message this field is single too, since a continuation or a second
+			// field leaves it no longer RFC 8058's single key/value pair
+			if !bulk {
+				name = ""
+			}
+			literal = literalUnsubscribePost
 		default:
 			name = ""
 		}
@@ -778,21 +824,14 @@ func checkHeaderBlock(block []byte, preamble *sessionPreamble) error {
 				return errors.New("the fixed DKIM signature has another d= or s=")
 			}
 		}
-		// rule 6
-		if string(line) == literalUnsubscribePost {
-			unsubscribeCount += 1
-		}
 	}
-	for _, name := range []string{"from", "message-id", "x-ur-ref", "feedback-id"} {
+	for _, name := range singleNames {
 		if counts[name] != 1 {
 			return fmt.Errorf("%d %s fields, want 1", counts[name], name)
 		}
 	}
 	if dkimCount != 1 {
 		return fmt.Errorf("%d fixed DKIM signatures, want 1", dkimCount)
-	}
-	if preamble.flags&preambleFlagBulk != 0 && unsubscribeCount != 1 {
-		return fmt.Errorf("%d List-Unsubscribe-Post fields on a BULK message, want 1", unsubscribeCount)
 	}
 	return nil
 }
@@ -1071,6 +1110,36 @@ func relationZ8(statement *partStatement, witness *partWitness) error {
 	return nil
 }
 
+// Whether an application record among a part's server plaintexts holds a whole CHUNKING line that is
+// not its reply's first. The circuit matches CR LF, 250, a separator, the keyword and CR LF at positions
+// inside one record, so a line at a record's edge does not count (SPEC.md reading 17), and this is that
+// same test, so that the two agree. A ticket's octets are no part of the reply stream.
+func offersChunking(version uint16, plaintexts [][]byte) bool {
+	const prefix = "\r\n250"
+	windowBytes := len(prefix) + 1 + len(keywordChunking) + len(literalCrlf)
+	matches := func(window []byte) bool {
+		separator := window[len(prefix)]
+		word := window[len(prefix)+1 : windowBytes-len(literalCrlf)]
+		return string(window[:len(prefix)]) == prefix && (separator == '-' || separator == ' ') &&
+			asciiLower(word) == keywordChunking && string(window[windowBytes-len(literalCrlf):]) == literalCrlf
+	}
+	for _, plaintext := range plaintexts {
+		content := plaintext
+		if version == tlsVersion13 {
+			if len(plaintext) == 0 || plaintext[len(plaintext)-1] != tlsRecordApplicationData {
+				continue
+			}
+			content = plaintext[:len(plaintext)-tlsInnerTypeBytes]
+		}
+		for i := 0; i+windowBytes <= len(content); i += 1 {
+			if matches(content[i : i+windowBytes]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Z9: BDAT only to an MX whose post-TLS EHLO reply offers CHUNKING.
 func relationZ9(statement *partStatement, witness *partWitness) error {
 	if statement.index != 2 || statement.mode != partModeBdat {
@@ -1085,11 +1154,8 @@ func relationZ9(statement *partStatement, witness *partWitness) error {
 		// Z8's to refuse
 		return nil
 	}
-	for i, text := range replies[0].lines {
-		// the first line is the MX's name, never a keyword
-		if 0 < i && asciiLower([]byte(text)) == keywordChunking {
-			return nil
-		}
+	if offersChunking(statement.session.version, witness.serverPlaintexts) {
+		return nil
 	}
 	return errors.New("BDAT to an MX whose EHLO reply lacks CHUNKING")
 }

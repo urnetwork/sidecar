@@ -8,7 +8,10 @@
 //     since this fake runs no Lua: a script with no twin fails rather than do nothing;
 //   - each call is counted by name, a script as script:<name>, for §22.5's op-counted hot paths;
 //   - keyspace events fire on the shared subscriber's goroutine for production's classes only,
-//     K, g, $, s and x, so SET, INCR, DEL and an expiry notify, and HSET and XADD do not (D-PROTO-12).
+//     K, g, $, s and x, so SET, INCR, DEL, EXPIRE and an expiry notify, and HSET and XADD do not
+//     (D-PROTO-12). They fire as a write applies, the way a master fires them inside the command, so a
+//     write whose answer is lost still notifies, and as often as a master does: SET with a ttl twice,
+//     once for the value and once for its expiry. A hash losing its last field fires the DEL it became.
 //
 // Faults come from the shared FaultQueue under FaultOpRedis, keyed by a call's first key. Everything
 // here is safe for concurrent use.
@@ -320,7 +323,7 @@ func (self *FakeRedis) call(ctx context.Context, op string, keys []string, serve
 	if 0 < len(keys) {
 		faultKey = keys[0]
 	}
-	plan := self.faults.take(ctx, FaultOpRedis, "", faultKey)
+	plan := self.faults.take(ctx, FaultOpRedis, "", faultKey, redisCallWrites(op))
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result
@@ -381,6 +384,15 @@ func (self *FakeRedis) callDelayed(ctx context.Context, op string, plan *FaultPl
 	return err
 }
 
+// The calls that only read. Every other call writes, a script included, since a script's body is its
+// own and §22.8's unknown rule would rather lose one read's answer too many than one write's too few.
+var redisReadCalls = []string{"get", "mget", "hget", "hgetall", "xrange"}
+
+// Whether a call, by its count name, writes.
+func redisCallWrites(op string) bool {
+	return !slices.Contains(redisReadCalls, op)
+}
+
 // CROSSSLOT, at run time: §22.4's lint. A call's keys must share a slot, as production demands, and
 // must do so by a shared hash tag, not by luck, or the two keys part at the next reshard.
 func (self *FakeRedis) checkSlots(op string, keys []string) error {
@@ -410,16 +422,10 @@ func (self *FakeRedis) setExpiryWithLock(key string, entry *fakeRedisEntry, ttl 
 	entry.expiresAt = self.clock.Now().Add(ttl)
 	expireSeq := entry.expireSeq
 	self.clock.AfterFunc(ttl, func() {
-		expired := false
-		func() {
-			self.stateLock.Lock()
-			defer self.stateLock.Unlock()
-			if current, ok := self.entries[key]; ok && current == entry && entry.expireSeq == expireSeq {
-				delete(self.entries, key)
-				expired = true
-			}
-		}()
-		if expired {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if current, ok := self.entries[key]; ok && current == entry && entry.expireSeq == expireSeq {
+			delete(self.entries, key)
 			self.subscriber.publish(key)
 		}
 	})
@@ -432,6 +438,7 @@ func (self *FakeRedis) expireDueWithLock() {
 	for key, entry := range self.entries {
 		if !entry.expiresAt.IsZero() && !now.Before(entry.expiresAt) {
 			delete(self.entries, key)
+			self.subscriber.publish(key)
 			continue
 		}
 		if entry.kind != fakeRedisHash {
@@ -444,6 +451,7 @@ func (self *FakeRedis) expireDueWithLock() {
 		}
 		if len(entry.fields) == 0 {
 			delete(self.entries, key)
+			self.subscriber.publish(key)
 		}
 	}
 }
@@ -470,6 +478,10 @@ func (self *FakeRedis) setWithLock(key string, value []byte, ttl time.Duration) 
 	entry := &fakeRedisEntry{kind: fakeRedisString, value: bytes.Clone(value)}
 	self.entries[key] = entry
 	self.setExpiryWithLock(key, entry, ttl)
+	self.subscriber.publish(key)
+	if 0 < ttl {
+		self.subscriber.publish(key)
+	}
 }
 
 func (self *FakeRedis) Get(ctx context.Context, key string) ([]byte, bool, error) {
@@ -510,14 +522,10 @@ func (self *FakeRedis) Set(ctx context.Context, key string, value []byte, ttl ti
 	if err := checkRedisTtl(ttl); err != nil {
 		return err
 	}
-	err := self.call(ctx, "set", []string{key}, func() error {
+	return self.call(ctx, "set", []string{key}, func() error {
 		self.setWithLock(key, value, ttl)
 		return nil
 	})
-	if err == nil {
-		self.subscriber.publish(key)
-	}
-	return err
 }
 
 func (self *FakeRedis) SetIfAbsent(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
@@ -535,9 +543,6 @@ func (self *FakeRedis) SetIfAbsent(ctx context.Context, key string, value []byte
 	})
 	if err != nil {
 		return false, err
-	}
-	if set {
-		self.subscriber.publish(key)
 	}
 	return set, nil
 }
@@ -559,9 +564,6 @@ func (self *FakeRedis) CompareAndSet(ctx context.Context, key string, expected [
 	if err != nil {
 		return false, err
 	}
-	if set {
-		self.subscriber.publish(key)
-	}
 	return set, nil
 }
 
@@ -573,14 +575,12 @@ func (self *FakeRedis) CompareAndDelete(ctx context.Context, key string, expecte
 			return err
 		}
 		delete(self.entries, key)
+		self.subscriber.publish(key)
 		deleted = true
 		return nil
 	})
 	if err != nil {
 		return false, err
-	}
-	if deleted {
-		self.subscriber.publish(key)
 	}
 	return deleted, nil
 }
@@ -602,9 +602,11 @@ func (self *FakeRedis) incrementWithLock(key string, ttl time.Duration) (int64, 
 	}
 	value += 1
 	entry.value = strconv.AppendInt(nil, value, 10)
+	self.subscriber.publish(key)
 	// EXPIRE NX: the first increment sets the key's life, and a later one leaves it
 	if 0 < ttl && entry.expiresAt.IsZero() {
 		self.setExpiryWithLock(key, entry, ttl)
+		self.subscriber.publish(key)
 	}
 	return value, nil
 }
@@ -622,28 +624,19 @@ func (self *FakeRedis) Increment(ctx context.Context, key string, ttl time.Durat
 	if err != nil {
 		return 0, err
 	}
-	self.subscriber.publish(key)
 	return value, nil
 }
 
 func (self *FakeRedis) Delete(ctx context.Context, keys []string) error {
-	deleted := []string{}
-	err := self.call(ctx, "del", keys, func() error {
+	return self.call(ctx, "del", keys, func() error {
 		for _, key := range keys {
 			if _, exists := self.entries[key]; exists {
 				delete(self.entries, key)
-				deleted = append(deleted, key)
+				self.subscriber.publish(key)
 			}
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	for _, key := range deleted {
-		self.subscriber.publish(key)
-	}
-	return nil
 }
 
 func (self *FakeRedis) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
@@ -654,6 +647,7 @@ func (self *FakeRedis) Expire(ctx context.Context, key string, ttl time.Duration
 	err := self.call(ctx, "expire", []string{key}, func() error {
 		if entry, exists := self.entries[key]; exists {
 			self.setExpiryWithLock(key, entry, ttl)
+			self.subscriber.publish(key)
 			found = true
 		}
 		return nil
@@ -747,6 +741,7 @@ func (self *FakeRedis) hashDeleteWithLock(key string, fields []string) error {
 	}
 	if len(entry.fields) == 0 {
 		delete(self.entries, key)
+		self.subscriber.publish(key)
 	}
 	return nil
 }
@@ -779,6 +774,7 @@ func (self *FakeRedis) hashExpireWithLock(key string, fields []string, ttl time.
 			delete(entry.fields, field)
 			if len(entry.fields) == 0 {
 				delete(self.entries, key)
+				self.subscriber.publish(key)
 			}
 		})
 	}

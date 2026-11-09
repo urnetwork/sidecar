@@ -1,0 +1,16 @@
+{
+  "name": "confirmed: the member's consented device signs OwnerConfirm or AdmissionConfirm, an unconsented one's counts for nothing",
+  "members": [{"id": "owner", "role": "owner"}, {"id": "admin", "role": "admin"}],
+  "genesis": {"sidecar": "laptop", "member": "owner"},
+  "sidecars": [
+    {"id": "laptop", "member": "owner", "admitted_at": 1},
+    {"id": "admin-laptop", "member": "admin", "admitted_at": 2, "signers": ["laptop"], "invited": true},
+    {"id": "owner-confirmed", "member": "owner", "admitted_at": 3, "signers": ["admin-laptop"], "owner_confirm": {"signer": "laptop", "at": 5}},
+    {"id": "admission-confirmed", "member": "owner", "admitted_at": 4, "signers": ["admin-laptop"], "confirm": {"signer": "laptop", "at": 6}},
+    {"id": "admin-confirmed", "member": "owner", "admitted_at": 7, "signers": ["admin-laptop"], "confirm": {"signer": "admin-laptop", "at": 8}},
+    {"id": "early", "member": "owner", "admitted_at": 9, "signers": ["admin-laptop"]},
+    {"id": "confirmed-by-early", "member": "owner", "admitted_at": 10, "signers": ["admin-laptop"], "owner_confirm": {"signer": "early", "at": 11}}
+  ],
+  "consented": ["laptop", "admin-laptop", "owner-confirmed", "admission-confirmed"],
+  "not_consented": ["admin-confirmed", "early", "confirmed-by-early"]
+}

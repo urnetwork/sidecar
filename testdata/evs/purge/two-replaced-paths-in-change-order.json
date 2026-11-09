@@ -1,0 +1,45 @@
+{
+  "name": "two replaced paths in change order",
+  "replaced": [
+    {
+      "token_path": "6a9b7645a9c4ea8ad84dfdfb7e7d70dd",
+      "version": {
+        "version": 1,
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "f5f58807f3dc7c31b4271c03cba78acd917328dc9938395e961babbdc7cb9e9e"
+          }
+        ]
+      }
+    },
+    {
+      "token_path": "7f78699601bf6f3832907e1c0f6965ce",
+      "version": {
+        "version": 2,
+        "versioning": 2,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "5f73abfa5301fb472f22cb694c0e9065dc8a00e9ac120d9cde356985ad03c8ea"
+          }
+        ]
+      }
+    }
+  ],
+  "push_versions": [
+    {
+      "version": 2,
+      "versioning": 1,
+      "chain": [
+        {
+          "kind": 5,
+          "id": "52d7f359d7c58fc2d9a620e55d77f275e26b369fdcca9380acecfe79f80755fa"
+        }
+      ]
+    }
+  ],
+  "room_byte_count": 1048576,
+  "want": "0a360a106a9b7645a9c4ea8ad84dfdfb7e7d70dd10011a20f5f58807f3dc7c31b4271c03cba78acd917328dc9938395e961babbdc7cb9e9e0a360a107f78699601bf6f3832907e1c0f6965ce10021a205f73abfa5301fb472f22cb694c0e9065dc8a00e9ac120d9cde356985ad03c8ea"
+}

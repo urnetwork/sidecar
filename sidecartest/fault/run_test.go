@@ -333,12 +333,12 @@ func TestAnUnbuiltInvariantFailsClosed(t *testing.T) {
 
 func TestEveryFiIsCataloged(t *testing.T) {
 	for n := 1; n <= 30; n += 1 {
-		if invariantNames[n] == "" {
+		if invariant := DefaultCatalog().Invariant(n); invariant == nil || invariant.Name == "" {
 			t.Errorf("FI-%d has no name", n)
 		}
 	}
-	if len(invariantNames) != 30 {
-		t.Errorf("%d names", len(invariantNames))
+	if count := len(DefaultCatalog().Invariants); count != 30 {
+		t.Errorf("%d names", count)
 	}
 	if built := BuiltInvariants(); !slices.Contains(built, 30) {
 		t.Errorf("built %v", built)
@@ -675,12 +675,20 @@ func raceSchedule(writerA *toyWriter, writerB *toyWriter) *Schedule {
 
 // §22.8's explorer: a correct writer passes every seed.
 func TestExplorerPassesACorrectProtocol(t *testing.T) {
-	failures := Explore(t.Context(), MergeSeeds(), func(net *Net) *Schedule {
+	report := Explore(t.Context(), func(net *Net) *Schedule {
 		return raceSchedule(&toyWriter{}, &toyWriter{})
-	}, nil)
-	for _, failure := range failures {
+	}, toyRuleSettings(t))
+	for _, failure := range report.Failures {
 		t.Errorf("%s", failure)
 	}
+}
+
+// Rule settings for a toy: the merge seeds, and traces into a directory of the test's own, never the
+// repository's.
+func toyRuleSettings(t *testing.T) *RuleSettings {
+	settings := DefaultRuleSettings()
+	settings.SeedsDirectory = t.TempDir()
+	return settings
 }
 
 // The explorer's reason to exist: the fixed order runs these one after the other and never sees the
@@ -689,13 +697,11 @@ func TestExplorerFindsARaceTheFixedOrderMisses(t *testing.T) {
 	mutant := &toyWriter{trustsPrecondition: true}
 	wantPass(t, runFresh(t, raceSchedule(mutant, mutant)))
 
-	seeds := []int64{}
-	for seed := range int64(40) {
-		seeds = append(seeds, seed+1)
-	}
-	failures := Explore(t.Context(), seeds, func(net *Net) *Schedule {
+	settings := toyRuleSettings(t)
+	settings.Seeds = seedRange(40)
+	failures := Explore(t.Context(), func(net *Net) *Schedule {
 		return raceSchedule(mutant, mutant)
-	}, nil)
+	}, settings).Failures
 	if len(failures) == 0 {
 		t.Fatal("40 seeds found no interleaving where a commit was lost")
 	}
@@ -726,7 +732,7 @@ func TestASeedRepeatsItsOrder(t *testing.T) {
 
 // §22.8's unknown rule, applied to every write in a schedule.
 func TestEveryWriteUnknownPassesACorrectProtocol(t *testing.T) {
-	failures := RunEveryWriteUnknown(t.Context(), func(net *Net) *Schedule {
+	failures, _ := EveryWrite(t.Context(), func(net *Net) *Schedule {
 		return raceSchedule(&toyWriter{}, &toyWriter{})
 	}, nil)
 	for _, failure := range failures {
@@ -735,7 +741,7 @@ func TestEveryWriteUnknownPassesACorrectProtocol(t *testing.T) {
 }
 
 func TestEveryWriteUnknownCatchesABlindRetry(t *testing.T) {
-	failures := RunEveryWriteUnknown(t.Context(), func(net *Net) *Schedule {
+	failures, _ := EveryWrite(t.Context(), func(net *Net) *Schedule {
 		return raceSchedule(&toyWriter{retriesBlindly: true}, &toyWriter{})
 	}, nil)
 	if len(failures) == 0 {
@@ -855,4 +861,111 @@ func (self *lateLandingCluster) PutIfNoneMatch(ctx context.Context, key string, 
 	self.store.pendingKey = key
 	self.store.pendingBody = body
 	return "", &sidecar.BlobUnknownError{Err: errors.New("the answer never came")}
+}
+
+// Three writes, the row's own fault armed first, each write reread after an unknown or refused answer,
+// as §11.8 says.
+func threeWrites(plan *FaultPlan) *Schedule {
+	return &Schedule{
+		Id: "three-writes",
+		Steps: []*Step{
+			{Fault: plan},
+			{Actor: "evs1", Action: func(ctx context.Context, net *Net) error {
+				cluster, err := net.Host().Blobs.FirstCluster()
+				if err != nil {
+					return err
+				}
+				for _, key := range []string{"a/_", "b/_", "c/_"} {
+					if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("v"), nil); err != nil {
+						if _, err := cluster.Head(ctx, key); err != nil && !errors.Is(err, sidecar.ErrBlobNotFound) {
+							return err
+						}
+					}
+				}
+				return nil
+			}},
+		},
+		Check: []Invariant{UnknownDeletesNothing, FI(30)},
+	}
+}
+
+// Every write runs with its response lost, the one the row fails before apply included: the failure
+// gives way, counted as fired, since its caller could not have told the two apart.
+func TestEveryWriteUnknownCountsAWriteTheRowFaultsItself(t *testing.T) {
+	builds := 0
+	failures, _ := EveryWrite(t.Context(), func(net *Net) *Schedule {
+		builds += 1
+		return threeWrites(&FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "a/", Result: FailBeforeApply})
+	}, nil)
+	for _, failure := range failures {
+		t.Errorf("%s", failure)
+	}
+	if builds != 4 {
+		t.Errorf("%d builds: want one to count and one for each of the 3 writes", builds)
+	}
+}
+
+// A write the row holds keeps its hold, which is the row's own case, and no plan goes unfired.
+func TestEveryWriteUnknownLeavesARowsOwnHold(t *testing.T) {
+	builds := 0
+	failures, _ := EveryWrite(t.Context(), func(net *Net) *Schedule {
+		builds += 1
+		return threeWrites(&FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "b/", Result: Held})
+	}, nil)
+	for _, failure := range failures {
+		t.Errorf("%s", failure)
+	}
+	if builds != 3 {
+		t.Errorf("%d builds: want one to count and one for each write the row does not hold", builds)
+	}
+}
+
+// An actor blocked where no barrier sees it loses the baton at the stall timeout, and the actor behind
+// it runs out of the schedule's order. The run fails rather than pass under an order it did not choose.
+func TestARunInWhichAnActorStalledFails(t *testing.T) {
+	settings := sidecartest.DefaultNetSettings()
+	settings.Barriers.StallTimeout = 1 * time.Millisecond
+	net := sidecartest.NewNet(t.Context(), settings)
+	defer net.Close()
+	gate := make(chan struct{})
+	result := Run(t.Context(), &Schedule{
+		Id: "stall",
+		Steps: []*Step{
+			// started first, so it takes the baton first, and keeps it waiting where no barrier sees
+			{Actor: "writerA", Background: true, Action: func(ctx context.Context, net *Net) error {
+				<-gate
+				return nil
+			}},
+			{Actor: "writerB", Action: func(ctx context.Context, net *Net) error {
+				close(gate)
+				return nil
+			}},
+		},
+	}, net)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "writerA stalled") {
+		t.Errorf("%s", result)
+	}
+}
+
+// A row whose connect clients run on the fake contract issuer and ControlId sink names T3, where a
+// divergence from server's exchange fails (Q-TEST-1). One that does not fails here.
+func TestARowOnThePlatformFakesNamesT3(t *testing.T) {
+	run := func(tiers []Tier) *Result {
+		net := sidecartest.NewNet(t.Context(), nil)
+		defer net.Close()
+		return Run(t.Context(), &Schedule{
+			Id: "platform-fakes",
+			Steps: []*Step{
+				{Actor: "daemonM", Action: func(ctx context.Context, net *Net) error {
+					net.AddClient("m", nil)
+					return nil
+				}},
+			},
+			Tiers: tiers,
+		}, net)
+	}
+	if result := run(nil); result.Err == nil || !strings.Contains(result.Err.Error(), "Q-TEST-1") {
+		t.Errorf("%s", result)
+	}
+	wantPass(t, run([]Tier{TierT2, TierT3}))
 }

@@ -1,0 +1,5 @@
+go test fuzz v1
+string("www")
+uint16(16)
+uint32(3600)
+string("\"hello\" \"world\"")

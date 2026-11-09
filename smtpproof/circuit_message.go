@@ -99,7 +99,7 @@ func newHeaderScan(shape *partShape) *headerScan {
 		FromAt:    make([]frontend.Variable, size),
 	}
 	for range shape.headerBlocks {
-		scan.Blocks = append(scan.Blocks, newPoolBlock(shape.blockBytes()))
+		scan.Blocks = append(scan.Blocks, newPoolBlock(shape.blockBytes(), false))
 	}
 	return scan
 }
@@ -110,6 +110,8 @@ func zeroPoolBlock(block *poolBlock) {
 		block.Cipher[i] = 0
 		block.Literal[i] = 0
 		block.IsLiteral[i] = 0
+	}
+	for i := range block.IsLocal {
 		block.IsLocal[i] = 0
 	}
 }
@@ -286,12 +288,16 @@ func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuit
 		messageIdHits[i] = match("message-id:")
 		xUrRefHits[i] = match("x-ur-ref:")
 		feedbackHits[i] = match("feedback-id:")
-		// rules 5 and 6: exact octets, not folded
+		// rule 5: exact octets, not folded
 		dkimHits[i] = api.Mul(nameStart, matchesConstant(api, values, i, []byte(literalDkimPrefix)))
-		unsubscribeHits[i] = api.Mul(nameStart, matchesConstant(api, values, i, []byte(literalUnsubscribePost+literalCrlf)))
+		// rule 6: on a BULK message the field is single as well, and its line is the literal's exact
+		// octets, so a continuation or a second field cannot leave it other than RFC 8058's one pair
+		unsubscribeHits[i] = api.Mul(scan.Bulk, match("list-unsubscribe-post:"))
+		unsubscribeLiteral := matchesConstant(api, values, i, []byte(literalUnsubscribePost+literalCrlf))
+		api.AssertIsEqual(api.Mul(unsubscribeHits[i], api.Sub(1, unsubscribeLiteral)), 0)
 
-		// rule 4: none of the single fields is continued
-		singleField := api.Add(inField, fromHits[i], messageIdHits[i], xUrRefHits[i], feedbackHits[i])
+		// rules 4 and 6: none of the single fields is continued
+		singleField := api.Add(inField, fromHits[i], messageIdHits[i], xUrRefHits[i], feedbackHits[i], unsubscribeHits[i])
 		ending := api.Mul(singleField, lfActive[i])
 		if i+1 < size {
 			api.AssertIsEqual(api.Mul(ending, api.Add(isSp[i+1], isTab[i+1])), 0)
@@ -307,7 +313,8 @@ func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuit
 	for _, hits := range [][]frontend.Variable{fromHits, messageIdHits, xUrRefHits, feedbackHits, dkimHits} {
 		api.AssertIsEqual(sum(hits), 1)
 	}
-	api.AssertIsEqual(api.Mul(scan.Bulk, api.Sub(sum(unsubscribeHits), 1)), 0)
+	// each hit carries Bulk, so this is exactly one on a BULK message and nothing otherwise
+	api.AssertIsEqual(sum(unsubscribeHits), scan.Bulk)
 
 	// rule 4's literal forms, each read at its one position
 	checkLiteralAt(api, values, messageIdHits, 0, scan.MessageId)
@@ -449,7 +456,7 @@ type bodyBlock struct {
 
 func newBodyBlock(blockBytes int) *bodyBlock {
 	return &bodyBlock{
-		Block:  newPoolBlock(blockBytes),
+		Block:  newPoolBlock(blockBytes, false),
 		Active: make([]frontend.Variable, blockBytes),
 		Start:  make([]frontend.Variable, blockBytes),
 		End:    make([]frontend.Variable, blockBytes),
@@ -482,6 +489,10 @@ func checkBody(api frontend.API, stream *circuitKeystream, blocks []*bodyBlock) 
 	size := len(crActive)
 	api.AssertIsEqual(lfActive[0], 0)
 	api.AssertIsEqual(crActive[size-1], 0)
+	// a record starting at the pool's last octet could hold no CRLF, so no assignment marks it; bound
+	// here because the dot rule below never reads it, and a public wire no constraint reads would
+	// verify at any value
+	api.AssertIsEqual(starts[size-1], 0)
 	for i := range size {
 		if i+1 < size {
 			api.AssertIsEqual(crActive[i], lfActive[i+1])
