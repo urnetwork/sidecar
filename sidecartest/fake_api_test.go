@@ -112,7 +112,7 @@ func TestFakeApiRoutesServeTheLog(t *testing.T) {
 	rows := env.baseOneRows(env.owner)
 	pin := &fakeApiConfigPin{}
 	status, refusal, err := world.call(http.MethodPost, "/network/config/projection", owner, &fakeApiConfigProjectionPublishArgs{
-		SignedHeader: env.base(env.owner, env.tip, rows, 0, 1), Rows: rows, Genesis: env.signedGenesis,
+		SignedHeader: env.base(env.owner, env.tip, rows, 0, 1), Rows: rows, Genesis: env.signedGenesis, ConfigPushes: env.configRepo.pushes(0, 1),
 	}, pin)
 	if err != nil || status != http.StatusOK || pin.N != 1 {
 		t.Fatalf("base 1: %d %v %v", status, refusal, err)
@@ -330,6 +330,33 @@ func TestDropEntryWithholdsItFromReads(t *testing.T) {
 	}
 	if entry, err := env.entry(3); err != nil || entry == nil {
 		t.Errorf("the store lost the withheld entry: %v", err)
+	}
+}
+
+// A base's body is read up to server's 16 MiB JSON bound, past 4 MiB of rows and 4,096 pushes as base64, so a body
+// over 8 MiB reaches the walk, here refused for its pushes, and only one past 16 MiB is unread.
+func TestFakeApiReadsABaseUpToServersBodyBound(t *testing.T) {
+	world := newFakeApiTestWorld(t)
+	env := world.env
+	if err := env.start(world.api); err != nil {
+		t.Fatal(err)
+	}
+	owner := world.api.ClientToken(env.networkId, configLogSuiteId(), env.owner.sidecarId)
+	rows := env.baseOneRows(env.owner)
+	oversized := func(pushCount int) *fakeApiConfigProjectionPublishArgs {
+		args := &fakeApiConfigProjectionPublishArgs{SignedHeader: env.base(env.owner, env.tip, rows, 1, 1+uint64(pushCount)), Rows: rows}
+		for range pushCount {
+			args.ConfigPushes = append(args.ConfigPushes, make([]byte, 1024*1024))
+		}
+		return args
+	}
+	status, refusal, err := world.call(http.MethodPost, "/network/config/projection", owner, oversized(8), nil)
+	if err != nil || status != http.StatusForbidden || refusal["code"] != "config_refused" {
+		t.Errorf("a body of about 11 MiB: %d %v %v", status, refusal["code"], err)
+	}
+	status, refusal, err = world.call(http.MethodPost, "/network/config/projection", owner, oversized(13), nil)
+	if err != nil || status != http.StatusBadRequest {
+		t.Errorf("a body past 16 MiB: %d %v %v", status, refusal["code"], err)
 	}
 }
 

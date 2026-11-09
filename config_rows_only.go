@@ -318,9 +318,9 @@ var ErrConfigTipMoved = errors.New("config tip moved")
 // the header's version is not the tip's next or its prev_chain is not A_tip; else what applying it at the next
 // position would find, a signer that is no config writer at S(tip), a bad signature, rows that do not hash to
 // rows_sha256 or do not build, or either version below the newest base's, as an ErrConfigRefused. Nothing is kept and
-// no state changes, so a refused base is no fork here: it never reached the log. The config head's descent is not
-// judged, since a rows-only reader cannot read the head (plan-TEAM-api-config-head-reach). For the goroutine that
-// applies, as Apply is.
+// no state changes, so a refused base is no fork here: it never reached the log. A rows-only reader cannot read the
+// config head, so its descent is CheckConfigPushes's, from the pushes the base carries
+// (plan-TEAM-api-config-head-reach). For the goroutine that applies, as Apply is.
 func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 	if self.fork != nil {
 		return fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
