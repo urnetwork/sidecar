@@ -765,3 +765,17 @@ func mustHex(t testing.TB, text string) []byte {
 	}
 	return decoded
 }
+
+// A push carries one entry a document: two of one key are refused before anything is planned.
+func TestIndexHeadRefusesADocumentTwice(t *testing.T) {
+	world := testNewHeadWorld()
+	a := evsTestId("writer a")
+	view := world.view(t, a)
+	_, err := indexPlanHead(context.Background(), &indexHeadPlanArgs{
+		view: view, root: view.writeRoot(), writer: a, signedTimeMs: world.at.UnixMilli(), tables: testHeadTables,
+		pending: []*indexPendingDocument{testLive("d", 1, 2, 1, testHeadKeys(1, 1)), testRemoved("d", 1, 3)},
+	})
+	if !errors.Is(err, errIndexMalformed) {
+		t.Errorf("a document twice planned %v", err)
+	}
+}
