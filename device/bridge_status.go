@@ -31,6 +31,9 @@ type BridgeAlarmKind string
 const (
 	// The state in force carries rules that do not parse: the bridge holds none of them, which opens nothing.
 	BridgeAlarmRulesRefused BridgeAlarmKind = "rules_refused"
+	// Contracts whose sealed subject their delegation's subject does not bind, which the hook refused (§17.9's verify
+	// row, plan-BRIDGE-small-readings #17's principal_mismatch).
+	BridgeAlarmPrincipalMismatch BridgeAlarmKind = "principal_mismatch"
 )
 
 // One alarm, with what failed in words that carry no key, id or address.
@@ -46,6 +49,11 @@ type BridgeStatus struct {
 	HasDocument bool
 	// The newest verified pin's position, 0 before the first state.
 	PinN uint64
+	// The provider hook's table and the generation it has published (§17.6), and the delegations it has checked a
+	// signature of, one per contract.
+	PolicyProfile          BridgePolicyProfile
+	PolicyGeneration       uint64
+	PrincipalVerifiedCount uint64
 
 	// The network's block, the block a change replaced and when that one stops draining; invalid before a state names
 	// one (§17.4).

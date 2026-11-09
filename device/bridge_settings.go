@@ -15,6 +15,13 @@ type BridgeSettings struct {
 	Clock Clock
 	// The posture the bridge embeds. Nil is DefaultPostureSettings.
 	PostureSettings *PostureSettings
+	// Which of §17.6's tables the bridge's provider hook runs: a sidecar-owned host's, the zero value, or the sdk exit
+	// NAT's until C16 (BridgePolicyProfileSdkProvider).
+	PolicyProfile BridgePolicyProfile
+	// The revocations Bridge.Revoke holds between states, each until a state at or past its position confirms or
+	// reverses it: 4,096, as many as the posture's overlay. Past it Revoke refuses, and the next state, which carries
+	// the revocation, applies it. Positive.
+	RevocationMaxCount int
 
 	// The slots of the sender's pin table (§17.5's pins row): 8,192 on desktop, 1,024 on mobile. A pin keeps one live
 	// pair on its link where an entry offers a choice. With no free slot a pair routes by the hash, unpinned, and
@@ -73,6 +80,7 @@ func DefaultBridgeSettings() *BridgeSettings {
 		RejectEntryHoldTimeout: 600 * time.Second,
 		RulesMaxByteCount:      8 * 1024 * 1024,
 		RulesMaxFieldCount:     1024 * 1024,
+		RevocationMaxCount:     4 * 1024,
 	}
 }
 
@@ -114,6 +122,7 @@ func (self *BridgeSettings) validate() error {
 		{name: "RejectBurst", value: self.RejectBurst},
 		{name: "RulesMaxByteCount", value: self.RulesMaxByteCount},
 		{name: "RulesMaxFieldCount", value: self.RulesMaxFieldCount},
+		{name: "RevocationMaxCount", value: self.RevocationMaxCount},
 	}
 	for _, count := range positiveCounts {
 		if count.value <= 0 {
