@@ -1,0 +1,26 @@
+{
+  "comment": [
+    "§6's wire as M2 froze it (D-PROTO-20): each vector's bytes are proto.Marshal's of its fields, which",
+    "envelope_wire_test.go builds and holds byte-equal on every leg. A vector's bytes never change: a new vector",
+    "is added with SIDECAR_REGENERATE_WIRE_GOLDENS=1, which refuses to change one already here."
+  ],
+  "vectors": [
+    {"name":"a request","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":7,"request_id":"81985529216486895","timeout_ms":15000,"body":"EBESExQVFhcYGRobHB0eHyAhIiMkJSYn"},"wire":"0801100719efcdab89674523013098757a18101112131415161718191a1b1c1d1e1f2021222324252627"},
+    {"name":"its response","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":8,"request_id":"81985529216486895","flags":1,"body":"MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZH"},"wire":"0801100819efcdab896745230120017a18303132333435363738393a3b3c3d3e3f4041424344454647"},
+    {"name":"a refusal","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":6,"request_id":"81985529216486895","flags":3,"body":"CAY="},"wire":"0801100619efcdab896745230120037a020806"},
+    {"name":"a version refusal with the receiver's range","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":6,"request_id":"81985529216486895","flags":3,"body":"CA4oATAB"},"wire":"0801100619efcdab896745230120037a06080e28013001"},
+    {"name":"a ping","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":3,"request_id":"81985529216486895","timeout_ms":15000},"wire":"0801100319efcdab8967452301309875"},
+    {"name":"a pong","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":4,"request_id":"81985529216486895","flags":1},"wire":"0801100419efcdab89674523012001"},
+    {"name":"a cancel","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":5,"request_id":"81985529216486895","flags":8},"wire":"0801100519efcdab89674523012008"},
+    {"name":"a first chunk","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":10,"request_id":"81985529216486895","flags":5,"chunk":{"count":3,"total_byte_count":9000},"body":"QEFCQ0RFRkdISUpLTE1OTw=="},"wire":"0801100a19efcdab896745230120053a05100318a8467a10404142434445464748494a4b4c4d4e4f"},
+    {"name":"a final chunk","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":10,"request_id":"81985529216486895","flags":1,"chunk":{"index":2,"count":3,"total_byte_count":9000,"sha256":"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8="},"body":"UFFSU1RVVldYWVpbXF1eXw=="},"wire":"0801100a19efcdab896745230120013a290802100318a8462220a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf7a10505152535455565758595a5b5c5d5e5f"},
+    {"name":"a stream frame","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":516,"flags":8,"stream_id":"2","body":"CIAQEghgYWJjZGVmZw=="},"wire":"0801108404200828027a0d08801012086061626364656667"},
+    {"name":"the widest header","message":"urnetwork.sidecar.Envelope","fields":{"version":1,"type":5125,"request_id":"18446744073709551615","flags":15,"stream_id":"18446744073709551615","timeout_ms":55000,"chunk":{"index":4294967295,"count":4294967295,"total_byte_count":1048576,"sha256":"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8="}},"wire":"080110852819ffffffffffffffff200f28ffffffffffffffffff0130d8ad033a3208ffffffff0f10ffffffff0f188080402220a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"},
+    {"name":"a final chunk alone","message":"urnetwork.sidecar.Chunk","fields":{"index":4,"count":5,"total_byte_count":20064,"sha256":"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8="},"wire":"0804100518e09c012220a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"},
+    {"name":"an error with every field","message":"urnetwork.sidecar.Error","fields":{"code":5,"message":"response too large to keep","retry_after_ms":250,"result_ref":"cHFyc3R1dnd4eXp7fH1+fw=="},"wire":"0805121a726573706f6e736520746f6f206c6172676520746f206b65657018fa012210707172737475767778797a7b7c7d7e7f"},
+    {"name":"a version error","message":"urnetwork.sidecar.Error","fields":{"code":14,"min_version":1,"max_version":1},"wire":"080e28013001"},
+    {"name":"a hello","message":"urnetwork.sidecar.Hello","fields":{"min_version":1,"max_version":1,"secure_version":1,"features":"3","max_body_byte_count":262144,"initial_window":16384,"binding":"gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ipqqusra6v"},"wire":"080110011801200328808010308080013a30808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"},
+    {"name":"a hello result","message":"urnetwork.sidecar.HelloResult","fields":{"min_version":1,"max_version":1,"secure_version":1,"max_body_byte_count":262144,"initial_window":16384,"binding":"sLGys7S1tre4ubq7vL2+v8DBwsPExcbHyMnKy8zNzs/Q0dLT1NXW19jZ2tvc3d7f"},"wire":"08011001180128808010308080013a30b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf"},
+    {"name":"an edge's hello fields, none","message":"urnetwork.sidecar.Hello","fields":{},"wire":""}
+  ]
+}

@@ -2,7 +2,9 @@
 the presence countersignature (185, 187, 189), unlimited P0 writes outside the wear bound (186, 190), and the search
 pair's accounting windows (188, 191). Adds owner decisions 192-196 from the implementation handoff: a parking
 DelegationRevoke's countersignature (192), the G0 sign-off (193), the straight-through build (194), the minio fork
-(195) and the branch starts (196)."""
+(195) and the branch starts (196). Adds owner decision 197 (2026-11-09): the apps' network extensions run only IP
+and port forwarding, always on and self-contained, amending 87, and Android's sidecar runs only while the app is
+open, amending 12."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -45,17 +47,21 @@ INDEX = list(_P9['INDEX']) + [
     (196, "Branch starts",
      "A `sidecar` branch on all repos the work touches: warp's, config's, mmm's and vault's all open at M0, so §19.11 "
      "lands W5 at M0 and W2 and W8 by M4 on warp's branch."),
+    (197, "Q-SDK-2, Q-MAIL-2",
+     "Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and "
+     "self-contained with its own forwarding key, amending @@OD:87@@; Android's sidecar runs only while the app is "
+     "open, as iOS's does, amending @@OD:12@@."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
 INDEX[_i176] = (176, INDEX[_i176][1],
                 "Connect rounds the byte reports of phone-to-indexer search contracts up to 128 KiB, hiding up to five "
                 "search pages an hour. Amended by @@OD:188@@.")
-assert [r[0] for r in INDEX] == list(range(1, 197))
+assert [r[0] for r in INDEX] == list(range(1, 198))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
-              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06'})
+              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -66,15 +72,19 @@ DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
     "@@OD:176@@'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation "
     "handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed "
     "G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a "
-    "fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). " + _ANCHOR)
+    "fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the "
+    "build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, "
+    "always on and self-contained, and ran Android's sidecar only while the app is open (197), amending "
+    "@@OD:87@@ and @@OD:12@@. " + _ANCHOR)
 
 STATUS = ("Status: draft for peer review, revised 2026-11-04 after the first peer review (see "
           "[DESIGN-REVIEW-RESPONSE.md](DESIGN-REVIEW-RESPONSE.md)), on 2026-11-05 with the v1 additions of owner "
           "decisions 150-184 (versionless objects, the search index, CLI and MCP search, the indexer, the team directory "
           "and history drops), and on 2026-11-06 after the final meta review "
           "([DESIGN-REVIEW-META.md](DESIGN-REVIEW-META.md)), with owner decisions 185-191, and at the implementation "
-          "handoff, with owner decisions 192-196. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 "
-          "build on the `sidecar` branches (owner decision 194); nothing has shipped.")
+          "handoff, with owner decisions 192-196, and on 2026-11-09 with owner decision 197, on the apps' network "
+          "extensions. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build on the `sidecar` "
+          "branches (owner decision 194); nothing has shipped.")
 
 # Implementation handoff (2026-11-06): the branch policy said the documents join the repo on the `sidecar` branch,
 # but §4.3 and §4.11 put them on `main`, where they are; only code starts on `sidecar` (§4.8).

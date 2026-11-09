@@ -891,7 +891,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 ### 18.12 Decisions proposed
 
-**D-SDK-1 (proposed).** Two roles (18.4); network processes hold only the keyless device role. *Why:* owner decisions 4, 87; tunnel budgets.
+**D-SDK-1 (proposed).** Two roles (18.4): the sidecar role in the app or `ur daemon`, and in every app's VPN component only forwarding, which holds its own forwarding key and nothing else of sidecar. *Why:* owner decisions 4, 87, 197; tunnel budgets.
 
 **D-SDK-2 (proposed).** One `sdk.Sidecar` with local and remote backends and 18.5's gates. *Why:* PLAN.md:28 within gobind limits.
 
@@ -957,7 +957,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **Q-SDK-1.** [X14] What runs the extension's sidecar? **Decided by owner 2026-11-03 (owner decision 26):** (a), a slimmed `sidecar.wasm` Worker, HTTPS-only first, and meanwhile (c), the native companion to a desktop `ur daemon`; never a hosted sidecar (18.8). *Residual:* 18.10's size spike, which decides C17 for the extension's streaming Worker only (owner decision 22); pages use the `sidecar_http` leg (D-SDK-19).
 
-**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 (owner decision 87):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). *Residual:* none.
+**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 (owner decision 87):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). **Amended by owner 2026-11-09 (owner decision 197):** every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) runs the device's IP and port forwarding and nothing else of sidecar: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet, always on whenever the component runs, with no setting that turns it off, and self-contained, with its own forwarding key, taking rule changes directly so it never waits on the app (18.4, 18.6). Owner decision 87 holds for everything else, and on Android the sidecar role runs only while the app is open, as on iOS. *Residual:* none.
 
 **Q-SDK-3.** Do phones get wake pushes? **Decided by owner 2026-11-03 (owner decision 88):** (b), content-free APNs and FCM wakes from the first app hosts (M8; 18.7). *Residual:* none.
 

@@ -4,7 +4,7 @@
 // 512 B with connect's wrapper. The side that wants to talk sends Hello; the side that receives it checks
 // it (rpc_identity.go) and, if it verifies, opens its gate to the sender and answers HelloResult with
 // its own fields, which the sender checks in turn before it opens its own. Either side refuses with
-// Error{UNAUTHENTICATED} or Error{VERSION}, the code alone until Error carries a range
+// Error{UNAUTHENTICATED} or Error{VERSION}, which carries this side's range of wire majors
 // (plan-PROTO-version-error-range), and a refused Hello closes any gate that stood.
 //
 // A verified Hello stands for HelloCacheTimeout, until a frame under another C15 key, or until a send's

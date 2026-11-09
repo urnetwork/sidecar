@@ -446,8 +446,7 @@ func (self *Subprotocol) receive(source connect.TransferPath, envelope *protocol
 	}
 
 	// (1) size: envelopeCodec refused anything past §6.5's limits before this ran
-	// (2) the version major (§6.4); the receiver's range waits on Error's fields
-	// (plan-PROTO-version-error-range.md), so the code goes alone
+	// (2) the version major (§6.4), refused with this side's range (plan-PROTO-version-error-range.md)
 	if envelope.Version != WireVersionMajor {
 		self.stats.versionRefusedCount.Add(1)
 		refuse(protocol.ErrorCode_ERR_VERSION)

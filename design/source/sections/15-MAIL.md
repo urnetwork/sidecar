@@ -350,7 +350,7 @@ DSNs arrive at `b.<net>.<root>`, and receivers deposit them to the sending mailb
 
 **Q-MAIL-1.** [X6] How does mxedge route without terminating TLS? **Decided by owner 2026-11-03 (owner decisions 31, 34):** by SNI alone, with DANE TLSA; senders without SNI defer (15.4). *Residual:* none.
 
-**Q-MAIL-2.** [X6 residual] Which devices receive mail? **Decided by owner 2026-11-03 (owner decision 12):** always-on receivers, which owner decision 150 names mail indexers, and the iOS app in the foreground, which listens only while open and so is no reliable receiver (15.6). *Residual:* none.
+**Q-MAIL-2.** [X6 residual] Which devices receive mail? **Decided by owner 2026-11-03 (owner decision 12):** always-on receivers, which owner decision 150 names mail indexers, and the iOS app in the foreground, which listens only while open and so is no reliable receiver (15.6). **Amended by owner 2026-11-09 (owner decision 197):** Android with the VPN on is no longer an always-on receiver: the Android app, like the iOS app, receives only while it is open, so the always-on receivers are a desktop `ur daemon`, a NAS or a VPS. *Residual:* none.
 
 **Q-MAIL-3.** [X6 residual] What are the burner format and domain? **Decided by owner 2026-11-03 (owner decision 32, superseding owner decision 29):** `<name>@<blabel>.<net>.<root>` under the wildcard MX (15.9). *Residual:* none.
 
