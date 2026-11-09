@@ -14,7 +14,9 @@
 //     own; else UNAUTHENTICATED;
 //   - a sidecar_id the state does not name first gets one catch-up of the config, with no alarm, since
 //     its admission may have landed after this side last followed the log; still unknown after it,
-//     UNAUTHENTICATED;
+//     UNAUTHENTICATED, and it gets no second catch-up while the state stays at the position that one
+//     left it unknown at (HelloUnknownPeerCount of them remembered), so a peer cannot make each Hello
+//     cost a follow of the log;
 //   - the admission's identity key, else UNAUTHENTICATED and key_changed;
 //   - a generation no lower than the highest this side has seen for the sidecar_id, which persists as
 //     M1's pins did, so a replayed older binding cannot stand in for a newer one.
@@ -35,7 +37,8 @@
 //
 // A Hello stands until HelloCacheTimeout, while its peer's admission does: once the state moves past the
 // position the admission was read at, the next frame or call from or to that peer reads it again, and a
-// revocation or park closes the gate then (peerAdmissionStands).
+// revocation or park closes the gate then; an agent's ends at its not_after on this side's clock, the
+// state moved or not (peerAdmissionStands).
 
 package sidecar
 
@@ -179,6 +182,10 @@ type admissionIdentityPins struct {
 
 	catchUpLock sync.Mutex
 	catchUp     *admissionCatchUp
+	// sidecar_ids a catch-up left unknown, each with the state position it left them at, and their order,
+	// oldest first, so the oldest goes past HelloUnknownPeerCount
+	unknownSidecarIdVersions map[Id]uint64
+	unknownSidecarIds        []Id
 }
 
 // The admission source for a Subprotocol: its ctx, admissions and store, and where key_changed goes.
@@ -191,14 +198,49 @@ func newAdmissionIdentityPins(
 	raiseEvent func(event SidecarEvent),
 ) *admissionIdentityPins {
 	return &admissionIdentityPins{
-		ctx:                  ctx,
-		admissions:           admissions,
-		store:                store,
-		settings:             settings,
-		clock:                clock,
-		raiseEvent:           raiseEvent,
-		sidecarIdGenerations: map[Id]int64{},
+		ctx:                      ctx,
+		admissions:               admissions,
+		store:                    store,
+		settings:                 settings,
+		clock:                    clock,
+		raiseEvent:               raiseEvent,
+		sidecarIdGenerations:     map[Id]int64{},
+		unknownSidecarIdVersions: map[Id]uint64{},
 	}
+}
+
+// Whether a catch-up already left sidecarId unknown at stateVersion, so another would read nothing new.
+func (self *admissionIdentityPins) unknownAt(sidecarId Id, stateVersion uint64) bool {
+	self.catchUpLock.Lock()
+	defer self.catchUpLock.Unlock()
+	version, ok := self.unknownSidecarIdVersions[sidecarId]
+	return ok && version == stateVersion
+}
+
+// Remembers that a catch-up left sidecarId unknown at stateVersion, forgetting the oldest past
+// HelloUnknownPeerCount.
+func (self *admissionIdentityPins) noteUnknown(sidecarId Id, stateVersion uint64) {
+	self.catchUpLock.Lock()
+	defer self.catchUpLock.Unlock()
+	if _, ok := self.unknownSidecarIdVersions[sidecarId]; !ok {
+		self.unknownSidecarIds = append(self.unknownSidecarIds, sidecarId)
+	}
+	self.unknownSidecarIdVersions[sidecarId] = stateVersion
+	for self.settings.HelloUnknownPeerCount < len(self.unknownSidecarIds) {
+		delete(self.unknownSidecarIdVersions, self.unknownSidecarIds[0])
+		self.unknownSidecarIds = self.unknownSidecarIds[1:]
+	}
+}
+
+// Forgets sidecarId's unknown mark: its admission has been read.
+func (self *admissionIdentityPins) noteKnown(sidecarId Id) {
+	self.catchUpLock.Lock()
+	defer self.catchUpLock.Unlock()
+	if _, ok := self.unknownSidecarIdVersions[sidecarId]; !ok {
+		return
+	}
+	delete(self.unknownSidecarIdVersions, sidecarId)
+	self.unknownSidecarIds = slices.DeleteFunc(self.unknownSidecarIds, func(id Id) bool { return id == sidecarId })
 }
 
 // See identityPinSource and the file header: the admission must stand and name the binding's key, and
@@ -215,6 +257,10 @@ func (self *admissionIdentityPins) checkPin(ctx context.Context, sidecarId Id, i
 	stateVersion := authority.Pin().GetVersion()
 	admission := authority.Admission(sidecarId)
 	if admission == nil {
+		if self.unknownAt(sidecarId, stateVersion) {
+			// a catch-up already left it unknown here, and the state has not moved since
+			return nil, errHelloUnadmitted
+		}
 		// one catch-up, with no alarm: an admission that landed after this side last followed the log
 		if err := self.catchUpOnce(ctx, authority); err != nil {
 			return nil, err
@@ -224,6 +270,11 @@ func (self *admissionIdentityPins) checkPin(ctx context.Context, sidecarId Id, i
 		}
 		stateVersion = authority.Pin().GetVersion()
 		admission = authority.Admission(sidecarId)
+		if admission == nil {
+			self.noteUnknown(sidecarId, stateVersion)
+			return nil, errHelloUnadmitted
+		}
+		self.noteKnown(sidecarId)
 	}
 	if err := admissionStanding(admission, sidecarId, self.clock.Now().UnixMilli()); err != nil {
 		return nil, err
@@ -455,6 +506,16 @@ func (self *Subprotocol) peerAdmissionStands(sourceId connect.Id) bool {
 	}
 	stateVersion := authority.Pin().GetVersion()
 	if stateVersion == peer.AdmissionVersion {
+		// an agent's admission ends at its not_after whatever the state does (§7.9), so its Hello does
+		// too, read against the admission the Hello verified; one with no admission held stands for none
+		if peer.Admission == nil || peer.Admission.Row == nil {
+			self.forgetPeerIdentity(sourceId, peer)
+			return false
+		}
+		if notAfter := peer.Admission.Row.GetNotAfter(); notAfter != 0 && notAfter <= self.clock.Now().UnixMilli() {
+			self.forgetPeerIdentity(sourceId, peer)
+			return false
+		}
 		return true
 	}
 	if !self.admissions.Admitted() || admissionStanding(authority.Admission(peer.SidecarId), peer.SidecarId, self.clock.Now().UnixMilli()) != nil {

@@ -112,6 +112,10 @@ type Net struct {
 	// what the world's searches are judged against (search_oracle.go), made at first use
 	searchLedger *SearchLedger
 	searchOracle *SearchOracle
+
+	// the hint state residents and the api's long-poll read (push_net.go), made at first use
+	pushLock  sync.Mutex
+	pushPlane *netPush
 }
 
 // A fresh world. settings may be nil for the defaults. The caller closes it. Under sidecar_testhooks
@@ -182,6 +186,7 @@ func (self *Net) Close() {
 	}
 	self.exchange.close()
 	self.barriers.Close()
+	self.closePush()
 	self.fakes.Redis.Close()
 	self.cancel()
 	if self.removeHooks != nil {

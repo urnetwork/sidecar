@@ -28,6 +28,10 @@ type SidecarProtocolSettings struct {
 	// A call's timeout when its caller sets none: 15 s. The protocol's maximum is 55 s, before the 60 s
 	// sequence exit (§6.6).
 	DefaultCallTimeout time.Duration
+	// sidecar_ids Hello's admission check remembers a catch-up left unknown, each at the state position it
+	// left them at, so a Hello from one gets no second catch-up until the state moves and a peer cannot
+	// make every Hello cost a follow of the log: 1,024, the oldest forgotten past it (rpc_admission.go).
+	HelloUnknownPeerCount int
 	// How long a call waits before it sends again a request connect refused before the call's deadline,
 	// keeping its request_id (§6.6's failure rule): 250 ms, so a refusal that clears quickly costs little
 	// and one that does not costs a few sends a call.
@@ -110,6 +114,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		MarkedKeepaliveInterval:          60 * time.Second,
 		MarkedSessionTimeout:             120 * time.Second,
 		DefaultCallTimeout:               15 * time.Second,
+		HelloUnknownPeerCount:            1024,
 		CallSendRetryInterval:            250 * time.Millisecond,
 		PeerQueueMessageCount:            64,
 		ReassemblyMaxBodyByteCount:       256 * 1024,

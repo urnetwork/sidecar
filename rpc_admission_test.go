@@ -375,6 +375,50 @@ func TestHelloLateAdmissionPassesAfterCatchUp(t *testing.T) {
 	}
 }
 
+// A peer a catch-up left unknown gets no second one while the state stands at that position: its next
+// Hello is refused UNAUTHENTICATED at once. Once the state moves it gets one again, and the memory of
+// unknown peers stays within HelloUnknownPeerCount, the oldest forgotten.
+func TestHelloUnknownPeerCatchesUpOncePerPosition(t *testing.T) {
+	pair, authority, _, bIdentity := newTestAdmissionPair(t)
+	b := pair.add(bIdentity, nil)
+	stranger := newTestRpcIdentity()
+	c := pair.addViewing(stranger, newTestAdmissionView(stranger, bIdentity))
+	for range 3 {
+		if code, _ := SubprotocolErrorCode(c.subprotocol.EnsureHello(t.Context(), Id(b.clientId))); code != protocol.ErrorCode_ERR_UNAUTHENTICATED {
+			t.Errorf("an unknown peer: %v", code)
+		}
+	}
+	if authority.catchUps() != 1 {
+		t.Errorf("%d catch-ups for one unknown peer at one position", authority.catchUps())
+	}
+
+	// the state moves: one more catch-up, and the admission it brings passes
+	authority.admit(NewId(), newTestRpcIdentity().identitySeed, nil)
+	authority.setCatchUp(func(ctx context.Context) error {
+		authority.admit(stranger.sidecarId, stranger.identitySeed, nil)
+		return nil
+	})
+	if err := c.subprotocol.EnsureHello(t.Context(), Id(b.clientId)); err != nil {
+		t.Errorf("after the state moved: %v", err)
+	}
+	if authority.catchUps() != 2 {
+		t.Errorf("%d catch-ups after the state moved", authority.catchUps())
+	}
+
+	// the memory is bounded
+	pins := newAdmissionIdentityPins(t.Context(), nil, newTestMemoryStore(), &SidecarProtocolSettings{HelloUnknownPeerCount: 2}, newTestEnvelopeClock(), func(SidecarEvent) {})
+	first, second, third := NewId(), NewId(), NewId()
+	for _, sidecarId := range []Id{first, second, third} {
+		pins.noteUnknown(sidecarId, 7)
+	}
+	if pins.unknownAt(first, 7) || !pins.unknownAt(second, 7) || !pins.unknownAt(third, 7) || len(pins.unknownSidecarIds) != 2 {
+		t.Errorf("remembered %v", pins.unknownSidecarIds)
+	}
+	if pins.unknownAt(third, 8) {
+		t.Errorf("an unknown mark held past its position")
+	}
+}
+
 // A catch-up that fails reads nothing: the Hello is refused UNAVAILABLE, not as unknown.
 func TestHelloCatchUpFailureRefusesUnavailable(t *testing.T) {
 	pair, authority, _, bIdentity := newTestAdmissionPair(t)
@@ -539,6 +583,50 @@ func TestRevocationClosesAStandingHello(t *testing.T) {
 	}
 	if _, ok := b.subprotocol.PeerIdentity(Id(a.clientId)); ok {
 		t.Errorf("a revoked peer's identity is still served")
+	}
+}
+
+// An agent's admission ends at its not_after on the receiver's clock while the state stands still: a
+// Hello that stood closes, its next request is refused UNAUTHENTICATED, and the Hello Call runs then is
+// refused, well inside HelloCacheTimeout and with no entry landing.
+func TestAgentPastItsNotAfterLosesAStandingHello(t *testing.T) {
+	pair, authority, _, bIdentity := newTestAdmissionPair(t)
+	b := pair.add(bIdentity, nil)
+	agent := newTestRpcIdentity()
+	untilNotAfter := b.settings.HelloCacheTimeout / 10
+	notAfter := b.clock.Now().Add(untilNotAfter).UnixMilli()
+	authority.admit(agent.sidecarId, agent.identitySeed, func(admission *AclSidecar) {
+		tagId := NewId()
+		admission.MemberId = Id{}
+		admission.TagIds = []Id{tagId}
+		admission.Row.MemberId = nil
+		admission.Row.TagIds = [][]byte{tagId.Bytes()}
+		admission.Row.NotAfter = notAfter
+	})
+	agentSide := pair.add(agent, nil)
+	if _, err := b.subprotocol.Handle(testCallType, func(ctx context.Context, request *SubprotocolRequest) ([]byte, error) {
+		return []byte("answered"), nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	body, err := agentSide.subprotocol.Call(t.Context(), Id(b.clientId), testCallType, []byte("ask"), nil)
+	if err != nil || string(body) != "answered" {
+		t.Fatalf("before its not_after: %q %v", body, err)
+	}
+	stateVersion := authority.Pin().GetVersion()
+
+	// b's clock reaches the agent's not_after, its Hello's cache far from ending; the agent's own clock has
+	// not, so it still sends
+	b.clock.Advance(untilNotAfter)
+	_, err = agentSide.subprotocol.Call(t.Context(), Id(b.clientId), testCallType, []byte("ask"), nil)
+	if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_UNAUTHENTICATED {
+		t.Errorf("past its not_after: %v", err)
+	}
+	if b.subprotocol.peerVerified(agentSide.clientId) {
+		t.Errorf("an expired agent's Hello still stands")
+	}
+	if authority.Pin().GetVersion() != stateVersion {
+		t.Errorf("the state moved, so this shows nothing of not_after alone")
 	}
 }
 

@@ -1,0 +1,5 @@
+{
+  "comment": "Allocations per receive from connect's decode through dispatch, the release leg (rpc_receive_allocs_test.go). PROTO-M5-05 holds these as the baseline: no regression. go test -run TestReceiveAllocsHoldTheBaseline -update-receive-allocs rewrites this file.",
+  "request": 18,
+  "push": 18
+}
