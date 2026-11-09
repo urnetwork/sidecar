@@ -1,0 +1,56 @@
+# Each model's refusing mutants (TEST-M2-08; D-TEST-10, D-PHASE-7): a model that accepts a broken
+# protocol proves nothing, so every invariant a model's cfg checks names the mutants that break it.
+# A mutant is a twin: a value of the spec's Twin constant that breaks one rule of the design, run by
+# run-tlc.sh at the bounds its twin table gives, which TLC must refuse with this invariant violated.
+# modelled_test.go holds this file to run-tlc.sh's twin tables and each cfg's INVARIANT list, both
+# ways; model_test.go, under sidecar_tlc, runs the mutants.
+#
+# models      one per spec.
+#   spec      EvsCommit, StoreSettle or IndexRollup.
+#   invariants  every invariant of the spec's cfg.
+#     invariant  its name in the cfg.
+#     mutants    the twins that must violate it, each in run-tlc.sh's table for the spec.
+#     none       why it has no mutant yet, and who writes one; never empty with no mutants. A gate reads
+#                each of these open: an invariant no mutant has broken is unproven.
+
+models:
+  - spec: EvsCommit
+    invariants:
+      - {invariant: TypeOk, none: "the type invariant, which every mutant's run checks before its own and none can break alone"}
+      - {invariant: ClosureHolds, mutants: [EvacuateBeforeIndex]}
+      - {invariant: AnswersDeleteNothing, mutants: [AnswerDeletes]}
+      - {invariant: OutcomesHold, mutants: [UnrecordedRefusal, EarlyRefusalDrop, NoRetryLookup, CachedRefusal]}
+      - {invariant: NewestFound, mutants: [PageOutUnfolded, NoIfMatchFold, NoWindowWait, FoldIgnoresWindow, CopyOverwrites]}
+      - {invariant: EntriesCommitted, none: "no twin breaks it yet; EVS1-M2-02, the model's owner, adds one (an entry written before its version commits)"}
+      - {invariant: GcSafe, mutants: [GcNoFence, GcNoSecondCheck]}
+      - {invariant: FileCas, mutants: [StaleHorizon]}
+      - {invariant: VersionsRise, mutants: [VersionRestarts]}
+      - {invariant: PinsHold, mutants: [PinFalls, NoPinCheck]}
+      - {invariant: OneLadder, mutants: [LadderFork]}
+      - {invariant: LifecycleHolds, mutants: [RestoreAfterShred]}
+      - {invariant: GitTip, mutants: [GitPathCas]}
+      - {invariant: ReadsServeNewest, mutants: [ReaderStaleHorizon]}
+      - {invariant: F2Closure, mutants: [PurgeUnseen, EvacDropsNewest, DropNoAgeCheck]}
+      - {invariant: F2DeletesKeepRules, mutants: [PurgeNoAllowance, PurgeIgnoresHold, DropIgnoresHold]}
+      - {invariant: F2Cites, none: "no twin breaks it yet; EVSB-M10-07, owner of the M10 part, adds one (a drop deleting a version a retained citation names)"}
+      - {invariant: F2FenceHolds, mutants: [DropNoFence]}
+
+  - spec: StoreSettle
+    invariants:
+      - {invariant: TypeOk, none: "the type invariant, which every mutant's run checks before its own and none can break alone"}
+      - {invariant: NoStaleQuorum, mutants: [ReleaseOnCancel, NoVersionCheck, SettlerRevertsUnseen, HealMinority, NoDriveLock]}
+      - {invariant: ReadsSeeCurrent, none: "no twin breaks it yet; EVS1-M2-02 adds one (a read answered from fewer than a read quorum)"}
+      - {invariant: LateWritesNeverRead, mutants: [NoDeadlineCheck, RevertBelowQuorumOnly]}
+      - {invariant: RefusedNeverLands, none: "no twin breaks it yet; EVS1-M2-02 adds one (a refused write's drive commit left in place)"}
+
+  - spec: IndexRollup
+    invariants:
+      - {invariant: TypeOk, none: "the type invariant, which every mutant's run checks before its own and none can break alone"}
+      - {invariant: ResultsHold, mutants: [MergeDropsTombstone, EraseLiveFirst, ClosureNoCas, ReuseUnabsorbed, RollupForgetsHeads]}
+      - {invariant: BucketsExact, mutants: [NoStep4]}
+      - {invariant: ChainsResolve, mutants: [MergeDropsBase, DiffOnHeadDiff]}
+      - {invariant: OneVersionEach, none: "no twin breaks it yet; SEARCH-M10-02, the model's owner, adds one"}
+      - {invariant: RollsOnce, none: "no twin breaks it yet; SEARCH-M10-02 adds one (two rollers both committing a bucket)"}
+      - {invariant: EpochHolds, none: "no twin breaks it yet; SEARCH-M10-02 adds one"}
+      - {invariant: CutFences, mutants: [NoEpochCheck, BuildIgnoresSet]}
+      - {invariant: ErasedUnreadable, mutants: [EarlyComplete]}
