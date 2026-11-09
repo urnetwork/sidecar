@@ -6,6 +6,7 @@
 package sidecar
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -14,8 +15,9 @@ import (
 // One network's sidecar: its own Required client, durable sidecar_id and identity key (D-CORE-4,
 // D-CORE-5). Safe for concurrent use.
 //
-// §5.4's other fields arrive with what they name: keychain with CORE-M1-02, and leg and NewSidecar
-// with CORE-M1-08, which also sets sidecarApi and coreSecrets.
+// §5.4's keychain is the instance's, reached through coreSecrets (keys_keychain.go), so the Sidecar
+// keeps no root key of its own. NewSidecar (sidecar_new_connect.go on connect legs) sets what is set
+// once, and the run loop (sidecar_core.go) alone starts and ends the client generations.
 type Sidecar struct {
 	host     SidecarHost
 	settings *SidecarSettings
@@ -28,6 +30,21 @@ type Sidecar struct {
 	eventCallbacks *CallbackList[SidecarEventFunction]
 	// ServiceToken's cache, under its own lock (api_service_token.go).
 	serviceTokens sidecarServiceTokens
+	// Running totals for `ur status --stats` (sidecar_stats.go).
+	stats sidecarStats
+	// Raised for each change the run loop must look at that the instance's state does not show: an
+	// enrollment, a generation's end, a component added or removed, a close.
+	wakes *MonitorValue[uint64]
+
+	// Set once by NewSidecar. instance holds U and this network's keychain, shared with the
+	// instance's other Sidecars; leg is what only the leg runs.
+	instance *SidecarInstance
+	clock    Clock
+	leg      sidecarLeg
+	ctx      context.Context
+	cancel   context.CancelFunc
+	// Closed once the run loop has returned, with every generation joined and every component closed.
+	done chan struct{}
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
@@ -40,6 +57,16 @@ type Sidecar struct {
 	coreSecrets SidecarSecrets
 	// Ids, generation and public keys, never a private key. Nil until the keychain holds an identity.
 	identity *SidecarIdentity
+	// The network this sidecar is enrolled in: the host store's, or the one Enroll recorded. Nil before.
+	networkId *Id
+	// The client generation running, which only the run loop starts and ends. Nil when none runs.
+	generation *sidecarGeneration
+	// The newest generation a confirmed rejection ended. It does not start again: a re-enrollment binds
+	// the next one (D-CORE-8).
+	endedGeneration int64
+	// The instance state the run loop last acted on, so Failed alarms once each time it is entered.
+	instanceState SidecarInstanceState
+	closed        bool
 }
 
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,

@@ -31,13 +31,19 @@ type testMiekgZone struct {
 
 func newTestMiekgZone(t *testing.T, name string, algorithm uint8) *testMiekgZone {
 	t.Helper()
-	key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 300}, Flags: dns.ZONE | dns.SEP, Protocol: 3, Algorithm: algorithm}
 	bits := map[uint8]int{dns.RSASHA256: 2048, dns.ECDSAP256SHA256: 256, dns.ED25519: 256}[algorithm]
-	private, err := key.Generate(bits)
-	if err != nil {
-		t.Fatal(err)
+	// miekg/dns will not sign under a key whose tag is 0, and about one random key in 65536 has
+	// that tag, so such a key is drawn again.
+	for {
+		key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 300}, Flags: dns.ZONE | dns.SEP, Protocol: 3, Algorithm: algorithm}
+		private, err := key.Generate(bits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.KeyTag() != 0 {
+			return &testMiekgZone{name: name, key: key, signer: private.(crypto.Signer)}
+		}
 	}
-	return &testMiekgZone{name: name, key: key, signer: private.(crypto.Signer)}
 }
 
 func testMiekgPack(t *testing.T, rr dns.RR) []byte {

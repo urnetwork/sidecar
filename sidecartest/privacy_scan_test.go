@@ -177,7 +177,7 @@ func TestScanFindsANeedleAcrossAChunkBoundary(t *testing.T) {
 		}
 	}
 	// a stream past the view bound still scans whole, raw
-	matcher := newPrivacyMatcher(capture.needles)
+	matcher := newPrivacyMatcher(capture.needles, nil)
 	matcher.decode.MaxViewByteCount = 64
 	hits := 0
 	head, err := matcher.scanStream(iotest.OneByteReader(bytes.NewReader(haystack)), 64, func(pattern *privacyPattern, offset int64) { hits += 1 })
@@ -471,7 +471,7 @@ func benchmarkPrivacyScan(b *testing.B, byteCount int) {
 		capture.CanaryText(fmt.Sprintf("field %d", index))
 	}
 	capture.AddSecret("K_test", []byte("synthetic-key-bytes-of-a-bench"))
-	matcher := newPrivacyMatcher(capture.needles)
+	matcher := newPrivacyMatcher(capture.needles, nil)
 	random := rand.New(rand.NewChaCha8([32]byte{0xbe}))
 	body := make([]byte, byteCount)
 	for index := range body {
@@ -497,4 +497,83 @@ func BenchmarkPrivacyScan16MiB(b *testing.B) {
 
 func BenchmarkPrivacyScan64MiB(b *testing.B) {
 	benchmarkPrivacyScan(b, 64*1024*1024)
+}
+
+// A stream is opened where it starts: gzip, zstd and zlib's usual headers anywhere in a body, a zlib,
+// deflate or brotli stream at the body's start or after a NUL, the fakes' field separator. A deflate or
+// brotli stream inside text is not opened, which the self-test's Embeds names.
+func TestScanOpensAStreamWhereItStarts(t *testing.T) {
+	capture := NewPrivacyCapture()
+	text := capture.CanaryText("value")
+	// compressible, so no stored copy of the text is found by luck
+	payload := []byte(strings.Repeat(text, 3))
+	compressed := func(write func(out *bytes.Buffer)) []byte {
+		var out bytes.Buffer
+		write(&out)
+		return out.Bytes()
+	}
+	gzipped := compressed(func(out *bytes.Buffer) {
+		writer := gzip.NewWriter(out)
+		writer.Write(payload)
+		writer.Close()
+	})
+	zlibbed := compressed(func(out *bytes.Buffer) {
+		writer := zlib.NewWriter(out)
+		writer.Write(payload)
+		writer.Close()
+	})
+	deflated := compressed(func(out *bytes.Buffer) {
+		writer, _ := flate.NewWriter(out, flate.BestCompression)
+		writer.Write(payload)
+		writer.Close()
+	})
+	brotlied := compressed(func(out *bytes.Buffer) {
+		writer := brotli.NewWriter(out)
+		writer.Write(payload)
+		writer.Close()
+	})
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zstded := encoder.EncodeAll(payload, nil)
+	encoder.Close()
+	if bytes.Contains(gzipped, []byte(text)) || bytes.Contains(deflated, []byte(text[:16])) {
+		t.Fatal("the stream holds the text as it is")
+	}
+	inText := func(stream []byte) []byte {
+		return append(append([]byte("level=info msg=push body="), stream...), []byte(" done")...)
+	}
+	afterNul := func(stream []byte) []byte {
+		return append([]byte("{evs}key\x00"), stream...)
+	}
+	for _, planted := range []struct {
+		name  string
+		body  []byte
+		view  string
+		found bool
+	}{
+		{name: "gzip in text", body: inText(gzipped), view: "gzip", found: true},
+		{name: "zstd in text", body: inText(zstded), view: "zstd", found: true},
+		{name: "zlib in text", body: inText(zlibbed), view: "zlib", found: true},
+		{name: "deflate after a NUL", body: afterNul(deflated), view: "deflate", found: true},
+		{name: "brotli after a NUL", body: afterNul(brotlied), view: "brotli", found: true},
+		{name: "deflate in text", body: inText(deflated), found: false},
+		{name: "brotli in text", body: inText(brotlied), found: false},
+	} {
+		found := NewPrivacyCapture()
+		found.needles = capture.needles
+		found.Add(PrivacyClassLog, "log", planted.body)
+		findings := found.Scan()
+		opened := false
+		for _, finding := range findings {
+			opened = opened || finding.View == planted.view
+		}
+		if planted.found && !opened {
+			t.Errorf("%s: %v", planted.name, findings)
+		}
+		if !planted.found && len(findings) != 0 {
+			t.Errorf("%s was opened, so the self-test's Embeds is out of date: %v", planted.name, findings)
+		}
+	}
 }

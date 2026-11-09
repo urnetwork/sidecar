@@ -16,7 +16,7 @@ else
 modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop ../sidecarctl
 endif
 
-.PHONY: check size proto metadata stack-test
+.PHONY: check leaktest size proto metadata stack-test
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
@@ -34,7 +34,14 @@ check:
 		echo "go test -tags sidecar_testhooks in $$module"; \
 		(cd $$module && $(GO) test -count=1 -timeout $(TEST_TIMEOUT) -tags sidecar_testhooks ./...); \
 	done
+	$(MAKE) leaktest GO="$(GO)"
 	cd check && $(GO) test -count=1 -timeout $(TEST_TIMEOUT) -tags sidecar_check
+
+# §22.7's self-test, the leak leg: a sidecar_leaktest build leaks a canary into each capture class,
+# which must catch it (sidecartest/leak_enabled.go), and the untagged legs above only skip it. Only
+# sidecartest links leaks, and check/ fails a release leg built with the tag.
+leaktest:
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -tags sidecar_leaktest ./sidecartest/...
 
 # §4.9's size gates, which build and link, so they are not part of make check. check/size_test.go
 # says what is measured. The ios_extension leg needs Xcode.

@@ -172,6 +172,8 @@ type PrivacyCapture struct {
 	// built from needles when Scan first needs it, and again when needles change
 	matcher            *privacyMatcher
 	matcherNeedleCount int
+	// forms the scanner leaves out, which only the self-test's mutants set (leak_test.go)
+	withoutForms []string
 }
 
 func NewPrivacyCapture() *PrivacyCapture {
@@ -326,7 +328,7 @@ func (self *PrivacyCapture) Scan() []*PrivacyFinding {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		if self.matcher == nil || self.matcherNeedleCount != len(self.needles) {
-			self.matcher = newPrivacyMatcher(self.needles)
+			self.matcher = newPrivacyMatcher(self.needles, self.withoutForms)
 			self.matcherNeedleCount = len(self.needles)
 		}
 		matcher = self.matcher

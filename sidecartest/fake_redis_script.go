@@ -145,6 +145,24 @@ func (self *FakeRedisScriptCall) HashGet(key string, field string) ([]byte, bool
 	return bytes.Clone(value.value), true, nil
 }
 
+// HGETALL: an absent key is an empty map.
+func (self *FakeRedisScriptCall) HashGetAll(key string) (map[string][]byte, error) {
+	if err := self.check(key); err != nil {
+		return nil, err
+	}
+	entry, err := self.redis.hashEntryWithLock(key)
+	if err != nil {
+		return nil, err
+	}
+	fieldValues := map[string][]byte{}
+	if entry != nil {
+		for field, value := range entry.fields {
+			fieldValues[field] = bytes.Clone(value.value)
+		}
+	}
+	return fieldValues, nil
+}
+
 func (self *FakeRedisScriptCall) HashSet(key string, fieldValues map[string][]byte) error {
 	if err := self.check(key); err != nil {
 		return err

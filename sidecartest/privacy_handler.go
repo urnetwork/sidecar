@@ -52,8 +52,11 @@ func (self *PrivacyCapture) WrapHandler(engineName string, handler http.Handler)
 		responseHead := &bytes.Buffer{}
 		fmt.Fprintf(responseHead, "%d\n", recording.statusCode())
 		recording.Header().Write(responseHead)
-		self.AddItem(&PrivacyItem{Class: PrivacyClassHandler, Name: engineName + " request", Body: append(requestHead.Bytes(), requestBody.Bytes()...)})
-		self.AddItem(&PrivacyItem{Class: PrivacyClassHandler, Name: engineName + " response", Body: append(responseHead.Bytes(), recording.body.Bytes()...)})
+		// heads and bodies apart, so a body that is a compressed stream opens from its start
+		self.AddItem(&PrivacyItem{Class: PrivacyClassHandler, Name: engineName + " request head", Body: requestHead.Bytes()})
+		self.AddItem(&PrivacyItem{Class: PrivacyClassHandler, Name: engineName + " request body", Body: requestBody.Bytes()})
+		self.AddItem(&PrivacyItem{Class: PrivacyClassHandler, Name: engineName + " response head", Body: responseHead.Bytes()})
+		self.AddItem(&PrivacyItem{Class: PrivacyClassHandler, Name: engineName + " response body", Body: recording.body.Bytes()})
 
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

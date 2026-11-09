@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -97,6 +98,20 @@ func (self *privacyWriter) bytes() []byte {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return bytes.Clone(self.body.Bytes())
+}
+
+// A leak, for §22.7's self-test (leak_enabled.go): Put puts value into Class's real path on net, as a
+// bug would. Leaks link only under sidecar_leaktest.
+type Leak struct {
+	Class PrivacyClass
+	// The path holds any byte. One that holds text alone, an environment value or a metric label, is
+	// leaked only the printable forms.
+	Binary bool
+	// The path puts the value inside text of its own, a log line's prefix, a metric's name and labels, a
+	// JSON document, where a deflate or brotli stream, which carries no magic, is not opened
+	// (privacy_decompress.go), so the self-test leaks those two forms through the other paths alone.
+	Embeds bool
+	Put    func(t testing.TB, net *Net, value []byte)
 }
 
 // CC4: an environment a process ran with, as os.Environ gives it, under source.
