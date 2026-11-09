@@ -100,10 +100,13 @@ func NewDropUsageBatchId(scanId connect.Id, cursorFrom []byte, cursorTo []byte) 
 
 // CountRate's keys for evs (§20.7's counters; §11.7, §11.12, §11.13), counted on the network's
 // {sq_<network_id>}. A key is its family, then ':' and the id it names when it names one. The window a
-// count lands in is the Quota's to tell from its clock, so no key carries a time.
+// count lands in is the Quota's to tell from its clock, so no key carries a time. A replayed debit id
+// answers its first result, a refusal included (QUOTA-M2-03), so a caller asking again after a refusal's
+// retry_after_ms takes a new debit id.
 const (
 	// The network's ERASE, CUT and CLOSURE pushes, 60 a minute. A refusal only classes the push: past
-	// the rate it queues as P1 and still commits (§11.12's push row).
+	// the rate it queues as P1 and still commits (§11.12's push row). Count it in a call of its own, since
+	// under all-or-none its refusal would also stop the call's other keys.
 	QuotaRateKeyErasurePush = "evs_erasure_pushes"
 	// The network's drop-history actions, evs_drops_per_day a UTC day (§11.7). A cancel never counts,
 	// and a drop spends no closure allowance (owner decision 146).
