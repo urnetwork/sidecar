@@ -337,6 +337,13 @@ rows:
     targets:
       - {name: FuzzMailRecipient, package: ".", seeds: [testdata/fuzz/FuzzMailRecipient]}
 
+  - id: mail-index-segments
+    spec: "MAIL-M7-06's Tests line: FuzzMailIndexSegment, total and memory-bounded"
+    owner: MAIL-M7-06
+    milestone: M7
+    targets:
+      - {name: FuzzMailIndexSegment, package: ".", seeds: [testdata/fuzz/FuzzMailIndexSegment]}
+
   - id: mta-sts
     spec: "SMTP-M9-06's Tests line: the MTA-STS policy and TXT grammars"
     owner: SMTP-M9-06
