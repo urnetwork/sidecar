@@ -530,3 +530,149 @@ paths:
   - name: burner
     label: otter-4821
     path: "burner/f4/otter-4821"
+
+# One f/ segment's ops and each key's winning op under MAIL-FORMAT.md's order, both MailFlagSegments from protoc, the
+# winners in (message_id, op, label) order: two writers' equal clocks, one writer's set and clear at one clock, a
+# verdict changed, a trash and a label. mail_flags_test.go merges the ops in every order it tries and holds the winners
+# to these bytes.
+flag_merges:
+  - name: ties-and-verdicts
+    ops: "0a320a10111111111111111111111111111111111001180128808080a0fbc4ebd0013a10010101010101010101010101010101010a300a1011111111111111111111111111111111100128808080a0fbc4ebd0013a10020202020202020202020202020202020a320a10111111111111111111111111111111111002180128818080a0fbc4ebd0013a10010101010101010101010101010101010a300a1011111111111111111111111111111111100228818080a0fbc4ebd0013a10010101010101010101010101010101010a380a10111111111111111111111111111111111003180122047370616d28828080a0fbc4ebd0013a10010101010101010101010101010101010a3c0a10111111111111111111111111111111111003180122086e6f742d7370616d28838080a0fbc4ebd0013a10020202020202020202020202020202020a360a1011111111111111111111111111111111100322047370616d28848080a0fbc4ebd0013a10020202020202020202020202020202020a320a10222222222222222222222222222222221004180128858080a0fbc4ebd0013a10020202020202020202020202020202020a380a1022222222222222222222222222222222100318012204776f726b28808080a0fbc4ebd0013a10010101010101010101010101010101010a360a102222222222222222222222222222222210032204776f726b28808080a0fbc4ebd0013a10010101010101010101010101010101010a320a10222222222222222222222222222222221001180128868080a0fbc4ebd0013a10010101010101010101010101010101010a320a10222222222222222222222222222222221001180128868080a0fbc4ebd0013a1001010101010101010101010101010101"
+    ops_text: |
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_SEEN
+        set: true
+        hlc: 117566550835200000
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_SEEN
+        hlc: 117566550835200000
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_FLAGGED
+        set: true
+        hlc: 117566550835200001
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_FLAGGED
+        hlc: 117566550835200001
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_LABEL
+        set: true
+        label: "spam"
+        hlc: 117566550835200002
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_LABEL
+        set: true
+        label: "not-spam"
+        hlc: 117566550835200003
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_LABEL
+        label: "spam"
+        hlc: 117566550835200004
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_TRASH
+        set: true
+        hlc: 117566550835200005
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_LABEL
+        set: true
+        label: "work"
+        hlc: 117566550835200000
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_LABEL
+        label: "work"
+        hlc: 117566550835200000
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_SEEN
+        set: true
+        hlc: 117566550835200006
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_SEEN
+        set: true
+        hlc: 117566550835200006
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+    winners: "0a300a1011111111111111111111111111111111100128808080a0fbc4ebd0013a10020202020202020202020202020202020a320a10111111111111111111111111111111111002180128818080a0fbc4ebd0013a10010101010101010101010101010101010a3c0a10111111111111111111111111111111111003180122086e6f742d7370616d28838080a0fbc4ebd0013a10020202020202020202020202020202020a360a1011111111111111111111111111111111100322047370616d28848080a0fbc4ebd0013a10020202020202020202020202020202020a320a10222222222222222222222222222222221001180128868080a0fbc4ebd0013a10010101010101010101010101010101010a380a1022222222222222222222222222222222100318012204776f726b28808080a0fbc4ebd0013a10010101010101010101010101010101010a320a10222222222222222222222222222222221004180128858080a0fbc4ebd0013a1002020202020202020202020202020202"
+    winners_text: |
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_SEEN
+        hlc: 117566550835200000
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_FLAGGED
+        set: true
+        hlc: 117566550835200001
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_LABEL
+        set: true
+        label: "not-spam"
+        hlc: 117566550835200003
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+        op: MAIL_FLAG_LABEL
+        label: "spam"
+        hlc: 117566550835200004
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_SEEN
+        set: true
+        hlc: 117566550835200006
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_LABEL
+        set: true
+        label: "work"
+        hlc: 117566550835200000
+        sidecar_id: "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
+      }
+      ops {
+        message_id: "\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22\x22"
+        op: MAIL_FLAG_TRASH
+        set: true
+        hlc: 117566550835200005
+        sidecar_id: "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02"
+      }

@@ -167,6 +167,10 @@ barrier keys.rotate.after keys_rotate.go
 barrier keys.rotate.before keys_rotate.go
 barrier keys.unlock.after keys_unlock.go
 barrier keys.unlock.before keys_unlock.go
+barrier mail.flags.write.after mail_flags.go
+barrier mail.flags.write.before mail_flags.go
+barrier mail.index.write.after mail_index_segment.go
+barrier mail.index.write.before mail_index_segment.go
 barrier mxedge.closed_handshake_read.after mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_read.before mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_write.after mxedgeservice/closed_handshake.go
