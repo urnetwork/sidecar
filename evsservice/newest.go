@@ -51,6 +51,9 @@ type EvsCommittedChange struct {
 	EntrySha256      []byte
 	// The EvsEntryVersion bytes the change writes, as received; nil for a removal.
 	EntryVersion []byte
+	// While the head lists sources: the EvsSourcePath encodings naming the path in each source that may hold it
+	// (§11.6's read row), which a fold carries from (§11.7's epochs row). Empty otherwise.
+	SourcePaths [][]byte
 }
 
 // Whether the change removes its path.
@@ -366,6 +369,8 @@ type recordPush struct {
 	sealParts   []*sidecar.EvsSealPart
 	partChanges map[int][]*EvsCommittedChange
 	sealed      bool
+	// a sealed push's every change, checked whole as its seal, once a fold read them all (fold.go)
+	allChanges []*EvsCommittedChange
 }
 
 // A source for one ref of one repo on its cluster.
@@ -519,6 +524,7 @@ func committedChanges(checkedChanges []*sidecar.EvsCheckedChange) []*EvsCommitte
 			BaseEntryVersion: checked.Change.GetBaseEntryVersion(),
 			EntrySha256:      checked.Change.GetEntrySha256(),
 			EntryVersion:     checked.EntryVersion,
+			SourcePaths:      checked.SourcePaths,
 		}
 	}
 	return changes

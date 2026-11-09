@@ -219,6 +219,12 @@ var failsOnRows = []failsOnRow{
 	},
 
 	{
+		row: "legs", item: "the every-leg runner's table and these legs differing, either way (TEST-M1-07)",
+		checkoutTest: "TestLegRunnerTableMatchesCheck",
+		plantedTests: []string{"TestLegRunnerTableFailsOnADrift"},
+	},
+
+	{
 		row: "cgo", item: "CgoFiles anywhere in this repository, except keychain_darwin.go",
 		rule: (*repository).cgoSourceFindings,
 		plantedTests: []string{
