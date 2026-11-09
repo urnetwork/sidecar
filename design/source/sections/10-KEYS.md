@@ -223,14 +223,18 @@ covered(s, R)  = s was admitted under a Delegation d with delegation(d) ∈ KeyH
 reach(d)       = the config, in a team network the directory, and each repo that a read or write grant
                  naming one of d's tags reads (the grants §8.6's ceiling counts for a tag a sidecar carries);
                  every agent d admits carries exactly d's tag_ids (§7.9's scoped), so a covered agent reads
-                 each repo d's key opens
+                 each repo d's key opens; a forwarding Delegation's is the config alone (owner decision 197)
 live(d)        = d has not ended (§7.9's delegation row) at S, t < d.not_after, and no Suspend, and no
-                 revocation for any reason but reaped, of a sidecar d admitted precedes S; d.key_dropped_at
+                 revocation for any reason but reaped, of a sidecar d admitted precedes S; a forwarding d is
+                 live while §7.9's forwarding row keeps it, with no not_after, and while its sidecar holds keys
+                 (not parked or suspended); d.key_dropped_at
                  is the position of the first such Suspend or revocation, or of d's end, and no Unsuspend
                  undoes it; an ephemeral covered agent's own not_after drops nothing, as its reap does not,
                  since it can close itself, and api can reap it, at any time before (§7.7), and §7.9's
                  scoped rule refuses a non-ephemeral one whose not_after precedes d's
-identity bytes = kind byte (1 leaf, 2 agent, 3 delegation, 4 recovery) || sidecar_id | delegation_id | member_id
+identity bytes = kind byte (1 leaf, 2 agent, 3 delegation, 4 recovery, 5 forwarding) || sidecar_id | delegation_id
+                 | member_id | a forwarding Delegation's sidecar_id, so a newer forwarding Delegation of one
+                 sidecar keeps its holder's identity, as a ReaderKey replacement does
 readerkey  every reader, leaves included, keeps a current ReaderKey at gkm/rk/<sidecar_id>, replacing it with a
            fresh X-Wing pair once it is 6 days old, its not_after at most 7 days after signing, never re-signing
            an old pair, and keeping a replaced or lapsed private key until 30 days past its not_after, for the
@@ -241,8 +245,8 @@ readerkey  every reader, leaves included, keeps a current ReaderKey at gkm/rk/<s
            new key, which one to an older key never blocks (10.6, 10.9)
 covered    a covered agent reads R through its Delegation's wrap and holds no ReaderWrap there; it holds a key
            in its own right only where a grant names it
-dwraps     the admin device that signs a Delegation writes late DelegationWraps of the current generation of
-           every repo it can read in the Delegation's reach; any holder but a read_only one writes the rest
+dwraps     the device that signs a Delegation, an admin's or for a forwarding one its sidecar's (§18.6), writes
+           late DelegationWraps of the current generation of every repo it can read in the Delegation's reach; any holder but a read_only one writes the rest
            on wrap-pending (10.9's late row); every rotation stages one per live Delegation in H
 signer     every GenRotate is signed by a holder of R's key, or one covered, at a pin covering what it rotates
            for (a writer of R, or a config statement signer; 10.9), so a dropped sidecar, whose ReaderKey and
@@ -283,7 +287,12 @@ removal of a member device                leaf(s) leaves                      sh
                                                                               at once
 ReaderKey lapse or replacement; a move    none                                none; its holder gets a late
   between leaf and wrap (owner decisions                                      delivery to its new key (10.9)
-  144, 182)
+  144, 182); a newer forwarding
+  Delegation of a sidecar (owner decision
+  197)
+DelegationRevoke of a forwarding          the forwarding holder of its        shrink: a REMOVE rotation of the
+  Delegation, or its sidecar's            sidecar leaves                      config excludes it; path epoch in
+  revocation                                                                  24 h, at once for compromise
 ```
 
 **Residual (owner decision 114).** Every holder of a Delegation's reader key reads every later generation of the Delegation's reach (the config, a team network's directory and its tag repos) until the key drops: each agent it admitted, reaped ones and ephemeral ones past their own `not_after` included, since such an agent can close itself, and api can reap it, before any cutoff keyed to that `not_after` (§7.7), and each copy of its auth key. The key drops, at its position, at `DelegationRevoke`, at a revocation for any reason but reaped or a `Suspend` of one of its agents, and at a compromise revocation whose closure voids the Delegation (§7.9's cascade), and at `not_after`; reaping an agent does not drop it. A copy of the whole auth-key bundle also holds the Delegation's signing seed, which no honest daemon's erasure reaches: it admits fresh agents, uncovered once the key has dropped and so reading by their own ReaderWraps, until the Delegation ends at its `DelegationRevoke`, its void or a compromise revocation of one of its agents, or passes `not_after` or `max_admits`, after which api and every reader refuse its admissions, whatever bearer or client the operator supplies (§7.9's delegation row). A lost or removed revocation, or a `Suspend`, thus retires the key but not the admission authority; the revoking device's plan says so and offers `DelegationRevoke`, whose `since_n`, like a compromise revocation's, parks the agents the Delegation admitted from that position on (§7.10's agents row). Bounds: `not_after` is required, at most 90 days (§7.8); `max_admits` counts every admission for the Delegation's life; the console gives CI and cloud Delegations 30 days and replaces them (a new Delegation, then `DelegationRevoke` of the old) at each CI secret rotation and after a key drop.
@@ -762,7 +771,7 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 
 **D-KEYS-15 (proposed).** `gkm/<group_id>/gen/<g>`, created If-None-Match by the rotating writer, is the only place a generation exists; MLS commits never raise the generation, and a removal is a Remove commit followed by an independent rotation (10.5). *Why:* two paths minting g+1 fork the ladder; one claim object serializes every rotator (owner decisions 1, 114, 128).
 
-**D-KEYS-16 (proposed).** KeyHolders are leaves (in the config and directory groups, member devices past their first 1,000 by wrap), uncovered agents, live Delegations over their reach (the config, a team's directory and the repos a grant names one of their tags for) and recovery keys; live Delegations get DelegationWraps keyed by delegation_id; a covered agent's reap, or an ephemeral one's own `not_after`, is no shrink, and a Delegation's key drops at its end (`DelegationRevoke`, a void, or a compromise revocation of one of its agents; §7.9), at `not_after`, and at any other revocation but a reap, or any `Suspend`, of one of its agents, which no `Unsuspend` undoes (10.5). *Why:* owner decision 114's read-at-once, bounded, with no dropped party signing the rotation that excludes it; a suspended agent must lose what the server can still deliver to its Delegation's key, and an ephemeral agent can close itself, or api reap it, before any cutoff keyed to its own expiry.
+**D-KEYS-16 (proposed).** KeyHolders are leaves (in the config and directory groups, member devices past their first 1,000 by wrap), uncovered agents, live Delegations over their reach (the config, a team's directory and the repos a grant names one of their tags for; a forwarding Delegation's, the config alone, its holder its sidecar's forwarding, which a newer one keeps; owner decision 197) and recovery keys; live Delegations get DelegationWraps keyed by delegation_id; a covered agent's reap, or an ephemeral one's own `not_after`, is no shrink, and a Delegation's key drops at its end (`DelegationRevoke`, a void, or a compromise revocation of one of its agents; §7.9), at `not_after`, and at any other revocation but a reap, or any `Suspend`, of one of its agents, which no `Unsuspend` undoes (10.5). *Why:* owner decision 114's read-at-once, bounded, with no dropped party signing the rotation that excludes it; a suspended agent must lose what the server can still deliver to its Delegation's key, and an ephemeral agent can close itself, or api reap it, before any cutoff keyed to its own expiry.
 
 **D-KEYS-17 (proposed).** Drop keys ride each generation's signed GenRotate, only for kinds that take deposits; a depositor seals only to a generation that covers every shrink and expiry it knows and is not below its pin; the deposit scope reaches only the drop-key route (10.6, 10.14). *Why:* a stale but unexpired drop key would reach a removed reader.
 
@@ -865,6 +874,8 @@ use       the recipient opens only a delivery to itself and to a key it holds wh
 | The unreviewed in-house MLS misreads RFC 9420 or skips a check (owner decision 99) | Medium | Critical | 10.4's subset, conformance plan and 0x0010 gate; disclosure (§2.18, owner decision 119) |
 | IANA assigns this suite another value, or X-Wing changes | Medium | Medium | Migration through GroupForm and the ladder (owner decision 44) |
 | An operator substitutes a network's first device at trust on first use | Low | High | Safety numbers; genesis in invites and auth keys |
+| Every app device's forwarding Delegation adds a DelegationWrap of about 1.2 KB to each config rotation, about 6 MB at a 5,000-device team's (owner decision 197) | High | Low | config rotations follow removals and the 30-day schedule, not rule edits; a newer forwarding Delegation is no shrink (10.5) |
+| A copied forwarding reader key opens the config generations wrapped to it until its Delegation ends | Low | Medium | it never leaves the VPN component (§5.9); the app rotates it at every new client generation and after 90 days; `DelegationRevoke` shrinks the config at once (10.5) |
 | A member stalls a group with a commit the others refuse | Low | Medium | Alarms; revocation; re-forming (10.9) |
 | A rogue or compromised admin admits a device under a member | Medium | Medium | Consent gates owner-bound repos (owner decision 126; 10.9); the member's devices alarm (§5.4); team repos stay readable until revocation |
 | A removed leaf stays in a repo's MLS tree until a writer leaf commits its Remove (owner decisions 114, 144, 182) | Medium | Low | Wrapped writers' rotations reopen the gate meanwhile, and no leaf wrap uses an epoch that holds it (10.5); hints wake writer leaves |
