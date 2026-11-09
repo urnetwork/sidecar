@@ -914,6 +914,9 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 	sshsig := register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, nil)
 	sshsig.Purpose = bridge.KeyPurpose_KEY_PURPOSE_SSHSIG
 	refused = append(refused, sshsig)
+	// a format §16.6 does not name, refused as such before any client data is asked for
+	unknownFormat := testAttestObject("fido-u2f", testCborMap{}, testAttestAuthData(credential, testAttestFlags))
+	refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, unknownFormat))
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self") {
 		refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).object(t, format)))
 	}

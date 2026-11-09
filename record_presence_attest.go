@@ -18,7 +18,10 @@
 //
 // The attestation object is parsed by record_presence_cbor.go's canonical reader, and certificates by crypto/x509, so
 // the root adds no module. Certificate chains are checked at the time the caller judges the registration at, the
-// carrying entry's for a log reader, so every reader of one log labels one key alike under one release.
+// carrying entry's for a reader labelling a logged key, so readers of one log under one release label one key alike.
+// Releases pin different roots, so a label can differ between releases: the device about to sign a KeyRegister runs
+// this and refuses a failing attestation, and question mcp-m2-01-attestation-in-the-log-rule asks whether §7.9's rule,
+// which every reader must judge alike, may read the attestation at all.
 //
 // No key is created, derived or unwrapped here, so nothing calls testHookSecret. Package-level functions are safe for
 // concurrent use. On every leg: nothing here names a connect type.
@@ -158,8 +161,8 @@ func presenceReleaseAttestationRoots() *presenceAttestationRoots {
 	}
 }
 
-// The label of a presence key's KeyRegister, judged at atMillis, the carrying entry's time for a log reader and now for
-// the device about to sign one: asserted or attested, or a refusal (above). register's own proof is
+// The label of a presence key's KeyRegister, judged at atMillis, now for the device about to sign one and the carrying
+// entry's time for a reader labelling a logged key: asserted or attested, or a refusal (above). register's own proof is
 // VerifyPresenceRegistration's, which a caller runs too.
 //
 // KeyRegister.attestation is read as the raw attestation object (QD-445): fmt none or an empty field labels a
@@ -238,6 +241,9 @@ func verifyPresenceAttestationObject(
 		}
 		return PresenceLabelAsserted, nil
 	}
+	if !slices.Contains([]string{"packed", "tpm", "android-key", "apple"}, formatName) {
+		return 0, fmt.Errorf("%w: fmt %q", ErrPresenceAttestation, formatName)
+	}
 	if clientDataHash == nil {
 		return 0, fmt.Errorf(
 			"%w: fmt %q signs client data KeyRegister does not carry (question mcp-m2-01-attestation-client-data)",
@@ -257,10 +263,9 @@ func verifyPresenceAttestationObject(
 		return verifyPresenceTpm(statement, authData, signedData, roots.tpm, at)
 	case "android-key":
 		return verifyPresenceAndroidKey(statement, authData, signedData, clientDataHash, roots.androidKey, at)
-	case "apple":
+	default:
 		return verifyPresenceApple(statement, authData, signedData, roots.apple, at)
 	}
-	return 0, fmt.Errorf("%w: fmt %q", ErrPresenceAttestation, formatName)
 }
 
 // What an attestation's authenticator data holds (WebAuthn §6.1, §6.5.1).
