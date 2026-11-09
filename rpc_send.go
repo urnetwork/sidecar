@@ -31,24 +31,27 @@ var (
 	errSubprotocolSendRefused = errors.New("subprotocol send refused")
 )
 
-// Sends one envelope to destinationId, waiting at most timeout for connect to take it, with opts as
-// connect's send options: connect.SendSubprotocolWithTimeout's contract, which internal tests stand in
-// for.
-type subprotocolSendFunction func(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) (bool, error)
+// Sends one envelope to destinationId, waiting at most timeout for connect to take it, with ack as
+// connect's frame ack and opts as its send options: connect.SendSubprotocolWithTimeout's contract, which
+// internal tests stand in for.
+type subprotocolSendFunction func(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) (bool, error)
 
-// One answer the dispatcher gives itself: a refusal, as type ERROR with an Error of code, or a Pong.
-// Bodies are built by the sender, so queueing one copies a value and allocates nothing.
+// One answer the dispatcher gives itself: a refusal, as type ERROR with an Error of code, a Pong, or a
+// HelloResult. A refusal's body is built by the sender, so queueing one copies a value and allocates
+// nothing; a HelloResult carries its body, built on the worker.
 type subprotocolReply struct {
 	// the request's source
 	destinationId connect.Id
 	// the request's peer.TransferKey, which replyTransferKey turns into the reply's send option
 	transferKey connect.TransferKey
-	// ERROR or PONG
+	// ERROR, PONG or HELLO_RESULT
 	messageType protocol.MessageType
 	requestId   uint64
 	streamId    uint64
 	// for ERROR: never ERR_OK, which no sender sets (§6.5)
 	code protocol.ErrorCode
+	// for HELLO_RESULT: its marshalled HelloResult
+	body []byte
 }
 
 // The answer to a request, named by its request_id and stream_id, that this side refuses with code.
@@ -99,6 +102,9 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		Flags:     EnvelopeFlagResponse,
 		StreamId:  reply.streamId,
 	}
+	if reply.body != nil {
+		envelope.Body = reply.body
+	}
 	if reply.messageType == protocol.MessageType_ERROR {
 		body, err := proto.Marshal(&protocol.Error{Code: uint32(reply.code)})
 		if err != nil {
@@ -109,7 +115,7 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		envelope.Flags |= EnvelopeFlagError
 		envelope.Body = body
 	}
-	if err := self.sendEnvelope(reply.destinationId, envelope, 0, replyTransferKey(reply.transferKey)); err != nil {
+	if err := self.sendEnvelopeAcked(reply.destinationId, envelope, ignoreSubprotocolAck, 0, replyTransferKey(reply.transferKey)); err != nil {
 		self.stats.replyFailedCount.Add(1)
 		if self.log.V(1).Enabled() {
 			self.log.Infof("[subprotocol]reply to %s = %s\n", reply.destinationId, err)
@@ -130,11 +136,17 @@ func replyTransferKey(transferKey connect.TransferKey) connect.TransferKey {
 }
 
 // The one place this layer hands connect an envelope: to destinationId, waiting at most timeout for
+// connect to take it, 0 meaning not at all, with no ack read. See sendEnvelopeAcked.
+func (self *Subprotocol) sendEnvelope(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) error {
+	return self.sendEnvelopeAcked(destinationId, envelope, ignoreSubprotocolAck, timeout, opts...)
+}
+
+// Hands connect an envelope for destinationId with ack as its frame ack, waiting at most timeout for
 // connect to take it, 0 meaning not at all. connect encodes envelope into a pool buffer it takes on
 // success and returns on failure, so envelope and its body stay the caller's either way. A refusal
 // comes back as connect's error, or errSubprotocolSendRefused when connect gave none.
-func (self *Subprotocol) sendEnvelope(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) error {
-	sent, err := self.send(destinationId, envelope, timeout, opts...)
+func (self *Subprotocol) sendEnvelopeAcked(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) error {
+	sent, err := self.send(destinationId, envelope, ack, timeout, opts...)
 	if err != nil {
 		return err
 	}
@@ -145,11 +157,11 @@ func (self *Subprotocol) sendEnvelope(destinationId connect.Id, envelope *protoc
 }
 
 // Sends through connect, the envelope's size held to §6.5 by envelopeCodec.
-func (self *Subprotocol) connectSend(destinationId connect.Id, envelope *protocol.Envelope, timeout time.Duration, opts ...any) (bool, error) {
-	return connect.SendSubprotocolWithTimeout(self.client, SubprotocolId, envelope, destinationId, ignoreSubprotocolAck, timeout, opts...)
+func (self *Subprotocol) connectSend(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) (bool, error) {
+	return connect.SendSubprotocolWithTimeout(self.client, SubprotocolId, envelope, destinationId, ack, timeout, opts...)
 }
 
-// The ack callback of a reply: a transfer ack says connect delivered a frame, never that anyone acted on
-// it (R-PROTO-10), and nothing waits on a refusal's or a Pong's.
+// The ack callback of a send whose ack nothing reads: a transfer ack says connect delivered a frame,
+// never that anyone acted on it (R-PROTO-10), and nothing waits on a refusal's or a Pong's.
 func ignoreSubprotocolAck(err error) {
 }

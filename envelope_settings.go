@@ -24,6 +24,10 @@ type SidecarProtocolSettings struct {
 	// A call's timeout when its caller sets none: 15 s. The protocol's maximum is 55 s, before the 60 s
 	// sequence exit (§6.6).
 	DefaultCallTimeout time.Duration
+	// How long a call waits before it sends again a request connect refused before the call's deadline,
+	// keeping its request_id (§6.6's failure rule): 250 ms, so a refusal that clears quickly costs little
+	// and one that does not costs a few sends a call.
+	CallSendRetryInterval time.Duration
 	// Requests one peer may have queued past the inline handler, which answers RESOURCE_EXHAUSTED
 	// past this without waiting: 64.
 	PeerQueueMessageCount int
@@ -101,6 +105,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		HelloCacheTimeout:                10 * time.Minute,
 		MarkedKeepaliveInterval:          60 * time.Second,
 		DefaultCallTimeout:               15 * time.Second,
+		CallSendRetryInterval:            250 * time.Millisecond,
 		PeerQueueMessageCount:            64,
 		ReassemblyMaxBodyByteCount:       256 * 1024,
 		ReassemblyPeerCount:              8,

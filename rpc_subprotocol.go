@@ -22,8 +22,9 @@
 // with zero wait (rpc_peer.go). Refusing a request answers it through the reply queue (rpc_send.go);
 // refusing anything else drops it. Both are counted. A worker per active source drains its queue in
 // order, reassembles chunked bodies (envelope_reassembly.go) and dispatches by Envelope.type: a Ping
-// gets its Pong here, a response goes to the response dispatch, and a request to the function its type
-// registered, or UNIMPLEMENTED.
+// gets its Pong here, a Hello its check (rpc_hello.go), a Cancel the run it names (rpc_handle.go), a
+// response the request it echoes (rpc_call.go), and a request the function its type registered
+// (Handle), or UNIMPLEMENTED.
 //
 // ControlId's frames are the platform's hints, not a peer's (§6.8). Only push types pass the guard, and
 // they skip steps 4 to 7, which ask about peers and contracts. Nothing is ever sent to ControlId.
@@ -33,6 +34,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -76,6 +78,14 @@ type SubprotocolEnv struct {
 	// §8's hook, the last inline check. Required, never an implied allow: M1's core passes
 	// SubprotocolInboundWithoutPolicy, and ACL its AclEngine.AllowInbound.
 	Inbound SubprotocolInboundFunction
+	// This sidecar's network, which a peer's binding must name (§6.4). Unset, every peer's binding
+	// names another, so no Hello verifies.
+	NetworkId Id
+	// This client generation's marshalled SignedSidecarIdentityBinding, which its Hello and HelloResult
+	// carry (§5.5). Empty, every peer refuses this side's Hello.
+	Binding []byte
+	// Where Hello raises key_changed. Nil drops events.
+	Event SidecarEventFunction
 }
 
 // One client generation's dispatcher. See the file header.
@@ -111,6 +121,25 @@ type Subprotocol struct {
 	// request types and their functions, as setMessageTypeDispatch registered them
 	messageTypeDispatches map[uint32]*subprotocolDispatch
 	responseDispatch      *subprotocolDispatch
+	// one Hello in flight a peer, which every EnsureHello to it joins (rpc_hello.go)
+	helloFlights map[connect.Id]*helloFlight
+	// requests this side waits on, Hellos and calls (rpc_call.go)
+	pendingRequests map[rpcPendingKey]*rpcPending
+	// handler runs, for Cancel, and how many each peer has (rpc_handle.go)
+	runningCalls      map[rpcCallKey]context.CancelCauseFunc
+	sourceIdRunCounts map[connect.Id]int
+
+	// Hello's identity: this side's network, binding and event sink, and the pins (rpc_identity.go)
+	networkId Id
+	binding   []byte
+	event     SidecarEventFunction
+	pins      identityPinSource
+	// core's live raise of the secure floor, 0 for none (QD-032)
+	raisedSecureFloor atomic.Uint32
+	// mutating handlers' answers (rpc_idempotency.go)
+	idempotency *idempotencyCache
+	// one per handler run or joined retry, which Close waits for
+	handlers sync.WaitGroup
 
 	stats subprotocolStats
 }
@@ -171,8 +200,19 @@ type subprotocolStats struct {
 	// complete envelopes nothing takes and nothing answers: responses with no response dispatch, pushes
 	// and NO_REPLY envelopes of a type nothing registered
 	unroutedCount atomic.Uint64
-	// a dispatched function that panicked
+	// a dispatched function or a handler that panicked
 	panicCount atomic.Uint64
+	// Hellos this side refused
+	helloRefusedCount atomic.Uint64
+	// call sends connect refused before the deadline, sent again
+	callSendRetryCount atomic.Uint64
+	// Cancels connect would not take at once
+	cancelDroppedCount atomic.Uint64
+	// handler runs a peer's Cancel reached
+	cancelledCount atomic.Uint64
+	// retries of mutating calls answered from memory, and those that joined a live run
+	idempotentAnswerCount atomic.Uint64
+	idempotentJoinCount   atomic.Uint64
 
 	replyQueuedCount  atomic.Uint64
 	replyDroppedCount atomic.Uint64
@@ -198,11 +238,12 @@ func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
 	clientSettings.DefaultTransferOpts.ForceStream = false
 }
 
-// What internal tests put in place of connect's side of the dispatcher: how a frame's C15 key is read
-// and how an envelope is sent. A nil field takes connect's own.
+// What internal tests put in place of connect's side of the dispatcher: how a frame's C15 key is read,
+// how an envelope is sent, and where pins are kept. A nil field takes the real one.
 type subprotocolSeams struct {
 	clientPublicKeyOf func(peer connect.Peer) ([ed25519.PublicKeySize]byte, bool)
 	send              subprotocolSendFunction
+	pins              identityPinSource
 }
 
 // A running dispatcher, registered on env.Client's id 21842 with C3's opt-in for ControlId's frames
@@ -252,12 +293,45 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		sourceIdPeers:         map[connect.Id]*subprotocolPeer{},
 		sourceIdIdentities:    map[connect.Id]subprotocolPeerIdentity{},
 		messageTypeDispatches: map[uint32]*subprotocolDispatch{},
+		helloFlights:          map[connect.Id]*helloFlight{},
+		pendingRequests:       map[rpcPendingKey]*rpcPending{},
+		runningCalls:          map[rpcCallKey]context.CancelCauseFunc{},
+		sourceIdRunCounts:     map[connect.Id]int{},
+		networkId:             env.NetworkId,
+		binding:               bytes.Clone(env.Binding),
+		event:                 env.Event,
+		pins:                  seams.pins,
+		idempotency:           newIdempotencyCache(env.Settings, env.Budget, clock),
 	}
 	if self.clientPublicKeyOf == nil {
 		self.clientPublicKeyOf = connect.Peer.VerifiedClientPublicKey
 	}
 	if self.send == nil {
 		self.send = self.connectSend
+	}
+	if self.pins == nil {
+		self.pins = newFirstUseIdentityPins(env.Store)
+	}
+	// the dispatcher's own: Hello's check, Cancel and every response
+	for _, register := range []func() error{
+		func() error {
+			_, err := self.setMessageTypeDispatch(protocol.MessageType_HELLO, self.dispatchHello)
+			return err
+		},
+		func() error {
+			_, err := self.setMessageTypeDispatch(protocol.MessageType_CANCEL, self.dispatchCancel)
+			return err
+		},
+		func() error {
+			_, err := self.setResponseDispatch(self.dispatchResponse)
+			return err
+		},
+	} {
+		if err := register(); err != nil {
+			cancel()
+			self.reassembler.close()
+			return nil, err
+		}
 	}
 	go self.runSender()
 
@@ -293,13 +367,16 @@ func (self *Subprotocol) Close() {
 	})
 }
 
-// Cancels, then joins the workers, the sender and the reassembler. closed is set first, or nothing was
-// ever registered, so no worker starts after the join begins.
+// Cancels, then joins the workers, the handler runs, the sender and the reassembler, and gives back
+// what the idempotency cache held. closed is set first, or nothing was ever registered, so no worker
+// starts after the join begins.
 func (self *Subprotocol) stop() {
 	self.cancel()
 	self.workers.Wait()
+	self.handlers.Wait()
 	<-self.senderDone
 	self.reassembler.close()
+	self.idempotency.close()
 }
 
 // The inline handler connect calls with each envelope from id 21842. Runs the file header's seven
