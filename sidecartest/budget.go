@@ -83,8 +83,9 @@ var (
 	budgetModules      = []string{"sidecar", "server"}
 )
 
-// The module's import path, for matching a run's packages.
-func budgetModulePath(module string) string {
+// A ledger module's import path as the ledger reads it, for matching a run's packages. A release tree's
+// module path carries its /v2026 suffix (§4.9), so a caller there maps its packages onto this first.
+func BudgetModulePath(module string) string {
 	return "github.com/urnetwork/" + module
 }
 
@@ -94,9 +95,9 @@ func (self *Budget) ImportPath() string {
 	case "":
 		return ""
 	case ".":
-		return budgetModulePath(self.Module)
+		return BudgetModulePath(self.Module)
 	}
-	return budgetModulePath(self.Module) + "/" + self.Package
+	return BudgetModulePath(self.Module) + "/" + self.Package
 }
 
 // The ledger in data, strictly: a field no row has, a second document, a duplicate id, an unknown kind,
