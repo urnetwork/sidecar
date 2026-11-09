@@ -52,6 +52,9 @@ type DaemonSettings struct {
 	Busy func() bool
 	// The version a hello must name. Empty is a development build's, and matches only another's.
 	Version string
+	// --listen: the addresses the local services bind, each an IP literal (DaemonLocalListen). Empty: every interface,
+	// 0.0.0.0 and :: (owner decision 84), plaintext staying on loopback all the same (owner decision 130).
+	Listen []string
 	// Nil is real time.
 	Clock Clock
 	// Nil is no logging. Never stdout.
@@ -84,6 +87,8 @@ type Daemon struct {
 	// raised whenever a session opens or closes or a request arrives, so the idle loop re-reads
 	activity *MonitorValue[uint64]
 	closed   bool
+	// the local services' listeners open, for ur status (daemon_local.go)
+	localListeners map[*DaemonLocalListener]bool
 }
 
 // Takes the instance's lock and listens on its socket or pipe. ErrDaemonRunning when another daemon holds the lock.

@@ -230,6 +230,7 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 		IdleExitTimeout:  10 * time.Minute,
 		RequestByteCount: 4 * 1024 * 1024,
 		RequestTimeout:   30 * time.Second,
+		FirstPort:        17000,
 	}
 	if *settings.LocalSettings != wantLocal {
 		t.Errorf("local settings %+v, want %+v", *settings.LocalSettings, wantLocal)
