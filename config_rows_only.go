@@ -28,8 +28,11 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -222,4 +225,95 @@ func (self ConfigRowsOnlySource) Rows(networkId Id, rowsSha256 []byte) ([]byte, 
 // Refused: a rows-only reader opens no config head.
 func (self ConfigRowsOnlySource) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	return nil, errors.New("a rows-only source opens no config head")
+}
+
+// §7.9's objects on the first metadata cluster, which api writes and api, evs and gkm read (owner decision 145): entry
+// n at proj/<network_id>/<n zero-padded to 20 digits>/_, entry 0 holding the Signed Genesis verbatim
+// (plan-TEAM-genesis-custody), and a base's rows content-addressed at projrows/<network_id>/<hex sha256>/_. No key
+// prefixes another (§11.8's keys row).
+func ConfigEntryKey(networkId Id, n uint64) string {
+	return fmt.Sprintf("proj/%s/%020d/_", networkId, n)
+}
+
+// The prefix every entry key of the network starts with, for a LIST, which returns them in position order.
+func ConfigEntryKeyPrefix(networkId Id) string {
+	return fmt.Sprintf("proj/%s/", networkId)
+}
+
+// The position an entry key of the network names, false for any other key.
+func ParseConfigEntryKey(networkId Id, key string) (uint64, bool) {
+	prefix := ConfigEntryKeyPrefix(networkId)
+	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, "/_") {
+		return 0, false
+	}
+	digits := key[len(prefix) : len(key)-len("/_")]
+	if len(digits) != 20 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// A base's rows' key.
+func ConfigRowsKey(networkId Id, rowsSha256 []byte) string {
+	return fmt.Sprintf("projrows/%s/%s/_", networkId, hex.EncodeToString(rowsSha256))
+}
+
+// A base whose version is not the tip's next or whose prev_chain is not A_tip: the tip moved, and its writer re-signs
+// at the new tip (§7.9's base row, api's 409).
+var ErrConfigTipMoved = errors.New("config tip moved")
+
+// api's verdict on a base before it appends one (§7.9's base row), as Check is for a statement: ErrConfigTipMoved when
+// the header's version is not the tip's next or its prev_chain is not A_tip; else what applying it at the next
+// position would find, a signer that is no config writer at S(tip), a bad signature, rows that do not hash to
+// rows_sha256 or do not build, or either version below the newest base's, as an ErrConfigRefused. Nothing is kept and
+// no state changes, so a refused base is no fork here: it never reached the log. The config head's descent is not
+// judged, since a rows-only reader cannot read the head (plan-TEAM-api-config-head-reach). For the goroutine that
+// applies, as Apply is.
+func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
+	if self.fork != nil {
+		return fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
+	}
+	state := self.state.Load()
+	entry := &bridge.AuthEntry{
+		NetworkId: self.networkId.Bytes(),
+		N:         state.n + 1,
+		PrevChain: bytes.Clone(state.chain[:]),
+		Kind:      bridge.AuthEntryKindBase,
+		TimeMs:    state.timeMs,
+		Body:      signedHeader,
+	}
+	signed, header, err := configParseBase(entry)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	if header.GetVersion() != entry.GetN() || !bytes.Equal(header.GetPrevChain(), entry.GetPrevChain()) {
+		return fmt.Errorf("%w: a base for %d at tip %d", ErrConfigTipMoved, header.GetVersion(), state.n)
+	}
+	signerId, err := configBaseSigner(signed)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigSigner, err)
+	}
+	if !state.IsConfigWriter(signerId) {
+		return fmt.Errorf("%w: the base's signer is no config writer at %d", ErrConfigAuthority, state.n)
+	}
+	var previousHeader *bridge.ProjectionHeader
+	if state.base != nil {
+		previousHeader = state.base.header
+	}
+	if _, err := bridge.VerifyBaseKeyless(entry, state.IdentityKey(signerId), rows, previousHeader); err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody())
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	scratch := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: nil}
+	if _, err := self.stateFromBase(state, scratch, header, rows, &ConfigHeadFacts{}); err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	return nil
 }

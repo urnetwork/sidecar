@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -403,4 +404,78 @@ func TestARowsOnlyBaseNeedsNoConfigHead(t *testing.T) {
 func testConfigRowsSha256(t testing.TB, rows *bridge.ProjectionRows) []byte {
 	digest := sha256.Sum256(testConfigMarshal(t, rows))
 	return digest[:]
+}
+
+// §7.9's object keys: entry n zero-padded to 20 digits, in position order under the network's prefix, read back to
+// their positions, and nothing else read as one.
+func TestConfigEntryKeysParseBackToTheirPositions(t *testing.T) {
+	networkId := testConfigId("keys network")
+	for _, n := range []uint64{0, 1, 12345, 1<<63 - 1} {
+		key := ConfigEntryKey(networkId, n)
+		if !strings.HasPrefix(key, ConfigEntryKeyPrefix(networkId)) || !strings.HasSuffix(key, "/_") {
+			t.Errorf("the key %q", key)
+		}
+		if parsed, ok := ParseConfigEntryKey(networkId, key); !ok || parsed != n {
+			t.Errorf("%q parsed as %d, %t", key, parsed, ok)
+		}
+	}
+	if ConfigEntryKey(networkId, 9) >= ConfigEntryKey(networkId, 10) {
+		t.Error("keys do not sort in position order")
+	}
+	for _, key := range []string{
+		ConfigEntryKey(testConfigId("another network"), 1),
+		ConfigRowsKey(networkId, make([]byte, 32)),
+		ConfigEntryKeyPrefix(networkId) + "1/_",
+		ConfigEntryKeyPrefix(networkId) + "0000000000000000000x/_",
+	} {
+		if _, ok := ParseConfigEntryKey(networkId, key); ok {
+			t.Errorf("%q parsed as an entry key", key)
+		}
+	}
+}
+
+// api's check of a base before it appends one: a base at the tip's next position passes; one for another position is
+// ErrConfigTipMoved; a stale compile, another signer or rows off their hash are refusals; and none of them forks the
+// log, which a reader's Apply of the same base would.
+func TestCheckBaseRefusesWithoutForking(t *testing.T) {
+	net := newTestConfigNet(t)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("member"))
+	net.fold(net.owner, net.n, 2)
+	rows := net.log.State().Rows()
+	rowsBytes := testConfigMarshal(t, rows)
+	signedHeaderOf := func(entryBytes []byte) []byte {
+		entry := &bridge.AuthEntry{}
+		if err := proto.Unmarshal(entryBytes, entry); err != nil {
+			t.Fatal(err)
+		}
+		return entry.GetBody()
+	}
+	if err := net.log.CheckBase(signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0)), rowsBytes); err != nil {
+		t.Errorf("a base at the next position: %v", err)
+	}
+	stale := signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0))
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("racer"))
+	if err := net.log.CheckBase(stale, rowsBytes); !errors.Is(err, ErrConfigTipMoved) {
+		t.Errorf("a base for a taken position: %v", err)
+	}
+	stranger := net.device("stranger", net.ownerMemberId)
+	cases := []struct {
+		name   string
+		header []byte
+		rows   []byte
+		want   error
+	}{
+		{name: "a lower fold", header: signedHeaderOf(net.makeBase(net.owner, rows, 1, 2, 0)), rows: rowsBytes, want: ErrConfigRule},
+		{name: "an older head", header: signedHeaderOf(net.makeBase(net.owner, rows, net.n, 1, 0)), rows: rowsBytes, want: ErrConfigRule},
+		{name: "no config writer", header: signedHeaderOf(net.makeBase(stranger, rows, net.n, 2, 0)), rows: rowsBytes, want: ErrConfigAuthority},
+		{name: "rows off their hash", header: signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0)), rows: append(bytes.Clone(rowsBytes), 0), want: ErrConfigRule},
+	}
+	for _, c := range cases {
+		if err := net.log.CheckBase(c.header, c.rows); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if net.log.Fork() != nil {
+		t.Error("a refused base forked the log")
+	}
 }
