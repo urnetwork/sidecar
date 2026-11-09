@@ -315,7 +315,11 @@ func TestRecordReceiptAwaitsEvsBeforeTheRead(t *testing.T) {
 	go func() {
 		done <- testReceiptRead(t.Context(), record, world, key, sidecar.RecordReadPurposeRead, objectIds)
 	}()
-	<-held.entered
+	select {
+	case <-held.entered:
+	case err := <-done:
+		t.Fatalf("the read ended before its deposit reached evs: %v", err)
+	}
 	// held inside the deposit: the read cannot have gone on
 	select {
 	case err := <-done:
