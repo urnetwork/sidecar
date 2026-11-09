@@ -240,7 +240,8 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{
 			"TestHygieneFailsOnAnExtraReplace", "TestHygieneFailsOnAMovedReplace", "TestHygieneFailsOnAMissingReplace",
 			"TestHygieneFailsOnANestedModuleNotRepeatingAReplace", "TestHygieneFailsOnAVersionedReplace",
-			"TestHygieneFailsOnAReleaseBranchExtraReplace",
+			"TestHygieneFailsOnAReleaseBranchExtraReplace", "TestHygieneFailsOnAMovedForkReplace",
+			"TestHygieneFailsOnAModuleLinkingAForkWithoutItsReplace",
 		},
 	},
 	{

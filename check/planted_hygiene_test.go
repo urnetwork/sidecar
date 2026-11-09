@@ -62,6 +62,65 @@ func TestHygieneFailsOnAVersionedReplace(t *testing.T) {
 		".: replace gvisor.dev/gvisor pins a version")
 }
 
+// QD-193's forks: the root's at ./third_party, a nested module's one level up, each before the first
+// link as mox's is now.
+func TestHygieneAllowsTheForkReplaces(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.edit("go.mod", "replace @glog@ => ../glog\n", "replace @glog@ => ../glog\n\nreplace github.com/emersion/go-smtp => ./third_party/go-smtp\n\nreplace github.com/mjl-/mox => ./third_party/mox\n")
+	fixture.edit("cli/go.mod", "replace @glog@ => ../../glog\n", "replace @glog@ => ../../glog\n\nreplace github.com/emersion/go-smtp => ../third_party/go-smtp\n\nreplace github.com/mjl-/mox => ../third_party/mox\n")
+	wantFindings(t, fixture.open().replaceFindings(t))
+}
+
+func TestHygieneFailsOnAMovedForkReplace(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.edit("go.mod", "replace @glog@ => ../glog\n", "replace @glog@ => ../glog\n\nreplace github.com/emersion/go-smtp => ./third_party/go-smtp-v0.25.0\n")
+	fixture.edit("smtpproof/go.mod", "replace @glog@ => ../../glog\n", "replace @glog@ => ../../glog\n\nreplace github.com/mjl-/mox => ./third_party/mox\n")
+	wantFindings(t, fixture.open().replaceFindings(t),
+		".: replace github.com/emersion/go-smtp => ./third_party/go-smtp-v0.25.0, and QD-193's is ./third_party/go-smtp",
+		"smtpproof: replace github.com/mjl-/mox => ./third_party/mox, and QD-193's is ../third_party/mox")
+}
+
+// A module whose graph holds go-smtp and does not replace it links upstream's, where every session
+// refuses: Go reads no replace from the root on its behalf.
+func TestHygieneFailsOnAModuleLinkingAForkWithoutItsReplace(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.edit("go.mod", "replace @glog@ => ../glog\n", "replace @glog@ => ../glog\n\nreplace github.com/emersion/go-smtp => ./third_party/go-smtp\n")
+	fixture.edit("mlsinterop/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire github.com/emersion/go-smtp v0.25.1 // indirect\n")
+	wantFindings(t, fixture.open().replaceFindings(t),
+		"mlsinterop: requires github.com/emersion/go-smtp and does not replace it with QD-193's fork at ../third_party/go-smtp")
+}
+
+// The release step moves the root into v2026/ and rebases a nested module's replaces, so a fork's
+// path may climb further or stay below the root, but it stays local and ends at the fork.
+func TestHygieneAllowsTheForkReplacesOnARelease(t *testing.T) {
+	module := &repositoryModule{relativeName: "smtpproof", file: &moduleFile{}}
+	addReplace := func(old string, newPath string, version string) {
+		replace := struct {
+			Old struct {
+				Path    string
+				Version string
+			}
+			New struct {
+				Path    string
+				Version string
+			}
+		}{}
+		replace.Old.Path = old
+		replace.New.Path = newPath
+		replace.New.Version = version
+		module.file.Replace = append(module.file.Replace, replace)
+	}
+	addReplace("github.com/emersion/go-smtp", "../../third_party/go-smtp", "")
+	addReplace("github.com/mjl-/mox", "./third_party/mox", "")
+	wantFindings(t, replaceFindingsRelease(module))
+
+	addReplace("github.com/emersion/go-smtp", "../../go-smtp", "")
+	addReplace("github.com/mjl-/mox", "github.com/mjl-/mox", "v0.0.17")
+	wantFindings(t, replaceFindingsRelease(module),
+		"smtpproof: replace github.com/emersion/go-smtp => ../../go-smtp does not end at third_party/go-smtp",
+		"smtpproof: replace github.com/mjl-/mox => github.com/mjl-/mox v0.0.17 is not a local path")
+}
+
 func TestHygieneFailsOnAnotherGoLine(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.edit("mlsinterop/go.mod", "go 1.27.3", "go 1.27.2")

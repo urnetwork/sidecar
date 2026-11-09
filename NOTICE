@@ -4,3 +4,14 @@ Copyright (c) 2026 BringYour, Inc.
 This repository is licensed under the Mozilla Public License, v. 2.0. The full text is in LICENSE.
 
 The third-party modules named in this repository's go.mod files keep their own licenses.
+
+third_party/ holds the source of two of them, each under its own license and changed only as its
+URNETWORK.md says:
+
+- third_party/go-smtp: github.com/emersion/go-smtp v0.25.1, under the MIT license in
+  third_party/go-smtp/LICENSE. Copyright (c) 2010 The Go Authors, (c) 2014 Gleez Technologies,
+  (c) 2016 emersion, (c) 2016 Proton Technologies AG.
+- third_party/mox: ten packages of github.com/mjl-/mox v0.0.17, under the MIT license in
+  third_party/mox/LICENSE.MIT. Copyright 2021 Mechiel Lukkien. The public suffix list it embeds,
+  third_party/mox/publicsuffix/public_suffix_list.txt, is Mozilla's, under the Mozilla Public
+  License, v. 2.0, in third_party/mox/LICENSE.MPLv2.0.
