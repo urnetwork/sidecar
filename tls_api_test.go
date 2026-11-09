@@ -172,3 +172,26 @@ func TestTlsKillEntryKills(t *testing.T) {
 		}
 	}
 }
+
+// {tes_<network_id>} and its trigger share one hash tag, the trigger parses back to its network, and no
+// other key parses.
+func TestTlsKillKeys(t *testing.T) {
+	networkId := NewId()
+	key := TlsKillKey(networkId)
+	trigger := TlsKillTriggerKey(networkId)
+	if key != "{tes_"+networkId.String()+"}" || trigger != key+"n" {
+		t.Fatalf("keys %q, %q", key, trigger)
+	}
+	if !RedisKeysShareTag([]string{key, trigger}) {
+		t.Fatal("the hash and its trigger are on two slots")
+	}
+	parsed, ok := ParseTlsKillTriggerKey(trigger)
+	if !ok || parsed != networkId {
+		t.Fatalf("parsed %v, %v", parsed, ok)
+	}
+	for _, other := range []string{key, "{tes_}n", "{tes_not-an-id}n", "{acl_" + networkId.String() + "}v", "tes_" + networkId.String() + "n"} {
+		if _, ok := ParseTlsKillTriggerKey(other); ok {
+			t.Errorf("%q parsed", other)
+		}
+	}
+}
