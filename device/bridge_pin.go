@@ -77,8 +77,10 @@ func (self *bridgePinSlot) read() (sequence uint64, key0 uint64, key1 uint64, va
 	return 0, 0, 0, 0, false
 }
 
-// Writes the slot if it is still as read at sequence: false when another writer came first.
+// Writes the slot if it is still as read at sequence: false when another writer came first. The compare-and-swap is
+// the pin's linearization point.
 func (self *bridgePinSlot) write(sequence uint64, key0 uint64, key1 uint64, value uint64) bool {
+	testHookBarrier("bridge_pin.write", "")
 	if !self.sequence.CompareAndSwap(sequence, sequence+1) {
 		return false
 	}

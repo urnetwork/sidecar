@@ -199,12 +199,27 @@ func (self *bridgeEntrySnapshot) entryLinks() []BridgeEntryLink {
 	return links
 }
 
+// Publishes the next snapshot: edit names the links from the one in force at now, under the edit lock. The swap is
+// the entry's linearization point, a Pick seeing the whole of one snapshot or of the other, and the barriers around it
+// run with no lock held.
+func (self *BridgeEntryState) edit(edit func(previous *bridgeEntrySnapshot, now time.Time) []BridgeEntryLink) {
+	testHookBarrier("bridge_pin_entry.swap.before", "")
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		previous := self.snapshot.Load()
+		now := self.clock.Now()
+		self.snapshot.Store(self.buildWithLock(previous, edit(previous, now), now))
+	}()
+	testHookBarrier("bridge_pin_entry.swap.after", "")
+}
+
 // Replaces the advertisers with links, as a new state names them: a joining one, a weight change and a drain each
 // keep what other links serve (§17.5's kept row), and health carries over.
 func (self *BridgeEntryState) Set(links []BridgeEntryLink) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.snapshot.Store(self.buildWithLock(self.snapshot.Load(), links, self.clock.Now()))
+	self.edit(func(previous *bridgeEntrySnapshot, now time.Time) []BridgeEntryLink {
+		return links
+	})
 }
 
 // Marks the link down for LinkDownTimeout: a refusal or a connect timeout (§17.5's health row,
@@ -214,55 +229,50 @@ func (self *BridgeEntryState) MarkDown(link BridgeLinkId) {
 	if held == nil {
 		return
 	}
+	testHookBarrier("bridge_pin_entry.mark_down.before", "")
 	held.health.downUntil.Store(self.clock.Now().Add(self.settings.LinkDownTimeout).UnixNano())
+	testHookBarrier("bridge_pin_entry.mark_down.after", "")
 }
 
 // Withdraws the link with a drain (§17.5's removed row): it stays in the entry, serving its pinned pairs and every pair
 // while nothing else remains, until max(drainUntil, now plus the idle of each protocol). A link already draining keeps
 // its earlier drain.
 func (self *BridgeEntryState) Withdraw(link BridgeLinkId, drainUntil time.Time) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	previous := self.snapshot.Load()
-	now := self.clock.Now()
-	links := previous.entryLinks()
-	for i := range links {
-		if links[i].Link == link && links[i].DrainingSince.IsZero() {
-			links[i].DrainingSince = now
-			links[i].DrainUntil = drainUntil
+	self.edit(func(previous *bridgeEntrySnapshot, now time.Time) []BridgeEntryLink {
+		links := previous.entryLinks()
+		for i := range links {
+			if links[i].Link == link && links[i].DrainingSince.IsZero() {
+				links[i].DrainingSince = now
+				links[i].DrainUntil = drainUntil
+			}
 		}
-	}
-	self.snapshot.Store(self.buildWithLock(previous, links, now))
+		return links
+	})
 }
 
 // Replaces the link from with to, from draining as Withdraw drains it: a retarget, an address or block change, or a
 // rebuild, whose old link drains to its strict_exp (§17.5's removed row). A one-advertiser entry so opens a window.
 func (self *BridgeEntryState) Retarget(from BridgeLinkId, to BridgeEntryLink, drainUntil time.Time) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	previous := self.snapshot.Load()
-	now := self.clock.Now()
-	links := previous.entryLinks()
-	for i := range links {
-		if links[i].Link == from && links[i].DrainingSince.IsZero() {
-			links[i].DrainingSince = now
-			links[i].DrainUntil = drainUntil
+	self.edit(func(previous *bridgeEntrySnapshot, now time.Time) []BridgeEntryLink {
+		links := previous.entryLinks()
+		for i := range links {
+			if links[i].Link == from && links[i].DrainingSince.IsZero() {
+				links[i].DrainingSince = now
+				links[i].DrainUntil = drainUntil
+			}
 		}
-	}
-	links = append(links, to)
-	self.snapshot.Store(self.buildWithLock(previous, links, now))
+		return append(links, to)
+	})
 }
 
 // Takes the link out at once, with no drain: a revocation (§17.8's revocation row). The caller drops its pins from the
 // pin table, BridgePinTable.Reset.
 func (self *BridgeEntryState) Reset(link BridgeLinkId) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	previous := self.snapshot.Load()
-	links := slices.DeleteFunc(previous.entryLinks(), func(entryLink BridgeEntryLink) bool {
-		return entryLink.Link == link
+	self.edit(func(previous *bridgeEntrySnapshot, now time.Time) []BridgeEntryLink {
+		return slices.DeleteFunc(previous.entryLinks(), func(entryLink BridgeEntryLink) bool {
+			return entryLink.Link == link
+		})
 	})
-	self.snapshot.Store(self.buildWithLock(previous, links, self.clock.Now()))
 }
 
 // The links that serve the entry at now: live ones, and draining ones short of their end for either protocol.

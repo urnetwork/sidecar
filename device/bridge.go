@@ -99,6 +99,7 @@ func (self *Bridge) adopt(decision PostureDecision) {
 			rules = parsed
 		}
 	}
+	testHookBarrier("bridge.adopt.before", "")
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -106,6 +107,7 @@ func (self *Bridge) adopt(decision PostureDecision) {
 		self.rules = rules
 		self.alarms = alarms
 	}()
+	testHookBarrier("bridge.adopt.after", "")
 	self.check()
 }
 

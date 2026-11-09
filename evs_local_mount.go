@@ -5,6 +5,13 @@
 // each mount in the evs component's sealed store, mounts/<repo_id>, so a daemon reopens them at start; an implicit
 // mount (git-remote-ur's first use, §11.11's names row) has no working directory and no listener.
 //
+// Where things sit is the sealed mirror layout (evs_mirror_layout.go): a mount's bare repository and its hooks
+// directory in the network's plaintext git tree, <state>/net/<network_id>/git/<repo>.git and <repo>.hooks, beside the
+// sealed directory that holds its mirror, evs/mirror/<repo>/, and never inside it. Both paths follow from <state> and
+// the ids alone, so a record names no path git could be sent to, and a moved <state> still finds its mounts. The tree
+// keeps <state>'s modes, 0700 directories and 0600 files: each bare repository is created with
+// core.sharedRepository 0600, so every file git writes there later is the user's alone too.
+//
 // On every mount's bare repository the daemon sets receive.procReceiveRefs to refs/heads and refs/tags, so every
 // branch and tag update reaches its proc-receive hook (EVS1-M2-36), receive.advertiseAtomic to false, so `git push
 // --atomic` fails before any write, and core.hooksPath to a directory the daemon owns. The bare repository is SHA-1
@@ -31,7 +38,22 @@ import (
 // The registry's directory in the evs component's store.
 const evsMountDirectory = "mounts/"
 
-// One mount: its repo, the working directory it names, and the bare repository the local git server runs on.
+// The local tier's plaintext tree in a network's directory, and what each mount keeps there.
+const (
+	evsLocalGitDirectory      = "git"
+	evsLocalBareRepoExtension = ".git"
+	evsLocalHooksExtension    = ".hooks"
+	// core.sharedRepository's value: <state>'s file mode, which git also turns into 0700 directories
+	evsLocalSharedRepository = "0600"
+)
+
+// <state>/net/<network_id>/git: where a network's bare repositories and hooks sit, beside its sealed directories.
+func evsLocalGitTree(state string, networkId Id) string {
+	return filepath.Join(state, filepath.FromSlash(networkDirectoryPath(networkId)), evsLocalGitDirectory)
+}
+
+// One mount: its repo, the working directory it names, the bare repository the local git server runs on, and the
+// repo's sealed mirror beside it.
 type EvsLocalRepo struct {
 	RepoId Id
 	// Empty for an implicit mount.
@@ -40,8 +62,10 @@ type EvsLocalRepo struct {
 	// The daemon-owned hooks directory, core.hooksPath.
 	HooksDir   string
 	AgentLabel string
-	locks      *EvsRefLocks
-	git        *EvsGitRunner
+	// The evs objects this device holds of the repo, sealed (evs_mirror_layout.go).
+	Mirror *EvsMirrorStore
+	locks  *EvsRefLocks
+	git    *EvsGitRunner
 }
 
 // Takes the ref's daemon lock, which receive-pack's update and the sync engine's apply both hold (§11.11's locks row).
@@ -54,36 +78,45 @@ func (self *EvsLocalRepo) Git(ctx context.Context, args ...string) ([]byte, erro
 	return self.git.Run(ctx, self.BareDir, args...)
 }
 
-// A mount's stored record.
+// A mount's stored record. The paths are the layout's, never stored.
 type evsMountRecord struct {
 	Dir        string `json:"dir,omitempty"`
-	BareDir    string `json:"bare_dir"`
-	HooksDir   string `json:"hooks_dir"`
 	AgentLabel string `json:"agent_label,omitempty"`
 }
 
 // One daemon's mounts.
 type EvsMounts struct {
 	client *EvsClient
-	// the daemon's state directory, where bare repositories and hooks live
-	stateDir string
-	git      *EvsGitRunner
+	// <state>/net/<network_id>/git
+	gitTree string
+	git     *EvsGitRunner
 
 	stateLock    sync.Mutex
 	repoIdMounts map[Id]*EvsLocalRepo
 }
 
-// The registry of client's mounts, its bare repositories under stateDir, and its git. It attaches to the client, so
-// EvsRepo.Mount reaches it.
-func NewEvsMounts(client *EvsClient, stateDir string, git *EvsGitRunner) (*EvsMounts, error) {
-	if !filepath.IsAbs(stateDir) {
+// The registry of client's mounts, its bare repositories in the plaintext git tree of client's network under state,
+// §5.9's <state>, which the instance's store is rooted at, and its git. It attaches to the client, so EvsRepo.Mount
+// reaches it.
+func NewEvsMounts(client *EvsClient, state string, git *EvsGitRunner) (*EvsMounts, error) {
+	if !filepath.IsAbs(state) {
 		return nil, fmt.Errorf("%w: the mount state by an absolute path", errInvalidSettings)
 	}
-	self := &EvsMounts{client: client, stateDir: stateDir, git: git, repoIdMounts: map[Id]*EvsLocalRepo{}}
+	self := &EvsMounts{
+		client:       client,
+		gitTree:      evsLocalGitTree(state, client.NetworkId()),
+		git:          git,
+		repoIdMounts: map[Id]*EvsLocalRepo{},
+	}
 	client.stateLock.Lock()
 	client.localTier = self
 	client.stateLock.Unlock()
 	return self, nil
+}
+
+// The network's plaintext git tree.
+func (self *EvsMounts) GitTree() string {
+	return self.gitTree
 }
 
 // Reopens every mount the store records.
@@ -111,9 +144,15 @@ func (self *EvsMounts) Load(ctx context.Context) error {
 		if err := json.Unmarshal(data, record); err != nil {
 			return fmt.Errorf("%w: a mount record that does not parse", ErrSidecarStoreFailed)
 		}
-		self.stateLock.Lock()
-		self.repoIdMounts[repoId] = self.localRepo(repoId, record)
-		self.stateLock.Unlock()
+		mount, err := self.localRepo(repoId, record)
+		if err != nil {
+			return err
+		}
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.repoIdMounts[repoId] = mount
+		}()
 	}
 	return nil
 }
@@ -126,17 +165,22 @@ func (self *EvsMounts) Get(repoId Id) (*EvsLocalRepo, bool) {
 	return mount, ok
 }
 
-// A mount of a record.
-func (self *EvsMounts) localRepo(repoId Id, record *evsMountRecord) *EvsLocalRepo {
+// A mount of a record, at the layout's paths.
+func (self *EvsMounts) localRepo(repoId Id, record *evsMountRecord) (*EvsLocalRepo, error) {
+	mirror, err := self.client.Mirror(repoId)
+	if err != nil {
+		return nil, err
+	}
 	return &EvsLocalRepo{
 		RepoId:     repoId,
 		Dir:        record.Dir,
-		BareDir:    record.BareDir,
-		HooksDir:   record.HooksDir,
+		BareDir:    filepath.Join(self.gitTree, evsUrlId(repoId)+evsLocalBareRepoExtension),
+		HooksDir:   filepath.Join(self.gitTree, evsUrlId(repoId)+evsLocalHooksExtension),
 		AgentLabel: record.AgentLabel,
+		Mirror:     mirror,
 		locks:      NewEvsRefLocks(self.client.settings, self.client.clock),
 		git:        self.git,
-	}
+	}, nil
 }
 
 // Mounts repoId: its bare repository created SHA-1 and configured, or reopened; the working clone's committer set
@@ -145,13 +189,24 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 	if args.Dir != "" && !filepath.IsAbs(args.Dir) {
 		return nil, fmt.Errorf("%w: a mount by a relative path", errInvalidSettings)
 	}
-	bareDir := filepath.Join(self.stateDir, "mounts", evsUrlId(repoId)+".git")
-	hooksDir := filepath.Join(self.stateDir, "mounts", evsUrlId(repoId)+".hooks")
-	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+	identity := self.client.args.Identity()
+	label := args.AgentLabel
+	if label == "" {
+		label = identity.SidecarId.String()
+	}
+	record := &evsMountRecord{Dir: args.Dir, AgentLabel: label}
+	mount, err := self.localRepo(repoId, record)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(filepath.Join(bareDir, "HEAD")); os.IsNotExist(err) {
-		if _, err := self.git.Run(ctx, "", "init", "--bare", "--quiet", "--object-format=sha1", bareDir); err != nil {
+	// MkdirAll makes the tree's missing parents 0700 too
+	if err := os.MkdirAll(mount.HooksDir, 0o700); err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(mount.BareDir, "HEAD")); os.IsNotExist(err) {
+		_, err := self.git.Run(ctx, "", "init", "--bare", "--quiet", "--object-format=sha1",
+			"--shared="+evsLocalSharedRepository, mount.BareDir)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -159,16 +214,12 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 		{"config", "--replace-all", "receive.procReceiveRefs", "refs/heads"},
 		{"config", "--add", "receive.procReceiveRefs", "refs/tags"},
 		{"config", "receive.advertiseAtomic", "false"},
-		{"config", "core.hooksPath", hooksDir},
+		{"config", "core.hooksPath", mount.HooksDir},
+		{"config", "core.sharedRepository", evsLocalSharedRepository},
 	} {
-		if _, err := self.git.Run(ctx, bareDir, setting...); err != nil {
+		if _, err := self.git.Run(ctx, mount.BareDir, setting...); err != nil {
 			return nil, err
 		}
-	}
-	identity := self.client.args.Identity()
-	label := args.AgentLabel
-	if label == "" {
-		label = identity.SidecarId.String()
 	}
 	if args.Dir != "" {
 		if _, err := os.Stat(filepath.Join(args.Dir, ".git")); err == nil {
@@ -182,7 +233,6 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 			}
 		}
 	}
-	record := &evsMountRecord{Dir: args.Dir, BareDir: bareDir, HooksDir: hooksDir, AgentLabel: label}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return nil, err
@@ -198,7 +248,6 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 	if err := writer.Commit(); err != nil {
 		return nil, err
 	}
-	mount := self.localRepo(repoId, record)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if held := self.repoIdMounts[repoId]; held != nil {
