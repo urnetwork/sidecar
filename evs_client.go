@@ -99,6 +99,8 @@ type EvsClient struct {
 	preDecryptHook EvsPreDecryptFunction
 	// RefHeads' rotation (evs_witness.go)
 	witnessCursors evsWitnessCursors
+	// the local tier's mount registry, an *EvsMounts on desktop legs (evs_local_mount.go), nil in head mode
+	localTier any
 }
 
 // A ref of a repo.
