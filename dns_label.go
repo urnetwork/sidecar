@@ -126,6 +126,8 @@ func mustParseDnsReservedList(reservedText string, brandText string) *dnsReserve
 	return list
 }
 
+// Both lists, or the first line that breaks a file's format: a label that is not lowercase LDH, a
+// pattern whose * is not first or last, a brand with a dash, or a line twice.
 func parseDnsReservedList(reservedText string, brandText string) (*dnsReservedList, error) {
 	list := &dnsReservedList{
 		exactLabels:    map[string]bool{},

@@ -281,6 +281,35 @@ func TestNewDnsLabelRefusesWhatItCannotUse(t *testing.T) {
 	}
 }
 
+// What an accepted name breaks, or empty when it breaks nothing or was refused.
+func checkValidateDnsName(name string) string {
+	if ValidateDnsName(name) != nil {
+		return ""
+	}
+	if len(name) < 5 || 50 < len(name) {
+		return "accepted a name of the wrong length"
+	}
+	for index := range len(name) {
+		character := name[index]
+		if !('a' <= character && character <= 'z') && !('0' <= character && character <= '9') && character != '-' {
+			return "accepted a byte outside lowercase LDH"
+		}
+	}
+	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
+		return "accepted a dash at an end"
+	}
+	if name[2:4] == "--" {
+		return "accepted dashes as the third and fourth characters"
+	}
+	if IsReservedDnsLabel(name) {
+		return "accepted a reserved name"
+	}
+	if IsBrandConfusableDnsName(name) {
+		return "accepted a name confusable with a brand"
+	}
+	return ""
+}
+
 // One seed of testdata/fuzz/FuzzValidateDnsName.
 func testDnsNameSeed(t *testing.T, name string, seed []byte) string {
 	t.Helper()
