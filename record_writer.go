@@ -144,13 +144,14 @@ type SidecarRecordArgs struct {
 	Log    Logger
 }
 
-// One network's record on this sidecar: its writer, its reader, its ingester, the approval family's log and the
-// accounting mirror, sharing one binding of evs and of the authorization state, and the loop that carries what the
-// writer holds, ingests deposits and mirrors queued events. Safe for concurrent use.
+// One network's record on this sidecar: its writer, its reader, its ingester, its read receipts, the approval family's
+// log and the accounting mirror, sharing one binding of evs and of the authorization state, and the loop that carries
+// what the writer holds, ingests deposits and mirrors queued events. Safe for concurrent use.
 type SidecarRecord struct {
 	writer     *recordWriter
 	reader     *RecordReader
 	ingester   *RecordIngester
+	receipts   *RecordReceipts
 	approvals  *RecordApprovals
 	accounting *RecordAccounting
 
@@ -179,6 +180,7 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 		writer:     writer,
 		reader:     reader,
 		ingester:   newRecordIngester(writer, reader),
+		receipts:   newRecordReceipts(writer),
 		approvals:  &RecordApprovals{writer: writer, reader: reader},
 		accounting: &RecordAccounting{writer: writer, reader: reader},
 		ingestDue:  true,
@@ -200,6 +202,11 @@ func (self *SidecarRecord) Reader() *RecordReader {
 // The record's ingester (RECORD-M3-04).
 func (self *SidecarRecord) Ingester() *RecordIngester {
 	return self.ingester
+}
+
+// The record's read receipts (RECORD-M3-05), which a reader deposits before it decrypts.
+func (self *SidecarRecord) Receipts() *RecordReceipts {
+	return self.receipts
 }
 
 // The approval family's log (RECORD-M3-07).
@@ -858,9 +865,21 @@ func (self *recordWriter) load() error {
 	}
 	pendingLogEntries := map[Id][]*RecordSealedEntry{}
 	for _, logId := range logIds {
-		entries, err := self.chain.Pending(logId)
+		pending, err := self.chain.Pending(logId)
 		if err != nil {
 			return err
+		}
+		// a read receipt goes out through its own path, which awaits evs before its read (record_receipt.go)
+		entries := []*RecordSealedEntry{}
+		for _, entry := range pending {
+			if header, err := entry.Header(); err == nil && header.Kind() == RecordKindRead {
+				entry.Clear()
+				continue
+			}
+			entries = append(entries, entry)
+		}
+		if len(entries) == 0 {
+			continue
 		}
 		pendingLogEntries[logId] = entries
 		for _, entry := range entries {
