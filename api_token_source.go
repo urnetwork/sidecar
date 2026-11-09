@@ -144,3 +144,15 @@ func (self *Sidecar) DpopSigner() (SidecarDpopSigner, error) {
 	}
 	return signer, nil
 }
+
+// Posts this sidecar's newest binding again and re-registers each component's registrations (§5.6, §19.10): what a
+// host runs when its token source's refresh answered restore_required (sdk's ErrRefreshRestoreRequired), as the core's
+// own refresher does. ErrSidecarNoIdentity before enrollment; a bind refused with sidecar_revoked is checked against
+// the config as a claim (VerifyRevocationClaim).
+func (self *Sidecar) Reregister(ctx context.Context) error {
+	var restorers []SidecarRestorer
+	if self.leg != nil {
+		restorers = self.leg.restorers()
+	}
+	return self.restoreRegistrations(ctx, restorers)
+}

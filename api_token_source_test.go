@@ -3,6 +3,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -290,5 +291,35 @@ func TestChildEnrollmentAndRepair(t *testing.T) {
 	}
 	if firstToken == "" || len(world.api.removed) != 2 {
 		t.Errorf("the first child was not removed at the re-pair: removed %d", len(world.api.removed))
+	}
+}
+
+// A host whose source answered restore_required re-registers through the core: its newest binding is posted again,
+// byte for byte, and nothing is posted before enrollment.
+func TestHostReregistersOnRestoreRequired(t *testing.T) {
+	world := newTestEnrollWorld(t)
+	if err := world.sidecar.Reregister(context.Background()); !errors.Is(err, ErrSidecarNoIdentity) {
+		t.Fatalf("before enrollment: %v", err)
+	}
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+	bound := len(world.api.requestedPaths())
+	world.sidecar.Reregister(context.Background())
+	paths := world.api.requestedPaths()[bound:]
+	if len(paths) == 0 || paths[0] != "/sidecar/bind" {
+		t.Fatalf("requests %v", paths)
+	}
+	record, err := loadSidecarIdentity(world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer record.keys.erase()
+	wire := &struct {
+		Binding []byte `json:"binding"`
+	}{}
+	if err := json.Unmarshal(world.api.bodies[bound], wire); err != nil || !bytes.Equal(wire.Binding, record.binding) {
+		t.Fatalf("the re-posted binding is not the newest one: %v", err)
 	}
 }
