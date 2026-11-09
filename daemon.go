@@ -52,6 +52,16 @@ type DaemonSettings struct {
 	Busy func() bool
 	// The version a hello must name. Empty is a development build's, and matches only another's.
 	Version string
+	// --listen: the addresses the local services bind, each an IP literal (DaemonLocalListen). Empty: every interface,
+	// 0.0.0.0 and :: (owner decision 84), plaintext staying on loopback all the same (owner decision 130).
+	Listen []string
+	// §12's ResolveNetworkLabel over the networks this client belongs to, which `.ur`, a call's network argument and a
+	// git session's <net> resolve through. Nil: only a network id or the only network names one.
+	Labels NetworkLabelResolver
+	// The user root those labels sit under, such as dns.yml names.
+	LabelRoot string
+	// $HOME, which bounds the search for `.ur` (§5.8). Empty: the OS's.
+	Home string
 	// Nil is real time.
 	Clock Clock
 	// Nil is no logging. Never stdout.
@@ -84,6 +94,10 @@ type Daemon struct {
 	// raised whenever a session opens or closes or a request arrives, so the idle loop re-reads
 	activity *MonitorValue[uint64]
 	closed   bool
+	// the local services' listeners open, for ur status (daemon_local.go)
+	localListeners map[*DaemonLocalListener]bool
+	// the Sidecar of each network hosted (daemon_networks.go)
+	networkIdSidecars map[Id]*Sidecar
 }
 
 // Takes the instance's lock and listens on its socket or pipe. ErrDaemonRunning when another daemon holds the lock.
@@ -376,12 +390,12 @@ func (self *Daemon) serve(conn net.Conn) {
 		}
 		return
 	}
-	self.serveRpc(reader, conn, hello)
+	self.serveRpc(reader, conn, &daemonSession{hello: hello})
 }
 
 // control and hook: one JSON-RPC request a line, each answered before the next is read, each under the request
 // timeout. A line past the request bound, or one that does not end, closes the session.
-func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, hello *DaemonHello) {
+func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, session *daemonSession) {
 	writer := bufio.NewWriter(conn)
 	for {
 		line, err := readDaemonLine(reader, self.settings.Local.RequestByteCount)
@@ -392,7 +406,7 @@ func (self *Daemon) serveRpc(reader *bufio.Reader, conn net.Conn, hello *DaemonH
 			return
 		}
 		self.noteRequest()
-		response := self.dispatch(line, hello, self.runBounded)
+		response := self.dispatch(line, session, self.runBounded)
 		if response == nil {
 			continue
 		}

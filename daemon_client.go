@@ -36,6 +36,8 @@ const (
 	DaemonRpcFailed = -32002
 	// The method ran past SidecarLocalSettings.RequestTimeout.
 	DaemonRpcTimeout = -32003
+	// §5.8's FAILED_PRECONDITION: a network-scoped call with no network to act on, whose message names the networks.
+	DaemonRpcFailedPrecondition = -32004
 )
 
 // A JSON-RPC 2.0 request line. ur_confirmed sits beside params, where only a ur sets it.
