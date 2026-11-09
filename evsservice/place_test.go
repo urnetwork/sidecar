@@ -244,6 +244,20 @@ func TestPlaceNewUnreachableAnswers503AndWritesNothing(t *testing.T) {
 	if fixture.placement(repoId) != nil {
 		t.Error("place/ names an unreachable cluster")
 	}
+	// a repo placed before continues on its own cluster, and another creator still gets 409
+	placedRepoId := testId("repo-placed")
+	fixture.projectRepo(placedRepoId, creator, testId("sidecar-b"))
+	fixture.host.Blobs.SetNewRepoClusterId("meta-1")
+	if status := fixture.putRepo(placedRepoId, creator); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	fixture.host.Blobs.SetNewRepoClusterId("meta-9")
+	if status := fixture.putRepo(placedRepoId, creator); status != http.StatusOK {
+		t.Errorf("its creator's retry with place_new unreachable: %d", status)
+	}
+	if status := fixture.putRepo(placedRepoId, testId("sidecar-b")); status != http.StatusConflict {
+		t.Errorf("another creator with place_new unreachable: %d", status)
+	}
 }
 
 // FS-63: a cached 404 clears within 5 s.

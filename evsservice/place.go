@@ -4,7 +4,8 @@
 //
 //  1. place/<repo_id> on the first metadata cluster, If-None-Match, naming the cluster that takes new repos
 //     (BlobStore.NewRepoClusterId, sidecar.yml's place_new) and this sidecar as creator. A place_new this process
-//     cannot reach answers 503 before anything is written, so no place/ ever names it.
+//     cannot reach answers a new repo 503 before anything is written, so no place/ ever names it; a repo already
+//     placed goes on to step 2's rule.
 //  2. On 412, or an unknown outcome, it reads place/: the same creator continues on the cluster place/ names,
 //     whatever place_new says now, and any other gets 409, so of two racing creates exactly one places the repo and
 //     a retry never moves it. An unknown outcome whose read finds no place/ never landed and never will (§19.6's
@@ -87,6 +88,10 @@ func (self *EvsEngine) placeRepo(request *EvsRequest) (*sidecar.EvsRepoPlace, bo
 	repoId := request.RepoId
 	newClusterId := self.blobs.NewRepoClusterId()
 	if _, err := self.blobs.Cluster(newClusterId); err != nil {
+		// a repo already placed continues where place/ names, and a new one waits, so no place/ names this cluster
+		if held, err := self.places.Resolve(request.Ctx, repoId); err == nil {
+			return self.continuePlace(request, held)
+		}
 		self.log.Warningf("[evs] place_new names cluster %s, which this process cannot reach", newClusterId)
 		request.Unavailable(nil)
 		return nil, false
