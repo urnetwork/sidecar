@@ -5,6 +5,7 @@ package sidecartest
 
 import (
 	"context"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -213,16 +214,23 @@ func TestSchemaGuardRefusesRecordProtosOldHeader(t *testing.T) {
 	}
 	copyFile(metadataListFileName)
 	copyFile(schemaGuardFieldsPath)
-	areaFiles, err := filepath.Glob(filepath.Join(repository, schemaGuardTestdata, "*", schemaGuardAreaFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, areaFile := range areaFiles {
-		relativePath, err := filepath.Rel(repository, areaFile)
+	// every area file the guard reads, at any depth under testdata, as testdata/evs/format2's is
+	err = filepath.WalkDir(filepath.Join(repository, schemaGuardTestdata), func(walkPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() != schemaGuardAreaFileName {
+			return nil
+		}
+		relativePath, err := filepath.Rel(repository, walkPath)
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		copyFile(relativePath)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	path := filepath.Join(top, "protocol", "record.proto")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
