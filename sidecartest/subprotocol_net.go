@@ -6,7 +6,8 @@
 // allows (§8.10).
 //
 // Later tasks reuse this: AddSubprotocolSidecars for a network of admitted sidecars, Subprotocol for a
-// sidecar's dispatcher, and SetContractClass for a pair's contracts.
+// sidecar's dispatcher, and SetContractClass for a pair's contracts, which the fake issuer alone takes:
+// on a platform (T3), the platform's controller seals the class.
 
 package sidecartest
 
@@ -125,9 +126,15 @@ func (self *Net) AddSubprotocolSidecars(names ...string) ([]*SubprotocolSidecar,
 }
 
 // Seals class into every contract the issuer creates between a and b from now on, either way, as the
-// contract gate classes a pair (§8.10). The default is data.
+// contract gate classes a pair (§8.10). The default is data. A Net on a platform takes its contracts from
+// the platform's controller, which seals the class its own gate gives, so a class set there is kept as
+// unapplied (Net.Unapplied).
 func (self *Net) SetContractClass(a connect.Id, b connect.Id, class connectprotocol.ContractClass) {
 	exchange := self.exchange
+	if self.OnPlatform() {
+		exchange.refuseOnPlatform(fmt.Sprintf("SetContractClass %s %s %s: the platform's controller seals each contract's class itself", a, b, class))
+		return
+	}
 	exchange.stateLock.Lock()
 	defer exchange.stateLock.Unlock()
 	for _, key := range []netLinkKey{{source: a, destination: b}, {source: b, destination: a}} {

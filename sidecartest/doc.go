@@ -21,7 +21,8 @@
 //     whose map is testdata/metadata/fields.yml.
 //   - fake_blobs*.go, fake_redis*.go and the other fake_ files, with abuse_gate_fake.go, a fake of every
 //     interface ServiceHost holds, gathered by fake_host.go.
-//   - net*.go, connect clients in one process, built on connect's exported API alone (Q-TEST-1).
+//   - net*.go, connect clients in one process, built on connect's exported API alone (Q-TEST-1), and
+//     net_platform.go, the seam through which T3 runs them on server's exchange instead.
 //   - blobsuite and redissuite, the conformance suites, which take a fake or a real store.
 //   - localstack, this module's own clients of the stack in local/, so the suites run on real stores
 //     without go-redis or minio-go, which stay out of this module (§4.5).

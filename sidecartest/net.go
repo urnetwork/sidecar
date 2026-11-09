@@ -2,8 +2,9 @@
 // schedule, and a ServiceHost, fake unless a test gives another. net_connect.go adds connect clients on
 // an in-process exchange. A Net is built per test and closed at its end.
 //
-// T3 is the same Net with NetSettings.Engines set: server's sidecart3 hosts the engines on its real
-// stores, so fault's rules, which build every Net from NetSettings, run a T3 row as they run a T2 one.
+// T3 is the same Net with NetSettings.Engines and NetSettings.Platform set: server's sidecart3 hosts the
+// engines on its real stores and the connect clients on its exchange, so fault's rules, which build every
+// Net from NetSettings, run a T3 row as they run a T2 one.
 //
 // NewNet installs the process-wide hooks under sidecar_testhooks, so two Nets cannot be open at once,
 // and tests using one are not parallel. Methods are safe for concurrent use.
@@ -36,9 +37,13 @@ type NetSettings struct {
 	// plans reach them, with what closes it at the Net's end, after the engines close. An error panics
 	// in NewNet, since a Net with no host has nothing to run its engines on.
 	Engines func(ctx context.Context, net *Net) (host *sidecar.ServiceHost, closeHost func(), err error)
+	// Builds the platform this Net's connect clients run on in place of the fake contract issuer and
+	// ControlId sink (net_platform.go), at the first client: nil keeps those (T2). Server's T3
+	// (sidecart3) gives server's exchange. The Net closes it at its end, after the clients it opened.
+	Platform func(ctx context.Context, net *Net) (NetPlatform, error)
 	// Why this Net's connect clients may not run on the fake contract issuer and ControlId sink, empty
-	// when they may. T3 sets it until server's exchange carries its clients, so a T3 run whose row
-	// added a client or a sidecar fails rather than passing on T2's platform (Q-TEST-1).
+	// when they may. T3 sets it, so a T3 run whose row reached them, as a sidecar does until server's api
+	// carries its enrollment, fails rather than passing on T2's platform (Q-TEST-1).
 	RefusePlatformFakes string
 }
 
