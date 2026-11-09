@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
@@ -159,8 +160,8 @@ type sidecarConnectLeg struct {
 }
 
 // Starts one generation's client: settings from the Sidecar's with the ClientKey seed, the platform's client, a
-// BringYourApi, the dispatcher and the watch on the connection. The components attach once the run loop has
-// published the generation, so a removal never misses one. See sidecarLeg.
+// BringYourApi and the dispatcher. The watch on the connection and the components start once the run loop has
+// published the generation (start), so a removal never misses one. See sidecarLeg.
 func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (sidecarLegGeneration, error) {
 	settings := self.sidecar.settings
 	clientSettings := *settings.Connect.ClientSettings
@@ -248,7 +249,6 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		watchDone:      make(chan struct{}),
 		attachments:    map[string]*sidecarComponentAttachment{},
 	}
-	go connectGeneration.watchConnection()
 	return connectGeneration, nil
 }
 
@@ -285,12 +285,20 @@ type sidecarConnectGeneration struct {
 	api            *connect.BringYourApi
 	subprotocol    *Subprotocol
 	closePlatform  func()
+	watchStarted   atomic.Bool
 	watchDone      chan struct{}
 
 	stateLock   sync.Mutex
 	auth        *connect.ClientAuth
 	attachments map[string]*sidecarComponentAttachment
 	closed      bool
+}
+
+// Starts the watch on the connection and attaches the components. See sidecarLegGeneration.
+func (self *sidecarConnectGeneration) start() {
+	self.watchStarted.Store(true)
+	go self.watchConnection()
+	self.reconcileComponents()
 }
 
 // Online and Offline as the client connects and loses its connection, until the generation ends.
@@ -350,7 +358,9 @@ func (self *sidecarConnectGeneration) subprotocolStats() SidecarSubprotocolStats
 // Detaches every component, then closes the dispatcher, the client and its connection, and the api, joining each.
 func (self *sidecarConnectGeneration) closeAndWait() {
 	self.detachAll()
-	<-self.watchDone
+	if self.watchStarted.Load() {
+		<-self.watchDone
+	}
 	self.subprotocol.Close()
 	self.closePlatform()
 	self.api.Close()
