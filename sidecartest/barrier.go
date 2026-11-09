@@ -351,6 +351,17 @@ func (self *BarrierDriver) currentRunWithLock() *actorRun {
 	return self.goroutineRuns[currentGoroutineId()]
 }
 
+// The actor whose goroutine calls this, or "" for a goroutine no actor runs: a test's own, or one an actor's
+// code started, which the driver does not follow.
+func (self *BarrierDriver) CurrentActor() string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if run := self.currentRunWithLock(); run != nil {
+		return run.actor.Name()
+	}
+	return ""
+}
+
 // Makes the next arrival at site hold, after skip arrivals pass. actor limits that to one actor's
 // arrivals; an arrival from a goroutine with no known actor still matches. Arms for one site take
 // arrivals in the order armed.
