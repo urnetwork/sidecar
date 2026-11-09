@@ -52,6 +52,8 @@ type Sidecar struct {
 	hostStores func() []SidecarHostCredentialStore
 	// One enrollment at a time, held across its requests, so never stateLock (identity_enroll.go).
 	enrollLock sync.Mutex
+	// §16's approval ledger and run store, under their own lock (record_ledger.go).
+	records sidecarRecords
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle

@@ -9,6 +9,10 @@
 //
 // so a kill leaves the old file or the new one, and an fsync comes before the rename that exposes
 // the bytes. commitBackendFile runs the last three in that order.
+//
+// An append-only log (state_log.go) is the one file that grows in place: OpenAppend, Write, Sync, and
+// SyncDirectory after the Sync of a file OpenAppend made, so a record a kill cut short is a short
+// tail the log's reader drops, never a whole file lost.
 
 package sidecar
 
@@ -42,6 +46,24 @@ type SidecarStoreBackend interface {
 	// Drops what a kill left of CreateTemp's files. An instance calls this once, on opening, while
 	// no file is being written.
 	RemoveTemp() error
+	// Opens the file at path to append to, making it and path's directories when it is absent, and
+	// reports whether it made the file: the caller then syncs path's directory after the file's first
+	// Sync, so the new name survives a power cut.
+	OpenAppend(path string) (SidecarStoreBackendAppendFile, bool, error)
+}
+
+// A file open at its end, which every Write extends. Not safe for concurrent use: one appender at a
+// time per path, which state_log.go's per-path lock keeps.
+type SidecarStoreBackendAppendFile interface {
+	io.Writer
+	// The file's length now.
+	Size() (int64, error)
+	// Cuts the file to byteCount, so the next Write lands there: how a log drops a torn tail.
+	Truncate(byteCount int64) error
+	// Makes what was written survive a power cut.
+	Sync() error
+	// Ends the appender. Safe to call again.
+	Close() error
 }
 
 // A file on its way to a path. Not safe for concurrent use.
@@ -118,7 +140,8 @@ func NewSidecarMemoryBackend() SidecarStoreBackend {
 	}
 }
 
-// A file's bytes never change once committed, so a reader needs no copy.
+// A file's bytes never change once committed, so a reader needs no copy: an append or a truncate
+// swaps in a new slice rather than writing into the one a reader holds.
 type memoryStoreBackend struct {
 	stateLock    sync.Mutex
 	pathContents map[string][]byte
@@ -171,6 +194,68 @@ func (self *memoryStoreBackend) List(prefix string) ([]SidecarStoreEntry, error)
 
 // No temp file outlives a process here.
 func (self *memoryStoreBackend) RemoveTemp() error {
+	return nil
+}
+
+// An appender over the map's entry, made empty when absent.
+func (self *memoryStoreBackend) OpenAppend(path string) (SidecarStoreBackendAppendFile, bool, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	_, ok := self.pathContents[path]
+	if !ok {
+		self.pathContents[path] = []byte{}
+	}
+	return &memoryAppendFile{backend: self, path: path}, !ok, nil
+}
+
+// One appender. Each change copies, so a reader holding the old slice keeps reading what it opened.
+type memoryAppendFile struct {
+	backend *memoryStoreBackend
+	path    string
+	closed  bool
+}
+
+// Swaps in the file with p after it.
+func (self *memoryAppendFile) Write(p []byte) (int, error) {
+	if self.closed {
+		return 0, ErrSidecarStoreFailed
+	}
+	self.backend.stateLock.Lock()
+	defer self.backend.stateLock.Unlock()
+	self.backend.pathContents[self.path] = slices.Concat(self.backend.pathContents[self.path], p)
+	return len(p), nil
+}
+
+// The entry's length, 0 for one a Remove took.
+func (self *memoryAppendFile) Size() (int64, error) {
+	self.backend.stateLock.Lock()
+	defer self.backend.stateLock.Unlock()
+	return int64(len(self.backend.pathContents[self.path])), nil
+}
+
+// Swaps in the file's first byteCount bytes.
+func (self *memoryAppendFile) Truncate(byteCount int64) error {
+	if self.closed {
+		return ErrSidecarStoreFailed
+	}
+	self.backend.stateLock.Lock()
+	defer self.backend.stateLock.Unlock()
+	content := self.backend.pathContents[self.path]
+	if byteCount < 0 || int64(len(content)) < byteCount {
+		return ErrSidecarStoreFailed
+	}
+	self.backend.pathContents[self.path] = bytes.Clone(content[:byteCount])
+	return nil
+}
+
+// Memory is as durable as this backend gets.
+func (self *memoryAppendFile) Sync() error {
+	return nil
+}
+
+// Ends the appender.
+func (self *memoryAppendFile) Close() error {
+	self.closed = true
 	return nil
 }
 

@@ -28,6 +28,7 @@
 package sidecar
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/cipher"
@@ -443,7 +444,12 @@ func (self *keychain) resealFile(path string) (bool, error) {
 		return false, err
 	}
 	defer in.Close()
-	header, err := readSealHeader(in)
+	buffered := bufio.NewReader(in)
+	if prefix, _ := buffered.Peek(len(storeLogMagic)); isStoreLog(prefix) {
+		// an append-only log, which moves record by record (state_log.go)
+		return self.resealLog(path)
+	}
+	header, err := readSealHeader(buffered)
 	if err != nil {
 		return false, err
 	}
@@ -461,7 +467,7 @@ func (self *keychain) resealFile(path string) (bool, error) {
 		return false, err
 	}
 	defer writer.file.Discard()
-	reader := newSealReader(in, header, path, func() (cipher.AEAD, error) {
+	reader := newSealReader(buffered, header, path, func() (cipher.AEAD, error) {
 		return self.classAead(header.class, header.generation)
 	})
 	if _, err := io.Copy(writer.seal, reader); err != nil {
