@@ -72,6 +72,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				FileByteCount:          8 * 1024 * 1024,
 				RunHourByteCount:       256 * 1024 * 1024,
 				SpoolByteCount:         1024 * 1024 * 1024,
+				SpoolSegmentByteCount:  16 * 1024 * 1024,
+				SpoolCursorRecordCount: 64,
 				TranscriptTailInterval: 30 * time.Second,
 				HookExitTimeout:        300 * time.Millisecond,
 				RestorePointByteCount:  256 * 1024 * 1024,

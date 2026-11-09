@@ -38,6 +38,12 @@ type SidecarIngestSettings struct {
 	RunHourByteCount int64
 	// The local encrypted spool, which keeps capturing while the daemon is locked: 1 GiB.
 	SpoolByteCount int64
+	// One spool segment, past which the next record starts another: 16 MiB, a reading, so a drain
+	// removes what it has taken in steps and never holds a gigabyte in one file.
+	SpoolSegmentByteCount int64
+	// Records a drain hands over between writes of its cursor: 64, a reading. After a kill at most
+	// this many come again, each with its SpoolRecordId, which the consumer skips.
+	SpoolCursorRecordCount int
 	// A transcript is tailed this often, and at Stop, SubagentStop, PreCompact and SessionEnd: 30 s.
 	TranscriptTailInterval time.Duration
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
@@ -86,6 +92,8 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		FileByteCount:          8 * 1024 * 1024,
 		RunHourByteCount:       256 * 1024 * 1024,
 		SpoolByteCount:         1024 * 1024 * 1024,
+		SpoolSegmentByteCount:  16 * 1024 * 1024,
+		SpoolCursorRecordCount: 64,
 		TranscriptTailInterval: 30 * time.Second,
 		HookExitTimeout:        300 * time.Millisecond,
 		RestorePointByteCount:  256 * 1024 * 1024,
