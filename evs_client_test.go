@@ -253,7 +253,7 @@ func TestEvsTransportMapsEveryRefusalClass(t *testing.T) {
 		test := newEvsTestClient(t, evsRefusingHandler(t, c.status, c.reply, nil), newEvsTestStore(t))
 		err := test.client.http.callMessage(context.Background(), &evsCall{
 			route: "POST /evs/v1/repos/{repo_id}/push", method: http.MethodPost,
-			path: "/evs/v1/repos/" + EvsKeyId(evsTestId("repo")) + "/push", repoId: evsTestId("repo"), role: evsScopeWrite,
+			path: "/evs/v1/repos/" + evsUrlId(evsTestId("repo")) + "/push", repoId: evsTestId("repo"), role: evsScopeWrite,
 		}, nil)
 		evsError, ok := EvsErrorOf(err)
 		if !ok || evsError.Status != c.status || !c.check(evsError) {
@@ -271,7 +271,7 @@ func TestEvsTransportUnauthorizedAndForeignBodies(t *testing.T) {
 		writer.WriteHeader(http.StatusUnauthorized)
 	}), newEvsTestStore(t))
 	call := &evsCall{route: "GET /evs/v1/repos/{repo_id}/refs", method: http.MethodGet,
-		path: "/evs/v1/repos/" + EvsKeyId(evsTestId("repo")) + "/refs", repoId: evsTestId("repo"), role: evsScopeRead}
+		path: "/evs/v1/repos/" + evsUrlId(evsTestId("repo")) + "/refs", repoId: evsTestId("repo"), role: evsScopeRead}
 	if err := test.client.http.callMessage(context.Background(), call, nil); !errors.Is(err, ErrEvsUnauthorized) {
 		t.Errorf("401: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestEvsTransportRetriesOnlyWhatRefusesNothing(t *testing.T) {
 	}), newEvsTestStore(t))
 	reply := &protocol.EvsRefsReply{}
 	call := &evsCall{route: "GET /evs/v1/repos/{repo_id}/refs", method: http.MethodGet,
-		path: "/evs/v1/repos/" + EvsKeyId(evsTestId("repo")) + "/refs", repoId: evsTestId("repo"), role: evsScopeRead, retry: true}
+		path: "/evs/v1/repos/" + evsUrlId(evsTestId("repo")) + "/refs", repoId: evsTestId("repo"), role: evsScopeRead, retry: true}
 	if err := test.client.http.callMessage(context.Background(), call, reply); err != nil || reply.GetPushSequence() != 42 {
 		t.Fatalf("read: %v %v", err, reply)
 	}
@@ -348,11 +348,11 @@ func TestEvsTransportScopesAndUrls(t *testing.T) {
 		writer.WriteHeader(http.StatusOK)
 	}), newEvsTestStore(t))
 	call := &evsCall{route: "DELETE /evs/v1/repos/{repo_id}", method: http.MethodDelete,
-		path: "/evs/v1/repos/" + EvsKeyId(repoId) + "?now=1", repoId: repoId, role: evsScopeAdmin}
+		path: "/evs/v1/repos/" + evsUrlId(repoId) + "?now=1", repoId: repoId, role: evsScopeAdmin}
 	if err := test.client.http.callMessage(context.Background(), call, nil); err != nil {
 		t.Fatal(err)
 	}
-	if seenPath != "https://evs.example/evs/v1/repos/"+EvsKeyId(repoId)+"?now=1" {
+	if seenPath != "https://evs.example/evs/v1/repos/"+evsUrlId(repoId)+"?now=1" {
 		t.Errorf("url %s", seenPath)
 	}
 	if len(test.tokens.scopes) != 1 || len(test.tokens.scopes[0]) != 1 ||
@@ -495,7 +495,7 @@ func TestEvsCreateRepoFilesThenPlacesThenActivates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoPath := "/evs/v1/repos/" + EvsKeyId(repo.RepoId())
+	repoPath := "/evs/v1/repos/" + evsUrlId(repo.RepoId())
 	want := []string{"PUT " + repoPath, "PUT " + repoPath, "POST " + repoPath + "/activate"}
 	if strings.Join(routes, ",") != strings.Join(want, ",") {
 		t.Errorf("routes %v", routes)
@@ -537,7 +537,7 @@ func TestEvsDeleteAndShredStayThin(t *testing.T) {
 	if err := repo.Shred(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 1 || routes[0] != "DELETE https://evs.example/evs/v1/repos/"+EvsKeyId(repo.RepoId())+"?now=1" {
+	if len(routes) != 1 || routes[0] != "DELETE https://evs.example/evs/v1/repos/"+evsUrlId(repo.RepoId())+"?now=1" {
 		t.Errorf("routes %v", routes)
 	}
 	deletion := test.poster.bodies[0].(*protocol.RepoDelete)

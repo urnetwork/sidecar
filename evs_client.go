@@ -217,7 +217,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if err := repo.callLifecycle(ctx, &evsCall{
 		route:  "PUT /evs/v1/repos/{repo_id}",
 		method: http.MethodPut,
-		path:   "/evs/v1/repos/" + EvsKeyId(repoId),
+		path:   "/evs/v1/repos/" + evsUrlId(repoId),
 		repoId: repoId,
 		role:   evsScopeAdmin,
 	}); err != nil {
@@ -230,7 +230,7 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if err := repo.callLifecycle(ctx, &evsCall{
 		route:  "POST /evs/v1/repos/{repo_id}/activate",
 		method: http.MethodPost,
-		path:   "/evs/v1/repos/" + EvsKeyId(repoId) + "/activate",
+		path:   "/evs/v1/repos/" + evsUrlId(repoId) + "/activate",
 		repoId: repoId,
 		role:   evsScopeAdmin,
 	}); err != nil {

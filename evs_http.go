@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -152,6 +153,12 @@ type evsHttp struct {
 	serviceToken EvsServiceTokenFunction
 	settings     *EvsSettings
 	clock        Clock
+}
+
+// An id as a route's path and query name it: 32 lowercase hex characters with no dashes, as evs parses them and as
+// object keys hold them (plan-EVS1-format-bytes#9).
+func evsUrlId(id Id) string {
+	return hex.EncodeToString(id[:])
 }
 
 // The repo scope one call presents.
