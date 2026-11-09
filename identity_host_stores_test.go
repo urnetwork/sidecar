@@ -21,7 +21,7 @@ func TestHostStoreCountsEveryExtensionVersionUntilTheCleanRelease(t *testing.T) 
 	if defaultHostStoreRoots().extensionCleanVersion != hostStoreExtensionCleanVersion {
 		t.Fatal("this host's roots do not carry the clean version")
 	}
-	for _, version := range []string{"0.1", "1.2.3", "99.0.0.1", "not-a-version", ""} {
+	for _, version := range []string{"0.1", "1.2.3", "99.0.1", "not-a-version", ""} {
 		if !hostExtensionVersionPersists(version, "") {
 			t.Errorf("%q does not count while the clean version is unset", version)
 		}
@@ -35,7 +35,7 @@ func TestHostStoreExtensionVersionAgainstTheCleanRelease(t *testing.T) {
 	}{
 		{version: "2.0.0", persists: false},
 		{version: "2.0", persists: false},
-		{version: "2.0.0.1", persists: false},
+		{version: "2.0.1", persists: false},
 		{version: "2.1", persists: false},
 		{version: "10.0", persists: false},
 		{version: "1.9.9", persists: true},

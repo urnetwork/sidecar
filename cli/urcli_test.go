@@ -299,7 +299,7 @@ func TestUrcliLoginRefusals(t *testing.T) {
 		t.Fatal("a denied consent ran the command")
 	}
 
-	if _, _, err := urcliLogin(context.Background(), &urCli{}, "https://ur.io/invite#synthetic"); err == nil {
+	if _, _, err := urcliLogin(context.Background(), &urCli{}, "https://invite.example/invite#synthetic"); err == nil {
 		t.Fatal("an invite login ran before Team invitations exist")
 	}
 }
