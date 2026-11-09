@@ -243,6 +243,8 @@ type DnsSigningSettings struct {
 type DnsTtlSettings struct {
 	// _acme-challenge TXT, inside R-DNS-7's 60 s.
 	Challenge uint32 `yaml:"challenge"`
+	// canary.<root> TXT, plan-DNS-canary-route-state's 60, so a resolver never holds one past a minute.
+	Canary uint32 `yaml:"canary"`
 	// A and AAAA at *, @ and each copy: the longest a health drop stays cached.
 	Edge uint32 `yaml:"edge"`
 	// MX at @, *, b and each copy.
@@ -346,6 +348,7 @@ func DefaultDnsSettings() *DnsSettings {
 		Ns: []string{"ns1", "ns2"},
 		Ttl: DnsTtlSettings{
 			Challenge:  60,
+			Canary:     60,
 			Edge:       60,
 			Mx:         300,
 			MxHost:     300,
@@ -729,6 +732,7 @@ func (self *DnsTtlSettings) validate() error {
 		ttl  uint32
 	}{
 		{name: "challenge", ttl: self.Challenge},
+		{name: "canary", ttl: self.Canary},
 		{name: "edge", ttl: self.Edge},
 		{name: "mx", ttl: self.Mx},
 		{name: "mx_host", ttl: self.MxHost},

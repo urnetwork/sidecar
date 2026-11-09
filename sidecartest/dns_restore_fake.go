@@ -47,8 +47,9 @@ type FakeDnsRestoreStore struct {
 }
 
 var (
-	_ dnsservice.DnsRestoreStore = (*FakeDnsRestoreStore)(nil)
-	_ dnsservice.DnsReadyStore   = (*FakeDnsRestoreStore)(nil)
+	_ dnsservice.DnsRestoreStore       = (*FakeDnsRestoreStore)(nil)
+	_ dnsservice.DnsReadyStore         = (*FakeDnsRestoreStore)(nil)
+	_ dnsservice.DnsCanaryVerdictStore = (*FakeDnsRestoreStore)(nil)
 )
 
 // clock may be nil, for a fresh clock; it stamps list times.
