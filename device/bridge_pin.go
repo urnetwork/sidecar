@@ -321,7 +321,7 @@ func (self *BridgePinTable) Pick(entry *BridgeEntryState, packet []byte) BridgeL
 
 	// syn: a new connection takes the new rule at once, under its own pin
 	if parsed.syn && (windowState != nil || pairState != nil) {
-		link := self.rendezvous(snapshot, parsed.pairHash, now, false)
+		link := self.rendezvous(snapshot, parsed.pairHash, now, false, true)
 		if link != 0 && self.insert(parsed.key0, parsed.fiveTupleKey1|entryKey1, link, nowSeconds) {
 			return link
 		}
@@ -336,7 +336,7 @@ func (self *BridgePinTable) Pick(entry *BridgeEntryState, packet []byte) BridgeL
 	}
 
 	// the hash
-	link := self.rendezvous(snapshot, parsed.pairHash, now, true)
+	link := self.rendezvous(snapshot, parsed.pairHash, now, true, parsed.tcp)
 	if link == 0 {
 		return 0
 	}
@@ -354,9 +354,9 @@ func (self *BridgePinTable) idleOf(tcp bool) time.Duration {
 
 // Weighted rendezvous (D-BRIDGE-9) over the advertisers that are up; with none up, over every live one, so a down
 // mark moves nothing when no other advertiser is up; with none live and withDraining, over the draining links that
-// still serve, since a draining link serves every pair while nothing else remains. 0 for no link. Each link scores
-// weight / -ln(u), u its uniform hash with the pair, and the highest wins, ties to the lower link.
-func (self *BridgePinTable) rendezvous(snapshot *bridgeEntrySnapshot, pairHash uint64, now time.Time, withDraining bool) BridgeLinkId {
+// still serve the pair's protocol, since a draining link serves every pair while nothing else remains. 0 for no link.
+// Each link scores weight / -ln(u), u its uniform hash with the pair, and the highest wins, ties to the lower link.
+func (self *BridgePinTable) rendezvous(snapshot *bridgeEntrySnapshot, pairHash uint64, now time.Time, withDraining bool, tcp bool) BridgeLinkId {
 	nowNano := now.UnixNano()
 	pick := func(eligible func(link *bridgeEntryLinkState) bool) BridgeLinkId {
 		best := BridgeLinkId(0)
@@ -386,9 +386,8 @@ func (self *BridgePinTable) rendezvous(snapshot *bridgeEntrySnapshot, pairHash u
 	if !withDraining {
 		return 0
 	}
-	tcp := false
 	return pick(func(link *bridgeEntryLinkState) bool {
-		return link.serves(tcp, now) || link.serves(!tcp, now)
+		return link.serves(tcp, now)
 	})
 }
 
