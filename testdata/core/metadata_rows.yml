@@ -1,0 +1,7 @@
+# The protocol/core.proto fields no design fence prints, for I-18: plan-CORE-core-hint-body #1's CoreHint, which api's
+# sync route and the residents build into PushHint.hint on topic core. Each line pins the field's number and type and
+# names the §2.8 row that shows it; `sees` quotes that row, so a row that stops saying it fails.
+
+CoreHint.kind: {number: 1, type: CoreHintKind, row: connect-4, sees: "server-held ids, kinds and versions"}
+CoreHint.sidecar_id: {number: 2, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}
+CoreHint.min_secure_version: {number: 3, type: uint32, row: connect-4, sees: "server-held ids, kinds and versions"}

@@ -74,6 +74,9 @@ var testFieldWidths = map[string]int{
 	// a network_tls_cert row's id (plan-TLS-small-readings#1)
 	"TlsHint.cert_id": testIdSize,
 
+	// this client's own sidecar_id (plan-CORE-core-hint-body #1)
+	"CoreHint.sidecar_id": testIdSize,
+
 	"DirectoryNotice.request_id":           testIdSize,
 	"DirectoryNotice.requester_sidecar_id": testIdSize,
 	"DirectoryNotice.decisions":            testNoticeDecisions,
@@ -193,7 +196,7 @@ func TestSocketTicketFitsItsBounds(t *testing.T) {
 
 // §6.8: PushHint.hint holds ids, kinds and versions, and is dropped when coalesced.
 func TestHintsFitPushHint(t *testing.T) {
-	for _, message := range []proto.Message{&SocketHint{}, &GkmHint{}, &EvsHeadChanged{}, &MailHint{}, &TlsHint{}} {
+	for _, message := range []proto.Message{&SocketHint{}, &GkmHint{}, &EvsHeadChanged{}, &MailHint{}, &TlsHint{}, &CoreHint{}} {
 		name := message.ProtoReflect().Descriptor().Name()
 		if err := testFillToWidths(message.ProtoReflect(), testFieldWidths); err != nil {
 			t.Fatal(err)

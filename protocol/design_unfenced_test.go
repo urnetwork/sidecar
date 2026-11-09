@@ -666,6 +666,14 @@ message SocketRegistrationClaim {
   string app_mode = 6;
 }
 
+// sidecar/protocol/core.proto
+// plan-CORE-core-hint-body #1's CoreHint and its kinds, PushHint.hint's body on topic core.
+message CoreHint { CoreHintKind kind = 1; bytes sidecar_id = 2; uint32 min_secure_version = 3; }
+enum CoreHintKind {
+  CORE_HINT_KIND_UNSPECIFIED = 0; CORE_HINT_KIND_REVOCATION = 1; CORE_HINT_KIND_RESYNC = 2; CORE_HINT_KIND_WAKE = 3;
+  CORE_HINT_KIND_MIN_SECURE = 4; CORE_HINT_KIND_GATES = 5;
+}
+
 // sidecar/protocol/tls.proto
 // plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, and #2's attestation body.
 message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
