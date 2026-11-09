@@ -66,7 +66,7 @@ func TestClientIdsRecordForm(t *testing.T) {
 	for _, step := range []struct {
 		generation int64
 		clientId   Id
-	}{{2, first}, {3, second}, {3, again}} {
+	}{{generation: 2, clientId: first}, {generation: 3, clientId: second}, {generation: 3, clientId: again}} {
 		if err := rememberSidecarClientId(secrets, step.generation, step.clientId); err != nil {
 			t.Fatal(err)
 		}
