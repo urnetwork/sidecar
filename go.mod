@@ -7,6 +7,7 @@ tool google.golang.org/protobuf/cmd/protoc-gen-go
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/andybalholm/brotli v1.2.7
+	github.com/emersion/go-smtp v0.25.1
 	github.com/klauspost/compress v1.20.2
 	github.com/miekg/dns v1.1.72
 	github.com/pires/go-proxyproto v0.16.0
@@ -20,6 +21,7 @@ require (
 
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -63,3 +65,9 @@ replace github.com/pion/sctp => ../connect/sctp
 replace github.com/urnetwork/glog => ../glog
 
 replace gvisor.dev/gvisor => ../gvisor
+
+// D-MAIL-3's go-smtp fork and plan-MAIL-mox-subset's mox subset, which every module that links the
+// root repeats, since Go does not inherit a replace (QD-193; third_party/*/URNETWORK.md).
+replace github.com/emersion/go-smtp => ./third_party/go-smtp
+
+replace github.com/mjl-/mox => ./third_party/mox
