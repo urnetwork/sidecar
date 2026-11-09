@@ -36,7 +36,8 @@ models:
       - sidecar/gkmservice/*.go
     exclude:
       - sidecar/evs_index_*.go
-    runs: []
+    runs:
+      - {at: 2026-11-09, commit: 1b95665622a4ec38509bd30a686d6ed752eb400c, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 9aece8d3ee88a44e3891dcc1e2c7a0d569c6343f513304a6ad2a6ea40c512ea6, states: 14451583, depth: 67, seconds: 1743}
 
   - spec: StoreSettle
     owners: [EVS1-M2-02]
