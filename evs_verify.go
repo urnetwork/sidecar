@@ -356,6 +356,20 @@ func (self *EvsVerifier) gapHead(verified *EvsVerifiedHead, read *EvsHeadRead) (
 	return verified, nil
 }
 
+// A ref's statements from fromVersion + 1 to throughVersion, read from GET .../log and each verified, chained from
+// fromChain, as a replaying reader walks them: what §16.8's stream chains and §7.9's config replay call. The caller
+// compares the last statement's Chain with the C it expects at throughVersion, and pins as it decides.
+func (self *EvsVerifier) Walk(ctx context.Context, repoId Id, refId Id, fromVersion uint64, fromChain [sha256.Size]byte, throughVersion uint64) ([]*EvsVerifiedStatement, error) {
+	if throughVersion <= fromVersion {
+		return nil, nil
+	}
+	statements, err := self.client.readLog(ctx, repoId, refId, fromVersion+1, throughVersion)
+	if err != nil {
+		return nil, err
+	}
+	return self.walk(repoId, refId, fromVersion, fromChain, statements, throughVersion)
+}
+
 // The statements from fromVersion + 1 to throughVersion, each verified, chained from fromChain, in order.
 func (self *EvsVerifier) walk(repoId Id, refId Id, fromVersion uint64, fromChain [sha256.Size]byte, statements []*protocol.EvsReadStatement, throughVersion uint64) ([]*EvsVerifiedStatement, error) {
 	walked := []*EvsVerifiedStatement{}

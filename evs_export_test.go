@@ -18,8 +18,6 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -277,18 +275,3 @@ func TestEvsFileModeCommitsAreDeterministic(t *testing.T) {
 		t.Errorf("commit %q", show)
 	}
 }
-
-// The push record the world serves for a push: its statement and payload as items.
-func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]byte, bool) {
-	if version == 0 || uint64(len(self.commits)) < version {
-		return nil, false
-	}
-	commit := self.commits[version-1]
-	if !bytes.Equal(commit.parsed.Push.GetPushId(), pushId) {
-		return nil, false
-	}
-	return evsJoinItems([][]byte{commit.statement, commit.built.Payload}), true
-}
-
-// Unused by the tests above, it keeps proto imported for the world's records.
-var _ = proto.Marshal

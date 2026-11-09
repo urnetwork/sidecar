@@ -46,7 +46,7 @@ func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) {
 	}
 	return self, nil
 }
-func (self *evsTestConfig) OnChain(pin *bridge.AuthPin) bool            { return true }
+func (self *evsTestConfig) OnChain(pin *bridge.AuthPin) bool { return true }
 func (self *evsTestConfig) IdentityKey(sidecarId Id) []byte {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -618,4 +618,16 @@ func (self *evsTestClient) eventsOf(kind SidecarEventKind) []SidecarEvent {
 		}
 	}
 	return events
+}
+
+// The push record the world serves for a push: its statement and payload as items.
+func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]byte, bool) {
+	if version == 0 || uint64(len(self.commits)) < version {
+		return nil, false
+	}
+	commit := self.commits[version-1]
+	if !bytes.Equal(commit.parsed.Push.GetPushId(), pushId) {
+		return nil, false
+	}
+	return evsJoinItems([][]byte{commit.statement, commit.built.Payload}), true
 }

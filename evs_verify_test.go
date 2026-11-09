@@ -550,3 +550,25 @@ func TestEvsDirectoryDeltaBelowThePin(t *testing.T) {
 		t.Errorf("a file's entry as a directory's delta")
 	}
 }
+
+// The exported walk reads the log from a version and chains every statement, as a stream's or the config's replay
+// does: it reaches the head's C from C_0, and refuses a log that skips a version.
+func TestEvsWalkFromTheLog(t *testing.T) {
+	world := newEvsTestWorld(t)
+	for i := range 20 {
+		world.push(&evsTestChange{path: fmt.Sprint("f", i), content: []byte("x")})
+	}
+	reader := world.reader(t, evsTestId("replayer"))
+	version, chain := world.head()
+	walked, err := reader.client.Verifier().Walk(context.Background(), world.repoId, world.refId, 0, EvsChainStart(world.repoId, world.refId), version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(walked) != int(version) || walked[len(walked)-1].Chain != chain {
+		t.Errorf("walked %d to another chain", len(walked))
+	}
+	world.omitVersion = 7
+	if _, err := reader.client.Verifier().Walk(context.Background(), world.repoId, world.refId, 0, EvsChainStart(world.repoId, world.refId), version); !errors.Is(err, ErrEvsChainBroken) {
+		t.Errorf("a log that skips a version: %v", err)
+	}
+}
