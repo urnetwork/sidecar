@@ -10,6 +10,8 @@ require (
 	github.com/emersion/go-message v0.18.2
 	github.com/emersion/go-smtp v0.25.1
 	github.com/klauspost/compress v1.20.2
+	github.com/letsencrypt/pebble/v2 v2.10.1
+	github.com/mholt/acmez/v3 v3.1.7
 	github.com/miekg/dns v1.1.72
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/urnetwork/connect v0.0.0
@@ -24,10 +26,12 @@ require (
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/letsencrypt/challtestsrv v1.4.2 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/ice/v4 v4.4.1 // indirect
