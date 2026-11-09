@@ -284,6 +284,13 @@ func (self *DirectoryClient) View() {
 	self.signal()
 }
 
+// One alarm through the record's sink.
+func (self *DirectoryClient) raise(reason SidecarRecordAlarm, logId Id, sidecarId *Id) {
+	if self.alarm != nil {
+		self.alarm(&RecordAlarm{Reason: reason, LogId: logId, SidecarId: sidecarId})
+	}
+}
+
 // Wakes the loop without waiting.
 func (self *DirectoryClient) signal() {
 	select {
