@@ -56,18 +56,21 @@ type netExchange struct {
 	// a client was ever added, each of which ran on the platform fakes
 	everAdded bool
 	links     map[netLinkKey]*LinkConditions
-	workers   sync.WaitGroup
+	// the class the issuer seals into a pair's contracts, data where none is set (subprotocol_net.go)
+	contractClasses map[netLinkKey]protocol.ContractClass
+	workers         sync.WaitGroup
 }
 
 func newNetExchange(ctx context.Context, net *Net) *netExchange {
 	cancelCtx, cancel := context.WithCancel(ctx)
 	return &netExchange{
-		net:     net,
-		ctx:     cancelCtx,
-		cancel:  cancel,
-		random:  rand.New(rand.NewPCG(uint64(net.settings.LinkSeed), 0x11e7)),
-		clients: map[connect.Id]*NetClient{},
-		links:   map[netLinkKey]*LinkConditions{},
+		net:             net,
+		ctx:             cancelCtx,
+		cancel:          cancel,
+		random:          rand.New(rand.NewPCG(uint64(net.settings.LinkSeed), 0x11e7)),
+		clients:         map[connect.Id]*NetClient{},
+		links:           map[netLinkKey]*LinkConditions{},
+		contractClasses: map[netLinkKey]protocol.ContractClass{},
 	}
 }
 
@@ -194,6 +197,8 @@ func (self *netContractIssuer) issue(createContract *protocol.CreateContract) (*
 		SourceId:                   self.sourceId.Bytes(),
 		DestinationId:              destinationId.Bytes(),
 		DestinationClientPublicKey: destination.Client.ClientKeyManager().PublicKey(),
+		// C13's class, as the contract gate seals it (§8.10)
+		ContractClass: self.exchange.contractClass(self.sourceId, destinationId),
 	})
 	if err != nil {
 		return nil, err
@@ -306,6 +311,12 @@ func (self *netExchange) addClient(ctx context.Context, name string, clientId co
 		}
 	}()
 	return netClient
+}
+
+// Why a client may not run on the fake contract issuer and ControlId sink here, empty when it may: what
+// NetSettings.RefusePlatformFakes says. A run that added one on such a Net fails (fault.Run).
+func (self *Net) RefusesPlatformFakes() string {
+	return self.settings.RefusePlatformFakes
 }
 
 // Whether a client was added, each of which runs on the fake contract issuer and the ControlId sink, so

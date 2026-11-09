@@ -137,6 +137,18 @@ func clockOf(ctx context.Context, fallback Clock) Clock {
 	return fallback
 }
 
+// What a wrapper outside this package does first, as every fake here does: a dead actor's goroutine
+// stops here, and any other caller goes on. Server's T3 store wrappers call it (sidecart3).
+func StopIfDead(ctx context.Context) {
+	stopIfDead(ctx)
+}
+
+// A crash point in a wrapper outside this package, as CrashBeforeApply and CrashAfterApply take one
+// here: the calling actor dies and the call never returns (sidecart3).
+func CrashCaller(ctx context.Context) {
+	crashCaller(ctx)
+}
+
 // What every fake does first: a dead actor's goroutine stops here.
 func stopIfDead(ctx context.Context) {
 	if actor := ActorFromContext(ctx); actor != nil && actor.Killed() {

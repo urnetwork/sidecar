@@ -26,6 +26,8 @@ import (
 // What CheckRow ran for one case.
 type RowReport struct {
 	Case *Case
+	// The tier it ran on.
+	Tier Tier
 	// The schedule as written, with no seed.
 	Fixed *Result
 	// Its twin, nil when it refuses nothing.
@@ -50,7 +52,11 @@ func (self *RowReport) Failed() bool {
 // What ran, for a test's log: seeds run and failed, lost writes, replays, and every failure.
 func (self *RowReport) String() string {
 	var text strings.Builder
-	fmt.Fprintf(&text, "%s on T2:", self.Case)
+	tier := self.Tier
+	if tier == "" {
+		tier = TierT2
+	}
+	fmt.Fprintf(&text, "%s on %s:", self.Case, tier)
 	if self.Explore != nil {
 		fmt.Fprintf(&text, " %s.", self.Explore)
 	}
@@ -85,13 +91,15 @@ func checkRuleSettings(settings *RuleSettings) error {
 	return nil
 }
 
-// Runs registration's case on T2 under every rule its row takes. settings nil takes the defaults.
+// Runs registration's case under every rule its row takes, on T2, or on the tier settings' Net names:
+// server's sidecart3 runs a T3 registration through here with T3's NetSettings and the nightly seeds.
+// settings nil takes the defaults.
 func CheckRow(ctx context.Context, registration *Registration, settings *RuleSettings) *RowReport {
 	if settings == nil {
 		settings = DefaultRuleSettings()
 	}
 	testCase := DefaultCatalog().Case(registration.Row, registration.Case)
-	report := &RowReport{Case: testCase}
+	report := &RowReport{Case: testCase, Tier: settings.Tier}
 	if testCase == nil {
 		report.Case = &Case{Name: registration.Case, Row: &Row{Id: registration.Row}}
 		report.Errors = append(report.Errors, fmt.Errorf("%s names no case the catalog holds", registration))

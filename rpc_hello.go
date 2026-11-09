@@ -179,7 +179,13 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 		// until a SidecarAdmit names this sidecar in its own verified state, it gets no peer (§5.6)
 		return &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE, Message: "this sidecar is not admitted"}
 	}
-	body, err := proto.Marshal(self.ownHelloFields(clientId).hello())
+	fields := self.ownHelloFields(clientId)
+	// a Hello carrying bit 1 marks the pair before it goes (rpc_marked_pair.go)
+	marked := false
+	if fields.features&SubprotocolFeatureAsksSearch != 0 {
+		marked = self.markBeforeSend(clientId)
+	}
+	body, err := proto.Marshal(fields.hello())
 	if err != nil {
 		return err
 	}
@@ -196,6 +202,7 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 		return err
 	}
 	defer remove()
+	self.noteWindowActivity(clientId)
 	if err := self.sendEnvelopeAcked(clientId, envelope, self.forgetPeerOnAckError(clientId), timeout); err != nil {
 		return sendFailure(err, requestId)
 	}
@@ -215,6 +222,15 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 		if err != nil {
 			self.forgetPeer(clientId)
 			return err
+		}
+		self.noteWindowActivity(clientId)
+		switch {
+		case marked:
+			// the answer's contract opens the receive window
+			self.peerWindows.AdoptPeerWindowContract(clientId, response.transferKey)
+		case peer.Features&SubprotocolFeatureAsksSearch != 0:
+			// an app host answering this indexer's Hello with bit 1
+			self.markOnReceipt(clientId, response.transferKey)
 		}
 		self.markPeerVerifiedAs(clientId, response.clientPublicKey, peer)
 		return nil
@@ -252,7 +268,17 @@ func (self *Subprotocol) dispatchHello(ctx context.Context, message *subprotocol
 		refuse(code)
 		return
 	}
-	body, err := proto.Marshal(self.ownHelloFields(message.sourceId).helloResult())
+	// a marked pair (rpc_marked_pair.go): a verified Hello carrying bit 1 marks it on receipt, before the
+	// reply, and a reply carrying bit 1 marks it before it goes
+	self.noteWindowActivity(message.sourceId)
+	if peer.Features&SubprotocolFeatureAsksSearch != 0 {
+		self.markOnReceipt(message.sourceId, message.transferKey)
+	}
+	fields := self.ownHelloFields(message.sourceId)
+	if fields.features&SubprotocolFeatureAsksSearch != 0 {
+		self.markBeforeSend(message.sourceId)
+	}
+	body, err := proto.Marshal(fields.helloResult())
 	if err != nil {
 		refuse(protocol.ErrorCode_ERR_UNAVAILABLE)
 		return

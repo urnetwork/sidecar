@@ -287,8 +287,12 @@ func (self *Subprotocol) takeOrRetire(peer *subprotocolPeer) (subprotocolInbound
 type subprotocolPeerIdentity struct {
 	// C15's key on the frame whose Hello verified, which every later frame must carry
 	clientPublicKey [ed25519.PublicKeySize]byte
-	// HelloCacheTimeout after the Hello verified
+	// HelloCacheTimeout after the Hello verified, or later while a marked pair's session lives
+	// (rpc_marked_pair.go)
 	expireTime time.Time
+	// when the session last showed live: the Hello's verification, then each Pong or Ping of a marked
+	// pair
+	sessionTime time.Time
 	// what the Hello showed; nil only where an internal test opened the gate by hand
 	peer *SubprotocolPeerIdentity
 }
@@ -302,12 +306,14 @@ func (self *Subprotocol) markPeerVerified(sourceId connect.Id, clientPublicKey [
 // Opens the gate for sourceId, as of now and until HelloCacheTimeout: what Hello's check does once a
 // Hello or HelloResult from that peer verifies, with C15's key on that frame and the peer it showed.
 func (self *Subprotocol) markPeerVerifiedAs(sourceId connect.Id, clientPublicKey [ed25519.PublicKeySize]byte, peer *SubprotocolPeerIdentity) {
-	expireTime := self.clock.Now().Add(self.settings.HelloCacheTimeout)
+	now := self.clock.Now()
+	expireTime := now.Add(self.settings.HelloCacheTimeout)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.sourceIdIdentities[sourceId] = subprotocolPeerIdentity{
 		clientPublicKey: clientPublicKey,
 		expireTime:      expireTime,
+		sessionTime:     now,
 		peer:            peer,
 	}
 }

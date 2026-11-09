@@ -152,6 +152,14 @@ type Subprotocol struct {
 	headCheck atomic.Pointer[headCheckTransport]
 	// the feature bits this side sends, which the inline handler reads with no lock (rpc_features.go)
 	features atomic.Pointer[subprotocolFeatureSet]
+	// connect's C19 ledger, and the first-choice indexer and foreground the keepalive follows
+	// (rpc_marked_pair.go)
+	peerWindows subprotocolPeerWindows
+	markedPair  *MonitorValue[subprotocolMarkedPair]
+	// waits the keepalive has armed, so a test steps its clock with no sleep
+	keepaliveMark *MonitorValue[uint64]
+	// under stateLock: the keepalive loop runs, and Close joins it with the handlers
+	keepaliveStarted bool
 
 	stats subprotocolStats
 }
@@ -258,6 +266,7 @@ type subprotocolSeams struct {
 	clientPublicKeyOf func(peer connect.Peer) ([ed25519.PublicKeySize]byte, bool)
 	send              subprotocolSendFunction
 	pins              identityPinSource
+	peerWindows       subprotocolPeerWindows
 }
 
 // A running dispatcher, registered on env.Client's id 21842 with C3's opt-in for ControlId's frames
@@ -317,6 +326,12 @@ func newSubprotocol(ctx context.Context, env *SubprotocolEnv, seams *subprotocol
 		pins:                  seams.pins,
 		admissions:            env.Admissions,
 		idempotency:           newIdempotencyCache(env.Settings, env.Budget, clock),
+		peerWindows:           seams.peerWindows,
+		markedPair:            NewMonitorValue(subprotocolMarkedPair{}),
+		keepaliveMark:         NewMonitorValue[uint64](0),
+	}
+	if self.peerWindows == nil {
+		self.peerWindows = env.Client.ContractManager()
 	}
 	if self.clientPublicKeyOf == nil {
 		self.clientPublicKeyOf = connect.Peer.VerifiedClientPublicKey
@@ -555,6 +570,9 @@ func (self *Subprotocol) dispatch(message *subprotocolMessage) {
 			requestId:     envelope.RequestId,
 			streamId:      envelope.StreamId,
 		})
+		// a marked pair's keepalive: its window's activity, and at the indexer its session (rpc_marked_pair.go)
+		self.noteWindowActivity(message.sourceId)
+		self.touchSession(message.sourceId)
 		return
 	}
 	var dispatch *subprotocolDispatch

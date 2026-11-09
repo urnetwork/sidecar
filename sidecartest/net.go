@@ -2,6 +2,9 @@
 // schedule, and a ServiceHost, fake unless a test gives another. net_connect.go adds connect clients on
 // an in-process exchange. A Net is built per test and closed at its end.
 //
+// T3 is the same Net with NetSettings.Engines set: server's sidecart3 hosts the engines on its real
+// stores, so fault's rules, which build every Net from NetSettings, run a T3 row as they run a T2 one.
+//
 // NewNet installs the process-wide hooks under sidecar_testhooks, so two Nets cannot be open at once,
 // and tests using one are not parallel. Methods are safe for concurrent use.
 
@@ -28,6 +31,15 @@ type NetSettings struct {
 	LinkSeed int64
 	// How long, in real time, NetClient.Send and the exchange give a connect client to take a frame.
 	SendTimeout time.Duration
+	// Builds the host engines run on, once the clock, fault queue, barriers and fakes exist: nil keeps
+	// the fakes' (T2). Server's T3 (sidecart3) gives one on its real stores, wrapped so the Net's fault
+	// plans reach them, with what closes it at the Net's end, after the engines close. An error panics
+	// in NewNet, since a Net with no host has nothing to run its engines on.
+	Engines func(ctx context.Context, net *Net) (host *sidecar.ServiceHost, closeHost func(), err error)
+	// Why this Net's connect clients may not run on the fake contract issuer and ControlId sink, empty
+	// when they may. T3 sets it until server's exchange carries its clients, so a T3 run whose row
+	// added a client or a sidecar fails rather than passing on T2's platform (Q-TEST-1).
+	RefusePlatformFakes string
 }
 
 func DefaultNetSettings() *NetSettings {
@@ -74,6 +86,8 @@ type Net struct {
 	fakes       *FakeHost
 	blobs       *BlobRecorder
 	removeHooks func()
+	// what NetSettings.Engines gave to close its host, nil for the fakes'
+	closeHost func()
 
 	stateLock     sync.Mutex
 	host          *sidecar.ServiceHost
@@ -121,6 +135,16 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 	}
 	self.fakes = NewFakeHost(cancelCtx, clock, faults, barriers, settings.Host)
 	self.AddEngines(self.fakes.ServiceHost())
+	if settings.Engines != nil {
+		host, closeHost, err := settings.Engines(cancelCtx, self)
+		if err != nil {
+			self.fakes.Redis.Close()
+			cancel()
+			panic(fmt.Errorf("the Net's engines have no host: %w", err))
+		}
+		self.AddEngines(host)
+		self.closeHost = closeHost
+	}
 	self.exchange = newNetExchange(cancelCtx, self)
 	self.capture.AddSource(self.fakes.privacyItems)
 	self.capture.AddSource(processEnvironmentItems)
@@ -146,6 +170,10 @@ func (self *Net) Close() {
 	}()
 	for _, engine := range engines {
 		engine.Close()
+	}
+	if self.closeHost != nil {
+		self.closeHost()
+		self.closeHost = nil
 	}
 	self.exchange.close()
 	self.barriers.Close()
