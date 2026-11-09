@@ -758,6 +758,7 @@ values:
 
 not_keys:
   "http/1.1": "an ALPN id, the second a route probe's hello offers, which the lb's http branch selects (§13.4)"
+  "tls/<>/<>": "a tls/<port>/<host> socket name (§9.4), what tlsedge's name map resolves a visitor's SNI to for Find (§13.5): no stored key"
 
 rows:
   connect-1: {server: [transfer_contract, contract_close, contract_close_report]}

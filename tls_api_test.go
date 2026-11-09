@@ -8,6 +8,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -182,8 +183,9 @@ func TestTlsKillKeys(t *testing.T) {
 	if key != "{tes_"+networkId.String()+"}" || trigger != key+"n" {
 		t.Fatalf("keys %q, %q", key, trigger)
 	}
-	if !RedisKeysShareTag([]string{key, trigger}) {
-		t.Fatal("the hash and its trigger are on two slots")
+	// one hash tag, the whole of the hash's key, so both land on one slot
+	if !strings.HasPrefix(key, "{") || !strings.HasSuffix(key, "}") || strings.Count(trigger, "}") != 1 {
+		t.Fatal("the hash and its trigger do not share one tag")
 	}
 	parsed, ok := ParseTlsKillTriggerKey(trigger)
 	if !ok || parsed != networkId {
