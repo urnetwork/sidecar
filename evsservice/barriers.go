@@ -44,6 +44,16 @@ const (
 	BarrierBatchPutAfter  = "evs.batch.put.after"
 )
 
+// EVS1-M2-09: index entries (§11.7), keyed by <repo>:<ref>.
+const (
+	// Around an entry's GET, which §11.7's newest rule combines with the head read before it.
+	BarrierEntryReadBefore = "evs.entry.read.before"
+	BarrierEntryReadAfter  = "evs.entry.read.after"
+	// Around the HEADs of a path's prefixes while the head lists sources (§11.6's read row).
+	BarrierEntryStateBefore = "evs.entry.state.before"
+	BarrierEntryStateAfter  = "evs.entry.state.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

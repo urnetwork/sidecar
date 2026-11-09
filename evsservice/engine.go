@@ -114,6 +114,7 @@ type EvsEngine struct {
 	heads      *HeadStore
 	batches    *BatchWriter
 	records    *RecordCache
+	overlays   *OverlayChains
 	metrics    *evsMetrics
 	handler    http.Handler
 
@@ -184,6 +185,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, blobs, self.records, settings, log)
+	self.overlays = NewOverlayChains(self.heads, settings)
 	mux := http.NewServeMux()
 	for _, route := range self.routes() {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
@@ -231,6 +233,11 @@ func (self *EvsEngine) Batches() *BatchWriter {
 // The process's record cache.
 func (self *EvsEngine) Records() *RecordCache {
 	return self.records
+}
+
+// The process's overlay chains.
+func (self *EvsEngine) Overlays() *OverlayChains {
+	return self.overlays
 }
 
 // One handler for every route.
