@@ -1,0 +1,5 @@
+go test fuzz v1
+string("www")
+uint16(5)
+uint32(300)
+string("host.other.example.")

@@ -90,6 +90,7 @@ type testEnrollApi struct {
 	stateLock sync.Mutex
 	// answers
 	adminRefused  bool
+	removeRefusal *testApiRefusal
 	enrollRefusal *testApiRefusal
 	bindRefusal   *testApiRefusal
 	onBind        func()
@@ -175,6 +176,9 @@ func (self *testEnrollApi) RoundTrip(request *http.Request) (*http.Response, err
 		self.generationsBy[binding.SidecarId] = binding.Generation
 		return testApiAnswer(http.StatusOK, map[string]int64{"generation": binding.Generation})
 	case "/network/remove-client":
+		if self.removeRefusal != nil {
+			return testApiAnswer(self.removeRefusal.status, map[string]string{"error": "synthetic refusal", "code": self.removeRefusal.code})
+		}
 		wire := &struct {
 			ClientId Id `json:"client_id"`
 		}{}
@@ -611,5 +615,97 @@ func TestEnrollRefusesALockedInstance(t *testing.T) {
 	}
 	if paths := world.api.requestedPaths(); len(paths) != 0 {
 		t.Errorf("sent %v", paths)
+	}
+}
+
+// The files under one network's directory.
+func networkFiles(t *testing.T, backend SidecarStoreBackend, networkId Id) []SidecarStoreEntry {
+	t.Helper()
+	entries, err := backend.List(networkDirectoryPath(networkId) + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+// ur logout at M1: the client is removed with its own token first, then the network's keychain, directory and record
+// go, and a later enrollment is a first one.
+func TestLogoutRemovesTheClientAndWipes(t *testing.T) {
+	world := newTestEnrollWorld(t)
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	world.platform.connected.Set(true)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 1))
+	identity := world.sidecar.currentIdentity()
+	if len(networkFiles(t, world.backend, identity.NetworkId)) == 0 {
+		t.Fatal("the enrollment wrote no network files")
+	}
+
+	if err := world.sidecar.Logout(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(world.api.removed) != 1 || world.api.removed[0] != identity.ClientId {
+		t.Fatalf("removed %v", world.api.removed)
+	}
+	if _, removerClient, ok := sidecarJwtClient(world.api.removers[0]); !ok || removerClient != identity.ClientId {
+		t.Error("the client was not removed with its own token")
+	}
+	awaitSidecarStatus(t, world.sidecar, func(status SidecarStatus) bool { return status.State == SidecarStateUnenrolled })
+	if files := networkFiles(t, world.backend, identity.NetworkId); len(files) != 0 {
+		t.Errorf("logout left %d network files", len(files))
+	}
+	if len(world.instance.Networks()) != 0 || world.sidecar.currentIdentity() != nil {
+		t.Error("logout kept the network's record or identity")
+	}
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 1))
+	if world.sidecar.currentIdentity().SidecarId == identity.SidecarId {
+		t.Error("an enrollment after logout kept the old sidecar_id")
+	}
+}
+
+// A refused removal wipes nothing, so the person can try again.
+func TestLogoutKeepsEverythingWhenRemovalFails(t *testing.T) {
+	world := newTestEnrollWorld(t)
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+	identity := world.sidecar.currentIdentity()
+	before := backendSnapshot(t, world.backend)
+	world.api.removeRefusal = &testApiRefusal{status: http.StatusServiceUnavailable, code: "unavailable"}
+	if err := world.sidecar.Logout(context.Background()); err == nil {
+		t.Fatal("a refused removal logged out")
+	}
+	if after := backendSnapshot(t, world.backend); !snapshotsEqual(before, after) {
+		t.Error("a failed logout changed the disk")
+	}
+	if world.sidecar.currentIdentity() == nil || world.instance.Networks()[0].SidecarId != identity.SidecarId {
+		t.Error("a failed logout dropped the identity")
+	}
+}
+
+// After a confirmed rejection there is no client to remove: logout wipes at once.
+func TestLogoutAfterRefusalWipesWithoutRemoving(t *testing.T) {
+	world := newTestEnrollWorld(t)
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	world.platform.connected.Set(true)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 1))
+	identity := world.sidecar.currentIdentity()
+	world.sidecar.runningGeneration().tokenManager.Load().end(SidecarReasonRefused)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateUnenrolled, 1))
+	if err := world.sidecar.Logout(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(world.api.removed) != 0 {
+		t.Error("logout tried to remove a refused client")
+	}
+	if files := networkFiles(t, world.backend, identity.NetworkId); len(files) != 0 {
+		t.Errorf("logout left %d network files", len(files))
 	}
 }
