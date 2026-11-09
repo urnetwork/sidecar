@@ -225,6 +225,11 @@ func persistSidecarIdentity(secrets SidecarSecrets, keys *sidecarIdentityKeys, s
 		keys:    keys,
 		binding: signedBinding,
 	}
+	// the generation's client joins the committer list first, so the list is never behind the identity
+	// (identity_committer.go)
+	if err := rememberSidecarClientId(secrets, binding.Generation, binding.ClientId); err != nil {
+		return nil, err
+	}
 	encoded := record.encode()
 	defer clear(encoded)
 	testHookBarrier("identity.persist.before", binding.SidecarId.String())
