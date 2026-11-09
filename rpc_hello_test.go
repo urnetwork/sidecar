@@ -150,6 +150,9 @@ type testRpcPair struct {
 	// the network's verified state every side added from now on reads for M2's admission check; nil
 	// runs M1's first-use pins (rpc_admission_test.go)
 	authority *testAdmissionAuthority
+	// a fake of connect's window ledger for each side added from now on; nil runs the client's own
+	// (rpc_marked_pair_test.go)
+	newPeerWindows func(side *testRpcSide) subprotocolPeerWindows
 }
 
 func newTestRpcPair(t testing.TB) *testRpcPair {
@@ -184,6 +187,11 @@ type testRpcSide struct {
 	presentsNoKey bool
 	// the class C13 sealed on the contract this side's frames ride; data unless a test sets another
 	contractClass connectprotocol.ContractClass
+	// set before the side runs: its window ledger fake and the log it shares with onSend, which hears each
+	// send before it is delivered or dropped
+	peerWindows  *testPeerWindows
+	windowEvents *testEvents
+	onSend       func(envelope *protocol.Envelope, destinationId connect.Id)
 }
 
 // The side's identity for a new side: fresh seeds and ids.
@@ -255,6 +263,11 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 		contractClass: connectprotocol.ContractClass_ContractClassData,
 	}
 	copy(side.clientPublicKey[:], verified.ClientPublicKey)
+	var peerWindows subprotocolPeerWindows
+	if self.newPeerWindows != nil {
+		peerWindows = self.newPeerWindows(side)
+		side.peerWindows, _ = peerWindows.(*testPeerWindows)
+	}
 	client := newTestRequiredClient(t, ctx)
 	subprotocol, err := newSubprotocol(ctx, &SubprotocolEnv{
 		Client:    client,
@@ -270,7 +283,7 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 			side.events <- event
 		},
 		Admissions: self.admissionsFor(identity.sidecarId, clock),
-	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send})
+	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, peerWindows: peerWindows})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +329,9 @@ func (self *testRpcSide) setContractClass(class connectprotocol.ContractClass) {
 // The side's send: refuses while refuseCount lasts, else records the envelope and hands a copy to the
 // side it names, through the pair's deliver hook.
 func (self *testRpcSide) send(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) (bool, error) {
+	if self.onSend != nil {
+		self.onSend(envelope, destinationId)
+	}
 	refused := false
 	func() {
 		self.stateLock.Lock()

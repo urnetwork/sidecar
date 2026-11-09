@@ -59,14 +59,17 @@ func (self *Subprotocol) SetFeatures(features uint64, asksSearch func(clientId I
 	return nil
 }
 
-// The bits this side sends peerId: its features, and bit 1 if asksSearch names the peer.
+// The bits this side sends peerId: its features, and bit 1 if asksSearch names the peer or it is the
+// first-choice indexer MarkSearchPeer named.
 func (self *Subprotocol) featuresToward(peerId connect.Id) uint64 {
-	set := self.features.Load()
-	if set == nil {
-		return 0
+	features := uint64(0)
+	if set := self.features.Load(); set != nil {
+		features = set.features
+		if set.asksSearch != nil && set.asksSearch(Id(peerId)) {
+			features |= SubprotocolFeatureAsksSearch
+		}
 	}
-	features := set.features
-	if set.asksSearch != nil && set.asksSearch(Id(peerId)) {
+	if pair, _ := self.markedPair.Get(); pair.hasPeer && pair.peerId == peerId {
 		features |= SubprotocolFeatureAsksSearch
 	}
 	return features & subprotocolFeaturesImplemented

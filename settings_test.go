@@ -181,6 +181,7 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 	want := &SidecarProtocolSettings{
 		HelloCacheTimeout:                10 * time.Minute,
 		MarkedKeepaliveInterval:          60 * time.Second,
+		MarkedSessionTimeout:             120 * time.Second,
 		DefaultCallTimeout:               15 * time.Second,
 		CallSendRetryInterval:            250 * time.Millisecond,
 		PeerQueueMessageCount:            64,

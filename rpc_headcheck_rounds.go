@@ -28,6 +28,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"slices"
 	"sync"
 	"time"
 
@@ -69,6 +70,13 @@ func cryptoRandomInt(n int) int {
 // all, at most HeadCheckRoundOtherMemberCount of other members, the rest own; within each, those
 // sharing a repo first, each group in a random order random draws. selfId is never picked.
 func headCheckRoundPicks(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, random func(n int) int) []Id {
+	return headCheckRoundPicksWith(candidates, peers, selfId, count, random, nil)
+}
+
+// headCheckRoundPicks, with firstOwn, an own candidate counted first among the own picks when it stands:
+// an app host's first-choice search indexer in the foreground (D-SDK-27), the other picks staying
+// random.
+func headCheckRoundPicksWith(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, random func(n int) int, firstOwn *Id) []Id {
 	shuffle := func(ids []Id) {
 		for i := len(ids) - 1; 0 < i; i -= 1 {
 			j := random(i + 1)
@@ -99,6 +107,11 @@ func headCheckRoundPicks(candidates []HeadCheckCandidate, peers HeadCheckPeerSta
 	}
 	others := ordered(false)
 	own := ordered(true)
+	if firstOwn != nil {
+		if index := slices.Index(own, *firstOwn); 0 <= index {
+			own = append([]Id{*firstOwn}, slices.Delete(own, index, index+1)...)
+		}
+	}
 	picks := []Id{}
 	for _, sidecarId := range others {
 		if HeadCheckRoundOtherMemberCount <= len(picks) || count <= len(picks) {
@@ -157,7 +170,14 @@ func (self *headCheckTransport) round(ctx context.Context) {
 	step := self.stop.round()
 	self.runActs(ctx, step.acts)
 	self.prune()
-	picks := headCheckRoundPicks(self.env.Candidates(), self.sources.Peers, self.stop.env.SidecarId, self.settings.HeadCheckRoundPeerCount, self.random)
+	// in the foreground, the first-choice search indexer counts among the own picks (D-SDK-27)
+	var firstOwn *Id
+	if peerId, ok := self.subprotocol.foregroundSearchPeer(); ok {
+		if peer, ok := self.subprotocol.PeerIdentity(Id(peerId)); ok {
+			firstOwn = &peer.SidecarId
+		}
+	}
+	picks := headCheckRoundPicksWith(self.env.Candidates(), self.sources.Peers, self.stop.env.SidecarId, self.settings.HeadCheckRoundPeerCount, self.random, firstOwn)
 	var wait sync.WaitGroup
 	for _, sidecarId := range picks {
 		wait.Add(1)
