@@ -191,6 +191,7 @@ sealed_messages:
   ConfigName: "inside a config head's names file, which evs holds as ciphertext (§7.7, §7.9)"
   BridgeState: "in process, or DeviceLocalRpc on the device (§18.6)"
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
+  BridgeRules: "BridgeState.rules, in process, or DeviceLocalRpc on the device (§18.6, plan-BRIDGE-small-readings #2)"
   WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"
   ShareCert: "rides sealed in a WindowDelegation (§17.9)"
   EvsImport: "a Signed EvsImport rides as bytes in EvsSealedMetadata.signed_import, inside a push's sealed metadata (§11.6, §11.11)"

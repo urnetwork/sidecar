@@ -61,6 +61,106 @@ message Pending {
   bytes identity_public_key = 4;         // Ed25519, 32 B
 }
 
+// BridgeState.rules, marshalled (plan-BRIDGE-small-readings #2): what a sidecar role compiled from verified config
+// for its own device role, in process or over the device RPC and never to a server, so no §2.8 row. The device role
+// validates it once, off the packet path, and refuses a malformed row or a field it does not know rather than skip
+// it, since a newer compiler's row may narrow what it would otherwise open. Times are ms since the epoch, taken from
+// the log and never a device clock, and 0 means none. Ids are 16 bytes, rule and grant ids 32, and identity keys
+// Ed25519's 32. A drain runs from draining_since to drain_until, and the device role keeps a pinned pair or a flow
+// past drain_until for as long as §17.5's idles say (600 s for TCP, 5 min otherwise, from draining_since).
+message BridgeRules {
+  BridgeIpv4Prefix block = 1;              // the network's /16 (§17.4); unset until a head carries one
+  BridgeIpv4Prefix previous_block = 2;     // the block a change replaced, draining until previous_block_drain_until
+  int64 previous_block_drain_until = 3;
+  repeated fixed32 addresses = 4;          // this host's overlay /32s; one in previous_block drains with it
+  repeated BridgeRuleEntry entries = 5;    // the sender's table (§17.5), one entry a prefix
+  repeated BridgeRuleMap maps = 6;         // this host's maps (§17.6's rule 1)
+  repeated BridgeRuleServed served = 7;    // the subnets and exit this host serves (rules 6 and 7)
+  repeated BridgeRuleSubject subjects = 8; // who may reach this host and how (rules 1, 3, 4, 6 and 7)
+  BridgeRuleEgress egress = 9;             // this device's own default route; unset keeps today's
+}
+
+enum BridgeRuleEntryKind {
+  BRIDGE_RULE_ENTRY_KIND_UNSPECIFIED = 0;
+  BRIDGE_RULE_ENTRY_KIND_LINK = 1;         // over its advertisers' links; with none left, a reject
+  BRIDGE_RULE_ENTRY_KIND_UNASSIGNED = 2;   // block addresses nobody holds: unreachable
+  BRIDGE_RULE_ENTRY_KIND_CARVED = 3;       // a local /32 the physical path needs: the default route (§17.4)
+  BRIDGE_RULE_ENTRY_KIND_SERVICE = 4;      // a block's <block>.0.0/24, the resolver at <block>.0.53
+}
+
+// One prefix of the sender's table. An entry owns its range outright: with every advertiser down it answers
+// unreachable, never a broader prefix or the default route (§17.7).
+message BridgeRuleEntry {
+  BridgeIpv4Prefix prefix = 1;
+  BridgeRuleEntryKind kind = 2;
+  repeated BridgeRuleLink links = 3;       // a link entry's advertisers, draining ones included
+}
+
+// An advertiser of an entry, or an exit: a link to its target (Q-BRIDGE-2).
+message BridgeRuleLink {
+  bytes target_client_id = 1;              // its current client, by §5's binding
+  bytes target_sidecar_id = 2;
+  bytes target_identity_public_key = 3;    // pinned through its SidecarAdmit
+  bytes target_member_id = 4;              // the member whose device it is, which a MemberRevoke names; empty if tagged
+  bytes rule_id = 5;                       // the BridgeRoute that advertises it; empty for an overlay address
+  uint32 weight = 6;                       // its rendezvous weight (D-BRIDGE-9), at least 1
+  bytes site_id = 7;
+  int64 draining_since = 8;                // removed (§17.5's removed row): drains from here
+  int64 drain_until = 9;
+}
+
+// A map this host holds (§17.6's rule 1, §17.8's BridgeMap): the destination as sent, mapped to target.
+message BridgeRuleMap {
+  bytes map_id = 1;                        // §17.8's rule id, which names its flows' rule tags
+  BridgeIpv4Prefix match_prefix = 2;       // in the block; a range maps by offset
+  uint32 protocol = 3;                     // 6, 17 or 1
+  repeated BridgePortRange ports = 4;      // none: every port; an ICMP map has none
+  bytes target = 5;                        // an address, 4 or 16 bytes
+  uint32 target_port = 6;                  // 0 keeps the port; with one range, the range maps by offset
+  int64 expires = 7;
+  int64 draining_since = 8;
+  int64 drain_until = 9;
+}
+
+// A prefix this host serves for an approved route (rule 6), or the exit an approved exit route makes it (rule 7).
+message BridgeRuleServed {
+  bytes route_id = 1;
+  BridgeRouteKind kind = 2;
+  BridgeIpv4Prefix prefix = 3;             // what it reaches; an exit's is 0.0.0.0/0
+  BridgeIpv4Prefix exposed_prefix = 4;     // a remap: senders reach prefix as this range of the block, keeping host bits
+  int64 draining_since = 5;
+  int64 drain_until = 6;
+}
+
+// A subject its rules let reach this host, with its reach expanded from §8's rules and grants, so the hook needs no
+// engine (plan-BRIDGE-small-readings #12). Its member and grant ids are here because a keyless device role applies
+// MemberRevoke and GrantRevoke between states, and parses nothing else.
+message BridgeRuleSubject {
+  bytes sidecar_id = 1;
+  bytes member_id = 2;                     // the member whose device it is; empty if tagged
+  repeated bytes client_ids = 3;           // its current client and any bound in the last 7 days (plan-BRIDGE-subject-resolution)
+  bool tagged = 4;
+  repeated BridgeRuleReach dial = 5;       // this host's addresses and maps (rules 1 and 3)
+  repeated BridgeRuleReach route = 6;      // the prefixes it serves (rule 6)
+  repeated BridgeRuleReach exit = 7;       // public destinations through this host (rule 7)
+}
+
+// One row of a subject's reach. Protocol 0 reaches every protocol and port, and takes no ports; 6 or 17 with no
+// ports, every port of it; ICMP has no port, so a row naming one never admits ICMP.
+message BridgeRuleReach {
+  bytes grant_id = 1;                      // the requested grant it comes from; empty for a policy rule
+  BridgeIpv4Prefix prefix = 2;             // a route row's; unset on dial and exit rows
+  uint32 protocol = 3;                     // 0, 1, 6 or 17
+  repeated BridgePortRange ports = 4;
+  int64 expires = 5;
+}
+
+// This device's own default route (§17.9's egress spec): today's under auto, only exits under exits, none under none.
+message BridgeRuleEgress {
+  BridgeEgressMode mode = 1;
+  repeated BridgeRuleLink exits = 2;       // the approved exits it may use, under exits only
+}
+
 // §6.9 Signed, purpose window-delegation, SignedType 0x1908; by the subject's identity key or, on a share
 // link, the ShareSigner its share_cert names (§17.9's share signers).
 message WindowDelegation {
