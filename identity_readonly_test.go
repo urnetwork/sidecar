@@ -57,37 +57,36 @@ type testReadOnlySign struct {
 func testReadOnlySigns(t *testing.T, sidecarId Id) []testReadOnlySign {
 	other := NewId()
 	return []testReadOnlySign{
-		{"its own sign-out", bridge.SignedType_SIGNED_SIDECAR_REVOKE, testReadOnlyBody(t, &bridge.SidecarRevoke{SidecarId: sidecarId.Bytes()}), true},
-		{"its ReaderKey", bridge.SignedType_SIGNED_READER_KEY, []byte("reader-key"), true},
-		{"a KeyPackage's credential", bridge.SignedType_SIGNED_UR_MLS_CREDENTIAL, []byte("credential"), true},
-		{"a read entry", bridge.SignedType_SIGNED_RECORD_HEADER, testReadOnlyBody(t, &protocol.RecordHeader{
-			Kind: uint32(RecordKindRead), WriterSidecarId: sidecarId.Bytes()}), true},
-		{"a receipt deposit", bridge.SignedType_SIGNED_EVS_PUSH, testReadOnlyBody(t, &protocol.EvsPush{
-			RefKind: uint32(protocol.EvsRefKind_EVS_REF_DEPOSIT), OwnerSidecarId: sidecarId.Bytes(), SignerSidecarId: sidecarId.Bytes()}), true},
-
-		{"another's revocation", bridge.SignedType_SIGNED_SIDECAR_REVOKE, testReadOnlyBody(t, &bridge.SidecarRevoke{SidecarId: other.Bytes()}), false},
-		{"an admission", bridge.SignedType_SIGNED_SIDECAR_ADMIT, testReadOnlyBody(t, &protocol.SidecarAdmit{SidecarId: other.Bytes()}), false},
-		{"an OwnerConfirm", bridge.SignedType_SIGNED_OWNER_CONFIRM, testReadOnlyBody(t, &protocol.OwnerConfirm{SidecarId: other.Bytes()}), false},
-		{"an EvsShare", bridge.SignedType_SIGNED_EVS_SHARE, []byte("share"), false},
-		{"a KeyRegister", bridge.SignedType_SIGNED_KEY_REGISTER, []byte("key"), false},
-		{"a RecoveryBind", bridge.SignedType_SIGNED_RECOVERY_BIND, []byte("bind"), false},
-		{"an IndexerSet", bridge.SignedType_SIGNED_INDEXER_SET, []byte("indexer"), false},
-		{"a grant", bridge.SignedType_SIGNED_GRANT_ACTIVATE, []byte("grant"), false},
-		{"a bridge route", bridge.SignedType_SIGNED_BRIDGE_ROUTE, []byte("route"), false},
-		{"a ReaderWrap", bridge.SignedType_SIGNED_READER_WRAP, []byte("wrap"), false},
-		{"a DelegationWrap", bridge.SignedType_SIGNED_DELEGATION_WRAP, []byte("wrap"), false},
-		{"a GenRotate", bridge.SignedType_SIGNED_GEN_ROTATE, []byte("rotate"), false},
-		{"a GroupForm", bridge.SignedType_SIGNED_GROUP_FORM, []byte("form"), false},
-		{"an approval", bridge.SignedType_SIGNED_APPROVAL_DECISION, []byte("decision"), false},
-		{"a head on a shared ref", bridge.SignedType_SIGNED_EVS_PUSH, testReadOnlyBody(t, &protocol.EvsPush{
-			RefKind: uint32(protocol.EvsRefKind_EVS_REF_SHARED), SignerSidecarId: sidecarId.Bytes()}), false},
-		{"a deposit to another's ref", bridge.SignedType_SIGNED_EVS_PUSH, testReadOnlyBody(t, &protocol.EvsPush{
-			RefKind: uint32(protocol.EvsRefKind_EVS_REF_DEPOSIT), OwnerSidecarId: other.Bytes(), SignerSidecarId: sidecarId.Bytes()}), false},
-		{"another kind of record entry", bridge.SignedType_SIGNED_RECORD_HEADER, testReadOnlyBody(t, &protocol.RecordHeader{
-			Kind: uint32(RecordKindClaim), WriterSidecarId: sidecarId.Bytes()}), false},
-		{"a socket registration", bridge.SignedType_SIGNED_SOCKET_REGISTRATION, []byte("registration"), false},
-		{"a TLS key attestation", bridge.SignedType_SIGNED_TLS_KEY_ATTESTATION, []byte("attestation"), false},
-		{"a directory card", bridge.SignedType_SIGNED_DIRECTORY_CARD, []byte("card"), false},
+		{name: "its own sign-out", signedType: bridge.SignedType_SIGNED_SIDECAR_REVOKE, body: testReadOnlyBody(t, &bridge.SidecarRevoke{SidecarId: sidecarId.Bytes()}), allowed: true},
+		{name: "its ReaderKey", signedType: bridge.SignedType_SIGNED_READER_KEY, body: []byte("reader-key"), allowed: true},
+		{name: "a KeyPackage's credential", signedType: bridge.SignedType_SIGNED_UR_MLS_CREDENTIAL, body: []byte("credential"), allowed: true},
+		{name: "a read entry", signedType: bridge.SignedType_SIGNED_RECORD_HEADER, body: testReadOnlyBody(t, &protocol.RecordHeader{
+			Kind: uint32(RecordKindRead), WriterSidecarId: sidecarId.Bytes()}), allowed: true},
+		{name: "a receipt deposit", signedType: bridge.SignedType_SIGNED_EVS_PUSH, body: testReadOnlyBody(t, &protocol.EvsPush{
+			RefKind: uint32(protocol.EvsRefKind_EVS_REF_DEPOSIT), OwnerSidecarId: sidecarId.Bytes(), SignerSidecarId: sidecarId.Bytes()}), allowed: true},
+		{name: "another's revocation", signedType: bridge.SignedType_SIGNED_SIDECAR_REVOKE, body: testReadOnlyBody(t, &bridge.SidecarRevoke{SidecarId: other.Bytes()}), allowed: false},
+		{name: "an admission", signedType: bridge.SignedType_SIGNED_SIDECAR_ADMIT, body: testReadOnlyBody(t, &protocol.SidecarAdmit{SidecarId: other.Bytes()}), allowed: false},
+		{name: "an OwnerConfirm", signedType: bridge.SignedType_SIGNED_OWNER_CONFIRM, body: testReadOnlyBody(t, &protocol.OwnerConfirm{SidecarId: other.Bytes()}), allowed: false},
+		{name: "an EvsShare", signedType: bridge.SignedType_SIGNED_EVS_SHARE, body: []byte("share"), allowed: false},
+		{name: "a KeyRegister", signedType: bridge.SignedType_SIGNED_KEY_REGISTER, body: []byte("key"), allowed: false},
+		{name: "a RecoveryBind", signedType: bridge.SignedType_SIGNED_RECOVERY_BIND, body: []byte("bind"), allowed: false},
+		{name: "an IndexerSet", signedType: bridge.SignedType_SIGNED_INDEXER_SET, body: []byte("indexer"), allowed: false},
+		{name: "a grant", signedType: bridge.SignedType_SIGNED_GRANT_ACTIVATE, body: []byte("grant"), allowed: false},
+		{name: "a bridge route", signedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, body: []byte("route"), allowed: false},
+		{name: "a ReaderWrap", signedType: bridge.SignedType_SIGNED_READER_WRAP, body: []byte("wrap"), allowed: false},
+		{name: "a DelegationWrap", signedType: bridge.SignedType_SIGNED_DELEGATION_WRAP, body: []byte("wrap"), allowed: false},
+		{name: "a GenRotate", signedType: bridge.SignedType_SIGNED_GEN_ROTATE, body: []byte("rotate"), allowed: false},
+		{name: "a GroupForm", signedType: bridge.SignedType_SIGNED_GROUP_FORM, body: []byte("form"), allowed: false},
+		{name: "an approval", signedType: bridge.SignedType_SIGNED_APPROVAL_DECISION, body: []byte("decision"), allowed: false},
+		{name: "a head on a shared ref", signedType: bridge.SignedType_SIGNED_EVS_PUSH, body: testReadOnlyBody(t, &protocol.EvsPush{
+			RefKind: uint32(protocol.EvsRefKind_EVS_REF_SHARED), SignerSidecarId: sidecarId.Bytes()}), allowed: false},
+		{name: "a deposit to another's ref", signedType: bridge.SignedType_SIGNED_EVS_PUSH, body: testReadOnlyBody(t, &protocol.EvsPush{
+			RefKind: uint32(protocol.EvsRefKind_EVS_REF_DEPOSIT), OwnerSidecarId: other.Bytes(), SignerSidecarId: sidecarId.Bytes()}), allowed: false},
+		{name: "another kind of record entry", signedType: bridge.SignedType_SIGNED_RECORD_HEADER, body: testReadOnlyBody(t, &protocol.RecordHeader{
+			Kind: uint32(RecordKindClaim), WriterSidecarId: sidecarId.Bytes()}), allowed: false},
+		{name: "a socket registration", signedType: bridge.SignedType_SIGNED_SOCKET_REGISTRATION, body: []byte("registration"), allowed: false},
+		{name: "a TLS key attestation", signedType: bridge.SignedType_SIGNED_TLS_KEY_ATTESTATION, body: []byte("attestation"), allowed: false},
+		{name: "a directory card", signedType: bridge.SignedType_SIGNED_DIRECTORY_CARD, body: []byte("card"), allowed: false},
 	}
 }
 
