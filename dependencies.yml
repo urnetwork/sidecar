@@ -68,9 +68,8 @@ modules:
     planned: true
   - module: github.com/emersion/go-message
     spdx: MIT
-    reason: D-MAIL-3's message parsing, MAIL-M7-11's ingest headers and IndexEntry (§15.5, §15.7), at v0.18.2; read from its LICENSE
+    reason: D-MAIL-3's message parsing, its textproto alone, in MAIL-M7-11's bounded walk for the IndexEntry (§15.5, §15.7), at v0.18.2; read from its LICENSE
     leg: [client, engine, cli, test]
-    planned: true
   - module: github.com/emersion/go-sasl
     spdx: MIT
     reason: go-smtp's AUTH mechanisms at the version go-smtp v0.25.1 requires, linked with it though no session here offers AUTH (§15.5)
