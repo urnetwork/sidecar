@@ -1,6 +1,12 @@
 // The team directory (§16.11), plaintext inside its sealed files and entries, so no server reads a field here. A
 // bare section number, as in 16.8, is DESIGN.md's. D-PHASE-9's reservations for it are elsewhere: repo/'s directory
 // kind, acl.proto's autogroup:dst-owner and EvsShare.expires, and config.proto's ServiceSettings.directory.
+//
+// The owner's answers fold in ahead of design-records (RESOLUTIONS.md): Announcement.state 4 and Announcement.pad are
+// plan-RECORD-m6-carrier's, a notice sits at q/<h>/<tgt>/<request_id> with <h> the first byte of SHA-256 of the name it
+// shards, in hex, for d/ and r/ too (plan-RECORD-notice-path-bound), every id in a path is 32 lowercase hex characters
+// (plan-RECORD-stream-names), and the role numbers are plan-RECORD-small-readings' #4. directory_format.go holds the
+// paths and the format values readers apply alike.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -35,11 +41,15 @@ message Announcement {
   uint64 version = 3;                       // +1 at each content change; a renewal keeps it
   int64 started_millis = 4; int64 renewed_millis = 5;
   int64 expires_millis = 6;                 // runs: renewed + 90 min; workers: renewed + 26 h; repos: none (0)
-  uint32 state = 7;                         // 1 active, 2 ended, 3 handed_off
+  uint32 state = 7;                         // 1 active, 2 ended, 3 handed_off, 4 withdrawn (runs and workers only:
+                                            // terminal, folded over the item at once and never shown)
   bool tainted = 8;                         // the writing run's taint when this version was written (16.6)
   AnnounceWho who = 9; AnnounceWhat what = 10; AnnounceWhere where = 11;
   repeated Claim claims = 12;               // <= 4: record_append(kind: claim)
   Handoff handoff = 13;                     // record_append(kind: handoff), or the run's end
+  bytes pad = 14;                           // zero bytes: every kind-repo announce entry, announcement or private
+                                            // marker, fills the marshaled Announcement to the next multiple of
+                                            // 2,048 B; runs and workers leave it empty
 }
 message AnnounceWho {                       // attested: readers check every id against §7.9's state
   bytes member_id = 1;                      // the member, or a tagged or ephemeral sidecar's sponsor
@@ -62,7 +72,8 @@ message AnnounceWhat {
   uint32 requests = 7;                      // workers, repos: 1 open, 2 closed
   repeated string topics = 8;               // repos: [a-z0-9-]{1,32}, <= 8
   uint32 repo_kind = 9;                     // repos: §11.12's kind
-  repeated uint32 roles = 10;               // repos: the roles offered (reader, writer, deposit)
+  repeated uint32 roles = 10;               // repos: the roles offered, as RepoGrantRole: 1 deposit, 2 reader,
+                                            // 3 writer
 }
 message AnnounceWhere {
   bytes repo_id = 1;                        // runs in an evs repo; repos
@@ -95,7 +106,8 @@ message DirectoryRequest {                  // body of a RecordEntry kind reques
   bytes request_id = 1;                     // random 16 B; for reach, also the ApprovalRequest's approval_id
   RequestTarget target = 2;
   bytes subject = 3; bool subject_is_member = 4;  // the member_id, or the requesting sidecar_id
-  uint32 role = 5;                          // repos: reader, writer, deposit; reach: dial
+  uint32 role = 5;                          // repos: RepoGrantRole, 1 deposit, 2 reader, 3 writer; a worker or a
+                                            // socket: AclAction 1, dial; 0 refused
   int64 grant_expires_millis = 6;           // asked; 0 asks for the approver's default
   int64 not_after_millis = 7;               // the request's own expiry: 7 d by default, at most 30 d
   string reason = 8;                        // <= 512 B (prose)
@@ -124,7 +136,7 @@ message DirectoryDecision {                 // body of a RecordEntry kind decisi
   int64 grant_expires_millis = 8;           // as approved: never later than asked, when an expiry was asked
   string note = 9;                          // <= 512 B (prose)
 }
-message DirectoryNotice {                   // q/<tgt>/<request_id>, <= 256 B
+message DirectoryNotice {                   // q/<h>/<tgt>/<request_id>, <= 256 B
   bytes request_id = 1; bytes requester_sidecar_id = 2;
   uint64 entry_seq = 3;                     // the request entry's seq in the requester's stream
   int64 not_after_millis = 4;
@@ -134,11 +146,13 @@ message DirectoryNotice {                   // q/<tgt>/<request_id>, <= 256 B
 }
 message DecisionRef {                       // a decision entry in its decider's stream (16.8)
   bytes decider_sidecar_id = 1;
-  uint64 seq = 2;                           // the entry's seq there, which names its path
+  uint64 seq = 2;                           // the entry's seq there, which names its path: a stream that holds
+                                            // no ingested entry numbers its paths by seq
   bytes header_sha256 = 3;                  // SHA-256 of the entry's Signed header
 }
 message DirectoryErasureRequest {           // body of a RecordEntry kind erasure_request, in a revoker's stream
-  bytes request_id = 1;                     // random 16 B; each ERASE's sealed note names it
+  bytes request_id = 1;                     // random 16 B; each ERASE's sealed note names it as its erasure_id,
+                                            // and ErasureBody.request_id holds it
   bytes repo_id = 2;                        // the revoked repo; the request erases only copies that name it
   uint64 marker_version = 3;                // its private marker's Announcement.version; a newer item lapses it
 }
