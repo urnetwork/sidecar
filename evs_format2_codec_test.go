@@ -1075,7 +1075,11 @@ func TestEvsKind5WorkingSetStaysUnder4MiB(t *testing.T) {
 	runtime.ReadMemStats(stats)
 	baseline := stats.HeapAlloc
 	peak := uint64(0)
+	// What the builder holds, not what it has let go of: each sample collects first. Garbage waits for
+	// the collector, whose pace follows the heap the rest of the package left, so counting it failed
+	// this test in a full package run now and then, and passed it alone.
 	sample := func() {
+		runtime.GC()
 		runtime.ReadMemStats(stats)
 		peak = max(peak, stats.HeapAlloc-min(stats.HeapAlloc, baseline))
 	}
@@ -1096,7 +1100,8 @@ func TestEvsKind5WorkingSetStaysUnder4MiB(t *testing.T) {
 			if _, err := record.Write(source); err != nil {
 				t.Fatal(err)
 			}
-			if frame%16 == 0 {
+			// mid-record, and on the record's last frame, where a builder that kept the chunk holds most
+			if frame%32 == 31 {
 				sample()
 			}
 		}

@@ -116,7 +116,13 @@ func (self *runner) run(result *Result) error {
 		}
 	}
 	for index, step := range self.schedule.Steps {
-		if err := self.runStep(step); err != nil {
+		err := self.runStep(step)
+		// what the step asked for and did not get is why anything after it failed
+		if unappliedErr := self.unapplied(); unappliedErr != nil {
+			result.FailedStep = index
+			return fmt.Errorf("%v: %w", step, unappliedErr)
+		}
+		if err != nil {
 			result.FailedStep = index
 			return fmt.Errorf("%v: %w", step, err)
 		}
@@ -303,11 +309,24 @@ func (self *runner) finish() error {
 	if unfired := self.net.Faults().Unfired(); 0 < len(unfired) {
 		return fmt.Errorf("never fired: %v", unfired)
 	}
+	if err := self.unapplied(); err != nil {
+		return err
+	}
 	if refusal := self.net.RefusesPlatformFakes(); refusal != "" && self.net.UsesPlatformFakes() {
 		return fmt.Errorf("the row ran a client on the fake contract issuer and ControlId sink, which this Net refuses: %s", refusal)
 	}
 	if self.net.UsesPlatformFakes() && !slices.Contains(self.schedule.Tiers, TierT3) && !(self.schedule.Forged && self.schedule.Twin != nil) {
 		return errors.New("the row ran on the fake contract issuer and ControlId sink, so it names T3 too (Q-TEST-1)")
+	}
+	return nil
+}
+
+// What the row asked of the Net that its platform cannot apply, a link's conditions or a contract's class
+// on T3's exchange, as the run's failure: the row ran without it, so its run proves nothing here. nil when
+// there is nothing.
+func (self *runner) unapplied() error {
+	if unapplied := self.net.Unapplied(); 0 < len(unapplied) {
+		return fmt.Errorf("the row asked for what this Net's platform cannot apply: %s", strings.Join(unapplied, "; "))
 	}
 	return nil
 }
