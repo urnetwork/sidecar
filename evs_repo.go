@@ -4,7 +4,7 @@
 //
 //	CreateRepo                      EvsClient's (evs_client.go)
 //	ReadHead, List, History         EVS1-M2-24 (evs_read.go, evs_list.go, evs_history.go)
-//	Write                           EVS1-M2-25, EVS1-M2-26
+//	Write                           EVS1-M2-25, EVS1-M2-26 (evs_plan.go, evs_write.go)
 //	Deposit, Consume                EVS1-M2-29
 //	Subscribe                       EVS1-M2-27
 //	Erasures                        EVS1-M2-30
@@ -136,6 +136,8 @@ type EvsWriteArgs struct {
 	Remove  bool
 	// "", "on" or "off" (§18.5): format 1 writes only versioning on.
 	Versioning string
+	// A whole checkpoint under a fresh key even where a diff would do: KEYS-M2-26's ur evs rekey.
+	ForceCheckpoint bool
 }
 
 // What a committed Write did.
@@ -240,11 +242,6 @@ type EvsMountInfo struct {
 	Dir    string
 	// The plaintext bare repository the local git server runs on.
 	BareDir string
-}
-
-// Writes or removes one file on a file-mode ref. EVS1-M2-25 and EVS1-M2-26 build it.
-func (self *EvsRepo) Write(ctx context.Context, args *EvsWriteArgs) (*EvsWriteResult, error) {
-	return nil, fmt.Errorf("%w: Write is EVS1-M2-25's and EVS1-M2-26's", ErrEvsNotBuilt)
 }
 
 // Deposits one entry to this sidecar's deposit ref. EVS1-M2-29 builds it.

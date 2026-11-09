@@ -73,6 +73,9 @@ type EvsClientArgs struct {
 	Config EvsConfigFunction
 	// Nil until CORE-M2-02: every create, delete and restore refuses.
 	FileStatement EvsFileStatementFunction
+	// This device's epoch pin for a §10 group it is a leaf of (KEYS-M2-23's HeadCheckGroupSource.GroupHead), which a
+	// push's sealed metadata carries for HeadCheck's epoch pins. Nil, or a group it holds none of, carries none.
+	GroupHead func(groupId Id) (*protocol.GroupHead, bool)
 	// Raises events; nil drops them.
 	Emit     SidecarEventFunction
 	Clock    Clock
@@ -103,6 +106,8 @@ type EvsClient struct {
 	localTier any
 	// each repo's sealed mirror, one per repo so its puts serialize (evs_mirror_layout.go)
 	repoIdMirrors map[Id]*EvsMirrorStore
+	// where M10's index writer joins each write's plan (evs_plan.go), nil until then
+	writeHook EvsWritePlanHook
 }
 
 // A ref of a repo.

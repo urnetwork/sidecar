@@ -582,9 +582,7 @@ func TestEvsUnbuiltMethodsRefuse(t *testing.T) {
 	repo := test.client.Repo(evsTestId("repo"))
 	ctx := context.Background()
 	calls := []error{}
-	_, err := repo.Write(ctx, &EvsWriteArgs{})
-	calls = append(calls, err)
-	_, err = repo.Deposit(ctx, &EvsDepositArgs{})
+	_, err := repo.Deposit(ctx, &EvsDepositArgs{})
 	calls = append(calls, err)
 	_, err = repo.Consume(ctx, &EvsConsumeArgs{})
 	calls = append(calls, err)

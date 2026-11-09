@@ -48,6 +48,26 @@ type EvsSettings struct {
 	GitCommandTimeout time.Duration
 	// How long a per-ref daemon lock waits before it gives up: 3 min, the hook's own bound (§11.11's journal row).
 	RefLockTimeout time.Duration
+	// The largest file, and the largest base, a write diffs: 8 MiB, past which a file is chunks anyway (§11.7). A phone
+	// sets 1 MiB, since it never diffs a file over 1 MiB (§11.7's traps).
+	DiffMaxByteCount int64
+	// Segments one push uploads at once: 4 (§11.8's client step 2). A phone sets 2, running at most 2 transfers.
+	UploadConcurrency int
+	// Parts one push posts at once: 4 (§11.8's parts row). A phone sets 2.
+	PartConcurrency int
+	// How many times one push id's request, an upload or a lease goes again after a 429, a 503 or no answer, each one
+	// attempt at a time with the same bytes (§11.8's retry id row): 40, past which the statement's own 10 min ends it.
+	PushRetryCount int
+	// The longest one wait between those attempts, whatever retry_after_ms says: 60 s.
+	PushRetryMaxWait time.Duration
+	// How many times one write builds its push again, under a new push id, after a refusal that asks for it
+	// (SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, PATH_EPOCH, GATE_CLOSED, BASE_STALE, TIME_STALE): 8.
+	PushRebuildCount int
+	// How many times a seal posts its parts again after 409 PARTS_MISSING: 3.
+	PartsMissingRetryCount int
+	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
+	// (§11.8's lease row).
+	SealLeaseDuration time.Duration
 }
 
 // The desktop daemon's evs settings.
@@ -65,5 +85,13 @@ func DefaultEvsSettings() *EvsSettings {
 		SegmentWholeByteCount:    256 * 1024,
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,
+		DiffMaxByteCount:         8 * 1024 * 1024,
+		UploadConcurrency:        4,
+		PartConcurrency:          4,
+		PushRetryCount:           40,
+		PushRetryMaxWait:         60 * time.Second,
+		PushRebuildCount:         8,
+		PartsMissingRetryCount:   3,
+		SealLeaseDuration:        120 * time.Second,
 	}
 }
