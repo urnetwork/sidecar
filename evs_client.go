@@ -101,6 +101,8 @@ type EvsClient struct {
 	witnessCursors evsWitnessCursors
 	// the local tier's mount registry, an *EvsMounts on desktop legs (evs_local_mount.go), nil in head mode
 	localTier any
+	// each repo's sealed mirror, one per repo so its puts serialize (evs_mirror_layout.go)
+	repoIdMirrors map[Id]*EvsMirrorStore
 }
 
 // A ref of a repo.
@@ -142,6 +144,7 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		pins:           NewEvsPinStore(args.Store, args.Settings),
 		hintedVersions: map[evsRefKey]uint64{},
 		refEpochs:      map[evsRefKey]*protocol.EvsPathEpoch{},
+		repoIdMirrors:  map[Id]*EvsMirrorStore{},
 	}
 	self.verifier = newEvsVerifier(self)
 	return self, nil
@@ -160,6 +163,31 @@ func (self *EvsClient) Pins() *EvsPinStore {
 // The client's verifying reader.
 func (self *EvsClient) Verifier() *EvsVerifier {
 	return self.verifier
+}
+
+// The repo's sealed mirror in the evs component's directory (the sealed mirror layout, evs_mirror_layout.go), the same
+// one for every caller. Nothing is written until a change.
+func (self *EvsClient) Mirror(repoId Id) (*EvsMirrorStore, error) {
+	held := func() *EvsMirrorStore {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.repoIdMirrors[repoId]
+	}()
+	if held != nil {
+		return held, nil
+	}
+	mirror, err := newEvsMirrorStore(self.args.Store, repoId)
+	if err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	// a racing caller's, if it got here first
+	if held := self.repoIdMirrors[repoId]; held != nil {
+		return held, nil
+	}
+	self.repoIdMirrors[repoId] = mirror
+	return mirror, nil
 }
 
 // The repo's client. Nothing is read or checked until a call needs it.
