@@ -121,6 +121,8 @@ type EvsEngine struct {
 	folder     *Folder
 	metrics    *evsMetrics
 	handler    http.Handler
+	// what the router took at the start, in its order
+	servedRoutes []*EvsRoute
 
 	// whether the first metadata cluster answered the last probe
 	storesReachable *sidecar.MonitorValue[bool]
@@ -192,7 +194,8 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.overlays = NewOverlayChains(self.heads, settings)
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
 	mux := http.NewServeMux()
-	for _, route := range self.routes() {
+	self.servedRoutes = self.routes()
+	for _, route := range self.servedRoutes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
 	}
 	self.handler = mux
@@ -204,6 +207,19 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 func (self *EvsEngine) routes() []*EvsRoute {
 	routes := append(self.placeRoutes(), self.uploadRoutes()...)
 	return append(routes, self.deps.testRoutes...)
+}
+
+// Every route the router took at the start, in its order, each a copy with no Serve, so a caller reads the table
+// and can reach a handler only through Handler and its guard: what server/evshost holds to connect's
+// api/bringyour.yml.
+func (self *EvsEngine) Routes() []*EvsRoute {
+	routes := make([]*EvsRoute, 0, len(self.servedRoutes))
+	for _, route := range self.servedRoutes {
+		copied := *route
+		copied.Serve = nil
+		routes = append(routes, &copied)
+	}
+	return routes
 }
 
 // The settings it runs under.
