@@ -272,11 +272,6 @@ func (self *EvsRepo) Import(ctx context.Context, args *EvsImportArgs) (*EvsImpor
 	return nil, fmt.Errorf("%w: Import is EVS1-M2-34's", ErrEvsNotBuilt)
 }
 
-// Rebuilds plain git from the repo (§11.12's export row). EVS1-M2-32 builds it.
-func (self *EvsRepo) Export(ctx context.Context, args *EvsExportArgs) (*EvsExportResult, error) {
-	return nil, fmt.Errorf("%w: Export is EVS1-M2-32's", ErrEvsNotBuilt)
-}
-
 // Serves the repo to stock git from a plaintext bare repository (§11.11). EVS1-M2-33 builds it.
 func (self *EvsRepo) Mount(ctx context.Context, args *EvsMountArgs) (*EvsMountInfo, error) {
 	return nil, fmt.Errorf("%w: Mount is EVS1-M2-33's", ErrEvsNotBuilt)
