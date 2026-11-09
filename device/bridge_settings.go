@@ -1,6 +1,7 @@
 // device.Bridge's tunables (§17.5, §17.8): every timing and size a bridge reads comes from here, with §17's values as
 // the defaults. DefaultBridgeSettings is the desktop's, and MobileBridgeSettings adjusts it for a phone's memory, as
-// connect's applyMobile settings do, so each number has one default.
+// connect's applyMobile settings do, so each number has one default. The few functions here are what the device's
+// host hands the bridge: the sidecar role's signer, the binding fetch, the interface subnets and the resolver upstream.
 
 package device
 
@@ -38,16 +39,41 @@ type BridgeSettings struct {
 	PinTouchInterval time.Duration
 
 	// How long a refusal or a connect timeout marks a link down (§17.5's health row): 30 s. A down link takes no new
-	// pairs while another advertiser of its entry is up, and keeps its pins. Positive.
+	// pairs while another advertiser of its entry is up, and keeps its pins. A build that failed is tried again only
+	// after it. Positive.
 	LinkDownTimeout time.Duration
 	// How long a link has to form its sealed session before that counts as a refusal (§17.5's health row,
-	// plan-BRIDGE-small-readings #15): 3 s. Positive.
+	// plan-BRIDGE-small-readings #15): 3 s from the first packet it is handed. Positive.
 	LinkConnectTimeout time.Duration
 	// How long a link idles before it closes: 600 s, as long as a TCP pin (§17.5's links row). Positive.
 	LinkIdleTimeout time.Duration
 	// How old a link grows before it is rebuilt, the old one draining until its window clients' strict_exp: 6 days,
 	// inside §7.4's 7-day strict_exp. Positive.
 	LinkRebuildInterval time.Duration
+	// How long fetching a link target's binding may take before the build fails as a refusal would: 30 s, a window
+	// client's own setup bound. The host's NewBridgeLink only constructs, and window clients set up on their own bound.
+	// Positive.
+	LinkBuildTimeout time.Duration
+	// Whether a link's window client may go direct, peer to peer: false until C3 (D-PROTO-10, D-BRIDGE-5), so
+	// BridgeLinkMultiClientSettings overrides direct mode off and a link relays.
+	LinkAllowDirect bool
+	// How many links a bridge holds open before building another closes its least recently used idle one: §18.4's
+	// memory budget counted in links, since a window client carries a whole client graph (§17.5's memory row). It is
+	// no cap: a busy link is never closed for room and no build is refused for count (R-BRIDGE-11), so past it with no
+	// idle link the build goes ahead. 64 on desktop and 8 on mobile until §22.9 measures a link. 0 builds no link at
+	// all, the iOS tunnel's setting until that measurement (owner decision 100), and every link entry answers with a
+	// reject. Negative holds any number open.
+	LinkCountMax int
+	// How long a link must have carried nothing before a bridge past LinkCountMax may close it for room: 60 s, so a
+	// link carrying a live exchange is never the one closed. Positive.
+	LinkRoomIdleTimeout time.Duration
+	// Signs each window client's WindowDelegation as this device's sidecar role (§17.9's sign, §18.6's signer row):
+	// in process, or over §18.6's channel for a keyless device role. Nil builds no link, so every link entry answers
+	// with a reject.
+	LinkSign BridgeSignFunction
+	// Fetches a link target's identity binding, which the link verifies against the key the rules pin before any
+	// contract (§17.9's target check). Nil builds no link.
+	LinkTargetKey BridgeTargetKeyFunction
 
 	// The per-source token bucket a reject enters the tun through (§17.5's rejects row): 20 a second, a burst of 40,
 	// since connect writes policy resets unthrottled. Both positive.
@@ -75,6 +101,9 @@ func DefaultBridgeSettings() *BridgeSettings {
 		LinkConnectTimeout:     3 * time.Second,
 		LinkIdleTimeout:        600 * time.Second,
 		LinkRebuildInterval:    6 * 24 * time.Hour,
+		LinkBuildTimeout:       30 * time.Second,
+		LinkCountMax:           64,
+		LinkRoomIdleTimeout:    60 * time.Second,
 		RejectPerSecond:        20,
 		RejectBurst:            40,
 		RejectEntryHoldTimeout: 600 * time.Second,
@@ -84,10 +113,13 @@ func DefaultBridgeSettings() *BridgeSettings {
 	}
 }
 
-// The defaults adjusted for a phone (§17.5): 1,024 pin slots, which §22.9's mobile churn case runs past.
+// The defaults adjusted for a phone (§17.5): 1,024 pin slots, which §22.9's mobile churn case runs past, and 8 links
+// before one idle for LinkRoomIdleTimeout closes for room. The iOS tunnel sets LinkCountMax to 0 on top of these until
+// §22.9 measures a link there (owner decision 100).
 func MobileBridgeSettings() *BridgeSettings {
 	settings := DefaultBridgeSettings()
 	settings.PinSlotCount = 1024
+	settings.LinkCountMax = 8
 	return settings
 }
 
@@ -106,6 +138,8 @@ func (self *BridgeSettings) validate() error {
 		{name: "LinkConnectTimeout", value: self.LinkConnectTimeout},
 		{name: "LinkIdleTimeout", value: self.LinkIdleTimeout},
 		{name: "LinkRebuildInterval", value: self.LinkRebuildInterval},
+		{name: "LinkBuildTimeout", value: self.LinkBuildTimeout},
+		{name: "LinkRoomIdleTimeout", value: self.LinkRoomIdleTimeout},
 		{name: "RejectEntryHoldTimeout", value: self.RejectEntryHoldTimeout},
 	}
 	for _, duration := range positiveDurations {

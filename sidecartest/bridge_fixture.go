@@ -441,7 +441,8 @@ func (self *FakeBridgeHost) NewBridgeLink(ctx context.Context, target connect.Id
 		return nil, err
 	}
 	build.Delegation = delegation
-	build.Link = &FakeBridgeLink{Target: target}
+	// the bypass starts on, so a test sees the bridge turn it off
+	build.Link = &FakeBridgeLink{Target: target, localSecurityBypass: true}
 	record(build)
 	return build.Link, nil
 }
@@ -522,7 +523,7 @@ func (self *FakeBridgeLink) Closed() bool {
 	return self.closed
 }
 
-// What SetLocalSecurityBypass last set: a bridge sets it off on every link (BRIDGE-M4-12).
+// What SetLocalSecurityBypass last set, on from the build: a bridge sets it off on every link (BRIDGE-M4-12).
 func (self *FakeBridgeLink) LocalSecurityBypass() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

@@ -154,6 +154,24 @@ message EvsUploadReceipt {              // unsigned; evs MACs it (11.13), the pu
 message EvsPlace {                      // where a batch record's bytes are (11.8); assigned by evs, 20 B packed
   uint32 minute = 1; uint32 instance = 2; uint32 seq = 3; uint32 offset = 4; uint32 length = 5;
 }
+message EvsPidxEntry {                  // pidx/<repo>/<ref>/<v_first>-<id> (11.13's index row), create-only, never
+                                        // extended: one container's records and log pages of one ref (EVSB-M2-10)
+  EvsContainerKind container_kind = 1;  // a pack on the segment cluster, or a parcel (hp/) on the repo's cluster
+  bytes container_id = 2;               // its pack_id or parcel_id: the first 16 B of SHA-256 over its bytes
+  uint64 first_version = 3; uint64 last_version = 4;  // v_first..v_last; the key carries v_first
+  repeated EvsPidxRecord records = 5;   // in the container's order
+  repeated EvsPidxLogPage log_pages = 6;  // a pack's only: parcels hold records (plan-EVSB-parcel-log-pages)
+  repeated bytes segment_ids = 7;       // 32 B each: the segments its records introduce, staged ones from format 2
+}
+message EvsPidxRecord {                 // one record in a container: the batch record's bytes as its batch held them
+  uint64 version = 1;                   // the version it committed, or a part's seal's
+  EvsBatchRecordType type = 2;
+  uint64 offset = 3; uint32 length = 4; // where its bytes are in the container
+  EvsPlace place = 5;                   // where it sat in its batch, so a seal's named part is found by place
+}
+message EvsPidxLogPage {                // one log page in a pack
+  uint64 page = 1; uint64 offset = 2; uint32 length = 3;
+}
 
 message EvsHead {                       // head/<repo>/<ref>; written only by If-Match (create: If-None-Match)
   uint64 version = 1; bytes chain = 2;  // v, C_v
@@ -284,6 +302,13 @@ enum EvsOidKind {
   EVS_OID_KIND_UNSPECIFIED = 0;
   EVS_OID_SHA1 = 1;                     // 20 B, left-aligned in a 32 B field and zero-filled
   EVS_OID_SHA256 = 2;
+}
+
+// What holds a ref's aged records once their batches go (11.13's move row).
+enum EvsContainerKind {
+  EVS_CONTAINER_KIND_UNSPECIFIED = 0;
+  EVS_CONTAINER_PACK = 1;
+  EVS_CONTAINER_PARCEL = 2;
 }
 
 // A batch record's type (11.8's record row).
