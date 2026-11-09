@@ -174,7 +174,14 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       know (M3)
 §17   (Classify = linear scan; hook = reference) reset vs drain; reset bucket; C18's aliases within §17.9's
       isolation; §17.5's Classify budget; blocks outside 100.64/10 and RFC 1918 refused (owner decision 132),
-      readers keeping the previous block; native IP and the dial fence: FS-38, FS-56
+      readers keeping the previous block; native IP and the dial fence: FS-38, FS-56; from M8, an app's VPN
+      component (owner decision 197): a delegation its forwarding key signs for its sidecar is admitted, while one
+      signed by a superseded, revoked or voided forwarding Delegation's key, or by one whose forward names another
+      sidecar, is refused before any byte, as is a link to an app host whose client key is not the host client its
+      live forwarding Delegation names, each on FS-38's operator-minted contracts; api and every reader refuse a
+      SidecarAdmit, statement or head a forwarding key signs; with the sidecar role stopped, a new grant and a
+      revocation reach the host within §8.9's targets; a forward_only client gets only the config's r scope and no
+      other route; after a 7-day lapse forwarding stays pending until the app's next run mints its client anew
 §18   (SidecarKeyStore statuses through the generated Swift, Kotlin, C-ABI and js adapters: one terminal result, no
       panic) LOCKED then unlock keeps the identity, and nothing is created while LOCKED; Absent with a recorded id
       makes no new root; corrupt bytes are Failed; a child token expired on a fake clock, a re-pair under the same
@@ -184,7 +191,7 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       list's descriptors (protocol's config, acl, evs and gkm, and protocol/bridge's), make size within
       Q-SDK-7's budget (M4); forwarding in the VPN component (owner decision 197): its posture restored before
       the first packet, rules and revocations applied with the sidecar role stopped, its forwarding client
-      refreshed by its own proofs, nothing but its sidecar's delegations signed by its key (FS-38); wakes and
+      refreshed by its own proofs, nothing but its sidecar's delegations signed by its key (the §17 row); wakes and
       liveness: FS-36, FS-37; phone and page search within §18.4's budgets: FS-77, remote search's requester side:
       FS-83; the device list and revocation through each adapter: FS-98; the ios_extension leg links no index code
       (protocol's evsindex.proto and search.proto, the root's evs_index_ and search_ files), and make size keeps its
@@ -1310,9 +1317,9 @@ FS-37  §18    an HTTPS-only page polling for 2 h, then killed with no unload: o
               then disconnected 2 min, is not reaped, and is 35-36 min after the disconnect
 FS-38  §17    a FriendsAndFamily contract whose sealed source network differs from the         FI-11       T2+T3  M4-out;
               dialer's verified identity: refused before data; an operator-minted window                          shares at
-              client with a correctly HMACed contract claiming subject S opens zero upstream                      M6-out;
-              sockets (TCP, UDP, ICMP), and a valid WindowDelegation is the positive twin,                        forwarding
-              while mismatched key, expired, wrong target and wrong network fail and a                            at M8-out
+              client with a correctly HMACed contract claiming subject S opens zero upstream                      M6-out
+              sockets (TCP, UDP, ICMP), and a valid WindowDelegation is the positive twin,
+              while mismatched key, expired, wrong target and wrong network fail and a
               substituted target key fails the sender's check; on a share link (C18), a
               ShareSigner-signed delegation is the positive twin, while a ShareCert below the
               host's newest verified generation, expired, over 7 days out or not signed by the
@@ -1323,17 +1330,7 @@ FS-38  §17    a FriendsAndFamily contract whose sealed source network differs f
               signer and an operator-minted contract to an X-granted target: the honest gate
               refuses the contract, the minted one reaches only X's granted targets and
               ports, and the run records X's grant and the gate, never Y's bypassed router,
-              as what enforced (§8.11); at M8, an app's VPN component (owner decision 197):
-              a delegation its forwarding key signs for its sidecar is the positive twin,
-              while one signed by a superseded, revoked or voided forwarding Delegation's
-              key, or by one whose forward names another sidecar, is refused before any
-              byte, as is a link to an app host whose client key is not the host client its
-              live forwarding Delegation names; api and every reader refuse a SidecarAdmit,
-              statement or head its key signs;
-              with the sidecar role stopped, a new grant and a revocation reach the host
-              within §8.9's targets, a forward_only client gets only the config's r scope
-              and no other route, and the app's next run after a 7-day lapse mints the
-              forwarding client anew, forwarding pending meanwhile
+              as what enforced (§8.11)
 FS-39  §14,15 report intake: gzip XML and JSON aggregates count once per reporter and          FI-11       T2     M5-out;
               report_id, and an ARF body canary appears in no log; at M7, delayed DNS evidence                    the rest
               and REQUIRETLS added by an active second hop: labels as stated                                      at M7-out
@@ -2614,7 +2611,7 @@ Beyond the schedules:
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds none; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
-- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link and one compiling a 5,000-device team's config in the forwarding role; §18.4's other hosts): §18.4's budgets and forwarding's within Q-SDK-7's (owner decision 197), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
+- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within Q-SDK-7's on an ios32 cell whose forwarding role compiles a 5,000-device team's config (owner decision 197), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/ reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
 ### 22.10 Internal review gates

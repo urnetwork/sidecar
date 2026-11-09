@@ -135,7 +135,7 @@ M7       strict MX; receivers' deposits and their authentication bounds;      FS
                                                                               passed
 M8       wake dispatch and token revisions (§18); receiver coverage and its   FS-19's quick-burner run; FS-36;
          copy (§15.6, §15.9); the bound device revocation and its copy (§18); FS-120; FS-85's and FS-100's wakes;
-         forwarding in every app's VPN component: the forwarding Delegation,  FS-38's forwarding cases; the mail
+         forwarding in every app's VPN component: the forwarding Delegation,  §22.5's forwarding cases; the mail
          the forward_only mark and its exchange rule, setup, following and    indexer paths and prompt;
          signing (§7, §10, §17, §18; owner decision 197); Q-BRIDGE-8          FS-82's coverage cases; FS-98's and
                                                                               FS-124's app-host cases; FS-41 and

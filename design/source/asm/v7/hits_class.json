@@ -3486,7 +3486,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 279,
+  "line": 286,
   "col": 7,
   "match": "evs and gkm touch no Postgres and write Redis",
   "snippet": "       evs and gkm touch no Postgres and write Redis only in {scp_} hints, {wakeq_} wake",
@@ -3499,7 +3499,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 388,
+  "line": 395,
   "col": 38,
   "match": "1,001st",
   "snippet": "seats (owner decisions 144, 182): the 1,001st live member device reads the config, and from",
@@ -3512,7 +3512,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 394,
+  "line": 401,
   "col": 2,
   "match": "1,001st",
   "snippet": "  1,001st reading member device waits keyless, named in the writer's preview; 5,000",
@@ -3525,7 +3525,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 395,
+  "line": 402,
   "col": 21,
   "match": "member-device cap",
   "snippet": "  admissions meet no member-device cap; in a team's directory group, gkm hints pending",
@@ -3538,7 +3538,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 633,
+  "line": 640,
   "col": 75,
   "match": "a week",
   "snippet": "         group on an ios32 cell within §18.4's iOS budget (22.9); a device a week behind a full group resyncs from",
@@ -3551,7 +3551,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 736,
+  "line": 743,
   "col": 54,
   "match": "redis\", \"pg-commit",
   "snippet": "\tOp        string // \"put\", \"get\", \"list\", \"delete\", \"redis\", \"pg-commit\", \"http\"",
@@ -3564,7 +3564,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1238,
+  "line": 1245,
   "col": 39,
   "match": "Redis loss too, and a rotation without a commit",
   "snippet": "              unchanged epoch, after a Redis loss too, and a rotation without a commit raises",
@@ -3577,7 +3577,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1410,
+  "line": 1407,
   "col": 37,
   "match": "Redis loss over-admits at most as for leases",
   "snippet": "              debit per contract_id; Redis loss over-admits at most as for leases",
@@ -3590,7 +3590,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 1461,
+  "line": 1458,
   "col": 34,
   "match": "14 days",
   "snippet": "FS-51  §20    a Team lapse: after 14 days web hosts and From are withheld, MX and TLSA kept,   D-QUOTA-6   T2     M6-out",
@@ -3603,7 +3603,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1568,
+  "line": 1565,
   "col": 28,
   "match": "pools",
   "snippet": "FS-63  §11,19 placement and pools (owner decision 145): two creators race at place/<repo_id>'s FI-1,2,4    T2+T3  M2-out;",
@@ -3616,7 +3616,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1575,
+  "line": 1572,
   "col": 49,
   "match": "pool",
   "snippet": "              segment cluster with more than one pool fails the suite before any write, read",
@@ -3629,7 +3629,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1577,
+  "line": 1574,
   "col": 26,
   "match": "Pools",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3642,7 +3642,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1577,
+  "line": 1574,
   "col": 46,
   "match": "pool",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3655,7 +3655,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1579,
+  "line": 1576,
   "col": 38,
   "match": "R2",
   "snippet": "              streams k by ranges and R2 holds k's locators from a head read, paused; a push",
@@ -3668,7 +3668,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1582,
+  "line": 1579,
   "col": 54,
   "match": "R2",
   "snippet": "              succeed; after it evs1 deletes the two; R2 resumes, gets collected, rereads the",
@@ -3681,7 +3681,7 @@
  {
   "family": "mib64_trigger",
   "file": "22-TEST.md",
-  "line": 1629,
+  "line": 1626,
   "col": 76,
   "match": "64 MiB",
   "snippet": "              no VersioningRules takes the platform rule, versionless above 64 MiB: an honest",
@@ -3694,7 +3694,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2018,
+  "line": 2015,
   "col": 49,
   "match": "R2",
   "snippet": "FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out",
@@ -3707,7 +3707,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2036,
+  "line": 2033,
   "col": 70,
   "match": "R2",
   "snippet": "              Z's chain), Y to X, X edited, a copy of an old X on ref R2: dropping X keeps",
@@ -3720,7 +3720,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2037,
+  "line": 2034,
   "col": 32,
   "match": "R2",
   "snippet": "              what Z's, Y's and R2's versions name; --follow drops X, Y and Z in one push and",
@@ -3733,7 +3733,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2038,
+  "line": 2035,
   "col": 52,
   "match": "R2",
   "snippet": "              one job, freeing what only they name, R2's copy keeping its segments; X live",
@@ -3746,7 +3746,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2076,
+  "line": 2073,
   "col": 26,
   "match": "weekly",
   "snippet": "              re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at",
@@ -3759,7 +3759,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2227,
+  "line": 2224,
   "col": 14,
   "match": "before the claim",
   "snippet": "              before the claim, and a STAGED one after it; again for a same-generation",
@@ -3772,7 +3772,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 2611,
+  "line": 2608,
   "col": 1077,
   "match": "pool",
   "snippet": "rects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write and LIST consistency; checksums; ranged GET; Delete; lifecycle; one pool per cluster (FS-63).",
@@ -3785,7 +3785,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2731,
+  "line": 2728,
   "col": 157,
   "match": "audited",
   "snippet": "**D-TEST-9 (proposed).** Freezes pass 22.10's gates in D-PHASE-7's two steps. *Why:* one conditional write orders storage (owner decision 2), and nothing is audited (owner decision 99).",
@@ -3798,7 +3798,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2733,
+  "line": 2730,
   "col": 787,
   "match": "audited",
   "snippet": "shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).",
@@ -3811,7 +3811,7 @@
  {
   "family": "kib_10_15",
   "file": "22-TEST.md",
-  "line": 2735,
+  "line": 2732,
   "col": 1260,
   "match": "10-15 KiB",
   "snippet": "oduction's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB)",
@@ -3824,7 +3824,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2737,
+  "line": 2734,
   "col": 316,
   "match": "14 days",
   "snippet": "askworker checks that no retained version names one; deletes turn on once FS-64 to FS-71 pass on their rows' tiers and a production soak after the final freeze (at least 14 days and 10,000 candidates) finds none that a retained version names, and until then the gate admits only internal networks and design partners (D-PHASE-10), so later network",
@@ -3837,7 +3837,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2783,
+  "line": 2780,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited novel crypto passes every test, 0x0010 having no vectors (owner decision 99) | Medium | Critical | 22.10's interop artifact; §10.4's mapping and KATs; its disclosure (ow",
