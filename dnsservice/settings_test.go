@@ -203,3 +203,150 @@ ttl: {challenge: 30}
 		t.Errorf("settings %+v", settings)
 	}
 }
+
+// The signing block's defaults hold together, and a file can only tighten them into something that
+// still does.
+func TestDnsSigningSettings(t *testing.T) {
+	signing := DefaultDnsSettings().Signing
+	if signing.LifetimeSeconds <= signing.RefreshSeconds+signing.JitterSeconds {
+		t.Errorf("defaults %+v", signing)
+	}
+	if signing.RefreshSeconds < int(DefaultDnsSettings().Ttl.Ns) {
+		t.Errorf("refresh_s %d is below the longest TTL", signing.RefreshSeconds)
+	}
+	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "signing: {lifetime_s: 7200, refresh_s: 3600, jitter_s: 0}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Signing.LifetimeSeconds != 7200 || settings.Signing.CacheEntryCount != signing.CacheEntryCount {
+		t.Errorf("signing %+v", settings.Signing)
+	}
+	for _, block := range []string{
+		"signing: {lifetime_s: 3600, refresh_s: 3600, jitter_s: 0}",
+		"signing: {lifetime_s: 7200, refresh_s: 3600, jitter_s: 3600}",
+		"signing: {refresh_s: 0}",
+		"signing: {jitter_s: -1}",
+		"signing: {inception_offset_s: -1}",
+		"signing: {cache_entries: 0}",
+		"signing: {lifetime: 7200}",
+	} {
+		_, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n"))
+		if !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}
+
+// The edge's own values, beside the sketch's: each refused out of range.
+func TestDnsEdgeSettingsRefusals(t *testing.T) {
+	settings := DefaultDnsSettings()
+	if settings.Rrl.WindowSeconds != 15 || settings.Rrl.BucketCount <= 0 || settings.Tcp.ConnectionCount <= 0 ||
+		settings.Edge.RetryMilliseconds <= 0 || settings.Edge.DrainSeconds < 0 {
+		t.Errorf("defaults %+v %+v %+v", settings.Rrl, settings.Tcp, settings.Edge)
+	}
+	for _, block := range []string{
+		"edge: {retry_ms: 0}",
+		"edge: {drain_s: -1}",
+		"edge: {udp_reader: 2}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+	for _, replacement := range []string{
+		"tcp: {connections_per_source: 8, idle_timeout_s: 10, connections: 0}",
+		"tcp: {connections_per_source: 8, idle_timeout_s: 10, connections: -1}",
+	} {
+		data := sketchWith(t, "tcp: {connections_per_source: 8, idle_timeout_s: 10}", replacement)
+		if _, err := LoadDnsSettings(data); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", replacement, err)
+		}
+	}
+	for _, replacement := range []string{", window_s: -1, responses_per_second: 20", ", buckets: 0, responses_per_second: 20"} {
+		data := sketchWith(t, ", responses_per_second: 20", replacement)
+		if _, err := LoadDnsSettings(data); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", replacement, err)
+		}
+	}
+}
+
+// The probe block defaults to §12.6's prose and refuses what would leave a round unfinished.
+func TestDnsProbeSettings(t *testing.T) {
+	probe := DefaultDnsSettings().Probe
+	if probe.IntervalSeconds != 10 || probe.FailureCount != 3 || !reflect.DeepEqual(probe.Ports, []int{443, 8443, 8883, 5671}) ||
+		probe.RoutePort != 443 || probe.RouteHostCount != 16 || probe.ReportTimeoutSeconds != 3 {
+		t.Errorf("defaults %+v", probe)
+	}
+	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "probe: {ports: [443]}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(settings.Probe.Ports, []int{443}) || settings.Probe.IntervalSeconds != 10 {
+		t.Errorf("probe %+v", settings.Probe)
+	}
+	for _, block := range []string{
+		"probe: {interval_s: 0}",
+		"probe: {timeout_s: 10}",
+		"probe: {timeout_s: 0}",
+		"probe: {failures: 0}",
+		"probe: {ports: []}",
+		"probe: {ports: [443, 443]}",
+		"probe: {ports: [0]}",
+		"probe: {ports: [65536]}",
+		"probe: {concurrency: 0}",
+		"probe: {route_port: 0}",
+		"probe: {route_port: 65536}",
+		"probe: {route_hosts: 0}",
+		"probe: {report_timeout_s: 0}",
+		"probe: {report_timeout_s: 10}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}
+
+// The feed block's waits are each positive, and its backoff grows.
+func TestDnsFeedSettings(t *testing.T) {
+	feed := DefaultDnsSettings().Feed
+	if feed.ReplacedKeepSeconds != 24*3600 || feed.RetryMinSeconds <= 0 || feed.RetryMaxSeconds < feed.RetryMinSeconds {
+		t.Errorf("defaults %+v", feed)
+	}
+	for _, block := range []string{
+		"feed: {retry_min_s: 0}",
+		"feed: {retry_min_s: 10, retry_max_s: 5}",
+		"feed: {empty_poll_s: 0}",
+		"feed: {snapshot_write_s: 0}",
+		"feed: {replaced_keep_s: 0}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}
+
+// The block's holds stay under the lb's 30 s, and its bounds are positive.
+func TestDnsApiSettings(t *testing.T) {
+	api := DefaultDnsSettings().Api
+	if api.JournalHoldSeconds != 25 || api.ReadyHoldSeconds != 25 || api.CanaryFreshSeconds != 180 {
+		t.Errorf("defaults %+v", api)
+	}
+	for _, block := range []string{
+		"api: {journal_hold_s: 30}",
+		"api: {journal_hold_s: 0}",
+		"api: {ready_hold_s: 31}",
+		"api: {row_limit: 0}",
+		"api: {soa_read_interval_s: 0}",
+		"api: {soa_read_timeout_s: 0}",
+		"api: {canary_fresh_s: 0}",
+		"api: {diff_max_bytes: 0}",
+		"api: {answer_max_bytes: 1024}",
+		"api: {store_probe_s: 0}",
+		"api: {store_timeout_s: 0}",
+		"api: {drain_s: -1}",
+	} {
+		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
+			t.Errorf("%s: %v", block, err)
+		}
+	}
+}

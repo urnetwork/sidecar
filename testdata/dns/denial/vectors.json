@@ -1,0 +1,215 @@
+{
+ "comment": "Signed answers and compact denial (RFC 9824). Rows read as in testdata/dns/answers. Each case is asked over UDP at EDNS 1232, with DO unless do is false and CO when co is true. answer and authority list the records other than RRSIGs as miekg prints them; rrsigs lists each RRSIG as '<owner> <type covered> <labels>' in the order it appears. dnskey cases answer the test window's RRset, which the test reads from its keys. Every RRSIG is verified with miekg's RRSIG.Verify against the test ZSK, and the DNSKEY RRset's against the test KSK.",
+ "root": "zone.example.",
+ "serial": 100,
+ "rows": [
+  "zone.example. 3600 system SOA ns1.zone.example. hostmaster.zone.example. 1 7200 3600 1209600 300",
+  "zone.example. 86400 system NS ns1.zone.example.",
+  "zone.example. 86400 system NS ns2.zone.example.",
+  "zone.example. 3600 system TXT \"v=spf1 -all\"",
+  "zone.example. 60 edge A",
+  "zone.example. 60 edge AAAA",
+  "ns1.zone.example. 86400 system A 192.0.2.1",
+  "ns2.zone.example. 86400 system A 192.0.2.2",
+  "net1.zone.example. 300 system MX 0 .",
+  "net1.zone.example. 60 edge A",
+  "*.net1.zone.example. 300 system MX 10 mx.net1.zone.example.",
+  "*.net1.zone.example. 60 edge A",
+  "*.net1.zone.example. 60 edge AAAA",
+  "www.net1.zone.example. 300 user A 11.22.33.44",
+  "www.net1.zone.example. 300 user AAAA 2a0f:ffff::7",
+  "alias.net1.zone.example. 300 user CNAME www.net1.zone.example.",
+  "dangling.net1.zone.example. 300 user CNAME gone.www.net1.zone.example.",
+  "_sip._tcp.blog.net1.zone.example. 300 user SRV 10 5 5060 sip.other.example.",
+  "blog.net1.zone.example. 0 copy",
+  "_tcp.blog.net1.zone.example. 0 copy",
+  "_xmpp._tcp.chat.net1.zone.example. 300 user SRV 10 5 5222 chat.other.example."
+ ],
+ "healthy": {"edge": ["192.0.2.10", "2001:db8::10"], "router": []},
+ "cases": [
+  {
+   "name": "a name that does not exist stays NXDOMAIN without DO",
+   "query": "nosuch.zone.example. A",
+   "do": false,
+   "rcode": "NXDOMAIN",
+   "authority": ["zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60"]
+  },
+  {
+   "name": "under DO it is NOERROR with an NSEC at that name and nothing walkable",
+   "query": "nosuch.zone.example. A",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "nosuch.zone.example. 60 IN NSEC \\000.nosuch.zone.example. RRSIG NSEC NXNAME"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "nosuch.zone.example. NSEC 3"]
+  },
+  {
+   "name": "CO restores the NXDOMAIN rcode, the denial unchanged",
+   "query": "nosuch.zone.example. A",
+   "co": true,
+   "rcode": "NXDOMAIN",
+   "co_echo": true,
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "nosuch.zone.example. 60 IN NSEC \\000.nosuch.zone.example. RRSIG NSEC NXNAME"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "nosuch.zone.example. NSEC 3"]
+  },
+  {
+   "name": "a name under an owner that blocks the wildcard",
+   "query": "x.www.net1.zone.example. AAAA",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "x.www.net1.zone.example. 60 IN NSEC \\000.x.www.net1.zone.example. RRSIG NSEC NXNAME"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "x.www.net1.zone.example. NSEC 5"]
+  },
+  {
+   "name": "an owner's empty answer names its real types",
+   "query": "www.net1.zone.example. TXT",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "www.net1.zone.example. 60 IN NSEC \\000.www.net1.zone.example. A AAAA RRSIG NSEC"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "www.net1.zone.example. NSEC 4"]
+  },
+  {
+   "name": "a wildcard's empty answer names the wildcard's types at the queried name",
+   "query": "burner.net1.zone.example. TXT",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "burner.net1.zone.example. 60 IN NSEC \\000.burner.net1.zone.example. A MX AAAA RRSIG NSEC"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "burner.net1.zone.example. NSEC 4"]
+  },
+  {
+   "name": "a copy's empty answer names the wildcard's types",
+   "query": "blog.net1.zone.example. TXT",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "blog.net1.zone.example. 60 IN NSEC \\000.blog.net1.zone.example. A MX AAAA RRSIG NSEC"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "blog.net1.zone.example. NSEC 4"]
+  },
+  {
+   "name": "a deeper copy too",
+   "query": "_tcp.blog.net1.zone.example. TXT",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "_tcp.blog.net1.zone.example. 60 IN NSEC \\000._tcp.blog.net1.zone.example. A MX AAAA RRSIG NSEC"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "_tcp.blog.net1.zone.example. NSEC 5"]
+  },
+  {
+   "name": "an empty non-terminal with no copy names only RRSIG and NSEC",
+   "query": "chat.net1.zone.example. A",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "chat.net1.zone.example. 60 IN NSEC \\000.chat.net1.zone.example. RRSIG NSEC"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "chat.net1.zone.example. NSEC 4"]
+  },
+  {
+   "name": "the apex's empty answer names DNSKEY beside its rows",
+   "query": "zone.example. MX",
+   "rcode": "NOERROR",
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "zone.example. 60 IN NSEC \\000.zone.example. A NS SOA TXT AAAA RRSIG NSEC DNSKEY"
+   ],
+   "rrsigs": ["zone.example. SOA 2", "zone.example. NSEC 2"]
+  },
+  {
+   "name": "a wildcard's answer is signed as the queried name",
+   "query": "burner.net1.zone.example. A",
+   "rcode": "NOERROR",
+   "answer": ["burner.net1.zone.example. 60 IN A 192.0.2.10"],
+   "rrsigs": ["burner.net1.zone.example. A 4"]
+  },
+  {
+   "name": "a deep name under the wildcard keeps its own label count",
+   "query": "a.b.c.net1.zone.example. MX",
+   "rcode": "NOERROR",
+   "answer": ["a.b.c.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."],
+   "rrsigs": ["a.b.c.net1.zone.example. MX 6"]
+  },
+  {
+   "name": "a query's case is kept, and the signature still verifies",
+   "query": "BURNER.Net1.zone.example. AAAA",
+   "rcode": "NOERROR",
+   "answer": ["BURNER.Net1.zone.example. 60 IN AAAA 2001:db8::10"],
+   "rrsigs": ["BURNER.Net1.zone.example. AAAA 4"]
+  },
+  {
+   "name": "a copy answers the wildcard's records, signed at the copy",
+   "query": "blog.net1.zone.example. MX",
+   "rcode": "NOERROR",
+   "answer": ["blog.net1.zone.example. 300 IN MX 10 mx.net1.zone.example."],
+   "rrsigs": ["blog.net1.zone.example. MX 4"]
+  },
+  {
+   "name": "a CNAME and its target are each signed",
+   "query": "alias.net1.zone.example. A",
+   "rcode": "NOERROR",
+   "answer": ["alias.net1.zone.example. 300 IN CNAME www.net1.zone.example.", "www.net1.zone.example. 300 IN A 11.22.33.44"],
+   "rrsigs": ["alias.net1.zone.example. CNAME 4", "www.net1.zone.example. A 4"]
+  },
+  {
+   "name": "a CNAME to a name that does not exist denies its target",
+   "query": "dangling.net1.zone.example. A",
+   "rcode": "NOERROR",
+   "answer": ["dangling.net1.zone.example. 300 IN CNAME gone.www.net1.zone.example."],
+   "authority": [
+    "zone.example. 60 IN SOA ns1.zone.example. hostmaster.zone.example. 100 7200 3600 1209600 60",
+    "gone.www.net1.zone.example. 60 IN NSEC \\000.gone.www.net1.zone.example. RRSIG NSEC NXNAME"
+   ],
+   "rrsigs": ["dangling.net1.zone.example. CNAME 4", "zone.example. SOA 2", "gone.www.net1.zone.example. NSEC 5"]
+  },
+  {
+   "name": "ANY is one RRset, signed",
+   "query": "burner.net1.zone.example. ANY",
+   "rcode": "NOERROR",
+   "answer": ["burner.net1.zone.example. 60 IN A 192.0.2.10"],
+   "rrsigs": ["burner.net1.zone.example. A 4"]
+  },
+  {
+   "name": "an NSEC asked for at a name that exists is the answer",
+   "query": "www.net1.zone.example. NSEC",
+   "rcode": "NOERROR",
+   "answer": ["www.net1.zone.example. 60 IN NSEC \\000.www.net1.zone.example. A AAAA RRSIG NSEC"],
+   "rrsigs": ["www.net1.zone.example. NSEC 4"]
+  },
+  {
+   "name": "DNSKEY answers the window, signed by the KSK",
+   "query": "zone.example. DNSKEY",
+   "rcode": "NOERROR",
+   "dnskey": true,
+   "rrsigs": ["zone.example. DNSKEY 2"]
+  },
+  {
+   "name": "DNSKEY without DO is the window's RRset alone",
+   "query": "zone.example. DNSKEY",
+   "do": false,
+   "rcode": "NOERROR",
+   "dnskey": true
+  },
+  {
+   "name": "a query for NXNAME is FORMERR",
+   "query": "zone.example. NXNAME",
+   "rcode": "FORMERR"
+  },
+  {
+   "name": "even without DO",
+   "query": "www.net1.zone.example. NXNAME",
+   "do": false,
+   "rcode": "FORMERR"
+  }
+ ]
+}

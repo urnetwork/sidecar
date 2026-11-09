@@ -7,8 +7,8 @@
 //   - a member's commit is RFC 9420's PrivateMessage up to its last field, so sidecar.ParseMlsHeader reads its
 //     group, epoch, content type and authenticated_data as gkm will a real one's; what a real one encrypts is a
 //     handle here, which only FakeMls resolves;
-//   - an external commit is a PublicMessage up to its content, a handle too, so ParseMlsHeader refuses it as it
-//     refuses a real one until KEYS-M2-05's framing lands;
+//   - an external commit is a PublicMessage up to its content, a handle too, where a real one has its Commit, so
+//     ParseMlsHeader refuses the fake's, while it reads a real one's joiner credential and removed leaf;
 //   - KeyPackages, Welcomes and GroupInfos are MLSMessages of their own wire formats with bodies only FakeMls
 //     reads, which a real parser refuses. A GroupInfo carries a MAC under its epoch's secret, so a forged one
 //     fails Complete, as a real one fails its signature;
@@ -20,7 +20,7 @@
 //     a committer removing itself and an empty commit, when one is made; a commit on another epoch or by a leaf
 //     its epoch does not hold, wherever it arrives.
 //
-// sidecartest/mlssuite holds FakeMls and the real engine (KEYS-M2-08) to the same behavior.
+// sidecartest/mlssuite holds FakeMls and the real engine (sidecar.NewMlsEngine) to the same behavior.
 // Engines and the world are safe for concurrent use; a group, pending join or staged commit has one owner.
 
 package sidecartest

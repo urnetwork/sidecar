@@ -4,3 +4,36 @@ Copyright (c) 2026 BringYour, Inc.
 This repository is licensed under the Mozilla Public License, v. 2.0. The full text is in LICENSE.
 
 The third-party modules named in this repository's go.mod files keep their own licenses.
+
+third_party/ holds the source of two of them, each under its own license and changed only as its
+URNETWORK.md says:
+
+- third_party/go-smtp: github.com/emersion/go-smtp v0.25.1, under the MIT license in
+  third_party/go-smtp/LICENSE. Copyright (c) 2010 The Go Authors, (c) 2014 Gleez Technologies,
+  (c) 2016 emersion, (c) 2016 Proton Technologies AG.
+- third_party/mox: ten packages of github.com/mjl-/mox v0.0.17, under the MIT license in
+  third_party/mox/LICENSE.MIT. Copyright 2021 Mechiel Lukkien. The public suffix list it embeds,
+  third_party/mox/publicsuffix/public_suffix_list.txt, is Mozilla's, under the Mozilla Public
+  License, v. 2.0, in third_party/mox/LICENSE.MPLv2.0.
+
+record_redact_rules.go and record_redact_entropy.go hold redaction rules copied from
+github.com/zricethezav/gitleaks v8.30.1's config/gitleaks.toml: their ids, regular expressions,
+keywords, entropy floors and allowlists. That file is under the MIT license, Copyright (c) 2019
+Zachary Rice:
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction,
+  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or
+  substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+  NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+  OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+No gitleaks code is linked: the module is in no go.mod, so dependencies.yml has no row for it.

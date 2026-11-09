@@ -1,7 +1,8 @@
 // Every fenced proto block in DESIGN.md, and what the design writes any other way, read against what this package
 // registers, so a wire that leaves the design fails here. testWireDifferences says exactly what is held. Whatever the
 // package declares beyond the fences is written out in testUnfencedFence, with where the design writes it, which is
-// where a reviewer reads what this repository added to the design's wire.
+// where a reviewer reads what this repository added to the design's wire, and a field an owner's answer adds to a
+// fenced message before design-records folds it in is in testFenceAdditions, with the question that holds the answer.
 
 package protocol
 
@@ -27,6 +28,10 @@ import (
 // the module moved into v2026/ (§4.9), so there it sits one directory further up.
 var testDesignPaths = []string{"../DESIGN.md", "../../DESIGN.md"}
 
+// Where RECORD.md is from this directory, which writes record.proto's entry bodies as its own fences (§16.8's kinds
+// row). It sits beside the module, and the second path serves a tree that moves it as DESIGN.md moves.
+var testRecordMdPaths = []string{"../RECORD.md", "../../RECORD.md"}
+
 // Written so a fence's string, identifier, number and punctuation each stay one token.
 var testFenceToken = regexp.MustCompile(`"[^"]*"|[A-Za-z_][A-Za-z0-9_.]*|0x[0-9A-Fa-f]+|[0-9]+|[{};=,<>]`)
 
@@ -50,6 +55,14 @@ var testFirstDeclarationFiles = map[string]string{
 	"MailAuthEvidence": "protocol/mail.proto",
 	"BridgeRows":       "protocol/bridge/bridge.proto",
 	"WindowDelegation": "protocol/bridge/bridge.proto",
+	// RECORD.md's fences after its first name no file, and each is record.proto's.
+	"RecordDepositBatch": "protocol/record.proto",
+	"LedgerScopeBody":    "protocol/record.proto",
+	"LogSettingsBody":    "protocol/record.proto",
+	"DisclosurePacket":   "protocol/record.proto",
+	"AttestationBody":    "protocol/record.proto",
+	"ModelManifest":      "protocol/record.proto",
+	"RunCostBody":        "protocol/record.proto",
 }
 
 // A field as a fence writes it. A map's typeName reads map<key,value>.
@@ -236,14 +249,23 @@ func testReadDesign(t testing.TB) []byte {
 	return design
 }
 
-// Every fenced proto block in DESIGN.md, then testUnfencedFence, read into one set of declarations. A declaration
-// that later gains a fence is then written twice, which says to take it out of testUnfencedFence.
-func testReadFences(t *testing.T) *testFences {
-	design := testReadDesign(t)
-	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
+// RECORD.md's bytes, from the first of testRecordMdPaths that holds it.
+func testReadRecordMd(t testing.TB) []byte {
+	recordMd, err := os.ReadFile(testRecordMdPaths[0])
+	if errors.Is(err, os.ErrNotExist) {
+		recordMd, err = os.ReadFile(testRecordMdPaths[1])
+	}
+	if err != nil {
+		t.Fatalf("this test needs RECORD.md beside the module: %v", err)
+	}
+	return recordMd
+}
+
+// Each fenced proto block in a document, read into fences, and how many there were.
+func testParseFences(t *testing.T, fences *testFences, document []byte) int {
 	var fence *strings.Builder
 	count := 0
-	for line := range strings.SplitSeq(string(design), "\n") {
+	for line := range strings.SplitSeq(string(document), "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case fence == nil && trimmed == "```proto":
@@ -256,12 +278,92 @@ func testReadFences(t *testing.T) *testFences {
 			fence.WriteString(line + "\n")
 		}
 	}
+	return count
+}
+
+// Every fenced proto block in DESIGN.md and RECORD.md, then testUnfencedFence, read into one set of declarations,
+// with testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend. A declaration
+// that later gains a fence is then written twice, which says to take it out of testUnfencedFence, and an added field
+// or value the design comes to write fails until its line leaves its list.
+func testReadFences(t *testing.T) *testFences {
+	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
+	count := testParseFences(t, fences, testReadDesign(t))
 	// A parser that found nothing would pass everything below.
 	if count < 27 || len(fences.messages) < 120 {
 		t.Fatalf("found %d fences and %d messages, too few to have read the design", count, len(fences.messages))
 	}
+	designMessageCount := len(fences.messages)
+	recordMdCount := testParseFences(t, fences, testReadRecordMd(t))
+	if recordMdCount < 8 || len(fences.messages)-designMessageCount < 40 {
+		t.Fatalf("found %d fences and %d messages in RECORD.md, too few to have read it", recordMdCount, len(fences.messages)-designMessageCount)
+	}
 	testParseFence(t, fences, testUnfencedFence)
+	for _, addition := range testFenceAdditions {
+		message := fences.messages[addition.message]
+		if message == nil {
+			t.Errorf("%s gains %s by %s, and no fence writes that message", addition.message, addition.field.name, addition.question)
+			continue
+		}
+		written := slices.ContainsFunc(message.fields, func(field testFenceField) bool {
+			return field.name == addition.field.name || field.number == addition.field.number
+		})
+		if written || slices.Contains(message.reservedNumbers, addition.field.number) {
+			t.Errorf("the design now writes %s.%s or its number %d: drop its line from testFenceAdditions (%s)", addition.message, addition.field.name, addition.field.number, addition.question)
+			continue
+		}
+		message.fields = append(message.fields, addition.field)
+	}
+	for _, finding := range testApplyValueAdditions(fences, testFenceValueAdditions) {
+		t.Error(finding)
+	}
 	return fences
+}
+
+// Joins each value to the enum it extends, and says which cannot join: an enum no fence writes, or a
+// value or number the design now writes itself, whose line should leave the list.
+func testApplyValueAdditions(fences *testFences, additions []testFenceValueAddition) []string {
+	findings := []string{}
+	for _, addition := range additions {
+		enum := fences.enums[addition.enum]
+		if enum == nil {
+			findings = append(findings, fmt.Sprintf("%s gains %s by %s, and no fence writes that enum", addition.enum, addition.name, addition.question))
+			continue
+		}
+		_, written := enum.values[addition.name]
+		for _, number := range enum.values {
+			written = written || number == addition.number
+		}
+		if written || slices.Contains(enum.reservedNumbers, addition.number) {
+			findings = append(findings, fmt.Sprintf("the design now writes %s.%s or its number %#x: drop its line from testFenceValueAdditions (%s)", addition.enum, addition.name, addition.number, addition.question))
+			continue
+		}
+		enum.values[addition.name] = addition.number
+	}
+	return findings
+}
+
+// The value list's own checks, on fences planted for it: a value joins, and a value or number already
+// written, or an enum no fence writes, is a finding rather than a second copy.
+func TestFenceValueAdditionsJoinOnlyWhatTheDesignLeavesOut(t *testing.T) {
+	planted := func() *testFences {
+		return &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{
+			"Planted": {path: "protocol/types.proto", values: map[string]int32{"PLANTED_NONE": 0, "PLANTED_ONE": 1}, reservedNumbers: []int32{9}},
+		}}
+	}
+	fences := planted()
+	if findings := testApplyValueAdditions(fences, []testFenceValueAddition{{enum: "Planted", name: "PLANTED_TWO", number: 2, question: "q"}}); len(findings) != 0 || fences.enums["Planted"].values["PLANTED_TWO"] != 2 {
+		t.Errorf("a new value: %v", findings)
+	}
+	for _, addition := range []testFenceValueAddition{
+		{enum: "Planted", name: "PLANTED_ONE", number: 3, question: "q"},
+		{enum: "Planted", name: "PLANTED_THREE", number: 1, question: "q"},
+		{enum: "Planted", name: "PLANTED_NINE", number: 9, question: "q"},
+		{enum: "Unwritten", name: "UNWRITTEN_ONE", number: 1, question: "q"},
+	} {
+		if findings := testApplyValueAdditions(planted(), []testFenceValueAddition{addition}); len(findings) != 1 {
+			t.Errorf("%s.%s: %v", addition.enum, addition.name, findings)
+		}
+	}
 }
 
 // A message's reserved ranges, each number written out.

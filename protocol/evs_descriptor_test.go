@@ -1,66 +1,22 @@
-// FS-72's lint: format 1's reserved numbers, read from evs.proto's descriptors, equal the decided list, none for
-// keep-last-n (§11.6, D-PHASE-9). That format-1 code refuses each in use is the code's to prove, with EVS1's tasks.
-// §11.9's read states are off this list because no section numbers them, and §11.8's batch format, the kind-5
-// header and the provenance's tainted bit are off it because none of them is protobuf.
+// evs.proto's own lints beside FS-72's, which evs_reserved_test.go reads from testdata/evs/reserved_numbers.yml: the
+// flag words' bits, EvsEntryVersion's missing field 15, the numbers of what EVS-FORMAT.md proposes where neither a
+// design fence nor testdata/evs/metadata_rows.yml pins them, and §22.6's every-body seeds for each evs message in
+// testdata/fuzz/FuzzBody, beside the target that reads them, so each runs in every go test.
 
 package protocol
 
 import (
+	"bytes"
+	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
-
-// Declared, never left out: format 1 parses each and refuses it as needing format 2, so a field dropped here would
-// arrive as an unknown field and pass.
-func TestFormatOneDeclaresFormatTwosFields(t *testing.T) {
-	cases := []struct {
-		message string
-		field   protoreflect.Name
-		number  protoreflect.FieldNumber
-	}{
-		{message: "EvsPush", field: "drop_sha256", number: 33},
-		{message: "EvsPush", field: "index_epoch", number: 34},
-		{message: "EvsHead", field: "index_epoch", number: 24},
-		{message: "EvsEntryVersion", field: "versioning", number: 14},
-		{message: "EvsLocator", field: "staged", number: 6},
-		{message: "EvsUploadReceipt", field: "versionless", number: 8},
-	}
-	for _, c := range cases {
-		field := testMessage(t, c.message).Fields().ByName(c.field)
-		if field == nil {
-			t.Errorf("%s.%s is missing", c.message, c.field)
-			continue
-		}
-		if field.Number() != c.number {
-			t.Errorf("%s.%s is %d, want %d", c.message, c.field, field.Number(), c.number)
-		}
-	}
-}
-
-// The values format 1 refuses or ignores, by their numbers. EvsPush.flags, EvsEntryVersion.versioning and
-// EvsLocator.kind are uint32 on the wire, so these enums are the only place the numbers can drift.
-func TestFormatOneReservesFormatTwosValues(t *testing.T) {
-	cases := []struct {
-		name   string
-		got    int32
-		number int32
-	}{
-		{name: "the DROP flag", got: int32(EvsPushFlag_EVS_PUSH_DROP), number: 256},
-		{name: "the CUT flag", got: int32(EvsPushFlag_EVS_PUSH_CUT), number: 512},
-		{name: "a versionless segment", got: int32(EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT), number: 5},
-		{name: "a versionless file", got: int32(EvsVersioning_EVS_VERSIONING_VERSIONLESS), number: 1},
-		{name: "an index file", got: int32(EvsVersioning_EVS_VERSIONING_INDEX), number: 2},
-		{name: "window bit 4", got: int32(EvsWindowFlag_EVS_WINDOW_VERSIONLESS_REPLACED), number: 1 << 4},
-		{name: "window bit 5", got: int32(EvsWindowFlag_EVS_WINDOW_DROP), number: 1 << 5},
-	}
-	for _, c := range cases {
-		if c.got != c.number {
-			t.Errorf("%s is %d, want %d", c.name, c.got, c.number)
-		}
-	}
-}
 
 // §11.8's entry row: bits 16-31 hold the change count, so no flag may reach them, and each is one bit.
 func TestWindowFlagsStayBelowTheChangeCount(t *testing.T) {
@@ -83,31 +39,6 @@ func TestPushFlagsAreOneBitEach(t *testing.T) {
 	}
 }
 
-// The list, exactly: anything reserved past it is a number no decision took, and anything missing from it a number
-// a later field could reuse. EvsPush's 21 moved into auth, and EvsHead's 10 likewise; EvsLocator's 3 and 4 wait
-// for a format readers learn first.
-func TestFormatOneReservesOnlyTheDecidedNumbers(t *testing.T) {
-	file := testFile(t, "protocol/evs.proto")
-	want := map[protoreflect.Name][]int32{"EvsPush": {21}, "EvsHead": {10}}
-	messages := file.Messages()
-	for i := range messages.Len() {
-		message := messages.Get(i)
-		got := testReservedNumbers(message.ReservedRanges())
-		if !slices.Equal(got, testSorted(want[message.Name()])) {
-			t.Errorf("%s reserves %v, want %v", message.Name(), got, want[message.Name()])
-		}
-	}
-	wantEnums := map[protoreflect.Name][]int32{"EvsLocatorKind": {3, 4}}
-	enums := file.Enums()
-	for i := range enums.Len() {
-		enum := enums.Get(i)
-		got := testEnumReservedNumbers(enum.ReservedRanges())
-		if !slices.Equal(got, testSorted(wantEnums[enum.Name()])) {
-			t.Errorf("%s reserves %v, want %v", enum.Name(), got, wantEnums[enum.Name()])
-		}
-	}
-}
-
 // Owner decisions 165 and 167: versionless means head-only, so field 15 is neither used nor held back.
 func TestEntryVersionHasNoFieldFifteen(t *testing.T) {
 	message := testMessage(t, "EvsEntryVersion")
@@ -116,5 +47,266 @@ func TestEntryVersionHasNoFieldFifteen(t *testing.T) {
 	}
 	if message.ReservedRanges().Has(15) {
 		t.Error("field 15 is reserved")
+	}
+}
+
+// EVS-FORMAT.md's enumerations, each value as written there. plan-EVS1-format-bytes#3 and #6 to #8 give most; the
+// refusal codes from 64 and the outcome are EVS-FORMAT.md's own, and its table gives every code's status.
+func TestEvsEnumNumbersStable(t *testing.T) {
+	cases := []struct {
+		name string
+		got  map[string]int32
+		want map[string]int32
+	}{
+		{
+			name: "EvsRefKind",
+			got:  EvsRefKind_value,
+			want: map[string]int32{
+				"EVS_REF_KIND_UNSPECIFIED": 0, "EVS_REF_SHARED": 1, "EVS_REF_OWNED": 2, "EVS_REF_DEPOSIT": 3,
+				"EVS_REF_ERASURE": 4,
+			},
+		},
+		{
+			name: "EvsRefMode",
+			got:  EvsRefMode_value,
+			want: map[string]int32{"EVS_REF_MODE_UNSPECIFIED": 0, "EVS_REF_GIT": 1, "EVS_REF_FILE": 2},
+		},
+		{
+			name: "EvsEntryKind",
+			got:  EvsEntryKind_value,
+			want: map[string]int32{"EVS_ENTRY_KIND_UNSPECIFIED": 0, "EVS_ENTRY_FILE": 1, "EVS_ENTRY_DIRECTORY": 2},
+		},
+		{
+			name: "EvsRecordKind",
+			got:  EvsRecordKind_value,
+			want: map[string]int32{
+				"EVS_RECORD_KIND_UNSPECIFIED": 0, "EVS_RECORD_CHECKPOINT": 1, "EVS_RECORD_DIFF": 2, "EVS_RECORD_CHUNK": 3,
+			},
+		},
+		{
+			name: "EvsKeyRefKind",
+			got:  EvsKeyRefKind_value,
+			want: map[string]int32{"EVS_KEY_REF_CONTAINER": 0, "EVS_KEY_REF_SLOT": 1},
+		},
+		{
+			name: "EvsOidKind",
+			got:  EvsOidKind_value,
+			want: map[string]int32{"EVS_OID_KIND_UNSPECIFIED": 0, "EVS_OID_SHA1": 1, "EVS_OID_SHA256": 2},
+		},
+		{
+			name: "EvsBatchRecordType",
+			got:  EvsBatchRecordType_value,
+			want: map[string]int32{
+				"EVS_BATCH_RECORD_TYPE_UNSPECIFIED": 0, "EVS_BATCH_PUSH": 1, "EVS_BATCH_PART": 2, "EVS_BATCH_SEAL": 3,
+				"EVS_BATCH_RESEED": 4,
+			},
+		},
+		{
+			name: "EvsPayloadSection",
+			got:  EvsPayloadSection_value,
+			want: map[string]int32{
+				"EVS_PAYLOAD_SECTION_UNSPECIFIED": 0, "EVS_PAYLOAD_ENTRY_VERSIONS": 1, "EVS_PAYLOAD_SEALED_METADATA": 2,
+				"EVS_PAYLOAD_INLINE_RECORDS": 3, "EVS_PAYLOAD_CHANGE_LIST": 4, "EVS_PAYLOAD_PART_HASHES": 5,
+				"EVS_PAYLOAD_NEW_OBJECTS": 6, "EVS_PAYLOAD_SLOT_BODIES": 7, "EVS_PAYLOAD_ERASED_LIST": 8,
+				"EVS_PAYLOAD_DROP_BODY": 9, "EVS_PAYLOAD_DROP_LISTS": 10, "EVS_PAYLOAD_TAIL_MOVES": 11,
+				"EVS_PAYLOAD_SOURCE_PATHS": 12, "EVS_PAYLOAD_REUSE_LIST": 13, "EVS_PAYLOAD_MERKLE_PROOFS": 14,
+			},
+		},
+		{
+			name: "EvsNewObjectKind",
+			got:  EvsNewObjectKind_value,
+			want: map[string]int32{
+				"EVS_NEW_OBJECT_KIND_UNSPECIFIED": 0, "EVS_NEW_OBJECT_SEGMENT": 1, "EVS_NEW_OBJECT_STAGED_SEGMENT": 2,
+				"EVS_NEW_OBJECT_SLOT": 3,
+			},
+		},
+		{
+			name: "EvsRepoState",
+			got:  EvsRepoState_value,
+			want: map[string]int32{
+				"EVS_REPO_STATE_UNSPECIFIED": 0, "EVS_REPO_KEYING": 1, "EVS_REPO_ACTIVE": 2, "EVS_REPO_DELETED": 3,
+				"EVS_REPO_SHREDDING": 4, "EVS_REPO_SHREDDED": 5,
+			},
+		},
+		{
+			name: "EvsRefusalCode",
+			got:  EvsRefusalCode_value,
+			want: map[string]int32{
+				"EVS_REFUSAL_CODE_UNSPECIFIED": 0, "EVS_REFUSAL_SCOPE": 1, "EVS_REFUSAL_TIME_STALE": 2,
+				"EVS_REFUSAL_REPO_KEYING": 3, "EVS_REFUSAL_REPO_DELETED": 4, "EVS_REFUSAL_QUOTA_PAYMENT": 5,
+				"EVS_REFUSAL_QUOTA_LIMIT": 6, "EVS_REFUSAL_CLUSTER_FULL": 7, "EVS_REFUSAL_GATE_CLOSED": 8,
+				"EVS_REFUSAL_INDEX_EPOCH": 9, "EVS_REFUSAL_MAP_PARTS": 10, "EVS_REFUSAL_EPOCH_SOURCES_FULL": 11,
+				"EVS_REFUSAL_PATH_EPOCH_DUE": 12, "EVS_REFUSAL_DIRECTORY_FULL": 13, "EVS_REFUSAL_SEGMENT_GONE": 14,
+				"EVS_REFUSAL_VERSIONING": 15, "EVS_REFUSAL_SLOT_UNKNOWN": 16, "EVS_REFUSAL_SLOT_STALE": 17,
+				"EVS_REFUSAL_NOTHING_TO_ERASE": 18, "EVS_REFUSAL_DROPPED": 19, "EVS_REFUSAL_DROP_PATH": 20,
+				"EVS_REFUSAL_DROP_CONSENT": 21, "EVS_REFUSAL_DROP_STATE": 22, "EVS_REFUSAL_DROP_BOUNDARY": 23,
+				"EVS_REFUSAL_DROP_LIST": 24, "EVS_REFUSAL_FORMAT_UNSUPPORTED": 25,
+				"EVS_REFUSAL_REF_MODE": 64, "EVS_REFUSAL_PUSH_ID_REUSED": 65, "EVS_REFUSAL_NON_FAST_FORWARD": 66,
+				"EVS_REFUSAL_BASE_STALE": 67, "EVS_REFUSAL_PATH_CONFLICT": 68, "EVS_REFUSAL_PATH_EPOCH": 69,
+				"EVS_REFUSAL_SHREDDING": 70, "EVS_REFUSAL_DROP_KIND": 71, "EVS_REFUSAL_SEGMENT_STALE": 72,
+				"EVS_REFUSAL_STATEMENT_MISSING": 73, "EVS_REFUSAL_GROUP_NOT_READY": 74,
+				"EVS_REFUSAL_INVALID": 128, "EVS_REFUSAL_NOT_FOUND": 129, "EVS_REFUSAL_PARTS_MISSING": 130,
+				"EVS_REFUSAL_BUSY": 131, "EVS_REFUSAL_FOLD_BEHIND": 132, "EVS_REFUSAL_TIME_AHEAD": 133,
+				"EVS_REFUSAL_RESOURCE_EXHAUSTED": 134, "EVS_REFUSAL_WAIT": 135, "EVS_REFUSAL_UNAVAILABLE": 136,
+			},
+		},
+		{
+			name: "EvsPushOutcome",
+			got:  EvsPushOutcome_value,
+			want: map[string]int32{"EVS_PUSH_OUTCOME_SETTLED": 0, "EVS_PUSH_OUTCOME_UNKNOWN": 1},
+		},
+		{
+			name: "EvsReadPathState",
+			got:  EvsReadPathState_value,
+			want: map[string]int32{
+				"EVS_READ_PATH_STATE_UNSPECIFIED": 0, "EVS_READ_PATH_COLLECTED": 1, "EVS_READ_PATH_DROP_PENDING": 2,
+				"EVS_READ_PATH_DROPPED": 3,
+			},
+		},
+		{
+			name: "EvsReadObjectKind",
+			got:  EvsReadObjectKind_value,
+			want: map[string]int32{
+				"EVS_READ_OBJECT_KIND_UNSPECIFIED": 0, "EVS_READ_OBJECT_SEGMENT": 1, "EVS_READ_OBJECT_SLOT": 2,
+				"EVS_READ_OBJECT_MAP_PART": 3, "EVS_READ_OBJECT_LOG_PAGE": 4, "EVS_READ_OBJECT_BATCH_RECORD": 5,
+			},
+		},
+	}
+	for _, c := range cases {
+		if !maps.Equal(c.got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, c.got, c.want)
+		}
+	}
+}
+
+// The refusal table's ranges hold: the head's 16 B EvsRefusal keeps a code in 2 bytes, and the ranges tell a
+// recordable code from a final one and from an answer that refuses nothing by number alone.
+func TestEvsRefusalCodesKeepTheirRanges(t *testing.T) {
+	recordable := 0
+	for number, name := range EvsRefusalCode_name {
+		switch {
+		case number < 0 || 1<<16 <= number:
+			t.Errorf("%s is %d, past the record's 2 bytes", name, number)
+		case 25 < number && number < 64, 74 < number && number < 128, 136 < number:
+			t.Errorf("%s is %d, outside the ranges EVS-FORMAT.md gives", name, number)
+		case 0 < number && number < 64:
+			recordable++
+		}
+	}
+	if recordable != 25 {
+		t.Errorf("%d recordable codes, and plan-EVS1-format-bytes#6 numbers 25", recordable)
+	}
+}
+
+// The sealed values EVS-FORMAT.md proposes, which no server reads, so testdata/evs/metadata_rows.yml does not pin
+// them: each field as testFieldLine writes it, in declaration order.
+func TestEvsSealedValuesKeepTheirNumbers(t *testing.T) {
+	want := map[protoreflect.Name][]string{
+		"EvsSealedFields": {
+			"1 file_id bytes", "2 mode uint32", "3 git_oid bytes", "4 oid_kind enum", "5 size uint64",
+			"6 content_sha256 bytes",
+		},
+		"EvsSealedMetadata": {
+			"1 group GroupHead", "2 provenance EvsProvenance", "3 commits repeated EvsSealedCommit",
+			"4 signed_import bytes",
+		},
+		"EvsProvenance":   {"1 agent_id bytes", "2 tainted bool"},
+		"EvsSealedCommit": {"1 object bytes", "2 changes repeated EvsSealedChange"},
+		"EvsSealedChange": {"1 path repeated bytes", "2 mode uint32", "3 git_oid bytes"},
+	}
+	for _, name := range slices.Sorted(maps.Keys(want)) {
+		message := testMessage(t, string(name))
+		got := []string{}
+		for i := range message.Fields().Len() {
+			got = append(got, testFieldLine(message.Fields().Get(i)))
+		}
+		if !slices.Equal(got, want[name]) {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, want[name])
+		}
+	}
+}
+
+// Every message evs.proto declares, in file order.
+func testEvsMessages(t testing.TB) []protoreflect.MessageDescriptor {
+	file, err := protoregistry.GlobalFiles.FindFileByPath("protocol/evs.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []protoreflect.MessageDescriptor{}
+	for i := range file.Messages().Len() {
+		messages = append(messages, file.Messages().Get(i))
+	}
+	if len(messages) < 50 {
+		t.Fatalf("found %d evs messages", len(messages))
+	}
+	return messages
+}
+
+// Each evs message's §22.6 seeds are on disk as the encoder writes them today, so a field added or renumbered before
+// the freeze shows as a rewritten seed. SIDECAR_WRITE_SEEDS=1 rewrites them.
+func TestEveryEvsBodyHasItsSeeds(t *testing.T) {
+	write := os.Getenv(testWriteSeedsEnvironment) != ""
+	forms := map[string]int{}
+	for _, message := range testEvsMessages(t) {
+		messageType, err := protoregistry.GlobalTypes.FindMessageByName(message.FullName())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for form, body := range testBodySeeds(t, message, testEncode(t, testFilled(messageType))) {
+			forms[form]++
+			path := filepath.Join(testBodySeedDirectory, string(message.Name())+"-"+form)
+			corpus := testCorpusFile(string(message.Name()), body)
+			if write {
+				if err := os.MkdirAll(testBodySeedDirectory, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, corpus, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
+			held, err := os.ReadFile(path)
+			if err != nil {
+				t.Errorf("%s: %v; %s=1 writes it", path, err, testWriteSeedsEnvironment)
+				continue
+			}
+			if !bytes.Equal(held, corpus) {
+				t.Errorf("%s is stale; %s=1 rewrites it", path, testWriteSeedsEnvironment)
+			}
+		}
+	}
+	for _, form := range []string{"canonical", "repeated", "unknown", "reordered", "non-minimal", "unpacked"} {
+		if forms[form] == 0 {
+			t.Errorf("no evs seed of form %s", form)
+		}
+	}
+}
+
+// §22.6's round trip on the evs seeds: however a seed was encoded it decodes, and every form but the doubled one is
+// the message it came from, proto.Equal to it.
+func TestEvsSeedsDecodeAlike(t *testing.T) {
+	for _, message := range testEvsMessages(t) {
+		messageType, err := protoregistry.GlobalTypes.FindMessageByName(message.FullName())
+		if err != nil {
+			t.Fatal(err)
+		}
+		filled := testFilled(messageType)
+		for form, body := range testBodySeeds(t, message, testEncode(t, filled)) {
+			decoded := messageType.New().Interface()
+			if err := proto.Unmarshal(body, decoded); err != nil {
+				t.Errorf("%s %s: %v", message.Name(), form, err)
+				continue
+			}
+			switch form {
+			case "repeated":
+			case "unknown":
+				decoded.ProtoReflect().SetUnknown(nil)
+				fallthrough
+			default:
+				if !proto.Equal(filled, decoded) {
+					t.Errorf("%s %s decoded differently", message.Name(), form)
+				}
+			}
+		}
 	}
 }

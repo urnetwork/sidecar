@@ -9,7 +9,20 @@
 //   - wire.go, what the journal, snapshots and the feed carry between the block and its edges.
 //   - store.go, DnsStore and DnsFeed: the only ways an engine reaches §12.14's tables and an edge
 //     reaches the block, so each part here runs on sidecartest's fakes before its real half exists.
+//   - validate.go and copy_rows.go, what every writer runs before its transaction: §12.7's user table,
+//     the zone lint and DMARC rule, and the copy rows that keep * answering at empty non-terminals.
 //   - zone.go, zone_trie.go and answer.go, a root held at one serial and the unsigned answers it gives.
+//   - keyset.go, sign.go, denial.go and selfcheck.go, online signing under DO: the ZSK and the released
+//     DNSKEY window, signatures with their cache and cap, compact denial, and the check every zone
+//     build and key set passes before it serves.
+//   - edge.go and rrl.go, dnsedge: UDP and TCP 53 answered from the view FeedLoop publishes, with
+//     response-rate limiting and no query log.
+//   - probe.go and probe_tls.go, the lb interface probes and the healthy set edge rows answer from;
+//     probe_route.go, the custom-host map's route probes on the same rounds, posted to the block.
+//   - feed.go and snapshot_file.go, the edge's feed loop: rows applied and checked before they serve,
+//     reloads and their diffs, and the local snapshot a restart serves from.
+//   - api.go, api_feed.go and api_ready.go, the API block's internal routes: the feed, GET ready and
+//     the bearer check; feed_http.go, DnsFeed over HTTP for the edges.
 //   - metrics.go, the metric families and their closed label values.
 //
 // This package never opens Postgres or Redis itself, and an edge holds neither, so with the core

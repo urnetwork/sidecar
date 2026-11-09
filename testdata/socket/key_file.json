@@ -1,0 +1,84 @@
+{
+  "comment": "Section 9.4's K_sock file and the token paths under each key, by a separate implementation. Synthetic ids and keys.",
+  "network_id": "00112233445566778899aabbccddeeff",
+  "files": [
+    {
+      "name": "fresh",
+      "current_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "previous_key": "",
+      "rotated_at_ms": 0,
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    },
+    {
+      "name": "rotating",
+      "current_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "previous_key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "rotated_at_ms": 1767323045000,
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f1220202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f188899a6e5b733"
+    }
+  ],
+  "names": [
+    {
+      "name": "db",
+      "current_token": "b77376f7cf8d8d3655bb222e54bec125",
+      "previous_token": "5ecc03ad774aba45c3a8ceae6a46dbd0"
+    },
+    {
+      "name": "db/primary",
+      "current_token": "b77376f7cf8d8d3655bb222e54bec125d486a8d7f3d999aef94d7901d743bd44",
+      "previous_token": "5ecc03ad774aba45c3a8ceae6a46dbd076c3c6a1d7921447b05b45461c04a3e3"
+    },
+    {
+      "name": "acme.internal/queue-events/_shard_3",
+      "current_token": "ff2bf1b74cd2ffbc285e55bbe90410b46c4c1c92aa99b73ad2b120c861aa1ef4e2b2b8901efb303a7aaae5e050e039ab",
+      "previous_token": "cdc73c6200608d381a4c07e99a54fa0c943cdfb8f7b75080939bc8a6f666e03160c6f4df8c030dddf124e264f3ce5882"
+    },
+    {
+      "name": "share/abcdefghijklmnopqrstuvwx27",
+      "current_token": "bf76c6f810dab65ad8b8cfd2556be8601440f0f2f85aeafe049c112eefa33820",
+      "previous_token": "07b953dfeeba25abc6527cd71080eb9265572364de03be70a43548f24839a4de"
+    }
+  ],
+  "prefixes": [
+    {
+      "prefix": "db",
+      "current_token": "b77376f7cf8d8d3655bb222e54bec125",
+      "previous_token": "5ecc03ad774aba45c3a8ceae6a46dbd0"
+    },
+    {
+      "prefix": "acme.internal/queue-events",
+      "current_token": "ff2bf1b74cd2ffbc285e55bbe90410b46c4c1c92aa99b73ad2b120c861aa1ef4",
+      "previous_token": "cdc73c6200608d381a4c07e99a54fa0c943cdfb8f7b75080939bc8a6f666e031"
+    }
+  ],
+  "invalid": [
+    {
+      "why": "a current key of 31 bytes",
+      "bytes": "0a1f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+    },
+    {
+      "why": "no current key",
+      "bytes": ""
+    },
+    {
+      "why": "a previous key of 33 bytes",
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f1221202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f00188899a6e5b733"
+    },
+    {
+      "why": "a previous key with no rotation time",
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f1220202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "why": "a rotation time with no previous key",
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f188899a6e5b733"
+    },
+    {
+      "why": "a previous key equal to the current",
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f1220000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f188899a6e5b733"
+    },
+    {
+      "why": "a truncated field",
+      "bytes": "0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+    }
+  ]
+}

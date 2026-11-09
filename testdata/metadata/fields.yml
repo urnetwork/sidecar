@@ -64,9 +64,13 @@ roots:
   SmtpPreambleResult: "smtpedge reads or answers it (§14.5)"
   SmtpProof: "smtpedge reads or answers it (§14.5)"
   SmtpProofResult: "smtpedge reads or answers it (§14.5)"
+  SmtpOutcome: "smtpedge reads it from the connection's dialer (§14.8, plan-SMTP-wire-gaps#1)"
+  SmtpStatus: "smtpedge's halt job builds it, in PushHint.hint on topic mail (§14.8, plan-SMTP-wire-gaps#2)"
+  SmtpHandshake: "smtpedge reads or answers it (§14.5's E2, smtpproof-start-shts-wire)"
+  SmtpHandshakeResult: "smtpedge reads or answers it (§14.5's E2, smtpproof-start-shts-wire)"
   # protocol/mail.proto
   MailIngress: "mxedge builds it from what it holds (§15.4)"
-  MailHint: "a kind in PushHint.hint on topic mail, which the mail service builds (§15.15)"
+  MailHint: "a kind and an mx host in PushHint.hint on topic mail, which mxedge's router builds (§15.15, §15.6)"
   # protocol/gkm.proto
   GkmCommitHeader: "gkm reads the clear header of every commit (§10.4, §10.6)"
   UrMlsCredential: "in a KeyPackage's clear credential, which gkm holds (§10.6, gkm-4)"
@@ -87,6 +91,20 @@ roots:
   EvsPlace: "evs assigns it in the batch (§11.8)"
   EvsHead: "evs writes and reads the commit point (§11.8)"
   EvsHeadChanged: "evs builds it, in PushHint.hint (§11.10)"
+  EvsRepoObject: "evs writes and reads repo/ (§11.8, §11.12)"
+  EvsRepoPlacement: "evs writes place/, and evs and gkm resolve it (§11.8)"
+  EvsSlotObject: "evs stores slot/ and rewrites it to drop erased keys (§11.8, §11.12)"
+  EvsIndexEntry: "evs folds committed versions into idx/ (§11.7)"
+  EvsLogPage: "evs pages the window into log/ (§11.8)"
+  EvsPushRequest: "evs reads POST .../push, a push or a seal (§11.8)"
+  EvsPartRequest: "evs reads POST .../push/<push_id>/<k> (§11.8)"
+  EvsLeaseRequest: "evs reads POST .../push/<push_id>/lease (§11.8)"
+  EvsPushReply: "evs answers a push, part or seal with it (§11.8)"
+  EvsRefusalReply: "evs answers every request it refuses with it (§11.8, §11.20)"
+  EvsReadRequest: "evs reads POST .../read (§11.9)"
+  EvsReadFrame: "evs answers a read with these frames (§11.9)"
+  EvsRefsReply: "evs answers GET .../refs (§11.9, §11.10)"
+  EvsLogReply: "evs answers GET .../log (§11.9)"
   # protocol/bridge/auth.proto
   AuthEntry: "the body of proj/<network_id>/<n>/_, which api sequences (§7.9)"
   ProjectionHeader: "a base's Signed header, which api checks (§7.9)"
@@ -153,7 +171,8 @@ seals:
   RecoveryRebind.sealed_body: RecoveryBindBody
   IndexerSet.sealed_services: IndexerServices
   RepoVersioning.sealed_rules: VersioningRules
-  EvsPushPart.sealed_metadata: EvsImport
+  EvsPushPart.sealed_metadata: EvsSealedMetadata
+  EvsEntryVersion.sealed_fields: EvsSealedFields
 
 sealed_messages:
   Hello: "peers only, over a Required session: an edge's opens need no Hello (§6.4)"
@@ -165,10 +184,17 @@ sealed_messages:
   ServiceSettings: "kept to config heads, which evs holds as ciphertext (§7.9)"
   BridgeBlock: "rides a config head, which evs holds as ciphertext (§17.8)"
   BridgeShareSigner: "a config file, which evs holds as ciphertext (§17.9)"
+  SocketKeyFile: "a config file, socket/key, which evs holds as ciphertext (§7.9, §9.4)"
+  ConfigRecord: "inside a config head's fold file, which evs holds as ciphertext (§7.9, plan-TEAM-config-head-format)"
+  ConfigFold: "a config head's fold/<d>/<i> file, which evs holds as ciphertext (§7.9, plan-TEAM-config-head-format)"
+  ConfigNameTable: "a config head's names file, which evs holds as ciphertext (§7.7, §7.9)"
+  ConfigName: "inside a config head's names file, which evs holds as ciphertext (§7.7, §7.9)"
   BridgeState: "in process, or DeviceLocalRpc on the device (§18.6)"
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
   WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"
   ShareCert: "rides sealed in a WindowDelegation (§17.9)"
+  EvsImport: "a Signed EvsImport rides as bytes in EvsSealedMetadata.signed_import, inside a push's sealed metadata (§11.6, §11.11)"
+  AuthKeyBundle: "client-only: a pre-approved auth key's #<bundle>, never sent, logged or passed to MCP, and no request has a field for it (§7.8, D-TEAM-22)"
 
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"
@@ -252,8 +278,23 @@ fields:
   SmtpProof.server_record_count: smtp-2
   SmtpProof.records: smtp-2
   SmtpProofResult.code: smtp-2
+  # smtp-2 sees "the self-reported SmtpOutcome", whole
+  SmtpOutcome.send_id: smtp-2
+  SmtpOutcome.tls_level: smtp-2
+  SmtpOutcome.mode: smtp-2
+  SmtpOutcome.reply_codes: smtp-2
+  SmtpOutcome.dsn_count: smtp-2
+  SmtpOutcome.hard_bounce_count: smtp-2
+  SmtpOutcome.downgrade_refused: smtp-2
+  # a kind in a mail hint, as MailHint.kind is
+  SmtpStatus.kind: connect-4
+  # smtp-2 sees "the server handshake secret the sidecar discloses" and the issued send_id
+  SmtpHandshake.send_id: smtp-2
+  SmtpHandshake.shts: smtp-2
+  SmtpHandshakeResult.code: smtp-2
   # protocol/mail.proto
   MailHint.kind: connect-4
+  MailHint.host: connect-4
   MailIngress.sender_ip: mx-1
   MailIngress.sender_port: mx-1
   MailIngress.sni: mx-1
@@ -629,6 +670,8 @@ open:
   SmtpPreamble.version: {row: smtp-1, question: protos-services-metadata-rows.md, until: M2}
   MailIngress.version: {row: mx-1, question: protos-services-metadata-rows.md, until: M2}
   SmtpPreambleResult.retry_after_ms: {row: smtp-2, question: protos-services-metadata-rows.md, until: M2}
+  # the same retry delay smtpedge sets from smtp-4's counters and halts, which that answer adds to smtp-2
+  SmtpStatus.retry_after_ms: {row: smtp-2, question: protos-services-metadata-rows.md, until: M2}
   Envelope.version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.type: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Envelope.request_id: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
@@ -712,6 +755,9 @@ values:
   "the sidecar dump and the main dumps": ops-2
   "the rdb bundles of existing Redis families": ops-3
 
+not_keys:
+  "http/1.1": "an ALPN id, the second a route probe's hello offers, which the lb's http branch selects (§13.4)"
+
 rows:
   connect-1: {server: [transfer_contract, contract_close, contract_close_report]}
   connect-3: {server: [network_client_connection, network_client_location]}
@@ -727,27 +773,19 @@ rows:
   api-13: {server: [transfer_balance]}
   api-14: {planned: M5}
   api-15: {planned: M2}
-  sock-1: {planned: M5}
-  sock-3: {planned: M5}
-  sock-4: {planned: M5}
-  sock-5: {planned: M5}
-  evs-1: {planned: M2}
+  sock-1: {server: ["{sg_}", "{sg_}ix"]}
+  sock-3: {server: ["{svc_}"]}
+  sock-4: {server: ["{sn_}names"]}
+  sock-5: {server: ["{sc_}set"]}
   evs-6: {planned: M2}
-  evs-7: {planned: M2}
   evs-8: {planned: M2}
-  evs-9: {planned: M2}
   evs-10: {planned: M2}
   evs-13: {planned: M2}
-  evs-14: {planned: M2}
   evs-16: {planned: M2}
   evs-17: {planned: M2}
   evs-18: {planned: M1}
-  evs-19: {planned: M2}
   evs-21: {planned: M2}
-  evs-22: {planned: M2}
   evs-23: {planned: M2}
-  evs-24: {planned: M2}
-  evs-25: {planned: M2}
   evs-26: {planned: M10}
   evs-27: {planned: M6}
   evs-28: {planned: M10}
@@ -757,7 +795,6 @@ rows:
   gkm-9: {planned: M2}
   gkm-10: {planned: M2}
   tls-4: {planned: M5}
-  cert-1: {planned: M5}
   cert-2: {planned: M5}
   dns-2: {planned: M5}
   smtp-3: {planned: M9}

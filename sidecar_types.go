@@ -6,6 +6,7 @@
 package sidecar
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -14,15 +15,45 @@ import (
 // One network's sidecar: its own Required client, durable sidecar_id and identity key (D-CORE-4,
 // D-CORE-5). Safe for concurrent use.
 //
-// §5.4's other fields arrive with what they name: sidecarApi with CORE-M1-04, keychain with
-// CORE-M1-02, identity with CORE-M1-05, and leg and NewSidecar with CORE-M1-08.
+// §5.4's keychain is the instance's, reached through coreSecrets (keys_keychain.go), so the Sidecar
+// keeps no root key of its own. NewSidecar (sidecar_new_connect.go on connect legs) sets what is set
+// once, and the run loop (sidecar_core.go) alone starts and ends the client generations.
 type Sidecar struct {
 	host     SidecarHost
 	settings *SidecarSettings
 	log      Logger
+	// The sidecar's client of api, on every leg, holding its jwt and DPoP signer (api_client.go).
+	// Set once at construction.
+	sidecarApi *SidecarApi
 	// Mirrors lifecycle's state for a caller waiting on a change, and is written only with it.
 	state          *MonitorValue[SidecarState]
 	eventCallbacks *CallbackList[SidecarEventFunction]
+	// ServiceToken's cache, under its own lock (api_service_token.go).
+	serviceTokens sidecarServiceTokens
+	// Running totals for `ur status --stats` (sidecar_stats.go).
+	stats sidecarStats
+	// Raised for each change the run loop must look at that the instance's state does not show: an
+	// enrollment, a generation's end, a component added or removed, a close.
+	wakes *MonitorValue[uint64]
+	// The number of the generation running, 0 when none: what a caller waits on for a generation to have
+	// ended and been joined.
+	runningGenerationNumber *MonitorValue[int64]
+
+	// Set once by NewSidecar. instance holds U and this network's keychain, shared with the
+	// instance's other Sidecars; leg is what only the leg runs.
+	instance *SidecarInstance
+	clock    Clock
+	leg      sidecarLeg
+	ctx      context.Context
+	cancel   context.CancelFunc
+	// Closed once the run loop has returned, with every generation joined and every component closed.
+	done chan struct{}
+	// D-TRUST-3's scan of this host's credential stores (identity_host_stores.go), which a test replaces.
+	hostStores func() []SidecarHostCredentialStore
+	// One enrollment at a time, held across its requests, so never stateLock (identity_enroll.go).
+	enrollLock sync.Mutex
+	// §16's approval ledger and run store, under their own lock (record_ledger.go).
+	records sidecarRecords
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
@@ -30,15 +61,29 @@ type Sidecar struct {
 	eventQueue []SidecarEvent
 	// a goroutine is delivering eventQueue, which every later event joins
 	eventDelivering bool
+	// The core's namespace of this network's keychain.ur, which holds the identity key, the ClientKey
+	// seed and the newest binding (identity_keys.go). Nil until the sidecar knows its network.
+	coreSecrets SidecarSecrets
+	// Ids, generation and public keys, never a private key. Nil until the keychain holds an identity.
+	identity *SidecarIdentity
+	// The network this sidecar is enrolled in: the host store's, or the one Enroll recorded. Nil before.
+	networkId *Id
+	// The client generation running, which only the run loop starts and ends. Nil when none runs.
+	generation *sidecarGeneration
+	// The newest generation a confirmed rejection ended. It does not start again: a re-enrollment binds
+	// the next one (D-CORE-8).
+	endedGeneration int64
+	// The instance state the run loop last acted on, so Failed alarms once each time it is entered.
+	instanceState SidecarInstanceState
+	closed        bool
 }
 
 // What an outward action does (I-8), as CanonicalAction.kind carries it (§16.8). Zero is no action,
 // and refused, so a value left unset never reads as one.
 //
-// §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order, the reading
-// plan-MCP-wire-enum-numbers.md recommends. Nothing hashes or sends them yet: RECORD-M2-01 and
-// MCP-M3-02 take them into record.proto, and they freeze with it at M3. §16.7's restore is the
-// next number, which MCP-M3-02 adds.
+// §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order with §16.7's
+// restore appended, as plan-MCP-wire-enum-numbers.md fills them. record.proto's SidecarActionKind
+// holds the same values, which record_kind_test.go checks, and they freeze with it at M3.
 type SidecarActionKind uint32
 
 const (
@@ -76,6 +121,8 @@ const (
 	SidecarActionAccessRequest SidecarActionKind = 15
 	// A payment.
 	SidecarActionPayment SidecarActionKind = 16
+	// A run_restore apply, which puts a run's files back (§16.7).
+	SidecarActionRestore SidecarActionKind = 17
 )
 
 // How much an outward action could cost, the larger of policy's and the daemon's classifier's
@@ -164,6 +211,35 @@ const (
 	SidecarEventErasure SidecarEventKind = "erasure"
 	// An internet send's outcome for a recipient domain changed (§14.5).
 	SidecarEventMailSend SidecarEventKind = "mail_send"
+	// A local git ref the sync engine could not move, its commits kept under the conflict ref Path names
+	// (§11.11's restart row; plan-EVS1-evs-events).
+	SidecarEventEvsConflict SidecarEventKind = "evs_conflict"
+	// An evs read or replay failed a check, named by EvsAlarm (plan-EVS1-evs-events). A head not extending a pin is
+	// head_alarm's fork instead.
+	SidecarEventEvsAlarm SidecarEventKind = "evs_alarm"
+	// A head reader re-pinned past §11.9's catch-up budget: VerifiedSince is the re-pin's time
+	// (g0-recheck-0-head-reader-read-paths#3).
+	SidecarEventEvsGap SidecarEventKind = "evs_gap"
+	// A store on this host holds a readable network credential (D-TRUST-3; plan-CORE-host-store-refusal #3),
+	// raised by an enrolled sidecar at each start and each SyncRefetchInterval. It names no path or value: `ur
+	// status` names the store's kind.
+	SidecarEventCredentialStore SidecarEventKind = "credential_store"
+)
+
+// Why an evs_alarm fired (plan-EVS1-evs-events): a closed set.
+type SidecarEvsAlarm string
+
+const (
+	// A path's newest version whose content evs does not serve (§11.7, §11.9's collected row).
+	SidecarEvsAlarmMissingSegment SidecarEvsAlarm = "missing_segment"
+	// A failed entry hash, AEAD, oid or statement.
+	SidecarEvsAlarmTamper SidecarEvsAlarm = "tamper"
+	// A version off §11.7's rule: a creation not at max(b, m) + 1, a write not at its base + 1.
+	SidecarEvsAlarmVersionRule SidecarEvsAlarm = "version_rule"
+	// A writer an hour past a path epoch's due_by_ms (§11.6).
+	SidecarEvsAlarmEpochOverdue SidecarEvsAlarm = "epoch_overdue"
+	// From M6: a stream push off its prefix rule (§16.11).
+	SidecarEvsAlarmPrefixRule SidecarEvsAlarm = "prefix_rule"
 )
 
 // A drop's state as a device reports it (§11.7).
@@ -217,14 +293,15 @@ type SidecarEvent struct {
 	GroupId *Id
 	// Membership kinds: the leaf or wrapped reader; admission_alarm: the admitted sidecar;
 	// recovery_rebind: its signer; recovery_unseen: the recovered device; head_alarm: the peer; index
-	// alarms and history_drop: the signer; search_alarm: the indexer.
+	// alarms and history_drop: the signer; search_alarm: the indexer; evs_alarm: the signer of what failed,
+	// where one is known.
 	SidecarId *Id
-	// Index alarms, search_alarm, history_drop, directory_erasure, erasure.
+	// Index alarms, search_alarm, history_drop, directory_erasure, erasure, evs_conflict, evs_alarm, evs_gap.
 	RepoId *Id
-	// Index alarms, history_drop.
+	// Index alarms, history_drop, evs_conflict, evs_alarm, evs_gap.
 	RefId *Id
 	// Index alarms: the alarmed path; history_drop: its first listed path, §18.5's Drops listing
-	// all.
+	// all; evs_conflict: the local conflict ref; evs_alarm: the path, where one is named.
 	Path string
 	// history_drop.
 	DropId *Id
@@ -250,6 +327,10 @@ type SidecarEvent struct {
 	Evidence [2][]byte
 	// erasure: its id, state and what is left (§11.12, §11.13's wait).
 	Erasure *SidecarErasure
+	// evs_alarm.
+	EvsAlarm SidecarEvsAlarm
+	// evs_gap: the newest re-pin past the catch-up budget.
+	VerifiedSince time.Time
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait
@@ -288,7 +369,7 @@ type SidecarStatus struct {
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire
-// form is plan-CORE-binding-wire.md's to settle, and CORE-M1-05 owns the encoding.
+// form is plan-CORE-binding-wire #1's SignedSidecarIdentityBinding (identity_binding.go).
 type SidecarIdentityBinding struct {
 	NetworkId Id
 	SidecarId Id

@@ -18,15 +18,22 @@
 //   - EnsureWritable and RotateRepo act only for a writer whose state reaches the newest generation's pin and
 //     which holds that generation, never sealing to or rotating from an older one (ErrGkmAuthAhead or
 //     ErrGkmKeyMissing until then). EnsureWritable rotates when the newest does not cover the repo's
-//     holders_shrunk_at, or a sidecar holding it reads no more (cause REMOVE), or it is ScheduleInterval old (cause
-//     SCHEDULE); RotateRepo rotates now, REMOVE or REQUEST by the same test;
-//   - DropKey keeps the depositor rule as far as this fake sees: coverage, the drop key's expiry and a pin that never
-//     falls;
+//     holders_shrunk_at, a key holder of the repo expired after the newest's time (sidecar.GkmRemoveDue), or a
+//     sidecar holding it reads no more (cause REMOVE), or when it is ScheduleInterval old (cause SCHEDULE); RotateRepo
+//     rotates now, REMOVE or REQUEST by the same test. So a generation EnsureWritable answers without rotating passes
+//     sidecar.GkmGatePasses at that state and now, as evs's gate will judge it;
+//   - DropKey keeps the depositor rule as far as this fake sees: the gate's coverage of shrinks and expiries, the
+//     drop key's expiry and a pin that never falls;
+//   - holders_sha256 is sidecar.KeyHolders' at the rotator's state and time, unless the settings give another;
 //   - generation 1 carries cause REQUEST (keys-ladder-aad-widths.md).
 //
+// KeyHolders needs a row for each reader (FakeGkmAuthMemberDevices gives member devices theirs). On a state that
+// names a reader with none, EnsureWritable, RotateRepo and DropKey refuse with ErrGkmMalformed, as evs's gate would,
+// and holders_sha256 falls back to the hash of no identity.
+//
 // What it does not keep: MLS, whose fake is FakeMls, so no epoch object, Welcome or LeafWrap is written, and the
-// GenWrap a client opens is under a KEK of this fake's own; KeyHolders and expiries (KEYS-M2-03), so deliveries
-// follow RepoReaders, holders_sha256 comes from FakeGkmSettings.HoldersSha256 and no expiry rotates; ReaderKeys,
+// GenWrap a client opens is under a KEK of this fake's own; KeyHolders' wraps, so staged deliveries follow
+// RepoReaders, a covered agent getting its own rather than its Delegation's; ReaderKeys,
 // hint timing, and gkm's own late check that the recipient reads the repo in gkm's newest state, so any holder that
 // may deliver does so at once, and what a removed reader gets here is what the holders' rules alone give it, as the
 // revocation suite needs; staged and late wraps as objects; and gkm's route and scope checks.
@@ -70,7 +77,8 @@ type FakeGkmSettings struct {
 	// The kinds whose GenRotates carry a drop key (D-KEYS-17): §8.5's deposit column, vault, mailbox, secret and the
 	// team record.
 	DepositKinds []protocol.RepoKind
-	// holders_sha256 for a new generation, until KEYS-M2-03's KeyHolders. Nil: SHA-256 of no identity.
+	// holders_sha256 for a new generation. Nil: sidecar.KeyHolders' at the rotator's state and time, or SHA-256 of no
+	// identity where the state cannot name the holders.
 	HoldersSha256 func(repoId sidecar.Id, state sidecar.GkmAuthView, at time.Time) []byte
 }
 
@@ -204,10 +212,13 @@ func (self *FakeGkm) takesDeposits(kind protocol.RepoKind) bool {
 	return slices.Contains(self.settings.DepositKinds, kind)
 }
 
-// The settings' holders hash, or the hash of no identity.
+// The settings' holders hash, or KeyHolders', or the hash of no identity.
 func (self *FakeGkm) holdersSha256(repoId sidecar.Id, state sidecar.GkmAuthView, at time.Time) []byte {
 	if self.settings.HoldersSha256 != nil {
 		return self.settings.HoldersSha256(repoId, state, at)
+	}
+	if holders, err := sidecar.KeyHolders(state, repoId, at); err == nil {
+		return holders.Sha256()
 	}
 	empty := sha256.Sum256(nil)
 	return empty[:]
@@ -445,20 +456,22 @@ func (self *fakeGkmClient) CreateGroup(ctx context.Context, args *sidecar.GkmCre
 	return key, nil
 }
 
-// Whether the newest generation leaves out a shrink the state shows: below holders_shrunk_at, or held by a sidecar
-// that reads no more.
-func (self *fakeGkmClient) needsRemove(repo *fakeGkmRepo, state sidecar.GkmAuthView) bool {
+// Whether the newest generation leaves out a drop the state shows at now: a shrink below holders_shrunk_at or a key
+// holder's expiry after its time (sidecar.GkmRemoveDue), or a sidecar holding it that reads no more. An error when the
+// state cannot name the repo's holders.
+func (self *fakeGkmClient) needsRemove(repo *fakeGkmRepo, state sidecar.GkmAuthView, now time.Time) (bool, error) {
 	newest := repo.keys[len(repo.keys)-1]
-	if aclRepo := state.Repo(repo.repoId); aclRepo != nil && newest.Auth().GetVersion() < aclRepo.GetHoldersShrunkAt() {
-		return true
+	due, err := sidecar.GkmRemoveDue(state, repo.repoId, newest.Auth(), newest.Time(), now)
+	if err != nil || due {
+		return due, err
 	}
 	readers := state.RepoReaders(repo.repoId)
 	for holder := range repo.generationHolderIdPins[len(repo.keys)-1] {
 		if !slices.Contains(readers, holder) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // A new generation after parent, the newest as this writer holds it, now: delivered to the readers state names,
@@ -528,10 +541,14 @@ func (self *fakeGkmClient) EnsureWritable(ctx context.Context, repoId sidecar.Id
 	if err != nil {
 		return nil, err
 	}
+	now := self.gkm.clock.Now()
+	needsRemove, err := self.needsRemove(repo, state, now)
 	switch {
-	case self.needsRemove(repo, state):
+	case err != nil:
+		return nil, err
+	case needsRemove:
 		return self.rotateWithLock(ctx, repo, newest, state, sidecar.GkmCauseRemove)
-	case self.gkm.settings.ScheduleInterval <= self.gkm.clock.Now().Sub(newest.Time()):
+	case self.gkm.settings.ScheduleInterval <= now.Sub(newest.Time()):
 		return self.rotateWithLock(ctx, repo, newest, state, sidecar.GkmCauseSchedule)
 	}
 	// covered
@@ -545,8 +562,12 @@ func (self *fakeGkmClient) RotateRepo(ctx context.Context, repoId sidecar.Id) (*
 	if err != nil {
 		return nil, err
 	}
+	needsRemove, err := self.needsRemove(repo, state, self.gkm.clock.Now())
+	if err != nil {
+		return nil, err
+	}
 	cause := sidecar.GkmCauseRequest
-	if self.needsRemove(repo, state) {
+	if needsRemove {
 		cause = sidecar.GkmCauseRemove
 	}
 	return self.rotateWithLock(ctx, repo, newest, state, cause)
@@ -660,11 +681,16 @@ func (self *fakeGkmClient) DropKey(ctx context.Context, repoId sidecar.Id) (*sid
 		return nil, err
 	}
 	rotate := generation.Rotate
-	if aclRepo := state.Repo(repoId); aclRepo != nil && rotate.GetAuth().GetVersion() < aclRepo.GetHoldersShrunkAt() {
-		return nil, fmt.Errorf("%w: gen/%d does not cover a shrink", sidecar.ErrGkmWait, newest)
+	now := self.gkm.clock.Now()
+	err = sidecar.GkmGateCheck(state, repoId, rotate.GetAuth(), time.UnixMilli(rotate.GetTimeMs()), now)
+	switch {
+	case errors.Is(err, sidecar.ErrGkmGateClosed):
+		return nil, fmt.Errorf("%w: gen/%d: %w", sidecar.ErrGkmWait, newest, err)
+	case err != nil:
+		return nil, err
 	}
 	notAfter := time.UnixMilli(rotate.GetDropNotAfterMs())
-	if !self.gkm.clock.Now().Before(notAfter) {
+	if !now.Before(notAfter) {
 		return nil, fmt.Errorf("%w: gen/%d's drop key has lapsed", sidecar.ErrGkmWait, newest)
 	}
 	self.stateLock.Lock()

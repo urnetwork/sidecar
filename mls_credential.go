@@ -9,8 +9,15 @@
 // field, and nothing after field 8.
 //
 // A credential is checked here against its own signature and format alone. Whether a SidecarAdmit admits its
-// identity key for its sidecar is the member checks' (KEYS-M2-19). not_after is evidence only (QD-057): its value
-// refuses nothing here, and a reader judges a stale Remove by it.
+// identity key for its sidecar is the member checks' (KEYS-M2-19), which reach a leaf through MlsCredentialCheck.
+// not_after is evidence only (QD-057): its value refuses nothing here, and a reader judges a stale Remove by it.
+//
+// A leaf carries the credential as RFC 9420's 0xF552 body (mls_leafnode.go), and mlsUrCredentialValidator holds
+// it there: its own signature, its suite, and the leaf's signature key as the one it names, before the check.
+//
+// Each credential pins its identity key to its sidecar_id, and §6's Hello pins the same pair from a session's
+// binding (D-PROTO-13): MlsIdentityPin is that pair, so either side reads a pin the other set and refuses a
+// second key. Where pins live, first use in M1 and the log's admissions from M2, is §6's and KEYS-M2-19's.
 //
 // On every leg, with no connect import. No key is created, derived or unwrapped here, so nothing calls
 // testHookSecret. Package-level functions are safe for concurrent use.
@@ -20,10 +27,12 @@ package sidecar
 import (
 	"bytes"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -191,4 +200,78 @@ func CheckUrMlsCredential(encoded []byte) (*protocol.UrMlsCredential, error) {
 		return nil, fmt.Errorf("%w: credential: %w", ErrGkmAuthentication, err)
 	}
 	return credential, nil
+}
+
+// A credential's identity key is not the one pinned for its sidecar (§10.4's Admission: a second key is refused).
+var ErrMlsIdentityPin = errors.New("mls: identity key differs from its pin")
+
+// Judges a leaf's credential once its own checks pass, as RFC 9420 §5.3.1 leaves to the application: KEYS-M2-19's
+// SidecarAdmit through the log, the pin, and §10.9's rows. Called for every leaf a member takes in, a KeyPackage's,
+// a path's, a tree's and an external joiner's. Must be safe for concurrent use.
+type MlsCredentialCheck func(credential *protocol.UrMlsCredential) error
+
+// The validator a group runs on every leaf: credential 0xF552 alone, CheckUrMlsCredential, the leaf's own
+// signature key as the one it names, then check. A nil check refuses every credential, which is what an engine
+// with no admission check gets, so it adds no one and joins nothing (KEYS-M2-19).
+func mlsUrCredentialValidator(check MlsCredentialCheck) mlsCredentialValidator {
+	return func(credential *mlsCredential, signatureKey []byte) error {
+		if credential.credentialType != mlsCredentialTypeUrSidecar {
+			return fmt.Errorf("%w: credential type %#x", errMlsRefused, credential.credentialType)
+		}
+		parsed, err := CheckUrMlsCredential(credential.urMlsCredential)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errMlsInvalid, err)
+		}
+		if !bytes.Equal(parsed.GetMlsSignaturePublicKey(), signatureKey) {
+			return fmt.Errorf("%w: the credential names another signature key", errMlsInvalid)
+		}
+		if check == nil {
+			return fmt.Errorf("%w: no admission check for credentials", errMlsRefused)
+		}
+		return check(parsed)
+	}
+}
+
+// The sidecar_id and identity key a credential names, read without its signature check, for a leaf already
+// validated when it entered the tree.
+func mlsReadUrMlsCredential(encoded []byte) (*protocol.UrMlsCredential, error) {
+	credential := &protocol.UrMlsCredential{}
+	if err := proto.Unmarshal(encoded, credential); err != nil {
+		return nil, fmt.Errorf("%w: credential: %w", errMlsMalformed, err)
+	}
+	if len(credential.GetSidecarId()) != gkmIdByteCount || len(credential.GetIdentityPublicKey()) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("%w: credential ids", errMlsMalformed)
+	}
+	return credential, nil
+}
+
+// One identity pin: the identity key a sidecar_id is bound to, which §6's Hello and every MLS leaf share.
+type MlsIdentityPin struct {
+	SidecarId         Id
+	IdentityPublicKey ed25519.PublicKey
+}
+
+// The pin a credential states, once CheckUrMlsCredential holds.
+func MlsCredentialPin(credential []byte) (*MlsIdentityPin, error) {
+	parsed, err := CheckUrMlsCredential(credential)
+	if err != nil {
+		return nil, err
+	}
+	return &MlsIdentityPin{
+		SidecarId:         Id(parsed.GetSidecarId()),
+		IdentityPublicKey: ed25519.PublicKey(bytes.Clone(parsed.GetIdentityPublicKey())),
+	}, nil
+}
+
+// Refuses a pin whose key differs from the one pinned for its sidecar, which pinnedIdentityKey answers, nil for
+// none. A sidecar with no pin passes: first use and the log's admissions are the pin source's to record.
+func CheckMlsIdentityPin(pinnedIdentityKey func(sidecarId Id) []byte, pin *MlsIdentityPin) error {
+	if pin == nil || len(pin.IdentityPublicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("%w: no identity key", ErrMlsIdentityPin)
+	}
+	pinned := pinnedIdentityKey(pin.SidecarId)
+	if pinned != nil && !bytes.Equal(pinned, pin.IdentityPublicKey) {
+		return ErrMlsIdentityPin
+	}
+	return nil
 }

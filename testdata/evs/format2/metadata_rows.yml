@@ -1,0 +1,48 @@
+# Format 2's protocol/evs.proto fields that no design fence prints, for I-18: each field's number and type, which
+# pin what EVS-FORMAT.md's format 2 chapter proposes, and the §2.8 row that shows it. `sees` quotes that row, so a
+# row that stops saying it fails §22.7's guard. A field the row does not name yet sits under `pending` with what asks
+# for it, which questions/evs2-m10-01-metadata-rows.md raises; each stays visible here until design-records gives the
+# row its words, and fails the guard from M10's exit. protocol/evs_format2_descriptor_test.go holds this file
+# complete against the descriptor: a format-2 field with no line here fails before the guard runs.
+
+EvsReadPathReply.drop_statement: {number: 15, type: bytes, row: evs-14, sees: "DROP pushes and their cancels included"}
+EvsReadPathReply.drop_body: {number: 16, type: bytes, row: evs-12, sees: "DROP payload bodies"}
+
+EvsPurgeList.candidates: {number: 1, type: repeated EvsPurgeCandidate, row: evs-12, sees: "each record's purge candidates (segment and slot ids, derived by evs)"}
+EvsPurgeList.marked: {number: 2, type: bool, row: evs-12, until: M10, pending: "11.13's purge row writes a mark past 2,048 ids, from which the sweep recomputes the candidates; evs-12 names the candidates and not the mark"}
+EvsPurgeCandidate.token_path: {number: 1, type: repeated bytes, row: evs-12, sees: "changes of token path"}
+EvsPurgeCandidate.replaced_version: {number: 2, type: uint64, row: evs-12, sees: "base entry version"}
+EvsPurgeCandidate.segment_ids: {number: 3, type: repeated bytes, row: evs-12, sees: "segment and slot ids, derived by evs"}
+EvsPurgeCandidate.staged_segment_ids: {number: 4, type: repeated bytes, row: evs-12, sees: "segment and slot ids, derived by evs"}
+EvsPurgeCandidate.slot_ids: {number: 5, type: repeated bytes, row: evs-12, sees: "segment and slot ids, derived by evs"}
+
+EvsDropStatus.drop_id: {number: 1, type: bytes, row: evs-28, sees: "per drop: its id"}
+EvsDropStatus.ref_id: {number: 2, type: bytes, row: evs-28, sees: "per drop: its id, ref"}
+EvsDropStatus.push_id: {number: 3, type: bytes, row: evs-28, sees: "DROP push id"}
+EvsDropStatus.version: {number: 4, type: uint64, row: evs-28, sees: "version and place"}
+EvsDropStatus.not_before_ms: {number: 5, type: int64, row: evs-28, sees: "not_before_ms"}
+EvsDropStatus.state: {number: 6, type: EvsDropState, row: evs-28, sees: "state (pending, cancelled, executing with phase and progress, held, observed, done, refused with reason)"}
+EvsDropStatus.phase: {number: 7, type: EvsDropPhase, row: evs-28, sees: "executing with phase and progress"}
+EvsDropStatus.progress: {number: 8, type: uint64, row: evs-28, sees: "executing with phase and progress"}
+EvsDropStatus.progress_total: {number: 9, type: uint64, row: evs-28, sees: "executing with phase and progress"}
+EvsDropStatus.reason: {number: 10, type: EvsDropRefusal, row: evs-28, sees: "refused with reason"}
+EvsDropStatus.freed_bytes: {number: 11, type: uint64, row: evs-28, sees: "freed and held bytes"}
+EvsDropStatus.preview_id: {number: 12, type: bytes, row: evs-28, sees: "the dry run it names"}
+EvsDropsReply.drops: {number: 1, type: repeated EvsDropStatus, row: evs-28, sees: "per drop"}
+
+EvsDropPreviewRequest.ref_id: {number: 1, type: bytes, row: evs-2, sees: "ref ids"}
+EvsDropPreviewRequest.paths: {number: 2, type: repeated EvsDropPath, row: evs-28, sees: "the token paths and lists it was asked about"}
+EvsDropPreviewReply.preview_id: {number: 1, type: bytes, row: evs-28, sees: "the dry run it names"}
+EvsDropPreviewReply.state: {number: 2, type: EvsDropPreviewState, row: evs-28, until: M10, pending: "11.20's preview route answers a dry run's state; evs-28 names a dry run's snapshot and results and not its state"}
+EvsDropPreviewReply.progress: {number: 3, type: uint64, row: evs-28, until: M10, pending: "11.20's preview route answers a dry run's progress; evs-28 names a drop's progress and not a dry run's"}
+EvsDropPreviewReply.progress_total: {number: 4, type: uint64, row: evs-28, until: M10, pending: "as EvsDropPreviewReply.progress"}
+EvsDropPreviewReply.paths: {number: 5, type: repeated EvsDropPreviewPath, row: evs-28, sees: "its snapshot and results"}
+EvsDropPreviewReply.freed_bytes: {number: 6, type: uint64, row: evs-28, sees: "candidate segment and slot ids with sizes"}
+EvsDropPreviewReply.shared_bytes: {number: 7, type: uint64, row: evs-28, sees: "which of them other versions name"}
+EvsDropPreviewReply.inline_bytes: {number: 8, type: uint64, row: evs-28, sees: "inline and packed bytes"}
+EvsDropPreviewReply.packed_bytes: {number: 9, type: uint64, row: evs-28, sees: "inline and packed bytes"}
+EvsDropPreviewReply.young_bytes: {number: 10, type: uint64, row: evs-28, until: M10, pending: "11.13's preview row reports young bytes, candidates under 25 h old; evs-28 names inline and packed bytes and not young ones"}
+EvsDropPreviewReply.snapshot_version: {number: 11, type: uint64, row: evs-28, sees: "its snapshot"}
+EvsDropPreviewReply.snapshot_ms: {number: 12, type: int64, row: evs-28, sees: "its snapshot"}
+EvsDropPreviewPath.list_match: {number: 1, type: bool, row: evs-28, until: M10, pending: "11.13's preview row reports list_match per path against the client's count and listed_sha256; evs-28 names the lists a dry run was asked about and not that answer"}
+EvsDropPreviewPath.count: {number: 2, type: uint32, row: evs-28, until: M10, pending: "as EvsDropPreviewPath.list_match: the resolved list's version count"}

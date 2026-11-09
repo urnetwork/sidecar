@@ -63,6 +63,8 @@ type SidecarSettings struct {
 	Search *SidecarSearchSettings
 	// §16.11's team directory.
 	Directory *SidecarDirectorySettings
+	// §11's client: its calls, verifying reader and local tier.
+	Evs *EvsSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -79,10 +81,18 @@ type SidecarSettings struct {
 	// The most stream data one StreamData message carries: 4,000 B, the format's limit (§6.5). A
 	// value above it is refused by peers.
 	StreamChunkByteCount int
+	// The most of one api answer's body a SidecarApi reads: 2 MiB, connect's own bound on an api
+	// answer (connect/net_http.go:63's MaxHttpResponseBodyBytes), and far past any body §5's and
+	// §7's routes answer. A longer answer is refused, so api cannot make a sidecar buffer more. §5.4
+	// names no such bound, so this is a reading.
+	ApiResponseByteCount int64
 
 	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
 	// logging at all on the sidecar_http leg.
 	Log Logger
+	// The time the Sidecar reads and waits on (clock.go). Nil, the default, is real time; a test
+	// passes sidecartest's FakeClock. connect's own timers stay real (X9).
+	Clock Clock
 }
 
 // sdk's refresh schedule (§5.4). A token refreshes at a point of its lifetime drawn from the window
@@ -100,6 +110,14 @@ type SidecarTokenRefreshSettings struct {
 	// After a failed refresh the next attempt waits a uniform draw from [0, this): 15 min, which
 	// spreads clients that failed together.
 	RefreshRetryTimeout time.Duration
+	// How long after it is first scheduled a token with no readable exp refreshes: 7 days, sdk's,
+	// so a token without an expiration is revalidated weekly rather than kept for good.
+	NoExpirationRefreshTimeout time.Duration
+	// How long ServiceToken keeps a service token for its audience and scopes before it exchanges
+	// again: 10 min, a reading of §5.6's "under 15 min", which leaves a token handed out at the end
+	// of its stay 5 min of its 15 (§7.8). A token whose expires_in is shorter is kept no longer
+	// than that.
+	ServiceTokenCacheTimeout time.Duration
 }
 
 // The pass's Argon2id cost (§5.9) and the rules around it. Opening a keychain reads the parameters
@@ -245,10 +263,12 @@ func DefaultSidecarSettings() *SidecarSettings {
 		Connect:          defaultSidecarConnectSettings(),
 		ProtocolSettings: DefaultSidecarProtocolSettings(),
 		TokenRefreshSettings: &SidecarTokenRefreshSettings{
-			RefreshWindowStart:  0.4,
-			RefreshWindowEnd:    0.5,
-			MinRefreshTimeout:   5 * time.Minute,
-			RefreshRetryTimeout: 15 * time.Minute,
+			RefreshWindowStart:         0.4,
+			RefreshWindowEnd:           0.5,
+			MinRefreshTimeout:          5 * time.Minute,
+			RefreshRetryTimeout:        15 * time.Minute,
+			NoExpirationRefreshTimeout: 7 * 24 * time.Hour,
+			ServiceTokenCacheTimeout:   10 * time.Minute,
 		},
 		KeychainSettings: &SidecarKeychainSettings{
 			PassMemoryByteCount: 64 * 1024 * 1024,
@@ -303,10 +323,12 @@ func DefaultSidecarSettings() *SidecarSettings {
 			PhoneMeteredByteCount: 8 * 1024 * 1024,
 			RenewJitter:           5 * time.Minute,
 		},
+		Evs: DefaultEvsSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
 		MemoryBudgetByteCount:      128 * 1024 * 1024,
 		StreamChunkByteCount:       4000,
+		ApiResponseByteCount:       2 * 1024 * 1024,
 	}
 }

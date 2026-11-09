@@ -686,7 +686,7 @@
       <div class="tool-head"><h3>IP addresses</h3><span class="tag t-first">First release</span></div>
       <p class="job">A permanent private address for each agent and service, plus subnets you choose to route.</p>
       <dl class="pae">
-        <dt>Grant</dt><dd>Agents reach only granted ranges, and leave only through exits you run.</dd>
+        <dt>Grant</dt><dd>With a policy, agents reach only granted ranges, and leave only through exits you run.</dd>
         <dt>Encrypted</dt><dd>Packet by packet, between your sidecars.</dd>
       </dl>
       <div class="writes"><span class="lbl">Records</span><span class="entry">route</span><span class="readers"><code>ur tun ip</code></span></div>
@@ -927,8 +927,8 @@
       <h2>Trust documents first</h2>
       <p>Before "end-to-end encrypted" appears in public:</p>
       <ul class="tight">
-        <li>recURd, the admin app, relay, and entry format ship open source, with reproducible builds.</li>
-        <li>An independent audit covers the client and the protocol.</li>
+        <li>recURd, the admin app, relay, and entry format ship open source, with signed releases.</li>
+        <li>The security page discloses that the cryptography is not yet independently audited.</li>
         <li>A threat model assumes a malicious server and lists all metadata our servers see.</li>
         <li>A data-flow diagram and subprocessor list, a self-service DPA, and a dated warrant canary.</li>
         <li>A plain statement: recURd has no token, and uses URnetwork's network only for worldwide reach.</li>

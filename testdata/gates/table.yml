@@ -1,0 +1,270 @@
+# The gate table (OPS-M1-03): what config/<env>/sidecar.yml's gates answer (§19.11, D-OPS-10). Two
+# readers answer it and must agree: server's reader of the file (server/sidecar_gates_test.go) and
+# sidecartest.FakeServiceGates (sidecartest/fake_service_gates_test.go). Every id is synthetic.
+#
+# buckets pins plan-OPS-small-readings #2's bucket: the first 8 bytes of SHA-256 over the id's 16
+# bytes, big-endian, mod 100. sidecar.ServiceGateBucket and server.SidecarGateBucket each answer it,
+# so a network's place in a percent rollout never moves between releases or between the two.
+#
+# In a case, file is the text of sidecar.yml and expect what it answers. Whatever expect leaves out
+# is closed: a service not under services admits none of the bucket ids and neither takes writes nor
+# is enabled; format2 admits none and observes; every switch is off; place_new is "" (the first
+# cluster); reseed is false; drained is empty; sockets_control_qps and urnetwork_edge are unset; and a
+# cluster under no_file_clusters has passed nothing. broken: true is a file neither reader can read,
+# which on a process's first read opens nothing (server) and which Set refuses (the fake).
+# gates_for is §6's core topic's list, which server alone answers (SidecarConfig.GatesFor).
+
+buckets:
+  5ca1ab1e-0000-4000-8000-000000000004: 0
+  5ca1ab1e-0000-4000-8000-00000000009a: 1
+  5ca1ab1e-0000-4000-8000-000000000012: 2
+  5ca1ab1e-0000-4000-8000-00000000007b: 49
+  5ca1ab1e-0000-4000-8000-00000000000e: 50
+  5ca1ab1e-0000-4000-8000-00000000003e: 98
+  5ca1ab1e-0000-4000-8000-000000000028: 99
+
+cases:
+  - name: an empty file opens nothing
+    file: ""
+    expect: {}
+
+  - name: a file without the block opens nothing
+    file: |
+      other: {enabled: true}
+    expect: {}
+
+  - name: §19.11's sample, as written, opens nothing
+    file: |
+      sidecar:
+        evs: {enabled: false, writes: true, networks: [], percent: 0}
+        format2: {enabled: false, networks: [], percent: 0, purge: observe, drop: observe}  # §11.6: networks whose
+                                   # pushes may carry format 2, each repo migrating at its first such push; purge: observe
+                                   # logs each candidate and deletes nothing, purge: on deletes, after D-TEST-12's soak (§22);
+                                   # drop: observe runs drop jobs through verify and deletes nothing (§11.13), drop: on
+                                   # deletes, after D-TEST-18's soak; until both are on and D-TEST-13's production check
+                                   # passes, the gate admits only listed internal networks and design partners (percent 0)
+        gkm: {enabled: false, networks: [], percent: 0}   # sockets, tlsedge, mxedge, smtpedge alike
+        dns: {enabled: false, writes: true}
+        push: {enabled: false}     # §6 EnableSidecarPush
+        wake: {enabled: false}     # 19.4's push sender
+        bridge: {enabled: false}   # §17 EnableBridge
+        escrow_draw_order: {enabled: false}  # §20.9 (D-QUOTA-9): every draw and return site (connect's CreateContract,
+                                   # the edges' leases, taskworker's closes); on only once M6's Gn-out registers
+                                   # MG6's index (19.7), never off while a team_credit balance is in window
+        reseed: false              # 19.10, site loss only
+        place_new: meta-1          # 19.9: the metadata cluster that takes new repos; absent, the first
+        drained: []                # W1: lb interfaces the dns edges leave out of their answers
+        preview_networks: []       # §7.4 (D-PHASE-3): networks that enroll sidecars before stage 2
+        sockets_control_qps: {rate: 50, burst: 500}  # §9.10 (D-SOCK-15), per process and calling client; edges: W2's 2,000 Finds/s
+        urnetwork_edge: <network_id>                 # §6.10.1, §9.6: the urnetwork-edge platform network's id
+    expect:
+      place_new: meta-1
+      sockets_control_qps: {rate: 50, burst: 500}
+
+  - name: a listed network is in whatever the percent, and the percent admits by bucket
+    file: |
+      sidecar:
+        evs: {enabled: true, networks: [5ca1ab1e-0000-4000-8000-000000000028], percent: 1}
+    expect:
+      services:
+        evs:
+          enabled: true
+          writes: true
+          percent: 1
+          admits: [5ca1ab1e-0000-4000-8000-000000000004, 5ca1ab1e-0000-4000-8000-000000000028]
+          refuses: [5ca1ab1e-0000-4000-8000-00000000009a, 5ca1ab1e-0000-4000-8000-00000000003e]
+      gates_for:
+        5ca1ab1e-0000-4000-8000-000000000004: [evs]
+        5ca1ab1e-0000-4000-8000-000000000028: [evs]
+        5ca1ab1e-0000-4000-8000-00000000009a: []
+
+  - name: percent 0 admits no unlisted network
+    file: |
+      sidecar:
+        gkm: {enabled: true, networks: [], percent: 0}
+    expect:
+      services:
+        gkm:
+          enabled: true
+          writes: true
+          percent: 0
+          refuses: [5ca1ab1e-0000-4000-8000-000000000004, 5ca1ab1e-0000-4000-8000-000000000028]
+
+  - name: percent 99 admits every bucket but the last
+    file: |
+      sidecar:
+        sockets: {enabled: true, percent: 99}
+    expect:
+      services:
+        sockets:
+          enabled: true
+          writes: true
+          percent: 99
+          admits: [5ca1ab1e-0000-4000-8000-000000000004, 5ca1ab1e-0000-4000-8000-00000000003e]
+          refuses: [5ca1ab1e-0000-4000-8000-000000000028]
+
+  - name: percent 100 admits every network
+    file: |
+      sidecar:
+        tlsedge: {enabled: true, percent: 100}
+    expect:
+      services:
+        tlsedge:
+          enabled: true
+          writes: true
+          percent: 100
+          admits: [5ca1ab1e-0000-4000-8000-000000000004, 5ca1ab1e-0000-4000-8000-00000000007b, 5ca1ab1e-0000-4000-8000-000000000028]
+
+  - name: enabled false closes a listed network and every percent
+    file: |
+      sidecar:
+        mxedge: {enabled: false, writes: true, networks: [5ca1ab1e-0000-4000-8000-000000000004], percent: 100}
+    expect:
+      services:
+        mxedge:
+          enabled: false
+          writes: false
+          percent: 100
+          refuses: [5ca1ab1e-0000-4000-8000-000000000004, 5ca1ab1e-0000-4000-8000-000000000028]
+
+  - name: writes defaults true inside a present gate, and false turns writes off while reads go on
+    file: |
+      sidecar:
+        evs: {enabled: true, networks: [5ca1ab1e-0000-4000-8000-000000000004]}
+        smtpedge: {enabled: true, writes: false, networks: [5ca1ab1e-0000-4000-8000-000000000004]}
+        dns: {enabled: true}
+    expect:
+      services:
+        evs:
+          enabled: true
+          writes: true
+          admits: [5ca1ab1e-0000-4000-8000-000000000004]
+        smtpedge:
+          enabled: true
+          writes: false
+          admits: [5ca1ab1e-0000-4000-8000-000000000004]
+        # dns has no network list in §19.11, so its readers ask enabled and writes; admits keeps the one
+        # rule and so admits only what the file lists
+        dns:
+          enabled: true
+          writes: true
+          refuses: [5ca1ab1e-0000-4000-8000-000000000004]
+      gates_for:
+        5ca1ab1e-0000-4000-8000-000000000004: [evs, smtpedge, dns]
+
+  - name: a percent out of range reads 0
+    file: |
+      sidecar:
+        evs: {enabled: true, percent: 101}
+        gkm: {enabled: true, percent: -1}
+    expect:
+      services:
+        evs:
+          enabled: true
+          writes: true
+          percent: 0
+          refuses: [5ca1ab1e-0000-4000-8000-000000000004]
+        gkm:
+          enabled: true
+          writes: true
+          percent: 0
+          refuses: [5ca1ab1e-0000-4000-8000-000000000004]
+
+  - name: one bad id costs only its own entry
+    file: |
+      sidecar:
+        evs: {enabled: true, networks: [not-an-id, 5ca1ab1e-0000-4000-8000-00000000003e, ""]}
+        urnetwork_edge: not-an-id
+    expect:
+      services:
+        evs:
+          enabled: true
+          writes: true
+          admits: [5ca1ab1e-0000-4000-8000-00000000003e]
+          refuses: [5ca1ab1e-0000-4000-8000-000000000004]
+
+  - name: purge and drop delete only when exactly on
+    file: |
+      sidecar:
+        format2: {enabled: true, networks: [5ca1ab1e-0000-4000-8000-00000000000e], percent: 0, purge: "on", drop: On}
+    expect:
+      format2:
+        admits: [5ca1ab1e-0000-4000-8000-00000000000e]
+        refuses: [5ca1ab1e-0000-4000-8000-000000000004]
+        purge: "on"
+        drop: observe
+      gates_for:
+        5ca1ab1e-0000-4000-8000-00000000000e: [format2]
+
+  - name: format2's modes absent observe
+    file: |
+      sidecar:
+        format2: {enabled: true, percent: 100}
+    expect:
+      format2:
+        admits: [5ca1ab1e-0000-4000-8000-000000000004]
+        purge: observe
+        drop: observe
+
+  - name: switches, placement, re-seed, drained, the control rate and the platform network
+    file: |
+      sidecar:
+        push: {enabled: true}
+        wake: {enabled: false}
+        bridge: {enabled: true}
+        escrow_draw_order: {enabled: true}
+        reseed: true
+        place_new: meta-2
+        drained: [lb-1-eth1, "", lb-2-eth0]
+        sockets_control_qps: {rate: 12.5, burst: 40}
+        urnetwork_edge: 5ca1ab1e-0000-4000-8000-000000000012
+    expect:
+      switches: {push: true, bridge: true, escrow_draw_order: true}
+      reseed: true
+      place_new: meta-2
+      drained: [lb-1-eth1, lb-2-eth0]
+      sockets_control_qps: {rate: 12.5, burst: 40}
+      urnetwork_edge: 5ca1ab1e-0000-4000-8000-000000000012
+      gates_for:
+        5ca1ab1e-0000-4000-8000-000000000004: [push, bridge]
+
+  - name: a control rate that is not positive is unset
+    file: |
+      sidecar:
+        sockets_control_qps: {rate: 0, burst: 500}
+    expect: {}
+
+  - name: a cluster's settle entry, and a cluster with none
+    file: |
+      sidecar:
+        file_clusters:
+          meta-1: {settle_passed_build: 18f97e70b, hdd_capacity_ops: 9000}
+          seg-1: {settle_passed_build: ""}
+    expect:
+      file_clusters:
+        meta-1: {settle_passed_build: 18f97e70b, hdd_capacity_ops: 9000}
+      no_file_clusters: [seg-1, meta-2]
+
+  - name: a gate for a service no reader knows opens nothing
+    file: |
+      sidecar:
+        storage: {enabled: true, percent: 100}
+        restore_hold: true
+    expect: {}
+
+  - name: a value of the wrong type breaks the whole file
+    file: |
+      sidecar:
+        evs: {enabled: true, percent: fifty}
+    broken: true
+
+  - name: a key given twice breaks the whole file
+    file: |
+      sidecar:
+        evs: {enabled: true, percent: 100}
+        evs: {enabled: false}
+    broken: true
+
+  - name: text that is not YAML breaks the whole file
+    file: "sidecar: [unterminated\n"
+    broken: true

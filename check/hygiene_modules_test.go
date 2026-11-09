@@ -28,14 +28,30 @@ var siblingReplaces = map[string]string{
 	gvisorBasePath:  "../gvisor",
 }
 
+// The siblings sidecarctl alone may replace beside those, from the root's own directory as
+// siblingReplaces gives them: C-23 lets the operations binary read warp's configuration through
+// warp's own packages.
+var sidecarctlSiblingReplaces = map[string]string{
+	warpBasePath: "../warp",
+}
+
 // The modules of this repository a nested module may replace, and what they are relative to it.
 var repositoryReplaces = map[string]string{
 	sidecarBasePath:                "..",
 	sidecarBasePath + "/smtpproof": "../smtpproof",
 }
 
+// The third-party modules this repository carries a fork of, by the fork's directory from the root
+// module's (QD-193): D-MAIL-3's go-smtp and plan-MAIL-mox-subset's mox. A module whose graph holds one
+// replaces it with the fork, since Go does not inherit a replace and upstream's go-smtp refuses every
+// session. A module may also name a fork before its graph holds it, as each names mox's.
+var forkReplaces = map[string]string{
+	"github.com/emersion/go-smtp": "third_party/go-smtp",
+	"github.com/mjl-/mox":         "third_party/mox",
+}
+
 // §4.7's replaces, development layout: the four siblings exactly, one level further up in a nested
-// module, which may also point at this repository's own modules.
+// module, which may also point at this repository's own modules, and QD-193's forks.
 func replaceFindingsDevelopment(module *repositoryModule) []string {
 	findings := []string{}
 	targets := map[string]string{}
@@ -60,7 +76,34 @@ func replaceFindingsDevelopment(module *repositoryModule) []string {
 		}
 		delete(targets, old)
 	}
+	required := map[string]bool{}
+	for _, require := range module.file.Require {
+		required[require.Path] = true
+	}
+	for old, directory := range forkReplaces {
+		target := "./" + directory
+		if module.relativeName != "." {
+			target = "../" + directory
+		}
+		got, found := targets[old]
+		if !found {
+			if required[old] {
+				findings = append(findings, findingf("%s: requires %s and does not replace it with QD-193's fork at %s", module.relativeName, old, target))
+			}
+			continue
+		}
+		if got != target {
+			findings = append(findings, findingf("%s: replace %s => %s, and QD-193's is %s", module.relativeName, old, got, target))
+		}
+		delete(targets, old)
+	}
 	for old, got := range targets {
+		if target, ok := sidecarctlSiblingReplaces[old]; ok && module.relativeName == "sidecarctl" {
+			if got != "../"+target {
+				findings = append(findings, findingf("%s: replace %s => %s, and C-23's is ../%s", module.relativeName, old, got, target))
+			}
+			continue
+		}
 		target, own := repositoryReplaces[old]
 		if !own || module.relativeName == "." {
 			findings = append(findings, findingf("%s: replace %s => %s is not one of §4.7's", module.relativeName, old, got))
@@ -79,15 +122,29 @@ var versionElementSuffixPattern = regexp.MustCompile(`/v[0-9]+$`)
 
 // §4.7's replaces, release layout. The release step drops connect's and glog's for tagged requires
 // (build/all/run.sh:1546-1549), points gVisor at the urnetwork fork (:1551) and rebases what stays
-// (:1568), so each may be absent, and a path may climb further, but nothing else may appear.
+// (:1568), so each may be absent, and a path may climb further, but nothing else may appear. A fork's
+// replace stays a local path that ends at its directory, wherever the step leaves third_party/: the
+// root's moves with the root into v2026/, and a nested module's climbs as far as it must.
 func replaceFindingsRelease(module *repositoryModule) []string {
 	findings := []string{}
 	for _, replace := range module.file.Replace {
 		old := firstPartyBase(replace.Old.Path)
 		newPath := replace.New.Path
+		if directory, fork := forkReplaces[old]; fork {
+			cleaned := path.Clean(newPath)
+			local := strings.HasPrefix(newPath, "./") || strings.HasPrefix(newPath, "../")
+			if replace.New.Version != "" || !local {
+				findings = append(findings, findingf("%s: replace %s => %s %s is not a local path", module.relativeName, replace.Old.Path, newPath, replace.New.Version))
+			} else if cleaned != directory && !strings.HasSuffix(cleaned, "/"+directory) {
+				findings = append(findings, findingf("%s: replace %s => %s does not end at %s", module.relativeName, replace.Old.Path, newPath, directory))
+			}
+			continue
+		}
 		_, sibling := siblingReplaces[old]
 		_, own := repositoryReplaces[old]
-		if !sibling && !own {
+		sidecarctlTarget, sidecarctlSibling := sidecarctlSiblingReplaces[old]
+		sidecarctlSibling = sidecarctlSibling && module.relativeName == "sidecarctl"
+		if !sibling && !own && !sidecarctlSibling {
 			findings = append(findings, findingf("%s: replace %s => %s is not one of §4.7's", module.relativeName, replace.Old.Path, newPath))
 			continue
 		}
@@ -98,8 +155,11 @@ func replaceFindingsRelease(module *repositoryModule) []string {
 			findings = append(findings, findingf("%s: replace %s => %s %s is not a rebased local path", module.relativeName, replace.Old.Path, newPath, replace.New.Version))
 			continue
 		}
-		if sibling {
+		if sibling || sidecarctlSibling {
 			want := strings.TrimPrefix(siblingReplaces[old], "../")
+			if sidecarctlSibling {
+				want = strings.TrimPrefix(sidecarctlTarget, "../")
+			}
 			target := versionElementSuffixPattern.ReplaceAllString(path.Clean(newPath), "")
 			if !strings.HasSuffix(target, "/"+want) {
 				findings = append(findings, findingf("%s: replace %s => %s does not end at %s", module.relativeName, replace.Old.Path, newPath, want))
@@ -162,14 +222,15 @@ func (self *repository) workFileFindings(t testing.TB) []string {
 	return findings
 }
 
-// The modules a release leaves unversioned in place, never tagged (§4.9).
-var untaggedModuleNames = []string{"cli", "mlsinterop"}
+// The modules a release leaves unversioned in place, never tagged (§4.9), sidecarctl among them
+// (C-23).
+var untaggedModuleNames = []string{"cli", "mlsinterop", "sidecarctl"}
 
 // A quoted path of this repository, as the release's rewrite finds one, up to what ends a path: a
 // Makefile's go install path@version, say, or a second word in the quotes.
 var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sidecarBasePath) + `[^"\s@]*)`)
 
-// cli and mlsinterop each stay one package, and no file names either by its path. The release
+// cli, mlsinterop and sidecarctl each stay one package, and no file names one by its path. The release
 // rewrites every quoted path under the root's to .../sidecar/v2026 in every .go file and Makefile
 // (build/all/run.sh's go_edit_require_subpackages, which sidecar_release_edit runs), and these modules
 // keep their unversioned paths. So a package beside a module's own is one the rewrite would import

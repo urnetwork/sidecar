@@ -6,7 +6,7 @@
 //
 // Each target holds decoding to what §22.6 asks of it: total, memory-bounded, and canonical, so that
 // what decodes re-encodes to the same bytes. These targets check mls_* alone. The differential half of
-// §22.6's row, against mls-go and tmc/mls, waits for mlsinterop/.
+// §22.6's row, against mls-go and tmc/mls, is mlsinterop/fuzz_test.go's, since the root imports no peer.
 
 package sidecar
 
@@ -236,5 +236,59 @@ func FuzzMlsCredential(f *testing.F) {
 	f.Add([]byte{0xf5, 0x52, 0})
 	f.Fuzz(func(t *testing.T, input []byte) {
 		mlsFuzzRoundTrip(t, input, &mlsCredential{})
+	})
+}
+
+// A commit's two framings and the header gkm reads from them (§22.6). Every input either fails both
+// the decode and ParseMlsHeader, or decodes, re-encodes to itself, and shows gkm a commit whose
+// external half is there exactly when the message is a PublicMessage.
+func FuzzMlsMessage(f *testing.F) {
+	f.Add(mlsTestPrivateFrame(mlsContentTypeCommit))
+	f.Add(mlsTestPrivateFrame(mlsContentTypeApplication))
+	f.Add(mlsTestPublicFrame(mlsSenderTypeNewMemberCommit, mlsContentTypeCommit, mlsTestCommitOf(mlsTestInlineProposal(mlsProposalTypeExternalInit, 0))))
+	f.Add(mlsTestPublicFrame(mlsSenderTypeMember, mlsContentTypeCommit, []byte{0, 0}))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		message := &mlsMessage{}
+		decodeErr := mlsUnmarshal(input, message)
+		header, headerErr := ParseMlsHeader(input)
+		if (decodeErr == nil) != (headerErr == nil) {
+			t.Fatalf("the decode says %v and the header %v", decodeErr, headerErr)
+		}
+		if decodeErr != nil {
+			return
+		}
+		encoded, err := mlsMarshal(message)
+		if err != nil {
+			t.Fatalf("decoded but cannot encode: %v", err)
+		}
+		if !bytes.Equal(encoded, input) {
+			t.Fatalf("%x re-encoded as %x", input, encoded)
+		}
+		if header.ContentType != mlsContentTypeCommit {
+			t.Fatalf("a header of content type %d", header.ContentType)
+		}
+		if (header.External != nil) != (message.wireFormat == mlsWireFormatPublicMessage) {
+			t.Fatalf("wire format %#x with external %v", message.wireFormat, header.External)
+		}
+	})
+}
+
+// A Commit, whose structure alone says where the signature after it starts.
+func FuzzMlsCommit(f *testing.F) {
+	f.Add([]byte{0, 0})
+	f.Add(mlsTestCommitOf(mlsTestInlineProposal(mlsProposalTypeRemove, 0, 0, 0, 1)))
+	f.Add(mlsTestCommitOf(mlsTestInlineProposal(mlsProposalTypeExternalInit, 0)))
+	f.Add(mlsTestCommitOf(append([]byte{mlsProposalOrRefTypeReference, 32}, make([]byte, 32)...)))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsCommit{})
+	})
+}
+
+// SenderData, which any member can forge, so its decoder sees what a peer chooses.
+func FuzzMlsSenderData(f *testing.F) {
+	f.Add(make([]byte, 12))
+	f.Add([]byte{0, 0, 0, 1, 0, 0, 0, 2, 1, 2, 3, 4})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		mlsFuzzRoundTrip(t, input, &mlsSenderData{})
 	})
 }

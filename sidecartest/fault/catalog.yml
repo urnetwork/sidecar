@@ -1,0 +1,473 @@
+# §22.8's fault schedule catalog and §23.6's gate map (D-TEST-10; TEST-M0-01): the one machine-readable
+# copy that sidecartest/fault reads and that OPS-M1-07's gates.yml is generated from (C-18). A schedule
+# registers against a case here with fault.Register, and fault.Missing lists what nothing covers.
+# TestCatalogMatchesSection22 and TestCatalogMatchesGateMap hold this file to the design's own text, so
+# a change to §22.8 or §23.6 that this file misses fails.
+#
+# invariants  FI-1 to FI-30: §22.8's name for each, and the task whose oracle answers it (base: the
+#             running sidecartest base already holds it). That task binds the check with
+#             fault.RegisterInvariant, so fault.FI(n) answers its check, and until it does fault.FI(n)
+#             fails closed.
+# rows        FS-1 to FS-125, each with §22.8's owning sections, checks (FI ids with their clause letter,
+#             invariants, and named checks such as "hint SLO" and WK1-WK4) and tiers, and its cases.
+# cases       the parts of a row a gate reports one by one, so a gate can report one part without
+#             implying another (§23.6). The row's main part has no name; a later part has one.
+#   gates     where the case must pass: Mn-out at milestone n's exit review, M6-in at M6's entry
+#             (FS-46's escrow run on M4's build), every-out at each Gn-out (FS-55), next-cluster
+#             before place_new names a new metadata cluster (§23.6's last row).
+#   later_of  the case passes at the later of its gates, which §23.6 lists at both: "once M10's Gn-out
+#             has passed" at the earlier gate, "unless M5's ... exit follows" at M10.
+#   tiers     the case's tiers when narrower than its row's: a +T4 row's T4 is its app-host and wake
+#             cases' (plan-TEST-small-readings reading 10), and a forged case runs on T2 alone.
+#   forged    the server forges, withholds or forks state in the case, so it runs on T2 alone and its
+#             twin, which must succeed, also runs on T3 (§22.8's cadence rule; reading 6 for FS-38,
+#             FS-102 and FS-124, whose forging clauses are their own case). A row flag covers every
+#             case of a T2 row.
+#   open      what outside the build the case waits on: production, hardware or people. A gate reports
+#             it open, never pass and never missing.
+#   store_clock  a T3 clause whose time a wrapper translates (plan-TEST-clock-seam #2): gate reports
+#             say so. TEST-M2-07 sets it as it lands.
+# unknown     every write the row issues also runs with ApplyThenDrop (§22.8's unknown rule).
+# fake_issuer the row's peers run on sidecartest's fake contract issuer or ControlId sink, so it names
+#             T3 too, where a divergence from server's exchange fails (Q-TEST-1).
+#
+# Every value is the design's or this plan's reading of it: change a row through the design first,
+# then here, and the tests say which side moved.
+
+invariants:
+  - {id: FI-1, name: "closure", oracle: TEST-M2-03}
+  - {id: FI-2, name: "outcomes", oracle: TEST-M2-04}
+  - {id: FI-3, name: "commit-point authorization", oracle: TEST-M2-05}
+  - {id: FI-4, name: "one ladder", oracle: TEST-M2-05}
+  - {id: FI-5, name: "lifecycle", oracle: TEST-M2-06}
+  - {id: FI-6, name: "visibility", oracle: TEST-M2-03}
+  - {id: FI-7, name: "effects", oracle: MCP-M3-24}
+  - {id: FI-8, name: "attribution", oracle: MCP-M3-27}
+  - {id: FI-9, name: "git", oracle: TEST-M2-06}
+  - {id: FI-10, name: "witnesses", oracle: PROTO-M2-05}
+  - {id: FI-11, name: "path integrity", oracle: TEST-M4-01}
+  - {id: FI-12, name: "recovery", oracle: TEST-M3-01}
+  - {id: FI-13, name: "accounting", oracle: QUOTA-M2-13}
+  - {id: FI-14, name: "write budget", oracle: EVSB-M2-16}
+  - {id: FI-15, name: "file-mode CAS", oracle: TEST-M2-04}
+  - {id: FI-16, name: "purge", oracle: TEST-M10-01}
+  - {id: FI-17, name: "versioning", oracle: TEST-M10-01}
+  - {id: FI-18, name: "index results", oracle: SEARCH-M10-07}
+  - {id: FI-19, name: "index erasure", oracle: TEST-M10-02}
+  - {id: FI-20, name: "roll-up", oracle: TEST-M10-02}
+  - {id: FI-21, name: "search scope and taint", oracle: TEST-M10-02}
+  - {id: FI-22, name: "determinism", oracle: TEST-M10-02}
+  - {id: FI-23, name: "fetch privacy", oracle: TEST-M10-02}
+  - {id: FI-24, name: "remote search", oracle: TEST-M10-02}
+  - {id: FI-25, name: "directory authorship", oracle: RECORD-M6-25}
+  - {id: FI-26, name: "request soundness", oracle: RECORD-M6-26}
+  - {id: FI-27, name: "drop history", oracle: TEST-M10-01}
+  - {id: FI-28, name: "deliveries", oracle: KEYS-M2-29}
+  - {id: FI-29, name: "copies", oracle: KEYS-M2-28}
+  - {id: FI-30, name: "store settle", oracle: base, note: "the BlobRecorder check in fi30.go, with EVSB-M2-17 on T3"}
+
+rows:
+  - {id: FS-1, sections: [11], checks: [FI-1, FI-2, FI-9], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-2, sections: [11], checks: [FI-1, FI-2, FI-3], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-3, sections: [11, 8], checks: [FI-2, FI-3], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-4, sections: [11], checks: [FI-1, FI-3, FI-6], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-5, sections: [11], checks: [FI-9], tiers: [T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-6, sections: [11], checks: [FI-5], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-7, sections: [11], checks: [FI-6], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-8, sections: [11], checks: [FI-6, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-9, sections: [11], checks: [FI-1], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - {id: FS-10, sections: [11], checks: [FI-3], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-11, sections: [11], checks: [FI-1], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-12, sections: [11], checks: ["hint SLO"], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-13, sections: [15], checks: [FI-1, FI-5], tiers: [T2], cases: [{gates: [M7-out]}]}
+  - {id: FS-14, sections: [7, 8], checks: [FI-3, FI-10], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-15, sections: [10], checks: [FI-4], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-16, sections: [7], checks: [FI-3], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-17, sections: [6, 11], checks: [FI-10], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-18, sections: [10], checks: [FI-3, FI-4], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - id: FS-19
+    sections: [8]
+    checks: [I-15]
+    tiers: [T2, T3]
+    cases:
+      - {name: config-read, gates: [M2-out]}
+      - {name: grant, gates: [M4-out]}
+      - {name: share, gates: [M4-out]}
+      - {name: team, gates: [M6-out]}
+      - {name: invite, gates: [M6-out]}
+      - {name: quick-burner, gates: [M8-out]}
+  - {id: FS-20, sections: [10], checks: [FI-12], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - id: FS-21
+    sections: [2, 6]
+    checks: [FI-10]
+    tiers: [T3]
+    fake_issuer: true
+    cases:
+      - {gates: [M4-out]}
+      - {name: team, gates: [M6-out]}
+  - {id: FS-22, sections: [10], checks: [I-15, FI-3], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - id: FS-23
+    sections: [10]
+    checks: [I-15]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M2-out]}
+      - {name: mailbox, gates: [M7-out]}
+  - {id: FS-24, sections: [10], checks: ["gate SLO"], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-25, sections: [16], checks: [FI-2, FI-7], tiers: [T2, T3], unknown: true, cases: [{gates: [M3-out]}]}
+  - {id: FS-26, sections: [16], checks: [FI-8], tiers: [T2], cases: [{gates: [M3-out]}]}
+  - {id: FS-27, sections: [16], checks: [FI-7], tiers: [T2], cases: [{gates: [M3-out]}]}
+  - {id: FS-28, sections: [16], checks: [FI-7], tiers: [T2], cases: [{gates: [M3-out]}]}
+  - {id: FS-29, sections: [16], checks: [FI-3, FI-7], tiers: [T2], cases: [{gates: [M3-out]}]}
+  - id: FS-30
+    sections: [16]
+    checks: [I-4]
+    tiers: [T2]
+    cases:
+      - {gates: [M3-out]}
+      - {name: audit, gates: [M6-out]}
+  - {id: FS-31, sections: [14], checks: [FI-11], tiers: [T2, T3], cases: [{gates: [M9-out]}]}
+  - {id: FS-32, sections: [13], checks: [FI-11], tiers: [T2], cases: [{gates: [M6-out]}]}
+  - {id: FS-33, sections: [15], checks: [FI-11], tiers: [T2], cases: [{gates: [M7-out]}]}
+  - {id: FS-34, sections: [13], checks: [FI-11], tiers: [T2, T3], cases: [{gates: [M5-out]}]}
+  - {id: FS-35, sections: [13], checks: [FI-11], tiers: [T3], cases: [{gates: [M6-out]}]}
+  - {id: FS-36, sections: [18], checks: [WK1-WK4], tiers: [T3], cases: [{gates: [M8-out]}]}
+  - {id: FS-37, sections: [18], checks: [FI-2], tiers: [T2, T3], cases: [{gates: [M4-out]}]}
+  - id: FS-38
+    sections: [17]
+    checks: [FI-11]
+    tiers: [T2, T3]
+    fake_issuer: true
+    cases:
+      - {gates: [M4-out]}
+      - {name: forged, gates: [M4-out], tiers: [T2], forged: true}
+      - {name: shares, gates: [M6-out]}
+  - id: FS-39
+    sections: [14, 15]
+    checks: [FI-11]
+    tiers: [T2]
+    cases:
+      - {name: report-intake, gates: [M5-out]}
+      - {name: labels, gates: [M7-out]}
+  - id: FS-40
+    sections: [19]
+    checks: [FI-12]
+    tiers: [T3]
+    cases:
+      - {gates: [M2-out]}
+      - {name: production, gates: [M3-out], open: production}
+  - id: FS-41
+    sections: [19]
+    checks: [FI-5, FI-10, FI-12]
+    tiers: [T3]
+    cases:
+      - {gates: [M3-out]}
+      - {name: m5, gates: [M5-out]}
+      - {name: m6, gates: [M6-out]}
+      - {name: m7, gates: [M7-out]}
+      - {name: m8, gates: [M8-out]}
+  - id: FS-42
+    sections: [19]
+    checks: [FI-12]
+    tiers: [T3]
+    cases:
+      - {gates: [M3-out]}
+      - {name: m5, gates: [M5-out]}
+      - {name: m6, gates: [M6-out]}
+      - {name: m7, gates: [M7-out]}
+      - {name: m8, gates: [M8-out]}
+      - {name: m9, gates: [M9-out]}
+  - {id: FS-43, sections: [20], checks: [FI-13b], tiers: [T2], unknown: true, cases: [{gates: [M6-out]}]}
+  - {id: FS-44, sections: [20], checks: [FI-13a], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-45, sections: [20], checks: [FI-13a], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-46, sections: [20], checks: [FI-13d], tiers: [T2, T3], cases: [{gates: [M6-in]}]}
+  - id: FS-47
+    sections: [20]
+    checks: [FI-13c]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M2-out]}
+      - {name: section-21, gates: [M5-out]}
+      - {name: mail, gates: [M7-out]}
+  - {id: FS-48, sections: [21], checks: [holds], tiers: [T2], cases: [{gates: [M5-out]}]}
+  - {id: FS-49, sections: [21], checks: [clocks], tiers: [T2], cases: [{gates: [M5-out]}]}
+  - id: FS-50
+    sections: [19]
+    checks: [D-OPS-9]
+    tiers: [T3]
+    cases:
+      - {gates: [M3-out]}
+      - {name: hosts-drill, gates: [M3-out], open: production}
+  - {id: FS-51, sections: [20], checks: [D-QUOTA-6], tiers: [T2], cases: [{gates: [M6-out]}]}
+  - {id: FS-52, sections: [19], checks: [Q-OPS-5], tiers: [T3], cases: [{gates: [M5-out]}]}
+  - {id: FS-53, sections: [19], checks: [FI-1], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-54, sections: [19], checks: [D-OPS-6], tiers: [T3], cases: [{gates: [M1-out]}]}
+  - {id: FS-55, sections: [19], checks: [R-OPS-5], tiers: [T3], cases: [{gates: [every-out]}]}
+  - {id: FS-56, sections: [17], checks: [FI-11], tiers: [T2, T3], cases: [{gates: [M4-out]}]}
+  - {id: FS-57, sections: [11], checks: [FI-1, FI-2, FI-6], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-58, sections: [11], checks: [FI-1, FI-6, FI-15], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-59, sections: [11], checks: [FI-6], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-60, sections: [11], checks: [FI-1, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-61, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-62, sections: [11, 10], checks: [FI-1, FI-2, FI-3, FI-10], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - id: FS-63
+    sections: [11, 19]
+    checks: [FI-1, FI-2, FI-4]
+    tiers: [T2, T3]
+    unknown: true
+    cases:
+      - {gates: [M2-out]}
+      - {name: next-cluster, gates: [next-cluster], open: production}
+  - {id: FS-64, sections: [11], checks: [FI-1, FI-16, FI-17], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-65, sections: [11], checks: [FI-1, FI-2, FI-16], tiers: [T2, T3], unknown: true, cases: [{gates: [M10-out]}]}
+  - id: FS-66
+    sections: [11]
+    checks: [FI-6, FI-16]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: hold, gates: [M5-out, M10-out], later_of: true}
+  - {id: FS-67, sections: [11], checks: [FI-16], tiers: [T2], cases: [{gates: [M10-out]}]}
+  - {id: FS-68, sections: [11, 7], checks: [FI-1, FI-17], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-69, sections: [11, 21], checks: [FI-5, FI-16], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true}]}
+  - {id: FS-70, sections: [11, 19], checks: [FI-5, FI-12, FI-16], tiers: [T2], cases: [{gates: [M10-out]}]}
+  - {id: FS-71, sections: [11, 20], checks: [FI-13c, FI-16], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - id: FS-72
+    sections: [11, 7]
+    checks: [FI-1, FI-2, FI-17]
+    tiers: [T2, T3]
+    unknown: true
+    cases:
+      - {name: format-1, gates: [M2-out]}
+      - {name: migration, gates: [M10-out]}
+      - {name: rollback, gates: [M10-out]}
+  - {id: FS-73, sections: [11], checks: [FI-9, FI-16], tiers: [T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-74, sections: [11], checks: [FI-18, FI-20], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-75, sections: [11], checks: [FI-18, FI-19, FI-20], tiers: [T2, T3], unknown: true, cases: [{gates: [M10-out]}]}
+  - id: FS-76
+    sections: [11, 16]
+    checks: [FI-18, FI-19, FI-22]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: team-record, gates: [M6-out, M10-out], later_of: true}
+      - {name: mailbox, gates: [M7-out, M10-out], later_of: true}
+      - {name: hold, gates: [M5-out, M10-out], later_of: true}
+  - id: FS-77
+    sections: [11, 18]
+    checks: [FI-18, FI-23]
+    tiers: [T2, T4]
+    cases:
+      - {gates: [M10-out]}
+      - {name: app-host, gates: [M8-out, M10-out], later_of: true}
+  - id: FS-78
+    sections: [11, 15]
+    checks: [FI-5, FI-13c, FI-19]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: mailbox, gates: [M7-out, M10-out], later_of: true}
+      - {name: hold, gates: [M5-out, M10-out], later_of: true}
+  - {id: FS-79, sections: [11], checks: [FI-18, FI-21], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - id: FS-80
+    sections: [16]
+    checks: [FI-21, FI-23]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: team-record, gates: [M6-out, M10-out], later_of: true}
+  - {id: FS-81, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - id: FS-82
+    sections: [7, 15]
+    checks: [I-4]
+    tiers: [T2, T3]
+    cases:
+      - {name: statement, gates: [M2-out]}
+      - {name: mail, gates: [M7-out]}
+      - {name: coverage, gates: [M8-out]}
+  - id: FS-83
+    sections: [11, 18]
+    checks: [FI-18, FI-24]
+    tiers: [T2, T3, T4]
+    fake_issuer: true
+    cases:
+      - {gates: [M10-out], tiers: [T2, T3]}
+      - {name: app-host, gates: [M8-out, M10-out], later_of: true}
+      - {name: team, gates: [M6-out, M10-out], later_of: true, tiers: [T2, T3]}
+  - id: FS-84
+    sections: [16, 11]
+    checks: [FI-25]
+    tiers: [T2]
+    cases:
+      - {name: entries, gates: [M6-out]}
+      - {name: cards, gates: [M6-out, M10-out], later_of: true}
+  - id: FS-85
+    sections: [8, 16]
+    checks: [FI-26]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M6-out]}
+      - {name: wakes, gates: [M8-out]}
+  - id: FS-86
+    sections: [16, 11, 19]
+    checks: [FI-14]
+    tiers: [T2, T3]
+    cases:
+      - {name: announce-entries, gates: [M6-out]}
+      - {name: cards, gates: [M6-out, M10-out], later_of: true}
+  - id: FS-87
+    sections: [7, 10, 16]
+    checks: [FI-19, FI-25]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M6-out]}
+      - {name: index, gates: [M6-out, M10-out], later_of: true}
+  - id: FS-88
+    sections: [16, 2]
+    checks: [FI-21]
+    tiers: [T2]
+    cases:
+      - {gates: [M6-out]}
+      - {name: searches, gates: [M6-out, M10-out], later_of: true}
+  - {id: FS-89, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-90, sections: [11], checks: [FI-2, FI-13a, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-91, sections: [11], checks: [FI-2, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-92, sections: [11, 21], checks: [FI-5, FI-13c, FI-27], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true}]}
+  - {id: FS-93, sections: [11], checks: [FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-94, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - id: FS-95
+    sections: [11, 8]
+    checks: [FI-17, FI-27]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: format-1, gates: [M2-out]}
+  - {id: FS-96, sections: [11, 19], checks: [FI-5, FI-13, FI-16, FI-19, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - id: FS-97
+    sections: [7, 18]
+    checks: [I-4, I-15, FI-2]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M4-out]}
+      - {name: team, gates: [M6-out]}
+  - id: FS-98
+    sections: [5, 18]
+    checks: [I-4, I-15, FI-2]
+    tiers: [T2, T3, T4]
+    cases:
+      - {name: cli, gates: [M3-out], tiers: [T2, T3]}
+      - {name: team, gates: [M6-out], tiers: [T2, T3]}
+      - {name: app-host, gates: [M8-out]}
+  - id: FS-99
+    sections: [16, 11, 7, 8]
+    checks: [FI-25]
+    tiers: [T2, T3]
+    cases:
+      - {name: entries, gates: [M6-out]}
+      - {name: cards, gates: [M6-out, M10-out], later_of: true}
+  - id: FS-100
+    sections: [16, 18]
+    checks: [FI-26]
+    tiers: [T2, T3, T4]
+    cases:
+      - {name: format-1, gates: [M6-out], tiers: [T2, T3]}
+      - {name: wakes, gates: [M8-out]}
+      - {name: format-2, gates: [M6-out, M10-out], later_of: true, tiers: [T2, T3]}
+  - id: FS-101
+    sections: [16, 7, 8]
+    checks: [FI-25]
+    tiers: [T2]
+    cases:
+      - {name: entries, gates: [M6-out]}
+      - {name: r-file, gates: [M6-out, M10-out], later_of: true}
+  - id: FS-102
+    sections: [7, 10]
+    checks: [I-4, I-15, FI-3]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M2-out]}
+      - {name: forged, gates: [M2-out], tiers: [T2], forged: true}
+  - {id: FS-103, sections: [10], checks: [FI-28], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-104, sections: [10], checks: [FI-28], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
+  - {id: FS-105, sections: [10, 2], checks: [FI-29], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - id: FS-106
+    sections: [10, 7]
+    checks: [I-4, FI-2]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M2-out]}
+      - {name: page-worker, gates: [M4-out]}
+  - {id: FS-107, sections: [11], checks: [FI-18, FI-22], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-108, sections: [11], checks: [FI-18, FI-20, FI-22], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - id: FS-109
+    sections: [11]
+    checks: [FI-18, FI-23]
+    tiers: [T2, T4]
+    cases:
+      - {gates: [M10-out]}
+      - {name: app-host, gates: [M8-out, M10-out], later_of: true}
+  - id: FS-110
+    sections: [16]
+    checks: [FI-18, FI-23]
+    tiers: [T2, T4]
+    cases:
+      - {gates: [M10-out]}
+      - {name: app-host, gates: [M8-out, M10-out], later_of: true}
+  - id: FS-111
+    sections: [11, 15, 16]
+    checks: [FI-2, FI-18, FI-19]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: mailbox, gates: [M7-out, M10-out], later_of: true}
+      - {name: team-record, gates: [M6-out, M10-out], later_of: true}
+  - id: FS-112
+    sections: [11, 15, 20]
+    checks: [FI-13c, FI-19]
+    tiers: [T2, T3]
+    cases:
+      - {gates: [M10-out]}
+      - {name: mailbox, gates: [M7-out, M10-out], later_of: true}
+  - {id: FS-113, sections: [11, 8], checks: [FI-2, FI-3], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - id: FS-114
+    sections: [19, 11]
+    checks: [FI-30, FI-1, FI-2, FI-6]
+    tiers: [T3]
+    cases:
+      - {name: head, gates: [M2-out]}
+      - {name: marker, gates: [M2-out]}
+      - {name: purge, gates: [M10-out]}
+      - {name: drop, gates: [M10-out]}
+  - {id: FS-115, sections: [16], checks: [FI-8], tiers: [T2], cases: [{gates: [M3-out]}]}
+  - {id: FS-116, sections: [11, 19], checks: [FI-14], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - {id: FS-117, sections: [10, 11], checks: [FI-3, FI-14], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - {id: FS-118, sections: [11, 19], checks: [FI-1, FI-6, FI-14], tiers: [T2], cases: [{gates: [M2-out]}]}
+  - id: FS-119
+    sections: [11, 19]
+    checks: [FI-1, FI-14]
+    tiers: [T3]
+    cases:
+      - {gates: [M3-out]}
+      - {name: next-cluster, gates: [next-cluster], open: production}
+  - {id: FS-120, sections: [18], checks: [WK5], tiers: [T3], cases: [{gates: [M8-out]}]}
+  - {id: FS-121, sections: [15], checks: [D-MAIL-14], tiers: [T2, T3], cases: [{gates: [M7-out]}]}
+  - {id: FS-122, sections: [13, 19], checks: [FI-11], tiers: [T3], cases: [{gates: [M6-out]}]}
+  - {id: FS-123, sections: [14, 18], checks: [D-SMTP-20], tiers: [T2, T3], cases: [{gates: [M9-out]}]}
+  - id: FS-124
+    sections: [7, 16]
+    checks: [I-4, FI-2]
+    tiers: [T2, T3, T4]
+    cases:
+      - {gates: [M2-out], tiers: [T2, T3]}
+      - {name: forged, gates: [M2-out], tiers: [T2], forged: true}
+      - {name: cli, gates: [M3-out], tiers: [T2, T3]}
+      - {name: team, gates: [M6-out], tiers: [T2, T3]}
+      - {name: app-host, gates: [M8-out]}
+  - id: FS-125
+    sections: [4, 6]
+    checks: [FI-24]
+    tiers: [T2, T3, T4]
+    fake_issuer: true
+    cases:
+      - {gates: [M10-out], tiers: [T2, T3]}
+      - {name: app-host, gates: [M8-out, M10-out], later_of: true}

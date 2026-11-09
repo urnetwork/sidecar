@@ -1,0 +1,345 @@
+{
+ "Preamble": {
+  "RecipientDomain": "recipient.example",
+  "RecipientCount": 2,
+  "MessageId": "abcdefghijklmnopqrstuvwxyz@net.root.example",
+  "HeaderFromDomain": "net.root.example",
+  "DkimSelector": "s1",
+  "MessageByteCount": 497,
+  "Flags": 0,
+  "HeloName": "o1.out.relay.example",
+  "XUrRef": "1.aeibceqtcqkrmfyydenbxifbukr2jjngu4",
+  "FeedbackId": "n:c:gaytemzugu3doobzhi5typj6h4:urnetwork",
+  "EnvelopeDomain": "b.net.root.example",
+  "MxHost": "mx.recipient.example"
+ },
+ "Events": [
+  {
+   "ClientRecord": "FgMBALQBAACwAwP9KMgGrFCrwtRLIIOx7t60IvX7qCc2dhAhZpGtcU9zTQAAAhMBAQAAhQAAABkAFwAAFG14LnJlY2lwaWVudC5leGFtcGxlACsABQQDBAMDAAoACAAGAB0AFwAYAAsAAgEAAA0AFgAUCAcEAwUDBgMIBAgFCAYEAQUBBgEAFwAA/wEAAQAAMwAmACQAHQAgXcyOLI7nywAzZRATat+JDnBTjjPNaenZgjkCHozzxhs=",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FgMDAFoCAABWAwMQL5sSPDs6jKATgtLufYfCb/aLP4DobrEByyZ6PTsAjwATAQAALgArAAIDBAAzACQAHQAg3gj4v4otHLmcJ27vphK5BvpnKoEWKZP4T9h0A8WOnDY=",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FAMDAAEB",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDABvWUpxYBpEwSbl8HGYv2Sfhl43OsVv7T3CEZGE=",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDAXKpS1GD08MHwIqrSpw73DWr1fFnVXK38MMGZp96AhOQY59/BtvknM+CuPed2iglmkYapLTeJ5Cki6xh/YM566CT9pzHXTJylC6PnBpxqJ2JLwOMf/g3toCbZdixaPur1D4gSBFHNOqOGnM1IysLc/HCWz1KDehZWGVuSVuSco+argfPNKff1cR2/ssYAKbZNF+cQh4GpR2Q1xWBi8OVKc222lvKH16PQ61j7cPcSilQtIj0kyaicwK7enImU4F6z2zkU6KyCid8W9d8IIHOQeU+yNVfxELwKWVt7L2Wqne2xMuMxRswJ7HqwJsSEpD3sMf6ZrJE7NG8SdFejBDj6rdVkii30L4yuD8Ygxn7SPATfZFMjaXZE8ZXfhK36hIFB85npUf9DvHmp0PMH3XWQm+t9YaRo9pbAjIhmrc5gol4rwEWNNsdnFUxcZYSIIpu/plun3eEQDJVxEB6N1Ae5eBp4EO3CMI3rEmaMmYQ8BFSmL2V",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDAGB0nGV+5W/vpKmiKt9Em2lY+Mj27m6zEZMqrIpmDZkP4t1IxwZvlrgzuyQCM4nJJZuWPJgRr6EWV6oc3Dcmh77rpzZ0rsa7mNZaf8dihfz7fG2NgG8i2t9Yx2zSx8dqF7U=",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDADUgAftbwL39JqhXeR0LEI0eF/2u4VHoTICFhW170B/omR+iEP7SVWo7FG4kR5LsKQPMt6dRPg==",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": null,
+   "Shts": "w3SWnG2PzDNr2Yqzpnj4yfiCguE1cSYXZFwtTX7x+to=",
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDADV6DgVyqEnGAgeRh2q4F+0vb7/5Jty2zE1QkwG3anRUq+bs+dRAU8c7+60G9n6398WcQJSMOA==",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": {
+    "SendId": "c3ludGhldGljLXNlbmQtaWQ=",
+    "Index": 1,
+    "Mode": 0,
+    "FirstRecord": 0,
+    "LastRecord": 0,
+    "Proof": "AAAAAAAAAAA=",
+    "Last": false,
+    "ServerRecordCount": 0,
+    "Records": [
+     "FwMDACx56BnuBXO16Gjd+F2N0xML9GczoDlQACKqb3gF+1drWQtL0DxQaPCrwaW+qA=="
+    ]
+   }
+  },
+  {
+   "ClientRecord": "FwMDACx56BnuBXO16Gjd+F2N0xML9GczoDlQACKqb3gF+1drWQtL0DxQaPCrwaW+qA==",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDAFe0SZgpbsTxtkD5jzNN6vdwvzADQgicfgka41/bOgh9XCcF8RdbjKid8XeTyCemuCzaRpN8Mhc2wBXdgVytDHV4c6oHWJvrs5GSknPzzBkXuQrV8ih6Rp8=",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": {
+    "SendId": "c3ludGhldGljLXNlbmQtaWQ=",
+    "Index": 2,
+    "Mode": 2,
+    "FirstRecord": 1,
+    "LastRecord": 4,
+    "Proof": "AAAAAAAAAAE=",
+    "Last": false,
+    "ServerRecordCount": 1,
+    "Records": [
+     "FwMDADolCJhOYO6li6qqKXDPLQrHqzOfxF3Qp92aG0d1DH64jkMEzqg3fmFbDHuxXMbk8AQlstg0FsKxmAMT",
+     "FwMDADKvWupfS2l2iBOUxhWdo0GZL2ckewtU5nRHyzKCvCjisLKg31X8YCj/DogY/Q8/Rc+EUQ==",
+     "FwMDADR3OqvS1TiN032rzqaQJVENoIDK0X11gaW+dINGkoqW1dAtSjTPpW5O2NQx4OoiEEI41hRa",
+     "FwMDABcq+gfIpAynntmZ2jFD5nwfFSDNWZ/vjA=="
+    ]
+   }
+  },
+  {
+   "ClientRecord": "FwMDADolCJhOYO6li6qqKXDPLQrHqzOfxF3Qp92aG0d1DH64jkMEzqg3fmFbDHuxXMbk8AQlstg0FsKxmAMT",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDADKvWupfS2l2iBOUxhWdo0GZL2ckewtU5nRHyzKCvCjisLKg31X8YCj/DogY/Q8/Rc+EUQ==",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDADR3OqvS1TiN032rzqaQJVENoIDK0X11gaW+dINGkoqW1dAtSjTPpW5O2NQx4OoiEEI41hRa",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDABcq+gfIpAynntmZ2jFD5nwfFSDNWZ/vjA==",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDAB+TDRGxyg12hQAAF8h+/PW/y8ti3YkxX2/z+FBGBhsO",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDAB+q+PAf5ArYZpK9V+jJWgn4RTwf7C+fBHxHNu7+153Z",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDAB+axjXVi4cmAuiDxoHruV41bbnJSxlcQ+mb3Z7SB7bc",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDADaCodDSaQJJT2qpZg5STW3qHow9Q8iIlid9z7bH3zeMEB9+2zfd+XG0dncEt0D/ChUF+8uI2aY=",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": {
+    "SendId": "c3ludGhldGljLXNlbmQtaWQ=",
+    "Index": 3,
+    "Mode": 2,
+    "FirstRecord": 5,
+    "LastRecord": 6,
+    "Proof": "AAAAAAAAAAI=",
+    "Last": false,
+    "ServerRecordCount": 5,
+    "Records": [
+     "FwMDAd1WFC6PEV8h5amFXCnBgNT+wS2SKwEU2yoknM5afWZFm1904bOGbUWQ49j0QZ5eTv+MaPpxa/MA9xjECzU3D3umwltlK00V1rXIAWZZX7mqJzrO9bKfdFdUk4nCDtt8KFkyENudyy3BuYOdBccVttoJmXV9YiS9IvGBH4t3J+8eEiqOKlwLXYWcYCTOHfho1/RK/JRvj3C8fyP//HNZtGFsUyJymoqM3mn7dHgPQGERtMlazWMg4cNVCP3VL8DIBjvKKItpR7y152gL2qBwfj5CkOyAW2GN9ysJ8as/mGBNFf4kQTN3+3pry9bLT5MLSQZIH1FhEfPwQktplZLmFrmMd9PVvQ95Fs+drSyvLN5WtQU5orFOKI5TVoO+sGGsAD+4fCyI6RdKAkvLaHDl7h8u7XDF7hlXgp5VaSjHWZRN91WAD9KYvCKMaxpWnO7k7vaeP0H9J/vkPAExegXO4epRsMKY4tiSmP52xtQ42dT3777O5J91x1JrmTNZK8U8oZoyVL+B6t2/N8ys8WyLQfS7GihS6u03JoVd4gxE2WOKZmdIhhq+RW4hwDpdEiCl6PlARozS02xD8X8yQafaYUFiKk9puisAUN0bUQz9UbZyalVnuCI9txRsml8HhV8=",
+     "FwMDABt2J2FgAdCcwNR2NoXpDq8SU3muRJCYWP2VCrU="
+    ]
+   }
+  },
+  {
+   "ClientRecord": "FwMDAd1WFC6PEV8h5amFXCnBgNT+wS2SKwEU2yoknM5afWZFm1904bOGbUWQ49j0QZ5eTv+MaPpxa/MA9xjECzU3D3umwltlK00V1rXIAWZZX7mqJzrO9bKfdFdUk4nCDtt8KFkyENudyy3BuYOdBccVttoJmXV9YiS9IvGBH4t3J+8eEiqOKlwLXYWcYCTOHfho1/RK/JRvj3C8fyP//HNZtGFsUyJymoqM3mn7dHgPQGERtMlazWMg4cNVCP3VL8DIBjvKKItpR7y152gL2qBwfj5CkOyAW2GN9ysJ8as/mGBNFf4kQTN3+3pry9bLT5MLSQZIH1FhEfPwQktplZLmFrmMd9PVvQ95Fs+drSyvLN5WtQU5orFOKI5TVoO+sGGsAD+4fCyI6RdKAkvLaHDl7h8u7XDF7hlXgp5VaSjHWZRN91WAD9KYvCKMaxpWnO7k7vaeP0H9J/vkPAExegXO4epRsMKY4tiSmP52xtQ42dT3777O5J91x1JrmTNZK8U8oZoyVL+B6t2/N8ys8WyLQfS7GihS6u03JoVd4gxE2WOKZmdIhhq+RW4hwDpdEiCl6PlARozS02xD8X8yQafaYUFiKk9puisAUN0bUQz9UbZyalVnuCI9txRsml8HhV8=",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDABt2J2FgAdCcwNR2NoXpDq8SU3muRJCYWP2VCrU=",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": {
+    "SendId": "c3ludGhldGljLXNlbmQtaWQ=",
+    "Index": 4,
+    "Mode": 2,
+    "FirstRecord": 7,
+    "LastRecord": 7,
+    "Proof": "AAAAAAAAAAM=",
+    "Last": false,
+    "ServerRecordCount": 5,
+    "Records": [
+     "FwMDAB8ed7MinXBWLjp6FiBXX15wdF+ex3MuEFI/oFYjkDM1"
+    ]
+   }
+  },
+  {
+   "ClientRecord": "FwMDAB8ed7MinXBWLjp6FiBXX15wdF+ex3MuEFI/oFYjkDM1",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": {
+    "SendId": "c3ludGhldGljLXNlbmQtaWQ=",
+    "Index": 5,
+    "Mode": 2,
+    "FirstRecord": 8,
+    "LastRecord": 10,
+    "Proof": "AAAAAAAAAAQ=",
+    "Last": true,
+    "ServerRecordCount": 5,
+    "Records": [
+     "FwMDAB5Ym8f9aXcAHTEfOdSogUffXIqi2Dv/OSsNfZtH/9U=",
+     "FwMDABQqRqhjerx1RERN/DDAxzeL/Fql1w==",
+     "FwMDABe2G/awPAXZAo3VI/cRefBEK+J3y5IVdQ=="
+    ]
+   }
+  },
+  {
+   "ClientRecord": "FwMDAB5Ym8f9aXcAHTEfOdSogUffXIqi2Dv/OSsNfZtH/9U=",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDABQqRqhjerx1RERN/DDAxzeL/Fql1w==",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": null,
+   "ServerRecord": "FwMDACc+DOvhDOB6D4RZuMBtt+0WGyAyU5mV3KSun+AxTMXXiSMnV9wkepA=",
+   "Shts": null,
+   "Part": null
+  },
+  {
+   "ClientRecord": "FwMDABe2G/awPAXZAo3VI/cRefBEK+J3y5IVdQ==",
+   "ServerRecord": null,
+   "Shts": null,
+   "Part": null
+  }
+ ],
+ "Witnesses": {
+  "12": {
+   "HandshakeSecret": "rnM3q1u1MjPg8EbtWMGCL1VKC+kxlEpS519JQ15sY0U=",
+   "MasterSecret": null,
+   "ClientKey": "rzGYnxZl1by4QC7IZrEUEg==",
+   "ClientIv": "QpC086ZBzokq+OfL",
+   "ServerKey": "y2qlxXZJlypbrv/Z7jvSAw==",
+   "ServerIv": "rQztl5e3OX3FnmYj",
+   "ClientPlaintexts": [
+    "TUFJTCBGUk9NOjxib3VuY2UtMUBiLm5ldC5yb290LmV4YW1wbGU+DQoX",
+    "UkNQVCBUTzo8Ym9iQHJlY2lwaWVudC5leGFtcGxlPg0KFw==",
+    "UkNQVCBUTzo8Y2Fyb2xAcmVjaXBpZW50LmV4YW1wbGU+DQoX",
+    "REFUQQ0KFw=="
+   ],
+   "ServerPlaintexts": [
+    "MjUwLW14LnJlY2lwaWVudC5leGFtcGxlDQoyNTAtUElQRUxJTklORw0KMjUwLUNIVU5LSU5HDQoyNTAgU01UUFVURjgNChc="
+   ]
+  },
+  "21": {
+   "HandshakeSecret": "rnM3q1u1MjPg8EbtWMGCL1VKC+kxlEpS519JQ15sY0U=",
+   "MasterSecret": null,
+   "ClientKey": "rzGYnxZl1by4QC7IZrEUEg==",
+   "ClientIv": "QpC086ZBzokq+OfL",
+   "ServerKey": "y2qlxXZJlypbrv/Z7jvSAw==",
+   "ServerIv": "rQztl5e3OX3FnmYj",
+   "ClientPlaintexts": [
+    "RnJvbTogQWxpY2UgRXhhbXBsZSA8YWxpY2VAbmV0LnJvb3QuZXhhbXBsZT4NClRvOiA8Ym9iQHJlY2lwaWVudC5leGFtcGxlPg0KU3ViamVjdDogQSBzeW50aGV0aWMgbWVzc2FnZQ0KRGF0ZTogRnJpLCAwNiBOb3YgMjAyNiAxMjowMDowMCArMDAwMA0KTWVzc2FnZS1JRDogPGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6QG5ldC5yb290LmV4YW1wbGU+DQpYLVVSLVJlZjogMS5hZWliY2VxdGNxa3JtZnl5ZGVuYnhpZmJ1a3IyampuZ3U0DQpGZWVkYmFjay1JRDogbjpjOmdheXRlbXp1Z3UzZG9vYnpoaTV0eXBqNmg0OnVybmV0d29yaw0KREtJTS1TaWduYXR1cmU6IHY9MTsgYT1yc2Etc2hhMjU2OyBjPXJlbGF4ZWQvcmVsYXhlZDsgaD1mcm9tOmRhdGU6bWVzc2FnZS1pZDp4LXVyLXJlZjpmZWVkYmFjay1pZDsgZD1uZXQucm9vdC5leGFtcGxlOyBzPXMxOyB0PTE7IHg9MjsgYmg9QUFBQTsgYj1CQkJCDQoNChc=",
+    "b25lIGxpbmUNChc="
+   ],
+   "ServerPlaintexts": [
+    "MjUwIDIuMS4wIE9rDQoX",
+    "MjUwIDIuMS41IE9rDQoX",
+    "MjUwIDIuMS41IE9rDQoX",
+    "MzU0IEVuZCBkYXRhIHdpdGggPENSPjxMRj4uPENSPjxMRj4NChc="
+   ]
+  },
+  "24": {
+   "HandshakeSecret": "rnM3q1u1MjPg8EbtWMGCL1VKC+kxlEpS519JQ15sY0U=",
+   "MasterSecret": null,
+   "ClientKey": "rzGYnxZl1by4QC7IZrEUEg==",
+   "ClientIv": "QpC086ZBzokq+OfL",
+   "ServerKey": "y2qlxXZJlypbrv/Z7jvSAw==",
+   "ServerIv": "rQztl5e3OX3FnmYj",
+   "ClientPlaintexts": [
+    "YW5vdGhlciBsaW5lDQoX"
+   ],
+   "ServerPlaintexts": null
+  },
+  "26": {
+   "HandshakeSecret": "rnM3q1u1MjPg8EbtWMGCL1VKC+kxlEpS519JQ15sY0U=",
+   "MasterSecret": null,
+   "ClientKey": "rzGYnxZl1by4QC7IZrEUEg==",
+   "ClientIv": "QpC086ZBzokq+OfL",
+   "ServerKey": "y2qlxXZJlypbrv/Z7jvSAw==",
+   "ServerIv": "rQztl5e3OX3FnmYj",
+   "ClientPlaintexts": [
+    "YW5kIGEgdGhpcmQNChc=",
+    "Lg0KFw==",
+    "UVVJVA0KFw=="
+   ],
+   "ServerPlaintexts": null
+  },
+  "9": {
+   "HandshakeSecret": "rnM3q1u1MjPg8EbtWMGCL1VKC+kxlEpS519JQ15sY0U=",
+   "MasterSecret": null,
+   "ClientKey": "rzGYnxZl1by4QC7IZrEUEg==",
+   "ClientIv": "QpC086ZBzokq+OfL",
+   "ServerKey": "y2qlxXZJlypbrv/Z7jvSAw==",
+   "ServerIv": "rQztl5e3OX3FnmYj",
+   "ClientPlaintexts": [
+    "RUhMTyBvMS5vdXQucmVsYXkuZXhhbXBsZQ0KFw=="
+   ],
+   "ServerPlaintexts": null
+  }
+ }
+}

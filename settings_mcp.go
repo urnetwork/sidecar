@@ -20,6 +20,12 @@ type SidecarMcpSettings struct {
 	// When a call times out: 30 s, under Codex's 60 s tool_timeout_sec default. A call awaiting a
 	// person returns pending at once.
 	CallTimeout time.Duration
+	// How long an approval's ledger file stays past its not_after: 30 days (§16.6's retention row),
+	// long after a local use stops completing at not_after + 10 min.
+	ApprovalFileRetention time.Duration
+	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
+	// for restore (§16.7). A later Coverage starts it again.
+	RunFileRetention time.Duration
 }
 
 // §16.7's capture bounds. Every cut, missed event or changed config is a coverage gap.
@@ -32,6 +38,12 @@ type SidecarIngestSettings struct {
 	RunHourByteCount int64
 	// The local encrypted spool, which keeps capturing while the daemon is locked: 1 GiB.
 	SpoolByteCount int64
+	// One spool segment, past which the next record starts another: 16 MiB, a reading, so a drain
+	// removes what it has taken in steps and never holds a gigabyte in one file.
+	SpoolSegmentByteCount int64
+	// Records a drain hands over between writes of its cursor: 64, a reading. After a kill at most
+	// this many come again, each with its SpoolRecordId, which the consumer skips.
+	SpoolCursorRecordCount int
 	// A transcript is tailed this often, and at Stop, SubagentStop, PreCompact and SessionEnd: 30 s.
 	TranscriptTailInterval time.Duration
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
@@ -64,10 +76,12 @@ type SidecarRecordSettings struct {
 // A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	return &SidecarMcpSettings{
-		SessionCallCount: 8,
-		SessionWriteRate: SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
-		ResultByteCount:  256 * 1024,
-		CallTimeout:      30 * time.Second,
+		SessionCallCount:      8,
+		SessionWriteRate:      SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
+		ResultByteCount:       256 * 1024,
+		CallTimeout:           30 * time.Second,
+		ApprovalFileRetention: 30 * 24 * time.Hour,
+		RunFileRetention:      30 * 24 * time.Hour,
 	}
 }
 
@@ -78,6 +92,8 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		FileByteCount:          8 * 1024 * 1024,
 		RunHourByteCount:       256 * 1024 * 1024,
 		SpoolByteCount:         1024 * 1024 * 1024,
+		SpoolSegmentByteCount:  16 * 1024 * 1024,
+		SpoolCursorRecordCount: 64,
 		TranscriptTailInterval: 30 * time.Second,
 		HookExitTimeout:        300 * time.Millisecond,
 		RestorePointByteCount:  256 * 1024 * 1024,

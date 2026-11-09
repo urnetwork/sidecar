@@ -18,6 +18,7 @@ syntax = "proto3";
 package urnetwork.sidecar;
 
 import "protocol/bridge/auth.proto";
+import "protocol/bridge/signed.proto";
 
 option go_package = "github.com/urnetwork/sidecar/protocol";
 
@@ -120,6 +121,13 @@ message KeyRegister {                  // the member's consented, approval-capab
   bytes attestation = 6;
   KeyPurpose purpose = 7;
   int64 not_after = 8;                 // ms since the epoch
+  // protos-bridge-presence-gaps #3 (QD-086): purpose presence only, written last, 9 then 10. The new key
+  // signs the received body before field 9's first byte, as §6.9's signed bytes with purpose key-proof
+  // and type SIGNED_KEY_REGISTER, which a verifier slices and never re-marshals: a DER signature here for
+  // both §16.6 profiles, and for webauthn-es256 its authenticator_data and client_data_json in field 10,
+  // the challenge being those bytes' SHA-256. Nothing may follow them.
+  bytes key_signature = 9;
+  WebAuthnEvidence key_webauthn = 10;
 }
 
 message KeyRevoke {
@@ -140,6 +148,22 @@ message DelegationRevoke {
   StatementHeader header = 1;
   bytes delegation_id = 2;
   uint64 since_n = 3;                  // 0, or for a leaked bundle the position from which it parks
+}
+
+// The client-only #<bundle> of a pre-approved auth key (§7.8): ur-authkey-<id>-<secret>#<base64url of this>,
+// about 200 B, which QR and MDM carry as the same string. Never sent, logged or passed to MCP (D-TEAM-22): no
+// request has a field for it, and the client splits it off before anything else runs. The daemon signs its own
+// SidecarAdmit with the Delegation's signing key, keeps only the reader seed and erases the rest (§5.6); every
+// other copy of the string keeps both seeds. No server decodes it. §7.8 writes it as a field list without
+// numbers, so these are in the order written.
+message AuthKeyBundle {
+  uint32  version = 1;                 // 1
+  bytes   genesis_sha256 = 2;          // A_0 = SHA-256(Signed Genesis)
+  AuthPin head = 3;                    // the log position the creating device stood at (§7.9)
+  bytes   delegation_id = 4;
+  bytes   delegation_signing_seed = 5; // 32 B: the Delegation's Ed25519 key, which signs SidecarAdmit
+  bytes   delegation_reader_seed = 6;  // 32 B: the Delegation's X-Wing reader key (§10.5)
+  repeated bytes tag_ids = 7;          // the Delegation's keyed tag ids, 16 B each, never names
 }
 
 enum TeamMailMode {
@@ -200,6 +224,17 @@ message VersioningRule {
   VersioningMode versioning = 5;
 }
 
+// §9.4's K_sock, the config repo's single-record file socket/key (plan-SOCK-ksock-rotation #2): a config
+// writer creates it with the repo, and only config writers' heads change it (§8.8). It rides heads only,
+// carries no header, and no server reads it: evs holds the head as ciphertext (§7.9). previous_key and
+// rotated_at_ms are set from a rotation until the first writer head at or after rotated_at_ms + 10 min,
+// which clears both.
+message SocketKeyFile {
+  bytes current_key = 1;               // 32 B
+  bytes previous_key = 2;              // 32 B during a rotation's overlap, else empty
+  int64 rotated_at_ms = 3;             // the rotating head's time, with previous_key, else 0
+}
+
 // An Owner, Admin or Network admin. Ordered, first match wins, unmatched paths staying versioned; absent,
 // the platform rule [{size_above_bytes: 64 MiB, off}]. v1, its type reserved at M2: format-1 readers apply
 // nothing from it but still apply the head holding it (owner decision 164; §11.7).
@@ -223,4 +258,34 @@ message RecoveryVeto {                 // an AdminSet member's admitted device, 
                                        // never the proposed device or a read_only one
   StatementHeader header = 1;
   bytes proposal_id = 2;
+}
+
+// One statement or tick a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold,
+// as records, exactly the log's statements and ticks in (the previous base's folded_through, folded_through],
+// each by id with the position of the entry that carried it. A config file, which evs holds as ciphertext.
+message ConfigRecord {
+  bytes  id = 1;                       // SHA-256 of the Signed for a STATEMENT (StatementId); empty for a TICK
+  uint64 n = 2;                        // the carrying entry's position
+  int64  time_ms = 3;                  // the carrying entry's time
+  uint32 kind = 4;                     // AuthEntry.kind: 2 STATEMENT or 3 TICK, never a BASE
+  bytes  body = 5;                     // AuthEntry.body verbatim
+}
+
+// fold/<d>/<i>, the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits: one file per head that
+// advances folded_through, holding the records in (after, folded_through] in n order.
+message ConfigFold {
+  uint64 after = 1;                    // the previous fold's folded_through, 0 for the first
+  uint64 folded_through = 2;
+  repeated ConfigRecord records = 3;
+}
+
+// names: each sidecar's chosen client name (§7.7), which ConfigNames resolves to DNS labels keyed on the
+// sidecar_id, duplicates taking -2, -3 in admission order. Deterministically encoded, in sidecar_id order.
+message ConfigNameTable {
+  repeated ConfigName names = 1;
+}
+
+message ConfigName {
+  bytes  sidecar_id = 1;
+  string name = 2;                     // a DNS label, as ValidateConfigClientName takes it
 }

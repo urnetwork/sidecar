@@ -113,6 +113,11 @@ func testExpectCheck(t *testing.T, name string, err error, check relationCheck) 
 	if !errors.As(err, &failure) || failure.check != check {
 		t.Errorf("%s: want %s to refuse, got %v", name, check, err)
 	}
+	// E1 and E2 end before any application record is forwarded, so their refusals are never cuts
+	// (SPEC.md section 6), and never count toward §14.8's halt
+	if (check == checkE1 || check == checkE2) && errors.Is(err, sidecar.ErrSmtpRecordCut) {
+		t.Errorf("%s: %s refused with a record cut", name, check)
+	}
 }
 
 func testExpectCut(t *testing.T, name string, err error) {
@@ -260,13 +265,21 @@ func TestE1TakesAChangeCipherSpecBeforeAClientHelloOnlyAfterARetry(t *testing.T)
 	gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
 	testExpectCheck(t, "before any hello", gate.ServerRecord(dummy), checkE1)
 
-	gate = newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
-	gate.helloRetried = true
-	if err := gate.ServerRecord(dummy); err != nil {
-		t.Errorf("after a retry: %v", err)
+	retried := func() *edgeSession {
+		gate := newEdgeSession(defaultEdgeSettings(), testEmptyPreamble(), testMxHost, &testFixedVerifier{})
+		gate.helloRetried = true
+		if err := gate.ServerRecord(dummy); err != nil {
+			t.Errorf("after a retry: %v", err)
+		}
+		return gate
 	}
+	gate = retried()
 	testExpectCheck(t, "another length", gate.ServerRecord(tlsFrameRecord(tlsRecordChangeCipherSpec, tlsVersion12, []byte{1, 1})), checkE1)
-	testExpectCheck(t, "any other record", gate.ServerRecord(tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 20))), checkE1)
+	// a refusal ends the gate: even the record it took a moment ago is refused now
+	if err := gate.ServerRecord(dummy); err == nil {
+		t.Error("the gate went on after a refusal")
+	}
+	testExpectCheck(t, "any other record", retried().ServerRecord(tlsFrameRecord(tlsRecordApplicationData, tlsVersion12, make([]byte, 20))), checkE1)
 }
 
 func TestE1RefusesAClientFlightOtherThanFinished(t *testing.T) {

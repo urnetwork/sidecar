@@ -811,7 +811,7 @@ tr.resolved td:first-child{position:relative}
     <div class="pane-head">
       <div>
         <h1>Access control</h1>
-        <p>One deny-by-default policy in HuJSON. It's compiled under your key authority and enforced on every client — the coordination network transports it but never reads it.</p>
+        <p>One deny-by-default policy in HuJSON, signed under your key authority, stored encrypted in your network's config repo. URnetwork enforces an id-only projection: it sees which ids may reach which, never names or rule text.</p>
       </div>
       <div class="actions">
         <button class="btn btn-secondary" id="run-preview">
@@ -914,7 +914,7 @@ tr.resolved td:first-child{position:relative}
           <div class="mini-body">
             <div class="def"><div><span class="dn">posture:compliant</span><div class="dd2">macOS/Linux · MDM-enrolled</div></div><span class="pill pill-active" style="font-size:10.5px">● 128 ok</span></div>
             <div class="def"><div><span class="dn">latestOS</span><div class="dd2">OS version ≥ 14.5</div></div><span class="pill pill-warn" style="font-size:10.5px">3 stale</span></div>
-            <p class="note" style="margin:10px 2px 0;font-size:11.5px">Signals are client-attested. Server-computed geolocation is intentionally not used — the network never sees connection metadata to evaluate.</p>
+            <p class="note" style="margin:10px 2px 0;font-size:11.5px">Signals are client-attested, and server-computed geolocation is intentionally not used. The policy is signed under your key authority, stored encrypted in your network's config repo. URnetwork enforces an id-only projection: it sees which ids may reach which, never names or rule text.</p>
           </div>
         </div>
 

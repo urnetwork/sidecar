@@ -1,0 +1,37 @@
+{
+  "name": "a removal",
+  "replaced": [
+    {
+      "token_path": "19ad88c5abe4bbb9f1b115f5e91b41ce",
+      "version": {
+        "version": 4,
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "e91269970cfde3163b4f96cf6caa04a9f7e9487c3b5b7bb213f43279bf9b0e44"
+          },
+          {
+            "kind": 5,
+            "id": "9a6fb1dbff7fc5628e8568daeaec9d872465f7c72f56cc486f00d283dee35b1d"
+          },
+          {
+            "kind": 5,
+            "id": "94420a8ccc47b33927b1f74fca1048ac747d21341bb58f35b7cf5aaca6b5c27e"
+          },
+          {
+            "kind": 5,
+            "id": "63c47bbffeac280ed4c544f0c67ea5ba0084f61cefeab9af5f7b1a09f14e2457"
+          },
+          {
+            "kind": 5,
+            "id": "c10d2397b5a529c69b2544f7d8a5f1d75b7f62b45eff5bb430b7d32dfb9dd230"
+          }
+        ]
+      }
+    }
+  ],
+  "push_versions": [],
+  "room_byte_count": 1048576,
+  "want": "0abe010a1019ad88c5abe4bbb9f1b115f5e91b41ce10041a20e91269970cfde3163b4f96cf6caa04a9f7e9487c3b5b7bb213f43279bf9b0e441a209a6fb1dbff7fc5628e8568daeaec9d872465f7c72f56cc486f00d283dee35b1d1a2094420a8ccc47b33927b1f74fca1048ac747d21341bb58f35b7cf5aaca6b5c27e1a2063c47bbffeac280ed4c544f0c67ea5ba0084f61cefeab9af5f7b1a09f14e24571a20c10d2397b5a529c69b2544f7d8a5f1d75b7f62b45eff5bb430b7d32dfb9dd230"
+}

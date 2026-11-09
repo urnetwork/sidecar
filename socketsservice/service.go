@@ -1,0 +1,218 @@
+// The engine's lifecycle: construction, readiness, drain and close, and the parts every route shares.
+// Its routes arrive with their own tasks, each in its own file: POST /socket/registrations, GET
+// /socket/list and GET /socket/keys with SOCK-M5-05, POST /socket/find with SOCK-M5-06. Until a route's
+// task lands the route is absent, so Handler answers 404 for it and never a faked answer.
+//
+// The engine turns ready only when everything a route needs is present: a store that answers its probe,
+// a gate that has loaded, and a ticket key that signs (§19.4's column for sockets: Redis, ticket key,
+// projection loaded). A host that has none of these, or only ClosedSocketGate, serves nothing.
+//
+// Every wait is on the host's sidecar.Clock, so a schedule moves them. Safe for concurrent use.
+
+package socketsservice
+
+import (
+	"context"
+	"crypto/ed25519"
+	"errors"
+	"net/http"
+	"sync"
+
+	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar"
+)
+
+var _ sidecar.HttpEngine = (*SocketsService)(nil)
+
+// The service's ticket keys (§9.8): the newest settled key signs, and every listed key verifies.
+// SOCK-M5-08's SocketTicketKeySet reads them from vault's secret_files and rotates them on 30 days with
+// overlap. Safe for concurrent use.
+type SocketTicketKeys interface {
+	// The key that signs now, and false when none is loaded, which leaves the engine not ready and
+	// signing nothing.
+	SigningKey() (keyId string, privateKey ed25519.PrivateKey, ok bool)
+	// Every key a ticket may verify under, as registration answers and GET /socket/keys publish them.
+	VerifyKeys() []*sidecar.SocketTicketKey
+}
+
+// The engine. Everything here is safe for concurrent use.
+type SocketsService struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	host     *sidecar.ServiceHost
+	store    SocketStore
+	gate     SocketGate
+	settings *SocketsSettings
+	clock    sidecar.Clock
+	metrics  *socketMetrics
+
+	bound      *SocketControlBound
+	fairQueue  *SocketFairQueue
+	namespaces *socketNamespaceRegistry
+
+	// What the last probe found.
+	storeReachable *sidecar.MonitorValue[bool]
+	// Probes finished, each counted once the wait for the next is armed, so a test can see one land
+	// and move a fake clock past the next.
+	probeCount *sidecar.MonitorValue[int]
+	// Closed once the run loop has ended.
+	released chan struct{}
+
+	handlerOnce sync.Once
+	handler     http.Handler
+
+	stateLock  sync.Mutex
+	ticketKeys SocketTicketKeys
+	draining   bool
+}
+
+// Starts the engine, which stays not ready until its store answers, its gate has loaded and a ticket
+// key is set, and runs until ctx ends or Close. host needs Metrics. A nil store or gate is allowed and
+// leaves the engine not ready for good, as ClosedSocketGate does.
+func NewSocketsService(
+	ctx context.Context,
+	host *sidecar.ServiceHost,
+	store SocketStore,
+	gate SocketGate,
+	settings *SocketsSettings,
+) (*SocketsService, error) {
+	if host == nil || host.Metrics == nil {
+		return nil, errors.New("sockets needs a host with Metrics")
+	}
+	if err := settings.Validate(); err != nil {
+		return nil, err
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	clock := host.ClockOrReal()
+	self := &SocketsService{
+		ctx:            cancelCtx,
+		cancel:         cancel,
+		host:           host,
+		store:          store,
+		gate:           gate,
+		settings:       settings,
+		clock:          clock,
+		metrics:        newSocketMetrics(host.Metrics),
+		bound:          NewSocketControlBound(settings.Bound, clock),
+		fairQueue:      NewSocketFairQueue(settings.FairQueue, clock),
+		namespaces:     newSocketNamespaceRegistry(),
+		storeReachable: sidecar.NewMonitorValue(false),
+		probeCount:     sidecar.NewMonitorValue(0),
+		released:       make(chan struct{}),
+	}
+	go self.run()
+	return self, nil
+}
+
+// Probes the store each ProbeInterval until the engine ends.
+func (self *SocketsService) run() {
+	defer close(self.released)
+	for {
+		reachable := false
+		if self.store != nil {
+			testHookBarrier("sockets.probe.before", "")
+			reachable = func() bool {
+				ctx, done := self.storeContext()
+				defer done()
+				return self.store.Ping(ctx) == nil
+			}()
+			testHookBarrier("sockets.probe.after", "")
+		}
+		self.storeReachable.Set(reachable)
+		probeTimer := self.clock.After(self.settings.ProbeInterval)
+		self.probeCount.Update(func(count int) int { return count + 1 })
+		select {
+		case <-self.ctx.Done():
+			return
+		case <-probeTimer:
+		}
+	}
+}
+
+// A context bounded by StoreTimeout on the engine's clock, and the call that ends it. Every store call
+// takes one, so a stalled store reads as unavailable and never holds a caller.
+func (self *SocketsService) storeContext() (context.Context, func()) {
+	ctx, cancel := context.WithCancel(self.ctx)
+	stop := self.clock.AfterFunc(self.settings.StoreTimeout, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+// Sets the keys tickets are signed and verified with: SOCK-M5-08's host calls this once its key file
+// loads, and again on each rotation. nil takes them away, and the engine turns not ready.
+func (self *SocketsService) SetTicketKeys(ticketKeys SocketTicketKeys) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.ticketKeys = ticketKeys
+}
+
+// The keys set, and whether one of them signs.
+func (self *SocketsService) currentTicketKeys() (SocketTicketKeys, bool) {
+	self.stateLock.Lock()
+	ticketKeys := self.ticketKeys
+	self.stateLock.Unlock()
+	if ticketKeys == nil {
+		return nil, false
+	}
+	_, _, signs := ticketKeys.SigningKey()
+	return ticketKeys, signs
+}
+
+// Registers the owner of an edge namespace, tls/, smtp/ or ur/ (§9.4): TLS-M5-22's, MAIL-M7-22's and
+// SOCK-M9-01's hosts call this before serving. An edge namespace nobody registered refuses every
+// entry, and a second registration of one namespace is an error.
+func (self *SocketsService) RegisterNamespace(namespace sidecar.SocketNamespace, hooks SocketNamespaceHooks) error {
+	return self.namespaces.register(namespace, hooks)
+}
+
+// Whether network is the urnetwork-edge platform network, whose callers take the edge bound and Find as
+// autogroup:public (§9.10), from §19.11's sidecar.yml. Unset reads as no network, so an engine whose
+// host did not set it treats every caller as a sidecar, the closed direction.
+func (self *SocketsService) isUrnetworkEdge(networkId connect.Id) bool {
+	edgeNetworkId, set := self.host.GatesOrClosed().UrnetworkEdge()
+	return set && edgeNetworkId == networkId
+}
+
+// See sidecar.Engine. Ready once the store answered its last probe, the gate has loaded and a ticket
+// key signs, and until Drain or Close.
+func (self *SocketsService) Ready() bool {
+	if self.store == nil || self.gate == nil || !self.gate.Ready() {
+		return false
+	}
+	if _, signs := self.currentTicketKeys(); !signs {
+		return false
+	}
+	if !self.storeReachable.Value() || self.ctx.Err() != nil {
+		return false
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return !self.draining
+}
+
+// See sidecar.Engine. Every call is one request, bounded by StoreTimeout, so there is nothing to wait
+// for here: the host has stopped new connections, and calls in flight finish on their own bound.
+func (self *SocketsService) Drain() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.draining = true
+}
+
+// See sidecar.Engine.
+func (self *SocketsService) Close() {
+	self.cancel()
+	<-self.released
+}
+
+// See sidecar.HttpEngine. Built once. Each route's task adds its route here from its own file, and a
+// route not yet built answers 404.
+func (self *SocketsService) Handler() http.Handler {
+	self.handlerOnce.Do(func() {
+		mux := http.NewServeMux()
+		self.handler = mux
+	})
+	return self.handler
+}

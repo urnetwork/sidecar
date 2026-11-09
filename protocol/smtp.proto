@@ -1,8 +1,12 @@
 // §14.5's preamble and proofs, which smtpedge sees (§2.8's smtp-1, smtp-2).
 //
-// §14.8 lists what SmtpOutcome reports and §14.14 what SmtpStatus says, and §6.11 numbers both, so neither is
-// unwritten, but neither has fields yet. This file took §14's fenced blocks, and SMTP-M9-01 brings the two with
-// plan-SMTP-wire-gaps, which asks where SmtpOutcome rides.
+// The first four messages are §14's fenced blocks. SmtpOutcome and SmtpStatus take their fields from
+// plan-SMTP-wire-gaps#1 and #2, and SmtpHandshake and SmtpHandshakeResult theirs from smtpproof-start-shts-wire,
+// each decided with its numbers, and design_unfenced_test.go holds them until §14 fences them.
+//
+// Only SmtpPreamble and SmtpPreambleResult travel as frames ahead of the raw TLS (plan-SMTP-wire-gaps#3,
+// smtp_frame.go). SmtpOutcome is a NO_REPLY envelope to the ticket's listener, SmtpProof and SmtpHandshake are
+// RPCs to it, and SmtpStatus rides PushHint.hint on topic mail. No message here holds a oneof (§6.11).
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -50,6 +54,31 @@ message SmtpProofResult {        // 0x1606, edge -> sidecar
                                   //   0 UNSPECIFIED, a protocol error
 }
 
+message SmtpOutcome {            // 0x1603, sidecar -> edge, a NO_REPLY envelope to the ticket's listener
+  bytes send_id = 1;              // the send it reports; the edge takes it from the connection's dialer for 15 min
+                                  //   after the stream ends, and then drops it
+  uint32 tls_level = 2;           // 1-4 for TL1-TL4, 0 if none was reached
+  uint32 mode = 3;                // as SmtpProof.mode, 0 if the send ended before the mode was known
+  repeated uint32 reply_codes = 4;  // the MX's reply codes, as the sidecar read them inside TLS
+  uint32 dsn_count = 5;           // DSNs made or received since the last accepted outcome, so a late bounce rides
+  uint32 hard_bounce_count = 6;   //   the next send
+  bool downgrade_refused = 7;     // the send refused an MX below its pin, or at TL4 without an allowance
+}                                 // self-reported: it only tightens (§14.8) and never feeds attribution
+
+message SmtpStatus {             // 0x1604, in PushHint.hint on topic mail; smtpedge's halt job hints the clients
+  uint32 kind = 1;                // SmtpStatusKind: 1 HALTED, 2 QUOTA, 3 CLEAR; 0 a protocol error (§6.11)
+  uint32 retry_after_ms = 2;      // when the queue may try again; GET /smtp/status gives a halt's scope
+}
+
+message SmtpHandshake {          // 0x1607, RPC sidecar -> edge, TLS 1.3 only, as soon as the handshake ends
+  bytes send_id = 1;
+  bytes shts = 2;                 // the disclosed server handshake traffic secret (E2), which the edge forgets
+}                                 //   once E2 has used it (D-SMTP-10)
+
+message SmtpHandshakeResult {    // 0x1608, edge -> sidecar
+  uint32 code = 1;                // SmtpHandshakeCode: 1 OK; 2 INVALID, and the edge ends the connection;
+}                                 //   0 UNSPECIFIED, a protocol error
+
 // SmtpPreambleResult.code, numbered by §6.11. A receiver takes 0 as a protocol error and resets the stream.
 enum SmtpPreambleCode {
   SMTP_PREAMBLE_CODE_UNSPECIFIED = 0;
@@ -67,4 +96,20 @@ enum SmtpProofCode {
   SMTP_PROOF_CODE_UNSPECIFIED = 0;
   SMTP_PROOF_OK = 1;
   SMTP_PROOF_INVALID = 2;
+}
+
+// SmtpStatus.kind (plan-SMTP-wire-gaps#2). A client takes 0 as a protocol error and drops the hint.
+enum SmtpStatusKind {
+  SMTP_STATUS_KIND_UNSPECIFIED = 0;
+  SMTP_STATUS_HALTED = 1;
+  SMTP_STATUS_QUOTA = 2;
+  SMTP_STATUS_CLEAR = 3;
+}
+
+// SmtpHandshakeResult.code (smtpproof-start-shts-wire). A receiver takes 0 as a protocol error and resets the
+// stream.
+enum SmtpHandshakeCode {
+  SMTP_HANDSHAKE_CODE_UNSPECIFIED = 0;
+  SMTP_HANDSHAKE_OK = 1;
+  SMTP_HANDSHAKE_INVALID = 2;
 }

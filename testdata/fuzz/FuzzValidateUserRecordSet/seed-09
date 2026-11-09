@@ -1,0 +1,5 @@
+go test fuzz v1
+string("_github-challenge")
+uint16(16)
+uint32(300)
+string("\"token\"")

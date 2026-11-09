@@ -1,15 +1,16 @@
 // What mxedge tells a receiver about a sender (§15.4), the evidence a receiver seals at reception (§15.5), the
 // deposit that carries both (§15.7), and the files of a mailbox and of mailcfg (§15.7, §15.8).
 //
-// Only MailIngress, on a Required stream (§2.8's mx-1), and MailHint, a kind in PushHint.hint, pass through a server.
-// Everything else here is sealed under §11, so it needs no §2.8 row, and the device role parses none of it, so it
-// lives in protocol and not protocol/bridge.
+// Only MailIngress, on a Required stream (§2.8's mx-1), and MailHint, a kind and a host in PushHint.hint, pass through
+// a server. Everything else here is sealed under §11, so it needs no §2.8 row, and the device role parses none of it,
+// so it lives in protocol and not protocol/bridge.
 //
-// §15.5 fences MailIngress, MailAuthEvidence and AuthLimits. The rest come from §15.5's comments and from the lists in
-// §14.5, §15.7, §15.8 and §15.15, fields in the order written, under plan-MAIL-format-bytes's first option:
-// MAIL-FORMAT.md gives their rules and containers, testdata/mail/vectors.yml pins their bytes, and their numbers stay
-// open until §15's formats freeze at M7. Every enum starts at 0 unspecified, then the values written, and no message
-// here holds a oneof (§6.11) or a map, so an encoding depends on neither a leg nor a run.
+// §15.5 fences MailIngress, MailAuthEvidence and AuthLimits. The rest take their numbers from the answers to
+// plan-MAIL-format-bytes and plan-SMTP-wire-gaps#4, with the readings mail-proto-format-readings accepted, and their
+// names from §14.5, §15.7, §15.8 and §15.15 wherever those lists give one: MAIL-FORMAT.md gives their rules and
+// containers, testdata/mail/vectors.yml pins their bytes, and their numbers stay open until §15's formats freeze at
+// M7. Every enum starts at 0 unspecified, then the values written, and no message here holds a oneof (§6.11) or a
+// map, so an encoding depends on neither a leg nor a run.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -126,26 +127,28 @@ message ArcResult {
 }
 
 enum MailHintKind {
-  MAIL_HINT_KIND_UNSPECIFIED = 0;
-  MAIL_HINT_DEPOSIT = 1;
-  MAIL_HINT_RECEIVER_NEEDED = 2;
+  MAIL_HINT_KIND_UNSPECIFIED = 0;  // a protocol error (§6.11)
+  MAIL_HINT_DEPOSIT = 1;           // reserved and never sent: a deposit reaches readers by evs's hint (plan-MAIL-hints)
+  MAIL_HINT_RECEIVER_NEEDED = 2;   // the router met host with no receiver, and hints its published ones
 }
 
-message MailHint {                 // §6 0x1702, in PushHint.hint on topic mail (§15.15)
+message MailHint {                 // §6 0x1702, in PushHint.hint on topic mail (§15.15), at most 256 B
   MailHintKind kind = 1;
+  string host = 2;                 // mx or mx.<scope>, as mail_host_key names it (§2.8's mx-3)
 }
 
-message MailDeposit {              // a deposit's sealed header (15.7), one per repo; evs sees none of it
+// A same-network deposit (D-MAIL-8) sets version, mail_from and recipients only, its signature being the push's.
+message MailDeposit {              // a deposit's sealed trailer (15.7), one per repo; evs sees none of it
   uint32 version = 1;
-  MailIngress ingress = 2;         // absent on a same-network deposit (D-MAIL-8)
-  MailAuthEvidence evidence = 3;   // absent there too, and from a receiver: "evidence unavailable" (15.5)
+  MailIngress ingress = 2;         // a receiver's deposit only
+  MailAuthEvidence evidence = 3;   // a receiver's deposit only, and one without is "evidence unavailable" (15.5)
   bytes mail_from = 4;             // MAIL's reverse path as received, no brackets, empty for <>; the sender's bytes,
                                    //   so bytes, as a string would refuse what is not UTF-8
   bool require_tls = 5;            // MAIL carried REQUIRETLS (RFC 8689)
   repeated string recipients = 6;  // this repo's RCPT addresses, in order, at most 100: never another repo's
-  uint32 tls_version = 7;          // the session's, as TLS numbers it, 0x0304 for 1.3; 0 on a same-network deposit
-  uint32 tls_suite = 8;            // the session's cipher suite, as TLS numbers it; 0 on a same-network deposit
-  bytes receiver_sidecar_id = 9;   // the depositor, which ingest holds to the deposit push's signer
+  uint32 tls_version = 7;          // the session's, as IANA numbers it, 0x0304 for 1.3
+  uint32 tls_suite = 8;            // the session's cipher suite, as IANA numbers it
+  bytes receiver_sidecar_id = 9;   // the depositing receiver, which ingest holds to the deposit push's signer
 }
 
 enum MailAddressKind {
@@ -218,7 +221,7 @@ enum MailTlsLabel {
   MAIL_TLS_LABEL_UNSPECIFIED = 0;  // a sent copy, or mail no ingest labeled: shown as no label, never as validated
   MAIL_TLS_VALIDATED = 1;
   MAIL_TLS_OPPORTUNISTIC = 2;
-  MAIL_TLS_MEMBER_SIGNED = 3;      // the sender's signature replaces the label (D-MAIL-8)
+  MAIL_TLS_MEMBER_SIGNED = 3;      // the sender's signature replaces the label (D-MAIL-8), if it may send as From
 }
 
 enum MailTlsRule {
@@ -235,8 +238,7 @@ message MailTlsBasis {             // the rule behind a label, kept for rechecks
 }
 
 message MailIndexSegment {         // i/<yyyymm>/<n>: at most 1 MiB or 4,096 entries, grown by appending (MAIL-FORMAT.md)
-  uint32 version = 1;
-  repeated IndexEntry entries = 2;
+  repeated IndexEntry entries = 1;
 }
 
 enum MailFlagKind {
@@ -248,20 +250,20 @@ enum MailFlagKind {
 }
 
 message MailFlagOp {               // one change to one message's flag; last writer wins (MAIL-FORMAT.md)
+  reserved 6;                      // hlc_count, whose counter rides in hlc's low 16 bits
   bytes message_id = 1;            // IndexEntry.id
-  MailFlagKind kind = 2;
-  string label = 3;                // kind label only, at most 64 B; a verdict is the label spam or not-spam
-  bool set = 4;                    // true sets the flag or label, false clears it
+  MailFlagKind op = 2;
+  bool set = 3;                    // true sets the flag or label, false clears it
+  string label = 4;                // op label only, at most 64 B; a verdict is the label spam or not-spam
   uint64 hlc = 5;                  // wall ms << 16 | counter
-  bytes sidecar_id = 6;            // the writer, which breaks equal clocks
+  bytes sidecar_id = 7;            // the writer, which breaks equal clocks
 }
 
 message MailFlagSegment {          // f/<yyyymm>/<n>: at most 4,096 ops, grown by appending (MAIL-FORMAT.md)
-  uint32 version = 1;
-  repeated MailFlagOp ops = 2;
+  repeated MailFlagOp ops = 1;
 }
 
-message MailReference {            // r/<yyyymm>/<h>/<id>, mailboxes only: a group message read in place (15.7)
+message MailGroupRef {             // r/<yyyymm>/<h>/<id>, mailboxes only: a group message read in place (15.7)
   bytes repo_id = 1;               // the group repo
   bytes message_id = 2;            // its message there, which is <id>
 }
@@ -311,6 +313,7 @@ message VaultUsedAt {
 message MailForward {              // forward, mailboxes only: the verified address and who forwards to it (15.10)
   string address = 1;
   repeated string burners = 2;     // the opted-in burners, each a <blabel>
+  uint64 verified_time_ms = 3;     // when address confirmed its 6-digit code
 }
 
 message MailReverseAlias {         // ra/<h>/<token>, mailboxes only (15.10)
@@ -318,16 +321,17 @@ message MailReverseAlias {         // ra/<h>/<token>, mailboxes only (15.10)
   string burner_address = 2;
 }
 
-message MailOutboxEntry {          // the body of o/<h>/<effect_key>'s Signed, as SIGNED_SMTP_OUTBOX (D-SMTP-18)
-  uint32 version = 1;
-  bytes effect_key = 2;            // the path's, so a signed entry cannot serve another path
-  string mail_from = 3;            // the envelope's address at b.<net>.<root>
+// The body of o/<h>/<effect_key>'s Signed, as SIGNED_SMTP_OUTBOX (D-SMTP-18), the message's bytes following that
+// Signed in the file (plan-SMTP-wire-gaps#4). MAIL writes o/, so this file declares it.
+message SmtpOutboxEntry {
+  bytes effect_key = 1;            // the path's, so a signed entry cannot serve another path
+  bytes message_sha256 = 2;        // the RFC 5322 bytes after the Signed
+  string sender = 3;               // the envelope's address at b.<net>.<root>
   repeated string recipients = 4;  // every recipient of this send, BCC included
-  bytes message = 5;               // the RFC 5322 bytes
-  uint32 flags = 6;                // as SmtpPreamble.flags: 1 BULK, 2 REQUIRETLS, 4 BURNER
-  repeated string tl4_domains = 7; // recipient domains the composing device's approval lets go at TL4 (§14.4)
-  uint64 created = 8;              // ms since the epoch
-  uint64 approval_not_after = 9;   // ms since the epoch, whence its retry window (§16 D-MCP-11); 0 for no approval
+  uint32 flags = 5;                // as SmtpPreamble.flags: 1 BULK, 2 REQUIRETLS, 4 BURNER
+  repeated string tl4_domains = 6; // recipient domains the composing device's approval lets go at TL4 (§14.4)
+  uint64 create_time_ms = 7;
+  uint64 approval_not_after = 8;   // ms since the epoch, whence its retry window (§16 D-MCP-11); 0 for no approval
 }
 
 enum MailSendMode {
@@ -350,12 +354,13 @@ enum MailOutcomeKind {
 message MailOutcome {              // one recipient domain's result of a send (§14.5): SmtpDomainOutcome's fields
   string domain = 1;
   MailSendMode mode = 2;
-  MailOutcomeKind kind = 3;
-  uint64 message_byte_count = 4;   // too_large: the encoded bytes
-  uint64 cap_byte_count = 5;       // too_large: the DATA cap
-  uint32 retry_after_ms = 6;       // deferred
-  uint32 reply_code = 7;           // refused: the MX's
-  uint32 tls_level = 8;            // 1-4 for TL1-TL4, or 0 if none was reached: the send's I-11 label
+  uint64 byte_count = 3;           // too_large: the message's encoded bytes
+  uint64 cap_byte_count = 4;       // too_large: the DATA cap
+  MailOutcomeKind outcome = 5;
+  uint32 reply_code = 6;           // refused: the MX's
+  uint32 retry_after_ms = 7;       // deferred
+  uint64 update_time_ms = 8;       // the sending device's last write of this domain's result
+  uint32 tls_level = 9;            // 1-4 for TL1-TL4, or 0 if none was reached: the send's I-11 label
 }
 
 message MailOutcomeRecord {        // or/<h>/<effect_key>, written by the sending device, kept 30 days
@@ -364,5 +369,6 @@ message MailOutcomeRecord {        // or/<h>/<effect_key>, written by the sendin
 
 message MailProverRecord {         // p/<sidecar_id>, rewritten at each measurement (§14.5)
   uint64 smtp_data_proof_bytes = 1;
-  uint64 data_bytes_per_second = 2;  // the measured DATA rate
+  uint64 data_bytes_per_s = 2;     // the measured DATA rate
+  uint64 measure_time_ms = 3;
 }

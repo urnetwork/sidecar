@@ -58,6 +58,11 @@ SidecarRow.capabilities: {number: 12, type: uint32, row: api-7, sees: "capabilit
 SidecarRow.delegation_id: {number: 13, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
 SidecarRow.live_since: {number: 14, type: uint64, row: api-7, sees: "live_since"}
 SidecarRow.not_after: {number: 15, type: int64, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.identity_public_key: {number: 16, type: bytes, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarRow.identity_alg: {number: 17, type: string, row: api-7, sees: "sidecar admissions with identity keys"}
+SidecarRow.member_id: {number: 18, type: bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.tag_ids: {number: 19, type: repeated bytes, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
+SidecarRow.ephemeral: {number: 20, type: bool, row: api-7, sees: "member or keyed tag ids, ephemeral flags, expiry and sponsors"}
 
 DelegationRow.delegation_id: {number: 1, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 DelegationRow.signer: {number: 2, type: bytes, row: api-7, sees: "the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration"}
@@ -67,6 +72,9 @@ DelegationRow.not_after: {number: 5, type: int64, row: api-7, sees: "Delegations
 DelegationRow.key_dropped_at: {number: 6, type: uint64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 DelegationRow.ended_at: {number: 7, type: uint64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 DelegationRow.admissions: {number: 8, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.pubkey: {number: 9, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.reader_xwing_public_key: {number: 10, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.max_admits: {number: 11, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 
 KeyRow.key_id: {number: 1, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
 KeyRow.member_id: {number: 2, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
@@ -156,6 +164,8 @@ KeyRegister.public_key: {number: 5, type: bytes, row: api-7, sees: "registered p
 KeyRegister.attestation: {number: 6, type: bytes, row: api-7, sees: "key registrations"}
 KeyRegister.purpose: {number: 7, type: KeyPurpose, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
 KeyRegister.not_after: {number: 8, type: int64, row: api-7, sees: "key registrations"}
+KeyRegister.key_signature: {number: 9, type: bytes, row: api-7, pending: "protos-bridge-presence-gaps #3 (QD-086): api-7 gains a key registration's proof"}
+KeyRegister.key_webauthn: {number: 10, type: WebAuthnEvidence, row: api-7, pending: "protos-bridge-presence-gaps #3 (QD-086): api-7 gains a key registration's proof"}
 
 KeyRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
 KeyRevoke.key_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}

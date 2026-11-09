@@ -83,6 +83,10 @@ type Net struct {
 	driveCounters map[string]*DriveCounters
 
 	exchange *netExchange
+
+	// what the world's searches are judged against (search_oracle.go), made at first use
+	searchLedger *SearchLedger
+	searchOracle *SearchOracle
 }
 
 // A fresh world. settings may be nil for the defaults. The caller closes it. Under sidecar_testhooks
@@ -113,6 +117,7 @@ func NewNet(ctx context.Context, settings *NetSettings) *Net {
 	self.AddEngines(self.fakes.ServiceHost())
 	self.exchange = newNetExchange(cancelCtx, self)
 	self.capture.AddSource(self.fakes.privacyItems)
+	self.capture.AddSource(processEnvironmentItems)
 	if HooksLinked {
 		remove, err := InstallTestHooks(self.capture.AddSecret, barriers.Hit)
 		if err != nil {

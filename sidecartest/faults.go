@@ -126,6 +126,9 @@ type FaultPlan struct {
 	// as fired there without its result. How §22.8's unknown rule loses the response of a write the
 	// schedule's own FailBeforeApply fails, which a caller cannot tell apart from a lost response.
 	Displaces bool
+	// Only operations that write match and count toward Nth, so a Redis plan can name the nth Redis
+	// write whatever reads come between, as §22.8's unknown rule needs. A PUT and a DELETE always write.
+	WritesOnly bool
 }
 
 func (self *FaultPlan) String() string {
@@ -181,6 +184,8 @@ type FaultQueue struct {
 	// By operation, each one that reached the queue in order, with the result it was given, zero for
 	// none.
 	opResults map[string][]FaultResult
+	// The same, for the operations that write alone.
+	writeResults map[string][]FaultResult
 }
 
 func NewFaultQueue() *FaultQueue {
@@ -209,8 +214,8 @@ func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) 
 
 // For one operation, the plan it gets, or nil. Reading counts a match on every armed plan the
 // operation fits, so Nth means the same whatever else is armed. The oldest plan that fires wins,
-// unless a plan that Displaces fires too.
-func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, key string) *FaultPlan {
+// unless a plan that Displaces fires too. write says whether the operation writes.
+func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, key string, write bool) *FaultPlan {
 	if isInspecting(ctx) {
 		return nil
 	}
@@ -230,6 +235,9 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 				continue
 			}
 			if plan.ClusterId != "" && plan.ClusterId != clusterId {
+				continue
+			}
+			if plan.WritesOnly && !write {
 				continue
 			}
 			armed.matches += 1
@@ -268,8 +276,12 @@ func (self *FaultQueue) take(ctx context.Context, op string, clusterId string, k
 		}
 		if self.opResults == nil {
 			self.opResults = map[string][]FaultResult{}
+			self.writeResults = map[string][]FaultResult{}
 		}
 		self.opResults[op] = append(self.opResults[op], result)
+		if write {
+			self.writeResults[op] = append(self.writeResults[op], result)
+		}
 		onFire = self.onFire
 	}()
 	if taken != nil && onFire != nil {
@@ -284,6 +296,14 @@ func (self *FaultQueue) OpResults(op string) []FaultResult {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.opResults[op])
+}
+
+// As OpResults, for the operations of op that write alone: what §22.8's unknown rule loses the response
+// of, one write at a time.
+func (self *FaultQueue) WriteResults(op string) []FaultResult {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.writeResults[op])
 }
 
 // Plans armed and never fired: a schedule ending with one proved nothing about it.

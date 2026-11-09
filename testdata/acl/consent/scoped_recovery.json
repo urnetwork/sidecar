@@ -1,0 +1,17 @@
+{
+  "name": "scoped: the member's recovery key admits while its binding is current, never after a rebind or for another member",
+  "members": [
+    {"id": "owner", "role": "owner", "bindings": [{"key": "new", "at": 5}, {"key": "old", "at": 2}]},
+    {"id": "other", "role": "member", "bindings": [{"key": "theirs", "at": 3}]}
+  ],
+  "genesis": {"sidecar": "laptop", "member": "owner"},
+  "sidecars": [
+    {"id": "laptop", "member": "owner", "admitted_at": 1},
+    {"id": "recovered-early", "member": "owner", "admitted_at": 4, "signers": ["key:old"]},
+    {"id": "recovered-late", "member": "owner", "admitted_at": 6, "signers": ["key:new"]},
+    {"id": "old-code", "member": "owner", "admitted_at": 7, "signers": ["key:old"]},
+    {"id": "wrong-member", "member": "owner", "admitted_at": 8, "signers": ["key:theirs"]}
+  ],
+  "consented": ["laptop", "recovered-early", "recovered-late"],
+  "not_consented": ["old-code", "wrong-member"]
+}

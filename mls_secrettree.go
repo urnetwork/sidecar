@@ -133,6 +133,23 @@ func (self *mlsSenderRatchet) next() (generation uint32, key []byte, nonce []byt
 	return generation, key, nonce, nil
 }
 
+// For a sender resuming its place in an epoch: moves the ratchet forward to generation without producing a
+// key, overwriting every secret it passes, so next gives generation. A generation at or below the next one is
+// no move: a ratchet never goes back.
+func (self *mlsSenderRatchet) skipTo(generation uint32) error {
+	suite := self.suite
+	for self.generation < generation {
+		next, err := suite.deriveTreeSecret("ratchet_secret", self.secret, "secret", self.generation, suite.hashLength)
+		if err != nil {
+			return err
+		}
+		clear(self.secret)
+		self.secret = next
+		self.generation += 1
+	}
+	return nil
+}
+
 // Moves the ratchet past this step's generation and overwrites what it passed.
 func (self *mlsRatchetStep) advance() {
 	ratchet := self.ratchet

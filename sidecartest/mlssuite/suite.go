@@ -1,10 +1,10 @@
 // The conformance suite for sidecar.MlsEngine (§23.5): what gkm's client relies on of §10.4's subset, which
-// sidecartest.FakeMls passes now and the real engine must pass when KEYS-M2-08 wires it in, so what was built on
-// the fake keeps working on the real thing. It speaks only through the seam, and crafts by hand only messages the
-// subset must refuse, whose bytes RFC 9420 §6 fixes.
+// sidecartest.FakeMls and the real engine, sidecar.NewMlsEngine, both pass, so what was built on the fake keeps
+// working on the real thing. It speaks only through the seam, and crafts by hand only messages the subset must
+// refuse, whose bytes RFC 9420 §6 fixes.
 //
-// One rule waits on KEYS-M2-05: an external commit's header, which sidecar.ParseMlsHeader refuses until that
-// framing lands, so the suite reads the header of members' commits alone.
+// The suite reads the header of members' commits alone: FakeMls frames an external commit around a handle, which
+// sidecar.ParseMlsHeader refuses, and the root's TestMlsHeaderReadsARealExternalCommit reads a real one's.
 //
 // A case is a plain function returning its first failure, and Run loops over them, since the cases are variations
 // of one engine's behavior (connect/CODESTYLE.md:216). A failure in one does not stop the next.

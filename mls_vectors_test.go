@@ -46,6 +46,14 @@ func (self *mlsHexBytes) UnmarshalJSON(encoded []byte) error {
 	return nil
 }
 
+// Hex text, or null for nil, as the mlswg writes an absent value.
+func (self mlsHexBytes) MarshalJSON() ([]byte, error) {
+	if self == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(hex.EncodeToString(self))
+}
+
 // Reads one file under testdata/mls/ into target.
 func mlsLoadVectorFile(t testing.TB, directory string, name string, target any) {
 	t.Helper()
@@ -106,5 +114,97 @@ func TestMlsVectorFilesMatchUpstream(t *testing.T) {
 		if !listedNames[path.Base(jsonPath)] {
 			t.Errorf("%s is not in SHA256SUMS", jsonPath)
 		}
+	}
+}
+
+// One mlswg file's place in §10.4's conformance plan: the tests that run it under 0x0001, named by value so a rename
+// fails to build here rather than leaving this record stale, and what of it they skip and why.
+type mlsVectorFileOutcome struct {
+	tests []func(*testing.T)
+	// whether its entries carry a cipher_suite, of which the tests run 0x0001's; the rest hold no suite's values
+	suiteBound bool
+	skipped    string
+}
+
+// Every one of the mlswg's 16 files (§10.3) under §10.4's plan. Each named test fails on any entry it runs and does
+// not reproduce, and on finding no 0x0001 entry where the file is suite-bound; what one skips, it counts, and the
+// reason here is the one it checks.
+var mlsVectorFileOutcomes = map[string]mlsVectorFileOutcome{
+	"crypto-basics.json":   {tests: []func(*testing.T){TestMlsCryptoBasicsVectors}, suiteBound: true},
+	"deserialization.json": {tests: []func(*testing.T){TestMlsVectorHeaderVectors}},
+	"key-schedule.json":    {tests: []func(*testing.T){TestMlsKeyScheduleVectors}, suiteBound: true},
+	"message-protection.json": {tests: []func(*testing.T){TestMlsMessageProtectionVectors}, suiteBound: true,
+		skipped: "each message opens and verifies through a test reader; the production parse refuses the standalone proposals, a member's PublicMessage commit and the application message (§10.4), and the PrivateMessage commit once it decrypts to a PSK proposal"},
+	"messages.json": {tests: []func(*testing.T){TestMlsMessagesVectors, TestMlsMessagesFramingVectors, TestMlsMessagesKeyPackageVectors, TestMlsMessagesWelcomeVectors},
+		skipped: "syntax alone: what the subset takes re-encodes byte for byte; Update, PSK and ReInit proposals, every framed message but a PrivateMessage commit, and group secrets naming a PSK are refused when parsed (§10.4)"},
+	"passive-client-handling-commit.json": {tests: []func(*testing.T){TestMlsPassiveClientVectors}, suiteBound: true,
+		skipped: "every 0x0001 entry's Welcome names a PSK, refused when parsed; mlsinterop's mls-go differential follows member commits instead (testdata/mls/0x0001/)"},
+	"passive-client-random.json": {tests: []func(*testing.T){TestMlsPassiveClientVectors}, suiteBound: true,
+		skipped: "the Welcome joins; its first commit is a member's PublicMessage, refused when parsed (D-KEYS-3), and the rest of the entry with it"},
+	"passive-client-welcome.json": {tests: []func(*testing.T){TestMlsPassiveClientVectors}, suiteBound: true,
+		skipped: "entries whose Welcome names a PSK, refused when parsed"},
+	"psk_secret.json": {suiteBound: true,
+		skipped: "the whole file: PSKs are refused when parsed (§10.4), so it covers no v0 feature"},
+	"secret-tree.json":       {tests: []func(*testing.T){TestMlsSecretTreeVectors}, suiteBound: true},
+	"transcript-hashes.json": {tests: []func(*testing.T){TestMlsTranscriptHashVectors}, suiteBound: true},
+	"tree-math.json":         {tests: []func(*testing.T){TestMlsTreeMathVectors}},
+	"tree-operations.json": {tests: []func(*testing.T){TestMlsTreeOperationsVectors}, suiteBound: true,
+		skipped: "entries whose proposal is an Update, refused when parsed (§10.4)"},
+	"tree-validation.json": {tests: []func(*testing.T){TestMlsTreeValidationVectors}, suiteBound: true},
+	"treekem.json":         {tests: []func(*testing.T){TestMlsTreeKemVectors}, suiteBound: true},
+	"welcome.json":         {tests: []func(*testing.T){TestMlsWelcomeVectors}, suiteBound: true},
+}
+
+// §22.10's per-file vectors evidence: every file SHA256SUMS lists has its outcome, every suite-bound file one 0x0001
+// entry or more, and the run logs each file's counts with what its tests skip. tree-operations' Update entries are
+// counted from the bytes, the first two of a Proposal being its type.
+func TestMlsVectorFilesEachHaveAnOutcome(t *testing.T) {
+	paths, err := fs.Glob(mlsVectorFiles, path.Join("testdata", "mls", "mlswg", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 16 || len(mlsVectorFileOutcomes) != 16 {
+		t.Fatalf("%d files and %d outcomes, want 16 of each", len(paths), len(mlsVectorFileOutcomes))
+	}
+	for _, filePath := range paths {
+		name := path.Base(filePath)
+		outcome, ok := mlsVectorFileOutcomes[name]
+		if !ok {
+			t.Errorf("%s has no outcome", name)
+			continue
+		}
+		var entries []map[string]any
+		mlsLoadVectors(t, strings.TrimSuffix(name, ".json"), &entries)
+		ours := 0
+		for _, entry := range entries {
+			if suite, ok := entry["cipher_suite"].(float64); ok && uint16(suite) == 0x0001 {
+				ours += 1
+			}
+		}
+		if outcome.suiteBound && ours == 0 {
+			t.Errorf("%s holds no 0x0001 entry", name)
+		}
+		if len(outcome.tests) == 0 && outcome.skipped == "" {
+			t.Errorf("%s: no test runs it and no reason says why", name)
+		}
+		line := fmt.Sprintf("%s: %d entries", name, len(entries))
+		if outcome.suiteBound {
+			line += fmt.Sprintf(", %d under 0x0001", ours)
+		}
+		if name == "tree-operations.json" {
+			updates := 0
+			for _, entry := range entries {
+				proposal, _ := hex.DecodeString(fmt.Sprint(entry["proposal"]))
+				if suite, _ := entry["cipher_suite"].(float64); uint16(suite) == 0x0001 && 2 <= len(proposal) && proposal[0] == 0 && proposal[1] == 2 {
+					updates += 1
+				}
+			}
+			line += fmt.Sprintf(", %d of them Updates", updates)
+		}
+		line += fmt.Sprintf("; run by %d tests", len(outcome.tests))
+		if outcome.skipped != "" {
+			line += "; skipped: " + outcome.skipped
+		}
+		t.Log(line)
 	}
 }

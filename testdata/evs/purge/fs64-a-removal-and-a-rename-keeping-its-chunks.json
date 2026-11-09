@@ -1,0 +1,64 @@
+{
+  "name": "fs64 a removal and a rename keeping its chunks",
+  "replaced": [
+    {
+      "token_path": "19ad88c5abe4bbb9f1b115f5e91b41ce",
+      "version": {
+        "version": 5,
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "e91269970cfde3163b4f96cf6caa04a9f7e9487c3b5b7bb213f43279bf9b0e44"
+          },
+          {
+            "kind": 5,
+            "id": "8395da4445179822b037184a0a2e689b8dcc53688bc7e2a6ef99cc7e39da8153"
+          },
+          {
+            "kind": 5,
+            "id": "94420a8ccc47b33927b1f74fca1048ac747d21341bb58f35b7cf5aaca6b5c27e"
+          },
+          {
+            "kind": 5,
+            "id": "7252596f1ebbf0874c03ca165da007d97308a8e01b5def8202227985df4a5775"
+          },
+          {
+            "kind": 5,
+            "id": "c10d2397b5a529c69b2544f7d8a5f1d75b7f62b45eff5bb430b7d32dfb9dd230"
+          }
+        ]
+      }
+    }
+  ],
+  "push_versions": [
+    {
+      "version": 1,
+      "versioning": 1,
+      "chain": [
+        {
+          "kind": 5,
+          "id": "e91269970cfde3163b4f96cf6caa04a9f7e9487c3b5b7bb213f43279bf9b0e44"
+        },
+        {
+          "kind": 5,
+          "id": "8395da4445179822b037184a0a2e689b8dcc53688bc7e2a6ef99cc7e39da8153"
+        },
+        {
+          "kind": 5,
+          "id": "94420a8ccc47b33927b1f74fca1048ac747d21341bb58f35b7cf5aaca6b5c27e"
+        },
+        {
+          "kind": 5,
+          "id": "7252596f1ebbf0874c03ca165da007d97308a8e01b5def8202227985df4a5775"
+        },
+        {
+          "kind": 5,
+          "id": "c10d2397b5a529c69b2544f7d8a5f1d75b7f62b45eff5bb430b7d32dfb9dd230"
+        }
+      ]
+    }
+  ],
+  "room_byte_count": 1048576,
+  "want": ""
+}

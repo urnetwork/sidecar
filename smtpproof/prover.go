@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -28,13 +30,21 @@ type partProver interface {
 type ProverSettings struct {
 	// Largest content of one client record. The protocol's limit is 16 KiB.
 	MaxRecordContentBytes int
-	// DATA octets proven per part, which must fit a shape's body blocks. The sidecar sizes this by its
-	// measured speed to prove within 2 minutes (§14.5). partShapes holds 2 KiB, one octet of it for
-	// TLS 1.3's inner type.
+	// DATA octets proven per part, which must fit a shape's body blocks. partShapes holds 2 KiB, one
+	// octet of it for TLS 1.3's inner type. A part's circuit is fixed, so it costs the same however much
+	// it carries: Measure sets this to a whole part, or 0 when a part cannot prove within DataPartTime.
+	// Until a Measure, this default stands.
 	DataPartBytes int
-	// smtp_data_proof_bytes, measured on each host: a larger message to an MX without CHUNKING is
-	// too_large before MAIL (§14.5). Non-positive refuses every DATA send.
+	// smtp_data_proof_bytes: a larger message to an MX without CHUNKING is too_large before MAIL
+	// (§14.5). Measure replaces this unmeasured default with the host's own figure. Non-positive refuses
+	// every DATA send.
 	DataProofBytes int
+	// How long one DATA part may take to prove: §14.5's 2 minutes, inside the MX's 5-minute timeout. A
+	// host whose part takes longer sends nothing in DATA mode.
+	DataPartTime time.Duration
+	// How long a DATA connection proves for: §14.4's 2 h. With the measured rate it gives
+	// smtp_data_proof_bytes.
+	DataConnectionTime time.Duration
 	// Server octets held for parts to cover, as VerifierSettings.MaxServerBytes. A reply that never ends
 	// stops here rather than growing what this send holds.
 	MaxServerBytes int
@@ -47,16 +57,24 @@ func DefaultProverSettings() *ProverSettings {
 		MaxRecordContentBytes: 16 * 1024,
 		DataPartBytes:         2*1024 - 1,
 		DataProofBytes:        1024 * 1024,
+		DataPartTime:          2 * time.Minute,
+		DataConnectionTime:    2 * time.Hour,
 		MaxServerBytes:        256 * 1024,
 	}
 }
 
-// Implements sidecar.SmtpProver. Safe for concurrent use: all state is per send.
+// Implements sidecar.SmtpProver. Safe for concurrent use: all state is per send, except the last
+// Measure's limits under stateLock.
 type Prover struct {
 	settings *ProverSettings
 	backend  partProver
 	// The suites offered, or nil for the client's default. Tests pin one to cover each.
 	tlsSuites []uint16
+	// Measure's clock, or nil for the wall clock. Tests give a fake one.
+	clock func() time.Time
+
+	stateLock sync.Mutex
+	measured  *proverMeasured
 }
 
 // A server record as the prover keeps it: its public form, and its plaintext for the witness.
@@ -152,7 +170,7 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 		settings.suites = self.tlsSuites
 	}
 	run := &proverRun{
-		settings: self.settings,
+		settings: self.sendSettings(),
 		backend:  self.backend,
 		job:      job,
 		channel:  channel,
@@ -214,30 +232,39 @@ func (self *proverRun) run(ctx context.Context) (*sidecar.SmtpProofResult, error
 		return &sidecar.SmtpProofResult{RefusedCode: replies[0].code}, nil
 	}
 
+	// the mode is what Z9 can prove, which is the keyword inside one record, and not merely what the
+	// reply says: an MX whose line spans two records gets DATA (SPEC.md reading 17)
 	mode := partModeData
+	received := make([][]byte, 0, len(self.records))
+	for _, record := range self.records {
+		received = append(received, record.plaintext)
+	}
+	if offersChunking(self.result.version, received) && !self.settings.ForceData {
+		mode = partModeBdat
+	}
 	pipelining := false
 	for i, text := range replies[0].lines {
-		keyword := asciiLower([]byte(text))
-		if 0 < i && keyword == keywordChunking && !self.settings.ForceData {
-			mode = partModeBdat
-		}
-		if 0 < i && keyword == "pipelining" {
+		if 0 < i && asciiLower([]byte(text)) == "pipelining" {
 			pipelining = true
 		}
 	}
-	// the count was declared before the mode was known (plan-SMTP-preamble-byte-count). BDAT's n and
-	// DATA's stuffed count differ when a line starts with a dot: a count only DATA can meet means
-	// DATA, and a count only BDAT can meet at an MX that needs DATA means a new connection
+	// the count was declared before the mode was known, for the mode the sidecar expected
+	// (plan-SMTP-preamble-byte-count). BDAT's n is the message's length and DATA's count its stuffed
+	// length, which differ when a line starts with a dot. The mode is chosen above and never by the
+	// count: where it cannot meet the count, nothing goes past EHLO and a new connection declares this
+	// mode's. So an MX offering CHUNKING gets BDAT unless DATA is forced for interop, and too_large means
+	// DATA was the only mode
 	stuffed := dotStuffed(self.job.Message)
-	declared := self.preamble.messageByteCount
-	if declared != uint64(len(self.job.Message)) {
-		mode = partModeData
+	count := uint64(len(self.job.Message))
+	if mode == partModeData {
+		count = uint64(len(stuffed))
+		// a host whose part cannot prove within its time has no DATA part size, and sends no DATA
+		if self.settings.DataPartBytes <= 0 || uint64(max(self.settings.DataProofBytes, 0)) < count {
+			return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
+		}
 	}
-	if mode == partModeData && uint64(max(self.settings.DataProofBytes, 0)) < uint64(len(stuffed)) {
-		return &sidecar.SmtpProofResult{Mode: mode, TooLarge: true}, nil
-	}
-	if mode == partModeData && declared != uint64(len(stuffed)) {
-		return &sidecar.SmtpProofResult{Mode: mode, ReconnectByteCount: uint64(len(stuffed))}, nil
+	if self.preamble.messageByteCount != count {
+		return &sidecar.SmtpProofResult{Mode: mode, ReconnectByteCount: count}, nil
 	}
 
 	// pi2: the envelope
@@ -425,6 +452,12 @@ func (self *proverRun) sendData(ctx context.Context, headerBlock []byte, body []
 	}
 	for {
 		last := len(runs) == 0
+		// pi3 follows the 354, so only later parts can find a record here
+		if reply, err := self.drainServerRecords(); err != nil {
+			return nil, err
+		} else if reply != nil {
+			return &sidecar.SmtpProofResult{Mode: partModeData, RefusedCode: reply.code}, nil
+		}
 		var sealed []*tlsSealedRecord
 		var plaintexts [][]byte
 		for _, content := range contents {
@@ -501,36 +534,68 @@ func (self *proverRun) awaitReplies(ctx context.Context, count int) ([]*smtpRepl
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		if event.err != nil {
-			return nil, event.err
-		}
-		record := event.record
-		self.serverBytes += len(record.raw)
-		if self.settings.MaxServerBytes < self.serverBytes {
-			return nil, errors.New("smtpproof: MX sent more than any part could cover")
-		}
-		plaintext, err := self.plaintextOf(record)
+		ticket, err := self.takeServerRecord(event)
 		if err != nil {
 			return nil, err
 		}
-		self.records = append(self.records, &proverServerRecord{
-			public:    &partRecord{seq: record.seq, raw: record.raw},
-			plaintext: plaintext,
-		})
-		switch record.recordType {
-		case tlsRecordApplicationData:
-			self.stream = append(self.stream, record.content...)
-		case tlsRecordHandshake:
-			if len(record.content) == 0 || record.content[0] != tlsHandshakeNewSessionTicket {
-				return nil, errors.New("smtpproof: MX sent a handshake record other than a ticket")
+		if ticket && self.lastPart != nil && self.lastPart.Mode != partModeNone && 3 <= self.lastPart.Index {
+			if err := self.proveAgain(ctx); err != nil {
+				return nil, err
 			}
-			if self.lastPart != nil && self.lastPart.Mode != partModeNone && 3 <= self.lastPart.Index {
-				if err := self.proveAgain(ctx); err != nil {
-					return nil, err
-				}
+		}
+	}
+}
+
+// Keeps a server record for the parts to cover, and says whether it is a ticket, which holds no reply.
+func (self *proverRun) takeServerRecord(event *proverServerEvent) (bool, error) {
+	if event.err != nil {
+		return false, event.err
+	}
+	record := event.record
+	self.serverBytes += len(record.raw)
+	if self.settings.MaxServerBytes < self.serverBytes {
+		return false, errors.New("smtpproof: MX sent more than any part could cover")
+	}
+	plaintext, err := self.plaintextOf(record)
+	if err != nil {
+		return false, err
+	}
+	self.records = append(self.records, &proverServerRecord{
+		public:    &partRecord{seq: record.seq, raw: record.raw},
+		plaintext: plaintext,
+	})
+	switch record.recordType {
+	case tlsRecordApplicationData:
+		self.stream = append(self.stream, record.content...)
+		return false, nil
+	case tlsRecordHandshake:
+		if len(record.content) == 0 || record.content[0] != tlsHandshakeNewSessionTicket {
+			return false, errors.New("smtpproof: MX sent a handshake record other than a ticket")
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("smtpproof: MX sent a record of type %d", record.recordType)
+	}
+}
+
+// Takes every server record the reader already holds, without waiting, so the next DATA part covers
+// them: server records still flow during DATA, and each later part covers those past the previous
+// count (§14.5). Otherwise a late ticket would hold every later part's records at the edge (E3 step 5)
+// until the end of the message, past the MX's timeout. A reply during the body is the MX ending the
+// send, and is returned. A record still on its way is the next part's, or the last part's again.
+func (self *proverRun) drainServerRecords() (*smtpReply, error) {
+	for {
+		select {
+		case event := <-self.serverIn:
+			if _, err := self.takeServerRecord(event); err != nil {
+				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("smtpproof: MX sent a record of type %d", record.recordType)
+			if replies, consumed := splitReplies(self.stream, 1); replies != nil {
+				self.stream = self.stream[consumed:]
+				return replies[0], nil
+			}
+			return nil, nil
 		}
 	}
 }

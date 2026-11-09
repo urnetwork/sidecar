@@ -3,18 +3,26 @@
 //
 // Format 1 reserves format 2's numbers by declaring them, never by leaving them out: EvsPush's flags 256 and 512
 // and fields 33 and 34, EvsHead.index_epoch, EvsEntryVersion.versioning, EvsLocator.staged and kind 5,
-// EvsUploadReceipt.versionless, and window bits 4 and 5. Format-1 code refuses each in use as FORMAT_UNSUPPORTED
-// {needs_format: 2}, never as a fork, tampering or a missing segment, and ignores the window bits (§11.6,
-// D-PHASE-9). EvsEntryVersion has no field 15, and no number serves keep-last-n (owner decisions 165, 167).
+// EvsUploadReceipt.versionless, window bits 4 and 5, the read states and the rest of
+// testdata/evs/reserved_numbers.yml. Format-1 code refuses each in use as FORMAT_UNSUPPORTED {needs_format: 2}, never
+// as a fork, tampering or a missing segment, and ignores the window bits and the tainted bit (§11.6, D-PHASE-9).
+// EvsEntryVersion has no field 15, and no number serves keep-last-n (owner decisions 165, 167).
 //
-// §11.9's read states drop_pending and dropped are not here: no section gives them a number, or a message to ride.
-// EvsWindowEntry and EvsRefusal are §11.8's fixed layouts, not protobuf. The objects and request bodies §11.8 and
-// §11.9 write in prose wait for their format.
+// The design's fences come first, with three fields the owner's answers added before design-records folds them in:
+// EvsPush.consumed_through, EvsPushPart.sections and EvsHead.consumed_through. After them come what §11.6 to §11.10
+// write in prose: the stored objects, sealed values and HTTP bodies, whose names and numbers are proposed, as
+// plan-EVS1-format-bytes's first option, until M2's entry review. Segments, record headers, batches, EvsWindowEntry
+// and EvsRefusal are fixed layouts, not protobuf. EVS-FORMAT.md states those and every rule these messages follow.
+//
+// Format 2's own messages come last: a record's purge candidates and the drop routes' bodies, proposed until M10's
+// entry review, with EVS-FORMAT.md's format 2 chapter and testdata/evs/format2/schema.yml.
 
 syntax = "proto3";
 package urnetwork.sidecar;
 
+import "protocol/acl.proto";
 import "protocol/bridge/auth.proto";
+import "protocol/envelope.proto";
 
 option go_package = "github.com/urnetwork/sidecar/protocol";
 
@@ -48,6 +56,8 @@ message EvsPush {                       // sidecar/protocol/evs.proto, inside §
   uint64 index_epoch = 34;              // a CUT, or a push other than a CLOSURE creating or replacing an index
                                         // file: the head's index_epoch it was built at, the ref's erasure set at
                                         // that epoch applied (11.8's 5d, 11.14); else 0 (format 2)
+  uint64 consumed_through = 35;         // CONSUME: the highest version of this deposit ref at or below which its
+                                        // ingester's read left no unconsumed deposit; else 0 (EVS-FORMAT.md)
 }
 message EvsTokenPath { repeated bytes token = 1; }            // 16 B per component
 message EvsChange {
@@ -62,6 +72,8 @@ message EvsPushPart {                   // unsigned; parts_sha256 binds it
   repeated bytes inline_records = 5;    // those that fit in 1 MiB; the rest go into segments
   bytes sealed_metadata = 6;            // a slice; sealed_metadata_sha256 covers the slices in order
   bytes changes_root = 7;               // root over this part's changes; the statement's root is over these roots
+  bytes sections = 8;                   // its slice of each payload section past fields 3-6, framed as a payload
+                                        // is; joined in part order, the slices are a one-part push's (EVS-FORMAT.md)
 }
 message EvsEntryVersion {               // what entry_sha256 hashes; in the push record, and folded into idx/
   uint64 version = 1;                   // base_entry_version + 1; a creation's max(the push's effective base
@@ -165,6 +177,7 @@ message EvsHead {                       // head/<repo>/<ref>; written only by If
                                         // never falls; a re-seed sets it from the newest CUT it replays
   bytes refused = 25;                   // 16-byte EvsRefusal records, at most 8, oldest first (outcomes)
   int64 refused_ms = 26;                // its writer's clock at the newest refusal fence
+  uint64 consumed_through = 27;         // a deposit ref's newest CONSUME mark, never falling (EVS-FORMAT.md)
 }
 message EvsOverlay { bytes ref_id = 1; uint64 version = 2; }
 message EvsSealLease { bytes push_id = 1; int64 until_ms = 2; }
@@ -227,4 +240,531 @@ enum EvsWindowFlag {
   EVS_WINDOW_REWRITES_HISTORY = 8;      // bit 3: FORCE, DELETE, BASE or ERASE
   EVS_WINDOW_VERSIONLESS_REPLACED = 16; // bit 4: its record lists the purge's candidates (11.13)
   EVS_WINDOW_DROP = 32;                 // bit 5
+}
+
+// EvsPush.ref_kind, EvsHead.ref_kind and EvsHeadSummary.ref_kind (11.8's refs table).
+enum EvsRefKind {
+  EVS_REF_KIND_UNSPECIFIED = 0;
+  EVS_REF_SHARED = 1;
+  EVS_REF_OWNED = 2;
+  EVS_REF_DEPOSIT = 3;
+  EVS_REF_ERASURE = 4;
+}
+
+// EvsPush.ref_mode, as its comment numbers it, EvsHead.ref_mode and EvsHeadSummary.ref_mode (11.7).
+enum EvsRefMode {
+  EVS_REF_MODE_UNSPECIFIED = 0;
+  EVS_REF_GIT = 1;
+  EVS_REF_FILE = 2;
+}
+
+// EvsEntryVersion.kind and EvsName.kind.
+enum EvsEntryKind {
+  EVS_ENTRY_KIND_UNSPECIFIED = 0;
+  EVS_ENTRY_FILE = 1;
+  EVS_ENTRY_DIRECTORY = 2;
+}
+
+// A record header's kind (11.6's records), in its sealed bytes.
+enum EvsRecordKind {
+  EVS_RECORD_KIND_UNSPECIFIED = 0;
+  EVS_RECORD_CHECKPOINT = 1;
+  EVS_RECORD_DIFF = 2;
+  EVS_RECORD_CHUNK = 3;
+}
+
+// What a record header's key ref names: the key that seals its body.
+enum EvsKeyRefKind {
+  EVS_KEY_REF_CONTAINER = 0;            // its segment's or inline chain's own wrapped key block
+  EVS_KEY_REF_SLOT = 1;                 // a key of the slot the header names, at its key index
+}
+
+// A git object format: a record header's oid kind and EvsSealedFields.oid_kind. Format 1 writes SHA-1 only.
+enum EvsOidKind {
+  EVS_OID_KIND_UNSPECIFIED = 0;
+  EVS_OID_SHA1 = 1;                     // 20 B, left-aligned in a 32 B field and zero-filled
+  EVS_OID_SHA256 = 2;
+}
+
+// A batch record's type (11.8's record row).
+enum EvsBatchRecordType {
+  EVS_BATCH_RECORD_TYPE_UNSPECIFIED = 0;
+  EVS_BATCH_PUSH = 1;
+  EVS_BATCH_PART = 2;
+  EVS_BATCH_SEAL = 3;
+  EVS_BATCH_RESEED = 4;
+}
+
+// A payload section's type, in the order a payload writes them (11.6's payload row). DROP's two are format 2's.
+enum EvsPayloadSection {
+  EVS_PAYLOAD_SECTION_UNSPECIFIED = 0;
+  EVS_PAYLOAD_ENTRY_VERSIONS = 1;
+  EVS_PAYLOAD_SEALED_METADATA = 2;
+  EVS_PAYLOAD_INLINE_RECORDS = 3;
+  EVS_PAYLOAD_CHANGE_LIST = 4;
+  EVS_PAYLOAD_PART_HASHES = 5;
+  EVS_PAYLOAD_NEW_OBJECTS = 6;
+  EVS_PAYLOAD_SLOT_BODIES = 7;
+  EVS_PAYLOAD_ERASED_LIST = 8;
+  EVS_PAYLOAD_DROP_BODY = 9;
+  EVS_PAYLOAD_DROP_LISTS = 10;
+  EVS_PAYLOAD_TAIL_MOVES = 11;
+  EVS_PAYLOAD_SOURCE_PATHS = 12;
+  EVS_PAYLOAD_REUSE_LIST = 13;
+  EVS_PAYLOAD_MERKLE_PROOFS = 14;
+}
+
+// A new-objects item's kind (11.6's payload row). A staged segment is format 2's.
+enum EvsNewObjectKind {
+  EVS_NEW_OBJECT_KIND_UNSPECIFIED = 0;
+  EVS_NEW_OBJECT_SEGMENT = 1;
+  EVS_NEW_OBJECT_STAGED_SEGMENT = 2;
+  EVS_NEW_OBJECT_SLOT = 3;
+}
+
+// EvsRepoObject.state (11.12's state row).
+enum EvsRepoState {
+  EVS_REPO_STATE_UNSPECIFIED = 0;
+  EVS_REPO_KEYING = 1;
+  EVS_REPO_ACTIVE = 2;
+  EVS_REPO_DELETED = 3;
+  EVS_REPO_SHREDDING = 4;
+  EVS_REPO_SHREDDED = 5;
+}
+
+// 11.8's fixed code table: EvsRefusal's code, and EvsRefusalReply's. Each code has one status, which EVS-FORMAT.md
+// gives. Below 64, what the head's refusal records may hold; from 64, refusals the head or a terminal repo/ state
+// settles, which are never recorded; from 128, answers that refuse nothing. Format 2's refusals are numbered from
+// format 1, so a format-1 binary after a rollback answers a recorded one by its code rather than an unknown number.
+enum EvsRefusalCode {
+  EVS_REFUSAL_CODE_UNSPECIFIED = 0;
+  EVS_REFUSAL_SCOPE = 1;
+  EVS_REFUSAL_TIME_STALE = 2;
+  EVS_REFUSAL_REPO_KEYING = 3;
+  EVS_REFUSAL_REPO_DELETED = 4;
+  EVS_REFUSAL_QUOTA_PAYMENT = 5;
+  EVS_REFUSAL_QUOTA_LIMIT = 6;
+  EVS_REFUSAL_CLUSTER_FULL = 7;
+  EVS_REFUSAL_GATE_CLOSED = 8;
+  EVS_REFUSAL_INDEX_EPOCH = 9;
+  EVS_REFUSAL_MAP_PARTS = 10;
+  EVS_REFUSAL_EPOCH_SOURCES_FULL = 11;
+  EVS_REFUSAL_PATH_EPOCH_DUE = 12;
+  EVS_REFUSAL_DIRECTORY_FULL = 13;
+  EVS_REFUSAL_SEGMENT_GONE = 14;
+  EVS_REFUSAL_VERSIONING = 15;
+  EVS_REFUSAL_SLOT_UNKNOWN = 16;
+  EVS_REFUSAL_SLOT_STALE = 17;
+  EVS_REFUSAL_NOTHING_TO_ERASE = 18;
+  EVS_REFUSAL_DROPPED = 19;
+  EVS_REFUSAL_DROP_PATH = 20;
+  EVS_REFUSAL_DROP_CONSENT = 21;
+  EVS_REFUSAL_DROP_STATE = 22;
+  EVS_REFUSAL_DROP_BOUNDARY = 23;
+  EVS_REFUSAL_DROP_LIST = 24;
+  EVS_REFUSAL_FORMAT_UNSUPPORTED = 25;
+
+  EVS_REFUSAL_REF_MODE = 64;
+  EVS_REFUSAL_PUSH_ID_REUSED = 65;
+  EVS_REFUSAL_NON_FAST_FORWARD = 66;
+  EVS_REFUSAL_BASE_STALE = 67;
+  EVS_REFUSAL_PATH_CONFLICT = 68;       // 409 naming the paths: 5g's path-level CAS, 5e's tail, a seal's rerun
+  EVS_REFUSAL_PATH_EPOCH = 69;
+  EVS_REFUSAL_SHREDDING = 70;
+  EVS_REFUSAL_DROP_KIND = 71;
+  EVS_REFUSAL_SEGMENT_STALE = 72;
+  EVS_REFUSAL_STATEMENT_MISSING = 73;
+  EVS_REFUSAL_GROUP_NOT_READY = 74;
+
+  EVS_REFUSAL_INVALID = 128;            // a body, statement or signature that does not parse or verify
+  EVS_REFUSAL_NOT_FOUND = 129;
+  EVS_REFUSAL_PARTS_MISSING = 130;
+  EVS_REFUSAL_BUSY = 131;
+  EVS_REFUSAL_FOLD_BEHIND = 132;
+  EVS_REFUSAL_TIME_AHEAD = 133;
+  EVS_REFUSAL_RESOURCE_EXHAUSTED = 134;
+  EVS_REFUSAL_WAIT = 135;               // 429 for a lease, a fence, or a refusal meeting 8 live records
+  EVS_REFUSAL_UNAVAILABLE = 136;        // 503: the store unreachable, evs's clock unsure, or the outcome unknown
+}
+
+// EvsRefusalReply.outcome: whether an attempt may yet have committed, which only a 503 leaves open.
+enum EvsPushOutcome {
+  EVS_PUSH_OUTCOME_SETTLED = 0;         // the answer's code says what happened
+  EVS_PUSH_OUTCOME_UNKNOWN = 1;         // 503 {push_id, outcome: unknown}, which the client's retry resolves (11.8)
+}
+
+// EvsReadPathReply.state (11.9's reply row). All three are format 2's, which format 1 refuses as needing it.
+enum EvsReadPathState {
+  EVS_READ_PATH_STATE_UNSPECIFIED = 0;
+  EVS_READ_PATH_COLLECTED = 1;
+  EVS_READ_PATH_DROP_PENDING = 2;
+  EVS_READ_PATH_DROPPED = 3;
+}
+
+// EvsReadObject.kind: what a read's frame carries beside the head, statements and paths.
+enum EvsReadObjectKind {
+  EVS_READ_OBJECT_KIND_UNSPECIFIED = 0;
+  EVS_READ_OBJECT_SEGMENT = 1;
+  EVS_READ_OBJECT_SLOT = 2;
+  EVS_READ_OBJECT_MAP_PART = 3;
+  EVS_READ_OBJECT_LOG_PAGE = 4;
+  EVS_READ_OBJECT_BATCH_RECORD = 5;     // a push, part or seal record
+}
+
+message EvsRepoObject {                 // repo/<repo>, <= 4 KiB; each change of state one If-Match (11.12), and a
+                                        // shredded tombstone stays
+  bytes repo_id = 1;
+  RepoKind kind = 2;                    // fixed at creation, from the projection
+  bytes owner_member_id = 3;            // an owner-bound kind's owner, else empty
+  EvsRepoState state = 4;
+  int64 state_ms = 5;                   // when this state began; deleted takes its RepoDelete entry's time
+  bytes state_signer = 6;               // deleted: its RepoDelete's signer
+  bytes deletion_id = 7;                // deleted, shredding and shredded: the incarnation a job rereads (11.12)
+  uint32 format = 8;                    // 1, or 2 from a repo's first push carrying a format-2 value (11.6)
+  bytes sealed_name = 9;                // the display name
+  bytes network_id = 10;                // the creating token's, checked against the projection's AclRepo and never
+                                        // changed; a repo/ without one reads as held, so nothing is deleted
+}
+
+message EvsRepoPlacement {              // place/<repo_id>, <= 256 B, on the first metadata cluster; written once (11.8)
+  string cluster_id = 1;                // the metadata cluster taking new repos when it was placed (§19.9)
+  bytes creator_sidecar_id = 2;         // its retry continues on cluster_id; any other creator gets 409
+}
+
+message EvsSlotObject {                 // slot/<repo>/<slot_id>, <= 8 KiB; rewritten only to drop erased keys
+  repeated EvsSlotKey keys = 1;         // up to 64; an erased key leaves the list, and no index shifts
+}
+message EvsSlotKey {
+  uint32 key_index = 1;                 // 0 to 63, never reused within its slot
+  uint64 generation = 2;                // g: fek_g wraps it, or, for a deposit, g's drop key
+  bytes wrapped = 3;                    // EVS-FORMAT.md's wrapped-key block under fek_g, or a deposit's HPKE bytes
+}
+
+message EvsIndexEntry {                 // idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e, <= 512 KiB: a cache of committed versions
+                                        // (11.7); its carried, fresh or removed state rides in object metadata
+  repeated EvsIndexVersion versions = 1;  // a file's, at most four, newest first
+  EvsNameTable names = 2;               // a directory's folded table
+  uint64 names_through = 3;             // the ref version of the newest delta folded into names
+  EvsRemovalMarker marker = 4;          // a removed path's
+  EvsDropMark drop_mark = 5;            // a dropped path's (format 2), which format-1 writers keep
+}
+message EvsIndexVersion {               // one committed version and where it committed
+  bytes push_id = 1;
+  uint64 commit_version = 2;            // u: the ref version its push committed at
+  bytes entry_version = 3;              // the EvsEntryVersion bytes its change's entry_sha256 names, unless elided
+  bool elided = 4;                      // its inline bodies are cut, as for all but the newest; evs restores them
+                                        // from its push record before serving it
+}
+message EvsRemovalMarker {              // 11.7's removal row
+  bytes push_id = 1;                    // the removing push
+  uint64 removal_version = 2;           // r, the ref version that push committed at
+  uint64 path_version = 3;              // the removal's own version, one past the path's last
+  repeated bytes segment_ids = 4;       // format 2: a versionless file its push did not list, whose kind-5 segments
+  repeated bytes slot_ids = 5;          // and slots its collection deletes; format-1 writers keep them
+}
+message EvsDropMark {                   // format 2 (11.7), which format-1 writers and copies keep
+  bytes drop_id = 1;
+  uint64 through_version = 2;
+}
+
+message EvsLogPage {                    // log/<repo>/<ref>/<n>, <= 70 KiB: versions 64n to 64n+63, built alike by any
+                                        // writer, so a 412 on equal bytes is success
+  uint64 page = 1;                      // n
+  bytes first_chain = 2;                // C_(64n-1); page 0, which starts at version 1, holds C_0
+  bytes last_chain = 3;                 // C_(64n+63)
+  bytes window = 4;                     // its versions' 64 B EvsWindowEntry records, oldest first
+  repeated bytes statements = 5;        // their Signed EvsPush bytes as received, in the same order
+}
+
+message EvsSealedFields {               // what EvsEntryVersion.sealed_fields opens to (11.6)
+  bytes file_id = 1;                    // 16 random bytes, kept across a rename
+  uint32 mode = 2;                      // git's file mode
+  bytes git_oid = 3;
+  EvsOidKind oid_kind = 4;
+  uint64 size = 5;                      // plaintext bytes
+  bytes content_sha256 = 6;             // versioning 1 and 2 only (format 2)
+}
+message EvsSealedMetadata {             // what a push's sealed metadata opens to (11.6, 11.7); sealed_metadata_sha256
+                                        // hashes the sealed bytes
+  GroupHead group = 1;                  // §10's (group_id, epoch, epoch_authenticator) the writer pins
+  EvsProvenance provenance = 2;
+  repeated EvsSealedCommit commits = 3; // git mode: every commit of this update, oldest first
+  bytes signed_import = 4;              // a Signed EvsImport, as signed (11.11)
+}
+message EvsProvenance {                 // 11.6's records row
+  bytes agent_id = 1;                   // §5.5's; absent reads agent_asserted
+  bool tainted = 2;                     // the writing run's (format 2), which format 1 ignores
+}
+message EvsSealedCommit {
+  bytes object = 1;                     // the git commit object, which hashes to its oid
+  repeated EvsSealedChange changes = 2; // against its first parent, so export rebuilds every original oid (11.7)
+}
+message EvsSealedChange {
+  repeated bytes path = 1;              // each component's raw name, as git stores it
+  uint32 mode = 2;
+  bytes git_oid = 3;                    // empty removes the path
+}
+
+message EvsPushRequest {                // POST .../push: a one-part push, or the seal of a push in parts
+  bytes statement = 1;                  // the Signed EvsPush bytes, which C_v and the window hash as received
+  bytes payload = 2;                    // a one-part push's sections (EVS-FORMAT.md); a seal sets none
+  repeated EvsUploadReceipt receipts = 3;  // one per new segment, outside the statement (11.13)
+  bytes staged = 4;                     // format 2's staged segments, outside every payload hash
+  repeated EvsPlace part_places = 5;    // a seal: the record of each part, in part order
+}
+message EvsPartRequest {                // POST .../push/<push_id>/<k>
+  bytes statement = 1;
+  bytes part = 2;                       // EvsPushPart k as sent, whose SHA-256 parts_sha256 covers
+  repeated EvsUploadReceipt receipts = 3;
+  bytes staged = 4;                     // format 2's, as in EvsPushRequest
+}
+message EvsLeaseRequest {               // POST .../push/<push_id>/lease, git mode; a 200 carries no body
+  bytes ref_id = 1;
+  uint64 base_version = 2;
+  uint32 ms = 3;                        // at most 120,000
+}
+message EvsPushReply {                  // 200 from push, part or seal
+  uint64 version = 1;                   // push and seal: its ref version, the original one on a retry
+  EvsPlace place = 2;                   // part: where its record is
+  EvsDepositHead deposit_head = 3;      // a push or seal on the caller's own deposit ref
+}
+message EvsRefusalReply {               // every answer of evs's but a 200
+  bytes push_id = 1;                    // a push's, part's, seal's or lease's
+  EvsRefusalCode code = 2;
+  bool recorded = 3;                    // the head's refusal records answered this attempt (11.8's refuse row)
+  uint32 retry_after_ms = 4;            // a 429, or a 503 where it applies, as Retry-After also says
+  repeated EvsTokenPath paths = 5;      // what a 409 names
+  EvsPushOutcome outcome = 6;
+  uint32 needs_format = 7;              // FORMAT_UNSUPPORTED
+  EvsQuotaRefusal quota = 8;            // QUOTA_PAYMENT, QUOTA_LIMIT and RESOURCE_EXHAUSTED past a quota (§20.7)
+  EvsDepositHead deposit_head = 9;      // BASE_STALE on the caller's own deposit ref, read from the cluster head
+}
+message EvsQuotaRefusal {               // §20.7's QuotaRefusal
+  string limit_key = 1;
+  int64 limit = 2;
+  int64 used = 3;
+  uint32 retry_after_ms = 4;
+  bool upgrade = 5;                     // a purchase or a higher tier lifts it
+}
+message EvsDepositHead {                // all a depositor learns of its own ref's head (11.12)
+  uint64 version = 1;
+  bytes chain = 2;                      // C_version
+  uint64 consumed_through = 3;          // the head's consumed_through
+}
+
+message EvsReadRequest {                // POST .../read (11.9)
+  bytes ref_id = 1;
+  uint64 pin_version = 2;               // 0 if none
+  bool fresh = 3;                       // no cached head
+  repeated EvsReadPath paths = 4;       // at most 64
+  repeated EvsReadRange ranges = 5;     // at most 64, 32 MiB in all
+  repeated bytes slot_ids = 6;
+  repeated EvsReadMap maps = 7;
+  repeated uint64 log_pages = 8;
+  repeated EvsReadPush pushes = 9;      // push records and parts
+  repeated EvsReadRef refs = 10;        // a streams read's, alone in its request: at most 64 (11.9's streams row)
+}
+message EvsReadPath {
+  repeated EvsSourcePath token_paths = 1;  // the current epoch's first, then each listed source that may hold it
+  uint64 version = 2;                   // 0 the newest committed, else that older version
+}
+message EvsReadRange {
+  bytes segment_id = 1;
+  uint32 offset = 2;
+  uint32 length = 3;
+}
+message EvsReadMap {                    // one part of a Signed EvsPathMap on the request's ref
+  uint64 path_epoch = 1;
+  bytes map_sha256 = 2;
+  uint32 part = 3;
+}
+message EvsReadPush {
+  bytes push_id = 1;
+  uint64 version = 2;                   // the ref version it committed at, whose window entry or log page places it
+  uint32 part = 3;                      // 0 its push or seal record, else that part's
+}
+message EvsReadRef {
+  bytes ref_id = 1;
+  uint64 pin_version = 2;
+}
+
+message EvsReadFrame {                  // the read reply: frames, each u32be(length) then this; each one of 11.9's
+                                        // parts by its set fields, the last with end set
+  EvsHeadSummary head = 1;              // first, and in a streams read first for each ref
+  EvsReadStatement statement = 2;       // each version after the pin, in order
+  uint64 behind = 3;                    // the pin is older than the window: the first missing version
+  uint64 more = 4;                      // a streams read stopped at its 4 MiB: this ref's next version
+  EvsReadPathReply path = 5;
+  EvsReadObject object = 6;
+  bool end = 7;
+}
+message EvsHeadSummary {                // all a reader sees of a head (11.8's fill row, 11.9), and GET .../refs's rows
+  bytes ref_id = 1;
+  uint64 version = 2;
+  bytes chain = 3;
+  bytes push_id = 4;
+  EvsRefKind ref_kind = 5;
+  EvsRefMode ref_mode = 6;
+  bytes owner_sidecar_id = 7;
+  bytes sealed_ref_name = 8;
+  EvsOverlay base = 9;
+  AuthPin auth = 10;
+  bytes group_id = 11;
+  uint64 generation = 12;
+  bytes generation_commitment = 13;
+  EvsPathEpoch path_epoch = 14;
+  uint64 index_epoch = 15;              // format 2
+  bool deleted = 16;
+  uint64 push_sequence = 17;            // what its last commit raised, 0 where {evsh_} holds none (11.9's moved row)
+}
+message EvsReadStatement {
+  uint64 version = 1;
+  bytes statement = 2;                  // the Signed EvsPush as received
+}
+message EvsReadPathReply {              // one path: its version, its listing, or what stands for them
+  repeated bytes token_path = 1;        // in the current epoch
+  EvsIndexVersion version = 2;          // never elided
+  bytes statement = 3;                  // the one that wrote it, when not among those this reply returned
+  repeated EvsMerkleProof proof = 4;    // to that statement's changes_root, part level last; empty when inline
+  repeated EvsAbsenceProof absences = 5;  // later statements that left this path and its prefixes alone
+  EvsRemovalMarker removal = 6;         // a removed path's, from its marker or the window, with no carried ids
+  EvsOverlay base = 7;                  // an overlay's path it holds no version of
+  EvsNameTable names = 8;               // a directory's folded table
+  uint64 names_through = 9;
+  repeated EvsIndexVersion deltas = 10; // the directory's deltas after names_through, in version order
+  EvsReadPathState state = 11;          // format 2, with the five fields after it
+  bytes drop_id = 12;
+  int64 not_before_ms = 13;             // drop_pending
+  uint64 drop_version = 14;             // dropped: the DROP's ref version
+  bytes drop_statement = 15;            // drop_pending and dropped: the DROP's Signed EvsPush as received, when this
+                                        // reply returns it nowhere else (format 2)
+  bytes drop_body = 16;                 // and its EvsDropHistory bytes, which its drop_sha256 covers, on the first
+                                        // path of this reply naming the drop (format 2)
+}
+message EvsMerkleProof {                // one RFC 9162 tree's inclusion proof (11.6's merkle row)
+  bytes leaf = 1;                       // the bytes the leaf hashes: an EvsChange as listed, or a part's changes_root
+  uint64 index = 2;                     // the leaf's index
+  uint64 size = 3;                      // the tree's leaf count
+  repeated bytes path = 4;              // RFC 9162's inclusion path, from the leaf up
+}
+message EvsAbsenceProof {               // two adjacent leaves with a path between them (11.6's merkle row)
+  uint64 version = 1;                   // the statement this speaks for
+  repeated bytes token_path = 2;        // the path or the prefix shown absent
+  repeated EvsMerkleProof below = 3;    // the leaf sorting just below it, part level last; empty when none does
+  repeated EvsMerkleProof above = 4;    // the leaf sorting just above it, part level last; empty when none does
+}
+message EvsReadObject {                 // a stored object or a range of one; one past 1 MiB spans frames
+  EvsReadObjectKind kind = 1;
+  bytes id = 2;                         // its segment id, slot id, map_sha256 or push id
+  uint64 number = 3;                    // its map part, log page or part
+  uint32 offset = 4;                    // of body's first byte in the object
+  bytes body = 5;
+  bool missing = 6;                     // evs found no such object, so body is empty
+}
+
+message EvsRefsReply {                  // GET .../refs[?moved_after=] (11.9, 11.10)
+  uint32 format = 1;                    // repo/'s object format (11.6)
+  uint64 push_sequence = 2;             // {evsq_<repo_id>}
+  repeated EvsHeadSummary refs = 3;     // a placeholder head is absent
+}
+message EvsLogReply {                   // GET .../log?ref=&since=, at most 1,000 statements
+  repeated EvsReadStatement statements = 1;
+  uint64 next_version = 2;              // where the next page starts, 0 once it reaches the head
+}
+
+// Format 2's own messages (EVS-FORMAT.md's format 2 chapter): a batch record's purge candidates (11.13's purge row)
+// and the bodies of 11.20's three drop routes. Their names and numbers are proposed until M10's entry review, and
+// their bytes freeze at its exit (D-PHASE-7). Format-1 code neither writes nor reads them: a purge list sits only in a
+// format-2 record's tail, and format-1 evs serves no drop route.
+
+message EvsPurgeList {                  // a format-2 record's purge candidates, after its staged segments; unsealed,
+                                        // since it says only what the push's own entries and their bases show
+  repeated EvsPurgeCandidate candidates = 1;  // per versionless version the push replaces, in change order
+  bool marked = 2;                      // past 2,048 ids or the record's 1 MiB: none listed, and evacuation's sweep
+                                        // recomputes them from the replaced versions (11.13)
+}
+message EvsPurgeCandidate {             // what one replaced versionless version V leaves to the purge
+  repeated bytes token_path = 1;        // V's path, in the push's path epoch, 16 B per component
+  uint64 replaced_version = 2;          // V's path version: its change's base_entry_version
+  repeated bytes segment_ids = 3;       // V's unstaged kind-5 segments that no version of the push names
+  repeated bytes staged_segment_ids = 4;  // V's staged ones that none names, in V's push's record until evacuation
+  repeated bytes slot_ids = 5;          // V's slots that none names (slot-keyed repos)
+}
+
+// EvsDropStatus.state (11.13's who row). A held drop reads done (owner decision 184), so no value says held.
+enum EvsDropState {
+  EVS_DROP_STATE_UNSPECIFIED = 0;
+  EVS_DROP_PENDING = 1;                 // committed, its start not passed
+  EVS_DROP_CANCELLED = 2;               // a committed cancel names it
+  EVS_DROP_EXECUTING = 3;               // its job runs, in phase
+  EVS_DROP_DONE = 4;                    // its deletions made, or waiting on a hold, which reads the same
+  EVS_DROP_REFUSED = 5;                 // its job refused it, for reason, deleting nothing
+  EVS_DROP_OBSERVED = 6;                // §19.11's format2.drop observe: verified, nothing deleted (D-TEST-18)
+}
+
+// EvsDropStatus.phase while a drop executes (11.13's resolve, mark, verify and delete rows).
+enum EvsDropPhase {
+  EVS_DROP_PHASE_UNSPECIFIED = 0;
+  EVS_DROP_RESOLVE = 1;
+  EVS_DROP_MARK = 2;
+  EVS_DROP_VERIFY = 3;
+  EVS_DROP_DELETE = 4;
+}
+
+// EvsDropStatus.reason for a refused drop (11.13's start, resolve and verify rows).
+enum EvsDropRefusal {
+  EVS_DROP_REFUSAL_UNSPECIFIED = 0;
+  EVS_DROP_REFUSAL_LOCKED = 1;          // a repo lock stood at its start (§8.8)
+  EVS_DROP_REFUSAL_MISMATCH = 2;        // a list or lineage resolve found off the ref's history
+  EVS_DROP_REFUSAL_VERIFY = 3;          // verify found a live version naming a candidate
+}
+
+// EvsDropPreviewReply.state: a dry run's progress (11.13's preview row).
+enum EvsDropPreviewState {
+  EVS_DROP_PREVIEW_STATE_UNSPECIFIED = 0;
+  EVS_DROP_PREVIEW_QUEUED = 1;          // waiting for the repo's one dry run at a time
+  EVS_DROP_PREVIEW_RUNNING = 2;
+  EVS_DROP_PREVIEW_DONE = 3;            // its results stand
+  EVS_DROP_PREVIEW_FAILED = 4;          // it stopped short of its results, as a deleted repo stops it; file another
+}
+
+message EvsDropStatus {                 // one drop as GET .../drops lists it, from drops/<repo>/_ (11.13, 11.20)
+  bytes drop_id = 1;
+  bytes ref_id = 2;
+  bytes push_id = 3;                    // its DROP push
+  uint64 version = 4;                   // the ref version that push committed at
+  int64 not_before_ms = 5;
+  EvsDropState state = 6;
+  EvsDropPhase phase = 7;               // executing
+  uint64 progress = 8;                  // executing: the phase's items done
+  uint64 progress_total = 9;            // and its items in all, 0 while unknown
+  EvsDropRefusal reason = 10;           // refused
+  uint64 freed_bytes = 11;              // deleted so far, held bytes counted as deleted (owner decision 184)
+  bytes preview_id = 12;                // the dry run its DROP names, or empty
+}
+message EvsDropsReply {                 // GET .../drops (r)
+  repeated EvsDropStatus drops = 1;     // the drop table's drops, oldest first
+}
+message EvsDropPreviewRequest {         // POST .../drops/preview (admin): 202 with an EvsDropPreviewReply's preview_id
+  bytes ref_id = 1;
+  repeated EvsDropPath paths = 2;       // each lineage as a DROP would carry it: its through_version the version a
+                                        // drop now would keep, its count and listed_sha256 the client's
+}
+message EvsDropPreviewReply {           // the preview route's 202, preview_id alone; GET .../drops/preview/<preview_id>
+  bytes preview_id = 1;                 // 16 random bytes evs draws
+  EvsDropPreviewState state = 2;
+  uint64 progress = 3;                  // running: versions read
+  uint64 progress_total = 4;            // and the versions to read, 0 while unknown
+  repeated EvsDropPreviewPath paths = 5;  // done: per requested path, in request order
+  uint64 freed_bytes = 6;               // done: what only the listed versions name, which a drop would delete
+  uint64 shared_bytes = 7;              // candidates another version names, which stay
+  uint64 inline_bytes = 8;              // listed versions' inline records, unserved and kept until compaction
+  uint64 packed_bytes = 9;              // candidates in packs, withheld until compaction
+  uint64 young_bytes = 10;              // candidates under 25 h old, which a later round deletes
+  uint64 snapshot_version = 11;         // the request ref's version at the dry run's snapshot
+  int64 snapshot_ms = 12;               // evs's clock at that snapshot
+}
+message EvsDropPreviewPath {             // one requested lineage's resolved list
+  bool list_match = 1;                  // the client's count and listed_sha256 equal the resolved list's
+  uint32 count = 2;                     // the resolved list's versions
 }

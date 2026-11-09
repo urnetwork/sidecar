@@ -4,7 +4,38 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/device"
 )
+
+// One fake serves the root and the device role (TEST-M0-02): device/ declares the root's method set
+// again, since it may not import the root.
+var (
+	_ sidecar.Clock = (*FakeClock)(nil)
+	_ device.Clock  = (*FakeClock)(nil)
+	_ sidecar.Clock = (*offsetClock)(nil)
+	_ device.Clock  = (*offsetClock)(nil)
+)
+
+// A host's view of the shared clock goes into its ServiceHost and a Sidecar's settings as it is, so
+// FS-1's evs2 reads 150 ms ahead while its timers run on the shared clock.
+func TestAnOffsetViewIsAHostsClock(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	view := clock.WithOffset(150 * time.Millisecond)
+	host := &sidecar.ServiceHost{Clock: view}
+	if got := host.ClockOrReal().Now().Sub(clock.Now()); got != 150*time.Millisecond {
+		t.Fatalf("the host reads %s ahead", got)
+	}
+	settings := &sidecar.SidecarSettings{Clock: view}
+	fired := settings.ClockOrReal().After(time.Second)
+	clock.Advance(time.Second)
+	select {
+	case <-fired:
+	default:
+		t.Fatal("a timer on the view did not fire when the shared clock passed it")
+	}
+}
 
 func TestFakeClockStartsWhereItIsToldAndStays(t *testing.T) {
 	clock := NewFakeClock(DefaultClockStart())
@@ -137,6 +168,31 @@ func TestFakeClockAwaitTimersSeesAWaiterArrive(t *testing.T) {
 	}
 	clock.Advance(5 * time.Second)
 	<-woke
+}
+
+// WatchTimers reads what is set and arms its channel at once: with nothing set, the channel closes
+// when a waiter sets its timer, and the next read finds it.
+func TestFakeClockWatchTimersSeesATimerSet(t *testing.T) {
+	clock := NewFakeClock(DefaultClockStart())
+	pending, added := clock.WatchTimers()
+	if len(pending) != 0 {
+		t.Fatalf("pending %v on a fresh clock", pending)
+	}
+	woke := make(chan struct{})
+	go func() {
+		defer close(woke)
+		<-clock.After(5 * time.Second)
+	}()
+	<-added
+	pending, _ = clock.WatchTimers()
+	if len(pending) != 1 || !pending[0].Equal(DefaultClockStart().Add(5*time.Second)) {
+		t.Errorf("pending %v", pending)
+	}
+	clock.Advance(5 * time.Second)
+	<-woke
+	if pending, _ := clock.WatchTimers(); len(pending) != 0 {
+		t.Errorf("pending %v once fired", pending)
+	}
 }
 
 func TestFakeClockAwaitTimersEndsWithItsContext(t *testing.T) {

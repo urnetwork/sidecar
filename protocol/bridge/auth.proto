@@ -78,8 +78,9 @@ message RecoveryBindingRow {
   RecoveryRebindReason reason = 4;      // unspecified: a RecoveryBind, which carries none
 }
 
-// The fields §7.9 lists. §2.8's api-7 also shows identity keys, member or keyed tag ids and ephemeral
-// flags in these rows; they stay out until the two sections agree, and later numbers can add them.
+// The fields §7.9 lists, then the admission's identity key, member or keyed tag ids and ephemeral flag,
+// which api-7 shows and protos-bridge-row-fields #1 numbers, so a reader holding only rows knows what
+// each admission names.
 message SidecarRow {
   bytes  sidecar_id = 1;
   bytes  admission_sha256 = 2;
@@ -96,10 +97,15 @@ message SidecarRow {
   bytes  delegation_id = 13;
   uint64 live_since = 14;                // the config leaf rank (leaves)
   int64  not_after = 15;                 // ms since the epoch: a revoked row stays a tombstone until it
+  bytes  identity_public_key = 16;       // the SidecarAdmit's, or for the first device the Genesis's
+  string identity_alg = 17;              // ed25519 in v0
+  bytes  member_id = 18;                 // an untagged admission's member; or tag_ids
+  repeated bytes tag_ids = 19;           // a tagged admission's keyed tag ids, 16 B each
+  bool   ephemeral = 20;
 }
 
-// The fields §7.9 lists. §2.8's api-7 also shows the signing and reader public keys and max_admits in
-// these rows; they stay out until the two sections agree, and later numbers can add them.
+// The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
+// shows and protos-bridge-row-fields #2 numbers.
 message DelegationRow {
   bytes  delegation_id = 1;
   bytes  signer = 2;
@@ -109,6 +115,9 @@ message DelegationRow {
   uint64 key_dropped_at = 6;             // §10.5
   uint64 ended_at = 7;
   uint32 admissions = 8;                 // those it has made, counted in log order for its life
+  bytes  pubkey = 9;                     // the Ed25519 key that signs its SidecarAdmits
+  bytes  reader_xwing_public_key = 10;   // §10.5
+  uint32 max_admits = 11;
 }
 
 // A KeyRegister, with its KeyRevoke's position: what the presence row reads.
@@ -145,6 +154,8 @@ enum MemberRole {
 enum SidecarCapability {
   SIDECAR_CAPABILITY_NONE = 0;
   SIDECAR_CAPABILITY_READ_ONLY = 2;  // bit 1: page Workers (D-TEAM-24)
+  SIDECAR_CAPABILITY_INVITED = 4;    // bit 2: set by the admitting device once the invite's join MAC verifies
+                                     // (§7.5, §7.6); §8.5's invited clause (plan-ACL-invited-consent-evidence)
 }
 
 enum KeyAlg {
@@ -214,4 +225,27 @@ message Unsuspend {
   StatementHeader header = 1;
   bytes subject = 2;
   bytes suspend_id = 3;
+}
+
+// One client generation of a sidecar (§5.5, plan-CORE-binding-wire #1): the body SignedSidecarIdentityBinding's
+// two signatures cover. Each new client binds generation n+1 under the same sidecar_id and identity key, so a peer
+// resolves a client to its sidecar from signed bytes (§17.9), and §6's Hello checks it (D-PROTO-13).
+message SidecarIdentityBinding {
+  bytes network_id = 1;
+  bytes sidecar_id = 2;
+  bytes client_id = 3;
+  int64 generation = 4;                // 1 for a sidecar_id's first binding, then the newest plus one
+  bytes client_public_key = 5;         // the ClientKey, Ed25519, 32 B
+  bytes identity_public_key = 6;       // the identity key, Ed25519, 32 B
+  int64 issued_at_ms = 7;
+}
+
+// What Hello.binding and POST /sidecar/bind carry, and what §5.15's signatures column stores verbatim, since the
+// table's other columns cannot rebuild it. Each signature is Ed25519 over §6.9's signed bytes of body as received,
+// type SIGNED_SIDECAR_BINDING: purpose binding-client by the ClientKey, binding-identity by the identity key.
+// Verifiers check body as received, never a re-marshal.
+message SignedSidecarIdentityBinding {
+  bytes body = 1;                      // SidecarIdentityBinding
+  bytes client_signature = 2;
+  bytes identity_signature = 3;
 }

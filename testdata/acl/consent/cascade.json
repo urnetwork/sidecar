@@ -1,0 +1,17 @@
+{
+  "name": "§22.7: A's OwnerConfirm of an admin-admitted G, G's only consent, stops when A enters P, and of an already consented H stops nothing; a consented device outside P restores G",
+  "members": [{"id": "member", "role": "member"}, {"id": "admin", "role": "admin"}],
+  "genesis": {"sidecar": "admin-laptop", "member": "admin"},
+  "sidecars": [
+    {"id": "admin-laptop", "member": "admin", "admitted_at": 1},
+    {"id": "a", "member": "member", "admitted_at": 2, "signers": ["admin-laptop"], "invited": true},
+    {"id": "b", "member": "member", "admitted_at": 3, "signers": ["a"]},
+    {"id": "g", "member": "member", "admitted_at": 4, "signers": ["admin-laptop"], "owner_confirm": {"signer": "a", "at": 6}},
+    {"id": "h", "member": "member", "admitted_at": 5, "signers": ["b"], "owner_confirm": {"signer": "a", "at": 7}},
+    {"id": "restored", "member": "member", "admitted_at": 8, "signers": ["admin-laptop"], "owner_confirm": {"signer": "a", "at": 9}, "confirm": {"signer": "b", "at": 12}}
+  ],
+  "parked": ["a"],
+  "voids": [{"signer": "a", "from": 4}],
+  "consented": ["admin-laptop", "b", "h", "restored"],
+  "not_consented": ["a", "g"]
+}

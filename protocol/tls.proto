@@ -1,8 +1,9 @@
-// What tlsedge tells a listener about a visitor (§13.5). Rides sealed streams only, as StreamOpen.metadata, and a
-// listener trusts it only as §9.6's admission step 3 allows.
+// What tlsedge tells a listener about a visitor (§13.5), what certs tells a device about its certificates (§13.6) and
+// what a device signs for its key (§13.8). TlsEdgeOpen rides sealed streams only, as StreamOpen.metadata, and a
+// listener trusts it only as §9.6's admission step 3 allows. §13 gives TlsHint and TlsKeyAttestation no field list,
+// so theirs are plan-TLS-small-readings' first two, every field inside connect-4 or cert-1.
 //
-// §13.6 says what TlsHint (0x1502) announces, orders, issuance and revocation, but not its fields, so it has no
-// message yet: this file took §13's fenced block, and plan-TLS-small-readings reads the rest for TLS-M5-05.
+// No oneof: TlsHint rides PushHint.hint and TlsEdgeOpen StreamOpen.metadata (§6.11).
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -17,4 +18,25 @@ message TlsEdgeOpen {              // StreamOpen.metadata, edge -> listener (§6
   uint32 client_hello_byte_count = 5;
   bytes connection_id = 6;         // 16 random B; joins abuse reports for 24 h
   uint64 expire_time_millis = 7;   // the ticket's grant_expire_time_millis; streams end here
+}
+
+message TlsHint {                  // §6 0x1502, topic `tls`: the client refetches GET /tls/certs, so a hint is never
+                                   // authoritative
+  TlsHintKind kind = 1;
+  bytes cert_id = 2;               // 16 B, the row's id
+}
+enum TlsHintKind {
+  TLS_HINT_KIND_UNSPECIFIED = 0;
+  TLS_HINT_ORDER = 1;              // an order's state moved
+  TLS_HINT_ISSUED = 2;
+  TLS_HINT_REVOKED = 3;
+}
+
+message TlsKeyAttestation {        // the body of a Signed, SIGNED_TLS_KEY_ATTESTATION, purpose tls-key, by the
+                                   // device's identity key (§13.8): this key, for these names
+  bytes network_id = 1;
+  bytes sidecar_id = 2;
+  bytes spki_sha256 = 3;           // of the DER SubjectPublicKeyInfo
+  bytes identifier_set_sha256 = 4; // TlsIdentifierSetHash
+  uint64 issue_time_millis = 5;
 }

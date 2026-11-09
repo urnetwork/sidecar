@@ -32,7 +32,7 @@ func TestSidecarClientSettingsOverrideConnectsDefaults(t *testing.T) {
 	clientSettings.EncryptionSettings.Mode = connect.EncryptionModeOpportunistic
 	clientSettings.DefaultTransferOpts.ForceStream = true
 
-	applySidecarClientSettings(clientSettings)
+	ApplySidecarClientSettings(clientSettings)
 
 	if clientSettings.EncryptionSettings.Mode != connect.EncryptionModeRequired {
 		t.Errorf("encryption mode %v", clientSettings.EncryptionSettings.Mode)

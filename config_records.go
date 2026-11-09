@@ -117,45 +117,41 @@ func ParseConfigStatement(purpose string, signedType bridge.SignedType, body []b
 
 // The one definition of what names a Signed in the log, which StatementId, ProposalId and DelegationId share, so
 // changing what an id covers changes this function and nothing that calls it. expectedType narrows it to one type;
-// SIGNED_TYPE_NONE takes any config statement. signedBytes must be the Signed as received, never a re-marshal.
+// SIGNED_TYPE_NONE takes any config statement. signedBytes must be the Signed as received.
 //
-// An id is the SHA-256 of those bytes, as §7.9 and §10.5 write it, and that is an open exposure rather than a settled
-// choice. No signature covers a Signed's wrapper, so a server, which writes the log, can carry one signed statement as
-// a new Signed that every reader verifies and that hashes to a new id. §7.9's replay row then takes it as unseen, inside
-// the window `at` allows, for whatever its type rules do not close: a RepoGrant after its RepoRevoke, an
-// AuthorityProposal after its RecoveryVeto, under a proposal_id the veto does not name, an older SponsorSet or
-// IndexerSet over a newer one, or, if Delegations ride the log, a Delegation after its DelegationRevoke, with max_admits
-// counting from zero under a new delegation_id. Question protos-bridge-statement-id-wrapper asks whether ids move to
-// bridge.SignedBytesSha256, which every rewrapping of a statement shares. All it takes is here: signed's type and body,
-// and the purpose its type registers.
+// An id is bridge.SignedBytesSha256 of the statement's purpose, type and body as received, which its signature fixes
+// (protos-bridge-statement-id-wrapper, decided by the owner). No signature covers a Signed's wrapper, its signer_id,
+// key_id, countersignature or unknown fields, so a server could carry one statement as many Signeds that all verify;
+// they all share this id, and §7.9's replay row and every id that names a proposal or a Delegation see one statement.
+// A body re-encoded is another body, whose signature fails.
 func configSignedId(signedBytes []byte, expectedType bridge.SignedType) ([sha256.Size]byte, error) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(signedBytes, signed); err != nil {
 		return [sha256.Size]byte{}, fmt.Errorf("%w: %w", ErrConfigStatementBody, err)
 	}
 	signedType := bridge.SignedType(signed.GetType())
-	_, ok := configStatementTypes[signedType]
+	statementType, ok := configStatementTypes[signedType]
 	if !ok || (expectedType != bridge.SignedType_SIGNED_TYPE_NONE && signedType != expectedType) {
 		return [sha256.Size]byte{}, fmt.Errorf("%w: %d", ErrConfigStatementType, int32(signedType))
 	}
-	return sha256.Sum256(signedBytes), nil
+	return bridge.SignedBytesSha256(statementType.purpose, signedType, signed.GetBody()), nil
 }
 
 // A statement's id: §7.9's replay row refuses a repeat of one, and a retry of one answers with its entry. It is also a
-// SidecarRow's admission_sha256 for a SidecarAdmit on its own; question team-records-admission-sha256-under-proposal
-// asks what that is for one inside a proposal. configSignedId says what this covers and what that leaves open.
+// SidecarRow's admission_sha256 for a SidecarAdmit, which for one inside a proposal is the same hash over the
+// proposal's statement bytes (configAdmissionSha256). configSignedId says what this covers.
 func StatementId(signedBytes []byte) ([sha256.Size]byte, error) {
 	return configSignedId(signedBytes, bridge.SignedType_SIGNED_TYPE_NONE)
 }
 
-// A proposal's proposal_id = SHA-256(Signed AuthorityProposal) (§7.9), which cosigns and vetoes name. Refuses any
-// other statement. configSignedId says what this covers and what that leaves open.
+// A proposal's proposal_id (§7.9), which cosigns and vetoes name. Refuses any other statement. configSignedId says
+// what this covers.
 func ProposalId(signedBytes []byte) ([sha256.Size]byte, error) {
 	return configSignedId(signedBytes, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL)
 }
 
-// A Delegation's delegation_id = SHA-256(Signed Delegation) (§10.5's d), which rows, its revocation and DelegationWraps
-// name. Refuses any other statement. configSignedId says what this covers and what that leaves open.
+// A Delegation's delegation_id (§10.5's d), which rows, its revocation and DelegationWraps name. Refuses any other
+// statement. configSignedId says what this covers.
 func DelegationId(signedBytes []byte) ([sha256.Size]byte, error) {
 	return configSignedId(signedBytes, bridge.SignedType_SIGNED_DELEGATION)
 }

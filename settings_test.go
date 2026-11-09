@@ -28,10 +28,12 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 			name: "TokenRefreshSettings",
 			got:  *settings.TokenRefreshSettings,
 			want: SidecarTokenRefreshSettings{
-				RefreshWindowStart:  0.4,
-				RefreshWindowEnd:    0.5,
-				MinRefreshTimeout:   5 * time.Minute,
-				RefreshRetryTimeout: 15 * time.Minute,
+				RefreshWindowStart:         0.4,
+				RefreshWindowEnd:           0.5,
+				MinRefreshTimeout:          5 * time.Minute,
+				RefreshRetryTimeout:        15 * time.Minute,
+				NoExpirationRefreshTimeout: 7 * 24 * time.Hour,
+				ServiceTokenCacheTimeout:   10 * time.Minute,
 			},
 		},
 		// §5.9's pass; auto-lock is a reading
@@ -56,6 +58,9 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				SessionWriteRate: SidecarRate{Count: 20, Burst: settings.Mcp.SessionWriteRate.Burst, Interval: 1 * time.Second},
 				ResultByteCount:  256 * 1024,
 				CallTimeout:      30 * time.Second,
+				// §16.6's retention row
+				ApprovalFileRetention: 30 * 24 * time.Hour,
+				RunFileRetention:      30 * 24 * time.Hour,
 			},
 		},
 		// §16.7
@@ -67,6 +72,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				FileByteCount:          8 * 1024 * 1024,
 				RunHourByteCount:       256 * 1024 * 1024,
 				SpoolByteCount:         1024 * 1024 * 1024,
+				SpoolSegmentByteCount:  16 * 1024 * 1024,
+				SpoolCursorRecordCount: 64,
 				TranscriptTailInterval: 30 * time.Second,
 				HookExitTimeout:        300 * time.Millisecond,
 				RestorePointByteCount:  256 * 1024 * 1024,
@@ -155,36 +162,39 @@ func TestDefaultAppVersionIsTheReleaseVersion(t *testing.T) {
 func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 	settings := DefaultSidecarSettings().ProtocolSettings
 
-	// §6.6's desktop values, in its order
+	// §6.6's desktop values, in its order, with §6.7's minimum above half of GOMEMLIMIT after the
+	// minimum it stands in for
 	want := &SidecarProtocolSettings{
-		HelloCacheTimeout:               10 * time.Minute,
-		MarkedKeepaliveInterval:         60 * time.Second,
-		DefaultCallTimeout:              15 * time.Second,
-		PeerQueueMessageCount:           64,
-		ReassemblyMaxBodyByteCount:      256 * 1024,
-		ReassemblyPeerCount:             8,
-		ReassemblyPeerByteCount:         2 * 1024 * 1024,
-		ReassemblyProcessByteCount:      16 * 1024 * 1024,
-		ReassemblyIdleTimeout:           30 * time.Second,
-		IdempotencyTimeout:              10 * time.Minute,
-		IdempotencyPeerByteCount:        256 * 1024,
-		IdempotencyProcessByteCount:     4 * 1024 * 1024,
-		IdempotencyMaxResponseByteCount: 16 * 1024,
-		StreamInitialWindowByteCount:    16 * 1024,
-		StreamMinWindowByteCount:        256 * 1024,
-		StreamMaxWindowByteCount:        1024 * 1024,
-		StreamPeerCreditByteCount:       8 * 1024 * 1024,
-		StreamProcessCreditByteCount:    64 * 1024 * 1024,
-		StreamMaxPeerCreditFraction:     0.125,
-		PingTimeout:                     15 * time.Second,
-		PeerSilenceTimeout:              45 * time.Second,
-		HeadCheckInterval:               1 * time.Hour,
-		HeadCheckRoundPeerCount:         4,
-		HeadCheckTimeout:                10 * time.Second,
-		HeadCheckFetchTimeout:           10 * time.Minute,
-		HeadCheckUnwitnessedInterval:    10 * time.Minute,
-		WakeInterval:                    1 * time.Hour,
-		SyncRefetchInterval:             1 * time.Hour,
+		HelloCacheTimeout:                10 * time.Minute,
+		MarkedKeepaliveInterval:          60 * time.Second,
+		DefaultCallTimeout:               15 * time.Second,
+		CallSendRetryInterval:            250 * time.Millisecond,
+		PeerQueueMessageCount:            64,
+		ReassemblyMaxBodyByteCount:       256 * 1024,
+		ReassemblyPeerCount:              8,
+		ReassemblyPeerByteCount:          2 * 1024 * 1024,
+		ReassemblyProcessByteCount:       16 * 1024 * 1024,
+		ReassemblyIdleTimeout:            30 * time.Second,
+		IdempotencyTimeout:               10 * time.Minute,
+		IdempotencyPeerByteCount:         256 * 1024,
+		IdempotencyProcessByteCount:      4 * 1024 * 1024,
+		IdempotencyMaxResponseByteCount:  16 * 1024,
+		StreamInitialWindowByteCount:     16 * 1024,
+		StreamMinWindowByteCount:         256 * 1024,
+		StreamPressureMinWindowByteCount: 64 * 1024,
+		StreamMaxWindowByteCount:         1024 * 1024,
+		StreamPeerCreditByteCount:        8 * 1024 * 1024,
+		StreamProcessCreditByteCount:     64 * 1024 * 1024,
+		StreamMaxPeerCreditFraction:      0.125,
+		PingTimeout:                      15 * time.Second,
+		PeerSilenceTimeout:               45 * time.Second,
+		HeadCheckInterval:                1 * time.Hour,
+		HeadCheckRoundPeerCount:          4,
+		HeadCheckTimeout:                 10 * time.Second,
+		HeadCheckFetchTimeout:            10 * time.Minute,
+		HeadCheckUnwitnessedInterval:     10 * time.Minute,
+		WakeInterval:                     1 * time.Hour,
+		SyncRefetchInterval:              1 * time.Hour,
 	}
 	if *settings != *want {
 		t.Errorf("%+v, want %+v", *settings, *want)
@@ -216,6 +226,10 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	}
 	if settings.Mcp.SessionWriteRate.Burst != 20 {
 		t.Errorf("SessionWriteRate.Burst %d", settings.Mcp.SessionWriteRate.Burst)
+	}
+	// connect's MaxHttpResponseBodyBytes, the bound connect puts on an api answer
+	if settings.ApiResponseByteCount != 2*1024*1024 {
+		t.Errorf("ApiResponseByteCount %d", settings.ApiResponseByteCount)
 	}
 
 	// why those numbers hold together: a hook payload at its limit fits in one request with room for

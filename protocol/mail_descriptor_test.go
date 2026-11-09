@@ -3,8 +3,8 @@
 // retyped, added or dropped here fails until these tables say so, and nothing here is hand-built, so a field added
 // without a stated width stops the bound tests rather than slipping past them unset.
 //
-// The builders that enforce the bounds are MAIL-M7-09's and MAIL-M7-19's. testBoundMailIngress applies the same
-// order to show the order always ends within the bound, which is the format's half of the promise.
+// The builders that enforce the bounds are MAIL-M7-09's and MAIL-M7-19's. The ingress test applies the same order to
+// show it always ends within the bound, which is the format's half of the promise.
 
 package protocol
 
@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	// Where the registry finds this file.
 	testMailProtoPath = "protocol/mail.proto"
 
 	// §15.5's bounds.
@@ -43,6 +44,9 @@ const (
 	testMailAddressWidth = 64 + 1 + testMailHostWidth
 	// An IPv6 sender.
 	testMailIpWidth = 16
+	// MAIL-FORMAT.md's hold on ip_listings, ahead of any drop.
+	testMailListingCount = 16
+	testMailListingWidth = 12
 )
 
 // Every message of mail.proto, each field as number, optional repeated, type and name. §15.5's fenced messages come
@@ -70,7 +74,7 @@ var testMailMessageFields = map[string][]string{
 	},
 	"ArcSet":    {"1 string domain", "2 string selector", "3 bytes public_key"},
 	"ArcResult": {"1 ArcVerdict cv", "2 repeated ArcSet sets"},
-	"MailHint":  {"1 MailHintKind kind"},
+	"MailHint":  {"1 MailHintKind kind", "2 string host"},
 	"MailDeposit": {
 		"1 uint32 version", "2 MailIngress ingress", "3 MailAuthEvidence evidence", "4 bytes mail_from",
 		"5 bool require_tls", "6 repeated string recipients", "7 uint32 tls_version", "8 uint32 tls_suite",
@@ -96,12 +100,12 @@ var testMailMessageFields = map[string][]string{
 	"MailTlsBasis": {
 		"1 MailTlsRule rule", "2 string operator_id", "3 uint32 list_version", "4 bool strict_custom_mx",
 	},
-	"MailIndexSegment": {"1 uint32 version", "2 repeated IndexEntry entries"},
+	"MailIndexSegment": {"1 repeated IndexEntry entries"},
 	"MailFlagOp": {
-		"1 bytes message_id", "2 MailFlagKind kind", "3 string label", "4 bool set", "5 uint64 hlc", "6 bytes sidecar_id",
+		"1 bytes message_id", "2 MailFlagKind op", "3 bool set", "4 string label", "5 uint64 hlc", "7 bytes sidecar_id",
 	},
-	"MailFlagSegment": {"1 uint32 version", "2 repeated MailFlagOp ops"},
-	"MailReference":   {"1 bytes repo_id", "2 bytes message_id"},
+	"MailFlagSegment": {"1 repeated MailFlagOp ops"},
+	"MailGroupRef":    {"1 bytes repo_id", "2 bytes message_id"},
 	"VaultEntry": {
 		"1 bytes entry_id", "2 string address", "3 string title", "4 string username", "5 string password",
 		"6 repeated string password_history", "7 VaultTotp totp", "8 repeated string urls", "9 string notes",
@@ -111,18 +115,21 @@ var testMailMessageFields = map[string][]string{
 		"1 bytes secret", "2 VaultTotpAlgorithm algorithm", "3 uint32 digits", "4 uint32 period",
 	},
 	"VaultUsedAt":      {"1 string registrable_domain", "2 uint64 first", "3 uint64 last"},
-	"MailForward":      {"1 string address", "2 repeated string burners"},
+	"MailForward":      {"1 string address", "2 repeated string burners", "3 uint64 verified_time_ms"},
 	"MailReverseAlias": {"1 string original_sender", "2 string burner_address"},
-	"MailOutboxEntry": {
-		"1 uint32 version", "2 bytes effect_key", "3 string mail_from", "4 repeated string recipients", "5 bytes message",
-		"6 uint32 flags", "7 repeated string tl4_domains", "8 uint64 created", "9 uint64 approval_not_after",
+	"SmtpOutboxEntry": {
+		"1 bytes effect_key", "2 bytes message_sha256", "3 string sender", "4 repeated string recipients",
+		"5 uint32 flags", "6 repeated string tl4_domains", "7 uint64 create_time_ms", "8 uint64 approval_not_after",
 	},
 	"MailOutcome": {
-		"1 string domain", "2 MailSendMode mode", "3 MailOutcomeKind kind", "4 uint64 message_byte_count",
-		"5 uint64 cap_byte_count", "6 uint32 retry_after_ms", "7 uint32 reply_code", "8 uint32 tls_level",
+		"1 string domain", "2 MailSendMode mode", "3 uint64 byte_count", "4 uint64 cap_byte_count",
+		"5 MailOutcomeKind outcome", "6 uint32 reply_code", "7 uint32 retry_after_ms", "8 uint64 update_time_ms",
+		"9 uint32 tls_level",
 	},
 	"MailOutcomeRecord": {"1 repeated MailOutcome outcomes"},
-	"MailProverRecord":  {"1 uint64 smtp_data_proof_bytes", "2 uint64 data_bytes_per_second"},
+	"MailProverRecord": {
+		"1 uint64 smtp_data_proof_bytes", "2 uint64 data_bytes_per_s", "3 uint64 measure_time_ms",
+	},
 }
 
 // The widest value of each field a bound test fills, keyed message.field: a string or bytes field's width in bytes, a
@@ -209,7 +216,7 @@ var testMailIndexEntryWidths = map[string]int{
 // A MailFlagOp at MAIL-FORMAT.md's caps.
 var testMailFlagOpWidths = map[string]int{
 	"MailFlagOp.message_id": testIdSize,
-	"MailFlagOp.kind":       0,
+	"MailFlagOp.op":         0,
 	"MailFlagOp.label":      64,
 	"MailFlagOp.set":        0,
 	"MailFlagOp.hlc":        0,
@@ -264,17 +271,6 @@ func testFillWidest(t *testing.T, message protoreflect.Message, fieldNameWidths 
 		default:
 			message.Set(field, widest(field, width))
 		}
-	}
-}
-
-// MAIL-FORMAT.md's drop order: listings from the end, one at a time, then ptr_name.
-func testBoundMailIngress(t *testing.T, ingress *MailIngress) {
-	t.Helper()
-	for testSize(t, ingress) > testMailIngressBound && len(ingress.IpListings) > 0 {
-		ingress.IpListings = ingress.IpListings[:len(ingress.IpListings)-1]
-	}
-	if testSize(t, ingress) > testMailIngressBound {
-		ingress.PtrName = ""
 	}
 }
 
@@ -339,14 +335,13 @@ func TestMailFieldsKeepTheirNumbers(t *testing.T) {
 	}
 }
 
-// §15.5: SNI-only routing took destination_ip, route and burner_id out, and no number of theirs comes back. Nothing
-// else in the file reserves one.
-func TestMailIngressKeepsItsReservations(t *testing.T) {
+// §15.5: SNI-only routing took destination_ip, route and burner_id out, and no number of theirs comes back. MailFlagOp
+// keeps hlc_count's, since its one clock field holds the two plan-MAIL-format-bytes#5 wrote. Nothing else in the file
+// reserves one.
+func TestMailReservationsStay(t *testing.T) {
+	nameReservedNumbers := map[string][]int32{"MailIngress": {4, 6, 7}, "MailFlagOp": {6}}
 	for name := range testMailMessageFields {
-		want := []int32{}
-		if name == "MailIngress" {
-			want = []int32{4, 6, 7}
-		}
+		want := append([]int32{}, nameReservedNumbers[name]...)
 		if got := testSorted(testReservedNumbers(testMessage(t, name).ReservedRanges())); !slices.Equal(got, want) {
 			t.Errorf("%s reserves %v, want %v", name, got, want)
 		}
@@ -474,50 +469,101 @@ func TestMailEnumsStartUnspecified(t *testing.T) {
 	}
 }
 
-// §6.11's numbers for the two messages this file gives bodies to. A hint's body rides PushHint.hint, so its kind is the
-// whole of it (§2.8: kinds, never content).
+// §6.11's numbers for the two messages this file gives bodies to. A hint's body rides PushHint.hint, so it holds a kind
+// and a host mx-3 already names (§2.8: ids and kinds, never content), and TestHintsFitPushHint holds it to §6.8's
+// bound.
 func TestMailMessageTypesKeepTheirNumbers(t *testing.T) {
 	if MessageType_MAIL_INGRESS != 0x1701 || MessageType_MAIL_HINT != 0x1702 {
 		t.Errorf("MAIL_INGRESS is %#x and MAIL_HINT %#x", int32(MessageType_MAIL_INGRESS), int32(MessageType_MAIL_HINT))
 	}
-	if size := testSize(t, testFilled((&MailHint{}).ProtoReflect().Type())); size > testHintBound {
-		t.Errorf("a hint takes %d B, over %d", size, testHintBound)
+}
+
+// MAIL-FORMAT.md's order, as the router's builder applies it: listings held to the first 16 of at most 12 B, then,
+// past 1,024 B, ptr_name, then listings from the end, one at a time. Nothing else is ever dropped.
+func testBuildMailIngress(t *testing.T, ingress *MailIngress) {
+	t.Helper()
+	held := []string{}
+	for _, listing := range ingress.IpListings {
+		if len(listing) <= testMailListingWidth && len(held) < testMailListingCount {
+			held = append(held, listing)
+		}
+	}
+	ingress.IpListings = held
+	if testSize(t, ingress) > testMailIngressBound {
+		ingress.PtrName = ""
+	}
+	for testSize(t, ingress) > testMailIngressBound && len(ingress.IpListings) > 0 {
+		ingress.IpListings = ingress.IpListings[:len(ingress.IpListings)-1]
 	}
 }
 
-// §15.5: every field at its widest, listings far past what the bound holds, built within 1,024 B by the drop order
-// alone, with nothing dropped that the order did not need to.
+// §15.5: every identifier at its widest and listings far past the hold, built within 1,024 B by the order alone. The
+// 16 held listings and ptr_name do not fit together, so ptr_name goes and every held listing stays.
 func TestMailIngressAtItsWidestBuildsWithinItsBound(t *testing.T) {
 	ingress := &MailIngress{}
 	testFillWidest(t, ingress.ProtoReflect(), testMailIngressWidths)
-	for range 64 {
-		ingress.IpListings = append(ingress.IpListings, strings.Repeat("x", 32))
+	for i := range 64 {
+		// Every other listing passes the width, so the hold leaves it out wherever it falls.
+		width := testMailListingWidth + i%2
+		ingress.IpListings = append(ingress.IpListings, strings.Repeat("x", width))
 	}
-	testBoundMailIngress(t, ingress)
+	testBuildMailIngress(t, ingress)
 	if size := testSize(t, ingress); size > testMailIngressBound {
 		t.Errorf("a built ingress takes %d B, over %d", size, testMailIngressBound)
 	}
-	if len(ingress.IpListings) == 0 || len(ingress.IpListings) == 64 {
-		t.Errorf("%d listings survived, want some of the 64", len(ingress.IpListings))
+	if len(ingress.IpListings) != testMailListingCount {
+		t.Errorf("%d listings survived, want the %d the hold keeps", len(ingress.IpListings), testMailListingCount)
 	}
-	if len(ingress.PtrName) != testMailHostWidth {
-		t.Errorf("ptr_name was dropped with listings left to drop")
+	for _, listing := range ingress.IpListings {
+		if len(listing) > testMailListingWidth {
+			t.Errorf("a %d B listing passed the hold", len(listing))
+		}
 	}
-	// Whole entries go, and the next one would not have fit.
-	before := len(ingress.IpListings)
-	ingress.IpListings = append(ingress.IpListings, strings.Repeat("x", 32))
-	if size := testSize(t, ingress); size <= testMailIngressBound {
-		t.Errorf("listing %d was dropped though %d B fit", before+1, size)
+	if ingress.PtrName != "" {
+		t.Error("ptr_name stayed, though it and the held listings pass the bound together")
+	}
+	if len(ingress.Sni) != testMailHostWidth || len(ingress.EhloName) != testMailEhloWidth ||
+		len(ingress.SenderIp) != testMailIpWidth || ingress.ReceiveTimeMillis == 0 {
+		t.Error("the order dropped a field it never drops")
 	}
 }
 
-// The order always ends: at every bound the message states, no listing is needed for it to fit, so ptr_name's step is
-// reached only by a field past its own bound. MAIL-FORMAT.md quotes this size.
-func TestMailIngressFitsWithNoListingsAtEveryBound(t *testing.T) {
+// The hold is enough for an ordinary sender, so ptr_name stays.
+func TestMailIngressKeepsPtrNameWhenTheHeldListingsFit(t *testing.T) {
+	ingress := &MailIngress{
+		Version:           1,
+		SenderIp:          testBytes(testMailIpWidth),
+		SenderPort:        49152,
+		Sni:               "mx.acme.root.example",
+		EhloName:          "mail.sender.example",
+		PtrName:           "mail.sender.example",
+		ReceiveTimeMillis: math.MaxUint64,
+	}
+	for range 64 {
+		ingress.IpListings = append(ingress.IpListings, strings.Repeat("x", testMailListingWidth))
+	}
+	testBuildMailIngress(t, ingress)
+	if ingress.PtrName == "" || len(ingress.IpListings) != testMailListingCount {
+		t.Errorf("ptr_name %q and %d listings, want it kept with %d", ingress.PtrName, len(ingress.IpListings),
+			testMailListingCount)
+	}
+}
+
+// The order always ends by its second step: at every bound the message states, no listings take 811 B and the held
+// listings without ptr_name 779 B, so listings go from the end only when a field is past its own bound.
+// MAIL-FORMAT.md quotes both sizes.
+func TestMailIngressFitsAtEveryBound(t *testing.T) {
 	ingress := &MailIngress{}
 	testFillWidest(t, ingress.ProtoReflect(), testMailIngressWidths)
 	if size := testSize(t, ingress); size != 811 {
 		t.Errorf("an ingress with no listings takes %d B, and MAIL-FORMAT.md says 811", size)
+	}
+	ingress.PtrName = ""
+	for range testMailListingCount {
+		ingress.IpListings = append(ingress.IpListings, strings.Repeat("x", testMailListingWidth))
+	}
+	if size := testSize(t, ingress); size != 779 {
+		t.Errorf("an ingress with the held listings and no ptr_name takes %d B, and MAIL-FORMAT.md says 779", size)
 	}
 }
 
@@ -542,7 +588,7 @@ func TestIndexEntryFitsItsBound(t *testing.T) {
 
 // §15.7 bounds f/ by count alone, which holds only if a segment of the widest ops stays under what i/ takes in bytes.
 func TestFlagSegmentFitsAtItsCount(t *testing.T) {
-	segment := &MailFlagSegment{Version: math.MaxUint32}
+	segment := &MailFlagSegment{}
 	for range testMailSegmentCount {
 		op := &MailFlagOp{}
 		testFillWidest(t, op.ProtoReflect(), testMailFlagOpWidths)
@@ -553,27 +599,30 @@ func TestFlagSegmentFitsAtItsCount(t *testing.T) {
 	}
 }
 
-// MAIL-FORMAT.md's append rule: the bytes of a segment are the bytes of it before, then one whole record, so a
-// writer appends without re-encoding and §11.7's diff is that record.
+// MAIL-FORMAT.md's append rule: a segment is its records and nothing else, so its bytes are the bytes of it before,
+// then one whole record. A writer appends without re-encoding, §11.7's delta against the last version adds only that
+// record, and a new segment is its first record alone.
 func TestMailSegmentsGrowByAppending(t *testing.T) {
 	entry := testFilled((&IndexEntry{}).ProtoReflect().Type()).(*IndexEntry)
-	index := &MailIndexSegment{Version: 1}
-	indexBefore := testEncode(t, index)
-	index.Entries = append(index.Entries, entry)
-	indexAfter := testEncode(t, index)
-	indexRecord := protowire.AppendBytes(protowire.AppendTag(nil, 2, protowire.BytesType), testEncode(t, entry))
-	if !bytes.Equal(indexAfter, append(indexBefore, indexRecord...)) {
-		t.Error("an i/ segment did not grow by one record")
+	indexRecord := protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), testEncode(t, entry))
+	index := &MailIndexSegment{}
+	for count := 1; count <= 2; count++ {
+		indexBefore := testEncode(t, index)
+		index.Entries = append(index.Entries, entry)
+		if !bytes.Equal(testEncode(t, index), append(indexBefore, indexRecord...)) {
+			t.Errorf("an i/ segment did not grow by one record to %d", count)
+		}
 	}
 
 	op := testFilled((&MailFlagOp{}).ProtoReflect().Type()).(*MailFlagOp)
-	flags := &MailFlagSegment{Version: 1}
-	flagsBefore := testEncode(t, flags)
-	flags.Ops = append(flags.Ops, op)
-	flagsAfter := testEncode(t, flags)
-	flagsRecord := protowire.AppendBytes(protowire.AppendTag(nil, 2, protowire.BytesType), testEncode(t, op))
-	if !bytes.Equal(flagsAfter, append(flagsBefore, flagsRecord...)) {
-		t.Error("an f/ segment did not grow by one record")
+	flagsRecord := protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), testEncode(t, op))
+	flags := &MailFlagSegment{}
+	for count := 1; count <= 2; count++ {
+		flagsBefore := testEncode(t, flags)
+		flags.Ops = append(flags.Ops, op)
+		if !bytes.Equal(testEncode(t, flags), append(flagsBefore, flagsRecord...)) {
+			t.Errorf("an f/ segment did not grow by one record to %d", count)
+		}
 	}
 }
 

@@ -1,0 +1,16 @@
+{
+  "name": "an ephemeral or parked device is never consented; a revoked one is not now, while what it signed before stands",
+  "members": [{"id": "owner", "role": "owner"}],
+  "genesis": {"sidecar": "laptop", "member": "owner"},
+  "sidecars": [
+    {"id": "laptop", "member": "owner", "admitted_at": 1},
+    {"id": "burner", "member": "owner", "admitted_at": 2, "signers": ["laptop"], "ephemeral": true},
+    {"id": "parked", "member": "owner", "admitted_at": 3, "signers": ["laptop"]},
+    {"id": "lost", "member": "owner", "admitted_at": 4, "signers": ["laptop"], "revoked_at": 9},
+    {"id": "by-lost", "member": "owner", "admitted_at": 5, "signers": ["lost"]},
+    {"id": "by-burner", "member": "owner", "admitted_at": 6, "signers": ["burner"]}
+  ],
+  "parked": ["parked"],
+  "consented": ["laptop", "by-lost"],
+  "not_consented": ["burner", "parked", "lost", "by-burner"]
+}

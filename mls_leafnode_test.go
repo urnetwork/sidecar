@@ -85,7 +85,7 @@ func TestMlsLeafNodeRefusesAnUnknownSource(t *testing.T) {
 
 // Whatever cannot be read must not be skipped: its length is unknown, and it is outside §10.4.
 func TestMlsCredentialRefusesEveryOtherType(t *testing.T) {
-	for _, credentialType := range []uint16{0, 2, mlsCredentialTypeUrSidecar, 0x0a0a, 0xffff} {
+	for _, credentialType := range []uint16{0, 2, 0xf553, 0x0a0a, 0xffff} {
 		encoder := &mlsEncoder{}
 		encoder.writeUint16(credentialType)
 		encoder.writeVector([]byte("body"))

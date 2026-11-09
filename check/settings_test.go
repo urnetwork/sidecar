@@ -80,6 +80,11 @@ type checkSettings struct {
 	sidecarHttpGoalSlipRecorded bool
 	// -iosversion in sdk/build/Makefile, which gomobile turns into -miphoneos-version-min
 	iosMinimumVersion string
+
+	// §22.4's clock rule's exceptions (clock_rule_test.go), by file and time function, as "id.go
+	// time.Now", each with the day it was granted and why. An exception that matches nothing fails, so
+	// the list only shrinks.
+	wallClockExceptions map[string]wallClockException
 }
 
 // What a module's license file says beyond its licenses' own words, read by a person.
@@ -180,6 +185,34 @@ func defaultCheckSettings() *checkSettings {
 		sidecarHttpMissByteCount:      74965628,
 		sidecarHttpGoalSlipRecorded:   false,
 		iosMinimumVersion:             "16.0",
+		wallClockExceptions: map[string]wallClockException{
+			"id.go time.Now": {
+				since: "2026-11-08",
+				why: "a ULID carries its minter's clock in its high bits by design (CODESTYLE's identifiers), so ids " +
+					"order by real creation time and never by a test's clock",
+			},
+			"clock.go time.Now":          {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock.go time.After":        {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"clock.go time.AfterFunc":    {since: "2026-11-08", why: "RealClock is the root's real time"},
+			"device/clock.go time.Now":   {since: "2026-11-08", why: "device.RealClock is the device role's real time"},
+			"device/clock.go time.After": {since: "2026-11-08", why: "device.RealClock is the device role's real time"},
+			"device/clock.go time.AfterFunc": {
+				since: "2026-11-08",
+				why:   "device.RealClock is the device role's real time",
+			},
+			"api_client.go time.Now": {
+				since: "2026-11-08",
+				why:   "SidecarApi's now defaults to real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+			"keys_instance.go time.Now": {
+				since: "2026-11-08",
+				why:   "the instance lock reads real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+			"keys_instance.go time.After": {
+				since: "2026-11-08",
+				why:   "the instance lock waits in real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+		},
 	}
 }
 

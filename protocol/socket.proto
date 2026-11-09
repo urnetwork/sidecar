@@ -1,6 +1,7 @@
-// §9's protobuf wire: the hint that revokes or drains a listener (§9.5), and the ticket a Find signs and a
-// dialer presents (§9.6). Numbers are §9's as written. Registrations and Find are JSON on §9's routes, so
-// they are not here, and neither is a registration's Claim, which §9.5 writes as a tuple.
+// §9's protobuf wire: the hint that revokes or drains a listener (§9.5), the claim a listener signs and a
+// dialer checks (§9.5), and the ticket a Find signs and a dialer presents (§9.6). Numbers are §9's as
+// written, and the claim's follow §9.5's tuple, which gives none. Registrations and Find are JSON on §9's
+// routes, so they are not here.
 //
 // No oneof: SocketHint rides PushHint.hint and SignedSocketTicket StreamOpen.ticket (§6.11).
 
@@ -19,6 +20,16 @@ enum SocketHintKind {
   SOCKET_HINT_KIND_UNSPECIFIED = 0;
   SOCKET_HINT_REVOKED = 1;       // a grant was revoked or §21 suspended the name
   SOCKET_HINT_DRAIN = 2;         // forced drain
+}
+
+message SocketRegistrationClaim { // §9.5's Claim: the body of SocketRegistration.claim, a §6 Signed by the
+                                 // identity key, purpose socket-registration; Find returns it with tickets
+  bytes network_id = 1;
+  string name = 2;               // tls/, smtp/ and ur/ names only
+  bytes name_token = 3;          // other names: the token path (9.4)
+  bytes listen_id = 4;           // 16 B
+  string protocol = 5;
+  string app_mode = 6;
 }
 
 message SocketTicket {           // signed: <= 370 B with a 112-byte name or an 8-segment token path

@@ -31,8 +31,11 @@ var (
 	_ sidecar.Tasks               = (*FakeTasks)(nil)
 	_ sidecar.Redis               = (*FakeRedis)(nil)
 	_ sidecar.BlobStore           = (*FakeBlobs)(nil)
+	_ sidecar.ClockCheck          = (*FakeClockCheck)(nil)
 	_ sidecar.Push                = (*FakePush)(nil)
 	_ sidecar.ServiceClientSource = (*FakeServiceClientSource)(nil)
+	_ sidecar.ServiceGates        = (*FakeServiceGates)(nil)
+	_ sidecar.Clock               = (*FakeClock)(nil)
 )
 
 func TestFakeHostFillsEveryInterface(t *testing.T) {
@@ -40,7 +43,8 @@ func TestFakeHostFillsEveryInterface(t *testing.T) {
 	serviceHost := host.ServiceHost()
 	if serviceHost.Authenticator == nil || serviceHost.Quota == nil || serviceHost.Metrics == nil ||
 		serviceHost.Tasks == nil || serviceHost.Redis == nil || serviceHost.Blobs == nil ||
-		serviceHost.Push == nil || serviceHost.ServiceClient == nil {
+		serviceHost.ClockCheck == nil || serviceHost.Push == nil || serviceHost.ServiceClient == nil ||
+		serviceHost.Clock == nil || serviceHost.Gates == nil {
 		t.Errorf("host %+v", serviceHost)
 	}
 }
@@ -168,11 +172,12 @@ func TestAZeroQuotaIdIsAnError(t *testing.T) {
 	ctx := t.Context()
 	networkId := connect.NewId()
 	zeroId := connect.Id{}
-	host.Quota.SetRateLimit(networkId, "a", 10)
+	host.Quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"evs_drops_per_day": 10}})
+	drop := map[string]int64{sidecar.QuotaRateKeyDrop: 1}
 	if _, err := host.Quota.Limits(ctx, zeroId); err == nil {
 		t.Error("Limits took a zero network")
 	}
-	if _, err := host.Quota.CountRate(ctx, zeroId, map[string]int64{"a": 1}, connect.NewId()); err == nil {
+	if _, err := host.Quota.CountRate(ctx, zeroId, drop, connect.NewId()); err == nil {
 		t.Error("CountRate took a zero network")
 	}
 	if _, _, err := host.Quota.Lease(ctx, zeroId, "tls"); err == nil {
@@ -180,16 +185,16 @@ func TestAZeroQuotaIdIsAnError(t *testing.T) {
 	}
 	// two debits sharing a zero id would read as one retried, the second counting nothing
 	for range 2 {
-		if _, err := host.Quota.CountRate(ctx, networkId, map[string]int64{"a": 1}, zeroId); err == nil {
+		if _, err := host.Quota.CountRate(ctx, networkId, drop, zeroId); err == nil {
 			t.Error("CountRate took a zero debit")
 		}
 	}
 	event := &sidecar.UsageEvent{NetworkId: networkId, Meter: "tls", TransferByteCount: 7}
-	if err := host.Quota.ReportUsage(ctx, &sidecar.UsageBatch{Events: []*sidecar.UsageEvent{event}}); err == nil {
+	if err := host.Quota.ReportUsage(ctx, &sidecar.UsageBatch{Producer: "tlsedge", Events: []*sidecar.UsageEvent{event}}); err == nil {
 		t.Error("ReportUsage took a zero batch")
 	}
 	badEvent := &sidecar.UsageEvent{Meter: "tls", TransferByteCount: 7}
-	if err := host.Quota.ReportUsage(ctx, &sidecar.UsageBatch{BatchId: connect.NewId(), Events: []*sidecar.UsageEvent{event, badEvent}}); err == nil {
+	if err := host.Quota.ReportUsage(ctx, &sidecar.UsageBatch{BatchId: connect.NewId(), Producer: "tlsedge", Events: []*sidecar.UsageEvent{event, badEvent}}); err == nil {
 		t.Error("ReportUsage took an event for a zero network")
 	}
 	if got := host.Quota.TransferUsed(networkId, "tls"); got != 0 {
@@ -199,7 +204,7 @@ func TestAZeroQuotaIdIsAnError(t *testing.T) {
 		t.Errorf("batches %d", len(host.Quota.Batches()))
 	}
 	// the cap is untouched, so all of it is still there to count
-	refusal, err := host.Quota.CountRate(ctx, networkId, map[string]int64{"a": 10}, connect.NewId())
+	refusal, err := host.Quota.CountRate(ctx, networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 10}, connect.NewId())
 	if err != nil || refusal != nil {
 		t.Errorf("refusal %+v, %v", refusal, err)
 	}
@@ -228,18 +233,18 @@ func TestQuotaLimitsReadZeroForWhatWasNotGiven(t *testing.T) {
 func TestCountRateIsAllOrNone(t *testing.T) {
 	host, _, _ := newHostFixture(t)
 	networkId := connect.NewId()
-	host.Quota.SetRateLimit(networkId, "a", 10)
-	host.Quota.SetRateLimit(networkId, "b", 1)
+	repoId := connect.NewId()
+	host.Quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"evs_drops_per_day": 10, "evs_read_receipts_per_repo_day": 1}})
 
-	refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{"a": 5, "b": 2}, connect.NewId())
+	refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 5, sidecar.QuotaRateKeyReadReceipt(repoId): 2}, connect.NewId())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refusal == nil || refusal.LimitKey != "b" {
+	if refusal == nil || refusal.LimitKey != "evs_read_receipts_per_repo_day" {
 		t.Fatalf("refusal %+v", refusal)
 	}
-	// nothing of that debit counted, so a's whole allowance still stands
-	refusal, err = host.Quota.CountRate(t.Context(), networkId, map[string]int64{"a": 10}, connect.NewId())
+	// nothing of that debit counted, so the day's whole allowance of drops still stands
+	refusal, err = host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 10}, connect.NewId())
 	if err != nil || refusal != nil {
 		t.Errorf("refusal %+v, %v", refusal, err)
 	}
@@ -249,41 +254,55 @@ func TestCountRateIsAllOrNone(t *testing.T) {
 func TestCountRateCountsOncePerDebit(t *testing.T) {
 	host, _, faults := newHostFixture(t)
 	networkId := connect.NewId()
-	host.Quota.SetRateLimit(networkId, "a", 10)
+	host.Quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"evs_drops_per_day": 10}})
 	debitId := connect.NewId()
 	if _, err := faults.Add(&FaultPlan{Op: FaultOpHost, KeyPrefix: "quota.CountRate", Result: ApplyThenDrop}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{"a": 10}, debitId); err == nil {
+	if _, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 10}, debitId); err == nil {
 		t.Fatal("the plan did not fire")
 	}
-	refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{"a": 10}, debitId)
+	refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 10}, debitId)
 	if err != nil || refusal != nil {
 		t.Errorf("the retry: %+v, %v", refusal, err)
 	}
-	refusal, err = host.Quota.CountRate(t.Context(), networkId, map[string]int64{"a": 1}, connect.NewId())
+	refusal, err = host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 1}, connect.NewId())
 	if err != nil || refusal == nil {
 		t.Errorf("a new debit past the limit: %+v, %v", refusal, err)
 	}
 }
 
+// What a network was not given reads 0, not included, so a rate with no limit refuses.
 func TestAnUncappedRateIsRefused(t *testing.T) {
 	host, _, _ := newHostFixture(t)
-	refusal, err := host.Quota.CountRate(t.Context(), connect.NewId(), map[string]int64{"a": 1}, connect.NewId())
+	refusal, err := host.Quota.CountRate(t.Context(), connect.NewId(), map[string]int64{sidecar.QuotaRateKeyDrop: 1}, connect.NewId())
 	if err != nil || refusal == nil {
 		t.Errorf("refusal %+v, %v", refusal, err)
 	}
 }
 
-func TestResetRatesStartsAWindow(t *testing.T) {
+// A key outside host_quota_keys.go's grammar is the caller's bug, never a counter of its own.
+func TestAnUnknownRateKeyIsAnError(t *testing.T) {
 	host, _, _ := newHostFixture(t)
+	if refusal, err := host.Quota.CountRate(t.Context(), connect.NewId(), map[string]int64{"a": 1}, connect.NewId()); err == nil {
+		t.Errorf("refusal %+v and no error", refusal)
+	}
+}
+
+// A window turns on the injected clock: the day's drops come back at 00:00 UTC.
+func TestRateWindowsTurnOnTheClock(t *testing.T) {
+	host, clock, _ := newHostFixture(t)
 	networkId := connect.NewId()
-	host.Quota.SetRateLimit(networkId, "a", 1)
+	host.Quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"evs_drops_per_day": 1}})
 	for range 2 {
-		if refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{"a": 1}, connect.NewId()); err != nil || refusal != nil {
+		if refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 1}, connect.NewId()); err != nil || refusal != nil {
 			t.Errorf("refusal %+v, %v", refusal, err)
 		}
-		host.Quota.ResetRates(networkId)
+		refusal, err := host.Quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyDrop: 1}, connect.NewId())
+		if err != nil || refusal == nil {
+			t.Fatalf("past the day's drop: %+v, %v", refusal, err)
+		}
+		clock.Advance(time.Duration(refusal.RetryAfterMs) * time.Millisecond)
 	}
 }
 
@@ -313,7 +332,7 @@ func TestLeaseSpendsAndReturnsTheRest(t *testing.T) {
 func TestLeaseDrawsAgainPastItsFractionAndRefusesPastTheBalance(t *testing.T) {
 	clock := NewFakeClock(DefaultClockStart())
 	settings := DefaultFakeHostSettings()
-	settings.Quota.LeaseDrawByteCount = 100
+	settings.Quota.CommunityLeaseDrawByteCount = 100
 	host := NewFakeHost(t.Context(), clock, nil, nil, settings)
 	t.Cleanup(host.Redis.Close)
 	networkId := connect.NewId()
@@ -854,7 +873,7 @@ func TestCrashAtAHostCallDiesThere(t *testing.T) {
 		t.Fatal(err)
 	}
 	networkId := connect.NewId()
-	batch := &sidecar.UsageBatch{BatchId: connect.NewId(), Events: []*sidecar.UsageEvent{{NetworkId: networkId, Meter: "tls", TransferByteCount: 1}}}
+	batch := &sidecar.UsageBatch{BatchId: connect.NewId(), Producer: "tlsedge", Events: []*sidecar.UsageEvent{{NetworkId: networkId, Meter: "tls", TransferByteCount: 1}}}
 	actor := table.Actor(t.Context(), "evs1")
 	returned := false
 	run := driver.Start(actor, func() error {

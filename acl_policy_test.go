@@ -325,7 +325,8 @@ func TestParseAclPolicyEveryField(t *testing.T) {
 	if want := time.Date(2026, time.December, 31, 0, 0, 0, 500_000_000, time.UTC); !publish.Expires.Equal(want) || publish.Expires.Location() != time.UTC {
 		t.Errorf("expires %s", publish.Expires)
 	}
-	if got := policy.Grants[5]; got.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS || got.AppMode != protocol.AclAppMode_ACL_APP_MODE_HTTP {
+	// members and http written out read as the zero values a grant leaving them out gets
+	if got := policy.Grants[5]; got.Audience != protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED || got.AppMode != protocol.AclAppMode_ACL_APP_MODE_UNSPECIFIED {
 		t.Errorf("audience %d, app mode %d", got.Audience, got.AppMode)
 	}
 	if got := policy.Grants[6].Audience; got != protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE {
@@ -416,6 +417,35 @@ func TestParseAclPolicyDefaults(t *testing.T) {
 	}
 }
 
+// A default written out reads as the same value as one left out, so writing it changes nothing a
+// compile could see. A rule's own evidence is the one exception, kept apart on purpose: harness counts
+// in a tainted run only where the rule itself names it (owner decision 142).
+func TestParseAclPolicyWrittenDefaultsReadAsLeftOut(t *testing.T) {
+	grant := `"src": ["tag:a"], "dst": ["dns:blog"], "allow": ["publish"]`
+	request := `"src": ["tag:a"], "dst": ["sock:db"], "allow": ["dial"]`
+	cases := []struct {
+		written string
+		leftOut string
+	}{
+		{written: `{"grants": [{` + grant + `, "audience": "members"}]}`, leftOut: `{"grants": [{` + grant + `}]}`},
+		{written: `{"grants": [{` + grant + `, "app_mode": "http"}]}`, leftOut: `{"grants": [{` + grant + `}]}`},
+		{written: `{"requests": [{` + request + `, "approver": ["autogroup:self"]}]}`, leftOut: `{"requests": [{` + request + `}]}`},
+		{written: `{"requests": [{` + request + `, "approvers": 1}]}`, leftOut: `{"requests": [{` + request + `}]}`},
+		{written: `{"requests": [{` + request + `, "maxExpiry": "30d"}]}`, leftOut: `{"requests": [{` + request + `}]}`},
+		{written: `{"expiresDefault": "1h"}`, leftOut: `{}`},
+		{written: `{"evidenceDefault": ["device", "presence", "harness"]}`, leftOut: `{}`},
+	}
+	for _, c := range cases {
+		if written, leftOut := testParseAclPolicy(t, []byte(c.written)), testParseAclPolicy(t, []byte(c.leftOut)); !reflect.DeepEqual(written, leftOut) {
+			t.Errorf("%s reads as %+v, and %s as %+v", c.written, written, c.leftOut, leftOut)
+		}
+	}
+	named := testParseAclPolicy(t, []byte(`{"requests": [{`+request+`, "evidence": ["device", "presence", "harness"]}]}`))
+	if leftOut := testParseAclPolicy(t, []byte(`{"requests": [{`+request+`}]}`)); reflect.DeepEqual(named, leftOut) {
+		t.Error("a rule naming every channel reads as one naming none")
+	}
+}
+
 // One refusal per row: the document, then the field and reason it must be refused for, so a case can't
 // pass on some nearer fault than the one it plants.
 var testAclPolicyRefusals = []struct {
@@ -489,6 +519,11 @@ var testAclPolicyRefusals = []struct {
 	{source: `{"audit": {"reader": "tag:a", "reader": "tag:b", "repos": ["kind:vault"]}}`, want: "audit: invalid acl policy: a key given twice"},
 	{source: `{"tests": [{"src": "tag:a", "accept": ["*#dial"], "accept": ["*#route"]}]}`, want: "tests[0]: invalid acl policy: a key given twice"},
 
+	// a fault past a list's first entry names that entry, in a list of rules, of strings and of keys
+	{source: `{"grants": [{"src": ["tag:a"], "dst": ["*"], "allow": ["dial"]}, {"src": ["tag:a"], "dst": ["*", "sock:"], "allow": ["dial"]}]}`, want: "grants[1].dst[1]: invalid acl policy: not a socket name"},
+	{source: `{"tests": [{"src": "tag:a", "accept": ["*#dial"]}, {"src": "tag:a", "deny": ["*#dial", "*#route", "*#leave"]}]}`, want: "tests[1].deny[2]: invalid acl policy: an unknown action"},
+	{source: `{"groups": {"group:a": [], "group:b": ["dana@acme.example", "dana"]}}`, want: "groups[1][1]: invalid acl policy: not an email"},
+
 	// a value of the wrong type, null included, at every key
 	{source: `{"groups": []}`, want: "groups: invalid acl policy: not an object"},
 	{source: `{"groups": null}`, want: "groups: invalid acl policy: not an object"},
@@ -525,6 +560,7 @@ var testAclPolicyRefusals = []struct {
 	{source: `{"audit": null}`, want: "audit: invalid acl policy: not an object"},
 	{source: `{"audit": {"reader": ["tag:a"]}}`, want: "audit.reader: invalid acl policy: not a string"},
 	{source: `{"audit": {"repos": "kind:vault"}}`, want: "audit.repos: invalid acl policy: not a list"},
+	{source: `{"audit": {"reader": "tag:a", "repos": [1]}}`, want: "audit.repos[0]: invalid acl policy: not a string"},
 	{source: `{"tests": {}}`, want: "tests: invalid acl policy: not a list"},
 	{source: `{"tests": [{"src": ["tag:a"]}]}`, want: "tests[0].src: invalid acl policy: not a string"},
 	{source: `{"tests": [{"accept": "*#dial"}]}`, want: "tests[0].accept: invalid acl policy: not a list"},
@@ -588,6 +624,8 @@ var testAclPolicyRefusals = []struct {
 	{source: `{"tagOwners": {"tag:A": []}}`, want: "tagOwners[0]: invalid acl policy: not a tag name"},
 	{source: `{"hosts": {"Office": "192.0.2.1"}}`, want: "hosts[0]: invalid acl policy: not a hosts name"},
 	{source: `{"hosts": {"192.0.2.1": "192.0.2.1"}}`, want: "hosts[0]: invalid acl policy: not a hosts name"},
+	// a name and not a pattern, since ip: names one entry
+	{source: `{"hosts": {"of*ce": "192.0.2.1"}}`, want: "hosts[0]: invalid acl policy: not a hosts name"},
 	{source: `{"hosts": {"a": "printer"}}`, want: "hosts[0]: invalid acl policy: not an address or cidr"},
 	{source: `{"hosts": {"a": ""}}`, want: "hosts[0]: invalid acl policy: not an address or cidr"},
 	{source: `{"hosts": {"a": "192.0.2.1/24"}}`, want: "hosts[0]: invalid acl policy: not a cidr"},
@@ -827,6 +865,10 @@ func TestParseAclPolicyNestingBelowTheBound(t *testing.T) {
 		{source: `{"groups": {"group:a": [[]]}}`, want: "groups[0][0]: invalid acl policy: not a string"},
 		{source: `{"a": {"b": {"c": {"d": 1}}}}`, want: ": an unknown key"},
 		{source: `{"a": {"b": {"c": {"d": {}}}}}`, want: "nested too deep"},
+		// a closed list gives back the one level it took, so a sibling after it is held to the same bound
+		{source: `{"grants": [{"src": ["tag:a"], "dst": ["*"], "allow": ["dial"]}], "tests": [{"accept": [[]]}]}`, want: "nested too deep"},
+		// and a closed document gives back its own, so a second value after it is refused as one
+		{source: `{} [[[[]]]]`, want: "not HuJSON"},
 		// brackets inside a string or comment are not nesting
 		{source: `{"grants": [{"src": ["tag:a"], "dst": ["*"], "allow": ["dial"], "note": "[[[[[[{{{{{{"}]}`, want: ""},
 		{source: `{/* [[[[[[ {{{{{{ */} // [[[[[[`, want: ""},
@@ -915,6 +957,11 @@ func TestAclStandardizeHujson(t *testing.T) {
 		{source: `[1.5e3,]`, want: `[1.5e3 ]`},
 		{source: `[[],]`, want: `[[] ]`},
 		{source: `[{},]`, want: `[{} ]`},
+		// any of JSON's spaces between it and the closer, as an editor on any system leaves them
+		{source: "[1,\t]", want: "[1 \t]"},
+		{source: "[1,\r\n]", want: "[1 \r\n]"},
+		{source: "{\"a\":1,\n}", want: "{\"a\":1 \n}"},
+		{source: "[1,\r\n\t// a\r\n]", want: "[1 \r\n\t    \r\n]"},
 		// not trailing
 		{source: `[1,2]`, want: `[1,2]`},
 		{source: `[1,/* a */2]`, want: `[1,       2]`},
@@ -929,6 +976,9 @@ func TestAclStandardizeHujson(t *testing.T) {
 		{source: `,]`, want: `,]`},
 		{source: `{},`, want: `{},`},
 		{source: `,`, want: `,`},
+		// a closer that opens the text stays, as does the byte it is
+		{source: `]`, want: `]`},
+		{source: `}`, want: `}`},
 		// one that never closes passes through, to be refused there
 		{source: `"abc`, want: `"abc`},
 		{source: `"abc\`, want: `"abc\`},
@@ -1046,6 +1096,9 @@ func testAclPolicySourceHolds(t *testing.T, source []byte) {
 		if !grant.Expires.IsZero() && grant.Expires.UnixMilli() <= 0 {
 			t.Fatalf("a grant whose expiry rows read as none: %s", grant.Expires)
 		}
+		if grant.Audience == protocol.AclAudience_ACL_AUDIENCE_MEMBERS || grant.AppMode == protocol.AclAppMode_ACL_APP_MODE_HTTP {
+			t.Fatalf("a default with a second value: %+v", grant)
+		}
 		for _, selector := range grant.Src {
 			checkSelector(selector, aclPositionSrc)
 		}
@@ -1136,6 +1189,74 @@ func TestAclPolicyCommentsChangeNoMeaning(t *testing.T) {
 		}
 		if !reflect.DeepEqual(testParseAclPolicy(t, source), testParseAclPolicy(t, standard)) {
 			t.Errorf("%s reads differently once standardized", name)
+		}
+	}
+}
+
+// Line ends and indents change no meaning either: each document saved with CRLF line ends and tab
+// indents, as an editor on another system leaves it, reads as written, its trailing commas and line
+// comments included.
+func TestAclPolicyLineEndingsChangeNoMeaning(t *testing.T) {
+	for _, name := range []string{"worked_example.hujson", "implicit_document.hujson", "every_field.hujson"} {
+		source := testAclPolicyFixture(t, name)
+		lines := strings.Split(string(source), "\n")
+		for i, line := range lines {
+			indent := len(line) - len(strings.TrimLeft(line, " "))
+			lines[i] = strings.Repeat("\t", indent) + line[indent:]
+		}
+		other := []byte(strings.Join(lines, "\r\n"))
+		if bytes.Equal(other, source) || !bytes.Contains(other, []byte(",\r\n\t")) {
+			t.Fatalf("%s did not change as this test needs", name)
+		}
+		if !reflect.DeepEqual(testParseAclPolicy(t, source), testParseAclPolicy(t, other)) {
+			t.Errorf("%s reads differently with CRLF and tabs", name)
+		}
+	}
+}
+
+// A place in the source, 1-based, counted in bytes from the last line feed, and never past the end.
+func TestAclSourcePosition(t *testing.T) {
+	source := []byte("ab\ncd\r\n\nx")
+	cases := []struct {
+		offset int
+		line   int
+		column int
+	}{
+		{offset: 0, line: 1, column: 1},
+		{offset: 2, line: 1, column: 3},
+		{offset: 3, line: 2, column: 1},
+		{offset: 6, line: 2, column: 4},
+		{offset: 7, line: 3, column: 1},
+		{offset: 8, line: 4, column: 1},
+		{offset: 9, line: 4, column: 2},
+		// past the end, as no offset a parser reports should be, the end
+		{offset: 100, line: 4, column: 2},
+	}
+	for _, c := range cases {
+		if line, column := aclSourcePosition(source, c.offset); line != c.line || column != c.column {
+			t.Errorf("%d: line %d, column %d", c.offset, line, column)
+		}
+	}
+}
+
+// Each kind protocol numbers reads by the name §11.12 gives it, its enum name lowercased, as an audit
+// block's kind: entry writes it: a kind added there, or a name drifting here, fails.
+func TestEveryRepoKindHasAName(t *testing.T) {
+	if len(aclNameRepoKinds) != len(protocol.RepoKind_name)-1 {
+		t.Errorf("%d names for %d kinds", len(aclNameRepoKinds), len(protocol.RepoKind_name)-1)
+	}
+	for number, enumName := range protocol.RepoKind_name {
+		if number == 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimPrefix(enumName, "REPO_KIND_"))
+		policy, err := ParseAclPolicy([]byte(`{"audit": {"reader": "tag:a", "repos": ["kind:` + name + `"]}}`))
+		if err != nil {
+			t.Errorf("kind:%s: %v", name, err)
+			continue
+		}
+		if got := policy.Audit.RepoKinds; len(got) != 1 || got[0] != protocol.RepoKind(number) {
+			t.Errorf("kind:%s reads as %v", name, got)
 		}
 	}
 }

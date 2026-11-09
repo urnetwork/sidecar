@@ -101,6 +101,7 @@ type SidecarCapability int32
 const (
 	SidecarCapability_SIDECAR_CAPABILITY_NONE      SidecarCapability = 0
 	SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY SidecarCapability = 2 // bit 1: page Workers (D-TEAM-24)
+	SidecarCapability_SIDECAR_CAPABILITY_INVITED   SidecarCapability = 4 // bit 2: set by the admitting device once the invite's join MAC verifies
 )
 
 // Enum value maps for SidecarCapability.
@@ -108,10 +109,12 @@ var (
 	SidecarCapability_name = map[int32]string{
 		0: "SIDECAR_CAPABILITY_NONE",
 		2: "SIDECAR_CAPABILITY_READ_ONLY",
+		4: "SIDECAR_CAPABILITY_INVITED",
 	}
 	SidecarCapability_value = map[string]int32{
 		"SIDECAR_CAPABILITY_NONE":      0,
 		"SIDECAR_CAPABILITY_READ_ONLY": 2,
+		"SIDECAR_CAPABILITY_INVITED":   4,
 	}
 )
 
@@ -881,8 +884,9 @@ func (x *RecoveryBindingRow) GetReason() RecoveryRebindReason {
 	return RecoveryRebindReason_RECOVERY_REBIND_REASON_UNSPECIFIED
 }
 
-// The fields §7.9 lists. §2.8's api-7 also shows identity keys, member or keyed tag ids and ephemeral
-// flags in these rows; they stay out until the two sections agree, and later numbers can add them.
+// The fields §7.9 lists, then the admission's identity key, member or keyed tag ids and ephemeral flag,
+// which api-7 shows and protos-bridge-row-fields #1 numbers, so a reader holding only rows knows what
+// each admission names.
 type SidecarRow struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId          []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
@@ -898,8 +902,13 @@ type SidecarRow struct {
 	Sponsor            []byte                 `protobuf:"bytes,11,opt,name=sponsor,proto3" json:"sponsor,omitempty"`
 	Capabilities       uint32                 `protobuf:"varint,12,opt,name=capabilities,proto3" json:"capabilities,omitempty"` // SidecarCapability bits
 	DelegationId       []byte                 `protobuf:"bytes,13,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
-	LiveSince          uint64                 `protobuf:"varint,14,opt,name=live_since,json=liveSince,proto3" json:"live_since,omitempty"` // the config leaf rank (leaves)
-	NotAfter           int64                  `protobuf:"varint,15,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`    // ms since the epoch: a revoked row stays a tombstone until it
+	LiveSince          uint64                 `protobuf:"varint,14,opt,name=live_since,json=liveSince,proto3" json:"live_since,omitempty"`                          // the config leaf rank (leaves)
+	NotAfter           int64                  `protobuf:"varint,15,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`                             // ms since the epoch: a revoked row stays a tombstone until it
+	IdentityPublicKey  []byte                 `protobuf:"bytes,16,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"` // the SidecarAdmit's, or for the first device the Genesis's
+	IdentityAlg        string                 `protobuf:"bytes,17,opt,name=identity_alg,json=identityAlg,proto3" json:"identity_alg,omitempty"`                     // ed25519 in v0
+	MemberId           []byte                 `protobuf:"bytes,18,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`                              // an untagged admission's member; or tag_ids
+	TagIds             [][]byte               `protobuf:"bytes,19,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`                                    // a tagged admission's keyed tag ids, 16 B each
+	Ephemeral          bool                   `protobuf:"varint,20,opt,name=ephemeral,proto3" json:"ephemeral,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1039,20 +1048,58 @@ func (x *SidecarRow) GetNotAfter() int64 {
 	return 0
 }
 
-// The fields §7.9 lists. §2.8's api-7 also shows the signing and reader public keys and max_admits in
-// these rows; they stay out until the two sections agree, and later numbers can add them.
+func (x *SidecarRow) GetIdentityPublicKey() []byte {
+	if x != nil {
+		return x.IdentityPublicKey
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetIdentityAlg() string {
+	if x != nil {
+		return x.IdentityAlg
+	}
+	return ""
+}
+
+func (x *SidecarRow) GetMemberId() []byte {
+	if x != nil {
+		return x.MemberId
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetTagIds() [][]byte {
+	if x != nil {
+		return x.TagIds
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetEphemeral() bool {
+	if x != nil {
+		return x.Ephemeral
+	}
+	return false
+}
+
+// The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
+// shows and protos-bridge-row-fields #2 numbers.
 type DelegationRow struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DelegationId  []byte                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
-	Signer        []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
-	At            uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
-	TagAtoms      [][]byte               `protobuf:"bytes,4,rep,name=tag_atoms,json=tagAtoms,proto3" json:"tag_atoms,omitempty"`
-	NotAfter      int64                  `protobuf:"varint,5,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`               // ms since the epoch
-	KeyDroppedAt  uint64                 `protobuf:"varint,6,opt,name=key_dropped_at,json=keyDroppedAt,proto3" json:"key_dropped_at,omitempty"` // §10.5
-	EndedAt       uint64                 `protobuf:"varint,7,opt,name=ended_at,json=endedAt,proto3" json:"ended_at,omitempty"`
-	Admissions    uint32                 `protobuf:"varint,8,opt,name=admissions,proto3" json:"admissions,omitempty"` // those it has made, counted in log order for its life
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	DelegationId         []byte                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	Signer               []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
+	At                   uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
+	TagAtoms             [][]byte               `protobuf:"bytes,4,rep,name=tag_atoms,json=tagAtoms,proto3" json:"tag_atoms,omitempty"`
+	NotAfter             int64                  `protobuf:"varint,5,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`               // ms since the epoch
+	KeyDroppedAt         uint64                 `protobuf:"varint,6,opt,name=key_dropped_at,json=keyDroppedAt,proto3" json:"key_dropped_at,omitempty"` // §10.5
+	EndedAt              uint64                 `protobuf:"varint,7,opt,name=ended_at,json=endedAt,proto3" json:"ended_at,omitempty"`
+	Admissions           uint32                 `protobuf:"varint,8,opt,name=admissions,proto3" json:"admissions,omitempty"`                                                     // those it has made, counted in log order for its life
+	Pubkey               []byte                 `protobuf:"bytes,9,opt,name=pubkey,proto3" json:"pubkey,omitempty"`                                                              // the Ed25519 key that signs its SidecarAdmits
+	ReaderXwingPublicKey []byte                 `protobuf:"bytes,10,opt,name=reader_xwing_public_key,json=readerXwingPublicKey,proto3" json:"reader_xwing_public_key,omitempty"` // §10.5
+	MaxAdmits            uint32                 `protobuf:"varint,11,opt,name=max_admits,json=maxAdmits,proto3" json:"max_admits,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *DelegationRow) Reset() {
@@ -1137,6 +1184,27 @@ func (x *DelegationRow) GetEndedAt() uint64 {
 func (x *DelegationRow) GetAdmissions() uint32 {
 	if x != nil {
 		return x.Admissions
+	}
+	return 0
+}
+
+func (x *DelegationRow) GetPubkey() []byte {
+	if x != nil {
+		return x.Pubkey
+	}
+	return nil
+}
+
+func (x *DelegationRow) GetReaderXwingPublicKey() []byte {
+	if x != nil {
+		return x.ReaderXwingPublicKey
+	}
+	return nil
+}
+
+func (x *DelegationRow) GetMaxAdmits() uint32 {
+	if x != nil {
+		return x.MaxAdmits
 	}
 	return 0
 }
@@ -1681,6 +1749,165 @@ func (x *Unsuspend) GetSuspendId() []byte {
 	return nil
 }
 
+// One client generation of a sidecar (§5.5, plan-CORE-binding-wire #1): the body SignedSidecarIdentityBinding's
+// two signatures cover. Each new client binds generation n+1 under the same sidecar_id and identity key, so a peer
+// resolves a client to its sidecar from signed bytes (§17.9), and §6's Hello checks it (D-PROTO-13).
+type SidecarIdentityBinding struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	NetworkId         []byte                 `protobuf:"bytes,1,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	SidecarId         []byte                 `protobuf:"bytes,2,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
+	ClientId          []byte                 `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Generation        int64                  `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`                                         // 1 for a sidecar_id's first binding, then the newest plus one
+	ClientPublicKey   []byte                 `protobuf:"bytes,5,opt,name=client_public_key,json=clientPublicKey,proto3" json:"client_public_key,omitempty"`       // the ClientKey, Ed25519, 32 B
+	IdentityPublicKey []byte                 `protobuf:"bytes,6,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"` // the identity key, Ed25519, 32 B
+	IssuedAtMs        int64                  `protobuf:"varint,7,opt,name=issued_at_ms,json=issuedAtMs,proto3" json:"issued_at_ms,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *SidecarIdentityBinding) Reset() {
+	*x = SidecarIdentityBinding{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SidecarIdentityBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SidecarIdentityBinding) ProtoMessage() {}
+
+func (x *SidecarIdentityBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SidecarIdentityBinding.ProtoReflect.Descriptor instead.
+func (*SidecarIdentityBinding) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SidecarIdentityBinding) GetNetworkId() []byte {
+	if x != nil {
+		return x.NetworkId
+	}
+	return nil
+}
+
+func (x *SidecarIdentityBinding) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *SidecarIdentityBinding) GetClientId() []byte {
+	if x != nil {
+		return x.ClientId
+	}
+	return nil
+}
+
+func (x *SidecarIdentityBinding) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *SidecarIdentityBinding) GetClientPublicKey() []byte {
+	if x != nil {
+		return x.ClientPublicKey
+	}
+	return nil
+}
+
+func (x *SidecarIdentityBinding) GetIdentityPublicKey() []byte {
+	if x != nil {
+		return x.IdentityPublicKey
+	}
+	return nil
+}
+
+func (x *SidecarIdentityBinding) GetIssuedAtMs() int64 {
+	if x != nil {
+		return x.IssuedAtMs
+	}
+	return 0
+}
+
+// What Hello.binding and POST /sidecar/bind carry, and what §5.15's signatures column stores verbatim, since the
+// table's other columns cannot rebuild it. Each signature is Ed25519 over §6.9's signed bytes of body as received,
+// type SIGNED_SIDECAR_BINDING: purpose binding-client by the ClientKey, binding-identity by the identity key.
+// Verifiers check body as received, never a re-marshal.
+type SignedSidecarIdentityBinding struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Body              []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"` // SidecarIdentityBinding
+	ClientSignature   []byte                 `protobuf:"bytes,2,opt,name=client_signature,json=clientSignature,proto3" json:"client_signature,omitempty"`
+	IdentitySignature []byte                 `protobuf:"bytes,3,opt,name=identity_signature,json=identitySignature,proto3" json:"identity_signature,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *SignedSidecarIdentityBinding) Reset() {
+	*x = SignedSidecarIdentityBinding{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedSidecarIdentityBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedSidecarIdentityBinding) ProtoMessage() {}
+
+func (x *SignedSidecarIdentityBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedSidecarIdentityBinding.ProtoReflect.Descriptor instead.
+func (*SignedSidecarIdentityBinding) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SignedSidecarIdentityBinding) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *SignedSidecarIdentityBinding) GetClientSignature() []byte {
+	if x != nil {
+		return x.ClientSignature
+	}
+	return nil
+}
+
+func (x *SignedSidecarIdentityBinding) GetIdentitySignature() []byte {
+	if x != nil {
+		return x.IdentitySignature
+	}
+	return nil
+}
+
 var File_protocol_bridge_auth_proto protoreflect.FileDescriptor
 
 const file_protocol_bridge_auth_proto_rawDesc = "" +
@@ -1734,7 +1961,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"key_sha256\x18\x01 \x01(\fR\tkeySha256\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
 	"\x02at\x18\x03 \x01(\x04R\x02at\x12?\n" +
-	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xa9\x04\n" +
+	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xd0\x05\n" +
 	"\n" +
 	"SidecarRow\x12\x1d\n" +
 	"\n" +
@@ -1756,7 +1983,12 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\rdelegation_id\x18\r \x01(\fR\fdelegationId\x12\x1d\n" +
 	"\n" +
 	"live_since\x18\x0e \x01(\x04R\tliveSince\x12\x1b\n" +
-	"\tnot_after\x18\x0f \x01(\x03R\bnotAfter\"\xf7\x01\n" +
+	"\tnot_after\x18\x0f \x01(\x03R\bnotAfter\x12.\n" +
+	"\x13identity_public_key\x18\x10 \x01(\fR\x11identityPublicKey\x12!\n" +
+	"\fidentity_alg\x18\x11 \x01(\tR\videntityAlg\x12\x1b\n" +
+	"\tmember_id\x18\x12 \x01(\fR\bmemberId\x12\x17\n" +
+	"\atag_ids\x18\x13 \x03(\fR\x06tagIds\x12\x1c\n" +
+	"\tephemeral\x18\x14 \x01(\bR\tephemeral\"\xe5\x02\n" +
 	"\rDelegationRow\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\fR\fdelegationId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
@@ -1767,7 +1999,12 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\bended_at\x18\a \x01(\x04R\aendedAt\x12\x1e\n" +
 	"\n" +
 	"admissions\x18\b \x01(\rR\n" +
-	"admissions\"\xa5\x02\n" +
+	"admissions\x12\x16\n" +
+	"\x06pubkey\x18\t \x01(\fR\x06pubkey\x125\n" +
+	"\x17reader_xwing_public_key\x18\n" +
+	" \x01(\fR\x14readerXwingPublicKey\x12\x1d\n" +
+	"\n" +
+	"max_admits\x18\v \x01(\rR\tmaxAdmits\"\xa5\x02\n" +
 	"\x06KeyRow\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\fR\x05keyId\x12\x1b\n" +
 	"\tmember_id\x18\x02 \x01(\fR\bmemberId\x12+\n" +
@@ -1812,7 +2049,24 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x18\n" +
 	"\asubject\x18\x02 \x01(\fR\asubject\x12\x1d\n" +
 	"\n" +
-	"suspend_id\x18\x03 \x01(\fR\tsuspendId*\xe0\x01\n" +
+	"suspend_id\x18\x03 \x01(\fR\tsuspendId\"\x91\x02\n" +
+	"\x16SidecarIdentityBinding\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x01 \x01(\fR\tnetworkId\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\x12\x1b\n" +
+	"\tclient_id\x18\x03 \x01(\fR\bclientId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x04 \x01(\x03R\n" +
+	"generation\x12*\n" +
+	"\x11client_public_key\x18\x05 \x01(\fR\x0fclientPublicKey\x12.\n" +
+	"\x13identity_public_key\x18\x06 \x01(\fR\x11identityPublicKey\x12 \n" +
+	"\fissued_at_ms\x18\a \x01(\x03R\n" +
+	"issuedAtMs\"\x8c\x01\n" +
+	"\x1cSignedSidecarIdentityBinding\x12\x12\n" +
+	"\x04body\x18\x01 \x01(\fR\x04body\x12)\n" +
+	"\x10client_signature\x18\x02 \x01(\fR\x0fclientSignature\x12-\n" +
+	"\x12identity_signature\x18\x03 \x01(\fR\x11identitySignature*\xe0\x01\n" +
 	"\n" +
 	"MemberRole\x12\x1b\n" +
 	"\x17MEMBER_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -1822,10 +2076,11 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x14MEMBER_ROLE_IT_ADMIN\x10\x04\x12\x1d\n" +
 	"\x19MEMBER_ROLE_BILLING_ADMIN\x10\x05\x12\x17\n" +
 	"\x13MEMBER_ROLE_AUDITOR\x10\x06\x12\x16\n" +
-	"\x12MEMBER_ROLE_MEMBER\x10\a*R\n" +
+	"\x12MEMBER_ROLE_MEMBER\x10\a*r\n" +
 	"\x11SidecarCapability\x12\x1b\n" +
 	"\x17SIDECAR_CAPABILITY_NONE\x10\x00\x12 \n" +
-	"\x1cSIDECAR_CAPABILITY_READ_ONLY\x10\x02*u\n" +
+	"\x1cSIDECAR_CAPABILITY_READ_ONLY\x10\x02\x12\x1e\n" +
+	"\x1aSIDECAR_CAPABILITY_INVITED\x10\x04*u\n" +
 	"\x06KeyAlg\x12\x17\n" +
 	"\x13KEY_ALG_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16KEY_ALG_WEBAUTHN_ES256\x10\x01\x12\x1d\n" +
@@ -1861,31 +2116,33 @@ func file_protocol_bridge_auth_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_bridge_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_protocol_bridge_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_protocol_bridge_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_protocol_bridge_auth_proto_goTypes = []any{
-	(MemberRole)(0),            // 0: urnetwork.sidecar.MemberRole
-	(SidecarCapability)(0),     // 1: urnetwork.sidecar.SidecarCapability
-	(KeyAlg)(0),                // 2: urnetwork.sidecar.KeyAlg
-	(KeyPurpose)(0),            // 3: urnetwork.sidecar.KeyPurpose
-	(RecoveryRebindReason)(0),  // 4: urnetwork.sidecar.RecoveryRebindReason
-	(SidecarRevokeReason)(0),   // 5: urnetwork.sidecar.SidecarRevokeReason
-	(*StatementHeader)(nil),    // 6: urnetwork.sidecar.StatementHeader
-	(*AuthEntry)(nil),          // 7: urnetwork.sidecar.AuthEntry
-	(*AuthPin)(nil),            // 8: urnetwork.sidecar.AuthPin
-	(*ProjectionHeader)(nil),   // 9: urnetwork.sidecar.ProjectionHeader
-	(*ProjectionRows)(nil),     // 10: urnetwork.sidecar.ProjectionRows
-	(*MemberRow)(nil),          // 11: urnetwork.sidecar.MemberRow
-	(*RecoveryBindingRow)(nil), // 12: urnetwork.sidecar.RecoveryBindingRow
-	(*SidecarRow)(nil),         // 13: urnetwork.sidecar.SidecarRow
-	(*DelegationRow)(nil),      // 14: urnetwork.sidecar.DelegationRow
-	(*KeyRow)(nil),             // 15: urnetwork.sidecar.KeyRow
-	(*ApiTick)(nil),            // 16: urnetwork.sidecar.ApiTick
-	(*Genesis)(nil),            // 17: urnetwork.sidecar.Genesis
-	(*MemberRevoke)(nil),       // 18: urnetwork.sidecar.MemberRevoke
-	(*SidecarRevoke)(nil),      // 19: urnetwork.sidecar.SidecarRevoke
-	(*GrantRevoke)(nil),        // 20: urnetwork.sidecar.GrantRevoke
-	(*Suspend)(nil),            // 21: urnetwork.sidecar.Suspend
-	(*Unsuspend)(nil),          // 22: urnetwork.sidecar.Unsuspend
+	(MemberRole)(0),                      // 0: urnetwork.sidecar.MemberRole
+	(SidecarCapability)(0),               // 1: urnetwork.sidecar.SidecarCapability
+	(KeyAlg)(0),                          // 2: urnetwork.sidecar.KeyAlg
+	(KeyPurpose)(0),                      // 3: urnetwork.sidecar.KeyPurpose
+	(RecoveryRebindReason)(0),            // 4: urnetwork.sidecar.RecoveryRebindReason
+	(SidecarRevokeReason)(0),             // 5: urnetwork.sidecar.SidecarRevokeReason
+	(*StatementHeader)(nil),              // 6: urnetwork.sidecar.StatementHeader
+	(*AuthEntry)(nil),                    // 7: urnetwork.sidecar.AuthEntry
+	(*AuthPin)(nil),                      // 8: urnetwork.sidecar.AuthPin
+	(*ProjectionHeader)(nil),             // 9: urnetwork.sidecar.ProjectionHeader
+	(*ProjectionRows)(nil),               // 10: urnetwork.sidecar.ProjectionRows
+	(*MemberRow)(nil),                    // 11: urnetwork.sidecar.MemberRow
+	(*RecoveryBindingRow)(nil),           // 12: urnetwork.sidecar.RecoveryBindingRow
+	(*SidecarRow)(nil),                   // 13: urnetwork.sidecar.SidecarRow
+	(*DelegationRow)(nil),                // 14: urnetwork.sidecar.DelegationRow
+	(*KeyRow)(nil),                       // 15: urnetwork.sidecar.KeyRow
+	(*ApiTick)(nil),                      // 16: urnetwork.sidecar.ApiTick
+	(*Genesis)(nil),                      // 17: urnetwork.sidecar.Genesis
+	(*MemberRevoke)(nil),                 // 18: urnetwork.sidecar.MemberRevoke
+	(*SidecarRevoke)(nil),                // 19: urnetwork.sidecar.SidecarRevoke
+	(*GrantRevoke)(nil),                  // 20: urnetwork.sidecar.GrantRevoke
+	(*Suspend)(nil),                      // 21: urnetwork.sidecar.Suspend
+	(*Unsuspend)(nil),                    // 22: urnetwork.sidecar.Unsuspend
+	(*SidecarIdentityBinding)(nil),       // 23: urnetwork.sidecar.SidecarIdentityBinding
+	(*SignedSidecarIdentityBinding)(nil), // 24: urnetwork.sidecar.SignedSidecarIdentityBinding
 }
 var file_protocol_bridge_auth_proto_depIdxs = []int32{
 	8,  // 0: urnetwork.sidecar.StatementHeader.at:type_name -> urnetwork.sidecar.AuthPin
@@ -1922,7 +2179,7 @@ func file_protocol_bridge_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_bridge_auth_proto_rawDesc), len(file_protocol_bridge_auth_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   17,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

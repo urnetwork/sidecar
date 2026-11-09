@@ -1,0 +1,43 @@
+{
+  "name": "a staged chunk and a kept slot",
+  "replaced": [
+    {
+      "token_path": "260936311fc541f6127f7230f5451ffc",
+      "version": {
+        "version": 2,
+        "versioning": 1,
+        "chain": [
+          {
+            "kind": 5,
+            "id": "a2abb9a06ee24e6529d36dfb6dd1cd10e8f0fc8942a5c5286d6926b6d267a12d",
+            "staged": true
+          },
+          {
+            "kind": 5,
+            "id": "685b888e572d5289ff8f8a0d2bf059f65c5f29626dbd2674836a17971867c1cd"
+          }
+        ],
+        "slot_ids": [
+          "ba2f4d5f46bf27bf534ac2730f632211"
+        ]
+      }
+    }
+  ],
+  "push_versions": [
+    {
+      "version": 3,
+      "versioning": 1,
+      "chain": [
+        {
+          "kind": 5,
+          "id": "9a24c1e510d0646e9e5b95f9733a032819b67e3f25ffafdcdd7630a87142f0fb"
+        }
+      ],
+      "slot_ids": [
+        "ba2f4d5f46bf27bf534ac2730f632211"
+      ]
+    }
+  ],
+  "room_byte_count": 1048576,
+  "want": "0a580a10260936311fc541f6127f7230f5451ffc10021a20685b888e572d5289ff8f8a0d2bf059f65c5f29626dbd2674836a17971867c1cd2220a2abb9a06ee24e6529d36dfb6dd1cd10e8f0fc8942a5c5286d6926b6d267a12d"
+}

@@ -1,8 +1,13 @@
 // §7.9's log as fixtures, for gkm's client to read through sidecar.GkmAuthView until TEAM's ConfigState implements
 // it (TEAM-M2-02). Each position is a state a test writes: the ProjectionRows it compiles to, whose AclRows give
-// Repo, and what §8.6's evaluation and the admissions would give, which no fixture can compute: identity keys,
-// readers and writers. Positions chain as the real log does, each A_n hashing the one before, so At and OnChain
-// see a fork the way a reader would; the chain values are this fake's own, not AuthChainDigest's.
+// Repo and whose member, sidecar and Delegation rows give theirs, and what §8.6's evaluation and the admissions would
+// give, which no fixture can compute: identity keys, readers, writers, when a reader stops reading, and the repos a
+// Delegation's tags reach. Positions chain as the real log does, each A_n hashing the one before, so At and OnChain
+// see a fork the way a reader would; the chain values are this fake's own, not AuthChainDigest's. No fixture voids
+// anything by a cascade.
+//
+// sidecar.KeyHolders needs a row for every reader, so a fixture whose readers have none computes no holders, and the
+// gate's expiry half refuses on it (ErrGkmMalformed).
 //
 // Safe for concurrent use. A view never changes once appended.
 
@@ -15,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -33,14 +39,21 @@ type FakeGkmAuthFixture struct {
 	RepoReaders map[sidecar.Id][]sidecar.Id
 	// The writers, by repo.
 	RepoWriters map[sidecar.Id][]sidecar.Id
+	// By repo, when a reader stops reading it: RepoReadersAt lists it only before this time. A reader absent here
+	// reads at every time.
+	RepoReaderExpiries map[sidecar.Id]map[sidecar.Id]time.Time
+	// By tag atom, the repos a read or write grant naming it reads, for ReposGrantedToAtoms.
+	AtomRepos map[sidecar.Id][]sidecar.Id
 }
 
 // A copy that shares nothing the test may change later.
 func (self *FakeGkmAuthFixture) clone() *FakeGkmAuthFixture {
 	cloned := &FakeGkmAuthFixture{
-		IdentityKeys: map[sidecar.Id][]byte{},
-		RepoReaders:  map[sidecar.Id][]sidecar.Id{},
-		RepoWriters:  map[sidecar.Id][]sidecar.Id{},
+		IdentityKeys:       map[sidecar.Id][]byte{},
+		RepoReaders:        map[sidecar.Id][]sidecar.Id{},
+		RepoWriters:        map[sidecar.Id][]sidecar.Id{},
+		RepoReaderExpiries: map[sidecar.Id]map[sidecar.Id]time.Time{},
+		AtomRepos:          map[sidecar.Id][]sidecar.Id{},
 	}
 	if self == nil {
 		return cloned
@@ -56,6 +69,15 @@ func (self *FakeGkmAuthFixture) clone() *FakeGkmAuthFixture {
 	}
 	for repoId, writers := range self.RepoWriters {
 		cloned.RepoWriters[repoId] = slices.Clone(writers)
+	}
+	for repoId, readerExpiries := range self.RepoReaderExpiries {
+		cloned.RepoReaderExpiries[repoId] = map[sidecar.Id]time.Time{}
+		for readerId, expiry := range readerExpiries {
+			cloned.RepoReaderExpiries[repoId][readerId] = expiry
+		}
+	}
+	for atom, repoIds := range self.AtomRepos {
+		cloned.AtomRepos[atom] = slices.Clone(repoIds)
 	}
 	return cloned
 }
@@ -198,6 +220,63 @@ func (self *FakeGkmAuthView) RepoWriters(repoId sidecar.Id) []sidecar.Id {
 	return slices.Clone(self.fixture.RepoWriters[repoId])
 }
 
+// The fixture's readers less those whose RepoReaderExpiries has passed at at, sorted.
+func (self *FakeGkmAuthView) RepoReadersAt(repoId sidecar.Id, at time.Time) []sidecar.Id {
+	readers := []sidecar.Id{}
+	for _, readerId := range self.fixture.RepoReaders[repoId] {
+		if expiry, found := self.fixture.RepoReaderExpiries[repoId][readerId]; found && !at.Before(expiry) {
+			continue
+		}
+		readers = append(readers, readerId)
+	}
+	slices.SortFunc(readers, sidecar.Id.Cmp)
+	return slices.Compact(readers)
+}
+
+func (self *FakeGkmAuthView) SidecarRow(sidecarId sidecar.Id) *bridge.SidecarRow {
+	for _, row := range self.fixture.Rows.GetSidecars() {
+		if bytes.Equal(row.GetSidecarId(), sidecarId.Bytes()) {
+			return proto.Clone(row).(*bridge.SidecarRow)
+		}
+	}
+	return nil
+}
+
+func (self *FakeGkmAuthView) Member(memberId sidecar.Id) *bridge.MemberRow {
+	for _, row := range self.fixture.Rows.GetMembers() {
+		if bytes.Equal(row.GetMemberId(), memberId.Bytes()) {
+			return proto.Clone(row).(*bridge.MemberRow)
+		}
+	}
+	return nil
+}
+
+func (self *FakeGkmAuthView) Delegations() []*bridge.DelegationRow {
+	delegations := []*bridge.DelegationRow{}
+	for _, row := range self.fixture.Rows.GetDelegations() {
+		delegations = append(delegations, proto.Clone(row).(*bridge.DelegationRow))
+	}
+	slices.SortFunc(delegations, func(a *bridge.DelegationRow, b *bridge.DelegationRow) int {
+		return bytes.Compare(a.GetDelegationId(), b.GetDelegationId())
+	})
+	return delegations
+}
+
+// The fixture's AtomRepos of each atom, merged and sorted. Time does not end a fixture's grant.
+func (self *FakeGkmAuthView) ReposGrantedToAtoms(atoms []sidecar.Id, at time.Time) []sidecar.Id {
+	repoIds := []sidecar.Id{}
+	for _, atom := range atoms {
+		repoIds = append(repoIds, self.fixture.AtomRepos[atom]...)
+	}
+	slices.SortFunc(repoIds, sidecar.Id.Cmp)
+	return slices.Compact(repoIds)
+}
+
+// No fixture voids anything.
+func (self *FakeGkmAuthView) CascadeVoids(signer []byte, at uint64) bool {
+	return false
+}
+
 // A fixture's rows for repos with these holders_shrunk_at, the one AclRows field gkm's client reads here, and kinds.
 func FakeGkmAuthRows(repos ...*protocol.AclRepo) *bridge.ProjectionRows {
 	acl, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.AclRows{Repos: repos})
@@ -205,4 +284,14 @@ func FakeGkmAuthRows(repos ...*protocol.AclRepo) *bridge.ProjectionRows {
 		panic(fmt.Sprintf("fake auth rows: %v", err))
 	}
 	return &bridge.ProjectionRows{Acl: acl}
+}
+
+// Rows for sidecars admitted as member devices of one member, untagged and not ephemeral, to put in a fixture's
+// Rows.Sidecars beside the member's row, so sidecar.KeyHolders names each reader among them as a leaf.
+func FakeGkmAuthMemberDevices(memberId sidecar.Id, sidecarIds ...sidecar.Id) ([]*bridge.SidecarRow, *bridge.MemberRow) {
+	rows := []*bridge.SidecarRow{}
+	for _, sidecarId := range sidecarIds {
+		rows = append(rows, &bridge.SidecarRow{SidecarId: sidecarId.Bytes(), MemberId: memberId.Bytes(), AdmittedAt: 1})
+	}
+	return rows, &bridge.MemberRow{MemberId: memberId.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_OWNER}
 }
