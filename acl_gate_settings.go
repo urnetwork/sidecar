@@ -24,6 +24,11 @@ type AclGateSettings struct {
 	// How long one network's load may read for before it gives up and keeps its old state: 30 s, three of §19.6's
 	// 10 s store deadlines. Non-positive is no deadline but the cache's own.
 	LoadTimeout time.Duration
+	// How long a network's loader waits after a load that failed or was refused before it takes the next trigger, so
+	// a gate that asks on every request while the source fails, or serves a refused copy, costs one read a wait
+	// (connect/CODESTYLE.md's retry budget): 5 s, within §8.9's 5 s target once the source recovers. Non-positive
+	// waits none.
+	FailureBackoff time.Duration
 	// The bytes of logs and rows the cache keeps, each network's retained entries and base rows counted: 256 MiB,
 	// room for a few dozen networks at §8.8's 4 MiB rows and thousands at common sizes. Past it the networks read
 	// longest ago lose their loaded state, keeping their pins, and load again when next asked. Non-positive keeps every
@@ -52,6 +57,7 @@ func DefaultAclGateSettings() *AclGateSettings {
 		PollJitter:      30 * time.Second,
 		LoadConcurrency: 16,
 		LoadTimeout:     30 * time.Second,
+		FailureBackoff:  5 * time.Second,
 		ByteBudget:      256 * 1024 * 1024,
 		UnloadedCount:   100000,
 		ListPageCount:   1000,

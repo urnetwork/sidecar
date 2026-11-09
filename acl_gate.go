@@ -245,7 +245,8 @@ func (self *AclGateCache) trigger(network *aclGateNetwork) {
 	}
 }
 
-// Loads the network while triggers keep coming, one load at a time, each holding one of the process's load slots.
+// Loads the network while triggers keep coming, one load at a time, each holding one of the process's load slots, and
+// waits FailureBackoff after a load that failed.
 func (self *AclGateCache) loader(network *aclGateNetwork) {
 	for {
 		due := func() bool {
@@ -280,6 +281,19 @@ func (self *AclGateCache) loader(network *aclGateNetwork) {
 				pin = snapshot.Pin
 			}
 			onLoad(network.networkId, pin, err)
+		}
+		if err != nil && 0 < self.settings.FailureBackoff {
+			// triggers meanwhile coalesce into the one load after the wait
+			select {
+			case <-self.clock.After(self.settings.FailureBackoff):
+			case <-self.ctx.Done():
+				func() {
+					network.stateLock.Lock()
+					defer network.stateLock.Unlock()
+					network.loading = false
+				}()
+				return
+			}
 		}
 	}
 }
