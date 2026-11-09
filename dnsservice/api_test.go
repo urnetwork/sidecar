@@ -18,8 +18,10 @@ import (
 
 // Visibly synthetic bearers, 32 bytes each in unpadded base64url, by class.
 var apiTestBearers = map[dnsservice.DnsCallerClass]string{
-	dnsservice.DnsCallerEdge:  base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("e", 32))),
-	dnsservice.DnsCallerCerts: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("c", 32))),
+	dnsservice.DnsCallerEdge:           base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("e", 32))),
+	dnsservice.DnsCallerCerts:          base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("c", 32))),
+	dnsservice.DnsCallerMonitor:        base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("m", 32))),
+	dnsservice.DnsCallerMonitorOutside: base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("o", 32))),
 }
 
 // internal-verify.yml for apiTestBearers.
