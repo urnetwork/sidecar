@@ -311,7 +311,8 @@ func (self *LongPoll) Poll(ctx context.Context, clientId connect.Id, cursor []by
 		return nil, err
 	}
 	defer self.unregister(clientId, waiter)
-	holdEnd := self.clock.After(self.settings.HoldTimeout)
+	// the hold's end, set at the first read that finds nothing, so an answer at once costs no timer
+	var holdEnd <-chan time.Time
 	barrierKey := clientId.String()
 	for {
 		response, err := self.read(ctx, clientId, position, hasPosition)
@@ -320,6 +321,9 @@ func (self *LongPoll) Poll(ctx context.Context, clientId connect.Id, cursor []by
 		}
 		if response != nil {
 			return response, nil
+		}
+		if holdEnd == nil {
+			holdEnd = self.clock.After(self.settings.HoldTimeout)
 		}
 		testHookBarrier("pushservice.long_poll.hold", barrierKey)
 		select {

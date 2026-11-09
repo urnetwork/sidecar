@@ -56,30 +56,6 @@ func testAwait[T any](t testing.TB, values <-chan T, what string) T {
 	}
 }
 
-// What Clock adds to the reassembly tests' clock: a call once a wait fires. The dispatcher schedules
-// none, so this completes the interface and no test here reaches it.
-func (self *testEnvelopeClock) AfterFunc(timeout time.Duration, function func()) (stop func() bool) {
-	fire := self.After(timeout)
-	stopped := make(chan struct{})
-	var done atomic.Bool
-	go func() {
-		select {
-		case <-fire:
-			if done.CompareAndSwap(false, true) {
-				function()
-			}
-		case <-stopped:
-		}
-	}()
-	return func() bool {
-		if done.CompareAndSwap(false, true) {
-			close(stopped)
-			return true
-		}
-		return false
-	}
-}
-
 // A store nothing in the dispatcher opens: PROTO-M1-04's pins are its first reader.
 type testUnusedStore struct{}
 
