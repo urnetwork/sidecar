@@ -133,6 +133,8 @@ type configStatement struct {
 	// the signer a row keeps as the one that did it, as the check found it: an admission's sponsor, a confirmation's
 	// confirm_signer
 	rowSigner ConfigSigner
+	// an acl statement's check, which its apply folds and a base's re-application keeps (configAclRules)
+	aclVerdict *AclStatementVerdict
 }
 
 // What every statement that enters the log begins with (§7.9's StatementHeader).
@@ -182,12 +184,13 @@ func registerConfigStatementRule(rule configStatementRule) {
 
 // §8.8's statements, 0x11xx, which ACL's rules judge (ACL-M2-06): CheckStatement at the state the entry lands on,
 // ApplyStatement's new AclRows and its effect on §7's rows, and ReapplyStatement over a new base, keeping the
-// verdict while effects that depend on rows follow the new rows. TEAM declares this and ACL implements it (C-05), so
-// neither waits on the other.
+// verdict while effects that depend on rows follow the new rows; and what a k-of-n proposal of one acts on, false for
+// a type no proposal carries. TEAM declares this and ACL implements it (C-05), so neither waits on the other.
 type configAclRules interface {
 	check(state *ConfigState, statement *configStatement) error
 	apply(next *configStateBuilder, statement *configStatement) error
 	reapply(next *configStateBuilder, statement *configStatement) error
+	targets(state *ConfigState, statement *configStatement) (ConfigTargets, bool)
 }
 
 // What judges 0x11xx statements. ACL-M2-06 replaces it from its own init.
@@ -209,6 +212,11 @@ func (self configAclRulesUnwired) apply(next *configStateBuilder, statement *con
 // Refused.
 func (self configAclRulesUnwired) reapply(next *configStateBuilder, statement *configStatement) error {
 	return fmt.Errorf("%w: %s", ErrConfigRuleMissing, statement.signedType)
+}
+
+// None: no proposal carries an acl statement.
+func (self configAclRulesUnwired) targets(state *ConfigState, statement *configStatement) (ConfigTargets, bool) {
+	return ConfigTargets{}, false
 }
 
 // One authorization log as one reader walks it.

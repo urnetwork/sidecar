@@ -255,9 +255,10 @@ func TestAnEntryAgainAheadOrMalformed(t *testing.T) {
 	}
 }
 
-// Each type whose rule another task builds is refused until it lands, so nothing passes unchecked: §8.8's statements
-// until ACL's rules are wired in, the presence keys, recovery bindings and Delegations of TEAM-M2-04 to -06, the
-// indexer, sponsor and veto records, §17.8's bridge statements, and the records that ride config heads only.
+// Each type whose rule another task builds is refused until it lands, so nothing passes unchecked: §8.8's
+// AuditOptIn until the audit reader's rule (ACL-M6-02), the presence keys, recovery bindings and Delegations of
+// TEAM-M2-04 to -06, the indexer, sponsor and veto records, §17.8's bridge statements, and the records that ride config
+// heads only.
 func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 	net := newTestConfigNet(t)
 	cases := []struct {
@@ -265,8 +266,8 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 		body       proto.Message
 		want       error
 	}{
-		{signedType: bridge.SignedType_SIGNED_OWNER_CONFIRM, body: &protocol.OwnerConfirm{Header: net.header(), SidecarId: net.owner.sidecarId.Bytes()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_SUSPEND, body: &bridge.Suspend{Header: net.header(), Subject: testConfigId("s").Bytes()}, want: ErrConfigRuleMissing},
+		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_IN, body: &protocol.AuditOptIn{Header: net.header()}, want: ErrConfigRuleMissing},
+		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_OUT, body: &protocol.AuditOptOut{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_KEY_REGISTER, body: &protocol.KeyRegister{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_RECOVERY_BIND, body: &protocol.RecoveryBind{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_DELEGATION, body: &protocol.Delegation{Header: net.header()}, want: ErrConfigRuleMissing},

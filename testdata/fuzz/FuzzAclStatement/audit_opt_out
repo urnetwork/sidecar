@@ -1,0 +1,4 @@
+go test fuzz v1
+byte('\x0e')
+[]byte("")
+uint16(14)
