@@ -46,8 +46,8 @@ var (
 
 // Reads the ZSK from its secret_files entry: BIND's private key format, Private-key-format v1.2 or
 // v1.3, Algorithm 13, and PrivateKey the 32-byte scalar in base64. Other lines, such as BIND's dates,
-// are ignored. The scalar is handed to the privacy harness the moment it is decoded (§22.7). DNS-M5-19
-// owns the file format and may replace this reading of it.
+// are ignored. The scalar is handed to the privacy harness the moment it is decoded (§22.7). This is
+// the ZSK key file format DNS-M5-19 keeps (ceremony.go), and MarshalDnsZsk writes it.
 func LoadZsk(data []byte) (crypto.Signer, error) {
 	refuse := func(format string, arguments ...any) error {
 		return fmt.Errorf("%w: zsk file: %s", ErrDnsKeyRefused, fmt.Sprintf(format, arguments...))
