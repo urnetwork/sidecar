@@ -133,18 +133,24 @@ func mxWorldName(name string) string {
 	return dns.CanonicalName(dns.Fqdn(name))
 }
 
+// A new signing key for zone. miekg/dns will not sign under a key whose tag is 0, and about one
+// random key in 65536 has that tag, so such a key is drawn again.
 func newMxWorldKey(zone string) (*dns.DNSKEY, crypto.Signer, error) {
-	key := &dns.DNSKEY{
-		Hdr:       dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: mxWorldTtl},
-		Flags:     dns.ZONE | dns.SEP,
-		Protocol:  3,
-		Algorithm: dns.ECDSAP256SHA256,
+	for {
+		key := &dns.DNSKEY{
+			Hdr:       dns.RR_Header{Name: zone, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: mxWorldTtl},
+			Flags:     dns.ZONE | dns.SEP,
+			Protocol:  3,
+			Algorithm: dns.ECDSAP256SHA256,
+		}
+		private, err := key.Generate(256)
+		if err != nil {
+			return nil, nil, err
+		}
+		if key.KeyTag() != 0 {
+			return key, private.(crypto.Signer), nil
+		}
 	}
-	private, err := key.Generate(256)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key, private.(crypto.Signer), nil
 }
 
 // The deepest zone holding name, under the lock.

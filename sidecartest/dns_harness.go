@@ -1123,22 +1123,28 @@ func newDnsHarnessKeys(net *Net, settings *DnsHarnessSettings) (*dnsHarnessKeys,
 		rootAnchors: map[string][]*dns.DNSKEY{},
 		rootWindows: map[string]map[int64]*dnsservice.DnsKeyWindow{},
 	}
+	// miekg/dns will not sign under a key whose tag is 0, and about one random key in 65536 has
+	// that tag, so such a key is drawn again.
 	newKey := func(flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey, error) {
-		record := &dns.DNSKEY{
-			Hdr:       dns.RR_Header{Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: settings.Keys.DnskeyTtl},
-			Flags:     flags,
-			Protocol:  3,
-			Algorithm: dns.ECDSAP256SHA256,
+		for {
+			record := &dns.DNSKEY{
+				Hdr:       dns.RR_Header{Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: settings.Keys.DnskeyTtl},
+				Flags:     flags,
+				Protocol:  3,
+				Algorithm: dns.ECDSAP256SHA256,
+			}
+			private, err := record.Generate(256)
+			if err != nil {
+				return nil, nil, err
+			}
+			key, ok := private.(*ecdsa.PrivateKey)
+			if !ok {
+				return nil, nil, errors.New("miekg made no ecdsa key")
+			}
+			if record.KeyTag() != 0 {
+				return record, key, nil
+			}
 		}
-		private, err := record.Generate(256)
-		if err != nil {
-			return nil, nil, err
-		}
-		key, ok := private.(*ecdsa.PrivateKey)
-		if !ok {
-			return nil, nil, errors.New("miekg made no ecdsa key")
-		}
-		return record, key, nil
 	}
 	kskRecord, kskPrivate, err := newKey(dns.ZONE | dns.SEP)
 	if err != nil {
