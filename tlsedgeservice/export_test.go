@@ -16,3 +16,23 @@ import (
 func NewProxyHeaderTimeoutForTest(clock sidecar.Clock, timeout time.Duration, conn net.Conn) (end func() bool) {
 	return newProxyHeaderTimeout(clock, timeout, conn).end
 }
+
+// Finished reads of the label map, failed or not.
+func (self *TlsEdgeService) NameLoadCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.nameLoadCount
+}
+
+// Finished kill reloads, failed or not.
+func (self *TlsEdgeService) KillLoadCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.killLoadCount
+}
+
+// Changes to the kill set.
+func (self *TlsEdgeService) KillChangeCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.killChangeCount
+}
+
+// Finished passes of the caps' loader.
+func (self *TlsEdgeService) LimitsPassCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.limits.passCount
+}

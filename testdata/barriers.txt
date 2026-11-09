@@ -30,7 +30,13 @@ barrier bridge_state.close.before device/bridge_state.go
 barrier bridge_state.route_swap.after device/bridge_state.go
 barrier bridge_state.route_swap.before device/bridge_state.go
 barrier certs.accept.write certsservice/order.go
+barrier certs.acme_order.after certsservice/acme.go
+barrier certs.acme_order.before certsservice/acme.go
 barrier certs.admit.transition certsservice/queue.go
+barrier certs.dns_write.after certsservice/solver_dns01.go
+barrier certs.dns_write.before certsservice/solver_dns01.go
+barrier certs.revoke.after certsservice/revoke.go
+barrier certs.revoke.before certsservice/revoke.go
 barrier config.apply config_apply.go
 barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
@@ -252,6 +258,12 @@ barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
 barrier tls.handshake.after smtpproof/tls_client.go
 barrier tls.handshake.before smtpproof/tls_client.go
+barrier tlsedge.kill_publish.after tlsedgeservice/kill_set.go
+barrier tlsedge.kill_publish.before tlsedgeservice/kill_set.go
+barrier tlsedge.kill_read.after tlsedgeservice/service.go
+barrier tlsedge.kill_read.before tlsedgeservice/service.go
+barrier tlsedge.names_publish.after tlsedgeservice/names.go
+barrier tlsedge.names_publish.before tlsedgeservice/names.go
 barrier token.refresh.after api_token_manager.go
 barrier token.refresh.before api_token_manager.go
 secret * gkm_keys.go
@@ -281,6 +293,8 @@ secret ReaderKey identity_enroll.go
 secret U keys_rotate.go
 secret U keys_unlock.go
 secret W keys_unlock.go
+secret acme_account_key certsservice/accounts.go
+secret acme_eab_mac_key certsservice/accounts.go
 secret auth_key api_routes_core.go
 secret auth_key config_authkey.go
 secret by_client_jwt api_client.go
@@ -344,3 +358,6 @@ secret tls13_shts smtpproof/tls_client.go
 secret tls_device_key tls_key.go
 secret tls_ecdhe_private smtpproof/tls_client.go
 secret tls_ecdhe_shared smtpproof/tls_client.go
+secret tls_visitor_cap tlsedgeservice/visitor_key.go
+secret tls_visitor_daily tlsedgeservice/visitor_key.go
+secret tls_visitor_record tlsedgeservice/visitor_key.go

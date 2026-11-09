@@ -8,6 +8,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -169,6 +170,30 @@ func TestTlsKillEntryKills(t *testing.T) {
 	for _, c := range cases {
 		if kills := c.entry.Kills(c.host, now); kills != c.kills {
 			t.Errorf("%+v on %q: %t", c.entry, c.host, kills)
+		}
+	}
+}
+
+// {tes_<network_id>} and its trigger share one hash tag, the trigger parses back to its network, and no
+// other key parses.
+func TestTlsKillKeys(t *testing.T) {
+	networkId := NewId()
+	key := TlsKillKey(networkId)
+	trigger := TlsKillTriggerKey(networkId)
+	if key != "{tes_"+networkId.String()+"}" || trigger != key+"n" {
+		t.Fatalf("keys %q, %q", key, trigger)
+	}
+	// one hash tag, the whole of the hash's key, so both land on one slot
+	if !strings.HasPrefix(key, "{") || !strings.HasSuffix(key, "}") || strings.Count(trigger, "}") != 1 {
+		t.Fatal("the hash and its trigger do not share one tag")
+	}
+	parsed, ok := ParseTlsKillTriggerKey(trigger)
+	if !ok || parsed != networkId {
+		t.Fatalf("parsed %v, %v", parsed, ok)
+	}
+	for _, other := range []string{key, "{tes_}n", "{tes_not-an-id}n", "{acl_" + networkId.String() + "}v", "tes_" + networkId.String() + "n"} {
+		if _, ok := ParseTlsKillTriggerKey(other); ok {
+			t.Errorf("%q parsed", other)
 		}
 	}
 }

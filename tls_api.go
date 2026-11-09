@@ -10,6 +10,7 @@
 package sidecar
 
 import (
+	"strings"
 	"time"
 )
 
@@ -165,4 +166,35 @@ func (self *TlsKillEntry) Kills(host string, now time.Time) bool {
 		return false
 	}
 	return self.Host == "" || self.Host == TlsKillAllHosts || self.Host == host
+}
+
+// Every network's {tes_}n, the family tlsedge and sockets watch on ServiceHost.Redis's shared subscriber (§13.9).
+const TlsKillTriggerKeyPattern = "{tes_*}n"
+
+// {tes_<network_id>}: the network's kills, a hash of host or TlsKillAllHosts to its TlsKillEntry's JSON (§13.9).
+func TlsKillKey(networkId Id) string {
+	return "{tes_" + networkId.String() + "}"
+}
+
+// {tes_<network_id>}n, in TlsKillKey's hash tag: INCR'd in the MULTI that writes the hash, since an INCR emits the key
+// event a HSET does not (D-PROTO-12).
+func TlsKillTriggerKey(networkId Id) string {
+	return TlsKillKey(networkId) + "n"
+}
+
+// The network whose {tes_}n key is key, false for any other key.
+func ParseTlsKillTriggerKey(key string) (Id, bool) {
+	rest, found := strings.CutPrefix(key, "{tes_")
+	if !found {
+		return Id{}, false
+	}
+	idText, found := strings.CutSuffix(rest, "}n")
+	if !found {
+		return Id{}, false
+	}
+	networkId, err := ParseId(idText)
+	if err != nil {
+		return Id{}, false
+	}
+	return networkId, true
 }
