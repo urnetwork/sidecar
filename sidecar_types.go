@@ -60,6 +60,8 @@ type Sidecar struct {
 	alarms sidecarAlarms
 	// §6.4's state Status reads witnessed_at and the UNVERIFIED pins from (sidecar_status.go).
 	headCheckStatuses sidecarHeadCheckStatuses
+	// §16's ledger and spend check behind Authorize (sidecar_gate.go).
+	gates sidecarGates
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
