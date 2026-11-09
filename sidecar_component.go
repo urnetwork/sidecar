@@ -13,7 +13,6 @@ package sidecar
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -25,10 +24,6 @@ import (
 
 // What a component name may not be: the core's own namespace and class names (§5.9).
 var sidecarReservedComponentNames = []string{sidecarCoreSecretsNamespace, keychainRecordsClass, sidecarSubprotocolStoreName}
-
-// What a component's env answers for every outward action until CORE-M3-01's gate lands: refused, never an implied
-// allow (I-8).
-var errSidecarGateUnbuilt = errors.New("the outward-action gate is not built yet, so every outward action is refused")
 
 // One of a Sidecar's components (§5.4).
 type SidecarComponent interface {
@@ -61,7 +56,8 @@ type SidecarEnv struct {
 	Store SidecarStore
 	// §6's dispatcher on the generation's client: inline, zero-wait handlers, and streams.
 	Subprotocol *Subprotocol
-	// The outward-action gate (I-8), which refuses every action until CORE-M3-01's gate lands.
+	// The outward-action gate (I-8): the Sidecar's Authorize, which refuses every action until §16's track installs
+	// its gate (sidecar_gate.go).
 	Authorize func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error
 	Log       Logger
 
@@ -77,12 +73,6 @@ func (self *SidecarEnv) Enqueue(byteCount int, run func(ctx context.Context)) bo
 		return false
 	}
 	return self.queue.offer(byteCount, run)
-}
-
-// The outward-action gate a component's env carries until CORE-M3-01's Authorize: every action refused, never an
-// implied allow (I-8).
-func refuseUnbuiltAuthorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
-	return errSidecarGateUnbuilt
 }
 
 // Whether name may name a component.
@@ -188,7 +178,7 @@ func (self *sidecarConnectGeneration) attach(component SidecarComponent) {
 			Secrets:     self.leg.sidecar.instance.secrets(networkId, name),
 			Store:       store,
 			Subprotocol: self.subprotocol,
-			Authorize:   refuseUnbuiltAuthorize,
+			Authorize:   self.leg.sidecar.Authorize,
 			Log:         self.leg.sidecar.log,
 			queue:       queue,
 		}

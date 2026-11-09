@@ -351,3 +351,61 @@ func TestSamplerReadsHeapGoroutinesAndRedisKeys(t *testing.T) {
 		t.Errorf("no Redis read as %d keys", sample.RedisKeys)
 	}
 }
+
+// A cancelled run launches nothing more, waits for what is in flight, and says how far it got, which
+// GateEvidence then refuses.
+func TestCancelledRunStopsArrivalsAndSaysSo(t *testing.T) {
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	sink := newQueueSink(clock, 0)
+	driver := NewDriver(&DriverSettings{Name: "cancelled", Rate: 10, Steady: 10 * time.Second, Clock: clock}, sink.do)
+	ctx, cancel := context.WithCancel(context.Background())
+	reports := make(chan *Report, 1)
+	go func() {
+		reports <- driver.Run(ctx)
+	}()
+	// let five arrivals in, each caught up before the clock moves
+	for launched := int64(1); ; launched += 1 {
+		for {
+			progress, changed := driver.Progress()
+			entered, released, sinkChanged := sink.progress()
+			if progress.Launched == launched && entered == launched && progress.Completed == released {
+				break
+			}
+			select {
+			case <-changed:
+			case <-sinkChanged:
+			case <-time.After(loadTestGuardTimeout):
+				t.Fatalf("arrival %d never caught up", launched)
+			}
+		}
+		if launched == 5 {
+			break
+		}
+		clock.Advance(100 * time.Millisecond)
+	}
+	cancel()
+	var report *Report
+	select {
+	case report = <-reports:
+	case <-time.After(loadTestGuardTimeout):
+		t.Fatal("a cancelled run did not end")
+	}
+	if report.Arrivals != 5 || report.Scheduled != 100 || report.Succeeded != 5 {
+		t.Errorf("arrivals %d of %d scheduled, %d succeeded; want 5 of 100 and 5", report.Arrivals, report.Scheduled, report.Succeeded)
+	}
+	report.Targets = []string{"acl-gates"}
+	report.Host = "builder-host"
+	report.Settings = map[string]string{"rate": "10"}
+	report.CommitSet = map[string]string{"sidecar": "abc123"}
+	if err := report.GateEvidence(); err == nil || !strings.Contains(err.Error(), "only 5 of its 100") {
+		t.Errorf("a cancelled run accepted as evidence: %v", err)
+	}
+	if len(report.Notes) == 0 || !strings.Contains(report.Notes[0], "cancelled") {
+		t.Errorf("the report does not say it was cancelled: %v", report.Notes)
+	}
+	// nothing launches after the cancel, though the clock moves past every due arrival
+	clock.Advance(20 * time.Second)
+	if progress, _ := driver.Progress(); progress.Launched != 5 {
+		t.Errorf("%d arrivals launched after the cancel", progress.Launched-5)
+	}
+}

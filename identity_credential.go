@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	// A pre-approved key's bundle, which signs this sidecar's own SidecarAdmit (§5.6), refused whole until CORE-M2-01's
-	// admission lands, rather than half-applied: FAILED_PRECONDITION.
+	// A pre-approved key's bundle, which signs this sidecar's own SidecarAdmit (§5.6), refused whole until the verified
+	// log can give its Delegation's row (TEAM-M2-10), rather than half-applied: FAILED_PRECONDITION.
 	ErrSidecarEnrollBundle = errors.New("a pre-approved auth key's bundle cannot be applied until admission lands")
 	// An sdk host's child token (§5.6's sdk host row), refused until CORE-M8-01.
 	ErrSidecarEnrollChild = errors.New("a child enrollment arrives with sdk hosts")
@@ -58,8 +58,8 @@ type SidecarEnrollCredential struct {
 	// sidecar_id and identity key, bind the next generation on a new client, and take this machine as the
 	// instance's own.
 	Replace bool
-	// The genesis anchor an invite or a pre-approved key carries, which CORE-M2-01 fills and checks before
-	// admission. Nothing reads it before then.
+	// The genesis anchor an invite carries, which Enroll checks whole before anything is sent and records as the
+	// sidecar's SidecarAnchor (identity_anchor.go), the log its ConfigClient follows having to chain to it.
 	Anchor *SidecarEnrollAnchor
 }
 

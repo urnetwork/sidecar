@@ -18,7 +18,8 @@
 #     stack               make stack-test: the store suites on §22.4's local stack, which needs Docker
 #     t3                  ../server/sidecar-t3.sh nightly: T3's FS rows and their 100 explorer seeds
 #   gate, the nightly phases and then, for --gate Mn:
-#     model               the TLC runs of sidecartest/model in gate mode (TEST-M2-08)
+#     model               the TLC runs of sidecartest/model in gate mode (TEST-M2-08), with TLC naming
+#                         the command that runs tlc2.TLC; with no TLC the gate fails, naming the tool
 #     gate-report         ../server/local/sidecar-gate Mn, OPS-M1-07's report of the gate's rows
 #
 # --legs runs the legs phase alone. --dry-run prints each phase's commands and runs none.

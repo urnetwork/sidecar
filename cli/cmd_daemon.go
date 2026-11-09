@@ -176,9 +176,23 @@ func registerUrDaemonMethods(daemon *sidecar.Daemon, instance string, target urD
 	return nil
 }
 
+// Control methods another command's file adds over the same target, at init, so each command keeps to its own
+// cmd_<name>.go (C-21): ur approve's, among them.
+var urDaemonMethodExtensions []func(target urDaemonTarget) []*sidecar.DaemonMethod
+
 // The control methods ur's daemon serves, over target: what registerUrDaemonMethods registers, and what a test reads
 // to hold ur native-host to every Confirm method among them.
 func urDaemonMethods(instance string, target urDaemonTarget, keyStoreKind osKeyStoreKind,
+	hostStores func() []sidecar.SidecarHostCredentialStore) []*sidecar.DaemonMethod {
+	methods := urDaemonCoreMethods(instance, target, keyStoreKind, hostStores)
+	for _, extension := range urDaemonMethodExtensions {
+		methods = append(methods, extension(target)...)
+	}
+	return methods
+}
+
+// The control methods of this file's own commands.
+func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind osKeyStoreKind,
 	hostStores func() []sidecar.SidecarHostCredentialStore) []*sidecar.DaemonMethod {
 	return []*sidecar.DaemonMethod{
 		{

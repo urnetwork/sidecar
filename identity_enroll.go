@@ -107,6 +107,11 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	if self.instance == nil || self.sidecarApi == nil {
 		return ErrSidecarClosed
 	}
+	// the network the credential vouches for, checked whole before anything is sent (§5.6's genesis row)
+	anchor, err := sidecarAnchorOfCredential(credential, nil)
+	if err != nil {
+		return err
+	}
 
 	self.enrollLock.Lock()
 	defer self.enrollLock.Unlock()
@@ -228,6 +233,12 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	}
 	if readerKeySeed != nil {
 		if err := secrets.Put(sidecarReaderKeyRecordName, readerKeySeed); err != nil {
+			return abandon(err)
+		}
+	}
+	if anchor != nil {
+		// the log this sidecar follows must chain to it (CORE-M2-01): a re-enrollment's anchor must be the one kept
+		if err := persistSidecarAnchor(secrets, anchor); err != nil {
 			return abandon(err)
 		}
 	}
