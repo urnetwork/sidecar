@@ -518,3 +518,20 @@ func TestAclReposGrantedToAtoms(t *testing.T) {
 		t.Errorf("wildcard repos %v", repos)
 	}
 }
+
+// An audit block naming a repo id of the wrong size names nothing, and EvsAccess, a gate's hot path, never panics on
+// it: NewAclState does not check the audit block.
+func TestAclAuditBlockWithAMalformedRepoId(t *testing.T) {
+	fixture := newAclTestFixture()
+	auditor := fixture.member(bridge.MemberRole_MEMBER_ROLE_AUDITOR)
+	device := fixture.device(auditor)
+	repoId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	fixture.rows.Audit = &protocol.AclAudit{
+		ReaderAtoms: [][]byte{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_AUDITOR).Bytes()},
+		RepoIds:     [][]byte{{1, 2, 3}},
+		AuditOptIn:  []byte("an opt-in the compile verified"),
+	}
+	if rights := aclTestRights(fixture.state(t), device, repoId, AclTokenAudienceEvs); rights != 0 {
+		t.Errorf("rights %b", rights)
+	}
+}

@@ -135,15 +135,18 @@ func (self *AclState) destinationOwner(grantDst []*protocol.AclTarget, now time.
 	for _, target := range grantDst {
 		switch {
 		case len(target.GetSidecarId()) != 0:
-			sidecar := self.sidecarState(Id(target.GetSidecarId()))
-			if sidecar == nil || sidecar.hardDeny(nowMs) != 0 {
+			// grantDst is the caller's, so an id of another size names no one
+			sidecarId, err := IdFromBytes(target.GetSidecarId())
+			sidecar := self.sidecarState(sidecarId)
+			if err != nil || sidecar == nil || sidecar.hardDeny(nowMs) != 0 {
 				alone = false
 				continue
 			}
 			addSidecar(sidecar)
 		case len(target.GetAtom()) != 0:
-			atomIndex, found := self.atomIndexes[Id(target.GetAtom())]
-			if !found {
+			atom, err := IdFromBytes(target.GetAtom())
+			atomIndex, found := self.atomIndexes[atom]
+			if err != nil || !found {
 				alone = false
 				continue
 			}

@@ -164,7 +164,7 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 			repo.Lock = body.GetLock()
 		case *protocol.OwnerConfirm:
 			for _, repo := range next {
-				if !aclRepoKindOwnerBound(repo.GetKind()) || Id(repo.GetOwnerMemberId()) != verdict.MemberId ||
+				if !aclRepoKindOwnerBound(repo.GetKind()) || !bytes.Equal(repo.GetOwnerMemberId(), verdict.MemberId.Bytes()) ||
 					slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(listed []byte) bool { return bytes.Equal(listed, body.GetSidecarId()) }) {
 					continue
 				}

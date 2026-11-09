@@ -170,3 +170,19 @@ func TestAclNamedAndRoleApprovers(t *testing.T) {
 		t.Errorf("autogroup:member: %+v", anyMember)
 	}
 }
+
+// autogroup:dst-owner over destinations whose ids are of the wrong size, which a caller may pass, resolves to an admin
+// and never panics.
+func TestAclDstOwnerOfMalformedDestinations(t *testing.T) {
+	fixture := newAclTestFixture()
+	alice := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	laptop := fixture.device(alice)
+	state := fixture.state(t)
+	dstOwner := aclApproverAtoms(AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER))
+	for _, target := range []*protocol.AclTarget{{SidecarId: []byte{1, 2, 3}}, {Atom: []byte{1}}} {
+		approvers := state.ResolveApprovers(dstOwner, AclSidecarSubject(laptop), []*protocol.AclTarget{target}, aclTestNow)
+		if !aclApproversAre(approvers, nil, protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN) {
+			t.Errorf("%v: %+v", target, approvers)
+		}
+	}
+}

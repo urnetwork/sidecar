@@ -22,6 +22,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"math/bits"
 	"slices"
 	"time"
@@ -407,7 +408,7 @@ func (self *AclState) addAuditRights(accumulator *aclEvsAccumulator, sidecar *ac
 		return
 	}
 	named := slices.Contains(audit.GetRepoKinds(), uint32(repo.kind)) ||
-		slices.ContainsFunc(audit.GetRepoIds(), func(idBytes []byte) bool { return Id(idBytes) == repoId })
+		slices.ContainsFunc(audit.GetRepoIds(), func(idBytes []byte) bool { return bytes.Equal(idBytes, repoId.Bytes()) })
 	if !named {
 		return
 	}

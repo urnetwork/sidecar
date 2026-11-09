@@ -191,3 +191,31 @@ func TestParseAclGrantAction(t *testing.T) {
 		}
 	}
 }
+
+// Request rules are no part of what NewAclState checks, and an ask's targets are its caller's: ids of the wrong size
+// in either match nothing and never panic, so a malformed requests row from a writer cannot stop a gate.
+func TestMatchAclRequestTakesMalformedIdsAsNoMatch(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	short := []byte{1, 2, 3}
+	dial := []protocol.AclAction{protocol.AclAction_ACL_ACTION_DIAL}
+	fixture.rows.Requests = append(fixture.rows.Requests, &protocol.AclRequestRule{
+		RuleId: NewId().Bytes(), SrcAtoms: [][]byte{short}, Actions: []uint32{uint32(dial[0])},
+		Targets: []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)},
+	})
+	member := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER)
+	for _, target := range []*protocol.AclTarget{{SidecarId: short}, {NetworkId: short}, {ClientId: short}, {RepoId: short}, {Atom: short}} {
+		fixture.requestRule([]Id{member}, []*protocol.AclTarget{target}, dial, nil, 0)
+	}
+	fixture.requestRule([]Id{member}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_SELF), aclWildcardRepoTarget(),
+		{NetworkId: NewId().Bytes()}, {ClientId: NewId().Bytes()}}, dial, nil, 0)
+	state := fixture.state(t)
+	for _, target := range []*protocol.AclTarget{{SidecarId: short}, {NetworkId: short}, {ClientId: short}, {RepoId: short}, {Atom: short}} {
+		if _, err := MatchAclRequest(state, &AclGrantAsk{Subject: cast.laptop, Dst: []*protocol.AclTarget{target}, Allow: dial}, aclTestNow); !errors.Is(err, ErrAclRequestNoMatch) {
+			t.Errorf("%v: %v", target, err)
+		}
+	}
+	if _, err := MatchAclRequest(state, &AclGrantAsk{Subject: cast.laptop, Dst: []*protocol.AclTarget{aclSidecarTarget(cast.stranger)}, Allow: dial}, aclTestNow); !errors.Is(err, ErrAclRequestNoMatch) {
+		t.Errorf("a well-formed ask against malformed rules: %v", err)
+	}
+}
