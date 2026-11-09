@@ -306,6 +306,7 @@ func ReadRevocation(ctx context.Context, cluster BlobCluster, verify RevocationV
 	return record, nil
 }
 
+// Tunables of RevocationChecker.
 type RevocationSettings struct {
 	// How long one read answers for its subject: §7.8 caps it at 5 s, so a removal reaches evs and gkm
 	// within 5 s of its object. Zero or negative reads on every check.
@@ -317,6 +318,7 @@ type RevocationSettings struct {
 	Clock Clock
 }
 
+// The cache §7.8's check row allows: 5 s.
 func DefaultRevocationSettings() *RevocationSettings {
 	return &RevocationSettings{
 		CacheTimeout:    5 * time.Second,
