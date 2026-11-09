@@ -43,6 +43,20 @@ The previews below are design-stage mockups from [design/mocks/](design/mocks/).
 
 ![URnetwork app: the Burner identities tab with burner addresses, saved logins and notes, recURd's Your agents tab, and the Feedback chat](design/mocks/previews/urnetwork-app-burner-recurd.png)
 
+## Verifying a release of ur
+
+Each release of `ur` publishes a `SHA256SUMS` over its packages and a `ur-release.json` naming its version and files. A release is installable by script once it is promoted: two people holding an offline Ed25519 key sign its `SHA256SUMS`, and ur.io serves the sums, the signature and the release's `ur-release.json` as `latest.json` (DESIGN.md §4.10).
+
+The public key is published as `RELEASE-KEY.pub` at the top of this repository and at `https://ur.io/recurd/release-key.pub`: one line, `ssh-ed25519 <key> ur-release`. Signatures use the SSH signature format in the namespace `ur-release`, under the identity `ur-release`. To check a release by hand with OpenSSH 8.1 or later:
+
+```sh
+echo "ur-release namespaces=\"ur-release\" $(cut -d' ' -f1,2 RELEASE-KEY.pub)" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I ur-release -n ur-release -s SHA256SUMS.sig < SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+```
+
+Neither file exists yet: the key is made at its ceremony, and until then nothing is promoted and `install.sh` refuses to install.
+
 ---
 
 Licensed under [MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0/).
