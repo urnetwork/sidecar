@@ -24,7 +24,7 @@ import (
 
 // One item of the block, or of the rules that bind it (§4.4, §18.10, CODESTYLE).
 type failsOnRow struct {
-	// deps, layering, legs, cgo or hygiene, then size for make size's
+	// deps, layering, legs, cgo, hygiene or x9 (§4.6's ledger), then size for make size's
 	row  string
 	item string
 	rule func(self *repository, t testing.TB) []string
@@ -369,6 +369,47 @@ var failsOnRows = []failsOnRow{
 	},
 
 	{
+		row: "x9", item: "a connect shape §4.6 rejects, defers or leaves for later (C1, C2, C4, C6b, C7, C10, C17)",
+		rule: (*repository).x9ShapeFindings,
+		plantedTests: []string{
+			"TestX9FailsOnAnExportedReservedRegistration", "TestX9FailsOnAFilterOption", "TestX9FailsOnAJsCarrier",
+			"TestX9FailsOnATunForwarder", "TestX9FailsOnACallerLaneKey", "TestX9FailsOnAPushMessageType",
+			"TestX9FailsOnAGvisorFreeJsTag",
+		},
+	},
+	{
+		row: "x9", item: "a connect proto that is not additive against connect's main, or no main to compare (D-REPO-5)",
+		rule: (*repository).x9ProtoFindings,
+		plantedTests: []string{
+			"TestX9FailsOnARenumberedField", "TestX9FailsOnARetypedField", "TestX9FailsOnARemovedEnumValue",
+			"TestX9FailsOnARemovedMessage", "TestX9AllowsAnAddedField", "TestX9FailsWithoutConnectsMain",
+		},
+	},
+	{
+		row: "x9", item: "a connect change landing before the row it follows, C18's before C13's (§4.18)",
+		rule:         (*repository).x9OrderFindings,
+		plantedTests: []string{"TestX9FailsOnC18BeforeC13"},
+	},
+	{
+		row: "x9", item: "connect requiring sidecar (R-REPO-2)",
+		rule:         (*repository).x9ConnectRequireFindings,
+		plantedTests: []string{"TestX9FailsOnConnectRequiringSidecar"},
+	},
+	{
+		row: "x9", item: "a landed connect change no default-off test pins: reported here, refused by TestX9ReadyForMain",
+		rule:         (*repository).x9DefaultOffReport,
+		plantedTests: []string{"TestX9ReportsAMarkerWithNoDefaultOffTest"},
+	},
+	{
+		row: "x9", item: "what merge-out's TestX9ReadyForMain refuses before connect's main, at the gate's milestone",
+		checkoutTest: "TestX9ReadyForMain",
+		plantedTests: []string{
+			"TestX9ReadyForMainRefusesAMarkerWithNoDefaultOffTest", "TestX9ReadyForMainRefusesC19WithoutItsSweep",
+			"TestX9ReadyForMainRefusesARowDueWithNoMarker", "TestX9ReadyForMainPassesAReadyConnect",
+		},
+	},
+
+	{
 		row: "size", item: "the ios_extension leg adding over §18.10's 1 MiB",
 		checkoutTest: "TestSizeVerdictsHoldTheirLimits",
 		plantedTests: []string{"TestSizeFailsOnADeviceRoleOverItsLimit"},
@@ -522,13 +563,13 @@ func TestEveryRowHasARuleAndAPlantedViolation(t *testing.T) {
 			}
 		}
 	}
-	planted := regexp.MustCompile(`^Test[A-Za-z]+FailsOn`)
+	planted := regexp.MustCompile(`^Test[A-Za-z0-9]+FailsOn`)
 	for name := range tests {
 		if planted.MatchString(name) && !indexed[name] {
 			t.Errorf("%s is on no row", name)
 		}
 	}
-	for _, row := range []string{"deps", "layering", "legs", "cgo", "hygiene", "size"} {
+	for _, row := range []string{"deps", "layering", "legs", "cgo", "hygiene", "x9", "size"} {
 		if !slices.ContainsFunc(failsOnRows, func(entry failsOnRow) bool { return entry.row == row }) {
 			t.Errorf("no rule is in the %s row", row)
 		}
