@@ -107,7 +107,7 @@ func releaseBudgetLease(ctx context.Context, redis sidecar.Redis, clusterId stri
 	return err
 }
 
-// 16 random bytes as hex: names a lease holder and no host.
+// 16 random bytes as hex: names a lease holder, or an evs process's PUT report (hdd_admission.go), and no host.
 func newBudgetHolderId() (string, error) {
 	holderIdBytes := make([]byte, 16)
 	if _, err := rand.Read(holderIdBytes); err != nil {
