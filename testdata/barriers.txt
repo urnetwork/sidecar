@@ -199,6 +199,7 @@ barrier token.refresh.after api_token_manager.go
 barrier token.refresh.before api_token_manager.go
 secret * gkm_keys.go
 secret * mls_state.go
+secret AdminDpopKey config_admin_command.go
 secret ClientKey api_dpop.go
 secret ClientKey identity_keys.go
 secret KEK_e mls_engine.go

@@ -6,7 +6,9 @@ package sidecar
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	_ "embed"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +16,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The Worker leg has no file system, so the vectors are embedded.
@@ -243,5 +246,57 @@ func TestAdminConsentCode(t *testing.T) {
 	}
 	if _, err := NewAdminConsentCode(bytes.NewReader([]byte{1, 2})); err == nil {
 		t.Fatal("a short draw made a code")
+	}
+}
+
+// RFC 8037 Appendix A's key: its thumbprint is A.3's.
+func TestDpopKeyThumbprintRfc8037(t *testing.T) {
+	seed, _ := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+	key, err := NewAdminDpopKey(bytes.NewReader(seed), func() time.Time { return time.Unix(1767225600, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.Thumbprint != "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k" {
+		t.Fatalf("thumbprint %s", key.Thumbprint)
+	}
+}
+
+// A proof by an admin DPoP key names its key, the request and the token, and an erased key signs nothing.
+func TestAdminDpopKeySignsAndErases(t *testing.T) {
+	random := bytes.NewReader(bytes.Repeat([]byte{9}, 32+16))
+	key, err := NewAdminDpopKey(random, func() time.Time { return time.Unix(1767225600, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := key.Sign("POST", "https://api.example/network/auth-keys?x=1", "synthetic-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(proof, ".")
+	if len(parts) != 3 {
+		t.Fatalf("proof %s", proof)
+	}
+	header, _ := base64.RawURLEncoding.DecodeString(parts[0])
+	claims, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	signature, _ := base64.RawURLEncoding.DecodeString(parts[2])
+	jwk := &struct {
+		Jwk struct {
+			X string `json:"x"`
+		} `json:"jwk"`
+	}{}
+	if err := json.Unmarshal(header, jwk); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _ := base64.RawURLEncoding.DecodeString(jwk.Jwk.X)
+	if DpopKeyThumbprint(publicKey) != key.Thumbprint || !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
+		t.Fatal("the proof is not by the key")
+	}
+	expectedClaims := `{"ath":"` + dpopAth("synthetic-token") + `","htm":"POST","htu":"https://api.example/network/auth-keys","iat":1767225600,"jti":"`
+	if !strings.HasPrefix(string(claims), expectedClaims) {
+		t.Fatalf("claims %s", claims)
+	}
+	key.Erase()
+	if _, err := key.Sign("POST", "https://api.example/network/auth-keys", "synthetic-token"); err == nil {
+		t.Fatal("an erased key signed")
 	}
 }

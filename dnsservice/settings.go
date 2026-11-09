@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -91,6 +92,36 @@ type DnsSettings struct {
 	Feed DnsFeedSettings `yaml:"feed"`
 	// How the API block holds, reads and bounds its routes (DNS-M5-08). Not in the sketch.
 	Api DnsApiSettings `yaml:"api"`
+	// Each root's own records (§12.7's <root> set, plan reading 19), by root, which the API block
+	// reconciles through §12.6's write path at start (DNS-M5-11). Not in the sketch, which gives
+	// <root>'s records no route. A root with none keeps no records of its own, so its edges serve
+	// nothing until it has an SOA.
+	RootRecords map[string]*DnsRootRecordSettings `yaml:"root_records"`
+}
+
+// One root's own records (§12.4, §12.7, §13.8, §14.6): what DnsReconcileRootRecords writes at <root>,
+// its NS and glue, _dmarc, _psl and _spf. Every value is config, so no code names a platform host.
+type DnsRootRecordSettings struct {
+	// The SOA's RNAME, a mailbox as a name. Empty takes hostmaster.<root>.
+	SoaRname string `yaml:"soa_rname"`
+	// §13.8's CAA set at <root>, each a CAA RDATA such as 0 issue "ca.example; accounturi=...":
+	// TlsRootCaaRecords' output (TLS-M5-16). Empty publishes 0 issue ";" and 0 issuewild ";", so no CA
+	// issues under the root until the set is configured: the closed direction.
+	Caa []string `yaml:"caa"`
+	// The CAA iodef URL, mailto: or https:. Empty adds none.
+	Iodef string `yaml:"iodef"`
+	// @ MX 10's target, the report and role-mail host (D-SMTP-19, owner decision 124). Empty publishes
+	// a null MX (RFC 7505), so mail to <root> is refused rather than sent anywhere unset.
+	ReportMx string `yaml:"report_mx"`
+	// @ A and AAAA, answered from the healthy lb interfaces, where a platform certificate redirects to
+	// ur.io (§13.4).
+	ApexEdge bool `yaml:"apex_edge"`
+	// _dmarc gains psd=y once company mail has left the root (§12.4 step 4).
+	CompanyMailLeft bool `yaml:"company_mail_left"`
+	// _psl's TXT value, the Public Suffix List's proof (§12.4). Empty publishes no _psl.
+	Psl string `yaml:"psl"`
+	// Each NS label's glue addresses, which arrive with the dns edge hosts. An NS with none has no glue.
+	Glue map[string][]string `yaml:"glue"`
 }
 
 // How the API block holds, reads and bounds its routes (DNS-M5-08, §12.8).
@@ -363,6 +394,13 @@ func LoadDnsSettings(data []byte) (*DnsSettings, error) {
 	for index, root := range settings.Roots {
 		settings.Roots[index] = dns.CanonicalName(root)
 	}
+	if settings.RootRecords != nil {
+		canonical := map[string]*DnsRootRecordSettings{}
+		for root, records := range settings.RootRecords {
+			canonical[dns.CanonicalName(root)] = records
+		}
+		settings.RootRecords = canonical
+	}
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
@@ -468,6 +506,24 @@ func (self *DnsSettings) Validate() error {
 	}
 	if err := self.Signing.validate(); err != nil {
 		return refuse("signing: %v", err)
+	}
+	for root, records := range self.RootRecords {
+		if !slices.Contains(self.Roots, root) {
+			return refuse("root_records: %s is no root", root)
+		}
+		if records == nil {
+			return refuse("root_records: %s is empty", root)
+		}
+		for ns, addresses := range records.Glue {
+			if !slices.Contains(self.Ns, ns) {
+				return refuse("root_records: %s glue for %s, which ns does not list", root, ns)
+			}
+			for _, address := range addresses {
+				if _, err := netip.ParseAddr(address); err != nil {
+					return refuse("root_records: %s glue %q is no address", root, address)
+				}
+			}
+		}
 	}
 	return nil
 }

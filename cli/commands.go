@@ -173,7 +173,7 @@ func newUrCli() *urCli {
 	}
 }
 
-// The ur-cli login TEAM-M1-08 registers. Nil until it lands, which `ur login` refuses (C-14).
+// The ur-cli login TEAM-M1-08 registers (urcli_login.go). Nil, `ur login` refuses (C-14).
 var urcliLoginEntry urLoginFunction
 
 // Runs one ur invocation, args as os.Args gives them, and answers the exit code.

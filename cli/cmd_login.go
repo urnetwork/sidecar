@@ -1,7 +1,7 @@
 // ur login (§5.6, §7.8, D-TEAM-7): TEAM-M1-08's ur-cli mints a single-use, user-owned auth key of at most 5 min in
 // this process, never through the daemon or MCP; ur drops the OAuth token at once, hands the key to the daemon over
-// the control socket, and then offers to register a presence key through §16's hook. Until ur-cli lands, ur login
-// refuses (C-14). --recover is CORE-M2-06's code-only recovery, refused until it lands.
+// the control socket, and then offers to register a presence key through §16's hook. ur-cli is urcli_login.go's
+// (C-14). --recover is CORE-M2-06's code-only recovery, refused until it lands.
 
 package main
 

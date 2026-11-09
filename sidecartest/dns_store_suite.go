@@ -38,8 +38,9 @@ type dnsSuiteCase struct {
 	run  func(ctx context.Context, store dnsservice.DnsStore, root string) error
 }
 
-// Runs every case on store, each on a fresh root under .example.
-func RunDnsStoreSuite(t *testing.T, store dnsservice.DnsStore) {
+// Runs every case on store, each on a fresh root under .example. t is a TB so a server test env's
+// attempt can run it.
+func RunDnsStoreSuite(t testing.TB, store dnsservice.DnsStore) {
 	t.Helper()
 	runId := sidecar.NewId().String()
 	for index, suiteCase := range dnsSuiteCases() {
