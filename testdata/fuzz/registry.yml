@@ -1,0 +1,368 @@
+# §22.6's fuzz targets (D-TEST-4, R-TEST-5; TEST-M1-10): every func Fuzz in this repository, by the bullet of
+# §22.6 it answers, with its owning task, its seeds and, where the bullet names one, the second implementation it is
+# held to. check/fuzz_registry_test.go holds this file to the code and to §22.6's own text:
+#
+#   - a func Fuzz with no target here fails, and so does a target here past its milestone with no func Fuzz;
+#   - a target with no seeds fails: none named here, no f.Add in it or in a helper it hands f to, and no corpus
+#     in its package's testdata/fuzz/<target>/; a seeds directory named here must hold a file, and a package's
+#     own corpus directory must be named here;
+#   - a crasher a person moved in with sidecartest.CrasherSeed names its regression test, which must exist;
+#   - every bullet of §22.6 has one row, matched by its bold words, and a row's bullet must be one of them;
+#   - a second implementation named here is imported by a test file of the target's package, and a reference
+#     named here is a function its tests declare;
+#   - each target's seeds run as ordinary tests under test.sh: TestFuzzSeedsRunUnderTestSh runs every module's
+#     targets as test.sh does, with and without sidecar_testhooks, and fails a target no seed of which ran
+#     (owner decision 101: fuzzing runs nowhere continuously, so a seed that never runs is the whole risk).
+#
+# landed       the newest milestone whose exit has passed, which each gate's sweep raises with
+#              testdata/metadata/fields.yml's, and the two must agree
+# rows         one per §22.6 bullet, then the targets other sections and tasks asked for
+#   id         a short name for findings
+#   bullet     §22.6's bold words, without the colon; empty on a row no bullet names
+#   spec       for a row no bullet names, what asks for it
+#   owner      the task that writes the row's targets, unless a target names its own
+#   milestone  Mn: from that milestone's exit, a target here with no func Fuzz fails
+#   differential  the second implementation or reference §22.6's bullet names, if any: once the row's
+#              milestone has landed, at least one of its targets names a second or a reference
+#   targets
+#     name     the func Fuzz
+#     package  its package as check/ names it: "." for the root, else its directory, a nested module's
+#              name first (mlsinterop, smtpproof)
+#     owner, milestone  when they differ from the row's
+#     seeds    directories, relative to the package, whose files the target adds as seeds or go test reads
+#              as its corpus; empty when its seeds are f.Add calls in code
+#     second   import paths of the second implementation the target compares against
+#     reference  a function of the package's tests, written apart, that the target compares against
+#
+# Third-party forks under third_party/ keep their upstream fuzz targets, which are not ours and are not listed.
+# Server's targets (FuzzSidecarConfig, OPS-M1-03) sit in server's tests, which this repository cannot read.
+
+landed: M0
+
+rows:
+  - id: envelope
+    bullet: "Envelope, chunks, every `sidecar/protocol` body"
+    owner: PROTO-M1-02
+    milestone: M1
+    differential: "proto.Unmarshal and proto.MarshalOptions{Deterministic: true}"
+    targets:
+      - {name: FuzzEnvelope, package: ".", seeds: [testdata/fuzz/FuzzEnvelope], second: [google.golang.org/protobuf/proto]}
+      - {name: FuzzChunkReassembly, package: ".", seeds: [testdata/fuzz/FuzzChunkReassembly]}
+      - {name: FuzzProtocolBody, package: ".", seeds: [testdata/fuzz/FuzzProtocolBody], second: [google.golang.org/protobuf/proto]}
+      - {name: FuzzBody, package: protocol, seeds: [testdata/fuzz/FuzzBody], second: [google.golang.org/protobuf/proto]}
+
+  - id: typed-signed
+    bullet: "Typed `Signed` statements"
+    owner: PROTO-M1-01
+    milestone: M1
+    targets:
+      - {name: FuzzSignedTypeConfusion, package: protocol/bridge, seeds: [testdata/fuzz/FuzzSignedTypeConfusion]}
+      - {name: FuzzVerifySigned, package: protocol/bridge}
+      - {name: FuzzVerifyRecoverySigned, package: protocol/bridge}
+      - {name: FuzzVerifyPresenceCountersign, package: protocol/bridge}
+      - {name: FuzzConfigStatementType, package: ".", owner: TEAM-M2-01, milestone: M2, seeds: [testdata/fuzz/FuzzConfigStatementType]}
+      - {name: FuzzAclStatement, package: ".", owner: ACL-M2-06, milestone: M2, seeds: [testdata/fuzz/FuzzAclStatement]}
+
+  - id: record-headers
+    bullet: "`record.proto` headers"
+    owner: RECORD-M3-03
+    milestone: M3
+    targets:
+      - {name: FuzzRecordHeader, package: "."}
+      - {name: FuzzRecordEntry, package: ".", owner: RECORD-M3-11}
+
+  - id: state-machines
+    bullet: "Stream, push and config-delta state machines"
+    owner: PROTO-M1-06
+    milestone: M1
+    targets:
+      - {name: FuzzPushState, package: ".", seeds: [testdata/fuzz/FuzzPushState]}
+      - {name: FuzzStreamState, package: ".", owner: PROTO-M5-01, milestone: M5, seeds: [testdata/fuzz/FuzzStreamState]}
+      - {name: FuzzConfigDelta, package: ".", owner: TEAM-M2-02, milestone: M2, seeds: [testdata/fuzz/FuzzConfigDelta]}
+      - {name: FuzzHeadCheckState, package: ".", owner: PROTO-M2-02, milestone: M2, seeds: [testdata/fuzz/FuzzHeadCheckState]}
+
+  - id: clienthello
+    bullet: "tlsedge ClientHello, split across records"
+    owner: TLS-M5-06
+    milestone: M5
+    differential: "crypto/tls"
+    targets:
+      - {name: FuzzClientHelloRecords, package: tlsedgeservice, seeds: [../testdata/fuzz/FuzzClientHelloRecords], second: [crypto/tls]}
+
+  - id: proxy
+    bullet: "PROXY v1 and v2"
+    owner: TLS-M5-07
+    milestone: M5
+    differential: "pires/go-proxyproto against a reader written from the spec (tls-hello-mailgun-proxyproto-license: no sidecar module links mailgun)"
+    targets:
+      - {name: FuzzProxyHeader, package: tlsedgeservice, seeds: [../testdata/fuzz/FuzzProxyHeader], second: [github.com/pires/go-proxyproto], reference: testReferenceProxyHeader}
+
+  - id: smtp-hops
+    bullet: "SMTP at mxedge (pre-TLS), smtpedge (MX replies) and receivers"
+    owner: MAIL-M5-01
+    milestone: M5
+    targets:
+      - {name: FuzzMxDialog, package: mxedgeservice, seeds: [../testdata/fuzz/FuzzMxDialog]}
+      - {name: FuzzParseReplies, package: smtpproof, owner: SMTP-M0-01, milestone: M0}
+      - {name: FuzzSmtpFrame, package: ".", owner: SMTP-M9-01, milestone: M9, seeds: [testdata/fuzz/FuzzSmtpFrame]}
+      - {name: FuzzSmtpMxReplies, package: smtpedgeservice, owner: SMTP-M9-12, milestone: M9}
+      - {name: FuzzMailSession, package: ".", owner: MAIL-M7-14, milestone: M7}
+
+  - id: mail-parsers
+    bullet: "go-message, mox, ARF, RUA, TLS-RPT, DSN"
+    owner: MAIL-M7-11
+    milestone: M5
+    targets:
+      - {name: FuzzMailParse, package: ".", milestone: M7, seeds: [testdata/fuzz/FuzzMailParse]}
+      - {name: FuzzSmtpArf, package: smtpedgeservice, owner: SMTP-M5-02, seeds: [testdata/fuzz/FuzzSmtpArf]}
+      - {name: FuzzSmtpAggregate, package: smtpedgeservice, owner: SMTP-M5-03, seeds: [testdata/fuzz/FuzzSmtpAggregate]}
+
+  - id: git
+    bullet: "Git pkt-line, pack, delta; head-mode codec"
+    owner: EVS1-M2-06
+    milestone: M2
+    differential: "go-git"
+    targets:
+      - {name: FuzzEvsPktLine, package: "."}
+      - {name: FuzzEvsGitDeltaApply, package: "."}
+      - {name: FuzzEvsGitDeltaRoundTrip, package: "."}
+      - {name: FuzzEvsGitTreeDecode, package: "."}
+      - {name: FuzzEvsGitCommitDecode, package: "."}
+      - {name: FuzzEvsGitIdentDecode, package: "."}
+      - {name: FuzzEvsGitTreeEqualsGoGit, package: mlsinterop, second: [github.com/go-git/go-git/v5]}
+      - {name: FuzzEvsGitCommitEqualsGoGit, package: mlsinterop, second: [github.com/go-git/go-git/v5]}
+      - {name: FuzzEvsGitDeltaApplyEqualsGoGit, package: mlsinterop, seeds: [../testdata/fuzz/evs_git_delta], second: [github.com/go-git/go-git/v5]}
+      - {name: FuzzEvsGitDeltaEncodeEqualsGoGit, package: mlsinterop, seeds: [../testdata/fuzz/evs_git_delta], second: [github.com/go-git/go-git/v5]}
+      - {name: FuzzEvsPktLineEqualsGoGit, package: mlsinterop, seeds: [../testdata/fuzz/evs_git_pktline], second: [github.com/go-git/go-git/v5]}
+      - {name: FuzzEvsPktLineEncodeEqualsGoGit, package: mlsinterop, second: [github.com/go-git/go-git/v5]}
+
+  - id: evs-records
+    bullet: "`EvsPush`, `EvsPushPart`, a DROP's `EvsDropHistory` and its lists, batch records, window entries, upload receipts, index entries, name tables, path maps, segments"
+    owner: EVS1-M2-05
+    milestone: M2
+    targets:
+      - {name: FuzzEvsPush, package: ".", seeds: [testdata/fuzz/evs_push]}
+      - {name: FuzzEvsPushPart, package: ".", seeds: [testdata/fuzz/evs_push]}
+      - {name: FuzzEvsBatch, package: ".", seeds: [testdata/fuzz/evs_batch]}
+      - {name: FuzzEvsWindowEntry, package: "."}
+      - {name: FuzzEvsReceiptAndPathMap, package: "."}
+      - {name: FuzzEvsSegment, package: ".", owner: EVS1-M2-04, seeds: [testdata/fuzz/evs_segment]}
+      - {name: FuzzEvsNameTable, package: ".", owner: EVS1-M2-04, seeds: [testdata/fuzz/evs_name_table]}
+      - {name: FuzzEvsIndexEntry, package: evsservice, owner: EVS1-M2-09}
+      - {name: FuzzEvsUploadReceipt, package: evsservice, owner: EVSB-M2-09}
+      - {name: FuzzEvsPidxEntry, package: evsservice, owner: EVSB-M2-10}
+      - {name: FuzzEvsDrop, package: ".", owner: EVS2-M10-32, milestone: M10, seeds: [testdata/fuzz/evs_drop]}
+      - {name: FuzzEvsFormat2Batch, package: ".", owner: EVS2-M10-32, milestone: M10, seeds: [testdata/fuzz/evs_batch]}
+      - {name: FuzzEvsKind5Segment, package: ".", owner: EVS2-M10-32, milestone: M10, seeds: [testdata/fuzz/evs_segment]}
+
+  - id: mls
+    bullet: "MLS messages, Welcome, GroupInfo, tree, `GkmCommitHeader`"
+    owner: KEYS-M2-10
+    milestone: M2
+    differential: "thomas-vilte/mls-go (0x0001) and tmc/mls (0x004F as 0x0010)"
+    targets:
+      - {name: FuzzMlsCodecIsCanonical, package: "."}
+      - {name: FuzzMlsRatchetTree, package: "."}
+      - {name: FuzzMlsLeafNode, package: "."}
+      - {name: FuzzMlsKeyPackage, package: "."}
+      - {name: FuzzMlsProposal, package: "."}
+      - {name: FuzzMlsUpdatePath, package: "."}
+      - {name: FuzzMlsGroupContext, package: "."}
+      - {name: FuzzMlsCapabilities, package: "."}
+      - {name: FuzzMlsCredential, package: "."}
+      - {name: FuzzMlsMessage, package: "."}
+      - {name: FuzzMlsCommit, package: "."}
+      - {name: FuzzMlsSenderData, package: "."}
+      - {name: FuzzMlsHeaderAgreesWithPeers, package: mlsinterop, second: [github.com/thomas-vilte/mls-go, github.com/tmc/mls]}
+      - {name: FuzzMlsGkmCommitHeaderAgreesWithPeers, package: mlsinterop, seeds: [../testdata/fuzz/mls_gkm_commit_header], second: [github.com/thomas-vilte/mls-go, github.com/tmc/mls]}
+      - {name: FuzzMlsWelcomeAgreesWithPeers, package: mlsinterop, seeds: [../testdata/fuzz/mls_welcome], second: [github.com/thomas-vilte/mls-go, github.com/tmc/mls]}
+      - {name: FuzzMlsGroupInfoAgreesWithPeers, package: mlsinterop, seeds: [../testdata/fuzz/mls_group_info], second: [github.com/thomas-vilte/mls-go, github.com/tmc/mls]}
+      - {name: FuzzMlsRatchetTreeAgreesWithPeers, package: mlsinterop, seeds: [../testdata/fuzz/mls_ratchet_tree], second: [github.com/thomas-vilte/mls-go, github.com/tmc/mls]}
+
+  - id: dns
+    bullet: "DNS feed, synthesis, validator; `dnssec_chain`"
+    owner: DNS-M5-03
+    milestone: M5
+    targets:
+      - {name: FuzzAnswer, package: dnsservice, seeds: [../testdata/fuzz/FuzzAnswer]}
+      - {name: FuzzFeedAnswer, package: dnsservice, owner: DNS-M5-06, seeds: [../testdata/fuzz/FuzzFeedAnswer]}
+      - {name: FuzzValidateUserRecordSet, package: dnsservice, owner: DNS-M5-02, seeds: [../testdata/fuzz/FuzzValidateUserRecordSet]}
+      - {name: FuzzValidateDnsName, package: ".", owner: DNS-M0-01, milestone: M0, seeds: [testdata/fuzz/FuzzValidateDnsName]}
+      - {name: FuzzSmtpDnssecChain, package: ".", owner: SMTP-M9-05, milestone: M9, seeds: [testdata/fuzz/FuzzSmtpDnssecChain]}
+
+  - id: policy-compilers
+    bullet: "HuJSON compiler; `BridgeEgressPolicy`"
+    owner: ACL-M2-01
+    milestone: M2
+    differential: "the reference each is written beside"
+    targets:
+      - {name: FuzzParseAclPolicy, package: ".", seeds: [testdata/fuzz/FuzzParseAclPolicy]}
+      - {name: FuzzCompileAcl, package: ".", owner: ACL-M2-10}
+      - {name: FuzzBridgeEgressPolicy, package: device, owner: BRIDGE-M4-09, milestone: M4, seeds: [testdata/fuzz/FuzzBridgeEgressPolicy], reference: egressCompare}
+
+  - id: daemon-inputs
+    bullet: "Daemon hello, `.ur`, `ur hook` payloads, MCP arguments"
+    owner: CORE-M1-10
+    milestone: M1
+    targets:
+      - {name: FuzzDaemonHello, package: ".", seeds: [testdata/fuzz/FuzzDaemonHello]}
+      - {name: FuzzDotUr, package: ".", owner: CORE-M3-05, milestone: M3, seeds: [testdata/fuzz/FuzzDotUr]}
+      - {name: FuzzHookPayload, package: ".", owner: MCP-M3-15, milestone: M3}
+      - {name: FuzzMcpArguments, package: mcp, owner: MCP-M3-12, milestone: M3}
+
+  - id: index-files
+    bullet: "Index files"
+    owner: SEARCH-M10-04
+    milestone: M10
+    targets:
+      - {name: FuzzIndexSlot, package: ".", seeds: [testdata/fuzz/FuzzIndexSlot]}
+      - {name: FuzzIndexEntry, package: ".", seeds: [testdata/fuzz/FuzzIndexEntry]}
+      - {name: FuzzIndexShard, package: ".", owner: SEARCH-M10-05, seeds: [testdata/fuzz/FuzzIndexShard]}
+      - {name: FuzzIndexSmallFile, package: ".", owner: SEARCH-M10-05, seeds: [testdata/fuzz/FuzzIndexSmallFile]}
+
+  - id: normalizer
+    bullet: "Normalizer and trigram extractor"
+    owner: SEARCH-M10-03
+    milestone: M10
+    differential: "a reference extractor written apart"
+    targets:
+      - {name: FuzzIndexNormalize, package: ".", seeds: [testdata/fuzz/FuzzIndexNormalize], reference: testReferenceNormalize}
+      - {name: FuzzIndexExtractMail, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractMail]}
+      - {name: FuzzIndexExtractFile, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractFile]}
+      - {name: FuzzIndexExtractAttachment, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractAttachment]}
+
+  - id: search-arguments
+    bullet: "Search arguments and cursors"
+    owner: SEARCH-M10-22
+    milestone: M10
+    targets:
+      - {name: FuzzSearchQuery, package: "."}
+
+  - id: search-wire
+    bullet: "`SearchRequest` and `SearchReply`"
+    owner: SEARCH-M10-31
+    milestone: M10
+    targets:
+      - {name: FuzzSearchRemoteWire, package: "."}
+
+  - id: search-merge
+    bullet: "The remote-search merge"
+    owner: SEARCH-M10-34
+    milestone: M10
+    targets:
+      - {name: FuzzSearchRemoteMerge, package: "."}
+
+  - id: directory
+    bullet: "`directory.proto`'s card, repo file, notice, request, decision and erasure request decoders"
+    owner: RECORD-M6-11
+    milestone: M6
+    targets:
+      - {name: FuzzDirectoryDecode, package: ".", seeds: [testdata/fuzz/FuzzDirectoryDecode]}
+
+  # Targets §22.6's bullets do not name, each asked for by its task's Tests line or its section's decoders.
+  - id: api-replies
+    spec: "CORE-M1-04's Tests line: SidecarApi's error and reply decoders"
+    owner: CORE-M1-04
+    milestone: M1
+    targets:
+      - {name: FuzzSidecarApiError, package: "."}
+      - {name: FuzzSidecarApiReplies, package: "."}
+
+  - id: keychain
+    spec: "CORE-M1-02's Tests line: keychain.ur, its wraps and the sealed state files (§5.9)"
+    owner: CORE-M1-02
+    milestone: M1
+    targets:
+      - {name: FuzzDecodeKeychainRecords, package: "."}
+      - {name: FuzzDecodeUnlockWrap, package: "."}
+      - {name: FuzzDecodeKeychainWrap, package: "."}
+      - {name: FuzzDecodeStateDocument, package: "."}
+      - {name: FuzzOpenSealedFile, package: "."}
+
+  - id: identity-binding
+    spec: "CORE-M1-05's Tests line: the sidecar identity binding's verifier"
+    owner: CORE-M1-05
+    milestone: M1
+    targets:
+      - {name: FuzzVerifySidecarIdentityBinding, package: "."}
+
+  - id: auth-key
+    spec: "TEAM-M1-05's Tests line: FuzzAuthKeyString, no panic and the bearer never holding the bundle"
+    owner: TEAM-M1-05
+    milestone: M1
+    targets:
+      - {name: FuzzAuthKeyString, package: ".", seeds: [testdata/fuzz/FuzzAuthKeyString]}
+
+  - id: socket-names
+    spec: "SOCK-M2-01's and SOCK-M5-01's Tests lines: socket addresses and tickets"
+    owner: SOCK-M2-01
+    milestone: M2
+    targets:
+      - {name: FuzzParseSocketAddress, package: ".", seeds: [testdata/fuzz/FuzzParseSocketAddress]}
+      - {name: FuzzSocketTicket, package: ".", owner: SOCK-M5-01, milestone: M5}
+
+  - id: name-screen
+    spec: "ABUSE-M5-01's Tests line: the name screen"
+    owner: ABUSE-M5-01
+    milestone: M5
+    targets:
+      - {name: FuzzScreenName, package: ".", seeds: [testdata/fuzz/FuzzScreenName]}
+
+  - id: record-actions
+    spec: "MCP-M3-02's and MCP-M3-08's Tests lines: the canonical action and the presence attestation"
+    owner: MCP-M3-02
+    milestone: M3
+    targets:
+      - {name: FuzzCanonicalActionBuild, package: ".", seeds: [testdata/fuzz/FuzzCanonicalActionBuild]}
+      - {name: FuzzAttestationObject, package: ".", owner: MCP-M3-08}
+
+  - id: state-log
+    spec: "MCP-M3-01's Tests line: the store log's reader"
+    owner: MCP-M3-01
+    milestone: M3
+    targets:
+      - {name: FuzzStoreLogRead, package: "."}
+
+  - id: tls-edge-open
+    spec: "TLS-M5-05's Tests line: TlsEdgeOpen decodes totally"
+    owner: TLS-M5-05
+    milestone: M5
+    targets:
+      - {name: FuzzTlsEdgeOpen, package: "."}
+
+  - id: mail-recipients
+    spec: "MAIL-M7-02's Tests line: FuzzMailRecipient, total, no panic"
+    owner: MAIL-M7-02
+    milestone: M7
+    targets:
+      - {name: FuzzMailRecipient, package: ".", seeds: [testdata/fuzz/FuzzMailRecipient]}
+
+  - id: mta-sts
+    spec: "SMTP-M9-06's Tests line: the MTA-STS policy and TXT grammars"
+    owner: SMTP-M9-06
+    milestone: M9
+    targets:
+      - {name: FuzzSmtpMtaStsPolicy, package: "."}
+
+  - id: smtpproof
+    spec: "SMTP-M0-01's, SMTP-M0-02's and SMTP-M9-21's Tests lines: what the edge parses before any proof, held to crypto/tls"
+    owner: SMTP-M0-01
+    milestone: M0
+    targets:
+      - {name: FuzzTlsParse, package: smtpproof, seeds: [testdata/fuzz/FuzzTlsParse], second: [crypto/tls]}
+      - {name: FuzzParseClientHello, package: smtpproof}
+      - {name: FuzzParseServerHello, package: smtpproof}
+      - {name: FuzzParseCertificate, package: smtpproof}
+      - {name: FuzzParseServerKeyExchange, package: smtpproof}
+      - {name: FuzzCheckHeaderBlock, package: smtpproof}
+      - {name: FuzzEdgeHandshake, package: smtpproof, owner: SMTP-M0-02, seeds: [testdata/fuzz/FuzzEdgeHandshake]}
+      - {name: FuzzEdgeRecordOrder, package: smtpproof, owner: SMTP-M9-21, milestone: M9}
+
+  - id: device-role
+    spec: "SDK-M4-01's, BRIDGE-M4-06's and BRIDGE-M4-14's Tests lines: posture, bridge rules and the resolver on the device role"
+    owner: SDK-M4-01
+    milestone: M4
+    targets:
+      - {name: FuzzPostureApply, package: device, seeds: [testdata/fuzz/FuzzPostureApply]}
+      - {name: FuzzParseBridgeRules, package: device, owner: BRIDGE-M4-06}
+      - {name: FuzzBridgeResolver, package: device, owner: BRIDGE-M4-14}

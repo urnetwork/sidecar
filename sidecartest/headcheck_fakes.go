@@ -202,6 +202,8 @@ type FakeHeadCheckAuth struct {
 	retainByteCount int
 	vetoes          [][]byte
 	heldVetoes      [][]byte
+	// the pin's version as it moves, which a test waits on (AwaitPin)
+	pinVersion *sidecar.MonitorValue[uint64]
 }
 
 // A device at api's genesis, keeping every entry it applies, serving proofs from its newest
@@ -214,6 +216,22 @@ func NewFakeHeadCheckAuth(sidecarId sidecar.Id, api *FakeHeadCheckApi) *FakeHead
 		chains:          map[uint64][]byte{0: genesis.GetChain()},
 		pin:             genesis,
 		retainByteCount: sidecar.HeadCheckMaxProofByteCount,
+		pinVersion:      sidecar.NewMonitorValue[uint64](0),
+	}
+}
+
+// Waits until the pin reaches version, as a fetch HeadCheck runs in the background moves it, or ctx ends.
+func (self *FakeHeadCheckAuth) AwaitPin(ctx context.Context, version uint64) error {
+	for {
+		current, changed := self.pinVersion.Get()
+		if version <= current {
+			return nil
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return fmt.Errorf("pin at %d, not %d: %w", current, version, ctx.Err())
+		}
 	}
 }
 
@@ -272,6 +290,7 @@ func (self *FakeHeadCheckAuth) apply(pin *bridge.AuthPin, entries [][]byte) erro
 		self.entries = append(self.entries, bytes.Clone(entryBytes))
 		self.chains[entry.GetN()] = chain[:]
 		self.pin = &bridge.AuthPin{Version: entry.GetN(), Chain: chain[:]}
+		self.pinVersion.Set(entry.GetN())
 	}
 	return nil
 }
