@@ -230,7 +230,10 @@ func (self *sidecarConnectLeg) startGeneration(generation *sidecarGeneration) (s
 		Budget:   self.budget,
 		Clock:    self.sidecar.clock,
 		// M1's core has no policy; ACL swaps in AclEngine.AllowInbound at M2
-		Inbound: SubprotocolInboundWithoutPolicy,
+		Inbound:   SubprotocolInboundWithoutPolicy,
+		NetworkId: generation.networkId,
+		Binding:   generation.binding,
+		Event:     self.sidecar.emitEvent,
 	})
 	if err != nil {
 		api.Close()

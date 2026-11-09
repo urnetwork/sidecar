@@ -12,28 +12,20 @@
 // source's slow component stalls only that source: a full queue refuses with RESOURCE_EXHAUSTED and
 // every other source keeps its own worker.
 //
-// The gate is closed for every peer until something marks it verified, which is PROTO-M1-04's Hello
-// check once it lands. A record names C15's key on the frame that verified it and ends at
-// HelloCacheTimeout; a frame under another key closes the gate at once (plan-PROTO-small-readings.md's
-// reading 1).
+// The gate is closed for every peer until its Hello or HelloResult verifies (rpc_hello.go). A record
+// names C15's key on the frame that verified it and the peer it showed, and ends at HelloCacheTimeout; a
+// frame under another key closes the gate at once (plan-PROTO-small-readings.md's reading 1).
 
 package sidecar
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"errors"
 	"time"
 
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar/protocol"
-)
-
-var (
-	// No Hello stands with the peer, so the identity gate is closed to it (D-PROTO-13).
-	errPeerUnverified = errors.New("peer identity not verified")
 )
 
 // One source's queue. Read and written under the Subprotocol's stateLock.
@@ -297,19 +289,36 @@ type subprotocolPeerIdentity struct {
 	clientPublicKey [ed25519.PublicKeySize]byte
 	// HelloCacheTimeout after the Hello verified
 	expireTime time.Time
+	// what the Hello showed; nil only where an internal test opened the gate by hand
+	peer *SubprotocolPeerIdentity
 }
 
-// Opens the gate for sourceId, as of now and until HelloCacheTimeout: what PROTO-M1-04 calls once a
-// Hello or HelloResult from that peer verifies, with C15's key on that frame. Nothing outside internal
-// tests calls it until then, so every peer's gate stays closed.
+// Opens the gate for sourceId with no peer behind it, as internal tests do by hand. See
+// markPeerVerifiedAs.
 func (self *Subprotocol) markPeerVerified(sourceId connect.Id, clientPublicKey [ed25519.PublicKeySize]byte) {
+	self.markPeerVerifiedAs(sourceId, clientPublicKey, nil)
+}
+
+// Opens the gate for sourceId, as of now and until HelloCacheTimeout: what Hello's check does once a
+// Hello or HelloResult from that peer verifies, with C15's key on that frame and the peer it showed.
+func (self *Subprotocol) markPeerVerifiedAs(sourceId connect.Id, clientPublicKey [ed25519.PublicKeySize]byte, peer *SubprotocolPeerIdentity) {
 	expireTime := self.clock.Now().Add(self.settings.HelloCacheTimeout)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.sourceIdIdentities[sourceId] = subprotocolPeerIdentity{
 		clientPublicKey: clientPublicKey,
 		expireTime:      expireTime,
+		peer:            peer,
 	}
+}
+
+// Whether a verified Hello with clientId stands now, reading the gate and running nothing.
+func (self *Subprotocol) peerVerified(clientId connect.Id) bool {
+	now := self.clock.Now()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	identity, ok := self.sourceIdIdentities[clientId]
+	return ok && now.Before(identity.expireTime)
 }
 
 // Closes the gate for sourceId: on a send's ack error or a refused Hello (reading 1). A peer with no
@@ -323,7 +332,7 @@ func (self *Subprotocol) forgetPeer(sourceId connect.Id) {
 // Whether an envelope belongs to the Hello exchange the gate exists for, and so passes it closed: a
 // Hello, a HelloResult answering one this side sent, or an Error answering one. Call and OpenStream go
 // through ensurePeerVerified, so a Hello is the only request this side ever sends a peer the gate is
-// closed to, and an Error from one either answers it or matches no call at all.
+// closed to, and an Error from one either answers it or matches no pending request at all.
 func helloExchange(messageType uint32, flags uint32) bool {
 	response := flags&EnvelopeFlagResponse != 0
 	switch protocol.MessageType(messageType) {
@@ -365,21 +374,4 @@ func (self *Subprotocol) identityAdmits(
 		return false
 	}
 	return true
-}
-
-// What Call and OpenStream go through before they send to clientId (D-PROTO-13): nil while a verified
-// Hello with it stands, else errPeerUnverified. PROTO-M1-04 runs Hello here when none stands; until it
-// lands this only reads the gate, so every call to a peer is refused.
-func (self *Subprotocol) ensurePeerVerified(ctx context.Context, clientId connect.Id) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	now := self.clock.Now()
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	identity, ok := self.sourceIdIdentities[clientId]
-	if !ok || !now.Before(identity.expireTime) {
-		return errPeerUnverified
-	}
-	return nil
 }
