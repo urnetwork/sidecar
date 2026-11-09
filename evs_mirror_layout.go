@@ -388,7 +388,7 @@ func (self *EvsMirrorStore) Put(key EvsMirrorKey, body io.Reader) error {
 		return err
 	}
 	maxByteCount := key.Family.maxByteCount()
-	// the body's SHA-256, after its bound and the segment rule
+	// a body's length and SHA-256 held to its family: not empty, within the bound, and a segment's hash its id
 	check := func(byteCount int64, hash []byte) error {
 		if byteCount == 0 {
 			return fmt.Errorf("%w: an empty %s", ErrEvsMirrorObjectInvalid, key.Family)
