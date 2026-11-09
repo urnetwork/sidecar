@@ -1,0 +1,5 @@
+go test fuzz v1
+string("www")
+uint16(1)
+uint32(300)
+string("11.22.33.44")
