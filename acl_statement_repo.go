@@ -4,8 +4,9 @@
 //	RepoCreate      general or record: a member device that is not read_only, or a tagged or ephemeral sidecar
 //	                under a rule giving it admin on evs:* or that repo, within §8.6's ceiling; team_record and
 //	                mailcfg: a config writer; vault, mailbox and secret: a consented device of the owner, its
-//	                member; directory: a config writer, once per network (and at api, the team tier, which api's
-//	                controller checks); config: none, since §7.9's bootstrap creates it (plan-ACL-small-readings #4)
+//	                member; directory: a config writer, once per network, and at api alone the team tier
+//	                (AclStatementNeedsTeamTier); config: none, since §7.9's bootstrap creates it
+//	                (plan-ACL-small-readings #4)
 //	RepoAdmin       a repo admin or a config writer; in an owner-bound repo an add only by a consented device of its
 //	                owner, of a consented device of its owner (§15.7); never an add in the directory
 //	RepoGrant       a repo admin or a config writer, in general, record, team_record and mailcfg repos only: never
@@ -35,7 +36,10 @@ import (
 	"math/bits"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // How long after its RepoDelete's entry a RepoRestore is taken (§8.8, owner decision 82): a protocol value every
@@ -118,6 +122,21 @@ func (self *AclState) consentedSidecarIds(memberId Id) []Id {
 		}
 	}
 	return sidecarIds
+}
+
+// Whether api alone must refuse a statement outside the team tier (§8.8; §20.5's NetworkTierOf): a RepoCreate of the
+// directory, one per team network, which readers, who know no tier, do not judge. signed is the Signed as received;
+// anything else, a malformed one included, is false, and the log's own check judges it.
+func AclStatementNeedsTeamTier(signed []byte) bool {
+	message := &bridge.Signed{}
+	if err := proto.Unmarshal(signed, message); err != nil || bridge.SignedType(message.GetType()) != bridge.SignedType_SIGNED_REPO_CREATE {
+		return false
+	}
+	body, err := ParseConfigStatement(bridge.SignedPurposeAcl, bridge.SignedType_SIGNED_REPO_CREATE, message.GetBody())
+	if err != nil {
+		return false
+	}
+	return body.(*protocol.RepoCreate).GetKind() == protocol.RepoKind_REPO_KIND_DIRECTORY
 }
 
 // RepoCreate{repo_id, kind}: who the kind lets create it, which becomes its admin.

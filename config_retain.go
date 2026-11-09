@@ -50,6 +50,19 @@ func (self *ConfigLog) Retained() *ConfigRetained {
 	return retained
 }
 
+// The bytes Retained would copy, the kept entries' and the base rows', which a cache of many networks' logs bounds
+// itself by (AclGateCache). For the log's applying goroutine, as Retained is.
+func (self *ConfigLog) RetainedByteCount() int64 {
+	byteCount := int64(len(self.signedGenesis))
+	for _, kept := range self.kept {
+		byteCount += int64(len(kept.entryBytes))
+	}
+	for _, rows := range self.baseRows {
+		byteCount += int64(len(rows))
+	}
+	return byteCount
+}
+
 // Saves what this log keeps.
 func (self *ConfigLog) SaveTo(store ConfigStateStore) error {
 	return store.SaveConfigRetained(self.networkId, self.Retained())

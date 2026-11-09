@@ -945,3 +945,28 @@ func TestAclReapplyKeepsARevocationPastAnAuthorityChange(t *testing.T) {
 		t.Error("a second reader holds other rows")
 	}
 }
+
+// api alone refuses a directory RepoCreate outside the team tier: AclStatementNeedsTeamTier names exactly that
+// statement, whatever else arrives.
+func TestAclStatementNeedsTeamTier(t *testing.T) {
+	net := newTestConfigNet(t)
+	create := func(kind protocol.RepoKind) []byte {
+		return net.sign(net.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{Header: net.header(), RepoId: NewId().Bytes(), Kind: kind})
+	}
+	cases := []struct {
+		name   string
+		signed []byte
+		team   bool
+	}{
+		{name: "the directory", signed: create(protocol.RepoKind_REPO_KIND_DIRECTORY), team: true},
+		{name: "a general repo", signed: create(protocol.RepoKind_REPO_KIND_GENERAL)},
+		{name: "the team record", signed: create(protocol.RepoKind_REPO_KIND_TEAM_RECORD)},
+		{name: "another type", signed: net.sign(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("tier"))},
+		{name: "no Signed", signed: []byte{0x0A, 0xFF}},
+	}
+	for _, c := range cases {
+		if team := AclStatementNeedsTeamTier(c.signed); team != c.team {
+			t.Errorf("%s: %v", c.name, team)
+		}
+	}
+}
