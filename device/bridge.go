@@ -3,13 +3,14 @@
 // (bridge_table.go, bridge_pin*.go), links through a BridgeHost, the provider hook, routes and the zone.
 //
 // It embeds the posture (posture.go), so §17.8's states are one machine with §18.6's (D-SDK-13, D-BRIDGE-18): what is
-// in force is what the posture decided, and the bridge turns that decision into what it enforces. A state's rules are
-// parsed once, when the bridge adopts the decision, off the packet path; rules that do not parse are held as none and
-// alarm, which opens nothing.
+// in force is what the posture decided, and the bridge turns that decision into what it enforces (bridge_state.go). A
+// state's rules are parsed once, when the bridge adopts the decision, off the packet path; rules that do not parse are
+// held as none and alarm, which opens nothing.
 //
-// The constructor restores the posture from its store before it returns, so the first packet meets what was in force
-// (DP1), and starts run, which watches the clock for the next time a row's meaning changes: an expiry, the end of a
-// drain, the end of the previous block's drain.
+// The constructor restores the posture from its store and publishes its decision to the provider hook before it
+// returns, so the first packet meets what was in force (DP1), and starts run, which watches the clock for the next time
+// a row's meaning changes, an expiry, the end of a drain, the end of the previous block's drain, and publishes again
+// then, ending the flows of what lapsed.
 //
 // A Bridge is safe for concurrent use. Status reads a snapshot; nothing here blocks a packet.
 
@@ -35,11 +36,24 @@ type Bridge struct {
 	posture  *Posture
 	// the sender's pins, for every entry this bridge routes
 	pins *BridgePinTable
+	// the provider hook, the one value EgressHook returns, and the NATs it is installed on, which CloseFlows reaches
+	policy          *BridgeEgressPolicy
+	hook            *bridgeEgressHook
+	closers         *connect.CallbackList[connect.EgressFlowCloser]
+	changeCallbacks *connect.CallbackList[func()]
 
 	// the next time a row's meaning changes, zero for none; run waits on it
 	deadline *connect.MonitorValue[time.Time]
 	// closed when run returns
 	done chan struct{}
+
+	// serializes what publishes, a posture call with its adoption, a revocation and a check of the clock, so the hook's
+	// states follow the posture's decisions in order; held across the posture's store I/O, never by a packet path
+	operationLock sync.Mutex
+	// Revoke's narrowing, each held until a state at or past its position; under operationLock
+	revocations []PostureOverlayEntry
+	// when the hook's state was last published; under operationLock
+	publishedAt time.Time
 
 	stateLock sync.Mutex
 	// the posture's decision the bridge last adopted
@@ -52,7 +66,7 @@ type Bridge struct {
 	expiredCount  int
 }
 
-// Restores the posture from store and adopts its decision before it returns, then starts run. host builds links and
+// Restores the posture from store and publishes its decision before it returns, then starts run. host builds links and
 // may be nil, as on a device that runs none. Nil settings are DefaultBridgeSettings.
 func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, settings *BridgeSettings) (*Bridge, error) {
 	if settings == nil {
@@ -65,17 +79,26 @@ func NewBridge(ctx context.Context, store PostureStore, host BridgeHost, setting
 	posture, decision := NewPosture(store, settings.PostureSettings)
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &Bridge{
-		ctx:      cancelCtx,
-		cancel:   cancel,
-		settings: settings,
-		clock:    settings.clock(),
-		host:     host,
-		posture:  posture,
-		pins:     NewBridgePinTable(settings),
-		deadline: connect.NewMonitorValue(time.Time{}),
-		done:     make(chan struct{}),
+		ctx:             cancelCtx,
+		cancel:          cancel,
+		settings:        settings,
+		clock:           settings.clock(),
+		host:            host,
+		posture:         posture,
+		pins:            NewBridgePinTable(settings),
+		policy:          NewBridgeEgressPolicy(settings.PolicyProfile, settings),
+		closers:         connect.NewCallbackList[connect.EgressFlowCloser](),
+		changeCallbacks: connect.NewCallbackList[func()](),
+		deadline:        connect.NewMonitorValue(time.Time{}),
+		done:            make(chan struct{}),
 	}
-	self.adopt(decision)
+	self.hook = &bridgeEgressHook{BridgeEgressPolicy: self.policy, bridge: self}
+	// no hook is installed yet, so no flow exists to end
+	func() {
+		self.operationLock.Lock()
+		defer self.operationLock.Unlock()
+		self.adoptWithLock(decision, true)
+	}()
 	go self.run()
 	return self, nil
 }
@@ -86,46 +109,7 @@ func (self *Bridge) Close() {
 	<-self.done
 }
 
-// Takes what the posture has in force: parses its state's rules, records why when they do not parse, and checks the
-// clock against the result.
-func (self *Bridge) adopt(decision PostureDecision) {
-	var rules *bridge.BridgeRules
-	alarms := []BridgeAlarm{}
-	if decision.State.Enforcing() && decision.BridgeState != nil {
-		parsed, err := ParseBridgeRules(decision.BridgeState.GetRules(), self.settings)
-		if err != nil {
-			alarms = append(alarms, BridgeAlarm{Kind: BridgeAlarmRulesRefused, Reason: err.Error()})
-		} else {
-			rules = parsed
-		}
-	}
-	testHookBarrier("bridge.adopt.before", "")
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.decision = decision
-		self.rules = rules
-		self.alarms = alarms
-	}()
-	testHookBarrier("bridge.adopt.after", "")
-	self.check()
-}
-
-// Counts what is draining and what has expired at the clock's now, and sets the next time that changes.
-func (self *Bridge) check() {
-	now := self.clock.Now()
-	deadline := func() time.Time {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		times := scanBridgeRulesTimes(self.rules, now, self.settings)
-		self.drainingCount = times.drainingCount
-		self.expiredCount = times.expiredCount
-		return times.next
-	}()
-	self.deadline.Set(deadline)
-}
-
-// Waits for the next time a row's meaning changes, and checks the clock then, until the bridge closes.
+// Waits for the next time a row's meaning changes, and publishes again then, until the bridge closes.
 func (self *Bridge) run() {
 	defer close(self.done)
 	for {
@@ -139,25 +123,35 @@ func (self *Bridge) run() {
 			return
 		case <-update:
 		case <-timeout:
-			self.check()
+			self.refresh()
 		}
 	}
 }
 
-// What the bridge has in force and what it found, at the last adopt or check of the clock. Counts the live pins by a
-// scan, so call it off the packet path.
+// What the bridge has in force and what it found, at the last adoption or check of the clock. Counts the live pins by
+// a scan, so call it off the packet path.
 func (self *Bridge) Status() BridgeStatus {
 	pinnedPairCount := self.pins.PinnedCount()
+	verifiedCount, mismatchCount := self.policy.principalCounts()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	status := BridgeStatus{
-		State:             self.decision.State,
-		DrainingCount:     self.drainingCount,
-		ExpiredCount:      self.expiredCount,
-		PinnedPairCount:   pinnedPairCount,
-		UnpinnedPickCount: self.pins.UnpinnedPickCount(),
-		PostureAlarms:     append([]PostureAlarm(nil), self.decision.Alarms...),
-		Alarms:            append([]BridgeAlarm(nil), self.alarms...),
+		State:                  self.decision.State,
+		PolicyProfile:          self.policy.Profile(),
+		PolicyGeneration:       self.policy.PolicyGeneration(),
+		PrincipalVerifiedCount: verifiedCount,
+		DrainingCount:          self.drainingCount,
+		ExpiredCount:           self.expiredCount,
+		PinnedPairCount:        pinnedPairCount,
+		UnpinnedPickCount:      self.pins.UnpinnedPickCount(),
+		PostureAlarms:          append([]PostureAlarm(nil), self.decision.Alarms...),
+		Alarms:                 append([]BridgeAlarm(nil), self.alarms...),
+	}
+	if 0 < mismatchCount {
+		status.Alarms = append(status.Alarms, BridgeAlarm{
+			Kind:   BridgeAlarmPrincipalMismatch,
+			Reason: "contracts refused whose sealed subject their delegation's subject does not bind",
+		})
 	}
 	if self.decision.Pin != nil {
 		status.PinN = self.decision.Pin.GetVersion()
