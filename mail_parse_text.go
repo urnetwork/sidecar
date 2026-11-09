@@ -1,9 +1,14 @@
 // The text a message walk keeps (MAIL-M7-11), made safe to re-emit: every value here is a sender's, and it reaches
-// IMAP clients, agents, indexes and headers ingest renders. A single-line value has its whitespace, CR and LF among
-// it, as single spaces and every other control character dropped, so it can never split a header or a list row;
-// text keeps its line breaks and nothing else of C0 or C1. Both replace each invalid UTF-8 byte with U+FFFD before any cap applies (MAIL-FORMAT.md), and cap on a
-// UTF-8 boundary. Charsets: UTF-8 and US-ASCII as they are and ISO-8859-1 by mapping, which needs no table; any
-// other charset's bytes stay as they are, so its non-ASCII bytes show as U+FFFD rather than as a guess.
+// IMAP clients, agents, indexes and the headers ingest renders. A single-line value has each run of whitespace, CR
+// and LF among it, as one space and every other control character dropped, so it can never split a header or a list
+// row; text keeps its line breaks and nothing else of C0 or C1. Both replace each invalid UTF-8 byte with U+FFFD
+// before any cap applies (MAIL-FORMAT.md), and cap on a UTF-8 boundary.
+//
+// Charsets and HTML are read as INDEX-FORMAT.md's Extractor 1 reads them (plan-SEARCH-index-format-bytes#8), so a
+// snippet says what search indexes: a part's charset decodes through x/text's htmlindex, no charset or one it does
+// not know reads as UTF-8, and none is guessed from content; HTML goes through the format's own scanner. RFC 2047's
+// words decode through the standard library, which reads UTF-8, US-ASCII and ISO-8859-1 itself and hands every other
+// charset to htmlindex here.
 //
 // No connect, go-smtp or mox, and no go-message: on every leg. Package-level functions are safe for concurrent use.
 
@@ -17,6 +22,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/encoding/htmlindex"
 )
 
 // MAIL-FORMAT.md's caps on IndexEntry, past which a value is cut on a UTF-8 boundary or, for an id or a code,
@@ -38,9 +45,20 @@ const (
 // 253 bytes, rounded up. A format value.
 const mailHeaderValueMaxByteCount = 255
 
-// Whether character is one a single-line value drops or turns to a space: C0, DEL and C1 controls, Unicode's line
-// and paragraph separators, and the bidi embeddings, overrides and isolates, which can make a file name or a
-// subject read as something it is not.
+// The tags whose removal leaves one space, the rest leaving nothing (INDEX-FORMAT.md's HTML).
+var mailHtmlBlockTags = map[string]bool{
+	"address": true, "article": true, "aside": true, "blockquote": true, "br": true, "center": true,
+	"dd": true, "details": true, "dialog": true, "dir": true, "div": true, "dl": true, "dt": true,
+	"fieldset": true, "figcaption": true, "figure": true, "footer": true, "form": true, "h1": true,
+	"h2": true, "h3": true, "h4": true, "h5": true, "h6": true, "header": true, "hgroup": true,
+	"hr": true, "li": true, "main": true, "menu": true, "nav": true, "ol": true, "p": true, "pre": true,
+	"section": true, "summary": true, "table": true, "tbody": true, "td": true, "tfoot": true, "th": true,
+	"thead": true, "tr": true, "ul": true,
+}
+
+// Whether character is one a single-line value drops: C0, DEL and C1 controls, Unicode's line and paragraph
+// separators, and the bidi embeddings, overrides and isolates, which can make a file name or a subject read as
+// something it is not.
 func isMailControl(character rune) bool {
 	switch {
 	case character < 0x20, character == 0x7f, 0x80 <= character && character <= 0x9f:
@@ -119,32 +137,35 @@ func mailSnippet(text string) string {
 	return mailCleanLine(text, mailIndexSnippetMaxByteCount)
 }
 
-// Whether charset names ISO-8859-1, which maps each byte to the rune of its value, under its IANA aliases.
-func isMailLatin1Charset(charset string) bool {
-	switch strings.ToLower(strings.TrimSpace(charset)) {
-	case "iso-8859-1", "iso8859-1", "iso_8859-1", "iso_8859-1:1987", "latin1", "l1", "cp819", "ibm819", "csisolatin1", "iso-ir-100":
-		return true
-	}
-	return false
-}
-
-// raw in charset as UTF-8, or as it is for any charset this does not map, which mailCleanText then reads as UTF-8.
-func mailDecodeCharset(charset string, raw []byte) []byte {
-	if !isMailLatin1Charset(charset) {
+// raw in the charset label names, as UTF-8 by htmlindex; or raw as it is for no label, one htmlindex does not know,
+// UTF-8 itself, or bytes its decoder refuses, so mailCleanText reads them as UTF-8.
+func mailDecodeCharset(label string, raw []byte) []byte {
+	if strings.TrimSpace(label) == "" {
 		return raw
 	}
-	decoded := make([]byte, 0, len(raw)+len(raw)/2)
-	for _, value := range raw {
-		decoded = utf8.AppendRune(decoded, rune(value))
+	encoding, err := htmlindex.Get(label)
+	if err != nil {
+		return raw
+	}
+	if name, err := htmlindex.Name(encoding); err == nil && name == "utf-8" {
+		return raw
+	}
+	decoded, err := encoding.NewDecoder().Bytes(raw)
+	if err != nil {
+		return raw
 	}
 	return decoded
 }
 
-// RFC 2047's encoded words, decoded by mime's own UTF-8, US-ASCII and ISO-8859-1, and any other charset's bytes
-// passed through as they are, so one word in an unknown charset never stops the rest decoding.
+// RFC 2047's encoded words, decoded by mime's own UTF-8, US-ASCII and ISO-8859-1 and by htmlindex for any other
+// charset, whose unknown labels pass their bytes through, so one word never stops the rest decoding.
 var mailWordDecoder = &mime.WordDecoder{
 	CharsetReader: func(charset string, input io.Reader) (io.Reader, error) {
-		return input, nil
+		raw, err := io.ReadAll(input)
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(mailDecodeCharset(charset, raw)), nil
 	},
 }
 
@@ -157,75 +178,32 @@ func mailDecodeWords(value string) string {
 	return decoded
 }
 
-// Elements whose content is not text a person reads.
-var mailHtmlSkippedElements = []string{"script", "style", "head", "title", "template"}
-
-// html's text: its tags and comments gone, the content of mailHtmlSkippedElements gone, each tag a space so words
-// stay apart, entities decoded. A snippet's reading of the first text part, not a renderer: one pass, linear in
-// html, nothing kept but the text.
-func mailHtmlText(html []byte) []byte {
-	text := make([]byte, 0, len(html))
-	flush := func(segment []byte) {
-		if len(segment) != 0 {
-			text = append(text, mailHtmlUnescape(segment)...)
-		}
-	}
-	for index := 0; index < len(html); {
-		open := bytes.IndexByte(html[index:], '<')
-		if open < 0 {
-			flush(html[index:])
-			break
-		}
-		flush(html[index : index+open])
-		index += open
-		if bytes.HasPrefix(html[index:], []byte("<!--")) {
-			end := bytes.Index(html[index+4:], []byte("-->"))
-			if end < 0 {
-				break
-			}
-			index += 4 + end + 3
-			continue
-		}
-		end := bytes.IndexByte(html[index:], '>')
-		if end < 0 {
-			break
-		}
-		tag := html[index+1 : index+end]
-		index += end + 1
-		text = append(text, ' ')
-		name := mailHtmlTagName(tag)
-		if name == "" || tag[0] == '/' || tag[len(tag)-1] == '/' {
-			continue
-		}
-		for _, skipped := range mailHtmlSkippedElements {
-			if name != skipped {
-				continue
-			}
-			// past the element's closing tag, or to the end where it has none
-			closing := mailHtmlIndexFold(html[index:], "</"+skipped)
-			if closing < 0 {
-				index = len(html)
-			} else {
-				index += closing
-			}
-			break
-		}
-	}
-	return text
+// Whether character is an ASCII letter.
+func isMailAsciiLetter(character byte) bool {
+	return ('a' <= character && character <= 'z') || ('A' <= character && character <= 'Z')
 }
 
-// A tag's element name, lowercase: the letters and digits after < and any /.
-func mailHtmlTagName(tag []byte) string {
-	tag = bytes.TrimPrefix(tag, []byte("/"))
-	end := 0
-	for end < len(tag) && (('a' <= tag[end]|0x20 && tag[end]|0x20 <= 'z') || ('0' <= tag[end] && tag[end] <= '9')) {
-		end += 1
+// The index of the > that ends the tag starting at text[0], outside quotes, or -1.
+func mailHtmlTagEnd(text []byte) int {
+	var quote byte
+	for index := 1; index < len(text); index += 1 {
+		character := text[index]
+		switch {
+		case quote != 0:
+			if character == quote {
+				quote = 0
+			}
+		case character == '"' || character == '\'':
+			quote = character
+		case character == '>':
+			return index
+		}
 	}
-	return dnsAsciiLower(string(tag[:end]))
+	return -1
 }
 
-// The index of the first ASCII-case-insensitive match of lowercase needle in data, or -1. needle starts with <,
-// so each try begins at a <, and nothing is allocated.
+// The index of the first ASCII-case-insensitive match of lowercase needle, which starts with <, in data, or -1.
+// Nothing is allocated, and each try begins at a <.
 func mailHtmlIndexFold(data []byte, needle string) int {
 	for index := 0; index+len(needle) <= len(data); {
 		open := bytes.IndexByte(data[index:], needle[0])
@@ -252,12 +230,79 @@ func mailHtmlIndexFold(data []byte, needle string) int {
 	return -1
 }
 
-// segment with its character references decoded.
-func mailHtmlUnescape(segment []byte) []byte {
-	if bytes.IndexByte(segment, '&') < 0 {
-		return segment
+// markup's text by INDEX-FORMAT.md's scanner: script and style elements go with their content, up to the matching end
+// tag or the input's end; comments, <!...> and <?...> go; a tag is <, a letter or /, to the next > outside quotes,
+// and a block-list tag leaves one space and any other nothing; any other < is text; a construct with no end ends
+// the text. Entities decode once every tag is gone, so &lt; stays text. One pass, linear in markup.
+func mailHtmlText(markup []byte) []byte {
+	text := make([]byte, 0, len(markup))
+	for index := 0; index < len(markup); {
+		open := bytes.IndexByte(markup[index:], '<')
+		if open < 0 {
+			text = append(text, markup[index:]...)
+			break
+		}
+		text = append(text, markup[index:index+open]...)
+		index += open
+		rest := markup[index:]
+		if bytes.HasPrefix(rest, []byte("<!--")) {
+			end := bytes.Index(rest[4:], []byte("-->"))
+			if end < 0 {
+				break
+			}
+			index += 4 + end + 3
+			continue
+		}
+		if bytes.HasPrefix(rest, []byte("<!")) || bytes.HasPrefix(rest, []byte("<?")) {
+			end := bytes.IndexByte(rest, '>')
+			if end < 0 {
+				break
+			}
+			index += end + 1
+			continue
+		}
+		if len(rest) < 2 || !(isMailAsciiLetter(rest[1]) || rest[1] == '/') {
+			text = append(text, '<')
+			index += 1
+			continue
+		}
+		end := mailHtmlTagEnd(rest)
+		if end < 0 {
+			break
+		}
+		closing := rest[1] == '/'
+		nameStart := 1
+		if closing {
+			nameStart = 2
+		}
+		nameEnd := nameStart
+		for nameEnd < end && (isMailAsciiLetter(rest[nameEnd]) || ('0' <= rest[nameEnd] && rest[nameEnd] <= '9')) {
+			nameEnd += 1
+		}
+		name := dnsAsciiLower(string(rest[nameStart:nameEnd]))
+		index += end + 1
+		if !closing && (name == "script" || name == "style") {
+			closeAt := mailHtmlIndexFold(markup[index:], "</"+name)
+			if closeAt < 0 {
+				index = len(markup)
+				break
+			}
+			closeEnd := mailHtmlTagEnd(markup[index+closeAt:])
+			if closeEnd < 0 {
+				index = len(markup)
+				break
+			}
+			index += closeAt + closeEnd + 1
+			continue
+		}
+		if mailHtmlBlockTags[name] {
+			text = append(text, ' ')
+		}
 	}
-	return []byte(html.UnescapeString(string(segment)))
+	if bytes.IndexByte(text, '&') < 0 {
+		return text
+	}
+	return []byte(html.UnescapeString(string(text)))
 }
 
 // The message ids of a msg-id list (RFC 5322 §3.6.4), in order, each without its angle brackets: the text of each

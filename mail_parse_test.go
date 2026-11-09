@@ -192,10 +192,10 @@ func TestMailParseMultipart(t *testing.T) {
 	}
 }
 
-// With no text/plain, the first text/html part's text, its markup, scripts, styles and comments gone and its
-// entities decoded.
+// With no text/plain, the first text/html part's text by INDEX-FORMAT.md's scanner: its markup, scripts, styles
+// and comments gone and its entities decoded, a title's text kept as any other.
 func TestMailParseHtmlText(t *testing.T) {
-	html := "<!DOCTYPE html><html><head><title>Ignored</title><style>p { color: red }</style></head>" +
+	html := "<!DOCTYPE html><html><head><title>Title</title><style>p { color: red }</style></head>" +
 		"<body><!-- a <b>comment</b> --><p>Hello&nbsp;<b>world</b> &amp; you</p><SCRIPT>steal()</script>" +
 		"<div>second&#33;</div></body></html>"
 	message := testMailMessage([]string{
@@ -203,10 +203,10 @@ func TestMailParseHtmlText(t *testing.T) {
 		"Content-Type: multipart/alternative; boundary=b",
 	}, "--b\r\nContent-Type: text/html\r\n\r\n"+html+"\r\n--b\r\nContent-Type: text/html\r\n\r\n<p>later</p>\r\n--b--\r\n")
 	parsed := testMailParse(t, message)
-	if parsed.Snippet != "Hello world & you second!" {
+	if parsed.Snippet != "Title Hello world & you second!" {
 		t.Errorf("snippet %q", parsed.Snippet)
 	}
-	if strings.Contains(parsed.Text, "steal") || strings.Contains(parsed.Text, "color") || strings.Contains(parsed.Text, "Ignored") || strings.Contains(parsed.Text, "comment") {
+	if strings.Contains(parsed.Text, "steal") || strings.Contains(parsed.Text, "color") || strings.Contains(parsed.Text, "comment") {
 		t.Errorf("text %q", parsed.Text)
 	}
 	// a later text/plain still wins over html taken first
@@ -214,6 +214,58 @@ func TestMailParseHtmlText(t *testing.T) {
 		"--b\r\nContent-Type: text/html\r\n\r\n<p>html first</p>\r\n--b\r\nContent-Type: text/plain\r\n\r\nplain second\r\n--b--\r\n")
 	if parsed := testMailParse(t, message); parsed.Text != "plain second" {
 		t.Errorf("text %q", parsed.Text)
+	}
+}
+
+// INDEX-FORMAT.md's HTML rules: a block tag leaves a space and any other nothing; a < that starts no tag is text; a
+// > inside quotes ends no tag; entities decode after the tags are gone; a construct with no end ends the text.
+func TestMailHtmlTextFollowsTheIndexFormat(t *testing.T) {
+	cases := []struct {
+		markup string
+		want   string
+	}{
+		{markup: "<b>a</b>b", want: "ab"},
+		{markup: "a<br>b<p>c</p>d", want: "a b c d"},
+		{markup: "<H1>Big</H1>small", want: " Big small"},
+		{markup: "a < b and 3<4", want: "a < b and 3<4"},
+		{markup: `<a title="x>y" href='p>q'>link</a>`, want: "link"},
+		{markup: "&lt;p&gt; stays &amp; text", want: "<p> stays & text"},
+		{markup: "<?xml version=1?><!DOCTYPE x>body", want: "body"},
+		{markup: "kept<!-- never closed", want: "kept"},
+		{markup: "kept<script>never closed", want: "kept"},
+		{markup: "kept<style>x</style >after", want: "keptafter"},
+		{markup: "kept<script>x</SCRIPT>after", want: "keptafter"},
+		{markup: "kept<div class=\"never closed", want: "kept"},
+	}
+	for _, c := range cases {
+		if text := string(mailHtmlText([]byte(c.markup))); text != c.want {
+			t.Errorf("%q: %q, want %q", c.markup, text, c.want)
+		}
+	}
+}
+
+// Charsets decode through htmlindex, as Extractor 1's do: a multibyte body and word, windows-1252's quotes under
+// their own label and under ISO-8859-1's, which the web reads as windows-1252, and UTF-8 left as it is.
+func TestMailParseCharsetsThroughHtmlindex(t *testing.T) {
+	cases := []struct {
+		headers []string
+		body    string
+		subject string
+		text    string
+	}{
+		{headers: []string{"Subject: =?shift_jis?B?k/qWew==?=", "Content-Type: text/plain; charset=Shift_JIS", "Content-Transfer-Encoding: quoted-printable"},
+			body: "=93=FA=96=7B", subject: "\u65e5\u672c", text: "\u65e5\u672c"},
+		{headers: []string{"Content-Type: text/plain; charset=windows-1252", "Content-Transfer-Encoding: quoted-printable"},
+			body: "=93quoted=94", text: "\u201cquoted\u201d"},
+		{headers: []string{"Content-Type: text/plain; charset=iso-8859-1", "Content-Transfer-Encoding: quoted-printable"},
+			body: "=93quoted=94 caf=E9", text: "\u201cquoted\u201d caf\u00e9"},
+		{headers: []string{"Content-Type: text/plain; charset=utf-8"}, body: "\xff ok", text: "\ufffd ok"},
+	}
+	for index, c := range cases {
+		parsed := testMailParse(t, testMailMessage(c.headers, c.body))
+		if parsed.Text != c.text || (c.subject != "" && parsed.Subject != c.subject) {
+			t.Errorf("case %d: text %q, subject %q", index, parsed.Text, parsed.Subject)
+		}
 	}
 }
 
