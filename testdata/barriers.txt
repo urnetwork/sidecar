@@ -192,6 +192,8 @@ barrier record.push.after record_batch.go
 barrier record.push.before record_batch.go
 barrier record.read.after record_reader.go
 barrier record.read.before record_reader.go
+barrier record.receipt.deposit.after record_receipt.go
+barrier record.receipt.deposit.before record_receipt.go
 barrier record.reserve.after record_ledger.go
 barrier record.reserve.before record_ledger.go
 barrier record.taint.after record_run.go
