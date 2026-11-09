@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 
@@ -58,6 +59,14 @@ type SidecarPlatformClient struct {
 	Connected func() (bool, <-chan struct{})
 	// Ends the client and what connects it, and joins them, ctx bounding the wait.
 	CloseAndWait func(ctx context.Context) error
+}
+
+// A SidecarPlatform that also carries SidecarApi's requests, as sidecartest's in-process api answers them: NewSidecar
+// sends them through ApiTransport rather than dialing api by the client strategy. ApiTransport answers a transport safe
+// for concurrent use, which the Sidecar keeps behind its absolute-url check; nil keeps the strategy's.
+type SidecarApiPlatform interface {
+	SidecarPlatform
+	ApiTransport() http.RoundTripper
 }
 
 // connect's own platform.
@@ -117,17 +126,24 @@ func NewSidecar(ctx context.Context, host SidecarHost, components []SidecarCompo
 	self := newSidecarBase(host, settings)
 	cancelCtx, cancel := context.WithCancel(ctx)
 	strategy := connect.NewClientStrategy(cancelCtx, settings.Connect.ClientStrategySettings)
-	sidecarApi, err := newSidecarApi(settings, newSidecarApiTransport(cancelCtx, strategy), self.clock.Now)
+	platform := settings.Connect.Platform
+	if platform == nil {
+		platform = connectSidecarPlatform{}
+	}
+	var apiTransport http.RoundTripper
+	if apiPlatform, ok := platform.(SidecarApiPlatform); ok {
+		apiTransport = apiPlatform.ApiTransport()
+	}
+	if apiTransport == nil {
+		apiTransport = newSidecarApiTransport(cancelCtx, strategy)
+	}
+	sidecarApi, err := newSidecarApi(settings, apiTransport, self.clock.Now)
 	if err != nil {
 		cancel()
 		strategy.Close()
 		return nil, err
 	}
 	self.sidecarApi = sidecarApi
-	platform := settings.Connect.Platform
-	if platform == nil {
-		platform = connectSidecarPlatform{}
-	}
 	leg := &sidecarConnectLeg{
 		sidecar:  self,
 		strategy: strategy,
