@@ -76,8 +76,9 @@ type EvsReadRecord struct {
 	Path string
 	// The entry version last read.
 	EntryVersion uint64
-	// The ref pin the read verified against.
+	// The ref pin the read verified against, and C there, so the next read of the path checks every statement since.
 	PinVersion uint64
+	PinChain   *[sha256.Size]byte
 	UsedAt     time.Time
 }
 
@@ -100,6 +101,7 @@ type evsReadRecordRecord struct {
 	Path         string `json:"path"`
 	EntryVersion uint64 `json:"entry_version"`
 	PinVersion   uint64 `json:"pin_version"`
+	PinChain     string `json:"pin_chain,omitempty"`
 	UsedAtMs     int64  `json:"used_at_ms"`
 }
 
@@ -195,7 +197,7 @@ func (self *EvsPinStore) load() error {
 					if err != nil {
 						return fmt.Errorf("%w: an evs read record's ref", ErrSidecarStoreFailed)
 					}
-					repo(repoId).reads[evsReadKey{refId: refId, path: record.Path}] = &EvsReadRecord{
+					read := &EvsReadRecord{
 						RepoId:       repoId,
 						RefId:        refId,
 						Path:         record.Path,
@@ -203,6 +205,15 @@ func (self *EvsPinStore) load() error {
 						PinVersion:   record.PinVersion,
 						UsedAt:       time.UnixMilli(record.UsedAtMs),
 					}
+					if record.PinChain != "" {
+						chainBytes, err := hex.DecodeString(record.PinChain)
+						if err != nil || len(chainBytes) != sha256.Size {
+							return fmt.Errorf("%w: an evs read record's chain", ErrSidecarStoreFailed)
+						}
+						chain := [sha256.Size]byte(chainBytes)
+						read.PinChain = &chain
+					}
+					repo(repoId).reads[evsReadKey{refId: refId, path: record.Path}] = read
 				}
 			}
 		}
@@ -460,6 +471,29 @@ func (self *EvsPinStore) update(repoId Id, change func(state *evsRepoState) erro
 	return nil
 }
 
+// Every pin, from memory alone: none before the store has loaded, so a caller that must not block or do I/O, as
+// HeadCheck's reads must not, gets what is there.
+func (self *EvsPinStore) loadedPins() []*EvsPin {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !self.loaded {
+		return nil
+	}
+	pins := []*EvsPin{}
+	for _, state := range self.repoIdRepos {
+		for _, pin := range state.refIdPins {
+			pins = append(pins, pin.clone())
+		}
+	}
+	slices.SortFunc(pins, func(a *EvsPin, b *EvsPin) int {
+		if c := a.RepoId.Cmp(b.RepoId); c != 0 {
+			return c
+		}
+		return a.RefId.Cmp(b.RefId)
+	})
+	return pins
+}
+
 // The read record of one path, false when none is held.
 func (self *EvsPinStore) ReadRecord(repoId Id, refId Id, path string) (*EvsReadRecord, bool, error) {
 	if err := self.load(); err != nil {
@@ -514,7 +548,9 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 			raised.RepoId = repoId
 			if held := reads[key]; held != nil {
 				raised.EntryVersion = max(raised.EntryVersion, held.EntryVersion)
-				raised.PinVersion = max(raised.PinVersion, held.PinVersion)
+				if raised.PinVersion < held.PinVersion {
+					raised.PinVersion, raised.PinChain = held.PinVersion, held.PinChain
+				}
 			}
 			reads[key] = &raised
 		}
@@ -545,13 +581,17 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 	for changedRepoId, reads := range changed {
 		stored := []*evsReadRecordRecord{}
 		for _, record := range reads {
-			stored = append(stored, &evsReadRecordRecord{
+			storedRecord := &evsReadRecordRecord{
 				RefId:        record.RefId.String(),
 				Path:         record.Path,
 				EntryVersion: record.EntryVersion,
 				PinVersion:   record.PinVersion,
 				UsedAtMs:     record.UsedAt.UnixMilli(),
-			})
+			}
+			if record.PinChain != nil {
+				storedRecord.PinChain = hex.EncodeToString(record.PinChain[:])
+			}
+			stored = append(stored, storedRecord)
 		}
 		slices.SortFunc(stored, func(a *evsReadRecordRecord, b *evsReadRecordRecord) int {
 			if c := strings.Compare(a.RefId, b.RefId); c != 0 {

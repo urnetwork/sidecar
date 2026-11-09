@@ -39,6 +39,8 @@ type EvsSettings struct {
 	// The most of a delta base a reconstruction holds in memory: 1 MiB (§11.7); a larger base spills to the sealed
 	// local store, so a whole path streams within R-EVS-14's 4 MiB on phones.
 	DeltaBaseMemoryByteCount int64
+	// The most versions one History walks: 1,000, a page of the log's.
+	HistoryVersionCount int
 	// The most of a segment a read fetches whole: 256 KiB (§11.9's rounds row); a larger one is read by
 	// 64 KiB-aligned ranges.
 	SegmentWholeByteCount int64
@@ -59,6 +61,7 @@ func DefaultEvsSettings() *EvsSettings {
 		CatchUpByteCount:         4 * 1024 * 1024,
 		HeadReadRecordCount:      16384,
 		DeltaBaseMemoryByteCount: 1024 * 1024,
+		HistoryVersionCount:      1000,
 		SegmentWholeByteCount:    256 * 1024,
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,
