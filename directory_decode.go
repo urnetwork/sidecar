@@ -279,3 +279,25 @@ func directoryCheckEntryByteCount(byteCount int) error {
 	}
 	return nil
 }
+
+// For the record writer: refuses a directory kind's body, given as a message or as stored, whose fields §16.11's
+// redaction row covers still hold what DirectoryRedact replaces, so a writer that skipped it seals nothing
+// (directoryUnredactedField). Every other kind passes.
+func directoryRefuseUnredacted(kind RecordKind, body proto.Message, stored []byte) error {
+	switch kind {
+	case RecordKindAnnounce, RecordKindRequest, RecordKindDecision, RecordKindErasureRequest:
+	default:
+		return nil
+	}
+	if body == nil {
+		parsed, _ := kind.NewBody()
+		if err := proto.Unmarshal(stored, parsed); err != nil {
+			return directoryRefusal("a %s body that does not parse", kind)
+		}
+		body = parsed
+	}
+	if field, unredacted := directoryUnredactedField(body); unredacted {
+		return directoryRefusal("%s holds a secret or a marker, which DirectoryRedact replaces before signing", field)
+	}
+	return nil
+}

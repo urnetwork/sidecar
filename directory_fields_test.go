@@ -958,6 +958,71 @@ func TestDirectoryRedactReplacesAMatchingFieldWhole(t *testing.T) {
 	}
 }
 
+// The record writer's backstop: a directory draft whose covered field still holds a secret, or a marker anywhere but
+// alone, is refused before it is sealed, as a message and as stored, naming the field; what DirectoryRedact leaves
+// passes. PII is the harness config's to hash, so the backstop leaves it, and a coordination entry is its route's to
+// refuse (§16.7's shared writes), not this backstop's.
+func TestDirectoryWriterRefusesWhatRedactionReplaces(t *testing.T) {
+	secret := testDirectorySecret(3)
+	titled := testDirectoryRunItem()
+	titled.What.Title = "deploy " + secret
+	marked := testDirectoryRunItem()
+	marked.Claims[0].Text = "the key [REDACTED:github-pat:0a1b2c3d] again"
+	targeted := testDirectoryRunItem()
+	targeted.Claims[0].Targets[1] = "keys/" + secret
+	described := testDirectoryWorkerItem()
+	described.What.Services[0].Description = "staging, password=" + secret
+	reasoned := testDirectoryRepoRequest()
+	reasoned.Reason = "my token is " + secret
+	noted := testDirectoryRepoApproval()
+	noted.Note = "use " + secret
+	for _, c := range []struct {
+		field string
+		kind  RecordKind
+		body  proto.Message
+	}{
+		{field: "what.title", kind: RecordKindAnnounce, body: titled},
+		{field: "claims[0].text", kind: RecordKindAnnounce, body: marked},
+		{field: "claims[0].targets[1]", kind: RecordKindAnnounce, body: targeted},
+		{field: "what.services[0].description", kind: RecordKindAnnounce, body: described},
+		{field: "reason", kind: RecordKindRequest, body: reasoned},
+		{field: "note", kind: RecordKindDecision, body: noted},
+	} {
+		if err := RecordBodyValidate(c.kind, c.body); err != nil {
+			t.Fatalf("%s: the body is within its caps, so only the backstop refuses it: %v", c.field, err)
+		}
+		for _, draft := range []*RecordDraft{
+			{Kind: c.kind, Body: c.body},
+			{Kind: c.kind, StoredBody: testDirectoryMarshal(t, c.body)},
+		} {
+			_, err := draft.bodyBytes()
+			if !errors.Is(err, ErrRecordDraftInvalid) || !strings.Contains(err.Error(), c.field) {
+				t.Errorf("%s, as stored %t: %v", c.field, draft.StoredBody != nil, err)
+			}
+		}
+		redacted := proto.Clone(c.body)
+		if _, err := DirectoryRedact(testDirectoryRedactor(t), redacted); err != nil {
+			t.Fatal(err)
+		}
+		draft := &RecordDraft{Kind: c.kind, Body: redacted}
+		if _, err := draft.bodyBytes(); err != nil {
+			t.Errorf("%s redacted: %v", c.field, err)
+		}
+	}
+	addressed := testDirectoryRunItem()
+	addressed.Claims[0].Text = "mail ana@team.example"
+	note := &protocol.CoordinationBody{Text: "token " + secret}
+	for _, draft := range []*RecordDraft{
+		{Kind: RecordKindAnnounce, Body: addressed},
+		{Kind: RecordKindErasureRequest, Body: testDirectoryErasureRequest()},
+		{Kind: RecordKindNote, Body: note},
+	} {
+		if _, err := draft.bodyBytes(); err != nil {
+			t.Errorf("kind %s: %v", draft.Kind, err)
+		}
+	}
+}
+
 // Normalizing comes before the redactor reads: a secret split by a control in prose, or by an invisible character in a
 // project, is joined by normalization and then redacted, never signed whole.
 func TestDirectoryRedactNormalizesBeforeItReads(t *testing.T) {

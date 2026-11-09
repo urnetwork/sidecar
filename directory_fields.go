@@ -310,6 +310,95 @@ func directoryIdentifierValid(class directoryIdentifierClass, text string, maxBy
 	return false
 }
 
+// How a field §16.11's redaction row covers is readied before the redactor reads it.
+type directoryRedactedClass int
+
+const (
+	// Taken as written: labels, branches and service names, which their classes refuse when out of them.
+	directoryRedactedAsWritten directoryRedactedClass = iota + 1
+	// DirectoryNormalizeProse.
+	directoryRedactedProse
+	// Path text's normalization.
+	directoryRedactedText
+)
+
+// Visits each identifier and prose field of an Announcement, a DirectoryRequest or a DirectoryDecision that §16.11's
+// redaction row covers, with its place in the message and its class. A DirectoryErasureRequest holds none; any other
+// message is refused. A DirectoryRequest's approval is not visited, since its hashes bind its bytes: its filer builds
+// it from text already redacted.
+func directoryRedactedFields(message proto.Message, visit func(field string, class directoryRedactedClass, value *string)) error {
+	switch typed := message.(type) {
+	case nil:
+		return directoryRefusal("no message")
+	case *protocol.Announcement:
+		if typed == nil {
+			return directoryRefusal("no item")
+		}
+		if who := typed.GetWho(); who != nil {
+			visit("who.agent_label", directoryRedactedAsWritten, &who.AgentLabel)
+			visit("who.harness", directoryRedactedAsWritten, &who.Harness)
+			visit("who.model", directoryRedactedText, &who.Model)
+		}
+		if what := typed.GetWhat(); what != nil {
+			visit("what.title", directoryRedactedProse, &what.Title)
+			visit("what.description", directoryRedactedProse, &what.Description)
+			for _, labels := range []struct {
+				field  string
+				values []string
+			}{
+				{field: "what.harnesses", values: what.Harnesses},
+				{field: "what.agent_labels", values: what.AgentLabels},
+				{field: "what.topics", values: what.Topics},
+			} {
+				for index := range labels.values {
+					visit(fmt.Sprintf("%s[%d]", labels.field, index), directoryRedactedAsWritten, &labels.values[index])
+				}
+			}
+			for index, service := range what.GetServices() {
+				if service == nil {
+					continue
+				}
+				visit(fmt.Sprintf("what.services[%d].name", index), directoryRedactedAsWritten, &service.Name)
+				visit(fmt.Sprintf("what.services[%d].description", index), directoryRedactedProse, &service.Description)
+			}
+		}
+		if where := typed.GetWhere(); where != nil {
+			visit("where.project", directoryRedactedText, &where.Project)
+			visit("where.branch", directoryRedactedAsWritten, &where.Branch)
+		}
+		for index, claim := range typed.GetClaims() {
+			if claim == nil {
+				continue
+			}
+			visit(fmt.Sprintf("claims[%d].text", index), directoryRedactedProse, &claim.Text)
+			for targetIndex := range claim.Targets {
+				visit(fmt.Sprintf("claims[%d].targets[%d]", index, targetIndex), directoryRedactedText, &claim.Targets[targetIndex])
+			}
+		}
+		if handoff := typed.GetHandoff(); handoff != nil {
+			visit("handoff.to_agent_label", directoryRedactedAsWritten, &handoff.ToAgentLabel)
+			visit("handoff.note", directoryRedactedProse, &handoff.Note)
+		}
+	case *protocol.DirectoryRequest:
+		if typed == nil {
+			return directoryRefusal("no request")
+		}
+		visit("reason", directoryRedactedProse, &typed.Reason)
+	case *protocol.DirectoryDecision:
+		if typed == nil {
+			return directoryRefusal("no decision")
+		}
+		visit("note", directoryRedactedProse, &typed.Note)
+	case *protocol.DirectoryErasureRequest:
+		if typed == nil {
+			return directoryRefusal("no erasure request")
+		}
+	default:
+		return directoryRefusal("%s is no directory message", proto.MessageName(message))
+	}
+	return nil
+}
+
 // One field DirectoryRedact replaced, named by its place in the message and the rule, never by its value.
 type DirectoryRedaction struct {
 	// As "what.title" or "claims[1].targets[0]".
@@ -323,14 +412,21 @@ type DirectoryRedaction struct {
 // in which the redactor finds a secret, or PII while the harness config hashes it, or which holds a marker of either
 // form, becomes [REDACTED:<rule>] whole, the rule its earliest. Labels, branches and service names are taken as
 // written: a writer that holds one outside its class is refused by the checks after this. A DirectoryErasureRequest
-// holds no text. A DirectoryRequest's approval is left alone, since its hashes bind its bytes: its filer builds it
-// from text already redacted. Answers what was replaced. Redacting twice changes nothing.
+// holds no text. A DirectoryRequest's approval is left alone (directoryRedactedFields). Answers what was replaced.
+// Redacting twice changes nothing. The record writer refuses a directory draft that skipped this
+// (directoryRefuseUnredacted).
 func DirectoryRedact(redactor *Redactor, message proto.Message) ([]DirectoryRedaction, error) {
 	if redactor == nil {
 		return nil, errors.New("directory redact: no redactor")
 	}
 	redactions := []DirectoryRedaction{}
-	redact := func(field string, value *string) {
+	err := directoryRedactedFields(message, func(field string, class directoryRedactedClass, value *string) {
+		switch class {
+		case directoryRedactedProse:
+			*value = DirectoryNormalizeProse(*value)
+		case directoryRedactedText:
+			*value = directoryNormalizeIdentifierText(*value)
+		}
 		text := *value
 		if text == "" || directorySharedMarker(text) {
 			return
@@ -349,80 +445,36 @@ func DirectoryRedact(redactor *Redactor, message proto.Message) ([]DirectoryReda
 		}
 		*value = "[REDACTED:" + rule + "]"
 		redactions = append(redactions, DirectoryRedaction{Field: field, Rule: rule})
-	}
-	prose := func(field string, value *string) {
-		*value = DirectoryNormalizeProse(*value)
-		redact(field, value)
-	}
-	text := func(field string, value *string) {
-		*value = directoryNormalizeIdentifierText(*value)
-		redact(field, value)
-	}
-	labels := func(field string, values []string) {
-		for index := range values {
-			redact(fmt.Sprintf("%s[%d]", field, index), &values[index])
-		}
-	}
-
-	switch typed := message.(type) {
-	case *protocol.Announcement:
-		if typed == nil {
-			return nil, directoryRefusal("no item")
-		}
-		if who := typed.GetWho(); who != nil {
-			redact("who.agent_label", &who.AgentLabel)
-			redact("who.harness", &who.Harness)
-			text("who.model", &who.Model)
-		}
-		if what := typed.GetWhat(); what != nil {
-			prose("what.title", &what.Title)
-			prose("what.description", &what.Description)
-			labels("what.harnesses", what.Harnesses)
-			labels("what.agent_labels", what.AgentLabels)
-			labels("what.topics", what.Topics)
-			for index, service := range what.GetServices() {
-				if service == nil {
-					continue
-				}
-				redact(fmt.Sprintf("what.services[%d].name", index), &service.Name)
-				prose(fmt.Sprintf("what.services[%d].description", index), &service.Description)
-			}
-		}
-		if where := typed.GetWhere(); where != nil {
-			text("where.project", &where.Project)
-			redact("where.branch", &where.Branch)
-		}
-		for index, claim := range typed.GetClaims() {
-			if claim == nil {
-				continue
-			}
-			prose(fmt.Sprintf("claims[%d].text", index), &claim.Text)
-			for targetIndex := range claim.Targets {
-				text(fmt.Sprintf("claims[%d].targets[%d]", index, targetIndex), &claim.Targets[targetIndex])
-			}
-		}
-		if handoff := typed.GetHandoff(); handoff != nil {
-			redact("handoff.to_agent_label", &handoff.ToAgentLabel)
-			prose("handoff.note", &handoff.Note)
-		}
-	case *protocol.DirectoryRequest:
-		if typed == nil {
-			return nil, directoryRefusal("no request")
-		}
-		prose("reason", &typed.Reason)
-	case *protocol.DirectoryDecision:
-		if typed == nil {
-			return nil, directoryRefusal("no decision")
-		}
-		prose("note", &typed.Note)
-	case *protocol.DirectoryErasureRequest:
-		if typed == nil {
-			return nil, directoryRefusal("no erasure request")
-		}
-	default:
-		return nil, directoryRefusal("%s is no directory message", proto.MessageName(message))
+	})
+	if err != nil {
+		return nil, err
 	}
 	return redactions, nil
+}
+
+// The first field §16.11's redaction row covers that still holds what DirectoryRedact replaces: a secret the
+// redactor's rules find, or a marker anywhere but alone, so no HMAC a local redaction wrote travels. PII is the harness
+// config's to hash, so it is not looked for here. Text out of its class is the checks' to refuse.
+func directoryUnredactedField(message proto.Message) (string, bool) {
+	unredacted := ""
+	err := directoryRedactedFields(message, func(field string, class directoryRedactedClass, value *string) {
+		text := *value
+		if unredacted != "" || text == "" || directorySharedMarker(text) {
+			return
+		}
+		if directoryAnyMarkerPattern.MatchString(text) {
+			unredacted = field
+			return
+		}
+		if matches, _ := findRedactMatches([]byte(text), false); len(matches) != 0 {
+			unredacted = field
+		}
+	})
+	if err != nil {
+		// no directory message: nothing here for the redactor
+		return "", false
+	}
+	return unredacted, unredacted != ""
 }
 
 // The fields of an item and of its who, what and where that each kind sets (directory.proto's comments). Whatever a
