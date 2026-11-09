@@ -325,7 +325,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-194"></a>194 | 2026-11-06 | Build order | M0-M10 build straight through in dependency order on the `sidecar` branches: each gate's local checks run and are reported, and anything needing hardware, production or people stays listed open. §23.8's freezes do not move. | §22, §23 |
 | <a id="od-195"></a>195 | 2026-11-06 | D-OPS-20 | D-OPS-20's MinIO build lives in a new `urnetwork/minio` fork, a sibling checkout with its own `sidecar` branch, keeping MinIO's AGPL source in one public place; the owner creates the GitHub repo before any push. | §3, §4, §19, §23 |
 | <a id="od-196"></a>196 | 2026-11-06 | Branch starts | A `sidecar` branch on all repos the work touches: warp's, config's, mmm's and vault's all open at M0, so §19.11 lands W5 at M0 and W2 and W8 by M4 on warp's branch. | §4, §19, §23 |
-| <a id="od-197"></a>197 | 2026-11-09 | [Q-SDK-2](#1813-open-questions), [Q-MAIL-2](#1513-open-questions) | Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and self-contained with its own forwarding key, amending [owner decision 87](#od-87); Android's sidecar runs only while the app is open, as iOS's does, amending [owner decision 12](#od-12). | §1, §2, §3, §4, §5, §6, §7, §8, §10, §12, §15, §17, §18, §20, §22, §23 |
+| <a id="od-197"></a>197 | 2026-11-09 | [Q-SDK-2](#1813-open-questions), [Q-MAIL-2](#1513-open-questions) | Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and self-contained with its own forwarding key, amending [owner decision 87](#od-87); Android's sidecar runs only while the app is open, as iOS's does, amending [owner decision 12](#od-12). | §1, §2, §3, §4, §5, §6, §7, §8, §10, §12, §15, §17, §18, §19, §20, §22, §23 |
 
 ## Contents
 
@@ -3393,7 +3393,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 | Linux desktop | Secret Service |
 | Linux headless | The pass, else a 0600 key file with a warning |
 
-**Forwarding's keys ([owner decision 197](#od-197)).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
+**Forwarding's keys ([owner decision 197](#od-197)).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); it generates them only at a setup, and after one a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
 
 | VPN component | Forwarding's keys |
 |---|---|
@@ -14684,7 +14684,7 @@ func (self *DeviceLocal) SetBridgeLocalAddresses(addresses *StringList) // bound
 ```
 
 - **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5696, :5789, :6340-6345). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5315; [owner decision 85](#od-85)).
-- **Setup (D-SDK-32; [owner decision 197](#od-197)).** The sidecar role's one act for its VPN component, in each network it has joined, in process on Android, else over the device RPC to the iOS or macOS extension or, via the desktop app paired per §5.8, the app service, never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
+- **Setup (D-SDK-32; [owner decision 197](#od-197)).** The sidecar role's one act for its VPN component, in each network it has joined: in process on Android, over the device RPC to the iOS extension, and from `ur daemon` through the desktop app paired per §5.8 to the macOS extension or the Windows or Linux app service; never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
 
 ```text
 when        each new client generation of the sidecar S (enrollment, re-enrollment, pairing; 18.5's State), and
@@ -15013,7 +15013,7 @@ Claude Code cloud adds secrets at its proxy (https://code.claude.com/docs/en/clo
 ### 18.10 Build and size
 
 - **Imports.** sdk imports the sidecar root and `protocol` in sidecar-role files, and in forwarding files `sidecar/device`, `protocol/bridge` and the root's forwarding files, by a new rule on sdk/dependency_boundary_test.go's legs (:80-92); §4.7's `make check` fails the `ios_extension` leg if its root files leave the forwarding list below or it registers a `protocol` descriptor outside it (D-SDK-20).
-- **Forwarding leg ([owner decision 197](#od-197); D-SDK-20).** Every VPN component links forwarding and no other sidecar code: Apple's extensions as the `ios_extension` leg, the Windows and Linux app services with the same file list, and Android's VPN service in the app's own binding, where the sidecar role's code is present but runs only while the app is open (18.4):
+- **Forwarding leg ([owner decision 197](#od-197); D-SDK-20).** Every VPN component runs forwarding and no other sidecar code: Apple's extensions link only forwarding, as the `ios_extension` leg, and the Windows and Linux app services the same file list, while Android's VPN service runs in the app's own binding, where the sidecar role's code is present but runs only while the app is open (18.4):
 
 ```text
 kept        the every-leg types and SidecarApi; the forwarding client's DPoP refresh (§7.4); the authorization
@@ -15607,7 +15607,7 @@ MG6     §7's Team tables; §8: network_acl_share; §17: network_bridge_share;
         §20: transfer_balance.tier, transfer_balance's team_credit index (built concurrently; pending
         from M4's dark comparator, behind escrow_draw_order, 19.11), stripe_meter_report
 MG7     §15: mail_network, mail_host_key, mail_direct_mx, mail_connection_record
-MG8     §18: sidecar_push_token
+MG8     §7: network_client_owner.forward_only (owner decision 197); §18: sidecar_push_token
 MG9     §14: smtp_*
 ```
 
@@ -21252,6 +21252,7 @@ Compiled from the sections' Interfaces subsections and the tables they point to 
 | `smtp_send` (daily partitions), `smtp_complaint`, `smtp_halt`, `smtp_dkim_key`, `smtp_dmarc_daily` | smtpedge | Send records (30 d), complaints, halts, DKIM keys, DMARC aggregates counted once per report | MG9 | §14.14 |
 | `mail_network`, `mail_host_key`, `mail_direct_mx`, `mail_connection_record` (hourly partitions, 24 h) | mxedge | Mail-enabled networks; receiver host keys (`mx` or `mx.<scope>`); Team direct-MX receivers; router sessions in 10 s batches, without sender address or burner label, dropped once any §21.9 hold has copied its network's rows | MG7 | §15.15 |
 | `sidecar_push_token` | api | One APNs or FCM wake token per client | MG8 | §18.15 |
+| `network_client_owner.forward_only` | api | A sidecar's forwarding client's mark, which narrows its routes and its exchange to the config's read (§7.4; [owner decision 197](#od-197)) | MG8 | §7.17 |
 | `network_client_lease` | api | One row per ephemeral client, inserted at its mint: `seen_time`, its newest poll, written at most once per 300 s while Redis answers, and its close capability's SHA-256; read by the reaper, deleted with its client | MG1 | §6.16, §18.15 |
 | `network_sidecar_limit` | api | Per-network limit overrides with a reason | MG1 | §20.14 |
 | `network_quota_state`, `network_service_usage` (13 months), `service_debit_journal`, `service_usage_batch` (24 h) | api | Stored bytes, `storage_over` and spent time per network; daily usage per network and meter; debits until applied; usage batches by id | MG2 | §20.14 |

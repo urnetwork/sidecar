@@ -544,7 +544,7 @@ func (self *DeviceLocal) SetBridgeLocalAddresses(addresses *StringList) // bound
 ```
 
 - **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5696, :5789, :6340-6345). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5315; owner decision 85).
-- **Setup (D-SDK-32; owner decision 197).** The sidecar role's one act for its VPN component, in each network it has joined, in process on Android, else over the device RPC to the iOS or macOS extension or, via the desktop app paired per §5.8, the app service, never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
+- **Setup (D-SDK-32; owner decision 197).** The sidecar role's one act for its VPN component, in each network it has joined: in process on Android, over the device RPC to the iOS extension, and from `ur daemon` through the desktop app paired per §5.8 to the macOS extension or the Windows or Linux app service; never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
 
 ```text
 when        each new client generation of the sidecar S (enrollment, re-enrollment, pairing; 18.5's State), and
@@ -873,7 +873,7 @@ Claude Code cloud adds secrets at its proxy (https://code.claude.com/docs/en/clo
 ### 18.10 Build and size
 
 - **Imports.** sdk imports the sidecar root and `protocol` in sidecar-role files, and in forwarding files `sidecar/device`, `protocol/bridge` and the root's forwarding files, by a new rule on sdk/dependency_boundary_test.go's legs (:80-92); §4.7's `make check` fails the `ios_extension` leg if its root files leave the forwarding list below or it registers a `protocol` descriptor outside it (D-SDK-20).
-- **Forwarding leg (owner decision 197; D-SDK-20).** Every VPN component links forwarding and no other sidecar code: Apple's extensions as the `ios_extension` leg, the Windows and Linux app services with the same file list, and Android's VPN service in the app's own binding, where the sidecar role's code is present but runs only while the app is open (18.4):
+- **Forwarding leg (owner decision 197; D-SDK-20).** Every VPN component runs forwarding and no other sidecar code: Apple's extensions link only forwarding, as the `ios_extension` leg, and the Windows and Linux app services the same file list, while Android's VPN service runs in the app's own binding, where the sidecar role's code is present but runs only while the app is open (18.4):
 
 ```text
 kept        the every-leg types and SidecarApi; the forwarding client's DPoP refresh (§7.4); the authorization

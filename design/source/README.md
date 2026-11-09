@@ -75,3 +75,17 @@ The import changed two things in the tooling:
 
 - `validate10.py` accepts the research root `design/design-research/`. Until then it flagged every `[R:key]` link as broken, and every section holding one as a verbatim mismatch, because the sheets moved there on 2026-11-05.
 - `v7/carry_readings.py` was added. It carries the readings forward to a fresh grep, so only new hits need reading.
+
+## Validation after owner decision 197 (2026-11-09)
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `f3ade234411ef7cd566b1da279066131f6bd7d9567678d1b27aa13d53f856c00`). Owner decision 197 put only IP and port forwarding in every app's VPN component and ran Android's sidecar only while the app is open; its design touched §1-§8, §10, §12, §15, §17-§20, §22 and §23, all of which cite it. The validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section: two new D- items (D-TEAM-33, D-SDK-32) and two new Q- items, each with its register summary.
+- **Links.** As before: every internal, relative and research link resolves, with RFC 5246's §7.4.9 the one unresolved section reference.
+- **Owner decisions.** All 197 rows are present and cited.
+- **Open owner questions.** Two, Q-BRIDGE-8 and Q-SDK-7, raised in designing decision 197: the front matter's table lists them, §23.6 places them, and the sections are written to each recommendation, marked "(proposed; Q-...)". `data_front7.py`'s check, which required none open, now allows these two and no other.
+- **Superseded options.** 301 grep hits, each with a reading; 14 were read on 2026-11-09 (the open questions' recommendation markers and decider lines, three settled items named by their answers, and §1's line now naming the open questions). None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands.
+- **The metadata list** is v9 (api-4's `forward_only`, api-7's forwarding Delegations, connect-1's forwarding-key delegations), copied to `metadata_list.yml` by `make metadata`.
+
+The tooling changed in two places: `validate10.py`'s `decision_rows` takes the 2026-11-09 date, and `data_front7.py`'s open-question check allows the two questions above. Tests outside this folder read the sections too: `sidecartest/fault`'s catalog mirrors §22.8's FS gates and §23.6's gate map, `check/`'s conformance ledger pins §22.9's peers, and `sidecartest`'s privacy and bounds tests read §22.7 and §22.8, so a change to those lines lands with the code that mirrors it.
