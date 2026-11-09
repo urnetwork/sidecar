@@ -445,6 +445,9 @@ func FuzzEvsGitCommitEqualsGoGit(f *testing.F) {
 	f.Add([]byte(head + author + author + committer + "\nsubject\n"))
 	f.Add([]byte(head + committer + author + "\nsubject\n"))
 	f.Add([]byte(head + author + committer))
+	f.Add([]byte(head + author + committer + "encoding ISO-8859-1\n"))
+	f.Add([]byte(head + author + committer + "gpgsig a\n b\n"))
+	f.Add([]byte(head + author + committer + "x-a b"))
 	f.Add([]byte(head + author + committer + "\x00\n\nsubject\n"))
 	f.Add([]byte(head + author + committer + " continues nothing\n\nsubject\n"))
 	f.Fuzz(func(t *testing.T, encoded []byte) {
@@ -461,10 +464,15 @@ func FuzzEvsGitCommitEqualsGoGit(f *testing.F) {
 			return
 		}
 		// a commit go-git takes and this refuses, which must be one this file names: bytes go-git's own
-		// fields would not give back, which is every repeated, misplaced or missing header and a missing
-		// blank line, or else a NUL in the headers, or a continuation right after the committer
+		// fields would not give back, which is every repeated, misplaced or missing header and a last
+		// line with no end, or else a NUL in the headers, or a continuation right after the committer.
+		// go-git's encoder adds a blank line to a commit that ends with its headers, which this takes, so
+		// bytes it gives back with only that added are no difference.
 		reencoded := &plumbing.MemoryObject{}
-		if theirs.Encode(reencoded) != nil || !bytes.Equal(objectBytes(t, reencoded), encoded) {
+		if theirs.Encode(reencoded) != nil {
+			return
+		}
+		if theirBytes := objectBytes(t, reencoded); !bytes.Equal(theirBytes, encoded) && !bytes.Equal(theirBytes, append(bytes.Clone(encoded), '\n')) {
 			return
 		}
 		headers, _, _ := bytes.Cut(encoded, []byte("\n\n"))
@@ -477,6 +485,46 @@ func FuzzEvsGitCommitEqualsGoGit(f *testing.F) {
 		}
 		t.Fatalf("this refuses a commit go-git takes and could give back: %q: %v", encoded, err)
 	})
+}
+
+// A commit that ends with its headers, which stock git files and fsck --strict passes: go-git reads
+// the fields this reads, an empty message among them, and the oid of the bytes both read is the one
+// this encodes, where go-git's own encoder adds the blank line and so changes it.
+func TestCommitsWithNoBodyEqualGoGit(t *testing.T) {
+	head := "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n" +
+		"parent fe15d1340f7f283a87474f1114513d1b8d96b342\n" +
+		"author A U Thor <author@example.com> 1112911993 -0700\n" +
+		"committer agent <0000@ur.invalid> 1112912053 +0000\n"
+	for _, tail := range []string{"", "encoding ISO-8859-1\n", "gpgsig a\n b\n", "x-a b\nx-c\n"} {
+		encoded := []byte(head + tail)
+		commit, err := sidecar.EvsGitCommitDecode(encoded)
+		if err != nil {
+			t.Fatalf("%q: %v", encoded, err)
+		}
+		if !commit.HeadersOnly {
+			t.Fatalf("%q has a body", encoded)
+		}
+		stored := memoryObject(plumbing.CommitObject, encoded)
+		checkCommitFields(t, commit, stored)
+		oid, err := commit.Oid()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if toHash(oid) != stored.Hash() {
+			t.Fatalf("%q: %s, go-git hashes %s", encoded, oid, stored.Hash())
+		}
+		theirs := &object.Commit{}
+		if err := theirs.Decode(stored); err != nil {
+			t.Fatal(err)
+		}
+		reencoded := &plumbing.MemoryObject{}
+		if err := theirs.Encode(reencoded); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(objectBytes(t, reencoded), append(bytes.Clone(encoded), '\n')) {
+			t.Fatalf("%q: go-git gives back %q", encoded, objectBytes(t, reencoded))
+		}
+	}
 }
 
 // go-git's apply of a delta. ApplyDelta and not PatchDelta, whose empty-base guard its own apply does
@@ -557,6 +605,9 @@ func FuzzEvsGitDeltaApplyEqualsGoGit(f *testing.F) {
 	for _, seed := range seedFiles(f, "evs_git_delta") {
 		f.Add(seed)
 	}
+	// a 64 KiB base, and a delta of two 64 KiB sizes and a copy cut at its one offset byte, which a zero
+	// read for that byte would make a copy of the whole base
+	f.Add(slices.Concat([]byte{1, 0, 0}, make([]byte, 64*1024), []byte{0x80, 0x80, 0x04, 0x80, 0x80, 0x04, 0x81}))
 	f.Fuzz(func(t *testing.T, input []byte) {
 		base, delta := splitSeed(input)
 		checkApplyEqualsGoGit(t, base, delta)

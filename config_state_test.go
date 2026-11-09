@@ -459,7 +459,7 @@ func TestConfigStateSnapshotsNeverChange(t *testing.T) {
 }
 
 // GkmAuthView's chain checks: a state is at its own pin, a pin above waits, one off the chain is a fork, and one
-// below on the chain waits for TEAM-M2-11's StateAt, unjudged here.
+// below on the chain is the state the log published there (StateAt, config_state_at.go).
 func TestConfigStateAnswersPinsAsAGkmView(t *testing.T) {
 	net := newTestConfigNet(t)
 	net.tick(&bridge.ApiTick{})
@@ -478,7 +478,7 @@ func TestConfigStateAnswersPinsAsAGkmView(t *testing.T) {
 	if !state.OnChain(older) {
 		t.Error("an older pin is on the chain")
 	}
-	if _, err := state.At(older); !errors.Is(err, ErrGkmAuthNotRetained) {
+	if view, err := state.At(older); err != nil || !proto.Equal(view.Pin(), older) {
 		t.Errorf("an older pin: %v", err)
 	}
 	genesisChain := bridge.GenesisChain(net.signedGenesis)
