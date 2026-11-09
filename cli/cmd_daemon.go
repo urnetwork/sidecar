@@ -168,7 +168,19 @@ func (self *urDaemonNetwork) rotateKeychain(ctx context.Context, pass []byte) er
 // it reports.
 func registerUrDaemonMethods(daemon *sidecar.Daemon, instance string, target urDaemonTarget, keyStoreKind osKeyStoreKind,
 	hostStores func() []sidecar.SidecarHostCredentialStore) error {
-	methods := []*sidecar.DaemonMethod{
+	for _, method := range urDaemonMethods(instance, target, keyStoreKind, hostStores) {
+		if err := daemon.RegisterMethod(method); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The control methods ur's daemon serves, over target: what registerUrDaemonMethods registers, and what a test reads
+// to hold ur native-host to every Confirm method among them.
+func urDaemonMethods(instance string, target urDaemonTarget, keyStoreKind osKeyStoreKind,
+	hostStores func() []sidecar.SidecarHostCredentialStore) []*sidecar.DaemonMethod {
+	return []*sidecar.DaemonMethod{
 		{
 			Name: urMethodStatus,
 			Handler: func(ctx context.Context, call *sidecar.DaemonCall) (any, error) {
@@ -260,12 +272,6 @@ func registerUrDaemonMethods(daemon *sidecar.Daemon, instance string, target urD
 			},
 		},
 	}
-	for _, method := range methods {
-		if err := daemon.RegisterMethod(method); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Decodes a call's params into params. No params is an empty object.

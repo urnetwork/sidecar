@@ -81,6 +81,12 @@ type urSettings struct {
 	// How long ur status's host probes run, all at once, each a dial and a tls handshake: 10 s, past a cold dial
 	// through a proxy on a slow link (cmd_status_hosts.go).
 	HostProbeTimeout time.Duration
+	// The longest message ur native-host reads from a browser: SidecarLocalSettings.RequestByteCount's 4 MiB, the
+	// daemon's own bound on a request. A longer one ends the session.
+	NativeHostRequestByteCount int64
+	// The most of a reply one native messaging frame carries before the reply goes as chunks: 512 KiB, whose base64
+	// and envelope stay under Chrome's 1 MiB limit on a host's message (native_host_frame.go).
+	NativeHostChunkByteCount int
 }
 
 // The defaults, a fresh value each call.
@@ -90,6 +96,9 @@ func defaultUrSettings() *urSettings {
 		SpawnRetryInterval: 50 * time.Millisecond,
 		CallTimeout:        35 * time.Second,
 		HostProbeTimeout:   10 * time.Second,
+		// the daemon's own request bound, so nothing the daemon would refuse is read whole
+		NativeHostRequestByteCount: sidecar.DefaultSidecarSettings().LocalSettings.RequestByteCount,
+		NativeHostChunkByteCount:   512 * 1024,
 	}
 }
 
@@ -124,6 +133,8 @@ type urCli struct {
 	hostList func() (*sidecar.SidecarHostList, error)
 	// how ur status probes each host
 	hostProber *urHostProber
+	// URnetwork's extension ids, which ur native-host serves and its manifests name (native_host_manifest.go)
+	nativeHostIds func() (*nativeHostIds, error)
 	// where and as whom a unit installs, and what runs its commands (unit.go)
 	unitEnv    func() (*unitEnv, error)
 	unitRunner func(cli *urCli) unitRunner
@@ -152,6 +163,7 @@ func newUrCli() *urCli {
 		serviceUrls:     urServiceUrlsFromHostTable,
 		hostList:        sidecar.SidecarHostListV1,
 		hostProber:      newUrHostProber(),
+		nativeHostIds:   embeddedNativeHostIds,
 		unitEnv:         hostUnitEnv,
 		unitRunner:      execUnitRunner,
 		stateDirectory:  sidecar.SidecarStateDirectory,
