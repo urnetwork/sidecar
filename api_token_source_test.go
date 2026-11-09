@@ -345,22 +345,20 @@ func TestHostReregistersOnRestoreRequired(t *testing.T) {
 	}
 }
 
-// Waits until the sidecar's api client holds a token, which nothing announces.
+// Waits until the sidecar's api client holds a token: a generation installs its token in the api before it is
+// published as running, so the running generation's monitor announces it.
 func awaitSidecarApiToken(t *testing.T, sidecar *Sidecar) {
 	t.Helper()
-	deadline := time.Now().Add(sidecarTestTimeout)
+	deadline := time.After(sidecarTestTimeout)
 	for {
-		held := func() bool {
-			sidecar.sidecarApi.stateLock.Lock()
-			defer sidecar.sidecarApi.stateLock.Unlock()
-			return sidecar.sidecarApi.byJwt != ""
-		}()
-		if held {
+		running, changed := sidecar.runningGenerationNumber.Get()
+		if running != 0 && sidecar.sidecarApi.currentByJwt() != "" {
 			return
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-changed:
+		case <-deadline:
 			t.Fatal("the sidecar api never held a token")
 		}
-		time.Sleep(time.Millisecond)
 	}
 }
