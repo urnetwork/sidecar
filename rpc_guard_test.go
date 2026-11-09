@@ -8,7 +8,6 @@
 package sidecar
 
 import (
-	"context"
 	"testing"
 
 	"github.com/urnetwork/connect"
@@ -98,14 +97,7 @@ func TestControlPushKeptOnlyOverPlatformCarriers(t *testing.T) {
 func TestControlPushGoesByTypeWhateverItsFlags(t *testing.T) {
 	fixture := newTestSubprotocol(t, nil)
 	pushes := fixture.collect(t, protocol.MessageType_PUSH_HINT)
-	responses := make(chan *subprotocolMessage, 1)
-	remove, err := fixture.subprotocol.setResponseDispatch(func(ctx context.Context, message *subprotocolMessage) {
-		responses <- testCopyMessage(message)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove()
+	unrouted := fixture.subprotocol.stats.unroutedCount.Load()
 	push := testRequest(protocol.MessageType_PUSH_HINT, []byte{1})
 	push.Flags = EnvelopeFlagResponse | EnvelopeFlagNoReply
 	fixture.receive(connect.ControlId, push, connect.Peer{TransportType: connect.TransportTypeH1})
@@ -113,8 +105,9 @@ func TestControlPushGoesByTypeWhateverItsFlags(t *testing.T) {
 		t.Errorf("push %d", message.envelope.RequestId)
 	}
 	fixture.closeBalanced(t)
-	if len(responses) != 0 {
-		t.Error("a hint reached the response dispatch")
+	// the response dispatch, which is the dispatcher's own, counts what it cannot route: it saw nothing
+	if count := fixture.subprotocol.stats.unroutedCount.Load() - unrouted; count != 0 {
+		t.Errorf("a hint reached the response dispatch")
 	}
 }
 

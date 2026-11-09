@@ -14,6 +14,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -226,6 +227,7 @@ func (self *Sidecar) reconcileOpen() {
 		connectInstanceId: connectInstanceId,
 		byJwt:             byJwt,
 		clientKeySeed:     record.keys.clientKeySeedCopy(),
+		binding:           bytes.Clone(record.binding),
 		secrets:           secrets,
 	})
 }

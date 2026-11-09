@@ -52,6 +52,8 @@ type sidecarGenerationArgs struct {
 	byJwt             string
 	// a copy, which the generation erases once the leg has read it
 	clientKeySeed []byte
+	// the generation's marshalled SignedSidecarIdentityBinding, which §6's Hello carries
+	binding []byte
 	// the core's namespace of the network's keychain
 	secrets SidecarSecrets
 }
@@ -66,8 +68,10 @@ type sidecarGeneration struct {
 	byJwt             string
 	// read by the leg while it starts, then erased
 	clientKeySeed []byte
-	ctx           context.Context
-	cancel        context.CancelFunc
+	// the generation's marshalled SignedSidecarIdentityBinding, which §6's Hello carries
+	binding []byte
+	ctx     context.Context
+	cancel  context.CancelFunc
 	// set once the refresher runs; connect's notifications before then are dropped, since the refresher's own
 	// schedule covers a token that close was about
 	tokenManager atomic.Pointer[sidecarTokenManager]
@@ -130,6 +134,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		connectInstanceId: args.connectInstanceId,
 		byJwt:             args.byJwt,
 		clientKeySeed:     args.clientKeySeed,
+		binding:           args.binding,
 		ctx:               generationCtx,
 		cancel:            cancel,
 	}
