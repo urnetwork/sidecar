@@ -1,0 +1,72 @@
+# R-TEST-7's target ledger (D-TEST-7; TEST-M2-13): every number §22.8 must show, with the test that
+# shows it, the tier it runs on and the task that owns it, so a number nothing has verified reads open
+# instead of passing unseen. sidecartest/targets_test.go reads this file; sidecartest/load's Report is
+# the shape each owning test's run reports in, and a Smoke report is never a target's evidence.
+#
+# targets       one per number, in the order of R-TEST-7's list.
+#   id          a short name, unique here.
+#   section     where the design sets the number: §8.9, §10.6, §11.13, §11.15, §13.5, §17.5 or D-SMTP-16.
+#   path        what is measured.
+#   target      the number as the design writes it.
+#   metric      what a Report holds it against: p50, p95, p99, a rate or a size, with its unit.
+#   limit       the bound, in metric's unit; a target with no single bound says so in target and leaves
+#               this empty.
+#   tier        where it can be shown: T2, T3, T4 or T5 (§22.4), or production.
+#   owners      the tasks whose tests measure it.
+#   test        the owning test, once its task lands it; empty reads open.
+#   open        what outside the build the target waits on, if anything: production, hardware or people.
+
+targets:
+  # §8.9's propagation targets, revocations included
+  - {id: acl-gates, section: "§8.9", path: "a projection change reaching every server gate", target: "≤ 5 s", metric: "max seconds", limit: 5, tier: T3, owners: [ACL-M2-13, TEAM-M2-14], test: ""}
+  - {id: acl-clients-p50, section: "§8.9", path: "a projection change applied on connected clients, from POST /acl/ack", target: "p50 ≤ 1 s", metric: "p50 seconds", limit: 1, tier: T5, owners: [TEAM-M2-14], test: "", open: production}
+  - {id: acl-clients-p99, section: "§8.9", path: "a projection change applied on connected clients, from POST /acl/ack", target: "p99 ≤ 5 s", metric: "p99 seconds", limit: 5, tier: T5, owners: [TEAM-M2-14], test: "", open: production}
+
+  # §10.6's sizes (D-KEYS-14), which §22.8's groups row measures at M2
+  - {id: gkm-tree-sizes, section: "§10.6", path: "ratchet_tree at 10, 100 and 1,000 leaves", target: "16-27 KB, 158-282 KB, 1.58-2.83 MB", metric: "bytes", tier: T2, owners: [KEYS-M2-31], test: ""}
+  - {id: gkm-commit-sizes, section: "§10.6", path: "a commit with a path at 10, 100 and 1,000 leaves", target: "11-17 KB, 18-126 KB, 26 KB-1.18 MB", metric: "bytes", tier: T2, owners: [KEYS-M2-31], test: ""}
+  - {id: gkm-groupinfo-size, section: "§10.6", path: "a sealed GroupInfo at 16 leaves", target: "the tree plus 1.6 KB, under 50 KB", metric: "bytes", limit: 51200, tier: T2, owners: [KEYS-M2-31], test: ""}
+  - {id: gkm-object-sizes, section: "§10.6", path: "KeyPackage, leaf, parent, Add-only commit, Welcome, ReaderKey, the wraps and GenRotate", target: "§10.6's per object table", metric: "bytes", tier: T2, owners: [KEYS-M2-31], test: ""}
+  - {id: gkm-rotation-5000, section: "§10.6", path: "a config rotation re-wrapping to 5,000 wrapped holders", target: "§22.8's groups row", metric: "seconds and bytes", tier: T3, owners: [KEYS-M2-31], test: ""}
+
+  # §11.13's budget, with D-TEST-11's nvme gate on the PM9A3 set
+  - {id: nvme-per-push, section: "§11.13", path: "bytes written per push per metadata drive at 2x year one's mix, the budget refilled at 0.8 DWPD", target: "≤ 43 KiB", metric: "KiB per push per drive", limit: 43, tier: T5, owners: [EVSB-M2-21], test: "", open: hardware}
+  - {id: nvme-iops, section: "§11.13", path: "write IOPS at 2x year one's mix", target: "≤ 50% of rated", metric: "percent of rated write IOPS", limit: 50, tier: T5, owners: [EVSB-M2-21], test: "", open: hardware}
+  - {id: nvme-no-refusal, section: "§11.13", path: "pushes the write budget refuses at 2x year one's mix", target: "none, no ref at FOLD_BEHIND, every batch under 26 h", metric: "count", limit: 0, tier: T5, owners: [EVSB-M2-21], test: "", open: hardware}
+  - {id: store-op-p99, section: "§11.13", path: "each GET, PUT, LIST and DELETE of §11.13's mix at 2x year one", target: "p99 ≤ 25 ms", metric: "p99 milliseconds", limit: 25, tier: T5, owners: [EVSB-M2-21], test: "", open: hardware}
+
+  # §11.15's table
+  - {id: evs-hint-p50, section: "§11.15", path: "commit to hint at an online subscriber", target: "p50 ≤ 300 ms", metric: "p50 milliseconds", limit: 300, tier: T3, owners: [EVS1-M2-43, PROTO-M2-07], test: ""}
+  - {id: evs-hint-p99, section: "§11.15", path: "commit to hint at an online subscriber", target: "p99 ≤ 2 s", metric: "p99 milliseconds", limit: 2000, tier: T3, owners: [EVS1-M2-43, PROTO-M2-07], test: ""}
+  - {id: evs-hint-1000-subscribers, section: "§11.15", path: "commit to hint with 1,000 subscribers on one repo", target: "p99 ≤ 2 s", metric: "p99 milliseconds", limit: 2000, tier: T3, owners: [TEST-M2-14], test: ""}
+  - {id: evs-push-p50, section: "§11.15", path: "local push of up to 64 KiB to remote commit, desktop", target: "p50 ≤ 1 s", metric: "p50 milliseconds", limit: 1000, tier: T3, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-visible-p50, section: "§11.15", path: "agent commit on device A visible on device B", target: "p50 ≤ 2 s", metric: "p50 milliseconds", limit: 2000, tier: T3, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-visible-p99, section: "§11.15", path: "agent commit on device A visible on device B", target: "p99 ≤ 5 s", metric: "p99 milliseconds", limit: 5000, tier: T3, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-head-read-desktop, section: "§11.15", path: "head read of a file up to 1 MiB, desktop", target: "p50 ≤ 250 ms", metric: "p50 milliseconds", limit: 250, tier: T3, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-head-read-mobile, section: "§11.15", path: "head read of a file up to 1 MiB, mobile", target: "p50 ≤ 600 ms", metric: "p50 milliseconds", limit: 600, tier: T4, owners: [EVS1-M2-43, SDK-M8-15], test: ""}
+  - {id: evs-head-read-behind, section: "§11.15", path: "head read 100 versions behind its pin", target: "statements ≤ 100 KiB, verify ≤ 20 ms on mobile", metric: "KiB and milliseconds", tier: T4, owners: [EVS1-M2-43, SDK-M8-15], test: ""}
+  - {id: evs-throughput-desktop, section: "§11.15", path: "throughput per repo, desktop", target: "≥ 50 MB/s", metric: "MB per second, at least", limit: 50, tier: T3, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-throughput-mobile, section: "§11.15", path: "throughput per repo, mobile", target: "≥ 5 MB/s", metric: "MB per second, at least", limit: 5, tier: T4, owners: [EVS1-M2-43, SDK-M8-15], test: ""}
+  - {id: evs-working-set, section: "§11.15", path: "evs working set in the iOS app process", target: "≤ 4 MiB; nothing over 1 MiB whole in RAM", metric: "MiB", limit: 4, tier: T4, owners: [SDK-M8-15], test: ""}
+  - {id: evs-twenty-agents, section: "§11.15", path: "the twenty-agent test: 20 agents pushing and merging every 60 s for 1 h", target: "no acknowledged commit lost; §11.15's targets met; published", metric: "count of lost commits", limit: 0, tier: T5, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-per-ref-pushes, section: "§11.15", path: "pushes to one ref meeting at its head's If-Match", target: "roughly 20-50 pushes/s", metric: "pushes per second", tier: T3, owners: [EVS1-M2-43], test: ""}
+  - {id: evs-cold-search-more, section: "§11.15", path: "cold search more", target: "first progress ≤ 500 ms; each shard's hits ≤ 100 ms after it lands, ≤ 300 ms on phones", metric: "milliseconds", limit: 500, tier: T4, owners: [SEARCH-M10-40], test: ""}
+
+  # §13.5's p95
+  - {id: tlsedge-setup-warm, section: "§13.5", path: "setup a passthrough connection adds, warm, contract round trip and e2e handshake included", target: "p95 ≤ 300 ms", metric: "p95 milliseconds", limit: 300, tier: T5, owners: [TLS-M5-26], test: ""}
+  - {id: tlsedge-setup-cold, section: "§13.5", path: "setup a passthrough connection adds, cold", target: "p95 ≤ 1.5 s", metric: "p95 milliseconds", limit: 1500, tier: T5, owners: [TLS-M5-26], test: ""}
+  - {id: tlsedge-connections, section: "§13.5", path: "connections per tlsedge process", target: "50,000", metric: "connections", limit: 50000, tier: T5, owners: [TLS-M5-26], test: "", open: hardware}
+
+  # §17.5's Classify
+  - {id: bridge-classify, section: "§17.5", path: "BridgeTable.Classify at 1,000 prefixes", target: "≤ 50 ns, 0 allocs", metric: "nanoseconds per op", limit: 50, tier: T5, owners: [BRIDGE-M4-13], test: ""}
+
+  # sockets, §9.8 (§22.8's sockets row)
+  - {id: sockets-find-p99, section: "§9.8", path: "Find, server side, at 100,000 listeners and ~6,700 registration calls/s", target: "p99 ≤ 50 ms", metric: "p99 milliseconds", limit: 50, tier: T5, owners: [SOCK-M5-17], test: ""}
+
+  # D-SMTP-16's M9 gate, speed (p95)
+  - {id: zk-bdat-pi1, section: "D-SMTP-16", path: "BDAT, 4 KiB header block, 10 recipients, π1, on an Apple M1 MacBook Air (8 GB)", target: "p95 ≤ 10 s", metric: "p95 seconds", limit: 10, tier: T5, owners: [SMTP-M9-32], test: "", open: hardware}
+  - {id: zk-bdat-all, section: "D-SMTP-16", path: "BDAT, π1 to π3, on an Apple M1 MacBook Air (8 GB)", target: "p95 ≤ 30 s", metric: "p95 seconds", limit: 30, tier: T5, owners: [SMTP-M9-32], test: "", open: hardware}
+  - {id: zk-bdat-m5-large, section: "D-SMTP-16", path: "BDAT, π1 to π3, on an AWS m5.large", target: "p95 ≤ 60 s", metric: "p95 seconds", limit: 60, tier: T5, owners: [SMTP-M9-32], test: "", open: hardware}
+  - {id: zk-data-pi1, section: "D-SMTP-16", path: "DATA, a 100 KiB message, π1", target: "p95 ≤ 10 min", metric: "p95 seconds", limit: 600, tier: T5, owners: [SMTP-M9-32], test: "", open: hardware}
+  - {id: zk-data-all, section: "D-SMTP-16", path: "DATA, a 100 KiB message, π1 to π3", target: "p95 ≤ 20 min", metric: "p95 seconds", limit: 1200, tier: T5, owners: [SMTP-M9-32], test: "", open: hardware}
+  - {id: zk-coverage, section: "D-SMTP-16", path: "the M7 census of the Tranco top 10,000's MXs", target: "the named providers and ≥ 95% of MX domains offer a covered version and suite", metric: "percent of MX domains, at least", limit: 95, tier: production, owners: [MAIL-M7-26, SMTP-M9-30], test: "", open: production}
