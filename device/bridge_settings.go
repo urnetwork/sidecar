@@ -92,6 +92,20 @@ type BridgeSettings struct {
 	// carve of Bridge.SetLocalAddresses applies.
 	LocalIpv4Networks func() []netip.Prefix
 
+	// How long a private name's answer may be cached (§12.9): 60 s, so a name a new state moves resolves anew within
+	// a minute. Positive.
+	NameTtl time.Duration
+	// Where `ur tun`'s resolver sends a query for a name the zone does not own (§12.9's pass-through): the host's
+	// system resolver, never this bridge's own <block>.0.53. Nil answers such a query with a server failure.
+	ResolverUpstream BridgeResolverUpstream
+	// The pass-through queries waiting for the upstream at once: 64. One more is dropped and counted. Positive.
+	ResolverQueueCount int
+	// The pass-through queries in flight at once, each on a worker of its own: 4, so one slow answer holds up few.
+	// Positive.
+	ResolverWorkerCount int
+	// How long one pass-through query may take upstream: 5 s, a stub resolver's own retry interval. Positive.
+	ResolverUpstreamTimeout time.Duration
+
 	// The largest marshalled BridgeRules ParseBridgeRules reads: 8 MiB, as large as the posture keeps a state. Positive.
 	RulesMaxByteCount int
 	// The most messages, strings and byte fields ParseBridgeRules decodes, at every depth. Decoding allocates per
@@ -102,24 +116,28 @@ type BridgeSettings struct {
 // §17's values, for a desktop: a daemon, a desktop network process or a VPS.
 func DefaultBridgeSettings() *BridgeSettings {
 	return &BridgeSettings{
-		PinSlotCount:           8192,
-		PinTcpIdleTimeout:      600 * time.Second,
-		PinIdleTimeout:         5 * time.Minute,
-		PinTouchInterval:       1 * time.Second,
-		LinkDownTimeout:        30 * time.Second,
-		LinkConnectTimeout:     3 * time.Second,
-		LinkIdleTimeout:        600 * time.Second,
-		LinkRebuildInterval:    6 * 24 * time.Hour,
-		LinkBuildTimeout:       30 * time.Second,
-		LinkCountMax:           64,
-		LinkRoomIdleTimeout:    60 * time.Second,
-		RejectPerSecond:        20,
-		RejectBurst:            40,
-		RejectSourceSlotCount:  256,
-		RejectEntryHoldTimeout: 600 * time.Second,
-		RulesMaxByteCount:      8 * 1024 * 1024,
-		RulesMaxFieldCount:     1024 * 1024,
-		RevocationMaxCount:     4 * 1024,
+		PinSlotCount:            8192,
+		PinTcpIdleTimeout:       600 * time.Second,
+		PinIdleTimeout:          5 * time.Minute,
+		PinTouchInterval:        1 * time.Second,
+		LinkDownTimeout:         30 * time.Second,
+		LinkConnectTimeout:      3 * time.Second,
+		LinkIdleTimeout:         600 * time.Second,
+		LinkRebuildInterval:     6 * 24 * time.Hour,
+		LinkBuildTimeout:        30 * time.Second,
+		LinkCountMax:            64,
+		LinkRoomIdleTimeout:     60 * time.Second,
+		RejectPerSecond:         20,
+		RejectBurst:             40,
+		RejectSourceSlotCount:   256,
+		RejectEntryHoldTimeout:  600 * time.Second,
+		NameTtl:                 60 * time.Second,
+		ResolverQueueCount:      64,
+		ResolverWorkerCount:     4,
+		ResolverUpstreamTimeout: 5 * time.Second,
+		RulesMaxByteCount:       8 * 1024 * 1024,
+		RulesMaxFieldCount:      1024 * 1024,
+		RevocationMaxCount:      4 * 1024,
 	}
 }
 
@@ -151,6 +169,8 @@ func (self *BridgeSettings) validate() error {
 		{name: "LinkBuildTimeout", value: self.LinkBuildTimeout},
 		{name: "LinkRoomIdleTimeout", value: self.LinkRoomIdleTimeout},
 		{name: "RejectEntryHoldTimeout", value: self.RejectEntryHoldTimeout},
+		{name: "NameTtl", value: self.NameTtl},
+		{name: "ResolverUpstreamTimeout", value: self.ResolverUpstreamTimeout},
 	}
 	for _, duration := range positiveDurations {
 		if duration.value <= 0 {
@@ -165,6 +185,8 @@ func (self *BridgeSettings) validate() error {
 		{name: "RejectPerSecond", value: self.RejectPerSecond},
 		{name: "RejectBurst", value: self.RejectBurst},
 		{name: "RejectSourceSlotCount", value: self.RejectSourceSlotCount},
+		{name: "ResolverQueueCount", value: self.ResolverQueueCount},
+		{name: "ResolverWorkerCount", value: self.ResolverWorkerCount},
 		{name: "RulesMaxByteCount", value: self.RulesMaxByteCount},
 		{name: "RulesMaxFieldCount", value: self.RulesMaxFieldCount},
 		{name: "RevocationMaxCount", value: self.RevocationMaxCount},

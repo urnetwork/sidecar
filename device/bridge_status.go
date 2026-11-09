@@ -103,6 +103,13 @@ type BridgeStatus struct {
 	// egress spec). `ur tun` routes the default into the tun only under exits.
 	EgressMode bridge.BridgeEgressMode
 
+	// §12.9's private names the state in force holds, and `ur tun`'s resolver's queries since the bridge started:
+	// answered from them, passed to the host's resolver, and dropped as malformed or past its queue.
+	NameCount             int
+	ResolverAnsweredCount uint64
+	ResolverPassedCount   uint64
+	ResolverDroppedCount  uint64
+
 	// What the bridge waits on.
 	Waits []BridgeWait
 	// What the posture's last call refused or found, and what the bridge itself holds back.
