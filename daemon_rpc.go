@@ -27,8 +27,9 @@ import (
 type DaemonMethod struct {
 	// The JSON-RPC method name.
 	Name string
-	// The call names one network: its network argument, else .ur's, else the only network (§5.8). Resolution
-	// beyond the argument is CORE-M3-05's, so until then the call's network argument is DaemonCall.Network.
+	// The call acts on one network: its network argument, else .ur's, else the only network the daemon hosts
+	// (§5.8). One that resolves to none is refused FAILED_PRECONDITION before the handler runs, and the handler gets
+	// the network and its Sidecar.
 	Network bool
 	// Signs or approves what only a person may (D-CORE-13): runs only from control, with Confirmed set.
 	Confirm bool
@@ -43,8 +44,13 @@ type DaemonCall struct {
 	Hello *DaemonHello
 	// The request's params, as sent.
 	Params json.RawMessage
-	// The network argument, for a Network method.
+	// The network argument as sent, for a Network method.
 	Network string
+	// A Network method's network, resolved by §5.8's rule, and the Sidecar hosting it.
+	NetworkId Id
+	Sidecar   *Sidecar
+	// The agent the session acts as: its hello's, else its project's .ur default; nil for none (daemon_agent.go).
+	Agent *SidecarAgent
 	// The ur that sent the call confirmed it on /dev/tty or in an app's UI (D-CORE-13). Only control mode sets it;
 	// any same-uid process can forge it (owner decision 47).
 	Confirmed bool
@@ -170,9 +176,10 @@ func daemonCallNetwork(params json.RawMessage) string {
 	return withNetwork.Network
 }
 
-// The response to one request line of a session in mode, or nil for a notification, which has no id and gets no
-// answer. run runs the method's handler under the request bound, which the session gives.
-func (self *Daemon) dispatch(line []byte, hello *DaemonHello, run func(handler func(ctx context.Context) (any, error)) (any, error, bool)) *daemonRpcResponse {
+// The response to one request line of a session, or nil for a notification, which has no id and gets no answer. run
+// runs the method's handler under the request bound, which the session gives.
+func (self *Daemon) dispatch(line []byte, session *daemonSession, run func(handler func(ctx context.Context) (any, error)) (any, error, bool)) *daemonRpcResponse {
+	hello := session.hello
 	request := &daemonRpcRequest{}
 	if err := json.Unmarshal(line, request); err != nil {
 		return &daemonRpcResponse{JsonRpc: "2.0", Id: json.RawMessage("null"), Error: &DaemonRpcError{Code: daemonRpcParseError, Message: "parse error"}}
@@ -201,7 +208,22 @@ func (self *Daemon) dispatch(line []byte, hello *DaemonHello, run func(handler f
 	call := &DaemonCall{Hello: hello, Params: request.Params, Confirmed: confirmed}
 	if method.Network {
 		call.Network = daemonCallNetwork(request.Params)
+		networkId, err := self.resolveSessionNetwork(session, call.Network)
+		if err != nil {
+			return answer(daemonNetworkErrorCode(err), err.Error())
+		}
+		sidecar, ok := self.SidecarForNetwork(networkId)
+		if !ok {
+			return answer(DaemonRpcFailedPrecondition, (&DaemonNetworkError{Reason: "unknown", Networks: self.hostedNetworkNames()}).Error())
+		}
+		call.NetworkId = networkId
+		call.Sidecar = sidecar
 	}
+	agent, err := self.sessionAgent(session)
+	if err != nil {
+		return answer(daemonRpcInvalidParams, err.Error())
+	}
+	call.Agent = agent
 	result, err, timedOut := run(func(ctx context.Context) (any, error) {
 		return method.Handler(ctx, call)
 	})
