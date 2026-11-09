@@ -805,6 +805,11 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
 		question: "plan-ACL-nonsidecar-subjects",
 	},
+	{
+		message:  "Announcement",
+		field:    testFenceField{name: "pad", number: 14, typeName: "bytes"},
+		question: "plan-RECORD-m6-carrier",
+	},
 }
 
 // One value an owner's answer adds to an enum the design fences.
