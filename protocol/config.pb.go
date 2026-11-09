@@ -2012,6 +2012,245 @@ func (x *RecoveryVeto) GetProposalId() []byte {
 	return nil
 }
 
+// One statement or tick a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold,
+// as records, exactly the log's statements and ticks in (the previous base's folded_through, folded_through],
+// each by id with the position of the entry that carried it. A config file, which evs holds as ciphertext.
+type ConfigRecord struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            []byte                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                        // SHA-256 of the Signed for a STATEMENT (StatementId); empty for a TICK
+	N             uint64                 `protobuf:"varint,2,opt,name=n,proto3" json:"n,omitempty"`                         // the carrying entry's position
+	TimeMs        int64                  `protobuf:"varint,3,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"` // the carrying entry's time
+	Kind          uint32                 `protobuf:"varint,4,opt,name=kind,proto3" json:"kind,omitempty"`                   // AuthEntry.kind: 2 STATEMENT or 3 TICK, never a BASE
+	Body          []byte                 `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`                    // AuthEntry.body verbatim
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigRecord) Reset() {
+	*x = ConfigRecord{}
+	mi := &file_protocol_config_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigRecord) ProtoMessage() {}
+
+func (x *ConfigRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigRecord.ProtoReflect.Descriptor instead.
+func (*ConfigRecord) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ConfigRecord) GetId() []byte {
+	if x != nil {
+		return x.Id
+	}
+	return nil
+}
+
+func (x *ConfigRecord) GetN() uint64 {
+	if x != nil {
+		return x.N
+	}
+	return 0
+}
+
+func (x *ConfigRecord) GetTimeMs() int64 {
+	if x != nil {
+		return x.TimeMs
+	}
+	return 0
+}
+
+func (x *ConfigRecord) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+func (x *ConfigRecord) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+// fold/<d>/<i>, the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits: one file per head that
+// advances folded_through, holding the records in (after, folded_through] in n order.
+type ConfigFold struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	After         uint64                 `protobuf:"varint,1,opt,name=after,proto3" json:"after,omitempty"` // the previous fold's folded_through, 0 for the first
+	FoldedThrough uint64                 `protobuf:"varint,2,opt,name=folded_through,json=foldedThrough,proto3" json:"folded_through,omitempty"`
+	Records       []*ConfigRecord        `protobuf:"bytes,3,rep,name=records,proto3" json:"records,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigFold) Reset() {
+	*x = ConfigFold{}
+	mi := &file_protocol_config_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigFold) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigFold) ProtoMessage() {}
+
+func (x *ConfigFold) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigFold.ProtoReflect.Descriptor instead.
+func (*ConfigFold) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ConfigFold) GetAfter() uint64 {
+	if x != nil {
+		return x.After
+	}
+	return 0
+}
+
+func (x *ConfigFold) GetFoldedThrough() uint64 {
+	if x != nil {
+		return x.FoldedThrough
+	}
+	return 0
+}
+
+func (x *ConfigFold) GetRecords() []*ConfigRecord {
+	if x != nil {
+		return x.Records
+	}
+	return nil
+}
+
+// names: each sidecar's chosen client name (§7.7), which ConfigNames resolves to DNS labels keyed on the
+// sidecar_id, duplicates taking -2, -3 in admission order. Deterministically encoded, in sidecar_id order.
+type ConfigNameTable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Names         []*ConfigName          `protobuf:"bytes,1,rep,name=names,proto3" json:"names,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigNameTable) Reset() {
+	*x = ConfigNameTable{}
+	mi := &file_protocol_config_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigNameTable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigNameTable) ProtoMessage() {}
+
+func (x *ConfigNameTable) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigNameTable.ProtoReflect.Descriptor instead.
+func (*ConfigNameTable) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ConfigNameTable) GetNames() []*ConfigName {
+	if x != nil {
+		return x.Names
+	}
+	return nil
+}
+
+type ConfigName struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SidecarId     []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // a DNS label, as ValidateConfigClientName takes it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigName) Reset() {
+	*x = ConfigName{}
+	mi := &file_protocol_config_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigName) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigName) ProtoMessage() {}
+
+func (x *ConfigName) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigName.ProtoReflect.Descriptor instead.
+func (*ConfigName) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ConfigName) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *ConfigName) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var File_protocol_config_proto protoreflect.FileDescriptor
 
 const file_protocol_config_proto_rawDesc = "" +
@@ -2159,7 +2398,25 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\fRecoveryVeto\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1f\n" +
 	"\vproposal_id\x18\x02 \x01(\fR\n" +
-	"proposalId*b\n" +
+	"proposalId\"m\n" +
+	"\fConfigRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\fR\x02id\x12\f\n" +
+	"\x01n\x18\x02 \x01(\x04R\x01n\x12\x17\n" +
+	"\atime_ms\x18\x03 \x01(\x03R\x06timeMs\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\rR\x04kind\x12\x12\n" +
+	"\x04body\x18\x05 \x01(\fR\x04body\"\x84\x01\n" +
+	"\n" +
+	"ConfigFold\x12\x14\n" +
+	"\x05after\x18\x01 \x01(\x04R\x05after\x12%\n" +
+	"\x0efolded_through\x18\x02 \x01(\x04R\rfoldedThrough\x129\n" +
+	"\arecords\x18\x03 \x03(\v2\x1f.urnetwork.sidecar.ConfigRecordR\arecords\"F\n" +
+	"\x0fConfigNameTable\x123\n" +
+	"\x05names\x18\x01 \x03(\v2\x1d.urnetwork.sidecar.ConfigNameR\x05names\"?\n" +
+	"\n" +
+	"ConfigName\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name*b\n" +
 	"\fIndexerScope\x12\x1d\n" +
 	"\x19INDEXER_SCOPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15INDEXER_SCOPE_NETWORK\x10\x01\x12\x18\n" +
@@ -2204,7 +2461,7 @@ func file_protocol_config_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_protocol_config_proto_goTypes = []any{
 	(IndexerScope)(0),                // 0: urnetwork.sidecar.IndexerScope
 	(IndexerService)(0),              // 1: urnetwork.sidecar.IndexerService
@@ -2236,35 +2493,39 @@ var file_protocol_config_proto_goTypes = []any{
 	(*AuthorityProposal)(nil),        // 27: urnetwork.sidecar.AuthorityProposal
 	(*AuthorityCosign)(nil),          // 28: urnetwork.sidecar.AuthorityCosign
 	(*RecoveryVeto)(nil),             // 29: urnetwork.sidecar.RecoveryVeto
-	(*bridge.StatementHeader)(nil),   // 30: urnetwork.sidecar.StatementHeader
-	(bridge.MemberRole)(0),           // 31: urnetwork.sidecar.MemberRole
-	(bridge.RecoveryRebindReason)(0), // 32: urnetwork.sidecar.RecoveryRebindReason
-	(bridge.KeyAlg)(0),               // 33: urnetwork.sidecar.KeyAlg
-	(bridge.KeyPurpose)(0),           // 34: urnetwork.sidecar.KeyPurpose
-	(*bridge.WebAuthnEvidence)(nil),  // 35: urnetwork.sidecar.WebAuthnEvidence
-	(*bridge.AuthPin)(nil),           // 36: urnetwork.sidecar.AuthPin
+	(*ConfigRecord)(nil),             // 30: urnetwork.sidecar.ConfigRecord
+	(*ConfigFold)(nil),               // 31: urnetwork.sidecar.ConfigFold
+	(*ConfigNameTable)(nil),          // 32: urnetwork.sidecar.ConfigNameTable
+	(*ConfigName)(nil),               // 33: urnetwork.sidecar.ConfigName
+	(*bridge.StatementHeader)(nil),   // 34: urnetwork.sidecar.StatementHeader
+	(bridge.MemberRole)(0),           // 35: urnetwork.sidecar.MemberRole
+	(bridge.RecoveryRebindReason)(0), // 36: urnetwork.sidecar.RecoveryRebindReason
+	(bridge.KeyAlg)(0),               // 37: urnetwork.sidecar.KeyAlg
+	(bridge.KeyPurpose)(0),           // 38: urnetwork.sidecar.KeyPurpose
+	(*bridge.WebAuthnEvidence)(nil),  // 39: urnetwork.sidecar.WebAuthnEvidence
+	(*bridge.AuthPin)(nil),           // 40: urnetwork.sidecar.AuthPin
 }
 var file_protocol_config_proto_depIdxs = []int32{
-	30, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	31, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
-	30, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
+	34, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
 	0,  // 7: urnetwork.sidecar.IndexerSet.scope:type_name -> urnetwork.sidecar.IndexerScope
 	1,  // 8: urnetwork.sidecar.IndexerServices.services:type_name -> urnetwork.sidecar.IndexerService
-	30, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
-	32, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
-	30, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
-	33, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
-	34, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	35, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
-	30, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 18: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	36, // 19: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	34, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
+	36, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
+	34, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
+	37, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
+	38, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
+	39, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
+	34, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 18: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 19: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
 	4,  // 20: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
 	5,  // 21: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
 	2,  // 22: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
@@ -2272,14 +2533,16 @@ var file_protocol_config_proto_depIdxs = []int32{
 	22, // 24: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
 	6,  // 25: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
 	24, // 26: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	30, // 27: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 28: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 29: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	34, // 27: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 28: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 29: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 30: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
+	33, // 31: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }
@@ -2293,7 +2556,7 @@ func file_protocol_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_config_proto_rawDesc), len(file_protocol_config_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   23,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
