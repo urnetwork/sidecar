@@ -516,6 +516,11 @@ func (self *DnsHarness) runningEdge(ns string) *dnsHarnessEdge {
 // A killed edge's goroutines end with its context, and Close does not wait for them, since a schedule
 // may hold one at a barrier until its end. The Net's Close closes these again, which does nothing
 // more. Safe more than once.
+//
+// Whether a process still runs is the Net's to say, since it forgets a killed one. Its context
+// cannot say: the end of a test cancels t.Context, and every process context with it, before the
+// test's cleanups run, so a Close in a cleanup would see every edge as killed and leave each to
+// write its last snapshot while Directory goes.
 func (self *DnsHarness) Close() {
 	edges := []*dnsHarnessEdge{}
 	var block *dnsHarnessApi
@@ -524,18 +529,18 @@ func (self *DnsHarness) Close() {
 		defer self.stateLock.Unlock()
 		self.closed = true
 		for _, ns := range self.dnsSettings.Ns {
-			if edge := self.nsEdges[ns]; edge != nil && edge.ctx.Err() == nil {
+			if edge := self.nsEdges[ns]; edge != nil {
 				edges = append(edges, edge)
 			}
 		}
-		if self.api != nil && self.api.ctx.Err() == nil {
-			block = self.api
-		}
+		block = self.api
 	}()
 	for _, edge := range edges {
-		edge.Close()
+		if self.net.Process(self.EdgeProcess(edge.ns)) == edge {
+			edge.Close()
+		}
 	}
-	if block != nil {
+	if block != nil && self.net.Process(self.ApiProcess()) == block.api {
 		block.api.Close()
 	}
 	self.bumpInstances()
@@ -1123,22 +1128,28 @@ func newDnsHarnessKeys(net *Net, settings *DnsHarnessSettings) (*dnsHarnessKeys,
 		rootAnchors: map[string][]*dns.DNSKEY{},
 		rootWindows: map[string]map[int64]*dnsservice.DnsKeyWindow{},
 	}
+	// miekg/dns will not sign under a key whose tag is 0, and about one random key in 65536 has
+	// that tag, so such a key is drawn again.
 	newKey := func(flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey, error) {
-		record := &dns.DNSKEY{
-			Hdr:       dns.RR_Header{Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: settings.Keys.DnskeyTtl},
-			Flags:     flags,
-			Protocol:  3,
-			Algorithm: dns.ECDSAP256SHA256,
+		for {
+			record := &dns.DNSKEY{
+				Hdr:       dns.RR_Header{Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: settings.Keys.DnskeyTtl},
+				Flags:     flags,
+				Protocol:  3,
+				Algorithm: dns.ECDSAP256SHA256,
+			}
+			private, err := record.Generate(256)
+			if err != nil {
+				return nil, nil, err
+			}
+			key, ok := private.(*ecdsa.PrivateKey)
+			if !ok {
+				return nil, nil, errors.New("miekg made no ecdsa key")
+			}
+			if record.KeyTag() != 0 {
+				return record, key, nil
+			}
 		}
-		private, err := record.Generate(256)
-		if err != nil {
-			return nil, nil, err
-		}
-		key, ok := private.(*ecdsa.PrivateKey)
-		if !ok {
-			return nil, nil, errors.New("miekg made no ecdsa key")
-		}
-		return record, key, nil
 	}
 	kskRecord, kskPrivate, err := newKey(dns.ZONE | dns.SEP)
 	if err != nil {

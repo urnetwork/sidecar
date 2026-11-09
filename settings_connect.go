@@ -12,7 +12,7 @@ import (
 )
 
 // connect's own settings, each with connect's defaults and connect's rules for its fields, and the
-// outbound mail sender's, which only connect legs run. None may be nil but SmtpProver.
+// outbound mail sender's, which only connect legs run. None may be nil but SmtpProver and Platform.
 type SidecarConnectSettings struct {
 	// How a client dials: connect's default.
 	ClientStrategySettings *connect.ClientStrategySettings
@@ -27,6 +27,10 @@ type SidecarConnectSettings struct {
 	// requires (D-SMTP-11). Nil, the default and every phone's: this host queues its internet mail
 	// to the member's outbox for a prover host, and never sends it itself (D-SMTP-18).
 	SmtpProver SmtpProver
+	// How a client generation reaches the platform. Nil, the default: connect's own, an
+	// ApiOutOfBandControl and a PlatformTransport (sidecar_new_connect.go). sidecartest's Net sets
+	// its in-process exchange.
+	Platform SidecarPlatform
 }
 
 // A fresh value each call, as DefaultSidecarSettings's is. ApplySidecarClientSettings (rpc_subprotocol.go)
