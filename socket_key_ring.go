@@ -232,6 +232,15 @@ func (self *SocketKeyRing) RegisterKeys(nowMs int64) []*SocketKeys {
 	return []*SocketKeys{self.current, self.previous}
 }
 
+// The time, in milliseconds on the listener's clock, from which RegisterKeys gives the newest keys alone, and false
+// while the file holds no previous key: a registrar wakes then to drop the previous path (§9.4's 10 min).
+func (self *SocketKeyRing) RegisterBothUntilMs() (int64, bool) {
+	if self.previous == nil {
+		return 0, false
+	}
+	return self.rotatedAtMs + self.settings.Overlap.Milliseconds(), true
+}
+
 // name's token path under each of RegisterKeys at nowMs, newest first: the paths a listener registers.
 func (self *SocketKeyRing) RegisterTokenPaths(name string, nowMs int64) ([][]byte, error) {
 	tokenPaths := [][]byte{}
