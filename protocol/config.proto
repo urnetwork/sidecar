@@ -18,6 +18,7 @@ syntax = "proto3";
 package urnetwork.sidecar;
 
 import "protocol/bridge/auth.proto";
+import "protocol/bridge/signed.proto";
 
 option go_package = "github.com/urnetwork/sidecar/protocol";
 
@@ -120,6 +121,13 @@ message KeyRegister {                  // the member's consented, approval-capab
   bytes attestation = 6;
   KeyPurpose purpose = 7;
   int64 not_after = 8;                 // ms since the epoch
+  // protos-bridge-presence-gaps #3 (QD-086): purpose presence only, written last, 9 then 10. The new key
+  // signs the received body before field 9's first byte, as §6.9's signed bytes with purpose key-proof
+  // and type SIGNED_KEY_REGISTER, which a verifier slices and never re-marshals: a DER signature here for
+  // both §16.6 profiles, and for webauthn-es256 its authenticator_data and client_data_json in field 10,
+  // the challenge being those bytes' SHA-256. Nothing may follow them.
+  bytes key_signature = 9;
+  WebAuthnEvidence key_webauthn = 10;
 }
 
 message KeyRevoke {

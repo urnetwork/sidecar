@@ -1103,15 +1103,22 @@ func (x *RecoveryRebind) GetReason() bridge.RecoveryRebindReason {
 }
 
 type KeyRegister struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Header        *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
-	MemberId      []byte                  `protobuf:"bytes,2,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
-	KeyId         []byte                  `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
-	Alg           bridge.KeyAlg           `protobuf:"varint,4,opt,name=alg,proto3,enum=urnetwork.sidecar.KeyAlg" json:"alg,omitempty"`
-	PublicKey     []byte                  `protobuf:"bytes,5,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	Attestation   []byte                  `protobuf:"bytes,6,opt,name=attestation,proto3" json:"attestation,omitempty"`
-	Purpose       bridge.KeyPurpose       `protobuf:"varint,7,opt,name=purpose,proto3,enum=urnetwork.sidecar.KeyPurpose" json:"purpose,omitempty"`
-	NotAfter      int64                   `protobuf:"varint,8,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"` // ms since the epoch
+	state       protoimpl.MessageState  `protogen:"open.v1"`
+	Header      *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	MemberId    []byte                  `protobuf:"bytes,2,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
+	KeyId       []byte                  `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	Alg         bridge.KeyAlg           `protobuf:"varint,4,opt,name=alg,proto3,enum=urnetwork.sidecar.KeyAlg" json:"alg,omitempty"`
+	PublicKey   []byte                  `protobuf:"bytes,5,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	Attestation []byte                  `protobuf:"bytes,6,opt,name=attestation,proto3" json:"attestation,omitempty"`
+	Purpose     bridge.KeyPurpose       `protobuf:"varint,7,opt,name=purpose,proto3,enum=urnetwork.sidecar.KeyPurpose" json:"purpose,omitempty"`
+	NotAfter    int64                   `protobuf:"varint,8,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"` // ms since the epoch
+	// protos-bridge-presence-gaps #3 (QD-086): purpose presence only, written last, 9 then 10. The new key
+	// signs the received body before field 9's first byte, as §6.9's signed bytes with purpose key-proof
+	// and type SIGNED_KEY_REGISTER, which a verifier slices and never re-marshals: a DER signature here for
+	// both §16.6 profiles, and for webauthn-es256 its authenticator_data and client_data_json in field 10,
+	// the challenge being those bytes' SHA-256. Nothing may follow them.
+	KeySignature  []byte                   `protobuf:"bytes,9,opt,name=key_signature,json=keySignature,proto3" json:"key_signature,omitempty"`
+	KeyWebauthn   *bridge.WebAuthnEvidence `protobuf:"bytes,10,opt,name=key_webauthn,json=keyWebauthn,proto3" json:"key_webauthn,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1200,6 +1207,20 @@ func (x *KeyRegister) GetNotAfter() int64 {
 		return x.NotAfter
 	}
 	return 0
+}
+
+func (x *KeyRegister) GetKeySignature() []byte {
+	if x != nil {
+		return x.KeySignature
+	}
+	return nil
+}
+
+func (x *KeyRegister) GetKeyWebauthn() *bridge.WebAuthnEvidence {
+	if x != nil {
+		return x.KeyWebauthn
+	}
+	return nil
 }
 
 type KeyRevoke struct {
@@ -1995,7 +2016,7 @@ var File_protocol_config_proto protoreflect.FileDescriptor
 
 const file_protocol_config_proto_rawDesc = "" +
 	"\n" +
-	"\x15protocol/config.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\"\xd8\x01\n" +
+	"\x15protocol/config.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\xd8\x01\n" +
 	"\bAdminSet\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x16\n" +
 	"\x06owners\x18\x02 \x03(\fR\x06owners\x12\x16\n" +
@@ -2062,7 +2083,7 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x19ed25519_public_key_sha256\x18\x04 \x01(\fR\x16ed25519PublicKeySha256\x12\x1f\n" +
 	"\vsealed_body\x18\x05 \x01(\fR\n" +
 	"sealedBody\x12?\n" +
-	"\x06reason\x18\x06 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xc1\x02\n" +
+	"\x06reason\x18\x06 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xae\x03\n" +
 	"\vKeyRegister\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1b\n" +
 	"\tmember_id\x18\x02 \x01(\fR\bmemberId\x12\x15\n" +
@@ -2072,7 +2093,10 @@ const file_protocol_config_proto_rawDesc = "" +
 	"public_key\x18\x05 \x01(\fR\tpublicKey\x12 \n" +
 	"\vattestation\x18\x06 \x01(\fR\vattestation\x127\n" +
 	"\apurpose\x18\a \x01(\x0e2\x1d.urnetwork.sidecar.KeyPurposeR\apurpose\x12\x1b\n" +
-	"\tnot_after\x18\b \x01(\x03R\bnotAfter\"^\n" +
+	"\tnot_after\x18\b \x01(\x03R\bnotAfter\x12#\n" +
+	"\rkey_signature\x18\t \x01(\fR\fkeySignature\x12F\n" +
+	"\fkey_webauthn\x18\n" +
+	" \x01(\v2#.urnetwork.sidecar.WebAuthnEvidenceR\vkeyWebauthn\"^\n" +
 	"\tKeyRevoke\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x15\n" +
 	"\x06key_id\x18\x02 \x01(\fR\x05keyId\"\xec\x01\n" +
@@ -2217,7 +2241,8 @@ var file_protocol_config_proto_goTypes = []any{
 	(bridge.RecoveryRebindReason)(0), // 32: urnetwork.sidecar.RecoveryRebindReason
 	(bridge.KeyAlg)(0),               // 33: urnetwork.sidecar.KeyAlg
 	(bridge.KeyPurpose)(0),           // 34: urnetwork.sidecar.KeyPurpose
-	(*bridge.AuthPin)(nil),           // 35: urnetwork.sidecar.AuthPin
+	(*bridge.WebAuthnEvidence)(nil),  // 35: urnetwork.sidecar.WebAuthnEvidence
+	(*bridge.AuthPin)(nil),           // 36: urnetwork.sidecar.AuthPin
 }
 var file_protocol_config_proto_depIdxs = []int32{
 	30, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
@@ -2235,25 +2260,26 @@ var file_protocol_config_proto_depIdxs = []int32{
 	30, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
 	33, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
 	34, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	30, // 15: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 16: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 17: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 18: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
-	4,  // 19: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
-	5,  // 20: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
-	2,  // 21: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
-	3,  // 22: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
-	22, // 23: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
-	6,  // 24: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
-	24, // 25: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	30, // 26: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 27: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 28: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	35, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
+	30, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 18: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	36, // 19: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	4,  // 20: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
+	5,  // 21: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
+	2,  // 22: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
+	3,  // 23: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
+	22, // 24: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
+	6,  // 25: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
+	24, // 26: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
+	30, // 27: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 28: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 29: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // [30:30] is the sub-list for method output_type
+	30, // [30:30] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }

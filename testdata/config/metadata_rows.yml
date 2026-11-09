@@ -164,6 +164,8 @@ KeyRegister.public_key: {number: 5, type: bytes, row: api-7, sees: "registered p
 KeyRegister.attestation: {number: 6, type: bytes, row: api-7, sees: "key registrations"}
 KeyRegister.purpose: {number: 7, type: KeyPurpose, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
 KeyRegister.not_after: {number: 8, type: int64, row: api-7, sees: "key registrations"}
+KeyRegister.key_signature: {number: 9, type: bytes, row: api-7, pending: "protos-bridge-presence-gaps #3 (QD-086): api-7 gains a key registration's proof"}
+KeyRegister.key_webauthn: {number: 10, type: WebAuthnEvidence, row: api-7, pending: "protos-bridge-presence-gaps #3 (QD-086): api-7 gains a key registration's proof"}
 
 KeyRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
 KeyRevoke.key_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}
