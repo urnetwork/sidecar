@@ -176,7 +176,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		Child:         args.child,
 		HostRefreshes: hostRefreshes,
 		Persist:       persist,
-		Install: install,
+		Install:       install,
 		Refused: func(refusedGeneration int64, reason SidecarStateReason) {
 			self.tokenRefused(refusedGeneration, reason)
 			self.generationRefused(refusedGeneration)
