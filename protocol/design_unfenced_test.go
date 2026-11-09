@@ -171,6 +171,13 @@ message SocketKeyFile { bytes current_key = 1; bytes previous_key = 2; int64 rot
 message AuthorityProposal { StatementHeader header = 1; uint32 statement_type = 2; bytes statement = 3; }
 message AuthorityCosign { StatementHeader header = 1; bytes proposal_id = 2; }
 message RecoveryVeto { StatementHeader header = 1; bytes proposal_id = 2; }
+// plan-TEAM-config-head-format #1's fold records, which the owner's answer gives with their numbers.
+message ConfigRecord { bytes id = 1; uint64 n = 2; int64 time_ms = 3; uint32 kind = 4; bytes body = 5; }
+message ConfigFold { uint64 after = 1; uint64 folded_through = 2; repeated ConfigRecord records = 3; }
+// §7.7's names file: the resolution names it a deterministically encoded protobuf and gives no fields, so these
+// are TEAM-M2-08's reading, open until §7.9's records freeze.
+message ConfigNameTable { repeated ConfigName names = 1; }
+message ConfigName { bytes sidecar_id = 1; string name = 2; }
 // §7.8's client-only bundle, a field list without numbers.
 message AuthKeyBundle {
   uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;
