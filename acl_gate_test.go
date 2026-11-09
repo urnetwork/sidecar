@@ -284,7 +284,9 @@ func TestAclGateRefusesAGapAndAForkWithAnAlarm(t *testing.T) {
 	net := newTestConfigNet(t)
 	source := newAclGateTestSource()
 	source.publish(net)
-	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), nil)
+	settings := DefaultAclGateSettings()
+	settings.FailureBackoff = 0
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), settings)
 	cache.Changed(net.networkId)
 	aclGateTestNextLoad(t, loads)
 	held, _ := cache.State(net.networkId)
@@ -350,6 +352,7 @@ func TestAclGateEvictsUnderItsByteBudgetAndKeepsPins(t *testing.T) {
 
 	settings := DefaultAclGateSettings()
 	settings.ByteBudget = 2*oneNetwork + oneNetwork/2
+	settings.FailureBackoff = 0
 	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), settings)
 	for _, net := range nets[:2] {
 		cache.Changed(net.networkId)
@@ -430,4 +433,38 @@ func newTestConfigNetNamed(t *testing.T, label string) *testConfigNet {
 		t.Fatalf("base 1: %v", verdict.Refusal)
 	}
 	return self
+}
+
+// A load that fails holds the network's next load back by FailureBackoff, every trigger meanwhile coalescing into it,
+// so a gate asking on each request while the source fails costs one read a wait.
+func TestAclGateBacksOffAfterAFailedLoad(t *testing.T) {
+	net := newTestConfigNet(t)
+	source := newAclGateTestSource()
+	clock := newAclGateTestClock()
+	settings := DefaultAclGateSettings()
+	settings.PollInterval = 0
+	cache, loads := newAclGateTestCache(t, source, clock, settings)
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err == nil {
+		t.Fatal("a load of an unpublished network read")
+	}
+	if armed := <-clock.armed; armed != settings.FailureBackoff {
+		t.Fatalf("the back-off armed %v", armed)
+	}
+	source.publish(net)
+	for range 20 {
+		cache.Changed(net.networkId)
+	}
+	if calls := source.calls(); calls != 0 {
+		t.Fatalf("%d reads during the back-off", calls)
+	}
+	clock.fire <- clock.Now().Add(settings.FailureBackoff)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil || !proto.Equal(load.pin, net.log.Pin()) {
+		t.Fatalf("the load after the back-off: %v", load.err)
+	}
+	select {
+	case load := <-loads:
+		t.Fatalf("another load: %+v", load)
+	default:
+	}
 }
