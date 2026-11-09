@@ -142,19 +142,19 @@ func TestMailDepositReceiveTime(t *testing.T) {
 		deposit *protocol.MailDeposit
 		want    uint64
 	}{
-		{&protocol.MailDeposit{
+		{deposit: &protocol.MailDeposit{
 			Ingress:  &protocol.MailIngress{ReceiveTimeMillis: ingressMillis},
 			Evidence: &protocol.MailAuthEvidence{ReceiveTimeMillis: evidenceMillis},
-		}, evidenceMillis},
-		{&protocol.MailDeposit{Ingress: &protocol.MailIngress{ReceiveTimeMillis: ingressMillis}}, ingressMillis},
-		{&protocol.MailDeposit{
+		}, want: evidenceMillis},
+		{deposit: &protocol.MailDeposit{Ingress: &protocol.MailIngress{ReceiveTimeMillis: ingressMillis}}, want: ingressMillis},
+		{deposit: &protocol.MailDeposit{
 			Ingress:  &protocol.MailIngress{ReceiveTimeMillis: ingressMillis},
 			Evidence: &protocol.MailAuthEvidence{},
-		}, ingressMillis},
-		{&protocol.MailDeposit{Ingress: &protocol.MailIngress{}, Evidence: &protocol.MailAuthEvidence{}}, pushMillis},
+		}, want: ingressMillis},
+		{deposit: &protocol.MailDeposit{Ingress: &protocol.MailIngress{}, Evidence: &protocol.MailAuthEvidence{}}, want: pushMillis},
 		// a same-network deposit has neither
-		{&protocol.MailDeposit{Version: 1, MailFrom: []byte("ada@k3j4h5g6f7.root.example")}, pushMillis},
-		{nil, pushMillis},
+		{deposit: &protocol.MailDeposit{Version: 1, MailFrom: []byte("ada@k3j4h5g6f7.root.example")}, want: pushMillis},
+		{deposit: nil, want: pushMillis},
 	}
 	for index, c := range cases {
 		if got := MailDepositReceiveTime(c.deposit, pushMillis); got != c.want {
@@ -204,11 +204,11 @@ func TestMailYearMonth(t *testing.T) {
 		millis uint64
 		want   string
 	}{
-		{0, "197001"},
-		{lastMillis, "999912"},
-		{lastMillis + 1, "999912"},
-		{math.MaxInt64, "999912"},
-		{math.MaxUint64, "999912"},
+		{millis: 0, want: "197001"},
+		{millis: lastMillis, want: "999912"},
+		{millis: lastMillis + 1, want: "999912"},
+		{millis: math.MaxInt64, want: "999912"},
+		{millis: math.MaxUint64, want: "999912"},
 	}
 	for _, c := range cases {
 		if month := MailYearMonthOf(c.millis); month.String() != c.want {
@@ -235,7 +235,12 @@ func TestParseMailSegmentNumber(t *testing.T) {
 	for _, c := range []struct {
 		text string
 		want uint64
-	}{{"0", 0}, {"7", 7}, {"4095", 4095}, {"18446744073709551615", math.MaxUint64}} {
+	}{
+		{text: "0", want: 0},
+		{text: "7", want: 7},
+		{text: "4095", want: 4095},
+		{text: "18446744073709551615", want: math.MaxUint64},
+	} {
 		if n, ok := ParseMailSegmentNumber(c.text); !ok || n != c.want {
 			t.Errorf("%s: %d, %t", c.text, n, ok)
 		}

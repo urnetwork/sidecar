@@ -33,27 +33,27 @@ func TestParseMailRecipientForms(t *testing.T) {
 		address string
 		want    MailRecipient
 	}{
-		{"admin@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "admin", Zone: labelZone}},
-		{"postmaster@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "postmaster", Zone: labelZone}},
-		{"abuse@acme-labs.root.example", MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "abuse", Zone: aliasZone}},
-		{"PostMaster@K3J4H5G6F7.Root.Example", MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "postmaster", Zone: labelZone}},
-		{"ada@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "ada", Zone: labelZone}},
-		{"ada.lovelace_1-x@acme-labs.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "ada.lovelace_1-x", Zone: aliasZone}},
-		{"0@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "0", Zone: labelZone}},
-		{strings.Repeat("a", 64) + "@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: strings.Repeat("a", 64), Zone: labelZone}},
+		{address: "admin@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "admin", Zone: labelZone}},
+		{address: "postmaster@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "postmaster", Zone: labelZone}},
+		{address: "abuse@acme-labs.root.example", want: MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "abuse", Zone: aliasZone}},
+		{address: "PostMaster@K3J4H5G6F7.Root.Example", want: MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "postmaster", Zone: labelZone}},
+		{address: "ada@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "ada", Zone: labelZone}},
+		{address: "ada.lovelace_1-x@acme-labs.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "ada.lovelace_1-x", Zone: aliasZone}},
+		{address: "0@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "0", Zone: labelZone}},
+		{address: strings.Repeat("a", 64) + "@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: strings.Repeat("a", 64), Zone: labelZone}},
 		// reserved from creation, but they parse, and the lookup finds no record
-		{"mailer-daemon@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "mailer-daemon", Zone: labelZone}},
-		{"bounces@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "bounces", Zone: labelZone}},
-		{"r-k5mzq7x2@k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "r-k5mzq7x2", Zone: labelZone}},
-		{"ada@ops.k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindName, LocalPart: "ada", Zone: scopeZone}},
-		{"admin@ops.k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "admin", Zone: scopeZone}},
-		{"abuse@ops.acme-labs.root.example", MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "abuse", Zone: aliasScopeZone}},
-		{"bounces+abc123@b.k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindBounce, LocalPart: "bounces+abc123", Zone: labelZone, Token: "abc123"}},
-		{"bounces+a.b_c-d@b.acme-labs.root.example", MailRecipient{Kind: MailAddressKindBounce, LocalPart: "bounces+a.b_c-d", Zone: aliasZone, Token: "a.b_c-d"}},
-		{"shop@otter-4821.k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindBurner, LocalPart: "shop", Zone: labelZone, BurnerLabel: "otter-4821"}},
+		{address: "mailer-daemon@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "mailer-daemon", Zone: labelZone}},
+		{address: "bounces@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "bounces", Zone: labelZone}},
+		{address: "r-k5mzq7x2@k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "r-k5mzq7x2", Zone: labelZone}},
+		{address: "ada@ops.k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindName, LocalPart: "ada", Zone: scopeZone}},
+		{address: "admin@ops.k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "admin", Zone: scopeZone}},
+		{address: "abuse@ops.acme-labs.root.example", want: MailRecipient{Kind: MailAddressKindAdmin, LocalPart: "abuse", Zone: aliasScopeZone}},
+		{address: "bounces+abc123@b.k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindBounce, LocalPart: "bounces+abc123", Zone: labelZone, Token: "abc123"}},
+		{address: "bounces+a.b_c-d@b.acme-labs.root.example", want: MailRecipient{Kind: MailAddressKindBounce, LocalPart: "bounces+a.b_c-d", Zone: aliasZone, Token: "a.b_c-d"}},
+		{address: "shop@otter-4821.k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindBurner, LocalPart: "shop", Zone: labelZone, BurnerLabel: "otter-4821"}},
 		// a burner takes any local part, admin's included: the label's mailbox gets it
-		{"admin@otter-4821.acme-labs.root.example", MailRecipient{Kind: MailAddressKindBurner, LocalPart: "admin", Zone: aliasZone, BurnerLabel: "otter-4821"}},
-		{"r-k5mzq7x2@otter-4821.k3j4h5g6f7.root.example", MailRecipient{Kind: MailAddressKindReverseAlias, LocalPart: "r-k5mzq7x2", Zone: labelZone, BurnerLabel: "otter-4821", Token: "k5mzq7x2"}},
+		{address: "admin@otter-4821.acme-labs.root.example", want: MailRecipient{Kind: MailAddressKindBurner, LocalPart: "admin", Zone: aliasZone, BurnerLabel: "otter-4821"}},
+		{address: "r-k5mzq7x2@otter-4821.k3j4h5g6f7.root.example", want: MailRecipient{Kind: MailAddressKindReverseAlias, LocalPart: "r-k5mzq7x2", Zone: labelZone, BurnerLabel: "otter-4821", Token: "k5mzq7x2"}},
 	}
 	for _, c := range cases {
 		recipient, err := ParseMailRecipient(testMailRoot, c.address)
