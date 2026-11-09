@@ -720,10 +720,10 @@ func TestRowFlagBits(t *testing.T) {
 		docKind indexDocKind
 		want    uint64
 	}{
-		{docKind: indexDocFile, want: 0x7F},
-		{docKind: indexDocMail, want: 0x7F},
-		{docKind: indexDocRecord, want: 0x3FF7F},
-		{docKind: indexDocDerived, want: 0x3FF7F},
+		{docKind: indexDocFile, want: 0x4007F},
+		{docKind: indexDocMail, want: 0x4007F},
+		{docKind: indexDocRecord, want: 0x7FF7F},
+		{docKind: indexDocDerived, want: 0x7FF7F},
 	} {
 		if got := c.docKind.rowFlags(); got != c.want {
 			t.Errorf("kind %d allows %x, want %x", c.docKind, got, c.want)
@@ -763,6 +763,9 @@ func TestRowTrimmingFollowsItsOrder(t *testing.T) {
 			t.Errorf("field %d is not UTF-8", field)
 		}
 	}
+	if row.flags&indexRowInexact == 0 {
+		t.Error("a cut locator reads as exact")
+	}
 	// a row within its caps loses nothing and sets nothing
 	fits := testFileRow(indexKeySet{1})
 	if fits.flags != indexRowTainted || fits.locator != "notes/plan.md" || fits.fields[indexFieldTitle] != "The plan" {
@@ -798,8 +801,37 @@ func TestRowFitIsExactAndStable(t *testing.T) {
 	}
 }
 
-// Setting a cut bit can widen the flags' VByte, which the trim counted ahead of time, so a row filled to the byte
-// still fits after its last cut sets bit 17.
+// A row that fits once each value is at its own cap is not walked at all, down to its last byte, and one byte more is.
+func TestRowFitWalksOnlyPastItsOwnCap(t *testing.T) {
+	row := func(fieldLength int) *indexRow {
+		built := &indexRow{docKind: indexDocRecord, locator: strings.Repeat("l", 512)}
+		for _, field := range built.docKind.rowFields() {
+			built.fields[field] = strings.Repeat("x", indexRowFieldCap(field))
+		}
+		for field := 9; field <= indexFieldLast; field += 1 {
+			built.fields[field] = ""
+		}
+		built.fields[9] = strings.Repeat("x", fieldLength)
+		return built
+	}
+	// the other values take 1,949 of the row's 2,048 B, so 98 B and a length byte fill it exactly
+	exact := row(98)
+	if used := exact.encodedByteCount(); used != indexRowMaxByteCount {
+		t.Fatalf("the row is %d bytes", used)
+	}
+	exact.fit()
+	if exact.flags != 0 || len(exact.fields[9]) != 98 {
+		t.Errorf("a row at its cap was cut: flags %x, field 9 %d", exact.flags, len(exact.fields[9]))
+	}
+	over := row(99)
+	over.fit()
+	if over.flags&indexRowCutFlag(9) == 0 || over.flags&indexRowCutFlag(8) != 0 || over.encodedByteCount() > indexRowMaxByteCount {
+		t.Errorf("flags %x, %d bytes", over.flags, over.encodedByteCount())
+	}
+}
+
+// Setting a cut bit can widen the flags' VByte, which the walk counts ahead of time, so a row filled to the byte still
+// fits after its last cut sets bit 17.
 func TestRowFitCountsItsWidestFlags(t *testing.T) {
 	for locatorLength := 400; locatorLength <= 512; locatorLength += 1 {
 		row := &indexRow{docKind: indexDocRecord, locator: strings.Repeat("l", locatorLength)}
@@ -817,15 +849,26 @@ func TestRowFitCountsItsWidestFlags(t *testing.T) {
 	}
 }
 
-// A path may be any bytes, and a row's text is UTF-8 by step 1's rule, one U+FFFD for each ill-formed byte.
+// A path may be any bytes, and a row's text is UTF-8 by step 1's rule, one U+FFFD for each ill-formed byte. A replaced
+// locator is no longer the exact path, and says so.
 func TestRowTextIsValidUtf8(t *testing.T) {
 	row := &indexRow{docKind: indexDocFile, locator: "a\xFF\xFEb"}
 	row.fit()
 	if row.locator != "a\uFFFD\uFFFDb" {
 		t.Errorf("%+q", row.locator)
 	}
-	if row.flags != 0 {
-		t.Errorf("a replacement set flags %x", row.flags)
+	if row.flags != indexRowInexact {
+		t.Errorf("flags %x", row.flags)
+	}
+	exact := &indexRow{docKind: indexDocFile, locator: strings.Repeat("\u00E9", 256)}
+	exact.fit()
+	if exact.flags != 0 {
+		t.Errorf("a locator at its cap set flags %x", exact.flags)
+	}
+	cut := &indexRow{docKind: indexDocFile, locator: strings.Repeat("\u00E9", 257)}
+	cut.fit()
+	if cut.flags != indexRowInexact || len(cut.locator) != 512 {
+		t.Errorf("flags %x, %d bytes", cut.flags, len(cut.locator))
 	}
 	row = &indexRow{docKind: indexDocMail}
 	row.fields[indexFieldSubject] = strings.Repeat("\xFF", 100)
@@ -868,7 +911,7 @@ func TestRowRefusals(t *testing.T) {
 		{name: "doc kind 0", row: testRawRow(0, 0, 0, nil, five...)},
 		{name: "doc kind 5", row: testRawRow(5, 0, 0, nil, five...)},
 		{name: "flag bit 7", row: testRawRow(1, 1<<7, 0, nil, five...)},
-		{name: "flag bit 18", row: testRawRow(3, 1<<18, 0, nil, registered...)},
+		{name: "flag bit 19", row: testRawRow(3, 1<<19, 0, nil, registered...)},
 		{name: "a registered cut bit on a file", row: testRawRow(1, 1<<8, 0, nil, five...)},
 		{name: "times on a file", row: testRawRow(1, 0, 1, nil, five...)},
 		{name: "times on a record", row: testRawRow(3, 0, 1, nil, registered...)},
@@ -1189,6 +1232,7 @@ func TestSlotBytesDependOnlyOnItsEntries(t *testing.T) {
 	}
 	entries = append(entries, &indexEntry{kind: indexEntryTombstone, key: testIndexId("doc", 9), version: 1})
 	entries = append(entries, &indexEntry{kind: indexEntryRefTombstone, key: [indexIdByteCount]byte{}, version: 1})
+	entries = append(entries, &indexEntry{kind: indexEntryRefTombstone, key: [indexIdByteCount]byte{0xFF}, version: 1})
 	want, err := indexEncodeSlot(&indexSlot{header: testSlotHeader(indexFileSlot), entries: entries}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -1209,13 +1253,17 @@ func TestSlotBytesDependOnlyOnItsEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ref tombstones come last, however low their ids sort
-	last := slot.entries[len(slot.entries)-1]
-	if last.kind != indexEntryRefTombstone {
+	// plan-SEARCH-index-format-bytes#2: one order by key, a ref_id taking its place among the doc_keys
+	if first := slot.entries[0]; first.kind != indexEntryRefTombstone || first.key != ([indexIdByteCount]byte{}) {
+		t.Errorf("the first entry is kind %d", first.kind)
+	}
+	if last := slot.entries[len(slot.entries)-1]; last.kind != indexEntryRefTombstone {
 		t.Errorf("the last entry is kind %d", last.kind)
 	}
-	if first := slot.entries[0]; first.kind == indexEntryRefTombstone {
-		t.Error("a ref tombstone came first")
+	for index := 1; index < len(slot.entries); index += 1 {
+		if 0 <= bytes.Compare(slot.entries[index-1].key[:], slot.entries[index].key[:]) {
+			t.Errorf("entry %d is out of order", index)
+		}
 	}
 }
 
@@ -1225,6 +1273,23 @@ func TestEncoderKeepsOneEntryAKey(t *testing.T) {
 	slot := &indexSlot{header: testSlotHeader(indexFileSlot), entries: []*indexEntry{tombstone, newer}}
 	if file, err := indexEncodeSlot(slot, false); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("encoded to %d bytes", len(file))
+	}
+	// plan-SEARCH-index-format-bytes#2's one entry a key holds across kinds, a ref_id equal to a doc_key included
+	ref := &indexEntry{kind: indexEntryRefTombstone, key: testIndexId("doc", 1), version: 3}
+	slot.entries = []*indexEntry{ref, tombstone}
+	file, err := indexEncodeSlot(slot, true)
+	if !errors.Is(err, errIndexMalformed) {
+		t.Errorf("encoded to %d bytes", len(file))
+	}
+	body := []byte{}
+	for _, entry := range []*indexEntry{tombstone, ref} {
+		if body, err = entry.appendEncoded(body, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decoded, err := testDecodeFile(testRawFile(t, testFilledHeader(indexFileSlot, 2, body), body, nil), true)
+	if !errors.Is(err, errIndexMalformed) {
+		t.Errorf("decoded to %+v", decoded)
 	}
 }
 

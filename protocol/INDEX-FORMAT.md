@@ -2,11 +2,11 @@
 
 The bytes of the search index: normalizer 1, extractor 1 and every file under an index root. DESIGN.md §11.14 owns the design, and `evsindex.proto` holds its messages. This file fixes what §11.14 names without bytes, so that two honest builds write the same plaintext (FI-22), whose SHA-256 an entry version carries as `content_sha256`. Where the two disagree, DESIGN.md wins and the mismatch is reported.
 
-**Status.** Proposed, as plan-SEARCH-index-format-bytes's option 1. Nothing is frozen: the specification freezes at M10's entry review and the bytes at its exit review (§23.8), and `testdata/index/` pins each byte in between. A choice a reviewer dislikes costs a vector rewrite. The last section lists what this file chose, for `design-records` to fold into §11.14. Two parts wait on a question, and each says so where it appears: Cherokee case folding (plan-SEARCH-cherokee-fold) and blocks under 64 keys (plan-SEARCH-shrink-claim).
+**Status.** Proposed. This file writes down the resolutions of plan-SEARCH-index-format-bytes (ledger QD-300; its items 1-8 are QD-444, QD-477, QD-476, QD-473, QD-475, QD-443, QD-579 and QD-474), with search-format-all-directory-names's correction to item 5 (QD-475), and the rules the owner decided for plan-SEARCH-cherokee-fold (QD-256) and plan-SEARCH-shrink-claim (QD-173). Nothing is frozen: the specification freezes at M10's entry review and the bytes at its exit review (§23.8), and `testdata/index/` pins each byte in between. The last section lists what this file adds to those, for `design-records` to fold into §11.14.
 
 ## Common encodings
 
-**VByte.** An unsigned integer of at most 64 bits, as LEB128: seven bits a byte, least significant group first, bit 7 set on every byte but the last. Encodings are minimal, so the last byte of a multi-byte value is never zero, and a value takes at most ten bytes, the tenth at most 0x01. Decoders refuse anything else.
+**VByte.** An unsigned integer of at most 64 bits, as LEB128, which `encoding/binary.AppendUvarint` writes: seven bits a byte, least significant group first, bit 7 set on every byte but the last. Encodings are minimal, so the last byte of a multi-byte value is never zero, and a value takes at most ten bytes, the tenth at most 0x01. Decoders refuse anything else.
 
 **Fixed widths.** An entry's kind, a row's doc kind and a tombstone table's kind are one byte each. A `doc_key`, a `ref_id` and a `sidecar_id` are 16 bytes, copied as they are. A trigram key in a dictionary's block index is 3 bytes, most significant first. `u16be`, `u32be` and `u64be` are big-endian integers of those widths.
 
@@ -26,8 +26,8 @@ Each path component is ASCII, and §11.7 seals and tokenizes it like any other. 
 <root>/settings                          versioned IndexSettings; every other file here is versionless (versioning 2)
 <root>/lock                              IndexLock
 <root>/a/m                               the all partition's IndexManifest
-<root>/a/<n>                             all shard n, for n below 3,500
-<root>/a/<k>/<n>                         all shard n, from 3,500 on, with k = 3500 + ⌊(n - 3500) / 1000⌋
+<root>/a/<n>                             all shard n, for n below 3,499
+<root>/a/<k>/<n>                         all shard n, from 3,499 on, with k = 3499 + ⌊(n - 3499) / 1000⌋
 <root>/b/<S>/m                           bucket S's IndexManifest
 <root>/b/<S>/s/<n>                       bucket shard n
 <root>/b/<S>/w/<h>/<writer>/<k>          slot k of a writer, k 0-15
@@ -35,7 +35,9 @@ Each path component is ASCII, and §11.7 seals and tokenizes it like any other. 
 .ur-index/x or x                         the ref's IndexErasureSet, beside its roots
 ```
 
-`<S>`, `<n>`, `<k>` and `<seq>` are decimal with no leading zero, and 0 is `0`. Shards number from 0. `<writer>` is the `sidecar_id` as 32 lowercase hex digits, and `<h>` its first two. A directory `a/<k>/` starts at 3500, so its name is never a shard's: `a/3500` is always a directory, and shard 3500 is `a/3500/3500`.
+`<S>` is the bucket's start day, and `<n>`, `<k>` and `<seq>` numbers, all decimal with no leading zero, and 0 is `0`. Shards number from 0: a new shard takes the manifest's highest n plus 1, and joined shards keep the lower n. `<writer>` is the `sidecar_id` as 32 lowercase hex digits, and `<h>` its first two.
+
+`a/` holds `m` and shards 0 to 3,498 as files, 3,500 names. From shard 3,499 on, a shard sits in directory `a/<k>/`, numbered from where the files stop (search-format-all-directory-names): shard 3,499 is `a/3499/3499`, shard 4,498 is `a/3499/4498` and shard 4,499 is `a/3500/4499`. So a directory's name is never a shard file's, nothing moves at the split, and `a/` stays inside §11.7's 3,584 names until some 84,000 shards past it.
 
 ## Normalizer 1
 
@@ -43,7 +45,7 @@ The steps run in this order over each field.
 
 1. Invalid UTF-8 becomes U+FFFD, one for each byte that does not begin a well-formed sequence (`utf8.DecodeRune`'s rule), a cut final sequence included.
 2. NFKC.
-3. Full case folding by `cases.Fold()`, with no locale. Cherokee waits on plan-SEARCH-cherokee-fold: x/text's fold swaps the two cases of the 172 code points U+13A0-U+13F5, U+13F8-U+13FD and U+AB70-U+ABBF, so folding is not idempotent on them. Until that is answered, the normalizer refuses text holding one of them, and no index byte depends on what the fold did to it.
+3. Full case folding by `cases.Fold()`, with no locale, then a fixed map: U+AB70-U+ABBF to U+13A0-U+13EF and U+13F8-U+13FD to U+13F0-U+13F5. x/text's fold swaps the two cases of those 172 Cherokee code points, where CaseFolding.txt takes both to the first form. The map is plan-SEARCH-cherokee-fold's rule, as the owner decided it, and it changes nothing on a correct fold, so a later x/text fix changes no output; a module bump is another normalizer anyway. `SearchOracle` applies it too.
 4. NFD. A nonspacing mark (general category Mn) goes when the nearest code point before it that is not Mn is a letter (category L) of the Latin, Greek, Cyrillic, Arabic or Hebrew script, so stacked marks after one base all go, and a spacing or enclosing mark in between keeps what follows it. Then NFC.
 5. Each maximal run of code points outside categories L, M and N becomes one U+0020. U+FFFD is in such a run, and so is everything step 1 replaced.
 
@@ -86,11 +88,11 @@ text  = VByte length, then that many bytes
 
 A row is at most 2,048 B in all. Whether `ref_id` is there is not in the file: the reader knows its root. Field 5, the body, is never in a row. An empty field is one 0 byte. File and mail rows have no fields 6-15, since only §16.8 and §16.11 register any, and record and derived rows carry all ten by position, so no mask needs a canonical rule of its own.
 
-**Flags.** Bit 0 tainted, bit 1 outside, bit 2 private, and bit n + 2 for field n cut at its cap (bit 3 subject through bit 17 field 15). Bit 7 stays zero, and so do bits 8-17 on file and mail rows, and every bit from 18 on.
+**Flags.** Bit 0 tainted, bit 1 outside, bit 2 private, bit n + 2 for field n cut (bit 3 subject through bit 17 field 15), and bit 18 for a locator that is not the exact path, because it was cut or held bytes that are not UTF-8. Bit 7 stays zero, and so do bits 8-17 on file and mail rows, and every bit from 19 on.
 
 **Values.** `size` is the source's length in bytes: a whole file's on each of its chunks' rows. `chunk` is the chunk number of the doc_key, 0 for the first or only chunk. `trigram count` is n_d, the size of the document's key set, on diffs too. `started` and `expires` are seconds, and zero except on derived rows. A field with several values (§16.8's session ids and tools) joins them with one U+0020.
 
-**Trimming.** A value first has invalid UTF-8 replaced as in step 1, because a row's strings reach `SearchHit`. Then, in the fixed order locator, 1, 2, 3, 4, 6-15, each value keeps the longest prefix ending on a code point that is within its cap (512 B locator, 160 B fields 1-4, 256 B fields 6-15) and that leaves the row within 2,048 B, with every later value counted empty and the flags counted at their widest, 3 B, since a cut can widen them. A field that lost bytes sets its bit. A cut locator sets none, since §11.14 gives it no bit, and such a hit shows but cannot be opened by its locator.
+**Trimming.** A value first has invalid UTF-8 replaced as in step 1, because a row's strings reach `SearchHit`. Each value then goes to its own cap, on a code point: 512 B locator, 160 B fields 1-4, 256 B fields 6-15. If the row still passes 2,048 B, a walk in the order locator, 1, 2, 3, 4, 6-15 lets each value keep what the 2,048 B leaves after the fixed part and the values before it, cut on a code point. That count takes every later value as empty, one length byte each, and the flags at their widest, 3 B, since a cut can widen them. A field that lost bytes sets its bit, and a locator that lost bytes or was replaced sets bit 18. Such a hit shows, and cannot be opened by its locator.
 
 ## Entries
 
@@ -109,12 +111,12 @@ A key set's first gap is its first key + 1, and each later gap the difference fr
 
 ## Slots and large entries
 
-A slot's body holds its entries in one order that depends only on what they are: kinds 1-3 ascending by doc_key, then ref tombstones ascending by ref_id. A key appears once among kinds 1-3, and a ref_id once among ref tombstones. A replaced entry therefore keeps no place of its own, and two writers of one entry set write one body, which §16.11's head reproduction rests on.
+A slot's entries sort ascending by their 16-byte key, doc_key or ref_id, then by kind, with one entry a key, so a key repeated under another kind is refused too. A replaced entry goes and its successor takes its sorted place, so a head is a function of its entry set and not of arrival order, which §16.11's head reproduction rests on.
 
 - **Slot, type 1.** The whole file is at most 16,208 B, each entry at most 8,192 B. `count` entries fill `body_length` exactly, and zero entries is a slot an erasure emptied.
 - **Large entry, type 2.** The whole file is at most 1,048,576 B, and its one entry is over 8,192 B.
 - **Headers.** Both carry `bucket_start_day`, `bucket_days` (at least 1), `writer_sidecar_id`, `seq` and the table fields, and `pad_generation` and `tombstones` stay zero. `coverage` is strictly ascending by ref_id. One counter a writer a bucket, from 1, numbers both slots and large entries, so `IndexManifest.absorbed` reads as one watermark.
-- **Pad.** A slot or large entry has no pad of its own. A CLOSURE, a DROP or a roll-up's in-place rewrite pads to the replaced length with zero bytes, and those are the only bytes allowed after `body_length`. A decoder accepts any count of them inside the file's cap, and re-encoding takes the file's length as an input.
+- **Pad.** A slot or large entry has no pad of its own. A CLOSURE, a DROP or a roll-up's in-place rewrite pads to the replaced length with zero bytes, and those are the only bytes allowed after `body_length`, on any file type. A decoder accepts any count of them inside the file's cap, re-encoding takes the pad's length from the file, and a writer's next head rewrite writes no pad.
 
 ## Shards
 
@@ -128,11 +130,11 @@ key entry   = flag byte | the key's other bytes | VByte document count | VByte l
 
 A shard is at most 1,032,192 B before its pad and 1,048,576 B with it. `count` is its live documents, N below. `tombstones` is zero in an all shard, a key is at most once in a shard and never in both tables, and a ref tombstone is only on `ur/index`.
 
-- **Blocks.** Keys ascend, 64 a block, the last block holding 1-64. A shard with no key has no block. A CLOSURE's blocks wait on plan-SEARCH-shrink-claim: a rewrite that would outgrow its replaced length fails closed until it is answered.
-- **Offsets.** A block's entries offset counts from the dictionary's first key entry, and its list offset from the first byte of postings, so block 0 has 0 and 0, and neither depends on the block index's own length. Both ascend strictly.
+- **Blocks.** Keys ascend, 64 a block, the last block holding 1-64, and a shard with no key has no block. Merges and roll-ups always re-block by 64. A rewrite padded to a replaced length (a CLOSURE, a DROP's rewrite, a roll-up's step 4 rewrite) first builds the shard this way, and if that outgrows the replaced length, rebuilds it keeping the replaced shard's partition: each block keeps its surviving keys, prefix sharing resets at each block's first key, and an emptied block goes. A removed key saves at least 4 B and costs the next key at most 2, so that always fits. Decoders accept blocks of 1 to 64 keys, refuse an empty or larger one, and re-encode from the file's own partition. This is plan-SEARCH-shrink-claim's rule, as the owner decided it, and the rewrite keeps the replaced header's `pad_generation`.
+- **Offsets.** A block's entries offset counts from the first byte after the block index, and its list offset from the first byte of postings, so block 0 has 0 and 0, and neither depends on the block index's own length. Both ascend strictly.
 - **Flag byte.** Bits 0-1 hold the prefix shared with the previous key of the block, which is the longest one and 0 for a block's first key. Bit 2 marks a bitset, and bits 3-7 are zero. The key's other bytes are the 3 - prefix bytes after it, so a block's first key is written in full again here.
 - **Postings.** Lists follow in key order. A list is VByte gaps between ascending docids, the first gap docid + 1, or a bitset of ⌈N/8⌉ bytes, whichever is shorter, VByte on a tie. In a bitset docid d is bit d mod 8 of byte ⌊d/8⌋, bit 0 being the least significant, and the spare bits of the last byte are zero.
-- **Pad.** `pad_generation` names the newest generation g of the writer, and K_index_g = `EvsRepoKey.DeriveKey("index", no context)` at g, which is HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 index" || u64be(g)). With L the shard's length before its pad, the pad is u32be(HMAC-SHA256(K_index_g, "pad" || SHA-256(the shard before its pad))[0:4]) mod step(L) zero bytes, "pad" being its three ASCII bytes. step(L) is 2^(E - S), with E = ⌊log2 L⌋ and S = ⌊log2 E⌋ + 1, Padmé's step at L, 16 KiB near a shard's cap. A rewrite in place pads with zero bytes to the replaced length instead, keeping the replaced header's `pad_generation`, and no reader recomputes that pad.
+- **Pad.** `pad_generation` names the writer's newest generation g, and K_index_g = HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 index" || u64be(g)), which is `EvsRepoKey.DeriveKey` with purpose `index` and no further context. With L the shard's length before its pad, the pad is u32be(HMAC-SHA256(K_index_g, "pad" || SHA-256(the shard before its pad))[0:4]) mod step(L) zero bytes, "pad" being its three ASCII bytes. step(L) is 2^(E - S), with E = ⌊log2 L⌋ and S = ⌊log2 E⌋ + 1, Padmé's step at L, 16 KiB near a shard's cap. A rewrite in place pads with zero bytes to the replaced length instead, keeping the replaced header's `pad_generation`, and no reader recomputes that pad.
 
 ## Small files
 
@@ -146,32 +148,15 @@ A shard is at most 1,032,192 B before its pad and 1,048,576 B with it. `count` i
 
 **Sniff.** A file is text when its first 8,000 bytes hold no NUL and are valid UTF-8 but for a cut final sequence, or when it opens with a UTF-16 byte-order mark, which selects the endianness and is dropped.
 
-**Charsets.** One table, matched ASCII-case-insensitively after trimming spaces and quotes, each decoder x/text's, so the module pin covers its tables:
+**Charsets.** A MIME part, an RFC 2047 word or an RFC 2231 value decodes through `golang.org/x/text/encoding/htmlindex`, from the pinned module, so normalizer 1's pin covers its tables. No charset, or a label it does not know, reads as UTF-8, and invalid bytes reach normalizer 1's step 1. No charset is guessed from content.
 
-| Labels | Decoder |
-|---|---|
-| utf-8, utf8, us-ascii, ascii, ansi_x3.4-1968 | none: the bytes go on as UTF-8 |
-| utf-16 (big-endian unless a mark says otherwise), utf-16be, utf-16le | `unicode.UTF16` |
-| iso-8859-1 to -10, -13 to -16, latin1 | `charmap.ISO8859_n` |
-| iso-8859-11, tis-620, windows-874 | `charmap.Windows874` |
-| windows-1250 to -1258, cp1250 to cp1258 | `charmap.Windows125n` |
-| koi8-r, koi8-u | `charmap.KOI8R`, `charmap.KOI8U` |
-| macintosh, ibm866, cp866 | `charmap.Macintosh`, `charmap.CodePage866` |
-| shift_jis, sjis, windows-31j | `japanese.ShiftJIS` |
-| euc-jp, iso-2022-jp | `japanese.EUCJP`, `japanese.ISO2022JP` |
-| euc-kr, ks_c_5601-1987 | `korean.EUCKR` |
-| gb2312, gbk, gb18030, hz-gb-2312 | `simplifiedchinese.GBK` (the first two), `.GB18030`, `.HZGB2312` |
-| big5 | `traditionalchinese.Big5` |
+**HTML.** Our own scanner on the decoded text, with no parser library, so no library bump changes its output. Names compare ASCII-case-insensitively.
 
-An unknown label reads as utf-8, so its bytes reach normalizer 1's step 1. No charset is ever guessed from content.
-
-**HTML.** Our own code in one left-to-right pass, with no tree and no library, so no bump changes its output. Names compare ASCII-case-insensitively.
-
-- `<` before an ASCII letter opens a start tag, and `</` before one an end tag. The name runs to the first byte that is no ASCII letter or digit, and the tag to the first `>` outside a single- or double-quoted run. A tag with no end removes the rest of the input.
-- `<!--` removes through the next `-->`, and `<!` or `<?` through the next `>`, in either case to the end of the input if there is none. Any other `<` is text.
-- After a `script` or `style` start tag everything goes through the next end tag of that name, or to the end of the input.
-- These tags, start or end, become one U+0020: address, article, aside, blockquote, body, br, center, dd, details, dialog, dir, div, dl, dt, fieldset, figcaption, figure, footer, form, h1-h6, head, header, hr, html, li, main, menu, nav, ol, p, pre, section, summary, table, tbody, td, tfoot, th, thead, title, tr, ul. Any other tag adds nothing, so `<b>a</b>b` reads `ab`.
-- In text, `&#` decimal `;` and `&#x` hex `;` become their code point, or U+FFFD for 0, a surrogate or anything past U+10FFFF, with no Windows-1252 remap. `&name;` becomes its value for HTML 4.01's 252 names and `apos`, case-sensitively. Anything else, a missing semicolon included, stays as it is. One pass only, so `&amp;lt;` reads `&lt;`.
+- `<script>` and `<style>` go with their content, up to the matching end tag, or to the end of the input if there is none.
+- Comments, `<!...>` and `<?...>` go.
+- A tag is `<`, then a letter or `/`, to the next `>` outside quotes. Any other `<` is text.
+- A tag in this list becomes one U+0020, and any other tag nothing, so `<b>a</b>b` reads `ab`: address, article, aside, blockquote, br, center, dd, details, dialog, dir, div, dl, dt, fieldset, figcaption, figure, footer, form, h1-h6, header, hgroup, hr, li, main, menu, nav, ol, p, pre, section, summary, table, tbody, td, tfoot, th, thead, tr, ul.
+- Entities then decode by the standard library's `html.UnescapeString`, after every tag is gone, so `&lt;` stays text. One Go toolchain builds every leg, which pins that table.
 
 **Files.** A title is the first line holding a letter or number, without a leading run of `#` and spaces or trailing spaces, and cut to 80 B on a code point.
 
@@ -179,23 +164,16 @@ An unknown label reads as utf-8, so its bytes reach normalizer 1's step 1. No ch
 
 A decoder is total: it refuses, and never panics or allocates past its input, since nothing is compressed. A count is checked against the bytes left before anything is sized by it. It takes a file's expected `content_sha256` and compares that first, so tampered bytes reach no parser. It accepts only canonical encodings, so re-encoding what it decoded reproduces its bytes (FI-22): non-minimal VByte, unsorted or repeated keys and docids, a bitset off the shorter-list rule, non-zero pad bytes, a value past its cap, a table out of order, and any other departure from this file are refused. A reader drops such a file and raises `index_malformed` (§11.14's verify row).
 
-## What this file chose
+## What this file adds
 
-For `design-records`, each is a reading of §11.14 that changes no D- item:
+The resolutions settle the rest. These readings are this file's, each changing no D- item, for `design-records` to take with them:
 
-| Item | Chosen |
+| Item | Reading |
 |---|---|
-| VByte | LEB128, least significant group first, minimal |
-| Widths | Kinds one byte; ids 16 bytes; dictionary keys big-endian |
-| `body_length` | Counts from the header's end, so it needs no fixed point |
-| Slot order | By key, ref tombstones last, so a replaced entry keeps no place |
-| Row | Field order above; registered fields by position on record and derived rows only |
-| Row trimming | Greedy in field order, plan-SEARCH-index-format-bytes's recommendation |
-| Dictionary offsets | From the first key entry and the first posting byte |
-| Bitset | LSB first; N is the shard's `count` |
-| Paths | Decimal, lowercase hex; `a/<k>/` numbered from 3500, because a smaller name would collide with a shard's |
-| Sequence numbers | One counter for slots and large entries, from 1 |
-| CLOSURE pad on a slot | Zero bytes after `body_length` |
-| K_index_g | Empty context; "pad" is three ASCII bytes before the hash |
-| Normalizer readings | The base of a mark is the nearest code point that is not Mn; an empty field adds nothing; padding trims nothing |
-| Extractor 1 | The charset table, HTML rules and title rule above |
+| `body_length` | Counts from the header's end, so no value depends on its own length |
+| Row trimming's count | Later values at one length byte each, and the flags at 3 B, or a walked row could end past 2,048 B |
+| Row values | `size` is the whole source's on each chunk's row; a field of several values joins them with one U+0020 |
+| Sequence numbers | One counter a writer a bucket, from 1, for slots and large entries, so `absorbed` reads as one watermark |
+| Normalizer readings | A mark's base is the nearest code point that is not Mn; a field with no text adds nothing; padding trims nothing; x/text's stream-safe U+034F stands |
+| Files | The title rule above |
+| Decoders | A header with an unknown field is refused; a `format` above 1 reads status `update`, not malformed |

@@ -8,7 +8,6 @@ package sidecar
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -26,18 +25,12 @@ func FuzzIndexNormalize(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, text []byte, split int) {
 		normalized, err := normalizer.normalize(text)
-		reference, ok := testReferenceNormalize(string(text))
-		if errors.Is(err, errIndexCherokeeUnsettled) {
-			if ok {
-				t.Fatalf("%+q was refused, and only cherokee case is", text)
-			}
-			return
-		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !ok || reference != string(normalized) {
-			t.Fatalf("%+q: got %+q, the reference reads %+q (%t)", text, normalized, reference, ok)
+		reference := testReferenceNormalize(string(text))
+		if reference != string(normalized) {
+			t.Fatalf("%+q: got %+q, the reference reads %+q", text, normalized, reference)
 		}
 		if !utf8.Valid(normalized) {
 			t.Fatalf("%+q came out as invalid UTF-8", text)

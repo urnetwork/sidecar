@@ -154,8 +154,8 @@ func indexCheckEntrySize(fileType uint32, byteCount int) error {
 }
 
 // Writes a slot or large entry, entries in the format's order, whatever order slot holds them in. Two entries of one
-// key are refused: a head keeps one per doc_key, and replacing the older one is its writer's to do. companion says
-// whether the file is under ur/index's root.
+// key are refused, whatever their kinds: a head keeps one per doc_key, and replacing the older one is its writer's to
+// do. companion says whether the file is under ur/index's root.
 func indexEncodeSlot(slot *indexSlot, companion bool) ([]byte, error) {
 	if slot.padByteCount < 0 {
 		return nil, indexMalformed("a rewrite longer than what it replaces")
@@ -164,7 +164,7 @@ func indexEncodeSlot(slot *indexSlot, companion bool) ([]byte, error) {
 	slices.SortFunc(entries, indexCompareEntries)
 	body := []byte{}
 	for index, entry := range entries {
-		if 0 < index && indexCompareEntries(entries[index-1], entry) == 0 {
+		if 0 < index && entries[index-1].key == entry.key {
 			return nil, indexMalformed("an entry key twice in one file")
 		}
 		start := len(body)
@@ -243,7 +243,7 @@ func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool) (*indexS
 		if err := indexCheckEntrySize(header.Type, start-body.remaining()); err != nil {
 			return nil, err
 		}
-		if count := len(slot.entries); 0 < count && 0 <= indexCompareEntries(slot.entries[count-1], entry) {
+		if count := len(slot.entries); 0 < count && 0 <= bytes.Compare(slot.entries[count-1].key[:], entry.key[:]) {
 			return nil, indexMalformed("entries out of order or repeated")
 		}
 		slot.entries = append(slot.entries, entry)

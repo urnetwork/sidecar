@@ -55,6 +55,10 @@ var testNormalizeCases = []testNormalizeCase{
 	{name: "fold-kelvin", text: "\u212A", want: "k"},
 	{name: "fold-angstrom", text: "\u212B", want: "a"},
 	{name: "fold-ypogegrammeni", text: "\u1FB3", want: "\u03B1\u03B9"},
+	{name: "fold-cherokee-capital", text: "\u13A0", want: "\u13A0"},
+	{name: "fold-cherokee-small", text: "\uAB70", want: "\u13A0"},
+	{name: "fold-cherokee-capital-end", text: "\u13F0", want: "\u13F0"},
+	{name: "fold-cherokee-small-end", text: "\u13F8", want: "\u13F0"},
 	{name: "marks-latin-precomposed", text: "caf\u00E9", want: "cafe"},
 	{name: "marks-latin-combining", text: "cafe\u0301", want: "cafe"},
 	{name: "marks-latin-stacked", text: "Vi\u1EC7t", want: "viet"},
@@ -97,18 +101,19 @@ var testNormalizeCases = []testNormalizeCase{
 	{name: "linear-b-dot", text: "\U00010044\u0307", want: "\U00010044\u0307"},
 }
 
-// Steps 1-5 a whole string at a time, each step from its own library call or loop. ok is false where the design has
-// no answer yet.
-func testReferenceNormalize(text string) (normalized string, ok bool) {
+// Steps 1-5 a whole string at a time, each step from its own library call or loop.
+func testReferenceNormalize(text string) string {
 	// step 1, by Go's own conversion, which writes one U+FFFD for each ill-formed byte
 	text = string([]rune(text))
 	text = norm.NFKC.String(text)
 	text = cases.Fold().String(text)
-	for _, r := range text {
-		if unicode.In(r, unicode.Cherokee) && unicode.IsLetter(r) && unicode.SimpleFold(r) != r {
-			return "", false
+	// CaseFolding.txt takes each Cherokee pair to its lower code point, which here is read off the Go tables' fold orbit
+	text = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cherokee, r) {
+			return min(r, unicode.SimpleFold(r))
 		}
-	}
+		return r
+	}, text)
 	text = norm.NFD.String(text)
 	kept := []rune{}
 	base := rune(-1)
@@ -135,7 +140,7 @@ func testReferenceNormalize(text string) (normalized string, ok bool) {
 		}
 		spaces += 1
 	}
-	return folded.String(), true
+	return folded.String()
 }
 
 // A key set found by looking at every window and remembering it, the extractor §22.6 asks for.
@@ -172,9 +177,8 @@ func TestNormalizationCases(t *testing.T) {
 		if string(normalized) != c.want {
 			t.Errorf("%s: got %+q, want %+q", c.name, normalized, c.want)
 		}
-		reference, ok := testReferenceNormalize(c.text)
-		if !ok || reference != c.want {
-			t.Errorf("%s: the reference reads %+q (%t), want %+q", c.name, reference, ok, c.want)
+		if reference := testReferenceNormalize(c.text); reference != c.want {
+			t.Errorf("%s: the reference reads %+q, want %+q", c.name, reference, c.want)
 		}
 	}
 }
@@ -234,69 +238,54 @@ func TestOtherTablesWriteNothing(t *testing.T) {
 	}
 }
 
-// plan-SEARCH-cherokee-fold is open, so all 172 code points are refused, and their neighbors are not. This is the test
-// to change with the answer.
-func TestCherokeeCaseIsRefusedUntilSettled(t *testing.T) {
+// plan-SEARCH-cherokee-fold's rule: every one of the 172 code points x/text's fold swaps comes out as the form
+// CaseFolding.txt names, the pair of a capital and a small letter as one, so a query finds either.
+func TestCherokeeFoldsToOneForm(t *testing.T) {
 	normalizer, err := indexNewNormalizer(indexLinkedTables())
 	if err != nil {
 		t.Fatal(err)
 	}
-	refusedCount := 0
-	for _, block := range [][2]rune{{0x1380, 0x1400}, {0xAB30, 0xABFF}} {
+	swapped := 0
+	for _, block := range [][3]rune{{0x13A0, 0x13F5, 0x13A0}, {0x13F8, 0x13FD, 0x13F0}, {0xAB70, 0xABBF, 0x13A0}} {
 		for r := block[0]; r <= block[1]; r += 1 {
-			_, err := normalizer.normalize([]byte("x" + string(r) + "y"))
-			switch {
-			case err == nil:
-			case errors.Is(err, errIndexCherokeeUnsettled):
-				refusedCount += 1
-				if !indexIsCherokeeCased(r) {
-					t.Errorf("%U was refused", r)
-				}
-			default:
-				t.Errorf("%U: %v", r, err)
+			if once := cases.Fold().String(string(r)); once != string(r) && cases.Fold().String(once) == string(r) {
+				swapped += 1
+			}
+			got, err := normalizer.normalize([]byte(string(r)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := string(block[2] + r - block[0]); string(got) != want {
+				t.Errorf("%U reads %+q, want %+q", r, got, want)
 			}
 		}
 	}
-	if refusedCount != 172 {
-		t.Errorf("refused %d code points, want 172", refusedCount)
+	if swapped != 172 {
+		t.Errorf("the fold swaps %d code points, want 172", swapped)
 	}
-	_, err = normalizer.documentKeys([]indexTextField{{number: indexFieldBody, text: strings.NewReader("ok \u13A0")}})
-	if !errors.Is(err, errIndexCherokeeUnsettled) {
-		t.Errorf("a document holding one reads %v", err)
+	document := testDocumentKeys(t, "\uAB70\uAB71")
+	if len(indexTrigrams([]byte("\u13A0\u13A1")).without(document)) != 0 {
+		t.Error("a query in one case does not find a document in the other")
 	}
 }
 
-// A refusal is one text's: a normalizer kept across documents goes on, its state left at no field's middle.
-func TestARefusalLeavesTheNormalizerUsable(t *testing.T) {
+// A failed read is one text's: a normalizer kept across documents goes on, with no state left from the field it lost.
+func TestAFailedReadLeavesTheNormalizerUsable(t *testing.T) {
 	normalizer, err := indexNewNormalizer(indexLinkedTables())
 	if err != nil {
 		t.Fatal(err)
 	}
-	cherokee := []byte("x \u13A0")
-	if _, err := normalizer.normalize(cherokee); !errors.Is(err, errIndexCherokeeUnsettled) {
+	failure := errors.New("the source broke")
+	failing := io.MultiReader(strings.NewReader("half a do"), iotest.ErrReader(failure))
+	if _, err := normalizer.documentKeys([]indexTextField{{number: indexFieldBody, text: failing}}); !errors.Is(err, failure) {
 		t.Fatalf("got %v", err)
 	}
-	got, err := normalizer.normalize([]byte("Clean"))
-	if err != nil || string(got) != "clean" {
-		t.Errorf("after a refused text: %q, %v", got, err)
-	}
-	keys, err := normalizer.documentKeys([]indexTextField{{number: indexFieldBody, text: bytes.NewReader(cherokee)}})
-	if !errors.Is(err, errIndexCherokeeUnsettled) {
-		t.Fatalf("got %x, %v", keys, err)
-	}
-	keys, err = normalizer.documentKeys([]indexTextField{{number: indexFieldBody, text: strings.NewReader("ab")}})
+	keys, err := normalizer.documentKeys([]indexTextField{{number: indexFieldBody, text: strings.NewReader("ab")}})
 	if err != nil || !slices.Equal(keys, indexTrigrams([]byte(" ab "))) {
-		t.Errorf("after a refused document: %x, %v", keys, err)
+		t.Errorf("after a failed read: %x, %v", keys, err)
 	}
-}
-
-// The reason for the refusal, kept in view: the day x/text's fold stops swapping these, the question's answer changes.
-func TestFoldStillSwapsCherokee(t *testing.T) {
-	if got := cases.Fold().String("\u13A0"); got != "\uAB70" {
-		t.Errorf("U+13A0 folds to %+q", got)
-	}
-	if got := cases.Fold().String("\uAB70"); got != "\u13A0" {
-		t.Errorf("U+AB70 folds to %+q", got)
+	if got, err := normalizer.normalize([]byte("Clean")); err != nil || string(got) != "clean" {
+		t.Errorf("after a failed read: %q, %v", got, err)
 	}
 }
 
@@ -306,10 +295,7 @@ func TestLongMarkRunsStreamAlike(t *testing.T) {
 	for _, base := range []string{"a", "\u05D0", "\u0E01", "\u0915", "\u304B", " ", ".", "1", "\uD55C"} {
 		for _, length := range []int{29, 30, 31, 60, 61, 1500, 5000} {
 			text := base + strings.Repeat("\u0301\u0323", length)
-			whole, ok := testReferenceNormalize(text)
-			if !ok {
-				t.Fatalf("%q refused", base)
-			}
+			whole := testReferenceNormalize(text)
 			normalizer, err := indexNewNormalizer(indexLinkedTables())
 			if err != nil {
 				t.Fatal(err)
@@ -321,8 +307,7 @@ func TestLongMarkRunsStreamAlike(t *testing.T) {
 			if string(streamed) != whole {
 				t.Errorf("%+q x %d differs", base, length)
 			}
-			again, ok := testReferenceNormalize(whole)
-			if !ok || again != whole {
+			if testReferenceNormalize(whole) != whole {
 				t.Errorf("%+q x %d is not idempotent", base, length)
 			}
 		}
@@ -561,9 +546,8 @@ type testNormalizeVectorFile struct {
 
 // The vector of a case, written from the reference and the hand-worked want, never from the code under test.
 func testBuildNormalizeVector(t *testing.T, c testNormalizeCase) testNormalizeVector {
-	reference, ok := testReferenceNormalize(c.text)
-	if !ok || reference != c.want {
-		t.Fatalf("%s: the reference reads %+q (%t)", c.name, reference, ok)
+	if reference := testReferenceNormalize(c.text); reference != c.want {
+		t.Fatalf("%s: the reference reads %+q", c.name, reference)
 	}
 	normalizedSum := sha256.Sum256([]byte(c.want))
 	encoded, err := testReferenceTrigrams([]byte(" " + c.want + " ")).appendEncoded(nil)
@@ -682,5 +666,4 @@ func TestNormalizeSeedFilesAreCurrent(t *testing.T) {
 		testCheckCorpusFile(t, "FuzzIndexNormalize", c.name, fmt.Sprintf("[]byte(%q)", c.text), "int(0)")
 	}
 	testCheckCorpusFile(t, "FuzzIndexNormalize", "mixed-text", fmt.Sprintf("[]byte(%q)", testNormalizeMixedText()), "int(17)")
-	testCheckCorpusFile(t, "FuzzIndexNormalize", "refused-cherokee", fmt.Sprintf("[]byte(%q)", "\u13A0"), "int(0)")
 }

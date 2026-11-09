@@ -131,6 +131,34 @@
    "key_set_sha256": "26c20968e5d62b309f8d0fc70808b3ce7520a4bebd7fa942589f61579dc12613"
   },
   {
+   "name": "fold-cherokee-capital",
+   "text_hex": "e18ea0",
+   "normalized_hex": "e18ea0",
+   "normalized_sha256": "bdc36141fbb1b256e5ea88cffbcb9264e0cb37655e66a57686ef0ffdcc3224a9",
+   "key_set_sha256": "03aa18fcda205f37a0de4d8c6fc5572199594d64d0b6f8249a14d0554ea09f6c"
+  },
+  {
+   "name": "fold-cherokee-small",
+   "text_hex": "eaadb0",
+   "normalized_hex": "e18ea0",
+   "normalized_sha256": "bdc36141fbb1b256e5ea88cffbcb9264e0cb37655e66a57686ef0ffdcc3224a9",
+   "key_set_sha256": "03aa18fcda205f37a0de4d8c6fc5572199594d64d0b6f8249a14d0554ea09f6c"
+  },
+  {
+   "name": "fold-cherokee-capital-end",
+   "text_hex": "e18fb0",
+   "normalized_hex": "e18fb0",
+   "normalized_sha256": "6bd1171d69468ff87cec728b086e960de9b2511717003106370d837f41c144bc",
+   "key_set_sha256": "c09fc68468f67cd76cfe37ad001bf228a678fe24c3e90582c56d0efb1b670d9a"
+  },
+  {
+   "name": "fold-cherokee-small-end",
+   "text_hex": "e18fb8",
+   "normalized_hex": "e18fb0",
+   "normalized_sha256": "6bd1171d69468ff87cec728b086e960de9b2511717003106370d837f41c144bc",
+   "key_set_sha256": "c09fc68468f67cd76cfe37ad001bf228a678fe24c3e90582c56d0efb1b670d9a"
+  },
+  {
    "name": "marks-latin-precomposed",
    "text_hex": "636166c3a9",
    "normalized_hex": "63616665",

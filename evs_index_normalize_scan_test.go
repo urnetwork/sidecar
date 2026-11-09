@@ -23,7 +23,7 @@ func TestEveryCodePointIsIdempotentAndBounded(t *testing.T) {
 	widest := 0.0
 	widestRune := rune(0)
 	for r := rune(0); r <= unicode.MaxRune; r += 1 {
-		if 0xD800 <= r && r <= 0xDFFF || indexIsCherokeeCased(r) {
+		if 0xD800 <= r && r <= 0xDFFF {
 			continue
 		}
 		text := string(r)

@@ -7,6 +7,7 @@ package sidecar
 
 import (
 	"bytes"
+	"cmp"
 )
 
 // An entry's first byte, and a shard tombstone table's kind where it is 3 or 4.
@@ -135,15 +136,9 @@ func (self *indexDecoder) entry(companion bool) *indexEntry {
 	return entry
 }
 
-// The one order a slot's entries take: kinds 1-3 by doc_key, then ref tombstones by ref_id. It depends only on the
-// entries, so a replaced entry keeps no place and a head is a function of what it holds.
+// The one order a slot's entries take (plan-SEARCH-index-format-bytes#2): ascending by 16-byte key, doc_key or ref_id,
+// then by kind. It depends only on the entries, so a replaced entry keeps no place and a head is a function of what it
+// holds.
 func indexCompareEntries(a *indexEntry, b *indexEntry) int {
-	aIsRef := a.kind == indexEntryRefTombstone
-	if bIsRef := b.kind == indexEntryRefTombstone; aIsRef != bIsRef {
-		if aIsRef {
-			return 1
-		}
-		return -1
-	}
-	return bytes.Compare(a.key[:], b.key[:])
+	return cmp.Or(bytes.Compare(a.key[:], b.key[:]), cmp.Compare(a.kind, b.kind))
 }

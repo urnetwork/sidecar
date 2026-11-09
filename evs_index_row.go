@@ -20,14 +20,17 @@ const (
 	indexFieldMaxByteCount   = 256
 )
 
-// A row's flags past its field bits. A provenance bit is the push's, and a private bit a directory document's.
+// A row's flags past its field bits. A provenance bit is the push's, and a private bit a directory document's. Inexact
+// says the locator is not the exact path: it was cut, or held bytes that are not UTF-8
+// (plan-SEARCH-index-format-bytes#3).
 const (
 	indexRowTainted uint64 = 1 << 0
 	indexRowOutside uint64 = 1 << 1
 	indexRowPrivate uint64 = 1 << 2
+	indexRowInexact uint64 = 1 << 18
 )
 
-// The widest flags encode, bit 17 being the highest: trimming counts this, since a cut it makes may widen them.
+// The widest flags encode, bit 18 being the highest: trimming counts this, since a cut it makes may widen them.
 const indexRowFlagsMaxByteCount = 3
 
 // An id's bytes: a doc_key, a ref_id, a sidecar_id.
@@ -87,12 +90,12 @@ func (self indexDocKind) rowFields() []int {
 	return indexRowHeaderFields
 }
 
-// Which flag bits a row of this kind may set: bits 0-6, and on a registered kind those of fields 6-15.
+// Which flag bits a row of this kind may set: bits 0-6 and 18, and on a registered kind those of fields 6-15.
 func (self indexDocKind) rowFlags() uint64 {
 	if self.hasRegisteredFields() {
-		return 1<<18 - 1 - indexRowCutFlag(indexFieldBody)
+		return 1<<19 - 1 - indexRowCutFlag(indexFieldBody)
 	}
-	return indexRowCutFlag(indexFieldBody) - 1
+	return indexRowCutFlag(indexFieldBody) - 1 | indexRowInexact
 }
 
 // A field's cap, 1-4 at 160 B and the registered ones at 256 B.
@@ -112,33 +115,65 @@ func indexRowText(value string) string {
 	return string([]rune(value))
 }
 
-// Brings the row's text within format, in the fixed order: each value keeps the longest prefix within its cap that
-// leaves the row within its own, every later value counted empty. A field that loses bytes sets its bit; the locator
-// has none (§11.14 gives it no bit), and a hit whose locator was cut shows but cannot be opened by it. Call it once
-// the numbers are set, since they share the 2 KiB, and only on values from the document, never on a decoded row.
+// The bytes the row encodes to, as its values stand.
+func (self *indexRow) encodedByteCount() int {
+	byteCount := 1 + indexVByteLength(self.flags) + indexVByteLength(self.byteCount) + indexVByteLength(self.chunk) +
+		indexVByteLength(self.trigramCount) + indexVByteLength(self.startedSeconds) +
+		indexVByteLength(self.expiresSeconds) + len(self.refId)
+	byteCount += indexVByteLength(uint64(len(self.locator))) + len(self.locator)
+	for _, field := range self.docKind.rowFields() {
+		byteCount += indexVByteLength(uint64(len(self.fields[field]))) + len(self.fields[field])
+	}
+	return byteCount
+}
+
+// Brings the row's text within format (plan-SEARCH-index-format-bytes#3). Each value first goes to its own cap, on a
+// code point. If the row still passes 2 KiB, a walk in the fixed order lets each value keep what the row leaves after
+// the fixed part and the values before it, every later value counted empty and the flags at their widest. A field that
+// loses bytes sets its bit, and a locator that is no longer the exact path sets the inexact bit. Call it once the
+// numbers are set, since they share the 2 KiB, and only on values from the document, never on a decoded row.
 func (self *indexRow) fit() {
+	rowFields := self.docKind.rowFields()
+	cutLocator := func(byteCount int) {
+		if kept := indexCutUtf8(self.locator, byteCount); len(kept) < len(self.locator) {
+			self.locator = kept
+			self.flags |= indexRowInexact
+		}
+	}
+	cutField := func(field int, byteCount int) {
+		if kept := indexCutUtf8(self.fields[field], byteCount); len(kept) < len(self.fields[field]) {
+			self.fields[field] = kept
+			self.flags |= indexRowCutFlag(field)
+		}
+	}
+	if text := indexRowText(self.locator); text != self.locator {
+		self.locator = text
+		self.flags |= indexRowInexact
+	}
+	cutLocator(indexLocatorMaxByteCount)
+	for _, field := range rowFields {
+		self.fields[field] = indexRowText(self.fields[field])
+		cutField(field, indexRowFieldCap(field))
+	}
+	if self.encodedByteCount() <= indexRowMaxByteCount {
+		return
+	}
 	used := 1 + indexRowFlagsMaxByteCount + len(self.refId) + indexVByteLength(self.byteCount) +
 		indexVByteLength(self.chunk) + indexVByteLength(self.trigramCount) +
 		indexVByteLength(self.startedSeconds) + indexVByteLength(self.expiresSeconds)
-	rowFields := self.docKind.rowFields()
-	// What one value may keep, given the values after it, each at least its one length byte.
-	cut := func(value string, valueCap int, laterCount int) string {
+	// What one value may keep, its own length byte or two taken out, with laterCount values after it.
+	roomFor := func(laterCount int) int {
 		room := indexRowMaxByteCount - used - laterCount
-		limit := room - 1
-		if 128 <= limit {
-			limit = room - 2
+		if 128 < room {
+			return room - 2
 		}
-		kept := indexCutUtf8(indexRowText(value), min(limit, valueCap))
-		used += indexVByteLength(uint64(len(kept))) + len(kept)
-		return kept
+		return room - 1
 	}
-	self.locator = cut(self.locator, indexLocatorMaxByteCount, len(rowFields))
+	cutLocator(roomFor(len(rowFields)))
+	used += indexVByteLength(uint64(len(self.locator))) + len(self.locator)
 	for index, field := range rowFields {
-		value := self.fields[field]
-		self.fields[field] = cut(value, indexRowFieldCap(field), len(rowFields)-index-1)
-		if len(self.fields[field]) < len(indexRowText(value)) {
-			self.flags |= indexRowCutFlag(field)
-		}
+		cutField(field, roomFor(len(rowFields)-index-1))
+		used += indexVByteLength(uint64(len(self.fields[field]))) + len(self.fields[field])
 	}
 }
 

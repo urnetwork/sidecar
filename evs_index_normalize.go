@@ -56,10 +56,6 @@ var indexFieldPad = []byte{' '}
 // status update (§11.14's tables row).
 var errIndexOtherNormalizer = errors.New("this build links another normalizer's tables")
 
-// plan-SEARCH-cherokee-fold is open, so normalizer 1 has no answer for this text, and an index byte built from one
-// reading could not be rebuilt under another. Such a document stays out of the index and reads not yet searchable.
-var errIndexCherokeeUnsettled = errors.New("normalizer 1 does not yet define case folding for cherokee")
-
 // A field out of order, or a number §11.14 does not give.
 var errIndexFieldOrder = errors.New("index fields must ascend from 1 to 15")
 
@@ -105,7 +101,7 @@ func (self indexTables) isNormalizerOne() bool {
 type indexRuneStep struct {
 	// What a code point becomes, negative for nothing. It runs once for each code point, since Transform checks for
 	// room first, so it may keep state.
-	mapRune func(r rune) (rune, error)
+	mapRune func(r rune) rune
 	// Forgets that state.
 	reset func()
 }
@@ -121,11 +117,7 @@ func (self *indexRuneStep) Transform(dst []byte, src []byte, atEof bool) (dstByt
 			return dstByteCount, srcByteCount, transform.ErrShortSrc
 		}
 		r, size := utf8.DecodeRune(src[srcByteCount:])
-		mapped, err := self.mapRune(r)
-		if err != nil {
-			return dstByteCount, srcByteCount, err
-		}
-		if 0 <= mapped {
+		if mapped := self.mapRune(r); 0 <= mapped {
 			dstByteCount += utf8.EncodeRune(dst[dstByteCount:], mapped)
 		}
 		srcByteCount += size
@@ -138,10 +130,17 @@ func (self *indexRuneStep) Reset() {
 	self.reset()
 }
 
-// Whether x/text's fold swaps this code point's case. Each of the 172 folds to its other case, so folding twice
-// returns the input, and that is the case plan-SEARCH-cherokee-fold asks about.
-func indexIsCherokeeCased(r rune) bool {
-	return (0x13A0 <= r && r <= 0x13F5) || (0x13F8 <= r && r <= 0x13FD) || (0xAB70 <= r && r <= 0xABBF)
+// Step 3's fixed map, plan-SEARCH-cherokee-fold's rule as the owner decided it. x/text's fold swaps Cherokee's two
+// cases, where CaseFolding.txt takes both to the first, so a fold alone is not idempotent and a query misses the other
+// case. This takes whatever the fold left in the second form to the first. On a correct fold it changes nothing.
+func indexFoldCherokee(r rune) rune {
+	switch {
+	case 0xAB70 <= r && r <= 0xABBF:
+		return r - 0xAB70 + 0x13A0
+	case 0x13F8 <= r && r <= 0x13FD:
+		return r - 0x13F8 + 0x13F0
+	}
+	return r
 }
 
 // Whether a nonspacing mark after this code point goes: a letter of step 4's five scripts. Hangul and kana are not,
@@ -154,30 +153,25 @@ func indexDropsMarks(r rune) bool {
 // Steps 1-5, in order, as one transform.
 func indexNormalizerChain() transform.Transformer {
 	validStep := &indexRuneStep{
-		mapRune: func(r rune) (rune, error) {
-			return r, nil
+		mapRune: func(r rune) rune {
+			return r
 		},
 		reset: func() {},
 	}
 	cherokeeStep := &indexRuneStep{
-		mapRune: func(r rune) (rune, error) {
-			if indexIsCherokeeCased(r) {
-				return -1, errIndexCherokeeUnsettled
-			}
-			return r, nil
-		},
-		reset: func() {},
+		mapRune: indexFoldCherokee,
+		reset:   func() {},
 	}
 	// The nearest code point that is not Mn decides, so stacked marks after one base all go.
 	dropsMarks := false
 	markStep := &indexRuneStep{
-		mapRune: func(r rune) (rune, error) {
+		mapRune: func(r rune) rune {
 			if !unicode.Is(unicode.Mn, r) {
 				dropsMarks = indexDropsMarks(r)
 			} else if dropsMarks {
-				return -1, nil
+				return -1
 			}
-			return r, nil
+			return r
 		},
 		reset: func() {
 			dropsMarks = false
@@ -185,16 +179,16 @@ func indexNormalizerChain() transform.Transformer {
 	}
 	inRun := false
 	runStep := &indexRuneStep{
-		mapRune: func(r rune) (rune, error) {
+		mapRune: func(r rune) rune {
 			if unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsNumber(r) {
 				inRun = false
-				return r, nil
+				return r
 			}
 			if inRun {
-				return -1, nil
+				return -1
 			}
 			inRun = true
-			return ' ', nil
+			return ' '
 		},
 		reset: func() {
 			inRun = false
@@ -210,7 +204,7 @@ type indexTextField struct {
 }
 
 // Normalizes text and builds key sets. Its buffers are a few KiB, plus 2 MiB once a document's keys are collected, so
-// a caller keeps one for as long as it has documents, a refused one among them. Not safe for concurrent use.
+// a caller keeps one for as long as it has documents. Not safe for concurrent use.
 type indexNormalizer struct {
 	chain     transform.Transformer
 	buffer    []byte
