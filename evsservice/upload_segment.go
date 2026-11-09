@@ -243,8 +243,11 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 		return
 	}
 	if stored {
-		// a re-upload's bytes were counted when they were first stored
-		deps.Usage.AddStored(networkId, byteCount)
+		// a re-upload's bytes were counted when they were first stored; a batcher that will not take them loses
+		// them to the nightly count, which corrects the drift (§20.7)
+		if err := deps.Usage.AddStored(networkId, byteCount); err != nil {
+			self.log.Infof("[evs]stored bytes of an upload not counted: %v\n", err)
+		}
 	}
 	request.Reply(receipt)
 }

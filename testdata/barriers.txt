@@ -227,6 +227,7 @@ secret dns_zsk dnsservice/keyset.go
 secret edge_server_handshake_iv smtpproof/edge.go
 secret edge_server_handshake_key smtpproof/edge.go
 secret edge_shts smtpproof/edge.go
+secret evs_receipt_key evsservice/upload_keys.go
 secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
 secret joiner_secret mls_welcome.go
