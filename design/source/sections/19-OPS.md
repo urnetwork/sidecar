@@ -390,7 +390,7 @@ MG6     §7's Team tables; §8: network_acl_share; §17: network_bridge_share;
         §20: transfer_balance.tier, transfer_balance's team_credit index (built concurrently; pending
         from M4's dark comparator, behind escrow_draw_order, 19.11), stripe_meter_report
 MG7     §15: mail_network, mail_host_key, mail_direct_mx, mail_connection_record
-MG8     §18: sidecar_push_token
+MG8     §7: network_client_owner.forward_only (owner decision 197); §18: sidecar_push_token
 MG9     §14: smtp_*
 ```
 

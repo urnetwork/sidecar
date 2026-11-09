@@ -38,11 +38,11 @@
  {
   "num": 5,
   "code": "CORE",
-  "words": 8386,
+  "words": 8396,
   "code_words": 6301,
   "ceiling": 3500,
-  "over": 4886,
-  "over_pct": 139.6
+  "over": 4896,
+  "over_pct": 139.9
  },
  {
   "num": 6,
@@ -155,17 +155,17 @@
  {
   "num": 18,
   "code": "SDK",
-  "words": 9366,
+  "words": 9378,
   "code_words": 8892,
   "ceiling": 3000,
-  "over": 6366,
-  "over_pct": 212.2
+  "over": 6378,
+  "over_pct": 212.6
  },
  {
   "num": 19,
   "code": "OPS",
   "words": 7613,
-  "code_words": 8437,
+  "code_words": 8442,
   "ceiling": 3500,
   "over": 4113,
   "over_pct": 117.5

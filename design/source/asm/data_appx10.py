@@ -558,3 +558,7 @@ ROUTES = _replace(ROUTES, '`POST /network/auth-client`',
      'Mint a client token, the pairing child and a sidecar\'s `forward_only` forwarding client included (§18.6; owner '
      'decision 197); a `strict_exp` bearer adds a DPoP proof (§7.4); an ephemeral mint also returns its close '
      'capability once (§7.8)', '§5.15'))
+TABLES = _insert_after(TABLES, '`sidecar_push_token`',
+    ('`network_client_owner.forward_only`', 'api',
+     "A sidecar's forwarding client's mark, which narrows its routes and its exchange to the config's read "
+     "(§7.4; owner decision 197)", 'MG8', '§7.17'))
