@@ -65,6 +65,8 @@ type SidecarSettings struct {
 	Directory *SidecarDirectorySettings
 	// §11's client: its calls, verifying reader and local tier.
 	Evs *EvsSettings
+	// §13.8's device key and the self-signed leaf that stands in for an issued chain.
+	Tls *SidecarTlsSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -254,6 +256,31 @@ type SidecarDirectorySettings struct {
 	RenewJitter time.Duration
 }
 
+// §13.8's device key and the self-signed leaf a device presents until §13 issues it (§15.5, §11.11). The
+// tls component's, declared on every leg so that SidecarSettings is one shape everywhere; the
+// sidecar_http leg runs no tls component and reads none of it (§18.10).
+type SidecarTlsSettings struct {
+	// How long a device key serves before TlsKeyRotationDue answers true and a successor is ordered:
+	// 180 days (§13.8). The old key serves until its successor's certificate installs.
+	KeyRotationInterval time.Duration
+	// How long a self-signed leaf is valid: 30 days, a reading, since §13.8 and §15.5 set none. Past
+	// half of it the next call makes a new one on the same key, which TlsCertificateFingerprint
+	// answers alike, since that pins the key.
+	SelfSignedLifetime time.Duration
+	// How far before its making a self-signed leaf's validity starts, so a peer whose clock runs
+	// behind accepts it: 1 h, a reading.
+	SelfSignedBackdate time.Duration
+}
+
+// A fresh value each call.
+func DefaultSidecarTlsSettings() *SidecarTlsSettings {
+	return &SidecarTlsSettings{
+		KeyRotationInterval: 180 * 24 * time.Hour,
+		SelfSignedLifetime:  30 * 24 * time.Hour,
+		SelfSignedBackdate:  1 * time.Hour,
+	}
+}
+
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
 func DefaultSidecarSettings() *SidecarSettings {
 	return &SidecarSettings{
@@ -324,6 +351,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			RenewJitter:           5 * time.Minute,
 		},
 		Evs: DefaultEvsSettings(),
+		Tls: DefaultSidecarTlsSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
