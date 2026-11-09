@@ -51,9 +51,14 @@ message BridgeShareKey {                 // the pinned ShareKey, Ed25519
   bytes public_key = 2;
 }
 
-message Pending {                        // legacy -> pending
+// legacy -> pending. The sidecar's id and identity key, stored with the anchor, are how the device role knows its own
+// sign-out: only a Signed SidecarRevoke of that id, signed by that id under that key, wipes the posture back to legacy
+// (plan-SDK-pending-sidecar-id). They travel in process or over the device RPC, never to a server.
+message Pending {
   bytes network_id = 1;
   bytes genesis_sha256 = 2;
+  bytes sidecar_id = 3;
+  bytes identity_public_key = 4;         // Ed25519, 32 B
 }
 
 // §6.9 Signed, purpose window-delegation, SignedType 0x1908; by the subject's identity key or, on a share
