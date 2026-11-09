@@ -93,6 +93,10 @@ type SidecarApiError struct {
 	// delay-seconds, or its HTTP-date less the api's clock, a date already past asking for no wait.
 	// Zero: no hint. Past a uint32 is its largest.
 	RetryAfterMs uint32
+	// A refusal by a sidecar limit (§20.7): the body's QuotaRefusal, whatever the status, 402 and 429
+	// alike, read whole only where its limit_key is a well formed key and each field its type (api_limits.go).
+	// Nil for any other refusal. It holds numbers and a key, nothing of the server's text.
+	QuotaRefusal *QuotaRefusal
 }
 
 // The route, status and code: nothing the server wrote but its code.
@@ -426,6 +430,7 @@ func newSidecarApiError(route string, response *http.Response, body []byte, now 
 		if json.Unmarshal(errorBody.RetryAfterMs, &retryAfterMs) == nil {
 			apiErr.RetryAfterMs = clampRetryAfterMs(retryAfterMs)
 		}
+		apiErr.QuotaRefusal = decodeSidecarApiQuotaRefusal(body)
 	}
 	if apiErr.RetryAfterMs == 0 {
 		// RFC 9110 §10.2.3: delay-seconds, which is digits alone, or an HTTP-date in any of its three
