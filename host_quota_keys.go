@@ -181,6 +181,7 @@ const (
 	QuotaRateWindowUtcDay
 )
 
+// The window's name in a trace.
 func (self QuotaRateWindow) String() string {
 	switch self {
 	case QuotaRateWindowMinute:
@@ -263,6 +264,7 @@ type QuotaRateRule struct {
 	Tiered bool
 }
 
+// One row of §20.7's counters: whether its keys name an id, and the rule each resolves to.
 type quotaRateFamily struct {
 	// the key names an id after its ':'
 	subject bool
@@ -415,6 +417,7 @@ type QuotaClosurePacing struct {
 	secondCount int64
 }
 
+// A network's pacing with no eraser asking, as after a Redis loss.
 func NewQuotaClosurePacing() *QuotaClosurePacing {
 	return &QuotaClosurePacing{
 		eraserTurns: map[connect.Id]time.Time{},
