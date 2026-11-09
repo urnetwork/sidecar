@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"slices"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -114,8 +116,11 @@ func (self *ConfigState) countedMember(signer ConfigSigner, targets ConfigTarget
 	return Id{}, false
 }
 
-// A statement's targets, by its type's rule.
+// A statement's targets, by its type's rule, or for an acl statement by ACL's rules.
 func configStatementTargets(state *ConfigState, statement *configStatement) (ConfigTargets, bool) {
+	if statement.signedType>>8 == 0x11 {
+		return configAcl.targets(state, statement)
+	}
 	rule := configStatementRules[statement.signedType]
 	if rule == nil || rule.targets == nil {
 		return ConfigTargets{}, false
@@ -143,26 +148,44 @@ func init() {
 // own header §7.9 does not judge, only the proposal's.
 func configProposedStatement(proposal *protocol.AuthorityProposal, signers []ConfigSigner, n uint64, timeMs int64) (*configStatement, error) {
 	proposedType := bridge.SignedType(proposal.GetStatementType())
-	rule := configStatementRules[proposedType]
-	if rule == nil || rule.targets == nil {
-		return nil, fmt.Errorf("%w: a proposal of %s, which no proposal carries yet", ErrConfigRuleMissing, proposedType)
+	var purpose string
+	var body proto.Message
+	var err error
+	if proposedType>>8 == 0x11 {
+		// an acl statement, which ACL's rules take; they name the targets of the types a proposal may carry
+		var ok bool
+		if purpose, ok = ConfigStatementPurpose(proposedType); !ok {
+			return nil, fmt.Errorf("%w: a proposal of %s, which no proposal carries yet", ErrConfigRuleMissing, proposedType)
+		}
+		body, err = ParseConfigStatement(purpose, proposedType, proposal.GetStatement())
+	} else {
+		rule := configStatementRules[proposedType]
+		if rule == nil || rule.targets == nil {
+			return nil, fmt.Errorf("%w: a proposal of %s, which no proposal carries yet", ErrConfigRuleMissing, proposedType)
+		}
+		purpose = rule.purpose
+		body, err = rule.decode(proposal.GetStatement())
 	}
-	body, err := rule.decode(proposal.GetStatement())
 	if err != nil {
 		return nil, fmt.Errorf("%w: the proposed statement: %w", ErrConfigRule, err)
 	}
 	proposed := &configStatement{
 		signedType: proposedType,
-		purpose:    rule.purpose,
+		purpose:    purpose,
 		body:       body,
 		bodyBytes:  proposal.GetStatement(),
-		id:         bridge.SignedBytesSha256(rule.purpose, proposedType, proposal.GetStatement()),
+		id:         bridge.SignedBytesSha256(purpose, proposedType, proposal.GetStatement()),
 		signers:    slices.Clone(signers),
 		n:          n,
 		timeMs:     timeMs,
 	}
 	if headerMessage, ok := body.(configHeaderMessage); ok {
 		proposed.header = headerMessage.GetHeader()
+	}
+	if proposedType>>8 == 0x11 {
+		if _, ok := configAcl.targets(nil, proposed); !ok {
+			return nil, fmt.Errorf("%w: a proposal of %s, which no proposal carries yet", ErrConfigRuleMissing, proposedType)
+		}
 	}
 	return proposed, nil
 }
