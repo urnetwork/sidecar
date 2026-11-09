@@ -1,4 +1,4 @@
-//go:build sidecar_testhooks
+//go:build sidecar_testhooks && !sidecar_http
 
 // What needs the hooks linked: every entry's key and salt reach testHookSecret where they are drawn, read back from
 // the journal and opened, and the privacy harness's scan finds each in a capture that holds it and in no entry a

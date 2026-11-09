@@ -1,9 +1,12 @@
+//go:build !sidecar_http
+
 // record_chain.go's chain and journal, on sidecartest's store and streams: seq from 1 on 32 zero bytes, then each
 // prev_sha256 the leaf before; a crash after the journal's fsync re-sending exactly the journaled bytes, and a write
 // that never landed leaving its seq to the next entry, so no seq is burned or reused; acknowledgments compacting the
 // head into the head file; a restart adopting a higher head from the writer's own stream, only from entries that
 // verify, and refusing a fork; corrupt state refused rather than read as a fresh chain; and one log's appends taking
-// distinct seqs however they race. External, since sidecartest imports the root.
+// distinct seqs however they race. External, since sidecartest imports the root, and off the sidecar_http leg, whose
+// root lacks what sidecartest's engine suites link.
 
 package sidecar_test
 
