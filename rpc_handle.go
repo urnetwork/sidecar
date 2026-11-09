@@ -55,7 +55,7 @@ type SubprotocolRequest struct {
 // and result_ref; any other answers UNAVAILABLE and names nothing of the error.
 type SubprotocolHandler func(ctx context.Context, request *SubprotocolRequest) ([]byte, error)
 
-// How a request type is served.
+// How a request type is served. SEARCH is served by its own rules whatever these say (rpc_search.go).
 type HandleOptions struct {
 	// The handler changes state, so a retry must not run it twice: its answers are kept by (source,
 	// request_id) for IdempotencyTimeout within the caps, and a retry while it runs joins it (§6.6).
@@ -84,6 +84,12 @@ func (self *Subprotocol) Handle(messageType protocol.MessageType, handler Subpro
 		options = &HandleOptions{}
 	}
 	handleOptions := *options
+	if messageType == protocol.MessageType_SEARCH {
+		// SEARCH's rules key on its type, whatever the options (rpc_search.go): it mutates nothing, so a
+		// retry is answered from the indexer's cursor, and its sizes are fixed below its handler
+		handleOptions.Mutating = false
+		handler = searchHandler(handler, self.log)
+	}
 	return self.setMessageTypeDispatch(messageType, func(ctx context.Context, message *subprotocolMessage) {
 		self.dispatchRequest(handler, &handleOptions, message)
 	})

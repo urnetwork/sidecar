@@ -77,7 +77,8 @@ func SubprotocolErrorCode(err error) (protocol.ErrorCode, bool) {
 	return protocol.ErrorCode_ERR_OK, false
 }
 
-// One call's options.
+// One call's options. A SEARCH call keeps its own rules whatever these say (rpc_search.go): its
+// timeout_ms is SearchTimeout, its wait ends there or at ctx, and it sends no Cancel.
 type CallOptions struct {
 	// The call's deadline, sent as timeout_ms: DefaultCallTimeout when zero, at most MaxCallTimeout, and
 	// cut to ctx's deadline. A larger one is refused.
@@ -225,6 +226,14 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 	if timeout == 0 {
 		timeout = self.settings.DefaultCallTimeout
 	}
+	search := messageType == protocol.MessageType_SEARCH
+	if search {
+		// one envelope of one size, and one timeout_ms, whatever the caller asks (rpc_search.go)
+		if len(body) != SearchRequestByteCount {
+			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a SEARCH body of another size"}
+		}
+		timeout = SearchTimeout
+	}
 	if timeout < 0 || MaxCallTimeout < timeout {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "timeout past the protocol's maximum"}
 	}
@@ -259,6 +268,8 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 			}
 			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAUTHENTICATED, RequestId: requestId}
 		}
+		// the first RPC with a peer each HeadCheckInterval starts a HeadCheck beside it (rpc_headcheck_rounds.go)
+		self.headCheckOnExchange(peerId, messageType)
 		response, err := self.callOnce(ctx, peerId, messageType, body, requestId, deadline)
 		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_UNAUTHENTICATED && attempt == 0 {
 			self.forgetPeer(peerId)
@@ -285,11 +296,17 @@ func (self *Subprotocol) callOnce(
 	if timeout <= 0 {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_DEADLINE_EXCEEDED, RequestId: requestId}
 	}
+	timeoutMs := uint32((timeout + time.Millisecond - 1) / time.Millisecond)
+	search := messageType == protocol.MessageType_SEARCH
+	if search {
+		// whatever ctx says, so the envelope has one length (§6.5)
+		timeoutMs = uint32(SearchTimeout / time.Millisecond)
+	}
 	envelopes, err := chunkBody(&protocol.Envelope{
 		Version:   WireVersionMajor,
 		Type:      uint32(messageType),
 		RequestId: requestId,
-		TimeoutMs: uint32((timeout + time.Millisecond - 1) / time.Millisecond),
+		TimeoutMs: timeoutMs,
 	}, body)
 	if err != nil {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_TOO_LARGE, RequestId: requestId}
@@ -330,10 +347,14 @@ func (self *Subprotocol) callOnce(
 
 	response, err := self.awaitPending(ctx, pending, deadline.Sub(self.clock.Now()), requestId)
 	if err != nil {
-		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_CANCELLED {
+		// a search is never cancelled (§11.14): the indexer answers it at its size whatever happens here
+		if code, ok := SubprotocolErrorCode(err); ok && code == protocol.ErrorCode_ERR_CANCELLED && !search {
 			self.sendCancel(peerId, requestId)
 		}
 		return nil, err
+	}
+	if search {
+		return searchResponseBody(response)
 	}
 	switch protocol.MessageType(response.envelope.Type) {
 	case messageType + 1:

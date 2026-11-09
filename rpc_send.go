@@ -36,8 +36,8 @@ var (
 // internal tests stand in for.
 type subprotocolSendFunction func(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) (bool, error)
 
-// One answer the dispatcher gives itself: a refusal, as type ERROR with an Error of code, a Pong, or a
-// HelloResult. A refusal's body is built by the sender, so queueing one copies a value and allocates
+// One answer the dispatcher gives itself: a refusal, as type ERROR with an Error of code, a Pong, a
+// HelloResult, or a StreamOpen's StreamReject. A refusal's body is built by the sender, so queueing one copies a value and allocates
 // nothing; a HelloResult carries its body, built on the worker.
 type subprotocolReply struct {
 	// the request's source
@@ -50,8 +50,27 @@ type subprotocolReply struct {
 	streamId    uint64
 	// for ERROR: never ERR_OK, which no sender sets (§6.5)
 	code protocol.ErrorCode
-	// for HELLO_RESULT: its marshalled HelloResult
+	// for HELLO_RESULT: its marshalled HelloResult; for STREAM_REJECT: its StreamReject
 	body []byte
+	// a stream frame, which carries NO_REPLY and no RESPONSE (reading 4): a StreamReject
+	streamFrame bool
+}
+
+// The StreamReject of code answering a StreamOpen on streamId, a stream frame.
+func streamRejectReply(destinationId connect.Id, transferKey connect.TransferKey, streamId uint64, code protocol.StreamRejectCode) subprotocolReply {
+	body, err := proto.Marshal(&protocol.StreamReject{Code: uint32(code)})
+	if err != nil {
+		// two integers always encode
+		panic(err)
+	}
+	return subprotocolReply{
+		destinationId: destinationId,
+		transferKey:   transferKey,
+		messageType:   protocol.MessageType_STREAM_REJECT,
+		streamId:      streamId,
+		body:          body,
+		streamFrame:   true,
+	}
 }
 
 // The answer to a request, named by its request_id and stream_id, that this side refuses with code.
@@ -101,6 +120,9 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		RequestId: reply.requestId,
 		Flags:     EnvelopeFlagResponse,
 		StreamId:  reply.streamId,
+	}
+	if reply.streamFrame {
+		envelope.Flags = EnvelopeFlagNoReply
 	}
 	if reply.body != nil {
 		envelope.Body = reply.body

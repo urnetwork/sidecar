@@ -99,11 +99,12 @@ func testClientPublicKeyOf(peer connect.Peer) ([ed25519.PublicKeySize]byte, bool
 	return testClientKey(peer.Principal), true
 }
 
-// A same-network peer on h1 whose frames carry the C15 key keyName names. Its TransferKey sets every
-// field, so a reply that drops or keeps one shows.
+// A same-network peer on h1, on a data contract, whose frames carry the C15 key keyName names. Its
+// TransferKey sets every field, so a reply that drops or keeps one shows.
 func testNetworkPeer(keyName string) connect.Peer {
 	return connect.Peer{
 		ProvideMode:   connectprotocol.ProvideMode_Network,
+		ContractClass: connectprotocol.ContractClass_ContractClassData,
 		TransportType: connect.TransportTypeH1,
 		Principal:     keyName,
 		TransferKey: connect.TransferKey{

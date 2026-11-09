@@ -39,14 +39,14 @@ type helloFlight struct {
 	err  error
 }
 
-// This side's Hello fields: its version range, floor, bounds and binding. Features are 0 until
-// PROTO-M10-01.
-func (self *Subprotocol) ownHelloFields() *helloFields {
+// This side's Hello fields toward peerId: its version range, floor, bounds and binding, and the feature
+// bits it sends that peer (rpc_features.go).
+func (self *Subprotocol) ownHelloFields(peerId connect.Id) *helloFields {
 	return &helloFields{
 		minVersion:       WireVersionMajor,
 		maxVersion:       WireVersionMajor,
 		secureVersion:    SecureVersion,
-		features:         0,
+		features:         self.featuresToward(peerId),
 		maxBodyByteCount: uint32(self.settings.ReassemblyMaxBodyByteCount),
 		initialWindow:    uint32(self.settings.StreamInitialWindowByteCount),
 		binding:          self.binding,
@@ -179,7 +179,7 @@ func (self *Subprotocol) runHello(ctx context.Context, clientId connect.Id, time
 		// until a SidecarAdmit names this sidecar in its own verified state, it gets no peer (§5.6)
 		return &SubprotocolError{Code: protocol.ErrorCode_ERR_UNAVAILABLE, Message: "this sidecar is not admitted"}
 	}
-	body, err := proto.Marshal(self.ownHelloFields().hello())
+	body, err := proto.Marshal(self.ownHelloFields(clientId).hello())
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func (self *Subprotocol) dispatchHello(ctx context.Context, message *subprotocol
 		refuse(code)
 		return
 	}
-	body, err := proto.Marshal(self.ownHelloFields().helloResult())
+	body, err := proto.Marshal(self.ownHelloFields(message.sourceId).helloResult())
 	if err != nil {
 		refuse(protocol.ErrorCode_ERR_UNAVAILABLE)
 		return

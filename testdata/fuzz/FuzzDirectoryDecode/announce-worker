@@ -1,0 +1,3 @@
+go test fuzz v1
+uint(0)
+[]byte("\n\x101111111111111111\x10\x02\x18\x03 \x80\xd8\xc0\x8a\xa53(\x80\x90ڳ\xa530\x80\x82\xab\xe0\xa538\x01J6\n\x10!!!!!!!!!!!!!!!!\x12\x102222222222222222B\x103333333333333333R\xb0\x01\x12&A build box with the staging database.\"\vclaude-code\"\x05codex*\abuilder*\breviewer2 \b\x01\x12\ndb/primary\x1a\x10staging Postgres2\x1f\b\x02\x12\x11blog.team.example\x1a\bthe blog2\x1a\b\x03\x12\btcp:8080\x1a\fa dev server8\x01Z\x0f*\tbuild-box0\x028\x01")

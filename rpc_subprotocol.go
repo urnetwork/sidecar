@@ -15,7 +15,7 @@
 //  3. the source guard (D-PROTO-8, rpc_guard.go);
 //  4. the provide mode, Network only (rpc_guard.go);
 //  5. the identity gate (rpc_peer.go), closed to a peer until its Hello verifies (D-PROTO-13);
-//  6. the contract class, which has nothing to read until C13 seals one (PROTO-M4-03);
+//  6. the contract class C13 sealed, control's narrow list on a control or unset class (rpc_contract_class.go);
 //  7. SubprotocolEnv.Inbound, §8's hook (rpc_inbound.go).
 //
 // An envelope through all seven is copied into a pool buffer and offered to its source's bounded queue
@@ -148,6 +148,10 @@ type Subprotocol struct {
 	handlers sync.WaitGroup
 	// the PushClient serving this dispatcher's push, which Subscribe reaches (push_client.go)
 	pushClient atomic.Pointer[PushClient]
+	// HeadCheck's transport while one is attached (rpc_headcheck.go)
+	headCheck atomic.Pointer[headCheckTransport]
+	// the feature bits this side sends, which the inline handler reads with no lock (rpc_features.go)
+	features atomic.Pointer[subprotocolFeatureSet]
 
 	stats subprotocolStats
 }
@@ -195,6 +199,8 @@ type subprotocolStats struct {
 	provideModeDroppedCount atomic.Uint64
 	// step 5: the identity gate
 	identityRefusedCount atomic.Uint64
+	// step 6: what a control or unset contract class does not carry
+	contractClassRefusedCount atomic.Uint64
 	// step 7: §8's hook
 	inboundRefusedCount atomic.Uint64
 	// a full source queue
@@ -435,10 +441,22 @@ func (self *Subprotocol) receive(source connect.TransferPath, envelope *protocol
 			refuse(protocol.ErrorCode_ERR_UNAUTHENTICATED)
 			return
 		}
-		// (6) the contract class: until C13 seals one into the contract (M4), connect's Peer carries
-		// none and every contract is a data contract, so this step has nothing to read and passes.
-		// PROTO-M4-03 fills it: on a control contract only §6.4's list, other RPCs refused with
-		// PERMISSION_DENIED and streams with DENIED (D-PROTO-18).
+		// (6) the contract class C13 sealed, read from this frame's Peer (rpc_contract_class.go): on
+		// control, or unset, only §6.4's list and SEARCH at a sidecar serving it; other requests
+		// refused PERMISSION_DENIED, a StreamOpen StreamReject{DENIED}, anything else dropped
+		switch contractClassAdmits(peer.ContractClass, envelope.Type, envelope.Flags, self.servesSearch()) {
+		case contractClassRefuse:
+			self.stats.contractClassRefusedCount.Add(1)
+			refuse(protocol.ErrorCode_ERR_PERMISSION_DENIED)
+			return
+		case contractClassRejectStream:
+			self.stats.contractClassRefusedCount.Add(1)
+			self.offerReply(streamRejectReply(sourceId, peer.TransferKey, envelope.StreamId, protocol.StreamRejectCode_SR_DENIED))
+			return
+		case contractClassDrop:
+			self.stats.contractClassRefusedCount.Add(1)
+			return
+		}
 		// (7) §8's hook
 		inbound := SubprotocolInbound{
 			SourceId:    Id(sourceId),
