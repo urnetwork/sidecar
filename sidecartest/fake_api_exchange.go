@@ -253,11 +253,13 @@ func fakeApiRepoScopeCount(scopes []string) int {
 // dropped.
 func fakeApiExchangeScopes(scope string) ([]string, error) {
 	scopes := []string{}
+	seen := map[string]bool{}
 	for _, s := range strings.Fields(scope) {
 		if !isFakeApiScopeToken(s) {
 			return nil, fmt.Errorf("%w: not a scope", ErrFakeApiInvalidScope)
 		}
-		if !slices.Contains(scopes, s) {
+		if !seen[s] {
+			seen[s] = true
 			scopes = append(scopes, s)
 		}
 	}
@@ -349,8 +351,12 @@ func (self *FakeApi) exchangeToken(ctx context.Context, args *fakeApiExchangeArg
 	if grant == nil {
 		return nil, errors.New("the scope source granted nothing and refused nothing")
 	}
+	asked := map[string]bool{}
+	for _, scope := range scopes {
+		asked[scope] = true
+	}
 	for _, granted := range grant.Scopes {
-		if !slices.Contains(scopes, granted) {
+		if !asked[granted] {
 			return nil, errors.New("the scope source granted a scope the request did not ask for")
 		}
 	}

@@ -62,7 +62,8 @@ type FakeApiSettings struct {
 	// How many positions one append tries before it answers 503, each a 412 or a lost race (§7.9's statement row).
 	// 64: every attempt is another appender's landed entry, so this bounds only a stream of them.
 	AppendAttemptCount int
-	// The longest request body a route reads: a base's 4 MiB of rows as base64 in JSON, with room.
+	// The longest request body a route reads, as server's router bounds a JSON body: 16 MiB, past a base's 4 MiB of
+	// rows and 4,096 config pushes of at most 1 KiB, each base64 in JSON.
 	MaxRequestByteCount int64
 }
 
@@ -78,7 +79,7 @@ func DefaultFakeApiSettings() *FakeApiSettings {
 		DpopMaxJtiByteCount: 256,
 		ProjectionPageCount: 1024,
 		AppendAttemptCount:  64,
-		MaxRequestByteCount: 8 * 1024 * 1024,
+		MaxRequestByteCount: 16 * 1024 * 1024,
 	}
 }
 
