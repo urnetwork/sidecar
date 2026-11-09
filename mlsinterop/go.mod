@@ -18,6 +18,8 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
+	github.com/emersion/go-smtp v0.25.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.2 // indirect
@@ -76,3 +78,9 @@ replace github.com/pion/sctp => ../../connect/sctp
 replace github.com/urnetwork/glog => ../../glog
 
 replace gvisor.dev/gvisor => ../../gvisor
+
+// D-MAIL-3's go-smtp fork and plan-MAIL-mox-subset's mox subset, which every module that links the
+// root repeats, since Go does not inherit a replace (QD-193; third_party/*/URNETWORK.md).
+replace github.com/emersion/go-smtp => ../third_party/go-smtp
+
+replace github.com/mjl-/mox => ../third_party/mox
