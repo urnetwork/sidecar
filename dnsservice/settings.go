@@ -92,6 +92,9 @@ type DnsSettings struct {
 	Feed DnsFeedSettings `yaml:"feed"`
 	// How the API block holds, reads and bounds its routes (DNS-M5-08). Not in the sketch.
 	Api DnsApiSettings `yaml:"api"`
+	// How a ceremony lays out the DNSKEY windows and the API block releases them (DNS-M5-19). Not in
+	// the sketch, whose prose gives the 14 days and the 7 d the monitor holds.
+	Keys DnsKeySettings `yaml:"keys"`
 	// Each root's own records (§12.7's <root> set, plan reading 19), by root, which the API block
 	// reconciles through §12.6's write path at start (DNS-M5-11). Not in the sketch, which gives
 	// <root>'s records no route. A root with none keeps no records of its own, so its edges serve
@@ -157,6 +160,27 @@ type DnsApiSettings struct {
 	StoreTimeoutSeconds int `yaml:"store_timeout_s"`
 	// Seconds Drain waits for holds it ended to answer. Zero waits for none.
 	DrainSeconds int `yaml:"drain_s"`
+}
+
+// The DNSKEY windows (§12.6's Keys, D-DNS-5; DNS-M5-19), in seconds but for the TTL. A window serves from
+// its inception plus release_delay_s until the next window's release, so the served one always has at
+// least window_s - step_s - release_delay_s left, which must exceed min_left_s: the monitor pages at 7 d
+// (DNS-M5-17), and release reports a gap before it would.
+type DnsKeySettings struct {
+	// How long a window's signatures are valid: D-DNS-5's 14 days, so a leaked ZSK's forgeries end at
+	// most this long after the last window naming it was released. Must be positive.
+	WindowSeconds int `yaml:"window_s"`
+	// How far apart two windows start. Six days leaves the served window 8 d less release_delay_s at
+	// the switch. Must be positive.
+	StepSeconds int `yaml:"step_s"`
+	// How long after its inception a window is released, so a validator whose clock runs this far slow
+	// still accepts its signatures. Zero releases it at its inception.
+	ReleaseDelaySeconds int `yaml:"release_delay_s"`
+	// The least the served window may have left: §12.6's 7 d, which the monitor checks. Must be
+	// positive.
+	MinLeftSeconds int `yaml:"min_left_s"`
+	// The DNSKEY RRset's TTL, which the KSK signs into each window. Must be positive.
+	DnskeyTtl uint32 `yaml:"dnskey_ttl"`
 }
 
 // How dnsedge follows the feed and keeps its local snapshot (DNS-M5-06).
@@ -379,6 +403,13 @@ func DefaultDnsSettings() *DnsSettings {
 			StoreTimeoutSeconds:    5,
 			DrainSeconds:           5,
 		},
+		Keys: DnsKeySettings{
+			WindowSeconds:       14 * 24 * 3600,
+			StepSeconds:         6 * 24 * 3600,
+			ReleaseDelaySeconds: 3600,
+			MinLeftSeconds:      7 * 24 * 3600,
+			DnskeyTtl:           3600,
+		},
 	}
 }
 
@@ -512,6 +543,9 @@ func (self *DnsSettings) Validate() error {
 	if err := self.Api.validate(); err != nil {
 		return refuse("api: %v", err)
 	}
+	if err := self.Keys.validate(); err != nil {
+		return refuse("keys: %v", err)
+	}
 	if self.CnameChainMaxCount < 1 {
 		return refuse("cname_chain_max_count is below 1")
 	}
@@ -591,6 +625,25 @@ func (self *DnsProbeSettings) validate() error {
 		if slices.Contains(self.Ports[:index], port) {
 			return fmt.Errorf("port %d is listed twice", port)
 		}
+	}
+	return nil
+}
+
+// Whether every value is in range and the served window always has over min_left_s left.
+func (self *DnsKeySettings) validate() error {
+	switch {
+	case self.WindowSeconds <= 0:
+		return errors.New("window_s is not positive")
+	case self.StepSeconds <= 0:
+		return errors.New("step_s is not positive")
+	case self.ReleaseDelaySeconds < 0:
+		return errors.New("release_delay_s is negative")
+	case self.MinLeftSeconds <= 0:
+		return errors.New("min_left_s is not positive")
+	case self.WindowSeconds-self.StepSeconds-self.ReleaseDelaySeconds <= self.MinLeftSeconds:
+		return errors.New("window_s less step_s and release_delay_s does not exceed min_left_s")
+	case self.DnskeyTtl == 0 || dnsTtlMaxSeconds < self.DnskeyTtl:
+		return fmt.Errorf("dnskey_ttl %d is out of range", self.DnskeyTtl)
 	}
 	return nil
 }

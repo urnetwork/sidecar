@@ -1,0 +1,216 @@
+{
+  "format": 1,
+  "root": "zone.example.",
+  "windows": [
+    {
+      "root": "zone.example.",
+      "not_before": "2027-01-01T00:00:00Z",
+      "not_after": "2027-01-15T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270115000000 20270101000000 56922 zone.example. NEYDWyTlI/iDAxhc6ieQvhGRdU7H712SdxI4Wu/yj8xiNNxWOnq+o/hdbMJqbUWr4aOoCReZzzmjBTfya7I22g=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-01-07T00:00:00Z",
+      "not_after": "2027-01-21T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270121000000 20270107000000 56922 zone.example. dVUvL9TP47l/2CcRxWGIYLJBA6FET0SRUp8Y8lgkJKSduZ0kayxwMQWW3FN287kfbpnDpn39U0ZhcRw3oD54ag=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-01-13T00:00:00Z",
+      "not_after": "2027-01-27T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270127000000 20270113000000 56922 zone.example. pnbXwWIB87weaJQZhqGNem/IDDLQEFForvy3OQY72d57z5ZbEmclnD3FmkBR7swappdz4poSp5ETweROdkgMZw=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-01-19T00:00:00Z",
+      "not_after": "2027-02-02T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270202000000 20270119000000 56922 zone.example. +NnCwAJydcLCnRRppRllk0yrmSXmxufLjY8QM3Sb+G/YhcrOeGW7ZsNnSWAt+UxcSrgqyRind2a+Art7F0wdfg=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-01-25T00:00:00Z",
+      "not_after": "2027-02-08T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270208000000 20270125000000 56922 zone.example. yoiOuBi0mV1iUK2yfhZYoBuiZLuhga/YlZLA1BOY1OvyQqgkhB3BrNNqJzXG9KRmP4o2A3eFwh5W/foRe/Iquw=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-01-31T00:00:00Z",
+      "not_after": "2027-02-14T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270214000000 20270131000000 56922 zone.example. l7FFCxkJEVFK/LAsQnfk+iFajmO3LzQ8DHtDzEKQoh54aAA3hvjT0mK3VM76Xj765QSNMs61vigstAguuGe4kA=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-02-06T00:00:00Z",
+      "not_after": "2027-02-20T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270220000000 20270206000000 56922 zone.example. mtSNsd3saDa9SmD5zOZMDkEqCN7DXB6yqKr/5eJVHZbMU6RBXrUZGWbRou6Q2lfOIhg6kQOKLL2Ust94y2xgIA=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-02-12T00:00:00Z",
+      "not_after": "2027-02-26T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270226000000 20270212000000 56922 zone.example. 48DlhbGu2wwtTSAh5O7Flt9CjZ7+7D6gAkhFa80Zcuh/ghRo0YPKXvL1MB8gzpvcsxaFX3xJAa0BzR8sQziieA=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-02-18T00:00:00Z",
+      "not_after": "2027-03-04T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270304000000 20270218000000 56922 zone.example. X2EuUuKSVfN6MGJxwMQwfZm10J7zO9IC/V5uP3N//jAO7Zcih9xFl8p6sK7JpjN8IaaXz8NuQCPydvDjO508mw=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-02-24T00:00:00Z",
+      "not_after": "2027-03-10T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270310000000 20270224000000 56922 zone.example. khaM0Q5/FYPd7Bw6EZNDltza+bvL8XBWUCWe7Yt4n+Y/vCuZlR0zKtTjqgoFpjlsqH5QJ/JiAE6fphM4Ry05Aw=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-03-02T00:00:00Z",
+      "not_after": "2027-03-16T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270316000000 20270302000000 56922 zone.example. 3blp1Pah4GmkKx25v6HnxjIpDQZIfYfI/Oda/5eySxO4RhFG8W/5zL4J2xH0SBzuC/cTL9MGeFC97AB5OWWjsQ=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-03-08T00:00:00Z",
+      "not_after": "2027-03-22T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270322000000 20270308000000 56922 zone.example. y2oNjDsbhxiKrKS+UwRfgodybVE+bgWHe+dHfbD34EoMV/T8MxL/l50FKPV3Xm/H9LKP491IheXZwgNqcG67ww=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-03-14T00:00:00Z",
+      "not_after": "2027-03-28T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270328000000 20270314000000 56922 zone.example. fJl6Ihp1gQK4RC06YbetPJL58mWRePZIqxmLWNbEg5ppD5G8kNcmA5v8v9v8R4I6TDW6ZTX/JxgPBpOz3rwc8A=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-03-20T00:00:00Z",
+      "not_after": "2027-04-03T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270403000000 20270320000000 56922 zone.example. XcM4gCey6ey3LAXzKFQ4Qq23OmrWbQkWETdRQ6eTck7GoR1CeKjjRaMrFvLr7A7HqXF+V9KEOdItU32pgb7rVA=="
+      ]
+    },
+    {
+      "root": "zone.example.",
+      "not_before": "2027-03-26T00:00:00Z",
+      "not_after": "2027-04-09T00:00:00Z",
+      "dnskeys": [
+        "257 3 13 wAqsNJ7/0xoP8tbs1EJrWQeRncz2Wy7jg7N7olQUNVldBkpZ1MG65Hu3h16kKPzc1dp1rm67z8s7uY4tANVSKQ==",
+        "256 3 13 9rlhEAWyHw5cpuDX9lZcWngUdVWOWlcJXdoQ3aDre/K2HJbT9dO8REWd6nyKXxpVOqzeyox22kQjv+OPnIHRiw==",
+        "256 3 13 jKBX8S1tZkGQRo5RLlG5+bQEH3VSmjdlQIVbFAttYVpTzYIKQuaaTLYMfYuAI5SGvfTfcpj5ldSzD/8rLh8nKA==",
+        "256 3 13 eJNyjT9WSSOpWpSNUAT4bYz4q4NivRS/D7R7XrBlFd8xrFy/jg+jKgT4VlVsQgn8qD8PpBp96qFW+aSumJ+9aQ=="
+      ],
+      "rrsigs": [
+        "DNSKEY 13 2 3600 20270409000000 20270326000000 56922 zone.example. r93vUUuQ0SyzfsbupSRam7F5MMjSkBS1iMtR2xVArzso9BYX3MrE0zPAZf2YsTI7EY2wI3QEW6x1b7TgtelBYA=="
+      ]
+    }
+  ]
+}
