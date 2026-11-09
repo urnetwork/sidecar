@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 
 	"github.com/urnetwork/connect"
@@ -191,8 +192,10 @@ func (self *Bridge) apply(call func() (PostureDecision, bool, error)) error {
 
 // Takes what the posture decided: its state's rules parsed once, Revoke's narrowing that the state has not passed,
 // and, when anything the hook reads changed or force says the clock moved, the hook's next state published and the
-// tags it no longer keeps returned. Sets the counts and the next deadline either way. Returns the tags and whether it
-// published.
+// tags it no longer keeps returned. Rebuilds what Route reads every time, so a link's change or a held entry's end
+// reaches it too, signs links as the posture's identity, and swaps in the state's private names. Sets the counts and
+// the next deadline either way. Returns the tags, and whether it published or changed the route export or the names,
+// which the change callbacks hear of.
 func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint64, bool) {
 	previous, previousRules, previousAlarms := func() (PostureDecision, *bridge.BridgeRules, []BridgeAlarm) {
 		self.stateLock.Lock()
@@ -235,13 +238,47 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 			Overlay:     slices.Concat(decision.Overlay, self.revocations),
 			NetworkId:   decision.NetworkId,
 			SidecarId:   decision.SidecarId,
-			// this device's addresses come with BRIDGE-M4-13's SetLocalAddresses; until then rule 0 reads every address
-			LocalAddresses: nil,
+			// nil while unknown, which rule 0 reads as every address
+			LocalAddresses: self.localAddrs,
 		})
 		closeTags = bridgeDispositionTags(previousState, self.publishedAt, self.policy.state.Load(), now, self.settings.PolicyProfile)
 		self.publishedAt = now
 	}
 	times := scanBridgeRulesTimes(rules, now, self.settings)
+
+	// the sender: links sign as the posture's identity, and Route reads the rules in force with the same narrowing
+	self.links.SetIdentity(decision.NetworkId, decision.SidecarId)
+	var routeRules *bridge.BridgeRules
+	if decision.State.Enforcing() {
+		routeRules = rules
+	}
+	routeState, routeFindings, routeNext := self.buildRouteWithLock(routeRules, slices.Concat(decision.Overlay, self.revocations), now)
+	var previousRoutes []netip.Prefix
+	if previousRouteState := self.routeState.Load(); previousRouteState != nil {
+		previousRoutes = previousRouteState.routes
+	}
+	testHookBarrier("bridge_state.route_swap.before", "")
+	self.routeState.Store(routeState)
+	testHookBarrier("bridge_state.route_swap.after", "")
+	var routes []netip.Prefix
+	if routeState != nil {
+		routes = routeState.routes
+	}
+	routesChanged := !slices.Equal(previousRoutes, routes)
+	// §12.9's names, versioned with the rules: a new zone for each state in force, none outside enforcing
+	zoneChanged := false
+	if decision.BridgeState != previous.BridgeState || decision.State != previous.State {
+		var zone *BridgeZone
+		if decision.State.Enforcing() && decision.BridgeState != nil {
+			zone = NewBridgeZone(decision.BridgeState.GetNames(), decision.BridgeState.GetNameZones(), self.settings)
+		}
+		zoneChanged = self.zone.Swap(zone) != zone
+	}
+	next := times.next
+	if !routeNext.IsZero() && (next.IsZero() || routeNext.Before(next)) {
+		next = routeNext
+	}
+
 	testHookBarrier("bridge.adopt.before", "")
 	func() {
 		self.stateLock.Lock()
@@ -251,8 +288,10 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 		self.alarms = alarms
 		self.drainingCount = times.drainingCount
 		self.expiredCount = times.expiredCount
+		self.routeFindings = routeFindings
+		self.egressMode = routeRules.GetEgress().GetMode()
 	}()
 	testHookBarrier("bridge.adopt.after", "")
-	self.deadline.Set(times.next)
-	return closeTags, changed
+	self.deadline.Set(next)
+	return closeTags, changed || routesChanged || zoneChanged
 }

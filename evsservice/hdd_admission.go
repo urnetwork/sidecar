@@ -14,6 +14,12 @@
 //     their own bounds hold (§11.13; QuotaGate's closure pacing for closures).
 //
 // Every refusal counts in §19.8's urnetwork_evs_hdd_admission_refused_total{cluster}, with no network label.
+//
+// The admission also counts the segments the cluster stored for this process (CountPut, which the upload route
+// calls), and on the same interval writes that count, from the admission's start, to {nvb_<cluster>} as the
+// process's HddPutReport with a 15 s ttl, from which the hdd loop sets §19.8's
+// urnetwork_filecluster_hdd_puts{cluster}. A report that does not land loses nothing but timing, since the next
+// carries the count from the start. The report names no network or repo, and the count is one atomic add.
 // Safe for concurrent use.
 
 package evsservice
@@ -25,6 +31,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/urnetwork/connect"
@@ -81,6 +88,8 @@ type HddAdmissionSettings struct {
 	RetryAfter time.Duration
 	// Where the store_weight cache reads its tunables: the write budget's (budget_queue.go).
 	Weights *WriteBudgetSettings
+	// The ttl of the process's PUT report: 15 s, three intervals, as {nvb_}'s other 5 s figures (§19.6).
+	PutReportTtl time.Duration
 }
 
 func DefaultHddAdmissionSettings() *HddAdmissionSettings {
@@ -90,6 +99,7 @@ func DefaultHddAdmissionSettings() *HddAdmissionSettings {
 		WindowSpan:    1 * time.Minute,
 		RetryAfter:    5 * time.Second,
 		Weights:       DefaultWriteBudgetSettings(),
+		PutReportTtl:  15 * time.Second,
 	}
 }
 
@@ -103,6 +113,11 @@ type HddAdmission struct {
 	redis          sidecar.Redis
 	weights        *writeBudgetWeights
 	refusedCounter sidecar.MetricsCounter
+	// names the process's PUT report, with when the admission started
+	processId string
+	startMs   int64
+	// segments the cluster stored for the process since startMs
+	putCount atomic.Int64
 
 	stateLock sync.Mutex
 	// upload bytes by network, the open interval's last
@@ -138,15 +153,22 @@ func newHddAdmission(ctx context.Context, host *sidecar.ServiceHost, clusterId s
 	if host == nil || host.Redis == nil {
 		return nil, errors.New("the hdd admission needs ServiceHost.Redis")
 	}
+	processId, err := newBudgetHolderId()
+	if err != nil {
+		return nil, err
+	}
+	clock := host.ClockOrReal()
 	cancelCtx, cancel := context.WithCancel(ctx)
 	self := &HddAdmission{
 		ctx:       cancelCtx,
 		cancel:    cancel,
 		clusterId: clusterId,
 		settings:  settings,
-		clock:     host.ClockOrReal(),
+		clock:     clock,
 		redis:     host.Redis,
 		weights:   newWriteBudgetWeights(settings.Weights, host.Quota),
+		processId: processId,
+		startMs:   clock.Now().UnixMilli(),
 		open:      map[connect.Id]int64{},
 		refused:   map[connect.Id]bool{},
 	}
@@ -198,9 +220,26 @@ func (self *HddAdmission) Admit(networkId connect.Id, byteCount int64, class Hdd
 	return nil
 }
 
-// One interval: reads the figures, closes the open interval into the window, and sets who is refused. A read
-// that fails keeps the last figures, which the key's own ttl ends: once it finds none, no one is refused.
+// Counts one segment the cluster stored for this process, toward §19.8's urnetwork_filecluster_hdd_puts{cluster}.
+// The upload route calls it once the segment cluster has stored the body, so a refusal, a re-upload's 412 or a
+// failed write counts nothing. No I/O.
+func (self *HddAdmission) CountPut() {
+	self.putCount.Add(1)
+}
+
+// One interval: writes the process's PUT report, reads the figures, closes the open interval into the window,
+// and sets who is refused. A read that fails keeps the last figures, which the key's own ttl ends: once it finds
+// none, no one is refused.
 func (self *HddAdmission) tick(ctx context.Context) {
+	report := &HddPutReport{
+		ProcessId: self.processId,
+		StartMs:   self.startMs,
+		TimeMs:    self.clock.Now().UnixMilli(),
+		PutCount:  self.putCount.Load(),
+	}
+	// one that does not land costs the loop only timing: the next carries the count from the start
+	writeHddPutReport(ctx, self.redis, self.clusterId, report, self.settings.PutReportTtl)
+
 	figures, err := readHddFigures(ctx, self.redis, self.clusterId)
 	readOk := err == nil
 	now := self.clock.Now()

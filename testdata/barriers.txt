@@ -24,6 +24,8 @@ barrier bridge_pin_entry.swap.after device/bridge_pin_entry.go
 barrier bridge_pin_entry.swap.before device/bridge_pin_entry.go
 barrier bridge_state.close.after device/bridge_state.go
 barrier bridge_state.close.before device/bridge_state.go
+barrier bridge_state.route_swap.after device/bridge_state.go
+barrier bridge_state.route_swap.before device/bridge_state.go
 barrier certs.accept.write certsservice/order.go
 barrier certs.admit.transition certsservice/queue.go
 barrier config.apply config_apply.go
@@ -236,6 +238,7 @@ secret dns_zsk dnsservice/keyset.go
 secret edge_server_handshake_iv smtpproof/edge.go
 secret edge_server_handshake_key smtpproof/edge.go
 secret edge_shts smtpproof/edge.go
+secret evs_receipt_key evsservice/upload_keys.go
 secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
 secret joiner_secret mls_welcome.go

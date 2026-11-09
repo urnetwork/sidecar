@@ -91,6 +91,9 @@ type EvsEngineDeps struct {
 	ServiceLog EvsServiceLog
 	// Lifecycle, alarms and, when ServiceLog is nil, the service log. nil discards.
 	Log sidecar.Logger
+	// The segment route's keys, storage gate, HDD share and usage producer (upload_segment.go). nil answers every
+	// upload 503.
+	Uploads *EvsUploadDeps
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
@@ -199,7 +202,8 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 
 // Every route the engine serves. A later task appends its own list here.
 func (self *EvsEngine) routes() []*EvsRoute {
-	return append(self.placeRoutes(), self.deps.testRoutes...)
+	routes := append(self.placeRoutes(), self.uploadRoutes()...)
+	return append(routes, self.deps.testRoutes...)
 }
 
 // The settings it runs under.

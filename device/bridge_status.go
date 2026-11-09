@@ -7,6 +7,8 @@ package device
 import (
 	"net/netip"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // What a bridge waits on, as `ur bridge` shows it (§17.17).
@@ -17,6 +19,8 @@ const (
 	BridgeWaitState BridgeWaitKind = "state"
 	// A link waits for its sidecar role to sign its window clients' delegations (§17.17's keyless sender).
 	BridgeWaitDelegation BridgeWaitKind = "delegation"
+	// A link builds: its target's binding is fetched and checked, and its window clients signed for.
+	BridgeWaitLink BridgeWaitKind = "link"
 )
 
 // One kind of wait, and how many wait on it.
@@ -34,6 +38,12 @@ const (
 	// Contracts whose sealed subject their delegation's subject does not bind, which the hook refused (§17.9's verify
 	// row, plan-BRIDGE-small-readings #17's principal_mismatch).
 	BridgeAlarmPrincipalMismatch BridgeAlarmKind = "principal_mismatch"
+	// A local /32 the physical path needs is a host's overlay address, so this device reaches that host on its LAN
+	// instead: an admin should cycle the block (§17.4, D-BRIDGE-16).
+	BridgeAlarmCarvedAddress BridgeAlarmKind = "carved_address"
+	// A subnet route overlaps a local network, which wins until a remap or a block change; the route is dropped from
+	// the table and the export (§17.7's sender conflicts).
+	BridgeAlarmRouteConflict BridgeAlarmKind = "route_conflict"
 )
 
 // One alarm, with what failed in words that carry no key, id or address.
@@ -77,6 +87,28 @@ type BridgeStatus struct {
 	// and routed by the hash, unpinned, refusing nothing (owner decision 66). An unpinned pair counts once a packet.
 	PinnedPairCount   int
 	UnpinnedPickCount uint64
+
+	// The sender's links (§17.5): open now, and building or asked for.
+	LinkOpenCount     int
+	LinkBuildingCount int
+	// Rejects written into the tun since the bridge started, and those its buckets, an unanswerable packet or no
+	// receive kept back (§17.5's rejects row).
+	RejectSentCount   uint64
+	RejectUnsentCount uint64
+	// Entries answering with rejects since they lost their last advertiser (§17.8's revocation row), and subnet routes
+	// dropped for overlapping a local network (§17.7).
+	HeldRejectCount    int
+	RouteConflictCount int
+	// This device's own default route, from the state in force: unspecified keeps today's, as auto does (§17.9's
+	// egress spec). `ur tun` routes the default into the tun only under exits.
+	EgressMode bridge.BridgeEgressMode
+
+	// §12.9's private names the state in force holds, and `ur tun`'s resolver's queries since the bridge started:
+	// answered from them, passed to the host's resolver, and dropped as malformed or past its queue.
+	NameCount             int
+	ResolverAnsweredCount uint64
+	ResolverPassedCount   uint64
+	ResolverDroppedCount  uint64
 
 	// What the bridge waits on.
 	Waits []BridgeWait

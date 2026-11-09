@@ -2,7 +2,9 @@ package evsservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -149,7 +151,8 @@ func TestHddAdmissionWithNoCapacityRefusesNothing(t *testing.T) {
 	}
 }
 
-// Admit makes no Redis op: the figures come in on the admission's own interval.
+// Admit and CountPut make no Redis op: the figures come in, and the PUT report goes out, on the admission's own
+// interval.
 func TestHddAdmissionInlinePathMakesNoRedisOp(t *testing.T) {
 	fixture := newHddFixture(t)
 	fixture.figures(1000, 1000)
@@ -160,9 +163,16 @@ func TestHddAdmissionInlinePathMakesNoRedisOp(t *testing.T) {
 	for range 1000 {
 		fixture.admission.Admit(networkId, 100, HddUploadOrdinary)
 		fixture.admission.Admit(connect.NewId(), 100, HddUploadErasure)
+		fixture.admission.CountPut()
 	}
 	if counts := fixture.host.Redis.OpCounts(); len(counts) != 0 {
-		t.Fatalf("Admit made Redis ops: %v", counts)
+		t.Fatalf("Admit or CountPut made Redis ops: %v", counts)
+	}
+	// the interval carries the count out
+	fixture.tick()
+	reports, err := readHddPutReports(fixture.ctx, fixture.host.Redis, "seg-1")
+	if err != nil || len(reports) != 1 || reports[0].PutCount != 1000 || reports[0].ProcessId != fixture.admission.processId {
+		t.Fatalf("reports %+v %v, want this process's 1,000 PUTs", reports, err)
 	}
 }
 
@@ -253,5 +263,232 @@ func TestHddLoopPublishesUnderItsLeaseWithItsTtl(t *testing.T) {
 	// and the other loop takes the lapsed lease, taking its own baseline first
 	if other.Step(ctx) != nil || !other.Holding() {
 		t.Fatal("the other loop did not take the lapsed lease")
+	}
+}
+
+// A segment cluster with an hdd loop and no evs process yet, the loop not yet stepped.
+type hddPutsFixture struct {
+	t     *testing.T
+	ctx   context.Context
+	clock *sidecartest.FakeClock
+	host  *sidecartest.FakeHost
+	loop  *HddLoop
+}
+
+func newHddPutsFixture(t *testing.T) *hddPutsFixture {
+	ctx := t.Context()
+	clock := sidecartest.NewFakeClock(governorTestStart())
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	sidecartest.RegisterEvsTwins(host.Redis)
+	loop, err := NewHddLoop(host.ServiceHost(), "seg-1", &testHddCounters{drives: []*DriveCounter{{DriveId: "0-0-0"}}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &hddPutsFixture{t: t, ctx: ctx, clock: clock, host: host, loop: loop}
+}
+
+// An evs process's admission on seg-1, its goroutine driven by the test.
+func (self *hddPutsFixture) process() *HddAdmission {
+	self.t.Helper()
+	admission, err := newHddAdmission(self.ctx, self.host.ServiceHost(), "seg-1", nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.t.Cleanup(admission.Close)
+	return admission
+}
+
+// Whether the puts gauge was ever set: FakeMetrics reads a series never set as zero.
+func (self *hddPutsFixture) gaugeSet() bool {
+	return slices.Contains(self.host.Metrics.Dump(), hddPutsMetricName+" seg-1")
+}
+
+func (self *hddPutsFixture) gauge() float64 {
+	return self.host.Metrics.Value(hddPutsMetricName, "seg-1")
+}
+
+// count PUTs stored for admission.
+func countHddPuts(admission *HddAdmission, count int) {
+	for range count {
+		admission.CountPut()
+	}
+}
+
+// The loop sums each process's segment PUTs a second over the span between that process's own last two reports,
+// counts a process started since its last step from that start, keeps a rate until the next report lands, and
+// sums a process no longer once its report lapses.
+func TestHddLoopSumsEachProcessesPutsOverItsOwnReports(t *testing.T) {
+	fixture := newHddPutsFixture(t)
+	step := func(want float64) {
+		t.Helper()
+		fixture.loop.Step(fixture.ctx)
+		if got := fixture.gauge(); got != want {
+			t.Fatalf("%v PUTs a second, want %v", got, want)
+		}
+	}
+	// with no evs process reporting, the cluster stores no PUTs
+	step(0)
+	if !fixture.gaugeSet() {
+		t.Fatal("no zero set with no process reporting")
+	}
+	first := fixture.process()
+	second := fixture.process()
+
+	// both started at the loop's last step, so everything they counted is new: 30 and 20 over 5 s
+	countHddPuts(first, 30)
+	countHddPuts(second, 20)
+	fixture.clock.Advance(5 * time.Second)
+	first.tick(fixture.ctx)
+	second.tick(fixture.ctx)
+	step(10)
+
+	countHddPuts(first, 10)
+	fixture.clock.Advance(5 * time.Second)
+	first.tick(fixture.ctx)
+	second.tick(fixture.ctx)
+	step(2)
+
+	// the second's report runs late: its rate of none stands until it lands, and then spans its own 10 s
+	countHddPuts(second, 10)
+	fixture.clock.Advance(5 * time.Second)
+	first.tick(fixture.ctx)
+	step(0)
+	fixture.clock.Advance(5 * time.Second)
+	first.tick(fixture.ctx)
+	second.tick(fixture.ctx)
+	step(1)
+
+	// the second stops: once its report's ttl ends, the first's 3 a second is the sum
+	second.Close()
+	for range 4 {
+		countHddPuts(first, 15)
+		fixture.clock.Advance(5 * time.Second)
+		first.tick(fixture.ctx)
+		fixture.loop.Step(fixture.ctx)
+	}
+	if got := fixture.gauge(); got != 3 {
+		t.Fatalf("%v PUTs a second after the second process stopped, want 3", got)
+	}
+	reports, err := readHddPutReports(fixture.ctx, fixture.host.Redis, "seg-1")
+	if err != nil || len(reports) != 1 || reports[0].ProcessId != first.processId {
+		t.Fatalf("reports %+v %v, want the first's alone", reports, err)
+	}
+}
+
+// A loop that takes the lease has only baselines, so it leaves the gauge as it was until each live process has a
+// rate, rather than publishing a sum that is not the cluster's.
+func TestHddLoopLeavesThePutsGaugeOnBaselines(t *testing.T) {
+	fixture := newHddPutsFixture(t)
+	other, err := NewHddLoop(fixture.host.ServiceHost(), "seg-1", &testHddCounters{drives: []*DriveCounter{{DriveId: "0-0-0"}}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := fixture.process()
+	fixture.loop.Step(fixture.ctx)
+	countHddPuts(process, 50)
+	fixture.clock.Advance(5 * time.Second)
+	process.tick(fixture.ctx)
+	fixture.loop.Step(fixture.ctx)
+	if got := fixture.gauge(); got != 10 {
+		t.Fatalf("%v PUTs a second, want 10", got)
+	}
+
+	// the first loop stops; the process goes on at 1 a second while the lease lapses
+	for range 4 {
+		countHddPuts(process, 5)
+		fixture.clock.Advance(5 * time.Second)
+		process.tick(fixture.ctx)
+	}
+	if other.Step(fixture.ctx); !other.Holding() {
+		t.Fatal("the other loop did not take the lapsed lease")
+	}
+	if got := fixture.gauge(); got != 10 {
+		t.Fatalf("a new holder set %v from a baseline", got)
+	}
+	countHddPuts(process, 5)
+	fixture.clock.Advance(5 * time.Second)
+	process.tick(fixture.ctx)
+	other.Step(fixture.ctx)
+	if got := fixture.gauge(); got != 1 {
+		t.Fatalf("%v PUTs a second, want 1", got)
+	}
+}
+
+// Each case the loop meets in one process's reports: a rate over its own span, a report not yet replaced, a
+// process started since the last step, and a count that fell or a clock that went back, each a baseline.
+func TestHddLoopRatesEachReportCase(t *testing.T) {
+	fixture := newHddPutsFixture(t)
+	startMs := fixture.clock.Now().UnixMilli()
+	report := func(processId string, processStartMs int64, timeMs int64, putCount int64) {
+		t.Helper()
+		putReport := &HddPutReport{ProcessId: processId, StartMs: processStartMs, TimeMs: timeMs, PutCount: putCount}
+		if err := writeHddPutReport(fixture.ctx, fixture.host.Redis, "seg-1", putReport, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stepPuts := func(want float64, wantComplete bool) {
+		t.Helper()
+		got, complete := fixture.loop.stepPuts(fixture.ctx, fixture.clock.Now())
+		if complete != wantComplete || (complete && got != want) {
+			t.Fatalf("%v PUTs a second, complete %t; want %v, %t", got, complete, want, wantComplete)
+		}
+	}
+
+	// a process running before the loop's first step is a baseline there
+	report("steady", startMs-60000, startMs, 100)
+	stepPuts(0, false)
+	// 20 over its own 4 s, and one started since the step, 8 over the 4 s it ran
+	fixture.clock.Advance(5 * time.Second)
+	report("steady", startMs-60000, startMs+4000, 120)
+	report("young", startMs+1000, startMs+5000, 8)
+	stepPuts(7, true)
+	// no new report from steady, so its 5 stands; young's count fell, a baseline
+	fixture.clock.Advance(5 * time.Second)
+	report("young", startMs+1000, startMs+10000, 3)
+	stepPuts(0, false)
+	// young is rated again; steady's clock went back, a baseline
+	fixture.clock.Advance(5 * time.Second)
+	report("young", startMs+1000, startMs+15000, 13)
+	report("steady", startMs-60000, startMs+3000, 130)
+	stepPuts(0, false)
+	fixture.clock.Advance(5 * time.Second)
+	report("young", startMs+1000, startMs+20000, 23)
+	report("steady", startMs-60000, startMs+19000, 146)
+	stepPuts(3, true)
+}
+
+// A report whose ttl never landed, from a process that died between its write and its ttl, holds the gauge as a
+// baseline until it is past the loop's bound, and is then dropped and its field deleted, so nothing stands in
+// {nvb_} past its published ttl.
+func TestHddLoopDeletesAPutReportPastItsTtl(t *testing.T) {
+	fixture := newHddPutsFixture(t)
+	fixture.loop.Step(fixture.ctx)
+	nowMs := fixture.clock.Now().UnixMilli()
+	encoded, err := json.Marshal(&HddPutReport{ProcessId: "dead", StartMs: nowMs - 60000, TimeMs: nowMs, PutCount: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.host.Redis.HashSet(fixture.ctx, writeBudgetKey("seg-1"), map[string][]byte{hddPutReportFieldPrefix + "dead": encoded}); err != nil {
+		t.Fatal(err)
+	}
+	live := fixture.process()
+	for range 3 {
+		countHddPuts(live, 5)
+		fixture.clock.Advance(5 * time.Second)
+		live.tick(fixture.ctx)
+		fixture.loop.Step(fixture.ctx)
+		if got := fixture.gauge(); got != 0 {
+			t.Fatalf("set %v while a process was a baseline", got)
+		}
+	}
+	countHddPuts(live, 5)
+	fixture.clock.Advance(5 * time.Second)
+	live.tick(fixture.ctx)
+	fixture.loop.Step(fixture.ctx)
+	if got := fixture.gauge(); got != 1 {
+		t.Fatalf("%v PUTs a second, want the live process's 1", got)
+	}
+	if _, found, err := fixture.host.Redis.HashGet(fixture.ctx, writeBudgetKey("seg-1"), hddPutReportFieldPrefix+"dead"); err != nil || found {
+		t.Fatalf("the lapsed report's field stands: %t %v", found, err)
 	}
 }

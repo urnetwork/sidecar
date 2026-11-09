@@ -50,13 +50,13 @@ func linkTestTarget(seed byte) device.BridgeLinkTarget {
 	return target
 }
 
-// The binding of a target's client, edit applied to its body, signed by identityKey and the client key.
-func linkTestSignedBinding(t *testing.T, seed byte, identityKey ed25519.PrivateKey, edit func(body *bridge.SidecarIdentityBinding)) []byte {
+// The binding in networkId of a target's client, edit applied to its body, signed by identityKey and the client key.
+func linkTestSignedBinding(t testing.TB, networkId []byte, seed byte, identityKey ed25519.PrivateKey, edit func(body *bridge.SidecarIdentityBinding)) []byte {
 	t.Helper()
 	clientKey := linkTestClientKey(seed)
 	clientId := sidecartest.BridgeFixtureClientId(seed)
 	body := &bridge.SidecarIdentityBinding{
-		NetworkId:         linkTestNetworkId,
+		NetworkId:         networkId,
 		SidecarId:         sidecartest.BridgeFixtureSidecarId(seed),
 		ClientId:          clientId[:],
 		Generation:        1,
@@ -88,7 +88,7 @@ func linkTestSignedBinding(t *testing.T, seed byte, identityKey ed25519.PrivateK
 // A target's binding as its host would fetch it.
 func linkTestBinding(t *testing.T, seed byte) []byte {
 	t.Helper()
-	return linkTestSignedBinding(t, seed, sidecartest.BridgeFixtureIdentityKey(seed), nil)
+	return linkTestSignedBinding(t, linkTestNetworkId, seed, sidecartest.BridgeFixtureIdentityKey(seed), nil)
 }
 
 // A manager on FakeBridgeHost and a fake clock, signing as this device's sidecar, whose fetch answers from bindings.
@@ -327,36 +327,36 @@ func TestBridgeLinkRefusesATargetWhoseBindingDoesNotVerify(t *testing.T) {
 		binding func(t *testing.T) []byte
 	}{
 		{name: "another network", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
 				body.NetworkId = bytes.Repeat([]byte{0x7E, 0x02}, 8)
 			})
 		}},
 		{name: "another sidecar", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
 				body.SidecarId = sidecartest.BridgeFixtureSidecarId(5)
 			})
 		}},
 		{name: "another client", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
 				clientId := sidecartest.BridgeFixtureClientId(5)
 				body.ClientId = clientId[:]
 			})
 		}},
 		{name: "a substituted identity key", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, otherIdentityKey, func(body *bridge.SidecarIdentityBinding) {
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, otherIdentityKey, func(body *bridge.SidecarIdentityBinding) {
 				body.IdentityPublicKey = otherIdentityKey.Public().(ed25519.PublicKey)
 			})
 		}},
 		{name: "an identity signature by another key", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, otherIdentityKey, nil)
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, otherIdentityKey, nil)
 		}},
 		{name: "the identity key as client key", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
 				body.ClientPublicKey = body.IdentityPublicKey
 			})
 		}},
 		{name: "a generation of 0", binding: func(t *testing.T) []byte {
-			return linkTestSignedBinding(t, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
+			return linkTestSignedBinding(t, linkTestNetworkId, 4, sidecartest.BridgeFixtureIdentityKey(4), func(body *bridge.SidecarIdentityBinding) {
 				body.Generation = 0
 			})
 		}},
