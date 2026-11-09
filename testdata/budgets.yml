@@ -1,0 +1,259 @@
+# §22.5's hot-path gates and §22.9's platform budgets as one ledger (D-TEST-3; TEST-M1-09): what each gate
+# allows, what measures it, and who owns it. D-TEST-3: "22.5's gates and 22.9's budgets fail the build;
+# raising one needs a reviewed change". check/'s budgets rule fails a limit raised above the value the
+# sidecar branch holds unless the same change rewrites the row's reviewed line, as
+# sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md records each raise of its own ceilings.
+#
+# budgets      one row per gate
+#   id         stable: lower case words joined by hyphens
+#   spec       where the design sets the number
+#   kind       bench   a Go benchmark, read from go test -bench -benchmem by sidecartest.CheckBudget
+#              path    an inline server path, run through server's sidecart3.InlinePath, which arms
+#                      DenyPostgresForTest over it and counts its Redis calls with
+#                      sidecarhost.CountingRedis
+#              size    bytes of a built artifact, which make size holds (check/size_gate_test.go)
+#              memory  a host's memory budget, measured on T4's cells and on T5, never on a merge
+#   owner      the task whose code the row holds
+#   module     where its measure lives: sidecar or server
+#   package    the measure's package, from the module's root: "." for the root, empty where the owner
+#              has not placed it yet, when a path's name is looked for in the whole module
+#   name       the benchmark, the InlinePath name or the size gate's test. A name its package does not
+#              declare yet reads missing, never a pass, until its owner lands it
+#   settings   what the measure runs on: effective constructor settings with features on (R-TEST-2)
+#   limits     bench: ns_per_op, allocs_per_op, bytes_per_op; path: postgres, redis_calls; size and
+#              memory: bytes. An absent limit is one the owner has not set, which reads missing. Time
+#              (ns_per_op) is held at the t5 gate alone, on a quiet T5 host: a shared machine's clock
+#              says nothing, so a merge reads allocations, bytes and operation counts
+#   reviewed   who reviewed the last raise, when, and why; empty while a row holds the design's number
+#   note       anything a reader needs that the fields do not say
+#
+# A raise is a reviewed change; a cut is not. Never loosen a row to make a failing run pass: the run is
+# the finding (connect/CODESTYLE.md:175).
+
+budgets:
+  - id: acl-gate-reach
+    spec: "§22.5's §8 row: gate < 1 us, 0 allocs"
+    kind: bench
+    owner: ACL-M2-02
+    module: sidecar
+    package: "."
+    name: BenchmarkAclReach
+    settings: "a 4,096-atom AclState at §8.8's bound, built by acl_bench_test.go"
+    limits: {ns_per_op: 1000, allocs_per_op: 0}
+    reviewed: ""
+  - id: acl-gate-may-dial
+    spec: "§22.5's §8 row: gate < 1 us, 0 allocs"
+    kind: bench
+    owner: ACL-M2-02
+    module: sidecar
+    package: "."
+    name: BenchmarkAclMayDial
+    settings: "a 4,096-atom AclState at §8.8's bound, built by acl_bench_test.go"
+    limits: {ns_per_op: 1000, allocs_per_op: 0}
+    reviewed: ""
+  - id: acl-gate-evs-access
+    spec: "§22.5's §8 row: gate < 1 us, 0 allocs"
+    kind: bench
+    owner: ACL-M2-02
+    module: sidecar
+    package: "."
+    name: BenchmarkAclEvsAccess
+    settings: "a 4,096-atom AclState at §8.8's bound, built by acl_bench_test.go"
+    limits: {ns_per_op: 1000, allocs_per_op: 0}
+    reviewed: ""
+  - id: acl-engine-allow-inbound
+    spec: "§22.5's §8 row: gate < 1 us, 0 allocs"
+    kind: bench
+    owner: ACL-M2-09
+    module: sidecar
+    package: "."
+    name: BenchmarkAclEngineAllowInbound
+    settings: "AclEngine with an installed 4,096-atom state"
+    limits: {ns_per_op: 1000, allocs_per_op: 0}
+    reviewed: ""
+  - id: acl-contract-gate
+    spec: "§22.5's §8 row and §8.18: the contract gate < 1 us, 0 allocs"
+    kind: bench
+    owner: ACL-M4-01
+    module: server
+    package: controller
+    name: BenchmarkAclContractGate
+    settings: "CreateContract's gate on a warm projection"
+    limits: {ns_per_op: 1000, allocs_per_op: 0}
+    reviewed: ""
+  - id: acl-contract-gate-inline
+    spec: "§22.5: the contract gate inline, no PostgreSQL, warm state making no Redis call"
+    kind: path
+    owner: ACL-M4-01
+    module: server
+    package: controller
+    name: acl.contract-gate
+    settings: "a warm projection, every feature on"
+    limits: {postgres: 0, redis_calls: 0}
+    reviewed: ""
+  - id: bridge-classify
+    spec: "§22.5's §17 row and §17.5: Classify at 50 ns on 1,000 prefixes, 0 allocs"
+    kind: bench
+    owner: BRIDGE-M4-07
+    module: sidecar
+    package: device
+    name: BenchmarkBridgeTableClassify
+    settings: "a BridgeTable of 1,000 prefixes on effective settings"
+    limits: {ns_per_op: 50, allocs_per_op: 0}
+    reviewed: ""
+  - id: sockets-find
+    spec: "§22.5's §9 row: one script per Find"
+    kind: path
+    owner: SOCK-M5-17
+    module: server
+    package: ""
+    name: sockets.find
+    settings: "socketsservice's Find on server's SocketStore, every feature on"
+    limits: {postgres: 0, redis_calls: 1}
+    reviewed: ""
+  - id: quota-spend
+    spec: "§22.5's §20 row: Spend atomic, no I/O"
+    kind: bench
+    owner: QUOTA-M2-07
+    module: sidecar
+    package: "."
+    name: BenchmarkQuotaLeaseSpend
+    settings: "a live lease with bytes reserved"
+    limits: {allocs_per_op: 0}
+    reviewed: ""
+  - id: quota-spend-inline
+    spec: "§22.5's §20 row: Spend atomic, no I/O"
+    kind: path
+    owner: QUOTA-M2-07
+    module: server
+    package: ""
+    name: quota.spend
+    settings: "a live lease with bytes reserved"
+    limits: {postgres: 0, redis_calls: 0}
+    reviewed: ""
+  - id: write-budget-admission
+    spec: "§22.5: the write budget's admission inline, no PostgreSQL and no Redis call (§11.13)"
+    kind: path
+    owner: EVSB-M2-06
+    module: server
+    package: ""
+    name: evs.write-budget-admission
+    settings: "evsservice's budget client with a filled bucket"
+    limits: {postgres: 0, redis_calls: 0}
+    reviewed: ""
+  - id: tlsedge-route
+    spec: "§22.5: tlsedge inline, no PostgreSQL, with an op-counting Redis"
+    kind: path
+    owner: TLS-M5-26
+    module: server
+    package: ""
+    name: tlsedge.route
+    settings: "the whole connection path, on server's host"
+    limits: {postgres: 0}
+    reviewed: ""
+    note: "redis_calls is TLS-M5-26's to set from §13's routing reads; until it does, the row reads missing"
+  - id: mxedge-route
+    spec: "§22.5: mxedge inline, no PostgreSQL, with an op-counting Redis"
+    kind: path
+    owner: MAIL-M7-27
+    module: server
+    package: ""
+    name: mxedge.route
+    settings: "§15.4's dialog to the splice, on server's host"
+    limits: {postgres: 0}
+    reviewed: ""
+    note: "redis_calls is MAIL-M7-27's to set; until it does, the row reads missing"
+  - id: smtp-preamble-gate
+    spec: "§22.5: the preamble inline, no PostgreSQL, with an op-counting Redis"
+    kind: path
+    owner: SMTP-M9-10
+    module: server
+    package: ""
+    name: smtpedge.preamble-gate
+    settings: "the preamble gate on server's host, every feature on"
+    limits: {postgres: 0}
+    reviewed: ""
+    note: "redis_calls is SMTP-M9-10's to set; until it does, the row reads missing"
+  - id: quota-lease-inline
+    spec: "§22.5: quota leases inline, no PostgreSQL"
+    kind: path
+    owner: QUOTA-M2-07
+    module: server
+    package: ""
+    name: quota.lease
+    settings: "a lease hit on a cached balance"
+    limits: {postgres: 0}
+    reviewed: ""
+    note: "redis_calls is QUOTA-M2-07's to set; until it does, the row reads missing"
+  - id: receive-allocs
+    spec: "§22.5's §6 row: receive allocs, which names no number"
+    kind: bench
+    owner: PROTO-M5-05
+    module: sidecar
+    package: "."
+    name: BenchmarkSubprotocolReceive
+    settings: "envelopeCodec and the real handler, production settings"
+    limits: {}
+    reviewed: ""
+    note: "the gate is no regression from PROTO-M1-11's recorded baseline; until PROTO-M5-05 writes that number here, the row reads missing"
+  - id: ios-extension-device-role
+    spec: "§18.4 and §18.10, D-SDK-20: what the device role adds to the ios_extension leg, 1 MiB"
+    kind: size
+    owner: SDK-M4-01
+    module: sidecar
+    package: check
+    name: TestSizeGateIosExtension
+    settings: "make size, unstripped"
+    limits: {bytes: 1048576}
+    reviewed: ""
+  - id: page-worker-wasm
+    spec: "§18.10 and §22.9: the page Worker's wasm goal, 41,943,040 B"
+    kind: size
+    owner: SDK-M4-09
+    module: sidecar
+    package: check
+    name: TestSizeGateSidecarHttp
+    settings: "make size's sidecar_http js leg, unstripped"
+    limits: {bytes: 41943040}
+    reviewed: ""
+    note: "§18.10's miss rule allows 74,965,628 B while a Gn-in records the slip; check/'s settings hold both"
+  - id: ios-sidecar-role-memory
+    spec: "§18.4's iOS row: the sidecar role in 32 MiB"
+    kind: memory
+    owner: SDK-M8-15
+    module: sidecar
+    package: ""
+    name: ""
+    settings: "T4's darwin/arm64 cells with iOS settings and the ios32 surrogate"
+    limits: {bytes: 33554432}
+    reviewed: ""
+  - id: android-sidecar-role-memory
+    spec: "§18.4's Android row: 16 MiB added"
+    kind: memory
+    owner: SDK-M8-15
+    module: sidecar
+    package: ""
+    name: ""
+    settings: "T4's Android surrogate cell"
+    limits: {bytes: 16777216}
+    reviewed: ""
+  - id: desktop-daemon-memory
+    spec: "§18.4's desktop and CLI rows: 128 MiB, 192 MiB designated for search"
+    kind: memory
+    owner: SDK-M8-15
+    module: sidecar
+    package: ""
+    name: ""
+    settings: "ur daemon on a T5 host, search off"
+    limits: {bytes: 134217728}
+    reviewed: ""
+  - id: page-worker-heap
+    spec: "§18.4's extension and ur.io row: 64 MiB of heap above wasm data"
+    kind: memory
+    owner: SDK-M8-15
+    module: sidecar
+    package: ""
+    name: ""
+    settings: "the page Worker in Node and Playwright"
+    limits: {bytes: 67108864}
+    reviewed: ""
