@@ -44,11 +44,13 @@ sidecar/            github.com/urnetwork/sidecar, package sidecar
   pushservice/ socketsservice/ gkmservice/ evsservice/ dnsservice/
   tlsedgeservice/ certsservice/ smtpedgeservice/ mxedgeservice/     server-only engines: import the root;
                                                                     only server imports them
-  device/           package device: the keyless device role (§17's classify, hook, routes and zone, §18.6's
-                    posture, verifying anchored revocation deltas); imports connect and protocol/bridge only
+  device/           package device: the forwarding role's packet side (§17's classify, hook, routes and zone,
+                    §18.6's posture, verifying anchored revocation deltas); imports connect and protocol/bridge
+                    only; an app's VPN component links it with the root's forwarding files (§18.10; owner
+                    decision 197)
   protocol/         *.proto, *.pb.go, Makefile; config.proto (§7.9), acl.proto (§8.8) and directory.proto
                     (§16.11) import bridge/; search.proto (§11.14)
-    bridge/         package bridge, std and protobuf only, sole home of every type the device role parses:
+    bridge/         package bridge, std and protobuf only, sole home of every type device/ parses:
                     signed.proto  Signed, WebAuthnEvidence, SignedType (§6.9, §6.11), plus VerifySigned
                     auth.proto    AuthEntry, AuthPin, ProjectionHeader, StatementHeader and the rest of
                                   §7.9's log, Genesis, SidecarRevoke and MemberRevoke; §8.8's GrantRevoke,
@@ -84,7 +86,7 @@ sidecar/            github.com/urnetwork/sidecar, package sidecar
 | tlsedge, certs (§13) | `tls_`, `tlsedgeservice`, `certsservice` | server/cli/tlsedge; taskworker |
 | smtpedge (§14) | `smtp_`, `smtpedgeservice`, `smtpproof` | server/cli/smtpedge |
 | mail, mxedge (§15) | `mail_`, `mxedgeservice` | server/cli/mxedge |
-| bridge (§17) | `bridge_` (the sidecar role builds `BridgeState`); `device/` (the device role); `protocol/bridge` | sdk DeviceLocal imports `device/` (sdk/device_local.go:5707, 5800); connect C5, C18 |
+| bridge (§17) | `bridge_` (the compiler builds `BridgeState`, in the daemon or an app's VPN component); `device/` (the forwarding role's packet side); `protocol/bridge` | sdk DeviceLocal imports `device/` (sdk/device_local.go:5707, 5800); connect C5, C18 |
 
 ```go
 // host_service.go: supplied by the hosting process; engines never import server, so go-redis,
@@ -182,8 +184,9 @@ fails on
   layering  the root importing a package of this module other than protocol and protocol/bridge; protocol
             importing beyond std, protobuf and protocol/bridge, or protocol/bridge beyond std and protobuf; a
             client package importing a <svc>service
-  legs      the ios_extension leg's deps including the root package or protocol; the sidecar_http js leg's deps
-            including any connect or gVisor package (from M1); net/rpc or template packages on ios, android or js
+  legs      the ios_extension leg's root files leaving §18.10's forwarding list, or its protocol descriptors
+            beyond that list's (owner decision 197); the sidecar_http js leg's deps including any connect or
+            gVisor package (from M1); net/rpc or template packages on ios, android or js
   cgo       CgoFiles, except keychain_darwin.go in §5.10's darwin fallback leg
   hygiene   replaces other than 4.7's; registry conflicts; stale generated code; a release leg built with
             sidecar_testhooks (§22.4); govulncheck findings
@@ -204,7 +207,7 @@ legs        sdk's (sdk/dependency_boundary_test.go:81-92), gomobile's CGO_ENABLE
 ### 4.9 Generation, targets, versions, license, style
 
 - **Protobuf:** `protocol/Makefile` runs `protoc -I=. --go_out=. --go_opt=paths=source_relative protocol/*.proto protocol/bridge/*.proto` from the repo root, so files register as `protocol/<name>.proto` and `protocol/bridge/<name>.proto` in package `urnetwork.sidecar`; sdk and server link connect's and sidecar's packages, and a duplicate path or name panics at init (protobuf@v1.36.11/reflect/protoregistry/registry.go:42, 128, 152), so `config.proto`, `acl.proto` and `directory.proto` import the types 4.4 lists for `protocol/bridge`, never redeclare them. `tool` pins protoc-gen-go v1.36.11, and output is committed.
-- **Mobile, wasm, C ABI:** gomobile binds only sdk (§18.3). `make size` gates from v0: the `ios_extension` leg (`device/` and `protocol/bridge` only; D-SDK-20) fails if sidecar adds over §18.10's 1 MiB, and the `sidecar_http` js leg is measured unstripped from M2 against §18.10's 41,943,040 B goal and miss rule (D-SDK-19). No C ABI: desktop apps use the `ur` daemon (§5) or sdk's generated ABI (sdk/cgo/gen/gen.go).
+- **Mobile, wasm, C ABI:** gomobile binds only sdk (§18.3). `make size` gates from v0: the `ios_extension` leg (`device/`, `protocol/bridge` and the root's forwarding files; D-SDK-20) fails if sidecar adds over §18.10's budget, 4 MiB (proposed; Q-SDK-7; owner decision 197), and the `sidecar_http` js leg is measured unstripped from M2 against §18.10's 41,943,040 B goal and miss rule (D-SDK-19). No C ABI: desktop apps use the `ur` daemon (§5) or sdk's generated ABI (sdk/cgo/gen/gen.go).
 - **Versions.** Development paths stay unversioned, as connect's and sdk's do; the release runs their steps (build/all/run.sh), which §22.4's release fixture checks:
 
 ```text
@@ -259,7 +262,7 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 **D-REPO-1 (proposed).** Use §4.7's go.mod, §4.9's proto naming, an unversioned development path, and the release rewrite to `/v2026` that connect and sdk use (§4.9). *Why:* §4.3's replace and lock rules, protobuf's init-time panic, and the release convention; Go accepts a v2026 tag only on a `/v2026` path, which only the release tree has.
 
-**D-REPO-2 (proposed).** Use §4.4's tree: MLS in root `mls_*` files (owner decision 43), server-only engines in `<svc>service` packages (owner decision 104), the device role in the leaf `device/` over `protocol/bridge`, which alone declares the types it parses (D-SDK-20), connect-facing and engine-host root files under `!sidecar_http` (D-SDK-19), test peers only in `mlsinterop/`; `cli/` and `smtpproof/` are nested modules the root never requires. *Why:* CODESTYLE groups files by prefix (connect/CODESTYLE.md:49-62); owner rule 1; a message declared twice panics at init, and importing connect links gVisor; test peers must not raise consumers' versions, and a root requirement reaches every consumer's module graph.
+**D-REPO-2 (proposed).** Use §4.4's tree: MLS in root `mls_*` files (owner decision 43), server-only engines in `<svc>service` packages (owner decision 104), the forwarding role's packet side in the leaf `device/` over `protocol/bridge`, which alone declares the types it parses, linked in apps' VPN components with only the root's forwarding files (D-SDK-20; owner decision 197), connect-facing and engine-host root files under `!sidecar_http` (D-SDK-19), test peers only in `mlsinterop/`; `cli/` and `smtpproof/` are nested modules the root never requires. *Why:* CODESTYLE groups files by prefix (connect/CODESTYLE.md:49-62); owner rule 1; a message declared twice panics at init, and importing connect links gVisor; test peers must not raise consumers' versions, and a root requirement reaches every consumer's module graph.
 
 **D-REPO-3 (proposed).** Engines live in sidecar behind §4.5's `ServiceHost` and stores, and server hosts each one (Q-REPO-1). *Why:* logic stays in sidecar, persistence beside the migrations, and URnetwork-only infrastructure behind interfaces (owner decision 48).
 
@@ -289,7 +292,7 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 ### 4.15 Departures from PLAN.md
 
-- **PLAN.md:13** ("all service code goes in the root"): engines live in `<svc>service` child packages and the X7 prover in a nested module, so no mobile or wasm build links them (owner decision 104; Q-REPO-5), and the device role in the leaf `device/`, so the iOS extension links no root package (Q-SDK-5, closed by peer review; D-SDK-20).
+- **PLAN.md:13** ("all service code goes in the root"): engines live in `<svc>service` child packages and the X7 prover in a nested module, so no mobile or wasm build links them (owner decision 104; Q-REPO-5), and the forwarding role's packet side in the leaf `device/`, so the iOS extension links of the root only its forwarding files (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).
 - **PLAN.md:9-21** (the tree) stands; `cli/` carries its own go.mod so the prover's requirements stay out of consumers' module graphs (owner decision 104).
 
 ### 4.16 Interfaces
@@ -298,13 +301,13 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 - **Consumes:** §6 (X8; §6.4's requester feature bit, §6.11's marked pair and §6.10's windows, which C19 keys on), §10 (X12), §11 (X19; placement; §11.14's normalizer 1, which x/text follows), §13 (X1), §17 (X18; C5's dial fence and per-flow idle, `WindowDelegation`, C18's alias map), §18 (X14; `sidecar_http`, `device/`), §19's gates and pending migrations (D-OPS-6), §22.4's `sidecar_testhooks` and release fixture, §23's milestones.
 - **Subprotocol messages, API routes, tables:** none (routes: C11).
 - **Services and config:** §4.5's server column; lock.yml; build/.gitmodules; run.sh; deploy-rollout.zsh; dependencies.yml.
-- **Assumptions about other sections:** §6 adds no protobuf `service` blocks; §6, §9-§15 and §19 follow §4.5's placement; §6.9, §7.9, §8.8 and §17 declare what the device role parses only in `protocol/bridge`'s `signed.proto`, `auth.proto` (§8.8's `GrantRevoke`, `Suspend` and `Unsuspend` included) and `bridge.proto`, which `config.proto`, `acl.proto` and `directory.proto` import (4.4); §5.4 and §18.10 keep connect types out of the `sidecar_http` leg's files, and §18.10 excludes `host_*.go` (4.4); §10, §11 and §19 keep each repo's metadata on the cluster its `place/` object names (owner decision 145); §5.8 and §11.11 define `git-remote-ur`'s daemon mode; §17, §2.10 and §22 cover C18, and §2.8's connect-5 and §20.6 state what C19 leaves visible and costs; §23.9 merges every touched repo at each Gn-out.
+- **Assumptions about other sections:** §6 adds no protobuf `service` blocks; §6, §9-§15 and §19 follow §4.5's placement; §6.9, §7.9, §8.8 and §17 declare what `device/` parses only in `protocol/bridge`'s `signed.proto`, `auth.proto` (§8.8's `GrantRevoke`, `Suspend` and `Unsuspend` included) and `bridge.proto`, which `config.proto`, `acl.proto` and `directory.proto` import (4.4); §5.4 and §18.10 keep connect types out of the `sidecar_http` leg's files, and §18.10 excludes `host_*.go` (4.4); §10, §11 and §19 keep each repo's metadata on the cluster its `place/` object names (owner decision 145); §5.8 and §11.11 define `git-remote-ur`'s daemon mode; §17, §2.10 and §22 cover C18, and §2.8's connect-5 and §20.6 state what C19 leaves visible and costs; §23.9 merges every touched repo at each Gn-out.
 
 ### 4.17 Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Engine or root code bloats the iOS extension | Low | High | `<svc>service` packages; the leaf `device/` and the `ios_extension` import rule; `make size` |
+| Engine or root code bloats the iOS extension, which since owner decision 197 links the root's forwarding files | Medium | High | `<svc>service` packages; the leaf `device/` and the `ios_extension` leg's file and descriptor lists; `make size` at Q-SDK-7's budget |
 | Branches drift from mains that release almost daily | High | Medium | Weekly and per-milestone merges; pending migration groups (D-OPS-6) |
 | A secret or AI-attributed message on a public branch stays served by hash (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository, read 2026-11-03) | Low | Medium | The hook in every clone (connect/.githooks/commit-msg:23-27); `--scan` before each push and at each Gn-out (§23.8); secrets only in vault |
 | A Go release breaks purego, leaving macOS pass-only | Low | High | Pinned version; a Keychain round trip in `make check`; cgo fallback |
@@ -314,6 +317,6 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 ### 4.18 Phasing
 
 - **v0, before code (M0):** LICENSE, the hook, the root's and `cli/`'s go.mod, dependencies.yml and `make check` on sidecar's `sidecar` branch, merged at M0's Gn-out (DESIGN.md and the documents are on `main` already, 708bb45); M0's branches; the lock entry, the release step and its fixture.
-- **v0, first usable:** §4.6's M1, M4 and M5 rows; the first hosted engine; signed `ur` packages; the `make size` gate; `sidecar_http`'s import rule (M1) and size measure (M2); `device/` and its `ios_extension` rule (M4).
+- **v0, first usable:** §4.6's M1, M4 and M5 rows; the first hosted engine; signed `ur` packages; the `make size` gate; `sidecar_http`'s import rule (M1) and size measure (M2); `device/` and its `ios_extension` rule, with the root's forwarding files (M4; owner decision 197).
 - **v1:** C18 (M6); C19's window accounting (M10; owner decisions 176, 188) and 4.7's x/text bump, ahead of M10's index code; Homebrew, winget, apt/yum. **Later:** C4 with §18's worker, and C17 for that streaming Worker if its spike needs it.
 - **Blocking:** M0's `make check` blocks the first consumer pin; C13 blocks C18; C19 blocks M10's Gn-out, since §2.8's connect-5 assumes it.

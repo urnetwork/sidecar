@@ -511,3 +511,50 @@ for _f in sorted(_SECTIONS.glob('*.md')):
         _cites[_m.group(1)].add(int(_f.name[:2]))
 RESEARCH_CITES = {k: sorted(_cites[k]) for k, _ in RESEARCH}
 assert set(_cites) == set(k for k, _ in RESEARCH), ('cited sheets differ from RESEARCH', sorted(_cites))
+
+# ------------------------------------------------------------------ owner decision 197 (2026-11-09)
+# Every app's VPN component runs only forwarding, self-contained with its own key (§17.8-§17.10, §18.4, §18.6): the
+# rows that named the keyless device role, a channel from the sidecar role, or Android's background receiver follow
+# the sections.
+INTRO['D'] = INTRO['D'].replace(
+    "The keyless device role parses only `protocol/bridge`'s `signed.proto`, `auth.proto` and `bridge.proto` (§4.4).",
+    "`sidecar/device` parses only `protocol/bridge`'s `signed.proto`, `auth.proto` and `bridge.proto` (§4.4).")
+assert '`sidecar/device` parses only' in INTRO['D'], 'Appendix D lead moved'
+CARRIED = _replace(CARRIED, _GRANTS,
+    (_GRANTS, "authorization-log statements (`acl.proto`, `SignedType` 0x11xx; `GrantRevoke`, `Suspend` and `Unsuspend` in "
+              "`protocol/bridge/auth.proto`, which `sidecar/device`'s posture applies); the audit records in heads",
+     "Approved runtime grants (each with its StatementHeader; `GrantActivate` once per `grant_id`) and their "
+     "revocation, the one-switch suspension, an owner's shares and confirmations of admin-admitted devices (owner "
+     "decision 126), repo creation, admins, grants, deletion and restore, and the audit reader", '§8.8'))
+CARRIED = _replace(CARRIED, '`BridgeState`, `Pending`, `BridgeIdentity`, `BridgeShareKey`',
+    ('`BridgeState`, `Pending`, `BridgeIdentity`, `BridgeShareKey`',
+     "the compiler to `device.Bridge`, in process (`protocol/bridge/bridge.proto`)",
+     "The compiler's bridge rules, names, anchor, the identities and share keys its host admits, and its daemon "
+     "listeners, for `device.Bridge`, compiled by a daemon's sidecar role or an app's forwarding role (owner decision "
+     "197); `Pending`, from enrollment or forwarding's setup, moves a device from legacy to pending", '§17.8, §18.6'))
+CARRIED = _replace(CARRIED, '`WindowDelegation`',
+    ('`WindowDelegation`', "C13's seal on a bridge link's contracts (`SignedType` 0x1908)",
+     "The subject's signed delegation of one window client to one target, which the host verifies against the "
+     "subject's pinned identity key, its live forwarding Delegation's key (owner decision 197) or a share's ShareKey "
+     "before admitting IP flows", '§17.9'))
+SERVICES = [r if r[0] != 'sdk' else
+            (r[0], r[1], r[2].replace("the device role in `sidecar/device`",
+                                      "forwarding in every app's VPN component, over `sidecar/device` (owner decision 197)"), r[3])
+            for r in SERVICES]
+assert any('forwarding in every app' in r[2] for r in SERVICES if r[0] == 'sdk'), 'sdk services row moved'
+_trace('13', '"all service code goes in the root',
+       ('13', '"all service code goes in the root of the module named sidecar"',
+        '§4.4, §4.15; §14.13 (D-SMTP-11); §18.14 (D-SDK-20)', 'departed (Q-REPO-5, owner 104; Q-SDK-5)',
+        'Server-only engines live in `sidecar/<svc>service` child packages, the X7 prover in the nested module '
+        '`smtpproof`, and forwarding\'s packet side in the leaf package `sidecar/device` (Q-SDK-5, closed by peer review), '
+        'linked in apps\' VPN components with only the root\'s forwarding files (owner decision 197)'))
+_trace('28', '"the sidecar will be used directly by the apps',
+       ('28', '"the sidecar will be used directly by the apps"', '§18.4 (D-SDK-1); §18.14',
+        'departed (Q-SDK-2, owner 87, 197)',
+        'Desktop apps use `ur daemon`; iOS runs the sidecar in the app; every app\'s VPN component runs only '
+        'forwarding, with its own key'))
+ROUTES = _replace(ROUTES, '`POST /network/auth-client`',
+    ('`POST /network/auth-client`', 'OwnClient (existing)',
+     'Mint a client token, the pairing child and a sidecar\'s `forward_only` forwarding client included (§18.6; owner '
+     'decision 197); a `strict_exp` bearer adds a DPoP proof (§7.4); an ephemeral mint also returns its close '
+     'capability once (§7.8)', '§5.15'))

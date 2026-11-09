@@ -355,6 +355,7 @@ Owner decision 4: one client per sidecar, a child of the device client in its ne
 |---|---|---|---|
 | App device client | counts | counts | — |
 | Sidecar child of a device client | exempt | — | counts |
+| A sidecar's forwarding client and its window clients (§18.6; owner decision 197) | exempt | exempt | — (its sidecar counts once) |
 | Standalone, declared no-egress (the extension worker too, §18.4) | exempt | exempt | counts |
 | Standalone, with `ur proxy` or public exits | counts | counts | counts |
 

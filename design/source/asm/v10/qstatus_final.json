@@ -998,5 +998,15 @@
   "decided",
   "decided (owner decision 186, 2026-11-05); amended (owner decision 190, 2026-11-06)",
   "owner"
+ ],
+ "Q-SDK-7": [
+  "open",
+  "open",
+  "owner"
+ ],
+ "Q-BRIDGE-8": [
+  "open",
+  "open",
+  "owner"
  ]
 }

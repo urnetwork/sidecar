@@ -2,7 +2,7 @@
  "D": {
   "D-PHASE-1": "Build 23.4's milestones straight through in dependency order, staffed as 23.5 proposes; each recURd stage releases once whole.",
   "D-PHASE-2": "No code before G0, signed 2026-11-06; an unsettled blocker defers what it blocks; implementation findings return as Q- items.",
-  "D-TEAM-30": "Delegations admit exact tags with a not_after floor and max_admits for life, ending at DelegationRevoke, void or compromise.",
+  "D-TEAM-30": "Auth-key Delegations admit exact tags with a not_after floor and max_admits for life, ending at DelegationRevoke, void or compromise.",
   "D-TEAM-31": "Revoking or suspending a tagged agent shows the agent, its Delegation's shared key and admission authority apart.",
   "D-TEAM-32": "Revocations, suspensions, vetoes, admissions, AdminSet changes, member removals, recovery bindings and presence-key changes carry the signer's live presence key's countersignature.",
   "D-KEYS-24": "ReaderWraps and DelegationWraps are typed KeyDeliveries naming the recipient key; late ones carry their signer's AuthPin and time.",
@@ -31,7 +31,13 @@
   "D-TEST-10": "Every state machine of §7-§21 is tested by deterministic fault schedules against FI-1 to FI-30, beside TLA+ and Porcupine checks.",
   "D-EVS-12": "11.6-11.7's token tree, re-keyed at once on removal or compromise, else within 24 h or, deferred, once a source drops.",
   "D-TEST-17": "FS-86 gates the directory against 16.11's cost table: its M6 case at M6's Gn-out, its card case later.",
-  "D-SDK-1": "Two roles: the sidecar role in the app or `ur daemon`; only forwarding, with its own key, in VPN components."
+  "D-SDK-1": "Two roles: the sidecar role in the app or `ur daemon`; only forwarding, with its own key, in VPN components.",
+  "D-SDK-3": "Use 18.6's seam, setup and mirror; app devices host nothing before C16, then only in the device client's network.",
+  "D-SDK-13": "The forwarding role compiles its own rules from the verified config, restores its posture first, and signs its own delegations.",
+  "D-SDK-20": "Forwarding is `sidecar/device` plus the root's listed forwarding files, whose file and descriptor lists `make check` holds.",
+  "D-SDK-32": "A forwarding Delegation of the device's sidecar and its forward_only clients authorize forwarding; the forwarding key signs only delegations.",
+  "D-TEAM-33": "A sidecar alone signs its forwarding Delegation: no admissions, config-only reach, no not_after, superseded by a newer one.",
+  "D-REPO-2": "Root: client code, MLS; engines in `<svc>service`; forwarding's packet side in `device/`; test peers in `mlsinterop/`; nested cli/, smtpproof/."
  },
  "Q": {
   "Q-EVS-24": [
@@ -49,6 +55,14 @@
   "Q-MAIL-2": [
    "[X6 residual] Which devices receive mail?",
    "Always-on receivers; the iOS and Android apps receive only while open (owner decision 197)."
+  ],
+  "Q-SDK-7": [
+   "What budget does forwarding get in the iOS network extension, now that it follows the config and compiles its rules there?",
+   "(a) +4 MiB executable, 54 MiB ceiling, 4-8 MiB heap, measured on surrogates."
+  ],
+  "Q-BRIDGE-8": [
+   "Does an app device claim its overlay address when its forwarding is set up?",
+   "(a) on demand, as §17.4 says: no new reach under owner decision 120."
   ]
  }
 }

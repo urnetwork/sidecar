@@ -266,7 +266,7 @@ CAs ignore unknown non-critical tags (RFC 8659 §3, §4.1), so the canary admits
 
 ### 12.9 Private names, visibility, capabilities, abuse hooks
 
-**Private names (owner decision 85).** `<client-name>.<net>.<root>` maps §7.7's client names to §17's overlay addresses (X18), which lie in 100.64/10 or RFC 1918 (owner decision 132), so 12.7 refuses them in public records. C14's `UpgradeMux.SetLocalZone` answers them on app paths, fed on keyless device roles by §17.8's `BridgeState` names (§18.6); §17's per-link resolver answers them under `ur tun`. A name in the table gets an answer for every qtype, A or NODATA (the overlay has no IPv6; browsers also ask HTTPS), so no query for it leaves the device; other names pass through. The table omits a client name equal to a live published host or record owner, which §7.7's signers also refuse.
+**Private names (owner decision 85).** `<client-name>.<net>.<root>` maps §7.7's client names to §17's overlay addresses (X18), which lie in 100.64/10 or RFC 1918 (owner decision 132), so 12.7 refuses them in public records. C14's `UpgradeMux.SetLocalZone` answers them on app paths, fed in each app's VPN component by the names its forwarding role compiles into §17.8's `BridgeState` (§18.6; owner decision 197); §17's per-link resolver answers them under `ur tun`. A name in the table gets an answer for every qtype, A or NODATA (the overlay has no IPv6; browsers also ask HTTPS), so no query for it leaves the device; other names pass through. The table omits a client name equal to a live published host or record owner, which §7.7's signers also refuse.
 
 ```go
 type LocalZone interface { // nil keeps today's behavior

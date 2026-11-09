@@ -118,3 +118,41 @@ for _k, _v in list(globals().items()):
         for _a, _b in _ID_FIX:
             _v = _v.replace(_a, _b)
         globals()[_k] = _v
+
+# Owner decision 197 (2026-11-09): designing it raised two owner questions, Q-BRIDGE-8 and Q-SDK-7, the first open
+# owner questions since owner decision 140's corrected record. The sections are written to each recommendation,
+# marked "(proposed; Q-...)"; assemble10.py checks OPEN_OWNER against them.
+_OPEN_OLD = "None. Every Q- item whose decider was the owner is decided. "
+assert OPEN_INTRO.count(_OPEN_OLD) == 1, 'open-questions lead moved'
+OPEN_INTRO = OPEN_INTRO.replace(
+    _OPEN_OLD,
+    "Two, raised on 2026-11-09 in designing owner decision 197's forwarding: Q-BRIDGE-8 (an app device's overlay "
+    "address) and Q-SDK-7 (forwarding's budget in the iOS network extension). The sections are written to each "
+    "recommendation, marked \"(proposed; Q-...)\". Every other Q- item whose decider was the owner is decided. ")
+OPEN_OWNER = [
+    ("Q-BRIDGE-8", "Does an app device claim its overlay address when its forwarding is set up (owner decision 197)?",
+     "(a) on demand, as §17.4 says: the app's UI, the host's first map or an admin; (b) at forwarding's setup, its "
+     "sidecar filing its own `BridgeAddress`",
+     "(a): with no ACL document a hosted address opens the device's loopback to the network's untagged sidecars "
+     "(owner decision 120), and (b) can follow by one filing",
+     "nothing before M8's app hosts", "M8"),
+    ("Q-SDK-7", "What budget does forwarding get in the iOS network extension, now that it follows the config and "
+                "compiles its rules there (owner decision 197)?",
+     "(a) the root's forwarding files, at most 4 MiB of executable with the extension's ceiling from 50 MiB to 54 MiB, "
+     "and 4 MiB of Go heap steady, 8 MiB compiling; (b) a second, minimal follower and compiler in `sidecar/device` "
+     "within today's 1 MiB; (c) on iOS alone the app compiles, which would amend owner decision 197",
+     "(a): one implementation of security-critical rules, inside today's runtime targets, measured on surrogates "
+     "(owner decision 100)",
+     "the `ios_extension` leg's `make size` value and §4.7's leg rule (M4); iOS forwarding (M8)", "M4"),
+]
+for _a, _b in [("[open owner questions](#open-owner-questions) (none remain)",
+                "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decision 197)"),
+               ("and @@NQW@@ withdrawn; none is open.", "@@NQW@@ withdrawn, and @@NQOPEN@@ open for the owner.")]:
+    assert HOW.count(_a) == 1, _a
+    HOW = HOW.replace(_a, _b)
+assert DECISIONS_INTRO.count("so no owner question is open") == 2, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace("so no owner question is open", "so no owner question was then open")
+_D197 = "amending @@OD:87@@ and @@OD:12@@. "
+assert DECISIONS_INTRO.count(_D197) == 1
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, open below. ")
