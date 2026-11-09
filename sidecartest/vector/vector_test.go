@@ -95,6 +95,11 @@ func TestCheckSeesTheZoneAndGomaxprocs(t *testing.T) {
 	if !reporter.contains("TZ Asia/Kathmandu") {
 		t.Errorf("a zone in the bytes passed: %v", reporter.errors)
 	}
+	if runtime.GOARCH == "wasm" {
+		// wasm runs one thread whatever GOMAXPROCS says, so the bytes cannot follow it there
+		t.Log("GOMAXPROCS is fixed on wasm: its variants are not shown on this leg")
+		return
+	}
 	procs := func() ([]Case, error) {
 		return []Case{{Name: "procs", Output: []byte(fmt.Sprint(runtime.GOMAXPROCS(0)))}}, nil
 	}

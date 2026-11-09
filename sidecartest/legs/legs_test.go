@@ -34,7 +34,13 @@ func fixtureLegs(names ...string) []*Leg {
 	return legs
 }
 
+// Settings for a run of the fixture. A leg where the test itself cannot run the go command, js/wasm
+// among them, runs nothing: the runner's own tests read not run there.
 func fixtureSettings(t *testing.T) *RunSettings {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("not run: this leg cannot run the go command: %v", err)
+	}
 	settings := DefaultRunSettings(repositoryTop(t))
 	settings.Go = goCommand()
 	return settings
