@@ -142,6 +142,12 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 	slices.SortFunc(pending, func(a *indexPendingDocument, b *indexPendingDocument) int {
 		return cmp.Or(compareIndexKeys(a.key, b.key), cmp.Compare(a.kind, b.kind))
 	})
+	// A push changes a document once: one entry a key.
+	for index := 1; index < len(pending); index += 1 {
+		if pending[index].key == pending[index-1].key {
+			return nil, indexMalformed("a document twice in one push")
+		}
+	}
 
 	// Buckets newer than the push's own, newest first, each with its documents: an entry of a document one of them
 	// holds goes to the newest of them.
