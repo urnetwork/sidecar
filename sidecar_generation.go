@@ -116,18 +116,26 @@ func (self *Sidecar) runningGeneration() *sidecarGeneration {
 func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	defer clear(args.clientKeySeed)
 	generationNumber := args.identity.Generation
+	// The generation's proof signer and token are installed before the status names the generation, so a host
+	// or component that acts on that status finds them. A refused move takes them back out.
+	signer, signerErr := newDpopSigner(args.clientKeySeed, self.clock.Now, rand.Reader)
+	if signerErr == nil {
+		self.sidecarApi.setDpopSigner(signer)
+		self.sidecarApi.SetByJwt(args.byJwt)
+	}
 	moved := self.applyTransition(sidecarTransition{to: SidecarStateOffline, generation: generationNumber})
 	if !moved && self.lifecycleState() != SidecarStateOffline {
+		if signerErr == nil {
+			self.sidecarApi.SetByJwt("")
+			self.sidecarApi.setDpopSigner(nil)
+		}
 		self.log.Warningf("[sidecar]generation %d did not start from %s", generationNumber, self.lifecycleState())
 		return
 	}
-	signer, err := newDpopSigner(args.clientKeySeed, self.clock.Now, rand.Reader)
-	if err != nil {
-		self.log.Errorf("[sidecar]generation %d has no proof signer: %s", generationNumber, err)
+	if signerErr != nil {
+		self.log.Errorf("[sidecar]generation %d has no proof signer: %s", generationNumber, signerErr)
 		return
 	}
-	self.sidecarApi.setDpopSigner(signer)
-	self.sidecarApi.SetByJwt(args.byJwt)
 
 	generationCtx, cancel := context.WithCancel(self.ctx)
 	generation := &sidecarGeneration{
