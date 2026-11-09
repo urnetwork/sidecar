@@ -3,8 +3,9 @@
 // Where Hello's identity check finds the key a peer's sidecar_id must hold (§6.4, D-PROTO-13). M1's
 // source is first use per sidecar_id (§2.8 EX6): the first verified binding for a sidecar_id pins its
 // identity key, durably, before Hello answers, and every later binding for it must name that key. From
-// M2 the pin is the peer's SidecarAdmit in the config (PROTO-M2-01), which replaces identityPinSource and
-// nothing else here.
+// M2 the pin is the peer's SidecarAdmit in the config (rpc_admission.go), the source a Subprotocol runs
+// on whenever its env carries Admissions, and these first-use pins are dropped as each sidecar_id is
+// checked against its admission, since EX6 ends there.
 //
 // The pin is the identity key, never the client key: each re-pair binds generation n+1 under the same
 // identity key on a new client (§5.8), so the client key changes and the identity key does not. A pin
@@ -15,6 +16,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
@@ -31,10 +33,20 @@ var (
 )
 
 // What Hello asks of a pin: whether a verified binding's identity key and generation may stand for its
-// sidecar_id, recording a first use and a higher generation durably before it answers nil. Safe for
-// concurrent use. PROTO-M2-01 replaces M1's first-use source with the config's admissions.
+// sidecar_id, recording a first use and a higher generation durably before it answers. The answer is the
+// peer's admission as this side's verified state holds it, nil under M1's first-use pins, which know of
+// none. ctx bounds what the source may wait for, an admission source's one catch-up of the config. Safe
+// for concurrent use.
 type identityPinSource interface {
-	checkPin(sidecarId Id, identityPublicKey []byte, generation int64) error
+	checkPin(ctx context.Context, sidecarId Id, identityPublicKey []byte, generation int64) (*identityPinAdmission, error)
+}
+
+// A peer's admission as an admission source read it.
+type identityPinAdmission struct {
+	admission *AclSidecar
+	// the position n of the state it was read at, or an older one: read before the admission, so a
+	// state that moved between the two reads is read again at the next recheck, never skipped
+	stateVersion uint64
 }
 
 // One sidecar_id's pin as stored: its identity key and the highest generation seen.
@@ -146,31 +158,32 @@ func (self *firstUseIdentityPins) storeWithLock(sidecarId Id, pin *identityPin) 
 }
 
 // See identityPinSource. The first binding for a sidecar_id pins it; a later one must name the pinned
-// key and no lower generation, and a higher generation is recorded before this answers.
-func (self *firstUseIdentityPins) checkPin(sidecarId Id, identityPublicKey []byte, generation int64) error {
+// key and no lower generation, and a higher generation is recorded before this answers. First use knows
+// no admission, so the answer's admission is always nil.
+func (self *firstUseIdentityPins) checkPin(ctx context.Context, sidecarId Id, identityPublicKey []byte, generation int64) (*identityPinAdmission, error) {
 	if len(identityPublicKey) != ed25519.PublicKeySize || generation < 1 {
-		return errHelloPinMismatch
+		return nil, errHelloPinMismatch
 	}
 	self.pinLock.Lock()
 	defer self.pinLock.Unlock()
 	pin, err := self.loadWithLock(sidecarId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if pin == nil {
 		pin = &identityPin{generation: generation}
 		copy(pin.identityPublicKey[:], identityPublicKey)
-		return self.storeWithLock(sidecarId, pin)
+		return nil, self.storeWithLock(sidecarId, pin)
 	}
 	if !bytes.Equal(pin.identityPublicKey[:], identityPublicKey) {
-		return errHelloPinMismatch
+		return nil, errHelloPinMismatch
 	}
 	if generation < pin.generation {
-		return errHelloGenerationBelow
+		return nil, errHelloGenerationBelow
 	}
 	if pin.generation < generation {
 		raised := &identityPin{identityPublicKey: pin.identityPublicKey, generation: generation}
-		return self.storeWithLock(sidecarId, raised)
+		return nil, self.storeWithLock(sidecarId, raised)
 	}
-	return nil
+	return nil, nil
 }

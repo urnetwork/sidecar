@@ -11,6 +11,7 @@ package sidecartest
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"slices"
 	"sync"
@@ -55,6 +56,9 @@ type FakeAuthority struct {
 	cascades     map[fakeAuthorityCascadeKey][]sidecar.DeviceRevokeItem
 	entryTimes   []fakeAuthorityEntryTime
 	presenceRule func(statement *sidecar.SidecarStatement, liveKeys []*bridge.KeyRow) bool
+	// what CatchUp runs, and how many times it has
+	catchUp      func(ctx context.Context) error
+	catchUpCount int
 }
 
 type fakeAuthorityCascadeKey struct {
@@ -62,7 +66,10 @@ type fakeAuthorityCascadeKey struct {
 	sinceN   uint64
 }
 
-var _ sidecar.SidecarAuthority = (*FakeAuthority)(nil)
+var (
+	_ sidecar.SidecarAuthority        = (*FakeAuthority)(nil)
+	_ sidecar.SidecarAuthorityCatchUp = (*FakeAuthority)(nil)
+)
 
 // An authority at pin (0, chain) holding nothing.
 func NewFakeAuthority() *FakeAuthority {
@@ -347,4 +354,34 @@ func (self *FakeAuthority) AddEntryCallback(callback sidecar.SidecarAuthorityEnt
 			self.callbacks.Remove(callbackId)
 		})
 	}
+}
+
+// Sets what CatchUp runs: a test admits a sidecar there, as a follower that applied a late entry would. nil
+// restores the default, which applies nothing.
+func (self *FakeAuthority) SetCatchUp(catchUp func(ctx context.Context) error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.catchUp = catchUp
+}
+
+// sidecar.SidecarAuthorityCatchUp: runs what SetCatchUp gave, outside the lock, counting each call.
+func (self *FakeAuthority) CatchUp(ctx context.Context) error {
+	var catchUp func(ctx context.Context) error
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.catchUpCount += 1
+		catchUp = self.catchUp
+	}()
+	if catchUp == nil {
+		return nil
+	}
+	return catchUp(ctx)
+}
+
+// How many times CatchUp has run.
+func (self *FakeAuthority) CatchUpCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.catchUpCount
 }
