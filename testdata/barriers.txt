@@ -281,6 +281,7 @@ secret delegation_signing_seed identity_admission.go
 secret dkim_private_key smtp_dkim_keys.go
 secret dkim_private_key smtp_dkim_rotate.go
 secret dns_internal_credential dnsservice/api.go
+secret dns_zsk dnsservice/ceremony.go
 secret dns_zsk dnsservice/keyset.go
 secret edge_server_handshake_iv smtpproof/edge.go
 secret edge_server_handshake_key smtpproof/edge.go
