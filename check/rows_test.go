@@ -363,6 +363,24 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "hygiene", item: "§22.9's conformance ledger: a row with no entry, a peer list the design changed, a pin that is no version, or one moved with no run since (D-TEST-7)",
+		checkoutTest: "TestConformanceLedger",
+		plantedTests: []string{
+			"TestConformanceLedgerFailsOnAChangedPinWithNoRun", "TestConformanceLedgerFailsOnASection229RowWithNoEntry",
+			"TestConformanceLedgerFailsOnAChangedPeerList", "TestConformanceLedgerFailsOnARowTheDesignDoesNotHold",
+			"TestConformanceLedgerFailsOnLatestAsAPin", "TestConformanceLedgerFailsOnARunMissingWhatItMustRecord",
+		},
+	},
+	{
+		row: "hygiene", item: "test.sh: a failed phase passing or retried, a go test without -count=1, an unknown cadence, a process left behind, a gate run missing a phase (D-TEST-1, R-TEST-9)",
+		checkoutTest: "TestTestShPlansEveryModuleOfThisTree",
+		plantedTests: []string{
+			"TestTestShFailingTestExitsNonZeroWithNoFooter", "TestTestShPhasePassingOnASecondCallStillFails",
+			"TestTestShRunsEveryMergePhaseWithCountOne", "TestTestShRefusesAnUnknownCadence",
+			"TestTestShLeavesNoProcessBehind", "TestTestShGateFailsOnAPhaseNotRun",
+		},
+	},
+	{
 		row: "hygiene", item: "govulncheck findings",
 		checkoutTest: "TestHygieneGovulncheck",
 		plantedTests: []string{"TestHygieneFailsOnAVulnerableCallOnALeg", "TestHygieneFailsOnAnUnreachableVulnDatabase"},
