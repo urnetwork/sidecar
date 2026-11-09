@@ -16,6 +16,7 @@
 package sidecar
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -65,6 +66,8 @@ type SidecarSettings struct {
 	Directory *SidecarDirectorySettings
 	// §11's client: its calls, verifying reader and local tier.
 	Evs *EvsSettings
+	// §10's client: its calls to gkm, its hints and its key upkeep.
+	Gkm *GkmSettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -254,6 +257,103 @@ type SidecarDirectorySettings struct {
 	RenewJitter time.Duration
 }
 
+// §10's client (KEYS-M2-18): its calls to gkm, its hint intake and its key upkeep. Format values every reader
+// applies alike stay constants beside their formats: a ReaderKey's 7-day bound (GkmReaderKeyLifetime), gkm's 10
+// minutes of skew (GkmClockSkew) and a token's 64 repo scopes (§7.8).
+type GkmSettings struct {
+	// The longest one call to gkm takes: 30 s, inside the lb's 60 s idle bound, past gkm's 20 s for a wrap batch
+	// (QD-066).
+	RequestTimeout time.Duration
+	// How many times a read retries a 429 or a 503, each after its Retry-After: 3. A write never retries here, since
+	// each flow resolves its own unknown outcome.
+	ReadRetryCount int
+	// The longest Retry-After a read waits out before giving up with the refusal: 30 s.
+	ReadRetryMaxWait time.Duration
+	// The wait before a retry when gkm names none: 1 s.
+	ReadRetryWait time.Duration
+	// The most one answer may hold: 16 MiB, past an epochs page carrying a 1,000-leaf group's sealed GroupInfo of
+	// about 2.8 MB (§10.6's sizes).
+	ReplyMaxByteCount int64
+	// How often every hint handler refetches whatever its hints would have told it, so a lost hint costs at most
+	// this: 1 h (§6.8's hourly resync).
+	ResyncInterval time.Duration
+	// The wakes the hint intake holds pending, coalesced by kind and group: 4,096. Past it a new one is dropped and
+	// a resync asked for instead.
+	HintPendingCount int
+	// How often key upkeep checks what is due: 1 h, besides each resync and each refill a hint asks for.
+	UpkeepInterval time.Duration
+	// D-KEYS-25: a ReaderKey is replaced by a fresh pair once it is this old: 6 days.
+	ReaderKeyReplaceAge time.Duration
+	// D-KEYS-25: a new ReaderKey's not_after after its signing: 7 days, at most GkmReaderKeyLifetime and past
+	// ReaderKeyReplaceAge, so one key is always valid.
+	ReaderKeyLifetime time.Duration
+	// D-KEYS-25: a replaced or lapsed private key is kept this long past its not_after, for what was sealed to it:
+	// 30 days.
+	ReaderKeyKeepAfterNotAfter time.Duration
+	// How often a sidecar reads its own ReaderKey back from gkm to compare it with those it signed: 24 h
+	// (g0-recheck-0-readerkey-forgery #2).
+	ReaderKeySelfCheckInterval time.Duration
+	// §10.6's KeyPackages row: the one-time KeyPackages a full set holds at gkm, 128.
+	KeyPackageCount int
+	// The same row's refill point: 32, below which gkm hints key-packages-low and a refill brings the set back to
+	// KeyPackageCount.
+	KeyPackageLowCount int
+	// A full set of one-time KeyPackages goes up again this long after the last upload: 90 days, a KeyPackage's
+	// life, so every one uploaded before has lapsed and gkm takes the whole set.
+	KeyPackageRenewAge time.Duration
+	// A new last-resort KeyPackage goes up this long after the last: 60 days, well inside its 90, so one is always
+	// valid.
+	KeyPackageLastResortRenewAge time.Duration
+	// A renewal gkm refused past its count is tried again this much later: 1 h.
+	KeyPackageRetryInterval time.Duration
+	// §10.6's ack row: a leaf acks a group at most this often: 24 h.
+	AckInterval time.Duration
+	// §10.6's late wraps: a recipient asks for a late delivery of one generation at most this often: 1 min.
+	LateAskInterval time.Duration
+	// QD-031 (decided): a GenRotate's drop key lives this long, drop_not_after_ms = time_ms + this: 90 days.
+	DropKeyLifetime time.Duration
+}
+
+// The desktop daemon's gkm settings, the only source of their defaults.
+func DefaultGkmSettings() *GkmSettings {
+	return &GkmSettings{
+		RequestTimeout:               30 * time.Second,
+		ReadRetryCount:               3,
+		ReadRetryMaxWait:             30 * time.Second,
+		ReadRetryWait:                1 * time.Second,
+		ReplyMaxByteCount:            16 * 1024 * 1024,
+		ResyncInterval:               1 * time.Hour,
+		HintPendingCount:             4096,
+		UpkeepInterval:               1 * time.Hour,
+		ReaderKeyReplaceAge:          6 * 24 * time.Hour,
+		ReaderKeyLifetime:            7 * 24 * time.Hour,
+		ReaderKeyKeepAfterNotAfter:   30 * 24 * time.Hour,
+		ReaderKeySelfCheckInterval:   24 * time.Hour,
+		KeyPackageCount:              128,
+		KeyPackageLowCount:           32,
+		KeyPackageRenewAge:           90 * 24 * time.Hour,
+		KeyPackageLastResortRenewAge: 60 * 24 * time.Hour,
+		KeyPackageRetryInterval:      1 * time.Hour,
+		AckInterval:                  24 * time.Hour,
+		LateAskInterval:              1 * time.Minute,
+		DropKeyLifetime:              90 * 24 * time.Hour,
+	}
+}
+
+// What the walk of numbers cannot hold: a ReaderKey valid at most GkmReaderKeyLifetime and replaced before it lapses
+// (D-KEYS-25), a refill point inside the full count, and a last-resort renewed before the set's renewal.
+func (self *GkmSettings) validate() error {
+	switch {
+	case GkmReaderKeyLifetime < self.ReaderKeyLifetime || self.ReaderKeyLifetime <= self.ReaderKeyReplaceAge:
+		return fmt.Errorf("%w: Gkm.ReaderKeyLifetime past §10.5's bound or not past its replacement", errInvalidSettings)
+	case self.KeyPackageCount < self.KeyPackageLowCount:
+		return fmt.Errorf("%w: Gkm.KeyPackageLowCount past the full count", errInvalidSettings)
+	case self.KeyPackageRenewAge <= self.KeyPackageLastResortRenewAge:
+		return fmt.Errorf("%w: Gkm.KeyPackageLastResortRenewAge not before the set's renewal", errInvalidSettings)
+	}
+	return nil
+}
+
 // A fresh value each call, sharing nothing mutable with any other (connect/CODESTYLE.md:151).
 func DefaultSidecarSettings() *SidecarSettings {
 	return &SidecarSettings{
@@ -324,6 +424,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			RenewJitter:           5 * time.Minute,
 		},
 		Evs: DefaultEvsSettings(),
+		Gkm: DefaultGkmSettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,
