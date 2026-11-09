@@ -13,7 +13,10 @@
 //     against it, so slot ids hold across a retry, and another statement under that id is 409 PUSH_ID_REUSED;
 //   - a repo's gate closes on demand, refusing pushes and deposits 412 GATE_CLOSED, recorded, until it opens;
 //   - every mutating step passes record_streams.<step>.before and .after around its commit, keyed by the repo, and
-//     every time is the injected clock's.
+//     every time is the injected clock's;
+//   - every commit raises the repo's push sequence (§11.10's sequence row) and keeps the value beside its ref, as
+//     {evsh_<repo_id>} does for GET .../refs?moved_after (§11.9); RestartSequence models its loss, after which the
+//     sequence starts above every earlier value and no ref holds one, so a listing answers every ref.
 //
 // It holds no format code: entries, slot rows, batches and notes are the caller's bytes, kept and returned as they
 // came, and nothing is sealed, tokenized or verified. What it does not keep: the pins a push declares, beyond
@@ -100,6 +103,48 @@ type fakeRecordRepo struct {
 	outcomes map[sidecar.Id]*fakeRecordOutcome
 	// a receipt-only depositor's deposits by UTC day
 	receiptCounts map[fakeRecordReceiptDay]int
+	// the push sequence, the value it restarted at, and what each ref's last commit raised it to
+	sequence     uint64
+	restartedAt  uint64
+	refSequences map[FakeRecordRef]uint64
+}
+
+// The value a repo's push sequence starts at, as a master's clock in µs × 1,000 would be (§11.10's sequence row): a
+// fake's, far above any count a test reaches.
+const fakeRecordSequenceStart = uint64(1_000_000_000)
+
+// One ref of a repo, as the push sequence names it.
+type FakeRecordRef struct {
+	Kind FakeRecordRefKind
+	// A stream's writer or a deposit ref's depositor; zero for the erasure ref and a named ref.
+	SidecarId sidecar.Id
+	// A ref outside the record's, such as the directory's cards ref.
+	Name string
+}
+
+type FakeRecordRefKind int
+
+const (
+	FakeRecordRefStream FakeRecordRefKind = iota + 1
+	FakeRecordRefDeposit
+	FakeRecordRefErasure
+	FakeRecordRefNamed
+)
+
+// A repo's push sequence as GET .../refs reads it.
+type FakeRecordSequence struct {
+	Sequence uint64
+	// Values below this predate the sequence's last restart.
+	RestartedAt uint64
+	// What each ref's last commit raised the sequence to; a ref the cache lost is absent.
+	Refs map[FakeRecordRef]uint64
+}
+
+// Raises the sequence for a commit of ref and keeps the value beside it.
+func (self *fakeRecordRepo) raiseWithLock(ref FakeRecordRef) uint64 {
+	self.sequence += 1
+	self.refSequences[ref] = self.sequence
+	return self.sequence
 }
 
 // A writer's stream.
@@ -157,8 +202,59 @@ func (self *FakeRecordStreams) NewRepo(ctx context.Context) (sidecar.Id, error) 
 		slots:         map[sidecar.Id]map[uint32][]byte{},
 		outcomes:      map[sidecar.Id]*fakeRecordOutcome{},
 		receiptCounts: map[fakeRecordReceiptDay]int{},
+		sequence:      fakeRecordSequenceStart,
+		restartedAt:   fakeRecordSequenceStart,
+		refSequences:  map[FakeRecordRef]uint64{},
 	}
 	return repoId, nil
+}
+
+// The repo's push sequence and each ref's last raise.
+func (self *FakeRecordStreams) PushSequence(repoId sidecar.Id) (*FakeRecordSequence, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	repo, ok := self.repos[repoId]
+	if !ok {
+		return nil, fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
+	}
+	refs := map[FakeRecordRef]uint64{}
+	for ref, sequence := range repo.refSequences {
+		refs[ref] = sequence
+	}
+	return &FakeRecordSequence{Sequence: repo.sequence, RestartedAt: repo.restartedAt, Refs: refs}, nil
+}
+
+// Raises the repo's push sequence for a commit of a ref this fake does not hold, such as the directory's cards ref,
+// calling subscribers with no lock held. 0 for a repo it does not hold.
+func (self *FakeRecordStreams) RaiseSequence(repoId sidecar.Id, name string) uint64 {
+	var raised uint64
+	var callbacks []func(repoId sidecar.Id)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		repo, ok := self.repos[repoId]
+		if !ok {
+			return
+		}
+		raised = repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefNamed, Name: name})
+		callbacks = self.subscribersWithLock(repoId)
+	}()
+	for _, callback := range callbacks {
+		callback(repoId)
+	}
+	return raised
+}
+
+// Loses the repo's push sequence and every ref's raise, as a Redis loss would (§11.10's loss row): the sequence
+// restarts above every earlier value, and until each ref commits again a listing answers every ref.
+func (self *FakeRecordStreams) RestartSequence(repoId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if repo, ok := self.repos[repoId]; ok {
+		repo.sequence += fakeRecordSequenceStart
+		repo.restartedAt = repo.sequence
+		repo.refSequences = map[FakeRecordRef]uint64{}
+	}
 }
 
 // Sets what sidecarId's token lets it do on repoId, as the access log and §7.8's exchange would.
@@ -403,6 +499,7 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 			rows[row.KeyIndex] = bytes.Clone(row.Row)
 		}
 		repo.slots[push.SlotId] = rows
+		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefStream, SidecarId: self.sidecarId})
 		return repo.commitWithLock(push.PushId, statement, commit), nil
 	})
 }
@@ -541,6 +638,7 @@ func (self *fakeRecordStreamsClient) Deposit(ctx context.Context, repoId sidecar
 			DepositId:  deposit.DepositId,
 			Batch:      bytes.Clone(deposit.Batch),
 		})
+		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefDeposit, SidecarId: self.sidecarId})
 		return repo.commitWithLock(deposit.PushId, statement, commit), nil
 	})
 }
@@ -627,6 +725,7 @@ func (self *fakeRecordStreamsClient) Consume(ctx context.Context, repoId sidecar
 		})
 		ref.version += 1
 		commit := &sidecar.RecordStreamCommit{Version: ref.version, TimeMillis: self.world.clock.Now().UnixMilli()}
+		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefDeposit, SidecarId: consume.DepositorSidecarId})
 		return repo.commitWithLock(consume.PushId, statement, commit), nil
 	})
 }
@@ -676,6 +775,7 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 		}
 		repo.erasures = append(repo.erasures, erasure)
 		commit := &sidecar.RecordStreamCommit{Version: erasure.Version, TimeMillis: erasure.TimeMillis}
+		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefErasure})
 		return repo.commitWithLock(erase.PushId, statement, commit), nil
 	})
 }
