@@ -262,12 +262,11 @@ func (self *Subprotocol) sendOutcome(reply *rpcReplyTarget, outcome *idempotency
 
 // Sends one Error answering reply's request.
 func (self *Subprotocol) sendRefusal(reply *rpcReplyTarget, refusal *SubprotocolError) {
-	body, err := proto.Marshal(&protocol.Error{
-		Code:         uint32(refusal.Code),
-		Message:      refusal.Message,
-		RetryAfterMs: uint32(refusal.RetryAfter / time.Millisecond),
-		ResultRef:    refusal.ResultRef,
-	})
+	refusalBody := refusalError(refusal.Code)
+	refusalBody.Message = refusal.Message
+	refusalBody.RetryAfterMs = uint32(refusal.RetryAfter / time.Millisecond)
+	refusalBody.ResultRef = refusal.ResultRef
+	body, err := proto.Marshal(refusalBody)
 	if err != nil {
 		self.stats.replyFailedCount.Add(1)
 		return

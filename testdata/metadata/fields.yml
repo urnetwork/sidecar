@@ -689,6 +689,8 @@ open:
   Error.message: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Error.retry_after_ms: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   Error.result_ref: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Error.min_version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
+  Error.max_version: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   StreamOpen.target: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   StreamOpen.window: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}
   StreamOpen.early_data: {row: tls-1, question: metadata-list-unnamed-fields.md, until: M5}

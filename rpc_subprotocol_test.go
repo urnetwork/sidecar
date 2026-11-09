@@ -580,6 +580,19 @@ func TestOtherVersionAnsweredVersion(t *testing.T) {
 		if code := sent.errorCode(t); code != protocol.ErrorCode_ERR_VERSION {
 			t.Errorf("version %d: code %v", version, code)
 		}
+		// the receiver's range rides VERSION (plan-PROTO-version-error-range), and a call reads it
+		refusal := &protocol.Error{}
+		if err := proto.Unmarshal(sent.envelope.Body, refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.MinVersion != WireVersionMajor || refusal.MaxVersion != WireVersionMajor {
+			t.Errorf("version %d: range %d-%d", version, refusal.MinVersion, refusal.MaxVersion)
+		}
+		var subprotocolError *SubprotocolError
+		if err := responseError(sent.envelope, request.RequestId); !errors.As(err, &subprotocolError) ||
+			subprotocolError.MinVersion != WireVersionMajor || subprotocolError.MaxVersion != WireVersionMajor {
+			t.Errorf("version %d: the call read %v", version, err)
+		}
 		if sent.destinationId != sourceId || sent.envelope.RequestId != request.RequestId || sent.envelope.Version != WireVersionMajor {
 			t.Errorf("version %d: to %s id %d version %d", version, sent.destinationId, sent.envelope.RequestId, sent.envelope.Version)
 		}

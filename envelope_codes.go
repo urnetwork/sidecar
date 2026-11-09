@@ -80,3 +80,14 @@ func readSmtpProofCode(code uint32) (protocol.SmtpProofCode, bool) {
 	}
 	return protocol.SmtpProofCode(code), true
 }
+
+// The Error a refusal of code carries. VERSION alone carries this side's range of wire majors, with
+// Hello's meaning (plan-PROTO-version-error-range, QD-459), so the peer learns what this side speaks.
+func refusalError(code protocol.ErrorCode) *protocol.Error {
+	refusal := &protocol.Error{Code: uint32(code)}
+	if code == protocol.ErrorCode_ERR_VERSION {
+		refusal.MinVersion = WireVersionMajor
+		refusal.MaxVersion = WireVersionMajor
+	}
+	return refusal
+}

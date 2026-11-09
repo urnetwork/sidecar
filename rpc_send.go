@@ -128,7 +128,7 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		envelope.Body = reply.body
 	}
 	if reply.messageType == protocol.MessageType_ERROR {
-		body, err := proto.Marshal(&protocol.Error{Code: uint32(reply.code)})
+		body, err := proto.Marshal(refusalError(reply.code))
 		if err != nil {
 			self.stats.replyFailedCount.Add(1)
 			self.log.Errorf("[subprotocol]reply error body = %s\n", err)

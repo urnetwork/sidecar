@@ -874,6 +874,16 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "identity_public_key", number: 4, typeName: "bytes"},
 		question: "plan-SDK-pending-sidecar-id",
 	},
+	{
+		message:  "Error",
+		field:    testFenceField{name: "min_version", number: 5, typeName: "uint32"},
+		question: "plan-PROTO-version-error-range",
+	},
+	{
+		message:  "Error",
+		field:    testFenceField{name: "max_version", number: 6, typeName: "uint32"},
+		question: "plan-PROTO-version-error-range",
+	},
 }
 
 // One value an owner's answer adds to an enum the design fences.
