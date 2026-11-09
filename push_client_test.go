@@ -97,3 +97,41 @@ func TestPushClientTakesTheResidentsFrames(t *testing.T) {
 		t.Errorf("a second push client on one Subprotocol")
 	}
 }
+
+// A running Sidecar's generation carries a PushClient: a core hint from its resident reaches the core,
+// which counts it as the bare resync it is at M1.
+func TestCoreHintReachesTheSidecarThroughThePush(t *testing.T) {
+	instance, enrollment := newTestEnrolledInstance(t)
+	platform := newTestSidecarPlatform()
+	sidecar := newTestRunningSidecar(t, instance, &enrollment.networkId, testSidecarSettings(platform))
+	platform.connected.Set(true)
+	awaitSidecarStatus(t, sidecar, atStatus(SidecarStateOnline, 1))
+	generation := sidecar.runningGeneration()
+	if generation == nil {
+		t.Fatal("no generation")
+	}
+	connectGeneration := generation.leg.(*sidecarConnectGeneration)
+	notices := make(chan PushNotice, 8)
+	remove, err := connectGeneration.subprotocol.Subscribe(PushTopicCore, func(notice PushNotice) {
+		notices <- notice
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove()
+	platformPeer := connect.Peer{TransportType: connect.TransportTypeH1}
+	for seq := uint64(1); seq <= 2; seq += 1 {
+		connectGeneration.subprotocol.receive(connect.SourceId(connect.ControlId), testPushFrame(t, protocol.MessageType_PUSH_HINT, &protocol.PushHint{
+			Seq: seq, Topic: PushTopicCore, Version: 10 + seq, Kind: uint32(protocol.MessageType_CORE_HINT), Hint: []byte{0x08, 0x02},
+		}), platformPeer)
+		for {
+			if notice := testAwait(t, notices, "core's notice"); notice.Version == 10+seq {
+				break
+			}
+		}
+	}
+	// the second notice came after every subscriber of the first had run, on the one push goroutine
+	if count := sidecar.Stats().CoreHintCount; count < 1 {
+		t.Errorf("core hints %d", count)
+	}
+}
