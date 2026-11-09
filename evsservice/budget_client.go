@@ -49,6 +49,9 @@ var (
 // §19.8's issued bytes, by cluster, class and, for P0, kind: no network or repo label.
 const writeBudgetIssuedMetricName = "urnetwork_evs_budget_issued_bytes_total"
 
+// The P1 admissions the shed rule refused, by cluster alone, which §19.8's shedding warn reads (EVSB-M3-01).
+const writeBudgetShedMetricName = "urnetwork_evs_budget_shed_total"
+
 // The metric's class values.
 const (
 	writeBudgetMetricClassP0         = "p0"
@@ -65,6 +68,7 @@ type WriteBudgetClient struct {
 	clock         sidecar.Clock
 	redis         sidecar.Redis
 	issuedCounter sidecar.MetricsCounter
+	shedCounter   sidecar.MetricsCounter
 	// 16 random bytes as hex, drawn at construction: names this process's reports and no host
 	processId string
 	startTime time.Time
@@ -126,6 +130,11 @@ func newWriteBudgetClient(ctx context.Context, host *sidecar.ServiceHost, cluste
 			writeBudgetIssuedMetricName,
 			"Priced bytes issued against each metadata cluster's write budget, by class, and by kind for P0.",
 			"cluster", "class", "kind",
+		)
+		client.shedCounter = host.Metrics.Counter(
+			writeBudgetShedMetricName,
+			"P1 admissions the shed rule refused, by metadata cluster.",
+			"cluster",
 		)
 	}
 	for _, clusterId := range clusterIds {
@@ -358,6 +367,7 @@ type writeBudgetExported struct {
 	p1ByteCount       int64
 	fundedByteCount   int64
 	unfundedByteCount int64
+	shedCount         int64
 }
 
 // One metadata cluster's part of the process's budget.
@@ -366,6 +376,8 @@ type writeBudgetAccount struct {
 	clusterId string
 	// every kind's counter, made at construction, so IssueP0 adds without a lock
 	p0KindByteCounts map[sidecar.WriteP0Kind]*atomic.Int64
+	// the P1 waiters the shed rule refused since the process started, which export reads without the lock
+	shedCount atomic.Int64
 
 	stateLock sync.Mutex
 	closed    bool
@@ -498,6 +510,7 @@ func (self *writeBudgetAccount) shedWithLock(now time.Time) {
 			waiter.state = writeBudgetRefused
 			self.p1.removeWithLock(waiter)
 			close(waiter.decided)
+			self.shedCount.Add(1)
 		}
 	}
 }
@@ -796,13 +809,20 @@ func (self *writeBudgetAccount) tick(ctx context.Context) {
 	self.export(report)
 }
 
-// Adds what the report's totals gained since the last export to the issued metric.
+// Adds what the report's totals gained since the last export to the issued metric, and the waiters shed
+// since then to the shed metric.
 func (self *writeBudgetAccount) export(report *WriteBudgetReport) {
+	exported := &self.exported
+	if shedCounter := self.client.shedCounter; shedCounter != nil {
+		if shedCount := self.shedCount.Load(); exported.shedCount < shedCount {
+			shedCounter.Add(float64(shedCount-exported.shedCount), self.clusterId)
+			exported.shedCount = shedCount
+		}
+	}
 	counter := self.client.issuedCounter
 	if counter == nil {
 		return
 	}
-	exported := &self.exported
 	for _, kind := range sidecar.WriteP0Kinds {
 		if delta := report.P0ByteCounts[kind] - exported.p0KindByteCounts[kind]; 0 < delta {
 			counter.Add(float64(delta), self.clusterId, writeBudgetMetricClassP0, string(kind))
