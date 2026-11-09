@@ -334,6 +334,37 @@ func TestWriteBudgetShedsTheHeaviestNetworkFirst(t *testing.T) {
 	}
 }
 
+// The shed rule's refusals reach §19.8's shed metric by cluster, with no network label, at the next export,
+// each counted once (EVSB-M3-01's shedding warn).
+func TestWriteBudgetShedRefusalsAreCountedByCluster(t *testing.T) {
+	fixture := newBudgetFixture(t)
+	fixture.setPools(&WriteBudgetShare{})
+	heavy := connect.NewId()
+	light := connect.NewId()
+	cost := sidecar.WriteCost{ImmediateByteCount: 100}
+	heavies := []*pendingAdmission{}
+	for range 2 {
+		heavies = append(heavies, fixture.admitAsync(t.Context(), heavy, cost))
+	}
+	fixture.awaitWaits(2)
+	fixture.clock.Advance(fixture.settings.ShedDelay)
+	lighter := fixture.admitAsync(t.Context(), light, cost)
+	for _, pending := range heavies {
+		pending.wait(t)
+	}
+	if lighter.decided() {
+		t.Fatal("the lighter network was decided")
+	}
+	if value := fixture.host.Metrics.Value(writeBudgetShedMetricName, "meta-1"); value != 0 {
+		t.Fatalf("%v shed before an export", value)
+	}
+	fixture.account.export(&WriteBudgetReport{})
+	fixture.account.export(&WriteBudgetReport{})
+	if value := fixture.host.Metrics.Value(writeBudgetShedMetricName, "meta-1"); value != 2 {
+		t.Errorf("%v shed, want 2", value)
+	}
+}
+
 // The shed rule weighs by store_weight: a Team network queueing four times a Community network's bytes
 // is the lighter, so the Community network is refused.
 func TestWriteBudgetShedsByQueuedBytesPerWeight(t *testing.T) {
