@@ -534,6 +534,7 @@ message EvsReadPathReply {
   repeated EvsMerkleProof proof = 4; repeated EvsAbsenceProof absences = 5; EvsRemovalMarker removal = 6;
   EvsOverlay base = 7; EvsNameTable names = 8; uint64 names_through = 9; repeated EvsIndexVersion deltas = 10;
   EvsReadPathState state = 11; bytes drop_id = 12; int64 not_before_ms = 13; uint64 drop_version = 14;
+  bytes drop_statement = 15; bytes drop_body = 16;
 }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
 message EvsAbsenceProof {
@@ -546,6 +547,41 @@ message EvsReadObject {
 // 11.9's moved row and 11.10's sequence and gap rows.
 message EvsRefsReply { uint32 format = 1; uint64 push_sequence = 2; repeated EvsHeadSummary refs = 3; }
 message EvsLogReply { repeated EvsReadStatement statements = 1; uint64 next_version = 2; }
+// Format 2's chapter (EVS-FORMAT.md, EVS2-M10-01): 11.13's purge row and 11.20's drop routes, with 11.9's dropped
+// row's DROP statement and body above, proposed until M10's entry review.
+message EvsPurgeList { repeated EvsPurgeCandidate candidates = 1; bool marked = 2; }
+message EvsPurgeCandidate {
+  repeated bytes token_path = 1; uint64 replaced_version = 2; repeated bytes segment_ids = 3;
+  repeated bytes staged_segment_ids = 4; repeated bytes slot_ids = 5;
+}
+enum EvsDropState {
+  EVS_DROP_STATE_UNSPECIFIED = 0; EVS_DROP_PENDING = 1; EVS_DROP_CANCELLED = 2; EVS_DROP_EXECUTING = 3;
+  EVS_DROP_DONE = 4; EVS_DROP_REFUSED = 5; EVS_DROP_OBSERVED = 6;
+}
+enum EvsDropPhase {
+  EVS_DROP_PHASE_UNSPECIFIED = 0; EVS_DROP_RESOLVE = 1; EVS_DROP_MARK = 2; EVS_DROP_VERIFY = 3; EVS_DROP_DELETE = 4;
+}
+enum EvsDropRefusal {
+  EVS_DROP_REFUSAL_UNSPECIFIED = 0; EVS_DROP_REFUSAL_LOCKED = 1; EVS_DROP_REFUSAL_MISMATCH = 2;
+  EVS_DROP_REFUSAL_VERIFY = 3;
+}
+enum EvsDropPreviewState {
+  EVS_DROP_PREVIEW_STATE_UNSPECIFIED = 0; EVS_DROP_PREVIEW_QUEUED = 1; EVS_DROP_PREVIEW_RUNNING = 2;
+  EVS_DROP_PREVIEW_DONE = 3; EVS_DROP_PREVIEW_FAILED = 4;
+}
+message EvsDropStatus {
+  bytes drop_id = 1; bytes ref_id = 2; bytes push_id = 3; uint64 version = 4; int64 not_before_ms = 5;
+  EvsDropState state = 6; EvsDropPhase phase = 7; uint64 progress = 8; uint64 progress_total = 9;
+  EvsDropRefusal reason = 10; uint64 freed_bytes = 11; bytes preview_id = 12;
+}
+message EvsDropsReply { repeated EvsDropStatus drops = 1; }
+message EvsDropPreviewRequest { bytes ref_id = 1; repeated EvsDropPath paths = 2; }
+message EvsDropPreviewReply {
+  bytes preview_id = 1; EvsDropPreviewState state = 2; uint64 progress = 3; uint64 progress_total = 4;
+  repeated EvsDropPreviewPath paths = 5; uint64 freed_bytes = 6; uint64 shared_bytes = 7; uint64 inline_bytes = 8;
+  uint64 packed_bytes = 9; uint64 young_bytes = 10; uint64 snapshot_version = 11; int64 snapshot_ms = 12;
+}
+message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; }
 
 // sidecar/protocol/smtp.proto
 // §6.11's edge codes, numbers as written.

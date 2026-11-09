@@ -1,0 +1,3 @@
+go test fuzz v1
+string("EvsDropPreviewPath")
+[]byte("\x10\x03\b\x01")

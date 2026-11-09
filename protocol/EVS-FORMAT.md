@@ -283,3 +283,147 @@ For design-records, each is a reading that changes no D- item:
 | Covering prefixes | 512 B of token bytes; the empty path allowed; the deepest that keep 1 KiB |
 | Window flags | Bits 6 to 15 refused on read |
 | Refusal records | Only codes below 64; until_s the ceiling of the milliseconds over 1,000 |
+
+# evs format 2
+
+Format 2 (v1; R-PHASE-13, owner decision 163) gives meaning to what format 1 reserves: versionless files, their kind-5 and staged content and its purge (§11.7, §11.13), dropped history (owner decisions 173, 183, 184), the search index's CUT and `index_epoch` (§11.12, §11.14), and the read states. This chapter fixes the bytes §11.6 to §11.9, §11.13 and §11.20 leave open for it, as the format-1 chapter above does for format 1, and it changes nothing above: no number format 1 declared moves, every format-1 refusal stays, and format-1 data is valid format 2.
+
+**Status.** Proposed, as EVS2-M10-01 writes it. M10's entry review reads this chapter beside real bytes in `testdata/evs/format2/` and `testdata/evs/citation/` and `purge/` (§22.10), and its bytes freeze at M10's exit (D-PHASE-7); a change after the entry review needs that review again. `testdata/evs/format2/schema.yml` lists every message, enum and layout number format 2 adds and every format-1 number it reads, and `protocol/evs_format2_descriptor_test.go` holds it to `evs.proto`. `testdata/evs/format2/metadata_rows.yml` maps each field format 2 adds to its §2.8 row (I-18). EvsCommit.tla's purger extension passing TLC is evidence for that review, not part of this chapter.
+
+## A repo's format
+
+`repo/`'s `EvsRepoObject.format` is 1 when the repo is created, always (plan-EVS2-small-readings#11), and 2 once a push carrying a format-2 value raises it: an If-Match on `repo/` changing only `format`, after step 6's record and before step 7, which never lowers it. A raise whose push then fails stands, since format-1 data is valid format 2. `GET .../refs` answers it in `EvsRefsReply.format`. evs takes format-2 values only from networks in §19.11's `format2` gate. A push carries format 2 when an entry version has versioning 1 or 2, a locator is kind 5 or staged, a new-objects item is kind 2, or the statement sets flag 256 or 512, field 33 or field 34; the provenance's `tainted` bit, which format 1 ignores, does not count.
+
+Format-1 code meeting a format-2 construct in a push refuses it 409 FORMAT_UNSUPPORTED {needs_format: 2}, recorded; meeting a format-2 `repo/` it answers a push 503 before step 4, serves stored bytes and writes nothing (plan-EVS1-format-unsupported).
+
+## What format 2 gives meaning to
+
+| Value | In format 2 |
+|---|---|
+| `EvsEntryVersion.versioning` | 0 every version kept; 1 versionless; 2 a versionless file of the search index. A directory carries 0; a value past 2 is malformed (INVALID) |
+| `EvsLocator.kind` 5 | a versionless segment, below; `staged` is set only on kind 5 |
+| New-object kind 2 | a staged segment, below |
+| `EvsUploadReceipt.versionless` | the uploaded segment's header is a kind-5 header naming the receipt's push; the MAC covers it |
+| `EvsSealedFields.content_sha256` | the SHA-256 of the file's whole plaintext, in versioning 1 and 2 only, required there and refused elsewhere |
+| `EvsPush` flags 256 DROP and 512 CUT, fields 33 `drop_sha256` and 34 `index_epoch` | below for the DROP; the CUT and `index_epoch` are §11.12's and §11.14's, on evs EVS2-M10-11's |
+| Payload sections 9 and 10 | a DROP's body and lists, below |
+| Window bits 4 and 5 | below |
+| `EvsReadPathState` 1 to 3 and `EvsReadPathReply` fields 12 to 16 | the read states, below |
+| `EvsProvenance.tainted` | the writing run's tainted bit (§16.6) |
+| Segment header format 2, batch header format 2, record format 2 | below |
+
+## Kind-5 segments
+
+A kind-5 segment holds exactly one record of one versionless version: a `checkpoint`, or one 4 MiB `chunk` of a file over 8 MiB, never a diff. Its public header is 48 B:
+
+| Bytes | Field |
+|---|---|
+| 0-3 | "URvs" |
+| 4 | format: 2 |
+| 5 | flags: 0 |
+| 6-7 | zero |
+| 8-23 | repo_id |
+| 24-31 | generation g, u64 |
+| 32-47 | push_id of the push that introduces it |
+
+In a general repo the 72 B wrapped-key block of its object key follows at byte 48 under fek_g, as format 1's, and its record starts at byte 120; in a slot-keyed repo its record starts at byte 48 and names the path's one slot key (§11.7's keys row). Random padding follows to Padmé of its length, at most 8 MiB in all, and its id is the SHA-256 of every byte. A reader verifies it as kind 1: the id, the header's repo and generation, each frame's AEAD, then `content_sha256` over the whole plaintext and the git oid; a range read checks only the frames it reads. A kind-1 locator may name a kind-5-headed segment, one a later version adopted with versioning on (§11.7's on row), so a format-2 reader of a kind-1 locator takes either header.
+
+An upload (`PUT .../segments/<sid>?push=P`) whose bytes start with a format-2 header naming another push than P gets 409 VERSIONING, recorded; one naming P gets a receipt with `versionless` true. Equal bytes carry an equal header, so a re-upload's receipt takes the same mark with no extra read, and equal bytes under another push are refused, never adopted (§11.13's receipt row).
+
+## Staged segments
+
+A kind-5 segment that pads to at most 16 KiB rides in its push or part instead of an upload (§11.7's staged row), except an `ur/lfs` object, which always uploads (plan-EVS2-small-readings#8). Its new-objects item is kind 2 | id (32 B) | padded_size u64, its byte length, a Padmé size of at most 16 KiB | upload_day u32, 0; its locator is {kind 5, id, offset, length, staged true}; it has no receipt. `new_objects_sha256` covers its item, never its bytes.
+
+Its bytes travel outside every payload hash, as the **staged bytes**: absent when a push or part stages nothing, else u32 count, at least 1, then per segment u32 length | its bytes. A request carries them in `EvsPushRequest.staged` or `EvsPartRequest.staged`, and its record in its tail (below). Joined over a push's parts in part order, the staged segments are the kind-2 items of the joined new-objects list, one each and in that order.
+
+The checks (§11.6's checks row): each staged segment hashes to its item's id, its length is its item's padded_size, and its header is a kind-5 header of this repo naming this push; one naming another push is 409 VERSIONING, as an upload is, and any other mismatch INVALID. A record's 1 MiB counts its staged tail, so a sender counts staged bytes against a part's bound (plan-EVS2-small-readings#13). A staged segment is cited only by the version that introduced it; a later version re-stages its bytes (§11.7's cite row).
+
+## Batches and records
+
+A **format-2 record** is a batch record that stages segments or lists purge candidates. Its header's byte 1, which format 1 writes zero, is 2, and its body is format 1's items followed by two more: its staged bytes (empty when none) and its `EvsPurgeList`'s deterministic bytes (empty when none). Any other record writes byte 1 zero and no tail, in a batch of either format. A batch's header format is 2 exactly when it holds a format-2 record. So a record read alone at its place shows its own format, and an evacuator meeting a batch or record format it does not know leaves the batch, alarming (§11.8's batches). A seal or reseed record stages nothing. A record is at most 1 MiB alone or 256 KiB beside others, its tail included.
+
+Format-1 code refuses a batch of format 2 and a record whose byte 1 is 2 as FORMAT_UNSUPPORTED.
+
+## Purge lists
+
+`EvsPurgeList` is a record's purge candidates (§11.13's purge row), unsealed, since it says only what the push's own entries and their bases show:
+
+- `candidates`, one per versionless version V the push replaces or removes, in change order, an entry with no id left out: `token_path`, V's path in the push's path epoch; `replaced_version`, V's path version, its change's `base_entry_version`; `segment_ids` and `staged_segment_ids`, V's unstaged and staged kind-5 segment ids that no version of the push names, in V's chain order; `slot_ids`, V's slots that no version of the push names, in V's order.
+- `marked`, when the ids in all would pass 2,048 or the list would take the record past 1 MiB: then no candidate is listed, and evacuation's sweep recomputes them from the record's changes and their replaced versions (plan-EVS2-small-readings#13).
+
+A version of the push names an id through any locator, staged or not and of any kind, or its slot ids. `evsservice.PurgeCandidates` computes the list, the one implementation evs and the sweep share.
+
+## Window entries
+
+Bit 4 (`EVS_WINDOW_VERSIONLESS_REPLACED`) marks a push that replaces or removes a versionless version, whose record's purge list lists the candidates or is marked; bit 5 (`EVS_WINDOW_DROP`) a DROP push, a cancel included. Readers take both as hints, the statement deciding; format-1 readers ignore them, and bits 6 to 15 stay refused.
+
+## DROP pushes
+
+A DROP's statement sets flag 256 and no other flag, and `drop_sha256`, the SHA-256 of its body's bytes; `index_epoch` stays 0. Its payload adds:
+
+| Type | Section | Its bytes | Hashed by |
+|---|---|---|---|
+| 9 | DROP body | the `EvsDropHistory` bytes, one value | `drop_sha256` |
+| 10 | DROP lists | per `EvsDropPath` in `paths` order, its `count` listed `entry_sha256` values, bare 32 B each and strictly ascending | each path's `listed_sha256`, over its values joined |
+
+A cancel carries section 9 and no section 10. In a push in parts both ride in `EvsPushPart.sections` slices, a slice splitting anywhere (plan-EVS2-drop-list-parts), and the seal runs the body and list checks over the slices in part order, streaming the lists, never joining them.
+
+The body's rules, which `EvsCheckDropPayload` runs before anything needs the head:
+
+- `drop_id` is 16 B, drawn per statement and kept by a retry; `action` is 1, a drop, or 2, a cancel.
+- A drop: 1 to 1,024 `paths`, strictly ascending by their newest lineage entry's token path bytes, then its epoch; `not_before_ms` equal to `time_ms` + 604,800,000 or to `time_ms` (else 409 DROP_STATE; plan-EVS2-small-readings#2); `preview_id` empty or 16 B; no cancel field.
+- A cancel: `cancels_drop_id` 16 B, `cancels_version` at least 1, no path, `not_before_ms` 0 and no `preview_id`.
+- An `EvsDropPath`: its `lineage` newest first, each entry's epoch strictly below the one before and at least 1, the newest at most the push's path epoch, each token path 1 to 32 components; one `map_parts` value per older entry (0 the PATH_EPOCH tail, else the map part, 1 to parts); `through_version` at least 2; `boundary` 1 written or 2 removed; `count` 1 to 1,048,576 and below `through_version`; `listed_sha256` 32 B.
+- A body that does not parse or breaks a rule above is INVALID, a body off `drop_sha256` too, being a payload hash; a list whose order, repeats, count or `listed_sha256` is wrong is 409 DROP_LIST. Kind, path, consent, boundary, the base step 4 read, the fence and the cancel's target are evs's (EVS2-M10-09).
+
+**Membership** (plan-EVS2-drop-list-proof): a ref's version V, committed in path epoch e at token path t, is listed by a DROP exactly when one of its paths' lineage holds (e, t), V is below that path's `through_version`, and V has an entry: a removal is never listed (plan-EVS2-small-readings#1). A head reader decides it from the signed body alone, through `EvsDropLists`; the listed set's equality with the lineage's versions is a replaying reader's and the job's resolve.
+
+## Read states
+
+`EvsReadPathReply.state` (§11.9), each of which a format-1 reader refuses as FORMAT_UNSUPPORTED {needs_format: 2}:
+
+- 1 `collected`: a replaced versionless version from T, the end of the UTC minute of the replacing record's `EvsPlace` plus 60 s, whether or not its bytes remain, and any version whose kind-5 segment or staged range 404s (plan-EVS2-small-readings#5). The frame keeps the version's signed entry version and statement, and its content is not served.
+- 2 `drop_pending` {`drop_id`, `not_before_ms`} and 3 `dropped` {`drop_id`, `drop_version`}, each with the DROP's statement in `drop_statement` when the reply returns it nowhere else, and its body in `drop_body` on the first path of the reply naming that drop. No list range is served (plan-EVS2-drop-list-proof).
+
+## Drop routes
+
+| Route | Request | Answer |
+|---|---|---|
+| `POST .../drops/preview` (admin) | `EvsDropPreviewRequest`: `ref_id`, and `paths`, each an `EvsDropPath` whose `through_version` is the version a drop now would keep and whose `count` and `listed_sha256` are the client's | 202 `EvsDropPreviewReply` with `preview_id` alone; 429 past `evs_drop_previews_per_day`; one dry run at a time a repo |
+| `GET .../drops/preview/<preview_id>` (admin) | none | `EvsDropPreviewReply`: `state`, `progress` of `progress_total` versions, per requested path its `list_match` and resolved `count`, `freed_bytes`, `shared_bytes`, `inline_bytes`, `packed_bytes` and `young_bytes`, and the snapshot's ref version and time; 404 for a dry run evs holds no record of |
+| `GET .../drops` (r) | none | `EvsDropsReply`: each drop of `drops/<repo>/_` as an `EvsDropStatus`, oldest first |
+
+`EvsDropStatus` reports a held drop as done, its held bytes counted in `freed_bytes`, so no field, value or count shows a hold (owner decision 184). A void record (plan-EVS2-drop-table-bound) lists as its `drop_id` and state alone. DROP pushes and their cancels go through `POST .../push`.
+
+## Rules the format-2 codecs share
+
+- **The citation rule** (§11.7's content, kind 5, staged and cite rows; §11.8's 5h), `EvsCheckCitation`, which 5h and replaying readers both run: kind-5 locators only in versionless versions, each naming a staged segment of this push, an upload of this push marked versionless (a replaying reader: a segment of the push's new-objects list, whose kind-5 header it checks as it reads it), or an unstaged kind-5 locator of its path's base version or of a path the push removes, never a reuse source's; a staged segment only by its introducing version; a versionless version's kind-1 locators only from its path's base version or a path the push removes, and no kind-2 locator; a kind-1 locator of any version naming a segment its sources name only as kind 5 only from the path's base or a removed path, never staged; no slot a versionless version names named by another path's version, but the rename target of the push removing that path; and each kind-5 segment, and each slot of a removed versionless path, named by at most one new version of the push (plan-EVS2-slot-rename, decided). Each breach is 409 VERSIONING.
+- **Purge candidates**, above.
+
+## Not fixed here
+
+- **Purge candidates of a push in parts.** A part's candidates subtract only that part's versions, so a rename whose removal and target sit in two parts would list content the target still names. questions/evs2-m10-04-purge-across-parts.md asks how; until it is answered, `PurgeCandidates` subtracts every version its caller passes, and evs lists a push in parts' candidates only once it holds every part (EVS2-M10-06).
+- **A DROP's lists past what its changes' parts carry.** Format 1 holds every part to at least one change, and a drop of one heavily edited path, or of removed boundaries alone, has fewer changes than its lists need parts. questions/evs2-m10-03-drop-list-parts-without-changes.md asks how; until it is answered such a DROP cannot be formed, and nothing accepts a part with no change.
+- **Fields no §2.8 row names yet**, which `testdata/evs/format2/metadata_rows.yml` lists as pending until M10's exit and questions/evs2-m10-01-metadata-rows.md raises.
+
+## What this chapter chose
+
+For design-records, each a reading that changes no D- item:
+
+| Item | Chosen |
+|---|---|
+| Kind-5 header | Format 1's 32 B with format 2, then the 16 B push_id; the key block at 48 and the record at 120 in a general repo, the record at 48 slot-keyed |
+| `content_sha256` | Required in versioning 1 and 2 and refused in 0, as sealed-field tampering |
+| Versioning past 2 | Malformed: INVALID, not VERSIONING |
+| Staged bytes | Absent when none, else a count of at least 1 and length-prefixed segments; in the kind-2 items' order, joined over parts |
+| Staged header naming another push | 409 VERSIONING, as an upload's |
+| Record format | The record header's byte 1 is 2, and the body ends with the staged and purge-list items; other records keep format 1's form in a batch of either format; a batch is format 2 when it holds one |
+| `EvsPurgeList` | Staged and unstaged ids in two lists, in V's chain order; a candidate with no id left out; the cap counting every id; `marked` listing nothing |
+| Window bit 4 | Every push replacing or removing a versionless version, candidates left or not |
+| DROP statement | Flag 256 alone, `index_epoch` 0 |
+| DROP paths' order | Strictly ascending by the newest lineage entry's token path bytes, then its epoch |
+| DROP shape | `through_version` at least 2, `count` below it; a cancel's `not_before_ms` 0 and no `preview_id`; the newest lineage epoch at most the push's |
+| DROP codes | Shape and `drop_sha256` INVALID; lists DROP_LIST; `not_before_ms` DROP_STATE |
+| The DROP on a read | `EvsReadPathReply.drop_statement` (15) and `drop_body` (16), each sent once a reply |
+| Drop listing | `EvsDropState` with observed and no held; a phase and its done and total counts; a refusal reason; held bytes counted as freed; a void record as its id and state |
+| Dry runs | `EvsDropPreviewState` with queued, running, done and failed; per path `list_match` and the resolved count; the snapshot's ref version and time |

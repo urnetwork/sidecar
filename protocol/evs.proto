@@ -13,6 +13,9 @@
 // write in prose: the stored objects, sealed values and HTTP bodies, whose names and numbers are proposed, as
 // plan-EVS1-format-bytes's first option, until M2's entry review. Segments, record headers, batches, EvsWindowEntry
 // and EvsRefusal are fixed layouts, not protobuf. EVS-FORMAT.md states those and every rule these messages follow.
+//
+// Format 2's own messages come last: a record's purge candidates and the drop routes' bodies, proposed until M10's
+// entry review, with EVS-FORMAT.md's format 2 chapter and testdata/evs/format2/schema.yml.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -629,10 +632,14 @@ message EvsReadPathReply {              // one path: its version, its listing, o
   EvsNameTable names = 8;               // a directory's folded table
   uint64 names_through = 9;
   repeated EvsIndexVersion deltas = 10; // the directory's deltas after names_through, in version order
-  EvsReadPathState state = 11;          // format 2, with the three fields after it
+  EvsReadPathState state = 11;          // format 2, with the five fields after it
   bytes drop_id = 12;
   int64 not_before_ms = 13;             // drop_pending
   uint64 drop_version = 14;             // dropped: the DROP's ref version
+  bytes drop_statement = 15;            // drop_pending and dropped: the DROP's Signed EvsPush as received, when this
+                                        // reply returns it nowhere else (format 2)
+  bytes drop_body = 16;                 // and its EvsDropHistory bytes, which its drop_sha256 covers, on the first
+                                        // path of this reply naming the drop (format 2)
 }
 message EvsMerkleProof {                // one RFC 9162 tree's inclusion proof (11.6's merkle row)
   bytes leaf = 1;                       // the bytes the leaf hashes: an EvsChange as listed, or a part's changes_root
@@ -663,4 +670,101 @@ message EvsRefsReply {                  // GET .../refs[?moved_after=] (11.9, 11
 message EvsLogReply {                   // GET .../log?ref=&since=, at most 1,000 statements
   repeated EvsReadStatement statements = 1;
   uint64 next_version = 2;              // where the next page starts, 0 once it reaches the head
+}
+
+// Format 2's own messages (EVS-FORMAT.md's format 2 chapter): a batch record's purge candidates (11.13's purge row)
+// and the bodies of 11.20's three drop routes. Their names and numbers are proposed until M10's entry review, and
+// their bytes freeze at its exit (D-PHASE-7). Format-1 code neither writes nor reads them: a purge list sits only in a
+// format-2 record's tail, and format-1 evs serves no drop route.
+
+message EvsPurgeList {                  // a format-2 record's purge candidates, after its staged segments; unsealed,
+                                        // since it says only what the push's own entries and their bases show
+  repeated EvsPurgeCandidate candidates = 1;  // per versionless version the push replaces, in change order
+  bool marked = 2;                      // past 2,048 ids or the record's 1 MiB: none listed, and evacuation's sweep
+                                        // recomputes them from the replaced versions (11.13)
+}
+message EvsPurgeCandidate {             // what one replaced versionless version V leaves to the purge
+  repeated bytes token_path = 1;        // V's path, in the push's path epoch, 16 B per component
+  uint64 replaced_version = 2;          // V's path version: its change's base_entry_version
+  repeated bytes segment_ids = 3;       // V's unstaged kind-5 segments that no version of the push names
+  repeated bytes staged_segment_ids = 4;  // V's staged ones that none names, in V's push's record until evacuation
+  repeated bytes slot_ids = 5;          // V's slots that none names (slot-keyed repos)
+}
+
+// EvsDropStatus.state (11.13's who row). A held drop reads done (owner decision 184), so no value says held.
+enum EvsDropState {
+  EVS_DROP_STATE_UNSPECIFIED = 0;
+  EVS_DROP_PENDING = 1;                 // committed, its start not passed
+  EVS_DROP_CANCELLED = 2;               // a committed cancel names it
+  EVS_DROP_EXECUTING = 3;               // its job runs, in phase
+  EVS_DROP_DONE = 4;                    // its deletions made, or waiting on a hold, which reads the same
+  EVS_DROP_REFUSED = 5;                 // its job refused it, for reason, deleting nothing
+  EVS_DROP_OBSERVED = 6;                // §19.11's format2.drop observe: verified, nothing deleted (D-TEST-18)
+}
+
+// EvsDropStatus.phase while a drop executes (11.13's resolve, mark, verify and delete rows).
+enum EvsDropPhase {
+  EVS_DROP_PHASE_UNSPECIFIED = 0;
+  EVS_DROP_RESOLVE = 1;
+  EVS_DROP_MARK = 2;
+  EVS_DROP_VERIFY = 3;
+  EVS_DROP_DELETE = 4;
+}
+
+// EvsDropStatus.reason for a refused drop (11.13's start, resolve and verify rows).
+enum EvsDropRefusal {
+  EVS_DROP_REFUSAL_UNSPECIFIED = 0;
+  EVS_DROP_REFUSAL_LOCKED = 1;          // a repo lock stood at its start (§8.8)
+  EVS_DROP_REFUSAL_MISMATCH = 2;        // a list or lineage resolve found off the ref's history
+  EVS_DROP_REFUSAL_VERIFY = 3;          // verify found a live version naming a candidate
+}
+
+// EvsDropPreviewReply.state: a dry run's progress (11.13's preview row).
+enum EvsDropPreviewState {
+  EVS_DROP_PREVIEW_STATE_UNSPECIFIED = 0;
+  EVS_DROP_PREVIEW_QUEUED = 1;          // waiting for the repo's one dry run at a time
+  EVS_DROP_PREVIEW_RUNNING = 2;
+  EVS_DROP_PREVIEW_DONE = 3;            // its results stand
+  EVS_DROP_PREVIEW_FAILED = 4;          // it stopped short of its results, as a deleted repo stops it; file another
+}
+
+message EvsDropStatus {                 // one drop as GET .../drops lists it, from drops/<repo>/_ (11.13, 11.20)
+  bytes drop_id = 1;
+  bytes ref_id = 2;
+  bytes push_id = 3;                    // its DROP push
+  uint64 version = 4;                   // the ref version that push committed at
+  int64 not_before_ms = 5;
+  EvsDropState state = 6;
+  EvsDropPhase phase = 7;               // executing
+  uint64 progress = 8;                  // executing: the phase's items done
+  uint64 progress_total = 9;            // and its items in all, 0 while unknown
+  EvsDropRefusal reason = 10;           // refused
+  uint64 freed_bytes = 11;              // deleted so far, held bytes counted as deleted (owner decision 184)
+  bytes preview_id = 12;                // the dry run its DROP names, or empty
+}
+message EvsDropsReply {                 // GET .../drops (r)
+  repeated EvsDropStatus drops = 1;     // the drop table's drops, oldest first
+}
+message EvsDropPreviewRequest {         // POST .../drops/preview (admin): 202 with an EvsDropPreviewReply's preview_id
+  bytes ref_id = 1;
+  repeated EvsDropPath paths = 2;       // each lineage as a DROP would carry it: its through_version the version a
+                                        // drop now would keep, its count and listed_sha256 the client's
+}
+message EvsDropPreviewReply {           // the preview route's 202, preview_id alone; GET .../drops/preview/<preview_id>
+  bytes preview_id = 1;                 // 16 random bytes evs draws
+  EvsDropPreviewState state = 2;
+  uint64 progress = 3;                  // running: versions read
+  uint64 progress_total = 4;            // and the versions to read, 0 while unknown
+  repeated EvsDropPreviewPath paths = 5;  // done: per requested path, in request order
+  uint64 freed_bytes = 6;               // done: what only the listed versions name, which a drop would delete
+  uint64 shared_bytes = 7;              // candidates another version names, which stay
+  uint64 inline_bytes = 8;              // listed versions' inline records, unserved and kept until compaction
+  uint64 packed_bytes = 9;              // candidates in packs, withheld until compaction
+  uint64 young_bytes = 10;              // candidates under 25 h old, which a later round deletes
+  uint64 snapshot_version = 11;         // the request ref's version at the dry run's snapshot
+  int64 snapshot_ms = 12;               // evs's clock at that snapshot
+}
+message EvsDropPreviewPath {             // one requested lineage's resolved list
+  bool list_match = 1;                  // the client's count and listed_sha256 equal the resolved list's
+  uint32 count = 2;                     // the resolved list's versions
 }
