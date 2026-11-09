@@ -291,64 +291,12 @@ func (self *EvsRepo) fetchMissing(ctx context.Context, result *evsReadResult, en
 
 // Rebuilds a verified file version into out, after the receipt gate and with its oid and size checked first.
 func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath, out io.Writer) (*EvsFileInfo, error) {
-	entry := verified.Entry
-	push := verified.Statement.Push
 	info := evsFileInfoOf(result.refId, result.head, verified)
-	chain := entry.GetChain()
-	if len(chain) == 0 {
-		return nil, fmt.Errorf("%w: a file with no chain", ErrEvsEntryRefused)
-	}
-	objectIds := [][]byte{}
-	for _, locator := range chain {
-		if len(locator.GetId()) != 0 {
-			objectIds = append(objectIds, locator.GetId())
-		}
-	}
-	objectIds = append(objectIds, entry.GetSlotIds()...)
-	if err := self.client.preDecrypt(ctx, self.repoId, result.refId, objectIds); err != nil {
-		return nil, err
-	}
-	keys := result.keys
-	manifest, err := keys.manifest(ctx, push.GetGeneration())
+	content, fields, oid, err := self.reconstructContent(ctx, result, verified, nil)
 	if err != nil {
-		return nil, err
-	}
-	fields, err := EvsOpenFields(manifest, entry.GetSealedFields())
-	if err != nil {
-		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
-		return nil, err
-	}
-	fileId, err := IdFromBytes(fields.GetFileId())
-	if err != nil {
-		return nil, fmt.Errorf("%w: a file id", ErrEvsSealInvalid)
-	}
-	if err := self.fetchMissing(ctx, result, entry); err != nil {
-		return nil, err
-	}
-	content, err := self.applyChain(ctx, result, push, entry, fileId)
-	if err != nil {
-		var missing bool
-		missing = errors.Is(err, ErrEvsObjectMissing)
-		if missing {
-			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmMissingSegment, "", nil)
-		} else if errors.Is(err, ErrEvsSealInvalid) {
-			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
-		}
 		return nil, err
 	}
 	defer content.close()
-	if uint64(content.Size()) != fields.GetSize() {
-		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
-		return nil, fmt.Errorf("%w: content of %d bytes where its fields say %d", ErrEvsSealInvalid, content.Size(), fields.GetSize())
-	}
-	oid, err := EvsGitBlobOid(content.reader(), content.Size())
-	if err != nil {
-		return nil, err
-	}
-	if fields.GetOidKind() != protocol.EvsOidKind_EVS_OID_SHA1 || !bytes.Equal(oid[:], fields.GetGitOid()) {
-		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
-		return nil, fmt.Errorf("%w: content whose oid is not its fields'", ErrEvsSealInvalid)
-	}
 	if _, err := io.Copy(out, content.reader()); err != nil {
 		return nil, err
 	}
@@ -358,8 +306,74 @@ func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, ver
 	return info, nil
 }
 
+// A verified file version's content in a spill the caller closes, after the receipt gate, its size and oid checked
+// against its sealed fields, which it gives with the oid. onRecord, when set, sees each record's opened header and
+// locator in chain order, which the write planner reads the chain's facts from.
+func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath, onRecord func(header *EvsRecordHeader, locator *protocol.EvsLocator)) (*evsSpill, *protocol.EvsSealedFields, EvsGitOid, error) {
+	entry := verified.Entry
+	push := verified.Statement.Push
+	chain := entry.GetChain()
+	if len(chain) == 0 {
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: a file with no chain", ErrEvsEntryRefused)
+	}
+	objectIds := [][]byte{}
+	for _, locator := range chain {
+		if len(locator.GetId()) != 0 {
+			objectIds = append(objectIds, locator.GetId())
+		}
+	}
+	objectIds = append(objectIds, entry.GetSlotIds()...)
+	if err := self.client.preDecrypt(ctx, self.repoId, result.refId, objectIds); err != nil {
+		return nil, nil, EvsGitOid{}, err
+	}
+	keys := result.keys
+	manifest, err := keys.manifest(ctx, push.GetGeneration())
+	if err != nil {
+		return nil, nil, EvsGitOid{}, err
+	}
+	fields, err := EvsOpenFields(manifest, entry.GetSealedFields())
+	if err != nil {
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, EvsGitOid{}, err
+	}
+	fileId, err := IdFromBytes(fields.GetFileId())
+	if err != nil {
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: a file id", ErrEvsSealInvalid)
+	}
+	if err := self.fetchMissing(ctx, result, entry); err != nil {
+		return nil, nil, EvsGitOid{}, err
+	}
+	content, err := self.applyChain(ctx, result, push, entry, fileId, onRecord)
+	if err != nil {
+		var missing bool
+		missing = errors.Is(err, ErrEvsObjectMissing)
+		if missing {
+			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmMissingSegment, "", nil)
+		} else if errors.Is(err, ErrEvsSealInvalid) {
+			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		}
+		return nil, nil, EvsGitOid{}, err
+	}
+	if uint64(content.Size()) != fields.GetSize() {
+		content.close()
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: content of %d bytes where its fields say %d", ErrEvsSealInvalid, content.Size(), fields.GetSize())
+	}
+	oid, err := EvsGitBlobOid(content.reader(), content.Size())
+	if err != nil {
+		content.close()
+		return nil, nil, EvsGitOid{}, err
+	}
+	if fields.GetOidKind() != protocol.EvsOidKind_EVS_OID_SHA1 || !bytes.Equal(oid[:], fields.GetGitOid()) {
+		content.close()
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: content whose oid is not its fields'", ErrEvsSealInvalid)
+	}
+	return content, fields, oid, nil
+}
+
 // Runs a chain into a spill: a checkpoint then each diff on the result before it, or chunks one after another.
-func (self *EvsRepo) applyChain(ctx context.Context, result *evsReadResult, push *protocol.EvsPush, entry *protocol.EvsEntryVersion, fileId Id) (*evsSpill, error) {
+func (self *EvsRepo) applyChain(ctx context.Context, result *evsReadResult, push *protocol.EvsPush, entry *protocol.EvsEntryVersion, fileId Id, onRecord func(header *EvsRecordHeader, locator *protocol.EvsLocator)) (*evsSpill, error) {
 	store := self.client.args.Store
 	memoryLimit := self.client.settings.DeltaBaseMemoryByteCount
 	var current *evsSpill
@@ -378,6 +392,9 @@ func (self *EvsRepo) applyChain(ctx context.Context, result *evsReadResult, push
 			return nil, err
 		}
 		inlineKey = nextInlineKey
+		if onRecord != nil {
+			onRecord(header, locator)
+		}
 		switch header.Kind {
 		case protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT:
 			if index != 0 {

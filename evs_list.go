@@ -35,7 +35,7 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 	switch {
 	case verified.Base != nil:
 		return nil, ErrEvsOverlayBase
-	case verified.Removal != nil:
+	case verified.Removal != nil, verified.Absent:
 		return nil, ErrEvsPathAbsent
 	case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY):
 		return nil, fmt.Errorf("%w: a file, which ReadHead reads", ErrEvsTokenInvalid)

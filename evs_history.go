@@ -40,6 +40,12 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 		if verified.Base != nil {
 			return nil, ErrEvsOverlayBase
 		}
+		if verified.Absent {
+			if len(history.Versions) == 0 {
+				return nil, ErrEvsPathAbsent
+			}
+			break
+		}
 		if verified.Removal != nil {
 			removal := verified.Removal
 			pushId, _ := IdFromBytes(removal.GetPushId())

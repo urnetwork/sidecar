@@ -437,7 +437,22 @@ func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, version uint
 	}
 	reply := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components()}
 	if state == nil {
-		return nil, nil, fmt.Errorf("no such path")
+		// never written: absent, with the proofs that no later statement's change list holds it
+		for later := uint64(1); later <= uint64(len(self.commits)); later += 1 {
+			tree := self.commits[later-1].built.ChangeTree
+			if tree == nil {
+				continue
+			}
+			for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, tokenPath) {
+				absence, err := tree.AbsenceProof(absentPath)
+				if err != nil {
+					continue
+				}
+				absence.Version = later
+				reply.Absences = append(reply.Absences, absence)
+			}
+		}
+		return reply, nil, nil
 	}
 	commitVersion := uint64(0)
 	var locators []*protocol.EvsLocator
@@ -559,10 +574,14 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 				continue
 			}
 			for _, part := range [][2]uint32{{0, evsSegmentKeyedHeaderByteCount}, {locator.GetOffset(), locator.GetLength()}} {
-				frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{
-					Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT, Id: locator.GetId(), Offset: part[0],
-					Body: segment[part[0] : part[0]+part[1]],
-				}})
+				// a range past 1 MiB spans frames, each the next slice at its own offset
+				for at := part[0]; at < part[0]+part[1]; at += 1024 * 1024 {
+					end := min(part[0]+part[1], at+1024*1024)
+					frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{
+						Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT, Id: locator.GetId(), Offset: at,
+						Body: segment[at:end],
+					}})
+				}
 			}
 		}
 		frames = append(frames, &protocol.EvsReadFrame{End: true})
