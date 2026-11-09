@@ -250,6 +250,12 @@ barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
 barrier tls.handshake.after smtpproof/tls_client.go
 barrier tls.handshake.before smtpproof/tls_client.go
+barrier tlsedge.kill_publish.after tlsedgeservice/kill_set.go
+barrier tlsedge.kill_publish.before tlsedgeservice/kill_set.go
+barrier tlsedge.kill_read.after tlsedgeservice/service.go
+barrier tlsedge.kill_read.before tlsedgeservice/service.go
+barrier tlsedge.names_publish.after tlsedgeservice/names.go
+barrier tlsedge.names_publish.before tlsedgeservice/names.go
 barrier token.refresh.after api_token_manager.go
 barrier token.refresh.before api_token_manager.go
 secret * gkm_keys.go
@@ -342,3 +348,6 @@ secret tls13_shts smtpproof/tls_client.go
 secret tls_device_key tls_key.go
 secret tls_ecdhe_private smtpproof/tls_client.go
 secret tls_ecdhe_shared smtpproof/tls_client.go
+secret tls_visitor_cap tlsedgeservice/visitor_key.go
+secret tls_visitor_daily tlsedgeservice/visitor_key.go
+secret tls_visitor_record tlsedgeservice/visitor_key.go

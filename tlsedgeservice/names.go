@@ -168,6 +168,9 @@ func tlsEdgeEntryRoutable(entry *TlsEdgeNameEntry) bool {
 // serial, each entry replacing its name's. A change applied with no view yet is dropped, since a map
 // must start from a snapshot.
 func (self *TlsEdgeNames) Apply(nameMap *TlsEdgeNameMap, snapshot bool) {
+	// the barriers sit outside the lock, so a schedule holding one stalls no other writer
+	testHookBarrier("tlsedge.names_publish.before", "")
+	defer testHookBarrier("tlsedge.names_publish.after", "")
 	self.applyLock.Lock()
 	defer self.applyLock.Unlock()
 
@@ -246,9 +249,7 @@ func (self *TlsEdgeNames) Apply(nameMap *TlsEdgeNameMap, snapshot bool) {
 		}
 		nameShard[entry.Name] = row
 	}
-	testHookBarrier("tlsedge.names_publish.before", "")
 	self.view.Store(view)
-	testHookBarrier("tlsedge.names_publish.after", "")
 }
 
 // The target a visitor's server name maps to on port, §13.5's step 2, or false. The name may be as the

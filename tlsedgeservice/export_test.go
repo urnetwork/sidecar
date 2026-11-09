@@ -31,3 +31,8 @@ func (self *TlsEdgeService) KillLoadCountForTest() *sidecar.MonitorValue[uint64]
 func (self *TlsEdgeService) KillChangeCountForTest() *sidecar.MonitorValue[uint64] {
 	return self.killChangeCount
 }
+
+// Finished passes of the caps' loader.
+func (self *TlsEdgeService) LimitsPassCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.limits.passCount
+}

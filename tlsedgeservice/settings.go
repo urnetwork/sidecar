@@ -83,6 +83,25 @@ type TlsEdgeSettings struct {
 	RedisTimeout time.Duration
 	// The pause after a failed Accept, which keeps a run of them from spinning. Default 100 ms.
 	AcceptRetryDelay time.Duration
+
+	// The caps' (§13.9).
+
+	// What a network gets until its own caps load (reading 11): Community's. Each field -1 or positive,
+	// since a cold network is never refused for being cold.
+	ColdLimits *TlsEndpointLimits
+	// How often a network's caps load again while it is in use. Default 5 s, §20.7's producer cache.
+	LimitsRefreshInterval time.Duration
+	// A network unused this long is forgotten, and cold again at its next connection. Default 10 min.
+	LimitsActiveWindow time.Duration
+	// Networks whose caps are held at most, the oldest going first. Default 65,536.
+	LimitsMaxNetworkCount int
+	// Token buckets of visitor /64s or /32s held at most, and the same of /48s or /24s. Default 65,536
+	// each, so a scan of distinct prefixes costs a few MiB.
+	VisitorRateMaxCount int
+	// Token buckets of endpoints held at most. Default 65,536.
+	EndpointRateMaxCount int
+	// What an endpoint's bandwidth bucket holds when full, as time at its rate. Default 1 s.
+	BandwidthBurst time.Duration
 }
 
 // The design's numbers. Root and Blocks stay unset, so these alone do not pass Validate.
@@ -107,6 +126,13 @@ func DefaultTlsEdgeSettings() *TlsEdgeSettings {
 		StoreTimeout:            30 * time.Second,
 		RedisTimeout:            1 * time.Second,
 		AcceptRetryDelay:        100 * time.Millisecond,
+		ColdLimits:              DefaultColdTlsEndpointLimits(),
+		LimitsRefreshInterval:   5 * time.Second,
+		LimitsActiveWindow:      10 * time.Minute,
+		LimitsMaxNetworkCount:   64 * 1024,
+		VisitorRateMaxCount:     64 * 1024,
+		EndpointRateMaxCount:    64 * 1024,
+		BandwidthBurst:          1 * time.Second,
 	}
 }
 
@@ -236,9 +262,30 @@ func (self *TlsEdgeSettings) Validate() error {
 		"StoreTimeout":            int64(self.StoreTimeout),
 		"RedisTimeout":            int64(self.RedisTimeout),
 		"AcceptRetryDelay":        int64(self.AcceptRetryDelay),
+		"LimitsRefreshInterval":   int64(self.LimitsRefreshInterval),
+		"LimitsActiveWindow":      int64(self.LimitsActiveWindow),
+		"LimitsMaxNetworkCount":   int64(self.LimitsMaxNetworkCount),
+		"VisitorRateMaxCount":     int64(self.VisitorRateMaxCount),
+		"EndpointRateMaxCount":    int64(self.EndpointRateMaxCount),
+		"BandwidthBurst":          int64(self.BandwidthBurst),
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%w: %s is not positive", ErrTlsEdgeSettingsRefused, name)
+		}
+	}
+	if self.ColdLimits == nil {
+		return fmt.Errorf("%w: ColdLimits is missing", ErrTlsEdgeSettingsRefused)
+	}
+	for name, value := range map[string]int64{
+		"EndpointConcurrent":       self.ColdLimits.EndpointConcurrent,
+		"EndpointNewPerS":          self.ColdLimits.EndpointNewPerS,
+		"EndpointMbitPerS":         self.ColdLimits.EndpointMbitPerS,
+		"VisitorConcurrent":        self.ColdLimits.VisitorConcurrent,
+		"VisitorNewPerS":           self.ColdLimits.VisitorNewPerS,
+		"VisitorAggregateMultiple": self.ColdLimits.VisitorAggregateMultiple,
+	} {
+		if value == 0 || value < tlsLimitNone {
+			return fmt.Errorf("%w: ColdLimits.%s is neither positive nor none", ErrTlsEdgeSettingsRefused, name)
 		}
 	}
 	return nil

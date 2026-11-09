@@ -48,6 +48,9 @@ type TlsEdgeService struct {
 	names         *TlsEdgeNames
 	kills         *TlsKillSet
 	negativeCache *tlsNegativeCache
+	visitorKeys   *TlsVisitorKeys
+	caps          *TlsEdgeCaps
+	limits        *tlsEndpointLimitsCache
 
 	// Wakes the kills loop for a key event or a resync.
 	killWake chan struct{}
@@ -90,6 +93,7 @@ func NewTlsEdgeService(
 	}
 	clock := host.ClockOrReal()
 	cancelCtx, cancel := context.WithCancel(ctx)
+	visitorKeys := NewTlsVisitorKeys(clock)
 	self := &TlsEdgeService{
 		ctx:                   cancelCtx,
 		cancel:                cancel,
@@ -102,6 +106,9 @@ func NewTlsEdgeService(
 		names:                 NewTlsEdgeNames(settings.Root, clock),
 		kills:                 NewTlsKillSet(clock),
 		negativeCache:         newTlsNegativeCache(settings.NegativeCacheTtl, settings.NegativeCacheMaxCount, clock),
+		visitorKeys:           visitorKeys,
+		caps:                  NewTlsEdgeCaps(settings, clock, visitorKeys),
+		limits:                newTlsEndpointLimitsCache(settings, host.Quota, clock),
 		killWake:              make(chan struct{}, 1),
 		killChangeCount:       sidecar.NewMonitorValue(uint64(0)),
 		nameLoadCount:         sidecar.NewMonitorValue(uint64(0)),
@@ -111,6 +118,11 @@ func NewTlsEdgeService(
 		liveListeners:         map[net.Listener]bool{},
 		liveConnections:       map[net.Conn]bool{},
 	}
+	self.loopGroup.Add(1)
+	go func() {
+		defer self.loopGroup.Done()
+		self.limits.run(cancelCtx)
+	}()
 	if store != nil {
 		self.loopGroup.Add(2)
 		go self.runNames()
@@ -127,6 +139,22 @@ func (self *TlsEdgeService) Names() *TlsEdgeNames {
 // The kill set, which the connection path checks.
 func (self *TlsEdgeService) Kills() *TlsKillSet {
 	return self.kills
+}
+
+// The caps, which the connection path admits through (§13.9).
+func (self *TlsEdgeService) Caps() *TlsEdgeCaps {
+	return self.caps
+}
+
+// The day's visitor keys, which also give a record's visitor hash (tls-3).
+func (self *TlsEdgeService) VisitorKeys() *TlsVisitorKeys {
+	return self.visitorKeys
+}
+
+// The network's caps as last loaded through ServiceHost.Quota.Limits, or Community's while it is cold
+// (reading 11). No I/O and no wait: a cold network's load runs off the path.
+func (self *TlsEdgeService) EndpointLimits(networkId sidecar.Id) *TlsEndpointLimits {
+	return self.limits.Limits(networkId)
 }
 
 // See sidecar.Engine: the store and the dialer given, the label map's first snapshot read, the kill
@@ -162,11 +190,13 @@ func (self *TlsEdgeService) runNames() {
 	defer self.loopGroup.Done()
 	for {
 		self.loadNames()
+		// armed before the pass is counted, so a wait that sees the count can move the clock past it
+		next := self.clock.After(self.settings.NameReloadInterval)
 		self.nameLoadCount.Update(func(count uint64) uint64 { return count + 1 })
 		select {
 		case <-self.ctx.Done():
 			return
-		case <-self.clock.After(self.settings.NameReloadInterval):
+		case <-next:
 		}
 	}
 }
@@ -243,6 +273,7 @@ func (self *TlsEdgeService) runKills() {
 			self.killResyncPending = false
 			return resync
 		}()
+		reloaded := false
 		if resync || !now.Before(nextReload) {
 			reloadWait := self.settings.KillReloadInterval
 			if self.reloadKills() {
@@ -252,7 +283,7 @@ func (self *TlsEdgeService) runKills() {
 				failedReloadCount += 1
 			}
 			nextReload = self.clock.Now().Add(reloadWait)
-			self.killLoadCount.Update(func(count uint64) uint64 { return count + 1 })
+			reloaded = true
 		}
 		pendingNetworkIds := func() []sidecar.Id {
 			self.stateLock.Lock()
@@ -281,11 +312,16 @@ func (self *TlsEdgeService) runKills() {
 			}()
 			wait = min(wait, self.settings.KillRetryDelay)
 		}
+		// armed before the reload is counted, as runNames does
+		next := self.clock.After(wait)
+		if reloaded {
+			self.killLoadCount.Update(func(count uint64) uint64 { return count + 1 })
+		}
 		select {
 		case <-self.ctx.Done():
 			return
 		case <-self.killWake:
-		case <-self.clock.After(wait):
+		case <-next:
 		}
 	}
 }

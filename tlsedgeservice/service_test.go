@@ -111,16 +111,6 @@ func testAwaitCount(t *testing.T, monitor *sidecar.MonitorValue[uint64], target 
 	}
 }
 
-// Waits until the engine's loops are both parked on the fake clock.
-func (self *testServiceWorld) awaitLoopsParked(t *testing.T, timerCount int) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(self.ctx, 30*time.Second)
-	defer cancel()
-	if err := self.clock.AwaitTimers(ctx, timerCount); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // With no store the engine loads nothing and is never ready, and with no dialer it is not ready either.
 func TestTlsEdgeServiceNotReadyWithoutStoreOrDialer(t *testing.T) {
 	world := newTestServiceWorld(t, nil, newTestServiceDialer(4))
@@ -171,7 +161,6 @@ func TestTlsEdgeServiceFirstSnapshotFailure(t *testing.T) {
 	if world.service.Ready() || world.service.Names().Loaded() {
 		t.Fatal("ready on a failed snapshot")
 	}
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(5 * time.Second)
 	testAwaitCount(t, world.service.NameLoadCountForTest(), 2)
 	if !world.service.Ready() {
@@ -203,7 +192,6 @@ func TestTlsEdgeServiceNamesFollowChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.WithdrawNetwork(networkId)
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(5 * time.Second)
 	testAwaitCount(t, world.service.NameLoadCountForTest(), 2)
 	target, ok := world.service.Names().Resolve("blog."+newLabel+"."+testServiceRoot, 443)
@@ -233,7 +221,6 @@ func TestTlsEdgeServiceRestoreTakesSnapshot(t *testing.T) {
 	if _, err := faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpHost, KeyPrefix: "tlsedge.NamesSince", Result: sidecartest.FailBeforeApply}); err != nil {
 		t.Fatal(err)
 	}
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(5 * time.Second)
 	testAwaitCount(t, world.service.NameLoadCountForTest(), 2)
 	if _, ok := world.service.Names().Resolve(label+"."+testServiceRoot, 443); !ok {
@@ -241,7 +228,6 @@ func TestTlsEdgeServiceRestoreTakesSnapshot(t *testing.T) {
 	}
 
 	store.RestoreRoot(testServiceRoot)
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(5 * time.Second)
 	testAwaitCount(t, world.service.NameLoadCountForTest(), 3)
 	if counts := store.OpCounts(); counts["NameSnapshot"] != 2 {
@@ -355,7 +341,6 @@ func TestTlsEdgeServiceReloadMergesRowsAndKeys(t *testing.T) {
 	if err := world.host.Redis.HashSet(world.ctx, sidecar.TlsKillKey(networkId), map[string][]byte{"blog": value}); err != nil {
 		t.Fatal(err)
 	}
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(60 * time.Second)
 	testAwaitCount(t, world.service.KillLoadCountForTest(), 2)
 	if !world.service.Kills().Kills(networkId, "blog") {
@@ -364,7 +349,6 @@ func TestTlsEdgeServiceReloadMergesRowsAndKeys(t *testing.T) {
 
 	// a restore loses the row: the key holds the kill
 	store.LiftSuspension(networkId, "blog")
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(60 * time.Second)
 	testAwaitCount(t, world.service.KillLoadCountForTest(), 3)
 	if !world.service.Kills().Kills(networkId, "blog") {
@@ -375,7 +359,6 @@ func TestTlsEdgeServiceReloadMergesRowsAndKeys(t *testing.T) {
 	if err := world.host.Redis.Delete(world.ctx, []string{sidecar.TlsKillKey(networkId)}); err != nil {
 		t.Fatal(err)
 	}
-	world.awaitLoopsParked(t, 2)
 	world.clock.Advance(60 * time.Second)
 	testAwaitCount(t, world.service.KillLoadCountForTest(), 4)
 	if world.service.Kills().Kills(networkId, "blog") {

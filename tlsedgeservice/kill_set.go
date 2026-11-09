@@ -120,6 +120,9 @@ func (self *TlsKillSet) SetRows(rows []*sidecar.TlsSuspendArgs) []sidecar.Id {
 			Until:  row.Until,
 		})
 	}
+	// the barriers sit outside the lock, so a schedule holding one stalls no reader of the set
+	testHookBarrier("tlsedge.kill_publish.before", "")
+	defer testHookBarrier("tlsedge.kill_publish.after", "")
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	changed := []sidecar.Id{}
@@ -143,6 +146,8 @@ func (self *TlsKillSet) SetRows(rows []*sidecar.TlsSuspendArgs) []sidecar.Id {
 // kills changed.
 func (self *TlsKillSet) SetKey(networkId sidecar.Id, fieldValues map[string][]byte) bool {
 	entries := ParseTlsKillHash(fieldValues)
+	testHookBarrier("tlsedge.kill_publish.before", networkId.String())
+	defer testHookBarrier("tlsedge.kill_publish.after", networkId.String())
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if tlsKillEntriesEqual(self.keyNetworkIdEntries[networkId], entries) {
@@ -166,9 +171,7 @@ func (self *TlsKillSet) publishWithLock() {
 	for networkId, entries := range self.keyNetworkIdEntries {
 		networkIdEntries[networkId] = append(networkIdEntries[networkId], entries...)
 	}
-	testHookBarrier("tlsedge.kill_publish.before", "")
 	self.view.Store(&tlsKillView{networkIdEntries: networkIdEntries})
-	testHookBarrier("tlsedge.kill_publish.after", "")
 }
 
 // The kills a {tes_<network_id>} hash holds: field the host or *, value the entry's JSON (tls_api.go).
