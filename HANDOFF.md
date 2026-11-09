@@ -1,8 +1,8 @@
 # Sidecar: design-to-implementation handoff
 
-*2026-11-06. From the design team to the implementation team.*
+*2026-11-06, updated 2026-11-09 for owner decision 197. From the design team to the implementation team.*
 
-This is where building the sidecar infrastructure starts. The design is finished. [DESIGN.md](DESIGN.md), about 21,300 lines, holds every decision, and this document maps it: what to read, what to build first, what must never break, and what is still open. Where the two disagree, DESIGN.md wins. Tell the owner, and fix whichever is wrong.
+This is where building the sidecar infrastructure starts. The design is finished, but for the two owner questions that owner decision 197 raised ([section 10](#10-open-items-risks-and-evidence-gates)). [DESIGN.md](DESIGN.md), about 21,400 lines, holds every decision, and this document maps it: what to read, what to build first, what must never break, and what is still open. Where the two disagree, DESIGN.md wins. Tell the owner, and fix whichever is wrong.
 
 ## Contents
 
@@ -32,12 +32,13 @@ This is where building the sidecar infrastructure starts. The design is finished
   See DESIGN.md's opening and [§1](DESIGN.md#1-context-goals-and-requirements).
 - **The one rule.** "End to end encryption is a must. The storage, tls edge, mail must only see encrypted bytes and some small header values like sni and spam headers." A server component that would see plaintext content is a design error and is never offered as an option ([owner directive](DESIGN.md#owner-directive)).
 - **State of the design.**
-  - No question is open. [Appendix B](DESIGN.md#appendix-b-open-questions-register)'s 200 questions break down as:
+  - Two questions are open, both for the owner: Q-SDK-7, forwarding's budget in the iOS network extension, and Q-BRIDGE-8, whether an app device claims its overlay address when its forwarding is set up. The sections are written to each recommendation, marked "(proposed; Q-...)" ([open owner questions](DESIGN.md#open-owner-questions)). [Appendix B](DESIGN.md#appendix-b-open-questions-register)'s 202 questions break down as:
     - 173 decided by the owner;
     - 11 closed by peer review;
     - 12 closed by the internal design review of 2026-11-03, which reviewers may reopen;
-    - 4 withdrawn.
-  - Owner decisions 1-196 settle the cross-cutting choices ([owner decisions by number](DESIGN.md#owner-decisions-by-number)).
+    - 4 withdrawn;
+    - 2 open.
+  - Owner decisions 1-197 settle the cross-cutting choices ([owner decisions by number](DESIGN.md#owner-decisions-by-number)). The latest, on 2026-11-09, puts only the device's IP and port forwarding in every app's VPN component, always on and self-contained, and runs Android's sidecar only while the app is open (owner decision 197, amending owner decisions 87 and 12).
   - The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build straight through on the `sidecar` branches (owner decision 194). Nothing is frozen. Each format's specification freezes at its milestone's entry review and its bytes at the exit review ([§23.8](DESIGN.md#238-review-gates)).
 - **What to do first.** M0, "Foundations" ([§23.4](DESIGN.md#234-milestones); [section 7](#7-m0-in-detail) lists it in full):
   - open the `sidecar` branches;
@@ -103,9 +104,14 @@ Where encryption ends depends on the service. For connect, tlsedge and certs it 
 
 - `ur daemon` runs one `Sidecar` per network, with its evs, gkm, sockets, mail, tls, bridge, mcp and search parts. It keeps the network's config repo in evs.
 - A harness talks to `ur mcp` over stdio, and `ur mcp` relays to the daemon over a peer-uid Unix socket.
-- Apps embed `sdk.Sidecar`. Network processes hold the keyless device role.
+- Apps embed `sdk.Sidecar`, the sidecar role, which runs only while the app is open, OS-granted windows and wakes aside, on Android as on iOS. Desktop apps reach `ur daemon` in remote mode.
+- Every app's VPN component runs the forwarding role and nothing else of sidecar: Apple's network extension on iOS and macOS, Android's VPN service, and the Windows and Linux app services ([§18.4](DESIGN.md#184-roles-placement-identity), [§18.6](DESIGN.md#186-device-abstractions-and-the-deviceremote-mirror); owner decision 197).
+  - It is the device's IP and port forwarding: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet.
+  - It runs whenever the VPN component runs, and no setting turns it off.
+  - It is self-contained. It generates its own forwarding keys, which never leave it, and its sidecar authorizes them by a forwarding Delegation. It refreshes its own forwarding client, follows the config repo and compiles its rules itself, and signs its links' `WindowDelegation`s, so it never waits on the app.
+  - Whoever compromises it can forward as its sidecar, through that sidecar's grants, and read the config, until the forwarding Delegation ends. It holds no mail, no other evs repo, no MLS secret and none of the sidecar's own keys. On Android this holds once app work gives the VPN service a process of its own ([§18.16](DESIGN.md#1816-risks)).
 - The extension runs `sidecar.wasm` as a web worker once its own Worker lands (Later). Until then it reaches `ur daemon` by native messaging (M8), and ur.io pages run `sidecar.wasm` read-only (M4).
-- Indexers are always-on `ur daemon`s (desktop, NAS or VPS), or Android with the VPN on for mail only, listed in the config repo's `IndexerSet` (owner decision 150).
+- Indexers are always-on `ur daemon`s (desktop, NAS or VPS), never an app, listed in the config repo's `IndexerSet` (owner decisions 150, 197).
 
 **On the servers** ([§3.8](DESIGN.md#38-service-summary), [§19](DESIGN.md#19-server-services-deployment-data-stores-operations)):
 
@@ -203,8 +209,8 @@ These rules are hard. When a section cannot meet one, it raises a Q- item for th
   - The root package imports only `protocol` and `protocol/bridge` from this repo.
   - `protocol/bridge` imports only std and protobuf.
   - No client package imports a `<svc>service`, and the root never imports `device/`.
-- **Build legs.** `ios_extension` links neither the root nor `protocol`. `sidecar_http`, the browser Worker's leg, links no connect or gVisor package. There is no cgo except `keychain_darwin.go`.
-- **Wire types.** The types the device role parses live only in `protocol/bridge`. Never declare a proto type twice: a duplicate panics at init. Run protoc from the repo root, and commit the `.pb.go` files.
+- **Build legs.** `ios_extension`, the leg Apple's network extensions build, links `device/` and `protocol/bridge`, and beyond them only the root files on §18.10's forwarding list and `protocol`'s config, acl, evs and gkm descriptors (D-SDK-20; owner decision 197). `sidecar_http`, the browser Worker's leg, links no connect or gVisor package. There is no cgo except `keychain_darwin.go`.
+- **Wire types.** The types `device/` parses live only in `protocol/bridge`. Never declare a proto type twice: a duplicate panics at init. Run protoc from the repo root, and commit the `.pb.go` files.
 - **Engines** never import server, so go-redis, minio-go and prometheus stay out of sidecar.
 - **Test hooks.** From M0's `mls_*` on, call `testHookSecret` at every key creation, derivation and unwrap, and `testHookBarrier` at and around every linearization point. The privacy harness scans for every hooked key; fault schedules run on barriers and fake clocks, never sleeps. Both are empty without the `sidecar_testhooks` tag, and `make check` fails a release leg built with it ([§22.4](DESIGN.md#224-tiers-and-harness)).
 - **Dependencies** are MIT, BSD-2/3-Clause, Apache-2.0, ISC or MPL-2.0 only. Shared module versions match connect, sdk and server.
@@ -259,7 +265,8 @@ github.com/urnetwork/sidecar
 │   bridge_*, record_*, directory_*, search_*, indexer_*                    each service's client side; MLS in mls_*
 ├── <svc>service/   pushservice socketsservice gkmservice evsservice dnsservice
 │                   tlsedgeservice certsservice smtpedgeservice mxedgeservice   server-only engines
-├── device/         the keyless device role; imports connect and protocol/bridge only
+├── device/         the forwarding role's packet side, which apps' VPN components link with the
+│                   root's forwarding files; imports connect and protocol/bridge only
 ├── protocol/       config.proto acl.proto directory.proto search.proto
 │   └── bridge/     signed.proto auth.proto bridge.proto; std and protobuf only
 ├── mcp/            the stdio MCP server
@@ -301,7 +308,7 @@ Each milestone is a vertical slice with an entry review, an exit review and a da
 | **M5** Names, edge | <ul><li>Streams and Service edges (C9)</li><li>§9, §12, §13 and §21 v0, with `tls/`, the dns edge and edge login</li><li>§14's report host</li></ul> | <ul><li>The dns edge serves the user root</li><li>Platform names and company MX moved off ur.network</li><li>Passthrough publish</li><li>CT and zone watches alarm</li><li>A kill switch that acts in ≤ 5 s</li></ul> |
 | **M6** Team; RS2 with M5 | v1 of §4-§13 and §16-§21, less format 2:<ul><li>SCIM and custom domains</li><li>Cross-network shares (C18)</li><li>Config wraps past a network's first 1,000 member devices</li><li>The team directory and the team console</li><li>`ur tun` on macOS and Windows</li><li>24/7 on-call</li></ul> | <ul><li>OIDC SSO</li><li>A removal blocks writes until its Remove commits</li><li>The team record</li><li>S13's schedules</li><li>A custom host turns ready only once every lb interface is current (FS-122)</li><li>Team billed</li></ul> |
 | **M7** Inbound mail | <ul><li>§9's `smtp/`</li><li>§12's mail records, TLSA and the DS</li><li>§15's receive path</li><li>mxedge on port 25</li></ul> | <ul><li>SNI inbound reaches desktop, NAS and VPS mail indexers</li><li>DANE TLSA live</li><li>Plaintext senders refused</li><li>Validated labels</li><li>D-MAIL-9's census run</li></ul> |
-| **M8** Burner; BS1, receive-only | <ul><li>§15's burners and app seams</li><li>App hosts, with sdk hosts and wake pushes</li><li>§13's app listeners</li><li>§17's Apple platforms</li><li>The directory's notice wakes on phones</li></ul> | <ul><li>Burner create and burn</li><li>Vault entries and one-time codes</li><li>The DeviceRemote mirror and receiver hosting API pass T4</li><li>Wake tokens in revision order (FS-120)</li><li>Release readiness, never a per-user gate</li></ul> |
+| **M8** Burner; BS1, receive-only | <ul><li>§15's burners and app seams</li><li>App hosts, with sdk hosts and wake pushes</li><li>§13's app listeners</li><li>§17's forwarding in every app's VPN component, with its own key and compile (owner decision 197), app-device hosts after C16, and private names on app paths</li><li>The directory's notice wakes on phones</li></ul> | <ul><li>Burner create and burn</li><li>Vault entries and one-time codes</li><li>The DeviceRemote mirror and receiver hosting API pass T4</li><li>Wake tokens in revision order (FS-120)</li><li>Release readiness, never a per-user gate</li></ul> |
 | **M9** Outbound mail | <ul><li>§14 v0 on the shared lb addresses, with `ur/`, reverse zones and burner records</li><li>Sending, replies and forwarding</li><li>§21's mail ladder and breakers</li></ul> | <ul><li>D-SMTP-16's proof tests, DATA mode included (FS-123)</li><li>DANE-only MXs reached, and unauthenticated ones refused</li><li>Halt, ARF and RUA joins</li></ul> |
 | **M10** Format 2, beside M6 | <ul><li>Versionless objects, the purge and history drops</li><li>git-lfs's versionless store</li><li>Format-1 migration</li><li>The search index in every eligible repo</li><li>Remote search and C19</li><li>`ur search`, `ur agents` and MCP search</li><li>The directory's cards</li></ul> | <ul><li>M10's schedules</li><li>D-TEST-13's drive-write gate</li><li>Index vectors byte-equal on every leg</li><li>A migrated repo's search equal to the oracle</li><li>Purge and drops in observe mode until production soaks pass</li></ul> |
 
@@ -394,7 +401,7 @@ No external review gates any milestone (owner decision 99).
 - **Year two's HDD PUTs fill the 50% line** (high by the model, high). Mitigation: the `hdd` run and its trigger.
 - **Track B is unstaffed** (medium, high). Mitigation: the fallback above.
 - **The BDAT or DATA proof misses D-SMTP-16** (high, high). Mitigation: BS1 launches receive-only.
-- **Senders without SNI, and iOS-only users who miss codes** (high, high). Mitigation: the census, indexer paths and the `foreground-only` copy.
+- **Senders without SNI, and phone-only users, iOS or Android, who miss codes** (high, high; owner decisions 12, 197). Mitigation: the census, indexer paths and the `foreground-only` copy.
 - **A purge, drop or migration destroys content** (low, critical). Mitigation: soaks and the FS rows.
 
 ## 7. M0 in detail
@@ -522,9 +529,9 @@ M0's exit needs G0 passed, `make check` green, the lock entry on server@sidecar,
 
 **Platform budgets** ([§22.9](DESIGN.md#229-conformance-and-platform-budgets)):
 
-- `make size` keeps the iOS extension's device role within 1 MiB.
+- `make size` holds the `ios_extension` leg, forwarding in the iOS network extension, to Q-SDK-7's budget: at most 4 MiB of executable added, proposed until the owner answers (owner decision 197).
 - The page Worker's wasm goal is 41,943,040 B.
-- §18.4's memory budgets hold on iOS.
+- §18.4's memory budgets hold on iOS, with forwarding's Go heap within Q-SDK-7's bound, 4 MiB steady and 8 MiB while compiling, on an ios32 surrogate whose forwarding role compiles a 5,000-device team's config.
 
 ## 9. Area guides
 
@@ -553,7 +560,7 @@ Each guide covers one area: where its code goes, when it lands, what to read fir
 `sidecar.Sidecar`, one per network in a per-instance `ur daemon`, holds its own Required client, durable `sidecar_id` and identity key, handles enrollment, refresh, admission and revocation, gates outward actions, and seals a per-network keychain.
 
 - **Code:** `sidecar` root package: `sidecar.go`, `settings.go`, `identity_`, `keys_`, `state_`, `daemon_`, `api_`; connect-using files carry `!sidecar_http` ([§4.4](DESIGN.md#44-repo-tree-and-layering)); `ur` in `cli/`. Server api: `POST /sidecar/bind`, `GET /sidecar/identity/<sidecar_id>`, never-reaped `sidecar_identity` and `sidecar_identity_binding` tables (migration ≥926).
-- **Lands:** M1 daemon, enrollment, keychain, DPoP refresh; M2 admission, revocation, recovery code; M3 gate, own-device revocation; M4 page Worker; M6 several networks; M8 sdk hosts, pairing; M10 index cache ([§5.17](DESIGN.md#517-phasing)).
+- **Lands:** M1 daemon, enrollment, keychain, DPoP refresh; M2 admission, revocation, recovery code; M3 gate, own-device revocation; M4 page Worker; M6 several networks; M8 sdk hosts, pairing, forwarding's identity row and key stores in apps' VPN components; M10 index cache ([§5.17](DESIGN.md#517-phasing)).
 - **Read first:** [§5.4](DESIGN.md#54-sidecar-fields-settings-lifecycle-components) types, lifecycle; [§5.5](DESIGN.md#55-identity-x10) key roles; [§5.6](DESIGN.md#56-login-enrollment-admission-refresh-revocation) enrollment to revocation; [§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery) state, keychain; [§5.8](DESIGN.md#58-the-daemon-and-local-ipc) daemon, IPC.
 - **Build first:** (1) every-leg root types, `DefaultSidecarSettings()`, net/http `SidecarApi` (M1); (2) U in `unlock.wrap`, per-network R_n, store states (M1); (3) enrollment, `POST /sidecar/bind`, DPoP refresh with `restore_required` (M1); (4) the daemon: `<state>/lock` flock, peer-uid check, JSON-RPC 2.0 (M1).
 - **Easy to get wrong:**
@@ -563,6 +570,7 @@ Each guide covers one area: where its code goes, when it lands, what to read fir
   - One R_n per network: no recovery code opens another network's keys (D-CORE-14).
   - Persist the keychain only if the reply confirms `admin_refused` (D-CORE-7).
   - Mode grants nothing: admissions, `OwnerConfirm` and revoking another device need `/dev/tty` or app-UI confirmation, never MCP (D-CORE-13).
+  - Forwarding's keys live in the VPN component's own store, apart from the sidecar role's, so neither reads the other's: on Apple platforms the extension's own keychain group, never `network.ur.sidecar` or the app group. After a setup, any store state but Present leaves forwarding pending and never resets it; only its sidecar's own sign-out wipes it ([§5.9](DESIGN.md#59-local-state-keychain-os-key-stores-recovery); owner decision 197).
 - **Gated by:**
   - [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §5 row at each component's milestone: wraps, store states, other uids refused, no secret in replies, fail-closed enrollment, one code opening no other network's keychain.
   - `make check` fails a `sidecar_http` leg linking connect or gVisor (from M1); M1-out: daemon on darwin, linux, windows, `preview_networks` only.
@@ -599,7 +607,7 @@ How sidecars talk over connect (subprotocol id 21842): chunked envelopes, peer R
 Who administers a network and which devices it admits: the P0 client-token fix, enrollment, scoped tokens, and each network's signed `config` repo and authorization log.
 
 - **Code:** server `api` (log sequencer, `rev/` writer, sole `{acl_<networkId>}e` writer; tables, migrations 926+), `server/api/route_authz.go`, `server/oauth` (exchange, edge login), `taskworker` (reaper); sidecar `protocol/config.proto`, `protocol/bridge/auth.proto`, the verifier; `sdk/sidecar.go` (DPoP signer).
-- **Lands:** M0 stage 1 log-only; M1 enforced, enrollment, exchange, `rev/`; M2 config repo, log; M3 stage 2; M5 edge login; M6 Team; M10 `VersioningRules`, `search`.
+- **Lands:** M0 stage 1 log-only; M1 enforced, enrollment, exchange, `rev/`; M2 config repo, log, with the forwarding Delegation's fields reserved; M3 stage 2; M5 edge login; M6 Team; M8 forwarding Delegations and the `forward_only` mark (owner decision 197); M10 `VersioningRules`, `search`.
 - **Read first:**
   1. [§7.4](DESIGN.md#74-p0-a-client-token-never-administers): allowlist, `strict_exp`, DPoP proof.
   2. [§7.8](DESIGN.md#78-credentials-and-scoped-tokens): enrollment, `#<bundle>`, exchange, `rev/`.
@@ -615,6 +623,7 @@ Who administers a network and which devices it admits: the P0 client-token fix, 
   - api appends: on 412, re-verify and try the next position; on a timeout, GET the position tried. No base lowers `config_version` or `folded_through` (D-TEAM-19).
   - k of n counts distinct members, never targets or read_only devices; recovery-signed statements wait for an ApiTick 72 h after the newest recovery signature, unvetoed (D-TEAM-21).
   - A signer with a live presence key must countersign presence-row statements; a compromise revocation is refused if its parked set holds one of its signers (D-TEAM-32, D-TEAM-26).
+  - A forwarding Delegation is signed only by its own sidecar, admits nothing, has no `not_after`, and a newer one supersedes it without a shrink; D-TEAM-30's agent rules never apply to it. Its `forward_only` client acts as the sidecar at every gate, so the exchange must give it the config's `r` scope alone, or it would take all of the sidecar's scopes (D-TEAM-33; [§7.4](DESIGN.md#74-p0-a-client-token-never-administers), [§7.8](DESIGN.md#78-credentials-and-scoped-tokens); owner decision 197).
 - **Gated by:**
   - M1-out: stage 1 and D-TEAM-14 enforced; `TestSidecarTokenRoutes`, [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §7 row.
   - M2-out: [§22.7](DESIGN.md#227-scenarios-privacy-revocation)'s admission suite; FS-14, FS-16, FS-18, FS-62, FS-102, FS-124's M2 cases; records freeze ([§23.8](DESIGN.md#238-review-gates)).
@@ -686,7 +695,7 @@ Clients lease `[<net>:]<name>` registrations; for each Find, the `sockets` servi
 An in-house, pure-Go MLS subset (RFC 9420, suite 0x0010) gives each evs repo one group, whose epochs export a key-encryption key for repo-key generations RK_g. gkm, a stateless Delivery Service over metadata-cluster objects, orders commits and stores RK_g only wrapped.
 
 - **Code:** sidecar root `mls_*`, `gkm_*` (`GkmClient`), `protocol/gkm.proto`, `gkmservice/`; test peers in nested `mlsinterop/`. Server: `server/cli/gkm` (D-OPS-2), reconciler in taskworker, limits in `config/all/pro.yml`. No tables; acks in Redis `{gka_<group_id>}`.
-- **Lands:** M0 starts the subset; M2 §10 v0, agents on wraps; M6 v1 (config wraps past the first 1,000 member devices, the directory group, the audit reader); M10 the `index` purpose ([§23.4](DESIGN.md#234-milestones)).
+- **Lands:** M0 starts the subset; M2 §10 v0, agents on wraps; M6 v1 (config wraps past the first 1,000 member devices, the directory group, the audit reader); M8 the forwarding key holder (owner decision 197); M10 the `index` purpose ([§23.4](DESIGN.md#234-milestones)).
 - **Read first:** [§10.4](DESIGN.md#104-implementation-ciphersuite-credentials), subset and framing; [§10.5](DESIGN.md#105-the-key-hierarchy-what-one-session-key-stored-in-gkm-means), hierarchy, Rotate, KeyHolders; [§10.6](DESIGN.md#106-gkm-the-delivery-service-and-wrapped-key-store), objects, checks, scopes, gate; [§10.9](DESIGN.md#109-authorization-of-mls-operations), what members verify; [§10.7](DESIGN.md#107-flows), KF1-KF7.
 - **Build first:**
   1. M0: `mls_*` with its X-Wing KAT; the subset is M2's critical path ([§23.5](DESIGN.md#235-x15-two-tracks-and-staffing)).
@@ -697,6 +706,7 @@ An in-house, pure-Go MLS subset (RFC 9420, suite 0x0010) gives each evs repo one
   - Rotate stages every delivery before claiming; on 412, adopt the winner only if it covers what you rotate for, else take g+2 (D-KEYS-15).
   - gkm sees no proposal, so members verify every commit and wrap; wrapped writers never commit Add or Remove (owner decisions 59, 114, 144, 182).
   - A covered agent's reap is no shrink; its `Suspend` or non-reap revocation drops its Delegation's key (D-KEYS-16).
+  - A forwarding Delegation reaches the config alone, and its holder identity is its sidecar's (kind 5), so a newer one of the same sidecar is a key replacement with a late DelegationWrap, never a shrink; its `DelegationRevoke`, or its sidecar's revocation, is a shrink (D-KEYS-16; owner decision 197).
   - ReaderKey `not_after` ≤7 days after signing; replace at 6 days; keep private keys 30 days past it (D-KEYS-25).
   - KF1 writes first wraps before evs activates the repo (D-KEYS-18); retention never deletes the newest epoch (D-KEYS-20).
 - **Gated by:**
@@ -831,10 +841,11 @@ Outbound mail runs TLS end to end from a desktop-class sidecar through `smtpedge
   - smtpedge forwards a client record only once a verified part covers it; a message record, only once parts cover every earlier server record (E3, D-SMTP-22).
   - SPF never aligns; only strict DKIM separates networks (D-SMTP-5). A replying burner's `_domainkey` child blocks the wildcard; its `<blabel>` gets MX and A/AAAA copies ([§15.9](DESIGN.md#159-burner-email), D-DNS-11).
   - No label claims path confidentiality or, for burners, cites MTA-STS (owner decision 135, D-MAIL-13).
+  - No app is a mail indexer. The iOS and Android apps receive only while open, the VPN component runs only forwarding, and an app's wake only resyncs; a remote-mode desktop app's `SetReceiverEnabled` designates its daemon ([§15.6](DESIGN.md#156-when-no-receiver-is-online); owner decisions 12, 150, 197).
 - **Gated by:**
   - M5-out: FS-39's intake cases; S7's SNI-less abuse@`<root>`.
   - M7-out: FS-13, FS-33, FS-121, FS-39's rest; the census run ([§23.6](DESIGN.md#236-decisions-that-block-each-milestone)).
-  - M8 (BS1): the mail-indexer paths and prompt pass §22.
+  - M8 (BS1): the mail-indexer paths (desktop daemon, NAS or VPS) and the prompt pass §22.
   - M9: `smtpproof/SPEC.md` frozen at entry; D-SMTP-16's soundness, speed, coverage and interop; a mutated witness per E1-E3, Z1-Z9 ([§22.10](DESIGN.md#2210-internal-review-gates)); FS-31, FS-123.
 - **Still open:** the owner's BS1 call on M7's measured SNI loss (proposed: under 5% of sign-up and code mail lacks SNI; D-MAIL-9); HE's TCP 25 egress and reverse delegation, asked in M0, unknown, due at M9's entry review ([§23.7](DESIGN.md#237-external-lead-times)).
 
@@ -866,57 +877,65 @@ The stdio MCP server inside `ur daemon` that gives Claude Code, Codex and Cursor
 
 ### 9.13 Bridge: private IPs, subnet routes and port forwards
 
-Each network gets a private IPv4 /16. A router before connect's mux sends overlay and granted-subnet traffic over per-target links; the target's hook passes, maps (DNAT) or denies each flow by signed config-repo rules.
+Each network gets a private IPv4 /16. A router before connect's mux sends overlay and granted-subnet traffic over per-target links; the target's hook passes, maps (DNAT) or denies each flow by signed config-repo rules. A CLI host's daemon runs all of this in process under its identity key. In every app it is the forwarding role, which runs in the VPN component whenever that runs, self-contained under a forwarding Delegation of the app's sidecar (owner decision 197).
 
-- **Code:** sidecar root `bridge_*.go`; `device/` (`device.Bridge`, imports connect and `protocol/bridge` only); `protocol/bridge/`; `cli/` (`ur tun`, `ur bridge`); connect C5, C6a, C13-C16, C18; sdk `sdk/device_sidecar.go`; server only `network_bridge_share`. No new service.
-- **Lands:** M4 same-network v0 (Linux, WSL2; sdk seam behind `EnableBridge`); M6 shares (C18), `ur tun` on macOS, Windows; M8 Apple, app-device hosts, iOS links ([§17.18](DESIGN.md#1718-phasing)).
+- **Code:** sidecar root `bridge_*.go`: statements, the compiler, forwards, and forwarding's setup and signer. The compiler and signer are among the root's forwarding files that apps' VPN components link ([§18.10](DESIGN.md#1810-build-and-size)). Also `device/` (`device.Bridge`, imports connect and `protocol/bridge` only); `protocol/bridge/`; `cli/` (`ur tun`, `ur bridge`); connect C5, C6a, C13-C16, C18; sdk `sdk/device_sidecar*.go`; server `network_bridge_share` and the forwarding client's `forward_only` mark. No new service.
+- **Lands:** M4 same-network v0 (Linux, WSL2; sdk seam behind `EnableBridge`); M6 shares (C18), `ur tun` on macOS, Windows; M8 forwarding in every app's VPN component, with its own keys, compile and signing: sending from M8, hosting after C16 in the device client's network, iOS links after §22.9's measurement ([§17.18](DESIGN.md#1718-phasing)).
 - **Read first:**
   1. [§17.5](DESIGN.md#175-data-path-and-the-router): router, pins, links.
   2. [§17.6](DESIGN.md#176-provider-hook-and-port-mapping): hook, rules 0-8.
-  3. [§17.8](DESIGN.md#178-rules-in-the-config-repo-delivery-engine-disposition): statements, states.
+  3. [§17.8](DESIGN.md#178-rules-in-the-config-repo-delivery-engine-disposition): statements, states, forwarding roles.
   4. [§17.9](DESIGN.md#179-acl-identity-egress-cross-network-shares-c18): delegations, shares.
-  5. [§18.6](DESIGN.md#186-device-abstractions-and-the-deviceremote-mirror): the sdk seam.
+  5. [§18.6](DESIGN.md#186-device-abstractions-and-the-deviceremote-mirror): the sdk seam, and forwarding's setup, following, posture and signing.
 - **Build first:**
   1. M4: `bridge.proto` (Signed 0x1901-0x1908, `BridgeState`, `Pending`).
   2. M4: connect C5's hook and dial fence; C13's delegation seal.
   3. M4: `device.Bridge` (Classify, pins, links, `BridgeEgressPolicy`), then the sdk insertion after `sendRoute.Load()` and `ur tun` on Linux.
+  4. M8: forwarding-key delegations at hosts and senders (§17.9's verify and target rows), then the VPN component's own following, compile and signing on its forwarding client (§18.6).
 - **Easy to get wrong:**
   - Revocation swaps the policy before `CloseFlows`; flows register rule tag and generation before dialing, re-checked before the first byte (D-BRIDGE-21).
   - Admit native flows only on a verified customer-signed `WindowDelegation`; C13's seal is a consistency check (D-BRIDGE-17).
+  - An app's forwarding key signs only its own sidecar's `WindowDelegation`s. A host admits one only while that sidecar's forwarding Delegation is live. A sender links to an app host only on the host client key that Delegation names, never on `GET /sidecar/identity`'s, which names the sidecar's own client (§17.9; D-BRIDGE-17).
   - Pending denies every private destination and exit; unsigned input never lowers a verified state (D-BRIDGE-18).
+  - In an app, forwarding never waits on the app: the VPN component takes rule changes and revocations itself while the app sleeps, and no setting turns it off (owner decision 197). Hosting there waits for C16 and runs only in the device client's network; sending needs no C16 (D-BRIDGE-5).
   - Rule 0: never dial the daemon's own listeners, document or not (D-BRIDGE-19).
   - Links: `FixedWindowSize: 1`, `PostQuantumEncryption`, `EnableIcmp`; never `DefaultMultiClientSettings` (Q-BRIDGE-2).
   - Pins key on (source, destination, protocol); a full table refuses nothing (D-BRIDGE-7, owner decision 66); HA never falls back to a broader prefix or default route.
 - **Gated by:**
   - M4-out: FS-38 (native IP trust; shares M6-out) and FS-56 (dial fence, TCP, UDP, ICMP), both FI-11.
   - [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §17 row: Classify (bart v0.30.0, else in-repo) vs linear scan, ≤50 ns at 1,000 prefixes; `BridgeEgressPolicy` vs reference, also fuzzed.
+  - M8-out: the same row's forwarding cases, on FS-38's operator-minted contracts. A delegation the forwarding key signs is admitted, and every refused one opens nothing. A new grant and a revocation reach the host with the sidecar role stopped. A `forward_only` client gets only the config's `r` ([§23.6](DESIGN.md#236-decisions-that-block-each-milestone)'s M8 row).
   - §22.7's pin, drain and fragment cases; §22.9's 1,024-slot pin table churned past 1,024 pairs refuses none.
-- **Still open:** No Q-BRIDGE residuals. Evidence gates: iOS links await §22.9's memory measurement (owner decision 100); `auto` addresses await the WebRTC overlay test (§17.17); C6a drops 100.64/10 after a release of shadow counts.
+- **Still open:** Q-BRIDGE-8, for the owner: whether an app device claims its overlay address when its forwarding is set up. The design keeps §17.4's on-demand claim meanwhile, as recommended. Evidence gates: iOS links await §22.9's memory measurement (owner decision 100), and iOS forwarding waits on Q-SDK-7's budget ([9.14](#914-sdk-apps-and-the-extension)); `auto` addresses await the WebRTC overlay test (§17.17); C6a drops 100.64/10 after a release of shadow counts.
 
 ### 9.14 SDK, apps and the extension
 
-This area binds the sidecar into the sdk: the `sdk.Sidecar` API apps call, a keyless device role in network processes, wake pushes, and a browser sidecar (`sidecar.wasm` behind the key origin `https://sidecar.ur.io`).
+This area binds the sidecar into the sdk: the `sdk.Sidecar` API apps call, which runs only while the app is open; the forwarding role in every app's VPN component, with its setup and keys (owner decision 197); wake pushes; and a browser sidecar (`sidecar.wasm` behind the key origin `https://sidecar.ur.io`).
 
-- **Code:** sdk `sdk/sidecar*.go`, `sdk/device_sidecar.go` (`deviceBridge`); leaf `sidecar/device` over `sidecar/protocol/bridge`; Worker main `sdk/js/cmd/sidecarwasm`; `ur native-host` (`cli/`); api `/sidecar/push-token`, `/sidecar/close`; taskworker's push sender and reaper; mmm's key origin.
-- **Lands:** M1 lease; M3 credential releases; M4 dark seam, host list, page Worker (RS1); M6 console; M8 app hosts, wakes, native companion; M10 search; Later the extension's Worker ([§18.17](DESIGN.md#1817-phasing)).
-- **Read first:** [§18.4](DESIGN.md#184-roles-placement-identity) (roles, budgets); [§18.10](DESIGN.md#1810-build-and-size) (legs, size); [§18.6](DESIGN.md#186-device-abstractions-and-the-deviceremote-mirror) (seam, posture); [§18.8](DESIGN.md#188-the-browser-sidecar-x14-the-extension-and-urio-pages) (key origin, lease); [§18.5](DESIGN.md#185-sdksidecargo) (API, states).
+- **Code:** sdk `sdk/sidecar*.go`, `sdk/device_sidecar*.go` (`deviceBridge`, forwarding's host, key store and setup calls); leaf `sidecar/device` over `sidecar/protocol/bridge`, with the root's forwarding files; Worker main `sdk/js/cmd/sidecarwasm`; `ur native-host` (`cli/`); api `/sidecar/push-token`, `/sidecar/close`; taskworker's push sender and reaper; mmm's key origin.
+- **Lands:** M1 lease; M3 credential releases; M4 dark seam, the forwarding leg's file and descriptor lists, host list, page Worker (RS1); M6 console; M8 app hosts, forwarding in every app's VPN component, Android's sidecar only while the app is open, wakes, native companion; M10 search; Later the extension's Worker ([§18.17](DESIGN.md#1817-phasing)).
+- **Read first:** [§18.4](DESIGN.md#184-roles-placement-identity) (roles, budgets); [§18.6](DESIGN.md#186-device-abstractions-and-the-deviceremote-mirror) (seam, forwarding's setup, following, posture and signing); [§18.10](DESIGN.md#1810-build-and-size) (legs, the forwarding leg, size); [§18.8](DESIGN.md#188-the-browser-sidecar-x14-the-extension-and-urio-pages) (key origin, lease); [§18.5](DESIGN.md#185-sdksidecargo) (API, states).
 - **Build first:**
   1. M1: `network_client_lease`, the reap predicate, `POST /sidecar/close`; `make check` on the `sidecar_http` leg.
   2. M2: measure `sidecar.wasm` unstripped against 41,943,040 B; Q-SDK-1's spike before M4's entry.
   3. M3: desktop app and extension releases stop persisting `by_jwt` (D-SDK-11).
-  4. M4: `sidecar/device`'s dark seam behind `EnableBridge` (posture, zone call, id refusal); `make size`.
+  4. M4: `sidecar/device`'s dark seam behind `EnableBridge` (posture, zone call, id refusal); the `ios_extension` leg's forwarding file and descriptor lists; `make size`.
+  5. M8: forwarding's setup in the sidecar role: the VPN component's public keys in, the forwarding Delegation, the `forward_only` client and the hand-off out. Then the VPN component's host: its sealed key store, following, compile and signing.
 - **Easy to get wrong:**
-  - `sidecar/device` imports only connect and `sidecar/protocol/bridge` (D-SDK-20); the page Worker links no connect package: connect-facing and `host_*.go` files are `!sidecar_http` (D-SDK-19).
-  - Posture (legacy → pending → enforcing) persists and is restored before the first packet; no restart, delay or unsigned response lowers it (D-SDK-13; DP1).
+  - `sidecar/device` imports only connect and `sidecar/protocol/bridge` (D-SDK-20). The `ios_extension` leg links of the root only §18.10's forwarding files, and of `protocol` only the config, acl, evs and gkm descriptors. The page Worker links no connect package: connect-facing and `host_*.go` files are `!sidecar_http` (D-SDK-19).
+  - Posture (legacy → pending → enforcing) persists, sealed, in the VPN component's own store, and is restored before the first packet; no restart, delay or unsigned response lowers it (D-SDK-13; DP1).
+  - Forwarding's keys are generated in the VPN component and never leave it, and no key of the sidecar enters it. The device RPC carries only bridge status and forwarding's setup calls (public keys out, the hand-off in, the witness hint), each additive, so `DeviceRpcVersion` stays 3 (D-SDK-32).
+  - Forwarding runs whenever the VPN component runs, never waits on the app, and has no setting that turns it off. It runs in each network the app's sidecar has joined, each with its own posture, and hosts only in the device client's network (§18.6). On Android the sidecar role runs only while the app is open, OS-granted windows and wakes aside, as on iOS: no mail, sockets, search or file sync in the background with the VPN (owner decision 197).
   - Only a verified `SidecarRevoke` means revoked; a confirmed 401 means unenrolled, only if `IsAuthLogoutCurrent(g)` (D-SDK-14). `SidecarKeyStore` never throws (D-SDK-15).
-  - The device RPC gains only status, state and delegation calls (`DeviceRpcVersion` stays 3); delegations ride a direct reverseCall, never reverseNotify (D-SDK-3, D-SDK-13).
   - postMessage only from exactly `https://ur.io`; one Worker per network under a Web Lock (D-SDK-18); the key-origin document holds the close capability (D-SDK-17).
   - Wakes carry topic class and version, never an id (WK4); no script spans two hash slots (WK1); a vendor 410 tombstones only while `rev` equals the `tokrev` read (D-SDK-16).
 - **Gated by:**
-  - `make check` (from M1), `make size` (≤1 MiB, from M4), the wasm gate (from M2) ([§18.10](DESIGN.md#1810-build-and-size)).
-  - [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §18 row (key-store statuses through every adapter); [§22.9](DESIGN.md#229-conformance-and-platform-budgets)'s Browsers row (M4).
+  - `make check` (from M1), `make size` (the `ios_extension` leg within Q-SDK-7's budget, from M4), the wasm gate (from M2) ([§18.10](DESIGN.md#1810-build-and-size)).
+  - [§22.5](DESIGN.md#225-component-matrix-and-hot-path-gates)'s §18 row: key-store statuses through every adapter, the forwarding leg's lists, and from M8 forwarding's posture, rules and revocations with the sidecar role stopped, and its own refresh. [§22.9](DESIGN.md#229-conformance-and-platform-budgets)'s Browsers row (M4) and its memory row, forwarding's compile on an ios32 cell included.
   - FS-37, FS-97 (M4-out); FS-98 (M3-out); FS-36, FS-120 (M8-out); FS-77, FS-83 (M10-out; app hosts at the later of M10-out and M8-out).
 - **Still open:**
+  - Q-SDK-7, for the owner: forwarding's budget in the iOS network extension. The design is written to its recommendation: at most 4 MiB of executable added, the signed extension's ceiling raised from 50 MiB to 54 MiB, and forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling. These figures are estimates until §22.9 measures them on surrogates (owner decision 100).
+  - Android's VPN service shares the app's process until app work gives it one of its own, so until then a compromise there reaches the sidecar role while the app is open; forwarding's keys and files stay apart from the sidecar role's meanwhile ([§18.16](DESIGN.md#1816-risks)).
   - Q-SDK-1's spike decides C17, for the extension only (owner decision 22).
   - `sidecar.wasm` (estimated 13-21 MB) may miss 41,943,040 B; RS1 then ships under 74,965,628 B.
   - Search targets need surrogate and Safari-wasm runs before M10's exit (D-SDK-25).
@@ -995,10 +1014,17 @@ Abuse policy over names, metadata, rates and reports, never content: intake into
 
 ## 10. Open items, risks and evidence gates
 
-No design question is open. This is what remains.
+Two design questions are open, both the owner's, raised on 2026-11-09 in designing owner decision 197. This is what remains.
 
 **For the owner now:**
 
+- **Answer Q-SDK-7, forwarding's budget in the iOS network extension, before M4's entry** ([§18.13](DESIGN.md#1813-open-questions)). Owner decision 197 has the extension follow the config repo and compile its own rules, which today's 1 MiB `make size` gate cannot hold.
+  - Recommended, and the design is written to it: (a), the root's forwarding files in the `ios_extension` leg, at most 4 MiB of executable added, the signed extension's ceiling raised from 50 MiB to 54 MiB, and forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling, inside the tunnel's 28 MiB target.
+  - Not recommended: (b), a second, minimal follower and compiler in `sidecar/device` within 1 MiB, which means two implementations of security-critical rules; (c), the app compiling on iOS alone, which would amend owner decision 197.
+  - It blocks the leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8.
+- **Answer Q-BRIDGE-8, whether an app device claims its overlay address when its forwarding is set up, before M8's app hosts** ([§17.14](DESIGN.md#1714-open-questions)).
+  - Recommended, and the design is written to it: (a), on demand, as §17.4 has it. With no ACL document, a hosted address opens the device's loopback to the network's untagged sidecars (owner decision 120), and (b) can follow by one filing at any later setup.
+  - The other option: (b), the sidecar files its own `BridgeAddress` at setup, so every app device is addressable once C16 lets it host.
 - **Create `urnetwork/minio` on GitHub** before any push (owner decision 195).
 - **Decide what happens if M2's storage benchmark misses.**
   - The model puts 1 KiB blocks at 33.3 KiB written per push and 4 KiB blocks at 43.5 KiB, against a 43 KiB gate.
@@ -1020,9 +1046,10 @@ No design question is open. This is what remains.
 | M2 entry | <ul><li>`EvsCommit.tla` passing TLC</li><li>The FS rows written as tests</li><li>The vector schemas</li><li>RECORD.md reviewed</li></ul> |
 | M2 exit | <ul><li>D-TEST-11's `nvme` run on the PM9A3 set, with its `fold` and `trash` rows</li><li>§10.6's sizes and §19.9's epoch size</li><li>The 0x0010 interop artifact</li><li>The M2 schedules</li></ul> |
 | M3 | <ul><li>The `hdd` row, before the segment cluster holds data</li><li>FS-40 on production</li><li>The `nvme` run again, on production</li><li>FS-50's drill</li><li>A sidecar-dump restore drill before the pilot</li></ul> |
-| M4 | <ul><li>`make size`'s 1 MiB gate</li><li>Per-target memory, before any iOS bridge link</li></ul> |
+| M4 | <ul><li>`make size`'s `ios_extension` gate, at Q-SDK-7's budget</li><li>Per-target memory, before any iOS bridge link</li></ul> |
 | M5 | Counsel's answer on owner decision 133 |
 | M6 entry | FS-46 and §20.9's escrow benchmark on M4's dark build |
+| M8 | Forwarding's heap on an ios32 surrogate compiling a 5,000-device team's config, within Q-SDK-7's bound, before iOS forwarding (owner decision 197) |
 | BS1 | The owner's acceptance of the SNI loss |
 | M9 | <ul><li>`smtpproof/SPEC.md`</li><li>A soundness argument by two people who did not write it</li><li>An independent relation checker</li></ul> |
 
@@ -1044,7 +1071,8 @@ No design question is open. This is what remains.
   - a passive copy of the keychain reads content up to about 37 days after the copy (60 above 50 leaves) while the device runs, and while it does not run, the copied leaf keeps deriving later epochs' keys until the device commits again or a stale Remove removes it;
   - holders of a team's indexer see search words;
   - relays see search timing;
-  - a wave of P0 work can push drives past 0.8 DWPD.
+  - a wave of P0 work can push drives past 0.8 DWPD;
+  - a compromised app VPN component forwards as its sidecar, through that sidecar's grants, and reads the config, until its forwarding Delegation ends; it never reaches mail, another evs repo, MLS secrets or the sidecar's own keys (owner decision 197).
 
 **Known gaps in the text and the tests:**
 
@@ -1074,7 +1102,7 @@ Implementation will find things the design got wrong or left thin. The rules for
   - An unsettled blocker defers only what it blocks.
   - Until the owner decides, text written at a question's recommendation is marked "(proposed; Q-…)" (D-ARCH-4).
   - A technical problem with a PLAN.md statement keeps the PLAN position visible and goes to the owner (owner rule 8).
-- **New owner decisions continue at 197.** Each one touches six places, which the source README lists. The validator fails a decision that no section cites.
+- **New owner decisions continue at 198.** Each one touches six places, which the source README lists. The validator fails a decision that no section cites.
 - **Freezes are real.** After a format's Gn-in its specification is frozen, and after Gn-out its bytes are. Before a final freeze, only local, T3, canary and M2's staging cluster may hold the format.
 - **Metadata goes on the list.** Any new server-visible column, Redis family, object family or proto field updates §2.8's list in the same change (I-18). Gn-out checks it.
 - **Before each review gate, refresh the checks:**
@@ -1090,7 +1118,7 @@ Most come from [Appendix C](DESIGN.md#appendix-c-glossary), which defines 330 te
 | Term | Meaning |
 |---|---|
 | `Sidecar`, `ur daemon` | The core type `sidecar.Sidecar`: identity, connect client, APIs and keys. The daemon is the per-instance background process that hosts one Sidecar per network (§5.4, §5.8). |
-| device role | The keyless half of the sidecar, package `sidecar/device`, which routes bridge flows in network processes (§18.4) |
+| sidecar role, forwarding role | The full `sidecar.Sidecar` on its own Required client, in an app only while the app is open; all of sidecar that runs in an app's VPN component, the device's IP and port forwarding, always on and self-contained with its own forwarding key, in `sidecar/device` and the root's forwarding files (§18.4, §18.6; owner decision 197) |
 | 21842 | The one connect subprotocol id that carries all sidecar traffic (§6.4) |
 | evs | Encrypted versioned storage: per-repo, encrypted, git-shaped objects in the file cluster (§11) |
 | head, push id | A ref's commit point, `head/<repo>/<ref>`, changed only by If-Match; the id of one push, committed only when a head names it (§11.8) |
@@ -1103,11 +1131,11 @@ Most come from [Appendix C](DESIGN.md#appendix-c-glossary), which defines 330 te
 | config repo | The per-network evs repo of signed authority records, policy and settings that every admitted sidecar reads (§7.9) |
 | authorization log | One hash-chained log per network of projection bases, statements and api's ticks; its position is the projection version (§7.9) |
 | genesis | The owner's first device's signed Genesis record, the network's trust anchor (§7.9) |
-| Delegation | A signed config record whose key admits up to `max_admits` tagged agents, for at most 90 days (§7.9) |
+| Delegation, forwarding Delegation | A signed config record whose key admits up to `max_admits` tagged agents, for at most 90 days; the same record signed by a sidecar for its app's VPN component, whose key admits nothing, signs only that sidecar's `WindowDelegation`s and reads only the config, live with no `not_after` until it is revoked or superseded or its sidecar is revoked (§7.9; owner decision 197) |
 | presence key | A hardware key proving that a person approved, beyond a same-device prompt; where the signing device registered one, its countersignature guards revocations of other devices, admissions of untagged sidecars and authority changes (§16.6; owner decisions 185, 187, 189) |
 | HeadCheck, witness | A peer RPC comparing pins, generations, heads, epochs and vetoes; any other admitted reader whose HeadCheck agrees (§6.4, §2.14) |
 | owner-bound repo | A member's vault, mailbox or secret repo, read only by its consented devices, EvsShares and a visible audit reader (§11.12) |
-| indexer, IndexerSet | An always-on device its network designates, none by default, to run background services: mail, mirrors and search upkeep. It gains no access. `IndexerSet` is the config statement that designates it (§3.6, §7.9). |
+| indexer, IndexerSet | An always-on device its network designates, none by default, to run background services: mail, mirrors and search upkeep. It is never an app (owner decision 197), and it gains no access. `IndexerSet` is the config statement that designates it (§3.6, §7.9). |
 | format 2, versionless | v1's storage format: versionless content, history drops, the search index and git-lfs. Versionless content is purged once a newer version commits (§11.6, §11.7). |
 | erasure, CUT | Destroying chosen entries' keys everywhere by a push on the repo's `erasure` ref; with the search index, a CUT goes first on each index ref (§11.12) |
 | C19 window | A 55-minute span of a phone-to-indexer search pair whose reports connect withholds to the window's end, at a 256 KiB floor each way (§6.10) |
