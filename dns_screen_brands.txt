@@ -1,0 +1,66 @@
+# The brands ScreenName screens (§12.5, §21.6), each with the domains whose verification (§7.6) lets
+# a network use it. One brand a line, as dns_brand_labels.txt writes it, then its domains, lowercase
+# and separated by spaces. Lines that are blank or start with # say nothing.
+#
+# This file extends dns_brand_labels.txt, the brands §12.5's confusable rule protects: every brand
+# there has a line here, and no brand is here that is not there, which TestScreenBrandsCoverTheBrandLabels
+# holds. A brand that is also one of §12.5's reserved labels, URnetwork's own, takes no domain, since
+# neither a verified domain nor a reviewer's allow lets a name use it. Every other brand takes at
+# least one, each a domain its owner holds: verifying one proves the network is the brand's.
+#
+# A seed of the brands public phishing reports name most often. Choosing and keeping the full list
+# is the abuse desk's (§21.6), outside this repository; a product's line may name its maker's domain.
+
+# URnetwork's own, from §12.5's block
+ur
+urnetwork
+bringyour
+recurd
+burner
+
+# the seed
+adobe adobe.com
+airbnb airbnb.com
+alibaba alibaba.com
+aliexpress aliexpress.com
+amazon amazon.com
+americanexpress americanexpress.com
+apple apple.com
+bankofamerica bankofamerica.com
+binance binance.com
+chase chase.com
+citibank citibank.com
+coinbase coinbase.com
+dhl dhl.com
+docusign docusign.com
+dropbox dropbox.com
+ebay ebay.com
+facebook facebook.com meta.com
+fedex fedex.com
+gmail gmail.com google.com
+google google.com
+hsbc hsbc.com
+icloud icloud.com apple.com
+instagram instagram.com meta.com
+linkedin linkedin.com
+mastercard mastercard.com
+meta meta.com
+metamask metamask.io
+microsoft microsoft.com
+netflix netflix.com
+office365 office.com microsoft.com
+onedrive microsoft.com
+outlook outlook.com microsoft.com
+paypal paypal.com
+roblox roblox.com
+santander santander.com
+spotify spotify.com
+telegram telegram.org
+twitter twitter.com x.com
+ups ups.com
+usps usps.com
+visa visa.com
+walmart walmart.com
+wellsfargo wellsfargo.com
+whatsapp whatsapp.com meta.com
+yahoo yahoo.com
