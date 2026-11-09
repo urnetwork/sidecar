@@ -15,7 +15,8 @@
 //     one-pass scan, privacy_decompress.go the views a body opens, and the capture points:
 //     privacy_handler.go CC1 and the request log, privacy_frame.go CC2's rule and frame sizes,
 //     privacy_sources.go CC4 and the classes. leak.go and leak_enabled.go are its self-test's leaks,
-//     linked only under sidecar_leaktest.
+//     linked only under sidecar_leaktest. privacy_asserts.go is the assert block's registry, each clause
+//     with its gates, owners and registered tests, which a Gn-out sweep reads for what is missing.
 //   - metadata_list.go, §2.8's list and its strict reader, and schema_guard*.go, §22.7's guard over it,
 //     whose map is testdata/metadata/fields.yml.
 //   - fake_blobs*.go, fake_redis*.go and the other fake_ files, a fake of every interface ServiceHost
@@ -41,6 +42,9 @@
 //     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
 //   - fault, the FS schedule runner (§22.8), with catalog.yml, §22.8's rows and §23.6's gates, and
 //     §22.8's rules across runs: twins, every write's lost response, the explorer and replays.
+//   - load, §22.8's harness conventions: an open-loop driver, the one report shape, and a sampler of
+//     heap, goroutines and Redis keys; testdata/targets.yml is R-TEST-7's ledger of what each run shows,
+//     which targets_test.go holds.
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
 package sidecartest

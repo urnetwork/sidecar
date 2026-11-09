@@ -149,6 +149,7 @@ func NewSidecar(ctx context.Context, host SidecarHost, components []SidecarCompo
 		strategy: strategy,
 		platform: platform,
 		budget:   NewSubprotocolBudget(settings.ProtocolSettings, settings.MemoryBudgetByteCount),
+		tls:      newTlsDeviceState(settings.Tls),
 	}
 	for _, component := range components {
 		if err := leg.addComponent(component); err != nil {
@@ -169,6 +170,8 @@ type sidecarConnectLeg struct {
 	// §6's process-wide caps for this Sidecar's dispatchers, inside MemoryBudgetByteCount (§6.6). Several networks
 	// in one daemon share one from CORE-M6-01.
 	budget *SubprotocolBudget
+	// The device key's lock, the certificate source and the self-signed leaves (tls_self_signed.go).
+	tls *tlsDeviceState
 
 	stateLock  sync.Mutex
 	components []SidecarComponent
