@@ -221,7 +221,7 @@ func (self *ZoneView) typedRecords(match zoneMatch, rrType uint16, owner string,
 	if rrset := match.node.rrset(rrType); rrset != nil {
 		return self.rrsetRecords(rrset, owner, healthy)
 	}
-	if match.node.copyRow != nil {
+	if match.node.copies() {
 		if source := self.copySource(match.name); source != nil {
 			if rrset := source.rrset(rrType); rrset != nil {
 				return self.rrsetRecords(rrset, owner, healthy)
@@ -247,7 +247,7 @@ func (self *ZoneView) anyRecords(match zoneMatch, owner string, healthy *Healthy
 	if records := first(match.node); records != nil {
 		return records
 	}
-	if match.node.copyRow != nil {
+	if match.node.copies() {
 		if source := self.copySource(match.name); source != nil {
 			if records := first(source); records != nil {
 				return records
@@ -267,6 +267,11 @@ func (self *ZoneView) answerQuestion(reply *dns.Msg, question dns.Question, heal
 		match := self.match(dns.CanonicalName(owner))
 		if match.node == nil {
 			reply.Rcode = dns.RcodeNameError
+			reply.Ns = append(reply.Ns, self.denialSoa())
+			return
+		}
+		// a suspended host answers no data of any type, ANY included (§12.9)
+		if match.node.withheldOwner() {
 			reply.Ns = append(reply.Ns, self.denialSoa())
 			return
 		}

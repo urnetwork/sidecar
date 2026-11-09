@@ -95,7 +95,7 @@ func (self *ZoneView) dataTypes(name string, healthy *HealthySet) []uint16 {
 		}
 	}
 	add(match.node)
-	if match.node.copyRow != nil {
+	if match.node.copies() {
 		if source := self.copySource(match.name); source != nil {
 			add(source)
 		}
