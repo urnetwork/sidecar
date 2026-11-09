@@ -173,6 +173,22 @@ func TestKeptOnlyAfterContentSha256(t *testing.T) {
 	if err != nil || ref == nil || len(ref.Files) != 1 || ref.Files[0].ContentSha256 != good.record.ContentSha256 || ref.RefVersion != 9 {
 		t.Fatalf("held %+v, %v", ref, err)
 	}
+	// a reader's one frame buffer takes each frame it reads, so a cursor holds one frame and no more
+	frames, err := world.cache.OpenRecord(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := frames.frameSource(good.record.Header, good.record.ObjectKey, good.record.FileId)
+	buffer := make([]byte, EvsRecordFrameByteCount)
+	for index := range 2 {
+		frame, err := source.indexReadFrame(index, buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if &frame[0] != &buffer[0] {
+			t.Errorf("frame %d was read into a buffer of its own", index)
+		}
+	}
 	// the record stays as evs sealed it: nothing of its plaintext is on the medium, sealed locally or not
 	for _, path := range world.searchPaths(t) {
 		reader, err := world.backend.Open(path)
@@ -446,5 +462,14 @@ func TestMemoryCacheWritesNothing(t *testing.T) {
 	}
 	if paths := world.searchPaths(t); len(paths) != 0 {
 		t.Errorf("an in-memory cache wrote %v", paths)
+	}
+
+	// a lock takes the in-memory files with the decoded state: everything in them is fetched or derived again
+	ended := make(chan struct{})
+	world.cache.AddCursor(func() { close(ended) })
+	world.instance.Lock()
+	<-ended
+	if ref, err := world.cache.Ref(key.RepoId, key.RefId); err != nil || ref != nil || world.cache.ByteCount() != 0 {
+		t.Errorf("after a lock the memory cache holds %+v, %d bytes: %v", ref, world.cache.ByteCount(), err)
 	}
 }
