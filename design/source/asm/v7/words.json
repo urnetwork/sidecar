@@ -2,74 +2,74 @@
  {
   "num": 1,
   "code": "CTX",
-  "words": 3755,
+  "words": 3786,
   "code_words": 52,
   "ceiling": 2200,
-  "over": 1555,
-  "over_pct": 70.7
+  "over": 1586,
+  "over_pct": 72.1
  },
  {
   "num": 2,
   "code": "TRUST",
-  "words": 8502,
-  "code_words": 12848,
+  "words": 8675,
+  "code_words": 12928,
   "ceiling": 3000,
-  "over": 5502,
-  "over_pct": 183.4
+  "over": 5675,
+  "over_pct": 189.2
  },
  {
   "num": 3,
   "code": "ARCH",
-  "words": 4525,
-  "code_words": 6673,
+  "words": 4580,
+  "code_words": 6686,
   "ceiling": 3000,
-  "over": 1525,
-  "over_pct": 50.8
+  "over": 1580,
+  "over_pct": 52.7
  },
  {
   "num": 4,
   "code": "REPO",
-  "words": 4200,
-  "code_words": 929,
+  "words": 4265,
+  "code_words": 952,
   "ceiling": 2800,
-  "over": 1400,
-  "over_pct": 50.0
+  "over": 1465,
+  "over_pct": 52.3
  },
  {
   "num": 5,
   "code": "CORE",
-  "words": 8113,
+  "words": 8396,
   "code_words": 6301,
   "ceiling": 3500,
-  "over": 4613,
-  "over_pct": 131.8
+  "over": 4896,
+  "over_pct": 139.9
  },
  {
   "num": 6,
   "code": "PROTO",
-  "words": 7704,
-  "code_words": 4582,
+  "words": 7730,
+  "code_words": 4580,
   "ceiling": 3800,
-  "over": 3904,
-  "over_pct": 102.7
+  "over": 3930,
+  "over_pct": 103.4
  },
  {
   "num": 7,
   "code": "TEAM",
-  "words": 9474,
-  "code_words": 8684,
+  "words": 9718,
+  "code_words": 8863,
   "ceiling": 3500,
-  "over": 5974,
-  "over_pct": 170.7
+  "over": 6218,
+  "over_pct": 177.7
  },
  {
   "num": 8,
   "code": "ACL",
-  "words": 6899,
-  "code_words": 2429,
+  "words": 6947,
+  "code_words": 2428,
   "ceiling": 3800,
-  "over": 3099,
-  "over_pct": 81.6
+  "over": 3147,
+  "over_pct": 82.8
  },
  {
   "num": 9,
@@ -83,11 +83,11 @@
  {
   "num": 10,
   "code": "KEYS",
-  "words": 9688,
-  "code_words": 6635,
+  "words": 9809,
+  "code_words": 6746,
   "ceiling": 4500,
-  "over": 5188,
-  "over_pct": 115.3
+  "over": 5309,
+  "over_pct": 118.0
  },
  {
   "num": 11,
@@ -101,11 +101,11 @@
  {
   "num": 12,
   "code": "DNS",
-  "words": 4655,
+  "words": 4665,
   "code_words": 1636,
   "ceiling": 3000,
-  "over": 1655,
-  "over_pct": 55.2
+  "over": 1665,
+  "over_pct": 55.5
  },
  {
   "num": 13,
@@ -128,11 +128,11 @@
  {
   "num": 15,
   "code": "MAIL",
-  "words": 8244,
+  "words": 8314,
   "code_words": 1666,
   "ceiling": 4500,
-  "over": 3744,
-  "over_pct": 83.2
+  "over": 3814,
+  "over_pct": 84.8
  },
  {
   "num": 16,
@@ -146,26 +146,26 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 6572,
-  "code_words": 3095,
+  "words": 7076,
+  "code_words": 3180,
   "ceiling": 3800,
-  "over": 2772,
-  "over_pct": 72.9
+  "over": 3276,
+  "over_pct": 86.2
  },
  {
   "num": 18,
   "code": "SDK",
-  "words": 7960,
-  "code_words": 8312,
+  "words": 9378,
+  "code_words": 8892,
   "ceiling": 3000,
-  "over": 4960,
-  "over_pct": 165.3
+  "over": 6378,
+  "over_pct": 212.6
  },
  {
   "num": 19,
   "code": "OPS",
   "words": 7613,
-  "code_words": 8437,
+  "code_words": 8442,
   "ceiling": 3500,
   "over": 4113,
   "over_pct": 117.5
@@ -173,11 +173,11 @@
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 4441,
+  "words": 4465,
   "code_words": 3805,
   "ceiling": 2500,
-  "over": 1941,
-  "over_pct": 77.6
+  "over": 1965,
+  "over_pct": 78.6
  },
  {
   "num": 21,
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7095,
-  "code_words": 34531,
+  "words": 7114,
+  "code_words": 34711,
   "ceiling": 2500,
-  "over": 4595,
-  "over_pct": 183.8
+  "over": 4614,
+  "over_pct": 184.6
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 6806,
-  "code_words": 1090,
+  "words": 6846,
+  "code_words": 1134,
   "ceiling": 2500,
-  "over": 4306,
-  "over_pct": 172.2
+  "over": 4346,
+  "over_pct": 173.8
  }
 ]

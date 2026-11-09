@@ -39,6 +39,11 @@
    "C19 window",
    "A 55-minute span of a phone-indexer search pair whose close reports connect withholds to its end and fixes at a 256 KiB floor each way.",
    "§6.10"
+  ],
+  [
+   "forwarding role",
+   "Sidecar's IP and port forwarding, self-contained in an app's VPN component (owner decision 197).",
+   "§18.4"
   ]
  ],
  "replace": {
@@ -77,9 +82,22 @@
   "P0, P1, P2 (write classes)": [
    "The write budget's classes: P0 (revocations, lifecycle, Removes), never queued or refused; P1 (pushes), queued per network; P2 (folds, evacuation, GC), prepaid by the P1 admissions causing it, else unfunded.",
    "§11.13"
+  ],
+  "BridgeState": [
+   "The compiler's bridge rules, names and anchor for `device.Bridge`, in a daemon or an app's VPN component.",
+   "§17.8"
+  ],
+  "sidecar role": [
+   "The full sidecar, on its own Required client.",
+   "§18.4"
+  ],
+  "Delegation": [
+   "A signed config record whose key, from a pre-approved auth key, admits tagged agents up to max_admits, or, forwarding, signs its sidecar's WindowDelegations.",
+   "§7.9"
   ]
  },
  "delete": [
-  "RV1-RV3"
+  "RV1-RV3",
+  "device role"
  ]
 }

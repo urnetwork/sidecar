@@ -31,7 +31,7 @@ This section owns the access-control model and its evaluation; X3, the customer 
 
 ### 8.4 Model
 
-**Subjects** are sidecars (`sidecar_id`, mapped to the current client through §5's binding) and other clients (`client_id`: app devices, legacy clients); untagged children such as sdk window clients act as their nearest subject ancestor (D-ACL-3). Before expansion each is classed as a member device (untagged, not ephemeral), an ephemeral sidecar, a tagged sidecar or another client (D-ACL-19). An untagged subject's atoms are its owner's user, groups and role, and its autogroups; an ephemeral subject's evs access is capped as 8.6 says; a tagged subject has no user atoms, and its §7 *sponsor* stands in: the admitting member or the one an admin's `SponsorSet` names, else `autogroup:admin` once that sponsor is removed (owner decision 83). In-daemon agents share their sidecar's grants, which the daemon may narrow (owner decision 4, §5.5).
+**Subjects** are sidecars (`sidecar_id`, mapped to the current client through §5's binding) and other clients (`client_id`: app devices, legacy clients); untagged children such as sdk window clients act as their nearest subject ancestor (D-ACL-3), so a sidecar's forwarding client and its window clients act as that sidecar, their tokens confined by `forward_only` (§7.4, §18.6; owner decision 197). Before expansion each is classed as a member device (untagged, not ephemeral), an ephemeral sidecar, a tagged sidecar or another client (D-ACL-19). An untagged subject's atoms are its owner's user, groups and role, and its autogroups; an ephemeral subject's evs access is capped as 8.6 says; a tagged subject has no user atoms, and its §7 *sponsor* stands in: the admitting member or the one an admin's `SponsorSet` names, else `autogroup:admin` once that sponsor is removed (owner decision 83). In-daemon agents share their sidecar's grants, which the daemon may narrow (owner decision 4, §5.5).
 
 ```text
 selector (src or dst unless noted)   meaning
@@ -239,7 +239,7 @@ message AclTarget {                       // exactly one kind set
 statement (§6 Signed, purpose acl unless noted; ids only; in       signer
   acl.proto, which imports sidecar/protocol/bridge/auth.proto
   (§4.4), where GrantRevoke, Suspend and Unsuspend are declared,
-  since the device role applies them between states (§17.8))
+  since sidecar/device's posture applies them between states (§17.8))
 GrantActivate{header, grant_id, canonical_action, decisions}       any admitted sidecar; authority only from the
   canonical_action: the approved §16.8 CanonicalAction, whose      embedded ApprovalDecisions, each signed by an
   grant fields are rule_id, subject, grant_dst, grant_allow and    approver the requests rule names (8.6) on a
@@ -328,7 +328,7 @@ rules     replace the network's VersioningRules (§7.9) for this repo; an owner-
 
 ### 8.9 Distribution: local evaluation and gate caches
 
-**Clients.** Every admitted sidecar follows the config repo and §7's `team` hints, verifies config heads and the authorization log (§7.9) and evaluates its own rules in `AclEngine`, with no always-on compiler (owner decision 6). The engine swaps compiled state through an `atomic.Pointer`, checks without locks or allocation, and compares its auth pin (n, A_n) in HeadCheck (§6.4), which any admitted reader, agents included, may witness (owner decision 129): it refuses a lower pin, and reconciles, alarms, relays (`proven`) and stops sealing in shared groups as §6.4's auth rules say. Keyless device roles check bases' signatures and chain only (owner decision 87).
+**Clients.** Every admitted sidecar follows the config repo and §7's `team` hints, verifies config heads and the authorization log (§7.9) and evaluates its own rules in `AclEngine`, with no always-on compiler (owner decision 6). The engine swaps compiled state through an `atomic.Pointer`, checks without locks or allocation, and compares its auth pin (n, A_n) in HeadCheck (§6.4), which any admitted reader, agents included, may witness (owner decision 129): it refuses a lower pin, and reconciles, alarms, relays (`proven`) and stops sealing in shared groups as §6.4's auth rules say. An app's forwarding role follows them itself in its VPN component, by its forwarding Delegation's reader key, through the same engine (§18.6; owner decision 197), and between its compiles `sidecar/device`'s posture checks bases' signatures and chain only.
 
 **Gates.** api's verifier (§7.9) keeps each network's newest base and the entries after it, which api, evs and gkm read from §7.9's verified Redis cache `{acl_<networkId>}e` when it reaches `{acl_}v` and every pin they hold, else from `proj/` on the first metadata cluster (owner decision 136); only api writes that cache, which decides nothing, and other gate services fetch from api, as only those three and taskworker reach the metadata tier (§2.8 evs-10). Each process caches them per (network, n), loading asynchronously outside packet locks on api's `INCR {acl_<networkId>}v` (class `$`, xops/redis-set-notify-keyspace-events.sh:23) after every entry it appends and on a 5-min poll; a network without a config repo costs one map miss (R-ACL-8). Gates check every entry's chain from their own pin wherever they read it, and refuse a lower n, or a second A_n at one n, with an alarm.
 

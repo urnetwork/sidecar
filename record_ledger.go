@@ -649,6 +649,8 @@ type sidecarRecords struct {
 	spool          *Spool
 	// the record's writer and push loop (RECORD-M3-02), built by Sidecar.Record
 	record *SidecarRecord
+	// the team directory's client (RECORD-M6-13), built by Sidecar.DirectoryClient
+	directory *DirectoryClient
 }
 
 // The network's sealed local state, net/<network_id>/ (§5.9): Directory(name, class) reaches §16's approvals/, runs/
@@ -702,5 +704,6 @@ func (self *sidecarRecords) forNetworkWithLock(networkId Id) {
 		self.runs = nil
 		self.spool = nil
 		self.record = nil
+		self.directory = nil
 	}
 }

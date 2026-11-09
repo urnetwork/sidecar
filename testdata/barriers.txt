@@ -42,6 +42,8 @@ barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
 barrier config.restore config_replay.go
 barrier config.run.checked config_rows_only.go
+barrier directory.sync.after directory_sync.go
+barrier directory.sync.before directory_sync.go
 barrier dnsservice.edge_publish dnsservice/edge.go
 barrier dnsservice.edge_publish.after dnsservice/edge.go
 barrier dnsservice.edge_publish.before dnsservice/edge.go

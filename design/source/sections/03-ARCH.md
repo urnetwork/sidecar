@@ -2,7 +2,7 @@
 
 ### 3.1 Purpose and scope
 
-This section assembles §1-§23 into one picture: a component map, the repo graph, planes, runtime topologies, thirteen end-to-end flows and a service summary. It designs nothing; every step cites its owner. The flows show only the directive (CONVENTIONS §0) and the owner's decisions ("owner decision N", front matter): 1-150, of 2026-11-03 to 2026-11-05, decide every X item and, with 141-145, the five owner questions the peer review raised (Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10), and F2 and F11 add the 2026-11-05 decisions on versionless objects (158, 161) and on the index and search (151-157, 166); F12 adds a phone's search through an indexer (175-178, 188, 191) and F13 the team directory (170, 171, 179-182). Owner decisions 167-184 answered every v1 question, 185 the SDK fixes' and 186-191 the final meta review's, and none is open; F11's index cadence follows owner decision 172 and 3.15's milestone for format 2 owner decision 169. Drafts' disagreements became Q-ARCH-1 to -9, closed by the 2026-11-03 design-review round (3.11).
+This section assembles §1-§23 into one picture: a component map, the repo graph, planes, runtime topologies, thirteen end-to-end flows and a service summary. It designs nothing; every step cites its owner. The flows show only the directive (CONVENTIONS §0) and the owner's decisions ("owner decision N", front matter): 1-150, of 2026-11-03 to 2026-11-05, decide every X item and, with 141-145, the five owner questions the peer review raised (Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10), and F2 and F11 add the 2026-11-05 decisions on versionless objects (158, 161) and on the index and search (151-157, 166); F12 adds a phone's search through an indexer (175-178, 188, 191) and F13 the team directory (170, 171, 179-182). Owner decisions 167-184 answered every v1 question, 185 the SDK fixes' and 186-191 the final meta review's; owner decision 197 put only forwarding in apps' VPN components (3.6, F7), and its design raised the two owner questions open now (Q-BRIDGE-8, Q-SDK-7); F11's index cadence follows owner decision 172 and 3.15's milestone for format 2 owner decision 169. Drafts' disagreements became Q-ARCH-1 to -9, closed by the 2026-11-03 design-review round (3.11).
 
 ### 3.2 Requirements
 
@@ -46,7 +46,7 @@ harness --stdio--> ur relay          api: enroll, token exchange, /sidecar/*, pu
   team directory, the first 1,000);    TCP 25 in --> mxedge (§15) <------------------------ sender MTAs
   agents hold wraps                    smtpedge (§14) --TCP 25 out from lb IPv4---------> destination MX
  sdk.Sidecar in apps (§18)           Postgres via PgBouncer: no file-storage state; Redis Cluster: soft
- device role: bridge hooks (§17)       state only (leases, push sequence, verified head and projection
+ forwarding in apps' VPN components    state only (leases, push sequence, verified head and projection
  extension, ur.io pages: wasm (X14)    caches, gkm acks; owner decision 136)
  sidecar traffic: id 21842, e2e,
   Required, relay-only (§6)
@@ -56,8 +56,8 @@ harness --stdio--> ur relay          api: enroll, token exchange, /sidecar/*, pu
 
 ```text
 sidecar ---------> connect                (only import; §4 D-REPO-1, D-REPO-4)
-sdk -------------> sidecar root, protocol; its device files only sidecar/device, protocol/bridge
-                                          (§18.10, D-SDK-20)
+sdk -------------> sidecar root, protocol; its forwarding files only sidecar/device, protocol/bridge
+                                          and the root's forwarding files (§18.10, D-SDK-20)
 server ----------> sidecar root, sidecar/<svc>service engines, sdk, connect (owner decisions 19, 104)
 apps, extension -> sdk bindings           (§18 D-SDK-2)
 warp, config, vault, build, minio: no Go import (§19; owner decision 195)
@@ -78,12 +78,12 @@ connect: X9 rows per owner decisions 22, 85, 86, 176 (§4.6)
 | Topology | Sidecar process | Client (X10, owner decision 4) | Components, carrier | Refs |
 |---|---|---|---|---|
 | Laptop CLI, harnesses | one `ur daemon` per `--instance`, one Sidecar per network (owner decision 23); `ur mcp` relays over a peer-uid Unix socket | top-level; child after app pairing (§5.8) | all; `ur tun` on Linux | §5 D-CORE-9; §16 D-MCP-2 |
-| iOS app | sidecar role in the app; keyless device role (`sidecar/device`) in the tunnel | child | evs, mail, dial; listens only while open, so never an indexer (owner decisions 12, 150; §15.6) | §18.4, D-SDK-1; owner decision 87 |
-| Android | one process, both roles | child | as iOS, except that while the VPN runs it receives mail and can be an indexer, for mail only (owner decision 150) | §18.4; §15.6 |
-| Desktop apps | `ur daemon`; app in remote mode; network process holds the device role | child after pairing (§5.8) | all | owner decision 87 |
+| iOS app | sidecar role in the app, while open; in the network extension only forwarding, self-contained with its own key (`sidecar/device` and the root's forwarding files) | child | evs, mail, dial; listens only while open, so never an indexer (owner decisions 12, 150; §15.6); forwarding whenever the VPN runs | §18.4, D-SDK-1; owner decisions 87, 197 |
+| Android | sidecar role in the app, while open; in the VPN service only forwarding, as on iOS | child | as iOS (owner decision 197) | §18.4; §15.6 |
+| Desktop apps | `ur daemon`; app in remote mode; the network extension or app service runs only forwarding, as on iOS | child after pairing (§5.8) | all; forwarding in the VPN component | owner decisions 87, 197 |
 | Extension, ur.io pages (X14) | slimmed `sidecar.wasm` in an offscreen document, meanwhile native messaging to `ur daemon`; ur.io pages run it read-only from the key origin `sidecar.ur.io`, labeled | top-level, admin-refused, no egress | evs, mail, dial, never listens; HTTPS only until C4's WebSocket carrier | §18.8, D-SDK-18; §7 D-TEAM-24; owner decisions 26, 76 |
 | Cloud agent | `ur daemon` in the VM, through the sandbox's HTTP CONNECT proxy (C8) | tagged, ephemeral; reads the config and, in a team network, the team directory, announcing itself and its runs there while admitted (§16.11; owner decision 170), and otherwise only deposits unless a grant or EvsShare names it (§8.6's ceiling); a reap removes its own key; its Delegation's key reads until DelegationRevoke, `not_after` or a key drop (§10.5) | evs by wraps, never an MLS leaf (owner decision 114), records, MCP; §18.9's rungs | §7.7; §18 D-SDK-7; owner decisions 6, 49 |
-| Indexer (owner decision 150) | an always-on `ur daemon` (desktop, NAS or VPS) run from its unit (§5.8), or Android with the VPN on, for mail only; never an iOS app, a browser, or an ephemeral or read_only sidecar | as its host's row | the services its `IndexerSet` names (§7.9, D-TEAM-27): receiving mail (owner decisions 12, 58); mirroring record-class repos and, on an admin's indexer, the config (§11.13; §16 D-MCP-10); in v1, rolling index buckets up once per bucket length, backfilling unindexed pushes, verifying other writers' index files and keeping all partitions current (§11.14; owner decision 157); at network scope, mirroring the team directory on an admin's indexer, rolling its index up and removing revoked sidecars' cards (§16.11); as a designated search indexer, answering its network's app hosts' remote searches over the repos it reads, which no phone does (§11.14; owner decision 175); embedding (Later); other services that need an always-on device, such as `scim_signer` (§7.6) | §11.14; §15.6; §16.10, §16.11 |
+| Indexer (owner decision 150) | an always-on `ur daemon` (desktop, NAS or VPS) run from its unit (§5.8); never an app, which runs its sidecar only while open (owner decision 197), a browser, or an ephemeral or read_only sidecar | as its host's row | the services its `IndexerSet` names (§7.9, D-TEAM-27): receiving mail (owner decisions 12, 58); mirroring record-class repos and, on an admin's indexer, the config (§11.13; §16 D-MCP-10); in v1, rolling index buckets up once per bucket length, backfilling unindexed pushes, verifying other writers' index files and keeping all partitions current (§11.14; owner decision 157); at network scope, mirroring the team directory on an admin's indexer, rolling its index up and removing revoked sidecars' cards (§16.11); as a designated search indexer, answering its network's app hosts' remote searches over the repos it reads, which no phone does (§11.14; owner decision 175); embedding (Later); other services that need an always-on device, such as `scim_signer` (§7.6) | §11.14; §15.6; §16.10, §16.11 |
 | Server | api, evs, gkm and sockets on lb hosts; the three edges on the lb's shared addresses; dns on dns edge hosts; certs, §10's reconciler and the push sender in taskworker; on 4 new hosts at one site (2 PM9A3 1.92 TB NVMe and 16 × 16 TB HDD each), the metadata cluster, more at §19.9's triggers, and the segment cluster; soft state in Redis | edges: platform clients in `urnetwork-edge`, Service mode | — | §19.4, §19.6, D-OPS-2; owner decisions 18, 20, 21, 34, 71, 94, 116, 136-140, 145 |
 
 **Indexers** (owner decision 150). An indexer is a device its network designates, by an `IndexerSet` in the config repo, as an always-on point device for the background services its row lists; a network may designate several, and has none until an Owner or Admin designates one at network scope, or a member's consented device at member scope (owner decision 177); owner decision 12's always-on receivers and a Team's receivers (owner decision 58) are indexers chosen for mail (§15.6). Always-on stays a device property, and the name is unrelated to evs's server-side path index (§11.8). A designation grants no key, grant or read, so an indexer serves only what its admission, tags and grants reach; it decides who runs a service first, never who may read, and for search it also bounds which devices a phone asks (owner decisions 175, 178). With none designated or online, mail reaches whichever receivers run and otherwise waits on sender retries (§15.6); the first writer committing after a search bucket expires rolls it up, a day after expiry where an indexer serves the repo, and the next capable writer backfills (§11.14); each device fetches all partitions under its own policy (§18.4), and a phone's "search more" downloads all and shows possible matches (owner decision 155); any member device removes revoked sidecars' directory cards after 24 h (§16.11); `ur status` names each unmirrored record-class repo (§11.13); and SCIM removals wait for an admin device (§7.6).
@@ -361,10 +361,10 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
    at _25._tcp.mx.<net>.<root> in the signed zone makes DANE senders send SNI; Find smtp/25/mx checks
    the listen grant (owner decisions 32, 34; §15 D-MAIL-1; §9)
 3  a Required stream in Service mode: StreamOpen{ticket, MailIngress, the ClientHello} (§15.5; §6.10)
-4  the receiver, a mail indexer where the network designates one (a desktop daemon, NAS, VPS or
-   Android with the VPN on), else whichever receiver runs, the iOS app only while open and never as an
-   indexer, answers with its own key and no second 220; RCPT is checked against the signed mailcfg,
-   and a burned label gets 550 (owner decisions 12, 32, 150, 177; §15 D-MAIL-3, D-MAIL-4; §15.6)
+4  the receiver, a mail indexer where the network designates one (a desktop daemon, NAS or VPS),
+   else whichever receiver runs, an app only while open and never as an indexer, answers with its own
+   key and no second 220; RCPT is checked against the signed mailcfg, and a burned label gets 550
+   (owner decisions 12, 32, 150, 177, 197; §15 D-MAIL-3, D-MAIL-4; §15.6)
 5  the receiver checks SPF, DKIM, ARC and DMARC as received, within §15.5's per-message bounds, and
    seals that result (MailAuthEvidence, at most 8,192 B) with the message to the mailbox's drop key;
    a check a bound cut is no result and refuses nothing; 250 only once the deposit is durable (§15
@@ -406,7 +406,8 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
    decisions 28, 132); private names <client-name>.<net>.<root> resolve on the device (C14; owner
    decision 85)
 5  a link to the fixed target: Network mode, Required, relay-only, one window client, whose
-   WindowDelegation, signed by the sender's identity key, the contract signer seals unchanged (C13;
+   WindowDelegation, signed by the sender's identity key, or in an app's VPN component by its
+   forwarding key (owner decision 197), the contract signer seals unchanged (C13;
    §17.9); the target serves only sealed flows; the contract gate checks reach, and relayed bytes are
    debited (owner decision 10; §17 D-BRIDGE-5; §8 D-ACL-4)
 6  the target's LocalUserNat flow meets EgressHook (C5) once per flow, keyed on the verified
@@ -694,7 +695,7 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
 |---|---|---|---|---|
 | Core, daemon | §5 (X10) | `sidecar.go`, `identity_`, `daemon_`, `indexer_` (3.6) | api | `Sidecar`, `ur daemon` |
 | Subprotocol, push | §6 (X8) | `envelope_`, `rpc_`, `stream_`, `push_`, `codec_`, `protocol/`; `pushservice/` | connect residents | `Subprotocol` |
-| Teams, SSO, authority | §7 | `protocol/config.proto`, which imports the records the device role verifies from `protocol/bridge/` (D-SDK-20) | api, oauth | `ur login`, `ur admin`, `ur indexer` |
+| Teams, SSO, authority | §7 | `protocol/config.proto`, which imports the records `sidecar/device` verifies from `protocol/bridge/` (D-SDK-20) | api, oauth | `ur login`, `ur admin`, `ur indexer` |
 | Access control | §8 (X3) | `acl_` | gates on the id projection | `AclEngine` |
 | Sockets | §9 | `socket_`; `socketsservice/` | sockets | `Listen`, `Dial` |
 | Group keys | §10 (X12) | `mls_`, `gkm_`; `gkmservice/` | gkm; reconciler in taskworker | `GkmClient` |
@@ -704,7 +705,7 @@ Each flow implements the owner decisions its header names (D-ARCH-3, D-ARCH-4). 
 | Outbound mail | §14 (X7) | `smtp_`; `smtpedgeservice/`; the prover apart | smtpedge | `SmtpSender` |
 | Inbound mail | §15 (X6) | `mail_`; `mxedgeservice/` | mxedge | `mail` |
 | MCP, record, search | §16 (X20) | `mcp/`, `record_`, `directory_`, `search_` | none | `ur mcp`, `ur hook`, `ur search`, `ur agents`, `ur directory` (§16.11) |
-| Bridge | §17 (X18) | `bridge_`; `device/` (D-SDK-20) | connect C5, C6a, C13, C14, C18 | `device.Bridge`, device role |
+| Bridge | §17 (X18) | `bridge_`; `device/` (D-SDK-20) | connect C5, C6a, C13, C14, C18 | `device.Bridge`, the forwarding role (owner decision 197) |
 | SDK | §18 (X14) | none | api push tokens; push sender (§19) | `sdk.Sidecar` |
 
 §4 owns X9, §19 X13, §20 X11 and X16, and §23 X15.
@@ -768,7 +769,7 @@ None introduced here; Appendix F traces every PLAN.md line. Departures that shap
 | :119 rules stored on the server, sent per client | a signed, encrypted config each device reads whole; servers enforce an id-only projection (owner decisions 5, 6, 72) |
 | :147 readers and writers are leaves | member devices are, except past the first 1,000 in the config and the team directory; agents read and write by per-generation wraps (owner decisions 114, 144, 182) |
 | :90-97 first-N-bytes proof | made sound for BDAT and DATA; outbound waits for it (owner decisions 35, 99, 125) |
-| :28, :31 apps and device | app or daemon hosts the sidecar; network processes stay keyless (owner decision 87) |
+| :28, :31 apps and device | app or daemon hosts the sidecar; network processes run only forwarding, with its own key (owner decisions 87, 197) |
 
 ### 3.13 Interfaces
 
@@ -776,7 +777,7 @@ None introduced here; Appendix F traces every PLAN.md line. Departures that shap
 - **Consumes:** §1-§23 and the owner's decision record (front matter).
 - **Subprotocol messages, API routes, Tables, Services and config:** none new.
 - **Assumptions about other sections:**
-  - Owners carry what the flows cite: §5.8 the `.ur` file, the submission port and pairing (F5, F8, 3.6); §7.9 admissions, authority and the recovery anchor, with the records a device role verifies in `protocol/bridge/` (F1, F9, 3.8); §8.5 owner consent and §8.8 access logs (F1, F3, F7, F8); §7.10, §8.12 and §10.9 the committers of owner decisions 113, 114, 128 and 144 (F1, F3, F9); §11.11 new-commit identity (F2); §14.5's proof parts and §14.16 TL1 at M9 (F5); §17.9's `WindowDelegation` and share signers (F7); §12, §13 and §15 the host `mx.<net>.<root>` (F6, F10).
+  - Owners carry what the flows cite: §5.8 the `.ur` file, the submission port and pairing (F5, F8, 3.6); §7.9 admissions, authority and the recovery anchor, with the records `sidecar/device` verifies in `protocol/bridge/`, and forwarding Delegations (F1, F7, F9, 3.8); §8.5 owner consent and §8.8 access logs (F1, F3, F7, F8); §7.10, §8.12 and §10.9 the committers of owner decisions 113, 114, 128 and 144 (F1, F3, F9); §11.11 new-commit identity (F2); §14.5's proof parts and §14.16 TL1 at M9 (F5); §17.9's `WindowDelegation` and share signers (F7); §12, §13 and §15 the host `mx.<net>.<root>` (F6, F10).
   - §10.6's gkm checks and §10.9's table accept, from a non-writer signer in the config group, an agent's first wrap, a Remove and the rotation it requires, under the gkm `rw` scope §7.8 gives member devices in the config group, and a recovery-admitted device's external commit, and follow §7.9's `leaves` and `move` rows, where a wrapped signer only wraps or rotates and a lost entitlement is a Remove input (owner decisions 128, 144; F1, F9).
   - evs and gkm keep each repo's metadata on the cluster its `place/<repo_id>` names, and §11.10's leases, the push sequence and the head cache in Redis (owner decisions 136, 145; F2, F3).
   - §5.9 keeps the index cache, and §16.10 states the scope, taint, paging and grouping rules F11 cites; §11.14's index provides buckets and all, roll-ups by the indexer or the first writer after expiry, and entry versions naming each index file's plaintext hash; §7.9's `IndexerSet` designates 3.6's indexers, none by default (owner decisions 150, 151-157, 166, 177).
