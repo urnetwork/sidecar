@@ -27,7 +27,6 @@ import (
 
 	"github.com/urnetwork/connect"
 	"github.com/urnetwork/connect/protocol"
-	"github.com/urnetwork/sidecar"
 )
 
 // One direction's conditions between two clients (§22.4's SetLink).
@@ -54,6 +53,8 @@ type netExchange struct {
 	stateLock sync.Mutex
 	random    *rand.Rand
 	clients   map[connect.Id]*NetClient
+	// a client was ever added, each of which ran on the platform fakes
+	everAdded bool
 	links     map[netLinkKey]*LinkConditions
 	workers   sync.WaitGroup
 }
@@ -214,6 +215,8 @@ type NetClient struct {
 	Client   *connect.Client
 
 	exchange *netExchange
+	// ends when the client leaves the exchange
+	ctx context.Context
 
 	stateLock sync.Mutex
 	// a receive route per carrier, made when a link first asks for it
@@ -248,24 +251,30 @@ func (self *Net) AddClient(name string, settings *connect.ClientSettings) *NetCl
 	if settings == nil {
 		settings = netClientSettings()
 	}
-	if settings.EncryptionSettings.Mode != connect.EncryptionModeRequired {
+	return self.exchange.addClient(self.exchange.ctx, name, connect.NewId(), settings)
+}
+
+// Starts a Required client of clientId on the exchange, until ctx ends, when it leaves the exchange. A client whose
+// settings are anything but Required panics (I-3).
+func (self *netExchange) addClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings) *NetClient {
+	if settings.EncryptionSettings == nil || settings.EncryptionSettings.Mode != connect.EncryptionModeRequired {
 		panic(fmt.Sprintf("client %q is not Required (I-3)", name))
 	}
-	exchange := self.exchange
-	clientId := connect.NewId()
-	issuer := &netContractIssuer{exchange: exchange, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
-	client := connect.NewClient(exchange.ctx, clientId, issuer, settings)
+	issuer := &netContractIssuer{exchange: self, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
+	client := connect.NewClient(ctx, clientId, issuer, settings)
 	netClient := &NetClient{
 		Name:          name,
 		ClientId:      clientId,
 		Client:        client,
-		exchange:      exchange,
+		exchange:      self,
+		ctx:           ctx,
 		receiveRoutes: map[connect.TransportType]connect.Route{},
 	}
 	func() {
-		exchange.stateLock.Lock()
-		defer exchange.stateLock.Unlock()
-		exchange.clients[clientId] = netClient
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.clients[clientId] = netClient
+		self.everAdded = true
 	}()
 
 	sendRoute := make(connect.Route)
@@ -275,14 +284,26 @@ func (self *Net) AddClient(name string, settings *connect.ClientSettings) *NetCl
 	netClient.receiveRoute(connect.TransportTypeH1)
 	client.ContractManager().SetProvideModes(map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true})
 
-	exchange.workers.Add(2)
+	self.workers.Add(3)
 	go func() {
-		defer exchange.workers.Done()
-		exchange.pump(netClient, sendRoute)
+		defer self.workers.Done()
+		self.pump(ctx, netClient, sendRoute)
 	}()
 	go func() {
-		defer exchange.workers.Done()
-		exchange.sinkControl(netClient, controlRoute)
+		defer self.workers.Done()
+		self.sinkControl(ctx, netClient, controlRoute)
+	}()
+	go func() {
+		defer self.workers.Done()
+		select {
+		case <-ctx.Done():
+		case <-self.ctx.Done():
+		}
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.clients[clientId] == netClient {
+			delete(self.clients, clientId)
+		}
 	}()
 	return netClient
 }
@@ -293,7 +314,7 @@ func (self *Net) UsesPlatformFakes() bool {
 	exchange := self.exchange
 	exchange.stateLock.Lock()
 	defer exchange.stateLock.Unlock()
-	return 0 < len(exchange.clients)
+	return exchange.everAdded
 }
 
 // The receive route of a carrier, made on first use.
@@ -309,11 +330,13 @@ func (self *NetClient) receiveRoute(transportType connect.TransportType) connect
 	return route
 }
 
-// Reads one client's send route, taking each frame's pool buffer: it either moves on to the peer's
-// receive route or goes back to the pool here.
-func (self *netExchange) pump(source *NetClient, route connect.Route) {
+// Reads one client's send route until ctx or the exchange ends, taking each frame's pool buffer: it
+// either moves on to the peer's receive route or goes back to the pool here.
+func (self *netExchange) pump(ctx context.Context, source *NetClient, route connect.Route) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-self.ctx.Done():
 			return
 		case frame, ok := <-route:
@@ -346,6 +369,9 @@ func (self *netExchange) forward(source *NetClient, frame []byte) {
 	route := destination.receiveRoute(self.transportType(source.ClientId, destinationId))
 	select {
 	case route <- frame:
+	case <-destination.ctx.Done():
+		// a client that left reads nothing more
+		connect.MessagePoolReturn(frame)
 	case <-self.ctx.Done():
 		connect.MessagePoolReturn(frame)
 	}
@@ -374,10 +400,13 @@ func (self *netExchange) passes(source connect.Id, destination connect.Id) bool 
 }
 
 // §22.4's ControlId sink: frames for the platform end here, kept for a test to read. Nothing answers,
-// and a client's control sync retries, as it does with a platform that is slow.
-func (self *netExchange) sinkControl(source *NetClient, route connect.Route) {
+// and a client's control sync retries, as it does with a platform that is slow. Runs until ctx or the
+// exchange ends.
+func (self *netExchange) sinkControl(ctx context.Context, source *NetClient, route connect.Route) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-self.ctx.Done():
 			return
 		case frame, ok := <-route:
@@ -446,28 +475,6 @@ func (self *NetClient) ReceiveMessages(messages chan<- *NetMessage) (remove func
 			}
 		}
 	})
-}
-
-// What §22.4's AddSidecar gives. The root has no Sidecar type yet, so this is a sidecar's settings and
-// its Required connect client, and nothing is enrolled: CORE-M1-13 makes it a running, enrolled
-// Sidecar once core lands.
-type TestSidecar struct {
-	Name     string
-	Settings *sidecar.SidecarSettings
-	Client   *NetClient
-}
-
-// Starts a sidecar's connect client on the exchange, from its own settings, so what a sidecar links
-// on a link is what ships: Required (defaultSidecarConnectSettings). Timeouts a real network needs are
-// shortened as NetClient's are. settings nil takes DefaultSidecarSettings.
-func (self *Net) AddSidecar(name string, settings *sidecar.SidecarSettings) *TestSidecar {
-	if settings == nil {
-		settings = sidecar.DefaultSidecarSettings()
-	}
-	clientSettings := netClientSettings()
-	clientSettings.EncryptionSettings.Mode = settings.Connect.ClientSettings.EncryptionSettings.Mode
-	clientSettings.DefaultTransferOpts = settings.Connect.ClientSettings.DefaultTransferOpts
-	return &TestSidecar{Name: name, Settings: settings, Client: self.AddClient(name, clientSettings)}
 }
 
 // Whether both ends of a pair hold a sealed session, the state I-3 asks for.

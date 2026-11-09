@@ -75,15 +75,24 @@ func TestNetClientsOtherThanRequiredPanic(t *testing.T) {
 func TestNetSidecarRunsTheModeItsSettingsShip(t *testing.T) {
 	net := newTestNet(t)
 	settings := sidecar.DefaultSidecarSettings()
-	testSidecar := net.AddSidecar("laptop", settings)
-	if testSidecar.Client == nil || testSidecar.Settings != settings {
+	testSidecar, err := net.AddSidecar("laptop", settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testSidecar.Client() == nil || testSidecar.Settings != settings {
 		t.Fatalf("sidecar %+v", testSidecar)
 	}
+	if mode := testSidecar.Settings.Connect.ClientSettings.EncryptionSettings.Mode; mode != connect.EncryptionModeRequired {
+		t.Fatalf("the sidecar's client runs %v", mode)
+	}
 
-	other := net.AddSidecar("phone", nil)
+	other, err := net.AddSidecar("phone", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	messages := make(chan *NetMessage, 16)
-	defer other.Client.ReceiveMessages(messages)()
-	if err := testSidecar.Client.SendMessage(other.Client.ClientId, "hello"); err != nil {
+	defer other.Client().ReceiveMessages(messages)()
+	if err := testSidecar.Client().SendMessage(other.Client().ClientId, "hello"); err != nil {
 		t.Fatal(err)
 	}
 	if message := awaitMessage(t, messages); message.Content != "hello" {
