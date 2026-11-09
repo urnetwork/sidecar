@@ -13,6 +13,7 @@ package sidecartest
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"slices"
@@ -199,5 +200,57 @@ func (self *fakeStoreWriter) Commit() error {
 
 func (self *fakeStoreWriter) Close() error {
 	self.closed = true
+	return nil
+}
+
+// A log at name, unsealed: each record a 4-byte big-endian length and its bytes, appended in place. An Append
+// counts as a write for FailWritesAfter, and fails whole, so a staged kill leaves no torn record here: torn tails
+// are the real log's, tested in the root.
+func (self *fakeStoreDirectory) Log(name string) (sidecar.SidecarStoreLog, error) {
+	path, err := self.path(name)
+	if err != nil {
+		return nil, err
+	}
+	return &fakeStoreLog{store: self.store, path: path}, nil
+}
+
+// One log of a FakeStore.
+type fakeStoreLog struct {
+	store *FakeStore
+	path  string
+}
+
+// Appends the record under the store's lock, so appends to one path go one at a time.
+func (self *fakeStoreLog) Append(record []byte) error {
+	if sidecar.StoreLogRecordMaxByteCount < len(record) {
+		return sidecar.ErrStoreLogRecordTooLarge
+	}
+	self.store.stateLock.Lock()
+	defer self.store.stateLock.Unlock()
+	if err := self.store.takeWriteWithLock(); err != nil {
+		return err
+	}
+	content := bytes.Clone(self.store.pathContents[self.path])
+	content = binary.BigEndian.AppendUint32(content, uint32(len(record)))
+	self.store.pathContents[self.path] = append(content, record...)
+	return nil
+}
+
+// Hands each record to visit in order, from a copy taken under the lock.
+func (self *fakeStoreLog) Read(visit func(index uint64, record []byte) error) error {
+	content, ok := self.store.Contents(self.path)
+	if !ok {
+		return sidecar.ErrSidecarStoreAbsent
+	}
+	for index := uint64(0); 0 < len(content); index += 1 {
+		if len(content) < 4 || len(content)-4 < int(binary.BigEndian.Uint32(content)) {
+			return sidecar.ErrSidecarStoreFailed
+		}
+		byteCount := int(binary.BigEndian.Uint32(content))
+		if err := visit(index, bytes.Clone(content[4:4+byteCount])); err != nil {
+			return err
+		}
+		content = content[4+byteCount:]
+	}
 	return nil
 }

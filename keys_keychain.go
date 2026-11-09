@@ -120,6 +120,8 @@ type keychain struct {
 
 	persistLock sync.Mutex
 	commitLock  sync.RWMutex
+	// append-only logs' per-path locks and tails (state_log.go), each path's lock taken before commitLock
+	logs storeLogPaths
 
 	stateLock sync.Mutex
 	closed    bool
