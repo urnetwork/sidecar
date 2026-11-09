@@ -364,6 +364,13 @@ func (self *GkmUpkeep) readerKeyRecords() ([]*gkmReaderKeyRecord, error) {
 	return records, nil
 }
 
+// Erases the private seeds records read, once a step is done with them: the keychain keeps them, not memory.
+func clearGkmReaderKeySeeds(records []*gkmReaderKeyRecord) {
+	for _, record := range records {
+		clear(record.seed)
+	}
+}
+
 // Writes a record.
 func (self *GkmUpkeep) putReaderKeyRecord(record *gkmReaderKeyRecord) error {
 	encoded := record.encode()
@@ -378,6 +385,7 @@ func (self *GkmUpkeep) keepReaderKey(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	defer clearGkmReaderKeySeeds(records)
 	kept := []*gkmReaderKeyRecord{}
 	for _, record := range records {
 		if !now.Before(record.notAfter.Add(self.settings.ReaderKeyKeepAfterNotAfter)) {
@@ -397,6 +405,7 @@ func (self *GkmUpkeep) keepReaderKey(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
+		defer clear(current.seed)
 	}
 	if current.uploaded {
 		return nil
@@ -494,6 +503,7 @@ func (self *GkmUpkeep) selfCheck(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	defer clearGkmReaderKeySeeds(records)
 	if len(records) == 0 {
 		return nil
 	}

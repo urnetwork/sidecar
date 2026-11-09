@@ -850,7 +850,12 @@ func TestX9ReadyForMain(t *testing.T) {
 		t.Fatalf("%s is %q, not a milestone M0 to M10", x9GateVariable, gateName)
 	}
 	gate, _ := strconv.Atoi(match[1])
-	repository := openThisCheckout(t)
+	// the checkout without its legs, which nothing here reads and merge-out would wait on
+	repository, err := thisCheckout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.report = t.Logf
 	failFindings(t, "x9 at "+gateName, repository.x9ReadyForMainFindings(t, gate))
 }
 
