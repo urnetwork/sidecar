@@ -243,14 +243,15 @@ func TestGkmUnbuiltRouteAnswers501AfterTheGuard(t *testing.T) {
 	groupId := testId("group-g")
 	fixture.placeRepo(repoId, "meta-1", protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	fixture.fileForm(repoId, "meta-1", 1, groupId)
-	reader := testId("sc-reader")
-	fixture.auth.admit(reader, memberDeviceFacts(testId("member-m")))
-	fixture.auth.grant(reader, repoId, sidecar.AclEvsRead)
-	path := "/gkm/groups/" + sidecar.EvsKeyId(groupId) + "/epochs"
-	if recorder := fixture.serve(http.MethodGet, path, fixture.token(reader, repoScope(repoId, "r")), nil); recorder.Code != http.StatusNotImplemented {
+	admin := testId("sc-admin")
+	fixture.auth.admit(admin, memberDeviceFacts(testId("member-m")))
+	fixture.auth.grant(admin, repoId, sidecar.AclEvsAdmin)
+	// the ladder is KEYS-M2-25's
+	path := "/gkm/groups/" + sidecar.EvsKeyId(groupId) + "/ladder"
+	if recorder := fixture.serve(http.MethodPost, path, fixture.token(admin, repoScope(repoId, "admin")), nil); recorder.Code != http.StatusNotImplemented {
 		t.Errorf("an unbuilt route past the guard: %d", recorder.Code)
 	}
-	if recorder := fixture.serve(http.MethodGet, path, fixture.token(reader), nil); recorder.Code != http.StatusForbidden {
+	if recorder := fixture.serve(http.MethodPost, path, fixture.token(admin, repoScope(repoId, "r")), nil); recorder.Code != http.StatusForbidden {
 		t.Errorf("an unbuilt route the guard refuses: %d", recorder.Code)
 	}
 }

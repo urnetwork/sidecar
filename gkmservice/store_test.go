@@ -98,7 +98,7 @@ func TestGkmGroupObjectsLandOnTheReposClusterAcrossARestart(t *testing.T) {
 		t.Errorf("a 404 within its 5 s: %d", recorder.Code)
 	}
 	fixture.clock.Advance(fixture.settings.Place.NotFoundTtl)
-	if recorder := fixture.serve(http.MethodGet, formsPath, token, nil); recorder.Code != http.StatusNotImplemented {
+	if recorder := fixture.serve(http.MethodGet, formsPath, token, nil); recorder.Code != http.StatusOK {
 		t.Errorf("a placed repo once the 404 cleared: %d", recorder.Code)
 	}
 

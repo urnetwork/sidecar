@@ -73,6 +73,27 @@ func (self *gkmClientEngineState) PendingTargets(principal *sidecar.Principal, s
 	return nil, gkmservice.GkmAuthAllowed
 }
 
+func (self *gkmClientEngineState) RepoReaders(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
+	return nil, gkmservice.GkmAuthAllowed
+}
+
+func (self *gkmClientEngineState) RepoWriters(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
+	return nil, gkmservice.GkmAuthAllowed
+}
+
+// No log in this test: every pin is refused, so nothing here claims or commits.
+func (self *gkmClientEngineState) CheckPin(principal *sidecar.Principal, pin *bridge.AuthPin) gkmservice.GkmAuthAnswer {
+	return gkmservice.GkmAuthDenied
+}
+
+func (self *gkmClientEngineState) DelegationReads(principal *sidecar.Principal, repoId sidecar.Id, delegationId []byte, now time.Time) gkmservice.GkmAuthAnswer {
+	return gkmservice.GkmAuthDenied
+}
+
+func (self *gkmClientEngineState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
+	return nil, gkmservice.GkmAuthAllowed
+}
+
 // The engine's handler as a client's transport.
 type gkmHandlerTransport struct {
 	handler http.Handler

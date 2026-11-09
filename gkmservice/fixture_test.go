@@ -52,6 +52,13 @@ type fakeGkmAuthState struct {
 	repoReaderIds   map[sidecar.Id]map[sidecar.Id]bool
 	pendingTargets  map[sidecar.Id][]*GkmPendingTarget
 	honorCount      int
+	// the log as gkm's state judges pins: the chain at each position, its newest position and its previous base's
+	logChains       map[uint64][]byte
+	newestVersion   uint64
+	baseVersion     uint64
+	delegationReads map[string]bool
+	lateHolderIds   map[sidecar.Id][]sidecar.Id
+	writerOverrides map[sidecar.Id][]sidecar.Id
 }
 
 func newFakeGkmAuthState() *fakeGkmAuthState {
@@ -61,7 +68,120 @@ func newFakeGkmAuthState() *fakeGkmAuthState {
 		honoredRights:     map[fakeGkmAuthKey]sidecar.AclEvsRights{},
 		repoReaderIds:     map[sidecar.Id]map[sidecar.Id]bool{},
 		pendingTargets:    map[sidecar.Id][]*GkmPendingTarget{},
+		logChains:         map[uint64][]byte{},
+		delegationReads:   map[string]bool{},
+		lateHolderIds:     map[sidecar.Id][]sidecar.Id{},
+		writerOverrides:   map[sidecar.Id][]sidecar.Id{},
 	}
+}
+
+// A synthetic chain value A_n for position n.
+func fakeGkmChain(version uint64) []byte {
+	chain := sha256.Sum256([]byte(fmt.Sprintf("chain-%d", version)))
+	return chain[:]
+}
+
+// Moves the log to version, every position up to it on one chain, with its previous base at baseVersion.
+func (self *fakeGkmAuthState) advanceLog(version uint64, baseVersion uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for n := self.newestVersion + 1; n <= version; n += 1 {
+		self.logChains[n] = fakeGkmChain(n)
+	}
+	self.newestVersion = max(self.newestVersion, version)
+	self.baseVersion = baseVersion
+}
+
+// The pin of position version on the fake log's chain.
+func fakeGkmPin(version uint64) *bridge.AuthPin {
+	return &bridge.AuthPin{Version: version, Chain: fakeGkmChain(version)}
+}
+
+func (self *fakeGkmAuthState) setDelegationReads(repoId sidecar.Id, delegationId []byte, reads bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.delegationReads[sidecar.EvsKeyId(repoId)+":"+fmt.Sprintf("%x", delegationId)] = reads
+}
+
+func (self *fakeGkmAuthState) setLateHolders(repoId sidecar.Id, sidecarIds []sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lateHolderIds[repoId] = slices.Clone(sidecarIds)
+}
+
+// Who a repo's pending and wrap-pending hints go to, in place of its writers, as the directory group's rule would.
+func (self *fakeGkmAuthState) setWriters(repoId sidecar.Id, sidecarIds []sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.writerOverrides[repoId] = slices.Clone(sidecarIds)
+}
+
+func (self *fakeGkmAuthState) RepoReaders(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.unloaded {
+		return nil, GkmAuthUnknown
+	}
+	readerIds := []sidecar.Id{}
+	for sidecarId, reads := range self.repoReaderIds[repoId] {
+		if reads {
+			readerIds = append(readerIds, sidecarId)
+		}
+	}
+	slices.SortFunc(readerIds, func(a sidecar.Id, b sidecar.Id) int { return a.Cmp(b) })
+	return readerIds, GkmAuthAllowed
+}
+
+func (self *fakeGkmAuthState) RepoWriters(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.unloaded {
+		return nil, GkmAuthUnknown
+	}
+	if overrides, ok := self.writerOverrides[repoId]; ok {
+		return slices.Clone(overrides), GkmAuthAllowed
+	}
+	writerIds := []sidecar.Id{}
+	for key, rights := range self.honoredRights {
+		if key.repoId == repoId && rights.Has(sidecar.AclEvsWrite) {
+			writerIds = append(writerIds, key.sidecarId)
+		}
+	}
+	slices.SortFunc(writerIds, func(a sidecar.Id, b sidecar.Id) int { return a.Cmp(b) })
+	return writerIds, GkmAuthAllowed
+}
+
+func (self *fakeGkmAuthState) CheckPin(principal *sidecar.Principal, pin *bridge.AuthPin) GkmAuthAnswer {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	switch {
+	case self.unloaded, self.newestVersion < pin.GetVersion():
+		return GkmAuthUnknown
+	case pin.GetVersion() < self.baseVersion, !bytes.Equal(self.logChains[pin.GetVersion()], pin.GetChain()):
+		return GkmAuthDenied
+	}
+	return GkmAuthAllowed
+}
+
+func (self *fakeGkmAuthState) DelegationReads(principal *sidecar.Principal, repoId sidecar.Id, delegationId []byte, now time.Time) GkmAuthAnswer {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.unloaded {
+		return GkmAuthUnknown
+	}
+	if self.delegationReads[sidecar.EvsKeyId(repoId)+":"+fmt.Sprintf("%x", delegationId)] {
+		return GkmAuthAllowed
+	}
+	return GkmAuthDenied
+}
+
+func (self *fakeGkmAuthState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.unloaded {
+		return nil, GkmAuthUnknown
+	}
+	return slices.Clone(self.lateHolderIds[repoId]), GkmAuthAllowed
 }
 
 // Admits a sidecar with facts, replacing what the state held of it.
