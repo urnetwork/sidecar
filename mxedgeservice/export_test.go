@@ -209,6 +209,22 @@ func (self *MxEdgeService) ConnectionRecords() *ConnectionRecords {
 	return self.records
 }
 
+// The most bytes the platform role's sessions have held at once.
+func (self *MxEdgeService) PlatformBufferPeak() int64 {
+	buffers := self.platform.buffers
+	buffers.stateLock.Lock()
+	defer buffers.stateLock.Unlock()
+	return buffers.peakByteCount
+}
+
+// What the platform role's sessions hold now.
+func (self *MxEdgeService) PlatformBufferHeld() int64 {
+	buffers := self.platform.buffers
+	buffers.stateLock.Lock()
+	defer buffers.stateLock.Unlock()
+	return buffers.heldByteCount
+}
+
 // What the router does at the end of a session that named networkId and began at startTime.
 func (self *MxEdgeService) RecordSession(startTime time.Time, networkId sidecar.Id, byteCount int64, result string) bool {
 	return self.recordSession(&mxSession{startTime: startTime}, networkId, byteCount, result)
