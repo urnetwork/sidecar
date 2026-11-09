@@ -416,6 +416,21 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "hygiene", item: "§22.6's fuzz registry: a func Fuzz with no row, a row past its milestone with no target, empty or unnamed seeds, a crasher with no regression test, a second implementation its tests do not import, or a §22.6 bullet with no row (D-TEST-4; TEST-M1-10)",
+		checkoutTest: "TestFuzzRegistry",
+		plantedTests: []string{
+			"TestFuzzRegistryFailsOnATargetWithNoRow", "TestFuzzRegistryFailsOnATargetPastItsMilestone",
+			"TestFuzzRegistryFailsOnEmptySeeds", "TestFuzzRegistryFailsOnAnUnnamedCorpus", "TestFuzzRegistryFailsOnABulletWithNoRow",
+			"TestFuzzRegistryFailsOnASecondImplementationNotImported", "TestFuzzRegistryFailsOnACrasherWithNoRegressionTest",
+			"TestFuzzRegistryFailsWhenLandedParts", "TestFuzzRegistryHoldsOnTheCleanFixture",
+		},
+	},
+	{
+		row: "hygiene", item: "§22.6's seeds: a registered target no seed of which runs under test.sh's go test, untagged or under sidecar_testhooks (owner decision 101)",
+		checkoutTest: "TestFuzzSeedsRunUnderTestSh",
+		plantedTests: []string{"TestFuzzSeedsFailOnALoopOverNothing"},
+	},
+	{
 		row: "hygiene", item: "a schedule's Await or Release naming a barrier no site holds, which at run time is only a timeout",
 		checkoutTest: "TestScheduleBarriersAllExist",
 		plantedTests: []string{"TestScheduleFailsOnATypoedBarrier", "TestScheduleAllowsAConstantBarrierAndItsKey"},
