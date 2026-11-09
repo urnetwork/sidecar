@@ -717,11 +717,22 @@ func TestEvsWriteDirectoryDeltas(t *testing.T) {
 	if e := writer.entry(t, "d/e"); len(e.GetNames().GetRemovedTokens()) != 1 {
 		t.Errorf("the removal's delta: %v", e)
 	}
+	// a removal below the root, its parent's delta beside it in one statement, reads as the path's own removal
+	if _, _, err := writer.read(t, "d/e/one.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Errorf("a removed file below a directory read: %v", err)
+	}
 	if read, _, err := writer.read(t, "d/e/two.txt"); err != nil || string(read) != "two" {
 		t.Errorf("read back: %v", err)
 	}
-	if _, err := writer.write(t, "d/e/one.txt/under", []byte("x")); err == nil {
-		t.Error("a path created under a removed file's name passed")
+	// a removed file's name takes a directory, created on the removal's versions
+	if _, err := writer.write(t, "d/e/one.txt/under", []byte("x")); err != nil {
+		t.Errorf("a path created under a removed file's name: %v", err)
+	}
+	if read, _, err := writer.read(t, "d/e/one.txt/under"); err != nil || string(read) != "x" {
+		t.Errorf("read back under a removed file's name: %v", err)
+	}
+	if one := writer.entry(t, "d/e/one.txt"); one.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) || one.GetVersion() <= 2 {
+		t.Errorf("the directory on a removed file's name: %v", one)
 	}
 	if _, err := writer.write(t, "d/e/two.txt/under", []byte("x")); !errors.Is(err, ErrEvsPathKind) {
 		t.Errorf("a path created under a file: %v", err)
