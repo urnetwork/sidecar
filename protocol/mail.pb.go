@@ -3046,6 +3046,58 @@ func (x *MailProverRecord) GetMeasureTimeMs() uint64 {
 	return 0
 }
 
+type MailSpamModel struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`      // 1, and a reader refuses another, 0 included
+	Counts        []uint32               `protobuf:"varint,2,rep,packed,name=counts,proto3" json:"counts,omitempty"` // the spam then the not-spam messages trained, then each of the 4,096 feature
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MailSpamModel) Reset() {
+	*x = MailSpamModel{}
+	mi := &file_protocol_mail_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MailSpamModel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MailSpamModel) ProtoMessage() {}
+
+func (x *MailSpamModel) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_mail_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MailSpamModel.ProtoReflect.Descriptor instead.
+func (*MailSpamModel) Descriptor() ([]byte, []int) {
+	return file_protocol_mail_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *MailSpamModel) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *MailSpamModel) GetCounts() []uint32 {
+	if x != nil {
+		return x.Counts
+	}
+	return nil
+}
+
 var File_protocol_mail_proto protoreflect.FileDescriptor
 
 const file_protocol_mail_proto_rawDesc = "" +
@@ -3262,7 +3314,10 @@ const file_protocol_mail_proto_rawDesc = "" +
 	"\x10MailProverRecord\x121\n" +
 	"\x15smtp_data_proof_bytes\x18\x01 \x01(\x04R\x12smtpDataProofBytes\x12'\n" +
 	"\x10data_bytes_per_s\x18\x02 \x01(\x04R\rdataBytesPerS\x12&\n" +
-	"\x0fmeasure_time_ms\x18\x03 \x01(\x04R\rmeasureTimeMs*\xb0\x01\n" +
+	"\x0fmeasure_time_ms\x18\x03 \x01(\x04R\rmeasureTimeMs\"A\n" +
+	"\rMailSpamModel\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\x12\x16\n" +
+	"\x06counts\x18\x02 \x03(\rR\x06counts*\xb0\x01\n" +
 	"\n" +
 	"SpfVerdict\x12\x1b\n" +
 	"\x17SPF_VERDICT_UNSPECIFIED\x10\x00\x12\f\n" +
@@ -3365,7 +3420,7 @@ func file_protocol_mail_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_mail_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_protocol_mail_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_protocol_mail_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_protocol_mail_proto_goTypes = []any{
 	(SpfVerdict)(0),           // 0: urnetwork.sidecar.SpfVerdict
 	(DkimVerdict)(0),          // 1: urnetwork.sidecar.DkimVerdict
@@ -3410,6 +3465,7 @@ var file_protocol_mail_proto_goTypes = []any{
 	(*MailOutcome)(nil),       // 40: urnetwork.sidecar.MailOutcome
 	(*MailOutcomeRecord)(nil), // 41: urnetwork.sidecar.MailOutcomeRecord
 	(*MailProverRecord)(nil),  // 42: urnetwork.sidecar.MailProverRecord
+	(*MailSpamModel)(nil),     // 43: urnetwork.sidecar.MailSpamModel
 }
 var file_protocol_mail_proto_depIdxs = []int32{
 	17, // 0: urnetwork.sidecar.MailAuthEvidence.spf:type_name -> urnetwork.sidecar.SpfResult
@@ -3464,7 +3520,7 @@ func file_protocol_mail_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_mail_proto_rawDesc), len(file_protocol_mail_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   29,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
