@@ -179,6 +179,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 		defer self.stateLock.Unlock()
 		self.generation = generation
 	}()
+	self.runningGenerationNumber.Set(generationNumber)
 	self.stats.generationCount.Add(1)
 	if generation.leg != nil {
 		// published first, so a component removed meanwhile is detached from this generation or never attached,
@@ -225,6 +226,7 @@ func (self *Sidecar) stopGeneration() {
 	self.sidecarApi.SetByJwt("")
 	self.sidecarApi.setDpopSigner(nil)
 	self.serviceTokens.clear()
+	self.runningGenerationNumber.Set(0)
 	testHookBarrier("sidecar.generation.stop.after", generation.identity.SidecarId.String())
 	if self.log.V(1).Enabled() {
 		self.log.Infof("[sidecar]generation %d ended", generation.generation)

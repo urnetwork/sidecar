@@ -161,15 +161,16 @@ func nextSidecarLifecycle(current sidecarLifecycle, transition sidecarTransition
 // have passed validate.
 func newSidecarBase(host SidecarHost, settings *SidecarSettings) *Sidecar {
 	return &Sidecar{
-		host:           host,
-		settings:       settings,
-		log:            loggerOrDefault(settings.Log),
-		state:          NewMonitorValue(SidecarStateLocked),
-		eventCallbacks: NewCallbackList[SidecarEventFunction](),
-		wakes:          NewMonitorValue[uint64](0),
-		clock:          settings.ClockOrReal(),
-		hostStores:     HostCredentialStores,
-		lifecycle:      sidecarLifecycle{state: SidecarStateLocked},
+		host:                    host,
+		settings:                settings,
+		log:                     loggerOrDefault(settings.Log),
+		state:                   NewMonitorValue(SidecarStateLocked),
+		eventCallbacks:          NewCallbackList[SidecarEventFunction](),
+		wakes:                   NewMonitorValue[uint64](0),
+		runningGenerationNumber: NewMonitorValue[int64](0),
+		clock:                   settings.ClockOrReal(),
+		hostStores:              HostCredentialStores,
+		lifecycle:               sidecarLifecycle{state: SidecarStateLocked},
 	}
 }
 
