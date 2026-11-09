@@ -246,7 +246,58 @@ func sidecarSignerOf(signers []ConfigSigner) *Id {
 	return nil
 }
 
-// Applies one entry: raises its alarms, records them and the windows, then emits, once per entry.
+// What one entry's alarms need of the verified state, read before the record's lock, so no authority call runs
+// under it (connect/CODESTYLE.md:234).
+type sidecarAlarmFacts struct {
+	// this device is a member device: admitted, not revoked, untagged and not ephemeral (§7.9's leaves row)
+	memberDevice bool
+	memberId     Id
+	// per sidecar an entry admits under this device's member: whether none of the member's other devices signed it,
+	// and whether the member has not consented to it
+	admissions map[Id]*sidecarAlarmAdmissionFacts
+}
+
+// One admission's facts.
+type sidecarAlarmAdmissionFacts struct {
+	unsigned    bool
+	unconsented bool
+}
+
+// Reads what entry's alarms need of authority, as this device stands in it now.
+func sidecarReadAlarmFacts(authority SidecarAuthority, identity *SidecarIdentity, entry *SidecarAuthorityEntry) *sidecarAlarmFacts {
+	facts := &sidecarAlarmFacts{admissions: map[Id]*sidecarAlarmAdmissionFacts{}}
+	own := authority.Admission(identity.SidecarId)
+	facts.memberDevice = own != nil && own.Row != nil && own.Row.GetRevokedAt() == 0 && len(own.TagIds) == 0 && !own.Ephemeral
+	if !facts.memberDevice {
+		return facts
+	}
+	facts.memberId = own.MemberId
+	for _, effect := range entry.Effects {
+		if effect.Type != bridge.SignedType_SIGNED_SIDECAR_ADMIT {
+			continue
+		}
+		admit := &protocol.SidecarAdmit{}
+		if proto.Unmarshal(effect.Body, admit) != nil {
+			continue
+		}
+		admittedId, err := IdFromBytes(admit.GetSidecarId())
+		admittedMemberId, memberErr := IdFromBytes(admit.GetMemberId())
+		if err != nil || memberErr != nil || admittedMemberId != facts.memberId || admittedId == identity.SidecarId {
+			continue
+		}
+		devices := slices.DeleteFunc(authority.MemberDevices(facts.memberId), func(device *AclSidecar) bool {
+			return device.Row == nil || bytes.Equal(device.Row.GetSidecarId(), admittedId.Bytes())
+		})
+		facts.admissions[admittedId] = &sidecarAlarmAdmissionFacts{
+			unsigned:    !sidecarSignedByOneOf(effect.Signers, devices),
+			unconsented: !admit.GetEphemeral() && !authority.Consented(admittedId, facts.memberId),
+		}
+	}
+	return facts
+}
+
+// Applies one entry: raises its alarms, records them and the windows, then emits, once per entry. The verified state
+// is read first, outside the record's lock; the follower delivers one entry at a time.
 func (self *Sidecar) applyAlarmEntry(authority SidecarAuthority, entry *SidecarAuthorityEntry) {
 	if entry == nil || entry.Pin == nil {
 		return
@@ -255,6 +306,7 @@ func (self *Sidecar) applyAlarmEntry(authority SidecarAuthority, entry *SidecarA
 	if identity == nil {
 		return
 	}
+	facts := sidecarReadAlarmFacts(authority, identity, entry)
 	events := []SidecarEvent{}
 	err := func() error {
 		self.alarms.stateLock.Lock()
@@ -268,7 +320,7 @@ func (self *Sidecar) applyAlarmEntry(authority SidecarAuthority, entry *SidecarA
 			// a follower's redelivery after a restart: raised already
 			return nil
 		}
-		events = self.alarmsOfEntry(authority, identity, entry, record)
+		events = self.alarmsOfEntry(facts, identity, entry, record)
 		record.AppliedThrough = n
 		return self.persistAlarmRecord(record)
 	}()
@@ -280,19 +332,14 @@ func (self *Sidecar) applyAlarmEntry(authority SidecarAuthority, entry *SidecarA
 	}
 }
 
-// The alarms one entry raises on this device, recorded in record. Runs under the alarm lock, calling only the
-// authority, which takes no lock of this sidecar's.
-func (self *Sidecar) alarmsOfEntry(authority SidecarAuthority, identity *SidecarIdentity, entry *SidecarAuthorityEntry, record *sidecarAlarmRecord) []SidecarEvent {
+// The alarms one entry raises on this device, given facts, recorded in record. Runs under the alarm lock and calls
+// nothing outside this sidecar.
+func (self *Sidecar) alarmsOfEntry(facts *sidecarAlarmFacts, identity *SidecarIdentity, entry *SidecarAuthorityEntry, record *sidecarAlarmRecord) []SidecarEvent {
 	events := []SidecarEvent{}
 	n := entry.Pin.GetVersion()
 	nowMs := self.clock.Now().UnixMilli()
-	own := authority.Admission(identity.SidecarId)
-	// a member device: untagged and not ephemeral (§7.9's leaves row)
-	memberDevice := own != nil && own.Row != nil && own.Row.GetRevokedAt() == 0 && len(own.TagIds) == 0 && !own.Ephemeral
-	var memberId Id
-	if memberDevice {
-		memberId = own.MemberId
-	}
+	memberDevice := facts.memberDevice
+	memberId := facts.memberId
 
 	for _, effect := range entry.Effects {
 		switch effect.Type {
@@ -302,25 +349,17 @@ func (self *Sidecar) alarmsOfEntry(authority SidecarAuthority, identity *Sidecar
 				continue
 			}
 			admittedId, err := IdFromBytes(admit.GetSidecarId())
-			admittedMemberId, memberErr := IdFromBytes(admit.GetMemberId())
-			if err != nil || memberErr != nil || admittedMemberId != memberId || admittedId == identity.SidecarId {
-				continue
-			}
-			devices := slices.DeleteFunc(authority.MemberDevices(memberId), func(device *AclSidecar) bool {
-				return device.Row == nil || bytes.Equal(device.Row.GetSidecarId(), admittedId.Bytes())
-			})
-			unsigned := !sidecarSignedByOneOf(effect.Signers, devices)
-			unconsented := !admit.GetEphemeral() && !authority.Consented(admittedId, memberId)
-			if !unsigned && !unconsented {
+			admission := facts.admissions[admittedId]
+			if err != nil || admission == nil || (!admission.unsigned && !admission.unconsented) {
 				continue
 			}
 			// one item, which approve answers with OwnerConfirm, revoke with RevokeDevice and deny dismisses
 			itemId := sidecarApprovalItemId(SidecarApprovalAdmissionAlarm, admittedId.Bytes(), n)
 			record.open(&sidecarApprovalRecord{ItemId: itemId, Kind: SidecarApprovalAdmissionAlarm, SidecarId: &admittedId, MemberId: &memberId, Position: n, RaisedAtMs: nowMs})
-			if unsigned {
+			if admission.unsigned {
 				events = append(events, SidecarEvent{Kind: SidecarEventAdmissionAlarm, SidecarId: &admittedId})
 			}
-			if unconsented {
+			if admission.unconsented {
 				events = append(events, SidecarEvent{Kind: SidecarEventApprovalPending, SidecarId: &admittedId, ApprovalId: &itemId})
 			}
 
