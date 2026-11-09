@@ -144,9 +144,11 @@ message RecoveryRebind {
   StatementHeader header = 1; bytes member_id = 2; bytes prev_sha256 = 3; bytes ed25519_public_key_sha256 = 4;
   bytes sealed_body = 5; RecoveryRebindReason reason = 6;
 }
+// KeyRegister's fields 9 and 10 are protos-bridge-presence-gaps #3's, decided by the owner with their numbers.
 message KeyRegister {
   StatementHeader header = 1; bytes member_id = 2; bytes key_id = 3; KeyAlg alg = 4; bytes public_key = 5;
-  bytes attestation = 6; KeyPurpose purpose = 7; int64 not_after = 8;
+  bytes attestation = 6; KeyPurpose purpose = 7; int64 not_after = 8; bytes key_signature = 9;
+  WebAuthnEvidence key_webauthn = 10;
 }
 message KeyRevoke { StatementHeader header = 1; bytes key_id = 2; }
 message Delegation {
