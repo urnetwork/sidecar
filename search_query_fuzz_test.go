@@ -1,6 +1,9 @@
+//go:build !js
+
 // §22.6's search-arguments target for the query grammar and the plan (SEARCH-M10-22): any query parses or is refused
 // without a panic, a refusal never repeats the query, the trigrams a query can look up stay bounded whatever it holds,
 // parsing is a function of the query, and planning any parsed query over a fixed holding stays within its partitions.
+// Not on js, where testing.F cannot open its corpus directory.
 
 package sidecar
 
