@@ -272,11 +272,6 @@ func (self *EvsRepo) Import(ctx context.Context, args *EvsImportArgs) (*EvsImpor
 	return nil, fmt.Errorf("%w: Import is EVS1-M2-34's", ErrEvsNotBuilt)
 }
 
-// Serves the repo to stock git from a plaintext bare repository (§11.11). EVS1-M2-33 builds it.
-func (self *EvsRepo) Mount(ctx context.Context, args *EvsMountArgs) (*EvsMountInfo, error) {
-	return nil, fmt.Errorf("%w: Mount is EVS1-M2-33's", ErrEvsNotBuilt)
-}
-
 // The newest re-pin of a ref past §11.9's catch-up budget, zero when nothing was skipped
 // (g0-recheck-0-head-reader-read-paths#3).
 func (self *EvsRepo) VerifiedSince(refId Id) time.Time {

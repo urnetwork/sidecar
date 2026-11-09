@@ -26,7 +26,9 @@ import (
 
 // The verified config state of the world: one state that judges every pin.
 type evsTestConfig struct {
-	stateLock    sync.Mutex
+	stateLock sync.Mutex
+	// what At answers, nil for this one state
+	atErr        error
 	identityKeys map[Id][]byte
 	writers      []Id
 	readers      []Id
@@ -36,8 +38,15 @@ type evsTestConfig struct {
 func (self *evsTestConfig) Pin() *bridge.AuthPin {
 	return &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)}
 }
-func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) { return self, nil }
-func (self *evsTestConfig) OnChain(pin *bridge.AuthPin) bool            { return true }
+func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.atErr != nil {
+		return nil, self.atErr
+	}
+	return self, nil
+}
+func (self *evsTestConfig) OnChain(pin *bridge.AuthPin) bool { return true }
 func (self *evsTestConfig) IdentityKey(sidecarId Id) []byte {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -135,6 +144,10 @@ type evsTestWorld struct {
 	headOverride   *protocol.EvsHeadSummary
 	logPageCount   int
 	reads          int
+	// a git-mode world's ref mode, its tree as git would hash it, and the next push's sealed metadata
+	mode         protocol.EvsRefMode
+	gitState     map[string]EvsGitOid
+	nextMetadata []byte
 }
 
 func newEvsTestWorld(t testing.TB) *evsTestWorld {
@@ -157,6 +170,8 @@ func newEvsTestWorld(t testing.TB) *evsTestWorld {
 		segments:     map[string][]byte{},
 		window:       127,
 		serveVersion: map[string]uint64{},
+		mode:         protocol.EvsRefMode_EVS_REF_FILE,
+		gitState:     map[string]EvsGitOid{},
 	}
 	refKey, err := NewEvsRefKey(evsTestRepoKey(repoId, 1))
 	if err != nil {
@@ -278,11 +293,15 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	keys := evsTestKeys(self.t, self.repoId, self.generation)
 	plan := &EvsPushPlan{
 		RepoId: self.repoId, RefId: self.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED,
-		RefMode: protocol.EvsRefMode_EVS_REF_FILE, PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain,
+		RefMode: self.mode, PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain,
 		Generation: self.generation, GroupId: evsTestId("world group"), GenerationCommitment: evsTestBytes(fmt.Sprint("commitment ", self.generation), 32),
 		PathEpoch: 1, Auth: &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)},
 		SignerSidecarId: self.signer.sidecarId, ClientId: evsTestId("world client"), TimeMs: 1767225600000 + int64(version),
 		SealedMetadata: append(evsTestBytes(fmt.Sprint("metadata ", version), 32), evsTestBytes("metadata tail", 16)...),
+	}
+	if self.nextMetadata != nil {
+		plan.SealedMetadata = self.nextMetadata
+		self.nextMetadata = nil
 	}
 	type pending struct {
 		key     string
@@ -386,7 +405,7 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 		return self.headOverride
 	}
 	head := &protocol.EvsHeadSummary{
-		RefId: self.refId.Bytes(), RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
+		RefId: self.refId.Bytes(), RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: self.mode,
 		GroupId: evsTestId("world group").Bytes(), Generation: self.generation,
 		PathEpoch: &protocol.EvsPathEpoch{Current: 1},
 	}
@@ -520,6 +539,13 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 			frames = append(frames, &protocol.EvsReadFrame{Path: reply})
 			locators = append(locators, pathLocators...)
 		}
+		for _, readPush := range read.GetPushes() {
+			if record, ok := self.pushRecordWithLock(readPush.GetPushId(), readPush.GetVersion()); ok {
+				frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{
+					Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD, Id: readPush.GetPushId(), Body: record,
+				}})
+			}
+		}
 		for _, readRange := range read.GetRanges() {
 			locators = append(locators, &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT), Id: readRange.GetSegmentId(), Offset: readRange.GetOffset(), Length: readRange.GetLength()})
 		}
@@ -592,4 +618,16 @@ func (self *evsTestClient) eventsOf(kind SidecarEventKind) []SidecarEvent {
 		}
 	}
 	return events
+}
+
+// The push record the world serves for a push: its statement and payload as items.
+func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]byte, bool) {
+	if version == 0 || uint64(len(self.commits)) < version {
+		return nil, false
+	}
+	commit := self.commits[version-1]
+	if !bytes.Equal(commit.parsed.Push.GetPushId(), pushId) {
+		return nil, false
+	}
+	return evsJoinItems([][]byte{commit.statement, commit.built.Payload}), true
 }

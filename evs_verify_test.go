@@ -448,3 +448,127 @@ func TestEvsReplayPathsVersionRules(t *testing.T) {
 		t.Errorf("a creation at max(b, m) + 1: %v", err)
 	}
 }
+
+// A statement pinned at a state this device's config no longer retains is refused, but proves nothing against its
+// signer, so it raises no alarm.
+func TestEvsUnretainedStatePinRefusesQuietly(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "a.txt", content: []byte("1")})
+	world.config.stateLock.Lock()
+	world.config.atErr = ErrGkmAuthNotRetained
+	world.config.stateLock.Unlock()
+	reader := world.reader(t, evsTestId("reader"))
+	if _, _, err := evsTestRead(t, reader, world, "a.txt"); !errors.Is(err, ErrGkmAuthNotRetained) {
+		t.Fatalf("an unretained pin: %v", err)
+	}
+	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) != 0 {
+		t.Errorf("alarms %v", alarms)
+	}
+}
+
+// The refs table on a record-class owned stream: its owner creates only, a repo admin's BASE and CLOSURE pass, and
+// another sidecar's write does not.
+func TestEvsOwnedStreamRefRules(t *testing.T) {
+	repoId := evsTestId("record repo")
+	owner, admin, other := evsTestId("owner"), evsTestId("admin"), evsTestId("other")
+	config := &evsTestConfig{
+		writers: []Id{owner, admin, other},
+		repo: &protocol.AclRepo{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_RECORD,
+			Admins: []*protocol.AclRepoAdminRow{{SidecarId: admin.Bytes()}}},
+	}
+	refId := evsTestId("stream")
+	statement := func(signer Id, flags protocol.EvsPushFlag, baseEntryVersion uint64) *EvsStatement {
+		push := &protocol.EvsPush{RefKind: uint32(protocol.EvsRefKind_EVS_REF_OWNED), OwnerSidecarId: owner.Bytes(), Flags: uint32(flags)}
+		change := &protocol.EvsChange{BaseEntryVersion: baseEntryVersion, EntrySha256: evsTestBytes("entry", 32)}
+		return &EvsStatement{Push: push, Changes: []*EvsCheckedChange{{Change: change}}}
+	}
+	cases := []struct {
+		name   string
+		signer Id
+		flags  protocol.EvsPushFlag
+		base   uint64
+		ok     bool
+	}{
+		{name: "owner creates", signer: owner, ok: true},
+		{name: "owner rewrites", signer: owner, base: 3, ok: false},
+		{name: "admin base", signer: admin, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, ok: true},
+		{name: "admin closure", signer: admin, flags: protocol.EvsPushFlag_EVS_PUSH_CLOSURE, base: 3, ok: true},
+		{name: "other writes", signer: other, ok: false},
+		{name: "owner forces", signer: owner, flags: protocol.EvsPushFlag_EVS_PUSH_FORCE, ok: false},
+	}
+	for _, c := range cases {
+		err := evsCheckRefRules(config, statement(c.signer, c.flags, c.base), repoId, refId, c.signer)
+		if c.ok != (err == nil) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
+
+// A directory's delta at or below the read's pin carries no statement, so it is taken as evs's word, its names still
+// checked by List; a delta that is no directory's is refused.
+func TestEvsDirectoryDeltaBelowThePin(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "d", children: []string{"a"}}, &evsTestChange{path: "d/a", content: []byte("a")})
+	reader := world.reader(t, evsTestId("reader"))
+	if _, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	world.push(&evsTestChange{path: "d", children: []string{"b"}}, &evsTestChange{path: "d/b", content: []byte("b")})
+	world.push(&evsTestChange{path: "x", content: []byte("x")})
+	// a reader that never listed d, pinned past both of its versions
+	reader = world.reader(t, evsTestId("later reader"))
+	if _, _, err := evsTestRead(t, reader, world, "x"); err != nil {
+		t.Fatal(err)
+	}
+	// evs now answers d with its first table and the second version as a delta, which is below the reader's pin
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		if reply.Names == nil {
+			return
+		}
+		state := world.paths["d"]
+		first, second := state.versions[1], state.versions[2]
+		reply.Version = &protocol.EvsIndexVersion{PushId: first.pushId, CommitVersion: first.commitVersion, EntryVersion: first.entryBytes}
+		reply.Statement = world.commits[first.commitVersion-1].statement
+		reply.Names = &protocol.EvsNameTable{Names: state.rows[:1]}
+		reply.NamesThrough = first.commitVersion
+		reply.Deltas = []*protocol.EvsIndexVersion{{PushId: second.pushId, CommitVersion: second.commitVersion, EntryVersion: second.entryBytes}}
+	}
+	listing, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Entries) != 2 {
+		t.Errorf("listed %d", len(listing.Entries))
+	}
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		if reply.Names != nil {
+			file := world.paths["x"].versions[world.paths["x"].newest]
+			reply.Deltas = []*protocol.EvsIndexVersion{{PushId: file.pushId, CommitVersion: file.commitVersion, EntryVersion: file.entryBytes}}
+		}
+	}
+	if _, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"}); err == nil {
+		t.Errorf("a file's entry as a directory's delta")
+	}
+}
+
+// The exported walk reads the log from a version and chains every statement, as a stream's or the config's replay
+// does: it reaches the head's C from C_0, and refuses a log that skips a version.
+func TestEvsWalkFromTheLog(t *testing.T) {
+	world := newEvsTestWorld(t)
+	for i := range 20 {
+		world.push(&evsTestChange{path: fmt.Sprint("f", i), content: []byte("x")})
+	}
+	reader := world.reader(t, evsTestId("replayer"))
+	version, chain := world.head()
+	walked, err := reader.client.Verifier().Walk(context.Background(), world.repoId, world.refId, 0, EvsChainStart(world.repoId, world.refId), version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(walked) != int(version) || walked[len(walked)-1].Chain != chain {
+		t.Errorf("walked %d to another chain", len(walked))
+	}
+	world.omitVersion = 7
+	if _, err := reader.client.Verifier().Walk(context.Background(), world.repoId, world.refId, 0, EvsChainStart(world.repoId, world.refId), version); !errors.Is(err, ErrEvsChainBroken) {
+		t.Errorf("a log that skips a version: %v", err)
+	}
+}
