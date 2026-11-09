@@ -215,8 +215,16 @@ func gateCaseExternal(testCase *Case, catalogGate string) string {
 	return strings.Join(parts, "; ")
 }
 
+// D-ARCH-4's assembly check, which G0 and every entry review runs (TEST-M1-12; R-ARCH-1, R-PHASE-1, D-PHASE-2):
+// server's gate tool rebuilds DESIGN.md from design/source in a scratch copy and says its outcome, missing for a
+// superseded-option hit nobody has read.
+var gateAssemblyItem = &GateItem{
+	Item:     "D-ARCH-4's assembly check: DESIGN.md rebuilt from design/source equals the checked-in one, validate.json clean, every superseded-option hit read, <me> only in PLAN quotations, and the Q- items added since the last gate listed (TEST-M1-12)",
+	Commands: []*GateCommand{{Repo: "server", Command: []string{"go", "run", "./local/sidecar-gate", "assembly"}}},
+}
+
 // Every row of gate: the catalog's cases at it, in row order, each with its conventional tests or its
-// sweep's, then its sweep's items.
+// sweep's; at G0 and an entry review, the assembly check; then its sweep's items.
 func GateRows(catalog *Catalog, gate string) []*GateRow {
 	sweep := gateSweep(gate)
 	rows := []*GateRow{}
@@ -234,7 +242,11 @@ func GateRows(catalog *Catalog, gate string) []*GateRow {
 			})
 		}
 	}
-	for _, item := range sweep.Items {
+	items := sweep.Items
+	if gate == "G0" || strings.HasSuffix(gate, "-in") {
+		items = append([]*GateItem{gateAssemblyItem}, items...)
+	}
+	for _, item := range items {
 		rows = append(rows, &GateRow{Item: item.Item, Tests: item.Tests, Commands: item.Commands, External: item.External})
 	}
 	return rows
