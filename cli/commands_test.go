@@ -321,7 +321,7 @@ func (self *testUrDaemonTarget) unlock(pass []byte) error {
 
 func (self *testUrDaemonTarget) lock() {}
 
-func (self *testUrDaemonTarget) enroll(ctx context.Context, credential *sidecar.SidecarEnrollCredential) (int64, error) {
+func (self *testUrDaemonTarget) enroll(ctx context.Context, credential *sidecar.SidecarEnrollCredential, network string) (int64, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.authKeys = append(self.authKeys, credential.AuthKey)
@@ -329,7 +329,7 @@ func (self *testUrDaemonTarget) enroll(ctx context.Context, credential *sidecar.
 	return 1, nil
 }
 
-func (self *testUrDaemonTarget) logout(ctx context.Context) error {
+func (self *testUrDaemonTarget) logout(ctx context.Context, networkId sidecar.Id) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.logouts += 1
@@ -477,6 +477,10 @@ func TestConnectSendsTheKeyToTheDaemon(t *testing.T) {
 func TestLogoutConfirmsOnTty(t *testing.T) {
 	target := &testUrDaemonTarget{}
 	daemon := startTestControlDaemon(t, target, nil)
+	// logout is network-scoped: the daemon hosts one network, which it acts on (CORE-M3-05)
+	if err := daemon.daemon.AddSidecar(sidecar.NewId(), &sidecar.Sidecar{}); err != nil {
+		t.Fatal(err)
+	}
 	cli, _, _ := newTestUrCli(daemon.socketPath)
 	cli.openTty = func() (urTty, error) { return &testTty{lines: []string{"n"}}, nil }
 	if code := cli.main(context.Background(), []string{"ur", "logout"}); code != urExitOk || target.logouts != 0 {

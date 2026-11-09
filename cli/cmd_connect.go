@@ -14,7 +14,7 @@ import (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "connect",
-		usage:   "  ur connect --token=<key> [--ephemeral] [--replace]",
+		usage:   "  ur connect --token=<key> [--ephemeral] [--replace] [--network=<name>]",
 		summary: "enroll this device's sidecar with an auth key",
 		run:     runUrConnect,
 	})
@@ -24,11 +24,13 @@ func runUrConnect(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	authKey, _ := options.String("--token")
 	ephemeral, _ := options.Bool("--ephemeral")
 	replace, _ := options.Bool("--replace")
+	network, _ := options.String("--network")
 	// no client declares provider egress until `ur proxy` or a public exit exists to set it (§20.8)
 	return enrollThroughDaemon(ctx, cli, &urEnrollParams{
 		AuthKey:   authKey,
 		Ephemeral: ephemeral,
 		Replace:   replace,
+		Network:   network,
 	})
 }
 

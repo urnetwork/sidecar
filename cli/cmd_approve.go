@@ -41,19 +41,21 @@ type urApprovalsTarget interface {
 }
 
 func (self *urDaemonNetwork) pendingApprovals() ([]*sidecar.SidecarApprovalItem, error) {
-	if self.sidecar == nil {
-		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	running, err := self.onlySidecar()
+	if err != nil {
+		return nil, err
 	}
-	return self.sidecar.PendingApprovals()
+	return running.PendingApprovals()
 }
 
 // A confirmed control call, the person having answered on /dev/tty. The daemon's presence prompt is §16's, so a
 // statement the log covers is refused until it lands, never signed without the check.
 func (self *urDaemonNetwork) decideApproval(ctx context.Context, approvalId sidecar.Id, decision string) error {
-	if self.sidecar == nil {
-		return fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	running, err := self.onlySidecar()
+	if err != nil {
+		return err
 	}
-	return self.sidecar.DecideApproval(ctx, approvalId, decision, sidecar.SidecarActConfirmed, nil)
+	return running.DecideApproval(ctx, approvalId, decision, sidecar.SidecarActConfirmed, nil)
 }
 
 // One item as approvals.list answers it: ids and kinds, never a secret.
