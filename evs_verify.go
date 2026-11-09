@@ -124,7 +124,7 @@ func (self *EvsVerifier) config() (GkmAuthView, error) {
 }
 
 // The kinds whose refs are record-class streams (§11.12's kinds table): every kind but general and config.
-func evsRepoKindRecordClass(kind protocol.RepoKind) bool {
+func EvsRepoKindRecordClass(kind protocol.RepoKind) bool {
 	return kind != protocol.RepoKind_REPO_KIND_GENERAL && kind != protocol.RepoKind_REPO_KIND_CONFIG
 }
 
@@ -212,7 +212,7 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 		if ownerErr != nil || ownerId != signerId {
 			// a record-class stream takes its BASE and an erasure's CLOSURE from a repo admin (§11.8, §11.12)
 			adminPush := has(protocol.EvsPushFlag_EVS_PUSH_BASE) || has(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
-			if ownerErr == nil && adminPush && admin && evsRepoKindRecordClass(repo.GetKind()) {
+			if ownerErr == nil && adminPush && admin && EvsRepoKindRecordClass(repo.GetKind()) {
 				return nil
 			}
 			return fmt.Errorf("%w: an owned ref signed by another sidecar", ErrEvsStatementRefused)
@@ -220,7 +220,7 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 		if !writer {
 			return fmt.Errorf("%w: an owned ref's sidecar no longer writes the repo", ErrEvsStatementRefused)
 		}
-		if evsRepoKindRecordClass(repo.GetKind()) {
+		if EvsRepoKindRecordClass(repo.GetKind()) {
 			if has(protocol.EvsPushFlag_EVS_PUSH_ERASE) || has(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) {
 				return nil
 			}
