@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -266,7 +267,12 @@ func TestEnrollRunsTheNewGeneration(t *testing.T) {
 	if identity == nil || identity.NetworkId != world.api.networkId || opened.args.ClientId != connectIdOf(identity.ClientId) {
 		t.Fatalf("identity %+v, client %s", identity, opened.args.ClientId)
 	}
-	if paths := world.api.requestedPaths(); strings.Join(paths, " ") != "/network/enroll /sidecar/bind" {
+	// The new generation's push client asks for a resync on its own (§6.8), so its /sidecar/sync/
+	// requests may or may not have come yet. They are not enrollment's.
+	paths := slices.DeleteFunc(world.api.requestedPaths(), func(path string) bool {
+		return strings.HasPrefix(path, "/sidecar/sync/")
+	})
+	if strings.Join(paths, " ") != "/network/enroll /sidecar/bind" {
 		t.Errorf("requests %v", paths)
 	}
 	enrollBody := map[string]any{}
