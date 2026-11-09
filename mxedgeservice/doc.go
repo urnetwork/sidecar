@@ -10,9 +10,12 @@
 //     {vhk}mx:.
 //   - service.go, the engine: Serve, a session's path, readiness and drain.
 //   - metrics.go, the metric families and their closed label values.
+//   - platform.go and platform_session.go, the platform role (D-MAIL-10): TLS ended here, then a
+//     go-smtp session that hands each message to PlatformIntake.
 //
 // Two roles stand on this: MAIL-M7-19's router, which routes by SNI and splices, and MAIL-M5-03's
-// platform listener. Until one replaces MxEdgeService's handoff, every session that reaches STARTTLS's
-// 220 closes in the handshake, the temporary failure §15.4 gives anything unroutable, so this engine
-// alone delivers nothing and tells no sender no for good.
+// platform listener, which NewMxEdgePlatformService starts. Until the router replaces
+// MxEdgeService's handoff, every router session that reaches STARTTLS's 220 closes in the handshake,
+// the temporary failure §15.4 gives anything unroutable, so the router alone delivers nothing and tells
+// no sender no for good.
 package mxedgeservice

@@ -75,6 +75,15 @@ record_flush_interval: 20s
 record_write_timeout: 3s
 record_queue: 9
 record_batch: 4
+platform_report_host: rpt.example
+platform_root: root.example
+platform_abuse_url: https://abuse.example/form
+platform_message_max_bytes: 1024
+platform_buffer_max_bytes: 4096
+platform_recipients: 3
+platform_handshake_timeout: 7s
+platform_idle_timeout: 2m
+platform_session_timeout: 20m
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +109,15 @@ record_batch: 4
 		RecordWriteTimeout:          3 * time.Second,
 		RecordQueueCount:            9,
 		RecordBatchCount:            4,
+		PlatformReportHostName:      "rpt.example",
+		PlatformRootDomainName:      "root.example",
+		PlatformAbuseUrl:            "https://abuse.example/form",
+		PlatformMessageByteCount:    1024,
+		PlatformBufferByteCount:     4096,
+		PlatformRecipientCount:      3,
+		PlatformHandshakeTimeout:    7 * time.Second,
+		PlatformIdleTimeout:         2 * time.Minute,
+		PlatformSessionTimeout:      20 * time.Minute,
 	}
 	if *settings != *want {
 		t.Errorf("loaded %+v, want %+v", settings, want)
@@ -213,24 +231,30 @@ func TestValidateTakesAHostAtItsLimits(t *testing.T) {
 // Each number, named by its yaml key, so a new field cannot miss the rule.
 func TestValidateRefusesEveryNumberAtZero(t *testing.T) {
 	for key, clear := range map[string]func(settings *mxedgeservice.MxEdgeSettings){
-		"sender_sessions":           func(settings *mxedgeservice.MxEdgeSettings) { settings.SenderSessionCount = 0 },
-		"sender_aggregate_sessions": func(settings *mxedgeservice.MxEdgeSettings) { settings.SenderAggregateSessionCount = 0 },
-		"network_sender_sessions":   func(settings *mxedgeservice.MxEdgeSettings) { settings.NetworkSenderSessionCount = 0 },
-		"network_sessions":          func(settings *mxedgeservice.MxEdgeSettings) { settings.NetworkSessionCount = 0 },
-		"max_connections":           func(settings *mxedgeservice.MxEdgeSettings) { settings.ProcessSessionCount = 0 },
-		"dialog_timeout":            func(settings *mxedgeservice.MxEdgeSettings) { settings.DialogTimeout = 0 },
-		"starttls_quiet":            func(settings *mxedgeservice.MxEdgeSettings) { settings.StartTlsQuietTimeout = 0 },
-		"client_hello_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.ClientHelloTimeout = 0 },
-		"client_hello_max_bytes":    func(settings *mxedgeservice.MxEdgeSettings) { settings.ClientHelloByteCount = 0 },
-		"closed_handshake_ttl":      func(settings *mxedgeservice.MxEdgeSettings) { settings.ClosedHandshakeTtl = 0 },
-		"store_timeout":             func(settings *mxedgeservice.MxEdgeSettings) { settings.StoreTimeout = 0 },
-		"ready_probe_interval":      func(settings *mxedgeservice.MxEdgeSettings) { settings.ReadyProbeInterval = 0 },
-		"accept_retry_delay":        func(settings *mxedgeservice.MxEdgeSettings) { settings.AcceptRetryDelay = 0 },
-		"drain_timeout":             func(settings *mxedgeservice.MxEdgeSettings) { settings.DrainTimeout = 0 },
-		"record_flush_interval":     func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordFlushInterval = 0 },
-		"record_write_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordWriteTimeout = 0 },
-		"record_queue":              func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordQueueCount = 0 },
-		"record_batch":              func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordBatchCount = 0 },
+		"sender_sessions":            func(settings *mxedgeservice.MxEdgeSettings) { settings.SenderSessionCount = 0 },
+		"sender_aggregate_sessions":  func(settings *mxedgeservice.MxEdgeSettings) { settings.SenderAggregateSessionCount = 0 },
+		"network_sender_sessions":    func(settings *mxedgeservice.MxEdgeSettings) { settings.NetworkSenderSessionCount = 0 },
+		"network_sessions":           func(settings *mxedgeservice.MxEdgeSettings) { settings.NetworkSessionCount = 0 },
+		"max_connections":            func(settings *mxedgeservice.MxEdgeSettings) { settings.ProcessSessionCount = 0 },
+		"dialog_timeout":             func(settings *mxedgeservice.MxEdgeSettings) { settings.DialogTimeout = 0 },
+		"starttls_quiet":             func(settings *mxedgeservice.MxEdgeSettings) { settings.StartTlsQuietTimeout = 0 },
+		"client_hello_timeout":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ClientHelloTimeout = 0 },
+		"client_hello_max_bytes":     func(settings *mxedgeservice.MxEdgeSettings) { settings.ClientHelloByteCount = 0 },
+		"closed_handshake_ttl":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ClosedHandshakeTtl = 0 },
+		"store_timeout":              func(settings *mxedgeservice.MxEdgeSettings) { settings.StoreTimeout = 0 },
+		"ready_probe_interval":       func(settings *mxedgeservice.MxEdgeSettings) { settings.ReadyProbeInterval = 0 },
+		"accept_retry_delay":         func(settings *mxedgeservice.MxEdgeSettings) { settings.AcceptRetryDelay = 0 },
+		"drain_timeout":              func(settings *mxedgeservice.MxEdgeSettings) { settings.DrainTimeout = 0 },
+		"record_flush_interval":      func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordFlushInterval = 0 },
+		"record_write_timeout":       func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordWriteTimeout = 0 },
+		"record_queue":               func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordQueueCount = 0 },
+		"record_batch":               func(settings *mxedgeservice.MxEdgeSettings) { settings.RecordBatchCount = 0 },
+		"platform_message_max_bytes": func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformMessageByteCount = 0 },
+		"platform_buffer_max_bytes":  func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformBufferByteCount = 0 },
+		"platform_recipients":        func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformRecipientCount = 0 },
+		"platform_handshake_timeout": func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformHandshakeTimeout = 0 },
+		"platform_idle_timeout":      func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformIdleTimeout = 0 },
+		"platform_session_timeout":   func(settings *mxedgeservice.MxEdgeSettings) { settings.PlatformSessionTimeout = 0 },
 	} {
 		settings := testSettings()
 		clear(settings)

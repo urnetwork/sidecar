@@ -103,6 +103,37 @@ type MxEdgeSettings struct {
 	RecordQueueCount int `yaml:"record_queue"`
 	// Session records one write carries at most. Default 10,000.
 	RecordBatchCount int `yaml:"record_batch"`
+
+	// The platform listener's (D-MAIL-10, MAIL-M5-03), which only NewMxEdgePlatformService reads. The
+	// three names have no default, as production names, and ValidatePlatform refuses them empty; the
+	// router's file need not set them.
+
+	// The report host, rpt.bringyour.com, whose <token>@ and root@ the listener takes (D-SMTP-19). An
+	// LDH name.
+	PlatformReportHostName string `yaml:"platform_report_host"`
+	// <root>, whose postmaster@ and abuse@ the listener takes (R-MAIL-15, RFC 2142). An LDH name.
+	PlatformRootDomainName string `yaml:"platform_root"`
+	// §21.8's form, which the 550 5.7.1 for unread role mail points a person at (plan-ABUSE-auto-reply).
+	// An absolute https url that fits a reply.
+	PlatformAbuseUrl string `yaml:"platform_abuse_url"`
+	// The most bytes one message may carry, advertised in SIZE, past which 552 5.3.4. Default 16 MiB,
+	// reading 17's.
+	PlatformMessageByteCount int `yaml:"platform_message_max_bytes"`
+	// The most message bytes all platform sessions in this process hold at once, past which a message
+	// gets 452 4.3.1, so 50 senders at the cap cannot take 800 MiB. Default 256 MiB, sixteen messages
+	// at the cap, tuned at T5.
+	PlatformBufferByteCount int `yaml:"platform_buffer_max_bytes"`
+	// Recipients one transaction may name, past which 452 4.5.3 and the sender sends the rest later.
+	// Default 100, RFC 5321 §4.5.3.1.8's least.
+	PlatformRecipientCount int `yaml:"platform_recipients"`
+	// How long a sender has to finish its TLS handshake after the 220. Default 10 s, as
+	// client_hello_timeout.
+	PlatformHandshakeTimeout time.Duration `yaml:"platform_handshake_timeout"`
+	// How long a session after TLS waits for a sender's next byte. Default 5 min, RFC 5321
+	// §4.5.3.2.7's server timeout.
+	PlatformIdleTimeout time.Duration `yaml:"platform_idle_timeout"`
+	// How long a session after TLS may run at all. Default 30 min, a splice's bound (§15.4).
+	PlatformSessionTimeout time.Duration `yaml:"platform_session_timeout"`
 }
 
 // The defaults every number here is read from. BannerHostName and DeviationUrl stay empty, so these
@@ -127,6 +158,12 @@ func DefaultMxEdgeSettings() *MxEdgeSettings {
 		RecordWriteTimeout:          5 * time.Second,
 		RecordQueueCount:            100000,
 		RecordBatchCount:            10000,
+		PlatformMessageByteCount:    16 * 1024 * 1024,
+		PlatformBufferByteCount:     256 * 1024 * 1024,
+		PlatformRecipientCount:      100,
+		PlatformHandshakeTimeout:    10 * time.Second,
+		PlatformIdleTimeout:         5 * time.Minute,
+		PlatformSessionTimeout:      30 * time.Minute,
 	}
 }
 
@@ -154,41 +191,10 @@ func (self *MxEdgeSettings) Validate() error {
 	if self == nil {
 		return fmt.Errorf("%w: no settings", ErrMxEdgeSettingsRefused)
 	}
-	// dotted LDH labels, which also keeps a CR or LF out of every reply the name enters
-	hostNameFits := func() bool {
-		if self.BannerHostName == "" || mxHostNameMaxByteCount < len(self.BannerHostName) {
-			return false
-		}
-		for _, label := range strings.Split(self.BannerHostName, ".") {
-			if label == "" || mxHostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
-				return false
-			}
-			for i := range len(label) {
-				c := label[i]
-				if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-') {
-					return false
-				}
-			}
-		}
-		return true
-	}
-	if !hostNameFits() {
+	if !mxLdhNameFits(self.BannerHostName) {
 		return fmt.Errorf("%w: banner_host is not an LDH name", ErrMxEdgeSettingsRefused)
 	}
-	// absolute https, printable ASCII with no space, and short enough for a 530's line to fit
-	deviationUrlFits := func() bool {
-		if self.DeviationUrl == "" || mxDeviationUrlMaxByteCount < len(self.DeviationUrl) {
-			return false
-		}
-		for i := range len(self.DeviationUrl) {
-			if self.DeviationUrl[i] <= ' ' || 0x7f <= self.DeviationUrl[i] {
-				return false
-			}
-		}
-		parsed, err := url.Parse(self.DeviationUrl)
-		return err == nil && parsed.Scheme == "https" && parsed.Host != ""
-	}
-	if !deviationUrlFits() {
+	if !mxReplyUrlFits(self.DeviationUrl) {
 		return fmt.Errorf("%w: deviation_url is not an absolute https url that fits a reply", ErrMxEdgeSettingsRefused)
 	}
 	value := reflect.ValueOf(self).Elem()
@@ -202,4 +208,56 @@ func (self *MxEdgeSettings) Validate() error {
 		return fmt.Errorf("%w: closed_handshake_ttl would outlive its daily key", ErrMxEdgeSettingsRefused)
 	}
 	return nil
+}
+
+// Whether these settings can run the platform role: Validate's rules, and the three names the role
+// answers with. A refusal names the field, never its value.
+func (self *MxEdgeSettings) ValidatePlatform() error {
+	if err := self.Validate(); err != nil {
+		return err
+	}
+	if !mxLdhNameFits(self.PlatformReportHostName) {
+		return fmt.Errorf("%w: platform_report_host is not an LDH name", ErrMxEdgeSettingsRefused)
+	}
+	if !mxLdhNameFits(self.PlatformRootDomainName) {
+		return fmt.Errorf("%w: platform_root is not an LDH name", ErrMxEdgeSettingsRefused)
+	}
+	if !mxReplyUrlFits(self.PlatformAbuseUrl) {
+		return fmt.Errorf("%w: platform_abuse_url is not an absolute https url that fits a reply", ErrMxEdgeSettingsRefused)
+	}
+	return nil
+}
+
+// Dotted LDH labels within RFC 1035's lengths, which also keeps a CR or LF out of every reply the name
+// enters.
+func mxLdhNameFits(name string) bool {
+	if name == "" || mxHostNameMaxByteCount < len(name) {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if label == "" || mxHostLabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := range len(label) {
+			c := label[i]
+			if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Absolute https, printable ASCII with no space, and short enough for a reply's line to fit around it.
+func mxReplyUrlFits(replyUrl string) bool {
+	if replyUrl == "" || mxDeviationUrlMaxByteCount < len(replyUrl) {
+		return false
+	}
+	for i := range len(replyUrl) {
+		if replyUrl[i] <= ' ' || 0x7f <= replyUrl[i] {
+			return false
+		}
+	}
+	parsed, err := url.Parse(replyUrl)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
 }

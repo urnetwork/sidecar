@@ -217,6 +217,8 @@ type testEngineOptions struct {
 	unseeded bool
 	// Takes a first probe that finds no store or no k, which otherwise fails the test.
 	unready bool
+	// Starts the platform role with these, and no store.
+	platform *mxedgeservice.MxEdgePlatformDeps
 }
 
 // An engine serving a test listener, past its first probe, with the mxedge gate open. Today's k is in
@@ -268,7 +270,13 @@ func newTestEngine(t *testing.T, options *testEngineOptions) *testEngine {
 			t.Fatal(err)
 		}
 	}
-	service, err := mxedgeservice.NewMxEdgeService(ctx, self.host.ServiceHost(), self.store, deps, self.settings)
+	var service *mxedgeservice.MxEdgeService
+	var err error
+	if options.platform != nil {
+		service, err = mxedgeservice.NewMxEdgePlatformService(ctx, self.host.ServiceHost(), deps, options.platform, self.settings)
+	} else {
+		service, err = mxedgeservice.NewMxEdgeService(ctx, self.host.ServiceHost(), self.store, deps, self.settings)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
