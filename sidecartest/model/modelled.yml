@@ -1,0 +1,67 @@
+# What each TLA+ model models, in code (TEST-M2-08; D-TEST-10, D-PHASE-7, FI-30). §22.8's cadence runs
+# the model checks "at each Gn-out of a milestone that changes a modelled object": a gate reruns a
+# model's TLC checks when any of its sources changed since its newest passing run here, and lets that
+# run stand when none did. modelled_test.go reads this file and holds its globs to real files;
+# model_test.go, under sidecar_tlc, decides each gate's rerun and prints the run line to add here.
+#
+# models        one per spec in this directory.
+#   spec        EvsCommit, StoreSettle or IndexRollup.
+#   owners      the tasks that write the model.
+#   milestones  the gates whose freeze needs it passing (§22.10).
+#   objects     what the model keeps, as §22.8 lists it.
+#   sources     globs from the monoroot, the directory holding this repository and its siblings, of the
+#               files that implement what the model keeps: a change to any forces a rerun at a gate.
+#               Test files never count. The spec, its cfg and run-tlc.sh count too.
+#   exclude     globs the sources match that belong to another model.
+#   runs        each recorded TLC run, newest last.
+#     at        yyyy-mm-dd
+#     commit    the sidecar commit
+#     tlc       TLC's revision, as its banner prints it
+#     mode      model, mutants, live or stories, as run-tlc.sh's modes
+#     result    pass or fail
+#     sources_sha256  the digest of the sources when it ran, as modelled_test.go computes it
+#     states, depth, seconds  what TLC reported, summed over the mode's runs
+
+models:
+  - spec: EvsCommit
+    owners: [EVS1-M2-02, EVSB-M10-07]
+    milestones: [M2, M10]
+    objects: "head (its fence, refusal records, seal lease and collect window), batch records, packs and parcels with their pidx/ entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and rev; from M10 versionless versions, kind-5 and staged content, holds, DROP pushes and the citation fence"
+    sources:
+      - sidecar/sidecartest/model/EvsCommit.tla
+      - sidecar/sidecartest/model/EvsCommit.cfg
+      - sidecar/sidecartest/model/run-tlc.sh
+      - sidecar/evsservice/*.go
+      - sidecar/evs_*.go
+      - sidecar/gkmservice/*.go
+    exclude:
+      - sidecar/evs_index_*.go
+    runs: []
+
+  - spec: StoreSettle
+    owners: [EVS1-M2-02]
+    milestones: [M2]
+    objects: "one key on 8 drives at EC:4 (4 hosts of 2): each drive's version and its own lock on the key, each write's coordinator and its drive commits, the settler and heal (D-OPS-20's settle rule)"
+    sources:
+      - sidecar/sidecartest/model/StoreSettle.tla
+      - sidecar/sidecartest/model/StoreSettle.cfg
+      - sidecar/sidecartest/model/run-tlc.sh
+      - minio/cmd/settle-*.go
+    exclude: []
+    runs:
+      - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 9de0263e10f0907d8f503d0352f873592332aebc62ce827b66aee45012259a59, states: 697346, depth: 21, seconds: 10}
+
+  - spec: IndexRollup
+    owners: [SEARCH-M10-02]
+    milestones: [M10]
+    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head and sealed slots, the roll-up lock, and each document's newest version and erasure state"
+    sources:
+      - sidecar/sidecartest/model/IndexRollup.tla
+      - sidecar/sidecartest/model/IndexRollup.cfg
+      - sidecar/sidecartest/model/run-tlc.sh
+      - sidecar/evs_index_*.go
+      - sidecar/search_*.go
+      - sidecar/indexer_*.go
+    exclude: []
+    runs:
+      - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: d009e271be94e34cb43dfdc846845a2f65b481ddbd6721982a9027a3f266eef6, states: 531540, depth: 0, seconds: 36}

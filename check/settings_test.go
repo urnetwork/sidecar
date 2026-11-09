@@ -85,6 +85,11 @@ type checkSettings struct {
 	// time.Now", each with the day it was granted and why. An exception that matches nothing fails, so
 	// the list only shrinks.
 	wallClockExceptions map[string]wallClockException
+	// the test rules' exceptions (tests_rules_test.go): a real-time wait, keyed "<file> time.<function>",
+	// and test data that is not synthetic, keyed "<file> <address or hostname>", each with the day it
+	// was granted and why. An exception that matches nothing fails, so the lists only shrink.
+	realTimeWaitExceptions map[string]testRuleException
+	testDataExceptions     map[string]testRuleException
 }
 
 // What a module's license file says beyond its licenses' own words, read by a person.
@@ -211,6 +216,126 @@ func defaultCheckSettings() *checkSettings {
 			"keys_instance.go time.After": {
 				since: "2026-11-08",
 				why:   "the instance lock waits in real time, until CORE-M1-08's NewSidecar passes SidecarSettings.Clock",
+			},
+		},
+		realTimeWaitExceptions: map[string]testRuleException{
+			"sidecartest/localstack/stack_test.go time.Sleep": {
+				since: "2026-11-09",
+				why:   "redissuite on §22.4's local stack waits out a real Redis's own TTLs, whose clock no test can move",
+			},
+			"socket_stream_fake_test.go time.NewTimer": {
+				since: "2026-11-09",
+				why:   "the fake socket pipe honors a real deadline the code under test sets, as net.Conn's contract has it; its firing is no proof",
+			},
+		},
+		testDataExceptions: map[string]testRuleException{
+			"acl_policy_host_test.go acme.com": {
+				since: "2026-11-09",
+				why:   "§8's worked example names acme.com, which the test reproduces as the design writes it",
+			},
+			"api_hosts_test.go ur.io": {
+				since: "2026-11-09",
+				why:   "a path into mmm's ur.io checkout, a directory name and no host",
+			},
+			"check/fixture_test.go mozilla.org": {
+				since: "2026-11-09",
+				why:   "the MPL's own notice, which names its URL, in a fixture license",
+			},
+			"check/fixture_test.go www.apache.org": {
+				since: "2026-11-09",
+				why:   "the Apache-2.0 notice, which names its URL, in a fixture license",
+			},
+			"check/planted_hygiene_test.go pkg.go.dev": {
+				since: "2026-11-09",
+				why:   "a vulnerability report's link as govulncheck prints it, planted",
+			},
+			"device/bridge_table_test.go 1.0.0.0": {
+				since: "2026-11-09",
+				why:   "a longest-prefix lookup's boundary under 0.0.0.0/1, not a host; BRIDGE's owner moves it to documentation space where the table allows",
+			},
+			"device/bridge_table_test.go 128.0.0.0": {
+				since: "2026-11-09",
+				why:   "128.0.0.0/1's boundary in a longest-prefix lookup, not a host",
+			},
+			"device/bridge_table_test.go 198.51.0.0": {
+				since: "2026-11-09",
+				why:   "a /16 around 198.51.100.0/24 to prove the longer prefix wins, which needs space outside the documentation /24",
+			},
+			"device/bridge_table_test.go 198.51.101.0": {
+				since: "2026-11-09",
+				why:   "the /16 above's address outside the documentation /24, which the lookup must send to the /16",
+			},
+			"device/bridge_table_test.go 198.51.7.7": {
+				since: "2026-11-09",
+				why:   "the /16 above's address outside the documentation /24, which the lookup must send to the /16",
+			},
+			"dnsservice/copy_rows_test.go 11.22.33.44": {
+				since: "2026-11-09",
+				why:   "§12.7's record validator refuses documentation space, so an accepted A record needs a routable address; DNS's owner may move it to a documented test address the validator allows",
+			},
+			"dnsservice/edge_test.go 11.22.33.44": {
+				since: "2026-11-09",
+				why:   "§12.7's record validator refuses documentation space, so an accepted A record needs a routable address",
+			},
+			"dnsservice/sign_test.go 11.22.33.44": {
+				since: "2026-11-09",
+				why:   "§12.7's record validator refuses documentation space, so an accepted A record needs a routable address",
+			},
+			"dnsservice/validate_fuzz_test.go 2000::": {
+				since: "2026-11-09",
+				why:   "a fuzz seed at global unicast's first address, which §12.7's validator must accept",
+			},
+			"dnsservice/zone_test.go 11.22.33.44": {
+				since: "2026-11-09",
+				why:   "§12.7's record validator refuses documentation space, so an accepted A record needs a routable address",
+			},
+			"dnsservice/zone_test.go 2a0f:ffff::7": {
+				since: "2026-11-09",
+				why:   "§12.7's record validator refuses documentation space, so an accepted AAAA record needs a routable address",
+			},
+			"mxedgeservice/caps_test.go 203.0.114.1": {
+				since: "2026-11-09",
+				why:   "routable, one /24 past 203.0.113.0/24: MAIL's owner moves it into 203.0.113.0/24",
+			},
+			"mxedgeservice/closed_handshake_test.go 203.0.114.9": {
+				since: "2026-11-09",
+				why:   "routable, one /24 past 203.0.113.0/24: MAIL's owner moves it into 203.0.113.0/24",
+			},
+			"mxedgeservice/service_test.go 203.0.114.9": {
+				since: "2026-11-09",
+				why:   "routable, one /24 past 203.0.113.0/24: MAIL's owner moves it into 203.0.113.0/24",
+			},
+			"record_presence_attest_test.go ur.io": {
+				since: "2026-11-09",
+				why:   "§16.6's presence profile fixes ur.io as the WebAuthn relying party id, a format constant",
+			},
+			"record_presence_test.go app.ur.io": {
+				since: "2026-11-09",
+				why:   "a subdomain of §16.6's relying party id, which the profile must refuse",
+			},
+			"record_presence_test.go ur.io": {
+				since: "2026-11-09",
+				why:   "§16.6's presence profile fixes ur.io as the WebAuthn relying party id, a format constant",
+			},
+			"sidecarctl/cmd_certs_renew_test.go 1.1.1.1": {
+				since: "2026-11-09",
+				why:   "a public resolver as an operator passes lego's --dns.resolvers, checked as an argument and never dialed; TLS's owner may move it to documentation space",
+			},
+			"sidecarctl/cmd_certs_renew_test.go acme-v02.api.letsencrypt.org": {
+				since: "2026-11-09",
+				why:   "Let's Encrypt's directory as the renew command passes it, checked as an argument and never dialed",
+			},
+			"sidecartest/localstack/blobs_sign_test.go examplebucket.s3.amazonaws.com": {
+				since: "2026-11-09",
+				why:   "AWS's published Signature Version 4 example, whose host is part of the signed vector",
+			},
+			"tls_caa_test.go letsencrypt.org": {
+				since: "2026-11-09",
+				why:   "§13.8's CAA issuer domain, a format constant",
+			},
+			"tlsedgeservice/sni_test.go 1.2.3.4": {
+				since: "2026-11-09",
+				why:   "an address literal a ClientHello must not carry as SNI; TLS's owner may move it to documentation space",
 			},
 		},
 	}

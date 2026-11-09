@@ -181,7 +181,8 @@ func (self *urCli) main(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		return urExitUsage
 	}
-	if base := strings.TrimSuffix(filepath.Base(args[0]), ".exe"); base == urGitRemoteName {
+	// Windows runs git-remote-ur.exe, and its file names keep no one case (§4.10)
+	if base := strings.TrimSuffix(strings.ToLower(filepath.Base(args[0])), ".exe"); base == urGitRemoteName {
 		if urGitRemoteEntry == nil {
 			fmt.Fprintln(self.stderr, "git-remote-ur: the git remote helper is not built yet")
 			return urExitFailed

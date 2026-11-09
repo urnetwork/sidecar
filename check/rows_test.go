@@ -381,6 +381,40 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "hygiene", item: "CODESTYLE's tests: a real-time wait in a test, time.Sleep or a timer whose firing is no failing guard (R-TEST-1)",
+		rule: (*repository).realTimeWaitFindings,
+		plantedTests: []string{
+			"TestTestRulesFailOnASleepInATest", "TestTestRulesFailOnANegativeTimeout", "TestTestRulesFailOnASleepInANestedModule",
+			"TestTestRulesFailOnATimerHeldAndNeverFailing", "TestTestRulesAllowFailingGuardsAndTheFakeClock",
+		},
+	},
+	{
+		row: "hygiene", item: "CODESTYLE's tests: t.Run whose result nothing reads, a positive subtest",
+		rule:         (*repository).positiveSubtestFindings,
+		plantedTests: []string{"TestTestRulesFailOnAPositiveSubtest", "TestTestRulesAllowASubtestExpectedToFail"},
+	},
+	{
+		row: "hygiene", item: "CODESTYLE's test data: a routable address outside the documentation ranges, or a real hostname, but a listed exception (I-13)",
+		rule: (*repository).testDataFindings,
+		plantedTests: []string{
+			"TestTestRulesFailOnARoutableAddress", "TestTestRulesFailOnARoutableIpv6Address", "TestTestRulesFailOnARealHostname",
+			"TestTestRulesFailOnAValueBesideAListedException", "TestTestRulesAllowSyntheticData",
+		},
+	},
+	{
+		row: "hygiene", item: "testdata/barriers.txt: a testHookBarrier or testHookSecret site it does not list, or a barrier name no inventory can read",
+		checkoutTest: "TestBarrierInventoryIsCurrent",
+		plantedTests: []string{
+			"TestBarrierInventoryFailsOnAnUnlistedSite", "TestBarrierInventoryFailsOnANameItCannotRead",
+			"TestBarrierInventoryFailsOnAStaleLine", "TestBarrierInventoryRegeneratesToItself",
+		},
+	},
+	{
+		row: "hygiene", item: "a schedule's Await or Release naming a barrier no site holds, which at run time is only a timeout",
+		checkoutTest: "TestScheduleBarriersAllExist",
+		plantedTests: []string{"TestScheduleFailsOnATypoedBarrier", "TestScheduleAllowsAConstantBarrierAndItsKey"},
+	},
+	{
 		row: "hygiene", item: "govulncheck findings",
 		checkoutTest: "TestHygieneGovulncheck",
 		plantedTests: []string{"TestHygieneFailsOnAVulnerableCallOnALeg", "TestHygieneFailsOnAnUnreachableVulnDatabase"},
