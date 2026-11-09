@@ -150,6 +150,8 @@ type Subprotocol struct {
 	pushClient atomic.Pointer[PushClient]
 	// HeadCheck's transport while one is attached (rpc_headcheck.go)
 	headCheck atomic.Pointer[headCheckTransport]
+	// the feature bits this side sends, which the inline handler reads with no lock (rpc_features.go)
+	features atomic.Pointer[subprotocolFeatureSet]
 
 	stats subprotocolStats
 }
@@ -442,7 +444,7 @@ func (self *Subprotocol) receive(source connect.TransferPath, envelope *protocol
 		// (6) the contract class C13 sealed, read from this frame's Peer (rpc_contract_class.go): on
 		// control, or unset, only §6.4's list and SEARCH at a sidecar serving it; other requests
 		// refused PERMISSION_DENIED, a StreamOpen StreamReject{DENIED}, anything else dropped
-		switch contractClassAdmits(peer.ContractClass, envelope.Type, envelope.Flags, false) {
+		switch contractClassAdmits(peer.ContractClass, envelope.Type, envelope.Flags, self.servesSearch()) {
 		case contractClassRefuse:
 			self.stats.contractClassRefusedCount.Add(1)
 			refuse(protocol.ErrorCode_ERR_PERMISSION_DENIED)
