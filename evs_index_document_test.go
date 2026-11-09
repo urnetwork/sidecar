@@ -391,7 +391,7 @@ func testExtractCases() []testExtractCase {
 			encodedCanary+"\n--outer\nContent-Type: text/plain; name=notes.txt\nContent-Disposition: attachment\n\n"+testAttachmentCanary+" in a text attachment\n--outer\nContent-Type: message/rfc822\n\nSubject: "+testAttachmentCanary+"\n\nforwarded "+testAttachmentCanary+"\n--outer--\nepilogue is not a part\n")
 	latin := testMessage("From: a@example.com\nSubject: plain\nContent-Type: text/plain; charset=iso-8859-1\nContent-Transfer-Encoding: 8bit", "Caf\xE9 cr\xE8me")
 	noMime := testMessage("From: a@example.com\nTo: b@example.com\nSubject: hello\n\tworld", "Just text, no MIME header at all.\n")
-	shiftJis := testMessage("From: =?Shift_JIS?B?k/qWe4zq?= <jp@example.jp>\nSubject: =?ISO-2022-JP?B?GyRCRnxLXDhsGyhC?=\nContent-Type: text/plain; charset=Shift_JIS", "\x93\xfa\x96\x7b\x8c\xea")
+	shiftJis := testMessage("From: =?Shift_JIS?B?k/qWe4zq?= <jp@example.com>\nSubject: =?ISO-2022-JP?B?GyRCRnxLXDhsGyhC?=\nContent-Type: text/plain; charset=Shift_JIS", "\x93\xfa\x96\x7b\x8c\xea")
 	utf16File := []byte{0xFF, 0xFE, 'H', 0, 'i', 0, ' ', 0, 0x3A, 0x30, '\n', 0, 'x', 0}
 	return []testExtractCase{
 		{name: "mixed", mail: true, path: "m/202611/3f/0123456789abcdef", content: mixed},

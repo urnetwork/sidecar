@@ -1,2 +1,2 @@
 go test fuzz v1
-[]byte("From: =?Shift_JIS?B?k/qWe4zq?= <jp@example.jp>\r\nSubject: =?ISO-2022-JP?B?GyRCRnxLXDhsGyhC?=\r\nContent-Type: text/plain; charset=Shift_JIS\r\n\r\n\x93\xfa\x96{\x8c\xea")
+[]byte("From: =?Shift_JIS?B?k/qWe4zq?= <jp@example.com>\r\nSubject: =?ISO-2022-JP?B?GyRCRnxLXDhsGyhC?=\r\nContent-Type: text/plain; charset=Shift_JIS\r\n\r\n\x93\xfa\x96{\x8c\xea")
