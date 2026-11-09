@@ -1,0 +1,56 @@
+{
+  "comment": "RFC 8785's JSON Canonicalization Scheme and the admin token's cmd digest (TEAM-M1-08; §7.8, D-TEAM-7). canonical cases come from RFC 8785 sections 3.2.2 to 3.2.4; numbers from its Appendix B, each a double's bits in hex and the text ECMAScript writes for it; digests computed apart from this repository, with Python's hashlib, over the bytes the format names.",
+  "canonical": [
+    {
+      "name": "rfc8785 3.2.2 and 3.2.4",
+      "input": "{\n  \"numbers\": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],\n  \"string\": \"\\u20ac$\\u000F\\u000aA'\\u0042\\u0022\\u005c\\\\\\\"\\/\",\n  \"literals\": [null, true, false]\n}",
+      "canonical": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}"
+    },
+    {
+      "name": "rfc8785 3.2.3 sorting by utf-16 code units",
+      "input": "{\n  \"\\u20ac\": \"Euro Sign\",\n  \"\\r\": \"Carriage Return\",\n  \"\\ufb33\": \"Hebrew Letter Dalet With Dagesh\",\n  \"1\": \"One\",\n  \"\\ud83d\\ude00\": \"Emoji: Grinning Face\",\n  \"\\u0080\": \"Control\",\n  \"\\u00f6\": \"Latin Small Letter O With Diaeresis\"\n}",
+      "canonical": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\u0080\":\"Control\",\"\u00f6\":\"Latin Small Letter O With Diaeresis\",\"\u20ac\":\"Euro Sign\",\"\ud83d\ude00\":\"Emoji: Grinning Face\",\"\ufb33\":\"Hebrew Letter Dalet With Dagesh\"}"
+    },
+    {
+      "name": "nested objects sort at every depth",
+      "input": "[ {\"b\": {\"z\": 1, \"a\": [ {\"y\": 2, \"x\": 1} ]}, \"a\": {}} ]",
+      "canonical": "[{\"a\":{},\"b\":{\"a\":[{\"x\":1,\"y\":2}],\"z\":1}}]"
+    },
+    {
+      "name": "the ur login command",
+      "input": "{ \"max_uses\": 1, \"duration_seconds\": 3.0e2 }",
+      "canonical": "{\"duration_seconds\":300,\"max_uses\":1}"
+    }
+  ],
+  "numbers": [
+    {"bits": "0000000000000000", "text": "0"},
+    {"bits": "8000000000000000", "text": "0"},
+    {"bits": "0000000000000001", "text": "5e-324"},
+    {"bits": "8000000000000001", "text": "-5e-324"},
+    {"bits": "7fefffffffffffff", "text": "1.7976931348623157e+308"},
+    {"bits": "ffefffffffffffff", "text": "-1.7976931348623157e+308"},
+    {"bits": "4340000000000000", "text": "9007199254740992"},
+    {"bits": "c340000000000000", "text": "-9007199254740992"},
+    {"bits": "4430000000000000", "text": "295147905179352830000"},
+    {"bits": "44b52d02c7e14af5", "text": "9.999999999999997e+22"},
+    {"bits": "44b52d02c7e14af6", "text": "1e+23"},
+    {"bits": "44b52d02c7e14af7", "text": "1.0000000000000001e+23"},
+    {"bits": "444b1ae4d6e2ef4e", "text": "999999999999999700000"},
+    {"bits": "444b1ae4d6e2ef4f", "text": "999999999999999900000"},
+    {"bits": "444b1ae4d6e2ef50", "text": "1e+21"},
+    {"bits": "3eb0c6f7a0b5ed8c", "text": "9.999999999999997e-7"},
+    {"bits": "3eb0c6f7a0b5ed8d", "text": "0.000001"},
+    {"bits": "41b3de4355555553", "text": "333333333.3333332"},
+    {"bits": "41b3de4355555554", "text": "333333333.33333325"},
+    {"bits": "41b3de4355555555", "text": "333333333.3333333"},
+    {"bits": "41b3de4355555556", "text": "333333333.3333334"},
+    {"bits": "41b3de4355555557", "text": "333333333.33333343"},
+    {"bits": "becbf647612f3696", "text": "-0.0000033333333333333333"},
+    {"bits": "43143ff3c1cb0959", "text": "1424953923781206.2"}
+  ],
+  "digests": [
+    {"method": "POST", "path": "/network/auth-keys", "body": "{\"max_uses\":1,\"duration_seconds\":300}", "cmd": "1yzElSu2YPGunv2Wylvo1FVIZvqmFrgJTsxOf7fFOqw"},
+    {"method": "GET", "path": "/network/auth-keys", "body": "", "cmd": "4jiG0A88t3_D4iBsqLVgLNmYMDTsponDW3Xk8I8WDKQ"},
+    {"method": "POST", "path": "/network/auth-keys", "body": "{\"duration_seconds\":300,\"max_uses\":2}", "cmd": "VdzIaLYsl5JGad68vILn_DN2AITsYd9dD9X6jbQLyis"}
+  ]
+}
