@@ -259,3 +259,33 @@ message RecoveryVeto {                 // an AdminSet member's admitted device, 
   StatementHeader header = 1;
   bytes proposal_id = 2;
 }
+
+// One statement or tick a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold,
+// as records, exactly the log's statements and ticks in (the previous base's folded_through, folded_through],
+// each by id with the position of the entry that carried it. A config file, which evs holds as ciphertext.
+message ConfigRecord {
+  bytes  id = 1;                       // SHA-256 of the Signed for a STATEMENT (StatementId); empty for a TICK
+  uint64 n = 2;                        // the carrying entry's position
+  int64  time_ms = 3;                  // the carrying entry's time
+  uint32 kind = 4;                     // AuthEntry.kind: 2 STATEMENT or 3 TICK, never a BASE
+  bytes  body = 5;                     // AuthEntry.body verbatim
+}
+
+// fold/<d>/<i>, the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits: one file per head that
+// advances folded_through, holding the records in (after, folded_through] in n order.
+message ConfigFold {
+  uint64 after = 1;                    // the previous fold's folded_through, 0 for the first
+  uint64 folded_through = 2;
+  repeated ConfigRecord records = 3;
+}
+
+// names: each sidecar's chosen client name (§7.7), which ConfigNames resolves to DNS labels keyed on the
+// sidecar_id, duplicates taking -2, -3 in admission order. Deterministically encoded, in sidecar_id order.
+message ConfigNameTable {
+  repeated ConfigName names = 1;
+}
+
+message ConfigName {
+  bytes  sidecar_id = 1;
+  string name = 2;                     // a DNS label, as ValidateConfigClientName takes it
+}

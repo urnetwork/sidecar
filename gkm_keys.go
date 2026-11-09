@@ -67,6 +67,9 @@ const (
 	EvsKeyPurposeGroupInfo = "groupinfo"
 	// The search index's keyed pad, per generation (§11.14).
 	EvsKeyPurposeIndex = "index"
+	// K_statement: the key a sealed field of a config record seals under (plan-TEAM-sealed-field-format,
+	// config_seal.go).
+	EvsKeyPurposeStatement = "statement"
 )
 
 // The formats of 10.5's records.
@@ -238,7 +241,7 @@ func (self *EvsRepoKey) DeriveKey(purpose string, context []byte) ([]byte, error
 			return nil, fmt.Errorf("%w: a groupinfo context of %d bytes", ErrGkmMalformed, len(context))
 		}
 	case EvsKeyPurposeLink, EvsKeyPurposeFek, EvsKeyPurposeManifest, EvsKeyPurposePath, EvsKeyPurposeDrop,
-		EvsKeyPurposeIndex:
+		EvsKeyPurposeIndex, EvsKeyPurposeStatement:
 	default:
 		return nil, fmt.Errorf("%w: no purpose %q", ErrGkmMalformed, purpose)
 	}
@@ -314,6 +317,7 @@ var gkmDerivedKeyKinds = map[string]string{
 	EvsKeyPurposeDrop:      "K_drop",
 	EvsKeyPurposeGroupInfo: "K_groupinfo",
 	EvsKeyPurposeIndex:     "K_index",
+	EvsKeyPurposeStatement: "K_statement",
 }
 
 // C_g = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g) || RK_g).
