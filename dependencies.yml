@@ -57,7 +57,6 @@ modules:
     spdx: MIT
     reason: ur's command line, at the version connect, server and sn hold
     leg: [cli]
-    planned: true
   - module: github.com/ebitengine/purego
     spdx: Apache-2.0
     reason: v0.11.2 reaches the macOS Keychain without cgo, from cli (§5.10, D-CORE-12)
