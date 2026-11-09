@@ -6,8 +6,10 @@ require (
 	github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815
 	github.com/ebitengine/purego v0.11.2
 	github.com/godbus/dbus/v5 v5.1.0
+	github.com/urnetwork/connect v0.0.0
 	github.com/urnetwork/sidecar v0.0.0
 	github.com/urnetwork/sidecar/smtpproof v0.0.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 )
 
@@ -52,13 +54,11 @@ require (
 	github.com/ronanh/intcomp v1.1.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/theodorsm/covert-dtls v1.5.1 // indirect
-	github.com/urnetwork/connect v0.0.0 // indirect
 	github.com/urnetwork/glog v0.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
-	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
