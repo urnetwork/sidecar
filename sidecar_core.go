@@ -311,18 +311,23 @@ func (self *Sidecar) Unlock(passphrase []byte) error {
 	return err
 }
 
-// The state, its reason and the bound client generation, for `ur status` and §18.5's GetState.
+// The state, its reason, the bound client generation, and §6.4's witnessed_at and open UNVERIFIED pins, for `ur
+// status` and §18.5's GetState.
 func (self *Sidecar) Status() SidecarStatus {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	status := SidecarStatus{
-		State:      self.lifecycle.state,
-		Reason:     self.lifecycle.reason,
-		Generation: self.lifecycle.generation,
-	}
-	if self.identity != nil && status.Generation < self.identity.Generation {
-		status.Generation = self.identity.Generation
-	}
+	status := func() SidecarStatus {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		status := SidecarStatus{
+			State:      self.lifecycle.state,
+			Reason:     self.lifecycle.reason,
+			Generation: self.lifecycle.generation,
+		}
+		if self.identity != nil && status.Generation < self.identity.Generation {
+			status.Generation = self.identity.Generation
+		}
+		return status
+	}()
+	self.fillHeadCheckStatus(&status)
 	return status
 }
 

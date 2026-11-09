@@ -54,6 +54,12 @@ type Sidecar struct {
 	enrollLock sync.Mutex
 	// §16's approval ledger and run store, under their own lock (record_ledger.go).
 	records sidecarRecords
+	// The network's verified config state, which admission, acts and alarms read (identity_authority.go).
+	authorities sidecarAuthorities
+	// §5.6's alarm watcher on that state's entries (identity_alarms.go).
+	alarms sidecarAlarms
+	// §6.4's state Status reads witnessed_at and the UNVERIFIED pins from (sidecar_status.go).
+	headCheckStatuses sidecarHeadCheckStatuses
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
