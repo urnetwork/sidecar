@@ -169,6 +169,11 @@ type SidecarLocalSettings struct {
 	RequestByteCount int64
 	// How long a local request may run: 30 s, §16.4's call timeout.
 	RequestTimeout time.Duration
+	// The first port of the local services (§5.8, §11.11, §15): git over http or https at it, git's ssh one past it,
+	// submission two past it and IMAP three past it: 17000 (plan-CORE-cli-ui-missing #6). ur daemon's --port sets
+	// it, and a second instance on one host passes its own. Zero lets the OS choose each service's port, as a test
+	// does.
+	FirstPort int `settings:"zero"`
 }
 
 // §16.10's limits, 5.9's cache and §11.14's remote search. A daemon designated for search (§7.9)
@@ -479,6 +484,7 @@ func DefaultSidecarSettings() *SidecarSettings {
 			IdleExitTimeout:  10 * time.Minute,
 			RequestByteCount: 4 * 1024 * 1024,
 			RequestTimeout:   30 * time.Second,
+			FirstPort:        17000,
 		},
 		Mcp:    defaultSidecarMcpSettings(),
 		Ingest: defaultSidecarIngestSettings(),

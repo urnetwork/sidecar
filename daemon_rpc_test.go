@@ -33,7 +33,7 @@ func runUnbounded(handler func(ctx context.Context) (any, error)) (any, error, b
 
 // One request line's response in mode.
 func dispatchTest(daemon *Daemon, mode string, line string) *daemonRpcResponse {
-	return daemon.dispatch([]byte(line), &DaemonHello{UrLocal: 1, Mode: mode, Version: "synthetic-version"}, runUnbounded)
+	return daemon.dispatch([]byte(line), &daemonSession{hello: &DaemonHello{UrLocal: 1, Mode: mode, Version: "synthetic-version"}}, runUnbounded)
 }
 
 // D-CORE-9: the mode selects a protocol, never a privilege. A Confirm method runs only from control with the ur's
@@ -184,16 +184,17 @@ func TestDaemonRpcRefusals(t *testing.T) {
 	}
 }
 
-// A Network method reads its network argument from the params.
+// A Network method reads its network argument from the params, and gets the network it names.
 func TestNetworkMethodReadsItsArgument(t *testing.T) {
-	daemon := newDispatchTestDaemon(t)
+	networkId := NewId()
+	daemon := newProjectTestDaemon(t, t.TempDir(), NetworkLabelRow{Root: testLabelRoot, NetworkId: networkId, Label: "k7q2m9"})
 	if err := daemon.RegisterMethod(&DaemonMethod{Name: "synthetic.status", Network: true, Handler: func(ctx context.Context, call *DaemonCall) (any, error) {
-		return call.Network, nil
+		return []string{call.Network, call.NetworkId.String()}, nil
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	response := dispatchTest(daemon, DaemonModeControl, `{"jsonrpc":"2.0","id":1,"method":"synthetic.status","params":{"network":"k7q2m9"}}`)
-	if string(response.Result) != `"k7q2m9"` {
+	if string(response.Result) != `["k7q2m9","`+networkId.String()+`"]` {
 		t.Fatalf("%s", response.Result)
 	}
 }

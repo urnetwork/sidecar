@@ -281,6 +281,7 @@ func TestEveryNumberMustBePositive(t *testing.T) {
 	want := []string{
 		"settings.KeychainSettings.AutoLockTimeout",
 		"settings.LocalSettings.IdleExitTimeout",
+		"settings.LocalSettings.FirstPort",
 		"settings.Search.CacheByteCount",
 	}
 	if !reflect.DeepEqual(zeroFieldNames, want) {

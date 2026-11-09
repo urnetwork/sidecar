@@ -40,8 +40,9 @@ type smtpSuiteCase struct {
 	run  func(ctx context.Context, store smtpedgeservice.SmtpEdgeStore) error
 }
 
-// Runs every case on store.
-func RunSmtpEdgeStoreSuite(t *testing.T, store smtpedgeservice.SmtpEdgeStore) {
+// Runs every case on store. t is a testing.TB, as the other store suites take, so server's test env,
+// which hands each attempt one, runs it on Postgres.
+func RunSmtpEdgeStoreSuite(t testing.TB, store smtpedgeservice.SmtpEdgeStore) {
 	t.Helper()
 	for _, suiteCase := range smtpSuiteCases() {
 		func() {

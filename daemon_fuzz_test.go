@@ -4,6 +4,8 @@ package sidecar
 
 import (
 	"bytes"
+	"errors"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -37,6 +39,48 @@ func FuzzDaemonHello(f *testing.F) {
 		}
 		if hello.Version != "synthetic-version" {
 			t.Fatal("accepted another version")
+		}
+	})
+}
+
+// The only refusals ParseSidecarProject writes: its sentence, with a line number or without one.
+var dotUrRefusalForm = regexp.MustCompile(`^\.ur is not the flat form ur reads(: line [0-9]+)?$`)
+
+// §22.6 and §5.8: a committed .ur is hostile input. No file panics the parser, a refusal is its sentence and a line
+// number and echoes nothing, and an accepted file holds only values of its keys' forms.
+func FuzzDotUr(f *testing.F) {
+	f.Add([]byte("network = \"k7q2m9\"\nagent = \"api-refactor\"\n"))
+	f.Add([]byte("# comment\nnetwork = \"k7q2m9\" # trailing\r\nclaims = \"prompt\"\nproject = \"billing-api\"\n"))
+	f.Add([]byte("network = 'k7q2m9'\n"))
+	f.Add([]byte("[table]\nsecret = \"synthetic-canary\"\n"))
+	f.Add([]byte("network = \"\\u006b\"\n"))
+	f.Add([]byte(""))
+	f.Fuzz(func(t *testing.T, content []byte) {
+		project, err := ParseSidecarProject(content)
+		if err != nil {
+			if project != nil || !errors.Is(err, ErrSidecarProjectMalformed) || !dotUrRefusalForm.MatchString(err.Error()) {
+				t.Fatalf("a refusal of another form: %v", err)
+			}
+			return
+		}
+		if project.Network != "" && !isDnsLowerLdhLabel(project.Network) {
+			t.Fatal("accepted a network that is no label")
+		}
+		for _, label := range []string{project.Agent, project.Project} {
+			if label == "" {
+				continue
+			}
+			if _, err := ParseSidecarAgent(label); err != nil {
+				t.Fatal("accepted a label of another form")
+			}
+		}
+		switch project.Claims {
+		case "", "off", "prompt", "auto":
+		default:
+			t.Fatal("accepted a claims value of another form")
+		}
+		if bytes.Contains(content, []byte("synthetic-canary")) && strings.Contains(project.Network+project.Agent+project.Project, "synthetic-canary") {
+			t.Fatal("a key outside the form was read")
 		}
 	})
 }
