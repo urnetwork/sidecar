@@ -3,6 +3,9 @@
 # fails make check until this file is regenerated, so each new linearization point and hooked key shows
 # in review. Regenerate with
 #   SIDECAR_REGENERATE_BARRIERS=1 go test -tags sidecar_check -run '^TestBarrierInventoryIsCurrent$' ./check
+barrier acl_gate.install acl_gate.go
+barrier acl_gate.install.after acl_gate.go
+barrier acl_gate.install.before acl_gate.go
 barrier api.send.after api_client.go
 barrier api.send.before api_client.go
 barrier api.set_by_jwt.after api_client.go
