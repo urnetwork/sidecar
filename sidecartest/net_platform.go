@@ -55,22 +55,26 @@ type netPlatformClient struct {
 }
 
 // The platform, built at the first call, or what building it failed with. A Net with no NetSettings.Platform has none,
-// and nil comes back with no error.
+// and nil comes back with no error. The build, and a later caller's wait for it, run with the caller's baton given up
+// (BarrierDriver.Blocking): the build is real I/O no barrier sees, and an actor waiting for another's build while it
+// held the baton would keep that build from ever handing back.
 func (self *netExchange) platformOrErr() (NetPlatform, error) {
 	if self.net.settings.Platform == nil {
 		return nil, nil
 	}
-	self.platformOnce.Do(func() {
-		platform, err := self.net.settings.Platform(self.ctx, self.net)
-		if err != nil {
-			self.platformErr = fmt.Errorf("the Net's platform did not start: %w", err)
-			return
-		}
-		if platform == nil {
-			self.platformErr = errors.New("the Net's platform builder gave no platform")
-			return
-		}
-		self.platform = platform
+	self.net.barriers.Blocking(func() {
+		self.platformOnce.Do(func() {
+			platform, err := self.net.settings.Platform(self.ctx, self.net)
+			if err != nil {
+				self.platformErr = fmt.Errorf("the Net's platform did not start: %w", err)
+				return
+			}
+			if platform == nil {
+				self.platformErr = errors.New("the Net's platform builder gave no platform")
+				return
+			}
+			self.platform = platform
+		})
 	})
 	return self.platform, self.platformErr
 }

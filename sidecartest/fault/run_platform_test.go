@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/urnetwork/connect"
@@ -143,5 +144,58 @@ func TestAwaitMessageEndsWithItsContext(t *testing.T) {
 	cancel()
 	if message, err := net.AwaitMessage(ctx, make(chan *sidecartest.NetMessage)); message != nil || !errors.Is(err, context.Canceled) {
 		t.Errorf("%v, %v", message, err)
+	}
+}
+
+// A platform for the runner's own tests: each client a Required connect client with no transport, whose control
+// takes no contract.
+type testRunPlatform struct {
+}
+
+func (self *testRunPlatform) OpenClient(ctx context.Context, name string, settings *connect.ClientSettings) (*sidecartest.NetPlatformClient, error) {
+	clientId := connect.NewId()
+	return &sidecartest.NetPlatformClient{
+		ClientId: clientId,
+		Client:   connect.NewClient(ctx, clientId, connect.NewNoContractClientOob(), settings),
+	}, nil
+}
+
+func (self *testRunPlatform) Close() {
+}
+
+// A platform built at a row's first client is built with the actor's baton given up: the builder here waits for a
+// second actor's step to start, which only a given-up baton lets happen, and both actors then open their clients on
+// the one platform it built, once, with no actor stalled.
+func TestAPlatformBuildGivesUpTheBaton(t *testing.T) {
+	secondStarted := make(chan struct{})
+	builds := atomic.Int64{}
+	settings := sidecartest.DefaultNetSettings()
+	settings.Platform = func(ctx context.Context, net *Net) (sidecartest.NetPlatform, error) {
+		builds.Add(1)
+		select {
+		case <-secondStarted:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &testRunPlatform{}, nil
+	}
+	RunTest(t, &Schedule{
+		Id:    "platform-build",
+		Tiers: []Tier{TierT2, TierT3},
+		Steps: []*Step{
+			{Actor: "first", Background: true, Action: func(ctx context.Context, net *Net) error {
+				_, err := net.OpenClient("a", nil)
+				return err
+			}},
+			{Actor: "second", Action: func(ctx context.Context, net *Net) error {
+				close(secondStarted)
+				_, err := net.OpenClient("b", nil)
+				return err
+			}},
+			{Actor: "first", Join: true},
+		},
+	}, settings)
+	if builds.Load() != 1 {
+		t.Errorf("the platform was built %d times", builds.Load())
 	}
 }
