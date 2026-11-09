@@ -951,3 +951,131 @@ func FuzzEvsIndexEntry(f *testing.F) {
 		}
 	})
 }
+
+// Commits a push of changes in parts, as the seal of §11.8's parts row leaves it: each part's record, then the seal's
+// record naming their places, changes_roots and first token paths, which the window entry places.
+func (self *evsWorld) pushInParts(changes ...*worldChange) uint64 {
+	self.pushSeq += 1
+	pushId := testId(fmt.Sprintf("push-%d", self.pushSeq))
+	baseVersion := self.head.Version()
+	baseChain := sidecar.EvsChainStart(self.repoId, self.refId)
+	if 0 < baseVersion {
+		baseChain = [32]byte(self.head.Head.GetChain())
+	}
+	plan := &sidecar.EvsPushPlan{
+		RepoId: self.repoId, RefId: self.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
+		PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain, Generation: 1, GroupId: testId("group"),
+		GenerationCommitment: make([]byte, 32), PathEpoch: 1, Auth: &bridge.AuthPin{Version: 1, Chain: make([]byte, 32)},
+		SignerSidecarId: self.signerId, ClientId: testId("client"), TimeMs: self.clock.Now().UnixMilli(),
+		SealedMetadata: []byte("sealed metadata"),
+	}
+	for _, change := range changes {
+		planned := &sidecar.EvsPlannedChange{TokenPath: change.path, BaseEntryVersion: change.base}
+		if change.version != 0 {
+			planned.EntryVersion = self.entryVersion(pushId, baseVersion, change)
+		}
+		plan.Changes = append(plan.Changes, planned)
+	}
+	built, err := self.builder.Build(plan)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if len(built.Parts) < 2 {
+		self.t.Fatalf("%d parts", len(built.Parts))
+	}
+	sealParts := []*sidecar.EvsSealPart{}
+	for _, partBytes := range built.Parts {
+		checked, err := sidecar.EvsCheckPart(built.Statement, partBytes)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		place, err := self.batches.Append(self.paidCtx, "meta-1", &sidecar.EvsBatchRecord{
+			Type: protocol.EvsBatchRecordType_EVS_BATCH_PART, RepoId: self.repoId, RefId: self.refId, PushId: pushId,
+			SignerSidecarId: self.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsPartRecordBody(built.Statement.Bytes, partBytes, nil, baseVersion),
+		})
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		sealParts = append(sealParts, &sidecar.EvsSealPart{Place: place, ChangesRoot: checked.Root, FirstTokenPath: checked.Changes[0].TokenPath})
+	}
+	place, err := self.batches.Append(self.paidCtx, "meta-1", &sidecar.EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: self.repoId, RefId: self.refId, PushId: pushId,
+		SignerSidecarId: self.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsSealRecordBody(built.Statement.Bytes, sealParts),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	changedPaths := make([]sidecar.EvsTokenPath, len(changes))
+	for i, change := range changes {
+		changedPaths[i] = change.path
+	}
+	windowEntry := sidecar.NewEvsWindowEntry(built.Statement.Sha256, built.Statement.Push, changedPaths, built.Statement.ChangedPrefixes, true, place)
+	next := CloneEvsHead(self.head.Head)
+	chain := sidecar.EvsChainNext(baseChain, pushId, built.Statement.Sha256)
+	next.Version = baseVersion + 1
+	next.Chain = chain[:]
+	next.PushId = pushId.Bytes()
+	next.Window = append(bytes.Clone(next.GetWindow()), windowEntry.Encode()...)
+	written, err := self.heads.Commit(self.ctx, self.cluster, self.repoId, self.refId, self.head, next)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.head = written
+	self.history = append(self.history, &worldPush{version: next.Version, changes: changes})
+	return next.Version
+}
+
+// A push in parts: the rule reads the seal's record and only the part whose run holds the path, matched to the
+// seal's changes_root for it.
+func TestNewestReadsASealedPushsPartHoldingThePath(t *testing.T) {
+	world := newEvsWorld(t)
+	world.push(&worldChange{path: worldPath("seed"), version: 1})
+	changes := []*worldChange{}
+	for i := 0; i < 1100; i += 1 {
+		changes = append(changes, &worldChange{path: worldPath(fmt.Sprintf("p%d", i)), version: 2})
+	}
+	world.pushInParts(changes...)
+	cache := NewRecordCache(world.settings)
+	source := NewRecordPushSource(cache, world.cluster, world.repoId, world.refId)
+	head, _ := world.heads.ReadCluster(world.ctx, world.cluster, world.repoId, world.refId)
+	for _, label := range []string{"p0", "p1099", "p550"} {
+		path := worldPath(label)
+		read, err := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, path, head.Head.GetFoldedThrough())
+		if err != nil {
+			t.Fatal(err)
+		}
+		newest, err := Newest(world.ctx, read, head.Head, source)
+		if err != nil || !newest.Exists || newest.Version != 2 || newest.CommitVersion != 2 {
+			t.Fatalf("%s: %+v %v", label, newest, err)
+		}
+	}
+	// the seal's record once, and each part once, for three paths
+	if _, readCount, _ := cache.Counts(); 3 < readCount {
+		t.Errorf("%d records read", readCount)
+	}
+	// a seal whose part's changes_root it does not name is no statement of it
+	tampered := CloneEvsHead(head.Head)
+	window, _ := EvsHeadWindow(tampered)
+	sealRecord, err := ReadRecord(world.ctx, cache, world.cluster, window[1].Place)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statementBytes, parts, err := sidecar.ParseEvsSealRecordBody(sealRecord.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts[0].ChangesRoot[0] ^= 1
+	place, err := world.batches.Append(world.paidCtx, "meta-1", &sidecar.EvsBatchRecord{
+		Type: sealRecord.Type, RepoId: sealRecord.RepoId, RefId: sealRecord.RefId, PushId: sealRecord.PushId,
+		SignerSidecarId: sealRecord.SignerSidecarId, TimeMs: sealRecord.TimeMs, Body: sidecar.EvsSealRecordBody(statementBytes, parts),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window[1].Place = place
+	tampered.Window = append(window[0].Encode(), window[1].Encode()...)
+	read, _ := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, worldPath("p0"), 0)
+	if _, err := Newest(world.ctx, read, tampered, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId)); !errors.Is(err, ErrEvsStatementMismatch) {
+		t.Errorf("a seal naming another changes_root: %v", err)
+	}
+}
