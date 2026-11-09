@@ -1,3 +1,5 @@
+//go:build !js
+
 // FuzzDirectoryDecode (§22.6's directory.proto target, RECORD-M6-11): whatever bytes arrive as an announce entry, a
 // request, a decision, a notice or an erasure request, its decoder never panics and answers either a refusal wrapping
 // ErrDirectoryFormatInvalid or what it took; it refuses bytes past its bound, whatever they hold; and what it takes

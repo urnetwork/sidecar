@@ -832,6 +832,8 @@ func DirectoryCheckDecision(decision *protocol.DirectoryDecision) error {
 	return err
 }
 
+// DirectoryCheckDecision's checks, answering an approved reach's ApprovalDecision as parsed from its bytes as stored,
+// nil for any other decision.
 func directoryCheckDecision(decision *protocol.DirectoryDecision) (*StoredApprovalDecision, error) {
 	if decision == nil {
 		return nil, directoryRefusal("no decision")
