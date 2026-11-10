@@ -54,6 +54,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// A test's hook that makes a read name every path in every listed source, whatever its floor, as the landed tokenize
+// did before the floor rule (DESIGN-DETAILS 9.1 A): the twin the capture must catch (9.6). false outside tests.
+var evsTokenizeEverySourceHook bool
+
 // Whether a ref of refKind is a deposit or the erasure ref: see the file header.
 func evsEpochExempt(refKind protocol.EvsRefKind) bool {
 	return refKind == protocol.EvsRefKind_EVS_REF_DEPOSIT || refKind == protocol.EvsRefKind_EVS_REF_ERASURE
@@ -349,8 +353,10 @@ type evsClientEpochs struct {
 	refAlarms map[evsRefKey]*evsRefAlarm
 	// per ref, closed at its next verified head (evs_epoch.go's moved)
 	waiters map[evsRefKey]chan struct{}
-	// what a mapper on this device says of a ref's job, nil until one registers (evs_epoch_map.go)
+	// what a mapper on this device says of a ref's job, and how a verified head asks it a tick, nil until one
+	// registers (evs_epoch_map.go)
 	mapperStatus evsMapperStatusFunction
+	mapperWake   func(repoId Id, refId Id, headVersion uint64)
 	// the client's *evsMapper, made on first use: untyped here, since the mapper's files stay off the ios_extension
 	// leg, which links this one
 	mapper any
@@ -386,11 +392,16 @@ func newEvsClientEpochs() *evsClientEpochs {
 	}
 }
 
-// Notes the generation this device's own EnsureWritable returned for a repo.
-func (self *evsClientEpochs) noteWritable(repoId Id, generation uint64) {
+// Notes the generation this device's own EnsureWritable returned for a repo: true when it rose, the device having
+// rotated or been given a newer one.
+func (self *evsClientEpochs) noteWritable(repoId Id, generation uint64) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.writable[repoId] = max(self.writable[repoId], generation)
+	if generation <= self.writable[repoId] {
+		return false
+	}
+	self.writable[repoId] = generation
+	return true
 }
 
 // Whether this device's own EnsureWritable returned generation, so it rotated to it and maps at once.
@@ -731,6 +742,10 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 				pinEpoch = path.record.PinEpoch
 			}
 			epochs, lookup, needFresh := evsEpochTokens(state.epoch, path.floor, pinEpoch, path.more, quiet != nil && *quiet, fresh)
+			if evsTokenizeEverySourceHook {
+				// the twin: every listed source for every path, floor or none, as tokenize did (9.1 A)
+				epochs, lookup, needFresh = append([]uint64{current}, evsSourceEpochs(state.epoch)...), false, false
+			}
 			if needFresh {
 				return nil, true, nil
 			}

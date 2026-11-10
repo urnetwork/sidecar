@@ -54,6 +54,7 @@ type epochWorld struct {
 	repoId    sidecar.Id
 	clientId  sidecar.Id
 	memberId  sidecar.Id
+	kind      protocol.RepoKind
 	log       *FakeGkmAuthLog
 	gkm       *FakeGkm
 	engine    *evsservice.EvsEngine
@@ -120,6 +121,12 @@ var epochWorldLabels = []string{"w", "v", "m", "r", "d"}
 // A general repo created by w, read by every label and written by w, v and m.
 func newEpochWorld(t *testing.T) *epochWorld {
 	t.Helper()
+	return newEpochWorldOf(t, protocol.RepoKind_REPO_KIND_GENERAL)
+}
+
+// newEpochWorld's repo of kind.
+func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
+	t.Helper()
 	ctx := t.Context()
 	clock := NewFakeClock(DefaultClockStart())
 	hostSettings := DefaultFakeHostSettings()
@@ -130,7 +137,7 @@ func newEpochWorld(t *testing.T) *epochWorld {
 	world := &epochWorld{
 		t: t, ctx: ctx, clock: clock, host: host,
 		networkId: sidecar.NewId(), repoId: sidecar.NewId(), clientId: sidecar.NewId(), memberId: sidecar.NewId(),
-		log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
+		kind: kind, log: NewFakeGkmAuthLog(), signers: map[string]*FakeGkmSigner{},
 	}
 	for _, label := range epochWorldLabels {
 		world.signers[label] = NewFakeGkmSigner()
@@ -150,7 +157,7 @@ func newEpochWorld(t *testing.T) *epochWorld {
 	world.gkm = NewFakeGkm(clock, host.Blobs, nil)
 	creator := world.gkm.Client(world.signers["w"].SidecarId, world.signers["w"].Sign)
 	creator.AuthAdvanced(world.currentView())
-	if _, err := creator.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: world.repoId, Kind: protocol.RepoKind_REPO_KIND_GENERAL}); err != nil {
+	if _, err := creator.CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: world.repoId, Kind: kind}); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := evsservice.NewUsageBatcher(ctx, host.ServiceHost(), nil)
@@ -173,7 +180,7 @@ func newEpochWorld(t *testing.T) *epochWorld {
 	settings.PushUnknownRereadInterval = 0
 	settings.RepoCacheTtl = 0
 	world.engine, err = evsservice.NewEvsEngine(ctx, host.ServiceHost(), settings, &evsservice.EvsEngineDeps{
-		AuthState: &depositAuthState{networkId: world.networkId, kind: protocol.RepoKind_REPO_KIND_GENERAL},
+		AuthState: &depositAuthState{networkId: world.networkId, kind: kind},
 		Uploads:   &evsservice.EvsUploadDeps{Keys: receiptKeys, Quota: quota, Usage: usage},
 		GateViews: world.gate,
 	})
@@ -189,7 +196,7 @@ func newEpochWorld(t *testing.T) *epochWorld {
 		t.Fatal(err)
 	}
 	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
-		RepoId: world.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
+		RepoId: world.repoId.Bytes(), Kind: kind, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
 		Format: sidecar.EvsRepoFormat1, NetworkId: world.networkId.Bytes(),
 	})
 	if err != nil {
@@ -205,7 +212,7 @@ func newEpochWorld(t *testing.T) *epochWorld {
 // reader expiries given, and gives it to evs and every device.
 func (self *epochWorld) advance(readers []string, shrunkAt uint64, expiries map[string]time.Time) *FakeGkmAuthView {
 	fixture := &FakeGkmAuthFixture{
-		Rows:               FakeGkmAuthRows(&protocol.AclRepo{RepoId: self.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, HoldersShrunkAt: shrunkAt}),
+		Rows:               FakeGkmAuthRows(&protocol.AclRepo{RepoId: self.repoId.Bytes(), Kind: self.kind, HoldersShrunkAt: shrunkAt}),
 		IdentityKeys:       map[sidecar.Id][]byte{},
 		RepoReaders:        map[sidecar.Id][]sidecar.Id{},
 		RepoWriters:        map[sidecar.Id][]sidecar.Id{},
@@ -787,5 +794,207 @@ func TestEvsPathEpochMapperResumesEndToEnd(t *testing.T) {
 		if content, _, err := reader.read(path); err != nil || !bytes.Equal(content, want) {
 			t.Fatalf("%s after the copy: %q %v", path, content, err)
 		}
+	}
+}
+
+// The slot/ objects the cluster holds for the repo, by key.
+func (self *epochWorld) slotKeys() []string {
+	keys := []string{}
+	prefix := strings.TrimSuffix(evsservice.SlotKey(self.repoId, sidecar.Id{}), sidecar.EvsKeyId(sidecar.Id{}))
+	for key := range self.host.Blobs.Dump() {
+		_, objectKey, _ := strings.Cut(key, "/")
+		if strings.HasPrefix(objectKey, prefix) {
+			keys = append(keys, objectKey)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// The slot ids among after that before does not hold.
+func epochNewSlots(before []string, after []string) []sidecar.Id {
+	slotIds := []sidecar.Id{}
+	for _, key := range after {
+		if slices.Contains(before, key) {
+			continue
+		}
+		slotId, err := sidecar.ParseId(key[strings.LastIndex(key, "/")+1:])
+		if err == nil {
+			slotIds = append(slotIds, slotId)
+		}
+	}
+	return slotIds
+}
+
+// Record-class writes end to end (§11.6's object key row; EVS1-M2-30's slot-keyed chains): in a record repo every
+// chain's key goes in a slot of its own. A small file, which a general repo would inline, and a larger one each
+// introduce one slot and read back; a diff on the small one seals under its chain's slot key, introducing none; a
+// CLOSURE re-checkpoints it under a new slot, and an ERASE of the old slot's key leaves the closure's version
+// reading and the versions before it opening no more.
+func TestEvsRecordClassWritesSlotKeyedEndToEnd(t *testing.T) {
+	world := newEpochWorldOf(t, protocol.RepoKind_REPO_KIND_RECORD)
+	w := world.device("w", nil)
+	reader := world.device("r", nil)
+	small := bytes.Repeat([]byte("an entry of the ledger; "), 300)
+	if _, err := w.write("ledger/a", small); err != nil {
+		t.Fatalf("the small entry: %v", err)
+	}
+	afterSmall := world.slotKeys()
+	if len(afterSmall) != 1 {
+		t.Fatalf("%d slots after the small entry", len(afterSmall))
+	}
+	large := bytes.Repeat([]byte("a larger entry; "), 20000)
+	if _, err := w.write("ledger/b", large); err != nil {
+		t.Fatalf("the large entry: %v", err)
+	}
+	afterLarge := world.slotKeys()
+	if len(afterLarge) != 2 {
+		t.Fatalf("%d slots after the large entry", len(afterLarge))
+	}
+	for path, want := range map[string][]byte{"ledger/a": small, "ledger/b": large} {
+		if content, _, err := reader.read(path); err != nil || !bytes.Equal(content, want) {
+			t.Fatalf("%s: %d bytes %v", path, len(content), err)
+		}
+	}
+	// a small change: a diff under the chain's own slot key, no new slot
+	changed := append(bytes.Clone(small[:len(small)-10]), []byte("a new tail")...)
+	if _, err := w.write("ledger/a", changed); err != nil {
+		t.Fatalf("the change: %v", err)
+	}
+	if slots := world.slotKeys(); len(slots) != 2 {
+		t.Fatalf("%d slots after a diff", len(slots))
+	}
+	if content, _, err := reader.read("ledger/a"); err != nil || !bytes.Equal(content, changed) {
+		t.Fatalf("ledger/a after the diff: %v", err)
+	}
+	// the CLOSURE: ledger/a again under a fresh key in a new slot, its erased list naming the old chain's key
+	oldSlot := epochNewSlots(nil, afterSmall)[0]
+	erased := []*sidecar.EvsErasedKey{{SlotId: oldSlot, KeyIndex: 0}}
+	closed := []byte("the ledger with the entry gone")
+	if _, err := w.repo.Closure(world.ctx, &sidecar.EvsClosureArgs{
+		Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader(closed)}}, Erased: erased,
+	}); err != nil {
+		t.Fatalf("the CLOSURE: %v", err)
+	}
+	afterClosure := world.slotKeys()
+	if len(epochNewSlots(afterLarge, afterClosure)) != 1 {
+		t.Fatalf("%d slots after the CLOSURE", len(afterClosure))
+	}
+	if _, err := w.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(), Keys: erased, Complete: true}); err != nil {
+		t.Fatalf("the ERASE: %v", err)
+	}
+	fresh := world.device("r", nil)
+	if content, _, err := fresh.read("ledger/a"); err != nil || !bytes.Equal(content, closed) {
+		t.Fatalf("ledger/a after the ERASE: %q %v", content, err)
+	}
+	if content, _, err := fresh.read("ledger/b"); err != nil || !bytes.Equal(content, large) {
+		t.Fatalf("ledger/b after the ERASE: %v", err)
+	}
+	history, err := fresh.repo.History(world.ctx, &sidecar.EvsReadArgs{Path: "ledger/a"})
+	if err != nil || len(history.Versions) != 3 {
+		t.Fatalf("ledger/a's history: %v %v", history, err)
+	}
+	for _, version := range history.Versions[1:] {
+		out := &bytes.Buffer{}
+		if _, err := fresh.repo.ReadHead(world.ctx, &sidecar.EvsReadArgs{Path: "ledger/a", Version: version.Version}, out); err == nil {
+			t.Fatalf("version %d of ledger/a opened after its key was erased", version.Version)
+		}
+	}
+}
+
+// The new slots and flags of a push request's statement and payload, nil for a request that is not a one-part push.
+func epochPushSlots(t *testing.T, request *http.Request) (flags uint32, slotIds []sidecar.Id, ok bool) {
+	t.Helper()
+	if !epochIsPush(request) || request.Body == nil {
+		return 0, nil, false
+	}
+	body, err := io.ReadAll(request.Body)
+	request.Body.Close()
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushRequest := &protocol.EvsPushRequest{}
+	if err := proto.Unmarshal(body, pushRequest); err != nil {
+		t.Fatal(err)
+	}
+	statement, err := sidecar.ParseEvsStatement(pushRequest.GetStatement())
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, err := sidecar.EvsCheckPayload(statement, pushRequest.GetPayload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range checked.NewObjects {
+		if object.Kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT {
+			slotIds = append(slotIds, sidecar.Id(object.Id))
+		}
+	}
+	return statement.Push.GetFlags(), slotIds, true
+}
+
+// DESIGN-DETAILS 9.6's K end to end in a record-class repo: a CLOSURE in flight across a cut-over is refused 412
+// PATH_EPOCH and retokened with what it sealed kept, so the slot it introduces is the one its first attempt named and
+// its segment goes up once.
+func TestEvsRecordClassClosureAcrossACutOverKeepsItsSlotEndToEnd(t *testing.T) {
+	world := newEpochWorldOf(t, protocol.RepoKind_REPO_KIND_RECORD)
+	w := world.device("w", nil)
+	m := world.device("m", func(settings *sidecar.EvsSettings) { settings.MapperSpread = time.Nanosecond })
+	entry := bytes.Repeat([]byte("an entry to close over; "), 400)
+	if _, err := w.write("ledger/a", entry); err != nil {
+		t.Fatal(err)
+	}
+	oldSlot := epochNewSlots(nil, world.slotKeys())[0]
+	refId := world.mainRefId(w)
+	before := world.slotKeys()
+	// d leaves: w's next EnsureWritable rotates to the REMOVE generation, which m maps to
+	world.advance([]string{"w", "v", "m", "r"}, 2, nil)
+	var firstSlots []sidecar.Id
+	closurePosts, segmentPuts := 0, 0
+	var interceptErr error
+	world.setIntercept(func(device *epochDevice, request *http.Request) error {
+		if device != w {
+			return nil
+		}
+		if request.Method == http.MethodPut && strings.Contains(request.URL.Path, "/segments/") {
+			segmentPuts += 1
+			return nil
+		}
+		flags, slotIds, ok := epochPushSlots(t, request)
+		if !ok || flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) == 0 {
+			return nil
+		}
+		closurePosts += 1
+		if closurePosts == 1 {
+			firstSlots = slotIds
+			if err := m.repo.TickMapper(world.ctx, refId); err != nil {
+				interceptErr = fmt.Errorf("m's mapper: %w", err)
+			}
+		} else if !slices.Equal(slotIds, firstSlots) {
+			interceptErr = fmt.Errorf("the retoken introduces slots %v, its first attempt %v", slotIds, firstSlots)
+		}
+		return nil
+	})
+	closed := []byte("the ledger, the entry gone")
+	_, err := w.repo.Closure(world.ctx, &sidecar.EvsClosureArgs{
+		Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader(closed)}},
+		Erased: []*sidecar.EvsErasedKey{{SlotId: oldSlot, KeyIndex: 0}},
+	})
+	world.setIntercept(nil)
+	if interceptErr != nil {
+		t.Fatal(interceptErr)
+	}
+	if err != nil {
+		t.Fatalf("the CLOSURE across the cut-over: %v", err)
+	}
+	if world.head(refId).GetPathEpoch().GetCurrent() != 2 || closurePosts != 2 || segmentPuts != 1 || len(firstSlots) != 1 {
+		t.Fatalf("epoch %d, %d CLOSURE posts, %d segment uploads, %d slots", world.head(refId).GetPathEpoch().GetCurrent(), closurePosts, segmentPuts, len(firstSlots))
+	}
+	if added := epochNewSlots(before, world.slotKeys()); len(added) != 1 || added[0] != firstSlots[0] {
+		t.Fatalf("slots added %v, the first attempt's %v", added, firstSlots)
+	}
+	if content, _, err := world.device("r", nil).read("ledger/a"); err != nil || !bytes.Equal(content, closed) {
+		t.Fatalf("ledger/a after the CLOSURE: %q %v", content, err)
 	}
 }

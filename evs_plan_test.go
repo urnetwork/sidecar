@@ -1043,6 +1043,10 @@ func (self *evsTestPushServer) commitPathEpoch(statement *EvsStatement, payload 
 		baseChain = world.commits[head-1].chain
 	}
 	if push.GetBaseVersion() != head || !bytes.Equal(push.GetBaseChain(), baseChain[:]) {
+		if world.mode == protocol.EvsRefMode_EVS_REF_GIT {
+			// 5f's TIP
+			return refuse(http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_NON_FAST_FORWARD)
+		}
 		return refuse(http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
 	}
 	chain := EvsChainNext(baseChain, Id(push.GetPushId()), statement.Sha256)

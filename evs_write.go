@@ -150,7 +150,10 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 	if err != nil {
 		return nil, nil, err
 	}
-	self.client.epochs.noteWritable(self.repoId, repoKey.Generation())
+	if self.client.epochs.noteWritable(self.repoId, repoKey.Generation()) {
+		// a newer generation, which may be a removal this device rotated to: its refs' mappers tick
+		self.client.NoteGeneration(self.repoId)
+	}
 	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: writes, Generation: repoKey.Generation(), Fresh: fresh})
 	if err != nil {
 		return nil, nil, err
