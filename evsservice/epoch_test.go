@@ -296,3 +296,25 @@ func TestPathEpochRefusesAFourthSource(t *testing.T) {
 	plan := fixture.pathEpochPlan(commitment, mapSha256, source.Version(), source.Head.GetChain())
 	requireRefusal(t, fixture.push(plan), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL)
 }
+
+// An immediate due blocks creation until its epoch lands: once the PATH_EPOCH commits, the due and its block are
+// gone and a creation in the new epoch commits.
+func TestPathEpochClearsAnImmediateDue(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	commitment := fixture.crossRemove(true)
+	source := fixture.head()
+	partBytes, mapSha256 := fixture.mapPart(pathEpochTestMove("a"))
+	if recorder := fixture.postRoute("/path-epoch", &protocol.EvsPathMapRequest{PathMapSha256: mapSha256, Part: partBytes}); recorder.Code != http.StatusOK {
+		t.Fatalf("map part answered %d", recorder.Code)
+	}
+	fixture.requireCommitted(fixture.push(fixture.pathEpochPlan(commitment, mapSha256, source.Version(), source.Head.GetChain())), 3)
+	pathEpoch := fixture.head().Head.GetPathEpoch()
+	if pathEpoch.GetCurrent() != 2 || pathEpoch.GetDueGeneration() != 0 || pathEpoch.GetDueBlocksCreation() || pathEpoch.GetBlockUntilMs() != 0 {
+		t.Fatalf("path epoch %v", pathEpoch)
+	}
+	creation := fixture.planAtTwo(commitment)
+	creation.PathEpoch = 2
+	creation.SourcesStand = true
+	fixture.create(creation, "epoch 2", "new")
+	fixture.requireCommitted(fixture.push(creation), 4)
+}
