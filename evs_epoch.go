@@ -24,6 +24,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// DESIGN-DETAILS 9.2.2's EvsReadPath: a read names a path in at most 8 epochs, one token path an epoch, which evs
+// matches by the epoch field.
+const EvsReadPathMaxEpochCount = 8
+
 // Whether a crossing of a REMOVE generation is immediate: a shrink of the repo's holders, at holdersShrunkAt in
 // the newest verified state, after fromAuthVersion, the auth pin of the generation the crossing starts from. Batched
 // otherwise. See the file header.

@@ -503,3 +503,53 @@ func TestEpochCopyDrainsASupersededSourceOnceTheFoldDeletedItsLeftover(t *testin
 		}
 	}
 }
+
+// DESIGN-DETAILS 9.2.6 with the copy: a directory changed after the cut-over is carried into the current epoch by its
+// fold, which then deletes its source copy; the copy's move for it finds no source, and still translates the rows the
+// carry tagged with the source's epoch, after its children's moves, before the sources drop (P6).
+func TestEpochCopyTranslatesADirectoryAFoldCarriedAndDeletedTheSourceOf(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	commitment := fixture.crossRemove(false)
+	plan := fixture.planAtTwo(commitment)
+	plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: checkTestPath("d"), EntryVersion: fixture.check.directoryEntry(plan, 3, []*protocol.EvsName{
+			{Token: checkTestPath("d", "x").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("x sealed for epoch 1")},
+		}, nil),
+	})
+	fixture.create(plan, "d", "x")
+	fixture.requireCommitted(fixture.push(plan), 3)
+	fixture.awaitStepEights()
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"), pathEpochTestMoveAt(2, []uint64{1}, "d"),
+		pathEpochTestMoveAt(2, []uint64{1}, "d", "x"))
+
+	// a delta on d in epoch 2, naming its epoch-1 copy, adds y; its fold carries d and deletes that copy
+	delta := fixture.planOnHead(2, commitment)
+	delta.Changes = append(delta.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: epochPath(2, "d"), BaseEntryVersion: 3, SourcePaths: [][]byte{epochSourcePath(t, 1, "d")},
+		EntryVersion: fixture.check.directoryEntry(delta, 4, []*protocol.EvsName{
+			{Token: epochPath(2, "d", "y").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("y sealed for epoch 2")},
+		}, nil),
+	})
+	fixture.requireCommitted(fixture.push(delta), 5)
+	fixture.awaitStepEights()
+	if folded := fixture.foldRef(); folded.SourceDeleteCount != 1 || !fixture.entryAt(1, "d").Absent() {
+		t.Fatalf("the delta's fold: %+v", folded)
+	}
+	if carried := fixture.entryAt(2, "epoch 2", "d"); carried.State.State != EvsEntryStateCarried || len(carried.Entry.GetNames().GetNames()) != 2 {
+		t.Fatalf("d's carried entry %+v", carried)
+	}
+
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2))
+	if err != nil || !result.SourcesDropped || result.MissedCount != 0 {
+		t.Fatalf("the copy: %+v %v", result, err)
+	}
+	rows := fixture.entryAt(2, "epoch 2", "d").Entry.GetNames().GetNames()
+	if len(rows) != 2 {
+		t.Fatalf("d holds %d rows", len(rows))
+	}
+	for _, row := range rows {
+		if row.GetEpoch() != 0 {
+			t.Fatalf("a row still carried from epoch %d after the sources dropped: %+v, result %+v", row.GetEpoch(), rows, result)
+		}
+	}
+}

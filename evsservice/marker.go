@@ -122,6 +122,8 @@ func (self *foldRun) markEntry(tokenPath sidecar.EvsTokenPath, removal *foldRemo
 			PushId:         removal.pushId.Bytes(),
 			RemovalVersion: removal.commitVersion,
 			PathVersion:    standing + 1,
+			LeafPart:       removal.leaf.part,
+			LeafIndex:      removal.leaf.index,
 		}
 		state := EvsEntryStateValue{}
 		if self.sources {

@@ -388,6 +388,32 @@ type foldEvent struct {
 	change *EvsCommittedChange
 	// a write's entry version, parsed
 	entryVersion *protocol.EvsEntryVersion
+	// where its change, or for a prefix's removal that removal's change, sits in its statement's list
+	leaf evsLeafPlace
+}
+
+// Where a change sits in its statement's list (DESIGN-DETAILS 9.2.2's leaf row; question details-9-index-leaf): under
+// changes_root, its part, 0 for a one-part push, and its index in that part's list plus 1; both 0 for an inline list,
+// which the statement holds. A fold records it beside each folded version, marker and table, and a carry keeps it, so
+// evs finds a change of an older path epoch, whose token it is never sent, by its place (read.go).
+type evsLeafPlace struct {
+	part  uint32
+	index uint32
+}
+
+// A folded version's place.
+func evsLeafPlaceOfVersion(version *protocol.EvsIndexVersion) evsLeafPlace {
+	return evsLeafPlace{part: version.GetLeafPart(), index: version.GetLeafIndex()}
+}
+
+// A marker's place: its removing change's.
+func evsLeafPlaceOfMarker(marker *protocol.EvsRemovalMarker) evsLeafPlace {
+	return evsLeafPlace{part: marker.GetLeafPart(), index: marker.GetLeafIndex()}
+}
+
+// A folded table's place: its delta at names_through's.
+func evsLeafPlaceOfTable(entry *protocol.EvsIndexEntry) evsLeafPlace {
+	return evsLeafPlace{part: entry.GetNamesLeafPart(), index: entry.GetNamesLeafIndex()}
 }
 
 // One path a version in the range changes, or removes by a prefix.
@@ -404,6 +430,8 @@ type foldRemoval struct {
 	tokenPath     sidecar.EvsTokenPath
 	commitVersion uint64
 	pushId        sidecar.Id
+	// where its change sits in its statement's list, which each marker it writes records
+	leaf evsLeafPlace
 	// the path was a file just before it, so nothing lies below
 	file bool
 }
@@ -513,11 +541,17 @@ func (self *foldRun) planRange() error {
 		if statement.Push.GetPathEpoch() != self.epoch {
 			return fmt.Errorf("%w: version %d in path epoch %d, the head's %d", ErrEvsFoldInvalid, version, statement.Push.GetPathEpoch(), self.epoch)
 		}
-		for _, change := range changes {
-			event := &foldEvent{commitVersion: version, pushId: windowEntry.PushId, change: change}
+		leaves, err := self.pushes.leafPlacesAt(self.ctx, version, windowEntry, changes)
+		if err != nil {
+			return err
+		}
+		for i, change := range changes {
+			event := &foldEvent{commitVersion: version, pushId: windowEntry.PushId, change: change, leaf: leaves[i]}
 			if change.Removes() {
 				event.kind = foldEventRemoval
-				self.removals = append(self.removals, &foldRemoval{tokenPath: change.TokenPath, commitVersion: version, pushId: windowEntry.PushId})
+				self.removals = append(self.removals, &foldRemoval{
+					tokenPath: change.TokenPath, commitVersion: version, pushId: windowEntry.PushId, leaf: leaves[i],
+				})
 			} else {
 				event.kind = foldEventWrite
 				event.entryVersion, err = parseEvsEntryVersion(change.EntryVersion)
@@ -545,7 +579,7 @@ func (self *foldRun) planRange() error {
 			if len(path.tokenPath) == len(removal.tokenPath) {
 				continue
 			}
-			path.events = append(path.events, &foldEvent{kind: foldEventPrefixRemoval, commitVersion: removal.commitVersion, pushId: removal.pushId})
+			path.events = append(path.events, &foldEvent{kind: foldEventPrefixRemoval, commitVersion: removal.commitVersion, pushId: removal.pushId, leaf: removal.leaf})
 		}
 		// a path a file just before its removal holds nothing below it
 		removal.file = self.paths[removalId].fileBefore(removal.commitVersion)
@@ -927,6 +961,8 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 				PushId:         event.pushId.Bytes(),
 				RemovalVersion: event.commitVersion,
 				PathVersion:    pathVersion,
+				LeafPart:       event.leaf.part,
+				LeafIndex:      event.leaf.index,
 			})
 			merged.removed = true
 			merged.replaced = false
@@ -940,6 +976,8 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 				PushId:         event.pushId.Bytes(),
 				RemovalVersion: event.commitVersion,
 				PathVersion:    standing + 1,
+				LeafPart:       event.leaf.part,
+				LeafIndex:      event.leaf.index,
 			}
 			merged.removed = true
 			merged.replaced = false
@@ -960,6 +998,8 @@ func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log s
 		PushId:        event.pushId.Bytes(),
 		CommitVersion: event.commitVersion,
 		EntryVersion:  event.change.EntryVersion,
+		LeafPart:      event.leaf.part,
+		LeafIndex:     event.leaf.index,
 	}
 	creation := event.change.BaseEntryVersion == 0
 	held := entry.GetVersions()
@@ -984,7 +1024,7 @@ func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log s
 }
 
 // A folded version with its inline records cut, which evs restores from its push record before serving it (§11.7's
-// holds row). One with none to cut keeps its signed bytes.
+// holds row), keeping its leaf place. One with none to cut keeps its signed bytes.
 func elideEvsIndexVersion(version *protocol.EvsIndexVersion) *protocol.EvsIndexVersion {
 	if version.GetElided() {
 		return version
@@ -1013,6 +1053,8 @@ func elideEvsIndexVersion(version *protocol.EvsIndexVersion) *protocol.EvsIndexV
 		CommitVersion: version.GetCommitVersion(),
 		EntryVersion:  elidedBytes,
 		Elided:        true,
+		LeafPart:      version.GetLeafPart(),
+		LeafIndex:     version.GetLeafIndex(),
 	}
 }
 
@@ -1059,6 +1101,37 @@ func (self *RecordPushSource) allChangesAt(ctx context.Context, version uint64, 
 	}
 	push.allChanges = committedChanges(checked.Changes)
 	return push.statement, push.allChanges, nil
+}
+
+// Where each of the changes allChangesAt gave for the push at version sits in its statement's list, in that order: see
+// evsLeafPlace. A sealed push's changes are its parts' joined in part order, each part starting at the token path its
+// seal names it by, which each part's changes_root was checked against.
+func (self *RecordPushSource) leafPlacesAt(ctx context.Context, version uint64, entry *sidecar.EvsWindowEntry, changes []*EvsCommittedChange) ([]evsLeafPlace, error) {
+	push, err := self.pushAt(ctx, version, entry)
+	if err != nil {
+		return nil, err
+	}
+	leaves := make([]evsLeafPlace, len(changes))
+	if len(push.statement.Push.GetChangesRoot()) == 0 {
+		return leaves, nil
+	}
+	if !push.sealed {
+		for i := range changes {
+			leaves[i] = evsLeafPlace{index: uint32(i + 1)}
+		}
+		return leaves, nil
+	}
+	part, partStart := 0, 0
+	for i, change := range changes {
+		if part+1 < len(push.sealParts) && change.TokenPath.Equal(push.sealParts[part+1].FirstTokenPath) {
+			part, partStart = part+1, i
+		}
+		leaves[i] = evsLeafPlace{part: uint32(part + 1), index: uint32(i - partStart + 1)}
+	}
+	if part+1 != len(push.sealParts) {
+		return nil, fmt.Errorf("%w: %d parts of changes for a seal of %d", ErrEvsStatementMismatch, part+1, len(push.sealParts))
+	}
+	return leaves, nil
 }
 
 // The statement committed at version, checked against its window entry.

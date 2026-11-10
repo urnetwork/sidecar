@@ -14,7 +14,8 @@
 //	         epoch, PUTs it If-None-Match, carried from that source, and deletes every source copy, only once the new
 //	         one exists
 //	412      a current entry already there: a file's, a removed or a fresh one is done, its source copies deleted
-//	         unmoved; a carried directory's carried rows are translated and the entry PUT If-Match, read again on 412
+//	         unmoved; a carried directory's carried rows are translated and the entry PUT If-Match, read again on 412,
+//	         also when no source holds it any more, a fold having carried it and deleted its source copy
 //	prefixes after each PUT the path's prefixes' current entries are HEADed, and under a removed or fresh one what it
 //	         put becomes a marker, If-Match on that PUT's ETag; on 412 the newer entry stands
 //	pace     at most CopyRepoOpsPerSecond operations a second on the repo, CopyRepoSourcesOpsPerSecond while two or
@@ -534,8 +535,16 @@ func (self *copyRun) copyOne(move *copyMove) error {
 		}
 		switch {
 		case source == nil && !current.Absent():
-			// moved before, its sources deleted
-			self.result.DoneCount += 1
+			// moved before, its sources deleted, or carried by a fold that then deleted them (fold_sources.go): a
+			// carried directory's rows the carry tagged with a source's epoch are still translated, after its
+			// children's moves
+			done, err := self.settleCurrent(move, current)
+			if err != nil {
+				return err
+			}
+			if !done {
+				continue
+			}
 			return nil
 		case source == nil:
 			// no epoch holds it: removed and collected, or never folded
@@ -729,7 +738,7 @@ func (self *copyRun) markUnderPrefixes(move *copyMove, etag string, entry *proto
 		if err != nil || prefix.Absent() {
 			return err
 		}
-		pushId, removalVersion := prefixRemoval(prefix.Entry)
+		pushId, removalVersion, leaf := prefixRemoval(prefix.Entry)
 		if removalVersion == 0 || removalVersion <= evsIndexEntryNewestCommit(entry) {
 			return nil
 		}
@@ -738,7 +747,9 @@ func (self *copyRun) markUnderPrefixes(move *copyMove, etag string, entry *proto
 			return nil
 		}
 		marked := proto.Clone(entry).(*protocol.EvsIndexEntry)
-		marked.Marker = &protocol.EvsRemovalMarker{PushId: pushId, RemovalVersion: removalVersion, PathVersion: standing + 1}
+		marked.Marker = &protocol.EvsRemovalMarker{
+			PushId: pushId, RemovalVersion: removalVersion, PathVersion: standing + 1, LeafPart: leaf.part, LeafIndex: leaf.index,
+		}
 		written := &EvsEntryRead{Entry: entry, Etag: etag}
 		_, err = self.put(move.newPath, written, marked, EvsEntryStateValue{State: EvsEntryStateRemoved})
 		if errors.Is(err, sidecar.ErrBlobPrecondition) {
@@ -754,16 +765,16 @@ func (self *copyRun) markUnderPrefixes(move *copyMove, etag string, entry *proto
 	return nil
 }
 
-// The removal a prefix stands for: a removed one's marker, or a fresh one's newest version, which its re-creation
-// committed after the removal (a reading: a re-creation keeps no marker). 0 for none.
-func prefixRemoval(prefix *protocol.EvsIndexEntry) ([]byte, uint64) {
+// The removal a prefix stands for, with its change's place: a removed one's marker, or a fresh one's newest version,
+// which its re-creation committed after the removal (a reading: a re-creation keeps no marker). 0 for none.
+func prefixRemoval(prefix *protocol.EvsIndexEntry) ([]byte, uint64, evsLeafPlace) {
 	if marker := prefix.GetMarker(); marker != nil {
-		return marker.GetPushId(), marker.GetRemovalVersion()
+		return marker.GetPushId(), marker.GetRemovalVersion(), evsLeafPlaceOfMarker(marker)
 	}
 	if versions := prefix.GetVersions(); 0 < len(versions) {
-		return versions[0].GetPushId(), versions[0].GetCommitVersion()
+		return versions[0].GetPushId(), versions[0].GetCommitVersion(), evsLeafPlaceOfVersion(versions[0])
 	}
-	return nil, 0
+	return nil, 0, evsLeafPlace{}
 }
 
 // Deletes every source copy of the move's path, once its current copy stands.

@@ -556,12 +556,17 @@ message EvsSlotKey { uint32 key_index = 1; uint64 generation = 2; bytes wrapped 
 // 11.7's index entries, removal row and drop mark, by plan-EVS1-format-bytes#9.
 message EvsIndexEntry {
   repeated EvsIndexVersion versions = 1; EvsNameTable names = 2; uint64 names_through = 3;
-  EvsRemovalMarker marker = 4; EvsDropMark drop_mark = 5;
+  EvsRemovalMarker marker = 4; EvsDropMark drop_mark = 5; uint32 names_leaf_part = 7; uint32 names_leaf_index = 8;
 }
-message EvsIndexVersion { bytes push_id = 1; uint64 commit_version = 2; bytes entry_version = 3; bool elided = 4; }
+// DESIGN-DETAILS 9.2.2's leaf places, on the versions, markers and tables a fold writes (question
+// details-9-index-leaf).
+message EvsIndexVersion {
+  bytes push_id = 1; uint64 commit_version = 2; bytes entry_version = 3; bool elided = 4; uint32 leaf_part = 5;
+  uint32 leaf_index = 6;
+}
 message EvsRemovalMarker {
   bytes push_id = 1; uint64 removal_version = 2; uint64 path_version = 3; repeated bytes segment_ids = 4;
-  repeated bytes slot_ids = 5;
+  repeated bytes slot_ids = 5; uint32 leaf_part = 6; uint32 leaf_index = 7;
 }
 message EvsDropMark { bytes drop_id = 1; uint64 through_version = 2; }
 // 11.8's log/ row.
@@ -616,7 +621,8 @@ message EvsReadRequest {
   repeated EvsReadRange ranges = 5; repeated bytes slot_ids = 6; repeated EvsReadMap maps = 7;
   repeated uint64 log_pages = 8; repeated EvsReadPush pushes = 9; repeated EvsReadRef refs = 10;
 }
-message EvsReadPath { repeated EvsSourcePath token_paths = 1; uint64 version = 2; }
+// DESIGN-DETAILS 9.2.2: a read's commit_version, and a reply's entry_epoch and stale_epoch.
+message EvsReadPath { repeated EvsSourcePath token_paths = 1; uint64 version = 2; uint64 commit_version = 3; }
 message EvsReadRange { bytes segment_id = 1; uint32 offset = 2; uint32 length = 3; }
 message EvsReadMap { uint64 path_epoch = 1; bytes map_sha256 = 2; uint32 part = 3; }
 message EvsReadPush { bytes push_id = 1; uint64 version = 2; uint32 part = 3; }
@@ -637,7 +643,7 @@ message EvsReadPathReply {
   repeated EvsMerkleProof proof = 4; repeated EvsAbsenceProof absences = 5; EvsRemovalMarker removal = 6;
   EvsOverlay base = 7; EvsNameTable names = 8; uint64 names_through = 9; repeated EvsIndexVersion deltas = 10;
   EvsReadPathState state = 11; bytes drop_id = 12; int64 not_before_ms = 13; uint64 drop_version = 14;
-  bytes drop_statement = 15; bytes drop_body = 16;
+  bytes drop_statement = 15; bytes drop_body = 16; uint64 entry_epoch = 17; bool stale_epoch = 18;
 }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
 message EvsAbsenceProof {

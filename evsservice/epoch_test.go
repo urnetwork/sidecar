@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"slices"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -171,6 +172,10 @@ func (self *pushFixture) mapPart(moves ...*protocol.EvsPathMove) ([]byte, []byte
 func (self *pushFixture) mapPartsAt(epoch uint64, sourceVersion uint64, sourceChain []byte, partMoves ...[]*protocol.EvsPathMove) ([][]byte, []byte) {
 	parts := [][]byte{}
 	for i, moves := range partMoves {
+		moves = slices.Clone(moves)
+		slices.SortFunc(moves, func(a *protocol.EvsPathMove, b *protocol.EvsPathMove) int {
+			return epochTestTokenPath(a.GetNewTokenPath()).Compare(epochTestTokenPath(b.GetNewTokenPath()))
+		})
 		body, err := proto.Marshal(&protocol.EvsPathMap{
 			RepoId: self.check.repoId.Bytes(), RefId: self.check.refId.Bytes(), PathEpoch: epoch, Part: uint32(i + 1),
 			Parts: uint32(len(partMoves)), Moves: moves, SourceVersion: sourceVersion, SourceChain: sourceChain,
@@ -189,6 +194,12 @@ func (self *pushFixture) mapPartsAt(epoch uint64, sourceVersion uint64, sourceCh
 		parts = append(parts, partBytes)
 	}
 	return parts, sidecar.EvsPathMapSha256(parts)
+}
+
+// A move's token path, for sorting.
+func epochTestTokenPath(components [][]byte) sidecar.EvsTokenPath {
+	tokenPath, _ := sidecar.ParseEvsTokenPath(components)
+	return tokenPath
 }
 
 // Uploads a map's parts under mapSha256 through POST .../path-epoch, each answering 200.

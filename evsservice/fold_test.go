@@ -1122,3 +1122,85 @@ func TestParseLogPageRefusesTamperedPages(t *testing.T) {
 		}
 	}
 }
+
+// DESIGN-DETAILS 9.2.2's leaf row: a fold records where each folded change sits in its statement's list, and the read
+// finds that same change by it: a sealed push's part from 1, a one-part push's list under changes_root part 0, and
+// nothing for an inline list; a removal's marker takes its removing change's place, and a directory's table its
+// delta's; a carry into the current epoch and an elided version keep them.
+func TestFoldRecordsLeafPlacesTheReadFindsTheChangeBy(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	fixture.commitOne(protocol.EvsRefMode_EVS_REF_FILE, "inline")
+	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 1100))
+	fixture.requireCommitted(fixture.seal(token, built, fixture.postParts(token, built)), 2)
+	fixture.awaitStepEights()
+	rooted := fixture.plan()
+	for i := 0; i < 20; i += 1 {
+		fixture.create(rooted, fmt.Sprintf("more-%02d", i))
+	}
+	rooted.Changes = append(rooted.Changes, fixture.check.change(rooted, checkTestPath("file-00007"), 2, 0))
+	rooted.Changes = append(rooted.Changes, &sidecar.EvsPlannedChange{TokenPath: checkTestPath("d"), EntryVersion: fixture.check.directoryEntry(rooted, 3,
+		[]*protocol.EvsName{{Token: checkTestPath("d", "x").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("sealed x")}}, nil)})
+	if statement := fixture.built(rooted).Statement; len(statement.Push.GetChangesRoot()) == 0 || statement.Push.GetPartCount() != 0 {
+		t.Fatal("the third push's list is not under changes_root in one part")
+	}
+	fixture.requireCommitted(fixture.push(rooted), 3)
+	fixture.awaitStepEights()
+	fixture.foldRef()
+
+	pushes := newReadPushes(fixture.engine, fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, fixture.head().Head)
+	requireFound := func(label string, commitVersion uint64, place evsLeafPlace, removal bool) {
+		t.Helper()
+		push, err := pushes.at(commitVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		change, _, _, err := pushes.changeAt(push, place)
+		if err != nil || !change.TokenPath.Equal(checkTestPath(label)) || change.WritesEntry() == removal {
+			t.Fatalf("%s's place %+v finds another change: %v", label, place, err)
+		}
+	}
+	if place := evsLeafPlaceOfVersion(fixture.entryAt(1, "inline").Entry.GetVersions()[0]); place != (evsLeafPlace{}) {
+		t.Fatalf("an inline list's version has place %+v", place)
+	}
+	parts := map[uint32]int{}
+	for i := 0; i < 1100; i += 1 {
+		label := fmt.Sprintf("file-%05d", i)
+		if label == "file-00007" {
+			continue
+		}
+		place := evsLeafPlaceOfVersion(fixture.entryAt(1, label).Entry.GetVersions()[0])
+		parts[place.part] += 1
+		requireFound(label, 2, place, false)
+	}
+	if len(parts) != len(built.Parts) || parts[0] != 0 {
+		t.Fatalf("the sealed push's places fall in parts %v of %d", parts, len(built.Parts))
+	}
+	for _, label := range []string{"more-00", "more-13"} {
+		place := evsLeafPlaceOfVersion(fixture.entryAt(1, label).Entry.GetVersions()[0])
+		if place.part != 0 || place.index == 0 {
+			t.Fatalf("%s's place %+v in a one-part list under changes_root", label, place)
+		}
+		requireFound(label, 3, place, false)
+	}
+	marker := fixture.entryAt(1, "file-00007").Entry.GetMarker()
+	if marker == nil {
+		t.Fatal("no marker for the removal")
+	}
+	requireFound("file-00007", 3, evsLeafPlaceOfMarker(marker), true)
+	table := fixture.entryAt(1, "d").Entry
+	requireFound("d", table.GetNamesThrough(), evsLeafPlaceOfTable(table), false)
+
+	// a carry keeps every place, and so does an elision
+	entry := fixture.entryAt(1, "file-00003").Entry
+	carried := carryEvsIndexEntry(entry, 1)
+	if evsLeafPlaceOfVersion(carried.GetVersions()[0]) != evsLeafPlaceOfVersion(entry.GetVersions()[0]) {
+		t.Fatal("a carry dropped the version's place")
+	}
+	if elided := elideEvsIndexVersion(entry.GetVersions()[0]); !elided.GetElided() || evsLeafPlaceOfVersion(elided) != evsLeafPlaceOfVersion(entry.GetVersions()[0]) {
+		t.Fatal("an elision dropped the version's place")
+	}
+	if carriedTable := carryEvsIndexEntry(table, 1); evsLeafPlaceOfTable(carriedTable) != evsLeafPlaceOfTable(table) {
+		t.Fatal("a carry dropped the table's place")
+	}
+}

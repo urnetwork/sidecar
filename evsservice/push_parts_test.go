@@ -230,7 +230,7 @@ func TestPartsUnsealedAreInvisible(t *testing.T) {
 	}
 	reply := fixture.read(token, &protocol.EvsReadRequest{
 		RefId: fixture.check.refId.Bytes(),
-		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{TokenPath: checkTestPath("file-00000").Components()}}}},
+		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: checkTestPath("file-00000").Components()}}}},
 	})
 	if reply.head.GetVersion() != 1 || len(reply.paths) != 1 || reply.paths[0].GetVersion() != nil || reply.paths[0].GetRemoval() != nil {
 		t.Fatalf("an unsealed part's path read %v at version %d", reply.paths[0], reply.head.GetVersion())

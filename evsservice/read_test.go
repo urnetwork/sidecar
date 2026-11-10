@@ -11,9 +11,12 @@ package evsservice
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -82,7 +85,7 @@ func decodeReadFrames(t *testing.T, body []byte) *readTestReply {
 func (self *pushFixture) readPath(token string, pin uint64, fresh bool, path sidecar.EvsTokenPath) *readTestReply {
 	return self.read(token, &protocol.EvsReadRequest{
 		RefId: self.check.refId.Bytes(), PinVersion: pin, Fresh: fresh,
-		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{TokenPath: path.Components()}}}},
+		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: path.Components()}}}},
 	})
 }
 
@@ -304,7 +307,7 @@ func TestReadAnswersAnOlderVersionByNumber(t *testing.T) {
 	fixture.awaitStepEights()
 	reply := fixture.read(token, &protocol.EvsReadRequest{
 		RefId: fixture.check.refId.Bytes(), PinVersion: 2,
-		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{TokenPath: path.Components()}}, Version: 1}},
+		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: path.Components()}}, Version: 1}},
 	})
 	pathReply := reply.paths[0]
 	if pathReply.GetVersion().GetCommitVersion() != 1 {
@@ -494,4 +497,227 @@ func TestReadStreamsObjects(t *testing.T) {
 	if !reply.objects[3].GetMissing() || !reply.objects[4].GetMissing() {
 		t.Fatal("an unknown push or segment not missing")
 	}
+}
+
+// A read of paths, each named by its token path in each epoch its map gives, newest epoch first.
+func (self *pushFixture) readNamed(token string, pin uint64, paths ...map[uint64]sidecar.EvsTokenPath) *readTestReply {
+	self.t.Helper()
+	return self.read(token, self.namedRequest(pin, 0, 0, paths...))
+}
+
+// The read request for paths named by epoch, at version with commitVersion when version is not 0.
+func (self *pushFixture) namedRequest(pin uint64, version uint64, commitVersion uint64, paths ...map[uint64]sidecar.EvsTokenPath) *protocol.EvsReadRequest {
+	request := &protocol.EvsReadRequest{RefId: self.check.refId.Bytes(), PinVersion: pin}
+	for _, named := range paths {
+		readPath := &protocol.EvsReadPath{Version: version, CommitVersion: commitVersion}
+		for _, epoch := range slices.Sorted(maps.Keys(named)) {
+			readPath.TokenPaths = append([]*protocol.EvsSourcePath{{Epoch: epoch, TokenPath: named[epoch].Components()}}, readPath.TokenPaths...)
+		}
+		request.Paths = append(request.Paths, readPath)
+	}
+	return request
+}
+
+// A one-part push at generation 2 under commitment on the head as it stands, in its current epoch, creating each label
+// below directory, so many that its list goes under changes_root: its version.
+func (self *pushFixture) commitRooted(commitment []byte, directory string, labels ...string) uint64 {
+	self.t.Helper()
+	plan := self.planOnHead(2, commitment)
+	for _, label := range labels {
+		plan.Changes = append(plan.Changes, self.check.change(plan, epochPath(plan.PathEpoch, directory, label), 0, plan.BaseVersion+1))
+	}
+	if built := self.built(plan); len(built.Statement.Push.GetChangesRoot()) == 0 || len(built.Parts) != 0 {
+		self.t.Fatal("a push whose list is inline or in parts")
+	}
+	version := self.requireCommitted(self.push(plan), plan.BaseVersion+1).GetVersion()
+	self.awaitStepEights()
+	return version
+}
+
+// Thirty labels from prefix.
+func readTestLabels(prefix string) []string {
+	labels := []string{}
+	for i := 0; i < 30; i += 1 {
+		labels = append(labels, fmt.Sprintf("%s-%02d", prefix, i))
+	}
+	return labels
+}
+
+// A PATH_EPOCH to epoch 2 on the head as it stands, its map moving each of moves, committed at its next version.
+func (self *pushFixture) cutOverToEpochTwo(commitment []byte, moves ...*protocol.EvsPathMove) uint64 {
+	self.t.Helper()
+	source := self.head()
+	parts, mapSha256 := self.mapPartsAt(2, source.Version(), source.Head.GetChain(), moves)
+	self.uploadParts(parts, mapSha256)
+	version := self.requireCommitted(self.push(self.pathEpochPlanAt(2, 2, commitment, mapSha256, source.Version(), source.Head.GetChain())), source.Version()+1).GetVersion()
+	self.awaitStepEights()
+	return version
+}
+
+// Asserts the reply's absence proofs: each for a version want names, of that version's token path or a prefix
+// holding it, verifying against its statement's root, and one at least for each version want names.
+func requireAbsences(t *testing.T, reply *readTestReply, pathReply *protocol.EvsReadPathReply, want map[uint64]sidecar.EvsTokenPath) {
+	t.Helper()
+	seen := map[uint64]bool{}
+	for _, absence := range pathReply.GetAbsences() {
+		tokenPath, ok := want[absence.GetVersion()]
+		absentPath, err := sidecar.ParseEvsTokenPath(absence.GetTokenPath())
+		if !ok || err != nil || !tokenPath.HasPrefix(absentPath) {
+			t.Fatalf("an absence for version %d of another path", absence.GetVersion())
+		}
+		push := readTestStatement(t, reply, pathReply, absence.GetVersion()).Push
+		if err := sidecar.EvsVerifyChangeAbsence(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absentPath, absence); err != nil {
+			t.Fatalf("version %d's absence: %v", absence.GetVersion(), err)
+		}
+		seen[absence.GetVersion()] = true
+	}
+	for version := range want {
+		if !seen[version] {
+			t.Fatalf("no absence for version %d among %d", version, len(pathReply.GetAbsences()))
+		}
+	}
+}
+
+// DESIGN-DETAILS 9.2.4: a version written before a cut-over by a push under changes_root is served with its proof by
+// the leaf place its fold recorded, unmoved from the source a reader names and once the copy moved it; each later
+// statement under changes_root answers adjacent-leaf proofs under the path's token path in its own epoch, and
+// nothing for an epoch the request does not name.
+func TestReadServesAVersionOfAnOlderEpochByItsLeafPlace(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	commitment := fixture.crossRemove(false)
+	written := fixture.commitRooted(commitment, "dir", readTestLabels("r")...)
+	untouched := fixture.commitRooted(commitment, "dir", readTestLabels("q")...)
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "dir", "r-07"))
+	later := fixture.commitRooted(commitment, "dir", readTestLabels("s")...)
+	oldPath, newPath := epochPath(1, "dir", "r-07"), epochPath(2, "dir", "r-07")
+
+	reply := fixture.readNamed(token, written, map[uint64]sidecar.EvsTokenPath{2: newPath, 1: oldPath})
+	pathReply := reply.paths[0]
+	if pathReply.GetEntryEpoch() != 1 || pathReply.GetVersion().GetCommitVersion() != written || pathReply.GetVersion().GetLeafIndex() == 0 ||
+		!bytes.Equal(bytes.Join(pathReply.GetTokenPath(), nil), newPath.Bytes()) {
+		t.Fatalf("unmoved: entry epoch %d, version %v", pathReply.GetEntryEpoch(), pathReply.GetVersion())
+	}
+	requireVersionProven(t, reply, pathReply, oldPath)
+	requireAbsences(t, reply, pathReply, map[uint64]sidecar.EvsTokenPath{untouched: oldPath, later: newPath})
+
+	if _, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2)); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.entryAt(2, "epoch 2", "dir", "r-07").Absent() {
+		t.Fatal("the copy did not move the path")
+	}
+	reply = fixture.readNamed(token, written, map[uint64]sidecar.EvsTokenPath{2: newPath})
+	pathReply = reply.paths[0]
+	if pathReply.GetEntryEpoch() != 0 || pathReply.GetVersion().GetCommitVersion() != written {
+		t.Fatalf("moved: entry epoch %d, version %v", pathReply.GetEntryEpoch(), pathReply.GetVersion())
+	}
+	requireVersionProven(t, reply, pathReply, oldPath)
+	requireAbsences(t, reply, pathReply, map[uint64]sidecar.EvsTokenPath{later: newPath})
+}
+
+// DESIGN-DETAILS 9.2.4: a request naming no token path in the head's current epoch gets stale_epoch for that path,
+// nothing read for it, beside the paths it names well; one naming an epoch twice, or none, is 400.
+func TestReadAnswersStaleEpoch(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	commitment := fixture.crossRemove(false)
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"))
+	reply := fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{1: checkTestPath("a")},
+		map[uint64]sidecar.EvsTokenPath{2: epochPath(2, "a"), 1: checkTestPath("a")})
+	stale, fresh := reply.paths[0], reply.paths[1]
+	if !stale.GetStaleEpoch() || stale.GetVersion() != nil || len(stale.GetStatement()) != 0 || stale.GetRemoval() != nil ||
+		!bytes.Equal(bytes.Join(stale.GetTokenPath(), nil), checkTestPath("a").Bytes()) {
+		t.Fatalf("stale: %v", stale)
+	}
+	if fresh.GetStaleEpoch() || fresh.GetVersion() == nil || reply.head.GetPathEpoch().GetCurrent() != 2 {
+		t.Fatalf("fresh: %v at epoch %d", fresh, reply.head.GetPathEpoch().GetCurrent())
+	}
+	for _, paths := range [][]*protocol.EvsSourcePath{
+		{{Epoch: 2, TokenPath: epochPath(2, "a").Components()}, {Epoch: 2, TokenPath: checkTestPath("a").Components()}},
+		{{TokenPath: checkTestPath("a").Components()}},
+	} {
+		request := &protocol.EvsReadRequest{RefId: fixture.check.refId.Bytes(), Paths: []*protocol.EvsReadPath{{TokenPaths: paths}}}
+		requireRefusal(t, fixture.call(token, http.MethodPost, "/read", request), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	}
+}
+
+// DESIGN-DETAILS 9.2.4: a directory's table served from the source a reader names says so in entry_epoch, its delta
+// at names_through, an inline push's, found by the request's token path in that epoch; once the copy carried it, a
+// reader naming only the current epoch gets the statement alone, since an inline list records no leaf place
+// (question evs1-m2-45-inline-leaf-place).
+func TestReadServesATableFromItsSourceWithItsEntryEpoch(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	commitment := fixture.crossRemove(false)
+	row := func(label string) *protocol.EvsName {
+		return &protocol.EvsName{Token: checkTestPath("d", label).Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("sealed " + label)}
+	}
+	plan := fixture.planAtTwo(commitment)
+	plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: checkTestPath("d"), EntryVersion: fixture.check.directoryEntry(plan, 3, []*protocol.EvsName{row("x"), row("y")}, nil),
+	})
+	created := fixture.requireCommitted(fixture.push(plan), 3).GetVersion()
+	fixture.awaitStepEights()
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "d"))
+
+	oldPath, newPath := checkTestPath("d"), epochPath(2, "d")
+	reply := fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{2: newPath, 1: oldPath})
+	pathReply := reply.paths[0]
+	if pathReply.GetEntryEpoch() != 1 || pathReply.GetNamesThrough() != created || len(pathReply.GetNames().GetNames()) != 2 {
+		t.Fatalf("the source's table: entry epoch %d, %v", pathReply.GetEntryEpoch(), pathReply)
+	}
+	requireVersionProven(t, reply, pathReply, oldPath)
+
+	if _, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2)); err != nil {
+		t.Fatal(err)
+	}
+	reply = fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{2: newPath})
+	pathReply = reply.paths[0]
+	statement, err := sidecar.ParseEvsStatement(pathReply.GetStatement())
+	if err != nil || pathReply.GetVersion() != nil || pathReply.GetNames() != nil || statement.Push.GetPathEpoch() != 1 ||
+		!bytes.Equal(statement.Push.GetPushId(), plan.PushId.Bytes()) {
+		t.Fatalf("the statement alone: %v %v", pathReply, err)
+	}
+}
+
+// DESIGN-DETAILS 9.2.4's history: an older version no entry and no window holds is read from the push commit_version
+// names, by the request's token path in that push's epoch, or answered with that statement alone when the request
+// names none there; an elided version an inline list wrote is restored by its elided bytes.
+func TestReadAnswersAnOlderVersionByItsCommitVersion(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	commitment := fixture.crossRemove(false)
+	for version := uint64(3); version <= 6; version += 1 {
+		plan := fixture.planAtTwo(commitment)
+		fixture.write(plan, version-1, "a")
+		fixture.requireCommitted(fixture.push(plan), version)
+	}
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"))
+	if _, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2)); err != nil {
+		t.Fatal(err)
+	}
+	oldPath, newPath := checkTestPath("a"), epochPath(2, "a")
+	if versions := fixture.entryAt(2, "epoch 2", "a").Entry.GetVersions(); len(versions) != 4 || !versions[2].GetElided() {
+		t.Fatalf("the carried entry holds %d versions", len(versions))
+	}
+
+	alone := fixture.read(token, fixture.namedRequest(0, 1, 1, map[uint64]sidecar.EvsTokenPath{2: newPath})).paths[0]
+	statement, err := sidecar.ParseEvsStatement(alone.GetStatement())
+	if err != nil || alone.GetVersion() != nil || statement.Push.GetPathEpoch() != 1 {
+		t.Fatalf("version 1 naming epoch 2 alone: %v %v", alone, err)
+	}
+	reply := fixture.read(token, fixture.namedRequest(0, 1, 1, map[uint64]sidecar.EvsTokenPath{2: newPath, 1: oldPath}))
+	if pathReply := reply.paths[0]; pathReply.GetVersion().GetCommitVersion() != 1 {
+		t.Fatalf("version 1 naming epoch 1: %v", pathReply)
+	}
+	requireVersionProven(t, reply, reply.paths[0], oldPath)
+
+	reply = fixture.read(token, fixture.namedRequest(0, 4, 0, map[uint64]sidecar.EvsTokenPath{2: newPath}))
+	pathReply := reply.paths[0]
+	entry := &protocol.EvsEntryVersion{}
+	if pathReply.GetVersion().GetElided() || proto.Unmarshal(pathReply.GetVersion().GetEntryVersion(), entry) != nil || entry.GetVersion() != 4 {
+		t.Fatalf("the elided version 4: %v", pathReply.GetVersion())
+	}
+	requireVersionProven(t, reply, pathReply, oldPath)
 }
