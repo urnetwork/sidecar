@@ -167,6 +167,13 @@ type ConfigClient struct {
 	heldVetoes [][]byte
 	// where a reader that started at a base began, which entry callbacks fire after
 	startBase uint64
+	// this device's config writer for the network, nil for none
+	writer atomic.Pointer[ConfigWriter]
+}
+
+// This device's config writer for the network, nil while none runs: what an act saving a config head goes through.
+func (self *ConfigClient) Writer() *ConfigWriter {
+	return self.writer.Load()
 }
 
 // A config head this device verified at a base.

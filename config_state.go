@@ -183,7 +183,9 @@ type ConfigState struct {
 	// the ServiceSettings the base's config head holds, nil for none, and whether the head was opened to see them
 	headSettings      *protocol.ServiceSettings
 	headSettingsKnown bool
-	proposals         map[[sha256.Size]byte]*configProposal
+	// the VersioningRules the base's config head holds, nil for none; known by headSettingsKnown (config_versioning.go)
+	headVersioningRules *protocol.VersioningRules
+	proposals           map[[sha256.Size]byte]*configProposal
 	// the IndexerSet designations that hold, by subject and scope
 	indexers map[configIndexerKey]*bridge.IndexerRow
 	// §7.9's replay row as a function of the log (DESIGN-DETAILS 5.2.3's ring): the statements that took effect
@@ -667,30 +669,31 @@ type configStateBuilder struct {
 // A new state sharing every field of state but its acl part, which builds again on first use.
 func configCopyState(state *ConfigState) *ConfigState {
 	return &ConfigState{
-		networkId:         state.networkId,
-		genesis:           state.genesis,
-		genesisChain:      state.genesisChain,
-		n:                 state.n,
-		chain:             state.chain,
-		timeMs:            state.timeMs,
-		base:              state.base,
-		previousBase:      state.previousBase,
-		members:           state.members,
-		sidecars:          state.sidecars,
-		delegations:       state.delegations,
-		keys:              state.keys,
-		aclRows:           state.aclRows,
-		threshold:         state.threshold,
-		settings:          state.settings,
-		headSettings:      state.headSettings,
-		headSettingsKnown: state.headSettingsKnown,
-		proposals:         state.proposals,
-		indexers:          state.indexers,
-		ring:              state.ring,
-		chains:            state.chains,
-		chainsFrom:        state.chainsFrom,
-		basePins:          state.basePins,
-		history:           state.history,
+		networkId:           state.networkId,
+		genesis:             state.genesis,
+		genesisChain:        state.genesisChain,
+		n:                   state.n,
+		chain:               state.chain,
+		timeMs:              state.timeMs,
+		base:                state.base,
+		previousBase:        state.previousBase,
+		members:             state.members,
+		sidecars:            state.sidecars,
+		delegations:         state.delegations,
+		keys:                state.keys,
+		aclRows:             state.aclRows,
+		threshold:           state.threshold,
+		settings:            state.settings,
+		headSettings:        state.headSettings,
+		headSettingsKnown:   state.headSettingsKnown,
+		headVersioningRules: state.headVersioningRules,
+		proposals:           state.proposals,
+		indexers:            state.indexers,
+		ring:                state.ring,
+		chains:              state.chains,
+		chainsFrom:          state.chainsFrom,
+		basePins:            state.basePins,
+		history:             state.history,
 	}
 }
 
