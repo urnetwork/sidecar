@@ -231,6 +231,27 @@ type MlsPendingJoin interface {
 	Complete(groupInfo []byte) (MlsGroup, error)
 }
 
+// What a resync reads of the newest epoch's GroupInfo before it joins from it (KF5; DESIGN-DETAILS 6.2.4): the
+// group and epoch it names and that epoch's leaves, once its tree and signature hold, so the joiner finds its own
+// old leaf and holds the tree to the roster rule before it stages anything. An engine that offers JoinExternal
+// offers this; one that does not resyncs nothing.
+type MlsGroupInfoReader interface {
+	GroupInfoRoster(groupInfo []byte) (groupId Id, epoch uint64, roster []MlsMember, err error)
+}
+
+// A pending join that knows which KeyPackage opened its Welcome. A join through the last-resort KeyPackage shares
+// its leaf's HPKE key with every other Welcome that package serves, so the joiner commits a path at once and
+// replaces the package (RFC 9420 §16.8; DESIGN-DETAILS 6.2.2).
+type MlsLastResortJoin interface {
+	LastResort() bool
+}
+
+// An engine that drops a group's state at a shred (§11.12, §10.8: members drop its keys). The epoch it reached
+// stays, so nothing joins the group again at or below it (I-16).
+type MlsGroupForgetter interface {
+	ForgetGroup(groupId Id) error
+}
+
 // One sidecar's MLS: what it creates, joins and holds (§10.4).
 type MlsEngine interface {
 	// A KeyPackage for this sidecar's leaf: one-time, which joins one Welcome, or its one last-resort KeyPackage,
