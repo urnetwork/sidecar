@@ -398,8 +398,8 @@ func (self configAclStatementRules) targets(state *ConfigState, statement *confi
 
 // An acl statement's effect on TEAM's rows at position n: an OwnerConfirm's signer and position on its sidecar's
 // row, in its confirmation history, lifting a park (TEAM's configConfirmSidecar); live_since for a member device an
-// Unsuspend left standing with no Suspend in force (§7.9's leaves row); and key_dropped_at for the live Delegation that
-// admitted a suspended agent (§10.5).
+// Unsuspend left standing with no Suspend in force (§7.9's leaves row); key_dropped_at for the live Delegation that
+// admitted a suspended agent (§10.5); and a suspended subject's own forwarding Delegation's key, dropped and returned.
 func configApplyAclEffect(next *configStateBuilder, n uint64, effect AclStatementEffect) {
 	if confirmed := effect.OwnerConfirmed; confirmed != nil {
 		configConfirmSidecar(next, n, configConfirmOwner, confirmed.Signer.Bytes(), confirmed.SidecarId)
@@ -416,6 +416,14 @@ func configApplyAclEffect(next *configStateBuilder, n uint64, effect AclStatemen
 			continue
 		}
 		next.sidecarForWrite(subjectId).LiveSince = n
+	}
+	// a subject's own forwarding Delegation: its key drops at a Suspend and returns once no Suspend and no park holds
+	// the subject (TEAM's config_forwarding.go; D-TEAM-33)
+	for _, subjectId := range effect.UnsuspendedSubjectIds {
+		configReturnForwardingKey(next, subjectId)
+	}
+	for _, subjectId := range effect.SuspendedSubjectIds {
+		configDropForwardingKey(next, subjectId, n)
 	}
 	for _, subjectId := range effect.SuspendedSubjectIds {
 		row := next.sidecar(subjectId)

@@ -729,3 +729,50 @@ func TestEvsWriteHeldToAVersionRefusesAMovedPath(t *testing.T) {
 		t.Errorf("the removed path after the refusal: %v", err)
 	}
 }
+
+// §10.16's "multi-part pushes": a rekey push whose entry versions pass one part's megabyte goes in parts and a seal,
+// as any push does (§11.8), one statement committing every file of it, within the entry-write bound.
+func TestEvsRekeyPushPastAPartGoesInParts(t *testing.T) {
+	test := newRekeyTest(t)
+	const fileCount = 100
+	writes := []*EvsPathWrite{}
+	paths := []string{}
+	for i := 0; i < fileCount; i += 1 {
+		// 12 KiB each, small enough to ride inline in its entry version, so the push's own bytes pass 1 MiB
+		path := fmt.Sprintf("big/%03d.bin", i)
+		content := evsTestEdited(path, 12*1024, i)
+		test.writer.server.know(path)
+		writes = append(writes, &EvsPathWrite{Path: path, Content: bytes.NewReader(content)})
+		test.contents[path] = content
+		paths = append(paths, path)
+	}
+	created, err := test.writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: writes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, path := range paths {
+		test.versions[path] = created.PathVersions[i]
+	}
+	if chain := test.writer.entry(t, paths[0]).GetChain(); len(chain) != 1 || chain[0].GetKind() != uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE) {
+		t.Fatalf("the files do not ride inline: %v", chain)
+	}
+	test.rotate(2, GkmCauseRemove)
+	commits := test.commits()
+	progress, err := test.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: test.writer.world.repoId, Paths: []string{"big"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.RewrittenCount != fileCount || progress.PushCount != 1 {
+		t.Fatalf("the progress: %+v", progress)
+	}
+	if got := test.entryWriteCounts(commits); len(got) != 1 || got[0] != fileCount {
+		t.Fatalf("the job's pushes carried %v entry writes", got)
+	}
+	test.writer.world.stateLock.Lock()
+	partCount := test.writer.world.commits[commits].parsed.Push.GetPartCount()
+	test.writer.world.stateLock.Unlock()
+	if partCount < 2 {
+		t.Errorf("a push of %d inline files of 12 KiB went in %d parts", fileCount, partCount)
+	}
+	test.requireRekeyed(2, paths...)
+}
