@@ -659,6 +659,11 @@ func (self *Subprotocol) dispatch(message *subprotocolMessage) {
 			self.offerReply(refusalReply(message.sourceId, message.transferKey, envelope.RequestId, envelope.StreamId, protocol.ErrorCode_ERR_INVALID_ARGUMENT))
 			return
 		}
+		// a marked pair's keepalive: its window's activity, and at the indexer its session as of the Ping's
+		// arrival, both before the Pong goes, so a requester holding the Pong never finds this side's
+		// record of the session behind its own (rpc_marked_pair.go)
+		self.noteWindowActivity(message.sourceId)
+		self.touchSession(message.sourceId, message.arrivalTime)
 		self.offerReply(subprotocolReply{
 			destinationId: message.sourceId,
 			transferKey:   message.transferKey,
@@ -666,9 +671,6 @@ func (self *Subprotocol) dispatch(message *subprotocolMessage) {
 			requestId:     envelope.RequestId,
 			streamId:      envelope.StreamId,
 		})
-		// a marked pair's keepalive: its window's activity, and at the indexer its session (rpc_marked_pair.go)
-		self.noteWindowActivity(message.sourceId)
-		self.touchSession(message.sourceId)
 		return
 	}
 	var dispatch *subprotocolDispatch
