@@ -174,9 +174,9 @@ func TestABaseWhoseBitsDisagreeForks(t *testing.T) {
 	member, first := net.consentedMember("m")
 	second := net.device("m second", member)
 	foldedThrough := net.n
-	net.admitDevice(first, second, 0)                                                           // 1
+	net.admitDevice(first, second, 0)                                                            // 1
 	net.post(second, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("refused")) // 0
-	net.fold(net.owner, foldedThrough, 2)                                                       // a BASE, 0
+	net.fold(net.owner, foldedThrough, 2)                                                        // a BASE, 0
 	_, proposalId := net.propose(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("by proposal"))
 	if verdict := net.verdicts[net.n]; !verdict.Completed() || !bytes.Equal(verdict.CompletedProposalId, proposalId) {
 		t.Fatalf("the proposal at k = 1: %v", verdict.Refusal)
