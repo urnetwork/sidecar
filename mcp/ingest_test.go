@@ -9,6 +9,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -599,5 +601,251 @@ func TestScanWritesChangeAndBlob(t *testing.T) {
 	harness.SessionEnd("s1", "exit")
 	if coverage := env.writer.of(sidecar.RecordKindCoverage); len(coverage) != 1 || !slices.Contains(coverage[0].Body.(*protocol.Coverage).Sources, sidecar.RecordCoverageSourceScan) {
 		t.Errorf("the coverage's sources: %+v", coverage)
+	}
+}
+
+// Claude Code's InstructionsLoaded restates the context, stage 2, with the file it names by hash and size, never by
+// text; and Cursor's own version reaches the context from its payload.
+func TestInstructionsLoadedRestatesContext(t *testing.T) {
+	env := newIngestTestEnv(t)
+	nested := filepath.Join(env.cwd, "pkg", "CLAUDE.md")
+	instructions := "Nested rules. The token is " + ingestTestSecret + ".\n"
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nested, []byte(instructions), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	harness := env.harnessIn(sidecartest.FakeHarnessClaudeCode)
+	harness.SessionStart("s1", "startup")
+	if err := harness.Hook(harness.Payload("s1", "InstructionsLoaded", map[string]any{"file_path": nested, "memory_type": "Project", "load_reason": "nested_traversal"})); err != nil {
+		t.Fatal(err)
+	}
+	contexts := env.writer.of(sidecar.RecordKindContext)
+	if len(contexts) != 2 {
+		t.Fatalf("%d context entries", len(contexts))
+	}
+	body := contexts[1].Body.(*protocol.ContextBody)
+	sum := sha256.Sum256([]byte(instructions))
+	if body.Stage != 2 || len(body.InstructionFiles) != 1 || body.InstructionFiles[0].Name != "CLAUDE.md" || !bytes.Equal(body.InstructionFiles[0].Sha256, sum[:]) ||
+		body.InstructionFiles[0].Size != uint64(len(instructions)) || body.InstructionFiles[0].Scope != ingestInstructionScopeProject {
+		t.Errorf("the restated context: %+v", body)
+	}
+	if encoded, _ := proto.Marshal(body); bytes.Contains(encoded, []byte("Nested rules")) || bytes.Contains(encoded, []byte(ingestTestSecret)) {
+		t.Error("the restated context carries the file's text")
+	}
+	// a file the payload names that is no regular file adds nothing, and the entry is still written
+	if err := harness.Hook(harness.Payload("s1", "InstructionsLoaded", map[string]any{"file_path": filepath.Join(env.cwd, "pkg"), "memory_type": "User"})); err != nil {
+		t.Fatal(err)
+	}
+	if contexts = env.writer.of(sidecar.RecordKindContext); len(contexts) != 3 || len(contexts[2].Body.(*protocol.ContextBody).InstructionFiles) != 0 {
+		t.Errorf("a directory named as a loaded file: %+v", contexts)
+	}
+
+	cursorEnv := newIngestTestEnv(t)
+	cursor := cursorEnv.harnessIn(sidecartest.FakeHarnessCursor)
+	if err := cursor.Hook(cursor.Payload("c1", "beforeSubmitPrompt", map[string]any{"prompt": "hello", "cursor_version": "9.9.9-test"})); err != nil {
+		t.Fatal(err)
+	}
+	contexts = cursorEnv.writer.of(sidecar.RecordKindContext)
+	if len(contexts) != 1 || contexts[0].Body.(*protocol.ContextBody).HarnessVersion != "9.9.9-test" {
+		t.Errorf("Cursor's version: %+v", contexts)
+	}
+}
+
+// A changed file past Ingest.FileByteCount goes by its hash in the change row, with no blob and an oversize gap.
+func TestOverCapFileIsHashOnlyAndGapped(t *testing.T) {
+	restoreEnv := newRestoreTestEnv(t)
+	env := newIngestTestEnv(t)
+	env.cwd = restoreEnv.dir
+	env.server.settings.Ingest.FileByteCount = 16
+	env.restore = NewRestorePoints(&RestorePointsArgs{Clock: env.clock, Ingest: env.server.settings.Ingest})
+	env.install()
+	harness := env.harnessIn(sidecartest.FakeHarnessClaudeCode)
+	harness.SessionStart("s1", "startup")
+	runId := env.runOf("claude-code", "s1")
+	large := strings.Repeat("far past the cap\n", 4)
+	restoreEnv.write("committed.txt", large)
+	harness.ToolCall("s1", false, "Bash", map[string]any{"command": "generate"})
+	changes := env.writer.of(sidecar.RecordKindChange)
+	if len(changes) != 1 {
+		t.Fatalf("change entries: %+v", changes)
+	}
+	change := changes[0].Body.(*protocol.ChangeBody)
+	if len(change.Paths) != 1 || !bytes.Equal(change.Paths[0].AfterSha256, sha256Of([]byte(large))) || len(change.Paths[0].BlobEntryId) != 0 || change.ShellCount != 1 {
+		t.Errorf("the change body: %+v", change)
+	}
+	if blobs := env.writer.of(sidecar.RecordKindBlob); len(blobs) != 0 {
+		t.Errorf("a file past the cap was stored: %d blobs", len(blobs))
+	}
+	if !env.hasGap(runId, sidecar.RecordCoverageGapOversize) {
+		t.Errorf("no oversize gap: %v", env.runFile(runId).Gaps)
+	}
+}
+
+// The network's runs as RECORD's writer reads their taint.
+type ingestTestRunView struct {
+	network *fakeMcpNetwork
+}
+
+func (self *ingestTestRunView) RunTainted(runId sidecar.Id) bool {
+	return self.network.runs.Tainted(runId)
+}
+
+// A scripted run through RECORD's own writer onto sidecartest.FakeRecordStreams: every draft Ingest makes passes
+// the writer's header and body rules, is sealed into the member's vault, and reads back by kind and source with the
+// run's id, the tool call under RECORD.md's action_id, and the coverage's range inside the writer's chain.
+func TestIngestOnRecordStreams(t *testing.T) {
+	env := newIngestTestEnv(t)
+	ctx := context.Background()
+	streams := sidecartest.NewFakeRecordStreams(env.clock, nil, nil)
+	vaultId, err := streams.NewRepo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecarId := sidecar.NewId()
+	memberId := sidecar.NewId()
+	if err := streams.Grant(vaultId, sidecarId, sidecartest.RecordStreamsScope{Read: true, Write: true, Deposit: true}); err != nil {
+		t.Fatal(err)
+	}
+	auth := sidecartest.NewFakeRecordAuth()
+	auth.Append(&sidecartest.FakeRecordAuthFixture{
+		TimeMillis:   env.clock.Now().UnixMilli(),
+		IdentityKeys: map[sidecar.Id][]byte{sidecarId: publicKey},
+		Members:      map[sidecar.Id]sidecar.Id{sidecarId: memberId},
+		Sponsors:     map[sidecar.Id]sidecar.Id{},
+		Repos: map[sidecar.Id]*sidecartest.FakeRecordRepoAuth{vaultId: {
+			Readers:   []sidecar.Id{sidecarId},
+			Writers:   []sidecar.Id{sidecarId},
+			Consented: []sidecar.Id{sidecarId},
+		}},
+		Vaults: map[sidecar.Id]sidecar.Id{memberId: vaultId},
+	})
+	store, err := env.network.LocalStore().Directory("record", "record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := sidecar.NewSidecarRecord(&sidecar.SidecarRecordArgs{
+		SidecarId:         sidecarId,
+		IdentityPublicKey: publicKey,
+		Store:             store,
+		Sign: func(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error) {
+			return &bridge.Signed{
+				Body:      bytes.Clone(body),
+				SignerId:  sidecarId.Bytes(),
+				Signature: ed25519.Sign(key, bridge.SignedBytes(purpose, signedType, body)),
+				Type:      uint32(signedType),
+			}, nil
+		},
+		// no spool: the device stays unlocked, so no draft spools
+		Runs:     &ingestTestRunView{network: env.network},
+		Streams:  streams.For(sidecarId),
+		Auth:     func() sidecar.RecordAuthView { return auth.Tip() },
+		Clock:    env.clock,
+		Settings: sidecar.DefaultSidecarSettings().Record,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.ingest = NewIngest(&IngestArgs{
+		Server:    env.server,
+		Writers:   func(network McpNetwork) (sidecar.RecordWriter, error) { return record.Writer(), nil },
+		Redactors: func(network McpNetwork) (*sidecar.Redactor, error) { return env.redactor, nil },
+		Record:    sidecar.DefaultSidecarSettings().Record,
+	})
+	env.writeTranscript("s1", "{\"type\":\"user\",\"text\":\"hello\"}\n")
+	harness := env.harnessIn(sidecartest.FakeHarnessClaudeCode)
+	if err := harness.SessionStart("s1", "startup"); err != nil {
+		t.Fatal(err)
+	}
+	runId := env.runOf("claude-code", "s1")
+	if err := harness.Hook(harness.Payload("s1", "UserPromptSubmit", map[string]any{"prompt": "Fix the build"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.ToolCall("s1", false, "Bash", map[string]any{"command": "echo " + ingestTestSecret}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Hook(harness.Payload("s1", "PermissionRequest", map[string]any{"tool_name": "mcp__ur__mail_send", "tool_input": map[string]any{"to": "a@mail.example"}})); err != nil {
+		t.Fatal(err)
+	}
+	session := env.server.newSession(harness.RelayHello(""))
+	env.ingest.RecordMcpCall(ctx, env.call(session), "evs_read", []byte(`{"repo":"notes"}`), []byte(`{"text":"ok"}`), 1, 2, nil)
+	if err := harness.SessionEnd("s1", "exit"); err != nil {
+		t.Fatal(err)
+	}
+	if gaps := env.runFile(runId).Gaps; slices.ContainsFunc(gaps, func(gap string) bool { return strings.HasPrefix(gap, sidecar.RecordCoverageGapMissedEvent) }) {
+		t.Fatalf("the writer refused a draft: %v", gaps)
+	}
+	if err := record.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Reader().Sync(ctx, vaultId); err != nil {
+		t.Fatal(err)
+	}
+	entries := record.Reader().Entries(vaultId)
+	sources := map[sidecar.RecordKind][]sidecar.RecordSource{}
+	wantActionId, err := sidecar.RecordToolActionId(runId, "toolu_s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSeq, lastSeq := uint64(0), uint64(0)
+	var coverage *protocol.Coverage
+	for _, entry := range entries {
+		header := entry.Header.Header
+		kind := entry.Header.Kind()
+		sources[kind] = append(sources[kind], sidecar.RecordSource(header.GetSource()))
+		if entry.BodyInvalid || entry.Body == nil {
+			t.Errorf("a %v entry's body did not open", kind)
+		}
+		if !bytes.Equal(header.GetRunId(), runId[:]) {
+			t.Errorf("a %v entry outside the run", kind)
+		}
+		if bytes.Contains(entry.Body, []byte(ingestTestSecret)) {
+			t.Errorf("a %v entry was sealed with the secret", kind)
+		}
+		if kind == sidecar.RecordKindToolCall && sidecar.RecordSource(header.GetSource()) == sidecar.RecordSourceHook && !bytes.Equal(header.GetActionId(), wantActionId[:]) {
+			t.Error("the hook's tool call is not under RECORD.md's action_id")
+		}
+		if kind == sidecar.RecordKindCoverage {
+			coverage = &protocol.Coverage{}
+			if err := proto.Unmarshal(entry.Body, coverage); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if firstSeq == 0 || header.GetSeq() < firstSeq {
+			firstSeq = header.GetSeq()
+		}
+		if lastSeq < header.GetSeq() {
+			lastSeq = header.GetSeq()
+		}
+	}
+	for kind, want := range map[sidecar.RecordKind][]sidecar.RecordSource{
+		sidecar.RecordKindContext:    {sidecar.RecordSourceHook},
+		sidecar.RecordKindTranscript: {sidecar.RecordSourceHook},
+		sidecar.RecordKindToolCall:   {sidecar.RecordSourceHook, sidecar.RecordSourceObserved},
+		sidecar.RecordKindPermission: {sidecar.RecordSourceHook},
+		sidecar.RecordKindCoverage:   {sidecar.RecordSourceObserved},
+	} {
+		if !slices.Equal(sources[kind], want) {
+			t.Errorf("%v entries by source: %v, want %v", kind, sources[kind], want)
+		}
+	}
+	if len(sources[sidecar.RecordKindHookEvent]) == 0 {
+		t.Error("no hook_event entries")
+	}
+	if coverage == nil {
+		t.Fatal("no coverage entry")
+	}
+	if !bytes.Equal(coverage.RunId, runId[:]) || coverage.FirstSeq != firstSeq || coverage.LastSeq != lastSeq ||
+		!slices.Contains(coverage.Sources, sidecar.RecordCoverageSourceTranscript) || !slices.Contains(coverage.Sources, sidecar.RecordCoverageSourceMcp) {
+		t.Errorf("the coverage %+v over seqs %d to %d", coverage, firstSeq, lastSeq)
+	}
+	if !slices.ContainsFunc(coverage.Gaps, func(gap string) bool { return strings.HasPrefix(gap, sidecar.RecordCoverageGapRedaction) }) {
+		t.Errorf("the coverage does not name the redaction: %v", coverage.Gaps)
 	}
 }

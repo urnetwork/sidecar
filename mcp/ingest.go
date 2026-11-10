@@ -235,6 +235,7 @@ type ingestRunState struct {
 	FirstSeq uint64 `json:"first_seq"`
 	LastSeq  uint64 `json:"last_seq"`
 	// the context entry's fields, for the stage 2 rule
+	HarnessVersion string `json:"harness_version"`
 	Model          string `json:"model"`
 	PermissionMode string `json:"permission_mode"`
 	Started        bool   `json:"started"`

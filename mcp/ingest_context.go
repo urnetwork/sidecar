@@ -2,23 +2,27 @@
 
 // §16.7's context, title, change and blob rows (RECORD.md sections 4.3 and 6.4):
 //
-//	context   stage 1 at a run's SessionStart, with the harness, model, permission_mode, the newest session ids,
-//	          the project and branch (`.ur`'s project, else the worktree's top-level name; git's branch), the title
-//	          where known, and the instruction files the harness loads by scope, name, hash and size, never their
-//	          text; stage 2 at a later event where the model or mode changed
+//	context   stage 1 at a run's SessionStart, with the harness, its version where the payload names one (Cursor's
+//	          cursor_version), model, permission_mode, the newest session ids, the project and branch (`.ur`'s
+//	          project, else the worktree's top-level name; git's branch), the title where known, and the
+//	          instruction files the harness loads by scope, name, hash and size, never their text; stage 2 at a
+//	          later event where the model or mode changed, and at Claude Code's InstructionsLoaded, with the file it
+//	          names among them
 //	title     Claude Code's session_title at SessionStart or UserPromptSubmit when set, else the first user
 //	          prompt's first line, 120 B after redaction, for the run card and the context entry
 //	change    each hook's scan of MCP-M3-20's restore point: the commits since the last scan, the counts by
 //	          attribution and each changed path with its hashes, mode and attribution
 //	blob      the after bytes of each changed file within Ingest.FileByteCount, redacted, with the hash of the bytes
-//	          as captured; a hash already stored is not stored again; one evs push per tree and multi-part pushes
-//	          are the writer's (EVS1-M2-26)
+//	          as captured; a hash already stored is not stored again; a file past the cap goes by its hash in the
+//	          change row alone, an oversize gap; one evs push per tree and multi-part pushes are the writer's
+//	          (EVS1-M2-26)
 //
 // Instruction files are read for their hash alone, and their names are their base names.
 
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,10 +41,14 @@ const (
 	ingestTitleByteCount          = 120
 	ingestSessionIdCount          = 4
 	ingestInstructionFileMax      = 64
+	ingestInstructionScopeManaged = 1
 	ingestInstructionScopeUser    = 2
 	ingestInstructionScopeProject = 3
 	ingestChangeCaptureHooks      = 1
 	ingestChangeCaptureScan       = 2
+	// Claude Code's event for an instruction file it loaded, and Cursor's payload field for its own version
+	ingestInstructionsLoadedEvent = "InstructionsLoaded"
+	ingestCursorVersionField      = "cursor_version"
 )
 
 // The context rows: stage 1 at SessionStart, stage 2 when the model or mode changes, and the title when it arrives.
@@ -69,7 +77,7 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 		state.Model = event.Model
 		state.PermissionMode = event.PermissionMode
 		run.dirty = true
-		self.appendContextWithLock(ctx, run, redactor, stage, event)
+		self.appendContextWithLock(ctx, run, redactor, stage, event, payload)
 		if stage == 1 && self.lifecycle != nil {
 			self.lifecycle.RunStarted(ctx, run.networkId, &RunLifecycleStart{
 				RunId:   run.runId,
@@ -89,16 +97,27 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 			state.PermissionMode = event.PermissionMode
 			changed = true
 		}
+		if event.HarnessEvent == ingestInstructionsLoadedEvent {
+			// the instructions in force changed: restated with the loaded file by hash
+			changed = true
+		}
 		if changed {
 			run.dirty = true
-			self.appendContextWithLock(ctx, run, redactor, 2, event)
+			self.appendContextWithLock(ctx, run, redactor, 2, event, payload)
 		}
 	}
 }
 
 // One context entry of stage.
-func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, stage uint32, event *HookEvent) {
+func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, stage uint32, event *HookEvent, payload []byte) {
 	state := run.state
+	if event.Harness == cursorHookHarness {
+		if version := ingestPayloadString(payload, ingestCursorVersionField); version != "" && version != state.HarnessVersion {
+			state.HarnessVersion = version
+			run.dirty = true
+		}
+	}
+	harnessVersion, _ := ingestCut([]byte(state.HarnessVersion), 64)
 	sessionIds := []string{}
 	if runs, err := run.network.Runs(); err == nil {
 		if file, err := runs.Get(run.runId); err == nil {
@@ -119,13 +138,18 @@ func (self *Ingest) appendContextWithLock(ctx context.Context, run *ingestRun, r
 	mode, _ := ingestCut([]byte(state.PermissionMode), 32)
 	project, _ := ingestCut([]byte(state.Project), 128)
 	branch, _ := ingestCut([]byte(state.Branch), 128)
-	files, truncations := self.instructionFiles(event.Cwd)
+	loaded := (*protocol.InstructionFile)(nil)
+	if event.HarnessEvent == ingestInstructionsLoadedEvent {
+		loaded = ingestLoadedInstructionFile(payload)
+	}
+	files, truncations := self.instructionFiles(event.Cwd, loaded)
 	self.appendWithLock(ctx, run, &ingestEntry{
 		kind:   sidecar.RecordKindContext,
 		source: sidecar.RecordSourceHook,
 		body: &protocol.ContextBody{
 			Stage:            stage,
 			Harness:          state.Harness,
+			HarnessVersion:   string(harnessVersion),
 			AgentLabel:       state.AgentLabel,
 			SessionIds:       sessionIds,
 			Model:            string(model),
@@ -221,9 +245,31 @@ func (self *Ingest) agentLabel(cwd string) string {
 	return found.Agent
 }
 
+// The file an InstructionsLoaded names, by hash and size: its file_path read for the hash alone, its scope from
+// memory_type (Managed, User, else the project's). Nil where the payload names no readable regular file.
+func ingestLoadedInstructionFile(payload []byte) *protocol.InstructionFile {
+	path := ingestPayloadString(payload, "file_path")
+	if path == "" || !filepath.IsAbs(path) {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	scope := uint32(ingestInstructionScopeProject)
+	switch ingestPayloadString(payload, "memory_type") {
+	case "Managed":
+		scope = ingestInstructionScopeManaged
+	case "User":
+		scope = ingestInstructionScopeUser
+	}
+	return ingestHashFile(scope, path)
+}
+
 // The instruction files under cwd and the home, by scope, base name, hash and size, at most 64, with a truncation
-// warning for each past it. A directory among the names lists its files.
-func (self *Ingest) instructionFiles(cwd string) ([]*protocol.InstructionFile, []string) {
+// warning for each past it. A directory among the names lists its files. loaded, the file an InstructionsLoaded
+// named, goes first when the lists do not already hold it.
+func (self *Ingest) instructionFiles(cwd string, loaded *protocol.InstructionFile) ([]*protocol.InstructionFile, []string) {
 	files := []*protocol.InstructionFile{}
 	truncations := []string{}
 	add := func(scope uint32, absolute string) {
@@ -261,6 +307,11 @@ func (self *Ingest) instructionFiles(cwd string) ([]*protocol.InstructionFile, [
 		for _, name := range self.settings.InstructionUserFileNames {
 			add(ingestInstructionScopeUser, filepath.Join(self.home, filepath.FromSlash(name)))
 		}
+	}
+	if loaded != nil && !slices.ContainsFunc(files, func(file *protocol.InstructionFile) bool {
+		return file.Name == loaded.Name && bytes.Equal(file.Sha256, loaded.Sha256)
+	}) {
+		files = append([]*protocol.InstructionFile{loaded}, files...)
 	}
 	if ingestInstructionFileMax < len(files) {
 		for _, file := range files[ingestInstructionFileMax:] {
@@ -346,8 +397,11 @@ func (self *Ingest) captureScanResultWithLock(ctx context.Context, run *ingestRu
 		default:
 			body.ForeignCount += 1
 		}
-		if change.AfterBytes != nil && change.After.Kind == RestoreKindFile {
-			if entryId := self.captureBlobWithLock(ctx, run, redactor, change); entryId != nil {
+		if change.After.Kind == RestoreKindFile {
+			if change.AfterBytes == nil {
+				// past FileByteCount: by hash alone, its bytes cut
+				self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapOversize)
+			} else if entryId := self.captureBlobWithLock(ctx, run, redactor, change); entryId != nil {
 				row.BlobEntryId = entryId
 			}
 		}
