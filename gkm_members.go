@@ -546,9 +546,10 @@ func (self *gkmGroupManager) commitHeader(state GkmAuthView, previousHeader *pro
 	return top, headerBytes, nil
 }
 
-// The rest of 6.2.4's Commit for a commit staged on base's epoch, a member's on its own group or a resync's external
-// commit on the epoch its GroupInfo names: GenWrap_{e+1}, the committer's own check, GroupInfo_{e+1}, the upload and
-// its outcome. A staged commit that is not adopted is discarded.
+// The rest of 6.2.4's Commit for a commit staged on base's epoch, a member's on its own group or a resync's or
+// recovery self-join's external commit on the epoch its GroupInfo names: GenWrap_{e+1}, unless the staged header
+// says generation 0, the committer's own check, GroupInfo_{e+1}, the upload and its outcome. A staged commit that
+// is not adopted is discarded.
 func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAuthView, base MlsGroup, staged MlsStagedCommit, previousHeader *protocol.GkmCommitHeader, top *gkmHeldGeneration, recipients []*protocol.GkmWelcomeRecipient) (gkmCommitOutcome, error) {
 	client := self.client
 	groupId := base.GroupId()
@@ -561,20 +562,29 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 		}
 	}()
 	epoch := staged.Epoch()
-	kek, err := MlsKek(staged, self.repoId)
-	if err != nil {
-		return 0, err
-	}
-	genWrap, err := SealGkmGenWrap(top.key, groupId, epoch, kek)
-	clear(kek)
-	if err != nil {
-		return 0, err
-	}
 	now := client.clock.Now()
+	checkArgs := &GkmCommitCheckArgs{RepoId: self.repoId, PreviousHeader: previousHeader, Time: now, Now: now}
+	stagedHeader := &protocol.GkmCommitHeader{}
+	if err := proto.Unmarshal(headerBytes, stagedHeader); err != nil {
+		return 0, fmt.Errorf("%w: the staged commit's header", ErrGkmMalformed)
+	}
+	var genWrap []byte
+	if stagedHeader.GetGeneration() != 0 {
+		kek, err := MlsKek(staged, self.repoId)
+		if err != nil {
+			return 0, err
+		}
+		genWrap, err = SealGkmGenWrap(top.key, groupId, epoch, kek)
+		clear(kek)
+		if err != nil {
+			return 0, err
+		}
+		checkArgs.Generation, checkArgs.GenWrap = top.generation, genWrap
+	}
+	// else §10.8's generation-0 self-join (gkm_recovery.go): no GenWrap, so the epoch hands no generation to the
+	// lost devices' leaves, and its GroupInfo seals under the newest generation the joiner holds (QD-165)
 	// the committer's own check: a commit others must refuse leaks the moment it stands, so it is never uploaded
-	check, err := CheckCommit(state, base, staged, &GkmCommitCheckArgs{
-		RepoId: self.repoId, PreviousHeader: previousHeader, Generation: top.generation, GenWrap: genWrap, Time: now, Now: now,
-	})
+	check, err := CheckCommit(state, base, staged, checkArgs)
 	if err != nil {
 		return 0, err
 	}
