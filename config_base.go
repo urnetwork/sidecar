@@ -139,6 +139,9 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 		if facts == nil {
 			facts = &ConfigHeadFacts{}
 		}
+		if err := CheckServiceSettings(facts.Settings); err != nil {
+			return nil, self.baseFork(kept, "config head: service_settings: %v", err)
+		}
 	}
 
 	next, err := self.stateFromBase(state, kept, header, rows, facts)
@@ -207,7 +210,8 @@ func (self *ConfigLog) foldedRecords(state *ConfigState, header *bridge.Projecti
 
 // The state a base's rows give, before the tail re-applies: its rows replace previous's, its pins move on, and the
 // proposals the base folded close, since rows carry no open proposal (question
-// team-m2-02-open-proposals-across-bases), while the tail's re-open as it re-applies.
+// team-m2-02-open-proposals-across-bases), while the tail's re-open as it re-applies. Its settings are the rows', which
+// a full reader holds to its head's (DESIGN-DETAILS 5.2.3): rows carrying other settings are no state.
 func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntry, header *bridge.ProjectionHeader, rowsBytes []byte, facts *ConfigHeadFacts) (*configStateBuilder, error) {
 	rows := &bridge.ProjectionRows{}
 	if err := proto.Unmarshal(rowsBytes, rows); err != nil {
@@ -221,8 +225,11 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 	state.previousBase = previous.base
 	state.base = &configBase{n: kept.n, chain: kept.chain, timeMs: kept.entry.GetTimeMs(), header: header}
 	state.threshold = header.GetThreshold()
-	state.settings = facts.Settings
-	state.settingsKnown = !self.rowsOnly
+	state.settings = configRowsSettingsOrDefault(rows.GetSettings())
+	state.headSettings, state.headSettingsKnown = facts.Settings, !self.rowsOnly
+	if !self.rowsOnly && !configRowsSettingsMatch(rows.GetSettings(), facts.Settings) {
+		return nil, errors.New("rows: settings are not the config head's")
+	}
 	state.proposals = map[[sha256.Size]byte]*configProposal{}
 	next.membersOwned, next.sidecarsOwned, next.delegationsOwned, next.keysOwned, next.proposalsOwned = true, true, true, true, true
 	// every row came from these rows, so the builder owns them all
@@ -306,7 +313,7 @@ func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
 	if err := proto.Unmarshal(rows.GetAcl(), state.aclRows); err != nil {
 		return fmt.Errorf("rows: acl: %w", err)
 	}
-	return nil
+	return configCheckRowsSettings(rows.GetSettings())
 }
 
 // Re-applies the statement and tick entries among foldedThrough+1..n-1 on next, in order, a base among them skipped,

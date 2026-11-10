@@ -30,7 +30,7 @@ func (self *testConfigNet) rowsOnlySource() ConfigRowsOnlySource {
 
 // The refusal sentinel a verdict carries, the narrowest first, or nil for an accepted one.
 func testConfigRefusalClass(err error) error {
-	for _, class := range []error{ErrConfigSettingsUnknown, ErrConfigPresence, ErrConfigReadOnly, ErrConfigRuleMissing,
+	for _, class := range []error{ErrConfigPresence, ErrConfigReadOnly, ErrConfigRuleMissing,
 		ErrConfigReplay, ErrConfigSigner, ErrConfigAuthority, ErrConfigRule, ErrConfigRefused} {
 		if errors.Is(err, class) {
 			return class
@@ -41,8 +41,7 @@ func testConfigRefusalClass(err error) error {
 
 // A generated log on the network: members and their devices admitted and revoked, ephemeral agents reaped by ticks,
 // statements refused for their signer or for a rule not built, and bases folding at random points, from a seed.
-// Statements are an admin's, never a member's own self-admission, whose verdict rows-only readers cannot reach
-// (question team-m2-02-self-admit-at-rows-only-readers).
+// Statements are an admin's; TestASelfAdmissionIsJudgedAlikeAtApi runs a member's own.
 func (self *testConfigNet) generate(seed uint64, count int) {
 	self.t.Helper()
 	random := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
@@ -102,7 +101,7 @@ func (self *testConfigNet) generate(seed uint64, count int) {
 }
 
 // A rows-only reader and a full one reach the same verdict at every position of generated logs, and stand on the same
-// state there, the rows-only one never opening a config head and reporting its settings unknown.
+// state there, the rows-only one never opening a config head and reporting its head-only settings unknown.
 func TestARowsOnlyReaderReachesAFullReadersVerdicts(t *testing.T) {
 	for seed := uint64(1); seed <= 6; seed += 1 {
 		net := newTestConfigNet(t)
@@ -143,7 +142,7 @@ func TestARowsOnlyReaderReachesAFullReadersVerdicts(t *testing.T) {
 		if accepted == 0 || refused == 0 {
 			t.Errorf("seed %d: %d accepted and %d refused", seed, accepted, refused)
 		}
-		if _, known := rowsOnly.State().Settings(); known || !rowsOnly.RowsOnly() || full.RowsOnly() {
+		if _, known := rowsOnly.State().HeadSettings(); known || !rowsOnly.RowsOnly() || full.RowsOnly() {
 			t.Errorf("seed %d: a rows-only state reports its settings", seed)
 		}
 	}
@@ -392,8 +391,8 @@ func TestARowsOnlyBaseNeedsNoConfigHead(t *testing.T) {
 	if gate.State().Base().GetConfigVersion() != 2 {
 		t.Error("the base did not apply")
 	}
-	if settings, known := gate.State().Settings(); known || settings != nil {
-		t.Error("a rows-only state reports settings")
+	if settings, known := gate.State().HeadSettings(); known || settings != nil {
+		t.Error("a rows-only state reports the head's settings")
 	}
 	if !bytes.Equal(gate.State().Base().GetRowsSha256(), testConfigRowsSha256(t, net.log.State().Rows())) {
 		t.Error("the base names other rows")

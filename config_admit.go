@@ -14,9 +14,9 @@
 //
 // A sidecar_id is admitted once and its row stays a tombstone; tagged and ephemeral admissions carry a not_after and a
 // member device's admission carrying one is refused, so leaves' rank depends on the log alone; revocations are
-// idempotent. A Delegation's admissions are TEAM-M2-04's and a recovery key's TEAM-M2-05's, refused at the signer
-// until each lands, as a compromise revocation is; lifting a park is TEAM-M2-04's too, so a confirmation of a parked
-// device records its signer and leaves the park.
+// idempotent. A Delegation's admissions and confirmations are config_delegation.go's scoped row, a compromise
+// revocation config_cascade.go's cascade, and a confirmation of a parked device lifts its park there; a recovery key's
+// admissions are TEAM-M2-05's, refused at the signer until they land.
 //
 // admission_sha256 is the SidecarAdmit's signed bytes' hash, whether it rides its own entry or a proposal's statement
 // (protos-bridge-statement-id-wrapper, team-records-admission-sha256-under-proposal).
@@ -357,17 +357,6 @@ func configRowAdmission(sidecarId Id, row *bridge.SidecarRow) *configAdmission {
 	return admission
 }
 
-// Whether the network's self_admit is on (owner decision 112): unset or on. An error when this reader could not open
-// the config head that holds it, so a scoped self-admission fails closed there (question
-// team-m2-02-self-admit-at-rows-only-readers).
-func (self *ConfigState) selfAdmit() (bool, error) {
-	settings, known := self.Settings()
-	if !known {
-		return false, fmt.Errorf("%w: self_admit", ErrConfigSettingsUnknown)
-	}
-	return settings.GetSelfAdmit() != protocol.SelfAdmitMode_SELF_ADMIT_MODE_OFF, nil
-}
-
 // Whether signers may admit the device admission names at state (§7.9's SidecarAdmit signers and scoped row), and
 // the first signer the row keeps as the one that did. The device itself never signs its own admission.
 func (self *ConfigState) admitSigners(signers []ConfigSigner, admission *configAdmission, timeMs int64) (ConfigSigner, error) {
@@ -426,11 +415,7 @@ func (self *ConfigState) admitSigners(signers []ConfigSigner, admission *configA
 	if !ok {
 		return ConfigSigner{}, fmt.Errorf("%w: a device of a member outside the AdminSet needs an admin's device or the member's consented one", ErrConfigAuthority)
 	}
-	selfAdmit, err := self.selfAdmit()
-	if err != nil {
-		return ConfigSigner{}, err
-	}
-	if !selfAdmit {
+	if !self.SelfAdmit() {
 		return ConfigSigner{}, fmt.Errorf("%w: self_admit is off", ErrConfigAuthority)
 	}
 	return signer, nil
@@ -472,12 +457,27 @@ func configCheckSidecarAdmit(state *ConfigState, statement *configStatement) err
 	case admit.GetCapabilities()&^configKnownCapabilities != 0:
 		return fmt.Errorf("%w: unknown capability bits %#x", ErrConfigRule, admit.GetCapabilities()&^configKnownCapabilities)
 	}
+	if configSignedByDelegation(statement.signers) {
+		if err := state.checkDelegationAdmission(statement, admit, admission); err != nil {
+			return err
+		}
+		statement.rowSigner = statement.signers[0]
+		return nil
+	}
 	statement.rowSigner, err = state.admitSigners(statement.signers, admission, statement.timeMs)
 	return err
 }
 
+// Whether a Delegation's key signed among signers.
+func configSignedByDelegation(signers []ConfigSigner) bool {
+	return slices.ContainsFunc(signers, func(signer ConfigSigner) bool {
+		return signer.Kind == ConfigSignerDelegation
+	})
+}
+
 // A SidecarAdmit's effect: the device's row, admitted here, its signers kept for the cascade, a tagged one's
-// admitting member its sponsor, and a member device live from here (§7.9's leaves row).
+// admitting member its sponsor, and a member device live from here (§7.9's leaves row). A Delegation's admission
+// counts against its max_admits for its life, names it, and takes as sponsor the member whose device signed it.
 func configApplySidecarAdmit(next *configStateBuilder, statement *configStatement) error {
 	admit := statement.body.(*protocol.SidecarAdmit)
 	admission, err := configSidecarAdmission(admit)
@@ -512,6 +512,23 @@ func configApplySidecarAdmit(next *configStateBuilder, statement *configStatemen
 				row.Sponsor = memberId.Bytes()
 			}
 		}
+		for _, signer := range statement.signers {
+			if signer.Kind != ConfigSignerDelegation {
+				continue
+			}
+			delegation := next.delegationForWrite(signer.DelegationId)
+			if delegation == nil {
+				return fmt.Errorf("%w: no such Delegation", ErrConfigRule)
+			}
+			delegation.Admissions += 1
+			row.DelegationId = bytes.Clone(signer.DelegationId)
+			if len(delegation.GetSigner()) == len(Id{}) {
+				if memberId, untagged := configRowMember(next.sidecar(Id(delegation.GetSigner()))); untagged {
+					row.Sponsor = memberId.Bytes()
+				}
+			}
+			break
+		}
 	} else {
 		row.MemberId = admission.memberId.Bytes()
 		if !admission.ephemeral {
@@ -537,8 +554,8 @@ func configSidecarRevokeTargets(state *ConfigState, statement *configStatement) 
 
 // A SidecarRevoke: a device this state admitted, for lost, removed or reaped (reaped only for an ephemeral one) with
 // no since_n, by the device itself or by whoever may admit it, the member's consented device included whatever
-// self_admit says (§7.10). A compromise revocation is TEAM-M2-04's cascade, refused until it lands. A device revoked
-// already takes it again as nothing (§7.9's replay row: revocations are idempotent).
+// self_admit says (§7.10); for compromise, config_cascade.go's cascade. A device revoked already takes it again as
+// nothing (§7.9's replay row: revocations are idempotent), and a compromise revocation of one parks its cascade.
 func configCheckSidecarRevoke(state *ConfigState, statement *configStatement) error {
 	revoke := statement.body.(*bridge.SidecarRevoke)
 	sidecarId, err := IdFromBytes(revoke.GetSidecarId())
@@ -556,7 +573,7 @@ func configCheckSidecarRevoke(state *ConfigState, statement *configStatement) er
 			return fmt.Errorf("%w: reaped names no ephemeral admission", ErrConfigRule)
 		}
 	case bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE:
-		return fmt.Errorf("%w: a compromise revocation waits on TEAM-M2-04's cascade", ErrConfigRuleMissing)
+		return configCheckCompromise(state, statement, sidecarId, row)
 	default:
 		return fmt.Errorf("%w: reason %d", ErrConfigRule, revoke.GetReason())
 	}
@@ -623,6 +640,9 @@ func configApplySidecarRevoke(next *configStateBuilder, statement *configStateme
 	if row == nil {
 		return fmt.Errorf("%w: no such sidecar", ErrConfigRule)
 	}
+	if revoke.GetReason() == bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE {
+		return configApplyCompromise(next, statement, sidecarId)
+	}
 	if row.GetRevokedAt() == 0 {
 		next.sidecarForWrite(sidecarId).RevokedAt = statement.n
 	}
@@ -651,7 +671,7 @@ func configAdmissionConfirmTargets(state *ConfigState, statement *configStatemen
 }
 
 // An AdmissionConfirm: a device this state admitted and has not revoked, by any signer allowed to admit it, never the
-// device itself.
+// device itself; by a Delegation's key, of an agent it admitted while it still signs.
 func configCheckAdmissionConfirm(state *ConfigState, statement *configStatement) error {
 	confirm := statement.body.(*protocol.AdmissionConfirm)
 	sidecarId, err := IdFromBytes(confirm.GetSidecarId())
@@ -662,12 +682,19 @@ func configCheckAdmissionConfirm(state *ConfigState, statement *configStatement)
 	if row == nil || row.GetRevokedAt() != 0 {
 		return fmt.Errorf("%w: no admitted sidecar to confirm", ErrConfigRule)
 	}
+	if configSignedByDelegation(statement.signers) {
+		if err := state.checkDelegationConfirm(statement, row); err != nil {
+			return err
+		}
+		statement.rowSigner = statement.signers[0]
+		return nil
+	}
 	statement.rowSigner, err = state.admitSigners(statement.signers, configRowAdmission(sidecarId, row), statement.timeMs)
 	return err
 }
 
-// An AdmissionConfirm's effect: its signer and position, the newest AdmissionConfirm the row keeps. Lifting a park
-// through it is TEAM-M2-04's.
+// An AdmissionConfirm's effect: its signer and position, the newest AdmissionConfirm the row keeps and one more in its
+// history, and the lift of a park (config_cascade.go), since a signer that may sign stands outside every P.
 func configApplyAdmissionConfirm(next *configStateBuilder, statement *configStatement) error {
 	sidecarId, err := IdFromBytes(statement.body.(*protocol.AdmissionConfirm).GetSidecarId())
 	if err != nil {
@@ -680,8 +707,6 @@ func configApplyAdmissionConfirm(next *configStateBuilder, statement *configStat
 	if signer.Kind == 0 && 0 < len(statement.signers) {
 		signer = statement.signers[0]
 	}
-	write := next.sidecarForWrite(sidecarId)
-	write.ConfirmSigner = signer.RowsSigner()
-	write.ConfirmedAt = statement.n
+	configConfirmSidecar(next, statement.n, configConfirmAdmission, signer.RowsSigner(), sidecarId)
 	return nil
 }

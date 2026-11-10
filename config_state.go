@@ -165,10 +165,12 @@ type ConfigState struct {
 	aclRows     *protocol.AclRows
 	// the newest AdminSet's threshold as signed, 0 for the default (§7.9's authority row)
 	threshold uint32
+	// the ServiceSettings values every verifier judges by, from the newest base's rows; nil before base 1
+	settings *bridge.ProjectionSettings
 	// the ServiceSettings the base's config head holds, nil for none, and whether the head was opened to see them
-	settings      *protocol.ServiceSettings
-	settingsKnown bool
-	proposals     map[[sha256.Size]byte]*configProposal
+	headSettings      *protocol.ServiceSettings
+	headSettingsKnown bool
+	proposals         map[[sha256.Size]byte]*configProposal
 
 	// A_k for k from chainsFrom to n. Later states append to the same array past this slice's end and never write
 	// inside it, so states share it.
@@ -340,13 +342,6 @@ func (self *ConfigState) RegisteredKey(keyId []byte) *bridge.KeyRow {
 	return self.keys[string(keyId)]
 }
 
-// The ServiceSettings the newest base's config head holds, nil when it holds none, so the defaults hold; known is
-// false when this state's reader could not open the head (a rows-only reader, TEAM-M2-11), and then a rule that
-// reads a setting fails closed.
-func (self *ConfigState) Settings() (settings *protocol.ServiceSettings, known bool) {
-	return self.settings, self.settingsKnown
-}
-
 // The identity key the log admits for a sidecar, by its SidecarAdmit or, for a network's first device, the
 // Genesis; nil for none. A revoked sidecar keeps it, for what it signed before (§10.9's history row).
 func (self *ConfigState) IdentityKey(sidecarId Id) []byte {
@@ -425,7 +420,7 @@ func (self *ConfigState) IsConfigWriter(sidecarId Id) bool {
 }
 
 // Whether §7.9's compromise cascade, or a leaked bundle's DelegationRevoke, parks the sidecar now, as its row's
-// parked_at says. TEAM-M2-04 computes and lifts parks; until then only a base's rows set one.
+// parked_at says (config_cascade.go): parked until a confirmation from outside P lifts it.
 func (self *ConfigState) Parked(sidecarId Id) bool {
 	row := self.sidecars[sidecarId]
 	return row != nil && row.GetParkedAt() != 0
@@ -443,36 +438,6 @@ func (self *ConfigState) Sponsor(sidecarId Id) (Id, bool) {
 		return Id{}, false
 	}
 	return sponsorId, true
-}
-
-// Whether a record signed by signer (a sidecar_id, a recovery key's hash or a delegation_id) and carried at
-// position at rests on what a compromise cascade voids (§7.9's cascade, D-TEAM-26).
-//
-// TEAM-M2-04 computes the set P in position order. Until it lands this fails closed from the rows alone: whatever a
-// parked sidecar signed is void at any position, and so is whatever a recovery key or a Delegation signed when a
-// parked sidecar signed its binding or the Delegation. A void consents nothing and opens no share, so the interim
-// errs toward less access.
-func (self *ConfigState) CascadeVoids(signer []byte, at uint64) bool {
-	parkedSigner := func(rowsSigner []byte) bool {
-		sidecarId, err := IdFromBytes(rowsSigner)
-		return err == nil && self.Parked(sidecarId)
-	}
-	switch len(signer) {
-	case len(Id{}):
-		return parkedSigner(signer)
-	case sha256.Size:
-		if delegation := self.delegations[string(signer)]; delegation != nil {
-			return parkedSigner(delegation.GetSigner())
-		}
-		for _, member := range self.members {
-			for _, binding := range member.GetBindings() {
-				if bytes.Equal(binding.GetKeySha256(), signer) && binding.GetAt() <= at && parkedSigner(binding.GetSigner()) {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // The acl part of this state: ACL's AclState over the rows' AclRows with this state as its view, built once on first
@@ -573,6 +538,7 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 			rows.Acl = aclBytes
 		}
 	}
+	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
 	return rows
 }
 
@@ -610,27 +576,28 @@ type configStateBuilder struct {
 // A new state sharing every field of state but its acl part, which builds again on first use.
 func configCopyState(state *ConfigState) *ConfigState {
 	return &ConfigState{
-		networkId:     state.networkId,
-		genesis:       state.genesis,
-		genesisChain:  state.genesisChain,
-		n:             state.n,
-		chain:         state.chain,
-		timeMs:        state.timeMs,
-		base:          state.base,
-		previousBase:  state.previousBase,
-		members:       state.members,
-		sidecars:      state.sidecars,
-		delegations:   state.delegations,
-		keys:          state.keys,
-		aclRows:       state.aclRows,
-		threshold:     state.threshold,
-		settings:      state.settings,
-		settingsKnown: state.settingsKnown,
-		proposals:     state.proposals,
-		chains:        state.chains,
-		chainsFrom:    state.chainsFrom,
-		basePins:      state.basePins,
-		history:       state.history,
+		networkId:         state.networkId,
+		genesis:           state.genesis,
+		genesisChain:      state.genesisChain,
+		n:                 state.n,
+		chain:             state.chain,
+		timeMs:            state.timeMs,
+		base:              state.base,
+		previousBase:      state.previousBase,
+		members:           state.members,
+		sidecars:          state.sidecars,
+		delegations:       state.delegations,
+		keys:              state.keys,
+		aclRows:           state.aclRows,
+		threshold:         state.threshold,
+		settings:          state.settings,
+		headSettings:      state.headSettings,
+		headSettingsKnown: state.headSettingsKnown,
+		proposals:         state.proposals,
+		chains:            state.chains,
+		chainsFrom:        state.chainsFrom,
+		basePins:          state.basePins,
+		history:           state.history,
 	}
 }
 
@@ -721,6 +688,17 @@ func (self *configStateBuilder) putSidecar(sidecarId Id, row *bridge.SidecarRow)
 	}
 	self.state.sidecars[sidecarId] = row
 	self.sidecarsCopied[sidecarId] = true
+}
+
+// Sets a new Delegation's row, which the builder then owns.
+func (self *configStateBuilder) putDelegation(row *bridge.DelegationRow) {
+	if !self.delegationsOwned {
+		self.state.delegations = configCloneMap(self.state.delegations)
+		self.delegationsOwned = true
+	}
+	key := string(row.GetDelegationId())
+	self.state.delegations[key] = row
+	self.delegationsCopied[key] = true
 }
 
 // A Delegation's row to change, nil when there is none.

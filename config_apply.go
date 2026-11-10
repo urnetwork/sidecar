@@ -58,8 +58,6 @@ var (
 	ErrConfigReadOnly = fmt.Errorf("%w: read_only", ErrConfigRefused)
 	// §7.9's presence row asks for a countersignature this build cannot check yet (TEAM-M2-06).
 	ErrConfigPresence = fmt.Errorf("%w: presence", ErrConfigRefused)
-	// A rule reads a ServiceSettings value this reader could not open.
-	ErrConfigSettingsUnknown = fmt.Errorf("%w: settings unknown", ErrConfigRefused)
 )
 
 // Evidence of a fork (§7.9's apply row): the position, what this reader holds there and what the entry presented.
@@ -645,8 +643,8 @@ func (self *ConfigLog) checkHeader(state *ConfigState, statement *configStatemen
 }
 
 // Resolves and verifies a statement's signer from Signed's signer_id and key_id (§6.9's Signers). A sidecar's
-// identity key must be one this state admits or the Genesis names; a recovery key's statements are TEAM-M2-05's and
-// a Delegation's TEAM-M2-04's, each refused until its rule lands.
+// identity key must be one this state admits or the Genesis names; a Delegation's key one a Delegation this state
+// holds names (config_delegation.go); a recovery key's statements are TEAM-M2-05's, refused until its rule lands.
 func (self *ConfigState) verifySigner(signed *bridge.Signed, purpose string, signedType bridge.SignedType, timeMs int64) (ConfigSigner, error) {
 	signerIdSize, keyIdSize := len(signed.GetSignerId()), len(signed.GetKeyId())
 	switch {
@@ -666,7 +664,7 @@ func (self *ConfigState) verifySigner(signed *bridge.Signed, purpose string, sig
 	case signerIdSize == len(Id{}) && keyIdSize == sha256.Size:
 		return ConfigSigner{}, fmt.Errorf("%w: a recovery key's statement waits on TEAM-M2-05's recovery rules", ErrConfigRuleMissing)
 	case signerIdSize == configDelegationIdByteCount && keyIdSize == sha256.Size:
-		return ConfigSigner{}, fmt.Errorf("%w: a Delegation's statement waits on TEAM-M2-04's delegation rule", ErrConfigRuleMissing)
+		return self.verifyDelegationSigner(signed, purpose, signedType)
 	}
 	return ConfigSigner{}, fmt.Errorf("%w: signer_id of %d bytes and key_id of %d", ErrConfigSigner, signerIdSize, keyIdSize)
 }

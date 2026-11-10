@@ -270,8 +270,6 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_OUT, body: &protocol.AuditOptOut{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_KEY_REGISTER, body: &protocol.KeyRegister{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_RECOVERY_BIND, body: &protocol.RecoveryBind{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_DELEGATION, body: &protocol.Delegation{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_DELEGATION_REVOKE, body: &protocol.DelegationRevoke{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_SPONSOR_SET, body: &protocol.SponsorSet{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_INDEXER_SET, body: &protocol.IndexerSet{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_RECOVERY_VETO, body: &protocol.RecoveryVeto{Header: net.header()}, want: ErrConfigRuleMissing},
@@ -287,8 +285,8 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 	}
 }
 
-// A statement signed by a recovery key or a Delegation's key is refused at its signer until TEAM-M2-05 and
-// TEAM-M2-04 land; an unknown signer, a bad signature or signer ids of no known form are refused as signers.
+// A statement signed by a recovery key is refused at its signer until TEAM-M2-05 lands, and a Delegation's key signs
+// no MemberAdmit; an unknown signer, a bad signature or signer ids of no known form are refused as signers.
 func TestSignersOfOtherKindsAreRefused(t *testing.T) {
 	net := newTestConfigNet(t)
 	body := testConfigMarshal(t, net.memberAdmitStatement("recovered"))
@@ -301,7 +299,7 @@ func TestSignersOfOtherKindsAreRefused(t *testing.T) {
 		want   error
 	}{
 		{name: "a recovery key", signed: wrap(net.ownerMemberId.Bytes(), make([]byte, 32), make([]byte, 64)), want: ErrConfigRuleMissing},
-		{name: "a Delegation", signed: wrap(make([]byte, 32), make([]byte, 32), make([]byte, 64)), want: ErrConfigRuleMissing},
+		{name: "a Delegation", signed: wrap(make([]byte, 32), make([]byte, 32), make([]byte, 64)), want: ErrConfigSigner},
 		{name: "no signer_id", signed: wrap(nil, nil, make([]byte, 64)), want: ErrConfigSigner},
 		{name: "a bad signature", signed: wrap(net.owner.sidecarId.Bytes(), nil, make([]byte, 64)), want: ErrConfigSigner},
 	}

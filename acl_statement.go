@@ -397,14 +397,12 @@ func (self configAclStatementRules) targets(state *ConfigState, statement *confi
 }
 
 // An acl statement's effect on TEAM's rows at position n: an OwnerConfirm's signer and position on its sidecar's
-// row; live_since for a member device an Unsuspend left standing with no Suspend in force (§7.9's leaves row); and
-// key_dropped_at for the live Delegation that admitted a suspended agent (§10.5).
+// row, in its confirmation history, lifting a park (TEAM's configConfirmSidecar); live_since for a member device an
+// Unsuspend left standing with no Suspend in force (§7.9's leaves row); and key_dropped_at for the live Delegation that
+// admitted a suspended agent (§10.5).
 func configApplyAclEffect(next *configStateBuilder, n uint64, effect AclStatementEffect) {
 	if confirmed := effect.OwnerConfirmed; confirmed != nil {
-		if row := next.sidecarForWrite(confirmed.SidecarId); row != nil {
-			row.OwnerConfirmSigner = confirmed.Signer.Bytes()
-			row.OwnerConfirmedAt = n
-		}
+		configConfirmSidecar(next, n, configConfirmOwner, confirmed.Signer.Bytes(), confirmed.SidecarId)
 	}
 	for _, subjectId := range effect.UnsuspendedSubjectIds {
 		row := next.sidecar(subjectId)
