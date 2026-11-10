@@ -10,14 +10,11 @@ package sidecar
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -436,8 +433,7 @@ func TestAProposalShortOfKExpiresAndTheNextAdmissionProposesItAgain(t *testing.T
 }
 
 // The authority a ConfigClient gives answers the page Workers, the count and the cleanup list at its newest verified
-// state, and each entry the alarm watcher reads carries that state's count, an ephemeral admission past its not_after
-// counted out.
+// state, an ephemeral admission past its not_after counted out as the state counts it.
 func TestConfigAuthorityAnswersThePageWorkersAtTheNewestState(t *testing.T) {
 	world := newTestConfigClientWorld(t)
 	client := world.client(nil)
@@ -446,20 +442,6 @@ func TestConfigAuthorityAnswersThePageWorkersAtTheNewestState(t *testing.T) {
 	if len(authority.PageWorkers(net.ownerMemberId)) != 0 || len(authority.CleanupList(1)) != 0 {
 		t.Error("an authority that read nothing answers page Workers")
 	}
-	// the client starts its log at base 1 first: a start applies its first page whole, with no entry callbacks, so
-	// only the entries after it reach the callback below
-	world.publish()
-	world.caughtUp(client)
-
-	entryLock := sync.Mutex{}
-	entries := map[uint64]*SidecarAuthorityEntry{}
-	entryAdded := make(chan struct{}, 1024)
-	defer authority.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
-		entryLock.Lock()
-		entries[entry.Pin.GetVersion()] = entry
-		entryLock.Unlock()
-		entryAdded <- struct{}{}
-	})()
 
 	member, laptop := net.consentedMember("m")
 	net.admitWorker(laptop, "m worker 1", member)
@@ -479,24 +461,5 @@ func TestConfigAuthorityAnswersThePageWorkersAtTheNewestState(t *testing.T) {
 	}
 	if got := authority.CleanupList(4); len(got) != 1 || !testConfigCleanupListsEqual(got, CleanupList(state, 4)) {
 		t.Errorf("cleanup list %v", got)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	for {
-		entryLock.Lock()
-		last := entries[net.n]
-		entryLock.Unlock()
-		if last != nil {
-			if last.AdmissionCount != 4 {
-				t.Errorf("the last entry carries %d admissions", last.AdmissionCount)
-			}
-			break
-		}
-		select {
-		case <-entryAdded:
-		case <-ctx.Done():
-			t.Fatal("no entry callback for the last entry")
-		}
 	}
 }

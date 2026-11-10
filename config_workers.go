@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §7.10's stale and cleanup rows as the log answers them (TEAM-M4-01, D-TEAM-29, FS-97): a member's page Workers with
 // their admission positions, what config_admissions counts, and the list every admin device shows from 90% of the cap.
 // The device act that revokes stale Workers in an admission is CORE-M4-02's (identity_act_stale.go), and the cleanup
@@ -19,8 +21,10 @@
 // as one (config_authority.go's counted row); a proposal short of k closes at its not_after, and the next admission
 // proposes the revocation again as a statement of its own, which no replay row refuses.
 //
-// On every leg, the sidecar_http page Worker's included: root Id, no connect type. Nothing here creates, derives or
-// unwraps a key, so nothing calls testHookSecret.
+// On every leg but ios_extension, the sidecar_http page Worker's included: root Id, no connect type. The forwarding
+// role in an app's VPN component admits no Worker and raises no alarm, so this file stays off its leg
+// (check/testdata/ios_extension_leg.txt). Nothing here creates, derives or unwraps a key, so nothing calls
+// testHookSecret.
 
 package sidecar
 
@@ -137,7 +141,8 @@ func (self *ConfigState) AdmissionCountAt(timeMs int64) int {
 // (QD-250), which no reader can derive from the log; non-positive lists nothing. Members come in id order, and a member
 // with one Worker or none is left out. Whether this device is an admin's, and each Worker's leaf's last change where a
 // group of this device shows one, are the caller's to add (CORE-M6-04): the list is the log's alone, so every admin
-// device at one pin shows the same.
+// device at one pin shows the same. Each Worker carries its admission position; rows hold no admission time, which the
+// row also asks to show (question team-m4-01-cleanup-admission-time).
 func CleanupList(state *ConfigState, admissionCap int) []ConfigCleanupMember {
 	members := []ConfigCleanupMember{}
 	if state == nil || !configAdmissionsNearCap(state.AdmissionCount(), admissionCap) {
