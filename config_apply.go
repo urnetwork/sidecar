@@ -771,6 +771,8 @@ func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick, activations
 		}
 		if row := next.sidecar(sidecarId); row != nil && row.GetRevokedAt() == 0 {
 			next.sidecarForWrite(sidecarId).RevokedAt = next.state.n
+			// a reaped device's forwarding Delegations end with it (D-TEAM-33)
+			configEndForwarding(next, sidecarId, next.state.n)
 		}
 	}
 	for _, activation := range activations {

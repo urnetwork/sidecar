@@ -276,6 +276,7 @@ func configCheckMemberRevoke(state *ConfigState, statement *configStatement) err
 }
 
 // A MemberRevoke's effect: the member's row goes, and each of its untagged devices is revoked at this position, its
+// forwarding Delegations ending with it (D-TEAM-33), its
 // tagged agents keeping their tags with autogroup:admin as their sponsor (§7.10's Sponsors); a recovery window whose
 // subject the member is is void (§7.9's voiding row).
 func configApplyMemberRevoke(next *configStateBuilder, statement *configStatement) error {
@@ -290,10 +291,17 @@ func configApplyMemberRevoke(next *configStateBuilder, statement *configStatemen
 		return slices.Contains(configProposalSubjects(next.state, proposal), memberId)
 	})
 	next.deleteMember(memberId)
+	// collected first: revoking a row replaces the map being ranged
+	revokedIds := []Id{}
 	for sidecarId, row := range next.state.sidecars {
 		if rowMemberId, untagged := configRowMember(row); untagged && rowMemberId == memberId && row.GetRevokedAt() == 0 {
-			next.sidecarForWrite(sidecarId).RevokedAt = statement.n
+			revokedIds = append(revokedIds, sidecarId)
 		}
+	}
+	slices.SortFunc(revokedIds, Id.Cmp)
+	for _, sidecarId := range revokedIds {
+		next.sidecarForWrite(sidecarId).RevokedAt = statement.n
+		configEndForwarding(next, sidecarId, statement.n)
 	}
 	return nil
 }
@@ -638,8 +646,9 @@ func (self *ConfigState) revokeSigners(signers []ConfigSigner, admission *config
 	return fmt.Errorf("%w: no signer may revoke this device", ErrConfigAuthority)
 }
 
-// A SidecarRevoke's effect: the device revoked here unless it was already; and for lost or removed, a Delegation
-// that admitted it drops its key here, the Delegation admitting on (§10.5, D-TEAM-30).
+// A SidecarRevoke's effect: the device revoked here unless it was already, its forwarding Delegations ending with it
+// whatever the reason (D-TEAM-33); and for lost or removed, a Delegation that admitted it drops its key here, the
+// Delegation admitting on (§10.5, D-TEAM-30).
 func configApplySidecarRevoke(next *configStateBuilder, statement *configStatement) error {
 	revoke := statement.body.(*bridge.SidecarRevoke)
 	sidecarId, err := IdFromBytes(revoke.GetSidecarId())
@@ -656,6 +665,7 @@ func configApplySidecarRevoke(next *configStateBuilder, statement *configStateme
 	if row.GetRevokedAt() == 0 {
 		next.sidecarForWrite(sidecarId).RevokedAt = statement.n
 	}
+	configEndForwarding(next, sidecarId, statement.n)
 	switch revoke.GetReason() {
 	case bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED:
 		if delegationId := row.GetDelegationId(); len(delegationId) != 0 {
