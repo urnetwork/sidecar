@@ -936,6 +936,7 @@ const (
 	EvsRefusalCode_EVS_REFUSAL_SEGMENT_STALE      EvsRefusalCode = 72
 	EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING  EvsRefusalCode = 73
 	EvsRefusalCode_EVS_REFUSAL_GROUP_NOT_READY    EvsRefusalCode = 74
+	EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE         EvsRefusalCode = 75  // a PATH_EPOCH whose map's source is unknown, under another chain or of an
 	EvsRefusalCode_EVS_REFUSAL_INVALID            EvsRefusalCode = 128 // a body, statement or signature that does not parse or verify
 	EvsRefusalCode_EVS_REFUSAL_NOT_FOUND          EvsRefusalCode = 129
 	EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING      EvsRefusalCode = 130
@@ -987,6 +988,7 @@ var (
 		72:  "EVS_REFUSAL_SEGMENT_STALE",
 		73:  "EVS_REFUSAL_STATEMENT_MISSING",
 		74:  "EVS_REFUSAL_GROUP_NOT_READY",
+		75:  "EVS_REFUSAL_MAP_SOURCE",
 		128: "EVS_REFUSAL_INVALID",
 		129: "EVS_REFUSAL_NOT_FOUND",
 		130: "EVS_REFUSAL_PARTS_MISSING",
@@ -1035,6 +1037,7 @@ var (
 		"EVS_REFUSAL_SEGMENT_STALE":      72,
 		"EVS_REFUSAL_STATEMENT_MISSING":  73,
 		"EVS_REFUSAL_GROUP_NOT_READY":    74,
+		"EVS_REFUSAL_MAP_SOURCE":         75,
 		"EVS_REFUSAL_INVALID":            128,
 		"EVS_REFUSAL_NOT_FOUND":          129,
 		"EVS_REFUSAL_PARTS_MISSING":      130,
@@ -8047,7 +8050,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x0fEVS_REPO_ACTIVE\x10\x02\x12\x14\n" +
 	"\x10EVS_REPO_DELETED\x10\x03\x12\x16\n" +
 	"\x12EVS_REPO_SHREDDING\x10\x04\x12\x15\n" +
-	"\x11EVS_REPO_SHREDDED\x10\x05*\xe3\n" +
+	"\x11EVS_REPO_SHREDDED\x10\x05*\xff\n" +
 	"\n" +
 	"\x0eEvsRefusalCode\x12 \n" +
 	"\x1cEVS_REFUSAL_CODE_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -8087,7 +8090,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x15EVS_REFUSAL_DROP_KIND\x10G\x12\x1d\n" +
 	"\x19EVS_REFUSAL_SEGMENT_STALE\x10H\x12!\n" +
 	"\x1dEVS_REFUSAL_STATEMENT_MISSING\x10I\x12\x1f\n" +
-	"\x1bEVS_REFUSAL_GROUP_NOT_READY\x10J\x12\x18\n" +
+	"\x1bEVS_REFUSAL_GROUP_NOT_READY\x10J\x12\x1a\n" +
+	"\x16EVS_REFUSAL_MAP_SOURCE\x10K\x12\x18\n" +
 	"\x13EVS_REFUSAL_INVALID\x10\x80\x01\x12\x1a\n" +
 	"\x15EVS_REFUSAL_NOT_FOUND\x10\x81\x01\x12\x1e\n" +
 	"\x19EVS_REFUSAL_PARTS_MISSING\x10\x82\x01\x12\x15\n" +

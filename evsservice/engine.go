@@ -109,6 +109,9 @@ type EvsEngineDeps struct {
 	// candidates (PushView.Format2Rules). nil refuses every such push 503, so nothing commits unchecked, and a
 	// format-1 repo is never raised.
 	Format2Rules func(view *PushView) *EvsCheckRefusal
+	// EVSB-M10-01's purge (purge.go), which EVS2-M10-06's step 7 hands each certain commit's candidates. nil queues
+	// nothing, which is safe: evacuation's sweep takes every list.
+	Purge PurgeSink
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
@@ -785,7 +788,7 @@ func (self *EvsRequest) refuseStatus(status int, reply *protocol.EvsRefusalReply
 }
 
 // Writes the answer once. A 503 always carries Retry-After: a closed gate's interval, the reply's, or
-// UnavailableRetryAfter for a store or state that did not answer.
+// UnavailableRetryAfter for a store or state that did not answer. A 429 and a 507 CLUSTER_FULL carry the reply's.
 func (self *EvsRequest) write(status int, body []byte) {
 	self.answered = true
 	self.status = status
@@ -795,7 +798,8 @@ func (self *EvsRequest) write(status int, body []byte) {
 	if status == http.StatusServiceUnavailable && self.retryAfter <= 0 {
 		self.retryAfter = max(time.Second, self.engine.settings.UnavailableRetryAfter)
 	}
-	if 0 < self.retryAfter && (status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests) {
+	if 0 < self.retryAfter && (status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests ||
+		status == http.StatusInsufficientStorage) {
 		header.Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(self.retryAfter.Seconds())))))
 	}
 	self.Writer.WriteHeader(status)

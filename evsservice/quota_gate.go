@@ -19,6 +19,10 @@
 //   - CheckRead, a read by a spent network (quota_read_gate.go): its own repos at evs_unpaid_read_rate, another
 //     network's not at all. A storage limit never touches a read.
 //
+// A metadata cluster at §19.9's cohort limit holds every repo placed on it to what the limit accepts
+// (cluster_limit.go): QuotaRefusesAtLimit classifies a push alone, and ChargeClosureAtClusterLimit and
+// ChargeClosureRecordsOn hold its closure uploads and records to the closure bounds as at the limit.
+//
 // Below the limit and not spent, closure uploads and records are ordinary payload, counted nowhere here.
 // Storage quotas are soft (owner decisions 2, 10): until the first list is read, and while reads fail, the
 // last list stands, none at first, so a gate that cannot read errs toward accepting, as CountRate fails open
@@ -199,29 +203,32 @@ func (self *QuotaGate) CheckUpload(networkId connect.Id, reseed bool) *sidecar.Q
 // Step 5c's check: nil accepts the push. See the file header. No I/O.
 func (self *QuotaGate) CheckPush(push *QuotaPush) *sidecar.QuotaRefusal {
 	refusal := self.refusal(push.NetworkId)
-	switch {
-	case refusal == nil:
-		return nil
-	case push.Authorization || push.Lifecycle:
-		return nil
-	case push.Flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) != 0:
-		// its inline records spend the eraser's allowance through ChargeClosureRecords, and its uploads
-		// were charged through ChargeClosure
-		return nil
-	case push.Flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP|protocol.EvsPushFlag_EVS_PUSH_CUT) != 0:
-		// a drop or its cancel, or a CUT whose one staged record replaces its ref's erasure set: accepted
-		// while it uploads no segment
-		if push.NewSegmentCount == 0 {
-			return nil
-		}
-		return refusal
-	case push.Flags&quotaMaintenanceFlags != 0 && push.NewSegmentCount == 0 && push.InlineRecordCount == 0:
-		return nil
-	case push.NewSegmentCount == 0 && push.InlineRecordCount == 0:
-		// adds no payload
+	if refusal == nil || !QuotaRefusesAtLimit(push) {
 		return nil
 	}
 	return refusal
+}
+
+// Whether §20.7's storage limit refuses the push, as it does for a network at its limit or spent and, through the
+// cohort limit, for every repo of a full cluster (cluster_limit.go): it names a new segment or inline record and is
+// none of what the limit accepts. Pure.
+func QuotaRefusesAtLimit(push *QuotaPush) bool {
+	switch {
+	case push.Authorization || push.Lifecycle:
+		return false
+	case push.Flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) != 0:
+		// its inline records spend the eraser's allowance through ChargeClosureRecords, and its uploads
+		// were charged through ChargeClosure
+		return false
+	case push.Flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP|protocol.EvsPushFlag_EVS_PUSH_CUT) != 0:
+		// a drop or its cancel, or a CUT whose one staged record replaces its ref's erasure set: accepted
+		// while it uploads no segment
+		return push.NewSegmentCount != 0
+	case push.Flags&quotaMaintenanceFlags != 0 && push.NewSegmentCount == 0 && push.InlineRecordCount == 0:
+		return false
+	}
+	// a push that adds no payload passes whatever its flags
+	return push.NewSegmentCount != 0 || push.InlineRecordCount != 0
 }
 
 // A ?closure=1 upload of byteCount by eraserId, the token's sidecar, to a repo of the network. Below the limit
@@ -246,10 +253,35 @@ func (self *QuotaGate) ChargeClosure(ctx context.Context, networkId connect.Id, 
 // A CLOSURE push's inline records of byteCount by eraserId at the limit or while spent: the eraser's daily
 // allowance alone (§20.7's allow row). Below the limit and not spent, nil with no host call.
 func (self *QuotaGate) ChargeClosureRecords(ctx context.Context, networkId connect.Id, eraserId connect.Id, byteCount int64, debitId connect.Id) (*sidecar.QuotaRefusal, error) {
-	if self.refusal(networkId) == nil || byteCount <= 0 {
+	return self.ChargeClosureRecordsOn(ctx, networkId, eraserId, byteCount, debitId, false)
+}
+
+// ChargeClosureRecords for a repo whose cluster stands at its cohort limit when clusterFull, which holds the
+// records to the eraser's allowance as the storage limit does, whatever the network's own state (cluster_limit.go).
+func (self *QuotaGate) ChargeClosureRecordsOn(ctx context.Context, networkId connect.Id, eraserId connect.Id, byteCount int64, debitId connect.Id, clusterFull bool) (*sidecar.QuotaRefusal, error) {
+	if (self.refusal(networkId) == nil && !clusterFull) || byteCount <= 0 {
 		return nil, nil
 	}
 	return self.quota.CountRate(ctx, networkId, map[string]int64{
 		sidecar.QuotaRateKeyClosureBytes(eraserId): byteCount,
 	}, debitId)
+}
+
+// ChargeClosure for a repo on a cluster at its cohort limit, which holds a closure upload to the storage limit's
+// closure bounds whatever the network's own state (cluster_limit.go). A network at its own limit or spent is answered
+// as ChargeClosure answers it. Otherwise oversize is true for an upload past QuotaClosureUploadMaxByteCount, which
+// the cohort limit refuses 507, and refusal is the eraser's rate, pacing or allowance, a 429.
+func (self *QuotaGate) ChargeClosureAtClusterLimit(ctx context.Context, networkId connect.Id, eraserId connect.Id, byteCount int64, debitId connect.Id) (refusal *sidecar.QuotaRefusal, oversize bool, err error) {
+	if self.refusal(networkId) != nil {
+		refusal, err := self.ChargeClosure(ctx, networkId, eraserId, byteCount, debitId)
+		return refusal, false, err
+	}
+	if byteCount < 0 || sidecar.QuotaClosureUploadMaxByteCount < byteCount {
+		return nil, true, nil
+	}
+	refusal, err = self.quota.CountRate(ctx, networkId, map[string]int64{
+		sidecar.QuotaRateKeyClosureUpload(eraserId): 1,
+		sidecar.QuotaRateKeyClosureBytes(eraserId):  byteCount,
+	}, debitId)
+	return refusal, false, err
 }

@@ -230,6 +230,10 @@ type EvsSettings struct {
 	CopyRunMoveCount int
 	// The log pages a copy reads looking for its PATH_EPOCH once the window paged it out, for the tail: 16. Positive.
 	CopyLogPageCount int
+	// DESIGN-DETAILS 9.2.6's source rule: how far below the window a PATH_EPOCH's map source may lie, in log pages
+	// counted down from the one just below it, of which its check reads the one holding the source, a cached GET
+	// of at most 70 KiB: 1. Non-positive reads none, so only a source the window holds commits.
+	MapSourcePageCount int
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -303,6 +307,7 @@ func DefaultEvsSettings() *EvsSettings {
 		CopyListPageCount:           1000,
 		CopyRunMoveCount:            10 * 1000,
 		CopyLogPageCount:            16,
+		MapSourcePageCount:          1,
 	}
 }
 

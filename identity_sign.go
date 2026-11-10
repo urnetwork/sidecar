@@ -94,7 +94,8 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 
 // §6.9's Signed over body, as signedType under purpose, by this sidecar's identity key, signer_id its sidecar_id.
 // Refuses, before reading any key, a pair the identity key does not sign (ErrSidecarSignRefused) and, on a read_only
-// device, a statement verifiers refuse from one (ErrSidecarSignReadOnly); answers a clean
+// device, a statement verifiers refuse from one (ErrSidecarSignReadOnly); on a device recovering by code, anything but
+// its ReaderKey and its sign-out until its recovery anchor passes (ErrSidecarRecoveryUnanchored); answers a clean
 // error wrapping ErrSidecarStoreLocked while Locked, and ErrSidecarNoIdentity before enrollment. agentId is the
 // caller's provenance label (source = agent_asserted, §5.5): until CORE-M6-03's subkeys it selects no key, so the
 // identity key signs whatever it names. body is copied.
@@ -126,6 +127,10 @@ func (self *Sidecar) Sign(purpose string, signedType bridge.SignedType, body []b
 	}
 	if secrets == nil {
 		return nil, fmt.Errorf("sign: %w", ErrSidecarNoIdentity)
+	}
+	// a code-only recovery acts only once its anchor passes (identity_recover.go)
+	if err := self.checkRecoveryAnchorSign(secrets, signedType, body); err != nil {
+		return nil, err
 	}
 	record, err := loadSidecarIdentity(secrets)
 	if err != nil {

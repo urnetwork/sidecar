@@ -1,7 +1,7 @@
 // ur login (§5.6, §7.8, D-TEAM-7): TEAM-M1-08's ur-cli mints a single-use, user-owned auth key of at most 5 min in
 // this process, never through the daemon or MCP; ur drops the OAuth token at once, hands the key to the daemon over
 // the control socket, and then offers to register a presence key through §16's hook. ur-cli is urcli_login.go's
-// (C-14). --recover is CORE-M2-06's code-only recovery, refused until it lands. Into a further network, the daemon
+// (C-14). --recover is CORE-M2-06's code-only recovery (cmd_login_recover.go). Into a further network, the daemon
 // enrolls one more Sidecar beside the others (CORE-M6-01); --network re-enrolls a network it holds by name.
 
 package main
@@ -24,7 +24,7 @@ func init() {
 
 func runUrLogin(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if recover, _ := options.Bool("--recover"); recover {
-		return errors.New("code-only recovery is not built yet")
+		return runUrLoginRecover(ctx, cli, options)
 	}
 	if cli.login == nil {
 		return errors.New("ur login needs ur-cli, which is not built yet: use ur connect --token")

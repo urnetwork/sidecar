@@ -12,6 +12,11 @@
 //	delete   a minute whose every batch was read, whose every record was settled and whose every repo moved: the
 //	         new slots its dead records list, then each of its batches, whole (I-EVS-7)
 //
+// At format 2 (EvsSettings.InstanceFormat) a run reads batches of either format, and a kept format-2 record's tail is
+// settled before its batch goes: each staged segment written to seg/ or dropped (evacuate_staged.go), then its purge
+// list swept (sweep.go), the record moving to its container without its staged bytes. A format-1 instance leaves a
+// format-2 batch, alarming (FS-72).
+//
 // Nothing is deleted on a doubt. A batch of a format this build does not know, a batch whose bytes fail its trailer,
 // a record whose repo/ cannot be read, a pending record whose ref could not be fenced and a repo whose move failed
 // each leave their whole minute where it is, alarmed, for a later run: a minute's batches go together or not at
@@ -158,6 +163,12 @@ type EvacuatorDeps struct {
 	EvsSettings *EvsSettings
 	// Alarms and what a run did. nil discards.
 	Log sidecar.Logger
+	// Format 2 (EVSB-M10-02): §19.11's purge mode the sweep reads, nil reading observe; the path's newest version,
+	// nil reading it through the evacuator's own head store and record cache; and taskworker's usage producer for
+	// the staged content a run drops or writes only for a hold, nil reporting nothing and alarming.
+	Format2 Format2Gate
+	Newest  PurgeNewestReader
+	Usage   StoredDeltaSink
 	// a test's: called at each barrier, an error stopping the run there as a kill would
 	atStep func(name string, key string) error
 }
@@ -187,6 +198,10 @@ type EvacuationResult struct {
 	PackedLogPageCount  int
 	// New slots of dead records deleted.
 	SlotDeletedCount int
+	// Format 2: staged segments written to seg/ and dropped, and what the sweep of kept records' lists did.
+	StagedWrittenCount int
+	StagedDroppedCount int
+	Swept              SweepResult
 	// Due minutes remain past this run's bounds: the job queues its next run at once.
 	More bool
 	// The age of the oldest batch still on the cluster as the run ended, and false when it holds none: §19.8's
@@ -212,9 +227,15 @@ type Evacuator struct {
 	logPages   *LogPageCache
 	locator    *RecordLocator
 	holds      *HoldCache
+	// format 2's: §19.11's purge mode, the path's newest version for the staged decisions, and the sweep of kept
+	// records' lists
+	format2 Format2Gate
+	newest  PurgeNewestReader
+	sweep   *Sweep
 
 	oldestBatchGauge sidecar.MetricsGauge
 	recordsCounter   sidecar.MetricsCounter
+	stagedCounter    sidecar.MetricsCounter
 }
 
 // An evacuator on host, which needs Blobs and a write budget, since no metadata write may go unpriced (§11.13). Its
@@ -270,9 +291,31 @@ func NewEvacuator(host *sidecar.ServiceHost, deps *EvacuatorDeps) (*Evacuator, e
 		locator:     NewRecordLocator(blobs, nil),
 		holds:       holds,
 	}
+	self.format2 = deps.Format2
+	if self.format2 == nil {
+		self.format2 = ClosedFormat2Gate{}
+	}
+	self.newest = deps.Newest
+	if self.newest == nil {
+		self.newest = &headPurgeNewest{heads: self.heads, records: NewRecordCache(evsSettings)}
+	}
+	sweep, err := NewSweep(host, &SweepDeps{
+		Format2:     deps.Format2,
+		Newest:      self.newest,
+		Holds:       holds,
+		EvsSettings: evsSettings,
+		ListLimit:   settings.ListLimit,
+		Log:         log,
+		atStep:      deps.atStep,
+	})
+	if err != nil {
+		return nil, err
+	}
+	self.sweep = sweep
 	if host.Metrics != nil {
 		self.oldestBatchGauge = host.Metrics.Gauge(evacuateOldestBatchMetricName, "Age of the oldest batch still on a metadata cluster, seconds.", "cluster")
 		self.recordsCounter = host.Metrics.Counter(evacuateRecordsMetricName, "Batch records evacuation resolved, by outcome.", "cluster", "outcome")
+		self.stagedCounter = host.Metrics.Counter(versionlessStagedMetricName, "Staged versionless segments evacuation decided, by outcome.", "outcome")
 	}
 	return self, nil
 }
@@ -594,11 +637,17 @@ func (self *evacuateRun) resolveMinute(minute *evacuateMinute) {
 			continue
 		}
 		self.result.BatchCount += 1
-		parsed, err := sidecar.ParseEvsBatch(batchBytes)
+		// an instance at format 2 reads batches of either format and settles format-2 records' tails
+		// (evacuate_staged.go, sweep.go); one at format 1 leaves a format-2 batch, alarming (FS-72)
+		var parsed *sidecar.EvsBatch
+		if sidecar.EvsRepoFormat2 <= self.evacuator.evsSettings.InstanceFormat {
+			parsed, err = sidecar.ParseEvsBatchFormat2(batchBytes)
+		} else {
+			parsed, err = sidecar.ParseEvsBatch(batchBytes)
+		}
 		switch {
 		case errors.Is(err, sidecar.ErrEvsFormatUnsupported):
-			// §11.8's bytes row: an evacuator that does not know a batch's format leaves it, alarming. Format
-			// 2's staged decisions and sweep are EVSB-M10-02's.
+			// §11.8's bytes row: an evacuator that does not know a batch's format leaves it, alarming
 			minute.wait("batch format")
 			self.alarm("evacuate_batch_format", batch.key, "batch %s on cluster %s is of a format this evacuator does not know: it stays", batch.key, self.clusterId)
 			continue
@@ -617,7 +666,11 @@ func (self *evacuateRun) resolveMinute(minute *evacuateMinute) {
 		for i, record := range parsed.Records {
 			place := parsed.Places[i]
 			recordBytes := batchBytes[place.GetOffset() : place.GetOffset()+place.GetLength()]
-			self.resolveRecord(minute, place, record, recordBytes)
+			var tail *sidecar.EvsBatchRecordTail
+			if i < len(parsed.Tails) {
+				tail = parsed.Tails[i]
+			}
+			self.resolveRecord(minute, place, record, tail, recordBytes)
 			if self.stopped() {
 				minute.wait("stopped")
 				return

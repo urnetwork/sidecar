@@ -1091,8 +1091,12 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 	return checked, checkedParts, nil
 }
 
-// A path map part's bound (§11.6's EvsPathMap).
-const EvsPathMapMaxByteCount = 8 * 1024 * 1024
+// A path map's bounds (§11.6's EvsPathMap; DESIGN-DETAILS 9.2.2's map row): a part at most 8 MiB signed, and a map
+// at most 1,024 parts.
+const (
+	EvsPathMapMaxByteCount = 8 * 1024 * 1024
+	EvsPathMapMaxPartCount = 1024
+)
 
 // An upload receipt's bytes as a push carries one back (§11.13), held to its shape: a repo and uploader id, a 32 B
 // segment id, a Padmé size within 8 MiB, an upload time and a 16 B MAC. The MAC itself is evs's to check with its
@@ -1125,8 +1129,9 @@ func decodeEvsUploadReceiptOf(receiptBytes []byte, format2 bool) (*protocol.EvsU
 }
 
 // A Signed EvsPathMap part's bytes held to its shape (§11.6's map row): at most 8 MiB, an identity key's statement of
-// type SIGNED_EVS_PATH_MAP, for a repo and ref, a new epoch past 1, a part within its count, a source head, and moves
-// each with a new token path, sources of older epochs and a sealed name. Its signature is the caller's to check.
+// type SIGNED_EVS_PATH_MAP, for a repo and ref, a new epoch past 1, a part within its count of at most 1,024, a source
+// head, and moves each with a new token path, sources of older epochs and a sealed name. Its signature is the
+// caller's to check, and the moves' order across parts the copy's (DESIGN-DETAILS 9.2.6).
 func ParseEvsPathMap(signedBytes []byte) (*bridge.Signed, *protocol.EvsPathMap, error) {
 	if EvsPathMapMaxByteCount < len(signedBytes) {
 		return nil, nil, fmt.Errorf("%w: a map part of %d bytes", ErrEvsPushInvalid, len(signedBytes))
@@ -1140,7 +1145,8 @@ func ParseEvsPathMap(signedBytes []byte) (*bridge.Signed, *protocol.EvsPathMap, 
 		return nil, nil, fmt.Errorf("%w: a path map that does not parse", ErrEvsPushInvalid)
 	}
 	if len(pathMap.GetRepoId()) != 16 || len(pathMap.GetRefId()) != 16 || pathMap.GetPathEpoch() < 2 ||
-		pathMap.GetPart() == 0 || pathMap.GetParts() < pathMap.GetPart() || len(pathMap.GetSourceChain()) != sha256.Size {
+		pathMap.GetPart() == 0 || pathMap.GetParts() < pathMap.GetPart() || EvsPathMapMaxPartCount < pathMap.GetParts() ||
+		len(pathMap.GetSourceChain()) != sha256.Size {
 		return nil, nil, fmt.Errorf("%w: a path map out of shape", ErrEvsPushInvalid)
 	}
 	for _, move := range pathMap.GetMoves() {

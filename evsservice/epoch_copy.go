@@ -3,11 +3,16 @@
 // drops them by a fence write. It is P2 work of rank copy, unfunded (§11.13): each write is paid before it is issued
 // and rereads repo/ as it issues.
 //
-//	moves    the newest map's moves, from the parts at pmap/<repo>/<ref>/<p>/<map>/ that the head's newest source
-//	         names, and the PATH_EPOCH push's tail, in descending token-path order, so a directory moves after its
-//	         children: each reads the entry from the newest source holding it, keeps its folded versions, marker and
-//	         drop mark, rewrites a directory's rows from its children's moves, each row matched in its own epoch, PUTs
-//	         it If-None-Match, carried from that source, and deletes every source copy, only once the new one exists
+//	map      the newest map's parts, at pmap/<repo>/<ref>/<p>/<map>/ that the head's newest source names, are read
+//	         in part order, hashed against that source's map_sha256 and held to DESIGN-DETAILS 9.2.2's order (moves
+//	         ascending by new token path within and across parts, the parts agreeing on their count and source)
+//	         before any move is made: a mismatch moves nothing and ends the run ErrEvsCopyMapInvalid, alarmed, the
+//	         source staying listed (question details-9-map-verifiers)
+//	moves    the map's moves and the PATH_EPOCH push's tail, in descending token-path order, so a directory moves
+//	         after its children: each reads the entry from the newest source holding it, keeps its folded versions,
+//	         marker and drop mark, rewrites a directory's rows from its children's moves, each row matched in its own
+//	         epoch, PUTs it If-None-Match, carried from that source, and deletes every source copy, only once the new
+//	         one exists
 //	412      a current entry already there: a file's, a removed or a fresh one is done, its source copies deleted
 //	         unmoved; a carried directory's carried rows are translated and the entry PUT If-Match, read again on 412
 //	prefixes after each PUT the path's prefixes' current entries are HEADed, and under a removed or fresh one what it
@@ -55,6 +60,11 @@ const EvsEpochCopyTaskName = "evs.epoch_copy"
 // A move read again past CopyMoveRetryCount times, or a fence write that lost FenceRetryCount races: the run ends, and
 // its retry resumes.
 var ErrEvsCopyBusy = errors.New("evs copy busy")
+
+// The newest map's parts do not hash to the map_sha256 its source names, break DESIGN-DETAILS 9.2.2's order, or are
+// not this ref's map: the run moved nothing and alarmed, and the source stays listed until a newer map supersedes
+// this one.
+var ErrEvsCopyMapInvalid = errors.New("evs copy map invalid")
 
 // An args body: repo id, ref id, then the epoch the copy moves into, 8 bytes big-endian.
 const evsEpochCopyArgsByteCount = 16 + 16 + 8
@@ -308,10 +318,19 @@ func (self *copyRun) ready() error {
 	return nil
 }
 
-// The newest map's moves and the PATH_EPOCH push's tail.
+// The newest map's moves and the PATH_EPOCH push's tail, the map checked whole first: see the file header's map row.
 func (self *copyRun) loadMoves() error {
 	mapSha256 := self.head.Head.GetPathEpoch().GetSources()[0].GetMapSha256()
+	invalid := func(detail string) error {
+		self.log.Errorf("[evs] alarm copy_map: repo %s ref %s epoch %d: %s; nothing moved, the source kept",
+			sidecar.EvsKeyId(self.repoId), sidecar.EvsKeyId(self.refId), self.epoch, detail)
+		return fmt.Errorf("%w: %s", ErrEvsCopyMapInvalid, detail)
+	}
+	hasher := sidecar.NewEvsPathMapHasher()
 	moveItems := [][]byte{}
+	var first *protocol.EvsPathMap
+	var previous sidecar.EvsTokenPath
+	ordered := false
 	parts := uint32(1)
 	for part := uint32(1); part <= parts; part += 1 {
 		if err := self.pace(); err != nil {
@@ -326,21 +345,37 @@ func (self *copyRun) loadMoves() error {
 		if err != nil {
 			return err
 		}
+		hasher.Add(partBytes)
 		_, pathMap, err := sidecar.ParseEvsPathMap(partBytes)
 		if err != nil || sidecar.Id(pathMap.GetRepoId()) != self.repoId || sidecar.Id(pathMap.GetRefId()) != self.refId ||
 			pathMap.GetPathEpoch() != self.epoch || pathMap.GetPart() != part {
-			return fmt.Errorf("%w: a map part that is not this ref's", ErrEvsIndexEntryInvalid)
+			return invalid(fmt.Sprintf("part %d is not this ref's map's", part))
 		}
-		if part == 1 {
+		if first == nil {
+			first = pathMap
 			parts = max(1, pathMap.GetParts())
+		} else if pathMap.GetParts() != first.GetParts() || pathMap.GetSourceVersion() != first.GetSourceVersion() ||
+			!bytes.Equal(pathMap.GetSourceChain(), first.GetSourceChain()) {
+			return invalid(fmt.Sprintf("part %d names another count or source than part 1", part))
 		}
 		for _, move := range pathMap.GetMoves() {
+			newPath, err := sidecar.ParseEvsTokenPath(move.GetNewTokenPath())
+			if err != nil {
+				return invalid(fmt.Sprintf("part %d holds a move that does not parse", part))
+			}
+			if ordered && newPath.Compare(previous) <= 0 {
+				return invalid(fmt.Sprintf("part %d holds moves out of order", part))
+			}
+			previous, ordered = newPath, true
 			moveBytes, err := proto.Marshal(move)
 			if err != nil {
 				return err
 			}
 			moveItems = append(moveItems, moveBytes)
 		}
+	}
+	if !bytes.Equal(hasher.Sum(), mapSha256) {
+		return invalid(fmt.Sprintf("%d parts that do not hash to the map's map_sha256", hasher.PartCount()))
 	}
 	tail, found, err := self.tailMoves(mapSha256)
 	if err != nil {

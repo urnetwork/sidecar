@@ -8,7 +8,7 @@
 //	c  check_refs.go: repo/ active, the refs table (scope, ref kind, mode, owner, IMMUTABLE, creates-only refs, the
 //	   flags each ref kind takes), and the storage limit through QuotaGate
 //	d  check_gate.go: §10.6's predicate against the newest state, and no pin below the head's
-//	e  check_cas.go: the path epoch, and creation while it is due or blocked
+//	e  check_cas.go: the path epoch, and creation while it is due or blocked or in the push crossing a due that blocks
 //	f  check_cas.go: git mode b = v with no other live lease; file mode b >= v - 63 with C_b the history's
 //	g  check_cas.go: each changed file's newest version is its base, each new version follows the versions rule,
 //	   directory deltas merge but for the two-way check of a removed directory, and the directory bound
@@ -127,12 +127,17 @@ type PushView struct {
 	NetworkId sidecar.Id
 	// The storage limit: QuotaGate. nil refuses 503, since no push may go unclassified.
 	Quota EvsQuotaChecker
-	// The repo's metadata cluster stands at §19.9's cohort limit, so the storage limit answers 507.
-	ClusterFull bool
+	// The repo's metadata cluster stands at §19.9's cohort limit (cluster_limit.go), so what the storage limit
+	// refuses answers 507 CLUSTER_FULL, carrying ClusterFullRetryAfter, whatever the network's own state.
+	ClusterFull           bool
+	ClusterFullRetryAfter time.Duration
 
 	// EVS1-M2-16's PATH_EPOCH commit rules: map parts, source binding, tail and fold (§11.6's commit row). nil refuses
 	// every PATH_EPOCH push 503.
 	PathEpochRules func(view *PushView) *EvsCheckRefusal
+	// The due this push's own commit would record over Head (epoch_commit.go), nil for none: 5e refuses a creation
+	// when it blocks, DESIGN-DETAILS 9.2.6's crossing creation, and the refusal's fence write records it.
+	CrossingDue *pathEpochDue
 	// EVS1-M2-20's ERASE and CLOSURE rules: the slots step 4 read, NOTHING_TO_ERASE, the slots a CLOSURE lists and its
 	// chains' bound (§11.12). nil refuses every ERASE and CLOSURE 503.
 	ErasureRules func(view *PushView) *EvsCheckRefusal

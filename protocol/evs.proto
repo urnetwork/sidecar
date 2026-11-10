@@ -400,6 +400,9 @@ enum EvsRefusalCode {
   EVS_REFUSAL_SEGMENT_STALE = 72;
   EVS_REFUSAL_STATEMENT_MISSING = 73;
   EVS_REFUSAL_GROUP_NOT_READY = 74;
+  EVS_REFUSAL_MAP_SOURCE = 75;          // a PATH_EPOCH whose map's source is unknown, under another chain or of an
+                                        // epoch no longer current, or a map part whose key holds other bytes: the
+                                        // mapper maps again, where MAP_PARTS uploads again (DESIGN-DETAILS 9.2.6)
 
   EVS_REFUSAL_INVALID = 128;            // a body, statement or signature that does not parse or verify
   EVS_REFUSAL_NOT_FOUND = 129;

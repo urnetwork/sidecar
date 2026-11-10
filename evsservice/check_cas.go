@@ -2,9 +2,12 @@
 //
 //	5e  a push names the head's current path epoch (1 for a ref with no head), an older or other one getting final
 //	    412 PATH_EPOCH, on which the client re-tokenizes; a push creating a path (a change on base 0, or a directory
-//	    add) while the head's due_blocks_creation holds, or before its block_until_ms, gets 412 PATH_EPOCH_DUE,
-//	    recorded. A PATH_EPOCH push's own rules (map parts, source binding, tail, fold) are EVS1-M2-16's, through
-//	    PushView.PathEpochRules.
+//	    add) while the head's due_blocks_creation holds, or before its block_until_ms, or whose own commit would
+//	    record a due that blocks creation (DESIGN-DETAILS 9.2.6's crossing creation, PushView.CrossingDue), gets 412
+//	    PATH_EPOCH_DUE, recorded, the refusal's fence write recording that due as the commit would have (refuse.go).
+//	    A ref with no head is exempt from both, as its first push must create and no PATH_EPOCH commits on a ref
+//	    with no head (a reading, raised as question evs1-m2-44-new-ref-crossing). A PATH_EPOCH push's own rules (map
+//	    parts, source binding, tail, fold) are EVS1-M2-16's, through PushView.PathEpochRules.
 //	5f  git mode: b = v (TIP), else final 409 non-fast-forward, and no other push's live seal lease, else 429 with
 //	    the lease's remaining time, refusing nothing; file mode: v - 63 <= b <= v, so the push lands within
 //	    (b, b+64], else final 409 BASE_STALE, which on the caller's own deposit ref carries its head
@@ -53,8 +56,9 @@ func CheckPathEpoch(view *PushView) *EvsCheckRefusal {
 		return nil
 	}
 	pathEpoch := view.Head.GetPathEpoch()
-	if pathEpoch.GetDueBlocksCreation() || view.Now.UnixMilli() < pathEpoch.GetBlockUntilMs() {
-		refusal := newEvsCheckRefusal(EvsCheckReasonPathEpochDue, "a creation while the path epoch is due or blocked")
+	crossing := view.CrossingDue != nil && view.CrossingDue.blocks
+	if crossing || pathEpoch.GetDueBlocksCreation() || view.Now.UnixMilli() < pathEpoch.GetBlockUntilMs() {
+		refusal := newEvsCheckRefusal(EvsCheckReasonPathEpochDue, "a creation while the path epoch is due or blocked, or crossing a due that blocks it")
 		for _, change := range view.Payload.Changes {
 			if change.Change.GetBaseEntryVersion() == 0 && change.WritesEntry() {
 				refusal.Paths = append(refusal.Paths, change.TokenPath)
