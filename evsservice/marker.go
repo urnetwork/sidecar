@@ -13,8 +13,10 @@
 // none of them until FoldCollectMargin (150 ms) past until_ms by its own clock, and none at all on an unsure clock; a
 // 404 needs no wait, a window deleting a key once.
 //
-// Format 1 writes no carried ids (a versionless file's kind-5 segments and slots, plan-EVS2-marker-carried-ids): its
-// markers carry none, and a marker read with them keeps them.
+// Carried ids (a versionless file's kind-5 segments and slots; D-EVS-40): a marker written below a removed directory,
+// by this LIST or by a planned path's own merge, over a versionless file the removing push did not list carries
+// that file's newest version's ids, with an alarm, for its collection to delete (fold_format2.go). Format 1 has no
+// versionless file, so its markers carry none, and a marker read with them keeps them.
 
 package evsservice
 
@@ -125,6 +127,9 @@ func (self *foldRun) markEntry(tokenPath sidecar.EvsTokenPath, removal *foldRemo
 			LeafPart:       removal.leaf.part,
 			LeafIndex:      removal.leaf.index,
 		}
+		// no change of the range names the path, the removing push's included: a versionless file here is one that
+		// push did not list (fold_format2.go)
+		carryUnlistedIds(marked.Marker, read.Entry, self.folder.log, "a removed directory's LIST")
 		state := EvsEntryStateValue{}
 		if self.sources {
 			state = EvsEntryStateValue{State: EvsEntryStateRemoved}
