@@ -237,19 +237,39 @@ func TestEvsHistoryWalksVersions(t *testing.T) {
 	}
 }
 
-// A format-2 read state answers FORMAT_UNSUPPORTED for that path, never a fork or tampering.
+// Each format-2 read state (collected, drop_pending and dropped; EVS2-M2-01) answers FORMAT_UNSUPPORTED, which every
+// reply carries as needs_format 2, for that path, never a fork or tampering, as does each of a drop's fields beside a
+// state this reader knows.
 func TestEvsFormatTwoReadStateUnsupported(t *testing.T) {
-	world := newEvsTestWorld(t)
-	world.push(&evsTestChange{path: "a.txt", content: []byte("one")})
-	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
-		reply.State = protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED
+	mutations := map[string]func(reply *protocol.EvsReadPathReply){
+		"collected": func(reply *protocol.EvsReadPathReply) {
+			reply.State = protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED
+		},
+		"drop_pending": func(reply *protocol.EvsReadPathReply) {
+			reply.State = protocol.EvsReadPathState_EVS_READ_PATH_DROP_PENDING
+		},
+		"dropped":            func(reply *protocol.EvsReadPathReply) { reply.State = protocol.EvsReadPathState_EVS_READ_PATH_DROPPED },
+		"a drop id":          func(reply *protocol.EvsReadPathReply) { reply.DropId = make([]byte, 16) },
+		"a drop time":        func(reply *protocol.EvsReadPathReply) { reply.NotBeforeMs = 1 },
+		"a drop's version":   func(reply *protocol.EvsReadPathReply) { reply.DropVersion = 1 },
+		"a drop's statement": func(reply *protocol.EvsReadPathReply) { reply.DropStatement = []byte("statement") },
+		"a drop's body":      func(reply *protocol.EvsReadPathReply) { reply.DropBody = []byte("body") },
 	}
-	reader := world.reader(t, evsTestId("reader"))
-	if _, _, err := evsTestRead(t, reader, world, "a.txt"); !errors.Is(err, ErrEvsFormatUnsupported) {
-		t.Fatalf("a format-2 state: %v", err)
-	}
-	if 0 < len(reader.eventsOf(SidecarEventEvsAlarm))+len(reader.eventsOf(SidecarEventHeadAlarm)) {
-		t.Errorf("a format-2 state alarmed")
+	for name, mutate := range mutations {
+		world := newEvsTestWorld(t)
+		world.push(&evsTestChange{path: "a.txt", content: []byte("one")})
+		world.mutatePath = mutate
+		reader := world.reader(t, evsTestId("reader"))
+		_, _, err := evsTestRead(t, reader, world, "a.txt")
+		if !errors.Is(err, ErrEvsFormatUnsupported) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if EvsRefusalCodeOf(err) != protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED {
+			t.Errorf("%s: answered %s", name, EvsRefusalCodeOf(err))
+		}
+		if 0 < len(reader.eventsOf(SidecarEventEvsAlarm))+len(reader.eventsOf(SidecarEventHeadAlarm)) {
+			t.Errorf("%s: a format-2 state alarmed", name)
+		}
 	}
 }
 

@@ -657,6 +657,20 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		daemon.Close()
 		return err
 	}
+	// §16.7's restore points and ingest: each network's Sidecar.Record writes the entries, and the points hold
+	// each PreToolUse's paths
+	home, _ := os.UserHomeDir()
+	ingest := mcp.NewIngest(&mcp.IngestArgs{
+		Server:  mcpServer,
+		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
+		Home:    home,
+		Record:  settings.Record,
+	})
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ingest.Close(closeCtx)
+	}()
 	// ur hook's hook.event, which shares the server's run bindings (§16.7)
 	for _, method := range mcpServer.DaemonMethods() {
 		if err := daemon.RegisterMethod(method); err != nil {

@@ -27,11 +27,12 @@ import (
 
 // A directory's delta merged into its entry: past a creation, a marker or anything but a table it starts from an
 // empty table; removed tokens drop their rows, added names replace theirs, and names_through becomes the delta's
-// commit version.
-func applyFoldDelta(entry *protocol.EvsIndexEntry, event *foldEvent) *protocol.EvsIndexEntry {
+// commit version. The entry's drop mark stays, and a replaced marker's carried ids alarm (format1_guard.go).
+func applyFoldDelta(entry *protocol.EvsIndexEntry, event *foldEvent, log sidecar.Logger) *protocol.EvsIndexEntry {
 	delta := event.entryVersion.GetNames()
 	if event.change.BaseEntryVersion == 0 || entry.GetMarker() != nil || entry.GetNames() == nil {
-		entry = &protocol.EvsIndexEntry{Names: &protocol.EvsNameTable{}}
+		alarmCarriedIdsDropped(log, entry.GetMarker(), "a directory's delta")
+		entry = &protocol.EvsIndexEntry{Names: &protocol.EvsNameTable{}, DropMark: entry.GetDropMark()}
 	}
 	tokenRows := map[sidecar.EvsToken]*protocol.EvsName{}
 	for _, row := range entry.GetNames().GetNames() {

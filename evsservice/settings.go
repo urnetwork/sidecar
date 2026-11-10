@@ -49,6 +49,13 @@ type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
 	Place *sidecar.EvsRepoPlaceSettings
 
+	// The storage format this instance runs as (§11.6's format row, EVS-FORMAT.md; format1_guard.go): 2, which
+	// takes format-2 values from networks in §19.11's format2 gate and raises their repos, refusing them 409
+	// VERSIONING outside it; or 1, a format-1 instance as a rolled-back binary is (FS-72), which refuses every
+	// format-2 construct 409 FORMAT_UNSUPPORTED {needs_format: 2}, answers a format-2 repo's pushes 503 and writes
+	// nothing to it. Validate holds it to 1 or 2; it is a fact of the binary a test stands in for, not a knob.
+	InstanceFormat uint32
+
 	// How long a repo/ read stays cached in a process: §11.8 step 4's "cached at most 5 s". At most 5 s;
 	// non-positive caches nothing, every read going to the cluster.
 	RepoCacheTtl time.Duration
@@ -229,6 +236,7 @@ type EvsSettings struct {
 func DefaultEvsSettings() *EvsSettings {
 	return &EvsSettings{
 		Place:                     sidecar.DefaultEvsRepoPlaceSettings(),
+		InstanceFormat:            sidecar.EvsRepoFormat2,
 		RepoCacheTtl:              5 * time.Second,
 		RepoCacheCount:            100 * 1000,
 		PriceBlockByteCount:       4 * 1024,
@@ -302,6 +310,9 @@ func DefaultEvsSettings() *EvsSettings {
 func (self *EvsSettings) Validate() error {
 	if self.Place == nil {
 		return fmt.Errorf("%w: no place settings", ErrEvsSettings)
+	}
+	if self.InstanceFormat != sidecar.EvsRepoFormat1 && self.InstanceFormat != sidecar.EvsRepoFormat2 {
+		return fmt.Errorf("%w: instance format %d is neither 1 nor 2", ErrEvsSettings, self.InstanceFormat)
 	}
 	if evsRepoCacheMaxTtl < self.RepoCacheTtl {
 		return fmt.Errorf("%w: repo/ cached %s, past step 4's %s", ErrEvsSettings, self.RepoCacheTtl, evsRepoCacheMaxTtl)

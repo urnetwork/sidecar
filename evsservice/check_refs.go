@@ -36,12 +36,13 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The repo/ format a format-1 binary writes to.
-const evsCheckRepoFormat = 1
-
-// 5c: repo/'s state and format, the refs table, then the storage limit.
+// 5c: repo/'s state and format, §19.11's format2 gate for a push carrying format 2, the refs table, then the storage
+// limit.
 func CheckRefs(view *PushView) *EvsCheckRefusal {
-	if refusal := checkRepoState(view.Repo); refusal != nil {
+	if refusal := checkRepoState(view.Repo, view.InstanceFormat); refusal != nil {
+		return refusal
+	}
+	if refusal := checkFormat2Gate(view); refusal != nil {
 		return refusal
 	}
 	if refusal := checkRefTable(view); refusal != nil {
@@ -50,10 +51,25 @@ func CheckRefs(view *PushView) *EvsCheckRefusal {
 	return checkStorageLimit(view)
 }
 
-// repo/ active and of format 1. A repo/ step 4 did not read refuses 503.
-func checkRepoState(repo *protocol.EvsRepoObject) *EvsCheckRefusal {
+// §11.6's format row at 5c: a push carrying a format-2 value from a network outside the format2 gate is 409
+// VERSIONING, recorded, since a gate can change (plan-EVS2-small-readings#3). A format-1 instance never reaches
+// here with one, having refused it as needing format 2 (push.go).
+func checkFormat2Gate(view *PushView) *EvsCheckRefusal {
+	if !view.NeedsFormat2 || view.Format2Admitted {
+		return nil
+	}
+	return newEvsCheckRefusal(EvsCheckReasonFormat2Gate, "a format-2 push from a network outside the format2 gate")
+}
+
+// repo/ active and of a format the instance writes: a repo/ past instanceFormat, a format-2 repo on a format-1
+// instance, answers 503 and writes nothing (plan-EVS1-format-unsupported#4). A repo/ step 4 did not read, or an
+// instance format the view does not give, refuses 503.
+func checkRepoState(repo *protocol.EvsRepoObject, instanceFormat uint32) *EvsCheckRefusal {
 	if repo == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no repo/ read")
+	}
+	if instanceFormat != sidecar.EvsRepoFormat1 && instanceFormat != sidecar.EvsRepoFormat2 {
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, fmt.Sprintf("an instance format of %d", instanceFormat))
 	}
 	switch repo.GetState() {
 	case protocol.EvsRepoState_EVS_REPO_ACTIVE:
@@ -66,8 +82,8 @@ func checkRepoState(repo *protocol.EvsRepoObject) *EvsCheckRefusal {
 	default:
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, fmt.Sprintf("repo/ state %d", repo.GetState()))
 	}
-	if repo.GetFormat() != evsCheckRepoFormat {
-		return newEvsCheckRefusal(EvsCheckReasonRepoFormat, fmt.Sprintf("a repo of format %d", repo.GetFormat()))
+	if instanceFormat < repo.GetFormat() {
+		return newEvsCheckRefusal(EvsCheckReasonRepoFormat, fmt.Sprintf("a repo of format %d at an instance of format %d", repo.GetFormat(), instanceFormat))
 	}
 	return nil
 }

@@ -470,15 +470,12 @@ func (self *Folder) PageOut(ctx context.Context, request *EvsPageOutRequest) (*E
 	return pageOut, nil
 }
 
-// §11.13's skip row for a P2 write of the repo: repo/, cached at most 5 s, active or deleted.
+// §11.13's skip row for a P2 write of the repo: repo/, cached at most 5 s, active or deleted, and of a format this
+// instance writes (format1_guard.go), so a rolled-back binary folds and pages nothing of a format-2 repo.
 func (self *Folder) recheckRepo(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id) error {
 	read, err := self.repos.Read(ctx, cluster, repoId)
 	if err != nil {
 		return err
 	}
-	switch read.Object.GetState() {
-	case protocol.EvsRepoState_EVS_REPO_ACTIVE, protocol.EvsRepoState_EVS_REPO_DELETED:
-		return nil
-	}
-	return fmt.Errorf("%w: state %s", ErrEvsFoldRepoState, read.Object.GetState())
+	return checkRepoWritable(read, self.settings.InstanceFormat)
 }

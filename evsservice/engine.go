@@ -103,6 +103,10 @@ type EvsEngineDeps struct {
 	GateViews EvsGateViews
 	// Step 8's push sequence and hints. nil takes the engine's own over the host's Redis and Push (hint.go).
 	CommitNotifier EvsCommitNotifier
+	// EVS2-M10-06's rules of a format-2 push inside §19.11's format2 gate: the citation rule, staging, uploads and
+	// candidates (PushView.Format2Rules). nil refuses every such push 503, so nothing commits unchecked, and a
+	// format-1 repo is never raised.
+	Format2Rules func(view *PushView) *EvsCheckRefusal
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
@@ -136,8 +140,10 @@ type EvsEngine struct {
 	locator *RecordLocator
 	// segments by id, through spidx/ (EVSB-M2-10)
 	segments *SegmentLocator
-	metrics  *evsMetrics
-	handler  http.Handler
+	// §19.11's format2 gate over the host's gates, read per push (format2_gate.go)
+	format2 Format2Gate
+	metrics *evsMetrics
+	handler http.Handler
 	// what the router took at the start, in its order
 	servedRoutes []*EvsRoute
 
@@ -211,6 +217,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 		stepEightCount:     sidecar.NewMonitorValue(0),
 		stepEightDoneCount: sidecar.NewMonitorValue(0),
 	}
+	self.format2 = NewFormat2Gate(host)
 	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, blobs, self.records, settings, log)
