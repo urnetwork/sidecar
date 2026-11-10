@@ -15,11 +15,22 @@
 //     keys and signed by an admitted writer, and holds it to format 2's parsers before it is sent;
 //   - format-1 devices, sidecar.EvsClient as built, writing and reading through an engine's handler.
 //
-// Sides: evs rows post the construct to format1 and hold the answer, the head's refusal record, every stored object
-// and the engine's alarms; reader rows commit the construct through format2, or lay it into a read reply as a
-// format-2 evs would, and read it with a format-1 device through format1; writer rows hold the paths and refs a
-// format-1 device refuses before any request. T3, the same rows through server's handlers on real stores, is not
-// here: this task's files are this package's.
+// Sides, each a test below:
+//
+//   - evs rows post the construct to format1 and hold the answer, the head's refusal record, every stored object and
+//     the engine's alarms;
+//   - reader rows commit the construct through format2, put it in the stores as a format-2 evs would, or lay it into
+//     a read reply, and read it with a format-1 device through format1;
+//   - the repo row holds a format-1 evs to a repo that format 2 raised, and the evacuator row a format-1 evacuation
+//     to a format-2 batch;
+//   - writer rows hold the paths, refs and setting a format-1 device refuses before any request;
+//   - config rows, §7.9's VersioningRules and §8.8's RepoVersioning, are driven by the root's own tests, which each
+//     row names and the coverage test finds;
+//   - the slot rule's two refusals (FS-95), which format 1 checks from M2.
+//
+// The coverage test holds the rows to testdata/evs/reserved_numbers.yml: every number format 1 reserves for format 2
+// is driven by a row, held by a named test, or listed unswept with its reason. T3, the same rows through server's
+// handlers on real stores, is not here: this task's files are this package's.
 //
 // Nothing sleeps: the clock is fake and every wait is on a channel the engine closes.
 
@@ -30,6 +41,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +56,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v3"
 
 	"github.com/urnetwork/connect"
 
@@ -61,8 +74,11 @@ type format2RefusalVectors struct {
 	// FORMAT_UNSUPPORTED's needs_format on every refusing row.
 	NeedsFormat uint32               `json:"needs_format"`
 	Rows        []*format2RefusalRow `json:"rows"`
+	// §11.8's slot rule as format 1 checks it from M2 (FS-95).
+	SlotRule []*format2SlotRuleRow `json:"slot_rule"`
 	// Reserved numbers no row drives, each with the test that holds format 1 to it.
 	Elsewhere []*format2RefusalElsewhere `json:"elsewhere"`
+	Unswept   []*format2RefusalUnswept   `json:"unswept"`
 }
 
 type format2RefusalRow struct {
@@ -70,19 +86,44 @@ type format2RefusalRow struct {
 	Construct string `json:"construct"`
 	// reserved_numbers.yml's keys this construct uses.
 	Numbers []string `json:"numbers"`
-	// evs, reader or writer.
+	// evs, reader, writer, repo, evacuator or config.
 	Side string `json:"side"`
-	// format_unsupported, ignored, unavailable or reserved.
+	// format_unsupported, ignored, unavailable, reserved, left or folded.
 	Outcome string `json:"outcome"`
 	// An evs row: the answer's status, and whether the head records the refusal.
 	Status   int                 `json:"status,omitempty"`
 	Recorded bool                `json:"recorded,omitempty"`
 	Twin     *format2RefusalTwin `json:"twin,omitempty"`
+	// A config row, which another package's test drives: that test.
+	HeldBy *format2RefusalTest `json:"held_by,omitempty"`
+}
+
+// A test by its file, from the module root, and its name.
+type format2RefusalTest struct {
+	File string `json:"file"`
+	Test string `json:"test"`
+}
+
+// One of the slot rule's refusals.
+type format2SlotRuleRow struct {
+	Name      string `json:"name"`
+	Construct string `json:"construct"`
+	Status    int    `json:"status"`
+	Code      string `json:"code"`
+	Recorded  bool   `json:"recorded"`
+	Twin      string `json:"twin"`
+}
+
+// Reserved numbers nothing here drives or names a test for, with why.
+type format2RefusalUnswept struct {
+	Numbers []string `json:"numbers"`
+	Why     string   `json:"why"`
 }
 
 type format2RefusalTwin struct {
 	Construct string `json:"construct"`
-	// refused: evs answers Code at Status, recording nothing. alarm: the reader raises evs_alarm Alarm.
+	// refused: evs answers Code at Status, recording nothing. alarm: the reader raises evs_alarm Alarm. evs_alarm:
+	// evs raises its alarm Alarm. unavailable: evs answers 503. committed: the write commits.
 	Outcome string `json:"outcome"`
 	Status  int    `json:"status,omitempty"`
 	Code    string `json:"code,omitempty"`
@@ -245,12 +286,29 @@ func (self *format2Device) write(path string, content []byte) error {
 }
 
 func (self *format2Device) writeRef(refName []byte, path string, content []byte, versioning string) error {
+	defer self.world.settle()
 	return self.world.call(func(ctx context.Context) error {
 		_, err := self.client.Repo(self.world.repoId).Write(ctx, &sidecar.EvsWriteArgs{
 			RefName: refName, Path: path, Content: bytes.NewReader(content), Size: int64(len(content)), Versioning: versioning,
 		})
 		return err
 	})
+}
+
+func (self *format2Device) remove(path string) error {
+	defer self.world.settle()
+	return self.world.call(func(ctx context.Context) error {
+		_, err := self.client.Repo(self.world.repoId).Write(ctx, &sidecar.EvsWriteArgs{Path: path, Remove: true})
+		return err
+	})
+}
+
+// Waits out the serving engine's step 8s, so the next read meets the head a commit left and not the cache before it.
+func (self *format2World) settle() {
+	self.stateLock.Lock()
+	engine := self.serving
+	self.stateLock.Unlock()
+	self.awaitStepEights(engine)
 }
 
 // An answer evs gave a device that the device waits out and sends again: a 429 or a 503.
@@ -344,6 +402,8 @@ func newFormat2World(t *testing.T) *format2World {
 	if err := host.Gates.Set(gates); err != nil {
 		t.Fatal(err)
 	}
+	// a network with transfer to spend, so no read marks it spent and no push meets §20's gate
+	host.Quota.SetBalance(connect.Id(world.networkId), 1<<40)
 	cluster, err := host.Blobs.Cluster("meta-1")
 	if err != nil {
 		t.Fatal(err)
@@ -1190,8 +1250,10 @@ type format2ReaderCase struct {
 	path string
 	// an ignored row: what the read gives
 	content []byte
-	// a path of the same ref that format 1 still reads; empty where the construct stops the ref's walk
-	sibling string
+	// a path of the same ref that format 1 still reads, and what it holds when that is not the kept file's; empty
+	// where the construct stops the ref's walk
+	sibling        string
+	siblingContent []byte
 	// what a format-2 evs lays into each frame of a read reply
 	rewrite func(frame *protocol.EvsReadFrame)
 	// the twin: what a hostile evs makes of the reply, and what it does to the stores first
@@ -1314,6 +1376,11 @@ var format2ReaderDrivers = map[string]func(world *format2World) *format2ReaderCa
 		plan.DropBody, plan.DropLists = world.drop(plan)
 		return nil
 	}),
+	"read-segment-header-kind-5": format2ReadSegmentHeaderKind5,
+	"read-removal-marker-ids":    format2ReadRemovalMarkerIds,
+	"read-provenance-tainted":    format2ReadProvenanceTainted,
+	"read-window-bits-4-5":       format2ReadWindowBits,
+	"read-batch-record-format-2": format2ReadBatchRecordFormat2,
 	"read-state-collected": format2ReaderState(func(reply *protocol.EvsReadPathReply) {
 		reply.State = protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED
 	}),
@@ -1339,15 +1406,15 @@ func TestEvsFormat2ConstructsAtAFormat1Reader(t *testing.T) {
 	for _, row := range format2RefusalRowsOf(t, "reader", format2ReaderDrivers) {
 		world := newFormat2World(t)
 		writer := world.device(world.writer)
-		kept := []byte("kept on format 1")
+		kept := format2KeptContent
 		world.serve(world.format2)
 		if err := writer.write("kept.txt", kept); err != nil {
 			t.Fatalf("%s: %v", row.Name, err)
 		}
 		world.awaitStepEights(world.format2)
 		c := format2ReaderDrivers[row.Name](world)
-		if row.Twin == nil || row.Twin.Outcome != "alarm" {
-			t.Fatalf("%s: a reader row's twin alarms", row.Name)
+		if row.Twin == nil {
+			t.Fatalf("%s: a reader row has a twin", row.Name)
 		}
 		// the binary rolls back: a format-1 evs serves what the format-2 one stored
 		world.serve(world.format1)
@@ -1356,7 +1423,10 @@ func TestEvsFormat2ConstructsAtAFormat1Reader(t *testing.T) {
 		content, err := reader.read(c.path)
 		switch row.Outcome {
 		case "format_unsupported":
-			if !errors.Is(err, sidecar.ErrEvsFormatUnsupported) || sidecar.EvsRefusalCodeOf(err) != protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED {
+			// the reader's own refusal, or evs's for a record it cannot serve, which names the format
+			evsError, refused := sidecar.EvsErrorOf(err)
+			refused = refused && evsError.Code == protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED && evsError.NeedsFormat == sidecar.EvsRepoFormat2
+			if !refused && !(errors.Is(err, sidecar.ErrEvsFormatUnsupported) && sidecar.EvsRefusalCodeOf(err) == protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED) {
 				t.Errorf("%s: read %q, %v", row.Name, content, err)
 			}
 		case "ignored":
@@ -1368,7 +1438,11 @@ func TestEvsFormat2ConstructsAtAFormat1Reader(t *testing.T) {
 		}
 		world.setRewrite(nil)
 		if c.sibling != "" {
-			if content, err := reader.read(c.sibling); err != nil || !bytes.Equal(content, kept) {
+			want := kept
+			if c.siblingContent != nil {
+				want = c.siblingContent
+			}
+			if content, err := reader.read(c.sibling); err != nil || !bytes.Equal(content, want) {
 				t.Errorf("%s: the format-1 path beside it read %q, %v", row.Name, content, err)
 			}
 		}
@@ -1385,11 +1459,659 @@ func TestEvsFormat2ConstructsAtAFormat1Reader(t *testing.T) {
 		}
 		world.setRewrite(c.twinRewrite)
 		content, err = twinReader.read(c.path)
-		if err == nil || errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+		if err == nil || errors.Is(err, sidecar.ErrEvsFormatUnsupported) || sidecar.IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED) {
 			t.Errorf("%s: the twin read %q, %v", row.Name, content, err)
 		}
-		if alarms := twinReader.alarms(); !slices.Contains(alarms, row.Twin.Alarm) {
-			t.Errorf("%s: the twin raised %v, want %s (%v)", row.Name, alarms, row.Twin.Alarm, err)
+		var wait *format2Wait
+		switch row.Twin.Outcome {
+		case "alarm":
+			if alarms := twinReader.alarms(); !slices.Contains(alarms, row.Twin.Alarm) {
+				t.Errorf("%s: the twin raised %v, want %s (%v)", row.Name, alarms, row.Twin.Alarm, err)
+			}
+		case "evs_alarm":
+			if alarms := world.format1Log.alarms(); !format2AlarmsName(alarms, row.Twin.Alarm) {
+				t.Errorf("%s: the twin raised %v at evs, want %s (%v)", row.Name, alarms, row.Twin.Alarm, err)
+			}
+		case "unavailable":
+			if !errors.As(err, &wait) || wait.status != http.StatusServiceUnavailable {
+				t.Errorf("%s: the twin read: %v", row.Name, err)
+			}
+		default:
+			t.Fatalf("%s: twin outcome %q", row.Name, row.Twin.Outcome)
+		}
+	}
+}
+
+// The file every reader row finds beside its construct, written by a format-1 device.
+var format2KeptContent = []byte("kept on format 1")
+
+// main's head put as a format-2 evs, or a broken one, leaves it: mutate's change, under a raised fence. The engines'
+// own head writes hold a head to format 1's shape, so this one goes to the cluster as bytes.
+func (self *format2World) rewriteHead(mutate func(head *protocol.EvsHead)) {
+	self.t.Helper()
+	prior := self.head()
+	next := evsservice.CloneEvsHead(prior.Head)
+	mutate(next)
+	next.Fence += 1
+	headBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(next)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfMatch(self.ctx, evsservice.HeadKey(self.repoId, self.refId), prior.Etag, headBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// Sets flags on every entry of the head's window.
+func setWindowFlags(head *protocol.EvsHead, flags uint32) {
+	window := head.GetWindow()
+	for at := 0; at+sidecar.EvsWindowEntryByteCount <= len(window); at += sidecar.EvsWindowEntryByteCount {
+		flagBytes := window[at+sidecar.EvsWindowEntryByteCount-4 : at+sidecar.EvsWindowEntryByteCount]
+		binary.BigEndian.PutUint32(flagBytes, binary.BigEndian.Uint32(flagBytes)|flags)
+	}
+}
+
+// The newest push's batch record moved to a batch of its own, as format 2 lays one out when change gives it a tail,
+// and the head's window pointed there: where a format-2 evs would have stored that push. corrupt, when it is not
+// nil, then spoils the record's bytes in place.
+func (self *format2World) restoreNewestRecord(seq uint32, tail *sidecar.EvsBatchRecordTail, corrupt func(recordBytes []byte)) {
+	self.t.Helper()
+	head := self.head()
+	window, err := evsservice.EvsHeadWindow(head.Head)
+	if err != nil || len(window) == 0 {
+		self.t.Fatalf("the head's window: %v", err)
+	}
+	entry := window[len(window)-1]
+	stored, ok := self.stored(evsservice.PlaceBatchKey(entry.Place))
+	if !ok {
+		self.t.Fatal("the newest push's batch is gone")
+	}
+	record, _, err := sidecar.NewEvsBatchReader(bytes.NewReader(stored)).RecordFormat2(entry.Place)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	writer := sidecar.NewEvsBatchWriter(entry.Place.GetInstance(), entry.Place.GetMinute(), seq, self.clock.Now().UnixMilli())
+	place, err := writer.AddFormat2(record, tail)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	batchBytes, err := writer.Bytes()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := sidecar.ParseEvsBatchFormat2(batchBytes); err != nil {
+		self.t.Fatalf("format 2 does not parse the batch: %v", err)
+	}
+	if _, err := sidecar.ParseEvsBatch(batchBytes); !errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+		self.t.Fatalf("format 1 parsed a format-2 batch: %v", err)
+	}
+	if corrupt != nil {
+		corrupt(batchBytes[place.GetOffset() : place.GetOffset()+place.GetLength()])
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, evsservice.PlaceBatchKey(place), batchBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	entry.Place = place
+	self.rewriteHead(func(head *protocol.EvsHead) {
+		head.Window = append(bytes.Clone(head.GetWindow()[:len(head.GetWindow())-sidecar.EvsWindowEntryByteCount]), entry.Encode()...)
+	})
+}
+
+// A kept version whose segment locator names a segment under a kind-5 header; its twin, the segment gone.
+func format2ReadSegmentHeaderKind5(world *format2World) *format2ReaderCase {
+	// versioning turned on over a versionless version adopts its upload (D-EVS-38): a kept version whose
+	// segment locator names a segment under a kind-5 header
+	plan := world.plan()
+	locator, object, receipt := world.storeKind5Segment(plan.PushId, []byte("a format-2 file"))
+	locator.Kind = uint32(protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT)
+	plan.NewObjects = append(plan.NewObjects, object)
+	world.create(plan, "construct.bin", []byte("a format-2 file"), protocol.EvsVersioning_EVS_VERSIONING_KEPT, func(entry *protocol.EvsEntryVersion) {
+		entry.Chain = []*protocol.EvsLocator{locator}
+	})
+	body := world.body(plan, nil, nil)
+	body.Receipts = []*protocol.EvsUploadReceipt{receipt}
+	world.commit(world.format2, body)
+	return &format2ReaderCase{path: "construct.bin", sibling: "kept.txt", twin: func() {
+		segmentCluster, err := world.host.Blobs.SegmentCluster()
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		if err := segmentCluster.Delete(world.ctx, evsservice.SegmentKey(world.repoId, [sha256.Size]byte(locator.GetId()))); err != nil {
+			world.t.Fatal(err)
+		}
+	}}
+
+}
+
+// A removed path whose marker carries a versionless file's ids; its twin, a removal off the versions rule.
+func format2ReadRemovalMarkerIds(world *format2World) *format2ReaderCase {
+	writer := world.device(world.writer)
+	if err := writer.write("gone.txt", []byte("gone")); err != nil {
+		world.t.Fatal(err)
+	}
+	if err := writer.remove("gone.txt"); err != nil {
+		world.t.Fatal(err)
+	}
+	world.awaitStepEights(world.format2)
+	segmentId := sha256.Sum256([]byte("a versionless file's segment"))
+	return &format2ReaderCase{
+		path: "gone.txt",
+		rewrite: world.readState("gone.txt", func(reply *protocol.EvsReadPathReply) {
+			if reply.GetRemoval() != nil {
+				reply.Removal.SegmentIds = [][]byte{segmentId[:]}
+				reply.Removal.SlotIds = [][]byte{sidecar.NewEvsSlotId().Bytes()}
+			}
+		}),
+		twinRewrite: world.readState("gone.txt", func(reply *protocol.EvsReadPathReply) {
+			if reply.GetRemoval() != nil {
+				reply.Removal.PathVersion += 1
+			}
+		}),
+	}
+
+}
+
+// A format-1 file whose push was written in a tainted run.
+func format2ReadProvenanceTainted(world *format2World) *format2ReaderCase {
+	content := []byte("written in a tainted run")
+	plan := world.planWith(&protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{Tainted: true}})
+	world.create(plan, "tainted.txt", content, protocol.EvsVersioning_EVS_VERSIONING_KEPT, nil)
+	// the bit is sealed, so a format-1 evs commits the push as any other
+	world.commit(world.format1, world.body(plan, nil, nil))
+	if repo := world.repo(); repo.GetFormat() != sidecar.EvsRepoFormat1 {
+		world.t.Fatal("a tainted push raised the repo")
+	}
+	return &format2ReaderCase{path: "tainted.txt", content: content, sibling: "kept.txt", twinRewrite: world.tamperEntry("tainted.txt")}
+
+}
+
+// A head whose window entries carry bits 4 and 5; its twin, a bit no format holds.
+func format2ReadWindowBits(world *format2World) *format2ReaderCase {
+	bits := uint32(protocol.EvsWindowFlag_EVS_WINDOW_VERSIONLESS_REPLACED) | uint32(protocol.EvsWindowFlag_EVS_WINDOW_DROP)
+	world.rewriteHead(func(head *protocol.EvsHead) { setWindowFlags(head, bits) })
+	// a format-1 evs commits on that head, carrying its window's entries as they are
+	world.serve(world.format1)
+	writer := world.device(world.writer)
+	if err := writer.write("after.txt", []byte("after")); err != nil {
+		world.t.Fatalf("a push on a head whose window carries bits 4 and 5: %v", err)
+	}
+	world.awaitStepEights(world.format1)
+	window, err := evsservice.EvsHeadWindow(world.head().Head)
+	if err != nil || len(window) != 2 || window[0].Flags&bits != bits || window[1].Flags&bits != 0 {
+		world.t.Fatalf("the window after a format-1 commit: %v, %v", window, err)
+	}
+	return &format2ReaderCase{path: "kept.txt", content: format2KeptContent, sibling: "after.txt", siblingContent: []byte("after"), twin: func() {
+		world.rewriteHead(func(head *protocol.EvsHead) { setWindowFlags(head, 64) })
+	}}
+
+}
+
+// A push a format-2 evs stored as a format-2 record; its twin, a record of no format.
+func format2ReadBatchRecordFormat2(world *format2World) *format2ReaderCase {
+	purgeList, err := sidecar.EncodeEvsPurgeList(&protocol.EvsPurgeList{Marked: true})
+	if err != nil {
+		world.t.Fatal(err)
+	}
+	tail := &sidecar.EvsBatchRecordTail{PurgeList: purgeList}
+	world.restoreNewestRecord(1000, tail, nil)
+	return &format2ReaderCase{path: "kept.txt", twin: func() {
+		// record format 3, which no format holds
+		world.restoreNewestRecord(2000, tail, func(recordBytes []byte) { recordBytes[1] = 3 })
+	}}
+
+}
+
+// FS-72's format-1 case on repo/'s format 2: once a format-2 push raised the repo, a format-1 evs answers every push
+// 503 with Retry-After before step 4, a format-1 push included, refusing nothing and recording nothing
+// (plan-EVS1-format-unsupported#4), writes nothing, and serves the stored bytes, each path as a format-1 reader
+// takes it. The twin, a repo/ of format 3, takes no push either, and alarms.
+func TestEvsFormat1EvsServesAFormat2RepoAndTakesNoPush(t *testing.T) {
+	rows := format2RefusalRowsOf(t, "repo", map[string]bool{"repo-format-2": true})
+	if len(rows) != 1 || rows[0].Outcome != "unavailable" || rows[0].Status != http.StatusServiceUnavailable || rows[0].Twin == nil {
+		t.Fatal("the repo row answers unavailable at 503, with a twin")
+	}
+	row := rows[0]
+	world := newFormat2World(t)
+	writer := world.device(world.writer)
+	world.serve(world.format2)
+	if err := writer.write("kept.txt", format2KeptContent); err != nil {
+		t.Fatal(err)
+	}
+	plan := world.plan()
+	world.create(plan, "versionless.bin", []byte("versionless"), protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS, nil)
+	world.commit(world.format2, world.body(plan, nil, nil))
+	if repo := world.repo(); repo.GetFormat() != sidecar.EvsRepoFormat2 {
+		t.Fatalf("the first format-2 push left repo/ at format %d", repo.GetFormat())
+	}
+
+	// the binary rolls back
+	world.serve(world.format1)
+	before := world.host.Blobs.Dump()
+	requireNothingWritten := func(what string) {
+		t.Helper()
+		after := world.host.Blobs.Dump()
+		for key, object := range after {
+			if held, ok := before[key]; !ok || !bytes.Equal(held, object) {
+				t.Errorf("%s: wrote %s", what, key)
+			}
+		}
+		for key := range before {
+			if _, ok := after[key]; !ok {
+				t.Errorf("%s: deleted %s", what, key)
+			}
+		}
+	}
+	var wait *format2Wait
+	if err := writer.write("more.txt", []byte("more")); !errors.As(err, &wait) || wait.status != row.Status || wait.retryAfter == "" {
+		t.Errorf("a format-1 push to a format-2 repo: %v", err)
+	}
+	requireNothingWritten("a format-1 push")
+	next := world.plan()
+	world.create(next, "next.bin", []byte("next"), protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS, nil)
+	recorder := world.postPush(world.format1, world.body(next, nil, nil))
+	if reply := format2Refusal(t, recorder); recorder.Code != row.Status || recorder.Header().Get("Retry-After") == "" || reply.GetRecorded() ||
+		reply.GetCode() == protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED {
+		t.Errorf("a format-2 push to a format-2 repo answered %d %v", recorder.Code, reply)
+	}
+	requireNothingWritten("a format-2 push")
+
+	reader := world.device(world.reader)
+	if content, err := reader.read("kept.txt"); err != nil || !bytes.Equal(content, format2KeptContent) {
+		t.Errorf("the format-1 path read %q, %v", content, err)
+	}
+	if _, err := reader.read("versionless.bin"); !errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+		t.Errorf("the format-2 path read: %v", err)
+	}
+	requireNothingWritten("the reads")
+	if alarms := append(reader.alarms(), world.format1Log.alarms()...); len(alarms) != 0 {
+		t.Errorf("alarms: %v", alarms)
+	}
+
+	// the twin: a repo/ whose format no code holds
+	repo := world.repo()
+	repo.Format = 3
+	repoBytes, err := proto.Marshal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := world.cluster.Head(world.ctx, evsservice.RepoKey(world.repoId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.cluster.PutIfMatch(world.ctx, evsservice.RepoKey(world.repoId), info.Etag, repoBytes, nil); err != nil {
+		t.Fatal(err)
+	}
+	err = writer.write("more.txt", []byte("more"))
+	if !errors.As(err, &wait) || wait.status != http.StatusServiceUnavailable {
+		t.Errorf("the twin's push: %v", err)
+	}
+	if alarms := world.format1Log.alarms(); row.Twin.Outcome != "evs_alarm" || !format2AlarmsName(alarms, row.Twin.Alarm) {
+		t.Errorf("the twin raised %v, want %s (%v)", alarms, row.Twin.Alarm, err)
+	}
+}
+
+// Whether a log's alarm lines name an alarm.
+func format2AlarmsName(alarms []string, name string) bool {
+	return slices.ContainsFunc(alarms, func(line string) bool { return strings.Contains(line, name) })
+}
+
+// The writer rows: what a format-1 device is asked to write, and the near miss beside it that it does write.
+var format2WriterDrivers = map[string]struct {
+	write func(device *format2Device) error
+	twin  func(device *format2Device) error
+}{
+	"write-ur-index-directory": {
+		write: func(device *format2Device) error { return device.write(".ur-index/i1/a/0", []byte("a shard")) },
+		twin:  func(device *format2Device) error { return device.write(".ur-indexes/notes.md", []byte("notes")) },
+	},
+	"write-ref-ur-index": {
+		write: func(device *format2Device) error {
+			return device.writeRef([]byte("ur/index"), "i1/a/0", []byte("a shard"), "")
+		},
+		twin: func(device *format2Device) error {
+			return device.writeRef([]byte("ur/indexes"), "i1/a/0", []byte("a file"), "")
+		},
+	},
+	"write-ref-ur-lfs": {
+		write: func(device *format2Device) error {
+			return device.writeRef([]byte("ur/lfs"), "ab/cd/abcd", []byte("an object"), "")
+		},
+		twin: func(device *format2Device) error {
+			return device.writeRef([]byte("ur/lfs-notes"), "ab/cd/abcd", []byte("a file"), "")
+		},
+	},
+	"write-versioning-off": {
+		write: func(device *format2Device) error { return device.writeRef(nil, "big.bin", []byte("big"), "off") },
+		twin:  func(device *format2Device) error { return device.writeRef(nil, "big.bin", []byte("big"), "on") },
+	},
+}
+
+// §11.6's kinds row at a format-1 writer: it writes nothing under .ur-index/ on a file-mode ref, nothing on ur/index
+// or ur/lfs, and no versionless file, each refused before any request reaches evs; the name or setting beside each
+// commits.
+func TestEvsFormat2WritesRefusedAtAFormat1Writer(t *testing.T) {
+	for _, row := range format2RefusalRowsOf(t, "writer", format2WriterDrivers) {
+		world := newFormat2World(t)
+		device := world.device(world.writer)
+		driver := format2WriterDrivers[row.Name]
+		requestsBefore := world.requests()
+		err := driver.write(device)
+		switch row.Outcome {
+		case "reserved":
+			if !errors.Is(err, sidecar.ErrEvsReservedPath) {
+				t.Errorf("%s: %v", row.Name, err)
+			}
+		case "format_unsupported":
+			if !errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+				t.Errorf("%s: %v", row.Name, err)
+			}
+		default:
+			t.Fatalf("%s: outcome %q", row.Name, row.Outcome)
+		}
+		if sent := world.requests() - requestsBefore; sent != 0 {
+			t.Errorf("%s: %d requests reached evs", row.Name, sent)
+		}
+		if head := world.head(); !head.Absent() {
+			t.Errorf("%s: the ref has a head", row.Name)
+		}
+		if row.Twin == nil || row.Twin.Outcome != "committed" {
+			t.Fatalf("%s: a writer row's twin commits", row.Name)
+		}
+		if err := driver.twin(device); err != nil {
+			t.Errorf("%s: the twin: %v", row.Name, err)
+		}
+	}
+}
+
+// One object's bytes as the cluster holds them, and whether it holds any.
+func (self *format2World) stored(key string) ([]byte, bool) {
+	self.t.Helper()
+	object, err := self.cluster.Get(self.ctx, key)
+	if errors.Is(err, sidecar.ErrBlobNotFound) {
+		return nil, false
+	}
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	defer object.Body.Close()
+	stored, err := io.ReadAll(object.Body)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return stored, true
+}
+
+// FS-72's format-2 batch at a format-1 evacuator: a batch of format 2, here one holding a staged push's record with
+// its staged bytes, is no batch format 1 parses, so the run leaves it for a format-2 evacuator, deleting nothing of
+// it and saying so under its own alarm, never as a batch that fails its checks. The twin, a format-1 batch with a
+// byte flipped, is left as failing them.
+func TestEvsFormat2BatchLeftByAFormat1Evacuator(t *testing.T) {
+	rows := format2RefusalRowsOf(t, "evacuator", map[string]bool{"batch-format-2": true})
+	if len(rows) != 1 || rows[0].Outcome != "left" || rows[0].Twin == nil || rows[0].Twin.Outcome != "evs_alarm" {
+		t.Fatal("the evacuator row is left, its twin alarming")
+	}
+	row := rows[0]
+	world := newFormat2World(t)
+	plan := world.plan()
+	segmentBytes, _, locator := world.kind5Segment(plan.PushId, []byte("staged"))
+	segment, err := sidecar.EvsStagedSegmentOf(segmentBytes, world.repoId, plan.PushId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator.Staged = true
+	plan.NewObjects = append(plan.NewObjects, segment.NewObject())
+	world.create(plan, "staged.bin", []byte("staged"), protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS, func(entry *protocol.EvsEntryVersion) {
+		entry.Chain = []*protocol.EvsLocator{locator}
+	})
+	staged := sidecar.EvsEncodeStaged([][]byte{segmentBytes})
+	body := world.body(plan, nil, staged)
+	record := &sidecar.EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_PUSH, RepoId: world.repoId, RefId: world.refId, PushId: plan.PushId,
+		SignerSidecarId: world.writer.SidecarId, TimeMs: plan.TimeMs, Body: sidecar.EvsPushRecordBody(body.GetStatement(), body.GetPayload()),
+	}
+	minute := evsservice.BatchMinute(world.clock.Now())
+	batches := map[string][]byte{}
+	for seq, name := range []string{"format 2", "twin"} {
+		writer := sidecar.NewEvsBatchWriter(7, minute, uint32(seq), world.clock.Now().UnixMilli())
+		tail := &sidecar.EvsBatchRecordTail{Staged: staged}
+		if name == "twin" {
+			// format 1's layout, which a tail would turn to format 2's
+			tail = nil
+		}
+		place, err := writer.AddFormat2(record, tail)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batchBytes, err := writer.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sidecar.ParseEvsBatchFormat2(batchBytes); err != nil {
+			t.Fatalf("format 2 does not parse the batch: %v", err)
+		}
+		if name == "twin" {
+			batchBytes[len(batchBytes)-1] ^= 1
+		}
+		_, err = sidecar.ParseEvsBatch(batchBytes)
+		if unsupported := errors.Is(err, sidecar.ErrEvsFormatUnsupported); err == nil || unsupported != (name == "format 2") {
+			t.Fatalf("format 1 parsed the %s batch as: %v", name, err)
+		}
+		key := evsservice.PlaceBatchKey(place)
+		if _, err := world.cluster.PutIfNoneMatch(world.ctx, key, batchBytes, nil); err != nil {
+			t.Fatal(err)
+		}
+		batches[key] = batchBytes
+	}
+
+	log := &format2Log{}
+	settings := evsservice.DefaultEvacuatorSettings()
+	settings.SpoolDirectory = t.TempDir()
+	evsSettings := evsservice.DefaultEvsSettings()
+	evsSettings.InstanceFormat = sidecar.EvsRepoFormat1
+	evacuator, err := evsservice.NewEvacuator(world.host.ServiceHost(), &evsservice.EvacuatorDeps{Settings: settings, EvsSettings: evsSettings, Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.clock.Advance(settings.MinuteAge + time.Hour)
+	result, err := evacuator.Run(world.ctx, "meta-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BatchCount != len(batches) || result.BatchDeletedCount != 0 || result.MinuteDeletedCount != 0 {
+		t.Errorf("the run read %d batches and deleted %d, in %d minutes", result.BatchCount, result.BatchDeletedCount, result.MinuteDeletedCount)
+	}
+	for key, batchBytes := range batches {
+		if stored, ok := world.stored(key); !ok || !bytes.Equal(stored, batchBytes) {
+			t.Errorf("batch %s did not stay as it was", key)
+		}
+	}
+	alarms := log.alarms()
+	if !format2AlarmsName(alarms, "evacuate_batch_format") || !format2AlarmsName(alarms, row.Twin.Alarm) || len(alarms) != len(batches) {
+		t.Errorf("the run's alarms: %v", alarms)
+	}
+}
+
+// One of §11.8's slot rule's refusals (5h and step 6), which format 1 checks from M2 so that format 2's one key per
+// versionless path can rest on it (§11.22, FS-95): the push refused, and its twin that commits.
+type format2SlotCase struct {
+	push *protocol.EvsPushRequest
+	twin *protocol.EvsPushRequest
+}
+
+// A slot's id, its new-objects item and its body.
+func format2Slot() (sidecar.Id, *sidecar.EvsNewObject, []byte, error) {
+	slotId := sidecar.NewEvsSlotId()
+	slotBody, err := sidecar.EvsEncodeSlotObject(&protocol.EvsSlotObject{Keys: []*protocol.EvsSlotKey{
+		{KeyIndex: 0, Generation: 1, Wrapped: make([]byte, sidecar.EvsWrappedKeyByteCount)},
+	}})
+	return slotId, &sidecar.EvsNewObject{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT, Id: slotId.Bytes()}, slotBody, err
+}
+
+// A file's creation on plan naming slotId, which the plan introduces when object is given.
+func (self *format2World) createSlotted(plan *sidecar.EvsPushPlan, path string, slotId sidecar.Id, object *sidecar.EvsNewObject, slotBody []byte) {
+	self.t.Helper()
+	self.create(plan, path, []byte(path), protocol.EvsVersioning_EVS_VERSIONING_KEPT, func(entry *protocol.EvsEntryVersion) {
+		entry.SlotIds = [][]byte{slotId.Bytes()}
+	})
+	if object != nil {
+		plan.NewObjects = append(plan.NewObjects, object)
+		plan.SlotBodies = append(plan.SlotBodies, slotBody)
+	}
+}
+
+var format2SlotDrivers = map[string]func(world *format2World) *format2SlotCase{
+	// 5h: a version naming a slot that neither its push introduces nor a version step 4 read names
+	"slot-unknown": func(world *format2World) *format2SlotCase {
+		slotId, object, slotBody, err := format2Slot()
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		plan := world.plan()
+		world.createSlotted(plan, "unknown.txt", slotId, nil, nil)
+		twin := world.plan()
+		world.createSlotted(twin, "unknown.txt", slotId, object, slotBody)
+		return &format2SlotCase{push: world.body(plan, nil, nil), twin: world.body(twin, nil, nil)}
+	},
+	// step 6: a new slot's PUT meeting an equal object over 23 h old
+	"slot-stale": func(world *format2World) *format2SlotCase {
+		slotId, object, slotBody, err := format2Slot()
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		first := world.plan()
+		world.createSlotted(first, "first.txt", slotId, object, slotBody)
+		firstBody := world.body(first, nil, nil)
+		world.commit(world.format1, firstBody)
+		// the twin: the first push sent again, which meets its own commit. Half an hour past the rule's 23 h, and
+		// inside the day the host's quota reservations last
+		world.clock.Advance(23*time.Hour + 30*time.Minute)
+		again := world.plan()
+		world.createSlotted(again, "again.txt", slotId, object, slotBody)
+		return &format2SlotCase{push: world.body(again, nil, nil), twin: firstBody}
+	},
+}
+
+// FS-95's format-1 cases from M2: a format-1 evs refuses a version naming a slot that neither its push introduced
+// nor a version step 4 read names (§11.8's 5h), and a new-slot PUT meeting an equal object over 23 h old (step 6),
+// each recorded and writing no version; each twin commits.
+func TestEvsSlotRuleRefusedAtAFormat1Evs(t *testing.T) {
+	vectors := loadFormat2RefusalVectors(t)
+	named := map[string]bool{}
+	for _, row := range vectors.SlotRule {
+		driver, ok := format2SlotDrivers[row.Name]
+		if !ok {
+			t.Errorf("%s: a slot rule row no driver builds", row.Name)
+			continue
+		}
+		named[row.Name] = true
+		world := newFormat2World(t)
+		c := driver(world)
+		headBefore := world.head()
+		recorder := world.postPush(world.format1, c.push)
+		reply := format2Refusal(t, recorder)
+		if recorder.Code != row.Status || format2CodeName(reply.GetCode()) != row.Code {
+			t.Errorf("%s: answered %d %s %v, want %d %s", row.Name, recorder.Code, format2CodeName(reply.GetCode()), reply, row.Status, row.Code)
+		}
+		head := world.head()
+		if head.Version() != headBefore.Version() {
+			t.Errorf("%s: the head moved to version %d", row.Name, head.Version())
+		}
+		if recorded := len(head.Head.GetRefused()) - len(headBefore.Head.GetRefused()); row.Recorded != (recorded == sidecar.EvsRefusalByteCount) {
+			t.Errorf("%s: the head's refusal records grew %d B, recorded %t", row.Name, recorded, row.Recorded)
+		}
+		if alarms := world.format1Log.alarms(); len(alarms) != 0 {
+			t.Errorf("%s: evs alarmed: %v", row.Name, alarms)
+		}
+		if twin := world.postPush(world.format1, c.twin); twin.Code != http.StatusOK {
+			t.Errorf("%s: the twin answered %d %v", row.Name, twin.Code, format2Refusal(t, twin))
+		}
+	}
+	for name := range format2SlotDrivers {
+		if !named[name] {
+			t.Errorf("%s: a slot rule driver with no row", name)
+		}
+	}
+}
+
+// testdata/evs/reserved_numbers.yml's lists of what format 1 holds for format 2.
+type format2ReservedNumbers struct {
+	Fields  map[string]int `yaml:"fields"`
+	Values  map[string]int `yaml:"values"`
+	Layouts map[string]int `yaml:"layouts"`
+}
+
+// The vectors name every number format 1 reserves for format 2: each field, value and layout of
+// reserved_numbers.yml is driven by a row here, held by a test the vectors name, or listed as unswept with its
+// reason, and no row names a number the list lacks. Each config row names the test that holds it, which exists.
+func TestEvsFormat2RefusalVectorsCoverTheReservations(t *testing.T) {
+	vectors := loadFormat2RefusalVectors(t)
+	reservedBytes, err := os.ReadFile("../testdata/evs/reserved_numbers.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := &format2ReservedNumbers{}
+	if err := yaml.Unmarshal(reservedBytes, reserved); err != nil {
+		t.Fatal(err)
+	}
+	numbers := map[string]bool{}
+	for _, list := range []map[string]int{reserved.Fields, reserved.Values, reserved.Layouts} {
+		for number := range list {
+			numbers[number] = false
+		}
+	}
+	if len(numbers) == 0 {
+		t.Fatal("no reserved numbers read")
+	}
+	cover := func(who string, cited []string) {
+		for _, number := range cited {
+			if _, ok := numbers[number]; !ok {
+				t.Errorf("%s: %q is no reserved number", who, number)
+				continue
+			}
+			numbers[number] = true
+		}
+	}
+	testExists := func(who string, file string, test string) {
+		source, err := os.ReadFile("../" + file)
+		if err != nil || !bytes.Contains(source, []byte("func "+test+"(")) {
+			t.Errorf("%s: no %s in %s (%v)", who, test, file, err)
+		}
+	}
+	names := map[string]bool{}
+	for _, row := range vectors.Rows {
+		if names[row.Name] || row.Construct == "" {
+			t.Errorf("%s: a row named twice, or with no construct", row.Name)
+		}
+		names[row.Name] = true
+		switch row.Side {
+		case "evs", "reader", "writer", "repo", "evacuator":
+			if row.HeldBy != nil {
+				t.Errorf("%s: a row this sweep drives names another test", row.Name)
+			}
+		case "config":
+			if row.HeldBy == nil {
+				t.Errorf("%s: a config row names the test that holds it", row.Name)
+				continue
+			}
+			testExists(row.Name, row.HeldBy.File, row.HeldBy.Test)
+		default:
+			t.Errorf("%s: side %q", row.Name, row.Side)
+		}
+		cover(row.Name, row.Numbers)
+	}
+	for _, elsewhere := range vectors.Elsewhere {
+		testExists(elsewhere.Test, elsewhere.File, elsewhere.Test)
+		cover(elsewhere.Test, elsewhere.Numbers)
+	}
+	for _, unswept := range vectors.Unswept {
+		if unswept.Why == "" {
+			t.Errorf("%v: unswept with no reason", unswept.Numbers)
+		}
+		cover("unswept", unswept.Numbers)
+	}
+	for number, covered := range numbers {
+		if !covered {
+			t.Errorf("%s: a reserved number no row, test or reason names", number)
 		}
 	}
 }
