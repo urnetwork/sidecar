@@ -13,6 +13,10 @@
 //	late    auth at or past gen/<g>'s and the previous base, matching proj/ there; time_ms within 10 minutes of gkm's
 //	        clock; the recipient reads R in gkm's newest state (a Delegation's reach holds R and it is live); a
 //	        ReaderWrap's key digest names the ReaderKey gkm serves at rk/<recipient>
+//	key     a DelegationWrap's key digest is the one its Delegation's row names (DESIGN-DETAILS 4.2.2): a forwarding
+//	        Delegation's reader_key_sha256, any other's its reader key's SHA-256; a LATE one's always, and a STAGED
+//	        one's wherever gkm's state holds the row, since its rotator's state may be ahead of gkm's and the members
+//	        judge it at its claim's pin
 //	bound   one object per (recipient, key), by If-None-Match; an uploader's STAGED objects in a group within
 //	        StagedRate's count per hour per reader of R
 //
@@ -22,7 +26,9 @@
 // If-None-Match makes that safe. PUTs run WrapPutConcurrency at once. A malformed delivery is refused as one whose
 // signature does not verify, 403, since gkm cannot tell the two apart without trusting it.
 //
-// Reads return only the caller's own objects: its s: deliveries and its covering Delegation's d: ones. A read asking
+// Reads return only the caller's own objects: its s: deliveries, its covering Delegation's d: ones, and its own
+// forwarding Delegations' d: ones, which its VPN component reads through its forwarding client, acting as the
+// sidecar (DESIGN-DETAILS 4.2.5's compile, step 2). A read asking
 // for a key (?want=<k8>&since=) that finds no delivery to it is a late delivery's ask: gkm hints wrap-pending naming
 // the recipient to the repo's writers, and once since is LateAskWidenAge (15 minutes) old to up to
 // LateAskOtherHolderMaxCount other holders, the recipient's member's devices first (§10.6's late wraps), at most once
@@ -37,6 +43,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,6 +246,11 @@ func (self *GkmEngine) judgeDelivery(batch *gkmWrapBatchContext, deliveryBytes [
 		if status := batch.stagedStatus(request.SidecarId); status != 0 {
 			return nil, status, true
 		}
+		if delivery.Type == sidecar.GkmWrapTypeDelegation {
+			if status, ok := self.checkDelegationKeyDigest(request, body, false); !ok || status != 0 {
+				return nil, status, ok
+			}
+		}
 		rateKey := "staged:" + sidecar.EvsKeyId(request.SidecarId) + ":" + sidecar.EvsKeyId(batch.groupId)
 		if !self.rates.Allow(batch.stagedRate, rateKey, request.Now()) {
 			return nil, 429, true
@@ -308,6 +320,9 @@ func (self *GkmEngine) judgeLateDelivery(batch *gkmWrapBatchContext, delivery *s
 		}
 	} else {
 		answer = self.deps.AuthState.DelegationReads(request.Principal, request.RepoId, body.GetRecipient(), now)
+		if answer == GkmAuthAllowed {
+			return self.checkDelegationKeyDigest(request, body, true)
+		}
 	}
 	switch answer {
 	case GkmAuthAllowed:
@@ -317,6 +332,51 @@ func (self *GkmEngine) judgeLateDelivery(batch *gkmWrapBatchContext, delivery *s
 	}
 	request.Unavailable()
 	return 0, false
+}
+
+// The key row for a DelegationWrap: its recipient_key_sha256 is the digest its Delegation's row names (DESIGN-DETAILS
+// 4.2.2), 0 when it is and 409 when it is not, the stale-key answer a ReaderWrap's gets. A row gkm's state does not
+// hold refuses a LATE delivery, 403, and passes a STAGED one to its members' checks when held is false. ok false once
+// it has answered the whole batch.
+func (self *GkmEngine) checkDelegationKeyDigest(request *GkmRequest, body *protocol.KeyDelivery, held bool) (status int, ok bool) {
+	facts, answer := self.deps.AuthState.DelegationKey(request.Principal, body.GetRecipient())
+	switch answer {
+	case GkmAuthAllowed:
+		if facts == nil || !bytes.Equal(facts.ReaderKeySha256, body.GetRecipientKeySha256()) {
+			// sealed to a key the Delegation's row does not name
+			return 409, true
+		}
+		return 0, true
+	case GkmAuthDenied:
+		if held {
+			return 403, true
+		}
+		return 0, true
+	}
+	request.Unavailable()
+	return 0, false
+}
+
+// Whether recipient is d:<delegation_id> of one of the caller's sidecar's own forwarding Delegations, any of them,
+// since a delivery valid at its own state stays its (§10.9's history row). ok false once it has answered 503.
+func (self *GkmEngine) ownForwardingRecipient(request *GkmRequest, recipient string) (own bool, ok bool) {
+	hexId, found := strings.CutPrefix(recipient, "d:")
+	if !found {
+		return false, true
+	}
+	delegationId, err := parseGkmDelegationId(hexId)
+	if err != nil {
+		return false, true
+	}
+	facts, answer := self.deps.AuthState.DelegationKey(request.Principal, delegationId)
+	switch answer {
+	case GkmAuthAllowed:
+		return facts != nil && facts.ForwardSidecarId != nil && *facts.ForwardSidecarId == request.SidecarId, true
+	case GkmAuthDenied:
+		return false, true
+	}
+	request.Unavailable()
+	return false, false
 }
 
 // POST /gkm/groups/<id>/wraps/<g>/<c8>: a GkmWrapBatch, answered by a GkmWrapBatchReply in order.
@@ -468,9 +528,16 @@ func (self *GkmEngine) serveWrapsRead(request *GkmRequest) {
 	}
 	covering := request.Sidecar.CoveringDelegationId
 	if recipient != ownRecipient && (len(covering) == 0 || recipient != "d:"+hex.EncodeToString(covering)) {
-		// a caller reads its own s: deliveries and its covering Delegation's d: ones alone
-		request.Forbidden()
-		return
+		// a caller reads its own s: deliveries, its covering Delegation's d: ones and its own forwarding Delegations'
+		// alone
+		own, ok := self.ownForwardingRecipient(request, recipient)
+		if !ok {
+			return
+		}
+		if !own {
+			request.Forbidden()
+			return
+		}
 	}
 	want := query.Get("want")
 	since := request.Now()

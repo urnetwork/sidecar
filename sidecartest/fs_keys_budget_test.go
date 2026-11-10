@@ -116,6 +116,11 @@ func (self *fsKeysBudgetState) DelegationReads(principal *sidecar.Principal, rep
 	return gkmservice.GkmAuthDenied
 }
 
+// No Delegation in this test's state.
+func (self *fsKeysBudgetState) DelegationKey(principal *sidecar.Principal, delegationId []byte) (*gkmservice.GkmDelegationKeyFacts, gkmservice.GkmAuthAnswer) {
+	return nil, gkmservice.GkmAuthDenied
+}
+
 func (self *fsKeysBudgetState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
 	return nil, gkmservice.GkmAuthAllowed
 }

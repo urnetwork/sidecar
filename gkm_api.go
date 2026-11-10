@@ -502,6 +502,63 @@ func (self *GkmApi) ReaderKeys(ctx context.Context, sidecarIds []Id) ([]*bridge.
 	return readerKeys, nil
 }
 
+// The path of a forwarding Delegation's reader key at gkm, or an error for an id of another size than 32 bytes.
+func gkmDelegationKeyRoutePath(delegationId []byte) (string, error) {
+	pathId, err := GkmDelegationPathId(delegationId)
+	if err != nil {
+		return "", err
+	}
+	return "/gkm/delegation-keys/" + pathId, nil
+}
+
+// PUT /gkm/delegation-keys/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key, by
+// the sidecar that signed the Delegation (DESIGN-DETAILS 4.2.6's S3), under a token holding r, rw or admin on some
+// repo. gkm creates the object once, holding the key to the Delegation's row in its newest state: a 409 while that
+// state does not hold the row yet, which the same call answers once it does, and the same bytes again answer
+// success, so a retry after a lost answer is safe.
+func (self *GkmApi) UploadDelegationKey(ctx context.Context, delegationId []byte, readerKey []byte) error {
+	path, err := gkmDelegationKeyRoutePath(delegationId)
+	if err != nil {
+		return err
+	}
+	if len(readerKey) != gkmXWingPublicKeyByteCount {
+		return fmt.Errorf("%w: a reader key of %d bytes", ErrGkmMalformed, len(readerKey))
+	}
+	scopes, err := self.scopesFor(nil, GkmScopeRoleRead)
+	if err != nil {
+		return err
+	}
+	call := &gkmCall{route: "PUT /gkm/delegation-keys/{delegation_id}", method: http.MethodPut, path: path, scopes: scopes, body: bytes.Clone(readerKey)}
+	_, _, err = self.do(ctx, call)
+	return err
+}
+
+// GET /gkm/delegation-keys/<delegation_id>: the reader key gkm holds for a forwarding Delegation, unchecked, or nil
+// for none, under the scopes of configRepoId, the network's config repo, whose readers alone may read it. A sealer
+// holds it to the Delegation's row before it seals to it (GkmForwardingReaderKey).
+func (self *GkmApi) DelegationKey(ctx context.Context, configRepoId Id, delegationId []byte) ([]byte, error) {
+	path, err := gkmDelegationKeyRoutePath(delegationId)
+	if err != nil {
+		return nil, err
+	}
+	scopes, err := self.scopesFor(&configRepoId, GkmScopeRoleRead)
+	if err != nil {
+		return nil, err
+	}
+	call := &gkmCall{route: "GET /gkm/delegation-keys/{delegation_id}", method: http.MethodGet, path: path, scopes: scopes, retry: true}
+	_, body, err := self.do(ctx, call)
+	if IsGkmStatus(err, http.StatusNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(body) != gkmXWingPublicKeyByteCount {
+		return nil, fmt.Errorf("%w: GET /gkm/delegation-keys: a key of %d bytes", ErrGkmReplyInvalid, len(body))
+	}
+	return body, nil
+}
+
 // POST /gkm/groups (KF1): the GroupForm, epoch 0 and generation 1 of repoId's group.
 func (self *GkmApi) CreateGroup(ctx context.Context, repoId Id, request *protocol.GkmGroupCreateRequest) error {
 	scopes, err := self.scopesFor(&repoId, GkmScopeRoleAdmin)
