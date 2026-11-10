@@ -39,9 +39,10 @@ type ConfigAuthority struct {
 	client *ConfigClient
 }
 
+// SidecarAuthorityCatchUp is declared on the legs that run §6's RPC alone, so it is not named here; CatchUp below
+// meets it there.
 var (
 	_ SidecarAuthority          = (*ConfigAuthority)(nil)
-	_ SidecarAuthorityCatchUp   = (*ConfigAuthority)(nil)
 	_ SidecarIndexerAuthority   = (*ConfigAuthority)(nil)
 	_ SidecarAuthorityProposals = (*ConfigAuthority)(nil)
 )
