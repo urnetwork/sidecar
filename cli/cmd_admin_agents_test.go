@@ -136,6 +136,58 @@ func TestAdminDelegationsListsAndRevokes(t *testing.T) {
 	}
 }
 
+// ur admin delegations tells a forwarding Delegation from an agent's (TEAM-M8-01; D-TEAM-33): it is listed by the
+// sidecar it forwards for and where a newer one superseded it, never by admissions or agents; its revoke refuses
+// --leaked before any prompt, with or without --since, and a plain one is confirmed in forwarding's words before it
+// acts.
+func TestAdminDelegationsTellsAForwardingDelegationApart(t *testing.T) {
+	sidecarId := sidecar.NewId()
+	liveId, supersededId := make([]byte, 32), make([]byte, 32)
+	liveId[0], supersededId[0] = 0xf, 0xe
+	target := &testUrAdminTarget{delegations: []*sidecar.DelegationState{
+		{DelegationId: supersededId, At: 5, ForwardSidecarId: sidecarId.Bytes(), SupersededAt: 8},
+		{DelegationId: liveId, At: 8, ForwardSidecarId: sidecarId.Bytes()},
+	}}
+	daemon := startTestControlDaemon(t, target, nil)
+	cli, stdout, _ := newTestUrCli(daemon.socketPath)
+	if code := cli.main(context.Background(), []string{"ur", "admin", "delegations"}); code != urExitOk {
+		t.Fatalf("the list: exit %d: %s", code, stdout.String())
+	}
+	listed := stdout.String()
+	for _, want := range []string{"forwards for sidecar " + sidecarId.String() + "  superseded at 8", "forwards for sidecar " + sidecarId.String() + "  live"} {
+		if !strings.Contains(listed, want) {
+			t.Errorf("the list lacks %q: %s", want, listed)
+		}
+	}
+	if strings.Contains(listed, "admits") || strings.Contains(listed, "agent(s)") {
+		t.Errorf("a forwarding Delegation listed by admissions or agents: %s", listed)
+	}
+
+	ttys := []*testTty{}
+	cli.openTty = func() (urTty, error) {
+		tty := &testTty{lines: []string{"yes"}}
+		ttys = append(ttys, tty)
+		return tty, nil
+	}
+	for _, args := range [][]string{{"--leaked", "--since", "9"}, {"--leaked"}} {
+		command := append([]string{"ur", "admin", "delegations", "revoke", hex.EncodeToString(liveId)}, args...)
+		if code := cli.main(context.Background(), command); code == urExitOk || len(ttys) != 0 || len(target.revokes) != 0 {
+			t.Fatalf("%v: exit %d, %d prompt(s), %v", args, code, len(ttys), target.revokes)
+		}
+	}
+	if code := cli.main(context.Background(), []string{"ur", "admin", "delegations", "revoke", hex.EncodeToString(liveId)}); code != urExitOk ||
+		len(target.revokes) != 1 || target.revokes[0] != hex.EncodeToString(liveId) {
+		t.Fatalf("a forwarding Delegation's revoke: exit %d, %v", code, target.revokes)
+	}
+	prompted := ""
+	for _, tty := range ttys {
+		prompted += tty.written.String()
+	}
+	if !strings.Contains(prompted, "hosts deny its key") || strings.Contains(prompted, "ReaderWraps") {
+		t.Errorf("the prompt: %s", prompted)
+	}
+}
+
 // A daemon target whose indexer designations a test reads.
 type testUrIndexerTarget struct {
 	testUrDaemonTarget
