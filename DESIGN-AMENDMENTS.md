@@ -5439,3 +5439,8 @@ A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id
 Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
 
 Questions: `details-13-edge-pair-life.md`.
+
+### QD-004 (part left): AclTarget.cidr leaves rows
+*Accepted by the owner on 2026-11-06, in bulk as recommended. Folds into §8 Access control, with protocol/acl.proto.*
+
+dr-s2-s3 folded QD-004 into §2.8, §8 and §17 on 2026-11-10, except one line: §8.8's AclTarget fence keeps `bytes cidr = 8` because protocol/acl.proto still declares it and protocol's fence guard holds the wire to the design. The ACL change that keeps an ip target's CIDR in AclLocalPolicy, never in rows, reserves field 8 in acl.proto, and §8.8's fence reserves it in the same change. AclRule's ports (5) and ports_limited (11) are already in both.
