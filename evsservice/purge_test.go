@@ -47,24 +47,35 @@ func (self *testFormat2Gate) set(mode sidecar.Format2Mode) {
 
 // X's newest version's names as a test sets them, by path.
 type fakePurgeNewest struct {
-	stateLock sync.Mutex
-	pathNames map[string]map[string]bool
-	err       error
-	readCount int
+	stateLock            sync.Mutex
+	pathNames            map[string]map[string]bool
+	pathCommitMinuteEnds map[string]time.Time
+	err                  error
+	readCount            int
 }
 
-func (self *fakePurgeNewest) NewestNames(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, pathEpoch uint64, tokenPath sidecar.EvsTokenPath) (map[string]bool, error) {
+func (self *fakePurgeNewest) NewestNames(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, pathEpoch uint64, tokenPath sidecar.EvsTokenPath) (*PurgeNewest, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.readCount += 1
 	if self.err != nil {
 		return nil, self.err
 	}
-	names := map[string]bool{}
+	newest := &PurgeNewest{Names: map[string]bool{}, CommitMinuteEnd: self.pathCommitMinuteEnds[tokenPath.KeyString()]}
 	for id := range self.pathNames[tokenPath.KeyString()] {
-		names[id] = true
+		newest.Names[id] = true
 	}
-	return names, nil
+	return newest, nil
+}
+
+// The minute X's newest version committed in, for evacuation's 60 s rule.
+func (self *fakePurgeNewest) committed(tokenPath sidecar.EvsTokenPath, minuteEnd time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.pathCommitMinuteEnds == nil {
+		self.pathCommitMinuteEnds = map[string]time.Time{}
+	}
+	self.pathCommitMinuteEnds[tokenPath.KeyString()] = minuteEnd
 }
 
 func (self *fakePurgeNewest) name(tokenPath sidecar.EvsTokenPath, ids ...[]byte) {
@@ -474,9 +485,9 @@ func TestPurgeNewestReaderReadsThePathsNewestVersion(t *testing.T) {
 	plan.NewObjects = append(plan.NewObjects, slotOneObject)
 	plan.SlotBodies = append(plan.SlotBodies, slotOneBody)
 	fixture.requireCommitted(fixture.push(plan), 1)
-	names, err := reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, path)
-	if err != nil || !names[string(slotOne.Bytes())] {
-		t.Fatalf("names %v %v", names, err)
+	newest, err := reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, path)
+	if err != nil || !newest.Names[string(slotOne.Bytes())] || newest.CommitVersion != 1 || newest.CommitMinuteEnd.IsZero() {
+		t.Fatalf("newest %+v %v", newest, err)
 	}
 
 	slotTwo, slotTwoObject, slotTwoBody := checkTestSlot(t, "p2")
@@ -485,17 +496,17 @@ func TestPurgeNewestReaderReadsThePathsNewestVersion(t *testing.T) {
 	next.NewObjects = append(next.NewObjects, slotTwoObject)
 	next.SlotBodies = append(next.SlotBodies, slotTwoBody)
 	fixture.requireCommitted(fixture.push(next), 2)
-	names, err = reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, path)
-	if err != nil || names[string(slotOne.Bytes())] || !names[string(slotTwo.Bytes())] {
-		t.Fatalf("after the replacement: %v %v", names, err)
+	newest, err = reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, path)
+	if err != nil || newest.Names[string(slotOne.Bytes())] || !newest.Names[string(slotTwo.Bytes())] || newest.CommitVersion != 2 {
+		t.Fatalf("after the replacement: %+v %v", newest, err)
 	}
 
 	removal := fixture.plan()
 	removal.Changes = append(removal.Changes, &sidecar.EvsPlannedChange{TokenPath: path, BaseEntryVersion: 2})
 	fixture.requireCommitted(fixture.push(removal), 3)
-	names, err = reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, path)
-	if err != nil || len(names) != 0 {
-		t.Fatalf("a removed path names %v %v", names, err)
+	newest, err = reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, path)
+	if err != nil || len(newest.Names) != 0 || newest.CommitVersion != 3 {
+		t.Fatalf("a removed path: %+v %v", newest, err)
 	}
 
 	if _, err := reader.NewestNames(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 2, path); !errors.Is(err, errPurgeUnjudged) {

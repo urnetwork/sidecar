@@ -145,6 +145,16 @@ func (self *EvsBatchRecord) encodeFormat2(tail *EvsBatchRecordTail) []byte {
 	return encoded
 }
 
+// The record's bytes as a pack or parcel keeps them (§11.13's staged row: packs and parcels never hold staged bytes):
+// its purge list kept, which a hold's end and purge's turn-on read back (EVSB-M10-02), its staged item emptied, and
+// format 1's form when no purge list is left. Its hashes do not change, since staged bytes ride outside every hash.
+func EvsBatchRecordBytesWithoutStaged(record *EvsBatchRecord, tail *EvsBatchRecordTail) []byte {
+	if tail == nil || len(tail.PurgeList) == 0 {
+		return record.encode()
+	}
+	return record.encodeFormat2(&EvsBatchRecordTail{PurgeList: tail.PurgeList})
+}
+
 // Adds a record of either format and gives its place: with a non-empty tail, a format-2 record, which turns the batch
 // to format 2; else format 1's form, as Add writes it. A seal or reseed record stages nothing, and every bound
 // counts the tail.

@@ -84,12 +84,22 @@ type PurgeSink interface {
 	Certain(commit *PurgeCommit)
 }
 
-// What X's newest committed version names, read from the cluster at the reread (§11.13's who row).
+// X's newest committed version as the purge, the sweep and evacuation's staged decision read it.
+type PurgeNewest struct {
+	// The ids it names, its locators' segments and its slots: empty when X stands removed or was never written.
+	Names map[string]bool
+	// The ref version that committed it, or X's removal, 0 when X was never written.
+	CommitVersion uint64
+	// The end of the UTC minute its record's place names, by which it committed (plan-EVS2-small-readings#5). Zero
+	// when it came folded from X's entry, whose time the head no longer carries.
+	CommitMinuteEnd time.Time
+}
+
+// What X's newest committed version names, read from the cluster (§11.13's who, staged and sweep rows).
 type PurgeNewestReader interface {
-	// The ids X's newest committed version names (its locators' segments and its slots), empty when X stands
-	// removed or was never written, at the ref's head now. An error leaves X's candidates to the sweep: the head
-	// unread or held, a path epoch other than pathEpoch, or sources standing.
-	NewestNames(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, pathEpoch uint64, tokenPath sidecar.EvsTokenPath) (map[string]bool, error)
+	// X's newest committed version at the ref's head now. An error leaves X's candidates where they are: the head
+	// unread or held, a path epoch other than pathEpoch, sources standing, or a record this reader cannot parse.
+	NewestNames(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, pathEpoch uint64, tokenPath sidecar.EvsTokenPath) (*PurgeNewest, error)
 }
 
 // Tunables of the purge (§11.13's who row; §22.8 tunes the rate and the queue).
@@ -524,12 +534,12 @@ func (self *Purger) purgeItem(item *purgeItem) int {
 			left += ids
 			continue
 		}
-		names, err := self.deps.Newest.NewestNames(self.ctx, cluster, commit.RepoId, commit.RefId, commit.PathEpoch, tokenPath)
+		newest, err := self.deps.Newest.NewestNames(self.ctx, cluster, commit.RepoId, commit.RefId, commit.PathEpoch, tokenPath)
 		if err != nil {
 			left += ids
 			continue
 		}
-		left += self.purgeCandidate(item, i, cluster, segmentCluster, candidate, versionTime, names)
+		left += self.purgeCandidate(item, i, cluster, segmentCluster, candidate, versionTime, newest.Names)
 	}
 	return left
 }
@@ -773,22 +783,23 @@ func (self *Purger) reportFreed(commit *PurgeCommit, byteCount int64, deleted bo
 }
 
 // X's newest version as the engine reads it (§11.7's newest row): the head from the cluster, the path's entry in
-// the head's current epoch, and the window's statements through the record cache. A head in another path epoch, or
-// with sources standing, is not judged here: its candidates are the sweep's.
-type enginePurgeNewest struct {
-	engine *EvsEngine
+// the head's current epoch, and the window's statements through a record cache. A head in another path epoch, or
+// with sources standing, is not judged here: its candidates stay where they are.
+type headPurgeNewest struct {
+	heads   *HeadStore
+	records *RecordCache
 }
 
 // The engine's reader of a path's newest version, for its Purger.
 func (self *EvsEngine) PurgeNewest() PurgeNewestReader {
-	return &enginePurgeNewest{engine: self}
+	return &headPurgeNewest{heads: self.heads, records: self.records}
 }
 
 // A path the reread cannot judge.
 var errPurgeUnjudged = errors.New("evs purge: the path's newest version cannot be judged here")
 
-func (self *enginePurgeNewest) NewestNames(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, pathEpoch uint64, tokenPath sidecar.EvsTokenPath) (map[string]bool, error) {
-	head, err := self.engine.heads.ReadCluster(ctx, cluster, repoId, refId)
+func (self *headPurgeNewest) NewestNames(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, pathEpoch uint64, tokenPath sidecar.EvsTokenPath) (*PurgeNewest, error) {
+	head, err := self.heads.ReadCluster(ctx, cluster, repoId, refId)
 	if err != nil {
 		return nil, err
 	}
@@ -800,7 +811,7 @@ func (self *enginePurgeNewest) NewestNames(ctx context.Context, cluster sidecar.
 	if err != nil {
 		return nil, err
 	}
-	pushes := NewRecordPushSource(self.engine.records, cluster, repoId, refId)
+	pushes := NewRecordPushSource(self.records, cluster, repoId, refId)
 	var newest *EvsNewest
 	for attempt := 0; attempt < 2; attempt += 1 {
 		newest, err = Newest(ctx, read.EvsEntryRead, head.Head, pushes)
@@ -816,9 +827,14 @@ func (self *enginePurgeNewest) NewestNames(ctx context.Context, cluster sidecar.
 	if err != nil {
 		return nil, err
 	}
-	names := map[string]bool{}
+	result := &PurgeNewest{Names: map[string]bool{}, CommitVersion: newest.CommitVersion}
+	if newest.FromWindow {
+		if entry := windowEntryAt(head.Head, newest.CommitVersion); entry != nil && entry.Place != nil {
+			result.CommitMinuteEnd = batchMinuteTime(entry.Place.GetMinute()).Add(time.Minute)
+		}
+	}
 	if !newest.Exists || newest.Directory {
-		return names, nil
+		return result, nil
 	}
 	var entryVersionBytes []byte
 	switch {
@@ -835,11 +851,11 @@ func (self *enginePurgeNewest) NewestNames(ctx context.Context, cluster sidecar.
 	}
 	for _, locator := range entryVersion.GetChain() {
 		if id := locator.GetId(); len(id) != 0 {
-			names[string(id)] = true
+			result.Names[string(id)] = true
 		}
 	}
 	for _, slotId := range entryVersion.GetSlotIds() {
-		names[string(slotId)] = true
+		result.Names[string(slotId)] = true
 	}
-	return names, nil
+	return result, nil
 }
