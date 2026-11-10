@@ -21,7 +21,7 @@ track=$1
 shift
 cap=${TLC_DISK_CAP_MB:-8192}
 designs="Gkm Gkm-Epochs Gkm-Live Gkm-Wide Gkm-Deep"
-twins="GkmTwin-PointerByRef GkmTwin-FormsUnchecked GkmTwin-GenWrapIgnoresRoster GkmTwin-SelfJoinCarriesGenWrap GkmTwin-LateBelowClaimPin GkmTwin-ClaimBelowParent GkmTwin-LeafWrapDirtyTree GkmTwin-NoGate"
+twins="GkmTwin-PointerByRef GkmTwin-FormsUnchecked GkmTwin-GenWrapIgnoresRoster GkmTwin-SelfJoinCarriesGenWrap GkmTwin-LateBelowClaimPin GkmTwin-ClaimBelowParent GkmTwin-LeafWrapDirtyTree GkmTwin-NoGate GkmTwin-AddWithoutRemove GkmTwin-StagedToNonHolder GkmTwin-AdoptNonCoveringWinner"
 case "${1:-all}" in
   all) set -- $designs $twins ;;
   design) set -- $designs ;;
@@ -81,7 +81,7 @@ for config in "$@"; do
   depth=$(sed -n 's/^The depth of the complete state graph search is \([0-9]*\).*/\1/p' "$out" | tail -1)
   took=$(sed -n 's/^Finished in \(.*\) at .*/\1/p' "$out" | tail -1)
   trace=$(grep -c '^State [0-9]*:' "$out")
-  expect=$(sed -n 's/^    \([A-Za-z]*\)$/\1/p' "$config.cfg" | tail -1)
+  expect=$(sed -n 's/^    \([A-Za-z]*\)$/\1/p' "$here/$config.cfg" | tail -1)
   generated=$(sed -n 's/^The number of states generated: \([0-9,]*\).*/\1/p' "$out" | tail -1)
   if [ -n "$generated" ]; then
     facts="tlc $rev, exit $code, simulation, $generated states generated, ${took:-?}"

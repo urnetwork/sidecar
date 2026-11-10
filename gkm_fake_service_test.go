@@ -87,8 +87,10 @@ type gkmFakeStore struct {
 	// each call, in order: "<sidecar label>:<route>"
 	calls []string
 	// a fault a test planted, by route: before it acts, a kill before the write; after it, a lost answer
-	beforeFaults map[string]error
-	afterFaults  map[string]error
+	beforeFaults map[string]int
+	afterFaults  map[string]int
+	// a refusal gkm answers once at a route, in place of acting
+	routeRefusals map[string]int
 	// what a test runs once just before the next call of a route acts, with no lock held: another device's flow, so
 	// two race at one object in the order the test chose
 	routeHooks map[string]func()
@@ -102,6 +104,7 @@ type gkmFakeStore struct {
 	readerKeys        map[sidecar.Id]*bridge.Signed
 	keyPackages       map[sidecar.Id][]*sidecar.MlsKeyPackage
 	groupWelcomes     map[string][]byte
+	groupInfos        map[sidecar.Id]*protocol.GkmGroupInfoObject
 	welcomeEntries    map[sidecar.Id][]*protocol.GkmWelcomeEntry
 	// every late ask: "<recipient>:<g>"
 	lateAsks []string
@@ -111,8 +114,10 @@ func newGkmFakeStore(t *testing.T, clock sidecar.Clock) *gkmFakeStore {
 	return &gkmFakeStore{
 		t:                 t,
 		clock:             clock,
-		beforeFaults:      map[string]error{},
-		afterFaults:       map[string]error{},
+		beforeFaults:      map[string]int{},
+		afterFaults:       map[string]int{},
+		routeRefusals:     map[string]int{},
+		groupInfos:        map[sidecar.Id]*protocol.GkmGroupInfoObject{},
 		routeHooks:        map[string]func(){},
 		groupOwnerRepoIds: map[sidecar.Id]sidecar.Id{},
 		repoForms:         map[sidecar.Id][]*bridge.Signed{},
@@ -132,13 +137,25 @@ var errGkmFakeFault = errors.New("fake gkm: a planted fault")
 
 // Plants a fault that fires once at the next call of route: before it acts when before, else after it has.
 func (self *gkmFakeStore) plant(route string, before bool) {
+	self.plantCount(route, before, 1)
+}
+
+// Plants a fault that fires at each of the next count calls of route.
+func (self *gkmFakeStore) plantCount(route string, before bool, count int) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if before {
-		self.beforeFaults[route] = errGkmFakeFault
+		self.beforeFaults[route] += count
 	} else {
-		self.afterFaults[route] = errGkmFakeFault
+		self.afterFaults[route] += count
 	}
+}
+
+// Has gkm answer status once at the next call of route, in place of acting.
+func (self *gkmFakeStore) refuseOnce(route string, status int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.routeRefusals[route] = status
 }
 
 // Runs hook once, just before the next call of route by the device labelled label acts.
@@ -235,16 +252,20 @@ func (self *gkmFakeApi) call(route string, act func() error) error {
 	store.stateLock.Lock()
 	defer store.stateLock.Unlock()
 	store.calls = append(store.calls, self.label+":"+route)
-	if fault, ok := store.beforeFaults[route]; ok {
-		delete(store.beforeFaults, route)
-		return fault
+	if 0 < store.beforeFaults[route] {
+		store.beforeFaults[route] -= 1
+		return errGkmFakeFault
+	}
+	if status, ok := store.routeRefusals[route]; ok {
+		delete(store.routeRefusals, route)
+		return gkmFakeRefusal(status, nil)
 	}
 	if err := act(); err != nil {
 		return err
 	}
-	if fault, ok := store.afterFaults[route]; ok {
-		delete(store.afterFaults, route)
-		return fault
+	if 0 < store.afterFaults[route] {
+		store.afterFaults[route] -= 1
+		return errGkmFakeFault
 	}
 	return nil
 }
@@ -338,8 +359,17 @@ func (self *gkmFakeApi) CommitEpoch(ctx context.Context, repoId sidecar.Id, grou
 			}
 			return gkmFakeRefusal(http.StatusConflict, epochs[epoch])
 		}
+		// gkm's copy of the header, where the commit's clear framing shows one
+		var header *protocol.GkmCommitHeader
+		if parsed, err := sidecar.ParseMlsHeader(request.GetCommit()); err == nil {
+			header = &protocol.GkmCommitHeader{}
+			if err := proto.Unmarshal(parsed.AuthenticatedData, header); err != nil {
+				header = nil
+			}
+		}
 		store.groupEpochs[groupId] = append(epochs, &protocol.GkmEpochObject{
 			Commit:              request.GetCommit(),
+			Header:              header,
 			Uploader:            self.sidecarId.Bytes(),
 			TimeMs:              store.clock.Now().UnixMilli(),
 			GenWrap:             request.GetGenWrap(),
@@ -577,4 +607,61 @@ func (self *gkmFakeApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEnt
 		return nil
 	})
 	return entries, err
+}
+
+func (self *gkmFakeApi) GroupInfo(ctx context.Context, repoId sidecar.Id, groupId sidecar.Id, want *uint64) (*protocol.GkmGroupInfoObject, error) {
+	var object *protocol.GkmGroupInfoObject
+	err := self.call("GroupInfo", func() error {
+		held, ok := self.store.groupInfos[groupId]
+		if !ok {
+			return gkmFakeRefusal(http.StatusNotFound, nil)
+		}
+		object = held
+		return nil
+	})
+	return object, err
+}
+
+func (self *gkmFakeApi) UploadGroupInfo(ctx context.Context, repoId sidecar.Id, groupId sidecar.Id, object *protocol.GkmGroupInfoObject) error {
+	return self.call("UploadGroupInfo", func() error {
+		// it rises at each write
+		if held, ok := self.store.groupInfos[groupId]; ok && object.GetEpoch() <= held.GetEpoch() {
+			return gkmFakeRefusal(http.StatusConflict, held)
+		}
+		self.store.groupInfos[groupId] = object
+		return nil
+	})
+}
+
+// Publishes KeyPackages of a device at gkm, as its upkeep would: count one-time ones, and its last-resort one when
+// asked.
+func (self *gkmFakeStore) publishKeyPackages(device *gkmWorldDevice, count int, lastResort bool) {
+	self.t.Helper()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for index := 0; index < count; index += 1 {
+		keyPackage, err := device.mls.CreateKeyPackage(false)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		self.keyPackages[device.id] = append(self.keyPackages[device.id], keyPackage)
+	}
+	if lastResort {
+		keyPackage, err := device.mls.CreateKeyPackage(true)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		self.keyPackages[device.id] = append(self.keyPackages[device.id], keyPackage)
+	}
+}
+
+// The Welcome pointers gkm holds for a device, as epochs in order.
+func (self *gkmFakeStore) welcomeEpochs(device *gkmWorldDevice) []uint64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	epochs := []uint64{}
+	for _, entry := range self.welcomeEntries[device.id] {
+		epochs = append(epochs, entry.GetPointer().GetEpoch())
+	}
+	return epochs
 }

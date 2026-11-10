@@ -21,7 +21,7 @@
 //	           generation 0, which may leave the lost devices' leaves; a tree that breaks it poisons the generation its
 //	           GenWrap carried
 //	GenWrap    opens under the new epoch's KEK to RK matching gen/<g>'s C_g (R4); none at generation 0, which only
-//	           that self-join carries
+//	           that self-join carries; a leaf the commit removes cannot derive that KEK and judges the rest alone
 //
 // Readings where the rows give less than §10.9's words: the rows keep no revocation's signer, so in the config and
 // directory groups a Remove is held to its input and to a standing committer leaf that is not read_only, not to "the
@@ -407,6 +407,11 @@ func CheckCommit(view GkmAuthView, group MlsGroup, staged MlsStagedCommit, args 
 	groupId := group.GroupId()
 	if !bytes.Equal(args.Generation.Rotate.GetRepoId(), args.RepoId.Bytes()) {
 		return refuse(gkmRefuse(GkmRefusalGenWrap, "gen/%d of another repo", generation))
+	}
+	if self := group.Self().SidecarId; removedSidecarIds[self] && !slices.ContainsFunc(joiners, func(joiner MlsMember) bool { return joiner.SidecarId == self }) {
+		// the commit removes this device: the new epoch's KEK is not its to derive, so it judges the commit by its
+		// rows alone and holds nothing of its GenWrap
+		return check, nil
 	}
 	kek, err := MlsKek(staged, args.RepoId)
 	if err != nil {
