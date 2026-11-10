@@ -564,6 +564,42 @@ func TestAclContractGateReloadsItsHeads(t *testing.T) {
 	}
 }
 
+// A heads load asks for at most LoadAskCount loads, the rest at the loads after it, so a cold start spreads them.
+func TestAclContractGateBoundsTheLoadsItAsks(t *testing.T) {
+	states := newAclContractTestStates()
+	heads := &aclContractTestHeads{}
+	networkIds := []Id{NewId(), NewId(), NewId()}
+	heads.set(map[Id]uint64{networkIds[0]: 1, networkIds[1]: 1, networkIds[2]: 1}, nil)
+	clock := newAclGateTestClock()
+	loads := make(chan error, 64)
+	settings := DefaultAclContractGateSettings()
+	settings.Log = NewNoopLogger()
+	settings.LoadAskCount = 1
+	settings.OnHeads = func(networkCount int, err error) {
+		loads <- err
+	}
+	gate := NewAclContractGate(context.Background(), states, heads, clock, settings)
+	t.Cleanup(gate.Close)
+	for i := range len(networkIds) + 1 {
+		if i != 0 {
+			clock.fire <- clock.Now()
+		}
+		if err := aclContractTestNextLoad(t, loads); err != nil {
+			t.Fatal(err)
+		}
+		<-clock.armed
+		if _, asked := states.asked(); len(asked) != min(i+1, len(networkIds)) {
+			t.Fatalf("load %d asked for %v", i, asked)
+		}
+	}
+	_, asked := states.asked()
+	slices.SortFunc(asked, Id.Cmp)
+	slices.SortFunc(networkIds, Id.Cmp)
+	if !slices.Equal(asked, networkIds) || !gate.HasHead(networkIds[2]) {
+		t.Errorf("asked for %v", asked)
+	}
+}
+
 // The decision allocates nothing on any path a warm state answers (§22.5's gate).
 func TestAclContractGateDecideAllocatesNothing(t *testing.T) {
 	net := newAclContractTestNet()

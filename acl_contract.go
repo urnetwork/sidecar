@@ -298,6 +298,11 @@ type AclContractGateSettings struct {
 	// How long one heads read may run before the gate gives it up and keeps its last snapshot: 4 s, inside one
 	// interval. Non-positive is no deadline but the gate's own.
 	HeadsTimeout time.Duration
+	// The most networks one heads load asks the cache to load, those whose head is new or moved; the rest are asked
+	// at the next loads, so a cold start over many networks spreads its loads rather than starting one per network at
+	// once (§8.18's fan-out risk): 1,000, a few hundred kilobytes of loader stacks. A network a contract finds not
+	// loaded is asked at once whatever this says. Non-positive asks for none.
+	LoadAskCount int
 	// Where heads failures are logged, ids only (I-13). Nil is the leg's default.
 	Log Logger
 	// Called after each heads load on the gate's goroutine, which it must not hold: the snapshot's network count and
@@ -310,6 +315,7 @@ func DefaultAclContractGateSettings() *AclContractGateSettings {
 	return &AclContractGateSettings{
 		HeadsInterval: 5 * time.Second,
 		HeadsTimeout:  4 * time.Second,
+		LoadAskCount:  1000,
 	}
 }
 
@@ -336,6 +342,8 @@ type AclContractGate struct {
 
 	// the newest heads snapshot, never changed once stored; nil before the first load reads cleanly
 	heads atomic.Pointer[map[Id]uint64]
+	// the head position each network's load was last asked at; the heads goroutine's alone
+	asked map[Id]uint64
 
 	skipCount         atomic.Uint64
 	allowCount        atomic.Uint64
@@ -360,6 +368,7 @@ func NewAclContractGate(ctx context.Context, states AclContractStateSource, head
 		clock:      clockOrReal(clock),
 		settings:   settings,
 		log:        loggerOrDefault(settings.Log),
+		asked:      map[Id]uint64{},
 	}
 	go self.run()
 	return self
@@ -655,8 +664,8 @@ func (self *AclContractGate) run() {
 	}
 }
 
-// One heads load: the snapshot's install, then a load asked of the cache for every network whose head is new or
-// moved since the last. A failure keeps the last snapshot.
+// One heads load: the snapshot's install, then a load asked of the cache for each network whose head is new or moved
+// since its last ask, at most LoadAskCount of them. A failure keeps the last snapshot.
 func (self *AclContractGate) loadHeads() {
 	if self.ctx.Err() != nil {
 		return
@@ -676,18 +685,26 @@ func (self *AclContractGate) loadHeads() {
 		if heads == nil {
 			heads = map[Id]uint64{}
 		}
-		previous := self.heads.Load()
 		testHookBarrier("acl_contract.heads.before", "")
 		self.heads.Store(&heads)
 		testHookBarrier("acl_contract.heads", "")
 		self.headsLoadCount.Add(1)
+		askCount := 0
 		for networkId, version := range heads {
-			if previous != nil {
-				if previousVersion, found := (*previous)[networkId]; found && previousVersion == version {
-					continue
-				}
+			if askedVersion, found := self.asked[networkId]; found && askedVersion == version {
+				continue
+			}
+			if self.settings.LoadAskCount <= askCount {
+				break
 			}
 			self.states.Changed(networkId)
+			self.asked[networkId] = version
+			askCount += 1
+		}
+		for networkId := range self.asked {
+			if _, found := heads[networkId]; !found {
+				delete(self.asked, networkId)
+			}
 		}
 		testHookBarrier("acl_contract.heads.after", "")
 	}
