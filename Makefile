@@ -16,7 +16,7 @@ else
 modules := . ../cli $(patsubst %/go.mod,%,$(wildcard ../smtpproof/v*/go.mod)) ../mlsinterop ../sidecarctl
 endif
 
-.PHONY: check leaktest size proto metadata stack-test
+.PHONY: check leaktest size ios-extension-leg proto metadata stack-test
 
 # Every module's tests, then again under sidecar_testhooks, then §4.7's rules in check/. -count=1
 # throughout: go test caches on what a test opens, and not on what a go list it runs reads, so a
@@ -44,9 +44,17 @@ leaktest:
 	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -tags sidecar_leaktest ./sidecartest/...
 
 # §4.9's size gates, which build and link, so they are not part of make check. check/size_test.go
-# says what is measured. The ios_extension leg needs Xcode.
+# says what is measured: the ios_extension leg stripped, as sdk ships it, and the sidecar_http leg
+# unstripped. The ios_extension leg needs Xcode.
 size:
 	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_check,sidecar_size -run '^TestSizeGate' ./check
+
+# The ios_extension legs' list, check/testdata/ios_extension_leg.txt, against the forwarding role's
+# file closure, which check/legs_closure_test.go computes by compiling the legs round after round
+# (DESIGN-DETAILS 4.2.3). It needs Xcode, as make size does, and make check holds the list as
+# written. With SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1 in the environment it rewrites the list.
+ios-extension-leg:
+	$(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -tags sidecar_check,sidecar_size -run '^TestIosExtensionLeg' ./check
 
 proto:
 	$(MAKE) -C protocol GO="$(GO)"

@@ -224,6 +224,8 @@ func testHookBarrier(name string, key string) {
 `,
 	"sidecar/protocol/doc.go":        "package protocol\n",
 	"sidecar/protocol/bridge/doc.go": "package bridge\n",
+	// the ios_extension legs' list: every root and protocol file the clean tree compiles there
+	"sidecar/check/testdata/ios_extension_leg.txt": fixtureIosExtensionLegListHeader + "connect_require.go\nprotocol/doc.go\nsidecar.go\ntesthook.go\n",
 
 	"sidecar/cli/go.mod": "module @module@/cli\n\ngo 1.27.3\n\nrequire (\n\t@module@ v0.0.0\n\t@module@/smtpproof v0.0.0\n)\n\nrequire @connect@ v0.0.0 // indirect\n" + fixtureIndirectRequires +
 		"\nreplace @module@ => ..\n\nreplace @module@/smtpproof => ../smtpproof\n" + fixtureNestedReplaces,

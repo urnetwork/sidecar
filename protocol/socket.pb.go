@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §9's protobuf wire: the hint that revokes or drains a listener (§9.5), the claim a listener signs and a
 // dialer checks (§9.5), and the ticket a Find signs and a dialer presents (§9.6). Numbers are §9's as
 // written, and the claim's follow §9.5's tuple, which gives none. Registrations and Find are JSON on §9's
