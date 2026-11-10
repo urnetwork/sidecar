@@ -133,6 +133,8 @@ type evsMapper struct {
 	wokenAt map[evsRefKey]uint64
 	// per ref, the generation whose PATH_EPOCH evs refused 409 REF_MODE: nothing is mapped there up to it
 	refusedThrough map[evsRefKey]uint64
+	// per ref, the last listed index built, which a tick on the same head, or a job's resume, takes again
+	listed map[evsRefKey]*evsListedNameIndex
 }
 
 // The client's mapper, made on first use and registered as PathEpochStatus's source and the epochs' waker.
@@ -145,7 +147,7 @@ func (self *EvsClient) mapper() *evsMapper {
 	mapper := &evsMapper{
 		client: self, wakeups: make(chan evsRefKey, evsMapperWakeCount), indexes: map[evsRefKey]EvsNameIndex{},
 		running: map[evsRefKey]bool{}, firstSeen: map[evsRefKey]time.Time{}, states: map[evsRefKey]*EvsMapJob{},
-		wokenAt: map[evsRefKey]uint64{}, refusedThrough: map[evsRefKey]uint64{},
+		wokenAt: map[evsRefKey]uint64{}, refusedThrough: map[evsRefKey]uint64{}, listed: map[evsRefKey]*evsListedNameIndex{},
 	}
 	self.epochs.mapper = mapper
 	self.epochs.mapperStatus = mapper.status
@@ -366,7 +368,7 @@ func (self *EvsRepo) TickMapper(ctx context.Context, refId Id) error {
 		// evs refused this ref a map at that generation (409 REF_MODE): an IMMUTABLE tag takes none
 		return ErrEvsMapperNotEligible
 	}
-	index, err := self.eligibleIndex(ctx, head)
+	index, err := self.eligibleIndex(ctx, head, job)
 	if errors.Is(err, ErrEvsMapperNotEligible) && job != nil {
 		// eligibility lost: the job goes, its parts on evs left for §2.2.5's collection
 		if deleteErr := self.deleteMapJob(refId); deleteErr != nil {
@@ -431,8 +433,10 @@ func (self *EvsRepo) abandonReason(job *EvsMapJob, head *EvsVerifiedHead, newest
 	return ""
 }
 
-// The index the ref maps from, or ErrEvsMapperNotEligible: see the file header's eligible row.
-func (self *EvsRepo) eligibleIndex(ctx context.Context, head *EvsVerifiedHead) (EvsNameIndex, error) {
+// The index the ref maps from, or ErrEvsMapperNotEligible: see the file header's eligible row. A listed index is kept
+// between ticks: taken again on the same head, and by a job on disk whatever the head, since a job walks its tail
+// from its source and needs of a listing at or past that source only the directories it names.
+func (self *EvsRepo) eligibleIndex(ctx context.Context, head *EvsVerifiedHead, job *EvsMapJob) (EvsNameIndex, error) {
 	refKind := head.Head.GetRefKind()
 	if refKind != protocol.EvsRefKind_EVS_REF_SHARED && refKind != protocol.EvsRefKind_EVS_REF_OWNED {
 		return nil, ErrEvsMapperNotEligible
@@ -447,13 +451,22 @@ func (self *EvsRepo) eligibleIndex(ctx context.Context, head *EvsVerifiedHead) (
 		return nil, ErrEvsMapperNotEligible
 	}
 	mapper := self.client.mapper()
+	key := evsRefKey{repoId: self.repoId, refId: head.RefId}
 	mapper.stateLock.Lock()
-	index := mapper.indexes[evsRefKey{repoId: self.repoId, refId: head.RefId}]
+	index := mapper.indexes[key]
+	listed := mapper.listed[key]
 	mapper.stateLock.Unlock()
 	if index == nil {
-		listed, err := newEvsListedNameIndex(ctx, self, head.RefId, self.client.settings.ListedIndexRoundCount)
-		if err != nil {
-			return nil, err
+		reuse := listed != nil && (listed.head.Version == head.Version && listed.head.Chain == head.Chain ||
+			job != nil && job.SourceVersion <= listed.head.Version)
+		if !reuse {
+			var err error
+			if listed, err = newEvsListedNameIndex(ctx, self, head.RefId, self.client.settings.ListedIndexRoundCount); err != nil {
+				return nil, err
+			}
+			mapper.stateLock.Lock()
+			mapper.listed[key] = listed
+			mapper.stateLock.Unlock()
 		}
 		index = listed
 	}
