@@ -313,12 +313,18 @@ func TestGkmNoEarlyWelcome(t *testing.T) {
 	if code := welcome(world.adminToken, joiner); code != http.StatusOK {
 		t.Errorf("the Welcome sent again: %d", code)
 	}
-	pointerKey, err := GkmWelcomePointerKey(joiner.sidecarId, ref)
-	if err != nil {
-		t.Fatal(err)
+	pointerKey := GkmWelcomePointerKey(joiner.sidecarId, world.groupId, 1)
+	pointer := &protocol.GkmWelcomePointer{}
+	if held := fixture.object("meta-1", pointerKey); held == nil || proto.Unmarshal(held, pointer) != nil || !bytes.Equal(pointer.GetKeyPackageRef(), ref) {
+		t.Errorf("no pointer on the first cluster carrying the ref")
 	}
-	if fixture.object("meta-1", pointerKey) == nil {
-		t.Errorf("no pointer on the first cluster")
+	// the same epoch's Welcome naming another KeyPackage for the joiner is the uploader's own conflict
+	otherRequest := &protocol.GkmWelcomeRequest{
+		Welcome:    []byte("a Welcome without the tree"),
+		Recipients: []*protocol.GkmWelcomeRecipient{{SidecarId: joiner.sidecarId.Bytes(), KeyPackageRef: bytes.Repeat([]byte{0xcd}, gkmKeyPackageRefByteCount)}},
+	}
+	if code := fixture.serve(http.MethodPost, "/gkm/groups/"+sidecar.EvsKeyId(world.groupId)+"/welcome/1", world.adminToken, fixture.marshal(otherRequest)).Code; code != http.StatusConflict {
+		t.Errorf("a second ref for one epoch's recipient: %d", code)
 	}
 	welcomeHintCount := 0
 	for _, hint := range fixture.hints(joiner.sidecarId) {

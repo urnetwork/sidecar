@@ -254,8 +254,8 @@ func TestGkmSweepHonorsEachTtl(t *testing.T) {
 	welcomeKey := GkmWelcomeKey(world.groupId, 1)
 	fixture.put("meta-2", welcomeKey, []byte("a Welcome"))
 	ref := bytes.Repeat([]byte{0xcd}, gkmKeyPackageRefByteCount)
-	pointerKey, _ := GkmWelcomePointerKey(recipient, ref)
-	fixture.put("meta-1", pointerKey, fixture.marshal(&protocol.GkmWelcomePointer{GroupId: world.groupId.Bytes(), Epoch: 1}))
+	pointerKey := GkmWelcomePointerKey(recipient, world.groupId, 1)
+	fixture.put("meta-1", pointerKey, fixture.marshal(&protocol.GkmWelcomePointer{GroupId: world.groupId.Bytes(), Epoch: 1, KeyPackageRef: ref}))
 	// KeyPackages and a claim
 	kpKey, _ := GkmKeyPackageKey(leaf, bytes.Repeat([]byte{0x11}, gkmKeyPackageRefByteCount))
 	kpClaimKey, _ := GkmKeyPackageClaimKey(leaf, bytes.Repeat([]byte{0x22}, gkmKeyPackageRefByteCount))

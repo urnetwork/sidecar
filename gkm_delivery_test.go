@@ -706,12 +706,20 @@ type gkmWrapPathVector struct {
 	Recipient          hexBytes    `json:"recipient,omitempty"`
 	RecipientKeySha256 hexBytes    `json:"recipient_key_sha256,omitempty"`
 	BindingKeySha256   hexBytes    `json:"binding_key_sha256,omitempty"`
-	Path               string      `json:"path"`
+	// A Welcome pointer's recipient and epoch, and the owner marker's flag (DESIGN-DETAILS 6.2.2).
+	SidecarId hexBytes `json:"sidecar_id,omitempty"`
+	Epoch     uint64   `json:"epoch,omitempty"`
+	Owner     bool     `json:"owner,omitempty"`
+	Path      string   `json:"path"`
 }
 
 // The path a vector names, by its kind.
 func (self *gkmWrapPathVector) build() (string, error) {
 	switch {
+	case self.Owner:
+		return GkmGroupOwnerPath(Id(self.GroupId)), nil
+	case self.SidecarId != nil:
+		return GkmWelcomePointerPath(Id(self.SidecarId), Id(self.GroupId), self.Epoch), nil
 	case self.Type != 0:
 		return GkmWrapPath(Id(self.GroupId), self.Generation, self.Commitment, self.Type, self.Recipient, self.RecipientKeySha256)
 	case self.BindingKeySha256 != nil:
@@ -739,6 +747,9 @@ func gkmVectorPaths() []gkmWrapPathVector {
 			Name: "recovery wrap", GroupId: groupId, MemberId: gkmTestId("member").Bytes(), Generation: 3, Commitment: commitment,
 			BindingKeySha256: gkmTestBytes("binding", 32),
 		},
+		{Name: "welcome pointer", GroupId: groupId, SidecarId: gkmTestId("reader sidecar").Bytes(), Epoch: 7},
+		{Name: "welcome pointer max", GroupId: groupId, SidecarId: gkmTestId("reader sidecar").Bytes(), Epoch: ^uint64(0)},
+		{Name: "group owner", GroupId: groupId, Owner: true},
 	}
 }
 

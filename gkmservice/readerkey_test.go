@@ -194,11 +194,8 @@ func TestGkmWelcomesAnswerOnlyGroupsTheTokenReaches(t *testing.T) {
 	fixture.auth.grant(device, repoB, sidecar.AclEvsRead)
 	pointer := func(groupId sidecar.Id, clusterId string, refByte byte, withWelcome bool) []byte {
 		ref := bytes.Repeat([]byte{refByte}, gkmKeyPackageRefByteCount)
-		key, err := GkmWelcomePointerKey(device, ref)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", key, fixture.marshal(&protocol.GkmWelcomePointer{GroupId: groupId.Bytes(), Epoch: 1}))
+		key := GkmWelcomePointerKey(device, groupId, 1)
+		fixture.put("meta-1", key, fixture.marshal(&protocol.GkmWelcomePointer{GroupId: groupId.Bytes(), Epoch: 1, KeyPackageRef: ref}))
 		if withWelcome {
 			fixture.put(clusterId, GkmWelcomeKey(groupId, 1), []byte("welcome of "+string(refByte)))
 		}

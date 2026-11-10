@@ -5,6 +5,10 @@
 // the hex of a digest's first 8 bytes; s: and d: are literal. Every key here has a fixed length for its kind, so
 // none prefixes another (§11.8's keys row). Keys carry opaque ids only (I-13).
 //
+// A Welcome pointer is keyed by its group and epoch, never by the KeyPackageRef its Add used, so two Adds through
+// one last-resort KeyPackage keep two pointers, and a group's owner marker is the first object of the group
+// (DESIGN-DETAILS 6.2.2).
+//
 // On every leg, with no connect import. Package-level functions are safe for concurrent use.
 
 package sidecar
@@ -89,4 +93,21 @@ func GkmRecoveryWrapPath(memberId Id, groupId Id, generation uint64, commitment 
 	}
 	return "gkm/recovery/" + gkmPathId(memberId) + "/" + gkmPathId(groupId) + "/" + gkmPathGeneration(generation) + "/" +
 		c8 + "/" + b8, nil
+}
+
+// gkm/welcome/<sidecar_id>/: a sidecar's Welcome pointers, by LIST.
+func GkmWelcomePointerPrefix(sidecarId Id) string {
+	return "gkm/welcome/" + gkmPathId(sidecarId) + "/"
+}
+
+// gkm/welcome/<sidecar_id>/<group_id>/<n>: the pointer to the Welcome that joins the sidecar to the group at epoch
+// n, n in 20 digits as every epoch number: one Welcome, one key, whatever KeyPackage it used.
+func GkmWelcomePointerPath(sidecarId Id, groupId Id, epoch uint64) string {
+	return GkmWelcomePointerPrefix(sidecarId) + gkmPathId(groupId) + "/" + gkmPathGeneration(epoch)
+}
+
+// gkm/<group_id>/owner: the group's owner marker, a GkmGroupOwner naming the one repo the group belongs to, which
+// gkm writes first at a creation or a re-form and resolves every group route through.
+func GkmGroupOwnerPath(groupId Id) string {
+	return "gkm/" + gkmPathId(groupId) + "/owner"
 }
