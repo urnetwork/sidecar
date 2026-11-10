@@ -185,6 +185,10 @@ barrier identity.post.after identity_pending.go
 barrier identity.post.before identity_pending.go
 barrier identity.recovery_bind.after identity_recovery_bind.go
 barrier identity.recovery_bind.before identity_recovery_bind.go
+barrier identity.revoke.effects.after identity_revoke_device.go
+barrier identity.revoke.effects.before identity_revoke_device.go
+barrier identity.revoke.sign.after identity_revoke_device.go
+barrier identity.revoke.sign.before identity_revoke_device.go
 barrier identity.stale.recheck.after identity_act_stale.go
 barrier identity.stale.recheck.before identity_act_stale.go
 barrier keys.change_pass.after keys_unlock.go

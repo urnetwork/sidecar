@@ -168,6 +168,8 @@ type sidecarRevokePlans struct {
 	stateLock sync.Mutex
 	// oldest first
 	previews []*sidecarRevokePreview
+	// what a landed revocation hands on (identity_revoke_device.go)
+	effects SidecarRevokeEffects
 }
 
 // Keeps a derived plan for RevokeDevice, replacing one of the same PlanId.
