@@ -11,10 +11,12 @@
 // QD-156: the repo-keyed drop-key and the forms read; QD-074: the ladder):
 //
 //	own       POST reader-key, key-packages: the token's own sidecar's record, admitted and not revoked, parked or
-//	          suspended; KeyPackages only from member devices (the handler)
+//	          suspended; KeyPackages only from member devices (the handler); PUT delegation-keys/<delegation_id>: a
+//	          forwarding Delegation's reader key, by the sidecar its row names (the handler, DESIGN-DETAILS 4.2.2)
 //	public    GET reader-key/<sidecar_id>, POST reader-keys: a public record, under an admitted sidecar's token
 //	read      GET a group, its epochs, gen/, wraps (the caller's own), group-info, Welcomes, and POST ack: r, rw or
-//	          admin
+//	          admin; GET delegation-keys/<delegation_id>: r, rw or admin on the network's config repo, which the
+//	          handler authorizes from the Delegation's row
 //	leaf      POST epochs/<n>: r, rw or admin, from a member device; members refuse what gkm cannot see (§10.9)
 //	info      POST group-info: r, rw or admin, from a member device that is not read_only
 //	deliver   POST wraps/<g>/<c8>: r, rw or admin, from a sidecar that is not read_only, under the wrap checks
@@ -146,6 +148,10 @@ var gkmRoutes = []*GkmRoute{
 	{Pattern: "GET /gkm/recovery/{member_id}/wraps", Scope: gkmScopeRecoveryRead, Target: gkmTargetPathMember, Serve: (*GkmEngine).serveRecoveryWrapsRead},
 	{Pattern: "POST /gkm/recovery/{member_id}/wraps", Scope: gkmScopeRecoveryOwn, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveRecoveryWrapWrite},
 	{Pattern: "DELETE /gkm/recovery/{member_id}/wraps", Scope: gkmScopeRecoveryOwn, Target: gkmTargetPathMember, Write: true, Serve: (*GkmEngine).serveRecoveryWrapsDelete},
+
+	// KEYS-M8-01: a forwarding Delegation's reader key, on the first cluster (DESIGN-DETAILS 4.2.2)
+	{Pattern: "PUT /gkm/delegation-keys/{delegation_id}", Scope: gkmScopeOwn, Target: gkmTargetNone, Write: true, Serve: (*GkmEngine).serveDelegationKeyUpload},
+	{Pattern: "GET /gkm/delegation-keys/{delegation_id}", Scope: gkmScopeRead, Target: gkmTargetBody, Serve: (*GkmEngine).serveDelegationKeyRead},
 }
 
 // The path values the patterns name.
@@ -158,4 +164,6 @@ const (
 	gkmPathValueGeneration = "g"
 	// c8: hex of the generation's commitment's first 8 bytes.
 	gkmPathValueCommitmentPrefix = "c8"
+	// A Delegation's id, 64 lowercase hex characters.
+	gkmPathValueDelegationId = "delegation_id"
 )

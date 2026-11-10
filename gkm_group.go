@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -57,6 +58,7 @@ type GkmGroupApi interface {
 	UploadRecoveryWraps(ctx context.Context, repoId Id, groupId Id, generation uint64, commitment []byte, batch *protocol.GkmRecoveryWrapBatch) (*protocol.GkmWrapBatchReply, error)
 	ReaderKey(ctx context.Context, sidecarId Id) (*bridge.Signed, error)
 	ReaderKeys(ctx context.Context, sidecarIds []Id) ([]*bridge.Signed, error)
+	DelegationKey(ctx context.Context, configRepoId Id, delegationId []byte) ([]byte, error)
 	ClaimKeyPackage(ctx context.Context, repoId Id, groupId Id, target Id) (*protocol.GkmKeyPackageClaimReply, error)
 	GroupInfo(ctx context.Context, repoId Id, groupId Id, want *uint64) (*protocol.GkmGroupInfoObject, error)
 	UploadGroupInfo(ctx context.Context, repoId Id, groupId Id, object *protocol.GkmGroupInfoObject) error
@@ -171,6 +173,9 @@ type GkmGroupClient struct {
 	lastResortJoinedLoaded bool
 	// what the flows' yields measured (gkm_yield.go)
 	yieldStats GkmYieldStats
+	// the DelegationWraps rotations skipped for a forwarding Delegation whose reader key neither the log nor gkm gave
+	// (gkm_deliver.go)
+	delegationWrapsSkipped atomic.Uint64
 }
 
 var _ GkmClient = (*GkmGroupClient)(nil)

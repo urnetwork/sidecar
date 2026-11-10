@@ -57,6 +57,8 @@ type fakeGkmAuthState struct {
 	newestVersion   uint64
 	baseVersion     uint64
 	delegationReads map[string]bool
+	// what DelegationKey answers, by delegation_id: Denied for one not here
+	delegationKeys  map[string]*GkmDelegationKeyFacts
 	lateHolderIds   map[sidecar.Id][]sidecar.Id
 	writerOverrides map[sidecar.Id][]sidecar.Id
 	// what HoldersDropped answers for a repo, Denied when unset, and what it was last asked
@@ -80,6 +82,7 @@ func newFakeGkmAuthState() *fakeGkmAuthState {
 		pendingTargets:    map[sidecar.Id][]*GkmPendingTarget{},
 		logChains:         map[uint64][]byte{},
 		delegationReads:   map[string]bool{},
+		delegationKeys:    map[string]*GkmDelegationKeyFacts{},
 		lateHolderIds:     map[sidecar.Id][]sidecar.Id{},
 		writerOverrides:   map[sidecar.Id][]sidecar.Id{},
 
@@ -142,6 +145,18 @@ func (self *fakeGkmAuthState) setDelegationReads(repoId sidecar.Id, delegationId
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.delegationReads[sidecar.EvsKeyId(repoId)+":"+fmt.Sprintf("%x", delegationId)] = reads
+}
+
+// What the state holds of a Delegation's reader key from now on, nil forgetting it.
+func (self *fakeGkmAuthState) setDelegationKey(delegationId []byte, facts *GkmDelegationKeyFacts) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if facts == nil {
+		delete(self.delegationKeys, string(delegationId))
+		return
+	}
+	factsCopy := *facts
+	self.delegationKeys[string(delegationId)] = &factsCopy
 }
 
 func (self *fakeGkmAuthState) setLateHolders(repoId sidecar.Id, sidecarIds []sidecar.Id) {
@@ -214,6 +229,20 @@ func (self *fakeGkmAuthState) DelegationReads(principal *sidecar.Principal, repo
 		return GkmAuthAllowed
 	}
 	return GkmAuthDenied
+}
+
+func (self *fakeGkmAuthState) DelegationKey(principal *sidecar.Principal, delegationId []byte) (*GkmDelegationKeyFacts, GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.unloaded {
+		return nil, GkmAuthUnknown
+	}
+	facts, ok := self.delegationKeys[string(delegationId)]
+	if !ok {
+		return nil, GkmAuthDenied
+	}
+	factsCopy := *facts
+	return &factsCopy, GkmAuthAllowed
 }
 
 func (self *fakeGkmAuthState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, GkmAuthAnswer) {

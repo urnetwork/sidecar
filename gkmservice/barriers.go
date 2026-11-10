@@ -47,6 +47,10 @@ const (
 	// Around an ack's {gka_} write (KEYS-M2-14), keyed by the group.
 	BarrierAckWriteBefore = "gkm.ack_write.before"
 	BarrierAckWriteAfter  = "gkm.ack_write.after"
+	// Around a forwarding Delegation's reader key object's If-None-Match, dkey/<delegation_id> (KEYS-M8-01), keyed by
+	// the delegation_id in 64 hex characters.
+	BarrierDelegationKeyPutBefore = "gkm.dkey_put.before"
+	BarrierDelegationKeyPutAfter  = "gkm.dkey_put.after"
 )
 
 // A group's barrier key.

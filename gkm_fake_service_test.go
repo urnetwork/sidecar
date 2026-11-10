@@ -110,6 +110,9 @@ type gkmFakeStore struct {
 	groupWelcomes     map[string][]byte
 	groupInfos        map[sidecar.Id]*protocol.GkmGroupInfoObject
 	welcomeEntries    map[sidecar.Id][]*protocol.GkmWelcomeEntry
+	// each forwarding Delegation's reader key object, by delegation_id, as a test planted it: gkm's checks of its
+	// upload are gkmservice's tests'
+	delegationKeys map[string][]byte
 	// every late ask: "<recipient>:<g>"
 	lateAsks []string
 	// every group-info want, by the epoch asked for, in order
@@ -136,6 +139,7 @@ func newGkmFakeStore(t *testing.T, clock sidecar.Clock) *gkmFakeStore {
 		pathRecoveryWraps:  map[string][]byte{},
 		readerKeys:         map[sidecar.Id]*bridge.Signed{},
 		keyPackages:        map[sidecar.Id][]*sidecar.MlsKeyPackage{},
+		delegationKeys:     map[string][]byte{},
 		groupWelcomes:      map[string][]byte{},
 		welcomeEntries:     map[sidecar.Id][]*protocol.GkmWelcomeEntry{},
 	}
@@ -573,6 +577,16 @@ func (self *gkmFakeApi) ReaderKeys(ctx context.Context, sidecarIds []sidecar.Id)
 		return nil
 	})
 	return readerKeys, err
+}
+
+// The object a test planted for the Delegation, or nil for none, as GkmApi answers a 404.
+func (self *gkmFakeApi) DelegationKey(ctx context.Context, configRepoId sidecar.Id, delegationId []byte) ([]byte, error) {
+	var key []byte
+	err := self.call("DelegationKey", func() error {
+		key = bytes.Clone(self.store.delegationKeys[string(delegationId)])
+		return nil
+	})
+	return key, err
 }
 
 func (self *gkmFakeApi) ClaimKeyPackage(ctx context.Context, repoId sidecar.Id, groupId sidecar.Id, target sidecar.Id) (*protocol.GkmKeyPackageClaimReply, error) {
