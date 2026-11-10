@@ -80,6 +80,8 @@ const (
 	// refused: a device of an owner-bound repo's owner without §8.5's consent there, which KF2 parks until the
 	// owner's OwnerConfirm (owner decision 126)
 	AclReasonUnconsented
+	// refused: an AclEngine with no state installed
+	AclReasonNoState
 )
 
 // A short name for logs and refusals.
@@ -127,6 +129,8 @@ func (self AclReason) String() string {
 		return "seats_full"
 	case AclReasonUnconsented:
 		return "unconsented"
+	case AclReasonNoState:
+		return "no_state"
 	}
 	return "unknown"
 }
