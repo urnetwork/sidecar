@@ -64,12 +64,14 @@ func (self *FakeNameIndex) Remove(path string) {
 	})
 }
 
+// The head SetHead set.
 func (self *FakeNameIndex) Head(ctx context.Context) (*sidecar.EvsNameIndexHead, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.head, nil
 }
 
+// Every standing path, in the order Add gave them.
 func (self *FakeNameIndex) Walk(ctx context.Context, visit func(path *sidecar.EvsIndexedPath) error) error {
 	self.stateLock.Lock()
 	paths := slices.Clone(self.paths)
@@ -82,6 +84,7 @@ func (self *FakeNameIndex) Walk(ctx context.Context, visit func(path *sidecar.Ev
 	return nil
 }
 
+// Every path added at a version after version, removed ones included.
 func (self *FakeNameIndex) CreatedAfter(ctx context.Context, version uint64) ([]*sidecar.EvsIndexedPath, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

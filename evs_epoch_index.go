@@ -163,10 +163,12 @@ func newEvsListedNameIndex(ctx context.Context, repo *EvsRepo, refId Id, rounds 
 	return nil, fmt.Errorf("%w: the ref moved through %d listings", errEvsMapperWait, rounds)
 }
 
+// The head the listing stood through.
 func (self *evsListedNameIndex) Head(ctx context.Context) (*EvsNameIndexHead, error) {
 	return self.head, nil
 }
 
+// Every listed path, the root first and each directory before what it holds.
 func (self *evsListedNameIndex) Walk(ctx context.Context, visit func(path *EvsIndexedPath) error) error {
 	for _, path := range self.paths {
 		if err := visit(path); err != nil {
