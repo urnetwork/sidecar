@@ -55,6 +55,7 @@ func (self *EvsEngine) erasureRoutes() []*EvsRoute {
 			Write:          true,
 			NeedsSureClock: true,
 			Placed:         true,
+			RefuseDeleted:  true,
 			Serve:          self.serveSlotsDelete,
 		},
 	}

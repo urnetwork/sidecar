@@ -93,6 +93,25 @@ const (
 	BarrierPushStep8After  = "evs.push.step8.after"
 )
 
+// EVS1-M2-19: repo/'s lifecycle (§11.12), keyed by the repo.
+const (
+	// Around a lifecycle transition's If-Match on repo/: a restore and a --now delete, or a restore and the 7-day
+	// start, race here, and the store's order picks one.
+	BarrierRepoCasBefore = "evs.repo.cas.before"
+	BarrierRepoCasAfter  = "evs.repo.cas.after"
+	// Around each step of a shred (shred.go): a schedule kills the worker at each.
+	BarrierShredStepBefore = "evs.shred.step.before"
+	BarrierShredStepAfter  = "evs.shred.step.after"
+)
+
+// EVS1-M2-17: the path-epoch copy (§11.6's copy row), keyed by <repo>:<ref>.
+const (
+	// Around each entry write of a copy: a move's If-None-Match, a carried directory's If-Match, a marker's If-Match,
+	// each carrying the stale rule's deadline.
+	BarrierCopyMoveBefore = "evs.copy.move.before"
+	BarrierCopyMoveAfter  = "evs.copy.move.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

@@ -186,6 +186,10 @@ type ConfigState struct {
 	proposals         map[[sha256.Size]byte]*configProposal
 	// the IndexerSet designations that hold, by subject and scope
 	indexers map[configIndexerKey]*bridge.IndexerRow
+	// §7.9's replay row as a function of the log (DESIGN-DETAILS 5.2.3's ring): the statements that took effect
+	// among the 4,096 entries through n, in position order, the oldest trimmed as n moves. Later states append to
+	// the same array past this slice's end and never write inside it, so states share it, as chains.
+	ring []configRingEntry
 
 	// A_k for k from chainsFrom to n. Later states append to the same array past this slice's end and never write
 	// inside it, so states share it.
@@ -559,10 +563,48 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 	}
 	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
 	rows.Proposals = self.openProposalRows()
+	rows.Ring = self.ringRows()
 	for _, key := range self.indexerKeys() {
 		rows.Indexers = append(rows.Indexers, proto.Clone(self.indexers[key]).(*bridge.IndexerRow))
 	}
 	return rows
+}
+
+// The replay ring as rows carry it at this state's position: each statement that took effect among the 4,096 entries
+// through n, in position order (DESIGN-DETAILS 5.2.2's RingRow).
+func (self *ConfigState) ringRows() []*bridge.RingRow {
+	rows := []*bridge.RingRow{}
+	for _, ringEntry := range self.ring {
+		if ringEntry.n <= self.n && self.n-ringEntry.n < configStatementWindow {
+			rows = append(rows, &bridge.RingRow{StatementId: bytes.Clone(ringEntry.id[:]), N: ringEntry.n})
+		}
+	}
+	return rows
+}
+
+// Whether a statement with this id took effect among the 4,096 entries before position n (§7.9's replay row): the
+// ring holds only what took effect, so a refused statement resubmitted is judged anew.
+func (self *ConfigState) ringHolds(n uint64, statementId [sha256.Size]byte) bool {
+	_, found := self.ringFind(n, statementId)
+	return found
+}
+
+// The position of the newest statement with this id that took effect among the 4,096 entries before position n.
+func (self *ConfigState) ringFind(n uint64, statementId [sha256.Size]byte) (uint64, bool) {
+	id := RetainedStatementId(statementId)
+	for i := len(self.ring) - 1; 0 <= i; i -= 1 {
+		ringEntry := self.ring[i]
+		if n <= ringEntry.n {
+			continue
+		}
+		if configStatementWindow < n-ringEntry.n {
+			break
+		}
+		if ringEntry.id == id {
+			return ringEntry.n, true
+		}
+	}
+	return 0, false
 }
 
 // Every proposal this state holds, closed ones included, in id order.
@@ -644,6 +686,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 		headSettingsKnown: state.headSettingsKnown,
 		proposals:         state.proposals,
 		indexers:          state.indexers,
+		ring:              state.ring,
 		chains:            state.chains,
 		chainsFrom:        state.chainsFrom,
 		basePins:          state.basePins,
@@ -839,6 +882,18 @@ func (self *configStateBuilder) closeProposal(proposalId [sha256.Size]byte, n ui
 // Sets the AclRows, which ACL's statement rules write (configAclRules).
 func (self *configStateBuilder) setAclRows(rows *protocol.AclRows) {
 	self.state.aclRows = rows
+}
+
+// Adds a statement that took effect at n to the replay ring, dropping the ids that fall out of the 4,096 entries
+// before position n + 1. Appends past the shared array's end, as chains do: a state is built from the one before it
+// by one builder at a time, and a rebuild starts from a slice whose capacity ends where it does.
+func (self *configStateBuilder) addRing(n uint64, statementId [sha256.Size]byte) {
+	ring := append(self.state.ring, configRingEntry{n: n, id: RetainedStatementId(statementId)})
+	dropCount := 0
+	for dropCount < len(ring) && configStatementWindow < n+1-ring[dropCount].n {
+		dropCount += 1
+	}
+	self.state.ring = ring[dropCount:]
 }
 
 // The built state, which the builder must not change afterward.

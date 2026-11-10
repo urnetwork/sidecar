@@ -401,6 +401,7 @@ func newTestConfigNetNamed(t *testing.T, label string) *testConfigNet {
 		source:        newTestConfigRowsSource(),
 		timeMs:        testConfigStartMs,
 		statesAt:      map[uint64]*ConfigState{},
+		verdicts:      map[uint64]ConfigVerdict{},
 	}
 	self.owner = testConfigDevice{sidecarId: testConfigId(label + " owner device"), memberId: self.ownerMemberId, key: testConfigDeviceKey(label + " owner device")}
 	genesis := &bridge.Genesis{

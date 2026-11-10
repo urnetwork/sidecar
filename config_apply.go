@@ -108,6 +108,24 @@ func (self ConfigVerdict) Accepted() bool {
 	return self.Refusal == nil
 }
 
+// Whether the entry took effect and completed a proposal: an AuthorityProposal at k = 1 or the k-th counted
+// AuthorityCosign, the 2 a base's tail_verdicts carries (DESIGN-DETAILS 5.2.2).
+func (self ConfigVerdict) Completed() bool {
+	return self.Refusal == nil && len(self.CompletedProposalId) != 0
+}
+
+// The two bits a base's tail_verdicts carries for this entry: 0 refused or a BASE, 1 took effect, 2 took effect and
+// completed a proposal (DESIGN-DETAILS 5.2.2).
+func (self ConfigVerdict) tailBits() uint8 {
+	switch {
+	case self.Kind == bridge.AuthEntryKindBase || self.Refusal != nil:
+		return configTailRefused
+	case self.Completed():
+		return configTailCompleted
+	}
+	return configTailEffect
+}
+
 // One statement as a rule judges it: the body as signed, its header, its signers, and the entry it takes effect at.
 // For a proposal's statement the body is AuthorityProposal.statement, the signers are the proposal's and its cosigns',
 // and the entry is the completing one.
@@ -242,9 +260,6 @@ type ConfigLog struct {
 	// entries from the retention point on, kept[i] at position keptFrom + i
 	kept     []*configKeptEntry
 	keptFrom uint64
-	// the first 16 B of each statement id applied among the last 4,096 entries, with its entry's pin
-	ringIds   map[[configRetainedIdSize]byte]configRingEntry
-	ringOrder []configRingEntry
 	// the rows of the current and previous bases, by rows_sha256
 	baseRows map[[sha256.Size]byte][]byte
 	// once set, every Apply returns it
@@ -265,6 +280,9 @@ type configKeptEntry struct {
 	entry      *bridge.AuthEntry
 	entryBytes []byte
 	verdict    ConfigVerdict
+	// whether this reader holds the entry's verdict: it judged it, or took it from a base's tail_verdicts. A new
+	// device holds none for the entries its first base folded (DESIGN-DETAILS 5.2.4's V)
+	verdictHeld bool
 	// a statement that took effect, as a base re-applies it
 	statement *configStatement
 	// a tick that took effect, and the proposals it activated
@@ -272,11 +290,10 @@ type configKeptEntry struct {
 	activations []configActivation
 }
 
-// One id in the ring, in position order, with the entry that carried it.
+// One id in the replay ring, in position order, with the entry that carried it (ProjectionRows' RingRow).
 type configRingEntry struct {
-	n     uint64
-	chain [sha256.Size]byte
-	id    [configRetainedIdSize]byte
+	n  uint64
+	id [configRetainedIdSize]byte
 }
 
 // A log at S(0), from its Signed Genesis as received: A_0 = SHA-256 of those bytes, and before base 1 the genesis
@@ -298,7 +315,6 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		networkId:     networkId,
 		signedGenesis: bytes.Clone(signedGenesis),
 		keptFrom:      1,
-		ringIds:       map[[configRetainedIdSize]byte]configRingEntry{},
 		baseRows:      map[[sha256.Size]byte][]byte{},
 	}
 	self.history = newConfigStateHistory(settings, networkId, self.log)
@@ -394,16 +410,22 @@ func (self *ConfigLog) Check(signedBytes []byte, timeMs int64) ConfigVerdict {
 }
 
 // Where a retry of the same statement landed: the position of an applied statement with this id among the last
-// 4,096 entries, which api answers a retry with (§7.9's statement row). False when none.
+// 4,096 entries, which api answers a retry with (§7.9's statement row), from the state's replay ring where this log
+// retains A_n there (DESIGN-DETAILS 5.4's api row). False when none.
 func (self *ConfigLog) FindStatement(statementId [sha256.Size]byte) (*bridge.AuthPin, bool) {
-	ringEntry, found := self.ringIds[RetainedStatementId(statementId)]
+	state := self.state.Load()
+	n, found := state.ringFind(state.n+1, statementId)
 	if !found {
 		return nil, false
 	}
-	if kept := self.keptEntry(ringEntry.n); kept != nil && kept.verdict.StatementId != statementId {
+	chain, ok := state.chainAt(n)
+	if !ok {
 		return nil, false
 	}
-	return &bridge.AuthPin{Version: ringEntry.n, Chain: bytes.Clone(ringEntry.chain[:])}, true
+	if kept := self.keptEntry(n); kept != nil && kept.verdictHeld && kept.verdict.StatementId != statementId {
+		return nil, false
+	}
+	return &bridge.AuthPin{Version: n, Chain: bytes.Clone(chain[:])}, true
 }
 
 // The kept entry at n, or nil.
@@ -458,7 +480,7 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	}
 
 	var next *ConfigState
-	kept := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: bytes.Clone(entryBytes)}
+	kept := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: bytes.Clone(entryBytes), verdictHeld: true}
 	kept.verdict = ConfigVerdict{Pin: &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}, Kind: entry.GetKind()}
 	switch entry.GetKind() {
 	case bridge.AuthEntryKindBase:
@@ -508,44 +530,12 @@ func (self *ConfigLog) applied(state *ConfigState, entry *bridge.AuthEntry, entr
 	return ConfigVerdict{Pin: &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}, Kind: entry.GetKind()}, nil
 }
 
-// Keeps an applied entry and its verdict, and its id in the ring when it took effect.
+// Keeps an applied entry and its verdict. The replay ring is the state's (config_state.go), a function of the log.
 func (self *ConfigLog) keep(kept *configKeptEntry) {
 	if len(self.kept) == 0 {
 		self.keptFrom = kept.n
 	}
 	self.kept = append(self.kept, kept)
-	if kept.entry.GetKind() == bridge.AuthEntryKindStatement && kept.verdict.Accepted() {
-		self.addRingId(kept.n, kept.chain, kept.verdict.StatementId)
-	}
-	self.trimRing(kept.n)
-}
-
-// Adds an applied statement's id at the entry (n, chain).
-func (self *ConfigLog) addRingId(n uint64, chain [sha256.Size]byte, statementId [sha256.Size]byte) {
-	ringEntry := configRingEntry{n: n, chain: chain, id: RetainedStatementId(statementId)}
-	self.ringIds[ringEntry.id] = ringEntry
-	self.ringOrder = append(self.ringOrder, ringEntry)
-}
-
-// Drops ids that fall out of the 4,096 entries before position n + 1.
-func (self *ConfigLog) trimRing(n uint64) {
-	dropCount := 0
-	for dropCount < len(self.ringOrder) && configStatementWindow < n+1-self.ringOrder[dropCount].n {
-		ringEntry := self.ringOrder[dropCount]
-		if self.ringIds[ringEntry.id].n == ringEntry.n {
-			delete(self.ringIds, ringEntry.id)
-		}
-		dropCount += 1
-	}
-	if 0 < dropCount {
-		self.ringOrder = append([]configRingEntry(nil), self.ringOrder[dropCount:]...)
-	}
-}
-
-// Whether a statement with this id took effect among the 4,096 entries before position n.
-func (self *ConfigLog) ringHolds(n uint64, statementId [sha256.Size]byte) bool {
-	ringEntry, found := self.ringIds[RetainedStatementId(statementId)]
-	return found && n-ringEntry.n <= configStatementWindow
 }
 
 // A statement entry: judged at state, then applied, or refused at its position.
@@ -562,6 +552,7 @@ func (self *ConfigLog) applyStatement(state *ConfigState, kept *configKeptEntry)
 			if statement.completes != nil {
 				kept.verdict.CompletedProposalId = configCompletedProposalId(statement)
 			}
+			next.addRing(kept.n, statement.id)
 			return next.finish()
 		}
 	}
@@ -655,7 +646,7 @@ func (self *ConfigLog) checkHeader(state *ConfigState, statement *configStatemen
 		return fmt.Errorf("%w: expired", ErrConfigReplay)
 	case statement.timeMs+configStatementMaxLifetimeMs < header.GetNotAfterMs():
 		return fmt.Errorf("%w: not_after more than 7 days on", ErrConfigReplay)
-	case self.ringHolds(statement.n, statement.id):
+	case state.ringHolds(statement.n, statement.id):
 		return fmt.Errorf("%w: a repeat of a statement applied among the last %d entries", ErrConfigReplay, configStatementWindow)
 	}
 	return nil

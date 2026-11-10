@@ -368,7 +368,32 @@ func (self *configLogSuiteEnv) baseNaming(signer configLogSuiteDevice, tip *brid
 		ConfigHeadSha256: headSha256[:],
 		RowsSha256:       rowsSha256[:],
 		RowsByteCount:    uint32(len(rows)),
+		TailVerdicts:     self.tailVerdicts(foldedThrough, tip.GetVersion()),
 	})
+}
+
+// The tail_verdicts a base after tip folding through foldedThrough carries (DESIGN-DETAILS 5.2.2), as the cluster
+// holds the tail: every statement and tick the suite lands takes effect, and a base carries 0. Two bits an entry,
+// entry foldedThrough+1+j at bits 2j and 2j+1 of byte j/4; empty when nothing is unfolded or a read fails, which the
+// sequencer then refuses.
+func (self *configLogSuiteEnv) tailVerdicts(foldedThrough uint64, tip uint64) []byte {
+	if tip <= foldedThrough {
+		return nil
+	}
+	count := tip - foldedThrough
+	data := make([]byte, (2*count+7)/8)
+	for k := foldedThrough + 1; k <= tip; k += 1 {
+		entry, err := self.entry(k)
+		if err != nil || entry == nil {
+			return nil
+		}
+		if entry.GetKind() == bridge.AuthEntryKindBase {
+			continue
+		}
+		j := k - foldedThrough - 1
+		data[j/4] |= 1 << (2 * (j % 4))
+	}
+	return data
 }
 
 // A StatementHeader at the tip the case last saw, a fresh nonce, expiring in an hour.

@@ -125,6 +125,8 @@ type EvsClient struct {
 	repoIdMirrors map[Id]*EvsMirrorStore
 	// where M10's index writer joins each write's plan (evs_plan.go), nil until then
 	writeHook EvsWritePlanHook
+	// subscriptions and catch-up (evs_subscribe.go), with its own lock
+	subscriber *evsSubscriber
 }
 
 // A ref of a repo.
@@ -169,6 +171,7 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		repoIdMirrors:  map[Id]*EvsMirrorStore{},
 	}
 	self.verifier = newEvsVerifier(self)
+	self.subscriber = newEvsSubscriber(self)
 	return self, nil
 }
 
@@ -330,8 +333,9 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 }
 
 // A hint on evs:<repo_id> (§11.10): PushHint.version, the repo's push sequence, and its delta, an EvsHeadChanged. It
-// carries no authority: it only sends the next read of the ref past evs's head cache, which the read then verifies
-// as any other. It never blocks, as a hint's subscriber must not (PROTO-M1-06).
+// carries no authority: it sends the next read of the ref past evs's head cache, which the read then verifies as any
+// other, and queues the subscriptions' reads it calls for (evs_hint.go). It never blocks, as a hint's subscriber must
+// not (PROTO-M1-06).
 func (self *EvsClient) ReceiveHint(repoId Id, sequence uint64, delta []byte) {
 	changed := &protocol.EvsHeadChanged{}
 	if err := proto.Unmarshal(delta, changed); err != nil {
@@ -341,12 +345,16 @@ func (self *EvsClient) ReceiveHint(repoId Id, sequence uint64, delta []byte) {
 	if err != nil {
 		return
 	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	key := evsRefKey{repoId: repoId, refId: refId}
-	if self.hintedVersions[key] < changed.GetVersion() {
-		self.hintedVersions[key] = changed.GetVersion()
-	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		key := evsRefKey{repoId: repoId, refId: refId}
+		if self.hintedVersions[key] < changed.GetVersion() {
+			self.hintedVersions[key] = changed.GetVersion()
+		}
+	}()
+	// the subscriptions' reads (evs_hint.go)
+	self.subscriber.noteHint(repoId, sequence, refId)
 }
 
 // The newest version a hint named for a ref, 0 when none did.

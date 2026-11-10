@@ -96,6 +96,8 @@ barrier evs.batch.put.after evsservice/batch.go
 barrier evs.batch.put.before evsservice/batch.go
 barrier evs.budget.p2.issued evsservice/budget_client.go
 barrier evs.budget.p2.recheck evsservice/budget_client.go
+barrier evs.copy.move.after evsservice/epoch_copy.go
+barrier evs.copy.move.before evsservice/epoch_copy.go
 barrier evs.entry.read.after evsservice/entry.go
 barrier evs.entry.read.before evsservice/entry.go
 barrier evs.entry.state.after evsservice/sources.go
@@ -127,8 +129,12 @@ barrier evs.push.step6.after evsservice/push_commit.go
 barrier evs.push.step6.before evsservice/push_commit.go
 barrier evs.push.step8.after evsservice/push_commit.go
 barrier evs.push.step8.before evsservice/push_commit.go
+barrier evs.repo.cas.after evsservice/repo_state.go
+barrier evs.repo.cas.before evsservice/repo_state.go
 barrier evs.repo.put.after evsservice/place.go
 barrier evs.repo.put.before evsservice/place.go
+barrier evs.shred.step.after evsservice/shred.go
+barrier evs.shred.step.before evsservice/shred.go
 barrier gkm.ack_write.after gkmservice/acks.go
 barrier gkm.ack_write.before gkmservice/acks.go
 barrier gkm.epoch_put.after gkmservice/epochs.go

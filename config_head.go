@@ -4,7 +4,9 @@
 //	genesis                          the Signed Genesis, verbatim, which the first head writes and every head keeps
 //	fold/<d>/<i>                     the i-th fold, i from 1 and d = i / 1024, each zero-padded to 8 digits: one
 //	                                 ConfigFold per head that advanced folded_through, its records in (after,
-//	                                 folded_through] in n order, no BASE
+//	                                 folded_through] in n order, BASE entries included as kind 1 with the Signed
+//	                                 ProjectionHeader as body (DESIGN-DETAILS 5.2.3; question
+//	                                 details-5-base-records-in-folds, built on its recommendation)
 //	service_settings                 one Signed ServiceSettings, verbatim
 //	versioning_rules                 one Signed VersioningRules, verbatim
 //	bridge/block                     one Signed BridgeBlock, verbatim
@@ -19,9 +21,11 @@
 // effect at the base that names it (§7.9's state row).
 //
 // What a head check asks of a base (§7.9's BASE row): the head's genesis is the log's, it holds as records exactly the
-// statements and ticks in (the previous base's folded_through, folded_through], each by id with its carrying position
-// and none past it, and its compile is the base's rows. CheckConfigBase runs those; that the head chains to genesis
-// through config writers' pushes is the evs ref's, which ConfigClient reads (TEAM-M2-10).
+// entries in (the previous base's folded_through, folded_through], each by id with its carrying position and none past
+// it, and its compile is the base's rows. A reader that starts at the base instead checks the anchor
+// (DESIGN-DETAILS 5.2.4's StartAtBase): the genesis, the records it holds, and the chain recomputed from the genesis
+// through the head's records reaching its first held entry. CheckConfigBase runs those; that the head is the config
+// repo's main ref at config_version, on its chain from C_0, is the evs ref's, which ConfigClient's head reader checks.
 //
 // A head knows every path it may hold, and refuses one it does not, so a writer and a reader of one version agree on
 // what a head compiles from. Immutable once built; every accessor returns a copy. On every leg, with no connect import.
@@ -205,9 +209,9 @@ func configCheckFold(fold *protocol.ConfigFold, after uint64) error {
 		}
 		previousN = record.GetN()
 		switch record.GetKind() {
-		case bridge.AuthEntryKindStatement:
+		case bridge.AuthEntryKindStatement, bridge.AuthEntryKindBase:
 			if len(record.GetId()) != sha256.Size {
-				return fmt.Errorf("statement %d has an id of %d bytes", i, len(record.GetId()))
+				return fmt.Errorf("record %d of kind %d has an id of %d bytes", i, record.GetKind(), len(record.GetId()))
 			}
 		case bridge.AuthEntryKindTick:
 			if len(record.GetId()) != 0 {
@@ -420,12 +424,15 @@ func CheckConfigHeadWriter(state *ConfigState, sidecarId Id) error {
 // Checks head against one base (§7.9's BASE row), for a full reader's ConfigRowsSource.CheckHead: the head's genesis is
 // the log's; it holds as records exactly check.Folded, each by id with its carrying position, and none past the base's
 // folded_through; its ServiceSettings, if any, was signed by an Owner's or Admin's standing device; and its compile
-// (CompileProjectionRows over rows, the rows the log's records give at folded_through, with this head) is check.Rows,
-// byte for byte. rows is the reader's: nil refuses, since no base compiles from nothing. Any error makes the base a
-// fork.
+// (CompileProjectionRows over rows, L(folded_through), with this head) is check.Rows, byte for byte. rows is the
+// reader's, check.CompileRows: nil refuses, since no base compiles from nothing. Without check.Previous, a reader
+// starting at the base, it checks the anchor instead (checkConfigAnchor). Any error makes the base a fork.
 func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompileRows) (*ConfigHeadFacts, error) {
-	if head == nil || check == nil || check.Previous == nil || check.Header == nil {
+	if head == nil || check == nil || check.Header == nil {
 		return nil, fmt.Errorf("%w: nothing to check", ErrConfigHeadMismatch)
+	}
+	if check.Previous == nil {
+		return checkConfigAnchor(head, check)
 	}
 	if bridge.GenesisChain(head.signedGenesis) != check.Previous.genesisChain {
 		return nil, fmt.Errorf("%w: another network's genesis", ErrConfigHeadMismatch)
@@ -481,5 +488,77 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 	if !bytes.Equal(compiled, check.Rows) {
 		return nil, fmt.Errorf("%w: the head compiles to other rows", ErrConfigHeadMismatch)
 	}
+	return facts, nil
+}
+
+// A reader's first base, which it starts at with no state before it (DESIGN-DETAILS 5.2.4's StartAtBase anchor): the
+// head's genesis is the one the reader trusts (check.GenesisChain); its folds hold a record at every position 1 to the
+// base's folded_through, bases included; the records at the positions the reader holds, from check.FoldedFrom, equal
+// check.Folded; the chain recomputed from the genesis through the records before check.FoldedFrom reaches the first
+// held entry's prev_chain, and passes through check.Floor when the reader held a pin there (DESIGN-DETAILS 5.5); and
+// its ServiceSettings keeps its bounds. No compile is checked: the reader holds no rows at folded_through but the base's.
+func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
+	if bridge.GenesisChain(head.signedGenesis) != check.GenesisChain {
+		return nil, fmt.Errorf("%w: another genesis", ErrConfigHeadMismatch)
+	}
+	foldedThrough := check.Header.GetFoldedThrough()
+	if head.FoldedThrough() != foldedThrough {
+		return nil, fmt.Errorf("%w: the head folds through %d, the base through %d", ErrConfigHeadMismatch, head.FoldedThrough(), foldedThrough)
+	}
+	records, err := head.RecordsIn(0, foldedThrough)
+	if err != nil {
+		return nil, err
+	}
+	from := max(check.FoldedFrom, 1)
+	floor := check.Floor
+	if floor != nil && floor.GetVersion() == 0 && !bytes.Equal(floor.GetChain(), check.GenesisChain[:]) {
+		return nil, fmt.Errorf("%w: the reader's own pin at 0 is another genesis", ErrConfigHeadMismatch)
+	}
+	chain := check.GenesisChain
+	for i, record := range records {
+		n := uint64(i) + 1
+		if record.GetN() != n {
+			return nil, fmt.Errorf("%w: the head holds no record at %d, so no chain through it", ErrConfigHeadMismatch, n)
+		}
+		if n < from {
+			next, err := bridge.AuthChainDigest(n, chain[:], record.GetKind(), record.GetTimeMs(), record.GetBody())
+			if err != nil {
+				return nil, fmt.Errorf("%w: the record at %d: %w", ErrConfigHeadMismatch, n, err)
+			}
+			chain = next
+			if floor != nil && floor.GetVersion() == n && !bytes.Equal(floor.GetChain(), chain[:]) {
+				return nil, fmt.Errorf("%w: the reader's own pin at %d is off the chain the head gives", ErrConfigHeadMismatch, n)
+			}
+			continue
+		}
+		if !check.FoldedKnown {
+			continue
+		}
+		index := n - from
+		if uint64(len(check.Folded)) <= index {
+			return nil, fmt.Errorf("%w: the reader holds no entry at %d", ErrConfigHeadMismatch, n)
+		}
+		want := check.Folded[index]
+		if !bytes.Equal(record.GetId(), want.Id) || record.GetN() != want.N || record.GetTimeMs() != want.TimeMs ||
+			record.GetKind() != want.Kind || !bytes.Equal(record.GetBody(), want.Body) {
+			return nil, fmt.Errorf("%w: the head's record at %d is not the log's entry %d", ErrConfigHeadMismatch, n, want.N)
+		}
+	}
+	if uint64(len(records)) != foldedThrough {
+		return nil, fmt.Errorf("%w: the head holds %d records through %d", ErrConfigHeadMismatch, len(records), foldedThrough)
+	}
+	if 1 < from && from-1 <= foldedThrough && chain != check.FirstPrevChain {
+		return nil, fmt.Errorf("%w: the chain the head gives does not reach the first held entry at %d", ErrConfigHeadMismatch, from)
+	}
+
+	facts := &ConfigHeadFacts{}
+	settings, _, err := head.ServiceSettings()
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckServiceSettings(settings); err != nil {
+		return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
+	}
+	facts.Settings = settings
 	return facts, nil
 }
