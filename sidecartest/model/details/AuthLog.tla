@@ -37,10 +37,14 @@
 (* after its end), and TEAM-M2-05 "WindowFromProposalEntry" (the window    *)
 (* runs from the proposal's entry, not its newest recovery signature) and  *)
 (* "VoidKeepsProposal" (a cascade's void leaves a proposal its voided key  *)
-(* signed open). The design models no recovery cosign, so those two twins  *)
-(* add one, rcosign, to their own runs alone. Story fixes                  *)
-(* the entries of a run, so a twin's violation is reached directly; the    *)
-(* design runs with no story.                                              *)
+(* signed open). Story fixes the entries of a run, so a twin's violation   *)
+(* is reached directly; the design runs with no story.                     *)
+(*                                                                          *)
+(* A recovery-signed proposal is pending until its tick, whoever cosigns   *)
+(* it (§7.9; question details-5-model-recovery-cosign, QD-628): a device's *)
+(* cosign that brings it to k counted members leaves it open, a recovery   *)
+(* key's cosign, rcosign, restarts its window, and only a tick at or after *)
+(* the window completes it. rcosign is in every run's alphabet.            *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -237,7 +241,10 @@ TypeRule(st, e, n) ==
             IF /\ Open(st, e.pid, n) /\ Standing(st, s)
                /\ Cardinality(Counted(st, {s}, st.props[e.pid].stmt)) = 1
                /\ st.adm[s].as \notin Counted(st, st.props[e.pid].signers, st.props[e.pid].stmt)
-            THEN complete(st.props[e.pid].stmt, st.props[e.pid].signers \cup {s}) ELSE 0
+            THEN \* a recovery-signed proposal stays pending at any cosign: its tick completes it (§7.9)
+                 IF st.props[e.pid].kind = "recovery" THEN 1
+                 ELSE complete(st.props[e.pid].stmt, st.props[e.pid].signers \cup {s})
+            ELSE 0
        [] e.k = "veto" ->
             IF /\ Open(st, e.pid, n) /\ st.props[e.pid].kind = "recovery"
                /\ AdminDevice(st, s) /\ s # st.props[e.pid].stmt.t
@@ -477,9 +484,8 @@ Candidates ==
     \cup {Stmt("bind", s, "", m, n - 1) : s \in Sidecars, m \in Members}
     \cup {Mk("replay", "", "", "", "", 0, 0, "", 0, of) : of \in {k \in 1 .. Len(log) : log[k].k \notin {"base", "tick", "replay"}}}
     \cup {Mk("tick", "api", "", "", "", 0, pid, "", n - 1, 0) : pid \in Pids}
-    \* a recovery cosign, which restarts a window: only the TEAM-M2-05 twins' runs take it
-    \cup (IF Twin \in {"WindowFromProposalEntry", "VoidKeepsProposal"}
-          THEN {Mk("rcosign", KeyOf[m], "", m, "", 0, pid, "", n - 1, 0) : m \in AdminMembers, pid \in Pids} ELSE {})
+    \* a recovery cosign, which restarts a window
+    \cup {Mk("rcosign", KeyOf[m], "", m, "", 0, pid, "", n - 1, 0) : m \in AdminMembers, pid \in Pids}
 
 Matches(pattern, e) == \A f \in DOMAIN pattern : e[f] = pattern[f]
 StoryAllows(e) == IF Len(Story) < n THEN TRUE ELSE Matches(Story[n], e)
@@ -566,10 +572,12 @@ ProposalsNeedK ==
         L.st.props[p].how \in {"completed", "activated"} =>
             Cardinality(Counted(L.hist[L.st.props[p].closed - 1], L.st.props[p].signers, L.st.props[p].stmt)) >= K
 
-\* A recovery proposal activates only once the window has run, with no veto between
+\* A recovery proposal takes effect only by its tick, once the window has run from its newest recovery
+\* signature, with no veto between; no cosign completes one
 WindowHolds ==
     \A p \in DOMAIN L.st.props :
-        L.st.props[p].how = "activated" =>
+        /\ L.st.props[p].kind = "recovery" => L.st.props[p].how # "completed"
+        /\ L.st.props[p].how = "activated" =>
             /\ L.st.props[p].a >= L.st.props[p].p + RecoveryWindow
             /\ ~\E k \in L.st.props[p].o .. L.st.props[p].a :
                   log[k].k = "veto" /\ log[k].pid = p /\ L.verdict[k] # 0
