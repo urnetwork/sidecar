@@ -68,6 +68,10 @@ type MlsEngineArgs struct {
 	// Nil is real time.
 	Clock    Clock
 	Settings *MlsSettings
+	// Called between the steps of the engine's long loops, each a leaf's validation or one X-Wing seal, so a host
+	// that runs one thread yields there: the page Worker's (§18.10's threads row), which passes NewMlsYield's. It
+	// must be safe for concurrent use. Nil calls nothing.
+	Yield func()
 }
 
 // One sidecar's real MLS engine.
@@ -90,6 +94,13 @@ func newMlsEngine(args *MlsEngineArgs, suite *mlsCipherSuite, groupSettings *mls
 	}
 	if settings.LeafLifetime <= 0 || groupSettings.Tree.MaximumLeafLifetime < settings.LeafLifetime {
 		return nil, fmt.Errorf("mls: a leaf lifetime of %s", settings.LeafLifetime)
+	}
+	if args.Yield != nil {
+		// this engine's own settings: NewMlsEngine makes them for it alone, and a test that shares a tree's settings
+		// between engines passes no yield
+		treeSettings := *groupSettings.Tree
+		treeSettings.Yield = args.Yield
+		groupSettings = &mlsGroupSettings{Tree: &treeSettings, Message: groupSettings.Message}
 	}
 	return &mlsEngine{
 		suite:               suite,

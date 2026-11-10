@@ -76,6 +76,10 @@ func (self *fuzzRecordAuth) Writes(repoId Id, sidecarId Id) bool {
 	return repoId == self.logId && sidecarId == self.writerId
 }
 
+func (self *fuzzRecordAuth) Admins(repoId Id, sidecarId Id) bool {
+	return false
+}
+
 func (self *fuzzRecordAuth) Deposits(repoId Id, sidecarId Id) bool {
 	return false
 }

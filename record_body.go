@@ -285,6 +285,10 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		)
 	case *protocol.Coverage:
 		return recordCoverageValidate(typed)
+	case *protocol.LogSettingsBody:
+		return recordLogSettingsValidate(typed)
+	case *protocol.LogCheckpointBody:
+		return recordLogCheckpointValidate(typed)
 	}
 	return nil
 }
