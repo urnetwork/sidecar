@@ -68,6 +68,10 @@ type Sidecar struct {
 	revocationClaims sidecarRevocationClaims
 	// keychain.wrap's recovery copy and the binding it is sealed to (keys_recovery_seal.go).
 	recovery recoverySealer
+	// The device revocation plans previewed here, which RevokeDevice signs (identity_revoke_plan.go).
+	revokePlans sidecarRevokePlans
+	// The k > 1 revocations this device proposed, watched for their completing cosign (identity_revoke_device.go).
+	revokeWatches sidecarRevokeWatches
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle

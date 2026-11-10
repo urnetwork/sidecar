@@ -4,12 +4,14 @@
 //
 //	admission         approve signs this device's member's new device's SidecarAdmit, after the safety number;
 //	                  deny dismisses
-//	admission_alarm   approve signs OwnerConfirm{sidecar_id}, after the safety number; revoke hands the device to
-//	                  RevokeDevice (CORE-M3-03); deny dismisses it, and a parked device stays parked
+//	admission_alarm   approve signs OwnerConfirm{sidecar_id}, after the safety number; revoke signs the device's
+//	                  compromise revocation from the alarm's entry through RevokeDevice
+//	                  (identity_revoke_device.go); deny dismisses it, and a parked device stays parked
 //	recovery_window   deny signs RecoveryVeto{proposal_id} on an AdminSet member's device; approve dismisses it, the
 //	                  window running its course
-//	recovery_rebind   revoke offers a compromise revocation of the rebind's signer (CORE-M3-03); deny dismisses it
-//	recovery_unseen   revoke offers the recovered device's revocation (CORE-M3-03); deny dismisses it
+//	recovery_rebind   revoke signs a compromise revocation of the rebind's signer through RevokeDevice; deny
+//	                  dismisses it
+//	recovery_unseen   revoke signs the recovered device's revocation through RevokeDevice; deny dismisses it
 //
 // Every decision runs as a sidecarAct of the person's confirmation, on /dev/tty or in an app's UI, never MCP, a hook
 // or an unconfirmed control call (D-CORE-13), and a covered act takes its one presence check (identity_act.go).
@@ -54,7 +56,8 @@ var (
 	ErrSidecarApprovalNotEligible = errors.New("this device may not sign it")
 	// The signature needs k of n, which the verified state does not yet say how to count (TEAM-M2-10).
 	ErrSidecarApprovalAuthority = errors.New("this needs more than one counted signer, which this device cannot gather yet")
-	// The decision's effect is another task's, not built yet: a revocation through RevokeDevice (CORE-M3-03).
+	// The decision's effect is another task's, not built yet. No kind of this file answers it now: a track whose
+	// kind's effect waits on another task does.
 	ErrSidecarApprovalUnbuilt = errors.New("that decision's effect is not built yet")
 )
 
@@ -295,8 +298,8 @@ func sidecarDecideAdmission(ctx context.Context, self *Sidecar, authority Sideca
 	})
 }
 
-// approve signs OwnerConfirm{sidecar_id}; revoke is RevokeDevice's (CORE-M3-03); deny dismisses, signing nothing,
-// so a parked device stays parked.
+// approve signs OwnerConfirm{sidecar_id}; revoke is RevokeDevice's, from the alarm's entry; deny dismisses, signing
+// nothing, so a parked device stays parked.
 func sidecarDecideAdmissionAlarm(ctx context.Context, self *Sidecar, authority SidecarAuthority, item *sidecarApprovalRecord, decision string, origin SidecarActOrigin, check SidecarPresenceCheck) error {
 	switch decision {
 	case SidecarDecisionApprove:
@@ -316,7 +319,7 @@ func sidecarDecideAdmissionAlarm(ctx context.Context, self *Sidecar, authority S
 		return self.runAdmissionAct(ctx, origin, check, memberId, workerId, bridge.SignedType_SIGNED_OWNER_CONFIRM,
 			&protocol.OwnerConfirm{SidecarId: item.SidecarId.Bytes()})
 	case SidecarDecisionRevoke:
-		return fmt.Errorf("%w: RevokeDevice is CORE-M3-03's", ErrSidecarApprovalUnbuilt)
+		return self.decideApprovalRevoke(ctx, authority, item, origin, check)
 	}
 	return nil
 }
@@ -333,10 +336,10 @@ func sidecarDecideRecoveryWindow(ctx context.Context, self *Sidecar, authority S
 	return self.runOneStatement(ctx, origin, check, bridge.SignedType_SIGNED_RECOVERY_VETO, &protocol.RecoveryVeto{ProposalId: proposalId})
 }
 
-// revoke offers a compromise revocation, RevokeDevice's (CORE-M3-03); deny dismisses.
+// revoke signs a compromise revocation from the alarm's entry, RevokeDevice's; deny dismisses.
 func sidecarDecideRevokeOffer(ctx context.Context, self *Sidecar, authority SidecarAuthority, item *sidecarApprovalRecord, decision string, origin SidecarActOrigin, check SidecarPresenceCheck) error {
 	if decision == SidecarDecisionRevoke {
-		return fmt.Errorf("%w: a compromise revocation is CORE-M3-03's RevokeDevice", ErrSidecarApprovalUnbuilt)
+		return self.decideApprovalRevoke(ctx, authority, item, origin, check)
 	}
 	return nil
 }
