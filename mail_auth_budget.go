@@ -158,6 +158,7 @@ func (self *MailAuthBudget) Close() {
 	self.cancel()
 }
 
+// Answers every waiting query with err.
 func (self *MailAuthBudget) refuseWaitersWithLock(err error) {
 	for _, waiter := range self.waiters {
 		waiter.ready <- err
