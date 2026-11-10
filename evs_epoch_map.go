@@ -772,22 +772,27 @@ func (self *evsMapRunReader) advance() error {
 // The runs a merge reads, smallest next key first.
 type evsMapRunHeap []*evsMapRunReader
 
+// How many runs have a move left.
 func (self evsMapRunHeap) Len() int {
 	return len(self)
 }
 
+// Whether run i's next key sorts before run j's.
 func (self evsMapRunHeap) Less(i int, j int) bool {
 	return bytes.Compare(self[i].next.key, self[j].next.key) < 0
 }
 
+// Swaps runs i and j.
 func (self evsMapRunHeap) Swap(i int, j int) {
 	self[i], self[j] = self[j], self[i]
 }
 
+// Adds a run, as container/heap asks.
 func (self *evsMapRunHeap) Push(item any) {
 	*self = append(*self, item.(*evsMapRunReader))
 }
 
+// Takes the last run, as container/heap asks.
 func (self *evsMapRunHeap) Pop() any {
 	old := *self
 	item := old[len(old)-1]
