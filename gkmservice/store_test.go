@@ -203,3 +203,21 @@ func TestGkmRepoAndFormCachesHoldAnAnswerAtMostTheirTtl(t *testing.T) {
 		t.Errorf("another repo's form: %v", err)
 	}
 }
+
+// D-TEST-2: gkm's store suite on the fakes its engine's tests run on, FakeBlobs and FakeRedis, with gkm's own key
+// builders. server/gkm runs the same suite on server's clusters and Redis.
+func TestGkmStoreSuiteOnTheFakes(t *testing.T) {
+	fixture := newGkmFixture(t)
+	sidecartest.RunGkmStoreSuite(t, &sidecartest.GkmStoreSuiteTarget{
+		Cluster:            fixture.cluster("meta-1"),
+		Redis:              fixture.host.Redis,
+		EpochKey:           GkmEpochKey,
+		GenerationKey:      GkmGenerationKey,
+		GenerationPrefix:   GkmGenerationPrefix,
+		GroupInfoKey:       GkmGroupInfoKey,
+		GroupPrefix:        GkmGroupPrefix,
+		KeyPackageKey:      GkmKeyPackageKey,
+		KeyPackageClaimKey: GkmKeyPackageClaimKey,
+		AckRedisKey:        GkmAckRedisKey,
+	})
+}
