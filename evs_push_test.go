@@ -237,19 +237,15 @@ func TestEvsWriteGitModeRefIsEvsGitRef(t *testing.T) {
 	}
 }
 
-// Cuts the world over to each epoch of epochs in turn, one at each push that arrives, the old current epoch listed
-// first among its sources, as a PATH_EPOCH commit lists it.
+// Cuts the world over to each epoch of epochs in turn, one at each push that arrives, by a PATH_EPOCH commit that lists
+// the old current epoch first among its sources.
 func (self *evsTestWriter) cutOverAtPushes(epochs ...uint64) {
 	next := 0
 	self.server.onPush = func(statement *EvsStatement) {
 		if len(epochs) <= next {
 			return
 		}
-		world := self.world
-		world.stateLock.Lock()
-		defer world.stateLock.Unlock()
-		world.sourceEpochs = append([]uint64{max(1, world.currentEpoch)}, world.sourceEpochs...)
-		world.currentEpoch = epochs[next]
+		self.world.cutOver(epochs[next])
 		next += 1
 	}
 }
@@ -325,7 +321,8 @@ func TestEvsPushRetokenKeepsWhatItSealed(t *testing.T) {
 			if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
 				t.Fatal(err)
 			}
-			if entry.GetVersion() != 1 || entry.GetBaseVersion() != 0 || len(entry.GetChain()) != 1 ||
+			// a creation on the new base, the PATH_EPOCH at version 1: max(b, m) + 1
+			if entry.GetVersion() != 2 || entry.GetBaseVersion() != 1 || len(entry.GetChain()) != 1 ||
 				hex.EncodeToString(entry.GetChain()[0].GetId()) != writer.server.uploads[0] {
 				t.Errorf("the entry: version %d on %d, its chain %v", entry.GetVersion(), entry.GetBaseVersion(), entry.GetChain())
 			}

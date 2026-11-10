@@ -13,7 +13,10 @@
 //   - a removal at r is a marker {removing push, r, the path's version, one past its last} on the path, then, by a
 //     LIST, on every current-epoch entry below it that holds a version older than r (marker.go). A fold deletes no
 //     current-epoch entry, and a marker takes only a newer one, so no repeated, queued or late removal fold writes
-//     over an entry a later fold wrote.
+//     over an entry a later fold wrote;
+//   - format 2 (fold_format2.go): a versionless version goes in as its statement holds it; a marker below a removed
+//     directory over a versionless file the removing push did not list carries its kind-5 segment and slot ids, with
+//     an alarm; and a DROP's written version replaces what the entry held, setting the drop mark, never skipped.
 //
 // Each entry is read, merged and written If-Match (If-None-Match to create), and read and merged again on a 412 or an
 // unknown outcome, so folds are idempotent and any process may run one, two of one range at once included.
@@ -390,6 +393,8 @@ type foldEvent struct {
 	entryVersion *protocol.EvsEntryVersion
 	// where its change, or for a prefix's removal that removal's change, sits in its statement's list
 	leaf evsLeafPlace
+	// a DROP's written version's {drop_id, through_version} (fold_format2.go); nil for any other event
+	dropMark *protocol.EvsDropMark
 }
 
 // Where a change sits in its statement's list (DESIGN-DETAILS 9.2.2's leaf row; question details-9-index-leaf): under
@@ -545,6 +550,10 @@ func (self *foldRun) planRange() error {
 		if err != nil {
 			return err
 		}
+		dropMarks, err := self.dropMarksAt(version, windowEntry, statement)
+		if err != nil {
+			return err
+		}
 		for i, change := range changes {
 			event := &foldEvent{commitVersion: version, pushId: windowEntry.PushId, change: change, leaf: leaves[i]}
 			if change.Removes() {
@@ -558,6 +567,7 @@ func (self *foldRun) planRange() error {
 				if err != nil {
 					return fmt.Errorf("%w: version %d: %v", ErrEvsStatementMismatch, version, err)
 				}
+				event.dropMark = self.dropMarkOf(dropMarks, event)
 			}
 			self.pathOf(change.TokenPath).events = append(self.pathOf(change.TokenPath).events, event)
 		}
@@ -619,11 +629,13 @@ func (self *foldPath) fileBefore(version uint64) bool {
 }
 
 // Whether a fold must write the path whatever later versions do: a directory's deltas, which a newer delta never
-// replaces, and the path's own removal, whose marker must stand before the removal leaves the window (I-EVS-6) and
-// before the LIST below it, so that while sources stand no read falls back to a source under it.
+// replaces; the path's own removal, whose marker must stand before the removal leaves the window (I-EVS-6) and
+// before the LIST below it, so that while sources stand no read falls back to a source under it; and a DROP's written
+// version, whose drop mark must stand before the DROP leaves the window, since 5h's fence reads it there once window
+// bit 5 is gone (§11.7's fence row).
 func (self *foldPath) neverSkipped() bool {
 	return slices.ContainsFunc(self.events, func(event *foldEvent) bool {
-		return event.kind == foldEventRemoval ||
+		return event.kind == foldEventRemoval || event.dropMark != nil ||
 			(event.kind == foldEventWrite && event.entryVersion.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY))
 	})
 }
@@ -733,7 +745,7 @@ func (self *foldRun) writePath(path *foldPath) error {
 				// a source copy holding them while the current epoch holds nothing: nothing stands to take over
 				return nil
 			}
-			return self.deleteSourceCopies(path)
+			return self.deleteSourceCopies(path, read.Entry)
 		}
 		if names := merged.entry.GetNames(); names != nil {
 			checkFoldedTableBound(names, self.folder.log)
@@ -758,7 +770,7 @@ func (self *foldRun) writePath(path *foldPath) error {
 		if merged.removed {
 			self.result.MarkerWriteCount += 1
 		}
-		return self.deleteSourceCopies(path)
+		return self.deleteSourceCopies(path, merged.entry)
 	}
 	return fmt.Errorf("%w: %d tries on one entry", ErrEvsFoldBusy, self.folder.settings.FoldEntryRetryCount)
 }
@@ -985,13 +997,17 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 				// already absent: a prefix's removal adds no removal of its own
 				continue
 			}
-			merged.entry.Marker = &protocol.EvsRemovalMarker{
+			marker := &protocol.EvsRemovalMarker{
 				PushId:         event.pushId.Bytes(),
 				RemovalVersion: event.commitVersion,
 				PathVersion:    standing + 1,
 				LeafPart:       event.leaf.part,
 				LeafIndex:      event.leaf.index,
 			}
+			// the removing push's own removal of the path, a listed file's, would have come first at this version and
+			// left nothing standing: a versionless file standing here is one it did not list (fold_format2.go)
+			carryUnlistedIds(marker, merged.entry, log, "a removed directory's fold")
+			merged.entry.Marker = marker
 			merged.removed = true
 			merged.replaced = false
 		}
@@ -1003,9 +1019,12 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 
 // A file's version merged into its entry: a creation replaces what the entry held, carrying no version, as does a
 // write over a marker, a table or a newer path version, which 5g never commits; else it goes first, the three newest
-// older ones kept with their inline records elided. Whether it replaced. The entry's drop mark stays through each,
-// since a path's versions never restart and the mark says which of them a drop took; a marker's carried ids cannot
-// stay on an entry that stands, so replacing one alarms and its content stays (format1_guard.go).
+// older ones kept with their inline records elided. Whether it replaced, as a creation does, which makes an entry
+// written while sources stand fresh. The entry's drop mark stays through each, since a path's versions never restart
+// and the mark says which of them a drop took; a marker's carried ids cannot stay on an entry that stands, so
+// replacing one alarms and its content stays (format1_guard.go). A DROP's written version replaces what the entry held
+// too and sets the mark, keeping the entry's state, since its path is not new (fold_format2.go). The version's entry
+// version bytes go in as its statement holds them, its versioning and locators with them.
 func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log sidecar.Logger) (*protocol.EvsIndexEntry, bool) {
 	version := &protocol.EvsIndexVersion{
 		PushId:        event.pushId.Bytes(),
@@ -1013,6 +1032,9 @@ func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log s
 		EntryVersion:  event.change.EntryVersion,
 		LeafPart:      event.leaf.part,
 		LeafIndex:     event.leaf.index,
+	}
+	if event.dropMark != nil {
+		return applyFoldDropVersion(entry, event, version, log), false
 	}
 	creation := event.change.BaseEntryVersion == 0
 	held := entry.GetVersions()
@@ -1072,8 +1094,8 @@ func elideEvsIndexVersion(version *protocol.EvsIndexVersion) *protocol.EvsIndexV
 }
 
 // Every change of the push committed at version: a one-part push's from its record, a sealed push's from every
-// part, checked whole as its seal is (EvsCheckSeal), so each change carries its source paths and each part matches
-// the root the seal names for it.
+// part, checked whole as its stored seal is (EvsCheckStoredSeal, of either format, a DROP's body read with it), so
+// each change carries its source paths and each part matches the root the seal names for it.
 func (self *RecordPushSource) allChangesAt(ctx context.Context, version uint64, entry *sidecar.EvsWindowEntry) (*sidecar.EvsStatement, []*EvsCommittedChange, error) {
 	push, err := self.pushAt(ctx, version, entry)
 	if err != nil {
@@ -1103,7 +1125,7 @@ func (self *RecordPushSource) allChangesAt(ctx context.Context, version uint64, 
 		}
 		partBytes[i] = part
 	}
-	checked, checkedParts, err := sidecar.EvsCheckSeal(push.statement, partBytes)
+	checked, checkedParts, err := sidecar.EvsCheckStoredSeal(push.statement, partBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 	}
@@ -1113,6 +1135,7 @@ func (self *RecordPushSource) allChangesAt(ctx context.Context, version uint64, 
 		}
 	}
 	push.allChanges = committedChanges(checked.Changes)
+	push.drop = checked.Drop
 	return push.statement, push.allChanges, nil
 }
 

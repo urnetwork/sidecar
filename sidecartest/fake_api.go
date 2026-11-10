@@ -2,8 +2,8 @@
 // queue, with the first metadata cluster on the Net's fake Blobs. server cannot be imported here, so each route copies
 // only the steps a schedule relies on, and T3 reruns the same schedules on server's real routes (Q-TEST-1): a
 // divergence fails. fake_api_config.go adds §7.9's authorization log, fake_api_exchange.go §7.8's token exchange,
-// fake_api_core.go enrollment, a client's mint and removal, the identity binding and its lookups, and refresh, and
-// fake_api_sync.go §6.8's poll and versions routes.
+// fake_api_core.go enrollment, a client's mint and removal, the identity binding and its lookups, and refresh,
+// fake_api_sync.go §6.8's poll and versions routes, and http_page.go §18.8's lease, its reap and POST /sidecar/close.
 //
 // Requests reach it through Transport, an http.RoundTripper that serves in process, so a client of api built with it
 // (SidecarApi's transport, a gate's source) sends real requests with no socket. It answers at two origins, api's and
@@ -67,6 +67,12 @@ type FakeApiSettings struct {
 	// The longest request body a route reads, as server's router bounds a JSON body: 16 MiB, past a base's 4 MiB of
 	// rows and 4,096 config pushes of at most 1 KiB, each base64 in JSON.
 	MaxRequestByteCount int64
+	// How long an ephemeral client's lease seen_time and its newest disconnect must both be past before
+	// ReapEphemeralClients removes it: §7.7's 35 min, as server's NetworkClientLeaseSettings.ReapAfter (http_page.go).
+	LeaseReapAfter time.Duration
+	// The longest body POST /sidecar/close reads: 64 bytes, a 22-character capability and room for a newline, as
+	// server's handler bounds it.
+	MaxCloseByteCount int64
 }
 
 func DefaultFakeApiSettings() *FakeApiSettings {
@@ -82,6 +88,8 @@ func DefaultFakeApiSettings() *FakeApiSettings {
 		ProjectionPageCount: 1024,
 		AppendAttemptCount:  64,
 		MaxRequestByteCount: 16 * 1024 * 1024,
+		LeaseReapAfter:      35 * time.Minute,
+		MaxCloseByteCount:   64,
 	}
 }
 
@@ -133,6 +141,8 @@ type FakeApi struct {
 	core fakeApiCoreState
 	// fake_api_sync.go's hint state, set by Net.AddApi
 	sync fakeApiSyncState
+	// http_page.go's leases, connections and reaps
+	lease fakeApiLeaseState
 	// counts every client token minted, for a test waiting on one
 	mints *sidecar.MonitorValue[uint64]
 }
@@ -162,12 +172,14 @@ func newFakeApi(ctx context.Context, clock Clock, faults *FaultQueue, barriers *
 		configLogs:       map[sidecar.Id]*fakeApiConfigLog{},
 		exchange:         newFakeApiExchangeState(),
 		core:             newFakeApiCoreState(),
+		lease:            newFakeApiLeaseState(),
 		mints:            sidecar.NewMonitorValue[uint64](0),
 	}
 	self.addConfigRoutes()
 	self.addExchangeRoutes()
 	self.addCoreRoutes()
 	self.addSyncRoutes()
+	self.addLeaseRoutes()
 	return self
 }
 
@@ -225,6 +237,8 @@ func (self *FakeApi) RemoveClient(clientId sidecar.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.removedClientIds[clientId] = true
+	// the removal chain's lease effect: a removed client's lease goes with it (http_page.go)
+	delete(self.lease.leases, clientId)
 }
 
 // The client bearer names, nil for none: an unknown token, one past its exp, one of a removed client or one whose

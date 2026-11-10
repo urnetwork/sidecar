@@ -10,8 +10,10 @@
 // (evs_push.go), and re-tokenized on 412 PATH_EPOCH with what it sealed kept (DESIGN-DETAILS 9.2.5). A refusal asking
 // for a rebuild runs the attempt again under a new push id from a fresh read; rebuilds and retokens together at most
 // PushRebuildCount times; a creation refused 409 is planned once more, since the removal a fresh read shows sets its
-// version (§11.7's versions row), unless the path now stands, whose 409 then goes back; every other refusal, a
-// file-mode 409 with paths among them, goes back to the caller.
+// version (§11.7's versions row), unless the path now stands, whose 409 then goes back; a creation the ref's coming
+// path epoch holds, 412 PATH_EPOCH_DUE or the planner's ErrEvsPathEpochDue, is planned again after its wait or at
+// the ref's next verified head, at most PushRetryCount times, then ErrEvsPathEpochDue (DESIGN-DETAILS 9.2.5); every
+// other refusal, a file-mode 409 with paths among them, goes back to the caller.
 //
 // On every leg. Safe for concurrent use, each call its own push.
 
@@ -22,6 +24,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // What WritePaths writes.
@@ -85,11 +89,23 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 	}
 	var creations map[string]bool
 	rebuilds := 0
+	dueWaits := 0
 	for attempt := 0; ; attempt += 1 {
 		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds)
 		switch {
 		case err == nil:
 			return result, nil
+		case errors.Is(err, ErrEvsPathEpochDue) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
+			if self.client.settings.PushRetryCount <= dueWaits {
+				if errors.Is(err, ErrEvsPathEpochDue) {
+					return nil, err
+				}
+				return nil, fmt.Errorf("%w: %w", ErrEvsPathEpochDue, err)
+			}
+			dueWaits += 1
+			if err := self.waitPathEpoch(ctx, refId, err); err != nil {
+				return nil, err
+			}
 		case (evsNeedsRebuild(err) || errors.Is(err, errEvsPlanEpochMoved) || errors.Is(err, errEvsRetokenSealsAgain)) &&
 			rebuilds < self.client.settings.PushRebuildCount:
 			rebuilds += 1
@@ -162,4 +178,22 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 		result.PathVersions = append(result.PathVersions, pathVersions[write.Path])
 	}
 	return result, plan, nil
+}
+
+// Waits out a creation the ref's coming path epoch holds: its retry_after_ms, else PathEpochDueWait, at most
+// PushRetryMaxWait, or the ref's next verified head, whichever comes first (DESIGN-DETAILS 9.2.5's 412
+// PATH_EPOCH_DUE row). A mapper on this device maps meanwhile on its own ticks (evs_epoch_map.go).
+func (self *EvsRepo) waitPathEpoch(ctx context.Context, refId Id, refusal error) error {
+	wait := self.client.settings.PathEpochDueWait
+	if evsError, ok := EvsErrorOf(refusal); ok && 0 < evsError.RetryAfter {
+		wait = evsError.RetryAfter
+	}
+	moved := self.client.epochs.moved(self.repoId, refId)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-moved:
+	case <-self.client.clock.After(min(wait, self.client.settings.PushRetryMaxWait)):
+	}
+	return nil
 }

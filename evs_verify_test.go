@@ -299,7 +299,9 @@ func TestEvsWalkRulesRefuse(t *testing.T) {
 }
 
 // A path a 1,200-change push left alone, though the push's covering prefixes reach it, is verified by adjacent-leaf
-// proofs with no change list fetched; the same read with the proofs dropped is refused.
+// proofs with no change list fetched; the same read with the proofs dropped is refused. The reader read the path
+// before the push, so its record's pin walks the push; a reader with no pin pins the head in its first round
+// (DESIGN-DETAILS 9.2.4) and takes a never-read path's version on evs's word (Q-EVS-6).
 func TestEvsAbsenceProofsForALargePush(t *testing.T) {
 	world := newEvsTestWorld(t)
 	world.push(&evsTestChange{path: "d/keep.txt", content: []byte("kept")})
@@ -315,15 +317,14 @@ func TestEvsAbsenceProofsForALargePush(t *testing.T) {
 	if world.commits[1].built.ChangeTree == nil {
 		t.Fatalf("the large push's changes are inline")
 	}
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) { reply.Absences = nil }
+	if _, _, err := evsTestRead(t, reader, world, "d/keep.txt"); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("no proofs: %v", err)
+	}
+	world.mutatePath = nil
 	content, _, err := evsTestRead(t, reader, world, "d/keep.txt")
 	if err != nil || string(content) != "kept" {
 		t.Fatalf("with proofs: %q %v", content, err)
-	}
-	// a reader with no pin walks the large push after the path's version, so it needs the proofs
-	world.mutatePath = func(reply *protocol.EvsReadPathReply) { reply.Absences = nil }
-	fresh := world.reader(t, evsTestId("fresh reader"))
-	if _, _, err := evsTestRead(t, fresh, world, "d/keep.txt"); !errors.Is(err, ErrEvsEntryRefused) {
-		t.Errorf("no proofs: %v", err)
 	}
 }
 

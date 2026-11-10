@@ -32,11 +32,13 @@ type evsTestWriteGkm struct {
 	stateLock sync.Mutex
 	newest    uint64
 	causes    map[uint64]GkmCause
-	ensured   int
+	// each generation's GenRotate auth pin version, 0 unset
+	auths   map[uint64]uint64
+	ensured int
 }
 
 func newEvsTestWriteGkm() *evsTestWriteGkm {
-	return &evsTestWriteGkm{newest: 1, causes: map[uint64]GkmCause{}}
+	return &evsTestWriteGkm{newest: 1, causes: map[uint64]GkmCause{}, auths: map[uint64]uint64{}}
 }
 
 func (self *evsTestWriteGkm) key(repoId Id, generation uint64) *EvsRepoKey {
@@ -46,6 +48,7 @@ func (self *evsTestWriteGkm) key(repoId Id, generation uint64) *EvsRepoKey {
 	key.groupId = evsTestId("world group")
 	key.commitment = evsTestBytes(fmt.Sprint("commitment ", generation), 32)
 	key.cause = self.causes[generation]
+	key.auth = &bridge.AuthPin{Version: self.auths[generation]}
 	return key
 }
 
@@ -365,9 +368,31 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 	if head < push.GetBaseVersion() || push.GetBaseVersion()+63 < head || !bytes.Equal(push.GetBaseChain(), baseChain[:]) {
 		return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE}}
 	}
+	current := world.currentWithLock()
+	// what the push showed evs: each change's token path, source paths and delta rows
+	for _, change := range checked.Changes {
+		world.captured = append(world.captured, &evsTestCaptured{epoch: push.GetPathEpoch(), tokenPath: change.TokenPath, current: current})
+		for epoch, tokenPath := range evsTestSourcePathsOf(change) {
+			world.captured = append(world.captured, &evsTestCaptured{epoch: epoch, tokenPath: tokenPath, current: current})
+		}
+		if change.WritesEntry() {
+			entry := &protocol.EvsEntryVersion{}
+			proto.Unmarshal(change.EntryVersion, entry)
+			for _, row := range entry.GetNames().GetNames() {
+				world.captured = append(world.captured, &evsTestCaptured{epoch: push.GetPathEpoch(), tokenPath: EvsTokenPath{EvsToken(row.GetToken())}, current: current, row: true})
+			}
+		}
+	}
 	conflicts := []*protocol.EvsTokenPath{}
 	for i, change := range checked.Changes {
 		state := world.paths[paths[i]]
+		if state != nil && paths[i] != "" && max(1, state.home) != current {
+			// 5g reads the current entry and the source copies the change names: one homed elsewhere is not seen
+			sources := evsTestSourcePathsOf(change)
+			if sourcePath, ok := sources[max(1, state.home)]; !ok || !sourcePath.Equal(world.tokensAt(paths[i], max(1, state.home))) {
+				state = nil
+			}
+		}
 		newest := uint64(0)
 		directory := false
 		if state != nil && state.removal == nil {
@@ -401,6 +426,8 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 			state = &evsTestPath{versions: map[uint64]*evsTestVersion{}}
 			world.paths[paths[i]] = state
 		}
+		// the fold writes the current entry and deletes the source copies the push named
+		state.home = current
 		if !change.WritesEntry() {
 			state.newest = change.Change.GetBaseEntryVersion() + 1
 			state.removal = &protocol.EvsRemovalMarker{PushId: push.GetPushId(), RemovalVersion: version, PathVersion: state.newest}
@@ -421,7 +448,9 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 			}
 			state.rows = kept
 		}
-		state.rows = append(state.rows, entry.GetNames().GetNames()...)
+		for _, row := range entry.GetNames().GetNames() {
+			state.rows = append(state.rows, evsTestStoredRow(row, current))
+		}
 		state.removal = nil
 		state.versions[entry.GetVersion()] = &evsTestVersion{entryBytes: change.EntryVersion, commitVersion: version, pushId: push.GetPushId()}
 		state.newest = entry.GetVersion()
@@ -847,4 +876,19 @@ func TestEvsTheRootTakesOnlyADirectorysDelta(t *testing.T) {
 	if !errors.Is(err, ErrEvsPushInvalid) {
 		t.Fatalf("a removal of the root: %v", err)
 	}
+}
+
+// The epochs and token paths a checked change's source paths name.
+func evsTestSourcePathsOf(change *EvsCheckedChange) map[uint64]EvsTokenPath {
+	sources := map[uint64]EvsTokenPath{}
+	for _, encoded := range change.SourcePaths {
+		sourcePath := &protocol.EvsSourcePath{}
+		if proto.Unmarshal(encoded, sourcePath) != nil {
+			continue
+		}
+		if tokenPath, err := ParseEvsChangedTokenPath(sourcePath.GetTokenPath()); err == nil {
+			sources[sourcePath.GetEpoch()] = tokenPath
+		}
+	}
+	return sources
 }

@@ -107,9 +107,11 @@ func (self EvsEntryStateValue) Metadata() map[string]string {
 }
 
 // An entry's bytes held to its shape: its bound; a file's at most four versions, newest first by commit version and
-// path version, each of its push, the newest whole and its entry version parsing as one; or a directory's table of
-// rows with a token, a kind and a sealed name, removing none; never both; a marker above every folded version; a
-// drop mark kept as read.
+// path version, each of its push and of a versioning of at most 2, the newest whole and its entry version parsing as
+// one; or a directory's table of rows with a token, a kind and a sealed name, removing none; never both; a marker
+// above every folded version, carrying 32 B segment ids and 16 B slot ids; a drop mark of a 16 B drop id through a
+// version, at most the newest folded path version and below a marker's (format 2's fields, which format 1 keeps as
+// read).
 func ParseEvsIndexEntry(entryBytes []byte) (*protocol.EvsIndexEntry, error) {
 	if EvsIndexEntryMaxByteCount < len(entryBytes) {
 		return nil, fmt.Errorf("%w: %d bytes", ErrEvsIndexEntryInvalid, len(entryBytes))
@@ -149,6 +151,9 @@ func ParseEvsIndexEntry(entryBytes []byte) (*protocol.EvsIndexEntry, error) {
 		if 0 < i && newerPath <= entryVersion.GetVersion() {
 			return refuse("path versions not newest first")
 		}
+		if uint32(protocol.EvsVersioning_EVS_VERSIONING_INDEX) < entryVersion.GetVersioning() {
+			return refuse("version %d of versioning %d", i, entryVersion.GetVersioning())
+		}
 		newerCommit, newerPath = version.GetCommitVersion(), entryVersion.GetVersion()
 	}
 	if names := entry.GetNames(); names != nil {
@@ -173,6 +178,27 @@ func ParseEvsIndexEntry(entryBytes []byte) (*protocol.EvsIndexEntry, error) {
 		}
 		if 0 < len(versions) && marker.GetPathVersion() <= newestPathVersion(versions) {
 			return refuse("a marker's version not past the path's last")
+		}
+		for _, segmentId := range marker.GetSegmentIds() {
+			if len(segmentId) != 32 {
+				return refuse("a marker carrying a segment id of %d bytes", len(segmentId))
+			}
+		}
+		for _, slotId := range marker.GetSlotIds() {
+			if len(slotId) != 16 {
+				return refuse("a marker carrying a slot id of %d bytes", len(slotId))
+			}
+		}
+	}
+	if dropMark := entry.GetDropMark(); dropMark != nil {
+		throughVersion := dropMark.GetThroughVersion()
+		switch {
+		case len(dropMark.GetDropId()) != 16 || throughVersion == 0:
+			return refuse("a drop mark of a %d B drop id through version %d", len(dropMark.GetDropId()), throughVersion)
+		case 0 < len(versions) && newestPathVersion(versions) < throughVersion:
+			return refuse("a drop mark through version %d past the path's newest", throughVersion)
+		case entry.GetMarker() != nil && entry.GetMarker().GetPathVersion() <= throughVersion:
+			return refuse("a drop mark through version %d at or past its marker's", throughVersion)
 		}
 	}
 	return entry, nil
