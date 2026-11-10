@@ -31,6 +31,15 @@ const evsFoldMaxStaleDeadline = 15 * time.Second
 // lengthen the margin and never shorten it.
 const evsFoldMinCollectMargin = 150 * time.Millisecond
 
+// §11.8 step 7: the head If-Match is issued only within 5 s of step 4's reads, the bound linearization rests on
+// (repo/ and the authorization state read at most 5 s before the commit), so a setting may shorten it and never
+// stretch it.
+const evsPushMaxStepSevenWindow = 5 * time.Second
+
+// §11.8's fence row: an attempt ends 503 unknown on a fence_ms later than its arrival less 100 ms, the margin the
+// clocks' 50 ms bound needs, so a setting may widen it and never narrow it.
+const evsPushMinFenceMargin = 100 * time.Millisecond
+
 // The engine's settings. Every field is read where it is used, from one instance.
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
@@ -125,6 +134,41 @@ type EvsSettings struct {
 	// The bytes of log pages a process keeps, which never change (§11.8's Resolve row), 16 MiB. Non-positive keeps
 	// none.
 	LogPageCacheByteCount int64
+
+	// §11.8 step 7: the head If-Match is issued only within this of step 4's reads, else steps 4 and 5 run again,
+	// 5 s. At most 5 s; positive.
+	PushStepSevenWindow time.Duration
+	// What a page-out at step 6 leaves step 7 of that window: its deadline is this long before the window ends, 1 s.
+	// At least zero and below PushStepSevenWindow.
+	PushPageOutReserve time.Duration
+	// §11.8's 412 row: how many times a push reruns 5 (b-h) on a reread head and issues step 7 again before 429
+	// BUSY, 8. Positive.
+	PushConflictRetryCount int
+	// How many times a push runs step 4 again from the cluster, after a refusal on a cached head, a passed 5 s
+	// window or a stale read, before it answers 429 BUSY, 8. Positive.
+	PushRerunCount int
+	// §11.8's refuse row: how many times the recording CAS rereads and tries again after a 412 before the push
+	// answers 503 unknown, 8. Positive.
+	PushRefusalRetryCount int
+	// §11.8's unknown row: rereads of the head after a step 7 whose outcome is unknown, before the push answers 503
+	// unknown, 3, and the wait between them, 200 ms. Positive count; the wait at least zero.
+	PushUnknownRereadCount    int
+	PushUnknownRereadInterval time.Duration
+	// §11.8's fence row: an attempt reading a fence_ms later than its arrival less this ends 503 unknown, 100 ms. At
+	// least 100 ms.
+	PushFenceMargin time.Duration
+	// §11.8's refuse row: a refusal meeting a refusal fence younger than this, by refused_ms, answers 429 instead
+	// of recording, 1 s. Positive.
+	RefusalFenceInterval time.Duration
+	// How long one attempt of a push may run once the client's request has arrived, its writes going on if the
+	// client leaves: past it, 503 unknown. Within the lb's 30 s silence, 25 s. Positive.
+	PushAttemptTimeout time.Duration
+	// The body a one-part push or a seal may carry: its statement, a payload of at most 1 MiB and its receipts, 2
+	// MiB. Positive.
+	PushBodyMaxByteCount int64
+	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
+	// keeps none.
+	GenerationCacheCount int
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -161,6 +205,18 @@ func DefaultEvsSettings() *EvsSettings {
 		FoldListPageCount:         1000,
 		FoldRefStateCount:         100 * 1000,
 		LogPageCacheByteCount:     16 * 1024 * 1024,
+		PushStepSevenWindow:       5 * time.Second,
+		PushPageOutReserve:        time.Second,
+		PushConflictRetryCount:    8,
+		PushRerunCount:            8,
+		PushRefusalRetryCount:     8,
+		PushUnknownRereadCount:    3,
+		PushUnknownRereadInterval: 200 * time.Millisecond,
+		PushFenceMargin:           100 * time.Millisecond,
+		RefusalFenceInterval:      time.Second,
+		PushAttemptTimeout:        25 * time.Second,
+		PushBodyMaxByteCount:      2 * 1024 * 1024,
+		GenerationCacheCount:      100 * 1000,
 	}
 }
 
@@ -202,6 +258,20 @@ func (self *EvsSettings) Validate() error {
 	if self.FoldVersionCount <= 0 || self.FoldTriggerInterval <= 0 || self.FoldBehindRetryAfter <= 0 ||
 		self.FoldEntryRetryCount <= 0 || self.FoldListPageCount <= 0 {
 		return fmt.Errorf("%w: a fold's version count, trigger interval, retry after, retry count and list page must be positive", ErrEvsSettings)
+	}
+	if self.PushStepSevenWindow <= 0 || evsPushMaxStepSevenWindow < self.PushStepSevenWindow {
+		return fmt.Errorf("%w: step 7's window %s, outside (0, %s]", ErrEvsSettings, self.PushStepSevenWindow, evsPushMaxStepSevenWindow)
+	}
+	if self.PushPageOutReserve < 0 || self.PushStepSevenWindow <= self.PushPageOutReserve {
+		return fmt.Errorf("%w: a page-out's reserve %s against step 7's window %s", ErrEvsSettings, self.PushPageOutReserve, self.PushStepSevenWindow)
+	}
+	if self.PushFenceMargin < evsPushMinFenceMargin {
+		return fmt.Errorf("%w: a fence margin %s, below §11.8's %s", ErrEvsSettings, self.PushFenceMargin, evsPushMinFenceMargin)
+	}
+	if self.PushConflictRetryCount <= 0 || self.PushRerunCount <= 0 || self.PushRefusalRetryCount <= 0 ||
+		self.PushUnknownRereadCount <= 0 || self.PushUnknownRereadInterval < 0 || self.RefusalFenceInterval <= 0 ||
+		self.PushAttemptTimeout <= 0 || self.PushBodyMaxByteCount <= 0 {
+		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
 	}
 	return nil
 }
