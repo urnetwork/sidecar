@@ -566,7 +566,8 @@ func (self *gkmGroupManager) openGenerationKey(state GkmAuthView, groupId Id, ge
 		if err != nil {
 			continue
 		}
-		deliveryArgs := &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: generation, Now: now}
+		// read from groupId's wrap paths, which a re-formed group's deliveries of its ladder's generations name
+		deliveryArgs := &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: generation, GroupId: groupId, Now: now}
 		opened, deliveryVerdict, err := GkmUseDelivery(state, deliveryArgs, client.args.SidecarId.Bytes(), privateKey)
 		if err == nil && deliveryVerdict.Passed() && opened != nil {
 			return opened, nil

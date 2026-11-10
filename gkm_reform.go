@@ -33,6 +33,9 @@
 //	statements gen/<k> of a re-formed group at or below its form's generation names the group it was claimed in,
 //	           so a statement naming another group is taken there only under a form this device verified, and is
 //	           still held to its signer's key, its repo and the C_k chain (parseServedGeneration)
+//	deliveries a delivery read from, or written in, the group this device pinned names that group, a generation the
+//	           ladder carried included (rule 7; GkmDeliveryCheckArgs.GroupId), as gkm's wrap checks hold it to the
+//	           path's group: a holder answers a late ask of the form's generation there before the re-former rotates
 //	depositor  reads no GroupForm (QD-156 gives the forms route r, rw and admin), and gkm's drop-key route serves
 //	           the newest group's generations: its pinned statement among the ladder's, byte for byte as the old
 //	           group held it, and the re-former's rotation chained from it, so its generation pin, which compares
@@ -48,11 +51,11 @@
 // depositor's pin takes a new group id at a generation past its pin, along a chain it verified, where rule 8 speaks
 // of an equal (g, C_g), which a depositor, holding no group, never meets.
 //
-// Not built here, each failing closed: a delivery of a generation at or below the form's in the new group, whose
-// body names the path's group where gen/<g> names the old one (rule 7), does not verify, so such a reader waits for
-// the re-former's rotation; evs's resolution of gen/<g> through the newest GroupForm (rule 8) is evs's; a member two
-// re-forms behind, whose middle form a second site loss took, refuses the chain and alarms, and returns by a re-add or
-// its recovery code; and a re-form keeps suite 0x0010, the one the subset speaks, until IANA's migration has another.
+// Not built here, each failing closed: evs's resolution of gen/<g> through the newest GroupForm (rule 8) is evs's; a
+// member two re-forms behind, whose middle form a second site loss took, refuses the chain and alarms, and returns by
+// a re-add or its recovery code; a form's signer is judged at the member's newest state, so a member that follows the
+// form only after its signer's revocation refuses it (question keys-m2-25-groupform-signer-judged-at); and a re-form
+// keeps suite 0x0010, the one the subset speaks, until IANA's migration has another.
 //
 // Calls testHookSecret through the ladder's own functions at every key sealed.
 
