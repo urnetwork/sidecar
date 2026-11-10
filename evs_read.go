@@ -1,12 +1,15 @@
 // Head reads (§11.9): ReadHead's and List's round trips to POST /evs/v1/repos/<id>/read, the verifying reader's checks
 // over what comes back, the pin and read records it raises, and the receipt gate before anything is decrypted.
 //
-// A read names its ref by id, which any reader derives from K_ref for a named ref (§11.6), and its path by tokens in
-// the ref's current path epoch and each listed source, computed here from the plaintext path, which never leaves the
-// device (I-13, X2). The current epoch comes from the last verified head; a ref this client has not read yet takes
-// one round for its head first. A path read before is read from its read record's pin, so every statement since that
-// read is checked against it (g0-recheck-0-head-reader-read-paths#1), and a version below the record is refused and
-// alarmed as tampering. A hint naming a newer version sends the read past evs's head cache.
+// A read names its ref by id, which any reader derives from K_ref for a named ref (§11.6), and its path by tokens
+// computed here from the plaintext path, which never leaves the device (I-13, X2), in the epochs DESIGN-DETAILS
+// 9.2.3's rules let it name: the current epoch, and the listed sources and other epochs at or above the path's floor;
+// a path with no floor is a new name, looked up through its parent's table where the rules hold it back. The loop
+// that chooses them, verifies each round and starts again on a head of another epoch state is evs_epoch_read.go's;
+// a ref this client has not verified a head of takes one round for its head first. A path read before is read from
+// its read record's pin, so every statement since that read is checked against it
+// (g0-recheck-0-head-reader-read-paths#1), and a version below the record is refused and alarmed as tampering. A hint
+// naming a newer version sends the read past evs's head cache.
 //
 // Objects the reply carries (segment ranges, slots) stream into spills (evs_reconstruct.go), never a whole reply in
 // memory. Nothing is decrypted before the head and the path verify and the head is pinned, and nothing at all of an
@@ -203,14 +206,44 @@ func (self *EvsRepo) resolveRefId(ctx context.Context, refName []byte, refId *Id
 	return EvsRefId(refKey, refName)
 }
 
-// One path a read asks for: its plaintext, its names, and its token path in each epoch asked.
+// A path's token path in epoch, from its raw names and K_path of that epoch: the root's is empty in every epoch.
+func (self *evsReadKeys) tokenPathIn(ctx context.Context, names [][]byte, epoch uint64) (EvsTokenPath, error) {
+	if len(names) == 0 {
+		return EvsTokenPath{}, nil
+	}
+	pathKey, err := self.path(ctx, epoch)
+	if err != nil {
+		return nil, err
+	}
+	return EvsPathTokens(pathKey, names)
+}
+
+// One path a read asks for: its plaintext and names, the version asked, and what the rounds named and learned of it
+// (evs_epoch_read.go).
 type evsReadPath struct {
 	path  string
 	names [][]byte
-	// the current epoch's, then each source's
-	epochPaths []*protocol.EvsSourcePath
+	// 0 the newest version, else that older version; the ref version its push committed at when known (history's
+	// prev_commit_version), and the push the newer version names as its predecessor, which E4 reads
+	version       uint64
+	commitVersion uint64
+	prevPushId    []byte
+	// its token path in the current epoch, and the epochs and token paths the last round named it in
 	current    EvsTokenPath
+	epochs     []uint64
+	epochPaths []*protocol.EvsSourcePath
+	named      map[uint64]bool
 	record     *EvsReadRecord
+	// the floor the call gathered, 0 none
+	floor uint64
+	// epochs the verifier needs proofs in, asked once more
+	more      []uint64
+	moreAsked bool
+	// a lookup ran for it in this call
+	lookedUp bool
+	// the reply as verified, or the absence a lookup settled with no token of the path sent
+	verified *EvsVerifiedPath
+	settled  *EvsVerifiedPath
 }
 
 // What one verified read gives its caller.
@@ -223,106 +256,40 @@ type evsReadResult struct {
 	objects *evsReadObjects
 }
 
-// Reads paths of a ref at version (0 the newest): the head first when the ref's path epoch is not known, then the
-// paths; verifies the head and every path, checks the read records, pins the head and raises the records, all before
-// the caller decrypts anything. A path's own failure fails the read: the caller asked for it.
+// One round's reply: its parts as they arrived and their objects, its head verified but not pinned, and the ref pin
+// it read from, which a path with no record is walked from (DESIGN-DETAILS 9.2.4's pin(X)).
+type evsReadRound struct {
+	reply         *evsReadReply
+	objects       *evsReadObjects
+	head          *EvsVerifiedHead
+	keys          *evsReadKeys
+	refPinVersion uint64
+}
+
+// Reads paths of a ref at version (0 the newest), each by DESIGN-DETAILS 9.2.4's loop (evs_epoch_read.go): verifies
+// the head and every path, checks the read records, pins the head and raises the records, all before the caller
+// decrypts anything. A path's own failure fails the read: the caller asked for it.
 func (self *EvsRepo) read(ctx context.Context, refId Id, paths []string, version uint64, fresh bool) (*evsReadResult, error) {
-	keys := newEvsReadKeys(self)
-	epoch := self.client.refEpoch(self.repoId, refId)
-	if epoch == nil && 0 < len(paths) {
-		// one round for the head alone, which gives the epoch the paths' tokens are asked in; nothing of it is
-		// trusted or pinned, since the next round's head is verified and a moved epoch asks again
-		request := &protocol.EvsReadRequest{RefId: refId.Bytes(), Fresh: fresh}
-		if pin, ok, err := self.client.pins.Pin(self.repoId, refId); err == nil && ok {
-			request.PinVersion = pin.Version
-		}
-		reply, objects, err := self.client.postRead(ctx, self.repoId, request)
-		if err != nil {
-			return nil, err
-		}
-		objects.close()
-		epoch = reply.head.GetPathEpoch()
-	}
-	readPaths := []*evsReadPath{}
+	readPaths := make([]*evsReadPath, 0, len(paths))
 	for _, path := range paths {
-		readPath, err := self.tokenize(ctx, keys, refId, path, epoch)
-		if err != nil {
-			return nil, err
-		}
-		readPaths = append(readPaths, readPath)
+		readPaths = append(readPaths, &evsReadPath{path: path, version: version})
 	}
-	result, err := self.readRound(ctx, refId, keys, readPaths, version, fresh)
-	if err != nil {
-		return nil, err
-	}
-	if !evsSamePathEpoch(epoch, result.head.Head.GetPathEpoch()) && 0 < len(paths) {
-		// the epoch moved between the rounds: the tokens asked are an older epoch's, which a source may still hold,
-		// but a reader asks again in the current one
-		result.objects.close()
-		return self.read(ctx, refId, paths, version, true)
-	}
-	return result, nil
+	return self.readPaths(ctx, refId, readPaths, fresh)
 }
 
-// Whether two path epochs name the same current epoch and sources.
-func evsSamePathEpoch(a *protocol.EvsPathEpoch, b *protocol.EvsPathEpoch) bool {
-	if a.GetCurrent() != b.GetCurrent() || len(a.GetSources()) != len(b.GetSources()) {
-		return false
-	}
-	for i, source := range a.GetSources() {
-		if source.GetEpoch() != b.GetSources()[i].GetEpoch() {
-			return false
-		}
-	}
-	return true
-}
-
-// A path's tokens in the current epoch and each source, and its read record.
-func (self *EvsRepo) tokenize(ctx context.Context, keys *evsReadKeys, refId Id, path string, epoch *protocol.EvsPathEpoch) (*evsReadPath, error) {
-	names, err := evsReadPathNames(path)
-	if err != nil {
-		return nil, err
-	}
-	readPath := &evsReadPath{path: path, names: names}
-	epochs := []uint64{max(1, epoch.GetCurrent())}
-	for _, source := range epoch.GetSources() {
-		epochs = append(epochs, source.GetEpoch())
-	}
-	for i, pathEpoch := range epochs {
-		pathKey, err := keys.path(ctx, pathEpoch)
-		if err != nil {
-			return nil, err
-		}
-		tokenPath, err := EvsPathTokens(pathKey, names)
-		if err != nil {
-			return nil, err
-		}
-		if i == 0 {
-			readPath.current = tokenPath
-		}
-		readPath.epochPaths = append(readPath.epochPaths, &protocol.EvsSourcePath{Epoch: pathEpoch, TokenPath: tokenPath.Components()})
-	}
-	record, ok, err := self.client.pins.ReadRecord(self.repoId, refId, path)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
-		readPath.record = record
-	}
-	return readPath, nil
-}
-
-// One round: the request, its framed reply, the head's and every path's checks, the read records' rule, then the
-// pin and the records raised.
-func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, version uint64, fresh bool) (*evsReadResult, error) {
+// One round: the request naming each path in the epochs the loop chose, its framed reply, and the head's check from
+// the pin, or from the oldest read record's pin of the paths asked, so every statement since is walked. The paths'
+// checks, the pin and the records are the loop's.
+func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys, paths []*evsReadPath, fresh bool) (*evsReadRound, error) {
 	fromVersion := uint64(0)
 	fromChain := EvsChainStart(self.repoId, refId)
 	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
 	if err != nil {
 		return nil, err
 	}
+	refPinVersion := uint64(0)
 	if pinned {
-		fromVersion, fromChain = pin.Version, pin.Chain
+		fromVersion, fromChain, refPinVersion = pin.Version, pin.Chain, pin.Version
 	}
 	for _, path := range paths {
 		// a recorded path reads from its last read's pin, so every statement since is checked against it
@@ -335,18 +302,16 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 	}
 	request := &protocol.EvsReadRequest{RefId: refId.Bytes(), PinVersion: fromVersion, Fresh: fresh}
 	for _, path := range paths {
-		request.Paths = append(request.Paths, &protocol.EvsReadPath{TokenPaths: path.epochPaths, Version: version})
+		readPath := &protocol.EvsReadPath{TokenPaths: path.epochPaths, Version: path.version}
+		if path.version != 0 {
+			readPath.CommitVersion = path.commitVersion
+		}
+		request.Paths = append(request.Paths, readPath)
 	}
 	reply, objects, err := self.client.postRead(ctx, self.repoId, request)
 	if err != nil {
 		return nil, err
 	}
-	keep := false
-	defer func() {
-		if !keep {
-			objects.close()
-		}
-	}()
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
 		RepoId:      self.repoId,
 		RefId:       refId,
@@ -357,49 +322,10 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 		Behind:      reply.behind,
 	})
 	if err != nil {
+		objects.close()
 		return nil, err
 	}
-	if len(reply.paths) != len(paths) {
-		return nil, fmt.Errorf("%w: %d path replies for %d paths", ErrEvsReplyInvalid, len(reply.paths), len(paths))
-	}
-	verifiedPaths := []*EvsVerifiedPath{}
-	for i, path := range paths {
-		verified, err := self.client.verifier.VerifyPath(head, path.current, reply.paths[i])
-		if err != nil {
-			return nil, err
-		}
-		// an older version asked for by number is history, not a rollback, and a path this device read a version of
-		// is never absent: removed at most
-		if version == 0 && path.record != nil && (verified.Absent || (verified.Entry != nil && verified.Entry.GetVersion() < path.record.EntryVersion)) {
-			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, path.path, nil)
-			return nil, fmt.Errorf("%w: a version below the one this device read", ErrEvsEntryRefused)
-		}
-		verifiedPaths = append(verifiedPaths, verified)
-	}
-	if err := self.client.verifier.Pin(head); err != nil {
-		return nil, err
-	}
-	self.client.noteVerifiedHead(self.repoId, refId, head.Head)
-	records := []*EvsReadRecord{}
-	for i, path := range paths {
-		if version != 0 || verifiedPaths[i].Entry == nil {
-			continue
-		}
-		chain := head.Chain
-		records = append(records, &EvsReadRecord{
-			RefId:        refId,
-			Path:         path.path,
-			EntryVersion: verifiedPaths[i].Entry.GetVersion(),
-			PinVersion:   head.Version,
-			PinChain:     &chain,
-			UsedAt:       self.client.clock.Now(),
-		})
-	}
-	if err := self.client.pins.RaiseReadRecords(self.repoId, records); err != nil {
-		return nil, err
-	}
-	keep = true
-	return &evsReadResult{refId: refId, head: head, keys: keys, paths: paths, replies: verifiedPaths, objects: objects}, nil
+	return &evsReadRound{reply: reply, objects: objects, head: head, keys: keys, refPinVersion: refPinVersion}, nil
 }
 
 // A read reply's parts as they arrived.

@@ -35,6 +35,10 @@ var (
 	// A push, part, seal, batch or window entry that does not parse or breaks its layout or a check that needs no
 	// head: §11.8's INVALID.
 	ErrEvsPushInvalid = errors.New("evs push invalid")
+	// A creation the ref's coming path epoch holds: §18.5's EVS_PATH_EPOCH_DUE, retryable (DESIGN-DETAILS 9.2.8). The
+	// planner answers it at once, nothing sent, for a creation on a blocking ref under immediate pressure, and the
+	// writer waits it out as it waits out 412 PATH_EPOCH_DUE, giving it to the caller past its bound.
+	ErrEvsPathEpochDue = errors.New("evs: EVS_PATH_EPOCH_DUE: a creation waits for the ref's path epoch")
 	// A refusal record or code §11.8 does not have.
 	ErrEvsRefusalInvalid = errors.New("evs refusal invalid")
 )

@@ -1,6 +1,14 @@
 // A stand-in evs for the verifying reader's and the reads' tests: one repo's main ref whose pushes are real signed
 // statements over real sealed entries, records and segments, served as POST .../read and GET .../log answer them
 // (§11.9), with knobs that make it lie the ways a malicious server would.
+//
+// Path epochs (DESIGN-DETAILS 9.2.4's route) as evs keeps them: each path's entry has a home epoch, the current one
+// or a listed source, where a read finds it only by the token path the request names in that epoch; a read naming no
+// token path in the current epoch is answered stale_epoch; an entry served from a source carries entry_epoch, its
+// table's rows sealed there untagged and older ones carried; every statement's change is proven under the path's token
+// path in that statement's own epoch, and a later statement of an epoch the request names none in gets no proof. A
+// cut-over (cutOver) leaves entries where they are, and the copy (copyAll) moves them all, translating carried rows,
+// and drops the sources.
 
 package sidecar
 
@@ -105,8 +113,10 @@ type evsTestPath struct {
 	versions map[uint64]*evsTestVersion
 	newest   uint64
 	removal  *protocol.EvsRemovalMarker
-	// a directory's folded rows
+	// a directory's folded rows, each with the epoch it is sealed in as its epoch field, 0 for 1
 	rows []*protocol.EvsName
+	// the epoch whose idx/ holds its entry, 0 for 1
+	home uint64
 }
 
 // What a test asks a push to change.
@@ -152,6 +162,130 @@ type evsTestWorld struct {
 	// leases follow it; and the source epochs it lists, newest first
 	currentEpoch uint64
 	sourceEpochs []uint64
+	// every token path a request named, in order: each read path's by epoch, each push's changes, source paths and
+	// delta rows (the capture of DESIGN-DETAILS 9.6)
+	captured []*evsTestCaptured
+	// a version of an epoch the request names no token path in is answered with its statement alone, as evs answers
+	// a version it can place by neither leaf place nor token path
+	statementAloneUnnamed bool
+}
+
+// One token path a request showed evs, by the epoch it named it in, with the current epoch then.
+type evsTestCaptured struct {
+	epoch     uint64
+	tokenPath EvsTokenPath
+	current   uint64
+	// a row of a delta names only the child's last token
+	row bool
+}
+
+// The world's current epoch, under stateLock.
+func (self *evsTestWorld) currentWithLock() uint64 {
+	return max(1, self.currentEpoch)
+}
+
+// A row stored in the epoch it is sealed in, 0 for 1.
+func evsTestStoredRow(row *protocol.EvsName, epoch uint64) *protocol.EvsName {
+	stored := proto.Clone(row).(*protocol.EvsName)
+	stored.Epoch = 0
+	if 1 < epoch {
+		stored.Epoch = epoch
+	}
+	return stored
+}
+
+// A directory's rows as served from a copy in tableEpoch: sealed there untagged, sealed in an older epoch carried.
+func evsTestServedRows(rows []*protocol.EvsName, tableEpoch uint64) []*protocol.EvsName {
+	served := []*protocol.EvsName{}
+	for _, row := range rows {
+		copied := proto.Clone(row).(*protocol.EvsName)
+		copied.Epoch = max(1, row.GetEpoch())
+		if copied.Epoch == tableEpoch {
+			copied.Epoch = 0
+		}
+		served = append(served, copied)
+	}
+	return served
+}
+
+// Cuts the ref over to epoch: the current one listed first among its sources, every entry left where it is.
+func (self *evsTestWorld) cutOver(epoch uint64) {
+	self.generation = max(self.generation, epoch)
+	self.pushPathEpoch(epoch)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.sourceEpochs = append([]uint64{self.currentWithLock()}, self.sourceEpochs...)
+	self.currentEpoch = epoch
+	for _, state := range self.paths {
+		if state.home == 0 {
+			state.home = 1
+		}
+	}
+}
+
+// Commits a PATH_EPOCH push to epoch on the head, as a mapper's commits, its map's parts standing on no store here:
+// the statement that lets every later one declare the new epoch.
+func (self *evsTestWorld) pushPathEpoch(epoch uint64) {
+	self.t.Helper()
+	baseVersion, baseChain := self.head()
+	version := baseVersion + 1
+	pushId := evsTestId(fmt.Sprint("world path epoch ", version, " ", epoch))
+	plan := &EvsPushPlan{
+		RepoId: self.repoId, RefId: self.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED,
+		RefMode: self.mode, PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain,
+		Generation: self.generation, GroupId: evsTestId("world group"), GenerationCommitment: evsTestBytes(fmt.Sprint("commitment ", self.generation), 32),
+		PathEpoch: epoch, Auth: &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)},
+		SignerSidecarId: self.signer.sidecarId, ClientId: evsTestId("world client"), TimeMs: 1767225600000 + int64(version),
+		Flags: uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH), PathMapSha256: evsTestBytes(fmt.Sprint("map ", epoch), 32),
+		MapSourceVersion: baseVersion, MapSourceChain: baseChain[:],
+		SealedMetadata: append(evsTestBytes(fmt.Sprint("metadata ", version), 32), evsTestBytes("metadata tail", 16)...),
+	}
+	built, err := NewEvsStatementBuilder(self.signer.sign).Build(plan)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	chain := EvsChainNext(baseChain, pushId, built.Statement.Sha256)
+	self.commits = append(self.commits, &evsTestCommit{statement: built.Statement.Bytes, parsed: built.Statement, built: built, chain: chain})
+}
+
+// The copy, finished: every entry moved to the current epoch, every row older than it translated, sealed again under
+// the current epoch's keys, and the sources dropped.
+func (self *evsTestWorld) copyAll() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	current := self.currentWithLock()
+	keys := evsTestKeys(self.t, self.repoId, current)
+	for directory, state := range self.paths {
+		state.home = current
+		for i, row := range state.rows {
+			rowEpoch := max(1, row.GetEpoch())
+			if rowEpoch == current {
+				continue
+			}
+			for path := range self.paths {
+				parent, name := evsSplitParent(path)
+				if path == "" || parent != directory || self.tokensAt(path, rowEpoch).Last() != EvsToken(row.GetToken()) {
+					continue
+				}
+				childToken := self.tokensAt(path, current).Last()
+				sealed, err := EvsNameSeal(keys.manifest, self.tokensAt(directory, current).Last(), childToken, name)
+				if err != nil {
+					self.t.Fatal(err)
+				}
+				state.rows[i] = evsTestStoredRow(&protocol.EvsName{Token: childToken.Bytes(), Kind: row.GetKind(), SealedName: sealed}, current)
+			}
+		}
+	}
+	self.sourceEpochs = nil
+}
+
+// The token paths captured so far.
+func (self *evsTestWorld) capturedTokenPaths() []*evsTestCaptured {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.captured)
 }
 
 func newEvsTestWorld(t testing.TB) *evsTestWorld {
@@ -302,11 +436,14 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	version := baseVersion + 1
 	pushId := evsTestId(fmt.Sprint("world push ", version, " ", self.generation))
 	keys := evsTestKeys(self.t, self.repoId, self.generation)
+	self.stateLock.Lock()
+	current := self.currentWithLock()
+	self.stateLock.Unlock()
 	plan := &EvsPushPlan{
 		RepoId: self.repoId, RefId: self.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED,
 		RefMode: self.mode, PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain,
 		Generation: self.generation, GroupId: evsTestId("world group"), GenerationCommitment: evsTestBytes(fmt.Sprint("commitment ", self.generation), 32),
-		PathEpoch: 1, Auth: &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)},
+		PathEpoch: current, Auth: &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)},
 		SignerSidecarId: self.signer.sidecarId, ClientId: evsTestId("world client"), TimeMs: 1767225600000 + int64(version),
 		SealedMetadata: append(evsTestBytes(fmt.Sprint("metadata ", version), 32), evsTestBytes("metadata tail", 16)...),
 	}
@@ -344,20 +481,20 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		switch {
 		case change.children != nil:
 			table := &protocol.EvsNameTable{}
-			parent := self.tokens(change.path).Last()
+			parent := self.tokensAt(change.path, current).Last()
 			for _, child := range change.children {
 				childPath := child
 				if change.path != "" {
 					childPath = change.path + "/" + child
 				}
-				childToken := self.tokens(childPath).Last()
-				sealed, err := EvsNameSeal(keys.manifestOfEpoch(self.t, self.repoId, 1), parent, childToken, []byte(child))
+				childToken := self.tokensAt(childPath, current).Last()
+				sealed, err := EvsNameSeal(keys.manifestOfEpoch(self.t, self.repoId, current), parent, childToken, []byte(child))
 				if err != nil {
 					self.t.Fatal(err)
 				}
 				row := &protocol.EvsName{Token: childToken.Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: sealed}
 				table.Names = append(table.Names, row)
-				p.rows = append(p.rows, row)
+				p.rows = append(p.rows, evsTestStoredRow(row, current))
 			}
 			entry := &protocol.EvsEntryVersion{
 				Version: entryVersion, PushId: pushId.Bytes(), BaseVersion: baseVersion, TimeMs: plan.TimeMs,
@@ -377,7 +514,7 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 			p.removal = &protocol.EvsRemovalMarker{PushId: pushId.Bytes(), RemovalVersion: version, PathVersion: state.newest + 1}
 		}
 		plan.Changes = append(plan.Changes, &EvsPlannedChange{
-			TokenPath: self.tokens(change.path), BaseEntryVersion: baseEntryVersion, EntryVersion: p.entry,
+			TokenPath: self.tokensAt(change.path, current), BaseEntryVersion: baseEntryVersion, EntryVersion: p.entry,
 		})
 		pendings = append(pendings, p)
 	}
@@ -389,6 +526,15 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	chain := EvsChainNext(baseChain, pushId, statement.Sha256)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	// what this push showed evs
+	for _, change := range plan.Changes {
+		self.captured = append(self.captured, &evsTestCaptured{epoch: current, tokenPath: change.TokenPath, current: current})
+	}
+	for _, p := range pendings {
+		for _, row := range p.rows {
+			self.captured = append(self.captured, &evsTestCaptured{epoch: current, tokenPath: EvsTokenPath{EvsToken(row.GetToken())}, current: current, row: true})
+		}
+	}
 	self.commits = append(self.commits, &evsTestCommit{statement: statement.Bytes, parsed: statement, built: built, chain: chain})
 	for _, p := range pendings {
 		state := self.paths[p.key]
@@ -396,6 +542,7 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 			state = &evsTestPath{versions: map[uint64]*evsTestVersion{}}
 			self.paths[p.key] = state
 		}
+		state.home = current
 		if p.removal != nil {
 			state.removal = p.removal
 			state.newest = p.version
@@ -444,29 +591,60 @@ func evsTestTreePosition(tree *EvsChangeTree, tokenPath EvsTokenPath) (int, int,
 	return tree.position(tokenPath)
 }
 
-// The reply for one path at its newest version, or version, with the proofs a reader needs from pin on: tokenPath
-// names it in epoch, and each statement's change is found under the path's token path in that statement's epoch.
-func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, epoch uint64, version uint64, pin uint64) (*protocol.EvsReadPathReply, []*protocol.EvsLocator, error) {
+// The reply for one path at its newest version, or version, with the proofs a reader needs from pin on: named holds
+// the token path the request names in each epoch, the current one's among them, and each statement's change is found
+// under the path's token path in that statement's epoch (see the file header).
+func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, version uint64, pin uint64) (*protocol.EvsReadPathReply, []*protocol.EvsLocator, error) {
+	current := self.currentWithLock()
+	tokenPath := named[current]
 	var key string
 	var state *evsTestPath
 	for path, candidate := range self.paths {
-		if self.tokensAt(path, epoch).Equal(tokenPath) {
+		if self.tokensAt(path, current).Equal(tokenPath) {
 			key, state = path, candidate
 		}
+	}
+	entryEpoch := uint64(0)
+	if state != nil {
+		home := max(1, state.home)
+		if home != current {
+			// a source's copy, found only by the token path the request names in its epoch; the root, which has no
+			// token, in every listed source
+			sourceNamed, ok := named[home]
+			switch {
+			case !slices.Contains(self.sourceEpochs, home):
+				state = nil
+			case key == "":
+				entryEpoch = home
+			case !ok || !sourceNamed.Equal(self.tokensAt(key, home)):
+				state = nil
+			default:
+				entryEpoch = home
+			}
+		}
+	}
+	// the path's token path in each later statement's epoch, as the request names it, nil for none
+	namedAt := func(later uint64) EvsTokenPath {
+		tokenPath, ok := named[max(1, self.commits[later-1].parsed.Push.GetPathEpoch())]
+		if !ok {
+			return nil
+		}
+		return tokenPath
 	}
 	// a statement's own epoch's token path of the path
 	tokenPathAt := func(commitVersion uint64) EvsTokenPath {
 		return self.tokensAt(key, self.commits[commitVersion-1].parsed.Push.GetPathEpoch())
 	}
-	reply := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components()}
+	reply := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components(), EntryEpoch: entryEpoch}
 	if state == nil {
 		// never written: absent, with the proofs that no later statement's change list holds it
 		for later := uint64(1); later <= uint64(len(self.commits)); later += 1 {
 			tree := self.commits[later-1].built.ChangeTree
-			if tree == nil {
+			laterPath := namedAt(later)
+			if tree == nil || laterPath == nil {
 				continue
 			}
-			for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, tokenPath) {
+			for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, laterPath) {
 				absence, err := tree.AbsenceProof(absentPath)
 				if err != nil {
 					continue
@@ -499,11 +677,19 @@ func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, epoch uint64
 		proto.Unmarshal(held.entryBytes, entry)
 		locators = entry.GetChain()
 		if entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
-			reply.Names = &protocol.EvsNameTable{Names: state.rows}
+			reply.Names = &protocol.EvsNameTable{Names: evsTestServedRows(state.rows, max(1, state.home))}
 			reply.NamesThrough = held.commitVersion
 		}
 	}
 	commit := self.commits[commitVersion-1]
+	if _, ok := named[max(1, commit.parsed.Push.GetPathEpoch())]; !ok && self.statementAloneUnnamed {
+		// a version or removal evs cannot place in its statement for this request: the statement alone
+		alone := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components(), Statement: commit.statement}
+		if self.mutatePath != nil {
+			self.mutatePath(alone)
+		}
+		return alone, nil, nil
+	}
 	if commitVersion <= pin {
 		reply.Statement = commit.statement
 	}
@@ -522,10 +708,11 @@ func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, epoch uint64
 	}
 	for later := commitVersion + 1; later <= uint64(len(self.commits)); later += 1 {
 		tree := self.commits[later-1].built.ChangeTree
-		if tree == nil {
+		laterPath := namedAt(later)
+		if tree == nil || laterPath == nil {
 			continue
 		}
-		for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, tokenPathAt(later)) {
+		for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, laterPath) {
 			absence, err := tree.AbsenceProof(absentPath)
 			if err != nil {
 				continue
@@ -568,8 +755,25 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		}
 		locators := []*protocol.EvsLocator{}
 		for _, path := range read.GetPaths() {
-			tokenPath, _ := ParseEvsTokenPath(path.GetTokenPaths()[0].GetTokenPath())
-			reply, pathLocators, err := self.pathReplyWithLock(tokenPath, path.GetTokenPaths()[0].GetEpoch(), path.GetVersion(), read.GetPinVersion())
+			named := map[uint64]EvsTokenPath{}
+			var first EvsTokenPath
+			for _, sourcePath := range path.GetTokenPaths() {
+				tokenPath, err := ParseEvsChangedTokenPath(sourcePath.GetTokenPath())
+				if err != nil {
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				named[sourcePath.GetEpoch()] = tokenPath
+				if first == nil {
+					first = tokenPath
+				}
+				self.captured = append(self.captured, &evsTestCaptured{epoch: sourcePath.GetEpoch(), tokenPath: tokenPath, current: self.currentWithLock()})
+			}
+			if _, ok := named[self.currentWithLock()]; !ok {
+				frames = append(frames, &protocol.EvsReadFrame{Path: &protocol.EvsReadPathReply{TokenPath: first.Components(), StaleEpoch: true}})
+				continue
+			}
+			reply, pathLocators, err := self.pathReplyWithLock(named, path.GetVersion(), read.GetPinVersion())
 			if err != nil {
 				writer.WriteHeader(http.StatusNotFound)
 				return

@@ -10,7 +10,9 @@
 // A read record is (ref_id, path, entry version, pin at last read), one per path a head reader read, at most
 // EvsSettings.HeadReadRecordCount for the network, least recently used out (g0-recheck-0-head-reader-read-paths#1). A
 // path whose record was evicted counts as never read. Paths are this device's own plaintext, held only in the sealed
-// store and never logged (I-13).
+// store and never logged (I-13). A record also keeps the path's floor and the ref's current epoch at its pin
+// (DESIGN-DETAILS 9.2.2, 9.2.3): a floor only falls, and a record stored without them reads as no floor, which only
+// sends less.
 //
 // Layout: pins/<repo_id> and reads/<repo_id>, each the repo's records as JSON, rewritten whole by Commit, so a kill
 // leaves the old file or the new one. Writes serialize on writeLock, which is never held with stateLock's work on the
@@ -80,6 +82,10 @@ type EvsReadRecord struct {
 	PinVersion uint64
 	PinChain   *[sha256.Size]byte
 	UsedAt     time.Time
+	// The lowest epoch in which this device holds evidence evs was shown the path's token, 0 none (DESIGN-DETAILS
+	// 9.2.3), and the ref's current epoch at PinVersion, whose statements the next read walks from.
+	Floor    uint64
+	PinEpoch uint64
 }
 
 // A pin's stored form.
@@ -103,6 +109,8 @@ type evsReadRecordRecord struct {
 	PinVersion   uint64 `json:"pin_version"`
 	PinChain     string `json:"pin_chain,omitempty"`
 	UsedAtMs     int64  `json:"used_at_ms"`
+	Floor        uint64 `json:"floor,omitempty"`
+	PinEpoch     uint64 `json:"pin_epoch,omitempty"`
 }
 
 // One repo's state as memory holds it.
@@ -204,6 +212,8 @@ func (self *EvsPinStore) load() error {
 						EntryVersion: record.EntryVersion,
 						PinVersion:   record.PinVersion,
 						UsedAt:       time.UnixMilli(record.UsedAtMs),
+						Floor:        record.Floor,
+						PinEpoch:     record.PinEpoch,
 					}
 					if record.PinChain != "" {
 						chainBytes, err := hex.DecodeString(record.PinChain)
@@ -513,9 +523,9 @@ func (self *EvsPinStore) ReadRecord(repoId Id, refId Id, path string) (*EvsReadR
 	return &copied, true, nil
 }
 
-// Raises the read records of one repo's reads, each to its entry version and pin, and evicts the network's least
-// recently used past HeadReadRecordCount. A record never falls: a lower entry version is the caller's refusal, which
-// it makes before calling this.
+// Raises the read records of one repo's reads, each to its entry version and pin, its floor to the lower of the two,
+// and evicts the network's least recently used past HeadReadRecordCount. A record never falls: a lower entry version
+// is the caller's refusal, which it makes before calling this.
 func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -549,8 +559,9 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 			if held := reads[key]; held != nil {
 				raised.EntryVersion = max(raised.EntryVersion, held.EntryVersion)
 				if raised.PinVersion < held.PinVersion {
-					raised.PinVersion, raised.PinChain = held.PinVersion, held.PinChain
+					raised.PinVersion, raised.PinChain, raised.PinEpoch = held.PinVersion, held.PinChain, held.PinEpoch
 				}
+				raised.Floor = evsLowerFloor(raised.Floor, held.Floor)
 			}
 			reads[key] = &raised
 		}
@@ -587,6 +598,8 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 				EntryVersion: record.EntryVersion,
 				PinVersion:   record.PinVersion,
 				UsedAtMs:     record.UsedAt.UnixMilli(),
+				Floor:        record.Floor,
+				PinEpoch:     record.PinEpoch,
 			}
 			if record.PinChain != nil {
 				storedRecord.PinChain = hex.EncodeToString(record.PinChain[:])

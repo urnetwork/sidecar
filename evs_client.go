@@ -113,8 +113,10 @@ type EvsClient struct {
 	stateLock sync.Mutex
 	// the newest ref version a hint named, per repo and ref, which sends the next read past evs's head cache
 	hintedVersions map[evsRefKey]uint64
-	// each ref's epoch state as the last verified head gave it (evs_epoch_read.go)
+	// each ref's epoch state as the last verified head gave it, and the listings, alarms and waits beside it
+	// (evs_epoch_read.go), under their own lock
 	refEpochs map[evsRefKey]*evsRefEpoch
+	epochs    *evsClientEpochs
 	// the receipt gate, nil for the default that refuses (evs_read.go)
 	preDecryptHook EvsPreDecryptFunction
 	// RefHeads' rotation (evs_witness.go)
@@ -168,6 +170,7 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		pins:           NewEvsPinStore(args.Store, args.Settings),
 		hintedVersions: map[evsRefKey]uint64{},
 		refEpochs:      map[evsRefKey]*evsRefEpoch{},
+		epochs:         newEvsClientEpochs(),
 		repoIdMirrors:  map[Id]*EvsMirrorStore{},
 	}
 	self.verifier = newEvsVerifier(self)
