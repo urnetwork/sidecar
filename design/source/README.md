@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-214. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-224. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,13 +42,13 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (215 onward)
+## Adding owner decision N (225 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
 3. Set `MAXD = N` in `asm/assemble10.py` and `asm/cites10.py`.
 4. In `asm/validate10.py`, raise both `list(range(1, N))` checks, `owner_record` and `decision_rows`, to `N + 1`, and add N's date to `LATE_DATES`, which `dates_ok` reads from 198 on, since the build's answers are numbered as they are folded and a later number can carry an earlier day (2026-11-06's bulk acceptance). A day no earlier entry has also needs `decision_rows`' date pattern, as 2026-11-10 was added for decision 198.
-5. In the sections, mark the question "**Decided by owner YYYY-MM-DD (owner decision N):**", or "**Amended by owner …**" for a change to an earlier answer. Cite "owner decision N" in every section that implements it: the validator fails any decision that no section cites. That is D-ARCH-4's assembly check, which G0 requires (§23.8).
+5. In the sections, mark the question "**Decided by owner YYYY-MM-DD (owner decision N):**", or "**Amended by owner …**" for a change to an earlier answer; `assemble10.py`'s `DECIDED` and `AMENDED` patterns read the date from that mark for Appendix B's status cell. Cite "owner decision N" in every section that implements it: the validator fails any decision that no section cites. That is D-ARCH-4's assembly check, which G0 requires (§23.8).
 6. If the question's status cell changes, update it in `asm/v10/qstatus_final.json`.
 7. Rebuild, and read `v7/validate.json`.
 
@@ -99,3 +99,15 @@ The design-records track for §2 and §3 folded those sections' items from sidec
 - **Superseded options.** 302 grep hits, each with a reading; those on changed lines were read on 2026-11-10. None is live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands.
 - **The metadata list** is v10, whose header names what it adds, copied to `metadata_list.yml` by `make metadata`. Two new rows the owner asked for, ext rows for Cloudflare at https://ur.io and for the abuse mailboxes' provider, wait on question `dr-s2-s3-new-metadata-rows.md`, since §22.7's guard needs each new row's `planned` line in `testdata/metadata/fields.yml` in the same commit; QD-206's row for the file clusters' bookkeeping went into evs-10, the file cluster's own row.
+
+## Validation after owner decisions 215-224 (2026-11-10)
+
+The design-records track for §17 and §18 folded those sections' items from sidecar/DESIGN-AMENDMENTS.md. The owner's answers that change a behavior or a rule became owner decisions 215-224, each citing its ledger id: those decided one at a time on 2026-11-10 (215-218: forwarding's iOS executable budget and compile cap, which decide Q-SDK-7, the key origin's per-network databases and multi-use bridge approvals), the key origin's sign-in hand-off the owner chose on 2026-11-06 (219), and the owner-class items accepted in bulk that day (220-224: requested grants' sealed detail, promoted key-origin builds, wintun.dll left unbundled, the ur.io/recurd page and C16's latch). Accepted defect fixes, readings and fills went in as text, among them the share seal and share pins (§17.9), the hook's modes, contract class, setter and binder (§17.6), the sign-out edge (§17.8, §18.6), the foreground report (§5.4, §18.5, §18.7) and the key origin's CSP and storage (§18.8); the parts they name in §2.8's EX7, §4.6, §4.7, §4.10, §5.4, §7.8, §7.9, §8.8, §8.11, §8.17, §13.7, §13.17, §16.8, §22.5, §22.8 (FS-37, FS-38, FS-56), §22.9 and §23 went in with them. Two items fell to owner decision 197, which replaced the keyless device role before they were folded: the window clients the sidecar role would have minted for it (QD-184) and the BridgeState chunks it would have taken over the device RPC (QD-559). Three wire parts wait in DESIGN-AMENDMENTS.md's "Later decisions", since protocol's fence test holds each fence to its .proto: CanonicalAction's `sealed_detail` (decision 220) with §2.8's api-7 and api-10, `BridgeShareGrant` for §17.9's fence, and `Pending`'s two sign-out fields, which bridge.proto declares and the test's additions list holds (question `dr-s17-s18-fence-additions.md`); each fence carries a comment naming what joins it. `build.sh` on this folder reproduced DESIGN.md (SHA-256 `108fad99b1c3f4de8cdc2b8225c7404ec7928a63deb7f80c7c168e6d233900e5`) at this fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new D-, Q- or FS- item.
+- **Owner decisions.** All 224 rows are present and cited. Q-SDK-7 is decided, so the front matter lists one open owner question, Q-BRIDGE-8, and `data_front10.py`'s `OPEN_OWNER` holds it alone.
+- **Superseded options.** 294 grep hits, each with a reading: the eight on Q-SDK-7's "(proposed; ...)" markers and decider line went with them, and the one on §17.17's changed risk row was read on 2026-11-10. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is unchanged (v10): §2.8's only change is EX7's prose, outside the list.
+
+The tooling changed in one place: `assemble10.py`'s `DECIDED` and `AMENDED` patterns read a 2026-11-1x date, since Q-SDK-7 is the first Q- item decided after 2026-11-09, and Appendix B's status cell otherwise lost its decision numbers.
