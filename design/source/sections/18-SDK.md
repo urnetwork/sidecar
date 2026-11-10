@@ -277,9 +277,11 @@ func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback S
 	// RevokeDevice; revocation proposal (AdminSet devices): approve signs §7.9's AuthorityCosign once the person
 	// reviews §5.6's plan, which this device derives, with §5.6's approval, deny dismisses it; recovery window
 	// (AdminSet devices, either kind): deny signs §7.9's RecoveryVeto naming it, countersigned as §7.9's presence
-	// row asks (owner decision 187); recovery_rebind or recovery_unseen:
-	// revoke signs a SidecarRevoke for compromise of the rebind's signer or the recovered device, from a since_n at
-	// or before the rebind or activation, once the person confirms §7.9's cascade list (what P parks and voids, what
+	// row asks (owner decision 187); recovery_rebind: not me signs a SidecarRevoke for compromise of the rebind's
+	// signer from a since_n at or before the rebind, and I did this runs §5.9's compromise procedure, which clamps
+	// since_n past the rebind for the rebind's signer, revoked last (owner decision 212);
+	// recovery_unseen: revoke signs a SidecarRevoke for compromise of the recovered device from a since_n at or
+	// before its activation; each once the person confirms §7.9's cascade list (what P parks and voids, what
 	// stands, and each device that sealed to a binding it voids, to revoke for compromise and enroll anew if its
 	// backups may hold that sealing, §5.9); deny dismisses it; a revoke answer naming a device of this member runs
 	// through RevokeDevice's rules (§5.6's plan, approval, Suspend and codes), for compromise from the since_n its
@@ -766,11 +768,14 @@ carrier:   first HTTPS-only: §6 long-poll, §10, §11 (config repo too) | later
 - **Key origin (D-SDK-18).** ur.io pages frame it and message it by exact origin:
 
 ```text
-pages       https://ur.io/recurd, the console and the quick tools render views and hold no key, token or
-            wrapped secret; the team console shows the directory, and the drops of the repos it reads with
+pages       https://ur.io/recurd, the console and the quick tools render views and hold no sidecar key, sidecar
+            token or wrapped secret, though ur.io's account panel keeps a network byJwt in localStorage while a
+            member is signed in on that browser; the team console shows the directory, and the drops of the repos it reads with
             their states and the device command; it files no request or decision and never dry-runs, signs
             or cancels a drop (read_only, admin_refused; D-SDK-29)
-key origin  https://sidecar.ur.io/v1/ serves only the signed loader and sidecar.wasm, under CSP default-src
+key origin  https://sidecar.ur.io/v1/, served direct from the lb, never through Cloudflare, which terminates
+            https://ur.io (§2.8 EX7, §19.5's W10; owner decision 211), serves only the signed loader and
+            sidecar.wasm, under CSP default-src
             'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 18.9's hosts; frame-ancestors
             https://ur.io; its Worker holds IndexedDB, the non-extractable WebCrypto root key and its token
 messages    postMessage, accepted only when event.origin is exactly https://ur.io in production (per-env
@@ -815,8 +820,12 @@ leaves      each page Worker is a read_only MLS leaf of each group it reads, wit
             group; in the config and directory groups, unless §7.9's rank makes it one of the 1,000
             leaf-entitled, it reads by wraps (owner decisions 144, 182); sign-out removes it, and an unused
             or evicted one goes by §10.9's stale-leaf Removes, 90 days after its leaf last changed
-disclosed   script running in https://ur.io (served code, an XSS, an extension with page access) can request
-            views while it runs, never the key or token, so its access ends with it (§2.4, §2.10)
+disclosed   script running in https://ur.io (served code, Cloudflare's altered page script, an XSS, an
+            extension with page access) can request views while it runs, never the Worker's key or token, so
+            that access ends with it; it can also take the account panel's network byJwt from localStorage
+            while a member is signed in on that browser, which reaches network-credential routes, but a client
+            minted with it gets no admission, key or plaintext without a consented device (§5.6, §7.9; §2.4,
+            §2.10)
 ```
 
 - **Quick burner (Q-SDK-4).** An ephemeral sidecar: a memory-only keychain (§5.6) on an `ephemeral` client (§7.7), never a genesis signer, reading the member's mailbox by ReaderWraps through an `EvsShare` (§8.8, §15.7) that the consented device admitting it signs, and reaped 30-36 min after its last poll (the lease below, §7.10); with no consented device of its member online, the page waits. It searches the mailbox's two buckets in memory only and never fetches all.

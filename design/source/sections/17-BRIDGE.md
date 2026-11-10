@@ -267,7 +267,9 @@ message BridgeState {
   AuthPin auth = 1;                        // auth.proto's (n, A_n), the newest verified state; ApplyDeltas chains from it
   bytes genesis_sha256 = 2;                // the anchor (§7.9)
   bool has_document = 3;                   // that state's rows: enforcing{doc} or enforcing{nodoc}
-  bytes rules = 4;                         // this device's compiled block, routes, maps and hook rules
+  bytes rules = 4;                         // a marshalled BridgeRules, declared in bridge.proto with its row
+                                           // messages: this device's compiled block, routes, maps and hook
+                                           // rules; only in process or over the device RPC, so no §2.8 row
   map<string, fixed32> names = 5;          // client name -> overlay IPv4 (§7.7, 17.4), versioned with rules
   repeated string name_zones = 6;          // <net>.<root>, and the alias zone where one is chosen (§12.9)
   repeated BridgeIdentity identities = 7;  // the subjects its rules let reach this host (17.9), ~64 B each

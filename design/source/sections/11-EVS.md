@@ -1001,9 +1001,10 @@ retry id  a push id names one statement; the client retries with the same push i
           overlap, and one may reach its evs handler at any time, even after another's answer reached the client;
           a committed push id returns its original version from the head window or from the log pages of
           (b, b+64], packed or not, however many commits followed, and a recorded one its refusal (refuse, below)
-fence     evacuation's fences raise the head's fence and set fence_ms (GC raises none, 11.13); refusal records, leases, blocks, source
-          drops and collection windows set no fence_ms and end nothing; an attempt that may issue step 7 (a push or
-          seal, never a part) and reads a head whose fence_ms, from a write it did not make, is later than its own
+fence     evacuation's fences raise the head's fence and set fence_ms (GC raises none, 11.13); refusal records,
+          leases, blocks, source drops and collection windows set no fence_ms and end nothing; an attempt that may
+          issue step 7 (a push or seal, never a part) and reads a head whose fence_ms, from a write it did not
+          make, is later than its own
           arrival less 100 ms ends with 503 {push_id, outcome: unknown} and no further step 7, so a fence ends every
           such attempt that arrived before it, whether it read the head before the fence or after, and one arriving
           after it fails the time or receipt-age check the fence waited out (Resolve, below; 11.13's orphans); the
@@ -1228,8 +1229,13 @@ reader    checks each returned statement's signature against its config's writer
           by its proof to changes_root), and for a removal, that its statement removes the path or a prefix holding
           it; that no statement after the version's own changes the path, or a prefix holding it, again (a prefix
           sends it to that push's change list: inline, or by its adjacent-leaf proofs, never the whole list); then it
-          pins (ref, v, C_v) durably; a head below its pin is refused unless a verified EvsReseed covers it (11.13,
-          §19.10), which it shows as a loss
+          pins (ref, v, C_v) durably, and keeps, sealed under §5's AEAD, one record per path read (ref_id, path,
+          entry version, pin at last read), at most HeadReadRecordCount = 16,384 a network, least recently used
+          out (§5.9); a read of a recorded path sets pin_version to the record's pin, not the ref's (a request of
+          several paths takes the oldest of their pins), checks every statement after it as above, refuses and
+          alarms if the served version is below the record's or a later statement changes the path, then raises
+          the record (owner decision 209); a head below its pin is refused unless a verified EvsReseed covers it
+          (11.13, §19.10), which it shows as a loss
 collected a kind-5 segment or staged range that 404s answers `collected` for a replaced versionless version, whose
           reader re-reads the head fresh and restarts on the newest version, and a 404 of a listed version's content
           reads `dropped`, with no alarm, unless its drop was cancelled or refused (11.7's states); for a path's
@@ -1242,7 +1248,8 @@ serve     from not_before_ms, unless the drop is cancelled or refused, evs serve
           record of its chain (elided from any record it serves, every other entry version keeping its own hash),
           and, once the job's delete set exists, no byte of a deleted, held or packed id in it (404, as if
           deleted), so a held drop reads as a finished one
-trusts    for a path it has never read, which writer-signed version is current at its first pin, and, after a
+trusts    for a path it has never read or no longer remembers (its record evicted, or its record's pin past the
+          budget), which writer-signed version is current at its first pin, and, after a
           re-pin past the budget, for every path, is evs's word (it could serve an older version or a refused
           push's entry); every later change is verified; its next HeadCheck with a replaying peer confirms the pin
           (v, C_v), not those versions (§2.8)
@@ -1290,9 +1297,9 @@ loss     leases and the sequence are soft state outside the rdb bundles (owner d
          master's clock trails the old one's by less than the lost family's age less 1 µs per 1,000 raises
          (§19.6's chrony on the Redis hosts); holders re-create their leases at their next hourly resync, which
          reads every subscribed head
-slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>}, {evsh_<repo_id>} or {evsc_<client_id>},
-         whose script runs before the lease script), and hints use
-         §6.8's per-client script, so no command crosses Redis Cluster slots
+slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>}, {evsh_<repo_id>} or
+         {evsc_<client_id>}, whose script runs before the lease script), and hints use §6.8's per-client script,
+         so no command crosses Redis Cluster slots
 caps     pro.yml's sidecar_abuse: 1,000 subscribed clients per repo, except the team directory, up to the
          network's config_admissions, whose readers poll the cards ref (§16.11) and lease only notice prefixes
          q/<target>/; 500 repos per client, counted in {evsc_<client_id>}, a sorted set of repo ids scored by last
@@ -1599,9 +1606,10 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
 ```text
 needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads and LIST,
           streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), a Delete, unconditional
-          or naming its object's LastModified (11.3, §19.6), §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
-          PUT or DELETE that takes effect before any later request on its key or never (D-OPS-20; 11.7's stale and
-          collect rows), and lifecycle rules, each metadata cluster in one pool (11.8), which §22's suite checks;
+          or naming its object's LastModified (11.3, §19.6), §19.6's deadline and settle rules: a request refused
+          once its x-ur-deadline-ms has passed, and a PUT or DELETE that takes effect before any later request on
+          its key or never (D-OPS-20; 11.7's stale and collect rows), and lifecycle rules, each metadata cluster in
+          one pool (11.8), which §22's suite checks;
           segment PUTs ride streamable_paths: ["/evs/v1/repos/[^/]+/segments/[^/]+"]
 address   a segment is addressed only by segment_id = SHA-256 of its bytes, never by cluster, bucket, pack or
           offset; locators are signed (inside entry versions), so packing never rewrites them; readers GET
@@ -1789,9 +1797,9 @@ when      hourly (so each day everything older than 24 h leaves the batches; own
           refills (owner decisions 186, 190; 11.21)
 resolve   per batch, GET it whole; per record, Resolve its push id on its ref (11.8): committed at this place ->
           keep; committed at another place -> drop; dead -> drop, deleting the new slots its record lists, the only
-          cleanup (11.8); pending -> raise the ref's fence (one head CAS, or for a ref with no head one placeholder head created with its
-          fence raised, 11.8's first row), then Resolve again; parts follow their
-          seal; reseed records count as committed
+          cleanup (11.8); pending -> raise the ref's fence (one head CAS, or for a ref with no head one
+          placeholder head created with its fence raised, 11.8's first row), then Resolve again; parts follow
+          their seal; reseed records count as committed
 move      per repo, the kept records, one pack or parcel per repo a run across all the minute directories it
           evacuates: once its aged material (these, its parcels, and its log pages older than 24 h, which wait at
           log/ until a pack takes them) reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster
@@ -1811,9 +1819,9 @@ skip      every P2 write for a repo (folds, moves, packing, copies) rereads repo
 index     pidx/<repo>/<ref>/<v_first>-<id> (v_first zero-padded to 20 digits, <id> the container's pack_id or
           parcel_id, the first 16 B of SHA-256 over its bytes; nothing extends it, and containers never share a
           key): {container kind, versions v_first..v_last with each record's kind, offset and length, the log pages
-          a pack holds (a parcel's entry lists none), the segment ids its records introduce}; a push whose parts and seal evacuate in different runs
-          has an entry in each container; a parcel is replaced by its pack's entries first, then the parcel and its
-          entries are deleted
+          a pack holds (a parcel's entry lists none), the segment ids its records introduce}; a push whose parts
+          and seal evacuate in different runs has an entry in each container; a parcel is replaced by its pack's
+          entries first, then the parcel and its entries are deleted
 readers   a record whose batch is gone is found by LIST pidx/<repo>/<ref>/ (cached; entries never change), a pack's
           entry taken over a parcel's for a record both name, and a range read
 negative  a reader whose cached pidx/ or spidx/ lookup misses or names a deleted container, and so gets a 404, drops
@@ -1896,9 +1904,10 @@ resolve   check each lineage's older entries against the map part or tail map_pa
           {mismatch}, which pages (§19.8); then write to dropscan/ the candidates: every segment and slot id a
           listed version names through a kind-1 locator or a slot id, less ids listed versions name only through
           kind-5 locators
-mark      once the horizon of the repo's metadata cluster (11.13's orphans row) has passed each covered drop's commit
-          time by 2 min, so every push validated before a drop has committed on a head a scan reads, or is dead
-          (owner decision 204): at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
+horizon   the job marks only once the horizon of the repo's metadata cluster (11.13's orphans row) has passed each
+          covered drop's commit time by 2 min, so every push validated before a drop has committed on a head a scan
+          reads, or is dead (owner decision 204)
+mark      at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
           the repo (file and git mode, shared and owned, creates-only, deposit and erasure refs, overlays and DELETE
           tombstones; owner decision 173), each live version (every committed version no executing or done drop
           lists) marks the candidates it names, comparing locators and slot ids from log pages, windows and records
@@ -3027,7 +3036,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **Q-EVS-5.** Should repo deletion start as a soft delete? **Decided by owner 2026-11-03 (owner decision 82):** yes: access ends at once, and keys are shredded after 7 days unless restored, or at once with `--now` (11.12). *Residual:* none.
 
-**Q-EVS-6.** Must a head reader that does not replay verify per-file freshness? **Closed by peer review 2026-11-04:** (c), made cheap: head readers replay signed statements, not payloads, from their pin, carried by the read response, and check the statement behind every entry they read (11.9), in D-EVS-24's format (statements of at most 1 KiB; for larger change lists, `changes_root` over sorted changes, so inclusion and adjacent-leaf proofs settle a path); phones keep durable pins and catch up by at most 4 MiB of statements and proofs, else re-pin and mark the gap. The sensitive classes (config, mailcfg, the mailbox's `vault/` and `i/`, approvals) are mirrored and replayed in full (11.13), and a head below a pin needs a verified EvsReseed. Disclosed limit (§2.8): for a path a head reader has never read, which writer-signed version is current as of its first pin, and, after a re-pin past that budget, for every path, rests on evs; HeadCheck confirms the pin, not those versions. (b), a Merkle root over the token tree, is rejected: a PUT per path level, root contention, d+1 GETs per read. *Residual:* that limit.
+**Q-EVS-6.** Must a head reader that does not replay verify per-file freshness? **Closed by peer review 2026-11-04:** (c), made cheap: head readers replay signed statements, not payloads, from their pin, carried by the read response, and check the statement behind every entry they read (11.9), in D-EVS-24's format (statements of at most 1 KiB; for larger change lists, `changes_root` over sorted changes, so inclusion and adjacent-leaf proofs settle a path); phones keep durable pins and catch up by at most 4 MiB of statements and proofs, else re-pin and mark the gap. The sensitive classes (config, mailcfg, the mailbox's `vault/` and `i/`, approvals) are mirrored and replayed in full (11.13), and a head below a pin needs a verified EvsReseed. Disclosed limit (§2.8): for a path a head reader has never read or no longer remembers (owner decision 209), which writer-signed version is current as of its first pin, and, after a re-pin past that budget, for every path, rests on evs; HeadCheck confirms the pin, not those versions. (b), a Merkle root over the token tree, is rejected: a PUT per path level, root contention, d+1 GETs per read. *Residual:* that limit.
 
 **Q-EVS-7.** Cross-cutting (§11, §21). Does a preservation hold pause user-initiated shredding (`--now`, the 7-day timer, slot erasure)? **Decided by owner 2026-11-04 (owner decision 133):** (a) no: holds pause only the server's TTL sweeps and GC for in-scope records and, from M10, drops' deletions, silently (owner decision 184; §21.9), and user-initiated shredding always proceeds (11.12), if counsel confirms that deleting wrapped keys to ciphertext URnetwork cannot read is permitted (§21). A hold keeps only the ciphertext a shred leaves. *Residual:* none.
 

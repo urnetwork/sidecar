@@ -11,6 +11,12 @@
 // padding to Padmé, so a checkpoint draws a fresh key wherever it lands (§11.7). Segments are held in the sealed local
 // store's spills, not in memory, until they upload (R-EVS-14); one upload's body is read into memory, at most 8 MiB.
 //
+// A record-class repo's plan is slot-keyed (evs_plan.go): its segments carry no key block, a new chain draws a fresh
+// object key in a new slot/ object as it is sealed, its one key at index 0 wrapped under fek_g, which the push
+// introduces, and a diff appended to a chain seals under that chain's slot key; each version names the slots its
+// chain's records name. The slots are sealed bytes like any other: a retoken sends the same ones again, and a rebuild,
+// which seals again, draws new ones (§11.6's object key row, DESIGN-DETAILS 9.2.5).
+//
 // A segment's receipt is evs's MAC over its id, size, time and uploader (§11.13), which the push carries back; its
 // upload day is the statement's, so the statement is built after the uploads answer. A 429 or 503 is retried after
 // its wait, at most PushRetryCount times; SEGMENT_STALE, and any other refusal, goes back to the push sender, whose
@@ -27,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -42,6 +49,8 @@ type EvsSealedWrite struct {
 	RepoKey  *EvsRepoKey
 	Paths    []*EvsSealedPath
 	Segments []*EvsSealedSegment
+	// A slot-keyed plan's new slot/ objects, in the order the push introduces them.
+	Slots []*EvsSealedSlot
 	// the token scope its uploads take: rw, or a deposit's deposit (evs_deposit.go)
 	scope string
 }
@@ -52,6 +61,14 @@ type EvsSealedPath struct {
 	SealedFields []byte
 	Chain        []*protocol.EvsLocator
 	PaddedSize   uint64
+	// The slots the chain's records name, in chain order, each once: a slot-keyed repo's.
+	SlotIds []Id
+}
+
+// A slot/ object a push introduces: its id and its EvsSlotObject bytes.
+type EvsSealedSlot struct {
+	Id   Id
+	Body []byte
 }
 
 // One segment to upload: its id, padded size and bytes, and its receipt once evs answered.
@@ -92,6 +109,21 @@ func (self *EvsClient) sealWrite(ctx context.Context, plan *EvsWritePlan, repoKe
 		return nil, err
 	}
 	sealed := &EvsSealedWrite{Plan: plan, RepoKey: repoKey}
+	// a slot-keyed chain's key: a new slot's, drawn here, which the push introduces
+	newChainKey := func() (*evsChainKey, error) {
+		objectKey := NewEvsObjectKey()
+		wrapped, err := EvsWrapObjectKey(fek, objectKey)
+		if err != nil {
+			return nil, err
+		}
+		chainKey := &evsChainKey{slotId: NewEvsSlotId(), keyIndex: 0, generation: repoKey.Generation(), objectKey: objectKey}
+		body, err := EvsEncodeSlotObject(&protocol.EvsSlotObject{Keys: []*protocol.EvsSlotKey{{KeyIndex: 0, Generation: chainKey.generation, Wrapped: wrapped}}})
+		if err != nil {
+			return nil, err
+		}
+		sealed.Slots = append(sealed.Slots, &EvsSealedSlot{Id: chainKey.slotId, Body: body})
+		return chainKey, nil
+	}
 	keep := false
 	defer func() {
 		if !keep {
@@ -138,10 +170,28 @@ func (self *EvsClient) sealWrite(ctx context.Context, plan *EvsWritePlan, repoKe
 			return nil, err
 		}
 		path := &EvsSealedPath{Planned: planned, SealedFields: sealedFields, PaddedSize: EvsPadme(planned.Fields.GetSize())}
+		if plan.slotKeyed && planned.Inline {
+			return nil, fmt.Errorf("%w: an inline chain in a slot-keyed repo", ErrEvsWriteInvalid)
+		}
+		// the chain's slot key, which its new records seal under: the previous chain's for a diff, else a new slot's
+		chainKey := planned.chainKey
+		keptSlots := planned.keptSlotIds
+		nameSlot := func(slotId Id) {
+			if !slices.Contains(path.SlotIds, slotId) {
+				path.SlotIds = append(path.SlotIds, slotId)
+			}
+		}
 		var inlineKey *EvsObjectKey
 		for index, link := range planned.Chain {
 			if link.Kept != nil {
 				path.Chain = append(path.Chain, link.Kept)
+				if plan.slotKeyed {
+					if len(keptSlots) == 0 {
+						return nil, fmt.Errorf("%w: a kept locator under no slot", ErrEvsWriteInvalid)
+					}
+					nameSlot(keptSlots[0])
+					keptSlots = keptSlots[1:]
+				}
 				continue
 			}
 			record := link.Record
@@ -184,14 +234,32 @@ func (self *EvsClient) sealWrite(ctx context.Context, plan *EvsWritePlan, repoKe
 			if builder == nil {
 				spill := newEvsSpill(self.args.Store, self.settings.DeltaBaseMemoryByteCount)
 				sealed.Segments = append(sealed.Segments, &EvsSealedSegment{content: spill})
-				builder, err = NewEvsSegmentBuilder(spill, manifest, fek)
+				if plan.slotKeyed {
+					builder, err = NewEvsSlotKeyedSegmentBuilder(spill, manifest)
+					builderLength = EvsSegmentHeaderByteCount
+				} else {
+					builder, err = NewEvsSegmentBuilder(spill, manifest, fek)
+					builderLength = evsSegmentKeyedRecordsOffset
+				}
 				if err != nil {
 					return nil, err
 				}
-				builderLength = evsSegmentKeyedRecordsOffset
 				recordCount = 0
 			}
-			writer, err := builder.BeginRecord(fileId, header)
+			var writer io.WriteCloser
+			if plan.slotKeyed {
+				if chainKey == nil {
+					if chainKey, err = newChainKey(); err != nil {
+						return nil, err
+					}
+				}
+				header.KeyRefKind = protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT
+				header.SlotId, header.KeyIndex, header.Generation = chainKey.slotId, chainKey.keyIndex, chainKey.generation
+				nameSlot(chainKey.slotId)
+				writer, err = builder.BeginSlotRecord(manifest, chainKey.objectKey, fileId, header)
+			} else {
+				writer, err = builder.BeginRecord(fileId, header)
+			}
 			if err != nil {
 				return nil, err
 			}

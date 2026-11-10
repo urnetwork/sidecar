@@ -238,8 +238,7 @@ message AclTarget {                       // exactly one kind set
   repeated bytes socket_tokens = 5;       // §9.4's token path
   bool socket_prefix = 6;                 // whole-segment prefix; finer globs project to their literal prefix
   string public_name = 7;                 // tls/ and smtp/ sockets, dns hosts
-  bytes cidr = 8;                         // QD-004 moves an ip target's CIDR to AclLocalPolicy and reserves 8;
-                                          // the wire keeps it until ACL's change lands (DESIGN-AMENDMENTS.md)
+  reserved 8;                             // an ip target's CIDR, kept in AclLocalPolicy, never in rows
   bool mail_send = 9;
 }
 ```

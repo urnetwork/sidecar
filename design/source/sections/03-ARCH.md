@@ -73,6 +73,8 @@ connect: X9 rows per owner decisions 22, 85, 86, 176 (§4.6)
 | Bulk storage | HTTPS segments and objects | sidecar → evs, gkm → file cluster | ciphertext plus the keyed token tree, per-file change history, padded sizes and the push DAG (§11 D-EVS-1; owner decision 2); gkm, ciphertext plus §10.6's ids and sizes (owner decision 115) |
 | Public edges | TCP 443, 8443, 8883, 5671 and 25 in, 25 out; TCP and UDP 53 | visitors, MTAs, resolvers ⇄ edges | TLS ends in the sidecar (X1, X6, X7; §13-§15), except at `rpt.bringyour.com`'s report and role-mail listener, which parses headers and aggregate report data only, seals the raw bytes and persists no plaintext (D-TRUST-4, §2.8 mx-4; §15 D-MAIL-10); DNS is public and signed (owner decisions 69, 109) |
 
+Outside the six planes, and no URnetwork carrier (owner decision 214): a checkpointer's own outbound HTTPS call to a witness that a log admin named in a signed, /dev/tty-confirmed `log_settings` (RECORD.md section 10.2). It carries a signed note and a consistency proof, never an entry; no agent can set the host; and no URnetwork server takes part, so §2.8 stands.
+
 ### 3.6 Runtime topologies
 
 | Topology | Sidecar process | Client (X10, owner decision 4) | Components, carrier | Refs |
@@ -725,7 +727,7 @@ Owners weigh the rest: a sidecar on the device client (§5.11), a sealed client 
 
 **D-ARCH-1 (proposed).** This document writes `<root>` for X4's user-name root (ur.network; owner decision 13), `<net>` for X5's immutable network label (owner decision 14; PLAN.md:25's `<me>`), which an opt-in alias may replace in user-facing names, `<host>` for a zone-relative host and `<blabel>` for a burner's generated label, so a burner domain is `<blabel>.<net>.<root>`, served by the mail host `mx.<net>.<root>` (owner decision 32); `<me>` appears only inside PLAN quotations. The front matter carries it. *Why:* one value, one spelling; no mechanism changes.
 
-**D-ARCH-2 (proposed).** The architecture has the six planes of 3.5 and no others; a new carrier needs an owner's decision, as the dns edge and phone wakes had (owner decisions 71, 88). *Why:* §6 D-PROTO-3, D-PROTO-5, D-PROTO-6 and §11 D-EVS-1 already split traffic this way, and §19 and §22 need one map.
+**D-ARCH-2 (proposed).** The architecture has the six planes of 3.5 and no others; a new carrier needs an owner's decision, as the dns edge and phone wakes had (owner decisions 71, 88), and a checkpointer's own HTTPS call to a witness its log admin named is ruled none (owner decision 214). *Why:* §6 D-PROTO-3, D-PROTO-5, D-PROTO-6 and §11 D-EVS-1 already split traffic this way, and §19 and §22 need one map.
 
 **D-ARCH-3 (proposed).** F1-F13 implement the directive and the owner decisions each names, and are redrawn when a decision changes. They are §22.7's scenarios: S1-S3 are F1-F3, S4 is F9, S5-S9 are F4-F8, S10 is F10, S11 is F11, S12 is F12 and S13 is F13, with S3 and S4 in device form (§10 KF2, KF4) from M2 and member form at M6. *Why:* OUTLINE §22 asks for tests "mirroring §3", and tests of superseded flows test the wrong system.
 

@@ -221,11 +221,19 @@ func (self *evsClientEpochs) mapperStatusFunction() evsMapperStatusFunction {
 	return self.mapperStatus
 }
 
+// The mapper's waker, nil while no mapper is registered.
+func (self *evsClientEpochs) mapperWakeFunction() func(repoId Id, refId Id, headVersion uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.mapperWake
+}
+
 // A verified head of a ref: the overdue alarm it calls for, on a device that writes the repo (DESIGN-DETAILS 9.2.8):
 // a due whose due_by_ms, or from this device's first holding of a REMOVE generation the head has not recorded, is
 // over EpochOverdueAfter past, at most once per ref and due generation in 24 h; not while the due is batched and the
-// head lists two sources, nor within EpochOverdueAfter of the first head after that with fewer. Then wakes whatever
-// waits on the ref's epoch.
+// head lists two sources, nor within EpochOverdueAfter of the first head after that with fewer. A head showing such a
+// due asks the mapper a tick (DESIGN-DETAILS 9.2.7's verified head), once per version. Then wakes whatever waits on
+// the ref's epoch.
 func (self *evsClientEpochs) noteHead(client *EvsClient, repoId Id, refId Id, head *protocol.EvsHeadSummary) {
 	defer self.wake(repoId, refId)
 	refKind := head.GetRefKind()
@@ -245,6 +253,11 @@ func (self *evsClientEpochs) noteHead(client *EvsClient, repoId Id, refId Id, he
 	} else if held, since := self.newestHeldRemoval(repoId, max(current, head.GetGeneration())); held != 0 {
 		// a removal this device holds that no head records yet: immediate, as it reads every unclassed crossing
 		generation, dueBy, batched = held, since, false
+	}
+	if generation != 0 {
+		if mapperWake := self.mapperWakeFunction(); mapperWake != nil {
+			mapperWake(repoId, refId, head.GetVersion())
+		}
 	}
 	key := evsRefKey{repoId: repoId, refId: refId}
 	raise := func() bool {
