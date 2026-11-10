@@ -202,10 +202,17 @@ func (self *Subprotocol) runKeepalive() {
 		}
 		now := self.clock.Now()
 		next := self.nextKeepaliveTick(pair.peerId, now)
-		wake := self.clock.After(next.Sub(now))
+		// timed from the clock as it reads once next is worked out, so a clock moved meanwhile does not push
+		// the wake past next
+		wake := self.clock.After(max(0, next.Sub(self.clock.Now())))
 		self.keepaliveMark.Update(func(mark uint64) uint64 {
 			return mark + 1
 		})
+		if !self.clock.Now().Before(next) {
+			// the clock reached next while the wake was armed, so the wake may fire late: tick now
+			self.keepaliveTick(pair.peerId, true)
+			continue
+		}
 		select {
 		case <-wake:
 			self.keepaliveTick(pair.peerId, true)

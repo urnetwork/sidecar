@@ -51,10 +51,16 @@ func (self *Subprotocol) runStreamKeepalive() {
 		}
 		var wake <-chan time.Time
 		if !next.IsZero() {
-			wake = self.clock.After(next.Sub(now))
+			// timed from the clock as it reads after the acts, not from now, so a clock moved meanwhile does
+			// not push the wake past next
+			wake = self.clock.After(max(0, next.Sub(self.clock.Now())))
 		}
 		// what a test steps its clock to, once the wait for it is armed
 		self.streamKeepaliveArmed.Set(next)
+		if !next.IsZero() && !self.clock.Now().Before(next) {
+			// the clock reached next while the wake was armed, so the wake may fire late: act again now
+			continue
+		}
 		select {
 		case <-wake:
 		case <-changed:
