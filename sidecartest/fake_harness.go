@@ -1,3 +1,5 @@
+//go:build !js && !ios && !android && !sdk_mobile_bind
+
 // sidecartest.FakeHarness (MCP-M3-15): a harness that runs hooks and MCP sessions the way Claude Code, Codex and
 // Cursor do, over a FakeProcessTable, so the run rules' ancestry (§16.7; plan-MCP-taint-new-session) runs against a
 // process tree a test builds, pid reuse and shells included. Pinned real harnesses are external (MCP-M3-28); this is
