@@ -11,11 +11,11 @@
  {
   "num": 2,
   "code": "TRUST",
-  "words": 8684,
-  "code_words": 12928,
+  "words": 8694,
+  "code_words": 13190,
   "ceiling": 3000,
-  "over": 5684,
-  "over_pct": 189.5
+  "over": 5694,
+  "over_pct": 189.8
  },
  {
   "num": 3,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 7112,
+  "words": 7116,
   "code_words": 3180,
   "ceiling": 3800,
-  "over": 3312,
-  "over_pct": 87.2
+  "over": 3316,
+  "over_pct": 87.3
  },
  {
   "num": 18,
@@ -164,20 +164,20 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 7613,
-  "code_words": 8442,
+  "words": 7620,
+  "code_words": 8446,
   "ceiling": 3500,
-  "over": 4113,
-  "over_pct": 117.5
+  "over": 4120,
+  "over_pct": 117.7
  },
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 4465,
-  "code_words": 3805,
+  "words": 4536,
+  "code_words": 3883,
   "ceiling": 2500,
-  "over": 1965,
-  "over_pct": 78.6
+  "over": 2036,
+  "over_pct": 81.4
  },
  {
   "num": 21,

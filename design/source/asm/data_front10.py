@@ -4,7 +4,8 @@ pair's accounting windows (188, 191). Adds owner decisions 192-196 from the impl
 DelegationRevoke's countersignature (192), the G0 sign-off (193), the straight-through build (194), the minio fork
 (195) and the branch starts (196). Adds owner decision 197 (2026-11-09): the apps' network extensions run only IP
 and port forwarding, always on and self-contained, amending 87, and Android's sidecar runs only while the app is
-open, amending 12."""
+open, amending 12. From 2026-11-10 adds the build's owner answers, 198 onward, as the design-records tracks fold
+them from sidecar/DESIGN-AMENDMENTS.md: the nightly count's shard sums (198) and Team subscriptions (199)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -51,6 +52,13 @@ INDEX = list(_P9['INDEX']) + [
      "Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and "
      "self-contained with its own forwarding key, amending @@OD:87@@; Android's sidecar runs only while the app is "
      "open, as iOS's does, amending @@OD:12@@."),
+    (198, "Stored count",
+     "The nightly pass's shard jobs keep per-network sums for the night in Redis `{evsn_<night>}` (48 h); a closing "
+     "job writes each network's count once every shard of every metadata cluster has reported, and a night left "
+     "unfinished keeps the old count."),
+    (199, "Team billing",
+     "A `team_subscription` row (MG6) records each Team's Stripe subscription, customer, anchor and start, written at "
+     "the first `invoice.paid` and ended at `customer.subscription.deleted`; only a live row is granted a period."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -68,11 +76,12 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 198))
+assert [r[0] for r in INDEX] == list(range(1, 200))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
-              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09'})
+              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09',
+              198: '2026-11-10', 199: '2026-11-10'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -93,8 +102,9 @@ STATUS = ("Status: draft for peer review, revised 2026-11-04 after the first pee
           "decisions 150-184 (versionless objects, the search index, CLI and MCP search, the indexer, the team directory "
           "and history drops), and on 2026-11-06 after the final meta review "
           "([DESIGN-REVIEW-META.md](DESIGN-REVIEW-META.md)), with owner decisions 185-191, and at the implementation "
-          "handoff, with owner decisions 192-196, and on 2026-11-09 with owner decision 197, on the apps' network "
-          "extensions. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build on the `sidecar` "
+          "handoff, with owner decisions 192-196, on 2026-11-09 with owner decision 197, on the apps' network "
+          "extensions, and from 2026-11-10 with the build's owner answers, owner decisions 198 onward, as the "
+          "design-records tracks fold them. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build on the `sidecar` "
           "branches (owner decision 194); nothing has shipped.")
 
 # Implementation handoff (2026-11-06): the branch policy said the documents join the repo on the `sidecar` branch,
@@ -167,3 +177,9 @@ _D197 = "amending @@OD:87@@ and @@OD:12@@. "
 assert DECISIONS_INTRO.count(_D197) == 1
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, open below. ")
+# The build's owner answers (2026-11-06 and 2026-11-10), numbered from 198 as the design-records tracks fold them.
+_D198 = "designing it raised two owner questions, open below. "
+assert DECISIONS_INTRO.count(_D198) == 1
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D198, _D198 + "From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as "
+    "they fold them: the nightly count's shard sums (198) and Team subscriptions (199). ")

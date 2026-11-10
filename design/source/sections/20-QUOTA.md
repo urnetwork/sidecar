@@ -248,7 +248,11 @@ count    taskworker's nightly pass over each repo's prefixes on its metadata clu
          prefix serves both; a version counts from head windows and log pages while its batch exists, then from
          the parcel or pack that holds it, or, staged versionless content, from the segment evacuation writes for
          it, if any, so a record mid-evacuation counts twice only until its minute's batches are deleted, and the
-         next pass corrects it; usage batches move the count between passes (20.6); §11.13 gives its cost
+         next pass corrects it; the pass runs as shard jobs, each replacing its per-network sums for the night in
+         Redis {evsn_<night>} (48 h), and a closing job, once every shard of every metadata cluster has reported,
+         writes each network's sum, zero for a network with a count and no sums, while a night that some shard
+         never finished, or whose sums Redis lost, leaves the old count (owner decision 198); usage batches move
+         the count between passes (20.6); §11.13 gives its cost
 limit    at the storage limit (Team: past storage_overage_max, or past storage while storage_gib_month is unset)
          and while spent, evs refuses new payload, segment uploads and pushes naming a new segment or inline
          record alike; it accepts maintenance pushes, which add no payload (CONSUME, BASE, ERASE, PATH_EPOCH and
@@ -365,7 +369,7 @@ Owner decision 4: one client per sidecar, a child of the device client in its ne
 
 ### 20.9 Team billing and abuse limits
 
-**Post-paid (owner decisions 92, 122).** One Stripe subscription per Team network prices the base, seats (graduated above `included_seats`; meter `team_seats`, formula `last`) and overage at 20.4's `team:` prices; Stripe holds only price ids, in `config/<env>/stripe.yml` as for Pro (server/controller/subscription_stripe_controller.go:64-65), and checkout refuses one whose amount differs. Transfer overage draws a 10 TiB credit line (`grant_kind` `team_credit`) that every draw uses last (D-QUOTA-9), metered as its daily GiB (pre-aggregated daily, `sum`; Meters below) at the data-pack rate, $3 per TiB (config/all/pro.yml:221-222). Settlement pays providers from balance revenue, so the line carries `net_revenue_nano_cents` at that rate, a per-period risk for URnetwork. Storage over 200 GiB is metered as daily GiB-days (pre-aggregated daily, `sum`), a GiB-day at 12/365 of the GiB-month price. `invoice.payment_failed`, like an exhausted line, stops renewal and refuses as an empty balance; `invoice.paid` renews.
+**Post-paid (owner decisions 92, 122).** One Stripe subscription per Team network prices the base, seats (graduated above `included_seats`; meter `team_seats`, formula `last`) and overage at 20.4's `team:` prices; Stripe holds only price ids, in `config/<env>/stripe.yml` as for Pro (server/controller/subscription_stripe_controller.go:64-65), and checkout refuses one whose amount differs. Transfer overage draws a 10 TiB credit line (`grant_kind` `team_credit`) that every draw uses last (D-QUOTA-9), metered as its daily GiB (pre-aggregated daily, `sum`; Meters below) at the data-pack rate, $3 per TiB (config/all/pro.yml:221-222). Settlement pays providers from balance revenue, so the line carries `net_revenue_nano_cents` at that rate, a per-period risk for URnetwork. Storage over 200 GiB is metered as daily GiB-days (pre-aggregated daily, `sum`), a GiB-day at 12/365 of the GiB-month price. `invoice.payment_failed`, like an exhausted line, stops renewal and refuses as an empty balance; `invoice.paid` renews. `team_subscription` (MG6) records each Team's Stripe subscription and customer ids, billing anchor and start: the first `invoice.paid` writes it, `customer.subscription.deleted` ends it, and the hourly reconciler can repair it from Stripe. `RefreshTeamTransferBalances` grants a period only to a Team whose row is live, with no unresolved payment failure, at the row's anchor, and the meter reports, which only such Teams get, take their customer and start from it (owner decision 199).
 
 **Draw order (D-QUOTA-9).** One comparator orders every draw of a payer's transfer balances and, reversed, every return:
 
@@ -517,6 +521,8 @@ service_debit_journal(usage_id, balance_id, meter, debit_byte_count,     deleted
 service_usage_batch(batch_id PK, producer, window_start, applied_time)   24 h
 stripe_meter_report(network_id, meter, usage_day, version, identifier,   13 months
   value, state, attempts, next_time)
+team_subscription(network_id, subscription_id, customer_id,              until its network is deleted
+  anchor_time, start_time, end_time NULL)
 Redis {sq_<network_id>}: rates, and each erasing sidecar's closure       48 h
   uploads a minute, closure bytes a UTC day, last closure ask and next
   turn, which give k (20.7)

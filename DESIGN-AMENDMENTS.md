@@ -6,13 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 336 decided items and 314 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 332 decided items and 314 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 34 | 5 |
+| [§2 Trust model and threat model](#s2) | 30 | 5 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -304,15 +304,6 @@ Changes: DESIGN-DETAILS.md section 5 stands as written; TEAM-M2-07 and -10 stand
 
 Questions: `details-5-settings-in-rows.md`, `team-m2-02-self-admit-at-rows-only-readers.md`.
 
-### QD-630: Who lands `BridgeEgress.mode = 4` and §2.8 api-7's row for it, which the answer to plan-BRIDGE-egress-mode-at-gates orders row first?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §17.*
-
-As QD-083's interim ordered: a design-records track lands §2.8's api-7 text for BridgeEgress's mode and §17.8's id list; then PROTO (or the bridge track) adds BridgeEgressMode mode = 4 to BridgeEgress, reserves BridgeEgressBody field 1 and updates protocol/design_unfenced_test.go, protocol/descriptor_test.go and testdata/metadata/fields.yml; then bridgeEgressClearMode returns the field. Until then every BridgeEgress is refused at every reader (fail closed) and R-BRIDGE-7 is not claimed at the gate.
-
-Changes: design-records: §2.8 api-7 and §17.8 id list; then PROTO: BridgeEgress.mode = 4 and its guards; then BRIDGE: bridgeEgressClearMode returns it.
-
-Questions: `bridge-m2-01-egress-mode-field.md`.
-
 ### QD-635: What queues the versionless sweep's two one-off passes: at a hold's end, and when §19.11's purge turns on from observe?
 *Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*
 
@@ -321,33 +312,6 @@ AbuseHoldPass (ABUSE-M5-14) schedules evsservice.EvsSweepHoldEndTaskRequest(hold
 Changes: ABUSE-M5-14: one line queueing the hold-end pass; sidecarctl: evs purge-turn-on (ops lane); EVS2-M10-34: runbook line and monitor row; §2.8 holds row (design-records).
 
 Questions: `evsb-m3-02-sweep-pass-triggers.md`.
-
-### QD-636: How do the nightly pass's shard jobs combine into one stored count per network?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The nightly pass's shard jobs combine through Redis: each shard job replaces its per-network sums for the night under a new {evsn_<night>} family with a 48 h ttl, and a closing job, once every shard of every metadata cluster has reported for the night, writes each network's sum through model.SetNetworkStoredByteCount (zero for a network with a count and no sums). A night some shard never finished, or whose sums Redis lost, leaves the old count standing. No migration. The new family needs its §2.8 row first (I-18; design-records), then an EVSB follow-up changes EVSB-M2-12's nightly pass. Until then the write stays as drafted: made only from a whole run.
-
-Changes: design-records: §2.8 row for the {evsn_<night>} family; EVSB follow-up: shard sums into {evsn_<night>}, a closing job, keep the old count on an unfinished night.
-
-Questions: `evsb-m2-23-nightly-count-across-shards.md`.
-
-### QD-649: Where does the server keep whether a Team's Stripe subscription is live, and its customer and anchor?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-MG6's quota group gains team_subscription(network_id, subscription_id, customer_id, anchor_time, start_time, end_time NULL), written at a Team's first invoice.paid and ended at customer.subscription.deleted, which the hourly reconciler can repair from Stripe. RefreshTeamTransferBalances grants only Teams whose row is live (end_time NULL) with no unresolved payment failure and reads the anchor from it; QUOTA-M6-03's 'only Team networks with a live subscription get rows' and QUOTA-M6-04's customer and start read it too. §2.8 gains a row (api: a Team's Stripe subscription and customer ids, for the network's life; I-18, design-records). QUOTA-M6-02's team_ended mark in subscription_renewal is replaced by the table (QUOTA follow-up: migration, writers, job, reconciler).
-
-Changes: QUOTA follow-up: the team_subscription migration in MG6, webhook writers, the grant job reading it, the reconciler repair; remove the team_ended mark; §2.8 row (design-records first, I-18).
-
-Questions: `quota-m6-02-team-subscription-state.md`.
-
-### QD-650: Which §2.8 row shows POST /auth/sso-discover's per-address limit history, and the vault key audit webhook signing keys derive from?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-§2.8 gains, under api-3 (or api-11 beside enrollment's histories), 'discovery attempts per caller address hash, for 10 minutes' for POST /auth/sso-discover's per-address limit (Redis attempt histories keyed by the address's peppered hash, 30 in 10 minutes, no domain or address held), and api-8 notes that audit webhook signing keys are HMAC-SHA256 of the vault resource network_audit_webhook_key over a fixed domain string and the webhook's id, answered once when the webhook is added and never stored. One design-records edit; the code stays as built. Ops provisions network_audit_webhook_key in vault before any webhook can be added (the owner's vault task).
-
-Changes: §2.8 api-3/api-11 and api-8 text (design-records); ops/owner: provision vault key network_audit_webhook_key.
-
-Questions: `team-m6-06-sso-discover-limit-row.md`.
 
 ### QD-321: Zip attachments
 *Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
@@ -4071,6 +4035,8 @@ Move `mode` out of the seal: `BridgeEgress` gains `BridgeEgressMode mode = 4`, a
 Changes: D-BRIDGE-6; §17.8; §2.8 api-7; bridge.proto BridgeEgress, BridgeEgressBody.
 
 Questions: `plan-BRIDGE-egress-mode-at-gates.md`.
+
+Partly folded (2026-11-10): with QD-630, §2.8's api-7 now shows an egress statement's mode and §17.8's id list names it; D-BRIDGE-6 and the rest of §17.8 wait for §17's fold, and bridge.proto for PROTO.
 
 ### QD-108: Wire format of the cross-network share seal
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8.*
