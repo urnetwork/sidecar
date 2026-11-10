@@ -33,7 +33,8 @@ import (
 
 // The answer for refusal: as is when final or refusing nothing, else after the refuse row records it.
 func (self *pushAttempt) refuse(refusal *EvsCheckRefusal) *pushOutcome {
-	if refusal.Fate != EvsRefusalRecorded {
+	if refusal.Fate != EvsRefusalRecorded || self.part != nil {
+		// a part's refusal needs no record, since only its push's seal commits (§11.8's refuse row)
 		return refusedOutcome(refusal.Reply(self.pushId))
 	}
 	return self.record(refusal)
@@ -45,8 +46,7 @@ func (self *pushAttempt) record(refusal *EvsCheckRefusal) *pushOutcome {
 	testHookBarrier(BarrierPushRefuseBefore, barrierKey)
 	defer testHookBarrier(BarrierPushRefuseAfter, barrierKey)
 	push := self.statement.Push
-	bound := evsPushTimeBound
-	untilMs := time.UnixMilli(push.GetTimeMs()).Add(bound + time.Second).UnixMilli()
+	untilMs := time.UnixMilli(push.GetTimeMs()).Add(self.timeBound() + time.Second).UnixMilli()
 	record, err := sidecar.NewEvsRefusal(self.pushId, self.statement.Sha256, refusal.Code, untilMs)
 	if err != nil {
 		// a code the table records but the record cannot hold: this code's fault, and nothing is written

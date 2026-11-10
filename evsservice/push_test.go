@@ -626,14 +626,14 @@ func TestPushCostsThreeStoreRoundsWithACachedHead(t *testing.T) {
 	}
 }
 
-// A seal is EVS1-M2-13's: refused 503 until it lands, writing nothing.
-func TestPushRefusesASealUntilBuilt(t *testing.T) {
+// A seal of a one-part statement, or one with places unlike its part count, is invalid and writes nothing.
+func TestPushRefusesASealOfAOnePartStatement(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	plan := fixture.plan()
 	fixture.create(plan, "a")
 	body := fixture.body(plan)
 	body.PartPlaces = []*protocol.EvsPlace{{Minute: 1}}
-	requireRefusal(t, fixture.post(fixture.token(fixture.check.signerId), body), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	requireRefusal(t, fixture.post(fixture.token(fixture.check.signerId), body), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 	if !fixture.head().Absent() {
 		t.Fatal("a seal wrote the head")
 	}

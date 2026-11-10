@@ -15,8 +15,9 @@
 //	h  check_objects.go: receipts, segments and slots a new version names
 //
 // A part runs b to e, g and h over its own entries; a seal runs b to f and h's age check over every part's receipts,
-// its rerun of g against the statements after each part's version being EVS1-M2-13's. 5a, which needs the head's
-// window and log pages, is EVS1-M2-12's, as is what a refusal does to the head.
+// and then g again over the parts' joined payload against the head it commits on (push.go's check, EVS1-M2-13),
+// which refuses a part whose path a statement after the version it was checked at changed. 5a, which needs the
+// head's window and log pages, is EVS1-M2-12's, as is what a refusal does to the head.
 //
 // Rules other tasks own come through the view's seams, and a seam left nil refuses 503, refusing nothing: a
 // PATH_EPOCH push's map, tail and fold rules (EVS1-M2-16) and an ERASE's or CLOSURE's slot rules (EVS1-M2-20). So

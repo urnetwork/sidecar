@@ -134,8 +134,10 @@ type EvsEngine struct {
 	notifier EvsCommitNotifier
 	// records and log pages past their batches, through pidx/
 	locator *RecordLocator
-	metrics *evsMetrics
-	handler http.Handler
+	// segments by id, through spidx/ (EVSB-M2-10)
+	segments *SegmentLocator
+	metrics  *evsMetrics
+	handler  http.Handler
 	// what the router took at the start, in its order
 	servedRoutes []*EvsRoute
 
@@ -216,6 +218,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
 	self.generations = NewGenerationRecords(settings)
 	self.locator = NewRecordLocator(blobs, nil)
+	self.segments = NewSegmentLocator(blobs)
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {
 		self.notifier = NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)
@@ -234,6 +237,9 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 func (self *EvsEngine) routes() []*EvsRoute {
 	routes := append(self.placeRoutes(), self.uploadRoutes()...)
 	routes = append(routes, self.pushRoutes()...)
+	routes = append(routes, self.partRoutes()...)
+	routes = append(routes, self.leaseRoutes()...)
+	routes = append(routes, self.readRoutes()...)
 	routes = append(routes, self.subscriptionRoutes()...)
 	routes = append(routes, self.pathEpochRoutes()...)
 	routes = append(routes, self.erasureRoutes()...)
