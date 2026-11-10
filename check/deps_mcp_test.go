@@ -1,9 +1,9 @@
 //go:build sidecar_check
 
-// D-MCP-1's case of §4.7's deps row: go-sdk, which mcp/ links, reaches ur alone, never sdk's builds, gomobile's or
-// wasm's. dependencies.yml's go-sdk row names the cli leg alone, so legModuleFindings already fails a client leg that
-// links it; this reads every shipped leg's closure for the module itself, so the case holds even if that row's legs
-// were widened by mistake.
+// D-MCP-1's case of §4.7's deps row, which TestDeps runs: go-sdk, which mcp/ links, reaches ur alone, never sdk's
+// builds, gomobile's or wasm's. dependencies.yml's go-sdk row names the cli leg alone, so legModuleFindings already
+// fails a client leg that links it; this reads every shipped leg's closure for the module itself, so the case holds
+// even if that row's legs were widened by mistake.
 
 package check
 
@@ -30,11 +30,6 @@ func (self *repository) mcpSdkLegFindings(t testing.TB) []string {
 		}
 	}
 	return findings
-}
-
-// sdk's, gomobile's, wasm's and the engines' legs hold no go-sdk package.
-func TestDepsGoSdkOnlyOnCliLegs(t *testing.T) {
-	failFindings(t, "deps", openThisCheckout(t).mcpSdkLegFindings(t))
 }
 
 // A client package importing go-sdk fails, even with its row widened to every leg.
