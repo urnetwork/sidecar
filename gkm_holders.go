@@ -264,13 +264,35 @@ func KeyHolders(view GkmAuthView, repoId Id, at time.Time) (GkmHolders, error) {
 
 	readerIds := view.RepoReadersAt(repoId, at)
 	if repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG {
-		// forward(s): a forwarding Delegation's reach is the config alone
+		// forward(s): a forwarding Delegation's reach is the config alone. Each sidecar's live one is neither ended
+		// nor superseded; §7.9's rule keeps one live a sidecar, and rows that held two would give the newer, then the
+		// higher id, as ConfigState.ForwardingDelegation does, so every reader names the same one
+		liveRows := map[Id]*bridge.DelegationRow{}
+		for _, row := range view.Delegations() {
+			if !ConfigDelegationRowForwards(row) || row.GetEndedAt() != 0 || row.GetSupersededAt() != 0 {
+				continue
+			}
+			sidecarId, err := IdFromBytes(row.GetForwardSidecarId())
+			if err != nil {
+				continue
+			}
+			if held := liveRows[sidecarId]; held != nil {
+				if c := cmp.Compare(held.GetAt(), row.GetAt()); 0 < c || (c == 0 && 0 <= bytes.Compare(held.GetDelegationId(), row.GetDelegationId())) {
+					continue
+				}
+			}
+			liveRows[sidecarId] = row
+		}
 		readingIds := map[Id]bool{}
 		for _, readerId := range readerIds {
 			readingIds[readerId] = true
 		}
-		for sidecarId, row := range gkmLiveForwardingRows(view) {
-			if readingIds[sidecarId] && gkmForwardingKeeps(view, row) {
+		for sidecarId, row := range liveRows {
+			// its sidecar reading the config, its key not dropped, no cascade voiding what carried it, and an id and a
+			// digest of their sizes, which a row TEAM wrote always has and a malformed one loses its holder by
+			keeps := readingIds[sidecarId] && row.GetKeyDroppedAt() == 0 && len(row.GetDelegationId()) == gkmDelegationIdByteCount &&
+				len(row.GetReaderKeySha256()) == gkmDigestByteCount && !view.CascadeVoids(row.GetSigner(), row.GetAt())
+			if keeps {
 				holders = append(holders, GkmHolder{
 					Kind:                   GkmHolderForwarding,
 					Id:                     sidecarId.Bytes(),
@@ -317,37 +339,6 @@ func KeyHolders(view GkmAuthView, repoId Id, at time.Time) (GkmHolders, error) {
 	return slices.CompactFunc(holders, func(a GkmHolder, b GkmHolder) bool {
 		return gkmHolderCmp(a, b) == 0
 	}), nil
-}
-
-// Each sidecar's live forwarding Delegation in the view's rows: neither ended nor superseded. §7.9's rule keeps one
-// live a sidecar; rows that held two would give the newer, then the higher id, as ConfigState.ForwardingDelegation
-// does, so every reader names the same one.
-func gkmLiveForwardingRows(view GkmAuthView) map[Id]*bridge.DelegationRow {
-	live := map[Id]*bridge.DelegationRow{}
-	for _, row := range view.Delegations() {
-		if !ConfigDelegationRowForwards(row) || row.GetEndedAt() != 0 || row.GetSupersededAt() != 0 {
-			continue
-		}
-		sidecarId, err := IdFromBytes(row.GetForwardSidecarId())
-		if err != nil {
-			continue
-		}
-		if held := live[sidecarId]; held != nil {
-			if c := cmp.Compare(held.GetAt(), row.GetAt()); 0 < c || (c == 0 && 0 <= bytes.Compare(held.GetDelegationId(), row.GetDelegationId())) {
-				continue
-			}
-		}
-		live[sidecarId] = row
-	}
-	return live
-}
-
-// Whether a sidecar's live forwarding Delegation, its sidecar reading the config, holds the config's key: its key
-// not dropped, no cascade voiding what carried it, and a delegation_id and reader key digest of their sizes, which
-// a row TEAM wrote always has and a malformed one loses its holder by.
-func gkmForwardingKeeps(view GkmAuthView, row *bridge.DelegationRow) bool {
-	return row.GetKeyDroppedAt() == 0 && len(row.GetDelegationId()) == gkmDelegationIdByteCount &&
-		len(row.GetReaderKeySha256()) == gkmDigestByteCount && !view.CascadeVoids(row.GetSigner(), row.GetAt())
 }
 
 // Whether a DelegationWrap to delegationId reaches a key holder of the repo at the view's state and the time given:

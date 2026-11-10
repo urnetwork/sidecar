@@ -357,28 +357,6 @@ func (self *GkmEngine) checkDelegationKeyDigest(request *GkmRequest, body *proto
 	return 0, false
 }
 
-// Whether recipient is d:<delegation_id> of one of the caller's sidecar's own forwarding Delegations, any of them,
-// since a delivery valid at its own state stays its (§10.9's history row). ok false once it has answered 503.
-func (self *GkmEngine) ownForwardingRecipient(request *GkmRequest, recipient string) (own bool, ok bool) {
-	hexId, found := strings.CutPrefix(recipient, "d:")
-	if !found {
-		return false, true
-	}
-	delegationId, err := parseGkmDelegationId(hexId)
-	if err != nil {
-		return false, true
-	}
-	facts, answer := self.deps.AuthState.DelegationKey(request.Principal, delegationId)
-	switch answer {
-	case GkmAuthAllowed:
-		return facts != nil && facts.ForwardSidecarId != nil && *facts.ForwardSidecarId == request.SidecarId, true
-	case GkmAuthDenied:
-		return false, true
-	}
-	request.Unavailable()
-	return false, false
-}
-
 // POST /gkm/groups/<id>/wraps/<g>/<c8>: a GkmWrapBatch, answered by a GkmWrapBatchReply in order.
 func (self *GkmEngine) serveWrapBatch(request *GkmRequest) {
 	generation, c8, ok := readGkmWrapPath(request)
@@ -528,11 +506,20 @@ func (self *GkmEngine) serveWrapsRead(request *GkmRequest) {
 	}
 	covering := request.Sidecar.CoveringDelegationId
 	if recipient != ownRecipient && (len(covering) == 0 || recipient != "d:"+hex.EncodeToString(covering)) {
-		// a caller reads its own s: deliveries, its covering Delegation's d: ones and its own forwarding Delegations'
-		// alone
-		own, ok := self.ownForwardingRecipient(request, recipient)
-		if !ok {
-			return
+		// a caller reads its own s: deliveries, its covering Delegation's d: ones and its own forwarding Delegations',
+		// any of them, since a delivery valid at its own state stays its (§10.9's history row), alone
+		own := false
+		if hexId, found := strings.CutPrefix(recipient, "d:"); found {
+			if delegationId, err := parseGkmDelegationId(hexId); err == nil {
+				facts, answer := self.deps.AuthState.DelegationKey(request.Principal, delegationId)
+				switch answer {
+				case GkmAuthAllowed:
+					own = facts != nil && facts.ForwardSidecarId != nil && *facts.ForwardSidecarId == request.SidecarId
+				case GkmAuthUnknown:
+					request.Unavailable()
+					return
+				}
+			}
 		}
 		if !own {
 			request.Forbidden()
