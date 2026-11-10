@@ -11,9 +11,10 @@ import (
 
 // Three of FI-30's four clauses, on whichever store the Net's host holds: a PUT or DELETE takes effect
 // before the next request or never, none past its deadline does, and no write or heal undoes what a
-// later write acknowledged or a read returned. The fourth, that a key is held only while a write
-// lacking a write quorum could still reach a read quorum, needs real drives: FS-114 checks it on T3,
-// and that waits for D-OPS-20's build.
+// later write acknowledged or a read returned. A DELETE that named its object and was refused 412 took
+// no effect, like any failed condition. The fourth, that a key is held only while a PUT lacking a write
+// quorum could still reach a read quorum, or a DELETE lacking one has a drive commit yet to answer or
+// be reverted (§19.6), needs real drives: FS-114 checks it on T3, on D-OPS-20's build.
 var _ = RegisterInvariant(30, func(ctx context.Context, oracle *Oracle) error {
 	return sidecartest.CheckBlobHistory(oracle.BlobHistory(), nil)
 })

@@ -36,7 +36,7 @@ func newBatchFixture(t *testing.T, adjust func(settings *EvsSettings)) *batchFix
 		adjust(settings)
 	}
 	records := NewRecordCache(settings)
-	writer := NewBatchWriter(ctx, clock, NewBudgetedBlobs(host.Blobs), records, settings, sidecar.NewNoopLogger())
+	writer := NewBatchWriter(ctx, clock, host.ClockCheck, NewBudgetedBlobs(host.Blobs), records, settings, sidecar.NewNoopLogger())
 	grant, err := host.Budget.AdmitP1(ctx, "meta-1", connectNetworkId(), sidecar.WriteCost{ImmediateByteCount: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -400,5 +400,116 @@ func TestBatchCachesEachRecordApartFromItsBatch(t *testing.T) {
 		if 2*len(cached) <= cap(cached) {
 			t.Errorf("a cached record of %d bytes pins %d", len(cached), cap(cached))
 		}
+	}
+}
+
+// DESIGN-DETAILS 2.2.3's minute rule: a batch opens only while this process's clock is sure. On an unsure clock
+// Append answers ErrEvsClockUnsure, the record joins nothing and nothing is written; once the clock is sure the next
+// record opens a batch.
+func TestBatchOpensOnlyOnASureClock(t *testing.T) {
+	fixture := newBatchFixture(t, nil)
+	fixture.host.ClockCheck.SetUnknown()
+	if _, err := fixture.writer.Append(fixture.paidCtx, "meta-1", testRecord("push-1", 100)); !errors.Is(err, ErrEvsClockUnsure) {
+		t.Fatalf("an append on an unsure clock: %v", err)
+	}
+	if fixture.writer.WriteCount() != 0 {
+		t.Fatal("an unsure clock wrote a batch")
+	}
+	if appended, _ := fixture.writer.Appended(); appended != 0 {
+		t.Fatal("a refused record counts as joined")
+	}
+	cluster, _ := fixture.host.Blobs.Cluster("meta-1")
+	if objects, _, err := cluster.List(fixture.ctx, batchKeyPrefix, "", 10); err != nil || len(objects) != 0 {
+		t.Fatalf("batches on an unsure clock: %v, %v", objects, err)
+	}
+
+	// an offset past the bound is unsure as an unknown one is
+	fixture.host.ClockCheck.SetOffset(51 * time.Millisecond)
+	if _, err := fixture.writer.Append(fixture.paidCtx, "meta-1", testRecord("push-2", 100)); !errors.Is(err, ErrEvsClockUnsure) {
+		t.Fatalf("an append on a clock 51 ms off: %v", err)
+	}
+
+	fixture.host.ClockCheck.SetOffset(0)
+	place, err := fixture.writer.Append(fixture.paidCtx, "meta-1", testRecord("push-3", 100))
+	if err != nil || place.GetMinute() != BatchMinute(fixture.clock.Now()) {
+		t.Fatalf("an append once the clock is sure: %v, %v", place, err)
+	}
+}
+
+// A writer given no clock check opens no batch: it fails closed.
+func TestBatchWriterWithNoClockCheckOpensNothing(t *testing.T) {
+	fixture := newBatchFixture(t, nil)
+	writer := NewBatchWriter(fixture.ctx, fixture.clock, nil, NewBudgetedBlobs(fixture.host.Blobs), fixture.records, fixture.settings, sidecar.NewNoopLogger())
+	if _, err := writer.Append(fixture.paidCtx, "meta-1", testRecord("push-1", 100)); !errors.Is(err, ErrEvsClockUnsure) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// A record may join a batch that opened while the clock was sure, since its minute was fixed then, and the batch
+// is still written. What an unsure clock stops is the next batch.
+func TestBatchOpenedOnASureClockTakesRecordsAndIsWritten(t *testing.T) {
+	fixture := newBatchFixture(t, func(settings *EvsSettings) {
+		// every cluster counts as loaded, so a batch stays open for its flush delay
+		settings.BatchLightLoadRecordCount = 1
+	})
+	first := fixture.appendAsync("meta-1", testRecord("push-1", 100))
+	fixture.awaitAppended(1)
+	fixture.host.ClockCheck.SetUnknown()
+	second := fixture.appendAsync("meta-1", testRecord("push-2", 100))
+	fixture.awaitAppended(2)
+	fixture.clock.Advance(fixture.settings.BatchFlushDelay)
+	firstAnswer, secondAnswer := awaitResult(t, first), awaitResult(t, second)
+	if firstAnswer.err != nil || secondAnswer.err != nil {
+		t.Fatalf("records of a batch opened on a sure clock: %v, %v", firstAnswer.err, secondAnswer.err)
+	}
+	if PlaceBatchKey(firstAnswer.place) != PlaceBatchKey(secondAnswer.place) || fixture.writer.WriteCount() != 1 {
+		t.Fatalf("places %v and %v in %d writes", firstAnswer.place, secondAnswer.place, fixture.writer.WriteCount())
+	}
+	if _, err := fixture.writer.Append(fixture.paidCtx, "meta-1", testRecord("push-3", 100)); !errors.Is(err, ErrEvsClockUnsure) {
+		t.Fatalf("the next batch on an unsure clock: %v", err)
+	}
+}
+
+// A key's minute is never past its records': a batch is named for the minute it opened in, so a record that joins it
+// across a minute's turn is in a batch whose minute began before it joined, and a new batch takes the new minute.
+func TestBatchKeyMinuteIsNeverPastItsRecords(t *testing.T) {
+	fixture := newBatchFixture(t, func(settings *EvsSettings) {
+		settings.BatchLightLoadRecordCount = 1
+		settings.BatchFlushDelay = 30 * time.Second
+	})
+	// 10 s before a minute turns
+	now := fixture.clock.Now()
+	fixture.clock.Advance(now.Truncate(time.Minute).Add(time.Minute).Sub(now) - 10*time.Second)
+	openedMinute := BatchMinute(fixture.clock.Now())
+	first := fixture.appendAsync("meta-1", testRecord("push-1", 100))
+	fixture.awaitAppended(1)
+	fixture.clock.Advance(15 * time.Second)
+	joinedAt := fixture.clock.Now()
+	if BatchMinute(joinedAt) != openedMinute+1 {
+		t.Fatalf("the clock did not cross a minute: %v", joinedAt)
+	}
+	second := fixture.appendAsync("meta-1", testRecord("push-2", 100))
+	fixture.awaitAppended(2)
+	fixture.clock.Advance(15 * time.Second)
+	firstAnswer, secondAnswer := awaitResult(t, first), awaitResult(t, second)
+	if firstAnswer.err != nil || secondAnswer.err != nil {
+		t.Fatalf("appends: %v, %v", firstAnswer.err, secondAnswer.err)
+	}
+	for _, place := range []*protocol.EvsPlace{firstAnswer.place, secondAnswer.place} {
+		if place.GetMinute() != openedMinute {
+			t.Fatalf("a record's batch names minute %d, opened in %d", place.GetMinute(), openedMinute)
+		}
+	}
+	if !batchMinuteTime(secondAnswer.place.GetMinute()).Before(joinedAt) {
+		t.Fatal("a batch names a minute past the time its record joined it")
+	}
+
+	// the next batch opens in the minute it opens in
+	third := fixture.appendAsync("meta-1", testRecord("push-3", 100))
+	fixture.awaitAppended(3)
+	fixture.clock.Advance(30 * time.Second)
+	thirdAnswer := awaitResult(t, third)
+	if thirdAnswer.err != nil || thirdAnswer.place.GetMinute() != openedMinute+1 {
+		t.Fatalf("the next batch: %v, %v", thirdAnswer.place, thirdAnswer.err)
 	}
 }

@@ -8,6 +8,11 @@
 // list and lists once more. A container precedes its entries, and both precede the deletion of what they replace
 // (I-EVS-7), so one relist finds a record that has moved, wherever a reader was paused. Past that, ErrBlobNotFound.
 //
+// A held batch key reads as a 404 does (DESIGN-DETAILS 2.2.6): a batch whose DELETE fell short of its quorum with a
+// commit stalled on a silent host is held by the store, and every record in it was moved before that DELETE was
+// issued (I-EVS-7), so the record is looked up through pidx/. Only when no entry holds it is the hold the answer:
+// the batch may be one a stalled write holds for another reason, and its record is then unread, never absent.
+//
 // Safe for concurrent use. No lock is held across a store call.
 
 package evsservice
@@ -72,14 +77,23 @@ func NewRecordLocator(blobs sidecar.BlobStore, settings *RecordLocatorSettings) 
 }
 
 // The record at place on repo's ref, in metadataCluster, its bytes as its batch held them: from the batch while it
-// stands, else from the container pidx/ names. ErrBlobNotFound when neither holds it.
+// stands, else from the container pidx/ names. ErrBlobNotFound when neither holds it, and ErrBlobHeld when the batch's
+// key is held and no entry names the record.
 func (self *RecordLocator) ReadRecord(ctx context.Context, metadataCluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, place *protocol.EvsPlace) ([]byte, error) {
 	if place == nil || place.GetLength() == 0 {
 		return nil, fmt.Errorf("%w: no place", ErrEvsPidxInvalid)
 	}
 	recordBytes, err := readBlobRange(ctx, metadataCluster, BatchKey(place.GetMinute(), place.GetInstance(), place.GetSeq()), int64(place.GetOffset()), int64(place.GetLength()))
-	if !errors.Is(err, sidecar.ErrBlobNotFound) {
+	batchHeld := errors.Is(err, sidecar.ErrBlobHeld)
+	if !errors.Is(err, sidecar.ErrBlobNotFound) && !batchHeld {
 		return recordBytes, err
+	}
+	// what no entry answers with: the batch is gone, or it is held and may yet hold the record
+	missing := func() error {
+		if batchHeld {
+			return fmt.Errorf("%w: the record's batch, and no container holds the record", sidecar.ErrBlobHeld)
+		}
+		return fmt.Errorf("%w: no container holds the record", sidecar.ErrBlobNotFound)
 	}
 	refKey := PidxRefPrefix(repoId, refId)
 	for attempt := range 2 {
@@ -91,7 +105,7 @@ func (self *RecordLocator) ReadRecord(ctx context.Context, metadataCluster sidec
 		entry, record := locateRecord(ref, place)
 		if entry == nil {
 			if fresh {
-				return nil, fmt.Errorf("%w: no container holds the record", sidecar.ErrBlobNotFound)
+				return nil, missing()
 			}
 			continue
 		}
@@ -101,7 +115,7 @@ func (self *RecordLocator) ReadRecord(ctx context.Context, metadataCluster sidec
 		}
 		return recordBytes, err
 	}
-	return nil, fmt.Errorf("%w: no container holds the record", sidecar.ErrBlobNotFound)
+	return nil, missing()
 }
 
 // The log page of repo's ref from the pack that holds it, ErrBlobNotFound when none does. A reader asks this once

@@ -84,7 +84,7 @@ func newEvsWorld(t *testing.T) *evsWorld {
 	world := &evsWorld{
 		t: t, ctx: ctx, clock: clock, host: host, cluster: cluster, settings: settings,
 		heads:   NewHeadStore(clock, host.ClockCheck, host.Redis, settings, sidecar.NewNoopLogger()),
-		batches: NewBatchWriter(ctx, clock, host.Blobs, nil, settings, sidecar.NewNoopLogger()),
+		batches: NewBatchWriter(ctx, clock, host.ClockCheck, host.Blobs, nil, settings, sidecar.NewNoopLogger()),
 		builder: sidecar.NewEvsStatementBuilder(func(purpose string, signedType bridge.SignedType, body []byte, agentId *sidecar.Id) (*bridge.Signed, error) {
 			return &bridge.Signed{Body: bytes.Clone(body), SignerId: signerId.Bytes(), Signature: make([]byte, 64), Type: uint32(signedType)}, nil
 		}),

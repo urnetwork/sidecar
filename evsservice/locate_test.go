@@ -255,3 +255,30 @@ func TestSegmentLocatorReadsSegAndRefusesAnSpidxPage(t *testing.T) {
 		t.Fatalf("with an spidx page: %v", err)
 	}
 }
+
+// DESIGN-DETAILS 2.2.6's last row: a batch whose DELETE fell short with a commit stalled on a silent host is held,
+// and every record in it was moved before that DELETE was issued, so a held batch key reads through pidx/ as a 404
+// does.
+func TestRecordLocatorReadsAHeldBatchThroughPidx(t *testing.T) {
+	fixture := newLocateFixture(t)
+	fixture.evacuate(protocol.EvsContainerKind_EVS_CONTAINER_PARCEL)
+	if _, err := fixture.blobs.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpGet, KeyPrefix: batchKeyPrefix, Result: sidecartest.Held, Repeat: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.readAll(); err != nil {
+		t.Fatalf("records of a held batch whose container stands: %v", err)
+	}
+}
+
+// A held batch no entry answers for is the hold, never a 404: the batch may yet hold the record, so the reader gets
+// the 503 and nothing is called absent.
+func TestRecordLocatorAnswersTheHoldWhenNoEntryHoldsTheRecord(t *testing.T) {
+	fixture := newLocateFixture(t)
+	if _, err := fixture.blobs.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpGet, KeyPrefix: batchKeyPrefix, Result: sidecartest.Held, Repeat: -1}); err != nil {
+		t.Fatal(err)
+	}
+	err := fixture.readAll()
+	if !errors.Is(err, sidecar.ErrBlobHeld) || errors.Is(err, sidecar.ErrBlobNotFound) {
+		t.Fatalf("a held batch with no entry: %v", err)
+	}
+}
