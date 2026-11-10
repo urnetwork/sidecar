@@ -58,19 +58,48 @@ func TestOutsideTheAdminSetAMembersDeviceAdmitsUnlessSelfAdmitIsOff(t *testing.T
 	net.admitDevice(net.owner, third, 0)
 }
 
-// A rows-only reader cannot open the head that holds self_admit, so a member's own admission fails closed there
-// (question team-m2-02-self-admit-at-rows-only-readers), while an admin's still lands.
-func TestASelfAdmissionFailsClosedWhereSettingsAreUnknown(t *testing.T) {
+// DESIGN-DETAILS 5.6's TestASelfAdmissionIsJudgedAlikeAtApi: a rows-only reader takes self_admit from rows, which it
+// cannot open the head of, so it accepts and refuses a member's own admission exactly as a full reader does, under
+// self_admit on and then off; the head-only settings stay unknown to it.
+func TestASelfAdmissionIsJudgedAlikeAtApi(t *testing.T) {
 	net := newTestConfigNet(t)
 	member, first := net.consentedMember("m")
-	net.log.rowsOnly = true
-	net.fold(net.owner, net.n, 2)
-	if _, known := net.log.State().Settings(); known {
-		t.Fatal("a rows-only reader knows the settings")
+	gate, err := NewConfigLogRowsOnly(testConfigLogSettings(), net.signedGenesis)
+	if err != nil {
+		t.Fatal(err)
 	}
+	applyAll := func() {
+		for n := gate.Pin().GetVersion() + 1; n <= net.n; n += 1 {
+			verdict, err := gate.Apply(net.entries[n-1], net.rowsOnlySource())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := net.log.keptEntry(n).verdict; verdict.Accepted() != want.Accepted() {
+				t.Fatalf("at %d the gate %v, the full reader %v", n, verdict.Refusal, want.Refusal)
+			}
+		}
+	}
+	net.fold(net.owner, net.n, 2)
 	second := net.device("m second", member)
-	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(second, nil, false, 0, 0), ErrConfigSettingsUnknown)
-	net.admitDevice(net.owner, second, 0)
+	net.admitDevice(first, second, 0)
+	applyAll()
+
+	net.source.settings[[sha256.Size]byte(testConfigHeadSha256(3))] = &protocol.ServiceSettings{SelfAdmit: protocol.SelfAdmitMode_SELF_ADMIT_MODE_OFF}
+	net.fold(net.owner, net.n, 3)
+	third := net.device("m third", member)
+	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(third, nil, false, 0, 0), ErrConfigAuthority)
+	net.admitDevice(net.owner, third, 0)
+	applyAll()
+	if gate.State().SelfAdmit() || net.log.State().SelfAdmit() {
+		t.Error("self_admit reads on")
+	}
+	if _, known := gate.State().StaleLeafDays(); known {
+		t.Error("a rows-only reader knows a head-only setting")
+	}
+	if days, known := net.log.State().StaleLeafDays(); !known || days != 90 {
+		t.Errorf("stale_leaf_days %d, known %v", days, known)
+	}
+	testConfigStatesEqual(t, gate.State(), net.log.State())
 }
 
 // A member's device that nothing consented admits nothing, nor does a device of another member, and no device admits
@@ -185,7 +214,7 @@ func (self *testConfigNet) statementOf(entryBytes []byte) []byte {
 }
 
 // Revocations are idempotent: a second takes effect as nothing and keeps the first position; reaped names only an
-// ephemeral admission; since_n rides only a compromise revocation, which waits on TEAM-M2-04's cascade; and a device
+// ephemeral admission; since_n rides only a compromise revocation, which needs one before its entry; and a device
 // signs itself out.
 func TestSidecarRevokeReasonsAndRepeats(t *testing.T) {
 	net := newTestConfigNet(t)
@@ -197,8 +226,10 @@ func TestSidecarRevokeReasonsAndRepeats(t *testing.T) {
 
 	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REAPED), ErrConfigRule)
 	compromise := net.revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE)
-	compromise.SinceN = 3
-	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, compromise, ErrConfigRuleMissing)
+	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, compromise, ErrConfigRule)
+	compromise = net.revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE)
+	compromise.SinceN = net.n + 1
+	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, compromise, ErrConfigRule)
 	withSince := net.revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST)
 	withSince.SinceN = 3
 	net.mustRefuse(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, withSince, ErrConfigRule)

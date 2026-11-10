@@ -31,7 +31,10 @@
 (* "NoProposalRows" and "NoSettingsRows" are §7.9 as written on            *)
 (* 2026-11-09, the three divergences; "CloseAtBase" is the code that       *)
 (* landed; "ReJudgeTail", "NoRingRows", "CascadeFromAt", "NoBitsCheck" and *)
-(* "NoTailCap" each break one rule of the detailed design. Story fixes     *)
+(* "NoTailCap" each break one rule of the detailed design, and TEAM-M2-04  *)
+(* adds "NewestConfirmOnly" (rows keep only each kind's newest             *)
+(* confirmation) and "DelegationEndIgnored" (a Delegation's key admits     *)
+(* after its end). Story fixes                                             *)
 (* the entries of a run, so a twin's violation is reached directly; the    *)
 (* design runs with no story.                                              *)
 (***************************************************************************)
@@ -200,7 +203,8 @@ TypeRule(st, e, n) ==
             IF ~Admitted(st, t) /\ e.as \in Members \cup {"tag"} /\ (s = "proposal" \/ MayAdmit(st, s, t, e.as))
             THEN 1 ELSE 0
        [] e.k = "dadmit" ->
-            IF st.deleg.declared /\ st.deleg.ended = 0 /\ st.deleg.admits < MaxAdmits /\ ~Admitted(st, t)
+            IF /\ st.deleg.declared /\ st.deleg.admits < MaxAdmits /\ ~Admitted(st, t)
+               /\ (st.deleg.ended = 0 \/ Twin = "DelegationEndIgnored")
             THEN 1 ELSE 0
        [] e.k = "deleg" ->
             IF ~st.deleg.declared /\ (AdminDevice(st, s) \/ (Standing(st, s) /\ st.adm[s].as = st.tagOwner))
@@ -381,9 +385,14 @@ JudgeTail(st, from, to, floor, verdict) ==
              st2 == IF v = 0 THEN st ELSE Effect(st, e, from, v = 2)
          IN JudgeTail(st2, from + 1, to, floor, verdict @@ (from :> v))
 
+\* Each kind's newest confirmation, all that rows kept before DESIGN-DETAILS 5.2.2's confirmations
+NewestConfirms(confirms) == {c \in confirms : \A d \in confirms : d.ck = c.ck => d.pos <= c.pos}
+
 \* The rows a base at n with folded_through ft carries: L's log-derived state at ft under head
 Compile(S, head, ft) ==
     [S EXCEPT !.selfAdmit = head.selfAdmit, !.tagOwner = head.tagOwner,
+              !.adm = IF Twin = "NewestConfirmOnly"
+                      THEN [y \in Sidecars |-> [S.adm[y] EXCEPT !.confirms = NewestConfirms(@)]] ELSE @,
               !.props = IF Twin \in {"NoProposalRows", "CloseAtBase"} THEN NoProps ELSE OpenProps(S, ft),
               !.ring = IF Twin = "NoRingRows" THEN {} ELSE {r \in S.ring : r.pos > ft - Window}]
 
@@ -404,7 +413,10 @@ ApplyBase(R, e, n) ==
     ELSE IF ~BaseOk(R, e, n) THEN [R EXCEPT !.forked = TRUE]
     ELSE LET st0 == [Stand(e.rows, e, n, R.st.base, R.rowsOnly) EXCEPT
                        !.props = IF Twin = "NoProposalRows" THEN R.st.props ELSE @,
-                       !.ring = IF Twin = "NoRingRows" THEN R.st.ring ELSE @]
+                       !.ring = IF Twin = "NoRingRows" THEN R.st.ring ELSE @,
+                       \* a reader that kept every entry keeps its own confirmations where rows keep only the newest
+                       !.adm = IF Twin = "NewestConfirmOnly" /\ R.keepsHist
+                               THEN [y \in Sidecars |-> [@[y] EXCEPT !.confirms = R.st.adm[y].confirms]] ELSE @]
              own == [k \in e.ft + 1 .. n - 1 |-> IF k \in DOMAIN R.verdict THEN R.verdict[k] ELSE e.bits[k]]
              judged == JudgeTail(st0, e.ft + 1, n - 1, st0.floor, [k \in {} |-> 0])
              st1 == IF Twin = "ReJudgeTail" THEN judged.st
@@ -605,6 +617,16 @@ StoryLie == <<[k |-> "admit", s |-> "a", t |-> "d", as |-> "m3"], [k |-> "base",
 \* the landed code closes every open proposal at a base
 StoryClose == <<[k |-> "propose", s |-> "a", t |-> "c", as |-> "m2"],
                 [k |-> "base", ft |-> 1], [k |-> "cosign", s |-> "b", pid |-> 1]>>
+\* rows keep only the newest confirmation: a park b lifted, then a's confirmation, then a fold, then b's compromise
+\* revocation pulls c back into P at the reader that kept every entry and at no reader that started from rows
+StoryConfirms == <<[k |-> "deleg", s |-> "a"], [k |-> "dadmit", t |-> "c"], [k |-> "drevoke", s |-> "a", since |-> 1],
+                   [k |-> "confirm", s |-> "b", t |-> "c", ck |-> "admission"],
+                   [k |-> "confirm", s |-> "a", t |-> "c", ck |-> "admission"],
+                   [k |-> "base", ft |-> 5, lie |-> FALSE],
+                   [k |-> "revoke", s |-> "a", t |-> "b", reason |-> "comp", since |-> 1]>>
+\* a Delegation's key admits after its DelegationRevoke
+StoryDelegationEnd == <<[k |-> "deleg", s |-> "a"], [k |-> "drevoke", s |-> "a", since |-> 0],
+                        [k |-> "dadmit", t |-> "c"]>>
 \* no cap on the tail
 StoryTailCap == <<[k |-> "admit", s |-> "a", t |-> "d", as |-> "m3"], [k |-> "admit", s |-> "a", t |-> "c", as |-> "m3"],
                   [k |-> "base", ft |-> 0]>>

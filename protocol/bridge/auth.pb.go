@@ -30,6 +30,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ProposalKind int32
+
+const (
+	ProposalKind_PROPOSAL_KIND_UNSPECIFIED     ProposalKind = 0
+	ProposalKind_PROPOSAL_KIND_AUTHORITY       ProposalKind = 1 // k of n (7.9's several row)
+	ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED ProposalKind = 2 // a scoped recovery admission filed with self_admit off: completes on one
+	//   cosign by an admission signer (7.9's self_admit row)
+	ProposalKind_PROPOSAL_KIND_RESTORED ProposalKind = 3 // a restored binding's scoped admission: activates at the window with no
+)
+
+// Enum value maps for ProposalKind.
+var (
+	ProposalKind_name = map[int32]string{
+		0: "PROPOSAL_KIND_UNSPECIFIED",
+		1: "PROPOSAL_KIND_AUTHORITY",
+		2: "PROPOSAL_KIND_RECOVERY_SCOPED",
+		3: "PROPOSAL_KIND_RESTORED",
+	}
+	ProposalKind_value = map[string]int32{
+		"PROPOSAL_KIND_UNSPECIFIED":     0,
+		"PROPOSAL_KIND_AUTHORITY":       1,
+		"PROPOSAL_KIND_RECOVERY_SCOPED": 2,
+		"PROPOSAL_KIND_RESTORED":        3,
+	}
+)
+
+func (x ProposalKind) Enum() *ProposalKind {
+	p := new(ProposalKind)
+	*p = x
+	return p
+}
+
+func (x ProposalKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProposalKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_bridge_auth_proto_enumTypes[0].Descriptor()
+}
+
+func (ProposalKind) Type() protoreflect.EnumType {
+	return &file_protocol_bridge_auth_proto_enumTypes[0]
+}
+
+func (x ProposalKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProposalKind.Descriptor instead.
+func (ProposalKind) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{0}
+}
+
 // §7.5's roles. The first four sign config records, under AdminSet; the rest ride a MemberAdmit.
 type MemberRole int32
 
@@ -79,11 +132,11 @@ func (x MemberRole) String() string {
 }
 
 func (MemberRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_bridge_auth_proto_enumTypes[0].Descriptor()
+	return file_protocol_bridge_auth_proto_enumTypes[1].Descriptor()
 }
 
 func (MemberRole) Type() protoreflect.EnumType {
-	return &file_protocol_bridge_auth_proto_enumTypes[0]
+	return &file_protocol_bridge_auth_proto_enumTypes[1]
 }
 
 func (x MemberRole) Number() protoreflect.EnumNumber {
@@ -92,7 +145,7 @@ func (x MemberRole) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MemberRole.Descriptor instead.
 func (MemberRole) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{0}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{1}
 }
 
 // Bits of SidecarAdmit.capabilities and SidecarRow.capabilities.
@@ -129,11 +182,11 @@ func (x SidecarCapability) String() string {
 }
 
 func (SidecarCapability) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_bridge_auth_proto_enumTypes[1].Descriptor()
+	return file_protocol_bridge_auth_proto_enumTypes[2].Descriptor()
 }
 
 func (SidecarCapability) Type() protoreflect.EnumType {
-	return &file_protocol_bridge_auth_proto_enumTypes[1]
+	return &file_protocol_bridge_auth_proto_enumTypes[2]
 }
 
 func (x SidecarCapability) Number() protoreflect.EnumNumber {
@@ -142,7 +195,7 @@ func (x SidecarCapability) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SidecarCapability.Descriptor instead.
 func (SidecarCapability) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{1}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{2}
 }
 
 type KeyAlg int32
@@ -181,11 +234,11 @@ func (x KeyAlg) String() string {
 }
 
 func (KeyAlg) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_bridge_auth_proto_enumTypes[2].Descriptor()
+	return file_protocol_bridge_auth_proto_enumTypes[3].Descriptor()
 }
 
 func (KeyAlg) Type() protoreflect.EnumType {
-	return &file_protocol_bridge_auth_proto_enumTypes[2]
+	return &file_protocol_bridge_auth_proto_enumTypes[3]
 }
 
 func (x KeyAlg) Number() protoreflect.EnumNumber {
@@ -194,7 +247,7 @@ func (x KeyAlg) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use KeyAlg.Descriptor instead.
 func (KeyAlg) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{2}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{3}
 }
 
 type KeyPurpose int32
@@ -230,11 +283,11 @@ func (x KeyPurpose) String() string {
 }
 
 func (KeyPurpose) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_bridge_auth_proto_enumTypes[3].Descriptor()
+	return file_protocol_bridge_auth_proto_enumTypes[4].Descriptor()
 }
 
 func (KeyPurpose) Type() protoreflect.EnumType {
-	return &file_protocol_bridge_auth_proto_enumTypes[3]
+	return &file_protocol_bridge_auth_proto_enumTypes[4]
 }
 
 func (x KeyPurpose) Number() protoreflect.EnumNumber {
@@ -243,7 +296,7 @@ func (x KeyPurpose) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use KeyPurpose.Descriptor instead.
 func (KeyPurpose) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{3}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{4}
 }
 
 type RecoveryRebindReason int32
@@ -282,11 +335,11 @@ func (x RecoveryRebindReason) String() string {
 }
 
 func (RecoveryRebindReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_bridge_auth_proto_enumTypes[4].Descriptor()
+	return file_protocol_bridge_auth_proto_enumTypes[5].Descriptor()
 }
 
 func (RecoveryRebindReason) Type() protoreflect.EnumType {
-	return &file_protocol_bridge_auth_proto_enumTypes[4]
+	return &file_protocol_bridge_auth_proto_enumTypes[5]
 }
 
 func (x RecoveryRebindReason) Number() protoreflect.EnumNumber {
@@ -295,7 +348,7 @@ func (x RecoveryRebindReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RecoveryRebindReason.Descriptor instead.
 func (RecoveryRebindReason) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{4}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{5}
 }
 
 type SidecarRevokeReason int32
@@ -337,11 +390,11 @@ func (x SidecarRevokeReason) String() string {
 }
 
 func (SidecarRevokeReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_protocol_bridge_auth_proto_enumTypes[5].Descriptor()
+	return file_protocol_bridge_auth_proto_enumTypes[6].Descriptor()
 }
 
 func (SidecarRevokeReason) Type() protoreflect.EnumType {
-	return &file_protocol_bridge_auth_proto_enumTypes[5]
+	return &file_protocol_bridge_auth_proto_enumTypes[6]
 }
 
 func (x SidecarRevokeReason) Number() protoreflect.EnumNumber {
@@ -350,7 +403,7 @@ func (x SidecarRevokeReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SidecarRevokeReason.Descriptor instead.
 func (SidecarRevokeReason) EnumDescriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{5}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{6}
 }
 
 type StatementHeader struct {
@@ -572,6 +625,7 @@ type ProjectionHeader struct {
 	RowsSha256       []byte `protobuf:"bytes,7,opt,name=rows_sha256,json=rowsSha256,proto3" json:"rows_sha256,omitempty"`
 	RowsByteCount    uint32 `protobuf:"varint,8,opt,name=rows_byte_count,json=rowsByteCount,proto3" json:"rows_byte_count,omitempty"` // ProjectionRows, <= 4 MiB (§8.8)
 	Threshold        uint32 `protobuf:"varint,9,opt,name=threshold,proto3" json:"threshold,omitempty"`
+	TailVerdicts     []byte `protobuf:"bytes,10,opt,name=tail_verdicts,json=tailVerdicts,proto3" json:"tail_verdicts,omitempty"` // DESIGN-DETAILS 5.2.2: 2 bits per entry among folded_through+1..version-1,
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -669,17 +723,34 @@ func (x *ProjectionHeader) GetThreshold() uint32 {
 	return 0
 }
 
+func (x *ProjectionHeader) GetTailVerdicts() []byte {
+	if x != nil {
+		return x.TailVerdicts
+	}
+	return nil
+}
+
 type ProjectionRows struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// names a sidecar_id, a recovery key's hash or a delegation_id, and a
-	// *_at is the position n of the entry carrying the record
+	// at folded_through (DESIGN-DETAILS 5.2.2); for the cascade a *_signer names
+	// a sidecar_id, a recovery key's hash or a delegation_id, a *_at the position
+	// n of the entry carrying the record, and confirmations every confirmation
 	Members        []*MemberRow     `protobuf:"bytes,1,rep,name=members,proto3" json:"members,omitempty"`
 	Sidecars       []*SidecarRow    `protobuf:"bytes,2,rep,name=sidecars,proto3" json:"sidecars,omitempty"`
 	Delegations    []*DelegationRow `protobuf:"bytes,3,rep,name=delegations,proto3" json:"delegations,omitempty"`
 	RegisteredKeys []*KeyRow        `protobuf:"bytes,4,rep,name=registered_keys,json=registeredKeys,proto3" json:"registered_keys,omitempty"` // what the presence row reads
 	Acl            []byte           `protobuf:"bytes,5,opt,name=acl,proto3" json:"acl,omitempty"`                                             // §8.8's AclRows (acl.proto), deterministically encoded, so this file
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// imports nothing, each EvsShare with its signer and at; with
+	// AclRepo.holders_shrunk_at; the device role reads only its
+	// has_document (field 1)
+	// 6 stays unused for TeamScopeRow at M6 (protos-bridge-row-fields #3)
+	Proposals []*ProposalRow      `protobuf:"bytes,7,rep,name=proposals,proto3" json:"proposals,omitempty"` // every proposal open at folded_through, by proposal_id
+	Settings  *ProjectionSettings `protobuf:"bytes,8,opt,name=settings,proto3" json:"settings,omitempty"`   // the ServiceSettings values a verifier judges by, always present
+	Ring      []*RingRow          `protobuf:"bytes,9,rep,name=ring,proto3" json:"ring,omitempty"`           // the statements that took effect among the 4,096 entries through
+	//   folded_through, in position order (the replay row)
+	Indexers      []*IndexerRow `protobuf:"bytes,10,rep,name=indexers,proto3" json:"indexers,omitempty"` // each IndexerSet designation that holds, by (sidecar_id, scope)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProjectionRows) Reset() {
@@ -747,6 +818,500 @@ func (x *ProjectionRows) GetAcl() []byte {
 	return nil
 }
 
+func (x *ProjectionRows) GetProposals() []*ProposalRow {
+	if x != nil {
+		return x.Proposals
+	}
+	return nil
+}
+
+func (x *ProjectionRows) GetSettings() *ProjectionSettings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+func (x *ProjectionRows) GetRing() []*RingRow {
+	if x != nil {
+		return x.Ring
+	}
+	return nil
+}
+
+func (x *ProjectionRows) GetIndexers() []*IndexerRow {
+	if x != nil {
+		return x.Indexers
+	}
+	return nil
+}
+
+// An AuthorityProposal open at a state (§7.9's proposal row; DESIGN-DETAILS 5.2.2), so a cosign, veto, void or
+// activation after a fold finds it at every verifier.
+type ProposalRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProposalId    []byte                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`           // 32 B
+	StatementType uint32                 `protobuf:"varint,2,opt,name=statement_type,json=statementType,proto3" json:"statement_type,omitempty"` // the proposed statement's SignedType
+	Statement     []byte                 `protobuf:"bytes,3,opt,name=statement,proto3" json:"statement,omitempty"`                               // AuthorityProposal.statement, verbatim
+	ProposedAt    uint64                 `protobuf:"varint,4,opt,name=proposed_at,json=proposedAt,proto3" json:"proposed_at,omitempty"`          // o: the AuthorityProposal's entry
+	NotAfterMs    int64                  `protobuf:"varint,5,opt,name=not_after_ms,json=notAfterMs,proto3" json:"not_after_ms,omitempty"`        // the proposal's own header's
+	Signers       []*ProposalSigner      `protobuf:"bytes,6,rep,name=signers,proto3" json:"signers,omitempty"`                                   // the proposer, then each counted cosign, in log order
+	WindowEntry   uint64                 `protobuf:"varint,7,opt,name=window_entry,json=windowEntry,proto3" json:"window_entry,omitempty"`       // p: the entry of the newest recovery-key signature; 0 with none
+	WindowTimeMs  int64                  `protobuf:"varint,8,opt,name=window_time_ms,json=windowTimeMs,proto3" json:"window_time_ms,omitempty"`  // T_p: that entry's time_ms
+	Kind          uint32                 `protobuf:"varint,9,opt,name=kind,proto3" json:"kind,omitempty"`                                        // ProposalKind, fixed at the proposal's entry
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProposalRow) Reset() {
+	*x = ProposalRow{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProposalRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProposalRow) ProtoMessage() {}
+
+func (x *ProposalRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProposalRow.ProtoReflect.Descriptor instead.
+func (*ProposalRow) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ProposalRow) GetProposalId() []byte {
+	if x != nil {
+		return x.ProposalId
+	}
+	return nil
+}
+
+func (x *ProposalRow) GetStatementType() uint32 {
+	if x != nil {
+		return x.StatementType
+	}
+	return 0
+}
+
+func (x *ProposalRow) GetStatement() []byte {
+	if x != nil {
+		return x.Statement
+	}
+	return nil
+}
+
+func (x *ProposalRow) GetProposedAt() uint64 {
+	if x != nil {
+		return x.ProposedAt
+	}
+	return 0
+}
+
+func (x *ProposalRow) GetNotAfterMs() int64 {
+	if x != nil {
+		return x.NotAfterMs
+	}
+	return 0
+}
+
+func (x *ProposalRow) GetSigners() []*ProposalSigner {
+	if x != nil {
+		return x.Signers
+	}
+	return nil
+}
+
+func (x *ProposalRow) GetWindowEntry() uint64 {
+	if x != nil {
+		return x.WindowEntry
+	}
+	return 0
+}
+
+func (x *ProposalRow) GetWindowTimeMs() int64 {
+	if x != nil {
+		return x.WindowTimeMs
+	}
+	return 0
+}
+
+func (x *ProposalRow) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+type ProposalSigner struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Signer        []byte                 `protobuf:"bytes,1,opt,name=signer,proto3" json:"signer,omitempty"` // as rows name one: a sidecar_id or a recovery key's hash
+	At            uint64                 `protobuf:"varint,2,opt,name=at,proto3" json:"at,omitempty"`        // the entry that carried its proposal or cosign
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProposalSigner) Reset() {
+	*x = ProposalSigner{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProposalSigner) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProposalSigner) ProtoMessage() {}
+
+func (x *ProposalSigner) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProposalSigner.ProtoReflect.Descriptor instead.
+func (*ProposalSigner) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ProposalSigner) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *ProposalSigner) GetAt() uint64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
+type ProjectionSettings struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SelfAdmit     uint32                 `protobuf:"varint,1,opt,name=self_admit,json=selfAdmit,proto3" json:"self_admit,omitempty"`   // SelfAdmitMode's value: 0 unset (on), 1 on, 2 off (owner decision 112)
+	ScimSigner    []byte                 `protobuf:"bytes,2,opt,name=scim_signer,json=scimSigner,proto3" json:"scim_signer,omitempty"` // ServiceSettings.scim_signer (7.6), empty for none
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectionSettings) Reset() {
+	*x = ProjectionSettings{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectionSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectionSettings) ProtoMessage() {}
+
+func (x *ProjectionSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectionSettings.ProtoReflect.Descriptor instead.
+func (*ProjectionSettings) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ProjectionSettings) GetSelfAdmit() uint32 {
+	if x != nil {
+		return x.SelfAdmit
+	}
+	return 0
+}
+
+func (x *ProjectionSettings) GetScimSigner() []byte {
+	if x != nil {
+		return x.ScimSigner
+	}
+	return nil
+}
+
+type RingRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StatementId   []byte                 `protobuf:"bytes,1,opt,name=statement_id,json=statementId,proto3" json:"statement_id,omitempty"` // the first 16 B of the statement's id (RetainedStatementId)
+	N             uint64                 `protobuf:"varint,2,opt,name=n,proto3" json:"n,omitempty"`                                       // the entry that carried it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RingRow) Reset() {
+	*x = RingRow{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RingRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RingRow) ProtoMessage() {}
+
+func (x *RingRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RingRow.ProtoReflect.Descriptor instead.
+func (*RingRow) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RingRow) GetStatementId() []byte {
+	if x != nil {
+		return x.StatementId
+	}
+	return nil
+}
+
+func (x *RingRow) GetN() uint64 {
+	if x != nil {
+		return x.N
+	}
+	return 0
+}
+
+type ConfirmationRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          uint32                 `protobuf:"varint,1,opt,name=kind,proto3" json:"kind,omitempty"`                               // 1 AdmissionConfirm, 2 OwnerConfirm
+	Signer        []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`                            // the confirm_signer or owner_confirm_signer it set
+	At            uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`                                   // its entry
+	LiftedPark    bool                   `protobuf:"varint,4,opt,name=lifted_park,json=liftedPark,proto3" json:"lifted_park,omitempty"` // the device was parked when it landed (7.9's lift row)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfirmationRow) Reset() {
+	*x = ConfirmationRow{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmationRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmationRow) ProtoMessage() {}
+
+func (x *ConfirmationRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmationRow.ProtoReflect.Descriptor instead.
+func (*ConfirmationRow) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ConfirmationRow) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+func (x *ConfirmationRow) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *ConfirmationRow) GetAt() uint64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
+func (x *ConfirmationRow) GetLiftedPark() bool {
+	if x != nil {
+		return x.LiftedPark
+	}
+	return false
+}
+
+// One compromise cascade's hold on a sidecar (§7.9's cascade; question team-m2-04-cascade-spans): what the sidecar
+// signed at a position in [from, until) is void until a signer outside P signs it again, whatever lifts its park.
+type CascadeSpanRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	From          uint64                 `protobuf:"varint,1,opt,name=from,proto3" json:"from,omitempty"`   // since_n for the revoked sidecar; else the entry that pulled it into P
+	Until         uint64                 `protobuf:"varint,2,opt,name=until,proto3" json:"until,omitempty"` // the revocation's entry, which parked or revoked it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CascadeSpanRow) Reset() {
+	*x = CascadeSpanRow{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CascadeSpanRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CascadeSpanRow) ProtoMessage() {}
+
+func (x *CascadeSpanRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CascadeSpanRow.ProtoReflect.Descriptor instead.
+func (*CascadeSpanRow) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CascadeSpanRow) GetFrom() uint64 {
+	if x != nil {
+		return x.From
+	}
+	return 0
+}
+
+func (x *CascadeSpanRow) GetUntil() uint64 {
+	if x != nil {
+		return x.Until
+	}
+	return 0
+}
+
+// One IndexerSet designation that holds (§7.9's Indexers; question team-m2-07-indexer-rows): what api sees of its
+// entry, its services sealed as there.
+type IndexerRow struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SidecarId      []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`                // the subject
+	Scope          uint32                 `protobuf:"varint,2,opt,name=scope,proto3" json:"scope,omitempty"`                                        // IndexerScope's value (config.proto)
+	Signer         []byte                 `protobuf:"bytes,3,opt,name=signer,proto3" json:"signer,omitempty"`                                       // a sidecar_id
+	At             uint64                 `protobuf:"varint,4,opt,name=at,proto3" json:"at,omitempty"`                                              // the IndexerSet's entry
+	SealedServices []byte                 `protobuf:"bytes,5,opt,name=sealed_services,json=sealedServices,proto3" json:"sealed_services,omitempty"` // IndexerSet.sealed_services, verbatim
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *IndexerRow) Reset() {
+	*x = IndexerRow{}
+	mi := &file_protocol_bridge_auth_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IndexerRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexerRow) ProtoMessage() {}
+
+func (x *IndexerRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_bridge_auth_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexerRow.ProtoReflect.Descriptor instead.
+func (*IndexerRow) Descriptor() ([]byte, []int) {
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *IndexerRow) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *IndexerRow) GetScope() uint32 {
+	if x != nil {
+		return x.Scope
+	}
+	return 0
+}
+
+func (x *IndexerRow) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *IndexerRow) GetAt() uint64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
+func (x *IndexerRow) GetSealedServices() []byte {
+	if x != nil {
+		return x.SealedServices
+	}
+	return nil
+}
+
 // Kept for the membership's life.
 type MemberRow struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -760,7 +1325,7 @@ type MemberRow struct {
 
 func (x *MemberRow) Reset() {
 	*x = MemberRow{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[5]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -772,7 +1337,7 @@ func (x *MemberRow) String() string {
 func (*MemberRow) ProtoMessage() {}
 
 func (x *MemberRow) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[5]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -785,7 +1350,7 @@ func (x *MemberRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemberRow.ProtoReflect.Descriptor instead.
 func (*MemberRow) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{5}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MemberRow) GetMemberId() []byte {
@@ -828,7 +1393,7 @@ type RecoveryBindingRow struct {
 
 func (x *RecoveryBindingRow) Reset() {
 	*x = RecoveryBindingRow{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[6]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -840,7 +1405,7 @@ func (x *RecoveryBindingRow) String() string {
 func (*RecoveryBindingRow) ProtoMessage() {}
 
 func (x *RecoveryBindingRow) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[6]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -853,7 +1418,7 @@ func (x *RecoveryBindingRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecoveryBindingRow.ProtoReflect.Descriptor instead.
 func (*RecoveryBindingRow) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{6}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RecoveryBindingRow) GetKeySha256() []byte {
@@ -909,13 +1474,17 @@ type SidecarRow struct {
 	MemberId           []byte                 `protobuf:"bytes,18,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`                              // an untagged admission's member; or tag_ids
 	TagIds             [][]byte               `protobuf:"bytes,19,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`                                    // a tagged admission's keyed tag ids, 16 B each
 	Ephemeral          bool                   `protobuf:"varint,20,opt,name=ephemeral,proto3" json:"ephemeral,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	Confirmations      []*ConfirmationRow     `protobuf:"bytes,21,rep,name=confirmations,proto3" json:"confirmations,omitempty"` // every AdmissionConfirm and OwnerConfirm that took effect, in
+	//   position order, for the sidecar's life; 5-8 the newest of each
+	//   (DESIGN-DETAILS 5.2.2)
+	Cascades      []*CascadeSpanRow `protobuf:"bytes,22,rep,name=cascades,proto3" json:"cascades,omitempty"` // each compromise cascade that held it in P, in position order
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SidecarRow) Reset() {
 	*x = SidecarRow{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[7]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -927,7 +1496,7 @@ func (x *SidecarRow) String() string {
 func (*SidecarRow) ProtoMessage() {}
 
 func (x *SidecarRow) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[7]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -940,7 +1509,7 @@ func (x *SidecarRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SidecarRow.ProtoReflect.Descriptor instead.
 func (*SidecarRow) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{7}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SidecarRow) GetSidecarId() []byte {
@@ -1083,6 +1652,20 @@ func (x *SidecarRow) GetEphemeral() bool {
 	return false
 }
 
+func (x *SidecarRow) GetConfirmations() []*ConfirmationRow {
+	if x != nil {
+		return x.Confirmations
+	}
+	return nil
+}
+
+func (x *SidecarRow) GetCascades() []*CascadeSpanRow {
+	if x != nil {
+		return x.Cascades
+	}
+	return nil
+}
+
 // The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
 // shows and protos-bridge-row-fields #2 numbers.
 type DelegationRow struct {
@@ -1104,7 +1687,7 @@ type DelegationRow struct {
 
 func (x *DelegationRow) Reset() {
 	*x = DelegationRow{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[8]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1116,7 +1699,7 @@ func (x *DelegationRow) String() string {
 func (*DelegationRow) ProtoMessage() {}
 
 func (x *DelegationRow) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[8]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1129,7 +1712,7 @@ func (x *DelegationRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DelegationRow.ProtoReflect.Descriptor instead.
 func (*DelegationRow) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{8}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DelegationRow) GetDelegationId() []byte {
@@ -1227,7 +1810,7 @@ type KeyRow struct {
 
 func (x *KeyRow) Reset() {
 	*x = KeyRow{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[9]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1239,7 +1822,7 @@ func (x *KeyRow) String() string {
 func (*KeyRow) ProtoMessage() {}
 
 func (x *KeyRow) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[9]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1252,7 +1835,7 @@ func (x *KeyRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyRow.ProtoReflect.Descriptor instead.
 func (*KeyRow) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{9}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *KeyRow) GetKeyId() []byte {
@@ -1328,7 +1911,7 @@ type ApiTick struct {
 
 func (x *ApiTick) Reset() {
 	*x = ApiTick{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[10]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1923,7 @@ func (x *ApiTick) String() string {
 func (*ApiTick) ProtoMessage() {}
 
 func (x *ApiTick) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[10]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +1936,7 @@ func (x *ApiTick) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApiTick.ProtoReflect.Descriptor instead.
 func (*ApiTick) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{10}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ApiTick) GetReapedSidecarIds() [][]byte {
@@ -1386,7 +1969,7 @@ type Genesis struct {
 
 func (x *Genesis) Reset() {
 	*x = Genesis{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[11]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1398,7 +1981,7 @@ func (x *Genesis) String() string {
 func (*Genesis) ProtoMessage() {}
 
 func (x *Genesis) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[11]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1411,7 +1994,7 @@ func (x *Genesis) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Genesis.ProtoReflect.Descriptor instead.
 func (*Genesis) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{11}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Genesis) GetNetworkId() []byte {
@@ -1466,7 +2049,7 @@ type MemberRevoke struct {
 
 func (x *MemberRevoke) Reset() {
 	*x = MemberRevoke{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[12]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1478,7 +2061,7 @@ func (x *MemberRevoke) String() string {
 func (*MemberRevoke) ProtoMessage() {}
 
 func (x *MemberRevoke) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[12]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1491,7 +2074,7 @@ func (x *MemberRevoke) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemberRevoke.ProtoReflect.Descriptor instead.
 func (*MemberRevoke) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{12}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MemberRevoke) GetHeader() *StatementHeader {
@@ -1520,7 +2103,7 @@ type SidecarRevoke struct {
 
 func (x *SidecarRevoke) Reset() {
 	*x = SidecarRevoke{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[13]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1532,7 +2115,7 @@ func (x *SidecarRevoke) String() string {
 func (*SidecarRevoke) ProtoMessage() {}
 
 func (x *SidecarRevoke) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[13]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1545,7 +2128,7 @@ func (x *SidecarRevoke) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SidecarRevoke.ProtoReflect.Descriptor instead.
 func (*SidecarRevoke) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{13}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SidecarRevoke) GetHeader() *StatementHeader {
@@ -1587,7 +2170,7 @@ type GrantRevoke struct {
 
 func (x *GrantRevoke) Reset() {
 	*x = GrantRevoke{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[14]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1599,7 +2182,7 @@ func (x *GrantRevoke) String() string {
 func (*GrantRevoke) ProtoMessage() {}
 
 func (x *GrantRevoke) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[14]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1612,7 +2195,7 @@ func (x *GrantRevoke) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GrantRevoke.ProtoReflect.Descriptor instead.
 func (*GrantRevoke) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{14}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GrantRevoke) GetHeader() *StatementHeader {
@@ -1640,7 +2223,7 @@ type Suspend struct {
 
 func (x *Suspend) Reset() {
 	*x = Suspend{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[15]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1652,7 +2235,7 @@ func (x *Suspend) String() string {
 func (*Suspend) ProtoMessage() {}
 
 func (x *Suspend) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[15]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1665,7 +2248,7 @@ func (x *Suspend) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Suspend.ProtoReflect.Descriptor instead.
 func (*Suspend) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{15}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Suspend) GetHeader() *StatementHeader {
@@ -1700,7 +2283,7 @@ type Unsuspend struct {
 
 func (x *Unsuspend) Reset() {
 	*x = Unsuspend{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[16]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +2295,7 @@ func (x *Unsuspend) String() string {
 func (*Unsuspend) ProtoMessage() {}
 
 func (x *Unsuspend) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[16]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +2308,7 @@ func (x *Unsuspend) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Unsuspend.ProtoReflect.Descriptor instead.
 func (*Unsuspend) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{16}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Unsuspend) GetHeader() *StatementHeader {
@@ -1767,7 +2350,7 @@ type SidecarIdentityBinding struct {
 
 func (x *SidecarIdentityBinding) Reset() {
 	*x = SidecarIdentityBinding{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[17]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1779,7 +2362,7 @@ func (x *SidecarIdentityBinding) String() string {
 func (*SidecarIdentityBinding) ProtoMessage() {}
 
 func (x *SidecarIdentityBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[17]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1792,7 +2375,7 @@ func (x *SidecarIdentityBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SidecarIdentityBinding.ProtoReflect.Descriptor instead.
 func (*SidecarIdentityBinding) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{17}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SidecarIdentityBinding) GetNetworkId() []byte {
@@ -1859,7 +2442,7 @@ type SignedSidecarIdentityBinding struct {
 
 func (x *SignedSidecarIdentityBinding) Reset() {
 	*x = SignedSidecarIdentityBinding{}
-	mi := &file_protocol_bridge_auth_proto_msgTypes[18]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1871,7 +2454,7 @@ func (x *SignedSidecarIdentityBinding) String() string {
 func (*SignedSidecarIdentityBinding) ProtoMessage() {}
 
 func (x *SignedSidecarIdentityBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_bridge_auth_proto_msgTypes[18]
+	mi := &file_protocol_bridge_auth_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1884,7 +2467,7 @@ func (x *SignedSidecarIdentityBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignedSidecarIdentityBinding.ProtoReflect.Descriptor instead.
 func (*SignedSidecarIdentityBinding) Descriptor() ([]byte, []int) {
-	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{18}
+	return file_protocol_bridge_auth_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SignedSidecarIdentityBinding) GetBody() []byte {
@@ -1931,7 +2514,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x04body\x18\x06 \x01(\fR\x04body\"9\n" +
 	"\aAuthPin\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x14\n" +
-	"\x05chain\x18\x02 \x01(\fR\x05chain\"\xcd\x02\n" +
+	"\x05chain\x18\x02 \x01(\fR\x05chain\"\xf2\x02\n" +
 	"\x10ProjectionHeader\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\fR\tnetworkId\x12\x18\n" +
@@ -1944,13 +2527,61 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\vrows_sha256\x18\a \x01(\fR\n" +
 	"rowsSha256\x12&\n" +
 	"\x0frows_byte_count\x18\b \x01(\rR\rrowsByteCount\x12\x1c\n" +
-	"\tthreshold\x18\t \x01(\rR\tthreshold\"\x9d\x02\n" +
+	"\tthreshold\x18\t \x01(\rR\tthreshold\x12#\n" +
+	"\rtail_verdicts\x18\n" +
+	" \x01(\fR\ftailVerdicts\"\x89\x04\n" +
 	"\x0eProjectionRows\x126\n" +
 	"\amembers\x18\x01 \x03(\v2\x1c.urnetwork.sidecar.MemberRowR\amembers\x129\n" +
 	"\bsidecars\x18\x02 \x03(\v2\x1d.urnetwork.sidecar.SidecarRowR\bsidecars\x12B\n" +
 	"\vdelegations\x18\x03 \x03(\v2 .urnetwork.sidecar.DelegationRowR\vdelegations\x12B\n" +
 	"\x0fregistered_keys\x18\x04 \x03(\v2\x19.urnetwork.sidecar.KeyRowR\x0eregisteredKeys\x12\x10\n" +
-	"\x03acl\x18\x05 \x01(\fR\x03acl\"\xce\x01\n" +
+	"\x03acl\x18\x05 \x01(\fR\x03acl\x12<\n" +
+	"\tproposals\x18\a \x03(\v2\x1e.urnetwork.sidecar.ProposalRowR\tproposals\x12A\n" +
+	"\bsettings\x18\b \x01(\v2%.urnetwork.sidecar.ProjectionSettingsR\bsettings\x12.\n" +
+	"\x04ring\x18\t \x03(\v2\x1a.urnetwork.sidecar.RingRowR\x04ring\x129\n" +
+	"\bindexers\x18\n" +
+	" \x03(\v2\x1d.urnetwork.sidecar.IndexerRowR\bindexers\"\xd0\x02\n" +
+	"\vProposalRow\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\fR\n" +
+	"proposalId\x12%\n" +
+	"\x0estatement_type\x18\x02 \x01(\rR\rstatementType\x12\x1c\n" +
+	"\tstatement\x18\x03 \x01(\fR\tstatement\x12\x1f\n" +
+	"\vproposed_at\x18\x04 \x01(\x04R\n" +
+	"proposedAt\x12 \n" +
+	"\fnot_after_ms\x18\x05 \x01(\x03R\n" +
+	"notAfterMs\x12;\n" +
+	"\asigners\x18\x06 \x03(\v2!.urnetwork.sidecar.ProposalSignerR\asigners\x12!\n" +
+	"\fwindow_entry\x18\a \x01(\x04R\vwindowEntry\x12$\n" +
+	"\x0ewindow_time_ms\x18\b \x01(\x03R\fwindowTimeMs\x12\x12\n" +
+	"\x04kind\x18\t \x01(\rR\x04kind\"8\n" +
+	"\x0eProposalSigner\x12\x16\n" +
+	"\x06signer\x18\x01 \x01(\fR\x06signer\x12\x0e\n" +
+	"\x02at\x18\x02 \x01(\x04R\x02at\"T\n" +
+	"\x12ProjectionSettings\x12\x1d\n" +
+	"\n" +
+	"self_admit\x18\x01 \x01(\rR\tselfAdmit\x12\x1f\n" +
+	"\vscim_signer\x18\x02 \x01(\fR\n" +
+	"scimSigner\":\n" +
+	"\aRingRow\x12!\n" +
+	"\fstatement_id\x18\x01 \x01(\fR\vstatementId\x12\f\n" +
+	"\x01n\x18\x02 \x01(\x04R\x01n\"n\n" +
+	"\x0fConfirmationRow\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\rR\x04kind\x12\x16\n" +
+	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\x12\x1f\n" +
+	"\vlifted_park\x18\x04 \x01(\bR\n" +
+	"liftedPark\":\n" +
+	"\x0eCascadeSpanRow\x12\x12\n" +
+	"\x04from\x18\x01 \x01(\x04R\x04from\x12\x14\n" +
+	"\x05until\x18\x02 \x01(\x04R\x05until\"\x92\x01\n" +
+	"\n" +
+	"IndexerRow\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x14\n" +
+	"\x05scope\x18\x02 \x01(\rR\x05scope\x12\x16\n" +
+	"\x06signer\x18\x03 \x01(\fR\x06signer\x12\x0e\n" +
+	"\x02at\x18\x04 \x01(\x04R\x02at\x12'\n" +
+	"\x0fsealed_services\x18\x05 \x01(\fR\x0esealedServices\"\xce\x01\n" +
 	"\tMemberRow\x12\x1b\n" +
 	"\tmember_id\x18\x01 \x01(\fR\bmemberId\x121\n" +
 	"\x04role\x18\x02 \x01(\x0e2\x1d.urnetwork.sidecar.MemberRoleR\x04role\x12.\n" +
@@ -1961,7 +2592,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"key_sha256\x18\x01 \x01(\fR\tkeySha256\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
 	"\x02at\x18\x03 \x01(\x04R\x02at\x12?\n" +
-	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xd0\x05\n" +
+	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xd9\x06\n" +
 	"\n" +
 	"SidecarRow\x12\x1d\n" +
 	"\n" +
@@ -1988,7 +2619,9 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\fidentity_alg\x18\x11 \x01(\tR\videntityAlg\x12\x1b\n" +
 	"\tmember_id\x18\x12 \x01(\fR\bmemberId\x12\x17\n" +
 	"\atag_ids\x18\x13 \x03(\fR\x06tagIds\x12\x1c\n" +
-	"\tephemeral\x18\x14 \x01(\bR\tephemeral\"\xe5\x02\n" +
+	"\tephemeral\x18\x14 \x01(\bR\tephemeral\x12H\n" +
+	"\rconfirmations\x18\x15 \x03(\v2\".urnetwork.sidecar.ConfirmationRowR\rconfirmations\x12=\n" +
+	"\bcascades\x18\x16 \x03(\v2!.urnetwork.sidecar.CascadeSpanRowR\bcascades\"\xe5\x02\n" +
 	"\rDelegationRow\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\fR\fdelegationId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
@@ -2066,7 +2699,12 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x1cSignedSidecarIdentityBinding\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\fR\x04body\x12)\n" +
 	"\x10client_signature\x18\x02 \x01(\fR\x0fclientSignature\x12-\n" +
-	"\x12identity_signature\x18\x03 \x01(\fR\x11identitySignature*\xe0\x01\n" +
+	"\x12identity_signature\x18\x03 \x01(\fR\x11identitySignature*\x89\x01\n" +
+	"\fProposalKind\x12\x1d\n" +
+	"\x19PROPOSAL_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17PROPOSAL_KIND_AUTHORITY\x10\x01\x12!\n" +
+	"\x1dPROPOSAL_KIND_RECOVERY_SCOPED\x10\x02\x12\x1a\n" +
+	"\x16PROPOSAL_KIND_RESTORED\x10\x03*\xe0\x01\n" +
 	"\n" +
 	"MemberRole\x12\x1b\n" +
 	"\x17MEMBER_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -2115,57 +2753,72 @@ func file_protocol_bridge_auth_proto_rawDescGZIP() []byte {
 	return file_protocol_bridge_auth_proto_rawDescData
 }
 
-var file_protocol_bridge_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_protocol_bridge_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_protocol_bridge_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_protocol_bridge_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_protocol_bridge_auth_proto_goTypes = []any{
-	(MemberRole)(0),                      // 0: urnetwork.sidecar.MemberRole
-	(SidecarCapability)(0),               // 1: urnetwork.sidecar.SidecarCapability
-	(KeyAlg)(0),                          // 2: urnetwork.sidecar.KeyAlg
-	(KeyPurpose)(0),                      // 3: urnetwork.sidecar.KeyPurpose
-	(RecoveryRebindReason)(0),            // 4: urnetwork.sidecar.RecoveryRebindReason
-	(SidecarRevokeReason)(0),             // 5: urnetwork.sidecar.SidecarRevokeReason
-	(*StatementHeader)(nil),              // 6: urnetwork.sidecar.StatementHeader
-	(*AuthEntry)(nil),                    // 7: urnetwork.sidecar.AuthEntry
-	(*AuthPin)(nil),                      // 8: urnetwork.sidecar.AuthPin
-	(*ProjectionHeader)(nil),             // 9: urnetwork.sidecar.ProjectionHeader
-	(*ProjectionRows)(nil),               // 10: urnetwork.sidecar.ProjectionRows
-	(*MemberRow)(nil),                    // 11: urnetwork.sidecar.MemberRow
-	(*RecoveryBindingRow)(nil),           // 12: urnetwork.sidecar.RecoveryBindingRow
-	(*SidecarRow)(nil),                   // 13: urnetwork.sidecar.SidecarRow
-	(*DelegationRow)(nil),                // 14: urnetwork.sidecar.DelegationRow
-	(*KeyRow)(nil),                       // 15: urnetwork.sidecar.KeyRow
-	(*ApiTick)(nil),                      // 16: urnetwork.sidecar.ApiTick
-	(*Genesis)(nil),                      // 17: urnetwork.sidecar.Genesis
-	(*MemberRevoke)(nil),                 // 18: urnetwork.sidecar.MemberRevoke
-	(*SidecarRevoke)(nil),                // 19: urnetwork.sidecar.SidecarRevoke
-	(*GrantRevoke)(nil),                  // 20: urnetwork.sidecar.GrantRevoke
-	(*Suspend)(nil),                      // 21: urnetwork.sidecar.Suspend
-	(*Unsuspend)(nil),                    // 22: urnetwork.sidecar.Unsuspend
-	(*SidecarIdentityBinding)(nil),       // 23: urnetwork.sidecar.SidecarIdentityBinding
-	(*SignedSidecarIdentityBinding)(nil), // 24: urnetwork.sidecar.SignedSidecarIdentityBinding
+	(ProposalKind)(0),                    // 0: urnetwork.sidecar.ProposalKind
+	(MemberRole)(0),                      // 1: urnetwork.sidecar.MemberRole
+	(SidecarCapability)(0),               // 2: urnetwork.sidecar.SidecarCapability
+	(KeyAlg)(0),                          // 3: urnetwork.sidecar.KeyAlg
+	(KeyPurpose)(0),                      // 4: urnetwork.sidecar.KeyPurpose
+	(RecoveryRebindReason)(0),            // 5: urnetwork.sidecar.RecoveryRebindReason
+	(SidecarRevokeReason)(0),             // 6: urnetwork.sidecar.SidecarRevokeReason
+	(*StatementHeader)(nil),              // 7: urnetwork.sidecar.StatementHeader
+	(*AuthEntry)(nil),                    // 8: urnetwork.sidecar.AuthEntry
+	(*AuthPin)(nil),                      // 9: urnetwork.sidecar.AuthPin
+	(*ProjectionHeader)(nil),             // 10: urnetwork.sidecar.ProjectionHeader
+	(*ProjectionRows)(nil),               // 11: urnetwork.sidecar.ProjectionRows
+	(*ProposalRow)(nil),                  // 12: urnetwork.sidecar.ProposalRow
+	(*ProposalSigner)(nil),               // 13: urnetwork.sidecar.ProposalSigner
+	(*ProjectionSettings)(nil),           // 14: urnetwork.sidecar.ProjectionSettings
+	(*RingRow)(nil),                      // 15: urnetwork.sidecar.RingRow
+	(*ConfirmationRow)(nil),              // 16: urnetwork.sidecar.ConfirmationRow
+	(*CascadeSpanRow)(nil),               // 17: urnetwork.sidecar.CascadeSpanRow
+	(*IndexerRow)(nil),                   // 18: urnetwork.sidecar.IndexerRow
+	(*MemberRow)(nil),                    // 19: urnetwork.sidecar.MemberRow
+	(*RecoveryBindingRow)(nil),           // 20: urnetwork.sidecar.RecoveryBindingRow
+	(*SidecarRow)(nil),                   // 21: urnetwork.sidecar.SidecarRow
+	(*DelegationRow)(nil),                // 22: urnetwork.sidecar.DelegationRow
+	(*KeyRow)(nil),                       // 23: urnetwork.sidecar.KeyRow
+	(*ApiTick)(nil),                      // 24: urnetwork.sidecar.ApiTick
+	(*Genesis)(nil),                      // 25: urnetwork.sidecar.Genesis
+	(*MemberRevoke)(nil),                 // 26: urnetwork.sidecar.MemberRevoke
+	(*SidecarRevoke)(nil),                // 27: urnetwork.sidecar.SidecarRevoke
+	(*GrantRevoke)(nil),                  // 28: urnetwork.sidecar.GrantRevoke
+	(*Suspend)(nil),                      // 29: urnetwork.sidecar.Suspend
+	(*Unsuspend)(nil),                    // 30: urnetwork.sidecar.Unsuspend
+	(*SidecarIdentityBinding)(nil),       // 31: urnetwork.sidecar.SidecarIdentityBinding
+	(*SignedSidecarIdentityBinding)(nil), // 32: urnetwork.sidecar.SignedSidecarIdentityBinding
 }
 var file_protocol_bridge_auth_proto_depIdxs = []int32{
-	8,  // 0: urnetwork.sidecar.StatementHeader.at:type_name -> urnetwork.sidecar.AuthPin
-	11, // 1: urnetwork.sidecar.ProjectionRows.members:type_name -> urnetwork.sidecar.MemberRow
-	13, // 2: urnetwork.sidecar.ProjectionRows.sidecars:type_name -> urnetwork.sidecar.SidecarRow
-	14, // 3: urnetwork.sidecar.ProjectionRows.delegations:type_name -> urnetwork.sidecar.DelegationRow
-	15, // 4: urnetwork.sidecar.ProjectionRows.registered_keys:type_name -> urnetwork.sidecar.KeyRow
-	0,  // 5: urnetwork.sidecar.MemberRow.role:type_name -> urnetwork.sidecar.MemberRole
-	12, // 6: urnetwork.sidecar.MemberRow.bindings:type_name -> urnetwork.sidecar.RecoveryBindingRow
-	4,  // 7: urnetwork.sidecar.RecoveryBindingRow.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
-	2,  // 8: urnetwork.sidecar.KeyRow.alg:type_name -> urnetwork.sidecar.KeyAlg
-	3,  // 9: urnetwork.sidecar.KeyRow.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	6,  // 10: urnetwork.sidecar.MemberRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 11: urnetwork.sidecar.SidecarRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	5,  // 12: urnetwork.sidecar.SidecarRevoke.reason:type_name -> urnetwork.sidecar.SidecarRevokeReason
-	6,  // 13: urnetwork.sidecar.GrantRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 14: urnetwork.sidecar.Suspend.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 15: urnetwork.sidecar.Unsuspend.header:type_name -> urnetwork.sidecar.StatementHeader
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	9,  // 0: urnetwork.sidecar.StatementHeader.at:type_name -> urnetwork.sidecar.AuthPin
+	19, // 1: urnetwork.sidecar.ProjectionRows.members:type_name -> urnetwork.sidecar.MemberRow
+	21, // 2: urnetwork.sidecar.ProjectionRows.sidecars:type_name -> urnetwork.sidecar.SidecarRow
+	22, // 3: urnetwork.sidecar.ProjectionRows.delegations:type_name -> urnetwork.sidecar.DelegationRow
+	23, // 4: urnetwork.sidecar.ProjectionRows.registered_keys:type_name -> urnetwork.sidecar.KeyRow
+	12, // 5: urnetwork.sidecar.ProjectionRows.proposals:type_name -> urnetwork.sidecar.ProposalRow
+	14, // 6: urnetwork.sidecar.ProjectionRows.settings:type_name -> urnetwork.sidecar.ProjectionSettings
+	15, // 7: urnetwork.sidecar.ProjectionRows.ring:type_name -> urnetwork.sidecar.RingRow
+	18, // 8: urnetwork.sidecar.ProjectionRows.indexers:type_name -> urnetwork.sidecar.IndexerRow
+	13, // 9: urnetwork.sidecar.ProposalRow.signers:type_name -> urnetwork.sidecar.ProposalSigner
+	1,  // 10: urnetwork.sidecar.MemberRow.role:type_name -> urnetwork.sidecar.MemberRole
+	20, // 11: urnetwork.sidecar.MemberRow.bindings:type_name -> urnetwork.sidecar.RecoveryBindingRow
+	5,  // 12: urnetwork.sidecar.RecoveryBindingRow.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
+	16, // 13: urnetwork.sidecar.SidecarRow.confirmations:type_name -> urnetwork.sidecar.ConfirmationRow
+	17, // 14: urnetwork.sidecar.SidecarRow.cascades:type_name -> urnetwork.sidecar.CascadeSpanRow
+	3,  // 15: urnetwork.sidecar.KeyRow.alg:type_name -> urnetwork.sidecar.KeyAlg
+	4,  // 16: urnetwork.sidecar.KeyRow.purpose:type_name -> urnetwork.sidecar.KeyPurpose
+	7,  // 17: urnetwork.sidecar.MemberRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 18: urnetwork.sidecar.SidecarRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	6,  // 19: urnetwork.sidecar.SidecarRevoke.reason:type_name -> urnetwork.sidecar.SidecarRevokeReason
+	7,  // 20: urnetwork.sidecar.GrantRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 21: urnetwork.sidecar.Suspend.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 22: urnetwork.sidecar.Unsuspend.header:type_name -> urnetwork.sidecar.StatementHeader
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_protocol_bridge_auth_proto_init() }
@@ -2178,8 +2831,8 @@ func file_protocol_bridge_auth_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_bridge_auth_proto_rawDesc), len(file_protocol_bridge_auth_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   19,
+			NumEnums:      7,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

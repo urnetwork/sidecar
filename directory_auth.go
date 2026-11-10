@@ -447,7 +447,7 @@ func directoryRepoAdminIn(state *ConfigState, repoId Id, sidecarId Id, position 
 }
 
 // D-MCP-35's right at a position before what this state retains, from the head's positions: the repo created by then
-// and not deleted then; the sidecar's row not revoked, read_only or voided by a cascade there, no active Suspend of it
+// and not deleted then; the sidecar's row not revoked, parked, read_only or voided by a cascade there, no active Suspend of it
 // from at or before it, and a member device consented by then; and a current admin row added at or before it, or, for
 // an owner-bound repo, the device being its owner's. A removed admin's row, a lifted Suspend and a consent replaced by
 // a later one are gone from the head, so what they said of an earlier position is not told here (question
@@ -469,7 +469,8 @@ func directoryRepoAdminFromHead(head *ConfigState, repoId Id, sidecarId Id, posi
 	row := head.SidecarRow(sidecarId)
 	sidecar := acl.sidecarState(sidecarId)
 	if row == nil || sidecar == nil || !sidecar.valid || configRowReadOnly(row) ||
-		(row.GetRevokedAt() != 0 && row.GetRevokedAt() <= position) || head.CascadeVoids(sidecarId.Bytes(), position) {
+		(row.GetRevokedAt() != 0 && row.GetRevokedAt() <= position) || (row.GetParkedAt() != 0 && row.GetParkedAt() <= position) ||
+		head.CascadeVoids(sidecarId.Bytes(), position) {
 		return false
 	}
 	for _, suspension := range acl.Rows().GetSuspensions() {

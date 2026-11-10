@@ -265,8 +265,11 @@ func testConfigHeadSha256(configVersion uint64) []byte {
 	return digest[:]
 }
 
-// The entry of a base over rows at the tip's next position, without moving the tip, its rows published.
+// The entry of a base over rows at the tip's next position, without moving the tip, its rows published. The rows
+// carry the settings the head's ServiceSettings compile to, as a writer's do (DESIGN-DETAILS 5.2.3).
 func (self *testConfigNet) makeBase(signer testConfigDevice, rows *bridge.ProjectionRows, foldedThrough uint64, configVersion uint64, threshold uint32) []byte {
+	rows = proto.Clone(rows).(*bridge.ProjectionRows)
+	rows.Settings = ConfigProjectionSettings(self.source.settings[[sha256.Size]byte(testConfigHeadSha256(configVersion))])
 	rowsBytes := testConfigMarshal(self.t, rows)
 	rowsSha256 := sha256.Sum256(rowsBytes)
 	self.source.rows[rowsSha256] = rowsBytes
@@ -421,7 +424,7 @@ func TestConfigStateAtBaseOneHoldsItsRows(t *testing.T) {
 	if !bytes.Equal(state.IdentityKey(net.owner.sidecarId), net.owner.publicKey()) {
 		t.Error("the owner device's identity key")
 	}
-	if settings, known := state.Settings(); !known || settings != nil {
+	if settings, known := state.HeadSettings(); !known || settings != nil || !state.SelfAdmit() {
 		t.Errorf("settings %v, known %t", settings, known)
 	}
 	if state.RetentionPoint() != 1 {
