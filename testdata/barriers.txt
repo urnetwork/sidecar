@@ -96,6 +96,8 @@ barrier evs.batch.put.after evsservice/batch.go
 barrier evs.batch.put.before evsservice/batch.go
 barrier evs.budget.p2.issued evsservice/budget_client.go
 barrier evs.budget.p2.recheck evsservice/budget_client.go
+barrier evs.copy.move.after evsservice/epoch_copy.go
+barrier evs.copy.move.before evsservice/epoch_copy.go
 barrier evs.entry.read.after evsservice/entry.go
 barrier evs.entry.read.before evsservice/entry.go
 barrier evs.entry.state.after evsservice/sources.go
