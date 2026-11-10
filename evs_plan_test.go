@@ -99,6 +99,10 @@ type evsTestPushServer struct {
 	leases           int
 	// called as each part arrives, before it is held
 	onPart func(k uint32)
+	// called as each push or seal arrives, before 5e's epoch is checked: what a test cuts the world over in
+	onPush func(statement *EvsStatement)
+	// the upload time receipts name, 0 for 2026-01-01
+	uploadMs int64
 }
 
 func newEvsTestPushServer(t *testing.T, world *evsTestWorld) *evsTestPushServer {
@@ -154,12 +158,16 @@ func (self *evsTestPushServer) serveSegment(writer http.ResponseWriter, request 
 	}
 	self.stateLock.Lock()
 	self.uploads = append(self.uploads, sid)
+	uploadMs := self.uploadMs
 	self.stateLock.Unlock()
+	if uploadMs == 0 {
+		uploadMs = 1767225600000
+	}
 	self.world.stateLock.Lock()
 	self.world.segments[string(segmentId[:])] = body
 	self.world.stateLock.Unlock()
 	receipt := &protocol.EvsUploadReceipt{
-		RepoId: self.world.repoId.Bytes(), SegmentId: segmentId[:], PaddedSize: uint64(len(body)), UploadMs: 1767225600000,
+		RepoId: self.world.repoId.Bytes(), SegmentId: segmentId[:], PaddedSize: uint64(len(body)), UploadMs: uploadMs,
 		UploaderSidecarId: self.world.signer.sidecarId.Bytes(), KeyId: 1, Mac: make([]byte, 16),
 	}
 	reply, _ := proto.Marshal(receipt)
@@ -240,6 +248,22 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		evsTestRefuse(writer, refusal)
 		return
 	}
+	onPush := self.onPush
+	self.stateLock.Unlock()
+	if onPush != nil {
+		onPush(statement)
+	}
+	self.world.stateLock.Lock()
+	current := max(1, self.world.currentEpoch)
+	self.world.stateLock.Unlock()
+	if epoch := statement.Push.GetPathEpoch(); epoch != current {
+		// 5e: final for the statement, which can never commit
+		evsTestRefuse(writer, &evsTestRefusal{status: http.StatusPreconditionFailed, reply: &protocol.EvsRefusalReply{
+			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH,
+		}})
+		return
+	}
+	self.stateLock.Lock()
 	var checked *EvsCheckedPayload
 	var tree *EvsChangeTree
 	if 0 < len(pushRequest.GetPartPlaces()) {
@@ -303,8 +327,8 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 	writer.Write(reply)
 }
 
-// The registered plaintext path whose epoch-1 tokens are tokenPath.
-func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath) (string, bool) {
+// The registered plaintext path whose tokens in epoch are tokenPath.
+func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath, epoch uint64) (string, bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if len(tokenPath) == 0 {
@@ -312,7 +336,7 @@ func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath) (string, bool) {
 		return "", true
 	}
 	for _, path := range self.knownPaths {
-		if self.world.tokens(path).Equal(tokenPath) {
+		if self.world.tokensAt(path, epoch).Equal(tokenPath) {
 			return path, true
 		}
 	}
@@ -323,7 +347,7 @@ func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath) (string, bool) {
 func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, checked *EvsCheckedPayload, tree *EvsChangeTree) (uint64, *evsTestRefusal) {
 	paths := make([]string, len(checked.Changes))
 	for i, change := range checked.Changes {
-		path, ok := self.pathOf(change.TokenPath)
+		path, ok := self.pathOf(change.TokenPath, statement.Push.GetPathEpoch())
 		if !ok {
 			self.t.Fatalf("a change to a path the test did not register")
 		}

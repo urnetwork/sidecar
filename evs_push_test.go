@@ -7,11 +7,14 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -79,7 +82,8 @@ func TestEvsPushRetriesWhatRefusesNothingWithTheSameStatement(t *testing.T) {
 }
 
 // Each refusal that asks for a rebuild builds the push again under a new push id, from a fresh read, its segments
-// uploaded again; GATE_CLOSED asks gkm for a writable generation again first.
+// uploaded again; GATE_CLOSED asks gkm for a writable generation again first. 412 PATH_EPOCH is a retoken's
+// (evs_epoch_test.go).
 func TestEvsPushRebuildsUnderANewPushId(t *testing.T) {
 	cases := []struct {
 		status int
@@ -90,7 +94,6 @@ func TestEvsPushRebuildsUnderANewPushId(t *testing.T) {
 		{status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE},
 		{status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE},
 		{status: http.StatusConflict, code: protocol.EvsRefusalCode_EVS_REFUSAL_TIME_STALE},
-		{status: http.StatusPreconditionFailed, code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH},
 		{status: http.StatusPreconditionFailed, code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED},
 	}
 	for _, c := range cases {
@@ -231,5 +234,183 @@ func TestEvsWriteGitModeRefIsEvsGitRef(t *testing.T) {
 	}
 	if len(writer.server.postedStatements) != 0 || len(writer.server.uploads) != 0 {
 		t.Error("a git-mode write sent something")
+	}
+}
+
+// Cuts the world over to each epoch of epochs in turn, one at each push that arrives, the old current epoch listed
+// first among its sources, as a PATH_EPOCH commit lists it.
+func (self *evsTestWriter) cutOverAtPushes(epochs ...uint64) {
+	next := 0
+	self.server.onPush = func(statement *EvsStatement) {
+		if len(epochs) <= next {
+			return
+		}
+		world := self.world
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.sourceEpochs = append([]uint64{max(1, world.currentEpoch)}, world.sourceEpochs...)
+		world.currentEpoch = epochs[next]
+		next += 1
+	}
+}
+
+// The checked payload of a committed version.
+func (self *evsTestWriter) committedPayload(t *testing.T, version uint64) (*EvsStatement, *EvsCheckedPayload) {
+	t.Helper()
+	commit := self.world.commits[version-1]
+	checked, err := EvsCheckPayload(commit.parsed, commit.built.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commit.parsed, checked
+}
+
+// The epochs and token paths a change's source paths name.
+func evsTestSourcePaths(t *testing.T, change *EvsCheckedChange) map[uint64]EvsTokenPath {
+	t.Helper()
+	sources := map[uint64]EvsTokenPath{}
+	for _, encoded := range change.SourcePaths {
+		sourcePath := &protocol.EvsSourcePath{}
+		if err := proto.Unmarshal(encoded, sourcePath); err != nil {
+			t.Fatal(err)
+		}
+		tokenPath, err := ParseEvsChangedTokenPath(sourcePath.GetTokenPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources[sourcePath.GetEpoch()] = tokenPath
+	}
+	return sources
+}
+
+// A push refused 412 PATH_EPOCH is re-tokenized on the new head and sent again under a new push id with every sealed
+// byte kept: one upload, one EnsureWritable, the chain naming the one segment; its change names the path in the new
+// epoch and, as a source, in the epoch the refused push showed it in, and the root's row is sealed in the new epoch
+// (DESIGN-DETAILS 9.2.5; 9.6's K and C).
+func TestEvsPushRetokenKeepsWhatItSealed(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.gkm.newest = 2
+	writer.world.generation = 2
+	writer.server.uploadMs = writer.test.clock.Now().UnixMilli()
+	writer.cutOverAtPushes(2)
+	content := evsTestContent("retoken", 64*1024)
+	result, err := writer.write(t, "big.txt", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushIds := writer.server.postedPushIds(t)
+	if len(pushIds) != 2 || pushIds[0] == pushIds[1] || result.PushId != pushIds[1] {
+		t.Fatalf("push ids %v, the result's %v", pushIds, result.PushId)
+	}
+	if len(writer.server.uploads) != 1 || writer.gkm.ensured != 1 {
+		t.Fatalf("%d uploads and %d EnsureWritable calls for one retoken", len(writer.server.uploads), writer.gkm.ensured)
+	}
+	refused, err := ParseEvsStatement(writer.server.postedStatements[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, checked := writer.committedPayload(t, result.Version)
+	if refused.Push.GetPathEpoch() != 1 || statement.Push.GetPathEpoch() != 2 || statement.Push.GetGeneration() != 2 {
+		t.Fatalf("epochs %d then %d", refused.Push.GetPathEpoch(), statement.Push.GetPathEpoch())
+	}
+	keys := evsTestKeys(t, writer.world.repoId, 2)
+	for _, change := range checked.Changes {
+		sources := evsTestSourcePaths(t, change)
+		switch {
+		case change.TokenPath.Equal(writer.world.tokensAt("big.txt", 2)):
+			if len(sources) != 1 || !sources[1].Equal(writer.world.tokensAt("big.txt", 1)) {
+				t.Errorf("the file's source paths %v", sources)
+			}
+			entry := &protocol.EvsEntryVersion{}
+			if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry.GetVersion() != 1 || entry.GetBaseVersion() != 0 || len(entry.GetChain()) != 1 ||
+				hex.EncodeToString(entry.GetChain()[0].GetId()) != writer.server.uploads[0] {
+				t.Errorf("the entry: version %d on %d, its chain %v", entry.GetVersion(), entry.GetBaseVersion(), entry.GetChain())
+			}
+		case len(change.TokenPath) == 0:
+			entry := &protocol.EvsEntryVersion{}
+			if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+				t.Fatal(err)
+			}
+			opened, err := EvsOpenNameTable(entry.GetNames(), 2, func(epoch uint64) (*EvsManifestKey, *EvsPathKey, EvsToken, error) {
+				return keys.manifest, evsTestPathKey(t, writer.world.repoId, epoch), EvsRootToken, nil
+			})
+			if err != nil || len(opened) != 1 || string(opened[0].Name) != "big.txt" || opened[0].Token != writer.world.tokensAt("big.txt", 2).Last() {
+				t.Errorf("the root's row in epoch 2: %v", err)
+			}
+		default:
+			t.Errorf("a change of another path")
+		}
+	}
+	if read, _, err := writer.read(t, "big.txt"); err != nil || !bytes.Equal(read, content) {
+		t.Fatalf("read back: %v", err)
+	}
+}
+
+// A retoken that meets a second cut-over is re-tokenized again, each time by the floors the refusals lowered: the
+// path names both listed sources the third time.
+func TestEvsPushRetokenAcrossTwoCutOvers(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.gkm.newest = 3
+	writer.world.generation = 3
+	writer.server.uploadMs = writer.test.clock.Now().UnixMilli()
+	writer.cutOverAtPushes(2, 3)
+	result, err := writer.write(t, "big.txt", evsTestContent("two cut-overs", 64*1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if posted := writer.server.postedPushIds(t); len(posted) != 3 || len(writer.server.uploads) != 1 {
+		t.Fatalf("%d posts and %d uploads", len(posted), len(writer.server.uploads))
+	}
+	statement, checked := writer.committedPayload(t, result.Version)
+	if statement.Push.GetPathEpoch() != 3 {
+		t.Fatalf("committed in epoch %d", statement.Push.GetPathEpoch())
+	}
+	for _, change := range checked.Changes {
+		if !change.TokenPath.Equal(writer.world.tokensAt("big.txt", 3)) {
+			continue
+		}
+		sources := evsTestSourcePaths(t, change)
+		if len(sources) != 2 || !sources[2].Equal(writer.world.tokensAt("big.txt", 2)) || !sources[1].Equal(writer.world.tokensAt("big.txt", 1)) {
+			t.Errorf("source paths %v", sources)
+		}
+	}
+}
+
+// A retoken keeps a segment's receipt only under RetokenReceiptMaxAge and uploads the segment again past it, since evs
+// adopts an upload only under 24 h old.
+func TestEvsPushRetokenUploadsAgainPastTheReceiptAge(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.gkm.newest = 2
+	writer.world.generation = 2
+	writer.server.uploadMs = writer.test.clock.Now().Add(-23 * time.Hour).UnixMilli()
+	writer.cutOverAtPushes(2)
+	if _, err := writer.write(t, "big.txt", evsTestContent("old receipt", 64*1024)); err != nil {
+		t.Fatal(err)
+	}
+	if uploads := writer.server.uploads; len(uploads) != 2 || uploads[0] != uploads[1] {
+		t.Fatalf("uploads %v", uploads)
+	}
+}
+
+// Retokens count against PushRebuildCount with rebuilds: past it, 412 PATH_EPOCH goes back to the caller.
+func TestEvsPushRetokenBound(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	count := writer.test.client.settings.PushRebuildCount
+	epochs := []uint64{}
+	for i := range count + 1 {
+		epochs = append(epochs, uint64(i+2))
+	}
+	writer.gkm.newest = uint64(count + 2)
+	writer.world.generation = uint64(count + 2)
+	writer.server.uploadMs = writer.test.clock.Now().UnixMilli()
+	writer.cutOverAtPushes(epochs...)
+	if _, err := writer.write(t, "a.txt", []byte("a")); !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH) {
+		t.Fatalf("past the bound: %v", err)
+	}
+	if posted := writer.server.postedPushIds(t); len(posted) != count+1 {
+		t.Fatalf("%d posts for a bound of %d", len(posted), count)
 	}
 }
