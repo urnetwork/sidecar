@@ -136,6 +136,29 @@ type PushView struct {
 	// EVS1-M2-20's ERASE and CLOSURE rules: the slots step 4 read, NOTHING_TO_ERASE, the slots a CLOSURE lists and its
 	// chains' bound (§11.12). nil refuses every ERASE and CLOSURE 503.
 	ErasureRules func(view *PushView) *EvsCheckRefusal
+
+	// EVS2-M10-05's format (§11.6's format row): the storage format the instance runs as, 1 or 2
+	// (EvsSettings.InstanceFormat); 0, a view built without one, refuses 503. Whether the push carries a format-2
+	// value (sidecar.EvsPushNeedsFormat2), and whether §19.11's format2 gate admits the repo's network, which 5c
+	// answers 409 VERSIONING, recorded, when it does not.
+	InstanceFormat  uint32
+	NeedsFormat2    bool
+	Format2Admitted bool
+	// EVS2-M10-06's rules of a format-2 push inside the gate: the citation rule, staging, uploads and candidates
+	// (§11.7, §11.8's 5h). nil refuses every format-2 push 503, so nothing commits unchecked.
+	Format2Rules func(view *PushView) *EvsCheckRefusal
+}
+
+// Format 2's rules for a push that carries format 2, after 5c admitted it: the seam's, or 503 while none is given.
+// A format-1 push passes.
+func checkFormat2Rules(view *PushView) *EvsCheckRefusal {
+	if !view.NeedsFormat2 {
+		return nil
+	}
+	if view.Format2Rules == nil {
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's rules are not supplied")
+	}
+	return view.Format2Rules(view)
 }
 
 // Whether the push's flags include flag.
@@ -161,7 +184,9 @@ func CheckPush(view *PushView) *EvsCheckRefusal {
 	if view == nil || view.Statement == nil || view.Payload == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no statement or payload in the view")
 	}
-	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, CheckGate, CheckPathEpoch}
+	// format 2's own rules run right after 5c's gate, so a format-2 push no rule yet checks answers 503 before a
+	// format-1 rule could record a refusal of it
+	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, checkFormat2Rules, CheckGate, CheckPathEpoch}
 	switch view.Stage {
 	case PushStageOnePart:
 		checks = append(checks, CheckBase, CheckPaths, CheckObjects)

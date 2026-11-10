@@ -160,9 +160,9 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	case 0 < len(entryErrs):
 		return self.unavailableOn(errors.Join(entryErrs...)), false
 	}
-	if !reads.repo.Format1() {
-		// a format-2 repo on this format-1 binary: 503 before anything is written, refusing nothing
-		// (plan-EVS1-format-unsupported#4)
+	if !reads.repo.FormatWithin(self.settings.InstanceFormat) {
+		// a repo of a format past this instance's, a format-2 repo on a format-1 binary: 503 before anything is
+		// written, refusing nothing (plan-EVS1-format-unsupported#4)
 		return self.unavailable(), false
 	}
 	if networkId, err := sidecar.IdFromBytes(reads.repo.Object.GetNetworkId()); err == nil {
@@ -289,9 +289,16 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		Receipts:            self.receipts,
 		Reuses:              reads.reuses,
 		NetworkId:           self.networkId,
+		InstanceFormat:      self.settings.InstanceFormat,
+		NeedsFormat2:        self.needsFormat2,
+		Format2Rules:        engine.deps.Format2Rules,
+	}
+	if self.needsFormat2 {
+		// the gate, read once per round of steps 4 and 5, so a rerun meets a gate that moved
+		view.Format2Admitted = engine.format2.Admits(self.networkId)
 	}
 	if self.payload == nil {
-		// a format-2 payload: only 5a and its refusal run
+		// a format-2 payload at a format-1 instance, or a seal's before its parts: only 5a and its refusal run
 		reads.view = view
 		return nil, false
 	}

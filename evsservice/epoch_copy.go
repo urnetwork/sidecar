@@ -659,7 +659,8 @@ func (self *copyRun) put(tokenPath sidecar.EvsTokenPath, prior *EvsEntryRead, en
 	return etag, err
 }
 
-// The P2 grant one write spends, rereading repo/ as it issues (§11.13's skip row): active or deleted.
+// The P2 grant one write spends, rereading repo/ as it issues (§11.13's skip row): active or deleted, and of a
+// format this instance writes (format1_guard.go).
 func (self *copyRun) acquire(byteCount int64) (sidecar.WriteGrant, error) {
 	return self.host.Budget.AcquireP2(self.ctx, self.cluster.ClusterId(), &sidecar.WriteP2Work{
 		Rank:      sidecar.WriteP2RankCopy,
@@ -670,11 +671,7 @@ func (self *copyRun) acquire(byteCount int64) (sidecar.WriteGrant, error) {
 			if err != nil {
 				return err
 			}
-			switch read.Object.GetState() {
-			case protocol.EvsRepoState_EVS_REPO_ACTIVE, protocol.EvsRepoState_EVS_REPO_DELETED:
-				return nil
-			}
-			return fmt.Errorf("%w: state %s", ErrEvsFoldRepoState, read.Object.GetState())
+			return checkRepoWritable(read, self.settings.InstanceFormat)
 		},
 	})
 }
@@ -798,6 +795,7 @@ func (self *copyRun) finish() error {
 					continue
 				}
 				if read.Entry.GetMarker() != nil {
+					alarmCarriedIdsDropped(self.log, read.Entry.GetMarker(), "a copy's delete of an unmoved marker")
 					if err := self.deleteKey(object.Key); err != nil {
 						return err
 					}
