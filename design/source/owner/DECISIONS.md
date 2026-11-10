@@ -925,6 +925,24 @@ The owner answered the questions HANDOFF.md left for them, and those the build r
     - Not taken: keeping the keyless device role, where the extension forwards with the rules and signed links the app last gave it and new links wait for the app; Apple's extension only; keeping Android's mail, sockets, search and file sync running in the background with the VPN.
     - Raised in planning the apps' integration (the build's ledger, QD-597).
 
+## The build's owner questions (2026-11-06 and 2026-11-10)
+
+The build raised its questions in a ledger (`.stack/decisions/LEDGER.json`, outside git), copied into sidecar/DESIGN-AMENDMENTS.md until folded here. On 2026-11-06 the owner accepted the ledger's owner and defect items as recommended, in bulk, except eleven costly to reverse, which the owner decided one at a time; on 2026-11-10 the owner answered the later owner questions one at a time. The design-records tracks number each answer that changes a behavior or a rule as it folds it, citing its ledger id; defect fixes the owner accepted, and the build's readings and fills, are applied as text without a number.
+
+198. **The nightly stored count combines its shard jobs' sums in Redis, under a new `{evsn_<night>}` family (option 2; the build recommended option 1).**
+    - Question: taskworker's nightly pass bounds its work by sharding repos by id prefix into jobs, each listing one shard on one metadata cluster. §20.7's stored count is per network, and `model.SetNetworkStoredByteCount` writes a network's whole count, but a network's repos fall in every shard and on every metadata cluster, so no shard job holds a network's sum, and nothing said where a shard's sums wait for the others'.
+    - Answer: each shard job replaces its per-network sums for the night under `{evsn_<night>}`, kept 48 h. A closing job, once every shard of every metadata cluster has reported for the night, writes each network's sum through `model.SetNetworkStoredByteCount`, zero for a network with a count and no sums. A night that some shard never finished, or whose sums Redis lost, leaves the old count standing. No migration.
+    - Cost: a new Redis family and its §2.8 line; a lost Redis loses that night, and the count then moves by usage batches alone until the next whole night. Until the change lands the pass writes the count only from a run that saw every repo.
+    - Not taken: (1) a per-night accumulator table in Postgres beside `network_quota_state`, the recommendation; (3) per-shard deltas, which still need last night's figures stored; (4) one job per cluster run in sequence, unbounded at year two's ~555,000 repos.
+    - Raised by the build (EVSB-M2-23; the build's ledger, QD-636).
+
+199. **A `team_subscription` table records whether each Team's Stripe subscription is live, with its customer and anchor (option 2, the recommendation).**
+    - Question: the Team grant job writes each period's `team` grant and credit line for every Team whose subscription is live with no unresolved payment failure, yet nothing recorded that a subscription had ended, so a Team that cancelled would be granted the period after its last paid one. The job guessed its anchor from renewal rows, and the meter reports had nowhere to read a Team's Stripe customer or its subscription's start.
+    - Answer: MG6's quota group gains `team_subscription(network_id, subscription_id, customer_id, anchor_time, start_time, end_time NULL)`, written at a Team's first `invoice.paid` and ended at `customer.subscription.deleted`, which the hourly reconciler can repair from Stripe. `RefreshTeamTransferBalances` grants only Teams whose row is live (no end time) with no unresolved payment failure, and reads the anchor from it; the meter reports, which only such Teams get, read its customer and start. It replaces the draft's `team_ended` mark in `subscription_renewal`.
+    - Cost: one migration in MG6 and a line in §2.8's api-13: a Team's Stripe subscription and customer ids, kept for the network's life.
+    - Not taken: (1) keeping the draft's `team_ended` mark, which gives renewal rows a second meaning and costs a period when a deletion event is lost; (3) asking Stripe for each due Team's status inside the daily job, which no outage may delay.
+    - Raised by the build (QUOTA-M6-02; the build's ledger, QD-649).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

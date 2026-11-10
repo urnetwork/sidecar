@@ -320,13 +320,14 @@ func TestAFailedCheckNamesItsStep(t *testing.T) {
 	}
 }
 
-// A check nobody wrote fails the schedule that asks for it (the brief's no fake completeness).
+// A check nobody wrote fails the schedule that asks for it (the brief's no fake completeness). FI-19's oracle waits on
+// DESIGN-DETAILS section 1, so it stays unbuilt longest.
 func TestAnUnbuiltInvariantFailsClosed(t *testing.T) {
-	result := runFresh(t, &Schedule{Id: "toy-unbuilt", Check: []Invariant{FI(1)}})
+	result := runFresh(t, &Schedule{Id: "toy-unbuilt", Check: []Invariant{FI(19)}})
 	if !errors.Is(result.Err, ErrInvariantUnbuilt) {
 		t.Errorf("err %v", result.Err)
 	}
-	if !strings.Contains(result.Err.Error(), "FI-1 closure") {
+	if !strings.Contains(result.Err.Error(), "FI-19 index erasure") {
 		t.Errorf("err %v", result.Err)
 	}
 }
@@ -340,7 +341,7 @@ func TestEveryFiIsCataloged(t *testing.T) {
 	if count := len(DefaultCatalog().Invariants); count != 30 {
 		t.Errorf("%d names", count)
 	}
-	if built := BuiltInvariants(); !slices.Contains(built, 30) {
+	if built := BuiltInvariants(); !slices.Contains(built, 30) || !slices.Contains(built, 1) || !slices.Contains(built, 6) {
 		t.Errorf("built %v", built)
 	}
 }
