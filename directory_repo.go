@@ -28,8 +28,10 @@
 //	            no device announces a private repo on its own, and its owner may later, a full item at a higher version
 //	explicit    ur directory announce repo: any announceable kind, a full item at a higher version; vault, mailbox,
 //	            secret and team_record only so, by their owner or repo admin
-//	predating   a general or record repo created before the directory, with no item, is announced by the first of its
-//	            admins' devices to sync it
+//	predating   a general or record repo created before the directory, with no item, is written by the first of its
+//	            admins' devices to sync it: as a private marker until question record-m6-14-private-before-directory is
+//	            answered, since a repo created with --private while its team had no directory has no marker, and only a
+//	            marker keeps that choice; its admins announce it explicitly
 //	re-sign     once the standing version's signer is revoked, reaped or its member removed, or a compromise voided the
 //	            newest, the first repo admin's device to sync writes it again at a higher version; a voided version
 //	            gives only its attested fields, never its prose, which its signer's key no longer vouches for
@@ -440,10 +442,10 @@ func (self *DirectoryClient) appendRepoItem(item *protocol.Announcement, confirm
 }
 
 // The repo items this device's rights call for after a sync (§16.11's default and repair rows, D-MCP-35): a general
-// or record repo predating the directory and holding no item is announced, and an item whose standing version's
-// signer was revoked, reaped or its member removed, or whose newest version a compromise voided, is written again at
-// a higher version. Each repo is written at most once until the copy reads that write back. Answers what it wrote; a
-// read_only client, or one with no writer, writes nothing.
+// or record repo predating the directory and holding no item gets its private marker (see the file's predating row),
+// and an item whose standing version's signer was revoked, reaped or its member removed, or whose newest version a
+// compromise voided, is written again at a higher version. Each repo is written at most once until the copy reads that
+// write back. Answers what it wrote; a read_only client, or one with no writer, writes nothing.
 func (self *DirectoryClient) MaintainRepos(ctx context.Context) ([]*DirectoryRepoWrite, error) {
 	writes := []*DirectoryRepoWrite{}
 	if self.readOnly || self.writer == nil {
@@ -481,11 +483,10 @@ func (self *DirectoryClient) MaintainRepos(ctx context.Context) ([]*DirectoryRep
 			// the newest rightful version a compromise voided: its attested fields alone
 			args = directoryRepoArgsOf(held.item, false)
 		} else if aclRepoKindGeneral(repo.Kind) && repo.CreatedAt < directory.CreatedAt {
-			// a repo predating the directory, with no item: the first of its admins' devices to sync announces it
-			args = &DirectoryRepoAnnounceArgs{}
-			if self.repoName != nil {
-				args.DisplayName = self.repoName(repo.RepoId)
-			}
+			// a repo predating the directory, with no item: the first of its admins' devices to sync writes it, as a
+			// private marker meanwhile (question record-m6-14-private-before-directory), so a repo its creator marked
+			// private before the directory existed is never named by another device
+			args = &DirectoryRepoAnnounceArgs{Private: true}
 		}
 		if args == nil {
 			continue

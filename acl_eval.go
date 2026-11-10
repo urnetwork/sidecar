@@ -64,6 +64,18 @@ const (
 	AclReasonQuota
 	// refused by the caller: an unapproved client (§7)
 	AclReasonUnapproved
+
+	// refused: a leaf of a group for a sidecar that is no member device, a tagged or ephemeral one, which reads by
+	// wraps and never takes a seat (D-KEYS-11, §8.12)
+	AclReasonNotMemberDevice
+	// refused: a leaf of the config or a team directory's group for a device §7.9's leaves rule does not entitle,
+	// which reads there by wraps (owner decisions 144, 182)
+	AclReasonNotLeafEntitled
+	// refused: a leaf past a group's 1,000 seats (D-KEYS-2)
+	AclReasonSeatsFull
+	// refused: a device of an owner-bound repo's owner without §8.5's consent there, which KF2 parks until the
+	// owner's OwnerConfirm (owner decision 126)
+	AclReasonUnconsented
 )
 
 // A short name for logs and refusals.
@@ -103,6 +115,14 @@ func (self AclReason) String() string {
 		return "quota"
 	case AclReasonUnapproved:
 		return "unapproved"
+	case AclReasonNotMemberDevice:
+		return "not_member_device"
+	case AclReasonNotLeafEntitled:
+		return "not_leaf_entitled"
+	case AclReasonSeatsFull:
+		return "seats_full"
+	case AclReasonUnconsented:
+		return "unconsented"
 	}
 	return "unknown"
 }

@@ -135,13 +135,6 @@ func directoryRefused(alarm SidecarRecordAlarm) directoryJudgement {
 	return directoryJudgement{verdict: directoryVerdictRefused, alarm: alarm}
 }
 
-// D-MCP-35's right found held: a fact of the access log's history at that position.
-type directoryRightKey struct {
-	repoId   Id
-	signerId Id
-	position uint64
-}
-
 // One alarm, raised once.
 type directoryAlarmKey struct {
 	leaf   [sha256.Size]byte
@@ -166,8 +159,6 @@ type DirectoryFold struct {
 	keyVersions  map[DirectoryItemKey][]*directoryVersion
 	// verdicts resting on fixed history alone, by leaf: never pending
 	leafFixed map[[sha256.Size]byte]directoryJudgement
-	// D-MCP-35's right found held
-	heldRights map[directoryRightKey]bool
 	// each repo item version's 10 min check, by leaf: the reader pin at which no ending entry was found
 	leafNotEndedAt map[[sha256.Size]byte]uint64
 	alarmed        map[directoryAlarmKey]bool
@@ -182,7 +173,6 @@ func NewDirectoryFold(directoryId Id, alarm func(alarm *RecordAlarm)) *Directory
 		leafVersions:   map[[sha256.Size]byte]*directoryVersion{},
 		keyVersions:    map[DirectoryItemKey][]*directoryVersion{},
 		leafFixed:      map[[sha256.Size]byte]directoryJudgement{},
-		heldRights:     map[directoryRightKey]bool{},
 		leafNotEndedAt: map[[sha256.Size]byte]uint64{},
 		alarmed:        map[directoryAlarmKey]bool{},
 		reused:         map[directoryReuseKey]bool{},

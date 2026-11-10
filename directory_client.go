@@ -64,9 +64,6 @@ type DirectoryClientArgs struct {
 	// §16.7's redactor, which every identifier and prose field passes before it is signed (§16.11's redaction row);
 	// nil makes one of the client's own, which hashes PII.
 	Redactor *Redactor
-	// The display name this device knows a repo by, for a repo predating the directory that it announces; nil, or an
-	// empty answer, announces it with none.
-	RepoName func(repoId Id) string
 	// Whether a config label names the repo (§8.8), for the warning a repo marked private takes; nil reads every repo
 	// as possibly labeled, so the warning is never missed.
 	RepoLabeled func(repoId Id) bool
@@ -89,7 +86,6 @@ type DirectoryClient struct {
 	wake          chan struct{}
 	writer        RecordWriter
 	redactor      *Redactor
-	repoName      func(repoId Id) string
 	repoLabeled   func(repoId Id) bool
 
 	syncLock sync.Mutex
@@ -158,7 +154,6 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		wake:          make(chan struct{}, 1),
 		writer:        args.Writer,
 		redactor:      redactor,
-		repoName:      args.RepoName,
 		repoLabeled:   args.RepoLabeled,
 		cards:         cards,
 		authFunc:      args.Auth,
