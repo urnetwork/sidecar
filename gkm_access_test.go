@@ -155,6 +155,10 @@ func TestARemovedReaderOpensNothingOfTheNextGeneration(t *testing.T) {
 	if key.Generation() != 2 || key.Cause() != sidecar.GkmCauseRemove {
 		t.Fatalf("the generation after the Remove: %d, cause %d", key.Generation(), key.Cause())
 	}
+	// a writer leaf an epoch behind takes the Remove, then the generation by its leaf_wrap, in one call
+	if behind, err := world.flows[world.b].client.EnsureWritable(world.ctx, world.repoId); err != nil || behind.Generation() != 2 {
+		t.Fatalf("a writer leaf behind the Remove and the rotation: %v", err)
+	}
 	if err := x.client.SyncRepo(world.ctx, world.repoId); err != nil {
 		t.Fatalf("the removed leaf's sync: %v", err)
 	}

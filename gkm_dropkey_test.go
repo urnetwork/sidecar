@@ -112,6 +112,11 @@ func TestADepositorsPinNeverFalls(t *testing.T) {
 	if len(depositor.forks) != 2 || len(depositor.forks[1].Remote) == 0 {
 		t.Errorf("the second fork's report: %+v", depositor.forks)
 	}
+	// the fork stops its deposits even once gkm serves the chain it pinned again
+	world.store.groupGenerations[world.groupId] = generations
+	if _, err := depositor.client.DropKey(world.ctx, world.repoId); !errors.Is(err, sidecar.ErrGkmForked) {
+		t.Errorf("a deposit at a forked pin: %v", err)
+	}
 }
 
 // A GenRotate the depositor cannot verify is never sealed to: one signed by a device that is no writer is held as

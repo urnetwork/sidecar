@@ -13,6 +13,9 @@
 //	pin         its generation is not below this depositor's pin, which then rises; gkm serving nothing at the pin,
 //	            or another commitment there, is a fork
 //
+// A pin of the repo this depositor saw fork stops its deposits as it stops a writer's seals (ErrGkmForked), until
+// the chain extends the pin.
+//
 // Anything else waits, ErrGkmWait, for a writer's rotation, which the gate or the renewal below makes writers
 // write. With gkm unreachable the newest GenRotate this depositor holds answers if it still passes covers and
 // unexpired at its state (KF7).
@@ -83,6 +86,10 @@ func (self *GkmGroupClient) DropKey(ctx context.Context, repoId Id) (*GkmDropKey
 	latest := generationTime.Add(self.settings.DropKeyLifetime + GkmClockSkew)
 	if !now.Before(notAfter) || latest.Before(notAfter) {
 		return nil, fmt.Errorf("%w: generation %d's drop key has lapsed", ErrGkmWait, rotate.GetGeneration())
+	}
+	// a deposit is a seal: none at a forked pin
+	if err := self.sealStopped(repoId); err != nil {
+		return nil, err
 	}
 	return &GkmDropKey{
 		RepoId:     repoId,
