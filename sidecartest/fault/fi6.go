@@ -26,7 +26,8 @@
 // unknown that left no record, such as an upload whose response was lost, beyond the segment horizon rule.
 //
 // Deferred, failing closed or unchecked as each says: a table's rows across a path-epoch cut-over are checked by
-// names_through alone; a batch written and deleted within one step, which no check saw, is not judged; a format-2
+// names_through alone; QD-011's orphan markers under idx/<repo>/<ref>/_o/, which carry format 2's ids, are left to
+// FI-16 and FI-27; a batch written and deleted within one step, which no check saw, is not judged; a format-2
 // repo's segment deletes (the versionless purge, a drop job) are FI-16's and FI-27's (TEST-M10-01), so the horizon
 // clause skips a repo of format 2; a staged wrap's 24 h is gkm's reconciler's and is not checked here.
 
@@ -65,6 +66,8 @@ const (
 	fi6StatementLife = 35 * time.Minute
 	// §11.8's Resolve row: a file-mode push commits within (b, b+64].
 	fi6ResolveRange = 64
+	// QD-011's orphan markers, idx/<repo>/<ref>/_o/, outside every epoch.
+	fi6OrphanMarkerDirectory = "_o/"
 )
 
 // What FI-6 keeps from one check to the next.
@@ -479,6 +482,11 @@ func fi6CheckEntriesCommitted(ctx context.Context, oracle *Oracle, repo *evsStor
 	}
 	errs := []error{}
 	for _, info := range infos {
+		if strings.HasPrefix(info.Key, refPrefix+fi6OrphanMarkerDirectory) {
+			// an orphan marker sits outside every epoch and holds a removed version's carried ids, format 2's
+			// content (QD-011), which FI-16's and FI-27's oracles judge (TEST-M10-01)
+			continue
+		}
 		epoch, tokenPath, err := fi6ParseIndexKey(refPrefix, info.Key)
 		if err != nil {
 			errs = append(errs, err)
