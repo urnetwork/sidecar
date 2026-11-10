@@ -548,6 +548,30 @@ message EvsLeaseRequest {               // POST .../push/<push_id>/lease, git mo
   uint64 base_version = 2;
   uint32 ms = 3;                        // at most 120,000
 }
+message EvsPathMapRequest {             // POST .../path-epoch: one part of a map (11.6's map row); a 200 carries no body
+  bytes path_map_sha256 = 1;            // the map's, naming its parts' keys: pmap/<repo>/<ref>/<p>/<map>/<part>/_
+  bytes part = 2;                       // a Signed EvsPathMap part, at most 8 MiB, as signed
+}
+message EvsPathEpochBlockRequest {      // POST .../path-epoch/block (11.6's block row); a 200 carries no body
+  bytes ref_id = 1;
+  uint32 ms = 2;                        // at most 120,000
+}
+message EvsSubscriptionRequest {        // POST|DELETE /evs/v1/subscriptions (11.10's lease row); a 200 carries no body
+  bytes repo_id = 1;
+  bytes ref_id = 2;                     // empty for every ref (*)
+  uint64 path_epoch = 3;                // the epoch its prefixes' tokens are in
+  repeated EvsTokenPath prefixes = 4;   // at most 16; none or one empty prefix is the whole ref; DELETE: none removes
+                                        // every lease of the caller's on the repo and ref
+}
+message EvsSubscription {               // one lease of the caller's, as GET /evs/v1/subscriptions?repo_id= lists it
+  bytes ref_id = 1;                     // empty for every ref (*)
+  uint64 path_epoch = 2;
+  EvsTokenPath prefix = 3;              // empty for the whole ref
+  int64 expires_ms = 4;                 // 7 d after its last renewal
+}
+message EvsSubscriptionsReply {         // GET /evs/v1/subscriptions?repo_id=
+  repeated EvsSubscription subscriptions = 1;
+}
 message EvsPushReply {                  // 200 from push, part or seal
   uint64 version = 1;                   // push and seal: its ref version, the original one on a retry
   EvsPlace place = 2;                   // part: where its record is

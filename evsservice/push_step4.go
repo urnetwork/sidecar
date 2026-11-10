@@ -323,6 +323,26 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		}
 		view.Paths[key] = pathRead
 	}
+	due, err := self.pathEpochDueOver(head.Head)
+	if err != nil {
+		return self.unavailableOn(err), false
+	}
+	self.due = due
+	self.pathEpoch = nil
+	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
+		pathEpoch, err := self.readPathEpoch(head.Head)
+		if err != nil {
+			return self.unavailableOn(err), false
+		}
+		self.pathEpoch = pathEpoch
+	}
+	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) != 0 && self.erasureSlots == nil {
+		if err := self.readErasureSlots(); err != nil {
+			return self.unavailableOn(err), false
+		}
+	}
+	view.PathEpochRules = self.pathEpochRules
+	view.ErasureRules = self.erasureRules
 	reads.view = view
 	return nil, false
 }

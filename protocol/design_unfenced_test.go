@@ -552,6 +552,15 @@ message EvsPartRequest {
   bytes statement = 1; bytes part = 2; repeated EvsUploadReceipt receipts = 3; bytes staged = 4;
 }
 message EvsLeaseRequest { bytes ref_id = 1; uint64 base_version = 2; uint32 ms = 3; }
+// 11.6's map and block rows and 11.10's lease row, whose bodies plan-EVS1-format-bytes#8 does not list: proposed by
+// EVS1-M2-15 and EVS1-M2-16, in the order the rows write their fields.
+message EvsPathMapRequest { bytes path_map_sha256 = 1; bytes part = 2; }
+message EvsPathEpochBlockRequest { bytes ref_id = 1; uint32 ms = 2; }
+message EvsSubscriptionRequest {
+  bytes repo_id = 1; bytes ref_id = 2; uint64 path_epoch = 3; repeated EvsTokenPath prefixes = 4;
+}
+message EvsSubscription { bytes ref_id = 1; uint64 path_epoch = 2; EvsTokenPath prefix = 3; int64 expires_ms = 4; }
+message EvsSubscriptionsReply { repeated EvsSubscription subscriptions = 1; }
 message EvsPushReply { uint64 version = 1; EvsPlace place = 2; EvsDepositHead deposit_head = 3; }
 message EvsRefusalReply {
   bytes push_id = 1; EvsRefusalCode code = 2; bool recorded = 3; uint32 retry_after_ms = 4;

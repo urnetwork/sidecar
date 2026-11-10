@@ -97,8 +97,7 @@ type EvsEngineDeps struct {
 	// The newest verified authorization state of each network (push.go): 5b's identity keys and 5d's gate. nil
 	// answers every push 503.
 	GateViews EvsGateViews
-	// Step 8's push sequence and hints (EVS1-M2-15). nil raises no sequence and sends no hint, which clients'
-	// hourly resync covers.
+	// Step 8's push sequence and hints. nil takes the engine's own over the host's Redis and Push (hint.go).
 	CommitNotifier EvsCommitNotifier
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
@@ -127,6 +126,8 @@ type EvsEngine struct {
 	folder     *Folder
 	// gen/<g> records, which 5d judges a push's generation pin by
 	generations *GenerationRecords
+	// step 8's push sequence and hints: the deps' notifier, else the engine's own (hint.go)
+	notifier EvsCommitNotifier
 	// records and log pages past their batches, through pidx/
 	locator *RecordLocator
 	metrics *evsMetrics
@@ -211,6 +212,10 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
 	self.generations = NewGenerationRecords(settings)
 	self.locator = NewRecordLocator(blobs, nil)
+	self.notifier = deps.CommitNotifier
+	if self.notifier == nil {
+		self.notifier = NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)
+	}
 	mux := http.NewServeMux()
 	self.servedRoutes = self.routes()
 	for _, route := range self.servedRoutes {
@@ -225,6 +230,9 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 func (self *EvsEngine) routes() []*EvsRoute {
 	routes := append(self.placeRoutes(), self.uploadRoutes()...)
 	routes = append(routes, self.pushRoutes()...)
+	routes = append(routes, self.subscriptionRoutes()...)
+	routes = append(routes, self.pathEpochRoutes()...)
+	routes = append(routes, self.erasureRoutes()...)
 	return append(routes, self.deps.testRoutes...)
 }
 

@@ -737,6 +737,12 @@ func TestEvsEngineRoutesAreTheRoutersTableWithNoHandler(t *testing.T) {
 		"PUT /evs/v1/repos/{repo_id}",
 		"PUT /evs/v1/repos/{repo_id}/segments/{segment_id}",
 		"POST /evs/v1/repos/{repo_id}/push",
+		"POST /evs/v1/subscriptions",
+		"GET /evs/v1/subscriptions",
+		"DELETE /evs/v1/subscriptions",
+		"POST /evs/v1/repos/{repo_id}/path-epoch",
+		"POST /evs/v1/repos/{repo_id}/path-epoch/block",
+		"POST /evs/v1/repos/{repo_id}/slots/delete",
 		"GET /evs/v1/repos/{repo_id}/probe",
 	}
 	if !slices.Equal(names, want) {
