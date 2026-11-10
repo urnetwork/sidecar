@@ -17,6 +17,7 @@ package sidecar
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
@@ -26,6 +27,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The git modes export writes for a tree and the files it knows.
@@ -237,4 +242,149 @@ func evsFileModeCommit(tree EvsGitOid, parent *EvsGitOid, clientId Id, timeMs in
 // place and the stub says what it stands for.
 func evsExportErasedStub(tokenPath EvsTokenPath, entrySha256 []byte) []byte {
 	return []byte("ur-erased " + hex.EncodeToString(tokenPath.Bytes()) + " " + hex.EncodeToString(entrySha256) + "\n")
+}
+
+// A file-mode ref, version by version (§11.7's export column): each push's changes replayed, in their list's order,
+// onto the state the version before it left, so a directory's delta, its parent's included and the root's first,
+// comes before the paths it names; every path's raw names are opened from the row its parent's delta added, checked
+// against its token (§11.7's name row), from the root's down (question evs1-m2-24-root-directory-names, option 1);
+// each version is one commit (evsFileModeCommit). A removal takes the path and everything below it out. A ref that
+// ever cut over to another path epoch refuses: its paths' names would be carried across the map, which this draft
+// does not follow (DESIGN-DETAILS 9.2.7).
+func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWriter, head *EvsVerifiedHead, gitRef string) (*EvsExportedRef, []*evsExportNote, error) {
+	keys := newEvsReadKeys(self)
+	state := evsExportState{}
+	// each standing path's names by its token path's bytes, the root's none
+	names := map[string][][]byte{"": {}}
+	forget := func(tokenPath EvsTokenPath) {
+		prefix := string(tokenPath.Bytes())
+		for key := range names {
+			if strings.HasPrefix(key, prefix) && key != "" {
+				delete(names, key)
+			}
+		}
+	}
+	var tip *EvsGitOid
+	notes := []*evsExportNote{}
+	for _, statement := range head.Statements {
+		push := statement.Statement.Push
+		flags := push.GetFlags()
+		switch {
+		case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 || 1 < push.GetPathEpoch():
+			return nil, nil, fmt.Errorf("%w: a file-mode ref past a path epoch, whose names this draft does not carry across its map", ErrEvsExport)
+		case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) != 0:
+			state = evsExportState{}
+			names = map[string][][]byte{"": {}}
+			tip = nil
+			continue
+		case push.GetPartCount() != 0:
+			return nil, nil, fmt.Errorf("%w: a push in parts, which this draft does not read back", ErrEvsExport)
+		}
+		payload, err := self.pushPayload(ctx, head, statement)
+		if err != nil {
+			return nil, nil, err
+		}
+		epoch := max(1, push.GetPathEpoch())
+		nameKey, err := keys.manifest(ctx, epoch)
+		if err != nil {
+			return nil, nil, err
+		}
+		pathKey, err := keys.path(ctx, epoch)
+		if err != nil {
+			return nil, nil, err
+		}
+		fieldsKey, err := keys.manifest(ctx, push.GetGeneration())
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, change := range payload.Changes {
+			key := string(change.TokenPath.Bytes())
+			pathNames, named := names[key]
+			if !named {
+				return nil, nil, fmt.Errorf("%w: a path whose name no directory's row gives", ErrEvsExport)
+			}
+			if !change.WritesEntry() {
+				for stateKey, path := range state {
+					if evsNamesHavePrefix(path.names, pathNames) {
+						delete(state, stateKey)
+					}
+				}
+				forget(change.TokenPath)
+				continue
+			}
+			entry := &protocol.EvsEntryVersion{}
+			if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+				return nil, nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
+			}
+			if entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
+				for _, removed := range entry.GetNames().GetRemovedTokens() {
+					child, err := EvsTokenFromBytes(removed)
+					if err != nil {
+						return nil, nil, err
+					}
+					forget(append(slices.Clone(change.TokenPath), child))
+				}
+				for _, row := range entry.GetNames().GetNames() {
+					child, err := EvsTokenFromBytes(row.GetToken())
+					if err != nil {
+						return nil, nil, err
+					}
+					name, err := EvsNameOpen(nameKey, pathKey, change.TokenPath.Last(), child, row.GetSealedName())
+					if err != nil {
+						self.client.alarm(self.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+						return nil, nil, err
+					}
+					names[key+string(child[:])] = append(slices.Clone(pathNames), name)
+				}
+				continue
+			}
+			if len(pathNames) == 0 || bytes.Equal(pathNames[0], []byte(evsExportSkippedDirectory)) {
+				continue
+			}
+			oid, err := self.exportBlob(ctx, writer, head, keys, statement, change)
+			if err != nil {
+				return nil, nil, err
+			}
+			fields, err := EvsOpenFields(fieldsKey, entry.GetSealedFields())
+			if err != nil {
+				self.client.alarm(self.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+				return nil, nil, err
+			}
+			state[evsExportKey(pathNames)] = &evsExportPath{names: pathNames, mode: fields.GetMode(), oid: *oid}
+		}
+		treeOid, err := writer.writeTree(state)
+		if err != nil {
+			return nil, nil, err
+		}
+		commitBytes, err := evsFileModeCommit(treeOid, tip, Id(push.GetClientId()), push.GetTimeMs(), Id(push.GetPushId()))
+		if err != nil {
+			return nil, nil, err
+		}
+		commitOid, err := writer.write("commit", commitBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		tip = &commitOid
+		notes = append(notes, &evsExportNote{commit: commitOid, statement: statement})
+	}
+	if tip == nil {
+		return nil, notes, nil
+	}
+	if err := writer.setRef(gitRef, *tip); err != nil {
+		return nil, nil, err
+	}
+	return &EvsExportedRef{GitRef: gitRef, Tip: *tip, Versions: head.Version}, notes, nil
+}
+
+// Whether names is prefix or a path below it.
+func evsNamesHavePrefix(names [][]byte, prefix [][]byte) bool {
+	if len(names) < len(prefix) {
+		return false
+	}
+	for i, name := range prefix {
+		if !bytes.Equal(names[i], name) {
+			return false
+		}
+	}
+	return true
 }

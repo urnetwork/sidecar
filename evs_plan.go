@@ -229,10 +229,9 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	directories := map[string]*evsDirectoryRead{}
 	// a read names at most 64 paths (§11.9), so a large write reads in batches, each verified, the push based on the
 	// first one's head; every path's own newest is what its batch read, which 5g holds it to at commit
-	for start := 0; start < len(readPaths); start += EvsReadMaxPathCount {
-		batch := readPaths[start:min(len(readPaths), start+EvsReadMaxPathCount)]
-		err := func() error {
-			result, err := self.read(ctx, args.RefId, batch, 0, args.Fresh || 0 < start)
+	readBatch := func(batch []string, fresh bool) error {
+		return func() error {
+			result, err := self.read(ctx, args.RefId, batch, 0, fresh)
 			if err != nil {
 				return err
 			}
@@ -272,7 +271,16 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			}
 			return nil
 		}()
-		if err != nil {
+	}
+	for start := 0; start < len(readPaths); start += EvsReadMaxPathCount {
+		batch := readPaths[start:min(len(readPaths), start+EvsReadMaxPathCount)]
+		if err := readBatch(batch, args.Fresh || 0 < start); err != nil {
+			return nil, err
+		}
+	}
+	if evsNeedsRoot(planned, directories) && directories[""] == nil {
+		// a top-level creation or removal changes the root's table, read after the rest (DESIGN-DETAILS 9.2.8)
+		if err := readBatch([]string{""}, true); err != nil {
 			return nil, err
 		}
 	}
@@ -338,6 +346,22 @@ func (self *EvsWritePlan) setRef(head *protocol.EvsHeadSummary, refName []byte, 
 		return fmt.Errorf("%w: a %s ref takes its own pushes", ErrEvsWriteInvalid, self.RefKind)
 	}
 	return nil
+}
+
+// Whether the plan's writes change the root's table: a top-level path created or removed, or a top-level directory
+// the plan creates, which a written path below it needs.
+func evsNeedsRoot(planned map[string]*EvsPlannedPath, directories map[string]*evsDirectoryRead) bool {
+	for path, change := range planned {
+		if !strings.Contains(path, "/") && (change.Remove || change.BaseEntryVersion == 0) {
+			return true
+		}
+	}
+	for path, read := range directories {
+		if path != "" && !strings.Contains(path, "/") && !read.directory && !read.file {
+			return true
+		}
+	}
+	return false
 }
 
 // Every directory below the root holding one of paths, each once, parents before children.

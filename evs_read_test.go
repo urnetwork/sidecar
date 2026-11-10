@@ -208,9 +208,21 @@ func TestEvsListChecksEachNameAgainstItsToken(t *testing.T) {
 	if _, err := world.reader(t, evsTestId("other reader")).client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"}); err == nil {
 		t.Errorf("swapped names listed")
 	}
-	if _, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: ""}); err == nil ||
-		!strings.Contains(err.Error(), "evs1-m2-24-root-directory-names") {
-		t.Errorf("the root: %v", err)
+	// the root, a directory with the empty token path, lists the top-level names its deltas add
+	world.mutatePath = nil
+	world.push(&evsTestChange{path: "", children: []string{"d"}})
+	listing, err = world.reader(t, evsTestId("root reader")).client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: ""})
+	if err != nil || len(listing.Entries) != 1 || string(listing.Entries[0].Name) != "d" {
+		t.Errorf("the root: %v %v", listing, err)
+	}
+}
+
+// List of a ref nothing was written to: the root stands empty.
+func TestEvsListOfAnEmptyRefsRootIsEmpty(t *testing.T) {
+	world := newEvsTestWorld(t)
+	listing, err := world.reader(t, evsTestId("reader")).client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: ""})
+	if err != nil || len(listing.Entries) != 0 {
+		t.Fatalf("an empty ref's root: %v %v", listing, err)
 	}
 }
 

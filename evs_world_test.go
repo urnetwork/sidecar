@@ -197,11 +197,13 @@ func (self *evsTestWorld) head() (uint64, [sha256.Size]byte) {
 	return uint64(len(self.commits)), self.commits[len(self.commits)-1].chain
 }
 
-// A path's token path in epoch 1.
+// A path's token path in epoch 1, the root's "" empty.
 func (self *evsTestWorld) tokens(path string) EvsTokenPath {
 	names := [][]byte{}
 	for _, name := range strings.Split(path, "/") {
-		names = append(names, []byte(name))
+		if path != "" {
+			names = append(names, []byte(name))
+		}
 	}
 	tokenPath, err := EvsPathTokens(evsTestPathKey(self.t, self.repoId, 1), names)
 	if err != nil {
@@ -338,7 +340,11 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 			table := &protocol.EvsNameTable{}
 			parent := self.tokens(change.path).Last()
 			for _, child := range change.children {
-				childToken := self.tokens(change.path + "/" + child).Last()
+				childPath := child
+				if change.path != "" {
+					childPath = change.path + "/" + child
+				}
+				childToken := self.tokens(childPath).Last()
 				sealed, err := EvsNameSeal(keys.manifestOfEpoch(self.t, self.repoId, 1), parent, childToken, []byte(child))
 				if err != nil {
 					self.t.Fatal(err)

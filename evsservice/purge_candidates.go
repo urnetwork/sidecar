@@ -37,6 +37,16 @@ type PurgeReplaced struct {
 // would pass 2,048 or the list roomByteCount; empty, unmarked, when nothing is left to purge, which the record then
 // carries no list for.
 func PurgeCandidates(replaced []*PurgeReplaced, pushVersions []*protocol.EvsEntryVersion, roomByteCount int) *protocol.EvsPurgeList {
+	list, idCount := purgeCandidateList(replaced, pushVersions)
+	if sidecar.EvsPurgeListMaxIdCount < idCount || roomByteCount < proto.Size(list) {
+		return &protocol.EvsPurgeList{Marked: true}
+	}
+	return list
+}
+
+// The candidates PurgeCandidates lists, with no bound, and how many ids they name: what the sweep recomputes a marked
+// list as (sweep_recompute.go).
+func purgeCandidateList(replaced []*PurgeReplaced, pushVersions []*protocol.EvsEntryVersion) (*protocol.EvsPurgeList, int) {
 	named := map[string]bool{}
 	for _, version := range pushVersions {
 		for _, locator := range version.GetChain() {
@@ -83,8 +93,5 @@ func PurgeCandidates(replaced []*PurgeReplaced, pushVersions []*protocol.EvsEntr
 		idCount += len(listed)
 		list.Candidates = append(list.Candidates, candidate)
 	}
-	if sidecar.EvsPurgeListMaxIdCount < idCount || roomByteCount < proto.Size(list) {
-		return &protocol.EvsPurgeList{Marked: true}
-	}
-	return list
+	return list, idCount
 }

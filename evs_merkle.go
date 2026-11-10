@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"slices"
 	"sort"
 
 	"google.golang.org/protobuf/proto"
@@ -523,6 +524,14 @@ func EvsVerifyChangeAbsence(changesRoot []byte, partCount uint32, changeCount ui
 // lies under a covering prefix, so no other prefix can be among the changes. Longest first.
 func EvsAbsencePaths(changedPrefixes []EvsTokenPath, tokenPath EvsTokenPath) []EvsTokenPath {
 	paths := []EvsTokenPath{}
+	if len(tokenPath) == 0 {
+		// the root, which only the empty covering prefix reaches, and which nothing removes, so it is no prefix
+		// another path's absence needs (DESIGN-DETAILS 9.2.8)
+		if slices.ContainsFunc(changedPrefixes, func(covering EvsTokenPath) bool { return len(covering) == 0 }) {
+			paths = append(paths, tokenPath)
+		}
+		return paths
+	}
 	for length := len(tokenPath); 0 < length; length -= 1 {
 		prefix := tokenPath[:length]
 		for _, covering := range changedPrefixes {

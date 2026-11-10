@@ -38,12 +38,20 @@ type EvsPathTokens struct {
 	// A read's: every token path its request names, by epoch, the current one's among them, which serve the
 	// statements of their epochs (DESIGN-DETAILS 9.2.4). nil for a push's change, whose source paths name its sources.
 	ByEpoch map[uint64]sidecar.EvsTokenPath
+	// The root, whose token path is empty in every epoch.
+	Root bool
 }
 
 // The token paths a read names, by epoch, matched to head (DESIGN-DETAILS 9.2.4: by the epoch field, never by
 // position): Current the one in the head's current epoch, nil when the read names none, and Sources those in the
 // epochs the head lists as sources.
 func EvsPathTokensAt(byEpoch map[uint64]sidecar.EvsTokenPath, head *protocol.EvsHead) *EvsPathTokens {
+	for _, tokenPath := range byEpoch {
+		if len(tokenPath) == 0 {
+			// the root: named in any epoch, its empty token path is every epoch's (DESIGN-DETAILS 9.2.8)
+			return &EvsPathTokens{Current: sidecar.EvsTokenPath{}, Root: true}
+		}
+	}
 	tokens := &EvsPathTokens{Current: byEpoch[EvsHeadCurrentEpoch(head)], ByEpoch: byEpoch}
 	for _, source := range head.GetPathEpoch().GetSources() {
 		if tokenPath, ok := byEpoch[source.GetEpoch()]; ok {
@@ -55,6 +63,9 @@ func EvsPathTokensAt(byEpoch map[uint64]sidecar.EvsTokenPath, head *protocol.Evs
 
 // Whether digest may change the path in any epoch the read names it in: what lets a read pass a statement by.
 func (self *EvsPathTokens) MayChangeIn(digest sidecar.EvsPathsDigest) bool {
+	if self.Root {
+		return digest.MayChange(sidecar.EvsTokenPath{})
+	}
 	for _, tokenPath := range self.ByEpoch {
 		if digest.MayChange(tokenPath) {
 			return true
@@ -66,6 +77,9 @@ func (self *EvsPathTokens) MayChangeIn(digest sidecar.EvsPathsDigest) bool {
 // The path's token path in epoch, of a head whose current epoch is current: Current for it, else the read's for that
 // epoch. nil when the path is named in none.
 func (self *EvsPathTokens) In(epoch uint64, current uint64) sidecar.EvsTokenPath {
+	if self.Root {
+		return sidecar.EvsTokenPath{}
+	}
 	if epoch == current {
 		return self.Current
 	}
@@ -116,9 +130,14 @@ func ReadPathEntry(ctx context.Context, cluster sidecar.BlobCluster, repoId side
 		return &EvsPathRead{EvsEntryRead: read}, nil
 	}
 
-	// the sources the client named that the head lists, newest first as the head lists them
+	// the sources the client named that the head lists, newest first as the head lists them; the root, whose token
+	// path is empty in every epoch, in each (DESIGN-DETAILS 9.2.8)
 	sourcePaths := []*EvsSourceTokenPath{}
 	for _, listedEpoch := range listedEpochs {
+		if len(tokens.Current) == 0 {
+			sourcePaths = append(sourcePaths, &EvsSourceTokenPath{Epoch: listedEpoch, TokenPath: sidecar.EvsTokenPath{}})
+			continue
+		}
 		for _, source := range tokens.Sources {
 			if source.Epoch == listedEpoch && len(source.TokenPath) != 0 {
 				sourcePaths = append(sourcePaths, source)

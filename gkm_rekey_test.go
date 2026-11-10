@@ -585,20 +585,24 @@ func TestEvsRekeyRetriesAPathConflictAndThenStops(t *testing.T) {
 	stopped.requireRekeyed(2, stoppedPaths...)
 }
 
-// What the job cannot list or write it does not claim: a request naming no path asks for the ref's root, which format
-// 1 cannot list, and writes nothing; a git-mode ref is skipped by name; a malformed path is refused; and a repo runs
-// one job at a time.
+// What the job cannot list or write it does not claim: a request naming no path walks the ref from its root, which
+// lists its top-level names since EVS1-M2-46 (question evs1-m2-24-root-directory-names, option 1); a git-mode ref is
+// skipped by name; a malformed path is refused; and a repo runs one job at a time.
 func TestEvsRekeyRefusesTheRootAndSkipsAGitModeRef(t *testing.T) {
+	root := newRekeyTest(t)
+	rootPaths := root.writeFiles("r", 3)
+	root.rotate(2, GkmCauseRemove)
+	progress, err := root.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: root.writer.world.repoId})
+	if err != nil || progress.State != GkmRekeyStateDone || progress.RewrittenCount != uint64(len(rootPaths)) {
+		t.Fatalf("a rekey from the root: %v %+v", err, progress)
+	}
+	root.requireRekeyed(2, rootPaths...)
+
 	test := newRekeyTest(t)
 	paths := test.writeFiles("s", 3)
 	test.rotate(2, GkmCauseRemove)
 	repoId := test.writer.world.repoId
-	posted := test.posted()
 	rekey := test.rekey()
-	progress, err := rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId})
-	if !errors.Is(err, ErrEvsTokenInvalid) || progress.State != GkmRekeyStateStopped || test.posted() != posted {
-		t.Fatalf("a rekey from the root: %v %+v", err, progress)
-	}
 	for _, request := range []*GkmRekeyRequest{nil, {}, {RepoId: repoId, Paths: []string{"s//x"}}, {RepoId: repoId, Paths: []string{""}}} {
 		if _, err := rekey.Run(context.Background(), request); err == nil {
 			t.Errorf("a malformed request ran: %+v", request)
@@ -628,7 +632,7 @@ func TestEvsRekeyRefusesTheRootAndSkipsAGitModeRef(t *testing.T) {
 	git.writer.world.push(&evsTestChange{path: "tree.txt", content: []byte("tree")})
 	git.writer.server.know("tree.txt")
 	git.rotate(2, GkmCauseRemove)
-	posted = git.posted()
+	posted := git.posted()
 	progress, err = git.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: git.writer.world.repoId, Paths: []string{"tree.txt"}})
 	if err != nil {
 		t.Fatal(err)
