@@ -212,6 +212,10 @@ barrier identity.persist.after identity_keys.go
 barrier identity.persist.before identity_keys.go
 barrier identity.post.after identity_pending.go
 barrier identity.post.before identity_pending.go
+barrier identity.recover.anchor.after identity_recover.go
+barrier identity.recover.anchor.before identity_recover.go
+barrier identity.recover.file.after identity_recover.go
+barrier identity.recover.file.before identity_recover.go
 barrier identity.recovery_bind.after identity_recovery_bind.go
 barrier identity.recovery_bind.before identity_recovery_bind.go
 barrier identity.revoke.effects.after identity_revoke_device.go

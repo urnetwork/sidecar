@@ -90,3 +90,22 @@ func (self *SidecarApi) SetPushToken(ctx context.Context, platform string, token
 		bearer:    true,
 	}, &SidecarPushTokenArgs{Platform: platform, Token: token}, nil)
 }
+
+// Posts this sidecar's wake token, or deletes it when token is empty (§18.7's step 0, through sdk's
+// Sidecar.SetPushToken, which apps call at every launch): on the current generation's token, so the row is
+// this client's own. A host's Api session holds the child's token only in the process that minted it, so
+// after a restart this is the one path that has the token to post with. ErrSidecarStoreLocked while
+// Locked, ErrSidecarNoIdentity with no enrolled client to post for, the route's refusals otherwise, and
+// the token is never in any of them.
+func (self *Sidecar) SetPushToken(ctx context.Context, platform string, token string) error {
+	if self.sidecarApi == nil {
+		return ErrSidecarClosed
+	}
+	switch self.lifecycleState() {
+	case SidecarStateLocked:
+		return ErrSidecarStoreLocked
+	case SidecarStateUnenrolled, SidecarStateRevoked:
+		return ErrSidecarNoIdentity
+	}
+	return self.sidecarApi.SetPushToken(ctx, platform, token)
+}

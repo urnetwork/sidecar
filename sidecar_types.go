@@ -72,6 +72,8 @@ type Sidecar struct {
 	revokePlans sidecarRevokePlans
 	// The k > 1 revocations this device proposed, watched for their completing cosign (identity_revoke_device.go).
 	revokeWatches sidecarRevokeWatches
+	// A code-only recovery's seams and its one-at-a-time lock (identity_recover.go).
+	recoveries sidecarRecoveries
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
