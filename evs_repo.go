@@ -6,7 +6,7 @@
 //	ReadHead, List, History         EVS1-M2-24 (evs_read.go, evs_list.go, evs_history.go)
 //	Write                           EVS1-M2-25, EVS1-M2-26 (evs_plan.go, evs_write.go)
 //	Deposit, Consume                EVS1-M2-29
-//	Subscribe                       EVS1-M2-27
+//	Subscribe                       EVS1-M2-27 (evs_subscribe.go, evs_hint.go)
 //	Erasures                        EVS1-M2-30
 //	Import                          EVS1-M2-34
 //	Export                          EVS1-M2-32 (evs_export.go)
@@ -175,26 +175,6 @@ type EvsConsumeResult struct {
 	Version uint64
 }
 
-// What Subscribe leases (§11.10; EVS1-M2-27).
-type EvsSubscribeArgs struct {
-	// nil: every ref.
-	RefName []byte
-	// Directories and subpaths; empty: the whole ref.
-	Paths []string
-}
-
-// A live subscription.
-type EvsSubscription struct {
-	cancel func()
-}
-
-// Ends the subscription.
-func (self *EvsSubscription) Close() {
-	if self != nil && self.cancel != nil {
-		self.cancel()
-	}
-}
-
 // What Import brings in (§11.11's import row; EVS1-M2-34).
 type EvsImportArgs struct {
 	// A git repository's directory.
@@ -252,11 +232,6 @@ func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDep
 // Commits a CONSUME of ingested deposits. EVS1-M2-29 builds it.
 func (self *EvsRepo) Consume(ctx context.Context, args *EvsConsumeArgs) (*EvsConsumeResult, error) {
 	return nil, fmt.Errorf("%w: Consume is EVS1-M2-29's", ErrEvsNotBuilt)
-}
-
-// Leases a subscription. EVS1-M2-27 builds it.
-func (self *EvsRepo) Subscribe(ctx context.Context, args *EvsSubscribeArgs) (*EvsSubscription, error) {
-	return nil, fmt.Errorf("%w: Subscribe is EVS1-M2-27's", ErrEvsNotBuilt)
 }
 
 // The repo's erasures as this device sees them (§18.5). EVS1-M2-30 builds it.
