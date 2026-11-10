@@ -42,8 +42,8 @@
 // Delegation, else from gkm/dkey/<delegation_id>, and seals to it only when its SHA-256 is the row's digest, which
 // the DelegationWrap's recipient_key_sha256 then names (GkmForwardingReaderKey).
 //
-// Pure, on every leg, the sidecar_http page Worker's included. Nothing here creates, derives or unwraps a key, so
-// nothing calls testHookSecret: a reader key is public.
+// On every leg, the sidecar_http page Worker's included, and pure but for the fetch GkmForwardingReaderKey is given.
+// Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret: a reader key is public.
 
 package sidecar
 
