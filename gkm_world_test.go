@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // The world the member checks', the rotation's and the membership flows' tests share: a log of fixture states
 // (sidecartest.FakeGkmAuthLog), one repo with its group on FakeMls, and devices that each hold an identity key, an
 // admitted credential and an engine. A test changes the world in place, then appends a position.

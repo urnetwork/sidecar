@@ -10,7 +10,14 @@
 //	pin        the identity key the log admits for a sidecar is its pin, which a revoked sidecar keeps for what it
 //	           signed before; §6's Hello reads the same pin (CheckMlsIdentityPin)
 //	judged     a pin above the state waits (ErrGkmAuthAhead, an error and never a refusal); one before what this
-//	           reader retains is not judged and counts against no one; one off the chain is invalid and a fork
+//	           reader retains is not judged and counts against no one, so its verdict passes with NotJudged set;
+//	           one off the chain is invalid and a fork
+//
+// A reading: §7.9 keeps A_k only for a day or two of entries while a generation lives up to 30 days and an epoch
+// as long, so a device meets objects whose pins it no longer retains as a matter of course, a late joiner's first
+// generation among them. Such an object passes, as gkm_gate.go reads the same pin for coverage: the members that
+// held the log then judged it when it was new, and this device's own commits, rotations and deliveries are still
+// fenced at its own pin (R3 to R6), where nothing unjudged can carry a non-holder forward.
 //
 // gkm sees no proposal (owner decision 59), so these checks are the only authority check of a commit: a bug here adds
 // a reader. They are pure functions over GkmAuthView, on every leg. Nothing here creates, derives or unwraps a key
@@ -89,7 +96,7 @@ type GkmVerdict struct {
 	// The generation a refusal poisons (§10.9's poisoned row): never seal to it again, rotate at once with cause
 	// REMOVE, and the next leaf commit removes its maker. 0 for none.
 	Poisoned uint64
-	// The object's pin lies before what this reader retains: not judged, held against no one, and not used.
+	// The object's pin lies before what this reader retains: not judged and held against no one. It passes.
 	NotJudged bool
 	// The pin is off this device's chain: head_alarm (fork), with Refused.
 	Fork   bool
@@ -98,9 +105,9 @@ type GkmVerdict struct {
 	Detail string
 }
 
-// Whether the object may be adopted or used: judged and not refused.
+// Whether the object may be adopted or used: not refused. One this reader could not judge passes.
 func (self GkmVerdict) Passed() bool {
-	return !self.Refused && !self.NotJudged
+	return !self.Refused
 }
 
 // A refusal for reason.

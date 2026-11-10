@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // §10.9's committer and check rows on fixtures (KEYS-M2-19, DESIGN-DETAILS 6.6): one success and one refusal per
 // row, the roster rule's refusals with their poison verdict, S3's forged admission and KeyPackage, and the judged
 // row's wait, fork and not-judged answers. FakeMls stages the commits, and FS-104's oracle is separate code.
@@ -235,11 +237,11 @@ func TestCheckCommitJudgesAtItsPin(t *testing.T) {
 		t.Errorf("a pin below the carried generation's: %+v %v", behindCheck, err)
 	}
 
-	// a pin before what this reader retains is not judged, and so not adopted
+	// a pin before what this reader retains is not judged and counts against no one
 	world.log.Retain(2)
 	old := world.stage(world.a, 1, world.first.Pin(), nil, nil)
 	check, err = world.check(third, world.b, old)
-	if err != nil || !check.Verdict.NotJudged || check.Verdict.Refused || check.Verdict.Passed() {
+	if err != nil || !check.Verdict.NotJudged || check.Verdict.Refused || !check.Verdict.Passed() || check.Key != nil {
 		t.Errorf("a pin before what is retained: %+v %v", check, err)
 	}
 }

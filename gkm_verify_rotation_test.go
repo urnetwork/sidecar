@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // §10.9's rotation checks on fixtures (KEYS-M2-19, DESIGN-DETAILS 6.6): one success and one refusal per row,
 // covered and read_only signers, the claim chain's floors, and a future time that waits rather than poisons.
 

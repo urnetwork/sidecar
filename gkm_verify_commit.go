@@ -3,7 +3,7 @@
 // on its own staged commit before it uploads it, since a bad commit leaks the moment it stands at epoch/<n>.
 //
 //	judged     at the header's auth pin (R1): above the tip waits, off the chain is a fork, before what is retained
-//	           is not judged
+//	           is not judged, and then no key is opened from its GenWrap here: the caller opens it against gen/<g>
 //	floors     the header's auth is at or past the previous epoch's and the carried generation's, and its
 //	           generation at or past the previous epoch's (R2)
 //	committer  Add: a writer leaf, or in the config and directory groups the admission's signer from its leaf;
@@ -192,7 +192,8 @@ func CheckCommit(view GkmAuthView, group MlsGroup, staged MlsStagedCommit, args 
 	if err != nil {
 		return nil, err
 	}
-	if !verdict.Passed() {
+	if at == nil {
+		// refused as a fork, or not judged: nothing more is read of it
 		return refuse(verdict)
 	}
 	repo := at.Repo(args.RepoId)

@@ -102,7 +102,8 @@ func CheckDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs) (GkmVerdict, er
 	if err != nil {
 		return GkmVerdict{}, err
 	}
-	if !verdict.Passed() {
+	if stateAt == nil {
+		// refused as a fork, or not judged
 		return verdict, nil
 	}
 	late := GkmDeliveryKind(body.GetDeliveryKind()) == GkmDeliveryLate

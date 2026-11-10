@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // §10.9's delivery checks on fixtures (KEYS-M2-19, DESIGN-DETAILS 6.6): one success and one refusal per row, a
 // delivery valid at its own state staying valid after a later revocation (FI-28), a LATE delivery signed below its
 // claim's pin refused, and S3's forged ReaderKey.
@@ -188,7 +190,7 @@ func TestCheckDeliveryLateJudgedAndHistoryRows(t *testing.T) {
 		t.Errorf("a LATE delivery off the chain: %+v %v", verdict, err)
 	}
 	world.log.Retain(3)
-	if verdict, err := world.checkDelivery(fourth, atPin, gen2); err != nil || !verdict.NotJudged || verdict.Refused || verdict.Passed() {
+	if verdict, err := world.checkDelivery(fourth, atPin, gen2); err != nil || !verdict.NotJudged || verdict.Refused || !verdict.Passed() {
 		t.Errorf("a delivery before what is retained: %+v %v", verdict, err)
 	}
 }
