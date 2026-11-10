@@ -320,6 +320,7 @@ func (self *fsKeysBudgetWorld) newGroup(dropped bool) *fsKeysBudgetGroup {
 	repoObject, _ := proto.Marshal(&protocol.EvsRepoObject{RepoId: group.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1, NetworkId: sidecar.Id(self.networkId).Bytes()})
 	formBody, _ := proto.Marshal(&protocol.GroupForm{RepoId: group.repoId.Bytes(), GroupId: group.groupId.Bytes(), Generation: 1})
 	form, _ := proto.Marshal(&bridge.Signed{Body: formBody, Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM)})
+	groupOwner, _ := proto.Marshal(&protocol.GkmGroupOwner{RepoId: group.repoId.Bytes(), NetworkId: sidecar.Id(self.networkId).Bytes()})
 	key1, rotate1, err := sidecar.NewGkmFirstGeneration(group.repoId, group.groupId, &sidecar.GkmGenerationArgs{
 		Cause:         sidecar.GkmCauseRequest,
 		Auth:          fsKeysBudgetPin(10),
@@ -339,6 +340,8 @@ func (self *fsKeysBudgetWorld) newGroup(dropped bool) *fsKeysBudgetGroup {
 		gkmservice.GkmEvsRepoKey(group.repoId):        repoObject,
 		gkmservice.GkmFormKey(group.repoId, 1):        form,
 		gkmservice.GkmGenerationKey(group.groupId, 1): generation1,
+		// the group's owner marker, which every group route resolves through (DESIGN-DETAILS 6.2.2)
+		gkmservice.GkmGroupOwnerKey(group.groupId): groupOwner,
 	} {
 		if _, err := cluster.PutIfNoneMatch(self.ctx, key, body, nil); err != nil {
 			self.t.Fatal(err)

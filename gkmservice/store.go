@@ -440,3 +440,67 @@ func (self *gkmFormCache) forget(repoId sidecar.Id) {
 	defer self.stateLock.Unlock()
 	delete(self.repoEntries, repoId)
 }
+
+// Each group's owner as this process read it from gkm/<group_id>/owner (DESIGN-DETAILS 6.2.2). A marker is
+// immutable for the group's life, so an entry is kept for the process's life, up to GroupRepoCacheCount, and only a
+// marker that stands is remembered: a group with none is read again, since its creation may be under way.
+type gkmGroupOwnerCache struct {
+	settings *GkmServiceSettings
+
+	stateLock         sync.Mutex
+	groupOwnerRepoIds map[sidecar.Id]sidecar.Id
+}
+
+// An empty cache.
+func newGkmGroupOwnerCache(settings *GkmServiceSettings) *gkmGroupOwnerCache {
+	return &gkmGroupOwnerCache{settings: settings, groupOwnerRepoIds: map[sidecar.Id]sidecar.Id{}}
+}
+
+// Keeps a group's owner, evicting another first when full.
+func (self *gkmGroupOwnerCache) remember(groupId sidecar.Id, repoId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.settings.GroupRepoCacheCount <= 0 {
+		return
+	}
+	if _, ok := self.groupOwnerRepoIds[groupId]; !ok && self.settings.GroupRepoCacheCount <= len(self.groupOwnerRepoIds) {
+		for evictedGroupId := range self.groupOwnerRepoIds {
+			delete(self.groupOwnerRepoIds, evictedGroupId)
+			break
+		}
+	}
+	self.groupOwnerRepoIds[groupId] = repoId
+}
+
+// The repo of a group whose marker this process has read, if any.
+func (self *gkmGroupOwnerCache) known(groupId sidecar.Id) (sidecar.Id, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	repoId, ok := self.groupOwnerRepoIds[groupId]
+	return repoId, ok
+}
+
+// The repo a group's marker names, reading gkm/<group_id>/owner on cluster when this process has not: false for a
+// group with no marker there, and errGkmStoreFault for one that does not parse.
+func (self *gkmGroupOwnerCache) owner(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id) (sidecar.Id, bool, error) {
+	if cachedRepoId, cached := self.known(groupId); cached {
+		return cachedRepoId, true, nil
+	}
+	ownerBytes, _, err := readGkmObject(ctx, cluster, GkmGroupOwnerKey(groupId), self.settings.ObjectMaxByteCount)
+	if errors.Is(err, sidecar.ErrBlobNotFound) {
+		return sidecar.Id{}, false, nil
+	}
+	if err != nil {
+		return sidecar.Id{}, false, err
+	}
+	owner := &protocol.GkmGroupOwner{}
+	if err := proto.Unmarshal(ownerBytes, owner); err != nil {
+		return sidecar.Id{}, false, fmt.Errorf("%w: a group owner marker that does not parse", errGkmStoreFault)
+	}
+	repoId, err := sidecar.IdFromBytes(owner.GetRepoId())
+	if err != nil || repoId == (sidecar.Id{}) {
+		return sidecar.Id{}, false, fmt.Errorf("%w: a group owner marker's repo of %d bytes", errGkmStoreFault, len(owner.GetRepoId()))
+	}
+	self.remember(groupId, repoId)
+	return repoId, true, nil
+}

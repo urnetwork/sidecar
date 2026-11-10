@@ -76,6 +76,10 @@ GkmGroupInfoObject.sealed_group_info: {number: 3, type: bytes, row: gkm-7, sees:
 
 GkmWelcomePointer.group_id: {number: 1, type: bytes, row: gkm-5, sees: "Welcome objects and pointers"}
 GkmWelcomePointer.epoch: {number: 2, type: uint64, row: gkm-5, sees: "Welcome objects and pointers"}
+GkmWelcomePointer.key_package_ref: {number: 3, type: bytes, row: gkm-5, sees: "KeyPackageRefs"}
+
+GkmGroupOwner.repo_id: {number: 1, type: bytes, row: gkm-1, sees: "repo_id, group_id"}
+GkmGroupOwner.network_id: {number: 2, type: bytes, row: gkm-1, sees: "network_id"}
 
 GkmKeyPackageClaim.group_id: {number: 1, type: bytes, row: gkm-4, sees: "claims (group"}
 GkmKeyPackageClaim.claimer: {number: 2, type: bytes, row: gkm-4, sees: "claims (group, claimer"}

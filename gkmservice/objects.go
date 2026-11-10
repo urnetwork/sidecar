@@ -29,7 +29,6 @@ const (
 	gkmFormKeyPrefix            = "gkm/repo/"
 	gkmKeyPackageKeyPrefix      = "gkm/kp/"
 	gkmReaderKeyKeyPrefix       = "gkm/rk/"
-	gkmWelcomePointerKeyPrefix  = "gkm/welcome/"
 	gkmRecoveryKeyPrefix        = "gkm/recovery/"
 	gkmKeyPackageClaimKeySuffix = ".claim"
 	// evs's repo/<repo>, which gkm rereads before each write (§10.6's checks row). evsservice.RepoKey builds the same
@@ -240,28 +239,38 @@ func GkmReaderKeyKey(sidecarId sidecar.Id) string {
 
 // gkm/welcome/<sidecar_id>/: a sidecar's Welcome pointers, by LIST, on the first cluster.
 func GkmWelcomePointerPrefix(sidecarId sidecar.Id) string {
-	return gkmWelcomePointerKeyPrefix + sidecar.EvsKeyId(sidecarId) + "/"
+	return sidecar.GkmWelcomePointerPrefix(sidecarId)
 }
 
-// gkm/welcome/<sidecar_id>/<ref>: a pointer {group_id, n} to the Welcome that joins the sidecar under that
-// KeyPackage.
-func GkmWelcomePointerKey(sidecarId sidecar.Id, ref []byte) (string, error) {
-	refKey, err := gkmRefKey(ref)
-	if err != nil {
-		return "", err
-	}
-	return GkmWelcomePointerPrefix(sidecarId) + refKey, nil
+// gkm/welcome/<sidecar_id>/<group_id>/<n>: a pointer {group_id, n, ref} to the Welcome that joins the sidecar to
+// the group at epoch n, keyed by group and epoch and never by the KeyPackageRef its Add used, so a last-resort
+// KeyPackage that served two Adds leaves two pointers (DESIGN-DETAILS 6.2.2).
+func GkmWelcomePointerKey(sidecarId sidecar.Id, groupId sidecar.Id, epoch uint64) string {
+	return sidecar.GkmWelcomePointerPath(sidecarId, groupId, epoch)
 }
 
-// The ref a key under a sidecar's welcome/ prefix names, or false.
-func parseGkmWelcomePointerKey(prefix string, key string) ([]byte, bool) {
+// The group and epoch a key under a sidecar's welcome/ prefix names, or false.
+func parseGkmWelcomePointerKey(prefix string, key string) (sidecar.Id, uint64, bool) {
 	rest, found := strings.CutPrefix(key, prefix)
-	if !found || len(rest) != 2*gkmKeyPackageRefByteCount || strings.ToLower(rest) != rest {
-		return nil, false
+	if !found {
+		return sidecar.Id{}, 0, false
 	}
-	ref, err := hex.DecodeString(rest)
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 {
+		return sidecar.Id{}, 0, false
+	}
+	groupId, err := parseGkmHexId(parts[0])
 	if err != nil {
-		return nil, false
+		return sidecar.Id{}, 0, false
 	}
-	return ref, true
+	epoch, ok := parseGkmKeyNumber(parts[1])
+	if !ok {
+		return sidecar.Id{}, 0, false
+	}
+	return groupId, epoch, true
+}
+
+// gkm/<group_id>/owner: the group's owner marker, a GkmGroupOwner, the first write of a creation or a re-form.
+func GkmGroupOwnerKey(groupId sidecar.Id) string {
+	return sidecar.GkmGroupOwnerPath(groupId)
 }

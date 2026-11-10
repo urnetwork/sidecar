@@ -156,10 +156,13 @@ func TestGkmClientReachesTheEngineForItsUpkeepAndAClaim(t *testing.T) {
 	repoObject, _ := proto.Marshal(&protocol.EvsRepoObject{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1})
 	formBody, _ := proto.Marshal(&protocol.GroupForm{RepoId: repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1})
 	form, _ := proto.Marshal(&bridge.Signed{Body: formBody, Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM)})
+	groupOwner, _ := proto.Marshal(&protocol.GkmGroupOwner{RepoId: repoId.Bytes(), NetworkId: sidecar.NewId().Bytes()})
 	for key, body := range map[string][]byte{
 		sidecar.EvsPlaceKey(repoId):      place,
 		gkmservice.GkmEvsRepoKey(repoId): repoObject,
 		gkmservice.GkmFormKey(repoId, 1): form,
+		// the group's owner marker, which every group route resolves through (DESIGN-DETAILS 6.2.2)
+		gkmservice.GkmGroupOwnerKey(groupId): groupOwner,
 	} {
 		if _, err := firstCluster.PutIfNoneMatch(ctx, key, body, nil); err != nil {
 			t.Fatal(err)
