@@ -116,9 +116,10 @@ func configGenesisCompileRows(genesis *bridge.Genesis) *ConfigCompileRows {
 }
 
 // ACL's compile (C-05, ACL-M2-04's CompileAcl): the AclRows a head's policy, tags, groups and files give, with the
-// log's acl statements. It must be a pure function of its input, with no clock, no network and no map order, since
-// every reader hashes what it gives.
-type ConfigAclCompiler func(head *ConfigHead, aclStatements *protocol.AclRows) (*protocol.AclRows, error)
+// log's rows at its folded_through, whose AclStatements the acl statements gave and whose members and sidecars the
+// policy's atoms expand over. It must be a pure function of its input, with no clock, no network and no map order,
+// since every reader hashes what it gives. rows is the compile's own copy.
+type ConfigAclCompiler func(head *ConfigHead, rows *ConfigCompileRows) (*protocol.AclRows, error)
 
 var configAclCompiler atomic.Pointer[ConfigAclCompiler]
 
@@ -149,7 +150,9 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	if aclStatements == nil {
 		aclStatements = &protocol.AclRows{}
 	}
-	aclRows, err := (*compiler)(head, proto.Clone(aclStatements).(*protocol.AclRows))
+	compileRows := *rows
+	compileRows.AclStatements = proto.Clone(aclStatements).(*protocol.AclRows)
+	aclRows, err := (*compiler)(head, &compileRows)
 	if err != nil {
 		return nil, fmt.Errorf("config compile: acl: %w", err)
 	}
