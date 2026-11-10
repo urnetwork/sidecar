@@ -253,41 +253,67 @@ func (self *evsReadObjects) close() {
 
 // Fetches the ranges and slots a version's chain needs that the reply did not carry, in one more round.
 func (self *EvsRepo) fetchMissing(ctx context.Context, result *evsReadResult, entry *protocol.EvsEntryVersion) error {
-	request := &protocol.EvsReadRequest{RefId: result.refId.Bytes(), PinVersion: result.head.Version}
+	ranges := []*protocol.EvsReadRange{}
 	for _, locator := range entry.GetChain() {
 		if protocol.EvsLocatorKind(locator.GetKind()) != protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT {
 			continue
 		}
 		if _, ok := result.objects.segmentRange(locator.GetId(), 0, evsSegmentKeyedHeaderByteCount); !ok {
-			request.Ranges = append(request.Ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: 0, Length: evsSegmentKeyedHeaderByteCount})
+			ranges = append(ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: 0, Length: evsSegmentKeyedHeaderByteCount})
 		}
 		if _, ok := result.objects.segmentRange(locator.GetId(), locator.GetOffset(), locator.GetLength()); !ok {
-			request.Ranges = append(request.Ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: locator.GetOffset(), Length: locator.GetLength()})
+			ranges = append(ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: locator.GetOffset(), Length: locator.GetLength()})
 		}
 	}
+	slotIds := [][]byte{}
 	for _, slotId := range entry.GetSlotIds() {
 		if _, ok := result.objects.slot(slotId); !ok {
-			request.SlotIds = append(request.SlotIds, slotId)
+			slotIds = append(slotIds, slotId)
 		}
 	}
-	if len(request.Ranges) == 0 && len(request.SlotIds) == 0 {
-		return nil
-	}
-	_, objects, err := self.client.postRead(ctx, self.repoId, request)
-	if err != nil {
-		return err
-	}
-	for key, spill := range objects.objects {
-		if held := result.objects.objects[key]; held != nil {
-			held.close()
+	// a round takes at most 64 ranges of at most 32 MiB in all (§11.9's request row), so a file past that, a chunked
+	// one of up to 2 GiB, fetches in rounds; the slots go with the first
+	requests := []*protocol.EvsReadRequest{}
+	var request *protocol.EvsReadRequest
+	requestByteCount := uint64(0)
+	for _, readRange := range ranges {
+		if request == nil || EvsReadMaxRangeCount <= len(request.Ranges) || EvsReadMaxRangeByteCount < requestByteCount+uint64(readRange.GetLength()) {
+			request = &protocol.EvsReadRequest{RefId: result.refId.Bytes(), PinVersion: result.head.Version}
+			requests = append(requests, request)
+			requestByteCount = 0
 		}
-		result.objects.objects[key] = spill
+		request.Ranges = append(request.Ranges, readRange)
+		requestByteCount += uint64(readRange.GetLength())
 	}
-	for id := range objects.missing {
-		result.objects.missing[id] = true
+	if 0 < len(slotIds) {
+		if len(requests) == 0 {
+			requests = append(requests, &protocol.EvsReadRequest{RefId: result.refId.Bytes(), PinVersion: result.head.Version})
+		}
+		requests[0].SlotIds = slotIds
+	}
+	for _, request := range requests {
+		_, objects, err := self.client.postRead(ctx, self.repoId, request)
+		if err != nil {
+			return err
+		}
+		for key, spill := range objects.objects {
+			if held := result.objects.objects[key]; held != nil {
+				held.close()
+			}
+			result.objects.objects[key] = spill
+		}
+		for id := range objects.missing {
+			result.objects.missing[id] = true
+		}
 	}
 	return nil
 }
+
+// §11.9's request row: one read names at most 64 ranges, of at most 32 MiB in all.
+const (
+	EvsReadMaxRangeCount     = 64
+	EvsReadMaxRangeByteCount = 32 * 1024 * 1024
+)
 
 // Rebuilds a verified file version into out, after the receipt gate and with its oid and size checked first.
 func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath, out io.Writer) (*EvsFileInfo, error) {

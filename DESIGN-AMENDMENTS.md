@@ -40,6 +40,8 @@ Holds 305 decided items and 309 proposed ones, generated from the ledger on 2026
 
 Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with its proposed DESIGN.md text. Their owner questions were answered on 2026-11-10 (QD-598 to QD-629, below under the sections they amend). Three answers differ from a section's recommendation and the design agent amends the section before it is folded: QD-604 (section 8, imports make helper refs), QD-621 (section 4, an overdue narrowing statement keeps the last state and alarms) and the model and wording fixes of QD-628, QD-632, QD-633, QD-642 and QD-644. Sections 1, 3, 7, 10, 11, 12 and 13 are still being written.
 
+Partly folded (2026-11-10), with §2's and §3's items: section 2.8 where QD-623 (owner decision 203) needed it, its §2.8, §11.3, §11.6, §11.13 and §11.17 parts, §11.8's but step 6's clock rule, §19.6's rule (6) clause and what deletes nothing on an unpassed build, §22.8's EvsCommit.tla row, FS-8 and FS-59's text. Section 2.8 still to fold: §11.8 step 6's clock rule and the clocks row's ", evs opens no batch"; §19.6 rule (2)'s stamp, rule (3)'s DELETE release and its PUT and DELETE waits, and the list row (QD-625's, with §11.13's needs row and FS-114); §19.10's held-key and §19.17's risk rows; D-OPS-20's text and *Why*; the StoreSettle.tla row, FI-30's last clause and FS-114's clauses; and FS-59's checks column, FI-1,6, which sidecartest/fault/catalog.yml must take in the same change. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
+
 <a id="s2"></a>
 ## §2 Trust model and threat model
 
@@ -2314,6 +2316,8 @@ The in-house MinIO build honors x-ur-if-unmodified-ms: T on a DELETE, under the 
 Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-22 and -23 (landed) stand; §11.3 MinIO bullet (design-records).
 
 Questions: `details-2-conditional-delete.md`.
+
+Partly folded (2026-11-10): DESIGN-DETAILS.md 2.8's words for it landed with QD-623's fold (owner decision 203): §11.3's MinIO bullet, §11.13's needs and orphans rows and the clause after §19.6's settle rule (6), which cites owner decision 203. This item's own owner decision number, cited there and in §11.3, and the rest of its text (412 with nothing sent to a drive, a missing key's 204, who sends the header) wait for §11's fold.
 
 ### QD-625: Should the in-house MinIO build answer a LIST 503 when it could have dropped a key, since evacuation's horizon and GC's reads of pidx/ delete on what a LIST shows?
 *Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*

@@ -2,7 +2,9 @@
 // into a mailbox through sidecar.EvsClient against an evsservice.EvsEngine over FakeHost's stores, with FakeGkm's
 // drop keys; the owner's device ingests in version order, each deposit opened by the drop key of its slot, and
 // commits a CONSUME, after which the slots are gone; the depositor's token holds deposit alone, so every read route
-// refuses it; and a depositor with no state reaches the ref's head through BASE_STALE.
+// refuses it; a depositor with no state reaches the ref's head through BASE_STALE; a depositor follows a rotation to
+// its new drop key; an ingester's cursor carries what it read between reads; a CONSUME whose answer a crash lost goes
+// again from its journal; and a deposit waits out a drop key gkm does not give yet.
 
 package sidecartest
 
@@ -10,10 +12,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +69,8 @@ type depositWorld struct {
 	view      *FakeGkmAuthView
 	gkm       *FakeGkm
 	engine    *evsservice.EvsEngine
+	// called after a request is served, before its answer goes back: an error loses the answer, as a crash would
+	afterServe func(request *http.Request) error
 }
 
 func newDepositWorld(t *testing.T) *depositWorld {
@@ -174,14 +180,37 @@ func (self *depositWorld) RoundTrip(request *http.Request) (*http.Response, erro
 			<-changed
 		}
 	}
+	if self.afterServe != nil {
+		if err := self.afterServe(request); err != nil {
+			return nil, err
+		}
+	}
 	return recorder.Result(), nil
 }
 
 // A device of signer whose tokens carry the scopes it asks for, or deposit alone.
 func (self *depositWorld) device(signer *FakeGkmSigner, depositOnly bool, store sidecar.SidecarStore) *sidecar.EvsClient {
 	self.t.Helper()
-	gkmClient := self.gkm.Client(signer.SidecarId, signer.Sign)
+	return self.deviceWith(signer, depositOnly, store, nil, nil)
+}
+
+// A device as device makes, its gkm client wrapped by wrap and its settings changed by mutate, either nil for none,
+// on the world's clock, or with instantWaits on one that answers every wait at once.
+func (self *depositWorld) deviceWith(signer *FakeGkmSigner, depositOnly bool, store sidecar.SidecarStore, wrap func(sidecar.GkmClient) sidecar.GkmClient, mutate func(*sidecar.EvsSettings), instantWaits ...bool) *sidecar.EvsClient {
+	self.t.Helper()
+	var clock sidecar.Clock = self.clock
+	if 0 < len(instantWaits) && instantWaits[0] {
+		clock = &epochDeviceClock{clock: self.clock}
+	}
+	var gkmClient sidecar.GkmClient = self.gkm.Client(signer.SidecarId, signer.Sign)
 	gkmClient.AuthAdvanced(self.view)
+	if wrap != nil {
+		gkmClient = wrap(gkmClient)
+	}
+	settings := sidecar.DefaultEvsSettings()
+	if mutate != nil {
+		mutate(settings)
+	}
 	identity := &sidecar.SidecarIdentity{NetworkId: self.networkId, SidecarId: signer.SidecarId, ClientId: self.clientId, Generation: 1, IdentityPublicKey: signer.PublicKey()}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.networkId,
@@ -203,9 +232,9 @@ func (self *depositWorld) device(signer *FakeGkmSigner, depositOnly bool, store 
 		Gkm:      gkmClient,
 		Store:    store,
 		Config:   func() sidecar.GkmAuthView { return self.view },
-		Clock:    self.clock,
+		Clock:    clock,
 		Log:      sidecar.NewNoopLogger(),
-		Settings: sidecar.DefaultEvsSettings(),
+		Settings: settings,
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -225,16 +254,17 @@ func (self *depositWorld) slotCount() int {
 	return count
 }
 
-// A deposit-only sidecar deposits a small entry and a 17 MiB one, which goes in 4 MiB chunks across segments; the
-// owner's device ingests both in version order, each body as it went in, and consumes them, and their slots go; the
-// depositor reads nothing; and a depositor that lost its state reaches the ref's head through BASE_STALE.
+// A deposit-only sidecar deposits a small entry and a 50 MiB one, which goes in 4 MiB chunks across segments, each
+// within the lb's bound; the owner's device ingests both in version order, each body as it went in, and consumes
+// them, and their slots go; the depositor reads nothing; and a depositor that lost its state reaches the ref's head
+// through BASE_STALE.
 func TestEvsDepositIngestAndConsume(t *testing.T) {
 	world := newDepositWorld(t)
 	depositorStore := NewFakeStore().Root()
 	depositor := world.device(world.depositor, true, depositorStore).Repo(world.repoId)
 	owner := world.device(world.owner, false, NewFakeStore().Root()).Repo(world.repoId)
 	small := []byte("a small deposit")
-	large := bytes.Repeat([]byte("a large deposit, past 8 MiB; "), 17*1024*1024/29)
+	large := bytes.Repeat([]byte("a large deposit, past 8 MiB; "), 50*1024*1024/29)
 	first, err := depositor.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: bytes.NewReader(small), Size: int64(len(small))})
 	if err != nil {
 		t.Fatalf("the first deposit: %v", err)
@@ -331,5 +361,204 @@ func TestEvsEraseADeposit(t *testing.T) {
 	again, err := owner.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: erasureId, Keys: keys, Complete: true})
 	if err != nil || again.Version != 0 {
 		t.Fatalf("an ERASE of keys gone: %v %v", again, err)
+	}
+}
+
+// The deposits the owner's device reads standing, by entry id, in the order it reads them.
+func (self *depositWorld) standing(owner *sidecar.EvsRepo) []sidecar.EvsToken {
+	self.t.Helper()
+	ids := []sidecar.EvsToken{}
+	if err := owner.ReadDeposits(self.ctx, self.depositor.SidecarId, 0, func(deposit *sidecar.EvsDeposit, body io.Reader) error {
+		ids = append(ids, deposit.EntryId)
+		return nil
+	}); err != nil {
+		self.t.Fatalf("read deposits: %v", err)
+	}
+	return ids
+}
+
+// FS-23's rotation: a deposit to generation 1's drop key; the owner rotates; the depositor's next deposit seals to
+// generation 2's, the newest; the owner's device opens each with its own generation's drop private key.
+func TestEvsDepositorFollowsARotation(t *testing.T) {
+	world := newDepositWorld(t)
+	depositor := world.device(world.depositor, true, NewFakeStore().Root()).Repo(world.repoId)
+	ownerGkm := world.gkm.Client(world.owner.SidecarId, world.owner.Sign)
+	ownerGkm.AuthAdvanced(world.view)
+	owner := world.device(world.owner, false, NewFakeStore().Root()).Repo(world.repoId)
+	first := []byte("to generation 1")
+	if _, err := depositor.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: bytes.NewReader(first), Size: int64(len(first))}); err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := ownerGkm.RotateRepo(world.ctx, world.repoId)
+	if err != nil || rotated.Generation() != 2 {
+		t.Fatalf("the rotation: %v", err)
+	}
+	second := []byte("to generation 2")
+	if _, err := depositor.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: bytes.NewReader(second), Size: int64(len(second))}); err != nil {
+		t.Fatalf("the deposit after the rotation: %v", err)
+	}
+	bodies := [][]byte{}
+	if err := owner.ReadDeposits(world.ctx, world.depositor.SidecarId, 0, func(deposit *sidecar.EvsDeposit, body io.Reader) error {
+		content, err := io.ReadAll(body)
+		bodies = append(bodies, content)
+		return err
+	}); err != nil || len(bodies) != 2 || !bytes.Equal(bodies[0], first) || !bytes.Equal(bodies[1], second) {
+		t.Fatalf("ingest across the rotation: %d bodies %v", len(bodies), err)
+	}
+	// the second deposit's slot holds generation 2's key
+	refId := sidecar.EvsDepositRefId(world.repoId, world.depositor.SidecarId)
+	generations := []uint64{}
+	slotPrefix := strings.TrimSuffix(evsservice.SlotKey(world.repoId, sidecar.Id{}), sidecar.EvsKeyId(sidecar.Id{}))
+	for key := range world.host.Blobs.Dump() {
+		_, objectKey, _ := strings.Cut(key, "/")
+		if !strings.HasPrefix(objectKey, slotPrefix) {
+			continue
+		}
+		object, err := world.cluster.Get(world.ctx, objectKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		objectBytes, err := io.ReadAll(object.Body)
+		object.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		slot, err := sidecar.EvsDecodeSlotObject(objectBytes)
+		if err != nil || len(slot.GetKeys()) != 1 {
+			t.Fatalf("a slot %v", err)
+		}
+		generations = append(generations, slot.GetKeys()[0].GetGeneration())
+	}
+	slices.Sort(generations)
+	if !slices.Equal(generations, []uint64{1, 2}) {
+		t.Fatalf("the slots' generations %v on %s", generations, refId)
+	}
+}
+
+// The ingester's cursor: what one read walked, a second read does not walk again, the deposits standing kept between
+// them; a CONSUME between reads ends the ones it names; and a device that never read the ref walks it from its start
+// to the same deposits.
+func TestEvsIngestKeepsACursor(t *testing.T) {
+	world := newDepositWorld(t)
+	depositor := world.device(world.depositor, true, NewFakeStore().Root()).Repo(world.repoId)
+	ownerStore := NewFakeStore().Root()
+	owner := world.device(world.owner, false, ownerStore).Repo(world.repoId)
+	deposit := func(body string) sidecar.EvsToken {
+		t.Helper()
+		result, err := depositor.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: strings.NewReader(body), Size: int64(len(body))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.EntryId
+	}
+	first, second := deposit("one"), deposit("two")
+	if read := world.standing(owner); !slices.Equal(read, []sidecar.EvsToken{first, second}) {
+		t.Fatalf("the first read: %v", read)
+	}
+	world.afterServe = func(request *http.Request) error {
+		if strings.HasSuffix(request.URL.Path, "/log") {
+			if since := request.URL.Query().Get("since"); since == "1" {
+				t.Errorf("a read walked the ref from its start again")
+			}
+		}
+		return nil
+	}
+	if _, err := owner.Consume(world.ctx, &sidecar.EvsConsumeArgs{
+		DepositRefId: sidecar.EvsDepositRefId(world.repoId, world.depositor.SidecarId), EntryIds: []sidecar.EvsToken{first}, ConsumedThrough: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	third := deposit("three")
+	if read := world.standing(owner); !slices.Equal(read, []sidecar.EvsToken{second, third}) {
+		t.Fatalf("the second read: %v", read)
+	}
+	world.afterServe = nil
+	fresh := world.device(world.owner, false, NewFakeStore().Root()).Repo(world.repoId)
+	if read := world.standing(fresh); !slices.Equal(read, []sidecar.EvsToken{second, third}) {
+		t.Fatalf("a device that never read the ref: %v", read)
+	}
+}
+
+// A CONSUME evs commits whose answer a crash loses: the device kept its statement in its journal, and the same device
+// restarted sends it again unchanged at its next read, which evs answers as the commit it made; the deposits it named
+// stand no more and the journal is gone.
+func TestEvsConsumeJournalSurvivesACrash(t *testing.T) {
+	world := newDepositWorld(t)
+	depositor := world.device(world.depositor, true, NewFakeStore().Root()).Repo(world.repoId)
+	ownerStore := NewFakeStore().Root()
+	owner := world.device(world.owner, false, ownerStore).Repo(world.repoId)
+	body := []byte("consumed across a crash")
+	deposited, err := depositor.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: bytes.NewReader(body), Size: int64(len(body))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refId := sidecar.EvsDepositRefId(world.repoId, world.depositor.SidecarId)
+	// the device stops once evs has served the CONSUME and before its answer arrives
+	crashCtx, crash := context.WithCancel(world.ctx)
+	world.afterServe = func(request *http.Request) error {
+		if strings.HasSuffix(request.URL.Path, "/push") {
+			crash()
+			return errors.New("the device crashed before the answer")
+		}
+		return nil
+	}
+	if _, err := owner.Consume(crashCtx, &sidecar.EvsConsumeArgs{DepositRefId: refId, EntryIds: []sidecar.EvsToken{deposited.EntryId}, ConsumedThrough: deposited.Version}); err == nil {
+		t.Fatal("a CONSUME whose answer was lost answered")
+	}
+	if entries, err := ownerStore.List("deposits/consume/"); err != nil || len(entries) != 1 {
+		t.Fatalf("the journal after the crash: %d %v", len(entries), err)
+	}
+	world.afterServe = nil
+	restarted := world.device(world.owner, false, ownerStore).Repo(world.repoId)
+	if read := world.standing(restarted); len(read) != 0 {
+		t.Fatalf("deposits standing after the resumed CONSUME: %v", read)
+	}
+	if entries, err := ownerStore.List("deposits/consume/"); err != nil || len(entries) != 0 {
+		t.Fatalf("the journal after the resume: %d %v", len(entries), err)
+	}
+	if world.slotCount() != 0 {
+		t.Errorf("%d slots after the resumed CONSUME", world.slotCount())
+	}
+}
+
+// A gkm client that answers ErrGkmWait to its first waits DropKey calls, as one no newer rotation has reached yet.
+type depositWaitingGkm struct {
+	sidecar.GkmClient
+	waits int
+	calls int
+}
+
+func (self *depositWaitingGkm) DropKey(ctx context.Context, repoId sidecar.Id) (*sidecar.GkmDropKey, error) {
+	self.calls += 1
+	if self.calls <= self.waits {
+		return nil, sidecar.ErrGkmWait
+	}
+	return self.GkmClient.DropKey(ctx, repoId)
+}
+
+// §11.12's deposits row: a depositor whose drop key gkm does not give yet waits for it, DropKeyWait at a time, and
+// deposits once it comes; one that waits past DropKeyWaitCount gets ErrGkmWait, having sent nothing.
+func TestEvsDepositWaitsForItsDropKey(t *testing.T) {
+	world := newDepositWorld(t)
+	waiting := &depositWaitingGkm{waits: 2}
+	patient := world.deviceWith(world.depositor, true, NewFakeStore().Root(), func(client sidecar.GkmClient) sidecar.GkmClient {
+		waiting.GkmClient = client
+		return waiting
+	}, nil, true).Repo(world.repoId)
+	body := []byte("after the wait")
+	if _, err := patient.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: bytes.NewReader(body), Size: int64(len(body))}); err != nil || waiting.calls != 3 {
+		t.Fatalf("the deposit after two waits: %d calls %v", waiting.calls, err)
+	}
+	slots := world.slotCount()
+	impatient := &depositWaitingGkm{waits: 5}
+	refused := world.deviceWith(world.depositor, true, NewFakeStore().Root(), func(client sidecar.GkmClient) sidecar.GkmClient {
+		impatient.GkmClient = client
+		return impatient
+	}, func(settings *sidecar.EvsSettings) { settings.DropKeyWaitCount = 2 }, true).Repo(world.repoId)
+	if _, err := refused.Deposit(world.ctx, &sidecar.EvsDepositArgs{Body: bytes.NewReader(body), Size: int64(len(body))}); !errors.Is(err, sidecar.ErrGkmWait) || impatient.calls != 3 {
+		t.Fatalf("past the waits: %d calls %v", impatient.calls, err)
+	}
+	if world.slotCount() != slots {
+		t.Error("a deposit that waited out its bound sent something")
 	}
 }

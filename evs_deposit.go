@@ -7,7 +7,8 @@
 //	drop key  GkmClient.DropKey gives the newest generation's drop key under §10.5's depositor rule: its GenRotate
 //	          verifies, it covers holders_shrunk_at and every holder expiry the depositor knows, now is before its
 //	          drop_not_after_ms, and it is not below the depositor's pin for the repo, which it raises; else ErrGkmWait,
-//	          and the depositor waits for a newer rotation. A depositor holds no path, manifest or fek key
+//	          and the depositor waits for a newer rotation: it asks again after DropKeyWait, at most DropKeyWaitCount
+//	          times, before the caller gets ErrGkmWait. A depositor holds no path, manifest or fek key
 //	seal      one random object key per deposit, which a slot the deposit push introduces holds HPKE-XWing to the drop
 //	          key (EvsWrapDepositKey); K_dep from it seals the record headers, the entry's sealed fields and the push's
 //	          metadata in manifest's place (EVS-FORMAT.md's deposits); the body goes under the object key, one
@@ -150,12 +151,9 @@ func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDep
 	refId := EvsDepositRefId(self.repoId, identity.SidecarId)
 	entryId := NewEvsRandomToken()
 	for rebuild := 0; ; rebuild += 1 {
-		dropKey, err := self.client.args.Gkm.DropKey(ctx, self.repoId)
+		dropKey, err := self.waitDropKey(ctx)
 		if err != nil {
 			return nil, err
-		}
-		if !self.client.clock.Now().Before(dropKey.NotAfter) {
-			return nil, fmt.Errorf("%w: the drop key lapsed", ErrGkmWait)
 		}
 		head, err := self.depositHead(refId)
 		if err != nil {
@@ -186,6 +184,25 @@ func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDep
 			// a newer drop key, or what a rebuild answers: sealed again, new slot ids
 		default:
 			return nil, err
+		}
+	}
+}
+
+// The newest drop key the depositor rule takes and that has not lapsed, asked again after DropKeyWait while gkm
+// answers ErrGkmWait, at most DropKeyWaitCount times (see the file header's drop key row).
+func (self *EvsRepo) waitDropKey(ctx context.Context) (*GkmDropKey, error) {
+	for waits := 0; ; waits += 1 {
+		dropKey, err := self.client.args.Gkm.DropKey(ctx, self.repoId)
+		if err == nil && !self.client.clock.Now().Before(dropKey.NotAfter) {
+			err = fmt.Errorf("%w: the drop key lapsed", ErrGkmWait)
+		}
+		if err == nil || !errors.Is(err, ErrGkmWait) || self.client.settings.DropKeyWaitCount <= waits {
+			return dropKey, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-self.client.clock.After(self.client.settings.DropKeyWait):
 		}
 	}
 }
