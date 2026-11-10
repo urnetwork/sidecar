@@ -74,7 +74,7 @@ func newAclBenchState(tb testing.TB) *aclBenchState {
 			fixture.rule(src, []*protocol.AclTarget{aclAtomTarget(atomOf()), aclAtomTarget(atomOf())}, protocol.AclAction_ACL_ACTION_DIAL, protocol.AclAction_ACL_ACTION_ROUTE)
 		case 1:
 			rule := fixture.rule(src, []*protocol.AclTarget{aclAtomTarget(atomOf())}, protocol.AclAction_ACL_ACTION_DIAL)
-			rule.Ports = []*protocol.AclPortRange{{Protocol: aclIpProtocolTcp, First: 443, Last: 443}}
+			rule.PortsLimited = true
 			rule.Expires = aclTestNow.Add(-1).UnixMilli()
 		case 2:
 			fixture.rule(src, []*protocol.AclTarget{aclRepoTarget(bench.repos[random.IntN(len(bench.repos))])}, protocol.AclAction_ACL_ACTION_READ, protocol.AclAction_ACL_ACTION_WRITE)
@@ -103,11 +103,11 @@ func TestAclChecksDoNotAllocate(t *testing.T) {
 		"Reach":         func() { state.Reach(source, destination, aclTestNow) },
 		"Reach client":  func() { state.Reach(client, destination, aclTestNow) },
 		"Reach to one":  func() { state.Reach(source, client, aclTestNow) },
-		"MayDial":       func() { state.MayDial(source, destination, aclIpProtocolTcp, 443, aclTestNow) },
+		"MayDial":       func() { state.MayDial(source, destination, aclTestNow) },
 		"MayDialSocket": func() { state.MayDialSocket(source, bench.tokenPaths[0], aclTestNow) },
 		"MayListen":     func() { state.MayListen(destination, AclSocketName{NameToken: bench.tokenPaths[1]}, aclTestNow) },
 		"MayListen tls": func() { state.MayListen(destination, AclSocketName{PublicName: "tls/443/blog"}, aclTestNow) },
-		"MayRoute":      func() { state.MayRoute(source, address, aclIpProtocolTcp, 443, destination, aclTestNow) },
+		"MayRoute":      func() { state.MayRoute(source, address, destination, aclTestNow) },
 		"MayPublish":    func() { state.MayPublish(destination, "app-preview", aclTestNow) },
 		"MaySend":       func() { state.MaySend(source, aclTestNow) },
 		"EvsAccess":     func() { state.EvsAccess(source, bench.repos[0], AclTokenAudienceEvs, aclTestNow) },
@@ -133,7 +133,7 @@ func BenchmarkAclMayDial(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; b.Loop(); i += 1 {
-		bench.state.MayDial(AclSidecarSubject(bench.devices[i%len(bench.devices)]), AclSidecarSubject(bench.agents[i%len(bench.agents)]), aclIpProtocolTcp, 443, aclTestNow)
+		bench.state.MayDial(AclSidecarSubject(bench.devices[i%len(bench.devices)]), AclSidecarSubject(bench.agents[i%len(bench.agents)]), aclTestNow)
 	}
 }
 

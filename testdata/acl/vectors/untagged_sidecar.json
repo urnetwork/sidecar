@@ -1,0 +1,32 @@
+{
+  "name": "untagged_sidecar",
+  "pins": [
+    {
+      "row": "atoms[0]",
+      "clause": "user: compiles to its member's derived atom (plan-ACL-nonsidecar-subjects)",
+      "hex": "0a10f7885bad781c4f8f2f959b425f9eb0b712103a20213130ee8ede653238439cfc6204"
+    },
+    {
+      "row": "rules[0]",
+      "clause": "sock: as its token path, ports_limited and no port (plan-BRIDGE-gate-row-prefixes #1)",
+      "hex": "0a101d1d884bd45deac813acef96e01a39bd1210000000000000000000000000000000011a122a1026beee4a0dfe4d0018a27d15651be2722201015801"
+    },
+    {
+      "row": "rules[1]",
+      "clause": "autogroup:self dial and route among an owner's devices (§8.4)",
+      "hex": "0a10824dff5fdf3016198c1b3e02fd664da71210000000000000000000000000000000011a120a100000000000000000000000000000000c22020103"
+    },
+    {
+      "row": "rules[2]",
+      "clause": "evs:\u003clabel\u003e through the labels file, write (§8.4)",
+      "hex": "0a10a06967e037ca7138ed7d034cbbfc0f1e1210f7885bad781c4f8f2f959b425f9eb0b71a122210df7412b535f7a0c1bc3248d87b731a44220105"
+    },
+    {
+      "row": "repos[0]",
+      "clause": "the log's repo rows ride as folded",
+      "hex": "0a10df7412b535f7a0c1bc3248d87b731a441001"
+    }
+  ],
+  "rows": "080112240a10f7885bad781c4f8f2f959b425f9eb0b712103a20213130ee8ede653238439cfc62041a3d0a101d1d884bd45deac813acef96e01a39bd1210000000000000000000000000000000011a122a1026beee4a0dfe4d0018a27d15651be27222010158011a3c0a10824dff5fdf3016198c1b3e02fd664da71210000000000000000000000000000000011a120a100000000000000000000000000000000c220201031a3b0a10a06967e037ca7138ed7d034cbbfc0f1e1210f7885bad781c4f8f2f959b425f9eb0b71a122210df7412b535f7a0c1bc3248d87b731a442201052a140a10df7412b535f7a0c1bc3248d87b731a441001",
+  "rows_sha256": "76b9afe8075f70f3452bcca0c6356f2a0c537fa1c2a27458739e4cffc3072521"
+}

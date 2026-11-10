@@ -199,7 +199,7 @@ rows:
     differential: "the reference each is written beside"
     targets:
       - {name: FuzzParseAclPolicy, package: ".", seeds: [testdata/fuzz/FuzzParseAclPolicy]}
-      - {name: FuzzCompileAcl, package: ".", owner: ACL-M2-10}
+      - {name: FuzzCompileAcl, package: ".", owner: ACL-M2-10, seeds: [testdata/fuzz/FuzzCompileAcl], reference: newAclReference}
       - {name: FuzzBridgeEgressPolicy, package: device, owner: BRIDGE-M4-09, milestone: M4, seeds: [testdata/fuzz/FuzzBridgeEgressPolicy], reference: egressCompare}
 
   - id: daemon-inputs
