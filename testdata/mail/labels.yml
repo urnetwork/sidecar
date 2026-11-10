@@ -1,0 +1,343 @@
+# T1 vectors for owner decision 135's labels (§15.5's Labels; D-MAIL-13, D-MAIL-14, I-11, FS-39, FS-121; MAIL-M7-10),
+# which mail_label_test.go runs on every leg the root's tests run on, the sidecar_http Worker included, so it embeds
+# this file and reads it with mail_operators.go's reader: the same shape as mail_operators.yml, a fixture list in its
+# version and operators, then cases. Every name is synthetic, under .example.
+#
+# A case builds a deposit and decides its label. Its keys, each optional but name and want:
+#
+#   deposit       receiver (the default), same-network, or none
+#   evidence      sealed (the default), none, version-2, other-receiver, or other-message
+#   require_tls   MAIL carried REQUIRETLS
+#   tlsa          sni_tlsa_live
+#   ptr           the receiver's own forward-confirmed PTR name
+#   dkim          entries as d=verdict, in selection order
+#   from          the From domain
+#   recipients    the deposit's recipients under root.example; id@acme.root.example by default
+#   mta_sts       the recipient's domain publishes an MTA-STS policy
+#   limits        a bound cut the checks
+#   strict_chain  the sealed strict_chain
+#   may_send      a same-network deposit's signer may send as From
+#   list          fixture (the default) or empty: a list version 9 with no operator
+#   want          validated, opportunistic or member-signed
+#   want_rule     requiretls, operator, or none (the default)
+#   want_operator, want_match (ptr or dkim), want_cites (dane, mta-sts, both or none, the default),
+#   want_unavailable, want_incomplete, want_strict
+
+version: 7
+operators:
+  - id: dane-mail
+    name: DANE Mail
+    ptr_suffixes: [out.dane-mail.example]
+    dkim_domains: [dane-mail.example]
+    dane: https://dane-mail.example/security/dane
+  - id: sts-mail
+    name: Policy Mail
+    ptr_suffixes: [mta.sts-mail.example]
+    dkim_domains: [sts-mail.example]
+    mta_sts: https://sts-mail.example/security/policy
+  - id: both-mail
+    name: Both Mail
+    dkim_domains: [both-mail.example]
+    dane: https://both-mail.example/dane
+    mta_sts: https://both-mail.example/sts
+  - id: second-dane
+    name: Second DANE Mail
+    ptr_suffixes: [out.dane-mail.example]
+    dane: https://second.example/dane
+
+cases:
+  - name: requiretls-alone
+    require_tls: true
+    want: validated
+    want_rule: requiretls
+  - name: requiretls-without-tlsa-or-operator
+    require_tls: true
+    ptr: host.unlisted.example
+    want: validated
+    want_rule: requiretls
+  - name: requiretls-over-an-operator
+    require_tls: true
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    want: validated
+    want_rule: requiretls
+  - name: requiretls-with-no-evidence-is-unavailable
+    require_tls: true
+    evidence: none
+    want: opportunistic
+    want_unavailable: true
+  - name: operator-by-ptr
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: ptr
+    want_cites: dane
+  - name: operator-by-ptr-at-the-suffix-itself
+    tlsa: true
+    ptr: out.dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: ptr
+    want_cites: dane
+  - name: ptr-not-at-a-label
+    tlsa: true
+    ptr: evilout.dane-mail.example
+    want: opportunistic
+  - name: ptr-under-another-name
+    tlsa: true
+    ptr: out.dane-mail.example.evil.example
+    want: opportunistic
+  - name: operator-by-ptr-without-tlsa
+    ptr: a1.out.dane-mail.example
+    want: opportunistic
+  - name: operator-by-aligned-dkim
+    tlsa: true
+    dkim: [dane-mail.example=pass]
+    from: dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: dkim
+    want_cites: dane
+  - name: operator-by-dkim-at-subdomains
+    tlsa: true
+    dkim: [s.dane-mail.example=pass]
+    from: users.dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: dkim
+    want_cites: dane
+  - name: dkim-listed-but-not-aligned
+    tlsa: true
+    dkim: [dane-mail.example=pass]
+    from: customer.example
+    want: opportunistic
+  - name: dkim-aligned-but-not-listed
+    tlsa: true
+    dkim: [customer.example=pass]
+    from: customer.example
+    want: opportunistic
+  - name: dkim-fail-never-validates
+    tlsa: true
+    dkim: [dane-mail.example=fail]
+    from: dane-mail.example
+    want: opportunistic
+  - name: dkim-incomplete-never-validates
+    tlsa: true
+    limits: true
+    dkim: [dane-mail.example=incomplete]
+    from: dane-mail.example
+    want: opportunistic
+    want_incomplete: true
+  - name: dkim-temperror-never-validates
+    tlsa: true
+    dkim: [dane-mail.example=temperror]
+    from: dane-mail.example
+    want: opportunistic
+  - name: dkim-permerror-never-validates
+    tlsa: true
+    dkim: [dane-mail.example=permerror]
+    from: dane-mail.example
+    want: opportunistic
+  - name: a-pass-after-failures
+    tlsa: true
+    dkim: [dane-mail.example=fail, other.example=pass, dane-mail.example=pass]
+    from: dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: dkim
+    want_cites: dane
+  - name: no-from-no-dkim-match
+    tlsa: true
+    dkim: [dane-mail.example=pass]
+    want: opportunistic
+  - name: dkim-without-tlsa
+    dkim: [dane-mail.example=pass]
+    from: dane-mail.example
+    want: opportunistic
+  - name: no-tlsa-nothing-else
+    want: opportunistic
+  - name: limits-with-complete-deciding-checks
+    tlsa: true
+    limits: true
+    ptr: a1.out.dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: ptr
+    want_cites: dane
+    want_incomplete: true
+  - name: limits-that-cut-the-tlsa
+    limits: true
+    ptr: a1.out.dane-mail.example
+    want: opportunistic
+    want_incomplete: true
+  - name: empty-list-labels-only-requiretls
+    list: empty
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    dkim: [dane-mail.example=pass]
+    from: dane-mail.example
+    want: opportunistic
+  - name: empty-list-keeps-requiretls
+    list: empty
+    require_tls: true
+    want: validated
+    want_rule: requiretls
+  - name: first-operator-in-list-order
+    tlsa: true
+    ptr: z9.out.dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: ptr
+    want_cites: dane
+  - name: mta-sts-only-burner-validated-citing-nothing
+    tlsa: true
+    ptr: m1.mta.sts-mail.example
+    recipients: [anything@quiet-4821.acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: sts-mail
+    want_match: ptr
+  - name: mta-sts-only-reverse-alias-cites-nothing
+    tlsa: true
+    ptr: m1.mta.sts-mail.example
+    recipients: [r-k3j4h5@quiet-4821.acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: sts-mail
+    want_match: ptr
+  - name: dane-listed-burner-cites-dane
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    recipients: [anything@quiet-4821.acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: ptr
+    want_cites: dane
+  - name: both-listed-burner-cites-dane-only
+    tlsa: true
+    dkim: [both-mail.example=pass]
+    from: both-mail.example
+    recipients: [anything@quiet-4821.acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: both-mail
+    want_match: dkim
+    want_cites: dane
+  - name: mta-sts-cited-only-with-a-policy
+    tlsa: true
+    ptr: m1.mta.sts-mail.example
+    recipients: [admin@acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: sts-mail
+    want_match: ptr
+    want_cites: mta-sts
+  - name: mta-sts-not-cited-without-a-policy
+    tlsa: true
+    ptr: m1.mta.sts-mail.example
+    recipients: [admin@acme.root.example]
+    want: validated
+    want_rule: operator
+    want_operator: sts-mail
+    want_match: ptr
+  - name: both-cited-for-network-mail-with-a-policy
+    tlsa: true
+    dkim: [both-mail.example=pass]
+    from: both-mail.example
+    recipients: [id@acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: both-mail
+    want_match: dkim
+    want_cites: both
+  - name: a-burner-among-recipients-cites-no-mta-sts
+    tlsa: true
+    dkim: [both-mail.example=pass]
+    from: both-mail.example
+    recipients: [id@acme.root.example, anything@quiet-4821.acme.root.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: both-mail
+    want_match: dkim
+    want_cites: dane
+  - name: a-recipient-outside-the-root-cites-no-mta-sts
+    tlsa: true
+    dkim: [both-mail.example=pass]
+    from: both-mail.example
+    recipients: [id@acme.elsewhere.example]
+    mta_sts: true
+    want: validated
+    want_rule: operator
+    want_operator: both-mail
+    want_match: dkim
+    want_cites: dane
+  - name: no-evidence
+    evidence: none
+    tlsa: true
+    want: opportunistic
+    want_unavailable: true
+  - name: evidence-of-another-version
+    evidence: version-2
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    want: opportunistic
+    want_unavailable: true
+  - name: evidence-of-another-receiver
+    evidence: other-receiver
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    want: opportunistic
+    want_unavailable: true
+  - name: evidence-of-another-message
+    evidence: other-message
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    want: opportunistic
+    want_unavailable: true
+  - name: no-deposit
+    deposit: none
+    want: opportunistic
+    want_unavailable: true
+  - name: same-network-member-signed
+    deposit: same-network
+    may_send: true
+    want: member-signed
+  - name: same-network-not-allowed-from
+    deposit: same-network
+    want: opportunistic
+    want_unavailable: true
+  - name: same-network-ignores-requiretls
+    deposit: same-network
+    require_tls: true
+    want: opportunistic
+    want_unavailable: true
+  - name: strict-chain-on-opportunistic
+    strict_chain: true
+    want: opportunistic
+    want_strict: true
+  - name: strict-chain-on-validated
+    strict_chain: true
+    tlsa: true
+    ptr: a1.out.dane-mail.example
+    want: validated
+    want_rule: operator
+    want_operator: dane-mail
+    want_match: ptr
+    want_cites: dane
+    want_strict: true
