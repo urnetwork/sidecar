@@ -45,6 +45,8 @@ CONSTANTS
     InitReaders,  \* admitted before the first entry
     InitLeaves,   \* leaves beside the creator at Init, added at epoch 1
     WithB,        \* repo B adds devices too (the Welcome pointer twin)
+    Losers,       \* member devices that may lose their group state
+    StaleTargets, \* leaves a writer may remove as stale
     Story,        \* <<>>, or the pattern each action must match in turn
     Twin          \* "none", or the rule a twin breaks
 
@@ -59,7 +61,7 @@ VARIABLES
     tip,       \* each sidecar's verified position
     epochs,    \* gkm/<A>/epoch/<n>, index n+1: [c, roster, gen, auth, time, k]
     gens,      \* gkm/<A>/gen/<g>, index g: [r, holders, auth, time, wraps, leafEpoch]
-    late,      \* LATE deliveries: [g, r, auth]
+    late,      \* LATE deliveries: [g, r]
     welcomes,  \* Welcomes with their pointer: [grp, epoch, r, key, lost]
     kp,        \* one-time KeyPackages a member device has at gkm
     at,        \* the epoch index a device adopted; 0 with no group state
@@ -212,6 +214,7 @@ Commit(c, kind, d) ==
              \/ kind = "remove" /\ c \in Writers /\ c \notin ReadOnly /\ Tree \ H # {} /\ d = c
              \/ kind = "path" /\ d = c
              \/ kind = "stale" /\ c \in Writers /\ c \notin ReadOnly /\ d \in Tree /\ d \in H /\ d # c
+                                /\ d \in StaleTargets
           \* the roster rule, as the committer checks it before it commits (6.2.3)
           /\ Twin = "GenWrapIgnoresRoster" \/ newRoster \subseteq H
           /\ epochs' = Append(epochs, [c |-> c, roster |-> newRoster, gen |-> G, auth |-> tip[c],
@@ -294,7 +297,7 @@ LateDeliver(d, x) ==
     /\ x # d /\ x \in Readers(tip[d], Clock)
     /\ x \notin gens[G].wraps /\ ~\E w \in late : w.g = G /\ w.r = x
     /\ Match([a |-> "Late", s |-> d, d |-> x])
-    /\ late' = late \cup {[g |-> G, r |-> x, auth |-> tip[d]]}
+    /\ late' = late \cup {[g |-> G, r |-> x]}
     /\ Step
     /\ UNCHANGED <<log, tip, epochs, gens, welcomes, kp, at, reached, sealed, squat, epochB>>
 
@@ -345,7 +348,7 @@ SelfJoin(s) ==
 (* in the tree until it resyncs or a writer removes it as stale.           *)
 (***************************************************************************)
 LoseState(s) ==
-    /\ s \in MemberDevices /\ at[s] > 0
+    /\ s \in Losers /\ at[s] > 0
     /\ Match([a |-> "Lose", s |-> s])
     /\ at' = [at EXCEPT ![s] = 0]
     /\ Step
