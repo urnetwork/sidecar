@@ -34,9 +34,8 @@ func (self *testDirectoryWorld) createRepo(kind protocol.RepoKind, ownerMemberId
 	return repoId
 }
 
-// A client of the world's for sidecarId, appending through writer, nil for none: a reader's, or a device's, knowing
-// repos by repoName, nil for no names.
-func (self *testDirectoryWorld) clientFor(sidecarId sidecar.Id, writer sidecar.RecordWriter, readOnly bool, repoName func(repoId sidecar.Id) string) *testDirectoryReader {
+// A client of the world's for sidecarId, appending through writer, nil for none: a reader's, or a device's.
+func (self *testDirectoryWorld) clientFor(sidecarId sidecar.Id, writer sidecar.RecordWriter, readOnly bool) *testDirectoryReader {
 	self.t.Helper()
 	files := sidecartest.NewFakeStore()
 	store, err := files.Root().Directory("directory", "search")
@@ -60,7 +59,6 @@ func (self *testDirectoryWorld) clientFor(sidecarId sidecar.Id, writer sidecar.R
 		Settings: sidecar.DefaultSidecarSettings().Directory,
 		Writer:   writer,
 		ReadOnly: readOnly,
-		RepoName: repoName,
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -76,9 +74,8 @@ type testDirectoryDevice struct {
 	*testDirectoryReader
 }
 
-// writer's device, knowing repos by repoName, nil for no names. Its entries go through its record alone, so its test
-// chain stays unused.
-func (self *testDirectoryWorld) device(writer *testDirectoryWriter, repoName func(repoId sidecar.Id) string) *testDirectoryDevice {
+// writer's device. Its entries go through its record alone, so its test chain stays unused.
+func (self *testDirectoryWorld) device(writer *testDirectoryWriter) *testDirectoryDevice {
 	self.t.Helper()
 	files := sidecartest.NewFakeStore()
 	store, err := files.Root().Directory("record", "record")
@@ -98,7 +95,7 @@ func (self *testDirectoryWorld) device(writer *testDirectoryWriter, repoName fun
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return &testDirectoryDevice{writer: writer, record: record, testDirectoryReader: self.clientFor(writer.sidecarId, record.Writer(), false, repoName)}
+	return &testDirectoryDevice{writer: writer, record: record, testDirectoryReader: self.clientFor(writer.sidecarId, record.Writer(), false)}
 }
 
 // Pushes what the device's record holds.
@@ -200,7 +197,7 @@ func TestDirectoryRepoItemOfARevokedAdminIsResigned(t *testing.T) {
 		}
 		// F's device read P's item before the revocation: a device that never held a version cannot tell an
 		// announcement from a private marker, so it writes nothing for it
-		fDevice := world.device(f, nil)
+		fDevice := world.device(f)
 		fDevice.mustSync(t)
 
 		admission := world.directoryFixture.Sidecars[e.sidecarId]
@@ -383,7 +380,7 @@ func TestDirectoryAnnounceNewRepoDefaults(t *testing.T) {
 	inbox := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
 	private := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
 	vault := world.createRepo(protocol.RepoKind_REPO_KIND_VAULT, &memberId, writer)
-	device := world.device(writer, nil)
+	device := world.device(writer)
 	created := []*sidecar.EvsRepoCreated{
 		{RepoId: general, Kind: protocol.RepoKind_REPO_KIND_GENERAL, DisplayName: "design notes", Confirmed: true},
 		{RepoId: record, Kind: protocol.RepoKind_REPO_KIND_RECORD, DisplayName: "build ledger"},
@@ -485,8 +482,8 @@ func TestDirectoryAnnounceRepoRefusals(t *testing.T) {
 	general := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, owner)
 	vault := world.createRepo(protocol.RepoKind_REPO_KIND_VAULT, &ownerMember, owner)
 	mailcfg := world.createRepo(protocol.RepoKind_REPO_KIND_MAILCFG, nil, other)
-	ownerDevice := world.device(owner, nil)
-	otherDevice := world.device(other, nil)
+	ownerDevice := world.device(owner)
+	otherDevice := world.device(other)
 	refusals := []struct {
 		client *sidecar.DirectoryClient
 		repoId sidecar.Id
@@ -496,8 +493,8 @@ func TestDirectoryAnnounceRepoRefusals(t *testing.T) {
 		{client: otherDevice.client, repoId: vault, want: sidecar.ErrDirectoryRepoRight},
 		{client: otherDevice.client, repoId: mailcfg, want: sidecar.ErrDirectoryRepoKind},
 		{client: otherDevice.client, repoId: world.directoryId, want: sidecar.ErrDirectoryRepoKind},
-		{client: world.clientFor(owner.sidecarId, ownerDevice.record.Writer(), true, nil).client, repoId: general, want: sidecar.ErrDirectoryReadOnly},
-		{client: world.clientFor(owner.sidecarId, nil, false, nil).client, repoId: general, want: sidecar.ErrDirectoryNoWriter},
+		{client: world.clientFor(owner.sidecarId, ownerDevice.record.Writer(), true).client, repoId: general, want: sidecar.ErrDirectoryReadOnly},
+		{client: world.clientFor(owner.sidecarId, nil, false).client, repoId: general, want: sidecar.ErrDirectoryNoWriter},
 	}
 	for _, refusal := range refusals {
 		if _, err := refusal.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: refusal.repoId, DisplayName: "x"}); !errors.Is(err, refusal.want) {
@@ -529,10 +526,11 @@ func TestDirectoryAnnounceRepoRefusals(t *testing.T) {
 	}
 }
 
-// A general or record repo created before the directory, with no item, is announced by the first of its admins'
-// devices to sync it, with the name the device knows it by; one created after the directory is its creating device's
-// to announce, or to mark private, and no other device writes it.
-func TestDirectoryMaintainReposAnnouncesPredatingRepos(t *testing.T) {
+// A general or record repo created before the directory, with no item, is written by the first of its admins'
+// devices to sync it, as a private marker while question record-m6-14-private-before-directory is open, so a repo its
+// creator marked private before the directory existed is never named; one created after the directory is its creating
+// device's to announce or to mark private, and no other device writes it; an admin may then announce it explicitly.
+func TestDirectoryMaintainReposMarksPredatingRepos(t *testing.T) {
 	world := newTestDirectoryWorld(t, nil)
 	memberId := sidecar.NewId()
 	writer := world.memberWriter(memberId)
@@ -543,8 +541,7 @@ func TestDirectoryMaintainReposAnnouncesPredatingRepos(t *testing.T) {
 	world.directoryFixture.Repos[world.directoryId].Admins[0].At = world.directoryAuth.Tip().Pin().GetVersion() + 1
 	world.publish()
 	later := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
-	names := map[sidecar.Id]string{predating: "old project"}
-	device := world.device(writer, func(repoId sidecar.Id) string { return names[repoId] })
+	device := world.device(writer)
 	device.mustSync(t)
 	writes, err := device.client.MaintainRepos(t.Context())
 	if err != nil {
@@ -557,15 +554,25 @@ func TestDirectoryMaintainReposAnnouncesPredatingRepos(t *testing.T) {
 	reader := world.reader(nil)
 	reader.mustSync(t)
 	item := testRepoItemShown(t, reader, predating)
-	if item == nil || item.Announcement.GetWhat().GetTitle() != "old project" || item.SignerSidecarId != writer.sidecarId {
+	if item == nil || item.Display != sidecar.DirectoryItemPrivate || item.Announcement.GetWhat().GetTitle() != "" ||
+		item.SignerSidecarId != writer.sidecarId || item.Announcement.GetWhat().GetRequests() != uint32(sidecar.DirectoryRequestsOpen) {
 		t.Errorf("the predating repo's item: %v", item)
 	}
 	if testRepoItemShown(t, reader, later) != nil || testRepoItemShown(t, reader, predatingVault) != nil {
-		t.Error("a repo created after the directory, or a vault, announced by another device")
+		t.Error("a repo created after the directory, or a vault, written by another device")
 	}
 	device.mustSync(t)
 	if again, err := device.client.MaintainRepos(t.Context()); err != nil || len(again) != 0 {
 		t.Errorf("a second sync writes %d: %v", len(again), err)
+	}
+	// its admin announces it explicitly, over the marker
+	if _, err := device.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: predating, DisplayName: "old project", Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	device.flush(t)
+	reader.mustSync(t)
+	if item := testRepoItemShown(t, reader, predating); item == nil || item.Display != sidecar.DirectoryItemActive || item.Announcement.GetWhat().GetTitle() != "old project" {
+		t.Errorf("announced over the marker: %v", item)
 	}
 }
 
