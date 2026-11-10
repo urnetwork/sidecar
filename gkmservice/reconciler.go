@@ -5,7 +5,12 @@
 //     per-client gkm topic to the repo's writers, the entry's signer first, as the revoking device commits the Remove
 //     first (§10.6's pending changes, KF4); in the directory group only to that signer and the config writers (§10.9).
 //     While a repo's write gate is closed the hint repeats every PendingHintInterval (60 s). An expiry closes a gate
-//     with no log entry, so the reconciler keeps each network's next holder expiry and wakes for it. Work is driven by
+//     with no log entry, so the reconciler keeps each network's next holder expiry and wakes for it. It repeats
+//     too, every DroppedLeafHintInterval, while the state shows a holder dropped since the newest epoch's auth pin
+//     and time, whatever the gate says (DESIGN-DETAILS 6.2.3's H1): a wrapped writer's rotation reopens the gate
+//     while the dropped holder's leaf may still stand, and a leaf that may commit no Remove waits on a writer leaf
+//     to commit it. gkm cannot see whether the dropped holder was a leaf, so the hint goes either way, and it
+//     stops at the first epoch whose pin passes the drop. Work is driven by
 //     the state's changes ({acl_<networkId>}v, through GkmReconcilerState.Watch) and those expiry times, never by a
 //     scan of every repo each minute; what a change costs is its own network's repos, and a gate's check reads its
 //     repo's newest form and generation.
@@ -86,6 +91,9 @@ type GkmReconcilerSettings struct {
 	WelcomeLifetime time.Duration
 	// pending repeats this often while a gate is closed (§10.6's pending changes: 60 s).
 	PendingHintInterval time.Duration
+	// pending repeats this often while a holder dropped since the newest epoch's pin and time, the gate open or
+	// not (DESIGN-DETAILS 6.2.3's H1): 60 s, one wake a minute per affected group.
+	DroppedLeafHintInterval time.Duration
 	// How far ahead a network's next holder expiry is looked for; one past it is found at the wake that horizon
 	// sets.
 	ExpiryHorizon time.Duration
@@ -122,13 +130,16 @@ func DefaultGkmReconcilerSettings() *GkmReconcilerSettings {
 		WelcomeLifetime:     90 * 24 * time.Hour,
 		PendingHintInterval: 60 * time.Second,
 		ExpiryHorizon:       24 * time.Hour,
-		SweepUnitCount:      256,
-		SweepInterval:       1 * time.Hour,
-		SweepRunTime:        10 * time.Minute,
-		NetworkCount:        100 * 1000,
-		ClosedGateCount:     100 * 1000,
-		HintTimeout:         5 * time.Second,
-		UnitKeyMaxCount:     256 * 1024,
+
+		DroppedLeafHintInterval: 60 * time.Second,
+
+		SweepUnitCount:  256,
+		SweepInterval:   1 * time.Hour,
+		SweepRunTime:    10 * time.Minute,
+		NetworkCount:    100 * 1000,
+		ClosedGateCount: 100 * 1000,
+		HintTimeout:     5 * time.Second,
+		UnitKeyMaxCount: 256 * 1024,
 
 		SweepBacklogByteCount: 4 * 1024 * 1024,
 	}
@@ -152,6 +163,7 @@ func (self *GkmReconcilerSettings) Validate() error {
 		{name: "KeyPackageLifetime", value: int64(self.KeyPackageLifetime)},
 		{name: "WelcomeLifetime", value: int64(self.WelcomeLifetime)},
 		{name: "PendingHintInterval", value: int64(self.PendingHintInterval)},
+		{name: "DroppedLeafHintInterval", value: int64(self.DroppedLeafHintInterval)},
 		{name: "ExpiryHorizon", value: int64(self.ExpiryHorizon)},
 		{name: "SweepUnitCount", value: int64(self.SweepUnitCount)},
 		{name: "SweepInterval", value: int64(self.SweepInterval)},
@@ -188,6 +200,8 @@ type gkmClosedGate struct {
 	networkId sidecar.Id
 	// when its last pending hint went
 	hintedAt time.Time
+	// how often its hint repeats: the gate's interval while it is closed, the dropped leaf's while only that holds
+	interval time.Duration
 }
 
 // The reconciler. See the file header.
@@ -310,7 +324,8 @@ func (self *GkmReconciler) run() {
 			self.stopWatch()
 		}
 	}()
-	nextGateHint := self.clock.Now().Add(self.settings.PendingHintInterval)
+	gateHintInterval := min(self.settings.PendingHintInterval, self.settings.DroppedLeafHintInterval)
+	nextGateHint := self.clock.Now().Add(gateHintInterval)
 	for {
 		changes := map[sidecar.Id]*GkmStateChange{}
 		resync := false
@@ -341,7 +356,7 @@ func (self *GkmReconciler) run() {
 		}
 		if !now.Before(nextGateHint) {
 			self.rehintClosedGates()
-			nextGateHint = now.Add(self.settings.PendingHintInterval)
+			nextGateHint = now.Add(gateHintInterval)
 		}
 		self.passCount.Update(func(count int) int { return count + 1 })
 		wakeAt := nextGateHint
@@ -431,10 +446,11 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 		if previous == nil || holdersChanged || shrinkMoved || wake || self.gateTracked(repoId) {
 			closed, groupId, known := self.gateClosed(state.View, repoId, now)
 			if known {
-				if holdersChanged || closed {
+				dropped := self.holderDroppedSinceNewestEpoch(state.View, repoId, groupId, now)
+				if holdersChanged || closed || dropped {
 					self.hintPending(state, repoId, groupId, change.SignerId, configWriterIds)
 				}
-				self.trackGate(networkId, repoId, closed, now)
+				self.trackGate(networkId, repoId, closed, dropped, now)
 			}
 		}
 		expiry, found, err := sidecar.GkmHolderExpiry(state.View, repoId, now, now.Add(self.settings.ExpiryHorizon))
@@ -478,18 +494,23 @@ func (self *GkmReconciler) gateTracked(repoId sidecar.Id) bool {
 	return ok
 }
 
-// Tracks a repo's gate as closed, its hint sent at hintedAt, or forgets it.
-func (self *GkmReconciler) trackGate(networkId sidecar.Id, repoId sidecar.Id, closed bool, hintedAt time.Time) {
+// Tracks a repo whose writers are owed a repeated hint, its last sent at hintedAt, or forgets it: its gate closed,
+// or a holder dropped since its newest epoch's pin and time (H1).
+func (self *GkmReconciler) trackGate(networkId sidecar.Id, repoId sidecar.Id, closed bool, dropped bool, hintedAt time.Time) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if !closed {
+	if !closed && !dropped {
 		delete(self.closedGates, repoId)
 		return
 	}
 	if _, ok := self.closedGates[repoId]; !ok && self.settings.ClosedGateCount <= len(self.closedGates) {
 		return
 	}
-	self.closedGates[repoId] = &gkmClosedGate{networkId: networkId, hintedAt: hintedAt}
+	interval := self.settings.PendingHintInterval
+	if !closed || dropped && self.settings.DroppedLeafHintInterval < interval {
+		interval = self.settings.DroppedLeafHintInterval
+	}
+	self.closedGates[repoId] = &gkmClosedGate{networkId: networkId, hintedAt: hintedAt, interval: interval}
 }
 
 // Re-checks each tracked gate at its network's last state, hinting pending again while it stays closed.
@@ -510,8 +531,8 @@ func (self *GkmReconciler) rehintClosedGates() {
 				delete(self.closedGates, repoId)
 				continue
 			}
-			if now.Sub(gate.hintedAt) < self.settings.PendingHintInterval {
-				// hinted within the interval, as a change's pass just did
+			if now.Sub(gate.hintedAt) < gate.interval {
+				// hinted within its interval, as a change's pass just did
 				continue
 			}
 			gates = append(gates, &trackedGate{repoId: repoId, networkId: gate.networkId, state: entry.state})
@@ -523,11 +544,38 @@ func (self *GkmReconciler) rehintClosedGates() {
 		if !known {
 			continue
 		}
-		if closed {
+		dropped := self.holderDroppedSinceNewestEpoch(gate.state.View, gate.repoId, groupId, now)
+		if closed || dropped {
 			self.hintPending(gate.state, gate.repoId, groupId, nil, gkmConfigWriters(gate.state))
 		}
-		self.trackGate(gate.networkId, gate.repoId, closed, now)
+		self.trackGate(gate.networkId, gate.repoId, closed, dropped, now)
 	}
+}
+
+// H1's condition (DESIGN-DETAILS 6.2.3): whether view shows a key holder of the repo dropped since the newest
+// epoch's auth pin and time, by a shrink past that pin or an expiry after that time, the test that classes a commit
+// as a Remove (sidecar.GkmRemoveDue). false when the group has no epoch gkm can read a pin from, a re-form's epoch
+// 0 among them, or a read failed: nothing is hinted on a guess.
+func (self *GkmReconciler) holderDroppedSinceNewestEpoch(view sidecar.GkmAuthView, repoId sidecar.Id, groupId sidecar.Id, now time.Time) bool {
+	ctx := self.ctx
+	cluster, _, err := self.places.Cluster(ctx, repoId)
+	if err != nil {
+		return false
+	}
+	infos, err := listGkmKeys(ctx, cluster, GkmEpochPrefix(groupId), self.settings.Service.ListPageCount, self.settings.UnitKeyMaxCount)
+	if err != nil || len(infos) == 0 {
+		return false
+	}
+	objectBytes, _, err := readGkmObject(ctx, cluster, infos[len(infos)-1].Key, self.settings.Service.ObjectMaxByteCount)
+	if err != nil {
+		return false
+	}
+	object, err := parseGkmEpochObject(objectBytes)
+	if err != nil || object.GetHeader().GetAuth() == nil {
+		return false
+	}
+	dropped, err := sidecar.GkmRemoveDue(view, repoId, object.GetHeader().GetAuth(), time.UnixMilli(object.GetTimeMs()), now)
+	return err == nil && dropped
 }
 
 // Whether a repo's write gate is closed at now in view: its newest group's newest generation does not cover a shrink
