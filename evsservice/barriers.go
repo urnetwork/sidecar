@@ -12,6 +12,7 @@
 package evsservice
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/urnetwork/sidecar"
@@ -161,6 +162,34 @@ const (
 	BarrierEvacuateBatchDeleteAfter  = "evs.evacuate.batch_delete.after"
 )
 
+// EVSB-M2-12 and EVSB-M2-13: the nightly pass and orphan GC by the evacuation horizon (DESIGN-DETAILS 2.2.4). The
+// one order a schedule must hold is the horizon's LIST of pb/ before any LIST of pidx/ (twin GcReadsIndexFirst).
+const (
+	// Around a metadata cluster's horizon read, one LIST of pb/ with limit 1, keyed by the cluster.
+	BarrierGcHorizonBefore = "evs.gc.horizon.before"
+	BarrierGcHorizonAfter  = "evs.gc.horizon.after"
+	// Around a repo's pidx/ reads: its LIST and the GETs of the entries GC reads, keyed by the repo.
+	BarrierGcIndexBefore = "evs.gc.index.before"
+	BarrierGcIndexAfter  = "evs.gc.index.after"
+	// Around each DELETE the pass decided on a listing: an orphan segment's, keyed by <repo>:<segment>, a map part's
+	// and a container's, keyed by <repo>:<ref> and the repo.
+	BarrierGcDeleteBefore = "evs.gc.delete.before"
+	BarrierGcDeleteAfter  = "evs.gc.delete.after"
+)
+
+// EVSB-M2-14: marker collection windows (§11.7's collect row), keyed by <repo>:<ref>.
+const (
+	// Around the head CAS that opens a window: collect {through, until_ms}, the fence raised.
+	BarrierCollectOpenBefore = "evs.collect.open.before"
+	BarrierCollectOpenAfter  = "evs.collect.open.after"
+	// Around each marker's DELETE in an open window, and the deletes of what it carries.
+	BarrierCollectDeleteBefore = "evs.collect.delete.before"
+	BarrierCollectDeleteAfter  = "evs.collect.delete.after"
+	// Around the head CAS that closes a window: collect.done set, the fence raised.
+	BarrierCollectCloseBefore = "evs.collect.close.before"
+	BarrierCollectCloseAfter  = "evs.collect.close.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
@@ -169,6 +198,11 @@ func barrierRepoKey(repoId sidecar.Id) string {
 // A ref's barrier key: <repo>:<ref>.
 func barrierRefKey(repoId sidecar.Id, refId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId) + ":" + sidecar.EvsKeyId(refId)
+}
+
+// A segment's barrier key: <repo>:<segment id in hex>.
+func barrierSegmentKey(repoId sidecar.Id, segmentId []byte) string {
+	return sidecar.EvsKeyId(repoId) + ":" + hex.EncodeToString(segmentId)
 }
 
 // A batch's barrier key: <minute>-<instance>-<seq> in hex, unique as its key is.
