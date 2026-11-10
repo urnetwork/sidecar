@@ -148,15 +148,34 @@ func (self *sidecarHttpGeneration) report(online bool) {
 func (self *sidecarHttpGeneration) newPollClient() (*PushPollClient, error) {
 	sidecar := self.leg.sidecar
 	generation := self.generation
+	// no request goes before core is subscribed, so no notice of the first reply is lost
+	subscribed := make(chan struct{})
+	awaitSubscribed := func(ctx context.Context) error {
+		select {
+		case <-subscribed:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	poll := func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error) {
+		if err := awaitSubscribed(ctx); err != nil {
+			return nil, err
+		}
 		response, err := sidecar.sidecarApi.SyncPoll(ctx, cursor)
 		if ctx.Err() == nil {
 			self.report(err == nil)
 		}
 		return response, err
 	}
-	pollClient, err := newPushPollClient(generation.ctx, poll, sidecar.sidecarApi.SyncVersions, self.store, self.settings,
-		sidecar.clock, sidecar.log, sidecar.emitEvent)
+	versions := func(ctx context.Context, cursor []byte) (*protocol.PollResponse, error) {
+		if err := awaitSubscribed(ctx); err != nil {
+			return nil, err
+		}
+		return sidecar.sidecarApi.SyncVersions(ctx, cursor)
+	}
+	pollClient, err := newPushPollClient(generation.ctx, poll, versions, self.store, self.settings, sidecar.clock, sidecar.log,
+		sidecar.emitEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +186,7 @@ func (self *sidecarHttpGeneration) newPollClient() (*PushPollClient, error) {
 		pollClient.Close()
 		return nil, err
 	}
+	close(subscribed)
 	return pollClient, nil
 }
 

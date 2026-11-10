@@ -449,6 +449,13 @@ func (self *searchMemoryStore) Directory(name string, class string) (SidecarStor
 	return nil, ErrSidecarStoreName
 }
 
+// Drops every file.
+func (self *searchMemoryStore) clear() {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	clear(self.files)
+}
+
 // A file on its way into the memory store, swapped in whole at Commit.
 type searchMemoryWriter struct {
 	store  *searchMemoryStore

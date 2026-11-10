@@ -277,10 +277,18 @@ func (self *SearchCache) Close() {
 }
 
 // What a lock does to the cache: the decoded state goes, and every open cursor ends (§5.9's delete row). The files
-// stay, sealed.
+// stay, sealed; a cache kept in memory, whose derived parts are plaintext there, drops them all, since everything in it
+// is refetched or derived again.
 func (self *SearchCache) Locked() {
 	self.decoded.drop()
 	self.versionPages.drop()
+	if memoryStore, ok := self.store.(*searchMemoryStore); ok {
+		memoryStore.clear()
+		self.stateLock.Lock()
+		clear(self.refs)
+		self.byteCount = 0
+		self.stateLock.Unlock()
+	}
 	cursors := func() []func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -858,8 +866,9 @@ func (self *SearchCacheRecordFrames) ReadFrame(index int, header *EvsRecordHeade
 	}
 	frames.frameIndex = uint32(index)
 	frames.frame()
-	if len(dst) < len(sealed) {
-		dst = make([]byte, len(sealed))
+	// the reader's own frame buffer takes the plaintext, so a cursor holds one frame and no more
+	if len(sealed) < chacha20poly1305.Overhead || cap(dst) < len(sealed)-chacha20poly1305.Overhead {
+		dst = make([]byte, 0, max(len(sealed), chacha20poly1305.Overhead))
 	}
 	opened, err := frames.aead.Open(dst[:0], frames.nonce[:], sealed, frames.aad[:])
 	if err != nil {
