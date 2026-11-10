@@ -170,6 +170,7 @@ type SidecarRecord struct {
 	approvals  *RecordApprovals
 	accounting *RecordAccounting
 	log        *RecordLog
+	export     *RecordExport
 
 	stateLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
@@ -204,6 +205,7 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
 	self.log = newRecordLog(self, args.Witness)
 	reader.addSyncHook(self.log.monitor)
+	self.export = newRecordExport(self)
 	return self, nil
 }
 
@@ -280,6 +282,7 @@ func (self *SidecarRecord) ingestedLogs() []Id {
 func (self *SidecarRecord) tend(ctx context.Context) {
 	self.accounting.mirrorQueued(ctx)
 	self.log.Tick(ctx)
+	self.export.Tick(ctx)
 	logIds := self.ingestedLogs()
 	if len(logIds) == 0 || !self.takeIngestDue() {
 		return
@@ -1195,6 +1198,8 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	// where a follow job's lines go: a file on this device, on a leg that has files
+	record.SetExportSink(recordExportFileSink())
 	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
 	// NewSidecar did not build raises no events to mirror.
 	if self.eventCallbacks != nil {
