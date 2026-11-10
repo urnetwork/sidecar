@@ -175,15 +175,6 @@ func (self *EvsRepo) openDeposit(ctx context.Context, refId Id, deposit *EvsDepo
 	return visit(deposit, content.reader())
 }
 
-// A deposit's keys for one read: its slot's object key and the K_dep it derives, which take the slot's and
-// manifest's place for that slot and generation (EVS-FORMAT.md's deposits).
-type evsDepositKeys struct {
-	slotId     Id
-	generation uint64
-	objectKey  *EvsObjectKey
-	manifest   *EvsManifestKey
-}
-
 // Commits a CONSUME of args.EntryIds on the deposit ref args.DepositRefId: see the file header's consume row. Each
 // entry is read first, by its id, for the version its removal names; one already gone is left out, and a CONSUME of
 // none commits nothing.

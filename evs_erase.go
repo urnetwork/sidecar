@@ -20,7 +20,8 @@
 //	          rewriting, and stalled 25 h after its last ERASE with none since; which device resumes it, its eraser's
 //	          at its start or another of its member's after 25 h, is the caller's, from these states
 //	after     on an ERASE's hint a reader deletes its cached object keys, slot copies and decrypted copies and refuses
-//	          those keys: ForgetErasedKeys's, which readers' caches call (§15.7, §16.8, §5.9's index cache)
+//	          those keys: not built here, since those caches are §15.7's mail stores, §16.8's record caches and §5.9's
+//	          index cache; ReadErasures gives them the keys to forget
 //
 // Erasure and deposit refs stay at path epoch 1 (evsEpochExempt), so an ERASE never meets 412 PATH_EPOCH. ERASE,
 // CLOSURE and closure uploads take admin; a 429's retry_after_ms, which may run to the next 00:00 UTC for a closure's
