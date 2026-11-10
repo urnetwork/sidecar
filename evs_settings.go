@@ -109,6 +109,11 @@ type EvsSettings struct {
 	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
 	// (§11.8's lease row).
 	SealLeaseDuration time.Duration
+	// A deposit whose drop key the depositor rule does not take yet (ErrGkmWait: no newer rotation has reached this
+	// device, or the newest lapsed) asks again after DropKeyWait, 30 s, at most DropKeyWaitCount times, 20, before
+	// the caller gets ErrGkmWait (§11.12's deposits row: it waits for a newer rotation).
+	DropKeyWait      time.Duration
+	DropKeyWaitCount int
 
 	// §11.10's lease row: a subscription rereads its head fresh this long after its lease's 200, 5 s, so a commit an
 	// evs process matched against leases read before the write is caught.
@@ -170,6 +175,8 @@ func DefaultEvsSettings() *EvsSettings {
 		MobileMapNameCount:       100000,
 		ListedIndexRoundCount:    8,
 		PartsMissingRetryCount:   3,
+		DropKeyWait:              30 * time.Second,
+		DropKeyWaitCount:         20,
 		SealLeaseDuration:        120 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,
 		SubscribeRenewAge:        24 * time.Hour,

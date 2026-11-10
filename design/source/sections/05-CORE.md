@@ -451,9 +451,12 @@ alarm    M's devices raise admission_alarm for every admission under M that none
          recovery-key ones included, and approval_pending for an unconsented one (D-CORE-13); for an
          admin-admitted page Worker, its OwnerConfirm or its answer to that alarm also revokes the
          stale Workers M's groups show and offers to revoke the others (§7.10's stale row);
-         each raises recovery_rebind for every RecoveryRebind of M it did not itself sign, including
-         one another device of M signed, offering to revoke that signer for compromise, and for
-         every binding of M that §7.9's cascade voids, naming any span its keychain.wrap was sealed
+         each raises recovery_rebind for every RecoveryRebind of M, naming for a compromise rebind the
+         span its retired binding was current, one it signed itself included; for one it did not sign,
+         another device of M's included, "not me" offers to revoke that signer for compromise from a
+         since_n at or before the rebind, and "I did this" runs 5.9's compromise procedure (owner
+         decision 212); and for every binding of M that §7.9's cascade voids, naming any span its
+         keychain.wrap was sealed
          to it (5.9); every member device shows recovery_window while an authority statement with a
          recovery-key signature, or a restored binding's admission (signers), is pending, from
          §7.9's window start p, and raises recovery_unseen if it activates less than 72 h minus 10
@@ -517,7 +520,10 @@ reasons   lost: SidecarRevoke{reason: lost}, no cascade, what the device signed 
           compromise: SidecarRevoke{reason: compromise, since_n}, §7.9's cascade from since_n
           parking P and voiding what P signed as 7.9 lists, and a compromise retirement, so each
           repo the device read rotates as cause REMOVE with a path epoch at once (§10.8, §11.6)
-plan      PreviewDeviceRevoke derives at the tip: since_n as above, never later than proposed;
+plan      PreviewDeviceRevoke derives at the tip: since_n as above, never later than proposed, and
+          after a compromise rebind at r clamped to r + 1 for the rebind's signer and for any device
+          whose closure would reach it, so the rebind stands, unless the person moves it earlier, when
+          the plan shows the rebind voiding and who must sign it again (5.9; owner decision 212);
           §7.9's cascade list (what P parks and voids, what stands, and each device that sealed
           keychain.wrap to a binding it voids, under 5.9's backup rule); each presence or SSH key
           the target registered (§7.9's KeyRow signer) that the cascade does not void; the counted
@@ -630,7 +636,10 @@ unpair  ur login -> top-level client as the next generation -> remove C
                     64 KiB (bases as headers), and while it sends proven the proof it verified (§6.4);
                     on a member device, every entry from api's retention point on, for a site loss (§19.10)
     approvals/ runs/ restore/ <component>/   §16's approval ledger, run taint and restore points, and
-                    each component's state, under keys derived from R_n
+                    each component's state, under keys derived from R_n, evs's with §11.9's pins and a
+                    head reader's read records: one per path read (ref_id, path, entry version, pin at
+                    last read), at most HeadReadRecordCount = 16,384 a network, least recently used out
+                    (owner decision 209)
     search/<repo_id>/<ref_id>/  file class search: the index files this device keeps, as the sealed evs
                     records it fetched, and their derived data (below); never a query, hit or cursor
     search.state    file class search: the search state that is not derived (below)
@@ -719,7 +728,7 @@ rebuild   all of it but state is derived: an AEAD failure drops the file and ref
 
 - **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock); a pass change rewraps U, and `ur keychain rotate` rotates U and every R_n. The CLI reads the pass only from `/dev/tty` with echo off, and the pass approves nothing (owner decisions 47, 75).
 - **Recovery code (owner decisions 62, 127, 149).** 128 bits as 12 BIP-39 words, shown once per membership, so no recovery key links a person's networks (owner decision 23) and no device keeps a master secret. It derives X-Wing and Ed25519 recovery keys, which a `RecoveryBind` config record binds to the member (§7.9); devices wrap that network's R_n and the member's repo key generations to the X-Wing key (§10.8). With the code alone, a new device restores, reading before admission only the authorization log and its member's recovery wraps (§7.9), admits itself under 5.6's signers, passes §7.9's recovery anchor in 5.6's order (genesis), then joins its groups (above 16 leaves, once one leaf is online to write the current GroupInfo) and revokes the lost devices, rotating their groups (§10.8). `ur keychain recovery-rotate` signs a `RecoveryRebind` (§7.9), countersigned where §7.9's presence row asks (owner decision 189): the old code then admits nothing and gets no new wrap, and if §7.9's cascade voids the rebind, admits only through the recovery window and gets none until a signer outside P signs its restored binding again (5.6); it opens at once what was wrapped to it before, whatever the window or a veto, and reads the current generation until the next rotation, which `--compromise` makes a remove rotation with a path epoch at once (§10.8). A device a restored binding admits anchors on a config ReaderWrap (5.6's genesis), whose RK_g opens only the config group's sealed GroupInfo to it: it self-joins that group if entitled, KF2 adds it to its other groups once it uploads KeyPackages, and a group whose leaves are all in P opens to it only through that binding's surviving wraps; it then offers `recovery-rotate`, whose rebind gives its member a current binding again (§7.9's after).
-- **Backup.** OS-keystore wraps are device-bound, so a backup restores only with the pass (U) or a network's code (its R_n); new hardware keeps the `sidecar_id` only via `--replace`, which revokes the old client. No re-seal reaches a backup sealed before it, whose `keychain.wrap` the code it was sealed to still opens, and with it the identity key, ClientKey seed, ReaderKeys and key cache. So each device whose backups may hold a sealing to a code retired for compromise, or to a binding §7.9's cascade voids (the span its `recovery_rebind` names, 5.6), is revoked for compromise and enrolled anew, never moved by `--replace`, which keeps its identity key (§7.9, §10.8); for a void, each device that may revoke it offers that revocation from a since_n at the voided binding's entry, since no keychain was sealed to that binding earlier.
+- **Backup.** OS-keystore wraps are device-bound, so a backup restores only with the pass (U) or a network's code (its R_n); new hardware keeps the `sidecar_id` only via `--replace`, which revokes the old client. No re-seal reaches a backup sealed before it, whose `keychain.wrap` the code it was sealed to still opens, and with it the identity key, ClientKey seed, ReaderKeys and key cache. So each device whose backups may hold a sealing to a code retired for compromise, or to a binding §7.9's cascade voids (the span its `recovery_rebind` names, 5.6), is revoked for compromise and enrolled anew, never moved by `--replace`, which keeps its identity key (§7.9, §10.8); for a void, each device that may revoke it offers that revocation from a since_n at the voided binding's entry, since no keychain was sealed to that binding earlier. For a compromise rebind landing at position r, `recovery-rotate --compromise` lists each device of the member live while the retired binding was current, raises `recovery_rebind` naming that span on its own device too, and offers each a compromise revocation, since_n defaulting to §7.9's loss-time proposal, clamped to r + 1 for the rebind's signer and for any device whose closure would reach that signer, so the rebind stands; a person who believes a clone acted may move it earlier, and the plan then shows the rebind voiding and who must sign it again. The rebind's signer goes last: it enrolls a replacement, which revokes it from a since_n after that admission, so where no signer outside exists, what a clone signed before that position stands (owner decision 212).
 - **Store states (D-CORE-15).** The OS key stores and the sdk's `SidecarKeyStore` (§18.5) answer reads with one of four statuses and writes with Ok, Locked or Failed:
 
 ```text

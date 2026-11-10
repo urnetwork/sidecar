@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -322,13 +323,13 @@ func TestEvsCreationUnderImmediatePressureWaits(t *testing.T) {
 	}
 }
 
-// The push sender's retoken of a push in parts: parts posted again under the new push id, committed in the new epoch,
-// sealed once.
+// The push sender's retoken of a push in parts, DESIGN-DETAILS 9.6's 2,000 entries: every part posted again under the
+// new push id, committed in the new epoch, sealed once.
 func TestEvsRetokenOfAPushInParts(t *testing.T) {
 	writer := newEvsTestWriter(t)
 	writer.gkm.newest = 2
 	writer.world.generation = 2
-	const fileCount = 1100
+	const fileCount = 2000
 	writes := []*EvsPathWrite{}
 	for i := 0; i < fileCount; i += 1 {
 		path := fmt.Sprintf("file-%04d.txt", i)
@@ -341,11 +342,12 @@ func TestEvsRetokenOfAPushInParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	statement := writer.world.commits[result.Version-1].parsed
-	if statement.Push.GetPathEpoch() != 2 || statement.Push.GetPartCount() != 2 || len(writer.server.postedParts) != 4 || writer.gkm.ensured != 1 {
+	partCount := int(statement.Push.GetPartCount())
+	if statement.Push.GetPathEpoch() != 2 || partCount < 2 || len(writer.server.postedParts) != 2*partCount || writer.gkm.ensured != 1 {
 		t.Fatalf("epoch %d, %d parts, %d parts posted, %d seals", statement.Push.GetPathEpoch(), statement.Push.GetPartCount(),
 			len(writer.server.postedParts), writer.gkm.ensured)
 	}
-	if read, _, err := writer.read(t, "file-0999.txt"); err != nil || string(read) != "file-0999.txt" {
+	if read, _, err := writer.read(t, "file-1999.txt"); err != nil || string(read) != "file-1999.txt" {
 		t.Errorf("read back: %v", err)
 	}
 }
@@ -377,6 +379,27 @@ func TestEvsRetokenPastTheSealedGenerationRebuilds(t *testing.T) {
 // after each cut-over, read, listed, changed, removed and created again, a push across each cut-over, every token path
 // a request names under an epoch below the current one has an earlier one of the same path at or below that epoch.
 func TestEvsCaptureNoLateToken(t *testing.T) {
+	if late := evsCaptureLateTokens(t); 0 < len(late) {
+		t.Fatalf("late tokens: %s", strings.Join(late, ", "))
+	}
+}
+
+// The capture's twin (DESIGN-DETAILS 9.6): the same run with every read naming every listed source, as the landed
+// tokenize did, sends a late token, which the capture catches: d, created after the second cut-over while epoch 2
+// stands as a source, named under that source, where no request had shown it.
+func TestEvsCaptureCatchesTheTokenizeTwin(t *testing.T) {
+	evsTokenizeEverySourceHook = true
+	defer func() { evsTokenizeEverySourceHook = false }()
+	late := evsCaptureLateTokens(t)
+	if !slices.Contains(late, "d in epoch 2 at 3") {
+		t.Fatalf("the twin's late tokens: %v", late)
+	}
+}
+
+// The capture's run, and every late token it records: a token path under an epoch below the current one with no
+// earlier token of the same path at or below that epoch.
+func evsCaptureLateTokens(t *testing.T) []string {
+	t.Helper()
 	writer := newEvsTestWriter(t)
 	world := writer.world
 	writer.server.uploadMs = writer.test.clock.Now().UnixMilli()
@@ -452,10 +475,11 @@ func TestEvsCaptureNoLateToken(t *testing.T) {
 			late = append(late, fmt.Sprintf("%s in epoch %d at %d", path, token.epoch, token.current))
 		}
 	}
-	if 0 < len(late) || len(captured) == 0 {
-		t.Fatalf("late tokens: %s", strings.Join(late, ", "))
+	if len(captured) == 0 {
+		t.Fatal("nothing captured")
 	}
 	_ = http.StatusOK
+	return late
 }
 
 func slicesEqual(a []uint64, b []uint64) bool {

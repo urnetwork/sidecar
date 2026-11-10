@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-197. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-214. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,12 +42,12 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (198 onward)
+## Adding owner decision N (215 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
 3. Set `MAXD = N` in `asm/assemble10.py` and `asm/cites10.py`.
-4. In `asm/validate10.py`, raise both `list(range(1, 198))` checks, `owner_record` and `decision_rows`, to `N + 1`. A decision dated on a day no earlier entry has also needs that day in `decision_rows`' date pattern and in its `dates_ok` rule, as 2026-11-09 was added for decision 197.
+4. In `asm/validate10.py`, raise both `list(range(1, N))` checks, `owner_record` and `decision_rows`, to `N + 1`, and add N's date to `LATE_DATES`, which `dates_ok` reads from 198 on, since the build's answers are numbered as they are folded and a later number can carry an earlier day (2026-11-06's bulk acceptance). A day no earlier entry has also needs `decision_rows`' date pattern, as 2026-11-10 was added for decision 198.
 5. In the sections, mark the question "**Decided by owner YYYY-MM-DD (owner decision N):**", or "**Amended by owner …**" for a change to an earlier answer. Cite "owner decision N" in every section that implements it: the validator fails any decision that no section cites. That is D-ARCH-4's assembly check, which G0 requires (§23.8).
 6. If the question's status cell changes, update it in `asm/v10/qstatus_final.json`.
 7. Rebuild, and read `v7/validate.json`.
@@ -89,3 +89,13 @@ The import changed two things in the tooling:
 - **The metadata list** is v9 (api-4's `forward_only`, api-7's forwarding Delegations, connect-1's forwarding-key delegations), copied to `metadata_list.yml` by `make metadata`.
 
 The tooling changed in two places: `validate10.py`'s `decision_rows` takes the 2026-11-09 date, and `data_front7.py`'s open-question check allows the two questions above. Tests outside this folder read the sections too: `sidecartest/fault`'s catalog mirrors §22.8's FS gates and §23.6's gate map, `check/`'s conformance ledger pins §22.9's peers, and `sidecartest`'s privacy and bounds tests read §22.7 and §22.8, so a change to those lines lands with the code that mirrors it.
+
+## Validation after the build's answers, owner decisions 198-214 (2026-11-10)
+
+The design-records track for §2 and §3 folded those sections' items from sidecar/DESIGN-AMENDMENTS.md. The owner's answers that change a behavior or a rule became owner decisions 198-214, each citing its ledger id: those decided one at a time on 2026-11-10 (198-206), and the owner-class items the owner accepted in bulk on 2026-11-06 (207-214), numbered as they were folded. Accepted defect fixes, readings and fills went in as text; QD-004's fold, which reserves AclTarget's CIDR and AclRule's ports in §8.8's fence, landed with acl.proto's matching change, since protocol's fence test holds the two together. Decision 213 also asked for a Q- item on `apt upgrade`, which waits on §4's evidence matrix in check/ (sidecar/DESIGN-AMENDMENTS.md, QD-023). A later pass the same day carried owner decision 203 into §2.8's evs-3 and §11's matching line: taskworker raises evacuation fences only, so fence_ms is evacuation's time, and a ref fenced before its first commit holds a placeholder head with its fence. `build.sh` on this folder reproduced DESIGN.md (SHA-256 `9bb6affd5921caa05a534cf3eb2e169767cd05a0d70647a7aaea935bc1a31495`) at that track's last fold, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new D- or Q- item.
+- **Owner decisions.** All 214 rows are present and cited; row 183 notes decision 204's amendment of its 25-minute fence. `validate10.py`'s `LATE_DATES` gives each row from 198 its date.
+- **Superseded options.** 302 grep hits, each with a reading; those on changed lines were read on 2026-11-10. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands.
+- **The metadata list** is v10, whose header names what it adds, copied to `metadata_list.yml` by `make metadata`. Two new rows the owner asked for, ext rows for Cloudflare at https://ur.io and for the abuse mailboxes' provider, wait on question `dr-s2-s3-new-metadata-rows.md`, since §22.7's guard needs each new row's `planned` line in `testdata/metadata/fields.yml` in the same commit; QD-206's row for the file clusters' bookkeeping went into evs-10, the file cluster's own row.

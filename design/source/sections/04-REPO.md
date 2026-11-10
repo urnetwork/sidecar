@@ -236,7 +236,7 @@ fixture    the tags served through GOPROXY=file:// with GOWORK=off, an empty mod
 | OS | Artifacts and signing | Path |
 |---|---|---|
 | macOS | `.pkg` and `.tar.gz` of a Developer ID `ur` bundle with a provisioning profile and hardened runtime (D-CORE-12), notarized and stapled (run.sh:2644-2673) | `/usr/local/bin/ur`, linked into the bundle |
-| Linux | `.deb`, `.rpm`, `.pkg.tar.zst` (nfpm) and `.tar.gz` | `/usr/bin/ur`; the script uses `/usr/local/bin/ur` |
+| Linux | `.deb`, `.rpm`, `.pkg.tar.zst` (nfpm) and `.tar.gz`, direct downloads through `install.sh`'s verified path, with no apt or yum repository, GPG key or repository host (owner decision 213) | `/usr/bin/ur`; the script uses `/usr/local/bin/ur` |
 | Windows | `.zip`, winget later; signtool SHA-256 with a timestamp (windows/app/SIGNING.md:17) | `%LOCALAPPDATA%\Programs\URnetwork\ur.exe` |
 
 - **`git-remote-ur`** ships beside `ur` in every package as a link to the same binary, which dispatches on argv[0] (a copy in the Windows zip); git runs it for `ur://` URLs from PATH (gitremote-helpers(7); §11.11), so Windows users add the zip's directory to PATH.
@@ -318,5 +318,5 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 - **v0, before code (M0):** LICENSE, the hook, the root's and `cli/`'s go.mod, dependencies.yml and `make check` on sidecar's `sidecar` branch, merged at M0's Gn-out (DESIGN.md and the documents are on `main` already, 708bb45); M0's branches; the lock entry, the release step and its fixture.
 - **v0, first usable:** §4.6's M1, M4 and M5 rows; the first hosted engine; signed `ur` packages; the `make size` gate; `sidecar_http`'s import rule (M1) and size measure (M2); `device/` and its `ios_extension` rule, with the root's forwarding files (M4; owner decision 197).
-- **v1:** C18 (M6); C19's window accounting (M10; owner decisions 176, 188) and 4.7's x/text bump, ahead of M10's index code; Homebrew, winget, apt/yum. **Later:** C4 with §18's worker, and C17 for that streaming Worker if its spike needs it.
+- **v1:** C18 (M6); C19's window accounting (M10; owner decisions 176, 188) and 4.7's x/text bump, ahead of M10's index code; Homebrew and winget; no apt or yum repository, `.deb` and `.rpm` staying direct downloads (owner decision 213). **Later:** C4 with §18's worker, and C17 for that streaming Worker if its spike needs it.
 - **Blocking:** M0's `make check` blocks the first consumer pin; C13 blocks C18; C19 blocks M10's Gn-out, since §2.8's connect-5 assumes it.

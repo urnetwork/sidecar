@@ -6,13 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 332 decided items and 314 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 305 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 30 | 5 |
+| [§2 Trust model and threat model](#s2) | 3 | 0 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -40,17 +40,10 @@ Holds 332 decided items and 314 proposed ones, generated from the ledger on 2026
 
 Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with its proposed DESIGN.md text. Their owner questions were answered on 2026-11-10 (QD-598 to QD-629, below under the sections they amend). Three answers differ from a section's recommendation and the design agent amends the section before it is folded: QD-604 (section 8, imports make helper refs), QD-621 (section 4, an overdue narrowing statement keeps the last state and alarms) and the model and wording fixes of QD-628, QD-632, QD-633, QD-642 and QD-644. Sections 1, 3, 7, 10, 11, 12 and 13 are still being written.
 
+Partly folded (2026-11-10), with §2's and §3's items: section 2.8 where QD-623 (owner decision 203) needed it, its §2.8, §11.3, §11.6, §11.13 and §11.17 parts, §11.8's but step 6's clock rule, §19.6's rule (6) clause and what deletes nothing on an unpassed build, §22.8's EvsCommit.tla row, FS-8 and FS-59's text. Section 2.8 still to fold: §11.8 step 6's clock rule and the clocks row's ", evs opens no batch"; §19.6 rule (2)'s stamp, rule (3)'s DELETE release and its PUT and DELETE waits, and the list row (QD-625's, with §11.13's needs row and FS-114); §19.10's held-key and §19.17's risk rows; D-OPS-20's text and *Why*; the StoreSettle.tla row, FI-30's last clause and FS-114's clauses; and FS-59's checks column, FI-1,6, which sidecartest/fault/catalog.yml must take in the same change. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
+
 <a id="s2"></a>
 ## §2 Trust model and threat model
-
-### QD-004: §2.8 api-7 and §8.8 put CIDRs and ports in rows, while §17.8 and D-BRIDGE-6 promise no server sees them
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §17.*
-
-Make §17.8 true. `AclTarget.cidr` (field 8) and `AclRule.ports` (field 5) leave rows and are reserved. `AclRule` gains `bool ports_limited = 11` (field 10 is plan-ACL-folded-grant-state's `source_rule_id`), true when the policy rule has an `ip` port list, because §8.10's legacy rule needs it: a legacy client is reached only by a `dial` grant with 'no `ip` ports', so emptying ports without this bit would make a port-limited grant look unrestricted (the question's 'the gate never used them' misses this). A `route` rule's targets become its via subjects, or with no `via` the advertisers `BridgeRoute.route_rule_ids` names at id level. CIDRs and ports stay in `AclLocalPolicy` from the sealed policy, so §8.6's 'ports match' reads that, and readers, not api, check a requested grant's prefix against its rule. api-7's text becomes `rules with targets, actions, whether a rule limits ports (never which)`.
-
-Changes: §2.8 api-7; §8.6; §8.8 AclRule, AclTarget; acl.proto.
-
-Questions: `plan-BRIDGE-gate-row-prefixes.md`.
 
 ### QD-012: How sidecar.ur.io is served, given that Cloudflare terminates ur.io
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §19.*
@@ -61,14 +54,7 @@ Changes: §2.8 EX7; §2.8 ext rows; §2.4 TB1; §18.8; §19.5 W10.
 
 Questions: `plan-SDK-small-readings.md#3`.
 
-### QD-016: After a compromise rebind: who is told, from which since_n, and who revokes the last device
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §5, §7, §10, §18.*
-
-Recommended procedure, in §5.9 with §7.9, §2.10, §18.5 and new FS-22 cases. Once the rebind lands at position r, `recovery-rotate --compromise` lists each device of M live while the retired binding was current, raises recovery_rebind naming that span on its own device too, and offers each a compromise revocation. since_n defaults to §7.9's loss-time proposal, clamped to r + 1 for the rebind's signer and for any device whose closure would reach that signer, so the rebind stands. A person who believes a clone acted may move it earlier, and the plan then shows the rebind voiding and who must sign it again. The rebind's signer goes last: it enrolls a replacement, which revokes it from a since_n after that admission. §18.5's recovery_rebind answer splits in two: "not me" keeps since_n at or before the rebind, and "I did this" takes this rule. §2.10 states the residual: where no signer outside exists, what a clone signed before that position stands. This differs from the question's option 1 in one way: only the rebind's signer is clamped, so other devices keep the loss-time since_n.
-
-Changes: §2.10; §5.6; §5.9; §7.9; §10.8; §18.5; FS-22; D-TEAM-26.
-
-Questions: `g0-recheck-2-compromise-rebind-backups.md#1`.
+Not folded (2026-11-10): the ext row for Cloudflare, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 211 (§2.8 EX7, §2.4 TB1, §2.10, §18.8, §19.5's W10).
 
 ### QD-023: Which key signs apt and yum metadata, and where do those repositories live?
 *Decided by the owner: owner 2026-11-06. Also amends §4.*
@@ -79,6 +65,8 @@ Changes: §2.6; §4.10; §4.18.
 
 Questions: `plan-REPO-v1-channels.md`.
 
+Not folded (2026-11-10): the Q- item for `apt upgrade` that the owner asked for, since a new §4 id needs its evidence line in check/repo_matrix_test.go's repoMatrix in the same commit (TestEveryRepoIdHasEvidence), which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 213 (§2.6, §4.10, §4.18).
+
 ### QD-030: Who holds the abuse and legal-request mailboxes, and what can that provider read?
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §19.*
 
@@ -88,271 +76,7 @@ Changes: §2.8 api-14; §2.8 ext rows; §21.10; §21.16; §19.10.
 
 Questions: `plan-ABUSE-metadata-rows.md#4`.
 
-### QD-043: Do head readers keep a per-path read record, or does the published limit widen to every path older than the pin?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §5.*
-
-Recommended: option 1. Head readers durably keep, sealed under §5's AEAD, one record per path read: (ref_id, path, entry version, pin at last read), at most HeadReadRecordCount = 16,384 a network, least recently used out. A read of a recorded path sets pin_version to the record's pin, not the ref's (a request of several paths uses the oldest of their pins, since pin_version is per request); the reader checks every statement after it by §11.9's reader row, refuses and alarms if the served version is below the record or a later statement changes the path, then raises the record. A path whose record was evicted, or whose pin is past §11.9's 4 MiB budget, counts as never read: §2.8, §11.9's trusts row, Q-EVS-6 and FS-10 say "a path it never read or no longer remembers". FS-10 adds: P read at v20 at pin 25, the pin moved to 30, P changed at v28 by a statement with no inline change list, then v20 and v10 each refused. No wire change.
-
-Changes: §2.8 head-reader disclosure; §11.9 reader and trusts rows; Q-EVS-6; FS-10; §5.9.
-
-Questions: `g0-recheck-0-head-reader-read-paths.md#1`.
-
-### QD-051: Do the physical copies of the primary count as backups under D-TRUST-7?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-Count them. (1) Each copy is refreshed or destroyed within 7 d: `pg-base` by the main dump's timer, else the base goes and the next run makes a full copy, and edge-5's `main-pgbase-<date>` by a timer or destruction. (2) `tls_connection_record` and `mail_connection_record` partitions become UNLOGGED: pg_basebackup copies no data of an unlogged relation, so the 24 h edge records never enter a physical copy, and a primary crash loses them, as a restore already does. (3) ops-2 discloses the rest: "physical working copies of the primary hold every table for at most 7 d".
-
-Changes: D-TRUST-7; D-OPS-18; §2.8 ops-2; §19.3; §19.6; §19.7.
-
-Questions: `xops-dump-physical-copies.md`.
-
-### QD-054: The published list of what servers see is behind the formats
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §12, §10, §9, §22.*
-
-[plan-SOCK-metadata-rows] Add to sock-2's `sees`: `a dial's protocol, minimum version and offered ALPN ids`, ttl the request, in the next metadata_list version, through design-records, before `SocketFindArgs` carries them. §9.7's step 1 stays as written. [plan-SOCK-metadata-rows#2] Remove `and a raw endpoint's authentication mode` from sock-1. A raw endpoint's audience stays where it lives, in api-7's rows. [protos-services-metadata-rows] In metadata_list's next version: gkm-4's credential gains its identity algorithm; gkm-7 gains wrap count (staged and recovery wraps) and the drop key's expiry (drop_not_after_ms), while `GenRotate.repo_id` and `LeafWrap.epoch` are settled by gkm-1 and gkm-2; evs-4 gains "under evs's receipt key id"; smtp-2 gains the retry delay smtpedge sets from smtp-4's counters; smtp-1, mx-1 and api-10 each gain "format version". §22.7's guard takes no exception, and TestEveryServiceFieldHasItsRow's raised lists empty as each row lands. §10.5's GenRotate summary adds the same two new values. CanonicalAction's fields are protos-services-canonical-action.md's. [plan-KEYS-wire-gaps#14] gkm-2's sees, in §10.6 and §2.8 alike, adds "at most 16 leaves, the sealed GroupInfo and the generation that seals it". gkm-7 keeps its "above 16 leaves, sealed GroupInfo". [keys-wire-metadata-rows] Add in metadata_list's next version, then move `testdata/gkm/metadata_rows.yml` from `pending` to `sees`: gkm-2 the sealed GroupInfo in an epoch object; gkm-7 the generation a sealed GroupInfo names; gkm-8 a recovery wrap's c8; gkm-4 a credential's identity_alg. gkm-1's epoch 0 ttl reads "while `epoch/0` exists", since §10.6's retention deletes it after 30 days. [metadata-list-unnamed-fields] Add in metadata_list's next version: a framing sentence for edges in tls-1, smtp-2 and mx-1 (Envelope, Chunk, Error and Stream* fields); Genesis, `config_version`, `rows_byte_count` and BridgeWithdraw.mode in api-7; CanonicalAction kind, version and scope and ApprovalDecision.version in api-10. No exception in §22.7's guard. State in the framing sentence that `StreamOpen.target` holds only a `<net>:<name>` socket or service target the edge already routes by, and `early_data` only the bytes of the connection it already carries. Keep fields.yml's `unset` list as read. [team-records-api7-base-header-fields] api-7 reads "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold". `TestConfigFieldsMapToApi7`'s two exceptions then fail and come out. [plan-ABUSE-metadata-rows#6] `abuse_access_log`, `abuse_action` and `abuse_appeal` keep a `reviewer_id`, the staff member's opaque id and never a customer's. api-14's `sees` gains "a reviewer id on each read, review and appeal decision" at the next records pass. [plan-DNS-metadata-rows#1] In metadata_list v9, api-3's sees gains network_domain's acme_token (plan-TLS-delegated-dns01), public in the customer's CNAME; ttl with the domain row. It goes in api-3, not dns-1 or api-2 as the file says, because network_domain sits in api-3. [plan-DNS-metadata-rows#2] In v9, dns-1's store names dns_restore_incident and its sees gains each reclaimable name's CT leaf SHA-256. Its ttl is the restore lists' 400 d, already in dns-1. [plan-DNS-metadata-rows#3] In v9, api-2's sees gains dns_label.certified_time, set by certs when a chain naming the alias is issued or registered. Its ttl is the row's: never deleted. [plan-DNS-metadata-rows#4] dns_root gains custom_host_map_version (bigint) and restore_incident_id, named in §12.14 and in v9's dns-1. §12.6's 'the restored one' reads custom_host_map_version. [plan-DNS-metadata-rows#6] In v9, dns-1's sees gains each lb interface's public addresses, router flag and the health an edge derives from its probes. Its store already names edge snapshots; ttl while the interface is in the lb inventory. [plan-DNS-metadata-rows#7] With plan-DNS-canary-route-state's fix and plan-DNS-running-ns's first option, v9's dns-1 store gains dns_canary_verdict and dns_ns, and its sees gains each monitor source's verdict (source, serial, ok, time), overwritten in place, and each NS's state, stopped time and reason, kept while dns.yml lists the NS. The verdict is its own table, not dns_root columns as the file assumes. If the owner picks another running-NS option, drop that half. [plan-DNS-metadata-rows#8] With plan-DNS-rua-token's fix, v9's dns-1 sees gains each network's report token, public in _dmarc, ttl with network_dns_zone's row.
-
-Changes: §2.8 sock-2; §2.8 sock-1; §2.8 api-3; §2.8 dns-1; §2.8 api-2; §12.14; §2.8 gkm-4; §2.8 gkm-7; §2.8 evs-4; §2.8 smtp-1; §2.8 smtp-2; §2.8 mx-1; §2.8 api-10; §10.5; §10.6; §2.8 gkm-2; §10.6 gkm-2; §2.8 api-14; §2.8 gkm-1; §2.8 gkm-2; §2.8 gkm-4; §2.8 gkm-7; §2.8 gkm-8; §2.8 tls-1; §2.8 smtp-2; §2.8 mx-1; §2.8 api-7; §2.8 api-10; §2.8 api-7.
-
-Questions: `plan-SOCK-metadata-rows.md`, `plan-SOCK-metadata-rows.md#2`, `plan-DNS-metadata-rows.md#1`, `plan-DNS-metadata-rows.md#2`, `plan-DNS-metadata-rows.md#3`, `plan-DNS-metadata-rows.md#4`, `plan-DNS-metadata-rows.md#6`, `plan-DNS-metadata-rows.md#7`, `plan-DNS-metadata-rows.md#8`, `protos-services-metadata-rows.md`, `plan-KEYS-wire-gaps.md#14`, `plan-ABUSE-metadata-rows.md#6`, `keys-wire-metadata-rows.md`, `metadata-list-unnamed-fields.md`, `team-records-api7-base-header-fields.md`.
-
-### QD-060: Visitor address hashes need a fleet-wide key no one provides
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §13, §15, §19.*
-
-[plan-TLS-visitor-hash-key] Cap keys stay per process (tls-2). tls-3's hash and Find's affinity key use a fleet-shared daily key: 32 random bytes in Redis at {vhk}tls:<yyyymmdd> (UTC), created by the first process with SET NX EX 90000 and read by every process each minute and at the date change. Derive k_record and k_affinity by HKDF-SHA256 with infos urnetwork-sidecar-v1/tls-visitor-record and urnetwork-sidecar-v1/tls-visitor-affinity; the hash is HMAC-SHA256(k, family byte || the /24 or /48 prefix)[:16]. mxedge's daily k takes the same shape under its own key {vhk}mx:<yyyymmdd>, so tls-3 rows and {mxc_} keys never join. With Redis unreachable a process uses a random per-process key for that day, the closed direction. {vhk} joins §19.7's tags and D-OPS-16's filter, so no key outlives 25 h in any backup. [plan-MAIL-small-readings#5] `k` is the fleet-shared daily key of plan-TLS-visitor-hash-key, `{vhk}mx:<yyyymmdd>`, not an HMAC of a `secret_files` root. Writes use today's k; lookups try today's and yesterday's, so the 1 h rule holds across 00:00 UTC. A Redis error reads as a recent closed handshake, so the sender gets `451 4.7.0`, never a lasting `530 5.7.0`. [mx-foundation-closed-handshake-key] Take the key from plan-TLS-visitor-hash-key's fleet-shared daily key: `{vhk}mx:<yyyymmdd>`, so no vault file is added and no long-lived secret sits on a TCP 25 block. `MxEdgeDeps.ClosedHandshakeSecret` is supplied per day from that key. Both `mxedge` and `mxedge-platform` read it, and both rows of §19.4 gain the Redis credential they already need for `{mxr_}` and `{mxc_}`.
-
-Changes: §2.8 tls-2; §2.8 tls-3; §2.8 mx-1; §13.9; §15.4; §19.7; D-OPS-16's filter list; §19.4 mxedge secret_files; §15.4; §19.4; OPS-M5-03; OPS-M7-01.
-
-Questions: `plan-TLS-visitor-hash-key.md`, `plan-MAIL-small-readings.md#5`, `mx-foundation-closed-handshake-key.md`.
-
-### QD-114: ur.io's byJwt in localStorage makes §18.8's and §2.10's claims about an XSS too narrow
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §22, §5, §7.*
-
-§18.8's `pages` and `disclosed` rows and §2.10's ur.io row say what is true: ur.io's account panel keeps a network `byJwt` in `localStorage`, so script in https://ur.io, ur.io/recurd included, can take that token while a member is signed in on that browser. It reaches network-credential routes, but a client minted with it gets no admission, key or plaintext without a consented device (§5.6, §7.9). §22.9's 'a script injected on ur.io finds none' is scoped to the Worker's key and token. Moving ur.io's session out of `localStorage` is separate mmm work and does not block this text.
-
-Changes: §2.10 ur.io row; §18.8 pages, disclosed; §22.9 Browsers row.
-
-Questions: `plan-SDK-key-origin-credential.md#2`.
-
-### QD-141: Does a case keep a reported URL's path, when §13.9 has reviewers open reported URLs?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §13.*
-
-Keep a reported URL's path and query on the case only until its first review ends, at most that case's review clock, then clear them. api-14 lists the field with that ttl. Never a reporter's address or free text; of free text only the appeal's own reason is stored.
-
-Changes: §2.8 api-14; §21.8; §13.9.
-
-Questions: `plan-ABUSE-small-readings.md#8`.
-
-### QD-192: Fleet-wide mail limits cannot live in a per-network key
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19, §14.*
-
-[plan-SMTP-shared-counters#1] Option 1. Two Redis families in smtp-4's store and §19.7's tag list: `{smg_<yyyymmddhh>}`, the Community total, and `{smd_<hex(SHA-256(domain)[0:16])>_<yyyymmddhh>}` per destination domain, UTC hours, each expiring 2 h after its hour starts, plus `{smg_median}`. A Community preamble runs one more single-key script for each, at accept: INCR, and past the cap DECR and answer TRY_LATER, the breaker alerting §19. Redis loss restarts them, as §14.9 accepts. [plan-SMTP-shared-counters#2] A taskworker job at each hour: count `smtp_send` rows by UTC hour over the trailing 168 complete hours for networks whose current tier is Community, take the median of those hours, empty hours included, and write it to `{smg_median}` (TTL 2 h). The breaker is max(500, 3 × median), and a missing median means 500.
-
-Changes: §2.8 smtp-4 store; §19.7 tags; §14.7 Enforcement; §14.7.
-
-Questions: `plan-SMTP-shared-counters.md#1`, `plan-SMTP-shared-counters.md#2`.
-
-### QD-197: Standing names over quota use the abuse kill switch
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §20.*
-
-QUOTA-M6-05 uses `model.SetTlsSuspension` with reason `quota:downgrade`, no `abuse_case`, and lifts it on renewal. Such a row is no §21 action: it is not mailed, does not count toward `restricted` or escalation, and a restore re-derives it. tls-4's ttl gains "or a downgrade's renewal", and §21.6's "lifted only through the case" names abuse kills.
-
-Changes: §2.8 tls-4; §21.6; §20.7.
-
-Questions: `plan-QUOTA-small-readings.md#17`.
-
-### QD-206: The settle rules leave a write id and a deleted object's copy in the store, with no §2.8 row
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19, §11.*
-
-Add one §2.8 row for the file clusters' own bookkeeping: `x-minio-internal-settle-id` in each version's xl.meta, and a DELETE's copy in `.minio.sys/settle/<id>-<hash of the key>/` on each drive, ciphertext and xl.meta, from the DELETE until the sweep removes it, at least 2 minutes after and longer while the key is held. The row ties that time to §11.12's 10 min stragglers' pass, and the check that the sweep's interval stays inside that pass is added to §19.6.
-
-Changes: §2.8 new row; §19.6; §11.12.
-
-Questions: `minio-settle-metadata-rows.md`.
-
-### QD-216: Where is `sidecar_clients`' connected count kept?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §20, §19.*
-
-`{sq_<network_id>}connected_sidecar`: a zset of every marked client scored by expiry ms, written and refreshed on the resident poll as `{np_}connected` is, the key's 48 h ttl refreshed at each write. One ZCOUNT from now to +inf per check at enrollment and connect. api-13 and §20.14's key row name it. Not under `{np_}`, as the question recommends: that family is outside §19.7's list, so D-OPS-16's filter leaves it in the rdb bundles about 8 months, which ops-3 publishes as "sidecar keys never".
-
-Changes: §2.8 api-13; §20.7; §20.14.
-
-Questions: `plan-QUOTA-sidecar-clients-store.md#1`.
-
-### QD-220: connect-1 and §21.9 overstate contract retention: rows now go at 35 to 91 days
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21.*
-
-connect-1's ttl becomes: "contracts expire within 60 min; resolved ones go at the contract horizon, 35 to 91 d by its runtime control (server/model/contract_horizon_reaper.go, server.ContractRetention), from the partition cutover with their week; while the reaper is off, paid ones 7 d after payout and unpaid ones at 300 d (server/model/subscription_model.go:47-52); a contract the reaper's keep rules hold stays until they clear; close-report evidence at the same horizon (server/db_contract_close_evidence_horizon.go)". §21.9's line becomes "for the horizon connect-1 states", and connect-5's 300 d reads as that same upper bound.
-
-Changes: §2.8 connect-1; §2.8 connect-5; §21.9.
-
-Questions: `plan-ABUSE-hold-contract-rows.md#1`.
-
-### QD-223: §2.8 does not publish that a refused push's entry can be served
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11.*
-
-§2.8's item reads: "A head reader's trust in evs for which writer-signed version, or a refused push's writer-signed entry that was never a version, is current at its first pin, for a path it never read ...". §11.9's trusts row already says so, and FS-10's "as §2.8 publishes" then holds.
-
-Changes: §2.8 Also disclosed.
-
-Questions: `g0-recheck-0-head-reader-read-paths.md#2`.
-
-### QD-231: §2.10's list of what stands after a compromise omits IndexerSets
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §5.*
-
-Add `IndexerSets` after `SponsorSets` in §2.10's what-stands clause (02-TRUST.md:826), matching §7.9's cascade row (07-TEAM.md:404-405). Code follows §7.9: an IndexerSet a sidecar in P signed stands until revoked, and §5.6's plan lists it among what stands.
-
-Changes: §2.10.
-
-Questions: `g0-density-text-alignments.md#3`.
-
-### QD-259: `network_verified`'s Redis tier has no §2.8 row or tag
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-Key `{sq_<network_id>}verified`, value 0 or 1, ttl 60 s, with a 5 s in-process tier, Pro's two windows (ProCacheTtl, ProLocalCacheTtl). api-1's `sees` and api-13's store name it. `{sq_}` is already in §19.7's list and D-OPS-16's filter, so no new tag is needed. The question's "5-minute ttl, like Pro's" is wrong, and a `pro_versioned:`-style untagged key would sit in the rdb bundles about 8 months, against ops-3.
-
-Changes: §2.8 api-1; §2.8 api-13.
-
-Questions: `plan-ABUSE-metadata-rows.md#1`.
-
-### QD-263: No named store can count 500 repos per client: {sq_} holds 48 h rates, and leases live 7 d
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §19.*
-
-Count it in a new soft-state key, not {sq_}. {evsc_<client_id>} is a sorted set of repo ids scored by last subscribe or renewal ms. One script drops members older than 7 d, refuses if the repo is absent and the set holds evs_repos_per_client, else adds it, and sets EXPIRE 8 d. It runs before the lease script, each touching one hash tag (§11.10's slots row). A DELETE removes the repo once the client's last lease on it goes. A loss fails open, and renewals rebuild the set within a day. Add the key to evs-8's store line, §19.7's tags, D-OPS-16's rdb filter and §11.10's slots row. A hold needs no copy, since evs-8's lease fields hold the same facts.
-
-Changes: §2.8 evs-8; §11.10 caps and slots rows; §19.7 Redis tags; D-OPS-16.
-
-Questions: `plan-EVS1-subscription-caps.md#2`.
-
-### QD-271: What ends a recovery code's reads is stated three ways
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §10, §5.*
-
-§5.9's account governs. Replace "which only a compromise rebind ends" (07-TEAM.md:690), and the same end named in §2.10, §10.8, Q-KEYS-7 and Q-TEAM-11, with: a rebind or a cascade void stops new wraps; the code keeps opening what was wrapped to it and reads the current generation until the next rotation, which `--compromise` makes a remove rotation with a path epoch at once.
-
-Changes: §2.10; §7.9; §10.8; Q-KEYS-7; Q-TEAM-11.
-
-Questions: `g0-recheck-1-wr-n4-recovery-window.md#2`.
-
-### QD-272: Three sentences overstate the witness bound
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-[g0-recheck-0-witness-residuals#1] Q-MCP-4 ends: "*Residual:* §2.8's: no bound across a split the server makes, or in own groups", the words Q-TRUST-9 uses. [g0-recheck-0-witness-residuals#2] D-TEAM-17 reads: "... and HeadCheck compares (n, A_n), unwitnessed writers in shared groups stopping at `witness_bound_hours` and those in own groups only alarming." Its Why stands. [g0-recheck-0-witness-residuals#3] D-SOCK-14's Why ends "a breached server can only deny or delay, within §2.8's exposure bound", and §2.7 reads "leaving a breached server only denial or delay, within §2.8's exposure bound".
-
-Changes: Q-MCP-4; D-TEAM-17; D-SOCK-14; §2.7.
-
-Questions: `g0-recheck-0-witness-residuals.md#1`, `g0-recheck-0-witness-residuals.md#2`, `g0-recheck-0-witness-residuals.md#3`.
-
-### QD-278: Parcels hold records only, and evs-23, D-EVS-32 and the move row's opening must say so
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11.*
-
-Option 1. Parcels hold records only, and log pages stay at log/ until a pack takes them. Reword evs-23 to 'a small repo's records older than 24 h', §11.13's move row to open with the kept records and name unpacked log pages only in the pack branch, and D-EVS-32 to say records go to parcels while log pages wait for the pack. A parcel's pidx/ entry lists no log pages.
-
-Changes: §2.8 evs-23; D-EVS-32; §11.13 move row; §11.8 pidx/ row.
-
-Questions: `plan-EVSB-parcel-log-pages.md`.
-
-### QD-611: How does evs find the change of a version written in an older path epoch, when it holds no key and must not ask the client for that epoch's token?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The fold records, beside each folded version, the place of its change in its statement's list (leaf_part, leaf_index; the same on a removal marker and for a directory's newest folded delta). evs builds the proof from the place, and the reader checks that the proof's leaf names its own token for that epoch, so no one sends an old token. §2.8's evs-11 row gains the words (I-18). DESIGN-DETAILS.md section 9 is built on this, and EVS1-M2-45 landed it on 2026-11-10.
-
-Changes: DESIGN-DETAILS.md section 9 stands as written; EVS1-M2-45 (landed) stands; §2.8's evs-11 row (design-records).
-
-Questions: `details-9-index-leaf.md`.
-
-### QD-614: Should a group's first object be an owner marker, `gkm/<group_id>/owner`, through which alone gkm resolves a group to its repo? (keys-m2-12-groupform-names-anothers-group, widened by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A group's first object is gkm/<group_id>/owner, GkmGroupOwner{repo_id, network_id}, created If-None-Match by gkm from the token as the first write of a creation or re-form; 409 on other bytes with nothing else written; equal bytes resume a crashed request. Every group route resolves through it (immutable, cached per process): the repo it names must be among the token's scopes and its newest form must name the group. The shred deletes it and a re-seed's form writes it again; the LIST before a form goes. §2.8's gkm-1 gains a line (no new value). DESIGN-DETAILS.md section 6 is built on this, and KEYS-M2-19, -21 and -25 have landed it.
-
-Changes: DESIGN-DETAILS.md section 6 stands as written; KEYS-M2-19, -21 and -25 (landed) stand; §2.8 gkm-1 line (design-records).
-
-Questions: `details-6-group-owner-marker.md`, `keys-m2-12-groupform-names-anothers-group.md`.
-
-### QD-622: Should a forwarding Delegation's row carry its 1,216 B reader key, when one a device puts a 5,000-device team's rows over §8.8's 4 MiB?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §8.*
-
-A forwarding Delegation's row carries its reader key's SHA-256 (reader_key_sha256), not the 1,216 B X-Wing key; the key is the gkm object gkm/dkey/<delegation_id>, which the Delegation's signer uploads and gkm and every rotator check against the digest. A 5,000-device team's rows are then about 2.2 MB and §8.8's 4 MiB cap sits near 9,600 devices. The cipher suite is unchanged; §2.8 gains a line for a value rows already showed. DESIGN-DETAILS.md section 4 is built on this, and TEAM-M2-20, TEAM-M8-01 and KEYS-M8-01 have landed it.
-
-Changes: DESIGN-DETAILS.md section 4 stands as written; TEAM-M2-20, TEAM-M8-01 and KEYS-M8-01 (landed) stand; §2.8 gkm-1 and api-7 lines (design-records).
-
-Questions: `details-4-forwarding-reader-key-in-rows.md`.
-
-### QD-623: May an unadopted segment live 49 to 75 h, in place of D-EVS-34's 25 to 49 h, so that segment GC can wait for evacuation and raise no fence?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-Segment GC deletes a segment no committed push introduced only once no batch is left from before its LastModified + 24 h + 2 min, so an unadopted segment lives 49 to 75 h in place of D-EVS-34's 25 to 49 h. GC then raises no fence, waits no deadline and makes no second check, and the push route is unchanged; the fence of a ref with no head is left to evacuation (a placeholder head created If-None-Match with its fence raised). D-EVS-25, D-EVS-34, I-EVS-5, FS-59 and §2.8's evs-4 take the new words (design-records). DESIGN-DETAILS.md section 2 is built on this, and EVSB-M2-12 and EVSB-M2-13 have landed it.
-
-Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-12 and -13 (landed) stand; D-EVS-25, D-EVS-34, I-EVS-5, FS-59, evs-4 wording (design-records).
-
-Questions: `details-2-orphan-age.md`, `evs-models-gc-unfenced-new-ref.md`, `evs1-m2-12-first-commit-gc-fence.md`, `evsb-m2-11-pending-record-no-head.md`.
-
-### QD-626: Should a drop job take its mark only once evacuation's horizon has passed each covered drop's commit, since a first commit to a new ref that cites a listed version can stall past mark and verify?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A drop job takes its mark only once the horizon of DESIGN-DETAILS.md 2.2.4 (the oldest batch left on the repo's metadata cluster) has passed each covered drop's commit time by 2 min, so every push validated before the drop has committed on a head a scan can read, or is dead. A 7-day-window drop costs nothing; a `now` drop's deletions start about 25 to 26 h after it, which amends owner decision 183's 'about 25 min'; §2.8's evs-4 ttl and FS-89's timings follow (design-records). EvsCommit.tla gains a drop story with a creating push stalled across the job (EVSB-M10-07). Problem 10's section builds to this; section 2 builds nothing for it.
-
-Changes: owner decision 183's timing for `now` drops (design-records); problem 10's section (EVSB-M10-03, -04, -06) builds to it; EvsCommit.tla drop story (EVSB-M10-07); evs-4 ttl and FS-89 timings.
-
-Questions: `details-2-drop-job-new-ref.md`.
-
-### QD-629: Should `self_admit` and `scim_signer` compile into ProjectionRows, where api and every gate judge by them, with a §2.8 api-7 line?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-self_admit and scim_signer, the two ServiceSettings values a verifier judges a statement by, compile into ProjectionRows.settings (ProjectionSettings{uint32 self_admit = 1; bytes scim_signer = 2}); full readers check them against the head at compile, and rows-only verifiers, api among them, take them. Nothing else of ServiceSettings is compiled. §2.8's api-7 gains a line for them (I-18; design-records): the server learns a setting whose effect it already sees. DESIGN-DETAILS.md section 5 is built on this, and TEAM-M2-07 and TEAM-M2-10 build to it.
-
-Changes: DESIGN-DETAILS.md section 5 stands as written; TEAM-M2-07 and -10 stand; §2.8 api-7 line (design-records).
-
-Questions: `details-5-settings-in-rows.md`, `team-m2-02-self-admit-at-rows-only-readers.md`.
-
-### QD-635: What queues the versionless sweep's two one-off passes: at a hold's end, and when §19.11's purge turns on from observe?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*
-
-AbuseHoldPass (ABUSE-M5-14) schedules evsservice.EvsSweepHoldEndTaskRequest(holdRecord, endTime) for each hold it ends, before it deletes the hold/ object. The purge turn-on is a sidecarctl evs purge-turn-on command that schedules EvsSweepTurnOnTaskRequest, run in the same runbook step that sets format2.purge: on (EVS2-M10-34's row); a monitor row watches for observe's retained count staying flat while purge is on. §2.8's holds row names the server/task pending_task and finished_task rows that carry a hold pass's network, repo ids and placement and end times, and their retention (design-records). Both passes are idempotent.
-
-Changes: ABUSE-M5-14: one line queueing the hold-end pass; sidecarctl: evs purge-turn-on (ops lane); EVS2-M10-34: runbook line and monitor row; §2.8 holds row (design-records).
-
-Questions: `evsb-m3-02-sweep-pass-triggers.md`.
-
-### QD-321: Zip attachments
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A one-file zip is taken under the same 8 MiB and 100:1 bounds as gzip; more than one entry is refused. `FuzzSmtpAggregate` covers it.
-
-Changes: §2.8 smtp-5 wording.
-
-Questions: `plan-SMTP-small-readings.md#15`.
-
-### QD-364: "Proto field" in the guard
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A field reachable from a message a `<svc>service` or server decodes, the walk stopping at `bytes` fields the design seals. `testdata/metadata/fields.yml` and per-area `metadata_rows.yml` map each to a row. "And back" holds for a row once its owning milestone has landed; a row ahead of it carries `planned: Mn` in those classification files, never in `metadata_list.yml`, which stays byte for byte §2.8's block.
-
-Questions: `plan-TEST-small-readings.md#5`.
-
-### QD-457: `copied_rows`' shape, past what one cell holds
-*Proposed fill: a gap the agents filled; work builds on it. Also amends §21.*
-
-`part` joins `abuse_legal_hold`'s primary key after (network_id, case_id). Part 0 is the hold itself; parts 1 and up each hold at most 16 MiB of compressed rows in `copied_rows`, keeping §21.16's seven tables. api-14 states the shape.
-
-Changes: §2.8 api-14; §21.9.
-
-Questions: `plan-ABUSE-metadata-rows.md#3`.
-
-### QD-505: No store is named for a breaker's level
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-A breaker's level is an `abuse_action` row with `network_id` NULL and kind `mail_breaker`, mailed like any action. api-14's actions text gains "and platform-wide breaker levels".
-
-Changes: §2.8 api-14.
-
-Questions: `plan-ABUSE-metadata-rows.md#5`.
-
-### QD-558: BridgeState.rules holds a BridgeRules message in bridge.proto
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`BridgeState.rules` stays `bytes` and holds a marshalled `BridgeRules`, declared with its row messages in protocol/bridge/bridge.proto. Field numbers are BRIDGE-M4-06's, in the order first written. No §2.8 row: it travels only in process or over the device RPC.
-
-Questions: `plan-BRIDGE-small-readings.md#2`.
+Not folded (2026-11-10): the new ext row for the mailboxes' provider, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 208 (§2.8 api-14, §19.10, §21.10, §21.16).
 
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
@@ -365,6 +89,8 @@ Rule it no URnetwork carrier, in one sentence in §3: a checkpointer's own outbo
 Changes: D-ARCH-2; §3.5 planes; RECORD.md section 10.2; Q-RECORD-8.
 
 Questions: `record-md-witness-carrier.md`.
+
+Not folded (2026-11-10): RECORD.md section 10.2's step 6 and Q-RECORD-8, which live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 214 (D-ARCH-2, §3.5).
 
 <a id="s4"></a>
 ## §4 Repositories, code placement, branches, and build
@@ -2590,6 +2316,8 @@ The in-house MinIO build honors x-ur-if-unmodified-ms: T on a DELETE, under the 
 Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-22 and -23 (landed) stand; §11.3 MinIO bullet (design-records).
 
 Questions: `details-2-conditional-delete.md`.
+
+Partly folded (2026-11-10): DESIGN-DETAILS.md 2.8's words for it landed with QD-623's fold (owner decision 203): §11.3's MinIO bullet, §11.13's needs and orphans rows and the clause after §19.6's settle rule (6), which cites owner decision 203. This item's own owner decision number, cited there and in §11.3, and the rest of its text (412 with nothing sent to a drive, a missing key's 204, who sends the header) wait for §11's fold.
 
 ### QD-625: Should the in-house MinIO build answer a LIST 503 when it could have dropped a key, since evacuation's horizon and GC's reads of pidx/ delete on what a LIST shows?
 *Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*
@@ -5627,6 +5355,8 @@ Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-07 builds it; 
 
 Questions: `details-13-lease-draw-size.md`.
 
+Partly folded (2026-11-10): §2.8 api-13's sizes landed with QD-657; §20.6's draw row waits for §20's fold.
+
 ### QD-655: Should a gate service refuse for a network once it knows the authorization log moved and cannot verify the new entries, where QD-055 has the last verified state keep serving?
 *Decided by the owner on 2026-11-10, asked one question at a time. Folds into §8 Access control. Also amends §9.*
 
@@ -5644,3 +5374,5 @@ A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id
 Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
 
 Questions: `details-13-edge-pair-life.md`.
+
+Partly folded (2026-11-10): §2.8 sock-3's ttl landed with QD-657; §9.6's edge Finds wait for §9's fold.

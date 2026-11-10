@@ -2264,6 +2264,521 @@ func (x *ConfigName) GetName() string {
 	return ""
 }
 
+// tags and groups: each tag or group a head's policy names, beside its opaque atom id (plan-ACL-atom-and-rule-ids
+// #1): 16 bytes of crypto/rand that the writer draws the first time a head names it, redrawn while its first 15
+// bytes are zero (an autogroup's form), and kept for as long as the name is. Deterministically encoded, in name
+// order. A config file, which evs holds as ciphertext.
+type ConfigAtomTable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Atoms         []*ConfigAtomName      `protobuf:"bytes,1,rep,name=atoms,proto3" json:"atoms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigAtomTable) Reset() {
+	*x = ConfigAtomTable{}
+	mi := &file_protocol_config_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigAtomTable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigAtomTable) ProtoMessage() {}
+
+func (x *ConfigAtomTable) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigAtomTable.ProtoReflect.Descriptor instead.
+func (*ConfigAtomTable) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ConfigAtomTable) GetAtoms() []*ConfigAtomName {
+	if x != nil {
+		return x.Atoms
+	}
+	return nil
+}
+
+type ConfigAtomName struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                   // without its tag: or group: prefix
+	AtomId        []byte                 `protobuf:"bytes,2,opt,name=atom_id,json=atomId,proto3" json:"atom_id,omitempty"` // 16 B
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigAtomName) Reset() {
+	*x = ConfigAtomName{}
+	mi := &file_protocol_config_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigAtomName) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigAtomName) ProtoMessage() {}
+
+func (x *ConfigAtomName) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigAtomName.ProtoReflect.Descriptor instead.
+func (*ConfigAtomName) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ConfigAtomName) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ConfigAtomName) GetAtomId() []byte {
+	if x != nil {
+		return x.AtomId
+	}
+	return nil
+}
+
+// rules: each document rule's id, keyed by the SHA-256 of the rule's canonical form (plan-ACL-atom-and-rule-ids #3),
+// so an unchanged rule keeps its id across saves and K_sock rotations. Deterministically encoded, in key order.
+type ConfigRuleTable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rules         []*ConfigRuleId        `protobuf:"bytes,1,rep,name=rules,proto3" json:"rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigRuleTable) Reset() {
+	*x = ConfigRuleTable{}
+	mi := &file_protocol_config_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigRuleTable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigRuleTable) ProtoMessage() {}
+
+func (x *ConfigRuleTable) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigRuleTable.ProtoReflect.Descriptor instead.
+func (*ConfigRuleTable) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ConfigRuleTable) GetRules() []*ConfigRuleId {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+type ConfigRuleId struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	CanonicalSha256 []byte                 `protobuf:"bytes,1,opt,name=canonical_sha256,json=canonicalSha256,proto3" json:"canonical_sha256,omitempty"` // 32 B
+	RuleId          []byte                 `protobuf:"bytes,2,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`                            // 16 B of crypto/rand
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ConfigRuleId) Reset() {
+	*x = ConfigRuleId{}
+	mi := &file_protocol_config_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigRuleId) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigRuleId) ProtoMessage() {}
+
+func (x *ConfigRuleId) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigRuleId.ProtoReflect.Descriptor instead.
+func (*ConfigRuleId) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ConfigRuleId) GetCanonicalSha256() []byte {
+	if x != nil {
+		return x.CanonicalSha256
+	}
+	return nil
+}
+
+func (x *ConfigRuleId) GetRuleId() []byte {
+	if x != nil {
+		return x.RuleId
+	}
+	return nil
+}
+
+// labels: the repo labels an evs: resource may name instead of an id (§8.4). Deterministically encoded, in label
+// order.
+type ConfigLabelTable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Labels        []*ConfigRepoLabel     `protobuf:"bytes,1,rep,name=labels,proto3" json:"labels,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigLabelTable) Reset() {
+	*x = ConfigLabelTable{}
+	mi := &file_protocol_config_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigLabelTable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigLabelTable) ProtoMessage() {}
+
+func (x *ConfigLabelTable) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigLabelTable.ProtoReflect.Descriptor instead.
+func (*ConfigLabelTable) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ConfigLabelTable) GetLabels() []*ConfigRepoLabel {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+type ConfigRepoLabel struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	RepoId        []byte                 `protobuf:"bytes,2,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"` // 16 B
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigRepoLabel) Reset() {
+	*x = ConfigRepoLabel{}
+	mi := &file_protocol_config_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigRepoLabel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigRepoLabel) ProtoMessage() {}
+
+func (x *ConfigRepoLabel) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigRepoLabel.ProtoReflect.Descriptor instead.
+func (*ConfigRepoLabel) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ConfigRepoLabel) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *ConfigRepoLabel) GetRepoId() []byte {
+	if x != nil {
+		return x.RepoId
+	}
+	return nil
+}
+
+// resolve: one row per user:, network: and client: selector the policy names and no others, which compile reads
+// alone (plan-ACL-selector-resolution). The writer fills it at save, a server's answer only a proposal.
+// Deterministically encoded, each list in the order of its first field.
+type ConfigResolution struct {
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	Members       []*ConfigMemberResolution  `protobuf:"bytes,1,rep,name=members,proto3" json:"members,omitempty"`
+	Networks      []*ConfigNetworkResolution `protobuf:"bytes,2,rep,name=networks,proto3" json:"networks,omitempty"`
+	Clients       []*ConfigClientResolution  `protobuf:"bytes,3,rep,name=clients,proto3" json:"clients,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigResolution) Reset() {
+	*x = ConfigResolution{}
+	mi := &file_protocol_config_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigResolution) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigResolution) ProtoMessage() {}
+
+func (x *ConfigResolution) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigResolution.ProtoReflect.Descriptor instead.
+func (*ConfigResolution) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ConfigResolution) GetMembers() []*ConfigMemberResolution {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+func (x *ConfigResolution) GetNetworks() []*ConfigNetworkResolution {
+	if x != nil {
+		return x.Networks
+	}
+	return nil
+}
+
+func (x *ConfigResolution) GetClients() []*ConfigClientResolution {
+	if x != nil {
+		return x.Clients
+	}
+	return nil
+}
+
+type ConfigMemberResolution struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Email         string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"` // lowercase, as ParseAclPolicy folds it
+	MemberId      []byte                 `protobuf:"bytes,2,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigMemberResolution) Reset() {
+	*x = ConfigMemberResolution{}
+	mi := &file_protocol_config_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigMemberResolution) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigMemberResolution) ProtoMessage() {}
+
+func (x *ConfigMemberResolution) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigMemberResolution.ProtoReflect.Descriptor instead.
+func (*ConfigMemberResolution) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ConfigMemberResolution) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *ConfigMemberResolution) GetMemberId() []byte {
+	if x != nil {
+		return x.MemberId
+	}
+	return nil
+}
+
+type ConfigNetworkResolution struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"` // the label or alias the policy writes, never a legacy name (D-DNS-2)
+	NetworkId     []byte                 `protobuf:"bytes,2,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigNetworkResolution) Reset() {
+	*x = ConfigNetworkResolution{}
+	mi := &file_protocol_config_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigNetworkResolution) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigNetworkResolution) ProtoMessage() {}
+
+func (x *ConfigNetworkResolution) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigNetworkResolution.ProtoReflect.Descriptor instead.
+func (*ConfigNetworkResolution) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ConfigNetworkResolution) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ConfigNetworkResolution) GetNetworkId() []byte {
+	if x != nil {
+		return x.NetworkId
+	}
+	return nil
+}
+
+type ConfigClientResolution struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      []byte                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	SidecarId     []byte                 `protobuf:"bytes,2,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"` // the sidecar a verified SidecarIdentityBinding names; empty for none
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigClientResolution) Reset() {
+	*x = ConfigClientResolution{}
+	mi := &file_protocol_config_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigClientResolution) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigClientResolution) ProtoMessage() {}
+
+func (x *ConfigClientResolution) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigClientResolution.ProtoReflect.Descriptor instead.
+func (*ConfigClientResolution) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ConfigClientResolution) GetClientId() []byte {
+	if x != nil {
+		return x.ClientId
+	}
+	return nil
+}
+
+func (x *ConfigClientResolution) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
 var File_protocol_config_proto protoreflect.FileDescriptor
 
 const file_protocol_config_proto_rawDesc = "" +
@@ -2430,7 +2945,37 @@ const file_protocol_config_proto_rawDesc = "" +
 	"ConfigName\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name*b\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"J\n" +
+	"\x0fConfigAtomTable\x127\n" +
+	"\x05atoms\x18\x01 \x03(\v2!.urnetwork.sidecar.ConfigAtomNameR\x05atoms\"=\n" +
+	"\x0eConfigAtomName\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x17\n" +
+	"\aatom_id\x18\x02 \x01(\fR\x06atomId\"H\n" +
+	"\x0fConfigRuleTable\x125\n" +
+	"\x05rules\x18\x01 \x03(\v2\x1f.urnetwork.sidecar.ConfigRuleIdR\x05rules\"R\n" +
+	"\fConfigRuleId\x12)\n" +
+	"\x10canonical_sha256\x18\x01 \x01(\fR\x0fcanonicalSha256\x12\x17\n" +
+	"\arule_id\x18\x02 \x01(\fR\x06ruleId\"N\n" +
+	"\x10ConfigLabelTable\x12:\n" +
+	"\x06labels\x18\x01 \x03(\v2\".urnetwork.sidecar.ConfigRepoLabelR\x06labels\"@\n" +
+	"\x0fConfigRepoLabel\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12\x17\n" +
+	"\arepo_id\x18\x02 \x01(\fR\x06repoId\"\xe4\x01\n" +
+	"\x10ConfigResolution\x12C\n" +
+	"\amembers\x18\x01 \x03(\v2).urnetwork.sidecar.ConfigMemberResolutionR\amembers\x12F\n" +
+	"\bnetworks\x18\x02 \x03(\v2*.urnetwork.sidecar.ConfigNetworkResolutionR\bnetworks\x12C\n" +
+	"\aclients\x18\x03 \x03(\v2).urnetwork.sidecar.ConfigClientResolutionR\aclients\"K\n" +
+	"\x16ConfigMemberResolution\x12\x14\n" +
+	"\x05email\x18\x01 \x01(\tR\x05email\x12\x1b\n" +
+	"\tmember_id\x18\x02 \x01(\fR\bmemberId\"L\n" +
+	"\x17ConfigNetworkResolution\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x02 \x01(\fR\tnetworkId\"T\n" +
+	"\x16ConfigClientResolution\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\fR\bclientId\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId*b\n" +
 	"\fIndexerScope\x12\x1d\n" +
 	"\x19INDEXER_SCOPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15INDEXER_SCOPE_NETWORK\x10\x01\x12\x18\n" +
@@ -2475,7 +3020,7 @@ func file_protocol_config_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_protocol_config_proto_goTypes = []any{
 	(IndexerScope)(0),                // 0: urnetwork.sidecar.IndexerScope
 	(IndexerService)(0),              // 1: urnetwork.sidecar.IndexerService
@@ -2511,37 +3056,47 @@ var file_protocol_config_proto_goTypes = []any{
 	(*ConfigFold)(nil),               // 31: urnetwork.sidecar.ConfigFold
 	(*ConfigNameTable)(nil),          // 32: urnetwork.sidecar.ConfigNameTable
 	(*ConfigName)(nil),               // 33: urnetwork.sidecar.ConfigName
-	(*bridge.StatementHeader)(nil),   // 34: urnetwork.sidecar.StatementHeader
-	(bridge.MemberRole)(0),           // 35: urnetwork.sidecar.MemberRole
-	(bridge.RecoveryRebindReason)(0), // 36: urnetwork.sidecar.RecoveryRebindReason
-	(bridge.KeyAlg)(0),               // 37: urnetwork.sidecar.KeyAlg
-	(bridge.KeyPurpose)(0),           // 38: urnetwork.sidecar.KeyPurpose
-	(*bridge.WebAuthnEvidence)(nil),  // 39: urnetwork.sidecar.WebAuthnEvidence
-	(*bridge.ForwardScope)(nil),      // 40: urnetwork.sidecar.ForwardScope
-	(*bridge.AuthPin)(nil),           // 41: urnetwork.sidecar.AuthPin
+	(*ConfigAtomTable)(nil),          // 34: urnetwork.sidecar.ConfigAtomTable
+	(*ConfigAtomName)(nil),           // 35: urnetwork.sidecar.ConfigAtomName
+	(*ConfigRuleTable)(nil),          // 36: urnetwork.sidecar.ConfigRuleTable
+	(*ConfigRuleId)(nil),             // 37: urnetwork.sidecar.ConfigRuleId
+	(*ConfigLabelTable)(nil),         // 38: urnetwork.sidecar.ConfigLabelTable
+	(*ConfigRepoLabel)(nil),          // 39: urnetwork.sidecar.ConfigRepoLabel
+	(*ConfigResolution)(nil),         // 40: urnetwork.sidecar.ConfigResolution
+	(*ConfigMemberResolution)(nil),   // 41: urnetwork.sidecar.ConfigMemberResolution
+	(*ConfigNetworkResolution)(nil),  // 42: urnetwork.sidecar.ConfigNetworkResolution
+	(*ConfigClientResolution)(nil),   // 43: urnetwork.sidecar.ConfigClientResolution
+	(*bridge.StatementHeader)(nil),   // 44: urnetwork.sidecar.StatementHeader
+	(bridge.MemberRole)(0),           // 45: urnetwork.sidecar.MemberRole
+	(bridge.RecoveryRebindReason)(0), // 46: urnetwork.sidecar.RecoveryRebindReason
+	(bridge.KeyAlg)(0),               // 47: urnetwork.sidecar.KeyAlg
+	(bridge.KeyPurpose)(0),           // 48: urnetwork.sidecar.KeyPurpose
+	(*bridge.WebAuthnEvidence)(nil),  // 49: urnetwork.sidecar.WebAuthnEvidence
+	(*bridge.ForwardScope)(nil),      // 50: urnetwork.sidecar.ForwardScope
+	(*bridge.AuthPin)(nil),           // 51: urnetwork.sidecar.AuthPin
 }
 var file_protocol_config_proto_depIdxs = []int32{
-	34, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
-	34, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	45, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
+	44, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
 	0,  // 7: urnetwork.sidecar.IndexerSet.scope:type_name -> urnetwork.sidecar.IndexerScope
 	1,  // 8: urnetwork.sidecar.IndexerServices.services:type_name -> urnetwork.sidecar.IndexerService
-	34, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
-	36, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
-	34, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
-	37, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
-	38, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	39, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
-	34, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
-	34, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	41, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	44, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
+	46, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
+	44, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
+	47, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
+	48, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
+	49, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
+	44, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
+	50, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
+	44, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	51, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
 	4,  // 21: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
 	5,  // 22: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
 	2,  // 23: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
@@ -2549,16 +3104,22 @@ var file_protocol_config_proto_depIdxs = []int32{
 	22, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
 	6,  // 26: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
 	24, // 27: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	34, // 28: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 29: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 30: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 28: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 29: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	44, // 30: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
 	30, // 31: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
 	33, // 32: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
-	33, // [33:33] is the sub-list for method output_type
-	33, // [33:33] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	35, // 33: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
+	37, // 34: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
+	39, // 35: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
+	41, // 36: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
+	42, // 37: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
+	43, // 38: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
+	39, // [39:39] is the sub-list for method output_type
+	39, // [39:39] is the sub-list for method input_type
+	39, // [39:39] is the sub-list for extension type_name
+	39, // [39:39] is the sub-list for extension extendee
+	0,  // [0:39] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }
@@ -2572,7 +3133,7 @@ func file_protocol_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_config_proto_rawDesc), len(file_protocol_config_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   27,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

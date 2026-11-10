@@ -7,11 +7,17 @@
 #   SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1 make ios-extension-leg  rewrites it
 acl_access_log.go
 acl_approver.go
+acl_compile.go
+acl_compile_atoms.go
+acl_compile_targets.go
 acl_consent.go
 acl_eval.go
 acl_evs.go
 acl_grant.go
 acl_hujson.go
+acl_implicit.go
+acl_kind.go
+acl_limits.go
 acl_member_check.go
 acl_policy.go
 acl_request.go

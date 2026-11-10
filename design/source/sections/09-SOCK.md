@@ -355,7 +355,7 @@ Served uses never exceed `uses`, counted by Reserves, and no get starts, resumes
 
 **D-SOCK-13 (proposed).** Send names outside `tls/`, `smtp/` and `ur/` only as 9.4's HMAC token paths, sealed for listings, under the config repo's `K_sock`, rotated on §11.6's triggers. *Why:* owner decision 67, built like evs paths (owner decision 2); prefix grants still work.
 
-**D-SOCK-14 (proposed).** Gate registrations and Finds on the signed id-only projection (§7.9, §8); listener and dialer each re-derive the grant from the config repo. *Why:* owner decisions 3, 6 and 72: a breached server can only deny or delay.
+**D-SOCK-14 (proposed).** Gate registrations and Finds on the signed id-only projection (§7.9, §8); listener and dialer each re-derive the grant from the config repo. *Why:* owner decisions 3, 6 and 72: a breached server can only deny or delay, within §2.8's exposure bound.
 
 **D-SOCK-15 (proposed).** System protection bounds registration and Find work, never the number of names or established use: a per-client token bucket charges each Find and each registration page of at most 1,024 entries, larger sets going as pages (9.5), and a spend check precedes signing (9.6, 9.10). *Why:* owner decision 66 allows system-protection bounds but no count caps; an authenticated byte-free client otherwise pins Redis and the signing key.
 

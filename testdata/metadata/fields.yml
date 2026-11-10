@@ -189,6 +189,17 @@ sealed_messages:
   ConfigFold: "a config head's fold/<d>/<i> file, which evs holds as ciphertext (§7.9, plan-TEAM-config-head-format)"
   ConfigNameTable: "a config head's names file, which evs holds as ciphertext (§7.7, §7.9)"
   ConfigName: "inside a config head's names file, which evs holds as ciphertext (§7.7, §7.9)"
+  ConfigAtomTable: "a config head's tags or groups file, which evs holds as ciphertext (§7.9, plan-ACL-atom-and-rule-ids)"
+  ConfigAtomName: "inside a config head's tags or groups file, which evs holds as ciphertext (§7.9)"
+  ConfigRuleTable: "a config head's rules file, which evs holds as ciphertext (§7.9, plan-ACL-atom-and-rule-ids)"
+  ConfigRuleId: "inside a config head's rules file, which evs holds as ciphertext (§7.9)"
+  ConfigLabelTable: "a config head's labels file, which evs holds as ciphertext (§8.8)"
+  ConfigRepoLabel: "inside a config head's labels file, which evs holds as ciphertext (§8.8)"
+  ConfigResolution: "a config head's resolve file, which evs holds as ciphertext (plan-ACL-selector-resolution)"
+  ConfigMemberResolution: "inside a config head's resolve file, which evs holds as ciphertext"
+  ConfigNetworkResolution: "inside a config head's resolve file, which evs holds as ciphertext"
+  ConfigClientResolution: "inside a config head's resolve file, which evs holds as ciphertext"
+  AclPortRange: "a grant's ports as a client checks them, never in AclRows (plan-BRIDGE-gate-row-prefixes #1)"
   BridgeState: "in process, or DeviceLocalRpc on the device (§18.6)"
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
   ForwardingKeys: "a VPN component's public keys for its sidecar role, in process or DeviceLocalRpc on the device (§18.6, DESIGN-DETAILS 4.2.6)"
@@ -489,14 +500,10 @@ fields:
   AclAtom.atom: api-7
   AclAtom.member_ids: api-7
   AclAtom.sidecar_ids: api-7
-  AclPortRange.protocol: api-7
-  AclPortRange.first: api-7
-  AclPortRange.last: api-7
   AclRule.rule_id: api-7
   AclRule.src_atoms: api-7
   AclRule.targets: api-7
   AclRule.actions: api-7
-  AclRule.ports: api-7
   AclRule.expires: api-7
   AclRule.audience: api-7
   AclRule.app_mode: api-7
@@ -551,7 +558,6 @@ fields:
   AclTarget.socket_tokens: api-7
   AclTarget.socket_prefix: api-7
   AclTarget.public_name: api-7
-  AclTarget.cidr: api-7
   AclTarget.mail_send: api-7
   GrantActivate.header: api-7
   GrantActivate.grant_id: api-7

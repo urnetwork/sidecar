@@ -29,8 +29,15 @@
 // epoch and in each such source, so a fold drops a carried row too. A push refused 412 PATH_EPOCH is made again by
 // Retoken.
 //
-// Not built here, and failing closed: writes to record-class repos, whose records name slot keys (EVS1-M2-29, -30
-// and §15, §16's writers); rename and copy, which keep a file's chain under another path through the reuse list.
+// Record-class repos (slot-keyed: §11.6's object key row) keep each chain's object key in a deletable slot/ object
+// rather than in its segment: a new chain, a checkpoint or chunks, draws a fresh key in a new slot as it is sealed
+// (evs_upload.go), and a diff appended to a chain seals under the chain's own slot key, which the plan opens from the
+// previous version's slot, so one ERASE of that key ends every record of the chain. Their chains never ride inline:
+// format 1's inline record carries its own key block (EVS-FORMAT.md), which a slot-keyed chain must not, so a
+// slot-keyed inline record is left to a format change and every chain goes in slot-keyed segments.
+//
+// Not built here, and failing closed: rename and copy, which keep a file's chain under another path through the
+// reuse list.
 //
 // On every leg. Not safe for concurrent use: one plan at a time per write.
 
@@ -138,6 +145,8 @@ type EvsWritePlan struct {
 	Flags  uint32
 	Erased []*EvsErasedKey
 	scope  string
+	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
+	slotKeyed bool
 }
 
 // One path's part of a push.
@@ -173,6 +182,18 @@ type EvsPlannedPath struct {
 	removalVersion uint64
 	// a directory delta's children, whose rows a retoken seals again in its epoch
 	children []*evsChildChange
+	// slot-keyed repos: the key a diff appended to the previous chain seals under, its slot's; and the slots the
+	// records of the locators this version keeps name, in chain order
+	chainKey    *evsChainKey
+	keptSlotIds []Id
+}
+
+// A slot-keyed chain's object key and where its slot holds it.
+type evsChainKey struct {
+	slotId     Id
+	keyIndex   uint16
+	generation uint64
+	objectKey  *EvsObjectKey
 }
 
 // Whether the change creates its path, as a creation's version is max(b, m) + 1 on the push's base.
@@ -228,9 +249,6 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	if err != nil {
 		return nil, err
 	}
-	if EvsRepoKindRecordClass(repoKind) {
-		return nil, fmt.Errorf("%w: a record-class repo's slot-keyed records (EVS1-M2-29, EVS1-M2-30)", ErrEvsWriteNotBuilt)
-	}
 	writePaths := map[string]bool{}
 	readPaths := []string{}
 	for _, write := range args.Writes {
@@ -280,6 +298,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
+					slotKeyed: EvsRepoKindRecordClass(repoKind),
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId); err != nil {
 					return err
@@ -469,13 +488,14 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	var previous *EvsChainState
 	var previousContent *evsSpill
+	var previousKeys *evsChainKeys
 	if stands {
-		content, state, fields, err := self.readBase(ctx, result, verified)
+		content, state, keys, fields, err := self.readBaseKeys(ctx, result, verified)
 		if err != nil {
 			return nil, err
 		}
 		defer content.close()
-		previous, previousContent = state, content
+		previous, previousContent, previousKeys = state, content, keys
 		planned.Fields.FileId = fields.GetFileId()
 		planned.Fields.Mode = fields.GetMode()
 	}
@@ -485,7 +505,7 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	if !evsFileModeValid(planned.Fields.GetMode()) {
 		return nil, fmt.Errorf("%w: mode %o is no file's", ErrEvsWriteInvalid, planned.Fields.GetMode())
 	}
-	if err := self.planChain(ctx, plan, planned, write, verified, previous, previousContent, oid); err != nil {
+	if err := self.planChain(ctx, plan, planned, write, verified, previous, previousContent, previousKeys, oid); err != nil {
 		return nil, err
 	}
 	return planned, nil
@@ -502,8 +522,9 @@ func evsVerifiedNewestVersion(verified *EvsVerifiedPath) uint64 {
 	return version
 }
 
-// A file version's chain: chunks, a checkpoint, or the previous chain and a diff.
-func (self *EvsRepo) planChain(ctx context.Context, plan *EvsWritePlan, planned *EvsPlannedPath, write *EvsPathWrite, verified *EvsVerifiedPath, previous *EvsChainState, previousContent *evsSpill, oid EvsGitOid) error {
+// A file version's chain: chunks, a checkpoint, or the previous chain and a diff. In a slot-keyed repo a diff goes
+// only on a chain whose one slot key the plan opened, and nothing rides inline (see the file header).
+func (self *EvsRepo) planChain(ctx context.Context, plan *EvsWritePlan, planned *EvsPlannedPath, write *EvsPathWrite, verified *EvsVerifiedPath, previous *EvsChainState, previousContent *evsSpill, previousKeys *evsChainKeys, oid EvsGitOid) error {
 	content := write.Content
 	size := uint64(content.Size())
 	removeSince := false
@@ -514,8 +535,13 @@ func (self *EvsRepo) planChain(ctx context.Context, plan *EvsWritePlan, planned 
 			return err
 		}
 	}
+	forced := write.ForceCheckpoint
+	if plan.slotKeyed && previous != nil && !previous.Chunked && (previous.Inline || previousKeys == nil || previousKeys.chain == nil) {
+		// a chain under no one slot key of its own takes no diff here: it starts again in a slot
+		forced = true
+	}
 	reason := EvsCheckpointBefore(&EvsCheckpointArgs{
-		Previous: previous, Size: size, Force: write.ForceCheckpoint, RemoveSince: removeSince, Generation: plan.Generation,
+		Previous: previous, Size: size, Force: forced, RemoveSince: removeSince, Generation: plan.Generation,
 		DiffMaxByteCount: uint64(self.client.settings.DiffMaxByteCount),
 	})
 	planned.Checkpoint = reason
@@ -532,6 +558,13 @@ func (self *EvsRepo) planChain(ctx context.Context, plan *EvsWritePlan, planned 
 		for _, chunk := range chunks {
 			if chunk.Kept != nil {
 				planned.Chain = append(planned.Chain, &EvsPlannedLink{Kept: chunk.Kept})
+				if plan.slotKeyed {
+					slotId, ok := previousKeys.slotOf(chunk.Kept)
+					if !ok {
+						return fmt.Errorf("%w: a kept chunk under no slot key", ErrEvsWriteInvalid)
+					}
+					planned.keptSlotIds = append(planned.keptSlotIds, slotId)
+				}
 				continue
 			}
 			planned.Chain = append(planned.Chain, &EvsPlannedLink{Record: &EvsPlannedRecord{
@@ -560,6 +593,12 @@ func (self *EvsRepo) planChain(ctx context.Context, plan *EvsWritePlan, planned 
 			for _, locator := range verified.Entry.GetChain() {
 				planned.Chain = append(planned.Chain, &EvsPlannedLink{Kept: locator})
 			}
+			if plan.slotKeyed {
+				planned.chainKey = previousKeys.chain
+				for range verified.Entry.GetChain() {
+					planned.keptSlotIds = append(planned.keptSlotIds, previousKeys.chain.slotId)
+				}
+			}
 			planned.Inline = previous.Inline
 			planned.Chain = append(planned.Chain, &EvsPlannedLink{Record: &EvsPlannedRecord{
 				Kind: protocol.EvsRecordKind_EVS_RECORD_DIFF, RecordId: NewEvsSlotId(), BaseRecordId: previous.LastRecordId,
@@ -569,7 +608,7 @@ func (self *EvsRepo) planChain(ctx context.Context, plan *EvsWritePlan, planned 
 		}
 		planned.Checkpoint = reason
 	}
-	planned.Inline = EvsPadme(EvsWrappedKeyByteCount+EvsRecordByteCount(size)) <= EvsInlineMaxByteCount
+	planned.Inline = !plan.slotKeyed && EvsPadme(EvsWrappedKeyByteCount+EvsRecordByteCount(size)) <= EvsInlineMaxByteCount
 	planned.Chain = []*EvsPlannedLink{{Record: &EvsPlannedRecord{
 		Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT, RecordId: NewEvsSlotId(), Oid: oid, Body: content,
 	}}}
@@ -593,12 +632,50 @@ func (self *evsBoundedBuffer) Write(p []byte) (int, error) {
 	return self.Buffer.Write(p)
 }
 
+// The keys a previous version's chain is under, in a slot-keyed repo: each record's slot by its locator, and the
+// chain's one slot key, opened, when every record is under it.
+type evsChainKeys struct {
+	slots map[*protocol.EvsLocator]Id
+	chain *evsChainKey
+}
+
+// The slot locator's record names, false for none.
+func (self *evsChainKeys) slotOf(locator *protocol.EvsLocator) (Id, bool) {
+	if self == nil {
+		return Id{}, false
+	}
+	slotId, ok := self.slots[locator]
+	return slotId, ok
+}
+
 // The previous version's content, reconstructed and checked against its sealed fields' oid and size, its fields,
 // and what its chain holds: the facts the checkpoint rules read.
 func (self *EvsRepo) readBase(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath) (*evsSpill, *EvsChainState, *protocol.EvsSealedFields, error) {
+	content, state, _, fields, err := self.readBaseKeys(ctx, result, verified)
+	return content, state, fields, err
+}
+
+// readBase, with the keys the chain is under in a slot-keyed repo.
+func (self *EvsRepo) readBaseKeys(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath) (*evsSpill, *EvsChainState, *evsChainKeys, *protocol.EvsSealedFields, error) {
 	state := &EvsChainState{RecordCount: len(verified.Entry.GetChain())}
 	pushGeneration := verified.Statement.Push.GetGeneration()
+	keys := &evsChainKeys{slots: map[*protocol.EvsLocator]Id{}}
+	// the slot key every record so far is under, false once two differ or one is the container's
+	var oneKey *EvsRecordHeader
+	oneSlot := true
 	onRecord := func(header *EvsRecordHeader, locator *protocol.EvsLocator) {
+		if header.KeyRefKind == protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT {
+			keys.slots[locator] = header.SlotId
+		}
+		switch {
+		case header.KeyRefKind != protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT:
+			oneSlot = false
+		case oneKey == nil:
+			copied := *header
+			oneKey = &copied
+		case oneKey.SlotId != header.SlotId || oneKey.KeyIndex != header.KeyIndex || oneKey.Generation != header.Generation:
+			oneSlot = false
+		}
 		if state.KeyGeneration == 0 || header.Generation < state.KeyGeneration {
 			state.KeyGeneration = header.Generation
 		}
@@ -620,10 +697,18 @@ func (self *EvsRepo) readBase(ctx context.Context, result *evsReadResult, verifi
 	}
 	content, fields, _, err := self.reconstructContent(ctx, result, verified, onRecord)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	state.Size = uint64(content.Size())
-	return content, state, fields, nil
+	if oneSlot && oneKey != nil {
+		objectKey, err := self.slotKey(ctx, result, oneKey)
+		if err != nil {
+			content.close()
+			return nil, nil, nil, nil, err
+		}
+		keys.chain = &evsChainKey{slotId: oneKey.SlotId, keyIndex: oneKey.KeyIndex, generation: oneKey.Generation, objectKey: objectKey}
+	}
+	return content, state, keys, fields, nil
 }
 
 // A path's token path in epoch, from its raw names and K_path of that epoch: the root's is empty in every epoch.
