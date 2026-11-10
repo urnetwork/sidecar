@@ -414,7 +414,7 @@ func TestAclRouteGrantReachesItsViaSubjects(t *testing.T) {
 	exit := fixture.agent(owner, exitTag)
 	other := fixture.agent(owner, fixture.tag(owner))
 	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER),
-		[]*protocol.AclTarget{aclCidrTarget("10.0.0.0/8"), aclAtomTarget(exitTag)}, protocol.AclAction_ACL_ACTION_ROUTE)
+		[]*protocol.AclTarget{aclAtomTarget(exitTag)}, protocol.AclAction_ACL_ACTION_ROUTE)
 	state := fixture.state(t)
 	if decision := state.Reach(AclSidecarSubject(source), AclSidecarSubject(exit), aclTestNow); !decision.Allowed {
 		t.Errorf("via subject refused: %s", decision.Reason)
@@ -422,86 +422,97 @@ func TestAclRouteGrantReachesItsViaSubjects(t *testing.T) {
 	if decision := state.Reach(AclSidecarSubject(source), AclSidecarSubject(other), aclTestNow); decision.Allowed {
 		t.Errorf("other subject reached: %+v", decision)
 	}
+	// the rule's prefixes stay on devices (plan-BRIDGE-gate-row-prefixes #1): a gate sees the via, and AclEngine
+	// checks the address (acl_engine_test.go)
 	address := netip.MustParseAddr("10.1.2.3")
-	if decision := state.MayRoute(AclSidecarSubject(source), address, 6, 443, AclSidecarSubject(exit), aclTestNow); !decision.Allowed {
+	if decision := state.MayRoute(AclSidecarSubject(source), address, AclSidecarSubject(exit), aclTestNow); !decision.Allowed {
 		t.Errorf("route via the exit refused: %s", decision.Reason)
 	}
-	if decision := state.MayRoute(AclSidecarSubject(source), address, 6, 443, AclSidecarSubject(other), aclTestNow); decision.Allowed {
+	if decision := state.MayRoute(AclSidecarSubject(source), address, AclSidecarSubject(other), aclTestNow); decision.Allowed {
 		t.Errorf("route via another: %+v", decision)
-	}
-	if decision := state.MayRoute(AclSidecarSubject(source), netip.MustParseAddr("192.0.2.1"), 6, 443, AclSidecarSubject(exit), aclTestNow); decision.Allowed {
-		t.Errorf("route outside the range: %+v", decision)
 	}
 }
 
-// 0.0.0.0/0 and ::/0 leave out loopback and link-local (§8.4), a rule naming them opens them, and
-// autogroup:internet takes only public addresses.
-func TestAclRouteRangesAndTheInternet(t *testing.T) {
+// A route rule with no via names no target in rows, its advertisers standing in only through BridgeRows, so a gate's
+// MayRoute finds no via for it (plan-BRIDGE-gate-row-prefixes #1).
+func TestAclRouteRuleWithoutViaReachesNoVia(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
 	source := fixture.device(owner)
 	via := fixture.device(owner)
-	loopbackUser := fixture.device(owner)
+	fixture.rule([]Id{fixture.sidecarAtom(source)}, nil, protocol.AclAction_ACL_ACTION_ROUTE)
+	state := fixture.state(t)
+	if decision := state.MayRoute(AclSidecarSubject(source), netip.MustParseAddr("10.0.0.1"), AclSidecarSubject(via), aclTestNow); decision.Allowed {
+		t.Errorf("a route with no via reached one: %+v", decision)
+	}
+}
+
+// autogroup:internet takes only public addresses, which rows can judge, since it is an atom and no prefix (§8.4).
+func TestAclRouteToTheInternet(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	via := fixture.device(owner)
 	internetUser := fixture.device(owner)
-	fixture.rule([]Id{fixture.sidecarAtom(source)}, []*protocol.AclTarget{aclCidrTarget("0.0.0.0/0"), aclCidrTarget("::/0")}, protocol.AclAction_ACL_ACTION_ROUTE)
-	fixture.rule([]Id{fixture.sidecarAtom(loopbackUser)}, []*protocol.AclTarget{aclCidrTarget("127.0.0.0/8")}, protocol.AclAction_ACL_ACTION_ROUTE)
 	fixture.rule([]Id{fixture.sidecarAtom(internetUser)}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_INTERNET)}, protocol.AclAction_ACL_ACTION_ROUTE)
 	state := fixture.state(t)
 	cases := []struct {
-		source  Id
 		address string
 		allowed bool
 	}{
-		{source: source, address: "198.51.100.9", allowed: true},
-		{source: source, address: "10.0.0.1", allowed: true},
-		{source: source, address: "2001:db8::1", allowed: true},
-		{source: source, address: "127.0.0.1", allowed: false},
-		{source: source, address: "169.254.1.1", allowed: false},
-		{source: source, address: "::1", allowed: false},
-		{source: source, address: "fe80::1", allowed: false},
-		{source: loopbackUser, address: "127.0.0.1", allowed: true},
-		{source: internetUser, address: "198.51.100.9", allowed: true},
-		{source: internetUser, address: "10.0.0.1", allowed: false},
-		{source: internetUser, address: "127.0.0.1", allowed: false},
+		{address: "198.51.100.9", allowed: true},
+		{address: "2001:db8::1", allowed: true},
+		{address: "10.0.0.1", allowed: false},
+		{address: "127.0.0.1", allowed: false},
+		{address: "fe80::1", allowed: false},
 	}
 	for i, c := range cases {
-		decision := state.MayRoute(AclSidecarSubject(c.source), netip.MustParseAddr(c.address), 6, 443, AclSidecarSubject(via), aclTestNow)
+		decision := state.MayRoute(AclSidecarSubject(internetUser), netip.MustParseAddr(c.address), AclSidecarSubject(via), aclTestNow)
 		if decision.Allowed != c.allowed {
 			t.Errorf("case %d (%s): allowed %t (%s)", i, c.address, decision.Allowed, decision.Reason)
 		}
 	}
 }
 
-// A dial grant's ports take a protocol and port, none taking every one.
-func TestAclDialPortsMatch(t *testing.T) {
+// 0.0.0.0/0 and ::/0 leave out loopback and link-local (§8.4), and a cidr naming them opens them: the client's check of
+// a rule's prefixes from AclLocalPolicy.
+func TestAclCidrCovers(t *testing.T) {
+	cases := []struct {
+		cidr    string
+		address string
+		covers  bool
+	}{
+		{cidr: "0.0.0.0/0", address: "198.51.100.9", covers: true},
+		{cidr: "0.0.0.0/0", address: "10.0.0.1", covers: true},
+		{cidr: "::/0", address: "2001:db8::1", covers: true},
+		{cidr: "0.0.0.0/0", address: "127.0.0.1", covers: false},
+		{cidr: "0.0.0.0/0", address: "169.254.1.1", covers: false},
+		{cidr: "::/0", address: "::1", covers: false},
+		{cidr: "::/0", address: "fe80::1", covers: false},
+		{cidr: "127.0.0.0/8", address: "127.0.0.1", covers: true},
+		{cidr: "10.0.0.0/8", address: "10.1.2.3", covers: true},
+		{cidr: "10.0.0.0/8", address: "192.0.2.1", covers: false},
+	}
+	for i, c := range cases {
+		if covers := aclCidrCovers(netip.MustParsePrefix(c.cidr), netip.MustParseAddr(c.address)); covers != c.covers {
+			t.Errorf("case %d (%s in %s): %t", i, c.address, c.cidr, covers)
+		}
+	}
+}
+
+// A port-limited dial grant still lets its source dial at a gate, which sees only that the rule limits ports
+// (plan-BRIDGE-gate-row-prefixes #1); the destination's AclEngine checks which (acl_engine_test.go).
+func TestAclDialOfAPortLimitedRule(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
 	tagId := fixture.tag(owner)
 	source := fixture.device(owner)
 	api := fixture.agent(owner, tagId)
-	anyPort := fixture.device(owner)
 	rule := fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclAtomTarget(tagId)}, protocol.AclAction_ACL_ACTION_DIAL)
-	rule.Ports = []*protocol.AclPortRange{{Protocol: aclIpProtocolTcp, First: 443, Last: 443}, {Protocol: 0, First: 8000, Last: 8100}}
-	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclSidecarTarget(anyPort)}, protocol.AclAction_ACL_ACTION_DIAL)
+	rule.PortsLimited = true
 	state := fixture.state(t)
-	cases := []struct {
-		destination Id
-		ipProtocol  uint32
-		port        uint32
-		allowed     bool
-	}{
-		{destination: api, ipProtocol: aclIpProtocolTcp, port: 443, allowed: true},
-		{destination: api, ipProtocol: aclIpProtocolUdp, port: 443, allowed: false},
-		{destination: api, ipProtocol: aclIpProtocolTcp, port: 80, allowed: false},
-		{destination: api, ipProtocol: aclIpProtocolUdp, port: 8050, allowed: true},
-		{destination: api, ipProtocol: aclIpProtocolTcp, port: 8101, allowed: false},
-		{destination: anyPort, ipProtocol: aclIpProtocolUdp, port: 9, allowed: true},
-	}
-	for i, c := range cases {
-		decision := state.MayDial(AclSidecarSubject(source), AclSidecarSubject(c.destination), c.ipProtocol, c.port, aclTestNow)
-		if decision.Allowed != c.allowed {
-			t.Errorf("case %d: allowed %t (%s)", i, decision.Allowed, decision.Reason)
-		}
+	decision := state.MayDial(AclSidecarSubject(source), AclSidecarSubject(api), aclTestNow)
+	if !decision.Allowed || !decision.Rule.GetPortsLimited() {
+		t.Errorf("dial %+v", decision)
 	}
 	// reach reads no ports: the contract gate is who talks to whom
 	if decision := state.Reach(AclSidecarSubject(source), AclSidecarSubject(api), aclTestNow); !decision.Allowed {

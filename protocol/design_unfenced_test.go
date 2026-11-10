@@ -29,8 +29,9 @@ message HeadCheckResult {
 
 // sidecar/protocol/acl.proto
 // §8.8's rows, which its AclRows comments list. AclAtom's fields 4 to 8 are plan-ACL-atom-and-rule-ids #4's and
-// plan-ACL-nonsidecar-subjects', AclRule's source_rule_id plan-ACL-folded-grant-state #2's, and AclSuspension
-// and AclSpentGrant its #1 and #3, each decided by the owner with its number.
+// plan-ACL-nonsidecar-subjects', AclRule's source_rule_id plan-ACL-folded-grant-state #2's, its ports' move to devices
+// and ports_limited plan-BRIDGE-gate-row-prefixes #1's, and AclSuspension and AclSpentGrant
+// plan-ACL-folded-grant-state #1's and #3's, each decided by the owner with its number.
 message AclAtom {
   bytes atom = 1; repeated bytes member_ids = 2; repeated bytes sidecar_ids = 3;
   repeated bytes tag_owner_member_ids = 4; repeated bytes client_ids = 5; repeated bytes network_ids = 6;
@@ -38,9 +39,10 @@ message AclAtom {
 }
 message AclPortRange { uint32 protocol = 1; uint32 first = 2; uint32 last = 3; }
 message AclRule {
+  reserved 5; reserved "ports";
   bytes rule_id = 1; repeated bytes src_atoms = 2; repeated AclTarget targets = 3; repeated uint32 actions = 4;
-  repeated AclPortRange ports = 5; int64 expires = 6; AclAudience audience = 7; AclAppMode app_mode = 8;
-  bytes link_spki_sha256 = 9; bytes source_rule_id = 10;
+  int64 expires = 6; AclAudience audience = 7; AclAppMode app_mode = 8;
+  bytes link_spki_sha256 = 9; bytes source_rule_id = 10; bool ports_limited = 11;
 }
 message AclSuspension {
   bytes subject = 1; bytes suspend_id = 2; uint32 signer_class = 3; bytes signer = 4; uint64 at = 5;
@@ -179,6 +181,22 @@ message ConfigFold { uint64 after = 1; uint64 folded_through = 2; repeated Confi
 // are TEAM-M2-08's reading, open until §7.9's records freeze.
 message ConfigNameTable { repeated ConfigName names = 1; }
 message ConfigName { bytes sidecar_id = 1; string name = 2; }
+// plan-TEAM-config-head-format #1's tags, groups, rules, labels and resolve files, which the answers name as
+// deterministically encoded protobufs: the tables plan-ACL-atom-and-rule-ids #1 and #3 and
+// plan-ACL-selector-resolution describe, ACL-M2-04's reading of their fields, open until §7.9's records freeze.
+message ConfigAtomTable { repeated ConfigAtomName atoms = 1; }
+message ConfigAtomName { string name = 1; bytes atom_id = 2; }
+message ConfigRuleTable { repeated ConfigRuleId rules = 1; }
+message ConfigRuleId { bytes canonical_sha256 = 1; bytes rule_id = 2; }
+message ConfigLabelTable { repeated ConfigRepoLabel labels = 1; }
+message ConfigRepoLabel { string label = 1; bytes repo_id = 2; }
+message ConfigResolution {
+  repeated ConfigMemberResolution members = 1; repeated ConfigNetworkResolution networks = 2;
+  repeated ConfigClientResolution clients = 3;
+}
+message ConfigMemberResolution { string email = 1; bytes member_id = 2; }
+message ConfigNetworkResolution { string text = 1; bytes network_id = 2; }
+message ConfigClientResolution { bytes client_id = 1; bytes sidecar_id = 2; }
 // §7.8's client-only bundle, a field list without numbers.
 message AuthKeyBundle {
   uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;
@@ -980,6 +998,18 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "indexers", number: 10, typeName: "IndexerRow", repeated: true},
 		question: "team-m2-07-indexer-rows",
 	},
+}
+
+// Fields the owner's answers take out of messages the design fences, ahead of design-records' fold, each reserved by
+// number and name in its place, with the question that holds the answer. Each leaves the fence it narrows, so both
+// directions stay exact, and one the design stops writing fails until its line here leaves.
+var testFenceRemovals = []struct {
+	message  string
+	field    string
+	number   int32
+	question string
+}{
+	{message: "AclTarget", field: "cidr", number: 8, question: "plan-BRIDGE-gate-row-prefixes"},
 }
 
 // One value an owner's answer adds to an enum the design fences.

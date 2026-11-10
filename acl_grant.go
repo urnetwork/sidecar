@@ -17,8 +17,8 @@
 // names no admin.
 //
 // A GrantActivate folds to an AclRule (plan-ACL-folded-grant-state #2): rule_id the grant_id, src its subject's
-// sidecar atom, targets and actions from grant_dst and grant_allow, the ports grant_dst names, expires the matching
-// rule's lifetime, a publish's audience, app_mode and pin, and source_rule_id the requests rule, whose deletion by a
+// sidecar atom, targets and actions from grant_dst and grant_allow, ports_limited when grant_dst names a port, whose
+// value stays out of rows (plan-BRIDGE-gate-row-prefixes #1), expires the matching rule's lifetime, a publish's audience, app_mode and pin, and source_rule_id the requests rule, whose deletion by a
 // later config head ends the grant at that base for every reader (FS-14). Its grant_id enters spent_grants until the
 // latest of its decisions' not_after_millis plus 60 s, so a re-signed GrantActivate under a fresh header is refused
 // for as long as any of its decisions could spend.
@@ -150,7 +150,7 @@ func (self *AclState) CheckGrantActivate(statement *AclStatement, spendCheck Acl
 			RuleId:       grantId[:],
 			SrcAtoms:     [][]byte{atomId.Bytes()},
 			Targets:      ask.Dst,
-			Ports:        ask.Ports,
+			PortsLimited: 0 < len(ask.Ports),
 			Expires:      match.ExpiresMs,
 			SourceRuleId: bytes.Clone(match.Rule.GetRuleId()),
 		},

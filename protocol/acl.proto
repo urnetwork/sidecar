@@ -91,18 +91,24 @@ enum AclAppMode {
   ACL_APP_MODE_RAW = 2;
 }
 
+// A port range as a client checks it. Rows carry none (plan-BRIDGE-gate-row-prefixes #1): this rides only a
+// grant's own fields on the device (AclGrantAsk), never AclRows.
 message AclPortRange {
   uint32 protocol = 1;                    // the IP protocol number; 0 any
   uint32 first = 2;
   uint32 last = 3;
 }
 
+// Ports and CIDRs stay in AclLocalPolicy, from the sealed policy, so a server sees whether a rule limits ports,
+// never which (plan-BRIDGE-gate-row-prefixes #1, §17.8). A route rule's targets are its via subjects; one with no
+// via names none, and the advertisers BridgeRoute.route_rule_ids names stand in at id level.
 message AclRule {
+  reserved 5;
+  reserved "ports";
   bytes rule_id = 1;
   repeated bytes src_atoms = 2;
   repeated AclTarget targets = 3;
   repeated uint32 actions = 4;            // AclAction
-  repeated AclPortRange ports = 5;
   int64 expires = 6;                      // ms since the epoch; 0 none
   AclAudience audience = 7;               // a publish's (8.4)
   AclAppMode app_mode = 8;
@@ -110,6 +116,8 @@ message AclRule {
                                           // api anyway (§16.6 AD4)
   bytes source_rule_id = 10;              // an activated grant's: the requests rule its CanonicalAction names,
                                           // whose deletion ends it (plan-ACL-folded-grant-state #2)
+  bool ports_limited = 11;                // the rule's ip field names ports: a legacy client is reached only
+                                          // under a dial grant with none (§8.10, D-ACL-5)
 }
 
 message AclRequestRule {
@@ -211,7 +219,13 @@ message AclAudit {                        // a reader every member sees (owner d
   bytes audit_opt_in = 4;                 // the k-of-n AuditOptIn record, which api and readers verify
 }
 
-message AclTarget {                       // exactly one kind set
+// Exactly one kind set, in the forms CompileAcl writes (acl-m2-02-state-readings #2): repo_id sixteen zero bytes is
+// every general or record repo (evs:*, a bare *); socket_tokens one name's token path under one K_sock, a rotation
+// adding a second target under the previous key (plan-SOCK-ksock-rotation); socket_prefix with no token every
+// application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /.
+message AclTarget {
+  reserved 8;
+  reserved "cidr";                        // CIDRs stay on devices (plan-BRIDGE-gate-row-prefixes #1)
   bytes atom = 1;
   bytes sidecar_id = 2;
   bytes network_id = 3;
@@ -219,7 +233,6 @@ message AclTarget {                       // exactly one kind set
   repeated bytes socket_tokens = 5;       // §9.4's token path
   bool socket_prefix = 6;                 // whole-segment prefix; finer globs project to their literal prefix
   string public_name = 7;                 // tls/ and smtp/ sockets, dns hosts
-  bytes cidr = 8;
   bool mail_send = 9;
   bytes client_id = 10;                   // a client no binding names, under an unrestricted grant
                                           // (D-ACL-5; plan-ACL-nonsidecar-subjects)

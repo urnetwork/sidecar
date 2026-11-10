@@ -313,6 +313,23 @@ func testReadFences(t *testing.T) *testFences {
 		}
 		message.fields = append(message.fields, addition.field)
 	}
+	for _, removal := range testFenceRemovals {
+		message := fences.messages[removal.message]
+		if message == nil {
+			t.Errorf("%s loses %s by %s, and no fence writes that message", removal.message, removal.field, removal.question)
+			continue
+		}
+		index := slices.IndexFunc(message.fields, func(field testFenceField) bool {
+			return field.name == removal.field && field.number == removal.number
+		})
+		if index < 0 {
+			t.Errorf("the design no longer writes %s.%s = %d: drop its line from testFenceRemovals (%s)", removal.message, removal.field, removal.number, removal.question)
+			continue
+		}
+		message.fields = slices.Delete(message.fields, index, index+1)
+		message.reservedNumbers = append(message.reservedNumbers, removal.number)
+		message.reservedNames = append(message.reservedNames, removal.field)
+	}
 	for _, finding := range testApplyValueAdditions(fences, testFenceValueAdditions) {
 		t.Error(finding)
 	}

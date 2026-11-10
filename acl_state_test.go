@@ -5,7 +5,6 @@ package sidecar
 
 import (
 	"errors"
-	"net/netip"
 	"testing"
 	"time"
 
@@ -235,10 +234,6 @@ func aclSocketRowTarget(prefix bool, tokenPaths ...[]byte) *protocol.AclTarget {
 	return &protocol.AclTarget{SocketTokens: tokenPaths, SocketPrefix: prefix}
 }
 
-func aclCidrTarget(cidr string) *protocol.AclTarget {
-	return &protocol.AclTarget{Cidr: AclRowsCidrBytes(netip.MustParsePrefix(cidr))}
-}
-
 // A token path of segments, each one byte repeated to §9.4's 16.
 func aclTestTokenPath(segments ...byte) []byte {
 	tokenPath := []byte{}
@@ -289,12 +284,6 @@ func TestNewAclStateRefusesMalformedRows(t *testing.T) {
 		}},
 		{name: "empty exact token path", edit: func(fixture *aclTestFixture) {
 			fixture.rule(nil, []*protocol.AclTarget{aclSocketRowTarget(false, []byte{})}, protocol.AclAction_ACL_ACTION_DIAL)
-		}},
-		{name: "cidr with host bits", edit: func(fixture *aclTestFixture) {
-			fixture.rule(nil, []*protocol.AclTarget{{Cidr: []byte{10, 0, 0, 1, 8}}}, protocol.AclAction_ACL_ACTION_ROUTE)
-		}},
-		{name: "cidr of the wrong size", edit: func(fixture *aclTestFixture) {
-			fixture.rule(nil, []*protocol.AclTarget{{Cidr: []byte{10, 0, 0}}}, protocol.AclAction_ACL_ACTION_ROUTE)
 		}},
 		{name: "short repo id", edit: func(fixture *aclTestFixture) {
 			fixture.rows.Repos = append(fixture.rows.Repos, &protocol.AclRepo{RepoId: []byte{1}})
@@ -447,13 +436,3 @@ func TestAclSocketTargetForms(t *testing.T) {
 	}
 }
 
-// Rows' cidr bytes round trip, both families.
-func TestAclRowsCidrRoundTrips(t *testing.T) {
-	for _, text := range []string{"10.0.0.0/8", "0.0.0.0/0", "192.0.2.7/32", "2001:db8::/32", "::/0"} {
-		cidr := netip.MustParsePrefix(text)
-		parsed, err := aclRowsCidr(AclRowsCidrBytes(cidr))
-		if err != nil || parsed != cidr {
-			t.Errorf("%s: %v %v", text, parsed, err)
-		}
-	}
-}

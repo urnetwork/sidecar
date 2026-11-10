@@ -729,6 +729,8 @@ func (x *AclAtom) GetPrincipal() string {
 	return ""
 }
 
+// A port range as a client checks it. Rows carry none (plan-BRIDGE-gate-row-prefixes #1): this rides only a
+// grant's own fields on the device (AclGrantAsk), never AclRows.
 type AclPortRange struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Protocol      uint32                 `protobuf:"varint,1,opt,name=protocol,proto3" json:"protocol,omitempty"` // the IP protocol number; 0 any
@@ -789,19 +791,23 @@ func (x *AclPortRange) GetLast() uint32 {
 	return 0
 }
 
+// Ports and CIDRs stay in AclLocalPolicy, from the sealed policy, so a server sees whether a rule limits ports,
+// never which (plan-BRIDGE-gate-row-prefixes #1, §17.8). A route rule's targets are its via subjects; one with no
+// via names none, and the advertisers BridgeRoute.route_rule_ids names stand in at id level.
 type AclRule struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	RuleId         []byte                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
 	SrcAtoms       [][]byte               `protobuf:"bytes,2,rep,name=src_atoms,json=srcAtoms,proto3" json:"src_atoms,omitempty"`
 	Targets        []*AclTarget           `protobuf:"bytes,3,rep,name=targets,proto3" json:"targets,omitempty"`
-	Actions        []uint32               `protobuf:"varint,4,rep,packed,name=actions,proto3" json:"actions,omitempty"` // AclAction
-	Ports          []*AclPortRange        `protobuf:"bytes,5,rep,name=ports,proto3" json:"ports,omitempty"`
+	Actions        []uint32               `protobuf:"varint,4,rep,packed,name=actions,proto3" json:"actions,omitempty"`                               // AclAction
 	Expires        int64                  `protobuf:"varint,6,opt,name=expires,proto3" json:"expires,omitempty"`                                      // ms since the epoch; 0 none
 	Audience       AclAudience            `protobuf:"varint,7,opt,name=audience,proto3,enum=urnetwork.sidecar.AclAudience" json:"audience,omitempty"` // a publish's (8.4)
 	AppMode        AclAppMode             `protobuf:"varint,8,opt,name=app_mode,json=appMode,proto3,enum=urnetwork.sidecar.AclAppMode" json:"app_mode,omitempty"`
 	LinkSpkiSha256 []byte                 `protobuf:"bytes,9,opt,name=link_spki_sha256,json=linkSpkiSha256,proto3" json:"link_spki_sha256,omitempty"` // the pin in full, as a requested grant's GrantActivate shows it to
 	// api anyway (§16.6 AD4)
-	SourceRuleId  []byte `protobuf:"bytes,10,opt,name=source_rule_id,json=sourceRuleId,proto3" json:"source_rule_id,omitempty"` // an activated grant's: the requests rule its CanonicalAction names,
+	SourceRuleId []byte `protobuf:"bytes,10,opt,name=source_rule_id,json=sourceRuleId,proto3" json:"source_rule_id,omitempty"` // an activated grant's: the requests rule its CanonicalAction names,
+	// whose deletion ends it (plan-ACL-folded-grant-state #2)
+	PortsLimited  bool `protobuf:"varint,11,opt,name=ports_limited,json=portsLimited,proto3" json:"ports_limited,omitempty"` // the rule's ip field names ports: a legacy client is reached only
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -864,13 +870,6 @@ func (x *AclRule) GetActions() []uint32 {
 	return nil
 }
 
-func (x *AclRule) GetPorts() []*AclPortRange {
-	if x != nil {
-		return x.Ports
-	}
-	return nil
-}
-
 func (x *AclRule) GetExpires() int64 {
 	if x != nil {
 		return x.Expires
@@ -904,6 +903,13 @@ func (x *AclRule) GetSourceRuleId() []byte {
 		return x.SourceRuleId
 	}
 	return nil
+}
+
+func (x *AclRule) GetPortsLimited() bool {
+	if x != nil {
+		return x.PortsLimited
+	}
+	return false
 }
 
 type AclRequestRule struct {
@@ -1541,6 +1547,10 @@ func (x *AclAudit) GetAuditOptIn() []byte {
 	return nil
 }
 
+// Exactly one kind set, in the forms CompileAcl writes (acl-m2-02-state-readings #2): repo_id sixteen zero bytes is
+// every general or record repo (evs:*, a bare *); socket_tokens one name's token path under one K_sock, a rotation
+// adding a second target under the previous key (plan-SOCK-ksock-rotation); socket_prefix with no token every
+// application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /.
 type AclTarget struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Atom          []byte                 `protobuf:"bytes,1,opt,name=atom,proto3" json:"atom,omitempty"`
@@ -1550,7 +1560,6 @@ type AclTarget struct {
 	SocketTokens  [][]byte               `protobuf:"bytes,5,rep,name=socket_tokens,json=socketTokens,proto3" json:"socket_tokens,omitempty"`  // §9.4's token path
 	SocketPrefix  bool                   `protobuf:"varint,6,opt,name=socket_prefix,json=socketPrefix,proto3" json:"socket_prefix,omitempty"` // whole-segment prefix; finer globs project to their literal prefix
 	PublicName    string                 `protobuf:"bytes,7,opt,name=public_name,json=publicName,proto3" json:"public_name,omitempty"`        // tls/ and smtp/ sockets, dns hosts
-	Cidr          []byte                 `protobuf:"bytes,8,opt,name=cidr,proto3" json:"cidr,omitempty"`
 	MailSend      bool                   `protobuf:"varint,9,opt,name=mail_send,json=mailSend,proto3" json:"mail_send,omitempty"`
 	ClientId      []byte                 `protobuf:"bytes,10,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"` // a client no binding names, under an unrestricted grant
 	unknownFields protoimpl.UnknownFields
@@ -1634,13 +1643,6 @@ func (x *AclTarget) GetPublicName() string {
 		return x.PublicName
 	}
 	return ""
-}
-
-func (x *AclTarget) GetCidr() []byte {
-	if x != nil {
-		return x.Cidr
-	}
-	return nil
 }
 
 func (x *AclTarget) GetMailSend() bool {
@@ -2574,19 +2576,19 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\fAclPortRange\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\rR\bprotocol\x12\x14\n" +
 	"\x05first\x18\x02 \x01(\rR\x05first\x12\x12\n" +
-	"\x04last\x18\x03 \x01(\rR\x04last\"\xa8\x03\n" +
+	"\x04last\x18\x03 \x01(\rR\x04last\"\xa3\x03\n" +
 	"\aAclRule\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\fR\x06ruleId\x12\x1b\n" +
 	"\tsrc_atoms\x18\x02 \x03(\fR\bsrcAtoms\x126\n" +
 	"\atargets\x18\x03 \x03(\v2\x1c.urnetwork.sidecar.AclTargetR\atargets\x12\x18\n" +
-	"\aactions\x18\x04 \x03(\rR\aactions\x125\n" +
-	"\x05ports\x18\x05 \x03(\v2\x1f.urnetwork.sidecar.AclPortRangeR\x05ports\x12\x18\n" +
+	"\aactions\x18\x04 \x03(\rR\aactions\x12\x18\n" +
 	"\aexpires\x18\x06 \x01(\x03R\aexpires\x12:\n" +
 	"\baudience\x18\a \x01(\x0e2\x1e.urnetwork.sidecar.AclAudienceR\baudience\x128\n" +
 	"\bapp_mode\x18\b \x01(\x0e2\x1d.urnetwork.sidecar.AclAppModeR\aappMode\x12(\n" +
 	"\x10link_spki_sha256\x18\t \x01(\fR\x0elinkSpkiSha256\x12$\n" +
 	"\x0esource_rule_id\x18\n" +
-	" \x01(\fR\fsourceRuleId\"\xdd\x02\n" +
+	" \x01(\fR\fsourceRuleId\x12#\n" +
+	"\rports_limited\x18\v \x01(\bR\fportsLimitedJ\x04\b\x05\x10\x06R\x05ports\"\xdd\x02\n" +
 	"\x0eAclRequestRule\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\fR\x06ruleId\x12\x1b\n" +
 	"\tsrc_atoms\x18\x02 \x03(\fR\bsrcAtoms\x126\n" +
@@ -2644,7 +2646,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"repo_kinds\x18\x02 \x03(\rR\trepoKinds\x12\x19\n" +
 	"\brepo_ids\x18\x03 \x03(\fR\arepoIds\x12 \n" +
 	"\faudit_opt_in\x18\x04 \x01(\fR\n" +
-	"auditOptIn\"\xaf\x02\n" +
+	"auditOptIn\"\xa7\x02\n" +
 	"\tAclTarget\x12\x12\n" +
 	"\x04atom\x18\x01 \x01(\fR\x04atom\x12\x1d\n" +
 	"\n" +
@@ -2655,11 +2657,10 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\rsocket_tokens\x18\x05 \x03(\fR\fsocketTokens\x12#\n" +
 	"\rsocket_prefix\x18\x06 \x01(\bR\fsocketPrefix\x12\x1f\n" +
 	"\vpublic_name\x18\a \x01(\tR\n" +
-	"publicName\x12\x12\n" +
-	"\x04cidr\x18\b \x01(\fR\x04cidr\x12\x1b\n" +
+	"publicName\x12\x1b\n" +
 	"\tmail_send\x18\t \x01(\bR\bmailSend\x12\x1b\n" +
 	"\tclient_id\x18\n" +
-	" \x01(\fR\bclientId\"\x93\x01\n" +
+	" \x01(\fR\bclientIdJ\x04\b\b\x10\tR\x04cidr\"\x93\x01\n" +
 	"\rAclSuspension\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x1d\n" +
 	"\n" +
@@ -2856,40 +2857,39 @@ var file_protocol_acl_proto_depIdxs = []int32{
 	21, // 5: urnetwork.sidecar.AclRows.suspensions:type_name -> urnetwork.sidecar.AclSuspension
 	22, // 6: urnetwork.sidecar.AclRows.spent_grants:type_name -> urnetwork.sidecar.AclSpentGrant
 	20, // 7: urnetwork.sidecar.AclRule.targets:type_name -> urnetwork.sidecar.AclTarget
-	10, // 8: urnetwork.sidecar.AclRule.ports:type_name -> urnetwork.sidecar.AclPortRange
-	2,  // 9: urnetwork.sidecar.AclRule.audience:type_name -> urnetwork.sidecar.AclAudience
-	3,  // 10: urnetwork.sidecar.AclRule.app_mode:type_name -> urnetwork.sidecar.AclAppMode
-	20, // 11: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
-	4,  // 12: urnetwork.sidecar.AclRepo.kind:type_name -> urnetwork.sidecar.RepoKind
-	14, // 13: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
-	15, // 14: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
-	16, // 15: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
-	17, // 16: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
-	18, // 17: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
-	6,  // 18: urnetwork.sidecar.AclRepo.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	5,  // 19: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	35, // 20: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
-	36, // 21: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
-	35, // 22: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 23: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 24: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
-	4,  // 25: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
-	35, // 26: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
-	7,  // 27: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
-	35, // 28: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
-	5,  // 29: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	35, // 30: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 31: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 32: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 33: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 34: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	35, // 35: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 36: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
-	37, // [37:37] is the sub-list for method output_type
-	37, // [37:37] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	2,  // 8: urnetwork.sidecar.AclRule.audience:type_name -> urnetwork.sidecar.AclAudience
+	3,  // 9: urnetwork.sidecar.AclRule.app_mode:type_name -> urnetwork.sidecar.AclAppMode
+	20, // 10: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
+	4,  // 11: urnetwork.sidecar.AclRepo.kind:type_name -> urnetwork.sidecar.RepoKind
+	14, // 12: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
+	15, // 13: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
+	16, // 14: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
+	17, // 15: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
+	18, // 16: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
+	6,  // 17: urnetwork.sidecar.AclRepo.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	5,  // 18: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	35, // 19: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
+	36, // 20: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
+	35, // 21: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 22: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 23: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
+	4,  // 24: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
+	35, // 25: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 26: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
+	35, // 27: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
+	5,  // 28: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	35, // 29: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 30: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 31: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 32: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
+	6,  // 33: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	35, // 34: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
+	35, // 35: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
+	36, // [36:36] is the sub-list for method output_type
+	36, // [36:36] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_protocol_acl_proto_init() }

@@ -8,10 +8,12 @@
 // The rows carry the target forms ACL-M2-04's compile writes (acl-m2-02-state-readings #2): an atom,
 // autogroup:self and autogroup:internet among them; a sidecar, a client no binding names or another
 // network; a repo by id, or by sixteen zero bytes for every general or record repo (evs:*, a bare *); one
-// socket's token paths, newest K_sock first, each t_1 || ... || t_n of 16-byte segments (§9.4), or with
-// socket_prefix every name strictly below one, no token meaning every application socket; a tls/ or
-// smtp/ name or a dns host, glob kept, in public_name; a cidr; mail_send. A bare * compiles to several of
-// these. In a rule allowing route, subject targets are its via subjects (§8.10).
+// socket's token paths, each t_1 || ... || t_n of 16-byte segments (§9.4), or with socket_prefix every
+// name strictly below one, no token meaning every application socket; a tls/ or smtp/ name or a dns host,
+// glob kept, in public_name; mail_send. A bare * compiles to several of these. In a rule allowing route,
+// subject targets are its via subjects (§8.10). Rows carry no ports and no CIDRs, only whether a rule
+// limits ports (plan-BRIDGE-gate-row-prefixes #1): a gate decides who reaches whom, and a client's
+// AclEngine checks ports and addresses from AclLocalPolicy.
 //
 // Malformed rows refuse to build: an atom or id of the wrong size, a duplicate atom or repo, a target with
 // two kinds set. A target with no kind this code knows, from a later format, matches nothing, and so does
@@ -28,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
-	"net/netip"
 	"slices"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -166,9 +167,9 @@ type aclRule struct {
 	repoWildcard bool
 	sockets      []aclSocketTarget
 	publicNames  []string
-	cidrs        []netip.Prefix
 	mailSend     bool
-	ports        []*protocol.AclPortRange
+	// the rule's ip field names ports, which the rows do not carry (plan-BRIDGE-gate-row-prefixes #1)
+	portsLimited bool
 }
 
 // Whether the rule holds the action.
@@ -180,19 +181,6 @@ func (self *aclRule) allows(action protocol.AclAction) bool {
 // time (§8.6's rows(t)).
 func (self *aclRule) activeAt(nowMs int64) bool {
 	return self.enabled && (self.expiresMs == 0 || nowMs < self.expiresMs)
-}
-
-// Whether a protocol and port pass the rule's ports, which allow every port when the rule names none.
-func (self *aclRule) portsMatch(ipProtocol uint32, port uint32) bool {
-	if len(self.ports) == 0 {
-		return true
-	}
-	for _, ports := range self.ports {
-		if (ports.GetProtocol() == 0 || ports.GetProtocol() == ipProtocol) && ports.GetFirst() <= port && port <= ports.GetLast() {
-			return true
-		}
-	}
-	return false
 }
 
 // Whether the rule names the atom in its src.
@@ -470,7 +458,7 @@ func (self *AclState) indexRules() error {
 				return err
 			}
 		}
-		rule.ports = row.GetPorts()
+		rule.portsLimited = row.GetPortsLimited()
 	}
 
 	newBits := func() aclBits {
@@ -554,7 +542,6 @@ func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, 
 	count(len(target.GetRepoId()) != 0)
 	count(len(target.GetSocketTokens()) != 0 || target.GetSocketPrefix())
 	count(target.GetPublicName() != "")
-	count(len(target.GetCidr()) != 0)
 	count(target.GetMailSend())
 	count(len(target.GetClientId()) != 0)
 	if 1 < kindCount {
@@ -615,34 +602,10 @@ func (self *AclState) classifyTarget(rule *aclRule, target *protocol.AclTarget, 
 		rule.sockets = append(rule.sockets, socket)
 	case target.GetPublicName() != "":
 		rule.publicNames = append(rule.publicNames, target.GetPublicName())
-	case len(target.GetCidr()) != 0:
-		cidr, err := aclRowsCidr(target.GetCidr())
-		if err != nil {
-			return aclRowsRefusal("%s.cidr: %v", field, err)
-		}
-		rule.cidrs = append(rule.cidrs, cidr)
 	case target.GetMailSend():
 		rule.mailSend = true
 	}
 	return nil
-}
-
-// A cidr as rows carry it: the address's 4 or 16 bytes, then one byte of prefix length, host bits clear.
-func aclRowsCidr(cidrBytes []byte) (netip.Prefix, error) {
-	if len(cidrBytes) != 5 && len(cidrBytes) != 17 {
-		return netip.Prefix{}, errors.New("not 5 or 17 bytes")
-	}
-	addr, _ := netip.AddrFromSlice(cidrBytes[:len(cidrBytes)-1])
-	cidr := netip.PrefixFrom(addr, int(cidrBytes[len(cidrBytes)-1]))
-	if !cidr.IsValid() || cidr.Masked() != cidr {
-		return netip.Prefix{}, errors.New("not a canonical cidr")
-	}
-	return cidr, nil
-}
-
-// The rows bytes of a cidr, aclRowsCidr's form.
-func AclRowsCidrBytes(cidr netip.Prefix) []byte {
-	return append(cidr.Addr().AsSlice(), byte(cidr.Bits()))
 }
 
 // Indexes the active Suspends.
