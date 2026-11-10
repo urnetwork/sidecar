@@ -34,7 +34,7 @@ Status: in progress
 
 Tasks held until complete: EVSB-M10-01, EVSB-M10-02, EVSB-M2-12, EVSB-M2-17.
 
-Models: `sidecar/sidecartest/model/details/Settle.tla` (the store's settle rules) and `EvsGc.tla` (segment GC beside evacuation), their configurations and `run-settle.sh` beside them. Questions filed: `.stack/questions/details-2-orphan-age.md`, `.stack/questions/details-2-conditional-delete.md`, `.stack/questions/details-2-drop-job-new-ref.md`. Questions this section answers, each on the option 2.9 names: `evs-models-gc-unfenced-new-ref`, `evs-models-settle-stalled-deletes`, `evs1-m2-12-first-commit-gc-fence`, `evsb-m2-11-pending-record-no-head`.
+Models: `sidecar/sidecartest/model/details/Settle.tla` (the store's settle rules) and `EvsGc.tla` (segment GC beside evacuation), their configurations and `run-settle.sh` beside them. Questions filed: `.stack/questions/details-2-orphan-age.md`, `.stack/questions/details-2-conditional-delete.md`, `.stack/questions/details-2-list-whole.md`, `.stack/questions/details-2-drop-job-new-ref.md`. Questions this section answers, each on the option 2.9 names: `evs-models-gc-unfenced-new-ref`, `evs-models-settle-stalled-deletes`, `evs1-m2-12-first-commit-gc-fence`, `evsb-m2-11-pending-record-no-head`.
 
 ### 2.1 The problem
 
@@ -42,7 +42,7 @@ Models: `sidecar/sidecartest/model/details/Settle.tla` (the store's settle rules
 
 A *stalled write* in this section is a write some of whose drive commits passed their check and have not renamed. It has one of three fates. If it already holds a write quorum it is acknowledged, and the stalled commits only add copies later. If it cannot reach one and enough drives may still hold it, it holds its key, and every request on the key waits, then fails 503, until its hosts answer. Otherwise it is released as failed and its late commits land on an unheld key. evs sees the second fate as a head it can neither read nor write, and the model `EvsCommit.tla` keeps it as `heldBy`.
 
-TLC finds the design wrong in two places, and working them out found two more.
+TLC finds the design wrong in two places, and working them out found three more.
 
 **A. Segment GC does not fence a ref that has no head yet (question evs-models-gc-unfenced-new-ref).** §11.13's orphans row deletes a segment no committed push introduced once it is 25 h old, after raising "the fence of each ref of the repo whose head was written before that LastModified + 24 h", waiting the store's deadline and checking the repo's commits again. A fence is a head CAS, so a ref with no head gets none. The trace, on `EvsCommit.tla` at depth 18 and on this section's `EvsGcWritten-NewRef` in 15 states:
 
@@ -64,9 +64,11 @@ The landed evacuation meets the same wall from the other side (question evsb-m2-
 
 *B2, a late revert undoes a later DELETE* (`SettleWritten-Revert`, 16 states at 4 drives; found at 8 drives by simulation in the question). DELETE w1 fails as above and is released; its stalled commit lands on drive 1. DELETE w2 takes the key and counts drive 1, which lacks the key, as committed, as rule (2)'s "or its absence" reads and the build does. w1's coordinator, reverting "as it lands", restores drive 1: the check passes, because the drive still lacks the key, which is all a DELETE leaves to compare. w2 commits on drives 2 and 3 and is acknowledged at three drives counting drive 1. The drives hold `initial, absent, absent, initial`: a read quorum holds the value w2's acknowledged DELETE removed.
 
-**C. A PUT's last commit undoes a later DELETE, found here** (`SettleWritten-Straggler`, 21 states, one PUT and one DELETE, no fault). PUT w1 creates the key: three of four drives commit, w1 is acknowledged and its key released, as rule (3) says ("a later commit of it only adds a copy"), with drive 4's commit still on its way, inside its deadline. DELETE w2 takes the key. It removes the key from drives 1 and 2 and counts drive 4, which lacks it. w1's commit now reaches drive 4. Rule (2) asks whether the drive still holds what w1's coordinator read there, which was the key's absence, and it does. The commit lands. w2 is acknowledged. The drives hold `absent, absent, w1, w1`, and a GET returns the object w2 deleted. This needs a DELETE served within the deadline of a PUT on the same key, which evs's own margins keep apart (a fold's write deadline ends before a marker's collection may delete; a purge waits 60 s), but FI-30 is stated for the store, and §10.6's and later callers' margins are not evs's. It is the same defect as B2 seen from the other side: rule (2) compares the version a drive holds, and absence is not a version. A drive that lacked the key, gained it and lost it again cannot be told from one nothing touched.
+**C. A PUT's last commit undoes a later DELETE, found here** (`SettleWritten-Straggler`, 21 states, one PUT and one DELETE, no fault). PUT w1 creates the key: three of four drives commit, w1 is acknowledged and its key released, as rule (3) says ("a later commit of it only adds a copy"), with drive 4's commit still on its way, inside its deadline. DELETE w2 takes the key. It removes the key from drives 1 and 2 and counts drive 4, which lacks it. w1's commit now reaches drive 4. Rule (2) asks whether the drive still holds what w1's coordinator read there, which was the key's absence, and it does. The commit lands. w2 is acknowledged. The drives hold `absent, absent, w1, w1`, and a GET returns the object w2 deleted. This needs a DELETE served within the deadline of a PUT on the same key, which evs's own margins keep apart (a fold's write deadline ends before a marker's collection may delete; a purge waits 60 s), but FI-30 is stated for the store, and §10.6's and later callers' margins are not evs's. It is the same defect as B2 seen from the other side: rule (2) compares the version a drive holds, and absence is not a version. A drive that lacked the key, gained it and lost it again cannot be told from one nothing touched. A heal's copy fails the same way (`SettleWritten-Heal`, 22 states): a heal reads a drive that lacks the key, a DELETE counts that drive, and the heal's commit then lands the deleted object there, which FI-30's "no heal undoes" forbids.
 
 **D. A second GC run deletes a segment uploaded again, found here** (`EvsGcWritten-Zombie`, 18 states, no stalled write). Orphan GC's DELETE is unconditional, as every DELETE is (§11.3: MinIO ignores a condition on one), and a segment's key is its content's hash. Two GC runs decide on one orphan: taskworker's once key keeps one run per shard, but a worker paused past its claim's 5 min lease wakes beside its successor. The first run deletes the segment. Its uploader, resuming a push days later, stores the same bytes again, gets a fresh receipt and commits. The second run, still holding its decision, issues its DELETE, which takes the new object. Neither fences nor checks help, since the second run's were all made before the re-upload. The drop job is protected from this by its lease and the deadlines on its DELETEs (§11.13's clock row), marker collection by its window; orphan GC has neither.
+
+**E. A LIST that drops a key, found here.** §11.13 deletes on what a LIST shows: a segment no pidx/ entry introduces, a container no entry names. This section adds one more, the oldest batch a LIST of pb/ returns. MinIO asks the drives of a set that are online and lists a key only if half of those hold it (`cmd/metacache-set.go:728-733`), so with three of a set's eight drives offline it can leave out a batch or an entry that five drives took and that a read would still return. No model here holds this one; it is a count of drives, in 2.2.2.
 
 The requirement: no committed head ever names a deleted segment; FI-30 holds for every mix of PUTs and DELETEs; and the settle rules stay correct with stalled drive commits, reverts as they land, DELETEs and new refs together, inside the cost and latency §11.13 and §19.6 budget.
 
@@ -82,7 +84,7 @@ Two rules, one for each side.
 
 The push route does not change. §11.8's first commit to a new ref stays If-None-Match, with no write before step 4.
 
-#### 2.2.2 The store: rules (2) and (3), and a DELETE that names its object
+#### 2.2.2 The store: rules (2) and (3), a DELETE that names its object, and a LIST that is whole
 
 Rules (1), (4), (5) and (6) stand as §19.6 has them. All of this is in the `minio` fork.
 
@@ -118,9 +120,9 @@ a drive commit carrying {id, expect, deadline}: a data or metadata rename, a DEL
 
 A commit that answers stale changes nothing and marks nothing. A coordinator fixes a commit's deadline before it issues the `SettleRead` whose answer the commit carries, and no deadline is more than `RequestDeadlineMax` (1 min) past its request's arrival or `CommitDeadline` (40 s) past its start, so every commit's deadline is at most 1 min after its read. The build refuses to start unless `StampKeep` is at least twice the larger of the two.
 
-The stamp is compared whole, as a string, so a restart, which draws a new boot, makes every commit read before it stale: rule (5) already keeps the old process's commits off the drive. A drive's version and stamp are read without the drive's lock, so a read beside a commit can pair the old version with the new stamp or the new with the old. Neither pair is ever the drive's state again while its entry is remembered, since the counter only rises, and 2.3 shows a forgotten entry can only be matched by a commit past its deadline.
+The stamp is compared whole, as a string, so a restart, which draws a new boot, makes every commit read before it stale: rule (5) already keeps the old process's commits off the drive. A drive's version and stamp are read without the drive's lock, so a read beside a commit can pair the old version with the new stamp or the new with the old. Such a pair is the drive's state once that commit ends, or never is while the commit's entry is remembered, since the counter only rises; and 2.3 shows a forgotten entry can only be matched by a commit past its deadline.
 
-**Rule (3), a DELETE.** The coordinator's states for one write, with what changes in bold:
+**Rule (3), a DELETE.** The coordinator's states for one write; the `released` and `after` rows are where a DELETE now differs from a PUT:
 
 ```text
 taken      it holds the key's lock; rule (1) refused it if its deadline had passed
@@ -179,7 +181,7 @@ fence    HeadStore.RaiseFence on a ref with no head creates a placeholder head I
          placeholder is fenced by If-Match
 ```
 
-The `minute` rule is a change of one check: `BatchWriter` opens a batch only while `ClockCheck.Sure()`, and `Append` answers `ErrEvsClockUnsure` otherwise, which its caller answers 503 as it does any unwritten batch. Push routes already refuse before step 4 on an unsure clock; this closes the attempt that was past step 4 when the clock turned.
+The `record` rule binds every route that writes a head naming new segments: a push, a seal, and EVSB-M2-20's re-seed, whose reseed record goes before its head write. The `minute` rule is a change of one check: `BatchWriter` opens a batch only while `ClockCheck.Sure()`, and `Append` answers `ErrEvsClockUnsure` otherwise, which its caller answers 503 as it does any unwritten batch. Push routes already refuse before step 4 on an unsure clock; this closes the attempt that was past step 4 when the clock turned.
 
 A placeholder a fence made is the placeholder a refusal makes (§11.8's first row), with fence_ms set: reads, listings, `GET .../refs` and the lease route treat it as absent; the ref's first commit replaces it by If-Match and keeps its fence count and any refusal records; it stays, as a tombstone head does. A creating attempt that held the absent head fails its If-None-Match, reads the placeholder, finds its fence_ms later than its own arrival and ends 503 unknown, as §11.8's fence row says of any head. An attempt that arrives later reads the placeholder and commits on it by If-Match.
 
@@ -267,38 +269,40 @@ a reader of a batch         as a 404 on the batch: the record is         n/a
 record                      looked up through pidx/ (RecordLocator)
 ```
 
-The last row is a change: a batch whose DELETE failed with a commit stalled on a silent host is held, and every record in it was moved before that DELETE was issued (I-EVS-7), so `RecordLocator` treats `ErrBlobHeld` on a pb/ key as it treats a 404.
+The last row is a change: a batch whose DELETE failed with a commit stalled on a silent host is held, and every record in it was moved before that DELETE was issued (I-EVS-7), so `RecordLocator` treats `ErrBlobHeld` on a pb/ key as it treats a 404: it looks the record up through pidx/, and answers the 503 only if no entry holds it.
 
 ### 2.3 Invariants and why they hold
 
 ```text
 store (Settle.tla)
-NoStaleQuorum,     FI-30's first and third clauses: a read returns only the state the store decided, and no
-ReadsSeeCurrent    earlier write, revert or heal undoes it
-                   why: a write is acknowledged with N/2 + 1 drives holding its state. A drive among them
-                   changes afterwards only by a commit that passes rule (2) there, which is one whose
-                   coordinator read the drive after the acknowledged commit landed on it: a later write's or a
-                   heal's, never an older write's last commit, whose stamp is spent, and never a revert, which
-                   needs the drive still to hold its own write (a PUT's own version; a DELETE's only while
-                   its key is held, when no other write runs). So an older version, or absence, can stand
-                   only on the at most N/2 - 1 drives outside that quorum, under a read quorum
-LateWritesNeverRead a PUT released as failed is never read, whatever of it still lands (rule (3), unchanged)
-RefusedNeverLands  nothing the store refused past its deadline reaches a drive (rule (1), unchanged)
-FailedDeleteSettled once a failed DELETE's key is released, no drive commit of it can land or be reverted
-                   why: rule (3) releases it only with no drive pending, running or committed
-HeldKeyReleased    every held key is released once its stalled commits answer and its hosts return (liveness)
-                   why: a stalled commit answers committed or stale; a committed one is reverted, by the
-                   coordinator or the settler; a write a settler cannot revert, because it may have been
-                   acknowledged, is found to hold a write quorum once its hosts answer
+NoStaleQuorum,       FI-30's first and third clauses: a read returns only the state the store decided, and no
+ReadsSeeCurrent      earlier write, revert or heal undoes it
+                     why: a write is acknowledged with N/2 + 1 drives holding its state. A drive among them
+                     changes afterwards only by a commit that passes rule (2) there, so one whose coordinator
+                     read the drive after the acknowledged commit landed on it: never an older write's last
+                     commit, whose stamp is spent, and never an older write's revert, which needs the drive
+                     still to hold that write. A later PUT leaves its own version there, and its revert puts
+                     back what it replaced; a later DELETE leaves absence, acknowledged or reverted before
+                     its key is released; a heal copies the state then readable. So an older version, or an
+                     older absence, can stand only on the at most N/2 - 1 drives outside that quorum, under a
+                     read quorum
+LateWritesNeverRead  a PUT released as failed is never read, whatever of it still lands (rule (3), unchanged)
+RefusedNeverLands    nothing the store refused past its deadline reaches a drive (rule (1), unchanged)
+FailedDeleteSettled  once a failed DELETE's key is released, no drive commit of it can land or be reverted
+                     why: rule (3) releases it only with no drive pending, running or committed
+HeldKeyReleased      every held key is released once its stalled commits answer and its hosts return (liveness)
+                     why: a stalled commit answers committed or stale; a committed one is reverted, by the
+                     coordinator or the settler; a write a settler cannot revert, because it may have been
+                     acknowledged, is found to hold a write quorum once its hosts answer
 
 evs (EvsGc.tla)
-ClosureHolds       I-EVS-1 for segments: no committed head ever names a deleted segment
-GcSafe             I-EVS-5: no segment becomes reachable after GC decided to delete it
-RecordsKept        I-EVS-2 and I-EVS-7: a committed push's record is in its batch or in a container a pidx/
-                   entry names
-HeadsRise          a placeholder head exists only with a fence or a refusal raised, and no write lowers a head
-RecordsLeave       every record old enough to evacuate leaves its batch (liveness): none stays pending for
-                   want of a head to fence
+ClosureHolds         I-EVS-1 for segments: no committed head ever names a deleted segment
+GcSafe               I-EVS-5: no segment becomes reachable after GC decided to delete it
+RecordsKept          I-EVS-2 and I-EVS-7: a committed push's record is in its batch or in a container a pidx/
+                     entry names
+HeadsRise            a placeholder head exists only with its fence raised
+RecordsLeave         every record old enough to evacuate leaves its batch (liveness): none stays pending for
+                     want of a head to fence
 ```
 
 **Why GC is safe.** Let s be a seg/ object with LastModified T, and suppose GC found T + AdoptionBound at or before H, where H came from a LIST of pb/ at time t, and then found s in no pidx/ entry.
@@ -320,14 +324,111 @@ The margins of step 2 are `EvsGc.tla`'s ASSUME, in ms: 24 h for the receipt, 100
 
 `EvsGc.tla` is new and small where `EvsCommit.tla` is whole: one repo's segments (uploaded, deleted and uploaded again), a ref with a head and a ref with none, pushes that take a receipt, check it, write a batch record and issue a head write that lands, fails, stalls holding its key or is sent late by a paused process, the evacuator (resolve, fence, placeholder, keep, drop, killed at any step), one or two GC runs whose DELETE may itself stall, and time in ticks, where a receipt lasts 2 and a minute is evacuated 3 ticks old. Its twin `Written` is §11.13's orphans row as DESIGN.md states it.
 
-Runs, TLC at the owner's jar (master d8fb231), each bounded so it finishes; breadth-first over every reachable state at its bounds unless it says simulation. `run-settle.sh` stops a run whose state directory passes 8 GB and deletes each run's state directory as it ends; the largest here used under 3 GB on disk.
+Runs, TLC at the owner's jar (master d8fb231), each bounded so it finishes; breadth-first over every reachable state at its bounds unless it says simulation. `run-settle.sh` stops a run whose state directory passes 8 GB and deletes each run's state directory as it ends; the largest here used 619 MB on disk.
 
 ```text
-(the run table is being filled: the design, written and twin configurations of Settle.tla and EvsGc.tla have each
-run once and done what they must; the final figures, at fixed worker counts, follow in the next landing)
+configuration                          what it runs
+                                       result                                        distinct states depth        time
+Settle.tla, the design (Twin none); 4 drives on 2 hosts, read at 2 and written at 3, unless a row says otherwise
+Settle                                 2 writes of either kind, 1 coordinator, a reader; commits stall, deadlines pass,
+                                       reverts land
+                                       pass, every invariant                                 426,576    28         5 s
+Settle-Hosts                           the same with a host failure
+                                       pass, every invariant                               1,818,910    29        51 s
+Settle-Heal                            a host failure, and heal, whose commit may land after the key's release
+                                       pass, every invariant                               5,150,490    35  1 min 38 s
+Settle-Cancel                          a host failure and cancels
+                                       pass, every invariant                               7,065,302    30        54 s
+Settle-Settler                         2 coordinators, a host failure and a coordinator crash, which the settler settles
+                                       pass, every invariant                              19,774,204    30  2 min 47 s
+Settle-Three                           3 writes: one PUT and two DELETEs
+                                       (not run yet)
+Settle-Three-Puts                      3 writes: two PUTs and one DELETE
+                                       (not run yet)
+Settle-Live                            HeldKeyReleased under weak fairness: two DELETEs
+                                       pass, the property                                    263,990    29        46 s
+Settle-Live-Hosts                      HeldKeyReleased: one write, a host failure and a coordinator crash
+                                       pass, the property                                     66,824    19         3 s
+Settle-Six                             6 drives on 3 hosts, read at 3 and written at 4, 2 writes, 2 coordinators, a host failure,
+                                       a crash, heal and cancels; simulation, 50,000 traces a worker of up to 70 steps, seed 3
+                                       (not run yet)
+Settle-Wide                            §22.8's bounds: 8 drives at EC:4 on 4 hosts, 3 writes, 2 coordinators, 2 host failures,
+                                       a crash, heal and cancels; simulation, 100,000 traces a worker of up to 60 steps, seed 1
+                                       (not run yet)
+Settle-Eight                           8 drives, 2 writes, 2 coordinators, a host failure, a crash, heal and cancels;
+                                       simulation, 50,000 traces a worker of up to 90 steps, seed 2
+                                       (not run yet)
+Settle.tla, §19.6 as written (Twin Written)
+SettleWritten-Sum                      two DELETEs and a host failure (B1)
+                                       NoStaleQuorum violated, a trace of 12 states           85,302    13         1 s
+SettleWritten-Revert                   two DELETEs, no host failure (B2)
+                                       NoStaleQuorum violated, a trace of 16 states          107,318    16         2 s
+SettleWritten-Straggler                one PUT and one DELETE (C)
+                                       NoStaleQuorum violated, a trace of 21 states          339,404    21         6 s
+SettleWritten-Heal                     one PUT, one DELETE and heal, no write's commit late (C, by a heal)
+                                       NoStaleQuorum violated, a trace of 22 states          156,441    22         3 s
+SettleWritten-Eight                    8 drives, two DELETEs, no host failure or crash; simulation, seed 7 (B2 at §22.8's drives)
+                                       NoStaleQuorum violated, a trace of 35 states  23,107 generated               0 s
+Settle.tla, one rule of the design broken
+SettleTwin-NoStamp                     rule (2) compares the version alone; one PUT and one DELETE
+                                       NoStaleQuorum violated, a trace of 21 states          200,790    23         3 s
+SettleTwin-DeleteReleasesEarly         a failed DELETE released as a PUT is; a host failure
+                                       NoStaleQuorum violated, a trace of 12 states          175,694    12         2 s
+SettleTwin-DeleteReleasesEarly-Settled the same, held to the rule itself
+                                       FailedDeleteSettled violated, a trace of 5 states             427     6         0 s
+SettleTwin-ReleaseOnCancel             StoreSettle.tla's twins, on this model, DELETEs on:
+                                       NoStaleQuorum violated, a trace of 7 states             4,434     7         0 s
+SettleTwin-NoDeadlineCheck             LateWritesNeverRead violated, a trace of 6 states             470     6         0 s
+SettleTwin-NoVersionCheck              NoStaleQuorum violated, a trace of 21 states          493,754    21        10 s
+SettleTwin-RevertBelowQuorumOnly       LateWritesNeverRead violated, a trace of 6 states           1,054     7         0 s
+SettleTwin-SettlerRevertsUnseen        NoStaleQuorum violated, a trace of 14 states          996,078    14        14 s
+SettleTwin-HealMinority                NoStaleQuorum violated, a trace of 9 states            10,138    10         0 s
+SettleTwin-NoDriveLock                 NoStaleQuorum violated, a trace of 16 states          395,171    17         7 s
+EvsGc.tla, the design (Twin none); one segment id, a ref with a head and a ref with none, a receipt lasting 2 ticks,
+a minute evacuated 3 ticks old
+EvsGc                                  GC, stalled writes, a new ref and DELETEs in one run: 2 pushes, 1 GC run, 2 uploads of
+                                       the id, 2 stalled writes (a head write or GC's DELETE), a paused attempt, a killed
+                                       evacuation, 7 ticks
+                                       pass, every invariant                              15,088,610    44  1 min 40 s
+EvsGc-Zombie                           2 GC runs alive at once, the id uploaded again between them; 1 stalled write, 1 pause,
+                                       6 ticks
+                                       pass, every invariant                               2,552,184    40        32 s
+EvsGc-Long                             10 ticks: uploaded, orphaned, deleted, uploaded again, adopted and evacuated; 1 stalled
+                                       write
+                                       pass, every invariant                               4,192,137    44        49 s
+EvsGc-Live                             RecordsLeave under weak fairness: 1 push, a stalled write, a pause, a killed evacuation
+                                       pass, the property                                     36,644    30         4 s
+EvsGc.tla, §11.13's orphans row as written (Twin Written)
+EvsGcWritten-NewRef                    one push, one stalled write (A)
+                                       ClosureHolds violated, a trace of 15 states             2,770    17         0 s
+EvsGcWritten-Zombie                    one push, two GC runs, two uploads, no stalled write (D)
+                                       ClosureHolds violated, a trace of 18 states            30,887    20         0 s
+EvsGc.tla, one rule of the design broken
+EvsGcTwin-GcIgnoresHorizon             GC goes by the object's age alone
+                                       ClosureHolds violated, a trace of 14 states             3,766    14         0 s
+EvsGcTwin-GcReadsIndexFirst            GC reads pidx/ before the horizon
+                                       ClosureHolds violated, a trace of 19 states             3,161    20         0 s
+EvsGcTwin-UnconditionalDelete          GC's DELETE takes whatever holds the key; two GC runs
+                                       ClosureHolds violated, a trace of 21 states            19,990    21         0 s
+EvsGcTwin-FenceSkipsAbsentHead         a pending record on a ref with no head is called dead, unfenced
+                                       RecordsKept violated, a trace of 14 states              3,410    15         0 s
+EvsGcTwin-PendingStaysOnAbsentHead     such a record is left where it is, as the landed draft leaves it (liveness)
+                                       RecordsLeave violated, a trace of 20 states            24,632    30         2 s
+EvsGcTwin-RecordAfterPut               a head write issued with no record before it
+                                       RecordsKept violated, a trace of 7 states                 155     9         0 s
+EvsGcTwin-DeleteBeforeIndex            a kept record's batch deleted before its pidx/ entry
+                                       RecordsKept violated, a trace of 13 states              1,337    14         0 s
+EvsGcTwin-AdoptsOldReceipt             5h takes a receipt of any age
+                                       ClosureHolds violated, a trace of 15 states             3,239    15         0 s
 ```
 
-Left before this section is complete: the recorded figures of each run, the simulations at 8 drives and the liveness runs of `Settle.tla`.
+Every design run passes, and every written and twin run ends on the one invariant or property its configuration names. The design runs used ten workers and the written and twin runs six. With more than one worker a trace is the first one TLC's workers met, which in some runs is a few states longer than the shortest, and a distinct-state count moves a little from run to run; a twin's count is what TLC had explored when it met the violation. The times are from a machine four build lanes were loading, at a load average near 50 on 14 cores, and are several times what the same runs took when it was idle.
+
+What the runs cover. The breadth-first runs of `Settle.tla` take every interleaving, at 4 drives, of two writes of either kind and of three writes in both mixes that matter (a create with a DELETE on either side of it, and two DELETEs beside a PUT), with a commit stalled at any drive, every deadline, a host failure, a coordinator crash settled by another host, cancels, and a heal whose commit lands late; one run repeats the PUT and DELETE pair at 6 drives. §22.8's own bounds, 8 drives and 3 writes, do not finish: EVS1-M2-02 stopped `StoreSettle.tla` there at 412.6 M states and depth 12, and this model with three writes of any kind at 4 drives passed 38 M states at depth 22, with no violation, before it was stopped. `Settle-Wide` and `Settle-Eight` therefore sample those bounds, and show only that the traces they drew kept every invariant. `EvsGc` is the run problem 2's brief asks for, GC with stalled writes, a new ref and DELETEs together: both refs take pushes, either push's head write may stall holding its key or come late from a paused process, GC's own DELETE may stall holding the segment's key, the segment is uploaded again after it goes, and evacuation is killed mid-record.
+
+The findings of 2.1 each appear against the text as written and are gone in the design: A in `EvsGcWritten-NewRef`, B1 in `SettleWritten-Sum`, B2 in `SettleWritten-Revert` and, at 8 drives, `SettleWritten-Eight`, C in `SettleWritten-Straggler` and `SettleWritten-Heal`, D in `EvsGcWritten-Zombie`. Each rule of the design has a twin that fails without it: the stamp (`NoStamp`), the DELETE's release (`DeleteReleasesEarly`, on FI-30 and on the rule itself), the horizon (`GcIgnoresHorizon`), its order before the pidx/ read (`GcReadsIndexFirst`), the DELETE that names its object (`UnconditionalDelete`), the placeholder fence (`FenceSkipsAbsentHead` for safety, `PendingStaysOnAbsentHead` for the record that never leaves), the record before the head write (`RecordAfterPut`), the entry before the batch's deletion (`DeleteBeforeIndex`) and the receipt's age (`AdoptsOldReceipt`).
+
+Neither model holds the LIST rule or the stamp's 2 min: a LIST is whole in both, and a stamp is never forgotten. The first is 2.2.2's count of drives and the second is the arithmetic above.
 
 ### 2.4 Cost
 
@@ -425,7 +526,8 @@ a hold placed while GC runs    step 5 reads hold/ again before each DELETE and s
 the stamp      a commit that read a drive before another commit was applied there answers stale, for a PUT
                over a version, a PUT over absence and a DELETE; a DELETE of a key the drive lacks marks it; a
                stale commit marks nothing; SettleRead pairs a version with its stamp, and a read beside a
-               commit held at commit-checked never yields a pair that passes later; an entry is forgotten
+               commit held at commit-checked yields a pair that passes later only if that commit changed
+               nothing; a heal's commit read before a DELETE passed its drive is stale; an entry is forgotten
                at StampKeep on the fake clock, and a commit read before it, sent after, is refused by its
                deadline; a new process's boot makes every earlier read stale; a StampKeep under twice the
                longest deadline refuses to start
@@ -433,8 +535,8 @@ rule (3)       a DELETE short of its quorum with one commit held at commit-check
                releases it once that commit lands and is reverted; nothing of it is reverted after
                key-release; a PUT in the same schedule releases under a read quorum as today; an orphaned
                DELETE stays held until its silent host answers
-the three      B1, B2 and C of 2.1 as schedules on a 4-drive set, each ending with a GET of the acknowledged
-traces         state from every host
+the four       B1, B2, C and C by a heal, of 2.1, as schedules on a 4-drive set, each ending with a GET of the
+traces         acknowledged state from every host
 conditional    x-ur-if-unmodified-ms deletes the object it names, answers 412 for one stored at least a second
 DELETE         later, 204 for a missing key, and tolerates a time truncated to the second
 LIST           answered with two drives of a set offline, and with two healing and none offline; 503 with
@@ -501,13 +603,13 @@ mutants.yml,      ClosureHolds adds FenceSkipsAbsentHead, NoStaleQuorum adds NoS
 modelled.yml      FailedDeleteSettled names DeleteReleasesEarly; modelled.yml records the new runs
 ```
 
-**Go twins.** `sidecartest/fake_blobs.go` keeps the settle rule for T2 and gains the DELETE that names its object (a 412 changes nothing) and a `Held` fault on a DELETE; `sidecartest.CheckBlobHistory`, FI-30's oracle over what clients saw, treats a 412 on a DELETE as no effect; `sidecartest/fault/fi30.go`'s comment on the fourth clause takes FI-30's new words.
+**Go twins.** The models' Go side is `sidecartest/model`'s tests: `modelled_test.go` holds `mutants.yml` to `run-tlc.sh`'s twin tables and each cfg's INVARIANT list, both ways, so the new invariant and twins must land in all three together, and `model_test.go`'s `TestStoreSettlePassesTlcAtItsBounds`, `TestStoreSettleMutantsFailTlc` and `TestStoreSettleLivenessHolds` then run the corrected model at bounds that finish; neither file changes. The store's Go side is the fake: `sidecartest/fake_blobs.go` keeps the settle rule for T2 and gains the DELETE that names its object (a 412 changes nothing) and a `Held` fault on a DELETE; `sidecartest.CheckBlobHistory`, FI-30's oracle over what clients saw, treats a 412 on a DELETE as no effect; `sidecartest/fault/fi30.go`'s comment on the fourth clause takes FI-30's new words.
 
 ### 2.7 Implementation notes, task by task
 
-The held tasks need three pieces of landed code changed first. They are small, and each is a task of its own so the held ones can name it; the orchestrator numbers them.
+The held tasks need three pieces of landed code changed first. They are small, and each is a task of its own so the held ones can name it. They are numbered here after EVSB's last M2 task; the orchestrator may number them otherwise.
 
-**New: EVSB-M2-22, the stamp and the DELETE rules in the fork** (minio; M; before EVSB-M2-17). In `cmd/settle-drive.go`: `settleDrive` gains `boot`, `counter` and the remembered entries, under `stateLock`, swept as `idFences` is; `settleRun` gains `mark()`, called wherever `settleHookCommitChecked` and `settleHookRevertChecked` fire, before the hook; `run.check` compares `Expect` with version@stamp. A new storage call `SettleRead(ctx, volume, path) (string, error)` beside `SettleProbe` (`storage-interface.go`, `storage-datatypes.go` and its generated code, `storage-rest-client.go`, `storage-rest-server.go`, `xl-storage-disk-id-check.go`, `internal/grid/handlers.go`, `naughty-disk_test.go`), which `settleReadVersions` calls in place of `ReadXL`; a drive that does not answer it is sent no commit. In `cmd/settle-write.go`: the release test in `run` becomes `tally.mayHold() < self.releaseBound()`, 1 for a write with `absentCommits` and `readQuorum` otherwise, and the file's header comment says so; `settleRenameData` and `settleDeleteVersion` take `settleCommitDeadline(ctx)` before `settleReadVersions`, as do heal (`erasure-healing.go:658`) and the dangling delete (`erasure-object.go:551`). In `cmd/settle-deadline.go`: the middleware reads `x-ur-if-unmodified-ms` into the context (`internal/http/headers.go` names it), and `erasureServerPools.DeleteObject` answers `PreConditionFailed` after `getPoolInfoExistingWithOpts` when the object it found has a ModTime at or past the value plus a second. `cmd/metacache-set.go`: `listPath` answers `InsufficientReadQuorum` when the set has three or more drives offline, or one offline beside one healing, and asks every online drive whatever `o.AskDisks` says. `cmd/settle-settings.go`: `StampKeep`, and the start-up check. `SIDECAR.md` says what changed. Tests: 2.6's fork list. Traps: mark after the last gate and before the rename, never before the check; a DELETE's revert check stays the stash's, since its key is held; the stamp is one string, compared whole.
+**New: EVSB-M2-22, the stamp and the DELETE rules in the fork** (minio; M; before EVSB-M2-17). In `cmd/settle-drive.go`: `settleDrive` gains `boot`, `counter` and the remembered entries, under `stateLock`, swept as `idFences` is; `settleRun` gains `mark()`, called wherever `settleHookCommitChecked` and `settleHookRevertChecked` fire, before the hook, and by every other run past its last gate, the ones that carry no expectation included (`xl-storage.go`'s metadata writes); `run.check` compares `Expect` with version@stamp. A new storage call `SettleRead(ctx, volume, path) (string, error)` beside `SettleProbe` (`storage-interface.go`, `storage-datatypes.go` and its generated code, `storage-rest-client.go`, `storage-rest-server.go`, `xl-storage-disk-id-check.go`, `internal/grid/handlers.go`, `naughty-disk_test.go`), which `settleReadVersions` calls in place of `ReadXL`; a drive that does not answer it is sent no commit. In `cmd/settle-write.go`: the release test in `run` becomes `tally.mayHold() < self.releaseBound()`, 1 for a write with `absentCommits` and `readQuorum` otherwise, and the file's header comment says so; `settleRenameData` and `settleDeleteVersion` take `settleCommitDeadline(ctx)` before `settleReadVersions`, as do heal (`erasure-healing.go:658`) and the dangling delete (`erasure-object.go:551`). In `cmd/settle-deadline.go`: the middleware reads `x-ur-if-unmodified-ms` into the context (`internal/http/headers.go` names it), and `erasureServerPools.DeleteObject` answers `PreConditionFailed` after `getPoolInfoExistingWithOpts` when the object it found has a ModTime at or past the value plus a second. `cmd/metacache-set.go`: `listPath` answers `InsufficientReadQuorum` when the set has three or more drives offline, or one offline beside one healing, and asks every online drive whatever `o.AskDisks` says. `cmd/settle-settings.go`: `StampKeep`, and the start-up check. `SIDECAR.md` says what changed. Tests: 2.6's fork list. Traps: mark after the last gate and before the rename, never before the check; a DELETE's revert check stays the stash's, since its key is held; the stamp is one string, compared whole.
 
 **New: EVSB-M2-23, a DELETE that names its object, in the Blobs contract** (sidecar, server; S; before EVSB-M2-12). `sidecar.WithBlobUnmodified(ctx, lastModified)` in `host_blobs.go` beside `WithBlobDeadline`, and `BlobCluster.Delete`'s comment; server's MinIO client sends the header where it sends `x-ur-deadline-ms` (`server/file_cluster_transport.go`) and maps the 412 to `ErrBlobPrecondition`; the fake and `blobsuite` as 2.6 says.
 
@@ -515,7 +617,7 @@ The held tasks need three pieces of landed code changed first. They are small, a
 
 **EVSB-M2-12, the nightly pass.** Build as planned, with these changes. The shard job takes each metadata cluster's horizon first, before any LIST of pidx/, and hands it to orphan GC; `evsservice/nightly.go` owns that read (`OrphanHorizon(ctx, cluster) (time.Time, error)`: one `List(batchKeyPrefix, "", 1)`, the minute by `batchKeyMinute`, as evacuation reads it, the clock held to `ClockCheck`, an unsure clock an error). Every DELETE the pass issues for an object it listed (a superseded pack or parcel and its entries, an unnamed container after 25 h, a consumed deposit's segment) carries `WithBlobUnmodified` with the listed LastModified, and counts a 412 as "replaced", never as deleted; a held key or unknown outcome is left for the next night. The pass still calls EVSB-M2-13 and EVSB-M2-14. Nothing else of its plan entry moves.
 
-**EVSB-M2-13, orphan GC** (not held by name, but it needs EVSB-M2-12 and is this section's subject). Build 2.2.4 and 2.2.5 in `evsservice/gc_orphans.go`, not its plan entry's four steps: no `RaiseFence`, no deadline wait, no second check, no batch read. `OrphanGcSettings{AdoptionBound: 24 h + 2 min, Window: 7 d, DeleteCount: 1024, DeleteRate: 10, PidxReadCount: 4096}`, with `AdoptionBound` a floor no setting passes. Barriers `evs.gc.horizon`, `evs.gc.index`, `evs.gc.delete` replace `orphan_mark`, `orphan_fence`, `orphan_recheck` and `orphan_delete`. It exports, per segment cluster and with no network or repo label (D-OPS-8), `urnetwork_evs_orphan_deletes_total{outcome}` with outcome deleted, replaced, held or failed. Its Needs lose `HeadStore.RaiseFence` and gain EVSB-M2-23 and `EvsPidxEntry`'s introduced ids (EVSB-M2-10). Tests: 2.6's GC row, FS-59's GC clauses and FS-8's.
+**EVSB-M2-13, orphan GC** (not held by name, but it needs EVSB-M2-12 and is this section's subject). Build 2.2.4 and 2.2.5 in `evsservice/gc_orphans.go`, not its plan entry's four steps: no `RaiseFence`, no deadline wait, no second check, no batch read. It runs for a repo only while `SettlePassed()` holds on the segment cluster and on the repo's metadata cluster, and `ClockCheck.Sure()`. `OrphanGcSettings{AdoptionBound: 24 h + 2 min, Window: 7 d, DeleteCount: 1024, DeleteRate: 10, PidxReadCount: 4096}`, with `AdoptionBound` a floor no setting passes. Barriers `evs.gc.horizon`, `evs.gc.index`, `evs.gc.delete` replace `orphan_mark`, `orphan_fence`, `orphan_recheck` and `orphan_delete`. It exports, per segment cluster and with no network or repo label (D-OPS-8), `urnetwork_evs_orphan_deletes_total{outcome}` with outcome deleted, replaced, held or failed. Its Needs lose `HeadStore.RaiseFence` and gain EVSB-M2-23 and `EvsPidxEntry`'s introduced ids (EVSB-M2-10). Tests: 2.6's GC row, FS-59's GC clauses and FS-8's.
 
 **EVSB-M2-17, the file-cluster suite and FS-114.** Needs EVSB-M2-22. Add 2.6's FS-114 clauses to the suite's cases, each with its barrier (the fork's hooks), and the conditional DELETE's three cases to the store suite. The suite reports, with the lag it already reports, how long a failed DELETE's key was held past its request's end. A build without EVSB-M2-22 fails the new cases, the DELETE naming an older object first, so `SettlePassed` is never recorded for one.
 
@@ -550,13 +652,13 @@ I-EVS-5  no segment becomes reachable after GC decided to delete it: a push, or 
 
 ```text
 orphans   the nightly pass first takes each metadata cluster's horizon, from one LIST of pb/: the start of the
-          minute its oldest batch names, or a minute before the LIST if that is earlier or none is left. It
-          then LISTs each repo's seg/ prefix on the segment cluster, as it does for stored bytes, and its pidx/
+          minute its oldest batch names, or 25 h before the LIST if that is earlier or none is left. It then
+          LISTs each repo's seg/ prefix on the segment cluster, as it does for stored bytes, and its pidx/
           entries. A segment whose LastModified + 24 h + 2 min is at or before its repo's cluster's horizon and
           that no pidx/ entry lists as introduced is an orphan, and taskworker deletes it by a DELETE that
-          names its LastModified (§19.6), at most 10 a second a segment cluster. It raises no fence and reads
-          no batch. An uncommitted path map above its ref's current epoch goes the same way, by its oldest
-          part (11.6)
+          names its LastModified (§19.6), at most 10 a second a segment cluster, on clusters whose build passed
+          §19.6's settle cases. It raises no fence and reads no batch. An uncommitted path map above its ref's
+          current epoch goes the same way, by its oldest part (11.6)
 why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check,
           writes its batch record within 5 s of that check and before its head write, in a minute that began no
           later; so every record that can adopt the segment is in a batch from before its LastModified + 24 h +
@@ -570,7 +672,7 @@ why       a push, or a seal for its parts, adopts a segment only with a receipt 
 
 **§11.17.** D-EVS-25: "Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push wrote, fencing a pending record's ref, one with no head by a placeholder head; and an unadopted segment or path map, found by the nightly LIST, is deleted only once evacuation's horizon has passed every batch that could adopt it. *Why:* an upload that never reached the log is otherwise invisible; a grace period cannot fence a late commit, and a fence cannot reach a ref that does not exist yet, but every commit leaves its record first." D-EVS-34: "... and GC deletes an unadopted segment only once every batch record that could adopt it has been evacuated, 49 h or more after its upload, by a DELETE that names the object. *Why:* markers cost three writes per segment."
 
-**§19.6, the settle row.** Rule (2), for "the version the coordinator read from that drive under the lock, or its absence, and a deadline": "the version the coordinator read from that drive under the lock, or its absence, with the drive's stamp for the key (how many commits its process had applied when it last applied one to the key, kept in memory for 2 min, with a value drawn at the process's start), and a deadline fixed before that read"; for "applies it only while the drive still holds that version and its clock is before the deadline": "applies it only while the drive still holds that version and that stamp, so only if no commit was applied to the key there since the read, and its clock is before the deadline; a DELETE of a key the drive lacks counts as committed and moves the stamp". Rule (3), after "so that write can never be read and the version before it loses only the drives the write stalled on or could not revert": "; a DELETE, which leaves a drive in the one state every DELETE leaves, releases its key only once no drive may still hold it, each commit of it having answered and each that landed been reverted, and is never reverted after its release". For "a DELETE's .trash copy, which the trash sweep keeps while the key is held": QD-279's "a DELETE's stash". For "and a key waits longer only while a write lacking N/2 + 1 drives could still reach N/2 with a host among the drives holding it unreachable": "and a key waits longer only while a PUT lacking N/2 + 1 drives could still reach N/2, or a DELETE lacking them has a commit unanswered, with a host among those drives unreachable". After rule (6): "; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's lock, when the object it finds was stored a second or more after that time, which is how GC deletes only the object it listed (§11.13)". The clocks row, for "taskworker raises no evacuation or GC fence and GC deletes nothing": "taskworker raises no evacuation fence and GC deletes nothing, evs opens no batch".
+**§19.6, the settle row.** Rule (2), for "the version the coordinator read from that drive under the lock, or its absence, and a deadline": "the version the coordinator read from that drive under the lock, or its absence, with the drive's stamp for the key (how many commits its process had applied when it last applied one to the key, kept in memory for 2 min, with a value drawn at the process's start), and a deadline fixed before that read"; for "applies it only while the drive still holds that version and its clock is before the deadline": "applies it only while the drive still holds that version and that stamp, so only if no commit was applied to the key there since the read, and its clock is before the deadline; a DELETE of a key the drive lacks counts as committed and moves the stamp". Rule (3), after "so that write can never be read and the version before it loses only the drives the write stalled on or could not revert": "; a DELETE, which leaves a drive in the one state every DELETE leaves, releases its key only once no drive may still hold it, each commit of it having answered and each that landed been reverted, and is never reverted after its release". For "a DELETE's .trash copy, which the trash sweep keeps while the key is held": QD-279's "a DELETE's stash". For "and a key waits longer only while a write lacking N/2 + 1 drives could still reach N/2 with a host among the drives holding it unreachable": "and a key waits longer only while a PUT lacking N/2 + 1 drives could still reach N/2, or a DELETE lacking them has a commit unanswered, with a host among those drives unreachable". After rule (6): "; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's lock, when the object it finds was stored a second or more after that time, which is how GC deletes only the object it listed (§11.13)". For "taskworker opens no collection window and v1's purge and drop jobs delete nothing": "taskworker opens no collection window, orphan GC deletes nothing and v1's purge and drop jobs delete nothing". The clocks row, for "taskworker raises no evacuation or GC fence and GC deletes nothing": "taskworker raises no evacuation fence and GC deletes nothing, evs opens no batch".
 
 After the settle row, a row of its own: "list      a LIST is answered only when it is whole: the build asks every online drive of each set it reads and answers 503 when three or more of a set's drives are offline, or one is while another heals, since a key on N/2 + 1 drives can then fall under the half of the asked drives a listing needs; evacuation's horizon and every deletion decided on a LIST of pidx/ (§11.13) rest on it".
 
@@ -604,17 +706,17 @@ FS-8, for "the fake clock passes 26 h and 2 d: GC and evacuation reclaim every o
 
 ### 2.9 Owner questions
 
-This section is designed on each recommendation below.
+This section is designed on the recommendation of each of the first three; the fourth is another problem's to build.
 
-**How long an orphan lives (`details-2-orphan-age.md`).** D-EVS-34 and §2.8's evs-4 say an unadopted segment goes 25 h after its upload, 25-49 h with the nightly pass. Options: (1) the horizon rule of this section: 49-75 h, no GC fence, no change to the push path; (2) keep 25 h, with GC reading every batch of the last day each night to find the refs of pending records, fencing those and every idle ref of the repo, a ref with no head by a placeholder: a second read of ~60 GB of batches a night in year one, a head overwrite per idle ref per orphan night, and a second place that resolves records; (3) keep 25 h by having every creating push write a placeholder head before step 4 (the question's own option 2): one more head create and round trip per new ref, a change to the landed push route, and GC's fences as written. Recommendation: (1). An orphan is bytes its own uploader's network is charged for, a day longer; nothing else moves.
+**How long an orphan lives (`details-2-orphan-age.md`).** D-EVS-34 and §2.8's evs-4 say an unadopted segment goes 25 h after its upload, 25-49 h with the nightly pass. Options: (1) the horizon rule of this section: 49-75 h, no GC fence, no change to the push path; (2) keep 25 h, with GC reading every batch of the last day each night to find the refs of pending records, fencing those and every idle ref of the repo, a ref with no head by a placeholder: a second read of a day's batches a night (tens of GB in year one), a head overwrite per idle ref per orphan night, and a second place that resolves records; (3) keep 25 h by having every creating push write a placeholder head before step 4 (the question's own option 2): one more head create and round trip per new ref, a change to the landed push route, and GC's fences as written. Recommendation: (1). An orphan is bytes its own uploader's network is charged for, a day longer; nothing else moves.
 
 **A DELETE that names its object (`details-2-conditional-delete.md`).** §11.3 and the Blobs contract say a DELETE takes no condition. Options: (1) the fork honors `x-ur-if-unmodified-ms` under the key's lock, and GC, the nightly pass and the sweep send it: about thirty lines in the fork, one context helper, and D closed for any number of late or doubled runs; (2) GC HEADs each orphan just before its DELETE and bounds the DELETE's deadline to 2 s after: no store change, and D remains when a second run's DELETE, the re-upload and its commit all fall inside those 2 s; (3) a lease object per GC shard, as the drop job has: a new object family and §2.8 row, and a renewal write per checkpoint. Recommendation: (1).
 
-**The drop job and a ref with no head (`details-2-drop-job-new-ref.md`).** Found while checking who else deletes on the strength of a scan of the repo's refs. §11.13's drop job marks "over every ref of the repo" at a snapshot after each drop's fence. A push that creates its ref, validated before the DROP committed and citing a listed version through `reuse`, whose head write stalls past mark and verify (25 min after a `now` drop), lands on a head the scans never saw, naming a segment the job deleted. It is A again, at 25 min in place of 25 h. Options: (1) the job takes mark only once the horizon of 2.2.4 has passed each covered drop's commit by 2 min, so every record validated before the fence has been settled, which makes a `now` drop's deletion start about 25 h after it and leaves a 7-day drop as it is; (2) the job resolves pending batch records itself before mark; (3) accept it. Recommendation: (1). It belongs to problem 10's tasks (EVSB-M10-03 and EVSB-M10-04) and to `EvsCommit.tla`'s drop stories, which run only refs that have heads; this section builds nothing for it.
-
 **A LIST that is whole (`details-2-list-whole.md`).** MinIO lists a key that half of the drives it asked hold, so with three of a set's eight drives offline it can drop a batch that five drives took, and the horizon, like §11.13's existing rules that delete on a LIST of pidx/, would act on what is missing. Options: (1) the fork answers such a LIST 503 (2.2.2), a few lines, failing closed in §19.6's at_risk state and with a segment host down; (2) taskworker reads drive states from admin info and holds its deletes, which leaves readers' lookups and a 60 s window; (3) accept it. Recommendation: (1).
 
-**Questions this section answers.** `evs-models-gc-unfenced-new-ref`: none of its options as stated; GC fences nothing, and the fence of a ref with no head is evacuation's placeholder (its option 1's write, made by evacuation). `evs1-m2-12-first-commit-gc-fence`: its option 1, the push route as it is. `evsb-m2-11-pending-record-no-head`: its option 1. `evs-models-settle-stalled-deletes`: its option 1, with the stamp for C, which it did not have. `evsb-m2-11-dead-record-shared-slot` is not answered here; its option 3 can take 2.2.4's horizon in place of reading batch-resident records, and a DELETE naming the slot's LastModified, when it is decided.
+**The drop job and a ref with no head (`details-2-drop-job-new-ref.md`).** Found while checking who else deletes on the strength of a scan of the repo's refs. §11.13's drop job marks "over every ref of the repo" at a snapshot after each drop's fence. A push that creates its ref, validated before the DROP committed and citing a listed version through `reuse`, whose head write stalls past mark and verify (25 min after a `now` drop), lands on a head the scans never saw, naming a segment the job deleted. It is A again, at 25 min in place of 25 h. Options: (1) the job takes mark only once the horizon of 2.2.4 has passed each covered drop's commit by 2 min, so every record validated before the fence has been settled, which makes a `now` drop's deletion start about 25 h after it and leaves a 7-day drop as it is; (2) the job resolves pending batch records itself before mark; (3) accept it. Recommendation: (1). It belongs to problem 10's tasks (EVSB-M10-03 and EVSB-M10-04) and to `EvsCommit.tla`'s drop stories, which run only refs that have heads; this section builds nothing for it.
+
+**Questions this section answers.** `evs-models-gc-unfenced-new-ref`: none of its options as stated; GC fences nothing, and the fence of a ref with no head is evacuation's placeholder (its option 1's write, made by evacuation). `evs1-m2-12-first-commit-gc-fence`: its option 1, the push route as it is. `evsb-m2-11-pending-record-no-head`: its option 1. `evs-models-settle-stalled-deletes`: its option 1, with the stamp for C, which it did not have; that option is the owner's too, since it changes FI-30's last clause and D-OPS-20's cost (2.4, 2.8). `evsb-m2-11-dead-record-shared-slot` is not answered here; its option 3 can take 2.2.4's horizon in place of reading batch-resident records, and a DELETE naming the slot's LastModified, when it is decided.
 
 ## 3. Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5)
 

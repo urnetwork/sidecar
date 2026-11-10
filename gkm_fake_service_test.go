@@ -91,6 +91,10 @@ type gkmFakeStore struct {
 	afterFaults  map[string]int
 	// a refusal gkm answers once at a route, in place of acting
 	routeRefusals map[string]int
+	// how many more times a planted refusal answers past its first
+	routeRefusalCounts map[string]int
+	// gkm stopped: every call fails as a transport would (KF7)
+	down bool
 	// what a test runs once just before the next call of a route acts, with no lock held: another device's flow, so
 	// two race at one object in the order the test chose
 	routeHooks map[string]func()
@@ -108,27 +112,32 @@ type gkmFakeStore struct {
 	welcomeEntries    map[sidecar.Id][]*protocol.GkmWelcomeEntry
 	// every late ask: "<recipient>:<g>"
 	lateAsks []string
+	// every group-info want, by the epoch asked for, in order
+	groupInfoWants []uint64
+	// epochs below this are pruned: Epochs serves none of them
+	prunedBelowEpoch uint64
 }
 
 func newGkmFakeStore(t *testing.T, clock sidecar.Clock) *gkmFakeStore {
 	return &gkmFakeStore{
-		t:                 t,
-		clock:             clock,
-		beforeFaults:      map[string]int{},
-		afterFaults:       map[string]int{},
-		routeRefusals:     map[string]int{},
-		groupInfos:        map[sidecar.Id]*protocol.GkmGroupInfoObject{},
-		routeHooks:        map[string]func(){},
-		groupOwnerRepoIds: map[sidecar.Id]sidecar.Id{},
-		repoForms:         map[sidecar.Id][]*bridge.Signed{},
-		groupGenerations:  map[sidecar.Id][]*bridge.Signed{},
-		groupEpochs:       map[sidecar.Id][]*protocol.GkmEpochObject{},
-		pathWraps:         map[string][]byte{},
-		pathRecoveryWraps: map[string][]byte{},
-		readerKeys:        map[sidecar.Id]*bridge.Signed{},
-		keyPackages:       map[sidecar.Id][]*sidecar.MlsKeyPackage{},
-		groupWelcomes:     map[string][]byte{},
-		welcomeEntries:    map[sidecar.Id][]*protocol.GkmWelcomeEntry{},
+		t:                  t,
+		clock:              clock,
+		beforeFaults:       map[string]int{},
+		afterFaults:        map[string]int{},
+		routeRefusals:      map[string]int{},
+		routeRefusalCounts: map[string]int{},
+		groupInfos:         map[sidecar.Id]*protocol.GkmGroupInfoObject{},
+		routeHooks:         map[string]func(){},
+		groupOwnerRepoIds:  map[sidecar.Id]sidecar.Id{},
+		repoForms:          map[sidecar.Id][]*bridge.Signed{},
+		groupGenerations:   map[sidecar.Id][]*bridge.Signed{},
+		groupEpochs:        map[sidecar.Id][]*protocol.GkmEpochObject{},
+		pathWraps:          map[string][]byte{},
+		pathRecoveryWraps:  map[string][]byte{},
+		readerKeys:         map[sidecar.Id]*bridge.Signed{},
+		keyPackages:        map[sidecar.Id][]*sidecar.MlsKeyPackage{},
+		groupWelcomes:      map[string][]byte{},
+		welcomeEntries:     map[sidecar.Id][]*protocol.GkmWelcomeEntry{},
 	}
 }
 
@@ -156,6 +165,21 @@ func (self *gkmFakeStore) refuseOnce(route string, status int) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.routeRefusals[route] = status
+}
+
+// Has gkm answer status at each of the next count calls of route, in place of acting.
+func (self *gkmFakeStore) refuseTimes(route string, status int, count int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.routeRefusals[route] = status
+	self.routeRefusalCounts[route] = count - 1
+}
+
+// Stops gkm, or starts it again.
+func (self *gkmFakeStore) setDown(down bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.down = down
 }
 
 // Runs hook once, just before the next call of route by the device labelled label acts.
@@ -252,12 +276,19 @@ func (self *gkmFakeApi) call(route string, act func() error) error {
 	store.stateLock.Lock()
 	defer store.stateLock.Unlock()
 	store.calls = append(store.calls, self.label+":"+route)
+	if store.down {
+		return errGkmFakeFault
+	}
 	if 0 < store.beforeFaults[route] {
 		store.beforeFaults[route] -= 1
 		return errGkmFakeFault
 	}
 	if status, ok := store.routeRefusals[route]; ok {
-		delete(store.routeRefusals, route)
+		if 0 < store.routeRefusalCounts[route] {
+			store.routeRefusalCounts[route] -= 1
+		} else {
+			delete(store.routeRefusals, route)
+		}
 		return gkmFakeRefusal(status, nil)
 	}
 	if err := act(); err != nil {
@@ -337,7 +368,7 @@ func (self *gkmFakeApi) Epochs(ctx context.Context, repoId sidecar.Id, groupId s
 	reply := &protocol.GkmEpochsReply{}
 	err := self.call("Epochs", func() error {
 		for epoch, object := range self.store.groupEpochs[groupId] {
-			if after < uint64(epoch) {
+			if after < uint64(epoch) && self.store.prunedBelowEpoch <= uint64(epoch) {
 				reply.Epochs = append(reply.Epochs, &protocol.GkmEpochEntry{Epoch: uint64(epoch), Object: object})
 			}
 		}
@@ -612,6 +643,9 @@ func (self *gkmFakeApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEnt
 func (self *gkmFakeApi) GroupInfo(ctx context.Context, repoId sidecar.Id, groupId sidecar.Id, want *uint64) (*protocol.GkmGroupInfoObject, error) {
 	var object *protocol.GkmGroupInfoObject
 	err := self.call("GroupInfo", func() error {
+		if want != nil {
+			self.store.groupInfoWants = append(self.store.groupInfoWants, *want)
+		}
 		held, ok := self.store.groupInfos[groupId]
 		if !ok {
 			return gkmFakeRefusal(http.StatusNotFound, nil)
@@ -631,6 +665,28 @@ func (self *gkmFakeApi) UploadGroupInfo(ctx context.Context, repoId sidecar.Id, 
 		self.store.groupInfos[groupId] = object
 		return nil
 	})
+}
+
+func (self *gkmFakeApi) DropKeys(ctx context.Context, repoId sidecar.Id, since uint64) (*protocol.GkmGenerationsReply, error) {
+	reply := &protocol.GkmGenerationsReply{}
+	err := self.call("DropKeys", func() error {
+		store := self.store
+		forms := store.repoForms[repoId]
+		if len(forms) == 0 {
+			return gkmFakeRefusal(http.StatusNotFound, nil)
+		}
+		form := &protocol.GroupForm{}
+		if err := proto.Unmarshal(forms[len(forms)-1].GetBody(), form); err != nil {
+			return gkmFakeRefusal(http.StatusNotFound, nil)
+		}
+		generations := store.groupGenerations[sidecar.Id(form.GetGroupId())]
+		if since < uint64(len(generations)) {
+			// the route's bound
+			reply.Generations = slices.Clone(generations[since:min(uint64(len(generations)), since+64)])
+		}
+		return nil
+	})
+	return reply, err
 }
 
 // Publishes KeyPackages of a device at gkm, as its upkeep would: count one-time ones, and its last-resort one when

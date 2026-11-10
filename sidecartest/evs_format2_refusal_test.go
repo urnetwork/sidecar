@@ -1039,12 +1039,29 @@ type format2EvsCase struct {
 	segment       []byte
 	twinSegment   []byte
 	segmentPushId sidecar.Id
+	// POST .../push/<partPushId>/<number>
+	part       *format2Part
+	twinPart   *format2Part
+	partPushId sidecar.Id
 }
 
-func (self *format2World) sendCase(push *protocol.EvsPushRequest, segment []byte, segmentPushId sidecar.Id) *httptest.ResponseRecorder {
+// One part of a push in parts, as its route takes it.
+type format2Part struct {
+	number int
+	body   *protocol.EvsPartRequest
+}
+
+func (self *format2World) sendCase(push *protocol.EvsPushRequest, part *format2Part, partPushId sidecar.Id, segment []byte, segmentPushId sidecar.Id) *httptest.ResponseRecorder {
 	self.t.Helper()
 	if push != nil {
 		return self.postPush(self.format1, push)
+	}
+	if part != nil {
+		bodyBytes, err := proto.Marshal(part.body)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		return self.send(self.format1, http.MethodPost, fmt.Sprintf("/push/%s/%d", sidecar.EvsKeyId(partPushId), part.number), bodyBytes)
 	}
 	route := fmt.Sprintf("/segments/%x?push=%s", sha256.Sum256(segment), sidecar.EvsKeyId(segmentPushId))
 	return self.send(self.format1, http.MethodPut, route, segment)
@@ -1155,6 +1172,58 @@ var format2EvsDrivers = map[string]func(world *format2World) *format2EvsCase{
 		world.create(twin, "indexed.txt", []byte("indexed"), protocol.EvsVersioning_EVS_VERSIONING_KEPT, nil)
 		return &format2EvsCase{push: world.body(plan, setIndexEpoch, nil), twin: world.unsignedBody(twin, setIndexEpoch, nil)}
 	},
+	"part-staged": func(world *format2World) *format2EvsCase {
+		// 96 inline files of 12 KiB pass a one-part payload's 1 MiB, so the push goes in parts; one more file is
+		// versionless, its record staged
+		plan := world.plan()
+		content := bytes.Repeat([]byte{'p'}, 12*1024)
+		for i := range 96 {
+			world.create(plan, fmt.Sprintf("part-%03d.bin", i), content, protocol.EvsVersioning_EVS_VERSIONING_KEPT, nil)
+		}
+		segmentBytes, _, locator := world.kind5Segment(plan.PushId, []byte("staged"))
+		segment, err := sidecar.EvsStagedSegmentOf(segmentBytes, world.repoId, plan.PushId)
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		locator.Staged = true
+		plan.NewObjects = append(plan.NewObjects, segment.NewObject())
+		world.create(plan, "staged.bin", []byte("staged"), protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS, func(entry *protocol.EvsEntryVersion) {
+			entry.Chain = []*protocol.EvsLocator{locator}
+		})
+		staged := sidecar.EvsEncodeStaged([][]byte{segmentBytes})
+		built, err := sidecar.NewEvsStatementBuilder(world.sign(&format2Signing{})).BuildFormat2(plan)
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		// the plan's bytes are fixed, so a second build differs only in its signature
+		unsigned, err := sidecar.NewEvsStatementBuilder(world.sign(&format2Signing{stranger: true})).BuildFormat2(plan)
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		if len(built.Parts) < 2 || len(unsigned.Parts) != len(built.Parts) {
+			world.t.Fatalf("the push built in %d parts", len(built.Parts))
+		}
+		c := &format2EvsCase{partPushId: plan.PushId}
+		for i, partBytes := range built.Parts {
+			if !bytes.Equal(partBytes, unsigned.Parts[i]) {
+				world.t.Fatal("the two builds' parts differ")
+			}
+			if _, err := sidecar.EvsCheckPartFormat2(built.Statement, partBytes, staged); err != nil {
+				world.t.Fatalf("format 2 does not take part %d: %v", i+1, err)
+			}
+			if c.part == nil {
+				c.part = &format2Part{number: i + 1, body: &protocol.EvsPartRequest{Statement: built.Statement.Bytes, Part: partBytes, Staged: staged}}
+			}
+			// the twin's part holds no format-2 entry, so only its signature refuses it
+			if _, err := sidecar.EvsCheckPart(built.Statement, partBytes); err == nil && c.twinPart == nil {
+				c.twinPart = &format2Part{number: i + 1, body: &protocol.EvsPartRequest{Statement: unsigned.Statement.Bytes, Part: partBytes}}
+			}
+		}
+		if c.twinPart == nil {
+			world.t.Fatal("every part holds a format-2 entry")
+		}
+		return c
+	},
 	"segment-header-kind-5": func(world *format2World) *format2EvsCase {
 		pushId := sidecar.NewEvsPushId()
 		segmentBytes, _, _ := world.kind5Segment(pushId, []byte("an upload"))
@@ -1185,7 +1254,7 @@ func TestEvsFormat2ConstructsRefusedAtAFormat1Evs(t *testing.T) {
 
 		headBefore := world.head()
 		objectsBefore := world.objects()
-		recorder := world.sendCase(c.twin, c.twinSegment, c.segmentPushId)
+		recorder := world.sendCase(c.twin, c.twinPart, c.partPushId, c.twinSegment, c.segmentPushId)
 		reply := format2Refusal(t, recorder)
 		if recorder.Code != row.Twin.Status || format2CodeName(reply.GetCode()) != row.Twin.Code || reply.GetNeedsFormat() != 0 || reply.GetRecorded() {
 			t.Errorf("%s: the twin answered %d %s %v, want %d %s", row.Name, recorder.Code, format2CodeName(reply.GetCode()), reply, row.Twin.Status, row.Twin.Code)
@@ -1195,7 +1264,7 @@ func TestEvsFormat2ConstructsRefusedAtAFormat1Evs(t *testing.T) {
 		}
 		world.requireSameObjects(row.Name+"'s twin", objectsBefore)
 
-		recorder = world.sendCase(c.push, c.segment, c.segmentPushId)
+		recorder = world.sendCase(c.push, c.part, c.partPushId, c.segment, c.segmentPushId)
 		reply = format2Refusal(t, recorder)
 		if recorder.Code != row.Status || reply.GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED || reply.GetNeedsFormat() != sidecar.EvsRepoFormat2 || reply.GetRecorded() {
 			t.Errorf("%s: answered %d %s %v", row.Name, recorder.Code, format2CodeName(reply.GetCode()), reply)

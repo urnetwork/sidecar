@@ -67,6 +67,10 @@ type GkmUpkeepRole struct {
 	MemberDevice bool
 	// Admitted under a restored binding and not yet anchored (§10.8): its ReaderKey goes up, its KeyPackages wait.
 	AwaitingAnchor bool
+	// When this device last joined a group through its last-resort KeyPackage, zero for never
+	// (GkmGroupClient.LastResortJoinedAt): a last-resort KeyPackage uploaded before it is replaced at the next pass,
+	// since its leaf key is every Welcome's that package served (RFC 9420 §16.8; DESIGN-DETAILS 6.2.2).
+	LastResortJoinedAt time.Time
 }
 
 // One group this device is a leaf of, with its newest applied epoch.
@@ -591,7 +595,8 @@ func (self *GkmUpkeep) keepKeyPackages(ctx context.Context, now time.Time) error
 		// gkm hinted that fewer than KeyPackageLowCount remain: what brings it back to the full count
 		oneTimeCount = self.settings.KeyPackageCount - self.settings.KeyPackageLowCount + 1
 	}
-	lastResort := times.lastResortAt.IsZero() || !now.Before(times.lastResortAt.Add(self.settings.KeyPackageLastResortRenewAge))
+	lastResort := times.lastResortAt.IsZero() || !now.Before(times.lastResortAt.Add(self.settings.KeyPackageLastResortRenewAge)) ||
+		times.lastResortAt.Before(role.LastResortJoinedAt)
 	if oneTimeCount == 0 && !lastResort {
 		return nil
 	}

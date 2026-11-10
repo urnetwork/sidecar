@@ -33,6 +33,11 @@ type gkmFlowDevice struct {
 	readerPrivateKeys map[string]hpke.PrivateKey
 	readerKeySha256   []byte
 	alarms            []*sidecar.GkmAlarm
+	// what HeadStopState would answer and take: nil allows every seal
+	sealAllowed func(groupId sidecar.Id) error
+	forks       []sidecar.HeadFork
+	// whether this process holds the network's state; a test clears it for a Worker without the Web Lock
+	stateless bool
 }
 
 type gkmFlowWorld struct {
@@ -148,8 +153,16 @@ func (self *gkmFlowDevice) restart() {
 		},
 		ReaderRepoIds: func() []sidecar.Id { return []sidecar.Id{world.repoId} },
 		Alarm:         func(alarm *sidecar.GkmAlarm) { self.alarms = append(self.alarms, alarm) },
-		Jitter:        func(max time.Duration) time.Duration { return min(world.jitter, max) },
-		Clock:         world.clock,
+		SealAllowed: func(groupId sidecar.Id) error {
+			if self.sealAllowed == nil {
+				return nil
+			}
+			return self.sealAllowed(groupId)
+		},
+		ReportFork: func(fork sidecar.HeadFork) { self.forks = append(self.forks, fork) },
+		HoldsState: func() bool { return !self.stateless },
+		Jitter:     func(max time.Duration) time.Duration { return min(world.jitter, max) },
+		Clock:      world.clock,
 	}
 	if len(self.row.GetTagIds()) == 0 {
 		args.Mls = self.mls

@@ -148,6 +148,23 @@
       }
     },
     {
+      "name": "part-staged",
+      "construct": "a part of a push in parts carrying staged kind-5 segments in the request's staged field",
+      "numbers": [
+        "EvsPartRequest.staged"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": false,
+      "twin": {
+        "construct": "a part of the same push with no staged bytes and no format-2 entry, under a signature that is not its signer's",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
       "name": "segment-header-kind-5",
       "construct": "a segment upload whose bytes open with a 48 B kind-5 header (segment header format 2)",
       "numbers": [
@@ -511,12 +528,6 @@
         "EvsHeadSummary.index_epoch"
       ],
       "why": "a head carries index_epoch only once a CUT committed, which raises the repo to format 2, where a format-1 evs takes no push; no format-1 code reads either field, and whether a format-1 reader should refuse a ref whose head summary carries one is not stated (11.6 lists it among what is refused in use, FS-72's constructs do not)"
-    },
-    {
-      "numbers": [
-        "EvsPartRequest.staged"
-      ],
-      "why": "the part route's staged refusal (evsservice/push_part.go) needs a push in parts, which this sweep does not build yet"
     }
   ]
 }

@@ -399,7 +399,7 @@ GcIndex(g) ==
                    stallsLeft, pausesLeft, crashesLeft, lost>>
 
 \* What the store does with the DELETE once it holds the key: only the object listed goes
-\* (If-Unmodified-Since its LastModified); the twin and the text as written delete whatever is there.
+\* (x-ur-if-unmodified-ms: its LastModified); the twin and the text as written delete whatever is there.
 Deletes(g) ==
     /\ seg[gc[g].seg].stored
     /\ Twin \in {"UnconditionalDelete", "Written"} \/ seg[gc[g].seg].at = gc[g].at
@@ -573,7 +573,7 @@ GcSafe == \A d \in gcDecided : ~\E a \in committed : att[a].seg = d.seg /\ att[a
 \* I-EVS-7 and I-EVS-2: a committed push's record is in its batch or in a container.
 RecordsKept == \A a \in committed : Records(a) # {} \/ a \in packed
 
-\* A placeholder head exists only with its fence raised, and no commit lowers a head.
+\* A placeholder head exists only with its fence raised.
 HeadsRise == \A r \in Refs : head[r].exists /\ head[r].version = 0 => head[r].fence > 0
 
 \* Every record old enough to evacuate before the behavior ends leaves its batch: no pending record
