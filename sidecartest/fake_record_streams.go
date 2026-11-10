@@ -25,7 +25,8 @@
 // It holds no format code: entries, slot rows, batches and notes are the caller's bytes, kept and returned as they
 // came, and nothing is sealed, tokenized or verified. What it does not keep: the pins a push declares, beyond
 // GATE_CLOSED on demand; statements and their replay; segments and padding; the storage limit and DIRECTORY_FULL;
-// BASE; drop keys; and deposit slots, which the binding keeps beside each deposit.
+// BASE's own statements, beyond RemoveStreamEntries' effect on a stream; drop keys; and deposit slots, which the
+// binding keeps beside each deposit.
 //
 // Safe for concurrent use. Barriers and subscribers run with no lock held.
 
