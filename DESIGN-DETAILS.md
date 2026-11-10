@@ -1552,6 +1552,8 @@ None blocks the held tasks: each is additive or a setting, and each task above b
 
 Status: complete (2026-11-09)
 
+Amended 2026-11-10 for the owner's answers: QD-628 (in `AuthLog.tla` a recovery-signed proposal stays pending at any cosign until its tick, and the recovery cosign is in every run's alphabet: 5.3's WindowHolds, model and runs). 5.9 records every answer, QD-627 to QD-629. Nothing of 5.2 changes.
+
 Tasks held until complete: CORE-M3-02, CORE-M3-03, TEAM-M10-01, TEAM-M2-04, TEAM-M2-05, TEAM-M2-06, TEAM-M2-07, TEAM-M2-09, TEAM-M2-10, TEAM-M2-17, TEAM-M2-18, TEAM-M2-19, TEAM-M3-02.
 
 Model: `sidecar/sidecartest/model/details/AuthLog.tla`, its configurations and `run.sh` beside it. Questions filed: `.stack/questions/details-5-settings-in-rows.md`, `.stack/questions/details-5-base-records-in-folds.md`.
@@ -1773,9 +1775,11 @@ DelegationEnds   no admission a Delegation's key signs takes effect after the De
                  why: DelegationRow.ended_at is in rows and the tail advances it by verdict
 ProposalsNeedK   a proposal completes only with k distinct counted members at the completing entry's state
                  why: ProposalRow keeps each signer; completion is judged once, at that entry, and carried as 2
-WindowHolds      a recovery proposal activates only at a tick at or after T_p + 72 h with no valid veto between
-                 its entry and the tick
-                 why: window_entry and window_time_ms are in the row; a veto closes the row at its position
+WindowHolds      a recovery proposal takes effect only at a tick at or after T_p + 72 h, T_p the entry of its
+                 newest recovery signature, with no valid veto between its entry and the tick; no cosign
+                 completes one, a device's k-th included
+                 why: window_entry and window_time_ms are in the row; a veto closes the row at its position;
+                 a cosign of a recovery row returns 1 and leaves the row open (§7.9's pending row)
 TailBounded      no base leaves more than 4,096 entries unfolded
 LiesAreForks     a base whose bits disagree with a present verifier's verdict forks that verifier
 ProposalsSurviveFolds
@@ -1783,24 +1787,24 @@ ProposalsSurviveFolds
                  lie between the proposal and the cosign
 ```
 
-**The model.** `sidecartest/model/details/AuthLog.tla` keeps the log as its one shared object and three verifiers as variables derived from it: `L`, the long-running full reader and writer; `N[b]`, a new full device started at each base b; and `G`, the rows-only gate cold-started at the newest base, which is what api sequences by. It models admissions with signers, carrying position, the signer's `at`, confirmations, parks and revocations; one Delegation with `max_admits`; recovery bindings, recovery-signed proposals, the 72 h window, vetoes and ticks; AuthorityProposals and cosigns at threshold K; the compromise cascade with consent (§8.5), voids of bindings and Delegations and the parks a Delegation's end makes; the replay ring and the `at` rule with the retention point; and bases with `folded_through`, head-derived rows (`self_admit`, a tag's owner), tail verdict bits and, under `LyingWriter`, a lie; under `Adversary` api sequences refused statements too. It leaves out presence countersignatures, read_only, `not_after` expiries, EvsShares, key registrations, leaf ranks, the head's own chain and api's reap ticks. The clock is the position. `Twin` selects a rule to break: `JudgeTail`, `NoProposalRows` and `NoSettingsRows` are §7.9 as written on 2026-11-09 and `CloseAtBase` the landed code; `ReJudgeTail` (the question's option 2), `NoRingRows`, `CascadeFromAt`, `NoBitsCheck` and `NoTailCap` each break one rule of this design. `Story` fixes a twin's entries so TLC reaches its violation directly; the design runs with none. `run.sh <track>` runs every configuration through `.stack/tools/tlc` and prints a verdict line per run.
+**The model.** `sidecartest/model/details/AuthLog.tla` keeps the log as its one shared object and three verifiers as variables derived from it: `L`, the long-running full reader and writer; `N[b]`, a new full device started at each base b; and `G`, the rows-only gate cold-started at the newest base, which is what api sequences by. It models admissions with signers, carrying position, the signer's `at`, confirmations, parks and revocations; one Delegation with `max_admits`; recovery bindings, recovery-signed proposals, their device cosigns and recovery cosigns, the 72 h window, vetoes and ticks; AuthorityProposals and cosigns at threshold K; the compromise cascade with consent (§8.5), voids of bindings and Delegations and the parks a Delegation's end makes; the replay ring and the `at` rule with the retention point; and bases with `folded_through`, head-derived rows (`self_admit`, a tag's owner), tail verdict bits and, under `LyingWriter`, a lie; under `Adversary` api sequences refused statements too. It leaves out presence countersignatures, read_only, `not_after` expiries, EvsShares, key registrations, leaf ranks, the head's own chain and api's reap ticks. The clock is the position. `Twin` selects a rule to break: `JudgeTail`, `NoProposalRows` and `NoSettingsRows` are §7.9 as written on 2026-11-09 and `CloseAtBase` the landed code; `ReJudgeTail` (the question's option 2), `NoRingRows`, `CascadeFromAt`, `NoBitsCheck` and `NoTailCap` each break one rule of this design. `Story` fixes a twin's entries so TLC reaches its violation directly; the design runs with none. `run.sh <track>` runs every configuration through `.stack/tools/tlc` and prints a verdict line per run.
 
-Runs, TLC at the owner's jar (master d8fb231), bounded so each finishes; breadth-first over every reachable state at the bounds, but for the deepest design run, which samples:
+Runs, TLC at the owner's jar (master d8fb231), bounded so each finishes; breadth-first over every reachable state at the bounds, but for the deepest design run, which samples. The design rows are of 2026-11-10, on the model with QD-628's change, on a machine carrying four build lanes:
 
 ```text
 configuration            Twin           K  bounds (Window 4, TailMax 4, RecoveryWindow 2, Life 5, MaxAdmits 2)
                                            result                                   distinct states  depth  time
 AuthLog                  none           2  MaxN 4, MaxBases 2, no story, no adversary
-                                           pass, every invariant                      1,725,243      5      1 min 44 s
+                                           pass, every invariant                      1,725,251      5      3 min 12 s
 AuthLog-K1               none           1  the same at k = 1
-                                           pass, every invariant                      4,061,811      5      6 min 22 s
+                                           pass, every invariant                      4,061,823      5      18 min 48 s
 AuthLog-Adversary        none           2  MaxN 4, MaxBases 2, LyingWriter: a writer may publish a base with a false
                                            verdict (every honest base has a lying twin beside it)
-                                           pass, every invariant                      2,494,475      5      7 min 18 s
+                                           pass, every invariant                      2,494,483      5      7 min 14 s
 AuthLog-Narrow           none           2  MaxN 5, MaxBases 2, Narrow: one at and one since_n a statement; by random
-                                           simulation, 200,000 traces of up to 7 steps from seed 1, since its complete
-                                           graph passes 20 million states
-                                           pass, every invariant on those traces   436,846,285 generated  6  1 h 46 min
+                                           simulation from seed 1, traces of up to 7 steps, since its complete graph
+                                           passes 20 million states; here 20,000 traces a worker on 14 workers
+                                           pass, every invariant on those traces    43,675,285 generated  6  16 min 8 s
 Twin-JudgeTail-Head      JudgeTail      2  StoryTailHead, MaxN 2      Agreement violated, 3-state trace    3    3
 Twin-JudgeTail-At        JudgeTail      2  StoryTailAt, MaxN 3        Agreement violated, 3-state trace    3    3
 Twin-NoProposalRows      NoProposalRows 2  StoryProposals, MaxN 3     Agreement violated, 3-state trace    3    3
@@ -1813,6 +1817,8 @@ Twin-NoBitsCheck-Forks   NoBitsCheck    2  the same                   LiesAreFor
 Twin-CloseAtBase         CloseAtBase    2  StoryClose, MaxN 3, Adversary ProposalsSurviveFolds violated   12    4
 Twin-NoTailCap           NoTailCap      2  StoryTailCap, MaxN 3, TailMax 1 TailBounded violated, 4 states  6    4
 ```
+
+What QD-628 changed in these runs. A recovery-signed proposal no longer completes at a device's cosign, and the recovery cosign is an entry any design run may take. Each breadth-first count rose a little (by 8, 12 and 8 states). A recovery cosign can only be a run's fourth entry at these bounds, since it needs two bindings and a recovery proposal before it, so the logs it adds are few. The narrowed run is recorded at a tenth of the size it was first run at (200,000 traces a worker, 436,846,285 states generated in 1 h 46 min on the model as it was), so that this record could land with the answers; `run.sh` keeps the full size, and that run on the amended model was started as this one ended and replaces the row when it finishes. The fifteen twins, the eleven below and the four the TEAM tasks added (`NewestConfirmOnly`, `DelegationEndIgnored`, `WindowFromProposalEntry`, `VoidKeepsProposal`), were run again and each ends on its invariant with the trace it had; the last two no longer add the recovery cosign to their own runs, since every run has it.
 
 Each twin run took under 5 s; a twin's distinct-state count is what TLC had explored when its workers met the violation, so it varies a little between runs (NoRingRows 59 to 75, CloseAtBase 12 to 14) while the trace does not. A depth counts TLC's initial state, so a 3-state trace is two entries. The three breadth-first design runs explore every log the candidate alphabet allows at their depth (about 37 enabled entries a position at MaxN 4); a run one entry deeper multiplies the states by that, so the narrowed depth-5 run, whose complete graph passed 20 million states without finishing in two hours, runs instead by TLC's random simulation, which proves only that the behaviors it drew kept every invariant. Its seed and trace count are fixed in `run.sh`, so the run repeats.
 
@@ -2034,11 +2040,15 @@ For the design-records track, section by section; each replaces the sentence or 
 
 ### 5.9 Owner questions
 
-**details-5-settings-in-rows** (filed). Should `self_admit` and `scim_signer` compile into ProjectionRows, where api and every gate read them, adding a §2.8 api-7 line (I-18)? Options: (1) yes, the two values a verifier judges by, nothing else of ServiceSettings; (2) every id-level ServiceSettings value, for uniformity; (3) no: api accepts every scoped self-admission and readers refuse the ones self_admit forbids, splitting api from devices. Costs: (1) two small fields and one api-7 line; the server learns a setting whose effect it already sees in which admissions land; (2) the same plus team_mail, stale_leaf_days and witness_bound_hours, which no gate judges by today; (3) a 403 for nothing and a log api sequences but devices refuse, the split D-TEAM-19 forbids. Recommendation: (1). This section is built on it.
+The owner answered both on 2026-11-10, each on its recommendation, and a third that a build track raised against this section's model.
 
-**details-5-base-records-in-folds** (filed). Should a fold's records include BASE entries, so the config head holds every entry's body and a reader recomputes the chain from the genesis through the head? Options: (1) yes, kind 1 with the Signed ProjectionHeader; (2) no, as plan-TEAM-config-head-format #1 fills it, and a far-behind reader that holds no pin in the retained run restarts on the base's signer alone, as a cold gate does. Costs: (1) about 400 B a base in the head, one more record kind in `ConfigHead`, `RecordsIn` and `CheckConfigBase`, and a change to a fill the planning track made; (2) a full reader off the network for longer than its base pins' 30 days anchors its restart on the signer named by the rows it is restarting from, which the invite's genesis and the head's repo chain bound but no hash chain does. Recommendation: (1). This section is built on it; with (2), 5.5's far-behind row loses its chain link and nothing else here changes.
+**details-5-settings-in-rows** (filed; **answered: QD-629, option 1**, `self_admit` and `scim_signer` compile into ProjectionRows; TEAM-M2-07 and TEAM-M2-10 build to it). Should `self_admit` and `scim_signer` compile into ProjectionRows, where api and every gate read them, adding a §2.8 api-7 line (I-18)? Options: (1) yes, the two values a verifier judges by, nothing else of ServiceSettings; (2) every id-level ServiceSettings value, for uniformity; (3) no: api accepts every scoped self-admission and readers refuse the ones self_admit forbids, splitting api from devices. Costs: (1) two small fields and one api-7 line; the server learns a setting whose effect it already sees in which admissions land; (2) the same plus team_mail, stale_leaf_days and witness_bound_hours, which no gate judges by today; (3) a 403 for nothing and a log api sequences but devices refuse, the split D-TEAM-19 forbids. Recommendation: (1). This section is built on it.
 
-Neither question blocks the held tasks: both are additive before M2's freeze, and each task above builds on the recommendation.
+**details-5-base-records-in-folds** (filed; **answered: QD-627, option 1**, a fold's records include the BASE entries; TEAM-M2-08, -09 and -10 landed it). Should a fold's records include BASE entries, so the config head holds every entry's body and a reader recomputes the chain from the genesis through the head? Options: (1) yes, kind 1 with the Signed ProjectionHeader; (2) no, as plan-TEAM-config-head-format #1 fills it, and a far-behind reader that holds no pin in the retained run restarts on the base's signer alone, as a cold gate does. Costs: (1) about 400 B a base in the head, one more record kind in `ConfigHead`, `RecordsIn` and `CheckConfigBase`, and a change to a fill the planning track made; (2) a full reader off the network for longer than its base pins' 30 days anchors its restart on the signer named by the rows it is restarting from, which the invite's genesis and the head's repo chain bound but no hash chain does. Recommendation: (1). This section is built on it; with (2), 5.5's far-behind row loses its chain link and nothing else here changes.
+
+Neither question blocked the held tasks: both are additive before M2's freeze, and each task above was built on the recommendation.
+
+**details-5-model-recovery-cosign** (raised by the team-m2-04 track; **answered: QD-628, option 1**, fix the model). §7.9 holds a statement with a recovery-key signature pending until a tick 72 h after its newest such signature, and TEAM-M2-05's code does. `AuthLog.tla` completed a recovery-signed proposal at the device cosign that brought it to k, with no window, and `WindowHolds` looked only at activated proposals, so no design run saw it. The model now returns 1 for a cosign of a recovery row and leaves its completion to the tick, `WindowHolds` also denies a recovery row that closed as completed, and the recovery cosign, `rcosign`, which only two twins' runs took, is in every run's alphabet. 5.3 records the runs. No code waited on it.
 
 ## 6. MLS group key management (§10)
 
