@@ -184,6 +184,8 @@ type ConfigState struct {
 	headSettings      *protocol.ServiceSettings
 	headSettingsKnown bool
 	proposals         map[[sha256.Size]byte]*configProposal
+	// the IndexerSet designations that hold, by subject and scope
+	indexers map[configIndexerKey]*bridge.IndexerRow
 
 	// A_k for k from chainsFrom to n. Later states append to the same array past this slice's end and never write
 	// inside it, so states share it.
@@ -197,6 +199,10 @@ type ConfigState struct {
 	aclOnce  sync.Once
 	acl      *AclState
 	aclError error
+
+	// §7.9's leaves rank, built on first use
+	leavesOnce  sync.Once
+	leavesCache *configLeaves
 }
 
 // The network the log is of.
@@ -553,6 +559,9 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 	}
 	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
 	rows.Proposals = self.openProposalRows()
+	for _, key := range self.indexerKeys() {
+		rows.Indexers = append(rows.Indexers, proto.Clone(self.indexers[key]).(*bridge.IndexerRow))
+	}
 	return rows
 }
 
@@ -605,6 +614,7 @@ type configStateBuilder struct {
 	delegationsOwned bool
 	keysOwned        bool
 	proposalsOwned   bool
+	indexersOwned    bool
 	// rows this builder already copied, so a second write changes the copy
 	membersCopied     map[Id]bool
 	sidecarsCopied    map[Id]bool
@@ -633,6 +643,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 		headSettings:      state.headSettings,
 		headSettingsKnown: state.headSettingsKnown,
 		proposals:         state.proposals,
+		indexers:          state.indexers,
 		chains:            state.chains,
 		chainsFrom:        state.chainsFrom,
 		basePins:          state.basePins,
@@ -659,6 +670,7 @@ func newConfigStateBuilder(previous *ConfigState, n uint64, chain [sha256.Size]b
 func (self *configStateBuilder) snapshot() *ConfigState {
 	snapshot := configCopyState(self.state)
 	self.membersOwned, self.sidecarsOwned, self.delegationsOwned, self.keysOwned, self.proposalsOwned = false, false, false, false, false
+	self.indexersOwned = false
 	clear(self.membersCopied)
 	clear(self.sidecarsCopied)
 	clear(self.delegationsCopied)
@@ -784,6 +796,19 @@ func (self *configStateBuilder) keyForWrite(keyId []byte) *bridge.KeyRow {
 		self.putKey(row)
 	}
 	return row
+}
+
+// Sets the designation of a subject at a scope, or removes it for nil.
+func (self *configStateBuilder) putIndexer(key configIndexerKey, row *bridge.IndexerRow) {
+	if !self.indexersOwned {
+		self.state.indexers = configCloneMap(self.state.indexers)
+		self.indexersOwned = true
+	}
+	if row == nil {
+		delete(self.state.indexers, key)
+		return
+	}
+	self.state.indexers[key] = row
 }
 
 // A proposal, open or closed, or nil.

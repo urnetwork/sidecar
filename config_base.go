@@ -231,6 +231,7 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 		return nil, errors.New("rows: settings are not the config head's")
 	}
 	next.membersOwned, next.sidecarsOwned, next.delegationsOwned, next.keysOwned, next.proposalsOwned = true, true, true, true, true
+	next.indexersOwned = true
 	// every row came from these rows, so the builder owns them all
 	for memberId := range state.members {
 		next.membersCopied[memberId] = true
@@ -332,6 +333,22 @@ func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
 			return fmt.Errorf("rows: proposals[%d]: %w", i, err)
 		}
 		state.proposals[proposalId] = &configProposal{id: proposalId, row: row, statement: statement}
+	}
+	state.indexers = make(map[configIndexerKey]*bridge.IndexerRow, len(rows.GetIndexers()))
+	for i, row := range rows.GetIndexers() {
+		sidecarId, err := IdFromBytes(row.GetSidecarId())
+		if err != nil {
+			return fmt.Errorf("rows: indexers[%d].sidecar_id", i)
+		}
+		scope := protocol.IndexerScope(row.GetScope())
+		if scope != protocol.IndexerScope_INDEXER_SCOPE_NETWORK && scope != protocol.IndexerScope_INDEXER_SCOPE_MEMBER {
+			return fmt.Errorf("rows: indexers[%d].scope %d", i, row.GetScope())
+		}
+		key := configIndexerKey{sidecarId: sidecarId, scope: scope}
+		if state.indexers[key] != nil {
+			return fmt.Errorf("rows: indexers[%d] repeats a designation", i)
+		}
+		state.indexers[key] = row
 	}
 	return nil
 }

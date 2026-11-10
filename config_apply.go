@@ -312,6 +312,7 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		delegations:  map[string]*bridge.DelegationRow{},
 		keys:         map[string]*bridge.KeyRow{},
 		proposals:    map[[sha256.Size]byte]*configProposal{},
+		indexers:     map[configIndexerKey]*bridge.IndexerRow{},
 		chains:       [][sha256.Size]byte{genesisChain},
 		chainsFrom:   0,
 		history:      self.history,
