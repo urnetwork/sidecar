@@ -94,9 +94,11 @@ func (self *MailAuthChecker) aligned(ctx context.Context, a moxdns.Domain, b mox
 // The first pass and the selection. A header section mox cannot read has no signature to select.
 func (self *MailAuthChecker) selectDkim(ctx context.Context, view *MailHeaderView, input *MailAuthInput, from moxdns.Domain, fromOk bool) *mailDkimSelection {
 	selection := &mailDkimSelection{}
-	// a resolver with no queries and nothing kept: even a policy that let one through would reach no DNS
+	// a resolver with no queries, no time and nothing kept: even a policy that let one through would reach no DNS,
+	// and the pass holds no 30 s timer beside the message's own
 	noQueries := *self.settings
 	noQueries.QueryMaxCount = 0
+	noQueries.CheckTimeout = 0
 	noBudget := NewMailAuthBudget(self.clock, &noQueries)
 	defer noBudget.Close()
 	refusing := NewMailAuthResolver(NewMailDnsStub(nil, self.clock, &noQueries), noBudget, MailAuthPriorityKeys)

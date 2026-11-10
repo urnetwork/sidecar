@@ -66,6 +66,10 @@ const (
 // a Received field's date are held to.
 const mailLastMillis = 253402300799999
 
+// The version MailDeposit, MailIngress and MailAuthEvidence hold in this format, and a reader refuses any other, 0
+// included (MAIL-FORMAT.md's Numbers).
+const mailFormatVersion = 1
+
 // A name a path family cannot hold, such as an effect key of the wrong length or an address with a slash. The error
 // never repeats the name (I-13).
 var ErrMailPathInvalid = errors.New("mail path name invalid")
