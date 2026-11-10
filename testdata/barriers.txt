@@ -114,8 +114,12 @@ barrier evs.head.cas.after evsservice/head.go
 barrier evs.head.cas.before evsservice/head.go
 barrier evs.head.read.after evsservice/head.go
 barrier evs.head.read.before evsservice/head.go
+barrier evs.lease.cas.after evsservice/push_lease.go
+barrier evs.lease.cas.before evsservice/push_lease.go
 barrier evs.log_page.put.after evsservice/logpage.go
 barrier evs.log_page.put.before evsservice/logpage.go
+barrier evs.part.append.after evsservice/push_part.go
+barrier evs.part.append.before evsservice/push_part.go
 barrier evs.place.put.after evsservice/place.go
 barrier evs.place.put.before evsservice/place.go
 barrier evs.push.arrive evsservice/push.go
@@ -129,6 +133,10 @@ barrier evs.push.step6.after evsservice/push_commit.go
 barrier evs.push.step6.before evsservice/push_commit.go
 barrier evs.push.step8.after evsservice/push_commit.go
 barrier evs.push.step8.before evsservice/push_commit.go
+barrier evs.read.entries.after evsservice/read.go
+barrier evs.read.entries.before evsservice/read.go
+barrier evs.read.head.after evsservice/read.go
+barrier evs.read.head.before evsservice/read.go
 barrier evs.repo.cas.after evsservice/repo_state.go
 barrier evs.repo.cas.before evsservice/repo_state.go
 barrier evs.repo.put.after evsservice/place.go
