@@ -498,7 +498,23 @@ func (self *EvsEngine) afterCommit(committed *EvsCommitted) {
 		}
 		self.heads.CacheCommit(ctx, committed.RepoId, committed.RefId, committed.Head, pushSequence)
 		self.folder.NoteCommit(committed.ClusterId, committed.RepoId, committed.RefId, committed.Head.Head)
+		if push := committed.Statement.Push; push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
+			self.queueEpochCopy(ctx, committed.RepoId, committed.RefId, push.GetPathEpoch())
+		}
 	}()
+}
+
+// Queues §11.6's copy of a committed PATH_EPOCH's sources into epoch (epoch_copy.go), once-keyed by repo, ref and
+// epoch. A queue that does not answer is logged: the sources stand until a copy runs, which costs reads, never
+// correctness.
+func (self *EvsEngine) queueEpochCopy(ctx context.Context, repoId sidecar.Id, refId sidecar.Id, epoch uint64) {
+	if self.host.Tasks == nil {
+		self.log.Warningf("[evs] repo %s: no task queue, so its path-epoch copy waits", sidecar.EvsKeyId(repoId))
+		return
+	}
+	if err := self.host.Tasks.Schedule(ctx, EvsEpochCopyTaskRequest(repoId, refId, epoch, self.clock.Now())); err != nil {
+		self.log.Warningf("[evs] repo %s: its path-epoch copy was not queued: %v", sidecar.EvsKeyId(repoId), err)
+	}
 }
 
 // How many commits have started step 8 and how many have finished it, with a channel that closes at the next

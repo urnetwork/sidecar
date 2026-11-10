@@ -104,6 +104,14 @@ const (
 	BarrierShredStepAfter  = "evs.shred.step.after"
 )
 
+// EVS1-M2-17: the path-epoch copy (§11.6's copy row), keyed by <repo>:<ref>.
+const (
+	// Around each entry write of a copy: a move's If-None-Match, a carried directory's If-Match, a marker's If-Match,
+	// each carrying the stale rule's deadline.
+	BarrierCopyMoveBefore = "evs.copy.move.before"
+	BarrierCopyMoveAfter  = "evs.copy.move.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

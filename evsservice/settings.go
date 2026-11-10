@@ -195,6 +195,11 @@ type EvsSettings struct {
 	CopyMoveRetryCount int
 	// The keys one LIST of a copy's walk returns, 1,000. Positive.
 	CopyListPageCount int
+	// The moves that write one copy run makes before it queues its successor, so a 1M-entry ref's copy is many runs,
+	// each within its job's time: 10,000. Non-positive: no bound.
+	CopyRunMoveCount int
+	// The log pages a copy reads looking for its PATH_EPOCH once the window paged it out, for the tail: 16. Positive.
+	CopyLogPageCount int
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -253,6 +258,8 @@ func DefaultEvsSettings() *EvsSettings {
 		CopyHeadRereadInterval:      5 * time.Second,
 		CopyMoveRetryCount:          16,
 		CopyListPageCount:           1000,
+		CopyRunMoveCount:            10 * 1000,
+		CopyLogPageCount:            16,
 	}
 }
 
@@ -313,7 +320,7 @@ func (self *EvsSettings) Validate() error {
 		return fmt.Errorf("%w: a transition's retry count, a shred's list page and its hold recheck must be positive", ErrEvsSettings)
 	}
 	if self.CopyRepoOpsPerSecond <= 0 || self.CopyRepoSourcesOpsPerSecond <= 0 || self.CopyMoveRetryCount <= 0 ||
-		self.CopyListPageCount <= 0 {
+		self.CopyListPageCount <= 0 || self.CopyLogPageCount <= 0 {
 		return fmt.Errorf("%w: a copy's rates, retry count and list page must be positive", ErrEvsSettings)
 	}
 	if self.CopyHeadRereadInterval <= 0 || evsCopyMaxHeadRereadInterval < self.CopyHeadRereadInterval {

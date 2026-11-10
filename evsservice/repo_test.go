@@ -539,6 +539,9 @@ func TestRepoShredResumesAfterAKillAtEachStep(t *testing.T) {
 		if families := fixture.repoFamilies(repoId); len(families) != 0 {
 			t.Errorf("step %d: %v stand after the retry (first run %v)", i, families, firstErr)
 		}
+		if unfired := fixture.host.Blobs.Faults().Unfired(); len(unfired) != 0 {
+			t.Errorf("step %d's fault never fired: %v", i, unfired)
+		}
 		if final && fixture.repoObject(repoId).GetState() != protocol.EvsRepoState_EVS_REPO_SHREDDED {
 			t.Errorf("step %d: repo/ %v", i, fixture.repoObject(repoId))
 		}
