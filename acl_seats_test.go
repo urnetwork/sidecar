@@ -198,13 +198,21 @@ func TestAclDataSeatsAgentsTakeNoSeat(t *testing.T) {
 }
 
 // The config group and a team directory's seat by §7.9's leaves rule, so AclDataSeats has no plan for them, nor for a
-// repo the rows do not hold (owner decision 182).
+// repo the rows do not hold, nor for a deleted one, whose leaves no plan removes while its readers may return
+// (owner decision 182, §10.8).
 func TestAclDataSeatsRefusesTheConfigAndADirectory(t *testing.T) {
 	seats := newAclSeatsFixture(1)
 	configId, _ := seats.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
 	directoryId, _ := seats.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
+	deletedId, deleted := seats.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	deleted.Deletion = &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: seats.next()}
+	restoredId, restored := seats.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	restored.Deletion = &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: seats.next(), RestoredAt: seats.next()}
 	state := seats.state(t)
-	for _, repoId := range []Id{configId, directoryId, NewId()} {
+	if _, err := AclDataSeats(state, restoredId, seats.devices, nil, aclTestNow); err != nil {
+		t.Errorf("a restored repo: %v", err)
+	}
+	for _, repoId := range []Id{configId, directoryId, deletedId, NewId()} {
 		if _, err := AclDataSeats(state, repoId, nil, aclTestSet(seats.devices...), aclTestNow); !errors.Is(err, ErrAclNoDataSeats) {
 			t.Errorf("%s: %v", repoId, err)
 		}

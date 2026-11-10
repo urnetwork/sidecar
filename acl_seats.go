@@ -66,15 +66,8 @@ type AclUnseatedRepo struct {
 	SidecarIds []Id
 }
 
-// Orders sidecars earliest-admitted first: by admitted_at, then by id.
-func aclSeatOrder(a *aclSidecarState, b *aclSidecarState) int {
-	if c := cmp.Compare(a.facts.Row.GetAdmittedAt(), b.facts.Row.GetAdmittedAt()); c != 0 {
-		return c
-	}
-	return a.id.Cmp(b.id)
-}
-
-// The member devices of the state that pass a data repo's leaf check at nowMs, earliest-admitted first.
+// The member devices of the state that pass a data repo's leaf check at nowMs, earliest-admitted first: by
+// admitted_at, then by id.
 func (self *AclState) seatReaders(repoId Id, nowMs int64) []*aclSidecarState {
 	readers := []*aclSidecarState{}
 	for i := range self.sidecars {
@@ -86,33 +79,33 @@ func (self *AclState) seatReaders(repoId Id, nowMs int64) []*aclSidecarState {
 			readers = append(readers, sidecar)
 		}
 	}
-	slices.SortFunc(readers, aclSeatOrder)
+	slices.SortFunc(readers, func(a *aclSidecarState, b *aclSidecarState) int {
+		if c := cmp.Compare(a.facts.Row.GetAdmittedAt(), b.facts.Row.GetAdmittedAt()); c != 0 {
+			return c
+		}
+		return a.id.Cmp(b.id)
+	})
 	return readers
-}
-
-// The data repo's index, or ErrAclNoDataSeats.
-func (self *AclState) dataSeatRepo(repoId Id) (*aclRepoState, error) {
-	repo := self.repos[repoId]
-	if repo == nil {
-		return nil, fmt.Errorf("%w: the rows hold no repo %s", ErrAclNoDataSeats, repoId)
-	}
-	if aclRepoKindLeafRanked(repo.kind) {
-		return nil, fmt.Errorf("%w: %s's group seats by §7.9's leaves rule", ErrAclNoDataSeats, repo.kind)
-	}
-	return repo, nil
 }
 
 // §8.12's data seats of one repo's group at this state and now: which leaves keep their seats and which are due a
 // Remove, and which waiting member devices take the free seats, earliest-admitted first among those with a KeyPackage.
 // leaves are the sidecars the group's tree holds, from the committer's MLS state; keyPackageSidecarIds the member
 // devices gkm lists a KeyPackage for. ErrAclNoDataSeats for a repo the rows do not hold, the config and a team's
-// directory.
+// directory, and a deleted repo, whose group no seat moves in until a RepoRestore, so a committer never removes every
+// leaf of a repo its readers return to (§10.8).
 func AclDataSeats(state *AclState, repoId Id, leaves []Id, keyPackageSidecarIds map[Id]bool, now time.Time) (*AclDataSeatPlan, error) {
 	if state == nil {
 		return nil, fmt.Errorf("%w: no state", ErrAclNoDataSeats)
 	}
-	if _, err := state.dataSeatRepo(repoId); err != nil {
-		return nil, err
+	repo := state.repos[repoId]
+	switch {
+	case repo == nil:
+		return nil, fmt.Errorf("%w: the rows hold no repo %s", ErrAclNoDataSeats, repoId)
+	case aclRepoKindLeafRanked(repo.kind):
+		return nil, fmt.Errorf("%w: %s's group seats by §7.9's leaves rule", ErrAclNoDataSeats, repo.kind)
+	case repo.deleted:
+		return nil, fmt.Errorf("%w: repo %s is deleted", ErrAclNoDataSeats, repoId)
 	}
 	nowMs := now.UnixMilli()
 	plan := &AclDataSeatPlan{Seated: []Id{}, Removes: []AclNonReader{}, Adds: []Id{}, Waiting: []Id{}}

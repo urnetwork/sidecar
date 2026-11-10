@@ -84,13 +84,6 @@ func aclRepoKindLeafRanked(kind protocol.RepoKind) bool {
 	return kind == protocol.RepoKind_REPO_KIND_CONFIG || kind == protocol.RepoKind_REPO_KIND_DIRECTORY
 }
 
-// Whether the state's view entitles the device to a config or directory leaf, false for a view that does not answer
-// the leaves rule.
-func (self *AclState) leafEntitled(sidecarId Id) bool {
-	leafView, ranks := self.view.(AclLeafRankView)
-	return ranks && leafView.LeafEntitled(sidecarId)
-}
-
 // §10.9's Add and delivery check on the sidecar a commit or a ReaderWrap adds, at this state, which must be the
 // state at the commit's or delivery's own auth pin, never the tip, and at its time: allowed with what lets it read
 // (a kind default, a rule, a repo admin, a RepoGrant or EvsShare with its position, or the audit block), else the
@@ -163,8 +156,12 @@ func (self *AclState) repoMemberDecision(sidecar *aclSidecarState, repoId Id, fo
 		if sidecar.class != AclSubjectClassMemberDevice {
 			return aclDeny(AclReasonNotMemberDevice)
 		}
-		if aclRepoKindLeafRanked(self.repos[repoId].kind) && !self.leafEntitled(sidecar.id) {
-			return aclDeny(AclReasonNotLeafEntitled)
+		if aclRepoKindLeafRanked(self.repos[repoId].kind) {
+			// a view that does not answer the leaves rule entitles no one
+			leafView, ranks := self.view.(AclLeafRankView)
+			if !ranks || !leafView.LeafEntitled(sidecar.id) {
+				return aclDeny(AclReasonNotLeafEntitled)
+			}
 		}
 	}
 	return access.AclDecision
