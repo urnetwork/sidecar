@@ -5,10 +5,12 @@
 #
 #   run-gkm.sh <track> [all | design | twins | <Config>...]
 #
-# Gkm-Wide, one entry deeper and one generation more than Gkm, runs by TLC's random simulation rather than
-# breadth-first search: 200,000 traces of up to 12 steps from seed 1, which shows those behaviors kept every
-# invariant and no more. Gkm-Live checks the liveness property Live under LiveSpec's fairness. TLC_FLAGS adds
-# flags to any run.
+# Disk: the shared disk holds four lanes' builds, so a run is bounded on disk as well as in states. Gkm and
+# Gkm-Live run breadth-first at bounds whose complete graphs finish; Gkm-Wide and Gkm-Deep run by TLC's random
+# simulation (a fixed number of traces of a fixed depth from a fixed seed), which keeps no state set on disk and
+# shows only that the behaviors it drew kept every invariant. Whatever the mode, a run whose state directory
+# passes TLC_DISK_CAP_MB (8,192 MB) is stopped and reported as FAIL (bounded), and every run's state directory
+# is deleted when it ends. TLC_FLAGS adds flags to any run.
 #
 # exit: 0 every run did what it must; 1 one did not; 64 usage
 set -uo pipefail
@@ -17,22 +19,62 @@ ROOT=/Users/builder/urnetwork-sidecar
 [ $# -ge 1 ] || { echo "usage: run-gkm.sh <track> [all | design | twins | <Config>...]" >&2; exit 64; }
 track=$1
 shift
-designs="Gkm Gkm-Wide Gkm-Live"
+cap=${TLC_DISK_CAP_MB:-8192}
+designs="Gkm Gkm-Epochs Gkm-Live Gkm-Wide Gkm-Deep"
 twins="GkmTwin-PointerByRef GkmTwin-FormsUnchecked GkmTwin-GenWrapIgnoresRoster GkmTwin-SelfJoinCarriesGenWrap GkmTwin-LateBelowClaimPin GkmTwin-ClaimBelowParent GkmTwin-LeafWrapDirtyTree GkmTwin-NoGate"
 case "${1:-all}" in
   all) set -- $designs $twins ;;
   design) set -- $designs ;;
   twins) set -- $twins ;;
 esac
+metadirs() { ls -d "$ROOT/.stack/scratch/$track.tlc."* 2>/dev/null; }
+runner=
+# a stopped script stops its TLC and deletes the run's state directory, so a timeout never leaves a run going
+stop() {
+  if [ -n "$runner" ]; then
+    for pid in $(pgrep -P "$runner"); do kill -TERM "$pid" 2>/dev/null; done
+    kill -TERM "$runner" 2>/dev/null
+    sleep 2
+    for pid in $(pgrep -P "$runner"); do kill -KILL "$pid" 2>/dev/null; done
+  fi
+  for dir in $(metadirs); do
+    case " ${before:-} " in *" $dir "*) continue ;; esac
+    rm -rf "$dir"
+  done
+}
+trap 'stop; exit 1' TERM INT
 failed=0
 for config in "$@"; do
   out=$(mktemp "${TMPDIR:-/tmp}/gkm.XXXXXX")
   flags=${TLC_FLAGS:-}
-  if [ "$config" = Gkm-Wide ] && [ -z "$flags" ]; then
-    flags="-simulate num=200000 -depth 12 -seed 1"
-  fi
-  (cd "$here" && "$ROOT/.stack/tools/tlc" "$track" -config "$config.cfg" -workers "${TLC_WORKERS:-auto}" $flags Gkm.tla) > "$out" 2>&1
+  case $config in
+    Gkm-Wide) [ -n "$flags" ] || flags="-simulate num=200000 -depth 12 -seed 1" ;;
+    Gkm-Deep) [ -n "$flags" ] || flags="-simulate num=100000 -depth 16 -seed 2" ;;
+  esac
+  before=$(metadirs)
+  (cd "$here" && exec "$ROOT/.stack/tools/tlc" "$track" -config "$config.cfg" -workers "${TLC_WORKERS:-auto}" $flags Gkm.tla) > "$out" 2>&1 &
+  runner=$!
+  bounded=0
+  while kill -0 "$runner" 2>/dev/null; do
+    sleep 15
+    for dir in $(metadirs); do
+      case " $before " in *" $dir "*) continue ;; esac
+      used=$(du -sm "$dir" 2>/dev/null | cut -f1)
+      if [ "${used:-0}" -gt "$cap" ]; then
+        bounded=1
+        for pid in $(pgrep -P "$runner"); do kill -TERM "$pid" 2>/dev/null; done
+        kill -TERM "$runner" 2>/dev/null
+        sleep 3
+        for pid in $(pgrep -P "$runner"); do kill -KILL "$pid" 2>/dev/null; done
+      fi
+    done
+  done
+  wait "$runner"
   code=$?
+  for dir in $(metadirs); do
+    case " $before " in *" $dir "*) continue ;; esac
+    rm -rf "$dir"
+  done
   rev=$(sed -n 's/.*(rev: \([0-9a-f]*\)).*/\1/p' "$out" | head -1)
   violated=$(sed -n 's/^Error: Invariant \(.*\) is violated.*/\1/p' "$out" | head -1)
   distinct=$(sed -n 's/.* \([0-9,]*\) distinct states found.*/\1/p' "$out" | tail -1)
@@ -46,22 +88,26 @@ for config in "$@"; do
   else
     facts="tlc $rev, exit $code, ${distinct:-?} distinct states, depth ${depth:-?}, ${took:-?}"
   fi
-  case $config in
-    GkmTwin-*)
-      if [ "$code" -ne 0 ] && [ "$violated" = "$expect" ]; then
-        echo "== PASS $config: $expect violated as it must, a trace of $trace states, $facts"
-      else
-        echo "== FAIL $config: expected $expect violated, got ${violated:-no violation}, $facts"; failed=1
-        grep -v '^Parsing\|^Semantic' "$out" | tail -40
-      fi ;;
-    *)
-      if [ "$code" -eq 0 ]; then
-        echo "== PASS $config: $facts"
-      else
-        echo "== FAIL $config: ${violated:-error}, $facts"; failed=1
-        grep -v '^Parsing\|^Semantic' "$out" | tail -60
-      fi ;;
-  esac
+  if [ "$bounded" -eq 1 ]; then
+    echo "== FAIL $config: stopped at the $cap MB disk cap, $facts"; failed=1
+  else
+    case $config in
+      GkmTwin-*)
+        if [ "$code" -ne 0 ] && [ "$violated" = "$expect" ]; then
+          echo "== PASS $config: $expect violated as it must, a trace of $trace states, $facts"
+        else
+          echo "== FAIL $config: expected $expect violated, got ${violated:-no violation}, $facts"; failed=1
+          grep -v '^Parsing\|^Semantic' "$out" | tail -40
+        fi ;;
+      *)
+        if [ "$code" -eq 0 ]; then
+          echo "== PASS $config: $facts"
+        else
+          echo "== FAIL $config: ${violated:-error}, $facts"; failed=1
+          grep -v '^Parsing\|^Semantic' "$out" | tail -60
+        fi ;;
+    esac
+  fi
   rm -f "$out"
 done
 exit $failed

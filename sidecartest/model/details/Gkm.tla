@@ -162,7 +162,7 @@ Enter(k, s) ==
     /\ UNCHANGED <<tip, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB>>
 
 Advance(s) ==
-    /\ tip[s] < Clock
+    /\ tip[s] < Clock /\ (s \in Admitted(Clock) \/ s \in Tree)
     /\ Match([a |-> "Advance", s |-> s])
     /\ tip' = [tip EXCEPT ![s] = @ + 1]
     /\ Step
@@ -416,13 +416,20 @@ LiveSpec == Spec /\ Fairness
 (***************************************************************************)
 (* Invariants (6.3).                                                        *)
 (***************************************************************************)
-\* no party outside a generation's holders opens it or anything after it
+\* a party is entitled to generation g if it was a holder at g's claim or was admitted after it, since a
+\* joiner takes the whole history down the ladder (§10.5)
+Entitled(s, g) ==
+    \/ s \in gens[g].holders
+    \/ s = Recovered    \* the member's recovery binding is a holder of every generation (D-KEYS-9)
+    \/ \E i \in 1..Clock : i > gens[g].auth /\ log[i].k \in {"admit", "radmit"} /\ log[i].s = s
+
+\* no party outside a generation's entitlement opens it or anything after it
 RemovedReadsNothingNew ==
-    \A g \in 1..G : \A s \in Sidecars \ {Recovered} : s \notin gens[g].holders => Reach(s) < g
+    \A g \in 1..G : \A s \in Sidecars : ~Entitled(s, g) => Reach(s) < g
 
 \* no content sealed at a state is readable by a party dropped at that state
 NoContentToDropped ==
-    \A w \in sealed : \A s \in Sidecars \ {Recovered} : Dropped(s, w.n, w.n) => Reach(s) < w.g
+    \A w \in sealed : \A s \in Sidecars : Dropped(s, w.n, w.n) => Reach(s) < w.g
 
 \* every tree lies within the holders at its commit's pin, but a generation-0 self-join's
 RosterWithinHolders ==
