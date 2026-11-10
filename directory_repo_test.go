@@ -442,6 +442,16 @@ func TestDirectoryAnnounceNewRepoDefaults(t *testing.T) {
 	if testRepoItemShown(t, reader, vault) != nil {
 		t.Error("a vault announced by default")
 	}
+	// what a run's where reads: a live, non-private item names the repo, a marker keeps it private, none says nothing
+	if item, ok := reader.client.RepoItem(general); !ok || item.Display != sidecar.DirectoryItemActive {
+		t.Errorf("RepoItem of an announced repo: %v", ok)
+	}
+	if item, ok := reader.client.RepoItem(private); !ok || item.Display != sidecar.DirectoryItemPrivate {
+		t.Errorf("RepoItem of a private repo: %v", ok)
+	}
+	if _, ok := reader.client.RepoItem(vault); ok {
+		t.Error("RepoItem of a repo with no item")
+	}
 	if len(reader.alarmReasons()) != 0 {
 		t.Errorf("alarms %v", reader.alarmReasons())
 	}

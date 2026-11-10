@@ -252,3 +252,41 @@ func TestDirectoryPhoneFetchOrderIgnoresTheFilter(t *testing.T) {
 		t.Error("the first read is not the newest stream")
 	}
 }
+
+// A view left open refreshes: once it holds everything, a Fetch lists only the streams moved since its last listing and
+// reads what they added, so a new announcement shows, nothing is read again, and each sidecar is named fetched once.
+func TestDirectoryPhoneOpenViewRefreshes(t *testing.T) {
+	world, writers := newTestPhoneWorld(t, 3, 2)
+	phone, _ := world.phone()
+	view, err := phone.client.View(&sidecar.DirectoryViewArgs{Metered: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if page := view.List(nil); !page.Coverage.Complete || len(page.Items) != 3 {
+		t.Fatalf("complete %v, %d items", page.Coverage.Complete, len(page.Items))
+	}
+	before := world.cards.Counts()
+	memberId := world.directoryFixture.Sidecars[writers[1].sidecarId].MemberId
+	writers[1].announce(testRunItem(writers[1].sidecarId, memberId, sidecar.NewId(), 1, world.clock.Now().UnixMilli()))
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page := view.List(nil)
+	after := world.cards.Counts()
+	if after.MovedListings != before.MovedListings+1 || after.FullListings != before.FullListings || after.StreamsNamed != before.StreamsNamed+1 {
+		t.Errorf("a refresh: %+v, then %+v", before, after)
+	}
+	if !page.Coverage.Complete || len(page.Items) != 4 || len(page.Coverage.FetchedSidecarIds) != 3 {
+		t.Errorf("after a refresh: complete %v, %d items, %d sidecars fetched", page.Coverage.Complete, len(page.Items), len(page.Coverage.FetchedSidecarIds))
+	}
+	// with nothing moved, a Fetch lists and reads nothing more
+	if err := view.Fetch(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if again := world.cards.Counts(); again.StreamReads != after.StreamReads {
+		t.Errorf("an idle refresh read %d streams", again.StreamReads-after.StreamReads)
+	}
+}

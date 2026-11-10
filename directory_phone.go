@@ -17,6 +17,8 @@
 //	continue   on an unmetered link (SetMetered(false)) or once the person allows the metered bytes (AllowMetered),
 //	           Fetch goes on from where it stopped; a stream read in part resumes at its next version, so nothing is
 //	           read twice
+//	refresh    while the view stays open, a Fetch with nothing left lists the streams moved since its last listing
+//	           (moved_after) and reads what they added, in the same order
 //	never      a partial view is never shown as complete or as empty: its coverage says what is left; a phone stays off
 //	           the follow, leasing nothing, and keeps no directory buckets (D-MCP-31, D-SDK-21)
 //
@@ -102,6 +104,8 @@ type DirectoryView struct {
 	allowMetered bool
 	listed       bool
 	erasureMoved bool
+	// the push sequence the last listing ended at: the next one's moved_after
+	sequence uint64
 	// what is left, in fetch order, and the writers fetched whole
 	queue      []*directoryViewStream
 	fetchedIds []Id
@@ -184,10 +188,19 @@ func (self *DirectoryView) versionByteCountWithLock() int64 {
 	return max(1, self.fetchedByteCount/self.fetchedVersionCount)
 }
 
-// Lists the directory's streams once, in fetch order: newest first by the push sequence their last commit raised, then
-// by writer id. Nothing of a filter or query reaches this.
+// Lists the directory's streams that hold more than the view does, in fetch order: newest first by the push sequence
+// their last commit raised, then by writer id. The first listing names every ref, a later one those moved since the
+// last. Nothing of a filter or query reaches this.
 func (self *DirectoryView) list(ctx context.Context, cards DirectoryCards) error {
-	listing, err := cards.Refs(ctx, self.directoryId, 0)
+	movedAfter := func() uint64 {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if !self.listed {
+			return 0
+		}
+		return self.sequence
+	}()
+	listing, err := cards.Refs(ctx, self.directoryId, movedAfter)
 	if err != nil {
 		return err
 	}
@@ -195,16 +208,18 @@ func (self *DirectoryView) list(ctx context.Context, cards DirectoryCards) error
 		stream   *directoryViewStream
 		sequence uint64
 	}
+	heldVersions := self.store.State().StreamVersions
 	streams := []*listed{}
 	erasureMoved := false
 	for _, ref := range listing.Refs {
 		switch ref.Kind {
 		case DirectoryRefStream:
-			if 0 < ref.Version {
-				streams = append(streams, &listed{stream: &directoryViewStream{writerId: ref.WriterSidecarId, headVersion: ref.Version}, sequence: ref.Sequence})
+			if held := heldVersions[ref.WriterSidecarId]; held < ref.Version {
+				stream := &directoryViewStream{writerId: ref.WriterSidecarId, pinVersion: held, headVersion: ref.Version}
+				streams = append(streams, &listed{stream: stream, sequence: ref.Sequence})
 			}
 		case DirectoryRefErasure:
-			erasureMoved = 0 < ref.Version
+			erasureMoved = erasureMoved || 0 < ref.Version
 		}
 	}
 	slices.SortFunc(streams, func(a *listed, b *listed) int {
@@ -215,7 +230,8 @@ func (self *DirectoryView) list(ctx context.Context, cards DirectoryCards) error
 	for _, stream := range streams {
 		self.queue = append(self.queue, stream.stream)
 	}
-	self.erasureMoved = erasureMoved
+	self.erasureMoved = self.erasureMoved || erasureMoved
+	self.sequence = listing.Sequence
 	self.listed = true
 	return nil
 }
@@ -298,22 +314,22 @@ func (self *DirectoryView) keep(stream *directoryViewStream, result *DirectorySt
 }
 
 // Fetches what the view has left, in its order, until every stream is read to the head it listed or the metered cap
-// holds it; then verifies what it holds and folds it. A view whose cap held it fetches nothing more until SetMetered
-// or AllowMetered lets it.
+// holds it; then verifies what it holds and folds it. With nothing left it lists what moved since its last listing
+// first. A view whose cap held it fetches nothing more until SetMetered or AllowMetered lets it.
 func (self *DirectoryView) Fetch(ctx context.Context) error {
 	self.fetchLock.Lock()
 	defer self.fetchLock.Unlock()
-	listed, closed := func() (bool, bool) {
+	listing, closed := func() (bool, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.waiting = ""
-		return self.listed, self.closed
+		return !self.listed || len(self.queue) == 0, self.closed
 	}()
 	if closed {
 		return ErrDirectoryViewClosed
 	}
 	cards := self.client.boundCards()
-	if !listed {
+	if listing {
 		if err := self.list(ctx, cards); err != nil {
 			return err
 		}
@@ -363,10 +379,10 @@ func (self *DirectoryView) Fetch(ctx context.Context) error {
 			defer self.stateLock.Unlock()
 			queue := []*directoryViewStream{}
 			for _, stream := range self.queue {
-				if stream.headVersion <= stream.pinVersion {
-					self.fetchedIds = append(self.fetchedIds, stream.writerId)
-				} else {
+				if stream.pinVersion < stream.headVersion {
 					queue = append(queue, stream)
+				} else if !slices.Contains(self.fetchedIds, stream.writerId) {
+					self.fetchedIds = append(self.fetchedIds, stream.writerId)
 				}
 			}
 			self.queue = queue

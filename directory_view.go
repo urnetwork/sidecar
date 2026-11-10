@@ -176,6 +176,16 @@ func (self *DirectoryClient) Get(announcementId Id, writerSidecarId *Id) (*Direc
 	return directoryGetItem(items, announcementId, writerSidecarId)
 }
 
+// The item that stands for repoId now, its private marker included; false while none does. What a run's where names
+// (RECORD-M6-16): the repo's name and branch only while it holds a live, non-private item, else private.
+func (self *DirectoryClient) RepoItem(repoId Id) (*DirectoryItem, bool) {
+	item, err := self.Get(DirectoryRepoAnnouncementId(repoId), nil)
+	if err != nil {
+		return nil, false
+	}
+	return item, true
+}
+
 // Get's choice among items.
 func directoryGetItem(items []*DirectoryItem, announcementId Id, writerSidecarId *Id) (*DirectoryItem, error) {
 	found := []*DirectoryItem{}
