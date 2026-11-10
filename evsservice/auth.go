@@ -50,6 +50,23 @@ type EvsRepoFacts struct {
 	// The network whose authorization log filed its RepoCreate (plan-EVSB-repo-network): repo/'s network_id,
 	// which the creating token's network must equal.
 	NetworkId sidecar.Id
+	// The repo's newest RepoDelete (§8.8's AclRepo deletion row), nil when the log holds none: what DELETE and
+	// restore require and take (§11.12's log first row), and what the reconciler applies.
+	Deletion *EvsRepoDeletionFacts
+}
+
+// A repo's newest RepoDelete as the projection holds it, with its entry's time and signer, which the row's position
+// names (AclRepoDeletionRow.deleted_at).
+type EvsRepoDeletionFacts struct {
+	DeletionId sidecar.Id
+	// RepoDelete{now}: straight to shredding, never restorable.
+	Now bool
+	// The RepoDelete entry's time: repo/'s state_ms while deleted, and what the 7-day start counts from.
+	Time time.Time
+	// The entry's signer: repo/'s state_signer while deleted.
+	SignerSidecarId sidecar.Id
+	// A RepoRestore of DeletionId is projected, which api takes only within 7 d (§8.8).
+	Restored bool
 }
 
 // The newest verified authorization state evs holds (§7.9, §8.9), per network. ACL-M2-14 implements it over

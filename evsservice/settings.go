@@ -40,6 +40,10 @@ const evsPushMaxStepSevenWindow = 5 * time.Second
 // clocks' 50 ms bound needs, so a setting may widen it and never narrow it.
 const evsPushMinFenceMargin = 100 * time.Millisecond
 
+// §11.6's copy row: a copy rereads its head at least every 5 s (§11.7's stale rule), so a setting may shorten it and
+// never stretch it.
+const evsCopyMaxHeadRereadInterval = 5 * time.Second
+
 // The engine's settings. Every field is read where it is used, from one instance.
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
@@ -169,6 +173,28 @@ type EvsSettings struct {
 	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
 	// keeps none.
 	GenerationCacheCount int
+
+	// §11.12's lifecycle: how many times a transition reads repo/ from the cluster again after another write came
+	// first or an answer was lost, before a route answers 429 BUSY or a job fails to be retried, 8. Positive.
+	RepoTransitionRetryCount int
+	// The keys one LIST of a shred's delete pass or a reconciliation's walk returns, 1,000. Positive.
+	ShredListPageCount int
+	// How long a shred a preservation hold stopped at its step 4 waits before it reads the holds again, when no
+	// hold covering the repo names an end: 24 h. Positive.
+	ShredHoldRecheckInterval time.Duration
+
+	// §11.6's copy row (EVS1-M2-17): a path-epoch copy's operations a second on one repo, 50, and while two or more
+	// sources stand, 150; the cluster's share comes from the write budget (WriteBudget.CopyOpsPerSecond). Positive.
+	CopyRepoOpsPerSecond        int
+	CopyRepoSourcesOpsPerSecond int
+	// §11.6's copy row: a copy rereads its ref's head at least this often, 5 s, the stale rule's bound on what its
+	// writes rely on. At most 5 s; positive.
+	CopyHeadRereadInterval time.Duration
+	// How many times one move reads its entry again after a 412 or an unknown outcome before the job gives the run
+	// up to its retry, 16. Positive.
+	CopyMoveRetryCount int
+	// The keys one LIST of a copy's walk returns, 1,000. Positive.
+	CopyListPageCount int
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -217,6 +243,16 @@ func DefaultEvsSettings() *EvsSettings {
 		PushAttemptTimeout:        25 * time.Second,
 		PushBodyMaxByteCount:      2 * 1024 * 1024,
 		GenerationCacheCount:      100 * 1000,
+
+		RepoTransitionRetryCount: 8,
+		ShredListPageCount:       1000,
+		ShredHoldRecheckInterval: 24 * time.Hour,
+
+		CopyRepoOpsPerSecond:        50,
+		CopyRepoSourcesOpsPerSecond: 150,
+		CopyHeadRereadInterval:      5 * time.Second,
+		CopyMoveRetryCount:          16,
+		CopyListPageCount:           1000,
 	}
 }
 
@@ -272,6 +308,16 @@ func (self *EvsSettings) Validate() error {
 		self.PushUnknownRereadCount <= 0 || self.PushUnknownRereadInterval < 0 || self.RefusalFenceInterval <= 0 ||
 		self.PushAttemptTimeout <= 0 || self.PushBodyMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
+	}
+	if self.RepoTransitionRetryCount <= 0 || self.ShredListPageCount <= 0 || self.ShredHoldRecheckInterval <= 0 {
+		return fmt.Errorf("%w: a transition's retry count, a shred's list page and its hold recheck must be positive", ErrEvsSettings)
+	}
+	if self.CopyRepoOpsPerSecond <= 0 || self.CopyRepoSourcesOpsPerSecond <= 0 || self.CopyMoveRetryCount <= 0 ||
+		self.CopyListPageCount <= 0 {
+		return fmt.Errorf("%w: a copy's rates, retry count and list page must be positive", ErrEvsSettings)
+	}
+	if self.CopyHeadRereadInterval <= 0 || evsCopyMaxHeadRereadInterval < self.CopyHeadRereadInterval {
+		return fmt.Errorf("%w: a copy's head reread %s, outside (0, %s]", ErrEvsSettings, self.CopyHeadRereadInterval, evsCopyMaxHeadRereadInterval)
 	}
 	return nil
 }

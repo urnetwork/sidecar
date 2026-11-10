@@ -14,8 +14,9 @@
 //     network (plan-EVSB-repo-network). A 412 whose repo/ is this repo, network, kind and owner is a retry, and
 //     answers 200 as the first did; any other is a fault that alarms.
 //
-// Both writes are P1 for the creating network (plan-EVSB-write-classes). EVS1-M2-19 builds the rest of the route's
-// family on this: GET and DELETE, the kinds' own rules, activate and the lifecycle.
+// Both writes are P1 for the creating network (plan-EVSB-write-classes). The projection's kind must be one of §11.12's
+// nine, with an owner exactly for vault, mailbox and secret, else 400 INVALID with an alarm. The rest of the route's
+// family, GET, DELETE, restore and activate, is repo.go's.
 
 package evsservice
 
@@ -64,6 +65,13 @@ func (self *EvsEngine) servePutRepo(request *EvsRequest) {
 	}
 	if facts.NetworkId != networkIdOf(request.Principal) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+		return
+	}
+	if !sidecar.EvsRepoKindKnown(facts.Kind) || sidecar.EvsRepoKindOwnerBound(facts.Kind) != (facts.OwnerMemberId != sidecar.Id{}) {
+		// §11.12's kinds table: a kind this build does not know, or an owner exactly for the owner-bound kinds, is a
+		// projection this build cannot keep, never a repo it creates
+		self.alarm("repo_kind", "repo %s: the projection holds kind %d with owner %t", sidecar.EvsKeyId(request.RepoId), facts.Kind, facts.OwnerMemberId != sidecar.Id{})
+		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
 	place, ok := self.placeRepo(request)
@@ -175,7 +183,7 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 		Kind:      facts.Kind,
 		State:     protocol.EvsRepoState_EVS_REPO_KEYING,
 		StateMs:   request.Now().UnixMilli(),
-		Format:    evsRepoFormat1,
+		Format:    sidecar.EvsRepoFormat1,
 		NetworkId: facts.NetworkId.Bytes(),
 	}
 	if facts.OwnerMemberId != (sidecar.Id{}) {
@@ -196,7 +204,7 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 	sameRepo := func() (same bool, found bool, err error) {
 		read, err := self.repos.ReadFresh(request.Ctx, cluster, repoId)
 		switch {
-		case errors.Is(err, ErrEvsRepoNotFound):
+		case errors.Is(err, sidecar.ErrEvsRepoNotFound):
 			return false, false, nil
 		case err != nil:
 			return false, false, err
@@ -209,7 +217,7 @@ func (self *EvsEngine) createRepoObject(request *EvsRequest, cluster sidecar.Blo
 	settle := func() bool {
 		same, found, err := sameRepo()
 		switch {
-		case err != nil && errors.Is(err, ErrEvsRepoInvalid):
+		case err != nil && errors.Is(err, sidecar.ErrEvsRepoInvalid):
 			self.alarm("repo_invalid", "repo %s: repo/ breaks its shape", sidecar.EvsKeyId(repoId))
 		case err != nil:
 		case same:
