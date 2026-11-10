@@ -736,6 +736,7 @@ func TestEvsEngineRoutesAreTheRoutersTableWithNoHandler(t *testing.T) {
 	want := []string{
 		"PUT /evs/v1/repos/{repo_id}",
 		"PUT /evs/v1/repos/{repo_id}/segments/{segment_id}",
+		"POST /evs/v1/repos/{repo_id}/push",
 		"GET /evs/v1/repos/{repo_id}/probe",
 	}
 	if !slices.Equal(names, want) {

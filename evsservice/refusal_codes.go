@@ -118,6 +118,8 @@ const (
 	EvsCheckReasonSegmentUnknown
 	// 5h: a slot a new version names that is neither this push's nor named by a version step 4 read.
 	EvsCheckReasonSlotUnknown
+	// Step 6: a new slot that exists past 23 h, or holds another push's bytes (§11.8 step 6).
+	EvsCheckReasonSlotStale
 
 	// A rule another task owns and has not supplied (PushView's seams), or a read step 4 did not give: refused 503,
 	// so nothing commits unchecked and nothing is settled against the push.
@@ -174,6 +176,7 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonSegmentGone:    {name: "segment_gone", code: protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_GONE, fate: EvsRefusalRecorded},
 	EvsCheckReasonSegmentUnknown: {name: "segment_unknown", code: protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_GONE, fate: EvsRefusalRecorded},
 	EvsCheckReasonSlotUnknown:    {name: "slot_unknown", code: protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_UNKNOWN, fate: EvsRefusalRecorded},
+	EvsCheckReasonSlotStale:      {name: "slot_stale", code: protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE, fate: EvsRefusalRecorded},
 
 	EvsCheckReasonUnchecked: {name: "unchecked", code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, fate: EvsRefusalNothing},
 }

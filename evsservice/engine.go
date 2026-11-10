@@ -92,8 +92,14 @@ type EvsEngineDeps struct {
 	// Lifecycle, alarms and, when ServiceLog is nil, the service log. nil discards.
 	Log sidecar.Logger
 	// The segment route's keys, storage gate, HDD share and usage producer (upload_segment.go). nil answers every
-	// upload 503.
+	// upload 503, and every push too, since 5c's storage limit, 5h's receipts and step 8's usage read them.
 	Uploads *EvsUploadDeps
+	// The newest verified authorization state of each network (push.go): 5b's identity keys and 5d's gate. nil
+	// answers every push 503.
+	GateViews EvsGateViews
+	// Step 8's push sequence and hints (EVS1-M2-15). nil raises no sequence and sends no hint, which clients'
+	// hourly resync covers.
+	CommitNotifier EvsCommitNotifier
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
@@ -119,7 +125,11 @@ type EvsEngine struct {
 	records    *RecordCache
 	overlays   *OverlayChains
 	folder     *Folder
-	metrics    *evsMetrics
+	// gen/<g> records, which 5d judges a push's generation pin by
+	generations *GenerationRecords
+	// records and log pages past their batches, through pidx/
+	locator *RecordLocator
+	metrics *evsMetrics
 	handler    http.Handler
 	// what the router took at the start, in its order
 	servedRoutes []*EvsRoute
@@ -130,6 +140,9 @@ type EvsEngine struct {
 	probeCount *sidecar.MonitorValue[int]
 	// requests in flight, for Drain
 	inFlightCount *sidecar.MonitorValue[int]
+	// commits whose step 8 has started, and those whose step 8 has finished
+	stepEightCount     *sidecar.MonitorValue[int]
+	stepEightDoneCount *sidecar.MonitorValue[int]
 	draining      chan struct{}
 	drainingOnce  sync.Once
 }
@@ -187,12 +200,17 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 		probeCount:      sidecar.NewMonitorValue(0),
 		inFlightCount:   sidecar.NewMonitorValue(0),
 		draining:        make(chan struct{}),
+
+		stepEightCount:     sidecar.NewMonitorValue(0),
+		stepEightDoneCount: sidecar.NewMonitorValue(0),
 	}
 	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, blobs, self.records, settings, log)
 	self.overlays = NewOverlayChains(self.heads, settings)
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
+	self.generations = NewGenerationRecords(settings)
+	self.locator = NewRecordLocator(blobs, nil)
 	mux := http.NewServeMux()
 	self.servedRoutes = self.routes()
 	for _, route := range self.servedRoutes {
@@ -206,6 +224,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 // Every route the engine serves. A later task appends its own list here.
 func (self *EvsEngine) routes() []*EvsRoute {
 	routes := append(self.placeRoutes(), self.uploadRoutes()...)
+	routes = append(routes, self.pushRoutes()...)
 	return append(routes, self.deps.testRoutes...)
 }
 
