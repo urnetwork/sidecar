@@ -1,0 +1,5 @@
+go test fuzz v1
+byte('\x01')
+[]byte("")
+[]byte("\x12\a\r\x00\xc8Pd\x10\x18")
+uint16(5)

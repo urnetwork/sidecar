@@ -1,0 +1,5 @@
+go test fuzz v1
+byte('\x03')
+[]byte("")
+[]byte("\x1a\x10\xe1\xffݢ\x91:\xa9$|1ٖ_C\xf2\x19")
+uint16(20)
