@@ -136,6 +136,8 @@ type urCli struct {
 	spawnDaemon func(args []string) error
 	// TEAM-M1-08's ur-cli login, nil until it lands
 	login urLoginFunction
+	// §16.7's hook bounds, which ur hook reads
+	ingest *sidecar.SidecarIngestSettings
 	// §16's offer to register a presence key after a login, nil until it lands
 	offerPresenceKey func(ctx context.Context, cli *urCli) error
 	// fills a daemon's service urls from §18.9's host table (cmd_daemon.go)
@@ -171,6 +173,7 @@ func newUrCli() *urCli {
 		dialDaemon:      sidecar.DialDaemon,
 		spawnDaemon:     spawnDetachedDaemon,
 		login:           urcliLoginEntry,
+		ingest:          sidecar.DefaultSidecarSettings().Ingest,
 		serviceUrls:     urServiceUrlsFromHostTable,
 		hostList:        sidecar.SidecarHostListV1,
 		hostProber:      newUrHostProber(),

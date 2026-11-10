@@ -465,6 +465,9 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 		if err := configHeadRecordSignedByAdmin(check.Previous, settingsSigned, bridge.SignedType_SIGNED_SERVICE_SETTINGS); err != nil {
 			return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
 		}
+		if err := CheckServiceSettings(settings); err != nil {
+			return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
+		}
 		facts.Settings = settings
 	}
 

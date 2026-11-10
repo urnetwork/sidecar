@@ -1,0 +1,1 @@
+{"conversation_id":"c0ffee-conversation","generation_id":"c0ffee-generation","hook_event_name":"afterMCPExecution","workspace_roots":["/tmp/sidecartest/project"],"transcript_path":"/tmp/sidecartest/.cursor/transcript.jsonl","tool_name":"evs_list","tool_input":"{}","result_json":"{\"files\":[]}","command":"/tmp/sidecartest/bin/ur mcp","duration":12}

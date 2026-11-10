@@ -393,6 +393,7 @@ func TestCompileProjectionRowsVectors(t *testing.T) {
 			Delegations:    input.GetDelegations(),
 			RegisteredKeys: input.GetRegisteredKeys(),
 			AclStatements:  aclStatements,
+			Proposals:      input.GetProposals(),
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", vector.Name, err)

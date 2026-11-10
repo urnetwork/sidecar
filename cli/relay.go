@@ -408,7 +408,8 @@ func (self *urRelay) fromDaemon(connection *urRelayConnection, line []byte) bool
 	return true
 }
 
-// Gives up on a connection, once: every request in flight on it answers as restarted, and a reconnect starts.
+// Gives up on a connection, once: every request in flight on it answers as restarted, and a reconnect starts. Once
+// the relay is ending, its harness gone or its daemon of another version, a lost connection answers nothing.
 func (self *urRelay) lose(connection *urRelayConnection) {
 	failed, reconnect := func() ([]*urRelayRequest, bool) {
 		self.stateLock.Lock()
@@ -422,6 +423,9 @@ func (self *urRelay) lose(connection *urRelayConnection) {
 			self.current = nil
 			self.connected = make(chan struct{})
 		}
+		if self.fatal != nil || self.ctx.Err() != nil {
+			return nil, false
+		}
 		failed := []*urRelayRequest{}
 		for key, request := range self.keyRequests {
 			if request.connection == connection {
@@ -429,7 +433,7 @@ func (self *urRelay) lose(connection *urRelayConnection) {
 				delete(self.keyRequests, key)
 			}
 		}
-		return failed, self.fatal == nil && self.ctx.Err() == nil
+		return failed, true
 	}()
 	connection.client.Close()
 	for _, request := range failed {

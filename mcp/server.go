@@ -99,6 +99,8 @@ type McpServerSettings struct {
 	RequestByteCount int64
 	// The version the server names itself by, ur's.
 	Version string
+	// The process table the ancestry rules read (§16.7). Nil is the system's.
+	Processes sidecar.ProcessTable
 	// Nil is real time.
 	Clock sidecar.Clock
 	// Nil is no logging. Never stdout.
@@ -124,10 +126,13 @@ type McpSubscribeCheck func(ctx context.Context, session *McpSession, uri string
 
 // The daemon's MCP server.
 type McpServer struct {
-	daemon   McpDaemon
-	settings *McpServerSettings
-	clock    sidecar.Clock
-	log      sidecar.Logger
+	daemon    McpDaemon
+	settings  *McpServerSettings
+	clock     sidecar.Clock
+	log       sidecar.Logger
+	processes sidecar.ProcessTable
+	binder    *RunBinder
+	hooks     mcpHooks
 
 	stateLock sync.Mutex
 	// one go-sdk Server per instructions text
@@ -152,15 +157,26 @@ func NewMcpServer(daemon McpDaemon, settings *McpServerSettings) *McpServer {
 	if log == nil {
 		log = sidecar.NewNoopLogger()
 	}
+	processes := settings.Processes
+	if processes == nil {
+		processes = sidecar.SystemProcessTable()
+	}
 	self := &McpServer{
 		daemon:              daemon,
 		settings:            settings,
 		clock:               clock,
 		log:                 log,
+		processes:           processes,
 		instructionsServers: map[string]*gomcp.Server{},
 		serverSessions:      map[*gomcp.ServerSession]*McpSession{},
 	}
+	self.binder = newRunBinder(self)
 	return self
+}
+
+// The run binder, which the daemon's hook method shares with the MCP sessions (hook_bind.go).
+func (self *McpServer) Binder() *RunBinder {
+	return self.binder
 }
 
 // Adds to the static tool table: install runs on every go-sdk Server, made already or later, so every session sees
@@ -272,10 +288,13 @@ func (self *McpServer) Sessions() []*McpSession {
 // A session for hello: its agent and instructions read now, and fixed for its life.
 func (self *McpServer) newSession(hello *sidecar.DaemonHello) *McpSession {
 	session := &McpSession{
-		server: self,
-		hello:  *hello,
-		limits: newMcpSessionLimits(self.settings.Mcp, self.clock),
+		server:            self,
+		hello:             *hello,
+		limits:            newMcpSessionLimits(self.settings.Mcp, self.clock),
+		networkIdBindings: map[sidecar.Id]*mcpSessionBinding{},
 	}
+	// the relay's place in the process tree, read once: a session's ancestry does not change
+	session.caller = self.binder.callerProcessOf(hello)
 	session.agent, session.agentErr = self.daemon.Agent(hello)
 	instructionsFor := func() func(session *McpSession) string {
 		self.stateLock.Lock()
@@ -313,9 +332,12 @@ func (self *McpServer) Serve(ctx context.Context, hello *sidecar.DaemonHello, st
 		session.serverSession = serverSession
 	}()
 	defer func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		delete(self.serverSessions, serverSession)
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			delete(self.serverSessions, serverSession)
+		}()
+		session.close()
 	}()
 	close(gate)
 	waited := make(chan error, 1)
@@ -368,7 +390,9 @@ func (self *McpServer) middleware(next gomcp.MethodHandler) gomcp.MethodHandler 
 }
 
 // A call's network, resolved by §5.8's rules and ready: refused with FAILED_PRECONDITION when none resolves, or when
-// its Sidecar is Locked, Unenrolled or Revoked, each naming what the person runs in their own terminal.
+// its Sidecar is Locked, Unenrolled or Revoked, each naming what the person runs in their own terminal. Then the
+// session's run in it is readied (hook_bind.go): a taint taken while Locked applied first, the session bound where a
+// hook has opened its harness process's run, and the coverage rules run.
 func (self *McpServer) call(ctx context.Context, session *McpSession, network string) (*McpCall, error) {
 	hello := session.hello
 	networkId, err := self.daemon.ResolveNetwork(&hello, network)
@@ -391,7 +415,14 @@ func (self *McpServer) call(ctx context.Context, session *McpSession, network st
 	case sidecar.SidecarStateRevoked:
 		return nil, newMcpError(McpCodeFailedPrecondition, "this device was revoked from the network: run ur login in your own terminal to enroll anew", false)
 	}
-	return &McpCall{Session: session, NetworkId: networkId, Network: host}, nil
+	call := &McpCall{Session: session, NetworkId: networkId, Network: host}
+	if err := self.binder.readyCall(ctx, call); err != nil {
+		if _, _, isMcpError := McpErrorCode(err); isMcpError {
+			return nil, err
+		}
+		return nil, newMcpError(McpCodeFailedPrecondition, "the run's taint cannot be read or written: run ur status in your own terminal", true)
+	}
+	return call, nil
 }
 
 // A tools/call's network argument: its arguments object's "network" string, else empty.

@@ -1,0 +1,1 @@
+{"session_id":"019a-codex-mcp","cwd":"/tmp/sidecartest/project","hook_event_name":"PostToolUse","tool_name":"mcp__ur__team_members","tool_input":{},"tool_response":{"content":[]},"tool_use_id":"call_codex_mcp"}

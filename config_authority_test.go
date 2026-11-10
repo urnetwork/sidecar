@@ -22,7 +22,8 @@ type testConfigTeam struct {
 	adminC testConfigDevice
 }
 
-// The team, built at k = 1 before its AdminSet grows to three.
+// The team, built at k = 1 before its AdminSet grows to three, each admin's device its member's first admission from an
+// invite, so consented (§8.5's invited clause).
 func newTestConfigTeam(t testing.TB) *testConfigTeam {
 	net := newTestConfigNet(t)
 	team := &testConfigTeam{testConfigNet: net}
@@ -31,8 +32,8 @@ func newTestConfigTeam(t testing.TB) *testConfigTeam {
 	net.admitMember(net.owner, memberC, bridge.MemberRole_MEMBER_ROLE_MEMBER)
 	team.adminB = net.device("admin b laptop", memberB)
 	team.adminC = net.device("admin c laptop", memberC)
-	net.admitDevice(net.owner, team.adminB, 0)
-	net.admitDevice(net.owner, team.adminC, 0)
+	net.admitDevice(net.owner, team.adminB, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED))
+	net.admitDevice(net.owner, team.adminC, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_INVITED))
 	net.mustPost(net.owner, bridge.SignedType_SIGNED_ADMIN_SET, team.adminSet(0))
 	if k, n := net.log.State().Threshold(); k != 2 || n != 3 {
 		t.Fatalf("k %d of n %d", k, n)
@@ -292,7 +293,7 @@ func TestAProposalAtOneCompletesAtItsOwnEntry(t *testing.T) {
 	}
 	keyRegister, _ := net.propose(net.owner, bridge.SignedType_SIGNED_KEY_REGISTER, &protocol.KeyRegister{Header: net.header()})
 	if keyRegister.Accepted() || !errors.Is(keyRegister.Refusal, ErrConfigRuleMissing) {
-		t.Errorf("a KeyRegister proposal: %v", keyRegister.Refusal)
+		t.Errorf("a KeyRegister proposal, which no proposal carries: %v", keyRegister.Refusal)
 	}
 	nested, _ := net.propose(net.owner, bridge.SignedType_SIGNED_AUTHORITY_COSIGN, &protocol.AuthorityCosign{Header: net.header()})
 	if nested.Accepted() {
@@ -300,9 +301,9 @@ func TestAProposalAtOneCompletesAtItsOwnEntry(t *testing.T) {
 	}
 }
 
-// Rows carry no open proposal, so a base that folds one closes it on every reader alike (question
-// team-m2-02-open-proposals-across-bases), while one in the base's tail re-opens on it and a cosign completes it.
-func TestAProposalABaseFoldsCloses(t *testing.T) {
+// Rows carry every open proposal (DESIGN-DETAILS 5.2.2), so one a base folds stays open on every reader alike, as does
+// one in the base's tail, and a cosign completes either.
+func TestAProposalABaseFoldsStaysOpen(t *testing.T) {
 	team := newTestConfigTeam(t)
 	memberX, memberY := testConfigId("x"), testConfigId("y")
 	team.admitMember(team.owner, memberX, bridge.MemberRole_MEMBER_ROLE_MEMBER)
@@ -313,12 +314,16 @@ func TestAProposalABaseFoldsCloses(t *testing.T) {
 	team.fold(team.owner, foldPoint, 2)
 
 	open := team.log.State().OpenProposalIds()
-	if len(open) != 1 || !slices.Equal(open[0], tailId) {
+	if len(open) != 2 || !slices.ContainsFunc(open, func(id []byte) bool { return slices.Equal(id, tailId) }) ||
+		!slices.ContainsFunc(open, func(id []byte) bool { return slices.Equal(id, foldedId) }) {
 		t.Fatalf("open after the base: %x", open)
 	}
 	testConfigStatesEqual(t, team.newReader().State(), team.log.State())
-	if verdict := team.cosign(team.adminB, foldedId); verdict.Accepted() {
-		t.Error("a folded proposal took a cosign")
+	if verdict := team.cosign(team.adminB, foldedId); !verdict.Accepted() {
+		t.Errorf("the folded proposal: %v", verdict.Refusal)
+	}
+	if team.log.State().Member(memberX).GetRole() != bridge.MemberRole_MEMBER_ROLE_ADMIN {
+		t.Error("x is no admin")
 	}
 	if verdict := team.cosign(team.adminB, tailId); !verdict.Accepted() {
 		t.Errorf("the tail's proposal: %v", verdict.Refusal)

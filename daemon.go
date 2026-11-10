@@ -359,6 +359,9 @@ func (self *Daemon) serve(conn net.Conn) {
 		return
 	}
 	hello, code, err := parseDaemonHello(line, self.settings.Version)
+	if err == nil {
+		hello.PeerPid = int64(daemonPeerPid(conn))
+	}
 	answer := &daemonHelloAnswer{UrLocal: daemonLocalProtocol, Version: self.settings.Version, Error: code}
 	var handler DaemonModeHandler
 	if err == nil && (hello.Mode == DaemonModeMcp || hello.Mode == DaemonModeGit) {

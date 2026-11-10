@@ -17,6 +17,7 @@ package sidecar
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -46,6 +47,10 @@ type ConfigCompileRows struct {
 	// What the log's 0x11xx statements give at folded_through: grants, shares, suspensions and AclRepo rows, which
 	// the acl compile carries into AclRows beside what the head's policy gives (§8.8).
 	AclStatements *protocol.AclRows
+	// Every proposal open at folded_through, its time the entry's there (DESIGN-DETAILS 5.2.3).
+	Proposals []*bridge.ProposalRow
+	// Every IndexerSet designation that holds at folded_through (question team-m2-07-indexer-rows).
+	Indexers []*bridge.IndexerRow
 }
 
 // The rows a state holds, as compile reads them: what a writer passes for its state at its fold.
@@ -61,6 +66,8 @@ func ConfigCompileRowsOf(state *ConfigState) *ConfigCompileRows {
 		Delegations:    rows.GetDelegations(),
 		RegisteredKeys: rows.GetRegisteredKeys(),
 		AclStatements:  aclStatements,
+		Proposals:      rows.GetProposals(),
+		Indexers:       rows.GetIndexers(),
 	}
 }
 
@@ -118,6 +125,8 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	projection.Sidecars = configSortRows(rows.Sidecars, (*bridge.SidecarRow).GetSidecarId, "sidecars", &sortErr)
 	projection.Delegations = configSortRows(rows.Delegations, (*bridge.DelegationRow).GetDelegationId, "delegations", &sortErr)
 	projection.RegisteredKeys = configSortRows(rows.RegisteredKeys, (*bridge.KeyRow).GetKeyId, "registered_keys", &sortErr)
+	projection.Proposals = configSortRows(rows.Proposals, (*bridge.ProposalRow).GetProposalId, "proposals", &sortErr)
+	projection.Indexers = configSortRows(rows.Indexers, configIndexerRowKey, "indexers", &sortErr)
 	if sortErr != nil {
 		return nil, sortErr
 	}
@@ -129,6 +138,14 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 		return nil, fmt.Errorf("%w: %d bytes", ErrConfigRowsTooLarge, len(encoded))
 	}
 	return encoded, nil
+}
+
+// A designation's sort key, its subject then its scope: a sidecar_id that is no 16-byte id gives none.
+func configIndexerRowKey(row *bridge.IndexerRow) []byte {
+	if len(row.GetSidecarId()) != len(Id{}) {
+		return nil
+	}
+	return binary.BigEndian.AppendUint32(bytes.Clone(row.GetSidecarId()), row.GetScope())
 }
 
 // The rows, cloned, in the byte order of their ids, refusing an empty or repeated id.

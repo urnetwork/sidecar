@@ -207,7 +207,7 @@ rows:
     targets:
       - {name: FuzzDaemonHello, package: ".", seeds: [testdata/fuzz/FuzzDaemonHello]}
       - {name: FuzzDotUr, package: ".", owner: CORE-M3-05, milestone: M3, seeds: [testdata/fuzz/FuzzDotUr]}
-      - {name: FuzzHookPayload, package: ".", owner: MCP-M3-15, milestone: M3}
+      - {name: FuzzHookPayload, package: mcp, owner: MCP-M3-15, milestone: M3, seeds: [../testdata/harness]}
       - {name: FuzzMcpArguments, package: mcp, owner: MCP-M3-12, milestone: M3}
 
   - id: index-files

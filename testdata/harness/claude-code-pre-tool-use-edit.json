@@ -1,0 +1,1 @@
+{"session_id":"7f1c2a90-edit","transcript_path":"/tmp/sidecartest/project/.transcripts/7f1c2a90.jsonl","cwd":"/tmp/sidecartest/project","hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Edit","tool_input":{"file_path":"/tmp/sidecartest/project/main.go","old_string":"a","new_string":"b"},"tool_use_id":"toolu_01edit"}
