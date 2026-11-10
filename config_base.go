@@ -381,6 +381,9 @@ func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.Projection
 // Indexes a base's rows into state, refusing rows a reader cannot hold: a malformed or repeated id, an admission
 // naming neither a member nor tags or both, a bad identity key, acl bytes that do not build, or a ring out of order.
 func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
+	// rows hold no bridge statement, only BridgeRows' egress modes in their acl part: the fold starts empty at a base
+	// and the base's tail re-applies (bridge_statement.go)
+	state.bridge = nil
 	state.members = make(map[Id]*bridge.MemberRow, len(rows.GetMembers()))
 	for i, member := range rows.GetMembers() {
 		memberId, err := IdFromBytes(member.GetMemberId())

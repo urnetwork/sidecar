@@ -1,0 +1,5 @@
+go test fuzz v1
+byte('\x01')
+[]byte("")
+[]byte(":\x1e\n\x1c{\"approval\":\"fuzz\",\"uses\":1}")
+uint16(6)

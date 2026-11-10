@@ -347,11 +347,22 @@ func TestHttpSidecarRefreshesWithDpop(t *testing.T) {
 	api.stateLock.Unlock()
 	newHttpTestSidecar(t, instance, keyStore, api)
 
+	// The refresher and the poll loop start together, so the first poll may leave on the old token before the refresh
+	// lands, and a long poll holds until it is answered. Each such poll is answered once, so the loop polls again on
+	// the token then in force.
+	answeredPolls := 0
 	requests := api.await(t, func(requests []httpTestRequest) bool {
+		oldPolls := 0
 		for _, request := range requests {
-			if request.path == "/sidecar/sync/poll" && request.bearer == next {
-				return true
+			if request.path == "/sidecar/sync/poll" {
+				if request.bearer == next {
+					return true
+				}
+				oldPolls += 1
 			}
+		}
+		for ; answeredPolls < oldPolls; answeredPolls += 1 {
+			api.pollAnswers <- httpTestCorePoll(t)
 		}
 		return false
 	})

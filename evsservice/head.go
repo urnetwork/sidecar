@@ -110,6 +110,11 @@ func checkEvsHeadShape(head *protocol.EvsHead) error {
 	if 0 < len(window) && len(head.GetWindowBaseChain()) != 32 {
 		return fmt.Errorf("%w: a window with no base chain", ErrEvsHeadInvalid)
 	}
+	// every reader of the window takes its entries as decoded, so one that does not decode, a place or a flag no
+	// format holds, is the head's fault here and never a missing entry there
+	if _, err := sidecar.DecodeEvsWindow(window); err != nil {
+		return fmt.Errorf("%w: a window entry: %v", ErrEvsHeadInvalid, err)
+	}
 	refused := head.GetRefused()
 	if len(refused)%sidecar.EvsRefusalByteCount != 0 || sidecar.EvsHeadMaxRefusalCount < len(refused)/sidecar.EvsRefusalByteCount {
 		return fmt.Errorf("%w: %d bytes of refusal records", ErrEvsHeadInvalid, len(refused))

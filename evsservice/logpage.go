@@ -193,7 +193,8 @@ func checkLogPageChain(repoId sidecar.Id, refId sidecar.Id, page uint64, firstCh
 	}
 	chain := firstChain
 	for i, statementBytes := range statements {
-		statement, err := sidecar.ParseEvsStatement(statementBytes)
+		// a page holds its statements as committed, of either format (format1_guard.go)
+		statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
 		if err != nil {
 			return nil, [sha256.Size]byte{}, fmt.Errorf("%w: version %d: %v", ErrEvsLogPageInvalid, first+uint64(i), err)
 		}

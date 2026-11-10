@@ -188,6 +188,9 @@ type ConfigState struct {
 	proposals           map[[sha256.Size]byte]*configProposal
 	// the IndexerSet designations that hold, by subject and scope
 	indexers map[configIndexerKey]*bridge.IndexerRow
+	// §17.8's bridge statements that took effect since the newest base's folded_through, nil for none
+	// (bridge_statement.go). Rows carry none of them, so a base empties it and its tail re-applies.
+	bridge *BridgeLog
 	// §7.9's replay row as a function of the log (DESIGN-DETAILS 5.2.3's ring): the statements that took effect
 	// among the 4,096 entries through n, in position order, the oldest trimmed as n moves. Later states append to
 	// the same array past this slice's end and never write inside it, so states share it, as chains.
@@ -689,6 +692,7 @@ func configCopyState(state *ConfigState) *ConfigState {
 		headVersioningRules: state.headVersioningRules,
 		proposals:           state.proposals,
 		indexers:            state.indexers,
+		bridge:              state.bridge,
 		ring:                state.ring,
 		chains:              state.chains,
 		chainsFrom:          state.chainsFrom,

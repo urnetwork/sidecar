@@ -118,7 +118,7 @@ func (self *readPushes) at(version uint64) (*readPush, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: log page %d lacks version %d", ErrEvsStatementMismatch, page.Page, version)
 		}
-		statement, err := sidecar.ParseEvsStatement(statementBytes)
+		statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 		}
@@ -157,7 +157,7 @@ func (self *readPushes) readRecord(push *readPush) error {
 		if err != nil {
 			return err
 		}
-		payload, err := sidecar.EvsCheckPayload(statement, payloadBytes)
+		payload, err := sidecar.EvsCheckStoredPayload(statement, payloadBytes)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 		}
@@ -183,9 +183,10 @@ func (self *readPushes) readRecord(push *readPush) error {
 	return nil
 }
 
-// The statement's bytes parsed and held to the window entry's push id and hash prefix.
+// The statement's bytes parsed and held to the window entry's push id and hash prefix. A committed statement is
+// served as stored, of either format (format1_guard.go).
 func (self *readPushes) statementOf(entry *sidecar.EvsWindowEntry, statementBytes []byte) (*sidecar.EvsStatement, error) {
-	statement, err := sidecar.ParseEvsStatement(statementBytes)
+	statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 	}
@@ -215,7 +216,7 @@ func (self *readPushes) checkedPart(push *readPush, part int) (*sidecar.EvsCheck
 	if !bytes.Equal(statementBytes, push.statement.Bytes) {
 		return nil, fmt.Errorf("%w: a part of another statement", ErrEvsStatementMismatch)
 	}
-	checked, err := sidecar.EvsCheckPart(push.statement, partBytes)
+	checked, err := sidecar.EvsCheckStoredPart(push.statement, partBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 	}
