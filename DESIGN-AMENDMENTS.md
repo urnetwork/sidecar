@@ -6,13 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 336 decided items and 314 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 332 decided items and 314 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 34 | 5 |
+| [§2 Trust model and threat model](#s2) | 30 | 5 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -304,15 +304,6 @@ Changes: DESIGN-DETAILS.md section 5 stands as written; TEAM-M2-07 and -10 stand
 
 Questions: `details-5-settings-in-rows.md`, `team-m2-02-self-admit-at-rows-only-readers.md`.
 
-### QD-630: Who lands `BridgeEgress.mode = 4` and §2.8 api-7's row for it, which the answer to plan-BRIDGE-egress-mode-at-gates orders row first?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §17.*
-
-As QD-083's interim ordered: a design-records track lands §2.8's api-7 text for BridgeEgress's mode and §17.8's id list; then PROTO (or the bridge track) adds BridgeEgressMode mode = 4 to BridgeEgress, reserves BridgeEgressBody field 1 and updates protocol/design_unfenced_test.go, protocol/descriptor_test.go and testdata/metadata/fields.yml; then bridgeEgressClearMode returns the field. Until then every BridgeEgress is refused at every reader (fail closed) and R-BRIDGE-7 is not claimed at the gate.
-
-Changes: design-records: §2.8 api-7 and §17.8 id list; then PROTO: BridgeEgress.mode = 4 and its guards; then BRIDGE: bridgeEgressClearMode returns it.
-
-Questions: `bridge-m2-01-egress-mode-field.md`.
-
 ### QD-635: What queues the versionless sweep's two one-off passes: at a hold's end, and when §19.11's purge turns on from observe?
 *Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*
 
@@ -321,33 +312,6 @@ AbuseHoldPass (ABUSE-M5-14) schedules evsservice.EvsSweepHoldEndTaskRequest(hold
 Changes: ABUSE-M5-14: one line queueing the hold-end pass; sidecarctl: evs purge-turn-on (ops lane); EVS2-M10-34: runbook line and monitor row; §2.8 holds row (design-records).
 
 Questions: `evsb-m3-02-sweep-pass-triggers.md`.
-
-### QD-636: How do the nightly pass's shard jobs combine into one stored count per network?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The nightly pass's shard jobs combine through Redis: each shard job replaces its per-network sums for the night under a new {evsn_<night>} family with a 48 h ttl, and a closing job, once every shard of every metadata cluster has reported for the night, writes each network's sum through model.SetNetworkStoredByteCount (zero for a network with a count and no sums). A night some shard never finished, or whose sums Redis lost, leaves the old count standing. No migration. The new family needs its §2.8 row first (I-18; design-records), then an EVSB follow-up changes EVSB-M2-12's nightly pass. Until then the write stays as drafted: made only from a whole run.
-
-Changes: design-records: §2.8 row for the {evsn_<night>} family; EVSB follow-up: shard sums into {evsn_<night>}, a closing job, keep the old count on an unfinished night.
-
-Questions: `evsb-m2-23-nightly-count-across-shards.md`.
-
-### QD-649: Where does the server keep whether a Team's Stripe subscription is live, and its customer and anchor?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-MG6's quota group gains team_subscription(network_id, subscription_id, customer_id, anchor_time, start_time, end_time NULL), written at a Team's first invoice.paid and ended at customer.subscription.deleted, which the hourly reconciler can repair from Stripe. RefreshTeamTransferBalances grants only Teams whose row is live (end_time NULL) with no unresolved payment failure and reads the anchor from it; QUOTA-M6-03's 'only Team networks with a live subscription get rows' and QUOTA-M6-04's customer and start read it too. §2.8 gains a row (api: a Team's Stripe subscription and customer ids, for the network's life; I-18, design-records). QUOTA-M6-02's team_ended mark in subscription_renewal is replaced by the table (QUOTA follow-up: migration, writers, job, reconciler).
-
-Changes: QUOTA follow-up: the team_subscription migration in MG6, webhook writers, the grant job reading it, the reconciler repair; remove the team_ended mark; §2.8 row (design-records first, I-18).
-
-Questions: `quota-m6-02-team-subscription-state.md`.
-
-### QD-650: Which §2.8 row shows POST /auth/sso-discover's per-address limit history, and the vault key audit webhook signing keys derive from?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-§2.8 gains, under api-3 (or api-11 beside enrollment's histories), 'discovery attempts per caller address hash, for 10 minutes' for POST /auth/sso-discover's per-address limit (Redis attempt histories keyed by the address's peppered hash, 30 in 10 minutes, no domain or address held), and api-8 notes that audit webhook signing keys are HMAC-SHA256 of the vault resource network_audit_webhook_key over a fixed domain string and the webhook's id, answered once when the webhook is added and never stored. One design-records edit; the code stays as built. Ops provisions network_audit_webhook_key in vault before any webhook can be added (the owner's vault task).
-
-Changes: §2.8 api-3/api-11 and api-8 text (design-records); ops/owner: provision vault key network_audit_webhook_key.
-
-Questions: `team-m6-06-sso-discover-limit-row.md`.
 
 ### QD-321: Zip attachments
 *Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
@@ -4072,6 +4036,8 @@ Changes: D-BRIDGE-6; §17.8; §2.8 api-7; bridge.proto BridgeEgress, BridgeEgres
 
 Questions: `plan-BRIDGE-egress-mode-at-gates.md`.
 
+Partly folded (2026-11-10): with QD-630, §2.8's api-7 now shows an egress statement's mode and §17.8's id list names it; D-BRIDGE-6 and the rest of §17.8 wait for §17's fold, and bridge.proto for PROTO.
+
 ### QD-108: Wire format of the cross-network share seal
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8.*
 
@@ -5628,3 +5594,53 @@ A fold's ConfigRecords include the BASE entries in (after, folded_through] as Co
 Changes: DESIGN-DETAILS.md section 5 stands as written; TEAM-M2-08, -09 and -10 (landed) stand; QD-456's fill amended (design-records).
 
 Questions: `details-5-base-records-in-folds.md`.
+
+<a id="later"></a>
+## Later decisions
+
+Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
+
+### QD-652: Should closure pacing admit by seat, each seat good only in its own second, in place of a bucket that admits by arrival?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
+
+Closure pacing admits by seat. A seat is a 1/R cell at the tail of the network's pacing, good from its instant to the end of its calendar second; a seat is handed out only in a second with a free cell; an eraser whose seat is due takes, and nothing else is checked, so arrival order decides nothing. A refusal is not recorded under its debit id, so the same upload asks again. An eraser that misses its seat's second by more than the cell's tolerance (250 ms to 1 s at R = 4) is seated again, at once while the second has a free cell, one round later in a full network. Reading 19's 5-minute horizon and its setting go; the steady state is the landed one (k erasers each every k/R s). QUOTA-M2-14 changes QuotaClosurePacing, the fake, the {sq_} script and quotasuite's pacing cases together. This answers quota-m2-03-pacing-boundary-order with a fourth option and quota-m2-01-rate-key-grammar #3 with its other reading.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-14 builds it; §20.7 closure and wait rows (design-records).
+
+Questions: `details-13-pacing-seats.md`, `quota-m2-03-pacing-boundary-order.md`.
+
+### QD-653: Should bytes a lease spent under a reservation that has since lapsed go unbilled, and should a lease's own tokens live 15 minutes instead of 24 hours?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
+
+No lease byte is debited without its carve: a batch is posted only once its carves answered; bytes whose reservation was gone are dropped from the event, counted in urnetwork_quota_lease_unbilled_bytes_total and alerted; ApplyUsageBatch refuses a lease meter's event its carves do not cover. A lease's own tokens live 15 min and are extended every 5 min while the lease lives, and the host stops spending a token's bytes 30 s before it could lapse; carved tokens keep 24 h. The cost is under-billing of at most one window's bytes a host during a Redis outage as seen from that host; a dead edge's hold returns in 15 min. Lease.tla holds NoOverdraw only with this. QUOTA-M2-07 and QUOTA-M2-15 build it; landed ApplyUsageBatch and the fake's lease excess change.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-07 and QUOTA-M2-15 build it; §20.6 leases and loss rows, E-d (design-records).
+
+Questions: `details-13-lease-lapse.md`.
+
+### QD-654: Should a lease draw more than 64 MiB at a time when its traffic is fast?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing. Also amends §2.*
+
+A lease's draw is 64 MiB (16 MiB on Community) or, when that is more, 4 s of the lease's own measured rate rounded up to a multiple of it, at most 16 times it (1 GiB; 256 MiB on Community), renewed with a quarter of the draw or 2 s of traffic left, whichever is more. A slow lease draws as §20.6 has it; a fast one renews about once per 4 s with 2 s to do it. A lease can hold up to 4 s of its traffic unspent, which a Redis loss can over-admit for it. §20.6's draw row and api-13's published sizes ('64 MiB to 1 GiB, 16 to 256 MiB on Community') change (design-records). QUOTA-M2-07 builds it.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-07 builds it; §20.6 draw row and §2.8 api-13 sizes (design-records).
+
+Questions: `details-13-lease-draw-size.md`.
+
+### QD-655: Should a gate service refuse for a network once it knows the authorization log moved and cannot verify the new entries, where QD-055 has the last verified state keep serving?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §8 Access control. Also amends §9.*
+
+A sockets process answers unavailable for a network once it has had evidence for 5 s (§8.9's target for server gates) that the authorization log passed what it holds and it has not verified the new entries: the {acl_<networkId>}v event, a store answer naming a higher position, or after a resubscription a {acl_}v that differs from the one its state was loaded at. With no evidence, the last verified state serves without limit, so an api outage changes nothing (api is the log's only writer). This narrows QD-055's 'on failure the last verified projection, facts and list keep serving' to 'keep serving what nothing contradicts'. Section 13 specifies it for sockets; SOCK-M5-07 builds it; SockReg.tla checks the strict form.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-07 builds it; QD-055 narrowed; §8.9 gates and §9.8 text (design-records).
+
+Questions: `details-13-gate-behind.md`.
+
+### QD-656: Should a tls/ or smtp/ Service pair live 15 minutes past its listener's last accepted registration, in place of its grant's expiry up to 24 hours?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §9 Abstract socket listeners and the scheduler. Also amends §2.*
+
+A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id>) is written by Find with a ttl of the lesser of the grant's remaining life and 15 min; a registration call that accepts an edge entry of the client renews its pairs, at most every 5 min a process; a removal leaves a floor that refuses a write allowed at an older position. A revoked, removed or dead listener's pairs end within 15 min whatever any sweep did. ur/ pairs keep §9.6's rule (60 min, refreshed per Find). sock-3's ttl text changes (design-records). SOCK-M5-18, SOCK-M5-05 and SOCK-M5-06 build it.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
+
+Questions: `details-13-edge-pair-life.md`.

@@ -351,8 +351,13 @@ type evsClientEpochs struct {
 	waiters map[evsRefKey]chan struct{}
 	// what a mapper on this device says of a ref's job, nil until one registers (evs_epoch_map.go)
 	mapperStatus evsMapperStatusFunction
+	// the client's *evsMapper, made on first use: untyped here, since the mapper's files stay off the ios_extension
+	// leg, which links this one
+	mapper any
 	// per ref, the newest version a push of this device committed at: a ref with a head though no verified one shows it
 	committed map[evsRefKey]uint64
+	// per repo, the newest generation this device's own EnsureWritable returned, which a mapper starts at once for
+	writable map[Id]uint64
 }
 
 // A cached listing's key.
@@ -377,7 +382,22 @@ func newEvsClientEpochs() *evsClientEpochs {
 		refAlarms:    map[evsRefKey]*evsRefAlarm{},
 		waiters:      map[evsRefKey]chan struct{}{},
 		committed:    map[evsRefKey]uint64{},
+		writable:     map[Id]uint64{},
 	}
+}
+
+// Notes the generation this device's own EnsureWritable returned for a repo.
+func (self *evsClientEpochs) noteWritable(repoId Id, generation uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.writable[repoId] = max(self.writable[repoId], generation)
+}
+
+// Whether this device's own EnsureWritable returned generation, so it rotated to it and maps at once.
+func (self *evsClientEpochs) rotatedTo(repoId Id, generation uint64) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.writable[repoId] == generation
 }
 
 // Notes a push of this device committed on a ref at version.
@@ -593,6 +613,9 @@ var errEvsReadRounds = errors.New("evs: a read past its rounds")
 func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPath, fresh bool) (*evsReadResult, error) {
 	keys := newEvsReadKeys(self)
 	for _, path := range paths {
+		if path.token != nil {
+			continue
+		}
 		names, err := evsReadPathNames(path.path)
 		if err != nil {
 			return nil, err
@@ -683,6 +706,16 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 	for _, path := range paths {
 		// each round chooses afresh on its state, a lookup hitting the listing cache while the head stands
 		path.epochs, path.settled, path.verified = nil, nil, nil
+		if path.token != nil {
+			// an id in epoch 1, which deposit and erasure refs never leave
+			if current != 1 {
+				return nil, false, fmt.Errorf("%w: an exempt ref in path epoch %d", ErrEvsReplyInvalid, current)
+			}
+			path.epochs, path.current, path.named = []uint64{1}, path.token, map[uint64]bool{1: true}
+			path.epochPaths = []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: path.token.Components()}}
+			asked = append(asked, path)
+			continue
+		}
 		if path.path == "" {
 			path.epochs = []uint64{current}
 		} else {
@@ -756,8 +789,17 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 		if path.record != nil {
 			since = path.record.PinVersion
 		}
+		tokenPathIn := func(epoch uint64) (EvsTokenPath, error) { return round.keys.tokenPathIn(ctx, path.names, epoch) }
+		if path.token != nil {
+			tokenPathIn = func(epoch uint64) (EvsTokenPath, error) {
+				if epoch != 1 {
+					return nil, fmt.Errorf("%w: an exempt ref's statement of path epoch %d", ErrEvsEntryRefused, epoch)
+				}
+				return path.token, nil
+			}
+		}
 		epochs := &EvsPathEpochs{
-			TokenPathIn: func(epoch uint64) (EvsTokenPath, error) { return round.keys.tokenPathIn(ctx, path.names, epoch) },
+			TokenPathIn: tokenPathIn,
 			Named:       path.named,
 			History:     path.version != 0,
 			Since:       since,
@@ -790,7 +832,7 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 			again = true
 			continue
 		}
-		if verified.Absent && path.version == 0 && path.path != "" {
+		if verified.Absent && path.version == 0 && path.path != "" && path.token == nil {
 			allAsked := true
 			for _, source := range sources {
 				allAsked = allAsked && path.named[source]
@@ -865,7 +907,7 @@ func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys
 	self.client.noteVerifiedHead(self.repoId, refId, head.Head)
 	records := []*EvsReadRecord{}
 	for i, path := range paths {
-		if path.version != 0 || verifiedPaths[i].Entry == nil {
+		if path.version != 0 || verifiedPaths[i].Entry == nil || path.token != nil {
 			continue
 		}
 		chain := head.Chain

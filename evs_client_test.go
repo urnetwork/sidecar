@@ -582,14 +582,9 @@ func TestEvsUnbuiltMethodsRefuse(t *testing.T) {
 	}), newEvsTestStore(t))
 	repo := test.client.Repo(evsTestId("repo"))
 	ctx := context.Background()
+	// Deposit, Consume and Erasures are EVS1-M2-29's and -30's, built
 	calls := []error{}
-	_, err := repo.Deposit(ctx, &EvsDepositArgs{})
-	calls = append(calls, err)
-	_, err = repo.Consume(ctx, &EvsConsumeArgs{})
-	calls = append(calls, err)
-	_, err = repo.Erasures(ctx)
-	calls = append(calls, err)
-	_, err = repo.Import(ctx, &EvsImportArgs{})
+	_, err := repo.Import(ctx, &EvsImportArgs{})
 	calls = append(calls, err)
 	for i, err := range calls {
 		if !errors.Is(err, ErrEvsNotBuilt) {

@@ -168,6 +168,8 @@ type evsTestWorld struct {
 	// a version of an epoch the request names no token path in is answered with its statement alone, as evs answers
 	// a version it can place by neither leaf place nor token path
 	statementAloneUnnamed bool
+	// the due the head records, nil for none: its generation, block and due_by_ms
+	due *protocol.EvsPathEpoch
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -574,6 +576,10 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
 	}
+	if self.due != nil {
+		head.PathEpoch.DueGeneration, head.PathEpoch.DueBlocksCreation = self.due.GetDueGeneration(), self.due.GetDueBlocksCreation()
+		head.PathEpoch.DueByMs, head.PathEpoch.BlockUntilMs = self.due.GetDueByMs(), self.due.GetBlockUntilMs()
+	}
 	if len(self.commits) == 0 {
 		chain := EvsChainStart(self.repoId, self.refId)
 		head.Chain = chain[:]
@@ -875,5 +881,11 @@ func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]b
 	if !bytes.Equal(commit.parsed.Push.GetPushId(), pushId) {
 		return nil, false
 	}
-	return evsJoinItems([][]byte{commit.statement, commit.built.Payload}), true
+	// the batch record as its place holds it
+	record := &EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_PUSH, RepoId: self.repoId, RefId: self.refId, PushId: Id(pushId),
+		SignerSidecarId: Id(commit.parsed.Push.GetSignerSidecarId()), TimeMs: commit.parsed.Push.GetTimeMs(),
+		Body: evsJoinItems([][]byte{commit.statement, commit.built.Payload}),
+	}
+	return record.encode(), true
 }

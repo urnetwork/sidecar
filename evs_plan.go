@@ -133,6 +133,11 @@ type EvsWritePlan struct {
 	// each path's floor by its plaintext path, 0 for none (DESIGN-DETAILS 9.2.3): what the reads showed, lowered by a
 	// refusal that answered the push (E3)
 	floors map[string]uint64
+	// What the push carries beside its changes: its flags (CLOSURE, ERASE), the keys its erased list names, and the
+	// token scope it goes under, rw when empty (evs_erase.go, evs_closure.go).
+	Flags  uint32
+	Erased []*EvsErasedKey
+	scope  string
 }
 
 // One path's part of a push.
