@@ -231,6 +231,7 @@ func (self *mlsPreparedPath) encrypt(groupContext []byte, newLeaves []mlsLeafInd
 	for index, entry := range self.path {
 		node := mlsUpdatePathNode{encryptionKey: tree.nodes[entry.node].encryptionKey()}
 		for _, recipient := range tree.pathSecretRecipients(entry.copathChild, newLeaves) {
+			tree.settings.yield()
 			kemOutput, ciphertext, err := suite.encryptWithLabel(
 				tree.nodes[recipient].encryptionKey(), mlsEncryptLabelUpdatePathNode, groupContext, self.pathSecrets[index],
 			)

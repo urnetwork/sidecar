@@ -68,6 +68,10 @@ type MlsEngineArgs struct {
 	// Nil is real time.
 	Clock    Clock
 	Settings *MlsSettings
+	// Called between the steps of the engine's long loops, each a leaf's validation or one X-Wing seal, so a host
+	// that runs one thread yields there: the page Worker's (§18.10's threads row), which passes NewMlsYield's. It
+	// must be safe for concurrent use. Nil calls nothing.
+	Yield func()
 }
 
 // One sidecar's real MLS engine.
@@ -90,6 +94,13 @@ func newMlsEngine(args *MlsEngineArgs, suite *mlsCipherSuite, groupSettings *mls
 	}
 	if settings.LeafLifetime <= 0 || groupSettings.Tree.MaximumLeafLifetime < settings.LeafLifetime {
 		return nil, fmt.Errorf("mls: a leaf lifetime of %s", settings.LeafLifetime)
+	}
+	if args.Yield != nil {
+		// this engine's own settings: NewMlsEngine makes them for it alone, and a test that shares a tree's settings
+		// between engines passes no yield
+		treeSettings := *groupSettings.Tree
+		treeSettings.Yield = args.Yield
+		groupSettings = &mlsGroupSettings{Tree: &treeSettings, Message: groupSettings.Message}
 	}
 	return &mlsEngine{
 		suite:               suite,
@@ -346,6 +357,51 @@ func (self *mlsEngine) JoinExternal(groupInfo []byte, args *MlsCommitArgs) (MlsS
 		return nil, err
 	}
 	return &mlsRealStagedCommit{engine: self, staged: staged, own: true}, nil
+}
+
+// The group, epoch and leaves of a full GroupInfo whose tree and signature hold, as JoinExternal checks them.
+func (self *mlsEngine) GroupInfoRoster(groupInfo []byte) (Id, uint64, []MlsMember, error) {
+	decoded := &mlsGroupInfo{}
+	if err := mlsUnmarshalMessageOf(groupInfo, mlsWireFormatGroupInfo, decoded); err != nil {
+		return Id{}, 0, nil, err
+	}
+	tree, err := decoded.checkTree(self.suite, self.groupSettings.Tree, self.credentialValidator)
+	if err != nil {
+		return Id{}, 0, nil, err
+	}
+	groupId, err := IdFromBytes(decoded.groupContext.groupId)
+	if err != nil {
+		return Id{}, 0, nil, fmt.Errorf("%w: a group id of %d bytes", errMlsInvalid, len(decoded.groupContext.groupId))
+	}
+	roster := []MlsMember{}
+	for index := range tree.leafCount() {
+		leaf := tree.leafNode(mlsLeafIndex(index))
+		if leaf == nil {
+			continue
+		}
+		member, err := mlsMemberOf(mlsLeafIndex(index), leaf)
+		if err != nil {
+			return Id{}, 0, nil, err
+		}
+		roster = append(roster, member)
+	}
+	return groupId, decoded.groupContext.epoch, roster, nil
+}
+
+// Drops the group's state, draft and used generations. The epoch it reached stays, so no join goes back.
+func (self *mlsEngine) ForgetGroup(groupId Id) error {
+	self.transitionLock.Lock()
+	defer self.transitionLock.Unlock()
+	head, err := self.headWithLock(groupId)
+	if err != nil {
+		return err
+	}
+	if err := self.store.removeState(groupId); err != nil {
+		return err
+	}
+	head.held = false
+	head.epochAuthenticator = nil
+	return nil
 }
 
 // The held state of a group, read from disk, its handshake generation resumed past what it used.
@@ -739,6 +795,11 @@ func (self *mlsRealPendingJoin) GroupId() Id {
 // The epoch it joins.
 func (self *mlsRealPendingJoin) Epoch() uint64 {
 	return self.opened.groupInfo.groupContext.epoch
+}
+
+// Whether the Welcome was opened under the last-resort KeyPackage.
+func (self *mlsRealPendingJoin) LastResort() bool {
+	return self.opened.held.lastResort
 }
 
 // The second phase, then the join written: refused above an epoch reached or a one-time KeyPackage used.

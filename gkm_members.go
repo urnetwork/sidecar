@@ -69,6 +69,10 @@ const gkmGroupInfoInlineLeafCount = 16
 var (
 	// A member check refused a commit this device made or received: it is never adopted.
 	ErrGkmCommitRefused = errors.New("gkm: a commit failed its member checks")
+	// This device's own commit would leave a leaf in the tree that is no key holder at its state, and it may not
+	// commit that leaf's Remove: it commits nothing until a writer leaf does (R3's wait). It comes wrapped in
+	// ErrGkmCommitRefused.
+	ErrGkmDroppedLeafStands = errors.New("gkm: a dropped leaf stands in the tree")
 	// This device is too far behind, or cannot process what gkm holds: it resyncs (KF5, KEYS-M2-23).
 	ErrGkmResyncNeeded = errors.New("gkm: the group needs a resync")
 )
@@ -502,20 +506,7 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 	if err := proto.Unmarshal(pins.epochHeader, previousHeader); err != nil {
 		return 0, fmt.Errorf("%w: the pinned epoch's header", ErrGkmMalformed)
 	}
-	top, err := client.newestHeldGeneration(self.repoId)
-	if err != nil {
-		return 0, err
-	}
-	if top.key == nil || top.poisoned {
-		// nothing is sealed to a poisoned generation: the rotation past it comes first
-		return 0, fmt.Errorf("%w: generation %d is poisoned or unopened", ErrGkmWait, top.generation.Rotate.GetGeneration())
-	}
-	generation := top.generation.Rotate.GetGeneration()
-	if state.Pin().GetVersion() < previousHeader.GetAuth().GetVersion() || state.Pin().GetVersion() < top.generation.Rotate.GetAuth().GetVersion() {
-		return 0, fmt.Errorf("%w: this state is below the epoch's or the generation's pin", ErrGkmAuthAhead)
-	}
-	header := &protocol.GkmCommitHeader{Generation: generation, Auth: state.Pin()}
-	headerBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(header)
+	top, headerBytes, err := self.commitHeader(state, previousHeader)
 	if err != nil {
 		return 0, err
 	}
@@ -525,6 +516,44 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 	if err != nil {
 		return 0, err
 	}
+	outcome, err := self.uploadCommitInFlow(ctx, state, group, staged, previousHeader, top, recipients)
+	if err == nil && outcome == gkmCommitAdopted && args.Path {
+		// this leaf's path is fresh: the self-update interval starts over, and a last-resort join's is paid
+		err = client.notePathCommitted(self.repoId)
+	}
+	return outcome, err
+}
+
+// The generation a commit carries and its header, under R1 and R2: the newest generation this device holds, opened
+// and not poisoned, with this state at or past the previous epoch's pin and that generation's.
+func (self *gkmGroupManager) commitHeader(state GkmAuthView, previousHeader *protocol.GkmCommitHeader) (*gkmHeldGeneration, []byte, error) {
+	top, err := self.client.newestHeldGeneration(self.repoId)
+	if err != nil {
+		return nil, nil, err
+	}
+	if top.key == nil || top.poisoned {
+		// nothing is sealed to a poisoned generation: the rotation past it comes first
+		return nil, nil, fmt.Errorf("%w: generation %d is poisoned or unopened", ErrGkmWait, top.generation.Rotate.GetGeneration())
+	}
+	if state.Pin().GetVersion() < previousHeader.GetAuth().GetVersion() || state.Pin().GetVersion() < top.generation.Rotate.GetAuth().GetVersion() {
+		return nil, nil, fmt.Errorf("%w: this state is below the epoch's or the generation's pin", ErrGkmAuthAhead)
+	}
+	header := &protocol.GkmCommitHeader{Generation: top.generation.Rotate.GetGeneration(), Auth: state.Pin()}
+	headerBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(header)
+	if err != nil {
+		return nil, nil, err
+	}
+	return top, headerBytes, nil
+}
+
+// The rest of 6.2.4's Commit for a commit staged on base's epoch, a member's on its own group or a resync's external
+// commit on the epoch its GroupInfo names: GenWrap_{e+1}, the committer's own check, GroupInfo_{e+1}, the upload and
+// its outcome. A staged commit that is not adopted is discarded.
+func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAuthView, base MlsGroup, staged MlsStagedCommit, previousHeader *protocol.GkmCommitHeader, top *gkmHeldGeneration, recipients []*protocol.GkmWelcomeRecipient) (gkmCommitOutcome, error) {
+	client := self.client
+	groupId := base.GroupId()
+	generation := top.generation.Rotate.GetGeneration()
+	headerBytes := staged.AuthenticatedData()
 	adopted := false
 	defer func() {
 		if !adopted {
@@ -536,20 +565,24 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 	if err != nil {
 		return 0, err
 	}
-	genWrap, err := SealGkmGenWrap(top.key, pins.groupId, epoch, kek)
+	genWrap, err := SealGkmGenWrap(top.key, groupId, epoch, kek)
 	clear(kek)
 	if err != nil {
 		return 0, err
 	}
 	now := client.clock.Now()
 	// the committer's own check: a commit others must refuse leaks the moment it stands, so it is never uploaded
-	check, err := CheckCommit(state, group, staged, &GkmCommitCheckArgs{
+	check, err := CheckCommit(state, base, staged, &GkmCommitCheckArgs{
 		RepoId: self.repoId, PreviousHeader: previousHeader, Generation: top.generation, GenWrap: genWrap, Time: now, Now: now,
 	})
 	if err != nil {
 		return 0, err
 	}
 	if check.Verdict.Refused {
+		if check.Verdict.Reason == GkmRefusalRoster {
+			// R3's wait: a leaf this commit may not remove stands in the tree, and a writer leaf's Remove releases it
+			return 0, fmt.Errorf("%w: %w: %s", ErrGkmCommitRefused, ErrGkmDroppedLeafStands, check.Verdict.Detail)
+		}
 		return 0, fmt.Errorf("%w: %s: %s", ErrGkmCommitRefused, check.Verdict.Reason, check.Verdict.Detail)
 	}
 	request := &protocol.GkmEpochRequest{Commit: staged.Message(), GenWrap: genWrap}
@@ -558,7 +591,7 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 	if err != nil {
 		return 0, err
 	}
-	sealedGroupInfo, err := SealGkmGroupInfo(top.key, pins.groupId, epoch, groupInfo)
+	sealedGroupInfo, err := SealGkmGroupInfo(top.key, groupId, epoch, groupInfo)
 	if err != nil {
 		return 0, err
 	}
@@ -584,14 +617,14 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 		}
 		return gkmCommitLost, nil
 	}
-	barrierKey := gkmPathId(pins.groupId) + ":" + strconv.FormatUint(epoch, 10)
+	barrierKey := gkmPathId(groupId) + ":" + strconv.FormatUint(epoch, 10)
 	landed := false
 	for sendCount := 0; !landed; sendCount += 1 {
 		if max(1, client.settings.CommitSendCount) <= sendCount {
 			return 0, fmt.Errorf("%w: the commit of epoch %d got no answer", ErrGkmUnavailable, epoch)
 		}
 		testHookBarrier(gkmBarrierCommitEpochBefore, barrierKey)
-		err := client.args.Api.CommitEpoch(ctx, self.repoId, pins.groupId, epoch, request)
+		err := client.args.Api.CommitEpoch(ctx, self.repoId, groupId, epoch, request)
 		testHookBarrier(gkmBarrierCommitEpochAfter, barrierKey)
 		gkmError, refused := GkmErrorOf(err)
 		switch {
@@ -601,7 +634,7 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 			return lose()
 		case refused && gkmError.Status == http.StatusForbidden:
 			// its rate, pin or header check, where this device's own passed
-			client.alarm(&GkmAlarm{Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: pins.groupId, Epoch: epoch, SidecarId: client.args.SidecarId, Detail: "gkm refused a commit this device's checks passed"})
+			client.alarm(&GkmAlarm{Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: groupId, Epoch: epoch, SidecarId: client.args.SidecarId, Detail: "gkm refused a commit this device's checks passed"})
 			return 0, fmt.Errorf("%w: gkm refused the commit of epoch %d", ErrGkmWait, epoch)
 		case refused:
 			return 0, err
@@ -609,7 +642,7 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 			return 0, err
 		default:
 			// unknown: what stands at epoch/<n> says what happened
-			standing, readErr := client.args.Api.Epochs(ctx, self.repoId, pins.groupId, epoch-1)
+			standing, readErr := client.args.Api.Epochs(ctx, self.repoId, groupId, epoch-1)
 			if readErr != nil {
 				return 0, readErr
 			}
@@ -624,11 +657,13 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 	}
 	// 200: adopt
 	epochAuthenticator := staged.EpochAuthenticator()
+	removed := staged.Removed()
 	if _, err := staged.Adopt(); err != nil {
 		return 0, err
 	}
 	adopted = true
 	err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
+		pins.groupId = groupId
 		pins.epoch = epoch
 		pins.epochAuthenticator = epochAuthenticator
 		pins.epochHeader = headerBytes
@@ -636,10 +671,12 @@ func (self *gkmGroupManager) commitInFlow(ctx context.Context, state GkmAuthView
 	if err != nil {
 		return 0, err
 	}
+	// what the commit removed as stale, for §7.10's view (gkm_stale.go)
+	self.noteRosterChange(state, check.Header, removed, check.Roster, epoch, now)
 	if groupInfoObject != nil {
 		// above 16 leaves the GroupInfo rides group-info, which rises at each write; a lost one is asked for again
 		// by a joiner's or a resyncer's ?want=
-		if err := client.args.Api.UploadGroupInfo(ctx, self.repoId, pins.groupId, groupInfoObject); err != nil && client.log.V(1).Enabled() {
+		if err := client.args.Api.UploadGroupInfo(ctx, self.repoId, groupId, groupInfoObject); err != nil && client.log.V(1).Enabled() {
 			client.log.Infof("[gkm]group-info of epoch %d was not written: %v", epoch, err)
 		}
 	}
@@ -695,6 +732,7 @@ func (self *gkmGroupManager) judgedGeneration(ctx context.Context, state GkmAuth
 func (self *gkmGroupManager) catchUpInFlow(ctx context.Context, state GkmAuthView) (int, error) {
 	client := self.client
 	adoptedCount := 0
+	yield := client.newYield()
 	for {
 		pins, err := client.repoPins(self.repoId)
 		if err != nil {
@@ -719,6 +757,7 @@ func (self *gkmGroupManager) catchUpInFlow(ctx context.Context, state GkmAuthVie
 			return adoptedCount, fmt.Errorf("%w: %d epochs behind", ErrGkmResyncNeeded, len(entries))
 		}
 		for _, entry := range entries {
+			yield.step()
 			left, err := self.processInFlow(ctx, state, group, entry)
 			if err != nil {
 				return adoptedCount, err
@@ -816,7 +855,8 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	}
 	epochAuthenticator := staged.EpochAuthenticator()
 	headerBytes := staged.AuthenticatedData()
-	_, adoptErr := staged.Adopt()
+	removed := staged.Removed()
+	adoptedGroup, adoptErr := staged.Adopt()
 	adopted = true
 	if adoptErr != nil && !errors.Is(adoptErr, ErrMlsNotMember) {
 		return false, adoptErr
@@ -838,6 +878,10 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	})
 	if err != nil {
 		return false, err
+	}
+	if adoptErr == nil && adoptedGroup != nil {
+		// what the commit removed as stale, for §7.10's view (gkm_stale.go)
+		self.noteRosterChange(state, header, removed, adoptedGroup.Roster(), entry.GetEpoch(), gkmCommitRosterTime(checkArgs))
 	}
 	// removed: it keeps every RK_g it holds and reads on by wraps if it is still a holder
 	return errors.Is(adoptErr, ErrMlsNotMember), nil
