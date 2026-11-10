@@ -64,6 +64,12 @@ type FakeAuthority struct {
 	// the open proposals and settings PendingProposal and Settings answer (DESIGN-DETAILS 5.7)
 	pendingProposals map[string]*bridge.ProposalRow
 	settings         *bridge.ProjectionSettings
+	// what §5.6's device revocation reads (sidecar.SidecarRevokeAuthority), and the recovery sealer
+	suspended        map[sidecar.Id]bool
+	revokeSignatures map[sidecar.Id]int
+	registeredKeys   map[sidecar.Id][]*bridge.KeyRow
+	restoredBindings map[sidecar.Id]bool
+	proposalRule     func(statement *sidecar.SidecarStatement) bool
 }
 
 type fakeAuthorityCascadeKey struct {
@@ -75,6 +81,9 @@ var (
 	_ sidecar.SidecarAuthority          = (*FakeAuthority)(nil)
 	_ sidecar.SidecarAuthorityCatchUp   = (*FakeAuthority)(nil)
 	_ sidecar.SidecarAuthorityProposals = (*FakeAuthority)(nil)
+	_ sidecar.SidecarRevokeAuthority    = (*FakeAuthority)(nil)
+	_ sidecar.SidecarRecoveryAuthority  = (*FakeAuthority)(nil)
+	_ sidecar.SidecarProposalAuthority  = (*FakeAuthority)(nil)
 )
 
 // An authority at pin (0, chain) holding nothing.
@@ -90,7 +99,137 @@ func NewFakeAuthority() *FakeAuthority {
 
 		pendingProposals: map[string]*bridge.ProposalRow{},
 		settings:         &bridge.ProjectionSettings{},
+		suspended:        map[sidecar.Id]bool{},
+		revokeSignatures: map[sidecar.Id]int{},
+		registeredKeys:   map[sidecar.Id][]*bridge.KeyRow{},
+		restoredBindings: map[sidecar.Id]bool{},
 	}
+}
+
+// Sets whether an active Suspend names the sidecar.
+func (self *FakeAuthority) SetSuspended(sidecarId sidecar.Id, suspended bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.suspended[sidecarId] = suspended
+}
+
+// Sets the counted signatures a SidecarRevoke of targetId needs: k for an AdminSet member's device. 1 until set.
+func (self *FakeAuthority) SetRevokeSignatures(targetId sidecar.Id, signatures int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.revokeSignatures[targetId] = signatures
+}
+
+// Registers a presence or SSH key the sidecar signed the KeyRegister of, still registered.
+func (self *FakeAuthority) AddRegisteredKey(sidecarId sidecar.Id, key *bridge.KeyRow) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.registeredKeys[sidecarId] = append(self.registeredKeys[sidecarId], proto.Clone(key).(*bridge.KeyRow))
+}
+
+// Drops a registered key, as its KeyRevoke applied would.
+func (self *FakeAuthority) RemoveRegisteredKey(sidecarId sidecar.Id, keyId []byte) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.registeredKeys[sidecarId] = slices.DeleteFunc(self.registeredKeys[sidecarId], func(key *bridge.KeyRow) bool {
+		return bytes.Equal(key.GetKeyId(), keyId)
+	})
+}
+
+// Sets whether the member's binding in effect is one a cascade void restored.
+func (self *FakeAuthority) SetBindingRestored(memberId sidecar.Id, restored bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.restoredBindings[memberId] = restored
+}
+
+// Sets ProposalRequired's rule: whether a statement needs more than one counted signer. nil, the default, answers
+// from SetRevokeSignatures for a SidecarRevoke and false for anything else.
+func (self *FakeAuthority) SetProposalRule(rule func(statement *sidecar.SidecarStatement) bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.proposalRule = rule
+}
+
+// sidecar.SidecarRevokeAuthority: consented for its member, untagged, not ephemeral, not read_only, not revoked or
+// parked, and not suspended, from the facts set.
+func (self *FakeAuthority) ApprovalCapable(sidecarId sidecar.Id) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	admission := self.sidecars[sidecarId]
+	if admission == nil || admission.Row == nil || 0 < len(admission.TagIds) || admission.Ephemeral ||
+		admission.Row.GetRevokedAt() != 0 || admission.Row.GetParkedAt() != 0 ||
+		admission.Row.GetCapabilities()&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) != 0 {
+		return false
+	}
+	return self.consents[[2]sidecar.Id{sidecarId, admission.MemberId}] && !self.suspended[sidecarId]
+}
+
+// sidecar.SidecarRevokeAuthority: the fact SetSuspended set.
+func (self *FakeAuthority) Suspended(sidecarId sidecar.Id) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.suspended[sidecarId]
+}
+
+// sidecar.SidecarRevokeAuthority: the count SetRevokeSignatures set, 1 until one is.
+func (self *FakeAuthority) RevokeSignatures(targetId sidecar.Id) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return max(1, self.revokeSignatures[targetId])
+}
+
+// sidecar.SidecarRevokeAuthority: the keys AddRegisteredKey set, by key_id.
+func (self *FakeAuthority) RegisteredKeys(sidecarId sidecar.Id) []*bridge.KeyRow {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	keys := []*bridge.KeyRow{}
+	for _, key := range self.registeredKeys[sidecarId] {
+		keys = append(keys, proto.Clone(key).(*bridge.KeyRow))
+	}
+	slices.SortFunc(keys, func(a *bridge.KeyRow, b *bridge.KeyRow) int {
+		return bytes.Compare(a.GetKeyId(), b.GetKeyId())
+	})
+	return keys
+}
+
+// sidecar.SidecarRevokeAuthority: the time of the entry Apply retained at n.
+func (self *FakeAuthority) EntryTime(n uint64) (time.Time, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, entry := range self.entryTimes {
+		if entry.n == n {
+			return time.UnixMilli(entry.timeMs), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// sidecar.SidecarRecoveryAuthority: the fact SetBindingRestored set.
+func (self *FakeAuthority) BindingRestored(memberId sidecar.Id) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.restoredBindings[memberId]
+}
+
+// sidecar.SidecarProposalAuthority: SetProposalRule's answer, or by default whether a SidecarRevoke's target needs
+// more than one counted signature.
+func (self *FakeAuthority) ProposalRequired(statement *sidecar.SidecarStatement) bool {
+	self.stateLock.Lock()
+	rule := self.proposalRule
+	self.stateLock.Unlock()
+	if rule != nil {
+		return rule(statement)
+	}
+	if statement.Type != bridge.SignedType_SIGNED_SIDECAR_REVOKE {
+		return false
+	}
+	revoke := &bridge.SidecarRevoke{}
+	if err := proto.Unmarshal(statement.Body, revoke); err != nil {
+		return false
+	}
+	targetId, err := sidecar.IdFromBytes(revoke.GetSidecarId())
+	return err == nil && 1 < self.RevokeSignatures(targetId)
 }
 
 // Sets a proposal open at the newest state, as a follower that applied its AuthorityProposal would; nil closes it.
@@ -177,35 +316,9 @@ func cloneFakeAdmission(admission *sidecar.AclSidecar) *sidecar.AclSidecar {
 	return &clone
 }
 
-// A deep copy of a row.
+// A deep copy of a row, its confirmations and cascade spans included.
 func cloneSidecarRow(row *bridge.SidecarRow) *bridge.SidecarRow {
-	clone := &bridge.SidecarRow{
-		SidecarId:          bytes.Clone(row.GetSidecarId()),
-		AdmissionSha256:    bytes.Clone(row.GetAdmissionSha256()),
-		AdmittedAt:         row.GetAdmittedAt(),
-		ConfirmSigner:      bytes.Clone(row.GetConfirmSigner()),
-		ConfirmedAt:        row.GetConfirmedAt(),
-		OwnerConfirmSigner: bytes.Clone(row.GetOwnerConfirmSigner()),
-		OwnerConfirmedAt:   row.GetOwnerConfirmedAt(),
-		RevokedAt:          row.GetRevokedAt(),
-		ParkedAt:           row.GetParkedAt(),
-		Sponsor:            bytes.Clone(row.GetSponsor()),
-		Capabilities:       row.GetCapabilities(),
-		DelegationId:       bytes.Clone(row.GetDelegationId()),
-		LiveSince:          row.GetLiveSince(),
-		NotAfter:           row.GetNotAfter(),
-		IdentityPublicKey:  bytes.Clone(row.GetIdentityPublicKey()),
-		IdentityAlg:        row.GetIdentityAlg(),
-		MemberId:           bytes.Clone(row.GetMemberId()),
-		Ephemeral:          row.GetEphemeral(),
-	}
-	for _, signer := range row.GetAdmissionSigners() {
-		clone.AdmissionSigners = append(clone.AdmissionSigners, bytes.Clone(signer))
-	}
-	for _, tagId := range row.GetTagIds() {
-		clone.TagIds = append(clone.TagIds, bytes.Clone(tagId))
-	}
-	return clone
+	return proto.Clone(row).(*bridge.SidecarRow)
 }
 
 // Admits a sidecar at the current pin's next position, as a SidecarAdmit applied there. Returns its row's position.

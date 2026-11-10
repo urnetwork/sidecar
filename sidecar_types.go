@@ -66,6 +66,8 @@ type Sidecar struct {
 	gates sidecarGates
 	// A core hint's revocation claim being checked (identity_revoke_self.go).
 	revocationClaims sidecarRevocationClaims
+	// keychain.wrap's recovery copy and the binding it is sealed to (keys_recovery_seal.go).
+	recovery recoverySealer
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
