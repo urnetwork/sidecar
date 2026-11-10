@@ -446,7 +446,8 @@ func TestEvsRekeyAKillBeforeTheRecordRewritesNothingTwice(t *testing.T) {
 	if !errors.Is(err, errRekeyTestKilled) {
 		t.Fatalf("a job killed before its record: %v", err)
 	}
-	if progress.State != GkmRekeyStateStopped {
+	// what the run answers is the record as stored, never ahead of it
+	if progress.State != GkmRekeyStateStopped || progress.RewrittenCount != 4 || progress.PushCount != 1 || progress.StopReason == "" {
 		t.Fatalf("the progress at the kill: %+v", progress)
 	}
 	rekey := test.rekey()
@@ -611,12 +612,13 @@ func TestEvsRekeyRefusesTheRootAndSkipsAGitModeRef(t *testing.T) {
 			_, second = rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId, Paths: []string{"s"}})
 		}
 	})
-	// paths in any order, one inside another: walked once, in walk order
-	progress, err = rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId, Paths: []string{paths[2], "s", paths[0]}})
+	// paths in any order, one inside another: walked once, in walk order; a path named that does not stand is
+	// counted as gone, not passed over in silence
+	progress, err = rekey.Run(context.Background(), &GkmRekeyRequest{RepoId: repoId, Paths: []string{paths[2], "s", "nowhere", paths[0]}})
 	if err != nil || !errors.Is(second, ErrGkmRekeyRunning) {
 		t.Fatalf("a job with a second asked for inside it: %v, the second %v", err, second)
 	}
-	if progress.RewrittenCount != 3 || len(progress.Paths) != 1 || progress.Paths[0] != "s" {
+	if progress.RewrittenCount != 3 || progress.AbsentCount != 1 || len(progress.Paths) != 2 || progress.Paths[0] != "nowhere" || progress.Paths[1] != "s" {
 		t.Errorf("the progress: %+v", progress)
 	}
 	test.requireRekeyed(2, paths...)

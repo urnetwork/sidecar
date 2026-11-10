@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // KEYS-M2-26's test of `ur keys rotate`, which is GkmClient.RotateRepo (DESIGN-DETAILS 6.2.5): a rotation on request
 // claims cause REQUEST, never REMOVE, unless a REMOVE is due at the rotator's state, and then REMOVE whatever was
 // asked, so §11.7's rule (4) rewrites files exactly when a holder left.

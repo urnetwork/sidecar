@@ -138,8 +138,8 @@ type GkmRekeySkippedRef struct {
 	Reason string
 }
 
-// A job's progress, as its record holds it: counts and positions, and this device's own paths, which stay in the
-// sealed store and are never logged (I-13).
+// A job's progress, as its stored record holds it, so nothing here is ahead of what a restart would find: counts and
+// positions, and this device's own paths, which stay in the sealed store and are never logged (I-13).
 type GkmRekeyProgress struct {
 	RepoId Id
 	State  GkmRekeyState
@@ -183,6 +183,7 @@ type gkmRekeyRecord struct {
 	UpdatedAtMs    int64                 `json:"updated_at_ms"`
 }
 
+// A skipped ref's stored form.
 type gkmRekeySkipRecord struct {
 	RefName []byte `json:"ref_name"`
 	Reason  string `json:"reason"`
@@ -281,7 +282,9 @@ func (self *GkmRekey) Run(ctx context.Context, request *GkmRekeyRequest) (*GkmRe
 	err = run.walk(ctx)
 	self.finish(run, err)
 	if err != nil {
-		return run.progress(GkmRekeyStateStopped), err
+		progress := run.progress(GkmRekeyStateStopped)
+		progress.StopReason = err.Error()
+		return progress, err
 	}
 	return run.progress(GkmRekeyStateDone), nil
 }
@@ -365,7 +368,7 @@ func (self *GkmRekey) begin(ctx context.Context, request *GkmRekeyRequest) (*gkm
 			Version: gkmRekeyRecordVersion, Generation: repoKey.Generation(), RefNames: refNames, Paths: paths,
 			StartedAtMs: now, UpdatedAtMs: now,
 		}
-		return run.persist()
+		return run.persist(run.record)
 	}()
 	if err != nil {
 		self.finish(run, err)
@@ -473,6 +476,10 @@ type gkmRekeyRun struct {
 	// the ref being walked
 	refName []byte
 	refId   Id
+	// files that needed no write, counted since the record was last written: the record takes them at its next
+	// write, which names a position at or past each of them, so the record in memory is always the record as stored
+	currentCount uint64
+	absentCount  uint64
 	// listed files waiting for their read, in walk order
 	listedPaths []string
 	// read files waiting for their push, in walk order
@@ -498,24 +505,33 @@ func (self *gkmRekeyRun) progress(state GkmRekeyState) *GkmRekeyProgress {
 	return progress
 }
 
-// Changes the record and writes it whole, so a kill leaves the old record or the new one (SidecarStore's rule).
+// Changes the record, with the counts waiting beside it, and writes it whole, so a kill leaves the old record or the
+// new one (SidecarStore's rule). The record in memory changes only once the write committed.
 func (self *gkmRekeyRun) update(change func(record *gkmRekeyRecord)) error {
-	func() {
+	next := func() *gkmRekeyRecord {
 		self.recordLock.Lock()
 		defer self.recordLock.Unlock()
-		change(self.record)
-		self.record.UpdatedAtMs = self.rekey.clock.Now().UnixMilli()
+		next := *self.record
+		next.Skipped = slices.Clone(self.record.Skipped)
+		return &next
 	}()
-	return self.persist()
+	change(next)
+	next.CurrentCount += self.currentCount
+	next.AbsentCount += self.absentCount
+	next.UpdatedAtMs = self.rekey.clock.Now().UnixMilli()
+	if err := self.persist(next); err != nil {
+		return err
+	}
+	self.currentCount, self.absentCount = 0, 0
+	self.recordLock.Lock()
+	defer self.recordLock.Unlock()
+	self.record = next
+	return nil
 }
 
-// Writes the record.
-func (self *gkmRekeyRun) persist() error {
-	data, err := func() ([]byte, error) {
-		self.recordLock.Lock()
-		defer self.recordLock.Unlock()
-		return json.Marshal(self.record)
-	}()
+// Writes record as the repo's.
+func (self *gkmRekeyRun) persist(record *gkmRekeyRecord) error {
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -683,7 +699,10 @@ func (self *gkmRekeyRun) walkEntry(ctx context.Context, path string, kind protoc
 		}
 		return nil
 	default:
-		// gone since it was named
+		// a path named that does not stand: counted as gone, once
+		if after == "" || 0 < gkmRekeyComparePaths(path, after) {
+			self.absentCount += 1
+		}
 		return nil
 	}
 }
@@ -719,17 +738,16 @@ func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull
 		return err
 	}
 	defer result.objects.close()
-	var currentCount, absentCount uint64
 	for i, verified := range result.replies {
 		switch {
 		case verified.Base != nil:
 			return ErrEvsOverlayBase
 		case verified.Entry == nil || verified.Removal != nil || verified.Absent:
-			absentCount += 1
+			self.absentCount += 1
 			continue
 		case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
 			// a directory took the name since the listing: its files are new, sealed to a current generation
-			absentCount += 1
+			self.absentCount += 1
 			continue
 		}
 		if err := self.pacer.take(ctx); err != nil {
@@ -741,31 +759,19 @@ func (self *gkmRekeyRun) readFiles(ctx context.Context, paths []string, pushFull
 		}
 		if generation <= chain.KeyGeneration {
 			content.close()
-			currentCount += 1
+			self.currentCount += 1
 			continue
 		}
 		self.batch = append(self.batch, &gkmRekeyFile{path: paths[i], content: content, version: verified.Entry.GetVersion()})
 		self.batchByteCount += content.Size()
 		if pushFull && (self.rekey.settings.PushEntryWriteCount <= len(self.batch) || self.rekey.settings.PushByteCount <= self.batchByteCount) {
-			// the counts so far are of files at or before this push's last path, which the record then names
-			self.addCounts(currentCount, absentCount)
-			currentCount, absentCount = 0, 0
+			// every file counted so far is at or before this push's last path, which the record then names
 			if err := self.pushBatch(ctx); err != nil {
 				return err
 			}
 		}
 	}
-	self.addCounts(currentCount, absentCount)
 	return nil
-}
-
-// Counts files that needed no write. The record carries them at its next write, which names a position at or past
-// each of them.
-func (self *gkmRekeyRun) addCounts(currentCount uint64, absentCount uint64) {
-	self.recordLock.Lock()
-	defer self.recordLock.Unlock()
-	self.record.CurrentCount += currentCount
-	self.record.AbsentCount += absentCount
 }
 
 // Pushes the batch, every file a forced checkpoint held to the version it was read at, and only then moves the
