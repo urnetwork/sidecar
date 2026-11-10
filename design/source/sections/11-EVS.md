@@ -41,7 +41,7 @@ Keys come from §10, identity from §5, push from §6, tokens, the projection an
 
 - **No code** exists for evs or a git server [R:server-platform] §5.10.
 - **BlobStore** has an overwriting Put (server/blob.go:674-679), PutIfAbsent as one If-None-Match request (:683-697), whole-object Get, List and SetLifecycle, but "deliberately no Delete", no ranged read and no streamed put (:155-183).
-- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and owner decision 18's clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). Upstream's DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored; §19.6's in-house build honors one condition of its own, `x-ur-if-unmodified-ms`, under the key's lock. A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
+- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and owner decision 18's clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). Upstream's DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored; §19.6's in-house build honors one condition of its own, `x-ur-if-unmodified-ms`, under the key's lock (owner decision 225). A LIST asks a set's online drives and returns a key that half of those asked hold (cmd/metacache-set.go:728-733), so with three of eight drives offline it can leave out a key that five took; the in-house build answers such a LIST 503 (owner decision 226). A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
 - **lb.** `client_max_body_size 16m` is global (warp/warpctl/config.go:1301); `streamable_paths` (warp/services/services.go:694-701) get 60 s timeouts and no request buffering (warp/warpctl/config.go:2311-2319).
 - **Crypto and clients.** x/crypto v0.54.0 (connect/go.mod:30) has XChaCha20-Poly1305 (chacha20poly1305/xchacha20poly1305.go:24) and no AES-SIV. Clients are reaped after 30+30 idle days (server/model/network_client_model.go:4179, :4199), so the durable signer is §5's `sidecar_id`.
 
@@ -938,14 +938,14 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              (11.22), every slot a new version names introduced by this push or named by a version step 4 read; a
              DROP's written boundary and its lists' base (409 DROP_BOUNDARY, DROP_LIST; 11.7); then the push's purge
              candidates (11.13)
-       6  one round: append P's record to the process's open batch and await its write (batches, above); if the window
-          would pass 127 versions, fold any of its oldest 64 still unfolded (If-Match) and PUT log/<n> for them
-          (If-None-Match; equal bytes on 412), or, if that cannot finish within the 5 s rule, page nothing (up to
-          255 versions; then 429 FOLD_BEHIND); then, for a push with new slots, one more round PUTs each slot
-          (If-None-Match; equal bytes on 412 are success, from M2 (11.22) only if a HEAD shows that object under
-          23 h old, else 409 SLOT_STALE, as a re-upload gets SEGMENT_STALE; unequal ones send evs to a cluster read
-          of the head, where 5a finds P committed if an ERASE rewrote it, else alarm), so a record names every slot
-          written
+       6  one round: append P's record to the process's open batch, a batch opening only while the process's clock is
+          sure (§19.6), and await its write (batches, above); if the window would pass 127 versions, fold any of its
+          oldest 64 still unfolded (If-Match) and PUT log/<n> for them (If-None-Match; equal bytes on 412), or, if
+          that cannot finish within the 5 s rule, page nothing (up to 255 versions; then 429 FOLD_BEHIND); then, for
+          a push with new slots, one more round PUTs each slot (If-None-Match; equal bytes on 412 are success, from
+          M2 (11.22) only if a HEAD shows that object under 23 h old, else 409 SLOT_STALE, as a re-upload gets
+          SEGMENT_STALE; unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE
+          rewrote it, else alarm), so a record names every slot written
        7  PUT head {v+1, C_{v+1}, P, the push's pins, window + P's entry (P, statement hash, place, digest, flags)
           - any paged out, window_base_chain, folded_through, written_ms, lease cleared, and for a CUT index_epoch
           v+1} If-Match step 4's ETag: the commit point; issued only within 5 s of step 4's reads, else steps 4
@@ -1604,12 +1604,15 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
 **Store needs (X13):**
 
 ```text
-needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads and LIST,
-          streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), a Delete, unconditional
-          or naming its object's LastModified (11.3, §19.6), §19.6's deadline and settle rules: a request refused
-          once its x-ur-deadline-ms has passed, and a PUT or DELETE that takes effect before any later request on
-          its key or never (D-OPS-20; 11.7's stale and collect rows), and lifecycle rules, each metadata cluster in
-          one pool (11.8), which §22's suite checks;
+needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads, a LIST
+          answered only when it is whole, else 503, as §19.6's list row has it while a set has three or more drives
+          offline, or one while another heals (owner decision 226), so evacuation's horizon, the nightly pass and
+          uncached pidx/ lookups wait in that state, streamed and ranged I/O, object metadata on PUT and HEAD (11.7's
+          entry states), a Delete, unconditional or naming its object's LastModified (11.3, §19.6; owner decision
+          225), and §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
+          PUT or DELETE that takes effect before any later request on its key or never (D-OPS-20; 11.7's stale and
+          collect rows), each metadata cluster in one pool (11.8) and no lifecycle rule on any bucket, which §22's
+          suite checks;
           segment PUTs ride streamable_paths: ["/evs/v1/repos/[^/]+/segments/[^/]+"]
 address   a segment is addressed only by segment_id = SHA-256 of its bytes, never by cluster, bucket, pack or
           offset; locators are signed (inside entry versions), so packing never rewrites them; readers GET
@@ -1965,7 +1968,7 @@ orphans   the nightly pass first takes each metadata cluster's horizon, from one
           each repo's seg/ prefix on the segment cluster, as it does for stored bytes, and its pidx/ entries; a
           segment whose LastModified + 24 h + 2 min is at or before its repo's cluster's horizon and that no pidx/
           entry lists as introduced is an orphan, which taskworker deletes by a DELETE that names its LastModified
-          (§19.6), at most 10 a second a segment cluster, on clusters whose build passed §19.6's settle cases; it
+          (§19.6; owner decision 225), at most 10 a second a segment cluster, on clusters whose build passed §19.6's settle cases; it
           raises no fence and reads no batch, so an orphan goes 49 to 75 h after its upload (owner decision 203);
           an uncommitted path map above its ref's current epoch goes the same way, by its oldest part (11.6)
 why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check,
