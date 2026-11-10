@@ -1,9 +1,12 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // One relay connection's session (§16.4, D-MCP-2): its hello, its agent and the instructions text picked at its start,
-// and its limits (limits.go). The agent is an attribution label,
+// its limits (limits.go), and its run bindings, one per network (hook_bind.go). The agent is an attribution label,
 // agent_asserted (X10; owner decision 47): the hello's, else the project's `.ur` default, read once at the session's
 // start. A label that is not one leaves the session unable to serve calls, each refused, rather than recorded raw.
+//
+// A session's run's taint lives in the run's file (D-MCP-16), never here: until a hook binds it, a session is
+// unbound and acts under a placeholder run id the run store never saw, which reads tainted.
 //
 // Safe for concurrent use.
 
@@ -28,9 +31,13 @@ type McpSession struct {
 	agentErr     error
 	instructions string
 	limits       *mcpSessionLimits
+	// the relay's harness process and ancestry, by the pid the system reports; empty when it cannot be read
+	caller mcpCallerProcess
 
 	stateLock     sync.Mutex
 	serverSession *gomcp.ServerSession
+	// each network's binding (hook_bind.go)
+	networkIdBindings map[sidecar.Id]*mcpSessionBinding
 }
 
 // A copy of the hello the session opened with. PeerPid is the system's report of the relay's pid.

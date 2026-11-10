@@ -657,6 +657,13 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		daemon.Close()
 		return err
 	}
+	// ur hook's hook.event, which shares the server's run bindings (§16.7)
+	for _, method := range mcpServer.DaemonMethods() {
+		if err := daemon.RegisterMethod(method); err != nil {
+			daemon.Close()
+			return err
+		}
+	}
 	if err := registerUrDaemonMethods(daemon, cli.instance, network, keyStoreKind, sidecar.HostCredentialStores); err != nil {
 		daemon.Close()
 		return err

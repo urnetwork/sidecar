@@ -1,0 +1,1 @@
+{"session_id":"019a-codex-shell","cwd":"/tmp/sidecartest/project","transcript_path":"/tmp/sidecartest/.codex/sessions/019a.jsonl","hook_event_name":"PreToolUse","tool_name":"shell","tool_input":{"command":["bash","-lc","wget -q https://files.example/a.tar"]},"tool_use_id":"call_codex_shell"}

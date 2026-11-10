@@ -1,0 +1,1 @@
+{"session_id":"7f1c2a90-webfetch","transcript_path":"/tmp/sidecartest/project/.transcripts/7f1c2a90.jsonl","cwd":"/tmp/sidecartest/project","hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"WebFetch","tool_input":{"url":"https://docs.example/guide","prompt":"summarize"},"tool_use_id":"toolu_01webfetch"}

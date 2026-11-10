@@ -1,0 +1,1 @@
+{"conversation_id":"c0ffee-conversation","generation_id":"c0ffee-generation","hook_event_name":"afterShellExecution","workspace_roots":["/tmp/sidecartest/project"],"transcript_path":null,"command":"ls -la; curl https://api.example/status","output":"ok","duration":40}

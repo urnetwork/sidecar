@@ -48,6 +48,24 @@ type SidecarIngestSettings struct {
 	TranscriptTailInterval time.Duration
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
 	HookExitTimeout time.Duration
+	// How long `ur hook` waits on a PreToolUse until the daemon holds the paths it names, past which it exits 0 and
+	// those paths' before is unknown (§16.7): 10 s, a reading, far under a harness's own hook timeout.
+	HookPathTimeout time.Duration
+	// A hook coverage lapse: a tool call of a bound session with no hook event of its run within this either side
+	// of it taints the run and counts a missed_event gap (§16.6's taint row): 60 s.
+	HookLapseTimeout time.Duration
+	// The harness config hashes are checked at each SessionStart and this often while a run lives (§16.6): 5 min.
+	ConfigCheckInterval time.Duration
+	// Tools whose use taints the run before the hook is acked (§16.6's taint row; MCP.md's reading 12): a tool of
+	// one of these names, or a shell call whose pipeline has a stage whose first word is one, by its base name.
+	// Matched exactly, so a wrapped call such as `python -c` goes unseen, as harness-native egress does.
+	WebToolNames []string
+	// Programs a harness may run a hook or an MCP server through, which the ancestry rules step over to find the
+	// harness process itself (plan-MCP-taint-new-session): shells, by base name without .exe, lowercase.
+	ShellNames []string
+	// The most ancestors a pid's ancestry reads before it stops, a bound on the work one lookup does: 64, far past
+	// any real process tree.
+	AncestorDepthCount int
 	// A run's restore point on disk: 256 MiB.
 	RestorePointByteCount int64
 	// A path's bytes are held from its PreToolUse to its PostToolUse at most this long: 10 min.
@@ -132,9 +150,17 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		SpoolCursorRecordCount: 64,
 		TranscriptTailInterval: 30 * time.Second,
 		HookExitTimeout:        300 * time.Millisecond,
-		RestorePointByteCount:  256 * 1024 * 1024,
-		RestoreHoldTimeout:     10 * time.Minute,
-		RestoreHoldByteCount:   8 * 1024 * 1024,
+		HookPathTimeout:        10 * time.Second,
+		HookLapseTimeout:       60 * time.Second,
+		ConfigCheckInterval:    5 * time.Minute,
+		WebToolNames:           []string{"WebFetch", "WebSearch", "web_search", "web_fetch", "curl", "wget"},
+		ShellNames: []string{
+			"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "tcsh", "csh", "nu", "cmd", "powershell", "pwsh",
+		},
+		AncestorDepthCount:    64,
+		RestorePointByteCount: 256 * 1024 * 1024,
+		RestoreHoldTimeout:    10 * time.Minute,
+		RestoreHoldByteCount:  8 * 1024 * 1024,
 	}
 }
 

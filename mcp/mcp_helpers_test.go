@@ -27,12 +27,37 @@ import (
 // How long a test waits on a session before calling itself broken. It bounds a hang and proves nothing.
 const mcpTestTimeout = 30 * time.Second
 
-// One network of a fake daemon.
+// One network of a fake daemon: its run files in a fake store, which a restart reopens with nothing in memory.
 type fakeMcpNetwork struct {
 	stateLock sync.Mutex
 	state     sidecar.SidecarState
+	store     *sidecartest.FakeStore
 	runs      *sidecar.RunStore
 	spool     *sidecar.Spool
+}
+
+// A restart: a run store over the same files with nothing in memory.
+func (self *fakeMcpNetwork) reopenRuns(t *testing.T, clock sidecar.Clock) {
+	t.Helper()
+	runs, err := sidecar.NewRunStore(self.store.Root(), sidecar.DefaultSidecarSettings().Mcp, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self.runs = runs
+}
+
+// Overwrites a run's file with bytes that do not read.
+func (self *fakeMcpNetwork) corruptRun(t *testing.T, runId sidecar.Id) {
+	t.Helper()
+	writer, err := self.store.Root().Create("runs/" + runId.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	writer.Write([]byte("not a run file"))
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (self *fakeMcpNetwork) setState(state sidecar.SidecarState) {
@@ -64,22 +89,30 @@ func (self *fakeMcpNetwork) Spool() (*sidecar.Spool, error) {
 // A daemon of networks a test sets, resolving as §5.8 does: the argument by id, else the only one.
 type fakeMcpDaemon struct {
 	stateLock       sync.Mutex
-	networkIdHosted map[sidecar.Id]*fakeMcpNetwork
+	networkIdHosted map[sidecar.Id]McpNetwork
 }
 
 func newFakeMcpDaemon() *fakeMcpDaemon {
-	return &fakeMcpDaemon{networkIdHosted: map[sidecar.Id]*fakeMcpNetwork{}}
+	return &fakeMcpDaemon{networkIdHosted: map[sidecar.Id]McpNetwork{}}
+}
+
+// Hosts network, a real Sidecar among them, as networkId's, in place of any before.
+func (self *fakeMcpDaemon) hostNetwork(networkId sidecar.Id, network McpNetwork) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.networkIdHosted[networkId] = network
 }
 
 // Hosts a network in state, with a run store over a fake store.
 func (self *fakeMcpDaemon) host(t *testing.T, state sidecar.SidecarState, clock sidecar.Clock) (sidecar.Id, *fakeMcpNetwork) {
 	t.Helper()
-	runs, err := sidecar.NewRunStore(sidecartest.NewFakeStore().Root(), sidecar.DefaultSidecarSettings().Mcp, clock)
+	store := sidecartest.NewFakeStore()
+	runs, err := sidecar.NewRunStore(store.Root(), sidecar.DefaultSidecarSettings().Mcp, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	networkId := sidecar.NewId()
-	network := &fakeMcpNetwork{state: state, runs: runs}
+	network := &fakeMcpNetwork{state: state, store: store, runs: runs}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.networkIdHosted[networkId] = network
