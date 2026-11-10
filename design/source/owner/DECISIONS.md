@@ -1118,6 +1118,20 @@ The build raised its questions in a ledger (`.stack/decisions/LEDGER.json`, outs
     - Not taken: (2) latching at the peer's first sealed frame alone, which accepts a forged plaintext pack until then, without end for a silent peer; (3) now, before the measurement.
     - Raised by the build (connect's C16; the build's ledger, QD-275).
 
+225. **The in-house MinIO build honors `x-ur-if-unmodified-ms` on a DELETE, so a GC run deletes only the object it listed (option 1, the recommendation).**
+    - Question: a segment's key is the hash of its bytes, and orphan GC's DELETE was unconditional. Two GC runs can hold a decision on one orphan, since a worker paused past its claim's 5 min lease wakes beside its successor: the first deletes the segment, its uploader stores the same bytes again under a fresh receipt and commits, and the second run's DELETE then takes the new, committed object. No fence or check of the second run helps, since each was made before the re-upload, and upstream's DELETE evaluates no precondition.
+    - Answer: the build honors `x-ur-if-unmodified-ms: T` on a DELETE, under the key's lock: 412, with nothing sent to a drive, when the object it finds was stored a second or more after T; a missing key answers 204 as today. `sidecar.WithBlobUnmodified(ctx, lastModified)` carries it, as `WithBlobDeadline` carries a deadline, and orphan GC, the nightly pass's container deletes and the sweep send it.
+    - Cost: about thirty lines in the fork, one context helper, the fake and three suite cases. The header is a time in a request, as `x-ur-deadline-ms` is, so it adds no §2.8 line.
+    - Not taken: (2) a HEAD of each orphan just before its DELETE, the DELETE's deadline 2 s after it, which leaves the hazard when a second run's DELETE, the re-upload and its commit all fall inside those 2 s; (3) a lease object per GC shard, as a drop job has, which costs a new object family, its §2.8 row and a renewal write per checkpoint.
+    - Raised by the design details (DESIGN-DETAILS.md section 2; the build's ledger, QD-624).
+
+226. **The in-house MinIO build answers a LIST 503 when it could have dropped a key, so evacuation's horizon and every deletion decided on a LIST rest on a whole listing (option 1, the recommendation).**
+    - Question: MinIO's LIST asks a set's online drives and returns a key only if at least half of those asked hold it, while an acknowledged key is on N/2 + 1 drives, so with three of eight drives offline it can drop a batch that five drives took. Evacuation's horizon (owner decision 203), and GC and the nightly pass, which delete on LISTs of pb/ and pidx/, would then act on what is missing, and a negative pidx/ lookup is a LIST too.
+    - Answer: the build asks every online drive of each set a LIST reads, whatever `list_quorum` says, and answers 503 when three or more of a set's drives are offline, or any is while another heals. LISTs then fail in §19.6's at_risk state on a metadata set and with one host down on a 16-drive segment set, where evacuation, the nightly pass and uncached pidx/ lookups wait.
+    - Cost: a few lines in the fork's cmd/metacache-set.go and one FS-114 clause; deletions, and the reads that need a LIST, wait while a set is at risk, a state the cluster is already paged for.
+    - Not taken: (2) taskworker reading each set's drive states from admin info and deleting nothing past that line, which leaves readers' lookups exposed and a 60 s window from the info's age; (3) accepting it, which costs I-EVS-5 its "only" while three drives of one metadata set are out of reach on hosts that still answer.
+    - Raised by the design details (DESIGN-DETAILS.md section 2; the build's ledger, QD-625).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.
