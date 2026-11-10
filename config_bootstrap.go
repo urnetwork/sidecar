@@ -33,7 +33,7 @@ type ConfigBootstrapArgs struct {
 	// The config repo the Genesis names, a fresh id.
 	ConfigRepoId Id
 	// The config repo's main ref, empty until the winner pushes; and api's log, to learn whose genesis won.
-	Heads      ConfigHeadStore
+	Heads      ConfigHeadRef
 	Publisher  ConfigBasePublisher
 	Projection ConfigProjectionReader
 	// EvsClient.CreateRepo for the config kind, which the winner runs before pushing the head; nil runs none.

@@ -70,19 +70,19 @@ func (self *FakeConfigHeads) ReadConfigHead(ctx context.Context, version uint64,
 }
 
 // The ref as one device writes it, signing its pushes by key.
-func (self *FakeConfigHeads) For(sidecarId sidecar.Id, key ed25519.PrivateKey) *FakeConfigHeadStore {
-	return &FakeConfigHeadStore{heads: self, sidecarId: sidecarId, key: key}
+func (self *FakeConfigHeads) For(sidecarId sidecar.Id, key ed25519.PrivateKey) *FakeConfigHeadRef {
+	return &FakeConfigHeadRef{heads: self, sidecarId: sidecarId, key: key}
 }
 
-// One device's sidecar.ConfigHeadStore over the shared ref.
-type FakeConfigHeadStore struct {
+// One device's sidecar.ConfigHeadRef over the shared ref.
+type FakeConfigHeadRef struct {
 	heads     *FakeConfigHeads
 	sidecarId sidecar.Id
 	key       ed25519.PrivateKey
 }
 
 // The newest head, version and C_v.
-func (self *FakeConfigHeadStore) CurrentConfigHead(ctx context.Context) (*sidecar.ConfigHead, uint64, [sha256.Size]byte, error) {
+func (self *FakeConfigHeadRef) CurrentConfigHead(ctx context.Context) (*sidecar.ConfigHead, uint64, [sha256.Size]byte, error) {
 	self.heads.stateLock.Lock()
 	defer self.heads.stateLock.Unlock()
 	version := uint64(len(self.heads.heads))
@@ -93,7 +93,7 @@ func (self *FakeConfigHeadStore) CurrentConfigHead(ctx context.Context) (*sideca
 }
 
 // A push of head after version, signed by this device, under evs-push's purpose (§6.11).
-func (self *FakeConfigHeadStore) PrepareConfigHead(ctx context.Context, head *sidecar.ConfigHead, version uint64) (*sidecar.ConfigHeadPush, error) {
+func (self *FakeConfigHeadRef) PrepareConfigHead(ctx context.Context, head *sidecar.ConfigHead, version uint64) (*sidecar.ConfigHeadPush, error) {
 	self.heads.stateLock.Lock()
 	defer self.heads.stateLock.Unlock()
 	if uint64(len(self.heads.heads)) < version {
@@ -132,7 +132,7 @@ func (self *FakeConfigHeadStore) PrepareConfigHead(ctx context.Context, head *si
 
 // Applies a prepared push If-Match on its version: the same push again is success, another at that version a
 // conflict.
-func (self *FakeConfigHeadStore) CommitConfigHead(ctx context.Context, push *sidecar.ConfigHeadPush) error {
+func (self *FakeConfigHeadRef) CommitConfigHead(ctx context.Context, push *sidecar.ConfigHeadPush) error {
 	self.heads.stateLock.Lock()
 	defer self.heads.stateLock.Unlock()
 	version := uint64(len(self.heads.heads))
@@ -149,7 +149,7 @@ func (self *FakeConfigHeadStore) CommitConfigHead(ctx context.Context, push *sid
 }
 
 // The Signed EvsPush of each version in (after, through].
-func (self *FakeConfigHeadStore) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
+func (self *FakeConfigHeadRef) ConfigHeadPushes(ctx context.Context, after uint64, through uint64) ([][]byte, error) {
 	self.heads.stateLock.Lock()
 	defer self.heads.stateLock.Unlock()
 	if through < after || uint64(len(self.heads.pushes)) < through {

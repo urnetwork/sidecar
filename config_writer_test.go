@@ -1,3 +1,5 @@
+//go:build !sidecar_http && !js
+
 // TEAM-M2-09's writer on T2's fake api (TEAM-M2-12): BootstrapNetwork and the race of two first devices, a base that
 // loses its position to a statement and lands re-signed carrying the tail's verdicts, the fold loop's cadence on a fake
 // clock with a second writer's base cancelling the delay, a fold at start after being offline, and a pending head

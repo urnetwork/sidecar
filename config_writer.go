@@ -70,7 +70,7 @@ type ConfigHeadPush struct {
 
 // The config repo's file-mode main ref as a config writer saves heads to it (§11.8): EvsClient's for the config kind,
 // or a test's fake.
-type ConfigHeadStore interface {
+type ConfigHeadRef interface {
 	// The head the ref holds now, its version and C_v; a nil head at version 0 before the first push.
 	CurrentConfigHead(ctx context.Context) (*ConfigHead, uint64, [sha256.Size]byte, error)
 	// Signs, and does not send, the push that makes head the ref's version after version: its Signed EvsPush and the
@@ -147,7 +147,7 @@ type ConfigWriterArgs struct {
 	Sign      ConfigSignFunction
 	// The verified state the writer stands on, which it catches up after a 409.
 	Client    *ConfigClient
-	Heads     ConfigHeadStore
+	Heads     ConfigHeadRef
 	Publisher ConfigBasePublisher
 	Settings  *ConfigWriterSettings
 }
