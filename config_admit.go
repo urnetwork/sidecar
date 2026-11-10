@@ -167,7 +167,8 @@ func configCheckAdminSet(state *ConfigState, statement *configStatement) error {
 	return nil
 }
 
-// An AdminSet's effect: each member it names takes its role, each it drops falls to member, and its threshold holds.
+// An AdminSet's effect: each member it names takes its role, each it drops falls to member, and its threshold holds;
+// every proposal Recovery's window holds is void (§7.9's voiding row).
 func configApplyAdminSet(next *configStateBuilder, statement *configStatement) error {
 	adminSet := statement.body.(*protocol.AdminSet)
 	roles, err := configAdminSetRoles(adminSet)
@@ -185,6 +186,7 @@ func configApplyAdminSet(next *configStateBuilder, statement *configStatement) e
 		}
 	}
 	next.state.threshold = adminSet.GetThreshold()
+	configVoidProposals(next, statement.n, func(proposal *configProposal) bool { return true })
 	return nil
 }
 
@@ -274,7 +276,8 @@ func configCheckMemberRevoke(state *ConfigState, statement *configStatement) err
 }
 
 // A MemberRevoke's effect: the member's row goes, and each of its untagged devices is revoked at this position, its
-// tagged agents keeping their tags with autogroup:admin as their sponsor (§7.10's Sponsors).
+// tagged agents keeping their tags with autogroup:admin as their sponsor (§7.10's Sponsors); a recovery window whose
+// subject the member is is void (§7.9's voiding row).
 func configApplyMemberRevoke(next *configStateBuilder, statement *configStatement) error {
 	memberId, err := IdFromBytes(statement.body.(*bridge.MemberRevoke).GetMemberId())
 	if err != nil {
@@ -283,6 +286,9 @@ func configApplyMemberRevoke(next *configStateBuilder, statement *configStatemen
 	if next.member(memberId) == nil {
 		return fmt.Errorf("%w: no such member", ErrConfigRule)
 	}
+	configVoidProposals(next, statement.n, func(proposal *configProposal) bool {
+		return slices.Contains(configProposalSubjects(next.state, proposal), memberId)
+	})
 	next.deleteMember(memberId)
 	for sidecarId, row := range next.state.sidecars {
 		if rowMemberId, untagged := configRowMember(row); untagged && rowMemberId == memberId && row.GetRevokedAt() == 0 {
@@ -463,6 +469,10 @@ func configCheckSidecarAdmit(state *ConfigState, statement *configStatement) err
 		}
 		statement.rowSigner = statement.signers[0]
 		return nil
+	}
+	if slices.ContainsFunc(statement.signers, func(signer ConfigSigner) bool { return signer.Kind == ConfigSignerRecovery }) {
+		statement.rowSigner, err = state.checkRecoveryAdmission(statement, admission)
+		return err
 	}
 	statement.rowSigner, err = state.admitSigners(statement.signers, admission, statement.timeMs)
 	return err

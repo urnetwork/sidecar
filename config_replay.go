@@ -297,11 +297,14 @@ func (self *ConfigLog) judgeTailEntry(next *configStateBuilder, kept *configKept
 			kept.verdict.Refusal = fmt.Errorf("%w: tick: %w", ErrConfigRule, err)
 			return
 		}
-		if err := configCheckTick(view, tick); err != nil {
+		activations, err := configCheckTick(view, tick, kept.n, kept.entry.GetTimeMs())
+		if err == nil {
+			err = configApplyTick(next, tick, activations)
+		}
+		if err != nil {
 			kept.verdict.Refusal = err
 			return
 		}
-		configApplyTick(next, tick)
-		kept.tick = tick
+		kept.tick, kept.activations = tick, activations
 	}
 }

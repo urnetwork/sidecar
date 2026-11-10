@@ -225,7 +225,9 @@ func (self *configStateHistory) rebuild(view *configHistoryView, k uint64) (*Con
 				if kept.tick == nil {
 					return nil, fmt.Errorf("the tick at %d took effect and is not kept", j)
 				}
-				configApplyTick(next, kept.tick)
+				if err := configApplyTick(next, kept.tick, kept.activations); err != nil {
+					return nil, fmt.Errorf("the tick at %d: %w", j, err)
+				}
 			default:
 				return nil, fmt.Errorf("a base at %d, which the window keeps", j)
 			}

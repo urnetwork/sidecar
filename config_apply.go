@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
@@ -133,6 +134,16 @@ type configStatement struct {
 	rowSigner ConfigSigner
 	// an acl statement's check, which its apply folds and a base's re-application keeps (configAclRules)
 	aclVerdict *AclStatementVerdict
+	// an AuthorityProposal's kind, fixed at its entry (DESIGN-DETAILS 5.2.2's ProposalKind)
+	proposalKind bridge.ProposalKind
+	// whether it takes effect at an ApiTick's activation, Recovery's window having held it (§7.9's activation row)
+	activated bool
+}
+
+// One proposal an ApiTick activates, and its statement as it takes effect at the tick.
+type configActivation struct {
+	proposalId [sha256.Size]byte
+	statement  *configStatement
 }
 
 // What every statement that enters the log begins with (§7.9's StatementHeader).
@@ -242,6 +253,8 @@ type ConfigLog struct {
 	rowsOnly bool
 	// the states StateAt serves, shared with every state this log makes (config_state_at.go)
 	history *configStateHistory
+	// the valid vetoes this device holds off the log, by proposal, with each one's at.version (HoldVeto)
+	heldVetoes map[[sha256.Size]byte]uint64
 }
 
 // One retained entry and what it came to.
@@ -253,8 +266,9 @@ type configKeptEntry struct {
 	verdict    ConfigVerdict
 	// a statement that took effect, as a base re-applies it
 	statement *configStatement
-	// a tick that took effect
-	tick *bridge.ApiTick
+	// a tick that took effect, and the proposals it activated
+	tick        *bridge.ApiTick
+	activations []configActivation
 }
 
 // One id in the ring, in position order, with the entry that carried it.
@@ -453,7 +467,10 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	case bridge.AuthEntryKindStatement:
 		next = self.applyStatement(state, kept)
 	case bridge.AuthEntryKindTick:
-		next = self.applyTick(state, kept)
+		next, err = self.applyTick(state, kept)
+		if err != nil {
+			return ConfigVerdict{}, err
+		}
 	default:
 		return ConfigVerdict{}, self.stopAtFork(&ConfigForkError{
 			N: entry.GetN(), RemoteChain: chain, Entry: bytes.Clone(entryBytes), Reason: fmt.Sprintf("kind %d", entry.GetKind()),
@@ -644,7 +661,7 @@ func (self *ConfigLog) checkHeader(state *ConfigState, statement *configStatemen
 
 // Resolves and verifies a statement's signer from Signed's signer_id and key_id (§6.9's Signers). A sidecar's
 // identity key must be one this state admits or the Genesis names; a Delegation's key one a Delegation this state
-// holds names (config_delegation.go); a recovery key's statements are TEAM-M2-05's, refused until its rule lands.
+// holds names (config_delegation.go); a recovery key its member's binding in effect (config_recovery.go).
 func (self *ConfigState) verifySigner(signed *bridge.Signed, purpose string, signedType bridge.SignedType, timeMs int64) (ConfigSigner, error) {
 	signerIdSize, keyIdSize := len(signed.GetSignerId()), len(signed.GetKeyId())
 	switch {
@@ -662,7 +679,7 @@ func (self *ConfigState) verifySigner(signed *bridge.Signed, purpose string, sig
 		}
 		return ConfigSigner{Kind: ConfigSignerSidecar, SidecarId: sidecarId}, nil
 	case signerIdSize == len(Id{}) && keyIdSize == sha256.Size:
-		return ConfigSigner{}, fmt.Errorf("%w: a recovery key's statement waits on TEAM-M2-05's recovery rules", ErrConfigRuleMissing)
+		return self.verifyRecoverySigner(signed, purpose, signedType)
 	case signerIdSize == configDelegationIdByteCount && keyIdSize == sha256.Size:
 		return self.verifyDelegationSigner(signed, purpose, signedType)
 	}
@@ -697,44 +714,61 @@ func configApplyStatement(next *configStateBuilder, statement *configStatement, 
 }
 
 // A tick entry (§7.9's tick row): every reaped id an ephemeral admission, each revoked at the tick; every activated
-// proposal meeting Recovery's window, which TEAM-M2-05 judges, so a tick naming one is refused until it lands. A
-// refused tick changes nothing.
-func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) *ConfigState {
+// proposal meeting Recovery's window (config_recovery.go), its statement taking effect at the tick. A refused tick
+// changes nothing; an accepted one activating a proposal this device holds a valid veto of is a fork (HoldVeto).
+func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) (*ConfigState, error) {
 	next := newConfigStateBuilder(state, kept.n, kept.chain, kept.entry.GetTimeMs())
 	tick := &bridge.ApiTick{}
 	if err := proto.Unmarshal(kept.entry.GetBody(), tick); err != nil {
 		kept.verdict.Refusal = fmt.Errorf("%w: tick: %w", ErrConfigRule, err)
-		return next.finish()
+		return next.finish(), nil
 	}
-	if err := configCheckTick(state, tick); err != nil {
+	activations, err := configCheckTick(state, tick, kept.n, kept.entry.GetTimeMs())
+	if err != nil {
 		kept.verdict.Refusal = err
-		return next.finish()
+		return next.finish(), nil
 	}
-	configApplyTick(next, tick)
-	kept.tick = tick
-	return next.finish()
+	if err := self.heldVetoFork(kept, tick); err != nil {
+		return nil, err
+	}
+	if err := configApplyTick(next, tick, activations); err != nil {
+		kept.verdict.Refusal = err
+		return newConfigStateBuilder(state, kept.n, kept.chain, kept.entry.GetTimeMs()).finish(), nil
+	}
+	kept.tick, kept.activations = tick, activations
+	return next.finish(), nil
 }
 
-// The checks a tick's content passes at state.
-func configCheckTick(state *ConfigState, tick *bridge.ApiTick) error {
+// The checks a tick's content passes at state, for a tick at position n and time timeMs: each reaped id an ephemeral
+// admission, and each activation, none repeated, as checkActivation says. Returns the activations.
+func configCheckTick(state *ConfigState, tick *bridge.ApiTick, n uint64, timeMs int64) ([]configActivation, error) {
 	for _, reapedBytes := range tick.GetReapedSidecarIds() {
 		sidecarId, err := IdFromBytes(reapedBytes)
 		if err != nil {
-			return fmt.Errorf("%w: a reaped id of %d bytes", ErrConfigRule, len(reapedBytes))
+			return nil, fmt.Errorf("%w: a reaped id of %d bytes", ErrConfigRule, len(reapedBytes))
 		}
 		row := state.sidecars[sidecarId]
 		if row == nil || !row.GetEphemeral() {
-			return fmt.Errorf("%w: a reaped id names no ephemeral admission", ErrConfigRule)
+			return nil, fmt.Errorf("%w: a reaped id names no ephemeral admission", ErrConfigRule)
 		}
 	}
-	if 0 < len(tick.GetActivatedProposalIds()) {
-		return fmt.Errorf("%w: a tick's activations wait on TEAM-M2-05's recovery window", ErrConfigRuleMissing)
+	activations := []configActivation{}
+	for _, proposalId := range tick.GetActivatedProposalIds() {
+		statement, err := state.checkActivation(proposalId, n, timeMs)
+		if err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(activations, func(activation configActivation) bool { return bytes.Equal(activation.proposalId[:], proposalId) }) {
+			return nil, fmt.Errorf("%w: a proposal activated twice", ErrConfigRule)
+		}
+		activations = append(activations, configActivation{proposalId: [sha256.Size]byte(proposalId), statement: statement})
 	}
-	return nil
+	return activations, nil
 }
 
-// A tick's effect: each reaped ephemeral admission revoked at the tick's position, an already revoked one left.
-func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick) {
+// A tick's effect: each reaped ephemeral admission revoked at the tick's position, an already revoked one left; then
+// each activation's proposal closed and its statement applied there.
+func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick, activations []configActivation) error {
 	for _, reapedBytes := range tick.GetReapedSidecarIds() {
 		sidecarId, err := IdFromBytes(reapedBytes)
 		if err != nil {
@@ -744,6 +778,16 @@ func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick) {
 			next.sidecarForWrite(sidecarId).RevokedAt = next.state.n
 		}
 	}
+	for _, activation := range activations {
+		if proposal := next.proposal(activation.proposalId); proposal == nil || proposal.closedAt != 0 {
+			return fmt.Errorf("%w: an activation of a proposal not open here", ErrConfigRule)
+		}
+		next.closeProposal(activation.proposalId, next.state.n, ConfigProposalActivated)
+		if err := configApplyStatement(next, activation.statement, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // §7.9's presence row as a hook until TEAM-M2-06 checks countersignatures: a statement the row covers, signed by a

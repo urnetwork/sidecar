@@ -131,16 +131,29 @@ type configBasePin struct {
 	timeMs int64
 }
 
-// One AuthorityProposal still open at a state (§7.9's proposal row). Never changed once a state holds it: a cosign
+// One AuthorityProposal as a state holds it (§7.9's proposal row, DESIGN-DETAILS 5.2.2's ProposalRow): its row, the
+// statement it proposes, and once it closed, where and why. Never changed once a state holds it: a cosign or a close
 // makes a new one.
 type configProposal struct {
 	id [sha256.Size]byte
-	// the proposal's entry
-	n uint64
-	// its own header's not_after_ms, which bounds every cosign
-	notAfterMs int64
+	// what rows carry while it is open: its entry, not_after, signers with their entries, window and kind
+	row *bridge.ProposalRow
 	// the proposed statement, its signers the proposal's and each cosign's so far, in log order
 	statement *configStatement
+	// the position it closed at, 0 while open, and why
+	closedAt uint64
+	closed   ConfigProposalClose
+}
+
+// Whether the proposal is open at timeMs: not closed, and not past its own header's not_after, which bounds every
+// cosign and activation.
+func (self *configProposal) open(timeMs int64) bool {
+	return self.closedAt == 0 && timeMs <= self.row.GetNotAfterMs()
+}
+
+// Whether Recovery's window holds it: a recovery key signed it, or it is a restored binding's admission.
+func (self *configProposal) windowed() bool {
+	return self.row.GetWindowEntry() != 0 || self.row.GetKind() == uint32(bridge.ProposalKind_PROPOSAL_KIND_RESTORED)
 }
 
 // §7.9's S(n).
@@ -539,17 +552,42 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 		}
 	}
 	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
+	rows.Proposals = self.openProposalRows()
 	return rows
 }
 
-// The open proposals' ids, in id order (§7.9's proposal row).
-func (self *ConfigState) OpenProposalIds() [][]byte {
-	proposalIds := make([][]byte, 0, len(self.proposals))
+// Every proposal this state holds, closed ones included, in id order.
+func (self *ConfigState) proposalIds() [][sha256.Size]byte {
+	proposalIds := make([][sha256.Size]byte, 0, len(self.proposals))
 	for proposalId := range self.proposals {
-		proposalIds = append(proposalIds, bytes.Clone(proposalId[:]))
+		proposalIds = append(proposalIds, proposalId)
 	}
-	slices.SortFunc(proposalIds, bytes.Compare)
+	slices.SortFunc(proposalIds, func(a [sha256.Size]byte, b [sha256.Size]byte) int {
+		return bytes.Compare(a[:], b[:])
+	})
 	return proposalIds
+}
+
+// The open proposals' ids at this state's time, in id order (§7.9's proposal row).
+func (self *ConfigState) OpenProposalIds() [][]byte {
+	proposalIds := [][]byte{}
+	for _, proposalId := range self.proposalIds() {
+		if self.proposals[proposalId].open(self.timeMs) {
+			proposalIds = append(proposalIds, bytes.Clone(proposalId[:]))
+		}
+	}
+	return proposalIds
+}
+
+// The rows of the proposals open at this state's time, in id order, cloned: what rows at this position carry.
+func (self *ConfigState) openProposalRows() []*bridge.ProposalRow {
+	rows := []*bridge.ProposalRow{}
+	for _, proposalId := range self.proposalIds() {
+		if proposal := self.proposals[proposalId]; proposal.open(self.timeMs) {
+			rows = append(rows, proto.Clone(proposal.row).(*bridge.ProposalRow))
+		}
+	}
+	return rows
 }
 
 // Checks an Ed25519 identity key's form, as a SidecarAdmit or a Genesis carries it.
@@ -720,12 +758,12 @@ func (self *configStateBuilder) delegationForWrite(delegationId []byte) *bridge.
 	return row
 }
 
-// An open proposal, or nil.
+// A proposal, open or closed, or nil.
 func (self *configStateBuilder) proposal(proposalId [sha256.Size]byte) *configProposal {
 	return self.state.proposals[proposalId]
 }
 
-// Sets an open proposal.
+// Sets a proposal.
 func (self *configStateBuilder) putProposal(proposal *configProposal) {
 	if !self.proposalsOwned {
 		self.state.proposals = configCloneMap(self.state.proposals)
@@ -734,16 +772,15 @@ func (self *configStateBuilder) putProposal(proposal *configProposal) {
 	self.state.proposals[proposal.id] = proposal
 }
 
-// Closes a proposal.
-func (self *configStateBuilder) deleteProposal(proposalId [sha256.Size]byte) {
-	if self.state.proposals[proposalId] == nil {
+// Closes an open proposal at n: it stays held, with where and why, and leaves rows (DESIGN-DETAILS 5.2.3).
+func (self *configStateBuilder) closeProposal(proposalId [sha256.Size]byte, n uint64, reason ConfigProposalClose) {
+	proposal := self.state.proposals[proposalId]
+	if proposal == nil || proposal.closedAt != 0 {
 		return
 	}
-	if !self.proposalsOwned {
-		self.state.proposals = configCloneMap(self.state.proposals)
-		self.proposalsOwned = true
-	}
-	delete(self.state.proposals, proposalId)
+	closed := *proposal
+	closed.closedAt, closed.closed = n, reason
+	self.putProposal(&closed)
 }
 
 // Sets the AclRows, which ACL's statement rules write (configAclRules).

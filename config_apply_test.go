@@ -269,10 +269,8 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_IN, body: &protocol.AuditOptIn{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_OUT, body: &protocol.AuditOptOut{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_KEY_REGISTER, body: &protocol.KeyRegister{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_RECOVERY_BIND, body: &protocol.RecoveryBind{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_SPONSOR_SET, body: &protocol.SponsorSet{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_INDEXER_SET, body: &protocol.IndexerSet{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_RECOVERY_VETO, body: &protocol.RecoveryVeto{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, body: &bridge.BridgeRoute{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_SERVICE_SETTINGS, body: &protocol.ServiceSettings{}, want: ErrConfigRule},
 		{signedType: bridge.SignedType_SIGNED_VERSIONING_RULES, body: &protocol.VersioningRules{}, want: ErrConfigRule},
@@ -285,8 +283,8 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 	}
 }
 
-// A statement signed by a recovery key is refused at its signer until TEAM-M2-05 lands, and a Delegation's key signs
-// no MemberAdmit; an unknown signer, a bad signature or signer ids of no known form are refused as signers.
+// Neither a recovery key nor a Delegation's key signs a MemberAdmit; an unknown signer, a bad signature or signer ids of
+// no known form are refused as signers.
 func TestSignersOfOtherKindsAreRefused(t *testing.T) {
 	net := newTestConfigNet(t)
 	body := testConfigMarshal(t, net.memberAdmitStatement("recovered"))
@@ -298,7 +296,7 @@ func TestSignersOfOtherKindsAreRefused(t *testing.T) {
 		signed []byte
 		want   error
 	}{
-		{name: "a recovery key", signed: wrap(net.ownerMemberId.Bytes(), make([]byte, 32), make([]byte, 64)), want: ErrConfigRuleMissing},
+		{name: "a recovery key", signed: wrap(net.ownerMemberId.Bytes(), make([]byte, 32), make([]byte, 64)), want: ErrConfigSigner},
 		{name: "a Delegation", signed: wrap(make([]byte, 32), make([]byte, 32), make([]byte, 64)), want: ErrConfigSigner},
 		{name: "no signer_id", signed: wrap(nil, nil, make([]byte, 64)), want: ErrConfigSigner},
 		{name: "a bad signature", signed: wrap(net.owner.sidecarId.Bytes(), nil, make([]byte, 64)), want: ErrConfigSigner},
@@ -547,7 +545,7 @@ func TestATickReapsOnlyEphemeralAdmissions(t *testing.T) {
 		t.Errorf("a member device reaped: %v", refused.Refusal)
 	}
 	activation := net.tick(&bridge.ApiTick{ActivatedProposalIds: [][]byte{make([]byte, 32)}})
-	if activation.Accepted() || !errors.Is(activation.Refusal, ErrConfigRuleMissing) {
+	if activation.Accepted() || !errors.Is(activation.Refusal, ErrConfigRule) {
 		t.Errorf("an activation: %v", activation.Refusal)
 	}
 	if net.log.State().SidecarRow(worker.sidecarId).GetRevokedAt() != 0 {
@@ -695,8 +693,8 @@ func TestConfigRepoReplaysFromGenesisAtEveryPosition(t *testing.T) {
 	team.mustPost(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, team.revocation(second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
 	_, openId := team.propose(team.adminC, bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{Header: team.header(), MemberId: memberM.Bytes()})
 	team.fold(team.owner, team.n, 3)
-	if open := team.log.State().OpenProposalIds(); len(open) != 0 {
-		t.Errorf("a proposal the last base folded is open: %x, %x", open, openId)
+	if open := team.log.State().OpenProposalIds(); len(open) != 1 || !bytes.Equal(open[0], openId) {
+		t.Errorf("the proposal the last base folded is not open: %x, %x", open, openId)
 	}
 
 	reader, err := NewConfigLog(testConfigLogSettings(), team.signedGenesis)

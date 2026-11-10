@@ -639,16 +639,15 @@ func (self *ConfigCascadePlan) Items() []DeviceRevokeItem {
 	return items
 }
 
-// Closes each open proposal a recovery key signed under a binding a cascade now voids (§7.9's Recovery voiding):
-// what that key signed rests on P.
+// Closes, as voided, each open proposal a recovery key signed under a binding a cascade now voids (§7.9's cascade and
+// Recovery voiding): what that key signed rests on P.
 func configCloseVoidedProposals(next *configStateBuilder, n uint64) {
-	for _, proposalId := range next.state.OpenProposalIds() {
-		proposal := next.proposal([sha256.Size]byte(proposalId))
-		for _, signer := range proposal.statement.signers {
-			if signer.Kind == ConfigSignerRecovery && next.state.CascadeVoids(signer.RecoveryKeySha256, proposal.n) {
-				next.deleteProposal(proposal.id)
-				break
+	configVoidProposals(next, n, func(proposal *configProposal) bool {
+		for _, signer := range proposal.row.GetSigners() {
+			if len(signer.GetSigner()) == sha256.Size && next.state.CascadeVoids(signer.GetSigner(), signer.GetAt()) {
+				return true
 			}
 		}
-	}
+		return false
+	})
 }

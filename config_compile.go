@@ -46,6 +46,8 @@ type ConfigCompileRows struct {
 	// What the log's 0x11xx statements give at folded_through: grants, shares, suspensions and AclRepo rows, which
 	// the acl compile carries into AclRows beside what the head's policy gives (§8.8).
 	AclStatements *protocol.AclRows
+	// Every proposal open at folded_through, its time the entry's there (DESIGN-DETAILS 5.2.3).
+	Proposals []*bridge.ProposalRow
 }
 
 // The rows a state holds, as compile reads them: what a writer passes for its state at its fold.
@@ -61,6 +63,7 @@ func ConfigCompileRowsOf(state *ConfigState) *ConfigCompileRows {
 		Delegations:    rows.GetDelegations(),
 		RegisteredKeys: rows.GetRegisteredKeys(),
 		AclStatements:  aclStatements,
+		Proposals:      rows.GetProposals(),
 	}
 }
 
@@ -118,6 +121,7 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	projection.Sidecars = configSortRows(rows.Sidecars, (*bridge.SidecarRow).GetSidecarId, "sidecars", &sortErr)
 	projection.Delegations = configSortRows(rows.Delegations, (*bridge.DelegationRow).GetDelegationId, "delegations", &sortErr)
 	projection.RegisteredKeys = configSortRows(rows.RegisteredKeys, (*bridge.KeyRow).GetKeyId, "registered_keys", &sortErr)
+	projection.Proposals = configSortRows(rows.Proposals, (*bridge.ProposalRow).GetProposalId, "proposals", &sortErr)
 	if sortErr != nil {
 		return nil, sortErr
 	}

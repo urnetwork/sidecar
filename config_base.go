@@ -208,10 +208,10 @@ func (self *ConfigLog) foldedRecords(state *ConfigState, header *bridge.Projecti
 	return folded, true
 }
 
-// The state a base's rows give, before the tail re-applies: its rows replace previous's, its pins move on, and the
-// proposals the base folded close, since rows carry no open proposal (question
-// team-m2-02-open-proposals-across-bases), while the tail's re-open as it re-applies. Its settings are the rows', which
-// a full reader holds to its head's (DESIGN-DETAILS 5.2.3): rows carrying other settings are no state.
+// The state a base's rows give, before the tail re-applies: its rows replace previous's, its pins move on, and its
+// proposals are the rows' open ones, which the tail advances, completes or closes as it re-applies (DESIGN-DETAILS
+// 5.2.3). Its settings are the rows', which a full reader holds to its head's: rows carrying other settings are no
+// state.
 func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntry, header *bridge.ProjectionHeader, rowsBytes []byte, facts *ConfigHeadFacts) (*configStateBuilder, error) {
 	rows := &bridge.ProjectionRows{}
 	if err := proto.Unmarshal(rowsBytes, rows); err != nil {
@@ -230,7 +230,6 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 	if !self.rowsOnly && !configRowsSettingsMatch(rows.GetSettings(), facts.Settings) {
 		return nil, errors.New("rows: settings are not the config head's")
 	}
-	state.proposals = map[[sha256.Size]byte]*configProposal{}
 	next.membersOwned, next.sidecarsOwned, next.delegationsOwned, next.keysOwned, next.proposalsOwned = true, true, true, true, true
 	// every row came from these rows, so the builder owns them all
 	for memberId := range state.members {
@@ -313,7 +312,25 @@ func configLoadRows(state *ConfigState, rows *bridge.ProjectionRows) error {
 	if err := proto.Unmarshal(rows.GetAcl(), state.aclRows); err != nil {
 		return fmt.Errorf("rows: acl: %w", err)
 	}
-	return configCheckRowsSettings(rows.GetSettings())
+	if err := configCheckRowsSettings(rows.GetSettings()); err != nil {
+		return err
+	}
+	state.proposals = make(map[[sha256.Size]byte]*configProposal, len(rows.GetProposals()))
+	for i, row := range rows.GetProposals() {
+		if len(row.GetProposalId()) != sha256.Size {
+			return fmt.Errorf("rows: proposals[%d].proposal_id", i)
+		}
+		proposalId := [sha256.Size]byte(row.GetProposalId())
+		if state.proposals[proposalId] != nil {
+			return fmt.Errorf("rows: proposals[%d] repeats a proposal", i)
+		}
+		statement, err := state.proposalRowStatement(row)
+		if err != nil {
+			return fmt.Errorf("rows: proposals[%d]: %w", i, err)
+		}
+		state.proposals[proposalId] = &configProposal{id: proposalId, row: row, statement: statement}
+	}
+	return nil
 }
 
 // Re-applies the statement and tick entries among foldedThrough+1..n-1 on next, in order, a base among them skipped,
@@ -335,7 +352,9 @@ func (self *ConfigLog) reapplyTail(next *configStateBuilder, foldedThrough uint6
 			}
 		case bridge.AuthEntryKindTick:
 			if kept.tick != nil {
-				configApplyTick(next, kept.tick)
+				if err := configApplyTick(next, kept.tick, kept.activations); err != nil {
+					self.log.Infof("[config]%s tick %d's effect ends at base %d: %v", self.networkId, k, n, err)
+				}
 			}
 		}
 	}
