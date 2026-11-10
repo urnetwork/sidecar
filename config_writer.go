@@ -168,7 +168,7 @@ type ConfigWriter struct {
 	// a base landing, which cancels a fold's delay
 	baseLanded chan struct{}
 	// an entry landing, which may make a fold due
-	entryLanded chan struct{}
+	entryLanded    chan struct{}
 	removeCallback func()
 
 	stateLock sync.Mutex
