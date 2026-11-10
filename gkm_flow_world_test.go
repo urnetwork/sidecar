@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/hpke"
 	"crypto/sha256"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,6 +49,33 @@ type gkmFlowWorld struct {
 	headerBytes []byte
 }
 
+// A world with the commit world's devices admitted and granted at the log's first position, and no group yet: what
+// KF1 starts from.
+func newGkmBareFlowWorld(t *testing.T, kind protocol.RepoKind) *gkmFlowWorld {
+	commitWorld := &gkmCommitWorld{gkmWorld: newGkmWorld(t, kind)}
+	commitWorld.a = commitWorld.admit("a")
+	commitWorld.b = commitWorld.admit("b")
+	commitWorld.c = commitWorld.admit("c")
+	commitWorld.p = commitWorld.admit("p")
+	commitWorld.p.row.Capabilities = uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
+	commitWorld.x = commitWorld.admit("x")
+	commitWorld.grant(true, commitWorld.a, commitWorld.b)
+	commitWorld.grant(false, commitWorld.c, commitWorld.p, commitWorld.x)
+	commitWorld.first = commitWorld.state()
+	world := &gkmFlowWorld{
+		gkmCommitWorld: commitWorld,
+		ctx:            context.Background(),
+		clock:          sidecartest.NewFakeClock(commitWorld.now),
+		flows:          map[*gkmWorldDevice]*gkmFlowDevice{},
+		recoveryKeys:   map[sidecar.Id]*sidecar.GkmRecoveryKey{},
+	}
+	world.store = newGkmFakeStore(t, world.clock)
+	for _, device := range world.devices {
+		world.flow(device)
+	}
+	return world
+}
+
 // The commit world at epoch 1 and generation 1, as gkm holds it and as every device holds it.
 func newGkmFlowWorld(t *testing.T, kind protocol.RepoKind) *gkmFlowWorld {
 	commitWorld := newGkmCommitWorld(t, kind)
@@ -60,8 +88,17 @@ func newGkmFlowWorld(t *testing.T, kind protocol.RepoKind) *gkmFlowWorld {
 	}
 	world.store = newGkmFakeStore(t, world.clock)
 	world.headerBytes = gkmWorldHeader(t, 1, world.first.Pin())
-	// gkm's side of the group: its owner, gen/1, and epochs 0 and 1
+	// gkm's side of the group: its owner, its form, gen/1, and epochs 0 and 1
 	world.store.groupOwnerRepoIds[world.groupId] = world.repoId
+	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{RepoId: world.repoId.Bytes(), GroupId: world.groupId.Bytes(), Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := world.a.signer.Sign("group-form", bridge.SignedType_SIGNED_GROUP_FORM, formBody, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.store.repoForms[world.repoId] = []*bridge.Signed{form}
 	world.store.groupGenerations[world.groupId] = []*bridge.Signed{world.gen1.signed}
 	world.store.groupEpochs[world.groupId] = []*protocol.GkmEpochObject{
 		{Header: world.header, Uploader: world.a.id.Bytes(), GroupInfoGeneration: 1},
@@ -109,9 +146,10 @@ func (self *gkmFlowDevice) restart() {
 		RecoveryKey: func(memberId sidecar.Id) (*sidecar.GkmRecoveryKey, error) {
 			return world.recoveryKeys[memberId], nil
 		},
-		Alarm:  func(alarm *sidecar.GkmAlarm) { self.alarms = append(self.alarms, alarm) },
-		Jitter: func(max time.Duration) time.Duration { return min(world.jitter, max) },
-		Clock:  world.clock,
+		ReaderRepoIds: func() []sidecar.Id { return []sidecar.Id{world.repoId} },
+		Alarm:         func(alarm *sidecar.GkmAlarm) { self.alarms = append(self.alarms, alarm) },
+		Jitter:        func(max time.Duration) time.Duration { return min(world.jitter, max) },
+		Clock:         world.clock,
 	}
 	if len(self.row.GetTagIds()) == 0 {
 		args.Mls = self.mls
@@ -229,4 +267,47 @@ func (self *gkmFlowWorld) deliveryRecipients(generation uint64) map[string]sidec
 		recipients[name] = sidecar.GkmDeliveryKind(body.GetDeliveryKind())
 	}
 	return recipients
+}
+
+// Appends a commit to gkm as its committer staged it, past every check of the client's: what a twin's or a hostile
+// leaf's upload leaves standing at epoch/<n>.
+func (self *gkmFlowWorld) inject(committer *gkmWorldDevice, staged sidecar.MlsStagedCommit, generation *gkmWorldGeneration) {
+	self.t.Helper()
+	header := &protocol.GkmCommitHeader{}
+	if err := proto.Unmarshal(staged.AuthenticatedData(), header); err != nil {
+		self.t.Fatal(err)
+	}
+	object := &protocol.GkmEpochObject{
+		Commit:   staged.Message(),
+		Header:   header,
+		Uploader: committer.id.Bytes(),
+		TimeMs:   self.clock.Now().UnixMilli(),
+	}
+	if generation != nil {
+		object.GenWrap = self.genWrap(staged, generation)
+	}
+	self.store.groupEpochs[self.groupId] = append(self.store.groupEpochs[self.groupId], object)
+}
+
+// The leaves of a device's group, by label, sorted.
+func (self *gkmFlowWorld) rosterLabels(group sidecar.MlsGroup) []string {
+	labels := []string{}
+	for _, member := range group.Roster() {
+		for _, device := range self.devices {
+			if device.id == member.SidecarId {
+				labels = append(labels, device.label)
+			}
+		}
+	}
+	slices.Sort(labels)
+	return labels
+}
+
+// A device's group as its engine holds it now, nil for none.
+func (self *gkmFlowWorld) engineGroup(device *gkmWorldDevice) sidecar.MlsGroup {
+	group, err := device.mls.LoadGroup(self.groupId)
+	if err != nil {
+		return nil
+	}
+	return group
 }

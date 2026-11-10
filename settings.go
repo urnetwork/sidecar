@@ -392,6 +392,13 @@ type GkmSettings struct {
 	// §8.12: the most leaves a committer seats in a data repo's tree: 1,000, never past MLS's bound
 	// (GkmSeatCount), which every member holds alike.
 	SeatCount int
+	// How many times one run of the pending engine commits again after losing an epoch to another's commit (KF6): 4.
+	PendingPassCount int
+	// How many times a commit, or a group's creation, whose answer was lost is sent again with the same bytes: 3.
+	CommitSendCount int
+	// KF1: how many group ids a creation draws while each is another repo's at the owner marker: 4. Ids are 16
+	// random bytes, so a second draw means a squatter.
+	CreateGroupDrawCount int
 }
 
 // The desktop daemon's gkm settings, the only source of their defaults.
@@ -432,6 +439,9 @@ func DefaultGkmSettings() *GkmSettings {
 		RotateClaimSendCount:         3,
 		RotatePassCount:              4,
 		SeatCount:                    1000,
+		PendingPassCount:             4,
+		CommitSendCount:              3,
+		CreateGroupDrawCount:         4,
 	}
 }
 
