@@ -16,6 +16,8 @@
 //     refusal 429 with retry_after_ms. The eraser is the token's sidecar, so no eraser spends another's.
 //   - ChargeClosureRecords, a CLOSURE push's inline records at the limit or while spent: the eraser's daily
 //     allowance alone.
+//   - CheckRead, a read by a spent network (quota_read_gate.go): its own repos at evs_unpaid_read_rate, another
+//     network's not at all. A storage limit never touches a read.
 //
 // Below the limit and not spent, closure uploads and records are ordinary payload, counted nowhere here.
 // Storage quotas are soft (owner decisions 2, 10): until the first list is read, and while reads fail, the
@@ -48,12 +50,15 @@ type QuotaGateSettings struct {
 	OverLimitInterval time.Duration
 	// Bounds one read. Non-positive leaves it to the gate's context: 4 s, inside the interval.
 	OverLimitTimeout time.Duration
+	// A spent network's reads (quota_read_gate.go). nil takes the defaults.
+	Read *QuotaReadSettings
 }
 
 func DefaultQuotaGateSettings() *QuotaGateSettings {
 	return &QuotaGateSettings{
 		OverLimitInterval: 5 * time.Second,
 		OverLimitTimeout:  4 * time.Second,
+		Read:              DefaultQuotaReadSettings(),
 	}
 }
 
@@ -80,6 +85,8 @@ type QuotaGate struct {
 	settings *QuotaGateSettings
 	clock    sidecar.Clock
 	quota    sidecar.Quota
+	// spent networks' reads, paced here (quota_read_gate.go)
+	reads *quotaReadGate
 
 	stateLock sync.Mutex
 	overLimit *sidecar.QuotaOverLimit
@@ -106,12 +113,14 @@ func newQuotaGate(ctx context.Context, host *sidecar.ServiceHost, settings *Quot
 		return nil, errors.New("the quota gate needs ServiceHost.Quota")
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
+	clock := host.ClockOrReal()
 	return &QuotaGate{
 		ctx:      cancelCtx,
 		cancel:   cancel,
 		settings: settings,
-		clock:    host.ClockOrReal(),
+		clock:    clock,
 		quota:    host.Quota,
+		reads:    newQuotaReadGate(clock, host.Quota, settings.Read),
 	}, nil
 }
 
@@ -132,7 +141,7 @@ func (self *QuotaGate) run() {
 	}
 }
 
-// One read. A failed read keeps the last list.
+// One read, then the spent readers' rates. A failed read keeps the last list and every rate.
 func (self *QuotaGate) refresh(ctx context.Context) {
 	readCtx := ctx
 	if 0 < self.settings.OverLimitTimeout {
@@ -145,10 +154,14 @@ func (self *QuotaGate) refresh(ctx context.Context) {
 		return
 	}
 	readTime := self.clock.Now()
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.overLimit = overLimit
-	self.readTime = readTime
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.overLimit = overLimit
+		self.readTime = readTime
+	}()
+	// the limits of the spent networks reading here, under the same bound and off every read's path
+	self.reads.refresh(readCtx, overLimit)
 }
 
 // The refusal the list holds for the network, its storage limit's first, nil while it is under the limit and

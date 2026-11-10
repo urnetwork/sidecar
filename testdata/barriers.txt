@@ -102,6 +102,16 @@ barrier evs.entry.read.after evsservice/entry.go
 barrier evs.entry.read.before evsservice/entry.go
 barrier evs.entry.state.after evsservice/sources.go
 barrier evs.entry.state.before evsservice/sources.go
+barrier evs.evacuate.batch_delete.after evsservice/evacuate.go
+barrier evs.evacuate.batch_delete.before evsservice/evacuate.go
+barrier evs.evacuate.container_put.after evsservice/evacuate_move.go
+barrier evs.evacuate.container_put.before evsservice/evacuate_move.go
+barrier evs.evacuate.fence.after evsservice/evacuate_resolve.go
+barrier evs.evacuate.fence.before evsservice/evacuate_resolve.go
+barrier evs.evacuate.parcel_delete.after evsservice/evacuate_move.go
+barrier evs.evacuate.parcel_delete.before evsservice/evacuate_move.go
+barrier evs.evacuate.pidx_put.after evsservice/evacuate_move.go
+barrier evs.evacuate.pidx_put.before evsservice/evacuate_move.go
 barrier evs.fold.acquire.after evsservice/fold.go
 barrier evs.fold.acquire.before evsservice/fold.go
 barrier evs.fold.entry_write.after evsservice/fold.go
