@@ -81,6 +81,11 @@ var failsOnRows = []failsOnRow{
 		},
 	},
 	{
+		row: "deps", item: "a shipped leg other than ur's linking go-sdk (D-MCP-1)",
+		rule:         (*repository).mcpSdkLegFindings,
+		plantedTests: []string{"TestDepsFailsOnGoSdkInAClientLeg"},
+	},
+	{
 		row: "deps", item: "a shared module's version other than connect's, sdk's and server's",
 		rule:         (*repository).sharedVersionFindings,
 		plantedTests: []string{"TestDepsFailsOnASharedVersionMismatch", "TestDepsFailsOnAMissingSibling"},

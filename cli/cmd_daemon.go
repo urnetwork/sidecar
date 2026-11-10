@@ -4,7 +4,8 @@
 // one unenrolled Sidecar a further network's enrollment takes. Each is unlocked by the key store's wrap at start when
 // it can be. Its control methods are the person's commands, a network-scoped one acting on its network argument, else
 // .ur's, else the only network (CORE-M3-05); the git mode resolves a session's <net> and hands it to §11's git service,
-// and the mcp mode is §16's to register. Its logs go to stderr, never stdout.
+// and the mcp mode is §16's server (mcp.McpServer), one go-sdk session per relay connection, which only this binary
+// links (D-MCP-1, D-MCP-2). Its logs go to stderr, never stdout.
 //
 // --auto-spawned is the relay's: such a daemon exits when idle. --unit is its unit's (install-daemon), and never
 // idles out; neither does a daemon a person runs by hand. --ephemeral keeps everything in memory, for an ephemeral
@@ -28,6 +29,7 @@ import (
 	"github.com/docopt/docopt-go"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/mcp"
 )
 
 // The control methods ur's commands call (§5.8). Each name is a reading: §5.8 names the mode, not the methods.
@@ -646,6 +648,12 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		}
 	}
 	if err := daemon.RegisterMode(sidecar.DaemonModeGit, sidecar.NewDaemonGitMode(daemon, urDaemonGitService)); err != nil {
+		daemon.Close()
+		return err
+	}
+	// §16's MCP, whatever the networks' states: a call on a Locked or Unenrolled one names what the person runs
+	mcpServer := mcp.NewMcpServer(mcp.DaemonOf(daemon), mcp.NewMcpServerSettings(settings, sidecar.Version))
+	if err := daemon.RegisterMode(sidecar.DaemonModeMcp, mcpServer.Serve); err != nil {
 		daemon.Close()
 		return err
 	}

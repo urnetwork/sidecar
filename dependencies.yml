@@ -114,6 +114,10 @@ modules:
     spdx: Apache-2.0
     reason: through gVisor's netstack
     leg: [client, engine, cli, test]
+  - module: github.com/google/jsonschema-go
+    spdx: MIT
+    reason: go-sdk's tool schemas, for mcp/ (§16), at v0.4.3 as go-sdk and server require it; read from its LICENSE
+    leg: [cli]
   - module: github.com/google/pprof
     spdx: Apache-2.0
     reason: through gnark, for smtpproof's prover (§14)
@@ -176,9 +180,8 @@ modules:
     leg: [client, engine, cli, test]
   - module: github.com/modelcontextprotocol/go-sdk
     spdx: Apache-2.0 AND MIT
-    reason: v1.7.0 for mcp/ (§16), which server holds at that version; its docs are CC-BY-4.0 and no build links them
+    reason: v1.7.0 for mcp/ (§16, D-MCP-1), which server holds at that version and only ur links; its docs are CC-BY-4.0 and no build links them
     leg: [cli]
-    planned: true
   - module: github.com/pion/datachannel
     spdx: MIT
     reason: connect's P2P transport
@@ -275,6 +278,14 @@ modules:
     spdx: MIT
     reason: gnark's logger, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/segmentio/asm
+    spdx: MIT
+    reason: through segmentio/encoding, for go-sdk's JSON in mcp/ (§16), at v1.1.3 as server holds it; read from its LICENSE
+    leg: [cli]
+  - module: github.com/segmentio/encoding
+    spdx: MIT
+    reason: go-sdk's case-sensitive JSON decoding, for mcp/ (§16), at v0.5.4 as server holds it; read from its LICENSE
+    leg: [cli]
   - module: github.com/sergi/go-diff
     spdx: MIT
     reason: go-git's file diffs, linked by the object package for mlsinterop's oracle
@@ -311,6 +322,10 @@ modules:
     spdx: MIT
     reason: through gnark's cbor, for smtpproof (§14)
     leg: [engine, cli, test]
+  - module: github.com/yosida95/uritemplate/v3
+    spdx: BSD-3-Clause
+    reason: go-sdk's resource templates, for mcp/ (§16), at v3.0.2 as server holds it; read from its LICENSE
+    leg: [cli]
   - module: golang.org/x/crypto
     spdx: BSD-3-Clause
     reason: §4.7's initial list; connect's and pion's primitives too
@@ -323,9 +338,13 @@ modules:
     spdx: BSD-3-Clause
     reason: connect's and quic-go's networking
     leg: [client, engine, cli, test]
+  - module: golang.org/x/oauth2
+    spdx: BSD-3-Clause
+    reason: go-sdk's auth package, which its mcp package links though the daemon's stdio server uses no OAuth (§16), at v0.36.0 as server requires it
+    leg: [cli]
   - module: golang.org/x/sync
     spdx: BSD-3-Clause
-    reason: through gnark, for smtpproof's prover (§14)
+    reason: through gnark, for smtpproof's prover (§14), and go-sdk's errgroup, for mcp/ (§16)
     leg: [engine, cli, test]
   - module: golang.org/x/sys
     spdx: BSD-3-Clause
