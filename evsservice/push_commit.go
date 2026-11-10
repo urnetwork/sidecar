@@ -77,6 +77,9 @@ func (self *pushAttempt) commit() (*pushOutcome, bool) {
 	if outcome != nil {
 		return outcome, false
 	}
+	if outcome, again := self.raiseFormat(); outcome != nil || again {
+		return outcome, again
+	}
 	conflicts := 0
 	for {
 		if !self.withinStepSeven() {
@@ -120,6 +123,33 @@ func (self *pushAttempt) commit() (*pushOutcome, bool) {
 			return self.unknown(), false
 		}
 	}
+}
+
+// §11.6's format row, between step 6's record and step 7: a push carrying a format-2 value, which 5c held to the
+// format2 gate, raises a format-1 repo/ to format 2 (repo_format.go), under the push's own grant. The raise reads
+// repo/ from the cluster, so a sibling's raise, or this push's own on an earlier attempt, is found there and nothing
+// is written twice. A repo it finds in any state but active sends the attempt back to steps 4 and 5, where 5c
+// refuses by its own rule on a head read from the cluster; lost races past RepoTransitionRetryCount answer 429,
+// which refuses nothing. A raise whose push then fails stands, since format-1 data is valid format 2, and step 7's
+// window still bounds the whole: a slow raise reruns steps 4 and 5. again asks for them.
+func (self *pushAttempt) raiseFormat() (*pushOutcome, bool) {
+	if !self.needsFormat2 || !self.engine.format2Instance() || sidecar.EvsRepoFormat2 <= self.reads.repo.Object.GetFormat() {
+		return nil, false
+	}
+	classify := func(ctx context.Context, objectByteCount int) context.Context { return ctx }
+	read, err := RaiseRepoFormat(self.writeCtx, self.cluster, self.engine.repos, self.repoId, self.settings.RepoTransitionRetryCount, classify)
+	var refusal *EvsRepoRefusal
+	switch {
+	case err == nil:
+		self.reads.repo = read
+		return nil, false
+	case errors.As(err, &refusal):
+		// keying, deleted, shredding or shredded: no push commits on it, and 5c says which
+		return nil, true
+	case errors.Is(err, ErrEvsRepoBusy):
+		return self.busy(), false
+	}
+	return self.unavailableOn(err), false
 }
 
 // Whether step 7 may still issue: within PushStepSevenWindow of step 4's reads.
@@ -242,11 +272,17 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 			}
 		}
 	}
+	// the raise of a format-1 repo/ is priced with its push (§11.6's format row): one overwrite of repo/
+	raiseCount := 0
+	if self.needsFormat2 && self.reads.repo.Object.GetFormat() < sidecar.EvsRepoFormat2 {
+		raiseCount = 1
+	}
 	return PricePush(self.engine.priceTable, &PushOperations{
 		Immediate: []WriteOperation{
 			{Kind: WriteOperationOverwrite, ObjectByteCount: headByteCount, Count: 1},
 			{Kind: WriteOperationCreate, ObjectByteCount: recordByteCount, Count: 1},
 			{Kind: WriteOperationCreate, ObjectByteCount: evsSlotMaxByteCount, Count: float64(slotCount)},
+			{Kind: WriteOperationOverwrite, ObjectByteCount: sidecar.EvsRepoObjectMaxByteCount, Count: float64(raiseCount)},
 		},
 		Deferred: []WriteOperation{
 			{Kind: WriteOperationOverwrite, Count: 0.3 * float64(changeCount)},

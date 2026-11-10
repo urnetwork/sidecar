@@ -51,7 +51,7 @@ type EvsVerifiedPath struct {
 // Checks reply for tokenPath against head's walk.
 func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, tokenPath EvsTokenPath, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error) {
 	if reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED || len(reply.GetDropId()) != 0 ||
-		reply.GetNotBeforeMs() != 0 || reply.GetDropVersion() != 0 || len(reply.GetDropStatement()) != 0 {
+		reply.GetNotBeforeMs() != 0 || reply.GetDropVersion() != 0 || len(reply.GetDropStatement()) != 0 || len(reply.GetDropBody()) != 0 {
 		return nil, fmt.Errorf("%w: a format-2 read state", ErrEvsFormatUnsupported)
 	}
 	replyPath, err := ParseEvsTokenPath(reply.GetTokenPath())

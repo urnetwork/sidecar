@@ -34,6 +34,10 @@ func (self *testRestartedNetwork) Spool() (*sidecar.Spool, error) {
 	return self.spool, nil
 }
 
+func (self *testRestartedNetwork) LocalStore() sidecar.SidecarStore {
+	return self.hosted.LocalStore()
+}
+
 func TestLockedTaintReplaysFirst(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), mcpTestTimeout)
 	defer cancel()

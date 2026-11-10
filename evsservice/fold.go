@@ -887,7 +887,7 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 		case foldEventWrite:
 			creation := event.change.BaseEntryVersion == 0
 			if event.entryVersion.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
-				merged.entry = applyFoldDelta(merged.entry, event)
+				merged.entry = applyFoldDelta(merged.entry, event, log)
 				directoryVersion = event.entryVersion.GetVersion()
 			} else {
 				var replaced bool
@@ -904,11 +904,12 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 				log.Errorf("[evs] alarm fold_version_rule: a removal based on %d over a path at %d", event.change.BaseEntryVersion, standing)
 				pathVersion = standing + 1
 			}
-			merged.entry.Marker = &protocol.EvsRemovalMarker{
+			// a newer marker over an older one keeps the ids the older carried (format1_guard.go)
+			merged.entry.Marker = inheritCarriedIds(merged.entry.GetMarker(), &protocol.EvsRemovalMarker{
 				PushId:         event.pushId.Bytes(),
 				RemovalVersion: event.commitVersion,
 				PathVersion:    pathVersion,
-			}
+			})
 			merged.removed = true
 			merged.replaced = false
 		case foldEventPrefixRemoval:
@@ -931,9 +932,11 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 	return merged
 }
 
-// A file's version merged into its entry: a creation replaces what the entry held, carrying nothing, as does a
+// A file's version merged into its entry: a creation replaces what the entry held, carrying no version, as does a
 // write over a marker, a table or a newer path version, which 5g never commits; else it goes first, the three newest
-// older ones kept with their inline records elided. Whether it replaced.
+// older ones kept with their inline records elided. Whether it replaced. The entry's drop mark stays through each,
+// since a path's versions never restart and the mark says which of them a drop took; a marker's carried ids cannot
+// stay on an entry that stands, so replacing one alarms and its content stays (format1_guard.go).
 func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log sidecar.Logger) (*protocol.EvsIndexEntry, bool) {
 	version := &protocol.EvsIndexVersion{
 		PushId:        event.pushId.Bytes(),
@@ -947,10 +950,8 @@ func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log s
 		if !creation && 0 < len(held) && event.entryVersion.GetVersion() <= newestPathVersion(held) {
 			log.Errorf("[evs] alarm fold_version_rule: version %d over a path at %d", event.entryVersion.GetVersion(), newestPathVersion(held))
 		}
-		replaced := &protocol.EvsIndexEntry{Versions: []*protocol.EvsIndexVersion{version}}
-		if !creation {
-			replaced.DropMark = entry.GetDropMark()
-		}
+		alarmCarriedIdsDropped(log, entry.GetMarker(), "a file's version")
+		replaced := &protocol.EvsIndexEntry{Versions: []*protocol.EvsIndexVersion{version}, DropMark: entry.GetDropMark()}
 		return replaced, true
 	}
 	kept := []*protocol.EvsIndexVersion{version}

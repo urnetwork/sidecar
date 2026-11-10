@@ -79,6 +79,9 @@ const (
 	EvsCheckReasonQuotaRate
 	// 5c: the storage limit while the repo's cluster stands at §19.9's cohort limit.
 	EvsCheckReasonClusterFull
+	// 5c: a push carrying a format-2 value from a network outside §19.11's format2 gate (§11.6's format row): 409
+	// VERSIONING, recorded, since a gate can change (plan-EVS2-small-readings#3).
+	EvsCheckReasonFormat2Gate
 
 	// 5d: §10.6's gate predicate fails against the newest state.
 	EvsCheckReasonGateClosed
@@ -169,6 +172,7 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonQuota:         {name: "quota", code: protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT, fate: EvsRefusalRecorded},
 	EvsCheckReasonQuotaRate:     {name: "quota_rate", code: protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED, fate: EvsRefusalNothing},
 	EvsCheckReasonClusterFull:   {name: "cluster_full", code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL, fate: EvsRefusalRecorded},
+	EvsCheckReasonFormat2Gate:   {name: "format2_gate", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
 
 	EvsCheckReasonGateClosed:   {name: "gate_closed", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalRecorded},
 	EvsCheckReasonPinBelowHead: {name: "pin_below_head", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},

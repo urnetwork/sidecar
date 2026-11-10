@@ -207,6 +207,8 @@ func (self *checkFixture) viewSigned(plan *sidecar.EvsPushPlan, sign sidecar.Evs
 		ReceiptKeys: self.receiptKeys,
 		NetworkId:   self.networkId,
 		Quota:       self.quota.gate,
+		// the fixture's checks are format 1's; format2_gate_test.go holds a format-2 instance's
+		InstanceFormat: sidecar.EvsRepoFormat1,
 	}
 	for _, change := range payload.Changes {
 		view.Paths[change.TokenPath.KeyString()] = &PathRead{Newest: &EvsNewest{}}

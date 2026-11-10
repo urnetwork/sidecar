@@ -22,8 +22,10 @@
 // may have left: nothing goes under the newest key such a file names until it is written again, unless
 // this process wrote it whole (durableWrapPaths).
 //
-// CORE-M2-05's HPKE copy of R_n must be re-sealed with step 2, which it does not exist to do yet, so a
-// network holding one refuses to rotate rather than leave its recovery code opening nothing.
+// keychain.wrap's HPKE copy of R_n (keys_recovery_seal.go) is re-sealed with step 2, in the renames that
+// add the new root and drop the old ones, to the binding it already names, so the recovery code opens
+// what U opens at every point of a rotation. A copy that does not decode stops the rotation before
+// anything changes, rather than leave a code opening nothing.
 
 package sidecar
 
@@ -35,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path"
 	"strings"
 )
@@ -42,8 +45,6 @@ import (
 // A stream still reads or writes under an old root. Nothing is lost: RotateKeychain finishes the rotation
 // on a later call, and until then the old root stands.
 var ErrSidecarRotationBusy = errors.New("a stream holds an old root")
-
-var errRotateRecovery = errors.New("a network's recovery copy cannot be re-sealed yet")
 
 // A step would drop a key the disk still names, which a run that went as it should never leaves. Nothing
 // is dropped, and the rotation stays pending.
@@ -119,7 +120,7 @@ func (self *SidecarInstance) rotateWithLock(ctx context.Context, passphrase []by
 }
 
 // Every network with a keychain.wrap on disk, recorded or not, since a killed enrollment's still rides
-// on U. Refuses before anything changes if one holds a recovery copy.
+// on U. Refuses before anything changes if one holds a recovery copy that does not decode.
 func (self *SidecarInstance) rotatedNetworkIdsWithLock() ([]Id, error) {
 	entries, err := self.backend.List(networkTreeName + "/")
 	if err != nil {
@@ -134,7 +135,9 @@ func (self *SidecarInstance) rotatedNetworkIdsWithLock() ([]Id, error) {
 		// a wrap that does not read fails on its own turn, and holds no other network back
 		wrap, err := self.readKeychainWrap(networkId)
 		if err == nil && len(wrap.recovery) != 0 {
-			return nil, errRotateRecovery
+			if _, err := decodeKeychainRecoveryCopy(wrap.recovery); err != nil {
+				return nil, err
+			}
 		}
 		networkIds = append(networkIds, networkId)
 	}
@@ -349,7 +352,7 @@ func (self *SidecarInstance) addRootWithLock(opened *keychain, wrap *keychainWra
 	}
 	testHookSecret("R_n", root)
 	generation := wrap.roots[0].generation + 1
-	next := &keychainWrap{networkId: wrap.networkId}
+	next := &keychainWrap{networkId: wrap.networkId, recovery: wrap.recovery}
 	wrapped, err := wrapKeychainRoot(wrap.networkId, generation, root, unlockGeneration, unlockKey, self.random)
 	if err != nil {
 		clear(root)
@@ -364,6 +367,13 @@ func (self *SidecarInstance) addRootWithLock(opened *keychain, wrap *keychainWra
 			return storeFault(err)
 		}
 		next.roots = append(next.roots, *rewrapped)
+	}
+	// the recovery copy takes the new root in the same rename
+	sealedRoots := maps.Clone(roots)
+	sealedRoots[generation] = root
+	if err := resealKeychainRecoveryCopy(next, sealedRoots); err != nil {
+		clear(root)
+		return err
 	}
 	if err := self.writeWrapWithLock(keychainWrapPath(wrap.networkId), next.encode()); err != nil {
 		clear(root)
@@ -555,6 +565,19 @@ func (self *SidecarInstance) dropOldRootsWithLock(opened *keychain, staleCommitC
 	}
 	next := *wrap
 	next.roots = wrap.roots[:1]
+	if len(next.recovery) != 0 {
+		// the recovery copy drops the old roots in the same rename
+		currentRoot := func() []byte {
+			opened.stateLock.Lock()
+			defer opened.stateLock.Unlock()
+			return bytes.Clone(opened.generationRoots[currentGeneration])
+		}()
+		err := resealKeychainRecoveryCopy(&next, map[uint64][]byte{currentGeneration: currentRoot})
+		clear(currentRoot)
+		if err != nil {
+			return false, err
+		}
+	}
 	if err := self.writeWrapWithLock(keychainWrapPath(wrap.networkId), next.encode()); err != nil {
 		return false, err
 	}

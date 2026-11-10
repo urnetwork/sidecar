@@ -90,6 +90,15 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				RestorePointByteCount: 256 * 1024 * 1024,
 				RestoreHoldTimeout:    10 * time.Minute,
 				RestoreHoldByteCount:  8 * 1024 * 1024,
+				// §16.6's modes whose evidence never counts, and MCP-M3-19's readings of §16.7's context and run card
+				BypassPermissionModes: []string{"bypassPermissions", "dontAsk", "auto"},
+				InstructionProjectFileNames: []string{
+					"CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", "AGENTS.md", ".cursorrules", ".cursor/rules",
+				},
+				InstructionUserFileNames: []string{".claude/CLAUDE.md", ".codex/AGENTS.md"},
+				ChangePathCount:          4096,
+				RunCardPromptByteCount:   2 * 1024,
+				RunCardPathCount:         256,
 			},
 		},
 		// §16.8

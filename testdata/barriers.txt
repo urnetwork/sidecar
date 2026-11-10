@@ -118,6 +118,8 @@ barrier evs.lease.cas.after evsservice/push_lease.go
 barrier evs.lease.cas.before evsservice/push_lease.go
 barrier evs.log_page.put.after evsservice/logpage.go
 barrier evs.log_page.put.before evsservice/logpage.go
+barrier evs.migrate.raise.after evsservice/repo_format.go
+barrier evs.migrate.raise.before evsservice/repo_format.go
 barrier evs.part.append.after evsservice/push_part.go
 barrier evs.part.append.before evsservice/push_part.go
 barrier evs.place.put.after evsservice/place.go
@@ -181,6 +183,8 @@ barrier identity.persist.after identity_keys.go
 barrier identity.persist.before identity_keys.go
 barrier identity.post.after identity_pending.go
 barrier identity.post.before identity_pending.go
+barrier identity.recovery_bind.after identity_recovery_bind.go
+barrier identity.recovery_bind.before identity_recovery_bind.go
 barrier identity.stale.recheck.after identity_act_stale.go
 barrier identity.stale.recheck.before identity_act_stale.go
 barrier keys.change_pass.after keys_unlock.go
@@ -192,6 +196,8 @@ barrier keys.keychain_write.after keys_keychain.go
 barrier keys.keychain_write.before keys_keychain.go
 barrier keys.record_network.after keys_instance.go
 barrier keys.record_network.before keys_instance.go
+barrier keys.recovery_seal.after keys_recovery_seal.go
+barrier keys.recovery_seal.before keys_recovery_seal.go
 barrier keys.rotate.after keys_rotate.go
 barrier keys.rotate.before keys_rotate.go
 barrier keys.unlock.after keys_unlock.go
@@ -253,6 +259,8 @@ barrier record.reserve.after record_ledger.go
 barrier record.reserve.before record_ledger.go
 barrier record.taint.after record_run.go
 barrier record.taint.before record_run.go
+barrier restore.scan.after mcp/restore_attribute.go
+barrier restore.scan.before mcp/restore_attribute.go
 barrier revocation.read.after config_rev.go
 barrier revocation.read.before config_rev.go
 barrier rpc.call_send.after rpc_call.go
@@ -342,6 +350,7 @@ secret K_unlock_previous keys_unlock.go
 secret RK_g gkm_delivery.go
 secret RK_g gkm_keys.go
 secret R_n keys_instance.go
+secret R_n keys_recovery_seal.go
 secret R_n keys_root.go
 secret R_n keys_rotate.go
 secret ReaderKey identity_enroll.go
@@ -388,6 +397,9 @@ secret record_entry_key record_seal.go
 secret record_entry_salt record_chain.go
 secret record_entry_salt record_deposit.go
 secret record_entry_salt record_seal.go
+secret recovery_code keys_recovery.go
+secret recovery_ed25519_seed keys_recovery.go
+secret recovery_xwing_seed keys_recovery.go
 secret service_token api_routes_core.go
 secret spool_private_key record_spool.go
 secret spool_private_key record_spool_locked.go

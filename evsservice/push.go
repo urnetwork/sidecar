@@ -150,12 +150,16 @@ type pushAttempt struct {
 	pushId  sidecar.Id
 	cluster sidecar.BlobCluster
 
-	// the statement as received, parsed, and its payload checked against it; a format-2 construct leaves payload nil
-	// and formatRefusal set, answered after 5a (plan-EVS1-format-unsupported)
+	// the statement as received, parsed, and its payload checked against it; at a format-1 instance a format-2
+	// construct leaves payload nil and formatRefusal set, answered after 5a (plan-EVS1-format-unsupported); at a
+	// format-2 instance the format-2 parsers read it whole and needsFormat2 says it carries format 2, which 5c holds
+	// to §19.11's gate and whose commit raises a format-1 repo (repo_format.go); a part or seal carrying format 2
+	// at a format-2 instance keeps formatRefusal too, since its format-2 checks are EVS2-M10-06's
 	statement     *sidecar.EvsStatement
 	payloadBytes  []byte
 	payload       *sidecar.EvsCheckedPayload
 	formatRefusal *EvsCheckRefusal
+	needsFormat2  bool
 	receipts      []*protocol.EvsUploadReceipt
 	// the repo's network, whose state judges the push and whose storage counts it, and the token's, whose fair
 	// queue its writes wait in
@@ -239,6 +243,7 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		}
 	}()
 
+	format2 := self.format2Instance()
 	statement, err := sidecar.ParseEvsStatement(body.GetStatement())
 	if err != nil {
 		refusal := EvsCheckRefusalOfCodec(err)
@@ -246,13 +251,18 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 			request.Refuse(refusal.Reply(sidecar.Id{}))
 			return nil, false
 		}
-		// a format-2 statement: read whole by format 2's parse, so its push id can be settled and recorded
+		// a format-2 statement: read whole by format 2's parse, so its push id can be settled and recorded; at a
+		// format-2 instance it is the gate's question, not a format refusal
 		statement, err = sidecar.ParseEvsStatementFormat2(body.GetStatement())
 		if err != nil {
 			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(sidecar.Id{}))
 			return nil, false
 		}
-		attempt.formatRefusal = refusal
+		if format2 {
+			attempt.needsFormat2 = true
+		} else {
+			attempt.formatRefusal = refusal
+		}
 	}
 	attempt.statement = statement
 	push := statement.Push
@@ -273,7 +283,20 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a push in parts posted as one").Reply(attempt.pushId))
 		return nil, false
 	}
-	if attempt.formatRefusal == nil && attempt.seal == nil {
+	switch {
+	case attempt.seal != nil:
+		// the parts' round reads and checks the payload (push_seal.go)
+	case format2:
+		// format 2's parsers take format 1's pushes too, since format-1 data is valid format 2; whether the push
+		// carries format 2 is then 5c's question against the gate, and its own rules EVS2-M10-06's
+		payload, err := sidecar.EvsCheckPayloadFormat2(statement, body.GetPayload(), body.GetStaged())
+		if err != nil {
+			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
+			return nil, false
+		}
+		attempt.payload = payload
+		attempt.needsFormat2 = attempt.needsFormat2 || sidecar.EvsPushNeedsFormat2(statement, payload)
+	case attempt.formatRefusal == nil:
 		payload, err := sidecar.EvsCheckPayload(statement, body.GetPayload())
 		if err != nil {
 			refusal := EvsCheckRefusalOfCodec(err)
@@ -286,7 +309,7 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 			attempt.payload = payload
 		}
 	}
-	if len(body.GetStaged()) != 0 && attempt.formatRefusal == nil {
+	if len(body.GetStaged()) != 0 && !format2 && attempt.formatRefusal == nil {
 		// staged segments are format 2's
 		refusal := newEvsCheckRefusal(EvsCheckReasonFormatUnsupported, "staged segments")
 		refusal.NeedsFormat = 2
@@ -422,10 +445,25 @@ func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
 }
 
 // 5 (b-h) over what step 4 read, with the rules other tasks own: a format-2 construct first, after 5a, as
-// plan-EVS1-format-unsupported reads it.
+// plan-EVS1-format-unsupported reads it. At a format-2 instance a part or seal carrying format 2, whose format-2
+// checks are EVS2-M10-06's, takes 5c's gate answer: 409 VERSIONING outside the gate, recorded for a seal, and 503
+// inside it, refusing nothing, so nothing commits unchecked.
 func (self *pushAttempt) check() *EvsCheckRefusal {
 	if self.formatRefusal != nil {
-		return self.formatRefusal
+		if !self.engine.format2Instance() {
+			return self.formatRefusal
+		}
+		if !self.engine.format2.Admits(self.networkId) {
+			return newEvsCheckRefusal(EvsCheckReasonFormat2Gate, "a format-2 part or seal from a network outside the format2 gate")
+		}
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's part and seal checks are not supplied")
+	}
+	if self.needsFormat2 && self.stage() != PushStageOnePart {
+		// a seal whose statement carries format 2 over parts format 1 read: EVS2-M10-06's
+		if !self.engine.format2.Admits(self.networkId) {
+			return newEvsCheckRefusal(EvsCheckReasonFormat2Gate, "a format-2 seal from a network outside the format2 gate")
+		}
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's seal checks are not supplied")
 	}
 	refusal := CheckPush(self.reads.view)
 	if refusal == nil && self.seal != nil {
