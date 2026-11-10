@@ -13,7 +13,7 @@ This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, 
 | R-SDK-3 | Device integration (ip addr, port forward) via abstractions the Sidecar implements | PLAN.md:31 |
 | R-SDK-4 | Bindings link only the sidecar core, never `mcp/` or `cli/` | PLAN.md:7 |
 | R-SDK-5 | gobind types only; exports pass mobileexports, the C ABI and js | x/mobile bind/gen.go:480-512 |
-| R-SDK-6 | iOS extension within its executable ceiling, 52,428,800 B today and raised only by a reviewed budget (Q-SDK-7), and a 32 MiB Go soft limit | sdk/build/check_apple_size.sh:9; apple/app/extension/TunnelMemoryBounds.swift:139,143 |
+| R-SDK-6 | iOS extension within its executable ceiling, 52,428,800 B today and 56,623,104 B from M4 (owner decision 215), and a 32 MiB Go soft limit | sdk/build/check_apple_size.sh:9; apple/app/extension/TunnelMemoryBounds.swift:139,143 |
 | R-SDK-7 | No server holds keys or plaintext | CONVENTIONS §0 |
 | R-SDK-8 | Quick burner: "Must log in, runs a new DeviceRemote in browser" | cli/UI.md:160-164 |
 | R-SDK-9 | With no connected remote, "start a local device that listens" | cli/UI.md:67 |
@@ -37,7 +37,7 @@ Two roles (owner decisions 87, 197). The forwarding role is all of sidecar that 
 
 | Host | Forwarding role | Sidecar role | Client (X10) | Secrets | Budget |
 |---|---|---|---|---|---|
-| iOS | network extension; 18.10's budget (proposed; Q-SDK-7) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |
+| iOS | network extension; 18.10's budget (owner decisions 215, 216) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |
 | Android | VPN service | app, while open (owner decision 197) | child | AndroidKeyStore; `noBackupFilesDir`; forwarding's under its own alias and files (§5.9) | 16 MiB, added |
 | Desktop apps | network extension (macOS), `urnetworkd` (Linux), app service (Windows) | `ur daemon`; app in remote mode | child after §5.8's pairing | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
 | CLI, cloud VM | none | `ur daemon` | top-level, §20.8 (cloud: tagged, ephemeral, by ReaderWraps) | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
@@ -96,7 +96,9 @@ metered     a "search more" whose missing all exceeds 25 MiB on a metered link w
             waiting=metered and the byte count, until the host repeats it with AllowMetered; under 25 MiB it
             proceeds
 caps        phones keep all only below 256 MiB per network and 10% of free space, else on_demand, and evict
-            all shards unused for 30 days; the page Worker keeps 128 MiB per network; a "search more" past a
+            all shards unused for 30 days, sdk's host reading free bytes by statfs on StateDir at start and
+            before each RunBackgroundSync and passing min(256 MiB, free / 10) in settings, as the core reads
+            no platform API; the page Worker keeps 128 MiB per network; a "search more" past a
             cap searches each all shard as it lands and keeps the youngest within the cap; desktops and
             indexers keep §5.9's Search.CacheByteCount (4 GiB by default; 16 GiB on a daemon designated for
             search, which evicts no all of a repo it serves while under it)
@@ -396,6 +398,8 @@ func (self *SidecarSearchHandle) Cancel() // local: no Cancel reaches an indexer
 func (self *SidecarSearch) GetStatus(repoId *Id) *SidecarSearchStatus
 func (self *SidecarSearch) SetPolicy(repoId *Id, policy string, callback SidecarResultCallback) // nil repoId: every repo; "" restores the host default
 func (self *SidecarSearch) SetConditions(unmetered bool, charging bool, lowPower bool) // the app, on each change (18.7)
+func (self *SidecarSearch) SetForeground(foreground bool) // the app at start and on each lifecycle change, a page
+	// Worker's frame on tab visibility; daemon hosts never call it, and an unreported state counts as background
 func (self *SidecarSearch) RunBackgroundSync(budgetMillis int64, callback SidecarResultCallback) // an OS window; stops at the budget, resumable
 func (self *SidecarSearch) DropCache(repoId *Id, callback SidecarResultCallback)
 func (self *SidecarSearch) GetIndexers() *SidecarIndexerList // indexers that may answer this device, own first
@@ -420,6 +424,12 @@ func (self *SidecarDirectory) RevokeRepo(repoId *Id, callback SidecarResultCallb
 	// marker over the announcement at once, and an erasure_request that the directory's erasure runner completes;
 	// the result reads hidden, and SidecarEvent directory_erasure names a request still pending past 24 h (owner
 	// decision 181)
+type SidecarResult struct { // json in the C ABI and js
+	Ok      bool
+	Value   string // a repo_id, send_id, approval_pending:<id> or authority_pending:<proposal_id>
+	Code    string // a REVOKE_ or EVS_ code
+	Message string
+}
 type SidecarResultCallback connect.ApiCallback[*SidecarResult] // one terminal result (sdk/api.go:950)
 // Go only; gobind skips, mobileexports names each.
 func (self *Sidecar) Core() *sidecar.Sidecar
@@ -495,17 +505,20 @@ never       an indexer, receiver or coverage setting: those are inbound (GetRece
 |---|---|
 | mobileexports | A `mobileSidecarGoOnlyIds` map; names avoid `Proxy`, an `Rpc` suffix and a `DeviceRemote` prefix, whose broad rules hide lost methods |
 | C ABI | Nine handle types, `SidecarSearch`, `SidecarSearchHandle` and `SidecarDirectory` included, join `behavioralTypes` (sdk/cgo/gen/gen.go:48), Go-only members `skipMethods` (:182), `SidecarSettings` `jsonParamDefaults` (:158); `SidecarSecret`, `SidecarIndexer`, `SidecarDevice`, `SidecarRevokePlan`, `SidecarRevokeItem`, `SidecarSendCheck` and `SidecarSendResult` cross as JSON, as data structs do (:15), and `SidecarIndexerList`, `SidecarDeviceList`, `SidecarRevokeItemList` and `SidecarSendDomainList` as JSON arrays, as lists do (:178); listeners and app interfaces cross as function pointers |
-| js | The extension Worker's main (18.8) and `gen_types.go` types, the device revocation's among them, where `PreviewRevokeDevice` and `RevokeDevice` answer `REVOKE_NOT_CAPABLE` while the extension is alarms-only (18.4); the page Worker links no sdk (18.10), and its key origin offers no revocation, since it is read_only (18.8); `ur native-host` relays no call that §5.8 signs only on confirmation, §5.6's revocation included, answering `REVOKE_NOT_CAPABLE` itself |
+| js | The local backend carries `!js`, so sdk.wasm links no sidecar root and stays under its gate: on js `NewSidecarRemote` runs over a host-supplied `ur native-host` port, and `NewSidecarLocal` answers unsupported until the extension's own Worker (Later). The extension Worker's main (18.8) and `gen_types.go` types, the device revocation's among them, where `PreviewRevokeDevice` and `RevokeDevice` answer `REVOKE_NOT_CAPABLE` while the extension is alarms-only (18.4); the page Worker links no sdk (18.10), and its key origin offers no revocation, since it is read_only (18.8); `ur native-host` relays no call that §5.8 signs only on confirmation, §5.6's revocation included, answering `REVOKE_NOT_CAPABLE` itself |
 
 **State (D-SDK-14).** Both backends, by client generation (§5.6):
 
 ```text
 reasons     unenrolled: expired | refused | parent_lost | session_ended | keystore_lost; revoked: signed
-confirmed 401 for generation g    -> unenrolled(session_ended if its cause is session_revoked, else refused),
-                                     only if IsAuthLogoutCurrent(g) at the transition; identity, keys,
-                                     admission and pins kept
+confirmed 401 for generation g    -> unenrolled(session_ended if its cause is session_revoked, else
+                                     parent_lost for a child, which sidecar.json records at pairing or sdk
+                                     enrollment, and refused for a top-level client), only if
+                                     IsAuthLogoutCurrent(g) at the transition; identity, keys, admission and
+                                     pins kept
 strict_exp passed unrefreshed     -> unenrolled(expired)
-parent client removed or reaped   -> unenrolled(parent_lost)
+parent client removed or reaped   -> the child's confirmed 401 above, unenrolled(parent_lost): no server signal
+                                     tells it from a refusal, and the remedy is the same
 a core revocation hint, or a bind -> fetch the config: revoked(signed) only if a SidecarRevoke{sidecar_id}
   refused with sidecar_revoked       verifies against it, else unenrolled(refused) and an alarm
 re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the same sidecar_id
@@ -545,7 +558,7 @@ func (self *DeviceLocal) SetBridgeLocalAddresses(addresses *StringList) // bound
 // Device, so DeviceLocal and DeviceRemote: GetBridgeStatus() *BridgeStatus, AddBridgeStatusChangeListener(listener) Sub
 ```
 
-- **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5696, :5789, :6340-6345). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5315; owner decision 85).
+- **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5766, :5859, :6421). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5385; owner decision 85).
 - **Setup (D-SDK-32; owner decision 197).** The sidecar role's one act for its VPN component, in each network it has joined: in process on Android, over the device RPC to the iOS extension, and from `ur daemon` through the desktop app paired per §5.8 to the macOS extension or the Windows or Linux app service; never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
 
 ```text
@@ -599,8 +612,12 @@ enforcing    a state its own compile verified, and the anchored deltas after it,
              document_seen_at latch (the newest pin at which has_document was true)
 stored       the anchor, the newest verified AuthPin, the signed base header and rows, the statements since,
              document_seen_at, and the config generations and compiled state its last compile used
-transitions  legacy -> pending -> enforcing{doc|nodoc}; back to legacy only on this sidecar's own sign-out
-             (its SidecarRevoke), which wipes the stored state and forwarding's keys
+transitions  legacy -> pending -> enforcing{doc|nodoc}; back to legacy only on this sidecar's own sign-out,
+             a Signed SidecarRevoke whose sidecar_id and signer_id both equal Pending's sidecar_id, whose
+             network is Pending's and whose signature verifies under Pending's identity key (§17.8's
+             any -> legacy), which wipes the stored state and forwarding's keys; another sidecar's sign-out or
+             an admin's revocation of this one lowers nothing, and a later Pending for the same network and
+             anchor replaces the stored id and key and changes no state
 never        an unverified projection, one that does not chain, a lower version or an unsigned has_document
              changes the posture; one that fails to verify leaves it unchanged and alarms
 DP1          after a device's first verified state, no restart, delay or unsigned response lowers enforcement
@@ -633,7 +650,7 @@ host     in D's network, the device's hosted address, maps and served prefixes r
 | JWT, refresh | an Api session holding only the child token (sdk/api.go:182-192), `strict_exp` for 7 days (owner decision 131); `StartJwtRefresh` at 40-50% of lifetime; refresh carries a DPoP proof from a signer sdk/sidecar.go installs (`Api.SetDpopSigner`, Go only, from the core's ClientKey), and none is sent without one | `TokenSource()`; D-CORE-8's refresher off once the signer is installed |
 | Logout | `AddAuthLogoutEventListener` (confirmed 401, with its generation; `IsAuthLogoutCurrent` at the transition) | `Unenrolled` with a reason; `Revoked` only on a verified `SidecarRevoke` (D-SDK-14) |
 | State, secrets | `StateDir` or IndexedDB; the app's `SidecarKeyStore` | `Store()`, re-sealing tokens on refresh; `KeyStore()` |
-| Conditions, background windows | the app's `SetConditions` on each change, and its OS window calling `RunBackgroundSync` (below) | the search engine's sync windows (D-SDK-23) |
+| Conditions, foreground, background windows | the app's `SetConditions` and `SetForeground` on each change, `SetForeground` at start too, a page Worker's frame reporting tab visibility, and the app's OS window calling `RunBackgroundSync` (below); daemon hosts report no foreground, and an unreported state counts as background | the search engine's sync windows and the foreground row below (D-SDK-23) |
 
 **Network credential (I-6; owner decision 45).** Same-user agents read `.auth_state` and the extension's `chrome.storage.local` (18.3), so two releases precede §7.4's stage 2 (M3): the desktop app's stops persisting `by_jwt` once the device client exists, re-authenticates for admin actions, seals `.auth_state` in an app-only OS keystore where one exists, and mints device clients `admin_refused`; the extension's stops persisting `by_jwt` in `chrome.storage.local` at each of 18.3's four writes, re-authenticating where it needs one.
 
@@ -673,11 +690,13 @@ control     a remote-mode Sidecar forwards Search, GetStatus and SetPolicy over 
 
 ```text
 {scp_<C>}live    EX 90; its publisher (§6.8) refreshes it every 30 s
-{scp_<C>}tok     api's projection of sidecar_push_token's {platform, token} at the revision tokrev holds;
-                 absent while the row is a tombstone (no token); written only by step 0's apply script
+{scp_<C>}tok     api's projection of sidecar_push_token's {platform, token} at the revision tokrev holds, as
+                 <platform>\n<token>, which only the sender parses; absent while the row is a tombstone (no
+                 token); written only by step 0's apply script
 {scp_<C>}tokrev  the newest revision of C's row applied to tok, a decimal string; no TTL
 {scp_<C>}ack     the highest hint stream id C's connect stack acked; EX 3600; written only while tok exists
-{wakeq_<shard>}  16 streams in their own slots: {c, t, v, h, hint_millis, due_millis}, MAXLEN ~10000
+{wakeq_<shard>}  16 streams in their own slots: {c, t, v, h, hint_millis, due_millis}, MAXLEN ~10000; the
+                 writer's hash of C picks the stream, since the sender reads all 16
 {tokgen_<n>}     16,384 sentinels, one per hash slot (n the least integer whose tag hashes to it), each holding
                  the run_id of the master that served the slot at its last reconcile (step 5); like tok and
                  tokrev, no TTL, so volatile-ttl never evicts them
@@ -745,7 +764,9 @@ WK5  while the slot's sentinel names its serving master, tok moves only up its r
 ```text
 APNs  apns-push-type background, apns-priority 5   {"aps":{"content-available":1},"t":"mail","v":42}
 FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}}
-      t: mail | team | evs | core (§6.8's topic with any id stripped); v: that topic's version; never an id
+      t: mail | team | evs | core (§6.8's topic with any id stripped); v: that topic's version; never an id;
+      APNs's v is the stored decimal string's digits as a JSON integer, never through a float and with no
+      exponent, within uint64, and FCM's stays a string
 ```
 
 - **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<target>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
@@ -764,29 +785,42 @@ carrier:   first HTTPS-only: §6 long-poll, §10, §11 (config repo too) | later
 
 - **Phasing (owner decisions 15, 26, 76).** HTTPS-only needs neither C4 nor C17, so the page Worker, on 18.10's `sidecar_http` leg, serves ur.io/recurd from RS1 (M4) and the team console from RS2 (M6).
 - **Carrier.** C4's `GOOS=js` WebSocket carrier, templated on sdk/device_rpc_platform_js.go, needs the server to admit `chrome-extension://` ids, the `moz-extension:` scheme (per-install UUID origins, https://bugzilla.mozilla.org/show_bug.cgi?id=1372288) and the key origin `https://sidecar.ur.io`, safe since auth is a bearer frame.
-- **Identity (owner decisions 112, 114, 126, 144).** Each Worker but the quick burner is an untagged member device, admitted per §5.6 with the member's consent (§8.5) and counted in `config_admissions` (§20.4). The page Worker reads records, receipts and the config's names, tags, groups and policy (owner decisions 46, 67); it is admitted `read_only` (§7.9), so every verifier refuses what it signs but its sign-out `SidecarRevoke`, its own ReaderKeys, KeyPackages and leaf's MLS maintenance under its r scopes (§10.6), read receipts and HeadCheck replies, and it is never approval-capable (§16.6) or a key deliverer. The extension's service worker, or on ur.io the key origin, mints one `admin_refused`, `strict_exp` top-level client declaring no egress (§20.8), re-minted under its `sidecar_id` after expiry (§5.5); the Worker gets only its token, never listens, and serves only its own pages. `nativeMessaging`, which warns of "cooperating native applications", stays optional (Firefox 87+, https://bugzil.la/1630415).
+- **Identity (owner decisions 112, 114, 126, 144).** Each Worker but the quick burner is an untagged member device, admitted per §5.6 with the member's consent (§8.5) and counted in `config_admissions` (§20.4). The page Worker reads records, receipts and the config's names, tags, groups and policy (owner decisions 46, 67); it is admitted `read_only` (§7.9), so every verifier refuses what it signs but its sign-out `SidecarRevoke`, its own ReaderKeys, KeyPackages and leaf's MLS maintenance under its r scopes (§10.6), read receipts and HeadCheck replies, and it is never approval-capable (§16.6) or a key deliverer. The extension's service worker, or on ur.io the key origin by its sign-in hand-off (owner decision 219), mints one `admin_refused`, `strict_exp` top-level client declaring no egress (§20.8), re-minted under its `sidecar_id` after expiry (§5.5); the Worker gets only its token, never listens, and serves only its own pages. `nativeMessaging`, which warns of "cooperating native applications", stays optional (Firefox 87+, https://bugzil.la/1630415).
 - **Key origin (D-SDK-18).** ur.io pages frame it and message it by exact origin:
 
 ```text
 pages       https://ur.io/recurd, the console and the quick tools render views and hold no sidecar key, sidecar
             token or wrapped secret, though ur.io's account panel keeps a network byJwt in localStorage while a
-            member is signed in on that browser; the team console shows the directory, and the drops of the repos it reads with
-            their states and the device command; it files no request or decision and never dry-runs, signs
-            or cancels a drop (read_only, admin_refused; D-SDK-29)
+            member is signed in on that browser, with which a page calls /auth/code-create for the key
+            origin's sign-in and hands it the one-time code (owner decision 219); the team console shows the
+            directory, and the drops of the repos it reads with their states and the device command; it files
+            no request or decision and never dry-runs, signs or cancels a drop (read_only, admin_refused;
+            D-SDK-29)
 key origin  https://sidecar.ur.io/v1/, served direct from the lb, never through Cloudflare, which terminates
-            https://ur.io (§2.8 EX7, §19.5's W10; owner decision 211), serves only the signed loader and
-            sidecar.wasm, under CSP default-src
-            'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 18.9's hosts; frame-ancestors
-            https://ur.io; its Worker holds IndexedDB, the non-extractable WebCrypto root key and its token
+            https://ur.io (§2.8 EX7, §19.5's W10; owner decision 211), serves only a promoted build's loader
+            and sidecar.wasm, both listed in the release's signed SHA256SUMS (§4.10), the loader pinning
+            sidecar.wasm's SHA-256 and checking it before instantiating: signed means listed in those sums,
+            so anyone can compare the served bytes, and no browser verifies them on load, so EX7 stands
+            (owner decision 221); its CSP is exactly default-src 'none'; script-src 'self'
+            'wasm-unsafe-eval'; connect-src 'self' <18.9's hosts>; frame-ancestors https://ur.io, worker-src
+            falling back to script-src; its Worker holds IndexedDB, the non-extractable WebCrypto root key
+            and its token
+sign-in     the hand-off from the ur.io session (owner decision 219): the page calls /auth/code-create and
+            posts the one-time code; the key origin runs /auth/code-login, mints the page Worker's client with
+            POST /network/auth-client and drops the network token, and re-mints the same way under its
+            sidecar_id after a lapse
 messages    postMessage, accepted only when event.origin is exactly https://ur.io in production (per-env
-            lists; never localhost or http:); requests name an operation (list, read view, record view,
-            directory view, drop states, search, search more, search cancel, search status, search policy,
-            sign-out); replies carry plaintext views only, search hits as display fields and states;
+            lists; never localhost or http:); requests name an operation (sign-in, list, read view, record
+            view, directory view, drop states, search, search more, search cancel, search status, search
+            policy, sign-out); replies carry plaintext views only, search hits as display fields and states;
             GetSecret's strings never leave the Worker
-storage     same-site with ur.io, so not partitioned in first-party use (§22.9's reload test checks it); the
-            search cache is its own IndexedDB store, written only by the lock holder (D-SDK-24); a browser
-            clears an origin's storage bucket in its entirety (https://storage.spec.whatwg.org/, §7), the
-            keychain, MLS state and token with the cache: under storage pressure unless the bucket is
+storage     one IndexedDB database per network, urnetwork-sidecar-v1-<network_id>, each its own sidecar
+            instance with its own instance document and WebCrypto root key, so two networks' page Workers
+            share nothing and the instance row's Web Lock covers everything a Worker writes (owner decision
+            217); same-site with ur.io, so not partitioned in first-party use (§22.9's reload test checks it);
+            the search cache is its own IndexedDB store, written only by the lock holder (D-SDK-24); a browser
+            clears an origin's storage bucket in its entirety (https://storage.spec.whatwg.org/, §7), every
+            network's keychain, MLS state and token with the cache: under storage pressure unless the bucket is
             persistent, and in Safari after seven days of Safari use without user interaction on the site,
             Home Screen web apps keeping their own count
             (https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/); so the frame calls
@@ -823,7 +857,8 @@ leaves      each page Worker is a read_only MLS leaf of each group it reads, wit
 disclosed   script running in https://ur.io (served code, Cloudflare's altered page script, an XSS, an
             extension with page access) can request views while it runs, never the Worker's key or token, so
             that access ends with it; it can also take the account panel's network byJwt from localStorage
-            while a member is signed in on that browser, which reaches network-credential routes, but a client
+            while a member is signed in on that browser, and the sign-in hand-off's one-time code as it
+            crosses the page, which reaches network-credential routes, but a client
             minted with it gets no admission, key or plaintext without a consented device (§5.6, §7.9; §2.4,
             §2.10)
 ```
@@ -851,7 +886,11 @@ generations  each poll authenticates its own client_id; a reaped or revoked clie
 suspended    a tab suspended over 36 min is reaped; on resume its polls get 401 and the page offers
              re-enrollment, since a memory-only keychain cannot rejoin
 cost         one narrow-row write per ephemeral page per 5 min (about 33/s for 10,000 pages) and one
-             index probe per lease row past 35 min per run; auth_time keeps its hourly refresh
+             index probe per lease row past 35 min per run; auth_time refreshes on a connect and on a
+             strict_exp refresh, GET /auth/refresh taking refreshClientAuthTimesInTx's one-hour gate
+             (server/model/network_client_model.go:3882), a child's source client included, so an HTTPS-only
+             client refreshing at 40-50% of 7 days writes it about once per 3 days and the 30-day idle sweep
+             never takes it in use; no poll writes network_client (§6.16)
 ```
 
 ### 18.9 Headless and cloud agents
@@ -862,7 +901,7 @@ cost         one narrow-row write per ephemeral page per 5 min (about 33/s for 1
 | 2 | H1 via HTTP CONNECT (`HTTPS_PROXY`) | §4 C8 (M4), including API dials | everything |
 | 3 | HTTPS-only | the required hosts below | evs, records, long-poll; no streams, sockets or mail send |
 
-Owner decision 49 runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path:
+Owner decision 49 runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path, as `{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}` generated from the one table `ur` embeds:
 
 ```text
 host                          tcp  need
@@ -893,16 +932,21 @@ excluded    every other root file, under !ios_extension as connect-facing ones c
             mail_, smtp_, tls_, dns_, socket_, search_, record_, directory_, indexer_ and the subprotocol but
             push hints; evs writes and every repo but config; approvals, enrollment and recovery; mcp/, cli/
             and every <svc>service
-make size   from M4 the leg adds at most 4 MiB of executable over today's binding, and the signed iOS
-            extension's ceiling rises from 50 MiB to 54 MiB (proposed; Q-SDK-7)
-memory      forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling, inside the iOS tunnel's 28 MiB
-            target and 32 MiB soft limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md): rows stream, never held
-            whole, and a compile that would pass the bound leaves the last verified state in force and raises
-            bridge_alarm (proposed; Q-SDK-7); measured on surrogates only (owner decision 100)
+make size   from M4 the leg adds at most 6 MiB (6,291,456 B) of executable over today's binding, measured
+            stripped as the shipped binding is, and the signed iOS extension's ceiling rises from 50 MiB to
+            54 MiB (56,623,104 B) (owner decision 215)
+memory      forwarding's Go heap at most 4 MiB steady, inside the iOS tunnel's 28 MiB target and 32 MiB soft
+            limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md); a compile is transient, and in the iOS and
+            macOS extensions it is admitted only when 5 x rows + 2 x head + 1 MiB fits a 10 MiB per-compile
+            cap and the room under a 30 MiB process ceiling, about 4,300 devices at the tunnel's connected
+            baseline, waiting for room under provider load; a larger network keeps its last verified state
+            on that device, applies every revocation it can check, raises bridge_alarm once a statement that
+            could narrow reach has waited 10 minutes and never goes pending for that wait, while it compiles on
+            Android, Windows and Linux (owner decision 216); measured on surrogates only (owner decision 100)
 ```
 - **Pruning.** No `net/rpc`, templates or dynamic reflect lookups (sdk/build/mobile_method_pruning_test.go:27); the worker needs protobuf v1.36.12, the first that keeps pruning (sdk/build/go.mod:98; sdk/js/go.mod:97 has v1.36.11), and sidecar generates with v1.36.11 (§6).
 - **Tags.** sdk's sidecar-role files carry `!ios_extension`, and §5.10's Keychain tag keeps gomobile's darwin slices (sdk/dependency_boundary_test.go:91) on the app's `SidecarKeyStore`.
-- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (proposed; Q-SDK-7; D-SDK-20); memory is measured on surrogates only (owner decision 100).
+- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (owner decision 215; D-SDK-20); memory is measured on surrogates only (owner decision 100).
 - **wasm (D-SDK-19).** A connect-only js/wasm main is already 55.0 MB unstripped (53.2 MB stripped; 2026-11-03), since Go links every imported package's `init` functions and initialized variables, connect's IP stack included (42 gVisor packages, §4.6). The page Worker's `sidecar.wasm` therefore links no connect package; the Q-SDK-1 spike before M4's entry decides C17 for the extension only (owner decision 22):
 
 ```text
@@ -940,7 +984,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 | Full sidecar in network processes | always on | iOS: 4,690,096 B headroom, 32 MiB shared, jetsam kills the VPN; desktop: root, LocalSystem or sandboxed processes (apple/app/app.xcodeproj/project.pbxproj:1291) hold content | rejected (owner decisions 87, 197) |
 | The keyless device role: the app compiles the rules and signs each link's delegation | no key or config reader in the tunnel; a 1 MiB budget | new rules and new links wait for the app, and a sleeping app stalls links | not taken (owner decision 197) |
 | A forwarding sidecar of its own in the VPN component, admitted as a device | hosts verify as today | two sidecars per app device in policy, `ur devices` and admissions; filings signed for a sidecar the app does not hold; with self_admit off an admin admits every phone's | rejected: a forwarding Delegation of the device's own sidecar (D-SDK-32) |
-| A second, minimal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen (proposed; Q-SDK-7) |
+| A second, minimal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen (owner decision 215) |
 | A forwarding Delegation that expires within 90 days, as an auth key's | bounds a copied forwarding key with no revocation | forwarding stops where the app has not run for 90 days | rejected: it ends with its sidecar, its revocation or a newer one (owner decision 197) |
 | Forwarding in the root package, linked whole | no new package | links every root `init` and `protocol` descriptor into the jetsam-bound tunnel | rejected: `sidecar/device` with the listed root files (Q-SDK-5; D-SDK-20) |
 | Hosted sidecar like ProxyDevice | no install | keys and plaintext on servers | ruled out (owner directive 2026-11-03; owner decision 26) |
@@ -999,7 +1043,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-22 (proposed).** Apps search through `SidecarSearch` (18.5): one call streams replacing pages of hits labeled verified, confirmed, possible, near or unmatched, each naming the indexer that verified it if one did, with progress that names the bytes to fetch, any metered wait and the remote state. *Why:* gobind's limits; one implementation of masking and ranking on every host.
 
-**D-SDK-23 (proposed).** Hosts report network and power conditions, apps through `SetConditions` and browsers through the key-origin frame, and apps grant background time through `RunBackgroundSync`; the Go core reads no platform API. *Why:* none is portable across gomobile, the C ABI and js, and the OS decides when a backgrounded app may run.
+**D-SDK-23 (proposed).** Hosts report network and power conditions and the foreground, apps through `SetConditions` and `SetForeground` and browsers through the key-origin frame's network, battery and tab visibility, and apps grant background time through `RunBackgroundSync`; the Go core reads no platform API. *Why:* none is portable across gomobile, the C ABI and js, the OS decides when a backgrounded app may run, and without a foreground report each search opens its own contract, the timing owner decision 188's windows exist to hide.
 
 **D-SDK-24 (proposed).** The page Worker links the search engine and keeps its search cache in its own IndexedDB store, written only by the Web Lock holder; pages receive hit views only, and the quick burner searches its buckets in memory and never fetches all. *Why:* owner decision 76's one browser runtime; eviction and Safari's 7-day rule make the cache disposable by design.
 
@@ -1023,17 +1067,17 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **Q-SDK-1.** [X14] What runs the extension's sidecar? **Decided by owner 2026-11-03 (owner decision 26):** (a), a slimmed `sidecar.wasm` Worker, HTTPS-only first, and meanwhile (c), the native companion to a desktop `ur daemon`; never a hosted sidecar (18.8). *Residual:* 18.10's size spike, which decides C17 for the extension's streaming Worker only (owner decision 22); pages use the `sidecar_http` leg (D-SDK-19).
 
-**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 (owner decision 87):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). **Amended by owner 2026-11-09 (owner decision 197):** every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) runs the device's IP and port forwarding and nothing else of sidecar: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet, always on whenever the component runs, with no setting that turns it off, and self-contained, with its own forwarding key, taking rule changes directly so it never waits on the app (18.4, 18.6; D-SDK-32). Owner decision 87 holds for everything else, and on Android the sidecar role runs only while the app is open, as on iOS. *Residual:* Q-SDK-7, forwarding's budget in the iOS extension.
+**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 (owner decision 87):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). **Amended by owner 2026-11-09 (owner decision 197):** every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) runs the device's IP and port forwarding and nothing else of sidecar: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet, always on whenever the component runs, with no setting that turns it off, and self-contained, with its own forwarding key, taking rule changes directly so it never waits on the app (18.4, 18.6; D-SDK-32). Owner decision 87 holds for everything else, and on Android the sidecar role runs only while the app is open, as on iOS. *Residual:* none; forwarding's budget in the iOS extension, Q-SDK-7, is decided (owner decisions 215, 216).
 
 **Q-SDK-3.** Do phones get wake pushes? **Decided by owner 2026-11-03 (owner decision 88):** (b), content-free APNs and FCM wakes from the first app hosts (M8; 18.7). *Residual:* none.
 
 **Q-SDK-4.** How does the ur.io quick burner run (cli/UI.md:164)? **Decided by owner 2026-11-03 (owner decision 76):** (b), an ephemeral, labeled wasm sidecar in the page (18.8; Q-CTX-2). *Residual:* none.
 
-**Q-SDK-5.** Cross-cutting (D-REPO-2). Where does the iOS device role's code live? Even with engines in `<svc>service` packages (owner decision 104), a root-package device role links every root init and `protocol` descriptor into the iOS extension. **Closed by peer review 2026-11-04:** (b) now. The device role is the leaf package `sidecar/device`, importing only connect and a generated `sidecar/protocol/bridge` (D-SDK-20); the root never imports it, and the iOS extension links neither the root nor `protocol`. Conditions: `protocol/bridge` imports only std and protobuf (owner decision 52's test); `make check` fails the ios_extension leg if its deps include the sidecar root or `sidecar/protocol`; `make size`'s 1 MiB gate stays and passes at M4; §2.10 gains the routing-integrity row; §17.10's `sidecar.Bridge` becomes `device.Bridge`. Owner decision 197 then put the config follower and compiler in every VPN component, so the extension links `sidecar/device` with the root's forwarding files and `protocol`'s config, acl, evs and gkm descriptors under 18.10's allow-list, the root still never importing `device/`, and the size gate follows Q-SDK-7. *Residual:* none.
+**Q-SDK-5.** Cross-cutting (D-REPO-2). Where does the iOS device role's code live? Even with engines in `<svc>service` packages (owner decision 104), a root-package device role links every root init and `protocol` descriptor into the iOS extension. **Closed by peer review 2026-11-04:** (b) now. The device role is the leaf package `sidecar/device`, importing only connect and a generated `sidecar/protocol/bridge` (D-SDK-20); the root never imports it, and the iOS extension links neither the root nor `protocol`. Conditions: `protocol/bridge` imports only std and protobuf (owner decision 52's test); `make check` fails the ios_extension leg if its deps include the sidecar root or `sidecar/protocol`; `make size`'s 1 MiB gate stays and passes at M4; §2.10 gains the routing-integrity row; §17.10's `sidecar.Bridge` becomes `device.Bridge`. Owner decision 197 then put the config follower and compiler in every VPN component, so the extension links `sidecar/device` with the root's forwarding files and `protocol`'s config, acl, evs and gkm descriptors under 18.10's allow-list, the root still never importing `device/`, and the size gate follows owner decision 215. *Residual:* none.
 
 **Q-SDK-6.** May a phone or browser ask one of its network's indexers to search all and return verified hits, instead of downloading all and showing possible matches? **Decided by owner 2026-11-05 (owner decisions 175, 177, 178):** (c), amended: in v1 a phone's "search more" asks one of its network's designated indexers that reads the repo end to end over the sidecar subprotocol (Required mode) and gets verified hits, an owner-bound repo only on its owner's consented device, replies padded to 16 KiB steps (§11.14's remote search, with 18.4's notice and setting); a network has no indexer by default, so by default a phone downloads all and shows possible matches (owner decision 155), as it does whenever none is online (options (a), never, and (b), later and opt-in, not taken). Browser tabs, whose Workers carry no connect client, keep the download (18.17's Later). *Residual:* none; connect's byte reports are owner decision 176 (§6's Q-PROTO-4).
 
-**Q-SDK-7.** Cross-cutting (§4.7, §22.9). What budget does forwarding get in the iOS network extension, now that owner decision 197 has it follow the config repo and compile its own rules there? *Options:* (a) the `ios_extension` leg links the root's forwarding files (18.10) and adds at most 4 MiB of executable, the signed extension's ceiling rising from 50 MiB to 54 MiB, with forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling inside the tunnel's 28 MiB target, all measured on surrogates (owner decision 100); (b) keep `make size`'s 1 MiB by writing a second, minimal config follower, policy evaluator and compiler in `sidecar/device`, two implementations of security-critical rules to keep equal; (c) on iOS alone the app compiles and signs as the keyless role did, which would need owner decision 197's point 3 amended. *Recommendation:* (a): one implementation, and the extension's executable ceiling is an artifact ceiling the owner has raised by review before (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md), while runtime memory stays inside today's targets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.
+**Q-SDK-7.** Cross-cutting (§4.7, §22.9). What budget does forwarding get in the iOS network extension, now that owner decision 197 has it follow the config repo and compile its own rules there? **Decided by owner 2026-11-10 (owner decisions 215, 216):** (a), one implementation of the rule table, with measured numbers: the `ios_extension` leg adds at most 6 MiB (6,291,456 B) of executable, measured stripped as the shipped binding is, and the signed extension's ceiling rises from 50 MiB to 54 MiB (56,623,104 B) (owner decision 215); a compile in the iOS and macOS network extensions is admitted only when 5 × rows + 2 × head + 1 MiB fits a 10 MiB cap and the room under a 30 MiB process ceiling, about 4,300 devices at the tunnel's connected baseline, and a larger network keeps its last verified state on that device, applies every revocation it can check and raises `bridge_alarm`, never going pending for a statement that waits on a compile (owner decision 216). A second follower in `sidecar/device` (b) and the app compiling on iOS (c) were not taken; 18.10, §4.7 and §22.9 carry the numbers. *Residual:* none; a compile past the cap for larger teams on iOS is review-phase work.
 
 ### 18.14 Departures from PLAN.md
 
@@ -1049,7 +1093,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 - **Subprotocol messages:** `SearchRequest` (`SEARCH`, 0x1404) and `SearchReply` (`SEARCH_RESULT`, 0x1405) (§6.11, §11.14): app hosts send requests to designated indexers and take replies, as requesters only, never serving (M10).
 - **API routes:** `POST /sidecar/push-token {platform: apns|fcm, token}` (Client; sets or, when empty, deletes the caller's wake token; M8).
 - **Tables:** `sidecar_push_token(client_id, platform, token, rev, update_time, removed_time, slot)` (api; migration ≥926, §19's MG8; `rev`, 18.7's revision; `slot`, the hash slot of `{scp_<C>}`, indexed for 18.7's reconcile, and `update_time` for its sweep; a removal keeps the row as a tombstone without platform or token; no foreign key: each path that removes a client tombstones its row and sets `removed_time` in that transaction, and 18.7's sweep deletes the row 24 h later); `network_client_lease(client_id, seen_time, close_sha256)` (api; MG1, with the auth keys that mint the first ephemeral clients; read by the reaper; deleted with its client; 18.8); Redis `{scp_<C>}live` and `{scp_<C>}ack` (publishers), `{scp_<C>}tok` and `{scp_<C>}tokrev` (the token projection and its revision, which api, the push sender and taskworker change only through 18.7's apply script), `{tokgen_<n>}` (taskworker's 16,384 per-slot sentinels) and `{wakeq_<shard>}` (owning services, evs included, write; the push sender reads; 18.7); `{scp_<C>}hb` (api, the poll lease; 18.8).
-- **Services and config:** `CheckOrigin` on connect's H1 upgrader (18.3); `https://ur.io` and the key origin `https://sidecar.ur.io` in `cors_origins` (warp/services/services.go:676) for api (auth included), evs and gkm; the key origin's loader, CSP and frame-ancestors, the page Worker, its label and `hosts/v1.json` (mmm); extension `offscreen` and optional `nativeMessaging`; native-host manifests for URnetwork's extension ids only; APNs and FCM credentials (§19).
+- **Services and config:** `CheckOrigin` on connect's H1 upgrader (18.3); `https://ur.io` and the key origin `https://sidecar.ur.io` in `cors_origins` (warp/services/services.go:676) for api (auth included), evs and gkm, the lb's CORS headers extended additively (warp/warpctl/config.go:2136-2138): `Access-Control-Allow-Methods` gains PUT and DELETE, `Access-Control-Allow-Headers` `DPoP`, `If-Match` and `If-None-Match`, and `Access-Control-Expose-Headers` `ETag` and `Retry-After`, the lb still sending no `Access-Control-Allow-Credentials`; the key origin's loader, CSP and frame-ancestors, the page Worker, its label and `hosts/v1.json` (mmm), with a minimal ur.io/recurd page at `mmm/ur.io/astro/src/pages/recurd/` on mmm's `sidecar` branch: the served-code label, the key-origin frame, the sign-in hand-off, a record list, one record view and download links, unstyled beyond the site's layout, its visual design out of scope (owner decision 223); extension `offscreen` and optional `nativeMessaging`; native-host manifests for URnetwork's extension ids only; APNs and FCM credentials (§19).
 - **App work this design assumes (out of scope; external releases, §23):** running forwarding in every VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) whenever it runs, with no setting that turns it off, its keys and state in the stores §5.9 names, and Android's VPN service in a process of its own (owner decision 197); `GetBridgeRoutes`, a chosen RFC 1918 block included (owner decision 132), lifted from §17.3's tun exclusions (Windows: WFP permits; Linux: the complement set), and `SetBridgeLocalAddresses` from the platform's routes and DNS settings; 18.4-18.7's seams (receiver, the composer's send check and results, autofill, push, approvals, alarms, presence key, §5.8's pairing); re-minting the device client after its forwarding role's first state (18.6); for search, 18.7's OS windows and conditions, the metered prompt with its byte count, labels for possible matches, 18.4's notice and setting, the indexer list and "verified by" labels; the directory view and access-request approvals; the drop dialog and pending drops' cancel (18.5); and, as prerequisites of §7.4's stage 2 (M3), 18.7's credential rules: the desktop app release and the extension release that stop persisting `by_jwt`.
 - **Assumptions about other sections:** §14 sends the extension's outbox mail as it does phones'; §6.8's hint script returns `tok` and `live` for 18.7's enqueue; §16.6 defines approval-capable hosts and the presence profiles; §5.6's `recovery_window` and §7.9's `RecoveryVeto` cover an admission by a binding the cascade restored as they do a recovery-signed authority statement, and §7.9's cascade list names each device that sealed to a binding it voids (owner decision 149); §17.10's `BridgeHost` and `BridgeStatus` live in `sidecar/device`, which D-SDK-20's tunnel may import; §5.8's control mode carries a remote-mode app's forwarding setup (18.6) to its daemon, which signs the forwarding Delegation and mints the forwarding client for that app alone; §17.4 carves the local addresses `SetBridgeLocalAddresses` passes; §7.7's ephemeral mint inserts the lease row and §7.8's responses return its `close` once, §7.10's ephemeral job applies 18.8's predicate, §6.16's poll writes only the lease, never `network_client`, and §6.18 phases `POST /sidecar/close` with it (M1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read; FS-36 kills one master and restarts one from an older dump, and expects a count only for step 2's failed XADDs, and FS-120 delays applies past later commits; each path that removes a client (§7.10) tombstones its token row in that transaction; §19.10's api step raises every row's rev by 2^32 after a Postgres restore; §22.9's Browsers row opens two tabs on one network (18.8's instance rule); §5.8's control mode carries `Search` streams, status and policy calls to the daemon (18.7) and returns untrusted hits' text to a caller that asks for it; §6.4's control contracts carry SEARCH where reach does not (D-PROTO-21); §11.14 owns remote search's eligibility, failover and merge and cites 18.4's notice; §16.11 defines the directory, its notices and their `q/` leases; §5.4 carries the new event kinds and fields and the `Directory` and remote-search settings, and §5.9 keeps 18.4's overrides, modes and notice answers in its non-derived search state; §5.4's `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` carry §5.6's rules and `REVOKE_` codes, and §5.8's control mode carries a remote-mode app's revocation calls and presence evidence to its daemon, the first call returning the act's countersigned bytes under Presence (D-SDK-30), and §7.9's presence row and §6.9 define the countersignature that `SignWithPresence`'s evidence becomes (owner decisions 185, 187).
 
@@ -1058,7 +1102,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `sidecar.wasm` misses its goal or starts slowly | High | High | `sidecar_http` leg from M1; spike before M4; C17 only for the extension |
-| An iOS tunnel jetsam regression reaches users unmeasured, now that forwarding compiles there (owner decision 197) | High | High | `make size` from M4; surrogates (owner decision 100); the forwarding leg's file list and budget (D-SDK-20; proposed; Q-SDK-7); a compile past its bound keeps the last state and alarms |
+| An iOS tunnel jetsam regression reaches users unmeasured, now that forwarding compiles there (owner decision 197) | High | High | `make size` from M4; surrogates (owner decision 100); the forwarding leg's file list and budget (D-SDK-20; owner decisions 215, 216); a compile past its cap keeps the last verified state and alarms |
 | A compromised VPN component forwards as its sidecar and reads the config until its forwarding Delegation ends | Low | Medium | the forwarding key signs only that sidecar's delegations, and its client is `forward_only` (D-SDK-32); no mail, evs data, MLS, identity or recovery key there; `DelegationRevoke` or the sidecar's revocation (§2.10) |
 | Android's VPN service shares the app's process, so a compromise there reaches the sidecar role while the app is open | Medium | High | app work runs the service in a process of its own (18.15); forwarding's keys under their own alias and files (§5.9) |
 | Phone-only burner users miss mail, as wakes are throttled or dropped | High | High | owner decision 12's copy via `GetReceiverCoverage`; mail indexers (owner decision 150); 18.7's deferred check (WK2) and per-slot reconcile; token projections in revision order, swept each pass (WK5) |
@@ -1076,10 +1120,10 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 ### 18.17 Phasing
 
-- **v0, CLI hosts (M1-M4):** §5.17's daemon; 18.8's lease, reap predicate and close capability, with `POST /sidecar/close`, for §7's first ephemeral clients (MG1, M1); 18.7's credential rules, in the desktop app and extension releases, before §7.4's stage 2 (M3); M4's dark seam, posture, zone call and id refusal in `sidecar/device`, with the forwarding leg's file and descriptor rule; 18.9's host list with C8 (M4); `make size` from M4, at Q-SDK-7's budget.
-- **v0, ur.io (M4, RS1):** ur.io/recurd's `read_only` page Worker in its key origin (18.8), on the `sidecar_http` leg (import rule from M1, size measured from M2) within 18.10's gate or miss rule.
-- **v1 (M6, RS2):** the team console on that Worker, with the directory's read-only views; `SignEdgeLogin` for §13's `members-device`; the directory's seams (`SidecarDirectory`, `CreateRepo`'s `private`, access-request approvals; §16.11's announce entries), in app hosts from M8; after M8, §17.9's egress spec on app devices.
+- **v0, CLI hosts (M1-M4):** §5.17's daemon; 18.8's lease, reap predicate and close capability, with `POST /sidecar/close`, for §7's first ephemeral clients (MG1, M1); 18.7's credential rules, in the desktop app and extension releases, before §7.4's stage 2 (M3); M4's dark seam, posture, zone call and id refusal in `sidecar/device`, with the forwarding leg's file and descriptor rule; 18.9's host list with C8 (M4); `make size` from M4, at owner decision 215's budget.
+- **v0, ur.io (M4, RS1):** the minimal ur.io/recurd page (owner decision 223) and its `read_only` page Worker in its key origin (18.8), signing in by the ur.io session's hand-off (owner decision 219), on the `sidecar_http` leg (import rule from M1, size measured from M2) within 18.10's gate or miss rule.
+- **v1 (M6, RS2):** the team console on that Worker, with the directory's read-only views; the `sdk.Sidecar` shell, dark, with `SignEdgeLogin` for §13's `members-device`, app hosts joining it at M8; the directory's seams (`SidecarDirectory`, `CreateRepo`'s `private`, access-request approvals; §16.11's announce entries), in app hosts from M8; after M8, §17.9's egress spec on app devices.
 - **v0, app hosts (M8, BS1):** Android and iOS local mode; desktop remote mode with §5.8's pairing; forwarding in every app's VPN component (owner decision 197): its keys, setup, forwarding Delegation and forwarding clients, its own following, compile and signing, posture and private names on app paths, hosting after C16 in the device client's network, iOS links after §22.9; Android's sidecar role only while the app is open; `SidecarApprovals` and alarms (owner decision 126), with the member's device list and revocation and, in team networks, revocation proposals' cosigns (D-SDK-30); wakes (owner decision 88), directory notices' included, and the directory view's policy; the receiver and coverage APIs and the indexer prompt; from M9, the send check and results (§14.5); the quick tools; the native companion (owner decision 26).
 - **v1, M10 (owner decision 169):** 18.4's search policy and targets, `SidecarSearch`, conditions and 18.7's windows on app hosts, and remote search's requester side (modes, notice, `GetIndexers`, the foreground Hello and §6.10's keepalive), at the later of M10's and M8's exits, in team networks at the later of those and M6's (§23); the page Worker's search operations, conditions and cache; the quick burner's in-memory buckets; remote mode's search stream; with format 2 (§11.7), `Write`'s versioning argument, the drop calls, `History`'s states and `EVS_DROPPED` (owner decisions 173, 183) and the console's drop view, and the directory's cards and index with phones' directory "search more".
 - **Later:** the extension's own Worker, Firefox session mode, browser streams (C4), C17 for the extension's streaming Worker if the spike needs it; browser Workers and ephemeral CLI hosts as remote-search requesters, browsers after C4.
-- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension (owner decision 45); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting; Q-SDK-7, the `ios_extension` leg's budget and iOS forwarding.
+- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension (owner decision 45); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting, once M8's entry has measured its latch (owner decision 224).

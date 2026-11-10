@@ -188,9 +188,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       sidecar_id and a released old-generation logout event leave the identity and the new enrollment; a forged core
       revocation with no SidecarRevoke gives unenrolled and an alarm, a signed one revoked, on local and remote
       backends; the ios_extension leg links of the root only §18.10's forwarding files and registers only that
-      list's descriptors (protocol's config, acl, evs and gkm, and protocol/bridge's), make size within
-      Q-SDK-7's budget (M4); forwarding in the VPN component (owner decision 197): its posture restored before
-      the first packet, rules and revocations applied with the sidecar role stopped, its forwarding client
+      list's descriptors (protocol's config, acl, evs and gkm, and protocol/bridge's), make size within owner
+      decision 215's budget (M4); forwarding in the VPN component (owner decision 197): its posture restored
+      before the first packet, rules and revocations applied with the sidecar role stopped, its forwarding client
       refreshed by its own proofs, nothing but its sidecar's delegations signed by its key (the §17 row); wakes and
       liveness: FS-36, FS-37; phone and page search within §18.4's budgets: FS-77, remote search's requester side:
       FS-83; the device list and revocation through each adapter: FS-98; the ios_extension leg links no index code
@@ -1329,23 +1329,25 @@ FS-36  §18    wake dispatch on the 3-master cluster, the client's and the shard
 FS-37  §18    an HTTPS-only page polling for 2 h, then killed with no unload: one reap 30-36   FI-2        T2+T3  M4-out
               min after its last poll, or at once on its close beacon; old-generation polls
               keep nothing alive; two tabs reap independently; an ephemeral connected 2 h,
-              then disconnected 2 min, is not reaped, and is 35-36 min after the disconnect
+              then disconnected 2 min, is not reaped, and is 35-36 min after the disconnect;
+              a page Worker polling and refreshing for 31 days on a fake clock stays active
 FS-38  §17    a FriendsAndFamily contract whose sealed source network differs from the         FI-11       T2+T3  M4-out;
               dialer's verified identity: refused before data; an operator-minted window                          shares at
               client with a correctly HMACed contract claiming subject S opens zero upstream                      M6-out
               sockets (TCP, UDP, ICMP), and a valid WindowDelegation is the positive twin,
               while mismatched key, expired, wrong target and wrong network fail and a
-              substituted target key fails the sender's check; on a share link (C18), a
-              ShareSigner-signed delegation is the positive twin, while a ShareCert below the
-              host's newest verified generation, expired, over 7 days out or not signed by the
-              pinned ShareKey is refused, after a host restart from 17.8's persisted state
-              too; a sidecar Y removed is refused new contracts once a later generation's
-              ShareCert reaches the host, at most 7 days after its removal; with no renewal
-              for 7 days the share lapses; a current Y reader with no Y grant on X, its valid
-              signer and an operator-minted contract to an X-granted target: the honest gate
-              refuses the contract, the minted one reaches only X's granted targets and
-              ports, and the run records X's grant and the gate, never Y's bypassed router,
-              as what enforced (§8.11)
+              substituted target key fails the sender's check, on a share link against the
+              host key Y's BridgeAlias pinned; on a share link (C18), a ShareSigner-signed
+              delegation is the positive twin, while a ShareCert below the host's newest
+              verified generation, expired, over 7 days out or not signed by the pinned
+              ShareKey is refused, after a host restart from 17.8's persisted state too; a
+              sidecar Y removed is refused new contracts once a later generation's ShareCert
+              reaches the host, at most 7 days after its removal; with no renewal for 7 days
+              the share lapses; a current Y reader with no Y grant on X, its valid signer and
+              an operator-minted contract to an X-granted target: the honest gate refuses the
+              contract, the minted one reaches only X's granted targets and ports, and the run
+              records X's grant and the gate, never Y's bypassed router, as what enforced
+              (§8.11)
 FS-39  §14,15 report intake: gzip XML and JSON aggregates count once per reporter and          FI-11       T2     M5-out;
               report_id, and an ARF body canary appears in no log; at M7, delayed DNS evidence                    the rest
               and REQUIRETLS added by an active second hop: labels as stated                                      at M7-out
@@ -1483,7 +1485,9 @@ FS-55  §19    migration N+1 applied while binary N runs; binary N restarted on 
               (rollback); then N+1's gate enabled                                                                 Gn-out
 FS-56  §17    the hook resolves a flow and its dial waits at a barrier; a revocation swaps the FI-11       T2+T3  M4-out
               policy and runs CloseFlows; the dial completes: reset before any byte reaches
-              the target, for TCP, UDP and ICMP; the twin without a revocation forwards
+              the target, for TCP and UDP, and for ICMP no echo reaches the target and none is
+              answered, a silent drop; the twin without a revocation forwards; a bridged
+              TCP/25 SYN gets the reject client's answer, and no local dial follows it
 FS-57  §11    a batch PUT applied and its response dropped; evs killed after the batch write   FI-1,2,6    T2+T3  M2-out
               and before the head CAS; the push id retried on evs2, which writes a second
               record and commits; the first process's delayed head PUT fails; evacuation keeps
@@ -2635,7 +2639,7 @@ Beyond the schedules:
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
-- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within Q-SDK-7's on an ios32 cell whose forwarding role compiles a 5,000-device team's config (owner decision 197), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
+- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions 215 and 216's on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions 197, 216), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/ reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
 ### 22.10 Internal review gates
