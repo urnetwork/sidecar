@@ -3,11 +3,14 @@
 // ApprovalInbox keep the requester's local state on top of it and hold no second route table, and MCP-M3-07's
 // ApprovalRender shows what Pending hands it.
 //
-//	request    to a log its approver reads: the member's vault; for a tagged sidecar its sponsor's, by deposit; for
-//	           a tagged sidecar with no sponsor, or an approver who is not the author, the team record, which is
-//	           RECORD-M6-01's, so at M3 such a request is refused and stays pending, failing closed
-//	decision   back through that vault, by the approver's device; read by the requester by hint, and by Decision,
-//	           the poll behind ur://approval/{id}
+//	request    to a log its approver reads: the member's vault, copied to any team record with the same bytes; for
+//	           a tagged sidecar its sponsor's, by deposit; for a tagged sidecar with no sponsor, or an approver who is
+//	           not the author, an admin's, the team record alone (RECORD-M6-01), its copy in the requester's vault;
+//	           in a network with no team record such a request is refused and stays pending, failing closed
+//	decision   back through that log, by the approver's device: a member's through the vault, copied to the team
+//	           record; an admin's into the team record, where only a requester that reads it finds it, so a member
+//	           device's admin-approved non-grant action stays pending until the ApprovalDelivery delta exists; read by
+//	           the requester by hint, and by Decision, the poll behind ur://approval/{id}
 //	use        approval_use, after §16.6's Outcome, never instead of it
 //
 // Bodies are stored bytes: an ApprovalRequest as the ledger keeps it, and a decision or a cancel as its Signed bytes,
@@ -45,8 +48,8 @@ var (
 	// The requester reads no vault, so no decision reaches it here: grant decisions arrive as GrantActivate deltas,
 	// and the ApprovalDelivery delta for the rest is not built (plan-RECORD-deposit-only-decisions).
 	ErrRecordApprovalUndeliverable = errors.New("record approval decision undeliverable to a deposit-only requester")
-	// The approval's route is the team record, RECORD-M6-01's: a tagged sidecar with no sponsor, an approver who is not
-	// the author, or a log that is not this device's vault.
+	// The approval's route is the team record, and this network has none, or the log named is neither this device's
+	// vault nor the team record: a tagged sidecar with no sponsor, or an approver who is not the author.
 	ErrRecordApprovalTeamRoute = errors.New("record approval routes to the team record")
 	// No request with that approval_id is in the log.
 	ErrRecordApprovalUnknown = errors.New("record approval unknown")
@@ -87,23 +90,29 @@ func (self *RecordApprovals) route() (*recordRoute, error) {
 	return route, err
 }
 
-// Files request, as the ledger stores it, in the log its approver reads, and answers where it went. A request whose
-// approvers are not this device's author is the team record's (RECORD-M6-01) and is refused here, staying pending.
+// Files request, as the ledger stores it, in the log its approver reads, and answers where it went: the author's
+// vault, or the team record for a tagged sidecar with no sponsor or an approver who is not the author. With no team
+// record those are refused here, staying pending.
 func (self *RecordApprovals) FileRequest(request *StoredApprovalRequest) (*RecordEntryRef, error) {
 	if request == nil {
 		return nil, fmt.Errorf("%w: no request", ErrRecordDraftInvalid)
 	}
 	auth := self.writer.auth()
+	teamRecordId, _ := recordTeamLogs(auth)
 	authorId, ok := auth.Member(self.writer.sidecarId)
 	if !ok {
 		authorId, ok = auth.Sponsor(self.writer.sidecarId)
 	}
-	if !ok {
+	if !ok && teamRecordId == nil {
 		return nil, fmt.Errorf("%w: no author", ErrRecordApprovalTeamRoute)
 	}
+	teamOnly := false
 	for _, approver := range request.Request.GetApprovers() {
-		if !bytes.Equal(approver, authorId[:]) {
-			return nil, fmt.Errorf("%w: an approver who is not the author", ErrRecordApprovalTeamRoute)
+		if ok && !bytes.Equal(approver, authorId[:]) {
+			if teamRecordId == nil {
+				return nil, fmt.Errorf("%w: an approver who is not the author", ErrRecordApprovalTeamRoute)
+			}
+			teamOnly = true
 		}
 	}
 	draft := &RecordDraft{
@@ -111,6 +120,7 @@ func (self *RecordApprovals) FileRequest(request *StoredApprovalRequest) (*Recor
 		Source:     RecordSourceObserved,
 		ActionId:   bytes.Clone(request.Request.GetActionId()),
 		StoredBody: request.Bytes,
+		TeamOnly:   teamOnly,
 	}
 	if runId := request.Request.GetRunId(); len(runId) != 0 {
 		id := recordIdOf(runId)
@@ -179,14 +189,19 @@ func (self *RecordApprovals) FileCancel(ctx context.Context, logId Id, storedSig
 	return self.fileAnswer(ctx, logId, recordIdOf(cancel.GetApprovalId()), RecordKindApprovalCancel, RecordSourceApprover, storedSigned, nil)
 }
 
-// A decision or cancel into logId, which must be this device's own route: the log its request is in.
+// A decision or cancel into logId, the log its request is in: this device's own vault, or the team record, where it
+// goes alone.
 func (self *RecordApprovals) fileAnswer(ctx context.Context, logId Id, approvalId Id, kind RecordKind, source RecordSource, storedSigned []byte, runId *Id) (*RecordEntryRef, error) {
-	route, err := self.route()
-	if err != nil {
-		return nil, err
-	}
-	if route.logId != logId {
-		return nil, fmt.Errorf("%w: a log other than this device's vault", ErrRecordApprovalTeamRoute)
+	teamRecordId, _ := recordTeamLogs(self.writer.auth())
+	inTeam := teamRecordId != nil && *teamRecordId == logId
+	if !inTeam {
+		route, err := self.route()
+		if err != nil {
+			return nil, err
+		}
+		if route.logId != logId {
+			return nil, fmt.Errorf("%w: a log other than this device's vault or the team record", ErrRecordApprovalTeamRoute)
+		}
 	}
 	if err := self.reader.Sync(ctx, logId); err != nil {
 		return nil, err
@@ -202,6 +217,7 @@ func (self *RecordApprovals) fileAnswer(ctx context.Context, logId Id, approvalI
 		NoSession:  runId == nil,
 		ActionId:   bytes.Clone(request.GetActionId()),
 		StoredBody: storedSigned,
+		TeamOnly:   inTeam,
 	}
 	return self.appendOne(draft)
 }
@@ -222,18 +238,52 @@ func (self *RecordApprovals) FileUse(use *protocol.ApprovalUseBody, runId *Id, a
 	return self.appendOne(draft)
 }
 
-// The requests waiting in the logs this approver's device reads, each with no decision or cancel and not past its
-// not_after, in read order. A request this device will not render is listed refused.
-func (self *RecordApprovals) Pending(ctx context.Context) ([]*RecordPendingApproval, error) {
+// The logs this device reads approvals in: its author's vault, and the team record where it reads it, an admin's or
+// an auditor's device.
+func (self *RecordApprovals) approvalLogs() ([]Id, error) {
+	auth := self.writer.auth()
+	logIds := []Id{}
 	route, err := self.route()
+	if err == nil && auth.Reads(route.logId, self.writer.sidecarId) {
+		logIds = append(logIds, route.logId)
+	}
+	if teamRecordId, _ := recordTeamLogs(auth); teamRecordId != nil && auth.Reads(*teamRecordId, self.writer.sidecarId) {
+		logIds = append(logIds, *teamRecordId)
+	}
+	if len(logIds) == 0 {
+		if err == nil {
+			err = fmt.Errorf("%w: this device reads no approval log", ErrRecordNotReader)
+		}
+		return nil, err
+	}
+	return logIds, nil
+}
+
+// The requests waiting in the logs this approver's device reads, each with no decision or cancel and not past its
+// not_after, in read order, the vault's first. A request this device will not render is listed refused.
+func (self *RecordApprovals) Pending(ctx context.Context) ([]*RecordPendingApproval, error) {
+	logIds, err := self.approvalLogs()
 	if err != nil {
 		return nil, err
 	}
-	if err := self.reader.Sync(ctx, route.logId); err != nil {
+	pending := []*RecordPendingApproval{}
+	for _, logId := range logIds {
+		logPending, err := self.pendingIn(ctx, logId)
+		if err != nil {
+			return nil, err
+		}
+		pending = append(pending, logPending...)
+	}
+	return pending, nil
+}
+
+// Pending's requests in one log.
+func (self *RecordApprovals) pendingIn(ctx context.Context, logId Id) ([]*RecordPendingApproval, error) {
+	if err := self.reader.Sync(ctx, logId); err != nil {
 		return nil, err
 	}
 	nowMillis := self.writer.clock.Now().UnixMilli()
-	entries := self.reader.Entries(route.logId)
+	entries := self.reader.Entries(logId)
 	answered := map[Id]bool{}
 	for _, entry := range entries {
 		if approvalId, ok := recordAnswerApprovalId(entry); ok {
@@ -246,7 +296,7 @@ func (self *RecordApprovals) Pending(ctx context.Context) ([]*RecordPendingAppro
 			continue
 		}
 		item := &RecordPendingApproval{
-			LogId:           route.logId,
+			LogId:           logId,
 			EntryId:         entry.EntryId,
 			Flagged:         entry.Flagged,
 			WriterSidecarId: recordIdOf(entry.Header.Header.GetWriterSidecarId()),
@@ -298,25 +348,47 @@ func recordAnswerApprovalId(entry *RecordReadEntry) (Id, bool) {
 // once a cancel is, and ErrRecordApprovalUndeliverable to a deposit-only requester. The decision's signature, signer
 // and channel are the spender's to check (§16.6's spendable, MCP-M3-05's inbox).
 func (self *RecordApprovals) Decision(ctx context.Context, approvalId Id) (*StoredApprovalDecision, error) {
+	auth := self.writer.auth()
+	teamRecordId, _ := recordTeamLogs(auth)
+	readsTeam := teamRecordId != nil && auth.Reads(*teamRecordId, self.writer.sidecarId)
 	route, err := self.route()
-	if err != nil {
+	logIds := []Id{}
+	switch {
+	case err == nil && !route.deposit:
+		logIds = append(logIds, route.logId)
+	case err == nil && !readsTeam:
+		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
+	case err != nil && (!errors.Is(err, ErrRecordApprovalTeamRoute) || teamRecordId == nil):
 		return nil, err
-	}
-	if route.deposit {
+	case err != nil && !readsTeam:
+		// a tagged sidecar with no sponsor filed to the team record, which it does not read
 		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
 	}
-	if err := self.reader.Sync(ctx, route.logId); err != nil {
-		return nil, err
+	if readsTeam {
+		logIds = append(logIds, *teamRecordId)
 	}
-	requestEntry, _, ok := self.requestEntry(route.logId, approvalId)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUnknown, approvalId)
+	for _, logId := range logIds {
+		if err := self.reader.Sync(ctx, logId); err != nil {
+			return nil, err
+		}
+		if requestEntry, _, ok := self.requestEntry(logId, approvalId); ok {
+			return self.decisionIn(logId, approvalId, requestEntry)
+		}
 	}
+	if teamRecordId != nil && !readsTeam {
+		// filed to the team record, which this device does not read: an admin's decision cannot reach it here
+		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
+	}
+	return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUnknown, approvalId)
+}
+
+// The first decision on approvalId in logId, beside its request's entry.
+func (self *RecordApprovals) decisionIn(logId Id, approvalId Id, requestEntry *RecordReadEntry) (*StoredApprovalDecision, error) {
 	request, err := ParseStoredApprovalRequest(requestEntry.Body)
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range self.reader.Entries(route.logId) {
+	for _, entry := range self.reader.Entries(logId) {
 		answered, ok := recordAnswerApprovalId(entry)
 		if !ok || answered != approvalId {
 			continue
@@ -327,7 +399,7 @@ func (self *RecordApprovals) Decision(ctx context.Context, approvalId Id) (*Stor
 		decision, err := ParseStoredApprovalDecision(entry.Body)
 		if err != nil || !decision.Binds(request) {
 			writerId := recordIdOf(entry.Header.Header.GetWriterSidecarId())
-			self.writer.raise(SidecarRecordAlarmBadDecision, route.logId, &writerId)
+			self.writer.raise(SidecarRecordAlarmBadDecision, logId, &writerId)
 			continue
 		}
 		return decision, nil

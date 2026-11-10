@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-196. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-197. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,12 +42,12 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (197 onward)
+## Adding owner decision N (198 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
 3. Set `MAXD = N` in `asm/assemble10.py` and `asm/cites10.py`.
-4. In `asm/validate10.py`, raise both `list(range(1, 197))` checks, `owner_record` and `decision_rows`, to `N + 1`.
+4. In `asm/validate10.py`, raise both `list(range(1, 198))` checks, `owner_record` and `decision_rows`, to `N + 1`. A decision dated on a day no earlier entry has also needs that day in `decision_rows`' date pattern and in its `dates_ok` rule, as 2026-11-09 was added for decision 197.
 5. In the sections, mark the question "**Decided by owner YYYY-MM-DD (owner decision N):**", or "**Amended by owner …**" for a change to an earlier answer. Cite "owner decision N" in every section that implements it: the validator fails any decision that no section cites. That is D-ARCH-4's assembly check, which G0 requires (§23.8).
 6. If the question's status cell changes, update it in `asm/v10/qstatus_final.json`.
 7. Rebuild, and read `v7/validate.json`.
@@ -75,3 +75,17 @@ The import changed two things in the tooling:
 
 - `validate10.py` accepts the research root `design/design-research/`. Until then it flagged every `[R:key]` link as broken, and every section holding one as a verbatim mismatch, because the sheets moved there on 2026-11-05.
 - `v7/carry_readings.py` was added. It carries the readings forward to a fresh grep, so only new hits need reading.
+
+## Validation after owner decision 197 (2026-11-09)
+
+`build.sh` on this folder reproduces DESIGN.md (SHA-256 `97b88431ef4579c8342a8c7fa6a6d9a6f85a2c71651e78e0015fb98fe1fd7177`). Owner decision 197 put only IP and port forwarding in every app's VPN component and ran Android's sidecar only while the app is open; its design touched §1-§8, §10-§12, §15, §17-§20, §22 and §23, all of which cite it. A second pass the same day carried it into lines the first had left: §4.4's leg sentence, the site-loss and missed-code risks of §2.18, §11.13, §15.16 and §23.15, which now name phone-only users on iOS or Android, the device-role names left in §7.16, §17.16 and §18.14, and `EnableBridge`'s place as a release gate (§17.16). The validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section: two new D- items (D-TEAM-33, D-SDK-32) and two new Q- items, each with its register summary.
+- **Links.** As before: every internal, relative and research link resolves, with RFC 5246's §7.4.9 the one unresolved section reference.
+- **Owner decisions.** All 197 rows are present and cited. Rows 12 and 87 note decision 197's amendment, as row 176 notes 188's (`data_front10.py`).
+- **Open owner questions.** Two, Q-BRIDGE-8 and Q-SDK-7, raised in designing decision 197: the front matter's table lists them, §23.6 places them, and the sections are written to each recommendation, marked "(proposed; Q-...)". `data_front7.py`'s check, which required none open, now allows these two and no other.
+- **Superseded options.** 301 grep hits, each with a reading; 14 were read on 2026-11-09 (the open questions' recommendation markers and decider lines, three settled items named by their answers, and §1's line now naming the open questions). None is live. The second pass's grep, carried forward, found no new hit.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated after the second pass.
+- **The metadata list** is v9 (api-4's `forward_only`, api-7's forwarding Delegations, connect-1's forwarding-key delegations), copied to `metadata_list.yml` by `make metadata`.
+
+The tooling changed in two places: `validate10.py`'s `decision_rows` takes the 2026-11-09 date, and `data_front7.py`'s open-question check allows the two questions above. Tests outside this folder read the sections too: `sidecartest/fault`'s catalog mirrors §22.8's FS gates and §23.6's gate map, `check/`'s conformance ledger pins §22.9's peers, and `sidecartest`'s privacy and bounds tests read §22.7 and §22.8, so a change to those lines lands with the code that mirrors it.

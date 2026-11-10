@@ -800,6 +800,8 @@ message MailOutcomeRecord { repeated MailOutcome outcomes = 1; }
 message MailProverRecord {
   uint64 smtp_data_proof_bytes = 1; uint64 data_bytes_per_s = 2; uint64 measure_time_ms = 3;
 }
+// §15.7's s/model row and plan-MAIL-format-bytes#5's two fields, counts MAIL-M7-12's.
+message MailSpamModel { uint32 version = 1; repeated uint32 counts = 2; }
 
 // sidecar/protocol/record.proto
 // plan-MCP-wire-enum-numbers' four enums, whose values §16.8's uint32 fields carry. RECORD.md's own messages are its

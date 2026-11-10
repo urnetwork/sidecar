@@ -396,10 +396,11 @@ func (self *Sidecar) AddComponent(component SidecarComponent) (func(), error)
 | Sidecar (a device instance in one network) | `sidecar_id` | until revoked | Ed25519 identity key (owner decision 44); X-Wing ReaderKey (§10.5) | `SidecarAdmit` in the config repo (5.6) |
 | Client (transport) | `client_id` | until reaped | connect ClientKey | operator-signed history |
 | Agent | `agent_id` in the sidecar | per registration | Ed25519 subkey, `not_after` ≤30 d (v1) | an attribution label |
+| Forwarding (apps; owner decision 197) | its forwarding Delegation's `delegation_id` | until revoked, superseded or its sidecar's revocation | Ed25519 forwarding key; X-Wing forwarding reader key; its forwarding clients' ClientKeys, all generated in the VPN component and never exported | its sidecar's forwarding Delegation (§7.9, §18.6) |
 
 - **Binding.** `POST /sidecar/bind` appends each `SidecarIdentityBinding` (5.4) to a never-reaped log, which §6's `Hello` checks (D-PROTO-13). Each new client (5.8) binds generation n+1 under the same `sidecar_id` and identity key, keeping admissions and grants. The binding names the client id as well as its key, so a peer resolves a client to its sidecar from signed bytes (§17.9). The `sidecar_id` names MLS leaves, ReaderKeys, statements, admissions, client names and bridge addresses; the client id stays the transport, contract and policy subject. Git committers (owner decision 81) and §8's `sidecar:<id>` and `client:<id>` resolve through the log, and a sidecar reads a repo iff a subject it hosts does.
 - **Agents.** A device or `--instance` is one sidecar per network. Agents are attribution labels on its client (`source = agent_asserted`) holding no credential or group key; the daemon signs, decrypts and enforces per-agent reads for them. Own reach (grants, an overlay address, an ssh key) needs the agent's own sidecar under its own OS user, container or VM (owner decision 4); otherwise grants attach to the sidecar, usable by any local process (owner decision 47).
-- **Signatures.** §6's typed `Signed` (a purpose and §6.11's `SignedType`), Ed25519 in v0: the identity key signs every statement the server stores or verifies, and approvals unless a presence key does (§16.6); agent subkeys only sealed provenance, revoked by `AgentRevoke`; the ClientKey only the binding and §7.4's DPoP proofs. A compromised identity key means a `SidecarRevoke` for compromise and a new `sidecar_id`.
+- **Signatures.** §6's typed `Signed` (a purpose and §6.11's `SignedType`), Ed25519 in v0: the identity key signs every statement the server stores or verifies, and approvals unless a presence key does (§16.6); agent subkeys only sealed provenance, revoked by `AgentRevoke`; the ClientKey only the binding and §7.4's DPoP proofs; an app's forwarding key only its sidecar's `WindowDelegation`s (§17.9). A compromised identity key means a `SidecarRevoke` for compromise and a new `sidecar_id`.
 
 ### 5.6 Login, enrollment, admission, refresh, revocation
 
@@ -740,6 +741,15 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 | Linux desktop | Secret Service |
 | Linux headless | The pass, else a 0600 key file with a warning |
 
+**Forwarding's keys (owner decision 197).** An app's VPN component keeps its forwarding key, forwarding reader key, forwarding clients' ClientKey seeds and tokens, and a forwarding root key that seals its posture, compiled state and config cache by this section's file sealing, apart from the sidecar role's, so neither reads the other's (§18.6); it generates them only at a setup, and after one a store state other than Present leaves forwarding pending, never resets it, and only its sidecar's own sign-out wipes it:
+
+| VPN component | Forwarding's keys |
+|---|---|
+| iOS and macOS network extension | The extension's own keychain access group, never the app's `network.ur.sidecar` group or the app-group container, `AfterFirstUnlockThisDeviceOnly` |
+| Android VPN service | Seeds sealed under an AndroidKeyStore key of its own alias in the service's `noBackupFilesDir`, unusable before the first unlock, when forwarding stays pending; app work runs the service in a process of its own (§18.15) |
+| Windows app service | DPAPI under the service's own account, in its state directory |
+| Linux app service | A 0600 file owned by the service's user, in its state directory |
+
 ### 5.10 Platform variants, build tags, logging, metrics, memory
 
 | Variant | Build | Host | IPC |
@@ -747,7 +757,7 @@ Absent   no sidecar_id recorded in sidecar.json: create U; R_n is created only a
 | CLI darwin | `CGO_ENABLED=0`; keychain file `darwin && !ios && !sdk_mobile_bind` (purego; GOOS=ios satisfies `darwin`; 5.11's fallbacks) | `ur daemon` | socket |
 | CLI linux | `CGO_ENABLED=0`; files `linux && !android` (GOOS=android satisfies `linux`) | `ur daemon` | socket |
 | CLI windows | `CGO_ENABLED=0` | `ur daemon` | pipe |
-| gomobile | sdk's `sdk_mobile_bind`; the `ios_extension` leg links only §18's device role (D-SDK-1) | app process (§18) | none |
+| gomobile | sdk's `sdk_mobile_bind`; the `ios_extension` leg links only §18's forwarding role, `sidecar/device` and the root's forwarding files (D-SDK-20; owner decision 197) | app process; forwarding in the VPN component (§18) | none; forwarding's setup over the device RPC (§18.6) |
 | wasm | `GOOS=js GOARCH=wasm`, `_js.go` files; the page Worker builds `-tags sidecar_http`, linking no connect package: 5.4's every-leg types and `SidecarApi` carry its identity, keychain, token path (bind, DPoP refresh, exchange) and approval views (§18.10) | extension worker, ur.io pages (owner decisions 26, 76) | none |
 
 - **Settings, logs, memory.** `DefaultSidecarSettings()` is the only source of defaults (connect/CODESTYLE.md:144, :151). Logs go through `settings.Log` behind `V(n).Enabled()`, never with secrets, content or peer IPs; `SidecarStats` feeds `ur status --stats`, with no telemetry, and on a search indexer counts remote pages served, refusals by code, CPU seconds and queue waits, with no requester, repo or query label (I-13). The host sets the process limit (`sdk.SetMemoryLimit`; 32 MiB in the iOS app) and the sidecar keeps to `MemoryBudgetByteCount`, §16.10's decoded index state (`Search.MemoryByteCount`) and remote search's working sets and cursors included (≤ 8 MiB a computing search; D-CORE-17).
@@ -860,7 +870,7 @@ None: PLAN.md:14 and :59's git identity hold, and D-CORE-1 reads "encryption key
 ### 5.17 Phasing
 
 - **v0 (§23 M1-M3)**, after §7's P0 and D-TEAM-14: M1, the daemon on darwin, linux and windows, top-level enrollment (`ur connect --token`, `ur login`), `/sidecar/bind`, refresh with DPoP proofs and `restore_required`, fail-closed, the per-network keychain under U with D-CORE-15's store states, the local API, and 5.4's every-leg root types and `SidecarApi`, which §4.7's `sidecar_http` check holds from M1; M2, config-repo admission and revocation with the key authority, owner consent, alarms, the config group's leaves and wraps, and ReaderKeys (owner decisions 3, 112, 114, 126, 127, 144), the recovery code, its wraps of R_n and its rotation, the `git` mode (§11), and `ur indexer` with 5.8's unit and idle rules (owner decision 150); M3, the gate with D-MCP-11's reserved uses and owner decision 142's tainted-run rule, a member's revocation of its own devices through 5.6's calls and `ur devices`, with their presence check, whose countersignature §7.9's M2 verifier already requires (D-CORE-20; owner decisions 185, 187), and `.ur`, with §16.
-- **v0, app hosts (§23 M8):** sdk hosts and desktop pairing (§18.17), with `SidecarApprovals`' device list and revocation (D-SDK-30).
+- **v0, app hosts (§23 M8):** sdk hosts and desktop pairing (§18.17), with `SidecarApprovals`' device list and revocation (D-SDK-30); forwarding's identity row and key stores in every app's VPN component (5.5, 5.9; owner decision 197).
 - **Browser (§18.17):** the HTTPS-only wasm page Worker, built `-tags sidecar_http`, for ur.io/recurd at M4 and the team console at M6 (owner decisions 26, 76).
 - **v1 (§23 M6):** several networks per daemon, with team networks (owner decisions 23, 55); the RFC 8628 device grant; agent subkeys; `.ur`'s `claims` and `project`, the directory's control methods, its group under 5.6's leaves rule, local state and `Directory` settings, and the `access_request` action and events (owner decisions 170, 171, 182).
 - **v1, §23's M10 (owner decision 169):** 5.9's index cache and search state and the `Search` settings, with §16.10's search and 5.4's engine API (owner decision 163); remote serving and the served record with the index cache (owner decision 175); local deletion of dropped content (owner decision 173); the index, search and drop event kinds.

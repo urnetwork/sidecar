@@ -40,6 +40,26 @@ func (self *HeadStopState) WitnessedAt() time.Time {
 	return self.witnessedAt
 }
 
+// The auth pin the newest consistent witness compared, the state witnessed_at names; nil while none has
+// been. A copy.
+func (self *HeadStopState) WitnessedPin() *bridge.AuthPin {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return headCheckPinCopy(self.witnessPin)
+}
+
+// The withheld tip this device holds proof of withholding for, which its HeadCheck sends as proven and
+// which stops sealing in shared groups until api serves it (§6.4's proven row); nil while it holds none.
+// A copy.
+func (self *HeadStopState) Withheld() *bridge.AuthPin {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.state.withheld == nil {
+		return nil
+	}
+	return headCheckPinCopy(self.state.withheld.pin)
+}
+
 // The UNVERIFIED auth pins held, as AuthPin bytes, highest first, what Status shows (§6.4's alarms row).
 // Empty: none.
 func (self *HeadStopState) Unverified() [][]byte {

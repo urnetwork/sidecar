@@ -42,6 +42,8 @@ barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
 barrier config.restore config_replay.go
 barrier config.run.checked config_rows_only.go
+barrier directory.sync.after directory_sync.go
+barrier directory.sync.before directory_sync.go
 barrier dnsservice.edge_publish dnsservice/edge.go
 barrier dnsservice.edge_publish.after dnsservice/edge.go
 barrier dnsservice.edge_publish.before dnsservice/edge.go
@@ -150,6 +152,8 @@ barrier identity.persist.after identity_keys.go
 barrier identity.persist.before identity_keys.go
 barrier identity.post.after identity_pending.go
 barrier identity.post.before identity_pending.go
+barrier identity.stale.recheck.after identity_act_stale.go
+barrier identity.stale.recheck.before identity_act_stale.go
 barrier keys.change_pass.after keys_unlock.go
 barrier keys.change_pass.before keys_unlock.go
 barrier keys.create_keychain.after keys_instance.go
@@ -163,6 +167,12 @@ barrier keys.rotate.after keys_rotate.go
 barrier keys.rotate.before keys_rotate.go
 barrier keys.unlock.after keys_unlock.go
 barrier keys.unlock.before keys_unlock.go
+barrier mail.flags.write.after mail_flags.go
+barrier mail.flags.write.before mail_flags.go
+barrier mail.index.write.after mail_index_segment.go
+barrier mail.index.write.before mail_index_segment.go
+barrier mail.spam.teach.after mail_spam.go
+barrier mail.spam.teach.before mail_spam.go
 barrier mxedge.closed_handshake_read.after mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_read.before mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_write.after mxedgeservice/closed_handshake.go
@@ -260,6 +270,12 @@ barrier state.commit.after keys_keychain.go
 barrier state.commit.before keys_keychain.go
 barrier state.remove.after keys_keychain.go
 barrier state.remove.before keys_keychain.go
+barrier stream.accept.after stream_listen.go
+barrier stream.accept.before stream_listen.go
+barrier stream.keepalive_reset.after stream_keepalive.go
+barrier stream.keepalive_reset.before stream_keepalive.go
+barrier stream.open.after stream_open.go
+barrier stream.open.before stream_open.go
 barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
 barrier tls.handshake.after smtpproof/tls_client.go

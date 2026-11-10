@@ -153,6 +153,8 @@ type testRpcPair struct {
 	// a fake of connect's window ledger for each side added from now on; nil runs the client's own
 	// (rpc_marked_pair_test.go)
 	newPeerWindows func(side *testRpcSide) subprotocolPeerWindows
+	// sides added from now on read real time, as net.Conn's deadlines do (stream_conn_test.go)
+	realClock bool
 }
 
 func newTestRpcPair(t testing.TB) *testRpcPair {
@@ -177,8 +179,9 @@ type testRpcSide struct {
 	cancel          context.CancelFunc
 
 	stateLock sync.Mutex
-	// envelopes this side sent, in order
+	// envelopes this side sent, in order, and their count, which a test waits on
 	sentEnvelopes []*protocol.Envelope
+	sentCount     *MonitorValue[int]
 	// sends left to refuse at once
 	refuseCount int
 	// a frame's C15 key, if not its binding's
@@ -187,6 +190,8 @@ type testRpcSide struct {
 	presentsNoKey bool
 	// the class C13 sealed on the contract this side's frames ride; data unless a test sets another
 	contractClass connectprotocol.ContractClass
+	// an edge's side (stream_edge.go): its frames, and a sidecar's to it, ride Service contracts
+	edge bool
 	// set before the side runs: its window ledger fake and the log it shares with onSend, which hears each
 	// send before it is delivered or dropped
 	peerWindows  *testPeerWindows
@@ -242,6 +247,10 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 	}
 	clock := newTestEnvelopeClock()
 	clock.firesWaits = true
+	var subprotocolClock Clock = clock
+	if self.realClock {
+		subprotocolClock = nil
+	}
 	settings := DefaultSidecarProtocolSettings()
 	if adjust != nil {
 		adjust(settings)
@@ -261,6 +270,7 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 		events:        make(chan SidecarEvent, 16),
 		cancel:        cancel,
 		contractClass: connectprotocol.ContractClass_ContractClassData,
+		sentCount:     NewMonitorValue(0),
 	}
 	copy(side.clientPublicKey[:], verified.ClientPublicKey)
 	var peerWindows subprotocolPeerWindows
@@ -275,7 +285,7 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 		Log:       NewNoopLogger(),
 		Settings:  settings,
 		Budget:    NewSubprotocolBudget(settings, 128*1024*1024),
-		Clock:     clock,
+		Clock:     subprotocolClock,
 		Inbound:   SubprotocolInboundWithoutPolicy,
 		NetworkId: self.networkId,
 		Binding:   binding,
@@ -283,7 +293,63 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 			side.events <- event
 		},
 		Admissions: self.admissionsFor(identity.sidecarId, clock),
-	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, peerWindows: peerWindows})
+	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, peerWindows: peerWindows, clientId: clientId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	side.subprotocol = subprotocol
+	t.Cleanup(func() {
+		subprotocol.Close()
+		cancel()
+	})
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.sides[clientId] = side
+	return side
+}
+
+// Adds an edge's side (stream_edge.go): a dispatcher in SubprotocolRoleEdge with no binding, store or
+// network, on a clock of its own, its settings adjusted by adjust.
+func (self *testRpcPair) addEdge(adjust func(settings *SidecarProtocolSettings)) *testRpcSide {
+	t := self.t
+	t.Helper()
+	clock := newTestEnvelopeClock()
+	clock.firesWaits = true
+	var subprotocolClock Clock = clock
+	if self.realClock {
+		subprotocolClock = nil
+	}
+	settings := DefaultSidecarProtocolSettings()
+	if adjust != nil {
+		adjust(settings)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	client := newTestRequiredClient(t, ctx)
+	clientId := connect.NewId()
+	clientKeySeed := make([]byte, ed25519.SeedSize)
+	rand.Read(clientKeySeed)
+	side := &testRpcSide{
+		pair:          self,
+		clientId:      clientId,
+		clientKeySeed: clientKeySeed,
+		clock:         clock,
+		settings:      settings,
+		events:        make(chan SidecarEvent, 16),
+		cancel:        cancel,
+		contractClass: connectprotocol.ContractClass_ContractClassData,
+		edge:          true,
+		sentCount:     NewMonitorValue(0),
+	}
+	copy(side.clientPublicKey[:], ed25519.NewKeyFromSeed(clientKeySeed).Public().(ed25519.PublicKey))
+	subprotocol, err := newSubprotocol(ctx, &SubprotocolEnv{
+		Client:   client,
+		Log:      NewNoopLogger(),
+		Settings: settings,
+		Budget:   NewSubprotocolBudget(settings, 128*1024*1024),
+		Clock:    subprotocolClock,
+		Inbound:  SubprotocolInboundWithoutPolicy,
+		Role:     SubprotocolRoleEdge,
+	}, &subprotocolSeams{clientPublicKeyOf: testRpcClientPublicKeyOf, send: side.send, clientId: clientId})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,6 +367,16 @@ func (self *testRpcPair) add(identity *testRpcIdentity, adjust func(settings *Si
 // The Peer a frame from this side arrives with: same network, on h1, on the contract class set, under
 // its binding's client key or the one presentedKey names.
 func (self *testRpcSide) peer() connect.Peer {
+	return self.peerTo(nil)
+}
+
+// The Peer a frame from this side arrives at to with: as peer's, on a Service contract when either side
+// is an edge's.
+func (self *testRpcSide) peerTo(to *testRpcSide) connect.Peer {
+	provideMode := connectprotocol.ProvideMode_Network
+	if self.edge || (to != nil && to.edge) {
+		provideMode = connectprotocol.ProvideMode_Service
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	key := self.clientPublicKey
@@ -312,7 +388,7 @@ func (self *testRpcSide) peer() connect.Peer {
 		principal = ""
 	}
 	return connect.Peer{
-		ProvideMode:   connectprotocol.ProvideMode_Network,
+		ProvideMode:   provideMode,
 		ContractClass: self.contractClass,
 		TransportType: connect.TransportTypeH1,
 		Principal:     principal,
@@ -342,6 +418,7 @@ func (self *testRpcSide) send(destinationId connect.Id, envelope *protocol.Envel
 			refused = true
 		}
 	}()
+	self.sentCount.Update(func(count int) int { return count + 1 })
 	if refused {
 		return false, nil
 	}
@@ -361,7 +438,7 @@ func (self *testRpcSide) send(destinationId connect.Id, envelope *protocol.Envel
 		delivered = deliver(self, to, delivered)
 	}
 	if delivered != nil {
-		to.subprotocol.receive(connect.SourceId(self.clientId), delivered, self.peer())
+		to.subprotocol.receive(connect.SourceId(self.clientId), delivered, self.peerTo(to))
 	}
 	return true, nil
 }

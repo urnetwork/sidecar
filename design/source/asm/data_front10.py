@@ -2,7 +2,9 @@
 the presence countersignature (185, 187, 189), unlimited P0 writes outside the wear bound (186, 190), and the search
 pair's accounting windows (188, 191). Adds owner decisions 192-196 from the implementation handoff: a parking
 DelegationRevoke's countersignature (192), the G0 sign-off (193), the straight-through build (194), the minio fork
-(195) and the branch starts (196)."""
+(195) and the branch starts (196). Adds owner decision 197 (2026-11-09): the apps' network extensions run only IP
+and port forwarding, always on and self-contained, amending 87, and Android's sidecar runs only while the app is
+open, amending 12."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -45,17 +47,32 @@ INDEX = list(_P9['INDEX']) + [
     (196, "Branch starts",
      "A `sidecar` branch on all repos the work touches: warp's, config's, mmm's and vault's all open at M0, so §19.11 "
      "lands W5 at M0 and W2 and W8 by M4 on warp's branch."),
+    (197, "Q-SDK-2, Q-MAIL-2",
+     "Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and "
+     "self-contained with its own forwarding key, amending @@OD:87@@; Android's sidecar runs only while the app is "
+     "open, as iOS's does, amending @@OD:12@@."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
 INDEX[_i176] = (176, INDEX[_i176][1],
                 "Connect rounds the byte reports of phone-to-indexer search contracts up to 128 KiB, hiding up to five "
                 "search pages an hour. Amended by @@OD:188@@.")
-assert [r[0] for r in INDEX] == list(range(1, 197))
+# Owner decision 197 amends 87's and 12's answers, which their rows note as 176's does.
+for _n, _old_end, _note in [
+        (87, "network processes hold only the keyless device role.",
+         " Amended by @@OD:197@@: every app's VPN component runs the device's IP and port forwarding, self-contained "
+         "with its own forwarding key, and nothing else of sidecar."),
+        (12, "no hosted or TEE receiver.",
+         " Amended by @@OD:197@@: Android with the VPN on is no receiver; the Android app, like the iOS app, receives "
+         "only while open.")]:
+    _i = [r[0] for r in INDEX].index(_n)
+    assert INDEX[_i][2].endswith(_old_end), _n
+    INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
+assert [r[0] for r in INDEX] == list(range(1, 198))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
-              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06'})
+              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -66,15 +83,19 @@ DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
     "@@OD:176@@'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation "
     "handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed "
     "G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a "
-    "fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). " + _ANCHOR)
+    "fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the "
+    "build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, "
+    "always on and self-contained, and ran Android's sidecar only while the app is open (197), amending "
+    "@@OD:87@@ and @@OD:12@@. " + _ANCHOR)
 
 STATUS = ("Status: draft for peer review, revised 2026-11-04 after the first peer review (see "
           "[DESIGN-REVIEW-RESPONSE.md](DESIGN-REVIEW-RESPONSE.md)), on 2026-11-05 with the v1 additions of owner "
           "decisions 150-184 (versionless objects, the search index, CLI and MCP search, the indexer, the team directory "
           "and history drops), and on 2026-11-06 after the final meta review "
           "([DESIGN-REVIEW-META.md](DESIGN-REVIEW-META.md)), with owner decisions 185-191, and at the implementation "
-          "handoff, with owner decisions 192-196. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 "
-          "build on the `sidecar` branches (owner decision 194); nothing has shipped.")
+          "handoff, with owner decisions 192-196, and on 2026-11-09 with owner decision 197, on the apps' network "
+          "extensions. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build on the `sidecar` "
+          "branches (owner decision 194); nothing has shipped.")
 
 # Implementation handoff (2026-11-06): the branch policy said the documents join the repo on the `sidecar` branch,
 # but §4.3 and §4.11 put them on `main`, where they are; only code starts on `sidecar` (§4.8).
@@ -108,3 +129,41 @@ for _k, _v in list(globals().items()):
         for _a, _b in _ID_FIX:
             _v = _v.replace(_a, _b)
         globals()[_k] = _v
+
+# Owner decision 197 (2026-11-09): designing it raised two owner questions, Q-BRIDGE-8 and Q-SDK-7, the first open
+# owner questions since owner decision 140's corrected record. The sections are written to each recommendation,
+# marked "(proposed; Q-...)"; assemble10.py checks OPEN_OWNER against them.
+_OPEN_OLD = "None. Every Q- item whose decider was the owner is decided. "
+assert OPEN_INTRO.count(_OPEN_OLD) == 1, 'open-questions lead moved'
+OPEN_INTRO = OPEN_INTRO.replace(
+    _OPEN_OLD,
+    "Two, raised on 2026-11-09 in designing owner decision 197's forwarding: Q-BRIDGE-8 (an app device's overlay "
+    "address) and Q-SDK-7 (forwarding's budget in the iOS network extension). The sections are written to each "
+    "recommendation, marked \"(proposed; Q-...)\". Every other Q- item whose decider was the owner is decided. ")
+OPEN_OWNER = [
+    ("Q-BRIDGE-8", "Does an app device claim its overlay address when its forwarding is set up (owner decision 197)?",
+     "(a) on demand, as §17.4 says: the app's UI, the host's first map or an admin; (b) at forwarding's setup, its "
+     "sidecar filing its own `BridgeAddress`",
+     "(a): with no ACL document a hosted address opens the device's loopback to the network's untagged sidecars "
+     "(owner decision 120), and (b) can follow by one filing",
+     "nothing before M8's app hosts", "M8"),
+    ("Q-SDK-7", "What budget does forwarding get in the iOS network extension, now that it follows the config and "
+                "compiles its rules there (owner decision 197)?",
+     "(a) the root's forwarding files, at most 4 MiB of executable with the extension's ceiling from 50 MiB to 54 MiB, "
+     "and 4 MiB of Go heap steady, 8 MiB compiling; (b) a second, minimal follower and compiler in `sidecar/device` "
+     "within today's 1 MiB; (c) on iOS alone the app compiles, which would amend owner decision 197",
+     "(a): one implementation of security-critical rules, inside today's runtime targets, measured on surrogates "
+     "(owner decision 100)",
+     "the `ios_extension` leg's `make size` value and §4.7's leg rule (M4); iOS forwarding (M8)", "M4"),
+]
+for _a, _b in [("[open owner questions](#open-owner-questions) (none remain)",
+                "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decision 197)"),
+               ("and @@NQW@@ withdrawn; none is open.", "@@NQW@@ withdrawn, and @@NQOPEN@@ open for the owner.")]:
+    assert HOW.count(_a) == 1, _a
+    HOW = HOW.replace(_a, _b)
+assert DECISIONS_INTRO.count("so no owner question is open") == 2, 'decisions lead moved'
+DECISIONS_INTRO = DECISIONS_INTRO.replace("so no owner question is open", "so no owner question was then open")
+_D197 = "amending @@OD:87@@ and @@OD:12@@. "
+assert DECISIONS_INTRO.count(_D197) == 1
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, open below. ")

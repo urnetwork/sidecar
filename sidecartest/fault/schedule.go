@@ -6,7 +6,9 @@
 //
 //  1. A row is an exported Builder in a non-test file here, fs<n>.go, registered with Register, since
 //     server's T3 test cannot import a _test.go file and runs the same builder through sidecart3. The
-//     thin T2 test in fs<n>_test.go calls RunRow (plan-TEST-small-readings reading 1).
+//     thin T2 test in fs<n>_test.go calls RunRow (plan-TEST-small-readings reading 1). It is named
+//     TestFs<n><Case>, and server's T3 test TestFs<n><Case>OnT3, which is how a gate's sweep finds both
+//     (gate.go).
 //  2. A builder makes a fresh schedule each call: every rule across runs reruns it.
 //  3. Each refusal sets Refuses and names its twin, which must succeed, through Twin.
 //  4. Check names fault.FI(n), and an area's oracle binds FI-n with RegisterInvariant in fi<n>.go.

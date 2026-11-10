@@ -30,7 +30,7 @@ Every value here but `MailIngress` and `MailHint` is sealed under §11, so none 
 | mailbox | `p/<sidecar_id>` | `MailProverRecord` |
 | mailbox | `forward` | `MailForward` |
 | mailbox | `ra/<h>/<token>` | `MailReverseAlias` |
-| mailbox | `s/model` | `MailSpamModel`, whose `counts` and bytes MAIL-M7-12 defines |
+| mailbox | `s/model` | `MailSpamModel` |
 
 - **`<h>`** is the two lowercase hex digits of the first byte of SHA-256 over the path's last name, as spelled below: 256 directories a family.
 - **`<yyyymm>`** is the UTC year and month of the sealed receive time: `MailAuthEvidence.receive_time_millis`, else `MailIngress.receive_time_millis`, else, on a deposit with neither, the depositing push's signed `time_ms`. Every reader holds the same three values, so racing readers write one path. An `f/` op sits under the month of the message it names, so one month's `i/` and `f/` make a view of that month.
@@ -114,6 +114,17 @@ The winning op's `wall` dates a trash for the 30-day shred. An op naming an eras
 - **`forward`.** `burners` lists the opted-in `<blabel>`s, and `verified_time_ms` is when the address confirmed its 6-digit code (15.10). The evs push signs it, as every mailbox file.
 - **`ra/`.** `<token>` is §15.10's MAC, and the record holds what it stands for.
 
+## `s/model`: the spam filter
+
+A `MailSpamModel` is one mailbox's naive Bayes filter (§15.9), which its people's `spam` and `not-spam` verdicts train and which readers score each message by at ingest, writing `IndexEntry.spam_score`. `version` is 1, and a reader refuses another, 0 included. `counts` holds 8,194 values: the spam messages trained, the not-spam messages trained, then the spam count of each of 4,096 feature buckets, then each bucket's not-spam count. A bucket counts the trained messages of its class that held a feature in it, each feature once a message, so no bucket counts more messages than its class, and a reader refuses a model where one does.
+
+- **Features.** The From domain as `f:<domain>`, each attachment's media type as `a:<type>`, then the words of the subject as `s:<word>` and of the first text part's first 16 KiB as `t:<word>`: runs of letters and digits, lowercased, of 2 to 32 bytes and not of digits alone. At most 512 distinct features a message, the first met kept.
+- **Buckets.** A feature's bucket is FNV-1a (32-bit) over its text, modulo 4,096, so every leg puts it in the same one.
+- **Counts.** Each is held below 2^20, three varint bytes, so a model takes at most about 24 KiB, under the 64 KiB a reader reads. Once more messages than the settings keep are trained, every count is halved, so old verdicts weigh less.
+- **Writes.** A device teaches the model a verdict it wrote, once, by a path CAS on `s/model`, reading again on another device's write. Changing a verdict unlearns the old one and learns the new one in one write.
+
+How a score follows from the model, the rules over the sealed results and the person's own verdict is MAIL-M7-12's (`mail_spam.go`), and none of it is format.
+
 ## `mailcfg`
 
 A record's authority is its evs push, whose signer readers check per version (§11.7). `MailAddress.creator` is that signer on the creating push (plan-MAIL-small-readings' reading 15), and a record whose field differs is ignored. A burn or pause is a later version of the same `burner/` path. `effect_key` is empty when no decision made the record.
@@ -129,5 +140,4 @@ A record's authority is its evs push, whose signer readers check per version (§
 ## Not fixed here
 
 - How evs seals and slots a deposit's body (§11, plan-EVS1-format-bytes).
-- `MailSpamModel`'s `counts` and its bytes, which are MAIL-M7-12's.
 - `SIGNED_SMTP_OUTBOX` and `smtp-outbox`, which SMTP-M9-09 registers.

@@ -626,7 +626,7 @@
  ],
  "Q-MAIL-2": [
   "decided",
-  "decided (owner decision 12)",
+  "decided (owner decision 12); amended (owner decision 197, 2026-11-09)",
   "owner"
  ],
  "Q-MAIL-3": [
@@ -771,7 +771,7 @@
  ],
  "Q-SDK-2": [
   "decided",
-  "decided (owner decision 87)",
+  "decided (owner decision 87); amended (owner decision 197, 2026-11-09)",
   "owner"
  ],
  "Q-SDK-3": [
@@ -997,6 +997,16 @@
  "Q-EVS-24": [
   "decided",
   "decided (owner decision 186, 2026-11-05); amended (owner decision 190, 2026-11-06)",
+  "owner"
+ ],
+ "Q-SDK-7": [
+  "open",
+  "open",
+  "owner"
+ ],
+ "Q-BRIDGE-8": [
+  "open",
+  "open",
   "owner"
  ]
 }

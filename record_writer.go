@@ -9,13 +9,17 @@
 //	locked             spool the draft unsealed, to the spool's public key; it is sealed at unlock, in capture order
 //	unrouted           spool it: no author, no vault yet, or no right there (section 4.2's no author row); the run's
 //	                   coverage names no_vault, and it is sealed once a log takes it
-//	team only, receipt refused: no personal log holds the kind (RECORD-M6-01 routes those), and read receipts are
-//	                   deposited before their reads (RECORD-M3-05)
+//	team mode          record_team.go's routes: the vault's entry sealed first, then T's, a projection or the same
+//	                   bytes, then its copy in the vault when T takes it by deposit; or the directory's (RECORD-M6-01)
+//	refused            a kind no log of this network takes, a claim or handoff that is state of a run's announcement,
+//	                   and read receipts, which are deposited before their reads (RECORD-M3-05)
 //
 // A spooled draft holds its body as marshaled once at capture and its capture time, so sealing later changes neither,
 // and the run's taint at capture, which sealing ORs with the run's bit then: taint never clears, so a later seal can
 // only read more tainted (D-MCP-16). While the spool holds drafts, Append spools too, after trying to drain it, so
-// entries are sealed in capture order: seq order never runs against capture order on one writer.
+// entries are sealed in capture order: seq order never runs against capture order on one writer. A draft of several
+// entries carries its capture id on its last, so a kill between them seals the whole draft again at the next drain:
+// the earlier entries then stand twice, never missing.
 //
 // The spool's drain (MCP-M3-18) hands over taint records first and delivers at least once. This writer owns the drain:
 // a taint record goes to the handler SetSpoolHandlers installs (MCP-M3-15's ingest, which applies it to the run file
@@ -42,6 +46,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -92,9 +97,12 @@ type RecordDraft struct {
 	Body proto.Message
 	// The body as stored, never re-encoded: the approval family's (RECORD-M3-07).
 	StoredBody []byte
-	// T's, nil where section 6.3 sends the kind to one log. Team mode is RECORD-M6-01's: at M3 nothing reaches T, so
-	// this is held to its kind and otherwise unused.
+	// T's projection, nil to take RecordProjectForTeam's of the body (record_team.go), which leaves the project empty
+	// for a run in an evs repo. Held to its kind, and refused holding any field record.proto marks V:.
 	Projection proto.Message
+	// The approval family's entry whose approver reads only the team record, an admin's (§16.8): T alone, refused in a
+	// network with none.
+	TeamOnly bool
 }
 
 // Where one entry of a draft went.
@@ -238,16 +246,32 @@ func (self *SidecarRecord) takeIngestDue() bool {
 	return due
 }
 
-// One pass of the loop's own work before the writer pumps: queued events mirrored, and this device's vault ingested
-// when it writes there as a consented device and a deposit may wait.
+// The logs this device ingests now: its vault where it writes there as a consented device, and the team record where
+// it writes its stream, as a log admin's device or a designated indexer (RECORD.md section 5.4's ingester row).
+func (self *SidecarRecord) ingestedLogs() []Id {
+	auth := self.writer.auth()
+	logIds := []Id{}
+	if route, err := recordVaultRoute(auth, self.writer.sidecarId); err == nil && !route.deposit {
+		logIds = append(logIds, route.logId)
+	}
+	if teamRecordId, _ := recordTeamLogs(auth); teamRecordId != nil && recordIngests(auth, self.writer.sidecarId, *teamRecordId) {
+		logIds = append(logIds, *teamRecordId)
+	}
+	return logIds
+}
+
+// One pass of the loop's own work before the writer pumps: queued events mirrored, and each log this device ingests
+// ingested when a deposit may wait.
 func (self *SidecarRecord) tend(ctx context.Context) {
 	self.accounting.mirrorQueued(ctx)
-	route, err := recordVaultRoute(self.writer.auth(), self.writer.sidecarId)
-	if err != nil || route.deposit || !self.takeIngestDue() {
+	logIds := self.ingestedLogs()
+	if len(logIds) == 0 || !self.takeIngestDue() {
 		return
 	}
-	if err := self.ingester.Ingest(ctx, route.logId); err != nil && self.writer.log.V(1).Enabled() {
-		self.writer.log.Infof("[record]an ingest pass stopped: %s", err)
+	for _, logId := range logIds {
+		if err := self.ingester.Ingest(ctx, logId); err != nil && self.writer.log.V(1).Enabled() {
+			self.writer.log.Infof("[record]an ingest pass of %s stopped: %s", logId, err)
+		}
 	}
 }
 
@@ -255,12 +279,12 @@ func (self *SidecarRecord) tend(ctx context.Context) {
 // one client generation's loop. A second Run waits for the first to return.
 func (self *SidecarRecord) Run(ctx context.Context) {
 	self.markIngestDue()
-	var unsubscribe func()
-	if route, err := recordVaultRoute(self.writer.auth(), self.writer.sidecarId); err == nil && !route.deposit {
-		unsubscribe = self.writer.boundStreams().Subscribe(route.logId, func(repoId Id) { self.markIngestDue() })
+	unsubscribes := []func(){}
+	for _, logId := range self.ingestedLogs() {
+		unsubscribes = append(unsubscribes, self.writer.boundStreams().Subscribe(logId, func(repoId Id) { self.markIngestDue() }))
 	}
 	defer func() {
-		if unsubscribe != nil {
+		for _, unsubscribe := range unsubscribes {
 			unsubscribe()
 		}
 	}()
@@ -467,6 +491,9 @@ func (self *RecordDraft) check() error {
 			return fmt.Errorf("%w: projection: %v", ErrRecordDraftInvalid, err)
 		}
 	}
+	if self.TeamOnly && !recordKindApprovalFamily(self.Kind) {
+		return fmt.Errorf("%w: only the approval family goes to the team record alone", ErrRecordDraftInvalid)
+	}
 	return nil
 }
 
@@ -511,6 +538,9 @@ type recordSpoolDraft struct {
 	TimeMillis  int64  `json:"time_millis"`
 	Tainted     bool   `json:"tainted"`
 	Body        []byte `json:"body"`
+	// T's projection as the caller gave it, marshaled once; empty to project the body at sealing.
+	Projection []byte `json:"projection,omitempty"`
+	TeamOnly   bool   `json:"team_only,omitempty"`
 }
 
 // The draft's spooled form, tagged so the drain tells it from another producer's capture.
@@ -535,8 +565,9 @@ func decodeRecordSpoolDraft(encoded []byte) (*recordSpoolDraft, bool) {
 	return draft, true
 }
 
-// The seal's args for a spooled draft at logId, with the run's taint now ORed in.
-func (self *recordWriter) sealArgs(draft *recordSpoolDraft, logId Id, captureId []byte) *RecordSealArgs {
+// The seal's args for one entry of a spooled draft at logId: kind and body its own, with content refs, and the run's
+// taint now ORed in.
+func (self *recordWriter) sealArgs(draft *recordSpoolDraft, logId Id, kind RecordKind, body []byte, content []*protocol.ContentRef, captureId []byte) *RecordSealArgs {
 	tainted := draft.Tainted
 	switch {
 	case draft.RunId != nil:
@@ -547,7 +578,7 @@ func (self *recordWriter) sealArgs(draft *recordSpoolDraft, logId Id, captureId 
 	}
 	args := &RecordSealArgs{
 		LogId:         logId,
-		Kind:          RecordKind(draft.Kind),
+		Kind:          kind,
 		Source:        RecordSource(draft.Source),
 		AgentSource:   RecordAgentSource(draft.AgentSource),
 		AgentId:       draft.AgentId,
@@ -557,7 +588,8 @@ func (self *recordWriter) sealArgs(draft *recordSpoolDraft, logId Id, captureId 
 		Tainted:       tainted,
 		PolicyVersion: self.auth().Pin().GetVersion(),
 		GrantId:       bytes.Clone(draft.GrantId),
-		StoredBody:    draft.Body,
+		Content:       content,
+		StoredBody:    body,
 		CaptureId:     captureId,
 	}
 	return args
@@ -599,7 +631,13 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 	if draft.RunId != nil {
 		spoolDraft.Tainted = self.runs.RunTainted(*draft.RunId)
 	}
-	route, err := recordRouteFor(self.auth(), self.sidecarId, draft.Kind)
+	projection, err := recordCheckedProjection(draft.Kind, draft.Projection)
+	if err != nil {
+		return nil, err
+	}
+	spoolDraft.Projection = projection
+	spoolDraft.TeamOnly = draft.TeamOnly
+	routes, err := recordRoutesFor(self.auth(), self.sidecarId, draft.Kind, draft.TeamOnly)
 	if errors.Is(err, errRecordUnrouted) {
 		return self.spoolDraft(spoolDraft, RecordCoverageGapNoVault)
 	}
@@ -622,28 +660,39 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 			return self.spoolDraft(spoolDraft, "")
 		}
 	}
-	ref, err := self.sealAndQueue(spoolDraft, route, nil)
+	refs, err := self.sealRoutes(spoolDraft, routes, nil)
 	if err != nil && recordDraftNeverSeals(err) {
 		return nil, err
 	}
 	if err != nil {
-		// locked, or a journal that did not take it: nothing was signed into the chain, and the spool keeps it
+		// locked, or a journal that did not take it: the spool keeps the draft, and a draft cut after its first entry
+		// seals whole again at the drain
 		return self.spoolDraft(spoolDraft, "")
 	}
-	return []*RecordEntryRef{ref}, nil
+	return refs, nil
 }
 
 // Whether a seal's failure is the draft's own, which no later attempt mends.
 func recordDraftNeverSeals(err error) bool {
 	return errors.Is(err, ErrRecordSealInvalid) || errors.Is(err, ErrRecordDraftInvalid) ||
-		errors.Is(err, ErrRecordRouteTeamOnly) || errors.Is(err, ErrRecordRouteReceipt)
+		errors.Is(err, ErrRecordRouteTeamOnly) || errors.Is(err, ErrRecordRouteReceipt) ||
+		errors.Is(err, ErrRecordRouteAnnouncement) || errors.Is(err, ErrRecordRouteNoTeamRecord) ||
+		errors.Is(err, ErrRecordProjectionNone) || errors.Is(err, ErrRecordBodyOverCap) || errors.Is(err, ErrRecordBodyInvalid)
 }
 
-// Seals a draft into route's log and queues it for the log's next push or deposit. captureId names a spooled capture.
-func (self *recordWriter) sealAndQueue(draft *recordSpoolDraft, route *recordRoute, captureId []byte) (*RecordEntryRef, error) {
+// One entry sealed and queued, with what a copy of it opens it by, taken before the pump may clear its salt.
+type recordSealedOpening struct {
+	ref    *RecordEntryRef
+	signed []byte
+	salt   []byte
+}
+
+// Seals one entry of draft into route's log, kind and body its own, and queues it for the log's next push or
+// deposit. captureId names a spooled capture.
+func (self *recordWriter) sealOne(draft *recordSpoolDraft, route *recordRoute, kind RecordKind, body []byte, content []*protocol.ContentRef, captureId []byte) (*recordSealedOpening, error) {
 	self.sealLock.RLock()
 	defer self.sealLock.RUnlock()
-	sealed, err := RecordSeal(&RecordSealEnv{Chain: self.chain, Sign: self.sign, Random: self.random}, self.sealArgs(draft, route.logId, captureId))
+	sealed, err := RecordSeal(&RecordSealEnv{Chain: self.chain, Sign: self.sign, Random: self.random}, self.sealArgs(draft, route.logId, kind, body, content, captureId))
 	if err != nil {
 		return nil, err
 	}
@@ -651,15 +700,111 @@ func (self *recordWriter) sealAndQueue(draft *recordSpoolDraft, route *recordRou
 	if err != nil {
 		return nil, err
 	}
-	ref := &RecordEntryRef{
-		LogId:      sealed.LogId,
-		EntryId:    sealed.EntryId,
-		Seq:        sealed.Seq,
-		Leaf:       sealed.Leaf,
-		Commitment: [sha256.Size]byte(header.Header.GetBodyCommitment()),
+	opening := &recordSealedOpening{
+		ref: &RecordEntryRef{
+			LogId:      sealed.LogId,
+			EntryId:    sealed.EntryId,
+			Seq:        sealed.Seq,
+			Leaf:       sealed.Leaf,
+			Commitment: [sha256.Size]byte(header.Header.GetBodyCommitment()),
+		},
+		signed: bytes.Clone(sealed.Signed),
+		salt:   bytes.Clone(sealed.Salt),
 	}
-	self.enqueue(route, sealed, RecordKind(draft.Kind))
-	return ref, nil
+	self.enqueue(route, sealed, kind)
+	return opening, nil
+}
+
+// Seals a draft's entries by its routes (record_team.go), in order: the vault's, T's, T's copy in the vault, the
+// directory's. Only the last carries captureId, so a kill between them leaves the capture to seal again whole.
+func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRoutes, captureId []byte) ([]*RecordEntryRef, error) {
+	kind := RecordKind(draft.Kind)
+	remaining := 0
+	if routes.vault != nil && routes.vaultEntry {
+		remaining += 1
+	}
+	if routes.team != nil {
+		remaining += 1
+		if routes.copy && routes.vault != nil {
+			remaining += 1
+		}
+	}
+	if routes.directory != nil {
+		remaining += 1
+	}
+	if remaining == 0 {
+		return nil, fmt.Errorf("%w: %s routes nowhere", ErrRecordRouteTeamOnly, kind)
+	}
+	capture := func() []byte {
+		remaining -= 1
+		if remaining == 0 {
+			return captureId
+		}
+		return nil
+	}
+	// T's body first, so a draft that cannot project seals nothing at all
+	var teamBody []byte
+	if routes.team != nil {
+		projected, err := recordTeamBodyBytes(kind, routes.teamBody, draft.Body, draft.Projection)
+		if err != nil {
+			return nil, err
+		}
+		teamBody = projected
+	}
+	refs := []*RecordEntryRef{}
+	var vaultRef *RecordEntryRef
+	if routes.vault != nil && routes.vaultEntry {
+		sealed, err := self.sealOne(draft, routes.vault, kind, draft.Body, nil, capture())
+		if err != nil {
+			return refs, err
+		}
+		vaultRef = sealed.ref
+		refs = append(refs, sealed.ref)
+	}
+	if routes.team != nil {
+		var content []*protocol.ContentRef
+		if routes.teamBody == recordTeamBodyProjection && vaultRef != nil {
+			// one ContentRef to the vault entry, whose salt stays in its slot row (RECORD.md section 5.1)
+			content = []*protocol.ContentRef{{RepoId: vaultRef.LogId.Bytes(), ObjectId: vaultRef.EntryId.Bytes(), Commitment: bytes.Clone(vaultRef.Commitment[:])}}
+		}
+		sealed, err := self.sealOne(draft, routes.team, kind, teamBody, content, capture())
+		if err != nil {
+			return refs, err
+		}
+		refs = append(refs, sealed.ref)
+		if routes.copy && routes.vault != nil {
+			copyBody, err := NewRecordCopyBody([]*RecordOpened{{SignedBytes: sealed.signed, Salt: sealed.salt, Body: teamBody}})
+			clear(sealed.salt)
+			if err != nil {
+				return refs, err
+			}
+			copyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(copyBody)
+			if err != nil {
+				return refs, err
+			}
+			// an accounting entry of the run that filed T's, about no action of its own
+			copyDraft := *draft
+			copyDraft.Kind = uint32(RecordKindCopy)
+			copyDraft.Source = uint32(RecordSourceObserved)
+			copyDraft.ActionId = nil
+			copyDraft.GrantId = nil
+			copied, err := self.sealOne(&copyDraft, routes.vault, RecordKindCopy, copyBytes, nil, capture())
+			clear(copyBytes)
+			if err != nil {
+				return refs, err
+			}
+			refs = append(refs, copied.ref)
+		}
+		clear(sealed.salt)
+	}
+	if routes.directory != nil {
+		sealed, err := self.sealOne(draft, routes.directory, kind, draft.Body, nil, capture())
+		if err != nil {
+			return refs, err
+		}
+		refs = append(refs, sealed.ref)
+	}
+	return refs, nil
 }
 
 // Whether a drain may be tried now: none failed within PushCoalesce.
@@ -748,12 +893,12 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 			// sealed before a kill cut the drain short
 			return nil
 		}
-		route, err := recordRouteFor(self.auth(), self.sidecarId, RecordKind(draft.Kind))
+		routes, err := recordRoutesFor(self.auth(), self.sidecarId, RecordKind(draft.Kind), draft.TeamOnly)
 		if errors.Is(err, errRecordUnrouted) {
 			return fmt.Errorf("%w: %v", errRecordSpoolUnhandled, err)
 		}
 		if err == nil {
-			_, err = self.sealAndQueue(draft, route, encodeSpoolRecordId(id))
+			_, err = self.sealRoutes(draft, routes, encodeSpoolRecordId(id))
 		}
 		if err != nil && !recordDraftNeverSeals(err) {
 			// locked again, or a write that failed: the drain stops here and takes this record again later

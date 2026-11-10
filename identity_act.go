@@ -2,16 +2,17 @@
 // through one runner, which owns the order and the rule and nothing of the rule's content:
 //
 //	build     every statement of the act first, each with its StatementHeader (network, the verified pin, a fresh
-//	          16-byte nonce, a not_after inside §7.9's 7 days); Add lets another track join statements to an act,
-//	          TEAM-M4-01's stale revocations among them
+//	          16-byte nonce, a not_after inside §7.9's 7 days); Add lets another track join statements to an act, and
+//	          AddStaleRevocations puts §7.10's stale revocations first (identity_act_stale.go)
 //	presence  if the log says any statement is covered (SidecarAuthority.PresenceRequired, never the caller), one check
 //	          over the act's countersigned bytes, PresenceActBytes(signer, m, RFC 9162's root over each statement's
 //	          signed bytes); evidence that does not verify against a live key of this sidecar's signs nothing
 //	sign      each statement by the identity key (Sidecar.Sign), the countersignature riding each with its own
 //	          inclusion path
 //	keep      every signed statement in keychain.ur's pending records (identity_pending.go) before any is posted
-//	post      each to POST /network/config/delta, testHookBarrier around each; a statement whose answer is lost stays
-//	          pending, and PostPendingStatements retries the same bytes until its not_after
+//	post      each to POST /network/config/delta in act order, testHookBarrier around each, a stale revocation re-checked
+//	          first; a statement whose answer is lost stays pending with the rest of its act, and PostPendingStatements
+//	          retries the same bytes in the same order until its not_after
 //
 // The check is the caller's function value: the daemon's presence prompt, §16's, or an app's SidecarPresenceSigner;
 // a remote-mode app's takes two calls, CountersignedBytes and Countersign (CORE-M8-03). A sidecar with no live key
@@ -105,6 +106,8 @@ type sidecarActStatement struct {
 	body []byte
 	// the header's not_after, ms since the epoch
 	notAfterMs int64
+	// set on §7.10's stale revocations, which each post and retry re-checks (identity_act_stale.go)
+	stale *sidecarStaleRevocation
 }
 
 // One act. Construct with Sidecar.newAct.
@@ -172,8 +175,7 @@ func (self *sidecarAct) Add(signedType bridge.SignedType, statement proto.Messag
 	if _, err := io.ReadFull(self.random, nonce); err != nil {
 		return fmt.Errorf("no randomness for a nonce: %w", err)
 	}
-	timeout := min(self.sidecar.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
-	notAfterMs := self.sidecar.clock.Now().Add(timeout).UnixMilli()
+	notAfterMs := self.notAfterMs()
 	header := &bridge.StatementHeader{
 		NetworkId:  self.identity.NetworkId.Bytes(),
 		At:         &bridge.AuthPin{Version: self.at.GetVersion(), Chain: bytes.Clone(self.at.GetChain())},
@@ -195,6 +197,12 @@ func (self *sidecarAct) Add(signedType bridge.SignedType, statement proto.Messag
 	self.countersigned = nil
 	self.evidence = nil
 	return nil
+}
+
+// A statement's not_after from now, ms since the epoch: StatementTimeout, at most §7.9's 7 days.
+func (self *sidecarAct) notAfterMs() int64 {
+	timeout := min(self.sidecar.settings.statementTimeout(), time.Duration(configStatementMaxLifetimeMs)*time.Millisecond)
+	return self.sidecar.clock.Now().Add(timeout).UnixMilli()
 }
 
 // The statement digests in act order, which an act's tree hashes.
@@ -298,11 +306,12 @@ func (self *sidecarAct) Countersign(evidence *bridge.WebAuthnEvidence) error {
 }
 
 // Runs the act: the presence check where the log requires one, check being called with the countersigned bytes unless
-// Countersign already took evidence; then signs every statement, keeps each in the pending records, and posts each.
-// Answers each statement's entry (n, A_n), in act order. A failed, refused or non-verifying check signs nothing
-// (ErrSidecarActPresence); an act needing presence with no check is the same. A statement api refuses is dropped
-// (ErrSidecarActRefused); one whose answer is lost stays pending, ErrSidecarActPending, and PostPendingStatements
-// retries the same bytes.
+// Countersign already took evidence; then signs every statement, keeps each in the pending records with its place in
+// the act, and posts each in act order, re-checking a stale revocation first (identity_act_stale.go). Answers each
+// statement's entry (n, A_n), in act order, nil for a stale revocation dropped unposted. A failed, refused or
+// non-verifying check signs nothing (ErrSidecarActPresence); an act needing presence with no check is the same. A
+// statement api refuses is dropped (ErrSidecarActRefused); one whose answer is lost stays pending with the rest of its
+// act, ErrSidecarActPending, and PostPendingStatements retries the same bytes in the same order.
 func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]*bridge.AuthPin, error) {
 	if len(self.statements) == 0 || self.ran {
 		return nil, ErrSidecarActState
@@ -326,6 +335,11 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 	}
 	self.ran = true
 
+	// the act's id and each statement's place in it, kept beside each, so a retry posts them in this order
+	var actId Id
+	if _, err := io.ReadFull(self.random, actId[:]); err != nil {
+		return nil, fmt.Errorf("no randomness for an act id: %w", err)
+	}
 	signedStatements := make([]*sidecarPendingStatement, 0, len(self.statements))
 	for index, statement := range self.statements {
 		signed, err := self.sidecar.Sign(statement.purpose, statement.signedType, statement.body, nil)
@@ -343,7 +357,11 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 		if err != nil {
 			return nil, err
 		}
-		signedStatements = append(signedStatements, &sidecarPendingStatement{signed: signedBytes, notAfterMs: statement.notAfterMs})
+		signedStatements = append(signedStatements, &sidecarPendingStatement{
+			signed:     signedBytes,
+			notAfterMs: statement.notAfterMs,
+			act:        &sidecarPendingAct{actId: actId, index: uint32(index), stale: statement.stale},
+		})
 	}
 	// every statement is kept before any is posted, so a kill between two posts retries the rest's same bytes
 	for _, pending := range signedStatements {
@@ -353,13 +371,14 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 	}
 	pins := make([]*bridge.AuthPin, 0, len(signedStatements))
 	for _, pending := range signedStatements {
-		pin, err := self.sidecar.postPendingStatement(ctx, pending)
+		pin, err := self.sidecar.postPendingInOrder(ctx, pending)
 		if err != nil {
 			if errors.Is(err, ErrSidecarActRefused) {
 				return pins, err
 			}
 			return pins, fmt.Errorf("%w: %w", ErrSidecarActPending, err)
 		}
+		// nil for a stale revocation dropped unposted, its Worker holding a leaf again
 		pins = append(pins, pin)
 	}
 	return pins, nil

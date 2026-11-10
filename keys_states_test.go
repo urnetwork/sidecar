@@ -1070,14 +1070,15 @@ func TestOpeningReadsItsOwnPassParameters(t *testing.T) {
 	}
 }
 
-// §5.4's default cost is what a new wrap actually carries.
+// §5.4's default cost is what a new wrap actually carries: the leg's (TestPassCostOnThisLeg).
 func TestANewPassWrapCarriesTheSettingsCost(t *testing.T) {
 	settings := DefaultSidecarSettings().KeychainSettings
 	pass, err := newUnlockPassWrap(bytes.Repeat([]byte{1}, localKeyByteCount), 1, testPass, settings, bytes.NewReader(make([]byte, 64)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pass.memoryKibiCount != 64*1024 || pass.iterationCount != 3 || pass.threadCount != 4 {
+	if pass.memoryKibiCount != testLegPassMemoryByteCount/1024 || pass.iterationCount != testLegPassIterationCount ||
+		pass.threadCount != testLegPassThreadCount {
 		t.Errorf("cost %d KiB, t=%d, p=%d", pass.memoryKibiCount, pass.iterationCount, pass.threadCount)
 	}
 }

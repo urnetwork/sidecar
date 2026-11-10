@@ -29,6 +29,8 @@ type Result struct {
 	Events []*sidecartest.BarrierEvent
 	// For a replay, where the run left the trace it followed and why: empty when it kept to it.
 	LeftTrace string
+	// Every invariant that did not hold, each with its step: all of them at the check the run failed at.
+	Violations []*Violation
 }
 
 func (self *Result) String() string {
@@ -61,12 +63,16 @@ type runner struct {
 	runs      []*sidecartest.ActorRun
 	// started by Background steps and not yet resumed
 	paused bool
+	// what the oracle reads every store through, and the blob history's length at its last check
+	view         *StoreView
+	historyCount int
+	violations   []*Violation
 }
 
 // Runs schedule on net, which it leaves to its caller to close. A refusal schedule with no twin fails
 // before it starts, and so does a replay that also names a seed.
 func Run(ctx context.Context, schedule *Schedule, net *Net) *Result {
-	self := &runner{ctx: ctx, schedule: schedule, net: net, barriers: net.Barriers()}
+	self := &runner{ctx: ctx, schedule: schedule, net: net, barriers: net.Barriers(), view: NewStoreView(net, nil)}
 	result := &Result{Id: schedule.Id, Seed: schedule.Seed, FailedStep: -1}
 	if schedule.Refuses != "" && schedule.Twin == nil {
 		result.Err = fmt.Errorf("%s expects %s refused and names no twin that must succeed (§22.8's twins)", schedule.Id, schedule.Refuses)
@@ -84,6 +90,7 @@ func Run(ctx context.Context, schedule *Schedule, net *Net) *Result {
 		self.barriers.SetScript(schedule.Replay.Events)
 	}
 	result.Err = self.run(result)
+	result.Violations = self.violations
 	result.Events = self.barriers.Trace()
 	for _, event := range result.Events {
 		result.Trace = append(result.Trace, event.String())
@@ -256,12 +263,12 @@ func (self *runner) check(step int, final bool) error {
 			return err
 		}
 	}
-	oracle := &Oracle{Net: self.net, Step: step, Final: final}
-	ctx := sidecartest.InspectContext(self.ctx)
-	for _, invariant := range self.schedule.Check {
-		if err := invariant.Check(ctx, oracle); err != nil {
-			return fmt.Errorf("%s after step %d: %w", invariant.Id(), step, err)
-		}
+	oracle := &Oracle{Net: self.net, Step: step, Final: final, View: self.view, previousHistoryCount: self.historyCount}
+	violations := checkInvariants(self.ctx, oracle, self.schedule.Check)
+	self.historyCount = len(self.net.BlobHistory())
+	if 0 < len(violations) {
+		self.violations = append(self.violations, violations...)
+		return violationsError(violations)
 	}
 	if violations := self.barriers.Violations(); 0 < len(violations) {
 		return fmt.Errorf("a barrier broke its naming rule: %s", strings.Join(violations, "; "))

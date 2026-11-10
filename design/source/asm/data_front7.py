@@ -216,8 +216,10 @@ def _check(ex_path=_HERE / 'v7' / 'extract.json'):
             return 'decided'
         return 'peer-closed' if c >= 0 else 'open'
     st = {i: status(it) for i, it in items.items() if i.startswith('Q-')}
+    # From owner decision 197 (2026-11-09) owner questions are open again, which data_front10.py's OPEN_OWNER lists
+    # and assemble10.py checks against the sections; only a question no later layer lists fails here.
     still_open = sorted(i for i, s in st.items() if s == 'open')
-    assert not still_open, f"data_front7.py says no Q- item is open, but these are: {still_open}"
+    assert set(still_open) <= {'Q-BRIDGE-8', 'Q-SDK-7'}, f"data_front7.py lists no such open Q- item: {still_open}"
     assert sorted(i for i, s in st.items() if s == 'peer-closed') == sorted(r[0] for r in PEER), 'PEER differs'
     assert '(owner decision 140, record corrected)' in items['Q-EVS-9']['text'], 'Q-EVS-9 no longer cites 140'
     for x, *_r in X_ROWS:

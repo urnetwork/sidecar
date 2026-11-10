@@ -58,24 +58,11 @@
   "col": 46,
   "match": "every owner question",
   "snippet": "Owner decisions 1-150 settle every X item and every owner question raised before the v1 additions, the five raised in the 2026-11-04 peer review included (owner decisions 141-145: Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10); that re",
-  "reading": "This holds. A scan of every Q- item heading in all 23 section files finds 173 decided, 23 closed and 4 withdrawn, with none open. No text is marked \"(proposed; Q-\" outside the rule definitions in D-ARCH-4 and D-PHASE-2, and the last questions (Q-EVS-24, by owner decisions 186 and 190; Q-PROTO-4, by 176, 188 and 191) are decided.",
+  "reading": "Holds for owner decisions 1-150's scope, which the line states; the line now also names the two owner questions owner decision 197's design raised (Q-BRIDGE-8, Q-SDK-7), open, so it no longer says none is open.",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-06"
- },
- {
-  "family": "none_open",
-  "file": "01-CTX.md",
-  "line": 131,
-  "col": 1097,
-  "match": "No owner question is open",
-  "snippet": "w's (Q-EVS-24, §11, whose answer owner decision 190 refines; Q-PROTO-4's answer, §6, which owner decisions 188 and 191 amend; the presence countersignature's reach, §7). No owner question is open. The front matter lists each decision with its implementing sections.",
-  "reading": "This holds. A scan of every Q- item heading in all 23 section files finds 173 decided, 23 closed and 4 withdrawn, with none open. No text is marked \"(proposed; Q-\" outside the rule definitions in D-ARCH-4 and D-PHASE-2, and the last questions (Q-EVS-24, by owner decisions 186 and 190; Q-PROTO-4, by 176, 188 and 191) are decided.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-06"
+  "source": "hand-2026-11-09"
  },
  {
   "family": "decided_q_open",
@@ -119,7 +106,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 98,
+  "line": 101,
   "col": 12,
   "match": "audited",
   "snippet": "- §2.18's unaudited cryptography.",
@@ -132,7 +119,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 104,
+  "line": 107,
   "col": 135,
   "match": "7-day window",
   "snippet": "- Dropped history (§11.7, §11.13): a repo admin may drop a path's history on a file-mode ref outside config and mailcfg repos, after a 7-day window in which any repo admin can cancel, or at once with `now`; in an owner-bound repo only its owner drops or cancels (owner decisions 126, 183); each dropped version's stat",
@@ -145,7 +132,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 146,
+  "line": 152,
   "col": 22,
   "match": "Redis holds only rebuildable soft state and verified caches (owner decision 136:",
   "snippet": "# (owner decision 2); Redis holds only rebuildable soft state and verified caches (owner decision 136: evs-8,",
@@ -158,7 +145,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 147,
+  "line": 153,
   "col": 92,
   "match": "off-site",
   "snippet": "# evs-24, gkm-10, api-7's {acl_}e); no backup of key slots or wraps (owner decision 90); no off-site copy",
@@ -171,7 +158,7 @@
  {
   "family": "pools",
   "file": "02-TRUST.md",
-  "line": 148,
+  "line": 154,
   "col": 72,
   "match": "pools",
   "snippet": "# (owner decision 94); the metadata tier grows by whole clusters, never pools, each repo placed on one at",
@@ -184,7 +171,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 150,
+  "line": 156,
   "col": 100,
   "match": "off-site",
   "snippet": "# Postgres: sidecar tables, with the network, user and client rows they name, go to their own daily off-site",
@@ -197,7 +184,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 151,
+  "line": 157,
   "col": 13,
   "match": "14 days",
   "snippet": "# dump, kept 14 days, tables whose ttl here is at most 7 d excluded, so a row outlives its ttl, or its hold,",
@@ -210,7 +197,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 152,
+  "line": 158,
   "col": 13,
   "match": "14 d",
   "snippet": "# by at most 14 d; tables that exist today also sit in the main dumps for about 4 months (ops-2, D-TRUST-7).",
@@ -223,7 +210,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 258,
+  "line": 264,
   "col": 45,
   "match": "7-day window",
   "snippet": "  sees: \"invites (hashed 256-bit code, uses, 7-day window, inviting and accepting networks); bridge shares (share_id, both network ids, target and alias tables sealed under a key the code derives and the server cannot, versions",
@@ -236,7 +223,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 280,
+  "line": 286,
   "col": 203,
   "match": "Redis {sq_<network_id>}; lease",
   "snippet": "etwork_sidecar_limit, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time); Redis {sq_<network_id>}; lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing)",
@@ -249,7 +236,7 @@
  {
   "family": "mib64_trigger",
   "file": "02-TRUST.md",
-  "line": 281,
+  "line": 287,
   "col": 598,
   "match": "64 MiB",
   "snippet": "alue, state, version, attempts, next send); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); edge leases (network, meter, 64 MiB reservations, 16 MiB on Community); per relayed contract its reservation, grant and settled bytes",
@@ -262,7 +249,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 288,
+  "line": 294,
   "col": 406,
   "match": "Redis soft state existing at placement (evs-8's lease fields, gkm",
   "snippet": "e, expiry) and their copied_rows, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks); legal requests (instrument, country, accounts, productions, sealing orders); every abuse-role read; reporters' third-party data only until the join (§21.8)",
@@ -275,7 +262,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 350,
+  "line": 356,
   "col": 66,
   "match": "Redis {evsh_<repo_id>} for 10 min (evs",
   "snippet": "  store: head/<repo>/<ref> (metadata cluster); a verified copy in Redis {evsh_<repo_id>} for 10 min (evs-24)",
@@ -288,7 +275,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 385,
+  "line": 391,
   "col": 9,
   "match": "Redis {evsl_<repo_id>} (holder, ref, path epoch",
   "snippet": "  store: Redis {evsl_<repo_id>} (holder, ref, path epoch, prefix -> expiry) and {evsl_<repo_id>}v",
@@ -301,7 +288,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 402,
+  "line": 408,
   "col": 101,
   "match": "off-site",
   "snippet": "  ttl: each object's own row; deletes and overwrites keep no prior version (unversioned buckets); no off-site copy (owner decision 94); request logs as ops-1; {nvb_} 15 s, but the write budget's saved bucket level, wallet and counter readings 48 h after the loop's last write",
@@ -314,7 +301,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 492,
+  "line": 498,
   "col": 9,
   "match": "Redis {evsq_<repo_id>} (push sequence), {evsh_<repo_id>} (verified head",
   "snippet": "  store: Redis {evsq_<repo_id>} (push sequence), {evsh_<repo_id>} (verified head cache)",
@@ -327,7 +314,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 586,
+  "line": 592,
   "col": 16,
   "match": "Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch",
   "snippet": "  sees: acks in Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch, time; written at most daily",
@@ -340,7 +327,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 588,
+  "line": 594,
   "col": 174,
   "match": "Redis, after which gkm deletes no epoch",
   "snippet": "l: overwritten by the leaf's next ack; 31 d after its last write; deleted with its group's gkm objects at a shred (§11.12); soft state outside the rdb bundles, lost with Redis, after which gkm deletes no epoch for 30 d; a hold's copy excepted (api-14)",
@@ -353,7 +340,7 @@
  {
   "family": "edge_termination",
   "file": "02-TRUST.md",
-  "line": 594,
+  "line": 600,
   "col": 28,
   "match": "terminating (X1); caps; absorb scans; no plaintext path to tlsedge",
   "snippet": "  why: route by SNI without terminating (X1); caps; absorb scans; no plaintext path to tlsedge (§13.4, §13.5)",
@@ -366,7 +353,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 613,
+  "line": 619,
   "col": 33,
   "match": "Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease",
   "snippet": "  store: network_tls_suspension; Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease spends (api-13); the published-names list, drawn from api-7",
@@ -379,7 +366,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 726,
+  "line": 732,
   "col": 347,
   "match": "off-site",
   "snippet": "s the ids of networks, members and sidecars newer than the main dump (D-OPS-18); tables that exist today (accounts, networks, clients, contracts) in the main dumps, with off-site copies on planetoid",
@@ -392,7 +379,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 728,
+  "line": 734,
   "col": 32,
   "match": "14 d",
   "snippet": "  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; existing tables about 4 months, 9 generations (xops/main/ansible/host_files/by-us-f",
@@ -405,7 +392,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 728,
+  "line": 734,
   "col": 75,
   "match": "14 d",
   "snippet": "  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; existing tables about 4 months, 9 generations (xops/main/ansible/host_files/by-us-fmt-5-edge-6/db-archive/README.md:201-203)",
@@ -418,7 +405,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 789,
+  "line": 795,
   "col": 16,
   "match": "off-site",
   "snippet": "  withdrawn: no off-site copy in v0 (owner decision 94)",
@@ -431,7 +418,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 878,
+  "line": 884,
   "col": 148,
   "match": "14-day",
   "snippet": "**D-TRUST-7 (proposed).** Retention follows §2.11 and §2.8's `ttl` column; sidecar tables leave the 4-month main dumps for their own daily off-site 14-day dump, and sidecar Redis families the 8-month bundles (ops-2, ops-3). *Why:* retained fields can be subpoenaed; no backup may outlive a published ttl.",
@@ -444,7 +431,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 878,
+  "line": 884,
   "col": 139,
   "match": "off-site",
   "snippet": "**D-TRUST-7 (proposed).** Retention follows §2.11 and §2.8's `ttl` column; sidecar tables leave the 4-month main dumps for their own daily off-site 14-day dump, and sidecar Redis families the 8-month bundles (ops-2, ops-3). *Why:* retained fields can be subpoenaed; no backup may outlive a published ttl.",
@@ -457,7 +444,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 902,
+  "line": 908,
   "col": 189,
   "match": "audited",
   "snippet": "product copy claim \"end-to-end encrypted\" without external review (owner decision 99)? **Decided by owner 2026-11-04 (owner decision 119):** (a) yes, now, with §2.18's unaudited-cryptography disclosure on the security page; sidecar/design/pitch5.html:931 changes. *Residual:* none.",
@@ -470,7 +457,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 927,
+  "line": 933,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a futur",
@@ -483,7 +470,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 933,
+  "line": 939,
   "col": 263,
   "match": "7-day window",
   "snippet": "ritten version's content gone a minute later | Medium | Medium | History written while versioning was on stays (owner decision 158) unless a repo admin drops it, after a 7-day window any repo admin can cancel or at once with `now` (owner decisions 173, 183); config and mailcfg repos and git-mode refs refuse it; a repo admin's lock (§8.8); statements ",
@@ -496,24 +483,11 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 934,
+  "line": 940,
   "col": 69,
   "match": "7-day window",
   "snippet": "| A rogue or compromised repo admin drops history | Low | High | The 7-day window, with notices on every repo admin's devices, any admin's cancel and a lock voiding a pending drop; in owner-bound repos only the owner's consented devices (owner decisio",
   "reading": "This 7-day window is the same drop-history cancel window (owner decision 183), with `now` skipping it as owner decisions 82 and 183 state.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-06"
- },
- {
-  "family": "none_open",
-  "file": "03-ARCH.md",
-  "line": 5,
-  "col": 839,
-  "match": "none is open",
-  "snippet": "188, 191) and F13 the team directory (170, 171, 179-182). Owner decisions 167-184 answered every v1 question, 185 the SDK fixes' and 186-191 the final meta review's, and none is open; F11's index cadence follows owner decision 172 and 3.15's milestone for format 2 owner decision 169. Drafts' disagreements became Q-ARCH-1 to -9, closed by the 2026-11-",
-  "reading": "This holds. Owner decisions 167-184 answered every v1 question, 185 the SDK fixes' question and 186-191 the meta review's, and no Q- item in any section is open: §3.11 shows Q-ARCH-1 to -9 closed or withdrawn, and the section scan finds none open.",
   "live": false,
   "gap": false,
   "stated": false,
@@ -587,7 +561,7 @@
  {
   "family": "edge_termination",
   "file": "03-ARCH.md",
-  "line": 717,
+  "line": 718,
   "col": 2,
   "match": "Edge termination",
   "snippet": "| Edge termination of customers' TLS or mail | filtering, coverage | plaintext at URnetwork | ruled out (owner directive 2026-11-03) |",
@@ -600,7 +574,7 @@
  {
   "family": "pools",
   "file": "03-ARCH.md",
-  "line": 721,
+  "line": 722,
   "col": 176,
   "match": "pools",
   "snippet": " weigh the rest: a sidecar on the device client (§5.11), a sealed client index (§11.16), agents as MLS leaves (§8.13), per-network addresses (§15.11), and Redis or MinIO pools for the metadata tier (§19.12; owner decisions 136, 145).",
@@ -613,7 +587,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "03-ARCH.md",
-  "line": 731,
+  "line": 732,
   "col": 402,
   "match": "(proposed; Q-",
   "snippet": "hdrawn D- item, a decided question shown as open, or a Q- option the owner has not chosen presented as the design, unless it is an open question's recommendation marked \"(proposed; Q-...)\". *Why:* the owner's decisions arrived in rounds while sections were drafted and reviewed; only a mechanical check keeps the body, the decision list and §22's scenar",
@@ -626,7 +600,7 @@
  {
   "family": "edge_termination",
   "file": "03-ARCH.md",
-  "line": 763,
+  "line": 764,
   "col": 27,
   "match": "edge termination",
   "snippet": "| :59 plaintext paths; :84 edge termination | superseded by the directive; residuals by owner decisions 2, 34, 39-41 |",
@@ -639,7 +613,7 @@
  {
   "family": "offsite",
   "file": "03-ARCH.md",
-  "line": 793,
+  "line": 794,
   "col": 338,
   "match": "off-site",
   "snippet": " 94, 123); an out-of-hours rota pages from M3 (owner decision 143); mail senders retry (§15.3); devices re-seed from local copies and Postgres rows from D-OPS-18's daily off-site dump (§19.10); record repos and their slots mirror to an indexer where one is designated (owner decisions 90, 150, 177) |",
@@ -652,7 +626,7 @@
  {
   "family": "pg_redis_durable",
   "file": "04-REPO.md",
-  "line": 97,
+  "line": 99,
   "col": 1,
   "match": "Redis         Redis               // cas, incr, scripts, TTLs, hash-tagged keys;",
   "snippet": "\tRedis         Redis               // cas, incr, scripts, TTLs, hash-tagged keys; evs and gkm keep only soft state",
@@ -665,7 +639,7 @@
  {
   "family": "window_14d_weekly",
   "file": "04-REPO.md",
-  "line": 201,
+  "line": 204,
   "col": 143,
   "match": "weekly",
   "snippet": "- **Merge, never rebase.** A rebase orphans pinned commits and skips the commit-msg hook (connect/.githooks/commit-msg:17-18). Merge `main` in weekly and before each gate, in the order connect, sidecar, sdk, sn, server, warp/config/vault/xops/mmm, build, re-pinning each time.",
@@ -676,9 +650,35 @@
   "source": "carried"
  },
  {
+  "family": "owner_or_peer_pending",
+  "file": "04-REPO.md",
+  "line": 210,
+  "col": 234,
+  "match": "(proposed; Q-",
+  "snippet": "e size` gates from v0: the `ios_extension` leg (`device/`, `protocol/bridge` and the root's forwarding files; D-SDK-20) fails if sidecar adds over §18.10's budget, 4 MiB (proposed; Q-SDK-7; owner decision 197), and the `sidecar_http` js leg is measured unstripped from M2 against §18.10's 41,943,040 B goal and miss rule (D-SDK-19). No C ABI: desktop ap",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "decided_q_open",
+  "file": "04-REPO.md",
+  "line": 295,
+  "col": 319,
+  "match": "forwarding files (Q-SDK-5",
+  "snippet": "ile or wasm build links them (owner decision 104; Q-REPO-5), and the forwarding role's packet side in the leaf `device/`, so the iOS extension links of the root only its forwarding files (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).",
+  "reading": "Names a settled item by its answer (Q-SDK-2 as owner decisions 87 and 197 amend it, Q-SDK-5 closed by peer review, Q-BRIDGE-2's own-client links), not as pending.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
   "family": "window_14d_weekly",
   "file": "04-REPO.md",
-  "line": 308,
+  "line": 311,
   "col": 72,
   "match": "Weekly",
   "snippet": "| Branches drift from mains that release almost daily | High | Medium | Weekly and per-milestone merges; pending migration groups (D-OPS-6) |",
@@ -704,7 +704,7 @@
  {
   "family": "decided_q_open",
   "file": "05-CORE.md",
-  "line": 572,
+  "line": 573,
   "col": 242,
   "match": "until `exp` (Q-CORE-4",
   "snippet": "s, or any file but the keychain (I-7) | a same-user process reading the keychain; a token copied alone renews, exchanges and mints nothing, but authenticates a transport until `exp` (Q-CORE-4 (c)) |",
@@ -717,7 +717,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 709,
+  "line": 710,
   "col": 79,
   "match": "64 MiB",
   "snippet": "          dictionaries and doc tables in an LRU within Search.MemoryByteCount (64 MiB on the daemon, inside",
@@ -730,7 +730,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 719,
+  "line": 720,
   "col": 42,
   "match": "64 MiB",
   "snippet": "- **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock);",
@@ -951,7 +951,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 269,
+  "line": 271,
   "col": 22,
   "match": "64 MiB",
   "snippet": "  [{size_above_bytes: 64 MiB, off}]; v1, its type reserved at M2:",
@@ -964,7 +964,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 313,
+  "line": 315,
   "col": 88,
   "match": "member-device cap",
   "snippet": "           §20.4's 5,000 Team admissions count member devices and agents alike, with no member-device cap",
@@ -977,7 +977,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 342,
+  "line": 344,
   "col": 256,
   "match": "64 MiB",
   "snippet": "ing an honest writer gives each path it creates, existing paths keeping theirs (§11.7; owner decision 167); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, ne",
@@ -990,7 +990,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 796,
+  "line": 807,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -1003,7 +1003,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 868,
+  "line": 879,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1016,7 +1016,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 924,
+  "line": 935,
   "col": 1105,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1029,8 +1029,8 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 991,
-  "col": 5835,
+  "line": 1004,
+  "col": 5844,
   "match": "member-device cap",
   "snippet": "19 an ephemeral client's refused join from a member invite; and §22.7's approval suite a cancel under the allowlist; §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
   "reading": "The interfaces assumption '§20.4 allows Team 5,000 config_admissions, with no member-device cap' matches owner decision 144 and 20-QUOTA.md:51.",
@@ -1146,7 +1146,7 @@
  {
   "family": "window_14d_weekly",
   "file": "10-KEYS.md",
-  "line": 511,
+  "line": 520,
   "col": 9,
   "match": "a week",
   "snippet": "  device a week away lacks ~233 commits (~6 MB) and resyncs from one 2.8 MB GroupInfo (KF5)",
@@ -1159,7 +1159,7 @@
  {
   "family": "decided_q_open",
   "file": "10-KEYS.md",
-  "line": 535,
+  "line": 544,
   "col": 71,
   "match": "confirmed them (Q-KEYS-12",
   "snippet": "**What GKM sees.** §2.8 adopts these rows verbatim; owner decision 115 confirmed them (Q-KEYS-12).",
@@ -1172,7 +1172,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 573,
+  "line": 582,
   "col": 16,
   "match": "Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch",
   "snippet": "  sees: acks in Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch, time; written at most daily",
@@ -1185,7 +1185,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 575,
+  "line": 584,
   "col": 174,
   "match": "Redis, after which gkm deletes no epoch",
   "snippet": "l: overwritten by the leaf's next ack; 31 d after its last write; deleted with its group's gkm objects at a shred (§11.12); soft state outside the rdb bundles, lost with Redis, after which gkm deletes no epoch for 30 d; a hold's copy excepted (api-14)",
@@ -1198,7 +1198,7 @@
  {
   "family": "offsite",
   "file": "10-KEYS.md",
-  "line": 615,
+  "line": 624,
   "col": 64,
   "match": "off-site",
   "snippet": "**Site loss (D-KEYS-13; order in §19.10).** gkm objects have no off-site copy (owner decisions 90, 94), but devices keep each group's MLS state and every RK_g: a device 10.6's GroupForm rules allow, a repo admin's and for owner-bound kinds th",
@@ -1211,7 +1211,7 @@
  {
   "family": "device_cap_1000",
   "file": "10-KEYS.md",
-  "line": 730,
+  "line": 739,
   "col": 2,
   "match": "1,000 member devices",
   "snippet": "| 1,000 member devices per network, or a larger config tree | No member wraps | The cap refuses Teams past ~330 members; 5,000 leaves make a 7.9-14 MB tree and path commits to ~6 MB, past §18.",
@@ -1224,7 +1224,7 @@
  {
   "family": "audit_gate",
   "file": "10-KEYS.md",
-  "line": 753,
+  "line": 762,
   "col": 385,
   "match": "independently audit",
   "snippet": "tifact (10.4), with 10.4's conformance plan, fuzz targets run as Go tests and 10.6's sizes measured (§22.8); the security page says this MLS on draft suite 0x0010 is not independently audited. *Why:* owner decisions 99, 101, 119 (§2.18).",
@@ -1237,7 +1237,7 @@
  {
   "family": "offsite",
   "file": "10-KEYS.md",
-  "line": 759,
+  "line": 768,
   "col": 234,
   "match": "off-site",
   "snippet": "s, and for owner-bound kinds the owner's consented devices, re-seed each group from their keychains under a GroupForm linked through the ladder (10.8). *Why:* gkm has no off-site copy (owner decisions 90, 94).",
@@ -1250,7 +1250,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 775,
+  "line": 784,
   "col": 26,
   "match": "gkm acks are Redis",
   "snippet": "**D-KEYS-21 (proposed).** gkm acks are Redis soft state, and the epoch reconciler deletes only while the ack family is 30 days old; a GroupInfo above 16 leaves is written at most once per epoch, on request. *Why:* ",
@@ -1263,7 +1263,7 @@
  {
   "family": "device_cap_1000",
   "file": "10-KEYS.md",
-  "line": 817,
+  "line": 826,
   "col": 169,
   "match": "member-device cap",
   "snippet": "**Q-KEYS-15.** How many member devices may one network hold, given the config group's 1,000-leaf cap? **Decided by owner 2026-11-04 (owner decision 144):** (b), with no member-device cap: from the start, member devices past the first 1,000 read the config group by per-generation wraps, as agents do, and stay leaves of their data repos, each still at most",
@@ -1276,7 +1276,7 @@
  {
   "family": "pg_redis_durable",
   "file": "10-KEYS.md",
-  "line": 843,
+  "line": 852,
   "col": 8,
   "match": "gkm/groups/<id>/welcome/<n>, /group-info, /ack (Redis",
   "snippet": "  POST /gkm/groups/<id>/welcome/<n>, /group-info, /ack (Redis)",
@@ -1289,7 +1289,7 @@
  {
   "family": "device_cap_1000",
   "file": "10-KEYS.md",
-  "line": 859,
+  "line": 868,
   "col": 519,
   "match": "1,001st",
   "snippet": "x, a recovery self-join with no leaf online, FS-20 also killing KF1's creator before activation and gkm between an epoch 16 past the pointer and the pointer's rewrite, a 1,001st member device reading the config and the team directory by wrap, the directory group's hint audience and rotation wait (10.9) and FS-87's directory Removes and rotation ",
@@ -2288,17 +2288,56 @@
   "source": "hand-2026-11-06"
  },
  {
-  "family": "decided_q_open",
+  "family": "owner_or_peer_pending",
   "file": "17-BRIDGE.md",
-  "line": 545,
-  "col": 122,
-  "match": "until §22 measures; Q-BRIDGE-2",
-  "snippet": "| Links do not fit the iOS tunnel; a keyless sender's new link waits for its sidecar role | High | Medium | No iOS bridge until §22 measures; Q-BRIDGE-2's own-client links; links fail closed meanwhile |",
-  "reading": "risk row: Q-BRIDGE-2's closed answer, own-client links once measured",
+  "line": 518,
+  "col": 737,
+  "match": "(proposed; Q-",
+  "snippet": "rk's untagged sidecars (17.6's rule 3; owner decision 120), a reach the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "carried"
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "owner_or_peer_pending",
+  "file": "17-BRIDGE.md",
+  "line": 518,
+  "col": 802,
+  "match": "*Decider:* owner",
+  "snippet": "ch the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "decided_q_open",
+  "file": "17-BRIDGE.md",
+  "line": 552,
+  "col": 91,
+  "match": "until §22 measures; Q-BRIDGE-2",
+  "snippet": "| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; Q-SDK-7's budget, a compile past it keeping the last state and alarming; links fail closed meanwhile |",
+  "reading": "Names a settled item by its answer (Q-SDK-2 as owner decisions 87 and 197 amend it, Q-SDK-5 closed by peer review, Q-BRIDGE-2's own-client links), not as pending.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 40,
+  "col": 42,
+  "match": "(proposed; Q-",
+  "snippet": "| iOS | network extension; 18.10's budget (proposed; Q-SDK-7) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
  },
  {
   "family": "mib64_trigger",
@@ -2329,7 +2368,7 @@
  {
   "family": "window_14d_weekly",
   "file": "18-SDK.md",
-  "line": 227,
+  "line": 228,
   "col": 99,
   "match": "7-day window",
   "snippet": "\t// confirmPath: the name the person typed, refused unless it is the previewed path; now skips the 7-day window",
@@ -2342,7 +2381,7 @@
  {
   "family": "window_14d_weekly",
   "file": "18-SDK.md",
-  "line": 752,
+  "line": 785,
   "col": 44,
   "match": "seven days",
   "snippet": "            persistent, and in Safari after seven days of Safari use without user interaction on the site,",
@@ -2353,9 +2392,61 @@
   "source": "hand-2026-11-06"
  },
  {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 888,
+  "col": 60,
+  "match": "(proposed; Q-",
+  "snippet": "            extension's ceiling rises from 50 MiB to 54 MiB (proposed; Q-SDK-7)",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 892,
+  "col": 25,
+  "match": "(proposed; Q-",
+  "snippet": "            bridge_alarm (proposed; Q-SDK-7); measured on surrogates only (owner decision 100)",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 896,
+  "col": 104,
+  "match": "(proposed; Q-",
+  "snippet": "- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (proposed; Q-SDK-7; D-SDK-20); memory is measured on surrogates only (owner decision 100).",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 934,
+  "col": 186,
+  "match": "(proposed; Q-",
+  "snippet": "mal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen (proposed; Q-SDK-7) |",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
   "family": "pools",
   "file": "18-SDK.md",
-  "line": 902,
+  "line": 957,
   "col": 92,
   "match": "pools",
   "snippet": "**D-SDK-5 (proposed).** 18.4's budgets are carved out of each process limit. *Why:* message pools and the soft limit are process-wide (sdk/sdk.go:554-571).",
@@ -2368,7 +2459,7 @@
  {
   "family": "pg_redis_durable",
   "file": "18-SDK.md",
-  "line": 924,
+  "line": 979,
   "col": 831,
   "match": "Postgres commit",
   "snippet": "nsactions, a stale live marker must not drop the only wake, and masters have no replicas and restart from their last RDB dump; a post-commit SET lands in no order that a Postgres commit or row lock sets, so an older POST's SET could replace a newer token or revive a removed one until the next launch (meta review F15).",
@@ -2379,10 +2470,49 @@
   "source": "hand-2026-11-06"
  },
  {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 1027,
+  "col": 1117,
+  "match": "(proposed; Q-",
+  "snippet": "g the owner has raised by review before (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md), while runtime memory stays inside today's targets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "owner_or_peer_pending",
+  "file": "18-SDK.md",
+  "line": 1027,
+  "col": 1247,
+  "match": "*Decider:* owner",
+  "snippet": "rgets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.",
+  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
+  "family": "decided_q_open",
+  "file": "18-SDK.md",
+  "line": 1033,
+  "col": 171,
+  "match": "forwarding (Q-SDK-2",
+  "snippet": " **PLAN.md:28 (\"used directly by the apps\").** Desktop apps use the `ur daemon`; iOS runs the sidecar in the app, not the tunnel, and every app's VPN component runs only forwarding (Q-SDK-2; owner decisions 87, 197).",
+  "reading": "Names a settled item by its answer (Q-SDK-2 as owner decisions 87 and 197 amend it, Q-SDK-5 closed by peer review, Q-BRIDGE-2's own-client links), not as pending.",
+  "live": false,
+  "gap": false,
+  "stated": false,
+  "source": "hand-2026-11-09"
+ },
+ {
   "family": "pg_redis_durable",
   "file": "18-SDK.md",
-  "line": 986,
-  "col": 1197,
+  "line": 1045,
+  "col": 1242,
   "match": "Redis-write assertion admits the `{wakeq_}` entries evs",
   "snippet": "1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read",
   "reading": "`{wakeq_}` wake entries are soft state that §22.7's Redis-write assertion explicitly admits, alongside a rule that evs touches no Postgres (22-TEST.md:276-279; owner decisions 2, 136).",
@@ -3213,7 +3343,7 @@
  {
   "family": "pg_redis_durable",
   "file": "20-QUOTA.md",
-  "line": 372,
+  "line": 373,
   "col": 76,
   "match": "Redis reservations, leases",
   "snippet": "// server/model: the only order of a payer's transfer balances, for escrow, Redis reservations, leases and settlement",
@@ -3226,7 +3356,7 @@
  {
   "family": "pg_redis_durable",
   "file": "20-QUOTA.md",
-  "line": 454,
+  "line": 455,
   "col": 666,
   "match": "Redis loss; stateless evs",
   "snippet": "QUOTA-12), an erasure's CUT (§11.12), and config and mailcfg pushes within §7.9's limits; rates use one atomic Lua script per network (20.7). *Why:* exact counts survive Redis loss; stateless evs has no counter to lock (owner decision 2); maintenance and erasure must work in a full network, no eraser can spend another's allowance or turns, and paced closures stay",
@@ -3239,7 +3369,7 @@
  {
   "family": "device_cap_1000",
   "file": "20-QUOTA.md",
-  "line": 525,
+  "line": 526,
   "col": 208,
   "match": "member-device cap",
   "snippet": "* §14 and §15 bill by lease. §7.5's Team routes check `NetworkTierOf`; §7 carries the declaration in the client JWT and bounds admissions by `config_admissions`, with no member-device cap (§7.9; owner decision 144). §11.13 derives pack and parcel ids from their bytes, and its nightly pass lists each repo's prefixes for 20.7's count and deletes a pack or p",
@@ -3252,7 +3382,7 @@
  {
   "family": "pg_redis_durable",
   "file": "20-QUOTA.md",
-  "line": 532,
+  "line": 533,
   "col": 2,
   "match": "Redis loss over-admits leases",
   "snippet": "| Redis loss over-admits leases, relayed reservations and rates, or reservations confuse the contract reconciler | Medium | Medium | lease size; grants that shrink near zero; own namespace; nightly rec",
@@ -3265,7 +3395,7 @@
  {
   "family": "mib64_trigger",
   "file": "20-QUOTA.md",
-  "line": 534,
+  "line": 535,
   "col": 371,
   "match": "64 MiB",
   "snippet": "ne bound), and CLOSURE pushes' inline records and staged index files ride their NVMe batch until evacuation moves or drops them; unpaced, an eraser could spend its day's 64 MiB in a minute, 5,000 uploads a second for a Team's 5,000 erasers, 12-20× the HDD sets' ~8,000-12,800 drive operations a second (§19.6), though that day's ~312.5 GiB averag",
@@ -3278,7 +3408,7 @@
  {
   "family": "device_cap_1000",
   "file": "20-QUOTA.md",
-  "line": 543,
+  "line": 544,
   "col": 392,
   "match": "member-device cap",
   "snippet": "rk and FS-46 on built code; then the `team` tier and its prices, seats, checkout, meters, credit line, downgrade jobs and share escrow; 5,000 `config_admissions` with no member-device cap (owner decision 144); the team directory's request limits and accounting at M6 (D-QUOTA-11), its card cap with cards at M10 (D-PHASE-11); at M10 (owner decision 169), wi",
@@ -3356,7 +3486,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 276,
+  "line": 286,
   "col": 7,
   "match": "evs and gkm touch no Postgres and write Redis",
   "snippet": "       evs and gkm touch no Postgres and write Redis only in {scp_} hints, {wakeq_} wake",
@@ -3369,7 +3499,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 385,
+  "line": 395,
   "col": 38,
   "match": "1,001st",
   "snippet": "seats (owner decisions 144, 182): the 1,001st live member device reads the config, and from",
@@ -3382,7 +3512,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 391,
+  "line": 401,
   "col": 2,
   "match": "1,001st",
   "snippet": "  1,001st reading member device waits keyless, named in the writer's preview; 5,000",
@@ -3395,7 +3525,7 @@
  {
   "family": "device_cap_1000",
   "file": "22-TEST.md",
-  "line": 392,
+  "line": 402,
   "col": 21,
   "match": "member-device cap",
   "snippet": "  admissions meet no member-device cap; in a team's directory group, gkm hints pending",
@@ -3408,7 +3538,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 630,
+  "line": 640,
   "col": 75,
   "match": "a week",
   "snippet": "         group on an ios32 cell within §18.4's iOS budget (22.9); a device a week behind a full group resyncs from",
@@ -3421,7 +3551,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 733,
+  "line": 743,
   "col": 54,
   "match": "redis\", \"pg-commit",
   "snippet": "\tOp        string // \"put\", \"get\", \"list\", \"delete\", \"redis\", \"pg-commit\", \"http\"",
@@ -3434,7 +3564,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1235,
+  "line": 1245,
   "col": 39,
   "match": "Redis loss too, and a rotation without a commit",
   "snippet": "              unchanged epoch, after a Redis loss too, and a rotation without a commit raises",
@@ -3447,7 +3577,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1397,
+  "line": 1407,
   "col": 37,
   "match": "Redis loss over-admits at most as for leases",
   "snippet": "              debit per contract_id; Redis loss over-admits at most as for leases",
@@ -3460,7 +3590,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 1448,
+  "line": 1458,
   "col": 34,
   "match": "14 days",
   "snippet": "FS-51  §20    a Team lapse: after 14 days web hosts and From are withheld, MX and TLSA kept,   D-QUOTA-6   T2     M6-out",
@@ -3473,7 +3603,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1555,
+  "line": 1565,
   "col": 28,
   "match": "pools",
   "snippet": "FS-63  §11,19 placement and pools (owner decision 145): two creators race at place/<repo_id>'s FI-1,2,4    T2+T3  M2-out;",
@@ -3486,7 +3616,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1562,
+  "line": 1572,
   "col": 49,
   "match": "pool",
   "snippet": "              segment cluster with more than one pool fails the suite before any write, read",
@@ -3499,7 +3629,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1564,
+  "line": 1574,
   "col": 26,
   "match": "Pools",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3512,7 +3642,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1564,
+  "line": 1574,
   "col": 46,
   "match": "pool",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3525,7 +3655,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1566,
+  "line": 1576,
   "col": 38,
   "match": "R2",
   "snippet": "              streams k by ranges and R2 holds k's locators from a head read, paused; a push",
@@ -3538,7 +3668,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1569,
+  "line": 1579,
   "col": 54,
   "match": "R2",
   "snippet": "              succeed; after it evs1 deletes the two; R2 resumes, gets collected, rereads the",
@@ -3551,7 +3681,7 @@
  {
   "family": "mib64_trigger",
   "file": "22-TEST.md",
-  "line": 1616,
+  "line": 1626,
   "col": 76,
   "match": "64 MiB",
   "snippet": "              no VersioningRules takes the platform rule, versionless above 64 MiB: an honest",
@@ -3564,7 +3694,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2005,
+  "line": 2015,
   "col": 49,
   "match": "R2",
   "snippet": "FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out",
@@ -3577,7 +3707,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2023,
+  "line": 2033,
   "col": 70,
   "match": "R2",
   "snippet": "              Z's chain), Y to X, X edited, a copy of an old X on ref R2: dropping X keeps",
@@ -3590,7 +3720,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2024,
+  "line": 2034,
   "col": 32,
   "match": "R2",
   "snippet": "              what Z's, Y's and R2's versions name; --follow drops X, Y and Z in one push and",
@@ -3603,7 +3733,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2025,
+  "line": 2035,
   "col": 52,
   "match": "R2",
   "snippet": "              one job, freeing what only they name, R2's copy keeping its segments; X live",
@@ -3616,7 +3746,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2063,
+  "line": 2073,
   "col": 26,
   "match": "weekly",
   "snippet": "              re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at",
@@ -3629,7 +3759,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2214,
+  "line": 2224,
   "col": 14,
   "match": "before the claim",
   "snippet": "              before the claim, and a STAGED one after it; again for a same-generation",
@@ -3642,7 +3772,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 2598,
+  "line": 2608,
   "col": 1077,
   "match": "pool",
   "snippet": "rects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write and LIST consistency; checksums; ranged GET; Delete; lifecycle; one pool per cluster (FS-63).",
@@ -3655,7 +3785,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2718,
+  "line": 2728,
   "col": 157,
   "match": "audited",
   "snippet": "**D-TEST-9 (proposed).** Freezes pass 22.10's gates in D-PHASE-7's two steps. *Why:* one conditional write orders storage (owner decision 2), and nothing is audited (owner decision 99).",
@@ -3668,7 +3798,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2720,
+  "line": 2730,
   "col": 787,
   "match": "audited",
   "snippet": "shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).",
@@ -3681,7 +3811,7 @@
  {
   "family": "kib_10_15",
   "file": "22-TEST.md",
-  "line": 2722,
+  "line": 2732,
   "col": 1260,
   "match": "10-15 KiB",
   "snippet": "oduction's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB)",
@@ -3694,7 +3824,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2724,
+  "line": 2734,
   "col": 316,
   "match": "14 days",
   "snippet": "askworker checks that no retained version names one; deletes turn on once FS-64 to FS-71 pass on their rows' tiers and a production soak after the final freeze (at least 14 days and 10,000 candidates) finds none that a retained version names, and until then the gate admits only internal networks and design partners (D-PHASE-10), so later network",
@@ -3707,7 +3837,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2770,
+  "line": 2780,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited novel crypto passes every test, 0x0010 having no vectors (owner decision 99) | Medium | Critical | 22.10's interop artifact; §10.4's mapping and KATs; its disclosure (ow",
@@ -3731,22 +3861,9 @@
   "source": "hand-2026-11-06"
  },
  {
-  "family": "none_open",
-  "file": "23-PHASE.md",
-  "line": 61,
-  "col": 819,
-  "match": "no owner question is open",
-  "snippet": "Q-PROTO-4's answer, which owner decisions 188 and 191 amend, and the presence countersignature's reach), and owner decisions 192-196 those of the implementation handoff: no owner question is open. The map puts each item at the review that needs it: a Gn-in needs its design closure, a Gn-out its schedules passing on their rows' tiers, each step at the Gn-out of th",
-  "reading": "The statement holds. Applying the grep script's own status rules to every section, each Q- item is decided (173), closed by peer review (11), closed (12) or withdrawn (4), with none open, and no \"(proposed; Q-\" marker remains in section text. The attributions also match DECISIONS.md: 141-145 decide Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15 and Q-OPS-10; 140's correction closes Q-EVS-9; 186 decides Q-EVS-24 and 190 refines it; 188 and 191 amend Q-PROTO-4's answer; 187, 189 and 192 set the countersignature's reach; 192-196 settle HANDOFF.md's owner items and name no Q- item. The owner's retained launch call on M7's census is stated as a future call, not an open question.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-06"
- },
- {
   "family": "audit_gate",
   "file": "23-PHASE.md",
-  "line": 200,
+  "line": 203,
   "col": 193,
   "match": "audited",
   "snippet": "-3 holds; RS1's copy discloses I-10's no-policy allow-all (owner decision 120); \"end-to-end encrypted\" waits only for D-TRUST-4's document, §21.11's canary and §2.18's unaudited-cryptography disclosure (sidecar/design/pitch5.html:932-934; owner decisions 77, 119); BS1 waits for 23.6's census call and M8's mail-indexer readiness, never for a user",
@@ -3759,7 +3876,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "23-PHASE.md",
-  "line": 224,
+  "line": 227,
   "col": 246,
   "match": "until the owner decides",
   "snippet": "ed on 2026-11-06, its re-checks, density review and RECORD.md draft running beside M0's bootstrap (owner decision 193; 23.8); an unsettled blocker defers what it blocks; until the owner decides an open question, text written at its recommendation is marked \"(proposed; Q-...)\" (D-ARCH-4); and an implementation finding that changes a D- item returns to review as ",
@@ -3772,7 +3889,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "23-PHASE.md",
-  "line": 224,
+  "line": 227,
   "col": 334,
   "match": "(proposed; Q-",
   "snippet": "bootstrap (owner decision 193; 23.8); an unsettled blocker defers what it blocks; until the owner decides an open question, text written at its recommendation is marked \"(proposed; Q-...)\" (D-ARCH-4); and an implementation finding that changes a D- item returns to review as a Q- item, as do those re-checks' and that review's findings. *Why:* R-PHASE-1",
@@ -3785,7 +3902,7 @@
  {
   "family": "audit_gate",
   "file": "23-PHASE.md",
-  "line": 283,
+  "line": 286,
   "col": 120,
   "match": "audited",
   "snippet": "| §10.4's subset or its 0x0010 interop slips M2, as a required step tmc/mls lacks would, or the in-house MLS ships an unaudited flaw (owner decisions 43, 99) | Medium | Critical | started in M0 (D-PHASE-4); D-KEYS-10's interop artifact gates M2's exit (D-PHASE-7), OpenMLS's 0x004D as the second p",

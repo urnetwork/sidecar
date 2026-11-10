@@ -2,7 +2,7 @@
 
 ### 18.1 Purpose and scope
 
-This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, search on devices (policy, conditions, background windows and `SidecarSearch`), remote search's requester side on app hosts (its modes, notice and states, and how apps see failover and merge), the team directory's app surface (`SidecarDirectory`, access-request approvals), the drop-history calls, the device seam `deviceBridge` and the device role's posture, per-platform placement (with §5, X10), the browser sidecar and its key origin (X14), cloud hosts and their allow-list, and size budgets. §17 owns the bridge engine, §7.9 and §8 admissions and the projection, §5 the gate, pairing and alarms, §11.14 the search index, its read path and remote search's wire, eligibility, failover and merge, §16.11 the directory, §11.7 and §11.13 the drop, §16 approvals, §19 the push sender; app UI is out of scope (owner rule 6).
+This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, search on devices (policy, conditions, background windows and `SidecarSearch`), remote search's requester side on app hosts (its modes, notice and states, and how apps see failover and merge), the team directory's app surface (`SidecarDirectory`, access-request approvals), the drop-history calls, the forwarding role that every app's VPN component runs (owner decision 197) with its setup, keys and seam `deviceBridge` and its posture, per-platform placement (with §5, X10), the browser sidecar and its key origin (X14), cloud hosts and their allow-list, and size budgets. §17 owns the bridge engine, §7.9 and §8 admissions and the projection, §5 the gate, pairing and alarms, §11.14 the search index, its read path and remote search's wire, eligibility, failover and merge, §16.11 the directory, §11.7 and §11.13 the drop, §16 approvals, §19 the push sender; app UI is out of scope (owner rule 6).
 
 ### 18.2 Requirements
 
@@ -13,7 +13,7 @@ This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, 
 | R-SDK-3 | Device integration (ip addr, port forward) via abstractions the Sidecar implements | PLAN.md:31 |
 | R-SDK-4 | Bindings link only the sidecar core, never `mcp/` or `cli/` | PLAN.md:7 |
 | R-SDK-5 | gobind types only; exports pass mobileexports, the C ABI and js | x/mobile bind/gen.go:480-512 |
-| R-SDK-6 | iOS extension within 52,428,800 B and a 32 MiB Go soft limit | sdk/build/check_apple_size.sh:9; apple/app/extension/TunnelMemoryBounds.swift:139,143 |
+| R-SDK-6 | iOS extension within its executable ceiling, 52,428,800 B today and raised only by a reviewed budget (Q-SDK-7), and a 32 MiB Go soft limit | sdk/build/check_apple_size.sh:9; apple/app/extension/TunnelMemoryBounds.swift:139,143 |
 | R-SDK-7 | No server holds keys or plaintext | CONVENTIONS §0 |
 | R-SDK-8 | Quick burner: "Must log in, runs a new DeviceRemote in browser" | cli/UI.md:160-164 |
 | R-SDK-9 | With no connected remote, "start a local device that listens" | cli/UI.md:67 |
@@ -33,29 +33,29 @@ This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, 
 
 ### 18.4 Roles, placement, identity
 
-The device role is the leaf package `sidecar/device` (D-SDK-20) in `DeviceLocal`'s process: §17's bridge hooks, keyless and without sidecar-subprotocol peers, enforcing what its sidecar role sends (18.6). The sidecar role is the full `sidecar.Sidecar` (§5) on its own Required client: a child in the device client's network (server/model/network_client_model.go:374-394), top-level in any other (owner decision 23).
+Two roles (owner decisions 87, 197). The forwarding role is all of sidecar that runs in an app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services): the device's IP and port forwarding, that is §17's overlay address, port forwards into the device, routes to other devices' subnets and its own advertised subnet, with no sidecar-subprotocol peer. It is `sidecar/device` with the root's forwarding files (D-SDK-20, 18.10), and it is self-contained (18.6): its own forwarding keys, its sidecar's forwarding Delegation in the authorization log (§7.9), forwarding clients it refreshes itself, and its own reading of the config repo, from which it compiles its rules, so it never waits on the app. It runs whenever the VPN component runs, and no setting turns it off. The sidecar role is the full `sidecar.Sidecar` (§5) on its own Required client: a child in the device client's network (server/model/network_client_model.go:374-394), top-level in any other (owner decision 23); on app hosts it runs only while the app is open, as iOS suspends it, OS-granted windows and wakes aside (18.7), on Android too (owner decision 197). A CLI host has no forwarding role: its daemon runs §17's bridge in process under its own identity key (§17.10).
 
-| Host | Device role | Sidecar role | Client (X10) | Secrets | Budget |
+| Host | Forwarding role | Sidecar role | Client (X10) | Secrets | Budget |
 |---|---|---|---|---|---|
-| iOS | tunnel, ≤1 MiB growth | app | child | keychain group `network.ur.sidecar` | 32 MiB |
-| Android | app process | same | child | AndroidKeyStore; `noBackupFilesDir` | 16 MiB, added |
-| Desktop apps | tunnel, `urnetworkd`, service | `ur daemon`; app in remote mode | child after §5.8's pairing | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
+| iOS | network extension; 18.10's budget (proposed; Q-SDK-7) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |
+| Android | VPN service | app, while open (owner decision 197) | child | AndroidKeyStore; `noBackupFilesDir`; forwarding's under its own alias and files (§5.9) | 16 MiB, added |
+| Desktop apps | network extension (macOS), `urnetworkd` (Linux), app service (Windows) | `ur daemon`; app in remote mode | child after §5.8's pairing | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
 | CLI, cloud VM | none | `ur daemon` | top-level, §20.8 (cloud: tagged, ephemeral, by ReaderWraps) | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
 | Extension, ur.io pages | none | Worker (18.8) | top-level, declared no-egress (§20.8) | non-extractable WebCrypto key and IndexedDB, in 18.8's key origin (quick burner: memory) | 64 MiB heap above wasm data |
 
-Phones mirror `mailcfg`, `vault/` and `i/` in full and head-read `m/` (§11.13), and keep MLS trees on disk, one loaded at a time (≤2.83 MB at 1,000 leaves; D-KEYS-14). Of §7.9's authorization log, every sidecar, phones, page Workers and agents included, keeps the digests A_k, its newest entries' bytes up to a `HeadCheckProof`'s 64 KiB (bases as headers) and, while it sends `proven`, the proof it verified, so any witness answers §6.4's `HeadCheckProofRequest`; member devices running `ur daemon` (desktop and CLI hosts) also keep every entry from api's retention point, which a site loss resumes from (§19.10). A config writer folds once the unfolded tail spans 1,024 entries or 24 h, at its next start if it was offline (§7.9's fold), so while one runs, kept tails stay within about 2,048 entries and a new device, a page Worker included, re-applies at most about 1,024. Marks: fg, foreground; VPN, Android VPN on; awake, Firefox event page alive; outbox, D-SMTP-18; C4, §4's browser carrier.
+Phones mirror `mailcfg`, `vault/` and `i/` in full and head-read `m/` (§11.13), and keep MLS trees on disk, one loaded at a time (≤2.83 MB at 1,000 leaves; D-KEYS-14). Of §7.9's authorization log, every sidecar, phones, page Workers and agents included, keeps the digests A_k, its newest entries' bytes up to a `HeadCheckProof`'s 64 KiB (bases as headers) and, while it sends `proven`, the proof it verified, so any witness answers §6.4's `HeadCheckProofRequest`; member devices running `ur daemon` (desktop and CLI hosts) also keep every entry from api's retention point, which a site loss resumes from (§19.10). A config writer folds once the unfolded tail spans 1,024 entries or 24 h, at its next start if it was offline (§7.9's fold), so while one runs, kept tails stay within about 2,048 entries and a new device, a page Worker included, re-applies at most about 1,024. Marks: fg, foreground; VPN, whenever the app's VPN component runs (owner decision 197); awake, Firefox event page alive; outbox, D-SMTP-18; C4, §4's browser carrier.
 
 | Feature | iOS app | Android | Desktop daemon | Extension: Chrome / Firefox |
 |---|---|---|---|---|
-| evs, mail read, burner logins | fg | fg, VPN | yes | yes / awake |
-| Search: buckets; all | fg; Wi-Fi while charging; "search more" asks a designated indexer (fg), else downloads | fg, VPN; the same | yes; background | yes / awake; "search more" |
-| Mail send | fg, outbox | fg, VPN, outbox | yes (§14) | outbox |
-| Socket dial | fg | fg, VPN | yes | C4 |
-| Listen: mail, sockets, TLS | fg | fg, VPN | yes | no |
+| evs, mail read, burner logins | fg | fg | yes | yes / awake |
+| Search: buckets; all | fg; Wi-Fi while charging; "search more" asks a designated indexer (fg), else downloads | fg; the same | yes; background | yes / awake; "search more" |
+| Mail send | fg, outbox | fg, outbox | yes (§14) | outbox |
+| Socket dial | fg | fg | yes | C4 |
+| Listen: mail, sockets, TLS | fg | fg | yes | no |
 | Approvals, admissions, alarms (18.5) | fg | fg | app or `ur approve` (for other sidecars); presence key | alarms only |
-| Bridge routes / hosting (§17) | after §22.9 / after C16 | VPN / after C16 | `ur tun` / `ur bridge` | no |
+| Forwarding (§17): routes and forwards out / hosting | VPN, links after §22.9 / VPN, after C16 | VPN / VPN, after C16 | the app's VPN component, else `ur tun` / likewise, after C16 on an app's; `ur bridge` | no |
 
-iOS suspends backgrounded apps (https://developer.apple.com/documentation/backgroundtasks); without the VPN, Android 15 caps `dataSync` at 6 h a day [R:sdk-clients].
+iOS suspends backgrounded apps (https://developer.apple.com/documentation/backgroundtasks), and Android's sidecar role now runs only while the app is open, whether or not the VPN runs, OS-granted windows and wakes aside, as on iOS (owner decision 197), so Android 15's 6 h daily cap on `dataSync` without a VPN [R:sdk-clients] no longer bears on it; forwarding alone runs in the background, in the VPN component.
 
 **Search (R-SDK-13, R-SDK-14; D-SDK-21, D-SDK-25 to D-SDK-28).** §11.14's read path, and on app hosts its remote search, run on each host by this policy:
 
@@ -172,14 +172,15 @@ type SidecarPresenceSigner interface { // app-implemented: a Secure Enclave or p
 }
 type SidecarSettings struct { // json in the C ABI and js
 	Instance, StateDir    string      // StateDir "" on js: IndexedDB
-	Components            *StringList // "evs", "mail", "sockets", "bridge", "tls" (§5.4)
+	Components            *StringList // "evs", "mail", "sockets", "bridge", "tls" (§5.4); an app lists no "bridge",
+	                                  // since forwarding is its VPN component's, always on (18.4)
 	MemoryBudgetByteCount int64
 }
 type Sidecar struct{ /* stateLock; local *sidecar.Sidecar or remote §5.8 client; the extension's Worker and native host serve it too */ }
 func NewSidecarLocal(networkSpace *NetworkSpace, keyStore SidecarKeyStore, presenceSigner SidecarPresenceSigner, settings *SidecarSettings) (*Sidecar, error)
 func NewSidecarRemote(presenceSigner SidecarPresenceSigner, settings *SidecarSettings) (*Sidecar, error) // `ur daemon` control mode (§5.8)
 func (self *Sidecar) EnrollWithDevice(device Device, callback SidecarResultCallback) // child, admin_refused and strict_exp (§7.4);
-                                                                                  // remote: §5.8's pairing; then sends its device role Pending and states (18.6)
+                                                                                  // remote: §5.8's pairing; then runs forwarding's setup for its VPN component (18.6)
 func (self *Sidecar) Unlock(passphrase string, callback SidecarResultCallback)       // local only; "": key-store wrap, called once the store unlocks;
                                                                                   // remote: refused, the daemon unlocks (§5.9)
 func (self *Sidecar) GetState() string       // locked|unenrolled|offline|online|revoked (State, below)
@@ -243,8 +244,9 @@ func (self *SidecarMail) CheckSend(draft *SidecarDraft, callback SidecarSendChec
 	// domain: mode (bdat|data|unknown), encoded bytes, the DATA cap, expected delay and ok|too_large|unknown (§14.5)
 func (self *SidecarMail) GetSendResult(sendId *Id, callback SidecarSendResultCallback) // per recipient domain:
 	// sent|queued|deferred|too_large|refused|tls_refused|failed, with bytes and cap, retry_after_ms or the MX's code
-func (self *SidecarMail) SetReceiverEnabled(enabled bool, callback SidecarResultCallback) // Android VPN service; in a personal
-	// network or a member scope, enabling files this device's IndexerSet for mail and disabling retires it (§15.6, §7.9)
+func (self *SidecarMail) SetReceiverEnabled(enabled bool, callback SidecarResultCallback) // remote mode: its daemon, an
+	// always-on receiver; in a personal network or a member scope, enabling files that device's IndexerSet for mail and
+	// disabling retires it (§15.6, §7.9); local mode answers refused, as app hosts receive only while open (owner decision 197)
 func (self *SidecarMail) GetReceiverCoverage() string // indexer|foreground-only|none, with Coverage's copy (below; §15.9)
 func (self *SidecarSockets) Dial(address string, timeoutMillis int64) (*Socket, error) // §9
 func (self *SidecarSockets) Listen(address string, weight int32) (*SidecarSocketListener, error)
@@ -466,9 +468,9 @@ refusals    REVOKE_PARKS_SELF: "<name> added or confirmed this device after <tim
 
 ```text
 indexer          an IndexerSet designates a mail indexer for this user's mail (§7.9, §15.6)
-foreground-only  receivers, but no mail indexer: "iOS alone cannot reliably receive mail: an indexer, an
-                 always-on device (a desktop ur daemon, a NAS or VPS, or Android with the VPN on), is
-                 needed; time-sensitive codes may not arrive"
+foreground-only  receivers, but no mail indexer: "A phone alone cannot reliably receive mail: an indexer, an
+                 always-on device (a desktop ur daemon, a NAS or VPS), is needed; time-sensitive codes may
+                 not arrive" (owner decisions 12, 197)
 none             no receiver; CreateBurner shows foreground-only's copy (§15.9)
 every value      says nothing of sending: outbound size limits are CheckSend's and GetSendResult's
 ```
@@ -522,17 +524,17 @@ type deviceBridge interface {
 	                                           // needs (interfaces, gateways, resolvers), never the whole block; with
 	                                           // those unknown, per-peer /32s instead of the block (§17.4, D-BRIDGE-12)
 	LocalZone() connect.LocalZone              // §12.9's private names from the state's Names and NameZones; nil before a state
-	SetPending(pending *bridge.Pending) error  // legacy -> pending, once the sidecar role has a sidecar_id (posture below)
-	SetState(state *bridge.BridgeState) error  // §17.8, from this device's sidecar role; versions only rise
+	SetPending(pending *bridge.Pending) error  // legacy -> pending, at forwarding's setup (Setup, below)
+	SetState(state *bridge.BridgeState) error  // §17.8, from the forwarding role's own compile (Following); versions only rise
 	ApplyDeltas(objects [][]byte) error        // projection deltas, verified offline against the state's anchor (§8.9)
 	Status() device.BridgeStatus
 	AddChangeCallback(callback func()) func()
 }
 // bridge is sidecar/protocol/bridge (D-SDK-20). BridgeState (§17.8) carries compiled rules, names, identities and
-// share keys (§17.9), its AuthPin and the anchor; Pending and states travel in process or as
-// DeviceLocalRpc.SetBridgeState. DeviceLocal also implements §17.10's BridgeHost (NewBridgeLink), in
-// sidecar/device, with its client generator, and gives device.Bridge the signer each link's sign calls
-// (Delegations, below).
+// share keys (§17.9), its AuthPin and the anchor; in an app the forwarding role produces Pending and states in the
+// VPN component's own process (Following, below), and none crosses the device RPC. DeviceLocal also implements
+// §17.10's BridgeHost (NewBridgeLink), in sidecar/device, minting each link's window clients under its forwarding
+// client and signing their delegations with its forwarding key (Signing, below).
 func (self *DeviceLocal) GetBridgeRoutes() *BridgeRouteList // bound, for the tun owner in its process (18.15), with its listener
 func (self *DeviceLocal) SetBridgeLocalAddresses(addresses *StringList) // bound: the tun owner's interface, gateway and
 	// resolver addresses from the platform's routes and DNS settings, on each path change, since
@@ -542,23 +544,61 @@ func (self *DeviceLocal) SetBridgeLocalAddresses(addresses *StringList) // bound
 ```
 
 - **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5696, :5789, :6340-6345). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5315; owner decision 85).
-- **Channel.** The sidecar role sends `Pending`, then §17.8's versioned `BridgeState`, in process on Android, else over the device RPC to the iOS tunnel or, via the desktop app paired per §5.8, the network process, queued while disconnected like `SetRouteLocal` (sdk/device_rpc.go:2292-2323). Between states `DeviceLocal` follows `team` hints (21842 registered for pushes only, D-PROTO-8) and applies revocations from projection deltas (`GET /network/config/projection?after=`) verified against the anchor (§8.9). Its posture is one state machine with §17.8's engine (D-SDK-13, D-BRIDGE-18):
+- **Setup (D-SDK-32; owner decision 197).** The sidecar role's one act for its VPN component, in each network it has joined: in process on Android, over the device RPC to the iOS extension, and from `ur daemon` through the desktop app paired per §5.8 to the macOS extension or the Windows or Linux app service; never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
 
 ```text
-posture      per network, persisted in the network process's own store (iOS: the app-group container;
-             Android: app storage; desktop: urnetworkd's state dir)
-legacy       no sidecar role has enrolled here: nil deviceBridge, today's behavior
-pending      the sidecar role sent Pending{network_id, anchor} once it had a sidecar_id: every Network
-             source is denied loopback, LAN, link-local, overlay and served-prefix destinations and every
-             exit; the block deny stands; maps and hosted addresses refuse
-enforcing    a verified BridgeState and the anchored deltas after it, re-verified offline against the anchor
-             and restored before the first packet on every start; {doc}: §17.6's rules; {nodoc}: owner
+when        each new client generation of the sidecar S (enrollment, re-enrollment, pairing; 18.5's State), and
+            any run of the app 90 days or more after the last setup; after a DelegationRevoke of S's forwarding
+            Delegation by any signer but S (§7.9), only when S's person confirms in the app's UI
+keys        the VPN component generates, and never exports, a forwarding key (Ed25519), a forwarding reader key
+            (X-Wing) and its forwarding client's ClientKey; only their public halves cross
+delegate    S signs its forwarding Delegation {pubkey, reader_xwing_public_key, forward: S, and in its device
+            client D's network D as host_client_id and host_client_public_key} (§7.9's forwarding row), which
+            supersedes S's earlier one, and writes its first DelegationWrap of the config's current generation
+            (§10.5's dwraps)
+mint        S mints its forwarding client F: POST /network/auth-client {source_client_id: S's client,
+            admin_refused, strict_exp, forward_only, the VPN component's client public key} with S's DPoP proof;
+            F and its window clients act as S (D-ACL-3), and forward_only confines their tokens (§7.4, §7.8)
+hand off    F's token, the Delegation's id and Pending {network_id, genesis_sha256, sidecar_id, identity public
+            key} reach the VPN component; no key of S does
+after       the VPN component refreshes F by its own DPoP proofs (§7.4), follows and compiles (Following) and
+            signs (Signing); a forwarding client left unrefreshed 7 days, its VPN component off that long, lapses
+            with no grace (D-TEAM-14), and forwarding stays pending until the app's next run mints another
+```
+
+- **Following (owner decision 197).** The forwarding role takes rule changes directly, with one compiler and follower shared with the daemon (18.10):
+
+```text
+pushes      team hints reach the VPN component on its device client D in D's network (21842 registered for
+            pushes only, D-PROTO-8; D minted acl_enforcing, Rules below), and in any other network by §6.8's
+            long-poll on F
+follow      it fetches the authorization log (GET /network/config/projection?after=) and config heads with F's
+            config-read token (§7.8), opens each config generation by its DelegationWrap (§10.5), and runs the
+            forwarding leg's follower, AclEngine and §17.8's compiler for S off the packet path, within §8.9's
+            targets, so a new rule, grant, block or revocation applies while the app sleeps
+witness     while the sidecar role runs, it sends its witnessed AuthPin (§6.4) as a hint: the forwarding role
+            fetches and verifies up to it, and a pin off its chain raises head_alarm through the status mirror;
+            between the app's runs its view is unwitnessed (§17.17)
+```
+
+Its posture is one state machine with §17.8's engine (D-SDK-13, D-BRIDGE-18):
+
+```text
+posture      per network, persisted in the VPN component's own store, sealed under forwarding's local key (§5.9):
+             iOS and macOS, the extension's container, never the app group; Android, the VPN service's files;
+             Windows and Linux, the app service's state directory
+legacy       no sidecar has set up forwarding here: nil deviceBridge, today's behavior
+pending      setup handed it Pending{network_id, anchor, sidecar_id, identity key}: every Network source is denied
+             loopback, LAN, link-local, overlay and served-prefix destinations and every exit; the block deny
+             stands; maps and hosted addresses refuse
+enforcing    a state its own compile verified, and the anchored deltas after it, re-verified offline against the
+             anchor and restored before the first packet on every start; {doc}: §17.6's rules; {nodoc}: owner
              decisions 50, 105 and 120's allow-all, entered only on a verified base above the persisted
              document_seen_at latch (the newest pin at which has_document was true)
 stored       the anchor, the newest verified AuthPin, the signed base header and rows, the statements since,
-             document_seen_at
+             document_seen_at, and the config generations and compiled state its last compile used
 transitions  legacy -> pending -> enforcing{doc|nodoc}; back to legacy only on this sidecar's own sign-out
-             (its SidecarRevoke), which wipes the stored state
+             (its SidecarRevoke), which wipes the stored state and forwarding's keys
 never        an unverified projection, one that does not chain, a lower version or an unsigned has_document
              changes the posture; one that fails to verify leaves it unchanged and alarms
 DP1          after a device's first verified state, no restart, delay or unsigned response lowers enforcement
@@ -566,30 +606,23 @@ so           an unverified projection is never read; a verified no-document stat
              105 and 120's allow-all
 ```
 
-- **Delegations (D-SDK-13).** A keyless device role's links get §17.9's `WindowDelegation`s from its sidecar role over the same paths, reversed:
+- **Signing (D-SDK-13, D-SDK-32).** The forwarding role signs its own links' delegations, so no link waits on the app:
 
 ```text
-request  per window client a link builds (§17.9's sign): {request_id, window_client_id,
-         window_client_public_key, not_after (its strict_exp), target_sidecar_id, share_id or none}; in
-         process on Android, else DeviceRemoteRpc.SignWindowDelegation to the app, whose Sidecar signs (iOS)
-         or relays to ur daemon over §5.8's channel (desktop), by a direct reverseCall as HttpResponse is,
-         never the coalescing reverseNotify (sdk/device_rpc.go:10094, :10143, :13900-13905)
-reply    DeviceLocalRpc.SetWindowDelegation{request_id, signed | error}: HttpPostRaw's RequestId pairing
-         reversed (:9342-9355, :13862, :14396)
-signer   the sidecar role signs only as its own sidecar_id, for a target or share its newest BridgeState
-         names, with not_after_ms at most not_after: by its identity key or, on a share link, the share's
-         current BridgeShareSigner while its ShareCert is unexpired (§17.9); targets still check every flow
-         against their own state (§17.9's use), so a network process gains no reach by requesting delegations
-fail     at once while the reverse service is down, else after RpcCallTimeout (60 s; :207): the window
-         client opens no contract, and the link fails closed until its sidecar role answers (§17.17's risks)
-re-sign  when any share's BridgeShareSigner changes (§17.9's share signers), the sidecar role calls
-         ResignShares, in process or as DeviceLocalRpc.ResignShares, queued while disconnected as states
-         are; DeviceLocal's BridgeHost then runs each share link's sign again for its live window clients,
-         whose later contracts carry the new delegation (§17.10)
+sign     per window client a link builds (§17.9's sign), the VPN component signs its WindowDelegation with the
+         forwarding key: subject S, signer_id the forwarding Delegation's delegation_id (§6.9), not_after_ms at
+         most the window client's strict_exp, which F's children inherit; on a share link, with the share's
+         current BridgeShareSigner, read from the config, while its ShareCert is unexpired (§17.9); the window
+         clients are F's children, so C13 seals S's client as their subject
+only     the forwarding key signs nothing but S's WindowDelegations (§7.9's forwarding row); targets check
+         every flow against their own state (§17.9's use), so it gains no reach S lacks
+host     in D's network, the device's hosted address, maps and served prefixes run on D's sdk provider once
+         C16 lands (D-SDK-3), which S's forwarding Delegation names, so senders link to D and check its key
+         (§17.9's target); in any other network an app device hosts nothing
 ```
 
-- **Rules.** An sdk mints its device client `acl_enforcing` (§7.7) only after its device role leaves legacy, so its resident publishes `team` hints to it (§6.8); earlier or older-sdk clients stay legacy until the app re-mints them (owner decision 106), its sidecar re-enrolling (18.5's State). `checkDeviceSubprotocolId` (sdk/device_local_subprotocol.go:85-93) also refuses 21842-21851 to apps.
-- **Mirror.** Bridge status, the state call and the delegation calls are additive, like network peers (sdk/device_rpc.go:6202-6232, :12100-12135, :14388), each listed in its method table (sdk/device_rpc_methods.go:18, :234): an older peer answers unlisted methods as unknown (:9-18), so `DeviceRpcVersion` stays 3 (:7677). No other sidecar-role API crosses the device RPC.
+- **Rules.** An sdk mints its device client `acl_enforcing` (§7.7) only after its forwarding role leaves legacy, so its resident publishes `team` hints to it (§6.8); earlier or older-sdk clients stay legacy until the app re-mints them (owner decision 106), its sidecar re-enrolling (18.5's State). `checkDeviceSubprotocolId` (sdk/device_local_subprotocol.go:85-93) also refuses 21842-21851 to apps.
+- **Mirror.** Bridge status and forwarding's setup calls (the keys' public halves out, the hand-off in, the witness hint) are additive, like network peers (sdk/device_rpc.go:6202-6232, :12100-12135, :14388), each listed in its method table (sdk/device_rpc_methods.go:18, :234): an older peer answers unlisted methods as unknown (:9-18), so `DeviceRpcVersion` stays 3 (:7677). No other sidecar-role API crosses the device RPC, and no key: forwarding's keys never leave the VPN component, and S's never enter it.
 
 ### 18.7 Host services the sdk injects
 
@@ -839,10 +872,28 @@ Claude Code cloud adds secrets at its proxy (https://code.claude.com/docs/en/clo
 
 ### 18.10 Build and size
 
-- **Imports.** sdk imports the sidecar root and `protocol` in sidecar-role files, and `sidecar/device` and `protocol/bridge` in device files, by a new rule on sdk/dependency_boundary_test.go's legs (:80-92); §4.7's `make check` fails the `ios_extension` leg if its deps hold the root or `sidecar/protocol` (D-SDK-20).
+- **Imports.** sdk imports the sidecar root and `protocol` in sidecar-role files, and in forwarding files `sidecar/device`, `protocol/bridge` and the root's forwarding files, by a new rule on sdk/dependency_boundary_test.go's legs (:80-92); §4.7's `make check` fails the `ios_extension` leg if its root files leave the forwarding list below or it registers a `protocol` descriptor outside it (D-SDK-20).
+- **Forwarding leg (owner decision 197; D-SDK-20).** Every VPN component runs forwarding and no other sidecar code: Apple's extensions link only forwarding, as the `ios_extension` leg, and the Windows and Linux app services the same file list, while Android's VPN service runs in the app's own binding, where the sidecar role's code is present but runs only while the app is open (18.4):
+
+```text
+kept        the every-leg types and SidecarApi; the forwarding client's DPoP refresh (§7.4); the authorization
+            log's follower and config verification (§7.9); DelegationWrap unwrap, X-Wing and the key ladder
+            (§10.5); evs head reads of the config repo (§11); AclEngine (§8); §17.8's statements and compiler;
+            forwarding's signer; protocol's config, acl, evs and gkm descriptors; sidecar/device; protocol/bridge
+excluded    every other root file, under !ios_extension as connect-facing ones carry !sidecar_http: mls_,
+            mail_, smtp_, tls_, dns_, socket_, search_, record_, directory_, indexer_ and the subprotocol but
+            push hints; evs writes and every repo but config; approvals, enrollment and recovery; mcp/, cli/
+            and every <svc>service
+make size   from M4 the leg adds at most 4 MiB of executable over today's binding, and the signed iOS
+            extension's ceiling rises from 50 MiB to 54 MiB (proposed; Q-SDK-7)
+memory      forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling, inside the iOS tunnel's 28 MiB
+            target and 32 MiB soft limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md): rows stream, never held
+            whole, and a compile that would pass the bound leaves the last verified state in force and raises
+            bridge_alarm (proposed; Q-SDK-7); measured on surrogates only (owner decision 100)
+```
 - **Pruning.** No `net/rpc`, templates or dynamic reflect lookups (sdk/build/mobile_method_pruning_test.go:27); the worker needs protobuf v1.36.12, the first that keeps pruning (sdk/build/go.mod:98; sdk/js/go.mod:97 has v1.36.11), and sidecar generates with v1.36.11 (§6).
 - **Tags.** sdk's sidecar-role files carry `!ios_extension`, and §5.10's Keychain tag keeps gomobile's darwin slices (sdk/dependency_boundary_test.go:91) on the app's `SidecarKeyStore`.
-- **iOS.** From M4, §4's `make size` fails the `ios_extension` leg if the device role adds over 1 MiB (D-SDK-20); memory is measured on surrogates only (owner decision 100).
+- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (proposed; Q-SDK-7; D-SDK-20); memory is measured on surrogates only (owner decision 100).
 - **wasm (D-SDK-19).** A connect-only js/wasm main is already 55.0 MB unstripped (53.2 MB stripped; 2026-11-03), since Go links every imported package's `init` functions and initialized variables, connect's IP stack included (42 gVisor packages, §4.6). The page Worker's `sidecar.wasm` therefore links no connect package; the Q-SDK-1 spike before M4's entry decides C17 for the extension only (owner decision 22):
 
 ```text
@@ -877,8 +928,12 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 | Option | Pros | Cons | Verdict |
 |---|---|---|---|
-| Full sidecar in network processes | always on | iOS: 4,690,096 B headroom, 32 MiB shared, jetsam kills the VPN; desktop: root, LocalSystem or sandboxed processes (apple/app/app.xcodeproj/project.pbxproj:1291) hold content | rejected (owner decision 87) |
-| Device role in the root package | no new package | links every root `init` and `protocol` descriptor into the jetsam-bound tunnel | rejected (Q-SDK-5; D-SDK-20) |
+| Full sidecar in network processes | always on | iOS: 4,690,096 B headroom, 32 MiB shared, jetsam kills the VPN; desktop: root, LocalSystem or sandboxed processes (apple/app/app.xcodeproj/project.pbxproj:1291) hold content | rejected (owner decisions 87, 197) |
+| The keyless device role: the app compiles the rules and signs each link's delegation | no key or config reader in the tunnel; a 1 MiB budget | new rules and new links wait for the app, and a sleeping app stalls links | not taken (owner decision 197) |
+| A forwarding sidecar of its own in the VPN component, admitted as a device | hosts verify as today | two sidecars per app device in policy, `ur devices` and admissions; filings signed for a sidecar the app does not hold; with self_admit off an admin admits every phone's | rejected: a forwarding Delegation of the device's own sidecar (D-SDK-32) |
+| A second, minimal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen (proposed; Q-SDK-7) |
+| A forwarding Delegation that expires within 90 days, as an auth key's | bounds a copied forwarding key with no revocation | forwarding stops where the app has not run for 90 days | rejected: it ends with its sidecar, its revocation or a newer one (owner decision 197) |
+| Forwarding in the root package, linked whole | no new package | links every root `init` and `protocol` descriptor into the jetsam-bound tunnel | rejected: `sidecar/device` with the listed root files (Q-SDK-5; D-SDK-20) |
 | Hosted sidecar like ProxyDevice | no install | keys and plaintext on servers | ruled out (owner directive 2026-11-03; owner decision 26) |
 | No browser sidecar before M8 | smaller M4 | ur.io/recurd and the console decrypt nothing (owner decisions 15, 46) | rejected (18.8) |
 | Keys in the `https://ur.io` origin | no frame or messages | any ur.io XSS uses the key and takes the token | rejected (D-SDK-18) |
@@ -891,11 +946,11 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 ### 18.12 Decisions proposed
 
-**D-SDK-1 (proposed).** Two roles (18.4); network processes hold only the keyless device role. *Why:* owner decisions 4, 87; tunnel budgets.
+**D-SDK-1 (proposed).** Two roles (18.4): the sidecar role in the app or `ur daemon`, and in every app's VPN component only forwarding, which holds its own forwarding key and nothing else of sidecar. *Why:* owner decisions 4, 87, 197; tunnel budgets.
 
 **D-SDK-2 (proposed).** One `sdk.Sidecar` with local and remote backends and 18.5's gates. *Why:* PLAN.md:28 within gobind limits.
 
-**D-SDK-3 (proposed).** 18.6's seam and mirror; app devices host, serve and map nothing before C16 (M4; D-BRIDGE-5). *Why:* Go types stay off bindings; the Opportunistic device client (sdk/device_local_provider.go:258) may reply in plaintext.
+**D-SDK-3 (proposed).** 18.6's seam, setup and mirror; app devices host, serve and map nothing before C16 (M4; D-BRIDGE-5), and then only on the device client's sdk provider, in that client's network. *Why:* Go types stay off bindings; the Opportunistic device client (sdk/device_local_provider.go:258) may reply in plaintext; the device client exists only in its own network.
 
 **D-SDK-4 (proposed).** The sdk Api session owns the token and injects 18.7's services. *Why:* one refresh per process.
 
@@ -915,7 +970,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-12 (proposed).** ur.io's hosted DeviceLocal runs no sidecar or bridge, and 18.3's hosted check marks it for §8.10's gate. *Why:* I-10.
 
-**D-SDK-13 (proposed).** The device role takes rules and names only from its `BridgeState` and anchored deltas, persists its posture (legacy, pending, enforcing), restoring enforcing state before the first packet, and gets each window client's `WindowDelegation` from its sidecar role, which signs only as itself for what its state names and re-signs share links when a share's `BridgeShareSigner` changes (18.6). *Why:* owner decisions 3, 85, 87; it holds no key and cannot read the config repo, a restart plus an unsigned `has_document = false` must not reopen a LAN, and §17.9's hosts admit only delegated window clients.
+**D-SDK-13 (proposed).** The forwarding role takes rules and names only from the `BridgeState` its own compile of the verified config produces and the anchored deltas after it, persists its posture (legacy, pending, enforcing), restoring enforcing state before the first packet, and signs each window client's `WindowDelegation` itself, with its forwarding key or a share's current `BridgeShareSigner` (18.6). *Why:* owner decisions 3, 85, 197; forwarding must never wait on the app, a restart plus an unsigned `has_document = false` must not reopen a LAN, and §17.9's hosts admit only delegated window clients.
 
 **D-SDK-14 (proposed).** Transport rejections are generation-bound and map to Unenrolled with a reason; only a verified `SidecarRevoke` maps to Revoked. *Why:* a lost or expired client is not a revocation (D-CORE-8), and a stale callback must not end a new pairing.
 
@@ -929,7 +984,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-19 (proposed).** The page Worker builds the root with `-tags sidecar_http`, linking no connect package: connect-facing and engine host (`host_*.go`) files are `!sidecar_http`, and the rest, token path included, use only §5.4's root types and `SidecarApi`. *Why:* importing connect links its IP stack, putting the 40 MB goal out of reach without C17.
 
-**D-SDK-20 (proposed).** The device role lives in `sidecar/device`, importing connect and `sidecar/protocol/bridge` only. *Why:* a root import links every root init and descriptor into the jetsam-bound tunnel.
+**D-SDK-20 (proposed).** The forwarding role is `sidecar/device`, importing connect and `sidecar/protocol/bridge` only, with the root's forwarding files, the only root files the `ios_extension` leg links, whose file and descriptor lists `make check` holds (18.10). *Why:* owner decision 197 puts the config follower and compiler in the VPN component, and only an allow-list keeps every other root init and descriptor out of the jetsam-bound tunnel.
 
 **D-SDK-21 (proposed).** Every host that searches a repo keeps its two latest buckets synced, phones' team directory aside (D-SDK-28). Desktops and indexers keep all in the background; phones fetch it at "search more" for repos no designated indexer answers and browser tabs at "search more", both also on Wi-Fi while charging, phones in OS windows, and tabs while open only where their browser reports both conditions; ephemeral agents fetch it only at "search more"; each device may override per repo, within 18.4's caps. A condition an app or browser has not reported counts as metered and not charging. *Why:* owner decisions 154, 177 and 178; 154's per-device override covers browsers, since Safari and Firefox report neither condition and desktop browsers no network type, and ephemeral agents, whose in-memory caches would re-download all at every start; only OS windows let a backgrounded phone download tens to hundreds of MB.
 
@@ -953,44 +1008,50 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-31 (proposed).** Apps check and follow internet sends through `SidecarMail`: before Send, `CheckSend` gives each recipient domain's mode, the message's encoded bytes, the DATA cap, the expected delay and a predicted outcome; after it, `GetSendResult` and the `mail_send` event give each domain's outcome, with 18.5's copy; `GetReceiverCoverage` speaks only of receiving. *Why:* owner decision 125 keeps the DATA cap, so a person needs the size, the cap and the one domain it stops, at composition or before MAIL, and an inbound API cannot explain an outbound limit (meta review K04).
 
+**D-SDK-32 (proposed).** Forwarding is authorized by a forwarding Delegation the sidecar signs for keys its VPN component generated and never exports, and runs on forwarding clients the sidecar mints as its `forward_only` children, which the VPN component refreshes itself; the forwarding key signs only that sidecar's `WindowDelegation`s, and the Delegation ends with the sidecar, its `DelegationRevoke` or a newer one (18.6, §7.9). *Why:* owner decision 197's self-contained forwarding keeps the device one subject in policy, `ur devices` and admissions, and reuses the Delegation's signer path, reader wraps, rows, revocation and cascade.
+
 ### 18.13 Open questions
 
 **Q-SDK-1.** [X14] What runs the extension's sidecar? **Decided by owner 2026-11-03 (owner decision 26):** (a), a slimmed `sidecar.wasm` Worker, HTTPS-only first, and meanwhile (c), the native companion to a desktop `ur daemon`; never a hosted sidecar (18.8). *Residual:* 18.10's size spike, which decides C17 for the extension's streaming Worker only (owner decision 22); pages use the `sidecar_http` leg (D-SDK-19).
 
-**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 (owner decision 87):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). *Residual:* none.
+**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 (owner decision 87):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). **Amended by owner 2026-11-09 (owner decision 197):** every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) runs the device's IP and port forwarding and nothing else of sidecar: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet, always on whenever the component runs, with no setting that turns it off, and self-contained, with its own forwarding key, taking rule changes directly so it never waits on the app (18.4, 18.6; D-SDK-32). Owner decision 87 holds for everything else, and on Android the sidecar role runs only while the app is open, as on iOS. *Residual:* Q-SDK-7, forwarding's budget in the iOS extension.
 
 **Q-SDK-3.** Do phones get wake pushes? **Decided by owner 2026-11-03 (owner decision 88):** (b), content-free APNs and FCM wakes from the first app hosts (M8; 18.7). *Residual:* none.
 
 **Q-SDK-4.** How does the ur.io quick burner run (cli/UI.md:164)? **Decided by owner 2026-11-03 (owner decision 76):** (b), an ephemeral, labeled wasm sidecar in the page (18.8; Q-CTX-2). *Residual:* none.
 
-**Q-SDK-5.** Cross-cutting (D-REPO-2). Where does the iOS device role's code live? Even with engines in `<svc>service` packages (owner decision 104), a root-package device role links every root init and `protocol` descriptor into the iOS extension. **Closed by peer review 2026-11-04:** (b) now. The device role is the leaf package `sidecar/device`, importing only connect and a generated `sidecar/protocol/bridge` (D-SDK-20); the root never imports it, and the iOS extension links neither the root nor `protocol`. Conditions: `protocol/bridge` imports only std and protobuf (owner decision 52's test); `make check` fails the ios_extension leg if its deps include the sidecar root or `sidecar/protocol`; `make size`'s 1 MiB gate stays and passes at M4; §2.10 gains the routing-integrity row; §17.10's `sidecar.Bridge` becomes `device.Bridge`. *Residual:* none.
+**Q-SDK-5.** Cross-cutting (D-REPO-2). Where does the iOS device role's code live? Even with engines in `<svc>service` packages (owner decision 104), a root-package device role links every root init and `protocol` descriptor into the iOS extension. **Closed by peer review 2026-11-04:** (b) now. The device role is the leaf package `sidecar/device`, importing only connect and a generated `sidecar/protocol/bridge` (D-SDK-20); the root never imports it, and the iOS extension links neither the root nor `protocol`. Conditions: `protocol/bridge` imports only std and protobuf (owner decision 52's test); `make check` fails the ios_extension leg if its deps include the sidecar root or `sidecar/protocol`; `make size`'s 1 MiB gate stays and passes at M4; §2.10 gains the routing-integrity row; §17.10's `sidecar.Bridge` becomes `device.Bridge`. Owner decision 197 then put the config follower and compiler in every VPN component, so the extension links `sidecar/device` with the root's forwarding files and `protocol`'s config, acl, evs and gkm descriptors under 18.10's allow-list, the root still never importing `device/`, and the size gate follows Q-SDK-7. *Residual:* none.
 
 **Q-SDK-6.** May a phone or browser ask one of its network's indexers to search all and return verified hits, instead of downloading all and showing possible matches? **Decided by owner 2026-11-05 (owner decisions 175, 177, 178):** (c), amended: in v1 a phone's "search more" asks one of its network's designated indexers that reads the repo end to end over the sidecar subprotocol (Required mode) and gets verified hits, an owner-bound repo only on its owner's consented device, replies padded to 16 KiB steps (§11.14's remote search, with 18.4's notice and setting); a network has no indexer by default, so by default a phone downloads all and shows possible matches (owner decision 155), as it does whenever none is online (options (a), never, and (b), later and opt-in, not taken). Browser tabs, whose Workers carry no connect client, keep the download (18.17's Later). *Residual:* none; connect's byte reports are owner decision 176 (§6's Q-PROTO-4).
 
+**Q-SDK-7.** Cross-cutting (§4.7, §22.9). What budget does forwarding get in the iOS network extension, now that owner decision 197 has it follow the config repo and compile its own rules there? *Options:* (a) the `ios_extension` leg links the root's forwarding files (18.10) and adds at most 4 MiB of executable, the signed extension's ceiling rising from 50 MiB to 54 MiB, with forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling inside the tunnel's 28 MiB target, all measured on surrogates (owner decision 100); (b) keep `make size`'s 1 MiB by writing a second, minimal config follower, policy evaluator and compiler in `sidecar/device`, two implementations of security-critical rules to keep equal; (c) on iOS alone the app compiles and signs as the keyless role did, which would need owner decision 197's point 3 amended. *Recommendation:* (a): one implementation, and the extension's executable ceiling is an artifact ceiling the owner has raised by review before (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md), while runtime memory stays inside today's targets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.
+
 ### 18.14 Departures from PLAN.md
 
-- **PLAN.md:13 ("all service code goes in the root").** The device role is the leaf package `sidecar/device`, as §4.15 records (Q-SDK-5, closed by peer review; D-SDK-20).
+- **PLAN.md:13 ("all service code goes in the root").** The forwarding role's packet side is the leaf package `sidecar/device`, which apps' VPN components link with only the root's forwarding files, as §4.15 records (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).
 - **PLAN.md:28 ("in the background ... as a web worker").** The extension's Worker follows ur.io's page Worker (M4) and its native companion (M8); Firefox's is session-scoped (Q-SDK-1).
-- **PLAN.md:28 ("used directly by the apps").** Desktop apps use the `ur daemon`; iOS runs the sidecar in the app, not the tunnel (Q-SDK-2).
+- **PLAN.md:28 ("used directly by the apps").** Desktop apps use the `ur daemon`; iOS runs the sidecar in the app, not the tunnel, and every app's VPN component runs only forwarding (Q-SDK-2; owner decisions 87, 197).
 - **PLAN.md:31 ("initial goal", abstractions "that the Sidecar struct implements").** `device.Bridge`, not the whole `Sidecar`, implements `deviceBridge` (Q-SDK-2, Q-SDK-5), and sdk exposure arrives at M8, after M4's dark seams (Q-PHASE-1).
 
 ### 18.15 Interfaces
 
-- **Provides:** the `sdk.Sidecar` API, gates, state reasons and approval kinds, a revocation proposal's cosign included; the member's device list and revocation (`GetDevices`, `PreviewRevokeDevice`, `RevokeDevice`) with its copy; `SidecarSearch`, the search policy, conditions and windows, remote search's requester side (modes, notice, `GetIndexers`, the foreground Hello, merged states) and the key origin's search operations; `SidecarDirectory`, `CreateRepo`'s `private` and access-request approvals; the drop calls and `History`'s states; the send check and results (`CheckSend`, `GetSendResult`, `mail_send`) with their copy; `deviceBridge`, its channel (states, the `SignWindowDelegation` exchange and `ResignShares`), posture, zone and local addresses, `BridgeHost` in `DeviceLocal`, bridge status; the hosted mark; the browser sidecar, its key origin, the poll lease, the ephemeral reap predicate and the close capability, and the native host; the wake dispatch and payload; 18.4's per-host log retention (§5.9, §7.9); 18.9's host list; the `sidecar_http` leg; edge-login signatures (§13.7).
-- **Consumes:** §4 (C4, C5, C8, C14, C16, C17, `make check`'s legs, `make size`); §5 (gate, alarms, control mode, pairing, `SidecarHost`, every-leg types, `SidecarApi` and `sidecarTokenManager`, store states, §5.4's device revocation calls); §6 (the hint script's `tok` and `live`, `PollResponse`, `POST /sidecar/close`, `HeadCheckProof`'s 64 KiB); §7 (marks, P0 stages and DPoP, the ephemeral mint and its `close`, the exchange, admissions, `read_only`, the leaves rule, the log's fold and retention, recovery windows and `RecoveryVeto`, projection, the reaper); §8.5, §8.9; §9-§11; §12.9; §14-§17; §19; §20.8; §11.14's search engine and remote search, §5.9's index cache and non-derived search state; §16.11's directory; §11.7's and §11.13's drop.
+- **Provides:** the `sdk.Sidecar` API, gates, state reasons and approval kinds, a revocation proposal's cosign included; the member's device list and revocation (`GetDevices`, `PreviewRevokeDevice`, `RevokeDevice`) with its copy; `SidecarSearch`, the search policy, conditions and windows, remote search's requester side (modes, notice, `GetIndexers`, the foreground Hello, merged states) and the key origin's search operations; `SidecarDirectory`, `CreateRepo`'s `private` and access-request approvals; the drop calls and `History`'s states; the send check and results (`CheckSend`, `GetSendResult`, `mail_send`) with their copy; `deviceBridge`, forwarding's setup (its keys, the forwarding Delegation, the forwarding client and the hand-off), its following, compile and signing in the VPN component, posture, zone and local addresses, `BridgeHost` in `DeviceLocal`, bridge status; the forwarding leg's file and descriptor lists; the hosted mark; the browser sidecar, its key origin, the poll lease, the ephemeral reap predicate and the close capability, and the native host; the wake dispatch and payload; 18.4's per-host log retention (§5.9, §7.9); 18.9's host list; the `sidecar_http` leg; edge-login signatures (§13.7).
+- **Consumes:** §4 (C4, C5, C8, C14, C16, C17, `make check`'s legs, `make size`); §7.9's forwarding Delegation, §7.4's `forward_only` mark, §7.8's config-read exchange and §10.5's forwarding key holder (owner decision 197); §5 (gate, alarms, control mode, pairing, `SidecarHost`, every-leg types, `SidecarApi` and `sidecarTokenManager`, store states, §5.4's device revocation calls); §6 (the hint script's `tok` and `live`, `PollResponse`, `POST /sidecar/close`, `HeadCheckProof`'s 64 KiB); §7 (marks, P0 stages and DPoP, the ephemeral mint and its `close`, the exchange, admissions, `read_only`, the leaves rule, the log's fold and retention, recovery windows and `RecoveryVeto`, projection, the reaper); §8.5, §8.9; §9-§11; §12.9; §14-§17; §19; §20.8; §11.14's search engine and remote search, §5.9's index cache and non-derived search state; §16.11's directory; §11.7's and §11.13's drop.
 - **Subprotocol messages:** `SearchRequest` (`SEARCH`, 0x1404) and `SearchReply` (`SEARCH_RESULT`, 0x1405) (§6.11, §11.14): app hosts send requests to designated indexers and take replies, as requesters only, never serving (M10).
 - **API routes:** `POST /sidecar/push-token {platform: apns|fcm, token}` (Client; sets or, when empty, deletes the caller's wake token; M8).
 - **Tables:** `sidecar_push_token(client_id, platform, token, rev, update_time, removed_time, slot)` (api; migration ≥926, §19's MG8; `rev`, 18.7's revision; `slot`, the hash slot of `{scp_<C>}`, indexed for 18.7's reconcile, and `update_time` for its sweep; a removal keeps the row as a tombstone without platform or token; no foreign key: each path that removes a client tombstones its row and sets `removed_time` in that transaction, and 18.7's sweep deletes the row 24 h later); `network_client_lease(client_id, seen_time, close_sha256)` (api; MG1, with the auth keys that mint the first ephemeral clients; read by the reaper; deleted with its client; 18.8); Redis `{scp_<C>}live` and `{scp_<C>}ack` (publishers), `{scp_<C>}tok` and `{scp_<C>}tokrev` (the token projection and its revision, which api, the push sender and taskworker change only through 18.7's apply script), `{tokgen_<n>}` (taskworker's 16,384 per-slot sentinels) and `{wakeq_<shard>}` (owning services, evs included, write; the push sender reads; 18.7); `{scp_<C>}hb` (api, the poll lease; 18.8).
 - **Services and config:** `CheckOrigin` on connect's H1 upgrader (18.3); `https://ur.io` and the key origin `https://sidecar.ur.io` in `cors_origins` (warp/services/services.go:676) for api (auth included), evs and gkm; the key origin's loader, CSP and frame-ancestors, the page Worker, its label and `hosts/v1.json` (mmm); extension `offscreen` and optional `nativeMessaging`; native-host manifests for URnetwork's extension ids only; APNs and FCM credentials (§19).
-- **App work this design assumes (out of scope; external releases, §23):** `GetBridgeRoutes`, a chosen RFC 1918 block included (owner decision 132), lifted from §17.3's tun exclusions (Windows: WFP permits; Linux: the complement set), and `SetBridgeLocalAddresses` from the platform's routes and DNS settings; 18.4-18.7's seams (receiver, the composer's send check and results, autofill, push, approvals, alarms, presence key, §5.8's pairing); re-minting the device client after its sidecar role's first state (18.6); for search, 18.7's OS windows and conditions, the metered prompt with its byte count, labels for possible matches, 18.4's notice and setting, the indexer list and "verified by" labels; the directory view and access-request approvals; the drop dialog and pending drops' cancel (18.5); and, as prerequisites of §7.4's stage 2 (M3), 18.7's credential rules: the desktop app release and the extension release that stop persisting `by_jwt`.
-- **Assumptions about other sections:** §14 sends the extension's outbox mail as it does phones'; §6.8's hint script returns `tok` and `live` for 18.7's enqueue; §16.6 defines approval-capable hosts and the presence profiles; §5.6's `recovery_window` and §7.9's `RecoveryVeto` cover an admission by a binding the cascade restored as they do a recovery-signed authority statement, and §7.9's cascade list names each device that sealed to a binding it voids (owner decision 149); §17.10's `BridgeHost` and `BridgeStatus` live in `sidecar/device`, which D-SDK-20's tunnel may import; §5.8's control mode carries a remote-mode app's 18.6 delegation requests to its daemon, which signs them only by 18.6's signer row; §17.4 carves the local addresses `SetBridgeLocalAddresses` passes; §7.7's ephemeral mint inserts the lease row and §7.8's responses return its `close` once, §7.10's ephemeral job applies 18.8's predicate, §6.16's poll writes only the lease, never `network_client`, and §6.18 phases `POST /sidecar/close` with it (M1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read; FS-36 kills one master and restarts one from an older dump, and expects a count only for step 2's failed XADDs, and FS-120 delays applies past later commits; each path that removes a client (§7.10) tombstones its token row in that transaction; §19.10's api step raises every row's rev by 2^32 after a Postgres restore; §22.9's Browsers row opens two tabs on one network (18.8's instance rule); §5.8's control mode carries `Search` streams, status and policy calls to the daemon (18.7) and returns untrusted hits' text to a caller that asks for it; §6.4's control contracts carry SEARCH where reach does not (D-PROTO-21); §11.14 owns remote search's eligibility, failover and merge and cites 18.4's notice; §16.11 defines the directory, its notices and their `q/` leases; §5.4 carries the new event kinds and fields and the `Directory` and remote-search settings, and §5.9 keeps 18.4's overrides, modes and notice answers in its non-derived search state; §5.4's `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` carry §5.6's rules and `REVOKE_` codes, and §5.8's control mode carries a remote-mode app's revocation calls and presence evidence to its daemon, the first call returning the act's countersigned bytes under Presence (D-SDK-30), and §7.9's presence row and §6.9 define the countersignature that `SignWithPresence`'s evidence becomes (owner decisions 185, 187).
+- **App work this design assumes (out of scope; external releases, §23):** running forwarding in every VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) whenever it runs, with no setting that turns it off, its keys and state in the stores §5.9 names, and Android's VPN service in a process of its own (owner decision 197); `GetBridgeRoutes`, a chosen RFC 1918 block included (owner decision 132), lifted from §17.3's tun exclusions (Windows: WFP permits; Linux: the complement set), and `SetBridgeLocalAddresses` from the platform's routes and DNS settings; 18.4-18.7's seams (receiver, the composer's send check and results, autofill, push, approvals, alarms, presence key, §5.8's pairing); re-minting the device client after its forwarding role's first state (18.6); for search, 18.7's OS windows and conditions, the metered prompt with its byte count, labels for possible matches, 18.4's notice and setting, the indexer list and "verified by" labels; the directory view and access-request approvals; the drop dialog and pending drops' cancel (18.5); and, as prerequisites of §7.4's stage 2 (M3), 18.7's credential rules: the desktop app release and the extension release that stop persisting `by_jwt`.
+- **Assumptions about other sections:** §14 sends the extension's outbox mail as it does phones'; §6.8's hint script returns `tok` and `live` for 18.7's enqueue; §16.6 defines approval-capable hosts and the presence profiles; §5.6's `recovery_window` and §7.9's `RecoveryVeto` cover an admission by a binding the cascade restored as they do a recovery-signed authority statement, and §7.9's cascade list names each device that sealed to a binding it voids (owner decision 149); §17.10's `BridgeHost` and `BridgeStatus` live in `sidecar/device`, which D-SDK-20's tunnel may import; §5.8's control mode carries a remote-mode app's forwarding setup (18.6) to its daemon, which signs the forwarding Delegation and mints the forwarding client for that app alone; §17.4 carves the local addresses `SetBridgeLocalAddresses` passes; §7.7's ephemeral mint inserts the lease row and §7.8's responses return its `close` once, §7.10's ephemeral job applies 18.8's predicate, §6.16's poll writes only the lease, never `network_client`, and §6.18 phases `POST /sidecar/close` with it (M1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read; FS-36 kills one master and restarts one from an older dump, and expects a count only for step 2's failed XADDs, and FS-120 delays applies past later commits; each path that removes a client (§7.10) tombstones its token row in that transaction; §19.10's api step raises every row's rev by 2^32 after a Postgres restore; §22.9's Browsers row opens two tabs on one network (18.8's instance rule); §5.8's control mode carries `Search` streams, status and policy calls to the daemon (18.7) and returns untrusted hits' text to a caller that asks for it; §6.4's control contracts carry SEARCH where reach does not (D-PROTO-21); §11.14 owns remote search's eligibility, failover and merge and cites 18.4's notice; §16.11 defines the directory, its notices and their `q/` leases; §5.4 carries the new event kinds and fields and the `Directory` and remote-search settings, and §5.9 keeps 18.4's overrides, modes and notice answers in its non-derived search state; §5.4's `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` carry §5.6's rules and `REVOKE_` codes, and §5.8's control mode carries a remote-mode app's revocation calls and presence evidence to its daemon, the first call returning the act's countersigned bytes under Presence (D-SDK-30), and §7.9's presence row and §6.9 define the countersignature that `SignWithPresence`'s evidence becomes (owner decisions 185, 187).
 
 ### 18.16 Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `sidecar.wasm` misses its goal or starts slowly | High | High | `sidecar_http` leg from M1; spike before M4; C17 only for the extension |
-| An iOS tunnel jetsam regression reaches users unmeasured | Medium | High | `make size` from M4; surrogates (owner decision 100); the leaf `sidecar/device` (D-SDK-20) |
+| An iOS tunnel jetsam regression reaches users unmeasured, now that forwarding compiles there (owner decision 197) | High | High | `make size` from M4; surrogates (owner decision 100); the forwarding leg's file list and budget (D-SDK-20; proposed; Q-SDK-7); a compile past its bound keeps the last state and alarms |
+| A compromised VPN component forwards as its sidecar and reads the config until its forwarding Delegation ends | Low | Medium | the forwarding key signs only that sidecar's delegations, and its client is `forward_only` (D-SDK-32); no mail, evs data, MLS, identity or recovery key there; `DelegationRevoke` or the sidecar's revocation (§2.10) |
+| Android's VPN service shares the app's process, so a compromise there reaches the sidecar role while the app is open | Medium | High | app work runs the service in a process of its own (18.15); forwarding's keys under their own alias and files (§5.9) |
 | Phone-only burner users miss mail, as wakes are throttled or dropped | High | High | owner decision 12's copy via `GetReceiverCoverage`; mail indexers (owner decision 150); 18.7's deferred check (WK2) and per-slot reconcile; token projections in revision order, swept each pass (WK5) |
 | Installed apps or the extension leave admin credentials agent-readable | Medium | Critical | D-SDK-11; §7.4's stages (owner decision 45) |
 | An XSS or extension in ur.io reads decrypted views while it runs | Medium | High | key origin, exact-origin messages, CSP (D-SDK-18); disclosed (§2.10) |
@@ -1006,10 +1067,10 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 ### 18.17 Phasing
 
-- **v0, CLI hosts (M1-M4):** §5.17's daemon; 18.8's lease, reap predicate and close capability, with `POST /sidecar/close`, for §7's first ephemeral clients (MG1, M1); 18.7's credential rules, in the desktop app and extension releases, before §7.4's stage 2 (M3); M4's dark seam, posture, zone call and id refusal in `sidecar/device`; 18.9's host list with C8 (M4); `make size` from M4.
+- **v0, CLI hosts (M1-M4):** §5.17's daemon; 18.8's lease, reap predicate and close capability, with `POST /sidecar/close`, for §7's first ephemeral clients (MG1, M1); 18.7's credential rules, in the desktop app and extension releases, before §7.4's stage 2 (M3); M4's dark seam, posture, zone call and id refusal in `sidecar/device`, with the forwarding leg's file and descriptor rule; 18.9's host list with C8 (M4); `make size` from M4, at Q-SDK-7's budget.
 - **v0, ur.io (M4, RS1):** ur.io/recurd's `read_only` page Worker in its key origin (18.8), on the `sidecar_http` leg (import rule from M1, size measured from M2) within 18.10's gate or miss rule.
 - **v1 (M6, RS2):** the team console on that Worker, with the directory's read-only views; `SignEdgeLogin` for §13's `members-device`; the directory's seams (`SidecarDirectory`, `CreateRepo`'s `private`, access-request approvals; §16.11's announce entries), in app hosts from M8; after M8, §17.9's egress spec on app devices.
-- **v0, app hosts (M8, BS1):** Android and iOS local mode; desktop remote mode with §5.8's pairing; the device role, its channel, posture and private names on app paths (hosting after C16, iOS links after §22.9); `SidecarApprovals` and alarms (owner decision 126), with the member's device list and revocation and, in team networks, revocation proposals' cosigns (D-SDK-30); wakes (owner decision 88), directory notices' included, and the directory view's policy; the receiver and coverage APIs and the indexer prompt; from M9, the send check and results (§14.5); the quick tools; the native companion (owner decision 26).
+- **v0, app hosts (M8, BS1):** Android and iOS local mode; desktop remote mode with §5.8's pairing; forwarding in every app's VPN component (owner decision 197): its keys, setup, forwarding Delegation and forwarding clients, its own following, compile and signing, posture and private names on app paths, hosting after C16 in the device client's network, iOS links after §22.9; Android's sidecar role only while the app is open; `SidecarApprovals` and alarms (owner decision 126), with the member's device list and revocation and, in team networks, revocation proposals' cosigns (D-SDK-30); wakes (owner decision 88), directory notices' included, and the directory view's policy; the receiver and coverage APIs and the indexer prompt; from M9, the send check and results (§14.5); the quick tools; the native companion (owner decision 26).
 - **v1, M10 (owner decision 169):** 18.4's search policy and targets, `SidecarSearch`, conditions and 18.7's windows on app hosts, and remote search's requester side (modes, notice, `GetIndexers`, the foreground Hello and §6.10's keepalive), at the later of M10's and M8's exits, in team networks at the later of those and M6's (§23); the page Worker's search operations, conditions and cache; the quick burner's in-memory buckets; remote mode's search stream; with format 2 (§11.7), `Write`'s versioning argument, the drop calls, `History`'s states and `EVS_DROPPED` (owner decisions 173, 183) and the console's drop view, and the directory's cards and index with phones' directory "search more".
 - **Later:** the extension's own Worker, Firefox session mode, browser streams (C4), C17 for the extension's streaming Worker if the spike needs it; browser Workers and ephemeral CLI hosts as remote-search requesters, browsers after C4.
-- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension (owner decision 45); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting.
+- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension (owner decision 45); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting; Q-SDK-7, the `ios_extension` leg's budget and iOS forwarding.

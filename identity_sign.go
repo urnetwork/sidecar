@@ -93,7 +93,8 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 }
 
 // §6.9's Signed over body, as signedType under purpose, by this sidecar's identity key, signer_id its sidecar_id.
-// Refuses, before reading any key, a pair the identity key does not sign (ErrSidecarSignRefused); answers a clean
+// Refuses, before reading any key, a pair the identity key does not sign (ErrSidecarSignRefused) and, on a read_only
+// device, a statement verifiers refuse from one (ErrSidecarSignReadOnly); answers a clean
 // error wrapping ErrSidecarStoreLocked while Locked, and ErrSidecarNoIdentity before enrollment. agentId is the
 // caller's provenance label (source = agent_asserted, §5.5): until CORE-M6-03's subkeys it selects no key, so the
 // identity key signs whatever it names. body is copied.
@@ -104,6 +105,10 @@ func (self *Sidecar) Sign(purpose string, signedType bridge.SignedType, body []b
 	}
 	if purpose != expectedPurpose {
 		return nil, fmt.Errorf("%w: type %#x is signed under purpose %s", ErrSidecarSignRefused, int32(signedType), expectedPurpose)
+	}
+	// a read_only device's courtesy refusal of what every verifier refuses from it (identity_readonly.go)
+	if err := self.checkReadOnlySign(signedType, body); err != nil {
+		return nil, err
 	}
 	var state SidecarState
 	var secrets SidecarSecrets

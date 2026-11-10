@@ -42,7 +42,10 @@
 //     a TLS server written from the RFCs, and MxWorld, a signed fixture DNS and dialer, all on
 //     in-process pipes; smtp_edge_stub.go, StubSmtpEdge, which runs a sender before the engine exists.
 //   - fault, the FS schedule runner (§22.8), with catalog.yml, §22.8's rows and §23.6's gates, and
-//     §22.8's rules across runs: twins, every write's lost response, the explorer and replays.
+//     §22.8's rules across runs: twins, every write's lost response, the explorer and replays; the
+//     oracle's StoreView over every store and readers' keys (store_view*.go, oracle.go); and GateFile,
+//     the gate tool's gates.yml generated from the catalog and each gate's sweep (gate*.go).
+//   - held_secrets.go, what each actor held, as testHookSecret gave it, which the StoreView opens with.
 //   - model, §22.8's TLA+ models with run-tlc.sh, and around them, under sidecar_tlc, the runner that
 //     checks each model, its mutants and liveness, modelled.yml's sources a gate reruns them on, and
 //     mutants/mutants.yml, each invariant's refusing twins.
@@ -52,6 +55,9 @@
 //   - load, §22.8's harness conventions: an open-loop driver, the one report shape, and a sampler of
 //     heap, goroutines and Redis keys; testdata/targets.yml is R-TEST-7's ledger of what each run shows,
 //     which targets_test.go holds.
+//   - crasher.go, §22.6's crashers: CrasherSeed moves one into its target's corpus, where every go test
+//     runs it as a seed, and names its regression test beside it; testdata/fuzz/registry.yml lists
+//     every target, which check/fuzz_registry_test.go holds to the code and to §22.6.
 //
 // This package and its children import no server package, and server imports them for T3 (D-TEST-2).
 package sidecartest

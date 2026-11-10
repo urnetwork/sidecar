@@ -126,6 +126,10 @@ type headCheckRotation struct {
 // them, ends the run loop and joins every exchange and act still running. One at a time per
 // dispatcher.
 func (self *Subprotocol) AttachHeadCheck(env *HeadCheckEnv) (detach func(), err error) {
+	if self.role == SubprotocolRoleEdge {
+		// edges never run HeadCheck (stream_edge.go)
+		return nil, errSubprotocolEdgeRole
+	}
 	if err := env.validate(); err != nil {
 		return nil, err
 	}

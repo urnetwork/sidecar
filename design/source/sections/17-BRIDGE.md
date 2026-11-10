@@ -2,7 +2,7 @@
 
 ### 17.1 Purpose and scope
 
-This section owns PLAN.md's bridge (PLAN.md:113-119): the overlay address plan (X18, owner decisions 28, 132), subnet routing, provider port mapping, bridge rules, their engine and states, native IP principals (`WindowDelegation`), cross-network shares (owner decision 86, C18), the connect changes, `BridgeHost`, `ur tun` and `ur bridge`. §7.9 owns the config repo and authorization log; §8 policy, grants, shares and gates; §12 names; §13 `public-tls`; §18 the sdk seam, device-role channel and app work; §20 billing.
+This section owns PLAN.md's bridge (PLAN.md:113-119): the overlay address plan (X18, owner decisions 28, 132), subnet routing, provider port mapping, bridge rules, their engine and states, native IP principals (`WindowDelegation`), cross-network shares (owner decision 86, C18), the connect changes, `BridgeHost`, `ur tun` and `ur bridge`. §7.9 owns the config repo and authorization log; §8 policy, grants, shares and gates; §12 names; §13 `public-tls`; §18 the sdk seam, the forwarding role's setup in apps' VPN components (owner decision 197) and app work; §20 billing.
 
 ### 17.2 Requirements
 
@@ -40,8 +40,8 @@ Missing: overlay addresses, destination routing, port mapping, per-port provider
 | Cycle or choose | An admin re-rolls it or picks a /16 in 100.64.0.0/10 or RFC 1918 only (owner decision 132; D-BRIDGE-16); hosts keep their host bits while the old block drains (17.8) |
 | Uniqueness | None across networks; a device whose networks share a block (owner decision 23) routes it only to the first-joined one, warning in `ur status` and a `SidecarEvent` until an admin cycles one |
 | Host address | A random free /32 of the lower /17 outside `<block>.0.0/24`, which holds services (the resolver at `<block>.0.53`); once that is full, the highest free /32 of the upper /17, whose bottom aliases fill first-fit (17.9); never x.y.z.0 or x.y.z.255; a chosen address (`ur tun ip <ip>`) must lie in the lower /17 |
-| Binding | The §5 `sidecar_id` (an agent's own only under its own OS user, container or VM, §5.5); it survives re-enrollment and the reaper |
-| Assignment | On demand (`ur tun ip`, the host's first map, an admin); the first claim in log order wins (17.8) |
+| Binding | The §5 `sidecar_id` (an agent's own only under its own OS user, container or VM, §5.5); it survives re-enrollment and the reaper; on an app, its VPN component's forwarding role hosts it (17.10; owner decision 197) |
+| Assignment | On demand (`ur tun ip`, the app's UI, the host's first map, an admin; proposed; Q-BRIDGE-8); the first claim in log order wins (17.8) |
 | Release | On revocation or removal, then a 30-day tombstone (I-14) |
 
 Addresses avoid connect's tun ranges, 10.a.b.0/24 and 169.254/16 (sdk/device_local.go:1851-1861; connect/tun.go:387-399, :533-551). Where a local route overlaps the block, as a CGNAT carrier address can, the device routes overlay peers by their /32s and carves out of the router's table and every exported route each local /32 its physical path needs: interface addresses, gateways and system resolvers, from the platform's routes and DNS settings (§18.6's `SetBridgeLocalAddresses`), since `connect.LocalIpv4Networks` sees only interface subnets, or nil where enumeration is restricted (connect/tun.go:490-495). The block is never dropped wholesale; until those /32s are known, the export holds per-peer /32s instead of the block. If a carved /32 is an assigned overlay address, `ur status` warns and an admin cycles the block (D-BRIDGE-16).
@@ -98,7 +98,7 @@ health   a refusal or 3 s connect timeout marks a link down for 30 s; a down lin
          while another advertiser of the entry is up, and keeps its pins
 ```
 
-- **Links** (Q-BRIDGE-2). One multi client per target, built by `BridgeHost` (17.10): fixed `ProviderSpec{ClientId}`, `FixedWindowSize: 1`, `PostQuantumEncryption` (Required), `OverrideAllowDirect=false` until C3 (D-PROTO-10), `EnableIcmp`, never `DefaultMultiClientSettings`' six-client window; each window client carries the subject's `WindowDelegation` (17.9). Window clients are the subject's children, so a sidecar's expire unrefreshed at §7.4's 7-day `strict_exp`, and links rebuild after 6 days, draining under the pins above. Same-network links run Network mode, share links FriendsAndFamily, carrying private destinations only inside their aliases (17.9). Relayed bytes are debited (§20.6). Links idle-close after 600 s, as long as a TCP pin, survive default-route rebuilds, and send TCP/25 to the local NAT, so bridged TCP/25 is refused. Until C16 only sidecar-owned Required clients are targets (D-BRIDGE-5), so replies are sealed too.
+- **Links** (Q-BRIDGE-2). One multi client per target, built by `BridgeHost` (17.10): fixed `ProviderSpec{ClientId}`, `FixedWindowSize: 1`, `PostQuantumEncryption` (Required), `OverrideAllowDirect=false` until C3 (D-PROTO-10), `EnableIcmp`, never `DefaultMultiClientSettings`' six-client window; each window client carries the subject's `WindowDelegation` (17.9). Window clients are the subject's children, or on an app its forwarding client's, which act as the subject (17.10), so they expire unrefreshed at §7.4's 7-day `strict_exp`, and links rebuild after 6 days, draining under the pins above. Same-network links run Network mode, share links FriendsAndFamily, carrying private destinations only inside their aliases (17.9). Relayed bytes are debited (§20.6). Links idle-close after 600 s, as long as a TCP pin, survive default-route rebuilds, and send TCP/25 to the local NAT, so bridged TCP/25 is refused. Until C16 only sidecar-owned Required clients are targets (D-BRIDGE-5), so replies are sealed too.
 - **Memory.** A window client carries a full client graph (connect/ip_remote_multi_client.go:217-222), so a device short of its §18.4 budget closes its least recently used idle link; the iOS tunnel runs none until §22.9 measures one (owner decision 100).
 - **Rejects.** A TCP RST or ICMP administratively prohibited (v4 3/13, v6 1/1) enters the tun through a per-source token bucket (20/s, burst 40), since connect writes policy resets unthrottled (connect/ip_smtp_policy.go:847-864).
 
@@ -225,11 +225,12 @@ rule id   route_id or map_id: under a decision, SHA-256("urnetwork-sidecar-v1/br
 ```
 
 - **Placement** (owner decision 5). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10), so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits. Only ids show (kind, signer, subject, rule id, expiry and, for an approved route, the advertiser and the `route` rules it serves), which readers check. Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
-- **Engine.** The sidecar role (`bridge_*.go`, §5) reads the config (owner decision 6), verifies statements against §7.9's admissions and §8's grants within §8.9's latency targets, and compiles a `BridgeState` off the packet path; `device.Bridge` (17.10) applies it and later verified log entries, manages links, and swaps table and hook atomically. Before its first verified state it is pending and denies every private destination and exit; it persists its last verified state and never lowers it on unsigned input:
+- **Engine.** The compiler (`bridge_*.go`, §5) reads the config (owner decision 6), verifies statements against §7.9's admissions and §8's grants within §8.9's latency targets, and compiles a `BridgeState` off the packet path: in the sidecar role on a daemon, and in an app's VPN component in the forwarding role, which reads the config by its forwarding Delegation's reader key (owner decision 197; 17.10); `device.Bridge` (17.10) applies it and later verified log entries, manages links, and swaps table and hook atomically. Before its first verified state it is pending and denies every private destination and exit; it persists its last verified state and never lowers it on unsigned input:
 
 ```text
-states (D-BRIDGE-18), per network; §18.6's device role runs the same machine as its posture
-legacy                no sidecar role has enrolled for the network on this device: no hook, today's behavior
+states (D-BRIDGE-18), per network; §18.6's forwarding role runs the same machine as its posture
+legacy                no sidecar of the network has enrolled, or on an app set up its forwarding, on this
+                      device: no hook, today's behavior
 pending               an anchor and no verified state: Network-source flows to loopback, LAN, link-local,
                       overlay and served prefixes, and every exit, are denied; the block deny stands; maps and
                       hosted addresses refuse
@@ -240,7 +241,8 @@ persist               the anchor, the newest verified AuthPin, the signed base h
                       served share's newest verified ShareCert (17.9); on restart they re-verify offline
                       against the anchor and the pinned ShareKeys, and the state applies before the first
                       packet
-legacy -> pending     the sidecar role enrolls and sends Pending{network_id, genesis_sha256}
+legacy -> pending     the sidecar enrolls, or on an app sets up its forwarding (§18.6), with
+                      Pending{network_id, genesis_sha256}
 pending -> enforcing  the first state verified against the anchor
 doc -> nodoc          only a verified base above document_seen_at whose rows say has_document = false
 any -> legacy         only this sidecar's own sign-out (its SidecarRevoke), which wipes the stored state
@@ -248,7 +250,7 @@ never                 an unsigned has_document, a projection that does not chain
                       state; one that fails to verify leaves it and alarms
 ```
 
-- **Device roles** (owner decision 87). A keyless device role gets `BridgeState` and `Pending` from its sidecar role (§18.6), its `Names` feeding C14's zone (§12.9), and between states applies the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `Unsuspend`, `GrantRevoke` and `BridgeWithdraw` entries, verified against the anchor (§7.9) with `protocol/bridge`'s types alone, so revocations apply while the sidecar role sleeps; a `SidecarRevoke`, `MemberRevoke` or `Suspend` that §7.9's presence row covers it applies on its identity signature alone, as a denial, since it parses no `KeyRegister`, and its sidecar role's next state, which checks the countersignature, confirms or reverses it (owner decisions 185, 187, 189).
+- **Forwarding roles** (owner decisions 87, 197). An app's VPN component compiles its own `BridgeState` from the config it reads by its forwarding Delegation's reader key, with `Pending` from forwarding's setup (§18.6), its `Names` feeding C14's zone (§12.9); between compiles its posture applies the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `Unsuspend`, `GrantRevoke` and `BridgeWithdraw` entries, verified against the anchor (§7.9) with `protocol/bridge`'s types alone, a `SidecarRevoke`, `MemberRevoke` or `Suspend` that §7.9's presence row covers on its identity signature as a denial that the next compile, which checks the countersignature, confirms or reverses (owner decisions 185, 187, 189). So rules and revocations apply whether or not the app runs.
 - **Limits.** None per network (owner decision 66); the block bounds addresses at 64,770.
 
 ```proto
@@ -259,8 +261,8 @@ message BridgeRows {                      // bridge.proto; acl.proto's AclRows.b
 
 ```proto
 // sidecar/protocol/bridge/bridge.proto (§4.4; std and protobuf only), importing auth.proto (§7.9) and
-// signed.proto (§6.9): a sidecar role's compiled view for its device role (§18.6), in process or as
-// DeviceLocalRpc.SetBridgeState; auth only rises, and verified entries apply on top
+// signed.proto (§6.9): the compiler's view of this host for device.Bridge, in process, a daemon's sidecar role
+// or an app's forwarding role compiling it (§18.6); auth only rises, and verified entries apply on top
 message BridgeState {
   AuthPin auth = 1;                        // auth.proto's (n, A_n), the newest verified state; ApplyDeltas chains from it
   bytes genesis_sha256 = 2;                // the anchor (§7.9)
@@ -292,7 +294,8 @@ message Pending { bytes network_id = 1; bytes genesis_sha256 = 2; }  // legacy -
 
 ```proto
 // bridge.proto; §6.9 Signed, purpose window-delegation, SignedType 0x1908; by the subject's
-// identity key or, on a share link, the ShareSigner its share_cert names (share signers, below)
+// identity key, the key of its live forwarding Delegation (owner decision 197; §7.9), or, on a share
+// link, the ShareSigner its share_cert names (share signers, below)
 message WindowDelegation {
   bytes network_id = 1;                // the source network
   bytes subject_sidecar_id = 2;
@@ -318,13 +321,15 @@ message BridgeShareSigner {            // Y's config file per accepted share; si
 ```
 
 ```text
-sign     BridgeHost gets one per window client it builds from the subject's sidecar role (over §18.6's
-         channel when the builder is a keyless device role), signed by its identity key or, on a share
-         link, by a ShareSigner (share signers, below), and passes it in CreateContract; the contract signer
-         copies it unchanged into StoredContract (C13)
+sign     BridgeHost gets one per window client it builds, signed by the subject's identity key where the
+         sidecar role builds the link (a daemon), by its forwarding key in an app's VPN component (§18.6),
+         or on a share link by a ShareSigner (share signers, below), and passes it in CreateContract; the
+         contract signer copies it unchanged into StoredContract (C13)
 verify   once per contract, before the first flow's dial: the signature, by the subject's identity key
-         pinned through its SidecarAdmit and neither revoked nor suspended at this state, or by a ShareSigner
-         that share signers admit; window_client_id = the contract's source; window_client_public_key = the
+         pinned through its SidecarAdmit and neither revoked nor suspended at this state, by the key of the
+         subject's forwarding Delegation live at this state (§7.9's forwarding row: forward names the
+         subject, and it is neither superseded, revoked nor void), or by a ShareSigner that share signers
+         admit; window_client_id = the contract's source; window_client_public_key = the
          sealed session's peer key (C15); target_sidecar_id = this host; not_after_ms ahead; network_id =
          C13's sealed network; C13's sealed subject resolves through §5's binding log to subject_sidecar_id,
          else deny and alarm
@@ -334,7 +339,8 @@ use      the principal {subject, network, share, not_after} rides that source's 
          without one is never passed by rule 4
 target   the sender's link admits a contract only if destination_client_public_key is the target's current
          SidecarIdentityBinding client key, verified against its pinned identity key
-         (GET /sidecar/identity/<sidecar_id>, cached per link)
+         (GET /sidecar/identity/<sidecar_id>, cached per link), or for an app host the device client key its
+         live forwarding Delegation names, which its identity key signed (§18.6's host row)
 cost     ~200 B (~350 B with a ShareCert) and one Ed25519 verification (~50 µs) per contract per link, and
          one per new ShareCert
 ```
@@ -377,8 +383,8 @@ keys         the ShareKey and ShareSigners, Ed25519, sign §6.9 Signeds in the s
              verifiers require signer_id = the body's share_id and resolve key_id, a ShareCert's to the
              share's pinned BridgeShareKey and a share delegation's to its ShareCert's signer_public_key
 sign         a Y subject signs with the share's current BridgeShareSigner while its cert is unexpired; when
-             that file changes, its sidecar role has BridgeHost re-sign each share link's delegations (§18.6's
-             ResignShares for a keyless builder), which their next contracts carry
+             that file changes, the compiler that reads it, a daemon's sidecar role or an app's forwarding role
+             (§18.6), has BridgeHost re-sign each share link's delegations, which their next contracts carry
 admit        X's host requires the ShareCert to verify under the pinned ShareKey with the delegation's
              share_id, not_after_ms ahead and at most 7 days away (§8.6's 60 s skew), and g at least the
              share's newest verified generation, which it raises and keeps in 17.8's persisted state, then the
@@ -398,10 +404,10 @@ bound        a sidecar Y removed is admitted on new contracts until a later gene
 | Repo | Change |
 |---|---|
 | connect (X9) | §4.6's C5, C6a, C13 and C14 (M4), C15's key (M1), C16 before app devices host, C18 for shares (M6); not C6b, since providers terminate flows without a tun |
-| sidecar | Root `bridge_*.go` (the sidecar role): statements, the compiler that builds `BridgeState`, forwards. `device/` (`device.Bridge`, D-SDK-20): table, pins, links, `BridgeEgressPolicy`, principals, aliases, routes, the per-link resolver and zone, and 17.8's states, importing connect and `protocol/bridge` only. `cli/` wires `device.Bridge` to the root's state producer for `ur tun` and `ur bridge` and holds `ur tun`'s OS tun (`golang.zx2c4.com/wireguard/tun`, MIT) and the userspace stack, out of every sdk binding (Q-SDK-5) |
-| sdk | Both insertion points and the exit-NAT hook through §18.6's `deviceBridge`; `DeviceLocal` implements `BridgeHost`; route export (§18) |
-| server | No rule tables; `network_bridge_share`; gates read `BridgeRows` |
-| apps | Out of scope (owner rule 6): applying exported routes, a chosen block included, is §18's app work |
+| sidecar | Root `bridge_*.go`: statements, the compiler that builds `BridgeState`, forwards, and forwarding's setup and signer, the compiler and signer also linked into apps' VPN components among the root's forwarding files (§18.10). `device/` (`device.Bridge`, D-SDK-20): table, pins, links, `BridgeEgressPolicy`, principals, aliases, routes, the per-link resolver and zone, and 17.8's states, importing connect and `protocol/bridge` only. `cli/` wires `device.Bridge` to the root's state producer for `ur tun` and `ur bridge` and holds `ur tun`'s OS tun (`golang.zx2c4.com/wireguard/tun`, MIT) and the userspace stack, out of every sdk binding (Q-SDK-5) |
+| sdk | Both insertion points and the exit-NAT hook through §18.6's `deviceBridge`; `DeviceLocal` implements `BridgeHost`; route export (§18); in every app's VPN component, forwarding's following, compile and signing on its forwarding client (owner decision 197; §18.6) |
+| server | No rule tables; `network_bridge_share`; gates read `BridgeRows`; the forwarding client's `forward_only` mark (§7.4) |
+| apps | Out of scope (owner rule 6): running forwarding in every VPN component, always on, and applying exported routes, a chosen block included, are §18's app work |
 
 ```go
 // device (sidecar/device); implemented by sdk DeviceLocal and the CLI host, which own the client generators
@@ -409,16 +415,15 @@ type BridgeHost interface {
 	// one link per target (Q-BRIDGE-2); shareAliases is nil for a same-network link (ProvideMode_Network),
 	// and for a share link (FriendsAndFamily) lists the aliases C18's source half may carry; sign returns
 	// the Signed WindowDelegation for each window client the link builds, not_after_ms at most notAfter, the
-	// client's strict_exp (§7.4), and on a share link the host calls it again for each live one when the
-	// sidecar role signals a new BridgeShareSigner (§18.6's ResignShares, or in process), for its later
-	// contracts (17.9)
+	// client's strict_exp (§7.4), and on a share link the host calls it again for each live one when its
+	// compile finds a new BridgeShareSigner, for its later contracts (17.9)
 	NewBridgeLink(ctx context.Context, target connect.Id, subject connect.Id, shareAliases []netip.Prefix,
 		sign func(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error),
 	) (connect.UserNatClient, error)
 }
 ```
 
-**Device abstractions (PLAN.md:31).** `device.Bridge` satisfies §18.6's `deviceBridge`, `BridgeEgressPolicy` being its hook; on iOS and desktop apps the keyless device role runs it (owner decision 87), and on Linux and WSL2 the daemon does, through `cli/`.
+**Device abstractions (PLAN.md:31).** `device.Bridge` satisfies §18.6's `deviceBridge`, `BridgeEgressPolicy` being its hook. In every app it runs in the VPN component as the forwarding role, with the root's compiler and its own forwarding key, whenever that component runs, with no setting that turns it off and no wait on the app (owner decision 197); under `ur tun` the daemon runs it, through `cli/`. On apps, sending, that is routes to other devices' addresses and subnets, forwards out and exits, needs no C16, since its links are Required window clients to sidecar-owned hosts or C16 ones; hosting, that is the device's own address, maps into it and its advertised subnet, waits for C16 on the device client's sdk provider, in that client's network only (D-BRIDGE-5, §18.6's host row).
 
 ### 17.11 cli/UI.md mapping
 
@@ -460,7 +465,7 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 **D-BRIDGE-4 (proposed).** The C5 hook applies 17.6's order, relying on C6a, C13, C15 and, for shares, C18 (17.10). *Why:* once per flow; a nil hook changes nothing.
 
-**D-BRIDGE-5 (proposed).** Links run Required to a fixed target with one window client, relay-only until C3, never count-capped; targets are sidecar-owned until C16. *Why:* D-PROTO-6, D-PROTO-10; owner decision 66.
+**D-BRIDGE-5 (proposed).** Links run Required to a fixed target with one window client, relay-only until C3, never count-capped; targets are sidecar-owned until C16, after which an app device hosts on its device client's sdk provider, in that client's network only. *Why:* D-PROTO-6, D-PROTO-10; owner decisions 66, 197.
 
 **D-BRIDGE-6 (proposed).** Bridge rules are signed config-repo statements, sidecars' own as sealed deltas in the authorization log; gates see only reach rules and `BridgeRows`. *Why:* owner decision 5; no prefixes, addresses or ports reach the server (I-4).
 
@@ -484,9 +489,9 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 **D-BRIDGE-16 (proposed).** `ur bridge block` refuses a block outside 100.64/10 and RFC 1918, readers keep the previous block and alarm on a head carrying one, and renumbering keeps host bits; an overlap no carve resolves (17.4) is fixed by cycling, readers keeping the previous block until a head carries a valid one. *Why:* owner decision 132; a CLI check binds no other signing tool.
 
-**D-BRIDGE-17 (proposed).** A host admits a native IP flow only from a window client whose customer-signed `WindowDelegation` it verified against the subject's pinned identity key or, on a share link, a ShareSigner of the source network's newest certified config generation, which the share's pinned ShareKey, kept in the approving admin's `secret`, certifies for at most 7 days; C13's seal serves only as a consistency check (17.9). *Why:* C13's seal is the operator's statement, and a sidecar its network removes must stop signing within a bound, which no key every reader keeps allows.
+**D-BRIDGE-17 (proposed).** A host admits a native IP flow only from a window client whose customer-signed `WindowDelegation` it verified against the subject's pinned identity key, the key of the subject's live forwarding Delegation (owner decision 197) or, on a share link, a ShareSigner of the source network's newest certified config generation, which the share's pinned ShareKey, kept in the approving admin's `secret`, certifies for at most 7 days; C13's seal serves only as a consistency check (17.9). *Why:* C13's seal is the operator's statement, and a sidecar its network removes must stop signing within a bound, which no key every reader keeps allows.
 
-**D-BRIDGE-18 (proposed).** Only a verified state opens a private destination: the engine and the device role run 17.8's legacy, pending and enforcing states, persisted, never lowered by unsigned input (§18.6). *Why:* a restart plus a forged `has_document = false` must not reopen a LAN.
+**D-BRIDGE-18 (proposed).** Only a verified state opens a private destination: the engine and the forwarding role run 17.8's legacy, pending and enforcing states, persisted, never lowered by unsigned input (§18.6). *Why:* a restart plus a forged `has_document = false` must not reopen a LAN.
 
 **D-BRIDGE-19 (proposed).** A provider never dials its own daemon listeners, document or not (17.6's rule 0). *Why:* owner decision 120 opens LAN and loopback destinations, not the sidecar's own control and content plane.
 
@@ -510,6 +515,8 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 **Q-BRIDGE-7.** Cross-cutting (§18). May a chosen block lie outside 100.64/10 and RFC 1918? **Decided by owner 2026-11-04 (owner decision 132):** (b), no: only 100.64.0.0/10, 10/8, 172.16/12 or 192.168/16, narrowing owner decision 28's "any /16" (D-BRIDGE-16). Public exits refuse RFC 1918 today (connect/ip_security.go:897) and 100.64/10 after C6a, so overlay traffic never reaches the internet; any /16, or adding 198.18.0.0/15, was not chosen. *Residual:* none.
 
+**Q-BRIDGE-8.** Cross-cutting (§18). Does an app device claim its overlay address when its forwarding is set up? Owner decision 197 makes the device's overlay address part of its always-on forwarding, while 17.4 assigns one on demand. *Options:* (a) on demand, as 17.4 says: in the app's UI, by the host's first map, or by an admin; (b) at forwarding's setup the sidecar role files its own `BridgeAddress`, so every app device is addressable once C16 lets it host. *Recommendation:* (a): with no ACL document, a hosted address opens the device's loopback to the network's untagged sidecars (17.6's rule 3; owner decision 120), a reach the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.
+
 ### 17.15 Departures from PLAN.md
 
 - **PLAN.md:117** ("from same network"): owner decision 86 extends maps to cross-network shares (Q-BRIDGE-6).
@@ -519,13 +526,13 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 ### 17.16 Interfaces
 
-- **Provides:** `device.Bridge`, `device.BridgeEgressPolicy`, `device.BridgeHost`, `BridgeStatus`; `protocol/bridge/bridge.proto`'s `BridgeState`, `BridgeIdentity`, `BridgeShareKey`, `Pending`, `BridgeRows`, `WindowDelegation`, `ShareCert`, `BridgeShareSigner` and 17.8's statements; 17.8's states, route export, reach events (§16), the `ur tun` resolver (§12.9).
-- **Consumes:** §7.9's config repo, authorization log (`AuthPin`, entries, `StatementHeader`), deltas and `team` hints; §7.4's `strict_exp`; §8 grant chains, `AclEngine`, approvals, suspension, contract gate, shares; §10's generations; §11.12's `secret` kind; §6 `Signed` and §6.11's `SignedType`, Required, §6.10.1; §5 identities, the binding log, `GET /sidecar/identity/<sidecar_id>`, `Sidecar.Authorize`, `SidecarEvent`; §16.6's decisions and `effect_key`; §12.9; §18 `deviceBridge`, device-role channel; §20.6 debits; §4 C5, C6a, C13, C14, C15, C16, C18.
+- **Provides:** `device.Bridge`, `device.BridgeEgressPolicy`, `device.BridgeHost`, `BridgeStatus`; the compiler and forwarding's signer, which apps' VPN components link (§18.6, §18.10); `protocol/bridge/bridge.proto`'s `BridgeState`, `BridgeIdentity`, `BridgeShareKey`, `Pending`, `BridgeRows`, `WindowDelegation`, `ShareCert`, `BridgeShareSigner` and 17.8's statements; 17.8's states, route export, reach events (§16), the `ur tun` resolver (§12.9).
+- **Consumes:** §7.9's config repo, authorization log (`AuthPin`, entries, `StatementHeader`), deltas and `team` hints, and its forwarding Delegations (owner decision 197); §7.4's `strict_exp`; §8 grant chains, `AclEngine`, approvals, suspension, contract gate, shares; §10's generations; §11.12's `secret` kind; §6 `Signed` and §6.11's `SignedType`, Required, §6.10.1; §5 identities, the binding log, `GET /sidecar/identity/<sidecar_id>`, `Sidecar.Authorize`, `SidecarEvent`; §16.6's decisions and `effect_key`; §12.9; §18 `deviceBridge`, forwarding's setup and the device RPC's status mirror; §20.6 debits; §4 C5, C6a, C13, C14, C15, C16, C18.
 - **Subprotocol messages:** none; rules ride the config repo (§6.11 leaves MessageType 0x19 unused). `Signed` types 0x1901-0x1909 are 17.8's statements, `WindowDelegation` and `ShareCert`; `BridgeShareSigner`, a config file, takes none (17.9).
 - **API routes:** statements through §7's `POST /network/config/delta`; shares through §8's `POST /acl/invite` and `POST /acl/accept-invite`, which carry the sealed tables, the accept status included; `GET|PUT /network/bridge/share/<share_id>` (Client, a sidecar of either network: read both tables, or replace its own at a higher version).
 - **Tables:** `network_bridge_share` (api): share_id, both network ids, sealed target and alias tables, versions, `accept_status enum{active, refused_too_large, refused_no_space}`; kept until revoked.
-- **Services and config:** no new service and no `sidecar_abuse:` caps; sdk flag `EnableBridge`; `ur tun` needs CAP_NET_ADMIN or root.
-- **Assumptions about other sections:** §7.9 carries 17.8's statements as log entries, its type rule bounding a decision's bridge rules by 17.8's rule ids; §16.6's step 5 has a bridge component whose Lookup finds that id in the authorization log, AU1 counts those rules, `bridge_expose` returns the id, and `bridge_close` takes it or a forward's grant_id (§16.5); a device role parses only `protocol/bridge`'s auth.proto (§7.9: `AuthPin`, `AuthEntry`, `ProjectionHeader`, `StatementHeader`, `Genesis`, `SidecarRevoke`, `MemberRevoke`, and §8.8's `Suspend`, `Unsuspend` and `GrantRevoke`) and signed.proto (§6.9: `Signed`, `WebAuthnEvidence`, `SignedType`), which `config.proto` and `acl.proto` import (§4.4); §5.8 and §16.6 sign 17.9's own-resource filings, a host's own `BridgeAddress` among them, from any mode, and other bridge statements only for a /dev/tty-confirmed `ur` command or in an app's UI; §18.6's channel carries `BridgeState` and `Pending`, has the sidecar role sign a keyless device role's delegations by `SignWindowDelegation` (with the identity key, or a share's ShareSigner and its ShareCert) and, by `ResignShares`, have it re-sign a share's links when its `BridgeShareSigner` changes, persists 17.8's states as the device role's posture, and takes the physical path's /32s; §2.8 lists `network_bridge_share` with its accept status and C13's delegation with a share's ShareCert, §2.10 17.9's share-signer bound, and §2.6 and §7.9 the ShareKey's custody and the `BridgeShareSigner` seeds every Y config reader, agents included, holds; §6.9's Signers and §5.5's identity-key rule (D-CORE-6) admit 17.9's two share keys; §22 states the dial fence as an invariant (no byte reaches a target after its flow's revocation; D-BRIDGE-21), which FS-56 tests, and tests D-BRIDGE-16 to D-BRIDGE-21, aliases, the no-document rules, the CGNAT carve, private names, MCP's own-resource bridge filings (a host's first map with its `BridgeAddress`) and the refusal of any other (§16.6), a `BridgeAddress` naming another sidecar_id or a second one for an addressed host included, share signers in FS-38's M6-out run with C18 (a ShareSigner-signed delegation passes; a ShareCert below the host's newest verified generation, expired, over 7 days out or not signed by the pinned ShareKey is refused, after a host restart from 17.8's persisted state too; a sidecar Y removed is refused new contracts once a later generation's ShareCert reaches the host, at most 7 days after its removal; with no renewal for 7 days the share lapses), and 17.5's pins: a TCP flow idle 300-600 s keeps its link across a withdraw, a long-lived flow across an advertiser join, and a one-advertiser retarget's live flows through the drain, while a new pair's TCP connection takes the new rule at once and new UDP and ICMP pairs follow the pre-change link for 5 min; a fragmented UDP datagram stays on one link; mobile churn past a full table (§22.9); and §22.9's link cell holds an app-device host's NAT at C5's per-flow idles.
+- **Services and config:** no new service and no `sidecar_abuse:` caps; sdk flag `EnableBridge` and §19's `bridge` gate, which keep the bridge dark until its release (§19.11) and are no setting: released, an app's forwarding runs whenever its VPN component runs (owner decision 197); `ur tun` needs CAP_NET_ADMIN or root.
+- **Assumptions about other sections:** §7.9 carries 17.8's statements as log entries, its type rule bounding a decision's bridge rules by 17.8's rule ids; §16.6's step 5 has a bridge component whose Lookup finds that id in the authorization log, AU1 counts those rules, `bridge_expose` returns the id, and `bridge_close` takes it or a forward's grant_id (§16.5); `sidecar/device` parses only `protocol/bridge`'s auth.proto (§7.9: `AuthPin`, `AuthEntry`, `ProjectionHeader`, `StatementHeader`, `Genesis`, `SidecarRevoke`, `MemberRevoke`, and §8.8's `Suspend`, `Unsuspend` and `GrantRevoke`) and signed.proto (§6.9: `Signed`, `WebAuthnEvidence`, `SignedType`), which `config.proto` and `acl.proto` import (§4.4); §5.8 and §16.6 sign 17.9's own-resource filings, a host's own `BridgeAddress` among them, from any mode, and other bridge statements only for a /dev/tty-confirmed `ur` command or in an app's UI; §18.6's setup gives an app's VPN component its forwarding Delegation, forwarding clients and `Pending`, after which its forwarding role compiles 17.8's states itself, persists them as its posture and signs its links' delegations with its forwarding key or a share's ShareSigner, and `DeviceLocal` takes the physical path's /32s; §7.9 defines the forwarding Delegation, its signer, what its key signs and its ends, §6.9 that key's `signer_id`, and §7.4 the forwarding client's `forward_only` mark; §2.8 lists `network_bridge_share` with its accept status and C13's delegation with a share's ShareCert, §2.10 17.9's share-signer bound, and §2.6 and §7.9 the ShareKey's custody and the `BridgeShareSigner` seeds every Y config reader, agents included, holds; §6.9's Signers and §5.5's identity-key rule (D-CORE-6) admit 17.9's two share keys; §22 states the dial fence as an invariant (no byte reaches a target after its flow's revocation; D-BRIDGE-21), which FS-56 tests, and tests D-BRIDGE-16 to D-BRIDGE-21, aliases, the no-document rules, the CGNAT carve, private names, MCP's own-resource bridge filings (a host's first map with its `BridgeAddress`) and the refusal of any other (§16.6), a `BridgeAddress` naming another sidecar_id or a second one for an addressed host included, share signers in FS-38's M6-out run with C18 (a ShareSigner-signed delegation passes; a ShareCert below the host's newest verified generation, expired, over 7 days out or not signed by the pinned ShareKey is refused, after a host restart from 17.8's persisted state too; a sidecar Y removed is refused new contracts once a later generation's ShareCert reaches the host, at most 7 days after its removal; with no renewal for 7 days the share lapses), and 17.5's pins: a TCP flow idle 300-600 s keeps its link across a withdraw, a long-lived flow across an advertiser join, and a one-advertiser retarget's live flows through the drain, while a new pair's TCP connection takes the new rule at once and new UDP and ICMP pairs follow the pre-change link for 5 min; a fragmented UDP datagram stays on one link; mobile churn past a full table (§22.9); and §22.9's link cell holds an app-device host's NAT at C5's per-flow idles.
 
 ### 17.17 Risks
 
@@ -542,11 +549,12 @@ Without an active grant, these commands print the approval prompt and wait (§16
 | A full pin table leaves pairs unpinned, so an edit can move their live flows | Low | Medium | One pin per pair, only where an entry offers a choice; nothing refused (owner decision 66); `ur bridge` counts unpinned pairs; §22.9's mobile churn case |
 | After an uncovered agent's reap, new bridge deltas wait for a config rotation (§8.12) by a config writer or the agent's admitting device, a wrapped one by rotation alone (§7.10; owner decisions 128, 144) | Medium | Medium | No admin needed (owner decision 128); covered agents' reaps need none (§10.5); withdrawals never wait; `ur bridge` shows the wait |
 | A tun's overlay address leaks in WebRTC (libwebrtc's 100.64/10 handling is unverified) | Unknown | Low | A §22 test before `auto` assigns one |
-| Links do not fit the iOS tunnel; a keyless sender's new link waits for its sidecar role | High | Medium | No iOS bridge until §22 measures; Q-BRIDGE-2's own-client links; links fail closed meanwhile |
+| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; Q-SDK-7's budget, a compile past it keeping the last state and alarming; links fail closed meanwhile |
+| Between the app's runs an app's forwarding role follows the log unwitnessed, so an operator that withholds a revocation from it keeps a revoked subject reaching that device | Low | Medium | the sidecar role's witnessed pin at each run (§18.6); daemon hosts witness by HeadCheck (§6.4); it needs a malicious operator, and the subject's own revocation still ends it at every other device |
 
 ### 17.18 Phasing
 
 - **v0, M4 (same network; Linux and WSL2 first):** C5 with its dial fence, C6a, C13 with `WindowDelegation`s, C14; statements in the config repo and 17.8's states; router, hook (rule 0 included), userspace stack; `ur tun` on Linux; private names via `ur tun`'s resolver and C14's seam, dark on app paths; forwards, expose and egress under I-8 approvals; HA, pins, dispositions, block changes and the CGNAT carve; sidecar-owned hosts; the sdk insertion behind `EnableBridge`. Blocked by §7.9's config repo and authorization log (M2), §8's grant chains and gates, and C13.
-- **v0, M8** (with §18's app hosts): Apple platforms, app-device hosts after C16, iOS links after §22.9's measurement, private names on app paths, keyless senders' delegations over §18.6's channel.
+- **v0, M8** (with §18's app hosts): forwarding in every app's VPN component, with its own keys, compile and signing (owner decision 197): sending from M8, hosting after C16 in the device client's network, iOS links after §22.9's measurement, private names on app paths.
 - **v1:** cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight, and `ur tun` on macOS and Windows (M6); P2P after C3 (§6).
 - **Later:** L3 delivery, multi-hop maps, IPv6 subnet routes.

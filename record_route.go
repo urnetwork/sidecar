@@ -8,10 +8,9 @@
 // coverage names no_vault (section 4.2's no author row). RecordVault.Ensure, which files the vault's RepoCreate, is
 // RECORD-M3-12's.
 //
-// Team mode, which sends T's kinds to the team record as well and D's to the directory, is RECORD-M6-01's: until it
-// lands, a kind no personal network holds is refused here rather than written anywhere (section 6.3's Personal none),
-// and a network whose config names a team record still routes as personal, so the team record misses entries and
-// nothing reaches a log it should not. A read receipt never routes here: it is deposited to the repo read, through
+// Team mode, which sends T's kinds to the team record as well and D's to the directory, is record_team.go's
+// (RECORD-M6-01), over the vault route here: a kind no log of the network holds is refused rather than written
+// anywhere (section 6.3's Personal none). A read receipt never routes here: it is deposited to the repo read, through
 // RECORD-M3-05's RecordReceipts, and awaits evs before its read runs.
 //
 // The stream path is plan-RECORD-stream-names#4's, in one function, RecordStreamPath. The stream's ref name, ur/<id>/
@@ -25,7 +24,6 @@ package sidecar
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -39,8 +37,8 @@ const (
 )
 
 var (
-	// A kind section 6.3 sends to no personal network's log: D's own, a copy of a T entry, and T's and R's upkeep.
-	// Team mode is RECORD-M6-01's, so nothing writes one yet.
+	// A kind section 6.3 sends to no log this network holds: D's own with no directory, a copy in a personal network,
+	// T's upkeep with no team record, and R's (record_team.go).
 	ErrRecordRouteTeamOnly = errors.New("record kind is for a team log")
 	// A read receipt, which is deposited to the repo read before the read (RECORD-M3-05), never appended.
 	ErrRecordRouteReceipt = errors.New("record read receipts are deposited, not appended")
@@ -66,18 +64,6 @@ type recordRoute struct {
 	logId Id
 	// The author's other sidecars deposit; a consented device writes its own stream.
 	deposit bool
-}
-
-// The log a kind goes to from this sidecar, by auth's answers: a route, errRecordUnrouted when none takes it now, or
-// a refusal for a kind M3 writes nowhere.
-func recordRouteFor(auth RecordAuthView, sidecarId Id, kind RecordKind) (*recordRoute, error) {
-	if kind == RecordKindRead {
-		return nil, ErrRecordRouteReceipt
-	}
-	if slices.Contains(recordKindsTeamOnly, kind) {
-		return nil, fmt.Errorf("%w: %s", ErrRecordRouteTeamOnly, kind)
-	}
-	return recordVaultRoute(auth, sidecarId)
 }
 
 // This sidecar's author's vault, and whether it deposits there: errRecordUnrouted when it has no author, the author
