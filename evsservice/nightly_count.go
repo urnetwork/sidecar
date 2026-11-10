@@ -13,8 +13,10 @@ package evsservice
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // Adds one repo's stored bytes to its network's in result: what it listed, less the containers the pass deleted.
@@ -73,8 +75,9 @@ func (self *NightlyPass) batchRecordByteCount(ctx context.Context, cluster sidec
 		standing = result.Horizon
 	}
 	byteCount := int64(0)
+	readAge := max(self.settings.HeadWindowAge, self.collectorSettings.HeadAge)
 	for _, listed := range heads {
-		if listed.LastModified.Before(now.Add(-self.settings.HeadWindowAge)) {
+		if listed.LastModified.Before(now.Add(-readAge)) {
 			continue
 		}
 		headBytes, err := readBlob(ctx, cluster, listed.Key)
@@ -88,6 +91,12 @@ func (self *NightlyPass) batchRecordByteCount(ctx context.Context, cluster sidec
 		if err != nil {
 			return 0, err
 		}
+		if err := self.queueCollection(ctx, cluster, repoId, listed.Key, head, result); err != nil {
+			return 0, err
+		}
+		if listed.LastModified.Before(now.Add(-self.settings.HeadWindowAge)) {
+			continue
+		}
 		window, err := EvsHeadWindow(head)
 		if err != nil {
 			return 0, err
@@ -99,4 +108,23 @@ func (self *NightlyPass) batchRecordByteCount(ctx context.Context, cluster sidec
 		}
 	}
 	return byteCount, nil
+}
+
+// Queues the ref's marker collection (EVSB-M2-14) when its head is due one: the fold has passed a removal after its
+// last window by a base range, and the cluster and the clock would let a window open. One run per ref, once-keyed.
+func (self *NightlyPass) queueCollection(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, headKey string, head *protocol.EvsHead, result *NightlyResult) error {
+	if self.host.Tasks == nil || !MarkerCollectionDue(head) || !self.clockSure() || !cluster.SettlePassed() {
+		return nil
+	}
+	refText := strings.TrimPrefix(headKey, HeadRepoPrefix(repoId))
+	refId, err := sidecar.ParseId(refText)
+	if err != nil || HeadKey(repoId, refId) != headKey {
+		return nil
+	}
+	request := EvsCollectTaskRequest(cluster.ClusterId(), repoId, refId, self.clock.Now(), self.collectorSettings)
+	if err := self.host.Tasks.Schedule(ctx, request); err != nil {
+		return err
+	}
+	result.CollectQueuedCount += 1
+	return nil
 }

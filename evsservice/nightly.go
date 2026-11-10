@@ -127,6 +127,8 @@ type NightlyPassDeps struct {
 	EvsSettings *EvsSettings
 	// The move's settings an idle repo's pack is built under (evacuate_move.go). nil: the defaults.
 	Evacuator *EvacuatorSettings
+	// The marker collection the pass queues (collect_markers.go). nil: the defaults.
+	Collector *MarkerCollectorSettings
 	// See OrphanGcDeps.
 	SegmentClusterBusy func(ctx context.Context, clusterId string) bool
 	// Alarms and what a run did. nil discards.
@@ -162,6 +164,8 @@ type NightlyResult struct {
 	UnnamedLeftCount     int
 	IdlePackCount        int
 	ReplacedParcelCount  int
+	// Refs queued for marker collection (evs.collect).
+	CollectQueuedCount int
 	// The run stopped at its bound: NextStartAfter is the repo/ key it reached, and the job queues itself there.
 	More           bool
 	NextStartAfter string
@@ -200,6 +204,8 @@ type NightlyPass struct {
 	orphans     *OrphanGc
 	evacuator   *Evacuator
 	priceTable  *PriceTable
+
+	collectorSettings *MarkerCollectorSettings
 }
 
 // A pass on host, which needs Blobs. Its ClockCheck is read per horizon and per DELETE, nil reading as unsure.
@@ -238,6 +244,13 @@ func NewNightlyPass(host *sidecar.ServiceHost, deps *NightlyPassDeps) (*NightlyP
 	if err != nil {
 		return nil, err
 	}
+	collectorSettings := deps.Collector
+	if collectorSettings == nil {
+		collectorSettings = DefaultMarkerCollectorSettings()
+	}
+	if err := collectorSettings.Validate(evsSettings); err != nil {
+		return nil, err
+	}
 	evacuator, err := NewEvacuator(host, &EvacuatorDeps{
 		Holds:       holds,
 		Settings:    deps.Evacuator,
@@ -273,6 +286,8 @@ func NewNightlyPass(host *sidecar.ServiceHost, deps *NightlyPassDeps) (*NightlyP
 		orphans:     orphans,
 		evacuator:   evacuator,
 		priceTable:  priceTable,
+
+		collectorSettings: collectorSettings,
 	}, nil
 }
 
