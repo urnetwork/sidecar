@@ -171,7 +171,7 @@ type RestorePointsArgs struct {
 	// The git program; empty is "git" on PATH.
 	Git string
 	// The OS's clock, which file ctimes are compared against: a fake clock cannot stand in for it, since the
-	// filesystem stamps real time. Nil is time.Now.
+	// filesystem stamps real time. Nil is sidecar.RealClock's.
 	WallClock func() time.Time
 }
 
@@ -216,7 +216,7 @@ func NewRestorePoints(args *RestorePointsArgs) *RestorePoints {
 	}
 	wallClock := args.WallClock
 	if wallClock == nil {
-		wallClock = time.Now
+		wallClock = sidecar.RealClock{}.Now
 	}
 	settings := args.Ingest
 	if settings == nil {
