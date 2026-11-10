@@ -18,12 +18,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // A logger keeping every line, safe for concurrent use, for alarms a test counts.
@@ -157,8 +159,8 @@ type format2Push struct {
 	listed [][][]byte
 	// the purge candidates its record lists, which makes the record format 2's form; nil for format 1's
 	purge *protocol.EvsPurgeList
-	// the record's batch instance and seq when it is format 2's form
-	seq uint32
+	// its new-objects list, staged segments' items included
+	newObjects []*sidecar.EvsNewObject
 }
 
 // The entry version bytes a format-2 change writes: the world's own for a versioned file or a directory, else a
@@ -210,7 +212,7 @@ func (self *evsWorld) format2Plan(push *format2Push) (*sidecar.EvsPushPlan, []*w
 		PushId: pushId, BaseVersion: baseVersion, BaseChain: baseChain, Generation: 1, GroupId: testId("group"),
 		GenerationCommitment: make([]byte, 32), PathEpoch: pathEpoch, Auth: &bridge.AuthPin{Version: 1, Chain: make([]byte, 32)},
 		SignerSidecarId: self.signerId, ClientId: testId("client"), TimeMs: self.clock.Now().UnixMilli(),
-		SealedMetadata: []byte("sealed metadata"), Flags: push.flags,
+		SealedMetadata: []byte("sealed metadata"), Flags: push.flags, NewObjects: push.newObjects,
 		SourcesStand: !self.head.Absent() && 0 < len(self.head.Head.GetPathEpoch().GetSources()),
 	}
 	// a statement lists its changes by token path
@@ -721,6 +723,623 @@ func TestFormat2DropRemovedBoundaryAndCancelWriteNothing(t *testing.T) {
 	world.raiseHorizon()
 	world.requireNewest(x)
 	world.requireNewest(y)
+	if lines.count("fold_drop") != 0 {
+		t.Fatalf("an honest drop alarmed:\n%s", lines)
+	}
+}
+
+// A folder over the world's clusters, as its own process, paying through budget and logging to log.
+func (self *evsWorld) folderWith(budget sidecar.WriteBudget, log sidecar.Logger) *Folder {
+	priceTable, err := DefaultPriceTable(self.settings.PriceBlockByteCount)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, budget, self.heads, NewRecordCache(self.settings),
+		NewRepoCache(self.clock, self.settings), priceTable, self.settings, log)
+}
+
+// FS-58 rerun over format-2 entries: two folds of a range holding directory D's removal, which leaves versionless
+// D/x unlisted, the first held. The second marks D and D/x, D/x's marker carrying its ids, and its commit raises
+// folded_through; D and D/x are created again and a third fold takes them in, the creation over the marker carrying
+// ids alarming as it drops them (plan-EVS2-marker-carried-ids's interim). The first then runs and writes nothing over
+// the newer entries: held in P2's queue its If-Match fails and its reread finds them newer; held past its 15 s
+// deadline the store refuses its write and its head reread shows another fold past it; with its marker PUT delayed in
+// the network and applying late, the If-Match fails. D/x reads as re-created throughout, and nothing more alarms.
+func TestFormat2LateRemovalFoldWritesNothingOverNewerEntries(t *testing.T) {
+	for _, variant := range []string{"queued", "stale", "delayed"} {
+		world, lines := newFormat2World(t)
+		directory := worldPath("d")
+		x := versionless(&worldChange{path: worldPath("d", "x"), version: 1}, "x1")
+		world.pushFormat2(&format2Push{changes: []*format2Change{
+			versioned(&worldChange{path: directory, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("x")}}), x,
+		}})
+		world.fold(1)
+		world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: directory, base: 1})}})
+		removalHead, readAt := world.head, world.clock.Now()
+
+		budget := newGatedBudget(world.host.Budget)
+		var delayed <-chan struct{}
+		if variant == "delayed" {
+			budget.open()
+			var err error
+			delayed, err = world.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+				Op: sidecartest.FaultOpPut, KeyPrefix: IndexEntryKey(world.repoId, world.refId, 1, directory), Nth: 1,
+				Result: sidecartest.Delay, Delay: sidecartest.DelayInNetwork,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		first := world.folderWith(budget, lines)
+		done := make(chan struct{})
+		var firstResult *EvsFoldResult
+		var firstErr error
+		go func() {
+			defer close(done)
+			firstResult, firstErr = first.Fold(world.ctx, &EvsFoldRequest{
+				Cluster: world.foldCluster, RepoId: world.repoId, RefId: world.refId, Head: removalHead, HeadReadAt: readAt,
+				Rank: sidecar.WriteP2RankFold,
+			})
+		}()
+		if variant == "delayed" {
+			awaitClosed(t, delayed, "the delayed marker PUT")
+		} else {
+			awaitClosed(t, budget.waiting, "the first fold's wait in P2's queue")
+		}
+
+		world.fold(2)
+		if marker := world.entryOf(x.path).Entry.GetMarker(); marker == nil || marker.GetRemovalVersion() != 2 || !carriesIdsOf(marker, x) {
+			t.Fatalf("%s: the second fold's marker on D/x: %v", variant, marker)
+		}
+		creation := ExpectedEntryVersion(0, world.head.Version(), 2)
+		recreated := versionless(&worldChange{path: x.path, version: creation}, "x3")
+		world.pushFormat2(&format2Push{changes: []*format2Change{
+			versioned(&worldChange{path: directory, directory: true, version: creation, names: []sidecar.EvsToken{worldToken("x")}}), recreated,
+		}})
+		world.fold(3)
+		if lines.count("fold_unlisted_versionless") != 1 || lines.count("fold_carried_ids") != 1 {
+			t.Fatalf("%s: alarms before the late fold:\n%s", variant, lines)
+		}
+
+		switch variant {
+		case "queued":
+			budget.open()
+		case "stale":
+			world.clock.Advance(20 * time.Second)
+			budget.open()
+		case "delayed":
+			if delivered := world.host.Blobs.DeliverDelayed("meta-1", indexKeyPrefix); delivered != 1 {
+				t.Fatalf("%d delayed requests delivered", delivered)
+			}
+		}
+		awaitClosed(t, done, "the first fold")
+		if firstErr != nil {
+			t.Fatalf("%s: the first fold: %v", variant, firstErr)
+		}
+		if firstResult.EntryWriteCount != 0 || (variant == "stale") != firstResult.Superseded {
+			t.Errorf("%s: the first fold %+v", variant, firstResult)
+		}
+		entry := world.entryOf(x.path).Entry
+		if entry.GetMarker() != nil || len(entry.GetVersions()) != 1 || foldedEntryVersion(t, entry.GetVersions()[0]).GetVersion() != creation {
+			t.Errorf("%s: D/x after the late fold: %v", variant, entry)
+		}
+		if newest := world.requireNewest(x.path); !newest.Exists || newest.Version != creation {
+			t.Errorf("%s: D/x reads %+v", variant, newest)
+		}
+		if lines.count("fold_unlisted_versionless") != 1 || lines.count("fold_carried_ids") != 1 {
+			t.Errorf("%s: the late fold alarmed:\n%s", variant, lines)
+		}
+	}
+}
+
+// FS-58 over a drop mark: a fold of an old range held in P2's queue while another folds it, a DROP commits and its
+// fold sets the mark: the held fold's If-Match fails, its reread finds the entry newer, and the mark stands.
+func TestFormat2LateFoldWritesNothingOverADropsMark(t *testing.T) {
+	world, _ := newFormat2World(t)
+	x := worldPath("x")
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: x, version: 1})}})
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: x, base: 1, version: 2})}})
+	staleHead, readAt := world.head, world.clock.Now()
+	budget := newGatedBudget(world.host.Budget)
+	first := world.folderWith(budget, sidecar.NewNoopLogger())
+	done := make(chan struct{})
+	var firstResult *EvsFoldResult
+	var firstErr error
+	go func() {
+		defer close(done)
+		firstResult, firstErr = first.Fold(world.ctx, &EvsFoldRequest{
+			Cluster: world.foldCluster, RepoId: world.repoId, RefId: world.refId, Head: staleHead, HeadReadAt: readAt,
+			Rank: sidecar.WriteP2RankFold,
+		})
+	}()
+	awaitClosed(t, budget.waiting, "the first fold's wait in P2's queue")
+	world.fold(2)
+	dropId := testId("drop")
+	world.fold(world.pushFormat2(format2DropPush(dropId, x, 1, 2)))
+	marked := world.entryOf(x)
+	budget.open()
+	awaitClosed(t, done, "the first fold")
+	if firstErr != nil || firstResult.EntryWriteCount != 0 {
+		t.Fatalf("the late fold: %+v %v", firstResult, firstErr)
+	}
+	if after := world.entryOf(x); after.Etag != marked.Etag || !hasDropMark(after.Entry, dropId, 3) {
+		t.Fatalf("the late fold wrote over the drop: %v", after.Entry)
+	}
+	world.requireNewest(x)
+}
+
+// §11.7's epochs row while sources stand, over format 2: a write of a dropped path carries its source entry, the drop
+// mark with it, and deletes the source copy; a creation whose named source holds a marker carrying ids alarms as the
+// fold's delete drops them; and a directory's removal that empties its named source below it alarms for an unlisted
+// versionless file there, whose content stays (plan-EVS2-marker-carried-ids's interim).
+func TestFormat2FoldWhileSourcesStandKeepsTheMarkAndAlarmsWhereIdsLeave(t *testing.T) {
+	world, lines := newFormat2World(t)
+	x, d, u, e, v := worldPath("x"), worldPath("d"), worldPath("d", "u"), worldPath("e"), worldPath("e", "v")
+	unlisted := versionless(&worldChange{path: u, version: 1}, "u")
+	below := versionless(&worldChange{path: v, version: 1}, "v")
+	world.pushFormat2(&format2Push{changes: []*format2Change{
+		versioned(&worldChange{path: x, version: 1}),
+		versioned(&worldChange{path: d, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("u")}}), unlisted,
+		versioned(&worldChange{path: e, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("v")}}), below,
+	}})
+	dropId := testId("drop")
+	world.pushFormat2(format2DropPush(dropId, x, 1, 1))
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: d, base: 1})}})
+	world.fold(3)
+	if marker := world.entryOf(u).Entry.GetMarker(); !carriesIdsOf(marker, unlisted) || lines.count("fold_unlisted_versionless") != 1 {
+		t.Fatalf("u's marker %v:\n%s", marker, lines)
+	}
+	world.cutOverToEpochTwo()
+
+	x2, u2, e2 := worldPath("x2"), worldPath("d2", "u2"), worldPath("e2")
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: x2, base: 2, version: 3, sourcePaths: world.sourceOf(1, x)})}})
+	creation := ExpectedEntryVersion(0, world.head.Version(), 2)
+	world.pushFormat2(&format2Push{changes: []*format2Change{versionless(&worldChange{path: u2, version: creation, sourcePaths: world.sourceOf(1, u)}, "u2")}})
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: e2, base: 1, sourcePaths: world.sourceOf(1, e)})}})
+	world.foldBy(world.folder)
+
+	carried, err := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 2, x2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(carried.Entry.GetVersions()) != 2 || !hasDropMark(carried.Entry, dropId, 2) || carried.State != (EvsEntryStateValue{State: EvsEntryStateCarried, Epoch: 1}) {
+		t.Fatalf("x carried from its source: %+v %v", carried.State, carried.Entry)
+	}
+	if world.holds(1, x) || world.holds(1, u) || world.holds(1, v) {
+		t.Fatalf("source copies left: x %t, u %t, v %t", world.holds(1, x), world.holds(1, u), world.holds(1, v))
+	}
+	if count := lines.count("fold_carried_ids"); count != 2 {
+		t.Fatalf("%d carried-ids alarms, want the creation's and the directory rule's:\n%s", count, lines)
+	}
+}
+
+// Commits a format-2 push of changes in parts, as the seal of §11.8's parts row leaves it: each part's record, the
+// first of format 2's form listing purge, then the seal's record naming their places, changes_roots and first token
+// paths.
+func (self *evsWorld) pushFormat2InParts(purge *protocol.EvsPurgeList, newObjects []*sidecar.EvsNewObject, changes ...*format2Change) uint64 {
+	self.t.Helper()
+	plan, worldChanges := self.format2Plan(&format2Push{changes: changes, newObjects: newObjects})
+	built, err := self.builder.BuildFormat2(plan)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if len(built.Parts) < 2 {
+		self.t.Fatalf("%d parts", len(built.Parts))
+	}
+	sealParts := []*sidecar.EvsSealPart{}
+	for i, partBytes := range built.Parts {
+		checked, err := sidecar.EvsCheckPartFormat2(built.Statement, partBytes, nil)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		record := &sidecar.EvsBatchRecord{
+			Type: protocol.EvsBatchRecordType_EVS_BATCH_PART, RepoId: self.repoId, RefId: self.refId, PushId: plan.PushId,
+			SignerSidecarId: self.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsPartRecordBody(built.Statement.Bytes, partBytes, nil, plan.BaseVersion),
+		}
+		listing := purge
+		if 0 < i {
+			listing = nil
+		}
+		sealParts = append(sealParts, &sidecar.EvsSealPart{Place: self.putFormat2Record(record, listing), ChangesRoot: checked.Root, FirstTokenPath: checked.Changes[0].TokenPath})
+	}
+	place := self.putFormat2Record(&sidecar.EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: self.repoId, RefId: self.refId, PushId: plan.PushId,
+		SignerSidecarId: self.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsSealRecordBody(built.Statement.Bytes, sealParts),
+	}, nil)
+	changedPaths := make([]sidecar.EvsTokenPath, len(plan.Changes))
+	for i, change := range plan.Changes {
+		changedPaths[i] = change.TokenPath
+	}
+	windowEntry := sidecar.NewEvsWindowEntry(built.Statement.Sha256, built.Statement.Push, changedPaths, built.Statement.ChangedPrefixes, true, place)
+	return self.commitWindowEntry(plan, built.Statement, windowEntry, worldChanges)
+}
+
+// A fold of a versionless push in parts checks its stored seal in format 2 (EvsCheckStoredSeal), its first part's
+// record of format 2's form among them, and writes every path's versionless version as written. The stored seal
+// matches no staged bytes, which ride outside every hash: the arriving seal's check (EvsCheckSealFormat2) refuses the
+// same parts without the staged segment their new-objects list names, and format 1's seal refuses them as needing
+// format 2.
+func TestFormat2FoldReadsAVersionlessPushInParts(t *testing.T) {
+	world, lines := newFormat2World(t)
+	seed := versionless(&worldChange{path: worldPath("seed"), version: 1}, "seed")
+	world.pushFormat2(&format2Push{changes: []*format2Change{seed}})
+	changes := []*format2Change{versioned(&worldChange{path: seed.path, base: 1, version: 2})}
+	for i := 0; i < 1100; i += 1 {
+		changes = append(changes, versionless(&worldChange{path: worldPath(fmt.Sprintf("p%d", i)), version: 2}, fmt.Sprintf("p%d", i)))
+	}
+	staged := []*sidecar.EvsNewObject{{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT, Id: format2Id("p0 staged"), PaddedSize: 4096}}
+	sealed := world.pushFormat2InParts(format2PurgeList(seed), staged, changes...)
+	window, err := EvsHeadWindow(world.head.Head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealRecord, err := ReadRecord(world.ctx, NewRecordCache(world.settings), world.cluster, window[sealed-1].Place)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statementBytes, sealParts, err := sidecar.ParseEvsSealRecordBody(sealRecord.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partBytes := [][]byte{}
+	for _, sealPart := range sealParts {
+		record, err := ReadRecord(world.ctx, NewRecordCache(world.settings), world.cluster, sealPart.Place)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, part, _, _, err := sidecar.ParseEvsPartRecordBody(record.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		partBytes = append(partBytes, part)
+	}
+	if _, _, err := sidecar.EvsCheckSeal(statement, partBytes); !errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+		t.Fatalf("format 1's seal over versionless parts: %v", err)
+	}
+	if _, _, err := sidecar.EvsCheckSealFormat2(statement, partBytes, make([][]byte, len(partBytes))); !errors.Is(err, sidecar.ErrEvsPushInvalid) {
+		t.Fatalf("an arriving seal without its staged segment: %v", err)
+	}
+	if _, _, err := sidecar.EvsCheckStoredSeal(statement, partBytes); err != nil {
+		t.Fatalf("the stored seal: %v", err)
+	}
+	world.fold(sealed)
+	for _, label := range []string{"p0", "p550", "p1099"} {
+		entry := world.entryOf(worldPath(label)).Entry
+		if len(entry.GetVersions()) != 1 || foldedEntryVersion(t, entry.GetVersions()[0]).GetVersioning() != uint32(protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS) {
+			t.Fatalf("%s after the sealed push's fold: %v", label, entry)
+		}
+		world.requireNewest(worldPath(label))
+	}
+	if lines.count("fold_invalid") != 0 {
+		t.Fatalf("the fold alarmed:\n%s", lines)
+	}
+}
+
+// An entry's format-2 fields held to their shape (ParseEvsIndexEntry): a versioning past 2, a carried id of the wrong
+// size, and a drop mark naming no drop, through no version, past the path's newest or at its marker's are refused;
+// a versionless version, a marker carrying ids and a mark at the newest version are taken.
+func TestFormat2IndexEntryShapes(t *testing.T) {
+	entryVersion := func(version uint64, versioning uint32) []byte {
+		bytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsEntryVersion{
+			Version: version, PushId: testId("push").Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), Versioning: versioning,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
+	file := func(versioning uint32) *protocol.EvsIndexEntry {
+		return &protocol.EvsIndexEntry{Versions: []*protocol.EvsIndexVersion{{PushId: testId("push").Bytes(), CommitVersion: 5, EntryVersion: entryVersion(3, versioning)}}}
+	}
+	marker := func(segmentIds [][]byte, slotIds [][]byte) *protocol.EvsRemovalMarker {
+		return &protocol.EvsRemovalMarker{PushId: testId("removal").Bytes(), RemovalVersion: 9, PathVersion: 4, SegmentIds: segmentIds, SlotIds: slotIds}
+	}
+	withMark := func(entry *protocol.EvsIndexEntry, dropId []byte, through uint64) *protocol.EvsIndexEntry {
+		entry.DropMark = &protocol.EvsDropMark{DropId: dropId, ThroughVersion: through}
+		return entry
+	}
+	removed := func() *protocol.EvsIndexEntry {
+		entry := file(1)
+		entry.Marker = marker([][]byte{format2Id("s")}, [][]byte{format2SlotId("s")})
+		return entry
+	}
+	for _, c := range []struct {
+		name  string
+		entry *protocol.EvsIndexEntry
+		valid bool
+	}{
+		{"a versionless version", file(1), true},
+		{"an index file's version", file(2), true},
+		{"a versioning past 2", file(3), false},
+		{"a marker carrying ids", removed(), true},
+		{"a marker carrying a short segment id", &protocol.EvsIndexEntry{Marker: marker([][]byte{make([]byte, 31)}, nil)}, false},
+		{"a marker carrying a long slot id", &protocol.EvsIndexEntry{Marker: marker(nil, [][]byte{make([]byte, 17)})}, false},
+		{"a mark at the newest version", withMark(file(0), testId("drop").Bytes(), 3), true},
+		{"a mark below a marker", withMark(removed(), testId("drop").Bytes(), 3), true},
+		{"a mark of a short drop id", withMark(file(0), make([]byte, 15), 3), false},
+		{"a mark through no version", withMark(file(0), testId("drop").Bytes(), 0), false},
+		{"a mark past the newest version", withMark(file(0), testId("drop").Bytes(), 4), false},
+		{"a mark at its marker's version", withMark(&protocol.EvsIndexEntry{Marker: marker(nil, nil)}, testId("drop").Bytes(), 4), false},
+	} {
+		entryBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(c.entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = ParseEvsIndexEntry(entryBytes)
+		if c.valid != (err == nil) || (err != nil && !errors.Is(err, ErrEvsIndexEntryInvalid)) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
+
+// A versionless file's entry as a fold leaves it, at path version in commit: one version, its kind-5 locators and
+// slot drawn from label, and a drop mark through dropThrough unless that is 0.
+func format2PlantedEntry(t *testing.T, label string, version uint64, commit uint64, dropThrough uint64) *protocol.EvsIndexEntry {
+	t.Helper()
+	pushId := testId("planted " + label)
+	entryVersion, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsEntryVersion{
+		Version: version, PushId: pushId.Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), PaddedSize: 4096,
+		Versioning: uint32(protocol.EvsVersioning_EVS_VERSIONING_VERSIONLESS), SealedFields: []byte("sealed fields"),
+		Chain: []*protocol.EvsLocator{{
+			Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT), Id: format2Id(label),
+			Offset: sidecar.EvsKind5SegmentHeaderByteCount, Length: uint32(sidecar.EvsRecordByteCount(4096)),
+		}},
+		SlotIds: [][]byte{format2SlotId(label)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := &protocol.EvsIndexEntry{Versions: []*protocol.EvsIndexVersion{{PushId: pushId.Bytes(), CommitVersion: commit, EntryVersion: entryVersion}}}
+	if 0 < dropThrough {
+		entry.DropMark = &protocol.EvsDropMark{DropId: testId("drop " + label).Bytes(), ThroughVersion: dropThrough}
+	}
+	return entry
+}
+
+// Writes entry over whatever the fixture holds at the path in epoch, as a fold would have, under state.
+func replantEntry(fixture *pushFixture, epoch uint64, entry *protocol.EvsIndexEntry, state EvsEntryStateValue, labels ...string) {
+	fixture.t.Helper()
+	prior := fixture.entryAt(epoch, labels...)
+	if _, err := PutEntry(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, epoch, checkTestPath(labels...), prior, entry, state); err != nil {
+		fixture.t.Fatal(err)
+	}
+}
+
+// A marker over planted's version carrying its ids, as a removal fold leaves an unlisted versionless file.
+func format2PlantedMarker(planted *protocol.EvsIndexEntry, removal uint64) *protocol.EvsIndexEntry {
+	marked := proto.Clone(planted).(*protocol.EvsIndexEntry)
+	entryVersion, _ := parseEvsEntryVersion(planted.GetVersions()[0].GetEntryVersion())
+	segmentIds, slotIds := evsCarriedIdsOf(entryVersion)
+	marked.Marker = &protocol.EvsRemovalMarker{
+		PushId: testId("removal").Bytes(), RemovalVersion: removal, PathVersion: entryVersion.GetVersion() + 1,
+		SegmentIds: segmentIds, SlotIds: slotIds,
+	}
+	return marked
+}
+
+// §11.6's copy row in format 2: every carried entry keeps its versionless versions as written, its marker's carried
+// ids and its drop mark, byte for byte, carried from its source; nothing alarms, since no id leaves; and a kill at each
+// copy boundary, a write failing before it applies or applying with its answer lost, resumes to the same entries.
+func TestFormat2CopyKeepsVersionlessVersionsCarriedIdsAndTheDropMark(t *testing.T) {
+	plans := []*sidecartest.FaultPlan{
+		nil,
+		{Op: sidecartest.FaultOpPut, KeyPrefix: "idx/", Nth: 1, Result: sidecartest.FailBeforeApply},
+		{Op: sidecartest.FaultOpPut, KeyPrefix: "idx/", Nth: 2, Result: sidecartest.ApplyThenDrop},
+		{Op: sidecartest.FaultOpDelete, KeyPrefix: "idx/", Nth: 1, Result: sidecartest.FailBeforeApply},
+		{Op: sidecartest.FaultOpDelete, KeyPrefix: "idx/", Nth: 2, Result: sidecartest.ApplyThenDrop},
+		{Op: sidecartest.FaultOpPut, KeyPrefix: "head/", Nth: 1, Result: sidecartest.ApplyThenDrop},
+	}
+	for i, plan := range plans {
+		fixture := newPushFixture(t, nil)
+		fixture.committedEpochTwo()
+		dropped := format2PlantedEntry(t, "a", 2, 2, 2)
+		replantEntry(fixture, 1, dropped, EvsEntryStateValue{}, "a")
+		marked := format2PlantedMarker(format2PlantedEntry(t, "late", 1, 3, 0), 4)
+		replantEntry(fixture, 1, marked, EvsEntryStateValue{}, "late")
+		if plan != nil {
+			if _, err := fixture.host.Blobs.Faults().Add(plan); err != nil {
+				t.Fatal(err)
+			}
+		}
+		lines := &format2Lines{}
+		drained := false
+		for range 4 {
+			result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), &EvsEpochCopyDeps{Log: lines}, fixture.copyArgs(2))
+			if err == nil && result.SourcesDropped || len(fixture.head().Head.GetPathEpoch().GetSources()) == 0 {
+				drained = true
+				break
+			}
+		}
+		if !drained || len(fixture.epochKeys(1)) != 0 {
+			t.Fatalf("plan %d: drained %t, epoch 1 %q", i, drained, fixture.epochKeys(1))
+		}
+		for _, c := range []struct {
+			label string
+			want  *protocol.EvsIndexEntry
+		}{{"a", dropped}, {"late", marked}} {
+			moved := fixture.entryAt(2, "epoch 2", c.label)
+			if moved.Absent() || !proto.Equal(moved.Entry, c.want) || moved.State != (EvsEntryStateValue{State: EvsEntryStateCarried, Epoch: 1}) {
+				t.Fatalf("plan %d: %s moved as %+v %v", i, c.label, moved.State, moved.Entry)
+			}
+		}
+		if lines.count("fold_carried_ids") != 0 || lines.count("fold_unlisted_versionless") != 0 {
+			t.Fatalf("plan %d: a copy that dropped no id alarmed:\n%s", i, lines)
+		}
+		if plan != nil {
+			if unfired := fixture.host.Blobs.Faults().Unfired(); len(unfired) != 0 {
+				t.Fatalf("plan %d never fired: %v", i, unfired)
+			}
+		}
+	}
+}
+
+// The prefixes row in format 2: a versionless file moved under a prefix whose removal the head has folded was not
+// listed by it, since its fold would have written the path's marker first, so the marker the copy writes carries its
+// ids, with an alarm; a versioned file moved there carries nothing; and the drop mark stays on the marker.
+func TestFormat2CopyUnderAFoldedRemovalCarriesAnUnlistedVersionlessFilesIds(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.committedEpochTwo()
+	head := fixture.head().Head
+	planted := format2PlantedEntry(t, "a", 2, 2, 2)
+	replantEntry(fixture, 1, planted, EvsEntryStateValue{}, "a")
+	// late a versioned file at commit 2, so a removal the head has folded passes both files' newest commits
+	late := format2PlantedEntry(t, "late", 1, 2, 0)
+	lateVersion, _ := parseEvsEntryVersion(late.GetVersions()[0].GetEntryVersion())
+	lateVersion.Versioning = uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT)
+	late.GetVersions()[0].EntryVersion, _ = proto.MarshalOptions{Deterministic: true}.Marshal(lateVersion)
+	replantEntry(fixture, 1, late, EvsEntryStateValue{}, "late")
+	removal := head.GetFoldedThrough()
+	if removal <= 2 {
+		t.Fatalf("the PATH_EPOCH left folded_through %d", removal)
+	}
+	fixture.plantEntry(2, &protocol.EvsIndexEntry{Marker: &protocol.EvsRemovalMarker{PushId: testId("removal").Bytes(), RemovalVersion: removal, PathVersion: 2}},
+		EvsEntryStateValue{State: EvsEntryStateRemoved}, "epoch 2")
+	lines := &format2Lines{}
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), &EvsEpochCopyDeps{Log: lines}, fixture.copyArgs(2))
+	if err != nil || result.MarkedCount != 2 {
+		t.Fatalf("result %+v %v", result, err)
+	}
+	moved := fixture.entryAt(2, "epoch 2", "a")
+	entryVersion, _ := parseEvsEntryVersion(planted.GetVersions()[0].GetEntryVersion())
+	segmentIds, slotIds := evsCarriedIdsOf(entryVersion)
+	marker := moved.Entry.GetMarker()
+	if marker == nil || marker.GetRemovalVersion() != removal || !slices.EqualFunc(marker.GetSegmentIds(), segmentIds, bytes.Equal) ||
+		!slices.EqualFunc(marker.GetSlotIds(), slotIds, bytes.Equal) || !proto.Equal(moved.Entry.GetDropMark(), planted.GetDropMark()) {
+		t.Fatalf("a under the removed prefix: %v", moved.Entry)
+	}
+	if late := fixture.entryAt(2, "epoch 2", "late").Entry.GetMarker(); late == nil || markerCarriesIds(late) {
+		t.Fatalf("the versioned file under the removed prefix: %v", late)
+	}
+	if count := lines.count("fold_unlisted_versionless"); count != 1 {
+		t.Fatalf("%d unlisted alarms:\n%s", count, lines)
+	}
+}
+
+// 412's rule and the end row in format 2: a source marker carrying ids under a current entry that stands, a
+// re-creation that carries none, is deleted unmoved and alarms as its ids leave; so does a source marker no move
+// names, at the end; the content stays (plan-EVS2-marker-carried-ids's interim).
+func TestFormat2CopyDeletingASourceMarkerWithIdsAlarms(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.committedEpochTwo()
+	replantEntry(fixture, 1, format2PlantedMarker(format2PlantedEntry(t, "a", 1, 1, 0), 2), EvsEntryStateValue{}, "a")
+	fixture.plantEntry(2, format2PlantedEntry(t, "a again", 3, 4, 0), EvsEntryStateValue{State: EvsEntryStateFresh}, "epoch 2", "a")
+	fixture.plantEntry(1, format2PlantedMarker(format2PlantedEntry(t, "gone", 1, 1, 0), 2), EvsEntryStateValue{}, "gone")
+	lines := &format2Lines{}
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), &EvsEpochCopyDeps{Log: lines}, fixture.copyArgs(2))
+	if err != nil || !result.SourcesDropped {
+		t.Fatalf("result %+v %v", result, err)
+	}
+	if count := lines.count("fold_carried_ids"); count != 2 {
+		t.Fatalf("%d carried-ids alarms, want the 412 rule's and the end's:\n%s", count, lines)
+	}
+	if moved := fixture.entryAt(2, "epoch 2", "a"); moved.State.State != EvsEntryStateFresh || moved.Entry.GetMarker() != nil {
+		t.Fatalf("the re-creation was written over: %+v %v", moved.State, moved.Entry)
+	}
+}
+
+// The copy's test of whether a prefix's removal lists the path it moves: the removing push's own change list while
+// the head holds it unfolded, the path named or not; a version the head has folded, which lists no path the copy
+// finds absent; and no answer for a fresh prefix's re-creation not yet folded or a version past the head.
+func TestFormat2CopyTellsWhetherARemovalListsThePath(t *testing.T) {
+	world, _ := newFormat2World(t)
+	directory, x, y := worldPath("d"), worldPath("d", "x"), worldPath("d", "y")
+	listed := versionless(&worldChange{path: x, version: 1}, "x")
+	world.pushFormat2(&format2Push{changes: []*format2Change{
+		versioned(&worldChange{path: directory, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("x"), worldToken("y")}}),
+		listed, versionless(&worldChange{path: y, version: 1}, "y"),
+	}})
+	world.fold(1)
+	removal := world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: directory, base: 1}), format2Removal(listed)}, purge: format2PurgeList(listed)})
+	run := &copyRun{
+		ctx: world.ctx, settings: world.settings, log: sidecar.NewNoopLogger(), cluster: world.cluster,
+		records: NewRecordCache(world.settings), repoId: world.repoId, refId: world.refId, head: world.head,
+	}
+	for _, c := range []struct {
+		version uint64
+		removed bool
+		path    sidecar.EvsTokenPath
+		listed  bool
+		known   bool
+	}{
+		{removal, true, x, true, true},
+		{removal, true, y, false, true},
+		{removal, false, y, false, false},
+		{removal + 1, true, y, false, false},
+		{1, true, y, false, true},
+	} {
+		listed, known, err := run.removalLists(c.version, c.removed, c.path)
+		if err != nil || listed != c.listed || known != c.known {
+			t.Errorf("version %d removed %t path %x: listed %t known %t %v", c.version, c.removed, c.path.Last().Bytes()[:2], listed, known, err)
+		}
+	}
+}
+
+// A DROP in parts, its lists past one part's 1 MiB riding in the parts' slices: the stored seal reads its body with
+// its parts (EvsCheckStoredSeal), and the fold sets each written lineage's mark.
+func TestFormat2DropInPartsSetsEachWrittenLineagesMark(t *testing.T) {
+	world, lines := newFormat2World(t)
+	labels := []string{"a", "b", "c", "d"}
+	creations := []*format2Change{}
+	for _, label := range labels {
+		creations = append(creations, versioned(&worldChange{path: worldPath(label), version: 1}))
+	}
+	world.pushFormat2(&format2Push{changes: creations})
+	dropId := testId("drop")
+	push := &format2Push{flags: uint32(protocol.EvsPushFlag_EVS_PUSH_DROP), drop: &protocol.EvsDropHistory{DropId: dropId.Bytes(), Action: 1}}
+	// each lineage lists 12,000 versions, more than these paths hold, which only resolve's checks against history
+	// refuse: the fold reads the body as committed
+	const listedCount = 12000
+	for _, label := range labels {
+		push.changes = append(push.changes, versioned(&worldChange{path: worldPath(label), base: listedCount, version: listedCount + 1}))
+	}
+	// the body's paths ascend by token path, as the changes do
+	for _, change := range push.changes {
+		push.drop.Paths = append(push.drop.Paths, format2DropPath(change.path, 1, listedCount+1, evsDropBoundaryWritten))
+		push.listed = append(push.listed, format2Listed(fmt.Sprint(change.path.Last()), listedCount))
+	}
+	slices.SortStableFunc(push.changes, func(a *format2Change, b *format2Change) int { return a.path.Compare(b.path) })
+	slices.SortStableFunc(push.drop.Paths, func(a *protocol.EvsDropPath, b *protocol.EvsDropPath) int {
+		return bytes.Compare(bytes.Join(a.GetLineage()[0].GetTokenPath(), nil), bytes.Join(b.GetLineage()[0].GetTokenPath(), nil))
+	})
+	plan, worldChanges := world.format2Plan(push)
+	built, err := world.builder.BuildFormat2(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(built.Parts) < 2 {
+		t.Fatalf("%d parts", len(built.Parts))
+	}
+	sealParts := []*sidecar.EvsSealPart{}
+	for _, partBytes := range built.Parts {
+		checked, err := sidecar.EvsCheckPartFormat2(built.Statement, partBytes, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealParts = append(sealParts, &sidecar.EvsSealPart{Place: world.putFormat2Record(&sidecar.EvsBatchRecord{
+			Type: protocol.EvsBatchRecordType_EVS_BATCH_PART, RepoId: world.repoId, RefId: world.refId, PushId: plan.PushId,
+			SignerSidecarId: world.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsPartRecordBody(built.Statement.Bytes, partBytes, nil, plan.BaseVersion),
+		}, nil), ChangesRoot: checked.Root, FirstTokenPath: checked.Changes[0].TokenPath})
+	}
+	place := world.putFormat2Record(&sidecar.EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: world.repoId, RefId: world.refId, PushId: plan.PushId,
+		SignerSidecarId: world.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsSealRecordBody(built.Statement.Bytes, sealParts),
+	}, nil)
+	changedPaths := []sidecar.EvsTokenPath{}
+	for _, change := range plan.Changes {
+		changedPaths = append(changedPaths, change.TokenPath)
+	}
+	dropped := world.commitWindowEntry(plan, built.Statement, sidecar.NewEvsWindowEntry(built.Statement.Sha256, built.Statement.Push, changedPaths, built.Statement.ChangedPrefixes, false, place), worldChanges)
+	world.fold(dropped)
+	for _, label := range labels {
+		if entry := world.entryOf(worldPath(label)).Entry; len(entry.GetVersions()) != 1 || !hasDropMark(entry, dropId, listedCount+1) {
+			t.Fatalf("%s after the sealed DROP's fold: %v", label, entry)
+		}
+		world.requireNewest(worldPath(label))
+	}
 	if lines.count("fold_drop") != 0 {
 		t.Fatalf("an honest drop alarmed:\n%s", lines)
 	}
