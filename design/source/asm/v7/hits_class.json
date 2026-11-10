@@ -1042,7 +1042,7 @@
  {
   "family": "window_14d_weekly",
   "file": "08-ACL.md",
-  "line": 357,
+  "line": 367,
   "col": 117,
   "match": "7-day window",
   "snippet": "- **Invite.** `ur bridge invite` (cli/UI.md:50) files X's request with a hashed 256-bit code, `uses = --count` and a 7-day window; `accept-invite` (`:51`) files Y's, the server binds `invited_network_id`, and each activation is a delta in its network. Y's approving admin creates the share's ShareKe",
@@ -1055,7 +1055,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 396,
+  "line": 406,
   "col": 11,
   "match": "1,000 member devices",
   "snippet": "| A cap of 1,000 member devices per network | config leaves only | refuses Teams past about 330 members with three devices each | rejected (owner decision 144) |",
@@ -1068,7 +1068,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 436,
+  "line": 446,
   "col": 542,
   "match": "1,000 member devices",
   "snippet": "r decisions 114, 144 and 182: agents cost no commit and read with no member device online, members accept config Adds by one function of the log, and no network stops at 1,000 member devices.",
@@ -1081,7 +1081,7 @@
  {
   "family": "pg_redis_durable",
   "file": "08-ACL.md",
-  "line": 491,
+  "line": 501,
   "col": 65,
   "match": "evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis",
   "snippet": "- **Services and config:** gates in `api`/`connect`, `sockets`, `evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis `{acl_<networkId>}v` (48 h after its last change), with §7.9's `{acl_<networkId>}e` read only; `config/all/pro.yml`.",
@@ -1094,7 +1094,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 503,
+  "line": 513,
   "col": 35,
   "match": "1,000 member devices",
   "snippet": "| A data repo granted to more than 1,000 member devices seats only 1,000; the rest wait keyless | Low | Medium | the preview and console name the repo; seats fill earliest-admitted first; data-repo wraps would need the owner ",
