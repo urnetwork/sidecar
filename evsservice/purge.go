@@ -169,7 +169,7 @@ type PurgeStats struct {
 	ObservedCount   int
 	// ids left to the sweep: past the queue, the clock unsure, past the give-up age, a gate closed, a reread or a
 	// DELETE that failed
-	SweepCount   int
+	SweepCount     int
 	FreedByteCount int64
 }
 
