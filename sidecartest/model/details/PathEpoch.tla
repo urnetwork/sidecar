@@ -286,16 +286,22 @@ Abandon(d) ==
 ----------------------------------------------------------------------------
 \* The mapper.
 
-\* A mapper's name index holds every live path of the source head with the floor its row gives it: a carried
-\* row's epoch, or the current epoch for an untagged one.
-IndexFloor(x) == IF row[x] = 0 \/ row[x] = cur THEN cur ELSE row[x]
+\* A mapper holds every live name of the source head, and for each an epoch in which evs was shown its token and
+\* which is at most its row's (9.2.7). An index kept by replaying statements gives the epoch the path's standing
+\* creation committed in; an index read from evs's listings gives the epoch of the row itself. A map names the
+\* sources at or above it.
+Born(x) ==
+    LET made == {u \in 1..ver : hist[u].kind = "create" /\ hist[u].x = x}
+    IN  IF made = {} THEN cur ELSE hist[Max(made)].epoch
+RowEpoch(x) == IF row[x] = 0 \/ row[x] = cur THEN cur ELSE row[x]
 
-MapBuild(m) ==
+MapBuild(m, byRow) ==
     /\ mp[m].st = "idle"
     /\ kgen[m] > cur
-    /\ LET moves == [x \in Paths |->
+    /\ LET from(x) == IF byRow THEN RowEpoch(x) ELSE Born(x)
+           moves == [x \in Paths |->
                         IF truth[x].st # "live" THEN {}
-                        ELSE {cur} \cup (IF Twin = "MapAllSources" THEN srcs ELSE {s \in srcs : s >= IndexFloor(x)})]
+                        ELSE {cur} \cup (IF Twin = "MapAllSources" THEN srcs ELSE {s \in srcs : s >= from(x)})]
            live == {x \in Paths : truth[x].st = "live"}
            shown == UNION {Shown(x, moves[x] \cup {kgen[m]}) : x \in live}
        IN  /\ mp' = [mp EXCEPT ![m] = [st |-> "built", pnew |-> kgen[m], src |-> ver, moves |-> moves]]
@@ -374,7 +380,7 @@ Next ==
     \/ \E d \in Clients, x \in Paths : Lookup(d, x) \/ Read(d, x)
     \/ \E d \in Clients, x \in Paths, op \in {"create", "modify", "remove"} : Plan(d, op, x)
     \/ \E d \in Clients : Push(d) \/ Retoken(d) \/ Abandon(d)
-    \/ \E m \in Mappers : MapBuild(m) \/ MapCommit(m)
+    \/ \E m \in Mappers : MapCommit(m) \/ \E byRow \in BOOLEAN : MapBuild(m, byRow)
     \/ \E x \in Paths : CopyMove(x)
     \/ CopyRows
     \/ DropSources

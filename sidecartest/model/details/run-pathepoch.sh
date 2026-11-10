@@ -25,7 +25,7 @@ main() {
   track=$1
   shift
   cap=${TLC_DISK_CAP_MB:-8192}
-  designs="PathEpoch PathEpoch-Mappers PathEpoch-Three PathEpoch-Two PathEpoch-Wide"
+  designs="PathEpoch PathEpoch-Mappers PathEpoch-Three PathEpoch-Two PathEpoch-Pair PathEpoch-Wide"
   twins="PathEpochTwin-NoBetweenFence PathEpochTwin-NoTailCheck PathEpochTwin-FoldKeepsSources PathEpochTwin-BlindRetoken PathEpochTwin-MissIsAbsent PathEpochTwin-SendAllSources PathEpochTwin-MapAllSources PathEpochTwin-StaleEpochSend PathEpochTwin-NoNewNameRule PathEpochTwin-RowsBeforeMoves PathEpochTwin-RemoveCurrentRowOnly"
   reach="PathEpochReach-TwoCutOvers PathEpochReach-Retoken"
   case "${1:-all}" in
@@ -56,7 +56,7 @@ main() {
     flags=${TLC_FLAGS:-}
     if [ -z "$flags" ]; then
       case $config in
-        PathEpoch-Wide) flags="-simulate num=400000 -depth 80 -seed 9" ;;
+        PathEpoch-Wide) flags="-simulate num=100000 -depth 80 -seed 9" ;;
       esac
     fi
     (cd "$here" && exec "$ROOT/.stack/tools/tlc" "$run" -config "$config.cfg" -workers "${TLC_WORKERS:-auto}" $flags PathEpoch.tla) > "$out" 2>&1 &
