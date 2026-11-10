@@ -67,9 +67,13 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	readAt := engine.clock.Now()
 	var head *EvsStoredHead
 	var err error
-	if cached {
+	switch {
+	case self.seal != nil && self.seal.head != nil:
+		// the cluster's head the seal read in its parts' round (push_seal.go), used once
+		head, self.seal.head = self.seal.head, nil
+	case cached:
 		head, err = engine.heads.ReadCached(self.ctx, self.cluster, self.repoId, self.refId, push.GetBaseVersion(), false)
-	} else {
+	default:
 		head, err = engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, self.refId)
 	}
 	if err != nil {
@@ -268,7 +272,7 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 	push := self.statement.Push
 	request := self.request
 	view := &PushView{
-		Stage:               PushStageOnePart,
+		Stage:               self.stage(),
 		RepoId:              self.repoId,
 		Statement:           self.statement,
 		Payload:             self.payload,
