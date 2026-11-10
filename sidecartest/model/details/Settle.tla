@@ -11,7 +11,8 @@
 (*            only the version it holds: a drive commit applies only while  *)
 (*            no commit has been applied to the key on that drive since the *)
 (*            coordinator read it under the key's lock. fresh[w][d] is that *)
-(*            fact, so no counter enters a state.                           *)
+(*            fact, so no counter enters a state. A heal's commit carries   *)
+(*            one too, and may reach its drive after the key's release.     *)
 (*   deletes  rule (3) releases a failed DELETE only once every drive       *)
 (*            commit of it has answered and each that landed is reverted:   *)
 (*            nothing of a DELETE lands or is reverted after its release.   *)
@@ -103,14 +104,14 @@ VARIABLES
     down,         \* the hosts no request reaches
     downLeft,     \* host failures left
     crashesLeft,  \* coordinator crashes left
-    healing,      \* heal's commit between its check and its commit step, or NoHeal
+    healing,      \* heal's drive commit, sent and then checked, with what it read of its drive, or NoHeal
     current,      \* ghost: what every request must see
     readBad       \* ghost: a read returned anything else
 
 vars == <<drive, driveLock, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked,
           expect, fresh, commit, down, downLeft, crashesLeft, healing, current, readBad>>
 
-NoHeal == [drive |-> 0, to |-> Absent]
+NoHeal == [drive |-> 0, to |-> Absent, from |-> Absent, stage |-> "none", fresh |-> FALSE]
 
 \* A drive a request reaches.
 Up(d) == HostOf(d) \notin down
@@ -160,8 +161,10 @@ Readable ==
         ELSE IF Cardinality(Holding(Absent)) >= ReadQuorum THEN {Absent}
         ELSE {}
 
-\* A commit applied on drive d: every stamp read from d before it is spent.
+\* A commit applied on drive d: every stamp read from d before it is spent, a heal's too.
 Spent(d) == [w \in Writes |-> [x \in Drives |-> IF x = d THEN FALSE ELSE fresh[w][x]]]
+
+HealSpent(d) == IF healing.stage = "sent" /\ healing.drive = d THEN [healing EXCEPT !.fresh = FALSE] ELSE healing
 
 Init ==
     /\ drive \in {[d \in Drives |-> Initial], [d \in Drives |-> Absent]}
@@ -241,8 +244,9 @@ Commit(w, d) ==
     /\ driveLock' = [driveLock EXCEPT ![d] = NoHolder]
     /\ commit' = [commit EXCEPT ![w][d] = "committed"]
     /\ fresh' = Spent(d)
+    /\ healing' = HealSpent(d)
     /\ UNCHANGED <<keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked, expect, down,
-                   downLeft, crashesLeft, healing, current, readBad>>
+                   downLeft, crashesLeft, current, readBad>>
 
 \* A cancel ends the handler's waits and stops its own drives' PUT commits before their rename; it
 \* reaches no other host and no DELETE. The deployed build also released the lock here.
@@ -304,8 +308,9 @@ Revert(w, d) ==
     /\ commit' = [commit EXCEPT ![w][d] = "clear"]
     \* a revert that finds nothing of its write changes nothing, the stamp included
     /\ fresh' = IF drive[d] = NewVersion(w) THEN Spent(d) ELSE fresh
+    /\ healing' = IF drive[d] = NewVersion(w) THEN HealSpent(d) ELSE healing
     /\ UNCHANGED <<driveLock, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked,
-                   expect, down, downLeft, crashesLeft, healing, current, readBad>>
+                   expect, down, downLeft, crashesLeft, current, readBad>>
 
 \* How many drives may still hold a failed write when its key is released: a PUT under a read quorum,
 \* since it can then never be read and carries its own version; a DELETE none, since every DELETE
@@ -351,25 +356,38 @@ HostUp(h) ==
     /\ UNCHANGED <<drive, driveLock, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked,
                    expect, fresh, commit, downLeft, crashesLeft, healing, current, readBad>>
 
-\* Rule (6): a heal takes the key, copies only a version N/2 drives hold, and so removes a dangling
-\* one; with no such version it does nothing. Its commit is checked here and may stall past the key's
-\* release like any other, which its drive's lock orders.
-HealCheck(d) ==
+\* Rule (6): a heal takes the key and reads the drives under it: it copies only a version N/2 drives
+\* hold, and so removes a dangling one; with no such version it does nothing. Its commit is a drive
+\* commit like any other: it carries what the heal read from its drive, may reach the drive after the
+\* key's release, and applies by rule (2)'s check.
+HealRead(d) ==
     /\ "heal" \notin Still
     /\ keyHolder = NoHolder
     /\ healing = NoHeal
     /\ Up(d)
-    /\ driveLock[d] = NoHolder
     /\ \E v \in Versions :
            /\ v \in Readable \/ (Twin = "HealMinority" /\ Holding(v) # {})
            /\ drive[d] # v
-           /\ healing' = [drive |-> d, to |-> v]
-    /\ driveLock' = [driveLock EXCEPT ![d] = Heal]
-    /\ UNCHANGED <<drive, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked, expect,
-                   fresh, commit, down, downLeft, crashesLeft, current, readBad>>
+           /\ healing' = [drive |-> d, to |-> v, from |-> drive[d], stage |-> "sent", fresh |-> TRUE]
+    /\ UNCHANGED <<drive, driveLock, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked,
+                   expect, fresh, commit, down, downLeft, crashesLeft, current, readBad>>
+
+HealCheck ==
+    LET d == healing.drive
+        moved == /\ Twin # "NoVersionCheck"
+                 /\ drive[d] # healing.from \/ (Stamps /\ ~healing.fresh)
+    IN  /\ healing.stage = "sent"
+        /\ driveLock[d] = NoHolder \/ Twin = "NoDriveLock"
+        /\ IF moved
+           THEN /\ healing' = NoHeal
+                /\ UNCHANGED driveLock
+           ELSE /\ healing' = [healing EXCEPT !.stage = "checked"]
+                /\ driveLock' = [driveLock EXCEPT ![d] = Heal]
+        /\ UNCHANGED <<drive, keyHolder, phase, kind, coordinator, past, cancelled, orphan, acked, expect,
+                       fresh, commit, down, downLeft, crashesLeft, current, readBad>>
 
 HealCommit ==
-    /\ healing # NoHeal
+    /\ healing.stage = "checked"
     /\ drive' = [drive EXCEPT ![healing.drive] = healing.to]
     /\ driveLock' = [driveLock EXCEPT ![healing.drive] = NoHolder]
     /\ fresh' = Spent(healing.drive)
@@ -399,7 +417,8 @@ Next ==
            \/ Crash(w)
            \/ \E c \in Coordinators, k \in {"put", "delete"} : Take(w, c, k)
     \/ \E h \in Hosts : HostDown(h) \/ HostUp(h)
-    \/ \E d \in Drives : HealCheck(d)
+    \/ \E d \in Drives : HealRead(d)
+    \/ HealCheck
     \/ HealCommit
     \/ Read
 
@@ -407,7 +426,7 @@ Next ==
 Fairness ==
     /\ \A w \in Writes : WF_vars(Settling(w))
     /\ \A h \in Hosts : WF_vars(HostUp(h))
-    /\ WF_vars(HealCommit)
+    /\ WF_vars(HealCheck \/ HealCommit)
 
 Spec == Init /\ [][Next]_vars
 
@@ -461,6 +480,10 @@ FailedDeleteSettled ==
     \A w \in Writes :
         phase[w] = "failed" /\ kind[w] = "delete" =>
             \A d \in Drives : commit[w][d] \in {"none", "clear"} \/ (commit[w][d] = "sent" /\ past[w])
+
+\* An action constraint for a run that isolates heal: no commit of a write is checked, lands or is
+\* reverted once its key is released, so only a heal's commit can arrive late.
+NoLateWriteCommits == \A w \in Writes : phase[w] \in {"success", "failed"} => commit'[w] = commit[w]
 
 \* FI-30's last clause, and the row's liveness: every held key is released once its stalled commits
 \* answer.
