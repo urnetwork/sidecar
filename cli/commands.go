@@ -87,6 +87,14 @@ type urSettings struct {
 	// The most of a reply one native messaging frame carries before the reply goes as chunks: 512 KiB, whose base64
 	// and envelope stay under Chrome's 1 MiB limit on a host's message (native_host_frame.go).
 	NativeHostChunkByteCount int
+	// The longest line `ur mcp` takes from its harness: SidecarLocalSettings.RequestByteCount's 4 MiB, the daemon's
+	// own bound on a session's line. A longer one is answered as an invalid request and goes no further.
+	RelayRequestByteCount int64
+	// The longest line `ur mcp` takes from the daemon: 64 MiB, far past a result's 256 KiB cap (§16.4), so a broken
+	// daemon cannot make the relay hold more; a longer one counts as the daemon lost.
+	RelayAnswerByteCount int64
+	// How long `ur mcp` waits after a failed reconnect before it dials, and spawns, again: 1 s.
+	RelayReconnectInterval time.Duration
 }
 
 // The defaults, a fresh value each call.
@@ -99,6 +107,9 @@ func defaultUrSettings() *urSettings {
 		// the daemon's own request bound, so nothing the daemon would refuse is read whole
 		NativeHostRequestByteCount: sidecar.DefaultSidecarSettings().LocalSettings.RequestByteCount,
 		NativeHostChunkByteCount:   512 * 1024,
+		RelayRequestByteCount:      sidecar.DefaultSidecarSettings().LocalSettings.RequestByteCount,
+		RelayAnswerByteCount:       64 * 1024 * 1024,
+		RelayReconnectInterval:     1 * time.Second,
 	}
 }
 
@@ -318,10 +329,11 @@ func (self *urCli) connectDaemon(ctx context.Context, hello *sidecar.DaemonHello
 		if !errors.As(err, &refusal) {
 			return nil
 		}
+		// each wraps the refusal, so a relay that reconnects can tell it from a daemon that is gone
 		if refusal.Code == sidecar.DaemonHelloErrorVersionSkew {
-			return fmt.Errorf("the daemon of instance %s runs version %q, and this ur is %q: stop it and run ur again", self.instance, refusal.Version, sidecar.Version)
+			return fmt.Errorf("the daemon of instance %s runs version %q, and this ur is %q: stop it and run ur again (%w)", self.instance, refusal.Version, sidecar.Version, refusal)
 		}
-		return fmt.Errorf("the daemon refused the session: %s", refusal.Code)
+		return fmt.Errorf("the daemon refused the session: %w", refusal)
 	}
 	client, err := self.dialDaemon(ctx, socketPath, hello)
 	if err == nil {
