@@ -27,6 +27,19 @@
 (*                                                                         *)
 (* Twin = "none" is the design. Each other value breaks one rule, and its  *)
 (* configuration names the invariant that must then fail.                  *)
+(*                                                                         *)
+(* NewRef (question evs1-m2-44-new-ref-crossing, QD-632): the ref has no   *)
+(* head until its first push commits. No path of it is read and no         *)
+(* PATH_EPOCH commits before then, and a device that has read no head of   *)
+(* it (hcur 0) sends no token in a read. Its creator names the newest      *)
+(* generation it holds as the push's epoch, evs starts the head there, and *)
+(* the creator knows the head its own push made. A push planned on no head *)
+(* believes the ref holds nothing: it is sent only while the ref still has *)
+(* no head, and is dropped and planned again otherwise. Under              *)
+(* "NewRefAtOne" the first push creates in epoch 1 whatever its sender     *)
+(* holds, which is what landed before the answer. Under "StaleFirstPush" a *)
+(* push planned on no head is sent to a ref that has since got one, as any *)
+(* push is, and commits when the epoch it named has become the head's.     *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -37,17 +50,19 @@ CONSTANTS
     MaxEpoch,    \* generations 1..MaxEpoch; every rotation is REMOVE and immediate
     MaxVersion,  \* the ref's versions
     MaxSources,  \* 11.6: at most 3 sources stand
+    NewRef,      \* the ref has no head until its first push commits
     Twin
 
 ASSUME Twin \in {"none", "NoBetweenFence", "NoTailCheck", "BlindRetoken", "SendAllSources", "MapAllSources",
                  "MissIsAbsent", "StaleEpochSend", "NoNewNameRule", "RowsBeforeMoves", "RemoveCurrentRowOnly",
-                 "FoldKeepsSources"}
+                 "FoldKeepsSources", "NewRefAtOne", "StaleFirstPush"}
+ASSUME NewRef \in BOOLEAN
 
 Epochs == 1..MaxEpoch
 Inf == MaxEpoch + 1
 Devices == Clients \cup Mappers
 NoEntry == [st |-> "none", v |-> 0]
-Nil == [op |-> "nil", x |-> "-", base |-> 0, epoch |-> 0, src |-> {}, refused |-> FALSE]
+Nil == [op |-> "nil", x |-> "-", base |-> 0, epoch |-> 0, src |-> {}, refused |-> FALSE, first |-> FALSE]
 Unknown == [st |-> "unknown", v |-> 0]
 Idle == [st |-> "idle", pnew |-> 0, src |-> 0, moves |-> [x \in Paths |-> {}]]
 
@@ -71,7 +86,7 @@ VARIABLES
     wrong,     \* a reader took a conclusive answer that was not the path's newest
     lost,      \* a push committed on a view of its path that was not the path's newest
     kgen,      \* kgen[d]: the newest generation device d holds
-    hcur,      \* hcur[d], hsrc[d]: the head's epoch state as d last read it
+    hcur,      \* hcur[d], hsrc[d]: the head's epoch state as d last read it; hcur 0 while d has read no head
     hsrc,
     floor,     \* floor[d][x]: the lowest epoch d holds evidence evs was shown x's token in, Inf for none
     know,      \* know[d][x]: d's last conclusive read of x
@@ -94,12 +109,16 @@ Init ==
     /\ seen = {}
     /\ leak = FALSE /\ wrong = FALSE /\ lost = FALSE
     /\ kgen = [d \in Devices |-> 1]
-    /\ hcur = [d \in Devices |-> 1]
+    /\ hcur = [d \in Devices |-> IF NewRef THEN 0 ELSE 1]
     /\ hsrc = [d \in Devices |-> {}]
     /\ floor = [d \in Devices |-> [x \in Paths |-> Inf]]
     /\ know = [d \in Devices |-> [x \in Paths |-> Unknown]]
     /\ pend = [d \in Devices |-> Nil]
     /\ mp = [m \in Mappers |-> Idle]
+
+\* The ref has a head: always, or under NewRef once its first push committed. Until then cur is no epoch of
+\* the ref's, only the variable's first value.
+HasHead == ~NewRef \/ ver > 0
 
 \* 11.6's read rule on evs: the current entry, else the newest listed source's among those the request names.
 ServerNewest(x, asked) ==
@@ -147,6 +166,7 @@ LearnGen(d) ==
     /\ UNCHANGED <<gen, server, seen, flags, hcur, hsrc, floor, know, pend, mp>>
 
 ReadHead(d) ==
+    /\ HasHead
     /\ hcur[d] # cur \/ hsrc[d] # srcs
     /\ hcur' = [hcur EXCEPT ![d] = cur]
     /\ hsrc' = [hsrc EXCEPT ![d] = srcs]
@@ -158,7 +178,7 @@ ReadHead(d) ==
 \* The directory's listing, which needs no token: a row gives its path a floor, and no row is the path's absence.
 Lookup(d, x) ==
     /\ pend[d].op = "nil"
-    /\ hcur' = [hcur EXCEPT ![d] = cur]
+    /\ hcur' = [hcur EXCEPT ![d] = IF HasHead THEN cur ELSE 0]
     /\ hsrc' = [hsrc EXCEPT ![d] = srcs]
     /\ IF row[x] # 0
        THEN /\ floor' = [floor EXCEPT ![d][x] = MinOf(@, row[x])]
@@ -174,6 +194,8 @@ Read(d, x) ==
     LET asked == AskedFor(d, x)
         direct == floor[d][x] = Inf
     IN  /\ pend[d].op = "nil"
+        /\ HasHead /\ hcur[d] # 0  \* a ref with no head has no entry, and a device that has read no head
+                                   \* reads the head alone first: nothing is asked and no token is sent
         /\ \A e \in asked : HoldsKey(d, e)
         /\ direct => /\ MaySendNew(d)
                      /\ Twin = "MissIsAbsent" \/ hsrc[d] = {}
@@ -207,15 +229,19 @@ Read(d, x) ==
 \* listing: a creation needs no row there, and a removal takes its floor from the row it will drop (9.2.5).
 Plan(d, op, x) ==
     LET f == IF op = "remove" /\ row[x] # 0 THEN MinOf(floor[d][x], row[x]) ELSE floor[d][x]
+        \* the epoch the push names: the head's current one; on a ref with no head, the newest generation its
+        \* creator holds (9.2.3), or under NewRefAtOne epoch 1
+        named == IF HasHead THEN hcur[d] ELSE IF Twin = "NewRefAtOne" THEN 1 ELSE kgen[d]
     IN  /\ pend[d].op = "nil"
         /\ ver < MaxVersion
-        /\ hcur[d] = cur /\ hsrc[d] = srcs
-        /\ HoldsKey(d, hcur[d])
+        /\ HasHead => hcur[d] = cur /\ hsrc[d] = srcs
+        /\ HoldsKey(d, named)
         /\ \/ op = "create" /\ know[d][x].st = "absent" /\ row[x] = 0
            \/ op \in {"modify", "remove"} /\ know[d][x].st = "live"
         /\ floor' = [floor EXCEPT ![d][x] = f]
-        /\ pend' = [pend EXCEPT ![d] = [op |-> op, x |-> x, base |-> know[d][x].v, epoch |-> hcur[d],
-                                        src |-> {s \in hsrc[d] : s >= f}, refused |-> FALSE]]
+        /\ pend' = [pend EXCEPT ![d] = [op |-> op, x |-> x, base |-> know[d][x].v, epoch |-> named,
+                                        src |-> {s \in hsrc[d] : s >= f}, refused |-> FALSE,
+                                        first |-> ~HasHead]]
         /\ UNCHANGED <<gen, server, seen, flags, kgen, hcur, hsrc, know, mp>>
 
 \* The push reaches evs: its tokens are shown whatever the answer.
@@ -226,13 +252,23 @@ Push(d) ==
         view == ServerNewest(x, p.src)
         passes == IF p.op = "create" THEN view.st # "live" ELSE view.st = "live" /\ view.v = p.base
         u == ver + 1
+        \* 5e: the head's current epoch; on a ref with no head, the epoch the push names, which its commit makes
+        \* the head's (9.2.6)
+        at == IF HasHead THEN cur ELSE p.epoch
+        \* the push creates the ref: its sender then knows the head it made
+        creates == ~HasHead /\ passes
     IN  /\ p.op # "nil" /\ ~p.refused
         /\ ver < MaxVersion
-        /\ floor[d][x] = Inf => (MaySendNew(d) /\ (Twin = "StaleEpochSend" \/ p.epoch = hcur[d]))
+        \* a push planned on no head is sent only to a ref that still has none (9.2.6): evs refuses it on a
+        \* head, and its sender plans again
+        /\ p.first => ~HasHead \/ Twin = "StaleFirstPush"
+        /\ floor[d][x] = Inf =>
+               IF HasHead THEN MaySendNew(d) /\ (Twin = "StaleEpochSend" \/ p.epoch = hcur[d])
+               ELSE Twin = "NewRefAtOne" \/ p.epoch = kgen[d]
         /\ seen' = seen \cup Shown(x, shown)
         /\ leak' = (leak \/ Leaks(d, x, shown))
         /\ floor' = [floor EXCEPT ![d][x] = MinOf(@, p.epoch)]
-        /\ IF p.epoch # cur
+        /\ IF p.epoch # at
            THEN \* 412 PATH_EPOCH: final, and nothing commits
                 /\ pend' = [pend EXCEPT ![d].refused = TRUE]
                 /\ UNCHANGED <<server, know, lost, wrong>>
@@ -242,25 +278,28 @@ Push(d) ==
                 /\ know' = [know EXCEPT ![d][x] = Unknown]
                 /\ UNCHANGED <<server, lost, wrong>>
            ELSE /\ ver' = u
-                /\ hist' = Append(hist, [kind |-> p.op, x |-> x, epoch |-> cur])
+                /\ cur' = at
+                /\ hist' = Append(hist, [kind |-> p.op, x |-> x, epoch |-> at])
                 /\ truth' = [truth EXCEPT ![x] = [st |-> IF p.op = "remove" THEN "gone" ELSE "live", v |-> u]]
                 \* the fold writes the current epoch's entry, carried from a source the push named or fresh, and
                 \* then deletes the source copies the push named (9.2.6)
                 /\ idx' = [e \in Epochs |-> [y \in Paths |->
                               IF y # x THEN idx[e][y]
-                              ELSE IF e = cur THEN [st |-> IF p.op = "remove" THEN "gone" ELSE "live", v |-> u]
+                              ELSE IF e = at THEN [st |-> IF p.op = "remove" THEN "gone" ELSE "live", v |-> u]
                               ELSE IF e \in p.src \cap srcs /\ Twin # "FoldKeepsSources" THEN NoEntry
                               ELSE idx[e][x]]]
                 /\ row' = [row EXCEPT ![x] =
-                              IF p.op = "create" THEN cur
+                              IF p.op = "create" THEN at
                               ELSE IF p.op = "remove"
                                    THEN (IF @ = cur \/ (@ \in p.src /\ Twin # "RemoveCurrentRowOnly") THEN 0 ELSE @)
                                    ELSE @]
                 /\ lost' = (lost \/ ~SameAs(view, truth[x]))
                 /\ pend' = [pend EXCEPT ![d] = Nil]
                 /\ know' = [know EXCEPT ![d][x] = [st |-> IF p.op = "remove" THEN "absent" ELSE "live", v |-> u]]
-                /\ UNCHANGED <<cur, srcs, cmap, rowsDone, wrong>>
-        /\ UNCHANGED <<gen, kgen, hcur, hsrc, mp>>
+                /\ UNCHANGED <<srcs, cmap, rowsDone, wrong>>
+        /\ hcur' = IF creates THEN [hcur EXCEPT ![d] = at] ELSE hcur
+        /\ hsrc' = IF creates THEN [hsrc EXCEPT ![d] = {}] ELSE hsrc
+        /\ UNCHANGED <<gen, kgen, mp>>
 
 \* 9.2.5: a push refused 412 PATH_EPOCH is re-tokenized on a fresh head. The refused attempt showed evs the path's
 \* token in its epoch, so that epoch is at or above the path's floor and the change names it as a source.
@@ -278,7 +317,7 @@ Retoken(d) ==
 \* A writer whose plan names an epoch the head has left may give the push up and read again.
 Abandon(d) ==
     /\ pend[d].op # "nil"
-    /\ pend[d].epoch # hcur[d]
+    /\ pend[d].epoch # hcur[d] \/ (pend[d].first /\ HasHead)
     /\ pend' = [pend EXCEPT ![d] = Nil]
     /\ know' = [know EXCEPT ![d][pend[d].x] = Unknown]
     /\ UNCHANGED <<gen, server, seen, flags, kgen, hcur, hsrc, floor, mp>>
@@ -297,6 +336,7 @@ RowEpoch(x) == IF row[x] = 0 \/ row[x] = cur THEN cur ELSE row[x]
 
 MapBuild(m, byRow) ==
     /\ mp[m].st = "idle"
+    /\ HasHead                    \* no PATH_EPOCH commits on a ref with no head
     /\ kgen[m] > cur
     /\ LET from(x) == IF byRow THEN RowEpoch(x) ELSE Born(x)
            moves == [x \in Paths |->
@@ -449,4 +489,5 @@ NoGhostRows ==
 \* Reachability witnesses: each must be violated, by a trace that reaches the state it denies.
 NeverTwoCutOvers == ~(cur = MaxEpoch /\ srcs = {} /\ \E x \in Paths : truth[x].st = "live" /\ row[x] = cur)
 NeverRetokened == \A d \in Clients : ~(pend[d].op # "nil" /\ pend[d].epoch > 1 /\ pend[d].src # {})
+NeverBornLate == ~(NewRef /\ ver > 0 /\ hist[1].epoch > 1)
 =============================================================================

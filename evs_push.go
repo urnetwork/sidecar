@@ -134,6 +134,11 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		attempt.receipts = append(attempt.receipts, segment.Receipt)
 		segmentIdReceipts[string(segment.Id[:])] = segment.Receipt
 	}
+	// a slot-keyed write's new slots, the same ones on every attempt of one seal
+	for _, slot := range sealed.Slots {
+		pushPlan.NewObjects = append(pushPlan.NewObjects, &EvsNewObject{Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT, Id: slot.Id.Bytes()})
+		pushPlan.SlotBodies = append(pushPlan.SlotBodies, slot.Body)
+	}
 	for _, path := range sealed.Paths {
 		change, err := path.change(pushId, plan.BaseVersion, timeMs)
 		if err != nil {
@@ -200,6 +205,9 @@ func (self *EvsSealedPath) change(pushId Id, baseVersion uint64, timeMs int64) (
 		entry.PaddedSize = self.PaddedSize
 		entry.SealedFields = self.SealedFields
 		entry.Chain = self.Chain
+		for _, slotId := range self.SlotIds {
+			entry.SlotIds = append(entry.SlotIds, slotId.Bytes())
+		}
 	case protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY:
 		entry.Names = &protocol.EvsNameTable{Names: planned.Names, RemovedTokens: planned.RemovedTokens}
 	default:

@@ -29,7 +29,7 @@
 # v9, updated 2026-11-09 for owner decision 197 (the apps' network extensions), adds api-4's forward_only mark,
 # api-7's forwarding Delegations with their sidecar and host client, and connect-1's delegations signed by a
 # forwarding key.
-# v10, updated 2026-11-10 for the build's answers (owner decisions 198-208, and the fixes the owner accepted on
+# v10, updated 2026-11-10 for the build's answers (owner decisions 198-210, and the fixes the owner accepted on
 # 2026-11-06), adds api-1's cached verification flag; api-2's certified times; api-3's discovery attempt histories
 # and acme tokens; api-7's config_version, rows_byte_count and Genesis, egress and withdrawal modes, forwarding
 # reader key digests and supersessions (owner decision 202) and self_admit and scim_signer (205), its rules
@@ -42,8 +42,8 @@
 # (198); evs-10's settle bookkeeping; evs-11's change places (200); gkm-1's owner markers and forwarding reader
 # keys (201, 202), gkm-2's, gkm-4's, gkm-7's and gkm-8's wire values; tls-2's {vhk}tls: daily key; the edges'
 # stream framing; dns-1's restore, canary, NS and report-token values; smtp-4's {smg_} and {smd_} counters; and
-# mx-1's {vhk}mx: daily key. connect-1 states the contract horizon, and sock-1 drops a raw endpoint's
-# authentication mode, which api-7's rows hold.
+# mx-1's {vhk}mx: daily key; and ops-2's physical working copies of the primary (owner decision 210). connect-1
+# states the contract horizon, and sock-1 drops a raw endpoint's authentication mode, which api-7's rows hold.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -55,7 +55,8 @@
 # its creation (owner decision 145; evs-25).
 # Postgres: sidecar tables, with the network, user and client rows they name, go to their own daily off-site
 # dump, kept 14 days, tables whose ttl here is at most 7 d excluded, so a row outlives its ttl, or its hold,
-# by at most 14 d; tables that exist today also sit in the main dumps for about 4 months (ops-2, D-TRUST-7).
+# by at most 14 d; tables that exist today also sit in the main dumps for about 4 months (ops-2, D-TRUST-7);
+# the primary's physical working copies hold every table but the UNLOGGED edge records for at most 7 d (ops-2).
 # Redis: sidecar families (§19.7) stay out of the rdb bundles (D-OPS-16); other families sit in them for
 # about 8 months (ops-3).
 # Holds (owner decision 133; api-14, evs-19): a preservation hold keeps one network's in-scope rows and
@@ -340,7 +341,7 @@ evs-15:
   store: pmap/<repo>/<ref>/<p>/<map_sha256>/<part>/_ (metadata cluster)
   sees: Signed EvsPathMap parts (repo, ref, path epoch, part numbers, the source head each map covers, moves of old token path to new token path with names re-sealed, and every live path's token in each source epoch), up to 8 MiB each, and their signer; they link every moved path's tokens across epochs
   why: path-key rotation on removal (owner decision 2 item 9; §11.6); keyed by the map's hash, so a mapper whose source left the window uploads a fresh map
-  ttl: the committed map, the ref's history; the epoch's other maps deleted once it commits, and an uncommitted one by the nightly pass 25-49 h after its upload (§11.6)
+  ttl: the committed map, the ref's history; the epoch's other maps deleted once it commits, and an uncommitted one above the head's epoch by the nightly pass once evacuation's horizon has passed its oldest part's upload + 24 h + 2 min, 49-75 h after it (§11.6; owner decision 203)
   owner: §11.6
 evs-16:
   service: evs; taskworker packs
@@ -628,10 +629,10 @@ ops-1:
   owner: §19.8
 ops-2:
   service: Postgres dumps
-  store: the sidecar dump (daily; edge-6's archive and planetoid; 14 generations each; tables with ttls of at most 7 d excluded); the main dumps (edge-6, planetoid)
-  sees: encrypted dumps of the Postgres rows above; sidecar tables in their own dump, with the network, user (sign-in rows included) and client rows they name, so a restore keeps the ids of networks, members and sidecars newer than the main dump (D-OPS-18); tables that exist today (accounts, networks, clients, contracts) in the main dumps, with off-site copies on planetoid
+  store: the sidecar dump (daily; edge-6's archive and planetoid; 14 generations each; tables with ttls of at most 7 d excluded); the main dumps (edge-6, planetoid); the primary's physical working copies (edge-6's pg-base, which the main dump reads, and edge-5's main-pgbase-<date> generations)
+  sees: encrypted dumps of the Postgres rows above; sidecar tables in their own dump, with the network, user (sign-in rows included) and client rows they name, so a restore keeps the ids of networks, members and sidecars newer than the main dump (D-OPS-18); tables that exist today (accounts, networks, clients, contracts) in the main dumps, with off-site copies on planetoid; in the physical working copies, every table of the primary but the UNLOGGED partitions of tls_connection_record and mail_connection_record (tls-3, mx-2)
   why: durability (§19.6; D-OPS-18)
-  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; existing tables about 4 months, 9 generations (xops/main/ansible/host_files/by-us-fmt-5-edge-6/db-archive/README.md:201-203)
+  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; physical working copies of the primary hold every table for at most 7 d, each refreshed or destroyed within that (owner decision 210); existing tables about 4 months, 9 generations (xops/main/ansible/host_files/by-us-fmt-5-edge-6/db-archive/README.md:201-203)
   owner: §19.6
 ops-3:
   service: Redis backups

@@ -6,12 +6,19 @@
    entries as an overlay of denials. It cannot judge them, so an entry the judge refused (ok = FALSE: api
    sequenced a statement that verifies under its signer's key and that the rule table refuses) denies until a
    compiled state at or past it says otherwise, and no entry opens anything. A denial the posture cannot check
-   at all (seen = FALSE: its signer is not in the rows the posture holds) waits for a compile, and when one
-   has not come by the deadline the posture stops admitting (Tick marks the waiting entries overdue).
+   at all (seen = FALSE: its signer is not in the rows the posture holds) waits for a compile. The posture
+   goes on admitting by its last compiled state meanwhile, however long that is: once the entry has waited
+   past the deadline it raises an alarm, again while the entry waits, and does nothing else (Tick marks the
+   waiting entries overdue; question details-4-compile-deadline, option 2, QD-621).
 
-   What is checked: a host admits a window delegation under key k only while k is S's live forwarding key at
-   the highest log position the host ever applied, or while an entry it could not check is still inside its
-   deadline, whatever the order of fetches, compiles, restarts and a rollback of its store.
+   What is checked. Safety: a host admits a window delegation under key k only while k is S's live forwarding
+   key at the highest log position the host ever applied, or while a revocation of k that it could not check
+   waits for a compile, whatever the order of fetches, compiles, restarts and a rollback of its store.
+   Liveness, under LiveSpec, where fetches go on and compiles start and finish: in the end every key the
+   host admits is S's live key at the newest entry (EventuallyRefused). Where no compile runs that does not
+   hold, and RefusedByDeadline, the rule the owner declined, is the invariant FwdReach-NoCompile denies to
+   show it: a revocation the posture cannot check, its deadline past, its key still admitted. That trace is
+   accepted (QD-621).
 
    Twin selects one rule to break:
      NoDelegationOverlay  the posture applies no DelegationRevoke and no newer Delegation as a denial (the
@@ -21,7 +28,6 @@
      StateDropsOverlay    a compiled state clears the whole overlay, the entries after its pin included
      LowerStateAccepted   a compile that finishes below the state's pin replaces it
      NoFloor              a rolled-back store is taken as it stands, with no pin kept in the key store
-     NoOverdue            an entry the posture could not check waits for a compile without limit
 
    Left out: the delegation's other fields, share signers, the window client's strict_exp, the cascade's void
    (an S revocation here) and every other subject. Positions are the clock, but for the one deadline. *)
@@ -43,7 +49,7 @@ VARIABLES
     comp,     \* per slot, the pin a running compile captured, or NoComp
     floor,    \* the highest pin ever committed, kept in the key store
     snap,     \* a copy of the store an attacker holds
-    old       \* positions whose compile deadline has passed
+    old       \* positions whose compile deadline has passed: the alarm is raised for them
 
 vars == <<log, hPin, sPin, sKey, overlay, comp, floor, snap, old>>
 
@@ -93,11 +99,13 @@ Denied(k) == \E q \in overlay : DenialFor(q, k)
 (* Entries the posture could not check, which only a compile resolves. *)
 Waiting == {q \in overlay : ~log[q].seen}
 
-Overdue == Twin # "NoOverdue" /\ Waiting \cap old # {}
+(* The alarm stands: an entry the posture could not check has waited past its deadline. It changes nothing the
+   host admits. *)
+Alarmed == Waiting \cap old # {}
 
 Current == Twin = "NoFloor" \/ hPin >= floor
 
-Admits(k) == k # 0 /\ sKey = k /\ Current /\ ~Overdue /\ ~Denied(k)
+Admits(k) == k # 0 /\ sKey = k /\ Current /\ ~Denied(k)
 
 Init ==
     /\ log = <<>>
@@ -175,10 +183,32 @@ Next ==
 
 Spec == Init /\ [][Next]_vars
 
+(* Where a compile eventually runs: the host goes on fetching, a compile starts whenever none is running in a
+   slot, and a compile that keeps being started is in the end let finish, restarts or not. *)
+Fairness == WF_vars(Fetch) /\ \A i \in 1..Slots : WF_vars(StartCompile(i)) /\ SF_vars(FinishCompile(i))
+LiveSpec == Spec /\ Fairness
+(* Where no compile need finish: fetches go on, and nothing is asked of a compile. *)
+FetchSpec == Spec /\ WF_vars(Fetch)
+
 (* A host admits a key only while it is S's live forwarding key at the highest position the host ever applied,
-   or while an entry it could not check is still inside its compile deadline. *)
+   or while a revocation of that key which it could not check waits for a compile. *)
 OnlyLiveKeysAdmitted ==
-    \A k \in Keys : Admits(k) => (Live(floor) = k \/ \E q \in overlay : ~log[q].seen /\ q \notin old)
+    \A k \in Keys : Admits(k) =>
+        (Live(floor) = k \/ \E q \in Waiting : log[q].kind = "revoke" /\ log[q].key = k)
+
+(* Under LiveSpec: in the end every key the host admits is S's live key at the newest entry of the log. Under
+   FetchSpec it fails, which FwdReach-NoCompileLive shows. *)
+EventuallyRefused == <>[](\A k \in Keys : Admits(k) => Live(Len(log)) = k)
+
+(* The rule the owner declined (option 1 of the question): no key that is not live is admitted once every
+   entry the posture could not check is past its deadline. The design does not hold it, and FwdReach-NoCompile
+   denies it to show the accepted trace. *)
+RefusedByDeadline ==
+    \A k \in Keys : Admits(k) => (Live(floor) = k \/ \E q \in Waiting : q \notin old)
+
+(* While that trace stands, the alarm stands with it. *)
+StaleIsAlarmed ==
+    \A k \in Keys : (Admits(k) /\ Live(floor) # k /\ Waiting \subseteq old) => Alarmed
 
 (* The overlay holds only entries after the state's pin, up to the posture's. *)
 OverlayAfterState == \A q \in overlay : sPin < q /\ q <= hPin
