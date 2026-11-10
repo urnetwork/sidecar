@@ -271,17 +271,12 @@ func TestOrphanGcReadsTheHorizonBeforeTheIndex(t *testing.T) {
 	fixture := newNightlyFixture(t)
 	fixture.putSegment("orphan")
 	fixture.pastTheHorizon()
-	listsAtHorizon, listsAtIndex := -1, -1
-	listsBefore := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpList)
+	// LISTs counted at each barrier: the engine's own loops may LIST the cluster beside the run, so only the
+	// counts' order is held, never their exact values
+	listsAt := map[string]int{}
 	fixture.onStep = func(name string, key string) {
-		lists := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpList)
-		switch name {
-		case BarrierGcHorizonAfter:
-			listsAtHorizon = lists
-		case BarrierGcIndexBefore:
-			if listsAtIndex < 0 {
-				listsAtIndex = lists
-			}
+		if _, seen := listsAt[name]; !seen {
+			listsAt[name] = fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpList)
 		}
 	}
 	fixture.runPass()
@@ -289,9 +284,10 @@ func TestOrphanGcReadsTheHorizonBeforeTheIndex(t *testing.T) {
 	if !slices.Equal(fixture.gcSteps, want) {
 		t.Fatalf("steps %v, want %v", fixture.gcSteps, want)
 	}
-	// the horizon's LIST of pb/ is the first LIST the run issues on the metadata cluster
-	if listsAtHorizon != listsBefore+1 || listsAtIndex < listsAtHorizon {
-		t.Fatalf("%d LISTs at the horizon and %d at the index", listsAtHorizon, listsAtIndex)
+	// the horizon's LIST of pb/ issues between its barriers, and the pidx/ LIST only after evs.gc.index.before
+	if listsAt[BarrierGcHorizonAfter] < listsAt[BarrierGcHorizonBefore]+1 || listsAt[BarrierGcIndexBefore] < listsAt[BarrierGcHorizonAfter] ||
+		listsAt[BarrierGcIndexAfter] < listsAt[BarrierGcIndexBefore]+1 {
+		t.Fatalf("LISTs at each barrier %v", listsAt)
 	}
 }
 
