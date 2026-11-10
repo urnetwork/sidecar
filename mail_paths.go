@@ -70,6 +70,12 @@ const mailLastMillis = 253402300799999
 // included (MAIL-FORMAT.md's Numbers).
 const mailFormatVersion = 1
 
+// AuthLimits.reason's bits (§15.5): a count or size bound, and the 30 s deadline. On every leg, for readers.
+const (
+	MailAuthLimitCount    = 1
+	MailAuthLimitDeadline = 2
+)
+
 // A name a path family cannot hold, such as an effect key of the wrong length or an address with a slash. The error
 // never repeats the name (I-13).
 var ErrMailPathInvalid = errors.New("mail path name invalid")

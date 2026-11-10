@@ -44,12 +44,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// AuthLimits.reason's bits (§15.5).
-const (
-	MailAuthLimitCount    = 1
-	MailAuthLimitDeadline = 2
-)
-
 // What a check reads of one message and its session.
 type MailAuthInput struct {
 	// The message's bytes as received, before ingest adds headers, and how many.

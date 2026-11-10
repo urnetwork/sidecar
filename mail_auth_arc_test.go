@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -414,5 +415,15 @@ func TestMailAuthMessageCostsAtMostNineBodyHashesAndSeventeenChecks(t *testing.T
 	}
 	if sealKeys != 8 || outcome.Counts.GetDkimSeen() != 64 || outcome.Counts.GetDkimChecked() != 8 || outcome.Counts.GetArcSets() != 8 {
 		t.Errorf("%d seal keys, counts %v", sealKeys, outcome.Counts)
+	}
+	// its evidence, every identifier at its bound, within 8,192 bytes, limits counting what the checks saw
+	evidence := testMailEvidenceOf(t, outcome, message)
+	if size := proto.Size(evidence); sidecar.MailAuthEvidenceMaxByteCount < size {
+		t.Errorf("%d bytes of evidence", size)
+	}
+	if limits := evidence.GetLimits(); limits.GetReason()&sidecar.MailAuthLimitCount == 0 || limits.GetDkimSeen() != 64 ||
+		limits.GetDkimChecked() != 8 || limits.GetArcSets() != 8 || limits.GetDnsQueries() != uint32(len(queries)) ||
+		int(limits.GetDropped()) != 16-len(evidence.GetDkim())-len(evidence.GetArc().GetSets()) {
+		t.Errorf("limits %v, %d dkim and %d arc entries kept", limits, len(evidence.GetDkim()), len(evidence.GetArc().GetSets()))
 	}
 }

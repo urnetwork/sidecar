@@ -73,8 +73,9 @@ func TestMailLabelOfASecondHopRequireTls(t *testing.T) {
 }
 
 // S7's cut message through the receiver's own checks: the DKIM key the 30 s cut is incomplete and counts for nothing,
-// while the PTR and TLSA the receiver did confirm still match a listed operator, so the message is validated by what
-// was verified and marked checks incomplete; with the PTR cut too it is opportunistic.
+// while the PTR and TLSA the receiver already held, from an earlier message of the same sender, still match a listed
+// operator, so the message is validated by what was verified and marked checks incomplete. From another address,
+// whose PTR the 30 s cut too, it is opportunistic.
 func TestMailLabelOfACutCheckRestsOnWhatWasVerified(t *testing.T) {
 	list, err := sidecar.ParseMailOperatorList("version: 4\noperators:\n  - id: listed\n    name: Listed Mail\n" +
 		"    ptr_suffixes: [sender.example]\n    dkim_domains: [sender.example]\n    dane: https://sender.example/dane\n")
@@ -85,24 +86,28 @@ func TestMailLabelOfACutCheckRestsOnWhatWasVerified(t *testing.T) {
 		world := newMailAuthCheckWorld(t)
 		world.settings.QueryTimeout = time.Minute
 		world.publishSender("sender.example")
+		// a first message leaves DMARC's and SPF's records, the PTR, its addresses and the TLSA in the stub
+		world.check(t, testMailAuthInput(testMailAuthMessage("sender.example", "warm"), "sender.example"))
 		signer, err := sidecartest.NewMailDkimSigner("sender.example", "slow", sidecartest.MailDkimRsaSha256, sidecartest.MailDkimRsaKey(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
 		world.zone.AddTxt(sidecartest.MailDkimKeyName("slow", "sender.example"), signer.KeyRecord())
 		world.zone.SetDelay(sidecartest.MailDkimKeyName("slow", "sender.example"), 40*time.Second)
-		delayed := 1
-		if cutPtr {
-			world.zone.SetDelay(sidecartest.MailZoneReverseName(netip.MustParseAddr(testMailAuthSender)), 40*time.Second)
-			delayed = 2
-		}
 		message, err := signer.Sign(testMailAuthMessage("sender.example", "cut"))
 		if err != nil {
 			t.Fatal(err)
 		}
+		input := testMailAuthInput(message, "sender.example")
+		delayed := 1
+		if cutPtr {
+			input.SenderIp = netip.MustParseAddr("192.0.2.26")
+			world.zone.SetDelay(sidecartest.MailZoneReverseName(input.SenderIp), 40*time.Second)
+			delayed = 2
+		}
 		done := make(chan *sidecar.MailAuthOutcome, 1)
 		go func() {
-			outcome, err := world.checker.Check(context.Background(), testMailAuthInput(message, "sender.example"))
+			outcome, err := world.checker.Check(context.Background(), input)
 			if err != nil {
 				t.Error(err)
 			}
@@ -115,6 +120,9 @@ func TestMailLabelOfACutCheckRestsOnWhatWasVerified(t *testing.T) {
 		evidence := testMailEvidenceOf(t, outcome, message)
 		if evidence.GetLimits().GetReason()&sidecar.MailAuthLimitDeadline == 0 || evidence.GetDkim()[0].GetResult() != protocol.DkimVerdict_DKIM_INCOMPLETE {
 			t.Fatalf("cut ptr %t: limits %v, dkim %v", cutPtr, evidence.GetLimits(), evidence.GetDkim())
+		}
+		if (evidence.GetPtrName() == "") != cutPtr || !evidence.GetSniTlsaLive() {
+			t.Fatalf("cut ptr %t: ptr %q, tlsa %t", cutPtr, evidence.GetPtrName(), evidence.GetSniTlsaLive())
 		}
 		result := testMailLabelOfEvidence(t, evidence, message, false, "sender.example", list)
 		want := protocol.MailTlsLabel_MAIL_TLS_VALIDATED
