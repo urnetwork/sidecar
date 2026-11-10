@@ -573,6 +573,21 @@ func (self *GkmApi) Epochs(ctx context.Context, repoId Id, groupId Id, after uin
 	return reply, nil
 }
 
+// GET /gkm/groups/<id>/epochs with no after: the epoch objects from epoch 0, which a group no commit has moved holds
+// alone, and which a recovery self-join reads its GroupInfo from (§10.8).
+func (self *GkmApi) EpochsFromStart(ctx context.Context, repoId Id, groupId Id) (*protocol.GkmEpochsReply, error) {
+	scopes, err := self.scopesFor(&repoId, GkmScopeRoleRead)
+	if err != nil {
+		return nil, err
+	}
+	reply := &protocol.GkmEpochsReply{}
+	call := &gkmCall{route: "GET /gkm/groups/{group_id}/epochs", method: http.MethodGet, path: gkmGroupPath(groupId, "/epochs"), scopes: scopes, retry: true}
+	if err := self.callMessage(ctx, call, reply); err != nil {
+		return nil, err
+	}
+	return reply, nil
+}
+
 // POST /gkm/groups/<id>/epochs/<n>: a commit that makes epoch n. A 409 is a *GkmError whose Winner is the
 // GkmEpochObject that won the epoch (KF6).
 func (self *GkmApi) CommitEpoch(ctx context.Context, repoId Id, groupId Id, epoch uint64, request *protocol.GkmEpochRequest) error {

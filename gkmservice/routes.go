@@ -141,7 +141,7 @@ var gkmRoutes = []*GkmRoute{
 	{Pattern: "GET /gkm/groups/{group_id}/wraps/{g}", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveWrapsRead},
 	{Pattern: "POST /gkm/groups/{group_id}/wraps/{g}/{c8}", Scope: gkmScopeDeliver, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateKeying, Serve: (*GkmEngine).serveWrapBatch},
 	{Pattern: "POST /gkm/groups/{group_id}/recovery-wraps/{g}/{c8}", Scope: gkmScopeStage, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateKeying, Serve: (*GkmEngine).serveRecoveryWrapBatch},
-	{Pattern: "POST /gkm/groups/{group_id}/ladder", Scope: gkmScopeAdmin, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateReseed},
+	{Pattern: "POST /gkm/groups/{group_id}/ladder", Scope: gkmScopeAdmin, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateReseed, Serve: (*GkmEngine).serveLadder},
 	{Pattern: "GET /gkm/repos/{repo_id}/drop-key", Scope: gkmScopeDeposit, Target: gkmTargetPathRepo, Serve: (*GkmEngine).serveDropKey},
 	{Pattern: "GET /gkm/recovery/{member_id}/wraps", Scope: gkmScopeRecoveryRead, Target: gkmTargetPathMember, Serve: (*GkmEngine).serveRecoveryWrapsRead},
 	{Pattern: "POST /gkm/recovery/{member_id}/wraps", Scope: gkmScopeRecoveryOwn, Target: gkmTargetBody, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveRecoveryWrapWrite},

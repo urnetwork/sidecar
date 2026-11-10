@@ -162,7 +162,9 @@ barrier gkm.commit.epoch.before gkm_members.go
 barrier gkm.epoch_put.after gkmservice/epochs.go
 barrier gkm.epoch_put.before gkmservice/epochs.go
 barrier gkm.gen_claim.after gkmservice/generations.go
+barrier gkm.gen_claim.after gkmservice/reform.go
 barrier gkm.gen_claim.before gkmservice/generations.go
+barrier gkm.gen_claim.before gkmservice/reform.go
 barrier gkm.group_create.after gkmservice/groups.go
 barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.group_owner.after gkmservice/groups.go

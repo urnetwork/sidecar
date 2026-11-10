@@ -454,6 +454,19 @@ func (self *EvsRepoKey) NextGeneration(args *GkmGenerationArgs) (*EvsRepoKey, *p
 	return newGkmGeneration(self.repoId, self.groupId, self, args)
 }
 
+// Generation g+1 after this one in groupId, the group that re-formed this generation's (§10.8; plan-KEYS-reform-ladder
+// rule 9): a re-formed group's ladder holds its old generations naming their old group, and the first rotation past
+// them names the new one. GenLink's AAD and C_g hold no group_id, so the link opens as any other.
+func (self *EvsRepoKey) NextGenerationIn(groupId Id, args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
+	if err := self.checkHeld(); err != nil {
+		return nil, nil, err
+	}
+	if groupId == (Id{}) {
+		return nil, nil, fmt.Errorf("%w: a generation needs its group", ErrGkmMalformed)
+	}
+	return newGkmGeneration(self.repoId, groupId, self, args)
+}
+
 // A generation's keys and statement; parent nil for generation 1.
 func newGkmGeneration(repoId Id, groupId Id, parent *EvsRepoKey, args *GkmGenerationArgs) (*EvsRepoKey, *protocol.GenRotate, error) {
 	if args == nil || !args.Cause.valid() || args.Time.IsZero() || len(args.HoldersSha256) != gkmDigestByteCount {

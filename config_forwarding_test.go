@@ -725,3 +725,53 @@ func TestForwardingRowsAreEqualAcrossAFoldAtEveryReader(t *testing.T) {
 	}
 	check()
 }
+
+// `ur admin delegations` tells a forwarding Delegation from an agent's: its state names the sidecar it forwards for
+// and where a newer one superseded it, with no tags, agents or admissions left; and its revocation is built with no
+// since_n, --leaked refused, since the log refuses one that carries it.
+func TestDelegationStatesTellAForwardingDelegationApart(t *testing.T) {
+	net, ci, _ := newTestConfigTagNet(t)
+	_, laptop := net.consentedMember("m")
+	agents := net.delegate(net.owner, "ci", []Id{ci}, 2, net.timeMs+7*24*60*60*1000)
+	first := net.forward(laptop, "first")
+	second := net.forward(laptop, "second")
+
+	state := net.log.State()
+	states := map[string]*DelegationState{}
+	for _, delegationState := range state.DelegationStates() {
+		states[string(delegationState.DelegationId)] = delegationState
+	}
+	if len(states) != 3 {
+		t.Fatalf("%d Delegations listed", len(states))
+	}
+	if agent := states[string(agents.id)]; agent.ForwardSidecarId != nil || agent.SupersededAt != 0 || len(agent.TagIds) != 1 || agent.AdmissionsLeft != 2 {
+		t.Errorf("the agent's Delegation: %+v", agent)
+	}
+	for _, forwarding := range []*testConfigDelegation{first, second} {
+		listed := states[string(forwarding.id)]
+		if !bytes.Equal(listed.ForwardSidecarId, laptop.sidecarId.Bytes()) || len(listed.TagIds) != 0 || len(listed.AgentIds) != 0 ||
+			listed.AdmissionsLeft != 0 || !listed.NotAfter.IsZero() || listed.EndedAt != 0 {
+			t.Errorf("a forwarding Delegation: %+v", listed)
+		}
+	}
+	if states[string(first.id)].SupersededAt != second.at(net) || states[string(second.id)].SupersededAt != 0 {
+		t.Error("the listing does not say which one was superseded, and where")
+	}
+
+	if _, err := state.DelegationRevokeStatement(second.id, true, 1); err == nil {
+		t.Error("a leaked revocation of a forwarding Delegation was built")
+	}
+	revoke, err := state.DelegationRevokeStatement(second.id, false, 0)
+	if err != nil || revoke.GetSinceN() != 0 {
+		t.Fatalf("a forwarding Delegation's revocation: %v %v", revoke, err)
+	}
+	revoke.Header = net.header()
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_DELEGATION_REVOKE, revoke)
+	if _, ended := net.log.State().DelegationEnded(second.id); !ended {
+		t.Error("the built revocation did not end it")
+	}
+	// the agent's Delegation still takes --leaked
+	if leaked, err := state.DelegationRevokeStatement(agents.id, true, 1); err != nil || leaked.GetSinceN() == 0 {
+		t.Errorf("a leaked revocation of an agent's Delegation: %v %v", leaked, err)
+	}
+}
