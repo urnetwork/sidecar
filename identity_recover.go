@@ -752,6 +752,7 @@ func (self *recoveryAnchorKeys) CurrentConfigKey(ctx context.Context) (*EvsRepoK
 	return nil, fmt.Errorf("%w: a recovery anchor seals nothing", ErrGkmKeyMissing)
 }
 
+// The key of a generation the ladder reaches, nil for one it does not.
 func (self *recoveryAnchorKeys) ConfigKeyAt(generation uint64) *EvsRepoKey {
 	if self.keyAt == nil {
 		return nil
