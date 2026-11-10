@@ -30,17 +30,61 @@ const (
 	probeSilent probeBehavior = "silent"
 	// no connection
 	probeRefuse probeBehavior = "refuse"
+	// mxedge's greeting on 25, which it sends before reading anything
+	probeMxedge probeBehavior = "mxedge"
+	// mxedge's greeting while it drains
+	probeMxedgeDraining probeBehavior = "mxedge_draining"
 )
 
-// DnsProbeDialer over in-memory pipes, each address answering as a test sets it, tlsedge by default.
+// The port the fake answers as mxedge does: DefaultDnsSettings' smtp_port.
+const fakeProbeSmtpPort = 25
+
+// mxedge's greetings, as its dialog writes them for a synthetic host.
+const (
+	fakeMxedgeBanner   = "220 mx.zone.example ESMTP\r\n"
+	fakeMxedgeDraining = "421 4.3.2 mx.zone.example Service closing, try again later\r\n"
+)
+
+// DnsProbeDialer over in-memory pipes, each address answering as a test sets it: tlsedge by default,
+// and on fakeProbeSmtpPort mxedge.
 type fakeProbeDialer struct {
 	stateLock sync.Mutex
 	behaviors map[netip.AddrPort]probeBehavior
 	dials     map[netip.AddrPort]int
+	// Bytes probes wrote to each address on fakeProbeSmtpPort, which a banner probe never does.
+	smtpWrittenByteCounts map[netip.AddrPort]int64
 }
 
 func newFakeProbeDialer() *fakeProbeDialer {
-	return &fakeProbeDialer{behaviors: map[netip.AddrPort]probeBehavior{}, dials: map[netip.AddrPort]int{}}
+	return &fakeProbeDialer{
+		behaviors:             map[netip.AddrPort]probeBehavior{},
+		dials:                 map[netip.AddrPort]int{},
+		smtpWrittenByteCounts: map[netip.AddrPort]int64{},
+	}
+}
+
+// Bytes probes have written to address on fakeProbeSmtpPort.
+func (self *fakeProbeDialer) smtpWrittenByteCount(address string) int64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.smtpWrittenByteCounts[netip.AddrPortFrom(netip.MustParseAddr(address), fakeProbeSmtpPort)]
+}
+
+// A probe's end of a fake 25, counting what it writes as it writes it, on the probe's own goroutine,
+// so a round that has finished has counted every byte.
+type fakeProbeSmtpConn struct {
+	net.Conn
+	dialer  *fakeProbeDialer
+	address netip.AddrPort
+}
+
+func (self *fakeProbeSmtpConn) Write(data []byte) (int, error) {
+	func() {
+		self.dialer.stateLock.Lock()
+		defer self.dialer.stateLock.Unlock()
+		self.dialer.smtpWrittenByteCounts[self.address] += int64(len(data))
+	}()
+	return self.Conn.Write(data)
 }
 
 func (self *fakeProbeDialer) set(address string, port uint16, behavior probeBehavior) {
@@ -56,6 +100,7 @@ func (self *fakeProbeDialer) dialCount(address string, port uint16) int {
 }
 
 func (self *fakeProbeDialer) DialProbe(ctx context.Context, address netip.AddrPort) (net.Conn, error) {
+	smtp := address.Port() == fakeProbeSmtpPort
 	behavior := func() probeBehavior {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -63,12 +108,33 @@ func (self *fakeProbeDialer) DialProbe(ctx context.Context, address netip.AddrPo
 		if behavior, ok := self.behaviors[address]; ok {
 			return behavior
 		}
+		if smtp {
+			return probeMxedge
+		}
 		return probeTlsedge
 	}()
 	if behavior == probeRefuse {
 		return nil, errors.New("refused")
 	}
 	client, server := net.Pipe()
+	if smtp {
+		// a greeting first, as SMTP's server speaks first, then whatever the probe writes until it
+		// closes; tlsedge's alert is followed by its close, as tlsedge's is
+		go func() {
+			defer server.Close()
+			switch behavior {
+			case probeMxedge:
+				server.Write([]byte(fakeMxedgeBanner))
+			case probeMxedgeDraining:
+				server.Write([]byte(fakeMxedgeDraining))
+			case probeTlsedge:
+				server.Write([]byte{21, 3, 3, 0, 2, 2, 112})
+				return
+			}
+			io.Copy(io.Discard, server)
+		}()
+		return &fakeProbeSmtpConn{Conn: client, dialer: self, address: address}, nil
+	}
 	go func() {
 		defer server.Close()
 		header := make([]byte, 5)

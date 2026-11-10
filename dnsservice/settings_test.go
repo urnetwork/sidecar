@@ -274,14 +274,16 @@ func TestDnsEdgeSettingsRefusals(t *testing.T) {
 func TestDnsProbeSettings(t *testing.T) {
 	probe := DefaultDnsSettings().Probe
 	if probe.IntervalSeconds != 10 || probe.FailureCount != 3 || !reflect.DeepEqual(probe.Ports, []int{443, 8443, 8883, 5671}) ||
-		probe.RoutePort != 443 || probe.RouteHostCount != 16 || probe.ReportTimeoutSeconds != 3 {
+		probe.RoutePort != 443 || probe.RouteHostCount != 16 || probe.ReportTimeoutSeconds != 3 ||
+		probe.SmtpPort != 25 || probe.SmtpBannerMaxByteCount != 4*1024 {
 		t.Errorf("defaults %+v", probe)
 	}
-	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "probe: {ports: [443]}\n"))
+	settings, err := LoadDnsSettings([]byte(dnsSettingsSketch + "probe: {ports: [443], smtp_port: 2525, smtp_banner_bytes: 512}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(settings.Probe.Ports, []int{443}) || settings.Probe.IntervalSeconds != 10 {
+	if !reflect.DeepEqual(settings.Probe.Ports, []int{443}) || settings.Probe.IntervalSeconds != 10 ||
+		settings.Probe.SmtpPort != 2525 || settings.Probe.SmtpBannerMaxByteCount != 512 {
 		t.Errorf("probe %+v", settings.Probe)
 	}
 	for _, block := range []string{
@@ -299,6 +301,11 @@ func TestDnsProbeSettings(t *testing.T) {
 		"probe: {route_hosts: 0}",
 		"probe: {report_timeout_s: 0}",
 		"probe: {report_timeout_s: 10}",
+		"probe: {smtp_port: 0}",
+		"probe: {smtp_port: 65536}",
+		"probe: {smtp_port: 8443}",
+		"probe: {ports: [25], smtp_port: 25}",
+		"probe: {smtp_banner_bytes: 511}",
 	} {
 		if _, err := LoadDnsSettings([]byte(dnsSettingsSketch + block + "\n")); !errors.Is(err, ErrDnsSettingsRefused) {
 			t.Errorf("%s: %v", block, err)
