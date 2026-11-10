@@ -657,6 +657,7 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 	}
 	// 200: adopt
 	epochAuthenticator := staged.EpochAuthenticator()
+	removed := staged.Removed()
 	if _, err := staged.Adopt(); err != nil {
 		return 0, err
 	}
@@ -670,6 +671,8 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 	if err != nil {
 		return 0, err
 	}
+	// what the commit removed as stale, for §7.10's view (gkm_stale.go)
+	self.noteRosterChange(state, check.Header, removed, check.Roster, epoch, now)
 	if groupInfoObject != nil {
 		// above 16 leaves the GroupInfo rides group-info, which rises at each write; a lost one is asked for again
 		// by a joiner's or a resyncer's ?want=
@@ -852,7 +855,8 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	}
 	epochAuthenticator := staged.EpochAuthenticator()
 	headerBytes := staged.AuthenticatedData()
-	_, adoptErr := staged.Adopt()
+	removed := staged.Removed()
+	adoptedGroup, adoptErr := staged.Adopt()
 	adopted = true
 	if adoptErr != nil && !errors.Is(adoptErr, ErrMlsNotMember) {
 		return false, adoptErr
@@ -874,6 +878,10 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	})
 	if err != nil {
 		return false, err
+	}
+	if adoptErr == nil && adoptedGroup != nil {
+		// what the commit removed as stale, for §7.10's view (gkm_stale.go)
+		self.noteRosterChange(state, header, removed, adoptedGroup.Roster(), entry.GetEpoch(), gkmCommitRosterTime(checkArgs))
 	}
 	// removed: it keeps every RK_g it holds and reads on by wraps if it is still a holder
 	return errors.Is(adoptErr, ErrMlsNotMember), nil
