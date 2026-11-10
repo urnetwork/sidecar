@@ -8,6 +8,7 @@
 package sidecar_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -454,5 +455,36 @@ func TestAPendingHintRunsTheEngineAfterItsDelay(t *testing.T) {
 	<-committed
 	if newest, _ := world.store.newestEpoch(world.groupId); newest != 2 || world.store.callCount("CommitEpoch") != 1 {
 		t.Errorf("after the delay: epoch %d, %d commits", newest, world.store.callCount("CommitEpoch"))
+	}
+}
+
+// A commit whose pin a reader no longer retains is not judged and counts against no one: the reader adopts it, and
+// takes the generation its GenWrap carries only against gen/<g>'s commitment.
+func TestALeafAdoptsACommitWhosePinItNoLongerRetains(t *testing.T) {
+	world := newGkmEngineWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	a, b := world.flows[world.a], world.flows[world.b]
+	world.stateFor(world.b)
+	key, err := a.client.RotateRepo(world.ctx, world.repoId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.client.SelfUpdate(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	// b returns two positions later, retaining only the newest
+	world.stateFor(world.b)
+	fourth := world.stateFor()
+	world.log.Retain(fourth.Pin().GetVersion())
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("a commit at a pin no longer retained: %v", err)
+	}
+	if _, epoch, generation, err := b.client.TestPins(world.repoId); err != nil || epoch != 2 || generation != 2 {
+		t.Errorf("b's pins: epoch %d, generation %d, %v", epoch, generation, err)
+	}
+	if held, poisoned, found, err := b.client.TestHeldGeneration(world.repoId, 2); err != nil || !found || held == nil || poisoned || !bytes.Equal(held.Commitment(), key.Commitment()) {
+		t.Errorf("b's generation 2: %v %v %v", found, poisoned, err)
+	}
+	if len(b.alarms) != 0 {
+		t.Errorf("an unjudged commit alarmed: %+v", b.alarms[0])
 	}
 }

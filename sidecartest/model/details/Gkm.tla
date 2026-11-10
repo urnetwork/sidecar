@@ -28,7 +28,11 @@
 (* "LateBelowClaimPin", "ClaimBelowParent", "LeafWrapDirtyTree" and        *)
 (* "NoGate" each break one rule of the design. Story fixes the actions of  *)
 (* a run, so a twin's violation is reached directly; the design runs with  *)
-(* no story.                                                                *)
+(* no story. The tasks' twins (6.6): "AddWithoutRemove" (KEYS-M2-21) has   *)
+(* an Add commit leave a dropped leaf; "StagedToNonHolder" (KEYS-M2-20)    *)
+(* has a rotation stage a delivery to a party outside its holder set;      *)
+(* "AdoptNonCoveringWinner" (KEYS-M2-20) has a writer seal to another      *)
+(* rotator's generation that does not cover the shrink it knows.           *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -200,7 +204,8 @@ Commit(c, kind, d) ==
     /\ Holds(c) /\ tip[c] >= gens[G].auth /\ tip[c] >= epochs[E].auth
     /\ Match([a |-> "Commit", s |-> c, k |-> kind, d |-> d])
     /\ LET H == Readers(tip[c], Clock)
-           pendingRemoves == IF c \in ReadOnly THEN {} ELSE Tree \ H
+           pendingRemoves == IF c \in ReadOnly \/ (Twin = "AddWithoutRemove" /\ kind = "add")
+                             THEN {} ELSE Tree \ H
            newRoster == CASE kind = "add" -> (Tree \ pendingRemoves) \cup {d}
                           [] kind = "remove" -> Tree \ pendingRemoves
                           [] kind = "path" -> Tree \ pendingRemoves
@@ -216,7 +221,7 @@ Commit(c, kind, d) ==
              \/ kind = "stale" /\ c \in Writers /\ c \notin ReadOnly /\ d \in Tree /\ d \in H /\ d # c
                                 /\ d \in StaleTargets
           \* the roster rule, as the committer checks it before it commits (6.2.3)
-          /\ Twin = "GenWrapIgnoresRoster" \/ newRoster \subseteq H
+          /\ Twin \in {"GenWrapIgnoresRoster", "AddWithoutRemove"} \/ newRoster \subseteq H
           /\ epochs' = Append(epochs, [c |-> c, roster |-> newRoster, gen |-> G, auth |-> tip[c],
                                        time |-> Clock, k |-> kind])
           /\ at' = [at EXCEPT ![c] = E + 1]
@@ -279,7 +284,9 @@ Rotate(r) ==
            leafCase == /\ r \in MemberDevices /\ at[r] > 0
                        /\ (Twin = "LeafWrapDirtyTree" \/ Roster(at[r]) \subseteq H)
            leaves == IF r \in MemberDevices /\ at[r] > 0 THEN Roster(at[r]) \cap H ELSE H \cap MemberDevices
-           wraps == (H \cap Agents) \cup (IF leafCase THEN {} ELSE leaves)
+           \* under StagedToNonHolder the rotation also stages to the parent's holders its own state dropped
+           strays == IF Twin = "StagedToNonHolder" THEN gens[G].holders \ H ELSE {}
+           wraps == (H \cap Agents) \cup (IF leafCase THEN {} ELSE leaves) \cup strays
        IN gens' = Append(gens, [r |-> r, holders |-> H, auth |-> tip[r], time |-> Clock,
                                 wraps |-> wraps, leafEpoch |-> IF leafCase THEN at[r] ELSE 0])
     /\ Step
@@ -362,7 +369,10 @@ LoseState(s) ==
 Seal(w) ==
     /\ Cardinality(sealed) < MaxSeals
     /\ w \in Writers /\ w \in Readers(tip[w], Clock) /\ Reach(w) > 0
-    /\ Twin = "NoGate" \/ Covers(Reach(w), Clock, Clock)
+    \* under AdoptNonCoveringWinner a writer that lost the claim seals to the winner's generation uncovered
+    /\ \/ Twin = "NoGate"
+       \/ Twin = "AdoptNonCoveringWinner" /\ Reach(w) > 1 /\ gens[Reach(w)].r # w
+       \/ Covers(Reach(w), Clock, Clock)
     /\ Match([a |-> "Seal", s |-> w])
     /\ sealed' = sealed \cup {[g |-> Reach(w), n |-> Clock]}
     /\ Step
@@ -482,5 +492,15 @@ StoryLeafWrap == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Advance",
                    [a |-> "Rotate", s |-> "a"]>>
 \* content sealed past a shrink under the generation the removed leaf holds
 StoryGate == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Seal", s |-> "a"]>>
+\* an Add commit that leaves the revoked leaf in the tree it wraps the generation into
+StoryAddWithoutRemove == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Enter", k |-> "radmit", s |-> "e"],
+                           [a |-> "Advance", s |-> "a"], [a |-> "Advance", s |-> "a"],
+                           [a |-> "Commit", s |-> "a", k |-> "add", d |-> "e"]>>
+\* a rotation for a revocation that stages a delivery to the revoked leaf
+StoryStaged == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Advance", s |-> "a"],
+                 [a |-> "Rotate", s |-> "a"]>>
+\* the agent claims at a state before the revocation; the writer that lost the claim seals to it past the shrink
+StoryAdopt == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Rotate", s |-> "d"],
+                [a |-> "Seal", s |-> "a"]>>
 
 =============================================================================

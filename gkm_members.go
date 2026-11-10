@@ -804,6 +804,16 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	if check.Verdict.Refused {
 		return refuse(check.Verdict)
 	}
+	if check.Verdict.NotJudged && check.Key == nil && checkArgs.Generation != nil {
+		// a pin this reader no longer retains: the rows are not judged, and the key its GenWrap carries is still
+		// accepted only against gen/<g>'s C_g
+		if kek, err := MlsKek(staged, self.repoId); err == nil {
+			if key, err := OpenGkmGenWrap(checkArgs.Generation, groupId, entry.GetEpoch(), kek, object.GetGenWrap()); err == nil {
+				check.Key = key
+			}
+			clear(kek)
+		}
+	}
 	epochAuthenticator := staged.EpochAuthenticator()
 	headerBytes := staged.AuthenticatedData()
 	_, adoptErr := staged.Adopt()
