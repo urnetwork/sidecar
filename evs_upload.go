@@ -42,6 +42,8 @@ type EvsSealedWrite struct {
 	RepoKey  *EvsRepoKey
 	Paths    []*EvsSealedPath
 	Segments []*EvsSealedSegment
+	// the token scope its uploads take: rw, or a deposit's deposit (evs_deposit.go)
+	scope string
 }
 
 // One path sealed.
@@ -236,7 +238,7 @@ func (self *EvsRepo) uploadSegments(ctx context.Context, sealed *EvsSealedWrite,
 		go func() {
 			defer wait.Done()
 			for segment := range work {
-				if err := self.uploadSegment(uploadCtx, segment, pushId); err != nil {
+				if err := self.uploadSegment(uploadCtx, segment, pushId, sealed.scope); err != nil {
 					errs <- err
 					cancel()
 				}
@@ -261,8 +263,12 @@ func (self *EvsRepo) uploadSegments(ctx context.Context, sealed *EvsSealedWrite,
 	return ctx.Err()
 }
 
-// One segment's PUT, retried after a 429 or 503 that refuses nothing, and its receipt held to the segment.
-func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegment, pushId Id) error {
+// One segment's PUT under scope (rw when empty), retried after a 429 or 503 that refuses nothing, and its receipt held
+// to the segment.
+func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegment, pushId Id, scope string) error {
+	if scope == "" {
+		scope = evsScopeWrite
+	}
 	body, err := io.ReadAll(segment.content.reader())
 	if err != nil {
 		return err
@@ -272,7 +278,7 @@ func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegmen
 		method:  http.MethodPut,
 		path:    "/evs/v1/repos/" + evsUrlId(self.repoId) + "/segments/" + hex.EncodeToString(segment.Id[:]) + "?push=" + evsUrlId(pushId),
 		repoId:  self.repoId,
-		role:    evsScopeWrite,
+		role:    scope,
 		rawBody: body,
 	}
 	receipt := &protocol.EvsUploadReceipt{}
