@@ -49,6 +49,9 @@ type McpNetwork interface {
 	Runs() (*sidecar.RunStore, error)
 	// Its capture spool (§16.7), which holds a taint taken while Locked.
 	Spool() (*sidecar.Spool, error)
+	// Its sealed local state, net/<network_id>/ (§5.9), where restore points and ingest state live. Every call on
+	// it answers ErrSidecarStoreLocked before enrollment and while locked.
+	LocalStore() sidecar.SidecarStore
 }
 
 // The daemon, as the server reads it (§5.8): DaemonOf wraps *sidecar.Daemon; a test passes a fake.

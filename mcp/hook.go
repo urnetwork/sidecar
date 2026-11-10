@@ -308,7 +308,7 @@ func hookObjectRaw(object json.RawMessage, name string) []byte {
 
 // What a PreToolUse's paths are held by before its tool runs: MCP-M3-20's restore point. Nil holds nothing, so a
 // path's before stays unknown, the closed direction for restore.
-type HookHolds func(ctx context.Context, network McpNetwork, runId sidecar.Id, event *HookEvent) error
+type HookHolds func(ctx context.Context, network McpNetwork, networkId sidecar.Id, runId sidecar.Id, event *HookEvent) error
 
 // hook.event's params: the payload as the harness wrote it, or, past Ingest.PayloadByteCount, its size alone.
 type HookEventParams struct {
@@ -317,10 +317,15 @@ type HookEventParams struct {
 	Oversize  bool            `json:"oversize,omitempty"`
 }
 
-// The daemon's hook state: the holds seam, under its own lock.
+// What captures a hook event once it is bound, tainted and held (MCP-M3-19's Ingest). It runs after the ack's
+// preconditions, and its error is its own: the hook is acked whatever it answers.
+type HookCapture func(ctx context.Context, captured *HookCaptured) error
+
+// The daemon's hook state: the holds and capture seams, under its own lock.
 type mcpHooks struct {
 	stateLock sync.Mutex
 	holds     HookHolds
+	capture   HookCapture
 }
 
 // Sets what holds a PreToolUse's paths (MCP-M3-20).
@@ -328,6 +333,20 @@ func (self *McpServer) SetHookHolds(holds HookHolds) {
 	self.hooks.stateLock.Lock()
 	defer self.hooks.stateLock.Unlock()
 	self.hooks.holds = holds
+}
+
+// Sets what captures each bound event (MCP-M3-19). Nil captures nothing.
+func (self *McpServer) SetHookCapture(capture HookCapture) {
+	self.hooks.stateLock.Lock()
+	defer self.hooks.stateLock.Unlock()
+	self.hooks.capture = capture
+}
+
+// The capture seam as set.
+func (self *McpServer) hookCapture() HookCapture {
+	self.hooks.stateLock.Lock()
+	defer self.hooks.stateLock.Unlock()
+	return self.hooks.capture
 }
 
 // The daemon methods the server adds beside its mcp mode: hook.event, which every `ur hook` calls, acting on the
@@ -366,5 +385,5 @@ func (self *McpServer) HandleHook(ctx context.Context, hello *sidecar.DaemonHell
 		}
 		return err
 	}
-	return self.binder.ingestEvent(ctx, network, networkId, adapter, caller, event)
+	return self.binder.ingestEvent(ctx, network, networkId, adapter, caller, event, params.Payload)
 }

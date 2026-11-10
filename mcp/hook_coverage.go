@@ -30,10 +30,16 @@ import (
 // One hook event, read: its run bound and caught up, a web tool's taint fsynced, the coverage rules run and its paths
 // held, each before the answer. While the network is Locked only a web tool's taint is kept, in the spool.
 func (self *RunBinder) ingestEvent(ctx context.Context, network McpNetwork, networkId sidecar.Id, adapter HookAdapter,
-	caller mcpCallerProcess, event *HookEvent) error {
+	caller mcpCallerProcess, event *HookEvent, payload []byte) error {
 	now := self.server.clock.Now()
 	if network.Status().State == sidecar.SidecarStateLocked {
-		return self.ingestLocked(ctx, network, caller, event, now)
+		if err := self.ingestLocked(ctx, network, caller, event, now); err != nil {
+			return err
+		}
+		if capture := self.server.hookCapture(); capture != nil {
+			capture(ctx, &HookCaptured{Network: network, NetworkId: networkId, Event: event, Payload: payload, Locked: true})
+		}
+		return nil
 	}
 	if err := self.replaySpooledTaint(ctx, network); err != nil {
 		return err
@@ -83,7 +89,15 @@ func (self *RunBinder) ingestEvent(ctx context.Context, network McpNetwork, netw
 			return self.server.hooks.holds
 		}()
 		if holds != nil {
-			return holds(ctx, network, runId, event)
+			if err := holds(ctx, network, networkId, runId, event); err != nil {
+				self.server.log.Warningf("[mcp]a PreToolUse's paths were not held: %s", err)
+			}
+		}
+	}
+	if capture := self.server.hookCapture(); capture != nil {
+		// after the ack's preconditions: its own failures are the capture's gaps, never the hook's
+		if err := capture(ctx, &HookCaptured{Network: network, NetworkId: networkId, RunId: runId, Event: event, Payload: payload}); err != nil {
+			self.server.log.Warningf("[mcp]a hook event was not captured: %s", err)
 		}
 	}
 	return nil

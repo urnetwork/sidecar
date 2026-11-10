@@ -72,6 +72,22 @@ type SidecarIngestSettings struct {
 	RestoreHoldTimeout time.Duration
 	// How much of a file that hold keeps: 8 MiB.
 	RestoreHoldByteCount int64
+	// Permission modes under which a run is recorded and gapped bypass_mode, and whose harness evidence never counts
+	// (§16.6; D-MCP-9): Claude Code's bypassPermissions and dontAsk, and Codex's auto, as the harness names them.
+	BypassPermissionModes []string
+	// The instruction files a harness loads from the project, relative to the session's cwd, which the context entry
+	// names by hash, never by text (§16.7): a directory among them lists its files. A reading, since §16.7 names no
+	// list: Claude Code's, Codex's and Cursor's documented files.
+	InstructionProjectFileNames []string
+	// The instruction files a harness loads from the person's home, relative to it, scope user.
+	InstructionUserFileNames []string
+	// The most paths one scan's change entry carries, RECORD.md's ChangedPath cap, past which path_count stands
+	// and the run's coverage has truncation: 4,096.
+	ChangePathCount int
+	// How much of the user prompts a run card keeps: 2 KiB (§16.10).
+	RunCardPromptByteCount int
+	// The most touched paths a run card keeps: 256 (§16.10).
+	RunCardPathCount int
 }
 
 // §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
@@ -161,6 +177,14 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		RestorePointByteCount: 256 * 1024 * 1024,
 		RestoreHoldTimeout:    10 * time.Minute,
 		RestoreHoldByteCount:  8 * 1024 * 1024,
+		BypassPermissionModes: []string{"bypassPermissions", "dontAsk", "auto"},
+		InstructionProjectFileNames: []string{
+			"CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", "AGENTS.md", ".cursorrules", ".cursor/rules",
+		},
+		InstructionUserFileNames: []string{".claude/CLAUDE.md", ".codex/AGENTS.md"},
+		ChangePathCount:          4096,
+		RunCardPromptByteCount:   2 * 1024,
+		RunCardPathCount:         256,
 	}
 }
 
