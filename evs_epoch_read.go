@@ -54,6 +54,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// A test's hook that makes a read name every path in every listed source, whatever its floor, as the landed tokenize
+// did before the floor rule (DESIGN-DETAILS 9.1 A): the twin the capture must catch (9.6). false outside tests.
+var evsTokenizeEverySourceHook bool
+
 // Whether a ref of refKind is a deposit or the erasure ref: see the file header.
 func evsEpochExempt(refKind protocol.EvsRefKind) bool {
 	return refKind == protocol.EvsRefKind_EVS_REF_DEPOSIT || refKind == protocol.EvsRefKind_EVS_REF_ERASURE
@@ -738,6 +742,10 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 				pinEpoch = path.record.PinEpoch
 			}
 			epochs, lookup, needFresh := evsEpochTokens(state.epoch, path.floor, pinEpoch, path.more, quiet != nil && *quiet, fresh)
+			if evsTokenizeEverySourceHook {
+				// the twin: every listed source for every path, floor or none, as tokenize did (9.1 A)
+				epochs, lookup, needFresh = append([]uint64{current}, evsSourceEpochs(state.epoch)...), false, false
+			}
 			if needFresh {
 				return nil, true, nil
 			}
