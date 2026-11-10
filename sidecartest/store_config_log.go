@@ -1032,3 +1032,25 @@ func (self *ConfigLogSuiteWorld) Start(sequencer ConfigLogSequencer) error {
 func (self *ConfigLogSuiteWorld) PostMemberAdmit(sequencer ConfigLogSequencer) (*bridge.AuthPin, error) {
 	return self.env.post(sequencer, self.env.memberAdmit())
 }
+
+// The owner's member id: its user's id in a personal network.
+func (self *ConfigLogSuiteWorld) OwnerMemberId() sidecar.Id {
+	return self.env.owner.memberId
+}
+
+// The owner's first device, the genesis's sidecar.
+func (self *ConfigLogSuiteWorld) OwnerSidecarId() sidecar.Id {
+	return self.env.owner.sidecarId
+}
+
+// A StatementHeader at the tip the world last saw, with a fresh nonce, expiring in an hour: what a test's own
+// statement carries.
+func (self *ConfigLogSuiteWorld) Header() *bridge.StatementHeader {
+	return self.env.header()
+}
+
+// body signed by the owner's first device under its type's purpose, as a Signed's bytes: a test's own statement,
+// such as a SidecarAdmit of a second device or a SidecarRevoke.
+func (self *ConfigLogSuiteWorld) SignAsOwner(signedType bridge.SignedType, body proto.Message) []byte {
+	return self.env.sign(self.env.owner, signedType, body)
+}
