@@ -1585,6 +1585,8 @@ func admissionRowRecoveryWindow(t testing.TB, net *AdmissionNet) {
 		if !net.Activate(bProposalId) || !net.Admitted(bPhone) {
 			t.Fatal("b's cosigned recovery proposal did not activate at 72 h")
 		}
+	} else {
+		t.Logf("this tier's api takes no activation tick, so the k = 2 activation at 72 h was not run here")
 	}
 
 	// the owner's proposal of c's tablet; b's key cosigns 72 h later and restarts the window there
