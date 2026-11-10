@@ -5,6 +5,13 @@
 // A format-1 instance meeting a format-2 construct in a push refuses it 409 FORMAT_UNSUPPORTED {needs_format: 2},
 // recorded (push.go), never as a fork, tampering or a missing segment.
 //
+// Serving stored bytes means reading a committed push back as it was stored, of either format: the read route, the
+// newest rule and a log page parse a stored statement by format 2's shape and a stored payload or part by
+// sidecar.EvsCheckStoredPayload and EvsCheckStoredPart, which take format 1's too, so a format-2 statement or entry
+// version in a format-1 batch record is served as it is and its reader decides what it can open. A batch or record
+// of format 2's layout, which this code does not parse, answers the read 409 FORMAT_UNSUPPORTED, with no alarm
+// (read.go; EVS1-M2-39).
+//
 // What format-1 writers keep (testdata/evs/reserved_numbers.yml's kept): an entry's drop mark and a marker's carried
 // segment and slot ids, which a format-2 collection deletes by and format 1 never wrote. A format-1 fold or copy
 // carries them unchanged, a newer marker over an older one inheriting its ids, and where a write would drop them it

@@ -739,6 +739,14 @@ func EvsCheckPayloadFormat2(statement *EvsStatement, payloadBytes []byte, staged
 	return checked, nil
 }
 
+// A committed one-part push's payload as its batch record stores it, of either format: EvsCheckPayloadFormat2's
+// checks without the staged bytes, which ride outside every hash and outside a format-1 record. What evs reads back
+// to serve: format-1 data is valid format 2, and an instance serves a format-2 push's stored entries as they are,
+// judging none of format 2's values (§11.6's format row, FS-72).
+func EvsCheckStoredPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedPayload, error) {
+	return evsCheckPayloadOf(statement, payloadBytes, true)
+}
+
 // A one-part push's checks, of either format.
 func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 bool) (*EvsCheckedPayload, error) {
 	push := statement.Push
@@ -890,6 +898,12 @@ func EvsCheckPartFormat2(statement *EvsStatement, partBytes []byte, stagedBytes 
 		checked.Staged = append(checked.Staged, staged)
 	}
 	return checked, nil
+}
+
+// A committed push's part as its batch record stores it, of either format, as EvsCheckStoredPayload reads a one-part
+// push's.
+func EvsCheckStoredPart(statement *EvsStatement, partBytes []byte) (*EvsCheckedPart, error) {
+	return evsCheckPartOf(statement, partBytes, true)
 }
 
 // A part's checks, of either format.

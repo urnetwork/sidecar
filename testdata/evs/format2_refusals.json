@@ -1,0 +1,522 @@
+{
+  "description": "Format 1's refusal of format 2 (D-EVS-39, D-PHASE-9, FI-17, FS-72's and FS-95's format-1 cases): each signed, well-formed format-2 construct, the reserved numbers it uses, the side that meets it and what format-1 code answers, with a malformed or unsigned twin that must not answer as needing format 2. sidecartest/evs_format2_refusal_test.go drives every row.",
+  "needs_format": 2,
+  "rows": [
+    {
+      "name": "entry-versioning-1",
+      "construct": "a push creating a file whose entry version has versioning 1 (versionless), its sealed fields carrying content_sha256",
+      "numbers": [
+        "EvsEntryVersion.versioning",
+        "EvsVersioning.EVS_VERSIONING_VERSIONLESS",
+        "EvsSealedFields.content_sha256"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same push under a signature that is not its signer's",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "entry-versioning-2",
+      "construct": "a push creating a file whose entry version has versioning 2 (a search index's file)",
+      "numbers": [
+        "EvsEntryVersion.versioning",
+        "EvsVersioning.EVS_VERSIONING_INDEX"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same push under a signature that is not its signer's",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "locator-kind-5",
+      "construct": "a push whose entry version's chain is a kind-5 locator, a versionless segment's one record after its 48 B header",
+      "numbers": [
+        "EvsLocatorKind.EVS_LOCATOR_VERSIONLESS_SEGMENT"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same entry with locator kind 6, which no format holds",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "locator-staged",
+      "construct": "a push whose entry version cites a staged kind-5 segment: the staged mark on its locator, a staged-segment item in new-objects and the segment's bytes in the request's staged field",
+      "numbers": [
+        "EvsLocator.staged",
+        "EvsNewObjectKind.EVS_NEW_OBJECT_STAGED_SEGMENT",
+        "EvsPushRequest.staged",
+        "segment header format"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same push under a signature that is not its signer's",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "receipt-versionless",
+      "construct": "a format-1 shaped push adopting a kind-5 segment by a versionless receipt a format-2 instance issued under the shared receipt keys",
+      "numbers": [
+        "EvsUploadReceipt.versionless"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same push with a versionless receipt no receipt key made",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "push-flag-256-field-33",
+      "construct": "a DROP: an EvsPush with flag 256 and drop_sha256 (field 33) over its EvsDropHistory, with the body and lists in payload sections 9 and 10",
+      "numbers": [
+        "EvsPushFlag.EVS_PUSH_DROP",
+        "EvsPush.drop_sha256",
+        "EvsPayloadSection.EVS_PAYLOAD_DROP_BODY",
+        "EvsPayloadSection.EVS_PAYLOAD_DROP_LISTS"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "a push with flag 256 and no drop_sha256, which format 2 does not parse either",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "push-flag-512",
+      "construct": "an erasure's CUT: an EvsPush with flag 512",
+      "numbers": [
+        "EvsPushFlag.EVS_PUSH_CUT"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same push with flag 1024, which no format holds",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "push-field-34",
+      "construct": "an index push: an EvsPush with index_epoch (field 34)",
+      "numbers": [
+        "EvsPush.index_epoch"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": true,
+      "twin": {
+        "construct": "the same push under a signature that is not its signer's",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "segment-header-kind-5",
+      "construct": "a segment upload whose bytes open with a 48 B kind-5 header (segment header format 2)",
+      "numbers": [
+        "segment header format"
+      ],
+      "side": "evs",
+      "outcome": "format_unsupported",
+      "status": 409,
+      "recorded": false,
+      "twin": {
+        "construct": "the same bytes with header format 3, which no format holds",
+        "outcome": "refused",
+        "status": 400,
+        "code": "INVALID"
+      }
+    },
+    {
+      "name": "read-entry-versioning-1",
+      "construct": "a committed file whose newest entry version has versioning 1",
+      "numbers": [
+        "EvsEntryVersion.versioning",
+        "EvsVersioning.EVS_VERSIONING_VERSIONLESS",
+        "repo/ format"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same reply with an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-entry-versioning-2",
+      "construct": "a committed file whose newest entry version has versioning 2",
+      "numbers": [
+        "EvsEntryVersion.versioning",
+        "EvsVersioning.EVS_VERSIONING_INDEX"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same reply with an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-locator-kind-5",
+      "construct": "a committed versionless file whose chain is a kind-5 locator into a stored kind-5 segment",
+      "numbers": [
+        "EvsLocatorKind.EVS_LOCATOR_VERSIONLESS_SEGMENT"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same reply with an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-statement-flag-512",
+      "construct": "a ref whose log holds a committed CUT, an EvsPush with flag 512",
+      "numbers": [
+        "EvsPushFlag.EVS_PUSH_CUT"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same statement under a signature its signer's key did not make",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-statement-field-34",
+      "construct": "a ref whose log holds a committed EvsPush with index_epoch (field 34)",
+      "numbers": [
+        "EvsPush.index_epoch"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same statement under a signature its signer's key did not make",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-statement-flag-256",
+      "construct": "a ref whose log holds a committed DROP, an EvsPush with flag 256 and drop_sha256 (field 33)",
+      "numbers": [
+        "EvsPushFlag.EVS_PUSH_DROP",
+        "EvsPush.drop_sha256"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same statement under a signature its signer's key did not make",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-state-collected",
+      "construct": "a read reply whose path state is collected",
+      "numbers": [
+        "EvsReadPathReply.state",
+        "EvsReadPathState.EVS_READ_PATH_COLLECTED"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the reply with no state and an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-state-drop-pending",
+      "construct": "a read reply whose path state is drop_pending, with its drop_id and not_before_ms",
+      "numbers": [
+        "EvsReadPathReply.state",
+        "EvsReadPathState.EVS_READ_PATH_DROP_PENDING",
+        "EvsReadPathReply.drop_id",
+        "EvsReadPathReply.not_before_ms"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the reply with no state and an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-state-dropped",
+      "construct": "a read reply whose path state is dropped, with its drop_id, drop_version, drop_statement and drop_body",
+      "numbers": [
+        "EvsReadPathReply.state",
+        "EvsReadPathState.EVS_READ_PATH_DROPPED",
+        "EvsReadPathReply.drop_id",
+        "EvsReadPathReply.drop_version",
+        "EvsReadPathReply.drop_statement",
+        "EvsReadPathReply.drop_body"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the reply with no state and an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-segment-header-kind-5",
+      "construct": "a committed kept version whose segment locator names a segment that opens with a kind-5 header, an upload adopted when versioning was turned on (D-EVS-38)",
+      "numbers": [
+        "segment header format",
+        "EvsUploadReceipt.versionless"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same version with its segment gone from the cluster",
+        "outcome": "alarm",
+        "alarm": "missing_segment"
+      }
+    },
+    {
+      "name": "read-removal-marker-ids",
+      "construct": "a removed path whose removal marker carries a versionless file's segment_ids and slot_ids",
+      "numbers": [
+        "EvsRemovalMarker.segment_ids",
+        "EvsRemovalMarker.slot_ids"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the removal with no ids and a path version off the versions rule",
+        "outcome": "alarm",
+        "alarm": "version_rule"
+      }
+    },
+    {
+      "name": "read-provenance-tainted",
+      "construct": "a format-1 file whose push's sealed provenance has the tainted bit, committed by a format-1 evs",
+      "numbers": [
+        "EvsProvenance.tainted"
+      ],
+      "side": "reader",
+      "outcome": "ignored",
+      "twin": {
+        "construct": "the same reply with an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
+      "name": "read-window-bits-4-5",
+      "construct": "a head whose window entries carry bits 4 (a versionless version replaced) and 5 (a DROP): a format-1 evs commits on it, carrying them, and serves it",
+      "numbers": [
+        "EvsWindowFlag.EVS_WINDOW_VERSIONLESS_REPLACED",
+        "EvsWindowFlag.EVS_WINDOW_DROP"
+      ],
+      "side": "reader",
+      "outcome": "ignored",
+      "twin": {
+        "construct": "the same head with window bit 6, which no format holds",
+        "outcome": "evs_alarm",
+        "alarm": "alarm read"
+      }
+    },
+    {
+      "name": "read-batch-record-format-2",
+      "construct": "a ref whose newest push a format-2 evs stored as a format-2 batch record, its purge list after its body, in a format-2 batch: evs answers the read 409 FORMAT_UNSUPPORTED {needs_format: 2}",
+      "numbers": [
+        "batch header format",
+        "batch record format"
+      ],
+      "side": "reader",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same record with record format 3, which no format holds",
+        "outcome": "unavailable"
+      }
+    },
+    {
+      "name": "repo-format-2",
+      "construct": "a repo whose repo/ a format-2 push raised to format 2: a format-1 evs answers every push 503 with Retry-After, recording nothing, writes nothing and serves the stored bytes",
+      "numbers": [
+        "repo/ format"
+      ],
+      "side": "repo",
+      "outcome": "unavailable",
+      "status": 503,
+      "twin": {
+        "construct": "a repo/ of format 3, which no format holds",
+        "outcome": "evs_alarm",
+        "alarm": "alarm"
+      }
+    },
+    {
+      "name": "batch-format-2",
+      "construct": "a batch of format 2 holding a staged push's record with its staged bytes, past evacuation's age: a format-1 evacuator leaves it for a format-2 one under its evacuate_batch_format alarm, deleting nothing",
+      "numbers": [
+        "batch header format",
+        "batch record format"
+      ],
+      "side": "evacuator",
+      "outcome": "left",
+      "twin": {
+        "construct": "a format-1 batch of the same record with a byte flipped",
+        "outcome": "evs_alarm",
+        "alarm": "evacuate_batch_invalid"
+      }
+    },
+    {
+      "name": "write-ur-index-directory",
+      "construct": "a write under .ur-index/ on a file-mode ref",
+      "numbers": [],
+      "side": "writer",
+      "outcome": "reserved",
+      "twin": {
+        "construct": "a write under .ur-indexes/",
+        "outcome": "committed"
+      }
+    },
+    {
+      "name": "write-ref-ur-index",
+      "construct": "a write on the ur/index ref",
+      "numbers": [],
+      "side": "writer",
+      "outcome": "reserved",
+      "twin": {
+        "construct": "a write on a ref named ur/indexes",
+        "outcome": "committed"
+      }
+    },
+    {
+      "name": "write-ref-ur-lfs",
+      "construct": "a write on the ur/lfs ref",
+      "numbers": [],
+      "side": "writer",
+      "outcome": "reserved",
+      "twin": {
+        "construct": "a write on a ref named ur/lfs-notes",
+        "outcome": "committed"
+      }
+    },
+    {
+      "name": "write-versioning-off",
+      "construct": "a write with versioning off",
+      "numbers": [
+        "EvsEntryVersion.versioning",
+        "EvsVersioning.EVS_VERSIONING_VERSIONLESS"
+      ],
+      "side": "writer",
+      "outcome": "format_unsupported",
+      "twin": {
+        "construct": "the same write with versioning on",
+        "outcome": "committed"
+      }
+    },
+    {
+      "name": "config-versioning-rules",
+      "construct": "a config head holding a signed VersioningRules record: the head compiles and applies as the one without it, taking nothing from the record",
+      "numbers": [],
+      "side": "config",
+      "outcome": "ignored",
+      "held_by": {
+        "file": "config_settings_test.go",
+        "test": "TestAHeadsVersioningRulesAndDirectoryApplyNothing"
+      }
+    },
+    {
+      "name": "acl-repo-versioning",
+      "construct": "a signed RepoVersioning statement in the access log: its signer verified, its lock folded into the repo's row, its sealed rules unread and no right changed",
+      "numbers": [],
+      "side": "config",
+      "outcome": "folded",
+      "held_by": {
+        "file": "acl_statement_test.go",
+        "test": "TestAclRepoVersioningFoldsTheLockAndEnforcesNothing"
+      }
+    }
+  ],
+  "elsewhere": [
+    {
+      "numbers": [
+        "EvsIndexEntry.drop_mark"
+      ],
+      "file": "evsservice/format1_guard_test.go",
+      "test": "TestFormat1FoldKeepsTheDropMarkAndCarriedIds",
+      "why": "kept: a format-1 fold carries an entry's drop mark and a marker's carried ids unchanged, which is the fold's own state and not a push or a read"
+    }
+  ],
+  "slot_rule": [
+    {
+      "name": "slot-unknown",
+      "construct": "a push whose new version names a slot that neither the push introduces nor a version step 4 read names (11.8's 5h)",
+      "status": 409,
+      "code": "SLOT_UNKNOWN",
+      "recorded": true,
+      "twin": "the same version in a push that introduces the slot commits"
+    },
+    {
+      "name": "slot-stale",
+      "construct": "a push introducing a slot whose If-None-Match PUT meets an equal object over 23 h old (11.8 step 6)",
+      "status": 409,
+      "code": "SLOT_STALE",
+      "recorded": true,
+      "twin": "the push that first introduced the slot, sent again, meets its own committed record and answers 200"
+    }
+  ],
+  "unswept": [
+    {
+      "numbers": [
+        "EvsHead.index_epoch",
+        "EvsHeadSummary.index_epoch"
+      ],
+      "why": "a head carries index_epoch only once a CUT committed, which raises the repo to format 2, where a format-1 evs takes no push; no format-1 code reads either field, and whether a format-1 reader should refuse a ref whose head summary carries one is not stated (11.6 lists it among what is refused in use, FS-72's constructs do not)"
+    },
+    {
+      "numbers": [
+        "EvsPartRequest.staged"
+      ],
+      "why": "the part route's staged refusal (evsservice/push_part.go) needs a push in parts, which this sweep does not build yet"
+    }
+  ]
+}

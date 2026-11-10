@@ -141,9 +141,17 @@ func evsRepoAdmin(state GkmAuthView, repo *protocol.AclRepo, sidecarId Id) bool 
 
 // Parses and checks one statement as received for repoId and refId: format 1's shape, its signature by the identity
 // key its signer's admission gives at the statement's own auth pin, and §11.8's refs table at that state. A format-2
-// construct answers ErrEvsFormatUnsupported, which is never a fork and never tampering (EVS1-M2-39).
+// statement of format 2's shape that its signer's key signed answers ErrEvsFormatUnsupported, which is never a fork
+// and never tampering; one out of shape or unsigned refuses as a format-1 statement does (EVS1-M2-39).
 func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId Id) (*EvsStatement, error) {
 	statement, err := ParseEvsStatement(statementBytes)
+	var unsupported error
+	if errors.Is(err, ErrEvsFormatUnsupported) {
+		// a format-2 statement is still held to format 2's shape and to its signer's key, so a malformed or unsigned
+		// one refuses, and alarms, as any other does: only one a writer signed answers as needing format 2 (FS-72)
+		unsupported = err
+		statement, err = ParseEvsStatementFormat2(statementBytes)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +177,10 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 	}
 	if err := statement.Verify(identityKey); err != nil {
 		return nil, fmt.Errorf("%w: its signature: %w", ErrEvsStatementRefused, err)
+	}
+	if unsupported != nil {
+		// format 2's ref rules are its readers' to judge
+		return nil, unsupported
 	}
 	if err := evsCheckRefRules(state, statement, repoId, refId, signerId); err != nil {
 		return nil, err
