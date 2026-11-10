@@ -11,9 +11,9 @@
 //   - a creation, base_entry_version 0, replaces what the entry held, carrying nothing, and an entry keeps four
 //     folded versions, the newest whole and the older ones with their inline records elided;
 //   - a removal at r is a marker {removing push, r, the path's version, one past its last} on the path, then, by a
-//     LIST, on every current-epoch entry below it that holds a version older than r (marker.go). A fold never
-//     deletes, and a marker takes only a newer one, so no repeated, queued or late removal fold writes over an entry
-//     a later fold wrote.
+//     LIST, on every current-epoch entry below it that holds a version older than r (marker.go). A fold deletes no
+//     current-epoch entry, and a marker takes only a newer one, so no repeated, queued or late removal fold writes
+//     over an entry a later fold wrote.
 //
 // Each entry is read, merged and written If-Match (If-None-Match to create), and read and merged again on a 412 or an
 // unknown outcome, so folds are idempotent and any process may run one, two of one range at once included.
@@ -25,7 +25,9 @@
 // window covers until FoldCollectMargin (150 ms) past until_ms by its own clock, and not at all on an unsure clock
 // (EVSB-M2-14 opens the windows). While the head lists source epochs, each entry written carries its state in object
 // metadata (carried, fresh or removed), and a path only a source still holds is carried from it, keeping that
-// source's folded versions and drop mark.
+// source's folded versions and drop mark; once the current entry holds a path's changes, the source copies they name
+// are deleted, and below a removed directory every key in those sources (fold_sources.go), so a source holds only what
+// still has to move (DESIGN-DETAILS 9.2.6).
 //
 // The horizon: folds add no head write. A finished fold's range stays with its process (Horizon), and that process's
 // next commit on the ref raises folded_through over it, every write having landed before. Each write passes the write
@@ -104,6 +106,9 @@ type EvsFoldResult struct {
 	// The entries it wrote, markers included, and the markers alone.
 	EntryWriteCount  int
 	MarkerWriteCount int
+	// The source copies it deleted while the head listed sources: those a changed path's changes name, and the keys
+	// below a removed directory in those sources (fold_sources.go).
+	SourceDeleteCount int
 }
 
 // One ref of one repo.
@@ -149,6 +154,8 @@ type Folder struct {
 	log        sidecar.Logger
 	// a test's: called before each entry write with its key, beside the write's barrier
 	beforeEntryWrite func(key string)
+	// a test's: deletes no source copy, as the fold did before DESIGN-DETAILS 9.2.6, for 9.1 E's twin
+	keepSourceCopies bool
 
 	stateLock sync.Mutex
 	refStates map[foldRef]*foldRefState
@@ -601,14 +608,16 @@ func (self *foldPath) continues() bool {
 	return false
 }
 
-// The source paths the path's first own change names (§11.6's read row), for a carry.
+// The source paths every own change of the path in the range names (§11.6's read row), in event order: what a carry
+// reads from and, once the current entry holds the changes, what the fold deletes (fold_sources.go).
 func (self *foldPath) sourcePaths() [][]byte {
+	sourcePaths := [][]byte{}
 	for _, event := range self.events {
 		if event.change != nil {
-			return event.change.SourcePaths
+			sourcePaths = append(sourcePaths, event.change.SourcePaths...)
 		}
 	}
-	return nil
+	return sourcePaths
 }
 
 // Marks each file path a window version after u changes itself again, which that version's fold takes (§11.7's
@@ -637,8 +646,9 @@ func (self *foldRun) planSkips(window []*sidecar.EvsWindowEntry, firstVersion ui
 	return nil
 }
 
-// Writes each planned path's entry, parents before children, then each removal's markers below it in version order:
-// the path's own marker before its LIST.
+// Writes each planned path's entry, parents before children, each followed by the deletes of the source copies its
+// changes name; then each removal's markers below it in version order, the path's own marker before its LIST, and
+// below it the keys of the named sources (fold_sources.go).
 func (self *foldRun) writeRange() error {
 	for _, pathId := range self.sortedIds {
 		path := self.paths[pathId]
@@ -656,12 +666,16 @@ func (self *foldRun) writeRange() error {
 		if err := self.markBelow(removal); err != nil {
 			return err
 		}
+		if err := self.emptySourcesBelow(removal); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // One path's entry: read, merge its events past what it holds, write, and on a 412 or an unknown outcome read and
-// merge again. An entry that already holds them is not written.
+// merge again. An entry that already holds them is not written. Once the current entry holds them, written now or
+// found so, the source copies its changes name are deleted (fold_sources.go).
 func (self *foldRun) writePath(path *foldPath) error {
 	for attempt := 0; attempt < self.folder.settings.FoldEntryRetryCount; attempt += 1 {
 		if err := self.ready(); err != nil {
@@ -681,7 +695,11 @@ func (self *foldRun) writePath(path *foldPath) error {
 		}
 		merged := mergeFoldEvents(held, path.events, self.folder.log)
 		if !merged.changed {
-			return nil
+			if read.Absent() {
+				// a source copy holding them while the current epoch holds nothing: nothing stands to take over
+				return nil
+			}
+			return self.deleteSourceCopies(path)
 		}
 		if names := merged.entry.GetNames(); names != nil {
 			checkFoldedTableBound(names, self.folder.log)
@@ -706,7 +724,7 @@ func (self *foldRun) writePath(path *foldPath) error {
 		if merged.removed {
 			self.result.MarkerWriteCount += 1
 		}
-		return nil
+		return self.deleteSourceCopies(path)
 	}
 	return fmt.Errorf("%w: %d tries on one entry", ErrEvsFoldBusy, self.folder.settings.FoldEntryRetryCount)
 }

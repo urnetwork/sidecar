@@ -72,6 +72,14 @@ const (
 	BarrierLogPagePutAfter  = "evs.log_page.put.after"
 )
 
+// EVS1-M2-44: the fold's source deletes (DESIGN-DETAILS 9.2.6), keyed by <repo>:<ref>.
+const (
+	// Around each DELETE of a source copy a current entry supersedes, or of a key below a removed directory in a
+	// named source: a fold killed between its PUT and its DELETE holds here.
+	BarrierFoldSourceDeleteBefore = "evs.fold.source_delete.before"
+	BarrierFoldSourceDeleteAfter  = "evs.fold.source_delete.after"
+)
+
 // EVS1-M2-12: a push's steps (§11.8), keyed by <repo>:<ref>. The head's own CAS and read keep EVS1-M2-08's names.
 const (
 	// An attempt that has arrived and parsed its body, before step 4: FS-113's attempt held before its handler runs,

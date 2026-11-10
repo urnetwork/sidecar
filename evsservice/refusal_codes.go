@@ -2,11 +2,11 @@
 // (EVS-FORMAT.md's refusal codes, sidecar.EvsRefusalStatus) and how it lives under §11.8's refuse row:
 //
 //   - final: the head or a terminal repo/ state settles it for good, so it is answered and never recorded: 5c's
-//     shredding and ref rules, 5d's pins, 5e's epoch and tail, 5f, and 5g's path and removal checks;
+//     shredding and ref rules, 5d's pins, 5e's epoch, map source and tail, 5f, and 5g's path and removal checks;
 //   - recorded: evs first records it in the head by one CAS (EVS1-M2-12's refuse row), so no later attempt of the
 //     push id commits: 5b's time, 5c's scope, keying, deleted state and storage limit, 5d's predicate, 5e's map parts,
-//     EPOCH_SOURCES_FULL and a block's PATH_EPOCH_DUE, 5g's DIRECTORY_FULL, 5h, and FORMAT_UNSUPPORTED
-//     (plan-EVS1-format-unsupported#2);
+//     EPOCH_SOURCES_FULL and PATH_EPOCH_DUE, a block's or a crossing creation's, 5g's DIRECTORY_FULL, 5h, and
+//     FORMAT_UNSUPPORTED (plan-EVS1-format-unsupported#2);
 //   - nothing: a 400, 429 or 503 that refuses nothing, which the client retries with the same statement.
 //
 // A recorded reason's code lies in 1 to 63 and a reason that refuses nothing has one from 128; a final reason's lies
@@ -94,7 +94,8 @@ const (
 
 	// 5e: an epoch other than the head's current one.
 	EvsCheckReasonPathEpoch
-	// 5e: a creation while due_blocks_creation or before block_until_ms.
+	// 5e: a creation while due_blocks_creation or before block_until_ms, or in a push whose own commit would record a
+	// due that blocks it (DESIGN-DETAILS 9.2.6's crossing creation).
 	EvsCheckReasonPathEpochDue
 
 	// 5f: git mode, a base other than the head's version.
@@ -133,8 +134,9 @@ const (
 	EvsCheckReasonEpochSourcesFull
 	// 5e, a PATH_EPOCH: its map's parts not all standing under 24 h old.
 	EvsCheckReasonMapParts
-	// 5e, a PATH_EPOCH: its map's source outside the window or under another chain, which the window never comes back
-	// to, so the mapper maps again; or a map part's key already holding another part.
+	// 5e, a PATH_EPOCH: its map's source past the head, below what the window and the log pages just under it hold,
+	// under another chain, or of an epoch no longer current (DESIGN-DETAILS 9.2.6's between fence), so the mapper
+	// maps again; or a map part's key already holding another part.
 	EvsCheckReasonMapSource
 	// 5e, a PATH_EPOCH: creations after its map's source that its tail does not move: 409 naming them.
 	EvsCheckReasonTailMissing
@@ -201,7 +203,7 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 
 	EvsCheckReasonEpochSourcesFull: {name: "epoch_sources_full", code: protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL, fate: EvsRefusalRecorded},
 	EvsCheckReasonMapParts:         {name: "map_parts", code: protocol.EvsRefusalCode_EVS_REFUSAL_MAP_PARTS, fate: EvsRefusalRecorded},
-	EvsCheckReasonMapSource:        {name: "map_source", code: protocol.EvsRefusalCode_EVS_REFUSAL_MAP_PARTS, fate: EvsRefusalFinal},
+	EvsCheckReasonMapSource:        {name: "map_source", code: protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE, fate: EvsRefusalFinal},
 	EvsCheckReasonTailMissing:      {name: "tail_missing", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, fate: EvsRefusalFinal},
 
 	EvsCheckReasonUnchecked: {name: "unchecked", code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, fate: EvsRefusalNothing},

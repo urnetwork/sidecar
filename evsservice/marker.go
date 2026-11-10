@@ -1,5 +1,6 @@
-// Removal markers (§11.7's removal and collect rows; owner decision 148): a fold never deletes an entry. A removal at
-// r gives its path a marker {removing push id, r, the path's version, one past its last} (fold.go), then gives every
+// Removal markers (§11.7's removal and collect rows; owner decision 148): a fold never deletes a current-epoch entry,
+// only, while sources stand, the source copies a current entry supersedes (fold_sources.go). A removal at r gives
+// its path a marker {removing push id, r, the path's version, one past its last} (fold.go), then gives every
 // current-epoch entry below the path, which a LIST finds, a marker of its own: by PUT If-Match on the entry read, only
 // while that entry holds a version older than r, a marker staying as it is, and on a 412 read again. The path's own
 // marker goes first (writeRange), so while sources stand no read or copy falls back to a source at or below it. A
