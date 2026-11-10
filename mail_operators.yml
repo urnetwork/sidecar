@@ -1,0 +1,22 @@
+# Owner decision 135's operator list (D-MAIL-13; §15.5's Labels), embedded in each release with its version. Mail is
+# labeled "validated" when MAIL carried REQUIRETLS, or when the receiving host's TLSA was live and the sender is an
+# operator listed here, matched by the receiver's own forward-confirmed PTR of the sending address under one of its
+# ptr_suffixes, or by a passing DKIM signature whose d= and From's domain both fall under one of its dkim_domains.
+# The list is an operator-reputation inference, never proof of a message's path. Anyone can recheck a label against
+# the version its basis names.
+#
+# Each entry, its source an https URL where the operator publishes it (mail_operators.go has the full rules):
+#
+#   - id: example-mail                     1 to 64 bytes of a-z, 0-9 and inner dashes, never reused
+#     name: Example Mail                   as a person sees it
+#     ptr_suffixes: [out.mail.example]     its sending hosts' PTR names end with one of these
+#     dkim_domains: [mail.example]         organizational domains its DKIM d= falls under
+#     dane: https://mail.example/dane      where it publishes its outbound DANE enforcement, if it does
+#     mta_sts: https://mail.example/sts    where it publishes its outbound MTA-STS enforcement, if it does
+#
+# Raise version with every change, and run go generate (mail_operators_gen.go). The real entries need sourcing and
+# review before any is added (MAIL plan, External item 4): until then the list is empty, and only REQUIRETLS mail is
+# "validated".
+
+version: 1
+operators: []

@@ -190,6 +190,8 @@ barrier keys.unlock.after keys_unlock.go
 barrier keys.unlock.before keys_unlock.go
 barrier mail.auth.check.after mail_auth.go
 barrier mail.auth.check.before mail_auth.go
+barrier mail.auth.slots.take.after mail_auth_slots.go
+barrier mail.auth.slots.take.before mail_auth_slots.go
 barrier mail.flags.write.after mail_flags.go
 barrier mail.flags.write.before mail_flags.go
 barrier mail.index.write.after mail_index_segment.go
