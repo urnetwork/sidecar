@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 305 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
@@ -27,8 +27,6 @@ Holds 305 decided items and 309 proposed ones, generated from the ledger on 2026
 | [§14 The SMTP edge](#s14) | 8 | 13 |
 | [§15 The local email server, inbound mail, and burner email](#s15) | 11 | 19 |
 | [§16 The local MCP server and record primitives](#s16) | 28 | 21 |
-| [§17 IP addresses, subnet routing, and port forwarding](#s17) | 10 | 18 |
-| [§18 SDK, apps, and extension integration](#s18) | 11 | 9 |
 | [§19 Server services](#s19) | 20 | 21 |
 | [§20 Tiers, quotas, metering, and billing](#s20) | 7 | 18 |
 | [§21 Abuse, safety, and legal process](#s21) | 17 | 17 |
@@ -3734,394 +3732,6 @@ Keep `PushEntryCount`, `PushCoalesce`, `ReachReceiptCoalesce`, `CoverageIdleTime
 
 Questions: `plan-RECORD-small-readings.md#1`.
 
-<a id="s17"></a>
-## §17 IP addresses, subnet routing, and port forwarding
-
-### QD-003: A requested grant's GrantActivate still shows its prefix and port to api, which clean rows do not fix
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §16, §2.*
-
-Seal the detail. In a `dial` or `route` grant's CanonicalAction, `rule_id`, `subject`, `grant_allow`, `expires_millis` and a subject-only `grant_dst` stay clear, and prefixes and ports (`cidrs`, `target_port`, any `ip:` or port text in `grant_dst`) move to a new `bytes sealed_detail = 38` under plan-TEAM-sealed-field-format's SealedBody, raising CanonicalAction's version. `payload_sha256` still covers the stored bytes, so api's `match` check is unchanged and it checks ids only. Approvers and readers open the detail to render and enforce it. Publishes keep their clear fields, which are public anyway.
-
-Changes: D-BRIDGE-6; §17.8; §8.8 GrantActivate; §16.8 CanonicalAction; §2.8 api-7; §2.8 api-10.
-
-Questions: `plan-BRIDGE-gate-row-prefixes.md#2`.
-
-### QD-077: X's pin of Y's ShareKey and Y's pin of each target host's identity key have no signed home
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §7.*
-
-Use sealed records, with no new SignedType. X's pin: a config file `bridge/share-grant/<share_id hex>` (plan-TEAM-config-head-format's list gains it) holding `BridgeShareGrant{share_id = 1, grant_id = 2, share_public_key = 3, target_table_sha256 = 4, table_key = 5}` in bridge.proto, a config file like `BridgeShareSigner`, written in a head by X's approving admin's device in the act that files the GrantActivate it names. The compiler fills `BridgeState.share_keys` only from a file whose `grant_id` is a live grant. `table_key` is K: no record gives X's hosts K today, yet they must open Y's alias table to map A_i to T_i. Y's pin: T_i in `BridgeShareTargets` gains `host_identity_public_key`, and Y's approving device copies it into `BridgeAliasBody.host_identity_public_key = 5`, so Y's routers pin from Y's own signed log. §17.9's `target` row then verifies the binding from `GET /sidecar/identity/<sidecar_id>` against that key on a share link. FS-38's substituted target key case gains a share-link run. §17.9's 'enters X's share grant' becomes this file.
-
-Changes: §17.8; §17.9; §8.11; §7.9 repo files; FS-38; bridge.proto.
-
-Questions: `plan-BRIDGE-share-pins.md`.
-
-### QD-083: A new BridgeEgress mode rides a sealed body, so §8.10's gate learns it only at the next base
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §8.*
-
-Move `mode` out of the seal: `BridgeEgress` gains `BridgeEgressMode mode = 4`, and `BridgeEgressBody` reserves field 1 and keeps `exit_sidecar_ids` and `exit_tag_id`. Gates and api apply each entry's mode in log order over `BridgeRows.egress`, as §8.9's entries after a base, and rows carry the same value at the fold. A statement with mode `none` or `auto` carries an empty `sealed_body`, so like `BridgeWithdraw` it never waits on §8.12's invariant or D-TRUST-10's stop. In the same change api-7's bridge statements read `(kind, signer, subject, rule id, expiry; an egress statement's mode; an approved route's advertiser and rules)`, §17.8's id list gains the mode, and bridge.proto's comment on the lag goes.
-
-Changes: D-BRIDGE-6; §17.8; §2.8 api-7; bridge.proto BridgeEgress, BridgeEgressBody.
-
-Questions: `plan-BRIDGE-egress-mode-at-gates.md`.
-
-Partly folded (2026-11-10): with QD-630, §2.8's api-7 now shows an egress statement's mode and §17.8's id list names it; D-BRIDGE-6 and the rest of §17.8 wait for §17's fold, and bridge.proto for PROTO.
-
-### QD-108: Wire format of the cross-network share seal
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8.*
-
-Add a fence to §17.9. K = HKDF-SHA256(code, salt x_network_id, info "urnetwork-sidecar-v1/bridge-share"), 32 B. sealed = nonce[24] || XChaCha20-Poly1305(K, nonce, pt = body, ad = "urnetwork-sidecar-v1/bridge-share/" || label || 0x00 || x_network_id || y_network_id || u64be(version)), a random nonce per seal; y_network_id is 16 zero bytes for `targets`, which X seals before any accept; version is the table version network_bridge_share stores. Labels and proto3 bodies in protocol/bridge: `targets` BridgeShareTargets (each T_i: index, host sidecar_id, ports or prefix, plus plan-BRIDGE-share-pins.md's host_identity_public_key), `aliases` BridgeShareAliases (A_i by index), `share-key` the ShareKey public key, `shortfall` refused_no_space's figures. Each body pads with a `bytes pad` field to a multiple of 256 B. A failed open refuses the share and alarms, with no fallback. Say in §17.9 that a multi-use code's accepters all hold K, so a seal proves a code holder, and X's approving admin is what pins one ShareKey to one share.
-
-Changes: §17.9; §8.11.
-
-Questions: `g0-density-share-seal-format.md`.
-
-### QD-112: A link does not refuse bridged TCP/25: it dials it on the sender's physical network
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-`device.Bridge.Route` answers TCP with destination port 25 to any link entry with the reject client, through §17.5's rejects bucket, so the packet never enters the link. TCP/25 on the default route is untouched. design-records replaces §17.5's 'send TCP/25 to the local NAT, so bridged TCP/25 is refused' with this rule, and FS-56 gains a case that no local dial follows a bridged TCP/25 SYN.
-
-Changes: §17.5 Links.
-
-Questions: `plan-BRIDGE-small-readings.md#3`.
-
-### QD-125: May `ur tun` on Windows ship or fetch wintun.dll, whose prebuilt license is custom
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §4.*
-
-Do not bundle or fetch it. `ur tun` on Windows looks for wintun.dll beside ur.exe or at the installed app's path, loads it only after its SHA-256 and Authenticode signer match the pins in windows/app/tools/fetch-deps.ps1 (0.14.1), since `ur tun` runs elevated and an unchecked DLL there is a privilege path, and otherwise prints where to get it. The release zip holds no DLL, as REPO-M1-03's `TestZipHoldsNoWintun` says. Bundling can follow once counsel has read the license.
-
-Changes: §17.10; §4.7 if bundled; §4.10 if bundled.
-
-Questions: `plan-BRIDGE-windows-tun-driver.md`.
-
-### QD-161: How a host checks C13's sealed subject against the delegation with no I/O and no client ids in BridgeState
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §8.*
-
-Compile the map. `BridgeRuleSubject.client_ids` in `BridgeState.rules` holds each same-network subject's current bound client id and every id this sidecar role compiled for it in the last 7 days, the longest a window client lives (§7.4), each binding verified against the subject's pinned identity key off the packet path. `VerifyPrincipal` makes one map lookup: C13's sealed subject must be in `subject_sidecar_id`'s `client_ids`, else it denies. Off the packet path the sidecar role then looks that id up with `GET /sidecar/identity?client_id=<id>` (plan-CORE-client-to-sidecar-lookup) and adds it at its next compile if the binding verifies to that subject, so an older generation's window client recovers on its next contract; it alarms only if the binding names another sidecar or none. A share link skips this clause, keeping the signature, ShareCert and `network_id` checks, and §17.9 states that exception. An sdk provider before C16 resolves its subject through the same map; a sealed subject in no row is an other client (§8.4), untagged for rule 4 as owner decision 105 keeps for app devices, and holding only `autogroup:untagged`'s rows under a document.
-
-Changes: §17.9 verify row; §17.6 subject line.
-
-Questions: `plan-BRIDGE-subject-resolution.md`.
-
-### QD-211: The device role cannot tell a SidecarRevoke is its own sign-out
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §2.*
-
-`Pending` gains `bytes sidecar_id = 3` and `bytes identity_public_key = 4`, stored with the anchor. The posture wipes to legacy only on a `Signed` `SidecarRevoke` whose `sidecar_id` and `signer_id` both equal the stored id, whose `header.network_id` is the stored network, and whose signature verifies under the stored key, so another sidecar's sign-out or an admin's revocation of this one lowers nothing. In enforcing it arrives as a chained delta. In pending no pin exists to chain from, so `ApplyDeltas` takes that one statement alone. A later `Pending` for the same network and anchor, as after an admin's revocation and a new enrollment, replaces the stored id and key and changes no state, which refines SDK-M4-01's 'a `Pending` after enforcing is ignored'. The key is needed beyond the question's option 1: pending holds no rows, and `identities` lists only subjects that reach this host. Never server-visible, so no §2.8 row.
-
-Changes: §17.8 Pending; §18.6 transitions; bridge.proto Pending.
-
-Questions: `plan-SDK-pending-sidecar-id.md`.
-
-### QD-275: Whether C16's receive gate latches at this side's seal or at the peer's first sealed frame
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: keep it as landed for M4, latching at this side's seal. Before M8 turns the setting on for app-device hosts, measure how much plaintext an Opportunistic client has in flight at the seal, and if the loss is visible take option 3: latch at the peer's first sealed frame, bounded by `TlsTimeout` from this side's seal.
-
-Changes: §17.12 only under options 2 and 3.
-
-Questions: `connect-c6-c16-sticky-receive-window.md`.
-
-### QD-631: How does a reader verify a `bridge_expose` rule filed under a multi-use decision, when `BridgeApproval` carries one action and the decisions hash a template?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §2.*
-
-BridgeApproval gains bytes template_action = 3. With it set, every decision's payload_sha256 hashes the template, canonical_action is this use's action (from which §17.8 derives the rule id through effect_key), and readers check ActionMatchesTemplate; with it unset, the single-use reading stands. The field is additive and sealed (no §2.8 row); bridge.proto is unfrozen. ConfigState.CheckBridgeApproval then lets a multi-use decision file up to uses rules, which the built ledger count binds. Binding a rule's body to expose's fields is settled together with record-m2-01-canonical-action-detail.
-
-Changes: protocol/bridge/bridge.proto: BridgeApproval.template_action = 3 (BRIDGE follow-up); sidecar/bridge_statement_rules.go: CheckBridgeApproval takes the template; §17.8's approval line (design-records).
-
-Questions: `bridge-m2-01-multi-use-approval.md`.
-
-### QD-354: 'Members on URnetwork may use the overlay' builds nothing beyond §17
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §13, §12.*
-
-Build nothing new in §13: no listener on an overlay address, no new audience and no new authentication path. A member reaches a published service over the overlay by §17's own rules: the target's private name or overlay address (§12.9) with §17.6's map or route grant to the local port. The front, tlsedge and edge login are not on that path. ur bridge public-tls may print that hint. §13.17's item closes with M6's ur tun on macOS and Windows.
-
-Questions: `plan-TLS-overlay-audience.md`.
-
-### QD-382: AllowAlias checks mail:<alias>
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`AclEngine.AllowAlias` checks `mail:<alias>` at receivers and the local mail server. §17's BridgeAlias is a share's delta, not an ACL resource.
-
-Questions: `plan-ACL-small-readings.md#9`.
-
-### QD-383: §17's line citations have drifted
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it. Also amends §4.*
-
-Use the anchors as filed, which spot checks confirm: sendRoute at sdk/device_local.go:5766 and :5859, with :2440 a read-only check; the exit NAT `ensureRemoteUserNatProviderWithLock` at :6421; `SetBlocker` at :5385; `applyLruMapLimit` at connect/ip.go:11751; `egressRelationship` callers at ip_remote_multi_client.go:6826, :7000, :7367 and ip.go:10856, :10982. design-records updates §17.5, §17.6 and §4.6's C5 row. Find code by function name.
-
-Changes: §17.5; §17.6; §4.6 C5 citations.
-
-Questions: `plan-BRIDGE-small-readings.md#20`.
-
-### QD-384: Statements land at M2 though §17.18 says M4
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-BRIDGE-M2-01 lands the rule table and `CompileBridgeRows` at M2, and nothing files a bridge statement until M4.
-
-Questions: `plan-BRIDGE-small-readings.md#19`.
-
-### QD-393: EgressFlow.ContractClass, and the hook denying unset and control
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Add `ContractClass` to `EgressFlow`. The hook denies a class of `control` or unset, placed after the `Public, or FriendsAndFamily at an sdk provider` pass row, so it binds Network and host FriendsAndFamily flows and never today's public egress at an sdk provider.
-
-Questions: `plan-BRIDGE-small-readings.md#6`.
-
-### QD-394: LocalUserNat.SetEgressHook for legacy to pending on a running NAT
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-`LocalUserNatSettings` holds the initial hook and an additive atomic `LocalUserNat.SetEgressHook` swaps it. Installing a non-nil hook cancels every live flow that holds no registered decision, so nothing opened before the hook outlives it.
-
-Questions: `plan-BRIDGE-small-readings.md#4`.
-
-### QD-395: Provide modes past §17.6's table
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-At a sidecar host every mode but Network and FriendsAndFamily denies: None, Public, Stream, PublicStream, Service and any later value. So §17.6's first row is read as `(Public or FriendsAndFamily) at an sdk provider`, and BRIDGE-M4-09's 'Public passes' applies to `BridgePolicyProfileSdkProvider` only. At an sdk provider every mode but Network and Service passes to today's rules, and Service denies by §17.6's own row, a narrowing of the reading as filed.
-
-Questions: `plan-BRIDGE-small-readings.md#7`.
-
-### QD-402: Hooked NATs run the per-flow UDP loop
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A NAT with a hook sets that sequence's `sharedSocketLifecycle` off, so `openSocket` and the hook run outside `udpSend`'s buffer mutex. M8's memory cell re-measures the per-flow cost on constrained provider profiles.
-
-Questions: `plan-BRIDGE-small-readings.md#8`.
-
-### QD-403: A denied ICMP echo is a silent drop
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A denied ICMP echo gets no reply and is never an Incident, and FS-56's ICMP case asserts no echo reaches the target.
-
-Questions: `plan-BRIDGE-small-readings.md#9`.
-
-### QD-404: What counts as a link's refusal
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A link's refusal is a `CreateContract` refusal, a failed `ContractDestinationCheck`, or no sealed session within 3 s of its first send. A TCP RST from the target is not a refusal.
-
-Questions: `plan-BRIDGE-small-readings.md#15`.
-
-### QD-418: A re-resolve with a new Map target closes the flow
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-After a generation change at `recheck`, only the same verdict and target keep the flow. Anything else, a Map to another target included, closes it as a Deny.
-
-Questions: `plan-BRIDGE-small-readings.md#10`.
-
-### QD-560: C6a's switch
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`CfaaSecurityPolicySettings.DropSharedAddressSpace`, false by default, so one release shadow-counts and a later one drops as `SecurityPolicyReasonSharedAddressSpace`. It is a check of its own beside `isPublicUnicast`, which stays as it is, because the `!isPublicUnicast` branch returns an Incident (connect/ip_security.go:574).
-
-Questions: `plan-BRIDGE-small-readings.md#16`.
-
-### QD-563: CloseFlows reaches the hook through a binder
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Add optional `connect.EgressHookBinder`: when the hook implements it, `SetEgressHook` calls it with the NAT as a `connect.EgressFlowCloser`, whose one method is §17.6's `CloseFlows`. `device.Bridge` keeps that closer and calls it after each policy swap.
-
-Questions: `plan-BRIDGE-small-readings.md#5`.
-
-### QD-564: exposed_prefix allocation
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`exposed_prefix` is allocated by `AllocateBridgeUpperBlock`: first fit, aligned, from the upper /17's bottom, in one space with aliases. §17.9's `space` row then counts exposed prefixes as taken, as it does aliases and spilled hosts.
-
-Questions: `plan-BRIDGE-small-readings.md#14`.
-
-### QD-565: What creates a network's first block
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`BootstrapNetwork` calls `ChooseBridgeBlock` and writes `BridgeBlock{ipv4_prefix}` into the first head. A network whose head holds none, older ones and any bootstrapped before BRIDGE-M4-15 lands, gets one from any config writer's next head. Until then `ur tun ip` reports no block and files nothing.
-
-Questions: `plan-BRIDGE-small-readings.md#13`.
-
-### QD-570: RuleTag's value
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`RuleTag` is the big-endian uint64 of the first 8 bytes of SHA-256(subject_id (16 B) || rule_id). Rules 3, 4 and 7, which have no rule id, use one byte holding the rule number, which no real rule id can equal, so the engine enumerates a subject's or a rule's tags without tracking issued flows.
-
-Questions: `plan-BRIDGE-small-readings.md#11`.
-
-### QD-590: The hook evaluates compiled rows, never AclEngine
-*Settled by the agents from the design; work builds on it.*
-
-The root's compiler expands reach into per-subject rows in `BridgeRules`, and the hook's AllowDial, AllowRoute and AllowExit read them. `AclEngine.AllowRoute` serves the compiler and `ur bridge`'s previews. ACL-M2-09's line calling it the hook's per-flow check is a plan error, not a design one.
-
-Questions: `plan-BRIDGE-small-readings.md#12`.
-
-### QD-591: The hook goes on the exit NAT alone
-*Settled by the agents from the design; work builds on it.*
-
-Install the hook on `remoteUserNatProviderLocalUserNat` only. `deviceLocalProvider.localUserNat` stays hookless: it carries this device's own `routeLocal` flows (sdk/device_local.go:5788, :5895), which are no provider source.
-
-Questions: `plan-BRIDGE-small-readings.md#21`.
-
-<a id="s18"></a>
-## §18 SDK, apps, and extension integration
-
-### QD-015: What credential lets the key origin mint a page Worker's client, and re-mint it after a lapse
-*Decided by the owner: owner 2026-11-06. Also amends §7, §23, §5.*
-
-the file's option 2, a hand-off from the ur.io session: the page calls /auth/code-create and passes the one-time code to the key origin by postMessage, and the key origin runs /auth/code-login, mints the client with POST /network/auth-client and drops the network token. This replaces Proposed. (The recommendation it replaces: Sign-in inside the key origin, the shape of `ur login` (§5.6). The frame opens the issuer's authorize flow with PKCE under a new public client `ur-web`, whose only `redirect_uri` is on `sidecar.ur.io/v1/`; the consent mints a single-use user-owned auth key of at most 5 min; the frame calls `POST /network/enroll` and drops the key. Re-minting after a lapse takes the same path under the same `sidecar_id`, so a person who leaves the page unopened for 7 days signs in again. §18.8's `messages` gains `enroll` and `admission status`, and the safety number renders inside the frame. §18.8's key origin row gains the redirect landing.)
-
-Changes: §18.8 key origin, messages; §7.8 public clients; §23.4 M4 sign-in.
-
-Questions: `plan-SDK-key-origin-credential.md`.
-
-### QD-037: What "signed loader" promises when no browser can check it
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §4, §2.*
-
-[plan-SDK-small-readings#2] From M4 the loader and `sidecar.wasm` join the release's signed `SHA256SUMS` (§4.10), `sidecar.ur.io` serves only a promoted build, and the loader pins `sidecar.wasm`'s SHA-256 and checks it before instantiating. §18.8 says 'signed' means listed in those sums, so anyone can compare served bytes, and that no browser verifies it on load, so EX7 stands. Same issue as plan-REPO-small-readings#15. [plan-REPO-small-readings#15] From M4 the loader and `sidecar.wasm` join the release's `SHA256SUMS`, and sidecar.ur.io serves only a promoted build. §18.8 says "signed" means listed in the holders' signed sums, so anyone can compare served bytes to them, and that no browser verifies it on load, so EX7 stands.
-
-Changes: §18.8; §4.10; §2.8 EX7.
-
-Questions: `plan-SDK-small-readings.md#2`, `plan-REPO-small-readings.md#15`.
-
-### QD-140: Is the ur.io/recurd page in scope, given that M4's exit needs it and the owner excluded console UI
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23.*
-
-Build a minimal real page at `mmm/ur.io/astro/src/pages/recurd/` on mmm's `sidecar` branch: the served-code label, the key-origin frame, sign-in hand-off, a record list, one record view and download links, unstyled beyond the site's layout. Visual design stays out. The seams and the fixture page are built either way.
-
-Changes: §18.15; §23.4 M4 exit if seams only.
-
-Questions: `plan-SDK-recurd-page-scope.md`.
-
-### QD-158: The core cannot tell when an app comes to the foreground
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §5, §11.*
-
-[plan-SDK-small-readings#6] `SidecarSearch.SetForeground(foreground bool)` in §18.5 over `Sidecar.SetSearchForeground(foreground bool)` in §5.4. Apps call it at start and on each lifecycle change, a page Worker's frame reports tab visibility, daemon hosts never call it, and an unreported state counts as background. Same issue as plan-SEARCH-foreground-signal. [plan-SEARCH-foreground-signal] Add `func (self *SidecarSearch) SetForeground(foreground bool)` to §18.5 and `func (self *Sidecar) SetSearchForeground(foreground bool)` to §5.4. Apps call it at start and on each lifecycle change; a page Worker's key-origin frame reports tab visibility; daemon hosts never call it; a state not yet reported counts as background. D-SDK-23 and §18.7's host table add it beside conditions, and it feeds PROTO-M10-04's Subprotocol.SetForeground, §18.7's foreground row and §11.14's trigger and reproduce rows. SetConditions keeps its published signature.
-
-Changes: §18.5; §5.4; D-SDK-23; §18.7 host table.
-
-Questions: `plan-SDK-small-readings.md#6`, `plan-SEARCH-foreground-signal.md`.
-
-### QD-184: A keyless device role's links get window clients that are the device client's children, not the sidecar's
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §17.*
-
-The sidecar role mints. On a keyless `DeviceLocal`, `ApiMultiClientGeneratorSettings.ClientCredentials` is a `NetworkClientCredentials` that forwards `AuthNetworkClient` and `RemoveNetworkClient` over §18.6's channel: in process on Android, else two new `DeviceRemoteRpc` calls by direct reverseCall, paired by request id as `SignWindowDelegation` is. The sidecar role mints under its own token and DPoP proof with `source_client_id` its own client, for a target its newest BridgeState names only, and returns the child's token and `strict_exp`. Children inherit both marks, so C13 seals the sidecar's client, §17.9's `verify` passes, and `not_after` names a real strict_exp the signer itself knows. A sleeping sidecar role means links neither build nor rebuild and fail closed, as §17.17 accepts. Amend §18.6's Mirror sentence ('No other sidecar-role API crosses the device RPC') and say in §17.10 that a keyless host's generator mints through this seam.
-
-Changes: §18.6 Mirror, Delegations; §17.10.
-
-Questions: `plan-BRIDGE-keyless-window-parent.md`.
-
-### QD-221: The lb's fixed CORS list stops a page Worker's DPoP calls
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-SDK-M4-06 extends warp/warpctl/config.go:2136-2138 additively: `Allow-Methods` gains PUT and DELETE, `Allow-Headers` gains `DPoP`, `If-Match` and `If-None-Match`, and `Expose-Headers` gains `ETag` and `Retry-After`. The lb still sends no `Access-Control-Allow-Credentials`. §18.15's Services row names these beside `cors_origins`.
-
-Changes: §18.15 Services and config.
-
-Questions: `plan-SDK-small-readings.md#4`.
-
-### QD-224: An HTTPS-only top-level client in daily use is deactivated 30 days after its mint
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §6.*
-
-`GET /auth/refresh` refreshes `auth_time` for a `strict_exp` bearer, through `refreshClientAuthTimesInTx` and its one-hour gate (server/model/network_client_model.go:3879), which also covers a child's source client. Refresh runs at 40-50% of 7 days, so about one write per client per 3 days. No poll writes `network_client`, so §6.16's sentence stands. §18.8's `cost` row says `auth_time` refreshes on a connect and on a strict_exp refresh, and FS-37 gains a case: a page Worker polling and refreshing for 31 days on a fake clock stays active.
-
-Changes: §18.8 cost row; FS-37.
-
-Questions: `plan-SDK-http-only-idle-reap.md`.
-
-### QD-225: §18.8's CSP blocks the Worker's own wasm fetch
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-The key origin's CSP is exactly `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' <§18.9's hosts>; frame-ancestors https://ur.io`. `worker-src` is left to fall back to `script-src`. design-records corrects §18.8.
-
-Changes: §18.8 key origin.
-
-Questions: `plan-SDK-small-readings.md#1`.
-
-### QD-619: What executable budget does forwarding get in the iOS network extension, now that the leg is measured at 5,040,248 B stripped against the 4 MiB that Q-SDK-7 proposed?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The iOS network extension's forwarding leg adds at most 6 MiB (6,291,456 B) of executable, measured stripped as the shipped binding is, and the signed extension's ceiling rises from 50 MiB to 54 MiB (56,623,104 B). One implementation of the rule table stays; the cost is artifact size and about 1 MiB more static memory in the tunnel. REPO-M4-01's limit and check_apple_size.sh's ceiling take these numbers and are no longer marked proposed. This settles Q-SDK-7's executable half and sdk-m4-02-make-size-over.
-
-Changes: REPO-M4-01's make size row and check_apple_size.sh: drop 'proposed'; DESIGN-DETAILS.md section 4 stands as written; Q-SDK-7 / §18.13 text (design-records).
-
-Questions: `details-4-ios-forwarding-budget.md`, `design-od197-ios-forwarding-budget.md`, `sdk-m4-02-make-size-over.md`.
-
-### QD-620: How much memory may a forwarding compile take in the iOS network extension, and what happens to a network whose compile does not fit?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §22.*
-
-A forwarding compile in the iOS and macOS network extensions is admitted only when 5 x rows + 2 x head + 1 MiB fits a 10 MiB per-compile cap and the room under a 30 MiB process ceiling. Networks to about 4,300 devices compile there at the tunnel's connected baseline; a larger one keeps its last verified state, applies every revocation it can check, raises bridge_alarm when a narrowing statement has waited 10 minutes and does not go pending (QD-621), and works on Android, Windows and Linux. Under provider load a compile waits for room. §22.9's cell becomes: a 3,000-device team compiles within the cap and a 5,000-device one is refused with the alarm. A compact per-host state (option 4) is review-phase work if teams past a few thousand devices on iOS matter. DESIGN-DETAILS.md section 4 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 4 stands as written; SDK-M8-15's surrogate cell sizes; §18.10 and §22.9 text (design-records); review phase: option 4 if needed.
-
-Questions: `details-4-ios-compile-memory.md`.
-
-### QD-645: Two page Workers of different networks in one browser share one instance document with no lock between them: which serializes it?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The key origin keeps one IndexedDB database per network, urnetwork-sidecar-v1-<network_id>, each its own sidecar instance with its own instance document and WebCrypto root key, so two networks' page Workers share nothing and §18.8's per-network Web Lock covers everything a Worker writes. SDK-M4-03's single database layout changes (an SDK follow-up: the page Worker's open and SDK-M4-03's tests); a browser eviction still clears every network at once. §18.8's storage row says it (design-records).
-
-Changes: SDK follow-up: page Worker opens urnetwork-sidecar-v1-<network_id>; SDK-M4-03's layout and tests; §18.8 storage row (design-records).
-
-Questions: `sdk-m4-04-instance-document-across-workers.md`.
-
-### QD-301: Telling parent_lost from refused on a child
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Client inference, no server change. Record child: true in sidecar.json at pairing or sdk enrollment. On a confirmed 401 of the current generation: session_revoked maps to session_ended; otherwise a child maps to parent_lost and a top-level client to refused. expired, and the core and refused-bind paths, stay as §18.5 has them. Identity and admission stay kept in all of these.
-
-Questions: `plan-CORE-parent-lost-signal.md`.
-
-### QD-419: sdk.wasm does not link the root
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The local backend carries `!js`, so sdk.wasm stays under its gate. On js, `NewSidecarRemote` runs over a host-supplied `ur native-host` port, and `NewSidecarLocal` answers unsupported until the extension's Worker (Later). The page Worker links no sdk.
-
-Questions: `plan-SDK-small-readings.md#7`.
-
-### QD-422: SignEdgeLogin at M6 before app hosts at M8
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-The `sdk.Sidecar` shell lands at M6, dark, and M8 adds hosts.
-
-Questions: `plan-SDK-small-readings.md#10`.
-
-### QD-556: APNs `v` is a JSON number and evs versions pass 2^53
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-The sender writes `v` as the stored decimal string's digits as a JSON integer, never through a float, with no exponent. FCM keeps a string. Values stay within uint64.
-
-Questions: `plan-SDK-small-readings.md#15`.
-
-### QD-559: A BridgeState can pass the device RPC's 3 MiB frame
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`SetBridgeState` sends chunks of at most 512 KiB as `{transfer_id, index, count, bytes}`, which the device role writes to its store as they arrive and applies only once whole. A new `transfer_id` discards a partial one. The method stays additive in the table, so `DeviceRpcVersion` stays 3.
-
-Questions: `plan-SDK-small-readings.md#11`.
-
-### QD-566: hosts/v1.json's schema
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}`, generated from the one table `ur` embeds. If core-types-default-urls is answered against public hostnames in code, the table moves to a data file with it.
-
-Questions: `plan-SDK-small-readings.md#12`.
-
-### QD-567: Free space for phones' cache cap
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-sdk's host reads free bytes with `statfs` on `StateDir` at start and before each `RunBackgroundSync`, and passes `min(256 MiB, free / 10)` in settings. The core reads no platform API.
-
-Questions: `plan-SDK-small-readings.md#14`.
-
-### QD-571: The value of {scp_<C>}tok
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`<platform>\n<token>`, parsed only by the sender. `{wakeq_<shard>}`'s hash stays the writer's choice, since the sender reads all 16 streams.
-
-Questions: `plan-SDK-small-readings.md#13`.
-
-### QD-573: SidecarResult's shape
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`SidecarResult{Ok bool, Value string, Code string, Message string}`. `Value` carries a repo id, send id, `approval_pending:<id>` or `authority_pending:<proposal_id>`, and `Code` a `REVOKE_` or `EVS_` code.
-
-Questions: `plan-SDK-small-readings.md#5`.
-
 <a id="s19"></a>
 ## §19 Server services
 
@@ -5376,3 +4986,34 @@ Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06
 Questions: `details-13-edge-pair-life.md`.
 
 Partly folded (2026-11-10): §2.8 sock-3's ttl landed with QD-657; §9.6's edge Finds wait for §9's fold.
+
+### QD-003: A requested grant's GrantActivate still shows its prefix and port to api, which clean rows do not fix
+*Accepted by the owner on 2026-11-06, in bulk as recommended; owner decision 220. Folds into §16 The local MCP server and record primitives. Also amends §2.*
+
+Owner decision 220's wire, which waits on the code: §16.8's CanonicalAction fence gains `bytes sealed_detail = 38` and the version it raises, and §2.8's api-7 and api-10 then say that a requested `dial` or `route` grant's GrantActivate carries its prefixes and ports only sealed. The rest is folded (2026-11-10): the decision, §17.8's placement, D-BRIDGE-6, §8.8's GrantActivate row and a comment in §16.8's fence naming the decision.
+
+Changes: §16.8 CanonicalAction's fence; §2.8 api-7; §2.8 api-10.
+
+Questions: `plan-BRIDGE-gate-row-prefixes.md#2`.
+
+Waits on: record.proto's `CanonicalAction.sealed_detail` and its version (ACL-M2-07, ACL-M4-02, MCP-M3-02, RECORD-M2-01), since protocol's fence test holds §16.8's fence to record.proto, and §2.8 keeps what api sees until the wire seals it.
+
+### QD-077: X's pin of Y's ShareKey and Y's pin of each target host's identity key have no signed home
+*Accepted by the owner on 2026-11-06, in bulk as recommended. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+The wire, which waits on the code: §17.9's fence takes `message BridgeShareGrant { bytes share_id = 1; bytes grant_id = 2; bytes share_public_key = 3; bytes target_table_sha256 = 4; bytes table_key = 5; }` once bridge.proto declares it, and bridge.proto gains `BridgeAliasBody.host_identity_public_key = 5` with the share seal's `BridgeShareTargets` and `BridgeShareAliases` (QD-108), which no DESIGN.md fence writes. The rest is folded (2026-11-10): §17.8's BridgeAlias, §17.9's share pins, shares paragraph and target row, a comment in §17.9's fence, §8.11, §7.9's repo files and FS-38.
+
+Changes: §17.9's fence; bridge.proto.
+
+Questions: `plan-BRIDGE-share-pins.md`.
+
+Waits on: bridge.proto's share messages (BRIDGE-M6-03 to -05), the fence line landing in one change with them, as protocol's fence test holds the two together.
+
+### QD-211: The device role cannot tell a SidecarRevoke is its own sign-out
+*Accepted by the owner on 2026-11-06, in bulk as recommended. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+The fence, which waits: §17.8's `Pending` fence takes `bytes sidecar_id = 3; bytes identity_public_key = 4;`, which bridge.proto already declares and protocol/design_unfenced_test.go's `testFenceAdditions` holds (plan-SDK-pending-sidecar-id). The fence line and the dropped additions must land in one commit, which a design-records track, editing no code, cannot make alone (question `dr-s17-s18-fence-additions.md`). The rest is folded (2026-11-10): §17.8's legacy -> pending and any -> legacy rows with a comment in the fence, and §18.6's transitions.
+
+Changes: §17.8 Pending's fence; protocol/design_unfenced_test.go's testFenceAdditions.
+
+Questions: `plan-SDK-pending-sidecar-id.md`.

@@ -45,7 +45,7 @@ All sidecar work happens on a branch named `sidecar` in every repo it touches (o
 
 ## How to review
 
-- **Where the decisions and questions are.** Every section follows one template: purpose and scope, requirements, what exists today, design, alternatives considered, decisions proposed, open questions, departures from PLAN.md, interfaces, risks and phasing. The [owner decisions](#owner-decisions) section below gives X1-X20, the [open owner questions](#open-owner-questions) (two, raised with [owner decision 197](#od-197)), the items [closed by peer review](#closed-by-peer-review) and the [owner decisions by number](#owner-decisions-by-number). [Appendix A](#appendix-a-decision-register) lists all 460 D- items (16 withdrawn). [Appendix B](#appendix-b-open-questions-register) lists all 202 Q- items: 173 decided by the owner, 11 closed by peer review on 2026-11-04, 12 closed by the 2026-11-03 design-review round, which reviewers may reopen (§3.11), 4 withdrawn, and 2 open for the owner.
+- **Where the decisions and questions are.** Every section follows one template: purpose and scope, requirements, what exists today, design, alternatives considered, decisions proposed, open questions, departures from PLAN.md, interfaces, risks and phasing. The [owner decisions](#owner-decisions) section below gives X1-X20, the [open owner questions](#open-owner-questions) (one, raised with [owner decision 197](#od-197)), the items [closed by peer review](#closed-by-peer-review) and the [owner decisions by number](#owner-decisions-by-number). [Appendix A](#appendix-a-decision-register) lists all 460 D- items (16 withdrawn). [Appendix B](#appendix-b-open-questions-register) lists all 202 Q- items: 174 decided by the owner, 11 closed by peer review on 2026-11-04, 12 closed by the 2026-11-03 design-review round, which reviewers may reopen (§3.11), 4 withdrawn, and 1 open for the owner.
 - **Id families.**
   - `X1`-`X20`: cross-cutting decisions. Each has one owning section, which resolves it in a Q- item whose text starts with the X id.
   - `R-CODE-n`: a requirement in section CODE's requirements table, with its source (a PLAN.md line, a product source, an owner decision, or "derived").
@@ -67,7 +67,7 @@ All sidecar work happens on a branch named `sidecar` in every repo it touches (o
 
 ## Owner decisions
 
-The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213) and the witness call outside the planes (214). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
+The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, [Q-SDK-7](#1813-open-questions), which owner decisions [215](#od-215) and [216](#od-216) decide, and [Q-BRIDGE-8](#1714-open-questions), open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled (222), the ur.io/recurd page (223) and C16's latch (224). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
 
 ### Cross-cutting decisions X1-X20
 
@@ -98,12 +98,11 @@ X1-X20 are the cross-cutting decisions the research surfaced (CONVENTIONS §7). 
 
 ### Open owner questions
 
-Two, raised on 2026-11-09 in designing [owner decision 197](#od-197)'s forwarding: [Q-BRIDGE-8](#1714-open-questions) (an app device's overlay address) and [Q-SDK-7](#1813-open-questions) (forwarding's budget in the iOS network extension). The sections are written to each recommendation, marked "(proposed; Q-...)". Every other Q- item whose decider was the owner is decided. Owner decisions [112](#od-112)-[135](#od-135) answered those the fix rounds and the conformance pass raised, and owner decisions [141](#od-141)-[145](#od-145) the five that the 2026-11-04 peer review raised ([Q-EVS-8](#1118-open-questions), [Q-MCP-6](#1614-open-questions), [Q-OPS-9](#1914-open-questions), [Q-KEYS-15](#1012-open-questions), [Q-OPS-10](#1914-open-questions)). [Q-EVS-9](#1118-open-questions), raised while the sections were edited to that review, is decided by [owner decision 140](#od-140)'s record as corrected on 2026-11-04: the binding budget, gated at 43 KiB a push per drive (D-TEST-11); the record's first ~10-15 KiB a push, a design-team estimate, is withdrawn. Outside the Q- items, the owner keeps one launch call on measured data: accepting the SNI loss that M7's census measures, before BS1 (D-MAIL-9; [owner decision 34](#od-34); §23.6).
+One, raised on 2026-11-09 in designing [owner decision 197](#od-197)'s forwarding: [Q-BRIDGE-8](#1714-open-questions) (an app device's overlay address), to whose recommendation the sections are written, marked "(proposed; [Q-BRIDGE-8](#1714-open-questions))". The other raised with it, [Q-SDK-7](#1813-open-questions) (forwarding's budget in the iOS network extension), was decided on 2026-11-10 (owner decisions [215](#od-215), [216](#od-216)). Every other Q- item whose decider was the owner is decided. Owner decisions [112](#od-112)-[135](#od-135) answered those the fix rounds and the conformance pass raised, and owner decisions [141](#od-141)-[145](#od-145) the five that the 2026-11-04 peer review raised ([Q-EVS-8](#1118-open-questions), [Q-MCP-6](#1614-open-questions), [Q-OPS-9](#1914-open-questions), [Q-KEYS-15](#1012-open-questions), [Q-OPS-10](#1914-open-questions)). [Q-EVS-9](#1118-open-questions), raised while the sections were edited to that review, is decided by [owner decision 140](#od-140)'s record as corrected on 2026-11-04: the binding budget, gated at 43 KiB a push per drive (D-TEST-11); the record's first ~10-15 KiB a push, a design-team estimate, is withdrawn. Outside the Q- items, the owner keeps one launch call on measured data: accepting the SNI loss that M7's census measures, before BS1 (D-MAIL-9; [owner decision 34](#od-34); §23.6).
 
 | Q id | Question | Options | Recommendation | Blocks | Needed by |
 |---|---|---|---|---|---|
 | [Q-BRIDGE-8](#1714-open-questions) | Does an app device claim its overlay address when its forwarding is set up ([owner decision 197](#od-197))? | (a) on demand, as §17.4 says: the app's UI, the host's first map or an admin; (b) at forwarding's setup, its sidecar filing its own `BridgeAddress` | (a): with no ACL document a hosted address opens the device's loopback to the network's untagged sidecars ([owner decision 120](#od-120)), and (b) can follow by one filing | nothing before M8's app hosts | M8 |
-| [Q-SDK-7](#1813-open-questions) | What budget does forwarding get in the iOS network extension, now that it follows the config and compiles its rules there ([owner decision 197](#od-197))? | (a) the root's forwarding files, at most 4 MiB of executable with the extension's ceiling from 50 MiB to 54 MiB, and 4 MiB of Go heap steady, 8 MiB compiling; (b) a second, minimal follower and compiler in `sidecar/device` within today's 1 MiB; (c) on iOS alone the app compiles, which would amend [owner decision 197](#od-197) | (a): one implementation of security-critical rules, inside today's runtime targets, measured on surrogates ([owner decision 100](#od-100)) | the `ios_extension` leg's `make size` value and §4.7's leg rule (M4); iOS forwarding (M8) | M4 |
 
 ### Closed by peer review
 
@@ -343,6 +342,16 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-212"></a>212 | 2026-11-06 | Recovery rebind | After a compromise rebind at r, `--compromise` lists the member's devices, clamps the rebind signer's since_n to r + 1 so the rebind stands, and revokes that signer last, by the replacement it enrolls. | §2, §5, §7, §10, §18, §22 |
 | <a id="od-213"></a>213 | 2026-11-06 | Linux packages | v1 ships no apt or yum repository: `.deb` and `.rpm` stay direct downloads through `install.sh`'s verified path, with no GPG key or repository host. | §2, §4 |
 | <a id="od-214"></a>214 | 2026-11-06 | D-ARCH-2 | A checkpointer's own HTTPS call to a witness its log admin named is no URnetwork carrier: it carries a signed note and a consistency proof, never an entry, and no URnetwork server takes part. | §3 |
+| <a id="od-215"></a>215 | 2026-11-10 | [Q-SDK-7](#1813-open-questions) | Forwarding adds at most 6 MiB of stripped executable to the iOS network extension, whose signed ceiling rises from 50 MiB to 54 MiB; one implementation of the rule table stays. | §1, §3, §4, §18, §22, §23 |
+| <a id="od-216"></a>216 | 2026-11-10 | [Q-SDK-7](#1813-open-questions) | A forwarding compile in the Apple extensions needs 5 × rows + 2 × head + 1 MiB within a 10 MiB cap and the room under a 30 MiB ceiling, about 4,300 devices; a larger network keeps its last verified state there and alarms, and no wait for a compile makes it pending. | §1, §3, §17, §18, §22, §23 |
+| <a id="od-217"></a>217 | 2026-11-10 | Key origin storage | The key origin keeps one IndexedDB database per network, `urnetwork-sidecar-v1-<network_id>`, each its own instance and root key, so the per-network Web Lock covers everything a Worker writes. | §18 |
+| <a id="od-218"></a>218 | 2026-11-10 | Bridge approvals | `BridgeApproval.template_action` carries a multi-use decision's template beside each use's action, so readers check the use against it and one decision files up to its uses bridge rules. | §17 |
+| <a id="od-219"></a>219 | 2026-11-06 | Key origin sign-in | The key origin signs a page Worker in by the ur.io session's hand-off: a one-time `/auth/code-create` code by postMessage, redeemed at `/auth/code-login` to mint its client, the network token then dropped. | §7, §18, §23 |
+| <a id="od-220"></a>220 | 2026-11-06 | Requested grants | A requested `dial` or `route` grant's prefixes and ports move into its CanonicalAction's sealed `sealed_detail`, so api checks the grant by ids alone. | §8, §16, §17 |
+| <a id="od-221"></a>221 | 2026-11-06 | Key origin builds | `sidecar.ur.io` serves only a promoted build, its loader and `sidecar.wasm` listed in the release's signed `SHA256SUMS` and the wasm's hash pinned in the loader; no browser checks them on load. | §2, §4, §18 |
+| <a id="od-222"></a>222 | 2026-11-06 | `ur tun` on Windows | `ur tun` neither bundles nor fetches wintun.dll; it loads one beside `ur.exe` or at the app's path only once its hash and signer match the Windows app's pins. | §17 |
+| <a id="od-223"></a>223 | 2026-11-06 | ur.io/recurd | A minimal real ur.io/recurd page (label, key-origin frame, sign-in, records, downloads) is built on mmm's `sidecar` branch; its visual design stays out. | §18, §23 |
+| <a id="od-224"></a>224 | 2026-11-06 | C16 | C16's receive gate latches at this side's seal for M4; before M8 turns it on for app-device hosts the plaintext in flight at a seal is measured, and a visible loss moves the latch to the peer's first sealed frame within `TlsTimeout`. | §4, §17, §18 |
 
 ## Contents
 
@@ -536,7 +545,7 @@ Custom domain   [only team]
 
 ### 1.9 The owner's decision list
 
-Owner decisions [1](#od-1)-[150](#od-150) settle every X item and every owner question raised before the v1 additions, the five raised in the 2026-11-04 peer review included (owner decisions [141](#od-141)-[145](#od-145): Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10); that review closed the Q- items left to it (Appendix B). Owner decisions [151](#od-151)-[166](#od-166) (2026-11-05) add versionless objects, the encrypted search index and search in `ur` and MCP, all in v1 (R-CTX-34 to R-CTX-36); owner decisions [167](#od-167)-[184](#od-184) (2026-11-05) answer the v1 questions (Q-PROTO-4, §6; Q-ACL-11, §8; Q-KEYS-16, §10; Q-EVS-19 to Q-EVS-23, §11; Q-MCP-7 to Q-MCP-9, §16; Q-SDK-6, §18; Q-ABUSE-7, §21; Q-PHASE-9 and Q-PHASE-10, §23.12) and add a phone's search through an indexer (R-CTX-37), the team directory (R-CTX-38) and the drop-history action (R-CTX-39). [Owner decision 185](#od-185) (2026-11-05) answers the SDK fixes' question, and owner decisions [186](#od-186)-[191](#od-191) (2026-11-05 and 2026-11-06) the final meta review's (Q-EVS-24, §11, whose answer [owner decision 190](#od-190) refines; Q-PROTO-4's answer, §6, which owner decisions [188](#od-188) and [191](#od-191) amend; the presence countersignature's reach, §7). [Owner decision 197](#od-197) (2026-11-09) puts only IP and port forwarding in every app's VPN component, always on and self-contained (§17, §18), and its design raised the two owner questions open now: Q-BRIDGE-8 (§17) and Q-SDK-7 (§18). The front matter lists each decision with its implementing sections.
+Owner decisions [1](#od-1)-[150](#od-150) settle every X item and every owner question raised before the v1 additions, the five raised in the 2026-11-04 peer review included (owner decisions [141](#od-141)-[145](#od-145): Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10); that review closed the Q- items left to it (Appendix B). Owner decisions [151](#od-151)-[166](#od-166) (2026-11-05) add versionless objects, the encrypted search index and search in `ur` and MCP, all in v1 (R-CTX-34 to R-CTX-36); owner decisions [167](#od-167)-[184](#od-184) (2026-11-05) answer the v1 questions (Q-PROTO-4, §6; Q-ACL-11, §8; Q-KEYS-16, §10; Q-EVS-19 to Q-EVS-23, §11; Q-MCP-7 to Q-MCP-9, §16; Q-SDK-6, §18; Q-ABUSE-7, §21; Q-PHASE-9 and Q-PHASE-10, §23.12) and add a phone's search through an indexer (R-CTX-37), the team directory (R-CTX-38) and the drop-history action (R-CTX-39). [Owner decision 185](#od-185) (2026-11-05) answers the SDK fixes' question, and owner decisions [186](#od-186)-[191](#od-191) (2026-11-05 and 2026-11-06) the final meta review's (Q-EVS-24, §11, whose answer [owner decision 190](#od-190) refines; Q-PROTO-4's answer, §6, which owner decisions [188](#od-188) and [191](#od-191) amend; the presence countersignature's reach, §7). [Owner decision 197](#od-197) (2026-11-09) puts only IP and port forwarding in every app's VPN component, always on and self-contained (§17, §18), and its design raised two owner questions: Q-SDK-7 (§18), which owner decisions [215](#od-215) and [216](#od-216) decide, and Q-BRIDGE-8 (§17), open now. The front matter lists each decision with its implementing sections.
 
 ### 1.10 Glossary seed
 
@@ -686,7 +695,7 @@ An active or compelled operator keeps:
 - **EX4.** A send the user allowed to an unauthenticated MX ([owner decision 38](#od-38)), labeled "readable by an active URnetwork edge".
 - **EX5.** Trust on first use of a genesis key no invite or auth key carried ([owner decision 5](#od-5)); safety numbers; a code-only recovered device, which has no admitter, commits, wraps, seals or signs nothing until the config head its RecoveryWrap, or under a binding a cascade void restored the ReaderWrap it is given (§7.9's restored order), opens chains to a genesis its RecoveryBind's `genesis_sig` signs under the key its code derives (§7.9's anchor), so the recovery public keys every config reader and rotator holds let no server fake that genesis; a server can forge the wrap or the ReaderKey gkm serves, but not a head that chains to that genesis.
 - **EX6.** connect key substitution at first contact until M2's admission check (§6.4); first-use pins.
-- **EX7.** Code URnetwork ships: signed releases ([owner decision 77](#od-77)) and labeled decrypting web pages ([owner decision 76](#od-76)); undetected; any script in a decrypting page's origin reads views while it runs (§18.8). Cloudflare terminates https://ur.io, so it sees page requests and can alter page script, and through it request views while that script runs, never the key origin's code, key or token, since `sidecar.ur.io` is served direct (§19.5's W10; [owner decision 211](#od-211)).
+- **EX7.** Code URnetwork ships: signed releases ([owner decision 77](#od-77)) and labeled decrypting web pages ([owner decision 76](#od-76)); undetected; any script in a decrypting page's origin reads views while it runs (§18.8). Cloudflare terminates https://ur.io, so it sees page requests and can alter page script, and through it request views while that script runs, never the key origin's code, key or token, since `sidecar.ur.io` is served direct (§19.5's W10; [owner decision 211](#od-211)). The key origin serves only a promoted build, whose loader and `sidecar.wasm` the release's signed `SHA256SUMS` lists, so anyone can compare the served bytes, though no browser checks them on load (§18.8; [owner decision 221](#od-221)).
 - **EX8.** URnetwork login as the `members` audience authority ([owner decision 42](#od-42)); undetected (§13.7).
 
 **Exposure bound** ([owner decision 129](#od-129)): a writer learns of a withheld Remove at its first HeadCheck with a device that holds it, or with a peer that relays it as `proven` or `unverified` within 8 hops of a holder (D-TRUST-10, §6.4); with the withholding proof it stops at once, and without it the pin stays UNVERIFIED, so, as with no consistent witness, the writer stops sealing shared-group content at `ServiceSettings.witness_bound_hours` (default 72 h, 24-168 h). Exposure is unbounded across a split, where the server leaves no HeadCheck path of up to 8 hops between a holder and the writer, including when every device that holds the Remove is offline, and in own groups, where writers only alarm: personal networks, and with them the v0 pilot ([owner decision 102](#od-102)), have no bound.
@@ -1565,7 +1574,7 @@ Decided (owner decisions [15](#od-15), [108](#od-108)): recURd uses the main ser
 
 ### 3.1 Purpose and scope
 
-This section assembles §1-§23 into one picture: a component map, the repo graph, planes, runtime topologies, thirteen end-to-end flows and a service summary. It designs nothing; every step cites its owner. The flows show only the directive (CONVENTIONS §0) and the owner's decisions ("owner decision N", front matter): 1-150, of 2026-11-03 to 2026-11-05, decide every X item and, with 141-145, the five owner questions the peer review raised (Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10), and F2 and F11 add the 2026-11-05 decisions on versionless objects (158, 161) and on the index and search (151-157, 166); F12 adds a phone's search through an indexer (175-178, 188, 191) and F13 the team directory (170, 171, 179-182). Owner decisions [167](#od-167)-[184](#od-184) answered every v1 question, 185 the SDK fixes' and 186-191 the final meta review's; [owner decision 197](#od-197) put only forwarding in apps' VPN components (3.6, F7), and its design raised the two owner questions open now (Q-BRIDGE-8, Q-SDK-7); F11's index cadence follows [owner decision 172](#od-172) and 3.15's milestone for format 2 [owner decision 169](#od-169). Drafts' disagreements became Q-ARCH-1 to -9, closed by the 2026-11-03 design-review round (3.11).
+This section assembles §1-§23 into one picture: a component map, the repo graph, planes, runtime topologies, thirteen end-to-end flows and a service summary. It designs nothing; every step cites its owner. The flows show only the directive (CONVENTIONS §0) and the owner's decisions ("owner decision N", front matter): 1-150, of 2026-11-03 to 2026-11-05, decide every X item and, with 141-145, the five owner questions the peer review raised (Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10), and F2 and F11 add the 2026-11-05 decisions on versionless objects (158, 161) and on the index and search (151-157, 166); F12 adds a phone's search through an indexer (175-178, 188, 191) and F13 the team directory (170, 171, 179-182). Owner decisions [167](#od-167)-[184](#od-184) answered every v1 question, 185 the SDK fixes' and 186-191 the final meta review's; [owner decision 197](#od-197) put only forwarding in apps' VPN components (3.6, F7), and its design raised two owner questions, Q-SDK-7, which owner decisions [215](#od-215) and [216](#od-216) decide, and Q-BRIDGE-8, open now; F11's index cadence follows [owner decision 172](#od-172) and 3.15's milestone for format 2 [owner decision 169](#od-169). Drafts' disagreements became Q-ARCH-1 to -9, closed by the 2026-11-03 design-review round (3.11).
 
 ### 3.2 Requirements
 
@@ -2495,8 +2504,8 @@ Dispositions follow owner decisions [22](#od-22), [85](#od-85) (C14 into M4), 86
 | C2 | Provide-mode and size filters (SUBPROTOCOL.md §6) | Rejected: handlers see `peer.ProvideMode` and length |
 | C3 | Drop ControlId-sourced subprotocol frames unless opted in (connect/subprotocol.go:590-651); P2P carriers accept only their peer as source (connect/transport_p2p.go:2345-2347) | M1 |
 | C4 | Browser WebSocket H1 carrier (`GOOS=js`), in-band auth, Origin allowlist (§18.8) | Later, after §18's HTTPS-only worker ([owner decision 26](#od-26)) |
-| C5 | `connect.EgressHook` (`ResolveEgress`, §17.6) in `LocalUserNat`: pass, map or deny per flow, with C13's subject and `Sealed` on `EgressFlow`; `EgressDecision.IdleTimeout` replaces, for that flow, the NAT-wide idle (read at connect/ip.go:3252, :3873, :6984 and connect/ip_icmp.go:854; 0 keeps it), so bridge flows hold §17.5's idles without raising the host's other flows; flows register their rule tag and policy generation before the dial, so `CloseFlows` fences dials in progress (D-BRIDGE-21) | M4 |
-| C6a | 100.64/10 non-public for §17 (connect/ip_security.go:892-908), with its own drop reason instead of an Incident, which calls `ReportAbuse` (connect/ip.go:10242-10244) | M4, after shadow counts |
+| C5 | `connect.EgressHook` (`ResolveEgress`, §17.6) in `LocalUserNat`: pass, map or deny per flow, with C13's subject and `Sealed` on `EgressFlow`; `EgressDecision.IdleTimeout` replaces, for that flow, the NAT-wide idle (read at connect/ip.go:3244 and :3255 for the shared lifecycle, :3873, :7027 and connect/ip_icmp.go:854; 0 keeps it), so bridge flows hold §17.5's idles without raising the host's other flows; flows register their rule tag and policy generation before the dial, so `CloseFlows` fences dials in progress (D-BRIDGE-21) | M4 |
+| C6a | 100.64/10 non-public for §17 (connect/ip_security.go:892-908), with its own drop reason instead of an Incident, which calls `ReportAbuse` (connect/ip.go:10242-10244), behind `CfaaSecurityPolicySettings.DropSharedAddressSpace`, false by default, a check of its own beside `isPublicUnicast` (§17.6) | M4, after shadow counts |
 | C6b | A `Tun` forwarder for a tun-less router | Rejected: not needed (§17.10) |
 | C7 | Caller lane key for non-IP sends (connect/transfer_logical_lane.go:11-37) | Deferred: `TransferKey` lanes suffice |
 | C8 | HTTP CONNECT and `HTTPS_PROXY` for platform transports and API dials; SOCKS5 only today (connect/net.go:333-363) | M4 (§5, §16, §18; [owner decision 49](#od-49)) |
@@ -2507,7 +2516,7 @@ Dispositions follow owner decisions [22](#od-22), [85](#od-85) (C14 into M4), 86
 | C13 | In every mode, seal into `StoredContract` (connect/protocol/transfer.proto:631-638) `source_subject_client_id`, which the server fills from the source client's stored `network_client.acl_subject_client_id` (D-ACL-3), never a client-supplied value, with `source_network_id`, the contract class and, for a window client, the subject's `WindowDelegation` (§17.9); companion contracts inherit the seals; expose them on `Peer` (connect/transfer.go:608-619) and `EgressFlow` | M4 (§8.10, §9, §17; D-PROTO-19) |
 | C14 | `UpgradeMux.SetLocalZone`, consulted before the Blocker in `handleDns` (connect/ip_mux_upgrade.go:1661) and `resolveDnsTcpQuery` (:716) | M4 ([owner decision 85](#od-85)); `ur tun` uses §17's resolver |
 | C15 | `Peer` exposes the session's verified peer client key read-only, unexported today (connect/transfer_encrypt.go:1152-1157) | M1 (§6, D-PROTO-13) |
-| C16 | Sticky Required: an Opportunistic client with a session to a peer never falls back to plaintext for that contract (connect/transfer_encrypt.go:477-483) | M4 (§17, §18); until then app devices are not bridge targets |
+| C16 | Sticky Required: an Opportunistic client with a session to a peer never falls back to plaintext for that contract (connect/transfer_encrypt.go:477-483); its receive gate latches at this side's seal, and before M8 turns it on for app-device hosts the plaintext an Opportunistic peer has in flight at the seal is measured: if the loss is visible, the gate latches at the peer's first sealed frame, bounded by `TlsTimeout` from this side's seal ([owner decision 224](#od-224)) | M4 (§17, §18); until then app devices are not bridge targets |
 | C17 | A `js` connect build without gVisor or the IP stack: a connect-only js/wasm main imports 42 gvisor packages (2026-11-03; sizes in §18.10) | Decided after §18's spike, for the extension's streaming Worker only; the page Worker uses §18.10's `sidecar_http` leg |
 | C18 | FriendsAndFamily flows to private destinations, which today admit only Network sources at the source's multi client (connect/ip_security.go:385-390; connect/ip_remote_multi_client.go:6691) and the provider (connect/ip.go:10307; connect/ip_security.go:567-576). The provider hands them to a C5 hook keyed on C13's `source_network_id`; the source admits only §17's alias-mapped destinations | M6 ([owner decision 86](#od-86)); hooks only on sidecar-owned Required targets with a cross-network route grant; off in sdk providers |
 | C19 | A per-peer accounting mode, off by default, for §6.10's remote-search windows. While a peer is in it, connect withholds every report, checkpoint or close, of a window's contracts with that peer, in both directions, until the window ends 55 minutes after its first contract's creation, 5 minutes before that contract's signed expiration. It then moves the sequences off them, as at expiry, and, while the mode holds, onto a new contract it takes at once with its successor requested then, which opens the next window whatever frame first rides it (§6.10), and sends one `CloseContract` a contract (connect/transfer_contract_manager.go:2344-2350): R(T) on the window's first and 0 on the others, T being the client's counted bytes over the window's contracts in that direction, and R(T) the floor F = 256 KiB while T ≤ F, else F plus 128 KiB steps. The sidecars of a pair that a Hello or HelloResult carrying the requester feature bit marks (§6.11) set the mode for each other through connect's per-peer setter, since a `Peer` exposes no contract id (connect/transfer.go:608-619), each first retiring the contracts it already sends on to the other. A window with up to five search pages then reports as one with none, whatever the pair's scheduled background (§6.10, §11.14; §2.8 connect-5) | M10 (owner decisions [176](#od-176), [188](#od-188)) |
@@ -2573,7 +2582,7 @@ legs        sdk's (sdk/dependency_boundary_test.go:81-92), gomobile's CGO_ENABLE
 ### 4.9 Generation, targets, versions, license, style
 
 - **Protobuf:** `protocol/Makefile` runs `protoc -I=. --go_out=. --go_opt=paths=source_relative protocol/*.proto protocol/bridge/*.proto` from the repo root, so files register as `protocol/<name>.proto` and `protocol/bridge/<name>.proto` in package `urnetwork.sidecar`; sdk and server link connect's and sidecar's packages, and a duplicate path or name panics at init (protobuf@v1.36.11/reflect/protoregistry/registry.go:42, 128, 152), so `config.proto`, `acl.proto` and `directory.proto` import the types 4.4 lists for `protocol/bridge`, never redeclare them. `tool` pins protoc-gen-go v1.36.11, and output is committed.
-- **Mobile, wasm, C ABI:** gomobile binds only sdk (§18.3). `make size` gates from v0: the `ios_extension` leg (`device/`, `protocol/bridge` and the root's forwarding files; D-SDK-20) fails if sidecar adds over §18.10's budget, 4 MiB (proposed; Q-SDK-7; [owner decision 197](#od-197)), and the `sidecar_http` js leg is measured unstripped from M2 against §18.10's 41,943,040 B goal and miss rule (D-SDK-19). No C ABI: desktop apps use the `ur` daemon (§5) or sdk's generated ABI (sdk/cgo/gen/gen.go).
+- **Mobile, wasm, C ABI:** gomobile binds only sdk (§18.3). `make size` gates from v0: the `ios_extension` leg (`device/`, `protocol/bridge` and the root's forwarding files; D-SDK-20) fails if sidecar adds over §18.10's budget, 6 MiB stripped (owner decisions [197](#od-197), [215](#od-215)), and the `sidecar_http` js leg is measured unstripped from M2 against §18.10's 41,943,040 B goal and miss rule (D-SDK-19). No C ABI: desktop apps use the `ur` daemon (§5) or sdk's generated ABI (sdk/cgo/gen/gen.go).
 - **Versions.** Development paths stay unversioned, as connect's and sdk's do; the release runs their steps (build/all/run.sh), which §22.4's release fixture checks:
 
 ```text
@@ -2607,7 +2616,7 @@ fixture    the tags served through GOPROXY=file:// with GOWORK=off, an empty mod
 
 - **`git-remote-ur`** ships beside `ur` in every package as a link to the same binary, which dispatches on argv[0] (a copy in the Windows zip); git runs it for `ur://` URLs from PATH (gitremote-helpers(7); §11.11), so Windows users add the zip's directory to PATH.
 - **Build.** `CGO_ENABLED=0 -trimpath` from `cli/`'s module, archive times from `SOURCE_DATE_EPOCH` (server/cli/api/Makefile:1, 4); macOS's keychain goes through purego (D-CORE-12).
-- **Release integrity.** Signing is the gate ([owner decision 77](#od-77)): a VirusTotal scan (run.sh:2257-2298), then a `SHA256SUMS` SSH-signed by an offline two-person Ed25519 key (§2.6), whose public key the repo and ur.io publish. `install.sh` on ur.io (mmm's branch from M0, §23.4; owner decisions [15](#od-15), [16](#od-16), [196](#od-196)) pins the key, verifies signature and checksum (`ssh-keygen -Y verify`, OpenSSH 8.1+) and refuses on any failure.
+- **Release integrity.** Signing is the gate ([owner decision 77](#od-77)): a VirusTotal scan (run.sh:2257-2298), then a `SHA256SUMS` SSH-signed by an offline two-person Ed25519 key (§2.6), whose public key the repo and ur.io publish. `install.sh` on ur.io (mmm's branch from M0, §23.4; owner decisions [15](#od-15), [16](#od-16), [196](#od-196)) pins the key, verifies signature and checksum (`ssh-keygen -Y verify`, OpenSSH 8.1+) and refuses on any failure. From M4 the sums also list the key origin's loader and `sidecar.wasm`, which `sidecar.ur.io` serves only from a promoted build (§18.8; [owner decision 221](#od-221)).
 - **Harness configs (§16)** use `ur`'s absolute path, since GUI-launched hosts lack the shell PATH ([MCP debugging](https://modelcontextprotocol.io/docs/2025-03-26/tools/debugging.md)). v0 has no self-updater.
 
 ### 4.11 The documents in the sidecar checkout
@@ -2673,7 +2682,7 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Engine or root code bloats the iOS extension, which since [owner decision 197](#od-197) links the root's forwarding files | Medium | High | `<svc>service` packages; the leaf `device/` and the `ios_extension` leg's file and descriptor lists; `make size` at Q-SDK-7's budget |
+| Engine or root code bloats the iOS extension, which since [owner decision 197](#od-197) links the root's forwarding files | Medium | High | `<svc>service` packages; the leaf `device/` and the `ios_extension` leg's file and descriptor lists; `make size` at [owner decision 215](#od-215)'s budget |
 | Branches drift from mains that release almost daily | High | Medium | Weekly and per-milestone merges; pending migration groups (D-OPS-6) |
 | A secret or AI-attributed message on a public branch stays served by hash (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository, read 2026-11-03) | Low | Medium | The hook in every clone (connect/.githooks/commit-msg:23-27); `--scan` before each push and at each Gn-out (§23.8); secrets only in vault |
 | A Go release breaks purego, leaving macOS pass-only | Low | High | Pinned version; a Keychain round trip in `make check`; cgo fallback |
@@ -3029,6 +3038,8 @@ func (self *Sidecar) Search(ctx context.Context, request *SearchRequest) (*Searc
 func (self *SearchStream) Next() (page []SearchHit, progress SearchProgress, done bool, err error) // replaces the last
 func (self *Sidecar) GetSearchStatus(repoId *Id) (*SearchStatus, error) // search_status (§16.10), GetStatus (§18.5)
 func (self *Sidecar) SetSearchConditions(unmetered, charging, lowPower bool) // the host's reports (§18.7)
+func (self *Sidecar) SetSearchForeground(foreground bool) // the app's lifecycle and a page Worker's tab visibility
+                                                          // (§18.7); unreported counts as background
 func (self *Sidecar) RunSearchBackgroundSync(ctx context.Context) error // an OS window, ctx's deadline its budget
                                                                         // (§18.5's budgetMillis); resumes next time
 func (self *Sidecar) SetSearchPolicy(repoId *Id, mode string) error // nil repoId: every repo; "": the host default
@@ -4444,6 +4455,7 @@ POST /oauth/token  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
                command's own transaction inserts admin_token_use(jti PRIMARY KEY, member_id, cmd, result,
                time); a replay of the jti returns the stored result; rows go 1 h after exp (§2.8 api-11)
   ```
+- **ur.io's key origin** (§18.8) has no public client of its own: a ur.io page hands it a one-time `/auth/code-create` code by postMessage, which it redeems at `/auth/code-login` for a network token, mints the page Worker's `admin_refused`, `strict_exp` client with `POST /network/auth-client` and drops the token, and it re-mints the same way after a lapse ([owner decision 219](#od-219)).
 - **Token exchange** (RFC 8693) checks the ClientKey's DPoP proof (RFC 9449; 7.4's proof rule, jti single-use), refuses expired subject tokens and inactive, reaped or unadmitted clients (an unadmitted client of member M may get only `recovery:<member_id>` at gkm, for M's own recovery wraps, 7.9), and never issues the API audience. evs and gkm capabilities (`scope=repo:<id>:r|rw|admin|deposit`, [owner decision 2](#od-2)) come from §8's rows in the newest projection: a read-only sidecar gets only `r` scopes and §16.8's receipt deposit, whatever else it is; a `forward_only` client (7.4), which acts as its sidecar, gets only `repo:<config_repo_id>:r` at evs and gkm, while that sidecar's forwarding Delegation is live (7.9), whatever its sidecar reads ([owner decision 197](#od-197)); readers of an owner-bound repo who are not its writers also get `repo:<id>:deposit` for receipts (§16.8); member devices other than read-only ones get gkm `rw` on the config group (7.9's `commit`); in a team network every admitted sidecar that is not read_only gets `repo:<directory>:rw` (read_only ones `r`), and only the directory's admins, its creator and the config writers, each consented (§8.5) and not read_only, get its `admin`, which alone carries its ERASE, CUT and CLOSURE pushes, their `?closure=1` uploads and `POST .../slots/delete`, as in every repo: evs cannot see whose copies a key covers, so it checks the authority before any key mutation (§11.12, §16.11). **Re-seed mode** (§19.10): while `sidecar.yml`'s `reseed` is true and the network's log has not resumed (7.9's site loss), the exchange mints only `repo:<id>:admin`, honored only by evs's `POST /evs/v1/repos/<id>/reseed` and gkm's GroupForm, to the sidecars the restored rows list under the network's Owners and Admins, and answers other requests `restore_required`. Tokens stay in the daemon (I-7), but for §11's v1 read-only git view.
 - **Keys.** Admin, service and ID tokens use disjoint ES256 key sets (`kid` prefixes `adm-`, `svc-`, `id-`), private to api's issuer, `auth.bringyour.com` (owner decisions [16](#od-16), [108](#od-108); server/oauth/keys.go:3-13).
 - **Notices.** New credentials, IdPs, domains, Delegations and admin-set changes notify Owners and Admins; auth codes carry their `api_key_id`, so removing the key ends the code and its network token, closing server/session/AUTH.md:202's gap (7.4). Tokens are never stored (§2.8 api-11).
@@ -4485,7 +4497,7 @@ front    counts that session only on same-origin requests and top-level GET or H
 
 From v0, admin keys sign membership and policy, and clients refuse any peer or rule not derivable from signed inputs, so a breached server can only deny or delay, within §2.8's exposure bound, though its gates see the reach graph (owner decisions [3](#od-3), [5](#od-5)-[8](#od-8), [72](#od-72), [110](#od-110)).
 
-**Repo.** One evs repo of kind `config` (§11.12) per network holds the records below, tags, groups, device names, policy (§8), bridge rules (§17), §17.9's `BridgeShareSigner` files (each accepted share's ShareSigner seed and ShareCert, which a config-writing ShareKey holder replaces per config generation) and the socket-name key ([owner decision 67](#od-67)). Config writers, the AdminSet members' member devices that are not read_only, write its heads; every admitted sidecar, ephemeral ones included (§8.6's ceiling), reads all of it ([owner decision 6](#od-6)) but owner-bound repos' versioning rules (below), so CI and cloud agents' sidecars hold the policy, the emails it names, the AdminSet, `K_sock` and each accepted share's ShareSigner seed, though MCP returns neither the config's contents nor a `secret` repo (§16.6); the server holds ciphertext and the authorization log.
+**Repo.** One evs repo of kind `config` (§11.12) per network holds the records below, tags, groups, device names, policy (§8), bridge rules (§17), §17.9's `BridgeShareSigner` files (each accepted share's ShareSigner seed and ShareCert, which a config-writing ShareKey holder replaces per config generation), §17.9's `BridgeShareGrant` files (`bridge/share-grant/<share_id hex>`: each share this network activated, its pinned ShareKey, target table hash and table key) and the socket-name key ([owner decision 67](#od-67)). Config writers, the AdminSet members' member devices that are not read_only, write its heads; every admitted sidecar, ephemeral ones included (§8.6's ceiling), reads all of it ([owner decision 6](#od-6)) but owner-bound repos' versioning rules (below), so CI and cloud agents' sidecars hold the policy, the emails it names, the AdminSet, `K_sock`, each accepted share's ShareSigner seed and each activated share's table key, though MCP returns neither the config's contents nor a `secret` repo (§16.6); the server holds ciphertext and the authorization log.
 
 ```text
 record (sidecar/protocol/config.proto; Genesis, MemberRevoke and       signer
@@ -5576,7 +5588,8 @@ GrantActivate{header, grant_id, canonical_action, decisions}       any admitted 
   canonical_action: the approved §16.8 CanonicalAction, whose      embedded ApprovalDecisions, each signed by an
   grant fields are rule_id, subject, grant_dst, grant_allow and    approver the requests rule names (8.6) on a
   expires_millis, and a publish's also app_mode and                channel its evidence lists, binding the
-  link_spki_sha256                                                 canonical action's hash and its subject (§16.6)
+  link_spki_sha256; a dial or route grant's prefixes and ports     canonical action's hash and its subject (§16.6)
+  only in its sealed_detail (owner decision 220; §17.8)
 GrantRevoke{grant_id}                                              an approver, the subject, or an admin
 Suspend{subject, suspend_id}                                       an admin, or the subject's owner or sponsor;
                                                                    for an AdminSet member's device, its owner
@@ -5686,7 +5699,7 @@ Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) an
 ### 8.11 Cross-network sharing and invites
 
 - **Consent.** X grants `network:Y` a resource with an admin's approval ([owner decision 74](#od-74)), and Y grants its subjects `dial` on `network:X`; access is the intersection, enforced as two halves: X's provider checks X's grant against the verified source network and share (§17.9), and Y's routers and the contract gate (8.10) check Y's grant; neither sees the other's groups. X's half verifies only that a current reader of Y's config signed for the share, never Y's per-subject grant, so the unit X can check is Y's whole current reader population: a Y reader that Y's policy denies, running modified software, reaches X's granted targets only on a contract the operator mints, still within X's grant (§17.9, §2.10).
-- **Invite.** `ur bridge invite` (cli/UI.md:50) files X's request with a hashed 256-bit code, `uses = --count` and a 7-day window; `accept-invite` (`:51`) files Y's, the server binds `invited_network_id`, and each activation is a delta in its network. Y's approving admin creates the share's ShareKey in a `secret` repo of its own (8.5); X's approval pins it, and it certifies a ShareSigner per generation of Y's config, so a sidecar Y removes signs only within §17.9's bound. The row is deleted once its uses run out or its window closes.
+- **Invite.** `ur bridge invite` (cli/UI.md:50) files X's request with a hashed 256-bit code, `uses = --count` and a 7-day window; `accept-invite` (`:51`) files Y's, the server binds `invited_network_id`, and each activation is a delta in its network. Y's approving admin creates the share's ShareKey in a `secret` repo of its own (8.5); X's approving admin's device pins it, with the target table's hash and its key K, in a `BridgeShareGrant` config file in the act that files the share's GrantActivate (§17.9's share pins), and the ShareKey certifies a ShareSigner per generation of Y's config, so a sidecar Y removes signs only within §17.9's bound. Both networks' tables travel under §17.9's share seal, bound to its label, both networks and the table's version; a multi-use code's accepters all hold its key, so a seal proves only a code holder, and X's approving admin is what pins one ShareKey to one share. The row is deleted once its uses run out or its window closes.
 - **Contracts and data plane.** Shares ride the IP path ([owner decision 86](#od-86)) as FriendsAndFamily toward marked sidecars, escrowed from the dialer's network (§6.10.1, Q-PROTO-3 (b), [owner decision 11](#od-11)); §4's C18 stops providers treating those sources as Public toward private destinations, and §17's hook admits them only under a `route` or `dial` grant.
 
 ### 8.12 ACL and evs readers
@@ -5815,7 +5828,7 @@ wrapped   a wrapped config or directory member commits no Add or Remove in that 
 
 ### 8.17 Interfaces
 
-- **Provides:** `sidecar.ParseAclPolicy`, `sidecar.CompileAcl` → `AclRows`; gate checks `Reach`, `MayListen`, `MayDial`, `MayPublish`, `MaySend`, `EvsAccess` and `RepoReaders` (sidecar ids), each naming its rule or delta; `AclEngine` (`AllowInbound`, `AllowRoute`, `AllowAlias`, `VerifyRepoMember`, `VerifyHeadSigner`); §8.5's consent rule, the `directory` kind default, and the directory's default rule with `autogroup:dst-owner` (§16.11); §8.8's grant chains and access logs, each EvsShare with its expires, signer and carrying position for §7.9's cascade, and the lock's refusal and voiding of drops (§11.7, §11.13); §8.12's data-repo seats and the directory's; the contract gate's `control` class for witnesses and its remote-search exchanges (§6.4, §11.14); `CanApplyTag` (§7).
+- **Provides:** `sidecar.ParseAclPolicy`, `sidecar.CompileAcl` → `AclRows`; gate checks `Reach`, `MayListen`, `MayDial`, `MayPublish`, `MaySend`, `EvsAccess` and `RepoReaders` (sidecar ids), each naming its rule or delta; `AclEngine` (`AllowInbound`, `AllowRoute`, `AllowAlias`, which checks `mail:<alias>` at receivers and the local mail server, §17's `BridgeAlias` being a share's delta and no ACL resource, `VerifyRepoMember`, `VerifyHeadSigner`); §8.5's consent rule, the `directory` kind default, and the directory's default rule with `autogroup:dst-owner` (§16.11); §8.8's grant chains and access logs, each EvsShare with its expires, signer and carrying position for §7.9's cascade, and the lock's refusal and voiding of drops (§11.7, §11.13); §8.12's data-repo seats and the directory's; the contract gate's `control` class for witnesses and its remote-search exchanges (§6.4, §11.14); `CanApplyTag` (§7).
 - **Consumes:** §4 C13, C18; §5 keys, bindings; §6 `Signed`, push, HeadCheck, Hello's feature bit 0; §7 the config repo, authorization log, projection and its verified read cache, the `leaves` rule, token exchange, removal; §10 MLS; §11 the gate, lifecycle routes and the DROP push and its job (§11.7, §11.13); §13.9's `tls/` `ValidateListen`; §16 `ApprovalDecision`, the spend check, `approval_use` and §16.11's directory requests; §17.9 `WindowDelegation`; §20 limits.
 - **Subprotocol messages:** none; §7's `team` hints and `evs:<repo_id>` (§6.8).
 - **API routes** (`connect/api/bringyour.yml`, `route_authz.go`), Client class: `POST /acl/ack`, `POST /acl/invite`, `POST /acl/accept-invite`; grant chains go through §7's `POST /network/config/delta`. No route takes policy text.
@@ -10884,7 +10897,7 @@ The `tls` component (§5; files `tls_*.go`) accepts streams for its `tls/` regis
 | 421 | Host and `:authority` must equal the SNI (RFC 9113 §9.1.1), since browsers coalesce a network's hosts on one wildcard and address set |
 | HTTP/3 | None; upstream `Alt-Svc` h3 entries are stripped |
 | Visitor address | To the local service only on request (PROXY v2 or `Forwarded`) |
-| Audience ([owner decision 42](#od-42)) | `members` (default): §7.8's edge login, checked against the front's config (§7.9; issuer trust: §2.8 EX8). `members-device` adds a §6 `Signed` (purpose `edge-login`) over origin and nonce by a member's consented device (§8.5), via the app or extension (§18). `link`: a URL token traded for a cookie (`raw`: the pinned client certificate). `public`: explicit, e.g. webhooks. Members on URnetwork may use the overlay (v1, §17) |
+| Audience ([owner decision 42](#od-42)) | `members` (default): §7.8's edge login, checked against the front's config (§7.9; issuer trust: §2.8 EX8). `members-device` adds a §6 `Signed` (purpose `edge-login`) over origin and nonce by a member's consented device (§8.5), via the app or extension (§18). `link`: a URL token traded for a cookie (`raw`: the pinned client certificate). `public`: explicit, e.g. webhooks. Members on URnetwork may also reach a service over the overlay by §17's own rules, its private name or overlay address (§12.9) with a §17.6 map or route grant to the local port, which adds no listener, audience or authentication path and passes no front, tlsedge or edge login (v1, with M6's `ur tun` on macOS and Windows) |
 | Other origins (§12.4) | Session cookies (`__Host-ur-session`, a `link` cookie) count only on `Sec-Fetch-Site: same-origin` or `none`, or top-level GET or HEAD navigations (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`); without Fetch Metadata, only with no `Origin` or the host's. Other requests, from the network's other hosts too, arrive anonymous (edge login under `members`). Browsers without Fetch Metadata (before March 2023: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site) still send them on other origins' GETs (§2.10) |
 | Reach receipts ([owner decision 25](#od-25)) | §16.8's `ReachReceipt` per publish grant, visitor and 5 min: SNI and a keyed `client_ip` hash (v1) |
 | Control panels | Refused and recorded for the daemon's API or MCP port and for targets that answer like agent UIs (§16's list) |
@@ -11067,7 +11080,7 @@ Flags: `--port` (443, or a listed port), `--expires`, `--audience`, `--alpn`, `-
 
 **v0** (§23 M5): the split after its gate and drained rollout, its custom-host map empty; tlsedge and Service contracts; certs with LE, GTS, ZeroSSL, ARI and per-device keys; the front with `members` login and `AppMode` dispatch (FS-34); desktop `ur bridge public-tls`; the CT watch; ports 443, 8443, 8883 and 5671; app listeners with §18 and the MTA-STS system publish with §15 (both M8). It waits on §9's `tls/` and Find, §6 streams, C9, §12's dns edge, §19's W1, §7.8's edge login, §21's kill-switch policy and the LE override's lead time.
 
-**v1** (§23 M6): Team custom domains (with §12's custom-host-add, the split's custom-host map with its versions, interface reports and readiness, and strong-mode CAA checks; FS-32, FS-35, FS-122), Team scopes, affinity, `members-device`, overlay access for members (§17), and publish reach receipts (§16).
+**v1** (§23 M6): Team custom domains (with §12's custom-host-add, the split's custom-host map with its versions, interface reports and readiness, and strong-mode CAA checks; FS-32, FS-35, FS-122), Team scopes, affinity, `members-device`, overlay access for members by §17's maps and grants alone, with M6's `ur tun` on macOS and Windows (§17), and publish reach receipts (§16).
 
 **Later:** ECH split mode, h3 on edge UDP 443, the PSL listing (§12), anycast.
 
@@ -12490,6 +12503,8 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   string alias_group = 36;                                                   // mail_alias_create's group (§15.8)
   uint32 versioning = 37;                   // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
                                             // only in version 2, which approvers that do not know it refuse
+  // owner decision 220: a dial or route grant's cidrs (9), target_port (27) and grant_dst's ip and port text move
+  // to bytes sealed_detail = 38 under a raised version, which joins record.proto and this fence together
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, and
 // ApprovalRequest.summary and preview as untrusted text, so an agent cannot carry trusted rdata, an alias or a
@@ -13714,6 +13729,7 @@ Missing: overlay addresses, destination routing, port mapping, per-port provider
 | Item | Value |
 |---|---|
 | Block | One IPv4 /16 per network, at random from 100.64.0.0/10 ([owner decision 28](#od-28)) except 100.64.0.0/16 (likeliest in use) and 100.100.0.0/16 (Tailscale's 100.100.100.100); no IPv6 overlay |
+| First block | Drawn at the network's bootstrap into its first config head; a head that holds none, an older network's or one bootstrapped before the bridge shipped, gets one from any config writer's next head; until then `ur tun ip` reports no block and files nothing |
 | Cycle or choose | An admin re-rolls it or picks a /16 in 100.64.0.0/10 or RFC 1918 only ([owner decision 132](#od-132); D-BRIDGE-16); hosts keep their host bits while the old block drains (17.8) |
 | Uniqueness | None across networks; a device whose networks share a block ([owner decision 23](#od-23)) routes it only to the first-joined one, warning in `ur status` and a `SidecarEvent` until an admin cycles one |
 | Host address | A random free /32 of the lower /17 outside `<block>.0.0/24`, which holds services (the resolver at `<block>.0.53`); once that is full, the highest free /32 of the upper /17, whose bottom aliases fill first-fit (17.9); never x.y.z.0 or x.y.z.255; a chosen address (`ur tun ip <ip>`) must lie in the lower /17 |
@@ -13735,7 +13751,7 @@ sender (app tun | ur tun | userspace connect.Tun)      target (sidecar-owned, Re
     UpgradeMux -> default multi client
 ```
 
-- **Insertion.** After `route := self.sendRoute.Load()` (sdk/device_local.go:5707, :5800), before the mux, so bridged :53 and :80 are never claimed. `deviceLocalSendRoute` gains §18.6's `deviceBridge` (`device.Bridge`, 17.10): nil costs one check, `Route` one atomic load plus `BridgeTable.Classify` and, where an entry offers a choice, one pin probe, two for TCP while it holds 5-tuple pins. Every send path passes here (connect/CODESTYLE.md:98); the CLI runs the same table over `ur tun` or a userspace `connect.Tun`.
+- **Insertion.** After `route := self.sendRoute.Load()` (sdk/device_local.go:5766, :5859; :2440 is a read-only check, no send path), before the mux, so bridged :53 and :80 are never claimed. `deviceLocalSendRoute` gains §18.6's `deviceBridge` (`device.Bridge`, 17.10): nil costs one check, `Route` one atomic load plus `BridgeTable.Classify` and, where an entry offers a choice, one pin probe, two for TCP while it holds 5-tuple pins. Every send path passes here (connect/CODESTYLE.md:98); the CLI runs the same table over `ur tun` or a userspace `connect.Tun`.
 - **Batches.** A burst splits in place (a 64-entry stack array) into per-link batches, keeping flow order; an all-default burst passes unchanged.
 - **Classify.** A fixed-offset destination read, then an immutable longest-prefix lookup (bart v0.30.0, MIT, 2026-09-21, https://pkg.go.dev/github.com/gaissmai/bart, at 0 allocs/op, else in-repo): ≤50 ns at 1,000 prefixes (§22 gate). Unassigned block addresses answer unreachable; carved local /32s (17.4) take the default route.
 - **HA and pins** (D-BRIDGE-7, D-BRIDGE-9). A weighted rendezvous hash of (source, destination, protocol), fragment-safe, picks among an entry's advertisers, and pins keep a live pair on its link across edits, since TCP cannot change exit mid-flow (connect/ip_remote_multi_client.go:6593-6597):
@@ -13764,30 +13780,32 @@ idle     a pin ends when its pair or connection idles out on its link: 600 s for
          through C5's per-flow IdleTimeout (17.6), raising for them alone connect's NAT idles: TCP 300 s
          (connect/ip.go:510), UDP 60 s (:446) or, in the targetless provider profile, 300 s (:578, :711),
          ICMP 60 s (connect/ip_icmp.go:157); a NAT at its flow caps still evicts an approximately least
-         recently active flow (connect/ip.go:11682)
+         recently active flow (`applyLruMapLimit`, connect/ip.go:11751)
 kept     an edit that leaves a pair's link serving it (an advertiser joining, a weight change, another
          link's health) keeps its pin until it idles out
 removed  a withdraw, retarget, address or block change, or a link rebuild, leaves the old advertiser or
          link in the entry, draining: it serves its pinned pairs, and every pair while nothing else
          remains, TCP pins for max(drain_seconds, 600 s) and others for max(drain_seconds, 5 min), a
          rebuilt link's until its strict_exp, then leaves
-health   a refusal or 3 s connect timeout marks a link down for 30 s; a down link takes no new pairs
-         while another advertiser of the entry is up, and keeps its pins
+health   a refusal, that is a CreateContract refusal, a failed ContractDestinationCheck or no sealed session
+         within 3 s of the link's first send, never a target's TCP RST, marks a link down for 30 s; a down
+         link takes no new pairs while another advertiser of the entry is up, and keeps its pins
 ```
 
-- **Links** (Q-BRIDGE-2). One multi client per target, built by `BridgeHost` (17.10): fixed `ProviderSpec{ClientId}`, `FixedWindowSize: 1`, `PostQuantumEncryption` (Required), `OverrideAllowDirect=false` until C3 (D-PROTO-10), `EnableIcmp`, never `DefaultMultiClientSettings`' six-client window; each window client carries the subject's `WindowDelegation` (17.9). Window clients are the subject's children, or on an app its forwarding client's, which act as the subject (17.10), so they expire unrefreshed at §7.4's 7-day `strict_exp`, and links rebuild after 6 days, draining under the pins above. Same-network links run Network mode, share links FriendsAndFamily, carrying private destinations only inside their aliases (17.9). Relayed bytes are debited (§20.6). Links idle-close after 600 s, as long as a TCP pin, survive default-route rebuilds, and send TCP/25 to the local NAT, so bridged TCP/25 is refused. Until C16 only sidecar-owned Required clients are targets (D-BRIDGE-5), so replies are sealed too.
+- **Links** (Q-BRIDGE-2). One multi client per target, built by `BridgeHost` (17.10): fixed `ProviderSpec{ClientId}`, `FixedWindowSize: 1`, `PostQuantumEncryption` (Required), `OverrideAllowDirect=false` until C3 (D-PROTO-10), `EnableIcmp`, never `DefaultMultiClientSettings`' six-client window; each window client carries the subject's `WindowDelegation` (17.9). Window clients are the subject's children, or on an app its forwarding client's, which act as the subject (17.10), so they expire unrefreshed at §7.4's 7-day `strict_exp`, and links rebuild after 6 days, draining under the pins above. Same-network links run Network mode, share links FriendsAndFamily, carrying private destinations only inside their aliases (17.9). Relayed bytes are debited (§20.6). Links idle-close after 600 s, as long as a TCP pin, and survive default-route rebuilds. `device.Bridge.Route` answers TCP to destination port 25 on any link entry with the reject client, through the rejects bucket below, so bridged TCP/25 never enters a link, whose multi client would hand it to its own local NAT to dial on the sender's physical network (`sendSmtpLocal`, connect/ip_remote_multi_client.go:6649, :6843); TCP/25 on the default route is untouched. Until C16 only sidecar-owned Required clients are targets (D-BRIDGE-5), so replies are sealed too.
 - **Memory.** A window client carries a full client graph (connect/ip_remote_multi_client.go:217-222), so a device short of its §18.4 budget closes its least recently used idle link; the iOS tunnel runs none until §22.9 measures one ([owner decision 100](#od-100)).
 - **Rejects.** A TCP RST or ICMP administratively prohibited (v4 3/13, v6 1/1) enters the tun through a per-source token bucket (20/s, burst 40), since connect writes policy resets unthrottled (connect/ip_smtp_policy.go:847-864).
 
 ### 17.6 Provider hook and port mapping
 
-C5 (§4) gives `LocalUserNatSettings` an `EgressHook`, called once per flow before the dial: at the TCP dial (connect/ip.go:5671-5676), the UDP open (:3597-3599) and ICMP egress (connect/ip_icmp.go:786), which every lane uses (connect/ip_provider_reliable_ingress.go:158-191). Replies are rebuilt from the flow (connect/ip.go:4075-4077, :7289-7291), so a map is DNAT with no checksum or return-path rewrite.
+C5 (§4) gives `LocalUserNatSettings` an `EgressHook`, called once per flow before the dial: at the TCP dial (connect/ip.go:5740), the UDP open (:3589) and ICMP egress (connect/ip_icmp.go:782), which every lane uses (connect/ip_provider_reliable_ingress.go:158-191). Replies are rebuilt from the flow (connect/ip.go:4075-4077, :7289-7291), so a map is DNAT with no checksum or return-path rewrite.
 
 ```go
 // connect (C5, with C13's seals, C15's key and C18's switch); a nil hook keeps today's behavior
 type EgressFlow struct {
 	Source        TransferPath
 	ProvideMode   protocol.ProvideMode
+	ContractClass protocol.ContractClass // C13: the sealed contract class; unset when the contract sealed none
 	SourceSubject Id               // C13: the sealed source subject, a consistency check only
 	SourceNetwork Id               // C13: the sealed source network, in every mode (D-PROTO-19)
 	Principal     *BridgePrincipal // the verified WindowDelegation's subject and network (17.9); nil: none
@@ -13802,9 +13820,13 @@ type BridgePrincipal struct {
 	NotAfter                  time.Time
 }
 type EgressDecision struct {
-	Verdict          EgressVerdict  // Pass | Map | Deny (RST or unreachable; never an Incident)
+	Verdict          EgressVerdict  // Pass | Map | Deny (an RST for TCP, unreachable for UDP and a silent drop
+	                                // for an ICMP echo; never an Incident)
 	Target           netip.AddrPort // Map; port 0 keeps the port
-	RuleTag          uint64         // names a (subject, rule) pair, so CloseFlows can end a subject's flows
+	RuleTag          uint64         // names a (subject, rule) pair, so CloseFlows can end a subject's flows:
+	                                // the first 8 bytes of SHA-256(subject_id (16 B) || rule_id), big-endian,
+	                                // rules 3, 4 and 7 taking one byte, the rule number, as their rule_id, so
+	                                // the engine enumerates a subject's or a rule's tags without tracking flows
 	PolicyGeneration uint64         // the published policy the decision used
 	IdleTimeout      time.Duration  // this flow's NAT idle in place of the NAT-wide one; 0 keeps the NAT's
 }
@@ -13821,28 +13843,46 @@ type EgressHook interface {
 // RST to the source and close the socket of every flow registered with ruleTag below the published
 // generation, dials in progress included
 func (self *LocalUserNat) CloseFlows(ruleTag uint64) int
+// LocalUserNatSettings holds the initial hook; this additive atomic setter swaps it on a running NAT, as
+// legacy -> pending does (17.8), and installing a non-nil hook cancels every live flow that holds no registered
+// decision, so nothing opened before the hook outlives it
+func (self *LocalUserNat) SetEgressHook(hook EgressHook)
+// optional: SetEgressHook hands a hook that implements it each NAT it is installed on, outside every lock, so
+// device.Bridge, which holds no NAT, keeps the closer and calls CloseFlows after each policy swap; unbind runs
+// when the hook leaves that NAT
+type EgressHookBinder interface{ BindFlowCloser(closer EgressFlowCloser) (unbind func()) }
+type EgressFlowCloser interface{ CloseFlows(ruleTag uint64) int } // LocalUserNat
 // C18's source half: MultiClientSettings (connect/ip_remote_multi_client.go:578) gains
-// SharePrivateDestinations []netip.Prefix, which egressRelationship's caller (:6704) admits
+// SharePrivateDestinations []netip.Prefix, which egressRelationship's callers (:6826, :7000, :7367) admit
 ```
 
 ```text
 C5's contract (D-BRIDGE-21; TCP, UDP and ICMP)
 register  ResolveEgress returns {verdict, target, rule tag, policy generation, idle}; LocalUserNat records
           them on the flow's sequence before it starts the dial (TCP), opens the socket (UDP) or sends
-          (ICMP), each under the sequence's context (connect/ip.go:5671, :3597)
+          (ICMP), each under the sequence's context (connect/ip.go:5740, :3589)
 publish   a revocation first swaps in the new policy (an atomic pointer swap, generation g+1), then calls
           CloseFlows(rule tag), which cancels every flow registered with that tag at a generation <= g, a flow
           whose dial is in progress included (its sequence context ends)
 recheck   a flow whose dial completes re-reads the published generation before it sends the SYN-ACK or
-          forwards a first byte; a newer one re-resolves the flow, and a Deny closes it with an RST or
-          unreachable; one atomic load per flow, no lock on the packet path
+          forwards a first byte; a newer one re-resolves the flow, and only the same verdict and target keep
+          it: anything else, a Map to another target included, closes it as a Deny; one atomic load per
+          flow, no lock on the packet path
+udp       a NAT with a hook runs each UDP sequence's own socket loop, its sharedSocketLifecycle off, so
+          openSocket and the hook run outside udpSend's buffer mutex (connect/ip.go's initSequence); §22.9's
+          Memory row re-measures that per-flow cost on constrained provider profiles at M8
 ```
 
 `device.BridgeEgressPolicy` implements the hook from the host's verified state (17.8):
 
 ```text
-Public, or FriendsAndFamily at an sdk provider -> Pass   // today's public-only rules follow
+at an sdk provider, any mode but Network   -> Pass   // Public and FriendsAndFamily among them: today's
+  and Service                                        // public-only rules follow
 Service                                    -> Deny   // no IP (§6.10.1)
+at a host, any mode but Network and        -> Deny   // None, Public, Stream, PublicStream and any later
+  FriendsAndFamily                                   // value (D-PROTO-6)
+contract class control or unset            -> Deny   // D-PROTO-18: no IP on control contracts; it binds Network
+                                                     // and a host's FriendsAndFamily flows, never the pass row
 no verified principal (17.9), or its       -> Deny   // D-BRIDGE-17; sdk providers skip it until C16
   subject or share revoked or suspended here
 not Sealed                                 -> Deny   // hosts are Required (D-PROTO-6)
@@ -13858,21 +13898,25 @@ FriendsAndFamily at a host (17.9)          -> C18 on and To in an alias A_i of t
 6 a served prefix                          -> AllowRoute(subject, prefix, port) ? Pass or Map(remap) : Deny
 7 public unicast                           -> AllowExit(subject, host) ? Pass : Deny
 8                                          -> Deny   // LAN without a route rule
-subject: the principal's (at an sdk provider before C16, C13's sealed subject); "no document" means a
-verified enforcing{nodoc} state (17.8); idle: a Pass or Map of a flow with a principal sets IdleTimeout to
-600 s for TCP and 5 min otherwise (17.5), and every other flow keeps its NAT's
+subject: the principal's (at an sdk provider before C16, C13's sealed subject, resolved through the compiled
+client_ids of 17.9's verify row: a sealed subject in no row is an other client (§8.4), untagged for rule 4 as
+owner decision 105 keeps for app devices, and under a document holds only autogroup:untagged's rows);
+"no document" means a verified enforcing{nodoc} state (17.8); idle: a Pass or Map of a flow with a principal
+sets IdleTimeout to 600 s for TCP and 5 min otherwise (17.5), and every other flow keeps its NAT's;
+AllowDial, AllowRoute and AllowExit read the per-subject rows the compiler expands into BridgeRules (17.8),
+never AclEngine, whose AllowRoute serves the compiler and ur bridge's previews
 ```
 
 - **Maps** match the destination as sent: `:5432` → `127.0.0.1:5432` on a hosted address, or `:8000` → `192.168.1.20:8000` ("client:port → ip:port"); ranges map by offset; ICMP echo follows rule 3. A map never targets another client's overlay address, the daemon's own listeners or a §13.7 control panel.
 - **Own listeners** (D-BRIDGE-19). Rule 0 matches the daemon's local API, MCP, git, IMAP and submission listeners on loopback and every local address, since they bind all interfaces by default ([owner decision 84](#od-84)); the state lists them (17.8), and the control channel is a socket or pipe, never a port (I-17).
 - **No document.** Rules 3-4 apply owner decisions [50](#od-50), [105](#od-105) and [120](#od-120): untagged sources keep today's reach, minus rule 0, the hosted address standing for loopback, and tagged ones get §8.5's implicit rules, so R-BRIDGE-7 holds for tagged agents, and for all once a policy exists; product copy and §2.18 disclose this (I-10).
-- **sdk exit NAT** (sdk/device_local.go:6351-6364). Until C16 the sdk installs the policy without the principal and Sealed rows and rules 1-3 and 6, since an Opportunistic provider's sources may be plaintext: Network sources keep the public exit their rules allow and, with a document, lose LAN, loopback and overlay reach.
-- **C6a.** 100.64/10 becomes non-public, as IANA lists it (RFC 6598; https://www.iana.org/assignments/iana-ipv4-special-registry/, updated 2025-10-09), so public exits refuse overlay traffic. Providers shadow-count it for a release, then drop it as `SecurityPolicyReasonSharedAddressSpace`, not as an Incident.
+- **sdk exit NAT** (`ensureRemoteUserNatProviderWithLock`, sdk/device_local.go:6421). The hook goes on that NAT, `remoteUserNatProviderLocalUserNat`, alone: the provider's own `localUserNat` stays hookless, since it carries this device's own `routeLocal` flows (:5788, :5895), which are no provider source. Until C16 the sdk installs the policy without the principal and Sealed rows and rules 1-3 and 6, since an Opportunistic provider's sources may be plaintext: Network sources keep the public exit their rules allow and, with a document, lose LAN, loopback and overlay reach.
+- **C6a.** 100.64/10 becomes non-public, as IANA lists it (RFC 6598; https://www.iana.org/assignments/iana-ipv4-special-registry/, updated 2025-10-09), so public exits refuse overlay traffic. Behind `CfaaSecurityPolicySettings.DropSharedAddressSpace`, false by default, providers shadow-count it for a release, and a later one drops it as `SecurityPolicyReasonSharedAddressSpace`, not as an Incident: a check of its own beside `isPublicUnicast`, which stays as it is, since that branch returns an Incident (connect/ip_security.go:574).
 
 ### 17.7 Subnets: advertisement, conflicts, HA
 
 - **Advertising.** `ur bridge expose <ranges>` files a `BridgeRoute` delta (17.8). As in Tailscale, approval is separate from access ([R:connect-ip](design/design-research/connect-ip.md) §2.10): a standing grant in a config head or an I-8 approval (§16.6) activates it; §8 `route` grants decide who uses it.
-- **Overlap** (D-BRIDGE-8). The longest prefix wins. An identical prefix is an HA replica (same `site_id`) or a remap, an exposed prefix from the block that the advertiser maps back keeping host bits.
+- **Overlap** (D-BRIDGE-8). The longest prefix wins. An identical prefix is an HA replica (same `site_id`) or a remap, an exposed prefix from the block, allocated as aliases are, first fit and aligned from the upper /17's bottom in one space with them (17.9), that the advertiser maps back keeping host bits.
 - **Sender conflicts.** The sdk drops and reports exposed subnet-route prefixes overlapping `connect.LocalIpv4Networks()` (connect/tun.go:490-531), so the local LAN wins until a remap or block change; where it returns nil, only 17.4's carve keeps the physical path's /32s. The overlay block follows that carve rule instead. The block and approved prefixes join `RandomLocalIpv4`'s avoid list.
 - **HA.** When no link to an advertiser of the most specific prefix can carry a packet (17.5), the router answers unreachable, never falling back to a broader prefix or the default route, which could reach another network reusing the addresses.
 
@@ -13888,11 +13932,17 @@ BridgeRoute{route_id, advertiser, prefixes, exposed_prefix, site_id,      the ad
             weight, kind subnet|exit, drain_seconds, approval}              approved (17.7)
 BridgeMap{map_id, host, match_prefix, protocol, ports, target,            the host; a delta, active once
           target_port, expires, drain_seconds, approval}                    approved (17.7)
-BridgeEgress{subject, mode auto|exits|none, exit sidecar_ids or tag_id}   an admin, owner or sponsor; a delta
-BridgeAlias{share_id, target_index, alias_prefix, host sidecar_id}        the accepting sidecar; a delta (17.9)
+BridgeEgress{subject, mode auto|exits|none; sealed: exit sidecar_ids      an admin, owner or sponsor; a delta
+             or tag_id, none under auto or none}
+BridgeAlias{share_id, target_index, alias_prefix, host sidecar_id,        the accepting sidecar; a delta (17.9)
+            host identity key}
 BridgeWithdraw{rule_id, reset|drain}                                      the rule's signer or an admin; ids only
 approval  none under a standing grant (17.7), or the I-8 decisions and this use's CanonicalAction (§16.8),
-          which readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester
+          which readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester;
+          under a multi-use decision also template_action, the template every decision's payload_sha256
+          hashes, which this use's action must match (ActionMatchesTemplate), so one decision files up to
+          its uses rules, the ledger's count binding them; with it unset the single-use reading stands
+          (owner decision 218)
 rule id   route_id or map_id: under a decision, SHA-256("urnetwork-sidecar-v1/bridge-rule" || effect_key),
           the use's §16.6 ledger key, which readers recompute, so a retry or restart files one id; under a
           standing grant, 32 random bytes; a filing of a held id may change only weight, site_id and
@@ -13901,7 +13951,7 @@ rule id   route_id or map_id: under a decision, SHA-256("urnetwork-sidecar-v1/br
           not_after
 ```
 
-- **Placement** ([owner decision 5](#od-5)). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10), so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits. Only ids show (kind, signer, subject, rule id, expiry, an egress statement's mode and, for an approved route, the advertiser and the `route` rules it serves), which readers check. Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
+- **Placement** ([owner decision 5](#od-5)). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10), so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits, nor does a `BridgeEgress` of mode `none` or `auto`, whose `sealed_body` is empty. Only ids show (kind, signer, subject, rule id, expiry, an egress statement's mode and, for an approved route, the advertiser and the `route` rules it serves), which readers check; gates and api apply each egress entry's mode in log order over `BridgeRows.egress`, as §8.9's entries after a base, and rows carry the same value at the fold. A requested `dial` or `route` grant keeps only ids in the clear too: its CanonicalAction's `rule_id`, `subject`, `grant_allow`, `expires_millis` and a subject-only `grant_dst`, while its prefixes and ports, `cidrs`, `target_port` and any `ip:` or port text in `grant_dst`, ride in `sealed_detail`, sealed as rule bodies are, under a raised version; `payload_sha256` still covers the stored bytes, so api's `match` checks ids only, and approvers and readers open the detail to render and enforce it, while a publish keeps its clear fields, which are public anyway ([owner decision 220](#od-220); §8.8, §16.8). Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
 - **Engine.** The compiler (`bridge_*.go`, §5) reads the config ([owner decision 6](#od-6)), verifies statements against §7.9's admissions and §8's grants within §8.9's latency targets, and compiles a `BridgeState` off the packet path: in the sidecar role on a daemon, and in an app's VPN component in the forwarding role, which reads the config by its forwarding Delegation's reader key ([owner decision 197](#od-197); 17.10); `device.Bridge` (17.10) applies it and later verified log entries, manages links, and swaps table and hook atomically. Before its first verified state it is pending and denies every private destination and exit; it persists its last verified state and never lowers it on unsigned input:
 
 ```text
@@ -13919,10 +13969,16 @@ persist               the anchor, the newest verified AuthPin, the signed base h
                       against the anchor and the pinned ShareKeys, and the state applies before the first
                       packet
 legacy -> pending     the sidecar enrolls, or on an app sets up its forwarding (§18.6), with
-                      Pending{network_id, genesis_sha256}
+                      Pending{network_id, genesis_sha256, sidecar_id, identity_public_key}, stored with the
+                      anchor; a later Pending for the same network and anchor, as after an admin's revocation
+                      and a new enrollment, replaces the stored id and key and changes no state
 pending -> enforcing  the first state verified against the anchor
 doc -> nodoc          only a verified base above document_seen_at whose rows say has_document = false
-any -> legacy         only this sidecar's own sign-out (its SidecarRevoke), which wipes the stored state
+any -> legacy         only this sidecar's own sign-out, which wipes the stored state: a Signed SidecarRevoke
+                      whose sidecar_id and signer_id both equal the stored sidecar_id, whose header.network_id
+                      is the stored network and whose signature verifies under the stored identity key, a
+                      chained delta in enforcing and, with no pin to chain from in pending, taken alone by
+                      ApplyDeltas; another sidecar's sign-out or an admin's revocation of this one lowers nothing
 never                 an unsigned has_document, a projection that does not chain, or a lower pin changes the
                       state; one that fails to verify leaves it and alarms
 ```
@@ -13957,6 +14013,8 @@ message BridgeIdentity { bytes sidecar_id = 1; bytes identity_public_key = 2; ui
                          bool revoked = 4; bool suspended = 5; }
 message BridgeShareKey { bytes share_id = 1; bytes public_key = 2; }   // the pinned ShareKey, Ed25519
 message Pending { bytes network_id = 1; bytes genesis_sha256 = 2; }  // legacy -> pending
+// bridge.proto also declares Pending's sidecar_id = 3 and identity_public_key = 4, which the sign-out edge above
+// checks; they join this fence in one change with protocol's fence test, whose additions list holds them now
 ```
 
 **Disposition** (D-BRIDGE-7):
@@ -13997,6 +14055,7 @@ message BridgeShareSigner {            // Y's config file per accepted share; si
   bytes signer_seed = 3;               // g's ShareSigner: a fresh 32-byte Ed25519 seed
   bytes share_cert = 4;                // its Signed ShareCert
 }
+// share pins' BridgeShareGrant (below) joins this fence when bridge.proto declares it
 ```
 
 ```text
@@ -14010,8 +14069,14 @@ verify   once per contract, before the first flow's dial: the signature, by the 
          subject, and it is neither superseded, revoked nor void), or by a ShareSigner that share signers
          admit; window_client_id = the contract's source; window_client_public_key = the
          sealed session's peer key (C15); target_sidecar_id = this host; not_after_ms ahead; network_id =
-         C13's sealed network; C13's sealed subject resolves through §5's binding log to subject_sidecar_id,
-         else deny and alarm
+         C13's sealed network; C13's sealed subject is among subject_sidecar_id's client_ids in the compiled
+         rules, one map lookup, else deny: its current bound client and every id the compiler bound to it
+         in the last 7 days, the longest a window client lives (§7.4), each binding verified against the
+         subject's pinned identity key off the packet path; off that path the compiler looks a denied id up
+         (GET /sidecar/identity?client_id=, §5.15) and adds it at its next compile if its binding names that
+         subject, so an older generation's window client recovers on its next contract, alarming only if it
+         names another sidecar or none; a share link skips this clause, keeping the signature, ShareCert and
+         network_id checks
 use      the principal {subject, network, share, not_after} rides that source's flows; the hook rechecks the
          subject, or a share's grant, against the state per flow (one lookup), so a SidecarRevoke, Suspend
          or share revocation denies it and CloseFlows ends its flows, and not_after_ms lapses it; a source
@@ -14019,22 +14084,52 @@ use      the principal {subject, network, share, not_after} rides that source's 
 target   the sender's link admits a contract only if destination_client_public_key is the target's current
          SidecarIdentityBinding client key, verified against its pinned identity key
          (GET /sidecar/identity/<sidecar_id>, cached per link), or for an app host the device client key its
-         live forwarding Delegation names, which its identity key signed (§18.6's host row)
+         live forwarding Delegation names, which its identity key signed (§18.6's host row); on a share link
+         the identity key is the one Y's BridgeAlias pinned for T_i's host (share pins, below)
 cost     ~200 B (~350 B with a ShareCert) and one Ed25519 verification (~50 µs) per contract per link, and
          one per new ShareCert
 ```
 
 - **Egress spec.** A subject's default route goes to an approved exit, or nowhere (app devices: `NetworkPeer` with `PostQuantumEncryption`, v1, §18); §8.10's gate refuses Public contracts under `exits` or `none`.
-- **Shares** ([owner decision 86](#od-86)). X's `ur bridge invite` files §8.11's admin-approved share (a `route` or `dial` grant to `network:Y`) with a 256-bit code and seals its targets T_i (index, host `sidecar_id`, ports or prefix) under K = HKDF-SHA256(code, "urnetwork-sidecar-v1/bridge-share"), which the server, holding the code's hash, cannot derive. Y's `accept-invite`, approved by a Y admin, runs the preflight below, aliases each target with an equal-length A_i in Y's block (`BridgeAlias` deltas) and returns the aliases sealed under K. Y routes A_i over a share link to T_i's host (resolved through §5's binding log), whose hook maps A_i to T_i, keeping host bits. Y's approving admin device also generates the share's Ed25519 ShareKey, which certifies a ShareSigner per generation of Y's config (share signers, below); its public key, sealed under K, enters X's share grant at X's activating approval, and X's host verifies the `WindowDelegation`s those signers sign, while Y's routers and the contract gate (§8.10) enforce Y's grants: §8.11's intersection is these points. X's host checks the share and that the signer is one every current Y config reader holds, never Y's per-subject grant, so the intersection holds against a modified Y reader or a compromised operator, not both together: on an operator-minted contract, any current Y reader, one Y's policy denies included, reaches X's granted targets, within X's grant (17.12, 17.17).
+- **Shares** ([owner decision 86](#od-86)). X's `ur bridge invite` files §8.11's admin-approved share (a `route` or `dial` grant to `network:Y`) with a 256-bit code and seals its targets T_i (index, host `sidecar_id`, ports or prefix, and the host's identity public key) under K, which the code derives and the server, holding the code's hash, cannot (share seal, below). Y's `accept-invite`, approved by a Y admin, runs the preflight below, aliases each target with an equal-length A_i in Y's block (`BridgeAlias` deltas, each copying its T_i's host identity key, so Y's routers pin the host from Y's own signed log) and returns the aliases sealed under K. Y routes A_i over a share link to T_i's host (resolved through §5's binding log), whose hook maps A_i to T_i, keeping host bits. Y's approving admin device also generates the share's Ed25519 ShareKey, which certifies a ShareSigner per generation of Y's config (share signers, below); its public key, sealed under K, reaches X, whose approving admin's device pins it, with K, in a `BridgeShareGrant` config file in the act that files the share's GrantActivate (share pins, below), and X's host verifies the `WindowDelegation`s those signers sign, while Y's routers and the contract gate (§8.10) enforce Y's grants: §8.11's intersection is these points. X's host checks the share and that the signer is one every current Y config reader holds, never Y's per-subject grant, so the intersection holds against a modified Y reader or a compromised operator, not both together: on an operator-minted contract, any current Y reader, one Y's policy denies included, reaches X's granted targets, within X's grant (17.12, 17.17).
+
+```text
+share seal (§8.11; api-9's tables)
+K          HKDF-SHA256(code, salt x_network_id, info "urnetwork-sidecar-v1/bridge-share"), 32 B
+sealed     nonce (24 random B a seal) || XChaCha20-Poly1305(K, nonce, body, ad), with ad =
+           "urnetwork-sidecar-v1/bridge-share/" || label || 0x00 || x_network_id || y_network_id ||
+           u64be(version): y_network_id is 16 zero bytes for targets, which X seals before any accept, and
+           version is the table version network_bridge_share stores
+labels     targets: BridgeShareTargets, each T_i's index, host sidecar_id, ports or prefix and host identity
+           public key; aliases: BridgeShareAliases, each A_i by index; share-key: the ShareKey's public key;
+           shortfall: refused_no_space's figures; proto3 bodies in protocol/bridge, each padded by a bytes pad
+           field to a multiple of 256 B
+open       a failed open refuses the share and alarms, with no fallback
+holders    a multi-use code's accepters all hold K, so a seal proves only a code holder; X's approving admin
+           is what pins one ShareKey to one share (share pins)
+```
+
+```text
+share pins
+X's pin    the config file bridge/share-grant/<share_id hex>, a BridgeShareGrant{share_id, grant_id,
+           share_public_key, target_table_sha256, table_key} that X's approving admin's device writes in a
+           head in the act that files the GrantActivate it names, a config file as BridgeShareSigner is
+           (§7.9); table_key is K, which X's hosts need to open Y's alias table and map A_i to T_i; the
+           compiler fills BridgeState.share_keys only from a file whose grant_id is a live grant
+Y's pin    each T_i carries its host's identity public key, which Y's approving device copies into the
+           BridgeAlias body, so Y's routers pin the host from Y's own signed log and the target row checks
+           the host's binding against that key
+```
 
 ```text
 preflight  (D-BRIDGE-20) on Y's approving device before any BridgeAlias, since the server sees no prefix
 size       aliases live in the upper /17 (17.4), so a target wider than /17 is refused_too_large
-space      each A_i is a free aligned block of its target's length in the upper /17, overlapping no alias
-           and no host /32 spilled there, a /32 alias avoiding x.y.z.0 and x.y.z.255; none free:
-           refused_no_space, the shortfall sealed under K
-allocate   first fit from the upper /17's bottom, aligned, while spilled hosts take its top; overlapping /24
-           requests get disjoint blocks; a draining alias keeps its block until its drain ends
+space      each A_i is a free aligned block of its target's length in the upper /17, overlapping no alias,
+           exposed prefix (17.7) or host /32 spilled there, a /32 alias avoiding x.y.z.0 and x.y.z.255;
+           none free: refused_no_space, the shortfall sealed under K
+allocate   first fit from the upper /17's bottom, aligned, in one space with exposed prefixes, while spilled
+           hosts take its top; overlapping /24 requests get disjoint blocks; a draining alias keeps its
+           block until its drain ends
 status     network_bridge_share.accept_status: active | refused_too_large | refused_no_space
 ```
 
@@ -14083,7 +14178,7 @@ bound        a sidecar Y removed is admitted on new contracts until a later gene
 | Repo | Change |
 |---|---|
 | connect (X9) | §4.6's C5, C6a, C13 and C14 (M4), C15's key (M1), C16 before app devices host, C18 for shares (M6); not C6b, since providers terminate flows without a tun |
-| sidecar | Root `bridge_*.go`: statements, the compiler that builds `BridgeState`, forwards, and forwarding's setup and signer, the compiler and signer also linked into apps' VPN components among the root's forwarding files (§18.10). `device/` (`device.Bridge`, D-SDK-20): table, pins, links, `BridgeEgressPolicy`, principals, aliases, routes, the per-link resolver and zone, and 17.8's states, importing connect and `protocol/bridge` only. `cli/` wires `device.Bridge` to the root's state producer for `ur tun` and `ur bridge` and holds `ur tun`'s OS tun (`golang.zx2c4.com/wireguard/tun`, MIT) and the userspace stack, out of every sdk binding (Q-SDK-5) |
+| sidecar | Root `bridge_*.go`: statements, the compiler that builds `BridgeState`, forwards, and forwarding's setup and signer, the compiler and signer also linked into apps' VPN components among the root's forwarding files (§18.10). `device/` (`device.Bridge`, D-SDK-20): table, pins, links, `BridgeEgressPolicy`, principals, aliases, routes, the per-link resolver and zone, and 17.8's states, importing connect and `protocol/bridge` only. `cli/` wires `device.Bridge` to the root's state producer for `ur tun` and `ur bridge` and holds `ur tun`'s OS tun (`golang.zx2c4.com/wireguard/tun`, MIT) and the userspace stack, out of every sdk binding (Q-SDK-5); on Windows `ur tun` neither bundles nor fetches wintun.dll: it loads one beside `ur.exe` or at the installed app's path only once its SHA-256 and Authenticode signer match windows/app/tools/fetch-deps.ps1's pins (0.14.1), since it runs elevated, and otherwise prints where to get it, so the release zip holds no DLL ([owner decision 222](#od-222)) |
 | sdk | Both insertion points and the exit-NAT hook through §18.6's `deviceBridge`; `DeviceLocal` implements `BridgeHost`; route export (§18); in every app's VPN component, forwarding's following, compile and signing on its forwarding client ([owner decision 197](#od-197); §18.6) |
 | server | No rule tables; `network_bridge_share`; gates read `BridgeRows`; the forwarding client's `forward_only` mark (§7.4) |
 | apps | Out of scope (owner rule 6): running forwarding in every VPN component, always on, and applying exported routes, a chosen block included, are §18's app work |
@@ -14146,7 +14241,7 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 **D-BRIDGE-5 (proposed).** Links run Required to a fixed target with one window client, relay-only until C3, never count-capped; targets are sidecar-owned until C16, after which an app device hosts on its device client's sdk provider, in that client's network only. *Why:* D-PROTO-6, D-PROTO-10; owner decisions [66](#od-66), [197](#od-197).
 
-**D-BRIDGE-6 (proposed).** Bridge rules are signed config-repo statements, sidecars' own as sealed deltas in the authorization log; gates see only reach rules and `BridgeRows`. *Why:* [owner decision 5](#od-5); no prefixes, addresses or ports reach the server (I-4).
+**D-BRIDGE-6 (proposed).** Bridge rules are signed config-repo statements, sidecars' own as sealed deltas in the authorization log; gates see only reach rules and `BridgeRows`, applying an egress statement's clear mode in log order, and a requested grant's prefixes and ports ride sealed in its CanonicalAction ([owner decision 220](#od-220)). *Why:* [owner decision 5](#od-5); no prefixes, addresses or ports reach the server (I-4).
 
 **D-BRIDGE-7 (proposed).** Revocations reset both ends at once. Edits move no live pair off a link that still serves it while the pin table has room, and drain a removed advertiser or address for max(`drain_seconds`, 600 s) for TCP and max(`drain_seconds`, 5 min) otherwise. New pairs take the new rule, as do new TCP connections of pairs pinned to a draining link, but for 5 min after an entry first offers a choice new UDP and ICMP pairs, which cannot be told from live ones, follow the pre-change link. Pins key on the rendezvous pair, exist only where an entry offers a choice, and a full table leaves a pair unpinned, refusing nothing (17.5). *Why:* revocation is a security event; an edit should not break live TCP; [owner decision 66](#od-66) allows overload protection, not count caps.
 
@@ -14205,7 +14300,7 @@ Without an active grant, these commands print the approval prompt and wait (§16
 
 ### 17.16 Interfaces
 
-- **Provides:** `device.Bridge`, `device.BridgeEgressPolicy`, `device.BridgeHost`, `BridgeStatus`; the compiler and forwarding's signer, which apps' VPN components link (§18.6, §18.10); `protocol/bridge/bridge.proto`'s `BridgeState`, `BridgeIdentity`, `BridgeShareKey`, `Pending`, `BridgeRows`, `WindowDelegation`, `ShareCert`, `BridgeShareSigner` and 17.8's statements; 17.8's states, route export, reach events (§16), the `ur tun` resolver (§12.9).
+- **Provides:** `device.Bridge`, `device.BridgeEgressPolicy`, `device.BridgeHost`, `BridgeStatus`; the compiler and forwarding's signer, which apps' VPN components link (§18.6, §18.10); `protocol/bridge/bridge.proto`'s `BridgeState`, `BridgeIdentity`, `BridgeShareKey`, `Pending`, `BridgeRows`, `WindowDelegation`, `ShareCert`, `BridgeShareSigner`, share pins' `BridgeShareGrant`, the share seal's `BridgeShareTargets` and `BridgeShareAliases`, and 17.8's statements; 17.8's states, route export, reach events (§16), the `ur tun` resolver (§12.9).
 - **Consumes:** §7.9's config repo, authorization log (`AuthPin`, entries, `StatementHeader`), deltas and `team` hints, and its forwarding Delegations ([owner decision 197](#od-197)); §7.4's `strict_exp`; §8 grant chains, `AclEngine`, approvals, suspension, contract gate, shares; §10's generations; §11.12's `secret` kind; §6 `Signed` and §6.11's `SignedType`, Required, §6.10.1; §5 identities, the binding log, `GET /sidecar/identity/<sidecar_id>`, `Sidecar.Authorize`, `SidecarEvent`; §16.6's decisions and `effect_key`; §12.9; §18 `deviceBridge`, forwarding's setup and the device RPC's status mirror; §20.6 debits; §4 C5, C6a, C13, C14, C15, C16, C18.
 - **Subprotocol messages:** none; rules ride the config repo (§6.11 leaves MessageType 0x19 unused). `Signed` types 0x1901-0x1909 are 17.8's statements, `WindowDelegation` and `ShareCert`; `BridgeShareSigner`, a config file, takes none (17.9).
 - **API routes:** statements through §7's `POST /network/config/delta`; shares through §8's `POST /acl/invite` and `POST /acl/accept-invite`, which carry the sealed tables, the accept status included; `GET|PUT /network/bridge/share/<share_id>` (Client, a sidecar of either network: read both tables, or replace its own at a higher version).
@@ -14228,13 +14323,13 @@ Without an active grant, these commands print the approval prompt and wait (§16
 | A full pin table leaves pairs unpinned, so an edit can move their live flows | Low | Medium | One pin per pair, only where an entry offers a choice; nothing refused ([owner decision 66](#od-66)); `ur bridge` counts unpinned pairs; §22.9's mobile churn case |
 | After an uncovered agent's reap, new bridge deltas wait for a config rotation (§8.12) by a config writer or the agent's admitting device, a wrapped one by rotation alone (§7.10; owner decisions [128](#od-128), [144](#od-144)) | Medium | Medium | No admin needed ([owner decision 128](#od-128)); covered agents' reaps need none (§10.5); withdrawals never wait; `ur bridge` shows the wait |
 | A tun's overlay address leaks in WebRTC (libwebrtc's 100.64/10 handling is unverified) | Unknown | Low | A §22 test before `auto` assigns one |
-| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; Q-SDK-7's budget, a compile past it keeping the last state and alarming; links fail closed meanwhile |
+| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of [owner decision 216](#od-216), a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |
 | Between the app's runs an app's forwarding role follows the log unwitnessed, so an operator that withholds a revocation from it keeps a revoked subject reaching that device | Low | Medium | the sidecar role's witnessed pin at each run (§18.6); daemon hosts witness by HeadCheck (§6.4); it needs a malicious operator, and the subject's own revocation still ends it at every other device |
 
 ### 17.18 Phasing
 
-- **v0, M4 (same network; Linux and WSL2 first):** C5 with its dial fence, C6a, C13 with `WindowDelegation`s, C14; statements in the config repo and 17.8's states; router, hook (rule 0 included), userspace stack; `ur tun` on Linux; private names via `ur tun`'s resolver and C14's seam, dark on app paths; forwards, expose and egress under I-8 approvals; HA, pins, dispositions, block changes and the CGNAT carve; sidecar-owned hosts; the sdk insertion behind `EnableBridge`. Blocked by §7.9's config repo and authorization log (M2), §8's grant chains and gates, and C13.
-- **v0, M8** (with §18's app hosts): forwarding in every app's VPN component, with its own keys, compile and signing ([owner decision 197](#od-197)): sending from M8, hosting after C16 in the device client's network, iOS links after §22.9's measurement, private names on app paths.
+- **v0, M4 (same network; Linux and WSL2 first):** C5 with its dial fence, C6a, C13 with `WindowDelegation`s, C14; statements in the config repo and 17.8's states, the rule table and the compile of `BridgeRows` landing at M2 with §7.9's records, though nothing files a bridge statement until M4; router, hook (rule 0 included), userspace stack; `ur tun` on Linux; private names via `ur tun`'s resolver and C14's seam, dark on app paths; forwards, expose and egress under I-8 approvals; HA, pins, dispositions, block changes and the CGNAT carve; sidecar-owned hosts; the sdk insertion behind `EnableBridge`. Blocked by §7.9's config repo and authorization log (M2), §8's grant chains and gates, and C13.
+- **v0, M8** (with §18's app hosts): forwarding in every app's VPN component, with its own keys, compile and signing ([owner decision 197](#od-197)): sending from M8, hosting after C16 in the device client's network, once M8's entry has measured the plaintext an Opportunistic peer has in flight at C16's latch ([owner decision 224](#od-224)), iOS links after §22.9's measurement, private names on app paths.
 - **v1:** cross-network shares through C18, with ShareKeys, per-generation ShareSigners and the preflight, and `ur tun` on macOS and Windows (M6); P2P after C3 (§6).
 - **Later:** L3 delivery, multi-hop maps, IPv6 subnet routes.
 
@@ -14253,7 +14348,7 @@ This section owns `sdk/sidecar.go` and its binding gates, host services, wakes, 
 | R-SDK-3 | Device integration (ip addr, port forward) via abstractions the Sidecar implements | PLAN.md:31 |
 | R-SDK-4 | Bindings link only the sidecar core, never `mcp/` or `cli/` | PLAN.md:7 |
 | R-SDK-5 | gobind types only; exports pass mobileexports, the C ABI and js | x/mobile bind/gen.go:480-512 |
-| R-SDK-6 | iOS extension within its executable ceiling, 52,428,800 B today and raised only by a reviewed budget (Q-SDK-7), and a 32 MiB Go soft limit | sdk/build/check_apple_size.sh:9; apple/app/extension/TunnelMemoryBounds.swift:139,143 |
+| R-SDK-6 | iOS extension within its executable ceiling, 52,428,800 B today and 56,623,104 B from M4 ([owner decision 215](#od-215)), and a 32 MiB Go soft limit | sdk/build/check_apple_size.sh:9; apple/app/extension/TunnelMemoryBounds.swift:139,143 |
 | R-SDK-7 | No server holds keys or plaintext | CONVENTIONS §0 |
 | R-SDK-8 | Quick burner: "Must log in, runs a new DeviceRemote in browser" | cli/UI.md:160-164 |
 | R-SDK-9 | With no connected remote, "start a local device that listens" | cli/UI.md:67 |
@@ -14277,7 +14372,7 @@ Two roles (owner decisions [87](#od-87), [197](#od-197)). The forwarding role is
 
 | Host | Forwarding role | Sidecar role | Client (X10) | Secrets | Budget |
 |---|---|---|---|---|---|
-| iOS | network extension; 18.10's budget (proposed; Q-SDK-7) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |
+| iOS | network extension; 18.10's budget (owner decisions [215](#od-215), [216](#od-216)) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |
 | Android | VPN service | app, while open ([owner decision 197](#od-197)) | child | AndroidKeyStore; `noBackupFilesDir`; forwarding's under its own alias and files (§5.9) | 16 MiB, added |
 | Desktop apps | network extension (macOS), `urnetworkd` (Linux), app service (Windows) | `ur daemon`; app in remote mode | child after §5.8's pairing | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
 | CLI, cloud VM | none | `ur daemon` | top-level, §20.8 (cloud: tagged, ephemeral, by ReaderWraps) | §5.9 | 128 MiB; 192 MiB designated for search (§5.4) |
@@ -14336,7 +14431,9 @@ metered     a "search more" whose missing all exceeds 25 MiB on a metered link w
             waiting=metered and the byte count, until the host repeats it with AllowMetered; under 25 MiB it
             proceeds
 caps        phones keep all only below 256 MiB per network and 10% of free space, else on_demand, and evict
-            all shards unused for 30 days; the page Worker keeps 128 MiB per network; a "search more" past a
+            all shards unused for 30 days, sdk's host reading free bytes by statfs on StateDir at start and
+            before each RunBackgroundSync and passing min(256 MiB, free / 10) in settings, as the core reads
+            no platform API; the page Worker keeps 128 MiB per network; a "search more" past a
             cap searches each all shard as it lands and keeps the youngest within the cap; desktops and
             indexers keep §5.9's Search.CacheByteCount (4 GiB by default; 16 GiB on a daemon designated for
             search, which evicts no all of a repo it serves while under it)
@@ -14636,6 +14733,8 @@ func (self *SidecarSearchHandle) Cancel() // local: no Cancel reaches an indexer
 func (self *SidecarSearch) GetStatus(repoId *Id) *SidecarSearchStatus
 func (self *SidecarSearch) SetPolicy(repoId *Id, policy string, callback SidecarResultCallback) // nil repoId: every repo; "" restores the host default
 func (self *SidecarSearch) SetConditions(unmetered bool, charging bool, lowPower bool) // the app, on each change (18.7)
+func (self *SidecarSearch) SetForeground(foreground bool) // the app at start and on each lifecycle change, a page
+	// Worker's frame on tab visibility; daemon hosts never call it, and an unreported state counts as background
 func (self *SidecarSearch) RunBackgroundSync(budgetMillis int64, callback SidecarResultCallback) // an OS window; stops at the budget, resumable
 func (self *SidecarSearch) DropCache(repoId *Id, callback SidecarResultCallback)
 func (self *SidecarSearch) GetIndexers() *SidecarIndexerList // indexers that may answer this device, own first
@@ -14660,6 +14759,12 @@ func (self *SidecarDirectory) RevokeRepo(repoId *Id, callback SidecarResultCallb
 	// marker over the announcement at once, and an erasure_request that the directory's erasure runner completes;
 	// the result reads hidden, and SidecarEvent directory_erasure names a request still pending past 24 h (owner
 	// decision 181)
+type SidecarResult struct { // json in the C ABI and js
+	Ok      bool
+	Value   string // a repo_id, send_id, approval_pending:<id> or authority_pending:<proposal_id>
+	Code    string // a REVOKE_ or EVS_ code
+	Message string
+}
 type SidecarResultCallback connect.ApiCallback[*SidecarResult] // one terminal result (sdk/api.go:950)
 // Go only; gobind skips, mobileexports names each.
 func (self *Sidecar) Core() *sidecar.Sidecar
@@ -14735,17 +14840,20 @@ never       an indexer, receiver or coverage setting: those are inbound (GetRece
 |---|---|
 | mobileexports | A `mobileSidecarGoOnlyIds` map; names avoid `Proxy`, an `Rpc` suffix and a `DeviceRemote` prefix, whose broad rules hide lost methods |
 | C ABI | Nine handle types, `SidecarSearch`, `SidecarSearchHandle` and `SidecarDirectory` included, join `behavioralTypes` (sdk/cgo/gen/gen.go:48), Go-only members `skipMethods` (:182), `SidecarSettings` `jsonParamDefaults` (:158); `SidecarSecret`, `SidecarIndexer`, `SidecarDevice`, `SidecarRevokePlan`, `SidecarRevokeItem`, `SidecarSendCheck` and `SidecarSendResult` cross as JSON, as data structs do (:15), and `SidecarIndexerList`, `SidecarDeviceList`, `SidecarRevokeItemList` and `SidecarSendDomainList` as JSON arrays, as lists do (:178); listeners and app interfaces cross as function pointers |
-| js | The extension Worker's main (18.8) and `gen_types.go` types, the device revocation's among them, where `PreviewRevokeDevice` and `RevokeDevice` answer `REVOKE_NOT_CAPABLE` while the extension is alarms-only (18.4); the page Worker links no sdk (18.10), and its key origin offers no revocation, since it is read_only (18.8); `ur native-host` relays no call that §5.8 signs only on confirmation, §5.6's revocation included, answering `REVOKE_NOT_CAPABLE` itself |
+| js | The local backend carries `!js`, so sdk.wasm links no sidecar root and stays under its gate: on js `NewSidecarRemote` runs over a host-supplied `ur native-host` port, and `NewSidecarLocal` answers unsupported until the extension's own Worker (Later). The extension Worker's main (18.8) and `gen_types.go` types, the device revocation's among them, where `PreviewRevokeDevice` and `RevokeDevice` answer `REVOKE_NOT_CAPABLE` while the extension is alarms-only (18.4); the page Worker links no sdk (18.10), and its key origin offers no revocation, since it is read_only (18.8); `ur native-host` relays no call that §5.8 signs only on confirmation, §5.6's revocation included, answering `REVOKE_NOT_CAPABLE` itself |
 
 **State (D-SDK-14).** Both backends, by client generation (§5.6):
 
 ```text
 reasons     unenrolled: expired | refused | parent_lost | session_ended | keystore_lost; revoked: signed
-confirmed 401 for generation g    -> unenrolled(session_ended if its cause is session_revoked, else refused),
-                                     only if IsAuthLogoutCurrent(g) at the transition; identity, keys,
-                                     admission and pins kept
+confirmed 401 for generation g    -> unenrolled(session_ended if its cause is session_revoked, else
+                                     parent_lost for a child, which sidecar.json records at pairing or sdk
+                                     enrollment, and refused for a top-level client), only if
+                                     IsAuthLogoutCurrent(g) at the transition; identity, keys, admission and
+                                     pins kept
 strict_exp passed unrefreshed     -> unenrolled(expired)
-parent client removed or reaped   -> unenrolled(parent_lost)
+parent client removed or reaped   -> the child's confirmed 401 above, unenrolled(parent_lost): no server signal
+                                     tells it from a refusal, and the remedy is the same
 a core revocation hint, or a bind -> fetch the config: revoked(signed) only if a SidecarRevoke{sidecar_id}
   refused with sidecar_revoked       verifies against it, else unenrolled(refused) and an alarm
 re-enrollment (EnrollWithDevice,  -> offline, binding generation n+1 under the same sidecar_id
@@ -14785,7 +14893,7 @@ func (self *DeviceLocal) SetBridgeLocalAddresses(addresses *StringList) // bound
 // Device, so DeviceLocal and DeviceRemote: GetBridgeStatus() *BridgeStatus, AddBridgeStatusChangeListener(listener) Sub
 ```
 
-- **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5696, :5789, :6340-6345). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5315; [owner decision 85](#od-85)).
+- **Lifecycle.** Past legacy, `DeviceLocal` builds `device.Bridge` on its provider client and rebuilds it with the client, like subprotocols (sdk/device_local_subprotocol.go:95-110), at §17.5-§17.6's call sites (sdk/device_local.go:5766, :5859, :6421). On each change it re-reads hook and routes and passes `LocalZone()` to C14's `UpgradeMux.SetLocalZone` beside `SetBlocker` (:5385; [owner decision 85](#od-85)).
 - **Setup (D-SDK-32; [owner decision 197](#od-197)).** The sidecar role's one act for its VPN component, in each network it has joined: in process on Android, over the device RPC to the iOS extension, and from `ur daemon` through the desktop app paired per §5.8 to the macOS extension or the Windows or Linux app service; never through MCP. After it the forwarding role holds everything it needs, and the app's absence stops nothing:
 
 ```text
@@ -14839,8 +14947,12 @@ enforcing    a state its own compile verified, and the anchored deltas after it,
              document_seen_at latch (the newest pin at which has_document was true)
 stored       the anchor, the newest verified AuthPin, the signed base header and rows, the statements since,
              document_seen_at, and the config generations and compiled state its last compile used
-transitions  legacy -> pending -> enforcing{doc|nodoc}; back to legacy only on this sidecar's own sign-out
-             (its SidecarRevoke), which wipes the stored state and forwarding's keys
+transitions  legacy -> pending -> enforcing{doc|nodoc}; back to legacy only on this sidecar's own sign-out,
+             a Signed SidecarRevoke whose sidecar_id and signer_id both equal Pending's sidecar_id, whose
+             network is Pending's and whose signature verifies under Pending's identity key (§17.8's
+             any -> legacy), which wipes the stored state and forwarding's keys; another sidecar's sign-out or
+             an admin's revocation of this one lowers nothing, and a later Pending for the same network and
+             anchor replaces the stored id and key and changes no state
 never        an unverified projection, one that does not chain, a lower version or an unsigned has_document
              changes the posture; one that fails to verify leaves it unchanged and alarms
 DP1          after a device's first verified state, no restart, delay or unsigned response lowers enforcement
@@ -14873,7 +14985,7 @@ host     in D's network, the device's hosted address, maps and served prefixes r
 | JWT, refresh | an Api session holding only the child token (sdk/api.go:182-192), `strict_exp` for 7 days ([owner decision 131](#od-131)); `StartJwtRefresh` at 40-50% of lifetime; refresh carries a DPoP proof from a signer sdk/sidecar.go installs (`Api.SetDpopSigner`, Go only, from the core's ClientKey), and none is sent without one | `TokenSource()`; D-CORE-8's refresher off once the signer is installed |
 | Logout | `AddAuthLogoutEventListener` (confirmed 401, with its generation; `IsAuthLogoutCurrent` at the transition) | `Unenrolled` with a reason; `Revoked` only on a verified `SidecarRevoke` (D-SDK-14) |
 | State, secrets | `StateDir` or IndexedDB; the app's `SidecarKeyStore` | `Store()`, re-sealing tokens on refresh; `KeyStore()` |
-| Conditions, background windows | the app's `SetConditions` on each change, and its OS window calling `RunBackgroundSync` (below) | the search engine's sync windows (D-SDK-23) |
+| Conditions, foreground, background windows | the app's `SetConditions` and `SetForeground` on each change, `SetForeground` at start too, a page Worker's frame reporting tab visibility, and the app's OS window calling `RunBackgroundSync` (below); daemon hosts report no foreground, and an unreported state counts as background | the search engine's sync windows and the foreground row below (D-SDK-23) |
 
 **Network credential (I-6; [owner decision 45](#od-45)).** Same-user agents read `.auth_state` and the extension's `chrome.storage.local` (18.3), so two releases precede §7.4's stage 2 (M3): the desktop app's stops persisting `by_jwt` once the device client exists, re-authenticates for admin actions, seals `.auth_state` in an app-only OS keystore where one exists, and mints device clients `admin_refused`; the extension's stops persisting `by_jwt` in `chrome.storage.local` at each of 18.3's four writes, re-authenticating where it needs one.
 
@@ -14913,11 +15025,13 @@ control     a remote-mode Sidecar forwards Search, GetStatus and SetPolicy over 
 
 ```text
 {scp_<C>}live    EX 90; its publisher (§6.8) refreshes it every 30 s
-{scp_<C>}tok     api's projection of sidecar_push_token's {platform, token} at the revision tokrev holds;
-                 absent while the row is a tombstone (no token); written only by step 0's apply script
+{scp_<C>}tok     api's projection of sidecar_push_token's {platform, token} at the revision tokrev holds, as
+                 <platform>\n<token>, which only the sender parses; absent while the row is a tombstone (no
+                 token); written only by step 0's apply script
 {scp_<C>}tokrev  the newest revision of C's row applied to tok, a decimal string; no TTL
 {scp_<C>}ack     the highest hint stream id C's connect stack acked; EX 3600; written only while tok exists
-{wakeq_<shard>}  16 streams in their own slots: {c, t, v, h, hint_millis, due_millis}, MAXLEN ~10000
+{wakeq_<shard>}  16 streams in their own slots: {c, t, v, h, hint_millis, due_millis}, MAXLEN ~10000; the
+                 writer's hash of C picks the stream, since the sender reads all 16
 {tokgen_<n>}     16,384 sentinels, one per hash slot (n the least integer whose tag hashes to it), each holding
                  the run_id of the master that served the slot at its last reconcile (step 5); like tok and
                  tokrev, no TTL, so volatile-ttl never evicts them
@@ -14985,7 +15099,9 @@ WK5  while the slot's sentinel names its serving master, tok moves only up its r
 ```text
 APNs  apns-push-type background, apns-priority 5   {"aps":{"content-available":1},"t":"mail","v":42}
 FCM   data message, priority high                  {"data":{"t":"mail","v":"42"}}
-      t: mail | team | evs | core (§6.8's topic with any id stripped); v: that topic's version; never an id
+      t: mail | team | evs | core (§6.8's topic with any id stripped); v: that topic's version; never an id;
+      APNs's v is the stored decimal string's digits as a JSON integer, never through a float and with no
+      exponent, within uint64, and FCM's stays a string
 ```
 
 - **Directory notices (D-SDK-28).** From M8 a phone leases the team directory's `q/<target>/` prefixes for the targets its member approves, and the notice path of each of its own pending requests (§16.11, §11.10), so a decision, a denial's included, rewrites a notice the phone leases. Their hints are `evs:<repo_id>` hints like any lease's (§6.8), so they are wake-class: a request or its decision wakes the phone under topic class `evs`, naming no directory, target or request.
@@ -15004,29 +15120,42 @@ carrier:   first HTTPS-only: §6 long-poll, §10, §11 (config repo too) | later
 
 - **Phasing (owner decisions [15](#od-15), [26](#od-26), [76](#od-76)).** HTTPS-only needs neither C4 nor C17, so the page Worker, on 18.10's `sidecar_http` leg, serves ur.io/recurd from RS1 (M4) and the team console from RS2 (M6).
 - **Carrier.** C4's `GOOS=js` WebSocket carrier, templated on sdk/device_rpc_platform_js.go, needs the server to admit `chrome-extension://` ids, the `moz-extension:` scheme (per-install UUID origins, https://bugzilla.mozilla.org/show_bug.cgi?id=1372288) and the key origin `https://sidecar.ur.io`, safe since auth is a bearer frame.
-- **Identity (owner decisions [112](#od-112), [114](#od-114), [126](#od-126), [144](#od-144)).** Each Worker but the quick burner is an untagged member device, admitted per §5.6 with the member's consent (§8.5) and counted in `config_admissions` (§20.4). The page Worker reads records, receipts and the config's names, tags, groups and policy (owner decisions [46](#od-46), [67](#od-67)); it is admitted `read_only` (§7.9), so every verifier refuses what it signs but its sign-out `SidecarRevoke`, its own ReaderKeys, KeyPackages and leaf's MLS maintenance under its r scopes (§10.6), read receipts and HeadCheck replies, and it is never approval-capable (§16.6) or a key deliverer. The extension's service worker, or on ur.io the key origin, mints one `admin_refused`, `strict_exp` top-level client declaring no egress (§20.8), re-minted under its `sidecar_id` after expiry (§5.5); the Worker gets only its token, never listens, and serves only its own pages. `nativeMessaging`, which warns of "cooperating native applications", stays optional (Firefox 87+, https://bugzil.la/1630415).
+- **Identity (owner decisions [112](#od-112), [114](#od-114), [126](#od-126), [144](#od-144)).** Each Worker but the quick burner is an untagged member device, admitted per §5.6 with the member's consent (§8.5) and counted in `config_admissions` (§20.4). The page Worker reads records, receipts and the config's names, tags, groups and policy (owner decisions [46](#od-46), [67](#od-67)); it is admitted `read_only` (§7.9), so every verifier refuses what it signs but its sign-out `SidecarRevoke`, its own ReaderKeys, KeyPackages and leaf's MLS maintenance under its r scopes (§10.6), read receipts and HeadCheck replies, and it is never approval-capable (§16.6) or a key deliverer. The extension's service worker, or on ur.io the key origin by its sign-in hand-off ([owner decision 219](#od-219)), mints one `admin_refused`, `strict_exp` top-level client declaring no egress (§20.8), re-minted under its `sidecar_id` after expiry (§5.5); the Worker gets only its token, never listens, and serves only its own pages. `nativeMessaging`, which warns of "cooperating native applications", stays optional (Firefox 87+, https://bugzil.la/1630415).
 - **Key origin (D-SDK-18).** ur.io pages frame it and message it by exact origin:
 
 ```text
 pages       https://ur.io/recurd, the console and the quick tools render views and hold no sidecar key, sidecar
             token or wrapped secret, though ur.io's account panel keeps a network byJwt in localStorage while a
-            member is signed in on that browser; the team console shows the directory, and the drops of the repos it reads with
-            their states and the device command; it files no request or decision and never dry-runs, signs
-            or cancels a drop (read_only, admin_refused; D-SDK-29)
+            member is signed in on that browser, with which a page calls /auth/code-create for the key
+            origin's sign-in and hands it the one-time code (owner decision 219); the team console shows the
+            directory, and the drops of the repos it reads with their states and the device command; it files
+            no request or decision and never dry-runs, signs or cancels a drop (read_only, admin_refused;
+            D-SDK-29)
 key origin  https://sidecar.ur.io/v1/, served direct from the lb, never through Cloudflare, which terminates
-            https://ur.io (§2.8 EX7, §19.5's W10; owner decision 211), serves only the signed loader and
-            sidecar.wasm, under CSP default-src
-            'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 18.9's hosts; frame-ancestors
-            https://ur.io; its Worker holds IndexedDB, the non-extractable WebCrypto root key and its token
+            https://ur.io (§2.8 EX7, §19.5's W10; owner decision 211), serves only a promoted build's loader
+            and sidecar.wasm, both listed in the release's signed SHA256SUMS (§4.10), the loader pinning
+            sidecar.wasm's SHA-256 and checking it before instantiating: signed means listed in those sums,
+            so anyone can compare the served bytes, and no browser verifies them on load, so EX7 stands
+            (owner decision 221); its CSP is exactly default-src 'none'; script-src 'self'
+            'wasm-unsafe-eval'; connect-src 'self' <18.9's hosts>; frame-ancestors https://ur.io, worker-src
+            falling back to script-src; its Worker holds IndexedDB, the non-extractable WebCrypto root key
+            and its token
+sign-in     the hand-off from the ur.io session (owner decision 219): the page calls /auth/code-create and
+            posts the one-time code; the key origin runs /auth/code-login, mints the page Worker's client with
+            POST /network/auth-client and drops the network token, and re-mints the same way under its
+            sidecar_id after a lapse
 messages    postMessage, accepted only when event.origin is exactly https://ur.io in production (per-env
-            lists; never localhost or http:); requests name an operation (list, read view, record view,
-            directory view, drop states, search, search more, search cancel, search status, search policy,
-            sign-out); replies carry plaintext views only, search hits as display fields and states;
+            lists; never localhost or http:); requests name an operation (sign-in, list, read view, record
+            view, directory view, drop states, search, search more, search cancel, search status, search
+            policy, sign-out); replies carry plaintext views only, search hits as display fields and states;
             GetSecret's strings never leave the Worker
-storage     same-site with ur.io, so not partitioned in first-party use (§22.9's reload test checks it); the
-            search cache is its own IndexedDB store, written only by the lock holder (D-SDK-24); a browser
-            clears an origin's storage bucket in its entirety (https://storage.spec.whatwg.org/, §7), the
-            keychain, MLS state and token with the cache: under storage pressure unless the bucket is
+storage     one IndexedDB database per network, urnetwork-sidecar-v1-<network_id>, each its own sidecar
+            instance with its own instance document and WebCrypto root key, so two networks' page Workers
+            share nothing and the instance row's Web Lock covers everything a Worker writes (owner decision
+            217); same-site with ur.io, so not partitioned in first-party use (§22.9's reload test checks it);
+            the search cache is its own IndexedDB store, written only by the lock holder (D-SDK-24); a browser
+            clears an origin's storage bucket in its entirety (https://storage.spec.whatwg.org/, §7), every
+            network's keychain, MLS state and token with the cache: under storage pressure unless the bucket is
             persistent, and in Safari after seven days of Safari use without user interaction on the site,
             Home Screen web apps keeping their own count
             (https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/); so the frame calls
@@ -15063,7 +15192,8 @@ leaves      each page Worker is a read_only MLS leaf of each group it reads, wit
 disclosed   script running in https://ur.io (served code, Cloudflare's altered page script, an XSS, an
             extension with page access) can request views while it runs, never the Worker's key or token, so
             that access ends with it; it can also take the account panel's network byJwt from localStorage
-            while a member is signed in on that browser, which reaches network-credential routes, but a client
+            while a member is signed in on that browser, and the sign-in hand-off's one-time code as it
+            crosses the page, which reaches network-credential routes, but a client
             minted with it gets no admission, key or plaintext without a consented device (§5.6, §7.9; §2.4,
             §2.10)
 ```
@@ -15091,7 +15221,11 @@ generations  each poll authenticates its own client_id; a reaped or revoked clie
 suspended    a tab suspended over 36 min is reaped; on resume its polls get 401 and the page offers
              re-enrollment, since a memory-only keychain cannot rejoin
 cost         one narrow-row write per ephemeral page per 5 min (about 33/s for 10,000 pages) and one
-             index probe per lease row past 35 min per run; auth_time keeps its hourly refresh
+             index probe per lease row past 35 min per run; auth_time refreshes on a connect and on a
+             strict_exp refresh, GET /auth/refresh taking refreshClientAuthTimesInTx's one-hour gate
+             (server/model/network_client_model.go:3882), a child's source client included, so an HTTPS-only
+             client refreshing at 40-50% of 7 days writes it about once per 3 days and the 30-day idle sweep
+             never takes it in use; no poll writes network_client (§6.16)
 ```
 
 ### 18.9 Headless and cloud agents
@@ -15102,7 +15236,7 @@ cost         one narrow-row write per ephemeral page per 5 min (about 33/s for 1
 | 2 | H1 via HTTP CONNECT (`HTTPS_PROXY`) | §4 C8 (M4), including API dials | everything |
 | 3 | HTTPS-only | the required hosts below | evs, records, long-poll; no streams, sockets or mail send |
 
-[Owner decision 49](#od-49) runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path:
+[Owner decision 49](#od-49) runs `ur` in the VM on rung 2, as a desktop daemon without mail receipt. `ur` embeds its allow-list and the issuer SPKIs of its hosts, `ur status` probes each entry, and mmm publishes the list at `https://ur.io/recurd/hosts/v1.json`, versioned by path, as `{"version":1,"hosts":[{"host":"...","tcp":443,"need":"..."}]}` generated from the one table `ur` embeds:
 
 ```text
 host                          tcp  need
@@ -15133,16 +15267,21 @@ excluded    every other root file, under !ios_extension as connect-facing ones c
             mail_, smtp_, tls_, dns_, socket_, search_, record_, directory_, indexer_ and the subprotocol but
             push hints; evs writes and every repo but config; approvals, enrollment and recovery; mcp/, cli/
             and every <svc>service
-make size   from M4 the leg adds at most 4 MiB of executable over today's binding, and the signed iOS
-            extension's ceiling rises from 50 MiB to 54 MiB (proposed; Q-SDK-7)
-memory      forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling, inside the iOS tunnel's 28 MiB
-            target and 32 MiB soft limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md): rows stream, never held
-            whole, and a compile that would pass the bound leaves the last verified state in force and raises
-            bridge_alarm (proposed; Q-SDK-7); measured on surrogates only (owner decision 100)
+make size   from M4 the leg adds at most 6 MiB (6,291,456 B) of executable over today's binding, measured
+            stripped as the shipped binding is, and the signed iOS extension's ceiling rises from 50 MiB to
+            54 MiB (56,623,104 B) (owner decision 215)
+memory      forwarding's Go heap at most 4 MiB steady, inside the iOS tunnel's 28 MiB target and 32 MiB soft
+            limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md); a compile is transient, and in the iOS and
+            macOS extensions it is admitted only when 5 x rows + 2 x head + 1 MiB fits a 10 MiB per-compile
+            cap and the room under a 30 MiB process ceiling, about 4,300 devices at the tunnel's connected
+            baseline, waiting for room under provider load; a larger network keeps its last verified state
+            on that device, applies every revocation it can check, raises bridge_alarm once a statement that
+            could narrow reach has waited 10 minutes and never goes pending for that wait, while it compiles on
+            Android, Windows and Linux (owner decision 216); measured on surrogates only (owner decision 100)
 ```
 - **Pruning.** No `net/rpc`, templates or dynamic reflect lookups (sdk/build/mobile_method_pruning_test.go:27); the worker needs protobuf v1.36.12, the first that keeps pruning (sdk/build/go.mod:98; sdk/js/go.mod:97 has v1.36.11), and sidecar generates with v1.36.11 (§6).
 - **Tags.** sdk's sidecar-role files carry `!ios_extension`, and §5.10's Keychain tag keeps gomobile's darwin slices (sdk/dependency_boundary_test.go:91) on the app's `SidecarKeyStore`.
-- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (proposed; Q-SDK-7; D-SDK-20); memory is measured on surrogates only ([owner decision 100](#od-100)).
+- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above ([owner decision 215](#od-215); D-SDK-20); memory is measured on surrogates only ([owner decision 100](#od-100)).
 - **wasm (D-SDK-19).** A connect-only js/wasm main is already 55.0 MB unstripped (53.2 MB stripped; 2026-11-03), since Go links every imported package's `init` functions and initialized variables, connect's IP stack included (42 gVisor packages, §4.6). The page Worker's `sidecar.wasm` therefore links no connect package; the Q-SDK-1 spike before M4's entry decides C17 for the extension only ([owner decision 22](#od-22)):
 
 ```text
@@ -15180,7 +15319,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 | Full sidecar in network processes | always on | iOS: 4,690,096 B headroom, 32 MiB shared, jetsam kills the VPN; desktop: root, LocalSystem or sandboxed processes (apple/app/app.xcodeproj/project.pbxproj:1291) hold content | rejected (owner decisions [87](#od-87), [197](#od-197)) |
 | The keyless device role: the app compiles the rules and signs each link's delegation | no key or config reader in the tunnel; a 1 MiB budget | new rules and new links wait for the app, and a sleeping app stalls links | not taken ([owner decision 197](#od-197)) |
 | A forwarding sidecar of its own in the VPN component, admitted as a device | hosts verify as today | two sidecars per app device in policy, `ur devices` and admissions; filings signed for a sidecar the app does not hold; with self_admit off an admin admits every phone's | rejected: a forwarding Delegation of the device's own sidecar (D-SDK-32) |
-| A second, minimal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen (proposed; Q-SDK-7) |
+| A second, minimal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen ([owner decision 215](#od-215)) |
 | A forwarding Delegation that expires within 90 days, as an auth key's | bounds a copied forwarding key with no revocation | forwarding stops where the app has not run for 90 days | rejected: it ends with its sidecar, its revocation or a newer one ([owner decision 197](#od-197)) |
 | Forwarding in the root package, linked whole | no new package | links every root `init` and `protocol` descriptor into the jetsam-bound tunnel | rejected: `sidecar/device` with the listed root files (Q-SDK-5; D-SDK-20) |
 | Hosted sidecar like ProxyDevice | no install | keys and plaintext on servers | ruled out (owner directive 2026-11-03; [owner decision 26](#od-26)) |
@@ -15239,7 +15378,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **D-SDK-22 (proposed).** Apps search through `SidecarSearch` (18.5): one call streams replacing pages of hits labeled verified, confirmed, possible, near or unmatched, each naming the indexer that verified it if one did, with progress that names the bytes to fetch, any metered wait and the remote state. *Why:* gobind's limits; one implementation of masking and ranking on every host.
 
-**D-SDK-23 (proposed).** Hosts report network and power conditions, apps through `SetConditions` and browsers through the key-origin frame, and apps grant background time through `RunBackgroundSync`; the Go core reads no platform API. *Why:* none is portable across gomobile, the C ABI and js, and the OS decides when a backgrounded app may run.
+**D-SDK-23 (proposed).** Hosts report network and power conditions and the foreground, apps through `SetConditions` and `SetForeground` and browsers through the key-origin frame's network, battery and tab visibility, and apps grant background time through `RunBackgroundSync`; the Go core reads no platform API. *Why:* none is portable across gomobile, the C ABI and js, the OS decides when a backgrounded app may run, and without a foreground report each search opens its own contract, the timing [owner decision 188](#od-188)'s windows exist to hide.
 
 **D-SDK-24 (proposed).** The page Worker links the search engine and keeps its search cache in its own IndexedDB store, written only by the Web Lock holder; pages receive hit views only, and the quick burner searches its buckets in memory and never fetches all. *Why:* [owner decision 76](#od-76)'s one browser runtime; eviction and Safari's 7-day rule make the cache disposable by design.
 
@@ -15263,17 +15402,17 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 **Q-SDK-1.** [X14] What runs the extension's sidecar? **Decided by owner 2026-11-03 ([owner decision 26](#od-26)):** (a), a slimmed `sidecar.wasm` Worker, HTTPS-only first, and meanwhile (c), the native companion to a desktop `ur daemon`; never a hosted sidecar (18.8). *Residual:* 18.10's size spike, which decides C17 for the extension's streaming Worker only ([owner decision 22](#od-22)); pages use the `sidecar_http` leg (D-SDK-19).
 
-**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 ([owner decision 87](#od-87)):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). **Amended by owner 2026-11-09 ([owner decision 197](#od-197)):** every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) runs the device's IP and port forwarding and nothing else of sidecar: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet, always on whenever the component runs, with no setting that turns it off, and self-contained, with its own forwarding key, taking rule changes directly so it never waits on the app (18.4, 18.6; D-SDK-32). [Owner decision 87](#od-87) holds for everything else, and on Android the sidecar role runs only while the app is open, as on iOS. *Residual:* Q-SDK-7, forwarding's budget in the iOS extension.
+**Q-SDK-2.** Where does the sidecar run beside a network process (PLAN.md:28, :31)? **Decided by owner 2026-11-03 ([owner decision 87](#od-87)):** (a), in the iOS app and the desktop `ur daemon`; network processes stay keyless (D-SDK-1). **Amended by owner 2026-11-09 ([owner decision 197](#od-197)):** every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) runs the device's IP and port forwarding and nothing else of sidecar: its overlay address, port forwards into it, routes to other devices' subnets and its own advertised subnet, always on whenever the component runs, with no setting that turns it off, and self-contained, with its own forwarding key, taking rule changes directly so it never waits on the app (18.4, 18.6; D-SDK-32). [Owner decision 87](#od-87) holds for everything else, and on Android the sidecar role runs only while the app is open, as on iOS. *Residual:* none; forwarding's budget in the iOS extension, Q-SDK-7, is decided (owner decisions [215](#od-215), [216](#od-216)).
 
 **Q-SDK-3.** Do phones get wake pushes? **Decided by owner 2026-11-03 ([owner decision 88](#od-88)):** (b), content-free APNs and FCM wakes from the first app hosts (M8; 18.7). *Residual:* none.
 
 **Q-SDK-4.** How does the ur.io quick burner run (cli/UI.md:164)? **Decided by owner 2026-11-03 ([owner decision 76](#od-76)):** (b), an ephemeral, labeled wasm sidecar in the page (18.8; Q-CTX-2). *Residual:* none.
 
-**Q-SDK-5.** Cross-cutting (D-REPO-2). Where does the iOS device role's code live? Even with engines in `<svc>service` packages ([owner decision 104](#od-104)), a root-package device role links every root init and `protocol` descriptor into the iOS extension. **Closed by peer review 2026-11-04:** (b) now. The device role is the leaf package `sidecar/device`, importing only connect and a generated `sidecar/protocol/bridge` (D-SDK-20); the root never imports it, and the iOS extension links neither the root nor `protocol`. Conditions: `protocol/bridge` imports only std and protobuf ([owner decision 52](#od-52)'s test); `make check` fails the ios_extension leg if its deps include the sidecar root or `sidecar/protocol`; `make size`'s 1 MiB gate stays and passes at M4; §2.10 gains the routing-integrity row; §17.10's `sidecar.Bridge` becomes `device.Bridge`. [Owner decision 197](#od-197) then put the config follower and compiler in every VPN component, so the extension links `sidecar/device` with the root's forwarding files and `protocol`'s config, acl, evs and gkm descriptors under 18.10's allow-list, the root still never importing `device/`, and the size gate follows Q-SDK-7. *Residual:* none.
+**Q-SDK-5.** Cross-cutting (D-REPO-2). Where does the iOS device role's code live? Even with engines in `<svc>service` packages ([owner decision 104](#od-104)), a root-package device role links every root init and `protocol` descriptor into the iOS extension. **Closed by peer review 2026-11-04:** (b) now. The device role is the leaf package `sidecar/device`, importing only connect and a generated `sidecar/protocol/bridge` (D-SDK-20); the root never imports it, and the iOS extension links neither the root nor `protocol`. Conditions: `protocol/bridge` imports only std and protobuf ([owner decision 52](#od-52)'s test); `make check` fails the ios_extension leg if its deps include the sidecar root or `sidecar/protocol`; `make size`'s 1 MiB gate stays and passes at M4; §2.10 gains the routing-integrity row; §17.10's `sidecar.Bridge` becomes `device.Bridge`. [Owner decision 197](#od-197) then put the config follower and compiler in every VPN component, so the extension links `sidecar/device` with the root's forwarding files and `protocol`'s config, acl, evs and gkm descriptors under 18.10's allow-list, the root still never importing `device/`, and the size gate follows [owner decision 215](#od-215). *Residual:* none.
 
 **Q-SDK-6.** May a phone or browser ask one of its network's indexers to search all and return verified hits, instead of downloading all and showing possible matches? **Decided by owner 2026-11-05 (owner decisions [175](#od-175), [177](#od-177), [178](#od-178)):** (c), amended: in v1 a phone's "search more" asks one of its network's designated indexers that reads the repo end to end over the sidecar subprotocol (Required mode) and gets verified hits, an owner-bound repo only on its owner's consented device, replies padded to 16 KiB steps (§11.14's remote search, with 18.4's notice and setting); a network has no indexer by default, so by default a phone downloads all and shows possible matches ([owner decision 155](#od-155)), as it does whenever none is online (options (a), never, and (b), later and opt-in, not taken). Browser tabs, whose Workers carry no connect client, keep the download (18.17's Later). *Residual:* none; connect's byte reports are [owner decision 176](#od-176) (§6's Q-PROTO-4).
 
-**Q-SDK-7.** Cross-cutting (§4.7, §22.9). What budget does forwarding get in the iOS network extension, now that [owner decision 197](#od-197) has it follow the config repo and compile its own rules there? *Options:* (a) the `ios_extension` leg links the root's forwarding files (18.10) and adds at most 4 MiB of executable, the signed extension's ceiling rising from 50 MiB to 54 MiB, with forwarding's Go heap at most 4 MiB steady and 8 MiB while compiling inside the tunnel's 28 MiB target, all measured on surrogates ([owner decision 100](#od-100)); (b) keep `make size`'s 1 MiB by writing a second, minimal config follower, policy evaluator and compiler in `sidecar/device`, two implementations of security-critical rules to keep equal; (c) on iOS alone the app compiles and signs as the keyless role did, which would need [owner decision 197](#od-197)'s point 3 amended. *Recommendation:* (a): one implementation, and the extension's executable ceiling is an artifact ceiling the owner has raised by review before (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md), while runtime memory stays inside today's targets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.
+**Q-SDK-7.** Cross-cutting (§4.7, §22.9). What budget does forwarding get in the iOS network extension, now that [owner decision 197](#od-197) has it follow the config repo and compile its own rules there? **Decided by owner 2026-11-10 (owner decisions [215](#od-215), [216](#od-216)):** (a), one implementation of the rule table, with measured numbers: the `ios_extension` leg adds at most 6 MiB (6,291,456 B) of executable, measured stripped as the shipped binding is, and the signed extension's ceiling rises from 50 MiB to 54 MiB (56,623,104 B) ([owner decision 215](#od-215)); a compile in the iOS and macOS network extensions is admitted only when 5 × rows + 2 × head + 1 MiB fits a 10 MiB cap and the room under a 30 MiB process ceiling, about 4,300 devices at the tunnel's connected baseline, and a larger network keeps its last verified state on that device, applies every revocation it can check and raises `bridge_alarm`, never going pending for a statement that waits on a compile ([owner decision 216](#od-216)). A second follower in `sidecar/device` (b) and the app compiling on iOS (c) were not taken; 18.10, §4.7 and §22.9 carry the numbers. *Residual:* none; a compile past the cap for larger teams on iOS is review-phase work.
 
 ### 18.14 Departures from PLAN.md
 
@@ -15289,7 +15428,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 - **Subprotocol messages:** `SearchRequest` (`SEARCH`, 0x1404) and `SearchReply` (`SEARCH_RESULT`, 0x1405) (§6.11, §11.14): app hosts send requests to designated indexers and take replies, as requesters only, never serving (M10).
 - **API routes:** `POST /sidecar/push-token {platform: apns|fcm, token}` (Client; sets or, when empty, deletes the caller's wake token; M8).
 - **Tables:** `sidecar_push_token(client_id, platform, token, rev, update_time, removed_time, slot)` (api; migration ≥926, §19's MG8; `rev`, 18.7's revision; `slot`, the hash slot of `{scp_<C>}`, indexed for 18.7's reconcile, and `update_time` for its sweep; a removal keeps the row as a tombstone without platform or token; no foreign key: each path that removes a client tombstones its row and sets `removed_time` in that transaction, and 18.7's sweep deletes the row 24 h later); `network_client_lease(client_id, seen_time, close_sha256)` (api; MG1, with the auth keys that mint the first ephemeral clients; read by the reaper; deleted with its client; 18.8); Redis `{scp_<C>}live` and `{scp_<C>}ack` (publishers), `{scp_<C>}tok` and `{scp_<C>}tokrev` (the token projection and its revision, which api, the push sender and taskworker change only through 18.7's apply script), `{tokgen_<n>}` (taskworker's 16,384 per-slot sentinels) and `{wakeq_<shard>}` (owning services, evs included, write; the push sender reads; 18.7); `{scp_<C>}hb` (api, the poll lease; 18.8).
-- **Services and config:** `CheckOrigin` on connect's H1 upgrader (18.3); `https://ur.io` and the key origin `https://sidecar.ur.io` in `cors_origins` (warp/services/services.go:676) for api (auth included), evs and gkm; the key origin's loader, CSP and frame-ancestors, the page Worker, its label and `hosts/v1.json` (mmm); extension `offscreen` and optional `nativeMessaging`; native-host manifests for URnetwork's extension ids only; APNs and FCM credentials (§19).
+- **Services and config:** `CheckOrigin` on connect's H1 upgrader (18.3); `https://ur.io` and the key origin `https://sidecar.ur.io` in `cors_origins` (warp/services/services.go:676) for api (auth included), evs and gkm, the lb's CORS headers extended additively (warp/warpctl/config.go:2136-2138): `Access-Control-Allow-Methods` gains PUT and DELETE, `Access-Control-Allow-Headers` `DPoP`, `If-Match` and `If-None-Match`, and `Access-Control-Expose-Headers` `ETag` and `Retry-After`, the lb still sending no `Access-Control-Allow-Credentials`; the key origin's loader, CSP and frame-ancestors, the page Worker, its label and `hosts/v1.json` (mmm), with a minimal ur.io/recurd page at `mmm/ur.io/astro/src/pages/recurd/` on mmm's `sidecar` branch: the served-code label, the key-origin frame, the sign-in hand-off, a record list, one record view and download links, unstyled beyond the site's layout, its visual design out of scope ([owner decision 223](#od-223)); extension `offscreen` and optional `nativeMessaging`; native-host manifests for URnetwork's extension ids only; APNs and FCM credentials (§19).
 - **App work this design assumes (out of scope; external releases, §23):** running forwarding in every VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services) whenever it runs, with no setting that turns it off, its keys and state in the stores §5.9 names, and Android's VPN service in a process of its own ([owner decision 197](#od-197)); `GetBridgeRoutes`, a chosen RFC 1918 block included ([owner decision 132](#od-132)), lifted from §17.3's tun exclusions (Windows: WFP permits; Linux: the complement set), and `SetBridgeLocalAddresses` from the platform's routes and DNS settings; 18.4-18.7's seams (receiver, the composer's send check and results, autofill, push, approvals, alarms, presence key, §5.8's pairing); re-minting the device client after its forwarding role's first state (18.6); for search, 18.7's OS windows and conditions, the metered prompt with its byte count, labels for possible matches, 18.4's notice and setting, the indexer list and "verified by" labels; the directory view and access-request approvals; the drop dialog and pending drops' cancel (18.5); and, as prerequisites of §7.4's stage 2 (M3), 18.7's credential rules: the desktop app release and the extension release that stop persisting `by_jwt`.
 - **Assumptions about other sections:** §14 sends the extension's outbox mail as it does phones'; §6.8's hint script returns `tok` and `live` for 18.7's enqueue; §16.6 defines approval-capable hosts and the presence profiles; §5.6's `recovery_window` and §7.9's `RecoveryVeto` cover an admission by a binding the cascade restored as they do a recovery-signed authority statement, and §7.9's cascade list names each device that sealed to a binding it voids ([owner decision 149](#od-149)); §17.10's `BridgeHost` and `BridgeStatus` live in `sidecar/device`, which D-SDK-20's tunnel may import; §5.8's control mode carries a remote-mode app's forwarding setup (18.6) to its daemon, which signs the forwarding Delegation and mints the forwarding client for that app alone; §17.4 carves the local addresses `SetBridgeLocalAddresses` passes; §7.7's ephemeral mint inserts the lease row and §7.8's responses return its `close` once, §7.10's ephemeral job applies 18.8's predicate, §6.16's poll writes only the lease, never `network_client`, and §6.18 phases `POST /sidecar/close` with it (M1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read; FS-36 kills one master and restarts one from an older dump, and expects a count only for step 2's failed XADDs, and FS-120 delays applies past later commits; each path that removes a client (§7.10) tombstones its token row in that transaction; §19.10's api step raises every row's rev by 2^32 after a Postgres restore; §22.9's Browsers row opens two tabs on one network (18.8's instance rule); §5.8's control mode carries `Search` streams, status and policy calls to the daemon (18.7) and returns untrusted hits' text to a caller that asks for it; §6.4's control contracts carry SEARCH where reach does not (D-PROTO-21); §11.14 owns remote search's eligibility, failover and merge and cites 18.4's notice; §16.11 defines the directory, its notices and their `q/` leases; §5.4 carries the new event kinds and fields and the `Directory` and remote-search settings, and §5.9 keeps 18.4's overrides, modes and notice answers in its non-derived search state; §5.4's `Devices`, `PreviewDeviceRevoke` and `RevokeDevice` carry §5.6's rules and `REVOKE_` codes, and §5.8's control mode carries a remote-mode app's revocation calls and presence evidence to its daemon, the first call returning the act's countersigned bytes under Presence (D-SDK-30), and §7.9's presence row and §6.9 define the countersignature that `SignWithPresence`'s evidence becomes (owner decisions [185](#od-185), [187](#od-187)).
 
@@ -15298,7 +15437,7 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `sidecar.wasm` misses its goal or starts slowly | High | High | `sidecar_http` leg from M1; spike before M4; C17 only for the extension |
-| An iOS tunnel jetsam regression reaches users unmeasured, now that forwarding compiles there ([owner decision 197](#od-197)) | High | High | `make size` from M4; surrogates ([owner decision 100](#od-100)); the forwarding leg's file list and budget (D-SDK-20; proposed; Q-SDK-7); a compile past its bound keeps the last state and alarms |
+| An iOS tunnel jetsam regression reaches users unmeasured, now that forwarding compiles there ([owner decision 197](#od-197)) | High | High | `make size` from M4; surrogates ([owner decision 100](#od-100)); the forwarding leg's file list and budget (D-SDK-20; owner decisions [215](#od-215), [216](#od-216)); a compile past its cap keeps the last verified state and alarms |
 | A compromised VPN component forwards as its sidecar and reads the config until its forwarding Delegation ends | Low | Medium | the forwarding key signs only that sidecar's delegations, and its client is `forward_only` (D-SDK-32); no mail, evs data, MLS, identity or recovery key there; `DelegationRevoke` or the sidecar's revocation (§2.10) |
 | Android's VPN service shares the app's process, so a compromise there reaches the sidecar role while the app is open | Medium | High | app work runs the service in a process of its own (18.15); forwarding's keys under their own alias and files (§5.9) |
 | Phone-only burner users miss mail, as wakes are throttled or dropped | High | High | [owner decision 12](#od-12)'s copy via `GetReceiverCoverage`; mail indexers ([owner decision 150](#od-150)); 18.7's deferred check (WK2) and per-slot reconcile; token projections in revision order, swept each pass (WK5) |
@@ -15316,13 +15455,13 @@ miss        if the leg still exceeds the goal at M4's entry, RS1 ships it under 
 
 ### 18.17 Phasing
 
-- **v0, CLI hosts (M1-M4):** §5.17's daemon; 18.8's lease, reap predicate and close capability, with `POST /sidecar/close`, for §7's first ephemeral clients (MG1, M1); 18.7's credential rules, in the desktop app and extension releases, before §7.4's stage 2 (M3); M4's dark seam, posture, zone call and id refusal in `sidecar/device`, with the forwarding leg's file and descriptor rule; 18.9's host list with C8 (M4); `make size` from M4, at Q-SDK-7's budget.
-- **v0, ur.io (M4, RS1):** ur.io/recurd's `read_only` page Worker in its key origin (18.8), on the `sidecar_http` leg (import rule from M1, size measured from M2) within 18.10's gate or miss rule.
-- **v1 (M6, RS2):** the team console on that Worker, with the directory's read-only views; `SignEdgeLogin` for §13's `members-device`; the directory's seams (`SidecarDirectory`, `CreateRepo`'s `private`, access-request approvals; §16.11's announce entries), in app hosts from M8; after M8, §17.9's egress spec on app devices.
+- **v0, CLI hosts (M1-M4):** §5.17's daemon; 18.8's lease, reap predicate and close capability, with `POST /sidecar/close`, for §7's first ephemeral clients (MG1, M1); 18.7's credential rules, in the desktop app and extension releases, before §7.4's stage 2 (M3); M4's dark seam, posture, zone call and id refusal in `sidecar/device`, with the forwarding leg's file and descriptor rule; 18.9's host list with C8 (M4); `make size` from M4, at [owner decision 215](#od-215)'s budget.
+- **v0, ur.io (M4, RS1):** the minimal ur.io/recurd page ([owner decision 223](#od-223)) and its `read_only` page Worker in its key origin (18.8), signing in by the ur.io session's hand-off ([owner decision 219](#od-219)), on the `sidecar_http` leg (import rule from M1, size measured from M2) within 18.10's gate or miss rule.
+- **v1 (M6, RS2):** the team console on that Worker, with the directory's read-only views; the `sdk.Sidecar` shell, dark, with `SignEdgeLogin` for §13's `members-device`, app hosts joining it at M8; the directory's seams (`SidecarDirectory`, `CreateRepo`'s `private`, access-request approvals; §16.11's announce entries), in app hosts from M8; after M8, §17.9's egress spec on app devices.
 - **v0, app hosts (M8, BS1):** Android and iOS local mode; desktop remote mode with §5.8's pairing; forwarding in every app's VPN component ([owner decision 197](#od-197)): its keys, setup, forwarding Delegation and forwarding clients, its own following, compile and signing, posture and private names on app paths, hosting after C16 in the device client's network, iOS links after §22.9; Android's sidecar role only while the app is open; `SidecarApprovals` and alarms ([owner decision 126](#od-126)), with the member's device list and revocation and, in team networks, revocation proposals' cosigns (D-SDK-30); wakes ([owner decision 88](#od-88)), directory notices' included, and the directory view's policy; the receiver and coverage APIs and the indexer prompt; from M9, the send check and results (§14.5); the quick tools; the native companion ([owner decision 26](#od-26)).
 - **v1, M10 ([owner decision 169](#od-169)):** 18.4's search policy and targets, `SidecarSearch`, conditions and 18.7's windows on app hosts, and remote search's requester side (modes, notice, `GetIndexers`, the foreground Hello and §6.10's keepalive), at the later of M10's and M8's exits, in team networks at the later of those and M6's (§23); the page Worker's search operations, conditions and cache; the quick burner's in-memory buckets; remote mode's search stream; with format 2 (§11.7), `Write`'s versioning argument, the drop calls, `History`'s states and `EVS_DROPPED` (owner decisions [173](#od-173), [183](#od-183)) and the console's drop view, and the directory's cards and index with phones' directory "search more".
 - **Later:** the extension's own Worker, Firefox session mode, browser streams (C4), C17 for the extension's streaming Worker if the spike needs it; browser Workers and ephemeral CLI hosts as remote-search requesters, browsers after C4.
-- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension ([owner decision 45](#od-45)); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting; Q-SDK-7, the `ios_extension` leg's budget and iOS forwarding.
+- **Blocking:** §7.4's stage 1 blocks every host, stage 2 the first desktop sidecar beside the app or the extension ([owner decision 45](#od-45)); the page Worker ships within the `sidecar_http` leg's gate or, at M4's entry, its miss rule (18.10); C16, device hosting, once M8's entry has measured its latch ([owner decision 224](#od-224)).
 
 ## 19. Server services: deployment, data stores, operations
 
@@ -17296,9 +17435,9 @@ Parentheses hold T1 tests; the rest run in T2 and T3. Inline server paths (contr
       sidecar_id and a released old-generation logout event leave the identity and the new enrollment; a forged core
       revocation with no SidecarRevoke gives unenrolled and an alarm, a signed one revoked, on local and remote
       backends; the ios_extension leg links of the root only §18.10's forwarding files and registers only that
-      list's descriptors (protocol's config, acl, evs and gkm, and protocol/bridge's), make size within
-      Q-SDK-7's budget (M4); forwarding in the VPN component (owner decision 197): its posture restored before
-      the first packet, rules and revocations applied with the sidecar role stopped, its forwarding client
+      list's descriptors (protocol's config, acl, evs and gkm, and protocol/bridge's), make size within owner
+      decision 215's budget (M4); forwarding in the VPN component (owner decision 197): its posture restored
+      before the first packet, rules and revocations applied with the sidecar role stopped, its forwarding client
       refreshed by its own proofs, nothing but its sidecar's delegations signed by its key (the §17 row); wakes and
       liveness: FS-36, FS-37; phone and page search within §18.4's budgets: FS-77, remote search's requester side:
       FS-83; the device list and revocation through each adapter: FS-98; the ios_extension leg links no index code
@@ -18437,23 +18576,25 @@ FS-36  §18    wake dispatch on the 3-master cluster, the client's and the shard
 FS-37  §18    an HTTPS-only page polling for 2 h, then killed with no unload: one reap 30-36   FI-2        T2+T3  M4-out
               min after its last poll, or at once on its close beacon; old-generation polls
               keep nothing alive; two tabs reap independently; an ephemeral connected 2 h,
-              then disconnected 2 min, is not reaped, and is 35-36 min after the disconnect
+              then disconnected 2 min, is not reaped, and is 35-36 min after the disconnect;
+              a page Worker polling and refreshing for 31 days on a fake clock stays active
 FS-38  §17    a FriendsAndFamily contract whose sealed source network differs from the         FI-11       T2+T3  M4-out;
               dialer's verified identity: refused before data; an operator-minted window                          shares at
               client with a correctly HMACed contract claiming subject S opens zero upstream                      M6-out
               sockets (TCP, UDP, ICMP), and a valid WindowDelegation is the positive twin,
               while mismatched key, expired, wrong target and wrong network fail and a
-              substituted target key fails the sender's check; on a share link (C18), a
-              ShareSigner-signed delegation is the positive twin, while a ShareCert below the
-              host's newest verified generation, expired, over 7 days out or not signed by the
-              pinned ShareKey is refused, after a host restart from 17.8's persisted state
-              too; a sidecar Y removed is refused new contracts once a later generation's
-              ShareCert reaches the host, at most 7 days after its removal; with no renewal
-              for 7 days the share lapses; a current Y reader with no Y grant on X, its valid
-              signer and an operator-minted contract to an X-granted target: the honest gate
-              refuses the contract, the minted one reaches only X's granted targets and
-              ports, and the run records X's grant and the gate, never Y's bypassed router,
-              as what enforced (§8.11)
+              substituted target key fails the sender's check, on a share link against the
+              host key Y's BridgeAlias pinned; on a share link (C18), a ShareSigner-signed
+              delegation is the positive twin, while a ShareCert below the host's newest
+              verified generation, expired, over 7 days out or not signed by the pinned
+              ShareKey is refused, after a host restart from 17.8's persisted state too; a
+              sidecar Y removed is refused new contracts once a later generation's ShareCert
+              reaches the host, at most 7 days after its removal; with no renewal for 7 days
+              the share lapses; a current Y reader with no Y grant on X, its valid signer and
+              an operator-minted contract to an X-granted target: the honest gate refuses the
+              contract, the minted one reaches only X's granted targets and ports, and the run
+              records X's grant and the gate, never Y's bypassed router, as what enforced
+              (§8.11)
 FS-39  §14,15 report intake: gzip XML and JSON aggregates count once per reporter and          FI-11       T2     M5-out;
               report_id, and an ARF body canary appears in no log; at M7, delayed DNS evidence                    the rest
               and REQUIRETLS added by an active second hop: labels as stated                                      at M7-out
@@ -18591,7 +18732,9 @@ FS-55  §19    migration N+1 applied while binary N runs; binary N restarted on 
               (rollback); then N+1's gate enabled                                                                 Gn-out
 FS-56  §17    the hook resolves a flow and its dial waits at a barrier; a revocation swaps the FI-11       T2+T3  M4-out
               policy and runs CloseFlows; the dial completes: reset before any byte reaches
-              the target, for TCP, UDP and ICMP; the twin without a revocation forwards
+              the target, for TCP and UDP, and for ICMP no echo reaches the target and none is
+              answered, a silent drop; the twin without a revocation forwards; a bridged
+              TCP/25 SYN gets the reject client's answer, and no local dial follows it
 FS-57  §11    a batch PUT applied and its response dropped; evs killed after the batch write   FI-1,2,6    T2+T3  M2-out
               and before the head CAS; the push id retried on evs2, which writes a second
               record and commits; the first process's delayed head PUT fails; evacuation keeps
@@ -19743,7 +19886,7 @@ Beyond the schedules:
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
 - **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
-- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within Q-SDK-7's on an ios32 cell whose forwarding role compiles a 5,000-device team's config ([owner decision 197](#od-197)), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
+- **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within owner decisions [215](#od-215) and [216](#od-216)'s on an ios32 cell whose forwarding role compiles a 3,000-device team's config within its 10 MiB cap and refuses a 5,000-device one with bridge_alarm (owner decisions [197](#od-197), [216](#od-216)), a hooked NAT's per-flow UDP loop re-measured on constrained provider profiles at M8 (§17.6), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/ reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 
 ### 22.10 Internal review gates
@@ -19973,7 +20116,7 @@ Each milestone is a vertical slice (PLAN.md:36) with entry and exit reviews and 
 | M1 Core, subprotocol | §5, §6 and §7 v0 up to the config repo, with the narrow `ur-cli`; §20's `sidecar:` blocks, counters and 20.8; C3, C11, C12, C15 | stage 1 and D-TEAM-14 enforced; Required RPC after §6.4's M1 identity check; push resyncs after a resident restart; envelope fuzzed; daemon on darwin, linux and windows, in `preview_networks` only (D-TRUST-3) |
 | M2 Storage | §7.9's config repo, key authority with its presence countersignature (owner decisions [185](#od-185), [187](#od-187), [189](#od-189), [192](#od-192)), leaf rule and `IndexerSet`, §8's projection, gates and owner consent, §6's HeadCheck and witness bound, and §10 v0 with agents on wraps (owner decisions [3](#od-3), [5](#od-5), [110](#od-110), [112](#od-112)-[114](#od-114), [126](#od-126)-[129](#od-129), [144](#od-144), [150](#od-150)); §11 v0a and v0b, with git-mode tip CAS, creation-time placement and the write budget with its accounts, wallet and P0 reports (owner decisions [140](#od-140), [141](#od-141), [145](#od-145), [186](#od-186), [190](#od-190)); format 1's reservations ([owner decision 163](#od-163); D-PHASE-9): format 2's numbers, the drop's EvsPush flag 256 and field 33, the erasure cut's flag 512 and field 34 with EvsHead's index_epoch, window bit 5 and read states `drop_pending` and `dropped` among them, and the directory's (repo/'s `directory` kind with §8.5's kind default, acl.proto's `autogroup:dst-owner` atom, which the implicit document's directory rule names, and `EvsShare.expires`, both honored from M2, and config.proto's `ServiceSettings.directory`); the slot rule as a format-1 check (§11.8's 5h and step 6; §11.22); specifications frozen at Gn-in and formats at Gn-out (23.8); §20's debit path, relayed bytes included; a staging file cluster on the production hosts and their PM9A3 set (§19.11) | D-KEYS-10's plan, fuzz targets and sizes, and §22.10's 0x0010 interop artifact (§10.4); 23.6's M2 schedules, FS-57 to FS-63, FS-113, FS-114's head and marker cases, FS-116 to FS-118 and FS-72's and FS-95's format-1 cases included; twenty agents, §11.15's targets and §22.8's storage benchmark, whose nvme run's gate is at most 43 KiB written per push per drive at 2× year one and 50% of rated IOPS on the PM9A3 set (D-TEST-11); servers get only §2.8's evs and gkm fields; §22.7's admission suite, consent and recovery veto included |
 | M3 Capture pilot | §16 v0 with `run_restore`, [owner decision 142](#od-142)'s tainted-run evidence and `EvsShare` readers' receipts (D-MCP-18), before which owner-bound shares stay closed (§8.19); `record.proto` frozen (23.8), CanonicalAction's field 37 reserved for format 2 and approvers refusing an action version they do not know; the production file cluster on M2's hosts, rebuilt empty and SMART-rechecked (D-PHASE-7); the out-of-hours rota ([owner decision 143](#od-143)); §5's device revocation with its presence check and `ur devices` (D-CORE-20) | hook conformance for Claude Code, Codex and Cursor; approval crash and replay effect counts (§22.7); restore writes only attributed paths and loses no concurrent write (§22.7's restore suite, FS-115); coverage names every gap; production file cluster, re-seed drilled (§19.10); the write budget live on the production metadata set, its drive counters, SMART wear, class liabilities and each cluster's exhaustion projection in monitor (§19.6, §19.8); the hdd run's admitted mix under the 50% policy (§22.8); FS-119's cohort drill; the main dump on schedule, the sidecar dump daily, one restore drilled (19.10); §7.4's stage 2 live; pilot on personal networks ([owner decision 102](#od-102)) |
-| M4 Reach; RS1 | §8's requested grants, suspension and contract gate, with witnesses' `control` contracts (D-PROTO-18); §17 v0 with `ur tun`'s private names ([owner decision 85](#od-85)); C5, C6a, C8, C13, C14, C16; §18's dark seam; ur.io/recurd's sign-in, downloads and page Worker (§18.8; owner decisions [15](#od-15), [26](#od-26), [76](#od-76)); recurd.dev's redirect (§19.5); §20.9's escrow comparator (D-QUOTA-9) and §22.8's escrow benchmark harness, dark, with the comparator's index pending in MG6 (§19.7) | forwards, private IPs (Linux, WSL2) and model servers behind approved, expiring grants; suspension within one epoch; a Claude Code cloud agent reaches a granted port; ur.io/recurd opens a vault record; trust documents drafted |
+| M4 Reach; RS1 | §8's requested grants, suspension and contract gate, with witnesses' `control` contracts (D-PROTO-18); §17 v0 with `ur tun`'s private names ([owner decision 85](#od-85)); C5, C6a, C8, C13, C14, C16; §18's dark seam; the minimal ur.io/recurd page ([owner decision 223](#od-223)), its sign-in by hand-off from the ur.io session ([owner decision 219](#od-219)), downloads and page Worker (§18.8; owner decisions [15](#od-15), [26](#od-26), [76](#od-76)); recurd.dev's redirect (§19.5); §20.9's escrow comparator (D-QUOTA-9) and §22.8's escrow benchmark harness, dark, with the comparator's index pending in MG6 (§19.7) | forwards, private IPs (Linux, WSL2) and model servers behind approved, expiring grants; suspension within one epoch; a Claude Code cloud agent reaches a granted port; ur.io/recurd opens a vault record; trust documents drafted |
 | M5 Names, edge | §6 streams and Service edges (C9); §9, §12, §13 and §21 v0, with `tls/`, the dns edge, §7's edge login and §19.8's M5 pages (owner decisions [134](#od-134), [143](#od-143)); §14's report host | the dns edge serves the user root, signed without a DS ([owner decision 109](#od-109)); platform names and company MX off ur.network; passthrough publish; CT and zone watches alarm on a test certificate and record ([owner decision 98](#od-98)); kill switch ≤5 s; FS-66's, FS-69's, FS-76's, FS-78's and FS-92's hold cases once M10's Gn-out has passed |
 | M6 Team; RS2 with M5 | v1 of §4-§13 and §16-§21, less M10's format 2, with SCIM, custom domains, cross-network shares (C18, [owner decision 86](#od-86)), config wraps for member devices past a network's first 1,000 ([owner decision 144](#od-144)), the team directory on format 1's record streams (§16.11; owner decisions [170](#od-170), [171](#od-171), [179](#od-179)-[182](#od-182): its repo, group, `announce` entries, requests and decisions, `claims` and the instructions, `directory_list` and the request tools), `ur tun` on macOS and Windows and 24/7 on-call; the team console on the page Worker | all 133 `admin_user_id` reads classified; OIDC SSO; removal blocks writes until its Remove commits; the team record, reach receipts, verifiable log and client packets (§16.18); S13 with FS-84, FS-85, FS-86, FS-87, FS-88, FS-99, FS-100 and FS-101's M6 cases, and evs-27 in §2.8; the console shows members and policy; a custom host turns ready, and its TLS-ALPN-01 order starts, only once every lb interface is current for its map version (FS-122); Team billed; FS-76's and FS-80's team-record cases, FS-83's team cases and the directory's format-2 cases once M10's Gn-out has passed |
 | M7 Inbound mail | §9's `smtp/`; §12's mail records, TLSA and the DS; §15's receive path; mxedge on TCP 25 | SNI inbound reaches desktop, NAS and VPS mail indexers ([owner decision 150](#od-150)); DANE TLSA live; plaintext senders refused; validated labels ([owner decision 135](#od-135)), from reception-time authentication inside §15.5's bounds (FS-121); D-MAIL-9's census run, with §14's outbound probe; FS-76's and FS-78's mailbox cases once M10's Gn-out has passed |
@@ -19993,7 +20136,7 @@ M2's critical path is §10.4's subset ([owner decision 43](#od-43)'s 2-4 enginee
 
 ### 23.6 Decisions that block each milestone
 
-Peer review closed every question owner decisions [1](#od-1)-[135](#od-135) left to it on 2026-11-04; owner decisions [141](#od-141)-[145](#od-145) decided the five it raised (Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10), [owner decision 140](#od-140)'s corrected record closed Q-EVS-9, owner decisions [146](#od-146)-[166](#od-166) settled the second round and the 2026-11-05 additions, and owner decisions [167](#od-167)-[184](#od-184) answered every v1 question (Q-EVS-19 to Q-EVS-23, Q-MCP-7 to Q-MCP-9, Q-SDK-6, Q-PROTO-4, Q-ACL-11, Q-KEYS-16, Q-ABUSE-7, Q-PHASE-9 and Q-PHASE-10; 23.12, Appendix B), [owner decision 185](#od-185) the SDK fixes' question, owner decisions [186](#od-186)-[191](#od-191) the final meta review's (Q-EVS-24, which [owner decision 190](#od-190) refines, Q-PROTO-4's answer, which owner decisions [188](#od-188) and [191](#od-191) amend, and the presence countersignature's reach), owner decisions [192](#od-192)-[196](#od-196) those of the implementation handoff, and [owner decision 197](#od-197) the apps' network extensions, whose design raised the two owner questions open now: Q-SDK-7 at M4's entry and Q-BRIDGE-8 at M8's (18.13, 17.14). The map puts each item at the review that needs it: a Gn-in needs its design closure, a Gn-out its schedules passing on their rows' tiers, each step at the Gn-out of the milestone that ships its mechanism. The owner keeps one launch call on measured data: accepting the SNI loss M7's census finds, before BS1 (D-MAIL-9; [owner decision 34](#od-34)).
+Peer review closed every question owner decisions [1](#od-1)-[135](#od-135) left to it on 2026-11-04; owner decisions [141](#od-141)-[145](#od-145) decided the five it raised (Q-EVS-8, Q-MCP-6, Q-OPS-9, Q-KEYS-15, Q-OPS-10), [owner decision 140](#od-140)'s corrected record closed Q-EVS-9, owner decisions [146](#od-146)-[166](#od-166) settled the second round and the 2026-11-05 additions, and owner decisions [167](#od-167)-[184](#od-184) answered every v1 question (Q-EVS-19 to Q-EVS-23, Q-MCP-7 to Q-MCP-9, Q-SDK-6, Q-PROTO-4, Q-ACL-11, Q-KEYS-16, Q-ABUSE-7, Q-PHASE-9 and Q-PHASE-10; 23.12, Appendix B), [owner decision 185](#od-185) the SDK fixes' question, owner decisions [186](#od-186)-[191](#od-191) the final meta review's (Q-EVS-24, which [owner decision 190](#od-190) refines, Q-PROTO-4's answer, which owner decisions [188](#od-188) and [191](#od-191) amend, and the presence countersignature's reach), owner decisions [192](#od-192)-[196](#od-196) those of the implementation handoff, and [owner decision 197](#od-197) the apps' network extensions, whose design raised two owner questions: Q-SDK-7, which owner decisions [215](#od-215) and [216](#od-216) decide for M4's entry, and Q-BRIDGE-8, open now, at M8's (18.13, 17.14). The map puts each item at the review that needs it: a Gn-in needs its design closure, a Gn-out its schedules passing on their rows' tiers, each step at the Gn-out of the milestone that ships its mechanism. The owner keeps one launch call on measured data: accepting the SNI loss M7's census finds, before BS1 (D-MAIL-9; [owner decision 34](#od-34)).
 
 ```text
 gate     design closure at Gn-in (owning sections)                            schedules passing at Gn-out (§22)
@@ -20035,8 +20178,8 @@ M3       approvals and effects; run attribution and restore's apply; harness  FS
 M4       witnesses' control contracts (§6, §8); C13's sealed source and the   FS-19's grant and share runs, FS-21,
          dial fence (§17); HTTP liveness (§18); the page Worker; the escrow   FS-37, FS-38, FS-56, FS-97 and
          comparator and index (D-QUOTA-9; §20); Q-BRIDGE-2, Q-SDK-5; the      FS-106's page Worker case
-         forwarding leg's file list and Q-SDK-7's budget (§4.7, §18.10;
-         owner decision 197)
+         forwarding leg's file list and budget, Q-SDK-7's (§4.7, §18.10;
+         owner decisions 197, 215, 216)
 M5       ALPN audience; the custom-SNI map (§13); report parsing (§14);       FS-34, FS-39's report-intake cases,
          hold kinds and abuse clocks (§21); Q-OPS-5                           FS-47's §21 case, FS-48, FS-49,
                                                                               FS-52; S7's SNI-less abuse@<root>
@@ -20710,7 +20853,7 @@ Every D- item, in section order: 460 items, 16 of them withdrawn and 1 decided b
 
 ## Appendix B. Open-questions register
 
-Every Q- item, in section order: 202 items. 173 were decided by the owner (32 of them by the 2026-11-04 entries), 11 were closed by peer review on 2026-11-04, 2 are open, all for the owner, 12 were closed by the 2026-11-03 design-review round, not by human peer review, so reviewers may reopen them (§3.11), and 4 were withdrawn. The question is a summary of 25 words or fewer. The status of a decided item gives the owner decisions that settled it, as its section cites them, with the date for a 2026-11-04 entry. The recommendation column, 15 words or fewer, gives the section's recommendation for an open item and the outcome for any other. The decider of a closed item is peer review, which may reopen one the design-review round closed.
+Every Q- item, in section order: 202 items. 174 were decided by the owner (32 of them by the 2026-11-04 entries), 11 were closed by peer review on 2026-11-04, 1 is open for the owner, 12 were closed by the 2026-11-03 design-review round, not by human peer review, so reviewers may reopen them (§3.11), and 4 were withdrawn. The question is a summary of 25 words or fewer. The status of a decided item gives the owner decisions that settled it, as its section cites them, with the date for a 2026-11-04 entry. The recommendation column, 15 words or fewer, gives the section's recommendation for an open item and the outcome for any other. The decider of a closed item is peer review, which may reopen one the design-review round closed.
 
 | Id | Question | Status | Recommendation | Decider |
 |---|---|---|---|---|
@@ -20875,7 +21018,7 @@ Every Q- item, in section order: 202 items. 173 were decided by the owner (32 of
 | [Q-SDK-4](#1813-open-questions) | How does the ur.io quick burner run (cli/UI.md:164)? | decided ([owner decision 76](#od-76)) | (b) an ephemeral, labeled wasm sidecar in the page. | owner |
 | [Q-SDK-5](#1813-open-questions) | Where does the iOS device role's code live, given root inits and protocol descriptors? | closed by peer review 2026-11-04 | (b): the leaf package `sidecar/device` over `protocol/bridge` (D-SDK-20). | peer review |
 | [Q-SDK-6](#1813-open-questions) | May a phone or browser ask one of its network's indexers to search all for verified hits, instead of downloading all for possible matches? | decided (owner decisions [175](#od-175), [177](#od-177), [178](#od-178), 2026-11-05) | (c), amended, owner decisions [175](#od-175), [177](#od-177), [178](#od-178): phones ask designated indexers; none by default. | owner |
-| [Q-SDK-7](#1813-open-questions) | What budget does forwarding get in the iOS network extension, now that it follows the config and compiles its rules there? | open | (a) +4 MiB executable, 54 MiB ceiling, 4-8 MiB heap, measured on surrogates. | owner |
+| [Q-SDK-7](#1813-open-questions) | What budget does forwarding get in the iOS network extension, now that it follows the config and compiles its rules there? | decided (owner decisions [215](#od-215), [216](#od-216), 2026-11-10) | (a): +6 MiB stripped, a 54 MiB ceiling, 10 MiB compiles (owner decisions [215](#od-215), [216](#od-216)). | owner |
 | [Q-OPS-1](#1914-open-questions) | [X13] What is the 'new file cluster' (PLAN.md:61), and where does ordering live? | decided (owner decisions [18](#od-18), [20](#od-20), [21](#od-21), [94](#od-94); owner decisions [116](#od-116), [136](#od-136)-[140](#od-140), [145](#od-145), 2026-11-04) | One-site MinIO clusters, store-ordered; PM9A3 metadata sets, a write budget, growth by whole clusters. | owner |
 | [Q-OPS-2](#1914-open-questions) | Should small objects pack, given Y2's HDD mix of ~32,000 drive operations a second against ~8,000-12,800? | closed by peer review 2026-11-04 | (b) in v0; content-id addressing reserved, so small-segment packing is a switch. | peer review |
 | [Q-OPS-3](#1914-open-questions) | Where does Postgres-held sidecar metadata live without a replica? | decided (implied by owner decisions [2](#od-2), [18](#od-18)) | Moot; storage left Postgres; D-OPS-18 dumps Postgres-held sidecar rows daily. | owner |
@@ -21473,8 +21616,8 @@ Compiled from the sections' Interfaces subsections and the tables they point to 
 | C2 | Provide-mode and size filters (SUBPROTOCOL.md §6) | Rejected: handlers see `peer.ProvideMode` and length |
 | C3 | Drop ControlId-sourced subprotocol frames unless opted in (connect/subprotocol.go:590-651); P2P carriers accept only their peer as source (connect/transport_p2p.go:2345-2347) | M1 |
 | C4 | Browser WebSocket H1 carrier (`GOOS=js`), in-band auth, Origin allowlist (§18.8) | Later, after §18's HTTPS-only worker ([owner decision 26](#od-26)) |
-| C5 | `connect.EgressHook` (`ResolveEgress`, §17.6) in `LocalUserNat`: pass, map or deny per flow, with C13's subject and `Sealed` on `EgressFlow`; `EgressDecision.IdleTimeout` replaces, for that flow, the NAT-wide idle (read at connect/ip.go:3252, :3873, :6984 and connect/ip_icmp.go:854; 0 keeps it), so bridge flows hold §17.5's idles without raising the host's other flows; flows register their rule tag and policy generation before the dial, so `CloseFlows` fences dials in progress (D-BRIDGE-21) | M4 |
-| C6a | 100.64/10 non-public for §17 (connect/ip_security.go:892-908), with its own drop reason instead of an Incident, which calls `ReportAbuse` (connect/ip.go:10242-10244) | M4, after shadow counts |
+| C5 | `connect.EgressHook` (`ResolveEgress`, §17.6) in `LocalUserNat`: pass, map or deny per flow, with C13's subject and `Sealed` on `EgressFlow`; `EgressDecision.IdleTimeout` replaces, for that flow, the NAT-wide idle (read at connect/ip.go:3244 and :3255 for the shared lifecycle, :3873, :7027 and connect/ip_icmp.go:854; 0 keeps it), so bridge flows hold §17.5's idles without raising the host's other flows; flows register their rule tag and policy generation before the dial, so `CloseFlows` fences dials in progress (D-BRIDGE-21) | M4 |
+| C6a | 100.64/10 non-public for §17 (connect/ip_security.go:892-908), with its own drop reason instead of an Incident, which calls `ReportAbuse` (connect/ip.go:10242-10244), behind `CfaaSecurityPolicySettings.DropSharedAddressSpace`, false by default, a check of its own beside `isPublicUnicast` (§17.6) | M4, after shadow counts |
 | C6b | A `Tun` forwarder for a tun-less router | Rejected: not needed (§17.10) |
 | C7 | Caller lane key for non-IP sends (connect/transfer_logical_lane.go:11-37) | Deferred: `TransferKey` lanes suffice |
 | C8 | HTTP CONNECT and `HTTPS_PROXY` for platform transports and API dials; SOCKS5 only today (connect/net.go:333-363) | M4 (§5, §16, §18; [owner decision 49](#od-49)) |
@@ -21485,7 +21628,7 @@ Compiled from the sections' Interfaces subsections and the tables they point to 
 | C13 | In every mode, seal into `StoredContract` (connect/protocol/transfer.proto:631-638) `source_subject_client_id`, which the server fills from the source client's stored `network_client.acl_subject_client_id` (D-ACL-3), never a client-supplied value, with `source_network_id`, the contract class and, for a window client, the subject's `WindowDelegation` (§17.9); companion contracts inherit the seals; expose them on `Peer` (connect/transfer.go:608-619) and `EgressFlow` | M4 (§8.10, §9, §17; D-PROTO-19) |
 | C14 | `UpgradeMux.SetLocalZone`, consulted before the Blocker in `handleDns` (connect/ip_mux_upgrade.go:1661) and `resolveDnsTcpQuery` (:716) | M4 ([owner decision 85](#od-85)); `ur tun` uses §17's resolver |
 | C15 | `Peer` exposes the session's verified peer client key read-only, unexported today (connect/transfer_encrypt.go:1152-1157) | M1 (§6, D-PROTO-13) |
-| C16 | Sticky Required: an Opportunistic client with a session to a peer never falls back to plaintext for that contract (connect/transfer_encrypt.go:477-483) | M4 (§17, §18); until then app devices are not bridge targets |
+| C16 | Sticky Required: an Opportunistic client with a session to a peer never falls back to plaintext for that contract (connect/transfer_encrypt.go:477-483); its receive gate latches at this side's seal, and before M8 turns it on for app-device hosts the plaintext an Opportunistic peer has in flight at the seal is measured: if the loss is visible, the gate latches at the peer's first sealed frame, bounded by `TlsTimeout` from this side's seal ([owner decision 224](#od-224)) | M4 (§17, §18); until then app devices are not bridge targets |
 | C17 | A `js` connect build without gVisor or the IP stack: a connect-only js/wasm main imports 42 gvisor packages (2026-11-03; sizes in §18.10) | Decided after §18's spike, for the extension's streaming Worker only; the page Worker uses §18.10's `sidecar_http` leg |
 | C18 | FriendsAndFamily flows to private destinations, which today admit only Network sources at the source's multi client (connect/ip_security.go:385-390; connect/ip_remote_multi_client.go:6691) and the provider (connect/ip.go:10307; connect/ip_security.go:567-576). The provider hands them to a C5 hook keyed on C13's `source_network_id`; the source admits only §17's alias-mapped destinations | M6 ([owner decision 86](#od-86)); hooks only on sidecar-owned Required targets with a cross-network route grant; off in sdk providers |
 | C19 | A per-peer accounting mode, off by default, for §6.10's remote-search windows. While a peer is in it, connect withholds every report, checkpoint or close, of a window's contracts with that peer, in both directions, until the window ends 55 minutes after its first contract's creation, 5 minutes before that contract's signed expiration. It then moves the sequences off them, as at expiry, and, while the mode holds, onto a new contract it takes at once with its successor requested then, which opens the next window whatever frame first rides it (§6.10), and sends one `CloseContract` a contract (connect/transfer_contract_manager.go:2344-2350): R(T) on the window's first and 0 on the others, T being the client's counted bytes over the window's contracts in that direction, and R(T) the floor F = 256 KiB while T ≤ F, else F plus 128 KiB steps. The sidecars of a pair that a Hello or HelloResult carrying the requester feature bit marks (§6.11) set the mode for each other through connect's per-peer setter, since a `Peer` exposes no contract id (connect/transfer.go:608-619), each first retiring the contracts it already sends on to the other. A window with up to five search pages then reports as one with none, whatever the pair's scheduled background (§6.10, §11.14; §2.8 connect-5) | M10 (owner decisions [176](#od-176), [188](#od-188)) |

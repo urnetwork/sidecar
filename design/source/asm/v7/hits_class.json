@@ -637,19 +637,6 @@
   "source": "carried"
  },
  {
-  "family": "owner_or_peer_pending",
-  "file": "04-REPO.md",
-  "line": 210,
-  "col": 234,
-  "match": "(proposed; Q-",
-  "snippet": "e size` gates from v0: the `ios_extension` leg (`device/`, `protocol/bridge` and the root's forwarding files; D-SDK-20) fails if sidecar adds over §18.10's budget, 4 MiB (proposed; Q-SDK-7; owner decision 197), and the `sidecar_http` js leg is measured unstripped from M2 against §18.10's 41,943,040 B goal and miss rule (D-SDK-19). No C ABI: desktop ap",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
   "family": "decided_q_open",
   "file": "04-REPO.md",
   "line": 295,
@@ -691,7 +678,7 @@
  {
   "family": "decided_q_open",
   "file": "05-CORE.md",
-  "line": 579,
+  "line": 581,
   "col": 242,
   "match": "until `exp` (Q-CORE-4",
   "snippet": "s, or any file but the keychain (I-7) | a same-user process reading the keychain; a token copied alone renews, exchanges and mints nothing, but authenticates a transport until `exp` (Q-CORE-4 (c)) |",
@@ -704,7 +691,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 719,
+  "line": 721,
   "col": 79,
   "match": "64 MiB",
   "snippet": "          dictionaries and doc tables in an LRU within Search.MemoryByteCount (64 MiB on the daemon, inside",
@@ -717,7 +704,7 @@
  {
   "family": "mib64_trigger",
   "file": "05-CORE.md",
-  "line": 729,
+  "line": 731,
   "col": 42,
   "match": "64 MiB",
   "snippet": "- **Pass (cli/UI.md:82-85).** Argon2id at 64 MiB, t=3, p=4 (RFC 9106 §4), or 19 MiB, t=2, p=1 on mobile and wasm (OWASP). The pass or the OS keystore yields U, which opens every R_n (owner decision 23's shared unlock);",
@@ -938,7 +925,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 271,
+  "line": 272,
   "col": 22,
   "match": "64 MiB",
   "snippet": "  [{size_above_bytes: 64 MiB, off}]; v1, its type reserved at M2:",
@@ -951,7 +938,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 315,
+  "line": 316,
   "col": 88,
   "match": "member-device cap",
   "snippet": "           §20.4's 5,000 Team admissions count member devices and agents alike, with no member-device cap",
@@ -964,7 +951,7 @@
  {
   "family": "mib64_trigger",
   "file": "07-TEAM.md",
-  "line": 344,
+  "line": 345,
   "col": 256,
   "match": "64 MiB",
   "snippet": "ing an honest writer gives each path it creates, existing paths keeping theirs (§11.7; owner decision 167); without the record the platform rule holds, versionless above 64 MiB of plaintext; Owners, Admins and Network admins write the record with `ur admin versioning`. The rules cover file-mode refs of every repo kind but config and mailcfg, ne",
@@ -977,7 +964,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 813,
+  "line": 814,
   "col": 67,
   "match": "weekly",
   "snippet": "         to the member (owner decision 126); together these hold a weekly re-enroller near 14 admitted",
@@ -990,7 +977,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 885,
+  "line": 886,
   "col": 118,
   "match": "14 days",
   "snippet": "**D-TEAM-1 (proposed).** P0 stage 1 refuses child and admin-refused tokens on all 37 routes before any sidecar, after 14 days log-only, confines `strict_exp` bearers to 7.4's route allowlist and closes AUTH.md:202. *Why:* owner decision 45.",
@@ -1003,7 +990,7 @@
  {
   "family": "window_14d_weekly",
   "file": "07-TEAM.md",
-  "line": 941,
+  "line": 942,
   "col": 1105,
   "match": "weekly",
   "snippet": "ry admin device lists each member's page Workers but its newest for an admin to revoke (7.10's `cleanup` row). *Why:* with `self_admit` off no member device admits, so a weekly re-enroller's evicted Workers would pile up toward Team's 5,000 `config_admissions` (§20.4); a stale-removed Worker has had no leaf change for 90 days and holds no leaf ",
@@ -1016,7 +1003,7 @@
  {
   "family": "device_cap_1000",
   "file": "07-TEAM.md",
-  "line": 1010,
+  "line": 1011,
   "col": 5844,
   "match": "member-device cap",
   "snippet": "19 an ephemeral client's refused join from a member invite; and §22.7's approval suite a cancel under the allowlist; §20.4 allows Team 5,000 `config_admissions`, with no member-device cap; §2.8's api-7 shows each `IndexerSet`'s signer, subject, scope and `retire`, its services sealed, and §15.5 keeps an undesignated `tag:mail` device off the mail listener",
@@ -1042,7 +1029,7 @@
  {
   "family": "window_14d_weekly",
   "file": "08-ACL.md",
-  "line": 367,
+  "line": 368,
   "col": 117,
   "match": "7-day window",
   "snippet": "- **Invite.** `ur bridge invite` (cli/UI.md:50) files X's request with a hashed 256-bit code, `uses = --count` and a 7-day window; `accept-invite` (`:51`) files Y's, the server binds `invited_network_id`, and each activation is a delta in its network. Y's approving admin creates the share's ShareKe",
@@ -1055,7 +1042,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 406,
+  "line": 407,
   "col": 11,
   "match": "1,000 member devices",
   "snippet": "| A cap of 1,000 member devices per network | config leaves only | refuses Teams past about 330 members with three devices each | rejected (owner decision 144) |",
@@ -1068,7 +1055,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 446,
+  "line": 447,
   "col": 542,
   "match": "1,000 member devices",
   "snippet": "r decisions 114, 144 and 182: agents cost no commit and read with no member device online, members accept config Adds by one function of the log, and no network stops at 1,000 member devices.",
@@ -1081,7 +1068,7 @@
  {
   "family": "pg_redis_durable",
   "file": "08-ACL.md",
-  "line": 501,
+  "line": 502,
   "col": 65,
   "match": "evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis",
   "snippet": "- **Services and config:** gates in `api`/`connect`, `sockets`, `evs`, `gkm`, `tlsedge`, `certs`, `dns`, `smtpedge`, `mxedge`; Redis `{acl_<networkId>}v` (48 h after its last change), with §7.9's `{acl_<networkId>}e` read only; `config/all/pro.yml`.",
@@ -1094,7 +1081,7 @@
  {
   "family": "device_cap_1000",
   "file": "08-ACL.md",
-  "line": 513,
+  "line": 514,
   "col": 35,
   "match": "1,000 member devices",
   "snippet": "| A data repo granted to more than 1,000 member devices seats only 1,000; the rest wait keyless | Low | Medium | the preview and console name the repo; seats fill earliest-admitted first; data-repo wraps would need the owner ",
@@ -2212,7 +2199,7 @@
  {
   "family": "mib64_trigger",
   "file": "16-MCP.md",
-  "line": 925,
+  "line": 927,
   "col": 62,
   "match": "64 MiB",
   "snippet": "memory                                                     <= 64 MiB decoded a daemon, <= 8 MiB a search, masks",
@@ -2225,7 +2212,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1046,
+  "line": 1048,
   "col": 101,
   "match": "14 days",
   "snippet": "            decision 156's general off switch for this repo; window 7 days (7-90), so latest holds 7-14 days;",
@@ -2238,7 +2225,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1054,
+  "line": 1056,
   "col": 12,
   "match": "weekly",
   "snippet": "roll-up     weekly, by the directory's network-scope search indexer, else the first writer after expiry (owner",
@@ -2251,7 +2238,7 @@
  {
   "family": "window_14d_weekly",
   "file": "16-MCP.md",
-  "line": 1467,
+  "line": 1469,
   "col": 14,
   "match": "7-day window",
   "snippet": "latest index (7-day window)           ~48 MB              ~190 MB               ~480 MB",
@@ -2264,7 +2251,7 @@
  {
   "family": "device_cap_1000",
   "file": "16-MCP.md",
-  "line": 1605,
+  "line": 1607,
   "col": 86,
   "match": "1,000 member devices",
   "snippet": "| Data-repo seats for the directory | no change to owner decision 144 | members past ~1,000 member devices wait keyless | not taken (owner decision 182) |",
@@ -2277,7 +2264,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "17-BRIDGE.md",
-  "line": 520,
+  "line": 600,
   "col": 737,
   "match": "(proposed; Q-",
   "snippet": "rk's untagged sidecars (17.6's rule 3; owner decision 120), a reach the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
@@ -2290,7 +2277,7 @@
  {
   "family": "owner_or_peer_pending",
   "file": "17-BRIDGE.md",
-  "line": 520,
+  "line": 600,
   "col": 802,
   "match": "*Decider:* owner",
   "snippet": "ch the owner did not ask for, and (b) can follow by one filing at any later setup; 17.4 is written to it (proposed; Q-BRIDGE-8). *Blocks:* nothing before M8's app hosts. *Decider:* owner.",
@@ -2303,28 +2290,15 @@
  {
   "family": "decided_q_open",
   "file": "17-BRIDGE.md",
-  "line": 554,
+  "line": 634,
   "col": 91,
   "match": "until §22 measures; Q-BRIDGE-2",
-  "snippet": "| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; Q-SDK-7's budget, a compile past it keeping the last state and alarming; links fail closed meanwhile |",
-  "reading": "Names a settled item by its answer (Q-SDK-2 as owner decisions 87 and 197 amend it, Q-SDK-5 closed by peer review, Q-BRIDGE-2's own-client links), not as pending.",
+  "snippet": "| Links, or forwarding's compile, do not fit the iOS tunnel | High | Medium | No iOS links until §22 measures; Q-BRIDGE-2's own-client links; the compile cap of owner decision 216, a network past it keeping its last verified state on that device and alarming; links fail closed meanwhile |",
+  "reading": "Names settled items by their answers: Q-BRIDGE-2's own-client links (closed by peer review) and owner decision 216's compile cap, which decided Q-SDK-7; 'until §22 measures' is owner decision 100's measurement of iOS links, not an open question.",
   "live": false,
   "gap": false,
   "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 40,
-  "col": 42,
-  "match": "(proposed; Q-",
-  "snippet": "| iOS | network extension; 18.10's budget (proposed; Q-SDK-7) | app, while open | child | keychain group `network.ur.sidecar`; forwarding's keys in the extension's own (§5.9) | 32 MiB |",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
+  "source": "hand-2026-11-10"
  },
  {
   "family": "mib64_trigger",
@@ -2342,7 +2316,7 @@
  {
   "family": "mib64_trigger",
   "file": "18-SDK.md",
-  "line": 138,
+  "line": 140,
   "col": 45,
   "match": "64 MiB",
   "snippet": "            verified page of 50 <= 200 ms, a 64 MiB decoded-shard cache; page Worker: <= 100 ms (p95 300 ms)",
@@ -2355,7 +2329,7 @@
  {
   "family": "window_14d_weekly",
   "file": "18-SDK.md",
-  "line": 228,
+  "line": 230,
   "col": 99,
   "match": "7-day window",
   "snippet": "\t// confirmPath: the name the person typed, refused unless it is the previewed path; now skips the 7-day window",
@@ -2368,7 +2342,7 @@
  {
   "family": "edge_termination",
   "file": "18-SDK.md",
-  "line": 776,
+  "line": 799,
   "col": 62,
   "match": "lb, never through Cloudflare, which terminates",
   "snippet": "key origin  https://sidecar.ur.io/v1/, served direct from the lb, never through Cloudflare, which terminates",
@@ -2381,7 +2355,7 @@
  {
   "family": "window_14d_weekly",
   "file": "18-SDK.md",
-  "line": 790,
+  "line": 824,
   "col": 44,
   "match": "seven days",
   "snippet": "            persistent, and in Safari after seven days of Safari use without user interaction on the site,",
@@ -2392,61 +2366,9 @@
   "source": "hand-2026-11-06"
  },
  {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 897,
-  "col": 60,
-  "match": "(proposed; Q-",
-  "snippet": "            extension's ceiling rises from 50 MiB to 54 MiB (proposed; Q-SDK-7)",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 901,
-  "col": 25,
-  "match": "(proposed; Q-",
-  "snippet": "            bridge_alarm (proposed; Q-SDK-7); measured on surrogates only (owner decision 100)",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 905,
-  "col": 104,
-  "match": "(proposed; Q-",
-  "snippet": "- **iOS.** From M4, §4's `make size` holds the `ios_extension` leg to the forwarding leg's budget above (proposed; Q-SDK-7; D-SDK-20); memory is measured on surrogates only (owner decision 100).",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 943,
-  "col": 186,
-  "match": "(proposed; Q-",
-  "snippet": "mal follower, policy evaluator and compiler in `sidecar/device` | keeps the tunnel near 1 MiB | two implementations of security-critical rules to keep equal | not chosen (proposed; Q-SDK-7) |",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
   "family": "pools",
   "file": "18-SDK.md",
-  "line": 966,
+  "line": 1010,
   "col": 92,
   "match": "pools",
   "snippet": "**D-SDK-5 (proposed).** 18.4's budgets are carved out of each process limit. *Why:* message pools and the soft limit are process-wide (sdk/sdk.go:554-571).",
@@ -2459,7 +2381,7 @@
  {
   "family": "pg_redis_durable",
   "file": "18-SDK.md",
-  "line": 988,
+  "line": 1032,
   "col": 831,
   "match": "Postgres commit",
   "snippet": "nsactions, a stale live marker must not drop the only wake, and masters have no replicas and restart from their last RDB dump; a post-commit SET lands in no order that a Postgres commit or row lock sets, so an older POST's SET could replace a newer token or revive a removed one until the next launch (meta review F15).",
@@ -2470,35 +2392,9 @@
   "source": "hand-2026-11-06"
  },
  {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 1036,
-  "col": 1117,
-  "match": "(proposed; Q-",
-  "snippet": "g the owner has raised by review before (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md), while runtime memory stays inside today's targets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
-  "family": "owner_or_peer_pending",
-  "file": "18-SDK.md",
-  "line": 1036,
-  "col": 1247,
-  "match": "*Decider:* owner",
-  "snippet": "rgets; 18.10 and §4.7 are written to it (proposed; Q-SDK-7). *Blocks:* the `ios_extension` leg's `make size` value and §4.7's leg rule from M4, and iOS forwarding at M8. *Decider:* owner.",
-  "reading": "An open owner question raised on 2026-11-09 in designing owner decision 197 (Q-SDK-7 or Q-BRIDGE-8): its recommendation, marked as D-ARCH-4 asks, or its decider line; no decided question reads as open.",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-09"
- },
- {
   "family": "decided_q_open",
   "file": "18-SDK.md",
-  "line": 1042,
+  "line": 1086,
   "col": 171,
   "match": "forwarding (Q-SDK-2",
   "snippet": " **PLAN.md:28 (\"used directly by the apps\").** Desktop apps use the `ur daemon`; iOS runs the sidecar in the app, not the tunnel, and every app's VPN component runs only forwarding (Q-SDK-2; owner decisions 87, 197).",
@@ -2511,7 +2407,7 @@
  {
   "family": "pg_redis_durable",
   "file": "18-SDK.md",
-  "line": 1054,
+  "line": 1098,
   "col": 1242,
   "match": "Redis-write assertion admits the `{wakeq_}` entries evs",
   "snippet": "1); §19.7 lists `network_client_lease` in MG1; §7.9's fold bounds the log tails 18.4 keeps, and FS-17's phone holder answers a `HeadCheckProofRequest` from them; §22.7's Redis-write assertion admits the `{wakeq_}` entries evs writes (18.7); §19.4's token row defers to 18.7's steps 0, 5 and 6, and its sender tombstones a token on a vendor 410 only while the row still holds the revision it read",
@@ -3590,7 +3486,7 @@
  {
   "family": "pg_redis_durable",
   "file": "22-TEST.md",
-  "line": 1422,
+  "line": 1424,
   "col": 37,
   "match": "Redis loss over-admits at most as for leases",
   "snippet": "              debit per contract_id; Redis loss over-admits at most as for leases",
@@ -3603,7 +3499,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 1473,
+  "line": 1475,
   "col": 34,
   "match": "14 days",
   "snippet": "FS-51  §20    a Team lapse: after 14 days web hosts and From are withheld, MX and TLSA kept,   D-QUOTA-6   T2     M6-out",
@@ -3616,7 +3512,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1588,
+  "line": 1592,
   "col": 28,
   "match": "pools",
   "snippet": "FS-63  §11,19 placement and pools (owner decision 145): two creators race at place/<repo_id>'s FI-1,2,4    T2+T3  M2-out;",
@@ -3629,7 +3525,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1595,
+  "line": 1599,
   "col": 49,
   "match": "pool",
   "snippet": "              segment cluster with more than one pool fails the suite before any write, read",
@@ -3642,7 +3538,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1597,
+  "line": 1601,
   "col": 26,
   "match": "Pools",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3655,7 +3551,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 1597,
+  "line": 1601,
   "col": 46,
   "match": "pool",
   "snippet": "              InfoMessage.Pools), and the one-pool twin passes",
@@ -3668,7 +3564,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1599,
+  "line": 1603,
   "col": 38,
   "match": "R2",
   "snippet": "              streams k by ranges and R2 holds k's locators from a head read, paused; a push",
@@ -3681,7 +3577,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 1602,
+  "line": 1606,
   "col": 54,
   "match": "R2",
   "snippet": "              succeed; after it evs1 deletes the two; R2 resumes, gets collected, rereads the",
@@ -3694,7 +3590,7 @@
  {
   "family": "mib64_trigger",
   "file": "22-TEST.md",
-  "line": 1649,
+  "line": 1653,
   "col": 76,
   "match": "64 MiB",
   "snippet": "              no VersioningRules takes the platform rule, versionless above 64 MiB: an honest",
@@ -3707,7 +3603,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2039,
+  "line": 2043,
   "col": 49,
   "match": "R2",
   "snippet": "FS-91  §11    racing reuse copies: a push on ref R2 citing a listed version as reuse source,   FI-2,27     T2+T3  M10-out",
@@ -3720,7 +3616,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2057,
+  "line": 2061,
   "col": 70,
   "match": "R2",
   "snippet": "              Z's chain), Y to X, X edited, a copy of an old X on ref R2: dropping X keeps",
@@ -3733,7 +3629,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2058,
+  "line": 2062,
   "col": 32,
   "match": "R2",
   "snippet": "              what Z's, Y's and R2's versions name; --follow drops X, Y and Z in one push and",
@@ -3746,7 +3642,7 @@
  {
   "family": "offsite",
   "file": "22-TEST.md",
-  "line": 2059,
+  "line": 2063,
   "col": 52,
   "match": "R2",
   "snippet": "              one job, freeing what only they name, R2's copy keeping its segments; X live",
@@ -3759,7 +3655,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2097,
+  "line": 2101,
   "col": 26,
   "match": "weekly",
   "snippet": "              re-enrolled weekly for a year, each evicted Worker's leaves removed as stale                        Team at",
@@ -3772,7 +3668,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2248,
+  "line": 2252,
   "col": 14,
   "match": "before the claim",
   "snippet": "              before the claim, and a STAGED one after it; again for a same-generation",
@@ -3785,7 +3681,7 @@
  {
   "family": "pools",
   "file": "22-TEST.md",
-  "line": 2632,
+  "line": 2636,
   "col": 1077,
   "match": "pool",
   "snippet": "rects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write and LIST consistency; checksums; ranged GET; Delete; lifecycle; one pool per cluster (FS-63).",
@@ -3798,7 +3694,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2752,
+  "line": 2756,
   "col": 157,
   "match": "audited",
   "snippet": "**D-TEST-9 (proposed).** Freezes pass 22.10's gates in D-PHASE-7's two steps. *Why:* one conditional write orders storage (owner decision 2), and nothing is audited (owner decision 99).",
@@ -3811,7 +3707,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2754,
+  "line": 2758,
   "col": 787,
   "match": "audited",
   "snippet": "shown under lost responses, crashes and stale processes, and the roll-up is a multi-push protocol whose lock, CAS and erasure race no schedule alone exhausts; nothing is audited (owner decision 99).",
@@ -3824,7 +3720,7 @@
  {
   "family": "kib_10_15",
   "file": "22-TEST.md",
-  "line": 2756,
+  "line": 2760,
   "col": 1260,
   "match": "10-15 KiB",
   "snippet": "oduction's 0.768, which leaves room for the bucket's 1 h of depth (§11.13); the head's If-Match overwrite alone writes ~14 KiB (owner decision 2), so the record's first ~10-15 KiB estimate was withdrawn (Q-EVS-9, decided); mkfs fixes the block size for format 2 too: at 2× year one format 1 writes ~40-43 KiB a push on 4 KiB blocks (~30-33 on 1 KiB)",
@@ -3837,7 +3733,7 @@
  {
   "family": "window_14d_weekly",
   "file": "22-TEST.md",
-  "line": 2758,
+  "line": 2762,
   "col": 316,
   "match": "14 days",
   "snippet": "askworker checks that no retained version names one; deletes turn on once FS-64 to FS-71 pass on their rows' tiers and a production soak after the final freeze (at least 14 days and 10,000 candidates) finds none that a retained version names, and until then the gate admits only internal networks and design partners (D-PHASE-10), so later network",
@@ -3850,7 +3746,7 @@
  {
   "family": "audit_gate",
   "file": "22-TEST.md",
-  "line": 2804,
+  "line": 2808,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited novel crypto passes every test, 0x0010 having no vectors (owner decision 99) | Medium | Critical | 22.10's interop artifact; §10.4's mapping and KATs; its disclosure (ow",
