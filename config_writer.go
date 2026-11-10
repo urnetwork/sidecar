@@ -189,6 +189,7 @@ func NewConfigWriter(ctx context.Context, args *ConfigWriterArgs) (*ConfigWriter
 		}
 		configSignal(self.entryLanded)
 	})
+	args.Client.writer.Store(self)
 	go self.run()
 	return self, nil
 }
@@ -227,6 +228,7 @@ func (self *ConfigWriter) Close() {
 	if self.removeCallback != nil {
 		self.removeCallback()
 	}
+	self.args.Client.writer.CompareAndSwap(self, nil)
 }
 
 // A fraction in [0, 1) from crypto/rand.
