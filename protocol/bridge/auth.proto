@@ -48,11 +48,19 @@ message ProjectionHeader {           // §6 Signed, purpose authority, by a conf
   bytes  rows_sha256 = 7;
   uint32 rows_byte_count = 8;        // ProjectionRows, <= 4 MiB (§8.8)
   uint32 threshold = 9;
+  bytes  tail_verdicts = 10;         // DESIGN-DETAILS 5.2.2: 2 bits per entry among folded_through+1..version-1,
+                                     //   in position order: entry folded_through+1+j is bits 2j and 2j+1 of byte
+                                     //   j/4, bit 0 the byte's least significant; 0 refused or a BASE, 1 took
+                                     //   effect, 2 took effect and completed a proposal (an AuthorityProposal at
+                                     //   k = 1 or the k-th AuthorityCosign only), 3 never; exactly
+                                     //   ceil(2*(version-1-folded_through)/8) bytes, padding bits 0; empty when
+                                     //   nothing is unfolded
 }
 
-message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_; for the cascade a *_signer
-                                     // names a sidecar_id, a recovery key's hash or a delegation_id, and a
-                                     // *_at is the position n of the entry carrying the record
+message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a rows-only verifier's whole state
+                                     // at folded_through (DESIGN-DETAILS 5.2.2); for the cascade a *_signer names
+                                     // a sidecar_id, a recovery key's hash or a delegation_id, a *_at the position
+                                     // n of the entry carrying the record, and confirmations every confirmation
   repeated MemberRow members = 1;
   repeated SidecarRow sidecars = 2;
   repeated DelegationRow delegations = 3;
@@ -61,6 +69,75 @@ message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_; f
                                      // imports nothing, each EvsShare with its signer and at; with
                                      // AclRepo.holders_shrunk_at; the device role reads only its
                                      // has_document (field 1)
+                                     // 6 stays unused for TeamScopeRow at M6 (protos-bridge-row-fields #3)
+  repeated ProposalRow proposals = 7;     // every proposal open at folded_through, by proposal_id
+  ProjectionSettings settings = 8;        // the ServiceSettings values a verifier judges by, always present
+  repeated RingRow ring = 9;              // the statements that took effect among the 4,096 entries through
+                                          //   folded_through, in position order (the replay row)
+  repeated IndexerRow indexers = 10;      // each IndexerSet designation that holds, by (sidecar_id, scope)
+                                          //   (question team-m2-07-indexer-rows)
+}
+
+// An AuthorityProposal open at a state (§7.9's proposal row; DESIGN-DETAILS 5.2.2), so a cosign, veto, void or
+// activation after a fold finds it at every verifier.
+message ProposalRow {
+  bytes  proposal_id = 1;                // 32 B
+  uint32 statement_type = 2;             // the proposed statement's SignedType
+  bytes  statement = 3;                  // AuthorityProposal.statement, verbatim
+  uint64 proposed_at = 4;                // o: the AuthorityProposal's entry
+  int64  not_after_ms = 5;               // the proposal's own header's
+  repeated ProposalSigner signers = 6;   // the proposer, then each counted cosign, in log order
+  uint64 window_entry = 7;               // p: the entry of the newest recovery-key signature; 0 with none
+  int64  window_time_ms = 8;             // T_p: that entry's time_ms
+  uint32 kind = 9;                       // ProposalKind, fixed at the proposal's entry
+}
+
+message ProposalSigner {
+  bytes  signer = 1;                     // as rows name one: a sidecar_id or a recovery key's hash
+  uint64 at = 2;                         // the entry that carried its proposal or cosign
+}
+
+enum ProposalKind {
+  PROPOSAL_KIND_UNSPECIFIED = 0;
+  PROPOSAL_KIND_AUTHORITY = 1;           // k of n (7.9's several row)
+  PROPOSAL_KIND_RECOVERY_SCOPED = 2;     // a scoped recovery admission filed with self_admit off: completes on one
+                                         //   cosign by an admission signer (7.9's self_admit row)
+  PROPOSAL_KIND_RESTORED = 3;            // a restored binding's scoped admission: activates at the window with no
+                                         //   counted cosign (owner decision 149)
+}
+
+message ProjectionSettings {
+  uint32 self_admit = 1;                 // SelfAdmitMode's value: 0 unset (on), 1 on, 2 off (owner decision 112)
+  bytes  scim_signer = 2;                // ServiceSettings.scim_signer (7.6), empty for none
+}
+
+message RingRow {
+  bytes  statement_id = 1;               // the first 16 B of the statement's id (RetainedStatementId)
+  uint64 n = 2;                          // the entry that carried it
+}
+
+message ConfirmationRow {
+  uint32 kind = 1;                       // 1 AdmissionConfirm, 2 OwnerConfirm
+  bytes  signer = 2;                     // the confirm_signer or owner_confirm_signer it set
+  uint64 at = 3;                         // its entry
+  bool   lifted_park = 4;                // the device was parked when it landed (7.9's lift row)
+}
+
+// One compromise cascade's hold on a sidecar (§7.9's cascade; question team-m2-04-cascade-spans): what the sidecar
+// signed at a position in [from, until) is void until a signer outside P signs it again, whatever lifts its park.
+message CascadeSpanRow {
+  uint64 from = 1;                       // since_n for the revoked sidecar; else the entry that pulled it into P
+  uint64 until = 2;                      // the revocation's entry, which parked or revoked it
+}
+
+// One IndexerSet designation that holds (§7.9's Indexers; question team-m2-07-indexer-rows): what api sees of its
+// entry, its services sealed as there.
+message IndexerRow {
+  bytes  sidecar_id = 1;                 // the subject
+  uint32 scope = 2;                      // IndexerScope's value (config.proto)
+  bytes  signer = 3;                     // a sidecar_id
+  uint64 at = 4;                         // the IndexerSet's entry
+  bytes  sealed_services = 5;            // IndexerSet.sealed_services, verbatim
 }
 
 // Kept for the membership's life.
@@ -102,6 +179,10 @@ message SidecarRow {
   bytes  member_id = 18;                 // an untagged admission's member; or tag_ids
   repeated bytes tag_ids = 19;           // a tagged admission's keyed tag ids, 16 B each
   bool   ephemeral = 20;
+  repeated ConfirmationRow confirmations = 21;   // every AdmissionConfirm and OwnerConfirm that took effect, in
+                                                 //   position order, for the sidecar's life; 5-8 the newest of each
+                                                 //   (DESIGN-DETAILS 5.2.2)
+  repeated CascadeSpanRow cascades = 22;         // each compromise cascade that held it in P, in position order
 }
 
 // The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
