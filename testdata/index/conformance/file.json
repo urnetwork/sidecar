@@ -1,5 +1,5 @@
 {
- "about": "Conformance vectors for extractor 1's file documents (DESIGN-DETAILS section 11.2; protocol/INDEX-FORMAT.md's Extractor 1). path is the file's path and input the file, written as in mail.json. binary marks a file that gives no document. Each document gives fields 4 (the title, one space and the path) and 5 (the chunk's text), and text, keys and row as in mail.json, the row's title being the title alone.",
+ "about": "Conformance vectors for extractor 1's file documents (DESIGN-DETAILS section 11.2; protocol/INDEX-FORMAT.md's Extractor 1). path is the file's path (path_x, in hex, when it is not printable UTF-8) and input the file, written as in mail.json. binary marks a file that gives no document. Each document gives fields 4 (the title, one space and the path) and 5 (the chunk's text), and text, keys and row as in mail.json, the row's title being the title alone.",
  "extractor": 1,
  "vectors": [
   {
@@ -1377,7 +1377,7 @@
   {
    "name": "s-path-not-utf-8",
    "rule": "D2 D5",
-   "path": "caf�.txt",
+   "path_x": "636166e92e747874",
    "input": [
     {
      "t": "x"
