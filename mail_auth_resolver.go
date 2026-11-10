@@ -169,6 +169,13 @@ func (self *MailAuthResolver) lookup(ctx context.Context, name string, qType dns
 	if flight == nil {
 		return nil, ErrMailAuthLookupRefused
 	}
+	// an answer already in hand, a stub hit among them, is the answer whatever ctx says: a bound cuts only work not
+	// yet done, so the same message and stub give the same evidence whenever the deadline falls
+	select {
+	case <-flight.done:
+		return flight.answer, flight.err
+	default:
+	}
 	select {
 	case <-flight.done:
 		return flight.answer, flight.err

@@ -16,7 +16,9 @@
 //	   5 (b-h) at most 8 times, then 429 BUSY; an unknown outcome rereads 3 times 200 ms apart (outcome.go)
 //	8  off the reply path: the push sequence and hints, usage, the head cache and the fold trigger (push_commit.go)
 //
-// The seal form of this route, {statement, part places}, is EVS1-M2-13's and answers 503 until it lands.
+// The seal form of this route, {statement, part places}, runs the same steps over the parts' joined payload once
+// push_seal.go has read them; a part of a push (push_part.go) runs steps 4 and 5 (a-e, g, h) over its own entries
+// and appends its record, and the git-mode seal lease is push_lease.go's.
 //
 // An attempt runs to its end once its request has arrived, whether or not its client is still there: the lb
 // re-sends a POST on an error, a 503 or 30 s of silence, so another attempt of the same push id may arrive at any
@@ -98,11 +100,6 @@ func (self *EvsEngine) servePush(request *EvsRequest) {
 	if !request.ReadMessage(body, self.settings.PushBodyMaxByteCount) {
 		return
 	}
-	if 0 < len(body.GetPartPlaces()) {
-		// a seal, which EVS1-M2-13 builds on this route: refused 503, so nothing commits unchecked
-		request.Unavailable(nil)
-		return
-	}
 	attempt, ok := self.newPushAttempt(request, body)
 	if !ok {
 		return
@@ -120,6 +117,8 @@ type pushOutcome struct {
 	ownCommit *EvsStoredHead
 	// The caller's own deposit ref's head (plan-EVS1-deposit-head), carried by a 200.
 	depositHead *protocol.EvsDepositHead
+	// A part's 200 {place}: where its record is (push_part.go).
+	partPlace *protocol.EvsPlace
 	// Otherwise the refusal, its code deciding its status.
 	reply *protocol.EvsRefusalReply
 }
@@ -183,19 +182,49 @@ type pushAttempt struct {
 	pathEpoch *pathEpochReads
 	// EVS1-M2-20's: the slots an ERASE names, as step 4 read them
 	erasureSlots map[sidecar.Id]*erasureSlotRead
+
+	// EVS1-M2-13's: a seal's parts, read before step 4 (push_seal.go), or the one part this attempt is of
+	// (push_part.go). At most one is set; both nil for a one-part push.
+	seal *sealReads
+	part *partReads
+}
+
+// Which of §11.8's requests this attempt is: a one-part push, a part or a seal.
+func (self *pushAttempt) stage() PushStage {
+	switch {
+	case self.seal != nil:
+		return PushStageSeal
+	case self.part != nil:
+		return PushStagePart
+	}
+	return PushStageOnePart
+}
+
+// 5b's time bound for the stage: 10 min for a one-part push, 30 for a part or a seal.
+func (self *pushAttempt) timeBound() time.Duration {
+	if self.stage() == PushStageOnePart {
+		return evsPushTimeBound
+	}
+	return evsSealTimeBound
+}
+
+// An attempt's context: it runs past the client's leaving, within the engine's life and PushAttemptTimeout.
+func (self *EvsEngine) newAttemptContext(request *EvsRequest) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Ctx), self.settings.PushAttemptTimeout)
+	stop := context.AfterFunc(self.ctx, cancel)
+	return ctx, func() { stop(); cancel() }
 }
 
 // The attempt for body, or false once the request has been answered: a statement or payload that does not parse
 // or verify refuses nothing (400), and a state not loaded answers 503.
 func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPushRequest) (*pushAttempt, bool) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Ctx), self.settings.PushAttemptTimeout)
-	stop := context.AfterFunc(self.ctx, cancel)
+	ctx, cancel := self.newAttemptContext(request)
 	attempt := &pushAttempt{
 		engine:         self,
 		request:        request,
 		settings:       self.settings,
 		ctx:            ctx,
-		cancel:         func() { stop(); cancel() },
+		cancel:         cancel,
 		arrival:        request.started,
 		repoId:         request.RepoId,
 		cluster:        request.Cluster,
@@ -230,12 +259,21 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 	attempt.pushId = sidecar.Id(push.GetPushId())
 	attempt.refId = sidecar.Id(push.GetRefId())
 	request.NoteRefIds(attempt.refId)
-	if 0 < push.GetPartCount() {
+	switch {
+	case 0 < len(body.GetPartPlaces()):
+		// a seal: the parts' places, in part order, one per part the statement counts (push_seal.go)
+		if push.GetPartCount() == 0 || uint32(len(body.GetPartPlaces())) != push.GetPartCount() || len(body.GetPayload()) != 0 {
+			request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a seal whose places are not one per part").Reply(attempt.pushId))
+			return nil, false
+		}
+		attempt.seal = &sealReads{places: body.GetPartPlaces()}
+		request.Note("seal")
+	case 0 < push.GetPartCount():
 		// a push in parts is sealed by its parts' places, never posted whole
 		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a push in parts posted as one").Reply(attempt.pushId))
 		return nil, false
 	}
-	if attempt.formatRefusal == nil {
+	if attempt.formatRefusal == nil && attempt.seal == nil {
 		payload, err := sidecar.EvsCheckPayload(statement, body.GetPayload())
 		if err != nil {
 			refusal := EvsCheckRefusalOfCodec(err)
@@ -255,36 +293,46 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		attempt.formatRefusal = refusal
 	}
 
-	// the repo's network: repo/ names it once created, and a token reaches only its own network's repos
-	attempt.networkId = attempt.tokenNetworkId
-	if self.deps.GateViews == nil {
-		request.Unavailable(nil)
+	if !attempt.bind() {
 		return nil, false
 	}
-	view, answer := self.deps.GateViews.View(attempt.networkId)
+	ok = true
+	return attempt, true
+}
+
+// The attempt's gate view and 5b's identity, before any store read, for every stage: a statement the token's sidecar
+// did not sign costs evs nothing, and refuses nothing, since a refusal recorded for a replayed statement would block
+// its push (refusal_codes.go). false once the request has been answered.
+func (self *pushAttempt) bind() bool {
+	engine := self.engine
+	request := self.request
+	// the repo's network: repo/ names it once created, and a token reaches only its own network's repos
+	self.networkId = self.tokenNetworkId
+	if engine.deps.GateViews == nil {
+		request.Unavailable(nil)
+		return false
+	}
+	view, answer := engine.deps.GateViews.View(self.networkId)
 	if answer != EvsAuthAllowed || view == nil {
 		request.Unavailable(nil)
-		return nil, false
+		return false
 	}
-	attempt.gateView = view
-	// 5b's identity, before any store read: a statement the token's sidecar did not sign costs evs nothing, and
-	// refuses nothing, since a refusal recorded for a replayed statement would block its push (refusal_codes.go)
+	self.gateView = view
 	identity := &PushView{
-		RepoId:         attempt.repoId,
-		Statement:      statement,
+		RepoId:         self.repoId,
+		Statement:      self.statement,
 		TokenSidecarId: request.SidecarId,
 		TokenClientId:  sidecar.Id(request.Principal.ClientId),
 		Auth:           view,
-		Stage:          PushStageOnePart,
+		Stage:          self.stage(),
 		Now:            request.Now(),
 	}
 	if refusal := CheckSignature(identity); refusal != nil && refusal.Reason != EvsCheckReasonTimeStale && refusal.Reason != EvsCheckReasonTimeAhead {
-		request.Refuse(refusal.Reply(attempt.pushId))
-		return nil, false
+		request.Refuse(refusal.Reply(self.pushId))
+		return false
 	}
-	attempt.pushes = NewRecordPushSource(self.records, attempt.cluster, attempt.repoId, attempt.refId)
-	ok = true
-	return attempt, true
+	self.pushes = NewRecordPushSource(engine.records, self.cluster, self.repoId, self.refId)
+	return true
 }
 
 // The attempt from step 4 to its outcome. See the file header.
@@ -311,8 +359,14 @@ func (self *pushAttempt) run() *pushOutcome {
 func (self *pushAttempt) runSteps() *pushOutcome {
 	barrierKey := barrierRefKey(self.repoId, self.refId)
 	testHookBarrier(BarrierPushArrive, barrierKey)
-	cached := true
+	// a seal reads the cluster's head, since its own lease left the cached ETag stale (§11.9's cache row)
+	cached := self.seal == nil
 	for rerun := 0; rerun <= self.settings.PushRerunCount; rerun += 1 {
+		if self.seal != nil {
+			if outcome := self.readSealParts(); outcome != nil {
+				return outcome
+			}
+		}
 		outcome := self.step4(cached)
 		if outcome != nil {
 			return outcome
@@ -321,7 +375,8 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		if outcome := self.settle(self.head); outcome != nil {
 			return outcome
 		}
-		if self.fenced(self.head.Head) {
+		// the fence row ends an attempt that may issue step 7: a push or a seal, never a part
+		if self.part == nil && self.fenced(self.head.Head) {
 			return self.unknown()
 		}
 		refusal := self.check()
@@ -331,6 +386,9 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 				continue
 			}
 			return self.refuse(refusal)
+		}
+		if self.part != nil {
+			return self.appendPart()
 		}
 		if outcome := self.countedRules(); outcome != nil {
 			return outcome
@@ -346,7 +404,7 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 // After a commit, its own or one 5a found: an ERASE's slot rewrites and an own CONSUME's slot deletes, before the
 // 200 (§11.12).
 func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
-	if !outcome.committed || self.payload == nil {
+	if !outcome.committed || self.payload == nil || self.part != nil {
 		return outcome
 	}
 	flags := self.statement.Push.GetFlags()
@@ -369,7 +427,13 @@ func (self *pushAttempt) check() *EvsCheckRefusal {
 	if self.formatRefusal != nil {
 		return self.formatRefusal
 	}
-	return CheckPush(self.reads.view)
+	refusal := CheckPush(self.reads.view)
+	if refusal == nil && self.seal != nil {
+		// §11.8's seal row: 5g again for the parts against the head the seal commits on, which the joined payload's
+		// newest reads carry (push_seal.go)
+		refusal = CheckPaths(self.reads.view)
+	}
+	return refusal
 }
 
 // 429 BUSY: another attempt of the push may still land, so the client retries the same statement.
@@ -411,6 +475,10 @@ func (self *pushAttempt) answer(outcome *pushOutcome) {
 		} else {
 			request.Refuse(reply)
 		}
+		return
+	}
+	if outcome.partPlace != nil {
+		request.Reply(&protocol.EvsPushReply{Place: outcome.partPlace})
 		return
 	}
 	request.Reply(&protocol.EvsPushReply{Version: outcome.committedVersion, DepositHead: outcome.depositHead})

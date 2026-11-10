@@ -173,6 +173,29 @@ type EvsSettings struct {
 	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
 	// keeps none.
 	GenerationCacheCount int
+	// §11.8's lease row: the longest seal lease a push may ask for, 120 s. At most 120 s; positive.
+	LeaseMaxDuration time.Duration
+
+	// §11.9's request bounds (EVS1-M2-14): the paths one read names, 64; its ranges, 64, and their bytes in all, 32
+	// MiB; and the slots, maps, log pages and push records it names, each 64. Positive.
+	ReadPathMaxCount      int
+	ReadRangeMaxCount     int
+	ReadRangeMaxByteCount int64
+	ReadObjectMaxCount    int
+	// The body of a stored object one read frame carries, 1 MiB: an object past it spans frames. Positive and under
+	// the frame bound.
+	ReadFrameByteCount int
+	// §11.9's rounds row: a segment up to this is read whole and a larger one in ReadSegmentRangeAlign-aligned
+	// ranges, 256 KiB and 64 KiB. Positive.
+	ReadSegmentWholeByteCount int64
+	ReadSegmentRangeAlign     int64
+	// How many times a read goes to a newer head from the cluster when an entry holds a version past the head it
+	// read (§11.9's newest row), 2. Positive.
+	ReadHeadRetryCount int
+	// GET .../log's page: at most this many statements an answer, 1,000. Positive, at most 1,000.
+	LogReplyStatementCount int
+	// GET .../refs: the keys one LIST of head/<repo>/ returns, 1,000. Positive.
+	RefsListPageCount int
 
 	// §11.12's lifecycle: how many times a transition reads repo/ from the cluster again after another write came
 	// first or an answer was lost, before a route answers 429 BUSY or a job fails to be retried, 8. Positive.
@@ -248,6 +271,18 @@ func DefaultEvsSettings() *EvsSettings {
 		PushAttemptTimeout:        25 * time.Second,
 		PushBodyMaxByteCount:      2 * 1024 * 1024,
 		GenerationCacheCount:      100 * 1000,
+		LeaseMaxDuration:          evsLeaseMaxDuration,
+
+		ReadPathMaxCount:          64,
+		ReadRangeMaxCount:         64,
+		ReadRangeMaxByteCount:     32 * 1024 * 1024,
+		ReadObjectMaxCount:        64,
+		ReadFrameByteCount:        1024 * 1024,
+		ReadSegmentWholeByteCount: 256 * 1024,
+		ReadSegmentRangeAlign:     64 * 1024,
+		ReadHeadRetryCount:        2,
+		LogReplyStatementCount:    evsLogReplyMaxStatementCount,
+		RefsListPageCount:         1000,
 
 		RepoTransitionRetryCount: 8,
 		ShredListPageCount:       1000,
@@ -315,6 +350,19 @@ func (self *EvsSettings) Validate() error {
 		self.PushUnknownRereadCount <= 0 || self.PushUnknownRereadInterval < 0 || self.RefusalFenceInterval <= 0 ||
 		self.PushAttemptTimeout <= 0 || self.PushBodyMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
+	}
+	if self.LeaseMaxDuration <= 0 || evsLeaseMaxDuration < self.LeaseMaxDuration {
+		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)
+	}
+	if self.ReadPathMaxCount <= 0 || self.ReadRangeMaxCount <= 0 || self.ReadRangeMaxByteCount <= 0 || self.ReadObjectMaxCount <= 0 ||
+		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.RefsListPageCount <= 0 {
+		return fmt.Errorf("%w: a read's bounds, segment sizes, head retries and refs page must be positive", ErrEvsSettings)
+	}
+	if self.ReadFrameByteCount <= 0 || sidecar.EvsReadFrameMaxByteCount <= self.ReadFrameByteCount {
+		return fmt.Errorf("%w: a read frame's body %d, outside (0, %d)", ErrEvsSettings, self.ReadFrameByteCount, sidecar.EvsReadFrameMaxByteCount)
+	}
+	if self.LogReplyStatementCount <= 0 || evsLogReplyMaxStatementCount < self.LogReplyStatementCount {
+		return fmt.Errorf("%w: a log page of %d statements, outside (0, %d]", ErrEvsSettings, self.LogReplyStatementCount, evsLogReplyMaxStatementCount)
 	}
 	if self.RepoTransitionRetryCount <= 0 || self.ShredListPageCount <= 0 || self.ShredHoldRecheckInterval <= 0 {
 		return fmt.Errorf("%w: a transition's retry count, a shred's list page and its hold recheck must be positive", ErrEvsSettings)

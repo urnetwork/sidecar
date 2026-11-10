@@ -101,6 +101,8 @@ type ConfigHeadCheck struct {
 type ConfigHeadFacts struct {
 	// The ServiceSettings record the head holds, nil for none, so the defaults hold (§7.9's ServiceSettings).
 	Settings *protocol.ServiceSettings
+	// The VersioningRules record the head holds, nil for none, so the platform rule holds (§7.9, §11.7).
+	VersioningRules *protocol.VersioningRules
 }
 
 // Where a ConfigLog takes a base's rows and its config head's check from. A full reader's source opens the config
@@ -219,6 +221,11 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 	if err := self.reapplyTail(next, header.GetFoldedThrough(), kept.n, bits, true); err != nil {
 		return nil, self.baseFork(kept, "%v", err)
 	}
+	var previousRows []byte
+	if state.base != nil {
+		previousRows = self.baseRows[[sha256.Size]byte(state.base.header.GetRowsSha256())]
+	}
+	configAdvanceBaseShrinks(next, state.base, header, previousRows, rowsMessage)
 	result := next.finish()
 	self.retainBase(result, rows)
 	return result, nil
@@ -329,7 +336,7 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 	state.base = &configBase{n: kept.n, chain: kept.chain, timeMs: kept.entry.GetTimeMs(), header: header}
 	state.threshold = header.GetThreshold()
 	state.settings = configRowsSettingsOrDefault(rows.GetSettings())
-	state.headSettings, state.headSettingsKnown = nil, false
+	state.headSettings, state.headSettingsKnown, state.headVersioningRules = nil, false, nil
 	next.membersOwned, next.sidecarsOwned, next.delegationsOwned, next.keysOwned, next.proposalsOwned = true, true, true, true, true
 	next.indexersOwned = true
 	// every row came from these rows, so the builder owns them all
@@ -358,7 +365,7 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 // are unknown.
 func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.ProjectionRows, facts *ConfigHeadFacts) error {
 	if self.rowsOnly {
-		state.headSettings, state.headSettingsKnown = nil, false
+		state.headSettings, state.headSettingsKnown, state.headVersioningRules = nil, false, nil
 		return nil
 	}
 	if facts == nil {
@@ -367,7 +374,7 @@ func (self *ConfigLog) holdHeadFacts(state *ConfigState, rows *bridge.Projection
 	if !configRowsSettingsMatch(rows.GetSettings(), facts.Settings) {
 		return errors.New("rows: settings are not the config head's")
 	}
-	state.headSettings, state.headSettingsKnown = facts.Settings, true
+	state.headSettings, state.headSettingsKnown, state.headVersioningRules = facts.Settings, true, facts.VersioningRules
 	return nil
 }
 
@@ -688,6 +695,7 @@ func (self *ConfigLog) reapplyStatement(next *configStateBuilder, view *ConfigSt
 	if effectErr != nil {
 		self.log.Infof("[config]%s entry %d's effect ends at the base: %v", self.networkId, kept.n, effectErr)
 	}
+	configAdvanceShrinks(view, next, configEntryEffects(statement, nil))
 	next.addRing(statement.n, statement.id)
 	return statement, nil
 }
@@ -718,6 +726,7 @@ func (self *ConfigLog) reapplyTick(next *configStateBuilder, view *ConfigState, 
 	if err := configApplyTick(next, tick, activations); err != nil {
 		self.log.Infof("[config]%s tick %d's effect ends at the base: %v", self.networkId, kept.n, err)
 	}
+	configAdvanceShrinks(view, next, configEntryEffects(nil, activations))
 	return tick, activations, nil
 }
 

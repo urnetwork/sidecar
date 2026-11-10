@@ -356,12 +356,17 @@ func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
 	scratch := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: nil}
-	next, _, err := self.stateFromBase(state, scratch, header, rows)
+	next, rowsMessage, err := self.stateFromBase(state, scratch, header, rows)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
 	if err := self.reapplyTail(next, header.GetFoldedThrough(), entry.GetN(), verdicts, false); err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
+	var previousRows []byte
+	if state.base != nil {
+		previousRows = self.baseRows[[sha256.Size]byte(state.base.header.GetRowsSha256())]
+	}
+	configAdvanceBaseShrinks(next, state.base, header, previousRows, rowsMessage)
 	return nil
 }

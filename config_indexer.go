@@ -20,8 +20,12 @@ package sidecar
 import (
 	"bytes"
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"slices"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -219,4 +223,136 @@ func configApplySponsorSet(next *configStateBuilder, statement *configStatement)
 	}
 	row.Sponsor = bytes.Clone(sponsorSet.GetSponsorMemberId())
 	return nil
+}
+
+// IndexerSet's search service (TEAM-M10-01; §11.14, §18.4; owner decisions 157, 175, 177, 178): which designated
+// indexers answer a searcher's remote searches over a repo at this state.
+//
+//	network  an indexer designated at network scope answers any member's devices over the team repos the searcher
+//	         reads
+//	member   one at member scope answers its own member's devices over any repo they read, and an EvsShare reader
+//	         over the repo its member shared
+//	tagged   a tagged indexer answers only team repos
+//
+// The indexer must read the repo itself, and its services, sealed to the config's generation, must name search:
+// services opens them, the caller holding the key (OpenConfigBody), and a designation it cannot open serves no search.
+// Readers ignore search on a read_only or ephemeral subject, which IndexerSet's rule refuses before any row holds one.
+func (self *ConfigState) SearchIndexersFor(searcherId Id, repoId Id, services func(indexer ConfigIndexer) ([]protocol.IndexerService, bool)) []Id {
+	repo := self.Repo(repoId)
+	searcher, standing := self.standingSidecar(searcherId, self.timeMs)
+	if repo == nil || !standing {
+		return nil
+	}
+	readers := self.RepoReaders(repoId)
+	searcherReads := slices.Contains(readers, searcherId)
+	searcherMember, searcherUntagged := configRowMember(searcher)
+	searcherMemberDevice := configRowMemberDevice(searcher)
+	teamRepo := !aclRepoKindOwnerBound(repo.GetKind())
+	sharedToSearcher := false
+	for _, share := range repo.GetShares() {
+		if bytes.Equal(share.GetSubject(), searcherId.Bytes()) && (share.GetExpires() == 0 || self.timeMs < share.GetExpires()) {
+			sharedToSearcher = true
+		}
+	}
+	answering := []Id{}
+	for _, indexer := range self.Indexers() {
+		offered, opened := services(indexer)
+		if !opened || !slices.Contains(offered, protocol.IndexerService_INDEXER_SERVICE_SEARCH) {
+			continue
+		}
+		if indexer.SidecarId == searcherId || !slices.Contains(readers, indexer.SidecarId) {
+			continue
+		}
+		indexerMember, indexerUntagged := configRowMember(self.SidecarRow(indexer.SidecarId))
+		if !indexerUntagged && !teamRepo {
+			continue
+		}
+		answers := false
+		switch indexer.Scope {
+		case protocol.IndexerScope_INDEXER_SCOPE_NETWORK:
+			answers = searcherMemberDevice && teamRepo && searcherReads
+		case protocol.IndexerScope_INDEXER_SCOPE_MEMBER:
+			ownMember := indexerUntagged && searcherUntagged && searcherMember == indexerMember && searcherReads
+			sharedByMember := indexerUntagged && sharedToSearcher && bytes.Equal(repo.GetOwnerMemberId(), indexerMember.Bytes())
+			answers = ownMember || sharedByMember
+		}
+		if answers && !slices.Contains(answering, indexer.SidecarId) {
+			answering = append(answering, indexer.SidecarId)
+		}
+	}
+	return answering
+}
+
+// The network's indexers at the newest verified state, for `ur indexer ls`.
+func (self *Sidecar) Indexers() ([]ConfigIndexer, error) {
+	state, err := self.configState()
+	if err != nil {
+		return nil, err
+	}
+	return state.Indexers(), nil
+}
+
+// The config generation's key was not given, so services cannot be sealed: the designation is refused, never signed
+// with its services in the clear.
+var errConfigIndexerNoKey = errors.New("no key of the config's generation here: an indexer's services ride sealed to it")
+
+// Designates this device as an indexer at scope for services (TEAM-M2-18's `ur indexer add`), as the person confirmed
+// it (origin, never MCP or a hook), its services sealed to the config's current generation, whose key configKey answers
+// (the GkmClient's CurrentRepoKey of the config repo): nil holds none, and the act is refused. search is refused on an
+// app host, since an indexer is an always-on `ur daemon` (owner decisions 150, 197).
+func (self *Sidecar) DesignateIndexer(ctx context.Context, scope protocol.IndexerScope, services []protocol.IndexerService, appHost bool,
+	configKey func(ctx context.Context) (*EvsRepoKey, error), origin SidecarActOrigin, check SidecarPresenceCheck) error {
+	if appHost && slices.Contains(services, protocol.IndexerService_INDEXER_SERVICE_SEARCH) {
+		return errors.New("an app host answers no remote search: search is an always-on daemon's")
+	}
+	if len(services) == 0 {
+		return errors.New("a designation names at least one service")
+	}
+	identity := self.currentIdentity()
+	if identity == nil {
+		return ErrSidecarNoIdentity
+	}
+	if configKey == nil {
+		return errConfigIndexerNoKey
+	}
+	repoKey, err := configKey(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errConfigIndexerNoKey, err)
+	}
+	act, err := self.newAct(origin)
+	if err != nil {
+		return err
+	}
+	err = act.AddSealed(bridge.SignedType_SIGNED_INDEXER_SET, &protocol.IndexerSet{SidecarId: identity.SidecarId.Bytes(), Scope: scope},
+		func(header *bridge.StatementHeader, statement proto.Message) error {
+			sealed, err := SealConfigBody(repoKey, NewConfigSealContext(bridge.SignedType_SIGNED_INDEXER_SET, header), &protocol.IndexerServices{Services: services}, nil)
+			if err != nil {
+				return err
+			}
+			statement.(*protocol.IndexerSet).SealedServices = sealed
+			return nil
+		})
+	if err != nil {
+		return err
+	}
+	_, err = act.Run(ctx, check)
+	return err
+}
+
+// Retires this device's designation at scope (`ur indexer rm`), as the person confirmed it; the subject itself may sign
+// it (§7.9's IndexerSet).
+func (self *Sidecar) RetireIndexerScope(ctx context.Context, scope protocol.IndexerScope, origin SidecarActOrigin, check SidecarPresenceCheck) error {
+	identity := self.currentIdentity()
+	if identity == nil {
+		return ErrSidecarNoIdentity
+	}
+	act, err := self.newAct(origin)
+	if err != nil {
+		return err
+	}
+	if err := act.Add(bridge.SignedType_SIGNED_INDEXER_SET, &protocol.IndexerSet{SidecarId: identity.SidecarId.Bytes(), Scope: scope, Retire: true}); err != nil {
+		return err
+	}
+	_, err = act.Run(ctx, check)
+	return err
 }

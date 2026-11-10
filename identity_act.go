@@ -156,6 +156,13 @@ func (self *Sidecar) newAct(origin SidecarActOrigin) (*sidecarAct, error) {
 // pin, a fresh nonce and a not_after StatementTimeout from now. Refuses a type the identity key does not sign under a
 // statement purpose, and, unless the origin is a person's confirmation, any type but an own-resource filing.
 func (self *sidecarAct) Add(signedType bridge.SignedType, statement proto.Message) error {
+	return self.AddSealed(signedType, statement, nil)
+}
+
+// Add, with seal run on the statement once its StatementHeader is set and before it is encoded, nil for none: what a
+// statement with a sealed field needs, since the seal binds the header's network and nonce
+// (plan-TEAM-sealed-field-format), as IndexerSet's services (TEAM-M2-18).
+func (self *sidecarAct) AddSealed(signedType bridge.SignedType, statement proto.Message, seal func(header *bridge.StatementHeader, statement proto.Message) error) error {
 	if self.ran {
 		return ErrSidecarActState
 	}
@@ -184,6 +191,11 @@ func (self *sidecarAct) Add(signedType bridge.SignedType, statement proto.Messag
 	}
 	withHeader := proto.Clone(statement)
 	withHeader.ProtoReflect().Set(headerField, protoreflect.ValueOfMessage(header.ProtoReflect()))
+	if seal != nil {
+		if err := seal(header, withHeader); err != nil {
+			return err
+		}
+	}
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(withHeader)
 	if err != nil {
 		return err
