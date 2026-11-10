@@ -667,11 +667,8 @@ func (self *ConfigClient) authorityEntry(log *ConfigLog, before *ConfigState, af
 	}
 	entry.Windows = configMovedWindows(before, after)
 	entry.VoidedBindings = configVoidedBindings(before, after)
-	for _, sidecarId := range after.SidecarIds() {
-		if row := after.SidecarRow(sidecarId); row.GetRevokedAt() == 0 {
-			entry.AdmissionCount += 1
-		}
-	}
+	// what config_admissions bounds, as api counts it (config_workers.go)
+	entry.AdmissionCount = after.AdmissionCount()
 	for _, memberId := range after.MemberIds() {
 		if configRoleInAdminSet(after.Member(memberId).GetRole()) {
 			entry.AdminMemberIds = append(entry.AdminMemberIds, memberId)
