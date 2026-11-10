@@ -66,6 +66,11 @@ func TestAdmissionCompromiseCascade(t *testing.T) {
 	RunAdmissionRow(t, "the compromise cascade", admissionT2Tier(t))
 }
 
+// DESIGN-DETAILS 5.6's cascade from the confirmation history, at every reader.
+func TestTheCascadeReadsEveryConfirmation(t *testing.T) {
+	RunAdmissionRow(t, "the cascade reads every confirmation", admissionT2Tier(t))
+}
+
 func TestAdmissionAuthKeys(t *testing.T) {
 	RunAdmissionRow(t, "auth keys", admissionT2Tier(t))
 }
@@ -80,7 +85,8 @@ func TestRowsOnlyAndFullReadersAgreeOverGeneratedLogs(t *testing.T) {
 func TestEveryAdmissionRowRunsOnT2(t *testing.T) {
 	tested := []string{
 		"signers", "outside the AdminSet", "the recovery window", "two first devices racing", "owner consent", "committers",
-		"seats", "agents cost no commit", "read-only page Workers", "the compromise cascade", "auth keys", "generated logs",
+		"seats", "agents cost no commit", "read-only page Workers", "the compromise cascade", "the cascade reads every confirmation",
+		"auth keys", "generated logs",
 	}
 	rows := AdmissionRows()
 	if len(rows) != len(tested) {

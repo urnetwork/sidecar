@@ -27,8 +27,8 @@
 //     holding D's identity key and not its presence key, has a malicious api sequence its covered statements, each
 //     refused at its position by every reader and carried as 0 in the next base's tail_verdicts.
 //
-// The rest of each row is a named schedule a T2 test runs: FS-14's re-signed base, stale compile, replay rules and
-// vetoed replay after a fold; FS-16's activation across a fold; FS-102's removed agent and max_admits across a fold;
+// The rest of each row is a named schedule a T2 test runs: FS-14's re-signed base, stale compile, fold rule, replay
+// rules and vetoed replay after a fold; FS-16's activation across a fold; FS-102's removed agent and max_admits across a fold;
 // FS-124's five-statement act, a device with no key, and the sign-out that needs none. What the world cannot show is
 // listed in TEAM-M2-19's report: HeadCheck between forked readers (FS-14's first clause), the recovery's forged
 // genesis and RecoveryWrap through Sidecar.RecoverWithCode (FS-16), generations, wraps and the reader-seed thief
@@ -304,6 +304,33 @@ func Fs14StaleCompile(net *Net) *Schedule {
 			signedHeader, rows := net.BaseKeepingTheFold(net.WriterDevice(), stale)
 			if _, err := net.AppendBase(signedHeader, rows); !fsTeamRefused(err) {
 				return fmt.Errorf("api's answer to a stale compile: %v, want 403", err)
+			}
+			pin := net.SequenceAnyway(bridge.AuthEntryKindBase, signedHeader)
+			return fsTeamEveryReaderForkedAt(net, pin.GetVersion())
+		}),
+	)
+}
+
+// FS-14's fold rule (DESIGN-DETAILS 5.2.3): a base whose folded_through lies between the newest base's and that base's
+// position is refused by api (403), and a FORK for every reader once a malicious api appends it. The newest base, a
+// head change, keeps its fold, so a position lies between.
+func Fs14FoldRule(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	return fsTeamSchedule("FS-14 the fold rule", world,
+		fs14Start(world, true),
+		fsTeamDo("writer", world, func(net *sidecartest.AdmissionNet) error {
+			net.SetServiceSettings(&protocol.ServiceSettings{WitnessBoundHours: 48})
+			previous := net.State().Base()
+			if previous.GetVersion() < previous.GetFoldedThrough()+3 {
+				return fmt.Errorf("the head's base at %d keeps no tail past %d", previous.GetVersion(), previous.GetFoldedThrough())
+			}
+			between := func(header *bridge.ProjectionHeader) {
+				header.FoldedThrough = previous.GetFoldedThrough() + 1
+				header.TailVerdicts = net.TailVerdicts(header.GetFoldedThrough())
+			}
+			signedHeader, rows := net.BaseKeepingTheFold(net.WriterDevice(), between)
+			if _, err := net.AppendBase(signedHeader, rows); !fsTeamRefused(err) {
+				return fmt.Errorf("api's answer to a fold between: %v, want 403", err)
 			}
 			pin := net.SequenceAnyway(bridge.AuthEntryKindBase, signedHeader)
 			return fsTeamEveryReaderForkedAt(net, pin.GetVersion())

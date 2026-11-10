@@ -1335,6 +1335,7 @@ func AdmissionRows() []*AdmissionRow {
 		{Name: "agents cost no commit", Run: admissionRowAgents},
 		{Name: "read-only page Workers", Run: admissionRowReadOnlyWorkers},
 		{Name: "the compromise cascade", Run: admissionRowCascade},
+		{Name: "the cascade reads every confirmation", Run: admissionRowCascadeConfirmations},
 		{Name: "auth keys", Run: admissionRowAuthKeys},
 		{Name: "generated logs", Run: admissionRowGeneratedLogs},
 	}
@@ -1925,6 +1926,45 @@ func admissionRowCascade(t testing.TB, net *AdmissionNet) {
 		t.Fatal("the phone is parked or no config writer, or the stolen device still writes the config")
 	}
 	net.UseWriter(ownerPhone)
+	net.Fold(true)
+}
+
+// DESIGN-DETAILS 5.6's TestTheCascadeReadsEveryConfirmation, end to end: rows keep every AdmissionConfirm and
+// OwnerConfirm with its signer, position and whether it lifted a park, so the new device and the gate a base after
+// them starts reach the long-running reader's cascade from rows alone. A stolen device's redundant OwnerConfirm of a
+// device its member's laptop consented parks nothing, while the device it admitted after since_n is parked; and an
+// AdmissionConfirm that lifted a park pulls its device back in at a compromise revocation of the lifter from before
+// the lift.
+func admissionRowCascadeConfirmations(t testing.TB, net *AdmissionNet) {
+	owner := net.Owner()
+	memberM, laptop := net.ConsentedMember("m")
+	stolen, consented, parkedLater := net.Device("m stolen", memberM), net.Device("m consented", memberM), net.Device("m parked later", memberM)
+	net.AdmitDevice(laptop, stolen, 0)
+	net.AdmitDevice(laptop, consented, 0)
+	sinceStolen := net.Tip().GetVersion() + 1
+	net.MustLand(net.Sign(stolen, bridge.SignedType_SIGNED_OWNER_CONFIRM, net.OwnerConfirm(consented)))
+	net.AdmitDevice(stolen, parkedLater, 0)
+	net.Fold(true)
+	net.MustLand(net.Sign(laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.Revocation(stolen, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE, sinceStolen)))
+	if state := net.State(); state.Parked(consented.SidecarId) || !state.Parked(parkedLater.SidecarId) {
+		t.Fatalf("the consented device parked %t, the one the stolen device admitted %t", state.Parked(consented.SidecarId), state.Parked(parkedLater.SidecarId))
+	}
+
+	ownerPhone := net.Device("owner phone", owner.MemberId)
+	net.AdmitDevice(owner, ownerPhone, 0)
+	sinceLift := net.Tip().GetVersion() + 1
+	lift := net.MustLand(net.Sign(ownerPhone, bridge.SignedType_SIGNED_ADMISSION_CONFIRM, net.AdmissionConfirm(parkedLater)))
+	row := net.Row(parkedLater)
+	confirmations := row.GetConfirmations()
+	if row.GetParkedAt() != 0 || len(confirmations) == 0 || !confirmations[len(confirmations)-1].GetLiftedPark() ||
+		confirmations[len(confirmations)-1].GetAt() != lift.Pin.GetVersion() {
+		t.Fatalf("the lift: parked at %d, confirmations %v", row.GetParkedAt(), confirmations)
+	}
+	net.Fold(true)
+	net.MustLand(net.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.Revocation(ownerPhone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE, sinceLift)))
+	if !net.State().Parked(parkedLater.SidecarId) {
+		t.Fatal("the lifter's compromise left the device whose park it lifted unparked")
+	}
 	net.Fold(true)
 }
 
