@@ -241,6 +241,9 @@ func (self *ConfigLog) stateFromBase(previous *ConfigState, kept *configKeptEntr
 	for delegationId := range state.delegations {
 		next.delegationsCopied[delegationId] = true
 	}
+	for keyId := range state.keys {
+		next.keysCopied[keyId] = true
+	}
 	// rows whose acl part does not build are no state; the state's own acl part builds later, on first use, once the
 	// tail has re-applied
 	if _, err := NewAclState(state.aclRows, state); err != nil {

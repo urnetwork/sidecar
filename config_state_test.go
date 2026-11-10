@@ -111,6 +111,8 @@ type testConfigNet struct {
 
 	log      *ConfigLog
 	statesAt map[uint64]*ConfigState
+	// the presence key each device registered last, which countersigns its next covered statement in a helper
+	presenceKeys map[Id]*testPresenceKey
 }
 
 // A network at base 1: its owner a member with role OWNER and its first device the genesis device, base 1 signed by

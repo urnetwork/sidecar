@@ -57,7 +57,8 @@ var (
 	ErrConfigRuleMissing = fmt.Errorf("%w: rule not built", ErrConfigRefused)
 	// A read_only device signed what D-TEAM-24 refuses from one.
 	ErrConfigReadOnly = fmt.Errorf("%w: read_only", ErrConfigRefused)
-	// §7.9's presence row asks for a countersignature this build cannot check yet (TEAM-M2-06).
+	// §7.9's presence row asks a countersignature by a live presence key of the signer that the statement does not
+	// carry, or that does not verify (config_presence.go).
 	ErrConfigPresence = fmt.Errorf("%w: presence", ErrConfigRefused)
 )
 
@@ -788,81 +789,4 @@ func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick, activations
 		}
 	}
 	return nil
-}
-
-// §7.9's presence row as a hook until TEAM-M2-06 checks countersignatures: a statement the row covers, signed by a
-// sidecar that registered a live presence key, is refused, since nothing here can verify the countersignature it
-// must carry. A statement the row does not cover, or one whose signer has no live key, passes, as the row says, and a
-// recovery key's statements need none. A key counts as live unless revoked or past its not_after, so a void one
-// still refuses until TEAM-M2-04 says which are void.
-func configPresenceCheck(state *ConfigState, statement *configStatement) error {
-	for _, signer := range statement.signers {
-		if signer.Kind != ConfigSignerSidecar || !state.hasLivePresenceKey(signer.SidecarId, statement.timeMs) {
-			continue
-		}
-		if configPresenceCovers(state, statement.signedType, statement.body, signer.SidecarId) {
-			return fmt.Errorf("%w: %s needs its signer's presence countersignature, which TEAM-M2-06 checks", ErrConfigPresence, statement.signedType)
-		}
-	}
-	return nil
-}
-
-// Whether the sidecar registered a presence key that is not revoked and whose not_after, when it has one, comes after
-// timeMs (§7.9's presence row).
-func (self *ConfigState) hasLivePresenceKey(sidecarId Id, timeMs int64) bool {
-	for _, key := range self.keys {
-		if key.GetPurpose() == bridge.KeyPurpose_KEY_PURPOSE_PRESENCE && bytes.Equal(key.GetSigner(), sidecarId.Bytes()) &&
-			key.GetRevokedAt() == 0 && (key.GetNotAfter() == 0 || timeMs < key.GetNotAfter()) {
-			return true
-		}
-	}
-	return false
-}
-
-// Whether §7.9's presence row covers a statement by signer (D-TEAM-32's list): a compromise revocation and any other
-// SidecarRevoke of another sidecar; a presence key's KeyRegister or KeyRevoke; a Suspend of another sidecar; every
-// RecoveryVeto; a DelegationRevoke with since_n; a SidecarAdmit, AdmissionConfirm or OwnerConfirm of an untagged
-// sidecar; an AdminSet change, a MemberRevoke, a RecoveryBind or RecoveryRebind; and a proposal carrying one of these
-// or a cosign of such a proposal. What cannot be told apart counts as covered.
-func configPresenceCovers(state *ConfigState, signedType bridge.SignedType, body proto.Message, signerId Id) bool {
-	untaggedRow := func(sidecarBytes []byte) bool {
-		sidecarId, err := IdFromBytes(sidecarBytes)
-		if err != nil {
-			return true
-		}
-		row := state.sidecars[sidecarId]
-		return row == nil || len(row.GetTagIds()) == 0
-	}
-	switch message := body.(type) {
-	case *bridge.SidecarRevoke:
-		return message.GetReason() == bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE ||
-			!bytes.Equal(message.GetSidecarId(), signerId.Bytes())
-	case *protocol.KeyRegister:
-		return message.GetPurpose() == bridge.KeyPurpose_KEY_PURPOSE_PRESENCE
-	case *protocol.KeyRevoke:
-		key := state.keys[string(message.GetKeyId())]
-		return key == nil || key.GetPurpose() == bridge.KeyPurpose_KEY_PURPOSE_PRESENCE
-	case *bridge.Suspend:
-		return !bytes.Equal(message.GetSubject(), signerId.Bytes())
-	case *protocol.RecoveryVeto, *protocol.AdminSet, *bridge.MemberRevoke, *protocol.RecoveryBind, *protocol.RecoveryRebind:
-		return true
-	case *protocol.DelegationRevoke:
-		return message.GetSinceN() != 0
-	case *protocol.SidecarAdmit:
-		return len(message.GetTagIds()) == 0
-	case *protocol.AdmissionConfirm:
-		return untaggedRow(message.GetSidecarId())
-	case *protocol.OwnerConfirm:
-		return untaggedRow(message.GetSidecarId())
-	case *protocol.AuthorityProposal:
-		proposed, err := configProposedStatement(message, nil, 0, 0)
-		return err != nil || configPresenceCovers(state, proposed.signedType, proposed.body, signerId)
-	case *protocol.AuthorityCosign:
-		if len(message.GetProposalId()) != sha256.Size {
-			return true
-		}
-		proposal := state.proposals[[sha256.Size]byte(message.GetProposalId())]
-		return proposal == nil || configPresenceCovers(state, proposal.statement.signedType, proposal.statement.body, signerId)
-	}
-	return false
 }

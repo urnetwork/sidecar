@@ -293,7 +293,7 @@ func TestAProposalAtOneCompletesAtItsOwnEntry(t *testing.T) {
 	}
 	keyRegister, _ := net.propose(net.owner, bridge.SignedType_SIGNED_KEY_REGISTER, &protocol.KeyRegister{Header: net.header()})
 	if keyRegister.Accepted() || !errors.Is(keyRegister.Refusal, ErrConfigRuleMissing) {
-		t.Errorf("a KeyRegister proposal: %v", keyRegister.Refusal)
+		t.Errorf("a KeyRegister proposal, which no proposal carries: %v", keyRegister.Refusal)
 	}
 	nested, _ := net.propose(net.owner, bridge.SignedType_SIGNED_AUTHORITY_COSIGN, &protocol.AuthorityCosign{Header: net.header()})
 	if nested.Accepted() {

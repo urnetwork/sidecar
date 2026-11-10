@@ -609,6 +609,7 @@ type configStateBuilder struct {
 	membersCopied     map[Id]bool
 	sidecarsCopied    map[Id]bool
 	delegationsCopied map[string]bool
+	keysCopied        map[string]bool
 }
 
 // A new state sharing every field of state but its acl part, which builds again on first use.
@@ -649,6 +650,7 @@ func newConfigStateBuilder(previous *ConfigState, n uint64, chain [sha256.Size]b
 		membersCopied:     map[Id]bool{},
 		sidecarsCopied:    map[Id]bool{},
 		delegationsCopied: map[string]bool{},
+		keysCopied:        map[string]bool{},
 	}
 }
 
@@ -660,6 +662,7 @@ func (self *configStateBuilder) snapshot() *ConfigState {
 	clear(self.membersCopied)
 	clear(self.sidecarsCopied)
 	clear(self.delegationsCopied)
+	clear(self.keysCopied)
 	return snapshot
 }
 
@@ -754,6 +757,31 @@ func (self *configStateBuilder) delegationForWrite(delegationId []byte) *bridge.
 		row = proto.Clone(row).(*bridge.DelegationRow)
 		self.state.delegations[key] = row
 		self.delegationsCopied[key] = true
+	}
+	return row
+}
+
+// Sets a new key's row, which the builder then owns.
+func (self *configStateBuilder) putKey(row *bridge.KeyRow) {
+	if !self.keysOwned {
+		self.state.keys = configCloneMap(self.state.keys)
+		self.keysOwned = true
+	}
+	key := string(row.GetKeyId())
+	self.state.keys[key] = row
+	self.keysCopied[key] = true
+}
+
+// A key's row to change, nil when there is none.
+func (self *configStateBuilder) keyForWrite(keyId []byte) *bridge.KeyRow {
+	key := string(keyId)
+	row := self.state.keys[key]
+	if row == nil {
+		return nil
+	}
+	if !self.keysCopied[key] {
+		row = proto.Clone(row).(*bridge.KeyRow)
+		self.putKey(row)
 	}
 	return row
 }
