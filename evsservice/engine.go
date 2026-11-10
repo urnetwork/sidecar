@@ -231,6 +231,8 @@ func (self *EvsEngine) routes() []*EvsRoute {
 	routes := append(self.placeRoutes(), self.uploadRoutes()...)
 	routes = append(routes, self.pushRoutes()...)
 	routes = append(routes, self.subscriptionRoutes()...)
+	routes = append(routes, self.pathEpochRoutes()...)
+	routes = append(routes, self.erasureRoutes()...)
 	return append(routes, self.deps.testRoutes...)
 }
 

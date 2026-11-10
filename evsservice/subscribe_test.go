@@ -334,3 +334,21 @@ func TestEvsRedisCallsPassTheCrossslotLint(t *testing.T) {
 		t.Fatal("a family's keys are not one tag a repo")
 	}
 }
+
+// The daily sweep over every repo the metadata clusters list: each one's lapsed leases go, live ones stay.
+func TestSweepAllLeases(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.allowSubscribers(1000)
+	fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest(checkTestPath("a")))
+	fixture.clock.Advance(evsLeaseLife - time.Hour)
+	fixture.subscribe(http.MethodPost, fixture.check.otherId, fixture.leaseRequest(checkTestPath("b")))
+	fixture.clock.Advance(2 * time.Hour)
+	removed, err := SweepAllLeases(fixture.ctx, fixture.host.ServiceHost(), fixture.clock.Now())
+	if err != nil || removed != 1 {
+		t.Fatalf("swept %d %v", removed, err)
+	}
+	leases, err := ReadLeases(fixture.ctx, fixture.host.Redis, fixture.check.repoId)
+	if err != nil || len(leases) != 1 || leases[0].SidecarId != fixture.check.otherId {
+		t.Fatalf("leases after the sweep %v %v", leases, err)
+	}
+}

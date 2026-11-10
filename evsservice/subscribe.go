@@ -470,3 +470,47 @@ func SweepLeases(ctx context.Context, redis sidecar.Redis, repoId sidecar.Id, no
 	}
 	return reply.Integer, nil
 }
+
+// Every repo's expired leases dropped, for taskworker's daily sweep: each metadata cluster's repo/ objects listed,
+// each repo's hash swept. How many leases went. A host with no Redis has none to sweep.
+func SweepAllLeases(ctx context.Context, host *sidecar.ServiceHost, now time.Time) (int64, error) {
+	if host == nil || host.Blobs == nil {
+		return 0, errors.New("no host to sweep on")
+	}
+	if host.Redis == nil {
+		return 0, nil
+	}
+	removed := int64(0)
+	for _, clusterId := range host.Blobs.MetadataClusterIds() {
+		cluster, err := host.Blobs.Cluster(clusterId)
+		if err != nil {
+			return removed, err
+		}
+		startAfter := ""
+		for {
+			objects, more, err := cluster.List(ctx, repoKeyPrefix, startAfter, evsLeaseSweepListLimit)
+			if err != nil {
+				return removed, err
+			}
+			for _, info := range objects {
+				startAfter = info.Key
+				repoId, err := parseEvsHexId(strings.TrimPrefix(info.Key, repoKeyPrefix))
+				if err != nil {
+					continue
+				}
+				count, err := SweepLeases(ctx, host.Redis, repoId, now)
+				if err != nil {
+					return removed, err
+				}
+				removed += count
+			}
+			if !more || len(objects) == 0 {
+				break
+			}
+		}
+	}
+	return removed, nil
+}
+
+// The repo/ keys one LIST of the sweep reads.
+const evsLeaseSweepListLimit = 1000

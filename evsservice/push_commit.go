@@ -177,6 +177,12 @@ func (self *pushAttempt) admit() *pushOutcome {
 	if err != nil {
 		return self.unavailableOn(err)
 	}
+	if self.erasureP0() {
+		// within its network's 60 a minute: P0, never queued or refused (§11.13's classes)
+		self.writeCtx = self.engine.budget.IssueP0(self.ctx, self.cluster.ClusterId(), sidecar.WriteP0KindErasure, cost.ByteCount())
+		self.grant = p0Grant{ctx: self.writeCtx}
+		return nil
+	}
 	grant, err := self.engine.budget.AdmitP1(self.ctx, self.cluster.ClusterId(), connect.Id(self.tokenNetworkId), cost)
 	var refusal *sidecar.WriteRefusal
 	switch {
@@ -193,6 +199,17 @@ func (self *pushAttempt) admit() *pushOutcome {
 	self.writeCtx = grant.Context()
 	return nil
 }
+
+// A P0 issue's ctx as a grant: nothing to release.
+type p0Grant struct {
+	ctx context.Context
+}
+
+func (self p0Grant) Context() context.Context {
+	return self.ctx
+}
+
+func (self p0Grant) Close() {}
 
 // §11.13's push row for this push, at one record a batch: now its head's overwrite, its batch share and its new
 // slots; deferred its fold share (~0.3 folded entries a changed path), its batch's delete and evacuation (a parcel
@@ -332,6 +349,11 @@ func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte) slotWriteResu
 // A page-out that cannot finish pages nothing, and past 255 versions answers 429 FOLD_BEHIND.
 func (self *pushAttempt) nextHead() (*protocol.EvsHead, *pushOutcome) {
 	engine := self.engine
+	if self.statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
+		if outcome := self.foldEverything(); outcome != nil {
+			return nil, outcome
+		}
+	}
 	pageOut, err := engine.folder.PageOut(self.writeCtx, &EvsPageOutRequest{
 		Cluster:    self.cluster,
 		RepoId:     self.repoId,
@@ -357,6 +379,25 @@ func (self *pushAttempt) nextHead() (*protocol.EvsHead, *pushOutcome) {
 		return nil, self.unavailableOn(err)
 	}
 	return next, nil
+}
+
+// §11.7's when row (4): a PATH_EPOCH's own process folds every version through the head it commits on, so its step-7
+// head sets folded_through = v; a fold that cannot finish within step 7's window answers 503, refusing nothing.
+func (self *pushAttempt) foldEverything() *pushOutcome {
+	engine := self.engine
+	readAt := engine.clock.Now()
+	head, err := engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, self.refId)
+	if err != nil {
+		return self.unavailableOn(err)
+	}
+	deadline := self.reads.readAt.Add(self.settings.PushStepSevenWindow - self.settings.PushPageOutReserve)
+	if _, err := engine.folder.FoldAll(self.writeCtx, self.cluster, self.repoId, self.refId, head, readAt, deadline); err != nil {
+		return self.unavailable()
+	}
+	if engine.folder.Horizon(self.repoId, self.refId, self.head.Head) < self.head.Version() {
+		return self.unavailable()
+	}
+	return nil
 }
 
 // The commit's head over self.head, with pageOut applied. See the file header.
@@ -396,6 +437,15 @@ func (self *pushAttempt) buildNextHead(pageOut *EvsPageOut) (*protocol.EvsHead, 
 	next.Window = append(append([]byte{}, next.GetWindow()...), entry.Encode()...)
 	next.Lease = nil
 	next.Deleted = push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) != 0
+	switch {
+	case push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0:
+		next.PathEpoch = committedPathEpoch(prior, push.GetPathEpoch(), push.GetPathMapSha256())
+	case self.due != nil:
+		next.PathEpoch = applyPathEpochDue(next.GetPathEpoch(), self.due, self.engine.clock.Now())
+	}
+	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) != 0 {
+		next.ConsumedThrough = consumedThroughOf(prior, push)
+	}
 	if err := pageOut.Apply(next); err != nil {
 		return nil, err
 	}
