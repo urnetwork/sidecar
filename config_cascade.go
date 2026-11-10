@@ -386,6 +386,8 @@ func configApplyCompromise(next *configStateBuilder, statement *configStatement,
 		target.RevokedAt = statement.n
 	}
 	target.Cascades = append(target.Cascades, &bridge.CascadeSpanRow{From: revoke.GetSinceN(), Until: statement.n})
+	// the revoked sidecar's forwarding Delegations end with it, those from before since_n too (D-TEAM-33)
+	configEndForwarding(next, sidecarId, statement.n)
 	for _, member := range closure.Members[1:] {
 		configParkSidecar(next, member.SidecarId, member.From, statement.n)
 	}
@@ -400,7 +402,9 @@ func configApplyCompromise(next *configStateBuilder, statement *configStatement,
 	return nil
 }
 
-// Parks a sidecar at n, unless it is revoked or parked already, and keeps its span [from, n) in P.
+// Parks a sidecar at n, unless it is revoked or parked already, and keeps its span [from, n) in P. Its forwarding
+// Delegations follow it (D-TEAM-33): one it signed inside the span is void and ends here, and the key of one it signed
+// before drops here until a lift returns it.
 func configParkSidecar(next *configStateBuilder, sidecarId Id, from uint64, n uint64) {
 	row := next.sidecarForWrite(sidecarId)
 	if row == nil {
@@ -410,6 +414,7 @@ func configParkSidecar(next *configStateBuilder, sidecarId Id, from uint64, n ui
 		row.ParkedAt = n
 	}
 	row.Cascades = append(row.Cascades, &bridge.CascadeSpanRow{From: from, Until: n})
+	configParkForwarding(next, sidecarId, from, n)
 }
 
 // Sets each member's binding in effect to its newest binding no cascade voids, none when every one is void (§7.9: a
@@ -450,6 +455,8 @@ func configConfirmSidecar(next *configStateBuilder, n uint64, kind uint32, signe
 		return
 	}
 	row.ParkedAt = 0
+	// its forwarding key returns with it, unless a Suspend still holds it (D-TEAM-33)
+	configReturnForwardingKey(next, sidecarId)
 	if !configRowMemberDevice(row) || aclRowsSuspends(next.state.aclRows, sidecarId) {
 		return
 	}
@@ -571,8 +578,11 @@ func (self *ConfigState) CascadePlan(targetId Id, sinceN uint64) (*ConfigCascade
 
 	target := self.sidecars[targetId]
 	for _, delegation := range self.Delegations() {
+		// the revoked sidecar's own forwarding Delegations end with it, whenever it signed them
+		forwardSidecarId, forwards := configRowForwardSidecar(delegation)
 		if closure.voidsRecord(self, delegation.GetSigner(), delegation.GetAt()) ||
-			bytes.Equal(delegation.GetDelegationId(), target.GetDelegationId()) {
+			bytes.Equal(delegation.GetDelegationId(), target.GetDelegationId()) ||
+			(forwards && forwardSidecarId == targetId && delegation.GetEndedAt() == 0) {
 			plan.EndedDelegationIds = append(plan.EndedDelegationIds, bytes.Clone(delegation.GetDelegationId()))
 		}
 	}

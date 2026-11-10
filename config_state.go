@@ -212,6 +212,10 @@ type ConfigState struct {
 	// §7.9's leaves rank, built on first use
 	leavesOnce  sync.Once
 	leavesCache *configLeaves
+
+	// each sidecar's live forwarding Delegation, built on first use (config_forwarding.go)
+	forwardingOnce  sync.Once
+	forwardingCache map[Id]*bridge.DelegationRow
 }
 
 // The network the log is of.
