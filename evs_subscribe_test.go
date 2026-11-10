@@ -445,21 +445,6 @@ func TestEvsLeaseRenewsOnceOverADayAtARandomTime(t *testing.T) {
 	if leases.postCount() != posts+1 {
 		t.Fatalf("%d renewals", leases.postCount()-posts)
 	}
-	// a reconnect: a new generation attaches, and nothing renews
-	test.client.clock = &evsSubscribeLoopClock{evsTestClock: test.clock, armed: make(chan time.Duration, 64), fire: make(chan time.Time)}
-	component := NewEvsComponent(test.client)
-	componentCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	queue := newSidecarComponentQueue(componentCtx, 4, 1024*1024, &sidecarQueueCounters{}, NewNoopLogger())
-	defer queue.closeAndWait()
-	if err := component.Attach(&SidecarEnv{Ctx: componentCtx, queue: queue}); err != nil {
-		t.Fatal(err)
-	}
-	test.client.Close()
-	subscriber.runDue(ctx)
-	if leases.postCount() != posts+1 {
-		t.Errorf("a reconnect renewed: %d", leases.postCount()-posts)
-	}
 }
 
 // FS-4's closing case: a read finding the ref's current epoch past the lease's re-tokenizes the subscription, leases

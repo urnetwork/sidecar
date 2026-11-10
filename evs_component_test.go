@@ -8,6 +8,7 @@ package sidecar
 import (
 	"context"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -44,5 +45,36 @@ func TestEvsComponentRoutesHintsThroughItsQueue(t *testing.T) {
 	<-done
 	if got := test.client.hintedVersion(repoId, refId); got != 9 {
 		t.Errorf("hinted %d", got)
+	}
+}
+
+// §11.10's renew row: a reconnect, a new generation attaching, starts the subscriptions' rounds once and renews no
+// lease that is not due.
+func TestEvsComponentReconnectRenewsNothing(t *testing.T) {
+	world := newEvsTestWorld(t)
+	leases := newEvsTestLeases(world)
+	test := newEvsSubscribeTest(t, world, leases, newEvsTestStore(t))
+	world.push(&evsTestChange{path: "docs/a", content: []byte("a")})
+	ctx := context.Background()
+	if _, err := test.client.Repo(world.repoId).Subscribe(ctx, &EvsSubscribeArgs{RefName: EvsMainRefName, Paths: []string{"docs"}}); err != nil {
+		t.Fatal(err)
+	}
+	test.client.subscriber.nextResyncAt = test.clock.Now().Add(1000 * time.Hour)
+	posts := leases.postCount()
+	test.client.clock = &evsSubscribeLoopClock{evsTestClock: test.clock, armed: make(chan time.Duration, 64), fire: make(chan time.Time)}
+	component := NewEvsComponent(test.client)
+	for range 2 {
+		componentCtx, cancel := context.WithCancel(context.Background())
+		queue := newSidecarComponentQueue(componentCtx, 4, 1024*1024, &sidecarQueueCounters{}, NewNoopLogger())
+		if err := component.Attach(&SidecarEnv{Ctx: componentCtx, queue: queue}); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		queue.closeAndWait()
+	}
+	component.Close()
+	test.client.subscriber.runDue(ctx)
+	if leases.postCount() != posts {
+		t.Errorf("a reconnect renewed: %d", leases.postCount()-posts)
 	}
 }
