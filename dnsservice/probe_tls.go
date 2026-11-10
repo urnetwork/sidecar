@@ -17,7 +17,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"sync"
 	"time"
 
 	"github.com/urnetwork/sidecar"
@@ -111,40 +110,13 @@ func (self *dnsNetProbeDialer) DialProbe(ctx context.Context, address netip.Addr
 	return self.dialer.DialContext(ctx, "tcp", address.String())
 }
 
-// One probe of address with hello, passing only on tlsedge's alert within timeout on clock. Every
-// fault is a failure, and none is logged, since a connection's error names its addresses. The timeout
-// and ctx's end each cut the connection short, so a silent far side holds a probe no longer.
+// One probe of address with hello, passing only on tlsedge's alert within timeout on clock, on
+// dnsProbeExchange's terms.
 func dnsProbeOnce(ctx context.Context, clock sidecar.Clock, timeout time.Duration, dialer DnsProbeDialer, address netip.AddrPort, hello []byte) bool {
-	probeCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var connLock sync.Mutex
-	var conn net.Conn
-	cut := false
-	context.AfterFunc(probeCtx, func() {
-		connLock.Lock()
-		defer connLock.Unlock()
-		cut = true
-		if conn != nil {
-			conn.SetDeadline(dnsPastDeadline)
+	return dnsProbeExchange(ctx, clock, timeout, dialer, address, func(conn net.Conn) bool {
+		if _, err := conn.Write(hello); err != nil {
+			return false
 		}
+		return dnsProbeAnswerPasses(conn)
 	})
-	stop := clock.AfterFunc(timeout, cancel)
-	defer stop()
-	dialed, err := dialer.DialProbe(probeCtx, address)
-	if err != nil {
-		return false
-	}
-	defer dialed.Close()
-	if func() bool {
-		connLock.Lock()
-		defer connLock.Unlock()
-		conn = dialed
-		return cut
-	}() {
-		return false
-	}
-	if _, err := dialed.Write(hello); err != nil {
-		return false
-	}
-	return dnsProbeAnswerPasses(dialed)
 }

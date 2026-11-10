@@ -56,6 +56,9 @@ type dnsMetrics struct {
 	// Whether each lb interface's address of a family is in the healthy set, by inventory name and
 	// family, which OPS's page for a failing split probe reads.
 	interfaceHealthy sidecar.MetricsGauge
+	// Whether each router interface's address of a family answers mx hosts, by inventory name and
+	// family: its 25 banner and drains decide it (DNS-M7-01).
+	routerHealthy sidecar.MetricsGauge
 	// Whether never-all is keeping a family's last set, by set (edge or router) and family.
 	healthyHeld sidecar.MetricsGauge
 	// Feed polls, by what each came to: rows, a reload, nothing new, or an error.
@@ -88,6 +91,8 @@ func newDnsMetrics(metrics sidecar.Metrics) *dnsMetrics {
 		tcpConnections: metrics.Gauge("urnetwork_dnsedge_tcp_connections", "TCP connections held now."),
 		interfaceHealthy: metrics.Gauge("urnetwork_dnsedge_interface_healthy",
 			"Whether an lb interface's address of a family is answered, by interface and family.", "interface", "family"),
+		routerHealthy: metrics.Gauge("urnetwork_dnsedge_router_healthy",
+			"Whether a router interface's address of a family is answered at mx hosts, by interface and family.", "interface", "family"),
 		healthyHeld: metrics.Gauge("urnetwork_dnsedge_healthy_held",
 			"Whether every address of a family failed and the last set is kept, by set and family.", "set", "family"),
 		feedPolls:  metrics.Counter("urnetwork_dnsedge_feed_polls_total", "Feed polls, by what each came to.", "result"),
