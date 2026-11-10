@@ -106,6 +106,9 @@ type rpcResponse struct {
 	hasClientPublicKey bool
 	// the lane the response rode, whose contract a marked pair's sender adopts (rpc_marked_pair.go)
 	transferKey connect.TransferKey
+	// when its last envelope passed this side's inline handler, as of which a Pong touches a marked
+	// pair's session (rpc_marked_pair.go)
+	arrivalTime time.Time
 }
 
 // One pending request's mailbox, which takes its first response.
@@ -155,6 +158,7 @@ func (self *Subprotocol) dispatchResponse(ctx context.Context, message *subproto
 		clientPublicKey:    message.clientPublicKey,
 		hasClientPublicKey: message.hasClientPublicKey,
 		transferKey:        message.transferKey,
+		arrivalTime:        message.arrivalTime,
 	}
 	select {
 	case pending.responses <- response:

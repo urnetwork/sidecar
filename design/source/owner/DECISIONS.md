@@ -1048,6 +1048,76 @@ The build raised its questions in a ledger (`.stack/decisions/LEDGER.json`, outs
     - Not taken: (2) running a witness as a sidecar, which costs each customer or auditor a sidecar and an adapter in front of its C2SP witness; (3) no online call, so a person or forwarder carries each checkpoint and witnessed times lag.
     - Raised by the RECORD.md draft (the build's ledger, QD-242).
 
+215. **Forwarding adds at most 6 MiB of stripped executable to the iOS network extension, whose signed ceiling rises from 50 MiB to 54 MiB (option 1, the recommendation; Q-SDK-7's executable half).**
+    - Question: Q-SDK-7 proposed that forwarding, which owner decision 197 has follow the config and compile its own rules in every VPN component, add at most 4 MiB of executable to the iOS extension, but nobody had measured it. Measured on 2026-11-10, the `ios_extension` leg with forwarding's entry points and every other root file tagged out adds 5,040,248 B stripped over the pre-sidecar leg, before the bridge statements and compiler, which add about 350,000 B more.
+    - Answer: the leg adds at most 6 MiB (6,291,456 B) of executable, measured stripped as the shipped binding is, and the signed extension's ceiling rises from 50 MiB to 54 MiB (56,623,104 B). One implementation of the rule table stays. `make size`'s limit for the leg and `check_apple_size.sh`'s ceiling take these numbers.
+    - Cost: artifact size, and about 1 MiB more static memory in the tunnel.
+    - Not taken: (2) holding the proposed 4 MiB, which one shared verifier cannot reach (without evs head reads, the gkm client and the poll it still adds 4,400,320 B), so part of the rules would need a second implementation; (3) holding D-SDK-20's original 1 MiB with a second follower, policy evaluator and compiler in `sidecar/device`, two implementations of security-critical rules to keep equal.
+    - Raised by the design details (DESIGN-DETAILS.md section 4; the build's ledger, QD-619).
+
+216. **A forwarding compile in the Apple network extensions is admitted only within a 10 MiB cap under a 30 MiB process ceiling, and a network past it keeps its last verified state there (option 1, the recommendation; Q-SDK-7's memory half).**
+    - Question: owner decision 197 has the VPN component compile its own rules from the network's verified rows, which decode at about five times their bytes (10,528,336 B for a 5,000-device team, measured), while the iOS tunnel's Go runtime runs at 19.6 MiB connected and 26.0 to 27.4 MiB under provider load, against a 28 MiB target and a 32 MiB soft limit; §18.10 had proposed 8 MiB while compiling, unmeasured. How much may a compile take there, and what happens to a network whose compile does not fit?
+    - Answer: a compile in the iOS and macOS network extensions is admitted only when 5 × rows + 2 × head + 1 MiB fits a 10 MiB per-compile cap and the room under a 30 MiB process ceiling, which networks to about 4,300 devices fit at the tunnel's connected baseline; under provider load a compile waits for room. A larger network keeps its last verified state on that device, applies every revocation it can check, raises `bridge_alarm` once a statement that could narrow reach has waited 10 minutes, and does not go pending for that wait (the build's ledger, QD-621), and it compiles on Android, Windows and Linux. §22.9's cell compiles a 3,000-device team within the cap and refuses a 5,000-device one with the alarm.
+    - Cost: teams past about 4,300 devices do not compile in the Apple extensions until review-phase work removes the bound, if such teams matter on iOS.
+    - Not taken: (2) a 12 MiB cap at the 32 MiB soft limit, which admits a 5,000-device team only while the tunnel is otherwise idle and leaves the collector running continuously while packets flow; (3) the app's sidecar role compiling for networks over the cap and handing the state over the device RPC, which waits on the app as owner decision 197 ruled out; (4) a compact per-host state in the shared verifier now, a rework of landed code.
+    - Raised by the design details (DESIGN-DETAILS.md section 4; the build's ledger, QD-620).
+
+217. **The key origin keeps one IndexedDB database per network, `urnetwork-sidecar-v1-<network_id>`, each its own sidecar instance (option 1, the recommendation).**
+    - Question: §18.8 keeps one page Worker per network under a per-network Web Lock, but the key origin's whole state sat in one IndexedDB database whose one instance document lists every network and which the core edits read-modify-write; two tabs on two networks each hold their own lock, so nothing ordered their edits, and an enrollment in one tab and a sign-out in the other could each write back the document it read, losing one change. Which serializes it?
+    - Answer: one IndexedDB database per network, `urnetwork-sidecar-v1-<network_id>`, each its own sidecar instance with its own instance document and WebCrypto root key, so two networks' page Workers share nothing and §18.8's per-network Web Lock covers everything a Worker writes.
+    - Cost: the page Worker's open and its single-database layout change, and a root key per network; a browser eviction still clears every network at once.
+    - Not taken: (2) a second, instance-wide Web Lock around every edit of the instance document, which needs a hook in the core and holds a lock another network's tab may wait on; (3) one Worker per browser for every network, which needs multi-network Workers before M4 and makes every tab wait on one Worker.
+    - Raised by the build (SDK-M4-04; the build's ledger, QD-645).
+
+218. **A bridge rule filed under a multi-use decision carries the decisions' template beside its own use's action, as `BridgeApproval.template_action` (option 1, the recommendation).**
+    - Question: §16.6 lets one multi-use decision activate up to its uses `bridge_expose` rules, each under the rule id §17.8 derives from its use's effect_key, so a reader needs both the template every decision's payload_sha256 hashes and the use's own action, but `BridgeApproval` carried one action, and the two agree only when uses is 1.
+    - Answer: `BridgeApproval` gains `bytes template_action = 3`. With it set, every decision's payload_sha256 hashes the template, `canonical_action` is this use's action, from which §17.8 derives the rule id through effect_key, and readers check that the use matches the template; with it unset, the single-use reading stands. A multi-use decision then files up to its uses rules, which the ledger's count binds. Binding a rule's body to `expose`'s fields is settled with the question on CanonicalAction's detail (record-m2-01-canonical-action-detail).
+    - Cost: one additive field inside the sealed body, so no §2.8 line.
+    - Not taken: (2) single-use bridge rules, so a decision with uses above 1 files none and §16.6's bridge half of AD2 goes; (3) the template in the ApprovalRequest, fetched from the record, which a forwarding role does not read.
+    - Raised by the build (BRIDGE-M2-01; the build's ledger, QD-631).
+
+219. **The key origin signs a page Worker in by a hand-off from the ur.io session, a one-time `/auth/code-create` code passed by postMessage (option 2; the build recommended sign-in inside the key origin).**
+    - Question: §18.8 has the key origin mint each page Worker's `admin_refused`, `strict_exp` top-level client, and re-mint it after a lapse, but no section named the credential: `POST /network/enroll` takes an auth key, a client token cannot create a top-level client (server/model/network_client_model.go:382), and pages may hold no token.
+    - Answer, in the owner's words: "the file's option 2, a hand-off from the ur.io session: the page calls /auth/code-create and passes the one-time code to the key origin by postMessage, and the key origin runs /auth/code-login, mints the client with POST /network/auth-client and drops the network token." Re-minting after a lapse takes the same hand-off.
+    - Cost: the one-time code crosses a page an XSS may read, as ur.io's `localStorage` network token already does, so §18.8's pages row says the page handles both.
+    - Not taken: (1) sign-in inside the key origin with PKCE under a new public client `ur-web`, a single-use auth key of at most 5 min and `POST /network/enroll`, which keeps every token out of https://ur.io at the cost of a second public client, a redirect landing on `sidecar.ur.io`, a popup and a sign-in at each lapse (the recommendation); (3) a single-use auth key issued by the member's consented device, the strongest, which a person with no other device cannot start and which needs app work.
+    - Raised by the build (plan-SDK; the build's ledger, QD-015).
+
+220. **A requested `dial` or `route` grant seals its prefixes and ports in its CanonicalAction, so api checks it by ids alone (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §8.8 has api hash and read a requested grant's CanonicalAction, whose `cidrs`, `grant_dst` and `target_port` carry its prefixes and ports, and §17.9's `bridge_forward` files a GrantActivate, so a forward's port and a requested route's LAN prefix reach api in the log whatever rows hold, while D-BRIDGE-6 and §17.8 promise that no prefix or port reaches the server.
+    - Answer: in a `dial` or `route` grant's CanonicalAction, `rule_id`, `subject`, `grant_allow`, `expires_millis` and a subject-only `grant_dst` stay clear, and its prefixes and ports (`cidrs`, `target_port`, any `ip:` or port text in `grant_dst`) move to a new `bytes sealed_detail = 38`, sealed as a statement's body is, raising CanonicalAction's version. `payload_sha256` still covers the stored bytes, so api's match check is unchanged and checks ids only; approvers and readers open the detail to render and enforce it. Publishes keep their clear fields, which are public anyway.
+    - Cost: one CanonicalAction field and version, approvers opening a seal before they render, and the change before record.proto freezes at M3.
+    - Not taken: (2) disclosing it, so §17.8, D-BRIDGE-6 and api-7 say a requested grant's prefix and port reach the operator, which falls short of owner decisions 5 and 72's id-only wording.
+    - Raised by the build (plan-BRIDGE; the build's ledger, QD-003).
+
+221. **The key origin serves only a promoted build, whose loader and `sidecar.wasm` the release's signed `SHA256SUMS` lists (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §18.8 said the key origin serves "only the signed loader", but no section said signed how, and no browser can verify a loader before running it (EX7).
+    - Answer: from M4 the loader and `sidecar.wasm` join the release's signed `SHA256SUMS` (§4.10), `sidecar.ur.io` serves only a promoted build, and the loader pins `sidecar.wasm`'s SHA-256 and checks it before instantiating. "Signed" means listed in those sums, so anyone can compare the served bytes to them; no browser verifies them on load, so EX7 stands.
+    - Cost: each page Worker fix waits for the release's two-person signing.
+    - Not taken: (2) the same sums for audit only, web fixes shipping at once, so "signed" means only that some served builds were; (3) dropping the word, so the key origin's bytes have no signed record.
+    - Raised by the build (plan-SDK and plan-REPO; the build's ledger, QD-037).
+
+222. **`ur tun` on Windows neither bundles nor fetches wintun.dll, and loads a copy already on the host only after checking it against the Windows app's pins (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §17.10 puts `ur tun`'s OS tun on `golang.zx2c4.com/wireguard/tun`, which on Windows loads wintun.dll, whose prebuilt binary carries a custom license that §4.7 refuses, so a release zip that carried it would need an exception.
+    - Answer: do not bundle or fetch it. `ur tun` on Windows looks for wintun.dll beside `ur.exe` or at the installed app's path, loads it only after its SHA-256 and Authenticode signer match the pins in windows/app/tools/fetch-deps.ps1 (0.14.1), since `ur tun` runs elevated and an unchecked DLL there is a privilege path, and otherwise prints where to get it. The release zip holds no DLL. Bundling can follow once counsel has read the license.
+    - Cost: a worse first run, and CLI-only hosts need a manual step.
+    - Not taken: (2) bundling the pinned DLL under an owner-approved exception to §4.7, after counsel reads the license; (3) no OS tun on Windows, dropping §17.18's `ur tun` there, a departure from the phasing.
+    - Raised by the build (plan-BRIDGE; the build's ledger, QD-125).
+
+223. **A minimal real ur.io/recurd page is built on mmm's `sidecar` branch, its visual design out of scope (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §23.4 puts ur.io/recurd's sign-in, downloads and page Worker in M4, with "ur.io/recurd opens a vault record" an exit criterion, while owner rule 6 and the implementation brief leave app, console and extension UI out, so it was unclear whether the page itself is built.
+    - Answer: build a minimal real page at `mmm/ur.io/astro/src/pages/recurd/` on mmm's `sidecar` branch: the served-code label, the key-origin frame, the sign-in hand-off, a record list, one record view and download links, unstyled beyond the site's layout. Visual design stays out. The seams and the fixture page are built either way.
+    - Cost: about 300 lines in mmm.
+    - Not taken: (2) seams only, M4's exit shown on a fixture and listed open until someone builds the page; (3) the owner's web work building it against those seams.
+    - Raised by the build (plan-SDK; the build's ledger, QD-140).
+
+224. **C16's receive gate latches at this side's seal for M4, and before M8 turns it on for app-device hosts the plaintext an Opportunistic peer has in flight at the seal is measured (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: a responder usually seals first, so for about one round trip an Opportunistic initiator still sends plaintext, legitimately, which a host whose C16 gate latched at its own seal acknowledges and discards, ending the sender's retry. Should the gate latch at this side's seal or at the peer's first sealed frame?
+    - Answer: keep it as landed for M4, latching at this side's seal. Before M8 turns the setting on for app-device hosts, measure how much plaintext an Opportunistic client has in flight at the seal, and if the loss is visible take option 3: latch at the peer's first sealed frame, bounded by `TlsTimeout` from this side's seal.
+    - Cost: until then each session start at a sticky host can lose up to a round trip of an Opportunistic peer's frames.
+    - Not taken: (2) latching at the peer's first sealed frame alone, which accepts a forged plaintext pack until then, without end for a silent peer; (3) now, before the measurement.
+    - Raised by the build (connect's C16; the build's ledger, QD-275).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

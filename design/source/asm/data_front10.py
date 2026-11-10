@@ -9,8 +9,11 @@ them from sidecar/DESIGN-AMENDMENTS.md: the nightly count's shard sums (198), Te
 fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203),
 the drop job's horizon, amending 183 (204), settings in rows (205), the sweep's triggers (206), a reported URL's
 path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210),
-the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213)
-and the witness call outside the planes (214)."""
+the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213),
+the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), deciding
+Q-SDK-7, the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in
+hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled
+(222), the ur.io/recurd page (223) and C16's latch (224)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -110,6 +113,38 @@ INDEX = list(_P9['INDEX']) + [
     (214, "D-ARCH-2",
      "A checkpointer's own HTTPS call to a witness its log admin named is no URnetwork carrier: it carries a signed "
      "note and a consistency proof, never an entry, and no URnetwork server takes part."),
+    (215, "Q-SDK-7",
+     "Forwarding adds at most 6 MiB of stripped executable to the iOS network extension, whose signed ceiling rises "
+     "from 50 MiB to 54 MiB; one implementation of the rule table stays."),
+    (216, "Q-SDK-7",
+     "A forwarding compile in the Apple extensions needs 5 × rows + 2 × head + 1 MiB within a 10 MiB cap and the "
+     "room under a 30 MiB ceiling, about 4,300 devices; a larger network keeps its last verified state there and "
+     "alarms, and no wait for a compile makes it pending."),
+    (217, "Key origin storage",
+     "The key origin keeps one IndexedDB database per network, `urnetwork-sidecar-v1-<network_id>`, each its own "
+     "instance and root key, so the per-network Web Lock covers everything a Worker writes."),
+    (218, "Bridge approvals",
+     "`BridgeApproval.template_action` carries a multi-use decision's template beside each use's action, so readers "
+     "check the use against it and one decision files up to its uses bridge rules."),
+    (219, "Key origin sign-in",
+     "The key origin signs a page Worker in by the ur.io session's hand-off: a one-time `/auth/code-create` code by "
+     "postMessage, redeemed at `/auth/code-login` to mint its client, the network token then dropped."),
+    (220, "Requested grants",
+     "A requested `dial` or `route` grant's prefixes and ports move into its CanonicalAction's sealed "
+     "`sealed_detail`, so api checks the grant by ids alone."),
+    (221, "Key origin builds",
+     "`sidecar.ur.io` serves only a promoted build, its loader and `sidecar.wasm` listed in the release's signed "
+     "`SHA256SUMS` and the wasm's hash pinned in the loader; no browser checks them on load."),
+    (222, "`ur tun` on Windows",
+     "`ur tun` neither bundles nor fetches wintun.dll; it loads one beside `ur.exe` or at the app's path only once "
+     "its hash and signer match the Windows app's pins."),
+    (223, "ur.io/recurd",
+     "A minimal real ur.io/recurd page (label, key-origin frame, sign-in, records, downloads) is built on mmm's "
+     "`sidecar` branch; its visual design stays out."),
+    (224, "C16",
+     "C16's receive gate latches at this side's seal for M4; before M8 turns it on for app-device hosts the plaintext "
+     "in flight at a seal is measured, and a visible loss moves the latch to the peer's first sealed frame within "
+     "`TlsTimeout`."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -127,7 +162,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 215))
+assert [r[0] for r in INDEX] == list(range(1, 225))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -135,7 +170,9 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '2026-11-10', 202: '2026-11-10',
               203: '2026-11-10', 204: '2026-11-10', 205: '2026-11-10', 206: '2026-11-10', 207: '2026-11-06',
               208: '2026-11-06', 209: '2026-11-06', 210: '2026-11-06', 211: '2026-11-06', 212: '2026-11-06',
-              213: '2026-11-06', 214: '2026-11-06'})
+              213: '2026-11-06', 214: '2026-11-06', 215: '2026-11-10', 216: '2026-11-10', 217: '2026-11-10',
+              218: '2026-11-10', 219: '2026-11-06', 220: '2026-11-06', 221: '2026-11-06', 222: '2026-11-06',
+              223: '2026-11-06', 224: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -195,15 +232,17 @@ for _k, _v in list(globals().items()):
         globals()[_k] = _v
 
 # Owner decision 197 (2026-11-09): designing it raised two owner questions, Q-BRIDGE-8 and Q-SDK-7, the first open
-# owner questions since owner decision 140's corrected record. The sections are written to each recommendation,
-# marked "(proposed; Q-...)"; assemble10.py checks OPEN_OWNER against them.
+# owner questions since owner decision 140's corrected record. The sections are written to each open one's
+# recommendation, marked "(proposed; Q-...)"; assemble10.py checks OPEN_OWNER against them. Owner decisions 215 and
+# 216 (2026-11-10) decide Q-SDK-7, so Q-BRIDGE-8 alone stays open.
 _OPEN_OLD = "None. Every Q- item whose decider was the owner is decided. "
 assert OPEN_INTRO.count(_OPEN_OLD) == 1, 'open-questions lead moved'
 OPEN_INTRO = OPEN_INTRO.replace(
     _OPEN_OLD,
-    "Two, raised on 2026-11-09 in designing owner decision 197's forwarding: Q-BRIDGE-8 (an app device's overlay "
-    "address) and Q-SDK-7 (forwarding's budget in the iOS network extension). The sections are written to each "
-    "recommendation, marked \"(proposed; Q-...)\". Every other Q- item whose decider was the owner is decided. ")
+    "One, raised on 2026-11-09 in designing owner decision 197's forwarding: Q-BRIDGE-8 (an app device's overlay "
+    "address), to whose recommendation the sections are written, marked \"(proposed; Q-BRIDGE-8)\". The other "
+    "raised with it, Q-SDK-7 (forwarding's budget in the iOS network extension), was decided on 2026-11-10 "
+    "(@@OD:215@@, @@OD:216@@). Every other Q- item whose decider was the owner is decided. ")
 OPEN_OWNER = [
     ("Q-BRIDGE-8", "Does an app device claim its overlay address when its forwarding is set up (owner decision 197)?",
      "(a) on demand, as §17.4 says: the app's UI, the host's first map or an admin; (b) at forwarding's setup, its "
@@ -211,14 +250,6 @@ OPEN_OWNER = [
      "(a): with no ACL document a hosted address opens the device's loopback to the network's untagged sidecars "
      "(owner decision 120), and (b) can follow by one filing",
      "nothing before M8's app hosts", "M8"),
-    ("Q-SDK-7", "What budget does forwarding get in the iOS network extension, now that it follows the config and "
-                "compiles its rules there (owner decision 197)?",
-     "(a) the root's forwarding files, at most 4 MiB of executable with the extension's ceiling from 50 MiB to 54 MiB, "
-     "and 4 MiB of Go heap steady, 8 MiB compiling; (b) a second, minimal follower and compiler in `sidecar/device` "
-     "within today's 1 MiB; (c) on iOS alone the app compiles, which would amend owner decision 197",
-     "(a): one implementation of security-critical rules, inside today's runtime targets, measured on surrogates "
-     "(owner decision 100)",
-     "the `ios_extension` leg's `make size` value and §4.7's leg rule (M4); iOS forwarding (M8)", "M4"),
 ]
 for _a, _b in [("[open owner questions](#open-owner-questions) (none remain)",
                 "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decision 197)"),
@@ -230,9 +261,10 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace("so no owner question is open", "so no
 _D197 = "amending @@OD:87@@ and @@OD:12@@. "
 assert DECISIONS_INTRO.count(_D197) == 1
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
-    _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, open below. ")
+    _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, Q-SDK-7, which @@OD:215@@ "
+    "and @@OD:216@@ decide, and Q-BRIDGE-8, open below. ")
 # The build's owner answers (2026-11-06 and 2026-11-10), numbered from 198 as the design-records tracks fold them.
-_D198 = "designing it raised two owner questions, open below. "
+_D198 = "decide, and Q-BRIDGE-8, open below. "
 assert DECISIONS_INTRO.count(_D198) == 1
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D198, _D198 + "From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as "
@@ -241,7 +273,10 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "horizon (204), amending @@OD:183@@, settings in rows (205), the sweep's triggers (206), a reported URL's "
     "path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical "
     "copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum "
-    "repository in v1 (213) and the witness call outside the planes (214). ")
+    "repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and "
+    "compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key "
+    "origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), "
+    "wintun.dll left unbundled (222), the ur.io/recurd page (223) and C16's latch (224). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
