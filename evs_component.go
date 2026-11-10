@@ -137,5 +137,6 @@ func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, file
 		Clock:         self.clock,
 		Log:           self.log,
 		Settings:      self.settings.Evs,
+		RepoCreated:   self.announceCreatedRepo,
 	}, nil
 }

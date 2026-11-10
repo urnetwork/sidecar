@@ -88,9 +88,11 @@ func newTestDirectoryWorld(t *testing.T, settings *sidecartest.FakeDirectoryCard
 	return world
 }
 
-// Appends the fixtures as the next position of each state.
+// Appends the fixtures as the next position of each state, timed now: one pin in both, as one ConfigState gives both
+// views.
 func (self *testDirectoryWorld) publish() {
 	self.recordFixture.TimeMillis = self.clock.Now().UnixMilli()
+	self.directoryFixture.TimeMillis = self.recordFixture.TimeMillis
 	self.recordAuth.Append(self.recordFixture)
 	self.directoryAuth.Append(self.directoryFixture)
 }
@@ -450,10 +452,10 @@ func TestDirectorySyncViewCoalesce(t *testing.T) {
 	if err := world.clock.AwaitTimers(t.Context(), 1); err != nil {
 		t.Fatal(err)
 	}
-	reader.client.View()
-	reader.client.View()
+	reader.client.ViewSync()
+	reader.client.ViewSync()
 	world.clock.Advance(settings.ViewCoalesce / 2)
-	reader.client.View()
+	reader.client.ViewSync()
 	if err := world.clock.AwaitTimers(t.Context(), 1); err != nil {
 		t.Fatal(err)
 	}

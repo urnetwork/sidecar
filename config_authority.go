@@ -10,16 +10,18 @@
 // A statement that needs more than one signer is an AuthorityProposal by the first counted signer, then an
 // AuthorityCosign from each further one, each under its own header. Signatures count at the completing entry's
 // state, and the proposed statement takes effect at the entry holding the k-th, its causal identity. A recovery key's
-// signature is TEAM-M2-05's, a Delegation never counts, and presence is TEAM-M2-06's, each refused until it lands.
+// key counts as its member under Recovery's window (config_recovery.go), a Delegation never counts, and presence is
+// TEAM-M2-06's.
 //
-// Rows carry no open proposal, so one a base folds before it completes closes there (question
-// team-m2-02-open-proposals-across-bases), on every reader alike.
+// Rows carry every open proposal as a ProposalRow, with its signers, its window and its kind fixed at its entry
+// (DESIGN-DETAILS 5.2.2), so a cosign, veto, void or activation after a fold finds it at every reader alike.
 //
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
 
 package sidecar
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"slices"
@@ -91,18 +93,29 @@ func (self *ConfigState) authorityAt(signers []ConfigSigner, targets ConfigTarge
 	return k <= len(self.countedAt(signers, targets, timeMs))
 }
 
-// The member one signer counts as, false when it counts for none: only a standing member device, not read_only,
-// of an Owner or Admin, or of the target device's own AdminSet member, and never the target or a target member.
-// A recovery key counts under Recovery's window, which TEAM-M2-05 judges; a Delegation never counts.
+// The member one signer counts as, false when it counts for none: a standing member device, not read_only, or a
+// recovery key under its binding in effect that no void restored (config_recovery.go), of an Owner or Admin, or of the
+// target device's own AdminSet member; never the target device or a target member. A Delegation never counts.
 func (self *ConfigState) countedMember(signer ConfigSigner, targets ConfigTargets, timeMs int64) (Id, bool) {
-	if signer.Kind != ConfigSignerSidecar || (targets.HasSidecar && signer.SidecarId == targets.SidecarId) {
+	var memberId Id
+	switch signer.Kind {
+	case ConfigSignerSidecar:
+		if targets.HasSidecar && signer.SidecarId == targets.SidecarId {
+			return Id{}, false
+		}
+		row, standing := self.standingSidecar(signer.SidecarId, timeMs)
+		if !standing || !configRowMemberDevice(row) || configRowReadOnly(row) {
+			return Id{}, false
+		}
+		memberId, _ = configRowMember(row)
+	case ConfigSignerRecovery:
+		if !self.recoveryKeyCurrent(signer) {
+			return Id{}, false
+		}
+		memberId = signer.MemberId
+	default:
 		return Id{}, false
 	}
-	row, standing := self.standingSidecar(signer.SidecarId, timeMs)
-	if !standing || !configRowMemberDevice(row) || configRowReadOnly(row) {
-		return Id{}, false
-	}
-	memberId, _ := configRowMember(row)
 	if slices.Contains(targets.MemberIds, memberId) {
 		return Id{}, false
 	}
@@ -190,8 +203,36 @@ func configProposedStatement(proposal *protocol.AuthorityProposal, signers []Con
 	return proposed, nil
 }
 
-// An AuthorityProposal at state: its proposer counts for the proposed statement, and at k = 1 the proposal completes
-// at its own entry, where the proposed statement's rule must hold.
+// The statement a ProposalRow proposes, as rows carry it to a reader that holds no entry of it: its signers rebuilt
+// from the row, a 16-byte one a sidecar and a 32-byte one a recovery key, whose member is the one whose bindings hold
+// it, or none, so that it counts for none, where that is not one member.
+func (self *ConfigState) proposalRowStatement(row *bridge.ProposalRow) (*configStatement, error) {
+	signers := make([]ConfigSigner, 0, len(row.GetSigners()))
+	for _, signer := range row.GetSigners() {
+		switch len(signer.GetSigner()) {
+		case len(Id{}):
+			signers = append(signers, ConfigSigner{Kind: ConfigSignerSidecar, SidecarId: Id(signer.GetSigner())})
+		case sha256.Size:
+			memberId, _ := self.recoveryKeyMember(signer.GetSigner())
+			signers = append(signers, ConfigSigner{Kind: ConfigSignerRecovery, MemberId: memberId, RecoveryKeySha256: bytes.Clone(signer.GetSigner())})
+		default:
+			return nil, fmt.Errorf("a signer of %d bytes", len(signer.GetSigner()))
+		}
+	}
+	switch kind := bridge.ProposalKind(row.GetKind()); {
+	case len(signers) == 0:
+		return nil, fmt.Errorf("no signer")
+	case kind < bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY || bridge.ProposalKind_PROPOSAL_KIND_RESTORED < kind:
+		return nil, fmt.Errorf("kind %d", kind)
+	}
+	last := row.GetSigners()[len(row.GetSigners())-1].GetAt()
+	return configProposedStatement(&protocol.AuthorityProposal{StatementType: row.GetStatementType(), Statement: row.GetStatement()}, signers, last, 0)
+}
+
+// An AuthorityProposal at state: a device proposer counts for the proposed statement, and at k = 1 the proposal
+// completes at its own entry, where the proposed statement's rule must hold. A recovery key's proposal takes the kind
+// §7.9's Recovery table gives it and never completes at its own entry: Recovery's window holds it, or for a
+// recovery-scoped admission one admission signer's cosign completes it.
 func configCheckProposal(state *ConfigState, statement *configStatement) error {
 	proposal := statement.body.(*protocol.AuthorityProposal)
 	proposed, err := configProposedStatement(proposal, statement.signers, statement.n, statement.timeMs)
@@ -199,6 +240,20 @@ func configCheckProposal(state *ConfigState, statement *configStatement) error {
 		return err
 	}
 	targets, _ := configStatementTargets(state, proposed)
+	proposer := statement.signers[0]
+	statement.proposalKind = bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY
+	if proposer.Kind == ConfigSignerRecovery {
+		kind, err := state.recoveryProposalKind(proposer, proposed)
+		if err != nil {
+			return err
+		}
+		if kind == bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY && len(state.countedAt(statement.signers, targets, statement.timeMs)) != 1 {
+			return fmt.Errorf("%w: the recovery key counts for no k of %s", ErrConfigAuthority, proposed.signedType)
+		}
+		statement.proposalKind = kind
+		statement.proposed = proposed
+		return nil
+	}
 	if len(state.countedAt(statement.signers, targets, statement.timeMs)) != 1 {
 		return fmt.Errorf("%w: the proposer is no counted signer for %s", ErrConfigAuthority, proposed.signedType)
 	}
@@ -213,7 +268,8 @@ func configCheckProposal(state *ConfigState, statement *configStatement) error {
 	return nil
 }
 
-// An AuthorityProposal's effect: the proposed statement's at completion, else an open proposal.
+// An AuthorityProposal's effect: the proposed statement's at completion, else an open proposal, its row holding its
+// kind and, for a recovery key's, its window from this entry.
 func configApplyProposal(next *configStateBuilder, statement *configStatement) error {
 	if statement.completes != nil {
 		return configApplyStatement(next, statement.completes, false)
@@ -221,41 +277,77 @@ func configApplyProposal(next *configStateBuilder, statement *configStatement) e
 	if statement.proposed == nil {
 		return fmt.Errorf("%w: a proposal neither complete nor open", ErrConfigRule)
 	}
-	next.putProposal(&configProposal{
-		id:         statement.id,
-		n:          statement.n,
-		notAfterMs: statement.header.GetNotAfterMs(),
-		statement:  statement.proposed,
-	})
+	proposal := statement.body.(*protocol.AuthorityProposal)
+	proposer := statement.signers[0]
+	kind := statement.proposalKind
+	if kind == bridge.ProposalKind_PROPOSAL_KIND_UNSPECIFIED {
+		kind = bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY
+	}
+	row := &bridge.ProposalRow{
+		ProposalId:    bytes.Clone(statement.id[:]),
+		StatementType: proposal.GetStatementType(),
+		Statement:     bytes.Clone(proposal.GetStatement()),
+		ProposedAt:    statement.n,
+		NotAfterMs:    statement.header.GetNotAfterMs(),
+		Signers:       []*bridge.ProposalSigner{{Signer: proposer.RowsSigner(), At: statement.n}},
+		Kind:          uint32(kind),
+	}
+	if proposer.Kind == ConfigSignerRecovery {
+		row.WindowEntry, row.WindowTimeMs = statement.n, statement.timeMs
+	}
+	next.putProposal(&configProposal{id: statement.id, row: row, statement: statement.proposed})
 	return nil
 }
 
-// An AuthorityCosign at state: its proposal is open and unexpired, and its signer is a further counted one; the
-// k-th counted signature completes the proposal, where the proposed statement's rule must hold at this state.
+// An AuthorityCosign at state: its proposal open and unexpired, and by kind: for k of n a further counted signer, the
+// k-th completing it unless Recovery's window holds it, where the proposed statement's rule must hold at this state; for
+// a recovery-scoped admission one admission signer's device, which completes it; for a restored binding's admission an
+// admission signer's device, which the activation counts when self_admit is off.
 func configCheckCosign(state *ConfigState, statement *configStatement) error {
 	cosign := statement.body.(*protocol.AuthorityCosign)
 	if len(cosign.GetProposalId()) != sha256.Size {
 		return fmt.Errorf("%w: a proposal_id of %d bytes", ErrConfigRule, len(cosign.GetProposalId()))
 	}
 	proposal := state.proposals[[sha256.Size]byte(cosign.GetProposalId())]
-	if proposal == nil {
+	if proposal == nil || !proposal.open(statement.timeMs) {
 		return fmt.Errorf("%w: no open proposal with this id", ErrConfigRule)
 	}
-	if proposal.notAfterMs < statement.timeMs {
-		return fmt.Errorf("%w: the proposal expired", ErrConfigRule)
-	}
+	cosigner := statement.signers[0]
 	targets, _ := configStatementTargets(state, proposal.statement)
-	cosigner, counted := state.countedMember(statement.signers[0], targets, statement.timeMs)
+	proposed := *proposal.statement
+	proposed.signers = append(slices.Clone(proposal.statement.signers), cosigner)
+	proposed.n, proposed.timeMs = statement.n, statement.timeMs
+	admissionSigner := func() bool {
+		_, ok := state.anyMemberDevice([]ConfigSigner{cosigner}, statement.timeMs, func(signerId Id, memberId Id, role bridge.MemberRole) bool {
+			return !(targets.HasSidecar && signerId == targets.SidecarId) && configRoleAdmits(role)
+		})
+		return ok
+	}
+	switch bridge.ProposalKind(proposal.row.GetKind()) {
+	case bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED:
+		if !admissionSigner() {
+			return fmt.Errorf("%w: a recovery-scoped admission takes an admission signer's cosign", ErrConfigAuthority)
+		}
+		if err := configCheckStatement(state, &proposed); err != nil {
+			return err
+		}
+		statement.completes = &proposed
+		return nil
+	case bridge.ProposalKind_PROPOSAL_KIND_RESTORED:
+		if !admissionSigner() {
+			return fmt.Errorf("%w: a restored binding's admission takes only an admission signer's cosign", ErrConfigAuthority)
+		}
+		statement.proposed = &proposed
+		return nil
+	}
+	member, counted := state.countedMember(cosigner, targets, statement.timeMs)
 	if !counted {
 		return fmt.Errorf("%w: the cosigner is no counted signer for %s", ErrConfigAuthority, proposal.statement.signedType)
 	}
-	if slices.Contains(state.countedAt(proposal.statement.signers, targets, statement.timeMs), cosigner) {
+	if slices.Contains(state.countedAt(proposal.statement.signers, targets, statement.timeMs), member) {
 		return fmt.Errorf("%w: the cosigner's member already counts", ErrConfigAuthority)
 	}
-	proposed := *proposal.statement
-	proposed.signers = append(slices.Clone(proposal.statement.signers), statement.signers[0])
-	proposed.n, proposed.timeMs = statement.n, statement.timeMs
-	if state.authorityAt(proposed.signers, targets, statement.timeMs) {
+	if !proposal.windowed() && cosigner.Kind != ConfigSignerRecovery && state.authorityAt(proposed.signers, targets, statement.timeMs) {
 		if err := configCheckStatement(state, &proposed); err != nil {
 			return err
 		}
@@ -266,25 +358,35 @@ func configCheckCosign(state *ConfigState, statement *configStatement) error {
 	return nil
 }
 
-// An AuthorityCosign's effect: the proposed statement's and the proposal's close at completion, else the proposal
-// with one more signer. On a base's re-application a proposal the base folded is gone, and an incomplete cosign of it
-// writes nothing.
+// An AuthorityCosign's effect: one more signer in its proposal's row, a recovery key's restarting its window; at
+// completion the proposal closes and the proposed statement takes effect here. A proposal not open on the state being
+// built, as a base's new rows may leave it, takes no cosign and the effect ends there.
 func configApplyCosign(next *configStateBuilder, statement *configStatement) error {
 	proposalId := [sha256.Size]byte(statement.body.(*protocol.AuthorityCosign).GetProposalId())
-	if statement.completes != nil {
-		next.deleteProposal(proposalId)
-		return configApplyStatement(next, statement.completes, false)
-	}
 	proposal := next.proposal(proposalId)
-	if proposal == nil || statement.proposed == nil {
+	if proposal == nil || proposal.closedAt != 0 {
 		return fmt.Errorf("%w: the proposal is not open here", ErrConfigRule)
 	}
-	next.putProposal(&configProposal{
-		id:         proposal.id,
-		n:          proposal.n,
-		notAfterMs: proposal.notAfterMs,
-		statement:  statement.proposed,
-	})
+	proposed := statement.proposed
+	if statement.completes != nil {
+		proposed = statement.completes
+	}
+	if proposed == nil {
+		return fmt.Errorf("%w: a cosign neither complete nor open", ErrConfigRule)
+	}
+	cosigner := statement.signers[0]
+	row := proto.Clone(proposal.row).(*bridge.ProposalRow)
+	row.Signers = append(row.Signers, &bridge.ProposalSigner{Signer: cosigner.RowsSigner(), At: statement.n})
+	if cosigner.Kind == ConfigSignerRecovery {
+		row.WindowEntry, row.WindowTimeMs = statement.n, statement.timeMs
+	}
+	updated := &configProposal{id: proposalId, row: row, statement: proposed}
+	if statement.completes != nil {
+		updated.closedAt, updated.closed = statement.n, ConfigProposalCompleted
+		next.putProposal(updated)
+		return configApplyStatement(next, statement.completes, false)
+	}
+	next.putProposal(updated)
 	return nil
 }
 

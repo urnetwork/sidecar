@@ -33,6 +33,10 @@ import (
 // The cards ref's name in the world's push sequence.
 const fakeDirectoryCardsRef = "cards"
 
+// What a version's push statement adds to a stream read's bytes: about 0.8 KiB (§16.11's sizes row), since the world
+// holds no statement bytes of its own.
+const fakeDirectoryStatementByteCount = 800
+
 type FakeDirectoryCardsSettings struct {
 	// Versions of one stream a read carries before answering more: its 4 MiB frame.
 	FrameVersionCount int
@@ -277,6 +281,23 @@ func (self *fakeDirectoryCardsClient) Refs(ctx context.Context, repoId sidecar.I
 	return listing, nil
 }
 
+// The bytes a read carrying versions costs: each version's statement, entries and slot rows.
+func fakeDirectoryStreamByteCount(versions []*sidecar.DirectoryStreamVersion) int64 {
+	byteCount := int64(0)
+	for _, version := range versions {
+		byteCount += fakeDirectoryStatementByteCount
+		for _, entry := range version.Version.Entries {
+			byteCount += int64(len(entry.Entry))
+		}
+		if version.Slot != nil {
+			for _, row := range version.Slot.Rows {
+				byteCount += int64(len(row.Row))
+			}
+		}
+	}
+	return byteCount
+}
+
 // One stream's versions after pin with their slots, at most limit; true when more remain.
 func (self *fakeDirectoryCardsClient) streamVersions(ctx context.Context, repoId sidecar.Id, writerId sidecar.Id, pin uint64, limit int) ([]*sidecar.DirectoryStreamVersion, uint64, bool, error) {
 	reader := self.fake.streams.For(self.sidecarId)
@@ -327,6 +348,7 @@ func (self *fakeDirectoryCardsClient) ReadStreams(ctx context.Context, repoId si
 			result.Behind = read.PinVersion + 1
 		} else {
 			result.Versions, result.More = versions, more
+			result.ByteCount = fakeDirectoryStreamByteCount(versions)
 		}
 		results = append(results, result)
 	}
@@ -346,7 +368,9 @@ func (self *fakeDirectoryCardsClient) ReadStreamLog(ctx context.Context, repoId 
 	if err != nil {
 		return nil, err
 	}
-	return &sidecar.DirectoryStreamVersions{WriterSidecarId: writerSidecarId, HeadVersion: head, Versions: versions, More: more}, nil
+	return &sidecar.DirectoryStreamVersions{
+		WriterSidecarId: writerSidecarId, HeadVersion: head, Versions: versions, More: more, ByteCount: fakeDirectoryStreamByteCount(versions),
+	}, nil
 }
 
 // A file's copy.

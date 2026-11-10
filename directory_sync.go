@@ -18,6 +18,8 @@
 //	          n moved streams and a kill re-reads at most what was not kept
 //	verify    RECORD-M3-03's reader over what the store holds: headers, rights, chains and bodies, as for any log
 //	          (RECORD.md section 5.5), with no request of its own but the erasure ref's when it moved
+//	fold      the announce entries the reader holds, folded into current items and judged at the state now, so what
+//	          the card and repo file rules refuse alarms at the sync that brought it (DirectoryFold, RECORD-M6-14)
 //
 // What a sync never does: lease the cards ref (D-MCP-31; readers poll it and lease only notice prefixes), read a
 // stream that did not move, or send evs anything of a view or a search (I-19). Barriers: directory.sync.before and
@@ -110,6 +112,10 @@ type DirectoryStreamVersions struct {
 	More bool
 	// The pin is older than the window: the first version the read could not give, which GET .../log pages.
 	Behind uint64
+	// The bytes this stream's part of the read carried, its statements, entries and slots, as the binding counted
+	// its frame; 0 where it does not count, and a caller counts the entries and slots it holds (a phone's view, which
+	// a metered cap bounds).
+	ByteCount int64
 }
 
 // One file of the cards ref as a statement left it.
@@ -262,6 +268,11 @@ func (self *DirectoryClient) Sync(ctx context.Context) error {
 	if directoryReadRefused(err) {
 		return self.loseRead(directoryId, err)
 	}
+	// what the reader verified, this sync's included up to where it stopped, folded for List and Get, and judged now,
+	// so a refused version alarms at the sync that brought it whether or not anything lists
+	fold := self.currentFold()
+	fold.Update(self.reader.Entries(directoryId))
+	fold.View(self.auth(), self.clock.Now().UnixMilli())
 	return err
 }
 

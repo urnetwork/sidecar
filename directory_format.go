@@ -58,6 +58,9 @@ const (
 	// Past a request's not_after by this, any writer may remove its notice, and its decider stops resuming the
 	// decision (§16.11's q/ path rule and decide row).
 	DirectoryNoticeGrace = 24 * time.Hour
+	// The clock skew readers allow a writer (§8.6's ±60 s): a run or worker version renewed further past its push's
+	// time_ms than this is refused, so no writer's clock keeps an item active past what evs's time bounds (FI-25).
+	DirectoryClockSkew = 60 * time.Second
 )
 
 // §16.11's sizes, which are format values.
