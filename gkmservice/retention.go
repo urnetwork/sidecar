@@ -63,13 +63,24 @@ type GkmSweepCursor struct {
 	After        string `json:"after"`
 }
 
-// Registers the sweep with host.Tasks and schedules its first run, a new pass from the start.
+// Registers the sweep with host.Tasks and schedules its first run, a new pass from the start. A host whose registry
+// outlives one reconciler, as taskworker's process registry outlives a runtime, binds GkmReconcilerSweepTaskName once
+// to a function that calls the current reconciler's RunSweepTask, and calls StartSweep instead.
 func (self *GkmReconciler) RegisterSweep(ctx context.Context) error {
 	tasks := self.host.Tasks
 	if tasks == nil {
 		return errors.New("gkm's reconciler needs a host with Tasks to sweep")
 	}
-	tasks.Register(GkmReconcilerSweepTaskName, self.runSweepTask)
+	tasks.Register(GkmReconcilerSweepTaskName, self.RunSweepTask)
+	return self.StartSweep(ctx)
+}
+
+// Schedules the sweep's first run, a new pass from the start, under its once key, so starts coalesce with a chain
+// already queued.
+func (self *GkmReconciler) StartSweep(ctx context.Context) error {
+	if self.host.Tasks == nil {
+		return errors.New("gkm's reconciler needs a host with Tasks to sweep")
+	}
 	return self.scheduleSweep(ctx, &GkmSweepCursor{}, time.Time{})
 }
 
@@ -88,9 +99,9 @@ func (self *GkmReconciler) scheduleSweep(ctx context.Context, cursor *GkmSweepCu
 	})
 }
 
-// One run: a page from the cursor in args, then the next run, at once while the pass has more, else a new pass
-// after SweepInterval. An error reruns this page after the host's backoff.
-func (self *GkmReconciler) runSweepTask(ctx context.Context, args []byte) error {
+// One run of the sweep's job: a page from the cursor in args, then the next run, at once while the pass has more,
+// else a new pass after SweepInterval. An error reruns this page after the host's backoff.
+func (self *GkmReconciler) RunSweepTask(ctx context.Context, args []byte) error {
 	cursor := &GkmSweepCursor{}
 	if 0 < len(args) {
 		if err := json.Unmarshal(args, cursor); err != nil {
