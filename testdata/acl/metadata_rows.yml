@@ -12,6 +12,7 @@ AclAtom.role: {number: 7, type: string, row: api-7, pending: "plan-ACL-nonsideca
 AclAtom.principal: {number: 8, type: string, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to atoms"}
 
 AclRule.source_rule_id: {number: 10, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #2: an activated grant's requests rule, which its GrantActivate shows api anyway"}
+AclRule.ports_limited: {number: 11, type: bool, row: api-7, pending: "plan-BRIDGE-gate-row-prefixes #1: api-7's rules show whether a rule limits ports, never which, its ports and CIDRs leaving rows"}
 
 AclTarget.client_id: {number: 10, type: bytes, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to targets"}
 

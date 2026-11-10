@@ -351,8 +351,8 @@ func admissionLogSettings() *sidecar.ConfigLogSettings {
 // The suite's stand-in for ACL's compile (C-05) until ACL-M2-04 registers CompileAcl: the log's acl statements as they
 // are, but for the tag owners a head's tags file declares, an AclRows whose atoms replace those of the same atom. Pure
 // and idempotent, as compile must be, since every reader compiles again what the last base compiled.
-func admissionAclCompile(head *sidecar.ConfigHead, aclStatements *protocol.AclRows) (*protocol.AclRows, error) {
-	aclRows := proto.Clone(aclStatements).(*protocol.AclRows)
+func admissionAclCompile(head *sidecar.ConfigHead, rows *sidecar.ConfigCompileRows) (*protocol.AclRows, error) {
+	aclRows := proto.Clone(rows.AclStatements).(*protocol.AclRows)
 	tagsBytes := head.File(sidecar.ConfigHeadTagsPath)
 	if tagsBytes == nil {
 		return aclRows, nil
