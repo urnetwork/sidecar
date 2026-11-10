@@ -171,6 +171,8 @@ barrier mail.flags.write.after mail_flags.go
 barrier mail.flags.write.before mail_flags.go
 barrier mail.index.write.after mail_index_segment.go
 barrier mail.index.write.before mail_index_segment.go
+barrier mail.spam.teach.after mail_spam.go
+barrier mail.spam.teach.before mail_spam.go
 barrier mxedge.closed_handshake_read.after mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_read.before mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_write.after mxedgeservice/closed_handshake.go

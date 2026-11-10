@@ -130,6 +130,7 @@ var testMailMessageFields = map[string][]string{
 	"MailProverRecord": {
 		"1 uint64 smtp_data_proof_bytes", "2 uint64 data_bytes_per_s", "3 uint64 measure_time_ms",
 	},
+	"MailSpamModel": {"1 uint32 version", "2 repeated uint32 counts"},
 }
 
 // The widest value of each field a bound test fills, keyed message.field: a string or bytes field's width in bytes, a

@@ -575,6 +575,9 @@ func TestHeadCheckSilentApiMovesToAProofRequest(t *testing.T) {
 	if len(testSentOfTypeRpc(a.testRpcSide, protocol.MessageType_HEAD_CHECK_PROOF_REQUEST)) != 0 {
 		t.Fatalf("a proof asked before the deadline")
 	}
+	// the round at start, before the clock moves: run after it, it would make the round asked below wait out
+	// HeadCheckTimeout on a clock that no longer moves
+	a.awaitRounds(1)
 	a.clock.Advance(a.settings.HeadCheckFetchTimeout)
 	event := testAwait(t, a.alarmEvents, "withheld alarm")
 	for event.HeadAlarm != SidecarHeadAlarmWithheld {
