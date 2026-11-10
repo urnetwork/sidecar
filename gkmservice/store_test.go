@@ -73,7 +73,11 @@ func TestGkmGroupObjectsLandOnTheReposClusterAcrossARestart(t *testing.T) {
 			"POST /gkm/groups/{group_id}/epochs/{n}": func(engine *GkmEngine, request *GkmRequest) {
 				writes += 1
 				key := GkmEpochKey(*request.GroupId, uint64(writes))
-				if _, err := createGkmObject(request.Ctx, request.Cluster, key, []byte("epoch"), engine.settings.ObjectMaxByteCount); err != nil {
+				writeCtx, ok := request.SpendWrites(request.Cluster, "", engine.settings.Prices.create(len("epoch")))
+				if !ok {
+					return
+				}
+				if _, err := createGkmObject(writeCtx, request.Cluster, key, []byte("epoch"), engine.settings.ObjectMaxByteCount); err != nil {
 					request.Unavailable()
 					return
 				}
@@ -123,15 +127,16 @@ func TestGkmGroupObjectsLandOnTheReposClusterAcrossARestart(t *testing.T) {
 // create that never landed (§11.8's unknown row).
 func TestGkmCreateAnswersTheWinnerAndResolvesLostAnswers(t *testing.T) {
 	fixture := newGkmFixture(t)
+	ctx := fixture.spentCtx()
 	cluster := fixture.cluster("meta-1")
 	key := "gkm/" + sidecar.EvsKeyId(testId("group-g")) + "/gen/00000000000000000002"
-	if winner, err := createGkmObject(fixture.ctx, cluster, key, []byte("mine"), 1024); err != nil || winner != nil {
+	if winner, err := createGkmObject(ctx, cluster, key, []byte("mine"), 1024); err != nil || winner != nil {
 		t.Fatalf("the first create: %q %v", winner, err)
 	}
-	if winner, err := createGkmObject(fixture.ctx, cluster, key, []byte("mine"), 1024); err != nil || winner != nil {
+	if winner, err := createGkmObject(ctx, cluster, key, []byte("mine"), 1024); err != nil || winner != nil {
 		t.Errorf("a retry of equal bytes: %q %v", winner, err)
 	}
-	if winner, err := createGkmObject(fixture.ctx, cluster, key, []byte("theirs"), 1024); err != nil || string(winner) != "mine" {
+	if winner, err := createGkmObject(ctx, cluster, key, []byte("theirs"), 1024); err != nil || string(winner) != "mine" {
 		t.Errorf("a loser: %q %v", winner, err)
 	}
 	// the store took the create and the answer was lost: the read finds it
@@ -139,7 +144,7 @@ func TestGkmCreateAnswersTheWinnerAndResolvesLostAnswers(t *testing.T) {
 	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: lostKey, Result: sidecartest.ApplyThenDrop}); err != nil {
 		t.Fatal(err)
 	}
-	if winner, err := createGkmObject(fixture.ctx, cluster, lostKey, []byte("mine"), 1024); err != nil || winner != nil {
+	if winner, err := createGkmObject(ctx, cluster, lostKey, []byte("mine"), 1024); err != nil || winner != nil {
 		t.Errorf("a lost answer: %q %v", winner, err)
 	}
 	// the create never reached the store: it goes again
@@ -147,7 +152,7 @@ func TestGkmCreateAnswersTheWinnerAndResolvesLostAnswers(t *testing.T) {
 	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: sentKey, Result: sidecartest.FailBeforeApply}); err != nil {
 		t.Fatal(err)
 	}
-	if winner, err := createGkmObject(fixture.ctx, cluster, sentKey, []byte("mine"), 1024); err != nil || winner != nil {
+	if winner, err := createGkmObject(ctx, cluster, sentKey, []byte("mine"), 1024); err != nil || winner != nil {
 		t.Errorf("a create that never landed: %q %v", winner, err)
 	}
 	if !bytes.Equal(fixture.object("meta-1", sentKey), []byte("mine")) {

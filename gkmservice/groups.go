@@ -391,10 +391,6 @@ func (self *GkmEngine) serveGroupCreate(request *GkmRequest) {
 	if !ok {
 		return
 	}
-	seq, retry, ok := self.formSeq(request, form, false)
-	if !ok || !self.fileForm(request, form, seq, retry) {
-		return
-	}
 	epochZero := &protocol.GkmEpochObject{
 		Header:              &protocol.GkmCommitHeader{Generation: 1, Auth: generation.Rotate.GetAuth()},
 		Uploader:            request.SidecarId.Bytes(),
@@ -404,6 +400,18 @@ func (self *GkmEngine) serveGroupCreate(request *GkmRequest) {
 		GroupInfoGeneration: 1,
 		NetworkId:           request.Principal.NetworkId.Bytes(),
 		CipherSuite:         createRequest.GetCipherSuite(),
+	}
+	// a repo's creation writes are §11.13's P1 (plan-EVSB-write-classes): the form, epoch/0 and gen/1, every one on
+	// the repo's cluster, so the request's ctx carries their class from here
+	prices := self.settings.Prices
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(len(form.raw))+prices.create(proto.Size(epochZero))+prices.create(len(generationBytes)))
+	if !ok {
+		return
+	}
+	request.Ctx = writeCtx
+	seq, retry, ok := self.formSeq(request, form, false)
+	if !ok || !self.fileForm(request, form, seq, retry) {
+		return
 	}
 	if !self.createEpochZero(request, form.groupId, epochZero) {
 		return
@@ -447,10 +455,6 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 	if !self.checkEpochZeroUpload(request, reformRequest.GetGenWrap(), reformRequest.GetSealedGroupInfo(), reformRequest.GetCipherSuite()) {
 		return
 	}
-	seq, retry, ok := self.formSeq(request, form, true)
-	if !ok || !self.fileForm(request, form, seq, retry) {
-		return
-	}
 	epochZero := &protocol.GkmEpochObject{
 		// no auth pin: question keys-wire-reform-epoch-zero, which the epoch PUT check fails closed on
 		Header:              &protocol.GkmCommitHeader{Generation: form.body.GetGeneration()},
@@ -461,6 +465,17 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		GroupInfoGeneration: form.body.GetGeneration(),
 		NetworkId:           request.Principal.NetworkId.Bytes(),
 		CipherSuite:         reformRequest.GetCipherSuite(),
+	}
+	// a re-form's writes queue as P1, both on the repo's cluster, so the request's ctx carries their class from here
+	prices := self.settings.Prices
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(len(form.raw))+prices.create(proto.Size(epochZero)))
+	if !ok {
+		return
+	}
+	request.Ctx = writeCtx
+	seq, retry, ok := self.formSeq(request, form, true)
+	if !ok || !self.fileForm(request, form, seq, retry) {
+		return
 	}
 	if !self.createEpochZero(request, form.groupId, epochZero) {
 		return

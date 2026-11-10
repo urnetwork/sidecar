@@ -59,6 +59,16 @@ type fakeGkmAuthState struct {
 	delegationReads map[string]bool
 	lateHolderIds   map[sidecar.Id][]sidecar.Id
 	writerOverrides map[sidecar.Id][]sidecar.Id
+	// what HoldersDropped answers for a repo, Denied when unset, and what it was last asked
+	holdersDroppedAnswers map[sidecar.Id]GkmAuthAnswer
+	holdersDroppedAsks    []*fakeGkmHoldersDroppedAsk
+}
+
+// One HoldersDropped question as the fake state was asked it.
+type fakeGkmHoldersDroppedAsk struct {
+	repoId     sidecar.Id
+	pinVersion uint64
+	since      time.Time
 }
 
 func newFakeGkmAuthState() *fakeGkmAuthState {
@@ -72,7 +82,38 @@ func newFakeGkmAuthState() *fakeGkmAuthState {
 		delegationReads:   map[string]bool{},
 		lateHolderIds:     map[sidecar.Id][]sidecar.Id{},
 		writerOverrides:   map[sidecar.Id][]sidecar.Id{},
+
+		holdersDroppedAnswers: map[sidecar.Id]GkmAuthAnswer{},
 	}
+}
+
+// What HoldersDropped answers for repoId from now on: Allowed as a shrink, an expiry or a compromise retirement since
+// any pin would show.
+func (self *fakeGkmAuthState) setHoldersDropped(repoId sidecar.Id, answer GkmAuthAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.holdersDroppedAnswers[repoId] = answer
+}
+
+// The HoldersDropped questions asked so far.
+func (self *fakeGkmAuthState) holdersDroppedAsked() []*fakeGkmHoldersDroppedAsk {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.holdersDroppedAsks)
+}
+
+func (self *fakeGkmAuthState) HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) GkmAuthAnswer {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.holdersDroppedAsks = append(self.holdersDroppedAsks, &fakeGkmHoldersDroppedAsk{repoId: repoId, pinVersion: pin.GetVersion(), since: since})
+	if self.unloaded {
+		return GkmAuthUnknown
+	}
+	answer, ok := self.holdersDroppedAnswers[repoId]
+	if !ok {
+		return GkmAuthDenied
+	}
+	return answer
 }
 
 // A synthetic chain value A_n for position n.
@@ -383,6 +424,12 @@ func (self *gkmFixture) start() {
 	}
 	self.t.Cleanup(engine.Close)
 	self.engine = engine
+}
+
+// The fixture's ctx as a write budget passes it, for a test writing as a handler would once it has spent: the budget
+// is not what such a test is about (budget_test.go is).
+func (self *gkmFixture) spentCtx() context.Context {
+	return sidecar.WithWriteClass(self.ctx, sidecar.WriteClassP1)
 }
 
 // A token for sidecarId with scopes, each repo:<id>:<role> or recovery:<member_id>. A zero sidecarId gives a token

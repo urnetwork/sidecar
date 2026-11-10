@@ -79,7 +79,12 @@ func (self *GkmEngine) serveReaderKeyUpload(request *GkmRequest) {
 	if done {
 		return
 	}
-	err = replaceGkmObject(request.Ctx, cluster, key, etag, body)
+	// a ReaderKey is §11.13's P1, on the first cluster (budget.go)
+	writeCtx, ok := request.SpendWrites(cluster, "", self.settings.Prices.replace(etag, len(body)))
+	if !ok {
+		return
+	}
+	err = replaceGkmObject(writeCtx, cluster, key, etag, body)
 	var unknown *sidecar.BlobUnknownError
 	switch {
 	case err == nil:

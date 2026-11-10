@@ -104,6 +104,11 @@ type GkmReconcilerSettings struct {
 	HintTimeout time.Duration
 	// The most keys one group's, sidecar's or member's family may hold before a sweep of it alarms.
 	UnitKeyMaxCount int
+	// The unfunded P2 backlog, in priced bytes, a sweep page declares on each metadata cluster while it runs, so the
+	// governor shares the unfunded allowance with this process (§11.13's accounts row): an estimate, since a page
+	// cannot know what it deletes before it lists. 4 MiB, a page of 256 units deleting about four objects each at
+	// §11.13's ~3.5 KiB a delete.
+	SweepBacklogByteCount int64
 }
 
 // The production defaults.
@@ -124,6 +129,8 @@ func DefaultGkmReconcilerSettings() *GkmReconcilerSettings {
 		ClosedGateCount:     100 * 1000,
 		HintTimeout:         5 * time.Second,
 		UnitKeyMaxCount:     256 * 1024,
+
+		SweepBacklogByteCount: 4 * 1024 * 1024,
 	}
 }
 
@@ -150,6 +157,7 @@ func (self *GkmReconcilerSettings) Validate() error {
 		{name: "SweepInterval", value: int64(self.SweepInterval)},
 		{name: "HintTimeout", value: int64(self.HintTimeout)},
 		{name: "UnitKeyMaxCount", value: int64(self.UnitKeyMaxCount)},
+		{name: "SweepBacklogByteCount", value: self.SweepBacklogByteCount},
 	} {
 		if value.value <= 0 {
 			return fmt.Errorf("%w: %s must be positive", ErrGkmSettings, value.name)
@@ -208,11 +216,14 @@ type GkmReconciler struct {
 	stopWatch func()
 }
 
-// Starts the reconciler's hint loop on host, which needs Blobs; its sweeps run once RegisterSweep has registered
-// them. It runs until ctx ends or Close.
+// Starts the reconciler's hint loop on host, which needs Blobs and Budget, since every sweep's delete spends §11.13's
+// P2 (budget.go); its sweeps run once RegisterSweep has registered them. It runs until ctx ends or Close.
 func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *GkmReconcilerSettings, deps *GkmReconcilerDeps) (*GkmReconciler, error) {
 	if host == nil || host.Blobs == nil {
 		return nil, errors.New("gkm's reconciler needs a host with Blobs")
+	}
+	if host.Budget == nil {
+		return nil, errors.New("gkm's reconciler needs a write budget: no metadata write may go unpriced (§11.13)")
 	}
 	if settings == nil {
 		settings = DefaultGkmReconcilerSettings()

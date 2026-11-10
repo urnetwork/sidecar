@@ -117,9 +117,11 @@ func (self *gkmGroupInfoCache) forget(groupId sidecar.Id) {
 }
 
 // Rewrites the pointer to epoch when the commit just stored there carries a sealed GroupInfo and runs
-// GroupInfoPointerLagCount or more past the epoch group-info names. A failure is passed over: the next such commit
-// heals it, which is the row's point.
-func (self *GkmEngine) healGroupInfoPointer(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id, epoch uint64) {
+// GroupInfoPointerLagCount or more past the epoch group-info names. The rewrite spends the write budget in the
+// commit's own class, writeKind (budget.go). A failure, a refusal by the budget among them, is passed over: the next
+// such commit heals it, which is the row's point.
+func (self *GkmEngine) healGroupInfoPointer(request *GkmRequest, cluster sidecar.BlobCluster, groupId sidecar.Id, epoch uint64, writeKind sidecar.WriteP0Kind) {
+	ctx := request.Ctx
 	held, etag, err := self.groupInfos.read(ctx, cluster, groupId)
 	if err != nil {
 		return
@@ -135,9 +137,16 @@ func (self *GkmEngine) healGroupInfoPointer(ctx context.Context, cluster sidecar
 	if err != nil {
 		return
 	}
+	writeCtx, err := request.spendWrites(cluster, writeKind, self.settings.Prices.replace(etag, len(pointerBytes)))
+	if err != nil {
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[gkm] a group-info pointer's heal waits for the next commit: %v", err)
+		}
+		return
+	}
 	barrierKey := gkmBarrierGroupKey(groupId)
 	testHookBarrier(BarrierPointerPutBefore, barrierKey)
-	err = replaceGkmObject(ctx, cluster, GkmGroupInfoKey(groupId), etag, pointerBytes)
+	err = replaceGkmObject(writeCtx, cluster, GkmGroupInfoKey(groupId), etag, pointerBytes)
 	testHookBarrier(BarrierPointerPutAfter, barrierKey)
 	self.groupInfos.forget(groupId)
 	if err != nil && self.log.V(1).Enabled() {
@@ -270,12 +279,17 @@ func (self *GkmEngine) serveGroupInfoWrite(request *GkmRequest) {
 		return false, info.Etag
 	}
 	done, etag := judge()
-	if done || !request.CheckRepoWritable() {
+	if done {
+		return
+	}
+	// GroupInfo is §11.13's P1, whatever epoch it seals
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", self.settings.Prices.replace(etag, len(objectBytes)))
+	if !ok || !request.CheckRepoWritable() {
 		return
 	}
 	barrierKey := gkmBarrierGroupKey(groupId)
 	testHookBarrier(BarrierPointerPutBefore, barrierKey)
-	err = replaceGkmObject(request.Ctx, request.Cluster, key, etag, objectBytes)
+	err = replaceGkmObject(writeCtx, request.Cluster, key, etag, objectBytes)
 	testHookBarrier(BarrierPointerPutAfter, barrierKey)
 	self.groupInfos.forget(groupId)
 	var unknown *sidecar.BlobUnknownError

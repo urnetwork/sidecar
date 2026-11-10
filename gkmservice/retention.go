@@ -21,6 +21,13 @@
 // deletion in it (§21.9, owner decision 133), and so does anything whose network or repo the sweep cannot tell:
 // every doubt keeps data. A user's shred is not a sweep and no hold pauses it (shred.go).
 //
+// Every delete and the pointer's move is §11.13's unfunded P2 (budget.go): epoch retention, the pointer and §2.8's
+// TTLs at rank retention, a lost claim's staged deliveries and recovery wraps at rank GC. Each waits for its turn in
+// the budget within the run's MaxTime, and when its turn comes it checks the unit's hold again (WriteP2Work.Recheck),
+// so a hold placed while it waited still pauses it. While a page runs it declares SweepBacklogByteCount as its
+// unfunded backlog on each metadata cluster, so the governor shares the unfunded allowance with it; the sweep cannot
+// know its real backlog before it lists, so this is an estimate, cleared when the page ends.
+//
 // What this does not do yet: delete a Welcome before 90 d once every recipient has acked it, since gkm keeps no list
 // of a Welcome's recipients beside their pointers (gkm-5's "until every recipient has acked"); pointers do go at their
 // recipient's ack.
@@ -106,6 +113,15 @@ func (self *GkmReconciler) runSweepTask(ctx context.Context, args []byte) error 
 func (self *GkmReconciler) SweepPage(ctx context.Context, cursor *GkmSweepCursor) (*GkmSweepCursor, bool, error) {
 	next := &GkmSweepCursor{ClusterIndex: cursor.ClusterIndex, After: cursor.After}
 	clusterIds := self.blobs.MetadataClusterIds()
+	budget := self.host.Budget
+	for _, clusterId := range clusterIds {
+		budget.DeclareP2Backlog(clusterId, gkmSweepBacklogOwner, sidecar.WriteP2RankRetention, false, self.settings.SweepBacklogByteCount)
+	}
+	defer func() {
+		for _, clusterId := range clusterIds {
+			budget.DeclareP2Backlog(clusterId, gkmSweepBacklogOwner, sidecar.WriteP2RankRetention, false, 0)
+		}
+	}()
 	firstClusterId := ""
 	if firstCluster, err := self.blobs.FirstCluster(); err == nil {
 		firstClusterId = firstCluster.ClusterId()
@@ -212,9 +228,44 @@ func (self *GkmReconciler) sidecarHeld(ctx context.Context, sidecarId sidecar.Id
 	return err != nil || cover.Covered(), revoked, nil
 }
 
-// Deletes key, counting what it removed. A key already gone is no error.
-func (self *GkmReconciler) deleteKey(ctx context.Context, cluster sidecar.BlobCluster, key string) error {
-	return cluster.Delete(ctx, key)
+// A hold that came to cover a unit while its delete waited for the budget: the delete is dropped, nothing deleted.
+var errGkmSweepHeld = errors.New("gkm: a hold now covers what the sweep would delete")
+
+// What a sweep unit's P2 work checks again when its turn comes: whether a hold now covers the unit.
+type gkmSweepRecheckKey struct{}
+
+// ctx carrying held, the unit's own hold check, for its deletes' rechecks.
+func withGkmSweepHeld(ctx context.Context, held func(ctx context.Context) bool) context.Context {
+	return context.WithValue(ctx, gkmSweepRecheckKey{}, held)
+}
+
+// Acquires byteCount priced bytes of unfunded P2 work at rank on cluster, waiting as long as ctx lasts, its recheck
+// the unit's hold check from ctx.
+func (self *GkmReconciler) acquireSweepWrite(ctx context.Context, cluster sidecar.BlobCluster, rank sidecar.WriteP2Rank, byteCount int64) (sidecar.WriteGrant, error) {
+	work := &sidecar.WriteP2Work{Rank: rank, Due: self.clock.Now(), ByteCount: byteCount}
+	if held, ok := ctx.Value(gkmSweepRecheckKey{}).(func(ctx context.Context) bool); ok {
+		work.Recheck = func(ctx context.Context) error {
+			if held(ctx) {
+				return errGkmSweepHeld
+			}
+			return nil
+		}
+	}
+	return self.host.Budget.AcquireP2(ctx, cluster.ClusterId(), work)
+}
+
+// Deletes key as unfunded P2 work at rank. A key already gone is no error, nor is a hold that came to cover it while
+// it waited, which keeps it.
+func (self *GkmReconciler) deleteKey(ctx context.Context, cluster sidecar.BlobCluster, key string, rank sidecar.WriteP2Rank) error {
+	grant, err := self.acquireSweepWrite(ctx, cluster, rank, self.settings.Service.Prices.delete())
+	if errors.Is(err, errGkmSweepHeld) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer grant.Close()
+	return deleteGkmObject(grant.Context(), cluster, key)
 }
 
 // One group's objects as a LIST found them.
@@ -293,6 +344,7 @@ func (self *GkmReconciler) sweepGroup(ctx context.Context, cluster sidecar.BlobC
 	if err != nil || self.repoHeld(ctx, cluster, repoId) {
 		return nil
 	}
+	ctx = withGkmSweepHeld(ctx, func(ctx context.Context) bool { return self.repoHeld(ctx, cluster, repoId) })
 	if err := self.retainEpochs(ctx, cluster, groupId, listing.epochs, now); err != nil {
 		return err
 	}
@@ -301,7 +353,7 @@ func (self *GkmReconciler) sweepGroup(ctx context.Context, cluster sidecar.BlobC
 	}
 	for _, info := range listing.welcomes {
 		if self.settings.WelcomeLifetime <= now.Sub(info.LastModified) {
-			if err := self.deleteKey(ctx, cluster, info.Key); err != nil {
+			if err := self.deleteKey(ctx, cluster, info.Key, sidecar.WriteP2RankRetention); err != nil {
 				return err
 			}
 		}
@@ -383,7 +435,7 @@ func (self *GkmReconciler) retainEpochs(ctx context.Context, cluster sidecar.Blo
 	}
 	slices.Sort(epochNumbers)
 	for _, epoch := range epochNumbers {
-		if err := self.deleteKey(ctx, cluster, deletable[epoch].info.Key); err != nil {
+		if err := self.deleteKey(ctx, cluster, deletable[epoch].info.Key, sidecar.WriteP2RankRetention); err != nil {
 			return err
 		}
 	}
@@ -409,9 +461,15 @@ func (self *GkmReconciler) movePointer(ctx context.Context, cluster sidecar.Blob
 		if err != nil {
 			return 0, false
 		}
+		// retention's own work, priced as an overwrite
+		grant, err := self.acquireSweepWrite(ctx, cluster, sidecar.WriteP2RankRetention, self.settings.Service.Prices.overwrite(len(pointerBytes)))
+		if err != nil {
+			return 0, false
+		}
+		defer grant.Close()
 		barrierKey := gkmBarrierGroupKey(groupId)
 		testHookBarrier(BarrierPointerPutBefore, barrierKey)
-		err = replaceGkmObject(ctx, cluster, GkmGroupInfoKey(groupId), etag, pointerBytes)
+		err = replaceGkmObject(grant.Context(), cluster, GkmGroupInfoKey(groupId), etag, pointerBytes)
 		testHookBarrier(BarrierPointerPutAfter, barrierKey)
 		return epochs[i].epoch, err == nil
 	}
@@ -447,6 +505,7 @@ func (self *GkmReconciler) collectWraps(ctx context.Context, cluster sidecar.Blo
 	for _, wrap := range listing.wraps {
 		c8, claimed := generationC8s[wrap.generation]
 		remove := false
+		rank := sidecar.WriteP2RankRetention
 		switch {
 		case listing.generations[wrap.generation+1]:
 			// the next generation's deliveries all exist once it is claimed (gkm-7)
@@ -454,12 +513,13 @@ func (self *GkmReconciler) collectWraps(ctx context.Context, cluster sidecar.Blo
 		case !claimed || c8 != wrap.c8:
 			// a lost claim's staged delivery
 			remove = self.settings.StagedGcAge <= now.Sub(wrap.info.LastModified)
+			rank = sidecar.WriteP2RankGc
 		default:
 			newest := newestWritten[recipientKey{generation: wrap.generation, recipient: wrap.recipient}]
 			remove = wrap.info.LastModified.Before(newest) && self.settings.OlderKeyDeliveryAge <= now.Sub(newest)
 		}
 		if remove {
-			if err := self.deleteKey(ctx, cluster, wrap.info.Key); err != nil {
+			if err := self.deleteKey(ctx, cluster, wrap.info.Key, rank); err != nil {
 				return err
 			}
 		}
@@ -476,8 +536,9 @@ func (self *GkmReconciler) sweepRecoveryWraps(ctx context.Context, cluster sidec
 		return err
 	}
 	type groupHeld struct {
-		known bool
-		held  bool
+		known  bool
+		held   bool
+		repoId sidecar.Id
 	}
 	groupHelds := map[sidecar.Id]*groupHeld{}
 	for _, info := range infos {
@@ -503,13 +564,16 @@ func (self *GkmReconciler) sweepRecoveryWraps(ctx context.Context, cluster sidec
 				if repoId, err := sidecar.IdFromBytes(newestFacts.repoId); err == nil {
 					held.known = true
 					held.held = self.repoHeld(ctx, cluster, repoId)
+					held.repoId = repoId
 				}
 			}
 		}
 		if !held.known || held.held {
 			continue
 		}
-		if err := self.deleteKey(ctx, cluster, info.Key); err != nil {
+		repoId := held.repoId
+		unitCtx := withGkmSweepHeld(ctx, func(ctx context.Context) bool { return self.repoHeld(ctx, cluster, repoId) })
+		if err := self.deleteKey(unitCtx, cluster, info.Key, sidecar.WriteP2RankGc); err != nil {
 			return err
 		}
 	}
@@ -530,6 +594,7 @@ func (self *GkmReconciler) sweepKeyPackages(ctx context.Context, cluster sidecar
 	if held {
 		return nil
 	}
+	ctx = withGkmSweepHeld(ctx, func(ctx context.Context) bool { return self.sidecarHeldNow(ctx, sidecarId) })
 	claimedRefs := map[string]bool{}
 	for _, info := range infos {
 		if ref, claim, ok := parseGkmKeyPackageListKey(prefix, info.Key); ok && claim {
@@ -553,12 +618,19 @@ func (self *GkmReconciler) sweepKeyPackages(ctx context.Context, cluster sidecar
 			}
 		}
 		if remove {
-			if err := self.deleteKey(ctx, cluster, info.Key); err != nil {
+			if err := self.deleteKey(ctx, cluster, info.Key, sidecar.WriteP2RankRetention); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// Whether a hold covers a sidecar's network now, or anything about it cannot be told: the recheck of its unit's
+// deletes.
+func (self *GkmReconciler) sidecarHeldNow(ctx context.Context, sidecarId sidecar.Id) bool {
+	held, _, err := self.sidecarHeld(ctx, sidecarId)
+	return err != nil || held
 }
 
 // One sidecar's ReaderKey, which goes once past its not_after (gkm-4).
@@ -584,7 +656,8 @@ func (self *GkmReconciler) sweepReaderKey(ctx context.Context, cluster sidecar.B
 	if err != nil || held {
 		return err
 	}
-	return self.deleteKey(ctx, cluster, key)
+	ctx = withGkmSweepHeld(ctx, func(ctx context.Context) bool { return self.sidecarHeldNow(ctx, sidecarId) })
+	return self.deleteKey(ctx, cluster, key, sidecar.WriteP2RankRetention)
 }
 
 // One sidecar's Welcome pointers: one goes once its recipient's ack has passed its epoch, or at 90 d (gkm-5).
@@ -598,6 +671,7 @@ func (self *GkmReconciler) sweepWelcomePointers(ctx context.Context, cluster sid
 	if err != nil || held {
 		return err
 	}
+	ctx = withGkmSweepHeld(ctx, func(ctx context.Context) bool { return self.sidecarHeldNow(ctx, sidecarId) })
 	field := sidecar.EvsKeyId(sidecarId)
 	for _, info := range infos {
 		remove := self.settings.WelcomeLifetime <= now.Sub(info.LastModified)
@@ -622,7 +696,7 @@ func (self *GkmReconciler) sweepWelcomePointers(ctx context.Context, cluster sid
 			}
 		}
 		if remove {
-			if err := self.deleteKey(ctx, cluster, info.Key); err != nil {
+			if err := self.deleteKey(ctx, cluster, info.Key, sidecar.WriteP2RankRetention); err != nil {
 				return err
 			}
 		}

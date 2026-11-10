@@ -15,4 +15,8 @@
 //
 // KEYS-M2-16's reconciler runs in taskworker, not in the engine: its pending hints (reconciler.go), its sweeps of
 // retention, staged GC and §2.8's TTLs (retention.go), and ShredGroup, which §11.12's shred calls (shred.go).
+//
+// KEYS-M2-30 put every write through §11.13's write budget (budget.go): Removes, REMOVE rotations and shreds as P0,
+// which nothing queues or refuses, the rest of the routes' writes as P1 per network, and the reconciler's sweeps as
+// unfunded P2, each class read from gkm's newest verified state and never from what a statement says of itself.
 package gkmservice

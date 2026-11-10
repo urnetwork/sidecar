@@ -116,6 +116,12 @@ type GkmAuthState interface {
 	// first (an agent's or a Delegation's sponsor's), then by identity bytes. recipient is the ask's, as its wrap
 	// path writes it: s:<sidecar_id> or d:<delegation_id>.
 	LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, GkmAuthAnswer)
+	// Whether the newest verified state shows a key holder of repoId dropped since pin and since: a shrink after pin's
+	// position, a compromise retirement among them, or a holder's authorization expiry in (since, now]
+	// (sidecar.GkmRemoveDue at the newest state, through now). Allowed when one did, Denied when none did, Unknown
+	// when the state cannot tell. §11.13's write budget reads it alone to class a commit as a Remove and a staged
+	// delivery or claim as a REMOVE rotation's (§10.6's checks row, budget.go), never a statement's stated cause.
+	HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) GkmAuthAnswer
 }
 
 // A scope's role, as §7.8 spells it after repo:<id>:.

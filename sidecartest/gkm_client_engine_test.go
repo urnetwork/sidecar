@@ -90,6 +90,11 @@ func (self *gkmClientEngineState) DelegationReads(principal *sidecar.Principal, 
 	return gkmservice.GkmAuthDenied
 }
 
+// No holder dropped: every write here is §11.13's P1.
+func (self *gkmClientEngineState) HoldersDropped(principal *sidecar.Principal, repoId sidecar.Id, pin *bridge.AuthPin, since time.Time, now time.Time) gkmservice.GkmAuthAnswer {
+	return gkmservice.GkmAuthDenied
+}
+
 func (self *gkmClientEngineState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
 	return nil, gkmservice.GkmAuthAllowed
 }

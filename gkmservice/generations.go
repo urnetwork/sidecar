@@ -370,12 +370,15 @@ func (self *GkmEngine) serveGenerationClaim(request *GkmRequest) {
 			return
 		}
 	}
-	if !request.CheckRepoWritable() {
+	// a REMOVE rotation's claim, which the write budget never refuses, only while gkm's newest state shows a drop since
+	// gen/<g-1>'s pin and time, whatever cause the claim states (§10.6's checks row, budget.go)
+	writeCtx, ok := request.SpendWrites(request.Cluster, self.rotationWriteKind(request, parent), self.settings.Prices.create(len(raw)))
+	if !ok || !request.CheckRepoWritable() {
 		return
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, generation)
 	testHookBarrier(BarrierGenClaimBefore, barrierKey)
-	winner, err := self.createGeneration(request.Ctx, request.Cluster, groupId, generation, raw)
+	winner, err := self.createGeneration(writeCtx, request.Cluster, groupId, generation, raw)
 	testHookBarrier(BarrierGenClaimAfter, barrierKey)
 	if err != nil {
 		self.answerStoreError(request, err)

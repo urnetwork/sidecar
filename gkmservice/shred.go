@@ -7,6 +7,9 @@
 // Safe to repeat: a key already gone is no error, and a write in flight at step 3, which gkm issued before it reread
 // repo/ as shredding, lands within the store's request deadline, which step 6's ten minutes outlast (§10.6's checks
 // row).
+//
+// Every delete is §11.13's P0 of kind shred, issued at once on the cluster it deletes from, never queued or refused
+// (owner decision 186; budget.go), so host needs a write budget.
 
 package gkmservice
 
@@ -23,8 +26,15 @@ func ShredGroup(ctx context.Context, host *sidecar.ServiceHost, cluster sidecar.
 	if host == nil || host.Blobs == nil || cluster == nil {
 		return errors.New("gkm's shred needs a host with Blobs and the repo's cluster")
 	}
+	if host.Budget == nil {
+		return errors.New("gkm's shred needs a write budget: no metadata write may go unpriced (§11.13)")
+	}
 	if settings == nil {
 		settings = DefaultGkmServiceSettings()
+	}
+	// a shred step's deletes, P0 on each cluster they reach
+	deletes := func(cluster sidecar.BlobCluster) *gkmShredDeletes {
+		return &gkmShredDeletes{budget: host.Budget, cluster: cluster, byteCount: settings.Prices.delete()}
 	}
 	forms, err := gkmReadForms(ctx, cluster, repoId, settings)
 	if err != nil {
@@ -35,7 +45,7 @@ func ShredGroup(ctx context.Context, host *sidecar.ServiceHost, cluster sidecar.
 		groupIds[form.GroupId] = true
 	}
 	for groupId := range groupIds {
-		if err := deleteGkmPrefix(ctx, cluster, GkmGroupPrefix(groupId), settings.ListPageCount); err != nil {
+		if err := deleteGkmPrefix(ctx, deletes(cluster), GkmGroupPrefix(groupId), settings.ListPageCount); err != nil {
 			return err
 		}
 		if host.Redis != nil {
@@ -50,19 +60,33 @@ func ShredGroup(ctx context.Context, host *sidecar.ServiceHost, cluster sidecar.
 			if err != nil {
 				return err
 			}
-			if err := deleteGkmRecoveryWrapsOfGroups(ctx, recoveryCluster, groupIds, settings.ListPageCount); err != nil {
+			if err := deleteGkmRecoveryWrapsOfGroups(ctx, deletes(recoveryCluster), groupIds, settings.ListPageCount); err != nil {
 				return err
 			}
 		}
 	}
 	if final {
-		return deleteGkmPrefix(ctx, cluster, GkmFormPrefix(repoId), settings.ListPageCount)
+		return deleteGkmPrefix(ctx, deletes(cluster), GkmFormPrefix(repoId), settings.ListPageCount)
 	}
 	return nil
 }
 
+// A shred's deletes on one cluster, each issued as P0 of kind shred before it is sent.
+type gkmShredDeletes struct {
+	budget    sidecar.WriteBudget
+	cluster   sidecar.BlobCluster
+	byteCount int64
+}
+
+// Deletes key, P0 at once. A key already gone is no error.
+func (self *gkmShredDeletes) delete(ctx context.Context, key string) error {
+	ctx = self.budget.IssueP0(ctx, self.cluster.ClusterId(), sidecar.WriteP0KindShred, self.byteCount)
+	return deleteGkmObject(ctx, self.cluster, key)
+}
+
 // Deletes every key under prefix, a page at a time.
-func deleteGkmPrefix(ctx context.Context, cluster sidecar.BlobCluster, prefix string, pageCount int) error {
+func deleteGkmPrefix(ctx context.Context, deletes *gkmShredDeletes, prefix string, pageCount int) error {
+	cluster := deletes.cluster
 	startAfter := ""
 	for {
 		infos, more, err := cluster.List(ctx, prefix, startAfter, pageCount)
@@ -70,7 +94,7 @@ func deleteGkmPrefix(ctx context.Context, cluster sidecar.BlobCluster, prefix st
 			return err
 		}
 		for _, info := range infos {
-			if err := cluster.Delete(ctx, info.Key); err != nil {
+			if err := deletes.delete(ctx, info.Key); err != nil {
 				return err
 			}
 		}
@@ -83,7 +107,8 @@ func deleteGkmPrefix(ctx context.Context, cluster sidecar.BlobCluster, prefix st
 
 // Deletes every recovery wrap on cluster whose group is one of groupIds: one walk of gkm/recovery/, since recovery
 // wraps are keyed by member first.
-func deleteGkmRecoveryWrapsOfGroups(ctx context.Context, cluster sidecar.BlobCluster, groupIds map[sidecar.Id]bool, pageCount int) error {
+func deleteGkmRecoveryWrapsOfGroups(ctx context.Context, deletes *gkmShredDeletes, groupIds map[sidecar.Id]bool, pageCount int) error {
+	cluster := deletes.cluster
 	startAfter := ""
 	for {
 		infos, more, err := cluster.List(ctx, gkmRecoveryKeyPrefix, startAfter, pageCount)
@@ -100,7 +125,7 @@ func deleteGkmRecoveryWrapsOfGroups(ctx context.Context, cluster sidecar.BlobClu
 			if err != nil || !groupIds[groupId] {
 				continue
 			}
-			if err := cluster.Delete(ctx, info.Key); err != nil {
+			if err := deletes.delete(ctx, info.Key); err != nil {
 				return err
 			}
 		}

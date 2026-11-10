@@ -52,7 +52,7 @@ func (self *gkmGroupWorld) withReaderKey(testSidecar *gkmTestSidecar) *gkmTestRe
 	if info, err := cluster.Head(fixture.ctx, key); err == nil {
 		etag = info.Etag
 	}
-	if err := replaceGkmObject(fixture.ctx, cluster, key, etag, fixture.marshal(signed)); err != nil {
+	if err := replaceGkmObject(fixture.spentCtx(), cluster, key, etag, fixture.marshal(signed)); err != nil {
 		self.t.Fatal(err)
 	}
 	keySha256 := sha256.Sum256(body.GetXwingPublicKey())

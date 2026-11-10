@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -61,10 +62,12 @@ const (
 // The status of a delivery gkm did not reach a definite answer for (QD-066's 0).
 const gkmWrapStatusNotTried = 0
 
-// One item of a batch on its way to the store: its key and bytes, and where its answer goes.
+// One item of a batch on its way to the store: its key and bytes, whether it is a LATE delivery, and where its answer
+// goes.
 type gkmWrapWrite struct {
 	key    string
 	body   []byte
+	late   bool
 	result *protocol.GkmWrapResult
 }
 
@@ -241,7 +244,7 @@ func (self *GkmEngine) judgeDelivery(batch *gkmWrapBatchContext, deliveryBytes [
 	default:
 		return nil, 403, true
 	}
-	return &gkmWrapWrite{key: key, body: raw}, 0, true
+	return &gkmWrapWrite{key: key, body: raw, late: body.GetDeliveryKind() == gkmDeliveryKindLate}, 0, true
 }
 
 // §10.6's late row for one LATE delivery: 0 when it passes, else the status refusing it. ok false once it has
@@ -351,7 +354,10 @@ func (self *GkmEngine) serveWrapBatch(request *GkmRequest) {
 
 // Writes a batch's judged items, WrapPutConcurrency at once, each If-None-Match, starting none past
 // WrapBatchStartDeadline into the request: 201, 412 with the winner, or 0 where no definite answer came. repo/ is
-// reread first, so a write in flight at a shred lands before its repeat. false once it has answered.
+// reread first, so a write in flight at a shred lands before its repeat. The items spend the write budget by class
+// (budget.go): STAGED ones as their rotation's, P0 while gkm's newest state shows a drop since gen/<g-1>'s pin and
+// time, at once, and LATE ones and the rest as P1, which the budget may shed, answering those items 429. false once
+// it has answered.
 func (self *GkmEngine) writeWrapBatch(request *GkmRequest, groupId sidecar.Id, generation uint64, writes []*gkmWrapWrite) bool {
 	if len(writes) == 0 {
 		return true
@@ -359,8 +365,55 @@ func (self *GkmEngine) writeWrapBatch(request *GkmRequest, groupId sidecar.Id, g
 	if !request.CheckRepoWritable() {
 		return false
 	}
+	stagedKind := sidecar.WriteP0Kind("")
+	for _, write := range writes {
+		if !write.late {
+			stagedKind = self.stagedWriteKind(request, groupId, generation)
+			break
+		}
+	}
+	type writeGroup struct {
+		kind      sidecar.WriteP0Kind
+		writes    []*gkmWrapWrite
+		byteCount int64
+	}
+	// P0 first, so the budget's queue never holds a REMOVE rotation's deliveries behind a LATE one
+	p0Group := &writeGroup{kind: stagedKind}
+	p1Group := &writeGroup{}
+	for _, write := range writes {
+		group := p1Group
+		if !write.late && stagedKind != "" {
+			group = p0Group
+		}
+		group.writes = append(group.writes, write)
+		group.byteCount += self.settings.Prices.create(len(write.body))
+	}
 	deadline := request.started.Add(self.settings.WrapBatchStartDeadline)
 	barrierKey := gkmBarrierNumberKey(groupId, generation)
+	for _, group := range []*writeGroup{p0Group, p1Group} {
+		if len(group.writes) == 0 {
+			continue
+		}
+		writeCtx, err := request.spendWrites(request.Cluster, group.kind, group.byteCount)
+		if err != nil {
+			status := uint32(gkmWrapStatusNotTried)
+			var refusal *sidecar.WriteRefusal
+			if errors.As(err, &refusal) {
+				// shed by §11.13's budget, nothing written: the client sends these again
+				status = http.StatusTooManyRequests
+			}
+			for _, write := range group.writes {
+				write.result.Status = status
+			}
+			continue
+		}
+		self.putWraps(writeCtx, request, group.writes, barrierKey, deadline)
+	}
+	return true
+}
+
+// PUTs writes under ctx, WrapPutConcurrency at once, starting none past deadline, and sets each one's answer.
+func (self *GkmEngine) putWraps(ctx context.Context, request *GkmRequest, writes []*gkmWrapWrite, barrierKey string, deadline time.Time) {
 	slots := make(chan struct{}, self.settings.WrapPutConcurrency)
 	var group sync.WaitGroup
 	for _, write := range writes {
@@ -375,7 +428,7 @@ func (self *GkmEngine) writeWrapBatch(request *GkmRequest, groupId sidecar.Id, g
 			defer group.Done()
 			defer func() { <-slots }()
 			testHookBarrier(BarrierWrapPutBefore, barrierKey)
-			winner, err := createGkmObject(request.Ctx, request.Cluster, write.key, write.body, gkmDeliveryMaxByteCount)
+			winner, err := createGkmObject(ctx, request.Cluster, write.key, write.body, gkmDeliveryMaxByteCount)
 			testHookBarrier(BarrierWrapPutAfter, barrierKey)
 			switch {
 			case err != nil:
@@ -389,7 +442,6 @@ func (self *GkmEngine) writeWrapBatch(request *GkmRequest, groupId sidecar.Id, g
 		}()
 	}
 	group.Wait()
-	return true
 }
 
 // GET /gkm/groups/<id>/wraps/<g>?recipient=&want=<k8>&since=<ms>: a GkmWrapsReply of the caller's own deliveries of

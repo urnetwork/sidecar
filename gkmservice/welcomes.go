@@ -181,12 +181,15 @@ func (self *GkmEngine) serveWelcomeWrite(request *GkmRequest) {
 		request.Forbidden()
 		return
 	}
-	if !request.CheckRepoWritable() {
+	// Welcomes and their pointers are §11.13's P1, the Welcome on the repo's cluster and the pointers on the first
+	// (budget.go)
+	welcomeCtx, ok := request.SpendWrites(request.Cluster, "", self.settings.Prices.create(len(welcome)))
+	if !ok || !request.CheckRepoWritable() {
 		return
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, epoch)
 	testHookBarrier(BarrierWelcomePutBefore, barrierKey)
-	winner, err := createGkmObject(request.Ctx, request.Cluster, GkmWelcomeKey(groupId, epoch), welcome, self.settings.ObjectMaxByteCount)
+	winner, err := createGkmObject(welcomeCtx, request.Cluster, GkmWelcomeKey(groupId, epoch), welcome, self.settings.ObjectMaxByteCount)
 	testHookBarrier(BarrierWelcomePutAfter, barrierKey)
 	if err != nil {
 		self.answerStoreError(request, err)
@@ -206,9 +209,14 @@ func (self *GkmEngine) serveWelcomeWrite(request *GkmRequest) {
 		request.Unavailable()
 		return
 	}
+	pointersCtx, ok := request.SpendWrites(firstCluster, "", int64(len(targets))*self.settings.Prices.create(len(pointerBytes)))
+	if !ok {
+		// a retry finds the Welcome standing and writes the pointers
+		return
+	}
 	hintedSidecarIds := []sidecar.Id{}
 	for _, target := range targets {
-		winner, err := createGkmObject(request.Ctx, firstCluster, target.key, pointerBytes, self.settings.ObjectMaxByteCount)
+		winner, err := createGkmObject(pointersCtx, firstCluster, target.key, pointerBytes, self.settings.ObjectMaxByteCount)
 		if err != nil {
 			// a retry finds the Welcome and the pointers written so far standing, and writes the rest
 			self.answerStoreError(request, err)

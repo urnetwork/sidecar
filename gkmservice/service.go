@@ -104,12 +104,15 @@ type GkmEngine struct {
 	drainingOnce  sync.Once
 }
 
-// Starts the engine. host needs Blobs and Metrics. Its Authenticator, Gates, Push and Clock are read per request,
-// a nil gate closing every route and a nil Push losing every hint, which the hourly resync covers. It runs until
-// ctx ends or Close.
+// Starts the engine. host needs Blobs, Budget and Metrics; a nil Budget refuses to start, since no metadata write may
+// go unpriced (§11.13, budget.go). Its Authenticator, Gates, Push and Clock are read per request, a nil gate closing
+// every route and a nil Push losing every hint, which the hourly resync covers. It runs until ctx ends or Close.
 func NewGkmEngine(ctx context.Context, host *sidecar.ServiceHost, settings *GkmServiceSettings, deps *GkmEngineDeps) (*GkmEngine, error) {
 	if host == nil || host.Blobs == nil || host.Metrics == nil {
 		return nil, errors.New("gkm needs a host with Blobs and Metrics")
+	}
+	if host.Budget == nil {
+		return nil, errors.New("gkm needs a write budget: no metadata write may go unpriced (§11.13)")
 	}
 	if settings == nil {
 		settings = DefaultGkmServiceSettings()
@@ -417,6 +420,8 @@ type GkmRequest struct {
 	retryAfter       time.Duration
 	requestByteCount int64
 	replyByteCount   int64
+	// what ends each write budget admission the request made, once its writes have (budget.go)
+	releases []func()
 }
 
 // The engine's clock now.
@@ -844,12 +849,16 @@ func (self *GkmRequest) write(status int, body []byte) {
 	}
 }
 
-// Counts the request and writes its gkm-9 line.
+// Ends the request's budget admissions, counts the request and writes its gkm-9 line.
 func (self *GkmRequest) finish() {
 	if !self.answered {
 		// a handler that answered nothing has failed closed
 		self.Unavailable()
 	}
+	for _, release := range self.releases {
+		release()
+	}
+	self.releases = nil
 	entry := &GkmServiceLogEntry{
 		Time:             self.started,
 		Route:            self.route.Pattern,
@@ -914,6 +923,8 @@ type gkmMetrics struct {
 	hintsSent    sidecar.MetricsCounter
 	hintsFailed  sidecar.MetricsCounter
 	hintsDropped sidecar.MetricsCounter
+	budgetShed   sidecar.MetricsCounter
+	budgetP0     sidecar.MetricsCounter
 }
 
 // Declares the series.
@@ -927,5 +938,7 @@ func newGkmMetrics(metrics sidecar.Metrics) *gkmMetrics {
 		hintsSent:    metrics.Counter("urnetwork_gkm_hints_sent_total", "gkm hints sent, by kind", "kind"),
 		hintsFailed:  metrics.Counter("urnetwork_gkm_hints_failed_total", "gkm hints whose send failed, by kind", "kind"),
 		hintsDropped: metrics.Counter("urnetwork_gkm_hints_dropped_total", "gkm hints dropped unsent, by kind", "kind"),
+		budgetShed:   metrics.Counter("urnetwork_gkm_budget_shed_total", "gkm P1 writes the write budget refused, by route", "route"),
+		budgetP0:     metrics.Counter("urnetwork_gkm_budget_p0_total", "gkm write groups issued as P0, by kind", "kind"),
 	}
 }
