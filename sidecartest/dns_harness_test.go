@@ -117,9 +117,8 @@ func TestDnsHarnessWriteReachesBothEdgesAtOneSerial(t *testing.T) {
 	}
 }
 
-// A failed interface leaves *, @ and the network's own names on both edges, and a restored one comes
-// back to both. Router rows keep it until DNS-M7-01's banner probe, as a failed alert probe does not
-// reach mx.
+// A failed interface leaves *, @ and the network's own names on both edges, and a router mx too, since
+// a host that is down fails its 25 banner as well; a restored one comes back to both.
 func TestDnsHarnessFailedInterfaceLeavesBothEdgesAnswers(t *testing.T) {
 	net := newTestNet(t)
 	harness := newTestDnsHarness(t, net, "dns")
@@ -144,7 +143,7 @@ func TestDnsHarnessFailedInterfaceLeavesBothEdgesAnswers(t *testing.T) {
 	if err := harness.FailInterface(t.Context(), "lb-2"); err != nil {
 		t.Fatal(err)
 	}
-	check("lb-2 failed", []string{"192.0.2.1", "192.0.2.3"}, all[1:])
+	check("lb-2 failed", []string{"192.0.2.1", "192.0.2.3"}, all[2:])
 	for _, ns := range harness.Settings().Ns {
 		if _, addresses := dnsHarnessTestAnswer(t, harness, ns, "www.net1."+harness.Root(), dns.TypeAAAA); !slices.Equal(addresses, []string{"2001:db8::1", "2001:db8::3"}) {
 			t.Errorf("%s answers AAAA %v", ns, addresses)
@@ -165,6 +164,9 @@ func TestDnsHarnessFailedInterfaceLeavesBothEdgesAnswers(t *testing.T) {
 	check("lb-3 back", all, all[1:])
 	if err := harness.FailInterface(t.Context(), "lb-9"); !errors.Is(err, ErrDnsHarnessSettings) {
 		t.Errorf("an unknown interface: %v", err)
+	}
+	if err := harness.FailInterfaceBanner(t.Context(), "lb-9"); !errors.Is(err, ErrDnsHarnessSettings) {
+		t.Errorf("an unknown interface's banner: %v", err)
 	}
 }
 

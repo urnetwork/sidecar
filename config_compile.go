@@ -3,11 +3,14 @@
 // alike: the rows' lists are in id order, every message is encoded deterministically, and the whole is at most 4 MiB
 // (§8.8).
 //
-// §7's rows, members, sidecars, Delegations and registered keys, are what the log's records give at the head's
-// folded_through, so the caller passes them: a writer from its state at its fold, a reader from its own log
-// (ConfigCompileRows). The acl part is §8's, from the head's policy, tags, groups and files beside the log's acl
-// statements, and ACL's CompileAcl gives it (ACL-M2-04). C-05 has this task declare the seam and ACL register the
-// compile: until one is registered, CompileProjectionRows refuses, so no base compiles without its acl part.
+// §7's rows, members, sidecars, Delegations and registered keys, with the proposals open there and the replay ring, are
+// what the log gives at the head's folded_through, L(ft), so the caller passes them: a writer from its state at its fold
+// or the previous base's rows, a reader from its own log alike (ConfigCompileRows; DESIGN-DETAILS 5.2.2). The settings
+// are the head's: its ServiceSettings' self_admit and scim_signer, always present, the zero value for none. The acl
+// part is §8's, from the head's policy, tags, groups and files beside the log's acl statements, and ACL's CompileAcl
+// gives it (ACL-M2-04). C-05 has this task declare the seam and ACL register the compile: until one is registered,
+// CompileProjectionRows refuses, so no base compiles without its acl part. Lists run in id order, the ring in position
+// order.
 //
 // On every leg, with no connect import. Nothing here creates, derives or unwraps a key, so nothing calls
 // testHookSecret. Safe for concurrent use.
@@ -16,6 +19,7 @@ package sidecar
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -45,6 +49,13 @@ type ConfigCompileRows struct {
 	// What the log's 0x11xx statements give at folded_through: grants, shares, suspensions and AclRepo rows, which
 	// the acl compile carries into AclRows beside what the head's policy gives (§8.8).
 	AclStatements *protocol.AclRows
+	// Every proposal open at folded_through, its time the entry's there (DESIGN-DETAILS 5.2.3).
+	Proposals []*bridge.ProposalRow
+	// The statements that took effect among the 4,096 entries through folded_through, in position order
+	// (DESIGN-DETAILS 5.2.3's ring).
+	Ring []*bridge.RingRow
+	// Every IndexerSet designation that holds at folded_through (question team-m2-07-indexer-rows).
+	Indexers []*bridge.IndexerRow
 }
 
 // The rows a state holds, as compile reads them: what a writer passes for its state at its fold.
@@ -60,6 +71,47 @@ func ConfigCompileRowsOf(state *ConfigState) *ConfigCompileRows {
 		Delegations:    rows.GetDelegations(),
 		RegisteredKeys: rows.GetRegisteredKeys(),
 		AclStatements:  aclStatements,
+		Proposals:      rows.GetProposals(),
+		Ring:           rows.GetRing(),
+		Indexers:       rows.GetIndexers(),
+	}
+}
+
+// The log-derived part of a base's rows, as compile reads it: L(ft) when a new base keeps the previous base's fold,
+// whose rows already hold the log at that point (DESIGN-DETAILS 5.2.2's recurrence).
+func configCompileRowsFromRows(rows *bridge.ProjectionRows) (*ConfigCompileRows, error) {
+	aclStatements := &protocol.AclRows{}
+	if err := proto.Unmarshal(rows.GetAcl(), aclStatements); err != nil {
+		return nil, fmt.Errorf("%w: acl: %w", ErrConfigRowsMalformed, err)
+	}
+	return &ConfigCompileRows{
+		Members:        rows.GetMembers(),
+		Sidecars:       rows.GetSidecars(),
+		Delegations:    rows.GetDelegations(),
+		RegisteredKeys: rows.GetRegisteredKeys(),
+		AclStatements:  aclStatements,
+		Proposals:      rows.GetProposals(),
+		Ring:           rows.GetRing(),
+		Indexers:       rows.GetIndexers(),
+	}, nil
+}
+
+// L(0) for base 1, which the log before it holds nothing of: the Genesis's owner an Owner, and its first device that
+// owner's member device, admitted by itself, with the identity key the Genesis names (§7.9's bootstrap).
+func configGenesisCompileRows(genesis *bridge.Genesis) *ConfigCompileRows {
+	return &ConfigCompileRows{
+		Members: []*bridge.MemberRow{{
+			MemberId: bytes.Clone(genesis.GetOwnerMemberId()),
+			Role:     bridge.MemberRole_MEMBER_ROLE_OWNER,
+		}},
+		Sidecars: []*bridge.SidecarRow{{
+			SidecarId:         bytes.Clone(genesis.GetOwnerSidecarId()),
+			AdmissionSigners:  [][]byte{bytes.Clone(genesis.GetOwnerSidecarId())},
+			IdentityPublicKey: bytes.Clone(genesis.GetOwnerIdentityPublicKey()),
+			IdentityAlg:       configIdentityAlgEd25519,
+			MemberId:          bytes.Clone(genesis.GetOwnerMemberId()),
+		}},
+		AclStatements: &protocol.AclRows{},
 	}
 }
 
@@ -106,15 +158,27 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("config compile: acl: %w", err)
 	}
+	settings, _, err := head.ServiceSettings()
+	if err != nil {
+		return nil, fmt.Errorf("config compile: service_settings: %w", err)
+	}
 
-	projection := &bridge.ProjectionRows{Acl: aclBytes}
+	projection := &bridge.ProjectionRows{Acl: aclBytes, Settings: ConfigProjectionSettings(settings)}
 	var sortErr error
 	projection.Members = configSortRows(rows.Members, (*bridge.MemberRow).GetMemberId, "members", &sortErr)
 	projection.Sidecars = configSortRows(rows.Sidecars, (*bridge.SidecarRow).GetSidecarId, "sidecars", &sortErr)
 	projection.Delegations = configSortRows(rows.Delegations, (*bridge.DelegationRow).GetDelegationId, "delegations", &sortErr)
 	projection.RegisteredKeys = configSortRows(rows.RegisteredKeys, (*bridge.KeyRow).GetKeyId, "registered_keys", &sortErr)
+	projection.Proposals = configSortRows(rows.Proposals, (*bridge.ProposalRow).GetProposalId, "proposals", &sortErr)
+	projection.Indexers = configSortRows(rows.Indexers, configIndexerRowKey, "indexers", &sortErr)
+	projection.Ring = configSortRows(rows.Ring, configRingRowKey, "ring", &sortErr)
 	if sortErr != nil {
 		return nil, sortErr
+	}
+	for i, row := range projection.Ring {
+		if len(row.GetStatementId()) != configRetainedIdSize {
+			return nil, fmt.Errorf("%w: ring[%d].statement_id of %d bytes", ErrConfigRowsMalformed, i, len(row.GetStatementId()))
+		}
 	}
 	encoded, err := encode.Marshal(projection)
 	if err != nil {
@@ -124,6 +188,19 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 		return nil, fmt.Errorf("%w: %d bytes", ErrConfigRowsTooLarge, len(encoded))
 	}
 	return encoded, nil
+}
+
+// A ring row's sort key, its position: the ring runs in position order, at most one statement a position.
+func configRingRowKey(row *bridge.RingRow) []byte {
+	return binary.BigEndian.AppendUint64(nil, row.GetN())
+}
+
+// A designation's sort key, its subject then its scope: a sidecar_id that is no 16-byte id gives none.
+func configIndexerRowKey(row *bridge.IndexerRow) []byte {
+	if len(row.GetSidecarId()) != len(Id{}) {
+		return nil
+	}
+	return binary.BigEndian.AppendUint32(bytes.Clone(row.GetSidecarId()), row.GetScope())
 }
 
 // The rows, cloned, in the byte order of their ids, refusing an empty or repeated id.

@@ -6,8 +6,9 @@
 // (D-CORE-3), and ends with it.
 //
 // Hints arrive through the generation's Subprotocol.Subscribe on the evs: family (§6.8): a notice carrying an
-// EvsHeadChanged goes to ReceiveHint, and a resync notice changes nothing here, since every read verifies whatever it
-// finds. Hints carry no authority either way.
+// EvsHeadChanged goes to ReceiveHint, and a reset's notice to ReceiveResync, each through the generation's queue, and
+// the client's subscriptions read what they call for (evs_hint.go). Hints carry no authority either way: every read
+// verifies whatever it finds.
 //
 // connect legs only: the sidecar_http leg runs no component (§18.10). Safe for concurrent use.
 
@@ -57,12 +58,19 @@ func (self *EvsComponent) Attach(env *SidecarEnv) error {
 	remove := func() {}
 	if env.Subprotocol != nil {
 		if unsubscribe, err := env.Subprotocol.Subscribe(PushTopicEvsPrefix, func(notice PushNotice) {
-			if notice.Kind == uint32(protocol.MessageType_EVS_HEAD_CHANGED) && 0 < len(notice.Hint) {
+			switch {
+			case notice.Kind == uint32(protocol.MessageType_EVS_HEAD_CHANGED) && 0 < len(notice.Hint):
 				self.ReceiveHint(notice.Topic, notice.Version, notice.Hint)
+			case notice.Resync:
+				self.receiveResync(notice.Topic, notice.Version)
 			}
 		}); err == nil {
 			remove = unsubscribe
 		}
+	}
+	// the subscriptions' rounds, once for the network: a reconnect starts nothing again, and renews nothing
+	if err := self.client.StartSubscriptions(); err != nil {
+		self.client.log.Warningf("[evs]subscriptions did not start: %v", err)
 	}
 	go func() {
 		<-env.Ctx.Done()
@@ -76,11 +84,39 @@ func (self *EvsComponent) Attach(env *SidecarEnv) error {
 	return nil
 }
 
-// Ends the component: no generation follows.
+// Ends the component: no generation follows, and the subscriptions' rounds end, their records kept for the next
+// start.
 func (self *EvsComponent) Close() {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.env = nil
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.env = nil
+	}()
+	self.client.Close()
+}
+
+// A reset's notice on evs:<repo_id>: handed to the running generation's queue without waiting, as a hint is, false
+// when there is none or the topic is not an evs repo's.
+func (self *EvsComponent) receiveResync(topic string, version uint64) bool {
+	idText, found := strings.CutPrefix(topic, PushTopicEvsPrefix)
+	if !found {
+		return false
+	}
+	repoId, err := ParseId(idText)
+	if err != nil || repoId.String() != idText {
+		return false
+	}
+	env := func() *SidecarEnv {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.env
+	}()
+	if env == nil {
+		return false
+	}
+	return env.Enqueue(0, func(ctx context.Context) {
+		self.client.ReceiveResync(repoId, version)
+	})
 }
 
 // A hint on evs:<repo_id>: topic, PushHint.version and its delta. Hands it to the running generation's queue without
@@ -137,5 +173,6 @@ func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, file
 		Clock:         self.clock,
 		Log:           self.log,
 		Settings:      self.settings.Evs,
+		RepoCreated:   self.announceCreatedRepo,
 	}, nil
 }

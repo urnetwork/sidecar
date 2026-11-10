@@ -62,16 +62,18 @@ func (self testConfigDevice) publicKey() []byte {
 // A rows source over what the test published, whose head check records what it was given and answers each head's
 // settings.
 type testConfigRowsSource struct {
-	rows      map[[sha256.Size]byte][]byte
-	settings  map[[sha256.Size]byte]*protocol.ServiceSettings
-	checks    []*ConfigHeadCheck
-	headError error
+	rows       map[[sha256.Size]byte][]byte
+	settings   map[[sha256.Size]byte]*protocol.ServiceSettings
+	versioning map[[sha256.Size]byte]*protocol.VersioningRules
+	checks     []*ConfigHeadCheck
+	headError  error
 }
 
 func newTestConfigRowsSource() *testConfigRowsSource {
 	return &testConfigRowsSource{
-		rows:     map[[sha256.Size]byte][]byte{},
-		settings: map[[sha256.Size]byte]*protocol.ServiceSettings{},
+		rows:       map[[sha256.Size]byte][]byte{},
+		settings:   map[[sha256.Size]byte]*protocol.ServiceSettings{},
+		versioning: map[[sha256.Size]byte]*protocol.VersioningRules{},
 	}
 }
 
@@ -90,7 +92,8 @@ func (self *testConfigRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHead
 	if self.headError != nil {
 		return nil, self.headError
 	}
-	return &ConfigHeadFacts{Settings: self.settings[[sha256.Size]byte(check.Header.GetConfigHeadSha256())]}, nil
+	headSha256 := [sha256.Size]byte(check.Header.GetConfigHeadSha256())
+	return &ConfigHeadFacts{Settings: self.settings[headSha256], VersioningRules: self.versioning[headSha256]}, nil
 }
 
 // A test network: its genesis, the fake sequencer's tip, the reader under test and every state it reached.
@@ -111,6 +114,10 @@ type testConfigNet struct {
 
 	log      *ConfigLog
 	statesAt map[uint64]*ConfigState
+	// the verdict the reader under test reached at each position, which a base's tail_verdicts carries
+	verdicts map[uint64]ConfigVerdict
+	// the presence key each device registered last, which countersigns its next covered statement in a helper
+	presenceKeys map[Id]*testPresenceKey
 }
 
 // A network at base 1: its owner a member with role OWNER and its first device the genesis device, base 1 signed by
@@ -123,6 +130,7 @@ func newTestConfigNet(t testing.TB) *testConfigNet {
 		source:        newTestConfigRowsSource(),
 		timeMs:        testConfigStartMs,
 		statesAt:      map[uint64]*ConfigState{},
+		verdicts:      map[uint64]ConfigVerdict{},
 	}
 	self.owner = testConfigDevice{sidecarId: testConfigId("owner device"), memberId: self.ownerMemberId, key: testConfigDeviceKey("owner device")}
 	genesis := &bridge.Genesis{
@@ -224,7 +232,23 @@ func (self *testConfigNet) push(entryBytes []byte) ConfigVerdict {
 		self.t.Fatalf("entry %d: %v", entry.GetN(), err)
 	}
 	self.statesAt[entry.GetN()] = self.log.State()
+	self.verdicts[entry.GetN()] = verdict
 	return verdict
+}
+
+// The tail_verdicts a base at the tip's next position folding through foldedThrough carries, as an honest writer
+// fills them: the reader's verdict at each entry since, 0 at a base (DESIGN-DETAILS 5.2.2).
+func (self *testConfigNet) tailVerdicts(foldedThrough uint64) []byte {
+	self.t.Helper()
+	verdicts := []uint8{}
+	for k := foldedThrough + 1; k <= self.n; k += 1 {
+		verdict, found := self.verdicts[k]
+		if !found {
+			self.t.Fatalf("no verdict at %d for a base's tail", k)
+		}
+		verdicts = append(verdicts, verdict.tailBits())
+	}
+	return configEncodeTailVerdicts(verdicts)
 }
 
 // Signs, sequences and applies one statement.
@@ -265,8 +289,11 @@ func testConfigHeadSha256(configVersion uint64) []byte {
 	return digest[:]
 }
 
-// The entry of a base over rows at the tip's next position, without moving the tip, its rows published.
+// The entry of a base over rows at the tip's next position, without moving the tip, its rows published. The rows
+// carry the settings the head's ServiceSettings compile to, as a writer's do (DESIGN-DETAILS 5.2.3).
 func (self *testConfigNet) makeBase(signer testConfigDevice, rows *bridge.ProjectionRows, foldedThrough uint64, configVersion uint64, threshold uint32) []byte {
+	rows = proto.Clone(rows).(*bridge.ProjectionRows)
+	rows.Settings = ConfigProjectionSettings(self.source.settings[[sha256.Size]byte(testConfigHeadSha256(configVersion))])
 	rowsBytes := testConfigMarshal(self.t, rows)
 	rowsSha256 := sha256.Sum256(rowsBytes)
 	self.source.rows[rowsSha256] = rowsBytes
@@ -280,6 +307,7 @@ func (self *testConfigNet) makeBase(signer testConfigDevice, rows *bridge.Projec
 		RowsSha256:       rowsSha256[:],
 		RowsByteCount:    uint32(len(rowsBytes)),
 		Threshold:        threshold,
+		TailVerdicts:     self.tailVerdicts(foldedThrough),
 	}
 	return self.makeEntry(bridge.AuthEntryKindBase, self.sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, header))
 }
@@ -421,7 +449,7 @@ func TestConfigStateAtBaseOneHoldsItsRows(t *testing.T) {
 	if !bytes.Equal(state.IdentityKey(net.owner.sidecarId), net.owner.publicKey()) {
 		t.Error("the owner device's identity key")
 	}
-	if settings, known := state.Settings(); !known || settings != nil {
+	if settings, known := state.HeadSettings(); !known || settings != nil || !state.SelfAdmit() {
 		t.Errorf("settings %v, known %t", settings, known)
 	}
 	if state.RetentionPoint() != 1 {

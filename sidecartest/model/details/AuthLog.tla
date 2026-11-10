@@ -31,7 +31,14 @@
 (* "NoProposalRows" and "NoSettingsRows" are §7.9 as written on            *)
 (* 2026-11-09, the three divergences; "CloseAtBase" is the code that       *)
 (* landed; "ReJudgeTail", "NoRingRows", "CascadeFromAt", "NoBitsCheck" and *)
-(* "NoTailCap" each break one rule of the detailed design. Story fixes     *)
+(* "NoTailCap" each break one rule of the detailed design, and TEAM-M2-04  *)
+(* adds "NewestConfirmOnly" (rows keep only each kind's newest             *)
+(* confirmation) and "DelegationEndIgnored" (a Delegation's key admits     *)
+(* after its end), and TEAM-M2-05 "WindowFromProposalEntry" (the window    *)
+(* runs from the proposal's entry, not its newest recovery signature) and  *)
+(* "VoidKeepsProposal" (a cascade's void leaves a proposal its voided key  *)
+(* signed open). The design models no recovery cosign, so those two twins  *)
+(* add one, rcosign, to their own runs alone. Story fixes                  *)
 (* the entries of a run, so a twin's violation is reached directly; the    *)
 (* design runs with no story.                                              *)
 (***************************************************************************)
@@ -200,7 +207,8 @@ TypeRule(st, e, n) ==
             IF ~Admitted(st, t) /\ e.as \in Members \cup {"tag"} /\ (s = "proposal" \/ MayAdmit(st, s, t, e.as))
             THEN 1 ELSE 0
        [] e.k = "dadmit" ->
-            IF st.deleg.declared /\ st.deleg.ended = 0 /\ st.deleg.admits < MaxAdmits /\ ~Admitted(st, t)
+            IF /\ st.deleg.declared /\ st.deleg.admits < MaxAdmits /\ ~Admitted(st, t)
+               /\ (st.deleg.ended = 0 \/ Twin = "DelegationEndIgnored")
             THEN 1 ELSE 0
        [] e.k = "deleg" ->
             IF ~st.deleg.declared /\ (AdminDevice(st, s) \/ (Standing(st, s) /\ st.adm[s].as = st.tagOwner))
@@ -236,12 +244,17 @@ TypeRule(st, e, n) ==
             THEN 1 ELSE 0
        [] e.k = "tick" ->
             IF /\ Open(st, e.pid, n) /\ st.props[e.pid].kind = "recovery"
-               /\ n >= st.props[e.pid].p + RecoveryWindow
+               /\ n >= (IF Twin = "WindowFromProposalEntry" THEN st.props[e.pid].o ELSE st.props[e.pid].p) + RecoveryWindow
                /\ complete(st.props[e.pid].stmt, st.props[e.pid].signers) = 2
             THEN 2 ELSE 0
        [] e.k = "rpropose" ->
             IF /\ s \in RecoveryKeys /\ MemberOfKey[s] \in AdminMembers /\ e.as = MemberOfKey[s]
                /\ st.binds[e.as].signer # "" /\ ~st.binds[e.as].void /\ ~Admitted(st, t)
+            THEN 1 ELSE 0
+       [] e.k = "rcosign" ->
+            IF /\ Open(st, e.pid, n) /\ st.props[e.pid].kind = "recovery"
+               /\ s \in RecoveryKeys /\ MemberOfKey[s] \in AdminMembers /\ s \notin st.props[e.pid].signers
+               /\ st.binds[MemberOfKey[s]].signer # "" /\ ~st.binds[MemberOfKey[s]].void
             THEN 1 ELSE 0
        [] e.k = "radmit" ->
             IF /\ s = "rk3" /\ e.as = "m3" /\ st.binds["m3"].signer # "" /\ ~st.binds["m3"].void
@@ -284,7 +297,7 @@ Compromise(st, x, since, n, P) ==
                       /\ ((st.deleg.signer \in P /\ st.deleg.at >= since) \/ st.adm[x].byDeleg)
                    THEN [st.deleg EXCEPT !.ended = n] ELSE st.deleg,
          !.props = [p \in DOMAIN st.props |->
-                      IF st.props[p].closed = 0 /\ \E rk \in st.props[p].signers \cap RecoveryKeys :
+                      IF Twin # "VoidKeepsProposal" /\ st.props[p].closed = 0 /\ \E rk \in st.props[p].signers \cap RecoveryKeys :
                             st.binds[MemberOfKey[rk]].signer \in P /\ st.binds[MemberOfKey[rk]].at >= since
                       THEN [st.props[p] EXCEPT !.closed = n, !.how = "voided"] ELSE st.props[p]]]
 \* The effect of a proposed statement that completed with signers
@@ -340,6 +353,9 @@ Effect(st, e, n, completed) ==
             LET row == st.props[o.pid]
                 st2 == [st EXCEPT !.props[o.pid] = [row EXCEPT !.closed = n, !.how = "activated", !.a = n]]
             IN [Complete(st, row.stmt, row.signers, n) EXCEPT !.props = st2.props]
+      [] o.k = "rcosign" ->
+            IF o.pid \notin DOMAIN st.props THEN st
+            ELSE withRing([st EXCEPT !.props[o.pid] = [@ EXCEPT !.signers = @ \cup {s}, !.p = n]])
       [] o.k = "rpropose" ->
             withRing([st EXCEPT !.props = (id :> Row(Stmt("admit", "proposal", t, o.as, o.at), {s}, n, n, "recovery", 0, "")) @@ @])
       [] o.k = "radmit" ->
@@ -381,9 +397,14 @@ JudgeTail(st, from, to, floor, verdict) ==
              st2 == IF v = 0 THEN st ELSE Effect(st, e, from, v = 2)
          IN JudgeTail(st2, from + 1, to, floor, verdict @@ (from :> v))
 
+\* Each kind's newest confirmation, all that rows kept before DESIGN-DETAILS 5.2.2's confirmations
+NewestConfirms(confirms) == {c \in confirms : \A d \in confirms : d.ck = c.ck => d.pos <= c.pos}
+
 \* The rows a base at n with folded_through ft carries: L's log-derived state at ft under head
 Compile(S, head, ft) ==
     [S EXCEPT !.selfAdmit = head.selfAdmit, !.tagOwner = head.tagOwner,
+              !.adm = IF Twin = "NewestConfirmOnly"
+                      THEN [y \in Sidecars |-> [S.adm[y] EXCEPT !.confirms = NewestConfirms(@)]] ELSE @,
               !.props = IF Twin \in {"NoProposalRows", "CloseAtBase"} THEN NoProps ELSE OpenProps(S, ft),
               !.ring = IF Twin = "NoRingRows" THEN {} ELSE {r \in S.ring : r.pos > ft - Window}]
 
@@ -404,7 +425,10 @@ ApplyBase(R, e, n) ==
     ELSE IF ~BaseOk(R, e, n) THEN [R EXCEPT !.forked = TRUE]
     ELSE LET st0 == [Stand(e.rows, e, n, R.st.base, R.rowsOnly) EXCEPT
                        !.props = IF Twin = "NoProposalRows" THEN R.st.props ELSE @,
-                       !.ring = IF Twin = "NoRingRows" THEN R.st.ring ELSE @]
+                       !.ring = IF Twin = "NoRingRows" THEN R.st.ring ELSE @,
+                       \* a reader that kept every entry keeps its own confirmations where rows keep only the newest
+                       !.adm = IF Twin = "NewestConfirmOnly" /\ R.keepsHist
+                               THEN [y \in Sidecars |-> [@[y] EXCEPT !.confirms = R.st.adm[y].confirms]] ELSE @]
              own == [k \in e.ft + 1 .. n - 1 |-> IF k \in DOMAIN R.verdict THEN R.verdict[k] ELSE e.bits[k]]
              judged == JudgeTail(st0, e.ft + 1, n - 1, st0.floor, [k \in {} |-> 0])
              st1 == IF Twin = "ReJudgeTail" THEN judged.st
@@ -453,6 +477,9 @@ Candidates ==
     \cup {Stmt("bind", s, "", m, n - 1) : s \in Sidecars, m \in Members}
     \cup {Mk("replay", "", "", "", "", 0, 0, "", 0, of) : of \in {k \in 1 .. Len(log) : log[k].k \notin {"base", "tick", "replay"}}}
     \cup {Mk("tick", "api", "", "", "", 0, pid, "", n - 1, 0) : pid \in Pids}
+    \* a recovery cosign, which restarts a window: only the TEAM-M2-05 twins' runs take it
+    \cup (IF Twin \in {"WindowFromProposalEntry", "VoidKeepsProposal"}
+          THEN {Mk("rcosign", KeyOf[m], "", m, "", 0, pid, "", n - 1, 0) : m \in AdminMembers, pid \in Pids} ELSE {})
 
 Matches(pattern, e) == \A f \in DOMAIN pattern : e[f] = pattern[f]
 StoryAllows(e) == IF Len(Story) < n THEN TRUE ELSE Matches(Story[n], e)
@@ -547,6 +574,12 @@ WindowHolds ==
             /\ ~\E k \in L.st.props[p].o .. L.st.props[p].a :
                   log[k].k = "veto" /\ log[k].pid = p /\ L.verdict[k] # 0
 
+\* No activation stands on a recovery key whose binding a cascade had voided: the void closed its proposal
+VoidsCloseProposals ==
+    \A p \in DOMAIN L.st.props :
+        L.st.props[p].how = "activated" =>
+            \A rk \in L.st.props[p].signers \cap RecoveryKeys : ~L.hist[L.st.props[p].a - 1].binds[MemberOfKey[rk]].void
+
 \* No base leaves more than TailMax entries unfolded
 TailBounded == \A b \in Bases : b - 1 - log[b].ft <= TailMax
 
@@ -605,6 +638,25 @@ StoryLie == <<[k |-> "admit", s |-> "a", t |-> "d", as |-> "m3"], [k |-> "base",
 \* the landed code closes every open proposal at a base
 StoryClose == <<[k |-> "propose", s |-> "a", t |-> "c", as |-> "m2"],
                 [k |-> "base", ft |-> 1], [k |-> "cosign", s |-> "b", pid |-> 1]>>
+\* rows keep only the newest confirmation: a park b lifted, then a's confirmation, then a fold, then b's compromise
+\* revocation pulls c back into P at the reader that kept every entry and at no reader that started from rows
+StoryConfirms == <<[k |-> "deleg", s |-> "a"], [k |-> "dadmit", t |-> "c"], [k |-> "drevoke", s |-> "a", since |-> 1],
+                   [k |-> "confirm", s |-> "b", t |-> "c", ck |-> "admission"],
+                   [k |-> "confirm", s |-> "a", t |-> "c", ck |-> "admission"],
+                   [k |-> "base", ft |-> 5, lie |-> FALSE],
+                   [k |-> "revoke", s |-> "a", t |-> "b", reason |-> "comp", since |-> 1]>>
+\* a Delegation's key admits after its DelegationRevoke
+StoryDelegationEnd == <<[k |-> "deleg", s |-> "a"], [k |-> "drevoke", s |-> "a", since |-> 0],
+                        [k |-> "dadmit", t |-> "c"]>>
+\* the window from the proposal's entry: a recovery cosign at 4 restarts it, and a tick at 5 activates before 4 + 2
+StoryWindowEntry == <<[k |-> "bind", s |-> "a", as |-> "m1"], [k |-> "bind", s |-> "b", as |-> "m2"],
+                      [k |-> "rpropose", s |-> "rk1", t |-> "c", as |-> "m1"], [k |-> "rcosign", s |-> "rk2", pid |-> 3],
+                      [k |-> "tick", pid |-> 3]>>
+\* a void that keeps the proposal open: c bound m2's key, c's compromise voids it, and rk1 alone activates rk2's proposal
+StoryVoidKeeps == <<[k |-> "admit", s |-> "b", t |-> "c", as |-> "m2"], [k |-> "bind", s |-> "c", as |-> "m2"],
+                    [k |-> "bind", s |-> "a", as |-> "m1"], [k |-> "rpropose", s |-> "rk2", t |-> "d", as |-> "m2"],
+                    [k |-> "rcosign", s |-> "rk1", pid |-> 4],
+                    [k |-> "revoke", s |-> "a", t |-> "c", reason |-> "comp", since |-> 1], [k |-> "tick", pid |-> 4]>>
 \* no cap on the tail
 StoryTailCap == <<[k |-> "admit", s |-> "a", t |-> "d", as |-> "m3"], [k |-> "admit", s |-> "a", t |-> "c", as |-> "m3"],
                   [k |-> "base", ft |-> 0]>>

@@ -114,6 +114,7 @@ rows:
     milestone: M5
     targets:
       - {name: FuzzMailParse, package: ".", milestone: M7, seeds: [testdata/fuzz/FuzzMailParse]}
+      - {name: FuzzMailAuth, package: ".", owner: MAIL-M7-09, milestone: M7}
       - {name: FuzzSmtpArf, package: smtpedgeservice, owner: SMTP-M5-02, seeds: [testdata/fuzz/FuzzSmtpArf]}
       - {name: FuzzSmtpAggregate, package: smtpedgeservice, owner: SMTP-M5-03, seeds: [testdata/fuzz/FuzzSmtpAggregate]}
 
@@ -207,7 +208,7 @@ rows:
     targets:
       - {name: FuzzDaemonHello, package: ".", seeds: [testdata/fuzz/FuzzDaemonHello]}
       - {name: FuzzDotUr, package: ".", owner: CORE-M3-05, milestone: M3, seeds: [testdata/fuzz/FuzzDotUr]}
-      - {name: FuzzHookPayload, package: ".", owner: MCP-M3-15, milestone: M3}
+      - {name: FuzzHookPayload, package: mcp, owner: MCP-M3-15, milestone: M3, seeds: [../testdata/harness]}
       - {name: FuzzMcpArguments, package: mcp, owner: MCP-M3-12, milestone: M3}
 
   - id: index-files

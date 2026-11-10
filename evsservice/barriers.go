@@ -71,6 +71,68 @@ const (
 	BarrierLogPagePutAfter  = "evs.log_page.put.after"
 )
 
+// EVS1-M2-12: a push's steps (§11.8), keyed by <repo>:<ref>. The head's own CAS and read keep EVS1-M2-08's names.
+const (
+	// An attempt that has arrived and parsed its body, before step 4: FS-113's attempt held before its handler runs,
+	// while the lb's re-send is refused and recorded.
+	BarrierPushArrive = "evs.push.arrive"
+	// Around step 4's reads: the head, then the one round after it.
+	BarrierPushStep4Before = "evs.push.step4.before"
+	BarrierPushStep4After  = "evs.push.step4.after"
+	// Around step 6: the record's batch write, a page-out and the new slots, before step 7 may issue.
+	BarrierPushStep6Before = "evs.push.step6.before"
+	BarrierPushStep6After  = "evs.push.step6.after"
+	// Around one new slot's If-None-Match at step 6.
+	BarrierPushSlotPutBefore = "evs.push.slot_put.before"
+	BarrierPushSlotPutAfter  = "evs.push.slot_put.after"
+	// Around the refuse row's recording CAS: the push's refusal fence.
+	BarrierPushRefuseBefore = "evs.push.refuse.before"
+	BarrierPushRefuseAfter  = "evs.push.refuse.after"
+	// Around step 8, off the reply path: the sequence, hints, usage, the head cache and the fold trigger.
+	BarrierPushStep8Before = "evs.push.step8.before"
+	BarrierPushStep8After  = "evs.push.step8.after"
+)
+
+// EVS1-M2-13: parts, the seal and the git-mode lease (§11.8), keyed by <repo>:<ref>. A seal's head CAS keeps
+// EVS1-M2-08's names, and its parts' round and record EVS1-M2-12's step names.
+const (
+	// Around a part's batch append: FS-9's orders and a kill between parts hold here.
+	BarrierPartAppendBefore = "evs.part.append.before"
+	BarrierPartAppendAfter  = "evs.part.append.after"
+	// Around the lease's head CAS: FS-5's lease cases race a commit or a refusal fence here.
+	BarrierLeaseCasBefore = "evs.lease.cas.before"
+	BarrierLeaseCasAfter  = "evs.lease.cas.after"
+)
+
+// EVS1-M2-14: the read API (§11.9), keyed by <repo>:<ref>.
+const (
+	// Around a read's head: the cached entry or the cluster GET, before its entries.
+	BarrierReadHeadBefore = "evs.read.head.before"
+	BarrierReadHeadAfter  = "evs.read.head.after"
+	// Around a read's entry round: a reader paused across an evacuation or a fold holds here.
+	BarrierReadEntriesBefore = "evs.read.entries.before"
+	BarrierReadEntriesAfter  = "evs.read.entries.after"
+)
+
+// EVS1-M2-19: repo/'s lifecycle (§11.12), keyed by the repo.
+const (
+	// Around a lifecycle transition's If-Match on repo/: a restore and a --now delete, or a restore and the 7-day
+	// start, race here, and the store's order picks one.
+	BarrierRepoCasBefore = "evs.repo.cas.before"
+	BarrierRepoCasAfter  = "evs.repo.cas.after"
+	// Around each step of a shred (shred.go): a schedule kills the worker at each.
+	BarrierShredStepBefore = "evs.shred.step.before"
+	BarrierShredStepAfter  = "evs.shred.step.after"
+)
+
+// EVS1-M2-17: the path-epoch copy (§11.6's copy row), keyed by <repo>:<ref>.
+const (
+	// Around each entry write of a copy: a move's If-None-Match, a carried directory's If-Match, a marker's If-Match,
+	// each carrying the stale rule's deadline.
+	BarrierCopyMoveBefore = "evs.copy.move.before"
+	BarrierCopyMoveAfter  = "evs.copy.move.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

@@ -368,7 +368,32 @@ func (self *configLogSuiteEnv) baseNaming(signer configLogSuiteDevice, tip *brid
 		ConfigHeadSha256: headSha256[:],
 		RowsSha256:       rowsSha256[:],
 		RowsByteCount:    uint32(len(rows)),
+		TailVerdicts:     self.tailVerdicts(foldedThrough, tip.GetVersion()),
 	})
+}
+
+// The tail_verdicts a base after tip folding through foldedThrough carries (DESIGN-DETAILS 5.2.2), as the cluster
+// holds the tail: every statement and tick the suite lands takes effect, and a base carries 0. Two bits an entry,
+// entry foldedThrough+1+j at bits 2j and 2j+1 of byte j/4; empty when nothing is unfolded or a read fails, which the
+// sequencer then refuses.
+func (self *configLogSuiteEnv) tailVerdicts(foldedThrough uint64, tip uint64) []byte {
+	if tip <= foldedThrough {
+		return nil
+	}
+	count := tip - foldedThrough
+	data := make([]byte, (2*count+7)/8)
+	for k := foldedThrough + 1; k <= tip; k += 1 {
+		entry, err := self.entry(k)
+		if err != nil || entry == nil {
+			return nil
+		}
+		if entry.GetKind() == bridge.AuthEntryKindBase {
+			continue
+		}
+		j := k - foldedThrough - 1
+		data[j/4] |= 1 << (2 * (j % 4))
+	}
+	return data
 }
 
 // A StatementHeader at the tip the case last saw, a fresh nonce, expiring in an hour.
@@ -1031,4 +1056,26 @@ func (self *ConfigLogSuiteWorld) Start(sequencer ConfigLogSequencer) error {
 // The owner's MemberAdmit of a fresh member at the tip, through sequencer.
 func (self *ConfigLogSuiteWorld) PostMemberAdmit(sequencer ConfigLogSequencer) (*bridge.AuthPin, error) {
 	return self.env.post(sequencer, self.env.memberAdmit())
+}
+
+// The owner's member id: its user's id in a personal network.
+func (self *ConfigLogSuiteWorld) OwnerMemberId() sidecar.Id {
+	return self.env.owner.memberId
+}
+
+// The owner's first device, the genesis's sidecar.
+func (self *ConfigLogSuiteWorld) OwnerSidecarId() sidecar.Id {
+	return self.env.owner.sidecarId
+}
+
+// A StatementHeader at the tip the world last saw, with a fresh nonce, expiring in an hour: what a test's own
+// statement carries.
+func (self *ConfigLogSuiteWorld) Header() *bridge.StatementHeader {
+	return self.env.header()
+}
+
+// body signed by the owner's first device under its type's purpose, as a Signed's bytes: a test's own statement,
+// such as a SidecarAdmit of a second device or a SidecarRevoke.
+func (self *ConfigLogSuiteWorld) SignAsOwner(signedType bridge.SignedType, body proto.Message) []byte {
+	return self.env.sign(self.env.owner, signedType, body)
 }

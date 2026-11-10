@@ -118,6 +118,23 @@ const (
 	EvsCheckReasonSegmentUnknown
 	// 5h: a slot a new version names that is neither this push's nor named by a version step 4 read.
 	EvsCheckReasonSlotUnknown
+	// Step 6: a new slot that exists past 23 h, or holds another push's bytes (§11.8 step 6).
+	EvsCheckReasonSlotStale
+	// 5h: an ERASE naming no key its slots still hold (§11.12).
+	EvsCheckReasonNothingToErase
+	// 5h: a CLOSURE that creates, removes or writes a directory, omits a replaced version's slot from its list, or
+	// grows a chain past Padmé of the one it replaces (§11.12's rekey row): 409 naming the paths.
+	EvsCheckReasonClosureShape
+
+	// 5e, a PATH_EPOCH: three sources standing, or two for an epoch that does not block creation (§11.6).
+	EvsCheckReasonEpochSourcesFull
+	// 5e, a PATH_EPOCH: its map's parts not all standing under 24 h old.
+	EvsCheckReasonMapParts
+	// 5e, a PATH_EPOCH: its map's source outside the window or under another chain, which the window never comes back
+	// to, so the mapper maps again; or a map part's key already holding another part.
+	EvsCheckReasonMapSource
+	// 5e, a PATH_EPOCH: creations after its map's source that its tail does not move: 409 naming them.
+	EvsCheckReasonTailMissing
 
 	// A rule another task owns and has not supplied (PushView's seams), or a read step 4 did not give: refused 503,
 	// so nothing commits unchecked and nothing is settled against the push.
@@ -174,6 +191,14 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonSegmentGone:    {name: "segment_gone", code: protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_GONE, fate: EvsRefusalRecorded},
 	EvsCheckReasonSegmentUnknown: {name: "segment_unknown", code: protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_GONE, fate: EvsRefusalRecorded},
 	EvsCheckReasonSlotUnknown:    {name: "slot_unknown", code: protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_UNKNOWN, fate: EvsRefusalRecorded},
+	EvsCheckReasonSlotStale:      {name: "slot_stale", code: protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE, fate: EvsRefusalRecorded},
+	EvsCheckReasonNothingToErase: {name: "nothing_to_erase", code: protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE, fate: EvsRefusalRecorded},
+	EvsCheckReasonClosureShape:   {name: "closure_shape", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, fate: EvsRefusalFinal},
+
+	EvsCheckReasonEpochSourcesFull: {name: "epoch_sources_full", code: protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL, fate: EvsRefusalRecorded},
+	EvsCheckReasonMapParts:         {name: "map_parts", code: protocol.EvsRefusalCode_EVS_REFUSAL_MAP_PARTS, fate: EvsRefusalRecorded},
+	EvsCheckReasonMapSource:        {name: "map_source", code: protocol.EvsRefusalCode_EVS_REFUSAL_MAP_PARTS, fate: EvsRefusalFinal},
+	EvsCheckReasonTailMissing:      {name: "tail_missing", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, fate: EvsRefusalFinal},
 
 	EvsCheckReasonUnchecked: {name: "unchecked", code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, fate: EvsRefusalNothing},
 }

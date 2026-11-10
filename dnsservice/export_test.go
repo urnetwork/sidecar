@@ -1,8 +1,12 @@
 package dnsservice
 
 import (
+	"context"
 	"io"
 	"net/netip"
+	"time"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // Bridges from the external tests, which reach sidecartest's fakes, to what only this package's own
@@ -47,6 +51,23 @@ func RouteProbeClientHelloForTest(name string) ([]byte, error) {
 // Whether what reader sends back passes a probe.
 func ProbeAnswerPassesForTest(reader io.Reader) bool {
 	return dnsProbeAnswerPasses(reader)
+}
+
+// Whether the greeting reader sends passes a banner probe bounded at maxByteCount.
+func SmtpBannerPassesForTest(reader io.Reader, maxByteCount int) bool {
+	return dnsSmtpBannerPasses(reader, maxByteCount)
+}
+
+// One banner probe of address through dialer on clock, as a round runs it with settings' bound.
+func SmtpProbeOnceForTest(
+	ctx context.Context,
+	clock sidecar.Clock,
+	settings *DnsSettings,
+	dialer DnsProbeDialer,
+	address netip.AddrPort,
+) bool {
+	timeout := time.Duration(settings.Probe.TimeoutSeconds) * time.Second
+	return dnsSmtpProbeOnce(ctx, clock, timeout, dialer, address, settings.Probe.SmtpBannerMaxByteCount)
 }
 
 // The serial of the view root's local snapshot holds, and a channel that closes when it changes.

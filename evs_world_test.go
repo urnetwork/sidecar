@@ -148,6 +148,9 @@ type evsTestWorld struct {
 	mode         protocol.EvsRefMode
 	gitState     map[string]EvsGitOid
 	nextMetadata []byte
+	// the head's current path epoch, 0 for 1: a PATH_EPOCH the world's pushes never made, as a subscription's
+	// leases follow it
+	currentEpoch uint64
 }
 
 func newEvsTestWorld(t testing.TB) *evsTestWorld {
@@ -407,7 +410,7 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 	head := &protocol.EvsHeadSummary{
 		RefId: self.refId.Bytes(), RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: self.mode,
 		GroupId: evsTestId("world group").Bytes(), Generation: self.generation,
-		PathEpoch: &protocol.EvsPathEpoch{Current: 1},
+		PathEpoch: &protocol.EvsPathEpoch{Current: max(1, self.currentEpoch)},
 	}
 	if len(self.commits) == 0 {
 		chain := EvsChainStart(self.repoId, self.refId)

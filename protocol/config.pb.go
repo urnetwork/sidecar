@@ -2012,16 +2012,20 @@ func (x *RecoveryVeto) GetProposalId() []byte {
 	return nil
 }
 
-// One statement or tick a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold,
-// as records, exactly the log's statements and ticks in (the previous base's folded_through, folded_through],
-// each by id with the position of the entry that carried it. A config file, which evs holds as ciphertext.
+// One entry a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold, as records,
+// exactly the log's entries in (the previous base's folded_through, folded_through], each by id with the position
+// of the entry that carried it, BASE entries included (DESIGN-DETAILS 5.2.3; question
+// details-5-base-records-in-folds), so a reader holding the genesis recomputes A_1..A_ft from the head alone. A
+// config file, which evs holds as ciphertext.
 type ConfigRecord struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            []byte                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                        // SHA-256 of the Signed for a STATEMENT (StatementId); empty for a TICK
-	N             uint64                 `protobuf:"varint,2,opt,name=n,proto3" json:"n,omitempty"`                         // the carrying entry's position
-	TimeMs        int64                  `protobuf:"varint,3,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"` // the carrying entry's time
-	Kind          uint32                 `protobuf:"varint,4,opt,name=kind,proto3" json:"kind,omitempty"`                   // AuthEntry.kind: 2 STATEMENT or 3 TICK, never a BASE
-	Body          []byte                 `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`                    // AuthEntry.body verbatim
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    []byte                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // SHA-256 of the Signed's signed bytes for a STATEMENT (StatementId) or a
+	//   BASE; empty for a TICK
+	N      uint64 `protobuf:"varint,2,opt,name=n,proto3" json:"n,omitempty"`                         // the carrying entry's position
+	TimeMs int64  `protobuf:"varint,3,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"` // the carrying entry's time
+	Kind   uint32 `protobuf:"varint,4,opt,name=kind,proto3" json:"kind,omitempty"`                   // AuthEntry.kind: 1 BASE, its body the Signed ProjectionHeader; 2 STATEMENT;
+	//   3 TICK
+	Body          []byte `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"` // AuthEntry.body verbatim
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

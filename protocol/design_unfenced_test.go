@@ -218,8 +218,26 @@ message SidecarRow {
   uint64 owner_confirmed_at = 8; uint64 revoked_at = 9; uint64 parked_at = 10; bytes sponsor = 11;
   uint32 capabilities = 12; bytes delegation_id = 13; uint64 live_since = 14; int64 not_after = 15;
   bytes identity_public_key = 16; string identity_alg = 17; bytes member_id = 18; repeated bytes tag_ids = 19;
-  bool ephemeral = 20;
+  bool ephemeral = 20; repeated ConfirmationRow confirmations = 21; repeated CascadeSpanRow cascades = 22;
 }
+// DESIGN-DETAILS 5.2.2's rows, its proto block's own numbers (complete 2026-11-09, pending its fold into §7.9 and the
+// owner's details-5-settings-in-rows), with the cascade's spans and the indexer rows that questions
+// team-m2-04-cascade-spans and team-m2-07-indexer-rows ask for.
+message ProposalRow {
+  bytes proposal_id = 1; uint32 statement_type = 2; bytes statement = 3; uint64 proposed_at = 4;
+  int64 not_after_ms = 5; repeated ProposalSigner signers = 6; uint64 window_entry = 7; int64 window_time_ms = 8;
+  uint32 kind = 9;
+}
+message ProposalSigner { bytes signer = 1; uint64 at = 2; }
+enum ProposalKind {
+  PROPOSAL_KIND_UNSPECIFIED = 0; PROPOSAL_KIND_AUTHORITY = 1; PROPOSAL_KIND_RECOVERY_SCOPED = 2;
+  PROPOSAL_KIND_RESTORED = 3;
+}
+message ProjectionSettings { uint32 self_admit = 1; bytes scim_signer = 2; }
+message RingRow { bytes statement_id = 1; uint64 n = 2; }
+message ConfirmationRow { uint32 kind = 1; bytes signer = 2; uint64 at = 3; bool lifted_park = 4; }
+message CascadeSpanRow { uint64 from = 1; uint64 until = 2; }
+message IndexerRow { bytes sidecar_id = 1; uint32 scope = 2; bytes signer = 3; uint64 at = 4; bytes sealed_services = 5; }
 message DelegationRow {
   bytes delegation_id = 1; bytes signer = 2; uint64 at = 3; repeated bytes tag_atoms = 4; int64 not_after = 5;
   uint64 key_dropped_at = 6; uint64 ended_at = 7; uint32 admissions = 8; bytes pubkey = 9;
@@ -552,6 +570,15 @@ message EvsPartRequest {
   bytes statement = 1; bytes part = 2; repeated EvsUploadReceipt receipts = 3; bytes staged = 4;
 }
 message EvsLeaseRequest { bytes ref_id = 1; uint64 base_version = 2; uint32 ms = 3; }
+// 11.6's map and block rows and 11.10's lease row, whose bodies plan-EVS1-format-bytes#8 does not list: proposed by
+// EVS1-M2-15 and EVS1-M2-16, in the order the rows write their fields.
+message EvsPathMapRequest { bytes path_map_sha256 = 1; bytes part = 2; }
+message EvsPathEpochBlockRequest { bytes ref_id = 1; uint32 ms = 2; }
+message EvsSubscriptionRequest {
+  bytes repo_id = 1; bytes ref_id = 2; uint64 path_epoch = 3; repeated EvsTokenPath prefixes = 4;
+}
+message EvsSubscription { bytes ref_id = 1; uint64 path_epoch = 2; EvsTokenPath prefix = 3; int64 expires_ms = 4; }
+message EvsSubscriptionsReply { repeated EvsSubscription subscriptions = 1; }
 message EvsPushReply { uint64 version = 1; EvsPlace place = 2; EvsDepositHead deposit_head = 3; }
 message EvsRefusalReply {
   bytes push_id = 1; EvsRefusalCode code = 2; bool recorded = 3; uint32 retry_after_ms = 4;
@@ -885,6 +912,31 @@ var testFenceAdditions = []struct {
 		message:  "Error",
 		field:    testFenceField{name: "max_version", number: 6, typeName: "uint32"},
 		question: "plan-PROTO-version-error-range",
+	},
+	{
+		message:  "ProjectionHeader",
+		field:    testFenceField{name: "tail_verdicts", number: 10, typeName: "bytes"},
+		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
+	},
+	{
+		message:  "ProjectionRows",
+		field:    testFenceField{name: "proposals", number: 7, typeName: "ProposalRow", repeated: true},
+		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
+	},
+	{
+		message:  "ProjectionRows",
+		field:    testFenceField{name: "settings", number: 8, typeName: "ProjectionSettings"},
+		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
+	},
+	{
+		message:  "ProjectionRows",
+		field:    testFenceField{name: "ring", number: 9, typeName: "RingRow", repeated: true},
+		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
+	},
+	{
+		message:  "ProjectionRows",
+		field:    testFenceField{name: "indexers", number: 10, typeName: "IndexerRow", repeated: true},
+		question: "team-m2-07-indexer-rows",
 	},
 }
 

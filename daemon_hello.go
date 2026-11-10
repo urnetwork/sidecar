@@ -62,6 +62,9 @@ type DaemonHello struct {
 	// git: <net>/<repo> and the service.
 	Repo    string `json:"repo,omitempty"`
 	Service string `json:"service,omitempty"`
+	// The process at the session's other end, as the system reports it: the daemon fills it, never the line, so the
+	// ancestry rules (§16.7) read a pid the caller cannot choose. 0 where the system names none.
+	PeerPid int64 `json:"-"`
 }
 
 // The daemon's answer to a hello.

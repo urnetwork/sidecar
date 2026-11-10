@@ -889,8 +889,10 @@ func TestAclSuspendDropsTheDelegationsKey(t *testing.T) {
 }
 
 // ReapplyStatement keeps a revocation past an authority change: a config writer's standing RepoRevoke still stands
-// once a base folds below it whose rows no longer make its signer a config writer, re-applying the tail, where a fresh
-// check refuses the same signer; a second reader reaches the same rows.
+// once a base folds below it and re-applies its tail, the AdminSet that then took its signer's role among it, where a
+// fresh check refuses the same signer; a second reader reaches the same rows. The authority change is the log's own,
+// since a re-application recomputes what an effect derives on the rows it rebuilds (DESIGN-DETAILS 5.2.3), and rows at
+// the fold are the log's there.
 func TestAclReapplyKeepsARevocationPastAnAuthorityChange(t *testing.T) {
 	net := newTestConfigNet(t)
 	writer := net.admitAdmin("revoking")
@@ -912,15 +914,12 @@ func TestAclReapplyKeepsARevocationPastAnAuthorityChange(t *testing.T) {
 	}
 	revoke := &protocol.RepoRevoke{Header: net.header(), RepoId: repoId.Bytes(), Subject: reader.sidecarId.Bytes()}
 	revokedAt := net.mustPost(writer, bridge.SignedType_SIGNED_REPO_REVOKE, revoke).Pin.GetVersion()
-	// a base below the revoke whose head no longer names the writer's member an Admin
+	// the writer's member no longer an Admin, then a base below the revoke whose tail re-applies both
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_ADMIN_SET, &protocol.AdminSet{
+		Header: net.header(), Owners: [][]byte{net.ownerMemberId.Bytes()},
+	})
 	folded := net.statesAt[revokedAt-1]
-	rows := folded.Rows()
-	for _, member := range rows.Members {
-		if Id(member.GetMemberId()) == writer.memberId {
-			member.Role = bridge.MemberRole_MEMBER_ROLE_MEMBER
-		}
-	}
-	if verdict := net.pushBase(net.owner, rows, revokedAt-1, 2, folded.threshold); !verdict.Accepted() {
+	if verdict := net.pushBase(net.owner, folded.Rows(), revokedAt-1, 2, folded.threshold); !verdict.Accepted() {
 		t.Fatal(verdict.Refusal)
 	}
 	if net.log.State().IsConfigWriter(writer.sidecarId) {

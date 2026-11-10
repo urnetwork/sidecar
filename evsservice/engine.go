@@ -78,6 +78,10 @@ type EvsRoute struct {
 	NeedsSureClock bool
 	// The route needs its repo placed, and gets its cluster. False only for the route that places it.
 	Placed bool
+	// On a placed route: §11.12's refused row, a deleted repo answering 409 REPO_DELETED and one shredding or shredded
+	// 409 SHREDDING before the route runs, from repo/ cached at most 5 s. For a route that reads no repo/ state of its
+	// own; the push's 5c and the lifecycle routes hold their own.
+	RefuseDeleted bool
 	// Answers the request through its methods. Runs on the request's goroutine.
 	Serve func(request *EvsRequest)
 }
@@ -92,8 +96,13 @@ type EvsEngineDeps struct {
 	// Lifecycle, alarms and, when ServiceLog is nil, the service log. nil discards.
 	Log sidecar.Logger
 	// The segment route's keys, storage gate, HDD share and usage producer (upload_segment.go). nil answers every
-	// upload 503.
+	// upload 503, and every push too, since 5c's storage limit, 5h's receipts and step 8's usage read them.
 	Uploads *EvsUploadDeps
+	// The newest verified authorization state of each network (push.go): 5b's identity keys and 5d's gate. nil
+	// answers every push 503.
+	GateViews EvsGateViews
+	// Step 8's push sequence and hints. nil takes the engine's own over the host's Redis and Push (hint.go).
+	CommitNotifier EvsCommitNotifier
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
@@ -119,8 +128,16 @@ type EvsEngine struct {
 	records    *RecordCache
 	overlays   *OverlayChains
 	folder     *Folder
-	metrics    *evsMetrics
-	handler    http.Handler
+	// gen/<g> records, which 5d judges a push's generation pin by
+	generations *GenerationRecords
+	// step 8's push sequence and hints: the deps' notifier, else the engine's own (hint.go)
+	notifier EvsCommitNotifier
+	// records and log pages past their batches, through pidx/
+	locator *RecordLocator
+	// segments by id, through spidx/ (EVSB-M2-10)
+	segments *SegmentLocator
+	metrics  *evsMetrics
+	handler  http.Handler
 	// what the router took at the start, in its order
 	servedRoutes []*EvsRoute
 
@@ -130,8 +147,11 @@ type EvsEngine struct {
 	probeCount *sidecar.MonitorValue[int]
 	// requests in flight, for Drain
 	inFlightCount *sidecar.MonitorValue[int]
-	draining      chan struct{}
-	drainingOnce  sync.Once
+	// commits whose step 8 has started, and those whose step 8 has finished
+	stepEightCount     *sidecar.MonitorValue[int]
+	stepEightDoneCount *sidecar.MonitorValue[int]
+	draining           chan struct{}
+	drainingOnce       sync.Once
 }
 
 // Starts the engine. host needs Blobs, Budget and Metrics; a nil Budget refuses to start, since no metadata write
@@ -187,12 +207,22 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 		probeCount:      sidecar.NewMonitorValue(0),
 		inFlightCount:   sidecar.NewMonitorValue(0),
 		draining:        make(chan struct{}),
+
+		stepEightCount:     sidecar.NewMonitorValue(0),
+		stepEightDoneCount: sidecar.NewMonitorValue(0),
 	}
 	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, blobs, self.records, settings, log)
 	self.overlays = NewOverlayChains(self.heads, settings)
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
+	self.generations = NewGenerationRecords(settings)
+	self.locator = NewRecordLocator(blobs, nil)
+	self.segments = NewSegmentLocator(blobs)
+	self.notifier = deps.CommitNotifier
+	if self.notifier == nil {
+		self.notifier = NewEvsHintNotifier(cancelCtx, clock, host.Redis, host.Push, deps.GateViews, log)
+	}
 	mux := http.NewServeMux()
 	self.servedRoutes = self.routes()
 	for _, route := range self.servedRoutes {
@@ -206,6 +236,14 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 // Every route the engine serves. A later task appends its own list here.
 func (self *EvsEngine) routes() []*EvsRoute {
 	routes := append(self.placeRoutes(), self.uploadRoutes()...)
+	routes = append(routes, self.pushRoutes()...)
+	routes = append(routes, self.partRoutes()...)
+	routes = append(routes, self.leaseRoutes()...)
+	routes = append(routes, self.readRoutes()...)
+	routes = append(routes, self.subscriptionRoutes()...)
+	routes = append(routes, self.pathEpochRoutes()...)
+	routes = append(routes, self.erasureRoutes()...)
+	routes = append(routes, self.repoRoutes()...)
 	return append(routes, self.deps.testRoutes...)
 }
 
@@ -396,6 +434,9 @@ func (self *EvsEngine) guard(route *EvsRoute) http.HandlerFunc {
 			return
 		}
 		if route.Placed && !request.resolvePlace() {
+			return
+		}
+		if route.Placed && route.RefuseDeleted && !request.refuseDeleted() {
 			return
 		}
 		route.Serve(request)
@@ -605,6 +646,21 @@ func (self *EvsRequest) resolvePlace() bool {
 		self.engine.metrics.alarms.Add(1, "place_invalid")
 	}
 	self.Unavailable(nil)
+	return false
+}
+
+// §11.12's refused row for a route that reads no repo/ state of its own: a deleted repo answers 409 REPO_DELETED and
+// one past it 409 SHREDDING; keying and active pass. false once it has answered the refusal.
+func (self *EvsRequest) refuseDeleted() bool {
+	read, err := self.engine.repos.Read(self.Ctx, self.Cluster, self.RepoId)
+	if !self.engine.answerTransition(self, err) {
+		return false
+	}
+	switch read.Object.GetState() {
+	case protocol.EvsRepoState_EVS_REPO_KEYING, protocol.EvsRepoState_EVS_REPO_ACTIVE:
+		return true
+	}
+	self.RefuseCode(repoStateRefusal(read.Object).Code)
 	return false
 }
 

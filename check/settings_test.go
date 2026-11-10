@@ -90,6 +90,10 @@ type checkSettings struct {
 	// was granted and why. An exception that matches nothing fails, so the lists only shrink.
 	realTimeWaitExceptions map[string]testRuleException
 	testDataExceptions     map[string]testRuleException
+	// go generate's outputs, keyed as the test rules key a file, each to the top-level test of its package that
+	// holds it equal to its source and rewrites it: the stale rule passes a listed file while that test exists,
+	// which every module's go test runs in make check
+	generatedFileTests map[string]string
 }
 
 // What a module's license file says beyond its licenses' own words, read by a person.
@@ -167,6 +171,23 @@ func defaultCheckSettings() *checkSettings {
 					"own, outside the notice line the comparison leaves out",
 				passages: []string{"Authors."},
 			},
+			"github.com/modelcontextprotocol/go-sdk": {
+				why: "says which of its contributions each of its two licenses covers, mid-way from MIT to Apache-2.0, and " +
+					"that its documentation, which no build links, is CC-BY-4.0",
+				passages: []string{
+					"The MCP project is undergoing a licensing transition from the MIT License to the Apache License, " +
+						"Version 2.0 (\"Apache-2.0\"). All new code and specification contributions to the project are " +
+						"licensed under Apache-2.0. Documentation contributions (excluding specifications) are licensed under " +
+						"CC-BY-4.0. Contributions for which relicensing consent has been obtained are licensed under " +
+						"Apache-2.0. Contributions made by authors who originally licensed their work under the MIT License " +
+						"and who have not yet granted explicit permission to relicense remain licensed under the MIT License. " +
+						"No rights beyond those granted by the applicable original license are conveyed for such contributions.",
+					"END OF TERMS AND CONDITIONS",
+					"Creative Commons Attribution 4.0 International (CC-BY-4.0) Documentation in this project (excluding " +
+						"specifications) is licensed under CC-BY-4.0. See https://creativecommons.org/licenses/by/4.0/legalcode " +
+						"for the full license text.",
+				},
+			},
 			"github.com/klauspost/compress": {
 				why: "names the directories each license in its file covers",
 				passages: []string{
@@ -190,6 +211,10 @@ func defaultCheckSettings() *checkSettings {
 		sidecarHttpMissByteCount:      74965628,
 		sidecarHttpGoalSlipRecorded:   false,
 		iosMinimumVersion:             "16.0",
+		generatedFileTests: map[string]string{
+			// mail_operators.yml's list as Go (plan-MAIL-small-readings#18)
+			"mail_operators_gen.go": "TestMailOperatorsGenIsCurrent",
+		},
 		wallClockExceptions: map[string]wallClockException{
 			"id.go time.Now": {
 				since: "2026-11-08",

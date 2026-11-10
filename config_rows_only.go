@@ -3,9 +3,9 @@
 // applies by bridge.VerifyBaseKeyless (the signature, prev_chain, rows by rows_sha256 and size, and neither version
 // below the previous base's, so no base rolls back policy or the fold), its signer a config writer at S(my.n), then
 // its rows replace the state's and its tail re-applies keeping each verdict; statements and ticks apply by the
-// ordinary rules at S(my.n). So a rows-only verdict is a full reader's, save where a rule reads what only the head
-// holds: a ServiceSettings value, which a rows-only state reports unknown and the rule fails closed on (question
-// team-m2-02-self-admit-at-rows-only-readers).
+// ordinary rules at S(my.n). So a rows-only verdict is a full reader's: the settings a rule judges by, self_admit and
+// scim_signer, ride rows (DESIGN-DETAILS 5.2.3, config_settings.go), and only devices read the head-only ones, which a
+// rows-only state reports unknown.
 //
 // Gates read the log from wherever is cheapest: the verified read cache {acl_<networkId>}e when it records {acl_}v's
 // current value and holds every position they need, else proj/ on the first metadata cluster (§7.9, ACL-M2-13's
@@ -75,7 +75,7 @@ func (self *ConfigRunError) Unwrap() error {
 }
 
 // A log at S(0) for a reader that holds no config key: NewConfigLog's, whose bases skip the config head's check and
-// whose states report ServiceSettings unknown. A gate starts one at the network's newest base with
+// whose states report the head-only ServiceSettings unknown. A gate starts one at the network's newest base with
 // RestoreConfigLogRowsOnly instead, since entries before the retention point are gone.
 func NewConfigLogRowsOnly(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog, error) {
 	self, err := NewConfigLog(settings, signedGenesis)
@@ -99,27 +99,17 @@ func RestoreConfigLogRowsOnly(settings *ConfigLogSettings, retained *ConfigRetai
 	if err != nil {
 		return nil, err
 	}
-	if err := self.restore(retained, rowsSource); err != nil {
+	if err := self.restore(retained, rowsSource, floor); err != nil {
 		return nil, err
 	}
-	if floor != nil {
-		state := self.state.Load()
-		if state.n < floor.GetVersion() {
-			return nil, fmt.Errorf("%w: %d below %d", ErrConfigBelowPin, state.n, floor.GetVersion())
-		}
-		if chain, ok := state.chainAt(floor.GetVersion()); ok && !bytes.Equal(chain[:], floor.GetChain()) {
-			runError := &ConfigRunError{N: floor.GetVersion(), RemoteChain: chain, Reason: "a second A_n at the reader's own pin"}
-			if len(floor.GetChain()) == sha256.Size {
-				runError.LocalChain, runError.HasLocalChain = [sha256.Size]byte(floor.GetChain()), true
-			}
-			self.log.Errorf("[config]%s cold start refused at %d: %s", self.networkId, floor.GetVersion(), runError.Reason)
-			return nil, runError
-		}
+	if err := self.checkFloor(floor); err != nil {
+		return nil, err
 	}
 	return self, nil
 }
 
-// Whether this log holds no config key: its bases skip the head check and its states report ServiceSettings unknown.
+// Whether this log holds no config key: its bases skip the head check and its states report the head-only
+// ServiceSettings unknown.
 func (self *ConfigLog) RowsOnly() bool {
 	return self.rowsOnly
 }
@@ -314,13 +304,15 @@ func ConfigRowsKey(networkId Id, rowsSha256 []byte) string {
 // at the new tip (§7.9's base row, api's 409).
 var ErrConfigTipMoved = errors.New("config tip moved")
 
-// api's verdict on a base before it appends one (§7.9's base row), as Check is for a statement: ErrConfigTipMoved when
-// the header's version is not the tip's next or its prev_chain is not A_tip; else what applying it at the next
-// position would find, a signer that is no config writer at S(tip), a bad signature, rows that do not hash to
-// rows_sha256 or do not build, or either version below the newest base's, as an ErrConfigRefused. Nothing is kept and
-// no state changes, so a refused base is no fork here: it never reached the log. A rows-only reader cannot read the
-// config head, so its descent is CheckConfigPushes's, from the pushes the base carries
-// (plan-TEAM-api-config-head-reach). For the goroutine that applies, as Apply is.
+// api's verdict on a base before it appends one (§7.9's base row; DESIGN-DETAILS 5.2.4's ApiAcceptBase), as Check is for
+// a statement: ErrConfigTipMoved when the header's version is not the tip's next or its prev_chain is not A_tip; else
+// what applying it at the next position would find, a signer that is no config writer at S(tip), a bad signature,
+// rows that do not hash to rows_sha256 or do not build, either version below the newest base's, a folded_through
+// neither the newest base's nor at or past it, more than 4,096 entries unfolded, or tail_verdicts other than api's own
+// verdicts on the tail, as an ErrConfigRefused. Nothing is kept and no state changes, so a refused base is no fork
+// here: it never reached the log. A rows-only reader cannot read the config head, so its descent is
+// CheckConfigPushes's, from the pushes the base carries (plan-TEAM-api-config-head-reach). For the goroutine that
+// applies, as Apply is.
 func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 	if self.fork != nil {
 		return fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
@@ -359,9 +351,22 @@ func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
-	scratch := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: nil}
-	if _, err := self.stateFromBase(state, scratch, header, rows, &ConfigHeadFacts{}); err != nil {
+	verdicts, err := self.checkBaseTail(state.base, header, entry.GetN())
+	if err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
+	scratch := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: nil}
+	next, rowsMessage, err := self.stateFromBase(state, scratch, header, rows)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	if err := self.reapplyTail(next, header.GetFoldedThrough(), entry.GetN(), verdicts, false); err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	var previousRows []byte
+	if state.base != nil {
+		previousRows = self.baseRows[[sha256.Size]byte(state.base.header.GetRowsSha256())]
+	}
+	configAdvanceBaseShrinks(next, state.base, header, previousRows, rowsMessage)
 	return nil
 }

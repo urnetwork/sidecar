@@ -9,7 +9,8 @@
 //     file holds, over a transport that runs each request on a goroutine of the block's, so a store
 //     call is the block's own and a dead block's goroutines park as a dead process's do. It signs with
 //     keys made here, keeps its local snapshot in a directory of its own, and probes fake lb
-//     interfaces that answer tlsedge's alert until a test fails or drains one.
+//     interfaces that answer tlsedge's alert, and on probe.smtp_port mxedge's greeting, until a test
+//     fails or drains one, or fails a router's banner alone.
 //   - A query reaches an edge over in-memory TCP or UDP, through the edge's own Serve and ServePacket,
 //     so it meets the edge's admission, RRL and signing as a resolver's would. Resolver gives TLS's and
 //     MAIL's T2 tests a net.Resolver that resolves <net>.<root> names the same way.
@@ -75,6 +76,13 @@ var dnsHarnessTlsedgeAlert = []byte{21, 3, 3, 0, 2, 2, 112}
 
 // A TLS record's header: type, version, then a two-byte length (RFC 8446 §5.1).
 const dnsHarnessTlsRecordHeaderByteCount = 5
+
+// mxedge's greetings on a fake router interface's 25 (§15.4), for a synthetic host: ready, and while
+// it drains, which a router whose banner a test failed sends.
+const (
+	dnsHarnessMxedgeBanner   = "220 mx.harness.example ESMTP\r\n"
+	dnsHarnessMxedgeDraining = "421 4.3.2 mx.harness.example Service closing, try again later\r\n"
+)
 
 // A harness's name, which prefixes its processes and names its block's host: a DNS label's shape.
 var dnsHarnessNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -215,12 +223,14 @@ type DnsHarness struct {
 	// Bumped at each start and end of a process, so a wait reads again.
 	instances *sidecar.MonitorValue[uint64]
 
-	stateLock      sync.Mutex
-	api            *dnsHarnessApi
-	nsEdges        map[string]*dnsHarnessEdge
-	interfaces     []dnsservice.DnsLbInterface
-	failedNames    map[string]bool
-	requireReloads map[string]bool
+	stateLock   sync.Mutex
+	api         *dnsHarnessApi
+	nsEdges     map[string]*dnsHarnessEdge
+	interfaces  []dnsservice.DnsLbInterface
+	failedNames map[string]bool
+	// Interfaces whose 25 greets as a draining mxedge does, while tlsedge still answers.
+	bannerFailedNames map[string]bool
+	requireReloads    map[string]bool
 	// Set by Close: nothing here runs any more.
 	closed bool
 
@@ -246,23 +256,24 @@ func NewDnsHarness(ctx context.Context, net *Net, settings *DnsHarnessSettings) 
 		return nil, err
 	}
 	self := &DnsHarness{
-		net:            net,
-		clock:          net.Clock(),
-		settings:       settings,
-		dnsSettings:    settings.Dns,
-		store:          settings.Store,
-		gates:          NewFakeServiceGates(nil),
-		readyStore:     newDnsHarnessReadyStore(),
-		keys:           keys,
-		classBearers:   map[dnsservice.DnsCallerClass]string{},
-		apiUrl:         "http://" + settings.Name + "-api.invalid",
-		instances:      sidecar.NewMonitorValue[uint64](0),
-		nsEdges:        map[string]*dnsHarnessEdge{},
-		interfaces:     slices.Clone(settings.Interfaces),
-		failedNames:    map[string]bool{},
-		requireReloads: map[string]bool{},
-		gateEnabled:    true,
-		gateWrites:     true,
+		net:               net,
+		clock:             net.Clock(),
+		settings:          settings,
+		dnsSettings:       settings.Dns,
+		store:             settings.Store,
+		gates:             NewFakeServiceGates(nil),
+		readyStore:        newDnsHarnessReadyStore(),
+		keys:              keys,
+		classBearers:      map[dnsservice.DnsCallerClass]string{},
+		apiUrl:            "http://" + settings.Name + "-api.invalid",
+		instances:         sidecar.NewMonitorValue[uint64](0),
+		nsEdges:           map[string]*dnsHarnessEdge{},
+		interfaces:        slices.Clone(settings.Interfaces),
+		failedNames:       map[string]bool{},
+		bannerFailedNames: map[string]bool{},
+		requireReloads:    map[string]bool{},
+		gateEnabled:       true,
+		gateWrites:        true,
 	}
 	self.transport = &dnsHarnessTransport{harness: self}
 	if self.store == nil {
@@ -791,35 +802,42 @@ func (self *DnsHarness) SetInterfaces(interfaces []dnsservice.DnsLbInterface) er
 	return nil
 }
 
-// Whether a probe of address reaches a fake interface that answers.
-func (self *DnsHarness) interfaceAnswers(address netip.Addr) bool {
+// Whether a probe of address reaches a fake interface that answers, and whether that interface's 25
+// greets as a draining mxedge does.
+func (self *DnsHarness) interfaceAnswers(address netip.Addr) (answers bool, bannerFailed bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	address = address.Unmap()
 	for index := range self.interfaces {
 		lbInterface := &self.interfaces[index]
 		if lbInterface.Ipv4.Unmap() == address || lbInterface.Ipv6 == address {
-			return !self.failedNames[lbInterface.Name]
+			return !self.failedNames[lbInterface.Name], self.bannerFailedNames[lbInterface.Name]
 		}
 	}
-	return false
+	return false, false
 }
 
-// Sets whether an interface refuses every probe, as a host that is down does.
-func (self *DnsHarness) setFailed(name string, failed bool) error {
+// Sets one fault of an interface: with banner, whether its 25 greets as a draining mxedge does, else
+// whether it refuses every probe, as a host that is down does.
+func (self *DnsHarness) setFailed(name string, banner bool, failed bool) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if !slices.ContainsFunc(self.interfaces, func(lbInterface dnsservice.DnsLbInterface) bool { return lbInterface.Name == name }) {
 		return fmt.Errorf("%w: no interface %s", ErrDnsHarnessSettings, name)
 	}
-	self.failedNames[name] = failed
+	if banner {
+		self.bannerFailedNames[name] = failed
+	} else {
+		self.failedNames[name] = failed
+	}
 	return nil
 }
 
 // Fails an interface, then runs enough probe rounds on every edge for each to judge it: dropped from
-// every edge row's answers, or kept by never-all when it is the last (§12.6).
+// every edge row's answers and, a router, every router row's, or kept by never-all when it is the
+// last (§12.6).
 func (self *DnsHarness) FailInterface(ctx context.Context, name string) error {
-	if err := self.setFailed(name, true); err != nil {
+	if err := self.setFailed(name, false, true); err != nil {
 		return err
 	}
 	return self.ProbeRounds(ctx, self.dnsSettings.Probe.FailureCount+1)
@@ -827,7 +845,26 @@ func (self *DnsHarness) FailInterface(ctx context.Context, name string) error {
 
 // Lets a failed interface answer again, then runs the round that brings it back.
 func (self *DnsHarness) RestoreInterface(ctx context.Context, name string) error {
-	if err := self.setFailed(name, false); err != nil {
+	if err := self.setFailed(name, false, false); err != nil {
+		return err
+	}
+	return self.ProbeRounds(ctx, 2)
+}
+
+// Fails a router interface's 25 banner alone, as a draining mxedge behind a live tlsedge does, then
+// runs enough probe rounds on every edge for each to judge it: dropped from every router row's answers,
+// each mx host, and from no edge row's, or kept by never-all when it is the last router (§12.6;
+// DNS-M7-01). An interface off the router list has no banner probed, so this changes nothing of it.
+func (self *DnsHarness) FailInterfaceBanner(ctx context.Context, name string) error {
+	if err := self.setFailed(name, true, true); err != nil {
+		return err
+	}
+	return self.ProbeRounds(ctx, self.dnsSettings.Probe.FailureCount+1)
+}
+
+// Lets a failed banner greet again, then runs the round that brings the interface back to mx hosts.
+func (self *DnsHarness) RestoreInterfaceBanner(ctx context.Context, name string) error {
+	if err := self.setFailed(name, true, false); err != nil {
 		return err
 	}
 	return self.ProbeRounds(ctx, 2)
@@ -1353,8 +1390,9 @@ func (self *dnsHarnessSoaReader) ReadSoa(ctx context.Context, root string, ns st
 	return 0, errDnsHarnessSoaUnreadable
 }
 
-// The fake lb: a probe of an interface that answers gets tlsedge's alert, whatever its hello names,
-// and one of a failed or unknown address is refused, as a dial to a host that is down is.
+// The fake lb: a probe of an interface that answers gets tlsedge's alert, whatever its hello names, or
+// on probe.smtp_port mxedge's greeting, a draining one where a test failed the banner; and one of a
+// failed or unknown address is refused, as a dial to a host that is down is.
 type dnsHarnessProbeDialer struct {
 	harness *DnsHarness
 }
@@ -1362,10 +1400,24 @@ type dnsHarnessProbeDialer struct {
 var errDnsHarnessProbeRefused = errors.New("probe refused")
 
 func (self *dnsHarnessProbeDialer) DialProbe(ctx context.Context, address netip.AddrPort) (net.Conn, error) {
-	if !self.harness.interfaceAnswers(address.Addr()) {
+	answers, bannerFailed := self.harness.interfaceAnswers(address.Addr())
+	if !answers {
 		return nil, errDnsHarnessProbeRefused
 	}
 	client, server := net.Pipe()
+	if int(address.Port()) == self.harness.dnsSettings.Probe.SmtpPort {
+		// SMTP's server speaks first, then reads until the probe closes
+		go func() {
+			defer server.Close()
+			greeting := dnsHarnessMxedgeBanner
+			if bannerFailed {
+				greeting = dnsHarnessMxedgeDraining
+			}
+			server.Write([]byte(greeting))
+			io.Copy(io.Discard, server)
+		}()
+		return client, nil
+	}
 	go func() {
 		defer server.Close()
 		header := make([]byte, dnsHarnessTlsRecordHeaderByteCount)

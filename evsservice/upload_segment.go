@@ -65,13 +65,14 @@ type EvsUploadDeps struct {
 func (self *EvsEngine) uploadRoutes() []*EvsRoute {
 	return []*EvsRoute{
 		{
-			Method:  http.MethodPut,
-			Pattern: evsRoutePrefix + "repos/{" + evsRepoIdPathValue + "}/segments/{" + evsSegmentPathValue + "}",
-			Name:    evsUploadSegmentRouteTemplate,
-			Rights:  sidecar.AclEvsWrite | sidecar.AclEvsDeposit | sidecar.AclEvsAdmin,
-			Write:   true,
-			Placed:  true,
-			Serve:   self.serveUploadSegment,
+			Method:        http.MethodPut,
+			Pattern:       evsRoutePrefix + "repos/{" + evsRepoIdPathValue + "}/segments/{" + evsSegmentPathValue + "}",
+			Name:          evsUploadSegmentRouteTemplate,
+			Rights:        sidecar.AclEvsWrite | sidecar.AclEvsDeposit | sidecar.AclEvsAdmin,
+			Write:         true,
+			Placed:        true,
+			RefuseDeleted: true,
+			Serve:         self.serveUploadSegment,
 		},
 	}
 }

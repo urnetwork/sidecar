@@ -31,6 +31,19 @@ const evsFoldMaxStaleDeadline = 15 * time.Second
 // lengthen the margin and never shorten it.
 const evsFoldMinCollectMargin = 150 * time.Millisecond
 
+// §11.8 step 7: the head If-Match is issued only within 5 s of step 4's reads, the bound linearization rests on
+// (repo/ and the authorization state read at most 5 s before the commit), so a setting may shorten it and never
+// stretch it.
+const evsPushMaxStepSevenWindow = 5 * time.Second
+
+// §11.8's fence row: an attempt ends 503 unknown on a fence_ms later than its arrival less 100 ms, the margin the
+// clocks' 50 ms bound needs, so a setting may widen it and never narrow it.
+const evsPushMinFenceMargin = 100 * time.Millisecond
+
+// §11.6's copy row: a copy rereads its head at least every 5 s (§11.7's stale rule), so a setting may shorten it and
+// never stretch it.
+const evsCopyMaxHeadRereadInterval = 5 * time.Second
+
 // The engine's settings. Every field is read where it is used, from one instance.
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
@@ -125,6 +138,91 @@ type EvsSettings struct {
 	// The bytes of log pages a process keeps, which never change (§11.8's Resolve row), 16 MiB. Non-positive keeps
 	// none.
 	LogPageCacheByteCount int64
+
+	// §11.8 step 7: the head If-Match is issued only within this of step 4's reads, else steps 4 and 5 run again,
+	// 5 s. At most 5 s; positive.
+	PushStepSevenWindow time.Duration
+	// What a page-out at step 6 leaves step 7 of that window: its deadline is this long before the window ends, 1 s.
+	// At least zero and below PushStepSevenWindow.
+	PushPageOutReserve time.Duration
+	// §11.8's 412 row: how many times a push reruns 5 (b-h) on a reread head and issues step 7 again before 429
+	// BUSY, 8. Positive.
+	PushConflictRetryCount int
+	// How many times a push runs step 4 again from the cluster, after a refusal on a cached head, a passed 5 s
+	// window or a stale read, before it answers 429 BUSY, 8. Positive.
+	PushRerunCount int
+	// §11.8's refuse row: how many times the recording CAS rereads and tries again after a 412 before the push
+	// answers 503 unknown, 8. Positive.
+	PushRefusalRetryCount int
+	// §11.8's unknown row: rereads of the head after a step 7 whose outcome is unknown, before the push answers 503
+	// unknown, 3, and the wait between them, 200 ms. Positive count; the wait at least zero.
+	PushUnknownRereadCount    int
+	PushUnknownRereadInterval time.Duration
+	// §11.8's fence row: an attempt reading a fence_ms later than its arrival less this ends 503 unknown, 100 ms. At
+	// least 100 ms.
+	PushFenceMargin time.Duration
+	// §11.8's refuse row: a refusal meeting a refusal fence younger than this, by refused_ms, answers 429 instead
+	// of recording, 1 s. Positive.
+	RefusalFenceInterval time.Duration
+	// How long one attempt of a push may run once the client's request has arrived, its writes going on if the
+	// client leaves: past it, 503 unknown. Within the lb's 30 s silence, 25 s. Positive.
+	PushAttemptTimeout time.Duration
+	// The body a one-part push or a seal may carry: its statement, a payload of at most 1 MiB and its receipts, 2
+	// MiB. Positive.
+	PushBodyMaxByteCount int64
+	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
+	// keeps none.
+	GenerationCacheCount int
+	// §11.8's lease row: the longest seal lease a push may ask for, 120 s. At most 120 s; positive.
+	LeaseMaxDuration time.Duration
+
+	// §11.9's request bounds (EVS1-M2-14): the paths one read names, 64; its ranges, 64, and their bytes in all, 32
+	// MiB; and the slots, maps, log pages and push records it names, each 64. Positive.
+	ReadPathMaxCount      int
+	ReadRangeMaxCount     int
+	ReadRangeMaxByteCount int64
+	ReadObjectMaxCount    int
+	// The body of a stored object one read frame carries, 1 MiB: an object past it spans frames. Positive and under
+	// the frame bound.
+	ReadFrameByteCount int
+	// §11.9's rounds row: a segment up to this is read whole and a larger one in ReadSegmentRangeAlign-aligned
+	// ranges, 256 KiB and 64 KiB. Positive.
+	ReadSegmentWholeByteCount int64
+	ReadSegmentRangeAlign     int64
+	// How many times a read goes to a newer head from the cluster when an entry holds a version past the head it
+	// read (§11.9's newest row), 2. Positive.
+	ReadHeadRetryCount int
+	// GET .../log's page: at most this many statements an answer, 1,000. Positive, at most 1,000.
+	LogReplyStatementCount int
+	// GET .../refs: the keys one LIST of head/<repo>/ returns, 1,000. Positive.
+	RefsListPageCount int
+
+	// §11.12's lifecycle: how many times a transition reads repo/ from the cluster again after another write came
+	// first or an answer was lost, before a route answers 429 BUSY or a job fails to be retried, 8. Positive.
+	RepoTransitionRetryCount int
+	// The keys one LIST of a shred's delete pass or a reconciliation's walk returns, 1,000. Positive.
+	ShredListPageCount int
+	// How long a shred a preservation hold stopped at its step 4 waits before it reads the holds again, when no
+	// hold covering the repo names an end: 24 h. Positive.
+	ShredHoldRecheckInterval time.Duration
+
+	// §11.6's copy row (EVS1-M2-17): a path-epoch copy's operations a second on one repo, 50, and while two or more
+	// sources stand, 150; the cluster's share comes from the write budget (WriteBudget.CopyOpsPerSecond). Positive.
+	CopyRepoOpsPerSecond        int
+	CopyRepoSourcesOpsPerSecond int
+	// §11.6's copy row: a copy rereads its ref's head at least this often, 5 s, the stale rule's bound on what its
+	// writes rely on. At most 5 s; positive.
+	CopyHeadRereadInterval time.Duration
+	// How many times one move reads its entry again after a 412 or an unknown outcome before the job gives the run
+	// up to its retry, 16. Positive.
+	CopyMoveRetryCount int
+	// The keys one LIST of a copy's walk returns, 1,000. Positive.
+	CopyListPageCount int
+	// The moves that write one copy run makes before it queues its successor, so a 1M-entry ref's copy is many runs,
+	// each within its job's time: 10,000. Non-positive: no bound.
+	CopyRunMoveCount int
+	// The log pages a copy reads looking for its PATH_EPOCH once the window paged it out, for the tail: 16. Positive.
+	CopyLogPageCount int
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -161,6 +259,42 @@ func DefaultEvsSettings() *EvsSettings {
 		FoldListPageCount:         1000,
 		FoldRefStateCount:         100 * 1000,
 		LogPageCacheByteCount:     16 * 1024 * 1024,
+		PushStepSevenWindow:       5 * time.Second,
+		PushPageOutReserve:        time.Second,
+		PushConflictRetryCount:    8,
+		PushRerunCount:            8,
+		PushRefusalRetryCount:     8,
+		PushUnknownRereadCount:    3,
+		PushUnknownRereadInterval: 200 * time.Millisecond,
+		PushFenceMargin:           100 * time.Millisecond,
+		RefusalFenceInterval:      time.Second,
+		PushAttemptTimeout:        25 * time.Second,
+		PushBodyMaxByteCount:      2 * 1024 * 1024,
+		GenerationCacheCount:      100 * 1000,
+		LeaseMaxDuration:          evsLeaseMaxDuration,
+
+		ReadPathMaxCount:          64,
+		ReadRangeMaxCount:         64,
+		ReadRangeMaxByteCount:     32 * 1024 * 1024,
+		ReadObjectMaxCount:        64,
+		ReadFrameByteCount:        1024 * 1024,
+		ReadSegmentWholeByteCount: 256 * 1024,
+		ReadSegmentRangeAlign:     64 * 1024,
+		ReadHeadRetryCount:        2,
+		LogReplyStatementCount:    evsLogReplyMaxStatementCount,
+		RefsListPageCount:         1000,
+
+		RepoTransitionRetryCount: 8,
+		ShredListPageCount:       1000,
+		ShredHoldRecheckInterval: 24 * time.Hour,
+
+		CopyRepoOpsPerSecond:        50,
+		CopyRepoSourcesOpsPerSecond: 150,
+		CopyHeadRereadInterval:      5 * time.Second,
+		CopyMoveRetryCount:          16,
+		CopyListPageCount:           1000,
+		CopyRunMoveCount:            10 * 1000,
+		CopyLogPageCount:            16,
 	}
 }
 
@@ -202,6 +336,43 @@ func (self *EvsSettings) Validate() error {
 	if self.FoldVersionCount <= 0 || self.FoldTriggerInterval <= 0 || self.FoldBehindRetryAfter <= 0 ||
 		self.FoldEntryRetryCount <= 0 || self.FoldListPageCount <= 0 {
 		return fmt.Errorf("%w: a fold's version count, trigger interval, retry after, retry count and list page must be positive", ErrEvsSettings)
+	}
+	if self.PushStepSevenWindow <= 0 || evsPushMaxStepSevenWindow < self.PushStepSevenWindow {
+		return fmt.Errorf("%w: step 7's window %s, outside (0, %s]", ErrEvsSettings, self.PushStepSevenWindow, evsPushMaxStepSevenWindow)
+	}
+	if self.PushPageOutReserve < 0 || self.PushStepSevenWindow <= self.PushPageOutReserve {
+		return fmt.Errorf("%w: a page-out's reserve %s against step 7's window %s", ErrEvsSettings, self.PushPageOutReserve, self.PushStepSevenWindow)
+	}
+	if self.PushFenceMargin < evsPushMinFenceMargin {
+		return fmt.Errorf("%w: a fence margin %s, below §11.8's %s", ErrEvsSettings, self.PushFenceMargin, evsPushMinFenceMargin)
+	}
+	if self.PushConflictRetryCount <= 0 || self.PushRerunCount <= 0 || self.PushRefusalRetryCount <= 0 ||
+		self.PushUnknownRereadCount <= 0 || self.PushUnknownRereadInterval < 0 || self.RefusalFenceInterval <= 0 ||
+		self.PushAttemptTimeout <= 0 || self.PushBodyMaxByteCount <= 0 {
+		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
+	}
+	if self.LeaseMaxDuration <= 0 || evsLeaseMaxDuration < self.LeaseMaxDuration {
+		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)
+	}
+	if self.ReadPathMaxCount <= 0 || self.ReadRangeMaxCount <= 0 || self.ReadRangeMaxByteCount <= 0 || self.ReadObjectMaxCount <= 0 ||
+		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.RefsListPageCount <= 0 {
+		return fmt.Errorf("%w: a read's bounds, segment sizes, head retries and refs page must be positive", ErrEvsSettings)
+	}
+	if self.ReadFrameByteCount <= 0 || sidecar.EvsReadFrameMaxByteCount <= self.ReadFrameByteCount {
+		return fmt.Errorf("%w: a read frame's body %d, outside (0, %d)", ErrEvsSettings, self.ReadFrameByteCount, sidecar.EvsReadFrameMaxByteCount)
+	}
+	if self.LogReplyStatementCount <= 0 || evsLogReplyMaxStatementCount < self.LogReplyStatementCount {
+		return fmt.Errorf("%w: a log page of %d statements, outside (0, %d]", ErrEvsSettings, self.LogReplyStatementCount, evsLogReplyMaxStatementCount)
+	}
+	if self.RepoTransitionRetryCount <= 0 || self.ShredListPageCount <= 0 || self.ShredHoldRecheckInterval <= 0 {
+		return fmt.Errorf("%w: a transition's retry count, a shred's list page and its hold recheck must be positive", ErrEvsSettings)
+	}
+	if self.CopyRepoOpsPerSecond <= 0 || self.CopyRepoSourcesOpsPerSecond <= 0 || self.CopyMoveRetryCount <= 0 ||
+		self.CopyListPageCount <= 0 || self.CopyLogPageCount <= 0 {
+		return fmt.Errorf("%w: a copy's rates, retry count and list page must be positive", ErrEvsSettings)
+	}
+	if self.CopyHeadRereadInterval <= 0 || evsCopyMaxHeadRereadInterval < self.CopyHeadRereadInterval {
+		return fmt.Errorf("%w: a copy's head reread %s, outside (0, %s]", ErrEvsSettings, self.CopyHeadRereadInterval, evsCopyMaxHeadRereadInterval)
 	}
 	return nil
 }

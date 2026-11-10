@@ -76,9 +76,20 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				SpoolCursorRecordCount: 64,
 				TranscriptTailInterval: 30 * time.Second,
 				HookExitTimeout:        300 * time.Millisecond,
-				RestorePointByteCount:  256 * 1024 * 1024,
-				RestoreHoldTimeout:     10 * time.Minute,
-				RestoreHoldByteCount:   8 * 1024 * 1024,
+				// MCP.md's MCP-M3-15 readings: a PreToolUse's wait for its paths, and the ancestry walk's bound
+				HookPathTimeout: 10 * time.Second,
+				// §16.6's taint row: 60 s either side of a call, and a config check every 5 min
+				HookLapseTimeout:    60 * time.Second,
+				ConfigCheckInterval: 5 * time.Minute,
+				// §16.6's web tools (MCP.md's reading 12), and the shells the ancestry rules step over
+				WebToolNames: []string{"WebFetch", "WebSearch", "web_search", "web_fetch", "curl", "wget"},
+				ShellNames: []string{
+					"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "tcsh", "csh", "nu", "cmd", "powershell", "pwsh",
+				},
+				AncestorDepthCount:    64,
+				RestorePointByteCount: 256 * 1024 * 1024,
+				RestoreHoldTimeout:    10 * time.Minute,
+				RestoreHoldByteCount:  8 * 1024 * 1024,
 			},
 		},
 		// §16.8

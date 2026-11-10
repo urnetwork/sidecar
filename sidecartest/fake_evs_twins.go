@@ -7,7 +7,9 @@
 package sidecartest
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar"
@@ -27,6 +29,10 @@ func RegisterEvsTwins(redis *FakeRedis) {
 	redis.RegisterScript(evsHeadCachePutScriptName, evsHeadCachePutTwin)
 	redis.RegisterScript(evsBudgetLeaseTakeScriptName, evsBudgetLeaseTakeTwin)
 	redis.RegisterScript(evsBudgetLeaseReleaseScriptName, evsBudgetLeaseReleaseTwin)
+	redis.RegisterScript(evsPushSequenceRaiseScriptName, evsPushSequenceRaiseTwin)
+	redis.RegisterScript(evsLeasePutScriptName, evsLeasePutTwin)
+	redis.RegisterScript(evsLeaseDeleteScriptName, evsLeaseDeleteTwin)
+	redis.RegisterScript(evsLeaseSweepScriptName, evsLeaseSweepTwin)
 }
 
 // A lease field taken or renewed: set to the holder while absent or already the holder's, with its own ttl.
@@ -102,4 +108,162 @@ func evsHeadCachePutTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error)
 		return nil, err
 	}
 	return &sidecar.RedisReply{Kind: sidecar.RedisReplyInteger, Integer: 1}, nil
+}
+
+// evsservice's push sequence and lease scripts' Names (sequence.go, subscribe.go).
+const (
+	evsPushSequenceRaiseScriptName = "evs_push_sequence_raise"
+	evsLeasePutScriptName          = "evs_lease_put"
+	evsLeaseDeleteScriptName       = "evs_lease_delete"
+	evsLeaseSweepScriptName        = "evs_lease_sweep"
+)
+
+// {evsq_<repo_id>}'s raise: SET to the master's TIME in µs x 1,000 as joined strings when absent, then INCR,
+// PEXPIRE, and GET's bulk string. KEYS[1] the key; ARGV[1] the ttl in ms.
+func evsPushSequenceRaiseTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	exists, err := call.Exists(key)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		now := call.Now()
+		seed := strconv.FormatInt(now.Unix(), 10) + fmt.Sprintf("%06d", now.Nanosecond()/1000) + "000"
+		if err := call.Set(key, []byte(seed), 0); err != nil {
+			return nil, err
+		}
+	}
+	value, _, err := call.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	// INCR in Redis's own 64-bit integers, as the real command does: never through a double
+	current, err := strconv.ParseInt(string(value), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	raised := []byte(strconv.FormatInt(current+1, 10))
+	if err := call.Set(key, raised, 0); err != nil {
+		return nil, err
+	}
+	ttlMs, err := strconv.ParseInt(call.Args[0], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := call.Expire(key, time.Duration(ttlMs)*time.Millisecond); err != nil {
+		return nil, err
+	}
+	return &sidecar.RedisReply{Kind: sidecar.RedisReplyBulk, Bulk: raised}, nil
+}
+
+// {evsl_<repo_id>}'s write: refuses a new holder at the cap, else sets each field, extends both keys and raises the
+// version. KEYS[1] the leases, KEYS[2] the version; ARGV now ms, holder, cap, ttl ms, then field and expiry pairs.
+func evsLeasePutTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	leaseKey, versionKey := call.Keys[0], call.Keys[1]
+	now, err := strconv.ParseInt(call.Args[0], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	holder := call.Args[1]
+	limit, err := strconv.ParseInt(call.Args[2], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	ttlMs, err := strconv.ParseInt(call.Args[3], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	fields, err := call.HashGetAll(leaseKey)
+	if err != nil {
+		return nil, err
+	}
+	holders := map[string]bool{}
+	for field, value := range fields {
+		fieldHolder, _, found := strings.Cut(field, "|")
+		expiry, err := strconv.ParseInt(string(value), 10, 64)
+		if !found || err != nil || expiry <= now {
+			continue
+		}
+		holders[fieldHolder] = true
+	}
+	if !holders[holder] && limit <= int64(len(holders)) {
+		return RedisIntegerReply(0), nil
+	}
+	set := map[string][]byte{}
+	for i := 4; i+1 < len(call.Args); i += 2 {
+		set[call.Args[i]] = []byte(call.Args[i+1])
+	}
+	if err := call.HashSet(leaseKey, set); err != nil {
+		return nil, err
+	}
+	if _, err := call.Expire(leaseKey, time.Duration(ttlMs)*time.Millisecond); err != nil {
+		return nil, err
+	}
+	if _, err := call.Increment(versionKey, 0); err != nil {
+		return nil, err
+	}
+	if _, err := call.Expire(versionKey, time.Duration(ttlMs)*time.Millisecond); err != nil {
+		return nil, err
+	}
+	return RedisIntegerReply(1), nil
+}
+
+// {evsl_<repo_id>}'s removal: exact fields, or every field under a prefix; the version raised when any went.
+func evsLeaseDeleteTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	leaseKey, versionKey := call.Keys[0], call.Keys[1]
+	fields, err := call.HashGetAll(leaseKey)
+	if err != nil {
+		return nil, err
+	}
+	remove := []string{}
+	for _, name := range call.Args[1:] {
+		if call.Args[0] == "prefix" {
+			for field := range fields {
+				if strings.HasPrefix(field, name) {
+					remove = append(remove, field)
+				}
+			}
+			continue
+		}
+		if _, ok := fields[name]; ok {
+			remove = append(remove, name)
+		}
+	}
+	if 0 < len(remove) {
+		if err := call.HashDelete(leaseKey, remove); err != nil {
+			return nil, err
+		}
+		if _, err := call.Increment(versionKey, 0); err != nil {
+			return nil, err
+		}
+	}
+	return RedisIntegerReply(int64(len(remove))), nil
+}
+
+// {evsl_<repo_id>}'s sweep: every field whose expiry has passed, the version raised when any went.
+func evsLeaseSweepTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	leaseKey, versionKey := call.Keys[0], call.Keys[1]
+	now, err := strconv.ParseInt(call.Args[0], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	fields, err := call.HashGetAll(leaseKey)
+	if err != nil {
+		return nil, err
+	}
+	remove := []string{}
+	for field, value := range fields {
+		if expiry, err := strconv.ParseInt(string(value), 10, 64); err == nil && expiry <= now {
+			remove = append(remove, field)
+		}
+	}
+	if 0 < len(remove) {
+		if err := call.HashDelete(leaseKey, remove); err != nil {
+			return nil, err
+		}
+		if _, err := call.Increment(versionKey, 0); err != nil {
+			return nil, err
+		}
+	}
+	return RedisIntegerReply(int64(len(remove))), nil
 }

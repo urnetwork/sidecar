@@ -205,6 +205,7 @@ func (self *configStateHistory) rebuild(view *configHistoryView, k uint64) (*Con
 	// the one the log's later states share
 	start := configCopyState(view.states[c-view.from])
 	start.chains = start.chains[:len(start.chains):len(start.chains)]
+	start.ring = start.ring[:len(start.ring):len(start.ring)]
 	state := start
 	for j := c + 1; j <= k; j += 1 {
 		kept := view.entries[j-view.from]
@@ -221,11 +222,16 @@ func (self *configStateHistory) rebuild(view *configHistoryView, k uint64) (*Con
 				if err := configApplyStatement(next, kept.statement, false); err != nil {
 					return nil, fmt.Errorf("the statement at %d: %w", j, err)
 				}
+				configAdvanceShrinks(state, next, configEntryEffects(kept.statement, nil))
+				next.addRing(kept.n, kept.statement.id)
 			case bridge.AuthEntryKindTick:
 				if kept.tick == nil {
 					return nil, fmt.Errorf("the tick at %d took effect and is not kept", j)
 				}
-				configApplyTick(next, kept.tick)
+				if err := configApplyTick(next, kept.tick, kept.activations); err != nil {
+					return nil, fmt.Errorf("the tick at %d: %w", j, err)
+				}
+				configAdvanceShrinks(state, next, configEntryEffects(nil, kept.activations))
 			default:
 				return nil, fmt.Errorf("a base at %d, which the window keeps", j)
 			}

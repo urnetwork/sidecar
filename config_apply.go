@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
@@ -56,10 +57,9 @@ var (
 	ErrConfigRuleMissing = fmt.Errorf("%w: rule not built", ErrConfigRefused)
 	// A read_only device signed what D-TEAM-24 refuses from one.
 	ErrConfigReadOnly = fmt.Errorf("%w: read_only", ErrConfigRefused)
-	// §7.9's presence row asks for a countersignature this build cannot check yet (TEAM-M2-06).
+	// §7.9's presence row asks a countersignature by a live presence key of the signer that the statement does not
+	// carry, or that does not verify (config_presence.go).
 	ErrConfigPresence = fmt.Errorf("%w: presence", ErrConfigRefused)
-	// A rule reads a ServiceSettings value this reader could not open.
-	ErrConfigSettingsUnknown = fmt.Errorf("%w: settings unknown", ErrConfigRefused)
 )
 
 // Evidence of a fork (§7.9's apply row): the position, what this reader holds there and what the entry presented.
@@ -108,6 +108,24 @@ func (self ConfigVerdict) Accepted() bool {
 	return self.Refusal == nil
 }
 
+// Whether the entry took effect and completed a proposal: an AuthorityProposal at k = 1 or the k-th counted
+// AuthorityCosign, the 2 a base's tail_verdicts carries (DESIGN-DETAILS 5.2.2).
+func (self ConfigVerdict) Completed() bool {
+	return self.Refusal == nil && len(self.CompletedProposalId) != 0
+}
+
+// The two bits a base's tail_verdicts carries for this entry: 0 refused or a BASE, 1 took effect, 2 took effect and
+// completed a proposal (DESIGN-DETAILS 5.2.2).
+func (self ConfigVerdict) tailBits() uint8 {
+	switch {
+	case self.Kind == bridge.AuthEntryKindBase || self.Refusal != nil:
+		return configTailRefused
+	case self.Completed():
+		return configTailCompleted
+	}
+	return configTailEffect
+}
+
 // One statement as a rule judges it: the body as signed, its header, its signers, and the entry it takes effect at.
 // For a proposal's statement the body is AuthorityProposal.statement, the signers are the proposal's and its cosigns',
 // and the entry is the completing one.
@@ -135,6 +153,16 @@ type configStatement struct {
 	rowSigner ConfigSigner
 	// an acl statement's check, which its apply folds and a base's re-application keeps (configAclRules)
 	aclVerdict *AclStatementVerdict
+	// an AuthorityProposal's kind, fixed at its entry (DESIGN-DETAILS 5.2.2's ProposalKind)
+	proposalKind bridge.ProposalKind
+	// whether it takes effect at an ApiTick's activation, Recovery's window having held it (§7.9's activation row)
+	activated bool
+}
+
+// One proposal an ApiTick activates, and its statement as it takes effect at the tick.
+type configActivation struct {
+	proposalId [sha256.Size]byte
+	statement  *configStatement
 }
 
 // What every statement that enters the log begins with (§7.9's StatementHeader).
@@ -232,9 +260,6 @@ type ConfigLog struct {
 	// entries from the retention point on, kept[i] at position keptFrom + i
 	kept     []*configKeptEntry
 	keptFrom uint64
-	// the first 16 B of each statement id applied among the last 4,096 entries, with its entry's pin
-	ringIds   map[[configRetainedIdSize]byte]configRingEntry
-	ringOrder []configRingEntry
 	// the rows of the current and previous bases, by rows_sha256
 	baseRows map[[sha256.Size]byte][]byte
 	// once set, every Apply returns it
@@ -244,6 +269,8 @@ type ConfigLog struct {
 	rowsOnly bool
 	// the states StateAt serves, shared with every state this log makes (config_state_at.go)
 	history *configStateHistory
+	// the valid vetoes this device holds off the log, by proposal, with each one's at.version (HoldVeto)
+	heldVetoes map[[sha256.Size]byte]uint64
 }
 
 // One retained entry and what it came to.
@@ -253,17 +280,20 @@ type configKeptEntry struct {
 	entry      *bridge.AuthEntry
 	entryBytes []byte
 	verdict    ConfigVerdict
+	// whether this reader holds the entry's verdict: it judged it, or took it from a base's tail_verdicts. A new
+	// device holds none for the entries its first base folded (DESIGN-DETAILS 5.2.4's V)
+	verdictHeld bool
 	// a statement that took effect, as a base re-applies it
 	statement *configStatement
-	// a tick that took effect
-	tick *bridge.ApiTick
+	// a tick that took effect, and the proposals it activated
+	tick        *bridge.ApiTick
+	activations []configActivation
 }
 
-// One id in the ring, in position order, with the entry that carried it.
+// One id in the replay ring, in position order, with the entry that carried it (ProjectionRows' RingRow).
 type configRingEntry struct {
-	n     uint64
-	chain [sha256.Size]byte
-	id    [configRetainedIdSize]byte
+	n  uint64
+	id [configRetainedIdSize]byte
 }
 
 // A log at S(0), from its Signed Genesis as received: A_0 = SHA-256 of those bytes, and before base 1 the genesis
@@ -285,7 +315,6 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		networkId:     networkId,
 		signedGenesis: bytes.Clone(signedGenesis),
 		keptFrom:      1,
-		ringIds:       map[[configRetainedIdSize]byte]configRingEntry{},
 		baseRows:      map[[sha256.Size]byte][]byte{},
 	}
 	self.history = newConfigStateHistory(settings, networkId, self.log)
@@ -299,6 +328,7 @@ func NewConfigLog(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog
 		delegations:  map[string]*bridge.DelegationRow{},
 		keys:         map[string]*bridge.KeyRow{},
 		proposals:    map[[sha256.Size]byte]*configProposal{},
+		indexers:     map[configIndexerKey]*bridge.IndexerRow{},
 		chains:       [][sha256.Size]byte{genesisChain},
 		chainsFrom:   0,
 		history:      self.history,
@@ -380,16 +410,22 @@ func (self *ConfigLog) Check(signedBytes []byte, timeMs int64) ConfigVerdict {
 }
 
 // Where a retry of the same statement landed: the position of an applied statement with this id among the last
-// 4,096 entries, which api answers a retry with (§7.9's statement row). False when none.
+// 4,096 entries, which api answers a retry with (§7.9's statement row), from the state's replay ring where this log
+// retains A_n there (DESIGN-DETAILS 5.4's api row). False when none.
 func (self *ConfigLog) FindStatement(statementId [sha256.Size]byte) (*bridge.AuthPin, bool) {
-	ringEntry, found := self.ringIds[RetainedStatementId(statementId)]
+	state := self.state.Load()
+	n, found := state.ringFind(state.n+1, statementId)
 	if !found {
 		return nil, false
 	}
-	if kept := self.keptEntry(ringEntry.n); kept != nil && kept.verdict.StatementId != statementId {
+	chain, ok := state.chainAt(n)
+	if !ok {
 		return nil, false
 	}
-	return &bridge.AuthPin{Version: ringEntry.n, Chain: bytes.Clone(ringEntry.chain[:])}, true
+	if kept := self.keptEntry(n); kept != nil && kept.verdictHeld && kept.verdict.StatementId != statementId {
+		return nil, false
+	}
+	return &bridge.AuthPin{Version: n, Chain: bytes.Clone(chain[:])}, true
 }
 
 // The kept entry at n, or nil.
@@ -444,7 +480,7 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	}
 
 	var next *ConfigState
-	kept := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: bytes.Clone(entryBytes)}
+	kept := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: bytes.Clone(entryBytes), verdictHeld: true}
 	kept.verdict = ConfigVerdict{Pin: &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}, Kind: entry.GetKind()}
 	switch entry.GetKind() {
 	case bridge.AuthEntryKindBase:
@@ -455,7 +491,10 @@ func (self *ConfigLog) Apply(entryBytes []byte, rowsSource ConfigRowsSource) (Co
 	case bridge.AuthEntryKindStatement:
 		next = self.applyStatement(state, kept)
 	case bridge.AuthEntryKindTick:
-		next = self.applyTick(state, kept)
+		next, err = self.applyTick(state, kept)
+		if err != nil {
+			return ConfigVerdict{}, err
+		}
 	default:
 		return ConfigVerdict{}, self.stopAtFork(&ConfigForkError{
 			N: entry.GetN(), RemoteChain: chain, Entry: bytes.Clone(entryBytes), Reason: fmt.Sprintf("kind %d", entry.GetKind()),
@@ -491,44 +530,12 @@ func (self *ConfigLog) applied(state *ConfigState, entry *bridge.AuthEntry, entr
 	return ConfigVerdict{Pin: &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}, Kind: entry.GetKind()}, nil
 }
 
-// Keeps an applied entry and its verdict, and its id in the ring when it took effect.
+// Keeps an applied entry and its verdict. The replay ring is the state's (config_state.go), a function of the log.
 func (self *ConfigLog) keep(kept *configKeptEntry) {
 	if len(self.kept) == 0 {
 		self.keptFrom = kept.n
 	}
 	self.kept = append(self.kept, kept)
-	if kept.entry.GetKind() == bridge.AuthEntryKindStatement && kept.verdict.Accepted() {
-		self.addRingId(kept.n, kept.chain, kept.verdict.StatementId)
-	}
-	self.trimRing(kept.n)
-}
-
-// Adds an applied statement's id at the entry (n, chain).
-func (self *ConfigLog) addRingId(n uint64, chain [sha256.Size]byte, statementId [sha256.Size]byte) {
-	ringEntry := configRingEntry{n: n, chain: chain, id: RetainedStatementId(statementId)}
-	self.ringIds[ringEntry.id] = ringEntry
-	self.ringOrder = append(self.ringOrder, ringEntry)
-}
-
-// Drops ids that fall out of the 4,096 entries before position n + 1.
-func (self *ConfigLog) trimRing(n uint64) {
-	dropCount := 0
-	for dropCount < len(self.ringOrder) && configStatementWindow < n+1-self.ringOrder[dropCount].n {
-		ringEntry := self.ringOrder[dropCount]
-		if self.ringIds[ringEntry.id].n == ringEntry.n {
-			delete(self.ringIds, ringEntry.id)
-		}
-		dropCount += 1
-	}
-	if 0 < dropCount {
-		self.ringOrder = append([]configRingEntry(nil), self.ringOrder[dropCount:]...)
-	}
-}
-
-// Whether a statement with this id took effect among the 4,096 entries before position n.
-func (self *ConfigLog) ringHolds(n uint64, statementId [sha256.Size]byte) bool {
-	ringEntry, found := self.ringIds[RetainedStatementId(statementId)]
-	return found && n-ringEntry.n <= configStatementWindow
 }
 
 // A statement entry: judged at state, then applied, or refused at its position.
@@ -545,6 +552,8 @@ func (self *ConfigLog) applyStatement(state *ConfigState, kept *configKeptEntry)
 			if statement.completes != nil {
 				kept.verdict.CompletedProposalId = configCompletedProposalId(statement)
 			}
+			configAdvanceShrinks(state, next, configEntryEffects(statement, nil))
+			next.addRing(kept.n, statement.id)
 			return next.finish()
 		}
 	}
@@ -638,15 +647,15 @@ func (self *ConfigLog) checkHeader(state *ConfigState, statement *configStatemen
 		return fmt.Errorf("%w: expired", ErrConfigReplay)
 	case statement.timeMs+configStatementMaxLifetimeMs < header.GetNotAfterMs():
 		return fmt.Errorf("%w: not_after more than 7 days on", ErrConfigReplay)
-	case self.ringHolds(statement.n, statement.id):
+	case state.ringHolds(statement.n, statement.id):
 		return fmt.Errorf("%w: a repeat of a statement applied among the last %d entries", ErrConfigReplay, configStatementWindow)
 	}
 	return nil
 }
 
 // Resolves and verifies a statement's signer from Signed's signer_id and key_id (§6.9's Signers). A sidecar's
-// identity key must be one this state admits or the Genesis names; a recovery key's statements are TEAM-M2-05's and
-// a Delegation's TEAM-M2-04's, each refused until its rule lands.
+// identity key must be one this state admits or the Genesis names; a Delegation's key one a Delegation this state
+// holds names (config_delegation.go); a recovery key its member's binding in effect (config_recovery.go).
 func (self *ConfigState) verifySigner(signed *bridge.Signed, purpose string, signedType bridge.SignedType, timeMs int64) (ConfigSigner, error) {
 	signerIdSize, keyIdSize := len(signed.GetSignerId()), len(signed.GetKeyId())
 	switch {
@@ -664,9 +673,9 @@ func (self *ConfigState) verifySigner(signed *bridge.Signed, purpose string, sig
 		}
 		return ConfigSigner{Kind: ConfigSignerSidecar, SidecarId: sidecarId}, nil
 	case signerIdSize == len(Id{}) && keyIdSize == sha256.Size:
-		return ConfigSigner{}, fmt.Errorf("%w: a recovery key's statement waits on TEAM-M2-05's recovery rules", ErrConfigRuleMissing)
+		return self.verifyRecoverySigner(signed, purpose, signedType)
 	case signerIdSize == configDelegationIdByteCount && keyIdSize == sha256.Size:
-		return ConfigSigner{}, fmt.Errorf("%w: a Delegation's statement waits on TEAM-M2-04's delegation rule", ErrConfigRuleMissing)
+		return self.verifyDelegationSigner(signed, purpose, signedType)
 	}
 	return ConfigSigner{}, fmt.Errorf("%w: signer_id of %d bytes and key_id of %d", ErrConfigSigner, signerIdSize, keyIdSize)
 }
@@ -699,44 +708,62 @@ func configApplyStatement(next *configStateBuilder, statement *configStatement, 
 }
 
 // A tick entry (§7.9's tick row): every reaped id an ephemeral admission, each revoked at the tick; every activated
-// proposal meeting Recovery's window, which TEAM-M2-05 judges, so a tick naming one is refused until it lands. A
-// refused tick changes nothing.
-func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) *ConfigState {
+// proposal meeting Recovery's window (config_recovery.go), its statement taking effect at the tick. A refused tick
+// changes nothing; an accepted one activating a proposal this device holds a valid veto of is a fork (HoldVeto).
+func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) (*ConfigState, error) {
 	next := newConfigStateBuilder(state, kept.n, kept.chain, kept.entry.GetTimeMs())
 	tick := &bridge.ApiTick{}
 	if err := proto.Unmarshal(kept.entry.GetBody(), tick); err != nil {
 		kept.verdict.Refusal = fmt.Errorf("%w: tick: %w", ErrConfigRule, err)
-		return next.finish()
+		return next.finish(), nil
 	}
-	if err := configCheckTick(state, tick); err != nil {
+	activations, err := configCheckTick(state, tick, kept.n, kept.entry.GetTimeMs())
+	if err != nil {
 		kept.verdict.Refusal = err
-		return next.finish()
+		return next.finish(), nil
 	}
-	configApplyTick(next, tick)
-	kept.tick = tick
-	return next.finish()
+	if err := self.heldVetoFork(kept, tick); err != nil {
+		return nil, err
+	}
+	if err := configApplyTick(next, tick, activations); err != nil {
+		kept.verdict.Refusal = err
+		return newConfigStateBuilder(state, kept.n, kept.chain, kept.entry.GetTimeMs()).finish(), nil
+	}
+	configAdvanceShrinks(state, next, configEntryEffects(nil, activations))
+	kept.tick, kept.activations = tick, activations
+	return next.finish(), nil
 }
 
-// The checks a tick's content passes at state.
-func configCheckTick(state *ConfigState, tick *bridge.ApiTick) error {
+// The checks a tick's content passes at state, for a tick at position n and time timeMs: each reaped id an ephemeral
+// admission, and each activation, none repeated, as checkActivation says. Returns the activations.
+func configCheckTick(state *ConfigState, tick *bridge.ApiTick, n uint64, timeMs int64) ([]configActivation, error) {
 	for _, reapedBytes := range tick.GetReapedSidecarIds() {
 		sidecarId, err := IdFromBytes(reapedBytes)
 		if err != nil {
-			return fmt.Errorf("%w: a reaped id of %d bytes", ErrConfigRule, len(reapedBytes))
+			return nil, fmt.Errorf("%w: a reaped id of %d bytes", ErrConfigRule, len(reapedBytes))
 		}
 		row := state.sidecars[sidecarId]
 		if row == nil || !row.GetEphemeral() {
-			return fmt.Errorf("%w: a reaped id names no ephemeral admission", ErrConfigRule)
+			return nil, fmt.Errorf("%w: a reaped id names no ephemeral admission", ErrConfigRule)
 		}
 	}
-	if 0 < len(tick.GetActivatedProposalIds()) {
-		return fmt.Errorf("%w: a tick's activations wait on TEAM-M2-05's recovery window", ErrConfigRuleMissing)
+	activations := []configActivation{}
+	for _, proposalId := range tick.GetActivatedProposalIds() {
+		statement, err := state.checkActivation(proposalId, n, timeMs)
+		if err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(activations, func(activation configActivation) bool { return bytes.Equal(activation.proposalId[:], proposalId) }) {
+			return nil, fmt.Errorf("%w: a proposal activated twice", ErrConfigRule)
+		}
+		activations = append(activations, configActivation{proposalId: [sha256.Size]byte(proposalId), statement: statement})
 	}
-	return nil
+	return activations, nil
 }
 
-// A tick's effect: each reaped ephemeral admission revoked at the tick's position, an already revoked one left.
-func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick) {
+// A tick's effect: each reaped ephemeral admission revoked at the tick's position, an already revoked one left; then
+// each activation's proposal closed and its statement applied there.
+func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick, activations []configActivation) error {
 	for _, reapedBytes := range tick.GetReapedSidecarIds() {
 		sidecarId, err := IdFromBytes(reapedBytes)
 		if err != nil {
@@ -746,81 +773,14 @@ func configApplyTick(next *configStateBuilder, tick *bridge.ApiTick) {
 			next.sidecarForWrite(sidecarId).RevokedAt = next.state.n
 		}
 	}
-}
-
-// §7.9's presence row as a hook until TEAM-M2-06 checks countersignatures: a statement the row covers, signed by a
-// sidecar that registered a live presence key, is refused, since nothing here can verify the countersignature it
-// must carry. A statement the row does not cover, or one whose signer has no live key, passes, as the row says, and a
-// recovery key's statements need none. A key counts as live unless revoked or past its not_after, so a void one
-// still refuses until TEAM-M2-04 says which are void.
-func configPresenceCheck(state *ConfigState, statement *configStatement) error {
-	for _, signer := range statement.signers {
-		if signer.Kind != ConfigSignerSidecar || !state.hasLivePresenceKey(signer.SidecarId, statement.timeMs) {
-			continue
+	for _, activation := range activations {
+		if proposal := next.proposal(activation.proposalId); proposal == nil || proposal.closedAt != 0 {
+			return fmt.Errorf("%w: an activation of a proposal not open here", ErrConfigRule)
 		}
-		if configPresenceCovers(state, statement.signedType, statement.body, signer.SidecarId) {
-			return fmt.Errorf("%w: %s needs its signer's presence countersignature, which TEAM-M2-06 checks", ErrConfigPresence, statement.signedType)
+		next.closeProposal(activation.proposalId, next.state.n, ConfigProposalActivated)
+		if err := configApplyStatement(next, activation.statement, false); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-// Whether the sidecar registered a presence key that is not revoked and whose not_after, when it has one, comes after
-// timeMs (§7.9's presence row).
-func (self *ConfigState) hasLivePresenceKey(sidecarId Id, timeMs int64) bool {
-	for _, key := range self.keys {
-		if key.GetPurpose() == bridge.KeyPurpose_KEY_PURPOSE_PRESENCE && bytes.Equal(key.GetSigner(), sidecarId.Bytes()) &&
-			key.GetRevokedAt() == 0 && (key.GetNotAfter() == 0 || timeMs < key.GetNotAfter()) {
-			return true
-		}
-	}
-	return false
-}
-
-// Whether §7.9's presence row covers a statement by signer (D-TEAM-32's list): a compromise revocation and any other
-// SidecarRevoke of another sidecar; a presence key's KeyRegister or KeyRevoke; a Suspend of another sidecar; every
-// RecoveryVeto; a DelegationRevoke with since_n; a SidecarAdmit, AdmissionConfirm or OwnerConfirm of an untagged
-// sidecar; an AdminSet change, a MemberRevoke, a RecoveryBind or RecoveryRebind; and a proposal carrying one of these
-// or a cosign of such a proposal. What cannot be told apart counts as covered.
-func configPresenceCovers(state *ConfigState, signedType bridge.SignedType, body proto.Message, signerId Id) bool {
-	untaggedRow := func(sidecarBytes []byte) bool {
-		sidecarId, err := IdFromBytes(sidecarBytes)
-		if err != nil {
-			return true
-		}
-		row := state.sidecars[sidecarId]
-		return row == nil || len(row.GetTagIds()) == 0
-	}
-	switch message := body.(type) {
-	case *bridge.SidecarRevoke:
-		return message.GetReason() == bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE ||
-			!bytes.Equal(message.GetSidecarId(), signerId.Bytes())
-	case *protocol.KeyRegister:
-		return message.GetPurpose() == bridge.KeyPurpose_KEY_PURPOSE_PRESENCE
-	case *protocol.KeyRevoke:
-		key := state.keys[string(message.GetKeyId())]
-		return key == nil || key.GetPurpose() == bridge.KeyPurpose_KEY_PURPOSE_PRESENCE
-	case *bridge.Suspend:
-		return !bytes.Equal(message.GetSubject(), signerId.Bytes())
-	case *protocol.RecoveryVeto, *protocol.AdminSet, *bridge.MemberRevoke, *protocol.RecoveryBind, *protocol.RecoveryRebind:
-		return true
-	case *protocol.DelegationRevoke:
-		return message.GetSinceN() != 0
-	case *protocol.SidecarAdmit:
-		return len(message.GetTagIds()) == 0
-	case *protocol.AdmissionConfirm:
-		return untaggedRow(message.GetSidecarId())
-	case *protocol.OwnerConfirm:
-		return untaggedRow(message.GetSidecarId())
-	case *protocol.AuthorityProposal:
-		proposed, err := configProposedStatement(message, nil, 0, 0)
-		return err != nil || configPresenceCovers(state, proposed.signedType, proposed.body, signerId)
-	case *protocol.AuthorityCosign:
-		if len(message.GetProposalId()) != sha256.Size {
-			return true
-		}
-		proposal := state.proposals[[sha256.Size]byte(message.GetProposalId())]
-		return proposal == nil || configPresenceCovers(state, proposal.statement.signedType, proposal.statement.body, signerId)
-	}
-	return false
 }

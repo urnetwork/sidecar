@@ -81,6 +81,23 @@ type EvsClientArgs struct {
 	Clock    Clock
 	Log      Logger
 	Settings *EvsSettings
+	// Called once a repo CreateRepo made is active, before CreateRepo answers: a team network's directory announces a
+	// general or record repo there, or writes its private marker (§16.11's default and private rows, RECORD-M6-15). A
+	// failure answers CreateRepo's error with the repo made, and a retry with ResumeRepoId calls it again. Nil for
+	// none.
+	RepoCreated func(ctx context.Context, created *EvsRepoCreated) error
+}
+
+// A repo CreateRepo made, as EvsClientArgs.RepoCreated takes it.
+type EvsRepoCreated struct {
+	RepoId        Id
+	Kind          protocol.RepoKind
+	OwnerMemberId *Id
+	// EvsCreateRepoArgs'.
+	DisplayName string
+	Private     bool
+	GroupInbox  bool
+	Confirmed   bool
 }
 
 // One network's client of evs.
@@ -108,6 +125,8 @@ type EvsClient struct {
 	repoIdMirrors map[Id]*EvsMirrorStore
 	// where M10's index writer joins each write's plan (evs_plan.go), nil until then
 	writeHook EvsWritePlanHook
+	// subscriptions and catch-up (evs_subscribe.go), with its own lock
+	subscriber *evsSubscriber
 }
 
 // A ref of a repo.
@@ -152,6 +171,7 @@ func NewEvsClient(args *EvsClientArgs) (*EvsClient, error) {
 		repoIdMirrors:  map[Id]*EvsMirrorStore{},
 	}
 	self.verifier = newEvsVerifier(self)
+	self.subscriber = newEvsSubscriber(self)
 	return self, nil
 }
 
@@ -229,6 +249,15 @@ type EvsCreateRepoArgs struct {
 	// A create already filed and cut short: its repo id, to resume at the route without filing a second
 	// RepoCreate. Nil draws a new random id and files.
 	ResumeRepoId *Id
+	// The repo's display name, which a team network's directory announces a general or record repo under (prose).
+	DisplayName string
+	// --private on every repo-creating command (§16.11's private row): the directory gets a private marker in place of
+	// the announcement, so no device announces the repo on its own.
+	Private bool
+	// A group inbox (§15.8): announced with requests closed and no roles offered.
+	GroupInbox bool
+	// A person confirmed the creating command on /dev/tty or in an app's UI (§5.8).
+	Confirmed bool
 }
 
 // A new random repo id: 16 random bytes, so the id says nothing of when or where it was made (§11.12's naming row).
@@ -241,8 +270,9 @@ func NewEvsRepoId() Id {
 
 // §11.12's creation: files RepoCreate, becoming the repo's admin; PUT /evs/v1/repos/<id> places it and writes repo/,
 // keying; KF1's GkmClient.CreateGroup makes its group and generation 1; activation moves repo/ to active, after which
-// the first write may go. Each step resumes: evs answers a retried create and activation as the first, and gkm resumes
-// KF1 after a crash.
+// the first write may go; then EvsClientArgs.RepoCreated, which a team network's directory announces it by. Each step
+// resumes: evs answers a retried create and activation as the first, and gkm resumes KF1 after a crash. A failure of
+// RepoCreated answers the repo with its error.
 func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) (*EvsRepo, error) {
 	if args == nil || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a repo of no kind", errInvalidSettings)
@@ -285,12 +315,27 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	}); err != nil {
 		return nil, err
 	}
+	if self.args.RepoCreated != nil {
+		created := &EvsRepoCreated{
+			RepoId:        repoId,
+			Kind:          args.Kind,
+			OwnerMemberId: args.OwnerMemberId,
+			DisplayName:   args.DisplayName,
+			Private:       args.Private,
+			GroupInbox:    args.GroupInbox,
+			Confirmed:     args.Confirmed,
+		}
+		if err := self.args.RepoCreated(ctx, created); err != nil {
+			return repo, fmt.Errorf("evs: the repo's directory item: %w", err)
+		}
+	}
 	return repo, nil
 }
 
 // A hint on evs:<repo_id> (§11.10): PushHint.version, the repo's push sequence, and its delta, an EvsHeadChanged. It
-// carries no authority: it only sends the next read of the ref past evs's head cache, which the read then verifies
-// as any other. It never blocks, as a hint's subscriber must not (PROTO-M1-06).
+// carries no authority: it sends the next read of the ref past evs's head cache, which the read then verifies as any
+// other, and queues the subscriptions' reads it calls for (evs_hint.go). It never blocks, as a hint's subscriber must
+// not (PROTO-M1-06).
 func (self *EvsClient) ReceiveHint(repoId Id, sequence uint64, delta []byte) {
 	changed := &protocol.EvsHeadChanged{}
 	if err := proto.Unmarshal(delta, changed); err != nil {
@@ -300,12 +345,16 @@ func (self *EvsClient) ReceiveHint(repoId Id, sequence uint64, delta []byte) {
 	if err != nil {
 		return
 	}
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	key := evsRefKey{repoId: repoId, refId: refId}
-	if self.hintedVersions[key] < changed.GetVersion() {
-		self.hintedVersions[key] = changed.GetVersion()
-	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		key := evsRefKey{repoId: repoId, refId: refId}
+		if self.hintedVersions[key] < changed.GetVersion() {
+			self.hintedVersions[key] = changed.GetVersion()
+		}
+	}()
+	// the subscriptions' reads (evs_hint.go)
+	self.subscriber.noteHint(repoId, sequence, refId)
 }
 
 // The newest version a hint named for a ref, 0 when none did.

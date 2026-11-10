@@ -39,6 +39,9 @@ type RecordEntryArrival struct {
 	StreamSidecarId Id
 	// The pin the push holding it declared.
 	PushPin *bridge.AuthPin
+	// A push pin before what the state retains is judged at the state itself, its chain value taken as §11.9's first
+	// pin (RecordReaderArgs.UnretainedAtHead); false refuses such an entry.
+	UnretainedAtHead bool
 }
 
 // The header of an entry that passed steps 2 and 3, with its stored Signed.
@@ -55,7 +58,8 @@ type RecordVerifiedHeader struct {
 // ingester's stream it is the position policy_version names, which may not pass the ingester's pin, at which it
 // writes or deposits, the ingester having judged the deposit's own pin (section 5.4's right step); the ingester itself
 // writes at its push's pin. Either way no compromise revocation of the writer from a since_n at or before that
-// position stands. ErrRecordAuthAhead is a pin this state has not reached: the caller waits, rather than judges.
+// position stands. ErrRecordAuthAhead is a pin this state has not reached: the caller waits, rather than judges. A pin
+// before what the state retains is refused, unless arrival asks for it to be judged at the state itself.
 func VerifyRecordEntry(auth RecordAuthView, logId Id, signedBytes []byte, arrival *RecordEntryArrival) (*RecordVerifiedHeader, error) {
 	header, signed, err := recordSignedHeader(signedBytes)
 	if err != nil {
@@ -75,6 +79,11 @@ func VerifyRecordEntry(auth RecordAuthView, logId Id, signedBytes []byte, arriva
 		return nil, fmt.Errorf("%w: no push pin", ErrRecordEntryRefused)
 	}
 	pushView, err := auth.At(arrival.PushPin)
+	if errors.Is(err, ErrRecordAuthNotRetained) && arrival.UnretainedAtHead {
+		// a position older than the reader's retention point: judged by the history the state keeps, as §16.11's
+		// repo file row judges one, rather than refused at every device that started after it
+		pushView, err = auth, nil
+	}
 	if err != nil {
 		return nil, recordAuthRefusal(err)
 	}

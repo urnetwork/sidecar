@@ -68,6 +68,28 @@ type EvsSettings struct {
 	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
 	// (§11.8's lease row).
 	SealLeaseDuration time.Duration
+
+	// §11.10's lease row: a subscription rereads its head fresh this long after its lease's 200, 5 s, so a commit an
+	// evs process matched against leases read before the write is caught.
+	SubscribeRereadDelay time.Duration
+	// §11.10's renew row: a lease is renewed once it is this old, 24 h, at a random time within SubscribeRenewWindow,
+	// 1 h, never because of a reconnect.
+	SubscribeRenewAge    time.Duration
+	SubscribeRenewWindow time.Duration
+	// §11.10's gap row: every subscribed ref is read fresh, and its leases listed, this often at a random offset, 1 h.
+	SubscribeResyncInterval time.Duration
+	// §11.10's gap row: after an incomplete reset a background daemon first waits a random time below this, 10 min.
+	SubscribeResetMaxWait time.Duration
+	// A lease that did not answer 200 is tried again after this, doubling to SubscribeRetryMaxWait: 1 s to 5 min. A
+	// final refusal waits SubscribeResyncInterval.
+	SubscribeRetryMinWait time.Duration
+	SubscribeRetryMaxWait time.Duration
+	// How many tries Subscribe makes itself before it answers with the lease still owed, which the rounds keep
+	// trying: 8.
+	SubscribeRetryCount int
+	// Whether this host is a background daemon, which waits out SubscribeResetMaxWait after an incomplete reset: the
+	// desktop daemon is; an app in the foreground is not.
+	SubscribeBackground bool
 }
 
 // The desktop daemon's evs settings.
@@ -93,5 +115,14 @@ func DefaultEvsSettings() *EvsSettings {
 		PushRebuildCount:         8,
 		PartsMissingRetryCount:   3,
 		SealLeaseDuration:        120 * time.Second,
+		SubscribeRereadDelay:     5 * time.Second,
+		SubscribeRenewAge:        24 * time.Hour,
+		SubscribeRenewWindow:     time.Hour,
+		SubscribeResyncInterval:  time.Hour,
+		SubscribeResetMaxWait:    10 * time.Minute,
+		SubscribeRetryMinWait:    time.Second,
+		SubscribeRetryMaxWait:    5 * time.Minute,
+		SubscribeRetryCount:      8,
+		SubscribeBackground:      true,
 	}
 }

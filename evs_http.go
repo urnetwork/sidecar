@@ -46,6 +46,9 @@ const evsHttpContentType = "application/x-protobuf"
 // buffer more.
 const evsReadFrameMaxByteCount = 1024*1024 + 64*1024
 
+// The bound of one read frame, for evs's writer (evsservice).
+const EvsReadFrameMaxByteCount = evsReadFrameMaxByteCount
+
 // The audience prefix and roles of an evs capability scope (§7.8).
 const (
 	evsScopeRead    = "r"

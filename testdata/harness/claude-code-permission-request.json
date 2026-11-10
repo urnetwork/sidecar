@@ -1,0 +1,1 @@
+{"session_id":"7f1c2a90-permission","transcript_path":"/tmp/sidecartest/project/.transcripts/7f1c2a90.jsonl","cwd":"/tmp/sidecartest/project","hook_event_name":"PermissionRequest","permission_mode":"default","tool_name":"mcp__ur__mail_send","tool_input":{"to":["someone@mail.example"],"subject":"hi"}}

@@ -131,16 +131,29 @@ type configBasePin struct {
 	timeMs int64
 }
 
-// One AuthorityProposal still open at a state (§7.9's proposal row). Never changed once a state holds it: a cosign
+// One AuthorityProposal as a state holds it (§7.9's proposal row, DESIGN-DETAILS 5.2.2's ProposalRow): its row, the
+// statement it proposes, and once it closed, where and why. Never changed once a state holds it: a cosign or a close
 // makes a new one.
 type configProposal struct {
 	id [sha256.Size]byte
-	// the proposal's entry
-	n uint64
-	// its own header's not_after_ms, which bounds every cosign
-	notAfterMs int64
+	// what rows carry while it is open: its entry, not_after, signers with their entries, window and kind
+	row *bridge.ProposalRow
 	// the proposed statement, its signers the proposal's and each cosign's so far, in log order
 	statement *configStatement
+	// the position it closed at, 0 while open, and why
+	closedAt uint64
+	closed   ConfigProposalClose
+}
+
+// Whether the proposal is open at timeMs: not closed, and not past its own header's not_after, which bounds every
+// cosign and activation.
+func (self *configProposal) open(timeMs int64) bool {
+	return self.closedAt == 0 && timeMs <= self.row.GetNotAfterMs()
+}
+
+// Whether Recovery's window holds it: a recovery key signed it, or it is a restored binding's admission.
+func (self *configProposal) windowed() bool {
+	return self.row.GetWindowEntry() != 0 || self.row.GetKind() == uint32(bridge.ProposalKind_PROPOSAL_KIND_RESTORED)
 }
 
 // §7.9's S(n).
@@ -165,10 +178,20 @@ type ConfigState struct {
 	aclRows     *protocol.AclRows
 	// the newest AdminSet's threshold as signed, 0 for the default (§7.9's authority row)
 	threshold uint32
+	// the ServiceSettings values every verifier judges by, from the newest base's rows; nil before base 1
+	settings *bridge.ProjectionSettings
 	// the ServiceSettings the base's config head holds, nil for none, and whether the head was opened to see them
-	settings      *protocol.ServiceSettings
-	settingsKnown bool
-	proposals     map[[sha256.Size]byte]*configProposal
+	headSettings      *protocol.ServiceSettings
+	headSettingsKnown bool
+	// the VersioningRules the base's config head holds, nil for none; known by headSettingsKnown (config_versioning.go)
+	headVersioningRules *protocol.VersioningRules
+	proposals           map[[sha256.Size]byte]*configProposal
+	// the IndexerSet designations that hold, by subject and scope
+	indexers map[configIndexerKey]*bridge.IndexerRow
+	// §7.9's replay row as a function of the log (DESIGN-DETAILS 5.2.3's ring): the statements that took effect
+	// among the 4,096 entries through n, in position order, the oldest trimmed as n moves. Later states append to
+	// the same array past this slice's end and never write inside it, so states share it, as chains.
+	ring []configRingEntry
 
 	// A_k for k from chainsFrom to n. Later states append to the same array past this slice's end and never write
 	// inside it, so states share it.
@@ -182,6 +205,10 @@ type ConfigState struct {
 	aclOnce  sync.Once
 	acl      *AclState
 	aclError error
+
+	// §7.9's leaves rank, built on first use
+	leavesOnce  sync.Once
+	leavesCache *configLeaves
 }
 
 // The network the log is of.
@@ -340,13 +367,6 @@ func (self *ConfigState) RegisteredKey(keyId []byte) *bridge.KeyRow {
 	return self.keys[string(keyId)]
 }
 
-// The ServiceSettings the newest base's config head holds, nil when it holds none, so the defaults hold; known is
-// false when this state's reader could not open the head (a rows-only reader, TEAM-M2-11), and then a rule that
-// reads a setting fails closed.
-func (self *ConfigState) Settings() (settings *protocol.ServiceSettings, known bool) {
-	return self.settings, self.settingsKnown
-}
-
 // The identity key the log admits for a sidecar, by its SidecarAdmit or, for a network's first device, the
 // Genesis; nil for none. A revoked sidecar keeps it, for what it signed before (§10.9's history row).
 func (self *ConfigState) IdentityKey(sidecarId Id) []byte {
@@ -425,7 +445,7 @@ func (self *ConfigState) IsConfigWriter(sidecarId Id) bool {
 }
 
 // Whether §7.9's compromise cascade, or a leaked bundle's DelegationRevoke, parks the sidecar now, as its row's
-// parked_at says. TEAM-M2-04 computes and lifts parks; until then only a base's rows set one.
+// parked_at says (config_cascade.go): parked until a confirmation from outside P lifts it.
 func (self *ConfigState) Parked(sidecarId Id) bool {
 	row := self.sidecars[sidecarId]
 	return row != nil && row.GetParkedAt() != 0
@@ -443,36 +463,6 @@ func (self *ConfigState) Sponsor(sidecarId Id) (Id, bool) {
 		return Id{}, false
 	}
 	return sponsorId, true
-}
-
-// Whether a record signed by signer (a sidecar_id, a recovery key's hash or a delegation_id) and carried at
-// position at rests on what a compromise cascade voids (§7.9's cascade, D-TEAM-26).
-//
-// TEAM-M2-04 computes the set P in position order. Until it lands this fails closed from the rows alone: whatever a
-// parked sidecar signed is void at any position, and so is whatever a recovery key or a Delegation signed when a
-// parked sidecar signed its binding or the Delegation. A void consents nothing and opens no share, so the interim
-// errs toward less access.
-func (self *ConfigState) CascadeVoids(signer []byte, at uint64) bool {
-	parkedSigner := func(rowsSigner []byte) bool {
-		sidecarId, err := IdFromBytes(rowsSigner)
-		return err == nil && self.Parked(sidecarId)
-	}
-	switch len(signer) {
-	case len(Id{}):
-		return parkedSigner(signer)
-	case sha256.Size:
-		if delegation := self.delegations[string(signer)]; delegation != nil {
-			return parkedSigner(delegation.GetSigner())
-		}
-		for _, member := range self.members {
-			for _, binding := range member.GetBindings() {
-				if bytes.Equal(binding.GetKeySha256(), signer) && binding.GetAt() <= at && parkedSigner(binding.GetSigner()) {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // The acl part of this state: ACL's AclState over the rows' AclRows with this state as its view, built once on first
@@ -573,17 +563,84 @@ func (self *ConfigState) Rows() *bridge.ProjectionRows {
 			rows.Acl = aclBytes
 		}
 	}
+	rows.Settings = proto.Clone(self.Settings()).(*bridge.ProjectionSettings)
+	rows.Proposals = self.openProposalRows()
+	rows.Ring = self.ringRows()
+	for _, key := range self.indexerKeys() {
+		rows.Indexers = append(rows.Indexers, proto.Clone(self.indexers[key]).(*bridge.IndexerRow))
+	}
 	return rows
 }
 
-// The open proposals' ids, in id order (§7.9's proposal row).
-func (self *ConfigState) OpenProposalIds() [][]byte {
-	proposalIds := make([][]byte, 0, len(self.proposals))
-	for proposalId := range self.proposals {
-		proposalIds = append(proposalIds, bytes.Clone(proposalId[:]))
+// The replay ring as rows carry it at this state's position: each statement that took effect among the 4,096 entries
+// through n, in position order (DESIGN-DETAILS 5.2.2's RingRow).
+func (self *ConfigState) ringRows() []*bridge.RingRow {
+	rows := []*bridge.RingRow{}
+	for _, ringEntry := range self.ring {
+		if ringEntry.n <= self.n && self.n-ringEntry.n < configStatementWindow {
+			rows = append(rows, &bridge.RingRow{StatementId: bytes.Clone(ringEntry.id[:]), N: ringEntry.n})
+		}
 	}
-	slices.SortFunc(proposalIds, bytes.Compare)
+	return rows
+}
+
+// Whether a statement with this id took effect among the 4,096 entries before position n (§7.9's replay row): the
+// ring holds only what took effect, so a refused statement resubmitted is judged anew.
+func (self *ConfigState) ringHolds(n uint64, statementId [sha256.Size]byte) bool {
+	_, found := self.ringFind(n, statementId)
+	return found
+}
+
+// The position of the newest statement with this id that took effect among the 4,096 entries before position n.
+func (self *ConfigState) ringFind(n uint64, statementId [sha256.Size]byte) (uint64, bool) {
+	id := RetainedStatementId(statementId)
+	for i := len(self.ring) - 1; 0 <= i; i -= 1 {
+		ringEntry := self.ring[i]
+		if n <= ringEntry.n {
+			continue
+		}
+		if configStatementWindow < n-ringEntry.n {
+			break
+		}
+		if ringEntry.id == id {
+			return ringEntry.n, true
+		}
+	}
+	return 0, false
+}
+
+// Every proposal this state holds, closed ones included, in id order.
+func (self *ConfigState) proposalIds() [][sha256.Size]byte {
+	proposalIds := make([][sha256.Size]byte, 0, len(self.proposals))
+	for proposalId := range self.proposals {
+		proposalIds = append(proposalIds, proposalId)
+	}
+	slices.SortFunc(proposalIds, func(a [sha256.Size]byte, b [sha256.Size]byte) int {
+		return bytes.Compare(a[:], b[:])
+	})
 	return proposalIds
+}
+
+// The open proposals' ids at this state's time, in id order (§7.9's proposal row).
+func (self *ConfigState) OpenProposalIds() [][]byte {
+	proposalIds := [][]byte{}
+	for _, proposalId := range self.proposalIds() {
+		if self.proposals[proposalId].open(self.timeMs) {
+			proposalIds = append(proposalIds, bytes.Clone(proposalId[:]))
+		}
+	}
+	return proposalIds
+}
+
+// The rows of the proposals open at this state's time, in id order, cloned: what rows at this position carry.
+func (self *ConfigState) openProposalRows() []*bridge.ProposalRow {
+	rows := []*bridge.ProposalRow{}
+	for _, proposalId := range self.proposalIds() {
+		if proposal := self.proposals[proposalId]; proposal.open(self.timeMs) {
+			rows = append(rows, proto.Clone(proposal.row).(*bridge.ProposalRow))
+		}
+	}
+	return rows
 }
 
 // Checks an Ed25519 identity key's form, as a SidecarAdmit or a Genesis carries it.
@@ -601,36 +658,42 @@ type configStateBuilder struct {
 	delegationsOwned bool
 	keysOwned        bool
 	proposalsOwned   bool
+	indexersOwned    bool
 	// rows this builder already copied, so a second write changes the copy
 	membersCopied     map[Id]bool
 	sidecarsCopied    map[Id]bool
 	delegationsCopied map[string]bool
+	keysCopied        map[string]bool
 }
 
 // A new state sharing every field of state but its acl part, which builds again on first use.
 func configCopyState(state *ConfigState) *ConfigState {
 	return &ConfigState{
-		networkId:     state.networkId,
-		genesis:       state.genesis,
-		genesisChain:  state.genesisChain,
-		n:             state.n,
-		chain:         state.chain,
-		timeMs:        state.timeMs,
-		base:          state.base,
-		previousBase:  state.previousBase,
-		members:       state.members,
-		sidecars:      state.sidecars,
-		delegations:   state.delegations,
-		keys:          state.keys,
-		aclRows:       state.aclRows,
-		threshold:     state.threshold,
-		settings:      state.settings,
-		settingsKnown: state.settingsKnown,
-		proposals:     state.proposals,
-		chains:        state.chains,
-		chainsFrom:    state.chainsFrom,
-		basePins:      state.basePins,
-		history:       state.history,
+		networkId:           state.networkId,
+		genesis:             state.genesis,
+		genesisChain:        state.genesisChain,
+		n:                   state.n,
+		chain:               state.chain,
+		timeMs:              state.timeMs,
+		base:                state.base,
+		previousBase:        state.previousBase,
+		members:             state.members,
+		sidecars:            state.sidecars,
+		delegations:         state.delegations,
+		keys:                state.keys,
+		aclRows:             state.aclRows,
+		threshold:           state.threshold,
+		settings:            state.settings,
+		headSettings:        state.headSettings,
+		headSettingsKnown:   state.headSettingsKnown,
+		headVersioningRules: state.headVersioningRules,
+		proposals:           state.proposals,
+		indexers:            state.indexers,
+		ring:                state.ring,
+		chains:              state.chains,
+		chainsFrom:          state.chainsFrom,
+		basePins:            state.basePins,
+		history:             state.history,
 	}
 }
 
@@ -644,6 +707,7 @@ func newConfigStateBuilder(previous *ConfigState, n uint64, chain [sha256.Size]b
 		membersCopied:     map[Id]bool{},
 		sidecarsCopied:    map[Id]bool{},
 		delegationsCopied: map[string]bool{},
+		keysCopied:        map[string]bool{},
 	}
 }
 
@@ -652,9 +716,11 @@ func newConfigStateBuilder(previous *ConfigState, n uint64, chain [sha256.Size]b
 func (self *configStateBuilder) snapshot() *ConfigState {
 	snapshot := configCopyState(self.state)
 	self.membersOwned, self.sidecarsOwned, self.delegationsOwned, self.keysOwned, self.proposalsOwned = false, false, false, false, false
+	self.indexersOwned = false
 	clear(self.membersCopied)
 	clear(self.sidecarsCopied)
 	clear(self.delegationsCopied)
+	clear(self.keysCopied)
 	return snapshot
 }
 
@@ -723,6 +789,17 @@ func (self *configStateBuilder) putSidecar(sidecarId Id, row *bridge.SidecarRow)
 	self.sidecarsCopied[sidecarId] = true
 }
 
+// Sets a new Delegation's row, which the builder then owns.
+func (self *configStateBuilder) putDelegation(row *bridge.DelegationRow) {
+	if !self.delegationsOwned {
+		self.state.delegations = configCloneMap(self.state.delegations)
+		self.delegationsOwned = true
+	}
+	key := string(row.GetDelegationId())
+	self.state.delegations[key] = row
+	self.delegationsCopied[key] = true
+}
+
 // A Delegation's row to change, nil when there is none.
 func (self *configStateBuilder) delegationForWrite(delegationId []byte) *bridge.DelegationRow {
 	key := string(delegationId)
@@ -742,12 +819,50 @@ func (self *configStateBuilder) delegationForWrite(delegationId []byte) *bridge.
 	return row
 }
 
-// An open proposal, or nil.
+// Sets a new key's row, which the builder then owns.
+func (self *configStateBuilder) putKey(row *bridge.KeyRow) {
+	if !self.keysOwned {
+		self.state.keys = configCloneMap(self.state.keys)
+		self.keysOwned = true
+	}
+	key := string(row.GetKeyId())
+	self.state.keys[key] = row
+	self.keysCopied[key] = true
+}
+
+// A key's row to change, nil when there is none.
+func (self *configStateBuilder) keyForWrite(keyId []byte) *bridge.KeyRow {
+	key := string(keyId)
+	row := self.state.keys[key]
+	if row == nil {
+		return nil
+	}
+	if !self.keysCopied[key] {
+		row = proto.Clone(row).(*bridge.KeyRow)
+		self.putKey(row)
+	}
+	return row
+}
+
+// Sets the designation of a subject at a scope, or removes it for nil.
+func (self *configStateBuilder) putIndexer(key configIndexerKey, row *bridge.IndexerRow) {
+	if !self.indexersOwned {
+		self.state.indexers = configCloneMap(self.state.indexers)
+		self.indexersOwned = true
+	}
+	if row == nil {
+		delete(self.state.indexers, key)
+		return
+	}
+	self.state.indexers[key] = row
+}
+
+// A proposal, open or closed, or nil.
 func (self *configStateBuilder) proposal(proposalId [sha256.Size]byte) *configProposal {
 	return self.state.proposals[proposalId]
 }
 
-// Sets an open proposal.
+// Sets a proposal.
 func (self *configStateBuilder) putProposal(proposal *configProposal) {
 	if !self.proposalsOwned {
 		self.state.proposals = configCloneMap(self.state.proposals)
@@ -756,21 +871,32 @@ func (self *configStateBuilder) putProposal(proposal *configProposal) {
 	self.state.proposals[proposal.id] = proposal
 }
 
-// Closes a proposal.
-func (self *configStateBuilder) deleteProposal(proposalId [sha256.Size]byte) {
-	if self.state.proposals[proposalId] == nil {
+// Closes an open proposal at n: it stays held, with where and why, and leaves rows (DESIGN-DETAILS 5.2.3).
+func (self *configStateBuilder) closeProposal(proposalId [sha256.Size]byte, n uint64, reason ConfigProposalClose) {
+	proposal := self.state.proposals[proposalId]
+	if proposal == nil || proposal.closedAt != 0 {
 		return
 	}
-	if !self.proposalsOwned {
-		self.state.proposals = configCloneMap(self.state.proposals)
-		self.proposalsOwned = true
-	}
-	delete(self.state.proposals, proposalId)
+	closed := *proposal
+	closed.closedAt, closed.closed = n, reason
+	self.putProposal(&closed)
 }
 
 // Sets the AclRows, which ACL's statement rules write (configAclRules).
 func (self *configStateBuilder) setAclRows(rows *protocol.AclRows) {
 	self.state.aclRows = rows
+}
+
+// Adds a statement that took effect at n to the replay ring, dropping the ids that fall out of the 4,096 entries
+// before position n + 1. Appends past the shared array's end, as chains do: a state is built from the one before it
+// by one builder at a time, and a rebuild starts from a slice whose capacity ends where it does.
+func (self *configStateBuilder) addRing(n uint64, statementId [sha256.Size]byte) {
+	ring := append(self.state.ring, configRingEntry{n: n, id: RetainedStatementId(statementId)})
+	dropCount := 0
+	for dropCount < len(ring) && configStatementWindow < n+1-ring[dropCount].n {
+		dropCount += 1
+	}
+	self.state.ring = ring[dropCount:]
 }
 
 // The built state, which the builder must not change afterward.

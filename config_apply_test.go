@@ -189,22 +189,29 @@ func TestTheHeadCheckGetsExactlyTheFoldedRecords(t *testing.T) {
 	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("second"))
 	net.fold(net.owner, net.n, 3)
 
+	// BASE entries are records too, by their header's id (DESIGN-DETAILS 5.2.3; question details-5-base-records-in-folds)
 	firstCheck := net.source.checks[len(net.source.checks)-2]
-	if !firstCheck.FoldedKnown || len(firstCheck.Folded) != 3 {
+	if !firstCheck.FoldedKnown || len(firstCheck.Folded) != 4 {
 		t.Fatalf("the first fold holds %d records", len(firstCheck.Folded))
 	}
-	if firstCheck.Folded[0].N != 2 || !bytes.Equal(firstCheck.Folded[0].Id, first.StatementId[:]) || firstCheck.Folded[0].Kind != bridge.AuthEntryKindStatement {
-		t.Errorf("record 0: %+v", firstCheck.Folded[0])
+	baseOneId := net.verdicts[1].StatementId
+	if firstCheck.Folded[0].N != 1 || firstCheck.Folded[0].Kind != bridge.AuthEntryKindBase ||
+		!bytes.Equal(firstCheck.Folded[0].Id, baseOneId[:]) {
+		t.Errorf("record 0 is base 1: %+v", firstCheck.Folded[0])
 	}
-	if firstCheck.Folded[1].Kind != bridge.AuthEntryKindTick || len(firstCheck.Folded[1].Id) != 0 {
-		t.Errorf("record 1 is the tick, with no id: %+v", firstCheck.Folded[1])
+	if firstCheck.Folded[1].N != 2 || !bytes.Equal(firstCheck.Folded[1].Id, first.StatementId[:]) || firstCheck.Folded[1].Kind != bridge.AuthEntryKindStatement {
+		t.Errorf("record 1: %+v", firstCheck.Folded[1])
 	}
-	if !bytes.Equal(firstCheck.Folded[2].Id, refused.StatementId[:]) {
+	if firstCheck.Folded[2].Kind != bridge.AuthEntryKindTick || len(firstCheck.Folded[2].Id) != 0 {
+		t.Errorf("record 2 is the tick, with no id: %+v", firstCheck.Folded[2])
+	}
+	if !bytes.Equal(firstCheck.Folded[3].Id, refused.StatementId[:]) {
 		t.Error("a refused statement is a record too")
 	}
 	secondCheck := net.source.checks[len(net.source.checks)-1]
-	if len(secondCheck.Folded) != 1 || secondCheck.Folded[0].N != foldedThrough+2 {
-		t.Errorf("the second fold skips the base: %+v", secondCheck.Folded)
+	if len(secondCheck.Folded) != 2 || secondCheck.Folded[0].N != foldedThrough+1 || secondCheck.Folded[0].Kind != bridge.AuthEntryKindBase ||
+		secondCheck.Folded[1].N != foldedThrough+2 {
+		t.Errorf("the second fold holds the base and the statement after it: %+v", secondCheck.Folded)
 	}
 }
 
@@ -268,13 +275,6 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 	}{
 		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_IN, body: &protocol.AuditOptIn{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_AUDIT_OPT_OUT, body: &protocol.AuditOptOut{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_KEY_REGISTER, body: &protocol.KeyRegister{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_RECOVERY_BIND, body: &protocol.RecoveryBind{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_DELEGATION, body: &protocol.Delegation{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_DELEGATION_REVOKE, body: &protocol.DelegationRevoke{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_SPONSOR_SET, body: &protocol.SponsorSet{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_INDEXER_SET, body: &protocol.IndexerSet{Header: net.header()}, want: ErrConfigRuleMissing},
-		{signedType: bridge.SignedType_SIGNED_RECOVERY_VETO, body: &protocol.RecoveryVeto{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, body: &bridge.BridgeRoute{Header: net.header()}, want: ErrConfigRuleMissing},
 		{signedType: bridge.SignedType_SIGNED_SERVICE_SETTINGS, body: &protocol.ServiceSettings{}, want: ErrConfigRule},
 		{signedType: bridge.SignedType_SIGNED_VERSIONING_RULES, body: &protocol.VersioningRules{}, want: ErrConfigRule},
@@ -287,8 +287,8 @@ func TestTypesWithNoRuleYetAreRefused(t *testing.T) {
 	}
 }
 
-// A statement signed by a recovery key or a Delegation's key is refused at its signer until TEAM-M2-05 and
-// TEAM-M2-04 land; an unknown signer, a bad signature or signer ids of no known form are refused as signers.
+// Neither a recovery key nor a Delegation's key signs a MemberAdmit; an unknown signer, a bad signature or signer ids of
+// no known form are refused as signers.
 func TestSignersOfOtherKindsAreRefused(t *testing.T) {
 	net := newTestConfigNet(t)
 	body := testConfigMarshal(t, net.memberAdmitStatement("recovered"))
@@ -300,8 +300,8 @@ func TestSignersOfOtherKindsAreRefused(t *testing.T) {
 		signed []byte
 		want   error
 	}{
-		{name: "a recovery key", signed: wrap(net.ownerMemberId.Bytes(), make([]byte, 32), make([]byte, 64)), want: ErrConfigRuleMissing},
-		{name: "a Delegation", signed: wrap(make([]byte, 32), make([]byte, 32), make([]byte, 64)), want: ErrConfigRuleMissing},
+		{name: "a recovery key", signed: wrap(net.ownerMemberId.Bytes(), make([]byte, 32), make([]byte, 64)), want: ErrConfigSigner},
+		{name: "a Delegation", signed: wrap(make([]byte, 32), make([]byte, 32), make([]byte, 64)), want: ErrConfigSigner},
 		{name: "no signer_id", signed: wrap(nil, nil, make([]byte, 64)), want: ErrConfigSigner},
 		{name: "a bad signature", signed: wrap(net.owner.sidecarId.Bytes(), nil, make([]byte, 64)), want: ErrConfigSigner},
 	}
@@ -432,8 +432,9 @@ func (self *testConfigNet) verdictAt(t *testing.T, n uint64) ConfigVerdict {
 	return verdict
 }
 
-// FS-14: a new device that starts after 30 days of retention, at a base folded below the previous one, reaches the
-// long-running reader's S(n): the base's rows plus its tail re-applied, then everything after.
+// FS-14: a new device that starts after 30 days of retention, at a base keeping the previous base's fold below that
+// base (DESIGN-DETAILS 5.2.3's fold rule), reaches the long-running reader's S(n): the base's rows plus its tail
+// re-applied by its verdicts, then everything after.
 func TestANewDeviceAfterRetentionReachesALongRunningReadersState(t *testing.T) {
 	net := newTestConfigNet(t)
 	member := testConfigId("member m")
@@ -453,7 +454,9 @@ func TestANewDeviceAfterRetentionReachesALongRunningReadersState(t *testing.T) {
 	net.admitDevice(laptop, tablet, 0)
 
 	net.timeMs += 31 * 24 * 60 * 60 * 1000
-	net.fold(net.owner, foldPoint, 3)
+	// a head whose settings differ, so the two bases name two rows objects
+	net.source.settings[[sha256.Size]byte(testConfigHeadSha256(3))] = &protocol.ServiceSettings{SelfAdmit: protocol.SelfAdmitMode_SELF_ADMIT_MODE_ON}
+	net.fold(net.owner, foldPoint-1, 3)
 	if base := net.log.State().Base(); base.GetFoldedThrough() >= previousBase {
 		t.Fatalf("the newest base folds through %d, not below the previous base at %d", base.GetFoldedThrough(), previousBase)
 	}
@@ -549,7 +552,7 @@ func TestATickReapsOnlyEphemeralAdmissions(t *testing.T) {
 		t.Errorf("a member device reaped: %v", refused.Refusal)
 	}
 	activation := net.tick(&bridge.ApiTick{ActivatedProposalIds: [][]byte{make([]byte, 32)}})
-	if activation.Accepted() || !errors.Is(activation.Refusal, ErrConfigRuleMissing) {
+	if activation.Accepted() || !errors.Is(activation.Refusal, ErrConfigRule) {
 		t.Errorf("an activation: %v", activation.Refusal)
 	}
 	if net.log.State().SidecarRow(worker.sidecarId).GetRevokedAt() != 0 {
@@ -697,8 +700,8 @@ func TestConfigRepoReplaysFromGenesisAtEveryPosition(t *testing.T) {
 	team.mustPost(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, team.revocation(second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
 	_, openId := team.propose(team.adminC, bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{Header: team.header(), MemberId: memberM.Bytes()})
 	team.fold(team.owner, team.n, 3)
-	if open := team.log.State().OpenProposalIds(); len(open) != 0 {
-		t.Errorf("a proposal the last base folded is open: %x, %x", open, openId)
+	if open := team.log.State().OpenProposalIds(); len(open) != 1 || !bytes.Equal(open[0], openId) {
+		t.Errorf("the proposal the last base folded is not open: %x, %x", open, openId)
 	}
 
 	reader, err := NewConfigLog(testConfigLogSettings(), team.signedGenesis)
