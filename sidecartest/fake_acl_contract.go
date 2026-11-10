@@ -103,6 +103,7 @@ func (self *FakeAclView) Park(sidecarId sidecar.Id) {
 	self.parked[sidecarId] = true
 }
 
+// Position 1, with a zero chain.
 func (self *FakeAclView) Pin() *bridge.AuthPin {
 	return self.pin
 }
@@ -112,6 +113,7 @@ func (self *FakeAclView) Genesis() *bridge.Genesis {
 	return nil
 }
 
+// Every sidecar added, revoked ones included.
 func (self *FakeAclView) SidecarIds() []sidecar.Id {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -122,12 +124,14 @@ func (self *FakeAclView) SidecarIds() []sidecar.Id {
 	return sidecarIds
 }
 
+// The admission added for sidecarId, nil for none.
 func (self *FakeAclView) Sidecar(sidecarId sidecar.Id) *sidecar.AclSidecar {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.sidecars[sidecarId]
 }
 
+// The member added for memberId, nil for none.
 func (self *FakeAclView) Member(memberId sidecar.Id) *bridge.MemberRow {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -139,12 +143,14 @@ func (self *FakeAclView) IsConfigWriter(sidecarId sidecar.Id) bool {
 	return false
 }
 
+// Whether Park parked the sidecar.
 func (self *FakeAclView) Parked(sidecarId sidecar.Id) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.parked[sidecarId]
 }
 
+// The sponsor AddAgent named.
 func (self *FakeAclView) Sponsor(sidecarId sidecar.Id) (sidecar.Id, bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -174,6 +180,7 @@ type FakeAclContractStates struct {
 
 var _ sidecar.AclContractStateSource = (*FakeAclContractStates)(nil)
 
+// A source holding no network's state.
 func NewFakeAclContractStates() *FakeAclContractStates {
 	return &FakeAclContractStates{snapshots: map[sidecar.Id]*sidecar.AclGateSnapshot{}}
 }
@@ -197,6 +204,7 @@ func (self *FakeAclContractStates) Remove(networkId sidecar.Id) {
 	delete(self.snapshots, networkId)
 }
 
+// The installed state, or the cache's unknown.
 func (self *FakeAclContractStates) State(networkId sidecar.Id) (*sidecar.AclGateSnapshot, sidecar.AclGateStatus) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -207,6 +215,7 @@ func (self *FakeAclContractStates) State(networkId sidecar.Id) (*sidecar.AclGate
 	return snapshot, sidecar.AclGateLoaded
 }
 
+// Keeps the load asked for, which changes nothing here.
 func (self *FakeAclContractStates) Changed(networkId sidecar.Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

@@ -413,6 +413,7 @@ func (self *AclContractGate) Decide(request *AclContractRequest, now time.Time) 
 	return verdict
 }
 
+// Decide's verdict, uncounted.
 func (self *AclContractGate) decide(request *AclContractRequest, now time.Time) AclContractVerdict {
 	source, destination := &request.Source, &request.Destination
 	if source.Platform || destination.Platform {
