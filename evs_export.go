@@ -250,11 +250,16 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	if record == nil {
 		return nil, fmt.Errorf("%w: a push record evs did not serve", ErrEvsObjectMissing)
 	}
-	items, err := EvsPayloadItems(record)
-	if err != nil || len(items) < 2 || !bytes.Equal(items[0], statement.Statement.Bytes) {
+	// the batch record as its place holds it: its header, then the push's statement and payload
+	batchRecord, err := ParseEvsBatchRecord(record)
+	if err != nil || batchRecord.Type != protocol.EvsBatchRecordType_EVS_BATCH_PUSH {
+		return nil, fmt.Errorf("%w: a push record that is not one push's", ErrEvsEntryRefused)
+	}
+	statementBytes, payload, err := ParseEvsPushRecordBody(batchRecord.Body)
+	if err != nil || !bytes.Equal(statementBytes, statement.Statement.Bytes) {
 		return nil, fmt.Errorf("%w: a push record of another statement", ErrEvsEntryRefused)
 	}
-	return EvsCheckPayload(statement.Statement, items[1])
+	return EvsCheckPayload(statement.Statement, payload)
 }
 
 // One entry of a push reconstructed into a blob, its oid checked by reconstruction, and the blob's oid; nil for an

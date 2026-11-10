@@ -5,9 +5,9 @@
 //	CreateRepo                      EvsClient's (evs_client.go)
 //	ReadHead, List, History         EVS1-M2-24 (evs_read.go, evs_list.go, evs_history.go)
 //	Write                           EVS1-M2-25, EVS1-M2-26 (evs_plan.go, evs_write.go)
-//	Deposit, Consume                EVS1-M2-29
+//	Deposit, Consume, ReadDeposits  EVS1-M2-29 (evs_deposit.go, evs_consume.go), the receipt gate (evs_receipt_gate.go)
 //	Subscribe                       EVS1-M2-27 (evs_subscribe.go, evs_hint.go)
-//	Erasures                        EVS1-M2-30
+//	Erasures, Erase, Closure        EVS1-M2-30 (evs_erase.go, evs_closure.go)
 //	Import                          EVS1-M2-34
 //	Export                          EVS1-M2-32 (evs_export.go)
 //	Mount                           EVS1-M2-33 (evs_local_mount.go), on desktop legs only
@@ -222,21 +222,6 @@ type EvsMountInfo struct {
 	Dir    string
 	// The plaintext bare repository the local git server runs on.
 	BareDir string
-}
-
-// Deposits one entry to this sidecar's deposit ref. EVS1-M2-29 builds it.
-func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDepositResult, error) {
-	return nil, fmt.Errorf("%w: Deposit is EVS1-M2-29's", ErrEvsNotBuilt)
-}
-
-// Commits a CONSUME of ingested deposits. EVS1-M2-29 builds it.
-func (self *EvsRepo) Consume(ctx context.Context, args *EvsConsumeArgs) (*EvsConsumeResult, error) {
-	return nil, fmt.Errorf("%w: Consume is EVS1-M2-29's", ErrEvsNotBuilt)
-}
-
-// The repo's erasures as this device sees them (§18.5). EVS1-M2-30 builds it.
-func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
-	return nil, fmt.Errorf("%w: Erasures is EVS1-M2-30's", ErrEvsNotBuilt)
 }
 
 // Imports a git repository's history under a signed EvsImport. EVS1-M2-34 builds it.

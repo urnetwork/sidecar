@@ -20,7 +20,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | pending |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | pending |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | pending |
-| 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | in progress: 13.3's model runs are being repeated in one pass to record them; the rest is written |
+| 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
@@ -4484,7 +4484,7 @@ Tasks held until complete: BRIDGE-M4-16, BRIDGE-M4-17, BRIDGE-M6-03, BRIDGE-M6-0
 
 ## 13. Smaller scheduling problems: closure pacing, quota leases, socket registration
 
-Status: in progress: 13.3's model runs are being repeated in one pass to record them; the rest is written
+Status: complete (2026-11-10)
 
 Tasks held until complete: QUOTA-M2-07, SOCK-M5-05, SOCK-M5-06, SOCK-M5-07.
 
@@ -4504,7 +4504,7 @@ The requirement: the network takes at most R uploads in any second whatever asks
 
 **B. Leases have a protocol only in outline.** §20.6 draws a lease reserving 64 MiB at a time on "escrow's per-balance Redis reservations", spending with no I/O, sending a `UsageBatch` every 60 s and releasing at close. QD-087 decided how a spent byte meets its reservation (the host carves it out of the lease's token into a token named for the journal row, which the flush releases), and QD-055 decided that a host with no Postgres reads a payer's balances from api and reserves "straight to Redis". Four things are still open, and each can overdraw a balance or bill a byte twice.
 
-1. *A reading older than a debit.* The reservation script takes the balance's credit as an argument and grants `credit - reserved`. api reads the credit a moment before it calls. An edge reads it through api and caches it. Balance B holds 100 MiB. Edge E1 reserves 64, spends them, carves and posts; the flush debits B to 36 and releases the carved token, so Redis holds no reservation. Edge E2 read the credit as 100 five seconds ago and now asks for 64: the script grants `100 - 0`, and E2 spends 64 MiB of a balance that holds 36. `LeaseTwin-NoFloor` reaches it in 16 states.
+1. *A reading older than a debit.* The reservation script takes the balance's credit as an argument and grants `credit - reserved`. api reads the credit a moment before it calls. An edge reads it through api and caches it. Balance B holds 100 MiB. Edge E1 reserves 64, spends them, carves and posts; the flush debits B to 36 and releases the carved token, so Redis holds no reservation. Edge E2 read the credit as 100 five seconds ago and now asks for 64: the script grants `100 - 0`, and E2 spends 64 MiB of a balance that holds 36. `LeaseTwin-NoFloor` reaches it in under 20 states.
 2. *A carve that runs twice.* A host retries a carve whose answer it did not get. If both copies run, the second after the flush released the batch's token, the bytes leave the lease's token twice: the host believes it holds bytes Redis has given to someone else (`LeaseTwin-BlindCarve`).
 3. *A host cut off from Redis.* Its tokens reach their expiry while it holds them in memory. If it keeps spending and later reports, the debit lands on bytes another host reserved meanwhile.
 4. *A crash, anywhere.* Between a reservation and its answer, between a window's end and its carve, between the carve and the post, between the post and its answer. The design's loss row allows one window of bytes to go unbilled and nothing to be billed twice, and E-d wants the reservation back within its lease.
@@ -4578,7 +4578,7 @@ All of it is inside the one `quota_rate` script a `CountRate` call already runs,
 
 ```text
 lease/<lease_id>/<n>   draw n of a lease: bytes reserved and not yet carved. lease_id is 16 random bytes drawn
-                       when the lease opens, n counts its reservations from 1. Lifetime LeaseTokenTtl, 15 min,
+                       when the lease opens, n counts its reservations from 1. Lifetime TokenTtl, 15 min,
                        extended while the lease lives. It never grows: carve and settle only shrink it.
 svc/<usage_id>         bytes carved for one journal row: the debit's reservation until the flush releases it
                        (QD-087). Lifetime 24 h, redisContractReservationLease.
@@ -4647,33 +4647,57 @@ type BalanceSource interface {
 
 ```go
 type quotaLeaseEntry struct {
-	leaseId     server.Id
-	available   atomic.Int64 // what Spend may take
-	spent       atomic.Int64 // every byte Spend took, ever
-	stateLock   sync.Mutex   // the rest; never held across I/O, never taken by Spend
+	leaseId   server.Id
+	available atomic.Int64 // what Spend may take
+	spent     atomic.Int64 // every byte Spend took, ever
+	// the rest under stateLock, which is never held across I/O and never taken by Spend
+	stateLock   sync.Mutex
 	draws       []*quotaLeaseDraw // one per live token
-	carved      int64        // bytes of spent already attributed to a batch, or given up
+	carved      int64             // bytes of spent already attributed to a batch, or given up
 	handleCount int
 	closed      bool
 }
 type quotaLeaseDraw struct {
-	balanceId     server.Id
-	rank          int       // the balance's place in draw order when drawn
-	token         string    // lease/<lease_id>/<n>
-	amount        int64     // what the token holds, as the host last learned
-	spendableUntil time.Time // the host's monotonic clock; see expiry
+	balanceId      server.Id
+	rank           int       // the balance's place in draw order when drawn
+	token          string    // lease/<lease_id>/<n>
+	amount         int64     // what the token holds, as the host last learned
+	spendableUntil time.Time // on the host's monotonic clock; see expiry
 }
 ```
 
 `Spend(n)`: a compare-and-swap loop that takes n from `available` if it holds n, then adds n to `spent`. No lock, no I/O, no allocation. False when `available` is short.
 
+`Lease(ctx, networkId, meter)`: an open entry that holds bytes gives a new handle with no I/O. An open entry that holds none makes one draw now, and an absent one is opened with its first draw. A draw that reserves nothing while Redis answered is a `QuotaRefusal` (limit key `data`, `upgrade`, as quota-m2-03-readings #3) with `MarkSpent`; Redis unanswered is an error, with no refusal and no mark. The draw's size on Community comes from the network's cached `QuotaLimits.Tier`.
+
+```go
+// server/quotahost. DefaultLeaseSettings is the only source of a default.
+type LeaseSettings struct {
+	DrawByteCount          int64         // 64 MiB
+	CommunityDrawByteCount int64         // 16 MiB
+	DrawMaxMultiple        int           // 16: a draw is at most this many times the above
+	DrawAhead              time.Duration // 4 s of the lease's rate
+	RenewAhead             time.Duration // 2 s of the lease's rate
+	RenewFraction          float64       // 0.25: or when this much of the last draw is left
+	TokenTtl               time.Duration // 15 min
+	ExtendInterval         time.Duration // 5 min
+	ExpiryMargin           time.Duration // 30 s
+	CarvedTokenTtl         time.Duration // 24 h, redisContractReservationLease
+	BalanceRefreshAge      time.Duration // 5 s
+	MaxCreditAge           time.Duration // 30 s
+	FloorTtl               time.Duration // 2 min; Validate refuses less than twice MaxCreditAge
+	ReserveRetryCount      int           // 3
+	CallTimeout            time.Duration // 1 s, redisContractAdmissionTimeout
+}
+```
+
 *Draw.* For a draw of D bytes the entry walks the payer's balances in draw order, and on each calls `reserve` for what is still wanted under a new token name, until D is reserved or the balances end. Each call is its own slot, so a draw over two balances is two calls and is not atomic: a host that dies between them leaves a token that lapses. Each granted amount becomes a draw, and its bytes join `available` when its answer arrives. A call with no answer is repeated under the same token name, which answers the token's amount; after `ReserveRetryCount` (3) tries the name is abandoned and its token, if any, lapses.
 
 *Attribution.* Spent bytes are attributed to draws only when a batch is planned, in rank order, the lowest rank first and within a rank the oldest draw, whatever order the draws were made in. So a lease that drew on the credit line and later, when a data pack regained room, on the pack, spends the pack's bytes first, and what is unspent at close is the highest ranks' (E-a, E-b). The invariant the host keeps: the draws' amounts sum to `available` plus the bytes spent and not yet planned into a batch plus the bytes of planned batches not yet carved.
 
-*Renewal.* A goroutine per entry, woken by `Spend` through a non-blocking send when `available` falls below the renew mark. Mark: the larger of a quarter of the last draw and `RenewAhead` (2 s) of the entry's spend rate, measured over the last second. Draw size: `LeaseDrawByteCount` (64 MiB, 16 MiB on Community) or, when larger, `DrawAhead` (4 s) of that rate rounded up to a multiple of it, at most 16 times it (1 GiB; 256 MiB on Community). A slow lease behaves as §20.6 draws it: 64 MiB, renewed at 75% used. A renewal that reserves nothing while Redis answered leaves the lease to run dry, and when `Spend` first answers false the entry calls `MarkSpent` once. A renewal Redis did not answer is retried with backoff and marks nothing: `Spend` answers false when the draws run out, and the edge resets, which is the closed direction.
+*Renewal.* A goroutine per entry, woken by `Spend` through a non-blocking send when `available` falls below the renew mark. Mark: the larger of a quarter of the last draw and `RenewAhead` (2 s) of the entry's spend rate, measured over the last second. Draw size: `DrawByteCount` (64 MiB, 16 MiB on Community) or, when larger, `DrawAhead` (4 s) of that rate rounded up to a multiple of it, at most 16 times it (1 GiB; 256 MiB on Community). A slow lease behaves as §20.6 draws it: 64 MiB, renewed at 75% used. A renewal that reserves nothing while Redis answered leaves the lease to run dry, and when `Spend` first answers false the entry calls `MarkSpent` once. A renewal Redis did not answer is retried with backoff and marks nothing: `Spend` answers false when the draws run out, and the edge resets, which is the closed direction.
 
-*Expiry.* Every draw carries `spendableUntil`: the host's monotonic time just before it sent the token's last answered `reserve`, `extend` or `carve`, plus `LeaseTokenTtl`, less `LeaseExpiryMargin` (30 s). A ticker a second extends each draw every `LeaseExtendInterval` (5 min). An `extend`'s answer replaces what the host holds as the token's amount, which settles a carve whose answer never came. A draw that reaches `spendableUntil`, or whose `extend` answers 0, is dropped: its unspent bytes leave `available`, and its spent bytes not yet in a carved batch are given up, added to `carved` and counted in `urnetwork_quota_lease_unbilled_bytes_total`. The host therefore stops spending a token's bytes at least the margin before Redis can give them to anyone else, whatever its reach to Redis.
+*Expiry.* Every draw carries `spendableUntil`: the host's monotonic time just before it sent the token's last answered `reserve`, `extend` or `carve`, plus `TokenTtl`, less `ExpiryMargin` (30 s). A ticker a second extends each draw every `ExtendInterval` (5 min). An `extend`'s answer replaces what the host holds as the token's amount, which settles a carve whose answer never came. A draw that reaches `spendableUntil`, or whose `extend` answers 0, is dropped: its unspent bytes leave `available`, and its spent bytes not yet in a carved batch are given up, added to `carved` and counted in `urnetwork_quota_lease_unbilled_bytes_total`. The host therefore stops spending a token's bytes at least the margin before Redis can give them to anyone else, whatever its reach to Redis.
 
 *A batch.* `quotahost`'s `ReportUsage` receives the engine's batch (its events as the engine counted them, its id fixed by QUOTA-M2-01's batcher) and, before it sends it:
 
@@ -4681,16 +4705,19 @@ type quotaLeaseDraw struct {
 plan     once per batch id, kept with the batch through its retries: for each event on a lease meter, take
          min(event bytes, spent - carved) from the entry, attribute it to draws in rank order, and group by
          balance: usage_id = model.ServiceUsageId(batch_id, network, meter, balance), with the list of
-         (token, amount, the token's amount before). carved rises by what was taken.
-carve    one script a balance. {1, sum}: the draws shrink by their amounts. {0, 0}: the sources are gone; the
-         part is dropped from the plan, its bytes are counted unbilled, and its draws are dropped as expired.
-         No answer: repeated with the same arguments on the batcher's backoff.
+         (token, amount). carved rises by what was taken.
+carve    one script a balance. Each source's expect is the token's amount as the host knows it when the carve
+         is first sent, and every retry repeats it. {1, sum}: the draws shrink by their amounts. {0, 0}: the
+         sources are gone; the part is dropped from the plan, its bytes are counted unbilled, and its draws
+         are dropped as expired. No answer: repeated with the same arguments on the batcher's backoff.
 post     only when every part of the plan is carved or dropped: the batch with its UsageCarve rows, each
          lease meter's event carrying the sum of its carved parts and no more, to model.ApplyUsageBatch or
          api's route. Retried under the batch's id for the batcher's 10 minutes.
 give up  at the horizon the batch is dropped, counted and alerted as today. Its carved tokens are left alone:
          the post may have been applied, and then the flush releases them; if not, they lapse at 24 h.
 ```
+
+*One operation a token at a time.* The operations that name one lease token (`reserve`, `extend`, `carve`, `settle`, `release`) are sent one at a time, each only when the one before was answered, so the host knows the token's amount whenever it computes the next. An operation that goes unanswered is repeated as it was. If it is abandoned, as a carve is with its batch at the horizon, the token's next operation is an `extend`, whose answer is the token's amount. Two batches of one lease therefore carve in the order they were planned, and a close settles a token only after its carve in flight.
 
 `ApplyUsageBatch` changes one rule: for the lease meters (`tls`, `mx`, `smtp`) an event's bytes must equal its carves' sum, else the batch is refused whole. Only `evs` bytes draw at apply.
 
@@ -4726,9 +4753,30 @@ rule        the engine acts on N's snapshot only while N is fresh. Otherwise eve
             for N answers unavailable with retry_after_ms, and the gate answers ErrSocketGateBehind.
 ```
 
-Each evidence calls `AclGateCache.Changed`, so a load follows. The cache's own 5-minute poll stays, as §8.9 has it, and is no evidence: it loads, and if the log did not move nothing changes. The host does not call `AclGateCache.Watch`: the wrapper registers the one callback on `{acl_*}v`, which only notes the network for the wrapper's worker (a key-event callback does no I/O). On a resubscription the worker reads `{acl_<N>}v` for every loaded network in pipelined batches of 1,000 and treats only the differing ones as evidence, where `Resync` would reload them all.
+```go
+// socketsservice/gate.go, added to what SOCK-M5-03 landed
+var ErrSocketGateBehind = errors.New("socket gate is behind the network's log")
 
-A process with no source, or one that has never loaded N, is as today: not ready, or `ErrSocketGateUnloaded`. A load the cache refuses with an alarm (a lower n, a second A_n, a broken link) covers nothing, so the network stays behind and, after the grace, unavailable at this process until a load succeeds: the log moved and this process cannot verify where to.
+// One network's state at one position, immutable: what a page or a Find judges everything on.
+type SocketGateView interface {
+	// The authorization log position of the state: a lease's pv and a ticket's policy_version.
+	Position() uint64
+	MayListen(request *SocketGateRequest, now time.Time) *SocketGateVerdict
+	MayDial(request *SocketGateRequest, now time.Time) *SocketGateVerdict
+	MayPublish(request *SocketGateRequest, now time.Time) *SocketGateVerdict
+	IdentityKey(sidecarId connect.Id) (publicKey []byte, found bool)
+}
+
+// SocketGate gains:
+//	// The network's newest state while it is fresh. ErrSocketGateUnloaded, or ErrSocketGateBehind past the grace.
+//	View(networkId connect.Id) (SocketGateView, error)
+//	// Evidence from the store that the network's log reached position. Nothing at or below the state's.
+//	Observe(networkId connect.Id, position uint64)
+```
+
+The landed `MayListen`, `MayDial`, `MayPublish` and `IdentityKey` stay, each a `View` and one call on it. Each evidence calls `AclGateCache.Changed`, so a load follows. The cache's own 5-minute poll stays, as §8.9 has it, and is no evidence: it loads, and if the log did not move nothing changes. The host does not call `AclGateCache.Watch`: the wrapper registers the one callback on `{acl_*}v`, which only notes the network for the wrapper's worker (a key-event callback does no I/O). On a resubscription the worker reads `{acl_<N>}v` for every loaded network in pipelined batches of 1,000 and treats only the differing ones as evidence, where `Resync` would reload them all.
+
+A process with no source, or one that has never loaded N, is as today: not ready, or `ErrSocketGateUnloaded`. A network the cache holds nothing of is asked for at once and answers unavailable until its first load: every caller outside `urnetwork-edge` is a bound sidecar, so its network has a log, and `ur/` names, which `urnetwork-edge` holds, are judged by no state. A load the cache refuses with an alarm (a lower n, a second A_n, a broken link) covers nothing, so the network stays behind and, after the grace, unavailable at this process until a load succeeds: the log moved and this process cannot verify where to.
 
 This narrows QD-055's "on failure the last verified projection keeps serving": it keeps serving while nothing says the log moved, which includes every api outage, since api is the log's only writer; it stops serving a network 5 s after evidence it cannot follow (question details-13-gate-behind).
 
@@ -4785,8 +4833,8 @@ pair_touch(ttl_max_ms, now_ms)                   each dialer field's ttl := min(
 2  the control bound: one token; then the fair queue. unavailable with retry_after_ms
 3  the page's shape, whole, before anything is judged: at most 1,024 entries, sorted by name key, each inside
    [key_start, key_end), field sizes as §9.5. A page that fails is refused invalid, and writes nothing.
-4  the network's snapshot S, taken once for the page. Unloaded or not fresh: unavailable. The removed-client set
-   holds the caller: 401.
+4  the network's view S (SocketGate.View), taken once for the page. Unloaded or not fresh: unavailable. The
+   removed-client set holds the caller: 401.
 5  per entry, in memory: the namespace (plaintext only for tls/, smtp/, ur/); the claim under the sidecar's
    identity key in S, verified once per (client, claim bytes, key) and remembered; MayListen for the caller's
    subject; the kill set; the namespace's ValidateListen. Each entry ends allowed or refused.
@@ -4813,12 +4861,12 @@ pair_touch(ttl_max_ms, now_ms)                   each dialer field's ttl := min(
 ```text
 1  authenticate; the control bound (the edge bound for urnetwork-edge callers); the fair queue: unavailable
 2  the kill set: denied
-3  the snapshot S of the name's network. Unloaded or not fresh: unavailable.
+3  the view S of the name's network (SocketGate.View). Unloaded or not fresh: unavailable.
    MayDial for the caller (an edge: autogroup:public, and MayPublish on tls/): denied, before any group is read
 4  the paying network is spent in the over-limit snapshot: quota
 5  the failed tickets: each verified and held by the caller, else dropped
 6  SocketStore.Pick: no_listener, busy, or a primary and a backup, each with its m record
-7  the newest snapshot S' (one pointer read). If its position is not S's, step 3's verdicts are taken again on
+7  the newest view S' (View again: one pointer read). If its position is not S's, step 3's verdicts are taken again on
    S', in memory. Then, for each picked listener L, the listener check:
      L's client is in the removed-client set, or its name in the kill set: refused
      on ur/ nothing more: the listener is a platform client the service authorizes (§9.4), with no subject
@@ -4856,7 +4904,7 @@ KillChanged(N)         the kill set is read again; Find and registration read it
 the cache's OnLoad     when N's position rose: N is queued for a revocation sweep.
 ```
 
-*The revocation sweep.* One worker pool a process (`SweepConcurrency`, 4). For a queued network at snapshot S(n): skipped when every entry of the run that raised the position is a statement of a kind that cannot take a socket verdict away: SIGNED_GRANT_ACTIVATE, SIGNED_UNSUSPEND, SIGNED_SIDECAR_ADMIT, SIGNED_MEMBER_ADMIT, SIGNED_ADMISSION_CONFIRM, SIGNED_OWNER_CONFIRM, SIGNED_KEY_REGISTER, and the repo statements no socket check reads (SIGNED_EVS_SHARE and SIGNED_REPO_CREATE through SIGNED_AUDIT_OPT_OUT). Every other statement kind, a BASE, a TICK and any kind the table does not hold sweep. The table is one function, `socketEntryMayNarrow`; the wrapped source sees each run's entry bytes and reads only `AuthEntry.kind` and the body's `Signed.type`. Not before `SweepMinInterval` (10 s) after this process's last sweep of N, always at the newest position. Then `ClaimSweep(N, n, 30 s)`: one script on `{sn_<N>}names` that takes the claim in field 0x00 unless a claim at n or above is unexpired. The claimer pages `{sn_<N>}names` 256 names at a time, reads each group's listeners, and applies step 7's listener check to each lease whose pv is at most n. It removes the refused in batches with `RemoveEntries` at cause 1 and position n, runs `pair_remove` for a listener left with no edge entry, sends `SOCKET_HINT_REVOKED` to each removed client, and yields between pages.
+*The revocation sweep.* One worker pool a process (`SweepConcurrency`, 4). For a queued network at snapshot S(n): skipped when every entry of the run that raised the position is a statement of a kind that cannot take a socket verdict away: SIGNED_GRANT_ACTIVATE, SIGNED_UNSUSPEND, SIGNED_SIDECAR_ADMIT, SIGNED_MEMBER_ADMIT, SIGNED_ADMISSION_CONFIRM, SIGNED_OWNER_CONFIRM, SIGNED_KEY_REGISTER, and the repo statements no socket check reads (SIGNED_EVS_SHARE and SIGNED_REPO_CREATE through SIGNED_AUDIT_OPT_OUT). Every other statement kind, a BASE, a TICK and any kind the table does not hold sweep. The table is one function, `socketEntryMayNarrow`; the wrapped source sees each run's entry bytes and reads only `AuthEntry.kind` and the body's `Signed.type`. Not before `SweepMinInterval` (10 s) after this process's last sweep of N, always at the newest position. Then `ClaimSweep(N, n, 30 s)`: one script on `{sn_<N>}names` that takes the claim in field 0x00 unless a claim at n or above is unexpired. The claimer pages `{sn_<N>}names` 256 names at a time, renewing its claim at each page, reads each group's listeners, and applies step 7's listener check to each lease whose pv is at most n. It removes the refused in batches with `RemoveEntries` at cause 1 and position n, runs `pair_remove` for a listener left with no edge entry, sends `SOCKET_HINT_REVOKED` to each removed client, and yields between pages.
 
 A sweep that dies leaves nothing wrong: each lease it did not reach is judged at its listener's next heartbeat by whichever process serves it, and at any Find that picks it; its pair ends by `EdgePairTtl`.
 
@@ -4877,6 +4925,17 @@ a lease of (group, L)
 a pair of (L, dialer)
   none --pair_set at or above the floor--> pair --pair_touch, pair_set--> pair
   pair --pair_remove at x--> floor{x}, 10 min; pair --its ttl--> none
+```
+
+**Settings**, added to `SocketsSettings` and `SocketStoreSettings`, each a positive duration or count that `Validate` holds:
+
+```text
+GateBehindGrace        5 s      TombstoneTtl           10 min (above the cache's poll and one load)
+UnlistenFenceTtl       60 s     RemovedClientTtl       10 min
+EdgePairTtl            15 min   EdgePairTouchInterval  5 min     PairWriteInterval  60 s
+SweepMinInterval       10 s     SweepClaimTtl          30 s      SweepPageCount 256, SweepConcurrency 4
+OverLimitInterval      5 s      OverLimitTimeout       2 s
+BehindRetryAfter       250 ms   FencedRetryAfter       1 s
 ```
 
 **Bounds, stated.** T0 is api's append of the entry that revokes listener L's grant, with its INCR of `{acl_}v`.
@@ -4928,7 +4987,7 @@ L5 Order        a lease's spent bytes are debited to its balances in draw order 
                 reverse (E-a, E-b)
 ```
 
-*Why.* Call R(t) the tokens' sum and F(t) the floor or, when there is none, the caller's reading. Claim: at every reservation, `min(reading, floor) - R` is at most `bal - pending - (bytes held by tokens whose debit is not yet applied)`. A reading is the balance at some earlier time, so it exceeds the present balance by exactly the debits the two flushes applied since. For each of those, either its token is still in R, which subtracts it, or `release-debited` ran, which lowered the floor to the balance after that debit, in the same script that removed the token, and the floor is still there because the reading is younger than `MaxCreditAge` and the floor older than neither. So what the script grants is free in truth. A byte a host spends was granted (`Spend` only takes `available`, which only reservations add to: L3, with expiry removing bytes before Redis can and `carve` shrinking a draw only by what its plan attributed). A byte is journaled only after its `carve` answered {1, sum}, which happens only while the lease tokens still hold it, and from then the carved token holds it until the flush's commit. So every journaled byte is inside R until its debit is applied, and L1 follows. L2: a batch is planned once and keeps its id; `carved` only rises; api applies an id once; a row is keyed (balance, usage id). L4 is the tokens' lifetimes with no marker. L5 is the attribution rule and the order of `settle` at close.
+*Why.* A reservation grants at most `min(reading, floor) - T`, T being the sum of the balance's tokens. Every byte reserved and not yet debited is in a token: a lease token from its reservation, a carved token from its carve to the flush's commit. So what is free in truth is the balance less the tokens of bytes not yet debited. A reading is the balance at an earlier time, so it is too high by exactly the debits applied since, and those fall in two groups. A debit whose token is still there is subtracted in T. A debit whose token `release-debited` removed lowered the floor, in that same script, to the balance it left, so the floor is at most the balance after the last such debit; and the floor is still set, because it lives `FloorTtl` and no reading older than `MaxCreditAge` is used, so a floor that has expired was set before the reading was taken, and the reading already holds its debit. So what the script grants is free in truth. A byte a host spends was granted (`Spend` only takes `available`, which only reservations add to: L3, with expiry removing bytes before Redis can and `carve` shrinking a draw only by what its plan attributed). A byte is journaled only after its `carve` answered {1, sum}, which happens only while the lease tokens still hold it, and from then the carved token holds it until the flush's commit. So every journaled byte is inside R until its debit is applied, and L1 follows. L2: a batch is planned once and keeps its id; `carved` only rises; api applies an id once; a row is keyed (balance, usage id). L4 is the tokens' lifetimes with no marker. L5 is the attribution rule and the order of `settle` at close.
 
 **Sockets.** n(p) is process p's verified position, which only rises (the cache never installs a lower pin: I-16, section 5).
 
@@ -4944,16 +5003,58 @@ S5 Evidence       no page is judged, no pick made and no ticket signed by a proc
 S6 Bounded        the bounds of 13.2.3's table
 ```
 
-*Why.* S1 is step 7: every verdict a ticket rests on is taken on the snapshot read at step 7, and a listener is passed only if that snapshot allows it then. S2 and S3 are the group script: a `put` below a tombstone's position or set is refused in the same script that would write it, a tombstone is cleared only by a `put` at or above both its numbers, and a lease keeps the highest position it was admitted at. After a tombstone is cleared by a newer admission and that lease is unlistened, an old `put` is still refused, by its set version, which is below the unlisten's. S4 is `pair_set`'s check against `~f`. S5 is the fresh rule, read at steps 4 and 3 and again at step 7; a store call already in flight when the evidence came is what S2 and S4 are for. S6 follows from S5 for a process that has evidence, from the resubscription check and the poll for one that has none, and from the lifetimes.
+*Why.* S1 is step 7: every verdict a ticket rests on is taken on the snapshot read at step 7, and a listener is passed only if that snapshot allows it then. S2 and S3 are the group script: a `put` below a tombstone's position or set is refused in the same script that would write it, a tombstone is cleared only by a `put` at or above both its numbers, and a lease keeps the highest position it was admitted at. After a tombstone is cleared by a newer admission and that lease is unlistened, an old `put` is still refused, by its set version, which is below the unlisten's. S4 is `pair_set`'s check against `~f`. S5 is the fresh rule, read at a page's step 4 and a Find's step 3, with step 7's listener check refusing a lease admitted above the signer's position; a store call already in flight when the evidence came is what S2 and S4 are for. S6 follows from S5 for a process that has evidence, from the resubscription check and the poll for one that has none, and from the lifetimes.
 
-**The models.** Three small models, one per part, each with twins that break one rule and must fail, and a reach configuration that denies a state the design must reach. `Pacing.tla` counts time in cells and lets Wild erasers ask at any time or never; time passes only once every obedient eraser with an ask due has asked. `Lease.tla` has one balance, hosts that read, reserve, spend, plan, carve, post, crash, restart, expire and close, a flush in two steps, lost post answers and late duplicate carves; it holds one live token a lease, each reservation being a token of its own that never grows, and leaves the attribution over several draws and balances to the argument above. `SockReg.tla` has one listener on one name, a log whose entries leave its grant standing or not, two processes with their own positions and evidence, and registration and Find in two steps each; its processes act on no grace (GateBehindGrace 0), so S5 there is the strict form.
+**The cross-cutting rules, where they bear.**
+
+```text
+X3, D-SOCK-14   every verdict is the gate's, on a state it verified (section 5). A lease's pv, a tombstone and a
+                floor only refuse writes; no ticket is signed on them, only on the signer's own state
+X1              an edge cannot judge a listener, since TLS ends at the listener: step 7's listener check is the
+                service's, and is why it exists
+X8, D-SOCK-4    the service contacts no listener: a removal is a store write and a hint
+X10, I-15       a removed client: the removed-client set at once, RemoveClient's tombstones, its pairs' floor
+X11             an edge Find's payer is the listener's network; the edge's lease (13.2.2) is the stop, and
+                Find's spent check saves the ticket
+C9              the pair is a lease the listener's registration keeps, and its floor outlives its removal
+I-4             the service originates only denials here: unavailable, revoked, a removal for cause
+I-12            no Postgres on a page, a Find, a Spend, a reservation or a carve; api is reached only off them
+I-13            no metric or log line carries a network, name, client or balance id; a tombstone holds only ids
+                its group already held
+I-16            a process's position never lowers; pv, sv and the floors are compared and never raise a verdict
+```
+
+**The models.** Three small models, one per part, each with twins that break one rule and must fail, and a reach configuration that denies a state the design must reach. `Pacing.tla` counts time in cells and lets Wild erasers ask at any time or never; time passes only once every obedient eraser with an ask due has asked. `Lease.tla` has one balance, hosts that read, reserve, spend, plan, carve, post, crash, restart, expire and close, a flush in two steps, lost post answers and late duplicate carves; it holds one live token a lease, each reservation being a token of its own that never grows, and leaves the attribution over several draws and balances to the argument above. `SockReg.tla` has one listener on one name, a log whose entries leave its grant standing or not, two or three processes with their own positions and evidence, and registration and Find in two steps each; its processes act on no grace (GateBehindGrace 0), so S5 there is the strict form.
 
 Working out the lease model changed the design twice. A first version let a host carve a batch planned under one token out of a token it reserved later, and `Backed` failed at depth 10: bytes spent under a token that has since expired are given up, never carved from another. A second version merged a lease's reservations into one token, and a late duplicate carve whose `expect` matched again moved bytes twice: each reservation is its own token, so an amount never returns.
 
-Runs of 2026-11-10, TLC rev d8fb231, `run-sched.sh details-13 all`, breadth-first over the whole graph at each configuration's bounds. Disk is the most the run's state directory held, sampled every 5 s.
+Runs of 2026-11-10, TLC rev d8fb231, one pass of `run-sched.sh details-13 all`, which ended 0: every design configuration passed and every twin and reach configuration ended with its one invariant violated. Each run is breadth-first; a design's states are its whole graph at its bounds, a twin's and a reach configuration's those found when the violation was. Disk is the most the run's state directory held, sampled every 5 s, so 0 for a run that ended inside the first sample. The machine was shared with four build lanes, and the two lease designs took under 7 and 5 minutes when run alone.
 
 ```text
-(the full pass is running as this version lands; each configuration has passed, or failed as it must, in single runs today, and the next version records the pass)
+configuration              what it holds                                                  result                                           states  depth         time     disk
+Pacing                     three obedient erasers and one wild, R = 2, 14 cells           pass                                              6,899     33    under 1 s     0 MB
+Pacing-Ghosts              one obedient eraser among three wild, R = 2, 12 cells          pass                                          1,241,261     29         15 s    79 MB
+Pacing-Three               three obedient erasers and two wild, R = 3, 12 cells           pass                                            201,974     30          3 s     0 MB
+Lease                      two hosts, a balance of 3 and draws of 2, two tokens a host    pass                                         37,710,290     38  11 min 08 s   970 MB
+Lease-Crash                two hosts, a balance of 2 and draws of 2, three tokens a host  pass                                         44,646,597     41  11 min 21 s  1219 MB
+SockReg                    two processes, a log of two entries, three pages               pass                                          1,042,443     20          3 s     0 MB
+SockReg-Regrant            two processes, a log of three entries, two pages               pass                                          1,321,149     23          3 s     0 MB
+SockReg-Wide               three processes, a log of two entries, three pages             pass                                         17,808,184     22   1 min 29 s   557 MB
+PacingTwin-Arrival         the landed bucket, every eraser obedient                       Turn violated, a trace of 135 states          7,488,412    135         14 s    81 MB
+PacingTwin-Tail            a bucket refusal goes to the tail; two late erasers            Turn violated, a trace of 68 states           1,804,133     68          5 s    82 MB
+LeaseTwin-NoFloor          a reservation trusts the host's reading                        NoOverdraw violated, a trace of 17 states       614,374     18          2 s     0 MB
+LeaseTwin-FloorExpires     the floor forgotten under an older reading                     NoOverdraw violated, a trace of 17 states     1,240,976     19          3 s     0 MB
+LeaseTwin-ReleaseFirst     the flush releases before it commits                           NoOverdraw violated, a trace of 15 states       252,787     17          1 s     0 MB
+LeaseTwin-BlindCarve       a carve that moves whatever its token holds                    NoOverdraw violated, a trace of 24 states    11,872,096     24         42 s   872 MB
+LeaseTwin-SpendPastExpiry  a host spending past its token                                 Backed violated, a trace of 4 states                 85      7    under 1 s     0 MB
+LeaseTwin-Replan           an unanswered batch planned again                              BilledOnce violated, a trace of 10 states         1,998     10    under 1 s     0 MB
+SockRegTwin-NoTombstone    a removal that leaves nothing                                  FencedLease violated, a trace of 9 states        27,786      9    under 1 s     0 MB
+SockRegTwin-NoRecheck      Find signs for what the pick returned                          TicketSound violated, a trace of 7 states        11,559      8    under 1 s     0 MB
+SockRegTwin-NoPairFloor    a pair written at any position                                 PairFenced violated, a trace of 9 states         32,004     10    under 1 s     0 MB
+SockRegTwin-BehindAllows   a process that admits while behind                             EvidenceBound violated, a trace of 5 states         151      5    under 1 s     0 MB
+SockRegTwin-NoSetVersion   pages taken in any order                                       SetOrder violated, a trace of 9 states           24,251      9    under 1 s     0 MB
+LeaseReach-Settled         a balance spent by two hosts and debited to the byte           NotSettled violated, a trace of 18 states       894,089     19          3 s     0 MB
+SockRegReach-Regrant       revoked, swept, granted again, found again                     NoRegrant violated, a trace of 12 states        319,172     13    under 1 s     0 MB
 ```
 
 What the models do not show: liveness beyond the reach configurations (a lease that is never starved of renewals, a sweep that ends); the attribution of spent bytes over several draws; clocks, which appear only as the order of steps (the floor's lifetime against a reading's age is `LeaseTwin-FloorExpires`'s assumption, and a seat's tolerance is not modelled); and Redis loss, which empties each model's store and is 13.5's subject.
@@ -4974,8 +5075,8 @@ tolerance            from the seat's instant to its second's end: 1 s, 750, 500 
 ```text
 Spend                      one compare-and-swap, one add, one load for the renew mark; no lock, no I/O, 0 allocs
 open                       one balance read unless one under 5 s old is held; one script a balance drawn (usually 1)
-renewal                    one script a balance drawn; a slow lease, one per 48 MiB spent; a fast one, one per
-                           2 s of traffic at most (a draw of 4 s, renewed with 2 s left)
+renewal                    one script a balance drawn; a slow lease, one per 48 MiB spent; a fast one, about one
+                           per 4 s (a draw of 4 s of its traffic, renewed with 2 s left)
 extend                     one script a live draw per 5 min: 10,000 live leases cost about 40 calls a second
 carve                      one script per (lease, balance) with spend in a window: 10,000 busy leases, 167 a second
 post                       as today: one batch a producer a minute, now with at most 4,000 carve rows
@@ -5089,9 +5190,10 @@ sidecartest/fake_quota_test.go the fake on the same vectors as the script; a ref
                                passed one replayed with no second seat; no seat for an ask its allowance refuses
 quotasuite                     the pacing cases rewritten to the seat rule: equal turns (as written); a waiting
                                eraser keeps its place (as written); returning together: twelve with lapsed seats
-                               ask at one instant in a hostile fixed order, R take that second, each of the rest
-                               is told an instant in a later second, and all twelve have taken three times
-                               within 10 s; a replay of a refusal after its retry_after_ms passes
+                               ask at one instant in a hostile fixed order, R uploads are taken that second (two
+                               by the first asker, whose next seat is the cell behind its own), each of the
+                               rest is told an instant in a later second, and all twelve have taken three
+                               times within 10 s; a replay of a refusal after its retry_after_ms passes
 socketsservice/                registrations_test.go, find_test.go, gate_projection_test.go, sweep_test.go,
                                over_limit_test.go: 13.7's lists, on FakeSocketStore, a fake gate source and
                                the fake clock
@@ -5141,7 +5243,7 @@ Order: QUOTA-M2-14 and QUOTA-M2-15 at once, in the ops lane; QUOTA-M2-07 after Q
 
 **QUOTA-M2-15, the reservation script's lease operations** (new; server; M). `server/model/subscription_redis_admission.go`: the seventh key, the floor rule on the reserving operations when it is passed, `extend`, `carve` and `release-debited`, all below `local rawTotal=`. `redisContractReservationKeys` keeps six; a new `redisLeaseReservationKeys` returns seven. `server/model/quota_lease_reservation.go`: the Go callers, each taking a `QuotaRateRedis`-shaped runner so a host passes its `ServiceHost.Redis`. `server/model/service_debit_flush.go` and `subscription_transfer_debit.go`: `RETURNING balance_byte_count` and `release-debited` with seven keys; the service flush also exports its oldest unreleased row's age, `urnetwork_service_debit_oldest_seconds`, as the transfer flush does. `server/model/service_usage_batch_model.go`: a lease meter's event must equal its carves. Trap: the contract admission path is not touched, so M6's escrow benchmark reads the same admission; the transfer flush's release gains one SET in the script, which the benchmark's settlement half should be rerun on.
 
-**QUOTA-M2-07, leases** (held; L; scope changed). It loses the script's operations to QUOTA-M2-15 and keeps the host: `server/quotahost/lease.go` (the set, entries, `Spend`, draws, renewal, expiry, close), `lease_balances.go` (`BalanceSource`, the 5 s and 30 s ages) and the `ReportUsage` wrapper's plan, carve and post. It gains the repo sidecar: `sidecartest/fake_quota.go` takes the same rules where a test can see them (a lease token's 15 min against a carved one's 24 h, expiry's unbilled bytes, no debit at apply for a lease meter), and quotasuite's lease cases stay as they are, which the real lease must pass at their slow rate. Build order: the entry and `Spend` with their T1 test; draws on QUOTA-M2-15's `reserve`; attribution and the plan; the carve and post; expiry and extend; close and drain; renewal's rate rule last. Traps beyond the plan's: a draw's bytes join `available` only when its answer arrives; the plan is made once per batch id; a carved token is never released by the host; `MarkSpent` is called only when Redis answered and reserved nothing.
+**QUOTA-M2-07, leases** (held; L; scope changed). It loses the script's operations to QUOTA-M2-15 and keeps the host: `server/quotahost/lease.go` (the set, entries, `Spend`, draws, renewal, expiry, close), `lease_balances.go` (`BalanceSource`, the 5 s and 30 s ages) and the `ReportUsage` wrapper's plan, carve and post. It gains the repo sidecar: `sidecartest/fake_quota.go` takes the same rules where a test can see them (a lease token's 15 min against a carved one's 24 h, expiry's unbilled bytes, no debit at apply for a lease meter), and quotasuite's lease cases stay as they are, which the real lease must pass at their slow rate. Build order: the entry and `Spend` with their T1 test; draws on QUOTA-M2-15's `reserve`; attribution and the plan; the carve and post; expiry and extend; close and drain; renewal's rate rule last. Traps beyond the plan's: a draw's bytes join `available` only when its answer arrives; the plan is made once per batch id, and a carve's `expect` is fixed when it is first sent; one operation a token at a time; a carved token is never released by the host; `MarkSpent` is called only when Redis answered and reserved nothing.
 
 **SOCK-M5-18, store fences** (new; sidecar and server; M). SOCK-M5-03's contract and SOCK-M5-04's scripts, both landed. `socketsservice/store.go`: `SocketStorePage` gains `PolicyVersion`, `SidecarId` and `RefusedNameKeys`; `SocketStoreEntryOutcome` gains `Fenced`, `FencePolicyVersion`, `Stale` and `PriorPolicyVersion`; `SocketStoreListener` gains `SidecarId`, `PolicyVersion` and `SetVersion`; `SocketStorePageResult` gains `EdgeEntriesRemain`; `RemoveEntries` takes a cause and a position and answers each ref removed, kept (with the lease's position) or absent; `SetServicePair` takes a position and answers whether it wrote and the floor; `RemoveServicePairs` takes a position; `RemoveClient` works in batches of 1,024 name keys, taking each out of the set once its leases are gone; `TouchServicePairs` and `ClaimSweep` are new. `sidecartest/socket_store_fake.go` and `socket_store_suite.go` follow. `server/model/socket_store_scripts.go`: `m`'s three fields (an `m` without them reads as sidecar empty, pv 0, sv 0, so a lease written before the change is judged at the next Find and replaced at the next heartbeat), `x:<L>`, the group's hash kept while a tombstone lives, the three pair scripts, the claim script on the listing's field 0x00 (which `ListNames` skips), and the commit script's edge answer. Everything else of both tasks stands.
 
@@ -5149,11 +5251,11 @@ Order: QUOTA-M2-14 and QUOTA-M2-15 at once, in the ops lane; QUOTA-M2-07 after Q
 
 **SOCK-M5-06, the find path** (held; L; scope grown by the listener check). Beyond the plan: step 7's second snapshot read and the listener check, with its removal for cause; `pair_set` before signing, with its memo; `unavailable` when no picked listener can be judged. The plan's "one script per Find" test stands for a Find whose listeners pass; its op-counting test names the refused-listener path's extra calls.
 
-**SOCK-M5-07, the gate, the poll and the sweep** (held; L; scope grown by evidence). `gate_projection.go`: the wrapped source, evidence, `Observe`, `ErrSocketGateBehind`, the resubscription check; `socketsservice/gate.go` gains `Observe` on `SocketGate` and the error, and `ClosedSocketGate` takes them. `over_limit.go` as planned. `sweep.go`: the removed-client set, `ClientRemoved`, `socketEntryMayNarrow` and the sweep. SOCK-M5-08's host calls no `AclGateCache.Watch`. Nothing in `acl_gate.go` changes.
+**SOCK-M5-07, the gate, the poll and the sweep** (held; L; scope grown by evidence). `gate_projection.go`: the wrapped source, evidence, `View`, `Observe`, `ErrSocketGateBehind`, the resubscription check; `socketsservice/gate.go` gains `SocketGateView`, `View` and `Observe` on `SocketGate` and the error, and `ClosedSocketGate` and `service_test.go`'s gate take them. `over_limit.go` as planned. `sweep.go`: the removed-client set, `ClientRemoved`, `socketEntryMayNarrow` and the sweep. SOCK-M5-08's host calls no `AclGateCache.Watch`. Nothing in `acl_gate.go` changes.
 
 ### 13.8 Proposed DESIGN.md text
 
-**§20.7, the closure row.** For "and within its turn of the network's pacing, which takes at most R uploads a second however many erasers ask at once ... each takes one at most every k/R s": "and within its turn of the network's pacing: each asking eraser holds a seat, a cell 1/R s wide at the tail of the network's seats, good from its instant to the end of its second; a seat is handed out only in a second with a free cell, so the network takes at most R uploads a second whatever asks arrive and in whatever order; with k erasers asking, each takes one every k/R s; an eraser that misses its seat's second is seated again, at once while the second has a free cell and else one round later". The wait row keeps its numbers.
+**§20.7, the closure row.** For "and within its turn of the network's pacing, which takes at most R uploads a second however many erasers ask at once ... each takes one at most every k/R s": "and within its turn of the network's pacing, R being evs_closure_uploads_per_s (4): each asking eraser holds a seat, a cell 1/R s wide at the tail of the network's seats, good from its instant to the end of its second; a seat is handed out only in a second with a free cell, so the network takes at most R uploads a second whatever asks arrive and in whatever order; with k erasers asking, each takes one every k/R s; an eraser that misses its seat's second is seated again, at once while the second has a free cell and else one round later". The wait row keeps its numbers.
 
 **§20.7, Counters.** After "one all-or-none Lua script per `{sq_<network_id>}` and `debit_id`": "a debit id that passed answers pass again and counts nothing; one that was refused is judged afresh".
 
@@ -5167,9 +5269,9 @@ Order: QUOTA-M2-14 and QUOTA-M2-15 at once, in the ops lane; QUOTA-M2-07 after Q
 
 **§9.6, Find.** Step 4 becomes "pick (9.7), then the listener check: the service signs only for a listener its own newest state allows, removing one it refuses", and step 5 gains "a pair is written only at or above the floor a removal left". The Edge Finds paragraph: "its TTL the lesser of the grant's remaining life and 15 min for `tls/` and `smtp/`, renewed by the listener's accepted registration, and 60 min for `ur/`, refreshed per Find".
 
-**§9.8.** For "on `{X}c_removed` ... a projection revocation or a §21 suspension, deletes entries and pairs and sends `SocketHint`": "one process a network and position sweeps the network's leases against its state after an entry that can narrow, removing for cause; every process refuses a removed client's and a killed name's leases from memory". Add the freshness rule: "A process acts on a network's state only while it has no evidence older than 5 s that the log passed it; past that it answers unavailable for that network."
+**§9.8.** For "on `{X}c_removed` ... a projection revocation or a §21 suspension, deletes entries and pairs and sends `SocketHint`": "on `{X}c_removed` every process refuses the client's leases from memory at once and removes them with its pairs; after an entry that can narrow, one process a network and position sweeps the network's leases against its state, removes for cause those it refuses, with the pairs of a listener left with no edge entry, and sends `SocketHint`; a §21 suspension is refused from the kill set in memory". Add the freshness rule: "A process acts on a network's state only while it has no evidence older than 5 s that the log passed it; past that it answers unavailable for that network."
 
-**§8.9, Gates.** After "and refuse a lower n, or a second A_n at one n, with an alarm": "A gate service that learns a network's log moved (the `{acl_}v` event, or a position in its own store above the one it holds) and has not verified the new entries within 5 s refuses for that network until it has; with no such evidence the last verified state serves."
+**§8.9, Gates.** After "and refuse a lower n, or a second A_n at one n, with an alarm": "A sockets process that learns a network's log moved (the `{acl_}v` event, or a position in its own store above the one it holds) and has not verified the new entries within 5 s refuses for that network until it has (§9.8); with no such evidence the last verified state serves."
 
 **§2.8.** sock-1's `sees` gains "the listener's sidecar_id, the authorization log position and set_version its lease was admitted at, and for 10 min after a removal the listener's client_id with the position it was removed at"; sock-3's gains "the position its pairs were last removed at" and its ttl becomes "the grant's expiry, at most 15 min past the listener's last accepted registration (`ur/`: 60 min, refreshed per Find)"; sock-4's `sees` gains "the authorization log position of the network's newest revocation sweep"; api-13's gains "a balance's lowest credit shown in the last 2 min (`{escrow_<balance_id>}approx_floor`)" and, for "64 MiB reservations, 16 MiB on Community", "reservations of 64 MiB to 1 GiB, 16 to 256 MiB on Community".
 

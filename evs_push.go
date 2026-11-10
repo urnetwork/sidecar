@@ -80,6 +80,8 @@ type evsPushAttempt struct {
 	refMode      protocol.EvsRefMode
 	baseVersion  uint64
 	refId        Id
+	// the token scope it posts under
+	scope string
 }
 
 // Builds sealed's push under pushId, its segments' receipts in hand.
@@ -101,6 +103,7 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		PushId: pushId, BaseVersion: plan.BaseVersion, BaseChain: plan.BaseChain, Generation: repoKey.Generation(),
 		GroupId: repoKey.GroupId(), GenerationCommitment: repoKey.Commitment(), PathEpoch: plan.PathEpoch, Auth: authPin,
 		SignerSidecarId: identity.SidecarId, ClientId: identity.ClientId, TimeMs: timeMs, SourcesStand: 0 < len(plan.Sources),
+		Flags: plan.Flags, Erased: plan.Erased,
 	}
 	manifest, err := NewEvsManifestKey(repoKey)
 	if err != nil {
@@ -116,7 +119,10 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		return nil, err
 	}
 	segmentIdReceipts := map[string]*protocol.EvsUploadReceipt{}
-	attempt := &evsPushAttempt{pushId: pushId, refMode: plan.RefMode, baseVersion: plan.BaseVersion, refId: plan.RefId}
+	attempt := &evsPushAttempt{pushId: pushId, refMode: plan.RefMode, baseVersion: plan.BaseVersion, refId: plan.RefId, scope: plan.scope}
+	if attempt.scope == "" {
+		attempt.scope = evsScopeWrite
+	}
 	for _, segment := range sealed.Segments {
 		if segment.Receipt == nil {
 			return nil, fmt.Errorf("%w: a segment posted before its upload answered", ErrEvsWriteInvalid)
@@ -216,17 +222,22 @@ func (self *EvsRepo) sendPush(ctx context.Context, attempt *evsPushAttempt) (*pr
 	request := &protocol.EvsPushRequest{
 		Statement: attempt.built.Statement.Bytes, Payload: attempt.built.Payload, Receipts: attempt.receipts,
 	}
-	return self.postPush(ctx, attempt.pushId, request)
+	return self.postPushAs(ctx, attempt.pushId, request, attempt.scope)
 }
 
 // POST .../push, the same bytes until it answers anything but a 429, a 503 or nothing.
 func (self *EvsRepo) postPush(ctx context.Context, pushId Id, request *protocol.EvsPushRequest) (*protocol.EvsPushReply, error) {
+	return self.postPushAs(ctx, pushId, request, evsScopeWrite)
+}
+
+// postPush under the token scope scope: a deposit's deposit, or rw.
+func (self *EvsRepo) postPushAs(ctx context.Context, pushId Id, request *protocol.EvsPushRequest, scope string) (*protocol.EvsPushReply, error) {
 	call := &evsCall{
 		route:  "POST /evs/v1/repos/{repo_id}/push",
 		method: http.MethodPost,
 		path:   "/evs/v1/repos/" + evsUrlId(self.repoId) + "/push",
 		repoId: self.repoId,
-		role:   evsScopeWrite,
+		role:   scope,
 		body:   request,
 	}
 	reply := &protocol.EvsPushReply{}

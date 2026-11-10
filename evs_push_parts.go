@@ -38,7 +38,7 @@ func (self *EvsRepo) sendParts(ctx context.Context, attempt *evsPushAttempt) (*p
 		if err != nil {
 			return nil, err
 		}
-		reply, err := self.postPush(ctx, attempt.pushId, &protocol.EvsPushRequest{Statement: attempt.built.Statement.Bytes, PartPlaces: places})
+		reply, err := self.postPushAs(ctx, attempt.pushId, &protocol.EvsPushRequest{Statement: attempt.built.Statement.Bytes, PartPlaces: places}, attempt.scope)
 		if IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING) && tries < self.client.settings.PartsMissingRetryCount {
 			continue
 		}
@@ -104,7 +104,7 @@ func (self *EvsRepo) postPart(ctx context.Context, attempt *evsPushAttempt, inde
 		method: http.MethodPost,
 		path:   "/evs/v1/repos/" + evsUrlId(self.repoId) + "/push/" + evsUrlId(attempt.pushId) + "/" + strconv.Itoa(index+1),
 		repoId: self.repoId,
-		role:   evsScopeWrite,
+		role:   attempt.scope,
 		body: &protocol.EvsPartRequest{
 			Statement: attempt.built.Statement.Bytes, Part: attempt.built.Parts[index], Receipts: attempt.partReceipts[index],
 		},
