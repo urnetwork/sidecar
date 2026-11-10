@@ -292,3 +292,49 @@ func TestGkmReconcilerHintsAShrinkAndAnExpiryWithinOneInterval(t *testing.T) {
 		t.Errorf("pending hints within an interval of the expiry: %d", count)
 	}
 }
+
+// DESIGN-DETAILS 6.2.3's H1: after a rotation that covers a shrink, the gate is open, yet pending still goes to the
+// writers every DroppedLeafHintInterval while the newest epoch's pin is below the drop, since the dropped holder's
+// leaf may still stand; it stops at the first epoch whose pin passes the drop.
+func TestGkmReconcilerHintsWhileADroppedHolderPrecedesTheNewestEpochsPin(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	writer, readerA := testId("sc-writer"), testId("sc-reader-a")
+	for _, sidecarId := range []sidecar.Id{writer, readerA} {
+		fixture.clientOf(sidecarId)
+	}
+	putEpoch := func(epoch uint64, pin *bridge.AuthPin) {
+		fixture.put("meta-2", GkmEpochKey(world.groupId, epoch), fixture.marshal(&protocol.GkmEpochObject{
+			Header: &protocol.GkmCommitHeader{Generation: 1, Auth: pin}, TimeMs: fixture.clock.Now().UnixMilli(),
+		}))
+	}
+	view1 := world.appendState([]sidecar.Id{writer, readerA}, []sidecar.Id{writer}, 0, nil)
+	world.key1 = world.putGeneration(nil, view1.Pin())
+	putEpoch(0, view1.Pin())
+	world.awaitState(view1, func() { world.state.set(world.networkId, view1, []sidecar.Id{world.repoId}, nil) })
+	if count := world.pendingHints(writer); count != 0 {
+		t.Fatalf("a first sight with nothing dropped hinted: %d", count)
+	}
+	// A is revoked at position 2, and a wrapped writer's rotation covers it at once: the gate is open
+	view2 := world.appendState([]sidecar.Id{writer}, []sidecar.Id{writer}, 2, nil)
+	world.putGeneration(world.key1, view2.Pin())
+	world.awaitState(view2, func() { world.state.set(world.networkId, view2, []sidecar.Id{world.repoId}, &writer) })
+	hinted := world.pendingHints(writer)
+	if hinted == 0 {
+		t.Fatalf("no pending hint at the shrink")
+	}
+	// epoch 0's pin is below the drop: the hint repeats though the gate is open
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	if count := world.pendingHints(writer); count != hinted+1 {
+		t.Errorf("pending hints one interval into a dropped holder before the newest epoch: %d, was %d", count, hinted)
+	}
+	// a writer leaf's Remove lands at a pin past the drop: the hints stop
+	putEpoch(1, view2.Pin())
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	stopped := world.pendingHints(writer)
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.DroppedLeafHintInterval) })
+	if count := world.pendingHints(writer); count != stopped {
+		t.Errorf("pending hints after an epoch whose pin passes the drop: %d, was %d", count, stopped)
+	}
+}
