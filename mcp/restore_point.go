@@ -372,6 +372,23 @@ func (self *RestorePoint) load() (bool, error) {
 	if ledger.Paths == nil {
 		ledger.Paths = map[string][]*RestoreObservation{}
 	}
+	// a hold lives with the process that took it: one left by the last process is removed, its edit's before
+	// unknown, and the point's byte count is its base copies alone again
+	held, err := self.store.List(restoreHoldCopyPrefix)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range held {
+		if err := self.store.Remove(entry.Name); err != nil {
+			return false, err
+		}
+	}
+	manifest.ByteCount = 0
+	for _, file := range manifest.Files {
+		if file.Copy != "" && file.State != nil {
+			manifest.ByteCount += file.State.Size
+		}
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.manifest = manifest
@@ -725,9 +742,9 @@ func (self *RestorePoint) readCopy(name string) ([]byte, error) {
 	return content, nil
 }
 
-// A path's base: what the walk saw, or, for a path clean at the start, HEAD's blob, learned from git when first
-// asked and kept. A path the repository never held has an absent base, exact. ErrRestoreNoRepository with no
-// repository.
+// A path's base: what the walk saw, or, for a path clean at the start, its blob in the commit HEAD named then,
+// learned from git when first asked and kept. A path that commit never held has an absent base, exact unless
+// .gitignore hides the path. ErrRestoreNoRepository with no repository.
 func (self *RestorePoint) BaseOf(ctx context.Context, path string) (*RestoreBaseFile, error) {
 	path = self.relativePath(path)
 	file, noRepo := func() (*RestoreBaseFile, bool) {
@@ -761,26 +778,46 @@ func (self *RestorePoint) BaseOf(ctx context.Context, path string) (*RestoreBase
 	return file, self.saveManifest()
 }
 
-// A clean path's base from HEAD: `git ls-files -s` names its blob and mode, and `git cat-file blob` its bytes, hashed
-// here. Untracked at HEAD means absent.
+// A clean path's base from the commit HEAD named at the run's start, never the index or a later HEAD, which a
+// `git add` or a commit during the run moves: `git ls-tree` names its blob and mode there, and `git cat-file blob`
+// its bytes, hashed here. A path that commit does not hold was untracked, so the walk would have copied it had it
+// existed, unless .gitignore hides it: an ignored path's start is unknown, so its base is not exact. A tree or a
+// submodule there is another kind, never restored.
 func (self *RestorePoint) headBase(ctx context.Context, path string) (*RestoreBaseFile, error) {
-	listing, err := self.points.runGit(ctx, self.root, "ls-files", "-s", "-z", "--", path)
+	absent := func() (*RestoreBaseFile, error) {
+		ignored, err := self.points.gitIgnores(ctx, self.root, path)
+		if err != nil {
+			return nil, err
+		}
+		// an ignored path may have held bytes the walk never saw
+		return &RestoreBaseFile{State: &RestoreFileState{Kind: RestoreKindAbsent}, Exact: !ignored, FromHead: true}, nil
+	}
+	head := self.HeadCommit()
+	if head == "" {
+		// an unborn branch: every indexed or untracked file was dirty at the walk
+		return absent()
+	}
+	listing, err := self.points.runGit(ctx, self.root, "ls-tree", "-z", head, "--", path)
 	if err != nil {
 		return nil, err
 	}
 	entry := string(bytes.TrimRight(listing, "\x00"))
 	if entry == "" {
-		return &RestoreBaseFile{State: &RestoreFileState{Kind: RestoreKindAbsent}, Exact: true, FromHead: true}, nil
+		return absent()
 	}
-	fields := strings.Fields(strings.SplitN(entry, "\t", 2)[0])
-	if len(fields) < 3 {
-		return nil, fmt.Errorf("%w: ls-files", ErrRestoreNoRepository)
+	header, name, found := strings.Cut(entry, "\t")
+	fields := strings.Fields(header)
+	if !found || len(fields) != 3 || strings.ContainsRune(name, 0) {
+		return nil, fmt.Errorf("%w: ls-tree", ErrRestoreNoRepository)
 	}
 	mode, err := strconv.ParseUint(fields[0], 8, 32)
 	if err != nil {
-		return nil, fmt.Errorf("%w: ls-files mode", ErrRestoreNoRepository)
+		return nil, fmt.Errorf("%w: ls-tree mode", ErrRestoreNoRepository)
 	}
-	blob := fields[1]
+	if fields[1] != "blob" || name != path {
+		return &RestoreBaseFile{State: &RestoreFileState{Kind: RestoreKindOther}, FromHead: true}, nil
+	}
+	blob := fields[2]
 	content, err := self.points.runGit(ctx, self.root, "cat-file", "blob", blob)
 	if err != nil {
 		return nil, err
@@ -796,6 +833,20 @@ func (self *RestorePoint) headBase(ctx context.Context, path string) (*RestoreBa
 		Blob:     blob,
 		FromHead: true,
 	}, nil
+}
+
+// Whether .gitignore hides path in the worktree at root: `git check-ignore -q` exits 0 for an ignored path and 1
+// for one that is not.
+func (self *RestorePoints) gitIgnores(ctx context.Context, root string, path string) (bool, error) {
+	_, err := self.runGit(ctx, root, "check-ignore", "-q", "--", path)
+	if err == nil {
+		return true, nil
+	}
+	exit := &exec.ExitError{}
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
 }
 
 // The exact bytes a path had at the run's start: the point's sealed copy, or HEAD's blob, for the apply (MCP-M3-21).

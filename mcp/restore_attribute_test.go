@@ -191,3 +191,127 @@ func TestRestorableFourConditions(t *testing.T) {
 		t.Errorf("restorable outside a repository: %t %q", ok, reason)
 	}
 }
+
+// A clean path's base is its blob in the commit HEAD named at the run's start. A commit the run's interval hid from
+// git status is still found by the next scan, through the two heads' difference, and the edit that follows it
+// chains from the committed bytes, not the base, so nothing is restorable to the wrong bytes (RV2).
+func TestBaseIsStartingHeadNotIndex(t *testing.T) {
+	env := newRestoreTestEnv(t)
+	point := env.open()
+	ctx := context.Background()
+	// a change staged and committed with no hook between: the index and HEAD both move past the start
+	env.write("committed.txt", "staged\n")
+	env.git("add", "-A")
+	env.git("commit", "-q", "-m", "second")
+	path := filepath.Join(env.dir, "committed.txt")
+	input := map[string]any{"file_path": path, "old_string": "staged", "new_string": "edited"}
+	env.preToolUse("Edit", "toolu_1", input)
+	env.write("committed.txt", "edited\n")
+	scan := env.postToolUse("Edit", "toolu_1", input)
+	base, err := point.BaseOf(ctx, "committed.txt")
+	if err != nil || !base.Exact || !bytes.Equal(base.State.Sha256, sha256Of([]byte("one\ntwo\nthree\n"))) {
+		t.Fatalf("the base is not the starting commit's blob: %+v %v", base, err)
+	}
+	if len(scan.Changes) != 1 || scan.Changes[0].Attribution == RestoreAttributionEdit {
+		t.Fatalf("an edit over a commit the run did not make by a path tool: %+v", scan.Changes)
+	}
+	if len(scan.Commits) != 1 {
+		t.Errorf("the scan's commits: %v", scan.Commits)
+	}
+	if ok, reason, err := point.Restorable(ctx, "committed.txt"); ok || err != nil {
+		t.Errorf("restorable past a commit: %t %q %v", ok, reason, err)
+	}
+	// a commit alone, the worktree clean after it: the scan still names the path
+	env.write("dir/nested.txt", "committed again\n")
+	env.git("add", "-A")
+	env.git("commit", "-q", "-m", "third")
+	shell := env.claudePayload("PostToolUse", "Bash", "toolu_2", map[string]any{"command": "git commit"})
+	scan, err = env.points.NoteEvent(ctx, env.network, env.networkId, env.runId, env.parse("claude-code", shell), shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, change := range scan.Changes {
+		if change.Path == "dir/nested.txt" {
+			found = true
+			if change.Attribution != RestoreAttributionShell || !change.BeforeKnown || !bytes.Equal(change.Before.Sha256, sha256Of([]byte("nested\n"))) {
+				t.Errorf("the committed path's change: %+v", change)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("a committed change was not scanned: %+v", scan.Changes)
+	}
+}
+
+// A path .gitignore hides was never walked, so its start is unknown: an edit that finds it absent is not chained
+// to an absent base, and the path is never restorable, which would delete bytes the walk did not see.
+func TestIgnoredPathBaseNotExact(t *testing.T) {
+	env := newRestoreTestEnv(t)
+	env.write("debug.log", "bytes the walk never saw\n")
+	point := env.open()
+	ctx := context.Background()
+	// removed with no hook between, then written by the run
+	env.remove("debug.log")
+	path := filepath.Join(env.dir, "debug.log")
+	input := map[string]any{"file_path": path, "content": "written\n"}
+	env.preToolUse("Write", "toolu_1", input)
+	env.write("debug.log", "written\n")
+	scan := env.postToolUse("Write", "toolu_1", input)
+	if len(scan.Changes) != 1 || scan.Changes[0].BeforeKnown || scan.Changes[0].Attribution == RestoreAttributionEdit {
+		t.Fatalf("an ignored path's change: %+v", scan.Changes)
+	}
+	base, err := point.BaseOf(ctx, "debug.log")
+	if err != nil || base.Exact {
+		t.Fatalf("an ignored path's base: %+v %v", base, err)
+	}
+	if ok, reason, err := point.Restorable(ctx, "debug.log"); ok || reason != RestoreReasonNotExact || err != nil {
+		t.Errorf("restorable on an ignored path: %t %q %v", ok, reason, err)
+	}
+	if _, err := point.BaseBytes(ctx, "debug.log"); err == nil {
+		t.Error("an ignored path's base bytes were answered")
+	}
+}
+
+// A hold belongs to the process that took it: after a restart its sealed copy is removed, its bytes no longer count
+// against the point, and the edit's before is unknown.
+func TestRestartDropsHolds(t *testing.T) {
+	env := newRestoreTestEnv(t)
+	env.write("untracked.txt", "kept in the base\n")
+	point := env.open()
+	path := filepath.Join(env.dir, "committed.txt")
+	input := map[string]any{"file_path": path, "old_string": "one", "new_string": "1"}
+	env.preToolUse("Edit", "toolu_1", input)
+	if !point.Holds("toolu_1", path) {
+		t.Fatal("the path is not held")
+	}
+	held, err := point.store.List(restoreHoldCopyPrefix)
+	if err != nil || len(held) != 1 {
+		t.Fatalf("the hold's copy: %v %v", held, err)
+	}
+	if err := point.saveManifest(); err != nil {
+		t.Fatal(err)
+	}
+	env.points = env.newPoints()
+	point = env.open()
+	if point.Holds("toolu_1", path) {
+		t.Error("a hold outlived its process")
+	}
+	if held, err := point.store.List(restoreHoldCopyPrefix); err != nil || len(held) != 0 {
+		t.Errorf("the hold's copy after a restart: %v %v", held, err)
+	}
+	point.stateLock.Lock()
+	byteCount := point.manifest.ByteCount
+	point.stateLock.Unlock()
+	if byteCount != int64(len("kept in the base\n")) {
+		t.Errorf("the point's byte count after a restart: %d", byteCount)
+	}
+	env.write("committed.txt", "1\ntwo\nthree\n")
+	scan := env.postToolUse("Edit", "toolu_1", input)
+	if observations := point.Observations("committed.txt"); len(observations) == 0 || observations[0].BeforeKnown {
+		t.Errorf("the edit after a restart: %+v", observations)
+	}
+	if len(scan.Changes) != 1 || scan.Changes[0].Attribution != RestoreAttributionForeign {
+		t.Errorf("the restart's interval: %+v", scan.Changes)
+	}
+}

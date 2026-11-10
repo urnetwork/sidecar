@@ -239,6 +239,11 @@ func (self *RestorePoint) scan(ctx context.Context, seq uint64, now time.Time) (
 		defer self.stateLock.Unlock()
 		return self.ledger.LastScanSeq, self.ledger.LastScanMillis, self.ledger.LastHead, self.foreignPending, self.manifest.NoRepo
 	}()
+	if seq < fromSeq {
+		// a later hook's scan ran first and covered this one's interval: the scans merge, and the ledger's
+		// interval end never moves back, so no activity is read into two intervals
+		seq = fromSeq
+	}
 	scan := &RestoreScan{
 		RunId:      self.runId,
 		FromSeq:    fromSeq,
@@ -272,6 +277,16 @@ func (self *RestorePoint) scan(ctx context.Context, seq uint64, now time.Time) (
 			listing, err := self.points.runGit(ctx, self.root, "rev-list", "--max-count="+strconv.Itoa(restoreScanCommitCount), lastHead+".."+scan.HeadCommit)
 			if err == nil {
 				scan.Commits = strings.Fields(string(listing))
+			}
+			// a path a commit changed is clean to git status, so the two heads' difference names it
+			moved, err := self.points.runGit(ctx, self.root, "diff", "--name-only", "-z", "--no-renames", lastHead, scan.HeadCommit)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range strings.Split(string(moved), "\x00") {
+				if path != "" {
+					candidates[path] = true
+				}
 			}
 		}
 	}
@@ -367,7 +382,8 @@ func (self *RestorePoint) lastStateOf(ctx context.Context, path string, noRepo b
 	if err != nil {
 		return nil, false, err
 	}
-	if base.State == nil || base.State.Kind == RestoreKindOther {
+	if base.State == nil || base.State.Kind == RestoreKindOther || (base.FromHead && !base.Exact) {
+		// an ignored path's start is unknown
 		return nil, false, nil
 	}
 	return base.State, true, nil

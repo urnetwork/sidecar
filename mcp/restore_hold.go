@@ -14,8 +14,9 @@
 //	unknown  otherwise: no hold, a timed-out or oversize one, or bytes the input does not reproduce; the edit then
 //	         counts as a non-path tool for attribution
 //
-// A hold is read back from the point, never from memory, so a restart between the two hooks still finds it, and
-// its copy is removed once checked or timed out.
+// A hold's bytes are sealed in the point and read back from it at the check, and its copy is removed once checked or
+// timed out. Which calls are held is this process's memory: a restart between the two hooks loses the hold, so that
+// edit's before is unknown, and the next process removes the copy when it reads the point.
 
 package mcp
 
