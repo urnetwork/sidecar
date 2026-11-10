@@ -33,6 +33,9 @@ require (
 	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mjl-/adns v0.0.0-20260809141028-22f885debe71 // indirect
+	github.com/mjl-/flate v0.0.0-20250221133712-6372d09eb978 // indirect
+	github.com/mjl-/mox v0.0.17 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/ice/v4 v4.4.1 // indirect

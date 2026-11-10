@@ -164,19 +164,16 @@ modules:
     leg: [client, cli]
   - module: github.com/mjl-/adns
     spdx: BSD-3-Clause
-    reason: the resolver mox's dns package links, at the version mox v0.0.17 requires; read from its LICENSE, the Go Authors' (plan-MAIL-mox-subset)
+    reason: the resolver mox's dns package links, at the version mox v0.0.17 requires, whose Resolver interface MAIL-M7-07's MailAuthResolver implements; read from its LICENSE, the Go Authors' (plan-MAIL-mox-subset)
     leg: [client, engine, cli, test]
-    planned: true
   - module: github.com/mjl-/flate
     spdx: BSD-3-Clause
     reason: the deflate writer mox's moxio package links, at the version mox v0.0.17 requires; read from its LICENSE, the Go Authors'
     leg: [client, engine, cli, test]
-    planned: true
   - module: github.com/mjl-/mox
     spdx: MIT AND MPL-2.0
     reason: D-MAIL-3's spf, dkim and dmarc at v0.0.17, through plan-MAIL-mox-subset's ten packages in third_party/mox, whose LICENSE.MIT and LICENSE.MPLv2.0 (the embedded public suffix list) were read; as published it links prometheus, which the deps row refuses
     leg: [client, engine, cli, test]
-    planned: true
   - module: github.com/modelcontextprotocol/go-sdk
     spdx: Apache-2.0 AND MIT
     reason: v1.7.0 for mcp/ (§16), which server holds at that version; its docs are CC-BY-4.0 and no build links them
