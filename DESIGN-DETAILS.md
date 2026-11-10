@@ -9,7 +9,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
 | 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | pending |
-| 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | in progress |
+| 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | pending |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
@@ -30,7 +30,7 @@ Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M
 
 ## 2. Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6)
 
-Status: in progress
+Status: complete (2026-11-10)
 
 Tasks held until complete: EVSB-M10-01, EVSB-M10-02, EVSB-M2-12, EVSB-M2-17.
 
@@ -316,15 +316,15 @@ RecordsLeave         every record old enough to evacuate leaves its batch (liven
 7. A version that names s later carries a receipt from a later upload, which made a new object, since If-None-Match stored it after the old one was gone. Its LastModified is days past T, and a DELETE carrying `x-ur-if-unmodified-ms: T` answers 412 for it. So however late, and however many times, a GC run issues its DELETE, it removes the object it judged or nothing.
 8. A version that names s without a receipt took it from a committed version step 4 read (5h), so s was already introduced, and 6 found it.
 
-The margins of step 2 are `EvsGc.tla`'s ASSUME, in ms: 24 h for the receipt, 100 for its stamp against LastModified, 5,000 for step 7's window, 50 for each of two clocks and 60,000 for a key's minute sum to 54.8 s less than AdoptionBound.
+The margins of step 2 are `EvsGc.tla`'s ASSUME, in ms: 24 h for the receipt, 100 for its stamp against LastModified, 5,000 for step 7's window, 50 for each of two clocks and 60,000 for a key's minute. They sum to 54.8 s less than AdoptionBound.
 
 **Why a forgotten stamp is safe.** A commit c carries the stamp boot:n it read at time r, and its deadline is at most r + 1 min. Suppose a commit c' was applied to the key on that drive after r. While c' is remembered the drive's stamp carries a higher count than any c could have read, so c is stale. Once c' is forgotten, StampKeep after it was applied, the stamp reads boot:0, which equals c's only if c read boot:0; but that is at least 2 min after r, a minute past c's deadline, and the gate refuses c on the drive's clock, which §19.6 holds within 50 ms. After a restart the boot differs and every earlier read is stale.
 
-**The models.** `Settle.tla` is `StoreSettle.tla`, which the data lane owns and this section leaves untouched, with the two store rules. A stamp is the fact `fresh[w][d]`: no commit was applied on drive d since write w's coordinator read it; every commit, revert that changes a drive and heal clears it for every write. A failed DELETE's release needs no drive that may still hold it. It adds `MaxPuts` and `MaxDeletes`, which fix a run's mix of writes, `Still`, which holds heal or cancels out of a run, and the invariant `FailedDeleteSettled`. Twin `Written` turns both rules off, which is §19.6 as DESIGN.md states it; `NoStamp` and `DeleteReleasesEarly` turn off one each; `StoreSettle.tla`'s seven twins are kept.
+**The models.** `Settle.tla` is `StoreSettle.tla`, which the data lane owns and this section leaves untouched, with the two store rules. A stamp is the fact `fresh[w][d]`: no commit was applied on drive d since write w's coordinator read it; every commit, revert that changes a drive and heal clears it for every write. A failed DELETE's release needs no drive that may still hold it. A heal's commit is read under the key and may reach its drive after the key's release, as a write's may, where `StoreSettle.tla` checks it in the step that reads. It adds `MaxPuts` and `MaxDeletes`, which fix a run's mix of writes, `Still`, which holds heal or cancels out of a run, the invariant `FailedDeleteSettled`, and the action constraint `NoLateWriteCommits`, which one configuration uses to leave heal's the only late commit. Twin `Written` turns both rules off, which is §19.6 as DESIGN.md states it; `NoStamp` and `DeleteReleasesEarly` turn off one each; `StoreSettle.tla`'s seven twins are kept.
 
 `EvsGc.tla` is new and small where `EvsCommit.tla` is whole: one repo's segments (uploaded, deleted and uploaded again), a ref with a head and a ref with none, pushes that take a receipt, check it, write a batch record and issue a head write that lands, fails, stalls holding its key or is sent late by a paused process, the evacuator (resolve, fence, placeholder, keep, drop, killed at any step), one or two GC runs whose DELETE may itself stall, and time in ticks, where a receipt lasts 2 and a minute is evacuated 3 ticks old. Its twin `Written` is §11.13's orphans row as DESIGN.md states it.
 
-Runs, TLC at the owner's jar (master d8fb231), each bounded so it finishes; breadth-first over every reachable state at its bounds unless it says simulation. `run-settle.sh` stops a run whose state directory passes 8 GB and deletes each run's state directory as it ends; the largest here used 619 MB on disk.
+Runs, TLC at the owner's jar (master d8fb231), each bounded so it finishes; breadth-first over every reachable state at its bounds unless it says simulation. `run-settle.sh` stops a run whose state directory passes 8 GB and deletes each run's state directory as it ends; the largest here used 1.7 GB on disk.
 
 ```text
 configuration                          what it runs
@@ -342,22 +342,22 @@ Settle-Cancel                          a host failure and cancels
 Settle-Settler                         2 coordinators, a host failure and a coordinator crash, which the settler settles
                                        pass, every invariant                              19,774,204    30  2 min 47 s
 Settle-Three                           3 writes: one PUT and two DELETEs
-                                       (not run yet)
+                                       pass, every invariant                              14,569,638    38  8 min 59 s
 Settle-Three-Puts                      3 writes: two PUTs and one DELETE
-                                       (not run yet)
+                                       pass, every invariant                              51,072,375    41 23 min 47 s
 Settle-Live                            HeldKeyReleased under weak fairness: two DELETEs
                                        pass, the property                                    263,990    29        46 s
 Settle-Live-Hosts                      HeldKeyReleased: one write, a host failure and a coordinator crash
                                        pass, the property                                     66,824    19         3 s
 Settle-Six                             6 drives on 3 hosts, read at 3 and written at 4, 2 writes, 2 coordinators, a host failure,
                                        a crash, heal and cancels; simulation, 50,000 traces a worker of up to 70 steps, seed 3
-                                       (not run yet)
+                                       pass, every invariant on those traces         35,000,002 generated         7 min 1 s
 Settle-Wide                            §22.8's bounds: 8 drives at EC:4 on 4 hosts, 3 writes, 2 coordinators, 2 host failures,
                                        a crash, heal and cancels; simulation, 100,000 traces a worker of up to 60 steps, seed 1
-                                       (not run yet)
+                                       pass, every invariant on those traces         60,000,002 generated       29 min 56 s
 Settle-Eight                           8 drives, 2 writes, 2 coordinators, a host failure, a crash, heal and cancels;
                                        simulation, 50,000 traces a worker of up to 90 steps, seed 2
-                                       (not run yet)
+                                       pass, every invariant on those traces         45,000,002 generated       13 min 59 s
 Settle.tla, §19.6 as written (Twin Written)
 SettleWritten-Sum                      two DELETEs and a host failure (B1)
                                        NoStaleQuorum violated, a trace of 12 states           85,302    13         1 s
@@ -422,9 +422,9 @@ EvsGcTwin-AdoptsOldReceipt             5h takes a receipt of any age
                                        ClosureHolds violated, a trace of 15 states             3,239    15         0 s
 ```
 
-Every design run passes, and every written and twin run ends on the one invariant or property its configuration names. The design runs used ten workers and the written and twin runs six. With more than one worker a trace is the first one TLC's workers met, which in some runs is a few states longer than the shortest, and a distinct-state count moves a little from run to run; a twin's count is what TLC had explored when it met the violation. The times are from a machine four build lanes were loading, at a load average near 50 on 14 cores, and are several times what the same runs took when it was idle.
+Every design run passes, and every written and twin run ends on the one invariant or property its configuration names. The design runs used ten workers (`EvsGc`'s four, eight) and the written and twin runs six. With more than one worker a trace is the first one TLC's workers met, which in some runs is a few states longer than the shortest, and a distinct-state count moves a little from run to run; a twin's count is what TLC had explored when it met the violation. The times are from a machine four build lanes were loading, at a load average near 50 on 14 cores, and are several times what the same runs took when it was idle.
 
-What the runs cover. The breadth-first runs of `Settle.tla` take every interleaving, at 4 drives, of two writes of either kind and of three writes in both mixes that matter (a create with a DELETE on either side of it, and two DELETEs beside a PUT), with a commit stalled at any drive, every deadline, a host failure, a coordinator crash settled by another host, cancels, and a heal whose commit lands late; one run repeats the PUT and DELETE pair at 6 drives. §22.8's own bounds, 8 drives and 3 writes, do not finish: EVS1-M2-02 stopped `StoreSettle.tla` there at 412.6 M states and depth 12, and this model with three writes of any kind at 4 drives passed 38 M states at depth 22, with no violation, before it was stopped. `Settle-Wide` and `Settle-Eight` therefore sample those bounds, and show only that the traces they drew kept every invariant. `EvsGc` is the run problem 2's brief asks for, GC with stalled writes, a new ref and DELETEs together: both refs take pushes, either push's head write may stall holding its key or come late from a paused process, GC's own DELETE may stall holding the segment's key, the segment is uploaded again after it goes, and evacuation is killed mid-record.
+What the runs cover. The breadth-first runs of `Settle.tla` take every interleaving, at 4 drives, of two writes of either kind and of three writes in both mixes that matter (a create with a DELETE on either side of it, and two DELETEs beside a PUT), with a commit stalled at any drive, every deadline, a host failure, a coordinator crash settled by another host, cancels, and a heal whose commit lands late. Larger sets do not finish: EVS1-M2-02 stopped `StoreSettle.tla` at §22.8's 8 drives and 3 writes at 412.6 M states and depth 12, and this model was stopped at 6 drives with one PUT and one DELETE at 19 M states and depth 19, and at 4 drives with three writes of any kind at 38 M states and depth 22, with no violation in either. `Settle-Six`, `Settle-Wide` and `Settle-Eight` therefore sample 6 and 8 drives, and show only that the traces they drew kept every invariant; a simulation's count is TLC's own figure for the traces it was asked for. `EvsGc` is the run problem 2's brief asks for, GC with stalled writes, a new ref and DELETEs together: both refs take pushes, either push's head write may stall holding its key or come late from a paused process, GC's own DELETE may stall holding the segment's key, the segment is uploaded again after it goes, and evacuation is killed mid-record.
 
 The findings of 2.1 each appear against the text as written and are gone in the design: A in `EvsGcWritten-NewRef`, B1 in `SettleWritten-Sum`, B2 in `SettleWritten-Revert` and, at 8 drives, `SettleWritten-Eight`, C in `SettleWritten-Straggler` and `SettleWritten-Heal`, D in `EvsGcWritten-Zombie`. Each rule of the design has a twin that fails without it: the stamp (`NoStamp`), the DELETE's release (`DeleteReleasesEarly`, on FI-30 and on the rule itself), the horizon (`GcIgnoresHorizon`), its order before the pidx/ read (`GcReadsIndexFirst`), the DELETE that names its object (`UnconditionalDelete`), the placeholder fence (`FenceSkipsAbsentHead` for safety, `PendingStaysOnAbsentHead` for the record that never leaves), the record before the head write (`RecordAfterPut`), the entry before the batch's deletion (`DeleteBeforeIndex`) and the receipt's age (`AdoptsOldReceipt`).
 
