@@ -399,6 +399,17 @@ messages:
       smtp_data_proof_bytes: 1048576
       data_bytes_per_s: 146
       measure_time_ms: 1793923200000
+  - name: spam-model-wire
+    type: MailSpamModel
+    hex: "0801120807030002ffff3f00"
+    text: |
+      version: 1
+      counts: 7
+      counts: 3
+      counts: 0
+      counts: 2
+      counts: 1048575
+      counts: 0
 
 # A deposit's plaintext: the message as received, its MailDeposit, then u32be of that MailDeposit's length.
 trailers:

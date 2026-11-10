@@ -372,3 +372,9 @@ message MailProverRecord {         // p/<sidecar_id>, rewritten at each measurem
   uint64 data_bytes_per_s = 2;     // the measured DATA rate
   uint64 measure_time_ms = 3;
 }
+
+message MailSpamModel {            // s/model (§15.9), a mailbox's naive Bayes filter its people's verdicts train
+  uint32 version = 1;              // 1, and a reader refuses another, 0 included
+  repeated uint32 counts = 2;      // the spam then the not-spam messages trained, then each of the 4,096 feature
+                                   //   buckets' spam count, then each one's not-spam count: 8,194 values
+}

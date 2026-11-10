@@ -35,6 +35,8 @@ func TestHeadCheckFirstExchangePerIntervalTriggersOnce(t *testing.T) {
 	if count := len(a.sentHeadChecks(t)); count != 1 {
 		t.Errorf("%d HeadChecks for two calls", count)
 	}
+	// the round at start, so the interval runs from it
+	a.awaitRounds(1)
 	a.clock.Advance(a.settings.HeadCheckInterval)
 	b.clock.Advance(b.settings.HeadCheckInterval)
 	a.awaitRounds(2)

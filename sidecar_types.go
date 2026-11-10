@@ -56,6 +56,8 @@ type Sidecar struct {
 	records sidecarRecords
 	// The network's verified config state, which admission, acts and alarms read (identity_authority.go).
 	authorities sidecarAuthorities
+	// KEYS-M4-01's group view, which §7.10's stale revocations read (identity_act_stale.go).
+	staleGroupViews sidecarStaleGroupViews
 	// §5.6's alarm watcher on that state's entries (identity_alarms.go).
 	alarms sidecarAlarms
 	// §6.4's state Status reads witnessed_at and the UNVERIFIED pins from (sidecar_status.go).

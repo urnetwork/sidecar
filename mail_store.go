@@ -88,7 +88,7 @@ func DefaultMailStoreSettings() *MailStoreSettings {
 		PageEntryCount:     50,
 		CachedMonthCount:   2,
 		CachedSegmentCount: 2,
-		SpamScoreThreshold: 500,
+		SpamScoreThreshold: DefaultMailSpamSettings().ScoreThreshold,
 	}
 }
 
