@@ -382,7 +382,13 @@ func (self *TestSidecar) start() error {
 	if self.host != nil {
 		stores = self.host.HostCredentialStores()
 	}
-	host := &testSidecarHost{store: instance.Store(nil), keyStore: self.keyStore, stores: stores}
+	// the network the instance enrolled in, as a host starts a Sidecar for each enrolled network, so a restart of an
+	// enrolled sidecar comes back in its network; none before enrollment
+	var networkId *sidecar.Id
+	if records := instance.Networks(); len(records) == 1 {
+		networkId = &records[0].NetworkId
+	}
+	host := &testSidecarHost{store: instance.Store(networkId), keyStore: self.keyStore, stores: stores}
 	running, err := sidecar.NewSidecar(ctx, host, nil, self.Settings)
 	if err != nil {
 		instance.Close()

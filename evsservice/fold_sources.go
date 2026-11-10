@@ -75,13 +75,17 @@ func (self *foldRun) namedSourcePaths(path *foldPath) []*EvsSourceTokenPath {
 	return named
 }
 
-// The path rule: see the file header. Called once the path's current entry holds its changes.
-func (self *foldRun) deleteSourceCopies(path *foldPath) error {
+// The path rule: see the file header. Called once the path's current entry, current, holds its changes; in a format-2
+// repo a source marker's carried ids that current does not carry alarm as they leave (fold_format2.go).
+func (self *foldRun) deleteSourceCopies(path *foldPath, current *protocol.EvsIndexEntry) error {
 	if !self.sources || self.folder.keepSourceCopies {
 		return nil
 	}
 	for _, source := range self.namedSourcePaths(path) {
 		key := IndexEntryKey(self.request.RepoId, self.request.RefId, source.Epoch, source.TokenPath)
+		if err := self.alarmSourceIdsLeaving(key, current.GetMarker(), false); err != nil {
+			return err
+		}
 		if err := self.deleteSourceKey(source.Epoch, key); err != nil {
 			return err
 		}
@@ -108,6 +112,10 @@ func (self *foldRun) emptySourcesBelow(removal *foldRemoval) error {
 			}
 			for _, object := range objects {
 				startAfter = object.Key
+				// in a format-2 repo, ids an unlisted versionless file or a marker there carries alarm as they leave
+				if err := self.alarmSourceIdsLeaving(object.Key, nil, true); err != nil {
+					return err
+				}
 				if err := self.deleteSourceKey(source.Epoch, object.Key); err != nil {
 					return err
 				}
