@@ -9,6 +9,10 @@
 // one last-resort KeyPackage keep two pointers, and a group's owner marker is the first object of the group
 // (DESIGN-DETAILS 6.2.2).
 //
+// A forwarding Delegation's reader key, which its row names by digest alone, is gkm's object keyed by the
+// Delegation's id, gkm/dkey/<delegation_id> (DESIGN-DETAILS 4.2.2): the route's path id and the object's key take
+// one form, built here.
+//
 // On every leg, with no connect import. Package-level functions are safe for concurrent use.
 
 package sidecar
@@ -110,4 +114,23 @@ func GkmWelcomePointerPath(sidecarId Id, groupId Id, epoch uint64) string {
 // gkm writes first at a creation or a re-form and resolves every group route through.
 func GkmGroupOwnerPath(groupId Id) string {
 	return "gkm/" + gkmPathId(groupId) + "/owner"
+}
+
+// A delegation_id as a path or key names it: 64 lowercase hex characters (QD-442), or an error for an id of another
+// size.
+func GkmDelegationPathId(delegationId []byte) (string, error) {
+	if len(delegationId) != gkmDelegationIdByteCount {
+		return "", fmt.Errorf("%w: a delegation id of %d bytes", ErrGkmMalformed, len(delegationId))
+	}
+	return hex.EncodeToString(delegationId), nil
+}
+
+// gkm/dkey/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key as the Delegation's
+// statement names it, on the first cluster beside the per-sidecar objects (DESIGN-DETAILS 4.2.2).
+func GkmDelegationKeyPath(delegationId []byte) (string, error) {
+	pathId, err := GkmDelegationPathId(delegationId)
+	if err != nil {
+		return "", err
+	}
+	return "gkm/dkey/" + pathId, nil
 }

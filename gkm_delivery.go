@@ -293,9 +293,17 @@ func ParseGkmDelivery(signed *bridge.Signed, wrapType GkmWrapType, identityKey G
 // RK_g from a delivery to recipient at privateKey, accepted against generation, gen/<g>'s verified statement
 // (§10.9's use row). The delivery must name recipient and the digest of privateKey's public key, and its group,
 // generation and commitment gen/<g>'s (§10.9's body row), before anything is decapsulated. A re-formed group's
-// deliveries of its old generations name the new group (QD-074(7)), which KEYS-M2-25 admits along the form chain;
-// until then they refuse here.
+// deliveries of the generations its ladder carried name the new group (QD-074 rule 7), which GkmUseDelivery admits
+// for the group its caller pinned along a verified form chain (GkmDeliveryCheckArgs.GroupId); here they refuse.
 func OpenGkmDelivery(delivery *GkmDelivery, generation *GkmGeneration, recipient []byte, privateKey hpke.PrivateKey) (*EvsRepoKey, error) {
+	if generation == nil || generation.Rotate == nil {
+		return nil, fmt.Errorf("%w: no gen/<g> to check a key against", ErrGkmKeyMissing)
+	}
+	return openGkmDelivery(delivery, generation, generation.Rotate.GetGroupId(), recipient, privateKey)
+}
+
+// OpenGkmDelivery, the body naming groupId.
+func openGkmDelivery(delivery *GkmDelivery, generation *GkmGeneration, groupId []byte, recipient []byte, privateKey hpke.PrivateKey) (*EvsRepoKey, error) {
 	if delivery == nil || delivery.Body == nil {
 		return nil, fmt.Errorf("%w: no delivery", ErrGkmKeyMissing)
 	}
@@ -310,7 +318,7 @@ func OpenGkmDelivery(delivery *GkmDelivery, generation *GkmGeneration, recipient
 	if !bytes.Equal(body.GetRecipientKeySha256(), keySha256[:]) {
 		return nil, fmt.Errorf("%w: a delivery to another key", ErrGkmKeyMissing)
 	}
-	if !bytes.Equal(body.GetGroupId(), generation.Rotate.GetGroupId()) || body.GetGeneration() != generation.Rotate.GetGeneration() ||
+	if !bytes.Equal(body.GetGroupId(), groupId) || body.GetGeneration() != generation.Rotate.GetGeneration() ||
 		!bytes.Equal(body.GetCommitment(), generation.Rotate.GetCommitment()) {
 		return nil, fmt.Errorf("%w: a delivery of another generation", ErrGkmAuthentication)
 	}

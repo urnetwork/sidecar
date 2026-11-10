@@ -7,6 +7,10 @@
 //	wrapped      config and directory groups: a ReaderWrap to each member device among the holders that tree(e) lacks
 //	agents       a ReaderWrap to each agent among the holders, which no live Delegation there covers
 //	delegations  a DelegationWrap to each live Delegation among the holders, at its reader key
+//	forwarding   in the config, a DelegationWrap to each sidecar's live forwarding Delegation among the holders, at
+//	             the reader key its statement names where this device keeps the entry, else gkm's object, held to the
+//	             row's digest (GkmForwardingReaderKey); one with neither is skipped and counted, and delivered late
+//	             once its object stands: its sidecar uploads the object, then writes that wrap (§10.5's dwraps)
 //	recovery     a RecoveryWrap to each member with a recovery identity among the holders, at its binding
 //
 // A ReaderWrap seals only to a ReaderKey gkm serves that the state's admitted identity key signed and that passes
@@ -116,6 +120,20 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 				return nil, fmt.Errorf("%w: a live Delegation with no reader key", ErrGkmMalformed)
 			}
 			targets = append(targets, &gkmDeliveryTarget{kind: gkmDeliveryTargetDelegation, recipient: bytes.Clone(holder.Id), publicKey: bytes.Clone(publicKey)})
+		case GkmHolderForwarding:
+			publicKey, err := GkmForwardingReaderKey(ctx, state, holder, self.delegationKeyFetch())
+			if errors.Is(err, ErrGkmKeyMissing) {
+				// skipped and counted: a late delivery gives it this generation once its object stands
+				client.delegationWrapsSkipped.Add(1)
+				if client.log.V(1).Enabled() {
+					client.log.Infof("[gkm]a rotation skipped a forwarding Delegation's wrap: %v", err)
+				}
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, &gkmDeliveryTarget{kind: gkmDeliveryTargetDelegation, recipient: bytes.Clone(holder.ForwardDelegationId), publicKey: publicKey})
 		case GkmHolderRecovery:
 			memberId, err := IdFromBytes(holder.Id)
 			if err != nil {
@@ -157,6 +175,21 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 		}
 	}
 	return targets, nil
+}
+
+// gkm's object of a forwarding Delegation's reader key, read under this repo's scopes, which in the config's group
+// are the config's, whose readers alone may read it.
+func (self *gkmGroupManager) delegationKeyFetch() GkmDelegationKeyFetch {
+	return func(ctx context.Context, delegationId []byte) ([]byte, error) {
+		return self.client.args.Api.DelegationKey(ctx, self.repoId, delegationId)
+	}
+}
+
+// How many DelegationWraps this client's rotations have skipped for a forwarding Delegation whose reader key neither
+// its log nor gkm gave it (DESIGN-DETAILS 4.2.2): each goes late once the key's object stands. Safe for concurrent
+// use.
+func (self *GkmGroupClient) DelegationWrapsSkipped() uint64 {
+	return self.delegationWrapsSkipped.Load()
 }
 
 // One delivery sealed and signed for a route.
@@ -434,8 +467,21 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 		}
 		publicKey = readerKey.Body.GetXwingPublicKey()
 	case GkmWrapTypeDelegation:
-		if !holders.Contains(GkmHolderDelegation, recipientId) {
+		holder, held := holders.DelegationRecipient(recipientId)
+		if !held {
 			return nil
+		}
+		if holder.Kind == GkmHolderForwarding {
+			key, err := GkmForwardingReaderKey(ctx, state, holder, self.delegationKeyFetch())
+			if errors.Is(err, ErrGkmKeyMissing) {
+				// no key to seal to yet: its sidecar uploads the object, then writes this delivery itself
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			publicKey = key
+			break
 		}
 		for _, delegation := range state.Delegations() {
 			if bytes.Equal(delegation.GetDelegationId(), recipientId) {
@@ -477,7 +523,7 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 			// not tried: the same bytes go again
 			continue
 		case http.StatusPreconditionFailed:
-			return self.judgeLateWinner(state, top, wrapType, result.GetWinner())
+			return self.judgeLateWinner(state, pins.groupId, top, wrapType, result.GetWinner())
 		case http.StatusConflict:
 			// not the newest generation any more, or a key gkm no longer serves: the next hint asks again
 			return nil
@@ -490,9 +536,9 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 	return fmt.Errorf("%w: gkm gave no answer for a late delivery", ErrGkmUnavailable)
 }
 
-// Judges the delivery that holds a late delivery's path, as any member judges one it reads when it answers
-// wrap-pending (§10.9): a refused one is alarmed, and poisons nothing later.
-func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, top *gkmHeldGeneration, wrapType GkmWrapType, winner []byte) error {
+// Judges the delivery that holds a late delivery's path in groupId, as any member judges one it reads when it
+// answers wrap-pending (§10.9): a refused one is alarmed, and poisons nothing later.
+func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, groupId Id, top *gkmHeldGeneration, wrapType GkmWrapType, winner []byte) error {
 	client := self.client
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(winner, signed); err != nil {
@@ -503,7 +549,7 @@ func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, top *gkmHeldGene
 		client.alarm(&GkmAlarm{Kind: GkmAlarmRefused, RepoId: self.repoId, Generation: top.generation.Rotate.GetGeneration(), Reason: GkmRefusalDelivery, Detail: "a delivery that does not verify"})
 		return nil
 	}
-	verdict, err := CheckDelivery(state, &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: top.generation, Now: client.clock.Now()})
+	verdict, err := CheckDelivery(state, &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: top.generation, GroupId: groupId, Now: client.clock.Now()})
 	if err != nil {
 		return err
 	}
@@ -542,7 +588,9 @@ func (self *GkmGroupClient) heldRepoIds() ([]Id, error) {
 // A Delegation's dwraps (§10.5): the device that signed a Delegation writes, for each repo it holds whose key the
 // Delegation's reach holds, one LATE DelegationWrap of the newest generation to the Delegation's reader key, so its
 // agents read at once. Each is a late delivery under its checks, and a repo this device may not deliver for is
-// passed over: another holder answers its wrap-pending.
+// passed over: another holder answers its wrap-pending. For a forwarding Delegation the reach is the config alone,
+// and its sidecar calls this once GkmApi.UploadDelegationKey has stored the key's object (DESIGN-DETAILS 4.2.6's S3
+// and S4), at a newer one's supersession as at its first.
 func (self *GkmGroupClient) DeliverDelegationWraps(ctx context.Context, delegationId []byte) error {
 	if len(delegationId) != gkmDelegationIdByteCount {
 		return fmt.Errorf("%w: a delegation id of %d bytes", ErrGkmMalformed, len(delegationId))

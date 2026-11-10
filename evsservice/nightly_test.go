@@ -160,12 +160,11 @@ func (self *nightlyFixture) putUnnamed(label string, pack bool) (sidecar.BlobClu
 	return cluster, key
 }
 
-// §11.13's resume row: a pack or parcel no pidx/ entry names goes once it is 25 h old, by a DELETE naming its
-// LastModified, and not before; a named one stays.
+// §11.13's resume row: a parcel no pidx/ entry names goes once it is 25 h old, by a DELETE naming its LastModified,
+// and not before; a named one stays.
 func TestNightlyPassDeletesAContainerNoEntryNamesAfter25Hours(t *testing.T) {
 	fixture := newNightlyFixture(t)
 	parcelCluster, parcel := fixture.putUnnamed("parcel", false)
-	packCluster, pack := fixture.putUnnamed("pack", true)
 	named := fixture.putPidx("named", 1)
 	namedId := testId("container named")
 	if _, err := fixture.cluster.PutIfNoneMatch(fixture.ctx, ParcelKey(fixture.check.repoId, namedId), []byte("named parcel"), nil); err != nil {
@@ -173,12 +172,12 @@ func TestNightlyPassDeletesAContainerNoEntryNamesAfter25Hours(t *testing.T) {
 	}
 
 	fixture.clock.Advance(24 * time.Hour)
-	if result := fixture.runPass(); result.UnnamedDeletedCount != 0 || !fixture.stands(parcelCluster, parcel) || !fixture.stands(packCluster, pack) {
+	if result := fixture.runPass(); result.UnnamedDeletedCount != 0 || !fixture.stands(parcelCluster, parcel) {
 		t.Fatalf("under 25 h: %+v", result)
 	}
 	fixture.clock.Advance(1*time.Hour + time.Minute)
 	result := fixture.runPass()
-	if result.UnnamedDeletedCount != 2 || fixture.stands(parcelCluster, parcel) || fixture.stands(packCluster, pack) {
+	if result.UnnamedDeletedCount != 1 || fixture.stands(parcelCluster, parcel) {
 		t.Fatalf("past 25 h: %+v", result)
 	}
 	if !fixture.stands(fixture.cluster, named) || !fixture.stands(fixture.cluster, ParcelKey(fixture.check.repoId, namedId)) {
@@ -268,4 +267,20 @@ func TestNightlyPassPacksAnIdleRepoBeforeItsParcelPasses7Days(t *testing.T) {
 		t.Fatalf("parcels %v packs %v", parcels, packs)
 	}
 	fixture.requireRecord(place, recordBytes)
+}
+
+// An unnamed pack stays while the repo has a parcel or a log page a move could build the same bytes from again: a
+// move killed after its pack, run again beside the pass, would reuse the pack on its 412 and name it.
+func TestNightlyPassKeepsAnUnnamedPackAMoveCouldRebuild(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	packCluster, pack := fixture.putUnnamed("pack", true)
+	_, parcel := fixture.putUnnamed("parcel", false)
+	fixture.clock.Advance(25*time.Hour + time.Minute)
+	// the unnamed parcel goes this night, and with it what a move could rebuild the pack from
+	if result := fixture.runPass(); result.UnnamedDeletedCount != 1 || !fixture.stands(packCluster, pack) || fixture.stands(fixture.cluster, parcel) {
+		t.Fatalf("beside a parcel: %+v", result)
+	}
+	if result := fixture.runPass(); result.UnnamedDeletedCount != 1 || fixture.stands(packCluster, pack) {
+		t.Fatalf("the next night: %+v", result)
+	}
 }

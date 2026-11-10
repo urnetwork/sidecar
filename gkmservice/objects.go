@@ -7,11 +7,12 @@
 // (gkm_paths.go), since the client and evs build them too; this file names them beside the rest.
 //
 // No key prefixes another as a path, since MinIO stores an object as a directory and lists it without descending
-// (§11.3): every group id is 32 hex characters, which none of repo, kp, rk, welcome or recovery is, and a claim is
-// <ref>.claim beside <ref>, never under it.
+// (§11.3): every group id is 32 hex characters, which none of repo, kp, rk, welcome, recovery or dkey is, and a claim
+// is <ref>.claim beside <ref>, never under it.
 //
 // Group objects live on the cluster place/<repo_id> names, and per-sidecar ones (kp/, rk/, welcome/<sidecar_id>/)
-// on the first cluster, beside place/ (§10.6's placement row).
+// on the first cluster, beside place/ (§10.6's placement row), as does a forwarding Delegation's reader key
+// (dkey/<delegation_id>), which no repo places.
 
 package gkmservice
 
@@ -30,6 +31,7 @@ const (
 	gkmKeyPackageKeyPrefix      = "gkm/kp/"
 	gkmReaderKeyKeyPrefix       = "gkm/rk/"
 	gkmRecoveryKeyPrefix        = "gkm/recovery/"
+	gkmDelegationKeyKeyPrefix   = "gkm/dkey/"
 	gkmKeyPackageClaimKeySuffix = ".claim"
 	// evs's repo/<repo>, which gkm rereads before each write (§10.6's checks row). evsservice.RepoKey builds the same
 	// key, which store_test.go pins, since this package does not link evs.
@@ -273,4 +275,10 @@ func parseGkmWelcomePointerKey(prefix string, key string) (sidecar.Id, uint64, b
 // gkm/<group_id>/owner: the group's owner marker, a GkmGroupOwner, the first write of a creation or a re-form.
 func GkmGroupOwnerKey(groupId sidecar.Id) string {
 	return sidecar.GkmGroupOwnerPath(groupId)
+}
+
+// gkm/dkey/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key, on the first cluster
+// (DESIGN-DETAILS 4.2.2); an error for an id of another size than 32 bytes.
+func GkmDelegationKeyKey(delegationId []byte) (string, error) {
+	return sidecar.GkmDelegationKeyPath(delegationId)
 }

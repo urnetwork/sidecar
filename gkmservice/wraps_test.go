@@ -253,7 +253,8 @@ func TestGkmLateWrapChecksRefuseAndTheirTwinPasses(t *testing.T) {
 	}
 }
 
-// A DelegationWrap's late recipient must be a live Delegation whose reach holds the repo.
+// A DelegationWrap's late recipient must be a live Delegation whose reach holds the repo, sealed to the key its row
+// names: a wrap to another key answers 409, as a ReaderWrap to a key gkm does not serve does.
 func TestGkmLateDelegationWrapNeedsALiveDelegationReachingTheRepo(t *testing.T) {
 	world := newGkmCommitWorld(t)
 	fixture := world.fixture
@@ -287,6 +288,17 @@ func TestGkmLateDelegationWrapNeedsALiveDelegationReachingTheRepo(t *testing.T) 
 		t.Errorf("a DelegationWrap to a Delegation that does not reach the repo: %d", status)
 	}
 	fixture.auth.setDelegationReads(world.repoId, delegationId, true)
+	// the state holds no row of the Delegation's key
+	if status := world.postWrap(world.adminToken, 2, gkmTestC8(key2), fixture.marshal(signed)); status != http.StatusForbidden {
+		t.Errorf("a DelegationWrap whose row's key gkm's state does not hold: %d", status)
+	}
+	otherKey := sha256.Sum256([]byte("another key"))
+	fixture.auth.setDelegationKey(delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: otherKey[:], ConfigRepoId: world.repoId})
+	if status := world.postWrap(world.adminToken, 2, gkmTestC8(key2), fixture.marshal(signed)); status != http.StatusConflict {
+		t.Errorf("a DelegationWrap sealed to a key the row does not name: %d", status)
+	}
+	keySha256 := sha256.Sum256(delegationPublicKey)
+	fixture.auth.setDelegationKey(delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: keySha256[:], ConfigRepoId: world.repoId})
 	if status := world.postWrap(world.adminToken, 2, gkmTestC8(key2), fixture.marshal(signed)); status != http.StatusCreated {
 		t.Errorf("a DelegationWrap to a live Delegation reaching the repo: %d", status)
 	}
