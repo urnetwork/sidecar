@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 281 decided items and 282 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
@@ -21,7 +21,7 @@ Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 14 | 13 |
 | [§9 Abstract socket listeners and the scheduler](#s9) | 5 | 2 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 23 | 15 |
-| [§11 Encrypted versioned storage](#s11) | 48 | 41 |
+| [§11 Encrypted versioned storage](#s11) | 45 | 41 |
 | [§12 DNS](#s12) | 7 | 0 |
 | [§13 The TLS edge and certificates](#s13) | 3 | 13 |
 | [§14 The SMTP edge](#s14) | 8 | 13 |
@@ -38,7 +38,7 @@ Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026
 
 Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with its proposed DESIGN.md text. Their owner questions were answered on 2026-11-10 (QD-598 to QD-629, below under the sections they amend). Three answers differ from a section's recommendation and the design agent amends the section before it is folded: QD-604 (section 8, imports make helper refs), QD-621 (section 4, an overdue narrowing statement keeps the last state and alarms) and the model and wording fixes of QD-628, QD-632, QD-633, QD-642 and QD-644. Sections 1, 3, 7, 10, 11, 12 and 13 are still being written.
 
-Partly folded (2026-11-10), with §2's and §3's items: section 2.8 where QD-623 (owner decision 203) needed it, its §2.8, §11.3, §11.6, §11.13 and §11.17 parts, §11.8's but step 6's clock rule, §19.6's rule (6) clause and what deletes nothing on an unpassed build, §22.8's EvsCommit.tla row, FS-8 and FS-59's text. Section 2.8 still to fold: §11.8 step 6's clock rule and the clocks row's ", evs opens no batch"; §19.6 rule (2)'s stamp, rule (3)'s DELETE release and its PUT and DELETE waits, and the list row (QD-625's, with §11.13's needs row and FS-114); §19.10's held-key and §19.17's risk rows; D-OPS-20's text and *Why*; the StoreSettle.tla row, FI-30's last clause and FS-114's clauses; and FS-59's checks column, FI-1,6, which sidecartest/fault/catalog.yml must take in the same change. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
+Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
 
 <a id="s2"></a>
 ## §2 Trust model and threat model
@@ -2198,15 +2198,6 @@ Changes: §11.20; §20.7.
 
 Questions: `plan-QUOTA-small-readings.md#18`.
 
-### QD-254: No cluster carries lifecycle rules, and §11.13's needs row and §22.9 must stop listing them
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Option 1. No lifecycle rule on any bucket. Strike 'and lifecycle rules' from §11.13's needs row. In §22.9's File clusters list, replace 'lifecycle' with 'no lifecycle rule set on either bucket', and add that case to server/cli/filecluster-suite, since blobsuite sees only BlobCluster. dropscan/ files stay deleted by their job (§11.8's immutable row). BlobCluster stays as landed, with no lifecycle call.
-
-Changes: §11.13 needs row; §22.9 File clusters.
-
-Questions: `plan-EVSB-lifecycle-rules.md`.
-
 ### QD-256: x/text's cases.Fold() swaps Cherokee case, so normalizer 1 is not idempotent and Cherokee search misses
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
@@ -2305,26 +2296,6 @@ Questions: `details-9-root-names.md`, `evs1-m2-24-root-directory-names.md`.
 Changes: sidecartest/fake_blobs.go checks path prefixes (data lane); KEYS-M2-13's filter removed; §11.8 keys row wording (design-records).
 
 Questions: `details-6-claim-key-prefix.md`, `keys-m2-13-claim-key-prefix.md`.
-
-### QD-624: Should the in-house MinIO build honor x-ur-if-unmodified-ms on a DELETE, so that a GC run deletes only the object it listed?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The in-house MinIO build honors x-ur-if-unmodified-ms: T on a DELETE, under the key's lock: 412, with nothing sent to a drive, when the object it finds was stored a second or more after T; a missing key answers 204 as today. sidecar.WithBlobUnmodified(ctx, lastModified) carries it, as WithBlobDeadline carries a deadline; orphan GC, the nightly pass's container deletes and the sweep send it. §11.3's 'a DELETE evaluates no precondition' changes (design-records). DESIGN-DETAILS.md section 2 is built on this, and the evsb-m2-23 track (EVSB-M2-22 and -23) has landed it.
-
-Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-22 and -23 (landed) stand; §11.3 MinIO bullet (design-records).
-
-Questions: `details-2-conditional-delete.md`.
-
-Partly folded (2026-11-10): DESIGN-DETAILS.md 2.8's words for it landed with QD-623's fold (owner decision 203): §11.3's MinIO bullet, §11.13's needs and orphans rows and the clause after §19.6's settle rule (6), which cites owner decision 203. This item's own owner decision number, cited there and in §11.3, and the rest of its text (412 with nothing sent to a drive, a missing key's 204, who sends the header) wait for §11's fold.
-
-### QD-625: Should the in-house MinIO build answer a LIST 503 when it could have dropped a key, since evacuation's horizon and GC's reads of pidx/ delete on what a LIST shows?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*
-
-The in-house MinIO build answers a LIST 503 when a set it must read has three or more drives offline, or any offline while one heals, and asks every online drive whatever list_quorum says. LISTs then fail in §19.6's at_risk state on a metadata set and with one host down on a 16-drive segment set, where evacuation, the nightly pass and uncached pidx/ lookups wait. FS-114 gains the clause; §11.13's needs row says what a LIST does in that state (design-records). DESIGN-DETAILS.md section 2 is built on this, and EVSB-M2-22 has landed it.
-
-Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-22 (landed) stands; §11.13 needs row and FS-114 (design-records).
-
-Questions: `details-2-list-whole.md`.
 
 ### QD-632: When a ref's first push crosses an immediate removal, may it create its paths in epoch 1, and if not, in which epoch does a new ref start?
 *Decided by the owner on 2026-11-10, asked one question at a time.*

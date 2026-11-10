@@ -7,7 +7,7 @@
 | Path | What it is |
 |---|---|
 | `sections/01-CTX.md` … `sections/23-PHASE.md` | DESIGN.md §1-§23, one file per section. The build copies them verbatim, adding only links. |
-| `owner/DECISIONS.md` | The owner's record, entries 1-224. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
+| `owner/DECISIONS.md` | The owner's record, entries 1-226. Each entry gives the question, the answer, what it costs and the options not taken. "Owner decision N" in DESIGN.md cites entry N. The file ends with owner instructions that carry no number. |
 | `owner/APPLY.md` | The rules for applying the owner's decisions: precedence (§1), supersession, where two decisions disagree (§2), notation (§3), editing rules (§4), and the follow-up decisions 112-136 with the sections each binds (§6-§8). |
 | `CONVENTIONS.md` | The writing conventions every section follows: the owner directive (§0), the owner rules (§1), the section template (§2) and the X registry (§7), which DESIGN.md's X1-X20 table replaced. |
 | `OUTLINE.md` | The original outline: section codes, scope boundaries, and the word budgets that G0's density rule replaced on 2026-11-04. |
@@ -42,7 +42,7 @@ It needs only `python3`; it was built and checked with Python 3.13. The steps, a
 
 The data files are layered. Each `data_*N.py` loads its predecessor with `runpy` and patches it: `data_front10.py` loads `data_front9.py`, back to `data_front3.py`, and the registers, glossary and appendices go the same way. Change the top layer (the `*10` files), or add an `*11` layer that loads them. Comments in the scripts cite working files from the design sessions (the reconcilers' orders, `peer/`, `review/`, `snap/`), which were not imported; they are history.
 
-## Adding owner decision N (225 onward)
+## Adding owner decision N (227 onward)
 
 1. Add entry N to `owner/DECISIONS.md`: the question, the answer, its cost, the options not taken, and what raised it.
 2. In `asm/data_front10.py`, append `(N, "<what it settles>", "<one line>")` to `INDEX`, add `DATES[N]`, and raise the `assert` to `list(range(1, N + 1))`. Update `STATUS` and `DECISIONS_INTRO` where they name a range. `@@OD:k@@` writes a link to decision k.
@@ -111,3 +111,13 @@ The design-records track for §17 and §18 folded those sections' items from sid
 - **The metadata list** is unchanged (v10): §2.8's only change is EX7's prose, outside the list.
 
 The tooling changed in one place: `assemble10.py`'s `DECIDED` and `AMENDED` patterns read a 2026-11-1x date, since Q-SDK-7 is the first Q- item decided after 2026-11-09, and Appendix B's status cell otherwise lost its decision numbers.
+
+## Validation after owner decisions 225 onward: §11's items (2026-11-10)
+
+The design-records track for §11 folds that section's items from sidecar/DESIGN-AMENDMENTS.md in pieces, each landed on its own. The first piece finishes DESIGN-DETAILS.md section 2.8 (segment GC and the store's settle rules), whose QD-623 part went in with §2's fold: owner decisions 225 and 226 (QD-624 and QD-625) give the in-house MinIO build a DELETE that names its object's LastModified and a LIST answered only when it is whole, and §11.3, §11.8's step 6, §11.13's needs and orphans rows, §19.6's settle, list and clocks rows, §19.10's held-key row, D-OPS-20, §19.17's risk rows, §22.8's StoreSettle.tla row, FI-30, FS-114 and §22.9's file-cluster list take section 2.8's remaining words, with QD-254's (no lifecycle rule on any bucket). FS-59's checks column stays FI-6 until sidecartest/fault/catalog.yml takes FI-1,6 with it, since the catalog's test holds each row's checks to that file. `build.sh` on this folder reproduced DESIGN.md (SHA-256 `2ea187b1325f538ad77e5c8343e1ec39a500b1c7b168b897c52a534088f7f720`) at this piece, and the validation shows:
+
+- **Ids.** None duplicated, undefined, or outside its own section; no new D-, Q- or FS- item.
+- **Owner decisions.** All 226 rows are present and cited.
+- **Superseded options.** 294 grep hits, each with a reading; the three on changed lines (the pools family, at §11.13's needs row, §19.6's rewrapped settle row and §22.9's file-cluster list) were read on 2026-11-10. None is live.
+- **Text.** No bare placeholders or HTML tags; the one research-sheet id stands. `v7/words.json` and `v7/text_checks.json` were regenerated.
+- **The metadata list** is unchanged (v10): neither the stamp, which lives in a storage host's memory, nor `x-ur-if-unmodified-ms`, a time in a request header as `x-ur-deadline-ms` is, adds a value a server sees.

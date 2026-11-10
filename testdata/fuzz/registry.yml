@@ -368,10 +368,11 @@ rows:
       - {name: FuzzEdgeRecordOrder, package: smtpproof, owner: SMTP-M9-21, milestone: M9}
 
   - id: device-role
-    spec: "SDK-M4-01's, BRIDGE-M4-06's and BRIDGE-M4-14's Tests lines: posture, bridge rules and the resolver on the device role"
+    spec: "SDK-M4-01's, SDK-M8-17's, BRIDGE-M4-06's and BRIDGE-M4-14's Tests lines: posture, bridge rules and the resolver on the device role"
     owner: SDK-M4-01
     milestone: M4
     targets:
       - {name: FuzzPostureApply, package: device, seeds: [testdata/fuzz/FuzzPostureApply]}
+      - {name: FuzzPostureNeverOpens, package: device, owner: SDK-M8-17, milestone: M8, seeds: [testdata/fuzz/FuzzPostureNeverOpens]}
       - {name: FuzzParseBridgeRules, package: device, owner: BRIDGE-M4-06}
       - {name: FuzzBridgeResolver, package: device, owner: BRIDGE-M4-14}

@@ -5,10 +5,13 @@ package fault
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
@@ -196,6 +199,110 @@ func (self *EvsWorld) ExpectEpoch(current uint64, sources ...uint64) func(ctx co
 		if evsservice.EvsHeadCurrentEpoch(head) != current || !slices.Equal(listed, sources) {
 			return fmt.Errorf("main's path epoch %v, not %d over %v", head.GetPathEpoch(), current, sources)
 		}
+		return nil
+	}
+}
+
+// A step action: device places the repo, PUT /evs/v1/repos/<id> through its lb under an admin token, as
+// EvsClient.CreateRepo does when it resumes the RepoCreate the world's projection holds: place/ and repo/, keying.
+// It must answer 200.
+func (self *EvsWorld) PlaceRepo(device string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		if err := self.PlaceRepoAny(device)(ctx, net); err != nil {
+			return err
+		}
+		if status := self.PlaceStatus(device); status != http.StatusOK {
+			return fmt.Errorf("%s's placement answered %d", device, status)
+		}
+		return nil
+	}
+}
+
+// A step action: device's placement, which may answer anything, its status kept (PlaceStatus).
+func (self *EvsWorld) PlaceRepoAny(device string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		world := self.Device(device)
+		token, err := self.issueToken(world, []string{"repo:" + self.RepoId.String() + ":admin"})
+		if err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPut, "https://evs.example/evs/v1/repos/"+hex.EncodeToString(self.RepoId[:]), nil)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		status := 0
+		response, err := world.transport.RoundTrip(request)
+		if err == nil {
+			status = response.StatusCode
+			response.Body.Close()
+		}
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.placeStatuses[device] = status
+		return nil
+	}
+}
+
+// What device's placement answered, 0 for no answer.
+func (self *EvsWorld) PlaceStatus(device string) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.placeStatuses[device]
+}
+
+// A step action: what KF1's group and the activation give a repo device placed, which the fakes cannot run through
+// the route, since sidecartest's FakeGkm writes no GroupForm (gkm/repo/<id>/) for the activation to read: device
+// makes the group under an inspecting context, and repo/, keying, is set active by hand, as the activation's If-Match
+// would. Then main's ref id is known and the world's checks and reads start.
+func (self *EvsWorld) FinishCreate(device string) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		inspect := sidecartest.InspectContext(ctx)
+		repoKey, err := self.Device(device).Gkm.CreateGroup(inspect, &sidecar.GkmCreateGroupArgs{RepoId: self.RepoId, Kind: self.settings.Kind})
+		if err != nil {
+			return fmt.Errorf("the repo's group: %w", err)
+		}
+		view := NewStoreView(net, nil)
+		clusterId, err := view.RepoClusterId(inspect, self.RepoId)
+		if err != nil {
+			return err
+		}
+		cluster, err := net.Host().Blobs.Cluster(clusterId)
+		if err != nil {
+			return err
+		}
+		object, err := view.Object(inspect, clusterId, sidecar.EvsRepoObjectKey(self.RepoId))
+		if err != nil {
+			return fmt.Errorf("repo/: %w", err)
+		}
+		repo := &protocol.EvsRepoObject{}
+		if err := proto.Unmarshal(object.Body, repo); err != nil {
+			return err
+		}
+		if repo.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING {
+			return fmt.Errorf("repo/ is %s, not keying", repo.GetState())
+		}
+		repo.State = protocol.EvsRepoState_EVS_REPO_ACTIVE
+		repo.StateMs = net.Clock().Now().UnixMilli()
+		repoBytes, err := proto.Marshal(repo)
+		if err != nil {
+			return err
+		}
+		if _, err := cluster.PutIfMatch(inspect, sidecar.EvsRepoObjectKey(self.RepoId), object.Etag, repoBytes, nil); err != nil {
+			return fmt.Errorf("repo/'s activation: %w", err)
+		}
+		refKey, err := sidecar.NewEvsRefKey(repoKey)
+		if err != nil {
+			return err
+		}
+		refId, err := sidecar.EvsRefId(refKey, sidecar.EvsMainRefName)
+		if err != nil {
+			return err
+		}
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.refId = refId
+		self.setUp = true
 		return nil
 	}
 }

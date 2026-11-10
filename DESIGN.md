@@ -67,7 +67,7 @@ All sidecar work happens on a branch named `sidecar` in every repo it touches (o
 
 ## Owner decisions
 
-The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, [Q-SDK-7](#1813-open-questions), which owner decisions [215](#od-215) and [216](#od-216) decide, and [Q-BRIDGE-8](#1714-open-questions), open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled (222), the ur.io/recurd page (223) and C16's latch (224). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
+The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, [Q-SDK-7](#1813-open-questions), which owner decisions [215](#od-215) and [216](#od-216) decide, and [Q-BRIDGE-8](#1714-open-questions), open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled (222), the ur.io/recurd page (223), C16's latch (224), and the store's DELETE that names its object (225) and its whole LIST (226). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
 
 ### Cross-cutting decisions X1-X20
 
@@ -352,6 +352,8 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-222"></a>222 | 2026-11-06 | `ur tun` on Windows | `ur tun` neither bundles nor fetches wintun.dll; it loads one beside `ur.exe` or at the app's path only once its hash and signer match the Windows app's pins. | §17 |
 | <a id="od-223"></a>223 | 2026-11-06 | ur.io/recurd | A minimal real ur.io/recurd page (label, key-origin frame, sign-in, records, downloads) is built on mmm's `sidecar` branch; its visual design stays out. | §18, §23 |
 | <a id="od-224"></a>224 | 2026-11-06 | C16 | C16's receive gate latches at this side's seal for M4; before M8 turns it on for app-device hosts the plaintext in flight at a seal is measured, and a visible loss moves the latch to the peer's first sealed frame within `TlsTimeout`. | §4, §17, §18 |
+| <a id="od-225"></a>225 | 2026-11-10 | Store DELETEs | The in-house MinIO build refuses a DELETE carrying `x-ur-if-unmodified-ms` 412, under the key's lock, when the object it finds was stored a second or more later, so orphan GC, the nightly pass and the sweep delete only what they listed. | §11, §19, §22 |
+| <a id="od-226"></a>226 | 2026-11-10 | Store LISTs | The in-house MinIO build answers a LIST only when it is whole: it asks every online drive of each set and answers 503 while three or more of a set's drives are offline, or one while another heals. | §11, §19, §22 |
 
 ## Contents
 
@@ -7213,7 +7215,7 @@ Keys come from §10, identity from §5, push from §6, tokens, the projection an
 
 - **No code** exists for evs or a git server [R:server-platform](design/design-research/server-platform.md) §5.10.
 - **BlobStore** has an overwriting Put (server/blob.go:674-679), PutIfAbsent as one If-None-Match request (:683-697), whole-object Get, List and SetLifecycle, but "deliberately no Delete", no ranged read and no streamed put (:155-183).
-- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and [owner decision 18](#od-18)'s clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). Upstream's DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored; §19.6's in-house build honors one condition of its own, `x-ur-if-unmodified-ms`, under the key's lock. A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
+- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and [owner decision 18](#od-18)'s clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). Upstream's DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored; §19.6's in-house build honors one condition of its own, `x-ur-if-unmodified-ms`, under the key's lock ([owner decision 225](#od-225)). A LIST asks a set's online drives and returns a key that half of those asked hold (cmd/metacache-set.go:728-733), so with three of eight drives offline it can leave out a key that five took; the in-house build answers such a LIST 503 ([owner decision 226](#od-226)). A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
 - **lb.** `client_max_body_size 16m` is global (warp/warpctl/config.go:1301); `streamable_paths` (warp/services/services.go:694-701) get 60 s timeouts and no request buffering (warp/warpctl/config.go:2311-2319).
 - **Crypto and clients.** x/crypto v0.54.0 (connect/go.mod:30) has XChaCha20-Poly1305 (chacha20poly1305/xchacha20poly1305.go:24) and no AES-SIV. Clients are reaped after 30+30 idle days (server/model/network_client_model.go:4179, :4199), so the durable signer is §5's `sidecar_id`.
 
@@ -8110,14 +8112,14 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              (11.22), every slot a new version names introduced by this push or named by a version step 4 read; a
              DROP's written boundary and its lists' base (409 DROP_BOUNDARY, DROP_LIST; 11.7); then the push's purge
              candidates (11.13)
-       6  one round: append P's record to the process's open batch and await its write (batches, above); if the window
-          would pass 127 versions, fold any of its oldest 64 still unfolded (If-Match) and PUT log/<n> for them
-          (If-None-Match; equal bytes on 412), or, if that cannot finish within the 5 s rule, page nothing (up to
-          255 versions; then 429 FOLD_BEHIND); then, for a push with new slots, one more round PUTs each slot
-          (If-None-Match; equal bytes on 412 are success, from M2 (11.22) only if a HEAD shows that object under
-          23 h old, else 409 SLOT_STALE, as a re-upload gets SEGMENT_STALE; unequal ones send evs to a cluster read
-          of the head, where 5a finds P committed if an ERASE rewrote it, else alarm), so a record names every slot
-          written
+       6  one round: append P's record to the process's open batch, a batch opening only while the process's clock is
+          sure (§19.6), and await its write (batches, above); if the window would pass 127 versions, fold any of its
+          oldest 64 still unfolded (If-Match) and PUT log/<n> for them (If-None-Match; equal bytes on 412), or, if
+          that cannot finish within the 5 s rule, page nothing (up to 255 versions; then 429 FOLD_BEHIND); then, for
+          a push with new slots, one more round PUTs each slot (If-None-Match; equal bytes on 412 are success, from
+          M2 (11.22) only if a HEAD shows that object under 23 h old, else 409 SLOT_STALE, as a re-upload gets
+          SEGMENT_STALE; unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE
+          rewrote it, else alarm), so a record names every slot written
        7  PUT head {v+1, C_{v+1}, P, the push's pins, window + P's entry (P, statement hash, place, digest, flags)
           - any paged out, window_base_chain, folded_through, written_ms, lease cleared, and for a CUT index_epoch
           v+1} If-Match step 4's ETag: the commit point; issued only within 5 s of step 4's reads, else steps 4
@@ -8776,12 +8778,15 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
 **Store needs (X13):**
 
 ```text
-needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads and LIST,
-          streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), a Delete, unconditional
-          or naming its object's LastModified (11.3, §19.6), §19.6's deadline and settle rules: a request refused
-          once its x-ur-deadline-ms has passed, and a PUT or DELETE that takes effect before any later request on
-          its key or never (D-OPS-20; 11.7's stale and collect rows), and lifecycle rules, each metadata cluster in
-          one pool (11.8), which §22's suite checks;
+needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads, a LIST
+          answered only when it is whole, else 503, as §19.6's list row has it while a set has three or more drives
+          offline, or one while another heals (owner decision 226), so evacuation's horizon, the nightly pass and
+          uncached pidx/ lookups wait in that state, streamed and ranged I/O, object metadata on PUT and HEAD (11.7's
+          entry states), a Delete, unconditional or naming its object's LastModified (11.3, §19.6; owner decision
+          225), and §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
+          PUT or DELETE that takes effect before any later request on its key or never (D-OPS-20; 11.7's stale and
+          collect rows), each metadata cluster in one pool (11.8) and no lifecycle rule on any bucket, which §22's
+          suite checks;
           segment PUTs ride streamable_paths: ["/evs/v1/repos/[^/]+/segments/[^/]+"]
 address   a segment is addressed only by segment_id = SHA-256 of its bytes, never by cluster, bucket, pack or
           offset; locators are signed (inside entry versions), so packing never rewrites them; readers GET
@@ -9137,7 +9142,7 @@ orphans   the nightly pass first takes each metadata cluster's horizon, from one
           each repo's seg/ prefix on the segment cluster, as it does for stored bytes, and its pidx/ entries; a
           segment whose LastModified + 24 h + 2 min is at or before its repo's cluster's horizon and that no pidx/
           entry lists as introduced is an orphan, which taskworker deletes by a DELETE that names its LastModified
-          (§19.6), at most 10 a second a segment cluster, on clusters whose build passed §19.6's settle cases; it
+          (§19.6; owner decision 225), at most 10 a second a segment cluster, on clusters whose build passed §19.6's settle cases; it
           raises no fence and reads no batch, so an orphan goes 49 to 75 h after its upload (owner decision 203);
           an uncommitted path map above its ref's current epoch goes the same way, by its oldest part (11.6)
 why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check,
@@ -15682,49 +15687,59 @@ settle    a PUT or DELETE must take effect before every later request on its key
           internal/grid/muxclient.go:118-133) and stops a PUT on the handler's own drives before their commit
           rename (cmd/xl-storage.go:2891-2896), but not on other hosts' drives, whose storage RPCs carry no
           cancel (cmd/storage-rest-server.go:708; internal/grid/handlers.go:294), nor a DELETE on any drive
-          (cmd/storage-rest-server.go:366; cmd/xl-storage-disk-id-check.go:638-639), and the handler releases
-          the object's lock, which GET, PUT and DELETE take (cmd/erasure-server-pool.go:939, :1137;
+          (cmd/storage-rest-server.go:366; cmd/xl-storage-disk-id-check.go:638-639), and the handler releases the
+          object's lock, which GET, PUT and DELETE take (cmd/erasure-server-pool.go:939, :1137;
           cmd/erasure-object.go:1264, :1555), while those run on, so a later request can read the key, or pass
-          its precondition, before the cancelled write lands; holding the lock until every drive answered or
-          met the 30 s drive timeout (internal/config/drive/drive.go:36-41) is not enough either, since a
-          commit stalled after its last check lands after that release; the in-house build (D-OPS-20)
-          therefore, for a set of N drives, whose writes need N/2 + 1 and reads N/2 (5 and 4 of 8, 9 and 8 of
-          16; Parity, above): (1) refuses a request whose x-ur-deadline-ms has passed when it holds the key's
-          lock; (2) sends each drive commit (data or metadata rename, delete, heal, revert) the version the
-          coordinator read from that drive under the lock, or its absence, and a deadline: the request's, or,
-          for a streamed segment PUT, a heal or a revert, 40 s after its last byte or its start; the drive
-          host, holding its own lock on the key from that check through the commit rename, applies it only
-          while the drive still holds that version and its clock is before the deadline, else answers stale
-          and changes nothing; (3) releases the key's lock once N/2 + 1 drives have committed the write
-          (success; a later commit of it only adds a copy), or, once no more of its commits can begin (every
-          drive answered, or its deadline passed), reverting every committed drive to its previous
-          xl.meta, or a DELETE's copy in .minio.sys/settle/<id>-<hash of the key>/, ciphertext and xl.meta,
-          which the settle sweep keeps at least 2 min and while the key is held, its interval checked to stay
-          inside §11.12's 10 min stragglers' pass (§2.8 evs-10), each version's xl.meta naming its write by
-          x-minio-internal-settle-id, the key lock's random id,
-          by (2)'s check, as the deployed build undoes a write short of quorum on every drive
-          that took it (cmd/erasure-object.go:1059-1079), once the drives that may still hold it,
-          committed and not yet reverted or still committing, number under N/2, so that write can
-          never be read and the version before it loses only the drives the write stalled on or
-          could not revert; until then the key is held: requests on it wait, then fail 503; (4)
-          keeps a dead coordinator's write locks, none expiring on a missed refresh, until a settler on another
-          host, past the request's deadline, reads each drive's version for the key, asks its host whether a
-          commit of the request still runs and settles by (3), a host that does not answer counting as still
-          committing; (5) serves a drive from a restarted process only once the old one has exited, by an
+          its precondition, before the cancelled write lands; holding the lock until every drive answered or met
+          the 30 s drive timeout (internal/config/drive/drive.go:36-41) is not enough either, since a commit
+          stalled after its last check lands after that release; the in-house build (D-OPS-20) therefore, for a
+          set of N drives, whose writes need N/2 + 1 and reads N/2 (5 and 4 of 8, 9 and 8 of 16; Parity, above):
+          (1) refuses a request whose x-ur-deadline-ms has passed when it holds the key's lock; (2) sends each
+          drive commit (data or metadata rename, delete, heal, revert) the version the coordinator read from that
+          drive under the lock, or its absence, with the drive's stamp for the key (how many commits its process
+          had applied when it last applied one to the key, kept in memory for 2 min, with a value drawn at the
+          process's start), and a deadline fixed before that read: the request's, or, for a streamed segment PUT,
+          a heal or a revert, 40 s after its last byte or its start; the drive host, holding its own lock on the
+          key from that check through the commit rename, applies it only while the drive still holds that version
+          and that stamp, so only if no commit was applied to the key there since the read, and its clock is
+          before the deadline, else answers stale and changes nothing; a DELETE of a key the drive lacks counts
+          as committed and moves the stamp; (3) releases the key's lock once N/2 + 1 drives have committed the
+          write (success; a later commit of it only adds a copy), or, once no more of its commits can begin
+          (every drive answered, or its deadline passed), reverting every committed drive to its previous
+          xl.meta, or a DELETE's copy in .minio.sys/settle/<id>-<hash of the key>/, ciphertext and xl.meta, which
+          the settle sweep keeps at least 2 min and while the key is held, its interval checked to stay inside
+          §11.12's 10 min stragglers' pass (§2.8 evs-10), each version's xl.meta naming its write by
+          x-minio-internal-settle-id, the key lock's random id, by (2)'s check, as the deployed build undoes a
+          write short of quorum on every drive that took it (cmd/erasure-object.go:1059-1079), once the drives
+          that may still hold it, committed and not yet reverted or still committing, number under N/2, so that
+          write can never be read and the version before it loses only the drives the write stalled on or could
+          not revert; a DELETE, which leaves a drive in the one state every DELETE leaves, releases its key only
+          once no drive may still hold it, each commit of it having answered and each that landed been reverted,
+          and is never reverted after its release; until then the key is held: requests on it wait, then fail
+          503; (4) keeps a dead coordinator's write locks, none expiring on a missed refresh, until a settler on
+          another host, past the request's deadline, reads each drive's version for the key, asks its host
+          whether a commit of the request still runs and settles by (3), a host that does not answer counting as
+          still committing; (5) serves a drive from a restarted process only once the old one has exited, by an
           exclusive flock on the drive; (6) heals no version that fewer than N/2 drives hold onto others,
-          removing it as dangling; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's
-          lock, when the object it finds was stored a second or more after that time, which is how GC deletes
-          only the object it listed (§11.13; owner decision 203); so one drive or host failing holds a key at most
-          for a revert's round trip,
-          and a key waits longer only while a write lacking N/2 + 1 drives could still reach N/2 with a host
-          among the drives holding it unreachable, until that host answers or its drives are replaced (19.10,
-          19.17); §22.9's suite checks it (FS-114) per build, upgrade and cluster, reporting the lag from a
-          cancel to a write's last drive answer, which no margin relies on, since a marker's collection DELETE
-          (owner decision 148) and, from v1, the versionless purge's, the marker collection's kind-5 and slot
-          DELETEs (§11.7, §11.13) and a drop job's (§11.13) are unconditional; on a cluster whose build has not
-          passed it, taskworker opens no collection window, orphan GC deletes nothing and v1's purge and drop
-          jobs delete nothing,
-          keeping markers and candidates
+          removing it as dangling; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's lock
+          and with nothing sent to a drive, when the object it finds was stored a second or more after that time,
+          and a missing key answers 204 as upstream's does; orphan GC, the nightly pass's container deletes and
+          the sweep send it, which is how GC deletes only the object it listed (§11.13; owner decisions 203,
+          225); so one drive or host failing holds a key at most for a revert's round trip, and a key waits
+          longer only while a PUT lacking N/2 + 1 drives could still reach N/2, or a DELETE lacking them has a
+          commit unanswered, with a host among those drives unreachable, until that host answers or its drives
+          are replaced (19.10, 19.17); §22.9's suite checks it (FS-114) per build, upgrade and cluster, reporting
+          the lag from a cancel to a write's last drive answer, which no margin relies on, since a marker's
+          collection DELETE (owner decision 148) and, from v1, the versionless purge's, the marker collection's
+          kind-5 and slot DELETEs (§11.7, §11.13) and a drop job's (§11.13) are unconditional; on a cluster whose
+          build has not passed it, taskworker opens no collection window, orphan GC deletes nothing and v1's
+          purge and drop jobs delete nothing, keeping markers and candidates
+list      a LIST is answered only when it is whole: the build asks every online drive of each set it reads,
+          whatever list_quorum says, and answers 503 when three or more of a set's drives are offline, or one is
+          while another heals, since a key on N/2 + 1 drives can then fall under the half of the asked drives a
+          listing needs (§11.3); evacuation's horizon and every deletion decided on a LIST of pidx/ (§11.13) rest
+          on it, so in the at_risk state on a metadata set (Parity, above), and with one host down on a 16-drive
+          segment set, evacuation, the nightly pass and uncached pidx/ lookups wait (owner decision 226)
 clocks    chrony on every host running evs, gkm, taskworker, a Redis master or MinIO, by whose clocks
           §11.10's push sequence restarts and the settle row's deadlines hold (edge-6 and edge-5:
           xops/main/ansible/REDIS.md:3-6; none synced today, 19.3), serving NTP only to its services network,
@@ -15734,7 +15749,8 @@ clocks    chrony on every host running evs, gkm, taskworker, a Redis master or M
           estimate of true time and slews the system clock toward it
           (https://chrony-project.org/doc/4.6/chronyc.html, tracking), unknown after 3 s without a reply or
           with an unsynchronised one (leap 3, stratum 16); while it is unknown or over 50 ms, §11.8's evs
-          answers pushes 503 and issues no v1 purge DELETE (§11.13), taskworker raises no evacuation fence
+          answers pushes 503, opens no batch and issues no v1 purge DELETE (§11.13), taskworker raises no
+          evacuation fence
           and GC deletes nothing, and a MinIO host takes no request carrying a deadline and begins no
           drive commit, the work waiting, since §11.8 bounds every clock that writes fence_ms or a refusal
           record's until, and the settle row every clock that sets or checks a deadline; each exports it,
@@ -16157,7 +16173,8 @@ a key held by a write      19.6's settle row: requests on the key wait, then   p
   that cannot settle       fail 503 (evs answers 503 unknown, gkm retries);    or replace its drives (the cold spare
                            the coordinator, or a settler on another host,      chassis or spare drives), after which
                            reverts what it can and releases once fewer than    the settler reads what they hold and
-                           a read quorum of drives can hold the write          releases
+                           a read quorum of drives can hold a PUT, or none a   releases
+                           DELETE
 P0 past the refill         P0 runs at once, never paced or refused (owner      read 19.8's P0 bytes by kind; never pace or
   (19.8's page)            decision 186); while it takes the refill, pushes    refuse P0; order the next metadata cluster
                            are shed, and once it empties the bucket folds and  (19.9) and point place_new away from this
@@ -16389,7 +16406,7 @@ A network is in when listed or when hash(network_id) mod 100 < `percent`. A disa
 
 **D-OPS-19 (proposed).** The metadata set runs 19.6's XFS and MinIO settings, and each storage host exports its metadata drives' write counters and SMART wear, and its HDDs' operation counters, to monitor, §11.13's write budget and its HDD share (19.6). *Why:* the drives' endurance is the binding budget, and only drive counters measure it ([owner decision 140](#od-140)); the HDD sets' operations bind before their space (Q-OPS-2).
 
-**D-OPS-20 (proposed).** Both clusters run an in-house MinIO build, from the `urnetwork/minio` fork's `sidecar` branch ([owner decision 195](#od-195)), with 19.6's deadline and settle rules: every request but a streamed segment PUT carries its deadline, which the build checks where it takes the key's lock and at each drive commit; each drive commit applies only while its drive still holds the version the coordinator read under the lock; and a PUT or DELETE releases its key only once it holds a write quorum or can never reach a read quorum, reverting every drive that took it, another host settling a dead coordinator's write; and a DELETE may name the LastModified of the object it means, as GC's do ([owner decision 203](#od-203)). *Why:* in the deployed build a cancel reaches no drive on another host and the lock is released first, and even a lock held to the 30 s drive timeout releases a commit that stalled after its last check, so a cancelled or timed-out write can land after a later request on its key read it or passed its precondition, breaking §11.7's marker collection, v1's versionless purge and drop jobs (§11.13) and every conditional write's atomicity; holding a key while such a write settles is the cost, paid only when a host fails during a write that has not reached its write quorum; a fork, not a patch series in warp, keeps MinIO's AGPL source in one public place.
+**D-OPS-20 (proposed).** Both clusters run an in-house MinIO build, from the `urnetwork/minio` fork's `sidecar` branch ([owner decision 195](#od-195)), with 19.6's deadline and settle rules: every request but a streamed segment PUT carries its deadline, which the build checks where it takes the key's lock and at each drive commit; each drive commit applies only while no commit was applied to its key on its drive since the coordinator read it under the lock; a PUT releases its key only once it holds a write quorum or can never reach a read quorum, and a DELETE only once it holds a write quorum or no drive holds anything of it, each reverting every drive that took it, another host settling a dead coordinator's write; a DELETE may name the LastModified of the object it means, as GC's do (owner decisions [203](#od-203), [225](#od-225)); and a LIST is answered only when it is whole ([owner decision 226](#od-226)). *Why:* in the deployed build a cancel reaches no drive on another host and the lock is released first, and even a lock held to the 30 s drive timeout releases a commit that stalled after its last check, so a cancelled or timed-out write can land after a later request on its key read it or passed its precondition, breaking §11.7's marker collection, v1's versionless purge and drop jobs (§11.13) and every conditional write's atomicity; absence is not a version, so a drive's contents alone cannot tell a commit from before a DELETE from one after it, nor one failed DELETE's leavings from another's; holding a key while such a write settles is the cost, paid only when a host fails during a write that has not reached its write quorum; a fork, not a patch series in warp, keeps MinIO's AGPL source in one public place.
 
 **D-OPS-21 (proposed).** Drop jobs are P2 taskworker work, one per segment cluster at a time, each reading at most 32 MB/s and deleting at most 10 objects a second, paused while HDD drive operations exceed 50% of measured capacity (19.6). *Why:* [owner decision 173](#od-173)'s scan of every ref must not starve customers' reads or the HDD sets' heal and evacuation.
 
@@ -16441,8 +16458,8 @@ None: owner decisions [18](#od-18), [94](#od-94) and [145](#od-145) keep MinIO, 
 | The first metadata cluster fails: writes stop on every cluster, since each checks `rev/` there, as do new repos, log appends and Adds (19.10) | Low | High | EC:4 with the cold spare; it pages as a cluster refusing writes; processes keep reading repos they hold placement and state for |
 | Placement moves only new repos, so a cluster's repos (its cohort), or the first cluster's control plane, can outgrow it before a move tool exists while new clusters stand mostly empty ([owner decision 145](#od-145)) | Medium | High | triggers stop new repos with over a third of the budget and half the space left; shedding; 19.9's cohorts row projects each cluster's own exhaustion and builds the move tool before the earliest, and until then holds a cluster at 80% raw or 70% inodes to maintenance (507 CLUSTER_FULL); FS-119 drills it |
 | A pool on a metadata cluster breaks conditional writes (§11.3) | Low | Critical | no pools ([owner decision 145](#od-145)); §22's suite refuses one (FS-63); monitor warns |
-| A cancelled or timed-out write lands after a later request on its key read it or passed its precondition, as the deployed MinIO allows (19.6's settle row), so a CAS loses its atomicity, or §11.7's collection or v1's purge (§11.13) deletes a live object | Low | Critical | D-OPS-20's build: deadlines checked where a request takes its key and at each drive commit, each commit applied only over the version its coordinator read, and a key released only at a write quorum or once the write can never be read, a dead coordinator's write settled from another host; §22.9's suite and FS-114 per build, upgrade and new cluster, with commits held past 30 s and the coordinator killed; StoreSettle.tla; collection, purge and drops wait on a build that has not passed |
-| A write that cannot settle holds its key: one lacking a write quorum that could still reach a read quorum, with a host among its drives unreachable, keeps requests on the key waiting, then failing 503 (evs answers unknown), until the host answers or its drives are replaced (19.6's settle row) | Low | Medium | it needs a write mid-commit as a host fails after committing; reverts reach every reachable drive at once; ordinary drive and host failures hold no key; paged past 1 min (19.8); 19.10's held-key row |
+| A cancelled or timed-out write lands after a later request on its key read it or passed its precondition, as the deployed MinIO allows (19.6's settle row), so a CAS loses its atomicity, or §11.7's collection or v1's purge (§11.13) deletes a live object | Low | Critical | D-OPS-20's build: deadlines checked where a request takes its key and at each drive commit, each commit applied only if no commit reached its key on that drive since its coordinator read it, and a key released only at a write quorum or once the write can never be read, a DELETE's once no drive holds it, a dead coordinator's write settled from another host; §22.9's suite and FS-114 per build, upgrade and new cluster, with commits held past 30 s and the coordinator killed; StoreSettle.tla; collection, purge and drops wait on a build that has not passed |
+| A write that cannot settle holds its key: a PUT lacking a write quorum that could still reach a read quorum, or a DELETE lacking one with a commit unanswered, with a host among its drives unreachable, keeps requests on the key waiting, then failing 503 (evs answers unknown), until the host answers or its drives are replaced (19.6's settle row) | Low | Medium | it needs a write mid-commit as a host fails after committing; reverts reach every reachable drive at once; ordinary drive and host failures hold no key; paged past 1 min (19.8); 19.10's held-key row |
 | A second failure lands while a set is degraded, before its heal ends | Medium | High | `at_risk` pages; full heal on every return; M3's drill measures heal time |
 | Y2's HDD load passes the 50% admission line: by 19.6's model its PUTs alone (~6,400 drive operations a second) fill it before any GET, and HDD sets cannot be pools (19.9) | High by the model | High | §22.8's hdd row runs the mix with admission on, reporting admitted throughput and refusals (M3); 19.9's hdd trigger lands the segment placement and the added capacity before that load; §11.13's HDD share past 50% of 19.6's published capacity; Q-OPS-2 (a) |
 | Site loss destroys data no device holds | Low | Critical | mirrors (D-EVS-17), spools, D-OPS-18's dump, §22.8's drill |
@@ -18066,12 +18083,13 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             while all holds its old row, that every current diff's chain resolves and no tombstoned version counts,
             and that every expired bucket is rolled while a roller is live and every erasure whose CUT committed
             finishes while a finishing device is live (weak fairness);
-            StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version and its own lock
-            on the key, each write's coordinator, which may crash, and its drive commits, each a check step then a
-            commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after it, hold
-            a commit between check and commit past the drive timeout, or miss a host that is down; TLC checks
-            FI-30 with 3 writes, 2 coordinators and a reader, and that every held key is released once its stalled
-            commits answer (weak fairness)
+            StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
+            its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
+            step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
+            it, hold a commit between check and commit past the drive timeout, or miss a host that is down; TLC
+            checks FI-30 with PUTs and DELETEs mixed, breadth-first at 4 drives on 2 hosts and at 6 on 3 with 2 and
+            3 writes, a coordinator crash and a host failure, and by simulation at 8 drives with 3 writes and 2
+            coordinators, and that every held key is released once its stalled commits answer (weak fairness)
 history     Porcupine (https://github.com/anishathalye/porcupine) checks T3 histories per ref with §11.8's commit
             rule; an unknown outcome has an open end time and matches any result
 cadence     each FS runs on the tiers its row names: T2 rows on each merge, T3 rows nightly and at each Gn-out; a row
@@ -18244,7 +18262,8 @@ FI-29  copies: no key in a passive keychain copy, a Delegation's reader key asid
 FI-30  store settle (D-OPS-20): a PUT or DELETE takes effect, as every request on its key sees it, before the next
        request the store serves on that key, or never; none the store took, or began a drive commit of, past its
        deadline takes effect; no earlier write and no heal undoes a state a later write acknowledged or a read
-       returned; a key is held only while a write lacking a write quorum could still reach a read quorum (§19.6)
+       returned; a key is held only while a PUT lacking a write quorum could still reach a read quorum, or a
+       DELETE lacking one has a drive commit yet to answer or be reverted (§19.6)
 ```
 
 ```text
@@ -19669,8 +19688,18 @@ FS-114 §19,11 the store's settle rule (D-OPS-20) on T3's 4 × 2 EC:4 and 4 × 4
               has exited; heal never spreads a version under a read quorum; a head written
               while a host was down, then a PUT to it short of its write quorum as a second
               host stalls mid-commit: every drive that took the PUT reverted, that head read
-              throughout and after both hosts return and a full heal; twin: with no barrier
-              every write releases at its write quorum and no key is held
+              throughout and after both hosts return and a full heal; two DELETEs of one key,
+              each with a commit held past its deadline, on one host and with a host then
+              down: the key is held until the held commits are released and reverted, and the
+              object reads throughout and after; a create whose last drive commit is held
+              before its check across an acknowledged DELETE of the key: released, it answers
+              stale, and the key reads 404 through every host and after a full heal; a DELETE
+              naming an older object's LastModified: 412, and the object stays (owner
+              decision 225); a drive host restarted between a write's read of it and its
+              commit: stale; a LIST with three drives of a set stopped, or one stopped while
+              another heals: 503, and with two stopped it lists every acknowledged key (owner
+              decision 226); twin: with no barrier every write releases at its write quorum
+              and no key is held
 FS-115 §16    apply barriered after its stage, after its aside's hash check and after its      FI-8        T2     M3-out
               install; there a process taking no daemon lock writes distinct bytes to the
               path in place, saves them by a temporary file and rename, deletes it, or
@@ -19880,7 +19909,7 @@ Beyond the schedules:
 - **git** (2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH): through the local tier, and `git-remote-ur` without a prior mount, oids equal a reference; stock non-fast-forward errors, sibling pushes from one base giving one; `git push --atomic` fails before any write; a two-ref push reports per-ref statuses; a daemon killed between the remote commit and update-ref reconciles from its journal; foreign new commits refused, signed imports accepted.
 - **git-lfs** (3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`): FS-73's flows with stock clients, pointer files byte-exact and export's oids equal to git's, its tip check included over http, ssh and `git-remote-ur`, with no skip option set and with `--no-verify` and `GIT_LFS_SKIP_PUSH`.
 - **Restore** (darwin on APFS; linux on ext4, xfs and an NFS mount; windows on NTFS; a FAT volume on each; symlinks on each, Windows with and without the symlink privilege): FS-115's apply through each volume's no-replace rename, its hard-link fallback, and `unsupported` where it has neither, with Windows's in-use refusal.
-- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally ([owner decision 148](#od-148)), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write and LIST consistency; checksums; ranged GET; Delete; lifecycle; one pool per cluster (FS-63).
+- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally ([owner decision 148](#od-148)), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 ([owner decision 226](#od-226)); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one ([owner decision 225](#od-225)); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
 - **MTAs** (Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail): in, D-MAIL-9's census with nothing lost; out, §14.4 levels, DKIM, strict DMARC, which B's selector fails for A's network and burners, FCrDNS, JMRP and CFL joins; aggregate reports as FS-39, a one-connection, ten-recipient send raising no alarm.
 - **ZK preamble** (`smtpproof`, BDAT and DATA ([owner decision 125](#od-125)), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
