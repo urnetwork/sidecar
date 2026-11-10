@@ -285,7 +285,11 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 
 	// the state at b itself, with S(b)'s pin and chains
 	state.n, state.chain, state.timeMs = baseN, chains[baseIndex], baseEntry.GetTimeMs()
-	configAdvanceBaseShrinks(next, previousBase, header)
+	var previousRows []byte
+	if previousBase != nil {
+		previousRows, _ = rowsSource.Rows(self.networkId, previousBase.header.GetRowsSha256())
+	}
+	configAdvanceBaseShrinks(next, previousBase, header, previousRows, rows)
 	result := next.finish()
 	self.keep(start)
 	self.retainBase(result, rowsBytes)

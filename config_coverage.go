@@ -9,8 +9,10 @@
 //	         that started at a base reach a long-running reader's value, and writers compile it into bases
 //	base     a base whose config head is newer than the previous base's may drop readers by policy, which a verifier
 //	         that started at that base cannot compare with the state before it; until question
-//	         team-m2-09-base-shrinks is answered, every verifier advances every repo's holders_shrunk_at to such a
-//	         base's position, the fail-closed rule
+//	         team-m2-09-base-shrinks is answered, every verifier advances every repo's holders_shrunk_at to the
+//	         position of a base whose compiled policy part differs from the previous base's rows', the fail-closed
+//	         rule, since both bases' rows are what every verifier holds; a fold, a ServiceSettings or a K_sock change
+//	         moves no policy and shrinks nothing
 //	expiry   a holder whose RepoGrant or requested grant expires, or whose SidecarAdmit (an uncovered agent's) or
 //	         Delegation not_after passes, at T_e, leaves at T_e with no entry: KEYS's GkmHolderExpiry, identity
 //	         (R, T_e). A covered agent's own not_after drops no holder where it is covered, and a ReaderKey's lapse is
@@ -178,11 +180,42 @@ func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
 }
 
 // The fail-closed rule for a base whose config head is newer than the previous base's (question
-// team-m2-09-base-shrinks): every repo's holders_shrunk_at advances to the base's position, at every verifier alike,
-// since each holds the previous base.
-func configAdvanceBaseShrinks(next *configStateBuilder, previous *configBase, header *bridge.ProjectionHeader) {
+// team-m2-09-base-shrinks): when the policy part of its compiled acl rows differs from the previous base's rows', or
+// those rows cannot be read (previousRows nil), every repo's holders_shrunk_at advances to the base's position, at
+// every verifier alike, since each holds both bases' rows.
+func configAdvanceBaseShrinks(next *configStateBuilder, previous *configBase, header *bridge.ProjectionHeader, previousRows []byte, rows *bridge.ProjectionRows) {
 	if previous == nil || header.GetConfigVersion() <= previous.header.GetConfigVersion() {
 		return
 	}
+	if previousRows != nil && configPolicyRowsEqual(previousRows, rows) {
+		return
+	}
 	configSetShrunkAt(next, func(repoId Id) bool { return true })
+}
+
+// Whether two rows' acl parts compile the same policy: has_document, rules, requests, the bridge section, audit and
+// each atom's policy fields, leaving out what the log folds, repos, suspensions, spent grants and the sidecars carrying
+// a tag. False when either does not parse.
+func configPolicyRowsEqual(previousRowsBytes []byte, rows *bridge.ProjectionRows) bool {
+	previousRows := &bridge.ProjectionRows{}
+	if err := proto.Unmarshal(previousRowsBytes, previousRows); err != nil {
+		return false
+	}
+	policy := func(aclBytes []byte) (*protocol.AclRows, bool) {
+		acl := &protocol.AclRows{}
+		if err := proto.Unmarshal(aclBytes, acl); err != nil {
+			return nil, false
+		}
+		acl.Repos, acl.Suspensions, acl.SpentGrants = nil, nil, nil
+		for _, atom := range acl.GetAtoms() {
+			atom.SidecarIds = nil
+		}
+		return acl, true
+	}
+	previousPolicy, ok := policy(previousRows.GetAcl())
+	if !ok {
+		return false
+	}
+	nextPolicy, ok := policy(rows.GetAcl())
+	return ok && proto.Equal(previousPolicy, nextPolicy)
 }

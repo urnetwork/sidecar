@@ -134,20 +134,22 @@ func TestShrunkAtIsEqualAtEveryReaderAfterABase(t *testing.T) {
 	net.everyReaderAgrees()
 }
 
-// Question team-m2-09-base-shrinks' fail-closed rule: a base naming a newer config head shrinks every repo at its
-// position, at every reader alike; a base keeping the head shrinks none.
-func TestABaseWithANewerHeadShrinksEveryRepo(t *testing.T) {
+// Question team-m2-09-base-shrinks' fail-closed rule: a base naming a newer config head whose compiled policy differs
+// from the previous base's shrinks every repo at its position, at every reader alike; a base keeping the head, or a
+// newer head moving no policy (a fold, a ServiceSettings), shrinks none.
+func TestABaseWithANewerPolicyShrinksEveryRepo(t *testing.T) {
 	net := newTestConfigNet(t)
 	repoId, _ := net.repoWithReader("r", 0)
 	before := net.log.State().ShrunkAt(repoId)
 	net.fold(net.owner, net.n, 1)
-	if shrunk := net.log.State().ShrunkAt(repoId); shrunk != before {
-		t.Errorf("a base keeping its head shrank the repo at %d", shrunk)
-	}
 	net.source.settings[[sha256.Size]byte(testConfigHeadSha256(2))] = &protocol.ServiceSettings{WitnessBoundHours: 48}
 	net.fold(net.owner, net.n, 2)
+	if shrunk := net.log.State().ShrunkAt(repoId); shrunk != before {
+		t.Errorf("a base moving no policy shrank the repo at %d", shrunk)
+	}
+	net.withTagOwner(testConfigId("tag t"), net.ownerMemberId)
 	if shrunk := net.log.State().ShrunkAt(repoId); shrunk != net.n {
-		t.Errorf("a base with a newer head left holders_shrunk_at at %d", shrunk)
+		t.Errorf("a base with a newer policy left holders_shrunk_at at %d", shrunk)
 	}
 	net.everyReaderAgrees()
 }
