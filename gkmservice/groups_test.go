@@ -339,8 +339,67 @@ func TestGkmGroupCreateResumesAfterACrash(t *testing.T) {
 	}
 }
 
-// A creation is a repo's first form, and no form names a group that has objects already (question
-// keys-m2-12-groupform-names-anothers-group, refused until it is answered).
+// DESIGN-DETAILS 6.6: a group belongs to one repo from its first byte. A form for repo b naming repo a's group
+// answers 409 at the owner marker and writes nothing, even in the race where a's creation has written only its
+// marker; equal bytes resume a's crashed creation; a form of b that names a's group in the store reaches none of
+// a's routes with a b-scoped token; and the shred deletes the marker with the group's other objects.
+func TestAGroupBelongsToOneRepo(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	fixture := world.fixture
+	// a's creation crashed after its first write: only the marker stands
+	ownerBytes, err := gkmGroupOwnerBytes(world.repoId, sidecar.Id(fixture.networkId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.put("meta-2", GkmGroupOwnerKey(world.groupId), ownerBytes)
+	otherRepoId := testId("repo-other")
+	fixture.placeRepo(otherRepoId, "meta-2", protocol.EvsRepoState_EVS_REPO_KEYING)
+	fixture.auth.grant(world.admin.sidecarId, otherRepoId, sidecar.AclEvsAdmin)
+	otherToken := fixture.token(world.admin.sidecarId, repoScope(otherRepoId, "admin"))
+	other := &gkmGroupWorld{t: t, fixture: fixture, repoId: otherRepoId, groupId: world.groupId, admin: world.admin, adminToken: otherToken}
+	if recorder := other.postCreate(other.createRequest(world.groupId)); recorder.Code != http.StatusConflict {
+		t.Errorf("a form for another repo naming the group, before the group's first form: %d", recorder.Code)
+	}
+	if fixture.object("meta-2", GkmFormKey(otherRepoId, 1)) != nil || fixture.object("meta-2", GkmEpochKey(world.groupId, 0)) != nil ||
+		fixture.object("meta-2", GkmGenerationKey(world.groupId, 1)) != nil {
+		t.Errorf("the refused creation wrote something")
+	}
+	if held := fixture.object("meta-2", GkmGroupOwnerKey(world.groupId)); !bytes.Equal(held, ownerBytes) {
+		t.Errorf("the marker changed")
+	}
+	// equal bytes resume the crashed creation
+	if recorder := world.postCreate(world.createRequest(world.groupId)); recorder.Code != http.StatusOK {
+		t.Fatalf("the owner's creation resumed: %d", recorder.Code)
+	}
+	// a form of the other repo naming the group, written past gkm's checks, resolves nothing
+	formBody := fixture.marshal(&protocol.GroupForm{RepoId: otherRepoId.Bytes(), GroupId: world.groupId.Bytes(), Generation: 1})
+	fixture.put("meta-2", GkmFormKey(otherRepoId, 1), fixture.marshal(&bridge.Signed{
+		Body: formBody, SignerId: world.admin.sidecarId.Bytes(), Signature: make([]byte, 64), Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM),
+	}))
+	groupPath := "/gkm/groups/" + sidecar.EvsKeyId(world.groupId)
+	for _, path := range []string{groupPath, groupPath + "/epochs?after=0", groupPath + "/gen?since=0"} {
+		if recorder := fixture.serve(http.MethodGet, path, otherToken, nil); recorder.Code != http.StatusForbidden {
+			t.Errorf("GET %s with the other repo's token: %d", path, recorder.Code)
+		}
+	}
+	if recorder := other.postEpoch(otherToken, 1, gkmTestEpochRequest([]byte("a commit"), 1, false)); recorder.Code != http.StatusForbidden {
+		t.Errorf("a commit to the group with the other repo's token: %d", recorder.Code)
+	}
+	ownerToken := fixture.token(world.admin.sidecarId, repoScope(world.repoId, "r"))
+	if recorder := fixture.serve(http.MethodGet, groupPath, ownerToken, nil); recorder.Code != http.StatusOK {
+		t.Errorf("GET the group with its repo's token: %d", recorder.Code)
+	}
+	// the shred deletes the marker with the group's other objects
+	if err := ShredGroup(fixture.ctx, fixture.host.ServiceHost(), fixture.cluster("meta-2"), world.repoId, true, fixture.settings); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.object("meta-2", GkmGroupOwnerKey(world.groupId)) != nil {
+		t.Errorf("the shred left the owner marker")
+	}
+}
+
+// A creation is a repo's first form, and no form names a group another repo owns: the owner marker answers 409
+// before anything is written (DESIGN-DETAILS 6.2.2).
 func TestGkmGroupCreateRefusesASecondGroupAndATakenGroup(t *testing.T) {
 	world := newGkmGroupWorld(t)
 	fixture := world.fixture

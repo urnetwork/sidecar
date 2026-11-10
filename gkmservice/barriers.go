@@ -21,6 +21,10 @@ const (
 	// Around POST /gkm/groups's If-None-Match creates: GroupForm, epoch/0, gen/1 (KEYS-M2-14), keyed by the group.
 	BarrierGroupCreateBefore = "gkm.group_create.before"
 	BarrierGroupCreateAfter  = "gkm.group_create.after"
+	// Around the owner marker's If-None-Match, the first write of a creation or a re-form (DESIGN-DETAILS 6.2.2),
+	// keyed by the group.
+	BarrierGroupOwnerBefore = "gkm.group_owner.before"
+	BarrierGroupOwnerAfter  = "gkm.group_owner.after"
 	// Around epoch/<n>'s If-None-Match, one commit per epoch (KEYS-M2-14), keyed by <group>:<n>.
 	BarrierEpochPutBefore = "gkm.epoch_put.before"
 	BarrierEpochPutAfter  = "gkm.epoch_put.after"

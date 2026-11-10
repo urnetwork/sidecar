@@ -382,14 +382,16 @@ enum GkmHintKind {
   GKM_HINT_KIND_UNSPECIFIED = 0; GKM_HINT_COMMIT = 1; GKM_HINT_PENDING = 2; GKM_HINT_WELCOME = 3;
   GKM_HINT_KEY_PACKAGES_LOW = 4; GKM_HINT_WRAP_PENDING = 5;
 }
-// §10.6's objects: the epoch/<n> row with gkm-1's epoch 0, the group-info row, the welcome/<sidecar_id>/<ref> row and
+// §10.6's objects: the epoch/<n> row with gkm-1's epoch 0, the group-info row, the welcome/<sidecar_id>/<group_id>/<n> row and
 // the <ref>.claim row, which §10 names and gives no bytes.
 message GkmEpochObject {
   bytes commit = 1; GkmCommitHeader header = 2; bytes uploader = 3; int64 time_ms = 4; bytes gen_wrap = 5;
   bytes sealed_group_info = 6; uint64 group_info_generation = 7; bytes network_id = 8; uint32 cipher_suite = 9;
 }
 message GkmGroupInfoObject { uint64 epoch = 1; uint64 generation = 2; bytes sealed_group_info = 3; }
-message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; }
+message GkmWelcomePointer { bytes group_id = 1; uint64 epoch = 2; bytes key_package_ref = 3; }
+// DESIGN-DETAILS 6.2.2: the group owner marker gkm/<group_id>/owner.
+message GkmGroupOwner { bytes repo_id = 1; bytes network_id = 2; }
 message GkmKeyPackageClaim { bytes group_id = 1; bytes claimer = 2; }
 // §10.14's routes: POST /gkm/key-packages and .../claim; POST /gkm/groups, as KF1 writes it; POST
 // /gkm/repos/<id>/forms, with 10.8's epoch 0; GET /gkm/groups/<id>; POST .../epochs/<n>; GET .../epochs, with sizes.

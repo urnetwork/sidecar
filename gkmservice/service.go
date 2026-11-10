@@ -82,6 +82,7 @@ type GkmEngine struct {
 	places     *sidecar.EvsRepoPlaceResolver
 	repos      *gkmRepoCache
 	forms      *gkmFormCache
+	owners     *gkmGroupOwnerCache
 	rates      GkmRateCounter
 	kinds      *gkmKeyPackageKinds
 	metrics    *gkmMetrics
@@ -146,6 +147,7 @@ func NewGkmEngine(ctx context.Context, host *sidecar.ServiceHost, settings *GkmS
 		places:           sidecar.NewEvsRepoPlaceResolver(host.Blobs, clock, settings.Place),
 		repos:            newGkmRepoCache(clock, settings),
 		forms:            newGkmFormCache(clock, settings),
+		owners:           newGkmGroupOwnerCache(settings),
 		rates:            newGkmRateCounters(settings.RateEntryCount),
 		kinds:            newGkmKeyPackageKinds(settings.KeyPackageKindCacheCount),
 		metrics:          newGkmMetrics(host.Metrics),
@@ -671,11 +673,13 @@ func (self *GkmRequest) checkRevocation() bool {
 	return false
 }
 
-// The repo among candidateRepoIds whose GroupForms tie groupId to it, examining at most GroupResolveRepoMaxCount of
-// them: a repo whose newest form names the group, or for a read any of whose forms does. A group's repo, once a
-// process has read it, never changes, so a token that does not scope it is refused with no read.
+// The repo among candidateRepoIds that owns groupId, examining at most GroupResolveRepoMaxCount of them: a repo whose
+// newest form names the group, or for a read any of whose forms does, and that the group's owner marker names
+// (DESIGN-DETAILS 6.2.2). The marker is what ties a group to its one repo: a form of another repo naming the group
+// resolves nothing, whichever form a process read first, and a group with no marker resolves to no repo. A group's
+// repo never changes, so a token that does not scope it is refused.
 func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, candidateRepoIds []sidecar.Id, newestOnly bool) (sidecar.Id, bool, error) {
-	// whether repoId's forms name the group as the request needs
+	// whether repoId's forms name the group as the request needs, and the group's marker names repoId
 	named := func(repoId sidecar.Id) (bool, error) {
 		cluster, _, err := self.places.Cluster(ctx, repoId)
 		if errors.Is(err, sidecar.ErrEvsRepoNotPlaced) {
@@ -688,12 +692,23 @@ func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, can
 		if err != nil {
 			return false, err
 		}
+		formNames := false
 		if newestOnly {
-			return 0 < len(forms) && forms[len(forms)-1].GroupId == groupId, nil
+			formNames = 0 < len(forms) && forms[len(forms)-1].GroupId == groupId
+		} else {
+			formNames = slices.ContainsFunc(forms, func(form *gkmForm) bool { return form.GroupId == groupId })
 		}
-		return slices.ContainsFunc(forms, func(form *gkmForm) bool { return form.GroupId == groupId }), nil
+		if !formNames {
+			return false, nil
+		}
+		ownerRepoId, found, err := self.owners.owner(ctx, cluster, groupId)
+		if err != nil {
+			return false, err
+		}
+		return found && ownerRepoId == repoId, nil
 	}
-	if repoId, ok := self.forms.groupRepo(groupId); ok {
+	if repoId, ok := self.owners.known(groupId); ok {
+		// the marker this process read names the group's one repo: no other is asked
 		if !slices.Contains(candidateRepoIds, repoId) {
 			return sidecar.Id{}, false, nil
 		}
@@ -711,9 +726,10 @@ func (self *GkmEngine) resolveGroup(ctx context.Context, groupId sidecar.Id, can
 		if found {
 			return repoId, true, nil
 		}
-		if formRepoId, ok := self.forms.groupRepo(groupId); ok && formRepoId == repoId {
-			// the repo's group, by a form that is no longer its newest: no write reaches it
-			return repoId, false, nil
+		if ownerRepoId, ok := self.owners.known(groupId); ok {
+			// the marker is read now: the repo's group by a form that is no longer its newest, which no write
+			// reaches, or another repo's group, which this candidate's form only names
+			return ownerRepoId, false, nil
 		}
 	}
 	return sidecar.Id{}, false, nil

@@ -1,21 +1,22 @@
-// GET /gkm/welcomes (§10.6's Welcomes row, QD-526 row 4): each Welcome pointer gkm/welcome/<sidecar_id>/<ref> of the
-// token's own sidecar, on the first cluster, with the Welcome gkm/<group_id>/welcome/<n> it points to, on the group's
-// repo's cluster, which no other route serves.
+// GET /gkm/welcomes (§10.6's Welcomes row, QD-526 row 4): each Welcome pointer
+// gkm/welcome/<sidecar_id>/<group_id>/<n> of the token's own sidecar, on the first cluster, with the Welcome
+// gkm/<group_id>/welcome/<n> it points to, on the group's repo's cluster, which no other route serves.
 //
 // A pointer is answered only where the token reaches its group: r, rw or admin on the repo whose GroupForms name
 // it, honored by the newest verified state, as every group read is. A client whose repos span several tokens
 // (§7.8's 64 scopes) asks once with each. A pointer whose Welcome is not there, which only a crash between the two
-// writes leaves (KEYS-M2-14 writes the Welcome first), is passed over; the reconciler removes pointers once every
-// recipient acked, at most 90 days (gkm-5, KEYS-M2-16), and a device skips a Welcome it has joined.
+// writes leaves (KEYS-M2-14 writes the Welcome first), is passed over; the reconciler removes a pointer at its
+// recipient's first ack past its epoch, at most 90 days (gkm-5, KEYS-M2-16), and a device holding several pointers
+// for one group takes the one with the highest epoch above the newest it reached and skips the rest.
 //
 // POST /gkm/groups/<id>/welcome/<n> (KEYS-M2-14) writes them: a Welcome is written only after its epoch object, by
 // that epoch's uploader, so a 409's loser never has one (§10.6's Welcomes row, KF6), at gkm/<group_id>/welcome/<n>
-// If-None-Match, then one pointer {group_id, n} per recipient at gkm/welcome/<sidecar_id>/<ref> If-None-Match, each
-// recipient a reader of the repo in gkm's newest state, and a welcome hint to each. Equal bytes answer success, so a
-// retry finishes what a crash left. A pointer key another Welcome already holds is never overwritten: that is a
-// last-resort KeyPackage serving two Adds before its first was acked, which question
-// keys-m2-13-last-resort-welcome-pointer asks about, and until it is answered the standing pointer keeps its Welcome
-// reachable, the second join waits for §10.6's re-add after 10 minutes, and the collision is counted and alarmed.
+// If-None-Match, then one pointer {group_id, n, ref} per recipient If-None-Match, each recipient a reader of the
+// repo in gkm's newest state, and a welcome hint to each. Equal bytes answer success, so a retry finishes what a
+// crash left. A pointer is keyed by its group and epoch, never by the KeyPackageRef its Add used (DESIGN-DETAILS
+// 6.2.2): one Welcome, one key, so a last-resort KeyPackage that served two Adds leaves two pointers, and the ref
+// rides in the pointer for the joiner to open the Welcome with. A pointer key that holds other bytes is the same
+// epoch's Welcome naming another KeyPackage for the recipient, which only its one uploader could send: 409.
 
 package gkmservice
 
@@ -52,7 +53,7 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 		if self.settings.WelcomesReplyMaxCount <= len(reply.GetWelcomes()) {
 			break
 		}
-		ref, ok := parseGkmWelcomePointerKey(prefix, info.Key)
+		keyGroupId, keyEpoch, ok := parseGkmWelcomePointerKey(prefix, info.Key)
 		if !ok {
 			continue
 		}
@@ -72,6 +73,11 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 		groupId, err := sidecar.IdFromBytes(pointer.GetGroupId())
 		if err != nil {
 			self.alarm("welcome_pointer_invalid", err)
+			continue
+		}
+		if groupId != keyGroupId || pointer.GetEpoch() != keyEpoch || len(pointer.GetKeyPackageRef()) != gkmKeyPackageRefByteCount {
+			// a pointer names what its key does, and the ref its Welcome opens with
+			self.alarm("welcome_pointer_invalid", errors.New("a Welcome pointer that disagrees with its key"))
 			continue
 		}
 		repoId, found, err := self.resolveGroup(request.Ctx, groupId, candidateRepoIds, false)
@@ -106,7 +112,7 @@ func (self *GkmEngine) serveWelcomes(request *GkmRequest) {
 			return
 		}
 		reply.Welcomes = append(reply.Welcomes, &protocol.GkmWelcomeEntry{
-			KeyPackageRef: ref,
+			KeyPackageRef: pointer.GetKeyPackageRef(),
 			Pointer:       pointer,
 			Welcome:       welcome,
 		})
@@ -136,6 +142,7 @@ func (self *GkmEngine) serveWelcomeWrite(request *GkmRequest) {
 	type pointerTarget struct {
 		sidecarId sidecar.Id
 		key       string
+		ref       []byte
 	}
 	targets := make([]*pointerTarget, 0, len(recipients))
 	seenKeys := map[string]bool{}
@@ -145,13 +152,15 @@ func (self *GkmEngine) serveWelcomeWrite(request *GkmRequest) {
 			request.BadRequest()
 			return
 		}
-		key, err := GkmWelcomePointerKey(sidecarId, recipient.GetKeyPackageRef())
-		if err != nil || seenKeys[key] {
+		ref := recipient.GetKeyPackageRef()
+		key := GkmWelcomePointerKey(sidecarId, groupId, epoch)
+		if len(ref) != gkmKeyPackageRefByteCount || seenKeys[key] {
+			// one leaf per recipient in one commit, each under a KeyPackage's ref
 			request.BadRequest()
 			return
 		}
 		seenKeys[key] = true
-		targets = append(targets, &pointerTarget{sidecarId: sidecarId, key: key})
+		targets = append(targets, &pointerTarget{sidecarId: sidecarId, key: key, ref: ref})
 	}
 	now := request.Now()
 	for _, target := range targets {
@@ -204,27 +213,39 @@ func (self *GkmEngine) serveWelcomeWrite(request *GkmRequest) {
 		request.Unavailable()
 		return
 	}
-	pointerBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmWelcomePointer{GroupId: groupId.Bytes(), Epoch: epoch})
-	if err != nil {
-		request.Unavailable()
-		return
+	pointerBytes := make([][]byte, 0, len(targets))
+	pointersPrice := int64(0)
+	for _, target := range targets {
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmWelcomePointer{
+			GroupId:       groupId.Bytes(),
+			Epoch:         epoch,
+			KeyPackageRef: target.ref,
+		})
+		if err != nil {
+			request.Unavailable()
+			return
+		}
+		pointerBytes = append(pointerBytes, encoded)
+		pointersPrice += self.settings.Prices.create(len(encoded))
 	}
-	pointersCtx, ok := request.SpendWrites(firstCluster, "", int64(len(targets))*self.settings.Prices.create(len(pointerBytes)))
+	pointersCtx, ok := request.SpendWrites(firstCluster, "", pointersPrice)
 	if !ok {
 		// a retry finds the Welcome standing and writes the pointers
 		return
 	}
 	hintedSidecarIds := []sidecar.Id{}
-	for _, target := range targets {
-		winner, err := createGkmObject(pointersCtx, firstCluster, target.key, pointerBytes, self.settings.ObjectMaxByteCount)
+	for i, target := range targets {
+		winner, err := createGkmObject(pointersCtx, firstCluster, target.key, pointerBytes[i], self.settings.ObjectMaxByteCount)
 		if err != nil {
 			// a retry finds the Welcome and the pointers written so far standing, and writes the rest
 			self.answerStoreError(request, err)
 			return
 		}
 		if winner != nil {
-			self.alarm("welcome_pointer_taken", errors.New("a Welcome pointer's key holds another Welcome's pointer"))
-			continue
+			// this epoch's Welcome already points the recipient at another KeyPackage: the uploader's own earlier
+			// request with other recipients, never another Welcome's pointer
+			request.Conflict(winner)
+			return
 		}
 		hintedSidecarIds = append(hintedSidecarIds, target.sidecarId)
 	}
