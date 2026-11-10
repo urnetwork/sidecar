@@ -13,17 +13,20 @@
 //	          apart from any component, by NewDirectoryClient, and its writes refuse whatever the args say
 //	leases    only notice prefixes and paths, never the cards ref (D-MCP-31)
 //
-// What a sync fetches is folded by RECORD-M6-14; the writes are RECORD-M6-16 to -19's, through the record writer for
-// entries and through PutCard and RemoveCard for notices. An admin device that finds a team with no directory files
-// its RepoCreate through TEAM-M6-10's FileTeamDirectory, which is not built: until it is, nothing here files one.
+// What a sync fetches is folded by DirectoryFold after each sync (RECORD-M6-14), which List and Get read, and a phone's
+// view fetches apart from the sync (directory_phone.go). The writes go through the record writer for entries (repo
+// items here, RECORD-M6-15; runs, workers, requests and decisions RECORD-M6-16 to -19) and through PutCard and
+// RemoveCard for notices. An admin device that finds a team with no directory files its RepoCreate through
+// TEAM-M6-10's FileTeamDirectory, which is not built: until it is, nothing here files one.
 //
-// Safe for concurrent use. Locks: syncLock, then stateLock; neither is held across a call out but syncLock across a
-// sync's own I/O.
+// Safe for concurrent use. Locks: syncLock, then stateLock, then a fold's own; none is held across a call out but
+// syncLock across a sync's own I/O.
 
 package sidecar
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"sync"
 	"time"
@@ -55,6 +58,18 @@ type DirectoryClientArgs struct {
 	// The page Worker's client: reads, refusing every write. The sidecar_http leg forces it.
 	ReadOnly bool
 	Log      Logger
+	// The record's writer, through which every directory entry this client files is appended; nil refuses each write
+	// with ErrDirectoryNoWriter.
+	Writer RecordWriter
+	// §16.7's redactor, which every identifier and prose field passes before it is signed (§16.11's redaction row);
+	// nil makes one of the client's own, which hashes PII.
+	Redactor *Redactor
+	// The display name this device knows a repo by, for a repo predating the directory that it announces; nil, or an
+	// empty answer, announces it with none.
+	RepoName func(repoId Id) string
+	// Whether a config label names the repo (§8.8), for the warning a repo marked private takes; nil reads every repo
+	// as possibly labeled, so the warning is never missed.
+	RepoLabeled func(repoId Id) bool
 }
 
 // One network's team directory on this sidecar.
@@ -72,6 +87,10 @@ type DirectoryClient struct {
 	readOnly      bool
 	log           Logger
 	wake          chan struct{}
+	writer        RecordWriter
+	redactor      *Redactor
+	repoName      func(repoId Id) string
+	repoLabeled   func(repoId Id) bool
 
 	syncLock sync.Mutex
 	// the record reader over the copy, replaced at a lost read
@@ -84,6 +103,10 @@ type DirectoryClient struct {
 	viewPending bool
 	// when the last sync started, Unix milliseconds; 0 before any
 	lastSyncMillis int64
+	// the fold of the directory read now, nil until one is asked for and after a lost read
+	fold *DirectoryFold
+	// the highest version of each repo's item this client wrote, until the copy reads it back
+	repoWrittenVersions map[Id]uint64
 }
 
 // A client over args. Nothing is read until its first Sync.
@@ -111,6 +134,13 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 	if recordSettings == nil {
 		recordSettings = defaultSidecarRecordSettings()
 	}
+	redactor := args.Redactor
+	if redactor == nil {
+		var err error
+		if redactor, err = NewRedactor(cryptorand.Reader); err != nil {
+			return nil, err
+		}
+	}
 	store := NewDirectoryStore(args.Store)
 	self := &DirectoryClient{
 		sidecarId:     args.SidecarId,
@@ -126,25 +156,50 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		readOnly:      args.ReadOnly || directoryLegReadOnly,
 		log:           log,
 		wake:          make(chan struct{}, 1),
+		writer:        args.Writer,
+		redactor:      redactor,
+		repoName:      args.RepoName,
+		repoLabeled:   args.RepoLabeled,
 		cards:         cards,
 		authFunc:      args.Auth,
+
+		repoWrittenVersions: map[Id]uint64{},
 	}
 	self.reader = self.newReader()
 	return self, nil
 }
 
-// A reader over the copy, its pins in the copy's own store.
+// A reader over the copy, its pins in the copy's own store. A push pin before what the state retains is judged at the
+// state, since a repo item's announce entry stands with no age bound and a device that starts after it still reads it
+// (§16.11's repo file row, FS-101); the fold holds each kind to its own rule after.
 func (self *DirectoryClient) newReader() *RecordReader {
 	return NewRecordReader(&RecordReaderArgs{
-		SidecarId: self.sidecarId,
-		Store:     self.store.store,
-		Streams:   func() RecordStreams { return self.adapter },
-		Auth:      self.recordAuth,
-		Alarm:     self.alarm,
-		Clock:     self.clock,
-		Settings:  self.recordSet,
-		Log:       self.log,
+		SidecarId:        self.sidecarId,
+		Store:            self.store.store,
+		Streams:          func() RecordStreams { return self.adapter },
+		Auth:             self.recordAuth,
+		Alarm:            self.alarm,
+		Clock:            self.clock,
+		Settings:         self.recordSet,
+		Log:              self.log,
+		UnretainedAtHead: true,
 	})
+}
+
+// The fold of the directory this client reads now: a new one for another directory, and after a lost read.
+func (self *DirectoryClient) currentFold() *DirectoryFold {
+	directoryId, _ := self.DirectoryId()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.fold == nil || self.fold.DirectoryId() != directoryId {
+		self.fold = NewDirectoryFold(directoryId, self.alarm)
+	}
+	return self.fold
+}
+
+// The redactor every write passes.
+func (self *DirectoryClient) redactorNow() *Redactor {
+	return self.redactor
 }
 
 // Binds the directory's evs and its view of the authorization state as they land. A nil argument keeps the current
@@ -216,6 +271,12 @@ func (self *DirectoryClient) loseRead(directoryId Id, cause error) error {
 		return err
 	}
 	self.reader = self.newReader()
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.fold = nil
+		clear(self.repoWrittenVersions)
+	}()
 	self.log.Infof("[directory]%s: the read is lost, its copy deleted", recordChainIdText(directoryId))
 	return fmt.Errorf("%w: %w", ErrDirectoryReadLost, cause)
 }
@@ -270,12 +331,12 @@ func (self *DirectoryClient) Lease(prefix string) (func(), error) {
 	if !ok {
 		return nil, ErrDirectoryNone
 	}
-	return self.boundCards().Lease(directoryId, prefix, func(repoId Id) { self.View() })
+	return self.boundCards().Lease(directoryId, prefix, func(repoId Id) { self.ViewSync() })
 }
 
 // Asks for a sync for a view or a search, which the loop coalesces over ViewCoalesce. Nothing of the view reaches evs
 // (I-19).
-func (self *DirectoryClient) View() {
+func (self *DirectoryClient) ViewSync() {
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -338,6 +399,12 @@ func (self *DirectoryClient) Run(ctx context.Context) {
 			if err != nil && self.log.V(1).Enabled() {
 				self.log.Infof("[directory]a sync stopped: %s", err)
 			}
+			if err == nil {
+				// what this device's repo rights call for once it has read the directory (RECORD-M6-15)
+				if _, maintainErr := self.MaintainRepos(ctx); maintainErr != nil {
+					self.log.Infof("[directory]repo items: %s", maintainErr)
+				}
+			}
 			if self.afterSync != nil {
 				self.afterSync(err)
 			}
@@ -369,8 +436,8 @@ func (self *Sidecar) Directory() *DirectoryClient {
 	return client
 }
 
-// The network's directory client, built once with the record (Sidecar.Record) and §5.9's directory/ under file class
-// search; its evs and authorization state stay unbound until DirectoryClient.Bind.
+// The network's directory client, built once with the record (Sidecar.Record), whose writer it appends through, and
+// §5.9's directory/ under file class search; its evs and authorization state stay unbound until DirectoryClient.Bind.
 func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 	record, err := self.Record()
 	if err != nil {
@@ -383,6 +450,11 @@ func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 	networkId := self.knownNetworkId()
 	if networkId == nil {
 		return nil, ErrSidecarStoreLocked
+	}
+	// the spool's redactor, whose PII setting is the harness config's; the client makes its own without one
+	var redactor *Redactor
+	if spool, err := self.Spool(); err == nil {
+		redactor = spool.Redactor()
 	}
 	self.records.stateLock.Lock()
 	defer self.records.stateLock.Unlock()
@@ -400,6 +472,8 @@ func (self *Sidecar) DirectoryClient() (*DirectoryClient, error) {
 		Settings:       self.settings.Directory,
 		RecordSettings: self.settings.Record,
 		Log:            self.log,
+		Writer:         record.Writer(),
+		Redactor:       redactor,
 	})
 	if err != nil {
 		return nil, err
