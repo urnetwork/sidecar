@@ -62,6 +62,8 @@ const (
 var (
 	// A draft breaks a rule its header or body holds: nothing was sealed or spooled.
 	ErrRecordDraftInvalid = errors.New("record draft invalid")
+	// An entry a write-ahead act waits on did not commit in evs now: the act is refused.
+	ErrRecordNotLanded = errors.New("record entry not landed")
 	// The drain met a record no handler takes, or a draft no log takes yet: it stopped there, leaving that record and
 	// every later one spooled, in order.
 	errRecordSpoolUnhandled = errors.New("record spool record unhandled")
@@ -103,6 +105,9 @@ type RecordDraft struct {
 	// The approval family's entry whose approver reads only the team record, an admin's (§16.8): T alone, refused in a
 	// network with none.
 	TeamOnly bool
+	// The one log the entry goes to, for a kind whose row in RECORD.md section 6.3 is the log it is about: a
+	// disclosure, written to the log disclosed or exported. Nil routes by kind. One entry, no projection and no copy.
+	LogId *Id
 }
 
 // Where one entry of a draft went.
@@ -150,6 +155,8 @@ type SidecarRecordArgs struct {
 	// crypto/rand's reader when nil. Push, slot and deposit ids draw from it too.
 	Random io.Reader
 	Log    Logger
+	// Reaches the verifiable log's witnesses (record_log_witness.go); the HTTPS client when nil.
+	Witness RecordLogWitness
 }
 
 // One network's record on this sidecar: its writer, its reader, its ingester, its read receipts, the approval family's
@@ -162,6 +169,7 @@ type SidecarRecord struct {
 	receipts   *RecordReceipts
 	approvals  *RecordApprovals
 	accounting *RecordAccounting
+	log        *RecordLog
 
 	stateLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
@@ -194,7 +202,14 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 		ingestDue:  true,
 	}
 	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
+	self.log = newRecordLog(self, args.Witness)
+	reader.addSyncHook(self.log.monitor)
 	return self, nil
+}
+
+// The verifiable log (RECORD-M6-05): its monitor runs at each of the reader's syncs.
+func (self *SidecarRecord) Log() *RecordLog {
+	return self.log
 }
 
 // The record's writer.
@@ -264,6 +279,7 @@ func (self *SidecarRecord) ingestedLogs() []Id {
 // ingested when a deposit may wait.
 func (self *SidecarRecord) tend(ctx context.Context) {
 	self.accounting.mirrorQueued(ctx)
+	self.log.Tick(ctx)
 	logIds := self.ingestedLogs()
 	if len(logIds) == 0 || !self.takeIngestDue() {
 		return
@@ -295,6 +311,48 @@ func (self *SidecarRecord) Run(ctx context.Context) {
 // and exit call, and what a test steps the loop with.
 func (self *SidecarRecord) Flush(ctx context.Context) error {
 	return self.writer.Flush(ctx)
+}
+
+// Sends what refs' logs hold now and answers nil only once every ref's entry committed in evs: a stream push, or a
+// deposit holding evs's 200. What a write-ahead act waits on before its effect, a disclosure's file or an export's
+// first line (RECORD.md sections 9 and 11's record rows). A ref that spooled, or that evs did not take now, is an
+// error, and the entry still goes later, since a journaled entry is never withdrawn.
+func (self *SidecarRecord) Land(ctx context.Context, refs []*RecordEntryRef) error {
+	for _, ref := range refs {
+		if ref == nil || ref.Spooled {
+			return fmt.Errorf("%w: an entry waits unsealed in the spool", ErrRecordNotLanded)
+		}
+	}
+	// another log's failure is not this act's: only these refs are judged
+	flushErr := self.writer.Flush(ctx)
+	for _, ref := range refs {
+		if !self.writer.landed(ref.LogId, ref.Seq) {
+			if flushErr != nil {
+				return fmt.Errorf("%w: %v", ErrRecordNotLanded, flushErr)
+			}
+			return fmt.Errorf("%w: entry %s of log %s", ErrRecordNotLanded, ref.EntryId, ref.LogId)
+		}
+	}
+	return nil
+}
+
+// Whether this writer's entry at seq of logId committed: sealed here, and neither waiting nor in a plan.
+func (self *recordWriter) landed(logId Id, seq uint64) bool {
+	head, err := self.chain.Head(logId)
+	if err != nil || head.Seq < seq {
+		return false
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	queue, ok := self.logQueues[logId]
+	if !ok {
+		// nothing of this log was queued in this process, so nothing of it waits unless the journal says so, which
+		// load puts on a queue
+		return self.loaded
+	}
+	_, waiting := queue.waitingSeqEntries[seq]
+	_, planned := queue.planSeqEntries[seq]
+	return !waiting && !planned
 }
 
 // Binds evs and the authorization state as they land: RECORD-M3-12's streams, TEAM's and ACL's states. A nil
@@ -494,6 +552,9 @@ func (self *RecordDraft) check() error {
 	if self.TeamOnly && !recordKindApprovalFamily(self.Kind) {
 		return fmt.Errorf("%w: only the approval family goes to the team record alone", ErrRecordDraftInvalid)
 	}
+	if self.LogId != nil && (!recordKindNamesItsLog(self.Kind) || self.TeamOnly || self.Projection != nil) {
+		return fmt.Errorf("%w: %s names no log of its own", ErrRecordDraftInvalid, self.Kind)
+	}
 	return nil
 }
 
@@ -541,6 +602,16 @@ type recordSpoolDraft struct {
 	// T's projection as the caller gave it, marshaled once; empty to project the body at sealing.
 	Projection []byte `json:"projection,omitempty"`
 	TeamOnly   bool   `json:"team_only,omitempty"`
+	// RecordDraft.LogId
+	LogId *Id `json:"log_id,omitempty"`
+}
+
+// The routes of a spooled draft now: its named log's, or its kind's (record_team.go).
+func (self *recordWriter) routesOf(draft *recordSpoolDraft) (*recordRoutes, error) {
+	if draft.LogId != nil {
+		return recordRoutesToLog(self.auth(), self.sidecarId, RecordKind(draft.Kind), *draft.LogId)
+	}
+	return recordRoutesFor(self.auth(), self.sidecarId, RecordKind(draft.Kind), draft.TeamOnly)
 }
 
 // The draft's spooled form, tagged so the drain tells it from another producer's capture.
@@ -637,7 +708,8 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 	}
 	spoolDraft.Projection = projection
 	spoolDraft.TeamOnly = draft.TeamOnly
-	routes, err := recordRoutesFor(self.auth(), self.sidecarId, draft.Kind, draft.TeamOnly)
+	spoolDraft.LogId = draft.LogId
+	routes, err := self.routesOf(spoolDraft)
 	if errors.Is(err, errRecordUnrouted) {
 		return self.spoolDraft(spoolDraft, RecordCoverageGapNoVault)
 	}
@@ -676,7 +748,7 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 func recordDraftNeverSeals(err error) bool {
 	return errors.Is(err, ErrRecordSealInvalid) || errors.Is(err, ErrRecordDraftInvalid) ||
 		errors.Is(err, ErrRecordRouteTeamOnly) || errors.Is(err, ErrRecordRouteReceipt) ||
-		errors.Is(err, ErrRecordRouteAnnouncement) || errors.Is(err, ErrRecordRouteNoTeamRecord) ||
+		errors.Is(err, ErrRecordRouteAnnouncement) || errors.Is(err, ErrRecordRouteNoTeamRecord) || errors.Is(err, ErrRecordRouteNoLog) ||
 		errors.Is(err, ErrRecordProjectionNone) || errors.Is(err, ErrRecordBodyOverCap) || errors.Is(err, ErrRecordBodyInvalid)
 }
 
@@ -893,7 +965,7 @@ func (self *recordWriter) drainSpool(ctx context.Context) error {
 			// sealed before a kill cut the drain short
 			return nil
 		}
-		routes, err := recordRoutesFor(self.auth(), self.sidecarId, RecordKind(draft.Kind), draft.TeamOnly)
+		routes, err := self.routesOf(draft)
 		if errors.Is(err, errRecordUnrouted) {
 			return fmt.Errorf("%w: %v", errRecordSpoolUnhandled, err)
 		}

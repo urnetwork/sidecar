@@ -23,8 +23,10 @@ import (
 
 // One repo's rights at a position, as a test writes them.
 type FakeRecordRepoAuth struct {
-	Readers    []sidecar.Id
-	Writers    []sidecar.Id
+	Readers []sidecar.Id
+	Writers []sidecar.Id
+	// Devices of the repo's admins (§8.6).
+	Admins     []sidecar.Id
 	Depositors []sidecar.Id
 	// Depositors whose deposits are read receipts alone (§11.12).
 	ReceiptOnly []sidecar.Id
@@ -80,6 +82,7 @@ func (self *FakeRecordAuthFixture) clone() *FakeRecordAuthFixture {
 		cloned.Repos[repoId] = &FakeRecordRepoAuth{
 			Readers:     slices.Clone(repo.Readers),
 			Writers:     slices.Clone(repo.Writers),
+			Admins:      slices.Clone(repo.Admins),
 			Depositors:  slices.Clone(repo.Depositors),
 			ReceiptOnly: slices.Clone(repo.ReceiptOnly),
 			Consented:   slices.Clone(repo.Consented),
@@ -246,6 +249,10 @@ func (self *fakeRecordAuthView) Reads(repoId sidecar.Id, sidecarId sidecar.Id) b
 
 func (self *fakeRecordAuthView) Writes(repoId sidecar.Id, sidecarId sidecar.Id) bool {
 	return slices.Contains(self.repo(repoId).Writers, sidecarId)
+}
+
+func (self *fakeRecordAuthView) Admins(repoId sidecar.Id, sidecarId sidecar.Id) bool {
+	return slices.Contains(self.repo(repoId).Admins, sidecarId)
 }
 
 func (self *fakeRecordAuthView) Deposits(repoId sidecar.Id, sidecarId sidecar.Id) bool {
