@@ -16,7 +16,9 @@
 //
 // What queues a start is not yet settled (questions/evsb-m3-02-sweep-pass-triggers.md): a hold ends in api's
 // AbuseHoldPass (ABUSE-M5-14), and the purge turns on by an operator's act. Until one does, nothing queues a start, and
-// what a hold or observe mode kept stays, alarming nowhere: content is kept, never lost.
+// what a hold or observe mode kept stays, alarming nowhere: content is kept, never lost. A hold's start carries the
+// hold's network, scope and times into server/task's rows, which §2.8's holds row does not list yet; the question
+// says so.
 //
 // Safe for concurrent use.
 

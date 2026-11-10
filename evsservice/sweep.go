@@ -64,6 +64,7 @@ type SweepSettings struct {
 	RecomputeVersionCount int
 }
 
+// A LIST page of 1,000 keys, and a walk of 64 log pages.
 func DefaultSweepSettings() *SweepSettings {
 	return &SweepSettings{
 		ListLimit:             1000,
