@@ -138,6 +138,18 @@ func TestConcurrentRetryJoinsTheLiveRun(t *testing.T) {
 	if result.err != nil || string(result.body) != "once" {
 		t.Fatalf("%q, %v", result.body, result.err)
 	}
+	// the joined retry's answer can go out after the first one reaches a, so wait for both before Close
+	for {
+		_, sent := b.sentCount.Get()
+		if len(testSentOfType(b, testCallBlockType+1)) == 2 {
+			break
+		}
+		select {
+		case <-sent:
+		case <-time.After(testSubprotocolAwaitTimeout):
+			t.Fatalf("%d answers", len(testSentOfType(b, testCallBlockType+1)))
+		}
+	}
 	b.subprotocol.Close()
 	if runCount.Load() != 1 {
 		t.Errorf("%d runs", runCount.Load())
