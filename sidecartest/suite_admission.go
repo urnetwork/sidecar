@@ -132,6 +132,38 @@ type AdmissionTier struct {
 	NewApi AdmissionApiFactory
 	// nil for DefaultAdmissionSuiteSettings.
 	Settings *AdmissionSuiteSettings
+	// The clock api and every statement read, which a fault schedule's Net shares; nil for one of the network's own.
+	Clock *FakeClock
+	// What the network's followers and writer run under, a Net's, so they end with it; nil for the background.
+	Context context.Context
+}
+
+// What a world fails through: a testing.TB, or a fault schedule's step, which turns a failure into the step's error.
+type AdmissionT interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+	Logf(format string, args ...any)
+}
+
+// The tier a fault schedule's admission world runs on: the Net's first metadata cluster, clock and context, and the
+// api NetSettings.ConfigLogApi names, which server's T3 sets to its sequencer, else a FakeApi on the Net's faults and
+// barriers (T2).
+func (self *Net) AdmissionTier() (*AdmissionTier, error) {
+	cluster, err := self.Host().Blobs.FirstCluster()
+	if err != nil {
+		return nil, err
+	}
+	tier := &AdmissionTier{Cluster: cluster, Clock: self.clock, Context: self.ctx, NewApi: self.settings.ConfigLogApi}
+	if tier.NewApi == nil {
+		tier.NewApi = func(clock sidecar.Clock, cluster sidecar.BlobCluster) AdmissionApi {
+			return FakeApiAdmission(NewFakeApi(self.ctx, clock, self.faults, self.barriers, cluster, nil))
+		}
+	}
+	if self.settings.ConfigLogSettings != nil {
+		tier.Settings = self.settings.ConfigLogSettings
+	}
+	return tier, nil
 }
 
 // One row of §22.7's admission suite.
@@ -202,7 +234,7 @@ type admissionReader struct {
 
 // One network on a tier's api, and every verifier of it.
 type AdmissionNet struct {
-	t        testing.TB
+	t        AdmissionT
 	ctx      context.Context
 	cancel   context.CancelFunc
 	settings *AdmissionSuiteSettings
@@ -241,18 +273,27 @@ type AdmissionNet struct {
 	// at bases
 	everyBase  bool
 	everyEntry bool
+	// runs once before the writer's next publish reaches api, as another appender landing first
+	beforePublish func()
 }
 
 // A fresh network on tier, bootstrapped: its owner's first device signed the genesis and base 1, which every verifier
 // applied. The caller closes it.
-func NewAdmissionNet(t testing.TB, tier *AdmissionTier) *AdmissionNet {
+func NewAdmissionNet(t AdmissionT, tier *AdmissionTier) *AdmissionNet {
 	t.Helper()
 	settings := tier.Settings
 	if settings == nil {
 		settings = DefaultAdmissionSuiteSettings()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), settings.RowTimeout)
-	clock := NewFakeClock(DefaultClockStart())
+	parent := tier.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, settings.RowTimeout)
+	clock := tier.Clock
+	if clock == nil {
+		clock = NewFakeClock(DefaultClockStart())
+	}
 	self := &AdmissionNet{
 		t:            t,
 		ctx:          ctx,
@@ -418,7 +459,7 @@ func (self *AdmissionNet) projection() sidecar.ConfigProjectionReader {
 }
 
 func (self *AdmissionNet) publisher() sidecar.ConfigBasePublisher {
-	return admissionPublisher{api: self.api, networkId: self.networkId}
+	return admissionPublisher{api: self.api, networkId: self.networkId, net: self}
 }
 
 // GET /network/config/projection of one network.
@@ -436,9 +477,16 @@ func (self admissionProjection) ReadConfigProjection(ctx context.Context, after 
 type admissionPublisher struct {
 	api       AdmissionApi
 	networkId sidecar.Id
+	// the network whose BeforePublish runs first, nil for none
+	net *AdmissionNet
 }
 
 func (self admissionPublisher) PublishConfigBase(ctx context.Context, base *sidecar.ConfigBasePublish) (*bridge.AuthPin, error) {
+	if self.net != nil && self.net.beforePublish != nil {
+		before := self.net.beforePublish
+		self.net.beforePublish = nil
+		before()
+	}
 	pin, err := self.api.AppendBase(ctx, self.networkId, base.SignedHeader, base.Rows, base.Genesis, base.ConfigPushes)
 	if err == nil {
 		return pin, nil
@@ -696,13 +744,23 @@ func (self *AdmissionNet) SequenceAnyway(kind uint32, body []byte) *bridge.AuthP
 	if !self.settings.ForgedAppends {
 		self.t.Fatal("this tier's api appends nothing unverified: a forged clause runs on T2 alone")
 	}
-	pin, err := self.api.SequenceAnyway(self.ctx, self.networkId, kind, body)
-	if err != nil {
-		self.t.Fatalf("a malicious append: %v", err)
-	}
+	before := self.applied
+	_, err := self.api.SequenceAnyway(self.ctx, self.networkId, kind, body)
 	self.clock.Advance(time.Second)
 	self.Sync()
-	return pin
+	// a base that forks the readers forks api's own verifier too, which answers its 503 though the entry landed
+	if self.applied != before+1 {
+		self.t.Fatalf("a malicious append landed %d entries: %v", self.applied-before, err)
+	}
+	entry := &bridge.AuthEntry{}
+	if err := proto.Unmarshal(self.entries[self.applied], entry); err != nil {
+		self.t.Fatal(err)
+	}
+	chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody())
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return &bridge.AuthPin{Version: entry.GetN(), Chain: chain[:]}
 }
 
 // Whether the tier's api can append what its check refuses (ForgedAppends).
@@ -790,6 +848,11 @@ func (self *AdmissionNet) SetTagOwners(tagOwners map[sidecar.Id]sidecar.Id) *bri
 // Moves api's clock on.
 func (self *AdmissionNet) Wait(duration time.Duration) {
 	self.clock.Advance(duration)
+}
+
+// The position every reader has read through, a forked one's included.
+func (self *AdmissionNet) Applied() uint64 {
+	return self.applied
 }
 
 // The reference's verdict at position n, failing the row when it holds none.
@@ -1995,4 +2058,133 @@ func admissionRowGeneratedLogs(t testing.TB, net *AdmissionNet) {
 	if net.ReaderCount() < 3 {
 		t.Fatalf("only %d readers ran", net.ReaderCount())
 	}
+}
+
+// Runs before once before the writer's next base reaches api, as another appender's entry landing first, so the base
+// meets api's 409 and the writer re-signs at the new tip (§7.9's base row). before appends through the api directly,
+// since the writer's publish holds the world: Post and Sync are not called from it.
+func (self *AdmissionNet) BeforeNextPublish(before func()) {
+	self.beforePublish = before
+}
+
+// Appends a signed statement at api without syncing: what BeforeNextPublish's function does.
+func (self *AdmissionNet) AppendOnly(signedBytes []byte) (*bridge.AuthPin, error) {
+	pin, err := self.api.AppendStatement(self.ctx, self.networkId, signedBytes)
+	self.clock.Advance(time.Second)
+	return pin, err
+}
+
+// The two bits each entry in (foldedThrough, tip] takes at the reference (DESIGN-DETAILS 5.2.2): 0 refused or a base,
+// 1 took effect, 2 took effect and completed a proposal; encoded as a base's tail_verdicts.
+func (self *AdmissionNet) TailVerdicts(foldedThrough uint64) []byte {
+	self.t.Helper()
+	tip := self.applied
+	if tip <= foldedThrough {
+		return nil
+	}
+	data := make([]byte, (2*(tip-foldedThrough)+7)/8)
+	for k := foldedThrough + 1; k <= tip; k += 1 {
+		verdict := self.VerdictAt(k)
+		bits := byte(1)
+		switch {
+		case verdict.Kind == bridge.AuthEntryKindBase || !verdict.Accepted():
+			bits = 0
+		case verdict.Completed():
+			bits = 2
+		}
+		j := k - foldedThrough - 1
+		data[j/4] |= bits << (2 * (j % 4))
+	}
+	return data
+}
+
+// A base at the tip's next position by signer that keeps the newest base's fold and config head, so its rows are that
+// base's, with the tail_verdicts the reference holds: what an honest writer publishes for a policy-only change at an
+// unchanged fold. edit, when not nil, changes the header before it is signed, as a lying or stale writer does. The
+// Signed header's bytes and the rows.
+func (self *AdmissionNet) BaseKeepingTheFold(signer *AdmissionDevice, edit func(header *bridge.ProjectionHeader)) ([]byte, []byte) {
+	self.t.Helper()
+	previous := self.State().Base()
+	if previous == nil {
+		self.t.Fatal("no base to keep the fold of")
+	}
+	rows, found := self.rows[[sha256.Size]byte(previous.GetRowsSha256())]
+	if !found {
+		self.t.Fatal("the newest base's rows were not served")
+	}
+	tip := self.Tip()
+	header := &bridge.ProjectionHeader{
+		NetworkId:        self.networkId.Bytes(),
+		Version:          tip.GetVersion() + 1,
+		PrevChain:        bytes.Clone(tip.GetChain()),
+		FoldedThrough:    previous.GetFoldedThrough(),
+		ConfigVersion:    previous.GetConfigVersion(),
+		ConfigHeadSha256: bytes.Clone(previous.GetConfigHeadSha256()),
+		RowsSha256:       bytes.Clone(previous.GetRowsSha256()),
+		RowsByteCount:    previous.GetRowsByteCount(),
+		Threshold:        previous.GetThreshold(),
+		TailVerdicts:     self.TailVerdicts(previous.GetFoldedThrough()),
+	}
+	if edit != nil {
+		edit(header)
+	}
+	return self.Sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, header), bytes.Clone(rows)
+}
+
+// Appends a base at api, no genesis and no config pushes, and syncs; the pin, or api's refusal.
+func (self *AdmissionNet) AppendBase(signedHeader []byte, rows []byte) (*bridge.AuthPin, error) {
+	self.t.Helper()
+	pin, err := self.api.AppendBase(self.ctx, self.networkId, signedHeader, rows, nil, nil)
+	self.clock.Advance(time.Second)
+	self.Sync()
+	return pin, err
+}
+
+// The writer's device: an Owner's, which signs bases and heads.
+func (self *AdmissionNet) WriterDevice() *AdmissionDevice {
+	return self.writerDevice
+}
+
+// Registers key as a presence key of device's member, signed by device and, where device holds a live key already,
+// countersigned by countersigner, since a presence key's KeyRegister is covered (§7.9's presence row).
+func (self *AdmissionNet) RegisterPresenceKey(device *AdmissionDevice, key *FixturePresenceKey, countersigner *FixturePresenceKey) sidecar.ConfigVerdict {
+	self.t.Helper()
+	body, err := key.RegisterBody(&protocol.KeyRegister{
+		Header:   self.Header(),
+		MemberId: device.MemberId.Bytes(),
+		NotAfter: self.clock.Now().Add(30 * 24 * time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	purpose, _ := sidecar.ConfigStatementPurpose(bridge.SignedType_SIGNED_KEY_REGISTER)
+	signed := &bridge.Signed{
+		Body:      body,
+		SignerId:  device.SidecarId.Bytes(),
+		Signature: ed25519.Sign(device.Key, bridge.SignedBytes(purpose, bridge.SignedType_SIGNED_KEY_REGISTER, body)),
+		Type:      uint32(bridge.SignedType_SIGNED_KEY_REGISTER),
+	}
+	if countersigner != nil {
+		self.Countersign(countersigner, device, signed)
+	}
+	return self.MustLand(self.marshal(signed))
+}
+
+// Puts key's countersignature on signed statements as one act of device's (§7.9's act): their identity signatures stay,
+// since the countersignature covers each statement's purpose, type and body alone.
+func (self *AdmissionNet) Countersign(key *FixturePresenceKey, device *AdmissionDevice, signed ...*bridge.Signed) {
+	self.t.Helper()
+	statements := make([]*FixturePresenceStatement, len(signed))
+	for i, statement := range signed {
+		purpose, _ := sidecar.ConfigStatementPurpose(bridge.SignedType(statement.GetType()))
+		statements[i] = &FixturePresenceStatement{Purpose: purpose, Signed: statement}
+	}
+	if err := key.Countersign(device.SidecarId.Bytes(), statements); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// A Signed's bytes.
+func (self *AdmissionNet) Marshal(signed *bridge.Signed) []byte {
+	return self.marshal(signed)
 }
