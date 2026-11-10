@@ -160,24 +160,33 @@ func (self *EvsComponent) tickMapper(ctx context.Context, repoId Id, delta []byt
 	if err != nil {
 		return
 	}
-	if err := self.client.Repo(repoId).TickMapper(ctx, refId); err != nil && self.client.log.V(1).Enabled() {
-		self.client.log.Infof("[evs]mapper on repo %s ref %s: %v", repoId, refId, err)
-	}
+	self.tickRef(ctx, repoId, refId)
 }
 
-// The mapper's timer: every MapperSpread, a tick of each ref this client pins, until ctx ends.
+// The mapper's loop until ctx ends: a tick of each ref a verified head, a new generation or this device's own
+// rotation asks one of (evs_epoch_map.go's wake row), and every MapperSpread a tick of each ref this client pins.
 func (self *EvsComponent) runMapper(ctx context.Context) {
+	mapper := self.client.mapper()
+	timer := self.client.clock.After(self.client.settings.MapperSpread)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-self.client.clock.After(self.client.settings.MapperSpread):
-		}
-		for _, pin := range self.client.pins.loadedPins() {
-			if err := self.client.Repo(pin.RepoId).TickMapper(ctx, pin.RefId); err != nil && self.client.log.V(1).Enabled() {
-				self.client.log.Infof("[evs]mapper on repo %s ref %s: %v", pin.RepoId, pin.RefId, err)
+		case key := <-mapper.wakeups:
+			self.tickRef(ctx, key.repoId, key.refId)
+		case <-timer:
+			timer = self.client.clock.After(self.client.settings.MapperSpread)
+			for _, pin := range self.client.pins.loadedPins() {
+				self.tickRef(ctx, pin.RepoId, pin.RefId)
 			}
 		}
+	}
+}
+
+// One tick of a ref's mapper, what it did not finish logged.
+func (self *EvsComponent) tickRef(ctx context.Context, repoId Id, refId Id) {
+	if err := self.client.Repo(repoId).TickMapper(ctx, refId); err != nil && self.client.log.V(1).Enabled() {
+		self.client.log.Infof("[evs]mapper on repo %s ref %s: %v", repoId, refId, err)
 	}
 }
 

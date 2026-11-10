@@ -23,6 +23,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -180,8 +181,28 @@ func (self *evsListedNameIndex) Walk(ctx context.Context, visit func(path *EvsIn
 
 // Every path a version in (version, the ref's verified head] created: each creating push's record read and the rows
 // its directory deltas add opened under the statement's epoch, a directory named by its token path in that epoch as
-// the index and each earlier creation give it.
+// the index and each earlier creation give it. It walks the ref from its first version, learning every directory a
+// creation names; createdAfterFrom walks from a version whose chain the caller holds.
 func (self *evsListedNameIndex) CreatedAfter(ctx context.Context, version uint64) ([]*EvsIndexedPath, error) {
+	return self.createdAfterWalk(ctx, version, 0, EvsChainStart(self.repo.repoId, self.refId))
+}
+
+// CreatedAfter walking from version, whose chain is chain: a map's source, which its job holds. A delta of a directory
+// neither the index nor the walk names, one that stood at version and was removed before the index's head, sends the
+// walk back to the ref's first version, which names every directory ever created.
+func (self *evsListedNameIndex) createdAfterFrom(ctx context.Context, version uint64, chain [32]byte) ([]*EvsIndexedPath, error) {
+	created, err := self.createdAfterWalk(ctx, version, version, chain)
+	if errors.Is(err, errEvsIndexDirectoryUnknown) {
+		return self.CreatedAfter(ctx, version)
+	}
+	return created, err
+}
+
+// A directory delta of a directory the index and the walk do not name.
+var errEvsIndexDirectoryUnknown = errors.New("evs: a delta of a directory the index does not name")
+
+// The walk of CreatedAfter from fromVersion with fromChain, collecting what versions after version create.
+func (self *evsListedNameIndex) createdAfterWalk(ctx context.Context, version uint64, fromVersion uint64, fromChain [32]byte) ([]*EvsIndexedPath, error) {
 	repo := self.repo
 	head, err := repo.readHeadAlone(ctx, self.refId, true)
 	if err != nil {
@@ -194,7 +215,7 @@ func (self *evsListedNameIndex) CreatedAfter(ctx context.Context, version uint64
 	if err != nil || !ok {
 		return nil, fmt.Errorf("%w: no pin to walk from", ErrEvsReplyInvalid)
 	}
-	walked, err := repo.client.verifier.Walk(ctx, repo.repoId, self.refId, 0, EvsChainStart(repo.repoId, self.refId), pin.Version)
+	walked, err := repo.client.verifier.Walk(ctx, repo.repoId, self.refId, fromVersion, fromChain, pin.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +229,7 @@ func (self *evsListedNameIndex) CreatedAfter(ctx context.Context, version uint64
 	}
 	created := []*EvsIndexedPath{}
 	for _, statement := range walked {
-		if statement.Version <= version || statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
+		if statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
 			continue
 		}
 		epoch := max(1, statement.Statement.Push.GetPathEpoch())
@@ -242,7 +263,7 @@ func (self *evsListedNameIndex) CreatedAfter(ctx context.Context, version uint64
 			}
 			directoryNames, ok := byTokens[string(change.TokenPath.Bytes())]
 			if !ok {
-				return nil, fmt.Errorf("%w: a delta of a directory the index does not name", ErrEvsEntryRefused)
+				return nil, errEvsIndexDirectoryUnknown
 			}
 			for _, row := range entry.GetNames().GetNames() {
 				child, err := EvsTokenFromBytes(row.GetToken())
@@ -255,9 +276,11 @@ func (self *evsListedNameIndex) CreatedAfter(ctx context.Context, version uint64
 				}
 				names := append(slices.Clone(directoryNames), name)
 				path := &EvsIndexedPath{Names: names, Kind: protocol.EvsEntryKind(row.GetKind()), Born: epoch}
-				created = append(created, path)
 				if path.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
 					directories[path.Path()] = names
+				}
+				if version < statement.Version {
+					created = append(created, path)
 				}
 			}
 		}

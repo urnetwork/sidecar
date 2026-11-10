@@ -349,8 +349,10 @@ type evsClientEpochs struct {
 	refAlarms map[evsRefKey]*evsRefAlarm
 	// per ref, closed at its next verified head (evs_epoch.go's moved)
 	waiters map[evsRefKey]chan struct{}
-	// what a mapper on this device says of a ref's job, nil until one registers (evs_epoch_map.go)
+	// what a mapper on this device says of a ref's job, and how a verified head asks it a tick, nil until one
+	// registers (evs_epoch_map.go)
 	mapperStatus evsMapperStatusFunction
+	mapperWake   func(repoId Id, refId Id, headVersion uint64)
 	// the client's *evsMapper, made on first use: untyped here, since the mapper's files stay off the ios_extension
 	// leg, which links this one
 	mapper any
@@ -386,11 +388,16 @@ func newEvsClientEpochs() *evsClientEpochs {
 	}
 }
 
-// Notes the generation this device's own EnsureWritable returned for a repo.
-func (self *evsClientEpochs) noteWritable(repoId Id, generation uint64) {
+// Notes the generation this device's own EnsureWritable returned for a repo: true when it rose, the device having
+// rotated or been given a newer one.
+func (self *evsClientEpochs) noteWritable(repoId Id, generation uint64) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	self.writable[repoId] = max(self.writable[repoId], generation)
+	if generation <= self.writable[repoId] {
+		return false
+	}
+	self.writable[repoId] = generation
+	return true
 }
 
 // Whether this device's own EnsureWritable returned generation, so it rotated to it and maps at once.
