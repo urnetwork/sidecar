@@ -115,6 +115,16 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	if err != nil {
 		return err
 	}
+	// a re-formed group is followed first (gkm_reform.go): one that fails its checks is refused and alarmed, and one
+	// whose ladder is still going up, or a gkm that cannot be reached, leaves this device on the group it holds
+	if _, err := manager.adoptReformInFlow(ctx, state); err != nil {
+		if errors.Is(err, ErrGkmReformRefused) {
+			return err
+		}
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[gkm]no re-form was followed: %v", err)
+		}
+	}
 	if err := manager.takeGenerationsInFlow(ctx, state); err != nil && !errors.Is(err, ErrGkmKeyMissing) {
 		return err
 	}
