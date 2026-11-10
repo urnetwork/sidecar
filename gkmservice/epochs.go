@@ -141,17 +141,24 @@ func (self *GkmEngine) serveEpochCommit(request *GkmRequest) {
 	if !self.checkCommitHeader(request, groupId, upload, previous.GetHeader()) {
 		return
 	}
-	if !request.CheckRepoWritable() {
-		return
-	}
 	objectBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(object)
 	if err != nil {
 		request.Unavailable()
 		return
 	}
+	// a Remove, which the write budget never refuses, only while gkm's newest state shows a holder dropped since
+	// epoch n-1's pin and time; every other commit queues as P1 (§10.6's checks row, budget.go)
+	writeKind := self.commitWriteKind(request, previous)
+	writeCtx, ok := request.SpendWrites(request.Cluster, writeKind, self.settings.Prices.create(len(objectBytes)))
+	if !ok {
+		return
+	}
+	if !request.CheckRepoWritable() {
+		return
+	}
 	barrierKey := gkmBarrierNumberKey(groupId, upload.epoch)
 	testHookBarrier(BarrierEpochPutBefore, barrierKey)
-	winner, err := createGkmObject(request.Ctx, request.Cluster, GkmEpochKey(groupId, upload.epoch), objectBytes, self.settings.ObjectMaxByteCount)
+	winner, err := createGkmObject(writeCtx, request.Cluster, GkmEpochKey(groupId, upload.epoch), objectBytes, self.settings.ObjectMaxByteCount)
 	testHookBarrier(BarrierEpochPutAfter, barrierKey)
 	if err != nil {
 		self.answerStoreError(request, err)
@@ -172,7 +179,7 @@ func (self *GkmEngine) serveEpochCommit(request *GkmRequest) {
 	self.rememberNewestEpoch(groupId, upload.epoch)
 	self.hintGroupCommit(request, groupId, upload.epoch, upload.header.GetGeneration())
 	if 0 < len(object.GetSealedGroupInfo()) {
-		self.healGroupInfoPointer(request.Ctx, request.Cluster, groupId, upload.epoch)
+		self.healGroupInfoPointer(request, request.Cluster, groupId, upload.epoch, writeKind)
 	}
 	request.Reply(nil)
 }

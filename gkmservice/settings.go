@@ -171,6 +171,10 @@ type GkmServiceSettings struct {
 	RecoveryWrapsReplyMaxCount int
 	// The most keys one member's recovery/ prefix may hold on one cluster before a read of it alarms.
 	RecoveryWrapListMaxCount int
+
+	// §11.13's cost rows each write is priced by before it spends the write budget (budget.go): the 4 KiB block's
+	// inferred figures until §22.8's nvme run measures them.
+	Prices *GkmWritePrices
 }
 
 // The production defaults.
@@ -237,6 +241,8 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		DropKeyRenewalHintInterval: 1 * time.Hour,
 		RecoveryWrapsReplyMaxCount: 4096,
 		RecoveryWrapListMaxCount:   64 * 1024,
+
+		Prices: DefaultGkmWritePrices(),
 	}
 }
 
@@ -244,6 +250,12 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 func (self *GkmServiceSettings) Validate() error {
 	if self.Place == nil {
 		return fmt.Errorf("%w: no place settings", ErrGkmSettings)
+	}
+	if self.Prices == nil {
+		return fmt.Errorf("%w: no write prices", ErrGkmSettings)
+	}
+	if err := self.Prices.validate(); err != nil {
+		return err
 	}
 	if self.Place.NotFoundTtl < 0 {
 		return fmt.Errorf("%w: a negative place/ 404 ttl", ErrGkmSettings)

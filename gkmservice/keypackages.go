@@ -240,13 +240,22 @@ func (self *GkmEngine) serveKeyPackagesUpload(request *GkmRequest) {
 		request.TooManyRequests(0)
 		return
 	}
+	// KeyPackages are §11.13's P1, on the first cluster (budget.go)
+	uploadByteCount := int64(0)
+	for _, keyPackage := range uploaded {
+		uploadByteCount += self.settings.Prices.create(len(keyPackage.encoded))
+	}
+	writeCtx, ok := request.SpendWrites(cluster, "", uploadByteCount)
+	if !ok {
+		return
+	}
 	for _, keyPackage := range uploaded {
 		key, err := GkmKeyPackageKey(request.SidecarId, keyPackage.info.Ref)
 		if err != nil {
 			request.BadRequest()
 			return
 		}
-		winner, err := createGkmObject(request.Ctx, cluster, key, keyPackage.encoded, self.settings.ObjectMaxByteCount)
+		winner, err := createGkmObject(writeCtx, cluster, key, keyPackage.encoded, self.settings.ObjectMaxByteCount)
 		if err != nil {
 			self.answerStoreError(request, err)
 			return
@@ -348,8 +357,14 @@ func (self *GkmEngine) serveKeyPackageClaim(request *GkmRequest) {
 		request.Unavailable()
 		return
 	}
+	// an Add's claim is §11.13's P1: <ref>.claim's create and <ref>'s delete, priced once however many races it loses
+	// on the way (budget.go)
+	writeCtx, ok := request.SpendWrites(cluster, "", self.settings.Prices.create(len(claimBody))+self.settings.Prices.delete())
+	if !ok {
+		return
+	}
 	for _, ref := range inventory.oneTimeRefs {
-		keyPackage, claimed, err := self.claimOneTime(request.Ctx, cluster, targetSidecarId, ref, claimBody)
+		keyPackage, claimed, err := self.claimOneTime(writeCtx, cluster, targetSidecarId, ref, claimBody)
 		if err != nil {
 			self.answerStoreError(request, err)
 			return
@@ -363,7 +378,7 @@ func (self *GkmEngine) serveKeyPackageClaim(request *GkmRequest) {
 		return
 	}
 	for _, ref := range inventory.lastResortRefs {
-		keyPackage, found, err := self.claimLastResort(request.Ctx, cluster, targetSidecarId, ref, claimBody)
+		keyPackage, found, err := self.claimLastResort(writeCtx, cluster, targetSidecarId, ref, claimBody)
 		if err != nil {
 			self.answerStoreError(request, err)
 			return
@@ -407,7 +422,7 @@ func (self *GkmEngine) claimOneTime(ctx context.Context, cluster sidecar.BlobClu
 	if winner != nil {
 		return nil, false, nil
 	}
-	if err := cluster.Delete(ctx, key); err != nil && self.log.V(1).Enabled() {
+	if err := deleteGkmObject(ctx, cluster, key); err != nil && self.log.V(1).Enabled() {
 		self.log.Infof("[gkm] a claimed KeyPackage's delete failed: %v", err)
 	}
 	return keyPackage, true, nil
@@ -464,8 +479,11 @@ func (self *GkmEngine) hintIfLow(ctx context.Context, cluster sidecar.BlobCluste
 // Answers a store error: 503 for an outcome no read resolved or a store that did not answer, and an alarm besides
 // for a stored object that breaks its form.
 func (self *GkmEngine) answerStoreError(request *GkmRequest, err error) {
-	if errors.Is(err, errGkmStoreFault) {
+	switch {
+	case errors.Is(err, errGkmStoreFault):
 		self.alarm("store_fault", err)
+	case errors.Is(err, errGkmWriteUnbudgeted):
+		self.alarm("unbudgeted_write", err)
 	}
 	request.Unavailable()
 }

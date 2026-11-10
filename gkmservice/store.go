@@ -11,10 +11,10 @@
 //     group's repo never changes, so a process remembers it; the forms themselves are cached as repo/ is, so a
 //     re-form is seen within 5 s.
 //
-// Writes go through createGkmObject and replaceGkmObject. Every gkm write is a create (If-None-Match) or an
-// overwrite of a key that changes in place (If-Match), since the store has no unconditional PUT, and a lost
-// answer is resolved by reading the key back (§11.8's unknown row). §11.13's write budget wraps these two once
-// KEYS-M2-30 lands; until then gkm spends nothing.
+// Writes go through createGkmObject, replaceGkmObject and deleteGkmObject. Every gkm write is a create
+// (If-None-Match), an overwrite of a key that changes in place (If-Match) or a delete, since the store has no
+// unconditional PUT, and a lost answer is resolved by reading the key back (§11.8's unknown row). Each refuses a ctx
+// §11.13's write budget has not passed (budget.go), before anything is sent.
 //
 // Safe for concurrent use. No lock is held across I/O.
 
@@ -134,6 +134,9 @@ const gkmCreateWriteCount = 2
 // (D-OPS-20), and a create that never landed goes once more. An outcome no read resolves comes back as the
 // sidecar.BlobUnknownError, and the caller answers 503 so its client retries the same bytes.
 func createGkmObject(ctx context.Context, cluster sidecar.BlobCluster, key string, body []byte, maxByteCount int64) (winner []byte, err error) {
+	if err := checkGkmWriteClass(ctx); err != nil {
+		return nil, err
+	}
 	readBack := func() (held []byte, found bool, err error) {
 		held, _, err = readGkmObject(ctx, cluster, key, maxByteCount)
 		if errors.Is(err, sidecar.ErrBlobNotFound) {
@@ -185,12 +188,23 @@ func createGkmObject(ctx context.Context, cluster sidecar.BlobCluster, key strin
 // the etag a read found, or If-None-Match when the read found none. sidecar.ErrBlobPrecondition when another write
 // moved the key between the read and this one, which the caller judges by reading again.
 func replaceGkmObject(ctx context.Context, cluster sidecar.BlobCluster, key string, etag string, body []byte) error {
+	if err := checkGkmWriteClass(ctx); err != nil {
+		return err
+	}
 	if etag == "" {
 		_, err := cluster.PutIfNoneMatch(ctx, key, body, nil)
 		return err
 	}
 	_, err := cluster.PutIfMatch(ctx, key, etag, body, nil)
 	return err
+}
+
+// Deletes key, once a write budget has passed ctx. A key already gone is no error.
+func deleteGkmObject(ctx context.Context, cluster sidecar.BlobCluster, key string) error {
+	if err := checkGkmWriteClass(ctx); err != nil {
+		return err
+	}
+	return cluster.Delete(ctx, key)
 }
 
 // One repo/ answer: the object, or a 404, good until expiresAt.

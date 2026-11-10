@@ -118,12 +118,14 @@ func (self *GkmEngine) serveRecoveryWrapWrite(request *GkmRequest) {
 		return
 	}
 	key := GkmRecoveryWrapKey(request.pathMemberId, groupId, wrap.GetGeneration(), hex.EncodeToString(wrap.GetCommitmentPrefix()), hex.EncodeToString(wrap.GetBindingPrefix()))
-	if !request.CheckRepoWritable() {
+	// a rebind's re-wrap is no REMOVE rotation's: §11.13's P1 (budget.go)
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", self.settings.Prices.create(len(wrap.GetCiphertext())))
+	if !ok || !request.CheckRepoWritable() {
 		return
 	}
 	barrierKey := gkmBarrierNumberKey(groupId, wrap.GetGeneration())
 	testHookBarrier(BarrierWrapPutBefore, barrierKey)
-	winner, err := createGkmObject(request.Ctx, request.Cluster, key, wrap.GetCiphertext(), gkmDeliveryMaxByteCount)
+	winner, err := createGkmObject(writeCtx, request.Cluster, key, wrap.GetCiphertext(), gkmDeliveryMaxByteCount)
 	testHookBarrier(BarrierWrapPutAfter, barrierKey)
 	if err != nil {
 		self.answerStoreError(request, err)
@@ -252,19 +254,35 @@ func (self *GkmEngine) serveRecoveryWrapsDelete(request *GkmRequest) {
 	if !ok {
 		return
 	}
+	// the deletes queue as P1 on each wrap's cluster, one admission a cluster (budget.go)
+	clusterIds := []string{}
+	clusterIdKeys := map[string][]string{}
 	for _, wrap := range found {
 		if wrap.b8 != b8 {
 			continue
 		}
-		cluster, err := self.blobs.Cluster(wrap.clusterId)
+		if _, ok := clusterIdKeys[wrap.clusterId]; !ok {
+			clusterIds = append(clusterIds, wrap.clusterId)
+		}
+		clusterIdKeys[wrap.clusterId] = append(clusterIdKeys[wrap.clusterId], wrap.key)
+	}
+	for _, clusterId := range clusterIds {
+		cluster, err := self.blobs.Cluster(clusterId)
 		if err != nil {
 			request.Unavailable()
 			return
 		}
-		if err := cluster.Delete(request.Ctx, wrap.key); err != nil {
-			// the client sends it again, and a key already gone is no error
-			request.Unavailable()
+		keys := clusterIdKeys[clusterId]
+		writeCtx, ok := request.SpendWrites(cluster, "", int64(len(keys))*self.settings.Prices.delete())
+		if !ok {
 			return
+		}
+		for _, key := range keys {
+			if err := deleteGkmObject(writeCtx, cluster, key); err != nil {
+				// the client sends it again, and a key already gone is no error
+				self.answerStoreError(request, err)
+				return
+			}
 		}
 	}
 	request.Reply(nil)
