@@ -127,8 +127,10 @@ type PushView struct {
 	NetworkId sidecar.Id
 	// The storage limit: QuotaGate. nil refuses 503, since no push may go unclassified.
 	Quota EvsQuotaChecker
-	// The repo's metadata cluster stands at §19.9's cohort limit, so the storage limit answers 507.
-	ClusterFull bool
+	// The repo's metadata cluster stands at §19.9's cohort limit (cluster_limit.go), so what the storage limit
+	// refuses answers 507 CLUSTER_FULL, carrying ClusterFullRetryAfter, whatever the network's own state.
+	ClusterFull           bool
+	ClusterFullRetryAfter time.Duration
 
 	// EVS1-M2-16's PATH_EPOCH commit rules: map parts, source binding, tail and fold (§11.6's commit row). nil refuses
 	// every PATH_EPOCH push 503.

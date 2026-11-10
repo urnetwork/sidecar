@@ -46,7 +46,6 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // One network's newest verified state as the reconciler reads it.
@@ -546,21 +545,6 @@ func (self *GkmReconciler) setNetwork(networkId sidecar.Id, state *GkmNetworkSta
 	entry.nextWake = nextWake
 }
 
-// The position at which a forwarding Delegation's row ended or was superseded, the earlier when both, 0 while it is
-// live: from there its key object serves nothing a new rotation seals.
-func gkmForwardingEndPosition(row *bridge.DelegationRow) uint64 {
-	ends := []uint64{}
-	for _, position := range []uint64{row.GetEndedAt(), row.GetSupersededAt()} {
-		if position != 0 {
-			ends = append(ends, position)
-		}
-	}
-	if len(ends) == 0 {
-		return 0
-	}
-	return slices.Min(ends)
-}
-
 // Notes each forwarding Delegation of the network's state that ended or was superseded, and queues for the deleter
 // every key object whose DelegationKeyRetention has run. Returns the earliest deletion still ahead, or a retry's,
 // false for none. A queue that is full leaves the rest for a later pass, at the retry interval.
@@ -574,10 +558,18 @@ func (self *GkmReconciler) reconcileDelegationKeys(networkId sidecar.Id, state *
 		if !sidecar.ConfigDelegationRowForwards(row) {
 			continue
 		}
-		position := gkmForwardingEndPosition(row)
-		if position == 0 {
+		// where it ended or was superseded, the earlier when both: from there its key object serves nothing a new
+		// rotation seals
+		ends := []uint64{}
+		for _, position := range []uint64{row.GetEndedAt(), row.GetSupersededAt()} {
+			if position != 0 {
+				ends = append(ends, position)
+			}
+		}
+		if len(ends) == 0 {
 			continue
 		}
+		position := slices.Min(ends)
 		endedAt := now
 		if state.PositionTime != nil {
 			if at, known := state.PositionTime(position); known && at.Before(now) {
@@ -603,7 +595,12 @@ func (self *GkmReconciler) reconcileDelegationKeys(networkId sidecar.Id, state *
 			end, tracked := self.delegationKeyEnds[row.delegationId]
 			if !tracked {
 				if self.settings.DelegationKeyTrackCount <= len(self.delegationKeyEnds) {
-					self.forgetDoneDelegationKeysWithLock()
+					// forget the objects already gone, so a full table takes new ends: one seen again costs a HEAD
+					for delegationId, end := range self.delegationKeyEnds {
+						if end.done {
+							delete(self.delegationKeyEnds, delegationId)
+						}
+					}
 				}
 				if self.settings.DelegationKeyTrackCount <= len(self.delegationKeyEnds) {
 					later(now.Add(self.settings.DelegationKeyRetryInterval))
@@ -651,15 +648,6 @@ func (self *GkmReconciler) reconcileDelegationKeys(networkId sidecar.Id, state *
 		later(now.Add(self.settings.DelegationKeyRetryInterval))
 	}
 	return next, found
-}
-
-// Forgets the key objects already gone, so a full table takes new ends: a forgotten one seen again is one HEAD more.
-func (self *GkmReconciler) forgetDoneDelegationKeysWithLock() {
-	for delegationId, end := range self.delegationKeyEnds {
-		if end.done {
-			delete(self.delegationKeyEnds, delegationId)
-		}
-	}
 }
 
 // The key objects' deleter: each queued deletion in turn, until the reconciler ends.

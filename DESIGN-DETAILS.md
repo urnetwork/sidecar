@@ -16,7 +16,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | pending |
 | 8 | Git and evs in both directions | 3 | pending |
-| 9 | Client path epochs and re-tokenizing | 3 | in progress |
+| 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | pending |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | pending |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | pending |
@@ -2743,7 +2743,7 @@ Tasks held until complete: EVS1-M2-34, EVS1-M2-35, EVS1-M2-36.
 
 ## 9. Client path epochs and re-tokenizing
 
-Status: in progress (2026-11-10): the design, model, cost, tests and notes below are written; the task proposal and the six question files it names are being filed
+Status: complete (2026-11-10)
 
 Tasks held until complete: EVS1-M2-28, EVS1-M2-29, EVS1-M2-30.
 
@@ -2761,7 +2761,7 @@ Working it through against the landed code and §11.6's rows found eleven ways i
 
 **B. After a cut-over, a path last written before it cannot be read, and a change to it can be hidden.** A statement names its changes by token paths in its own epoch. evs's read route (`evsservice/read.go`: `pathReply`, `attachStatement`, `absences`, `olderVersion`) finds a path's change in every statement by the request's current-epoch token path, and the client's verifier (`evs_proof.go`: `VerifyPath`, `verifyUnchangedSince`) checks every statement against that one token path too. Take a file whose newest version was written in epoch 1 by a 3,000-file import. After the cut-over to epoch 2 a read finds its entry (in the source, or moved), and `attachStatement` then looks for `tp(X, 2)` in a change list sorted under epoch 1's tokens: `ErrEvsStatementMismatch`. With an inline change list evs returns the statement and the client's `evsChangeOf` fails instead. Every file not rewritten since the cut-over is unreadable. The other half is a soundness hole: a reader pinned at version 90 reads X at head 130, with the cut-over at 120. A statement at 110 changed X under `tp(X, 1)`. `verifyUnchangedSince` compares that statement's changes with `tp(X, 2)`, finds no match, and accepts the stale version evs served, the rollback I-16 forbids. A listing has its own form of this: an unmoved directory's entry is served from the source with its rows untagged, and `List` opens them under the head's epoch, so every name fails its token check and the reader alarms `tamper`.
 
-**C. A creation lands on a path that stands.** evs holds no key, so while sources stand it can check a creation only against the entries the push names: the current epoch's and the source copies its source paths give. Writer w reads the directory at epoch 1 and sees no `report.md`. Writer v creates `report.md` in epoch 1. The ref cuts over to epoch 2, which folds every earlier version into epoch 1's entries. w's push is refused 412 PATH_EPOCH; w recomputes its tokens for epoch 2 and sends the creation again with no source path, since by its own listing the path never existed. evs reads `idx/2/…`, finds nothing, and commits: a creation over v's file, with no 409, v's content cut off from the path's history. The fold then adds an untagged row beside v's carried row, and when the copy translates the carried row the table holds one token twice, which EVS-FORMAT.md has every reader refuse whole: the directory can no longer be listed.
+**C. A creation lands on a path that stands.** evs holds no key, so while sources stand it can check a creation only against the entries the push names: the current epoch's and the source copies its source paths give. Writer w reads the directory at epoch 1 and sees no `report.md`. Writer v creates `report.md` in epoch 1. The ref cuts over to epoch 2, which folds every earlier version into epoch 1's entries. w's push is refused 412 PATH_EPOCH; w recomputes its tokens for epoch 2 and sends the creation again with no source path, since by its own listing the path never existed. evs reads `idx/2/…`, finds nothing, and commits: a creation over v's file, with no 409, v's content cut off from the path's history. The fold then adds an untagged row beside v's carried row, and when the copy translates the carried row the table holds one token twice, which every reader refuses whole (`EvsOpenNameTable`, `evs_name.go`): the directory can no longer be listed.
 
 **D. Two mappers, two generations.** Device a maps to generation 2 and device b, which has already adopted a second REMOVE rotation, to generation 3, both from a head in epoch 1. a's PATH_EPOCH commits. b's is checked by 5e as written and landed (`pathEpochRules`): a newer generation, parts present, source in the window with a matching chain, tail covering every later creation. It commits. b's map lists each path in epochs 3 and 1 and knows nothing of epoch 2. The copy for epoch 2 has by then moved some entries into `idx/2/` and deleted their epoch-1 copies, and the copy for epoch 3 runs "for the newest map and its tail only": it finds those paths in no source its moves name, and at its end the LIST of `idx/2/` finds entries no move took. It alarms and keeps the source. Nothing ever moves them, one of three source slots is gone for good, and after two more such races every creation on the ref is refused EPOCH_SOURCES_FULL.
 
@@ -2831,13 +2831,20 @@ message EvsIndexEntry {
   uint32 names_leaf_part = 7; uint32 names_leaf_index = 8;  // the same, for the delta at names_through (6 is left
                                            // for evs1-m2-10-directory-marker-version's names_version)
 }
+enum EvsRefusalCode {
+  ...
+  EVS_REFUSAL_MAP_SOURCE = 75;             // 409, final: a PATH_EPOCH whose map's source is unknown, under another
+                                           // chain or of an epoch no longer current, or a map part whose key holds
+                                           // other bytes (9.2.6); the landed code answers MAP_PARTS for these, which
+                                           // a mapper cannot tell from "upload the parts again"
+}
 ```
 
 `EvsPush`, `EvsPathMap`, `EvsPathMove`, `EvsSourcePath`, `EvsName` and `EvsHead` keep their fields. What this section adds to them is rules, for `protocol/EVS-FORMAT.md`:
 
 ```text
 map       one move per path live at the source head S, the root included (9.2.8), ascending by new_token_path's
-          bytes within a part and across parts, so a part is a run and the copy reads them last part first; a part is
+          bytes within a part and across parts, so a part is a run and the copy can take them last part first; a part is
           at most 8 MiB signed, and a map at most 1,024 parts; a move's sources are
           the path in the epoch current at S, then in each source S lists that 9.2.7's rule names, newest first;
           sealed_name is the name under manifest_{p_new}, AAD repo_id || u64be(p_new) || new parent || new child,
@@ -3078,6 +3085,22 @@ Everything else of 5e stands: a newer generation, parts present and under 24 h o
 
 **The copy checks its map.** `copyRun.loadMoves` hashes the parts as it reads them and compares with the head's `map_sha256`; on a mismatch, or a part out of 9.2.2's order, it moves nothing, alarms and ends, and the source stays listed. evs verified each part's signature at its upload, and a reader checks every row and entry it uses (9.3's M1), so this is the one whole-map check, made where the map is read whole anyway.
 
+**The order of the fences.** Each line is the order in which one actor meets them, and a later one never stands in for an earlier.
+
+```text
+a request      the client: a head verified within EpochFreshFor and no immediate pressure (a new name only); then
+               the floor rule for every token path it names
+a push at evs  5d the gate; 5e the epoch (412 PATH_EPOCH, final); 5e the crossing creation, the due and the block
+               (412 PATH_EPOCH_DUE, recorded); 5f the base; 5g the path-level CAS over the current entry and the
+               source copies named; step 7
+a PATH_EPOCH   the mapper: the job record, the parts, the replay to its base, the tail; evs: 5d; 5e a newer
+               generation, a free source slot, the parts present and under 24 h, the source and its chain, the
+               between fence, the tail over the window, nothing unfolded; 5f; step 7 with folded_through = v
+after a commit the fold: PUT the current entry, DELETE the named source copies, and only then may folded_through
+               rise; the copy: children before their directory, PUT the current entry, HEAD its prefixes, DELETE
+               the source copies; at its end the LIST of each source, then the fence write that drops them
+```
+
 #### 9.2.7 The mapper
 
 A mapper is a writer that holds every name of a ref. It is given them by an index:
@@ -3094,7 +3117,7 @@ type EvsNameIndex interface {
 }
 ```
 
-`born` is an epoch in which evs was shown the path's token and which is at most the epoch of the path's row. Two kinds of index give it, and either is correct:
+`born` is an epoch in which evs was shown the path's token and which is at most the epoch of the path's row, or 0 for a path that stood before the oldest standing source was left, for which every listed source qualifies. Two kinds of index give it, and either is correct:
 
 ```text
 replayed   the local tier's mirror of a mounted repo, or a head-mode mirror: it follows every statement, and its
@@ -3103,7 +3126,10 @@ replayed   the local tier's mirror of a mounted repo, or a head-mode mirror: it 
            drops the path and everything below it from the journal; the journal empties when the sources drop
 listed     evsListedNameIndex, which EVS1-M2-47 builds for a device with no mirror: it lists the tree from the
            root by 9.2.4 (64 directories a request), taking each row's epoch as born (E2), then lists again every
-           directory a statement after its listing changed, until one verified head has no such statement
+           directory a statement after its listing changed, until one verified head has no such statement; after
+           8 rounds without one it gives up until the next tick. CreatedAfter never comes from listings, which
+           miss a path created and removed between two of them: it reads each creating push's record (§11.9's
+           push reads) and opens the rows its directory deltas add
 ```
 
 A device is *eligible* for a ref when it writes the repo, the ref is shared or owned, and an index is registered for it: on a phone only while the index holds at most `MobileMapNameCount` names. Wrapped agents are eligible on the same terms (owner decision 114).
@@ -3117,7 +3143,7 @@ tick(ref), on a new generation from gkm, a verified head, a PATH_EPOCH hint, and
    a job on disk: resume it at its state
    batched, and E lists two sources: wait, building nothing                      (§11.6's commit row)
    E lists three sources: wait
-   start at: now, for the device whose own rotation made r; else, immediate: first seen + U[0, MapperSpread);
+   start at: now, for a device whose own EnsureWritable call returned r; else, immediate: first seen + U[0, MapperSpread);
              batched: due_by_ms − MapperBatchedLead + U[0, MapperSpread), due_by_ms being 24 h after the
              device first held r when no head records the due; U seeded by (sidecar_id, ref_id, r)
 
@@ -3176,7 +3202,7 @@ Two mappers need no agreement. If both map to one generation, the first PATH_EPO
 
 **M1, a map cannot misdirect a read.** If a map moves X's entry under another name's token, a read of that name is served a version whose statement names `tp(X, e)`, not the reader's token for the name it asked, and P4 refuses it. A row the map sealed wrongly fails its AEAD or its token check and the listing is refused (§11.7's name row). A map can therefore withhold or break, which 9.5 recovers from, and never substitute.
 
-**P5, sources drain.** Every entry a source holds is a marker or is named there by the newest committed map or its tail, so the copy's end LIST finds nothing else and the sources drop. *Why.* An entry could be left unnamed three ways. A map built on another epoch state would not know a source: the between fence refuses it. A path created after the map's source: the mapper covers creations through its base, and evs's tail check covers those after it, all of which the window holds. A path changed, removed or re-created since: the fold that wrote its current entry deleted the source copies its push named, and those are every copy there is, because no evidence can lift a writer's floor above a copy that still stands. A row is translated only after its child's move, deletes included, has finished, and a version's statement is at or below the epoch of the copy that holds it. The newest map names each remaining path from `born` up, which is at or below its row's epoch, so it names the path's home and the epoch its row is matched in.
+**P5, sources drain.** Every entry a source holds is a marker or is named there by the newest committed map or its tail, so the copy's end LIST finds nothing else and the sources drop. *Why.* An entry could be left unnamed three ways. A map built on another epoch state would not know a source: the between fence refuses it. A path created after the map's source: the mapper covers creations through its base, and evs's tail check covers those after it, all of which the window holds. A path changed, removed or re-created since: the fold that wrote its current entry deleted the source copies its push named, and those are every copy there is, because no evidence can lift a writer's floor above a copy that still stands. A row is translated only after its child's move, deletes included, has finished, and a version's statement is at or below the epoch of the copy that holds it. The newest map names each remaining path from `born` up, which is at or below its row's epoch, so it names the path's home and the epoch its row is matched in. The model takes a move's two writes apart, so a copy killed or superseded between them is among what it checks.
 
 **P6, one row per standing path.** A standing path has exactly one row in its parent's table, and a path that does not stand has none. *Why.* A creation adds one, after a listing showed none (P3). A removal drops the child's token in every epoch at or above the path's floor, which the row's own epoch is (E2). The copy turns a carried row into the current one in place, after the child's move.
 
@@ -3186,57 +3212,57 @@ Two mappers need no agreement. If both map to one generation, the first PATH_EPO
 
 **K.** A retoken's kept slot ids name the bytes the refused statement would have written, and that statement can never commit, so no slot is introduced by two committed pushes.
 
-**The model.** `PathEpoch.tla` holds one ref whose paths are files under one directory that any client lists without a token, which is the root. It models keys and heads (a rotation, a device learning it, a head read), reads by the floor and new-name rules and lookups, plans, pushes with their fold, the 412 and the retoken, abandoning a plan, a mapper building from either kind of index and committing against the fence, the tail and the source slots, and the copy's moves, row translation and drop. A token is the pair (path, epoch), and `seen` is every pair a request showed evs. Its invariants are P1 (`NoLateToken`, `FloorsBacked`), P2 (`ReadsNewest`), P3 (`NoLostUpdate`), P5 (`NoneMissed`, `EntriesHome`) and P6 (`RowsLead`, `NoGhostRows`), with `TypeOK`. Every rotation in it is a REMOVE and immediate. TLC is the owner's jar, a nightly from master at d8fb231, through `.stack/tools/tlc`; `run-pathepoch.sh details-9 all` runs everything below and deletes each run's state directory as it ends.
+**The model.** `PathEpoch.tla` holds one ref whose paths are files under one directory that any client lists without a token, which is the root. It models keys and heads (a rotation, a device learning it, a head read), reads by the floor and new-name rules and lookups, plans, pushes with their fold, the 412 and the retoken, abandoning a plan, a mapper building from either kind of index and committing against the fence, the tail and the source slots, and the copy: each move as its two writes, the PUT of the current entry and the DELETE of the source copies, with any other step between them, then the row translation and the drop. A token is the pair (path, epoch), and `seen` is every pair a request showed evs. Its invariants are P1 (`NoLateToken`, `FloorsBacked`), P2 (`ReadsNewest`), P3 (`NoLostUpdate`), P5 (`NoneMissed`, `EntriesHome`) and P6 (`RowsLead`, `NoGhostRows`), with `TypeOK`. Every rotation in it is a REMOVE and immediate. TLC is the owner's jar, a nightly from master at d8fb231, through `.stack/tools/tlc`; `run-pathepoch.sh details-9 all` runs everything below and deletes each run's state directory as it ends.
 
 ```text
 configuration                          what it holds, and the result               distinct states   depth      time
 PathEpoch.tla, the design (Twin none)
 PathEpoch                              2 writers, 1 mapper, 1 cut-over, 6 versions
-                                       pass, every invariant                              959,250      29       25 s
+                                       pass, every invariant                            1,020,926      29       47 s
 PathEpoch-Three                        1 writer, 1 mapper, 2 cut-overs, 7 versions
-                                       pass, every invariant                              490,787      32       11 s
+                                       pass, every invariant                              558,167      34       22 s
 PathEpoch-Two                          2 paths, 1 writer, 1 mapper, 1 cut-over, 5 versions
-                                       pass, every invariant                              145,454      25        2 s
+                                       pass, every invariant                              178,282      27        9 s
 PathEpoch-Mappers                      1 writer, 2 mappers, 2 cut-overs, 5 versions
-                                       pass, every invariant                            5,178,063      32       54 s
+                                       pass, every invariant                            5,921,003      34  1 min 14 s
 PathEpoch-Pair                         2 writers, 1 mapper, 2 cut-overs, 5 versions
-                                       pass, every invariant                           23,946,250      35  3 min 54 s
+                                       pass, every invariant                           27,248,431      37  7 min 42 s
 PathEpoch-Wide                         2 paths, 2 writers, 2 mappers, 2 cut-overs, 9 versions; by simulation:
                                        1,400,000 traces of at most 80 steps from seed 9
-                                       pass, every invariant         117,640,645 generated       80  2 min 51 s
+                                       pass, every invariant         117,909,723 generated       80  3 min 12 s
 PathEpoch.tla, one rule of the design broken
 PathEpochTwin-SendAllSources           a read names every listed source (the landed tokenize; A)
-                                       NoLateToken violated, a trace of 10 states             555      12        1 s
+                                       NoLateToken violated, a trace of 10 states           1,000      15        0 s
 PathEpochTwin-MapAllSources            a map names every listed source (§11.6's map row; A)
-                                       NoLateToken violated, a trace of 12 states           4,872      14        1 s
+                                       NoLateToken violated, a trace of 12 states           3,391      14        0 s
 PathEpochTwin-StaleEpochSend           a new name sent on a head that is not fresh
-                                       NoLateToken violated, a trace of 6 states              327       9        1 s
+                                       NoLateToken violated, a trace of 7 states              411      10        0 s
 PathEpochTwin-NoNewNameRule            a new name sent by a device that holds the removal's generation (F)
-                                       NoLateToken violated, a trace of 4 states              168       9        1 s
+                                       NoLateToken violated, a trace of 5 states              253      11        0 s
 PathEpochTwin-MissIsAbsent             a miss in the current epoch read as absence while sources stand
-                                       ReadsNewest violated, a trace of 11 states           1,796      12        1 s
+                                       ReadsNewest violated, a trace of 11 states           2,966      14        0 s
 PathEpochTwin-BlindRetoken             a retoken that names no source (C)
-                                       NoLostUpdate violated, a trace of 14 states         15,510      15        2 s
+                                       NoLostUpdate violated, a trace of 14 states         17,541      16        0 s
 PathEpochTwin-NoBetweenFence           a PATH_EPOCH across another (D)
-                                       NoneMissed violated, a trace of 12 states           14,130      14        4 s
+                                       NoneMissed violated, a trace of 12 states            8,287      14        0 s
 PathEpochTwin-NoTailCheck              a PATH_EPOCH whose tail misses a creation
-                                       NoneMissed violated, a trace of 8 states               346      11        4 s
+                                       NoneMissed violated, a trace of 8 states               648      14        0 s
 PathEpochTwin-FoldKeepsSources         a fold that leaves the source copies (the landed fold; E)
-                                       NoneMissed violated, a trace of 16 states           17,588      17        6 s
+                                       NoneMissed violated, a trace of 16 states           12,722      18        0 s
 PathEpochTwin-RowsBeforeMoves          the copy translates rows before the children's moves
-                                       RowsLead violated, a trace of 10 states                457      12        1 s
+                                       RowsLead violated, a trace of 10 states                432      12        0 s
 PathEpochTwin-RemoveCurrentRowOnly     a removal that drops the current-epoch token alone (G)
-                                       NoGhostRows violated, a trace of 12 states           2,016      16        1 s
+                                       NoGhostRows violated, a trace of 13 states           1,501      15        0 s
 PathEpoch.tla, a state the design must reach (the invariant denies it)
 PathEpochReach-TwoCutOvers             a path created in epoch 1 standing in epoch 3 with the sources dropped
-                                       NeverTwoCutOvers violated, a trace of 12 states      2,222      13        0 s
+                                       NeverTwoCutOvers violated, a trace of 13 states      2,458      14        0 s
 PathEpochReach-Retoken                 a refused push retokened with a source path
-                                       NeverRetokened violated, a trace of 9 states         1,595      11        3 s
+                                       NeverRetokened violated, a trace of 10 states        1,571      12        0 s
 ```
 
-Every design run passes, and every twin and reach run ends on the one invariant its configuration names. The breadth-first runs are complete graphs; the largest kept 994 MB of state on disk. `PathEpoch-Wide` is a random simulation, which keeps no state set and shows only that the traces it drew held every invariant. A twin's count is what TLC had explored when it met the violation, and with several workers it moves a little from run to run. The machine carried four build lanes throughout.
+Every design run passes, and every twin and reach run ends on the one invariant its configuration names. The breadth-first runs are complete graphs; the largest kept 1,012 MB of state on disk. `PathEpoch-Wide` is a random simulation, which keeps no state set and shows only that the traces it drew held every invariant. A twin's count is what TLC had explored when it met the violation, and with several workers it moves a little from run to run. The machine carried four build lanes throughout.
 
-What the runs cover: every interleaving, at those bounds, of two writers and a mapper over one and two cut-overs, with a push in flight across each cut-over, a refused push retokened or abandoned, a device that has and has not learned the new generation, a read on a stale head, two mappers at one generation and at two, a map built from either index, the copy's moves in any order against writes, and the drop. What the model leaves out, and why each is safe:
+What the runs cover: every interleaving, at those bounds, of two writers and a mapper over one and two cut-overs, with a push in flight across each cut-over, a refused push retokened or abandoned, a device that has and has not learned the new generation, a read on a stale head, two mappers at one generation and at two, a map built from either index, the copy's moves in any order against writes, a move left between its two writes while a push or a second cut-over lands, and the drop. What the model leaves out, and why each is safe:
 
 ```text
 nested directories    a prefix's floor is at most its child's, and the prefix states (removed, fresh) are §11.6's as
@@ -3244,8 +3270,6 @@ nested directories    a prefix's floor is at most its child's, and the prefix st
 P4 and M1             sequential arguments about one reply, above; FS-10's cases cover them on the code
 time                  a client's head read and the request after it are one step: the model is the design with
                       EpochFreshFor at zero, and StaleEpochSend is the design without it
-the copy's crash      a move is atomic in the model; P5's last sentences are the argument for a copy left below a
-                      newer one
 the source below      MAP_SOURCE and the mapper's cover of (S, b] are a mapper's own diligence, not a fence: a miss is
 the window            P5's alarm, and 9.9 puts the choice to the owner
 parts, seals, leases  9.2.5 changes nothing in them but what is sealed again
@@ -3271,7 +3295,7 @@ evs writes                  1 create      4 to 14 creates                  40 cr
 commit                      one PATH_EPOCH push: a LIST of the map's keys, one GET of part 1, at most one log page
 ```
 
-A mapper holds one part in memory, 7 MiB, or 2 MiB on a phone, inside R-EVS-14's 4 MiB. The 24 h a part may age and `MapMaxAge` of 20 h leave a mapper 20 h from its first part to its commit, against 2 min of upload, and 9.2.6's source rule means a busy ref no longer shortens that to its window. An immediate epoch is rare (a member's or a device's removal, a compromise), and batched ones are at most one a repo a day (§11.13), so a 1M-path ref uploads at most 293 MB a day and typically nothing.
+A mapper holds one part in memory: 7 MiB on a desktop, and 2 MiB on a phone, which is inside R-EVS-14's 4 MiB. The 24 h a part may age and `MapMaxAge` of 20 h leave a mapper 20 h from its first part to its commit, against 2 min of upload, and 9.2.6's source rule means a busy ref no longer shortens that to its window. An immediate epoch is rare (a member's or a device's removal, a compromise), and batched ones are at most one a repo a day (§11.13), so a 1M-path ref uploads at most 293 MB a day and typically nothing.
 
 **The copy** is §11.6's: three operations an entry, about 17 h for 1M entries at 50 a second and 6 h at 150. The fold's deletes add at most one DELETE per named source per changed path while sources stand, three at most, and each is one the copy then does not make, since its move finds the current entry and nothing to delete. A directory's removal adds a LIST per named source and a DELETE per child copy, as its markers already cost a LIST and a PUT per current child. Hashing the map as the copy reads it costs under a second for 280 MiB. The leaf fields add at most 6 B per folded version.
 
@@ -3363,11 +3387,12 @@ Left to the review phase: FS-4's exhaustive schedules on T3, the capture under r
 The held tasks need landed code changed first, and EVS1-M2-28 as planned is two tasks' work. `.stack/plan/proposals/details-9-tasks.md` gives the four new tasks and the changed one in the plan's format. They are numbered after EVS1's last M2 task; the orchestrator may number them otherwise. All are the data lane's.
 
 **New: EVS1-M2-44, path-epoch fences on evs** (sidecar; M). 9.2.6's fold, 5e and copy changes.
-- `evsservice/fold.go`: after `foldRun.writePath` settles a path (its PUT, or `merged.changed` false), delete the listed source copies its events' source paths name; `foldPath.sourcePaths` today returns the first change's, and must return every change's in the range. A directory removal's LIST and deletes go beside `markBelow`, in a new `evsservice/fold_sources.go`. Each delete is paid as P2 fold work through `self.acquire`, carries `self.staleDeadline`, and counts in a new `EvsFoldResult.SourceDeleteCount`. The run returns only after they answer, so `folded_through` cannot rise over a range whose deletes are outstanding. Barriers `evs.fold.source_delete.before` and `.after`.
+- `evsservice/fold.go`: after `foldRun.writePath` settles a path (its PUT, or `merged.changed` false), delete the listed source copies its events' source paths name; `foldPath.sourcePaths` today returns the first change's, and must return every change's in the range. A directory removal's LIST and deletes go beside `markBelow`, in a new `evsservice/fold_sources.go`. Each delete is paid as the fold's entry writes are, through `self.acquire`, carries `self.staleDeadline`, and counts in a new `EvsFoldResult.SourceDeleteCount`. The run returns only after they answer, so `folded_through` cannot rise over a range whose deletes are outstanding. Barriers `evs.fold.source_delete.before` and `.after`.
 - `evsservice/epoch_commit.go`: `pathEpochRules` reads the source statement through `self.pushes` when the window holds S; `baseChainAt` answers nil below the window, so for an older S a new `sourceBelowWindow` reads log page ⌊S/64⌋ (`EvsSettings.MapSourcePageCount`, default 1), recomputes C_S from its `first_chain` and returns the statement. Then the chain check, then the between fence against `EvsHeadCurrentEpoch(head)`. `readPathEpoch` is unchanged: it already scans only the window. The refusal reasons stay `EvsCheckReasonMapSource` and `EvsCheckReasonTailMissing`.
 - `evsservice/check_cas.go` and `refuse.go`: step 4 already computes `self.due` (`push_step4.go`, from `pathEpochDueOver`) and the commit applies it (`push_commit.go`). `PushView` gains `CrossingDue *pathEpochDue` set from it; `CheckPathEpoch` refuses a creating push when `CrossingDue.blocks`, with `EvsCheckReasonPathEpochDue`, as a recorded refusal; and `pushAttempt.record` applies `applyPathEpochDue` to the head its refusal fence writes when the attempt holds a due. The classification moves to a root function, `EvsClassifyPathEpochDue(holdersShrunkAt, fromAuthVersion uint64) bool` in `evs_epoch.go`, which `pathEpochDueOver` and the client's `pressure` both call.
 - `evsservice/epoch_copy.go`: `loadMoves` hashes the parts in order and checks 9.2.2's order; a mismatch returns a new `ErrEvsCopyMapInvalid`, alarmed, with no move made.
-- Tests: 9.6's evs row. Nothing here changes a wire format.
+- `protocol/evs.proto`: `EVS_REFUSAL_MAP_SOURCE = 75`, final, which `refusal_codes.go` gives `EvsCheckReasonMapSource` in place of MAP_PARTS and `evs_refusal.go` a typed error. It is this task's one wire change.
+- Tests: 9.6's evs row.
 
 **New: EVS1-M2-45, reads across path epochs on evs** (sidecar; M). 9.2.2's fields and 9.2.4's route.
 - `protocol/evs.proto` and `evs.pb.go`, `protocol/EVS-FORMAT.md` (9.2.2's rules, the map's order among them), `testdata/evs/` vectors, `protocol/evs_descriptor_test.go`.
@@ -3376,10 +3401,10 @@ The held tasks need landed code changed first, and EVS1-M2-28 as planned is two 
 - `metadata_list.yml`'s evs-11 takes 9.8's words in the same change (I-18), with `check/`'s metadata test.
 - Tests: 9.6's reads row, server half.
 
-**New: EVS1-M2-46, the root directory's table** (sidecar; M). Question evs1-m2-24-root-directory-names, option 1, as 9.2.8 extends it. `evs_token.go`: `ParseEvsChangedTokenPath` takes the empty path for a directory delta only. `evsservice/entry.go`: the root's key `idx/<repo>/<ref>/<p>.e`. `evsservice/fold.go`, `check_cas.go` (5g's directory bound at the root), `evs_digest.go` (the empty path's digest rule: a root delta sets the two bits of `SHA-256("UR evs digest")`), `evsservice/read.go`. Client: `evs_read.go` (`evsPathNames("")` is the root), `evs_list.go`, `evs_directory.go` (a top-level creation or removal adds to the root's delta), `evs_export_file.go` (file-mode export no longer refuses). `evsservice/epoch_copy.go` needs no change: the empty path sorts first, so the root moves last. Tests: 9.6's root row, and EVS1-M2-24's refused cases turned into passes.
+**New: EVS1-M2-46, the root directory's table** (sidecar; M). Question evs1-m2-24-root-directory-names, option 1, as 9.2.8 extends it. `evs_token.go`: `ParseEvsChangedTokenPath` takes the empty path for a directory delta only. `evsservice/entry.go`: the root's key `idx/<repo>/<ref>/<p>.e`. `evsservice/fold.go`, `check_cas.go` (5g's directory bound at the root), `evs_digest.go` (the empty path's digest rule: a root delta sets the two bits of `SHA-256("UR evs digest")`), `evsservice/read.go`. Client: `evs_read.go` (`evsPathNames("")` is the root), `evs_list.go`, `evs_directory.go` (a top-level creation or removal adds to the root's delta), `evs_export_file.go` (file-mode export no longer refuses). `evs_payload.go`: `checkEvsPathMove` takes the root's move (an empty path in each epoch, no sealed name). `evsservice/epoch_copy.go` needs only that: the empty path sorts first, so the root moves last. Tests: 9.6's root row, and EVS1-M2-24's refused cases turned into passes.
 
 **EVS1-M2-28, client path epochs: floors, reads, writes and the retoken** (held; L; scope changed). It keeps §11.6's read, leases and alarm rows and re-tokenizing, and loses the mapper, the block and the tail to EVS1-M2-47. Needs EVS1-M2-45 and EVS1-M2-46, and EVS1-M2-44 for its end-to-end tests. Build 9.2.3, 9.2.4, 9.2.5 and 9.2.8's alarm, status and errors:
-- `evs_epoch.go` (new): floors and the evidence kinds; the two rules as `evsEpochTokens(ctx, ref, path, need) (epochs []uint64, lookup bool, err error)`; `pressure`; `EvsClassifyPathEpochDue`; `EvsRepo.PathEpochStatus`; the alarm. `evs_epoch_read.go` (new): `lookup`, the listing cache, the read loop.
+- `evs_epoch.go` (EVS1-M2-44 starts the file with `EvsClassifyPathEpochDue`): floors and the evidence kinds; the two rules as `evsEpochTokens(ctx, ref, path, need) (epochs []uint64, lookup bool, err error)`; `pressure`; `EvsRepo.PathEpochStatus`; the alarm. `evs_epoch_read.go` (new): `lookup`, the listing cache, the read loop.
 - Landed code that changes. `evs_read.go`: `tokenize` goes; `read` and `readRound` become 9.2.4's loop, the head-only round also when the epoch state is older than `EpochFreshFor` and a path has no floor; a reply whose head has another epoch state is pinned and the paths asked again (today it pins only after the paths verify). `evs_proof.go`: `VerifyPath` and `verifyUnchangedSince` take `func(epoch uint64) (EvsTokenPath, error)` in place of one token path, check each statement under its own epoch, and return the epochs they need more of; `evsChangeOf` compares the leaf with the token path of the statement's epoch. `evs_list.go`: untagged rows open under `entry_epoch`. `evs_history.go`: `commit_version` and E4. `evs_pin_store.go`: `EvsReadRecord.Floor` and `PinEpoch`, written by `RaiseReadRecords`; a stored record without them reads as no floor. `evs_plan.go`: the `ErrEvsWriteNotBuilt` refusal at line 247 and `errEvsPlanEpochMoved`'s source clause go; source paths and `pressure` come in; `EvsWritePlan.Retoken(head)`. `evs_directory.go`: `evsChildChange` carries the child's token per epoch for a removal. `evs_push.go`, `evs_write.go`: PATH_EPOCH leaves `evsRebuildCodes` for the retoken branch; the wait for PATH_EPOCH_DUE. `evs_payload.go`: section 12's builder if the planner has none. `evs_settings.go`: 9.2.2's client settings. `evs_refusal.go`: `EVS_PATH_EPOCH_DUE`.
 - Traps: a floor is lowered only after evs answers (E3), never when a request is built; `tp(X, e)` for a proof is always computed locally, never read from a reply; the head-only round is skipped only for paths that have a floor; a retoken reuses a receipt only under 22 h old; a deposit or erasure ref bypasses all of it (`evsEpochExempt(refKind)`); on a ref whose kind does not block, `pressure` never holds a creation.
 - Tests: 9.6's floors, capture, reads (client half) and writes rows.
@@ -3392,7 +3417,7 @@ The held tasks need landed code changed first, and EVS1-M2-28 as planned is two 
 
 **Order.** EVS1-M2-45, EVS1-M2-44 and EVS1-M2-46 in any order; then EVS1-M2-28; then EVS1-M2-47, EVS1-M2-29 and EVS1-M2-30 in any order. EVS1-M2-29 and EVS1-M2-30 need of EVS1-M2-28 only the sender's exempt branch and the retoken, which land in its first commit.
 
-**Other landed code this section touches by name:** `evsservice/fold.go`, `epoch_commit.go`, `check_cas.go`, `push_commit.go`, `epoch_copy.go`, `read.go`, `sources.go`, `entry.go` (EVS1-M2-44 to -46); `evs_read.go`, `evs_proof.go`, `evs_list.go`, `evs_history.go`, `evs_pin_store.go`, `evs_plan.go`, `evs_directory.go`, `evs_push.go`, `evs_write.go`, `evs_settings.go`, `evs_refusal.go`, `evs_token.go`, `evs_digest.go`, `evs_export_file.go`, `evs_component.go` (EVS1-M2-28, -46, -47); `protocol/evs.proto`, `protocol/EVS-FORMAT.md`, `metadata_list.yml` (EVS1-M2-45). `evs_subscribe.go` does not change. EVS1-M2-41's FS-4 schedules gain 9.6's cases.
+**Other landed code this section touches by name:** `evsservice/fold.go`, `epoch_commit.go`, `check_cas.go`, `refuse.go`, `epoch_copy.go`, `read.go`, `read_proof.go`, `sources.go`, `entry.go` (EVS1-M2-44 to -46); `evs_read.go`, `evs_proof.go`, `evs_list.go`, `evs_history.go`, `evs_pin_store.go`, `evs_plan.go`, `evs_directory.go`, `evs_push.go`, `evs_write.go`, `evs_payload.go`, `evs_settings.go`, `evs_refusal.go`, `evs_token.go`, `evs_digest.go`, `evs_export_file.go`, `evs_component.go` (EVS1-M2-28, -46, -47); `protocol/evs.proto`, `protocol/EVS-FORMAT.md`, `metadata_list.yml` (EVS1-M2-45). `evs_subscribe.go` does not change. EVS1-M2-41's FS-4 schedules gain 9.6's cases.
 
 ### 9.8 Proposed DESIGN.md text
 
