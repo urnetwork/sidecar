@@ -391,3 +391,26 @@ func TestFi6CatchesANameTableMissingAFoldedRow(t *testing.T) {
 	result := Run(t.Context(), &Schedule{Id: "fi6-table-row", Steps: steps, Check: fiChecks()}, world.net)
 	fiRequireViolation(t, result, 5, "FI-6", "its table lacks the row")
 }
+
+// An orphan marker under idx/<repo>/<ref>/_o/ sits outside every epoch (QD-011): FI-6 leaves it to format 2's
+// oracles rather than reading it as an entry of no epoch.
+func TestFi6LeavesAnOrphanMarkerOutsideTheEpochs(t *testing.T) {
+	world := newFiHandWorld(t)
+	main := sidecar.NewId()
+	steps := []*Step{
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			_, err := world.foldedFile(ctx, main)
+			return err
+		}},
+		{Actor: "evs", Action: func(ctx context.Context, net *Net) error {
+			markerBytes, err := proto.Marshal(&protocol.EvsIndexEntry{Marker: &protocol.EvsRemovalMarker{PushId: sidecar.NewId().Bytes(), RemovalVersion: 1}})
+			if err != nil {
+				return err
+			}
+			key := evsOracleRefPrefix("idx/", world.repoId, main) + "_o/" + evsOracleNumber(1) + "-0123456789abcdef.e"
+			_, err = world.cluster.PutIfNoneMatch(ctx, key, markerBytes, nil)
+			return err
+		}},
+	}
+	fiRequirePass(t, Run(t.Context(), &Schedule{Id: "fi6-orphan-marker", Steps: steps, Check: []Invariant{FI(6)}}, world.net))
+}

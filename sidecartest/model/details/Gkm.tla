@@ -36,6 +36,18 @@
 (* "FormWithoutMarker" (KEYS-M2-25) has a re-form's GroupForm filed with   *)
 (* no owner marker written first, so B's re-form naming A's group stands   *)
 (* as an unchecked form does.                                              *)
+(*                                                                          *)
+(* The poison rule (6.2.3, §10.9; question keys-m2-19-members-skip-roster- *)
+(* twin, QD-644). Hostile names leaves that may inject one commit no       *)
+(* honest leaf makes: its tree holds a party dropped at its own header and *)
+(* its GenWrap carries the newest generation. The store invariants cannot  *)
+(* hold past it, since the dropped party opens that generation the moment  *)
+(* the commit stands. What a member's refusal buys is modeled instead:     *)
+(* poisoned holds, per device, the generations it refused a commit for,    *)
+(* Seal never takes one of them, and NoContentPastRefusal says nothing a   *)
+(* device seals after its refusal opens to a party dropped at the seal's   *)
+(* state. "MembersSkipRosterCheck" (KEYS-M2-19) has members adopt the      *)
+(* injected commit and seal on to the generation it carried.               *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -54,6 +66,7 @@ CONSTANTS
     WithB,        \* repo B adds devices too (the Welcome pointer twin)
     Losers,       \* member devices that may lose their group state
     StaleTargets, \* leaves a writer may remove as stale
+    Hostile,      \* leaves that may inject one commit that breaks the roster rule
     Story,        \* <<>>, or the pattern each action must match in turn
     Twin          \* "none", or the rule a twin breaks
 
@@ -73,12 +86,13 @@ VARIABLES
     kp,        \* one-time KeyPackages a member device has at gkm
     at,        \* the epoch index a device adopted; 0 with no group state
     reached,   \* the newest epoch index a device ever adopted (I-16)
-    sealed,    \* content writes: [g, n]
+    sealed,    \* content writes: [g, n, j], j when its sealer had refused an injected commit
     squat,     \* repo B's newest form names A's group
     epochB,    \* repo B's newest epoch, for its Welcomes
+    poisoned,  \* the generations each device refused a commit for and never seals to again
     step       \* the story's next action
 
-vars == <<log, tip, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB, step>>
+vars == <<log, tip, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB, poisoned, step>>
 
 (***************************************************************************)
 (* The log and the sets every verifier derives from it.                    *)
@@ -148,6 +162,7 @@ Init ==
     /\ sealed = {}
     /\ squat = FALSE
     /\ epochB = 0
+    /\ poisoned = [s \in Sidecars |-> {}]
     /\ step = 1
 
 (***************************************************************************)
@@ -166,30 +181,65 @@ Enter(k, s) ==
        \/ k = "expire" /\ s \in Agents /\ s \in Admitted(Clock) /\ s \notin Expired(Clock)
     /\ log' = Append(log, [k |-> k, s |-> s])
     /\ Step
-    /\ UNCHANGED <<tip, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB>>
+    /\ UNCHANGED <<tip, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB, poisoned>>
 
 Advance(s) ==
     /\ tip[s] < Clock /\ (s \in Admitted(Clock) \/ s \in Tree)
     /\ Match([a |-> "Advance", s |-> s])
     /\ tip' = [tip EXCEPT ![s] = @ + 1]
     /\ Step
-    /\ UNCHANGED <<log, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, epochs, gens, late, welcomes, kp, at, reached, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* A member processes the next epoch once its tip reaches the commit's     *)
-(* pin: it adopts the epoch, or finds itself removed and leaves.           *)
+(* pin: it adopts the epoch, or finds itself removed and leaves. An        *)
+(* injected commit breaks the roster rule at its own header, so the member *)
+(* refuses it: it never adopts that epoch and holds the generation its     *)
+(* GenWrap carried as poisoned (6.2.3), once. Under MembersSkipRosterCheck *)
+(* it adopts the epoch, and poisoned still records the generation the      *)
+(* skipped check would have named, so the invariant can tell its seals.    *)
 (***************************************************************************)
 Process(s) ==
     /\ at[s] > 0 /\ at[s] < E
     /\ tip[s] >= epochs[at[s] + 1].auth
-    /\ Match([a |-> "Process", s |-> s])
-    /\ IF s \in Roster(at[s] + 1)
-       THEN /\ at' = [at EXCEPT ![s] = @ + 1]
-            /\ reached' = [reached EXCEPT ![s] = at[s] + 1]
-       ELSE /\ at' = [at EXCEPT ![s] = 0]
-            /\ reached' = [reached EXCEPT ![s] = at[s] + 1]
+    /\ LET next == epochs[at[s] + 1]
+           bad == next.k = "inject"
+       IN /\ ~(bad /\ next.gen \in poisoned[s])
+          /\ Match([a |-> "Process", s |-> s])
+          /\ poisoned' = IF bad THEN [poisoned EXCEPT ![s] = @ \cup {next.gen}] ELSE poisoned
+          /\ IF bad /\ Twin # "MembersSkipRosterCheck"
+             THEN UNCHANGED <<at, reached>>
+             ELSE IF s \in next.roster
+                  THEN /\ at' = [at EXCEPT ![s] = @ + 1]
+                       /\ reached' = [reached EXCEPT ![s] = at[s] + 1]
+                  ELSE /\ at' = [at EXCEPT ![s] = 0]
+                       /\ reached' = [reached EXCEPT ![s] = at[s] + 1]
     /\ Step
     /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, sealed, squat, epochB>>
+
+(***************************************************************************)
+(* A hostile leaf commits what no honest leaf does: at the newest epoch, a *)
+(* commit whose tree holds a party x dropped at the commit's own header,   *)
+(* its GenWrap carrying the newest generation. gkm cannot refuse it: the   *)
+(* commit is a PrivateMessage, the leaf holds a writer's token and the     *)
+(* generation, and the pin it names passes the epoch PUT check (at or past *)
+(* the previous epoch's and the carried generation's, not ahead of gkm).   *)
+(* x opens the generation the moment the commit stands. One injection in a *)
+(* behavior.                                                                *)
+(***************************************************************************)
+Inject(c, x, n) ==
+    /\ c \in Hostile /\ E < MaxEpochs
+    /\ ~\E i \in 1..E : epochs[i].k = "inject"
+    /\ at[c] = E /\ c \in Tree /\ c \in Readers(Clock, Clock) /\ Holds(c)
+    /\ n <= Clock /\ n >= gens[G].auth /\ n >= epochs[E].auth
+    /\ x # c /\ Dropped(x, n, Clock)
+    /\ Match([a |-> "Inject", s |-> c, d |-> x])
+    /\ epochs' = Append(epochs, [c |-> c, roster |-> Tree \cup {x}, gen |-> G, auth |-> n,
+                                 time |-> Clock, k |-> "inject"])
+    /\ at' = [at EXCEPT ![c] = E + 1]
+    /\ reached' = [reached EXCEPT ![c] = E + 1]
+    /\ Step
+    /\ UNCHANGED <<log, tip, gens, late, welcomes, kp, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* A member's commit at the newest epoch, carrying the newest generation's  *)
@@ -234,7 +284,7 @@ Commit(c, kind, d) ==
                   /\ kp' = [kp EXCEPT ![d] = IF @ > 0 THEN @ - 1 ELSE 0]
              ELSE UNCHANGED <<welcomes, kp>>
     /\ Step
-    /\ UNCHANGED <<log, tip, gens, late, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, gens, late, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* A joiner takes the newest Welcome it can reach for the group, never one *)
@@ -249,7 +299,7 @@ Join(d) ==
         /\ reached' = [reached EXCEPT ![d] = w.epoch]
         /\ welcomes' = welcomes \ {w}
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, gens, late, kp, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, gens, late, kp, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* Repo B adds d through d's KeyPackages too: with one-time ones gone, its *)
@@ -267,7 +317,7 @@ AddInB(d) ==
           /\ kp' = [kp EXCEPT ![d] = IF @ > 0 THEN @ - 1 ELSE 0]
     /\ epochB' = epochB + 1
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, gens, late, at, reached, sealed, squat>>
+    /\ UNCHANGED <<log, tip, epochs, gens, late, at, reached, sealed, squat, poisoned>>
 
 (***************************************************************************)
 (* Rotate (§10.5): a writer holding the newest generation, at a tip at or  *)
@@ -293,7 +343,7 @@ Rotate(r) ==
        IN gens' = Append(gens, [r |-> r, holders |-> H, auth |-> tip[r], time |-> Clock,
                                 wraps |-> wraps, leafEpoch |-> IF leafCase THEN at[r] ELSE 0])
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, late, welcomes, kp, at, reached, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, late, welcomes, kp, at, reached, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* A LATE delivery of the newest generation (§10.6's late wraps, §10.9's   *)
@@ -309,7 +359,7 @@ LateDeliver(d, x) ==
     /\ Match([a |-> "Late", s |-> d, d |-> x])
     /\ late' = late \cup {[g |-> G, r |-> x]}
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, gens, welcomes, kp, at, reached, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, gens, welcomes, kp, at, reached, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* KF5: a leaf that lost or fell behind resyncs by external commit from    *)
@@ -331,7 +381,7 @@ Resync(s) ==
     /\ at' = [at EXCEPT ![s] = E + 1]
     /\ reached' = [reached EXCEPT ![s] = E + 1]
     /\ Step
-    /\ UNCHANGED <<log, tip, gens, late, welcomes, kp, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, gens, late, welcomes, kp, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* §10.8: the recovered device self-joins by external commit. While the    *)
@@ -351,7 +401,7 @@ SelfJoin(s) ==
     /\ at' = [at EXCEPT ![s] = E + 1]
     /\ reached' = [reached EXCEPT ![s] = E + 1]
     /\ Step
-    /\ UNCHANGED <<log, tip, gens, late, welcomes, kp, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, gens, late, welcomes, kp, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* A member device loses its group state (a wiped phone): its leaf stays   *)
@@ -362,12 +412,14 @@ LoseState(s) ==
     /\ Match([a |-> "Lose", s |-> s])
     /\ at' = [at EXCEPT ![s] = 0]
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, reached, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, reached, sealed, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* A writer seals content to the newest generation it holds; evs's gate   *)
 (* passes it only if that generation covers every shrink and expiry evs   *)
-(* knows (§10.6's predicate; evs is current here).                         *)
+(* knows (§10.6's predicate; evs is current here). A device never seals to *)
+(* a generation it holds as poisoned (§10.9; EnsureWritable's step 4): it  *)
+(* waits for the rotation past it.                                          *)
 (***************************************************************************)
 Seal(w) ==
     /\ Cardinality(sealed) < MaxSeals
@@ -376,10 +428,11 @@ Seal(w) ==
     /\ \/ Twin = "NoGate"
        \/ Twin = "AdoptNonCoveringWinner" /\ Reach(w) > 1 /\ gens[Reach(w)].r # w
        \/ Covers(Reach(w), Clock, Clock)
+    /\ Twin = "MembersSkipRosterCheck" \/ Reach(w) \notin poisoned[w]
     /\ Match([a |-> "Seal", s |-> w])
-    /\ sealed' = sealed \cup {[g |-> Reach(w), n |-> Clock]}
+    /\ sealed' = sealed \cup {[g |-> Reach(w), n |-> Clock, j |-> poisoned[w] # {}]}
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, at, reached, squat, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, at, reached, squat, epochB, poisoned>>
 
 (***************************************************************************)
 (* The squatter, admin of B and a reader of A, files B's form naming A's   *)
@@ -394,7 +447,7 @@ SquatForm ==
     /\ Match([a |-> "SquatForm"])
     /\ squat' = TRUE
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, at, reached, sealed, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, gens, late, welcomes, kp, at, reached, sealed, epochB, poisoned>>
 
 SquatClaim ==
     /\ squat /\ G < MaxGens
@@ -402,7 +455,7 @@ SquatClaim ==
     /\ gens' = Append(gens, [r |-> Squatter, holders |-> {Squatter}, auth |-> tip[Squatter], time |-> Clock,
                              wraps |-> {Squatter}, leafEpoch |-> 0])
     /\ Step
-    /\ UNCHANGED <<log, tip, epochs, late, welcomes, kp, at, reached, sealed, squat, epochB>>
+    /\ UNCHANGED <<log, tip, epochs, late, welcomes, kp, at, reached, sealed, squat, epochB, poisoned>>
 
 Next ==
     \/ \E s \in Sidecars : \E k \in {"admit", "radmit", "revoke", "expire"} : Enter(k, s)
@@ -417,6 +470,7 @@ Next ==
     \/ \E s \in Sidecars : SelfJoin(s)
     \/ \E s \in Sidecars : LoseState(s)
     \/ \E w \in Sidecars : Seal(w)
+    \/ \E c, x \in Sidecars : \E n \in 0..MaxLog : Inject(c, x, n)
     \/ SquatForm
     \/ SquatClaim
 
@@ -445,6 +499,17 @@ RemovedReadsNothingNew ==
 \* no content sealed at a state is readable by a party dropped at that state
 NoContentToDropped ==
     \A w \in sealed : \A s \in Sidecars : Dropped(s, w.n, w.n) => Reach(s) < w.g
+
+\* what a member's refusal buys: nothing a device seals after it refused an injected commit opens to a party
+\* dropped at the seal's state. Content sealed to the carried generation by a writer that has not processed the
+\* commit (a wrapped writer, which reads no commit, until the REMOVE rotation's delivery reaches it; a leaf whose
+\* seal races the injection) is the leak 6.2.3 states and no refusal undoes, so the store invariants above are
+\* not checked where Hostile is not empty.
+NoContentPastRefusal ==
+    \A w \in sealed : w.j => \A s \in Sidecars : Dropped(s, w.n, w.n) => Reach(s) < w.g
+
+\* denied by GkmReach-SealsPastRefusal: the design must reach a seal made after a refusal
+NeverSealedPastRefusal == \A w \in sealed : ~w.j
 
 \* every tree lies within the holders at its commit's pin, but a generation-0 self-join's
 RosterWithinHolders ==
@@ -507,5 +572,10 @@ StoryStaged == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Advance", s
 \* the agent claims at a state before the revocation; the writer that lost the claim seals to it past the shrink
 StoryAdopt == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Rotate", s |-> "d"],
                 [a |-> "Seal", s |-> "a"]>>
+\* the hostile leaf's commit hands the revoked leaf the REMOVE generation; a member that processes it seals on to
+\* that generation
+StoryPoison == <<[a |-> "Enter", k |-> "revoke", s |-> "b"], [a |-> "Advance", s |-> "d"],
+                 [a |-> "Rotate", s |-> "d"], [a |-> "Inject", s |-> "c", d |-> "b"],
+                 [a |-> "Advance", s |-> "a"], [a |-> "Process", s |-> "a"], [a |-> "Seal", s |-> "a"]>>
 
 =============================================================================
