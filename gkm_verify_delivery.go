@@ -2,8 +2,9 @@
 // runs on a delivery it reads, its own when it fetches it and another's when it answers wrap-pending, judged at the
 // delivery's own state and never at the member's later one.
 //
-//	body      group_id, generation and commitment are gen/<g>'s; the recipient and recipient_key_sha256 are its
-//	          path's, when the caller gives the path it came by
+//	body      group_id, generation and commitment are gen/<g>'s, but that in a re-formed group a generation its
+//	          ladder carried names the group it was read from (QD-074 rule 7); the recipient and
+//	          recipient_key_sha256 are its path's, when the caller gives the path it came by
 //	staged    no auth and no time; the signer is gen/<g>'s; the recipient is in KeyHolders at gen/<g>'s auth and time
 //	late      auth on this chain, at or past gen/<g>'s (R2); gen/<g>'s time_ms <= time_ms <= this clock + 60 s, a
 //	          later one waiting (ErrGkmTimeAhead); the recipient in KeyHolders(R, auth, time_ms); the signer in it or
@@ -40,8 +41,21 @@ type GkmDeliveryCheckArgs struct {
 	// The wrap/ path the delivery came by, in the group of its route; empty when the caller built the path from the
 	// body itself.
 	Path string
+	// The group the delivery was read from or written in, which its body names: gen/<g>'s own group, or in a group a
+	// re-form made, that group for each generation its ladder carried, whose gen/<g> names the group it was claimed
+	// in (QD-074 rule 7). Zero reads gen/<g>'s. A caller sets it only for the group it pinned, along a form chain it
+	// verified.
+	GroupId Id
 	// This device's clock.
 	Now time.Time
+}
+
+// The group a delivery's body must name: args.GroupId, else gen/<g>'s.
+func (self *GkmDeliveryCheckArgs) bodyGroupId() []byte {
+	if self.GroupId != (Id{}) {
+		return self.GroupId.Bytes()
+	}
+	return self.Generation.Rotate.GetGroupId()
 }
 
 // §10.9's delivery checks of one delivery at its own state. The error is a wait or a state that cannot answer, never
@@ -57,7 +71,7 @@ func CheckDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs) (GkmVerdict, er
 	rotate := args.Generation.Rotate
 
 	// body
-	if !bytes.Equal(body.GetGroupId(), rotate.GetGroupId()) || body.GetGeneration() != rotate.GetGeneration() ||
+	if !bytes.Equal(body.GetGroupId(), args.bodyGroupId()) || body.GetGeneration() != rotate.GetGeneration() ||
 		!bytes.Equal(body.GetCommitment(), rotate.GetCommitment()) {
 		return gkmRefuse(GkmRefusalDelivery, "a delivery of another generation"), nil
 	}
@@ -156,7 +170,7 @@ func GkmUseDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs, recipient []by
 	if err != nil || !verdict.Passed() {
 		return nil, verdict, err
 	}
-	key, err := OpenGkmDelivery(args.Delivery, args.Generation, recipient, privateKey)
+	key, err := openGkmDelivery(args.Delivery, args.Generation, args.bodyGroupId(), recipient, privateKey)
 	if err != nil {
 		return nil, GkmVerdict{}, err
 	}
