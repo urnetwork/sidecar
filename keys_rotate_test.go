@@ -646,9 +646,10 @@ func TestStepTwoKeepsTheOldRootsUnlessTheFilesAreOnTheKeptOne(t *testing.T) {
 	}
 }
 
-// CORE-M2-05's copy cannot be re-sealed yet, and rotating past it would leave a recovery code opening
-// nothing, so this refuses with nothing changed.
-func TestARecoveryCopyRefusesARotation(t *testing.T) {
+// A recovery copy that does not decode cannot be re-sealed, and rotating past it would leave a recovery code opening
+// nothing, so this refuses with nothing changed. A copy that decodes is re-sealed with the roots
+// (TestRotationResealsTheRecoveryCopy).
+func TestAnUnreadableRecoveryCopyRefusesARotation(t *testing.T) {
 	instance, backend, _ := enrolledInstance(t)
 	wrap, err := instance.readKeychainWrap(testNetworkId)
 	if err != nil {
@@ -657,7 +658,7 @@ func TestARecoveryCopyRefusesARotation(t *testing.T) {
 	wrap.recovery = []byte("synthetic recovery copy")
 	putBackendFile(t, backend, keychainWrapPath(testNetworkId), wrap.encode())
 	before := backendSnapshot(t, backend)
-	requireError(t, instance.RotateKeychain(context.Background(), nil), errRotateRecovery)
+	requireError(t, instance.RotateKeychain(context.Background(), nil), ErrSidecarStoreFailed)
 	requireSameBackend(t, before, backend)
 }
 
