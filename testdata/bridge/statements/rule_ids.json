@@ -1,0 +1,34 @@
+[
+  {
+    "name": "a subnet route",
+    "approval_id": "11111111111111111111111111111111",
+    "canonical_action": "08044a0e3139322e3136382e372e302f32346001d20110a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "action_id": "9a3c0b532bffa819e2e3c89c19721561051d0c08f65bba9cb07eefb32d8c8355",
+    "effect_key": "31f226640d97b7cdc73eb828ea77e446359778b12976229565e1fe70db84677f",
+    "rule_id": "d0c061bc7c791329f0fbb4d9595af692bdd068e59245938c35dbad8f95d24bfa"
+  },
+  {
+    "name": "the same action under another approval",
+    "approval_id": "22222222222222222222222222222222",
+    "canonical_action": "08044a0e3139322e3136382e372e302f32346001d20110a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "action_id": "e2a3d1b01137b19b1bac04387c70b7b445e801b666820580225191fc29645ffd",
+    "effect_key": "168c01874c58eccc4b135ab8d2318f8ed4bf237c6cfed2c1726409077ed642f0",
+    "rule_id": "4c840c98ed5da6bbf099870631d561fbaadf88f411cac0e7168b925650631b56"
+  },
+  {
+    "name": "a map with a port and an expiry",
+    "approval_id": "11111111111111111111111111111111",
+    "canonical_action": "08044080fdccc4b1346001d20110a0a1a2a3a4a5a6a7a8a9aaabacadaeafd801fb41",
+    "action_id": "ddf0284ee8d844a63cb0d29ae106dd63304cbfec8e0fdd563cd72ccb71af7ee8",
+    "effect_key": "779cd6506f43902fca65ec2e8f9a095252b89c0038106a9f66651bef89c7c56c",
+    "rule_id": "f9e79a2115f32f5ed2ac59c39b5bbe8575d5577036450034cac7edf159d0322e"
+  },
+  {
+    "name": "an exit",
+    "approval_id": "33333333333333333333333333333333",
+    "canonical_action": "08044a09302e302e302e302f306001d20110a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "action_id": "f90df4ecf8363f1f0b4f393ef5ca98fd15d3e984b058fbc4044f8ab017da520c",
+    "effect_key": "c5effe140a73a144367c1413870138e764cdc095ee463c75060bf35caabdfa5a",
+    "rule_id": "3594361976da540324768ded0436b7ceb94834f75862a25c7f4b9f06acd20d36"
+  }
+]

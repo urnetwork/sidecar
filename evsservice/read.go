@@ -179,8 +179,14 @@ func (self *EvsEngine) newReadAttempt(request *EvsRequest, body *protocol.EvsRea
 	return read, nil
 }
 
-// 503 for a read that failed before the first frame; a head or record that breaks its shape alarms.
+// 503 for a read that failed before the first frame; a head or record that breaks its shape alarms. A batch or
+// record of a layout past this instance's is neither: the read needs format 2, answered 409 FORMAT_UNSUPPORTED
+// {needs_format: 2}, so the reader waits on no retry and sees no outage (FS-72).
 func (self *readAttempt) unavailableOn(err error) {
+	if errors.Is(err, sidecar.ErrEvsFormatUnsupported) {
+		self.request.Refuse(&protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED, NeedsFormat: sidecar.EvsRepoFormat2})
+		return
+	}
 	if errors.Is(err, ErrEvsHeadInvalid) || errors.Is(err, ErrEvsStatementMismatch) || errors.Is(err, ErrEvsIndexEntryInvalid) {
 		self.engine.log.Errorf("[evs] alarm read: repo %s ref %s: %v", sidecar.EvsKeyId(self.repoId), sidecar.EvsKeyId(self.refId), err)
 		self.engine.metrics.alarms.Add(1, "read")

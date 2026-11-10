@@ -62,6 +62,7 @@ rows:
       - {name: FuzzVerifyPresenceCountersign, package: protocol/bridge}
       - {name: FuzzConfigStatementType, package: ".", owner: TEAM-M2-01, milestone: M2, seeds: [testdata/fuzz/FuzzConfigStatementType]}
       - {name: FuzzAclStatement, package: ".", owner: ACL-M2-06, milestone: M2, seeds: [testdata/fuzz/FuzzAclStatement]}
+      - {name: FuzzBridgeStatement, package: ".", owner: BRIDGE-M2-01, milestone: M2, seeds: [testdata/fuzz/FuzzBridgeStatement]}
 
   - id: record-headers
     bullet: "`record.proto` headers"

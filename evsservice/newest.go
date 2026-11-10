@@ -452,7 +452,7 @@ func (self *RecordPushSource) readPush(ctx context.Context, entry *sidecar.EvsWi
 		if err != nil {
 			return nil, err
 		}
-		checked, err := sidecar.EvsCheckPayload(statement, payloadBytes)
+		checked, err := sidecar.EvsCheckStoredPayload(statement, payloadBytes)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 		}
@@ -471,9 +471,10 @@ func (self *RecordPushSource) readPush(ctx context.Context, entry *sidecar.EvsWi
 	return nil, fmt.Errorf("%w: a record of type %d at a version's place", ErrEvsStatementMismatch, record.Type)
 }
 
-// The statement's bytes parsed and held to the window entry's push id and hash prefix.
+// The statement's bytes parsed and held to the window entry's push id and hash prefix. A committed statement is
+// read as stored, of either format (format1_guard.go).
 func (self *RecordPushSource) statementOf(entry *sidecar.EvsWindowEntry, statementBytes []byte) (*sidecar.EvsStatement, error) {
-	statement, err := sidecar.ParseEvsStatement(statementBytes)
+	statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 	}
@@ -503,7 +504,7 @@ func (self *RecordPushSource) readPart(ctx context.Context, push *recordPush, in
 	if !bytes.Equal(statementBytes, push.statement.Bytes) {
 		return nil, fmt.Errorf("%w: a part of another statement", ErrEvsStatementMismatch)
 	}
-	checked, err := sidecar.EvsCheckPart(push.statement, partBytes)
+	checked, err := sidecar.EvsCheckStoredPart(push.statement, partBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 	}
