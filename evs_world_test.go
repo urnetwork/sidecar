@@ -875,5 +875,11 @@ func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]b
 	if !bytes.Equal(commit.parsed.Push.GetPushId(), pushId) {
 		return nil, false
 	}
-	return evsJoinItems([][]byte{commit.statement, commit.built.Payload}), true
+	// the batch record as its place holds it
+	record := &EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_PUSH, RepoId: self.repoId, RefId: self.refId, PushId: Id(pushId),
+		SignerSidecarId: Id(commit.parsed.Push.GetSignerSidecarId()), TimeMs: commit.parsed.Push.GetTimeMs(),
+		Body: evsJoinItems([][]byte{commit.statement, commit.built.Payload}),
+	}
+	return record.encode(), true
 }

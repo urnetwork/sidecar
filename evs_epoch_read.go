@@ -593,6 +593,9 @@ var errEvsReadRounds = errors.New("evs: a read past its rounds")
 func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPath, fresh bool) (*evsReadResult, error) {
 	keys := newEvsReadKeys(self)
 	for _, path := range paths {
+		if path.token != nil {
+			continue
+		}
 		names, err := evsReadPathNames(path.path)
 		if err != nil {
 			return nil, err
@@ -683,6 +686,16 @@ func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, st
 	for _, path := range paths {
 		// each round chooses afresh on its state, a lookup hitting the listing cache while the head stands
 		path.epochs, path.settled, path.verified = nil, nil, nil
+		if path.token != nil {
+			// an id in epoch 1, which deposit and erasure refs never leave
+			if current != 1 {
+				return nil, false, fmt.Errorf("%w: an exempt ref in path epoch %d", ErrEvsReplyInvalid, current)
+			}
+			path.epochs, path.current, path.named = []uint64{1}, path.token, map[uint64]bool{1: true}
+			path.epochPaths = []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: path.token.Components()}}
+			asked = append(asked, path)
+			continue
+		}
 		if path.path == "" {
 			path.epochs = []uint64{current}
 		} else {
@@ -756,8 +769,17 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 		if path.record != nil {
 			since = path.record.PinVersion
 		}
+		tokenPathIn := func(epoch uint64) (EvsTokenPath, error) { return round.keys.tokenPathIn(ctx, path.names, epoch) }
+		if path.token != nil {
+			tokenPathIn = func(epoch uint64) (EvsTokenPath, error) {
+				if epoch != 1 {
+					return nil, fmt.Errorf("%w: an exempt ref's statement of path epoch %d", ErrEvsEntryRefused, epoch)
+				}
+				return path.token, nil
+			}
+		}
 		epochs := &EvsPathEpochs{
-			TokenPathIn: func(epoch uint64) (EvsTokenPath, error) { return round.keys.tokenPathIn(ctx, path.names, epoch) },
+			TokenPathIn: tokenPathIn,
 			Named:       path.named,
 			History:     path.version != 0,
 			Since:       since,
@@ -790,7 +812,7 @@ func (self *EvsRepo) verifyRound(ctx context.Context, refId Id, state *evsRefEpo
 			again = true
 			continue
 		}
-		if verified.Absent && path.version == 0 && path.path != "" {
+		if verified.Absent && path.version == 0 && path.path != "" && path.token == nil {
 			allAsked := true
 			for _, source := range sources {
 				allAsked = allAsked && path.named[source]
@@ -865,7 +887,7 @@ func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys
 	self.client.noteVerifiedHead(self.repoId, refId, head.Head)
 	records := []*EvsReadRecord{}
 	for i, path := range paths {
-		if path.version != 0 || verifiedPaths[i].Entry == nil {
+		if path.version != 0 || verifiedPaths[i].Entry == nil || path.token != nil {
 			continue
 		}
 		chain := head.Chain

@@ -79,6 +79,11 @@ func (self *EvsRepo) Write(ctx context.Context, args *EvsWriteArgs) (*EvsWriteRe
 // Writes and removes paths on a file-mode ref in one push: see the file header. What KEYS-M2-26's ur evs rekey
 // writes through, each path's ForceCheckpoint set.
 func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*EvsWritePathsResult, error) {
+	return self.writePaths(ctx, args, nil)
+}
+
+// WritePaths with what the push carries beside its changes, nil for none: a CLOSURE's flag, erased list and scope.
+func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, extras *evsPushExtras) (*EvsWritePathsResult, error) {
 	refName := args.RefName
 	if refName == nil {
 		refName = EvsMainRefName
@@ -91,7 +96,7 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 	rebuilds := 0
 	dueWaits := 0
 	for attempt := 0; ; attempt += 1 {
-		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds)
+		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds, extras)
 		switch {
 		case err == nil:
 			return result, nil
@@ -121,7 +126,7 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 				return nil, err
 			}
 			// read the removal the first read did not show, and plan once more, unless a creation now stands
-			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, creations)
+			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, extras, creations)
 			if retryErr == nil {
 				return retried, nil
 			}
@@ -140,7 +145,7 @@ var errEvsCreationStands = errors.New("evs: a path created concurrently")
 
 // One attempt: see the file header. creations, when given, are paths the last plan created, refused with
 // errEvsCreationStands if this plan finds one standing. rebuilds counts the write's rebuilds and retokens.
-func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, rebuilds *int, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
+func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
 	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
 	if err != nil {
 		return nil, nil, err
@@ -156,10 +161,22 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 			}
 		}
 	}
+	if extras != nil {
+		if extras.flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) != 0 {
+			for _, planned := range plan.Paths {
+				if planned.creates() || planned.Remove || planned.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE {
+					// a CLOSURE replaces committed file versions alone, which a directory's delta is not
+					return nil, plan, fmt.Errorf("%w: a CLOSURE creating, removing or listing a path", ErrEvsWriteInvalid)
+				}
+			}
+		}
+		plan.Flags, plan.Erased, plan.scope = extras.flags, extras.erased, extras.scope
+	}
 	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
 	if err != nil {
 		return nil, plan, err
 	}
+	sealed.scope = plan.scope
 	defer sealed.Close()
 	pushId, reply, err := self.sendSealed(ctx, sealed, rebuilds)
 	if err != nil {

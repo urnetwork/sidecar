@@ -110,6 +110,9 @@ type evsReadKeys struct {
 	manifestKeys map[uint64]*EvsManifestKey
 	fekKeys      map[uint64]*EvsFekKey
 	pathKeys     map[uint64]*EvsPathKey
+	// a deposit's slot key and K_dep, set once its slot is opened, which take manifest's and the slot's place for
+	// its generation (evs_consume.go)
+	deposit *evsDepositKeys
 }
 
 // A read's keys, none asked yet.
@@ -136,8 +139,11 @@ func (self *evsReadKeys) repoKey(ctx context.Context, generation uint64) (*EvsRe
 	return key, nil
 }
 
-// manifest_g.
+// manifest_g, or a deposit's K_dep in its generation's place.
 func (self *evsReadKeys) manifest(ctx context.Context, generation uint64) (*EvsManifestKey, error) {
+	if self.deposit != nil && self.deposit.generation == generation {
+		return self.deposit.manifest, nil
+	}
 	if key := self.manifestKeys[generation]; key != nil {
 		return key, nil
 	}
@@ -244,6 +250,9 @@ type evsReadPath struct {
 	// the reply as verified, or the absence a lookup settled with no token of the path sent
 	verified *EvsVerifiedPath
 	settled  *EvsVerifiedPath
+	// a deposit's or the erasure ref's entry, named by its random id in token's place, on a ref that stays at epoch 1
+	// (evsEpochExempt): no names, record, floor or lookup
+	token EvsTokenPath
 }
 
 // What one verified read gives its caller.

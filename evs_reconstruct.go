@@ -528,9 +528,15 @@ func (self *EvsRepo) openRecord(ctx context.Context, result *evsReadResult, push
 	}
 }
 
-// The key a slot-keyed record names, from its slot under fek of the key's generation. Deposits open with the drop key
-// instead, which EVS1-M2-29 reads.
+// The key a slot-keyed record names, from its slot under fek of the key's generation; a deposit's, opened by the drop
+// key before the read reconstructs it (evs_consume.go).
 func (self *EvsRepo) slotKey(ctx context.Context, result *evsReadResult, header *EvsRecordHeader) (*EvsObjectKey, error) {
+	if deposit := result.keys.deposit; deposit != nil && deposit.slotId == header.SlotId {
+		if header.KeyIndex != 0 || header.Generation != deposit.generation {
+			return nil, fmt.Errorf("%w: a deposit record naming another key", ErrEvsSealInvalid)
+		}
+		return deposit.objectKey, nil
+	}
 	slotBytes, ok := result.objects.slot(header.SlotId.Bytes())
 	if !ok {
 		return nil, ErrEvsObjectMissing
