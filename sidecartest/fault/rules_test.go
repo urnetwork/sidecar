@@ -342,6 +342,8 @@ func toyQuotaSuccess(quota *toyQuota) Builder {
 // A refusal registers only with its twin, and runs only beside one.
 func TestARefusalWithNoTwinFailsToRegister(t *testing.T) {
 	quota := &toyQuota{enabled: true}
+	// FS-2's own registration (fs2.go) stands before and after: the refused one adds nothing beside it
+	before := Lookup("FS-2", "", TierT2)
 	func() {
 		defer func() {
 			if recover() == nil {
@@ -350,7 +352,7 @@ func TestARefusalWithNoTwinFailsToRegister(t *testing.T) {
 		}()
 		Register("FS-2", "", []Tier{TierT2}, Twin(toyQuotaRefusal(quota), nil))
 	}()
-	if registration := Lookup("FS-2", "", TierT2); registration != nil {
+	if registration := Lookup("FS-2", "", TierT2); registration != before {
 		t.Errorf("a refusal with no twin registered: %v", registration)
 	}
 	// a refusal schedule built outside Twin fails where it runs
