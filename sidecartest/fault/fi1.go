@@ -531,7 +531,8 @@ func (self *evsStoreWalker) walkRef(repo *evsStoreRepo, refId sidecar.Id, head *
 	pageStatements := map[uint64][]byte{}
 	pageFirstChains := map[uint64][]byte{}
 	pageLastChains := map[uint64][]byte{}
-	for page := uint64(0); page*64 < firstWindowVersion; page += 1 {
+	// page n holds versions max(64n, 1) to 64n + 63, and the pages below the window hold every version before it
+	for page := uint64(0); max(page*64, 1) < firstWindowVersion; page += 1 {
 		logPage, err := self.logPage(repo, refId, page)
 		if err != nil {
 			failRef("log page %d: %v", page, err)
