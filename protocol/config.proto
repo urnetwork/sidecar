@@ -135,13 +135,17 @@ message KeyRevoke {
   bytes key_id = 2;
 }
 
-message Delegation {                   // owner, admin, or tag-owning network admin
+message Delegation {                   // owner, admin, or tag-owning network admin; a forwarding one only
+                                       //   by the sidecar it names
   StatementHeader header = 1;
   bytes pubkey = 2;
   bytes reader_xwing_public_key = 3;   // §10.5
   repeated bytes tag_ids = 4;
   uint32 max_admits = 5;
   int64 not_after = 6;                 // ms since the epoch; required, <= 90 d (7.8)
+  ForwardScope forward = 7;            // set means a forwarding Delegation (D-TEAM-33, owner decision 197):
+                                       //   no tag_ids, max_admits 0 and not_after 0, so a reader that does
+                                       //   not know this field refuses the statement for its missing not_after
 }
 
 message DelegationRevoke {

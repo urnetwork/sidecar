@@ -151,9 +151,10 @@ message KeyRegister {
   WebAuthnEvidence key_webauthn = 10;
 }
 message KeyRevoke { StatementHeader header = 1; bytes key_id = 2; }
+// Delegation's forward is §7.9's forwarding row's, its number DESIGN-DETAILS 4.2.2's (owner decision 197).
 message Delegation {
   StatementHeader header = 1; bytes pubkey = 2; bytes reader_xwing_public_key = 3; repeated bytes tag_ids = 4;
-  uint32 max_admits = 5; int64 not_after = 6;
+  uint32 max_admits = 5; int64 not_after = 6; ForwardScope forward = 7;
 }
 message DelegationRevoke { StatementHeader header = 1; bytes delegation_id = 2; uint64 since_n = 3; }
 message ServiceDirectorySettings { DirectoryRunsMode runs = 1; DirectoryWorkersMode workers = 2; }
@@ -238,11 +239,16 @@ message RingRow { bytes statement_id = 1; uint64 n = 2; }
 message ConfirmationRow { uint32 kind = 1; bytes signer = 2; uint64 at = 3; bool lifted_park = 4; }
 message CascadeSpanRow { uint64 from = 1; uint64 until = 2; }
 message IndexerRow { bytes sidecar_id = 1; uint32 scope = 2; bytes signer = 3; uint64 at = 4; bytes sealed_services = 5; }
+// DelegationRow's fields 12 to 16 and ForwardScope are DESIGN-DETAILS 4.2.2's proto block's own numbers (complete
+// 2026-11-10, pending its fold into §7.9 and the owner's details-4-forwarding-reader-key-in-rows).
 message DelegationRow {
   bytes delegation_id = 1; bytes signer = 2; uint64 at = 3; repeated bytes tag_atoms = 4; int64 not_after = 5;
   uint64 key_dropped_at = 6; uint64 ended_at = 7; uint32 admissions = 8; bytes pubkey = 9;
-  bytes reader_xwing_public_key = 10; uint32 max_admits = 11;
+  bytes reader_xwing_public_key = 10; uint32 max_admits = 11; bytes forward_sidecar_id = 12;
+  bytes host_client_id = 13; bytes host_client_public_key = 14; uint64 superseded_at = 15;
+  bytes reader_key_sha256 = 16;
 }
+message ForwardScope { bytes forward_sidecar_id = 1; bytes host_client_id = 2; bytes host_client_public_key = 3; }
 message KeyRow {
   bytes key_id = 1; bytes member_id = 2; KeyAlg alg = 3; bytes public_key = 4; KeyPurpose purpose = 5;
   bytes signer = 6; uint64 at = 7; int64 not_after = 8; uint64 revoked_at = 9;
@@ -285,6 +291,19 @@ enum RecoveryRebindReason {
 enum SidecarRevokeReason {
   SIDECAR_REVOKE_REASON_UNSPECIFIED = 0; SIDECAR_REVOKE_REASON_LOST = 1; SIDECAR_REVOKE_REASON_REAPED = 2;
   SIDECAR_REVOKE_REASON_REMOVED = 3; SIDECAR_REVOKE_REASON_COMPROMISE = 4;
+}
+
+// sidecar/protocol/bridge/bridge.proto
+// Forwarding's setup messages between an app's VPN component and its sidecar role, DESIGN-DETAILS 4.2.2's proto
+// block's own numbers (owner decision 197; §18.6).
+message ForwardingKeys {
+  bytes key_set_id = 1; bytes forward_public_key = 2; bytes reader_xwing_public_key = 3;
+  bytes client_public_key = 4; bytes host_client_id = 5; bytes host_client_public_key = 6;
+}
+message ForwardingHandOff {
+  Pending pending = 1; bytes key_set_id = 2; bytes forward_client_id = 3; string forward_client_jwt = 4;
+  int64 strict_exp_ms = 5; bytes config_repo_id = 6; bytes config_group_id = 7; bytes signed_delegation = 8;
+  AuthPin delegation_at = 9;
 }
 
 // sidecar/protocol/bridge/bridge.proto
@@ -904,6 +923,21 @@ var testFenceAdditions = []struct {
 		message:  "Pending",
 		field:    testFenceField{name: "identity_public_key", number: 4, typeName: "bytes"},
 		question: "plan-SDK-pending-sidecar-id",
+	},
+	{
+		message:  "Pending",
+		field:    testFenceField{name: "forward_delegation_id", number: 5, typeName: "bytes"},
+		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
+	},
+	{
+		message:  "BridgeIdentity",
+		field:    testFenceField{name: "forward_delegation_id", number: 6, typeName: "bytes"},
+		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
+	},
+	{
+		message:  "BridgeIdentity",
+		field:    testFenceField{name: "forward_public_key", number: 7, typeName: "bytes"},
+		question: "DESIGN-DETAILS 4.2.2 (owner decision 197)",
 	},
 	{
 		message:  "Error",

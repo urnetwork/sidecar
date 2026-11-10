@@ -156,6 +156,20 @@ func DelegationId(signedBytes []byte) ([sha256.Size]byte, error) {
 	return configSignedId(signedBytes, bridge.SignedType_SIGNED_DELEGATION)
 }
 
+// Whether a Delegation is a forwarding one (§7.9's forwarding row; D-TEAM-33; owner decision 197): forward set,
+// whatever it holds. A reader that does not know the field sees a Delegation with no tags, no max_admits and no
+// not_after, which the agent rule refuses, so an older verifier never takes one as an agent's.
+func ConfigDelegationForwards(delegation *protocol.Delegation) bool {
+	return delegation.GetForward() != nil
+}
+
+// How a forwarding Delegation's row names its reader key (DelegationRow.reader_key_sha256; DESIGN-DETAILS 4.2.2): the
+// SHA-256 of the statement's reader_xwing_public_key as received. The row carries no key, gkm's key object must hash
+// to this, and a DelegationWrap's recipient_key_sha256 is the same digest (§10.5).
+func DelegationReaderKeySha256(readerXwingPublicKey []byte) [sha256.Size]byte {
+	return sha256.Sum256(readerXwingPublicKey)
+}
+
 // What a reader keeps of a statement's id for the last 4,096 entries: its first 16 B (§7.9's retain row).
 func RetainedStatementId(id [sha256.Size]byte) [configRetainedIdSize]byte {
 	return [configRetainedIdSize]byte(id[:configRetainedIdSize])

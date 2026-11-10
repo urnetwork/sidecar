@@ -1276,13 +1276,15 @@ func (x *KeyRevoke) GetKeyId() []byte {
 }
 
 type Delegation struct {
-	state                protoimpl.MessageState  `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	//   by the sidecar it names
 	Header               *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
 	Pubkey               []byte                  `protobuf:"bytes,2,opt,name=pubkey,proto3" json:"pubkey,omitempty"`
 	ReaderXwingPublicKey []byte                  `protobuf:"bytes,3,opt,name=reader_xwing_public_key,json=readerXwingPublicKey,proto3" json:"reader_xwing_public_key,omitempty"` // §10.5
 	TagIds               [][]byte                `protobuf:"bytes,4,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`
 	MaxAdmits            uint32                  `protobuf:"varint,5,opt,name=max_admits,json=maxAdmits,proto3" json:"max_admits,omitempty"`
 	NotAfter             int64                   `protobuf:"varint,6,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"` // ms since the epoch; required, <= 90 d (7.8)
+	Forward              *bridge.ForwardScope    `protobuf:"bytes,7,opt,name=forward,proto3" json:"forward,omitempty"`                    // set means a forwarding Delegation (D-TEAM-33, owner decision 197):
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1357,6 +1359,13 @@ func (x *Delegation) GetNotAfter() int64 {
 		return x.NotAfter
 	}
 	return 0
+}
+
+func (x *Delegation) GetForward() *bridge.ForwardScope {
+	if x != nil {
+		return x.Forward
+	}
+	return nil
 }
 
 type DelegationRevoke struct {
@@ -2342,7 +2351,7 @@ const file_protocol_config_proto_rawDesc = "" +
 	" \x01(\v2#.urnetwork.sidecar.WebAuthnEvidenceR\vkeyWebauthn\"^\n" +
 	"\tKeyRevoke\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x15\n" +
-	"\x06key_id\x18\x02 \x01(\fR\x05keyId\"\xec\x01\n" +
+	"\x06key_id\x18\x02 \x01(\fR\x05keyId\"\xa7\x02\n" +
 	"\n" +
 	"Delegation\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x16\n" +
@@ -2351,7 +2360,8 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\atag_ids\x18\x04 \x03(\fR\x06tagIds\x12\x1d\n" +
 	"\n" +
 	"max_admits\x18\x05 \x01(\rR\tmaxAdmits\x12\x1b\n" +
-	"\tnot_after\x18\x06 \x01(\x03R\bnotAfter\"\x8c\x01\n" +
+	"\tnot_after\x18\x06 \x01(\x03R\bnotAfter\x129\n" +
+	"\aforward\x18\a \x01(\v2\x1f.urnetwork.sidecar.ForwardScopeR\aforward\"\x8c\x01\n" +
 	"\x10DelegationRevoke\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12#\n" +
 	"\rdelegation_id\x18\x02 \x01(\fR\fdelegationId\x12\x17\n" +
@@ -2507,7 +2517,8 @@ var file_protocol_config_proto_goTypes = []any{
 	(bridge.KeyAlg)(0),               // 37: urnetwork.sidecar.KeyAlg
 	(bridge.KeyPurpose)(0),           // 38: urnetwork.sidecar.KeyPurpose
 	(*bridge.WebAuthnEvidence)(nil),  // 39: urnetwork.sidecar.WebAuthnEvidence
-	(*bridge.AuthPin)(nil),           // 40: urnetwork.sidecar.AuthPin
+	(*bridge.ForwardScope)(nil),      // 40: urnetwork.sidecar.ForwardScope
+	(*bridge.AuthPin)(nil),           // 41: urnetwork.sidecar.AuthPin
 }
 var file_protocol_config_proto_depIdxs = []int32{
 	34, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
@@ -2528,25 +2539,26 @@ var file_protocol_config_proto_depIdxs = []int32{
 	39, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
 	34, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
 	34, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 18: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 19: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
-	4,  // 20: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
-	5,  // 21: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
-	2,  // 22: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
-	3,  // 23: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
-	22, // 24: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
-	6,  // 25: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
-	24, // 26: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	34, // 27: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 28: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	34, // 29: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 30: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
-	33, // 31: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
-	32, // [32:32] is the sub-list for method output_type
-	32, // [32:32] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	40, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
+	34, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	4,  // 21: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
+	5,  // 22: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
+	2,  // 23: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
+	3,  // 24: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
+	22, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
+	6,  // 26: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
+	24, // 27: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
+	34, // 28: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 29: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	34, // 30: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	30, // 31: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
+	33, // 32: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
+	33, // [33:33] is the sub-list for method output_type
+	33, // [33:33] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }
