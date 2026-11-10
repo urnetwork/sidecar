@@ -7,10 +7,10 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"errors"
 	"math/rand/v2"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +20,11 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// testdata/acl/vectors, embedded, since the sidecar_http leg's Worker reads no file (§22.6's every-leg vectors).
+//
+//go:embed testdata/acl/vectors
+var testAclVectorFiles embed.FS
 
 // A network as a compile test writes it: the log's rows at the head's fold and the head's tables, every id fixed by a
 // label, so a world built twice is the same world.
@@ -374,18 +379,14 @@ func TestCompileAclIsDeterministic(t *testing.T) {
 // The implicit document is the binary's, frozen: its source is testdata's, and its compiled rows are the golden's,
 // byte for byte, so a change to either fails here before any reader compiles other rows (D-ACL-20, D-PHASE-9).
 func TestCompileAclImplicitDocumentIsFrozen(t *testing.T) {
-	fixture, err := os.ReadFile("testdata/acl/policy/implicit_document.hujson")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(AclImplicitPolicySource(), fixture) {
+	if !bytes.Equal(AclImplicitPolicySource(), testAclPolicyFixture(t, "implicit_document.hujson")) {
 		t.Fatal("acl_implicit.hujson is not §8.5's implicit document as testdata holds it")
 	}
 	rows := newAclCompileWorld("implicit").compile(t)
 	if rows.GetHasDocument() {
 		t.Fatal("the implicit document's rows say has_document")
 	}
-	golden, err := os.ReadFile("testdata/acl/vectors/implicit_rows.hex")
+	golden, err := testAclVectorFiles.ReadFile("testdata/acl/vectors/implicit_rows.hex")
 	if err != nil {
 		t.Fatal(err)
 	}
