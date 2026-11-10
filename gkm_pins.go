@@ -416,9 +416,20 @@ func (self *GkmGroupClient) ObserveGenHead(repoId Id, head *protocol.GenHead, pe
 	if err != nil {
 		return 0, err
 	}
-	if !bytes.Equal(head.GetGroupId(), pins.groupId.Bytes()) || pins.generation == 0 {
-		// another group of the repo is a re-form's, compared along the form chain (KEYS-M2-25)
+	if pins.generation == 0 {
 		return GkmPinUnheld, nil
+	}
+	if !bytes.Equal(head.GetGroupId(), pins.groupId.Bytes()) {
+		// the group this device's adopted re-form replaced compares (g, C_g) along the form, whose ladder carries
+		// every C_k (gkm_reform.go); any other is a group this device never met, which a sync resolves by the
+		// repo's newest form, so nothing is compared
+		form, err := self.adoptedForm(repoId)
+		if err != nil {
+			return 0, err
+		}
+		if form == nil || form.groupId != pins.groupId || !bytes.Equal(head.GetGroupId(), form.previousGroupId.Bytes()) {
+			return GkmPinUnheld, nil
+		}
 	}
 	if pins.generation < head.GetGeneration() {
 		return GkmPinAhead, nil

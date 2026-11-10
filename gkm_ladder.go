@@ -234,7 +234,7 @@ func (self *gkmGroupManager) firstWrapInFlow(ctx context.Context, state GkmAuthV
 		if err != nil {
 			return nil, err
 		}
-		return ParseGenRotate(signedBytes, groupId, number, GkmIdentityKeys(state))
+		return client.parseServedGeneration(ctx, state, self.repoId, groupId, number, signedBytes)
 	}
 	generation, err := parse(newest, since)
 	if err != nil {
@@ -304,7 +304,7 @@ func (self *gkmGroupManager) walkLadderInFlow(ctx context.Context, state GkmAuth
 			if err != nil {
 				return nil, err
 			}
-			generation, err := ParseGenRotate(signedBytes, groupId, pageNumber, GkmIdentityKeys(state))
+			generation, err := client.parseServedGeneration(ctx, state, self.repoId, groupId, pageNumber, signedBytes)
 			if err != nil {
 				return nil, err
 			}

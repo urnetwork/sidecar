@@ -32,7 +32,10 @@
 (* an Add commit leave a dropped leaf; "StagedToNonHolder" (KEYS-M2-20)    *)
 (* has a rotation stage a delivery to a party outside its holder set;      *)
 (* "AdoptNonCoveringWinner" (KEYS-M2-20) has a writer seal to another      *)
-(* rotator's generation that does not cover the shrink it knows.           *)
+(* rotator's generation that does not cover the shrink it knows;           *)
+(* "FormWithoutMarker" (KEYS-M2-25) has a re-form's GroupForm filed with   *)
+(* no owner marker written first, so B's re-form naming A's group stands   *)
+(* as an unchecked form does.                                              *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -380,11 +383,13 @@ Seal(w) ==
 
 (***************************************************************************)
 (* The squatter, admin of B and a reader of A, files B's form naming A's   *)
-(* group; with no check at the form (FormsUnchecked) gkm then honors B's   *)
-(* rw on A's group, and the squatter claims A's next generation.           *)
+(* group; with no check at the form (FormsUnchecked), or a re-form that    *)
+(* writes no owner marker before its form (FormWithoutMarker), gkm then    *)
+(* honors B's rw on A's group, and the squatter claims A's next            *)
+(* generation.                                                             *)
 (***************************************************************************)
 SquatForm ==
-    /\ Twin = "FormsUnchecked" /\ ~squat
+    /\ Twin \in {"FormsUnchecked", "FormWithoutMarker"} /\ ~squat
     /\ Squatter \in Readers(tip[Squatter], Clock)
     /\ Match([a |-> "SquatForm"])
     /\ squat' = TRUE
