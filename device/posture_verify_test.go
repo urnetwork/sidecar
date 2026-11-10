@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
-	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -287,35 +286,5 @@ func TestStatementSignerRules(t *testing.T) {
 			decision.Overlay[0].N != n || len(decision.Alarms) != 0 {
 			t.Errorf("%s: overlay %+v, alarms %v", c.name, decision.Overlay, decision.Alarms)
 		}
-	}
-}
-
-// An Unsuspend lifts only the overlay Suspend it names, and only from the class that suspended it or a higher one,
-// and never from the subject itself.
-func TestUnsuspendLiftsOnlyWhatItsClassMay(t *testing.T) {
-	fixture := newPostureFixture(t)
-	store := newMemoryPostureStore()
-	posture := fixture.enforcing(store, true)
-	byAdmin := fixture.suspend(fixture.ownerPhone, fixture.agent.id, postureFixtureId(0x78))
-	bySponsor := fixture.suspend(fixture.aliceLaptop, fixture.agent.id, postureFixtureId(0x79))
-	sponsorLiftsAdmin := fixture.unsuspend(fixture.aliceLaptop, fixture.agent.id, postureFixtureId(0x78))
-	subjectLifts := fixture.unsuspend(fixture.agent, fixture.agent.id, postureFixtureId(0x79))
-	adminLiftsSponsor := fixture.unsuspend(fixture.ownerPhone, fixture.agent.id, postureFixtureId(0x79))
-	decision, err := posture.ApplyDeltas(fixture.log(byAdmin, adminLiftsSponsor))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(decision.Overlay) != 1 || !bytes.Equal(decision.Overlay[0].SuspendId, postureFixtureId(0x78)) || decision.Overlay[0].N != byAdmin {
-		t.Errorf("overlay %+v", decision.Overlay)
-	}
-	refusedAt := []uint64{}
-	for _, alarm := range decision.Alarms {
-		refusedAt = append(refusedAt, alarm.N)
-	}
-	if !slices.Equal(refusedAt, []uint64{subjectLifts}) {
-		t.Errorf("refused at %v, want %d", refusedAt, subjectLifts)
-	}
-	if len(decision.Alarms) != 1 || bySponsor == 0 || sponsorLiftsAdmin == 0 {
-		t.Errorf("alarms %v", decision.Alarms)
 	}
 }

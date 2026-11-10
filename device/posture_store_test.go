@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -167,16 +168,25 @@ func TestPostureManifestDecodesStrictly(t *testing.T) {
 		stateRecord: "state-7", stateSha256: make([]byte, 32), documentSeenAt: 9,
 		shareCerts: []postureShareCert{{shareId: postureFixtureId(0x05), generation: 2, cert: []byte{0x01}}},
 		overlay: []PostureOverlayEntry{
-			{Kind: PostureOverlaySuspend, N: 8, Id: postureFixtureId(0x06), SuspendId: postureFixtureId(0x07), Covered: true, suspendClass: 2},
+			{Kind: PostureOverlaySuspend, N: 8, Id: postureFixtureId(0x06), SuspendId: postureFixtureId(0x07), Covered: true},
 			{Kind: PostureOverlayBridgeWithdraw, N: 9, Id: postureFixtureId(0x08), WithdrawMode: bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_DRAIN},
+			{Kind: PostureOverlayDelegationRevoke, N: 9, Id: bytes.Repeat([]byte{0x09}, 32), Covered: true},
+			{Kind: PostureOverlayForwardSupersede, N: 9, Id: postureFixtureId(0x0a), DelegationId: bytes.Repeat([]byte{0x0b}, 32)},
 		},
+		waiting: []PostureWaitingEntry{
+			{N: 8, ThroughN: 8, FirstSeen: time.UnixMilli(1_800_000_000_000)},
+			{N: 9, ThroughN: 12, FirstSeen: time.UnixMilli(1_800_000_060_000)},
+		},
+		fork: true,
 	}
 	encoded := manifest.encode()
 	decoded, err := decodePostureManifest(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(decoded.encode()) != string(encoded) || decoded.overlay[0].suspendClass != 2 || !decoded.overlay[0].Covered {
+	if string(decoded.encode()) != string(encoded) || !decoded.overlay[0].Covered || !decoded.fork ||
+		!bytes.Equal(decoded.overlay[3].DelegationId, manifest.overlay[3].DelegationId) || len(decoded.waiting) != 2 ||
+		decoded.waiting[1].ThroughN != 12 || !decoded.waiting[1].FirstSeen.Equal(manifest.waiting[1].FirstSeen) {
 		t.Errorf("round trip lost something: %+v", decoded)
 	}
 	// the rest are written onto a manifest holding only its version and generation, so each fails on what it names
@@ -193,10 +203,27 @@ func TestPostureManifestDecodesStrictly(t *testing.T) {
 		"a truncated field":    encoded[:len(encoded)-1],
 		// field 20: kind 0, n 1
 		"an overlay of no kind": onto(0xa2, 0x01, 0x02, 0x10, 0x01),
-		// field 20: a Suspend, n 1, id 0x01, and no suspend_id or class
+		// field 20: a Suspend, n 1, id 0x01, and no suspend_id
 		"a Suspend with no suspend_id": onto(0xa2, 0x01, 0x07, 0x08, 0x03, 0x10, 0x01, 0x1a, 0x01, 0x01),
 		// field 20: kind 1, then id as a varint
 		"an overlay id of another wire type": onto(0xa2, 0x01, 0x04, 0x08, 0x01, 0x18, 0x01),
+		// field 20: a DelegationRevoke, n 1, an id of one byte
+		"a DelegationRevoke of no delegation_id": onto(0xa2, 0x01, 0x07, 0x08, 0x06, 0x10, 0x01, 0x1a, 0x01, 0x01),
+		// field 20: a ForwardSupersede, n 1, a sidecar id of 16 bytes and no newer delegation_id
+		"a ForwardSupersede with no newer delegation": onto(append([]byte{0xa2, 0x01, 0x16, 0x08, 0x07, 0x10, 0x01, 0x1a, 0x10},
+			postureFixtureId(0x0c)...)...),
+		// field 20: a SidecarRevoke, n 1, id 0x01, with a delegation_id
+		"a delegation_id on another kind": onto(0xa2, 0x01, 0x0a, 0x08, 0x01, 0x10, 0x01, 0x1a, 0x01, 0x01, 0x3a, 0x01, 0x01),
+		// field 20: kind 8, past the last
+		"an overlay of a kind past the last": onto(0xa2, 0x01, 0x07, 0x08, 0x08, 0x10, 0x01, 0x1a, 0x01, 0x01),
+		// field 21: n 0
+		"a waiting entry at 0": onto(0xaa, 0x01, 0x02, 0x08, 0x00),
+		// field 21: n 5 through 4
+		"a waiting entry through before it": onto(0xaa, 0x01, 0x04, 0x08, 0x05, 0x10, 0x04),
+		// field 21: n as bytes
+		"a waiting entry of another wire type": onto(0xaa, 0x01, 0x03, 0x0a, 0x01, 0x05),
+		// field 22: 2
+		"a fork of 2": onto(0xb0, 0x01, 0x02),
 		// field 19: a share id and no certificate
 		"a share with no cert": onto(0x9a, 0x01, 0x03, 0x0a, 0x01, 0x01),
 		// field 19: the share id twice
