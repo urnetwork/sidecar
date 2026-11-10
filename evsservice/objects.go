@@ -99,9 +99,13 @@ func IndexEpochPrefix(repoId sidecar.Id, refId sidecar.Id, epoch uint64) string 
 	return indexKeyPrefix + sidecar.EvsKeyId(repoId) + "/" + sidecar.EvsKeyId(refId) + "/" + keyNumber(epoch) + "/"
 }
 
-// idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e: the entry of a token path in path epoch p (§11.7's keys row). An empty
-// path has no entry, so it builds the epoch's prefix alone, which no caller writes to.
+// idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e: the entry of a token path in path epoch p (§11.7's keys row), and for the
+// root's empty path idx/<repo>/<ref>/<p>.e, beside the epoch's prefix, so no key prefixes another and no LIST of the
+// epoch's entries lists it (question evs1-m2-24-root-directory-names, option 1).
 func IndexEntryKey(repoId sidecar.Id, refId sidecar.Id, epoch uint64, tokenPath sidecar.EvsTokenPath) string {
+	if len(tokenPath) == 0 {
+		return strings.TrimSuffix(IndexEpochPrefix(repoId, refId, epoch), "/") + indexEntryKeySuffix
+	}
 	return IndexEpochPrefix(repoId, refId, epoch) + tokenPath.KeyString() + indexEntryKeySuffix
 }
 

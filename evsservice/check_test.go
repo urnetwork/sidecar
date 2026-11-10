@@ -1417,3 +1417,27 @@ func TestCheckSeamsFailClosed(t *testing.T) {
 		t.Error("the rules ran for a push 5c refused")
 	}
 }
+
+// 5g's directory bound holds at the root: a delta past 4,096 children over the root's listing is 409 DIRECTORY_FULL,
+// and the same delta one row short of it passes.
+func TestCheckPathsHoldsTheRootToTheDirectoryBound(t *testing.T) {
+	fixture := newCheckFixture(t)
+	viewWith := func(listed int) *PushView {
+		plan := fixture.plan()
+		plan.BaseVersion = 3
+		row := &protocol.EvsName{Token: checkTestPath("new").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: make([]byte, 64)}
+		plan.Changes = []*sidecar.EvsPlannedChange{{
+			TokenPath: sidecar.EvsTokenPath{}, BaseEntryVersion: 1, EntryVersion: fixture.directoryEntry(plan, 2, []*protocol.EvsName{row}, nil),
+		}}
+		view := fixture.view(plan)
+		view.Head = checkTestHead(view, 3)
+		names := []*protocol.EvsName{}
+		for i := 0; i < listed; i += 1 {
+			names = append(names, &protocol.EvsName{Token: checkTestPath(fmt.Sprintf("child-%04d", i)).Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: make([]byte, 64)})
+		}
+		view.Paths[""] = &PathRead{Newest: &EvsNewest{Exists: true, Directory: true, CommitVersion: 1}, Listing: &EvsListing{Names: names}}
+		return view
+	}
+	requireCheckRefusal(t, "the root past 4,096 children", CheckPaths(viewWith(sidecar.EvsDirectoryMaxChildCount)), EvsCheckReasonDirectoryFull)
+	requireCheckPass(t, "the root at 4,096 children", CheckPaths(viewWith(sidecar.EvsDirectoryMaxChildCount-1)))
+}

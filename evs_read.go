@@ -76,10 +76,10 @@ func (self *EvsClient) preDecrypt(ctx context.Context, repoId Id, refId Id, obje
 	return nil
 }
 
-// A path as its raw names, refusing an empty component.
+// A path as its raw names, refusing an empty component, and the empty path, which only a read names (the root).
 func evsPathNames(path string) ([][]byte, error) {
 	if path == "" {
-		return nil, fmt.Errorf("%w: the root has no entry in format 1 (question evs1-m2-24-root-directory-names)", ErrEvsTokenInvalid)
+		return nil, fmt.Errorf("%w: the empty path, which names the root only to a read", ErrEvsTokenInvalid)
 	}
 	names := [][]byte{}
 	for _, name := range strings.Split(path, "/") {
@@ -89,6 +89,15 @@ func evsPathNames(path string) ([][]byte, error) {
 		names = append(names, []byte(name))
 	}
 	return names, nil
+}
+
+// A path a read names as its raw names: the empty path is the ref's root, with no names, whose token path is empty in
+// every epoch (question evs1-m2-24-root-directory-names, option 1; DESIGN-DETAILS 9.2.8); any other as evsPathNames.
+func evsReadPathNames(path string) ([][]byte, error) {
+	if path == "" {
+		return [][]byte{}, nil
+	}
+	return evsPathNames(path)
 }
 
 // The repo keys one read uses, each generation asked of gkm once.
@@ -270,7 +279,7 @@ func evsSamePathEpoch(a *protocol.EvsPathEpoch, b *protocol.EvsPathEpoch) bool {
 
 // A path's tokens in the current epoch and each source, and its read record.
 func (self *EvsRepo) tokenize(ctx context.Context, keys *evsReadKeys, refId Id, path string, epoch *protocol.EvsPathEpoch) (*evsReadPath, error) {
-	names, err := evsPathNames(path)
+	names, err := evsReadPathNames(path)
 	if err != nil {
 		return nil, err
 	}

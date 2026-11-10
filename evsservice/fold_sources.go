@@ -48,6 +48,13 @@ func (self *foldRun) listsSource(epoch uint64) bool {
 // shape).
 func (self *foldRun) namedSourcePaths(path *foldPath) []*EvsSourceTokenPath {
 	named := []*EvsSourceTokenPath{}
+	if len(path.tokenPath) == 0 {
+		// the root's copy in each listed source, whose token path is empty there too (DESIGN-DETAILS 9.2.8)
+		for _, source := range self.head.Head.GetPathEpoch().GetSources() {
+			named = append(named, &EvsSourceTokenPath{Epoch: source.GetEpoch(), TokenPath: sidecar.EvsTokenPath{}})
+		}
+		return named
+	}
 	seen := map[string]bool{}
 	for _, encoded := range path.sourcePaths() {
 		sourcePath := &protocol.EvsSourcePath{}

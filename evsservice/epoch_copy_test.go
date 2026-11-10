@@ -553,3 +553,69 @@ func TestEpochCopyTranslatesADirectoryAFoldCarriedAndDeletedTheSourceOf(t *testi
 		}
 	}
 }
+
+// DESIGN-DETAILS 9.2.8: a map holds the root's move first, an empty path in each epoch and no sealed name, and the copy,
+// moving in descending order, moves it last, after the top-level names its rows hold, translating each row to the
+// child's move; a read naming the root in an epoch no longer current is served it, the root having no token.
+func TestEpochCopyMovesTheRootLastAndTranslatesItsRows(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	commitment := fixture.crossRemove(false)
+	plan := fixture.planAtTwo(commitment)
+	plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: sidecar.EvsTokenPath{}, EntryVersion: fixture.check.directoryEntry(plan, 3, []*protocol.EvsName{
+			{Token: checkTestPath("a").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("a sealed for epoch 1")},
+		}, nil),
+	})
+	fixture.requireCommitted(fixture.push(plan), 3)
+	fixture.awaitStepEights()
+	rootMove := &protocol.EvsPathMove{Sources: []*protocol.EvsSourcePath{{Epoch: 1}}}
+	fixture.cutOverToEpochTwo(commitment, rootMove, pathEpochTestMoveAt(2, []uint64{1}, "a"))
+
+	written := []string{}
+	deps := &EvsEpochCopyDeps{beforeWrite: func(key string) { written = append(written, key) }}
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), deps, fixture.copyArgs(2))
+	if err != nil || !result.SourcesDropped || result.MovedCount != 2 {
+		t.Fatalf("the copy: %+v %v", result, err)
+	}
+	rootKey := IndexEntryKey(fixture.check.repoId, fixture.check.refId, 2, sidecar.EvsTokenPath{})
+	if len(written) == 0 || written[len(written)-1] != rootKey {
+		t.Fatalf("the copy's writes %q end elsewhere than the root", written)
+	}
+	root, err := ReadEntry(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 2, sidecar.EvsTokenPath{}, 0)
+	if err != nil || root.Absent() {
+		t.Fatalf("the root in epoch 2: %v", err)
+	}
+	rows := root.Entry.GetNames().GetNames()
+	if len(rows) != 1 || rows[0].GetEpoch() != 0 || !bytes.Equal(rows[0].GetToken(), epochPath(2, "a").Last().Bytes()) {
+		t.Fatalf("the root's rows %v", rows)
+	}
+
+	reply := fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{1: {}})
+	if pathReply := reply.paths[0]; pathReply.GetStaleEpoch() || len(pathReply.GetNames().GetNames()) != 1 || pathReply.GetVersion().GetCommitVersion() != 3 {
+		t.Fatalf("the root named in epoch 1: %v", pathReply)
+	}
+}
+
+// The copy's end reads each source's root, which no LIST of the source lists: a root its map holds no move for is
+// missed, alarmed, and keeps the source listed (DESIGN-DETAILS 9.3's P5).
+func TestEpochCopyKeepsASourceWhoseRootTheMapMissed(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	commitment := fixture.crossRemove(false)
+	plan := fixture.planAtTwo(commitment)
+	plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: sidecar.EvsTokenPath{}, EntryVersion: fixture.check.directoryEntry(plan, 3, []*protocol.EvsName{
+			{Token: checkTestPath("a").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("a sealed for epoch 1")},
+		}, nil),
+	})
+	fixture.requireCommitted(fixture.push(plan), 3)
+	fixture.awaitStepEights()
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"))
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2))
+	if err != nil || result.SourcesDropped || result.MissedCount != 1 {
+		t.Fatalf("the copy: %+v %v", result, err)
+	}
+	if len(fixture.head().Head.GetPathEpoch().GetSources()) != 1 {
+		t.Fatal("a source whose root no move took was dropped")
+	}
+}

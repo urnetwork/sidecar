@@ -10,9 +10,10 @@
 // at base + 1, as replaying readers hold every path to (evs_replay.go). A child created under a path that stands as a
 // file is refused, as git would.
 //
-// Top-level names have no directory: a ref's root keeps no table in format 1 until questions/
-// evs1-m2-24-root-directory-names is answered, so a top-level path's creation or removal carries no delta for it, and
-// List refuses the root meanwhile. A directory whose last child goes stays, empty, until it is removed itself.
+// The root, path "" with the empty token path, takes the top-level names' rows as any directory takes its children's,
+// sealed under parent t_0 (question evs1-m2-24-root-directory-names, option 1; DESIGN-DETAILS 9.2.8): a top-level
+// creation or removal gives it a delta, the first one creating it, and nothing holds the root itself. A directory
+// whose last child goes stays, empty, until it is removed itself.
 //
 // On every leg. Package-level functions are safe for concurrent use.
 
@@ -66,7 +67,15 @@ type evsChildChange struct {
 	removed bool
 }
 
-// The path's parent below the root, "" at the top, and its own last name.
+// A directory's depth, the root's -1, so the root takes its delta after every top-level directory it may create.
+func evsDirectoryDepth(path string) int {
+	if path == "" {
+		return -1
+	}
+	return strings.Count(path, "/")
+}
+
+// The path's parent, "" at the top for the root, and its own last name.
 func evsSplitParent(path string) (string, []byte) {
 	index := strings.LastIndexByte(path, '/')
 	if index < 0 {
@@ -79,10 +88,11 @@ func evsSplitParent(path string) (string, []byte) {
 func evsDirectoryChanges(plan *EvsWritePlan, planned map[string]*EvsPlannedPath, directories map[string]*evsDirectoryRead, nameKey *EvsManifestKey) ([]*EvsPlannedPath, error) {
 	parentChildren := map[string][]*evsChildChange{}
 	note := func(path string, tokenPath EvsTokenPath, kind protocol.EvsEntryKind, removed bool) {
-		parent, name := evsSplitParent(path)
-		if parent == "" {
+		if path == "" {
+			// the root, which no directory holds
 			return
 		}
+		parent, name := evsSplitParent(path)
 		parentChildren[parent] = append(parentChildren[parent], &evsChildChange{name: name, token: tokenPath.Last(), kind: kind, removed: removed})
 	}
 	for path, change := range planned {
@@ -101,7 +111,7 @@ func evsDirectoryChanges(plan *EvsWritePlan, planned map[string]*EvsPlannedPath,
 			parents = append(parents, parent)
 		}
 		slices.SortFunc(parents, func(a string, b string) int {
-			if depth := strings.Count(b, "/") - strings.Count(a, "/"); depth != 0 {
+			if depth := evsDirectoryDepth(b) - evsDirectoryDepth(a); depth != 0 {
 				return depth
 			}
 			return strings.Compare(a, b)

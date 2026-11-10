@@ -8,9 +8,9 @@
 //     parent (EvsSealedCommit), so export rebuilds each tree from its parent's, checks it hashes to the tree its commit
 //     names, and writes the commit's exact bytes, which reproduce the original oid; blobs come from the push's own
 //     entries, each reconstructed and its oid checked;
-//   - a file-mode ref gets one deterministic commit per version (evs_export_file.go), which needs every path's name,
-//     the top level's included, and format 1 gives the root no entry: so file-mode export refuses until question
-//     evs1-m2-24-root-directory-names is answered.
+//   - a file-mode ref gets one deterministic commit per version (evs_export_file.go), each push's changes replayed
+//     onto the version before, every path's names opened from the rows its directories' deltas added, the root's for
+//     the top level (question evs1-m2-24-root-directory-names, option 1).
 //
 // Provenance goes in refs/notes/ur (evs_export_notes.go). ur/index and ur/lfs are derived or stores, never exported, and
 // .ur-index/ files are left out of every tree. A push in parts, and a format-2 repo's collected or dropped versions
@@ -123,7 +123,7 @@ func (self *EvsRepo) exportRef(ctx context.Context, writer *evsGitObjectWriter, 
 	case protocol.EvsRefMode_EVS_REF_GIT:
 		return self.exportGitRef(ctx, writer, verified, gitRef)
 	case protocol.EvsRefMode_EVS_REF_FILE:
-		return nil, nil, fmt.Errorf("%w: a file-mode ref's tree needs its root's names (question evs1-m2-24-root-directory-names)", ErrEvsExport)
+		return self.exportFileRef(ctx, writer, verified, gitRef)
 	default:
 		return nil, nil, fmt.Errorf("%w: ref mode %d", ErrEvsExport, head.GetRefMode())
 	}
@@ -165,7 +165,7 @@ func (self *EvsRepo) exportGitRef(ctx context.Context, writer *evsGitObjectWrite
 			if !change.WritesEntry() {
 				continue
 			}
-			if err := self.exportBlob(ctx, writer, head, keys, statement, change); err != nil {
+			if _, err := self.exportBlob(ctx, writer, head, keys, statement, change); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -257,14 +257,15 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	return EvsCheckPayload(statement.Statement, items[1])
 }
 
-// One entry of a push reconstructed into a blob, its oid checked by reconstruction.
-func (self *EvsRepo) exportBlob(ctx context.Context, writer *evsGitObjectWriter, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange) error {
+// One entry of a push reconstructed into a blob, its oid checked by reconstruction, and the blob's oid; nil for an
+// entry that is no file's.
+func (self *EvsRepo) exportBlob(ctx context.Context, writer *evsGitObjectWriter, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*EvsGitOid, error) {
 	entry := &protocol.EvsEntryVersion{}
 	if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
-		return fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
+		return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
 	}
 	if entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE) {
-		return nil
+		return nil, nil
 	}
 	result := &evsReadResult{refId: head.RefId, head: head, keys: keys, objects: newEvsReadObjects(self.client)}
 	defer result.objects.close()
@@ -272,8 +273,11 @@ func (self *EvsRepo) exportBlob(ctx context.Context, writer *evsGitObjectWriter,
 	spill := newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount)
 	defer spill.close()
 	if _, err := self.reconstruct(ctx, result, verified, spill); err != nil {
-		return err
+		return nil, err
 	}
-	_, err := writer.writeFrom("blob", spill.reader(), spill.Size())
-	return err
+	oid, err := writer.writeFrom("blob", spill.reader(), spill.Size())
+	if err != nil {
+		return nil, err
+	}
+	return &oid, nil
 }

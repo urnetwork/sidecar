@@ -6,8 +6,9 @@
 // recomputed from the directory's token in that epoch, since evs folds the table itself and only the token ties a row
 // to a path; a carried row keeps its source epoch's token and AAD (§11.6). Any failure refuses the whole listing.
 //
-// A ref's root has no entry in format 1, so List of the root refuses until question
-// evs1-m2-24-root-directory-names is answered.
+// The root, path "", is a directory like any other whose token path is empty in every epoch, its rows the top-level
+// names sealed under parent t_0 (question evs1-m2-24-root-directory-names, option 1; DESIGN-DETAILS 9.2.8): a ref
+// nothing was written to lists it empty.
 //
 // On every leg. Safe for concurrent use.
 
@@ -37,6 +38,9 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 	switch {
 	case verified.Base != nil:
 		return nil, ErrEvsOverlayBase
+	case args.Path == "" && verified.Absent:
+		// a ref no top-level name was written to: an empty root
+		return &EvsListing{RefId: refId, Path: args.Path, HeadVersion: result.head.Version}, nil
 	case verified.Removal != nil, verified.Absent:
 		return nil, ErrEvsPathAbsent
 	case verified.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY):
