@@ -281,6 +281,23 @@ func aclCompileRefusal(format string, a ...any) error {
 
 // Compiles both outputs.
 func newAclCompiler(input *AclCompileInput) (*aclCompiler, error) {
+	self, err := newAclCompilerTables(input)
+	if err != nil {
+		return nil, err
+	}
+	if self.policy.Audit != nil {
+		// no AuditOptIn stands before ACL-M6-02, and the block counts only under one (§8.5)
+		return nil, aclCompileRefusal("an audit block, which counts only under an AuditOptIn (ACL-M6-02)")
+	}
+	if err := self.compile(); err != nil {
+		return nil, err
+	}
+	return self, nil
+}
+
+// The document, or the implicit one, parsed, and the head's tables and the log's members indexed: what compile and
+// ValidateAclPolicy both start from.
+func newAclCompilerTables(input *AclCompileInput) (*aclCompiler, error) {
 	if input == nil {
 		return nil, aclCompileRefusal("no input")
 	}
@@ -300,14 +317,7 @@ func newAclCompiler(input *AclCompileInput) (*aclCompiler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrAclCompile, err)
 	}
-	if self.policy.Audit != nil {
-		// no AuditOptIn stands before ACL-M6-02, and the block counts only under one (§8.5)
-		return nil, aclCompileRefusal("an audit block, which counts only under an AuditOptIn (ACL-M6-02)")
-	}
 	if err := self.indexTables(); err != nil {
-		return nil, err
-	}
-	if err := self.compile(); err != nil {
 		return nil, err
 	}
 	return self, nil

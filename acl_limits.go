@@ -12,6 +12,7 @@ package sidecar
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -33,6 +34,8 @@ type AclLimits struct {
 	NetworkShares int
 	// Whether the tier's documents may hold standing publishes (§8.5: Pro and Team).
 	StandingPublishes bool
+	// The longest a publish request may last, §13.9's 7 days on Community; 0 for no tier bound.
+	PublishMaxExpiry time.Duration
 }
 
 // Whether a count fits a limit, a negative limit taking any.
