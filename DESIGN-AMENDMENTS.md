@@ -6,13 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 305 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 306 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 3 | 0 |
+| [§2 Trust model and threat model](#s2) | 4 | 0 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -42,6 +42,17 @@ Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with i
 
 <a id="s2"></a>
 ## §2 Trust model and threat model
+
+### QD-004: §2.8 api-7 and §8.8 put CIDRs and ports in rows, while §17.8 and D-BRIDGE-6 promise no server sees them
+*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §8, §17.*
+
+Make §17.8 true. `AclTarget.cidr` (field 8) and `AclRule.ports` (field 5) leave rows and are reserved. `AclRule` gains `bool ports_limited = 11` (field 10 is plan-ACL-folded-grant-state's `source_rule_id`), true when the policy rule has an `ip` port list, because §8.10's legacy rule needs it: a legacy client is reached only by a `dial` grant with 'no `ip` ports', so emptying ports without this bit would make a port-limited grant look unrestricted (the question's 'the gate never used them' misses this). A `route` rule's targets become its via subjects, or with no `via` the advertisers `BridgeRoute.route_rule_ids` names at id level. CIDRs and ports stay in `AclLocalPolicy` from the sealed policy, so §8.6's 'ports match' reads that, and readers, not api, check a requested grant's prefix against its rule. api-7's text becomes `rules with targets, actions, whether a rule limits ports (never which)`.
+
+Changes: §2.8 api-7; §8.6; §8.8 AclRule, AclTarget; acl.proto.
+
+Questions: `plan-BRIDGE-gate-row-prefixes.md`.
+
+Not folded (2026-11-10): §2.8 must keep listing a rule's ports and an ip target's CIDRs until rows stop carrying them, and protocol's fence test (design_fence_test.go) holds §8.8's AclTarget fence to acl.proto, so the api-7 words, §8.6, §8.8's AclRule and AclTarget and §8.10's legacy clause fold in the same change as acl.proto's (PROTO): AclTarget.cidr and AclRule.ports reserved and `ports_limited = 11` added.
 
 ### QD-012: How sidecar.ur.io is served, given that Cloudflare terminates ur.io
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §19.*
