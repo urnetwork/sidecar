@@ -17,8 +17,10 @@
 //	          C_g, then judges it as any member does
 //
 // A recipient is a key holder by its wrap's type: a ReaderWrap's a leaf or an uncovered agent, a DelegationWrap's a
-// live Delegation among the holders. A ReaderWrap to an agent its Delegation covers is refused: it reads through
-// the Delegation's wrap (§10.5's covered row).
+// live Delegation among the holders or, in the config, a sidecar's live forwarding Delegation, whose holder is its
+// sidecar's forwarding identity (owner decision 197), so a wrap to a forwarding Delegation superseded or ended at its
+// state is refused. A ReaderWrap to an agent its Delegation covers is refused: it reads through the Delegation's
+// wrap (§10.5's covered row).
 //
 // Pure, on every leg. GkmUseDelivery unwraps RK_g through OpenGkmDelivery, which hooks it.
 
@@ -142,7 +144,7 @@ func CheckDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs) (GkmVerdict, er
 			return gkmRefuse(GkmRefusalDelivery, "a ReaderWrap to no key holder at its state"), nil
 		}
 	case GkmWrapTypeDelegation:
-		if !holders.Contains(GkmHolderDelegation, recipient) {
+		if _, held := holders.DelegationRecipient(recipient); !held {
 			return gkmRefuse(GkmRefusalDelivery, "a DelegationWrap to no live Delegation at its state"), nil
 		}
 	default:

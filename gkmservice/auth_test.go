@@ -63,6 +63,9 @@ var gkmMatrixAllowed = map[string][]gkmMatrixClass{
 	"GET /gkm/recovery/{member_id}/wraps":                 {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly, gkmClassRecovery, gkmClassParked},
 	"POST /gkm/recovery/{member_id}/wraps":                {gkmClassRead, gkmClassWrite, gkmClassAdmin},
 	"DELETE /gkm/recovery/{member_id}/wraps":              {gkmClassRead, gkmClassWrite, gkmClassAdmin},
+
+	"PUT /gkm/delegation-keys/{delegation_id}": {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
+	"GET /gkm/delegation-keys/{delegation_id}": {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
 }
 
 // The matrix's world: one repo on the second cluster whose GroupForm names one group, one member, and a sidecar of
@@ -168,6 +171,7 @@ func (self *gkmMatrix) path(pattern string) (method string, path string) {
 		"{n}", "1",
 		"{g}", "2",
 		"{c8}", "0123456789abcdef",
+		"{delegation_id}", strings.Repeat("d1", 32),
 	)
 	return method, replacer.Replace(path)
 }

@@ -95,6 +95,11 @@ func (self *gkmClientEngineState) HoldersDropped(principal *sidecar.Principal, r
 	return gkmservice.GkmAuthDenied
 }
 
+// No Delegation in this test's state.
+func (self *gkmClientEngineState) DelegationKey(principal *sidecar.Principal, delegationId []byte) (*gkmservice.GkmDelegationKeyFacts, gkmservice.GkmAuthAnswer) {
+	return nil, gkmservice.GkmAuthDenied
+}
+
 func (self *gkmClientEngineState) LateHolders(principal *sidecar.Principal, repoId sidecar.Id, recipient string, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
 	return nil, gkmservice.GkmAuthAllowed
 }

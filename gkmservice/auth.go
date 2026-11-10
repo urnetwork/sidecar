@@ -72,6 +72,21 @@ type GkmSidecarFacts struct {
 	CoveringDelegationId []byte
 }
 
+// What gkm's newest verified state holds of one Delegation's reader key (§10.5; DESIGN-DETAILS 4.2.2), as the
+// delegation-key routes and the wrap checks ask it.
+type GkmDelegationKeyFacts struct {
+	// SHA-256 of the X-Wing key a DelegationWrap to the Delegation seals to, sidecar.GkmDelegationKeySha256's: a
+	// forwarding Delegation's row's reader_key_sha256, any other's that of its row's reader_xwing_public_key. What
+	// the key object's bytes must hash to, and what a DelegationWrap's recipient_key_sha256 must be.
+	ReaderKeySha256 []byte
+	// The sidecar a forwarding Delegation is of, its signer and the one sidecar that uploads its key object; nil for
+	// a Delegation that does not forward, whose key its row holds and which takes no object.
+	ForwardSidecarId *sidecar.Id
+	// The network's config repo, a forwarding Delegation's whole reach (owner decision 197): a token that reads it
+	// may read the key object.
+	ConfigRepoId sidecar.Id
+}
+
 // One repo a sidecar reads, and who a pending hint about it goes to (§10.6's pending changes): the repo's writers,
 // or in the directory group only the signer of the statement it answers and the config writers (§10.9).
 type GkmPendingTarget struct {
@@ -109,8 +124,13 @@ type GkmAuthState interface {
 	// reached yet; Denied for one before the previous base or off the chain.
 	CheckPin(principal *sidecar.Principal, pin *bridge.AuthPin) GkmAuthAnswer
 	// Whether a Delegation is live at now and its reach holds repoId (§10.5's live and reach): a late DelegationWrap's
-	// recipient must, as a ReaderWrap's must read R (§10.6's late row).
+	// recipient must, as a ReaderWrap's must read R (§10.6's late row). A forwarding Delegation is live while §7.9's
+	// forwarding row keeps it, neither ended nor superseded and its sidecar holding keys, and reaches the config alone
+	// (owner decision 197): sidecar.GkmDelegationHolds answers both kinds from the state.
 	DelegationReads(principal *sidecar.Principal, repoId sidecar.Id, delegationId []byte, now time.Time) GkmAuthAnswer
+	// What the newest verified state holds of a Delegation's reader key: Denied when it holds no row of that id,
+	// ended and superseded rows answering as any other.
+	DelegationKey(principal *sidecar.Principal, delegationId []byte) (*GkmDelegationKeyFacts, GkmAuthAnswer)
 	// The holders a late delivery's ask widens its hint to once its since is 15 minutes old (§10.6's late wraps):
 	// sidecars that hold repoId's key at now and may deliver, so none read_only, the recipient's member's devices
 	// first (an agent's or a Delegation's sponsor's), then by identity bytes. recipient is the ask's, as its wrap

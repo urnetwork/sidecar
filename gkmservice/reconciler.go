@@ -17,9 +17,16 @@
 //   - sweeps (retention.go): epoch retention by acks, staged-wrap GC and §2.8's TTLs, a page of groups, sidecars and
 //     members a run, from a cursor the task framework keeps between runs. A preservation hold pauses them.
 //   - ShredGroup (shred.go): §11.12's shred of a repo's gkm objects, which no hold pauses.
+//   - a forwarding Delegation's reader key object, dkey/<delegation_id> (delegation_keys.go), goes
+//     DelegationKeyRetention (24 h) after its Delegation ended or was superseded, which the state's rows show at a
+//     position: from the time the host gives that position (GkmNetworkState.PositionTime), else from when this process
+//     first saw the end, so a restart can only delay a deletion. The network's pass finds each one due and sets its
+//     wake for the next; a deleter of its own deletes them one at a time, each as §11.13's unfunded P2 at rank
+//     retention, re-checking first whether a hold covers the network, which keeps the object for a later try.
 //
-// The hint loop runs on the reconciler's own goroutine, started by its constructor; hints go out through
-// ServiceHost.Push.HintSidecars, lossy, a lost one covered by the next interval or the clients' hourly resync (§6.8).
+// The hint loop runs on the reconciler's own goroutine, started by its constructor, and the key objects' deleter on
+// another; hints go out through ServiceHost.Push.HintSidecars, lossy, a lost one covered by the next interval or the
+// clients' hourly resync (§6.8).
 //
 // Safe for concurrent use. No lock is held across I/O.
 
@@ -39,6 +46,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // One network's newest verified state as the reconciler reads it.
@@ -46,6 +54,10 @@ type GkmNetworkState struct {
 	View sidecar.GkmAuthView
 	// Every repo the state holds, sorted.
 	RepoIds []sidecar.Id
+	// The time of the log's entry at a position the state judges, false where the host cannot tell: when a forwarding
+	// Delegation ended or was superseded, from which its key object's DelegationKeyRetention runs. Nil tells none, and
+	// the reconciler counts from when it first saw the end.
+	PositionTime func(n uint64) (time.Time, bool)
 }
 
 // One move of a network's state, as {acl_<networkId>}v announces it.
@@ -117,6 +129,17 @@ type GkmReconcilerSettings struct {
 	// cannot know what it deletes before it lists. 4 MiB, a page of 256 units deleting about four objects each at
 	// §11.13's ~3.5 KiB a delete.
 	SweepBacklogByteCount int64
+	// A forwarding Delegation's reader key object goes this long after its Delegation ended or was superseded
+	// (DESIGN-DETAILS 4.8's §10.6 row): 24 h, so a rotation in flight at the end still finds what it seals to.
+	DelegationKeyRetention time.Duration
+	// How long a key object's deletion that a hold kept, or that failed, waits before it is tried again: one hour, a
+	// sweep's interval.
+	DelegationKeyRetryInterval time.Duration
+	// The most forwarding Delegations whose end this process keeps track of for their key objects; past it, done ones
+	// are forgotten first, and a new one waits for a later pass.
+	DelegationKeyTrackCount int
+	// How many key objects due for deletion wait for the deleter at once; one past it is queued at a later pass.
+	DelegationKeyDeleteQueueCount int
 }
 
 // The production defaults.
@@ -142,6 +165,11 @@ func DefaultGkmReconcilerSettings() *GkmReconcilerSettings {
 		UnitKeyMaxCount: 256 * 1024,
 
 		SweepBacklogByteCount: 4 * 1024 * 1024,
+
+		DelegationKeyRetention:        24 * time.Hour,
+		DelegationKeyRetryInterval:    1 * time.Hour,
+		DelegationKeyTrackCount:       100 * 1000,
+		DelegationKeyDeleteQueueCount: 1024,
 	}
 }
 
@@ -170,6 +198,10 @@ func (self *GkmReconcilerSettings) Validate() error {
 		{name: "HintTimeout", value: int64(self.HintTimeout)},
 		{name: "UnitKeyMaxCount", value: int64(self.UnitKeyMaxCount)},
 		{name: "SweepBacklogByteCount", value: self.SweepBacklogByteCount},
+		{name: "DelegationKeyRetention", value: int64(self.DelegationKeyRetention)},
+		{name: "DelegationKeyRetryInterval", value: int64(self.DelegationKeyRetryInterval)},
+		{name: "DelegationKeyTrackCount", value: int64(self.DelegationKeyTrackCount)},
+		{name: "DelegationKeyDeleteQueueCount", value: int64(self.DelegationKeyDeleteQueueCount)},
 	} {
 		if value.value <= 0 {
 			return fmt.Errorf("%w: %s must be positive", ErrGkmSettings, value.name)
@@ -193,6 +225,19 @@ type gkmReconcilerNetwork struct {
 	state *GkmNetworkState
 	// When to read it again for an expiry, zero for none within the horizon.
 	nextWake time.Time
+}
+
+// A forwarding Delegation that ended or was superseded, whose reader key object goes DelegationKeyRetention after.
+type gkmDelegationKeyEnd struct {
+	networkId sidecar.Id
+	// when it ended or was superseded, or when this process first saw that where the host cannot tell
+	endedAt time.Time
+	// with the deleter now
+	queued bool
+	// its object is gone
+	done bool
+	// a kept or failed deletion's next try
+	retryAt time.Time
 }
 
 // A repo whose gate was closed at its last check, re-hinted each interval.
@@ -222,6 +267,13 @@ type GkmReconciler struct {
 	pendingChanges map[sidecar.Id]*GkmStateChange
 	resyncPending  bool
 	closedGates    map[sidecar.Id]*gkmClosedGate
+	// each forwarding Delegation whose end this process saw, by delegation_id
+	delegationKeyEnds map[string]*gkmDelegationKeyEnd
+
+	// the key objects due for deletion, by delegation_id, which the deleter takes one at a time
+	delegationKeyDeletes chan string
+	// deletions the deleter finished, done or not: what a test waits on
+	delegationKeyDeleteCount *sidecar.MonitorValue[int]
 
 	wake      chan struct{}
 	passCount *sidecar.MonitorValue[int]
@@ -275,6 +327,10 @@ func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *
 		wake:           make(chan struct{}, 1),
 		passCount:      sidecar.NewMonitorValue(0),
 		idle:           sidecar.NewMonitorValue(false),
+
+		delegationKeyEnds:        map[string]*gkmDelegationKeyEnd{},
+		delegationKeyDeletes:     make(chan string, settings.DelegationKeyDeleteQueueCount),
+		delegationKeyDeleteCount: sidecar.NewMonitorValue(0),
 	}
 	stopWatch, err := deps.State.Watch(self.noteChange)
 	if err != nil {
@@ -283,6 +339,7 @@ func NewGkmReconciler(ctx context.Context, host *sidecar.ServiceHost, settings *
 	}
 	self.stopWatch = stopWatch
 	go self.run()
+	go self.runDelegationKeyDeletes()
 	return self, nil
 }
 
@@ -458,6 +515,9 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 			nextWake = expiry
 		}
 	}
+	if deleteAt, found := self.reconcileDelegationKeys(networkId, state, now); found && (nextWake.IsZero() || deleteAt.Before(nextWake)) {
+		nextWake = deleteAt
+	}
 	if nextWake.IsZero() {
 		// no expiry within the horizon: look again at its end
 		nextWake = now.Add(self.settings.ExpiryHorizon)
@@ -484,6 +544,202 @@ func (self *GkmReconciler) setNetwork(networkId sidecar.Id, state *GkmNetworkSta
 		entry.state = state
 	}
 	entry.nextWake = nextWake
+}
+
+// The position at which a forwarding Delegation's row ended or was superseded, the earlier when both, 0 while it is
+// live: from there its key object serves nothing a new rotation seals.
+func gkmForwardingEndPosition(row *bridge.DelegationRow) uint64 {
+	ends := []uint64{}
+	for _, position := range []uint64{row.GetEndedAt(), row.GetSupersededAt()} {
+		if position != 0 {
+			ends = append(ends, position)
+		}
+	}
+	if len(ends) == 0 {
+		return 0
+	}
+	return slices.Min(ends)
+}
+
+// Notes each forwarding Delegation of the network's state that ended or was superseded, and queues for the deleter
+// every key object whose DelegationKeyRetention has run. Returns the earliest deletion still ahead, or a retry's,
+// false for none. A queue that is full leaves the rest for a later pass, at the retry interval.
+func (self *GkmReconciler) reconcileDelegationKeys(networkId sidecar.Id, state *GkmNetworkState, now time.Time) (time.Time, bool) {
+	type endedRow struct {
+		delegationId string
+		endedAt      time.Time
+	}
+	ended := []*endedRow{}
+	for _, row := range state.View.Delegations() {
+		if !sidecar.ConfigDelegationRowForwards(row) {
+			continue
+		}
+		position := gkmForwardingEndPosition(row)
+		if position == 0 {
+			continue
+		}
+		endedAt := now
+		if state.PositionTime != nil {
+			if at, known := state.PositionTime(position); known && at.Before(now) {
+				endedAt = at
+			}
+		}
+		ended = append(ended, &endedRow{delegationId: string(row.GetDelegationId()), endedAt: endedAt})
+	}
+	if len(ended) == 0 {
+		return time.Time{}, false
+	}
+	due := []string{}
+	next, found := time.Time{}, false
+	later := func(at time.Time) {
+		if !found || at.Before(next) {
+			next, found = at, true
+		}
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for _, row := range ended {
+			end, tracked := self.delegationKeyEnds[row.delegationId]
+			if !tracked {
+				if self.settings.DelegationKeyTrackCount <= len(self.delegationKeyEnds) {
+					self.forgetDoneDelegationKeysWithLock()
+				}
+				if self.settings.DelegationKeyTrackCount <= len(self.delegationKeyEnds) {
+					later(now.Add(self.settings.DelegationKeyRetryInterval))
+					continue
+				}
+				end = &gkmDelegationKeyEnd{networkId: networkId, endedAt: row.endedAt}
+				self.delegationKeyEnds[row.delegationId] = end
+			}
+			if end.done || end.queued {
+				continue
+			}
+			deleteAt := end.endedAt.Add(self.settings.DelegationKeyRetention)
+			if end.retryAt.After(deleteAt) {
+				deleteAt = end.retryAt
+			}
+			if now.Before(deleteAt) {
+				later(deleteAt)
+				continue
+			}
+			due = append(due, row.delegationId)
+		}
+	}()
+	for _, delegationId := range due {
+		// marked before the deleter can take it, so its outcome is never overwritten
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if end, ok := self.delegationKeyEnds[delegationId]; ok {
+				end.queued = true
+			}
+		}()
+		select {
+		case self.delegationKeyDeletes <- delegationId:
+		default:
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				if end, ok := self.delegationKeyEnds[delegationId]; ok {
+					end.queued = false
+				}
+			}()
+		}
+		// a retry's wake, whether the deleter takes it now or a later pass does: a kept or failed deletion waits
+		// DelegationKeyRetryInterval, and one done costs this pass nothing more
+		later(now.Add(self.settings.DelegationKeyRetryInterval))
+	}
+	return next, found
+}
+
+// Forgets the key objects already gone, so a full table takes new ends: a forgotten one seen again is one HEAD more.
+func (self *GkmReconciler) forgetDoneDelegationKeysWithLock() {
+	for delegationId, end := range self.delegationKeyEnds {
+		if end.done {
+			delete(self.delegationKeyEnds, delegationId)
+		}
+	}
+}
+
+// The key objects' deleter: each queued deletion in turn, until the reconciler ends.
+func (self *GkmReconciler) runDelegationKeyDeletes() {
+	for {
+		select {
+		case <-self.ctx.Done():
+			return
+		case delegationId := <-self.delegationKeyDeletes:
+			self.deleteDelegationKey(delegationId)
+			self.delegationKeyDeleteCount.Update(func(count int) int { return count + 1 })
+		}
+	}
+}
+
+// Deletions the deleter finished, done or kept, and a channel that closes at the next: what a test waits on.
+func (self *GkmReconciler) DelegationKeyDeletes() (count int, changed chan struct{}) {
+	return self.delegationKeyDeleteCount.Get()
+}
+
+// Deletes one forwarding Delegation's key object on the first cluster as unfunded P2 at rank retention, unless a hold
+// covers its network, checked before and again when its turn in the budget comes. A key already gone is done; one a
+// hold kept, or a failed deletion, is tried again after DelegationKeyRetryInterval.
+func (self *GkmReconciler) deleteDelegationKey(delegationId string) {
+	var end *gkmDelegationKeyEnd
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		end = self.delegationKeyEnds[delegationId]
+	}()
+	if end == nil {
+		return
+	}
+	done := false
+	defer func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		end.queued = false
+		end.done = done
+		if !done {
+			// the pass that queued this woke its network for a retry at about this time
+			end.retryAt = self.clock.Now().Add(self.settings.DelegationKeyRetryInterval)
+		}
+	}()
+	key, err := GkmDelegationKeyKey([]byte(delegationId))
+	if err != nil {
+		// an id no object is keyed by
+		done = true
+		return
+	}
+	cluster, err := self.blobs.FirstCluster()
+	if err != nil {
+		return
+	}
+	held := func(ctx context.Context) bool {
+		cover, err := self.holds.Covering(ctx, end.networkId, sidecar.Id{})
+		return err != nil || cover.Covered()
+	}
+	if held(self.ctx) {
+		return
+	}
+	if _, err := cluster.Head(self.ctx, key); errors.Is(err, sidecar.ErrBlobNotFound) {
+		done = true
+		return
+	} else if err != nil {
+		return
+	}
+	grant, err := self.acquireSweepWrite(withGkmSweepHeld(self.ctx, held), cluster, sidecar.WriteP2RankRetention, self.settings.Service.Prices.delete())
+	if err != nil {
+		// a hold that came while it waited, or the budget or the reconciler ended: a later try
+		return
+	}
+	defer grant.Close()
+	if err := deleteGkmObject(grant.Context(), cluster, key); err != nil {
+		if self.log.V(1).Enabled() {
+			self.log.Infof("[gkm reconciler] a forwarding Delegation's key object did not delete: %v", err)
+		}
+		return
+	}
+	done = true
 }
 
 // Whether a repo's gate is tracked as closed.
