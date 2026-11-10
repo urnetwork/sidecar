@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -59,6 +61,9 @@ type FakeAuthority struct {
 	// what CatchUp runs, and how many times it has
 	catchUp      func(ctx context.Context) error
 	catchUpCount int
+	// the open proposals and settings PendingProposal and Settings answer (DESIGN-DETAILS 5.7)
+	pendingProposals map[string]*bridge.ProposalRow
+	settings         *bridge.ProjectionSettings
 }
 
 type fakeAuthorityCascadeKey struct {
@@ -67,8 +72,9 @@ type fakeAuthorityCascadeKey struct {
 }
 
 var (
-	_ sidecar.SidecarAuthority        = (*FakeAuthority)(nil)
-	_ sidecar.SidecarAuthorityCatchUp = (*FakeAuthority)(nil)
+	_ sidecar.SidecarAuthority          = (*FakeAuthority)(nil)
+	_ sidecar.SidecarAuthorityCatchUp   = (*FakeAuthority)(nil)
+	_ sidecar.SidecarAuthorityProposals = (*FakeAuthority)(nil)
 )
 
 // An authority at pin (0, chain) holding nothing.
@@ -81,7 +87,46 @@ func NewFakeAuthority() *FakeAuthority {
 		bindings:  map[sidecar.Id]*bridge.RecoveryBindingRow{},
 		liveKeys:  map[sidecar.Id][]*bridge.KeyRow{},
 		cascades:  map[fakeAuthorityCascadeKey][]sidecar.DeviceRevokeItem{},
+
+		pendingProposals: map[string]*bridge.ProposalRow{},
+		settings:         &bridge.ProjectionSettings{},
 	}
+}
+
+// Sets a proposal open at the newest state, as a follower that applied its AuthorityProposal would; nil closes it.
+func (self *FakeAuthority) SetPendingProposal(proposalId []byte, row *bridge.ProposalRow) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if row == nil {
+		delete(self.pendingProposals, string(proposalId))
+		return
+	}
+	self.pendingProposals[string(proposalId)] = proto.Clone(row).(*bridge.ProposalRow)
+}
+
+// Sets the settings a verifier judges by.
+func (self *FakeAuthority) SetSettings(settings *bridge.ProjectionSettings) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.settings = proto.Clone(settings).(*bridge.ProjectionSettings)
+}
+
+// sidecar.SidecarAuthorityProposals: the row SetPendingProposal set, nil for none.
+func (self *FakeAuthority) PendingProposal(proposalId []byte) *bridge.ProposalRow {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	row := self.pendingProposals[string(proposalId)]
+	if row == nil {
+		return nil
+	}
+	return proto.Clone(row).(*bridge.ProposalRow)
+}
+
+// sidecar.SidecarAuthorityProposals: the settings SetSettings set, the defaults until one does.
+func (self *FakeAuthority) Settings() *bridge.ProjectionSettings {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return proto.Clone(self.settings).(*bridge.ProjectionSettings)
 }
 
 // §7.9's presence row's covered statements (TEAM-M2-06's Build line): a statement of one of these types, of an
