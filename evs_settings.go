@@ -83,6 +83,27 @@ type EvsSettings struct {
 	EpochOverdueAfter time.Duration
 	// The most rounds one read takes across epoch moves, lookups and second asks before it gives up: 8.
 	ReadEpochRoundCount int
+
+	// DESIGN-DETAILS 9.2.2's mapper settings (evs_epoch_map.go). A mapper that did not rotate starts within a random
+	// delay below this, 10 min, so two do not upload one map at once.
+	MapperSpread time.Duration
+	// A batched epoch is mapped this long before its due_by_ms: 2 h.
+	MapperBatchedLead time.Duration
+	// A map's part closes at this size: 7 MiB, under evs's 8 MiB; a phone sets 2 MiB, within R-EVS-14's 4 MiB.
+	MapPartFillByteCount int
+	// Parts uploaded at once: 4; a phone sets 2.
+	MapUploadCount int
+	// A map whose oldest part is older than this is abandoned: 20 h, as evs takes parts under 24 h old.
+	MapMaxAge time.Duration
+	// Tail refusals of one map before its mapper asks evs for the block: 2.
+	MapTailRefusalCount int
+	// A phone maps only while its index holds at most this many names, §11.6's bound: 100,000. Read only where
+	// MapperMobile is set.
+	MobileMapNameCount int
+	// Whether this host is a phone, which maps only within MobileMapNameCount: the desktop daemon is not.
+	MapperMobile bool
+	// The most listings a listed index takes for one verified head to stand through a whole one: 8.
+	ListedIndexRoundCount int
 	// How many times a seal posts its parts again after 409 PARTS_MISSING: 3.
 	PartsMissingRetryCount int
 	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
@@ -140,6 +161,14 @@ func DefaultEvsSettings() *EvsSettings {
 		ListingCacheCount:        256,
 		EpochOverdueAfter:        time.Hour,
 		ReadEpochRoundCount:      8,
+		MapperSpread:             10 * time.Minute,
+		MapperBatchedLead:        2 * time.Hour,
+		MapPartFillByteCount:     7 * 1024 * 1024,
+		MapUploadCount:           4,
+		MapMaxAge:                20 * time.Hour,
+		MapTailRefusalCount:      2,
+		MobileMapNameCount:       100000,
+		ListedIndexRoundCount:    8,
 		PartsMissingRetryCount:   3,
 		SealLeaseDuration:        120 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,
