@@ -14,7 +14,9 @@
 // being its uploads, since a part's new-objects slice need not hold whole items; its slots are left to the seal. A
 // seal runs the age check over every part's receipts (§11.8's seal row), each new segment's receipt, and the slot
 // rule over every part's versions, the slots step 4's reads name being what the seal's view carries (EVS1-M2-13's).
-// Format 2's kind-5, staged and DROPPED rows are refused before this, by the codecs.
+// Format 2's kind-5, staged and DROPPED rows are refused before this, by the codecs; its versionless receipt, which no
+// codec of a push's bytes sees, is refused here once it verifies, 409 FORMAT_UNSUPPORTED {needs_format: 2}, at an
+// instance that is not format 2.
 //
 // An ERASE's and a CLOSURE's own rules, which read the named slots and the replaced chains, are EVS1-M2-20's, through
 // PushView.ErasureRules, run last.
@@ -47,6 +49,13 @@ func CheckObjects(view *PushView) *EvsCheckRefusal {
 			return newEvsCheckRefusal(EvsCheckReasonSegmentGone, "a receipt past its age")
 		case err != nil:
 			return newEvsCheckRefusal(EvsCheckReasonReceiptInvalid, "a receipt that does not verify")
+		}
+		if receipt.GetVersionless() && view.InstanceFormat != sidecar.EvsRepoFormat2 {
+			// a format-2 instance's receipt for a kind-5 segment, which verifies under the keys both share: no
+			// format-1 commit adopts one (§11.6's kinds row, FS-72)
+			refusal := newEvsCheckRefusal(EvsCheckReasonFormatUnsupported, "a versionless receipt")
+			refusal.NeedsFormat = sidecar.EvsRepoFormat2
+			return refusal
 		}
 		receiptSegments[[32]byte(receipt.GetSegmentId())] = receipt
 	}
