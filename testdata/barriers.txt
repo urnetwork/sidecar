@@ -253,6 +253,8 @@ barrier record.reserve.after record_ledger.go
 barrier record.reserve.before record_ledger.go
 barrier record.taint.after record_run.go
 barrier record.taint.before record_run.go
+barrier restore.scan.after mcp/restore_attribute.go
+barrier restore.scan.before mcp/restore_attribute.go
 barrier revocation.read.after config_rev.go
 barrier revocation.read.before config_rev.go
 barrier rpc.call_send.after rpc_call.go
