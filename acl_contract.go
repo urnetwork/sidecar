@@ -291,17 +291,18 @@ type AclContractStateSource interface {
 
 // The gate's tunables, each with its default here and nowhere else.
 type AclContractGateSettings struct {
-	// How often the heads snapshot reloads: 5 s, §8.10's heads snapshot. Each load also asks the cache to load every
-	// network whose head is new or moved, so the gate holds a revocation within about this long even when its
-	// {acl_}v event is lost. Non-positive loads once, at construction.
+	// How often the heads snapshot reloads: 5 s, §8.10's heads snapshot. Each load also asks the cache to load the
+	// networks whose head is new or moved, up to LoadAskCount, so the gate holds a revocation within about this long
+	// even when its {acl_}v event is lost. Non-positive loads once, at construction.
 	HeadsInterval time.Duration
 	// How long one heads read may run before the gate gives it up and keeps its last snapshot: 4 s, inside one
 	// interval. Non-positive is no deadline but the gate's own.
 	HeadsTimeout time.Duration
 	// The most networks one heads load asks the cache to load, those whose head is new or moved; the rest are asked
 	// at the next loads, so a cold start over many networks spreads its loads rather than starting one per network at
-	// once (§8.18's fan-out risk): 1,000, a few hundred kilobytes of loader stacks. A network a contract finds not
-	// loaded is asked at once whatever this says. Non-positive asks for none.
+	// once (§8.18's fan-out risk): 1,000, each a loader goroutine waiting its turn for one of the cache's
+	// LoadConcurrency slots, a few megabytes of stacks at most. A network a contract finds not loaded is asked at once
+	// whatever this says. Non-positive asks for none.
 	LoadAskCount int
 	// Where heads failures are logged, ids only (I-13). Nil is the leg's default.
 	Log Logger
