@@ -158,14 +158,14 @@ func TestValidateBridgeAddressHoldsAChosenAddressToTheLowerHalf(t *testing.T) {
 		address uint32
 		want    error
 	}{
-		"free":                {testBridgeIpv4(100, 80, 3, 8), nil},
-		"the lower /17's top": {testBridgeIpv4(100, 80, 127, 254), nil},
-		"held":                {testBridgeIpv4(100, 80, 3, 7), ErrBridgeAddressTaken},
-		"another block":       {testBridgeIpv4(100, 81, 3, 8), ErrBridgeAddressInvalid},
-		"the upper /17":       {testBridgeIpv4(100, 80, 128, 9), ErrBridgeAddressInvalid},
-		"the services":        {testBridgeIpv4(100, 80, 0, 53), ErrBridgeAddressInvalid},
-		"ends in 0":           {testBridgeIpv4(100, 80, 9, 0), ErrBridgeAddressInvalid},
-		"ends in 255":         {testBridgeIpv4(100, 80, 9, 255), ErrBridgeAddressInvalid},
+		"free":                {address: testBridgeIpv4(100, 80, 3, 8), want: nil},
+		"the lower /17's top": {address: testBridgeIpv4(100, 80, 127, 254), want: nil},
+		"held":                {address: testBridgeIpv4(100, 80, 3, 7), want: ErrBridgeAddressTaken},
+		"another block":       {address: testBridgeIpv4(100, 81, 3, 8), want: ErrBridgeAddressInvalid},
+		"the upper /17":       {address: testBridgeIpv4(100, 80, 128, 9), want: ErrBridgeAddressInvalid},
+		"the services":        {address: testBridgeIpv4(100, 80, 0, 53), want: ErrBridgeAddressInvalid},
+		"ends in 0":           {address: testBridgeIpv4(100, 80, 9, 0), want: ErrBridgeAddressInvalid},
+		"ends in 255":         {address: testBridgeIpv4(100, 80, 9, 255), want: ErrBridgeAddressInvalid},
 	} {
 		if err := ValidateBridgeAddress(plan, c.address); !errors.Is(err, c.want) || (c.want == nil && err != nil) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
@@ -319,9 +319,9 @@ func TestAnAllocationSkipsATombstoneByTheLogsTime(t *testing.T) {
 func TestRenumberBridgeAddressKeepsHostBits(t *testing.T) {
 	next := testBridgePrefix(10, 44, 0, 0, 16)
 	for _, c := range []struct{ from, want uint32 }{
-		{testBridgeIpv4(100, 80, 3, 7), testBridgeIpv4(10, 44, 3, 7)},
-		{testBridgeIpv4(100, 80, 255, 254), testBridgeIpv4(10, 44, 255, 254)},
-		{testBridgeIpv4(100, 80, 127, 1), testBridgeIpv4(10, 44, 127, 1)},
+		{from: testBridgeIpv4(100, 80, 3, 7), want: testBridgeIpv4(10, 44, 3, 7)},
+		{from: testBridgeIpv4(100, 80, 255, 254), want: testBridgeIpv4(10, 44, 255, 254)},
+		{from: testBridgeIpv4(100, 80, 127, 1), want: testBridgeIpv4(10, 44, 127, 1)},
 	} {
 		got, err := RenumberBridgeAddress(c.from, next)
 		if err != nil || got != c.want {

@@ -10,11 +10,11 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"embed"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -26,6 +26,11 @@ import (
 )
 
 const testBridgeDayMs = int64(24 * 60 * 60 * 1000)
+
+// The statement vectors, embedded so they read on every leg, the page Worker's included.
+//
+//go:embed testdata/bridge/statements
+var testBridgeStatementFiles embed.FS
 
 // An IPv4 address as bridge.proto's fixed32 holds one.
 func testBridgeIpv4(a byte, b byte, c byte, d byte) uint32 {
@@ -266,7 +271,7 @@ type testBridgeRuleIdVector struct {
 // BridgeApproval a rule carries, so a retry or a restart files one id. Each vector is also recomputed with nothing but
 // SHA-256, so the constants cannot drift with the functions.
 func TestBridgeRuleIdVectors(t *testing.T) {
-	data, err := os.ReadFile("testdata/bridge/statements/rule_ids.json")
+	data, err := testBridgeStatementFiles.ReadFile("testdata/bridge/statements/rule_ids.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +465,7 @@ func TestADecisionsBridgeRulesStopAtItsUses(t *testing.T) {
 	for _, c := range []struct {
 		timeMs int64
 		kept   bool
-	}{{notAfter + aclDecisionSkewMs, true}, {notAfter + aclDecisionSkewMs + 1, false}} {
+	}{{timeMs: notAfter + aclDecisionSkewMs, kept: true}, {timeMs: notAfter + aclDecisionSkewMs + 1, kept: false}} {
 		late := state.Bridge().Open(&BridgeLedgerReader{
 			State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1)), Approvals: testBridgeApprovalCheck, TimeMs: c.timeMs,
 		})
