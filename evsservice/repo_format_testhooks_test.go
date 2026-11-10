@@ -58,3 +58,35 @@ func TestRaiseBarriersStandAroundTheWholeRaise(t *testing.T) {
 		t.Fatalf("the held raise wrote past its sibling's: barriers %v", names)
 	}
 }
+
+// Step 7's 5 s bounds the raise with the rest: a raise that lands only as the window from step 4's reads passes
+// sends the attempt back to steps 4 and 5, which find format 2, raise nothing more and commit.
+func TestSlowRaiseRerunsStepsFourAndFive(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.openFormat2()
+	plan := fixture.plan()
+	fixture.createVersionless(plan, "a")
+	body := fixture.bodyFormat2(plan)
+	repoKey := barrierRepoKey(fixture.check.repoId)
+	refKey := barrierRefKey(fixture.check.repoId, fixture.check.refId)
+	raises, stepSixes := 0, 0
+	sidecar.SetTestHooks(&sidecar.TestHooks{Barrier: func(name string, key string) {
+		switch {
+		case name == BarrierMigrateRaiseAfter && key == repoKey:
+			raises += 1
+			if raises == 1 {
+				fixture.clock.Advance(fixture.settings.PushStepSevenWindow)
+			}
+		case name == BarrierPushStep6Before && key == refKey:
+			stepSixes += 1
+		}
+	}})
+	t.Cleanup(func() { sidecar.SetTestHooks(nil) })
+	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), body), 1)
+	if raises != 1 || stepSixes != 2 {
+		t.Fatalf("%d raises and %d step 6s, want one raise and a rerun", raises, stepSixes)
+	}
+	if object, _ := fixture.repo(); object.GetFormat() != sidecar.EvsRepoFormat2 {
+		t.Fatalf("repo/ format %d", object.GetFormat())
+	}
+}
