@@ -18,7 +18,9 @@
 //     the indexer answers Pong, so no sequence of the pair idles out and no contract opens inside a
 //     foreground window but at its start, a re-establishment or an overflow. Background hosts send none.
 //   - session: the pair's Hello lasts while its session lives, past HelloCacheTimeout: each Pong, and at
-//     the indexer each Ping, keeps it standing MarkedSessionTimeout more. A session is lost after
+//     the indexer each Ping, keeps it standing MarkedSessionTimeout past that frame's arrival, however
+//     late its worker reaches it. The indexer records its Ping before it answers, so a requester holding
+//     a Pong never finds the indexer's record behind its own. A session is lost after
 //     MarkedSessionTimeout without one; it is re-established by the next Hello, at the next foreground or
 //     keepalive tick, or at once by a search that comes first, whose new contract, and the successor
 //     connect requests with it, keep that search's time in connect's rows (owner decision 191,
@@ -123,21 +125,25 @@ func (self *Subprotocol) noteWindowActivity(peerId connect.Id) {
 	self.peerWindows.NotePeerWindowActivity(peerId)
 }
 
-// Records that the session with peerId showed live now, a Pong at the requester or a Ping at the
-// indexer, and, while the pair is in C19's mode, keeps its Hello standing MarkedSessionTimeout past now,
-// however long ago it verified.
-func (self *Subprotocol) touchSession(peerId connect.Id) {
+// Records that the session with peerId showed live at arrivalTime, when a Pong passed this side's gate at
+// the requester or a Ping at the indexer, and, while the pair is in C19's mode, keeps its Hello standing
+// MarkedSessionTimeout past that arrival, however long ago it verified. It reads the frame's arrival, not
+// the clock as it runs, so a frame the gate admitted under a standing Hello keeps that Hello however late
+// its worker reaches it; a Hello already ended at the arrival, or closed since, is left as it is, and the
+// session's time never moves back.
+func (self *Subprotocol) touchSession(peerId connect.Id, arrivalTime time.Time) {
 	marked := self.peerWindows.PeerWindow(peerId).Accounting
-	now := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	identity, ok := self.sourceIdIdentities[peerId]
-	if !ok || !now.Before(identity.expireTime) {
+	if !ok || !arrivalTime.Before(identity.expireTime) {
 		return
 	}
-	identity.sessionTime = now
+	if identity.sessionTime.Before(arrivalTime) {
+		identity.sessionTime = arrivalTime
+	}
 	if marked {
-		if until := now.Add(self.settings.MarkedSessionTimeout); identity.expireTime.Before(until) {
+		if until := arrivalTime.Add(self.settings.MarkedSessionTimeout); identity.expireTime.Before(until) {
 			identity.expireTime = until
 		}
 	}
@@ -283,6 +289,6 @@ func (self *Subprotocol) ping(ctx context.Context, peerId connect.Id) error {
 		return ErrSubprotocolResponse
 	}
 	self.noteWindowActivity(peerId)
-	self.touchSession(peerId)
+	self.touchSession(peerId, response.arrivalTime)
 	return nil
 }
