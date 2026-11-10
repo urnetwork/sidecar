@@ -32,6 +32,10 @@ func TestFs14StaleCompileIsRefusedAndForksIfAppended(t *testing.T) {
 	fsTeamRun(t, Fs14StaleCompile)
 }
 
+func TestFs14FoldBetweenThePreviousBasesIsRefusedAndForks(t *testing.T) {
+	fsTeamRun(t, Fs14FoldRule)
+}
+
 func TestFs14ReplayRulesAtEveryReader(t *testing.T) {
 	fsTeamRun(t, Fs14ReplayRules)
 }

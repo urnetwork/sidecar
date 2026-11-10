@@ -24,10 +24,10 @@
 //
 // What is not the system here, each named in the task's report: the acl compile is the suite's stand-in
 // (admissionAclCompile) until ACL-M2-04 registers CompileAcl (C-05); the config repo is in memory, since no file-mode
-// head reader over evs exists yet (TEAM-M2-10's report); and the rows about MLS, wraps and devices' alarms (a
-// recovery-admitted device self-joining, committers' commits, seats' ReaderWraps, agents reading by their reader key,
-// M's devices raising admission_alarm) check only the verified state those flows read, since no Sidecar here runs a
-// GkmClient or an EvsClient.
+// head reader over evs exists yet (TEAM-M2-10's report); and no Sidecar here runs a GkmClient or an EvsClient, so the
+// committers, seats and agents rows check only the verified state their commits and wraps follow (MayCommit,
+// LeafRank, WrappedMembers), and §22.7's rows that are MLS, wraps or a device's alarms alone (a recovery-admitted
+// device self-joining, members refusing an unconsented device's Add, admission_alarm) are not rows here.
 //
 // A row is a top-level test on each tier (AdmissionRows, RunAdmissionRow); a row fails its test with t.Fatalf.
 // Nothing here sleeps: api's clock is a FakeClock the rows move, and every wait is a monitor's.
@@ -1335,6 +1335,7 @@ func AdmissionRows() []*AdmissionRow {
 		{Name: "agents cost no commit", Run: admissionRowAgents},
 		{Name: "read-only page Workers", Run: admissionRowReadOnlyWorkers},
 		{Name: "the compromise cascade", Run: admissionRowCascade},
+		{Name: "the cascade reads every confirmation", Run: admissionRowCascadeConfirmations},
 		{Name: "auth keys", Run: admissionRowAuthKeys},
 		{Name: "generated logs", Run: admissionRowGeneratedLogs},
 	}
@@ -1925,6 +1926,45 @@ func admissionRowCascade(t testing.TB, net *AdmissionNet) {
 		t.Fatal("the phone is parked or no config writer, or the stolen device still writes the config")
 	}
 	net.UseWriter(ownerPhone)
+	net.Fold(true)
+}
+
+// DESIGN-DETAILS 5.6's TestTheCascadeReadsEveryConfirmation, end to end: rows keep every AdmissionConfirm and
+// OwnerConfirm with its signer, position and whether it lifted a park, so the new device and the gate a base after
+// them starts reach the long-running reader's cascade from rows alone. A stolen device's redundant OwnerConfirm of a
+// device its member's laptop consented parks nothing, while the device it admitted after since_n is parked; and an
+// AdmissionConfirm that lifted a park pulls its device back in at a compromise revocation of the lifter from before
+// the lift.
+func admissionRowCascadeConfirmations(t testing.TB, net *AdmissionNet) {
+	owner := net.Owner()
+	memberM, laptop := net.ConsentedMember("m")
+	stolen, consented, parkedLater := net.Device("m stolen", memberM), net.Device("m consented", memberM), net.Device("m parked later", memberM)
+	net.AdmitDevice(laptop, stolen, 0)
+	net.AdmitDevice(laptop, consented, 0)
+	sinceStolen := net.Tip().GetVersion() + 1
+	net.MustLand(net.Sign(stolen, bridge.SignedType_SIGNED_OWNER_CONFIRM, net.OwnerConfirm(consented)))
+	net.AdmitDevice(stolen, parkedLater, 0)
+	net.Fold(true)
+	net.MustLand(net.Sign(laptop, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.Revocation(stolen, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE, sinceStolen)))
+	if state := net.State(); state.Parked(consented.SidecarId) || !state.Parked(parkedLater.SidecarId) {
+		t.Fatalf("the consented device parked %t, the one the stolen device admitted %t", state.Parked(consented.SidecarId), state.Parked(parkedLater.SidecarId))
+	}
+
+	ownerPhone := net.Device("owner phone", owner.MemberId)
+	net.AdmitDevice(owner, ownerPhone, 0)
+	sinceLift := net.Tip().GetVersion() + 1
+	lift := net.MustLand(net.Sign(ownerPhone, bridge.SignedType_SIGNED_ADMISSION_CONFIRM, net.AdmissionConfirm(parkedLater)))
+	row := net.Row(parkedLater)
+	confirmations := row.GetConfirmations()
+	if row.GetParkedAt() != 0 || len(confirmations) == 0 || !confirmations[len(confirmations)-1].GetLiftedPark() ||
+		confirmations[len(confirmations)-1].GetAt() != lift.Pin.GetVersion() {
+		t.Fatalf("the lift: parked at %d, confirmations %v", row.GetParkedAt(), confirmations)
+	}
+	net.Fold(true)
+	net.MustLand(net.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.Revocation(ownerPhone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_COMPROMISE, sinceLift)))
+	if !net.State().Parked(parkedLater.SidecarId) {
+		t.Fatal("the lifter's compromise left the device whose park it lifted unparked")
+	}
 	net.Fold(true)
 }
 
