@@ -177,6 +177,12 @@ type pushAttempt struct {
 	place        *protocol.EvsPlace
 	slotsWritten bool
 	issued       bool
+
+	// EVS1-M2-16's reads over self.head: the due its commit records, and a PATH_EPOCH's map and tail
+	due       *pathEpochDue
+	pathEpoch *pathEpochReads
+	// EVS1-M2-20's: the slots an ERASE names, as step 4 read them
+	erasureSlots map[sidecar.Id]*erasureSlotRead
 }
 
 // The attempt for body, or false once the request has been answered: a statement or payload that does not parse
@@ -289,6 +295,20 @@ func (self *pushAttempt) run() *pushOutcome {
 			self.grant.Close()
 		}
 	}()
+	outcome := self.runSteps()
+	if outcome.ownCommit != nil {
+		// the commit stands even when its post-commit work did not finish, so its step 8 runs
+		finished := self.afterCommitted(outcome)
+		if !finished.committed {
+			self.engine.afterCommit(self.newCommitted(outcome.ownCommit))
+		}
+		return finished
+	}
+	return self.afterCommitted(outcome)
+}
+
+// Steps 4 to 7 and their outcomes, without the post-commit work.
+func (self *pushAttempt) runSteps() *pushOutcome {
 	barrierKey := barrierRefKey(self.repoId, self.refId)
 	testHookBarrier(BarrierPushArrive, barrierKey)
 	cached := true
@@ -312,12 +332,35 @@ func (self *pushAttempt) run() *pushOutcome {
 			}
 			return self.refuse(refusal)
 		}
+		if outcome := self.countedRules(); outcome != nil {
+			return outcome
+		}
 		outcome, again := self.commit()
 		if !again {
 			return outcome
 		}
 	}
 	return self.busy()
+}
+
+// After a commit, its own or one 5a found: an ERASE's slot rewrites and an own CONSUME's slot deletes, before the
+// 200 (§11.12).
+func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
+	if !outcome.committed || self.payload == nil {
+		return outcome
+	}
+	flags := self.statement.Push.GetFlags()
+	switch {
+	case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE) != 0:
+		if unfinished := self.finishErase(); unfinished != nil {
+			return unfinished
+		}
+	case flags&uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME) != 0 && outcome.ownCommit != nil:
+		if unfinished := self.finishConsume(); unfinished != nil {
+			return unfinished
+		}
+	}
+	return outcome
 }
 
 // 5 (b-h) over what step 4 read, with the rules other tasks own: a format-2 construct first, after 5a, as
