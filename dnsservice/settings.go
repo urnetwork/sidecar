@@ -304,20 +304,20 @@ type DnsTcpSettings struct {
 	ConnectionCount int `yaml:"connections"`
 }
 
-// How dnsedge probes the lb interfaces (DNS-M5-07, §12.6, §13.4).
+// How dnsedge probes the lb interfaces (DNS-M5-07, DNS-M7-01, §12.6, §13.4).
 type DnsProbeSettings struct {
 	// Seconds between rounds: owner decision 34's 10. Must be positive.
 	IntervalSeconds int `yaml:"interval_s"`
-	// Seconds one probe may take, dial to tlsedge's alert, before it fails. Must be positive and
-	// below interval_s, so a round ends before the next is due.
+	// Seconds one probe may take, dial to tlsedge's alert or to a router's greeting's last line,
+	// before it fails. Must be positive and below interval_s, so a round ends before the next is due.
 	TimeoutSeconds int `yaml:"timeout_s"`
 	// Consecutive failures on any one port that drop an address: reading 7's 3. At least 1.
 	FailureCount int `yaml:"failures"`
 	// The ports tlsedge answers on: 443, and 8443, 8883 and 5671 unsplit (§13.4; owner decision 121).
 	// Each once, from 1 to 65535.
 	Ports []int `yaml:"ports"`
-	// Probes in flight at once in a round, across interfaces, families, ports and route probes. Must be
-	// positive.
+	// Probes in flight at once in a round, across interfaces, families, ports, banners and route
+	// probes. Must be positive.
 	ConcurrencyCount int `yaml:"concurrency"`
 	// The port route probes reach the split on: 443, where §13.4's map runs. From 1 to 65535.
 	RoutePort int `yaml:"route_port"`
@@ -326,6 +326,14 @@ type DnsProbeSettings struct {
 	// Seconds the post of a round's route-probe report may take before the round gives it up, its
 	// passes to be probed again. Must be positive and below interval_s.
 	ReportTimeoutSeconds int `yaml:"report_timeout_s"`
+	// The port the 25 banner probe reaches router interfaces on (DNS-M7-01): 25, which W4 sends to
+	// mxedge's router (§19.5), and so the port whose service marks a router in the lb inventory. From
+	// 1 to 65535, and none of ports, since tlsedge does not answer there.
+	SmtpPort int `yaml:"smtp_port"`
+	// The most a router's greeting may hold, every line with its CRLF, before the banner probe fails
+	// it: 4 KiB, eight of RFC 5321's longest reply lines, where mxedge's greeting is one. At least
+	// RFC 5321's 512, so one longest line fits.
+	SmtpBannerMaxByteCount int `yaml:"smtp_banner_bytes"`
 }
 
 // How dnsedge reads its sockets and drains (DNS-M5-05).
@@ -390,14 +398,16 @@ func DefaultDnsSettings() *DnsSettings {
 			DrainSeconds:      5,
 		},
 		Probe: DnsProbeSettings{
-			IntervalSeconds:      10,
-			TimeoutSeconds:       3,
-			FailureCount:         3,
-			Ports:                []int{443, 8443, 8883, 5671},
-			ConcurrencyCount:     64,
-			RoutePort:            443,
-			RouteHostCount:       16,
-			ReportTimeoutSeconds: 3,
+			IntervalSeconds:        10,
+			TimeoutSeconds:         3,
+			FailureCount:           3,
+			Ports:                  []int{443, 8443, 8883, 5671},
+			ConcurrencyCount:       64,
+			RoutePort:              443,
+			RouteHostCount:         16,
+			ReportTimeoutSeconds:   3,
+			SmtpPort:               25,
+			SmtpBannerMaxByteCount: 4 * 1024,
 		},
 		Feed: DnsFeedSettings{
 			RetryMinSeconds:      1,
@@ -643,6 +653,12 @@ func (self *DnsProbeSettings) validate() error {
 		return errors.New("route_hosts is below 1")
 	case self.ReportTimeoutSeconds <= 0 || self.IntervalSeconds <= self.ReportTimeoutSeconds:
 		return errors.New("report_timeout_s is not positive and below interval_s")
+	case self.SmtpPort < 1 || 65535 < self.SmtpPort:
+		return fmt.Errorf("smtp_port %d is no port", self.SmtpPort)
+	case slices.Contains(self.Ports, self.SmtpPort):
+		return fmt.Errorf("smtp_port %d is one of ports", self.SmtpPort)
+	case self.SmtpBannerMaxByteCount < dnsSmtpReplyLineMaxByteCount:
+		return fmt.Errorf("smtp_banner_bytes is below %d", dnsSmtpReplyLineMaxByteCount)
 	}
 	for index, port := range self.Ports {
 		if port < 1 || 65535 < port {
