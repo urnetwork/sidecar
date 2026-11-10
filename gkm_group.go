@@ -552,7 +552,7 @@ func (self *GkmGroupClient) repoPins(repoId Id) (*gkmRepoPins, error) {
 
 // Moves a repo's pins forward by edit, which sees the stored pins or, for a repo with none, a zero value. A pin
 // that would fall, or a group that would change, is a fork alarm and nothing is written (R8): a re-formed group's
-// new id is taken only along a verified GroupForm chain, which KEYS-M2-25 builds.
+// new id is taken only along a verified GroupForm chain, by movePinsToReform (gkm_reform.go).
 func (self *GkmGroupClient) advancePins(repoId Id, edit func(pins *gkmRepoPins)) error {
 	stored, err := self.repoPins(repoId)
 	if errors.Is(err, ErrGkmKeyMissing) {
@@ -605,7 +605,8 @@ func (self *GkmGroupClient) fetchGeneration(ctx context.Context, state GkmAuthVi
 	if err != nil {
 		return nil, err
 	}
-	return ParseGenRotate(signedBytes, groupId, generation, GkmIdentityKeys(state))
+	// a re-formed group's ladder names its old group (gkm_reform.go)
+	return self.parseServedGeneration(ctx, state, repoId, groupId, generation, signedBytes)
 }
 
 // A Welcome this device's commit owes its joiners: written to the keychain before the commit is uploaded, so a kill
@@ -888,8 +889,25 @@ func (self *gkmGroupManager) joinInFlow(ctx context.Context, state GkmAuthView, 
 	client := self.client
 	epoch := entry.GetPointer().GetEpoch()
 	if pins, err := client.repoPins(self.repoId); err == nil {
-		if pins.groupId != groupId || epoch <= pins.epoch {
-			// another group of the repo is a re-form's (KEYS-M2-25); an epoch at or below the one reached is no join
+		if pins.groupId != groupId {
+			// another group of the repo: a re-form's, followed first along a form chain this device verifies
+			// (gkm_reform.go), so a Welcome taken before a sync joins; any other group is no join
+			adopted, err := self.adoptReformInFlow(ctx, state)
+			if errors.Is(err, ErrGkmWait) || err == nil && !adopted {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			if pins, err = client.repoPins(self.repoId); err != nil {
+				return false, err
+			}
+			if pins.groupId != groupId {
+				return false, nil
+			}
+		}
+		if epoch <= pins.epoch {
+			// an epoch at or below the one reached is no join
 			return false, nil
 		}
 	} else if !errors.Is(err, ErrGkmKeyMissing) {

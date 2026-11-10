@@ -738,9 +738,17 @@ func (self *fakeBlobCluster) List(ctx context.Context, keyPrefix string, startAf
 	return objects, more, nil
 }
 
+// A Delete that names its object (WithBlobUnmodified) is judged where the store judges it: at serve,
+// against the object then under the key, so one parked by Delay answers for what it finds when it
+// lands. A 412 changes nothing. A Held fault answers ErrBlobHeld and changes nothing either, as a key
+// a failed DELETE's stalled commit holds does (§19.6's rule (3)).
 func (self *fakeBlobCluster) Delete(ctx context.Context, key string) error {
+	named, isNamed := sidecar.BlobUnmodified(ctx)
 	return self.request(ctx, FaultOpDelete, key, true, self.deadline(ctx), self.keyEquals(key), func() error {
-		if _, exists := self.objects[key]; exists {
+		if object, exists := self.objects[key]; exists {
+			if isNamed && sidecar.BlobUnmodifiedRefuses(named, object.lastModified) {
+				return sidecar.ErrBlobPrecondition
+			}
 			delete(self.objects, key)
 			index := sort.SearchStrings(self.sortedKeys, key)
 			self.sortedKeys = slices.Delete(self.sortedKeys, index, index+1)

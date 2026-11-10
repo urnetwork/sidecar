@@ -697,6 +697,11 @@ func (self *FakeApi) handleConfigDelta(writer http.ResponseWriter, request *http
 			return
 		}
 	}
+	// what the log's rule cannot judge: a forwarding Delegation's host client (fake_api_forwarding.go)
+	if err := self.checkForwardingHost(client.networkId, args.Signed); err != nil {
+		fakeApiAppendFailure(writer, err)
+		return
+	}
 	pin, err := self.AppendStatement(request.Context(), client.networkId, args.Signed)
 	if err != nil {
 		fakeApiAppendFailure(writer, err)

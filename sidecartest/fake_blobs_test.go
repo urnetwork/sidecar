@@ -874,3 +874,133 @@ func TestPutImmutableWritesAgainPastAParkedCreatesDeadline(t *testing.T) {
 		}
 	}
 }
+
+// A Delete that names its object takes it, and a key already gone is nil.
+func TestNamedDeleteTakesTheObjectItNames(t *testing.T) {
+	fixture := newBlobFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.cluster.PutIfNoneMatch(ctx, "seg/r/s", []byte("an orphan"), nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := fixture.cluster.Head(ctx, "seg/r/s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := sidecar.WithBlobUnmodified(ctx, info.LastModified)
+	if err := fixture.cluster.Delete(named, "seg/r/s"); err != nil {
+		t.Errorf("err %v", err)
+	}
+	if !fixture.absent(t, "seg/r/s") {
+		t.Error("the named object stands")
+	}
+	if err := fixture.cluster.Delete(named, "seg/r/s"); err != nil {
+		t.Errorf("a named Delete of a missing key: %v", err)
+	}
+}
+
+// §11.13's second GC run: the object it listed was deleted and its bytes stored again, days later. Its
+// Delete names the object it listed, so it answers ErrBlobPrecondition and changes nothing.
+func TestNamedDeleteRefusesAnObjectStoredAgain(t *testing.T) {
+	fixture := newBlobFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.cluster.PutIfNoneMatch(ctx, "seg/r/s", []byte("the bytes"), nil); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := fixture.cluster.Head(ctx, "seg/r/s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := sidecar.WithBlobUnmodified(ctx, listed.LastModified)
+	if err := fixture.cluster.Delete(named, "seg/r/s"); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(1 * time.Second)
+	if _, err := fixture.cluster.PutIfNoneMatch(ctx, "seg/r/s", []byte("the bytes"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err = fixture.cluster.Delete(named, "seg/r/s")
+	if !errors.Is(err, sidecar.ErrBlobPrecondition) {
+		t.Errorf("err %v", err)
+	}
+	var unknown *sidecar.BlobUnknownError
+	if errors.As(err, &unknown) {
+		t.Error("a 412 was reported as an unknown outcome")
+	}
+	if got := fixture.body(t, "seg/r/s"); got != "the bytes" {
+		t.Errorf("the object stored again holds %q", got)
+	}
+	// inside the second of slack the object is still the one named
+	inside := sidecar.WithBlobUnmodified(ctx, fixture.clock.Now().Add(-999*time.Millisecond))
+	if err := fixture.cluster.Delete(inside, "seg/r/s"); err != nil {
+		t.Errorf("a Delete naming a time inside the slack: %v", err)
+	}
+}
+
+// A named Delete is judged where the store judges it, when it lands: one parked in the network across
+// a delete and a new upload of its key finds the new object, and leaves it.
+func TestNamedDeleteIsJudgedWhenItLands(t *testing.T) {
+	fixture := newBlobFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.cluster.PutIfNoneMatch(ctx, "seg/r/s", []byte("the bytes"), nil); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := fixture.cluster.Head(ctx, "seg/r/s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.arm(t, &FaultPlan{Op: FaultOpDelete, Result: Delay, Delay: DelayInNetwork})
+	answered := make(chan error, 1)
+	go func() {
+		answered <- fixture.cluster.Delete(sidecar.WithBlobUnmodified(ctx, listed.LastModified), "seg/r/s")
+	}()
+	if err := fixture.clock.AwaitTimers(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// another run deletes the object, and its uploader stores the bytes again
+	if err := fixture.cluster.Delete(ctx, "seg/r/s"); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(2 * time.Second)
+	if _, err := fixture.cluster.PutIfNoneMatch(ctx, "seg/r/s", []byte("the bytes"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if delivered := fixture.store.DeliverDelayed("meta-1", "seg/"); delivered != 1 {
+		t.Fatalf("delivered %d", delivered)
+	}
+	if err := <-answered; !errors.Is(err, sidecar.ErrBlobPrecondition) {
+		t.Errorf("the parked Delete: %v", err)
+	}
+	if got := fixture.body(t, "seg/r/s"); got != "the bytes" {
+		t.Errorf("the object stored again holds %q", got)
+	}
+}
+
+// A key a failed DELETE's stalled commit holds answers ErrBlobHeld to a Delete (§19.6's rule (3)): a
+// definite answer that deleted nothing, named or not.
+func TestHeldResultOnADeleteAppliesNothing(t *testing.T) {
+	fixture := newBlobFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.cluster.PutIfNoneMatch(ctx, "seg/r/s", []byte("held"), nil); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := fixture.cluster.Head(ctx, "seg/r/s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.arm(t, &FaultPlan{Op: FaultOpDelete, Result: Held, Repeat: 2})
+	for _, deleteCtx := range []context.Context{ctx, sidecar.WithBlobUnmodified(ctx, listed.LastModified)} {
+		err := fixture.cluster.Delete(deleteCtx, "seg/r/s")
+		if !errors.Is(err, sidecar.ErrBlobHeld) {
+			t.Errorf("err %v", err)
+		}
+		var unknown *sidecar.BlobUnknownError
+		if errors.As(err, &unknown) {
+			t.Error("a held key was reported as an unknown outcome")
+		}
+	}
+	if got := fixture.body(t, "seg/r/s"); got != "held" {
+		t.Errorf("the object on a held key holds %q", got)
+	}
+}

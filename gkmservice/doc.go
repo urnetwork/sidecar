@@ -10,7 +10,7 @@
 // (hints.go) and the barriers schedules hold (testhook.go). Each route's handler is its own task's: KEYS-M2-13 the
 // per-sidecar routes (keypackages.go, readerkey.go, welcomes.go), KEYS-M2-14 groups, epochs, Welcomes, GroupInfo and
 // acks (groups.go, epochs.go, welcomes.go, groupinfo.go, acks.go), KEYS-M2-15 generations, wraps, drop keys and
-// recovery wraps (generations.go, wraps.go, dropkey.go, recovery.go), and KEYS-M2-25 the ladder. A route whose
+// recovery wraps (generations.go, wraps.go, dropkey.go, recovery.go), and KEYS-M2-25 the ladder (reform.go). A route whose
 // handler has not landed answers 501 once the guard has passed it, so nothing reads as served before it is.
 //
 // KEYS-M2-16's reconciler runs in taskworker, not in the engine: its pending hints (reconciler.go), its sweeps of

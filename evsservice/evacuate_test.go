@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -329,23 +330,96 @@ func TestEvacuationRaisesNoFenceOnAnUnsureClock(t *testing.T) {
 	}
 }
 
-// A pending record on a ref with no head has nothing to fence, and no rule here says how such a ref is fenced
-// (DESIGN-DETAILS.md's problem 2): it stays, its minute waits, and no head is written.
-func TestEvacuationLeavesAPendingRecordOnARefWithNoHead(t *testing.T) {
+// A pending record on a ref with no head, as a creating push that passed step 5 and died before step 7 leaves: the
+// ref is fenced by a placeholder head created with its fence raised and fence_ms set, the record then resolves dead,
+// its new slot is deleted and its batch goes (DESIGN-DETAILS 2.2.3). The ref still reads as absent, and a later push
+// to that name commits on the placeholder.
+func TestEvacuationFencesARefWithNoHeadByPlaceholderAndDropsItsPendingRecord(t *testing.T) {
 	fixture := newEvacuateFixture(t, nil)
+	slotId, slotObject, slotBody := checkTestSlot(t, "dead creating push")
 	pending := fixture.plan()
-	fixture.create(pending, "a")
-	key, _ := fixture.putBatch(1, fixture.unposted(pending))
+	pending.Changes = append(pending.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: checkTestPath("a"), EntryVersion: fixture.check.fileEntry(pending, 1, nil, slotId),
+	})
+	pending.NewObjects = append(pending.NewObjects, slotObject)
+	pending.SlotBodies = append(pending.SlotBodies, slotBody)
+	fixture.putBatch(1, fixture.unposted(pending))
+	if _, err := fixture.cluster.PutIfNoneMatch(fixture.ctx, SlotKey(fixture.check.repoId, slotId), slotBody, nil); err != nil {
+		t.Fatal(err)
+	}
 	fixture.age()
 	result := fixture.mustRun()
-	if result.WaitingCount != 1 || result.FenceCount != 0 || result.BatchDeletedCount != 0 || result.MinuteWaitingCount != 1 {
+	if result.FenceCount != 1 || result.DeadCount != 1 || result.WaitingCount != 0 || result.SlotDeletedCount != 1 || result.BatchDeletedCount != 1 || result.HasBatches {
 		t.Fatalf("result %+v", result)
 	}
-	if !fixture.head().Absent() {
-		t.Fatal("a head was written for a ref that had none")
+	placeholder := fixture.head()
+	if placeholder.Absent() || placeholder.Version() != 0 || placeholder.Head.GetFence() != 1 || placeholder.Head.GetFenceMs() != fixture.clock.Now().UnixMilli() ||
+		len(placeholder.Head.GetWindow()) != 0 || placeholder.Head.GetRefKind() != 0 || placeholder.Head.GetRefMode() != 0 {
+		t.Fatalf("placeholder %v", placeholder.Head)
 	}
-	if keys := fixture.keys("meta-1", batchKeyPrefix); !slices.Equal(keys, []string{key}) {
+	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); !errors.Is(err, sidecar.ErrBlobNotFound) {
+		t.Fatalf("the dead push's slot stands: %v", err)
+	}
+	if keys := fixture.keys("meta-1", batchKeyPrefix); len(keys) != 0 {
 		t.Fatalf("batches %v", keys)
+	}
+	if !slices.Contains(fixture.steps, BarrierEvacuateFenceBefore) || !slices.Contains(fixture.steps, BarrierEvacuateFenceAfter) {
+		t.Fatalf("steps %v", fixture.steps)
+	}
+
+	// the ref reads and lists as absent
+	token := fixture.token(fixture.check.signerId)
+	if reply := fixture.read(token, &protocol.EvsReadRequest{RefId: fixture.check.refId.Bytes()}); reply.head.GetVersion() != 0 || reply.head.GetRefMode() != 0 {
+		t.Fatalf("a fenced placeholder read as %v", reply.head)
+	}
+	recorder := fixture.call(token, http.MethodGet, "/refs", nil)
+	refs := &protocol.EvsRefsReply{}
+	if recorder.Code != http.StatusOK || proto.Unmarshal(recorder.Body.Bytes(), refs) != nil || len(refs.GetRefs()) != 0 {
+		t.Fatalf("refs: %d %v", recorder.Code, refs)
+	}
+
+	// the dead push's own retry is refused, a day past its statement's time
+	if retry := fixture.push(pending); retry.Code == http.StatusOK {
+		t.Fatal("a push evacuation called dead committed")
+	}
+	// a later push to that name commits on the placeholder by If-Match, keeping its fence count
+	fixture.clock.Advance(time.Second)
+	later := fixture.plan()
+	fixture.create(later, "b")
+	fixture.requireCommitted(fixture.push(later), 1)
+	if head := fixture.head(); head.Version() != 1 || head.Head.GetFence() < placeholder.Head.GetFence() {
+		t.Fatalf("the first commit on the placeholder: version %d fence %d", head.Version(), head.Head.GetFence())
+	}
+}
+
+// A head write stalled at the store holds the key of a ref with no head: evacuation's read, or its placeholder's
+// creation, fails ErrBlobHeld, the record's minute waits and nothing of it is dropped. Once the key is released the
+// next run fences and settles the record.
+func TestEvacuationWaitsOnAHeldHeadOfARefWithNoHead(t *testing.T) {
+	for _, op := range []string{sidecartest.FaultOpGet, sidecartest.FaultOpPut} {
+		fixture := newEvacuateFixture(t, nil)
+		pending := fixture.plan()
+		fixture.create(pending, "a")
+		key, _ := fixture.putBatch(1, fixture.unposted(pending))
+		fixture.age()
+		if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{Op: op, KeyPrefix: "head/", Result: sidecartest.Held}); err != nil {
+			t.Fatal(err)
+		}
+		result, _ := fixture.run()
+		if result == nil || result.DeadCount != 0 || result.BatchDeletedCount != 0 || result.MinuteWaitingCount != 1 {
+			t.Fatalf("held %s: result %+v", op, result)
+		}
+		if !fixture.head().Absent() {
+			t.Fatalf("held %s: a head was written", op)
+		}
+		if keys := fixture.keys("meta-1", batchKeyPrefix); !slices.Equal(keys, []string{key}) {
+			t.Fatalf("held %s: batches %v", op, keys)
+		}
+
+		result = fixture.mustRun()
+		if result.FenceCount != 1 || result.DeadCount != 1 || result.BatchDeletedCount != 1 {
+			t.Fatalf("released after a held %s: result %+v", op, result)
+		}
 	}
 }
 

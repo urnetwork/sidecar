@@ -18,6 +18,13 @@
 // steps back cannot make a key repeat; seq counts within that minute across the process's clusters. instance is
 // the process's random 32-bit id.
 //
+// A batch opens only while this process's clock is sure (§19.6's clocks row, DESIGN-DETAILS 2.2.3's minute rule), and
+// Append answers ErrEvsClockUnsure otherwise, which its caller answers 503 as it does any unwritten batch. So a
+// batch's key names a minute that began no later than 50 ms past the time each of its records joined it, which is
+// what lets evacuation's oldest batch stand as a horizon for segment GC (§11.13): every record that could adopt a
+// segment is in a batch whose minute began before the segment's LastModified + 24 h + 2 min. A record may join a
+// batch that opened while the clock was sure, since its minute was fixed then.
+//
 // A batch's write is paid for: each record's admission (AdmitP1, or a P0 issue) counted its batch share (§11.13's
 // push row), so the write runs under the class the opening record's ctx carries, past that request's own end and
 // within the engine's. Safe for concurrent use; no lock is held across a write or a barrier.
@@ -75,13 +82,15 @@ type batchClusterState struct {
 
 // See the file header.
 type BatchWriter struct {
-	ctx      context.Context
-	clock    sidecar.Clock
-	blobs    sidecar.BlobStore
-	records  *RecordCache
-	settings *EvsSettings
-	log      sidecar.Logger
-	instance uint32
+	ctx   context.Context
+	clock sidecar.Clock
+	// nil reads as unsure, so no batch opens
+	clockCheck sidecar.ClockCheck
+	blobs      sidecar.BlobStore
+	records    *RecordCache
+	settings   *EvsSettings
+	log        sidecar.Logger
+	instance   uint32
 
 	stateLock     sync.Mutex
 	minute        uint32
@@ -92,15 +101,17 @@ type BatchWriter struct {
 	appendedCount *sidecar.MonitorValue[int]
 }
 
-// A writer for one process, until ctx ends. blobs is the engine's, metadata writes held to the budget. records may
-// be nil, keeping nothing.
-func NewBatchWriter(ctx context.Context, clock sidecar.Clock, blobs sidecar.BlobStore, records *RecordCache, settings *EvsSettings, log sidecar.Logger) *BatchWriter {
+// A writer for one process, until ctx ends. clockCheck says whether clock is sure: a batch opens only while it is,
+// and a nil one opens none. blobs is the engine's, metadata writes held to the budget. records may be nil, keeping
+// nothing.
+func NewBatchWriter(ctx context.Context, clock sidecar.Clock, clockCheck sidecar.ClockCheck, blobs sidecar.BlobStore, records *RecordCache, settings *EvsSettings, log sidecar.Logger) *BatchWriter {
 	instanceBytes := make([]byte, 4)
 	// never fails: since Go 1.24 a broken system generator crashes the program instead
 	rand.Read(instanceBytes)
 	return &BatchWriter{
 		ctx:           ctx,
 		clock:         clock,
+		clockCheck:    clockCheck,
 		blobs:         blobs,
 		records:       records,
 		settings:      settings,
@@ -131,6 +142,7 @@ func (self *BatchWriter) WriteCount() int {
 // Adds record to clusterId's open batch and waits for that batch's write: its place, or the write's error, which
 // the caller answers 503. ctx must carry the class the budget passed the record's request under; a ctx that never
 // spent is ErrWriteUnbudgeted. A record no batch can hold, past 1 MiB with its framing, is sidecar.ErrEvsPushInvalid.
+// A record that would open a batch while this process's clock is unsure is ErrEvsClockUnsure, and joins nothing.
 func (self *BatchWriter) Append(ctx context.Context, clusterId string, record *sidecar.EvsBatchRecord) (*protocol.EvsPlace, error) {
 	if _, ok := sidecar.WriteClassOf(ctx); !ok {
 		return nil, ErrWriteUnbudgeted
@@ -155,6 +167,12 @@ func (self *BatchWriter) Append(ctx context.Context, clusterId string, record *s
 			self.closeOpenWithLock(state)
 		}
 		if state.open == nil {
+			if self.clockCheck == nil || !self.clockCheck.Sure() {
+				// the batch just closed, if one was, still goes to the store
+				addErr = ErrEvsClockUnsure
+				started = self.startWritesWithLock(state)
+				return
+			}
 			state.open = self.openWithLock(ctx, state, clusterId, now)
 		}
 		batch = state.open
@@ -172,13 +190,13 @@ func (self *BatchWriter) Append(ctx context.Context, clusterId string, record *s
 		}
 		started = self.startWritesWithLock(state)
 	}()
+	for _, startedBatch := range started {
+		go self.write(startedBatch)
+	}
 	if addErr != nil {
 		return nil, addErr
 	}
 	self.appendedCount.Update(func(count int) int { return count + 1 })
-	for _, startedBatch := range started {
-		go self.write(startedBatch)
-	}
 	select {
 	case <-batch.done:
 		if batch.err != nil {

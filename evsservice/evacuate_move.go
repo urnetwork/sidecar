@@ -451,7 +451,7 @@ func (self *evacuateRun) moveRepo(repo *evacuateRepo) error {
 		older(page.lastModified)
 	}
 	pack := settings.PackByteCount <= agedByteCount ||
-		(!oldest.IsZero() && !oldest.Add(settings.PackAge).After(self.now.Add(settings.RunInterval)))
+		(!oldest.IsZero() && !oldest.Add(settings.PackAge).After(self.now.Add(self.nextRunInterval)))
 
 	freshRecords := make([]*ContainerRecord, 0, len(fresh))
 	for _, kept := range fresh {

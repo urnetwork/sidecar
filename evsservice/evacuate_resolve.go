@@ -346,13 +346,9 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 		return resolution, "", nil
 	}
 
+	// A ref with no head is fenced like any other: RaiseFence creates the placeholder head with its fence raised
+	// (DESIGN-DETAILS 2.2.3), so a pending record always has a head to be resolved again on.
 	refKey := barrierRefKey(record.RepoId, record.RefId)
-	if head.Absent() {
-		// nothing to fence (HeadStore.RaiseFence), and no rule here says how a ref with no head is fenced:
-		// DESIGN-DETAILS.md's problem 2. The record stays.
-		self.alarm("evacuate_pending_no_head", refKey, "a pending record of batch minute %d on cluster %s is on a ref with no head: it stays", minute.minute, self.clusterId)
-		return resolution, "pending on a ref with no head", nil
-	}
 	if clockCheck := self.evacuator.host.ClockCheck; clockCheck == nil || !clockCheck.Sure() {
 		return resolution, "pending while the clock is unsure", nil
 	}
@@ -360,8 +356,6 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 	switch {
 	case errors.Is(err, ErrEvsClockUnsure):
 		return resolution, "pending while the clock is unsure", nil
-	case errors.Is(err, ErrEvsHeadAbsent):
-		return resolution, "pending on a ref with no head", nil
 	case errors.Is(err, ErrEvsHeadBusy), errors.Is(err, errEvacuateRepoWaits):
 		return resolution, "pending, its fence not raised", nil
 	case err != nil:
@@ -377,9 +371,14 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 }
 
 // Raises the ref's fence for a pending record: one head CAS that sets fence_ms, paid as the minute's work (§11.13's
-// order row: a fence goes with the work that raises it).
+// order row: a fence goes with the work that raises it). A ref with no head pays for a create, of the placeholder
+// head the fence makes (DESIGN-DETAILS 2.4), and any other for an overwrite of the head it has.
 func (self *evacuateRun) fence(minute *evacuateMinute, repoId sidecar.Id, refId sidecar.Id, head *EvsStoredHead) (*EvsStoredHead, error) {
-	grant, err := self.acquire(minute.minute, WriteOperation{Kind: WriteOperationOverwrite, ObjectByteCount: int64(len(head.Bytes)), Count: 1},
+	operation := WriteOperation{Kind: WriteOperationOverwrite, ObjectByteCount: int64(len(head.Bytes)), Count: 1}
+	if head.Absent() {
+		operation = WriteOperation{Kind: WriteOperationCreate, ObjectByteCount: evsFencePlaceholderByteCount, Count: 1}
+	}
+	grant, err := self.acquire(minute.minute, operation,
 		func(ctx context.Context) error { return self.recheckMove(ctx, repoId) })
 	if err != nil {
 		return nil, err

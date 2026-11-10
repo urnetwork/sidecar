@@ -90,13 +90,14 @@ func Run(t *testing.T, target *Target) {
 		}
 		cleanup(ctx, target.Cluster, keys.prefix)
 	}
+	settleBuildCases := append(settleCases(), namedDeleteCases()...)
 	if target.Settle == nil {
-		for _, c := range settleCases() {
+		for _, c := range settleBuildCases {
 			t.Logf("waits for D-OPS-20's build: %s", c.name)
 		}
 		return
 	}
-	for _, c := range settleCases() {
+	for _, c := range settleBuildCases {
 		keys := &keySpace{prefix: fmt.Sprintf("blobsuite/%s/%s/", runId, c.name)}
 		if err := c.run(ctx, target, keys); err != nil {
 			t.Errorf("%s: %v", c.name, err)
@@ -170,6 +171,17 @@ func settleCases() []*suiteCase {
 	return []*suiteCase{
 		{name: "request-past-its-deadline-is-refused", run: caseDeadlineRefused},
 		{name: "delete-past-its-deadline-deletes-nothing", run: caseDeadlineDelete},
+	}
+}
+
+// §19.6's DELETE that names its object, which only D-OPS-20's build honors: upstream ignores the
+// header and deletes whatever the key holds, so these wait with the settle cases, and a build without
+// the rule fails the second.
+func namedDeleteCases() []*suiteCase {
+	return []*suiteCase{
+		{name: "delete-naming-its-object-takes-it", run: caseDeleteNamed},
+		{name: "delete-naming-an-older-object-is-refused", run: caseDeleteNamedOlder},
+		{name: "delete-naming-a-missing-key", run: caseDeleteNamedMissing},
 	}
 }
 
@@ -1133,6 +1145,86 @@ func caseDeadlineDelete(ctx context.Context, target *Target, keys *keySpace) err
 		return fmt.Errorf("a late DELETE: got %v, want an unknown outcome", err)
 	}
 	return wantBody(ctx, cluster, key, []byte("v1"))
+}
+
+// A Delete that names its object by the LastModified a LIST or a HEAD showed takes that object
+// (§19.6, x-ur-if-unmodified-ms): the times a store shows may be cut to the second, which the rule's
+// slack covers.
+func caseDeleteNamed(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	listed := keys.key("listed")
+	headed := keys.key("headed")
+	for _, key := range []string{listed, headed} {
+		if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("an orphan"), nil); err != nil {
+			return err
+		}
+	}
+
+	objects, _, err := cluster.List(ctx, listed, "", 1)
+	if err != nil {
+		return err
+	}
+	if len(objects) != 1 || objects[0].Key != listed {
+		return fmt.Errorf("a LIST of %q: %v", listed, listedKeys(objects))
+	}
+	if err := cluster.Delete(sidecar.WithBlobUnmodified(ctx, objects[0].LastModified), listed); err != nil {
+		return fmt.Errorf("a DELETE naming the LastModified a LIST showed: %w", err)
+	}
+	if _, err := cluster.Head(ctx, listed); !errors.Is(err, sidecar.ErrBlobNotFound) {
+		return fmt.Errorf("the listed object after its DELETE: %v", err)
+	}
+
+	info, err := cluster.Head(ctx, headed)
+	if err != nil {
+		return err
+	}
+	if err := cluster.Delete(sidecar.WithBlobUnmodified(ctx, info.LastModified.Truncate(time.Second)), headed); err != nil {
+		return fmt.Errorf("a DELETE naming a HEAD's LastModified cut to the second: %w", err)
+	}
+	if _, err := cluster.Head(ctx, headed); !errors.Is(err, sidecar.ErrBlobNotFound) {
+		return fmt.Errorf("the headed object after its DELETE: %v", err)
+	}
+	return nil
+}
+
+// A Delete naming an object older than the one under its key deletes nothing and says so: the key was
+// written again since its caller looked, and what stands there is another object (§11.13). A store
+// that ignores the condition, as upstream's does, deletes it, and fails here.
+func caseDeleteNamedOlder(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	key := keys.key("uploaded-again")
+	body := []byte("the same bytes, stored again")
+	if _, err := cluster.PutIfNoneMatch(ctx, key, body, nil); err != nil {
+		return err
+	}
+	info, err := cluster.Head(ctx, key)
+	if err != nil {
+		return err
+	}
+	// two seconds clears the slack however the store rounds what it shows
+	for _, age := range []time.Duration{2 * time.Second, 3 * 24 * time.Hour} {
+		older := sidecar.WithBlobUnmodified(ctx, info.LastModified.Add(-age))
+		if err := wantError("a DELETE naming an older object", cluster.Delete(older, key), sidecar.ErrBlobPrecondition); err != nil {
+			return err
+		}
+		if err := wantBody(ctx, cluster, key, body); err != nil {
+			return fmt.Errorf("after a refused DELETE: %w", err)
+		}
+	}
+	// and the object it does name still goes
+	if err := cluster.Delete(sidecar.WithBlobUnmodified(ctx, info.LastModified), key); err != nil {
+		return err
+	}
+	if _, err := cluster.Head(ctx, key); !errors.Is(err, sidecar.ErrBlobNotFound) {
+		return fmt.Errorf("the object after the DELETE that named it: %v", err)
+	}
+	return nil
+}
+
+// A Delete naming an object under a key that holds none is nil, as any Delete of a missing key is.
+func caseDeleteNamedMissing(ctx context.Context, target *Target, keys *keySpace) error {
+	named := sidecar.WithBlobUnmodified(ctx, target.Settle.Now().Add(-25*time.Hour))
+	return target.Cluster.Delete(named, keys.key("never-written"))
 }
 
 // Runs BlobStore's own promises: which clusters exist and how they are found.

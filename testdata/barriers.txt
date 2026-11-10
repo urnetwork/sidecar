@@ -162,7 +162,9 @@ barrier gkm.commit.epoch.before gkm_members.go
 barrier gkm.epoch_put.after gkmservice/epochs.go
 barrier gkm.epoch_put.before gkmservice/epochs.go
 barrier gkm.gen_claim.after gkmservice/generations.go
+barrier gkm.gen_claim.after gkmservice/reform.go
 barrier gkm.gen_claim.before gkmservice/generations.go
+barrier gkm.gen_claim.before gkmservice/reform.go
 barrier gkm.group_create.after gkmservice/groups.go
 barrier gkm.group_create.before gkmservice/groups.go
 barrier gkm.group_owner.after gkmservice/groups.go
@@ -173,6 +175,10 @@ barrier gkm.pointer_put.after gkmservice/groupinfo.go
 barrier gkm.pointer_put.after gkmservice/retention.go
 barrier gkm.pointer_put.before gkmservice/groupinfo.go
 barrier gkm.pointer_put.before gkmservice/retention.go
+barrier gkm.reform.form.after gkm_reform.go
+barrier gkm.reform.form.before gkm_reform.go
+barrier gkm.reform.ladder.after gkm_reform.go
+barrier gkm.reform.ladder.before gkm_reform.go
 barrier gkm.rekey.progress.after gkm_rekey.go
 barrier gkm.rekey.push.after gkm_rekey.go
 barrier gkm.rekey.push.before gkm_rekey.go
