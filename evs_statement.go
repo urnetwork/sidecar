@@ -420,7 +420,8 @@ func (self *EvsStatementBuilder) build(plan *EvsPushPlan, format2 bool) (*EvsBui
 	changes := make([]*evsBuildChange, 0, len(plan.Changes))
 	entryWriteCount := 0
 	for _, planned := range plan.Changes {
-		if len(planned.TokenPath) == 0 || EvsTokenPathMaxLength < len(planned.TokenPath) {
+		// the empty path is the root, which the payload's checks hold to a directory's delta
+		if EvsTokenPathMaxLength < len(planned.TokenPath) {
 			return nil, fmt.Errorf("%w: a change of %d components", ErrEvsTokenInvalid, len(planned.TokenPath))
 		}
 		if planned.EntryVersion == nil && planned.BaseEntryVersion == 0 {

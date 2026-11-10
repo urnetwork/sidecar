@@ -626,8 +626,9 @@ func TestEvsPathTokensRefuseWhatNoPathHolds(t *testing.T) {
 	if _, err := EvsPathTokens(pathKey, append(deep, []byte("d"))); !errors.Is(err, ErrEvsTokenInvalid) {
 		t.Errorf("33 components: %v", err)
 	}
-	if _, err := EvsPathTokens(pathKey, nil); !errors.Is(err, ErrEvsTokenInvalid) {
-		t.Errorf("no component: %v", err)
+	// no component is the root, whose token path is empty in every epoch (question evs1-m2-24-root-directory-names)
+	if root, err := EvsPathTokens(pathKey, nil); err != nil || len(root) != 0 {
+		t.Errorf("no component: %v %v", root, err)
 	}
 	if _, err := ParseEvsTokenPath(tokenPath.Components()); err != nil {
 		t.Errorf("32 components back: %v", err)
@@ -638,8 +639,8 @@ func TestEvsPathTokensRefuseWhatNoPathHolds(t *testing.T) {
 	if _, err := ParseEvsTokenPath([][]byte{make([]byte, 15)}); !errors.Is(err, ErrEvsTokenInvalid) {
 		t.Errorf("a short token: %v", err)
 	}
-	if _, err := ParseEvsChangedTokenPath(nil); !errors.Is(err, ErrEvsTokenInvalid) {
-		t.Errorf("a change naming no path: %v", err)
+	if root, err := ParseEvsChangedTokenPath(nil); err != nil || len(root) != 0 {
+		t.Errorf("a change naming the root: %v %v", root, err)
 	}
 }
 
@@ -1223,5 +1224,34 @@ func TestEvsDigestMissProvesNoChange(t *testing.T) {
 	}
 	if EvsPathsDigest(0).MayChange(EvsTokenPath{evsTestToken("a")}) {
 		t.Error("an empty digest matched")
+	}
+}
+
+// The root's empty token path in the digest and the absence rule (DESIGN-DETAILS 9.2.8): a root delta sets the two
+// bits of SHA-256("UR evs digest"), which a query of the root matches and every path's query reads as a prefix's, so
+// the empty covering prefix sends evs to the change list for every path; only the empty covering prefix calls for
+// the root's absence, and no other path's absences name the root.
+func TestEvsDigestAndAbsencesOfTheRoot(t *testing.T) {
+	root := EvsTokenPath{}
+	file := EvsTokenPath{evsTestToken("a"), evsTestToken("b")}
+	if !NewEvsPathsDigest([]EvsTokenPath{root}, nil).MayChange(root) {
+		t.Fatal("a root delta does not match the root")
+	}
+	if !NewEvsPathsDigest([]EvsTokenPath{file}, []EvsTokenPath{root}).MayChange(EvsTokenPath{evsTestToken("elsewhere")}) {
+		t.Fatal("the empty covering prefix does not reach every path")
+	}
+	if EvsPathsDigest(0).MayChange(root) {
+		t.Fatal("an empty digest matches the root")
+	}
+	if got := EvsAbsencePaths([]EvsTokenPath{root}, root); len(got) != 1 || len(got[0]) != 0 {
+		t.Fatalf("the root under the empty covering prefix: %v", got)
+	}
+	if got := EvsAbsencePaths([]EvsTokenPath{file[:1]}, root); len(got) != 0 {
+		t.Fatalf("the root under another covering prefix: %v", got)
+	}
+	for _, absent := range EvsAbsencePaths([]EvsTokenPath{root}, file) {
+		if len(absent) == 0 {
+			t.Fatal("a path's absences name the root")
+		}
 	}
 }

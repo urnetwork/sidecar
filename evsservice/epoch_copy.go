@@ -855,6 +855,20 @@ func (self *copyRun) finish() error {
 				break
 			}
 		}
+		// the root's copy, beside the epoch's prefix, which no LIST of it lists (DESIGN-DETAILS 9.2.8): one still there
+		// is one the map's root move did not take
+		if err := self.pace(); err != nil {
+			return err
+		}
+		root, err := ReadEntry(self.ctx, self.cluster, self.repoId, self.refId, epoch, sidecar.EvsTokenPath{}, self.head.Head.GetFoldedThrough())
+		if err != nil {
+			return err
+		}
+		if !root.Absent() {
+			self.result.MissedCount += 1
+			drained = false
+			self.log.Errorf("[evs] alarm copy_missed: repo %s ref %s: source %d's root, which no move took", sidecar.EvsKeyId(self.repoId), sidecar.EvsKeyId(self.refId), epoch)
+		}
 	}
 	if !drained || 0 < self.result.MissedCount {
 		return nil

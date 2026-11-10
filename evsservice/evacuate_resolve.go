@@ -281,7 +281,7 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 		if !tail.Empty() {
 			// format 2: each staged segment written or dropped, the record's own list swept, both before its batch
 			// goes, and the record kept without its staged bytes
-			if why, err := self.settleFormat2(minute, place, record, tail); why != "" {
+			if why, err := self.settleFormat2(minute, place, record, tail, version); why != "" {
 				wait(why, err)
 				return
 			}
@@ -459,7 +459,13 @@ func (self *evacuateRun) sealNamesPart(record *sidecar.EvsBatchRecord, place *pr
 		if err != nil {
 			return false, err
 		}
-		seal, err := sidecar.ParseEvsBatchRecord(sealBytes)
+		// a format-2 seal may carry a purge list in its tail, which an instance at format 2 reads past
+		var seal *sidecar.EvsBatchRecord
+		if sidecar.EvsRepoFormat2 <= self.evacuator.evsSettings.InstanceFormat {
+			seal, _, err = sidecar.ParseEvsBatchRecordFormat2(sealBytes)
+		} else {
+			seal, err = sidecar.ParseEvsBatchRecord(sealBytes)
+		}
 		if err != nil {
 			return false, err
 		}

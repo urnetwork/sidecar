@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // A gkm client holding every generation of the world's repo, under the world's group and commitments, each
@@ -98,6 +99,10 @@ type evsTestPushServer struct {
 	leases           int
 	// called as each part arrives, before it is held
 	onPart func(k uint32)
+	// called as each push or seal arrives, before 5e's epoch is checked: what a test cuts the world over in
+	onPush func(statement *EvsStatement)
+	// the upload time receipts name, 0 for 2026-01-01
+	uploadMs int64
 }
 
 func newEvsTestPushServer(t *testing.T, world *evsTestWorld) *evsTestPushServer {
@@ -153,12 +158,16 @@ func (self *evsTestPushServer) serveSegment(writer http.ResponseWriter, request 
 	}
 	self.stateLock.Lock()
 	self.uploads = append(self.uploads, sid)
+	uploadMs := self.uploadMs
 	self.stateLock.Unlock()
+	if uploadMs == 0 {
+		uploadMs = 1767225600000
+	}
 	self.world.stateLock.Lock()
 	self.world.segments[string(segmentId[:])] = body
 	self.world.stateLock.Unlock()
 	receipt := &protocol.EvsUploadReceipt{
-		RepoId: self.world.repoId.Bytes(), SegmentId: segmentId[:], PaddedSize: uint64(len(body)), UploadMs: 1767225600000,
+		RepoId: self.world.repoId.Bytes(), SegmentId: segmentId[:], PaddedSize: uint64(len(body)), UploadMs: uploadMs,
 		UploaderSidecarId: self.world.signer.sidecarId.Bytes(), KeyId: 1, Mac: make([]byte, 16),
 	}
 	reply, _ := proto.Marshal(receipt)
@@ -239,6 +248,22 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		evsTestRefuse(writer, refusal)
 		return
 	}
+	onPush := self.onPush
+	self.stateLock.Unlock()
+	if onPush != nil {
+		onPush(statement)
+	}
+	self.world.stateLock.Lock()
+	current := max(1, self.world.currentEpoch)
+	self.world.stateLock.Unlock()
+	if epoch := statement.Push.GetPathEpoch(); epoch != current {
+		// 5e: final for the statement, which can never commit
+		evsTestRefuse(writer, &evsTestRefusal{status: http.StatusPreconditionFailed, reply: &protocol.EvsRefusalReply{
+			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH,
+		}})
+		return
+	}
+	self.stateLock.Lock()
 	var checked *EvsCheckedPayload
 	var tree *EvsChangeTree
 	if 0 < len(pushRequest.GetPartPlaces()) {
@@ -302,12 +327,16 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 	writer.Write(reply)
 }
 
-// The registered plaintext path whose epoch-1 tokens are tokenPath.
-func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath) (string, bool) {
+// The registered plaintext path whose tokens in epoch are tokenPath.
+func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath, epoch uint64) (string, bool) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if len(tokenPath) == 0 {
+		// the root, whose table a top-level creation or removal changes
+		return "", true
+	}
 	for _, path := range self.knownPaths {
-		if self.world.tokens(path).Equal(tokenPath) {
+		if self.world.tokensAt(path, epoch).Equal(tokenPath) {
 			return path, true
 		}
 	}
@@ -318,7 +347,7 @@ func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath) (string, bool) {
 func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, checked *EvsCheckedPayload, tree *EvsChangeTree) (uint64, *evsTestRefusal) {
 	paths := make([]string, len(checked.Changes))
 	for i, change := range checked.Changes {
-		path, ok := self.pathOf(change.TokenPath)
+		path, ok := self.pathOf(change.TokenPath, statement.Push.GetPathEpoch())
 		if !ok {
 			self.t.Fatalf("a change to a path the test did not register")
 		}
@@ -736,5 +765,86 @@ func TestEvsWriteDirectoryDeltas(t *testing.T) {
 	}
 	if _, err := writer.write(t, "d/e/two.txt/under", []byte("x")); !errors.Is(err, ErrEvsPathKind) {
 		t.Errorf("a path created under a file: %v", err)
+	}
+}
+
+// Question evs1-m2-24-root-directory-names, option 1: a top-level creation adds the name's row to the root's table,
+// the first creating the root, a creation under a new top-level directory adds the directory's, and a top-level
+// removal drops its token; the root lists the names standing, and a write of the root itself is refused.
+func TestEvsWriteTopLevelPathsChangeTheRoot(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	if _, err := writer.write(t, "top.txt", []byte("top")); err != nil {
+		t.Fatal(err)
+	}
+	root := writer.entry(t, "")
+	if root.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) || len(root.GetNames().GetNames()) != 1 ||
+		!bytes.Equal(root.GetNames().GetNames()[0].GetToken(), writer.world.tokens("top.txt").Last().Bytes()) {
+		t.Fatalf("the root after a top-level creation: %v", root)
+	}
+	if _, err := writer.write(t, "d/x.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if root := writer.entry(t, ""); len(root.GetNames().GetNames()) != 1 || root.GetVersion() <= 1 {
+		t.Fatalf("the root's delta for a new top-level directory: %v", root)
+	}
+	before := writer.entry(t, "").GetVersion()
+	if _, err := writer.write(t, "d/y.txt", []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	if after := writer.entry(t, "").GetVersion(); after != before {
+		t.Fatal("a write below a standing directory changed the root")
+	}
+	if _, err := writer.write(t, "top.txt", nil); err != nil {
+		t.Fatal(err)
+	}
+	if root := writer.entry(t, ""); len(root.GetNames().GetRemovedTokens()) != 1 {
+		t.Fatalf("the root's delta for a top-level removal: %v", root)
+	}
+	reader := writer.world.reader(t, evsTestId("root reader"))
+	reader.client.args.Gkm = writer.gkm
+	reader.client.args.Transport = &evsTestTransport{handler: writer.server}
+	reader.client.http.transport = wrapSidecarApiTransport(reader.client.args.Transport)
+	listing, err := reader.client.Repo(writer.world.repoId).List(context.Background(), &EvsReadArgs{Path: ""})
+	if err != nil || len(listing.Entries) != 1 || string(listing.Entries[0].Name) != "d" {
+		t.Fatalf("the root's listing: %v %v", listing, err)
+	}
+	if _, err := writer.write(t, "", []byte("root")); !errors.Is(err, ErrEvsTokenInvalid) {
+		t.Fatalf("a write of the root itself: %v", err)
+	}
+}
+
+// A change may name the root only as a directory's delta: a file written at the empty token path and a removal of it
+// are refused by the payload's checks.
+func TestEvsTheRootTakesOnlyADirectorysDelta(t *testing.T) {
+	world := newEvsTestWorld(t)
+	file := &EvsPushPlan{
+		RepoId: world.repoId, RefId: world.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
+		PushId: evsTestId("root push"), BaseChain: EvsChainStart(world.repoId, world.refId), Generation: 1,
+		GroupId: evsTestId("world group"), GenerationCommitment: evsTestBytes("commitment 1", 32), PathEpoch: 1,
+		Auth: &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)}, SignerSidecarId: world.signer.sidecarId,
+		ClientId: evsTestId("world client"), TimeMs: 1767225600000, SealedMetadata: append(evsTestBytes("metadata", 32), evsTestBytes("metadata tail", 16)...),
+		Changes: []*EvsPlannedChange{{TokenPath: EvsTokenPath{}, EntryVersion: world.fileEntry([]byte("a file"), false, 1, evsTestId("root push"), 0, nil)}},
+	}
+	built, err := NewEvsStatementBuilder(world.signer.sign).Build(file)
+	if err == nil {
+		_, err = EvsCheckPayload(built.Statement, built.Payload)
+	}
+	if !errors.Is(err, ErrEvsPushInvalid) {
+		t.Fatalf("a file at the root: %v", err)
+	}
+	removal := &EvsPushPlan{
+		RepoId: world.repoId, RefId: world.refId, RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
+		PushId: evsTestId("root removal"), BaseVersion: 0, BaseChain: EvsChainStart(world.repoId, world.refId), Generation: 1,
+		GroupId: evsTestId("world group"), GenerationCommitment: evsTestBytes("commitment 1", 32), PathEpoch: 1,
+		Auth: &bridge.AuthPin{Version: 1, Chain: evsTestBytes("auth chain", 32)}, SignerSidecarId: world.signer.sidecarId,
+		ClientId: evsTestId("world client"), TimeMs: 1767225600000, SealedMetadata: append(evsTestBytes("metadata", 32), evsTestBytes("metadata tail", 16)...),
+		Changes: []*EvsPlannedChange{{TokenPath: EvsTokenPath{}, BaseEntryVersion: 1}},
+	}
+	built, err = NewEvsStatementBuilder(world.signer.sign).Build(removal)
+	if err == nil {
+		_, err = EvsCheckPayload(built.Statement, built.Payload)
+	}
+	if !errors.Is(err, ErrEvsPushInvalid) {
+		t.Fatalf("a removal of the root: %v", err)
 	}
 }

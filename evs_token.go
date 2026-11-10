@@ -111,10 +111,14 @@ func EvsPathToken(pathKey *EvsPathKey, parent EvsToken, name []byte) (EvsToken, 
 	return token, nil
 }
 
-// The token path of a path given as its components' raw names, in pathKey's epoch: 1 to 32 components.
+// The token path of a path given as its components' raw names, in pathKey's epoch: up to 32 components, none being
+// the root, whose token path is empty in every epoch (question evs1-m2-24-root-directory-names, option 1).
 func EvsPathTokens(pathKey *EvsPathKey, names [][]byte) (EvsTokenPath, error) {
-	if len(names) == 0 || EvsTokenPathMaxLength < len(names) {
+	if EvsTokenPathMaxLength < len(names) {
 		return nil, fmt.Errorf("%w: a path of %d components", ErrEvsTokenInvalid, len(names))
+	}
+	if err := pathKey.checkHeld(); err != nil {
+		return nil, err
 	}
 	tokenPath := make(EvsTokenPath, 0, len(names))
 	parent := EvsRootToken
@@ -141,7 +145,7 @@ func checkEvsPathName(name []byte) error {
 type EvsTokenPath []EvsToken
 
 // A token path from the components EvsChange.token_path and its kin carry: up to 32, each exactly 16 bytes. An
-// empty list is the empty path, which only a covering prefix may be; ParseEvsChangedTokenPath refuses it.
+// empty list is the empty path: the root, or a covering prefix that covers every change.
 func ParseEvsTokenPath(components [][]byte) (EvsTokenPath, error) {
 	if EvsTokenPathMaxLength < len(components) {
 		return nil, fmt.Errorf("%w: a token path of %d components", ErrEvsTokenInvalid, len(components))
@@ -157,11 +161,10 @@ func ParseEvsTokenPath(components [][]byte) (EvsTokenPath, error) {
 	return tokenPath, nil
 }
 
-// A token path a change may name: 1 to 32 components.
+// A token path a change may name: 1 to 32 components, or the empty path, the ref's root (question
+// evs1-m2-24-root-directory-names, option 1; DESIGN-DETAILS 9.2.8), which only a directory's delta may name: the
+// payload's checks hold a change to that, and a source path, a move and a read may name the root as well.
 func ParseEvsChangedTokenPath(components [][]byte) (EvsTokenPath, error) {
-	if len(components) == 0 {
-		return nil, fmt.Errorf("%w: a change names no path", ErrEvsTokenInvalid)
-	}
 	return ParseEvsTokenPath(components)
 }
 

@@ -76,10 +76,10 @@ func (self *EvsClient) preDecrypt(ctx context.Context, repoId Id, refId Id, obje
 	return nil
 }
 
-// A path as its raw names, refusing an empty component.
+// A path as its raw names, refusing an empty component, and the empty path, which only a read names (the root).
 func evsPathNames(path string) ([][]byte, error) {
 	if path == "" {
-		return nil, fmt.Errorf("%w: the root has no entry in format 1 (question evs1-m2-24-root-directory-names)", ErrEvsTokenInvalid)
+		return nil, fmt.Errorf("%w: the empty path, which names the root only to a read", ErrEvsTokenInvalid)
 	}
 	names := [][]byte{}
 	for _, name := range strings.Split(path, "/") {
@@ -89,6 +89,15 @@ func evsPathNames(path string) ([][]byte, error) {
 		names = append(names, []byte(name))
 	}
 	return names, nil
+}
+
+// A path a read names as its raw names: the empty path is the ref's root, with no names, whose token path is empty in
+// every epoch (question evs1-m2-24-root-directory-names, option 1; DESIGN-DETAILS 9.2.8); any other as evsPathNames.
+func evsReadPathNames(path string) ([][]byte, error) {
+	if path == "" {
+		return [][]byte{}, nil
+	}
+	return evsPathNames(path)
 }
 
 // The repo keys one read uses, each generation asked of gkm once.
@@ -270,7 +279,7 @@ func evsSamePathEpoch(a *protocol.EvsPathEpoch, b *protocol.EvsPathEpoch) bool {
 
 // A path's tokens in the current epoch and each source, and its read record.
 func (self *EvsRepo) tokenize(ctx context.Context, keys *evsReadKeys, refId Id, path string, epoch *protocol.EvsPathEpoch) (*evsReadPath, error) {
-	names, err := evsPathNames(path)
+	names, err := evsReadPathNames(path)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +379,7 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 	if err := self.client.verifier.Pin(head); err != nil {
 		return nil, err
 	}
-	self.client.setRefEpoch(self.repoId, refId, head.Head.GetPathEpoch())
+	self.client.noteVerifiedHead(self.repoId, refId, head.Head)
 	records := []*EvsReadRecord{}
 	for i, path := range paths {
 		if version != 0 || verifiedPaths[i].Entry == nil {
@@ -461,16 +470,10 @@ func (self *EvsClient) postRead(ctx context.Context, repoId Id, request *protoco
 
 // The ref's path epoch as the last verified head gave it, nil when this client has read none.
 func (self *EvsClient) refEpoch(repoId Id, refId Id) *protocol.EvsPathEpoch {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.refEpochs[evsRefKey{repoId: repoId, refId: refId}]
-}
-
-// Keeps the ref's path epoch from a verified head.
-func (self *EvsClient) setRefEpoch(repoId Id, refId Id, epoch *protocol.EvsPathEpoch) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.refEpochs[evsRefKey{repoId: repoId, refId: refId}] = epoch
+	if state := self.refEpochState(repoId, refId); state != nil {
+		return state.epoch
+	}
+	return nil
 }
 
 // Reads the newest committed version of a file, or an older one (args.Version), verified and pinned, then

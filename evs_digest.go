@@ -57,10 +57,12 @@ func (self EvsPathsDigest) Matches(tokenPath EvsTokenPath) bool {
 	return self&want == want
 }
 
-// What evs and readers query (§11.8): whether tokenPath or any prefix holding it, down to its first component,
-// matches. False proves the push changed neither tokenPath nor a directory holding it.
+// What evs and readers query (§11.8): whether tokenPath or any prefix holding it, down to the empty path, matches.
+// False proves the push changed neither tokenPath nor a directory holding it, and named no covering prefix reaching
+// it. The empty path is the root's, whose two bits are those of SHA-256("UR evs digest") (DESIGN-DETAILS 9.2.8), and
+// the covering prefix of every change.
 func (self EvsPathsDigest) MayChange(tokenPath EvsTokenPath) bool {
-	for length := len(tokenPath); 0 < length; length -= 1 {
+	for length := len(tokenPath); 0 <= length; length -= 1 {
 		if self.Matches(tokenPath[:length]) {
 			return true
 		}

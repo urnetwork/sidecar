@@ -1,4 +1,5 @@
-// Index entries (§11.7's index entries row, evs-11): idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e, a cache of each path's
+// Index entries (§11.7's index entries row, evs-11): idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e, and the root's table at
+// idx/<repo>/<ref>/<p>.e (question evs1-m2-24-root-directory-names, option 1), a cache of each path's
 // committed versions in path epoch p, folded from committed pushes, whose push records hold every one. An entry holds
 // a file's up to four folded EvsEntryVersions, newest first, all but the newest with inline records elided; or a
 // directory's folded name table as of the newest delta applied (names_through); and a removed path's marker, which a
@@ -284,7 +285,8 @@ func PutEntry(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.I
 	if _, err := ParseEvsIndexEntry(entryBytes); err != nil {
 		return "", err
 	}
-	if len(tokenPath) == 0 || sidecar.EvsTokenPathMaxLength < len(tokenPath) {
+	if sidecar.EvsTokenPathMaxLength < len(tokenPath) || (len(tokenPath) == 0 && entry.GetNames() == nil) {
+		// the empty path is the root, whose entry is a table (IndexEntryKey)
 		return "", fmt.Errorf("%w: a path of %d components", ErrEvsIndexEntryInvalid, len(tokenPath))
 	}
 	var options *sidecar.BlobPutOptions

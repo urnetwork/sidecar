@@ -199,14 +199,39 @@ func TestEvsExportRefusesATreeItsChangesDoNotBuild(t *testing.T) {
 	}
 }
 
-// A file-mode ref refuses, naming the question its root's names wait on.
-func TestEvsExportFileModeWaitsOnTheRootQuestion(t *testing.T) {
+// A file-mode ref exports one commit a version, each path named by the rows its directories' deltas added, the root's
+// for the top level (question evs1-m2-24-root-directory-names, option 1): the tree holds what stands at each version,
+// a removal taking its path out, git fsck takes it, and two exporters give one tip.
+func TestEvsExportFileModeRebuildsASmallTree(t *testing.T) {
 	world := newEvsTestWorld(t)
-	world.push(&evsTestChange{path: "a.txt", content: []byte("a")})
-	reader := world.reader(t, evsTestId("exporter"))
-	_, err := reader.client.Repo(world.repoId).Export(context.Background(), &EvsExportArgs{Dir: filepath.Join(t.TempDir(), "x.git")})
-	if !errors.Is(err, ErrEvsExport) || !strings.Contains(err.Error(), "evs1-m2-24-root-directory-names") {
-		t.Fatalf("a file-mode export: %v", err)
+	world.push(&evsTestChange{path: "", children: []string{"a.txt", "d"}}, &evsTestChange{path: "a.txt", content: []byte("a\n")},
+		&evsTestChange{path: "d", children: []string{"b.txt", "c.txt"}}, &evsTestChange{path: "d/b.txt", content: []byte("b\n")},
+		&evsTestChange{path: "d/c.txt", content: []byte("c\n"), segment: true})
+	world.push(&evsTestChange{path: "d/c.txt"}, &evsTestChange{path: "a.txt", content: []byte("a again\n")})
+	tips := []EvsGitOid{}
+	for _, label := range []string{"one", "two"} {
+		dir := filepath.Join(t.TempDir(), "file.git")
+		result, err := world.reader(t, evsTestId("exporter "+label)).client.Repo(world.repoId).Export(context.Background(), &EvsExportArgs{Dir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Refs) != 1 || result.Refs[0].Versions != 2 {
+			t.Fatalf("exported %+v", result.Refs)
+		}
+		tips = append(tips, result.Refs[0].Tip)
+		evsTestGit(t, dir, "fsck", "--strict", "--no-dangling")
+		if tree := evsTestGit(t, dir, "ls-tree", "-r", "--name-only", "main"); tree != "a.txt\nd/b.txt\n" {
+			t.Fatalf("the tip's tree %q", tree)
+		}
+		if first := evsTestGit(t, dir, "ls-tree", "-r", "--name-only", "main~1"); first != "a.txt\nd/b.txt\nd/c.txt\n" {
+			t.Fatalf("the first version's tree %q", first)
+		}
+		if content := evsTestGit(t, dir, "show", "main:a.txt"); content != "a again\n" {
+			t.Fatalf("a.txt at the tip %q", content)
+		}
+	}
+	if tips[0] != tips[1] {
+		t.Fatalf("two exporters: %s, %s", tips[0], tips[1])
 	}
 }
 

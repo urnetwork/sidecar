@@ -52,7 +52,7 @@ func (self *sweepFixture) sweepList(list *protocol.EvsPurgeList) (*SweepResult, 
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return self.sweep.SweepList(self.ctx, cluster, self.repoId, self.refId, self.repo(), 1, list,
+	return self.sweep.SweepList(self.ctx, cluster, &SweepTarget{RepoId: self.repoId, RefId: self.refId, Repo: self.repo(), PathEpoch: 1, List: list},
 		sidecar.WriteP2RankEvacuation, true, self.clock.Now())
 }
 
@@ -163,8 +163,8 @@ func TestSweepKeepsWhatAHoldKeeps(t *testing.T) {
 	}
 }
 
-// Observe mode, a build that has not passed the settle cases, a marked list and a path the reader cannot judge keep
-// their content; an unsure clock or a held head is a retry.
+// Observe mode, a build that has not passed the settle cases, a marked list with no record to recompute it from and a
+// path the reader cannot judge keep their content; an unsure clock or a held head is a retry.
 func TestSweepGatesKeepContent(t *testing.T) {
 	fixture := newSweepFixture(t)
 	path := checkTestPath("x")

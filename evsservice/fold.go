@@ -794,6 +794,19 @@ func (self *foldRun) entryState(read *EvsEntryRead, merged *foldMerge, carriedEp
 // rows, untagged rows tagged with the source's epoch (§11.7's epochs row), from the newest listed source the path's
 // change names that still holds it. nil when none does.
 func (self *foldRun) sourceEntry(path *foldPath) (*protocol.EvsIndexEntry, uint64, error) {
+	if len(path.tokenPath) == 0 {
+		// the root, from the newest listed source holding its table, named or not (DESIGN-DETAILS 9.2.8)
+		for _, source := range self.namedSourcePaths(path) {
+			read, err := ReadEntry(self.ctx, self.cluster, self.request.RepoId, self.request.RefId, source.Epoch, source.TokenPath, self.head.Head.GetFoldedThrough())
+			if err != nil {
+				return nil, 0, err
+			}
+			if !read.Absent() && read.Entry.GetNames() != nil {
+				return carryEvsIndexEntry(read.Entry, source.Epoch), source.Epoch, nil
+			}
+		}
+		return nil, 0, nil
+	}
 	encodedSources := path.sourcePaths()
 	for _, listed := range self.head.Head.GetPathEpoch().GetSources() {
 		for _, encoded := range encodedSources {

@@ -289,6 +289,9 @@ func decodeEvsReuse(item []byte) (*EvsReuse, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(tokenPath) == 0 {
+		return nil, fmt.Errorf("%w: a reuse of the root", ErrEvsPushInvalid)
+	}
 	return &EvsReuse{RefId: Id(item[0:16]), EntryVersion: binary.BigEndian.Uint64(item[16:24]), TokenPath: tokenPath}, nil
 }
 
@@ -493,6 +496,9 @@ func attachEvsEntryVersionsOf(push *protocol.EvsPush, changes []*EvsCheckedChang
 			if change.Change.GetBaseEntryVersion() == 0 {
 				return false, fmt.Errorf("%w: a removal of a path it names absent", ErrEvsPushInvalid)
 			}
+			if len(change.TokenPath) == 0 {
+				return false, fmt.Errorf("%w: a removal of the root", ErrEvsPushInvalid)
+			}
 			continue
 		}
 		if len(entryVersions) <= next {
@@ -508,6 +514,9 @@ func attachEvsEntryVersionsOf(push *protocol.EvsPush, changes []*EvsCheckedChang
 		if err != nil {
 			return false, err
 		}
+		if len(change.TokenPath) == 0 && !evsEntryVersionIsDirectory(entryBytes) {
+			return false, fmt.Errorf("%w: the root written as anything but a directory's delta", ErrEvsPushInvalid)
+		}
 		change.EntryVersion = entryBytes
 		if change.Change.GetBaseEntryVersion() == 0 || addsName {
 			createsPath = true
@@ -517,6 +526,12 @@ func attachEvsEntryVersionsOf(push *protocol.EvsPush, changes []*EvsCheckedChang
 		return false, fmt.Errorf("%w: more entry versions than writes", ErrEvsPushInvalid)
 	}
 	return createsPath, nil
+}
+
+// Whether entry version bytes, already held to their shape, are a directory's: what the root's change must be.
+func evsEntryVersionIsDirectory(entryBytes []byte) bool {
+	entry := &protocol.EvsEntryVersion{}
+	return proto.Unmarshal(entryBytes, entry) == nil && entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY)
 }
 
 // The sections past the change list, checked against the statement, into checked: sealed metadata, new objects and
@@ -636,8 +651,13 @@ func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *E
 				if sourcePath.GetEpoch() == 0 || push.GetPathEpoch() <= sourcePath.GetEpoch() {
 					return fmt.Errorf("%w: a source path of epoch %d", ErrEvsPushInvalid, sourcePath.GetEpoch())
 				}
-				if _, err := ParseEvsChangedTokenPath(sourcePath.GetTokenPath()); err != nil {
+				sourceTokenPath, err := ParseEvsChangedTokenPath(sourcePath.GetTokenPath())
+				if err != nil {
 					return err
+				}
+				if (len(sourceTokenPath) == 0) != (len(checked.Changes[i].TokenPath) == 0) {
+					// the root's source path is the root, in every epoch, and no other path's is
+					return fmt.Errorf("%w: a source path of the root for another path, or another for the root", ErrEvsPushInvalid)
 				}
 			}
 			checked.Changes[i].SourcePaths = sourcePaths
@@ -697,18 +717,25 @@ func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *E
 // A path move held to format 1: a new token path, sources of older epochs each with a token path, and a sealed
 // name.
 func checkEvsPathMove(move *protocol.EvsPathMove, pathEpoch uint64) error {
-	if _, err := ParseEvsChangedTokenPath(move.GetNewTokenPath()); err != nil {
+	newPath, err := ParseEvsChangedTokenPath(move.GetNewTokenPath())
+	if err != nil {
 		return err
 	}
-	if len(move.GetSealedName()) == 0 {
-		return fmt.Errorf("%w: a move with no sealed name", ErrEvsPushInvalid)
+	// the root's move has an empty path in each epoch and no sealed name, and every other move a name (DESIGN-DETAILS
+	// 9.2.8)
+	if (len(newPath) == 0) != (len(move.GetSealedName()) == 0) {
+		return fmt.Errorf("%w: a move with no sealed name, or the root's with one", ErrEvsPushInvalid)
 	}
 	for _, source := range move.GetSources() {
 		if source.GetEpoch() == 0 || pathEpoch <= source.GetEpoch() {
 			return fmt.Errorf("%w: a move's source of epoch %d", ErrEvsPushInvalid, source.GetEpoch())
 		}
-		if _, err := ParseEvsChangedTokenPath(source.GetTokenPath()); err != nil {
+		sourcePath, err := ParseEvsChangedTokenPath(source.GetTokenPath())
+		if err != nil {
 			return err
+		}
+		if (len(sourcePath) == 0) != (len(newPath) == 0) {
+			return fmt.Errorf("%w: a move between the root and another path", ErrEvsPushInvalid)
 		}
 	}
 	return nil

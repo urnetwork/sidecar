@@ -169,6 +169,8 @@ type EvacuatorDeps struct {
 	Format2 Format2Gate
 	Newest  PurgeNewestReader
 	Usage   StoredDeltaSink
+	// The sweep's LIST page and recompute bound. nil: the defaults.
+	SweepSettings *SweepSettings
 	// a test's: called at each barrier, an error stopping the run there as a kill would
 	atStep func(name string, key string) error
 }
@@ -304,7 +306,7 @@ func NewEvacuator(host *sidecar.ServiceHost, deps *EvacuatorDeps) (*Evacuator, e
 		Newest:      self.newest,
 		Holds:       holds,
 		EvsSettings: evsSettings,
-		ListLimit:   settings.ListLimit,
+		Settings:    deps.SweepSettings,
 		Log:         log,
 		atStep:      deps.atStep,
 	})

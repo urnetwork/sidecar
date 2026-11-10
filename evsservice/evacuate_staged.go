@@ -227,8 +227,9 @@ func (self *evacuateRun) reportStoredDelta(networkId sidecar.Id, networkErr erro
 }
 
 // A kept format-2 record's tail settled before its batch goes: its staged segments decided, then its list swept
-// (sweep.go) as P2 of evacuation's rank, funded by the push. A non-empty why leaves the minute waiting.
-func (self *evacuateRun) settleFormat2(minute *evacuateMinute, place *protocol.EvsPlace, record *sidecar.EvsBatchRecord, tail *sidecar.EvsBatchRecordTail) (string, error) {
+// (sweep.go) as P2 of evacuation's rank, funded by the push, a marked one recomputed from version, the ref version
+// its push committed at. A non-empty why leaves the minute waiting.
+func (self *evacuateRun) settleFormat2(minute *evacuateMinute, place *protocol.EvsPlace, record *sidecar.EvsBatchRecord, tail *sidecar.EvsBatchRecordTail, version uint64) (string, error) {
 	if why, err := self.decideStaged(minute, place, record, tail); why != "" {
 		return why, err
 	}
@@ -248,8 +249,10 @@ func (self *evacuateRun) settleFormat2(minute *evacuateMinute, place *protocol.E
 	if err != nil {
 		return "statement unread", err
 	}
-	swept, err := self.evacuator.sweep.SweepList(self.ctx, self.cluster, record.RepoId, record.RefId, read.Object,
-		statement.Push.GetPathEpoch(), list, self.rank, self.funded, batchMinuteTime(minute.minute))
+	swept, err := self.evacuator.sweep.SweepList(self.ctx, self.cluster, &SweepTarget{
+		RepoId: record.RepoId, RefId: record.RefId, Repo: read.Object, PathEpoch: statement.Push.GetPathEpoch(),
+		Record: record, CommitVersion: version, List: list,
+	}, self.rank, self.funded, batchMinuteTime(minute.minute))
 	self.result.Swept.add(swept)
 	switch {
 	case errors.Is(err, ErrSweepRetry):

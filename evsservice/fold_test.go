@@ -1204,3 +1204,35 @@ func TestFoldRecordsLeafPlacesTheReadFindsTheChangeBy(t *testing.T) {
 		t.Fatal("a carry dropped the table's place")
 	}
 }
+
+// Question evs1-m2-24-root-directory-names, option 1: the root's deltas fold into its table at idx/<repo>/<ref>/<p>.e,
+// beside the epoch's prefix, so no LIST of the epoch's entries lists it; a top-level creation adds its row, a
+// top-level removal drops it, and a reread of the root finds the newest table.
+func TestFoldWritesTheRootsTableBesideItsEpochsEntries(t *testing.T) {
+	world := newEvsWorld(t)
+	root := sidecar.EvsTokenPath{}
+	world.push(sortedChanges(
+		&worldChange{path: root, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("a"), worldToken("b")}},
+		&worldChange{path: worldPath("a"), version: 1}, &worldChange{path: worldPath("b"), version: 1},
+	)...)
+	world.push(sortedChanges(
+		&worldChange{path: root, base: 1, version: 2, directory: true, removedTokens: []sidecar.EvsToken{worldToken("b")}},
+		&worldChange{path: worldPath("b"), base: 1},
+	)...)
+	world.fold(world.head.Version())
+	rows := world.entryOf(root).Entry.GetNames().GetNames()
+	if len(rows) != 1 || !bytes.Equal(rows[0].GetToken(), worldToken("a").Bytes()) {
+		t.Fatalf("the root's rows %v", rows)
+	}
+	epochPrefix := IndexEpochPrefix(world.repoId, world.refId, 1)
+	if key := IndexEntryKey(world.repoId, world.refId, 1, root); key != epochPrefix[:len(epochPrefix)-1]+".e" {
+		t.Fatalf("the root's key %s", key)
+	}
+	objects, _, err := world.cluster.List(world.ctx, epochPrefix, "", 100)
+	if err != nil || len(objects) != 2 {
+		t.Fatalf("the epoch's LIST holds %d keys: %v", len(objects), err)
+	}
+	if newest := world.requireNewest(root); !newest.Exists || !newest.Directory {
+		t.Fatalf("the root's newest %+v", newest)
+	}
+}
