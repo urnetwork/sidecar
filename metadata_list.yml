@@ -211,7 +211,7 @@ sock-3:
   store: Redis {svc_<listener_client_id>}
   sees: Service-contract pairs, field the dialer client (an edge's platform client, or a sidecar dialing ur/), value the grant expiry; the authorization log position at which a listener's pairs were last removed, for 10 min
   why: CreateContract issues Service only for a pair Find recorded (§6.10.1, C9); the removal's floor refuses a pair written at an older position
-  ttl: the grant's expiry, at most 15 min past the listener's last accepted registration (ur/: 60 min, refreshed per Find); deleted on revocation or the last edge unlisten; the floor 10 min
+  ttl: "the grant's expiry, at most 15 min past the listener's last accepted registration (ur/: 60 min, refreshed per Find); deleted on revocation or the last edge unlisten; the floor 10 min"
   owner: §9.6
 sock-4:
   service: sockets
