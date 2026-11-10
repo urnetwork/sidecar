@@ -4812,7 +4812,7 @@ Vectors: `sidecar/testdata/index/conformance/` (`mail.json`, `file.json`, `entit
 
 Two things in §11.14 must come out byte for byte the same on every device, and neither is written down far enough to build.
 
-**Extraction.** An index entry is a document's row and its key set, and a key set is the trigrams of the document's normalized text. A device that holds a document's text rebuilds the entry and compares it with what the writer committed, and raises `index_mismatch` naming the signer when they differ (§11.14's coverage and reproduce rows; FI-22). So every byte the extractor hands the normalizer is a format byte. §11.14's extract row gives mail three lines, and `protocol/INDEX-FORMAT.md`'s Extractor 1 a dozen. Two implementations were written apart from them, as D-TEST-14 asks: `indexExtractMail` (SEARCH-M10-06) and SearchOracle's extractor (SEARCH-M10-07). Three things are wrong.
+**Extraction.** An index entry is a document's row and its key set, and a key set is the trigrams of the document's normalized text. A device that holds a document's text rebuilds the entry and compares it with what the writer committed, and raises `index_mismatch` naming the signer when they differ (§11.14's coverage and reproduce rows; FI-22). So every byte the extractor hands the normalizer is a format byte. §11.14's extract row gives mail three lines, and `protocol/INDEX-FORMAT.md`'s Extractor 1 a dozen. Two implementations were written apart from them, as D-TEST-14 asks: `indexExtractMail` (SEARCH-M10-06) and SearchOracle's extractor (SEARCH-M10-07). Four things are wrong or missing.
 
 *A. The two disagree.* On honest mail they agree. On the inputs below, each a vector in `mail.json`, they do not, and each difference changes the key set:
 
@@ -5591,7 +5591,7 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 
 **§22.8, FI-22.** "a function of its format version, normalization version, extractor version and inputs alone".
 
-**protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the three clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
+**protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and `search.proto`'s fields are sealed end to end.
 
