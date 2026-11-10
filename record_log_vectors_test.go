@@ -1,6 +1,8 @@
+//go:build !js
+
 // RECORD.md section 20's log vectors, testdata/record/log.json: leaves, roots, an inclusion path, a consistency path
 // and the checkpoint's text, each computed here and held to the file, and each proof verified and then refused with
-// one byte, the index or a size changed.
+// one byte, the index or a size changed. Not on the js leg, which reads no file.
 
 package sidecar_test
 

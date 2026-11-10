@@ -125,6 +125,8 @@ func NewRecordLogWitnessHttp(client *http.Client, settings *RecordLogWitnessHttp
 	return &recordLogWitnessHttp{client: &bound, settings: settings}
 }
 
+// POSTs to <prefix>/add-checkpoint, refusing a prefix that is not https, and reads at most AnswerByteCount of the
+// answer.
 func (self *recordLogWitnessHttp) AddCheckpoint(ctx context.Context, witnessUrl string, request []byte) (*RecordLogWitnessAnswer, error) {
 	if !recordLogWitnessUrlValid(witnessUrl) {
 		return nil, fmt.Errorf("%w: a witness url that is not https", ErrRecordLogSettings)

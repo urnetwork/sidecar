@@ -181,6 +181,7 @@ type recordLogSettings struct {
 	witnesses      []*recordLogWitnessSetting
 }
 
+// One witness a log_settings names, its verifier key parsed.
 type recordLogWitnessSetting struct {
 	name string
 	url  string
@@ -210,6 +211,7 @@ type recordLogBatch struct {
 	cosignedNameLines map[string][]byte
 }
 
+// How far the last batch that named a ref ran through it: the version, and C_v there.
 type recordLogFrontierRow struct {
 	version uint64
 	chain   []byte
@@ -253,6 +255,7 @@ type RecordLog struct {
 	stopWake  func() bool
 }
 
+// The log of record, reaching witnesses through witness, the HTTPS client when nil.
 func newRecordLog(record *SidecarRecord, witness RecordLogWitness) *RecordLog {
 	if witness == nil {
 		witness = NewRecordLogWitnessHttp(nil, nil)
@@ -820,17 +823,20 @@ type recordLogStateDocument struct {
 	LastCheckpointMillis int64                        `json:"last_checkpoint_millis,omitempty"`
 }
 
+// A batch signed and not yet filed whole.
 type recordLogPendingDocument struct {
 	Batch uint64 `json:"batch"`
 	// the checkpoint entry's body as signed and marshaled once: what every retry appends
 	Body []byte `json:"body"`
 }
 
+// One note's cosignature lines, waiting for the next entry.
 type recordLogCosignedDocument struct {
 	Batch uint64 `json:"batch"`
 	Lines []byte `json:"lines"`
 }
 
+// What this checkpointer knows of one witness: the size it last cosigned, and its misses since.
 type recordLogWitnessDocument struct {
 	Name      string `json:"name"`
 	Size      uint64 `json:"size"`
@@ -838,6 +844,7 @@ type recordLogWitnessDocument struct {
 	Refusal   string `json:"refusal,omitempty"`
 }
 
+// The state file of a log.
 func recordLogStateName(logId Id) string {
 	return recordLogStateDirectory + "/" + recordChainIdText(logId)
 }
@@ -1064,6 +1071,7 @@ func (self *RecordLog) Checkpoint(ctx context.Context, logId Id, force bool) (*R
 	return result, err
 }
 
+// Checkpoint's steps, with the view's checkpoint lock held.
 func (self *RecordLog) checkpoint(ctx context.Context, view *recordLogView, force bool) (*RecordLogCheckpointResult, error) {
 	logId := view.logId
 	writer := self.record.writer

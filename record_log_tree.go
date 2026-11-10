@@ -57,6 +57,7 @@ type recordLogTree struct {
 	nodes map[[2]uint64][sha256.Size]byte
 }
 
+// An empty tree.
 func newRecordLogTree() *recordLogTree {
 	return &recordLogTree{nodes: map[[2]uint64][sha256.Size]byte{}}
 }
@@ -66,6 +67,7 @@ func (self *recordLogTree) size() uint64 {
 	return uint64(len(self.leaves))
 }
 
+// Adds leaves at the end.
 func (self *recordLogTree) append(leaves ...[sha256.Size]byte) {
 	self.leaves = append(self.leaves, leaves...)
 }
