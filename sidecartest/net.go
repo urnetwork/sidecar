@@ -48,6 +48,11 @@ type NetSettings struct {
 	// What the oracle reads Postgres through (fault's StoreView): server's, which T3 (sidecart3) sets. Nil on
 	// T2, which has no Postgres.
 	Postgres PostgresReader
+	// The api a schedule's authorization log runs on (AdmissionTier): nil is a FakeApi on this Net's host (T2);
+	// server's T3 gives its real sequencer over the Net's first metadata cluster, with ConfigLogSettings saying what
+	// it does not do.
+	ConfigLogApi      AdmissionApiFactory
+	ConfigLogSettings *AdmissionSuiteSettings
 }
 
 // Read access to a tier's Postgres for an oracle: one query's rows, each its columns' values. Read-only by
