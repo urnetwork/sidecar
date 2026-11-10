@@ -832,6 +832,158 @@ func TestFoldWhileSourcesStandCarriesFreshAndRemovedEntries(t *testing.T) {
 	}
 }
 
+// The cut-over to epoch 2 with epoch 1 its source, as a PATH_EPOCH's commit leaves the head, everything folded.
+func (self *evsWorld) cutOverToEpochTwo() {
+	self.t.Helper()
+	self.fenceWrite(func(next *protocol.EvsHead) {
+		next.PathEpoch = &protocol.EvsPathEpoch{Current: 2, Sources: []*protocol.EvsEpochSource{{Epoch: 1, MapSha256: make([]byte, 32)}}}
+	})
+}
+
+// A path's encoded source path in epoch, as a change names it while sources stand.
+func (self *evsWorld) sourceOf(epoch uint64, path sidecar.EvsTokenPath) [][]byte {
+	encoded, err := proto.Marshal(&protocol.EvsSourcePath{Epoch: epoch, TokenPath: path.Components()})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return [][]byte{encoded}
+}
+
+// Whether epoch holds an entry for path.
+func (self *evsWorld) holds(epoch uint64, path sidecar.EvsTokenPath) bool {
+	self.t.Helper()
+	read, err := ReadEntry(self.ctx, self.cluster, self.repoId, self.refId, epoch, path, 0)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return !read.Absent()
+}
+
+// One fold of the world's whole range by folder.
+func (self *evsWorld) foldBy(folder *Folder) *EvsFoldResult {
+	self.t.Helper()
+	result, err := folder.Fold(self.ctx, &EvsFoldRequest{Cluster: self.foldCluster, RepoId: self.repoId, RefId: self.refId, Rank: sidecar.WriteP2RankFold})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return result
+}
+
+// DESIGN-DETAILS 9.2.6: while sources stand, once a path's current entry holds its changes the fold deletes the
+// source copies they name, a modification's after carrying from it and a removal's after its marker; a path whose
+// changes name no source leaves the source as it is; and a rerun of the range deletes nothing more.
+func TestFoldDeletesTheSourceCopiesItsChangesName(t *testing.T) {
+	world := newEvsWorld(t)
+	oldX, oldY, oldZ := worldPath("x"), worldPath("y"), worldPath("z")
+	world.push(&worldChange{path: oldX, version: 1}, &worldChange{path: oldY, version: 1}, &worldChange{path: oldZ, version: 1})
+	world.fold(1)
+	world.cutOverToEpochTwo()
+	newX, newY, newZ := worldPath("x2"), worldPath("y2"), worldPath("z2")
+	world.push(&worldChange{path: newX, base: 1, version: 2, sourcePaths: world.sourceOf(1, oldX)})
+	world.push(&worldChange{path: newY, base: 1, sourcePaths: world.sourceOf(1, oldY)})
+	world.push(&worldChange{path: newZ, base: 1, version: 2})
+	result := world.foldBy(world.folder)
+	if result.SourceDeleteCount != 2 || result.EntryWriteCount != 3 {
+		t.Fatalf("the fold: %+v", result)
+	}
+	if world.holds(1, oldX) || world.holds(1, oldY) || !world.holds(1, oldZ) {
+		t.Fatalf("epoch 1 holds x %t, y %t, z %t", world.holds(1, oldX), world.holds(1, oldY), world.holds(1, oldZ))
+	}
+	if versions := world.entryOf(newX).Entry.GetVersions(); len(versions) != 2 {
+		t.Fatalf("x's current entry holds %d versions, not its carried one and its own", len(versions))
+	}
+	if marker := world.entryOf(newY).Entry.GetMarker(); marker == nil {
+		t.Fatal("y's removal left no marker")
+	}
+	world.raiseHorizon()
+	if again := world.foldBy(world.otherFolder(world.host.Budget)); again.SourceDeleteCount != 0 || again.EntryWriteCount != 0 {
+		t.Fatalf("a fold of nothing new: %+v", again)
+	}
+}
+
+// DESIGN-DETAILS 9.6: a fold killed between its PUT of the current entry and its DELETE of the source copy leaves the
+// range unfolded, the copy standing beside the current entry; the rerun by another process finds the entry holding
+// the change, writes nothing, and still deletes, and only then does its commit raise folded_through.
+func TestFoldKilledBetweenItsPutAndItsSourceDelete(t *testing.T) {
+	world := newEvsWorld(t)
+	oldX := worldPath("x")
+	world.push(&worldChange{path: oldX, version: 1})
+	world.fold(1)
+	world.cutOverToEpochTwo()
+	newX := worldPath("x2")
+	world.push(&worldChange{path: newX, base: 1, version: 2, sourcePaths: world.sourceOf(1, oldX)})
+	fired, err := world.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+		Op: sidecartest.FaultOpDelete, KeyPrefix: IndexEntryKey(world.repoId, world.refId, 1, oldX), Result: sidecartest.CrashBeforeApply,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	died := make(chan struct{})
+	go func() {
+		defer close(died)
+		world.folder.Fold(world.ctx, &EvsFoldRequest{Cluster: world.foldCluster, RepoId: world.repoId, RefId: world.refId, Rank: sidecar.WriteP2RankFold})
+		t.Error("the killed fold returned")
+	}()
+	awaitClosed(t, died, "the fold's death")
+	awaitClosed(t, fired, "the crash")
+	if !world.holds(2, newX) || !world.holds(1, oldX) {
+		t.Fatalf("after the kill: current %t, source %t", world.holds(2, newX), world.holds(1, oldX))
+	}
+	if horizon := world.folder.Horizon(world.repoId, world.refId, world.head.Head); horizon != world.head.Head.GetFoldedThrough() {
+		t.Fatalf("a fold killed before its deletes left a horizon of %d", horizon)
+	}
+	rerun := world.otherFolder(world.host.Budget)
+	result := world.foldBy(rerun)
+	if result.EntryWriteCount != 0 || result.SourceDeleteCount != 1 || result.Through != 2 {
+		t.Fatalf("the rerun: %+v", result)
+	}
+	if world.holds(1, oldX) {
+		t.Fatal("the rerun left the source copy")
+	}
+	world.folder = rerun
+	world.raiseHorizon()
+	if folded := world.head.Head.GetFoldedThrough(); folded != 2 {
+		t.Fatalf("folded through %d after the rerun", folded)
+	}
+}
+
+// DESIGN-DETAILS 9.2.6's directory rule: a fold of a directory's removal, its marker standing, LISTs every key below
+// the directory in the source its removal names and deletes each, nested ones included, leaving the source's other
+// entries.
+func TestFoldRemovingADirectoryEmptiesItsNamedSourceBelowIt(t *testing.T) {
+	world := newEvsWorld(t)
+	directory, x, y, z, other := worldPath("d"), worldPath("d", "x"), worldPath("d", "y"), worldPath("d", "y", "z"), worldPath("o")
+	world.push(sortedChanges(
+		&worldChange{path: directory, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("x"), worldToken("y")}},
+		&worldChange{path: x, version: 1},
+		&worldChange{path: y, directory: true, version: 1, names: []sidecar.EvsToken{worldToken("z")}},
+		&worldChange{path: z, version: 1},
+		&worldChange{path: other, version: 1},
+	)...)
+	world.fold(1)
+	world.cutOverToEpochTwo()
+	newDirectory := worldPath("d2")
+	world.push(&worldChange{path: newDirectory, base: 1, directory: true, sourcePaths: world.sourceOf(1, directory)})
+	result := world.foldBy(world.folder)
+	if result.SourceDeleteCount != 4 || result.MarkerWriteCount != 1 {
+		t.Fatalf("the fold: %+v", result)
+	}
+	if marker := world.entryOf(newDirectory).Entry.GetMarker(); marker == nil {
+		t.Fatal("the directory's removal left no marker")
+	}
+	objects, _, err := world.cluster.List(world.ctx, IndexEpochPrefix(world.repoId, world.refId, 1), "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objects) != 1 || objects[0].Key != IndexEntryKey(world.repoId, world.refId, 1, other) {
+		keys := []string{}
+		for _, object := range objects {
+			keys = append(keys, object.Key)
+		}
+		t.Fatalf("epoch 1 keeps %q", keys)
+	}
+}
+
 // §11.7's when row: a commit leaving FoldUnfoldedTriggerCount unfolded has its process fold the oldest
 // FoldVersionCount, at most once per FoldTriggerInterval, and FoldIdleDelay after a ref's last commit the rest; the
 // horizon rises with that process's next commit, and the folds the ref owes are declared to the budget.

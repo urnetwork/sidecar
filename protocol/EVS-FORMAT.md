@@ -55,7 +55,7 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 9 | INDEX_EPOCH | 409 | 5d's index epoch |
 | 10 | MAP_PARTS | 409 | 5e: a map's parts missing or over 24 h old |
 | 11 | EPOCH_SOURCES_FULL | 412 | 5e |
-| 12 | PATH_EPOCH_DUE | 412 | 5e: a creation while blocked |
+| 12 | PATH_EPOCH_DUE | 412 | 5e: a creation while blocked, or in the push whose own pin crosses a due that would block it (DESIGN-DETAILS 9.2.6) |
 | 13 | DIRECTORY_FULL | 409 | 5g |
 | 14 | SEGMENT_GONE | 409 | 5h: a receipt past its age |
 | 15 | VERSIONING | 409 | 5c and 5h |
@@ -80,6 +80,7 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 72 | SEGMENT_STALE | 409 | the segment route, and a re-upload |
 | 73 | STATEMENT_MISSING | 409 | DELETE and restore without their projected statement |
 | 74 | GROUP_NOT_READY | 409 | the activate route (plan-EVS1-repo-activate-route) |
+| 75 | MAP_SOURCE | 409 | 5e, a PATH_EPOCH: its map's source unknown, under another chain or of an epoch no longer current, and a map part whose key holds other bytes (DESIGN-DETAILS 9.2.6) |
 | 128 | INVALID | 400 | a body, statement or signature that does not parse or verify, or a statement over 1 KiB |
 | 129 | NOT_FOUND | 404 | a repo, ref or object evs holds no record of |
 | 130 | PARTS_MISSING | 409 | a seal's part missing at its place |

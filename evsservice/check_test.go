@@ -913,6 +913,41 @@ func TestCheckPathEpoch(t *testing.T) {
 	}
 }
 
+// DESIGN-DETAILS 9.2.6's crossing creation: a creation in a push whose own commit would record a due that blocks
+// creation gets 412 PATH_EPOCH_DUE, recorded, naming it; a modification passes, as does a creation under a due that
+// does not block; a ref with no head is exempt, since its first push must create (question
+// evs1-m2-44-new-ref-crossing).
+func TestCheckPathEpochRefusesACrossingCreation(t *testing.T) {
+	fixture := newCheckFixture(t)
+	viewOf := func(create bool, due *pathEpochDue, headed bool) *PushView {
+		plan := fixture.plan()
+		plan.BaseVersion = 3
+		if create {
+			plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("new"), 0, 4)}
+		} else {
+			plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("old"), 1, 2)}
+		}
+		view := fixture.view(plan)
+		if headed {
+			view.Head = checkTestHead(view, 3)
+		}
+		view.CrossingDue = due
+		return view
+	}
+	blocking := &pathEpochDue{generation: 2, immediate: true, blocks: true}
+	refusal := CheckPathEpoch(viewOf(true, blocking, true))
+	requireCheckRefusal(t, "a crossing creation", refusal, EvsCheckReasonPathEpochDue)
+	if refusal != nil && (!refusal.Recorded() || len(refusal.Paths) != 1 || !refusal.Paths[0].Equal(checkTestPath("new"))) {
+		t.Errorf("a crossing creation's refusal %v names %v", refusal, refusal.Paths)
+	}
+	requireCheckPass(t, "a crossing modification", CheckPathEpoch(viewOf(false, blocking, true)))
+	requireCheckPass(t, "a creation crossing a batched due", CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2}, true)))
+	requireCheckPass(t, "a creation crossing an immediate due that does not block",
+		CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2, immediate: true}, true)))
+	requireCheckPass(t, "a creation crossing nothing", CheckPathEpoch(viewOf(true, nil, true)))
+	requireCheckPass(t, "a ref's first push crossing a due that blocks", CheckPathEpoch(viewOf(true, blocking, false)))
+}
+
 // 5f: TIP and the live lease in git mode; the 63-version window in file mode; C_b; and BASE_STALE carrying the head
 // on the caller's own deposit ref.
 func TestCheckBase(t *testing.T) {

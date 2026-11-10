@@ -109,6 +109,9 @@ type EvsEngineDeps struct {
 	// candidates (PushView.Format2Rules). nil refuses every such push 503, so nothing commits unchecked, and a
 	// format-1 repo is never raised.
 	Format2Rules func(view *PushView) *EvsCheckRefusal
+	// EVSB-M10-01's purge (purge.go), which EVS2-M10-06's step 7 hands each certain commit's candidates. nil queues
+	// nothing, which is safe: evacuation's sweep takes every list.
+	Purge PurgeSink
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
