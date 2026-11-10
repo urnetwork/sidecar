@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"expiresDefault\": \"2h\", \"evidenceDefault\": [\"device\"], \"requests\": [{\"src\": [\"autogroup:tagged\"], \"dst\": [\"evs:*\", \"mail:ops-*\"], \"allow\": [\"read\", \"send\"], \"approver\": [\"autogroup:dst-owner\"], \"evidence\": [\"harness\"]}]}")

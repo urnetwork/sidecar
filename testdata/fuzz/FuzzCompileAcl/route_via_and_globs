@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"tagOwners\": {\"tag:router\": [\"autogroup:admin\"]}, \"hosts\": {\"lan\": \"192.0.2.0/24\"}, \"grants\": [{\"src\": [\"autogroup:member\"], \"dst\": [\"ip:lan\", \"sock:app/db*\"], \"via\": [\"tag:router\"], \"allow\": [\"route\", \"dial\"], \"ip\": [\"tcp:22\"]}]}")

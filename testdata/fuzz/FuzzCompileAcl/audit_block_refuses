@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"tagOwners\": {\"tag:audit\": [\"autogroup:admin\"]}, \"audit\": {\"reader\": \"tag:audit\", \"repos\": [\"kind:vault\"]}}")
