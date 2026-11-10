@@ -263,8 +263,9 @@ func checkRemovalsOnly(view *PushView, detail string) *EvsCheckRefusal {
 }
 
 // §11.13's storage limit through the quota gate, which classifies the push as payload or maintenance (QuotaPush):
-// a refusal is recorded, 507 CLUSTER_FULL while the repo's cluster stands at its cohort limit, and a quota's rate
-// refuses nothing.
+// a refusal is recorded, and a quota's rate refuses nothing. The network's own QuotaRefusal comes first, as for an
+// upload; then, while the repo's cluster stands at its cohort limit, what the storage limit refuses answers 507
+// CLUSTER_FULL with Retry-After, recorded too (§19.9's cohorts row, §11.20).
 func checkStorageLimit(view *PushView) *EvsCheckRefusal {
 	if view.Quota == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no storage limit to classify against")
@@ -292,6 +293,11 @@ func checkStorageLimit(view *PushView) *EvsCheckRefusal {
 	}
 	quotaRefusal := view.Quota.CheckPush(quotaPush)
 	if quotaRefusal == nil {
+		if view.ClusterFull && QuotaRefusesAtLimit(quotaPush) {
+			refusal := newEvsCheckRefusal(EvsCheckReasonClusterFull, "the storage limit at the cluster's cohort limit")
+			refusal.RetryAfter = view.ClusterFullRetryAfter
+			return refusal
+		}
 		return nil
 	}
 	var refusal *EvsCheckRefusal
@@ -299,8 +305,6 @@ func checkStorageLimit(view *PushView) *EvsCheckRefusal {
 	case 0 < quotaRefusal.RetryAfterMs:
 		refusal = newEvsCheckRefusal(EvsCheckReasonQuotaRate, "a quota's rate")
 		refusal.RetryAfter = time.Duration(quotaRefusal.RetryAfterMs) * time.Millisecond
-	case view.ClusterFull:
-		refusal = newEvsCheckRefusal(EvsCheckReasonClusterFull, "the storage limit at the cluster's cohort limit")
 	default:
 		refusal = newEvsCheckRefusal(EvsCheckReasonQuota, "the storage limit")
 		if quotaRefusal.Upgrade {

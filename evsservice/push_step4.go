@@ -307,6 +307,9 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		if uploads.Quota != nil {
 			view.Quota = uploads.Quota
 		}
+		// §19.9's cohort limit, read once per round of steps 4 and 5 from the cluster's last allowance
+		view.ClusterFull = uploads.ClusterLimit.Full(self.cluster.ClusterId())
+		view.ClusterFullRetryAfter = uploads.ClusterLimit.RetryAfter()
 	}
 	flags, err := self.headFlags(head.Head)
 	if err != nil {

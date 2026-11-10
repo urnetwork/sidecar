@@ -6,7 +6,9 @@
 //  1. the repo's facts from the projection, and the body's length, known and within a segment's 8 MiB;
 //  2. the storage gate (quota_gate.go): a closure upload through ChargeClosure, any other through CheckUpload,
 //     §20.7's QuotaRefusal on a refusal;
-//  3. 507 CLUSTER_FULL, which EVSB-M3-02 adds;
+//  3. §19.9's cohort limit (cluster_limit.go): while the repo's metadata cluster stands at it, 507 CLUSTER_FULL with
+//     Retry-After for what the storage limit refuses, a re-seed upload passing and a closure upload held to the
+//     closure bounds as at the limit;
 //  4. the segment cluster's HDD share (hdd_admission.go): 503 with Retry-After past its line, an authorization or
 //     closure upload exempt;
 //  5. the 32 B public header: "URvs", format 1 with no flags, this repo and a generation; format 1 refuses a kind-5
@@ -57,6 +59,8 @@ type EvsUploadDeps struct {
 	// The segment cluster's HDD share. nil admits every upload, as a cluster with no measured capacity does.
 	Hdd   *HddAdmission
 	Usage *UsageBatcher
+	// §19.9's cohort limit on the repo's metadata cluster, for uploads and step 5c. nil is never full.
+	ClusterLimit *ClusterLimit
 	// nil takes the defaults.
 	Settings *UploadReceiptSettings
 }
@@ -154,7 +158,24 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 	}
 	networkId := connect.Id(facts.NetworkId)
 
-	if closure {
+	clusterFull := request.Cluster != nil && deps.ClusterLimit.Full(request.Cluster.ClusterId())
+	reseed := self.host.GatesOrClosed().Reseed()
+	switch {
+	case closure && clusterFull:
+		debitSum := sha256.Sum256(append(append([]byte(evsUploadClosureDebitDomain), segmentId[:]...), request.SidecarId[:]...))
+		refusal, oversize, err := deps.Quota.ChargeClosureAtClusterLimit(request.Ctx, networkId, connect.Id(request.SidecarId), byteCount, connect.Id(debitSum[:16]))
+		switch {
+		case err != nil:
+			request.Unavailable(nil)
+			return
+		case refusal != nil:
+			request.Refuse(evsQuotaRefusalReply(refusal))
+			return
+		case oversize:
+			request.Refuse(deps.ClusterLimit.UploadRefusal())
+			return
+		}
+	case closure:
 		debitSum := sha256.Sum256(append(append([]byte(evsUploadClosureDebitDomain), segmentId[:]...), request.SidecarId[:]...))
 		refusal, err := deps.Quota.ChargeClosure(request.Ctx, networkId, connect.Id(request.SidecarId), byteCount, connect.Id(debitSum[:16]))
 		if err != nil {
@@ -165,9 +186,16 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 			request.Refuse(evsQuotaRefusalReply(refusal))
 			return
 		}
-	} else if refusal := deps.Quota.CheckUpload(networkId, self.host.GatesOrClosed().Reseed()); refusal != nil {
-		request.Refuse(evsQuotaRefusalReply(refusal))
-		return
+	default:
+		if refusal := deps.Quota.CheckUpload(networkId, reseed); refusal != nil {
+			request.Refuse(evsQuotaRefusalReply(refusal))
+			return
+		}
+		if clusterFull && !reseed {
+			// what the storage limit refuses, on a cluster at its cohort limit, whatever the network's own state
+			request.Refuse(deps.ClusterLimit.UploadRefusal())
+			return
+		}
 	}
 
 	if deps.Hdd != nil {

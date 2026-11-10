@@ -574,6 +574,11 @@ func RunNightlyPass(ctx context.Context, host *sidecar.ServiceHost, deps *Nightl
 				}
 			}
 		}
+		// the first cluster's control plane, counted apart for §19.9's cohorts row (cluster_limit.go): a count that
+		// fails leaves its gauge at the last value and the start done
+		if _, err := PublishControlPlane(ctx, host, nil); err != nil {
+			pass.log.Errorf("[evs] alarm control_plane_count: %v", err)
+		}
 		return nil, nil
 	}
 	clusterId, shard, startAfter, ok := ParseEvsNightlyArgs(args)

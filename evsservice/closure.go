@@ -135,7 +135,8 @@ func (self *pushAttempt) countedRules() *pushOutcome {
 	return nil
 }
 
-// A CLOSURE's inline records at the storage limit or while spent: its eraser's own allowance.
+// A CLOSURE's inline records at the storage limit, while spent or at its cluster's cohort limit: its eraser's own
+// allowance.
 func (self *pushAttempt) chargeClosureRecords() *pushOutcome {
 	uploads := self.engine.deps.Uploads
 	if uploads == nil || uploads.Quota == nil {
@@ -151,7 +152,9 @@ func (self *pushAttempt) chargeClosureRecords() *pushOutcome {
 			}
 		}
 	}
-	refusal, err := uploads.Quota.ChargeClosureRecords(self.ctx, connect.Id(self.networkId), connect.Id(self.request.SidecarId), inline, connect.Id(self.pushId))
+	// a cluster at its cohort limit holds the records to the eraser's allowance as the storage limit does
+	clusterFull := self.reads.view != nil && self.reads.view.ClusterFull
+	refusal, err := uploads.Quota.ChargeClosureRecordsOn(self.ctx, connect.Id(self.networkId), connect.Id(self.request.SidecarId), inline, connect.Id(self.pushId), clusterFull)
 	switch {
 	case err != nil:
 		return self.unavailable()

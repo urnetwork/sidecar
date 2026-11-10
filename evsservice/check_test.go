@@ -712,9 +712,10 @@ func TestCheckStorageLimitAtTheLimit(t *testing.T) {
 	if refusal != nil && (refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_PAYMENT || *refusal.Quota != *limit) {
 		t.Errorf("at the limit: %s with %+v", refusal.Code, refusal.Quota)
 	}
+	// the network's own refusal comes first, as for an upload: a purchase lifts it (cluster_limit.go)
 	full := creation()
 	full.ClusterFull = true
-	requireCheckRefusal(t, "a creation at the limit and the cohort limit", CheckRefs(full), EvsCheckReasonClusterFull)
+	requireCheckRefusal(t, "a creation at the limit and the cohort limit", CheckRefs(full), EvsCheckReasonQuota)
 	requireCheckPass(t, "a removal at the limit", CheckRefs(removal()))
 
 	configPush := creation()
