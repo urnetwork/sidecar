@@ -62,16 +62,18 @@ func (self testConfigDevice) publicKey() []byte {
 // A rows source over what the test published, whose head check records what it was given and answers each head's
 // settings.
 type testConfigRowsSource struct {
-	rows      map[[sha256.Size]byte][]byte
-	settings  map[[sha256.Size]byte]*protocol.ServiceSettings
-	checks    []*ConfigHeadCheck
-	headError error
+	rows       map[[sha256.Size]byte][]byte
+	settings   map[[sha256.Size]byte]*protocol.ServiceSettings
+	versioning map[[sha256.Size]byte]*protocol.VersioningRules
+	checks     []*ConfigHeadCheck
+	headError  error
 }
 
 func newTestConfigRowsSource() *testConfigRowsSource {
 	return &testConfigRowsSource{
-		rows:     map[[sha256.Size]byte][]byte{},
-		settings: map[[sha256.Size]byte]*protocol.ServiceSettings{},
+		rows:       map[[sha256.Size]byte][]byte{},
+		settings:   map[[sha256.Size]byte]*protocol.ServiceSettings{},
+		versioning: map[[sha256.Size]byte]*protocol.VersioningRules{},
 	}
 }
 
@@ -90,7 +92,8 @@ func (self *testConfigRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHead
 	if self.headError != nil {
 		return nil, self.headError
 	}
-	return &ConfigHeadFacts{Settings: self.settings[[sha256.Size]byte(check.Header.GetConfigHeadSha256())]}, nil
+	headSha256 := [sha256.Size]byte(check.Header.GetConfigHeadSha256())
+	return &ConfigHeadFacts{Settings: self.settings[headSha256], VersioningRules: self.versioning[headSha256]}, nil
 }
 
 // A test network: its genesis, the fake sequencer's tip, the reader under test and every state it reached.

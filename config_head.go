@@ -388,6 +388,13 @@ func (self *ConfigHead) Names() (*protocol.ConfigNameTable, error) {
 // sidecar's identity key, the sidecar standing and of an Owner's or Admin's member, as ServiceSettings' signer row
 // asks (§7.9). A head is judged at the state its base lands on.
 func configHeadRecordSignedByAdmin(state *ConfigState, signed *bridge.Signed, signedType bridge.SignedType) error {
+	return configHeadRecordSignedByRole(state, signed, signedType, func(role bridge.MemberRole) bool {
+		return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN
+	})
+}
+
+// configHeadRecordSignedByAdmin with the roles a record's signer row allows: VersioningRules' adds a Network admin.
+func configHeadRecordSignedByRole(state *ConfigState, signed *bridge.Signed, signedType bridge.SignedType, allow func(role bridge.MemberRole) bool) error {
 	signerId, err := configBaseSigner(signed)
 	if err != nil {
 		return err
@@ -400,10 +407,8 @@ func configHeadRecordSignedByAdmin(state *ConfigState, signed *bridge.Signed, si
 	if !untagged {
 		return fmt.Errorf("its signer %s is a tagged sidecar", signerId)
 	}
-	switch state.Member(memberId).GetRole() {
-	case bridge.MemberRole_MEMBER_ROLE_OWNER, bridge.MemberRole_MEMBER_ROLE_ADMIN:
-	default:
-		return fmt.Errorf("its signer %s is no Owner's or Admin's", signerId)
+	if !allow(state.Member(memberId).GetRole()) {
+		return fmt.Errorf("its signer %s's member holds no role that signs it", signerId)
 	}
 	purpose, _ := ConfigStatementPurpose(signedType)
 	return bridge.VerifySigned(signed, purpose, signedType, bridge.SignedKeyAlgEd25519, state.IdentityKey(signerId))
@@ -476,6 +481,22 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 			return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
 		}
 		facts.Settings = settings
+	}
+	versioningRules, versioningSigned, err := head.VersioningRules()
+	if err != nil {
+		return nil, err
+	}
+	if versioningSigned != nil {
+		err := configHeadRecordSignedByRole(check.Previous, versioningSigned, bridge.SignedType_SIGNED_VERSIONING_RULES, func(role bridge.MemberRole) bool {
+			return role == bridge.MemberRole_MEMBER_ROLE_OWNER || role == bridge.MemberRole_MEMBER_ROLE_ADMIN || role == bridge.MemberRole_MEMBER_ROLE_NETWORK_ADMIN
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
+		}
+		if err := CheckVersioningRules(versioningRules); err != nil {
+			return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
+		}
+		facts.VersioningRules = versioningRules
 	}
 
 	if rows == nil {
@@ -560,5 +581,15 @@ func checkConfigAnchor(head *ConfigHead, check *ConfigHeadCheck) (*ConfigHeadFac
 		return nil, fmt.Errorf("%w: service_settings: %w", ErrConfigHeadMismatch, err)
 	}
 	facts.Settings = settings
+	versioningRules, _, err := head.VersioningRules()
+	if err != nil {
+		return nil, err
+	}
+	if versioningRules != nil {
+		if err := CheckVersioningRules(versioningRules); err != nil {
+			return nil, fmt.Errorf("%w: versioning_rules: %w", ErrConfigHeadMismatch, err)
+		}
+		facts.VersioningRules = versioningRules
+	}
 	return facts, nil
 }

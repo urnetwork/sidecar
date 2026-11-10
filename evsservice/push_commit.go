@@ -143,16 +143,7 @@ func (self *pushAttempt) step6() *pushOutcome {
 		return outcome
 	}
 	if self.place == nil {
-		record := &sidecar.EvsBatchRecord{
-			Type:            protocol.EvsBatchRecordType_EVS_BATCH_PUSH,
-			RepoId:          self.repoId,
-			RefId:           self.refId,
-			PushId:          self.pushId,
-			SignerSidecarId: sidecar.Id(self.statement.Push.GetSignerSidecarId()),
-			TimeMs:          self.statement.Push.GetTimeMs(),
-			Body:            sidecar.EvsPushRecordBody(self.statement.Bytes, self.payloadBytes),
-		}
-		place, err := self.engine.batches.Append(self.writeCtx, self.cluster.ClusterId(), record)
+		place, err := self.engine.batches.Append(self.writeCtx, self.cluster.ClusterId(), self.batchRecord())
 		if err != nil {
 			// nothing this attempt carried reached a head
 			return self.unavailable()
@@ -166,6 +157,30 @@ func (self *pushAttempt) step6() *pushOutcome {
 		self.slotsWritten = true
 	}
 	return nil
+}
+
+// The batch record this attempt appends at step 6: a push's statement and payload, or a seal's statement and parts
+// (push_seal.go); a part's is push_part.go's.
+func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
+	record := &sidecar.EvsBatchRecord{
+		Type:            protocol.EvsBatchRecordType_EVS_BATCH_PUSH,
+		RepoId:          self.repoId,
+		RefId:           self.refId,
+		PushId:          self.pushId,
+		SignerSidecarId: sidecar.Id(self.statement.Push.GetSignerSidecarId()),
+		TimeMs:          self.statement.Push.GetTimeMs(),
+		Body:            sidecar.EvsPushRecordBody(self.statement.Bytes, self.payloadBytes),
+	}
+	if self.seal != nil {
+		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_SEAL
+		record.Body = self.seal.body
+	}
+	return record
+}
+
+// The record's bytes as its batch holds them, for the cost and the usage count.
+func (self *pushAttempt) recordByteCount() int64 {
+	return int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.batchRecord().Body))
 }
 
 // The budget for the push's writes, once per attempt: AdmitP1 at its full price in the token network's queue.
@@ -215,7 +230,7 @@ func (self p0Grant) Close() {}
 // slots; deferred its fold share (~0.3 folded entries a changed path), its batch's delete and evacuation (a parcel
 // of its record and a pidx/ entry, as evacuation prices a batch) and its share of a log page.
 func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
-	recordByteCount := int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.statement.Bytes) + len(self.payloadBytes) + 8)
+	recordByteCount := self.recordByteCount()
 	headByteCount := int64(len(self.head.Bytes) + sidecar.EvsWindowEntryByteCount)
 	slotCount := 0
 	changeCount := 0
@@ -463,7 +478,7 @@ func (self *pushAttempt) newCommitted(head *EvsStoredHead) *EvsCommitted {
 		Head:             head,
 		Statement:        self.statement,
 		Payload:          self.payload,
-		RecordByteCount:  int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.statement.Bytes) + len(self.payloadBytes) + 8),
+		RecordByteCount:  self.recordByteCount(),
 		RequestByteCount: self.request.requestByteCount,
 	}
 }
