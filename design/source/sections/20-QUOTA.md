@@ -219,12 +219,12 @@ cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Pos
 | Limit | Checked at | At the limit | On downgrade |
 |---|---|---|---|
 | `storage` | evs's over-limit list (20.6) over the nightly stored count (below) | uploads and pushes adding payload refused (Team: above 2 TiB, metered above 200 GiB); maintenance pushes, an erasure's bounded CLOSURE push and its uploads, re-seeding, config and mailcfg pushes within §7.9's limits, reads, deletes and export work | read-only |
-| `tls_endpoints`: publish grants per (host, port) | grant activation; `ValidateListen` (§13.9) | refused | grants expire; standing names over quota suspended after 14 days |
+| `tls_endpoints`: publish grants per (host, port) | grant activation; `ValidateListen` (§13.9) | refused | grants expire; standing names over quota suspended after 14 days by `model.SetTlsSuspension` with reason `quota:downgrade` and no `abuse_case`, lifted on renewal: no §21 action, so not mailed, not counted toward `restricted` or escalation, and re-derived by a restore |
 | `dns_entries`: user RRsets | record CAS (§12.8) | refused | newest over quota withheld after 14 days |
 | custom domains, mail From included (§14.6) | `custom-host-add` (§12.8) | Team only | web hosts and mail From withheld after 14 days; mail hosts keep MX, TLSA and routing |
 | `config_admissions`, `acl_*` | the writer's validation, api's verifier (§7.9, §8.8); from 90% of `config_admissions`, admins' devices' cleanup list (§7.10's `cleanup` row) | delta or head refused | existing ones stay; new ones must fit |
 | `smtp_*` | smtpedge `{smq_}` script (§14.7) | QUOTA; mail stays queued | next preamble |
-| `sidecar_clients`: connected | enrollment and connect, as `concurrent_clients` (server/connect/resident.go:1170-1187) | refused; 4001 at connect | connected clients stay |
+| `sidecar_clients`: connected | enrollment and connect, as `concurrent_clients` (server/connect/resident.go:1170-1187), by one ZCOUNT from now to +inf of `{sq_<network_id>}connected_sidecar`, a sorted set of every marked client scored by its expiry ms, written and refreshed on the resident poll as `{np_}connected` is, its 48 h ttl refreshed at each write | refused; 4001 at connect | connected clients stay |
 | members, SSO (§7.5, §7.6) | §7.5's Team routes, by `NetworkTierOf` | Team only | frozen: sign-in, data kept; invites, roles, IdP, SCIM refused |
 
 **Stored bytes and maintenance at the limit (D-QUOTA-3).**
@@ -525,7 +525,9 @@ team_subscription(network_id, subscription_id, customer_id,              until i
   anchor_time, start_time, end_time NULL)
 Redis {sq_<network_id>}: rates, and each erasing sidecar's closure       48 h
   uploads a minute, closure bytes a UTC day, last closure ask and next
-  turn, which give k (20.7)
+  turn, which give k (20.7); connected_sidecar, every connected marked
+  client by its expiry ms (20.7); verified, network_verified as 0 or 1   60 s
+  (§21.7)
 ```
 
 - **Services and config:** the 20.4 keys in pro.yml; sidecar.yml's `escrow_draw_order` gate (§19.11, 20.9); Team price ids in `config/<env>/stripe.yml`; the three meters, created once before M6; a Stripe invoice-finalization rule (72 h, metered subscription-cycle invoices); `POST /network/team-checkout`'s 1 h session with `subscription_data.billing_cycle_anchor` at 00:00:00 UTC (20.9); taskworker jobs `RefreshTeamTransferBalances`, `RollupServiceUsage`, `ReportStripeMeters`, `ReconcileSidecarCounters`.

@@ -172,6 +172,10 @@ ceiling(s, r, g) = true unless s is ephemeral and r is an evs: resource; then g 
                    writes, or is an EvsShare to s; so every ephemeral sidecar that hardDeny spares, never a
                    parked one, reads the config (owner decision 6) and its team's directory, and none
                    writes a config head
+ports match      = for a rule with ip CIDRs or ports, each reader's check against the policy it compiles from
+                   the sealed source (AclLocalPolicy); rows carry only whether a rule limits ports
+                   (ports_limited, 8.8), so api and the gates check ids, and readers check a requested grant's
+                   prefix against its rule
 hardDeny         = unadmitted, revoked or parked sidecar (§7.9; parked by its compromise cascade or by a
                    leaked bundle's DelegationRevoke, unlike KF2's consent park) | unapproved client (§7) |
                    suspended subject | abuse halt (§21) | quota (§20)
@@ -195,10 +199,15 @@ Owner decisions 3, 5 and 6 settle X3 (§7.9, Q-ACL-1): config writers sign the p
 message AclRows {
   bool has_document = 1;                  // owner decisions 50, 105
   repeated AclAtom atoms = 2;             // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
-  repeated AclRule rules = 3;             // rule_id, src atoms, targets, actions, ports, expires; a
+  repeated AclRule rules = 3;             // rule_id, src atoms, targets, actions, expires; a
                                           // publish's audience, app_mode and link_spki_sha256 (8.4), the
                                           // pin in full, as a requested grant's GrantActivate shows it to
-                                          // api anyway (§16.6 AD4)
+                                          // api anyway (§16.6 AD4); ports (5) reserved: bool
+                                          // ports_limited = 11 says the rule has an ip port list, never
+                                          // which, for 8.10's legacy rule; a route rule's targets are its
+                                          // via subjects, or with no via the advertisers that
+                                          // BridgeRoute.route_rule_ids names (§17.8); CIDRs and ports stay
+                                          // in each reader's AclLocalPolicy (8.6)
   repeated AclRequestRule requests = 4;
   repeated AclRepo repos = 5;             // repo_id, kind, owner_member_id and the owner's consented
                                           // sidecar_ids (§8.5), whose consenting admission, AdmissionConfirm
@@ -229,7 +238,8 @@ message AclTarget {                       // exactly one kind set
   repeated bytes socket_tokens = 5;       // §9.4's token path
   bool socket_prefix = 6;                 // whole-segment prefix; finer globs project to their literal prefix
   string public_name = 7;                 // tls/ and smtp/ sockets, dns hosts
-  bytes cidr = 8; bool mail_send = 9;
+  reserved 8;                             // an ip target's CIDR, kept in AclLocalPolicy, never in rows
+  bool mail_send = 9;
 }
 ```
 
@@ -349,7 +359,7 @@ Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) an
 
 **Contract rule** (networks with a head row): non-companion a→b needs `reach(a,b)`, companion a→b `reach(b,a)`, replacing the origin-free normalization at `:917-927`; `reach` is an active dial or route grant, sockets expanding to listeners and `ip` grants to via subjects. The gate also refuses Network contracts from §18's hosted devices (I-10), and Public ones from declared no-egress clients (§20.8) or subjects in `exits` or `none` egress mode (`ContractError_NoPermission`). With a document, providers refuse LAN, loopback, link-local and overlay destinations to Network sources no rule allows (owner decision 50, §17). Witness exception: any two admitted sidecars of one network, neither revoked, parked nor suspended, get a Network contract of class `control` without a reach grant; it carries only Hello, Ping, HeadCheck and its proofs and, with a sidecar that serves remote search (Hello feature bit 0), §11.14's SEARCH and SEARCH_RESULT, which receivers enforce and the gate does not check, and providers deny IP on it (§6.4, D-PROTO-18, D-PROTO-21).
 
-**Receivers** see window-client ids [R:connect-ip]; C13 seals the source client's stored `acl_subject_client_id` (never a request field), `source_network_id`, the contract class and the subject's `WindowDelegation` into `StoredContract` (D-PROTO-19), and receivers admit a native flow only from a verified delegation (§17.9). A **legacy** client (no `acl_enforcing`, set at mint, §7.7) is reached only through an unrestricted grant, naming it or a selector containing it as dst with `dial` and no `ip` ports, `sock` or `via`; otherwise it is source-only (owner decision 106).
+**Receivers** see window-client ids [R:connect-ip]; C13 seals the source client's stored `acl_subject_client_id` (never a request field), `source_network_id`, the contract class and the subject's `WindowDelegation` into `StoredContract` (D-PROTO-19), and receivers admit a native flow only from a verified delegation (§17.9). A **legacy** client (no `acl_enforcing`, set at mint, §7.7) is reached only through an unrestricted grant, naming it or a selector containing it as dst with `dial` and no `ip` ports (its rule's `ports_limited` false), `sock` or `via`; otherwise it is source-only (owner decision 106).
 
 ### 8.11 Cross-network sharing and invites
 

@@ -54,7 +54,7 @@ Breakers act early: `<root>` cannot be replaced, and listings also block platfor
 
 | Control | Policy |
 |---|---|
-| Kill switch (§13.9) | host, then label (21.4), then revocation (`cessationOfOperation`, https://letsencrypt.org/docs/revoking/) and no renewal (§13.8); lifted only through the case, never by a restore (21.10) |
+| Kill switch (§13.9) | host, then label (21.4), then revocation (`cessationOfOperation`, https://letsencrypt.org/docs/revoking/) and no renewal (§13.8); an abuse kill is lifted only through its case, never by a restore (21.10); a quota downgrade's suspension of standing names (§20.7) is no §21 action |
 | Proactive check | published hosts and user record names, hourly, against Web Risk's locally matched Update API (https://docs.cloud.google.com/web-risk/docs/overview); Safe Browsing is non-commercial only (https://developers.google.com/safe-browsing) |
 | CT watch (owner decision 41) | the abuse worker sends 21.8 any name under `<root>` in CT that `ScreenName`'s current lists refuse; D-TLS-8 covers mis-issuance |
 
@@ -82,7 +82,7 @@ Breakers act early: `<root>` cannot be replaced, and listings also block platfor
 
 **Header-only parsing** (owner decision 78). Report and role mail get §14.8's parse and sealed copy or are dropped unread; an auto-reply points senders to the form, which takes URLs and header blocks.
 
-**Pipeline.** Each report becomes an `abuse_case`, joined to a network by host or address (§12's label map; a burner address names its `<net>`), headers (§14.8) or edge `connection_id` (24 h); third-party data is dropped after the join.
+**Pipeline.** Each report becomes an `abuse_case`, joined to a network by host or address (§12's label map; a burner address names its `<net>`), headers (§14.8) or edge `connection_id` (24 h); third-party data is dropped after the join, except a reported URL's path and query, which the case keeps until its first review ends, at most its review clock, so that reviewers open the page reported (§13.9; owner decision 207); a reporter's address and free text are never kept, and of free text only an appeal's own reason is stored.
 
 | Signal | Machine action | Review (v0: business hours, the action holding) |
 |---|---|---|
@@ -100,7 +100,7 @@ Breakers act early: `<root>` cannot be replaced, and listings also block platfor
 
 **Production** reaches only §2.8's rows while retained, never content, keys, internal names or paths (§2.5), notably:
 - accounts and identities (api-1, api-5), the projection's reach graph (api-7) and abuse cases (api-14);
-- connect-1's contract pairs (client ids, bytes, times): Network and Service contracts for up to 300 days, shares for 7 days after payout;
+- connect-1's contract pairs (client ids, bytes, times), for the horizon connect-1 states;
 - evs's push history (sidecar ids, times, path tokens, padded sizes; evs-4, evs-12, evs-14), kept for the repo's life by default, DROP statements included: who, when, which token paths and how many versions (evs-12); its drops', drop jobs' and dry runs' state for 30 days after each ends (evs-28) and its 7-day request log (evs-7); gkm's membership as sidecar ids;
 - edge records for 24 h (tls-3, with keyed visitor-address hashes; mx-2, with no sender address) and, from M9, send records for 30 days (smtp-3).
 
@@ -109,7 +109,10 @@ It never reaches relay frames or dials (connect-2), inbound sender addresses (mx
 **Preservation holds (owner decisions 133, 184).** A hold keeps one network's in-scope records existing at placement until its kind's deadline (§2703(f): 90 days, renewable once; §2258A: 1 year), and collects nothing new. TTL sweeps skip those rows; `copied_rows` copies what drops or is overwritten on its own: rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks; owner decision 136); and api mirrors each hold as `hold/<network_id>/<case_id>/_` on the first metadata cluster (§11.8; owner decision 145), so §11.13's GC and §10.6's reconciler skip in-scope objects on every cluster, and evacuation moves a held network's batched records, a shredding repo's included, into packs and parcels that nothing deletes while the hold stands (evs-19). A drop of a path's history (§11.7) whose targets a hold covers still commits: it reads, lists and bills as finished, as an unheld drop would, and its dropped versions are served to no one, while its deletions wait until every covering hold has ended (§11.13); no answer, listing or bill tells the network that a hold exists, so a sealed order stays sealed (owner decision 184). A site loss voids what a hold kept on the file cluster, which has no off-site copy (owner decision 94); §19.10's restore returns its rows and tells counsel.
 
 ```text
-abuse_legal_hold(network_id, kind, scope, case_id, expire_time, copied_rows)
+abuse_legal_hold(network_id, case_id, part, kind, scope, expire_time, copied_rows)
+part     the primary key is (network_id, case_id, part): part 0 is the hold itself, and parts 1 and up each
+         hold at most 16 MiB of compressed rows in copied_rows, so a busy network's tls-3 rows fit 21.16's
+         seven tables
 kind     preserve_2703f  90 d from placement, renewed once for 90 d by a renewed request (18 U.S.C. §2703(f)(2))
          report_2258a    1 year from the NCMEC report (18 U.S.C. §2258A(h)); not renewable here
 overlap  holds over one scope keep it until the latest expire_time; expiry resumes TTL sweeps, GC, held shreds
@@ -131,12 +134,16 @@ counsel  before holds ship (M5), confirms each kind's applicability and owner de
 
 ```text
 record   each action (kill, zone or host suspension, halt, §8 suspension, limit tightening) and each lift
-         is mailed, as it commits, to the abuse mailbox (config/<env>/abuse.yml), held off site, as
-         {action_id, case_id, category, network_id, kind, target, until, time}; kept as api-14's actions
+         is sealed to a vault-held HPKE key in api and mailed, as it commits, to the abuse mailbox
+         (config/<env>/abuse.yml), as {action_id, case_id, category, network_id, kind, target, until, time};
+         kept as api-14's actions; each hold placed goes the same way to the legal-request mailbox, kept
+         until its expire_time; both mailboxes sit at one provider outside URnetwork's Postgres and clusters,
+         which the owner names, so it and SES see only each record's sender, time and size (owner
+         decision 208)
 restore  §19.10's abuse step, after the dumps load and before the token exchange reopens, the edges read
          the restored rows or §12.6's restore step builds the zone: the abuse role (§19.8's rota, at any
          hour) re-applies, in mail order and idempotently by action_id, every unexpired action and every
-         lift mailed after the dump, re-creating its case under its id
+         lift mailed after the dump, each opened with the vault key, re-creating its case under its id
 check    §12.6's step flags restored RRsets of networks with open cases; the abuse role clears each flag
 gap      an action committed in the seconds before the primary's loss, its mail not yet sent, is lost
          with it; tlsedge still keeps a kill that Redis holds (§13.9), and feed and Web Risk hits recur
@@ -199,8 +206,8 @@ A semiannual report counts requests by instrument and country, accounts affected
 - **Subprotocol messages:** none; state changes ride §6's `core`, `sock` and `mail` hints.
 - **API routes** (api, §19.4): `POST /abuse/report` (Public, rate-limited); `GET /abuse/cases` (Network, read roles); `POST /abuse/appeal` (Owner or Admin; never a client token); `GET /abuse/status` (Client, own state; sidecar-classified, on §7.4's `strict_exp` allowlist); `POST /abuse/action` (staff, off the public API; it refuses a `network_sidecar_limit` row that sets `evs_closure_bytes_floor` or `evs_closure_uploads_per_s`, both fixed, or takes `evs_closure_bytes_per_day` below the floor: §20.5, §20.7).
 - **Tables** (api; migrations ≥926 in §19.7's MG5): `abuse_case`, `abuse_action`, `abuse_appeal`, `network_abuse_state`, `abuse_legal_hold` (with `kind`, 21.9), `abuse_access_log`, `legal_request`.
-- **Services and config:** the taskworker abuse worker (feeds, Web Risk, the CT watch, breakers, 21.7's closure-growth cases, TTL sweeps, hold copies); pro.yml `sidecar_abuse:` thresholds; `config/<env>/abuse.yml` for feeds, Web Risk, reviewer and pager routing, the abuse mailbox and counsel's out-of-hours contact; a Web Risk key in vault.
-- **Assumptions about other sections:** §14 and §15 run `rpt.bringyour.com` from M5; §19.8's out-of-hours rota carries 21.8's notices from M5, paging both members at once, and review runs 24/7 from M6; §19.10 restores holds' rows, re-places later holds, tells counsel and runs 21.10's abuse step in 21.10's order, and §12.6's restore step flags restored RRsets of networks with open cases; §2.8's header and api-14 publish `copied_rows` (tls-3's, smtp-3's and mx-2's rows, evs-8's lease fields, gkm-10's acks), and mx-2's, evs-8's and gkm-10's ttls except a hold's copy; api-14 lists the abuse mailbox's copies (21.10); §11.13 moves a held shredding repo's batched records, and §11.12 resumes its shred at phase 5 when the hold ends; §11.13's drop job rereads `hold/` before each batch of deletions and defers a covered drop's deletions until every covering hold ends, the drop reading, listing and billing as an unheld one (owner decision 184); §16.11's daemons and readers apply the directory's request limits as `GET /sidecar/limits` gives them, §21's rows included (§20.4); §23.7 tracks counsel's confirmation of owner decision 133's condition and of each hold kind's applicability (`preserve_2703f`, `report_2258a`); §22 tests sweeps, access logs, holds beside shredding, a held --now shred's batched records packed, kept until the hold ends, then deleted (FS-6), hold kinds' deadlines (FS-48), clocks across a weekend (FS-49), held drops (FS-92) and, at M5, FS-39's report-intake cases and S7's SNI-less `abuse@<root>`.
+- **Services and config:** the taskworker abuse worker (feeds, Web Risk, the CT watch, breakers, 21.7's closure-growth cases, TTL sweeps, hold copies); pro.yml `sidecar_abuse:` thresholds; `config/<env>/abuse.yml` for feeds, Web Risk, reviewer and pager routing, the abuse and legal-request mailboxes and counsel's out-of-hours contact; a Web Risk key and the mailboxes' HPKE key in vault.
+- **Assumptions about other sections:** §14 and §15 run `rpt.bringyour.com` from M5; §19.8's out-of-hours rota carries 21.8's notices from M5, paging both members at once, and review runs 24/7 from M6; §19.10 restores holds' rows, re-places later holds, tells counsel and runs 21.10's abuse step in 21.10's order, and §12.6's restore step flags restored RRsets of networks with open cases; §2.8's header and api-14 publish `copied_rows` (tls-3's, smtp-3's and mx-2's rows, evs-8's lease fields, gkm-10's acks), and mx-2's, evs-8's and gkm-10's ttls except a hold's copy; api-14 lists both mailboxes' sealed copies (21.10); §11.13 moves a held shredding repo's batched records, and §11.12 resumes its shred at phase 5 when the hold ends; §11.13's drop job rereads `hold/` before each batch of deletions and defers a covered drop's deletions until every covering hold ends, the drop reading, listing and billing as an unheld one (owner decision 184); §16.11's daemons and readers apply the directory's request limits as `GET /sidecar/limits` gives them, §21's rows included (§20.4); §23.7 tracks counsel's confirmation of owner decision 133's condition and of each hold kind's applicability (`preserve_2703f`, `report_2258a`); §22 tests sweeps, access logs, holds beside shredding, a held --now shred's batched records packed, kept until the hold ends, then deleted (FS-6), hold kinds' deadlines (FS-48), clocks across a weekend (FS-49), held drops (FS-92) and, at M5, FS-39's report-intake cases and S7's SNI-less `abuse@<root>`.
 
 ### 21.17 Risks
 
