@@ -446,6 +446,10 @@ func TestConfigAuthorityAnswersThePageWorkersAtTheNewestState(t *testing.T) {
 	if len(authority.PageWorkers(net.ownerMemberId)) != 0 || len(authority.CleanupList(1)) != 0 {
 		t.Error("an authority that read nothing answers page Workers")
 	}
+	// the client starts its log at base 1 first: a start applies its first page whole, with no entry callbacks, so
+	// only the entries after it reach the callback below
+	world.publish()
+	world.caughtUp(client)
 
 	entryLock := sync.Mutex{}
 	entries := map[uint64]*SidecarAuthorityEntry{}
