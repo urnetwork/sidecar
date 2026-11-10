@@ -54,7 +54,7 @@ func keyNumber(number uint64) string {
 
 // repo/<repo>: kind, owner, state and deletion id, format, sealed name (§11.12).
 func RepoKey(repoId sidecar.Id) string {
-	return repoKeyPrefix + sidecar.EvsKeyId(repoId)
+	return sidecar.EvsRepoObjectKey(repoId)
 }
 
 // head/<repo>/<ref>: the commit point.

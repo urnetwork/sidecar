@@ -146,7 +146,7 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	}
 	waitGroup.Wait()
 	switch {
-	case errors.Is(repoErr, ErrEvsRepoNotFound):
+	case errors.Is(repoErr, sidecar.ErrEvsRepoNotFound):
 		// a placed repo whose repo/ was never written: nothing to push to
 		return refusedOutcome(&protocol.EvsRefusalReply{PushId: self.pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND}), false
 	case repoErr != nil:
@@ -469,7 +469,7 @@ func (self *pushAttempt) fenced(head *protocol.EvsHead) bool {
 // 503 for a read or write that failed before anything could settle the push: unknown once a step 7 may have been
 // issued. A context that ended stops the attempt the same way.
 func (self *pushAttempt) unavailableOn(err error) *pushOutcome {
-	if errors.Is(err, ErrEvsHeadInvalid) || errors.Is(err, ErrEvsStatementMismatch) || errors.Is(err, ErrEvsRepoInvalid) {
+	if errors.Is(err, ErrEvsHeadInvalid) || errors.Is(err, ErrEvsStatementMismatch) || errors.Is(err, sidecar.ErrEvsRepoInvalid) {
 		self.engine.log.Errorf("[evs] alarm push_read: repo %s ref %s: %v", sidecar.EvsKeyId(self.repoId), sidecar.EvsKeyId(self.refId), err)
 		self.engine.metrics.alarms.Add(1, "push_read")
 	}
