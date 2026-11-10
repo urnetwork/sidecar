@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A base's config head descent at api (plan-TEAM-api-config-head-reach). api never reads the config repo, so a config
 // writer's base carries config_pushes, the Signed EvsPush of each config version the base adds, oldest first, and api
 // walks the config repo's ref chain (§11.8) from the previous base's head to this one's:

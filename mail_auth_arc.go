@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's arc row (RFC 8617; R-MAIL-16, D-MAIL-14, FS-121; MAIL-M7-09): MailArcVerifier, written here since mox has
 // no ARC (plan-MAIL-mox-subset#1), on mail_auth_canon.go's canonicalization.

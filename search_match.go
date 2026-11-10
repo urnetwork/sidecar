@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Matching (§11.14's plan and chains rows; R-EVS-14; D-EVS-44; FS-107; SEARCH-M10-23): one partition's candidates
 // for a query. Per shard the query's trigrams are looked up rarest first, a term with an absent trigram matching
 // nothing there and a group none of whose terms is present ending that shard; only the query's lists are decoded, read

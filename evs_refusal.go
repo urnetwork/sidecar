@@ -77,6 +77,7 @@ var evsRefusalStatuses = map[protocol.EvsRefusalCode]int{
 	protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_STALE:      409,
 	protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING:  409,
 	protocol.EvsRefusalCode_EVS_REFUSAL_GROUP_NOT_READY:    409,
+	protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE:         409,
 	protocol.EvsRefusalCode_EVS_REFUSAL_INVALID:            400,
 	protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND:          404,
 	protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING:      409,
@@ -120,6 +121,13 @@ func EvsRefusalCodeOf(err error) protocol.EvsRefusalCode {
 		return protocol.EvsRefusalCode_EVS_REFUSAL_DROP_STATE
 	}
 	return protocol.EvsRefusalCode_EVS_REFUSAL_INVALID
+}
+
+// Whether err is evs's 409 MAP_SOURCE (DESIGN-DETAILS 9.2.6): final, a PATH_EPOCH whose map's source evs does not
+// hold, holds under another chain or of an epoch no longer current, or a map part whose key holds other bytes. The
+// mapper builds its map again on the head as it now stands; MAP_PARTS, recorded, asks only for the parts again.
+func IsEvsMapSource(err error) bool {
+	return IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE)
 }
 
 // One refusal record of the head.

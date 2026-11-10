@@ -211,8 +211,9 @@ func (self *evacuateRun) repoOf(repoId sidecar.Id, minute uint32) (*evacuateRepo
 	return repo, nil
 }
 
-// Settles one record of a batch: see the file header. A record it cannot settle leaves its minute waiting.
-func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.EvsPlace, record *sidecar.EvsBatchRecord, recordBytes []byte) {
+// Settles one record of a batch: see the file header. A record it cannot settle leaves its minute waiting. tail is a
+// format-2 record's, nil for format 1's form.
+func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.EvsPlace, record *sidecar.EvsBatchRecord, tail *sidecar.EvsBatchRecordTail, recordBytes []byte) {
 	wait := func(why string, err error) {
 		self.result.WaitingCount += 1
 		minute.wait(why)
@@ -276,6 +277,15 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 			self.alarm("evacuate_kept_record", placeKey(place), "a committed record of batch minute %d on cluster %s lists objects that do not parse: it stays", minute.minute, self.clusterId)
 			wait("record objects", nil)
 			return
+		}
+		if !tail.Empty() {
+			// format 2: each staged segment written or dropped, the record's own list swept, both before its batch
+			// goes, and the record kept without its staged bytes
+			if why, err := self.settleFormat2(minute, place, record, tail); why != "" {
+				wait(why, err)
+				return
+			}
+			recordBytes = sidecar.EvsBatchRecordBytesWithoutStaged(record, tail)
 		}
 		spoolOffset, err := self.spool.append(recordBytes)
 		if err != nil {
@@ -486,7 +496,9 @@ func evacuateRecordObjects(record *sidecar.EvsBatchRecord) (segmentIds [][32]byt
 		}
 		for _, object := range objects {
 			switch object.Kind {
-			case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT:
+			case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT, protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
+				// a staged segment the record introduced is listed as introduced too, written to seg/ or not, so
+				// orphan GC never takes one evacuation wrote (DESIGN-DETAILS 2.2.4)
 				segmentIds = append(segmentIds, [32]byte(object.Id))
 			case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT:
 				slotIds = append(slotIds, sidecar.Id(object.Id))

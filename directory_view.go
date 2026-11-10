@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // What List and Get answer (RECORD-M6-14): the folded current items, filtered locally with no index and no history
 // (§16.11's tools row: directory_list(kind, member, repo, active_only, query) and ur directory ls filter the folded
 // current state). Nothing of a filter or a query reaches evs (I-19): a view asks the loop for a sync, coalesced over

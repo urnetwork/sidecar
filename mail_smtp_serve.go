@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The one place the root reaches go-smtp's fork (D-MAIL-3, §15.5). A receiver or the platform listener
 // has finished TLS before its session starts, and RFC 3207 §4.2 has the server say nothing first.

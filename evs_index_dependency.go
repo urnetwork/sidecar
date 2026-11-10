@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The dependency row (§11.14's commit path; D-EVS-46): whether a writer's entry for a document version is a diff on a
 // base, read literally, as a pure function of the bucket at the push's base. A diff for version v names its base by
 // version and is written only where the index at the push's base keeps that base while the diff is current, in the

@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // repo/<repo> (§11.8's repo/ row, §11.12, D-EVS-11, D-EVS-19, evs-1): one repo's server-held record on its metadata
 // cluster: its kind and owner, fixed at creation from the projection, its network (plan-EVSB-repo-network), its object

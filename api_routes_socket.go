@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §9's routes at the sockets service that this sidecar calls with its own client token (§9.15; Client class, on §7.4's
 // strict_exp allowlist, plan-SOCK-client-auth): POST /socket/registrations, which the registrar alone calls

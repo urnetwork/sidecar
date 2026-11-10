@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The bodies of §13.15's routes, and the kill entry sockets and tlsedge both read (§13.9). Every leg links this file,
 // so it names no connect type (§4.4). A body holds an attestation as its Signed's encoded bytes, which keeps this file
 // off protocol too and means nothing re-marshals what was signed (§22.6).

@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's evidence row (R-MAIL-16, D-MAIL-14, I-11, FS-121; MAIL-M7-09): MailEvidenceBuilder assembles the
 // MailAuthEvidence a receiver seals in each deposit's trailer, bound to the message's hash, its receive time and this

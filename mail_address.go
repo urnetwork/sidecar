@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.8's address grammar (R-MAIL-3, R-MAIL-7, R-MAIL-9, D-MAIL-7): the recipients a network's receivers take
 // mail for, parsed from an RCPT address under a root, and the local parts `ur id create`, an agent's registration
 // and §16's mail_alias_create may claim. Pure and on every leg, the sidecar_http Worker included, since it links no

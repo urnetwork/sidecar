@@ -153,6 +153,8 @@ func TestRulesPassAReleaseTree(t *testing.T) {
 func TestRulesFireOnAReleaseTree(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("device/device.go", "package device\n\nimport _ \"@module@\"\n")
+	fixture.write("mail_planted.go", "package sidecar\n\nimport _ \"@module@/mcp\"\n")
+	fixture.write("mcp/mcp.go", "package mcp\n")
 	fixture.write("protocol/bridge/planted.go", "package bridge\n\nimport _ \"@module@/protocol\"\n")
 	fixture.write("cli/planted.go", "package main\n\nimport _ \"@module@/evsservice\"\n")
 	fixture.write("evsservice/engine.go", "package evsservice\n")
@@ -161,7 +163,9 @@ func TestRulesFireOnAReleaseTree(t *testing.T) {
 	fixture.keepLegs(iosExtensionLegName)
 	fixture.toRelease()
 	repository := fixture.openRelease()
-	wantFindings(t, repository.iosExtensionFindings(t), iosExtensionLegName+" links @module@/v2026", iosExtensionLegName+" links @module@/v2026/protocol")
+	wantFindings(t, repository.iosExtensionFindings(t),
+		iosExtensionLegName+" compiles mail_planted.go, which is not on check/testdata/ios_extension_leg.txt",
+		iosExtensionLegName+" links @module@/v2026/mcp")
 	wantFindings(t, repository.deviceImportFindings(t), "v2026/device/device.go:3: device imports @module@/v2026")
 	wantFindings(t, repository.protocolImportFindings(t), "v2026/protocol/bridge/planted.go:3: protocol/bridge imports @module@/v2026/protocol")
 	wantFindings(t, repository.clientEngineImportFindings(t), "the client package cli imports @module@/v2026/evsservice")

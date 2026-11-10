@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The store seam (§11.14's head and commit rows; SEARCH-M10-08): what the index asks of a ref's committed state, and
 // nothing more. No single index head exists: the listing of an index root at a ref version is the index's state, each
 // file's plaintext SHA-256 in its entry version, so the index reads a head, lists, reads files and commits pushes of

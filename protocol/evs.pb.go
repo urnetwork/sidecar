@@ -936,6 +936,7 @@ const (
 	EvsRefusalCode_EVS_REFUSAL_SEGMENT_STALE      EvsRefusalCode = 72
 	EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING  EvsRefusalCode = 73
 	EvsRefusalCode_EVS_REFUSAL_GROUP_NOT_READY    EvsRefusalCode = 74
+	EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE         EvsRefusalCode = 75  // a PATH_EPOCH whose map's source is unknown, under another chain or of an
 	EvsRefusalCode_EVS_REFUSAL_INVALID            EvsRefusalCode = 128 // a body, statement or signature that does not parse or verify
 	EvsRefusalCode_EVS_REFUSAL_NOT_FOUND          EvsRefusalCode = 129
 	EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING      EvsRefusalCode = 130
@@ -987,6 +988,7 @@ var (
 		72:  "EVS_REFUSAL_SEGMENT_STALE",
 		73:  "EVS_REFUSAL_STATEMENT_MISSING",
 		74:  "EVS_REFUSAL_GROUP_NOT_READY",
+		75:  "EVS_REFUSAL_MAP_SOURCE",
 		128: "EVS_REFUSAL_INVALID",
 		129: "EVS_REFUSAL_NOT_FOUND",
 		130: "EVS_REFUSAL_PARTS_MISSING",
@@ -1035,6 +1037,7 @@ var (
 		"EVS_REFUSAL_SEGMENT_STALE":      72,
 		"EVS_REFUSAL_STATEMENT_MISSING":  73,
 		"EVS_REFUSAL_GROUP_NOT_READY":    74,
+		"EVS_REFUSAL_MAP_SOURCE":         75,
 		"EVS_REFUSAL_INVALID":            128,
 		"EVS_REFUSAL_NOT_FOUND":          129,
 		"EVS_REFUSAL_PARTS_MISSING":      130,
@@ -4172,13 +4175,15 @@ func (x *EvsSlotKey) GetWrapped() []byte {
 type EvsIndexEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// (11.7); its carried, fresh or removed state rides in object metadata
-	Versions      []*EvsIndexVersion `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`                              // a file's, at most four, newest first
-	Names         *EvsNameTable      `protobuf:"bytes,2,opt,name=names,proto3" json:"names,omitempty"`                                    // a directory's folded table
-	NamesThrough  uint64             `protobuf:"varint,3,opt,name=names_through,json=namesThrough,proto3" json:"names_through,omitempty"` // the ref version of the newest delta folded into names
-	Marker        *EvsRemovalMarker  `protobuf:"bytes,4,opt,name=marker,proto3" json:"marker,omitempty"`                                  // a removed path's
-	DropMark      *EvsDropMark       `protobuf:"bytes,5,opt,name=drop_mark,json=dropMark,proto3" json:"drop_mark,omitempty"`              // a dropped path's (format 2), which format-1 writers keep
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Versions       []*EvsIndexVersion `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`                                      // a file's, at most four, newest first
+	Names          *EvsNameTable      `protobuf:"bytes,2,opt,name=names,proto3" json:"names,omitempty"`                                            // a directory's folded table
+	NamesThrough   uint64             `protobuf:"varint,3,opt,name=names_through,json=namesThrough,proto3" json:"names_through,omitempty"`         // the ref version of the newest delta folded into names
+	Marker         *EvsRemovalMarker  `protobuf:"bytes,4,opt,name=marker,proto3" json:"marker,omitempty"`                                          // a removed path's
+	DropMark       *EvsDropMark       `protobuf:"bytes,5,opt,name=drop_mark,json=dropMark,proto3" json:"drop_mark,omitempty"`                      // a dropped path's (format 2), which format-1 writers keep
+	NamesLeafPart  uint32             `protobuf:"varint,7,opt,name=names_leaf_part,json=namesLeafPart,proto3" json:"names_leaf_part,omitempty"`    // where the delta at names_through sits in its statement's list, as
+	NamesLeafIndex uint32             `protobuf:"varint,8,opt,name=names_leaf_index,json=namesLeafIndex,proto3" json:"names_leaf_index,omitempty"` // EvsIndexVersion's leaf_part and leaf_index (DESIGN-DETAILS 9.2.2); 6 is
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EvsIndexEntry) Reset() {
@@ -4246,12 +4251,29 @@ func (x *EvsIndexEntry) GetDropMark() *EvsDropMark {
 	return nil
 }
 
+func (x *EvsIndexEntry) GetNamesLeafPart() uint32 {
+	if x != nil {
+		return x.NamesLeafPart
+	}
+	return 0
+}
+
+func (x *EvsIndexEntry) GetNamesLeafIndex() uint32 {
+	if x != nil {
+		return x.NamesLeafIndex
+	}
+	return 0
+}
+
 type EvsIndexVersion struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PushId        []byte                 `protobuf:"bytes,1,opt,name=push_id,json=pushId,proto3" json:"push_id,omitempty"`
 	CommitVersion uint64                 `protobuf:"varint,2,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"` // u: the ref version its push committed at
 	EntryVersion  []byte                 `protobuf:"bytes,3,opt,name=entry_version,json=entryVersion,proto3" json:"entry_version,omitempty"`     // the EvsEntryVersion bytes its change's entry_sha256 names, unless elided
 	Elided        bool                   `protobuf:"varint,4,opt,name=elided,proto3" json:"elided,omitempty"`                                    // its inline bodies are cut, as for all but the newest; evs restores them
+	// from its push record before serving it
+	LeafPart      uint32 `protobuf:"varint,5,opt,name=leaf_part,json=leafPart,proto3" json:"leaf_part,omitempty"`    // where its change sits in its statement's list: the part, 0 for a one-part
+	LeafIndex     uint32 `protobuf:"varint,6,opt,name=leaf_index,json=leafIndex,proto3" json:"leaf_index,omitempty"` // push, and the change's index in that part's list plus 1; 0 when the list
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4314,6 +4336,20 @@ func (x *EvsIndexVersion) GetElided() bool {
 	return false
 }
 
+func (x *EvsIndexVersion) GetLeafPart() uint32 {
+	if x != nil {
+		return x.LeafPart
+	}
+	return 0
+}
+
+func (x *EvsIndexVersion) GetLeafIndex() uint32 {
+	if x != nil {
+		return x.LeafIndex
+	}
+	return 0
+}
+
 type EvsRemovalMarker struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	PushId         []byte                 `protobuf:"bytes,1,opt,name=push_id,json=pushId,proto3" json:"push_id,omitempty"`                          // the removing push
@@ -4321,6 +4357,8 @@ type EvsRemovalMarker struct {
 	PathVersion    uint64                 `protobuf:"varint,3,opt,name=path_version,json=pathVersion,proto3" json:"path_version,omitempty"`          // the removal's own version, one past the path's last
 	SegmentIds     [][]byte               `protobuf:"bytes,4,rep,name=segment_ids,json=segmentIds,proto3" json:"segment_ids,omitempty"`              // format 2: a versionless file its push did not list, whose kind-5 segments
 	SlotIds        [][]byte               `protobuf:"bytes,5,rep,name=slot_ids,json=slotIds,proto3" json:"slot_ids,omitempty"`                       // and slots its collection deletes; format-1 writers keep them
+	LeafPart       uint32                 `protobuf:"varint,6,opt,name=leaf_part,json=leafPart,proto3" json:"leaf_part,omitempty"`                   // where the change that removed the path or its prefix sits, as
+	LeafIndex      uint32                 `protobuf:"varint,7,opt,name=leaf_index,json=leafIndex,proto3" json:"leaf_index,omitempty"`                // EvsIndexVersion's leaf_part and leaf_index (DESIGN-DETAILS 9.2.2)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -4388,6 +4426,20 @@ func (x *EvsRemovalMarker) GetSlotIds() [][]byte {
 		return x.SlotIds
 	}
 	return nil
+}
+
+func (x *EvsRemovalMarker) GetLeafPart() uint32 {
+	if x != nil {
+		return x.LeafPart
+	}
+	return 0
+}
+
+func (x *EvsRemovalMarker) GetLeafIndex() uint32 {
+	if x != nil {
+		return x.LeafIndex
+	}
+	return 0
 }
 
 type EvsDropMark struct {
@@ -5745,9 +5797,13 @@ func (x *EvsReadRequest) GetRefs() []*EvsReadRef {
 }
 
 type EvsReadPath struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TokenPaths    []*EvsSourcePath       `protobuf:"bytes,1,rep,name=token_paths,json=tokenPaths,proto3" json:"token_paths,omitempty"` // the current epoch's first, then each listed source that may hold it
-	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`                        // 0 the newest committed, else that older version
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	TokenPaths []*EvsSourcePath       `protobuf:"bytes,1,rep,name=token_paths,json=tokenPaths,proto3" json:"token_paths,omitempty"` // the path in the head's current epoch, and in any other epoch the reader
+	// may name (DESIGN-DETAILS 9.2.3): a listed source's is read for the entry
+	// (11.6's read rule), and each one serves the statements of its epoch; at
+	// most 8, one per epoch; evs matches by the epoch field, never by position
+	Version       uint64 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`                                  // 0 the newest committed, else that older version of the path
+	CommitVersion uint64 `protobuf:"varint,3,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"` // with version: the ref version its push committed at, from the newer
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5792,6 +5848,13 @@ func (x *EvsReadPath) GetTokenPaths() []*EvsSourcePath {
 func (x *EvsReadPath) GetVersion() uint64 {
 	if x != nil {
 		return x.Version
+	}
+	return 0
+}
+
+func (x *EvsReadPath) GetCommitVersion() uint64 {
+	if x != nil {
+		return x.CommitVersion
 	}
 	return 0
 }
@@ -6347,7 +6410,7 @@ func (x *EvsReadStatement) GetStatement() []byte {
 
 type EvsReadPathReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TokenPath     [][]byte               `protobuf:"bytes,1,rep,name=token_path,json=tokenPath,proto3" json:"token_path,omitempty"` // in the current epoch
+	TokenPath     [][]byte               `protobuf:"bytes,1,rep,name=token_path,json=tokenPath,proto3" json:"token_path,omitempty"` // in the current epoch; a stale_epoch path's, the first its request named
 	Version       *EvsIndexVersion       `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`                      // never elided
 	Statement     []byte                 `protobuf:"bytes,3,opt,name=statement,proto3" json:"statement,omitempty"`                  // the one that wrote it, when not among those this reply returned
 	Proof         []*EvsMerkleProof      `protobuf:"bytes,4,rep,name=proof,proto3" json:"proof,omitempty"`                          // to that statement's changes_root, part level last; empty when inline
@@ -6363,7 +6426,11 @@ type EvsReadPathReply struct {
 	DropVersion   uint64                 `protobuf:"varint,14,opt,name=drop_version,json=dropVersion,proto3" json:"drop_version,omitempty"`      // dropped: the DROP's ref version
 	DropStatement []byte                 `protobuf:"bytes,15,opt,name=drop_statement,json=dropStatement,proto3" json:"drop_statement,omitempty"` // drop_pending and dropped: the DROP's Signed EvsPush as received, when this
 	// reply returns it nowhere else (format 2)
-	DropBody      []byte `protobuf:"bytes,16,opt,name=drop_body,json=dropBody,proto3" json:"drop_body,omitempty"` // and its EvsDropHistory bytes, which its drop_sha256 covers, on the first
+	DropBody []byte `protobuf:"bytes,16,opt,name=drop_body,json=dropBody,proto3" json:"drop_body,omitempty"` // and its EvsDropHistory bytes, which its drop_sha256 covers, on the first
+	// path of this reply naming the drop (format 2)
+	EntryEpoch uint64 `protobuf:"varint,17,opt,name=entry_epoch,json=entryEpoch,proto3" json:"entry_epoch,omitempty"` // the epoch whose idx/ copy served the version, table or marker; 0 the
+	// head's current one (DESIGN-DETAILS 9.2.2)
+	StaleEpoch    bool `protobuf:"varint,18,opt,name=stale_epoch,json=staleEpoch,proto3" json:"stale_epoch,omitempty"` // the request named no token path in the head's current epoch: nothing was
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6508,6 +6575,20 @@ func (x *EvsReadPathReply) GetDropBody() []byte {
 		return x.DropBody
 	}
 	return nil
+}
+
+func (x *EvsReadPathReply) GetEntryEpoch() uint64 {
+	if x != nil {
+		return x.EntryEpoch
+	}
+	return 0
+}
+
+func (x *EvsReadPathReply) GetStaleEpoch() bool {
+	if x != nil {
+		return x.StaleEpoch
+	}
+	return false
 }
 
 type EvsMerkleProof struct {
@@ -7659,25 +7740,33 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x02 \x01(\x04R\n" +
 	"generation\x12\x18\n" +
-	"\awrapped\x18\x03 \x01(\fR\awrapped\"\xa5\x02\n" +
+	"\awrapped\x18\x03 \x01(\fR\awrapped\"\xf7\x02\n" +
 	"\rEvsIndexEntry\x12>\n" +
 	"\bversions\x18\x01 \x03(\v2\".urnetwork.sidecar.EvsIndexVersionR\bversions\x125\n" +
 	"\x05names\x18\x02 \x01(\v2\x1f.urnetwork.sidecar.EvsNameTableR\x05names\x12#\n" +
 	"\rnames_through\x18\x03 \x01(\x04R\fnamesThrough\x12;\n" +
 	"\x06marker\x18\x04 \x01(\v2#.urnetwork.sidecar.EvsRemovalMarkerR\x06marker\x12;\n" +
-	"\tdrop_mark\x18\x05 \x01(\v2\x1e.urnetwork.sidecar.EvsDropMarkR\bdropMark\"\x8e\x01\n" +
+	"\tdrop_mark\x18\x05 \x01(\v2\x1e.urnetwork.sidecar.EvsDropMarkR\bdropMark\x12&\n" +
+	"\x0fnames_leaf_part\x18\a \x01(\rR\rnamesLeafPart\x12(\n" +
+	"\x10names_leaf_index\x18\b \x01(\rR\x0enamesLeafIndex\"\xca\x01\n" +
 	"\x0fEvsIndexVersion\x12\x17\n" +
 	"\apush_id\x18\x01 \x01(\fR\x06pushId\x12%\n" +
 	"\x0ecommit_version\x18\x02 \x01(\x04R\rcommitVersion\x12#\n" +
 	"\rentry_version\x18\x03 \x01(\fR\fentryVersion\x12\x16\n" +
-	"\x06elided\x18\x04 \x01(\bR\x06elided\"\xb3\x01\n" +
+	"\x06elided\x18\x04 \x01(\bR\x06elided\x12\x1b\n" +
+	"\tleaf_part\x18\x05 \x01(\rR\bleafPart\x12\x1d\n" +
+	"\n" +
+	"leaf_index\x18\x06 \x01(\rR\tleafIndex\"\xef\x01\n" +
 	"\x10EvsRemovalMarker\x12\x17\n" +
 	"\apush_id\x18\x01 \x01(\fR\x06pushId\x12'\n" +
 	"\x0fremoval_version\x18\x02 \x01(\x04R\x0eremovalVersion\x12!\n" +
 	"\fpath_version\x18\x03 \x01(\x04R\vpathVersion\x12\x1f\n" +
 	"\vsegment_ids\x18\x04 \x03(\fR\n" +
 	"segmentIds\x12\x19\n" +
-	"\bslot_ids\x18\x05 \x03(\fR\aslotIds\"O\n" +
+	"\bslot_ids\x18\x05 \x03(\fR\aslotIds\x12\x1b\n" +
+	"\tleaf_part\x18\x06 \x01(\rR\bleafPart\x12\x1d\n" +
+	"\n" +
+	"leaf_index\x18\a \x01(\rR\tleafIndex\"O\n" +
 	"\vEvsDropMark\x12\x17\n" +
 	"\adrop_id\x18\x01 \x01(\fR\x06dropId\x12'\n" +
 	"\x0fthrough_version\x18\x02 \x01(\x04R\x0ethroughVersion\"\x98\x01\n" +
@@ -7789,11 +7878,12 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\tlog_pages\x18\b \x03(\x04R\blogPages\x126\n" +
 	"\x06pushes\x18\t \x03(\v2\x1e.urnetwork.sidecar.EvsReadPushR\x06pushes\x121\n" +
 	"\x04refs\x18\n" +
-	" \x03(\v2\x1d.urnetwork.sidecar.EvsReadRefR\x04refs\"j\n" +
+	" \x03(\v2\x1d.urnetwork.sidecar.EvsReadRefR\x04refs\"\x91\x01\n" +
 	"\vEvsReadPath\x12A\n" +
 	"\vtoken_paths\x18\x01 \x03(\v2 .urnetwork.sidecar.EvsSourcePathR\n" +
 	"tokenPaths\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x04R\aversion\"]\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12%\n" +
+	"\x0ecommit_version\x18\x03 \x01(\x04R\rcommitVersion\"]\n" +
 	"\fEvsReadRange\x12\x1d\n" +
 	"\n" +
 	"segment_id\x18\x01 \x01(\fR\tsegmentId\x12\x16\n" +
@@ -7848,7 +7938,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\rpush_sequence\x18\x11 \x01(\x04R\fpushSequence\"J\n" +
 	"\x10EvsReadStatement\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1c\n" +
-	"\tstatement\x18\x02 \x01(\fR\tstatement\"\xef\x05\n" +
+	"\tstatement\x18\x02 \x01(\fR\tstatement\"\xb1\x06\n" +
 	"\x10EvsReadPathReply\x12\x1d\n" +
 	"\n" +
 	"token_path\x18\x01 \x03(\fR\ttokenPath\x12<\n" +
@@ -7867,7 +7957,11 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\rnot_before_ms\x18\r \x01(\x03R\vnotBeforeMs\x12!\n" +
 	"\fdrop_version\x18\x0e \x01(\x04R\vdropVersion\x12%\n" +
 	"\x0edrop_statement\x18\x0f \x01(\fR\rdropStatement\x12\x1b\n" +
-	"\tdrop_body\x18\x10 \x01(\fR\bdropBody\"b\n" +
+	"\tdrop_body\x18\x10 \x01(\fR\bdropBody\x12\x1f\n" +
+	"\ventry_epoch\x18\x11 \x01(\x04R\n" +
+	"entryEpoch\x12\x1f\n" +
+	"\vstale_epoch\x18\x12 \x01(\bR\n" +
+	"staleEpoch\"b\n" +
 	"\x0eEvsMerkleProof\x12\x12\n" +
 	"\x04leaf\x18\x01 \x01(\fR\x04leaf\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x12\n" +
@@ -8047,7 +8141,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x0fEVS_REPO_ACTIVE\x10\x02\x12\x14\n" +
 	"\x10EVS_REPO_DELETED\x10\x03\x12\x16\n" +
 	"\x12EVS_REPO_SHREDDING\x10\x04\x12\x15\n" +
-	"\x11EVS_REPO_SHREDDED\x10\x05*\xe3\n" +
+	"\x11EVS_REPO_SHREDDED\x10\x05*\xff\n" +
 	"\n" +
 	"\x0eEvsRefusalCode\x12 \n" +
 	"\x1cEVS_REFUSAL_CODE_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -8087,7 +8181,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x15EVS_REFUSAL_DROP_KIND\x10G\x12\x1d\n" +
 	"\x19EVS_REFUSAL_SEGMENT_STALE\x10H\x12!\n" +
 	"\x1dEVS_REFUSAL_STATEMENT_MISSING\x10I\x12\x1f\n" +
-	"\x1bEVS_REFUSAL_GROUP_NOT_READY\x10J\x12\x18\n" +
+	"\x1bEVS_REFUSAL_GROUP_NOT_READY\x10J\x12\x1a\n" +
+	"\x16EVS_REFUSAL_MAP_SOURCE\x10K\x12\x18\n" +
 	"\x13EVS_REFUSAL_INVALID\x10\x80\x01\x12\x1a\n" +
 	"\x15EVS_REFUSAL_NOT_FOUND\x10\x81\x01\x12\x1e\n" +
 	"\x19EVS_REFUSAL_PARTS_MISSING\x10\x82\x01\x12\x15\n" +

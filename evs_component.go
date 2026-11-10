@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The evs SidecarComponent (§5.4): an EvsClient on a Sidecar's client generations. The client itself lives for the
 // network, holding its pins and read records across generations; the component follows each generation's env so a

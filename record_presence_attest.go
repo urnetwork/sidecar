@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §16.6's registration rows and labels (D-MCP-19, I-8; FS-124): what a presence key's KeyRegister.attestation shows of
 // where the key lives, which records and approver screens show as presence (attested) or presence (asserted), both
 // channel presence, the policy grammar unchanged.

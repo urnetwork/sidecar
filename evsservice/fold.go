@@ -11,9 +11,9 @@
 //   - a creation, base_entry_version 0, replaces what the entry held, carrying nothing, and an entry keeps four
 //     folded versions, the newest whole and the older ones with their inline records elided;
 //   - a removal at r is a marker {removing push, r, the path's version, one past its last} on the path, then, by a
-//     LIST, on every current-epoch entry below it that holds a version older than r (marker.go). A fold never
-//     deletes, and a marker takes only a newer one, so no repeated, queued or late removal fold writes over an entry
-//     a later fold wrote.
+//     LIST, on every current-epoch entry below it that holds a version older than r (marker.go). A fold deletes no
+//     current-epoch entry, and a marker takes only a newer one, so no repeated, queued or late removal fold writes
+//     over an entry a later fold wrote.
 //
 // Each entry is read, merged and written If-Match (If-None-Match to create), and read and merged again on a 412 or an
 // unknown outcome, so folds are idempotent and any process may run one, two of one range at once included.
@@ -25,7 +25,9 @@
 // window covers until FoldCollectMargin (150 ms) past until_ms by its own clock, and not at all on an unsure clock
 // (EVSB-M2-14 opens the windows). While the head lists source epochs, each entry written carries its state in object
 // metadata (carried, fresh or removed), and a path only a source still holds is carried from it, keeping that
-// source's folded versions and drop mark.
+// source's folded versions and drop mark; once the current entry holds a path's changes, the source copies they name
+// are deleted, and below a removed directory every key in those sources (fold_sources.go), so a source holds only what
+// still has to move (DESIGN-DETAILS 9.2.6).
 //
 // The horizon: folds add no head write. A finished fold's range stays with its process (Horizon), and that process's
 // next commit on the ref raises folded_through over it, every write having landed before. Each write passes the write
@@ -104,6 +106,9 @@ type EvsFoldResult struct {
 	// The entries it wrote, markers included, and the markers alone.
 	EntryWriteCount  int
 	MarkerWriteCount int
+	// The source copies it deleted while the head listed sources: those a changed path's changes name, and the keys
+	// below a removed directory in those sources (fold_sources.go).
+	SourceDeleteCount int
 }
 
 // One ref of one repo.
@@ -149,6 +154,8 @@ type Folder struct {
 	log        sidecar.Logger
 	// a test's: called before each entry write with its key, beside the write's barrier
 	beforeEntryWrite func(key string)
+	// a test's: deletes no source copy, as the fold did before DESIGN-DETAILS 9.2.6, for 9.1 E's twin
+	keepSourceCopies bool
 
 	stateLock sync.Mutex
 	refStates map[foldRef]*foldRefState
@@ -381,6 +388,32 @@ type foldEvent struct {
 	change *EvsCommittedChange
 	// a write's entry version, parsed
 	entryVersion *protocol.EvsEntryVersion
+	// where its change, or for a prefix's removal that removal's change, sits in its statement's list
+	leaf evsLeafPlace
+}
+
+// Where a change sits in its statement's list (DESIGN-DETAILS 9.2.2's leaf row; question details-9-index-leaf): under
+// changes_root, its part, 0 for a one-part push, and its index in that part's list plus 1; both 0 for an inline list,
+// which the statement holds. A fold records it beside each folded version, marker and table, and a carry keeps it, so
+// evs finds a change of an older path epoch, whose token it is never sent, by its place (read.go).
+type evsLeafPlace struct {
+	part  uint32
+	index uint32
+}
+
+// A folded version's place.
+func evsLeafPlaceOfVersion(version *protocol.EvsIndexVersion) evsLeafPlace {
+	return evsLeafPlace{part: version.GetLeafPart(), index: version.GetLeafIndex()}
+}
+
+// A marker's place: its removing change's.
+func evsLeafPlaceOfMarker(marker *protocol.EvsRemovalMarker) evsLeafPlace {
+	return evsLeafPlace{part: marker.GetLeafPart(), index: marker.GetLeafIndex()}
+}
+
+// A folded table's place: its delta at names_through's.
+func evsLeafPlaceOfTable(entry *protocol.EvsIndexEntry) evsLeafPlace {
+	return evsLeafPlace{part: entry.GetNamesLeafPart(), index: entry.GetNamesLeafIndex()}
 }
 
 // One path a version in the range changes, or removes by a prefix.
@@ -397,6 +430,8 @@ type foldRemoval struct {
 	tokenPath     sidecar.EvsTokenPath
 	commitVersion uint64
 	pushId        sidecar.Id
+	// where its change sits in its statement's list, which each marker it writes records
+	leaf evsLeafPlace
 	// the path was a file just before it, so nothing lies below
 	file bool
 }
@@ -506,11 +541,17 @@ func (self *foldRun) planRange() error {
 		if statement.Push.GetPathEpoch() != self.epoch {
 			return fmt.Errorf("%w: version %d in path epoch %d, the head's %d", ErrEvsFoldInvalid, version, statement.Push.GetPathEpoch(), self.epoch)
 		}
-		for _, change := range changes {
-			event := &foldEvent{commitVersion: version, pushId: windowEntry.PushId, change: change}
+		leaves, err := self.pushes.leafPlacesAt(self.ctx, version, windowEntry, changes)
+		if err != nil {
+			return err
+		}
+		for i, change := range changes {
+			event := &foldEvent{commitVersion: version, pushId: windowEntry.PushId, change: change, leaf: leaves[i]}
 			if change.Removes() {
 				event.kind = foldEventRemoval
-				self.removals = append(self.removals, &foldRemoval{tokenPath: change.TokenPath, commitVersion: version, pushId: windowEntry.PushId})
+				self.removals = append(self.removals, &foldRemoval{
+					tokenPath: change.TokenPath, commitVersion: version, pushId: windowEntry.PushId, leaf: leaves[i],
+				})
 			} else {
 				event.kind = foldEventWrite
 				event.entryVersion, err = parseEvsEntryVersion(change.EntryVersion)
@@ -538,7 +579,7 @@ func (self *foldRun) planRange() error {
 			if len(path.tokenPath) == len(removal.tokenPath) {
 				continue
 			}
-			path.events = append(path.events, &foldEvent{kind: foldEventPrefixRemoval, commitVersion: removal.commitVersion, pushId: removal.pushId})
+			path.events = append(path.events, &foldEvent{kind: foldEventPrefixRemoval, commitVersion: removal.commitVersion, pushId: removal.pushId, leaf: removal.leaf})
 		}
 		// a path a file just before its removal holds nothing below it
 		removal.file = self.paths[removalId].fileBefore(removal.commitVersion)
@@ -601,14 +642,16 @@ func (self *foldPath) continues() bool {
 	return false
 }
 
-// The source paths the path's first own change names (§11.6's read row), for a carry.
+// The source paths every own change of the path in the range names (§11.6's read row), in event order: what a carry
+// reads from and, once the current entry holds the changes, what the fold deletes (fold_sources.go).
 func (self *foldPath) sourcePaths() [][]byte {
+	sourcePaths := [][]byte{}
 	for _, event := range self.events {
 		if event.change != nil {
-			return event.change.SourcePaths
+			sourcePaths = append(sourcePaths, event.change.SourcePaths...)
 		}
 	}
-	return nil
+	return sourcePaths
 }
 
 // Marks each file path a window version after u changes itself again, which that version's fold takes (§11.7's
@@ -637,8 +680,9 @@ func (self *foldRun) planSkips(window []*sidecar.EvsWindowEntry, firstVersion ui
 	return nil
 }
 
-// Writes each planned path's entry, parents before children, then each removal's markers below it in version order:
-// the path's own marker before its LIST.
+// Writes each planned path's entry, parents before children, each followed by the deletes of the source copies its
+// changes name; then each removal's markers below it in version order, the path's own marker before its LIST, and
+// below it the keys of the named sources (fold_sources.go).
 func (self *foldRun) writeRange() error {
 	for _, pathId := range self.sortedIds {
 		path := self.paths[pathId]
@@ -656,12 +700,16 @@ func (self *foldRun) writeRange() error {
 		if err := self.markBelow(removal); err != nil {
 			return err
 		}
+		if err := self.emptySourcesBelow(removal); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // One path's entry: read, merge its events past what it holds, write, and on a 412 or an unknown outcome read and
-// merge again. An entry that already holds them is not written.
+// merge again. An entry that already holds them is not written. Once the current entry holds them, written now or
+// found so, the source copies its changes name are deleted (fold_sources.go).
 func (self *foldRun) writePath(path *foldPath) error {
 	for attempt := 0; attempt < self.folder.settings.FoldEntryRetryCount; attempt += 1 {
 		if err := self.ready(); err != nil {
@@ -681,7 +729,11 @@ func (self *foldRun) writePath(path *foldPath) error {
 		}
 		merged := mergeFoldEvents(held, path.events, self.folder.log)
 		if !merged.changed {
-			return nil
+			if read.Absent() {
+				// a source copy holding them while the current epoch holds nothing: nothing stands to take over
+				return nil
+			}
+			return self.deleteSourceCopies(path)
 		}
 		if names := merged.entry.GetNames(); names != nil {
 			checkFoldedTableBound(names, self.folder.log)
@@ -706,7 +758,7 @@ func (self *foldRun) writePath(path *foldPath) error {
 		if merged.removed {
 			self.result.MarkerWriteCount += 1
 		}
-		return nil
+		return self.deleteSourceCopies(path)
 	}
 	return fmt.Errorf("%w: %d tries on one entry", ErrEvsFoldBusy, self.folder.settings.FoldEntryRetryCount)
 }
@@ -909,6 +961,8 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 				PushId:         event.pushId.Bytes(),
 				RemovalVersion: event.commitVersion,
 				PathVersion:    pathVersion,
+				LeafPart:       event.leaf.part,
+				LeafIndex:      event.leaf.index,
 			})
 			merged.removed = true
 			merged.replaced = false
@@ -922,6 +976,8 @@ func mergeFoldEvents(held *protocol.EvsIndexEntry, events []*foldEvent, log side
 				PushId:         event.pushId.Bytes(),
 				RemovalVersion: event.commitVersion,
 				PathVersion:    standing + 1,
+				LeafPart:       event.leaf.part,
+				LeafIndex:      event.leaf.index,
 			}
 			merged.removed = true
 			merged.replaced = false
@@ -942,6 +998,8 @@ func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log s
 		PushId:        event.pushId.Bytes(),
 		CommitVersion: event.commitVersion,
 		EntryVersion:  event.change.EntryVersion,
+		LeafPart:      event.leaf.part,
+		LeafIndex:     event.leaf.index,
 	}
 	creation := event.change.BaseEntryVersion == 0
 	held := entry.GetVersions()
@@ -966,7 +1024,7 @@ func applyFoldFileVersion(entry *protocol.EvsIndexEntry, event *foldEvent, log s
 }
 
 // A folded version with its inline records cut, which evs restores from its push record before serving it (§11.7's
-// holds row). One with none to cut keeps its signed bytes.
+// holds row), keeping its leaf place. One with none to cut keeps its signed bytes.
 func elideEvsIndexVersion(version *protocol.EvsIndexVersion) *protocol.EvsIndexVersion {
 	if version.GetElided() {
 		return version
@@ -995,6 +1053,8 @@ func elideEvsIndexVersion(version *protocol.EvsIndexVersion) *protocol.EvsIndexV
 		CommitVersion: version.GetCommitVersion(),
 		EntryVersion:  elidedBytes,
 		Elided:        true,
+		LeafPart:      version.GetLeafPart(),
+		LeafIndex:     version.GetLeafIndex(),
 	}
 }
 
@@ -1041,6 +1101,37 @@ func (self *RecordPushSource) allChangesAt(ctx context.Context, version uint64, 
 	}
 	push.allChanges = committedChanges(checked.Changes)
 	return push.statement, push.allChanges, nil
+}
+
+// Where each of the changes allChangesAt gave for the push at version sits in its statement's list, in that order: see
+// evsLeafPlace. A sealed push's changes are its parts' joined in part order, each part starting at the token path its
+// seal names it by, which each part's changes_root was checked against.
+func (self *RecordPushSource) leafPlacesAt(ctx context.Context, version uint64, entry *sidecar.EvsWindowEntry, changes []*EvsCommittedChange) ([]evsLeafPlace, error) {
+	push, err := self.pushAt(ctx, version, entry)
+	if err != nil {
+		return nil, err
+	}
+	leaves := make([]evsLeafPlace, len(changes))
+	if len(push.statement.Push.GetChangesRoot()) == 0 {
+		return leaves, nil
+	}
+	if !push.sealed {
+		for i := range changes {
+			leaves[i] = evsLeafPlace{index: uint32(i + 1)}
+		}
+		return leaves, nil
+	}
+	part, partStart := 0, 0
+	for i, change := range changes {
+		if part+1 < len(push.sealParts) && change.TokenPath.Equal(push.sealParts[part+1].FirstTokenPath) {
+			part, partStart = part+1, i
+		}
+		leaves[i] = evsLeafPlace{part: uint32(part + 1), index: uint32(i - partStart + 1)}
+	}
+	if part+1 != len(push.sealParts) {
+		return nil, fmt.Errorf("%w: %d parts of changes for a seal of %d", ErrEvsStatementMismatch, part+1, len(push.sealParts))
+	}
+	return leaves, nil
 }
 
 // The statement committed at version, checked against its window entry.

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The field registry (§11.14's fields row): 1 subject, 2 from, 3 to (to and cc), 4 title and 5 body are every
 // document's, and 6-15 are registered per document class, §16.8's record entries and run cards and §16.11's directory
 // documents, each holding what its class says at the numbers it says. One posting set covers every field, and a

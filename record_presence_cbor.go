@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A small reader of CTAP2's canonical CBOR (CTAP 2.1 §8's "CTAP2 canonical CBOR encoding form"), for what §16.6's
 // registration reads: a WebAuthn attestation object, its attestation statement, and its authenticator data's credential
 // public key (COSE_Key) and extensions. The root links no CBOR module (MCP-M3-08), so this holds only what those need.

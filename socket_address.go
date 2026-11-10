@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §9.9's SocketAddress, which names connect.Id, so it stays off the sidecar_http leg. The grammar it
 // parses by is socket_name.go's, on every leg.

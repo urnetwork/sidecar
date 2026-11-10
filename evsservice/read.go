@@ -19,6 +19,28 @@
 //	         no version of `base`; a directory its folded table, names_through and the deltas after it; then the
 //	         objects (read_frame.go)
 //
+// Path epochs (DESIGN-DETAILS 9.2.4; EVS1-M2-45). A path names its token path in each epoch it names, at most 8, one
+// an epoch, and evs matches them to the head by their epoch field, never by position: the head's current epoch's
+// and the listed sources' are read by §11.6's read rule, and a path naming none in the current epoch is answered
+// stale_epoch, nothing read for it. entry_epoch names the epoch whose copy served. Every statement is worked in its
+// own epoch, e(w), which it declares:
+//
+//	served   the version, removal or delta at names_through a reply speaks for, committed at u: in the current epoch
+//	         (after the newest cut-over) found by the current token path; else by the leaf place the fold recorded
+//	         for it (leaf_part, leaf_index), else by the path's token path in e(u) when the request names one; the
+//	         proof's leaf is the change itself, which the reader checks against its own token path in e(u)
+//	absent   each statement w after max(u, pin_version) whose list is under changes_root: the adjacent-leaf proofs
+//	         under the path's token path in e(w) when the request names one, nothing for w when it names none
+//	history  an older version by number from the entry's folded versions by their leaf places, or with
+//	         commit_version from that push's record by the path's token path in its epoch
+//
+// When evs can locate a version's change by neither, an inline list of an epoch the request names no token path in
+// or a place left unrecorded, it answers the path with the statement alone, as 9.2.4's history does: the reader,
+// finding its own token path in it, may name that epoch and ask again (question evs1-m2-45-inline-leaf-place). An
+// elided version in an inline list is restored from the one write of its push whose bytes elide to its own. Window
+// versions after folded_through are all the current epoch's (9.3's W1) and keep the current token path. evs never
+// asks a client for a token.
+//
 // A placeholder head reads as absent (§11.8's first row). The route takes r, so a deposit-only principal is refused
 // at the guard (FS-23). The {refs} streams form and moved_after are M6's (EVS1-M6-01) and answer 400 until then.
 // A request whose reads fail before the first frame answers 503; one that fails after it ends the stream short,
@@ -90,13 +112,20 @@ func (self *EvsEngine) serveRead(request *EvsRequest) {
 
 // One path as the request names it, with what the read found.
 type readPath struct {
+	// every token path the request names, by epoch, and the first it names, which a stale reply carries
+	named map[uint64]sidecar.EvsTokenPath
+	first sidecar.EvsTokenPath
+	// named matched to the head served; stale when it names none in the head's current epoch
 	tokens *EvsPathTokens
-	// 0 for the newest version, else the path version asked for.
-	version uint64
-	read    *EvsPathRead
-	newest  *EvsNewest
-	listing *EvsListing
-	reply   *protocol.EvsReadPathReply
+	stale  bool
+	// 0 for the newest version, else the path version asked for, and the ref version its push committed at when
+	// the request knows it
+	version       uint64
+	commitVersion uint64
+	read          *EvsPathRead
+	newest        *EvsNewest
+	listing       *EvsListing
+	reply         *protocol.EvsReadPathReply
 }
 
 // What one read gives before it streams.
@@ -159,22 +188,29 @@ func (self *EvsEngine) newReadAttempt(request *EvsRequest, body *protocol.EvsRea
 		body:     body,
 	}
 	for _, path := range body.GetPaths() {
-		tokens := &EvsPathTokens{}
-		for i, sourcePath := range path.GetTokenPaths() {
+		tokenPaths := path.GetTokenPaths()
+		if len(tokenPaths) == 0 || sidecar.EvsReadPathMaxEpochCount < len(tokenPaths) {
+			return nil, fmt.Errorf("%w: a path of %d token paths", sidecar.ErrEvsPushInvalid, len(tokenPaths))
+		}
+		readPath := &readPath{named: map[uint64]sidecar.EvsTokenPath{}, version: path.GetVersion(), commitVersion: path.GetCommitVersion()}
+		for _, sourcePath := range tokenPaths {
 			tokenPath, err := sidecar.ParseEvsChangedTokenPath(sourcePath.GetTokenPath())
 			if err != nil {
 				return nil, err
 			}
-			if i == 0 {
-				tokens.Current = tokenPath
-				continue
+			epoch := sourcePath.GetEpoch()
+			if _, named := readPath.named[epoch]; named || epoch == 0 {
+				return nil, fmt.Errorf("%w: a token path of epoch %d named twice or of no epoch", sidecar.ErrEvsPushInvalid, epoch)
 			}
-			tokens.Sources = append(tokens.Sources, &EvsSourceTokenPath{Epoch: sourcePath.GetEpoch(), TokenPath: tokenPath})
+			readPath.named[epoch] = tokenPath
+			if readPath.first == nil {
+				readPath.first = tokenPath
+			}
 		}
-		if tokens.Current == nil {
-			return nil, fmt.Errorf("%w: a path with no current token path", sidecar.ErrEvsPushInvalid)
+		if readPath.commitVersion != 0 && readPath.version == 0 {
+			return nil, fmt.Errorf("%w: a commit version with no version", sidecar.ErrEvsPushInvalid)
 		}
-		read.paths = append(read.paths, &readPath{tokens: tokens, version: path.GetVersion()})
+		read.paths = append(read.paths, readPath)
 	}
 	return read, nil
 }
@@ -231,10 +267,18 @@ func (self *readAttempt) read() (*readReply, error) {
 // Both rounds against self.head.
 func (self *readAttempt) readAt() (*readReply, error) {
 	head := self.head.Head
+	for _, path := range self.paths {
+		path.tokens = EvsPathTokensAt(path.named, head)
+		path.stale = path.tokens.Current == nil
+	}
 	reply := &readReply{head: self.headSummary()}
 	if self.head.Absent() || !evsHeadExists(head) {
 		// no commit yet: every path is absent, and nothing is after any pin
 		for _, path := range self.paths {
+			if path.stale {
+				reply.paths = append(reply.paths, staleReply(path))
+				continue
+			}
 			reply.paths = append(reply.paths, &protocol.EvsReadPathReply{TokenPath: path.tokens.Current.Components()})
 		}
 		return reply, nil
@@ -243,6 +287,9 @@ func (self *readAttempt) readAt() (*readReply, error) {
 		return nil, err
 	}
 	for _, path := range self.paths {
+		if path.stale {
+			continue
+		}
 		if err := self.resolvePath(path); err != nil {
 			return nil, err
 		}
@@ -317,6 +364,9 @@ func (self *readAttempt) readEntries() error {
 		}
 	}
 	for _, path := range self.paths {
+		if path.stale {
+			continue
+		}
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
@@ -354,7 +404,7 @@ func (self *readAttempt) windowPlacesTouching() []*protocol.EvsPlace {
 			continue
 		}
 		for _, path := range self.paths {
-			if entry.PathsDigest.MayChange(path.tokens.Current) {
+			if !path.stale && entry.PathsDigest.MayChange(path.tokens.Current) {
 				places = append(places, entry.Place)
 				break
 			}
@@ -460,12 +510,20 @@ func recordStatementBytes(record *sidecar.EvsBatchRecord) ([]byte, error) {
 	return nil, fmt.Errorf("%w: a record of type %d", sidecar.ErrEvsPushInvalid, record.Type)
 }
 
+// A stale_epoch path's reply: the request named no token path in the head's current epoch, so nothing was read for
+// it, and the reader asks again on this head (DESIGN-DETAILS 9.2.4).
+func staleReply(path *readPath) *protocol.EvsReadPathReply {
+	return &protocol.EvsReadPathReply{TokenPath: path.first.Components(), StaleEpoch: true}
+}
+
 // One path's reply: see the file header.
 func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, error) {
+	if path.stale {
+		return staleReply(path), nil
+	}
 	head := self.head.Head
 	newest := path.newest
-	tokenPath := path.tokens.Current
-	reply := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components()}
+	reply := &protocol.EvsReadPathReply{TokenPath: path.tokens.Current.Components(), EntryEpoch: path.read.SourceEpoch}
 	since := uint64(0)
 	deltaVersions := map[uint64]bool{}
 	switch {
@@ -476,21 +534,28 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 		}
 		return reply, nil
 	case newest.Exists:
-		version, err := self.versionReply(newest, tokenPath)
+		version, located, err := self.versionReply(path, newest)
 		if err != nil {
 			return nil, err
 		}
+		if !located {
+			return reply, self.statementAlone(reply, newest.CommitVersion)
+		}
 		reply.Version = version
 		since = newest.CommitVersion
-		if err := self.attachStatement(reply, newest.CommitVersion, tokenPath, false); err != nil {
-			return nil, err
+		if located, err := self.attachStatement(reply, path, newest.CommitVersion, evsLeafPlaceOfVersion(version), false); err != nil || !located {
+			if err != nil {
+				return nil, err
+			}
+			return reply, self.statementAlone(reply, newest.CommitVersion)
 		}
 		if listing := path.listing; listing != nil {
 			reply.Names = &protocol.EvsNameTable{Names: listing.Names}
 			reply.NamesThrough = listing.TableThrough
 			for _, deltaVersion := range listing.DeltaVersions {
 				deltaVersions[deltaVersion] = true
-				delta, err := self.deltaReply(deltaVersion, tokenPath)
+				// a delta after the table is an unfolded window version, of the current epoch (9.3's W1)
+				delta, err := self.deltaReply(deltaVersion, path.tokens.Current)
 				if err != nil {
 					return nil, err
 				}
@@ -498,19 +563,26 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 			}
 		}
 	case newest.RemovalVersion != 0:
-		reply.Removal = &protocol.EvsRemovalMarker{
+		removal := &protocol.EvsRemovalMarker{
 			PushId:         newest.PushId.Bytes(),
 			RemovalVersion: newest.CommitVersion,
 			PathVersion:    newest.RemovalVersion,
 		}
+		if marker := newest.Marker; marker != nil {
+			removal.LeafPart, removal.LeafIndex = marker.GetLeafPart(), marker.GetLeafIndex()
+		}
+		reply.Removal = removal
 		since = newest.CommitVersion
-		if err := self.attachStatement(reply, newest.CommitVersion, tokenPath, true); err != nil {
-			return nil, err
+		if located, err := self.attachStatement(reply, path, newest.CommitVersion, evsLeafPlaceOfMarker(removal), true); err != nil || !located {
+			if err != nil {
+				return nil, err
+			}
+			return reply, self.statementAlone(reply, newest.CommitVersion)
 		}
 	case head.GetBase() != nil:
 		reply.Base = head.GetBase()
 	}
-	absences, err := self.absences(tokenPath, since, deltaVersions)
+	absences, err := self.absences(path, since, deltaVersions)
 	if err != nil {
 		return nil, err
 	}
@@ -518,31 +590,78 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 	return reply, nil
 }
 
-// The newest version as an EvsIndexVersion, never elided: from the window's change, or from the entry with its
-// bodies restored from its push record when elided or when a directory's table carries none.
-func (self *readAttempt) versionReply(newest *EvsNewest, tokenPath sidecar.EvsTokenPath) (*protocol.EvsIndexVersion, error) {
+// A path's reply as the statement committed at commitVersion alone: what evs answers for a version or removal whose
+// change it can locate in that statement by neither its leaf place nor a token path the request names (see the file
+// header). The reader asks again naming that statement's epoch once it finds its own token path there.
+func (self *readAttempt) statementAlone(reply *protocol.EvsReadPathReply, commitVersion uint64) error {
+	push, err := self.pushes.at(commitVersion)
+	if err != nil {
+		return err
+	}
+	reply.Version = nil
+	reply.Removal = nil
+	reply.Proof = nil
+	reply.Names = nil
+	reply.NamesThrough = 0
+	reply.Deltas = nil
+	reply.Absences = nil
+	reply.Statement = push.statement.Bytes
+	return nil
+}
+
+// The newest version as an EvsIndexVersion, never elided, with its leaf place: from the window's change, or from the
+// entry, with its bodies restored from its push record when elided or when a directory's table carries none, its
+// change located in the push's own epoch. located false when that change cannot be (see the file header).
+func (self *readAttempt) versionReply(path *readPath, newest *EvsNewest) (*protocol.EvsIndexVersion, bool, error) {
 	version := &protocol.EvsIndexVersion{PushId: newest.PushId.Bytes(), CommitVersion: newest.CommitVersion}
+	place := evsLeafPlace{}
 	switch {
 	case newest.Change != nil:
+		// a window version after folded_through, of the current epoch
 		version.EntryVersion = newest.Change.EntryVersion
-	case newest.IndexVersion != nil && !newest.IndexVersion.GetElided():
-		version.EntryVersion = newest.IndexVersion.GetEntryVersion()
-	default:
-		push, err := self.pushes.at(newest.CommitVersion)
-		if err != nil {
-			return nil, err
+		return version, true, nil
+	case newest.IndexVersion != nil:
+		place = evsLeafPlaceOfVersion(newest.IndexVersion)
+		if !newest.IndexVersion.GetElided() {
+			version.EntryVersion = newest.IndexVersion.GetEntryVersion()
+			version.LeafPart, version.LeafIndex = place.part, place.index
+			return version, true, nil
 		}
-		entryVersion, err := self.pushes.entryVersionOf(push, tokenPath)
-		if err != nil {
-			return nil, err
-		}
-		if len(entryVersion) == 0 {
-			return nil, fmt.Errorf("%w: version %d does not write the path its entry names it for", ErrEvsStatementMismatch, newest.CommitVersion)
-		}
-		version.PushId = push.statement.Push.GetPushId()
-		version.EntryVersion = entryVersion
+	case path.read.Entry != nil:
+		// a directory's folded table: its delta at names_through
+		place = evsLeafPlaceOfTable(path.read.Entry)
 	}
-	return version, nil
+	push, err := self.pushes.at(newest.CommitVersion)
+	if err != nil {
+		return nil, false, err
+	}
+	entryVersion, err := self.entryVersionIn(push, path, place, newest.IndexVersion)
+	if err != nil || entryVersion == nil {
+		return nil, false, err
+	}
+	version.PushId = push.statement.Push.GetPushId()
+	version.EntryVersion = entryVersion
+	version.LeafPart, version.LeafIndex = place.part, place.index
+	return version, true, nil
+}
+
+// The EvsEntryVersion bytes the push wrote for the path, its change located in the push's own epoch, or for an elided
+// version of an inline list matched by its elided bytes; nil when neither finds it.
+func (self *readAttempt) entryVersionIn(push *readPush, path *readPath, place evsLeafPlace, elided *protocol.EvsIndexVersion) ([]byte, error) {
+	change, _, _, err := self.locate(push, path, place, false)
+	if err != nil {
+		return nil, err
+	}
+	if change != nil {
+		if !change.WritesEntry() {
+			return nil, fmt.Errorf("%w: version %d's change for the path writes nothing", ErrEvsIndexEntryInvalid, push.version)
+		}
+		return change.EntryVersion, nil
+	}
+	if elided == nil || push.rooted() {
+		return nil, nil
+	}
+	return self.pushes.inlineEntryVersionEliding(push, elided)
 }
 
 // A directory's delta at version: its entry version as its push carried it.
@@ -561,42 +680,69 @@ func (self *readAttempt) deltaReply(version uint64, tokenPath sidecar.EvsTokenPa
 	return &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: version, EntryVersion: entryVersion}, nil
 }
 
-// The statement that wrote the version at commitVersion, when the reply does not return it among those after the
-// pin, and its proof to changes_root when the list is not inline: the path's own change, or for a removal the
-// change removing it or a prefix holding it.
-func (self *readAttempt) attachStatement(reply *protocol.EvsReadPathReply, commitVersion uint64, tokenPath sidecar.EvsTokenPath, removal bool) error {
+// Where the change of the path a reply speaks for sits in push, worked in the push's own epoch (see the file header):
+// its part and index, and nil when it cannot be located. A change of the current epoch's push that its token path
+// does not find, or a leaf place the push does not have, is a fault.
+func (self *readAttempt) locate(push *readPush, path *readPath, place evsLeafPlace, removal bool) (*sidecar.EvsCheckedChange, int, int, error) {
+	epoch := push.statement.Push.GetPathEpoch()
+	current := EvsHeadCurrentEpoch(self.head.Head)
+	byTokenPath := func(tokenPath sidecar.EvsTokenPath) (*sidecar.EvsCheckedChange, int, int, error) {
+		if removal {
+			return self.pushes.removalOf(push, tokenPath)
+		}
+		return self.pushes.changeOf(push, tokenPath)
+	}
+	if epoch == current {
+		change, part, index, err := byTokenPath(path.tokens.Current)
+		if err == nil && change == nil {
+			err = fmt.Errorf("%w: version %d does not change the path its entry names it for", ErrEvsStatementMismatch, push.version)
+		}
+		return change, part, index, err
+	}
+	if push.rooted() && place.index != 0 {
+		change, part, index, err := self.pushes.changeAt(push, place)
+		if err == nil && removal == change.WritesEntry() {
+			err = fmt.Errorf("%w: version %d's change at the place recorded is not what the entry holds", ErrEvsIndexEntryInvalid, push.version)
+		}
+		return change, part, index, err
+	}
+	if tokenPath := path.tokens.In(epoch, current); tokenPath != nil {
+		return byTokenPath(tokenPath)
+	}
+	return nil, 0, 0, nil
+}
+
+// The statement that wrote the version or removal at commitVersion, when the reply does not return it among those
+// after the pin, and its proof to changes_root when the list is not inline: the path's own change, or for a removal
+// the change removing it or a prefix holding it, located in the statement's own epoch. located false when it cannot
+// be, and the reply then carries no proof.
+func (self *readAttempt) attachStatement(reply *protocol.EvsReadPathReply, path *readPath, commitVersion uint64, place evsLeafPlace, removal bool) (bool, error) {
 	push, err := self.pushes.at(commitVersion)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if commitVersion <= self.body.GetPinVersion() || commitVersion < EvsHeadWindowFirstVersion(self.head.Head) {
 		reply.Statement = push.statement.Bytes
 	}
 	if !push.rooted() {
-		return nil
+		// the statement holds the list, which the reader reads under its own token path in the statement's epoch
+		return true, nil
 	}
-	var change *sidecar.EvsCheckedChange
-	var part, index int
-	if removal {
-		change, part, index, err = self.pushes.removalOf(push, tokenPath)
-	} else {
-		change, part, index, err = self.pushes.changeOf(push, tokenPath)
-	}
-	if err != nil {
-		return err
-	}
-	if change == nil {
-		return fmt.Errorf("%w: version %d does not change the path its entry names it for", ErrEvsStatementMismatch, commitVersion)
+	change, part, index, err := self.locate(push, path, place, removal)
+	if err != nil || change == nil {
+		return false, err
 	}
 	reply.Proof, err = self.pushes.inclusionProof(push, part, index)
-	return err
+	return err == nil, err
 }
 
 // For each statement after since among those the reply returns whose list is not inline and whose covering
 // prefixes reach the path or a prefix holding it, the adjacent-leaf proofs for each such path the push did not
-// change; a directory's own deltas are its reply's, and a prefix the push changed is shown by nothing here.
-func (self *readAttempt) absences(tokenPath sidecar.EvsTokenPath, since uint64, deltaVersions map[uint64]bool) ([]*protocol.EvsAbsenceProof, error) {
+// change, under the path's token path in that statement's epoch, and nothing for a statement of an epoch the request
+// names none in; a directory's own deltas are its reply's, and a prefix the push changed is shown by nothing here.
+func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions map[uint64]bool) ([]*protocol.EvsAbsenceProof, error) {
 	head := self.head.Head
+	current := EvsHeadCurrentEpoch(head)
 	absences := []*protocol.EvsAbsenceProof{}
 	for version := max(since, self.body.GetPinVersion()) + 1; version <= head.GetVersion(); version += 1 {
 		if deltaVersions[version] {
@@ -611,12 +757,16 @@ func (self *readAttempt) absences(tokenPath sidecar.EvsTokenPath, since uint64, 
 			}
 			entry = push.entry
 		}
-		if !entry.ChangesInPayload() || !entry.PathsDigest.MayChange(tokenPath) {
+		if !entry.ChangesInPayload() || !path.tokens.MayChangeIn(entry.PathsDigest) {
 			continue
 		}
 		push, err := self.pushes.at(version)
 		if err != nil {
 			return nil, err
+		}
+		tokenPath := path.tokens.In(push.statement.Push.GetPathEpoch(), current)
+		if tokenPath == nil || !entry.PathsDigest.MayChange(tokenPath) {
+			continue
 		}
 		for _, absentPath := range sidecar.EvsAbsencePaths(push.statement.ChangedPrefixes, tokenPath) {
 			absence, err := self.pushes.absenceProof(push, absentPath)
@@ -631,9 +781,11 @@ func (self *readAttempt) absences(tokenPath sidecar.EvsTokenPath, since uint64, 
 	return absences, nil
 }
 
-// An older version by number (§11.9's "older ones on request"): from the entry's folded versions, with the statement
-// that wrote it and its proof; one neither the entry nor the window holds answers the path with no version, which a
-// reader takes as absent at that number.
+// An older version by number (§11.9's "older ones on request"; DESIGN-DETAILS 9.2.4's history): from the entry's
+// folded versions, by their leaf places, with the statement that wrote it and its proof; else from the window; else,
+// with commit_version, from that push's record by the path's token path in its epoch, or the statement alone when the
+// request names none there. One none of these holds answers the path with no version, which a reader takes as absent
+// at that number.
 func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPathReply) error {
 	tokenPath := path.tokens.Current
 	if entry := path.read.Entry; entry != nil {
@@ -642,21 +794,35 @@ func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPat
 			if err != nil || entryVersion.GetVersion() != path.version {
 				continue
 			}
-			served := &protocol.EvsIndexVersion{PushId: version.GetPushId(), CommitVersion: version.GetCommitVersion(), EntryVersion: version.GetEntryVersion()}
+			place := evsLeafPlaceOfVersion(version)
+			served := &protocol.EvsIndexVersion{
+				PushId: version.GetPushId(), CommitVersion: version.GetCommitVersion(), EntryVersion: version.GetEntryVersion(),
+				LeafPart: place.part, LeafIndex: place.index,
+			}
 			if version.GetElided() {
 				push, err := self.pushes.at(version.GetCommitVersion())
 				if err != nil {
 					return err
 				}
-				if served.EntryVersion, err = self.pushes.entryVersionOf(push, tokenPath); err != nil {
+				if served.EntryVersion, err = self.entryVersionIn(push, path, place, version); err != nil {
 					return err
+				}
+				if served.EntryVersion == nil {
+					return self.statementAlone(reply, version.GetCommitVersion())
 				}
 			}
 			reply.Version = served
-			return self.attachStatement(reply, version.GetCommitVersion(), tokenPath, false)
+			located, err := self.attachStatement(reply, path, version.GetCommitVersion(), place, false)
+			if err != nil {
+				return err
+			}
+			if !located {
+				return self.statementAlone(reply, version.GetCommitVersion())
+			}
+			return nil
 		}
 	}
-	// the window's versions of the path, newest first
+	// the window's versions of the path after the entry's horizon, the current epoch's, newest first
 	head := self.head.Head
 	for version := head.GetVersion(); EvsHeadWindowFirstVersion(head) <= version && path.read.FoldedThrough < version; version -= 1 {
 		entry := windowEntryAt(head, version)
@@ -679,7 +845,37 @@ func (self *readAttempt) olderVersion(path *readPath, reply *protocol.EvsReadPat
 			continue
 		}
 		reply.Version = &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: version, EntryVersion: change.EntryVersion}
-		return self.attachStatement(reply, version, tokenPath, false)
+		_, err = self.attachStatement(reply, path, version, evsLeafPlace{}, false)
+		return err
 	}
-	return nil
+	return self.versionAtCommit(path, reply)
+}
+
+// History by commit_version (DESIGN-DETAILS 9.2.4): the version asked for, from the push the request says committed
+// it, located by the path's token path in that push's epoch; the statement alone when the request names none there,
+// and nothing when the push did not write that version of the path.
+func (self *readAttempt) versionAtCommit(path *readPath, reply *protocol.EvsReadPathReply) error {
+	commitVersion := path.commitVersion
+	if commitVersion == 0 || self.head.Head.GetVersion() < commitVersion {
+		return nil
+	}
+	push, err := self.pushes.at(commitVersion)
+	if err != nil {
+		return err
+	}
+	tokenPath := path.tokens.In(push.statement.Push.GetPathEpoch(), EvsHeadCurrentEpoch(self.head.Head))
+	if tokenPath == nil {
+		return self.statementAlone(reply, commitVersion)
+	}
+	change, _, _, err := self.pushes.changeOf(push, tokenPath)
+	if err != nil || change == nil || !change.WritesEntry() {
+		return err
+	}
+	entryVersion, err := parseEvsEntryVersion(change.EntryVersion)
+	if err != nil || entryVersion.GetVersion() != path.version {
+		return nil
+	}
+	reply.Version = &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: commitVersion, EntryVersion: change.EntryVersion}
+	_, err = self.attachStatement(reply, path, commitVersion, evsLeafPlace{}, false)
+	return err
 }

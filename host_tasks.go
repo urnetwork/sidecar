@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Tasks: taskworker's jobs (§19.4), by name, since an engine cannot name server's generic
 // task functions. Evacuation, GC, packing, shreds, gkm's reconciler, drop jobs and certs run here.

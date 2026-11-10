@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Sidecar.Logout, `ur logout` (§5.6, CORE-M2-07): the sidecar signs SidecarRevoke{removed} for its own sidecar_id and
 // posts it (identity_revoke_self.go), removes its client (POST /network/remove-client), and wipes this network's state,
 // its keychain and directory and its sidecar.json record, in that order, so the instance holds nothing of the network

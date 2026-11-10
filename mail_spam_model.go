@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // s/model's naive Bayes filter (§15.9; MAIL-M7-12): one file per mailbox, which its people's spam and not-spam
 // verdicts train, and which readers score each message by at ingest. mox's junk filter keeps per-word rows in a
 // database, which neither a page Worker nor a single s/model file can hold (plan-MAIL-mox-subset#2), so this is a small

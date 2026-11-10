@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Welcome (RFC 9420 §12.4.3.1): how a commit's Adds join. Each joiner gets the epoch's joiner_secret, and the
 // path secret of the lowest node it shares with the committer, sealed to its KeyPackage's init key, and every
 // joiner gets the epoch's GroupInfo under welcome_secret.

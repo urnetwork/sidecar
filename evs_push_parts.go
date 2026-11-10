@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A push in parts (§11.8's parts, lease and seal rows; D-EVS-20): past 1 MiB or 1,024 entry writes the statement
 // signs part_count, parts_sha256 and changes_root, each part posts to .../push/<P>/<k> with the receipts of the
 // segments its entry versions name, at most PartConcurrency at once, and the seal posts the statement with the

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §16.11's phones row in M6's form (RECORD-M6-27): a phone keeps the directory's current announcements only while a
 // view is open, in memory, and fetches them through a DirectoryView apart from any sync, up to
 // Directory.PhoneMeteredByteCount a metered session. It sits in the root, not the sdk, because FS-86's M6 case runs a

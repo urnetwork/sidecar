@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Writer heads (§11.14's slot, seal, large and version rows; D-EVS-46; SEARCH-M10-09): what one writer's push writes to
 // the index, as a pure function of the index at the push's base. Each writer appends to a head of its own, its slot
 // with the highest seq, never shared, so disjoint pushes never meet on one file. A head keeps one entry per doc_key, a

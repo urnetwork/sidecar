@@ -1,4 +1,4 @@
-//go:build !js && !ios && !android
+//go:build !js && !ios && !android && !ios_extension
 
 // §5.8's hello: the first line of every local session, newline-delimited JSON with ur_local 1, naming the mode the
 // session speaks and the version of the ur that opened it. The mode selects a protocol, never a privilege (D-CORE-9).

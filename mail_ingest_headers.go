@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The header fields ingest puts above a received message in m/ (§15.7, D-MAIL-14): Authentication-Results (RFC
 // 8601) and Received (RFC 5321 §4.4), rendered only from the deposit's sealed MailIngress and MailAuthEvidence and
 // the message's own From, never from a lookup made later, so a reader sees the verdicts reception sealed. They are

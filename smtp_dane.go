@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // TL1 (§14.4, D-SMTP-2): DANE for SMTP (RFC 7672) over the edge's dnssec_chain, which
 // smtp_dnssec_chain.go validates to the sidecar's own anchors on its own clock. Only DANE-EE (3) and

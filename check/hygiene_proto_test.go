@@ -172,7 +172,9 @@ func writeOverlay(t testing.TB, directory string, virtualPath string, realPath s
 // what is committed: a .proto with no output, a .pb.go with no .proto, or bytes that differ. protoc
 // is required once a .proto exists, and its absence fails, because a rule that cannot run has not
 // passed. On a release branch committed files carry the rewritten import paths and are never
-// regenerated (§4.9), so the fresh output goes through the same rewrite before the comparison.
+// regenerated (§4.9), so the fresh output goes through the same rewrite before the comparison. The
+// Makefile tags each generated protocol file the ios_extension leg's list does not name, and so does
+// this (iosExtensionTagGenerated).
 func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 	t.Helper()
 	protoFiles, err := self.protocolFiles(".proto")
@@ -213,6 +215,7 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 	normalize := func(data []byte) []byte {
 		return protocVersionLinePattern.ReplaceAll(data, nil)
 	}
+	legList := readIosExtensionLegList(self.moduleDirectory)
 	for _, protoFile := range protoFiles {
 		generatedFile := strings.TrimSuffix(protoFile, ".proto") + ".pb.go"
 		committed, err := os.ReadFile(filepath.Join(self.moduleDirectory, filepath.FromSlash(generatedFile)))
@@ -228,6 +231,7 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 		if self.releaseSuffix != "" {
 			fresh = []byte(releaseRewrite(string(fresh), self.releaseSuffix))
 		}
+		fresh = iosExtensionTagGenerated(legList, generatedFile, fresh)
 		if !bytes.Equal(normalize(committed), normalize(fresh)) {
 			findings = append(findings, findingf("%s is stale; run make proto", generatedFile))
 		}

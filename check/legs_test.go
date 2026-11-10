@@ -74,8 +74,9 @@ func (self *buildLeg) environment() []string {
 // and protocol/bridge in device files (§18.10).
 var clientPatterns = []string{".", "./protocol", "./protocol/bridge", "./device"}
 
-// §4.9: the ios_extension leg holds device/ and protocol/bridge only (D-SDK-20).
-var deviceRolePatterns = []string{"./protocol/bridge", "./device"}
+// The packages Apple's network extensions link (D-SDK-20; DESIGN-DETAILS 4.2.3): device and protocol/bridge whole, and
+// the root and protocol as the forwarding leg's list leaves them, every other file of theirs carrying !ios_extension.
+var iosExtensionPatterns = []string{".", "./protocol", "./protocol/bridge", "./device"}
 
 // Everything in a module, for the legs that build or test all of it.
 var allPatterns = []string{"./..."}
@@ -95,7 +96,7 @@ func defaultBuildLegs() []*buildLeg {
 		return &buildLeg{
 			name: name, moduleName: ".", goos: goos, goarch: "arm64", cgoEnabled: true,
 			tags:     []string{mobileBindTag, iosExtensionTag},
-			patterns: deviceRolePatterns, class: classClient, ships: true,
+			patterns: iosExtensionPatterns, class: classClient, ships: true,
 		}
 	}
 	cliLeg := func(goos string, goarch string) *buildLeg {

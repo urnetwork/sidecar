@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Buckets (§11.14's Buckets block; D-EVS-45): UTC windows of a repo's W days, which every device computes alike from
 // signed push times and the bucket windows its files keep, so no device's clock decides where an entry goes. Bucket S
 // holds UTC days [S, S+W), counted from 1970-01-01. The first starts at ⌊day/W⌋·W and each next where the newest ends,

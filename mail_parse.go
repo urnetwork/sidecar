@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's message walk (R-MAIL-1, D-MAIL-5, D-MAIL-14): what an IndexEntry, a reader's list, the spam score and
 // the code check take from a message's bytes, by one bounded pass with emersion/go-message's textproto. It keeps
 // From, Subject, Message-ID and the thread's first id from the header, the first text part's start, and each

@@ -72,6 +72,14 @@ const (
 	BarrierLogPagePutAfter  = "evs.log_page.put.after"
 )
 
+// EVS1-M2-44: the fold's source deletes (DESIGN-DETAILS 9.2.6), keyed by <repo>:<ref>.
+const (
+	// Around each DELETE of a source copy a current entry supersedes, or of a key below a removed directory in a
+	// named source: a fold killed between its PUT and its DELETE holds here.
+	BarrierFoldSourceDeleteBefore = "evs.fold.source_delete.before"
+	BarrierFoldSourceDeleteAfter  = "evs.fold.source_delete.after"
+)
+
 // EVS1-M2-12: a push's steps (§11.8), keyed by <repo>:<ref>. The head's own CAS and read keep EVS1-M2-08's names.
 const (
 	// An attempt that has arrived and parsed its body, before step 4: FS-113's attempt held before its handler runs,
@@ -188,6 +196,25 @@ const (
 	// Around the head CAS that closes a window: collect.done set, the fence raised.
 	BarrierCollectCloseBefore = "evs.collect.close.before"
 	BarrierCollectCloseAfter  = "evs.collect.close.after"
+)
+
+// EVSB-M10-01 and EVSB-M10-02: the versionless purge and evacuation's sweep (§22.8's sites: the purge's certainty,
+// its hold/ reread and each delete, and evacuation's staged decision).
+const (
+	// The committing process queued u's candidates, keyed by <repo>:<ref>.
+	BarrierPurgeCertain = "evs.purge.certain"
+	// Around the hold/ reread before each purge DELETE, keyed by <repo>:<ref>:<candidate>:<id>.
+	BarrierPurgeHoldsBefore = "evs.purge.holds.before"
+	BarrierPurgeHoldsAfter  = "evs.purge.holds.after"
+	// Around each purge DELETE, keyed as the reread is.
+	BarrierPurgeDeleteBefore = "evs.purge.delete.before"
+	BarrierPurgeDeleteAfter  = "evs.purge.delete.after"
+	// Around evacuation's decision for one staged segment: written to seg/ or dropped, keyed by <repo>:<segment>.
+	BarrierEvacuateStagedBefore = "evs.evacuate.staged.before"
+	BarrierEvacuateStagedAfter  = "evs.evacuate.staged.after"
+	// Around each sweep DELETE, and each one-off pass's, keyed by <repo>:<segment> or <repo>:<slot>.
+	BarrierSweepDeleteBefore = "evs.sweep.delete.before"
+	BarrierSweepDeleteAfter  = "evs.sweep.delete.after"
 )
 
 // A repo's barrier key.

@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.ServiceClient: the jwt and urls an engine builds its connect clients from. An edge's
 // clients are platform clients in the urnetwork-edge network (§6.10.1): tlsedge runs K of them a

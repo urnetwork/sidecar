@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.9's spam scoring (R-MAIL-6, R-MAIL-10; MAIL-M7-12): what a reader files as spam at ingest, from the sealed SPF,
 // DKIM and DMARC results, a few rules over them, and the mailbox's own naive Bayes filter in s/model, which its
 // people's verdicts train. The score is spam_score in the message's IndexEntry, parts per thousand. Nothing here

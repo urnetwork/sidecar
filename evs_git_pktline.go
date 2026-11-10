@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Git's pkt-line framing (gitprotocol-common), on every leg: the proc-receive hook's conversation with
 // receive-pack is pkt-lines, and §5.8's git hello hands a daemon raw ones (§11.11). This is framing
 // only: what a payload says, an `ERR` line's meaning included, is for its protocol. mlsinterop's

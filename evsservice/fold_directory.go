@@ -27,7 +27,8 @@ import (
 
 // A directory's delta merged into its entry: past a creation, a marker or anything but a table it starts from an
 // empty table; removed tokens drop their rows, added names replace theirs, and names_through becomes the delta's
-// commit version. The entry's drop mark stays, and a replaced marker's carried ids alarm (format1_guard.go).
+// commit version, names_leaf_* its place in its statement's list. The entry's drop mark stays, and a replaced
+// marker's carried ids alarm (format1_guard.go).
 func applyFoldDelta(entry *protocol.EvsIndexEntry, event *foldEvent, log sidecar.Logger) *protocol.EvsIndexEntry {
 	delta := event.entryVersion.GetNames()
 	if event.change.BaseEntryVersion == 0 || entry.GetMarker() != nil || entry.GetNames() == nil {
@@ -52,6 +53,8 @@ func applyFoldDelta(entry *protocol.EvsIndexEntry, event *foldEvent, log sidecar
 	}
 	entry.Names = &protocol.EvsNameTable{Names: sortedEvsNameRows(tokenRows)}
 	entry.NamesThrough = event.commitVersion
+	entry.NamesLeafPart = event.leaf.part
+	entry.NamesLeafIndex = event.leaf.index
 	entry.Versions = nil
 	entry.Marker = nil
 	return entry

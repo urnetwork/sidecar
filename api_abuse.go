@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §21's types every leg decodes: a network's §21.7 standing, and GET /abuse/status's body, which a
 // sidecar reads with its own client token and the page Worker reads too, so nothing here names a
 // connect type. host_abuse.go holds ServiceHost.Abuse, which only hosted engines read.

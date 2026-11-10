@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // TlsEdgeOpen's bound and its two ends (§13.5): the list tlsedge may put in it, and what a listener reads back. A
 // listener still trusts it only as §9.6's admission step 3 allows, which is its caller's check, so a parse here says
 // the bytes are well formed and nothing about who sent them.

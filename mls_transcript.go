@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The transcript hashes (RFC 9420 §8.2), which chain every commit a group adopts into its GroupContext,
 // and the confirmation tag (RFC §6.1) that proves both sides reached the same epoch.
 //

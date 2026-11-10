@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §14.4's TLS policy (D-SMTP-2, R-SMTP-13, X7): the check behind SmtpProofJob.VerifyPeer, which decides
 // how the sidecar, as TLS client, authenticated the MX the edge spliced it to, best level first.

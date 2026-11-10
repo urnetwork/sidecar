@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §12.14's ResolveNetworkLabel on the client (D-DNS-2, X5): the <net> of `.ur`, a git remote, a §9.4
 // address or a typed command, to the network it names. On every leg, with no connect.
 //

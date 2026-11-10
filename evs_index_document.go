@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Documents (§11.14's Documents block and never row; protocol/INDEX-FORMAT.md's Documents): what the index holds one
 // row and one key set of. A document is a text file's chunk, a mail message's, a record entry, or a document §16.8 or
 // §16.11 derives, such as a run card. Its key is
