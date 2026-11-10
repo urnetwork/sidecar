@@ -188,6 +188,35 @@ func TestPartsSealCommitUnderAGitLease(t *testing.T) {
 	}
 }
 
+// A lease on a ref with no head takes a placeholder head at version 0, which reads treat as absent and the seal
+// replaces by its first commit.
+func TestLeaseOnARefWithNoHead(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_GIT, 1100))
+	pushId := sidecar.Id(built.Statement.Push.GetPushId())
+	if recorder := fixture.lease(token, pushId, 0, time.Minute); recorder.Code != http.StatusOK {
+		t.Fatalf("lease: %d %s", recorder.Code, refusalOf(t, recorder).GetCode())
+	}
+	head := fixture.head()
+	if head.Absent() || head.Version() != 0 || !bytes.Equal(head.Head.GetLease().GetPushId(), pushId.Bytes()) {
+		t.Fatalf("placeholder %v", head.Head)
+	}
+	if reply := fixture.read(token, &protocol.EvsReadRequest{RefId: fixture.check.refId.Bytes()}); reply.head.GetVersion() != 0 || reply.head.GetRefMode() != 0 {
+		t.Fatalf("a placeholder read as %v", reply.head)
+	}
+	// another push's one-part push to the ref waits on the lease
+	one := fixture.plan()
+	one.RefMode = protocol.EvsRefMode_EVS_REF_GIT
+	fixture.create(one, "one")
+	requireRefusal(t, fixture.push(one), http.StatusTooManyRequests, protocol.EvsRefusalCode_EVS_REFUSAL_WAIT)
+	places := fixture.postParts(token, built)
+	fixture.requireCommitted(fixture.seal(token, built, places), 1)
+	if head := fixture.head(); head.Version() != 1 || head.Head.GetLease() != nil || head.Head.GetRefMode() != uint32(protocol.EvsRefMode_EVS_REF_GIT) {
+		t.Fatalf("after the seal: %v", head.Head)
+	}
+}
+
 // Parts not sealed are invisible: the head stands and a read answers the path absent.
 func TestPartsUnsealedAreInvisible(t *testing.T) {
 	fixture := newPushFixture(t, nil)

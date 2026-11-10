@@ -463,7 +463,7 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 	since := uint64(0)
 	deltaVersions := map[uint64]bool{}
 	switch {
-	case newest.Exists && path.version != 0 && newest.Version != path.version:
+	case newest.Exists && !newest.Directory && path.version != 0 && newest.Version != path.version:
 		// an older version by number: from its entry's folded versions, each of which its own push committed
 		if err := self.olderVersion(path, reply); err != nil {
 			return nil, err
