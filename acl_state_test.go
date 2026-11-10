@@ -435,4 +435,3 @@ func TestAclSocketTargetForms(t *testing.T) {
 		}
 	}
 }
-
