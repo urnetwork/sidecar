@@ -106,6 +106,7 @@ func TestDeviceRoleTypesLiveInBridge(t *testing.T) {
 		"KeyRow", "ApiTick", "StatementHeader", "Genesis", "SidecarRevoke", "MemberRevoke",
 		"GrantRevoke", "Suspend", "Unsuspend",
 		"BridgeState", "BridgeIdentity", "BridgeShareKey", "Pending", "BridgeRows", "WindowDelegation", "ShareCert",
+		"ForwardScope", "ForwardingKeys", "ForwardingHandOff",
 		"BridgeShareSigner", "BridgeBlock", "BridgeAddress", "BridgeRoute", "BridgeMap", "BridgeEgress",
 		"BridgeAlias", "BridgeWithdraw",
 		"BridgeRules", "BridgeRuleEntry", "BridgeRuleLink", "BridgeRuleMap", "BridgeRuleServed", "BridgeRuleSubject",

@@ -13,6 +13,9 @@
 //	                    AdmissionConfirm of an agent it admitted, which lifts a park; each refused once it ended or
 //	                    passed its not_after
 //
+// A Delegation with forward set is a forwarding Delegation, §7.9's forwarding row, which config_forwarding.go judges:
+// none of the rules above apply to it, its key signs no statement of the log, and its revocation takes since_n 0 alone.
+//
 // A Delegation ends at the first of its DelegationRevoke, its void (a cascade's P held its signer when it signed it)
 // and a compromise revocation of a sidecar it admitted (config_cascade.go); its key drops then too, and before, at a
 // lost or removed revocation or a Suspend of one of its agents, which leaves it admitting, each later agent uncovered.
@@ -61,7 +64,8 @@ func init() {
 
 // Verifies a statement a Delegation's key signed: signer_id names a Delegation this state holds and key_id is its
 // pubkey's SHA-256. Only a SidecarAdmit and an AdmissionConfirm take such a signer; whether the Delegation may still
-// sign is the type's rule.
+// sign is the type's rule. A forwarding Delegation's key is no signer of the log at all: it admits nothing
+// (D-TEAM-33), so a statement whose signer resolves to one is refused here, at api and at every reader.
 func (self *ConfigState) verifyDelegationSigner(signed *bridge.Signed, purpose string, signedType bridge.SignedType) (ConfigSigner, error) {
 	switch signedType {
 	case bridge.SignedType_SIGNED_SIDECAR_ADMIT, bridge.SignedType_SIGNED_ADMISSION_CONFIRM:
@@ -71,6 +75,9 @@ func (self *ConfigState) verifyDelegationSigner(signed *bridge.Signed, purpose s
 	delegation := self.delegations[string(signed.GetSignerId())]
 	if delegation == nil {
 		return ConfigSigner{}, fmt.Errorf("%w: no Delegation with this id", ErrConfigSigner)
+	}
+	if ConfigDelegationRowForwards(delegation) {
+		return ConfigSigner{}, fmt.Errorf("%w: a forwarding Delegation's key signs no %s: it admits nothing", ErrConfigSigner, signedType)
 	}
 	pubkey := delegation.GetPubkey()
 	pubkeySha256 := sha256.Sum256(pubkey)
@@ -97,9 +104,13 @@ func configDelegationTagIds(tagBytes [][]byte) ([]Id, error) {
 }
 
 // A Delegation: its fields' forms and bounds, a delegation_id no state held before, and one standing member device of
-// an Owner, Admin or Network admin, not read_only, that may apply each of its tags (§8's tagOwners).
+// an Owner, Admin or Network admin, not read_only, that may apply each of its tags (§8's tagOwners). One with forward
+// set is judged by §7.9's forwarding row instead, and by none of this (D-TEAM-33).
 func configCheckDelegation(state *ConfigState, statement *configStatement) error {
 	delegation := statement.body.(*protocol.Delegation)
+	if ConfigDelegationForwards(delegation) {
+		return configCheckForwardingDelegation(state, statement)
+	}
 	if len(statement.signers) != 1 || statement.signers[0].Kind != ConfigSignerSidecar {
 		return fmt.Errorf("%w: a Delegation takes one device's signature, never a Delegation's or a recovery key's", ErrConfigSigner)
 	}
@@ -149,6 +160,9 @@ func configCheckDelegation(state *ConfigState, statement *configStatement) error
 // A Delegation's effect: its row, keyed by its delegation_id, with its signer and position for the cascade.
 func configApplyDelegation(next *configStateBuilder, statement *configStatement) error {
 	delegation := statement.body.(*protocol.Delegation)
+	if ConfigDelegationForwards(delegation) {
+		return configApplyForwardingDelegation(next, statement)
+	}
 	if next.state.delegations[string(statement.id[:])] != nil {
 		return fmt.Errorf("%w: a delegation_id declared before", ErrConfigRule)
 	}
@@ -209,6 +223,9 @@ func configCheckDelegationRevoke(state *ConfigState, statement *configStatement)
 	if delegation == nil {
 		return fmt.Errorf("%w: no such Delegation", ErrConfigRule)
 	}
+	if ConfigDelegationRowForwards(delegation) {
+		return configCheckForwardingRevoke(state, statement, delegation)
+	}
 	if sinceN := revoke.GetSinceN(); sinceN != 0 && statement.n <= sinceN {
 		return fmt.Errorf("%w: since_n %d is not before the entry", ErrConfigRule, sinceN)
 	}
@@ -229,6 +246,10 @@ func configApplyDelegationRevoke(next *configStateBuilder, statement *configStat
 		return fmt.Errorf("%w: no such Delegation", ErrConfigRule)
 	}
 	configEndDelegation(delegation, statement.n)
+	if ConfigDelegationRowForwards(delegation) {
+		// it admitted nothing, so there is nothing to park
+		return nil
+	}
 	if sinceN := revoke.GetSinceN(); sinceN != 0 {
 		for _, sidecarId := range next.state.SidecarIds() {
 			row := next.sidecar(sidecarId)
@@ -267,6 +288,8 @@ func configDelegationSigns(delegation *bridge.DelegationRow, timeMs int64) error
 	switch {
 	case delegation == nil:
 		return fmt.Errorf("%w: no such Delegation", ErrConfigSigner)
+	case ConfigDelegationRowForwards(delegation):
+		return fmt.Errorf("%w: a forwarding Delegation admits nothing", ErrConfigAuthority)
 	case delegation.GetEndedAt() != 0:
 		return fmt.Errorf("%w: the Delegation ended at %d", ErrConfigAuthority, delegation.GetEndedAt())
 	case delegation.GetNotAfter() <= timeMs:

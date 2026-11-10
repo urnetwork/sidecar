@@ -58,6 +58,8 @@ var (
 	ErrEvsPathKind = errors.New("evs: a path of another kind")
 	// What a format-1 write cannot do yet: named in the error, nothing sent.
 	ErrEvsWriteNotBuilt = errors.New("evs: write not built")
+	// A write held to an entry version (EvsPathWrite.IfVersion) the path no longer stands at.
+	ErrEvsPathMoved = errors.New("evs: the path moved past the version the write was made on")
 	// A plan whose read batches met two path epochs: the write plans again from a fresh read.
 	errEvsPlanEpochMoved = errors.New("evs: the path epoch moved while the plan read")
 )
@@ -76,6 +78,10 @@ type EvsPathWrite struct {
 	Remove bool
 	// A whole checkpoint under a fresh key even where a diff would do: KEYS-M2-26's ur evs rekey.
 	ForceCheckpoint bool
+	// The entry version the path must stand at, 0 for any. A write whose content came from an earlier read of that
+	// version, as ur evs rekey's does, is refused with ErrEvsPathMoved once another write or a removal landed
+	// between, rather than putting the older content back; evs then holds the push to the version the plan read (5g).
+	IfVersion uint64
 }
 
 // What a plan is made against.
@@ -361,6 +367,9 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	if stands {
 		planned.PrevPushId = verified.Statement.Push.GetPushId()
 		planned.PrevCommitVersion = verified.CommitVersion
+	}
+	if write.IfVersion != 0 && (!stands || evsVerifiedNewestVersion(verified) != write.IfVersion) {
+		return nil, ErrEvsPathMoved
 	}
 	if write.Remove {
 		if !stands {

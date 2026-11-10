@@ -838,3 +838,332 @@ func TestAuthChainVectors(t *testing.T) {
 		testCheckChainRow(t, row)
 	}
 }
+
+// A forwarding Delegation's body in DESIGN-DETAILS 4.2.2's form: its keys and forward, and no tags, max_admits or
+// not_after (§7.9's forwarding row; D-TEAM-33; owner decision 197).
+func testForwardingDelegationBody() *protocol.Delegation {
+	return &protocol.Delegation{
+		Header: &bridge.StatementHeader{
+			NetworkId:  bytes.Repeat([]byte{0x11}, 16),
+			At:         &bridge.AuthPin{Version: 7, Chain: bytes.Repeat([]byte{0x22}, sha256.Size)},
+			Nonce:      bytes.Repeat([]byte{0x33}, 16),
+			NotAfterMs: 1_700_000_000_000,
+		},
+		Pubkey:               testConfigPublicKey(),
+		ReaderXwingPublicKey: bytes.Repeat([]byte{0x5A}, configXwingPublicKeyByteCount),
+		Forward: &bridge.ForwardScope{
+			ForwardSidecarId:    bytes.Repeat([]byte{0x44}, 16),
+			HostClientId:        bytes.Repeat([]byte{0x55}, 16),
+			HostClientPublicKey: bytes.Repeat([]byte{0x66}, ed25519.PublicKeySize),
+		},
+	}
+}
+
+// One field DESIGN-DETAILS 4.2.2 adds, as its proto block writes it.
+type testForwardingField struct {
+	message  proto.Message
+	name     string
+	number   int32
+	kind     protoreflect.Kind
+	typeName string
+}
+
+// Every field TEAM-M2-20 adds before M2's freeze, each with 4.2.2's number and type.
+func testForwardingFields() []testForwardingField {
+	return []testForwardingField{
+		{message: (*protocol.Delegation)(nil), name: "forward", number: 7, kind: protoreflect.MessageKind, typeName: "ForwardScope"},
+		{message: (*bridge.ForwardScope)(nil), name: "forward_sidecar_id", number: 1, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardScope)(nil), name: "host_client_id", number: 2, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardScope)(nil), name: "host_client_public_key", number: 3, kind: protoreflect.BytesKind},
+		{message: (*bridge.DelegationRow)(nil), name: "forward_sidecar_id", number: 12, kind: protoreflect.BytesKind},
+		{message: (*bridge.DelegationRow)(nil), name: "host_client_id", number: 13, kind: protoreflect.BytesKind},
+		{message: (*bridge.DelegationRow)(nil), name: "host_client_public_key", number: 14, kind: protoreflect.BytesKind},
+		{message: (*bridge.DelegationRow)(nil), name: "superseded_at", number: 15, kind: protoreflect.Uint64Kind},
+		{message: (*bridge.DelegationRow)(nil), name: "reader_key_sha256", number: 16, kind: protoreflect.BytesKind},
+		{message: (*bridge.BridgeIdentity)(nil), name: "forward_delegation_id", number: 6, kind: protoreflect.BytesKind},
+		{message: (*bridge.BridgeIdentity)(nil), name: "forward_public_key", number: 7, kind: protoreflect.BytesKind},
+		{message: (*bridge.Pending)(nil), name: "forward_delegation_id", number: 5, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingKeys)(nil), name: "key_set_id", number: 1, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingKeys)(nil), name: "forward_public_key", number: 2, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingKeys)(nil), name: "reader_xwing_public_key", number: 3, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingKeys)(nil), name: "client_public_key", number: 4, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingKeys)(nil), name: "host_client_id", number: 5, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingKeys)(nil), name: "host_client_public_key", number: 6, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "pending", number: 1, kind: protoreflect.MessageKind, typeName: "Pending"},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "key_set_id", number: 2, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "forward_client_id", number: 3, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "forward_client_jwt", number: 4, kind: protoreflect.StringKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "strict_exp_ms", number: 5, kind: protoreflect.Int64Kind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "config_repo_id", number: 6, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "config_group_id", number: 7, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "signed_delegation", number: 8, kind: protoreflect.BytesKind},
+		{message: (*bridge.ForwardingHandOff)(nil), name: "delegation_at", number: 9, kind: protoreflect.MessageKind, typeName: "AuthPin"},
+	}
+}
+
+// DESIGN-DETAILS 4.2.2's formats, field by field: each new field has the number and type its proto block writes,
+// none is repeated, the two setup messages hold nothing else, and each message that gained fields kept the ones it
+// had at their numbers.
+func TestForwardingFieldsAreDesignDetailsNumbers(t *testing.T) {
+	for _, c := range testForwardingFields() {
+		descriptor := c.message.ProtoReflect().Descriptor()
+		field := descriptor.Fields().ByName(protoreflect.Name(c.name))
+		if field == nil {
+			t.Errorf("%s has no %s", descriptor.Name(), c.name)
+			continue
+		}
+		if int32(field.Number()) != c.number || field.Kind() != c.kind || field.IsList() || field.IsMap() {
+			t.Errorf("%s.%s is %d, %s", descriptor.Name(), c.name, field.Number(), field.Kind())
+		}
+		if c.typeName != "" && (field.Message() == nil || string(field.Message().Name()) != c.typeName) {
+			t.Errorf("%s.%s is no %s", descriptor.Name(), c.name, c.typeName)
+		}
+	}
+	fieldCounts := []struct {
+		message proto.Message
+		count   int
+	}{
+		{message: (*protocol.Delegation)(nil), count: 7},
+		{message: (*bridge.ForwardScope)(nil), count: 3},
+		{message: (*bridge.DelegationRow)(nil), count: 16},
+		{message: (*bridge.BridgeIdentity)(nil), count: 7},
+		{message: (*bridge.Pending)(nil), count: 5},
+		{message: (*bridge.ForwardingKeys)(nil), count: 6},
+		{message: (*bridge.ForwardingHandOff)(nil), count: 9},
+	}
+	for _, c := range fieldCounts {
+		descriptor := c.message.ProtoReflect().Descriptor()
+		if descriptor.Fields().Len() != c.count {
+			t.Errorf("%s has %d fields, want %d", descriptor.Name(), descriptor.Fields().Len(), c.count)
+		}
+	}
+	// what the device role parses lives in protocol/bridge (§4.4): it reads a Delegation's field 7 by wire
+	for _, message := range []proto.Message{(*bridge.ForwardScope)(nil), (*bridge.ForwardingKeys)(nil), (*bridge.ForwardingHandOff)(nil)} {
+		descriptor := message.ProtoReflect().Descriptor()
+		if path := descriptor.ParentFile().Path(); !strings.HasPrefix(path, "protocol/bridge/") {
+			t.Errorf("%s is declared in %s", descriptor.Name(), path)
+		}
+	}
+	// the numbers each message had before, unmoved
+	kept := []struct {
+		message proto.Message
+		name    string
+		number  int32
+	}{
+		{message: (*protocol.Delegation)(nil), name: "reader_xwing_public_key", number: 3},
+		{message: (*protocol.Delegation)(nil), name: "not_after", number: 6},
+		{message: (*bridge.DelegationRow)(nil), name: "reader_xwing_public_key", number: 10},
+		{message: (*bridge.DelegationRow)(nil), name: "max_admits", number: 11},
+		{message: (*bridge.BridgeIdentity)(nil), name: "suspended", number: 5},
+		{message: (*bridge.Pending)(nil), name: "identity_public_key", number: 4},
+	}
+	for _, c := range kept {
+		descriptor := c.message.ProtoReflect().Descriptor()
+		if field := descriptor.Fields().ByName(protoreflect.Name(c.name)); field == nil || int32(field.Number()) != c.number {
+			t.Errorf("%s.%s moved", descriptor.Name(), c.name)
+		}
+	}
+}
+
+// Each message TEAM-M2-20 adds or extends round-trips with every field set: nothing is lost, nothing lands as
+// unknown, and the deterministic bytes are stable.
+func TestForwardingMessagesRoundTrip(t *testing.T) {
+	messages := []proto.Message{
+		&protocol.Delegation{}, &bridge.ForwardScope{}, &bridge.DelegationRow{}, &bridge.BridgeIdentity{},
+		&bridge.Pending{}, &bridge.ForwardingKeys{}, &bridge.ForwardingHandOff{},
+	}
+	for _, message := range messages {
+		name := message.ProtoReflect().Descriptor().Name()
+		testConfigFill(message.ProtoReflect())
+		encoded := testConfigEncode(t, message)
+		decoded := message.ProtoReflect().New()
+		if err := proto.Unmarshal(encoded, decoded.Interface()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !proto.Equal(message, decoded.Interface()) {
+			t.Errorf("%s did not round-trip", name)
+		}
+		if len(decoded.GetUnknown()) != 0 {
+			t.Errorf("%s holds unknown fields after its own round trip", name)
+		}
+		fields := decoded.Descriptor().Fields()
+		for i := range fields.Len() {
+			if !decoded.Has(fields.Get(i)) {
+				t.Errorf("%s.%s is unset after a round trip", name, fields.Get(i).Name())
+			}
+		}
+		if again := testConfigEncode(t, decoded.Interface()); !bytes.Equal(again, encoded) {
+			t.Errorf("%s re-encodes differently", name)
+		}
+	}
+}
+
+// A forwarding Delegation through the registry: it parses only as a Delegation under purpose authority, forward set
+// says what it is, and its id is its statement id, which its row, its revocation and its DelegationWraps name.
+func TestAForwardingDelegationParsesAsADelegationAlone(t *testing.T) {
+	delegation := testForwardingDelegationBody()
+	body := testConfigEncode(t, delegation)
+	message, err := ParseConfigStatement(bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_DELEGATION, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, ok := message.(*protocol.Delegation)
+	if !ok || !proto.Equal(parsed, delegation) {
+		t.Fatalf("parsed as %T", message)
+	}
+	if !ConfigDelegationForwards(parsed) {
+		t.Error("forward set is no forwarding Delegation")
+	}
+	if len(parsed.GetTagIds()) != 0 || parsed.GetMaxAdmits() != 0 || parsed.GetNotAfter() != 0 {
+		t.Error("a forwarding Delegation carries tags, max_admits or a not_after")
+	}
+	// set means set: a ForwardScope naming nothing is still a forwarding Delegation, which its rule then refuses
+	empty := testForwardingDelegationBody()
+	empty.Forward = &bridge.ForwardScope{}
+	emptyParsed := &protocol.Delegation{}
+	if err := proto.Unmarshal(testConfigEncode(t, empty), emptyParsed); err != nil {
+		t.Fatal(err)
+	}
+	if !ConfigDelegationForwards(emptyParsed) {
+		t.Error("an empty forward reads as unset")
+	}
+	agent := testForwardingDelegationBody()
+	agent.Forward = nil
+	if ConfigDelegationForwards(agent) {
+		t.Error("a Delegation with no forward reads as a forwarding one")
+	}
+
+	signed := testConfigSign(bridge.SignedType_SIGNED_DELEGATION, body)
+	signedBytes := testConfigEncode(t, signed)
+	statementId, err := StatementId(signedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegationId, err := DelegationId(signedBytes)
+	if err != nil || delegationId != statementId {
+		t.Errorf("delegation id %x, statement id %x: %v", delegationId, statementId, err)
+	}
+	for _, otherType := range testConfigTypes() {
+		if otherType == bridge.SignedType_SIGNED_DELEGATION {
+			continue
+		}
+		otherPurpose := configStatementTypes[otherType].purpose
+		if err := testConfigVerify(signed, otherPurpose, otherType); !errors.Is(err, bridge.ErrSignedTypeMismatch) {
+			t.Errorf("a forwarding Delegation presented as %s: %v", otherType, err)
+		}
+		rewritten := &bridge.Signed{Body: signed.GetBody(), Signature: signed.GetSignature(), Type: uint32(otherType)}
+		if err := testConfigVerify(rewritten, otherPurpose, otherType); !errors.Is(err, bridge.ErrSignedSignature) {
+			t.Errorf("a forwarding Delegation rewritten to %s: %v", otherType, err)
+		}
+	}
+}
+
+// What sidecar/device does with a Delegation: it may import only protocol/bridge, so it reads field 7 by wire and
+// parses the value as a ForwardScope, never the Delegation's own message.
+func TestADelegationsForwardReadsByWireAsAForwardScope(t *testing.T) {
+	delegation := testForwardingDelegationBody()
+	var forwardBytes []byte
+	found := 0
+	for _, record := range testConfigSplitFields(t, testConfigEncode(t, delegation)) {
+		number, wireType, tagSize := protowire.ConsumeTag(record)
+		if tagSize < 0 {
+			t.Fatal("a record with no tag")
+		}
+		switch number {
+		case 4, 5, 6:
+			t.Errorf("a forwarding Delegation's bytes hold field %d", number)
+		case 7:
+			if wireType != protowire.BytesType {
+				t.Fatalf("field 7 has wire type %d", wireType)
+			}
+			value, valueSize := protowire.ConsumeBytes(record[tagSize:])
+			if valueSize < 0 {
+				t.Fatal("field 7 does not hold bytes")
+			}
+			forwardBytes = value
+			found += 1
+		}
+	}
+	if found != 1 {
+		t.Fatalf("field 7 appears %d times", found)
+	}
+	scope := &bridge.ForwardScope{}
+	if err := proto.Unmarshal(forwardBytes, scope); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(scope, delegation.GetForward()) {
+		t.Error("field 7 by wire is not the Delegation's forward")
+	}
+}
+
+// The closed direction for a reader built before the field: the message it knows has no field 7, so it keeps the
+// field as unknown bytes, which leaves the signature and the id whole, and sees a Delegation with no tags, no
+// max_admits and no not_after, which the agent rule refuses.
+func TestAnOlderReaderSeesAForwardingDelegationWithNoNotAfter(t *testing.T) {
+	body := testConfigEncode(t, testForwardingDelegationBody())
+	older := []byte{}
+	for _, record := range testConfigSplitFields(t, body) {
+		if number, _, _ := protowire.ConsumeTag(record); number != 7 {
+			older = append(older, record...)
+		}
+	}
+	// what the older reader's message holds: every field but 7
+	seen := &protocol.Delegation{}
+	if err := proto.Unmarshal(older, seen); err != nil {
+		t.Fatal(err)
+	}
+	if ConfigDelegationForwards(seen) {
+		t.Fatal("the older reader's view still forwards")
+	}
+	if len(seen.GetTagIds()) != 0 || seen.GetMaxAdmits() != 0 || seen.GetNotAfter() != 0 {
+		t.Fatalf("the older reader sees tags %d, max_admits %d, not_after %d", len(seen.GetTagIds()), seen.GetMaxAdmits(), seen.GetNotAfter())
+	}
+	// and an unknown field does not fail the parse or change the bytes a signature and an id cover (§6.4)
+	unknown := protowire.AppendTag(nil, testConfigUnknownField, protowire.BytesType)
+	unknown = protowire.AppendBytes(unknown, []byte("a field from later"))
+	withUnknown := append(bytes.Clone(body), unknown...)
+	message, err := ParseConfigStatement(bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_DELEGATION, withUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(message.ProtoReflect().GetUnknown(), unknown) {
+		t.Error("an unknown field was dropped")
+	}
+}
+
+// A forwarding Delegation's row carries its reader key's SHA-256 and never the key: with the key it would be over
+// 1,216 B a device, and §8.8's 4 MiB of rows would be passed at about 2,600 app devices (DESIGN-DETAILS 4.1).
+func TestAForwardingRowCarriesItsReaderKeysDigestNotTheKey(t *testing.T) {
+	delegation := testForwardingDelegationBody()
+	digest := DelegationReaderKeySha256(delegation.GetReaderXwingPublicKey())
+	if want := sha256.Sum256(delegation.GetReaderXwingPublicKey()); digest != want {
+		t.Fatalf("digest %x, want %x", digest, want)
+	}
+	row := &bridge.DelegationRow{
+		DelegationId:        bytes.Repeat([]byte{0x77}, sha256.Size),
+		Signer:              delegation.GetForward().GetForwardSidecarId(),
+		At:                  1_000_000,
+		Pubkey:              delegation.GetPubkey(),
+		ForwardSidecarId:    delegation.GetForward().GetForwardSidecarId(),
+		HostClientId:        delegation.GetForward().GetHostClientId(),
+		HostClientPublicKey: delegation.GetForward().GetHostClientPublicKey(),
+		SupersededAt:        2_000_000,
+		ReaderKeySha256:     digest[:],
+	}
+	rowBytes := testConfigEncode(t, row)
+	if 256 < len(rowBytes) {
+		t.Errorf("a forwarding row is %d bytes", len(rowBytes))
+	}
+	withKey := proto.Clone(row).(*bridge.DelegationRow)
+	withKey.ReaderXwingPublicKey = delegation.GetReaderXwingPublicKey()
+	if len(testConfigEncode(t, withKey)) < len(rowBytes)+configXwingPublicKeyByteCount {
+		t.Error("the key in the row would not be the cost DESIGN-DETAILS 4.1 measured")
+	}
+	decoded := &bridge.DelegationRow{}
+	if err := proto.Unmarshal(rowBytes, decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.GetReaderXwingPublicKey()) != 0 || !bytes.Equal(decoded.GetReaderKeySha256(), digest[:]) {
+		t.Error("field 10 is not empty or field 16 is not the digest")
+	}
+}

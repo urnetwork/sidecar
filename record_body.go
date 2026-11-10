@@ -289,6 +289,8 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return recordLogSettingsValidate(typed)
 	case *protocol.LogCheckpointBody:
 		return recordLogCheckpointValidate(typed)
+	case *protocol.DisclosureBody:
+		return recordDisclosureValidate(typed)
 	}
 	return nil
 }

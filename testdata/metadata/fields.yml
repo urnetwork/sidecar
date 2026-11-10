@@ -191,6 +191,8 @@ sealed_messages:
   ConfigName: "inside a config head's names file, which evs holds as ciphertext (§7.7, §7.9)"
   BridgeState: "in process, or DeviceLocalRpc on the device (§18.6)"
   Pending: "in process, or DeviceLocalRpc on the device (§18.6)"
+  ForwardingKeys: "a VPN component's public keys for its sidecar role, in process or DeviceLocalRpc on the device (§18.6, DESIGN-DETAILS 4.2.6)"
+  ForwardingHandOff: "a sidecar role's hand-off to its VPN component, in process or DeviceLocalRpc on the device (§18.6, DESIGN-DETAILS 4.2.6)"
   BridgeRules: "BridgeState.rules, in process, or DeviceLocalRpc on the device (§18.6, plan-BRIDGE-small-readings #2)"
   WindowDelegation: "C13 seals it into StoredContract, in every mode (§2.8's connect-1, §8.10, §17.9)"
   ShareCert: "rides sealed in a WindowDelegation (§17.9)"
