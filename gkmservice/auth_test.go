@@ -236,8 +236,14 @@ func TestGkmTokenWithoutASidecarReachesOnlyItsRecoveryRead(t *testing.T) {
 	}
 }
 
-// A route whose handler has not landed answers 501 once the guard has passed it, and the guard's refusals before.
-func TestGkmUnbuiltRouteAnswers501AfterTheGuard(t *testing.T) {
+// Every route of the table has its handler, so none answers 501, and a route's handler runs only past the guard: the
+// ladder, the last to land, refuses a reader's token before it reads a body and holds an admin's to its shape.
+func TestGkmEveryRouteHasItsHandlerBehindTheGuard(t *testing.T) {
+	for _, route := range gkmRoutes {
+		if route.Serve == nil {
+			t.Errorf("%s has no handler", route.Pattern)
+		}
+	}
 	fixture := newGkmFixture(t)
 	repoId := testId("repo-r")
 	groupId := testId("group-g")
@@ -246,13 +252,12 @@ func TestGkmUnbuiltRouteAnswers501AfterTheGuard(t *testing.T) {
 	admin := testId("sc-admin")
 	fixture.auth.admit(admin, memberDeviceFacts(testId("member-m")))
 	fixture.auth.grant(admin, repoId, sidecar.AclEvsAdmin)
-	// the ladder is KEYS-M2-25's
 	path := "/gkm/groups/" + sidecar.EvsKeyId(groupId) + "/ladder"
-	if recorder := fixture.serve(http.MethodPost, path, fixture.token(admin, repoScope(repoId, "admin")), nil); recorder.Code != http.StatusNotImplemented {
-		t.Errorf("an unbuilt route past the guard: %d", recorder.Code)
+	if recorder := fixture.serve(http.MethodPost, path, fixture.token(admin, repoScope(repoId, "admin")), nil); recorder.Code != http.StatusBadRequest {
+		t.Errorf("an empty ladder past the guard: %d", recorder.Code)
 	}
 	if recorder := fixture.serve(http.MethodPost, path, fixture.token(admin, repoScope(repoId, "r")), nil); recorder.Code != http.StatusForbidden {
-		t.Errorf("an unbuilt route the guard refuses: %d", recorder.Code)
+		t.Errorf("a ladder the guard refuses: %d", recorder.Code)
 	}
 }
 

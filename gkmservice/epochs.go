@@ -13,9 +13,9 @@
 //     below epoch n-1's; a rotation landing between that read and the PUT is harmless, since joiners fetch a late
 //     wrap. The one exception: an external commit by a device its member's recovery key admitted may say generation
 //     0 and carry no GenWrap (§10.8), and the group's next commit carries gen/'s newest again;
-//   - its auth pin exists, as gkm's newest state judges it, and never falls below epoch n-1's. An epoch with no pin, a
-//     re-form's epoch 0 as landed, gives no floor, and question keys-wire-reform-epoch-zero asks what should; until
-//     it is answered a commit onto such an epoch is refused (fail closed);
+//   - its auth pin exists, as gkm's newest state judges it, and never falls below epoch n-1's, or, for epoch 1 of a
+//     re-formed group, whose epoch 0 carries no pin, below gen/<the form's generation>'s auth, which the ladder must
+//     have written first (DESIGN-DETAILS 6.2.2; reform.go). A commit onto any other epoch with no pin is refused;
 //   - repo/ is reread as the write issues, so a write in flight at a shred lands before §11.12 repeats the group's
 //     deletion (§10.6's checks row), and 60 commits an hour per uploader per group.
 //
@@ -274,9 +274,13 @@ func (self *GkmEngine) checkCommitHeader(request *GkmRequest, groupId sidecar.Id
 	pin := upload.header.GetAuth()
 	previousPin := previous.GetAuth()
 	if previousPin == nil {
-		// a re-form's epoch 0 as landed carries no pin: question keys-wire-reform-epoch-zero
-		request.Forbidden()
-		return false
+		// only a re-form's epoch 0 carries no pin, and epoch 1's floor is gen/<the form's generation>'s auth, which
+		// the ladder writes first (reform.go); any other pinless epoch gives no floor and takes no commit
+		floor, ok := self.reformPinFloor(request, groupId, upload.epoch, previous)
+		if !ok {
+			return false
+		}
+		previousPin = floor
 	}
 	if pin.GetVersion() < previousPin.GetVersion() ||
 		pin.GetVersion() == previousPin.GetVersion() && !bytes.Equal(pin.GetChain(), previousPin.GetChain()) {
