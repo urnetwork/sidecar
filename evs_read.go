@@ -379,7 +379,7 @@ func (self *EvsRepo) readRound(ctx context.Context, refId Id, keys *evsReadKeys,
 	if err := self.client.verifier.Pin(head); err != nil {
 		return nil, err
 	}
-	self.client.setRefEpoch(self.repoId, refId, head.Head.GetPathEpoch())
+	self.client.noteVerifiedHead(self.repoId, refId, head.Head)
 	records := []*EvsReadRecord{}
 	for i, path := range paths {
 		if version != 0 || verifiedPaths[i].Entry == nil {
@@ -470,16 +470,10 @@ func (self *EvsClient) postRead(ctx context.Context, repoId Id, request *protoco
 
 // The ref's path epoch as the last verified head gave it, nil when this client has read none.
 func (self *EvsClient) refEpoch(repoId Id, refId Id) *protocol.EvsPathEpoch {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return self.refEpochs[evsRefKey{repoId: repoId, refId: refId}]
-}
-
-// Keeps the ref's path epoch from a verified head.
-func (self *EvsClient) setRefEpoch(repoId Id, refId Id, epoch *protocol.EvsPathEpoch) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.refEpochs[evsRefKey{repoId: repoId, refId: refId}] = epoch
+	if state := self.refEpochState(repoId, refId); state != nil {
+		return state.epoch
+	}
+	return nil
 }
 
 // Reads the newest committed version of a file, or an older one (args.Version), verified and pinned, then

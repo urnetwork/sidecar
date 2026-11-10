@@ -149,8 +149,9 @@ type evsTestWorld struct {
 	gitState     map[string]EvsGitOid
 	nextMetadata []byte
 	// the head's current path epoch, 0 for 1: a PATH_EPOCH the world's pushes never made, as a subscription's
-	// leases follow it
+	// leases follow it; and the source epochs it lists, newest first
 	currentEpoch uint64
+	sourceEpochs []uint64
 }
 
 func newEvsTestWorld(t testing.TB) *evsTestWorld {
@@ -199,13 +200,18 @@ func (self *evsTestWorld) head() (uint64, [sha256.Size]byte) {
 
 // A path's token path in epoch 1, the root's "" empty.
 func (self *evsTestWorld) tokens(path string) EvsTokenPath {
+	return self.tokensAt(path, 1)
+}
+
+// A path's token path in epoch, the root's "" empty in every epoch.
+func (self *evsTestWorld) tokensAt(path string, epoch uint64) EvsTokenPath {
 	names := [][]byte{}
 	for _, name := range strings.Split(path, "/") {
 		if path != "" {
 			names = append(names, []byte(name))
 		}
 	}
-	tokenPath, err := EvsPathTokens(evsTestPathKey(self.t, self.repoId, 1), names)
+	tokenPath, err := EvsPathTokens(evsTestPathKey(self.t, self.repoId, max(1, epoch)), names)
 	if err != nil {
 		self.t.Fatal(err)
 	}
@@ -418,6 +424,9 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 		GroupId: evsTestId("world group").Bytes(), Generation: self.generation,
 		PathEpoch: &protocol.EvsPathEpoch{Current: max(1, self.currentEpoch)},
 	}
+	for _, source := range self.sourceEpochs {
+		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
+	}
 	if len(self.commits) == 0 {
 		chain := EvsChainStart(self.repoId, self.refId)
 		head.Chain = chain[:]
@@ -435,14 +444,19 @@ func evsTestTreePosition(tree *EvsChangeTree, tokenPath EvsTokenPath) (int, int,
 	return tree.position(tokenPath)
 }
 
-// The reply for one path at its newest version, or version, with the proofs a reader needs from pin on.
-func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, version uint64, pin uint64) (*protocol.EvsReadPathReply, []*protocol.EvsLocator, error) {
+// The reply for one path at its newest version, or version, with the proofs a reader needs from pin on: tokenPath
+// names it in epoch, and each statement's change is found under the path's token path in that statement's epoch.
+func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, epoch uint64, version uint64, pin uint64) (*protocol.EvsReadPathReply, []*protocol.EvsLocator, error) {
 	var key string
 	var state *evsTestPath
 	for path, candidate := range self.paths {
-		if self.tokens(path).Equal(tokenPath) {
+		if self.tokensAt(path, epoch).Equal(tokenPath) {
 			key, state = path, candidate
 		}
+	}
+	// a statement's own epoch's token path of the path
+	tokenPathAt := func(commitVersion uint64) EvsTokenPath {
+		return self.tokensAt(key, self.commits[commitVersion-1].parsed.Push.GetPathEpoch())
 	}
 	reply := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components()}
 	if state == nil {
@@ -494,7 +508,7 @@ func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, version uint
 		reply.Statement = commit.statement
 	}
 	if commit.built.ChangeTree != nil {
-		part, index, present := evsTestTreePosition(commit.built.ChangeTree, tokenPath)
+		part, index, present := evsTestTreePosition(commit.built.ChangeTree, tokenPathAt(commitVersion))
 		if !present && reply.Removal == nil {
 			return nil, nil, fmt.Errorf("the path is not in its push")
 		}
@@ -511,7 +525,7 @@ func (self *evsTestWorld) pathReplyWithLock(tokenPath EvsTokenPath, version uint
 		if tree == nil {
 			continue
 		}
-		for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, tokenPath) {
+		for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, tokenPathAt(later)) {
 			absence, err := tree.AbsenceProof(absentPath)
 			if err != nil {
 				continue
@@ -555,7 +569,7 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		locators := []*protocol.EvsLocator{}
 		for _, path := range read.GetPaths() {
 			tokenPath, _ := ParseEvsTokenPath(path.GetTokenPaths()[0].GetTokenPath())
-			reply, pathLocators, err := self.pathReplyWithLock(tokenPath, path.GetVersion(), read.GetPinVersion())
+			reply, pathLocators, err := self.pathReplyWithLock(tokenPath, path.GetTokenPaths()[0].GetEpoch(), path.GetVersion(), read.GetPinVersion())
 			if err != nil {
 				writer.WriteHeader(http.StatusNotFound)
 				return

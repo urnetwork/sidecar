@@ -20,6 +20,7 @@
 package sidecar
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -30,6 +31,7 @@ import (
 // A directory below the root as a plan's read found it.
 type evsDirectoryRead struct {
 	path      string
+	names     [][]byte
 	tokenPath EvsTokenPath
 	// it stands as a directory, or as a file
 	directory bool
@@ -44,7 +46,7 @@ type evsDirectoryRead struct {
 
 // A read directory's state.
 func evsDirectoryReadOf(readPath *evsReadPath, verified *EvsVerifiedPath) *evsDirectoryRead {
-	read := &evsDirectoryRead{path: readPath.path, tokenPath: readPath.current}
+	read := &evsDirectoryRead{path: readPath.path, names: readPath.names, tokenPath: readPath.current}
 	switch {
 	case verified.Entry != nil && verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY):
 		read.directory = true
@@ -59,10 +61,11 @@ func evsDirectoryReadOf(readPath *evsReadPath, verified *EvsVerifiedPath) *evsDi
 	return read
 }
 
-// What one directory's delta does to one child.
+// What one directory's delta does to one child: the child's plaintext path and last raw name, its kind, and whether
+// it goes. Its tokens are the plan's to compute in whichever epoch the push names (EvsWritePlan.directoryRows).
 type evsChildChange struct {
+	path    string
 	name    []byte
-	token   EvsToken
 	kind    protocol.EvsEntryKind
 	removed bool
 }
@@ -85,22 +88,22 @@ func evsSplitParent(path string) (string, []byte) {
 }
 
 // The directory changes a plan's written paths need: see the file header.
-func evsDirectoryChanges(plan *EvsWritePlan, planned map[string]*EvsPlannedPath, directories map[string]*evsDirectoryRead, nameKey *EvsManifestKey) ([]*EvsPlannedPath, error) {
+func evsDirectoryChanges(ctx context.Context, plan *EvsWritePlan, planned map[string]*EvsPlannedPath, directories map[string]*evsDirectoryRead) ([]*EvsPlannedPath, error) {
 	parentChildren := map[string][]*evsChildChange{}
-	note := func(path string, tokenPath EvsTokenPath, kind protocol.EvsEntryKind, removed bool) {
+	note := func(path string, kind protocol.EvsEntryKind, removed bool) {
 		if path == "" {
 			// the root, which no directory holds
 			return
 		}
 		parent, name := evsSplitParent(path)
-		parentChildren[parent] = append(parentChildren[parent], &evsChildChange{name: name, token: tokenPath.Last(), kind: kind, removed: removed})
+		parentChildren[parent] = append(parentChildren[parent], &evsChildChange{path: path, name: name, kind: kind, removed: removed})
 	}
 	for path, change := range planned {
 		switch {
 		case change.Remove:
-			note(path, change.TokenPath, change.Kind, true)
+			note(path, change.Kind, true)
 		case change.BaseEntryVersion == 0:
-			note(path, change.TokenPath, change.Kind, false)
+			note(path, change.Kind, false)
 		}
 	}
 	changes := []*EvsPlannedPath{}
@@ -126,35 +129,74 @@ func evsDirectoryChanges(plan *EvsWritePlan, planned map[string]*EvsPlannedPath,
 		if read.file {
 			return nil, fmt.Errorf("%w: a path created under a file", ErrEvsPathKind)
 		}
-		change := &EvsPlannedPath{Path: parent, TokenPath: read.tokenPath, Kind: protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY}
-		for _, child := range children {
-			if child.removed {
-				change.RemovedTokens = append(change.RemovedTokens, child.token.Bytes())
-				continue
-			}
-			sealedName, err := EvsNameSeal(nameKey, read.tokenPath.Last(), child.token, child.name)
-			if err != nil {
-				return nil, err
-			}
-			change.Names = append(change.Names, &protocol.EvsName{Token: child.token.Bytes(), Kind: uint32(child.kind), SealedName: sealedName})
-		}
-		slices.SortFunc(change.Names, func(a *protocol.EvsName, b *protocol.EvsName) int {
-			return strings.Compare(string(a.GetToken()), string(b.GetToken()))
-		})
+		change := &EvsPlannedPath{Path: parent, TokenPath: read.tokenPath, Kind: protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY, names: read.names, children: children}
 		if read.directory {
 			change.BaseEntryVersion = read.version
 			change.Version = read.version + 1
 			change.PrevPushId = read.prevPushId
 			change.PrevCommitVersion = read.prevCommitVersion
 		} else {
-			if len(change.Names) == 0 {
+			// a directory that does not stand holds no child to remove
+			added := []*evsChildChange{}
+			for _, child := range children {
+				if !child.removed {
+					added = append(added, child)
+				}
+			}
+			if len(added) == 0 {
 				return nil, fmt.Errorf("%w: a removal under a directory that does not stand", ErrEvsWriteInvalid)
 			}
-			change.RemovedTokens = nil
+			change.children = added
+			change.removalVersion = read.removalVersion
 			change.Version = max(plan.BaseVersion, read.removalVersion) + 1
-			note(parent, read.tokenPath, protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY, false)
+			note(parent, protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY, false)
 		}
+		if err := plan.directoryRows(ctx, change); err != nil {
+			return nil, err
+		}
+		sourcePaths, err := plan.sourcePathsOf(ctx, change)
+		if err != nil {
+			return nil, err
+		}
+		change.SourcePaths = sourcePaths
 		changes = append(changes, change)
 	}
 	return changes, nil
+}
+
+// The rows a directory change adds and the child tokens it removes, in the plan's current epoch: each added child's
+// token, kind and name sealed alone under manifest_p, the directory's token its parent; each removed child's token in
+// the current epoch and in each listed source at or above the child's floor, so a fold drops a carried row too
+// (DESIGN-DETAILS 9.2.5's G). Rows sort by token, as a table's do.
+func (self *EvsWritePlan) directoryRows(ctx context.Context, change *EvsPlannedPath) error {
+	change.Names, change.RemovedTokens = nil, nil
+	parent := change.TokenPath.Last()
+	for _, child := range change.children {
+		childNames := append(slices.Clone(change.names), child.name)
+		tokenPath, err := self.tokenPathIn(ctx, childNames, self.PathEpoch)
+		if err != nil {
+			return err
+		}
+		token := tokenPath.Last()
+		if child.removed {
+			change.RemovedTokens = append(change.RemovedTokens, token.Bytes())
+			for _, source := range self.sourcesOf(child.path) {
+				sourcePath, err := self.tokenPathIn(ctx, childNames, source)
+				if err != nil {
+					return err
+				}
+				change.RemovedTokens = append(change.RemovedTokens, sourcePath.Last().Bytes())
+			}
+			continue
+		}
+		sealedName, err := EvsNameSeal(self.nameKey, parent, token, child.name)
+		if err != nil {
+			return err
+		}
+		change.Names = append(change.Names, &protocol.EvsName{Token: token.Bytes(), Kind: uint32(child.kind), SealedName: sealedName})
+	}
+	slices.SortFunc(change.Names, func(a *protocol.EvsName, b *protocol.EvsName) int {
+		return strings.Compare(string(a.GetToken()), string(b.GetToken()))
+	})
+	return nil
 }

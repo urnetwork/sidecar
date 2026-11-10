@@ -37,6 +37,8 @@ import (
 	"io"
 	"strings"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -108,12 +110,21 @@ type EvsWritePlan struct {
 	BaseVersion uint64
 	BaseChain   [32]byte
 	// The head the plan read, whose pins a push must not fall below (§11.8 5d).
-	Head       *protocol.EvsHeadSummary
+	Head *protocol.EvsHeadSummary
+	// The head's current path epoch, which every change's token path is in, and the epochs it lists as sources,
+	// newest first, in which a change names its path at or above its floor (DESIGN-DETAILS 9.2.5).
 	PathEpoch  uint64
+	Sources    []uint64
 	Generation uint64
 	Paths      []*EvsPlannedPath
-	// The changes' token paths, in the head's current epoch.
+	// The changes' token paths, in the head's current epoch, and manifest_p of that epoch, which seals a delta's rows.
 	pathKey *EvsPathKey
+	nameKey *EvsManifestKey
+	// every epoch's keys, as the read reached them
+	keys *evsReadKeys
+	// each path's floor by its plaintext path, 0 for none (DESIGN-DETAILS 9.2.3): what the reads showed, lowered by a
+	// refusal that answered the push (E3)
+	floors map[string]uint64
 }
 
 // One path's part of a push.
@@ -139,6 +150,21 @@ type EvsPlannedPath struct {
 	// A directory's delta: the rows it adds, each sealed, and the child tokens it removes.
 	Names         []*protocol.EvsName
 	RemovedTokens [][]byte
+	// The change's source paths while the head lists sources: its token path in each one at or above its floor, as
+	// EvsSourcePath bytes (payload section 12; DESIGN-DETAILS 9.2.2's source paths row).
+	SourcePaths [][]byte
+
+	// the path's raw names, which give its token path in any epoch
+	names [][]byte
+	// a creation's standing removal version m, which max(b, m) + 1 counts again on a retoken's base
+	removalVersion uint64
+	// a directory delta's children, whose rows a retoken seals again in its epoch
+	children []*evsChildChange
+}
+
+// Whether the change creates its path, as a creation's version is max(b, m) + 1 on the push's base.
+func (self *EvsPlannedPath) creates() bool {
+	return !self.Remove && self.BaseEntryVersion == 0
 }
 
 // One link of a new chain: a locator the previous version cites, kept as it stands, or a record this push writes.
@@ -224,7 +250,6 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		writes[write.Path] = write
 	}
 	var plan *EvsWritePlan
-	var nameKey *EvsManifestKey
 	planned := map[string]*EvsPlannedPath{}
 	directories := map[string]*evsDirectoryRead{}
 	// a read names at most 64 paths (§11.9), so a large write reads in batches, each verified, the push based on the
@@ -240,7 +265,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			if plan == nil {
 				plan = &EvsWritePlan{
 					RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
-					Head: head, PathEpoch: max(1, head.GetPathEpoch().GetCurrent()), Generation: args.Generation,
+					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
+					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
 				}
 				if 0 < len(head.GetPathEpoch().GetSources()) {
 					return fmt.Errorf("%w: a write while the head lists source epochs (EVS1-M2-28)", ErrEvsWriteNotBuilt)
@@ -251,13 +277,17 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 				if plan.pathKey, err = result.keys.path(ctx, plan.PathEpoch); err != nil {
 					return err
 				}
-				if nameKey, err = result.keys.manifest(ctx, plan.PathEpoch); err != nil {
+				if plan.nameKey, err = result.keys.manifest(ctx, plan.PathEpoch); err != nil {
 					return err
 				}
-			} else if max(1, head.GetPathEpoch().GetCurrent()) != plan.PathEpoch || 0 < len(head.GetPathEpoch().GetSources()) {
+			} else if evsCurrentEpoch(head.GetPathEpoch()) != plan.PathEpoch || 0 < len(head.GetPathEpoch().GetSources()) {
 				return errEvsPlanEpochMoved
 			}
 			for i, readPath := range result.paths {
+				if readPath.path != "" {
+					// evs answered a request naming the path in the current epoch (DESIGN-DETAILS 9.2.3's E3)
+					plan.floors[readPath.path] = evsLowerFloor(plan.floors[readPath.path], plan.PathEpoch)
+				}
 				write := writes[readPath.path]
 				if write == nil {
 					directories[readPath.path] = evsDirectoryReadOf(readPath, result.replies[i])
@@ -287,7 +317,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	for _, write := range args.Writes {
 		plan.Paths = append(plan.Paths, planned[write.Path])
 	}
-	directoryPaths, err := evsDirectoryChanges(plan, planned, directories, nameKey)
+	directoryPaths, err := evsDirectoryChanges(ctx, plan, planned, directories)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +416,7 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	if verified.Base != nil {
 		return nil, ErrEvsOverlayBase
 	}
-	planned := &EvsPlannedPath{Path: write.Path, TokenPath: readPath.current, Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE}
+	planned := &EvsPlannedPath{Path: write.Path, TokenPath: readPath.current, Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE, names: readPath.names}
 	stands := verified.Entry != nil
 	if stands {
 		planned.PrevPushId = verified.Statement.Push.GetPushId()
@@ -411,11 +441,10 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		planned.BaseEntryVersion = verified.Entry.GetVersion()
 		planned.Version = planned.BaseEntryVersion + 1
 	} else {
-		removalVersion := uint64(0)
 		if verified.Removal != nil {
-			removalVersion = verified.Removal.GetPathVersion()
+			planned.removalVersion = verified.Removal.GetPathVersion()
 		}
-		planned.Version = max(plan.BaseVersion, removalVersion) + 1
+		planned.Version = max(plan.BaseVersion, planned.removalVersion) + 1
 	}
 	oid, err := EvsGitBlobOid(io.NewSectionReader(write.Content, 0, write.Content.Size()), write.Content.Size())
 	if err != nil {
@@ -582,4 +611,117 @@ func (self *EvsRepo) readBase(ctx context.Context, result *evsReadResult, verifi
 	}
 	state.Size = uint64(content.Size())
 	return content, state, fields, nil
+}
+
+// A path's token path in epoch, from its raw names and K_path of that epoch: the root's is empty in every epoch.
+func (self *EvsWritePlan) tokenPathIn(ctx context.Context, names [][]byte, epoch uint64) (EvsTokenPath, error) {
+	if len(names) == 0 {
+		return EvsTokenPath{}, nil
+	}
+	if epoch == self.PathEpoch && self.pathKey != nil {
+		return EvsPathTokens(self.pathKey, names)
+	}
+	pathKey, err := self.keys.path(ctx, epoch)
+	if err != nil {
+		return nil, err
+	}
+	return EvsPathTokens(pathKey, names)
+}
+
+// The listed sources at or above a path's floor, newest first: the epochs a change, a source path or a removed token
+// names it in beside the current one (DESIGN-DETAILS 9.2.5). None for a path with no floor, which is a new name, and
+// none for the root, which has no token and moves last.
+func (self *EvsWritePlan) sourcesOf(path string) []uint64 {
+	floor := self.floors[path]
+	if path == "" || floor == 0 {
+		return nil
+	}
+	sources := []uint64{}
+	for _, source := range self.Sources {
+		if floor <= source {
+			sources = append(sources, source)
+		}
+	}
+	return sources
+}
+
+// The change's source paths: its token path in each source sourcesOf names, as EvsSourcePath bytes.
+func (self *EvsWritePlan) sourcePathsOf(ctx context.Context, planned *EvsPlannedPath) ([][]byte, error) {
+	sourcePaths := [][]byte{}
+	for _, source := range self.sourcesOf(planned.Path) {
+		tokenPath, err := self.tokenPathIn(ctx, planned.names, source)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsSourcePath{Epoch: source, TokenPath: tokenPath.Components()})
+		if err != nil {
+			return nil, err
+		}
+		sourcePaths = append(sourcePaths, encoded)
+	}
+	return sourcePaths, nil
+}
+
+// Lowers to epoch the floor of every path the plan's push names: in a change, a source path or a delta's row. What a
+// refusal of that push shows, since evs answered a request naming each there (DESIGN-DETAILS 9.2.3's E3).
+func (self *EvsWritePlan) lowerFloors(epoch uint64) {
+	for _, planned := range self.Paths {
+		if planned.Path != "" {
+			self.floors[planned.Path] = evsLowerFloor(self.floors[planned.Path], epoch)
+		}
+		for _, child := range planned.children {
+			self.floors[child.path] = evsLowerFloor(self.floors[child.path], epoch)
+		}
+	}
+}
+
+// A retoken whose head's generation is past the plan's: the gate refuses the generation, so the write is sealed again
+// as after 412 GATE_CLOSED rather than re-tokenized.
+var errEvsRetokenSealsAgain = errors.New("evs: the head's generation is past the sealed one")
+
+// Makes the plan again on head, a verified head whose current epoch is above the plan's, for a push refused 412
+// PATH_EPOCH (DESIGN-DETAILS 9.2.5's retoken). Made again: every token path in the new epoch; source paths and
+// removed tokens by the floors, which the refusal lowered first (lowerFloors); the rows a delta adds, sealed in the
+// new epoch; a creation's version max(b, m) + 1 on the new base; the base itself. Kept: what is sealed, records,
+// fields and chains, and each change's base_entry_version, so no path is read again: 5g holds each base, and a path
+// that moved since the plan answers 409 as on any push. A head whose generation is past the plan's answers
+// errEvsRetokenSealsAgain, since the gate would refuse it.
+func (self *EvsWritePlan) Retoken(ctx context.Context, head *EvsVerifiedHead) error {
+	current := evsCurrentEpoch(head.Head.GetPathEpoch())
+	if current <= self.PathEpoch {
+		return fmt.Errorf("%w: a retoken on a head of epoch %d, the plan's %d", ErrEvsWriteInvalid, current, self.PathEpoch)
+	}
+	if self.Generation < current || self.Generation < head.Head.GetGeneration() {
+		return errEvsRetokenSealsAgain
+	}
+	pathKey, err := self.keys.path(ctx, current)
+	if err != nil {
+		return err
+	}
+	nameKey, err := self.keys.manifest(ctx, current)
+	if err != nil {
+		return err
+	}
+	self.BaseVersion, self.BaseChain, self.Head = head.Version, head.Chain, head.Head
+	self.PathEpoch, self.Sources = current, evsSourceEpochs(head.Head.GetPathEpoch())
+	self.pathKey, self.nameKey = pathKey, nameKey
+	for _, planned := range self.Paths {
+		if planned.TokenPath, err = self.tokenPathIn(ctx, planned.names, current); err != nil {
+			return err
+		}
+		if planned.SourcePaths, err = self.sourcePathsOf(ctx, planned); err != nil {
+			return err
+		}
+		if planned.creates() {
+			planned.Version = max(self.BaseVersion, planned.removalVersion) + 1
+		}
+	}
+	for _, planned := range self.Paths {
+		if planned.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY && !planned.Remove {
+			if err := self.directoryRows(ctx, planned); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

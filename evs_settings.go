@@ -61,8 +61,12 @@ type EvsSettings struct {
 	// The longest one wait between those attempts, whatever retry_after_ms says: 60 s.
 	PushRetryMaxWait time.Duration
 	// How many times one write builds its push again, under a new push id, after a refusal that asks for it
-	// (SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, PATH_EPOCH, GATE_CLOSED, BASE_STALE, TIME_STALE): 8.
+	// (SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, GATE_CLOSED, BASE_STALE, TIME_STALE), or re-tokenizes it after 412
+	// PATH_EPOCH, the two counted together: 8.
 	PushRebuildCount int
+	// A retoken keeps a segment's receipt while it is under this old, 22 h, and uploads the segment again past it,
+	// since evs adopts an upload only under 24 h old (DESIGN-DETAILS 9.2.5).
+	RetokenReceiptMaxAge time.Duration
 	// How many times a seal posts its parts again after 409 PARTS_MISSING: 3.
 	PartsMissingRetryCount int
 	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
@@ -113,6 +117,7 @@ func DefaultEvsSettings() *EvsSettings {
 		PushRetryCount:           40,
 		PushRetryMaxWait:         60 * time.Second,
 		PushRebuildCount:         8,
+		RetokenReceiptMaxAge:     22 * time.Hour,
 		PartsMissingRetryCount:   3,
 		SealLeaseDuration:        120 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,

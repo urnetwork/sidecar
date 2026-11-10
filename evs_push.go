@@ -13,8 +13,15 @@
 //	         a 429 and a 503, an unknown outcome among them, and no answer at all go again after retry_after_ms
 //	         (TIME_AHEAD's 429 included, unchanged), so a dropped answer's retry returns the original version (FS-1)
 //	rebuild  a new push id, sealed afresh from a fresh read, never a second statement under one push id: 409
-//	         SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, BASE_STALE and TIME_STALE, 412 PATH_EPOCH (re-tokenized by the
-//	         fresh read) and GATE_CLOSED (EnsureWritable again, so the next seal is to the next generation)
+//	         SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, BASE_STALE and TIME_STALE, and 412 GATE_CLOSED (EnsureWritable
+//	         again, so the next seal is to the next generation)
+//	retoken  412 PATH_EPOCH, final for its statement, which can never commit since the epoch only rises: the floor
+//	         of every path the push named falls to its epoch (E3), the sender reads a head whose current epoch is
+//	         above it, and the plan is made again there with every sealed byte kept, segments and their receipts
+//	         under RetokenReceiptMaxAge, slot ids and bodies, inline records, sealed fields, chains and each base,
+//	         then sent under a new push id (DESIGN-DETAILS 9.2.5). A retoken counts against PushRebuildCount with
+//	         rebuilds; a head whose generation is past the sealed one is a rebuild, as the gate would refuse it. A
+//	         deposit or the erasure ref stays at epoch 1, so its 412 PATH_EPOCH goes back to the caller
 //	return   any other refusal goes back to the caller as an *EvsError: a file-mode 409 with paths among them
 //
 // A part's own 409 PARTS_MISSING at the seal posts the parts again and seals P again (evs_push_parts.go).
@@ -28,6 +35,7 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 	"net/http"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -35,11 +43,11 @@ import (
 )
 
 // The codes that ask for the push to be built again under a new push id (§11.8's outcomes; EVS1-M2-26's rebuild row).
+// 412 PATH_EPOCH is the retoken's (sendSealed).
 var evsRebuildCodes = map[protocol.EvsRefusalCode]bool{
 	protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_STALE: true,
 	protocol.EvsRefusalCode_EVS_REFUSAL_SEGMENT_GONE:  true,
 	protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_STALE:    true,
-	protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH:    true,
 	protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED:   true,
 	protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE:    true,
 	protocol.EvsRefusalCode_EVS_REFUSAL_TIME_STALE:    true,
@@ -91,7 +99,7 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		RepoId: plan.RepoId, RefId: plan.RefId, RefKind: plan.RefKind, RefMode: plan.RefMode, OwnerSidecarId: plan.OwnerSidecarId,
 		PushId: pushId, BaseVersion: plan.BaseVersion, BaseChain: plan.BaseChain, Generation: repoKey.Generation(),
 		GroupId: repoKey.GroupId(), GenerationCommitment: repoKey.Commitment(), PathEpoch: plan.PathEpoch, Auth: authPin,
-		SignerSidecarId: identity.SidecarId, ClientId: identity.ClientId, TimeMs: timeMs,
+		SignerSidecarId: identity.SidecarId, ClientId: identity.ClientId, TimeMs: timeMs, SourcesStand: 0 < len(plan.Sources),
 	}
 	manifest, err := NewEvsManifestKey(repoKey)
 	if err != nil {
@@ -172,7 +180,7 @@ func evsEntrySegmentIds(entryBytes []byte) []string {
 // The change a sealed path makes under pushId: its entry version rendered for this push, or a removal.
 func (self *EvsSealedPath) change(pushId Id, baseVersion uint64, timeMs int64) (*EvsPlannedChange, error) {
 	planned := self.Planned
-	change := &EvsPlannedChange{TokenPath: planned.TokenPath, BaseEntryVersion: planned.BaseEntryVersion}
+	change := &EvsPlannedChange{TokenPath: planned.TokenPath, BaseEntryVersion: planned.BaseEntryVersion, SourcePaths: planned.SourcePaths}
 	if planned.Remove {
 		return change, nil
 	}
@@ -236,4 +244,53 @@ func (self *EvsRepo) postPush(ctx context.Context, pushId Id, request *protocol.
 func evsCreationConflict(err error) bool {
 	evsError, ok := EvsErrorOf(err)
 	return ok && evsError.Code == protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT
+}
+
+// Sends sealed under a new push id until evs commits it, answering that push id and its version: uploads, builds and
+// posts it (above), and on 412 PATH_EPOCH re-tokenizes it and sends it again (the file header's retoken row).
+// rebuilds counts the write's rebuilds and retokens against PushRebuildCount.
+func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int) (Id, *protocol.EvsPushReply, error) {
+	for {
+		pushId := NewEvsPushId()
+		if err := self.uploadSegments(ctx, sealed, pushId); err != nil {
+			return pushId, nil, err
+		}
+		attempt, err := self.buildPush(ctx, sealed, pushId)
+		if err != nil {
+			return pushId, nil, err
+		}
+		reply, err := self.sendPush(ctx, attempt)
+		if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH) {
+			return pushId, reply, err
+		}
+		if evsEpochExempt(sealed.Plan.RefKind) || self.client.settings.PushRebuildCount <= *rebuilds {
+			return pushId, nil, err
+		}
+		*rebuilds += 1
+		if err := self.retoken(ctx, sealed); err != nil {
+			return pushId, nil, err
+		}
+	}
+}
+
+// The retoken row of the file header, on a push sealed refused 412 PATH_EPOCH.
+func (self *EvsRepo) retoken(ctx context.Context, sealed *EvsSealedWrite) error {
+	plan := sealed.Plan
+	plan.lowerFloors(plan.PathEpoch)
+	head, err := self.readHeadPast(ctx, plan.RefId, plan.PathEpoch)
+	if err != nil {
+		return err
+	}
+	if err := plan.Retoken(ctx, head); err != nil {
+		return err
+	}
+	// evs adopts an upload under 24 h old, so a receipt past RetokenReceiptMaxAge is taken again by uploading the same
+	// segment again
+	now := self.client.clock.Now()
+	for _, segment := range sealed.Segments {
+		if segment.Receipt != nil && self.client.settings.RetokenReceiptMaxAge <= now.Sub(time.UnixMilli(segment.Receipt.GetUploadMs())) {
+			segment.Receipt = nil
+		}
+	}
+	return nil
 }
