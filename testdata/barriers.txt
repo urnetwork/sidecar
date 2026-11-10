@@ -167,6 +167,8 @@ barrier keys.rotate.after keys_rotate.go
 barrier keys.rotate.before keys_rotate.go
 barrier keys.unlock.after keys_unlock.go
 barrier keys.unlock.before keys_unlock.go
+barrier mail.auth.check.after mail_auth.go
+barrier mail.auth.check.before mail_auth.go
 barrier mail.flags.write.after mail_flags.go
 barrier mail.flags.write.before mail_flags.go
 barrier mail.index.write.after mail_index_segment.go
