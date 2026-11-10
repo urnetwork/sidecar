@@ -64,7 +64,7 @@ func NewSealedPostureStore(inner PostureStore, rootKey []byte) (PostureStore, er
 		return nil, fmt.Errorf("%w: a root key of %d bytes", ErrPostureStoreFailed, len(rootKey))
 	}
 	key := bytes.Clone(rootKey)
-	testHookSecret("forward-store root key", key)
+	testHookSecret("forward_store_root_key", key)
 	return &sealedPostureStore{inner: inner, rootKey: key}, nil
 }
 
@@ -74,7 +74,7 @@ func (self *sealedPostureStore) recordAead(name string, fileId []byte) (cipher.A
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPostureStoreFailed, err)
 	}
-	testHookSecret("forward-store record key", key)
+	testHookSecret("forward_store_record_key", key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPostureStoreFailed, err)

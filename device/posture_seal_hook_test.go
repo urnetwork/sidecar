@@ -36,10 +36,10 @@ func TestSealedPostureStoreHooksItsKeys(t *testing.T) {
 	reader.Close()
 	stateLock.Lock()
 	defer stateLock.Unlock()
-	if roots := kindSecrets["forward-store root key"]; len(roots) != 1 || !bytes.Equal(roots[0], rootKey) {
+	if roots := kindSecrets["forward_store_root_key"]; len(roots) != 1 || !bytes.Equal(roots[0], rootKey) {
 		t.Errorf("root keys reported %d", len(roots))
 	}
-	records := kindSecrets["forward-store record key"]
+	records := kindSecrets["forward_store_record_key"]
 	if len(records) != 2 || !bytes.Equal(records[0], records[1]) || len(records[0]) != sealedPostureRecordKeyByteCount ||
 		bytes.Equal(records[0], rootKey) {
 		t.Errorf("record keys reported %d", len(records))
