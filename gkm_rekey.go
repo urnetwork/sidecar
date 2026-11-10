@@ -259,12 +259,25 @@ func (self *GkmRekey) Close() {
 // Begins request's job, or resumes the repo's unfinished one, on a goroutine of its own, and answers the progress
 // it starts from. ErrGkmRekeyRunning when one runs already.
 func (self *GkmRekey) Start(request *GkmRekeyRequest) (*GkmRekeyProgress, error) {
+	// counted before Close can begin its wait, so Close waits for every job that got this far
+	open := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.closed {
+			return false
+		}
+		self.started.Add(1)
+		return true
+	}()
+	if !open {
+		return nil, context.Canceled
+	}
 	run, err := self.begin(self.ctx, request)
 	if err != nil {
+		self.started.Done()
 		return nil, err
 	}
 	progress := run.progress(GkmRekeyStateRunning)
-	self.started.Add(1)
 	go func() {
 		defer self.started.Done()
 		self.finish(run, run.walk(self.ctx))
