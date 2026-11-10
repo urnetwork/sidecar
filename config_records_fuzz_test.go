@@ -12,6 +12,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -22,6 +23,17 @@ func FuzzConfigStatementType(f *testing.F) {
 	for _, signedType := range signedTypes {
 		signedBytes := testConfigSignedBytes(f, signedType)
 		f.Add(configStatementTypes[signedType].purpose, uint32(signedType), signedBytes)
+		for _, otherType := range signedTypes {
+			f.Add(configStatementTypes[otherType].purpose, uint32(otherType), signedBytes)
+		}
+	}
+	// a forwarding Delegation in DESIGN-DETAILS 4.2.2's form, forward set and no tags, max_admits or not_after, as
+	// itself and as every other type; and one whose forward names nothing
+	forwarding := testForwardingDelegationBody()
+	emptyForward := testForwardingDelegationBody()
+	emptyForward.Forward = &bridge.ForwardScope{}
+	for _, delegation := range []*protocol.Delegation{forwarding, emptyForward} {
+		signedBytes := testConfigEncode(f, testConfigSign(bridge.SignedType_SIGNED_DELEGATION, testConfigEncode(f, delegation)))
 		for _, otherType := range signedTypes {
 			f.Add(configStatementTypes[otherType].purpose, uint32(otherType), signedBytes)
 		}
