@@ -11,6 +11,15 @@
 // evs's word (Q-EVS-6, §2.8, g0-recheck-0-head-reader-read-paths#2). A read record moves the pin back to the path's
 // last read, so a recorded path's later statements are all checked.
 //
+// Path epochs (DESIGN-DETAILS 9.2.4's reader). A statement names its changes by token paths in the epoch it declares,
+// so every statement is checked under the path's token path in that statement's own epoch, tp(X, e), which the
+// reader derives from the name and the ladder and never takes from a reply: the served version, removal or delta at u
+// under tp(X, e(u)), its proof's leaf compared with it, and each walked statement after it under tp(X, e(w)). A
+// rooted statement of an epoch the request named no token path in has no proof evs could give: the reader asks once
+// more naming that epoch, which is at or above e(u) and so at or above the path's floor. A directory's untagged rows
+// open under the epoch whose copy served them (entry_epoch), its carried rows under their own, a delta's under its
+// statement's (evs_list.go).
+//
 // Format 2's read states and settings answer ErrEvsFormatUnsupported for that path alone, never a fork, so the
 // caller reads the rest (EVS1-M2-39).
 //
@@ -22,6 +31,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 
@@ -46,58 +56,116 @@ type EvsVerifiedPath struct {
 	Names        *protocol.EvsNameTable
 	NamesThrough uint64
 	Deltas       []*EvsVerifiedPath
+	// The epoch whose copy served the version, table or marker, 0 the head's current one (DESIGN-DETAILS 9.2.2's
+	// entry_epoch): a folded table's untagged rows open under it.
+	EntryEpoch uint64
+	// The lowest epoch whose statement, verified, names the path's own token path in it (DESIGN-DETAILS 9.2.3's E1),
+	// 0 for none.
+	Floor uint64
+	// evs answered with the statement alone, verified, of a version or removal it could not place in it
+	// (question evs1-m2-45-inline-leaf-place; 9.2.4's history): the reader asks again naming its epoch, and nothing
+	// else of the reply stands.
+	StatementAlone *EvsStatement
 }
 
-// Checks reply for tokenPath against head's walk.
-func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, tokenPath EvsTokenPath, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, error) {
+// A path as the verifier checks it: its token path in any epoch, derived by the reader from its name, never taken from
+// a reply (DESIGN-DETAILS 9.2.4's reader), and the epochs the request named it in.
+type EvsPathEpochs struct {
+	TokenPathIn func(epoch uint64) (EvsTokenPath, error)
+	Named       map[uint64]bool
+	// An older version asked for by number: history, not a rollback, so the walk after it is not checked (§11.9's
+	// "older ones on request").
+	History bool
+	// The path's own pin, its record's PinVersion, else the ref pin before this read: the walk checks statements after
+	// it and after the version's own (DESIGN-DETAILS 9.2.4's since = max(u, pin(X))).
+	Since uint64
+}
+
+// Checks reply for a path against head's walk, every statement under the path's token path in that statement's own
+// epoch (DESIGN-DETAILS 9.2.4's verifyPath): a version, removal or delta at u under tp(X, e(u)), which E1 makes the
+// path's floor; each walked statement after it under tp(X, e(w)), a rooted one by the absence proofs evs sent for
+// that epoch. A rooted statement of an epoch the request did not name, with no proof, adds that epoch to the epochs
+// answered, which the reader asks once more naming; of one it named, it refuses.
+func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, []uint64, error) {
 	if reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED || len(reply.GetDropId()) != 0 ||
 		reply.GetNotBeforeMs() != 0 || reply.GetDropVersion() != 0 || len(reply.GetDropStatement()) != 0 || len(reply.GetDropBody()) != 0 {
-		return nil, fmt.Errorf("%w: a format-2 read state", ErrEvsFormatUnsupported)
+		return nil, nil, fmt.Errorf("%w: a format-2 read state", ErrEvsFormatUnsupported)
 	}
-	replyPath, err := ParseEvsTokenPath(reply.GetTokenPath())
+	current := evsCurrentEpoch(head.Head.GetPathEpoch())
+	if reply.GetStaleEpoch() {
+		// only a request naming no token path in the head's current epoch is answered stale (9.2.4's route)
+		return nil, nil, fmt.Errorf("%w: a stale_epoch reply to a request naming the current epoch", ErrEvsReplyInvalid)
+	}
+	tokenPath, err := epochs.TokenPathIn(current)
+	if err != nil {
+		return nil, nil, err
+	}
+	replyPath, err := ParseEvsChangedTokenPath(reply.GetTokenPath())
 	if err != nil || !replyPath.Equal(tokenPath) {
-		return nil, fmt.Errorf("%w: a reply for another path", ErrEvsEntryRefused)
+		return nil, nil, fmt.Errorf("%w: a reply for another path", ErrEvsEntryRefused)
 	}
-	verified := &EvsVerifiedPath{TokenPath: tokenPath}
+	if reply.GetEntryEpoch() != 0 {
+		// a listed source the request named the path in; the root, which has no token, from any listed source
+		listed := false
+		for _, source := range evsSourceEpochs(head.Head.GetPathEpoch()) {
+			listed = listed || source == reply.GetEntryEpoch()
+		}
+		if !listed || (len(tokenPath) != 0 && !epochs.Named[reply.GetEntryEpoch()]) {
+			return nil, nil, fmt.Errorf("%w: an entry served from an epoch not listed or not named", ErrEvsEntryRefused)
+		}
+	}
+	verified := &EvsVerifiedPath{TokenPath: tokenPath, EntryEpoch: reply.GetEntryEpoch()}
 	switch {
 	case reply.GetBase() != nil:
 		if reply.GetVersion() != nil || reply.GetRemoval() != nil {
-			return nil, fmt.Errorf("%w: an overlay base beside a version", ErrEvsEntryRefused)
+			return nil, nil, fmt.Errorf("%w: an overlay base beside a version", ErrEvsEntryRefused)
 		}
 		verified.Base = reply.GetBase()
-		return verified, nil
+		return verified, nil, nil
 	case reply.GetRemoval() != nil:
 		if reply.GetVersion() != nil {
-			return nil, fmt.Errorf("%w: a removal beside a version", ErrEvsEntryRefused)
+			return nil, nil, fmt.Errorf("%w: a removal beside a version", ErrEvsEntryRefused)
 		}
-		if err := self.verifyRemoval(head, tokenPath, reply, verified); err != nil {
-			return nil, err
+		if err := self.verifyRemoval(head, epochs, reply, verified); err != nil {
+			return nil, nil, err
 		}
 	case reply.GetVersion() != nil:
-		if err := self.verifyVersion(head, tokenPath, reply.GetVersion(), reply.GetStatement(), reply.GetProof(), verified); err != nil {
-			return nil, err
+		if err := self.verifyVersion(head, epochs, reply.GetVersion(), reply.GetStatement(), reply.GetProof(), verified); err != nil {
+			return nil, nil, err
 		}
 		if verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
-			if err := self.verifyDeltas(head, tokenPath, reply, verified); err != nil {
-				return nil, err
+			if err := self.verifyDeltas(head, epochs, reply, verified); err != nil {
+				return nil, nil, err
 			}
 		}
+	case len(reply.GetStatement()) != 0 && len(reply.GetNames().GetNames()) == 0 && len(reply.GetDeltas()) == 0 && len(reply.GetProof()) == 0:
+		// the statement alone, of a version or removal evs could not place: its epoch is the reader's to name
+		statement, err := self.VerifyStatement(reply.GetStatement(), head.RepoId, head.RefId)
+		if err != nil {
+			return nil, nil, err
+		}
+		verified.StatementAlone = statement
+		return verified, nil, nil
 	case len(reply.GetNames().GetNames()) != 0 || len(reply.GetDeltas()) != 0 || len(reply.GetStatement()) != 0 || len(reply.GetProof()) != 0:
-		return nil, fmt.Errorf("%w: a reply with no version, removal or base beside what only those carry", ErrEvsEntryRefused)
+		return nil, nil, fmt.Errorf("%w: a reply with no version, removal or base beside what only those carry", ErrEvsEntryRefused)
 	default:
 		// a path never written: no walked statement may change it (below); before the walk it is evs's word, which a
 		// writer's push meets at evs's own CAS (§11.8's 5g) and which a read record of a version refutes (evs_read.go)
 		verified.Absent = true
+	}
+	if epochs.History {
+		return verified, nil, nil
 	}
 	// a directory's own later writes are its deltas, each of which the walk must account for
 	deltaVersions := map[uint64]bool{}
 	for _, delta := range verified.Deltas {
 		deltaVersions[delta.CommitVersion] = true
 	}
-	if err := self.verifyUnchangedSince(head, tokenPath, verified.CommitVersion, reply.GetAbsences(), deltaVersions, verified.Absent); err != nil {
-		return nil, err
+	more, err := self.verifyUnchangedSince(head, epochs, verified.CommitVersion, reply.GetAbsences(), deltaVersions, verified.Absent)
+	if err != nil {
+		return nil, nil, err
 	}
-	return verified, nil
+	return verified, more, nil
 }
 
 // The statement committed at version: from the walk when it holds it, which then must name pushId, else the
@@ -155,13 +223,24 @@ func evsChangeOf(statement *EvsStatement, tokenPath EvsTokenPath, proofs []*prot
 	return change, changedPath, nil
 }
 
-// Checks a version: its statement, its entry hash to that statement's change of exactly tokenPath, its push and base,
-// and format 1's shape.
-func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, tokenPath EvsTokenPath, version *protocol.EvsIndexVersion, sent []byte, proofs []*protocol.EvsMerkleProof, verified *EvsVerifiedPath) error {
+// The path's token path in a statement's own epoch, which the reader derives.
+func evsTokenPathOfStatement(epochs *EvsPathEpochs, statement *EvsStatement) (EvsTokenPath, uint64, error) {
+	epoch := max(1, statement.Push.GetPathEpoch())
+	tokenPath, err := epochs.TokenPathIn(epoch)
+	return tokenPath, epoch, err
+}
+
+// Checks a version: its statement, its entry hash to that statement's change of exactly the path's token path in the
+// statement's epoch, its push and base, and format 1's shape.
+func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpochs, version *protocol.EvsIndexVersion, sent []byte, proofs []*protocol.EvsMerkleProof, verified *EvsVerifiedPath) error {
 	if version.GetElided() || len(version.GetEntryVersion()) == 0 {
 		return fmt.Errorf("%w: an elided version", ErrEvsEntryRefused)
 	}
 	statement, err := self.statementAt(head, version.GetCommitVersion(), version.GetPushId(), sent)
+	if err != nil {
+		return err
+	}
+	tokenPath, epoch, err := evsTokenPathOfStatement(epochs, statement)
 	if err != nil {
 		return err
 	}
@@ -193,13 +272,19 @@ func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, tokenPath EvsToken
 	verified.Entry = entry
 	verified.Statement = statement
 	verified.CommitVersion = version.GetCommitVersion()
+	verified.Floor = evsLowerFloor(verified.Floor, epoch)
 	return nil
 }
 
-// Checks a removal: its statement removes tokenPath, or a prefix holding it, at the marker's versions.
-func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, tokenPath EvsTokenPath, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
+// Checks a removal: its statement removes the path's token path in its epoch, or a prefix holding it, at the
+// marker's versions.
+func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
 	removal := reply.GetRemoval()
 	statement, err := self.statementAt(head, removal.GetRemovalVersion(), removal.GetPushId(), reply.GetStatement())
+	if err != nil {
+		return err
+	}
+	tokenPath, epoch, err := evsTokenPathOfStatement(epochs, statement)
 	if err != nil {
 		return err
 	}
@@ -220,13 +305,17 @@ func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, tokenPath EvsToken
 	verified.Removal = removal
 	verified.Statement = statement
 	verified.CommitVersion = removal.GetRemovalVersion()
+	if changedPath.Equal(tokenPath) {
+		// a prefix's removal names the prefix's token, not the path's
+		verified.Floor = evsLowerFloor(verified.Floor, epoch)
+	}
 	return nil
 }
 
 // Checks a directory's deltas after its folded table: each a version of the directory, in version order, after the
-// table's names_through, verified as a version is. The table itself is evs's fold, whose names List checks against
-// their tokens.
-func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, tokenPath EvsTokenPath, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
+// table's names_through, verified as a version is under the directory's token path in its own statement's epoch.
+// The table itself is evs's fold, whose names List checks against their tokens.
+func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
 	verified.Names = reply.GetNames()
 	verified.NamesThrough = reply.GetNamesThrough()
 	last := reply.GetNamesThrough()
@@ -235,7 +324,7 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, tokenPath EvsTokenP
 			return fmt.Errorf("%w: deltas out of version order", ErrEvsEntryRefused)
 		}
 		last = delta.GetCommitVersion()
-		deltaPath := &EvsVerifiedPath{TokenPath: tokenPath}
+		deltaPath := &EvsVerifiedPath{TokenPath: verified.TokenPath}
 		if _, walked := head.StatementAt(delta.GetCommitVersion()); !walked {
 			// a delta at or below the read's pin carries no statement: what it adds is evs's word, as a never-read
 			// path's version is (Q-EVS-6), and its names are still checked against their tokens
@@ -248,7 +337,7 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, tokenPath EvsTokenP
 			verified.Deltas = append(verified.Deltas, deltaPath)
 			continue
 		}
-		if err := self.verifyVersion(head, tokenPath, delta, nil, nil, deltaPath); err != nil {
+		if err := self.verifyVersion(head, epochs, delta, nil, nil, deltaPath); err != nil {
 			return err
 		}
 		verified.Deltas = append(verified.Deltas, deltaPath)
@@ -256,16 +345,22 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, tokenPath EvsTokenP
 	return nil
 }
 
-// Checks that no walked statement after version since changes tokenPath or a prefix holding it: an inline list by its
-// changes, a change list under changes_root by the adjacent-leaf proofs evs sent for each path its covering prefixes
-// reach (EvsAbsencePaths). A directory's own later writes are its deltas, at deltaVersions, already verified; any
-// other is a delta evs left out.
-func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath EvsTokenPath, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool, absent bool) error {
+// Checks that no walked statement after version since changes the path or a prefix holding it, each under the path's
+// token path in its own epoch: an inline list by its changes, a change list under changes_root by the adjacent-leaf
+// proofs evs sent for each path its covering prefixes reach (EvsAbsencePaths). A directory's own later writes are its
+// deltas, at deltaVersions, already verified; any other is a delta evs left out. A rooted statement with no proof, of
+// an epoch the request did not name, adds that epoch to the epochs answered: the reader asks once more naming it.
+func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *EvsPathEpochs, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool, absent bool) ([]uint64, error) {
+	more := []uint64{}
 	for _, walked := range head.Statements {
-		if walked.Version <= since || deltaVersions[walked.Version] {
+		if walked.Version <= max(since, epochs.Since) || deltaVersions[walked.Version] {
 			continue
 		}
 		push := walked.Statement.Push
+		tokenPath, epoch, err := evsTokenPathOfStatement(epochs, walked.Statement)
+		if err != nil {
+			return nil, err
+		}
 		if len(push.GetChangesRoot()) == 0 {
 			for _, change := range walked.Statement.Changes {
 				// the path itself, or a prefix's removal, which ends every path below it; a prefix's delta does not
@@ -274,7 +369,7 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath E
 				removesPrefix := tokenPath.HasPrefix(change.TokenPath) && len(change.Change.GetEntrySha256()) == 0 && !absent
 				if change.TokenPath.Equal(tokenPath) || removesPrefix {
 					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
-					return fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
+					return nil, fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
 				}
 			}
 			continue
@@ -288,15 +383,21 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, tokenPath E
 				}
 				if err := EvsVerifyChangeAbsence(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absentPath, absence); err != nil {
 					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
-					return fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
+					return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
 				}
 				proven = true
 				break
 			}
-			if !proven {
-				return fmt.Errorf("%w: a later statement's change list with no proof the path is absent", ErrEvsEntryRefused)
+			if proven {
+				continue
+			}
+			if epochs.Named[epoch] {
+				return nil, fmt.Errorf("%w: a later statement's change list with no proof the path is absent", ErrEvsEntryRefused)
+			}
+			if !slices.Contains(more, epoch) {
+				more = append(more, epoch)
 			}
 		}
 	}
-	return nil
+	return more, nil
 }
