@@ -161,7 +161,7 @@ CatchUp(d) ==
     /\ mtip' = [mtip EXCEPT ![d] = log[mver[d] + 1].tip]
     /\ UNCHANGED <<evs, nextAtom, nextPid, crashes, atip, lref, jr, att, qforce, acked, conf, nack, snap, flags>>
 
-\* 8.2.6's rule for the local ref, on the value cur read under the ref's apply lock.
+\* 8.2.7's settle: the rule for the local ref, on the value cur read under the ref's apply lock.
 SettleRule(d, cur) ==
     IF cur = atip[d] THEN "follow"
     ELSE IF Anc(cur, mtip[d]) THEN "follow"

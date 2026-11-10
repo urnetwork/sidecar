@@ -15,7 +15,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
 | 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | pending |
-| 8 | Git and evs in both directions | 3 | in progress |
+| 8 | Git and evs in both directions | 3 | complete (2026-11-10) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | pending |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | pending |
@@ -2737,9 +2737,7 @@ Tasks held until complete: SEARCH-M10-19, SEARCH-M10-32, SEARCH-M10-33.
 
 ## 8. Git and evs in both directions
 
-Status: in progress
-
-Left: 8.3's record of the model runs on the final model; everything else is written.
+Status: complete (2026-11-10)
 
 Tasks held until complete: EVS1-M2-34, EVS1-M2-35, EVS1-M2-36.
 
@@ -2759,9 +2757,9 @@ Working the three tasks through against the landed code and §11's rows found fo
 
 **C. Replay refuses the first pull.** §11.11's hook checks only *new* commits, "one that no ref of this repo's local mirror reaches". Replay has no such notion. An agent pulls `main`, which holds commits by two other sidecars, into its owned ref and pushes. Its hook passes: those commits are on `main`. The push's commits are everything its ref did not have, the others' included, and a replaying reader holds each to the decided rule (plan-CORE-client-to-sidecar-lookup #1 and #2): the committer is the push's `client_id`, or a client whose binding names the push's signer. The others' commits fail it, and every replaying reader alarms a forged history on the first merge of the twenty-agent test. Fast-forwarding `main` to a colleague's branch fails the same way. The hook's rule depends on the order pushes reached one device, and evs gives no order across refs, so a reader cannot simply copy it.
 
-**D. Sealed metadata that outgrows its parts.** A push of 2,000 commits that touch 30 files holds about 1.2 MiB of sealed commits and 30 changes. Parts are cut by changes, sections with no change of their own "spill into the parts' room", and the builder stops with "section does not fit beside the changes" (`evs_statement.go`). A part with no change is refused (`evs_payload.go`). No push past about 1,800 commits can be sent.
+**D. Sealed metadata that outgrows its parts.** A push of 2,000 commits that touch 30 files holds about 1.1 MiB of sealed commits and 30 changes. Parts are cut by changes, sections with no change of their own "spill into the parts' room", and the builder stops with "section does not fit beside the changes" (`evs_statement.go`). A part with no change is refused (`evs_payload.go`). No push past about 1,800 commits can be sent.
 
-**E. A committed push ends on a conflict branch.** §11.11's restart row: "committed -> update the local ref if it still equals old, else move the local commits to ur/<sidecar_id>/conflicts/<ref>/<time> and raise EvsConflict". A device pushes P, old → new. evs commits it, and the daemon dies before its `git update-ref`. At restart the sync engine sees the new version first, as it would any other device's, and moves the local ref to new. The journal then resolves P: committed, and the local ref no longer equals old, so it makes a conflict branch for a commit that is the ref's own tip and raises EvsConflict. `GitSyncTwin-EqualsOld` shows it in 7 states. On an owned ref, accepted locally at once, a second local push before P resolves gives the same.
+**E. A committed push ends on a conflict branch.** §11.11's restart row: "committed -> update the local ref if it still equals old, else move the local commits to ur/<sidecar_id>/conflicts/<ref>/<time> and raise EvsConflict". A device pushes P, old → new. evs commits it, and the daemon dies before its `git update-ref`. At restart the sync engine sees the new version first, as it would any other device's, and moves the local ref to new. The journal then resolves P: committed, and the local ref no longer equals old, so it makes a conflict branch for a commit that is the ref's own tip and raises EvsConflict. `GitSyncTwin-EqualsOld` shows it in a trace of 7 states. On an owned ref, accepted locally at once, a second local push before P resolves gives the same.
 
 **F. One lock cannot be both held across the push and free for sync.** The journal row reads as if the ref's daemon lock were held from the check of old to the `update-ref`. A push that waits its three minutes on GATE_CLOSED then stalls every other device's commits to that ref locally, and a receive that must replay the head to tell "only a PATH_EPOCH moved it" from "it gained a commit" waits on the sync engine, which waits on the lock. The landed lock's comment says the opposite, that the lock is taken only around the `update-ref`; then sync can apply the push's own version between evs's 200 and that `update-ref`, which fails its compare and lands in E.
 
@@ -2771,7 +2769,7 @@ Working the three tasks through against the landed code and §11's rows found fo
 
 **I. A split import cannot be checked, and its signature can be borrowed.** `EvsImport` signs {tip_oid, oid_list_sha256, count} for the whole import, and "an import past 1,024 parts splits at commit boundaries, each push carrying the EvsImport". A reader of the second of five pushes holds a hash of a list it has not seen, so it cannot tell whether a commit there is listed. If it waits for the last push it has accepted foreign committers on trust meanwhile; if it does not, any writer can attach the admin's EvsImport, which every reader of the repo can open, to its own push of commits with forged committers.
 
-**J. History that stock git holds and the codec refuses** (question evs-codec-import-forms). A tree is never stored: a reader rebuilds it from names and each child's sealed {mode, oid}. A tree with a zero-padded mode, with a mode outside git's six, or out of git's order hashes to an oid no rebuild reaches. Stock git 2.56 stores all of them (`git index-pack` takes each; plain `git fsck` passes the first two with warnings), and old histories written by other tools hold them. A commit with a second `committer` header is stored too, and git 2.56's `git log --format=%cn` prints the *last* one, where the question records git and go-git as reading the first: exactly the two readings the codec's refusal exists to prevent.
+**J. History that stock git holds and the codec refuses** (question evs-codec-import-forms). A tree is never stored: a reader rebuilds it from names and each child's sealed {mode, oid}. A tree with a zero-padded mode, with a mode outside git's six, or out of git's order hashes to an oid no rebuild reaches. Stock git 2.56 stores all of them: `git index-pack` takes each, and plain `git fsck` passes the first two with warnings and calls the third an error without refusing to serve it. Old histories written by other tools hold them. A commit with a second `committer` header is stored too, and git 2.56's `git log --format=%cn` prints the *last* one, where the question records git and go-git as reading the first: exactly the two readings the codec's refusal exists to prevent.
 
 **K. A large import does not fit its clocks or its memory.** Parts and the seal must reach evs within 30 minutes of the statement's `time_ms`, a receipt must be under 24 h old at the seal, and the seal lease lasts two minutes. A million-commit import is about 0.8 GiB of sealed metadata and entries and 7.4 GiB of segments (8.4). On a 5 Mbit/s uplink the parts alone take 23 minutes and the segments three and a half hours. Export keeps one map of every path per commit it rebuilt (`states`), which for 100,000 files and a million commits is 10^11 entries.
 
@@ -2871,7 +2869,7 @@ Local state. Everything is in the evs component's sealed directory, under `local
 
 ```text
 ref/<ref_id>              EvsGitRef: name; version, chain; tip; applied_tip; deleted; base (ref, version); stuck_at;
-                          a tag's peeled commit                                            (8.2.7)
+                          a tag's peeled commit; tainted token paths (8.5)                 (8.2.7)
 tips/<ref_id>/<page>      the version-tip log: 4,096 versions a page, each {version, tip, flags}, appended as
                           versions apply; commitless versions are left out (the tip before stands)
 tipindex/<oid[0:2]>       commit oid -> (ref_id, version) for every tip a ref version had, 256 sorted files
@@ -2882,7 +2880,7 @@ journal/<ref_id>          EvsJournalRef (8.2.8), rewritten whole
 import/<id>               an import's arguments, so a rerun resumes it (8.2.6)
 ```
 
-In the bare repository the daemon keeps `refs/ur/evs/<ref_id hex>` at each ref's tip as evs holds it, a deleted ref's at its last tip, and `refs/ur/import/<id>` at an import's source tip. `transfer.hideRefs refs/ur` keeps them from clients.
+In the bare repository the daemon keeps `refs/ur/evs/<ref_id hex>` at each ref's tip as evs holds it, a deleted ref's at its last tip, and `refs/ur/import/<id>` at an import's source tip. `transfer.hideRefs refs/ur` keeps them from clients, in what git advertises and in what it lets a client push.
 
 Settings, in `EvsSettings`:
 
@@ -2979,7 +2977,7 @@ overlay    a branch with a base (ref R, version k): it holds entries only for *h
              else                                                                -> R's path at version k
 ```
 
-A held directory's table is the whole truth about its children, so an inherited file is removed by a table that lacks it, and the removal survives a marker's collection and a path-epoch copy, which carry tables and drop markers (H). A file whose content the overlay changes without adding or removing a name needs no directory at all. A reader resolves a path with one request naming it and its ancestors on the overlay, then the base when it must; the local tier never does, since it holds the trees.
+A held directory's table is the whole truth about its children, so an inherited file is removed by a table that lacks it, and the removal survives a marker's collection and a path-epoch copy, which carry tables and drop markers (H). A file whose content the overlay changes without adding or removing a name needs no directory at all. A reader resolves a path with one request naming it and its ancestors on the overlay, then the base when it must; the local tier never does, since it holds the trees. A repo's refs share their path keys (§11.6), so an inherited name's floor on the overlay (9.2.3) is its floor on the base ref, and a held directory's first table, which lists inherited children, sends no token the floor rule forbids.
 
 The base of a new branch whose tip is T, chosen by the device that creates it:
 
@@ -3041,8 +3039,9 @@ publish(r, old, new, opt):
         changes(c) = diff(tree(first parent), tree(c)) by the tree reader; trees(c) = its non-canonical trees
   3 net change (8.2.4); PlanGitUpdate; entries sealed, their segments uploaded (the landed sender)
   4 history blobs sealed into history segments and uploaded, 4 at once, each under its receipt
-  5 sealed metadata: group, provenance, commits (from the spool), git, signed_import, and for a creating push
-        ref_name and base; payload sections 15 and 16 beside it; the reuse list
+  5 sealed metadata: group, provenance (the session's agent, §5.5), commits (from the spool), git,
+        signed_import, and for a creating push ref_name and base; payload sections 15 and 16 beside it; the
+        reuse list
   6 statement on (b, C_b); the journal records its push id before the first POST (8.2.8)
   7 a one-part push posts; a push in parts takes the seal lease, posts its parts 4 at once, takes the lease again
         each time it lapses (evs answers 200 for a live lease of the push's own), and seals
@@ -3121,7 +3120,7 @@ After an import, `git push --tags` from the working clone creates each tag ref w
 
 #### 8.2.7 From evs to git: replay, verify, apply
 
-The sync engine keeps, per git-mode ref of a mounted repo, an `EvsGitRef` and runs one replay at a time for it:
+A mount follows every git-mode ref of its repo that it learns of: `main`; a ref a local push creates; a ref a hint names, whose name the head's sealed ref name gives; a ref a push names as a base or a source, which is replayed for its objects even before its name is known; and, once EVS1-M6-01 serves it, the listing of GET .../refs. A branch `<b>` is `refs/heads/<b>` in the bare repository and a tag keeps its name (`EvsGitRefOfName`); a file-mode ref has no git ref. The sync engine keeps, per git-mode ref, an `EvsGitRef` and runs one replay at a time for it:
 
 ```text
 replay(r, upTo):                                   // on a hint, the hourly resync, a push's answer, a start
@@ -3144,7 +3143,8 @@ replay(r, upTo):                                   // on a hint, the hourly resy
 ```text
 every shape   git present; shape, flags and ref kind agree (8.2.3's table); a tag ref's first push IMMUTABLE and
               no other; ref_name and base only where the push creates the ref, equal to the head's
-DELETE        no commit, no change; the tip becomes none
+DELETE        no commit, no change; old_tip is not checked, since a stopped ref's deleter does not hold it (8.5);
+              the tip becomes none
 REKEY         no commit, blob, tag or source; every change a file entry whose opened mode and oid are those of
               tree(peel(E)) at that path; a tag ref takes none
 UPDATE        old_tip = E
@@ -3164,7 +3164,8 @@ UPDATE        old_tip = E
               new_tip peels to a commit held or carried, and every carried commit is its ancestor
               descent: E is none, or FORCE is set, or E's commit is an ancestor of peel(new_tip)
               changes: on a branch, exactly 8.2.4's net change from the path state at E to tree(peel(new_tip)),
-                  each entry's opened mode and oid the tree's; on a tag ref, none
+                  each entry's opened mode and oid the tree's, and beside it a write or a removal of every
+                  tainted token path (8.5); on a tag ref, none
 ```
 
 The tree builder and the object sink are shared with export (EVS1-M2-49):
@@ -3239,10 +3240,12 @@ brings a new commit or tree that is not canonical, a tree past the tree reader's
 receive(r, old, new):                                  // a shared ref; an owned ref is below
   refuse before any evs write, as `ng <r> <reason>`:   a branch whose short name begins refs/; erasure, ur/index,
         ur/lfs; ur/<id>/... for another sidecar; an existing tag with new not none (`tag exists`); a tag of a
-        non-commit; §11.19's limits
+        non-commit; §11.19's limits; anything but a deletion of a ref stopped at a refused version (`ref
+        refused at version <u>`; 8.5)
   P_r, the publish lock, within ReceiveWaitTimeout, else `ng <r> busy`
   L_r:  settle(r); the local ref is not old -> `ng <r> non-fast-forward`; journal update {old, new, RECEIVED};
         read (b, E) from EvsGitRef
+  from v1, §11.11's git-lfs tip check, whose refusal deletes the update (`ng <r> lfs objects missing`)
   publish(r, old, new) with the answers of 8.2.5, and:
         tip moved (409, the history does not hold the push)   delete the update; `ng <r> non-fast-forward`
         200, or the history holds the push id                 settled: `ok <r>`; the local update failing (a
@@ -3366,7 +3369,7 @@ CreatedAfter   for each version in (S, Head], from the tips log: the paths of tr
                by the tree reader, and on an overlay the paths that version first held
 ```
 
-**Rekey** (question keys-m2-26-rekey-git-mode-refs, option 1). A rekey of a git-mode ref is the REKEY shape: an ordinary push on the tip whose changes re-checkpoint files under the current generation and change no mode, oid or name. Any writer's device can send it, a head-mode one included, since it needs no tree: `EvsRepo.WritePaths` takes a git-mode ref when every write has `ForceCheckpoint` and `IfVersion` and no `Remove`, the planner refuses a write whose new blob's oid is not the standing version's (`ErrEvsGitRef`, as today, for anything else), and the sender seals `git {shape: REKEY}`. evs needs no rule: TIP, 5g and 5h hold it as they hold any push, and a replaying reader holds each entry to the tree (8.2.7). KEYS-M2-26's job then walks a git-mode ref as it walks a file-mode one. It covers the ref's own entries: an overlay's held files, and nothing on a tag ref. History blobs and sealed commits are never rekeyed, as a file-mode ref's older versions are not. A mounted device builds a rekey's content from its bare repository and takes P_r.
+**Rekey** (question keys-m2-26-rekey-git-mode-refs, option 1). A rekey of a git-mode ref is the REKEY shape: an ordinary push on the tip whose changes re-checkpoint files under the current generation and change no mode, oid or name. Any writer's device can send it, a head-mode one included, since it needs no tree: `EvsRepo.WritePaths` takes a git-mode ref when every write has `ForceCheckpoint` and `IfVersion` and no `Remove`, the planner refuses a write whose new blob's oid is not the standing version's (`ErrEvsGitRef`, as today, for anything else), and the sender seals `git {shape: REKEY}`. evs needs no rule: TIP, 5g and 5h hold it as they hold any push, and a replaying reader holds each entry to the tree (8.2.7). KEYS-M2-26's job then walks a git-mode ref as it walks a file-mode one. It covers the ref's own entries: an overlay's held files, and nothing on a tag ref. History blobs and sealed commits are never rekeyed, as a file-mode ref's older versions are not. On a device that mounts the repo, `WritePaths` takes P_r for a git-mode ref, so a rekey and a git push from one device do not race each other to the tip.
 
 #### 8.2.11 The bare repository's upkeep
 
@@ -3382,7 +3385,7 @@ CreatedAfter   for each version in (S, Head], from the tips log: the paths of tr
 
 **G4, the path state is the tip's tree.** After every applied version of a branch, evs's entries describe tree(peel(tip)): directly, or for an overlay through 8.2.4's reading. So a head-mode reader of a ref and a git user of its tip see the same files. *Why.* `check` holds an UPDATE's changes to exactly the net change between the state before and the new tip's tree, entry by entry, a REKEY's to no change of mode or oid, and a PATH_EPOCH has none. A DELETE leaves the entries, and the next UPDATE's net change starts from the tree they describe. On an overlay a held directory's table lists exactly the new tree's children, by the same check, so "absent from a held table" is absent from the tree, with or without a marker. A head-mode device cannot run `check`. It trusts that a replaying reader would have alarmed, which is §11.9's trusts row as it stands.
 
-**G5, one update, one version.** A push id commits at most once, and no version repeats the update before it. *Why.* evs's 5a and TIP. A daemon builds a second attempt for an update only on a base above every earlier attempt's, or on the same base after the earlier one's time bound, and two attempts on one base cannot both pass TIP. An attempt that committed is in the history the second is built from, and then the update is done and nothing is built. Model: `NoDuplicate`.
+**G5, one update, one version.** A push id commits at most once, and no version repeats the update before it. *Why.* evs's 5a and TIP. A daemon builds a second attempt for an update only on a base above every earlier attempt's, or on the same base once evs has refused the earlier one for good or its time bound has passed, and two attempts on one base cannot both pass TIP in any case. An attempt that committed is in the history the second is built from, and then the update is done and nothing is built. Model: `NoDuplicate`.
 
 **G6, no acknowledged commit is lost.** A commit the daemon answered `ok` for is in a tip evs committed, or still on its local ref, or on a conflict branch of that device, unless the client's own forced update dropped it. *Why.* A shared ref is answered after evs's commit is in the history and applied. An owned ref's commit is on the local ref from the `update-ref` that precedes its `ok`, and the only things that move a local ref afterwards are a client's update, and settle, which follows only when evs's tip holds the local commit and otherwise keeps it or puts it on a conflict branch in the same git transaction that moves the ref. Model: `AckedDurable`, `SharedSafe`; `GitSyncTwin-NoApplyLock` loses a commit as soon as settle's read and write are not one step.
 
@@ -3405,8 +3408,48 @@ Left out, and why it is safe. What a push carries and how a reader checks it cha
 The runs, on TLC from the owner's jar (master at `d8fb231`), through `run-gitsync.sh`:
 
 ```text
-(the record of the runs is being taken on the final model; this version of the section lands before it)
+configuration                          what it holds, and the result               distinct states   depth        time     disk
+GitSync.tla, the design (Twin none)
+GitSync                                a shared ref, 2 devices, 3 pushes, 4 versions, 1 crash, 1 commitless version
+                                       pass, every invariant                             3,611,441      35  1 min 54 s   237 MB
+GitSync-Force                          a shared ref whose clients may force, 2 devices, 3 pushes, 4 versions, 1 crash
+                                       pass, every invariant                               485,286      30         9 s    78 MB
+GitSync-Crash                          a shared ref, 2 devices, 2 pushes, 3 versions, 2 crashes, 1 commitless version
+                                       pass, every invariant                               165,468      27        11 s    22 MB
+GitSync-Owned                          an owned ref on two copies of one sidecar, 3 pushes, 4 versions, 1 crash, 1 commitless
+                                       pass, every invariant                             3,546,934      34        40 s   240 MB
+GitSync-OwnedForce                     the same, clients may force, no commitless version
+                                       pass, every invariant                             1,178,770      33         9 s   106 MB
+GitSync-Three                          a shared ref, 3 devices, 3 pushes, 3 versions, 1 crash, 1 commitless version
+                                       pass, every invariant                            18,830,900      34  7 min 10 s   705 MB
+GitSync-Wide                           a shared ref, 3 devices, 5 pushes, 7 versions, 2 crashes, 2 commitless, force; by simulation:
+                                       2,800,000 traces (200,000 a worker, 14 workers) of at most 60 steps from seed 8
+                                       pass, every invariant                 142,967,253 generated      60  3 min 54 s     0 MB
+GitSync-WideOwned                      an owned ref on three copies, the same bounds; by simulation, the same traces
+                                       pass, every invariant                 160,931,893 generated      60   6 min 6 s     0 MB
+GitSync.tla, one rule of the design broken
+GitSyncTwin-EqualsOld                  §11.11's restart row as written: a committed entry whose local ref is not old (E)
+                                       NoSpurious violated, a trace of 7 states                593       9         0 s     0 MB
+GitSyncTwin-BlindUpdateRef             the hook's update-ref <new> after evs's 200, whatever sync applied since (F)
+                                       SharedSafe violated, a trace of 12 states             1,805      14         0 s     0 MB
+GitSyncTwin-NoApplyLock                settle's read and write of the local ref are two steps around a receive (F)
+                                       AckedDurable violated, a trace of 10 states             830      12         0 s     0 MB
+GitSyncTwin-NgOnUnknown                an unknown outcome answered as a non-fast-forward (G)
+                                       TruthfulNg violated, a trace of 5 states                 27       9         0 s     0 MB
+GitSyncTwin-NoRecognition              the daemon takes its own committed push for another's commit (G)
+                                       TruthfulNg violated, a trace of 7 states                 27       9         0 s     0 MB
+GitSyncTwin-RefusedDropOnly            a queued update evs can never take is dropped and the local ref left (M)
+                                       Converge violated, a trace of 11 states               1,308      13         0 s     0 MB
+GitSync.tla, the design, with a state it must reach denied
+GitSyncReach-Conflict                  "no conflict branch is ever made" must fail on an owned ref that diverges
+                                       NoConflict violated, a trace of 9 states                599      12         0 s     0 MB
+GitSyncReach-Reconcile                 "no update whose answer a crash lost is found committed and applied" must fail
+                                       NeverReconciled violated, a trace of 8 states            740       9         1 s     0 MB
+GitSyncReach-Resign                    "no update commits on its second attempt" must fail after a commitless version
+                                       NeverResigned violated, a trace of 11 states            127      13         0 s     0 MB
 ```
+
+Every design run that reports distinct states is the complete graph at its bounds. The two Wide runs are simulation, and show only that the behaviors they drew kept every invariant. A twin or reach run stops at the first trace its workers find, so its trace and its counts vary by a state or two between runs. Disk is the most a run's state directory held; each was deleted when its run ended.
 
 Each named counterexample is gone from the design and present in its twin: E is `GitSyncTwin-EqualsOld` (`NoSpurious`), F's second half is `GitSyncTwin-BlindUpdateRef` (`SharedSafe`) and `GitSyncTwin-NoApplyLock` (`AckedDurable`), G is `GitSyncTwin-NgOnUnknown` and `GitSyncTwin-NoRecognition` (`TruthfulNg`), M is `GitSyncTwin-RefusedDropOnly` (`Converge`). The three reach configurations show the design gets to the states the scenarios need: a conflict branch after a real divergence, a crash between evs's commit and the local update reconciled from the history, and a push signed again after a commitless version.
 
@@ -3495,6 +3538,11 @@ SEGMENT_GONE, SEGMENT_STALE                   re-uploaded, a new push id
 a git ref lock is stuck                       retried; a lock older than GitCommandTimeout + 1 min removed; the push is
                                               committed and says so (`committed remotely, local update pending`)
 evs's ref was forced by an admin              settle follows: the local ref is the applied tip, so nothing local is lost
+evs's ref was re-seeded below the version     not a version applied in order: once the verifier accepts the EvsReseed
+  this device applied (§19.10)                (EVSB-M2-20), EvsGitRef is set to the re-seeded head with applied_tip none,
+                                              so settle follows only a local ref that is an ancestor of the new tip and
+                                              otherwise makes a conflict branch: what the incident lost and this device
+                                              still holds is kept, and can be pushed again
 an owned ref diverged (restored state)        a conflict branch, published; evs_conflict; the local ref follows evs
 the queue's push is refused for good          a hold with the code; `ur status`; the commits stay on the local ref
 a source ref cannot be replayed               the dependent ref waits (`waiting_source` in `ur status`), no alarm on it
@@ -3506,7 +3554,7 @@ local/<repo>/ is lost, the repository kept    replay from version 1 recomputes i
                                               followed, and any other becomes a conflict branch
 ```
 
-A ref that stops at a refused version u stays stopped until the ref is deleted on evs. A DELETE at a version w above u carries nothing to check, so a stopped reader skips to w, applies it (its local ref equals its applied tip, so it is deleted) and replays on. Recovery from a forged or broken push is therefore an admin's `git push --delete` and a new push, on the ref's own sidecar for an owned ref. The refused versions stay in evs's history, and export reports them and exports what follows the DELETE.
+A ref that stops at a refused version u stays stopped until the ref is deleted on evs. A DELETE at a version w above u carries nothing to check, so a stopped reader skips to w, applies it (its local ref is its applied tip, so it is deleted) and replays on. A stopped device's own receive path takes that deletion and nothing else for the ref, and builds it on the head's version with no old tip. The versions in between wrote entries no reader vouches for, so every token path their change lists name, which are cleartext, is *tainted* in the reader's `EvsGitRef`. The push that re-creates the ref must write or remove each tainted token path beside its net change against the last tree applied, which its sender can do without the names: a removal needs the token path, its standing version from a read, and the parent's `removed_tokens`. `check` holds it to that, and the taints clear. Recovery from a forged or broken push is therefore `git push --delete` and a new push, by an admin on a shared ref and by its sidecar on an owned one. The refused versions stay in evs's history; export reports them and goes on from the DELETE.
 
 ### 8.6 The test plan
 
@@ -3516,7 +3564,7 @@ Every test is deterministic: a fake clock, barriers at `evs.local.<point>` (publ
 
 **Git to evs (`evs_local_publish_test.go`; EVS1-M2-34).** A's scenario: two commits, one push, the middle blob a history blob, and a second device's `git fsck --strict` clean. A file added and removed inside a push. A 2,000-commit push in two parts, the second changeless. A branch at an existing commit, a lightweight tag and an annotated tag: one empty push each, the tag IMMUTABLE, a second push to it refused. A forced rewind. A DELETE and a re-creation whose net change starts from the old tree. C's scenario: a pull of two other sidecars' commits names one source and carries only the merge; with 17 branches merged at once the 17th's commits are carried. A rename keeps the file_id and uploads nothing; a merged file is cited from its source ref, and a moved-on source falls back to a checkpoint. FS-5's overlay cases, and H's: an inherited file removed, its directory then held whole, the removal standing after a marker collection and after a path-epoch copy; a file changed in a directory the overlay never holds. N's: a file replaced by a directory and back; a gitlink. §11.19's limits refused before any evs write. An import: a foreign history of 10,000 commits in three pushes by a lowered `ImportPushPartCount`, each `EvsImport` checked alone; a writer's push carrying the admin's `EvsImport` with other commits, refused by replay; a kill between pushes and a rerun; a history with raw trees and late headers, its export's oids equal; a tree name with a slash, refused naming the tree; a 100,000-file commit as one multi-part push (§22.8's row), run at 1,100 files in the unit leg.
 
-**Evs to git (`evs_local_sync_test.go`; EVS1-M2-35).** A push on device A applied on device B with equal oids and a clean `git fsck`. Each line of `check` broken in turn by a hand-built push, each refused with its alarm and the ref left: a forged committer; a commit of another sidecar carried without a source; a source that does not reach it; a missing history blob; a change that is not the tree's; an UPDATE that does not descend, without FORCE; a REKEY that changes an oid; a second push to a tag. A committed FORCE and a git-mode PATH_EPOCH raise no alarm (FS-1's case). A source ref replayed first, a missing source leaving the ref waiting, a cycle refused. A stopped ref resuming at a DELETE. Settle's table, one test a row, with a kill at each of `apply.state`, `apply.ref` and `apply.done`. Conflicts: an owned ref with two copies of one sidecar; the conflict branch published and visible on a third device; the 65th conflict stopping the ref; no conflict for E's schedule. Sync racing a receive on one ref at every barrier order (the seeded explorer, 10 seeds a merge). The replayed name index against `sidecartest.FakeNameIndex` for one tree, an overlay included.
+**Evs to git (`evs_local_sync_test.go`; EVS1-M2-35).** A push on device A applied on device B with equal oids and a clean `git fsck`. Each line of `check` broken in turn by a hand-built push, each refused with its alarm and the ref left: a forged committer; a commit of another sidecar carried without a source; a source that does not reach it; a missing history blob; a change that is not the tree's; an UPDATE that does not descend, without FORCE; a REKEY that changes an oid; a second push to a tag. A committed FORCE and a git-mode PATH_EPOCH raise no alarm (FS-1's case). A source ref replayed first, a missing source leaving the ref waiting, a cycle refused. A stopped ref resuming at a DELETE, its re-creating push refused until it writes or removes every tainted token path. Settle's table, one test a row, with a kill at each of `apply.state`, `apply.ref` and `apply.done`. Conflicts: an owned ref with two copies of one sidecar; the conflict branch published and visible on a third device; the 65th conflict stopping the ref; no conflict for E's schedule. Sync racing a receive on one ref at every barrier order (the seeded explorer, 10 seeds a merge). The replayed name index against `sidecartest.FakeNameIndex` for one tree, an overlay included.
 
 **The receive path (`evs_local_receive_test.go`; EVS1-M2-36).** FS-5's journal cases with stock git as the client: two clients push siblings and the second gets `! [remote rejected] … (non-fast-forward)`; a push whose head moved only by a PATH_EPOCH, and one by a rekey, land with no `ng`; SEGMENT_GONE, 429 and GATE_CLOSED never read as non-fast-forward; a two-ref push reports each status; `git push --atomic` fails before any write; the daemon killed at each row of 8.5's first table; a git ref lock held after pre-receive. G's: an unknown outcome answered `remote outcome pending` and later resolved each way, with no statement sent twice across the restart. An owned ref: `ok` before evs, three pushes coalesced into one, a forced local update, an offline queue re-sealed at the generation current at reconnect, a final refusal held and released by `ur evs retry`. pre-receive: a foreign committer refused with both config values, a non-canonical new commit refused, a ref outside refs/heads and refs/tags refused, the quarantine paths checked to lie in the bare repository.
 
@@ -3525,16 +3573,18 @@ Every test is deterministic: a fake clock, barriers at `evs.local.<point>` (publ
 **The client matrix (§22.9's git row; EVS1-M2-43).** Through the local tier, and `git-remote-ur` with no prior mount, for stock git 2.34, 2.43 and the latest, on Linux, macOS (Xcode's) and Windows, and for go-git, JGit and libgit2 as clients over http and OpenSSH:
 
 ```text
-every client     clone, fetch, push; oids equal a reference repository; a sibling push answered as that client
-                 words a remote rejection; a two-ref push with one ng; an annotated tag; a branch delete
+every client     clone, fetch, push; oids equal a reference repository; a sibling push refused, the client's
+                 report holding the daemon's `non-fast-forward`; a two-ref push with one ng; an annotated tag; a
+                 branch delete; refs/ur/ not advertised
 stock git        push --atomic fails before any write; push --force by an admin and by a writer (refused, SCOPE);
                  the kill between the remote commit and update-ref; a foreign commit refused, an import accepted
-2.34             proc-receive and receive.advertiseAtomic as 2.29 gave them; committer.name and committer.email
-go-git           as a client it sends no push options and reads `ng` reasons: the reason strings above are asserted
-JGit, libgit2    the same rows; each reads a hidden ref namespace as absent (transfer.hideRefs)
+2.34             receive.procReceiveRefs and receive.advertiseAtomic behave as on the latest; committer.name and
+                 committer.email are honored
+go-git, JGit,    as clients over http and OpenSSH: every row of "every client"
+libgit2
 ```
 
-**Twenty agents (§22.8; EVS1-M2-43).** As planned, and it now also asserts: every merge into `main` names its agent's ref as a source and carries one commit; no conflict branch; `git fsck --strict` on a second device; export's oids equal.
+**Twenty agents (§22.8; EVS1-M2-43).** As planned, and it now also asserts: a merge into `main` of commits already on evs names their refs as sources and carries none of them, and no push carries another sidecar's commit; no conflict branch; `git fsck --strict` on a second device; export's oids equal.
 
 ### 8.7 Implementation notes, task by task
 
@@ -3544,7 +3594,7 @@ Two new tasks change landed code before the held ones can pass their tests. `.st
 - `protocol/evs.proto`, `evs.pb.go`, `protocol/EVS-FORMAT.md`, `testdata/evs/` vectors, `protocol/evs_descriptor_test.go`: `EvsGitUpdate`, `EvsGitShape`, `EvsSealedBlob`, `EvsHistoryLocator`, `EvsSealedTree`, the three new `EvsSealedMetadata` fields, `EvsSealedCommit.trees`, payload sections 15 and 16, and the rows of 8.2.2. Every new field is sealed, or arrives in a place a row already names: evs-3 lists the head's sealed ref name and overlay base, which sections 15 and 16 deliver, and evs-12 a push's parts and new objects. `check/`'s metadata test must pass unchanged; 8.8 adds one sentence to evs-4 for what evs can now infer.
 - Changeless parts. `evs_statement.go`: `buildParts` adds parts for what does not fit beside the changes, in place of its error "a draft builder adds no part for it", and `build` takes the parts path whenever a one-part payload would pass 1 MiB; such parts carry no `changes_root`. `evs_payload.go`: `evsCheckPartOf`'s "a part with no change" becomes "a part with neither a change nor a section slice, or a part with a change after one without". `evs_merkle.go`: `NewEvsPartedChangeTree` takes only the parts that hold changes. `evsservice/push_part.go` and `push_seal.go`: a changeless part runs no entry check, is recorded and hashed as any part, and the seal's root is over the parts with changes.
 - The creating push (evs1-m2-01-ref-creation-fields, option 1). `evs_payload.go`: sections 15 and 16. `evsservice/push_commit.go`: step 7 copies them into the head's `sealed_ref_name` and `base` when the head is absent, a placeholder or deleted; `check_refs.go` refuses them on any other push, a base naming a ref that is not git mode or does not exist at that version, and a base on a file-mode push (409 REF_MODE), and holds the first push after a DELETE to the head's base. `versions.go`'s `OverlayChains` then has chains to read.
-- Kinds and gitlinks. `evsservice/check_cas.go`: on a git-mode ref "a directory created over a standing path" and "a file written over a standing directory" are creations, not conflicts; `fold.go`'s merge takes a creation of the other kind as it takes any creation. `evs_payload.go:386`: a file entry may have an empty chain. `evs_reconstruct.go`: an empty chain is a gitlink when the opened mode is 160000 and refused otherwise.
+- Kinds and gitlinks. `evsservice/check_cas.go`: on a git-mode ref "a directory created over a standing path" and "a file written over a standing directory" are creations, not conflicts; `fold.go`'s `mergeFoldEvents` already lets a creation replace what an entry held, a table included; the task checks the directory-over-file case and tests both. `evs_payload.go`'s entry check, which refuses a file entry with no chain today: a file entry may have an empty chain. `evs_reconstruct.go`: an empty chain is a gitlink when the opened mode is 160000 and refused otherwise.
 - Rekey's shape. `evs_plan.go`: `setRef` returns `ErrEvsGitRef` unless every write is a rekey write (`ForceCheckpoint`, `IfVersion`, no `Remove`), and `planPath` then refuses a new blob whose oid is not the standing one's. `evs_push.go`: a git-mode plan seals `git {shape: REKEY}`. `gkm_rekey.go` (KEYS-M2-26, core lane, a wiring change): the git-mode skip goes.
 - Tests: vectors for each field; a two-part push whose second part is changeless, committed and read back; a creating push's name and base in the head; a base refused on a second push; a file over a directory on a git-mode ref committing and on a file-mode ref refused; a gitlink entry; a rekey of a git-mode ref from a head-mode client, and one that changes an oid refused by the planner.
 
@@ -3552,15 +3602,15 @@ Two new tasks change landed code before the held ones can pass their tests. `.st
 - `evs_git_object.go`: `EvsGitTreeRead(encoded) ([]EvsGitRawEntry, error)` (git's reading of any tree, with 8.2.5's two refusals), `EvsGitCanonMode`, `EvsGitCommitGraph(encoded) (tree, parents, error)` (commit.c's rule), `EvsGitTag` with `EvsGitTagDecode` (the first `object` and `type` lines) and the `tag` kind in `evsGitObjectOid`. The strict codecs are unchanged.
 - `evs_git_build.go` (new, every leg): `EvsGitTreeBuilder` (8.2.7's `build`, over an `EvsGitObjectSource` and an `EvsGitObjectSink`), bounded by `TreeCacheByteCount`. `evs_git_pack.go` (new): the pack writer. `evs_git_check.go` (new): `EvsGitCheckUpdate`, the pure part of `check(u)` that both export and the sync engine call, with the committer resolver and the held-object test as its arguments.
 - `evs_export.go`, `evs_export_file.go`: `exportGitRef` reads pushes in parts, takes each tip from `git.new_tip`, replays sources first, rebuilds through the builder (the `states` map and `evsExportState.clone` go), takes history blobs, writes tags, and renders a refused version as 8.5 says. `evsGitObjectWriter` becomes export's sink.
-- Tests: 8.6's codec and builder row; export of a history with history blobs, a source, a tag and a raw tree, `git fsck` clean and oids equal.
+- Tests: 8.6's codec and builder row; export of a history with history blobs, a source, a tag and a raw tree: oids equal, and `git fsck` saying of the export what it says of the original.
 
 **EVS1-M2-34, git to evs** (held; L; scope changed). It keeps net changes, sealed commits, overlays and import, and gains history blobs, sources, tags and the base search. It loses nothing; it needs EVS1-M2-48 and EVS1-M2-49. Order: `evs_local_tree.go` (new: the tree reader over `git cat-file --batch`, `diff`), `evs_local_commits.go` (C, S, B, the spool, the strict checks), `evs_local_publish.go` (`EvsLocalPublish`, the net change, `PlanGitUpdate`'s caller, history segments, the answers of 8.2.5), `evs_local_overlay.go` (the base search, the held set, the whole-directory rule), `evs_local_import.go` (8.2.6). Landed code that changes: `evs_plan.go` gains `PlanGitUpdate(ctx, *EvsGitPlanArgs)` beside `PlanWrite`, sharing `planPath`, with content sources by oid, rename and the two reuse cases (EVS1-M2-25 deferred both); `evs_push.go` and `evs_push_parts.go` take a prepared sealed-metadata builder and extra new objects (the history segments), and re-take the lease when it lapses; `evs_local_mount.go` sets 8.2.11's config and creates `refs/ur/`; `evs_mirror_layout.go` gains the `local/<repo>/` names and their parse. Traps: `old` and the base version are read together under L_r; a ref's own `refs/ur/evs/` tip is in excl, never a source; a queued owned ref is a source only at its evs tip; sources are capped at 16; the spool and the history segments are deleted on every exit; nothing here calls `git diff-tree`; a tag ref never gets a change; `EvsImport` is signed per push, after its commits are fixed. Tests: 8.6's git-to-evs row.
 
-**EVS1-M2-35, evs to git** (held; L; scope changed). It keeps the sync engine and conflict branches, and gains the dependency on sources, the stop-and-resume rule and the replayed name index. It needs EVS1-M2-49 and, for end-to-end tests, EVS1-M2-34. Order: `evs_local_sync.go` (the replay loop, batches, the wait on sources, `stuck_at`), `evs_local_apply.go` (`EvsGitRef`, the tips log and index, held and born, settle, the two-step write), `evs_local_conflict.go` (the transaction, the bound, the event), `evs_local_index.go` (new: `EvsNameIndex` over the bare repository, registered with EVS1-M2-47's seam at `Mount`). Landed code that changes: `evs_replay.go`: `NewEvsReplayPaths` takes the ref's mode and effective base, and on a git-mode ref holds a creation to b_eff + 1 and takes a creation over a standing path of the other kind; `evs_local_lock.go`: `EvsRefLocks` gains the publish lock and the mount's upkeep lock, and its header's "after evs's 200" becomes 8.2.9; `evs_verify.go`: nothing, the walk is used as it is. Traps: the sink is flushed before `EvsGitRef` moves; settle reads the local ref inside the lock, every time; a conflict's two ref changes are one `update-ref --stdin` transaction; an own push is replayed from the bytes sent but checked like any other; `SidecarCommitter` refusing is a refusal of the version, not an error to retry; the sync engine never takes P_r. Tests: 8.6's evs-to-git row.
+**EVS1-M2-35, evs to git** (held; L; scope changed). It keeps the sync engine and conflict branches, and gains the dependency on sources, the stop-and-resume rule and the replayed name index. It needs EVS1-M2-49 and, for end-to-end tests, EVS1-M2-34. Order: `evs_local_sync.go` (the replay loop, batches, the wait on sources, `stuck_at`, the resume at a DELETE and the tainted token paths), `evs_local_apply.go` (`EvsGitRef`, the tips log and index, held and born, settle, the two-step write), `evs_local_conflict.go` (the transaction, the bound, the event), `evs_local_index.go` (new: `EvsNameIndex` over the bare repository, registered with EVS1-M2-47's seam at `Mount`). Landed code that changes: `evs_replay.go`: `NewEvsReplayPaths` takes the ref's mode and effective base, and on a git-mode ref holds a creation to b_eff + 1 and takes a creation over a standing path of the other kind; `evs_local_lock.go`: `EvsRefLocks` gains the publish lock and the mount's upkeep lock, and its header's "after evs's 200" becomes 8.2.9; `evs_verify.go`: nothing, the walk is used as it is. Traps: the sink is flushed before `EvsGitRef` moves; settle reads the local ref inside the lock, every time; a conflict's two ref changes are one `update-ref --stdin` transaction; an own push is replayed from the bytes sent but checked like any other; `SidecarCommitter` refusing is a refusal of the version, not an error to retry; the sync engine never takes P_r. Tests: 8.6's evs-to-git row.
 
 **EVS1-M2-36, the receive path** (held; L; scope changed). It keeps the hooks, proc-receive, the journal and owned refs' queue. The journal no longer retries a push id at a restart: it resolves from the history. Order: `evs_local_journal.go` (`EvsJournalRef`, its states, `resolve`), `evs_local_hook.go` (the session, the quarantine relay, pre-receive's checks through EVS1-M2-34's C), `evs_local_receive.go` (proc-receive's protocol on `evs_git_pktline.go`, the per-ref flow, the answers, the queue), `cli/git_hook.go`. Traps: an attempt's record is durable before its first POST; `non-fast-forward` only under G7's condition; `ok` only after the local ref moved; the quarantine paths are checked before the runner takes them; an owned ref's `update-ref` and its journal write are under one L_r; nothing is answered from a 200 alone when the history disagrees. Tests: 8.6's receive row.
 
-**Order.** EVS1-M2-48 and EVS1-M2-49 in either order; then EVS1-M2-34; then EVS1-M2-35; then EVS1-M2-36, as the plan has them. EVS1-M2-35's unit tests need only hand-built pushes, so it can start beside EVS1-M2-34.
+**Order.** EVS1-M2-48, then EVS1-M2-49, which uses its messages; then EVS1-M2-34; then EVS1-M2-35; then EVS1-M2-36, as the plan has them. EVS1-M2-35's unit tests need only hand-built pushes, so it can start beside EVS1-M2-34.
 
 **Other tasks this section touches by name.** EVS1-M2-32 (export) is changed by EVS1-M2-49. EVS1-M2-33's files change as listed under EVS1-M2-34 and EVS1-M2-35. EVS1-M2-37 starts `git-receive-pack` with `UR_GIT_SESSION`. EVS1-M2-38's `ur evs import` passes `cuts` and `force`, and adds `ur evs retry`. EVS1-M2-43 gains 8.6's matrix rows and its twins file. EVS1-M2-47's seam is registered by EVS1-M2-35. KEYS-M2-26 drops its git-mode skip once EVS1-M2-48 lands. EVS2's drop job holds to G11.
 
