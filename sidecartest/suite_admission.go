@@ -24,10 +24,10 @@
 //
 // What is not the system here, each named in the task's report: the acl compile is the suite's stand-in
 // (admissionAclCompile) until ACL-M2-04 registers CompileAcl (C-05); the config repo is in memory, since no file-mode
-// head reader over evs exists yet (TEAM-M2-10's report); and the rows about MLS, wraps and devices' alarms (a
-// recovery-admitted device self-joining, committers' commits, seats' ReaderWraps, agents reading by their reader key,
-// M's devices raising admission_alarm) check only the verified state those flows read, since no Sidecar here runs a
-// GkmClient or an EvsClient.
+// head reader over evs exists yet (TEAM-M2-10's report); and no Sidecar here runs a GkmClient or an EvsClient, so the
+// committers, seats and agents rows check only the verified state their commits and wraps follow (MayCommit,
+// LeafRank, WrappedMembers), and §22.7's rows that are MLS, wraps or a device's alarms alone (a recovery-admitted
+// device self-joining, members refusing an unconsented device's Add, admission_alarm) are not rows here.
 //
 // A row is a top-level test on each tier (AdmissionRows, RunAdmissionRow); a row fails its test with t.Fatalf.
 // Nothing here sleeps: api's clock is a FakeClock the rows move, and every wait is a monitor's.
