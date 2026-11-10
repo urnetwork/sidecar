@@ -3189,7 +3189,8 @@ Memory is the tree cache, the pending chunk and one commit's changes. Nothing is
 
 ```text
 settle(r):     E = EvsGitRef.tip (none: deleted); A = EvsGitRef.applied_tip; L = the local ref, read now
-               Q = the journal holds LOCAL updates for r and the newest one's new is L (an owned ref's queue)
+               Q = the journal holds queued updates for r, LOCAL or SENT, and the newest one's new is L (an owned
+                   ref's queue)
                "ancestor" is of the peeled commits, and none is an ancestor of every commit
    L = E                                              -> nothing
    E = A and (Q or L = A)                             -> nothing: evs has not moved
@@ -3305,7 +3306,8 @@ RECEIVED   before anything else an update does              shared: delete it (n
                                                             owned: the local ref is old -> move it and go LOCAL;
                                                             else delete it
 LOCAL      an owned ref's local ref is new                  the queue goes on
-SENT       before an attempt's first POST, with its record  resolve(r)
+SENT       before an attempt's first POST, with its record, resolve(r)
+           on every update the attempt covers
 (deleted)  the update is applied, refused or dead
 ```
 
@@ -3470,8 +3472,8 @@ the same without sources          + 40 commits, 23 KiB                     + the
   (the design as written)         and replay refuses them (8.1 C)
 2,000 commits, 30 files           1.1 MiB             30 x 450 B           about 6,000 history         2    1
                                                                            diffs, 10 MiB, 2 segments
-a 100,000-file commit on a        8.5 MiB (its        106,000 entries,     1.2 GiB, 150 segments     104   none (a
-  new ref (§22.8's pushes row)    changes)            56 MiB                                               new ref)
+a 100,000-file commit on a        8.1 MiB (its        106,000 entries,     1.2 GiB, 150 segments     104   none (a
+  new ref (§22.8's pushes row)    changes)            53 MiB                                               new ref)
 a branch or tag at a commit a     about 100 B         none                 none                        1    none
   ref already reaches
 ```
@@ -3483,11 +3485,11 @@ A push of at most 64 KiB is one upload at most and one POST, inside §11.15's "l
 ```text
 sealed commits        1,000,000 x 570 B                                   0.53 GiB
 history blob entries  2,900,000 x 80 B                                    0.22 GiB    all sealed metadata: 0.75 GiB
-entries               100,000 files and 6,000 directories                 56 MiB
+entries               100,000 files and 6,000 directories                 53 MiB
 history content       150,000 first versions x 12.2 KiB, 2,750,000 diffs x 1.7 KiB    6.0 GiB
 entry content         100,000 checkpoints x 12.2 KiB                      1.1 GiB     with Padmé's 3%: 7.4 GiB,
                                                                                       950 segments of 8 MiB
-parts                 about 830 of 1 MiB if it were one push
+parts                 about 820 of 1 MiB if it were one push
 pushes                2 at 20 Mbit/s (ImportPushPartCount); 3 at 5 Mbit/s (ImportPostTime: 10 min x 0.6 MiB/s)
 upload                segments 53 min at 20 Mbit/s and 3.5 h at 5 Mbit/s, 4 at once, each receipt used well inside
                       22 h because a push seals what it uploaded; parts 6 min and 23 min in all
