@@ -190,6 +190,25 @@ const (
 	BarrierCollectCloseAfter  = "evs.collect.close.after"
 )
 
+// EVSB-M10-01 and EVSB-M10-02: the versionless purge and evacuation's sweep (§22.8's sites: the purge's certainty,
+// its hold/ reread and each delete, and evacuation's staged decision).
+const (
+	// The committing process queued u's candidates, keyed by <repo>:<ref>.
+	BarrierPurgeCertain = "evs.purge.certain"
+	// Around the hold/ reread before each purge DELETE, keyed by <repo>:<ref>:<candidate>:<id>.
+	BarrierPurgeHoldsBefore = "evs.purge.holds.before"
+	BarrierPurgeHoldsAfter  = "evs.purge.holds.after"
+	// Around each purge DELETE, keyed as the reread is.
+	BarrierPurgeDeleteBefore = "evs.purge.delete.before"
+	BarrierPurgeDeleteAfter  = "evs.purge.delete.after"
+	// Around evacuation's decision for one staged segment: written to seg/ or dropped, keyed by <repo>:<segment>.
+	BarrierEvacuateStagedBefore = "evs.evacuate.staged.before"
+	BarrierEvacuateStagedAfter  = "evs.evacuate.staged.after"
+	// Around each sweep DELETE, and each one-off pass's, keyed by <repo>:<segment> or <repo>:<slot>.
+	BarrierSweepDeleteBefore = "evs.sweep.delete.before"
+	BarrierSweepDeleteAfter  = "evs.sweep.delete.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
