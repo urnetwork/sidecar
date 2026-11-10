@@ -6,6 +6,12 @@
 #
 #   run.sh <track> [all | design | twins | <Config>...]
 #
+# AuthLog-Narrow, one entry deeper than the other design runs, runs by TLC's random simulation rather than
+# breadth-first search, since its complete state graph passes 20 million states: 200,000 traces of up to 7
+# steps from seed 1, which shows those behaviors kept every invariant and no more, and took 1 h 46 min on
+# 14 cores on 2026-11-09. TLC_FLAGS adds flags to any run, as in TLC_FLAGS="-simulate num=1000 -depth 7
+# -seed 1" for a shorter simulation.
+#
 # exit: 0 every run did what it must; 1 one did not; 64 usage
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,7 +29,11 @@ esac
 failed=0
 for config in "$@"; do
   out=$(mktemp "${TMPDIR:-/tmp}/authlog.XXXXXX")
-  (cd "$here" && "$ROOT/.stack/tools/tlc" "$track" -config "$config.cfg" -workers "${TLC_WORKERS:-auto}" ${TLC_FLAGS:-} AuthLog.tla) > "$out" 2>&1
+  flags=${TLC_FLAGS:-}
+  if [ "$config" = AuthLog-Narrow ] && [ -z "$flags" ]; then
+    flags="-simulate num=200000 -depth 7 -seed 1"
+  fi
+  (cd "$here" && "$ROOT/.stack/tools/tlc" "$track" -config "$config.cfg" -workers "${TLC_WORKERS:-auto}" $flags AuthLog.tla) > "$out" 2>&1
   code=$?
   rev=$(sed -n 's/.*(rev: \([0-9a-f]*\)).*/\1/p' "$out" | head -1)
   violated=$(sed -n 's/^Error: Invariant \(.*\) is violated.*/\1/p' "$out" | head -1)
@@ -32,7 +42,12 @@ for config in "$@"; do
   took=$(sed -n 's/^Finished in \(.*\) at .*/\1/p' "$out" | tail -1)
   trace=$(grep -c '^State [0-9]*:' "$out")
   expect=$(sed -n 's/^    \([A-Za-z]*\)$/\1/p' "$config.cfg" | tail -1)
-  facts="tlc $rev, exit $code, ${distinct:-?} distinct states, depth ${depth:-?}, ${took:-?}"
+  generated=$(sed -n 's/^The number of states generated: \([0-9,]*\).*/\1/p' "$out" | tail -1)
+  if [ -n "$generated" ]; then
+    facts="tlc $rev, exit $code, simulation, $generated states generated, ${took:-?}"
+  else
+    facts="tlc $rev, exit $code, ${distinct:-?} distinct states, depth ${depth:-?}, ${took:-?}"
+  fi
   case $config in
     Twin-*)
       if [ "$code" -ne 0 ] && [ "$violated" = "$expect" ]; then

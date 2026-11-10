@@ -22,7 +22,7 @@
 (* and its veto; AuthorityProposals and cosigns at threshold K; the        *)
 (* compromise cascade P; the replay ring and the StatementHeader's at;     *)
 (* bases with their folded_through, head-derived rows (self_admit and a    *)
-(* tag's owner), tail verdict bits and, under Adversary, a lie. What it    *)
+(* tag's owner), tail verdict bits and, under LyingWriter, a lie. What it  *)
 (* leaves out: presence countersignatures, read_only, expiries by          *)
 (* not_after, EvsShares, key registrations, leaf ranks, the config head's  *)
 (* own chain and api's ticks for reaps.                                    *)
@@ -46,7 +46,8 @@ CONSTANTS
     RecoveryWindow,  \* 72 h, in entries
     Life,            \* a proposal's not_after, in entries after its entry
     MaxAdmits,       \* the Delegation's max_admits
-    Adversary,       \* api sequences refused statements, and a writer may lie in a base
+    Adversary,       \* api sequences refused statements too
+    LyingWriter,     \* a config writer may publish a base with a false verdict
     Narrow,          \* one at and one since_n per statement, so a deeper run finishes
     Story,           \* <<>>, or the pattern each entry must match in turn
     Twin             \* "none", or the rule a twin breaks
@@ -473,7 +474,7 @@ PublishBase(ft, selfAdmit, tagOwner, lie) ==
     /\ ~L.forked                                  \* a forked writer stops (§6.4's FORK)
     /\ ft \in {L.st.ft} \cup (Max(L.st.base, 1) .. n - 1)
     /\ n - 1 - ft <= TailMax \/ Twin = "NoTailCap"
-    /\ lie => Adversary /\ ft < n - 1 /\ log[n - 1].k # "base"
+    /\ lie => LyingWriter /\ ft < n - 1 /\ log[n - 1].k # "base"
     /\ LET head == [selfAdmit |-> selfAdmit, tagOwner |-> tagOwner]
            rows == Compile(L.hist[ft], head, ft)
            honest == [k \in ft + 1 .. n - 1 |-> IF log[k].k = "base" THEN 0 ELSE L.verdict[k]]

@@ -12,7 +12,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | pending |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | pending |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | pending |
-| 5 | Authorization-log verdicts across folds (§7.9) | 13 | in progress |
+| 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
 | 6 | MLS group key management (§10) | 13 | pending |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | pending |
 | 8 | Git and evs in both directions | 3 | pending |
@@ -48,7 +48,7 @@ Tasks held until complete: BRIDGE-M2-01, BRIDGE-M4-15, BRIDGE-M4-18, BRIDGE-M4-1
 
 ## 5. Authorization-log verdicts across folds (§7.9)
 
-Status: in progress
+Status: complete (2026-11-09)
 
 Tasks held until complete: CORE-M3-02, CORE-M3-03, TEAM-M10-01, TEAM-M2-04, TEAM-M2-05, TEAM-M2-06, TEAM-M2-07, TEAM-M2-09, TEAM-M2-10, TEAM-M2-17, TEAM-M2-18, TEAM-M2-19, TEAM-M3-02.
 
@@ -281,9 +281,9 @@ ProposalsSurviveFolds
                  lie between the proposal and the cosign
 ```
 
-**The model.** `sidecartest/model/details/AuthLog.tla` keeps the log as its one shared object and three verifiers as variables derived from it: `L`, the long-running full reader and writer; `N[b]`, a new full device started at each base b; and `G`, the rows-only gate cold-started at the newest base, which is what api sequences by. It models admissions with signers, carrying position, the signer's `at`, confirmations, parks and revocations; one Delegation with `max_admits`; recovery bindings, recovery-signed proposals, the 72 h window, vetoes and ticks; AuthorityProposals and cosigns at threshold K; the compromise cascade with consent (§8.5), voids of bindings and Delegations and the parks a Delegation's end makes; the replay ring and the `at` rule with the retention point; and bases with `folded_through`, head-derived rows (`self_admit`, a tag's owner), tail verdict bits and, under `Adversary`, a lie. It leaves out presence countersignatures, read_only, `not_after` expiries, EvsShares, key registrations, leaf ranks, the head's own chain and api's reap ticks. The clock is the position. `Twin` selects a rule to break: `JudgeTail`, `NoProposalRows` and `NoSettingsRows` are §7.9 as written on 2026-11-09 and `CloseAtBase` the landed code; `ReJudgeTail` (the question's option 2), `NoRingRows`, `CascadeFromAt`, `NoBitsCheck` and `NoTailCap` each break one rule of this design. `Story` fixes a twin's entries so TLC reaches its violation directly; the design runs with none. `run.sh <track>` runs every configuration through `.stack/tools/tlc` and prints a verdict line per run.
+**The model.** `sidecartest/model/details/AuthLog.tla` keeps the log as its one shared object and three verifiers as variables derived from it: `L`, the long-running full reader and writer; `N[b]`, a new full device started at each base b; and `G`, the rows-only gate cold-started at the newest base, which is what api sequences by. It models admissions with signers, carrying position, the signer's `at`, confirmations, parks and revocations; one Delegation with `max_admits`; recovery bindings, recovery-signed proposals, the 72 h window, vetoes and ticks; AuthorityProposals and cosigns at threshold K; the compromise cascade with consent (§8.5), voids of bindings and Delegations and the parks a Delegation's end makes; the replay ring and the `at` rule with the retention point; and bases with `folded_through`, head-derived rows (`self_admit`, a tag's owner), tail verdict bits and, under `LyingWriter`, a lie; under `Adversary` api sequences refused statements too. It leaves out presence countersignatures, read_only, `not_after` expiries, EvsShares, key registrations, leaf ranks, the head's own chain and api's reap ticks. The clock is the position. `Twin` selects a rule to break: `JudgeTail`, `NoProposalRows` and `NoSettingsRows` are §7.9 as written on 2026-11-09 and `CloseAtBase` the landed code; `ReJudgeTail` (the question's option 2), `NoRingRows`, `CascadeFromAt`, `NoBitsCheck` and `NoTailCap` each break one rule of this design. `Story` fixes a twin's entries so TLC reaches its violation directly; the design runs with none. `run.sh <track>` runs every configuration through `.stack/tools/tlc` and prints a verdict line per run.
 
-Runs, TLC at the owner's jar (master d8fb231), bounded so each finishes; breadth-first, every reachable state at the bounds:
+Runs, TLC at the owner's jar (master d8fb231), bounded so each finishes; breadth-first over every reachable state at the bounds, but for the deepest design run, which samples:
 
 ```text
 configuration            Twin           K  bounds (Window 4, TailMax 4, RecoveryWindow 2, Life 5, MaxAdmits 2)
@@ -292,11 +292,13 @@ AuthLog                  none           2  MaxN 4, MaxBases 2, no story, no adve
                                            pass, every invariant                      1,725,243      5      1 min 44 s
 AuthLog-K1               none           1  the same at k = 1
                                            pass, every invariant                      4,061,811      5      6 min 22 s
-AuthLog-Adversary        none           2  MaxN 4, MaxBases 2, Adversary: api sequences refused statements and a
-                                           writer may lie in a base
-                                           ADVERSARY-ROW
-AuthLog-Narrow           none           2  MaxN 5, MaxBases 2, Narrow: one at and one since_n a statement
-                                           NARROW-ROW
+AuthLog-Adversary        none           2  MaxN 4, MaxBases 2, LyingWriter: a writer may publish a base with a false
+                                           verdict (every honest base has a lying twin beside it)
+                                           pass, every invariant                      2,494,475      5      7 min 18 s
+AuthLog-Narrow           none           2  MaxN 5, MaxBases 2, Narrow: one at and one since_n a statement; by random
+                                           simulation, 200,000 traces of up to 7 steps from seed 1, since its complete
+                                           graph passes 20 million states
+                                           pass, every invariant on those traces   436,846,285 generated  6  1 h 46 min
 Twin-JudgeTail-Head      JudgeTail      2  StoryTailHead, MaxN 2      Agreement violated, 3-state trace    3    3
 Twin-JudgeTail-At        JudgeTail      2  StoryTailAt, MaxN 3        Agreement violated, 3-state trace    3    3
 Twin-NoProposalRows      NoProposalRows 2  StoryProposals, MaxN 3     Agreement violated, 3-state trace    3    3
@@ -304,13 +306,13 @@ Twin-NoSettingsRows      NoSettingsRows 2  StorySettings, MaxN 3      Agreement 
 Twin-NoRingRows          NoRingRows     2  StoryRing, MaxN 6          Agreement violated, 7-state trace   75    7
 Twin-ReJudgeTail         ReJudgeTail    2  StoryReJudge, MaxN 3       RevocationsStand violated, 4 states  4    4
 Twin-CascadeFromAt       CascadeFromAt  1  StoryCascadeAt, MaxN 2     CascadeClosed violated, 3 states     3    3
-Twin-NoBitsCheck         NoBitsCheck    2  StoryLie, MaxN 2, Adversary Agreement violated, 3 states         3    3
+Twin-NoBitsCheck         NoBitsCheck    2  StoryLie, MaxN 2, LyingWriter Agreement violated, 3 states       3    3
 Twin-NoBitsCheck-Forks   NoBitsCheck    2  the same                   LiesAreForks violated, 3 states      3    3
-Twin-CloseAtBase         CloseAtBase    2  StoryClose, MaxN 3, Adversary ProposalsSurviveFolds violated   14    4
+Twin-CloseAtBase         CloseAtBase    2  StoryClose, MaxN 3, Adversary ProposalsSurviveFolds violated   12    4
 Twin-NoTailCap           NoTailCap      2  StoryTailCap, MaxN 3, TailMax 1 TailBounded violated, 4 states  6    4
 ```
 
-Each twin run took under 5 s. A twin's depth counts TLC's initial state, so a 3-state trace is two entries. The design runs explore every log the candidate alphabet allows at their depth (about 37 enabled entries a position at MaxN 4); a run one entry deeper multiplies the states by that, which is why the deeper run narrows the alphabet instead.
+Each twin run took under 5 s. A depth counts TLC's initial state, so a 3-state trace is two entries. The three breadth-first design runs explore every log the candidate alphabet allows at their depth (about 37 enabled entries a position at MaxN 4); a run one entry deeper multiplies the states by that, so the narrowed depth-5 run, whose complete graph passed 20 million states without finishing in two hours, runs instead by TLC's random simulation, which proves only that the behaviors it drew kept every invariant. Its seed and trace count are fixed in `run.sh`, so the run repeats.
 
 The three divergences appear in the model of §7.9 as written and are gone in the design: `Twin-JudgeTail-Head` and `Twin-JudgeTail-At` violate Agreement at the base (a new device's tail verdict differs from the long-running reader's on a tag owner moved by the head, and on an `at` below the new device's first held position); `Twin-NoProposalRows` at the cosign after the fold; `Twin-NoSettingsRows` at the self-admission the gate refuses; `Twin-NoRingRows` at the vetoed recovery proposal's replay. The design's runs hold every invariant at the same and larger bounds, with Agreement comparing every new device and the gate against the long-running reader at every state.
 
