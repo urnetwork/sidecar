@@ -363,5 +363,6 @@ func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 	if err := self.reapplyTail(next, header.GetFoldedThrough(), entry.GetN(), verdicts, false); err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
+	configAdvanceBaseShrinks(next, state.base, header)
 	return nil
 }

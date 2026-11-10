@@ -219,6 +219,7 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 	if err := self.reapplyTail(next, header.GetFoldedThrough(), kept.n, bits, true); err != nil {
 		return nil, self.baseFork(kept, "%v", err)
 	}
+	configAdvanceBaseShrinks(next, state.base, header)
 	result := next.finish()
 	self.retainBase(result, rows)
 	return result, nil
@@ -688,6 +689,7 @@ func (self *ConfigLog) reapplyStatement(next *configStateBuilder, view *ConfigSt
 	if effectErr != nil {
 		self.log.Infof("[config]%s entry %d's effect ends at the base: %v", self.networkId, kept.n, effectErr)
 	}
+	configAdvanceShrinks(view, next, configEntryEffects(statement, nil))
 	next.addRing(statement.n, statement.id)
 	return statement, nil
 }
@@ -718,6 +720,7 @@ func (self *ConfigLog) reapplyTick(next *configStateBuilder, view *ConfigState, 
 	if err := configApplyTick(next, tick, activations); err != nil {
 		self.log.Infof("[config]%s tick %d's effect ends at the base: %v", self.networkId, kept.n, err)
 	}
+	configAdvanceShrinks(view, next, configEntryEffects(nil, activations))
 	return tick, activations, nil
 }
 
