@@ -73,6 +73,8 @@ type EvsTierDeps struct {
 	AuthState   evsservice.EvsAuthState
 	GateViews   evsservice.EvsGateViews
 	ReceiptKeys *evsservice.ReceiptKeys
+	// The segment cluster's HDD share's settings (EvsWorldSettings.HddInterval).
+	Hdd *evsservice.HddAdmissionSettings
 }
 
 // One instance's block: an engine server hosts, with what it owns.
@@ -117,6 +119,11 @@ type EvsWorldSettings struct {
 	LbReadTimeout time.Duration
 	// Real time a request's step 8s may take before the request fails: a guard, never a wait a schedule orders.
 	StepEightTimeout time.Duration
+	// The HDD share's loop interval on each instance: past any schedule's span, 10,000 h, so a schedule's Advance
+	// ticks no loop. A loop ticking on the Net's clock writes Redis as often as its goroutine wins the race with the
+	// Advance, so the count of a run's Redis writes, which §22.8's unknown rule loses one at a time, would differ from
+	// run to run. Non-positive takes the share's own 5 s.
+	HddInterval time.Duration
 	// The engine settings of an instance past the world's own, nil for none.
 	AdjustEngine func(instance string, settings *evsservice.EvsSettings)
 	// A device's client settings past the defaults, nil for none.
@@ -146,6 +153,7 @@ func DefaultEvsWorldSettings() *EvsWorldSettings {
 		LbTries:          2,
 		LbReadTimeout:    30 * time.Second,
 		StepEightTimeout: 10 * time.Second,
+		HddInterval:      10000 * time.Hour,
 	}
 }
 
@@ -246,6 +254,11 @@ type EvsWorld struct {
 	setUp     bool
 	// each instance's gate view while a schedule holds it stale, by instance
 	staleViews map[string]*sidecartest.FakeGkmAuthView
+	// the devices that no longer read the repo, the position the repo's holders last shrank at, and how many
+	// positions the log holds
+	droppedReaders map[string]bool
+	shrunkAt       uint64
+	viewCount      uint64
 	// the sidecars an instance's auth state takes no scope of, by instance
 	scopeDenials map[string]map[sidecar.Id]bool
 	// by path, every write started, in order
@@ -277,6 +290,7 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		log:            sidecartest.NewFakeGkmAuthLog(),
 		devices:        map[string]*EvsWorldDevice{},
 		staleViews:     map[string]*sidecartest.FakeGkmAuthView{},
+		droppedReaders: map[string]bool{},
 		scopeDenials:   map[string]map[sidecar.Id]bool{},
 		pathWrites:     map[string][]*evsWorldWrite{},
 		pushes:         map[sidecar.Id]*EvsWorldPush{},
@@ -371,7 +385,7 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 		return fmt.Errorf("repo/: %w", err)
 	}
 
-	gkm := sidecartest.NewFakeGkm(net.Clock(), net.Host().Blobs, nil)
+	gkm := sidecartest.NewFakeGkm(net.Clock(), &evsWorldGkmBlobs{BlobStore: net.Host().Blobs}, nil)
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -406,11 +420,20 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 	return nil
 }
 
-// Appends a position at which every device reads the repo and writers write it, and gives it to evs and every
-// device.
+// Appends a position at which every device but a dropped one reads the repo and writers write it, with the holders
+// shrunk where the newest drop was, and gives it to evs and every device.
 func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
+	self.stateLock.Lock()
+	droppedReaders := map[string]bool{}
+	for name, dropped := range self.droppedReaders {
+		droppedReaders[name] = dropped
+	}
+	shrunkAt := self.shrunkAt
+	self.stateLock.Unlock()
 	fixture := &sidecartest.FakeGkmAuthFixture{
-		Rows:         sidecartest.FakeGkmAuthRows(&protocol.AclRepo{RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind}),
+		Rows: sidecartest.FakeGkmAuthRows(&protocol.AclRepo{
+			RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind, HoldersShrunkAt: shrunkAt,
+		}),
 		IdentityKeys: map[sidecar.Id][]byte{},
 		RepoReaders:  map[sidecar.Id][]sidecar.Id{},
 		RepoWriters:  map[sidecar.Id][]sidecar.Id{},
@@ -420,6 +443,9 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 		device := self.devices[name]
 		fixture.IdentityKeys[device.Signer.SidecarId] = device.Signer.PublicKey()
 		sidecarIds = append(sidecarIds, device.Signer.SidecarId)
+		if droppedReaders[name] {
+			continue
+		}
 		fixture.RepoReaders[self.RepoId] = append(fixture.RepoReaders[self.RepoId], device.Signer.SidecarId)
 		if device.settings.Writer {
 			fixture.RepoWriters[self.RepoId] = append(fixture.RepoWriters[self.RepoId], device.Signer.SidecarId)
@@ -431,6 +457,7 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 	view := self.log.Append(fixture)
 	self.stateLock.Lock()
 	self.view = view
+	self.viewCount += 1
 	self.stateLock.Unlock()
 	for _, name := range self.deviceNames {
 		if gkm := self.devices[name].Gkm; gkm != nil {
@@ -438,6 +465,74 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 		}
 	}
 	return view
+}
+
+// The store as the world's fake gkm writes its generations to it: every request under an inspecting context, so an evs
+// row's plans never land on gkm's own writes and §22.8's unknown rule loses evs's writes, not a fake of another
+// service's. Its writes stay in the blob history, so FI-1 reads every generation it makes.
+type evsWorldGkmBlobs struct {
+	sidecar.BlobStore
+}
+
+func (self *evsWorldGkmBlobs) Cluster(clusterId string) (sidecar.BlobCluster, error) {
+	cluster, err := self.BlobStore.Cluster(clusterId)
+	if err != nil {
+		return nil, err
+	}
+	return &evsWorldGkmCluster{BlobCluster: cluster}, nil
+}
+
+func (self *evsWorldGkmBlobs) FirstCluster() (sidecar.BlobCluster, error) {
+	cluster, err := self.BlobStore.FirstCluster()
+	if err != nil {
+		return nil, err
+	}
+	return &evsWorldGkmCluster{BlobCluster: cluster}, nil
+}
+
+func (self *evsWorldGkmBlobs) SegmentCluster() (sidecar.BlobCluster, error) {
+	cluster, err := self.BlobStore.SegmentCluster()
+	if err != nil {
+		return nil, err
+	}
+	return &evsWorldGkmCluster{BlobCluster: cluster}, nil
+}
+
+// One cluster of evsWorldGkmBlobs.
+type evsWorldGkmCluster struct {
+	sidecar.BlobCluster
+}
+
+func (self *evsWorldGkmCluster) PutIfNoneMatch(ctx context.Context, key string, body []byte, options *sidecar.BlobPutOptions) (string, error) {
+	return self.BlobCluster.PutIfNoneMatch(sidecartest.InspectContext(ctx), key, body, options)
+}
+
+func (self *evsWorldGkmCluster) PutIfMatch(ctx context.Context, key string, etag string, body []byte, options *sidecar.BlobPutOptions) (string, error) {
+	return self.BlobCluster.PutIfMatch(sidecartest.InspectContext(ctx), key, etag, body, options)
+}
+
+func (self *evsWorldGkmCluster) PutStream(ctx context.Context, key string, body io.Reader, byteCount int64, checksumSha256 []byte) (string, error) {
+	return self.BlobCluster.PutStream(sidecartest.InspectContext(ctx), key, body, byteCount, checksumSha256)
+}
+
+func (self *evsWorldGkmCluster) Get(ctx context.Context, key string) (*sidecar.BlobObject, error) {
+	return self.BlobCluster.Get(sidecartest.InspectContext(ctx), key)
+}
+
+func (self *evsWorldGkmCluster) GetRange(ctx context.Context, key string, offset int64, byteCount int64) (*sidecar.BlobObject, error) {
+	return self.BlobCluster.GetRange(sidecartest.InspectContext(ctx), key, offset, byteCount)
+}
+
+func (self *evsWorldGkmCluster) Head(ctx context.Context, key string) (*sidecar.BlobInfo, error) {
+	return self.BlobCluster.Head(sidecartest.InspectContext(ctx), key)
+}
+
+func (self *evsWorldGkmCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
+	return self.BlobCluster.List(sidecartest.InspectContext(ctx), keyPrefix, startAfter, limit)
+}
+
+func (self *evsWorldGkmCluster) Delete(ctx context.Context, key string) error {
+	return self.BlobCluster.Delete(sidecartest.InspectContext(ctx), key)
 }
 
 // The newest position.
@@ -474,6 +569,12 @@ func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHo
 		AuthState:   &evsWorldAuthState{world: self, instance: instance},
 		GateViews:   &evsWorldGateViews{world: self, instance: instance},
 		ReceiptKeys: self.receiptKeys,
+		Hdd:         evsservice.DefaultHddAdmissionSettings(),
+	}
+	if 0 < self.settings.HddInterval {
+		deps.Hdd.Interval = self.settings.HddInterval
+		deps.Hdd.RetryAfter = self.settings.HddInterval
+		deps.Hdd.PutReportTtl = 3 * self.settings.HddInterval
 	}
 	if tier := evsTierOf(self.net); tier != nil && tier.NewHost != nil {
 		return tier.NewHost(ctx, host, settings, deps)
@@ -514,7 +615,7 @@ func newEvsWorldHost(ctx context.Context, host *sidecar.ServiceHost, settings *e
 	if err != nil {
 		return fail(err)
 	}
-	hdd, err := evsservice.NewHddAdmission(ctx, host, segmentCluster.ClusterId(), nil)
+	hdd, err := evsservice.NewHddAdmission(ctx, host, segmentCluster.ClusterId(), deps.Hdd)
 	if err != nil {
 		return fail(err)
 	}
@@ -783,14 +884,15 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 			break
 		}
 		tried = append(tried, instance)
-		recorder, answered := self.serve(request.Context(), instance, request, body)
+		var notePushId *sidecar.Id
+		if isPush {
+			notePushId = &pushId
+		}
+		recorder, answered := self.serve(request.Context(), instance, request, body, notePushId)
 		if !answered {
 			// a connection error or the read timeout: the lb sends it on
 			last = nil
 			continue
-		}
-		if isPush {
-			self.noteAnswer(pushId, evsWorldAnswerOf(instance, recorder))
 		}
 		last = recorder
 		if recorder.Code == http.StatusServiceUnavailable {
@@ -846,8 +948,9 @@ func (self *EvsWorld) serveHelper(device *EvsWorldDevice, request *http.Request,
 }
 
 // One request served by instance as an Action of its actor, waited for with the baton given up. Whether it answered
-// before its instance died, the lb's read timeout passed or ctx ended.
-func (self *EvsWorld) serve(ctx context.Context, instance string, request *http.Request, body []byte) (*httptest.ResponseRecorder, bool) {
+// before its instance died, the lb's read timeout passed or ctx ended. A push's answer is noted under pushId when the
+// instance gives it, whether or not the lb still waits for it.
+func (self *EvsWorld) serve(ctx context.Context, instance string, request *http.Request, body []byte, pushId *sidecar.Id) (*httptest.ResponseRecorder, bool) {
 	host := self.instanceHost(instance)
 	if host == nil {
 		return nil, false
@@ -861,6 +964,9 @@ func (self *EvsWorld) serve(ctx context.Context, instance string, request *http.
 		host.Handler().ServeHTTP(recorder, served)
 		if err := self.awaitStepEights(host.Engine()); err != nil {
 			return err
+		}
+		if pushId != nil {
+			self.noteAnswer(*pushId, evsWorldAnswerOf(instance, recorder))
 		}
 		close(answered)
 		return nil
@@ -939,6 +1045,7 @@ func (self *EvsWorld) serveDuplicates(device *EvsWorldDevice, request *http.Requ
 			if err := self.awaitStepEights(host.Engine()); err != nil {
 				return err
 			}
+			self.noteAnswer(pushId, evsWorldAnswerOf(instance, one.recorder))
 			close(one.answered)
 			return nil
 		})
@@ -955,10 +1062,9 @@ func (self *EvsWorld) serveDuplicates(device *EvsWorldDevice, request *http.Requ
 		}
 	})
 	var first *httptest.ResponseRecorder
-	for index, one := range runs {
+	for _, one := range runs {
 		select {
 		case <-one.answered:
-			self.noteAnswer(pushId, evsWorldAnswerOf(instances[index], one.recorder))
 			if first == nil {
 				first = one.recorder
 			}
