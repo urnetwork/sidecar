@@ -340,6 +340,8 @@ func (self *Sidecar) Search(ctx context.Context, request *SearchRequest) (*Searc
 func (self *SearchStream) Next() (page []SearchHit, progress SearchProgress, done bool, err error) // replaces the last
 func (self *Sidecar) GetSearchStatus(repoId *Id) (*SearchStatus, error) // search_status (§16.10), GetStatus (§18.5)
 func (self *Sidecar) SetSearchConditions(unmetered, charging, lowPower bool) // the host's reports (§18.7)
+func (self *Sidecar) SetSearchForeground(foreground bool) // the app's lifecycle and a page Worker's tab visibility
+                                                          // (§18.7); unreported counts as background
 func (self *Sidecar) RunSearchBackgroundSync(ctx context.Context) error // an OS window, ctx's deadline its budget
                                                                         // (§18.5's budgetMillis); resumes next time
 func (self *Sidecar) SetSearchPolicy(repoId *Id, mode string) error // nil repoId: every repo; "": the host default

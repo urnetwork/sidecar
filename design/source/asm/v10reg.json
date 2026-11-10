@@ -58,7 +58,7 @@
   ],
   "Q-SDK-7": [
    "What budget does forwarding get in the iOS network extension, now that it follows the config and compiles its rules there?",
-   "(a) +4 MiB executable, 54 MiB ceiling, 4-8 MiB heap, measured on surrogates."
+   "(a): +6 MiB stripped, a 54 MiB ceiling, 10 MiB compiles (owner decisions 215, 216)."
   ],
   "Q-BRIDGE-8": [
    "Does an app device claim its overlay address when its forwarding is set up?",

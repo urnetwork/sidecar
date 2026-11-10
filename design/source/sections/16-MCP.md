@@ -581,6 +581,8 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   string alias_group = 36;                                                   // mail_alias_create's group (§15.8)
   uint32 versioning = 37;                   // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
                                             // only in version 2, which approvers that do not know it refuse
+  // owner decision 220: a dial or route grant's cidrs (9), target_port (27) and grant_dst's ip and port text move
+  // to bytes sealed_detail = 38 under a raised version, which joins record.proto and this fence together
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, and
 // ApprovalRequest.summary and preview as untrusted text, so an agent cannot carry trusted rdata, an alias or a
