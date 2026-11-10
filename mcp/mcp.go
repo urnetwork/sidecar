@@ -74,12 +74,16 @@ func newMcpError(code int64, message string, retryable bool) *jsonrpc.Error {
 type mcpSessionContextKey struct{}
 type mcpCallContextKey struct{}
 
-// One call's place: the session it came on, and the network it acts on, resolved by §5.8's rules before any tool
-// runs.
+// One call's place: the session it came on, the network it acts on, resolved by §5.8's rules before any tool runs,
+// and the run it acts in there (hook_bind.go), whose taint Taint and Tainted reach.
 type McpCall struct {
 	Session   *McpSession
 	NetworkId sidecar.Id
 	Network   McpNetwork
+	// The session's harness process's newest run, or, while no hook has bound it, its placeholder, which reads tainted.
+	RunId sidecar.Id
+	// RunId first, then each run of a harness above the session, which a taint reaches (hook_bind.go)
+	members []sidecar.Id
 }
 
 // The session a request came on, which the server's middleware puts in every request's context. Nil outside one.
