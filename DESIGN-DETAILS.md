@@ -2851,6 +2851,8 @@ Tasks held until complete: SEARCH-M10-19, SEARCH-M10-32, SEARCH-M10-33.
 
 Status: complete (2026-11-10)
 
+Amended 2026-11-10 for the owner's answers: QD-604 (an import makes helper refs for a first-parent step too large for one push, where this section had refused it: 8.2.2, 8.2.6, 8.2.8, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8) and QD-632 (a new ref's path epoch; an overlay's first push takes its base ref's current epoch: 8.2.4, 8.2.10). 8.9 records every answer, QD-598 to QD-606 and QD-634. EVS1-M2-34, held for the first amendment, builds to this text.
+
 Tasks held until complete: EVS1-M2-34, EVS1-M2-35, EVS1-M2-36.
 
 Model: `sidecar/sidecartest/model/details/GitSync.tla`, its configurations (`GitSync*.cfg`, `GitSyncTwin-*.cfg`, `GitSyncReach-*.cfg`) and `run-gitsync.sh` beside it. New tasks: `.stack/plan/proposals/details-8-tasks.md` (EVS1-M2-48 and EVS1-M2-49). Questions filed: `.stack/questions/details-8-import-forms.md`, `details-8-history-blobs.md`, `details-8-pulled-sources.md`, `details-8-import-per-push.md`, `details-8-changeless-parts.md`, `details-8-overlay-directories.md`, `details-8-tag-refs.md`, `details-8-conflict-branches.md`, `details-8-import-step-bound.md`. Questions this section answers, each on the option 8.9 names: `evs-codec-import-forms`, `keys-m2-26-rekey-git-mode-refs`. Open questions this section builds on, each on its recommendation: `evs1-m2-01-ref-creation-fields` (option 1), `evs1-m2-24-root-directory-names` (option 1, as section 9 extends it).
@@ -2989,7 +2991,8 @@ held/<ref_id>             an overlay's held paths: path -> file, directory or re
                           the versions since, folded every 64 (8.2.4)
 born/<ref_id>             section 9's born journal, fed by replay (8.2.10)
 journal/<ref_id>          EvsJournalRef (8.2.8), rewritten whole
-import/<id>               an import's arguments, so a rerun resumes it (8.2.6)
+import/<id>               an import's arguments and its helper refs, so a rerun resumes it (8.2.6): EvsImportRecord
+                          {dir, source tip, dst, cuts, force, helpers: {n, merge, parent, under, ref_id, state}}
 ```
 
 In the bare repository the daemon keeps `refs/ur/evs/<ref_id hex>` at each ref's tip as evs holds it, a deleted ref's at its last tip, and `refs/ur/import/<id>` at an import's source tip. `transfer.hideRefs refs/ur` keeps them from clients, in what git advertises and in what it lets a client push.
@@ -3012,6 +3015,11 @@ ImportPushPartCount        512      an import cuts a push here (the bound is 1,0
 ImportPushByteCount        32 GiB   and at this much sealed content
 ImportPostTime             10 min   and where its parts would take longer to post at the rate measured
 ImportCommitEstimate       1 KiB    sealed metadata assumed per commit before it is built
+ImportStepPartCount        960      a first-parent step past this many parts is oversized (the bound is 1,024)
+ImportStepPostTime         20 min   and one whose parts would take longer to post (a statement's bound is 30 min)
+ImportStepUploadTime       18 h     and one whose content would take longer to upload (a receipt serves 22 h)
+ImportHelperCount          64       helper refs one import may make
+ImportHelperDepth          8        helper refs nested one inside another
 ConflictBranchCount        64       conflict branches a ref may have before its sync stops
 GcMinInterval              24 h     between two git gc runs of one mount
 ```
@@ -3102,7 +3110,7 @@ choose       the candidate whose tip leaves the fewest commits (git rev-list --c
 none         no candidate: the ref has no base and holds its whole tree
 ```
 
-A base is a branch, never a tag ref, and it never changes. It is where the overlay's unheld paths read from, and its tip's tree is the tree the overlay's first push states its changes against.
+A base is a branch, never a tag ref, and it never changes. It is where the overlay's unheld paths read from, and its tip's tree is the tree the overlay's first push states its changes against. The overlay's first push also takes the base ref's current path epoch as its own (8.2.10; QD-632), so at its creation an overlay's token paths are its base's.
 
 The net change of an UPDATE on a branch, from the tree the path state stands at (S: old's, a deleted ref's last tip's, an overlay's base tip's for its first push) to tree(peel(new)) (N), by the tree reader of 8.2.5:
 
@@ -3193,27 +3201,71 @@ It never calls `git diff-tree`, whose walk assumes git's order. A refusal here r
 ```text
 import(dir, srcRef, dst, cuts, force):
   refuse   a sha256 <dir>; a caller that is no repo admin at its newest verified state; dst a shared ref that has
-           a tip this import did not put there; dst an owned ref of another sidecar; a source tip that does not
-           descend from dst's, without force
+           a tip this import did not put there; dst an owned ref of another sidecar, or a ref under
+           ur/<this sidecar>/import/; a source tip that does not descend from dst's, without force
   fetch    git fetch --no-tags <dir> <srcRef>:refs/ur/import/<id>, into the bare repository, with no fsck
-  record   local/<repo>/import/<id> {dir, the source tip, dst, cuts, force}: a rerun of the command resumes it
-  loop     t = dst's tip as replayed (none at first); stop when t is the source tip
-           walk the source tip's first-parent line from the first commit that descends from t (every one, at
-           first), a step at a time; step j is what c_j brings that c_(j-1) and evs's other tips do not hold:
+  record   local/<repo>/import/<id> {dir, the source tip, dst, cuts, force, helpers: none}: a rerun of the
+           command resumes it; <id> is 8 random bytes drawn here, written as 16 hex digits
+  run(dst, the source tip, cuts, force, depth 0)
+  finish   clean (below); then delete refs/ur/import/<id> and the record
+
+run(d, T, cuts, force, depth):                 brings ref d to tip T by ordinary import pushes
+  loop     t = d's tip as replayed (none at first); stop when t is T
+           walk T's first-parent line from the first commit that descends from t (every one, at first), a step
+           at a time; step j is what c_j brings that c_(j-1) and evs's other tips do not hold:
            rev-list --topo-order --reverse c_j --not c_(j-1) --glob=refs/ur/evs/*
              before a step: |step| x ImportCommitEstimate would pass a soft bound and the push is not empty -> cut
              after a step:  the push passes ImportPushPartCount, ImportPushByteCount or ImportPostTime, or c_j is
                             one of `cuts` -> cut
-             a step that alone passes 1,024 parts: stop the import, naming c_j and the way round: a branch at
-                            its other parent, imported into a ref of its own, makes the step one commit that
-                            names that ref as a source (8.9); a tip tree change past 1,048,576 entry writes: stop
+             an oversized step: cut before it and send that push, so d's tip is c_(j-1); split(d, c_j, depth);
+                            then take step j again
+             a tip tree change past 1,048,576 entry writes: stop the import, naming c_j
            the push: EvsImport {repo_id, ref_id, tip_oid = the cut, oid_list_sha256 = SHA-256 over the push's
            carried commit oids in carried order, count}, signed by this admin, in signed_import;
-           publish(dst, t, the cut, Import), FORCE on the first push when force
-  finish   delete refs/ur/import/<id> and the record
+           publish(d, t, the cut, Import), FORCE on the first push when force
 ```
 
-An `EvsImport` therefore covers exactly the commits of the push that carries it, and a reader checks it against that push alone (I): the hash over the push's own commit oids, the count, the tip, the ref, and a signer who is a repo admin at the push's authorization pin. With one present every carried commit is imported: none is held to the committer rule or to the strict commit codec, and its trees may be raw. A push cannot mix imported commits and new ones. Each import push is an ordinary descending update, so the ref is usable between pushes, a killed import leaves a ref at a real commit, and a rerun continues from the ref's tip with nothing remembered but the arguments.
+An `EvsImport` therefore covers exactly the commits of the push that carries it, and a reader checks it against that push alone (I): the hash over the push's own commit oids, the count, the tip, the ref, and a signer who is a repo admin at the push's authorization pin. With one present every carried commit is imported: none is held to the committer rule or to the strict commit codec, and its trees may be raw. A push cannot mix imported commits and new ones. Each import push is an ordinary descending update, so the ref is usable between pushes, a killed import leaves a ref at a real commit, and a rerun continues from the ref's tip with nothing remembered but the arguments and the helper table below.
+
+**A step too large for one push** (question details-8-import-step-bound, option 2; QD-604). One step of the first-parent line is one commit and everything its other parents bring, and a ref has one tip, so a step cannot be cut. A push does not carry what another ref of the repo already holds (8.2.3). So when a step would pass a push's bounds the import first puts the merged side into a ref of its own, a *helper ref*, by the same `run`, and the step then carries the merge commit and names the helper as a source. A side that has such a step of its own gets a helper inside its helper.
+
+```text
+oversized(step)   one push cannot hold it: by ImportCommitEstimate before it is built, or by its sealed bytes
+                  once it is, it would pass ImportStepPartCount parts, its parts would take over
+                  ImportStepPostTime to post at the rate measured, or its content over ImportStepUploadTime to
+                  upload; nothing of an oversized step is sent
+
+split(d, c, depth):                            c is the commit of d's first-parent line whose step is oversized
+  while step(c) is oversized:
+      q = the parent of c, after its first, that alone brings the most:
+              own(q) = rev-list --count q --not <c's first parent> --glob=refs/ur/evs/*
+      stop the import, naming c and the bound, when: no parent brings a commit (the step is c alone and
+              what it changes, or its sources pass 8.2.3's 16); depth is ImportHelperDepth; the record
+              already holds ImportHelperCount helpers
+      h = the record's helper for (c, q): the one with that pair that is not abandoned, else a new one
+              {n: the next number from 1, merge: c, parent: q, under: d, state: open}, the record written
+              durably before anything is sent for it
+      run(ur/<sidecar_id>/import/<id>/<n>, q, no cuts, no force, depth + 1)
+      h.state = done, with the helper's ref id; refs/ur/evs/<its ref id> is at q now, so step(c) no longer
+              holds anything q reaches
+  the step's push is built as any: 8.2.3 finds the helpers among the refs whose tips reach its boundary
+  commits and names each at the version the tips log gives its tip
+
+clean:   for each helper of the record whose state is open or done, the most deeply nested first:
+             publish(the helper ref, its tip, none), a DELETE push; then its state is deleted
+```
+
+A helper ref is `ur/<sidecar_id>/import/<id>/<n>`: an owned ref of the importing sidecar, a git-mode branch, `<id>` the import's and `<n>` a decimal number in the order helpers are first needed. Nothing about it is new to evs or to a reader. Its first push creates it as any new branch is created: 8.2.4 chooses its base, an overlay of the nearest branch tip its side descends from, and none when the side shares no commit with a ref evs holds, in which case it holds the side's tree as entries; 8.2.10 gives its path epoch. Its pushes are import pushes, each with its own `EvsImport` for the helper's ref id. A replaying reader that meets the step's push replays the helper to the named version first, as for any source (8.2.7), and holds what the side reaches before it checks the merge.
+
+The import holds one publish lock at a time: P_d around each push to d and no longer, so a sub-import runs with no lock of the ref above it held, and 8.2.9's order stands. The receive path refuses a client's update of a ref under `ur/<this sidecar>/import/`, but its deletion (8.2.8), so nothing but the import moves a helper while it is in use.
+
+Cleanup. When dst is at the source tip the import deletes every helper with a DELETE push, which its sidecar may send for an owned ref (§11.8's refs table). evs keeps a deleted ref's versions, push records and segments: a DELETE is one more version, and nothing collects a retained push's objects (G11). So a push that names a helper's version as a source stays replayable for good: `replay(helper, upTo that version)` reads the versions below the DELETE as it did before it. What the DELETE removes is the ref from listings, from `git ls-remote` and from each device's `refs/heads/`. The helper's entries stand as its last tip left them (8.2.4), and each mirror's `refs/ur/evs/<ref id>` stays at that tip, which keeps the side's objects from `git gc` and its commits out of later pushes. A helper is deleted only at the end, so that every push of the import that names one was committed first.
+
+Resume. The record is the only new state. A rerun walks again from each ref's tip: a helper that is done is found by its pair and its tip is q, so `run` returns at once; one that is open continues from its own tip; one whose ref a rerun finds deleted while still open (its owner deleted it mid-import) is marked abandoned and the pair gets a new number; a kill inside `clean` leaves helpers marked done whose refs the rerun deletes, a DELETE of a ref evs already shows deleted being skipped. A kill between a helper's record entry and its first push leaves an entry with no ref, which the rerun creates. If `local/<repo>/` is lost the record goes with it: a new import of the same history makes new helpers under a new id, carries only what the old ones' tips do not hold, since the mirror replays every ref of the repo it learns of, and the old helpers are left as owned refs no record names, which `ur status` lists as leftover and their owner removes with `git push --delete`.
+
+`ur evs import --abandon` ends an import that will not be finished: it runs `clean`, deletes `refs/ur/import/<id>` and the record, and leaves dst at the cut it reached. `ur status` shows an unfinished import with its dst, the cut reached and its helper refs.
+
+What stays a hard bound, refused before any evs write for the step, naming the commit: one commit that changes more than 1,048,576 entries; a step that needs more than 16 sources (a merge of more than 16 sides, each too large to carry); more than `ImportHelperCount` helpers or `ImportHelperDepth` levels.
 
 What an imported history must be is what git can walk and a path can name:
 
@@ -3228,7 +3280,7 @@ refused            a tree entry whose name holds a slash, or two entries of one 
                    a tip tree past §11.19's directory limits (history may pass them: only a push's tip is entries)
 ```
 
-After an import, `git push --tags` from the working clone creates each tag ref with no new commit and no change (8.2.4), and another branch of the same history is its own `ur evs import` when it holds foreign commits, an overlay of the nearest tip. `cuts` lets the caller put a tip where a later branch forks.
+After an import, `git push --tags` from the working clone creates each tag ref with no new commit and no change (8.2.4), and another branch of the same history is its own `ur evs import` when it holds foreign commits, an overlay of the nearest tip. `cuts` lets the caller put a tip where a later branch forks. `cuts` apply to dst's own first-parent line; a helper takes none.
 
 #### 8.2.7 From evs to git: replay, verify, apply
 
@@ -3352,9 +3404,10 @@ brings a new commit or tree that is not canonical, a tree past the tree reader's
 ```text
 receive(r, old, new):                                  // a shared ref; an owned ref is below
   refuse before any evs write, as `ng <r> <reason>`:   a branch whose short name begins refs/; erasure, ur/index,
-        ur/lfs; ur/<id>/... for another sidecar; an existing tag with new not none (`tag exists`); a tag of a
-        non-commit; §11.19's limits; anything but a deletion of a ref stopped at a refused version (`ref
-        refused at version <u>`; 8.5)
+        ur/lfs; ur/<id>/... for another sidecar; anything but a deletion of a ref under ur/<this sidecar>/import/
+        (`import helper`; 8.2.6), which an owned ref's receive below refuses the same way; an existing tag with
+        new not none (`tag exists`); a tag of a non-commit; §11.19's limits; anything but a deletion of a ref
+        stopped at a refused version (`ref refused at version <u>`; 8.5)
   P_r, the publish lock, within ReceiveWaitTimeout, else `ng <r> busy`
   L_r:  settle(r); the local ref is not old -> `ng <r> non-fast-forward`; journal update {old, new, RECEIVED};
         read (b, E) from EvsGitRef
@@ -3387,6 +3440,8 @@ queue(r):               QueueFirstDelay after a LOCAL update, then at most once 
    a final refusal      (REF_MODE, SCOPE, a limit, VERSIONING): hold {code}: `ur status` shows it and the queue
                         waits for the local ref to move or `ur evs retry`; the commits stay on the local ref
    offline              the queue waits for the connection; at reconnect it builds on the generation then current
+   an import's helper   a ref under ur/<this sidecar>/import/ takes no client update but its deletion, refused
+                        before the journal (`ng <r> import helper`); a deletion is queued as any other
 ```
 
 **The journal** is one sealed file per ref with open work:
@@ -3470,6 +3525,8 @@ a restart      stale git lock files removed; journals read; RECEIVED settled as 
 
 **PATH_EPOCH.** A git-mode ref's PATH_EPOCH push is section 9's, on the tip, under P_r when this device maps. It carries no `git` and moves no tip. A waiting git push that loses TIP to one is retokened (8.2.5). Tag refs have no entries, so no token, no due and no map: evs records a due only at a commit, and an IMMUTABLE ref takes none.
 
+**A new ref's path epoch** (question evs1-m2-44-new-ref-crossing, option 2; QD-632). The push that creates a ref names the epoch the ref starts in, by section 9's rule (9.2.3), and evs holds it to that (9.2.6). A branch with no base, and a tag ref, which sends no token, name the newest REMOVE generation the creating device holds, 1 when there is none. An overlay names its base ref's current epoch, read from the base ref's head within `EpochFreshFor` as `PlanGitUpdate` reads the new ref's absent one: overlay and base then share every token path, an inherited name's floor on the overlay is its floor on the base (8.2.4), and a held directory's first table sends no token the base has not shown. Each ref cuts over by its own PATH_EPOCH afterwards. While the base ref is under an immediate removal, a creating push that holds any change waits as on 412 PATH_EPOCH_DUE, within its caller's wait bound: an agent's new branch, a conflict branch, which stays local and listed until its queue can publish it, and an import's helper that is an overlay. A branch or tag at a commit a ref already reaches is an empty push, creates no path and does not wait.
+
 **The replayed name index.** For each mounted git-mode branch the local tier registers section 9's `EvsNameIndex` (EVS1-M2-47's seam):
 
 ```text
@@ -3515,9 +3572,11 @@ CreatedAfter   for each version in (S, Head], from the tips log: the paths of tr
 
 **G12, bounded cost.** A push's bytes, reads and memory are bounded by what it changes and carries (8.4).
 
+**Helper refs add no rule to these** (QD-604). A helper is a branch, its pushes are import pushes and its end is a DELETE, each of which G1 to G11 already cover; the step's push that names it is G2's and G3's source case. Two things they rest on are worth saying. G2 and G3 need a named source version to stay replayable after its ref is deleted: it does, since a DELETE is a later version of the same history and evs retains a ref's versions and what their pushes introduced (G11), which is also what lets any merged and deleted branch stay a source. And G3's induction is unchanged: a commit the merge step does not carry was carried by a helper's push under that push's own `EvsImport`, signed by a repo admin for the helper's ref id.
+
 **The model.** `GitSync.tla` is one git-mode ref on evs and each device's side of it. A commit is the set of the history it holds, so ancestry is inclusion. A push attempt, once sent, may reach evs at any step, any number of times, until its time bound drops it, and a daemon learns an outcome only from the ref's history, which is the worst case of every lost answer, lb re-send and stalled write. Daemons crash and restart. `LocalFirst` chooses a shared ref or an owned one; two devices on an owned ref are one sidecar's state restored or copied, the way an owned ref diverges. Its invariants are `MirrorExact`, `NoDuplicate`, `AckedDurable`, `SharedSafe`, `TruthfulNg`, `NoSpurious` and `Converge`, read above.
 
-Left out, and why it is safe. What a push carries and how a reader checks it change no ref's value: a refused version stops a ref where it is (8.5). Parts, leases and every refusal but TIP's end as "the attempt never commits", which `EvsDrop` is. Several clients on one device are serialized by P_r. A ref moved outside the daemon is 8.2.7's rule on inputs the model never produces. Liveness beyond `Converge` is not checked: a queue that evs keeps refusing is a hold a person clears.
+Left out, and why it is safe. What a push carries and how a reader checks it change no ref's value: a refused version stops a ref where it is (8.5). An import's helper refs change neither the journal nor a sync fence, so the model is not extended for them (QD-604): each helper is one more ref moved only by publish under its own P_r and by settle under its own L_r, its pushes are journaled as an import's (kind 3) and resolved from its own history, the import holds one publish lock at a time, and the receive path's refusal of a client's update there is a name rule ahead of every fence. What a kill leaves is the import record's to resume (8.2.6), not the journal's. Parts, leases and every refusal but TIP's end as "the attempt never commits", which `EvsDrop` is. Several clients on one device are serialized by P_r. A ref moved outside the daemon is 8.2.7's rule on inputs the model never produces. Liveness beyond `Converge` is not checked: a queue that evs keeps refusing is a hold a person clears.
 
 The runs, on TLC from the owner's jar (master at `d8fb231`), through `run-gitsync.sh`:
 
@@ -3616,7 +3675,25 @@ The same history in git's own pack is about a tenth of that: evs seals records u
 
 On the reading side a device's first sync of that ref fetches the same 8.2 GiB, rebuilds about ten trees a commit, and writes undeltified packs: by estimate 13 GiB in the bare repository before its first `git gc` and 2 GiB after. Its memory is the same three bounds.
 
-A push's hard limits, checked before anything is sent: 1,024 parts; 1,048,576 entry writes; 16 sources; §11.19's directory bounds on the tip's tree. A history with one first-parent step past a push's bounds, about a million commits merged at once, is imported by importing the merged side into a ref of its own first (8.2.6, 8.9).
+A push's hard limits, checked before anything is sent: 1,024 parts; 1,048,576 entry writes; 16 sources; §11.19's directory bounds on the tip's tree. A history with one first-parent step past a push's bounds, about a million commits merged at once, is imported through a helper ref the import makes for the merged side (8.2.6; QD-604).
+
+**A step through a helper.** The case above with a second history of the same size merged into it at the tip: 1,000,000 commits on the merged side, 100,000 files at its tip, none shared with dst.
+
+```text
+the side, into its helper   as the large import above: 2 or 3 pushes, 0.75 GiB of sealed metadata, 7.4 GiB of
+                            segments; the helper has no base, so its last push leaves the side's tip tree as
+                            entries: 53 MiB and 106,000 idx entries
+the merge step on dst       1 commit; the net change of dst's tree: 100,000 files the side brings, each entry
+                            citing the helper's standing chain (8.2.4's reuse), so 45 MiB of entries in about
+                            45 parts and no content uploaded again; 1 source
+cleanup                     1 DELETE push, about 100 B
+extra over one ref          the helper's 53 MiB of entries, which stand after the DELETE until the repo is
+                            shredded; one more ref for each reader to replay, the same bytes in all
+local                       own(q) is one rev-list --count per other parent of an oversized step; the record is
+                            under 200 B a helper
+```
+
+A helper that is an overlay of the branch its side forked from holds only the paths that differ, as any overlay does. An import with no oversized step makes no helper and costs what it did.
 
 ### 8.5 Failure modes and recovery
 
@@ -3634,6 +3711,14 @@ between update-ref and applied_tip            the same                        se
 mid replay                                    objects in a pack or lost       the versions are replayed again; objects
                                                                               are content-addressed
 mid import                                    the arguments; the ref at a cut the command resumes from the ref's tip
+mid import, inside a helper                   the record's helper, open; the  the rerun finds the helper by its (merge,
+                                              helper ref at a cut             parent) pair and goes on from its tip
+after a helper's record entry, before its     an entry with no ref            the rerun's first push creates the ref
+  first push
+after the helpers, before the merge step      helpers done; dst at c_(j-1)    the step is no longer oversized: its push
+                                                                              names the helpers as sources
+mid cleanup                                   some helpers deleted            the rerun deletes the rest, skipping a ref
+                                                                              evs shows deleted, then the record
 mid upload of a large push                    segments at evs, unadopted      shared: nothing; section 2's orphan GC
                                                                               takes them. owned: the queue builds again
 ```
@@ -3660,6 +3745,25 @@ evs's ref was re-seeded below the version     not a version applied in order: on
 an owned ref diverged (restored state)        a conflict branch, published; evs_conflict; the local ref follows evs
 the queue's push is refused for good          a hold with the code; `ur status`; the commits stay on the local ref
 a source ref cannot be replayed               the dependent ref waits (`waiting_source` in `ur status`), no alarm on it
+an import step is oversized                   the import makes a helper ref for the largest merged side and repeats
+                                              until the step fits (8.2.6); nothing of the step is sent before it does
+a helper's push is refused for good           the import stops, naming the helper ref, the code and the commit; dst is at
+  (SCOPE, REF_MODE, a limit)                  the cut before the step; the record and the helpers stay; a rerun resumes,
+                                              and `ur evs import --abandon` deletes the helpers and the record
+a helper's push waits (GATE_CLOSED, 429,      as any import push: waits and retries; a helper that is an overlay of a
+  PATH_EPOCH_DUE)                             ref under an immediate removal waits for that ref's cut-over (8.2.10)
+a step needs over 16 sources, 64 helpers      the import stops before any write for the step, naming the commit and the
+  or 8 levels, or one commit changes over     bound; what it imported stays, and its helpers stay until a rerun
+  1,048,576 entries                           finishes or `--abandon`
+a helper ref is deleted while its import      the rerun marks it abandoned and makes another under the next number; the
+  runs                                        deleted one's history still serves any push that named it
+a helper's cleanup DELETE fails               the import ends with dst at the source tip and says which helpers are
+                                              left; a rerun, or `--abandon`, deletes them
+a client pushes to a helper ref               `ng <ref> import helper`; only its deletion is taken
+the import record is lost with local/<repo>/  helpers no record names: `ur status` lists them as leftover; a new import
+                                              makes its own and carries only what their tips do not hold
+a helper is deleted, and a device first       the merge step names (helper, version): replay reads the helper's versions
+  syncs dst afterwards                        below its DELETE as before it (8.2.6's cleanup)
 a version fails check                         evs_alarm; the ref stops at the version before; its local ref is left
                                               alone and still serves; receive answers `ng <ref> ref refused at version u`
 the bare repository is lost or corrupt        `ur mount add` again: replay rebuilds it from evs; queued commits that
@@ -3676,11 +3780,11 @@ Every test is deterministic: a fake clock, barriers at `evs.local.<point>` (publ
 
 **The codec and the builder (`evs_git_object_test.go`, `evs_git_tree_test.go`; EVS1-M2-49).** Vectors, each made by stock git and checked against its oid: a tree with a zero-padded mode, with mode 100600, out of order; a commit with a late `committer`, with a NUL in a header, with no blank line; an annotated tag, a tag of a tag. The tree reader refuses a name with a slash and a repeated name. The builder: 1,000 random commits from go-git's oracle rebuilt with equal tree oids from changes alone; a raw tree inherited across a commit that changes a sibling directory; a raw tree whose reading differs from the changes, refused; memory flat over 100,000 commits (the cache's bound asserted). A fuzz target for the tree reader and one for the graph decoder, registered in `check/`'s fuzz registry.
 
-**Git to evs (`evs_local_publish_test.go`; EVS1-M2-34).** A's scenario: two commits, one push, the middle blob a history blob, and a second device's `git fsck --strict` clean. A file added and removed inside a push. A 2,000-commit push in two parts, the second changeless. A branch at an existing commit, a lightweight tag and an annotated tag: one empty push each, the tag IMMUTABLE, a second push to it refused. A forced rewind. A DELETE and a re-creation whose net change starts from the old tree. C's scenario: a pull of two other sidecars' commits names one source and carries only the merge; with 17 branches merged at once the 17th's commits are carried. A rename keeps the file_id and uploads nothing; a merged file is cited from its source ref, and a moved-on source falls back to a checkpoint. FS-5's overlay cases, and H's: an inherited file removed, its directory then held whole, the removal standing after a marker collection and after a path-epoch copy; a file changed in a directory the overlay never holds. N's: a file replaced by a directory and back; a gitlink. §11.19's limits refused before any evs write. An import: a foreign history of 10,000 commits in three pushes by a lowered `ImportPushPartCount`, each `EvsImport` checked alone; a writer's push carrying the admin's `EvsImport` with other commits, refused by replay; a kill between pushes and a rerun; a history with raw trees and late headers, its export's oids equal; a tree name with a slash, refused naming the tree; a 100,000-file commit as one multi-part push (§22.8's row), run at 1,100 files in the unit leg.
+**Git to evs (`evs_local_publish_test.go`; EVS1-M2-34).** A's scenario: two commits, one push, the middle blob a history blob, and a second device's `git fsck --strict` clean. A file added and removed inside a push. A 2,000-commit push in two parts, the second changeless. A branch at an existing commit, a lightweight tag and an annotated tag: one empty push each, the tag IMMUTABLE, a second push to it refused. A forced rewind. A DELETE and a re-creation whose net change starts from the old tree. C's scenario: a pull of two other sidecars' commits names one source and carries only the merge; with 17 branches merged at once the 17th's commits are carried. A rename keeps the file_id and uploads nothing; a merged file is cited from its source ref, and a moved-on source falls back to a checkpoint. FS-5's overlay cases, and H's: an inherited file removed, its directory then held whole, the removal standing after a marker collection and after a path-epoch copy; a file changed in a directory the overlay never holds. N's: a file replaced by a directory and back; a gitlink. §11.19's limits refused before any evs write. An import: a foreign history of 10,000 commits in three pushes by a lowered `ImportPushPartCount`, each `EvsImport` checked alone; a writer's push carrying the admin's `EvsImport` with other commits, refused by replay; a kill between pushes and a rerun; a history with raw trees and late headers, its export's oids equal; a tree name with a slash, refused naming the tree; a 100,000-file commit as one multi-part push (§22.8's row), run at 1,100 files in the unit leg. Helper refs (QD-604), each with `ImportStepPartCount` lowered so that a side of a few hundred commits is oversized: a merge of two disjoint histories imports through one helper, `ur/<sidecar_id>/import/<id>/1`, the merge step's push carrying the merge commit alone and naming the helper's version as its one source, each push's `EvsImport` checked alone, and a second device's `git fsck --strict` clean; a side that itself merges an oversized side makes a helper inside a helper, numbered in the order first needed; an octopus merge of three sides of which two are oversized makes two helpers and carries the third; a side that forked from dst's line gets a helper that is an overlay; after the import every helper is deleted on evs, no `refs/heads/ur/<sidecar_id>/import/` is left on either device, `refs/ur/evs/` keeps each last tip, and a third device that first syncs dst then replays each deleted helper to its named version and ends with equal oids; a kill at each of `evs.local.import.helper_recorded`, `.helper_pushed`, `.helper_done`, `.step_sent` and `.clean_deleted`, each rerun finishing with the same refs and no second helper for a pair; a helper deleted mid-import, abandoned and replaced; a helper push refused SCOPE stopping the import with dst at the cut before the step, and `--abandon` deleting the helpers and the record; a step past `ImportHelperCount`, past `ImportHelperDepth`, and one needing 17 sources, each refused before any evs write for the step, naming the commit; an import with no oversized step making no helper.
 
 **Evs to git (`evs_local_sync_test.go`; EVS1-M2-35).** A push on device A applied on device B with equal oids and a clean `git fsck`. Each line of `check` broken in turn by a hand-built push, each refused with its alarm and the ref left: a forged committer; a commit of another sidecar carried without a source; a source that does not reach it; a missing history blob; a change that is not the tree's; an UPDATE that does not descend, without FORCE; a REKEY that changes an oid; a second push to a tag. A committed FORCE and a git-mode PATH_EPOCH raise no alarm (FS-1's case). A source ref replayed first, a missing source leaving the ref waiting, a cycle refused. A stopped ref resuming at a DELETE, its re-creating push refused until it writes or removes every tainted token path. Settle's table, one test a row, with a kill at each of `apply.state`, `apply.ref` and `apply.done`. Conflicts: an owned ref with two copies of one sidecar; the conflict branch published and visible on a third device; the 65th conflict stopping the ref; no conflict for E's schedule. Sync racing a receive on one ref at every barrier order (the seeded explorer, 10 seeds a merge). The replayed name index against `sidecartest.FakeNameIndex` for one tree, an overlay included.
 
-**The receive path (`evs_local_receive_test.go`; EVS1-M2-36).** FS-5's journal cases with stock git as the client: two clients push siblings and the second gets `! [remote rejected] … (non-fast-forward)`; a push whose head moved only by a PATH_EPOCH, and one by a rekey, land with no `ng`; SEGMENT_GONE, 429 and GATE_CLOSED never read as non-fast-forward; a two-ref push reports each status; `git push --atomic` fails before any write; the daemon killed at each row of 8.5's first table; a git ref lock held after pre-receive. G's: an unknown outcome answered `remote outcome pending` and later resolved each way, with no statement sent twice across the restart. An owned ref: `ok` before evs, three pushes coalesced into one, a forced local update, an offline queue re-sealed at the generation current at reconnect, a final refusal held and released by `ur evs retry`. pre-receive: a foreign committer refused with both config values, a non-canonical new commit refused, a ref outside refs/heads and refs/tags refused, the quarantine paths checked to lie in the bare repository.
+**The receive path (`evs_local_receive_test.go`; EVS1-M2-36).** FS-5's journal cases with stock git as the client: two clients push siblings and the second gets `! [remote rejected] … (non-fast-forward)`; a push whose head moved only by a PATH_EPOCH, and one by a rekey, land with no `ng`; SEGMENT_GONE, 429 and GATE_CLOSED never read as non-fast-forward; a two-ref push reports each status; `git push --atomic` fails before any write; the daemon killed at each row of 8.5's first table; a git ref lock held after pre-receive. G's: an unknown outcome answered `remote outcome pending` and later resolved each way, with no statement sent twice across the restart. An owned ref: `ok` before evs, three pushes coalesced into one, a forced local update, an offline queue re-sealed at the generation current at reconnect, a final refusal held and released by `ur evs retry`. pre-receive: a foreign committer refused with both config values, a non-canonical new commit refused, a ref outside refs/heads and refs/tags refused, the quarantine paths checked to lie in the bare repository. An import's helper ref: a client's push to it answers `ng … import helper`, and its deletion is taken.
 
 **Model twins in code (`sidecartest/evs_git_twins_test.go`, a new file of EVS1-M2-43).** One schedule per twin of 8.3, run against the real code, which must hold where the twin breaks: `EqualsOld`, `BlindUpdateRef`, `NgOnUnknown`, `NoRecognition`, `NoApplyLock`, `RefusedDropOnly`.
 
@@ -3718,15 +3822,15 @@ Two new tasks change landed code before the held ones can pass their tests. `.st
 - `evs_export.go`, `evs_export_file.go`: `exportGitRef` reads pushes in parts, takes each tip from `git.new_tip`, replays sources first, rebuilds through the builder (the `states` map and `evsExportState.clone` go), takes history blobs, writes tags, and renders a refused version as 8.5 says. `evsGitObjectWriter` becomes export's sink.
 - Tests: 8.6's codec and builder row; export of a history with history blobs, a source, a tag and a raw tree: oids equal, and `git fsck` saying of the export what it says of the original.
 
-**EVS1-M2-34, git to evs** (held; L; scope changed). It keeps net changes, sealed commits, overlays and import, and gains history blobs, sources, tags and the base search. It loses nothing; it needs EVS1-M2-48 and EVS1-M2-49. Order: `evs_local_tree.go` (new: the tree reader over `git cat-file --batch`, `diff`), `evs_local_commits.go` (C, S, B, the spool, the strict checks), `evs_local_publish.go` (`EvsLocalPublish`, the net change, `PlanGitUpdate`'s caller, history segments, the answers of 8.2.5), `evs_local_overlay.go` (the base search, the held set, the whole-directory rule), `evs_local_import.go` (8.2.6). Landed code that changes: `evs_plan.go` gains `PlanGitUpdate(ctx, *EvsGitPlanArgs)` beside `PlanWrite`, sharing `planPath`, with content sources by oid, rename and the two reuse cases (EVS1-M2-25 deferred both); `evs_push.go` and `evs_push_parts.go` take a prepared sealed-metadata builder and extra new objects (the history segments), and re-take the lease when it lapses; `evs_local_mount.go` sets 8.2.11's config and creates `refs/ur/`; `evs_mirror_layout.go` gains the `local/<repo>/` names and their parse. Traps: `old` and the base version are read together under L_r; a ref's own `refs/ur/evs/` tip is in excl, never a source; a queued owned ref is a source only at its evs tip; sources are capped at 16; the spool and the history segments are deleted on every exit; nothing here calls `git diff-tree`; a tag ref never gets a change; `EvsImport` is signed per push, after its commits are fixed. Tests: 8.6's git-to-evs row.
+**EVS1-M2-34, git to evs** (held; L; scope changed). It keeps net changes, sealed commits, overlays and import, and gains history blobs, sources, tags and the base search. It loses nothing; it needs EVS1-M2-48 and EVS1-M2-49. Order: `evs_local_tree.go` (new: the tree reader over `git cat-file --batch`, `diff`), `evs_local_commits.go` (C, S, B, the spool, the strict checks), `evs_local_publish.go` (`EvsLocalPublish`, the net change, `PlanGitUpdate`'s caller, history segments, the answers of 8.2.5), `evs_local_overlay.go` (the base search, the held set, the whole-directory rule), `evs_local_import.go` (8.2.6). Landed code that changes: `evs_plan.go` gains `PlanGitUpdate(ctx, *EvsGitPlanArgs)` beside `PlanWrite`, sharing `planPath`, with content sources by oid, rename and the two reuse cases (EVS1-M2-25 deferred both); `evs_push.go` and `evs_push_parts.go` take a prepared sealed-metadata builder and extra new objects (the history segments), and re-take the lease when it lapses; `evs_local_mount.go` sets 8.2.11's config and creates `refs/ur/`; `evs_mirror_layout.go` gains the `local/<repo>/` names and their parse. Traps: `old` and the base version are read together under L_r; a ref's own `refs/ur/evs/` tip is in excl, never a source; a queued owned ref is a source only at its evs tip; sources are capped at 16; the spool and the history segments are deleted on every exit; nothing here calls `git diff-tree`; a tag ref never gets a change; `EvsImport` is signed per push, after its commits are fixed. Helper refs (QD-604; 8.2.6), all in `evs_local_import.go`: `oversized`, `split` and `clean`, the helper table in `EvsImportRecord` (a sealed file rewritten whole, durable before a helper's first push), `EvsRepo.Import`'s `Abandon`, and the leftover and unfinished-import lines `ur status` reads; `evs_mirror_layout.go` gains `EvsImportHelperRefName(sidecarId, importId, n)` and its parse beside the conflict branch's. Traps there: nothing of an oversized step is sent; own(q) is counted against `refs/ur/evs/*`, never against local refs; the import holds one publish lock at a time and none across a sub-import; a helper is found by its (merge, parent) pair, never by its number; helpers are deleted only once dst is at the source tip, the most deeply nested first; a helper's DELETE is a push of the import, journaled as kind 3. A new ref's path epoch (QD-632; 8.2.10) comes from section 9's `firstEpoch` (EVS1-M2-50), which `PlanGitUpdate` calls for a ref with no head, reading the base ref's head for an overlay. Tests: 8.6's git-to-evs row.
 
 **EVS1-M2-35, evs to git** (held; L; scope changed). It keeps the sync engine and conflict branches, and gains the dependency on sources, the stop-and-resume rule and the replayed name index. It needs EVS1-M2-49 and, for end-to-end tests, EVS1-M2-34. Order: `evs_local_sync.go` (the replay loop, batches, the wait on sources, `stuck_at`, the resume at a DELETE and the tainted token paths), `evs_local_apply.go` (`EvsGitRef`, the tips log and index, held and born, settle, the two-step write), `evs_local_conflict.go` (the transaction, the bound, the event), `evs_local_index.go` (new: `EvsNameIndex` over the bare repository, registered with EVS1-M2-47's seam at `Mount`). Landed code that changes: `evs_replay.go`: `NewEvsReplayPaths` takes the ref's mode and effective base, and on a git-mode ref holds a creation to b_eff + 1 and takes a creation over a standing path of the other kind; `evs_local_lock.go`: `EvsRefLocks` gains the publish lock and the mount's upkeep lock, and its header's "after evs's 200" becomes 8.2.9; `evs_verify.go`: nothing, the walk is used as it is. Traps: the sink is flushed before `EvsGitRef` moves; settle reads the local ref inside the lock, every time; a conflict's two ref changes are one `update-ref --stdin` transaction; an own push is replayed from the bytes sent but checked like any other; `SidecarCommitter` refusing is a refusal of the version, not an error to retry; the sync engine never takes P_r. Tests: 8.6's evs-to-git row.
 
-**EVS1-M2-36, the receive path** (held; L; scope changed). It keeps the hooks, proc-receive, the journal and owned refs' queue. The journal no longer retries a push id at a restart: it resolves from the history. Order: `evs_local_journal.go` (`EvsJournalRef`, its states, `resolve`), `evs_local_hook.go` (the session, the quarantine relay, pre-receive's checks through EVS1-M2-34's C), `evs_local_receive.go` (proc-receive's protocol on `evs_git_pktline.go`, the per-ref flow, the answers, the queue), `cli/git_hook.go`. Traps: an attempt's record is durable before its first POST; `non-fast-forward` only under G7's condition; `ok` only after the local ref moved; the quarantine paths are checked before the runner takes them; an owned ref's `update-ref` and its journal write are under one L_r; nothing is answered from a 200 alone when the history disagrees. Tests: 8.6's receive row.
+**EVS1-M2-36, the receive path** (held; L; scope changed). It keeps the hooks, proc-receive, the journal and owned refs' queue. The journal no longer retries a push id at a restart: it resolves from the history. Order: `evs_local_journal.go` (`EvsJournalRef`, its states, `resolve`), `evs_local_hook.go` (the session, the quarantine relay, pre-receive's checks through EVS1-M2-34's C), `evs_local_receive.go` (proc-receive's protocol on `evs_git_pktline.go`, the per-ref flow, the answers, the queue), `cli/git_hook.go`. Traps: an attempt's record is durable before its first POST; `non-fast-forward` only under G7's condition; `ok` only after the local ref moved; the quarantine paths are checked before the runner takes them; an owned ref's `update-ref` and its journal write are under one L_r; nothing is answered from a 200 alone when the history disagrees; a ref under `ur/<this sidecar>/import/` takes only its deletion (8.2.8). Tests: 8.6's receive row.
 
 **Order.** EVS1-M2-48, then EVS1-M2-49, which uses its messages; then EVS1-M2-34; then EVS1-M2-35; then EVS1-M2-36, as the plan has them. EVS1-M2-35's unit tests need only hand-built pushes, so it can start beside EVS1-M2-34.
 
-**Other tasks this section touches by name.** EVS1-M2-32 (export) is changed by EVS1-M2-49. EVS1-M2-33's files change as listed under EVS1-M2-34 and EVS1-M2-35. EVS1-M2-37 starts `git-receive-pack` with `UR_GIT_SESSION`. EVS1-M2-38's `ur evs import` passes `cuts` and `force`, and adds `ur evs retry`. EVS1-M2-43 gains 8.6's matrix rows and its twins file. EVS1-M2-47's seam is registered by EVS1-M2-35. KEYS-M2-26 drops its git-mode skip once EVS1-M2-48 lands. EVS2's drop job holds to G11.
+**Other tasks this section touches by name.** EVS1-M2-32 (export) is changed by EVS1-M2-49. EVS1-M2-33's files change as listed under EVS1-M2-34 and EVS1-M2-35. EVS1-M2-37 starts `git-receive-pack` with `UR_GIT_SESSION`. EVS1-M2-38's `ur evs import` passes `cuts` and `force`, takes `--abandon`, and adds `ur evs retry`; its `ur status` lines gain an unfinished import and leftover helper refs. EVS1-M2-43 gains 8.6's matrix rows and its twins file. EVS1-M2-47's seam is registered by EVS1-M2-35. KEYS-M2-26 drops its git-mode skip once EVS1-M2-48 lands. EVS2's drop job holds to G11.
 
 ### 8.8 Proposed DESIGN.md text
 
@@ -3755,11 +3859,15 @@ kinds     a git-mode push may write a file where a directory stands and a direct
 
 **§11.8, the `parts` row.** After "within both bounds" add: "a part may hold no change when it holds a slice of the sealed metadata or another section that did not fit beside the changes; such parts follow every part with a change and are no leaf of `changes_root`".
 
-**§11.8, the `seal` row, its last clause.** Replace "an import past 1,024 parts splits at commit boundaries, each push carrying the EvsImport" with: "an import is cut at commits of its tip's first-parent line into ordinary descending pushes, each within 512 parts and each carrying an EvsImport signed for that push's own commits".
+**§11.8, the `seal` row, its last clause.** Replace "an import past 1,024 parts splits at commit boundaries, each push carrying the EvsImport" with: "an import is cut at commits of its tip's first-parent line into ordinary descending pushes, each within 512 parts and each carrying an EvsImport signed for that push's own commits; where one step of that line is too large for a push, the import first brings the merged side into a helper ref of its own, which the step's push names as a source (11.11)".
 
 **§11.6, the statements row and `EvsImport`'s comment.** "EvsImport (evs-import, by a repo admin; 11.11): one push's imported commits: `tip_oid` that push's new tip, `oid_list_sha256` the SHA-256 over its carried commit oids in carried order, `count` their number."
 
-**§11.11, the `import` row.** Replace with: "ur evs import <dir> [<ref>]: a repo admin's daemon fetches <dir>'s history into the bare repository and publishes it itself, not through the hook, as pushes cut on the first-parent line (11.8), each with its own signed EvsImport, into a ref that has no tip or an owned ref of this sidecar; imported commits are held to no committer rule and travel as their bytes, trees that do not rebuild from names, modes and oids included, so history stock git holds imports with its oids; a tree entry whose name holds a slash, a tree naming one entry twice, a tag of a tree or blob and one first-parent step past a push's bounds are refused before any evs write; a rerun resumes from the ref's tip".
+**§11.11, the `import` row.** Replace with: "ur evs import <dir> [<ref>]: a repo admin's daemon fetches <dir>'s history into the bare repository and publishes it itself, not through the hook, as pushes cut on the first-parent line (11.8), each with its own signed EvsImport, into a ref that has no tip or an owned ref of this sidecar; imported commits are held to no committer rule and travel as their bytes, trees that do not rebuild from names, modes and oids included, so history stock git holds imports with its oids; a tree entry whose name holds a slash, a tree naming one entry twice and a tag of a tree or blob are refused before any evs write; where one first-parent step would pass a push's bounds, the import brings the largest merged side into a helper ref, `ur/<sidecar_id>/import/<id>/<n>`, an owned ref of the importing sidecar filled by the same cut pushes, and repeats until the step fits, the step's push then naming the helpers as sources; a side with such a step of its own gets a helper inside its helper, to 8 levels and 64 helpers an import; when the import ends it deletes its helpers, whose history evs keeps, so the pushes that name them stay replayable; one commit that changes more than 1,048,576 entries and a step that needs more than 16 sources are refused, naming the commit; a rerun resumes from each ref's tip and the import's record of its helpers, and `ur evs import --abandon` deletes the helpers of an import that will not be finished". (QD-604.)
+
+**§11.8's refs table and §11.11's `owned` row.** Add: "`ur/<sidecar_id>/import/…` is the import's: the daemon takes no client update of a ref there but its deletion".
+
+**§11.6 and §11.7, a new ref's path epoch (QD-632).** §11.7's "Overlays" gains: "An overlay's first push takes its base ref's current path epoch, so overlay and base share token paths at its creation; each cuts over by its own PATH_EPOCH afterwards." §11.6's text for other refs is in 9.8.
 
 **§11.11, "Refs (D-EVS-28)", the `journal`, `restart`, `owned` and `locks` rows.** Replace with:
 
@@ -3806,19 +3914,21 @@ locks     a publish lock per ref serializes one device's pushes to it and is hel
 
 ### 8.9 Owner questions
 
-Each is filed under `.stack/questions/` and the section is built on its recommendation.
+Each is filed under `.stack/questions/`, and the section was built on its recommendation. The owner answered all nine on 2026-11-10: eight on the recommendation, and the ninth on option 2, which 8.2.6 now carries. Each answer follows its question, with its ledger id.
 
-1. **What must an import carry when the codec refuses forms stock git accepts** (`details-8-import-forms.md`; it answers `evs-codec-import-forms`)? Options: (1) keep the three forms refused, as that question recommends: no format change, and a history with a zero-padded mode, which old tools wrote, cannot be imported with its oids; (2) widen the codec for odd modes and late headers: zero-padded modes stay refused, and the committer rule moves into two checks; (3) carry raw: a non-canonical tree and every commit travel as bytes, the path state reads them as git does, and the strict codec applies only to commits a sidecar makes. Cost of (3): `EvsSealedCommit.trees`, a lenient tree reader and graph decoder, and a builder that takes raw trees. **Recommendation: (3).** It imports everything git can walk and a path can name, keeps owner decision 81's rule in one place and strict, and leaves refused only a name with a slash, a repeated name, and tags of trees and blobs.
-2. **How are a commit's blobs that are not in the net change carried** (`details-8-history-blobs.md`)? Options: (1) one sealed history record per blob, a diff against a blob named by oid, in segments the push introduces; (2) a sealed git pack per push: git's own delta choice, and a pack reader on every leg; (3) not carried: export and `git fsck` fail on any push of two commits. **Recommendation: (1).** It reuses the record and delta code that exists, needs no chain, and costs the diff's bytes.
-3. **How does replay know a commit was already in the repo** (`details-8-pulled-sources.md`)? Options: (1) the push names source versions of other refs, readers replay them first, and what a source reaches is neither carried nor judged again; (2) every push carries every commit its ref lacks, and a foreign commit is vouched for by the pusher: any writer can then attribute a commit to another sidecar; (3) hold every carried commit to the signer: no pull and no fast-forward of another's branch can be pushed. **Recommendation: (1).** It is the hook's rule made checkable, and a merge carries one commit. Its cost is that a ref's replay may need other refs' histories.
-4. **What does an `EvsImport` sign** (`details-8-import-per-push.md`)? Options: (1) one push's commits, by a hash over that push's own list, one signature a push; (2) the whole import's list, shipped in its first push and kept by every reader until the import ends; (3) as written, unverifiable until the last push. **Recommendation: (1).**
-5. **May a part hold no change** (`details-8-changeless-parts.md`)? Options: (1) yes, after the parts with changes, for spilled sections; (2) no, and sealed commits past a part's room go into segments behind a locator: a new record kind and a second way to read commits; (3) no, and a push is capped at about 1,800 commits. **Recommendation: (1).**
-6. **How does an overlay remove an inherited path** (`details-8-overlay-directories.md`)? Options: (1) a held directory is whole: its first change on the overlay lists every child, and absence from it is absence; no evs change; one table of up to 448 KiB the first time a directory's names change on a branch; (2) removals on base 0 that write markers, which collection and the path-epoch copy must then keep on overlay refs: three evs changes in other tasks' code; (3) overlays hold their whole tree: creating a branch writes every entry. **Recommendation: (1).**
-7. **Does a tag ref hold a path state** (`details-8-tag-refs.md`)? Options: (1) no: a tag ref has no base and carries only what its commit needs beyond what its sources hold, so any tag of held history is one empty push, and it never needs a path epoch or a rekey, which an IMMUTABLE ref could not take; (2) yes, as an overlay: a tag at an old commit writes the tree's difference from its base, re-uploading content, and its tokens can never be re-keyed. **Recommendation: (1).** Nothing reads a tag's paths through evs: head mode names no ref and replaying readers use the commits.
-8. **What is a conflict branch's life** (`details-8-conflict-branches.md`)? Options: (1) made by settle alone, published as an owned ref, never merged, moved or deleted by the daemon, listed by `ur status`, at most 64 a ref before that ref's sync stops; (2) local only: the commits never leave the device; (3) deleted after a period: commits lost on a timer. **Recommendation: (1).**
-9. **A first-parent step too large for one push** (`details-8-import-step-bound.md`). A merge that brings in more than about a million commits at one step of the first-parent line cannot be one push, and a ref has one tip, so the step cannot be cut. Options: (1) refuse the step in v0, naming the commit and the way round, which uses only sources: import the merged side into a ref of its own, and the step then carries one commit; (2) the import makes those helper refs itself; (3) staged pushes that carry history and move no tip, which readers hold until the step's own push: a fifth shape and staged state in every reader. **Recommendation: (1) for v0**, with (2) addable later without a format change.
+1. **What must an import carry when the codec refuses forms stock git accepts** (`details-8-import-forms.md`; it answers `evs-codec-import-forms`)? Options: (1) keep the three forms refused, as that question recommends: no format change, and a history with a zero-padded mode, which old tools wrote, cannot be imported with its oids; (2) widen the codec for odd modes and late headers: zero-padded modes stay refused, and the committer rule moves into two checks; (3) carry raw: a non-canonical tree and every commit travel as bytes, the path state reads them as git does, and the strict codec applies only to commits a sidecar makes. Cost of (3): `EvsSealedCommit.trees`, a lenient tree reader and graph decoder, and a builder that takes raw trees. **Recommendation: (3).** It imports everything git can walk and a path can name, keeps owner decision 81's rule in one place and strict, and leaves refused only a name with a slash, a repeated name, and tags of trees and blobs. **Answered: QD-598, option 3**, carry raw.
+2. **How are a commit's blobs that are not in the net change carried** (`details-8-history-blobs.md`)? Options: (1) one sealed history record per blob, a diff against a blob named by oid, in segments the push introduces; (2) a sealed git pack per push: git's own delta choice, and a pack reader on every leg; (3) not carried: export and `git fsck` fail on any push of two commits. **Recommendation: (1).** It reuses the record and delta code that exists, needs no chain, and costs the diff's bytes. **Answered: QD-599, option 1**, history records.
+3. **How does replay know a commit was already in the repo** (`details-8-pulled-sources.md`)? Options: (1) the push names source versions of other refs, readers replay them first, and what a source reaches is neither carried nor judged again; (2) every push carries every commit its ref lacks, and a foreign commit is vouched for by the pusher: any writer can then attribute a commit to another sidecar; (3) hold every carried commit to the signer: no pull and no fast-forward of another's branch can be pushed. **Recommendation: (1).** It is the hook's rule made checkable, and a merge carries one commit. Its cost is that a ref's replay may need other refs' histories. **Answered: QD-600, option 1**, sources.
+4. **What does an `EvsImport` sign** (`details-8-import-per-push.md`)? Options: (1) one push's commits, by a hash over that push's own list, one signature a push; (2) the whole import's list, shipped in its first push and kept by every reader until the import ends; (3) as written, unverifiable until the last push. **Recommendation: (1).** **Answered: QD-603, option 1**, one EvsImport per push.
+5. **May a part hold no change** (`details-8-changeless-parts.md`)? Options: (1) yes, after the parts with changes, for spilled sections; (2) no, and sealed commits past a part's room go into segments behind a locator: a new record kind and a second way to read commits; (3) no, and a push is capped at about 1,800 commits. **Recommendation: (1).** **Answered: QD-601, option 1**, changeless parts allowed.
+6. **How does an overlay remove an inherited path** (`details-8-overlay-directories.md`)? Options: (1) a held directory is whole: its first change on the overlay lists every child, and absence from it is absence; no evs change; one table of up to 448 KiB the first time a directory's names change on a branch; (2) removals on base 0 that write markers, which collection and the path-epoch copy must then keep on overlay refs: three evs changes in other tasks' code; (3) overlays hold their whole tree: creating a branch writes every entry. **Recommendation: (1).** **Answered: QD-605, option 1**, a held directory is whole.
+7. **Does a tag ref hold a path state** (`details-8-tag-refs.md`)? Options: (1) no: a tag ref has no base and carries only what its commit needs beyond what its sources hold, so any tag of held history is one empty push, and it never needs a path epoch or a rekey, which an IMMUTABLE ref could not take; (2) yes, as an overlay: a tag at an old commit writes the tree's difference from its base, re-uploading content, and its tokens can never be re-keyed. **Recommendation: (1).** Nothing reads a tag's paths through evs: head mode names no ref and replaying readers use the commits. **Answered: QD-606, option 1**, a tag ref holds no path state.
+8. **What is a conflict branch's life** (`details-8-conflict-branches.md`)? Options: (1) made by settle alone, published as an owned ref, never merged, moved or deleted by the daemon, listed by `ur status`, at most 64 a ref before that ref's sync stops; (2) local only: the commits never leave the device; (3) deleted after a period: commits lost on a timer. **Recommendation: (1).** **Answered: QD-602, option 1**, published, and removed only by their owner.
+9. **A first-parent step too large for one push** (`details-8-import-step-bound.md`). A merge that brings in more than about a million commits at one step of the first-parent line cannot be one push, and a ref has one tip, so the step cannot be cut. Options: (1) refuse the step in v0, naming the commit and the way round, which uses only sources: import the merged side into a ref of its own, and the step then carries one commit; (2) the import makes those helper refs itself; (3) staged pushes that carry history and move no tip, which readers hold until the step's own push: a fifth shape and staged state in every reader. **Recommendation: (1) for v0**, with (2) addable later without a format change. **Answered: QD-604, option 2, not the recommendation**: the import makes the helper refs itself, under `ur/<sidecar_id>/import/<id>/<n>`, recursing where a merged side has such a step of its own. 8.2.6 gives the naming, the recursion, the cleanup, the resume and the bounds, with no format change; a single commit that changes more than 1,048,576 entries stays a hard bound.
 
-Answered here on an existing question's option, with no new file: `keys-m2-26-rekey-git-mode-refs`, option 1, refined in 8.2.10: evs needs no new rule, and any writer's device can run it.
+Answered here on an existing question's option, with no new file: `keys-m2-26-rekey-git-mode-refs`, option 1, refined in 8.2.10: evs needs no new rule, and any writer's device can run it. **The owner answered it so: QD-634, option 1**, a commitless REKEY push.
+
+One answer from a build track changes this section's overlays: QD-632 (question `evs1-m2-44-new-ref-crossing`, option 2), a new ref's path epoch, in 8.2.4 and 8.2.10. G11's demand on the drop job is carried forward with QD-626 (question `details-2-drop-job-new-ref`): problem 10's section, which builds to that answer, also holds a drop job's candidates to the segments its listed versions' chains name.
 
 ## 9. Client path epochs and re-tokenizing
 
