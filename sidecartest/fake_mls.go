@@ -360,6 +360,21 @@ func (self *FakeMls) JoinExternal(groupInfo []byte, args *sidecar.MlsCommitArgs)
 	return &fakeMlsStagedCommit{engine: self, commit: commit, own: true}, nil
 }
 
+func (self *FakeMls) GroupInfoRoster(groupInfo []byte) (sidecar.Id, uint64, []sidecar.MlsMember, error) {
+	epoch, _, err := self.world.checkGroupInfo(groupInfo)
+	if err != nil {
+		return sidecar.Id{}, 0, nil, err
+	}
+	return epoch.groupId, epoch.epoch, epoch.members(), nil
+}
+
+func (self *FakeMls) ForgetGroup(groupId sidecar.Id) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.groupIdEpochs, groupId)
+	return nil
+}
+
 func (self *FakeMls) LoadGroup(groupId sidecar.Id) (sidecar.MlsGroup, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -783,6 +798,10 @@ func (self *fakeMlsPendingJoin) GroupId() sidecar.Id {
 
 func (self *fakeMlsPendingJoin) Epoch() uint64 {
 	return self.epoch.epoch
+}
+
+func (self *fakeMlsPendingJoin) LastResort() bool {
+	return self.keyPackage.lastResort
 }
 
 func (self *fakeMlsPendingJoin) Complete(groupInfo []byte) (sidecar.MlsGroup, error) {

@@ -413,6 +413,33 @@ func TestGkmUpkeepRenewsKeyPackagesBeforeTheyLapse(t *testing.T) {
 	}
 }
 
+// A join through the last-resort KeyPackage replaces it at the next pass, well before its 60 days, since its leaf
+// key is every Welcome's that package served; a pass after the replacement uploads nothing more (DESIGN-DETAILS
+// 6.2.2, TestALastResortJoinSelfUpdatesAtOnce's upkeep half).
+func TestGkmUpkeepReplacesTheLastResortKeyPackageAfterAJoinThroughIt(t *testing.T) {
+	fixture := newGkmUpkeepFixture(t, GkmUpkeepRole{MemberDevice: true})
+	fixture.pass()
+	if len(fixture.api.keyPackageUploads) != 1 {
+		t.Fatal("no first set")
+	}
+	fixture.clock.Advance(time.Hour)
+	fixture.pass()
+	if len(fixture.api.keyPackageUploads) != 1 {
+		t.Fatal("a KeyPackage went up with nothing due")
+	}
+	fixture.role.LastResortJoinedAt = fixture.clock.Now()
+	fixture.clock.Advance(time.Hour)
+	fixture.pass()
+	if uploads := fixture.api.keyPackageUploads; len(uploads) != 2 || len(uploads[1]) != 1 {
+		t.Fatalf("the last-resort's replacement after a join through it: %d uploads", len(uploads))
+	}
+	fixture.clock.Advance(time.Hour)
+	fixture.pass()
+	if len(fixture.api.keyPackageUploads) != 2 {
+		t.Errorf("the replaced last-resort KeyPackage went up again")
+	}
+}
+
 // A running upkeep on a test clock, its loop started, with hints when given.
 func startGkmTestUpkeep(t *testing.T, clock *gkmTestClock, hints *GkmHints, api *gkmTestUpkeepApi) *GkmUpkeep {
 	t.Helper()

@@ -246,7 +246,9 @@ func (self *gkmGroupManager) stageDeliveries(ctx context.Context, state GkmAuthV
 	client := self.client
 	wrapItems := []*gkmStagedItem{}
 	recoveryItems := []*gkmStagedItem{}
+	yield := client.newYield()
 	for _, target := range targets {
+		yield.step()
 		item, err := self.sealStaged(key, groupId, target)
 		if err != nil {
 			return err

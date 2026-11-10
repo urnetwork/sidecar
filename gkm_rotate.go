@@ -420,12 +420,6 @@ func (self *gkmGroupManager) claimed(draft *gkmRotateDraft) (*EvsRepoKey, error)
 func (self *gkmGroupManager) takeWinner(ctx context.Context, state GkmAuthView, pins *gkmRepoPins, top *gkmHeldGeneration, winner *bridge.Signed, now time.Time) (*EvsRepoKey, error) {
 	client := self.client
 	generationNumber := top.generation.Rotate.GetGeneration() + 1
-	alarm := func(signerId Id, verdict GkmVerdict) {
-		client.alarm(&GkmAlarm{
-			Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: pins.groupId, Generation: generationNumber,
-			SidecarId: signerId, Reason: verdict.Reason, Detail: verdict.Detail,
-		})
-	}
 	winnerBytes, err := gkmSignedBytes(winner)
 	if err != nil {
 		return nil, err
@@ -435,15 +429,55 @@ func (self *gkmGroupManager) takeWinner(ctx context.Context, state GkmAuthView, 
 		if errors.Is(err, ErrGkmAuthentication) || errors.Is(err, ErrGkmMalformed) {
 			// nothing verifiable stands at gen/<g*+1>, so nothing can be held or linked past it: the admins
 			// re-form the group (§10.9)
-			alarm(Id{}, gkmRefuse(GkmRefusalSigner, "gen/%d does not verify", generationNumber))
+			verdict := gkmRefuse(GkmRefusalSigner, "gen/%d does not verify", generationNumber)
+			client.alarm(&GkmAlarm{
+				Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: pins.groupId, Generation: generationNumber,
+				Reason: verdict.Reason, Detail: verdict.Detail,
+			})
 			return nil, fmt.Errorf("%w: gen/%d does not verify", ErrGkmWait, generationNumber)
 		}
 		return nil, err
 	}
+	held, err := self.holdGenerationInFlow(ctx, state, pins.groupId, generation, top.generation, top.poisoned, now)
+	if err != nil {
+		return nil, err
+	}
+	// whatever this device drafted for g*+1 lost
+	if err := client.args.Secrets.Delete(gkmRepoRecordName(self.repoId, "draft")); err != nil {
+		return nil, err
+	}
+	if held.poisoned {
+		// §10.9's poisoned row: never seal to it, rotate at once on top of it with cause REMOVE
+		if held.key == nil {
+			return nil, fmt.Errorf("%w: generation %d is poisoned and this device holds no key of it to rotate past it", ErrGkmKeyMissing, generationNumber)
+		}
+		return nil, nil
+	}
+	if held.key == nil {
+		// it passed, and nothing this device holds opens it yet: a holder's late delivery brings it
+		return nil, fmt.Errorf("%w: generation %d is claimed and no delivery of it reached this device yet", ErrGkmKeyMissing, generationNumber)
+	}
+	// adopt it only if it covers what this rotation is for
 	rotate := generation.Rotate
+	if GkmGatePasses(state, self.repoId, rotate.GetAuth(), time.UnixMilli(rotate.GetTimeMs()), now) {
+		return held.key, nil
+	}
+	return nil, nil
+}
+
+// Judges gen/<g> as gkm serves it, on parent, gen/<g-1> as this device holds it and nil at generation 1, opens its
+// key where this device can, and keeps it (§10.9's rotation checks, R1 and R6): the STAGED deliveries to this device
+// are judged with it; its key comes by its leaf_wrap where this device adopted that epoch, else by a delivery to a
+// ReaderKey it holds; one that fails its checks is kept as poisoned and alarmed naming its signer; one that passes
+// moves the generation pin; and one this device cannot open is asked for late. The error is a wait, ErrGkmAuthAhead
+// while its pin is above this state, or a store's failure, never a refusal.
+func (self *gkmGroupManager) holdGenerationInFlow(ctx context.Context, state GkmAuthView, groupId Id, generation *GkmGeneration, parent *GkmGeneration, parentPoisoned bool, now time.Time) (*gkmHeldGeneration, error) {
+	client := self.client
+	rotate := generation.Rotate
+	generationNumber := rotate.GetGeneration()
 
 	// what this device can read of it: its own deliveries, and the leaf_wrap's tree where it holds that epoch
-	deliveries, err := self.ownDeliveries(ctx, state, pins.groupId, generationNumber)
+	deliveries, err := self.ownDeliveries(ctx, state, groupId, generationNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -455,12 +489,12 @@ func (self *gkmGroupManager) takeWinner(ctx context.Context, state GkmAuthView, 
 	}
 	var group MlsGroup
 	if leafWrap := rotate.GetLeafWrap(); leafWrap != nil {
-		if loaded, err := client.loadGroup(pins.groupId); err == nil && loaded.Epoch() == leafWrap.GetEpoch() {
+		if loaded, err := client.loadGroup(groupId); err == nil && loaded.Epoch() == leafWrap.GetEpoch() {
 			group = loaded
 		}
 	}
 	checkArgs := &GkmRotationCheckArgs{
-		RepoId: self.repoId, Generation: generation, Parent: top.generation, ParentPoisoned: top.poisoned,
+		RepoId: self.repoId, Generation: generation, Parent: parent, ParentPoisoned: parentPoisoned,
 		StagedDeliveries: staged, DropKeyLifetime: client.settings.DropKeyLifetime, Now: now,
 	}
 	if group != nil {
@@ -471,68 +505,96 @@ func (self *gkmGroupManager) takeWinner(ctx context.Context, state GkmAuthView, 
 		return nil, err
 	}
 
-	// its key, by the leaf_wrap or a delivery to a key this device holds
-	var key *EvsRepoKey
-	if group != nil {
-		kek, err := MlsKek(group, self.repoId)
-		if err != nil {
-			return nil, err
-		}
-		opened, err := OpenGkmLeafWrap(generation, kek)
-		clear(kek)
-		if err == nil {
-			key = opened
-		}
-	}
-	if key == nil && client.args.ReaderPrivateKey != nil {
-		for _, delivery := range deliveries {
-			privateKey, err := client.args.ReaderPrivateKey(delivery.Body.GetRecipientKeySha256())
-			if err != nil {
-				continue
-			}
-			deliveryArgs := &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: generation, Now: now}
-			opened, deliveryVerdict, err := GkmUseDelivery(state, deliveryArgs, client.args.SidecarId.Bytes(), privateKey)
-			if err == nil && deliveryVerdict.Passed() && opened != nil {
-				key = opened
-				break
-			}
-		}
+	key, err := self.openGenerationKey(state, groupId, generation, deliveries, now)
+	if err != nil {
+		return nil, err
 	}
 
 	held := &gkmHeldGeneration{generation: generation, key: key, poisoned: verdict.Refused}
 	if err := client.putHeldGeneration(self.repoId, held); err != nil {
 		return nil, err
 	}
-	// whatever this device drafted for g*+1 lost
-	if err := client.args.Secrets.Delete(gkmRepoRecordName(self.repoId, "draft")); err != nil {
-		return nil, err
-	}
 	if verdict.Refused {
-		// §10.9's poisoned row: alarm, never seal to it, rotate at once on top of it with cause REMOVE
-		alarm(generation.SignerId, verdict)
-		if key == nil {
-			self.askLate(ctx, pins.groupId, generationNumber, now)
-			return nil, fmt.Errorf("%w: generation %d is poisoned and this device holds no key of it to rotate past it", ErrGkmKeyMissing, generationNumber)
+		client.alarm(&GkmAlarm{
+			Kind: GkmAlarmRefused, RepoId: self.repoId, GroupId: groupId, Generation: generationNumber,
+			SidecarId: generation.SignerId, Reason: verdict.Reason, Detail: verdict.Detail,
+		})
+	} else {
+		err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
+			pins.groupId = groupId
+			if pins.generation < generationNumber {
+				pins.generation = generationNumber
+				pins.commitment = bytes.Clone(rotate.GetCommitment())
+			}
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil, nil
-	}
-	err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
-		pins.generation = generationNumber
-		pins.commitment = bytes.Clone(rotate.GetCommitment())
-	})
-	if err != nil {
-		return nil, err
 	}
 	if key == nil {
-		// it passed, and nothing this device holds opens it yet: a holder's late delivery brings it
-		self.askLate(ctx, pins.groupId, generationNumber, now)
-		return nil, fmt.Errorf("%w: generation %d is claimed and no delivery of it reached this device yet", ErrGkmKeyMissing, generationNumber)
+		self.askLate(ctx, groupId, generationNumber, now)
 	}
-	// adopt it only if it covers what this rotation is for
-	if GkmGatePasses(state, self.repoId, rotate.GetAuth(), time.UnixMilli(rotate.GetTimeMs()), now) {
-		return key, nil
+	return held, nil
+}
+
+// RK_g of a generation this device parsed, by its leaf_wrap where this device's engine holds that epoch, else by a
+// delivery to a ReaderKey it holds, each delivery judged at its own pin before its key is used (GkmUseDelivery). Nil
+// when nothing this device holds opens it.
+func (self *gkmGroupManager) openGenerationKey(state GkmAuthView, groupId Id, generation *GkmGeneration, deliveries []*GkmDelivery, now time.Time) (*EvsRepoKey, error) {
+	client := self.client
+	if leafWrap := generation.Rotate.GetLeafWrap(); leafWrap != nil {
+		if group, err := client.loadGroup(groupId); err == nil && group.Epoch() == leafWrap.GetEpoch() {
+			kek, err := MlsKek(group, self.repoId)
+			if err != nil {
+				return nil, err
+			}
+			opened, err := OpenGkmLeafWrap(generation, kek)
+			clear(kek)
+			if err == nil {
+				return opened, nil
+			}
+		}
+	}
+	if client.args.ReaderPrivateKey == nil {
+		return nil, nil
+	}
+	yield := client.newYield()
+	for _, delivery := range deliveries {
+		yield.step()
+		privateKey, err := client.args.ReaderPrivateKey(delivery.Body.GetRecipientKeySha256())
+		if err != nil {
+			continue
+		}
+		deliveryArgs := &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: generation, Now: now}
+		opened, deliveryVerdict, err := GkmUseDelivery(state, deliveryArgs, client.args.SidecarId.Bytes(), privateKey)
+		if err == nil && deliveryVerdict.Passed() && opened != nil {
+			return opened, nil
+		}
 	}
 	return nil, nil
+}
+
+// A generation this device holds without its key, tried again: a late delivery, or its leaf_wrap's epoch, may have
+// come since. One it still cannot open is asked for late.
+func (self *gkmGroupManager) openHeldGenerationInFlow(ctx context.Context, state GkmAuthView, groupId Id, held *gkmHeldGeneration) error {
+	client := self.client
+	generationNumber := held.generation.Rotate.GetGeneration()
+	now := client.clock.Now()
+	deliveries, err := self.ownDeliveries(ctx, state, groupId, generationNumber)
+	if err != nil {
+		return err
+	}
+	key, err := self.openGenerationKey(state, groupId, held.generation, deliveries, now)
+	if err != nil {
+		return err
+	}
+	if key == nil {
+		self.askLate(ctx, groupId, generationNumber, now)
+		return nil
+	}
+	recipient := "s:" + hex.EncodeToString(client.args.SidecarId.Bytes())
+	client.lateAsks.Done(groupId, generationNumber, recipient)
+	return client.putHeldGeneration(self.repoId, &gkmHeldGeneration{generation: held.generation, key: key})
 }
 
 // This sidecar's deliveries of one generation, as gkm serves them, each verified under its signer's admitted key. One
