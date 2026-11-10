@@ -121,6 +121,10 @@ func (self *GkmGroupClient) SyncRepo(ctx context.Context, repoId Id) error {
 	if err := manager.syncEpochsInFlow(ctx, state); err != nil {
 		return err
 	}
+	// a leaf_wrap of the newest generation opens once its epoch is adopted
+	if err := manager.openNewestInFlow(ctx, state); err != nil {
+		return err
+	}
 	pins, err := self.repoPins(repoId)
 	if errors.Is(err, ErrGkmKeyMissing) {
 		return nil
