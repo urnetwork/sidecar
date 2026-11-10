@@ -361,3 +361,29 @@ func TestEvsMapperWakesOnAVerifiedHead(t *testing.T) {
 		t.Fatalf("woken %v by a new generation", woken)
 	}
 }
+
+// The listed index is kept between ticks: a job resumed after a failed upload maps through the listing its build
+// made, without listing the tree again.
+func TestEvsMapperKeepsItsListingBetweenTicks(t *testing.T) {
+	writer := newEvsTestMapperWriter(t)
+	writer.test.client.settings.PushRetryCount = 0
+	writer.server.onMapPart = func(part uint32) error { return errors.New("down") }
+	if err := writer.repo.TickMapper(context.Background(), writer.world.refId); err == nil {
+		t.Fatal("a tick whose upload failed committed")
+	}
+	mapper := writer.test.client.mapper()
+	key := evsRefKey{repoId: writer.world.repoId, refId: writer.world.refId}
+	listed := mapper.listed[key]
+	if listed == nil {
+		t.Fatal("no listing kept")
+	}
+	writer.server.onMapPart = nil
+	// a push lands between the ticks: the job, on disk, still maps through the listing its build made
+	writer.world.push(&evsTestChange{path: "a", content: []byte("a between ticks")})
+	if err := writer.repo.TickMapper(context.Background(), writer.world.refId); err != nil {
+		t.Fatalf("the resumed tick: %v", err)
+	}
+	if mapper.listed[key] != listed || writer.world.currentEpoch != 2 {
+		t.Fatalf("listed again: %v, epoch %d", mapper.listed[key] != listed, writer.world.currentEpoch)
+	}
+}
