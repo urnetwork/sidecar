@@ -28,10 +28,14 @@ import (
 	"context"
 	"crypto/hpke"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -55,6 +59,8 @@ type GkmGroupApi interface {
 	ReaderKey(ctx context.Context, sidecarId Id) (*bridge.Signed, error)
 	ReaderKeys(ctx context.Context, sidecarIds []Id) ([]*bridge.Signed, error)
 	ClaimKeyPackage(ctx context.Context, repoId Id, groupId Id, target Id) (*protocol.GkmKeyPackageClaimReply, error)
+	GroupInfo(ctx context.Context, repoId Id, groupId Id, want *uint64) (*protocol.GkmGroupInfoObject, error)
+	UploadGroupInfo(ctx context.Context, repoId Id, groupId Id, object *protocol.GkmGroupInfoObject) error
 	UploadWelcome(ctx context.Context, repoId Id, groupId Id, epoch uint64, request *protocol.GkmWelcomeRequest) error
 	Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, error)
 }
@@ -118,6 +124,9 @@ type GkmGroupClientArgs struct {
 	// Whether a device a restored binding admitted is anchored (§10.8): until it is, no committer adds it. Nil
 	// reads every device as anchored, since only §7.9's restored row parks one.
 	Anchored func(sidecarId Id) bool
+	// The repos this sidecar reads at its newest state, the list its token scopes come from: where a Welcome's
+	// group is looked for. Nil joins only groups of repos this device already holds.
+	ReaderRepoIds func() []Id
 	// Each alarm a flow raises (§10.9): refused, head_alarm, approval_pending. It must not block. Nil drops them.
 	Alarm func(alarm *GkmAlarm)
 	// A uniform draw in [0, max), for the jittered waits. Nil draws from crypto/rand.
@@ -141,7 +150,11 @@ type GkmGroupClient struct {
 	// the newest verified state the log applier gave
 	state          GkmAuthView
 	repoIdManagers map[Id]*gkmGroupManager
+	// the hint work running now, by kind and repo
+	hintWorkKeys map[string]bool
 }
+
+var _ GkmClient = (*GkmGroupClient)(nil)
 
 // A client with no state yet: every flow refuses with ErrGkmUnavailable until the first AuthAdvanced.
 func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
@@ -159,6 +172,7 @@ func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
 		log:            loggerOrDefault(args.Log),
 		lateAsks:       NewGkmLateAsks(settings),
 		repoIdManagers: map[Id]*gkmGroupManager{},
+		hintWorkKeys:   map[string]bool{},
 	}, nil
 }
 
@@ -585,4 +599,502 @@ func (self *GkmGroupClient) fetchGeneration(ctx context.Context, state GkmAuthVi
 		return nil, err
 	}
 	return ParseGenRotate(signedBytes, groupId, generation, GkmIdentityKeys(state))
+}
+
+// A Welcome this device's commit owes its joiners: written to the keychain before the commit is uploaded, so a kill
+// between the epoch's 200 and the Welcome's write loses nothing once this device returns.
+type gkmOwedWelcome struct {
+	epoch uint64
+	// SHA-256 of the commit's MLSMessage: the Welcome is owed only if this commit holds the epoch
+	commitSha256 []byte
+	// the GkmWelcomeRequest, encoded
+	request []byte
+}
+
+// A repo's pending-change record: KF1's draft until the group stands with its deliveries, and the Welcomes owed.
+type gkmPendingRecord struct {
+	create       *gkmCreateDraft
+	owedWelcomes []*gkmOwedWelcome
+}
+
+// version | u32 length | [group_id | RK_1 | request] | u16 count | { u64 epoch | commit hash | u32 length | request }.
+func (self *gkmPendingRecord) encode() []byte {
+	encoded := []byte{gkmRecordVersion}
+	create := []byte{}
+	if self.create != nil {
+		create = append(create, self.create.groupId.Bytes()...)
+		create = append(create, self.create.repoKey...)
+		create = append(create, self.create.request...)
+	}
+	encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(create)))
+	encoded = append(encoded, create...)
+	encoded = binary.BigEndian.AppendUint16(encoded, uint16(len(self.owedWelcomes)))
+	for _, owed := range self.owedWelcomes {
+		encoded = binary.BigEndian.AppendUint64(encoded, owed.epoch)
+		encoded = append(encoded, owed.commitSha256...)
+		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(owed.request)))
+		encoded = append(encoded, owed.request...)
+	}
+	return encoded
+}
+
+// A pending record's fields.
+func decodeGkmPendingRecord(encoded []byte) (*gkmPendingRecord, error) {
+	malformed := fmt.Errorf("%w: a pending record", ErrGkmMalformed)
+	remaining := encoded
+	failed := false
+	take := func(byteCount int) []byte {
+		if failed || byteCount < 0 || len(remaining) < byteCount {
+			failed = true
+			return nil
+		}
+		taken := remaining[:byteCount]
+		remaining = remaining[byteCount:]
+		return taken
+	}
+	takeUint := func(byteCount int) uint64 {
+		taken := take(byteCount)
+		if taken == nil {
+			return 0
+		}
+		padded := make([]byte, 8)
+		copy(padded[8-byteCount:], taken)
+		return binary.BigEndian.Uint64(padded)
+	}
+	if version := take(1); version == nil || version[0] != gkmRecordVersion {
+		return nil, malformed
+	}
+	record := &gkmPendingRecord{}
+	if create := take(int(takeUint(4))); 0 < len(create) {
+		if len(create) <= gkmIdByteCount+gkmRepoKeyByteCount {
+			return nil, malformed
+		}
+		groupId, err := IdFromBytes(create[:gkmIdByteCount])
+		if err != nil {
+			return nil, malformed
+		}
+		record.create = &gkmCreateDraft{
+			groupId: groupId,
+			repoKey: bytes.Clone(create[gkmIdByteCount : gkmIdByteCount+gkmRepoKeyByteCount]),
+			request: bytes.Clone(create[gkmIdByteCount+gkmRepoKeyByteCount:]),
+		}
+	}
+	for count := takeUint(2); 0 < count && !failed; count -= 1 {
+		owed := &gkmOwedWelcome{epoch: takeUint(8)}
+		owed.commitSha256 = bytes.Clone(take(gkmDigestByteCount))
+		owed.request = bytes.Clone(take(int(takeUint(4))))
+		record.owedWelcomes = append(record.owedWelcomes, owed)
+	}
+	if failed || len(remaining) != 0 {
+		return nil, malformed
+	}
+	return record, nil
+}
+
+// The repo's pending record, empty for none.
+func (self *gkmGroupManager) pendingRecord() (*gkmPendingRecord, error) {
+	encoded, err := self.client.getRecord(gkmRepoRecordName(self.repoId, "pending"))
+	if errors.Is(err, ErrGkmKeyMissing) {
+		return &gkmPendingRecord{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer clear(encoded)
+	return decodeGkmPendingRecord(encoded)
+}
+
+// Keeps the repo's pending record, or removes it once it holds nothing.
+func (self *gkmGroupManager) putPendingRecord(record *gkmPendingRecord) error {
+	name := gkmRepoRecordName(self.repoId, "pending")
+	if record.create == nil && len(record.owedWelcomes) == 0 {
+		return self.client.args.Secrets.Delete(name)
+	}
+	encoded := record.encode()
+	defer clear(encoded)
+	return self.client.args.Secrets.Put(name, encoded)
+}
+
+// Records the Welcome a commit to epoch will owe, before the commit is uploaded.
+func (self *gkmGroupManager) oweWelcome(epoch uint64, commit []byte, request *protocol.GkmWelcomeRequest) error {
+	requestBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+	if err != nil {
+		return err
+	}
+	record, err := self.pendingRecord()
+	if err != nil {
+		return err
+	}
+	commitSha256 := sha256.Sum256(commit)
+	record.owedWelcomes = slices.DeleteFunc(record.owedWelcomes, func(owed *gkmOwedWelcome) bool { return owed.epoch == epoch })
+	record.owedWelcomes = append(record.owedWelcomes, &gkmOwedWelcome{epoch: epoch, commitSha256: commitSha256[:], request: requestBytes})
+	return self.putPendingRecord(record)
+}
+
+// Drops the Welcome owed for epoch: its commit lost the epoch, or its Welcome stands.
+func (self *gkmGroupManager) dropOwedWelcome(epoch uint64) error {
+	record, err := self.pendingRecord()
+	if err != nil {
+		return err
+	}
+	kept := slices.DeleteFunc(slices.Clone(record.owedWelcomes), func(owed *gkmOwedWelcome) bool { return owed.epoch == epoch })
+	if len(kept) == len(record.owedWelcomes) {
+		return nil
+	}
+	record.owedWelcomes = kept
+	return self.putPendingRecord(record)
+}
+
+// 6.2.4's welcome step, and its resumption after a kill: each Welcome this device owes is written, with its
+// pointers, if its own commit holds the epoch; one whose commit lost the epoch, or never landed, is dropped, since a
+// staged commit that dies is made again. gkm writes welcome/<n> and each pointer If-None-Match, equal bytes
+// answering success, so a repeat finishes what a crash left.
+func (self *gkmGroupManager) writeOwedWelcomes(ctx context.Context, groupId Id) error {
+	client := self.client
+	record, err := self.pendingRecord()
+	if err != nil {
+		return err
+	}
+	for _, owed := range slices.Clone(record.owedWelcomes) {
+		standing, err := client.args.Api.Epochs(ctx, self.repoId, groupId, owed.epoch-1)
+		if err != nil {
+			return err
+		}
+		mine := false
+		if entries := standing.GetEpochs(); 0 < len(entries) && entries[0].GetEpoch() == owed.epoch {
+			commitSha256 := sha256.Sum256(entries[0].GetObject().GetCommit())
+			mine = bytes.Equal(commitSha256[:], owed.commitSha256)
+		}
+		if mine {
+			request := &protocol.GkmWelcomeRequest{}
+			if err := proto.Unmarshal(owed.request, request); err != nil {
+				return fmt.Errorf("%w: an owed Welcome", ErrGkmMalformed)
+			}
+			if err := client.args.Api.UploadWelcome(ctx, self.repoId, groupId, owed.epoch, request); err != nil && !IsGkmStatus(err, http.StatusConflict) {
+				// a 409 is a Welcome that already stands for the epoch, which only this uploader wrote
+				return err
+			}
+		}
+		if err := self.dropOwedWelcome(owed.epoch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The repo among those this sidecar reads whose newest GroupForm names groupId, which a Welcome's pointer does not
+// say. What gkm answers here binds nothing: a wrong repo fails at the GenWrap, whose KEK and gen/<g> name the repo.
+func (self *GkmGroupClient) repoOfGroup(ctx context.Context, groupId Id) (Id, bool, error) {
+	repoIds, err := self.heldRepoIds()
+	if err != nil {
+		return Id{}, false, err
+	}
+	for _, repoId := range repoIds {
+		if pins, err := self.repoPins(repoId); err == nil && pins.groupId == groupId {
+			return repoId, true, nil
+		}
+	}
+	if self.args.ReaderRepoIds == nil {
+		return Id{}, false, nil
+	}
+	for _, repoId := range self.args.ReaderRepoIds() {
+		forms, err := self.args.Api.Forms(ctx, repoId)
+		if err != nil {
+			if _, refused := GkmErrorOf(err); refused {
+				continue
+			}
+			return Id{}, false, err
+		}
+		if signedForms := forms.GetForms(); 0 < len(signedForms) {
+			form := &protocol.GroupForm{}
+			if err := proto.Unmarshal(signedForms[len(signedForms)-1].GetBody(), form); err == nil && bytes.Equal(form.GetGroupId(), groupId.Bytes()) {
+				return repoId, true, nil
+			}
+		}
+	}
+	return Id{}, false, nil
+}
+
+// KF2's joiner (the welcome hint's work, and each resync's): takes each Welcome gkm holds for this sidecar. Of the
+// pointers for one group it takes the one with the highest epoch above the newest it reached and skips the rest: a
+// lower one names a leaf a later Remove took out, or an epoch at or below its pin (I-16). Returns the repos joined.
+func (self *GkmGroupClient) JoinWelcomes(ctx context.Context) ([]Id, error) {
+	if self.args.Mls == nil {
+		return nil, nil
+	}
+	state, err := self.currentState()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := self.args.Api.Welcomes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	groupIdEntries := map[Id]*protocol.GkmWelcomeEntry{}
+	groupIds := []Id{}
+	for _, entry := range entries {
+		groupId, err := IdFromBytes(entry.GetPointer().GetGroupId())
+		if err != nil {
+			continue
+		}
+		best, ok := groupIdEntries[groupId]
+		if !ok {
+			groupIds = append(groupIds, groupId)
+		}
+		if !ok || best.GetPointer().GetEpoch() < entry.GetPointer().GetEpoch() {
+			groupIdEntries[groupId] = entry
+		}
+	}
+	joinedRepoIds := []Id{}
+	errs := []error{}
+	for _, groupId := range groupIds {
+		repoId, found, err := self.repoOfGroup(ctx, groupId)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !found {
+			continue
+		}
+		manager := self.manager(repoId)
+		joined, err := func() (bool, error) {
+			manager.flowLock.Lock()
+			defer manager.flowLock.Unlock()
+			return manager.joinInFlow(ctx, state, groupId, groupIdEntries[groupId])
+		}()
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if joined {
+			joinedRepoIds = append(joinedRepoIds, repoId)
+		}
+	}
+	return joinedRepoIds, errors.Join(errs...)
+}
+
+// One Welcome join (§10.6's two phases): the Welcome gives the epoch's exporter and so KEK_n; GenWrap_n gives
+// RK_g, accepted only against gen/<g>'s C_g, the generation itself judged by the rotation checks; K_groupinfo of
+// the generation the epoch names opens the sealed GroupInfo; and only then does the engine verify the GroupInfo's
+// signature and tree against the Welcome. Nothing the Welcome or gkm says is trusted before those pass.
+func (self *gkmGroupManager) joinInFlow(ctx context.Context, state GkmAuthView, groupId Id, entry *protocol.GkmWelcomeEntry) (bool, error) {
+	client := self.client
+	epoch := entry.GetPointer().GetEpoch()
+	if pins, err := client.repoPins(self.repoId); err == nil {
+		if pins.groupId != groupId || epoch <= pins.epoch {
+			// another group of the repo is a re-form's (KEYS-M2-25); an epoch at or below the one reached is no join
+			return false, nil
+		}
+	} else if !errors.Is(err, ErrGkmKeyMissing) {
+		return false, err
+	}
+	pendingJoin, err := client.args.Mls.JoinWelcome(entry.GetWelcome())
+	if err != nil {
+		return false, err
+	}
+	if pendingJoin.GroupId() != groupId || pendingJoin.Epoch() != epoch {
+		return false, fmt.Errorf("%w: a Welcome that is not its pointer's", ErrGkmAuthentication)
+	}
+	standing, err := client.args.Api.Epochs(ctx, self.repoId, groupId, epoch-1)
+	if err != nil {
+		return false, err
+	}
+	if len(standing.GetEpochs()) == 0 || standing.GetEpochs()[0].GetEpoch() != epoch {
+		return false, fmt.Errorf("%w: gkm holds no epoch %d for a Welcome", ErrGkmKeyMissing, epoch)
+	}
+	object := standing.GetEpochs()[0].GetObject()
+	// the commit's header as its clear framing shows it; gkm's copy where the commit is no member's
+	headerBytes := []byte{}
+	if parsed, err := ParseMlsHeader(object.GetCommit()); err == nil {
+		headerBytes = parsed.AuthenticatedData
+	} else {
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(object.GetHeader())
+		if err == nil {
+			headerBytes = encoded
+		}
+	}
+	header := &protocol.GkmCommitHeader{}
+	if err := proto.Unmarshal(headerBytes, header); err != nil || header.GetGeneration() == 0 {
+		return false, fmt.Errorf("%w: epoch %d names no generation to join with", ErrGkmKeyMissing, epoch)
+	}
+	held, err := self.judgedGeneration(ctx, state, groupId, header.GetGeneration())
+	if err != nil {
+		return false, err
+	}
+	if held.poisoned {
+		return false, fmt.Errorf("%w: epoch %d carries a poisoned generation", ErrGkmCommitRefused, epoch)
+	}
+	kek, err := MlsKek(pendingJoin, self.repoId)
+	if err != nil {
+		return false, err
+	}
+	key, err := OpenGkmGenWrap(held.generation, groupId, epoch, kek, object.GetGenWrap())
+	clear(kek)
+	if err != nil {
+		return false, err
+	}
+	sealedGroupInfo, groupInfoGeneration := object.GetSealedGroupInfo(), object.GetGroupInfoGeneration()
+	if len(sealedGroupInfo) == 0 {
+		// above 16 leaves the GroupInfo rides group-info, asked for by epoch
+		groupInfoObject, err := client.args.Api.GroupInfo(ctx, self.repoId, groupId, &epoch)
+		if err != nil {
+			return false, err
+		}
+		if groupInfoObject.GetEpoch() != epoch || len(groupInfoObject.GetSealedGroupInfo()) == 0 {
+			return false, fmt.Errorf("%w: no GroupInfo of epoch %d yet", ErrGkmKeyMissing, epoch)
+		}
+		sealedGroupInfo, groupInfoGeneration = groupInfoObject.GetSealedGroupInfo(), groupInfoObject.GetGeneration()
+	}
+	groupInfoKey := key
+	if groupInfoGeneration != header.GetGeneration() {
+		other, err := client.heldGeneration(self.repoId, groupInfoGeneration)
+		if err != nil {
+			return false, err
+		}
+		if other.key == nil {
+			return false, fmt.Errorf("%w: generation %d, which seals the GroupInfo", ErrGkmKeyMissing, groupInfoGeneration)
+		}
+		groupInfoKey = other.key
+	}
+	groupInfo, err := OpenGkmGroupInfo(groupInfoKey, groupId, epoch, sealedGroupInfo)
+	if err != nil {
+		return false, err
+	}
+	group, err := pendingJoin.Complete(groupInfo)
+	if err != nil {
+		return false, err
+	}
+	if err := client.putHeldGeneration(self.repoId, &gkmHeldGeneration{generation: held.generation, key: key}); err != nil {
+		return false, err
+	}
+	epochAuthenticator := group.EpochAuthenticator()
+	err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
+		pins.groupId = groupId
+		pins.epoch = epoch
+		pins.epochAuthenticator = epochAuthenticator
+		pins.epochHeader = headerBytes
+		if pins.generation < header.GetGeneration() {
+			pins.generation = header.GetGeneration()
+			pins.commitment = key.Commitment()
+		}
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// The granting device's first wrap (KF2's wrapped row): one LATE delivery of the newest generation to an agent, or
+// in the config and directory groups to a wrapped member device, at once, under the late delivery's checks.
+func (self *GkmGroupClient) DeliverFirstWrap(ctx context.Context, repoId Id, sidecarId Id) error {
+	manager := self.manager(repoId)
+	manager.flowLock.Lock()
+	defer manager.flowLock.Unlock()
+	return manager.deliverLateInFlow(ctx, "s:"+hex.EncodeToString(sidecarId.Bytes()))
+}
+
+// The repo this device holds whose group is groupId.
+func (self *GkmGroupClient) heldRepoOfGroup(groupId Id) (Id, bool) {
+	repoIds, err := self.heldRepoIds()
+	if err != nil {
+		return Id{}, false
+	}
+	for _, repoId := range repoIds {
+		if pins, err := self.repoPins(repoId); err == nil && pins.groupId == groupId {
+			return repoId, true
+		}
+	}
+	return Id{}, false
+}
+
+// Takes gkm's hints (§10.14): pending runs the engine, the granting device at once and every other writer after
+// PendingCommitDelay plus jitter; welcome joins; wrap-pending answers with a late delivery after its own wait; and
+// each resync runs all three for every repo held, so a lost hint costs at most the resync interval. A hint is only
+// a wake: whatever it names is refetched and verified. Each wake's work runs on its own goroutine until ctx ends,
+// one at a time per repo and kind, so a wait never holds the intake and a repeated hint piles nothing up.
+func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
+	if hints == nil {
+		return
+	}
+	pending := func(repoId Id) {
+		self.hintWork(ctx, "pending", repoId, func() {
+			changes, granting, err := self.Pending(ctx, repoId)
+			if err != nil || changes.Empty() {
+				// nothing this device sees to do; what gkm holds past its epoch is still processed
+				granting = true
+			}
+			if self.wait(ctx, self.PendingCommitWait(granting)) != nil {
+				return
+			}
+			self.logFlowError("pending", self.RunPending(ctx, repoId))
+		})
+	}
+	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) {
+		if wake.GroupId == nil {
+			return
+		}
+		if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
+			pending(repoId)
+		}
+	})
+	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WELCOME, func(ctx context.Context, wake *GkmHintWake) {
+		_, err := self.JoinWelcomes(ctx)
+		self.logFlowError("welcome", err)
+	})
+	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, func(ctx context.Context, wake *GkmHintWake) {
+		if wake.GroupId == nil || wake.Recipient == "" {
+			return
+		}
+		repoId, ok := self.heldRepoOfGroup(*wake.GroupId)
+		if !ok {
+			return
+		}
+		recipient := wake.Recipient
+		self.hintWork(ctx, "wrap-pending:"+recipient, repoId, func() {
+			self.logFlowError("wrap-pending", self.DeliverLate(ctx, repoId, recipient))
+		})
+	})
+	hints.AddResync(func(ctx context.Context) {
+		_, err := self.JoinWelcomes(ctx)
+		self.logFlowError("welcome", err)
+		repoIds, err := self.heldRepoIds()
+		if err != nil {
+			return
+		}
+		for _, repoId := range repoIds {
+			pending(repoId)
+		}
+	})
+}
+
+// Runs work on its own goroutine unless the same kind of work for the repo is already running.
+func (self *GkmGroupClient) hintWork(ctx context.Context, kind string, repoId Id, work func()) {
+	key := kind + ":" + gkmPathId(repoId)
+	running := false
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		running = self.hintWorkKeys[key]
+		self.hintWorkKeys[key] = true
+	}()
+	if running {
+		return
+	}
+	go func() {
+		defer func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			delete(self.hintWorkKeys, key)
+		}()
+		if ctx.Err() == nil {
+			work()
+		}
+	}()
+}
+
+// Logs what a hint's flow ended with. A wait is the expected end of a flow whose turn has not come.
+func (self *GkmGroupClient) logFlowError(flow string, err error) {
+	if err != nil && self.log.V(1).Enabled() {
+		self.log.Infof("[gkm]%s: %v", flow, err)
+	}
 }
