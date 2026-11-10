@@ -127,13 +127,26 @@ func (self *RecordCache) countRead() {
 	self.readCount += 1
 }
 
+// A record's bytes as this cache's instance reads them (EvsSettings.InstanceFormat): at format 2 of either format, a
+// format-2 record's tail, its staged bytes and purge list, split off its body, of which a fold, a copy's tail and the
+// newest rule read nothing; at format 1 format 1's form alone, a format-2 record answering
+// sidecar.ErrEvsFormatUnsupported (format1_guard.go).
+func (self *RecordCache) parseRecord(recordBytes []byte) (*sidecar.EvsBatchRecord, error) {
+	if self.settings != nil && sidecar.EvsRepoFormat2 <= self.settings.InstanceFormat {
+		record, _, err := sidecar.ParseEvsBatchRecordFormat2(recordBytes)
+		return record, err
+	}
+	return sidecar.ParseEvsBatchRecord(recordBytes)
+}
+
 // The record at place on cluster (§11.8's read row): this process's cache, else one range GET of its batch, parsed
-// whole. ErrEvsRecordEvacuated when the batch is gone; sidecar.ErrEvsPushInvalid for bytes there that are no
-// record, which only a wrong place can produce and which breaks the chain a reader checks.
+// whole, of either format at a format-2 instance. ErrEvsRecordEvacuated when the batch is gone;
+// sidecar.ErrEvsPushInvalid for bytes there that are no record, which only a wrong place can produce and which breaks
+// the chain a reader checks.
 func ReadRecord(ctx context.Context, cache *RecordCache, cluster sidecar.BlobCluster, place *protocol.EvsPlace) (*sidecar.EvsBatchRecord, error) {
 	clusterId := cluster.ClusterId()
 	if recordBytes, ok := cache.Get(clusterId, place); ok {
-		return sidecar.ParseEvsBatchRecord(recordBytes)
+		return cache.parseRecord(recordBytes)
 	}
 	if place.GetLength() < sidecar.EvsBatchRecordHeaderByteCount || sidecar.EvsBatchMaxRecordByteCount < place.GetLength() {
 		return nil, fmt.Errorf("%w: a place of %d bytes", sidecar.ErrEvsPushInvalid, place.GetLength())
@@ -153,7 +166,7 @@ func ReadRecord(ctx context.Context, cache *RecordCache, cluster sidecar.BlobClu
 	if err != nil {
 		return nil, err
 	}
-	record, err := sidecar.ParseEvsBatchRecord(recordBytes)
+	record, err := cache.parseRecord(recordBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -15,7 +15,8 @@
 // What format-1 writers keep (testdata/evs/reserved_numbers.yml's kept): an entry's drop mark and a marker's carried
 // segment and slot ids, which a format-2 collection deletes by and format 1 never wrote. A format-1 fold or copy
 // carries them unchanged, a newer marker over an older one inheriting its ids, and where a write would drop them it
-// alarms and keeps the content, until EVS2-M10-07's orphan marker lands (plan-EVS2-marker-carried-ids's interim).
+// alarms and keeps the content, until the orphan marker plan-EVS2-marker-carried-ids decided lands with its
+// collection case and evs-11's store row (its interim; fold_format2.go).
 //
 // The instance's format is EvsSettings.InstanceFormat: 2 for this code, 1 for a test standing in for the rolled-back
 // binary, which is how FS-72's format-1 cases run on one tree.
@@ -80,8 +81,9 @@ func inheritCarriedIds(prior *protocol.EvsRemovalMarker, next *protocol.EvsRemov
 	return next
 }
 
-// A write that would drop a marker's carried ids: alarmed, and the content kept, since nothing this instance writes
-// names the ids for a collection to delete (plan-EVS2-marker-carried-ids's interim until EVS2-M10-07).
+// A write or delete that would drop a marker's carried ids: alarmed, and the content kept, since nothing this
+// instance writes names the ids for a collection to delete (plan-EVS2-marker-carried-ids's interim, until its orphan
+// marker lands).
 func alarmCarriedIdsDropped(log sidecar.Logger, marker *protocol.EvsRemovalMarker, what string) {
 	if !markerCarriesIds(marker) {
 		return

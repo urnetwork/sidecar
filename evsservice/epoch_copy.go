@@ -18,6 +18,10 @@
 //	         also when no source holds it any more, a fold having carried it and deleted its source copy
 //	prefixes after each PUT the path's prefixes' current entries are HEADed, and under a removed or fresh one what it
 //	         put becomes a marker, If-Match on that PUT's ETag; on 412 the newer entry stands
+//	format 2 every carried entry keeps its versionless versions as written, its markers' carried ids and its drop mark;
+//	         a marker under a removed prefix carries a versionless file's ids where the removal is known not to list
+//	         it; a source marker's carried ids that leave with a copy the copy deletes, under a standing entry or at
+//	         the end, alarm and their content stays (fold_format2.go)
 //	pace     at most CopyRepoOpsPerSecond operations a second on the repo, CopyRepoSourcesOpsPerSecond while two or
 //	         more sources stand, and the process's share of its cluster's copy rate (WriteBudget.CopyOpsPerSecond)
 //	head     reread at least every CopyHeadRereadInterval; every write carries §11.7's stale deadline, FoldStaleDeadline
@@ -438,7 +442,8 @@ func (self *copyRun) tailMoves(mapSha256 []byte) ([][]byte, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		statement, err := sidecar.ParseEvsStatement(statementBytes)
+		// a committed statement and payload read back as stored, of either format (format1_guard.go)
+		statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
 		if err != nil {
 			return nil, false, err
 		}
@@ -446,7 +451,7 @@ func (self *copyRun) tailMoves(mapSha256 []byte) ([][]byte, bool, error) {
 		if push.GetPathEpoch() != self.epoch || !bytes.Equal(push.GetPathMapSha256(), mapSha256) {
 			return nil, false, nil
 		}
-		payload, err := sidecar.EvsCheckPayload(statement, payloadBytes)
+		payload, err := sidecar.EvsCheckStoredPayload(statement, payloadBytes)
 		if err != nil {
 			return nil, false, err
 		}
@@ -558,6 +563,8 @@ func (self *copyRun) copyOne(move *copyMove) error {
 			if !done {
 				continue
 			}
+			// a source marker's carried ids the standing entry does not carry leave with its copy (fold_format2.go)
+			self.alarmSourceIdsLeaving(source, current)
 			return self.deleteSources(move)
 		}
 		entry := self.translated(move, source.Entry, sourceEpoch, carryEvsIndexEntry)
@@ -749,6 +756,10 @@ func (self *copyRun) markUnderPrefixes(move *copyMove, etag string, entry *proto
 		marked := proto.Clone(entry).(*protocol.EvsIndexEntry)
 		marked.Marker = &protocol.EvsRemovalMarker{
 			PushId: pushId, RemovalVersion: removalVersion, PathVersion: standing + 1, LeafPart: leaf.part, LeafIndex: leaf.index,
+		}
+		// a versionless file the removal did not list carries its ids, as the removal fold's LIST gives them
+		if err := self.carryUnderPrefix(marked.Marker, entry, move.newPath, removalVersion, prefix.Entry.GetMarker() != nil); err != nil {
+			return err
 		}
 		written := &EvsEntryRead{Entry: entry, Etag: etag}
 		_, err = self.put(move.newPath, written, marked, EvsEntryStateValue{State: EvsEntryStateRemoved})

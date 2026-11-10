@@ -371,6 +371,9 @@ type recordPush struct {
 	sealed      bool
 	// a sealed push's every change, checked whole as its seal, once a fold read them all (fold.go)
 	allChanges []*EvsCommittedChange
+	// a DROP's body as checked (format 2): a one-part push's from its record, a sealed push's with allChanges; nil
+	// for any other push (fold_format2.go)
+	drop *sidecar.EvsCheckedDrop
 }
 
 // A source for one ref of one repo on its cluster.
@@ -456,7 +459,7 @@ func (self *RecordPushSource) readPush(ctx context.Context, entry *sidecar.EvsWi
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrEvsStatementMismatch, err)
 		}
-		return &recordPush{statement: statement, changes: committedChanges(checked.Changes)}, nil
+		return &recordPush{statement: statement, changes: committedChanges(checked.Changes), drop: checked.Drop}, nil
 	case protocol.EvsBatchRecordType_EVS_BATCH_SEAL:
 		statementBytes, parts, err := sidecar.ParseEvsSealRecordBody(record.Body)
 		if err != nil {
