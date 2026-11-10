@@ -309,6 +309,37 @@ func TestCheckRepoMemberConfigLeafFollowsTheLeavesRule(t *testing.T) {
 	}
 }
 
+// Owner decision 63's audit assignment: once the rows carry the audit block with its AuditOptIn, which ACL-M6-02's
+// compile writes only after verifying it, the audit reader takes a wrap of each repo the block names, an owner-bound
+// one included, and no leaf, being tagged; without the opt-in it takes neither.
+func TestCheckRepoMemberTakesTheAuditReaderOnlyWithItsOptIn(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	admin := fixture.member(bridge.MemberRole_MEMBER_ROLE_ADMIN)
+	auditTag := fixture.tag(admin)
+	auditor := fixture.agent(admin, auditTag)
+	vaultId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_VAULT, owner)
+	mailboxId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_MAILBOX, owner)
+	fixture.rows.Audit = &protocol.AclAudit{
+		ReaderAtoms: [][]byte{auditTag.Bytes()},
+		RepoKinds:   []uint32{uint32(protocol.RepoKind_REPO_KIND_VAULT)},
+	}
+	if decision := fixture.state(t).CheckRepoMember(vaultId, aclTestWrap(auditor), aclTestNow); decision.Allowed {
+		t.Errorf("without its opt-in: %+v", decision)
+	}
+	fixture.rows.Audit.AuditOptIn = []byte("a k-of-n AuditOptIn the compile verified")
+	state := fixture.state(t)
+	if decision := state.CheckRepoMember(vaultId, aclTestWrap(auditor), aclTestNow); !decision.Allowed || decision.Reason != AclReasonAudit {
+		t.Errorf("the audit reader's wrap: %+v", decision)
+	}
+	if decision := state.CheckRepoMember(vaultId, aclTestLeaf(auditor), aclTestNow); decision.Allowed || decision.Reason != AclReasonNotMemberDevice {
+		t.Errorf("the audit reader's leaf: %+v", decision)
+	}
+	if decision := state.CheckRepoMember(mailboxId, aclTestWrap(auditor), aclTestNow); decision.Allowed {
+		t.Errorf("a kind the block does not name: %+v", decision)
+	}
+}
+
 // A view that answers AclAuthView alone, as fakes outside this package do.
 type aclTestUnrankedView struct {
 	AclAuthView

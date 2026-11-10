@@ -37,7 +37,8 @@ import (
 // The most leaves a group's tree holds: MLS's 1,000 (D-KEYS-2), a protocol constant every member holds alike.
 const aclRepoSeatCount = 1000
 
-// Why AclDataSeats has no plan: the rows hold no such repo, or its group seats by §7.9's leaves rule instead.
+// Why AclDataSeats has no plan: the rows hold no such repo, it is deleted, or its group seats by §7.9's leaves rule
+// instead.
 var ErrAclNoDataSeats = errors.New("no data seats")
 
 // What a committer of a data repo's group commits next, at a state and a time (§8.12, KF2).
