@@ -430,8 +430,8 @@ func (self *EvsEngine) afterCommit(committed *EvsCommitted) {
 		defer testHookBarrier(BarrierPushStep8After, barrierKey)
 		ctx := self.ctx
 		pushSequence := uint64(0)
-		if self.deps.CommitNotifier != nil {
-			sequence, err := self.deps.CommitNotifier.Notify(ctx, committed)
+		if self.notifier != nil {
+			sequence, err := self.notifier.Notify(ctx, committed)
 			if err != nil {
 				self.log.Infof("[evs] repo %s: push sequence or hints not sent: %v", sidecar.EvsKeyId(committed.RepoId), err)
 			} else {
