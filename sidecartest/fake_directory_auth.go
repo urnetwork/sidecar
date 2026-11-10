@@ -4,11 +4,13 @@
 // network's directory and its creator, and the approvers a reach target resolves to, which ACL's requests rules give
 // the real view.
 //
-// Each position of a FakeDirectoryAuth is a state a test writes, and positions chain as FakeRecordAuth's do, so At
+// Each position of a FakeDirectoryAuth is a state a test writes, and positions chain as FakeRecordAuth's do, with the
+// same values, so a test appending both in step holds one pin in both, as one ConfigState binds both views, and At
 // sees a fork the way a reader would. A position below RetainFrom's is not retained: SignerStanding and the rest refuse
 // it, and RepoAdminRight answers it from the newest position's admin rows and consent positions, as the real view
 // answers from the config head, so a removed admin's earlier right fails closed there as it does in the real view. A
-// view never changes once appended, and everything here is safe for concurrent use.
+// compromise revocation (CompromisedSince, or a Parked standing) voids, from the newest position, what its sidecar
+// signed at or after since_n. A view never changes once appended, and everything here is safe for concurrent use.
 
 package sidecartest
 
@@ -44,6 +46,9 @@ type FakeDirectorySidecar struct {
 	SuspendedAt uint64
 	// The position a member device's consent first held, 0 for from the first position.
 	ConsentedAt uint64
+	// A compromise revocation's since_n, 0 for none: what it signed at or after this position is void (§7.10), whenever
+	// the revocation came.
+	CompromisedSince uint64
 }
 
 // One admin row of a repo: its sidecar and the position of the statement that added it.
@@ -71,6 +76,8 @@ type FakeDirectoryAuthFixture struct {
 	DirectoryId *sidecar.Id
 	// What a reach target resolves to by its requests rule, keyed by sidecar.DirectoryNoticeTarget's text.
 	ReachApprovers map[string]*sidecar.DirectoryApprovers
+	// The time_ms of the entry that made this position, which RepoAdminRightEnded reads.
+	TimeMillis int64
 }
 
 // A deep copy, so a test changing its fixture later changes no appended view.
@@ -121,6 +128,7 @@ func (self *FakeDirectoryAuthFixture) clone() *FakeDirectoryAuthFixture {
 		copied.MemberIds = slices.Clone(approvers.MemberIds)
 		cloned.ReachApprovers[target] = &copied
 	}
+	cloned.TimeMillis = self.TimeMillis
 	return cloned
 }
 
@@ -145,7 +153,7 @@ func (self *FakeDirectoryAuth) Append(fixture *FakeDirectoryAuthFixture) sidecar
 		previous = self.views[len(self.views)-1].pin.GetChain()
 	}
 	version := uint64(len(self.views) + 1)
-	chain := sha256.Sum256(binary.BigEndian.AppendUint64(append([]byte("fake directory auth"), previous...), version))
+	chain := sha256.Sum256(binary.BigEndian.AppendUint64(slices.Clone(previous), version))
 	view := &fakeDirectoryAuthView{
 		auth:    self,
 		pin:     &bridge.AuthPin{Version: version, Chain: chain[:]},
@@ -287,6 +295,9 @@ func (self *fakeDirectoryAuthView) repoAdminIn(repoId sidecar.Id, sidecarId side
 func (self *fakeDirectoryAuthView) RepoAdminRight(repoId sidecar.Id, sidecarId sidecar.Id, position uint64) (bool, error) {
 	if self.pin.GetVersion() < position {
 		return false, sidecar.ErrDirectoryAuthAhead
+	}
+	if self.SignatureVoided(sidecarId, position) {
+		return false, nil
 	}
 	held, retained := func() (*fakeDirectoryAuthView, bool) {
 		self.auth.stateLock.Lock()
@@ -452,6 +463,64 @@ func (self *fakeDirectoryAuthView) SponsorOf(sidecarId sidecar.Id) (sidecar.Id, 
 func (self *fakeDirectoryAuthView) Masked(sidecarId sidecar.Id) bool {
 	admission := self.fixture.Sidecars[sidecarId]
 	return admission != nil && admission.RevokedAt != 0 && admission.RevokedAt <= self.pin.GetVersion()
+}
+
+func (self *fakeDirectoryAuthView) SignatureVoided(sidecarId sidecar.Id, position uint64) bool {
+	admission := self.fixture.Sidecars[sidecarId]
+	if admission == nil {
+		return false
+	}
+	return admission.Standing == sidecar.DirectoryStandingParked ||
+		(admission.CompromisedSince != 0 && admission.CompromisedSince <= position)
+}
+
+// Each retained position after after, until one timed at or past beforeMillis: the first at which repoAdminIn no
+// longer holds answers true.
+func (self *fakeDirectoryAuthView) RepoAdminRightEnded(repoId sidecar.Id, sidecarId sidecar.Id, after uint64, beforeMillis int64) bool {
+	views := func() []*fakeDirectoryAuthView {
+		self.auth.stateLock.Lock()
+		defer self.auth.stateLock.Unlock()
+		start := max(after+1, self.auth.retainedFrom)
+		if self.pin.GetVersion() < start {
+			return nil
+		}
+		return slices.Clone(self.auth.views[start-1 : self.pin.GetVersion()])
+	}()
+	for _, view := range views {
+		if beforeMillis <= view.fixture.TimeMillis {
+			return false
+		}
+		if !view.repoAdminIn(repoId, sidecarId, view.pin.GetVersion()) {
+			return true
+		}
+	}
+	return false
+}
+
+// A repo of the position as sidecar.DirectoryRepo.
+func fakeDirectoryRepoOf(repoId sidecar.Id, repo *FakeDirectoryRepo) *sidecar.DirectoryRepo {
+	answer := &sidecar.DirectoryRepo{RepoId: repoId, Kind: repo.Kind, CreatedAt: fakeDirectoryCreatedAt(repo), Live: !repo.Deleted}
+	if repo.OwnerMemberId != nil {
+		answer.OwnerMemberId = *repo.OwnerMemberId
+	}
+	return answer
+}
+
+func (self *fakeDirectoryAuthView) Repo(repoId sidecar.Id) (*sidecar.DirectoryRepo, bool) {
+	repo := self.fixture.Repos[repoId]
+	if repo == nil {
+		return nil, false
+	}
+	return fakeDirectoryRepoOf(repoId, repo), true
+}
+
+func (self *fakeDirectoryAuthView) Repos() []*sidecar.DirectoryRepo {
+	repos := []*sidecar.DirectoryRepo{}
+	for repoId, repo := range self.fixture.Repos {
+		repos = append(repos, fakeDirectoryRepoOf(repoId, repo))
+	}
+	slices.SortFunc(repos, func(a *sidecar.DirectoryRepo, b *sidecar.DirectoryRepo) int { return a.RepoId.Cmp(b.RepoId) })
+	return repos
 }
 
 // The kinds §16.11 ignores repo files of.

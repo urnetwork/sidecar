@@ -23,6 +23,11 @@
 //	             plan-ACL-small-readings #5, a sponsor gone resolving to autogroup:admin
 //	masked       a sidecar whose row is revoked: a SidecarRevoke, a reap, or its member's MemberRevoke (§16.11's
 //	             member and device rows); TEAM-M6-11's ConfigState.MaskedInDirectory replaces this reading
+//	voided       what a sidecar signed at a position that a compromise cascade in this state reaches (§7.9's cascade,
+//	             §7.10's since_n), however long after the signature the revocation came (RECORD-M6-15)
+//	right ended  whether an entry after a repo item's push pin ended its signer's right more than 10 min before the
+//	             push's time_ms, by the states this view's log still holds (§16.11's repo file row)
+//	repos        each repo's kind, owner, creation position and liveness, as the access log holds them
 //
 // A view's answers never change, and a view is safe for concurrent use. On every leg, the sidecar_http page Worker's
 // included: root Id, no connect type. Nothing here creates, derives or unwraps a key.
@@ -132,6 +137,18 @@ func (self *DirectoryApprovers) HasAutogroup(autogroup protocol.AclAutogroup) bo
 	return self.Autogroups&aclAutogroupBit(autogroup) != 0
 }
 
+// A repo as the access log holds it (§8.8's AclRepo), for the directory's repo items (RECORD-M6-15).
+type DirectoryRepo struct {
+	RepoId Id
+	Kind   protocol.RepoKind
+	// An owner-bound repo's owner; zero for any other kind.
+	OwnerMemberId Id
+	// The position of its RepoCreate, as the rows keep it: its earliest admin row's.
+	CreatedAt uint64
+	// Not deleted, or restored: §16.11's lifetime row ends its item at the deletion.
+	Live bool
+}
+
 // One view of §7.9's and §8's state at its pin, through which every directory rule asks its question. Answers at
 // another pin or position come from that state of the same log, never this one's tip, so a version is judged where it
 // came in (I-4, I-EVS-14). Answers never change for one view, and a view is safe for concurrent use.
@@ -164,6 +181,17 @@ type DirectoryAuthView interface {
 	// Whether readers mask the sidecar's cards, notices and pending requests at this state (§16.11's member and device
 	// rows).
 	Masked(sidecarId Id) bool
+	// Whether a compromise cascade in this state voids what sidecarId signed at position: a compromise revocation of
+	// it from a since_n at or before position (§7.10), however late that revocation came.
+	SignatureVoided(sidecarId Id, position uint64) bool
+	// Whether an entry after position after, timed before beforeMillis, ended D-MCP-35's right of sidecarId on repoId,
+	// by the states this view's log still holds: §16.11's repo file row voids an item whose push's time_ms came more
+	// than 10 min after such an entry. Positions this log no longer holds say nothing here.
+	RepoAdminRightEnded(repoId Id, sidecarId Id, after uint64, beforeMillis int64) bool
+	// The repo as this state's access log holds it, false for one it never held.
+	Repo(repoId Id) (*DirectoryRepo, bool)
+	// Every repo this state's access log holds, deleted ones included, in id order.
+	Repos() []*DirectoryRepo
 }
 
 // The member §16.11's AnnounceWho.member_id names for a sidecar: its own member, or a tagged sidecar's live sponsor;
@@ -232,6 +260,26 @@ func (self DirectoryAuthUnavailable) SponsorOf(sidecarId Id) (Id, bool) {
 // Everyone, so nothing shows as current.
 func (self DirectoryAuthUnavailable) Masked(sidecarId Id) bool {
 	return true
+}
+
+// Everything, so no repo item stands.
+func (self DirectoryAuthUnavailable) SignatureVoided(sidecarId Id, position uint64) bool {
+	return true
+}
+
+// Ended, so no repo item stands.
+func (self DirectoryAuthUnavailable) RepoAdminRightEnded(repoId Id, sidecarId Id, after uint64, beforeMillis int64) bool {
+	return true
+}
+
+// None.
+func (self DirectoryAuthUnavailable) Repo(repoId Id) (*DirectoryRepo, bool) {
+	return nil, false
+}
+
+// None.
+func (self DirectoryAuthUnavailable) Repos() []*DirectoryRepo {
+	return []*DirectoryRepo{}
 }
 
 // DirectoryAuthView over TEAM's ConfigState and its acl part.
@@ -416,16 +464,80 @@ func (self *configDirectoryAuth) stateAtPosition(position uint64) (*ConfigState,
 	return state, true, nil
 }
 
-// Judged in the state at position while the log retains it, else from this state's positions.
+// Judged in the state at position while the log retains it, else from this state's positions; either way void where
+// a cascade this state holds reaches position, which the state at position may predate.
 func (self *configDirectoryAuth) RepoAdminRight(repoId Id, sidecarId Id, position uint64) (bool, error) {
 	state, held, err := self.stateAtPosition(position)
 	if err != nil {
 		return false, err
 	}
+	if self.state.CascadeVoids(sidecarId.Bytes(), position) {
+		return false, nil
+	}
 	if held {
 		return directoryRepoAdminIn(state, repoId, sidecarId, position), nil
 	}
 	return directoryRepoAdminFromHead(self.state, repoId, sidecarId, position), nil
+}
+
+// The cascade's verdict in this state.
+func (self *configDirectoryAuth) SignatureVoided(sidecarId Id, position uint64) bool {
+	return self.state.CascadeVoids(sidecarId.Bytes(), position)
+}
+
+// Each held position after after, in order, until one timed at or past beforeMillis: the first at which the right
+// no longer holds answers true. The scan ends at the bound, so for a push with a fresh pin it reads nothing.
+func (self *configDirectoryAuth) RepoAdminRightEnded(repoId Id, sidecarId Id, after uint64, beforeMillis int64) bool {
+	for position := max(after+1, self.state.chainsFrom); position <= self.state.n; position += 1 {
+		state, held, err := self.stateAtPosition(position)
+		if err != nil || !held {
+			continue
+		}
+		if beforeMillis <= state.TimeMs() {
+			return false
+		}
+		if !directoryRepoAdminIn(state, repoId, sidecarId, position) {
+			return true
+		}
+	}
+	return false
+}
+
+// A row as DirectoryRepo.
+func directoryRepoOf(repo *protocol.AclRepo, live bool) *DirectoryRepo {
+	return &DirectoryRepo{
+		RepoId:        recordIdOf(repo.GetRepoId()),
+		Kind:          repo.GetKind(),
+		OwnerMemberId: recordIdOf(repo.GetOwnerMemberId()),
+		CreatedAt:     directoryRepoCreatedAt(repo),
+		Live:          live,
+	}
+}
+
+// The access log's row.
+func (self *configDirectoryAuth) Repo(repoId Id) (*DirectoryRepo, bool) {
+	repo, live := directoryRepoRow(directoryAcl(self.state), repoId)
+	if repo == nil {
+		return nil, false
+	}
+	return directoryRepoOf(repo, live), true
+}
+
+// The access log's rows.
+func (self *configDirectoryAuth) Repos() []*DirectoryRepo {
+	acl := directoryAcl(self.state)
+	repos := []*DirectoryRepo{}
+	if acl == nil {
+		return repos
+	}
+	for _, row := range acl.Rows().GetRepos() {
+		repo, live := directoryRepoRow(acl, recordIdOf(row.GetRepoId()))
+		if repo != nil {
+			repos = append(repos, directoryRepoOf(repo, live))
+		}
+	}
+	slices.SortFunc(repos, func(a *DirectoryRepo, b *DirectoryRepo) int { return a.RepoId.Cmp(b.RepoId) })
+	return repos
 }
 
 // D-MCP-35's right judged in the state at position itself.

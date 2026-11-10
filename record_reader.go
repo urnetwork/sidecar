@@ -37,6 +37,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // What an entry is now (RECORD.md section 5.5's states row).
@@ -68,6 +69,10 @@ type RecordEntryCopy struct {
 	Path            string
 	SlotId          Id
 	KeyIndex        uint32
+	// The pin the push holding this copy declared, and evs's time_ms for that push: where §16.11's card and repo file
+	// rules judge an announce entry (the M6 carrier row's "the entry's push's auth pin standing for at").
+	AuthPin    *bridge.AuthPin
+	TimeMillis int64
 }
 
 // One verified entry, as a reader holds it.
@@ -101,6 +106,9 @@ func (self *RecordReadEntry) clone() *RecordReadEntry {
 	clone.Copies = nil
 	for _, entryCopy := range self.Copies {
 		copied := *entryCopy
+		if entryCopy.AuthPin != nil {
+			copied.AuthPin = &bridge.AuthPin{Version: entryCopy.AuthPin.GetVersion(), Chain: bytes.Clone(entryCopy.AuthPin.GetChain())}
+		}
 		clone.Copies = append(clone.Copies, &copied)
 	}
 	return &clone
@@ -122,6 +130,11 @@ type RecordReaderArgs struct {
 	Clock    Clock
 	Settings *SidecarRecordSettings
 	Log      Logger
+	// A push pin before what the state retains is judged at the state itself, its chain value taken as §11.9's first
+	// pin, as §16.11's repo file row judges a position older than the reader's retention point; false refuses such an
+	// entry. The team directory's reader sets it (RecordEntryArrival.UnretainedAtHead), so a device that starts past
+	// a repo item's push still reads it, and the directory's fold holds each kind to its own rule after.
+	UnretainedAtHead bool
 }
 
 // The logs this sidecar reads, as verified so far.
@@ -134,6 +147,8 @@ type RecordReader struct {
 	clock     Clock
 	settings  *SidecarRecordSettings
 	log       Logger
+	// RecordReaderArgs.UnretainedAtHead
+	unretainedAtHead bool
 
 	stateLock sync.Mutex
 	logs      map[Id]*recordReadLog
@@ -184,6 +199,8 @@ func NewRecordReader(args *RecordReaderArgs) *RecordReader {
 		settings:  settings,
 		log:       log,
 		logs:      map[Id]*recordReadLog{},
+
+		unretainedAtHead: args.UnretainedAtHead,
 	}
 }
 
@@ -307,7 +324,8 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			self.raise(SidecarRecordAlarmBadEntry, log.logId, &streamId)
 			continue
 		}
-		verified, err := VerifyRecordEntry(auth, log.logId, fields.signed, &RecordEntryArrival{StreamSidecarId: streamId, PushPin: version.AuthPin})
+		arrival := &RecordEntryArrival{StreamSidecarId: streamId, PushPin: version.AuthPin, UnretainedAtHead: self.unretainedAtHead}
+		verified, err := VerifyRecordEntry(auth, log.logId, fields.signed, arrival)
 		if errors.Is(err, ErrRecordAuthAhead) {
 			return true, nil
 		}
@@ -336,7 +354,13 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			self.raise(SidecarRecordAlarmBadEntry, log.logId, &writerId)
 			continue
 		}
-		entryCopy := &RecordEntryCopy{StreamSidecarId: streamId, Version: version.Version, Path: arrival.path, KeyIndex: arrival.fields.keyIndex}
+		entryCopy := &RecordEntryCopy{
+			StreamSidecarId: streamId, Version: version.Version, Path: arrival.path, KeyIndex: arrival.fields.keyIndex,
+			TimeMillis: version.TimeMillis,
+		}
+		if version.AuthPin != nil {
+			entryCopy.AuthPin = &bridge.AuthPin{Version: version.AuthPin.GetVersion(), Chain: bytes.Clone(version.AuthPin.GetChain())}
+		}
 		if len(arrival.fields.keySlotId) == len(Id{}) {
 			entryCopy.SlotId = Id(arrival.fields.keySlotId)
 		}
