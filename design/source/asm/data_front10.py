@@ -13,7 +13,8 @@ the key origin served direct (211), the compromise rebind's procedure (212), no 
 the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), deciding
 Q-SDK-7, the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in
 hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled
-(222), the ur.io/recurd page (223) and C16's latch (224)."""
+(222), the ur.io/recurd page (223), C16's latch (224), and the store's DELETE that names its object (225) and its
+whole LIST (226)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -145,6 +146,13 @@ INDEX = list(_P9['INDEX']) + [
      "C16's receive gate latches at this side's seal for M4; before M8 turns it on for app-device hosts the plaintext "
      "in flight at a seal is measured, and a visible loss moves the latch to the peer's first sealed frame within "
      "`TlsTimeout`."),
+    (225, "Store DELETEs",
+     "The in-house MinIO build refuses a DELETE carrying `x-ur-if-unmodified-ms` 412, under the key's lock, when "
+     "the object it finds was stored a second or more later, so orphan GC, the nightly pass and the sweep delete "
+     "only what they listed."),
+    (226, "Store LISTs",
+     "The in-house MinIO build answers a LIST only when it is whole: it asks every online drive of each set and "
+     "answers 503 while three or more of a set's drives are offline, or one while another heals."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -162,7 +170,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 225))
+assert [r[0] for r in INDEX] == list(range(1, 227))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -172,7 +180,7 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               208: '2026-11-06', 209: '2026-11-06', 210: '2026-11-06', 211: '2026-11-06', 212: '2026-11-06',
               213: '2026-11-06', 214: '2026-11-06', 215: '2026-11-10', 216: '2026-11-10', 217: '2026-11-10',
               218: '2026-11-10', 219: '2026-11-06', 220: '2026-11-06', 221: '2026-11-06', 222: '2026-11-06',
-              223: '2026-11-06', 224: '2026-11-06'})
+              223: '2026-11-06', 224: '2026-11-06', 225: '2026-11-10', 226: '2026-11-10'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -276,7 +284,8 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and "
     "compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key "
     "origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), "
-    "wintun.dll left unbundled (222), the ur.io/recurd page (223) and C16's latch (224). ")
+    "wintun.dll left unbundled (222), the ur.io/recurd page (223), C16's latch (224), and the store's DELETE that "
+    "names its object (225) and its whole LIST (226). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

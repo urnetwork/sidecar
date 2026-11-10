@@ -819,12 +819,13 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             while all holds its old row, that every current diff's chain resolves and no tombstoned version counts,
             and that every expired bucket is rolled while a roller is live and every erasure whose CUT committed
             finishes while a finishing device is live (weak fairness);
-            StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version and its own lock
-            on the key, each write's coordinator, which may crash, and its drive commits, each a check step then a
-            commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after it, hold
-            a commit between check and commit past the drive timeout, or miss a host that is down; TLC checks
-            FI-30 with 3 writes, 2 coordinators and a reader, and that every held key is released once its stalled
-            commits answer (weak fairness)
+            StoreSettle.tla keeps one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and
+            its own lock on the key, each write's coordinator, which may crash, and its drive commits, each a check
+            step then a commit step, the settler and heal; writes are cancelled, pass their deadline, arrive after
+            it, hold a commit between check and commit past the drive timeout, or miss a host that is down; TLC
+            checks FI-30 with PUTs and DELETEs mixed, breadth-first at 4 drives on 2 hosts and at 6 on 3 with 2 and
+            3 writes, a coordinator crash and a host failure, and by simulation at 8 drives with 3 writes and 2
+            coordinators, and that every held key is released once its stalled commits answer (weak fairness)
 history     Porcupine (https://github.com/anishathalye/porcupine) checks T3 histories per ref with §11.8's commit
             rule; an unknown outcome has an open end time and matches any result
 cadence     each FS runs on the tiers its row names: T2 rows on each merge, T3 rows nightly and at each Gn-out; a row
@@ -997,7 +998,8 @@ FI-29  copies: no key in a passive keychain copy, a Delegation's reader key asid
 FI-30  store settle (D-OPS-20): a PUT or DELETE takes effect, as every request on its key sees it, before the next
        request the store serves on that key, or never; none the store took, or began a drive commit of, past its
        deadline takes effect; no earlier write and no heal undoes a state a later write acknowledged or a read
-       returned; a key is held only while a write lacking a write quorum could still reach a read quorum (§19.6)
+       returned; a key is held only while a PUT lacking a write quorum could still reach a read quorum, or a
+       DELETE lacking one has a drive commit yet to answer or be reverted (§19.6)
 ```
 
 ```text
@@ -2422,8 +2424,18 @@ FS-114 §19,11 the store's settle rule (D-OPS-20) on T3's 4 × 2 EC:4 and 4 × 4
               has exited; heal never spreads a version under a read quorum; a head written
               while a host was down, then a PUT to it short of its write quorum as a second
               host stalls mid-commit: every drive that took the PUT reverted, that head read
-              throughout and after both hosts return and a full heal; twin: with no barrier
-              every write releases at its write quorum and no key is held
+              throughout and after both hosts return and a full heal; two DELETEs of one key,
+              each with a commit held past its deadline, on one host and with a host then
+              down: the key is held until the held commits are released and reverted, and the
+              object reads throughout and after; a create whose last drive commit is held
+              before its check across an acknowledged DELETE of the key: released, it answers
+              stale, and the key reads 404 through every host and after a full heal; a DELETE
+              naming an older object's LastModified: 412, and the object stays (owner
+              decision 225); a drive host restarted between a write's read of it and its
+              commit: stale; a LIST with three drives of a set stopped, or one stopped while
+              another heals: 503, and with two stopped it lists every acknowledged key (owner
+              decision 226); twin: with no barrier every write releases at its write quorum
+              and no key is held
 FS-115 §16    apply barriered after its stage, after its aside's hash check and after its      FI-8        T2     M3-out
               install; there a process taking no daemon lock writes distinct bytes to the
               path in place, saves them by a temporary file and rename, deletes it, or
@@ -2633,7 +2645,7 @@ Beyond the schedules:
 - **git** (2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH): through the local tier, and `git-remote-ur` without a prior mount, oids equal a reference; stock non-fast-forward errors, sibling pushes from one base giving one; `git push --atomic` fails before any write; a two-ref push reports per-ref statuses; a daemon killed between the remote commit and update-ref reconciles from its journal; foreign new commits refused, signed imports accepted.
 - **git-lfs** (3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`): FS-73's flows with stock clients, pointer files byte-exact and export's oids equal to git's, its tip check included over http, ssh and `git-remote-ur`, with no skip option set and with `--no-verify` and `GIT_LFS_SKIP_PUSH`.
 - **Restore** (darwin on APFS; linux on ext4, xfs and an NFS mount; windows on NTFS; a FAT volume on each; symlinks on each, Windows with and without the symlink privilege): FS-115's apply through each volume's no-replace rename, its hard-link fallback, and `unsupported` where it has neither, with Windows's in-use refusal.
-- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write and LIST consistency; checksums; ranged GET; Delete; lifecycle; one pool per cluster (FS-63).
+- **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).
 - **MTAs** (Postfix (may, dane), Exim; Gmail, Outlook.com, Microsoft 365, Yahoo, iCloud, SES, Proton, Fastmail): in, D-MAIL-9's census with nothing lost; out, §14.4 levels, DKIM, strict DMARC, which B's selector fails for A's network and burners, FCrDNS, JMRP and CFL joins; aggregate reports as FS-39, a one-connection, ten-recipient send raising no alarm.
 - **ZK preamble** (`smtpproof`, BDAT and DATA (owner decision 125), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
