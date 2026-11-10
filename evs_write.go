@@ -150,6 +150,7 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 	if err != nil {
 		return nil, nil, err
 	}
+	self.client.epochs.noteWritable(self.repoId, repoKey.Generation())
 	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: writes, Generation: repoKey.Generation(), Fresh: fresh})
 	if err != nil {
 		return nil, nil, err

@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -72,6 +74,7 @@ func (self *EvsComponent) Attach(env *SidecarEnv) error {
 	if err := self.client.StartSubscriptions(); err != nil {
 		self.client.log.Warningf("[evs]subscriptions did not start: %v", err)
 	}
+	go self.runMapper(env.Ctx)
 	go func() {
 		<-env.Ctx.Done()
 		remove()
@@ -142,7 +145,40 @@ func (self *EvsComponent) ReceiveHint(topic string, version uint64, delta []byte
 	deltaCopy := append([]byte{}, delta...)
 	return env.Enqueue(len(deltaCopy), func(ctx context.Context) {
 		self.client.ReceiveHint(repoId, version, deltaCopy)
+		self.tickMapper(ctx, repoId, deltaCopy)
 	})
+}
+
+// The mapper's tick on a hint's ref (DESIGN-DETAILS 9.2.7): a ref whose epoch is due maps on this device when it is
+// eligible, and anything that waits ticks again on the next hint or the timer (runMapper).
+func (self *EvsComponent) tickMapper(ctx context.Context, repoId Id, delta []byte) {
+	changed := &protocol.EvsHeadChanged{}
+	if err := proto.Unmarshal(delta, changed); err != nil {
+		return
+	}
+	refId, err := IdFromBytes(changed.GetRefId())
+	if err != nil {
+		return
+	}
+	if err := self.client.Repo(repoId).TickMapper(ctx, refId); err != nil && self.client.log.V(1).Enabled() {
+		self.client.log.Infof("[evs]mapper on repo %s ref %s: %v", repoId, refId, err)
+	}
+}
+
+// The mapper's timer: every MapperSpread, a tick of each ref this client pins, until ctx ends.
+func (self *EvsComponent) runMapper(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-self.client.clock.After(self.client.settings.MapperSpread):
+		}
+		for _, pin := range self.client.pins.loadedPins() {
+			if err := self.client.Repo(pin.RepoId).TickMapper(ctx, pin.RefId); err != nil && self.client.log.V(1).Enabled() {
+				self.client.log.Infof("[evs]mapper on repo %s ref %s: %v", pin.RepoId, pin.RefId, err)
+			}
+		}
+	}
 }
 
 // The args an EvsClient takes from this Sidecar for the network it is enrolled in: the service url, SidecarApi's

@@ -106,6 +106,14 @@ type evsTestPushServer struct {
 	onPush func(statement *EvsStatement)
 	// the upload time receipts name, 0 for 2026-01-01
 	uploadMs int64
+	// map parts by path_map_sha256 and part, the PATH_EPOCHs committed with their parts, the blocks asked for, and
+	// how many uploads each part took
+	mapParts     map[string]map[uint32][]byte
+	committedMap [][][]byte
+	blocks       int
+	partUploads  map[uint32]int
+	// called as each map part arrives; an error answers 503 for it
+	onMapPart func(part uint32) error
 }
 
 func newEvsTestPushServer(t *testing.T, world *evsTestWorld) *evsTestPushServer {
@@ -141,6 +149,13 @@ func (self *evsTestPushServer) ServeHTTP(writer http.ResponseWriter, request *ht
 		self.leases += 1
 		self.stateLock.Unlock()
 		writer.WriteHeader(http.StatusOK)
+	case request.Method == http.MethodPost && strings.HasSuffix(path, "/path-epoch/block"):
+		self.stateLock.Lock()
+		self.blocks += 1
+		self.stateLock.Unlock()
+		writer.WriteHeader(http.StatusOK)
+	case request.Method == http.MethodPost && strings.HasSuffix(path, "/path-epoch"):
+		self.serveMapPart(writer, request)
 	case request.Method == http.MethodPost && strings.Contains(path, "/push/"):
 		self.servePart(writer, request)
 	case request.Method == http.MethodPost && strings.HasSuffix(path, "/push"):
@@ -255,6 +270,21 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 	self.stateLock.Unlock()
 	if onPush != nil {
 		onPush(statement)
+	}
+	if statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
+		version, refusal := self.commitPathEpoch(statement, pushRequest.GetPayload())
+		if refusal != nil {
+			refusal.reply.PushId = pushId.Bytes()
+			evsTestRefuse(writer, refusal)
+			return
+		}
+		self.stateLock.Lock()
+		self.committed[pushId] = version
+		self.stateLock.Unlock()
+		reply, _ := proto.Marshal(&protocol.EvsPushReply{Version: version})
+		writer.WriteHeader(http.StatusOK)
+		writer.Write(reply)
+		return
 	}
 	self.world.stateLock.Lock()
 	current := max(1, self.world.currentEpoch)
@@ -891,4 +921,151 @@ func evsTestSourcePathsOf(change *EvsCheckedChange) map[uint64]EvsTokenPath {
 		}
 	}
 	return sources
+}
+
+// POST .../path-epoch: a part, its signature the world signer's, held under its map's hash; another part under its key
+// answers MAP_SOURCE, as evs does.
+func (self *evsTestPushServer) serveMapPart(writer http.ResponseWriter, request *http.Request) {
+	body, _ := io.ReadAll(request.Body)
+	mapRequest := &protocol.EvsPathMapRequest{}
+	if err := proto.Unmarshal(body, mapRequest); err != nil || len(mapRequest.GetPathMapSha256()) != 32 {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	signed, pathMap, err := ParseEvsPathMap(mapRequest.GetPart())
+	if err != nil || !ed25519Verify(self.world.signer.publicKey(), signed) {
+		self.t.Errorf("a map part that does not check: %v", err)
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	self.stateLock.Lock()
+	onMapPart := self.onMapPart
+	self.stateLock.Unlock()
+	if onMapPart != nil {
+		if err := onMapPart(pathMap.GetPart()); err != nil {
+			evsTestRefuse(writer, &evsTestRefusal{status: http.StatusServiceUnavailable, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE}})
+			return
+		}
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.mapParts == nil {
+		self.mapParts, self.partUploads = map[string]map[uint32][]byte{}, map[uint32]int{}
+	}
+	key := hex.EncodeToString(mapRequest.GetPathMapSha256())
+	if self.mapParts[key] == nil {
+		self.mapParts[key] = map[uint32][]byte{}
+	}
+	if held, ok := self.mapParts[key][pathMap.GetPart()]; ok && !bytes.Equal(held, mapRequest.GetPart()) {
+		evsTestRefuse(writer, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE}})
+		return
+	}
+	self.mapParts[key][pathMap.GetPart()] = mapRequest.GetPart()
+	self.partUploads[pathMap.GetPart()] += 1
+	writer.WriteHeader(http.StatusOK)
+}
+
+// A PATH_EPOCH as 5e checks it and step 7 commits it: a newer epoch, a free source slot, every part present under the
+// map's hash in order, its source at or below the head with its chain and of the current epoch (the between fence),
+// and its tail moving every path a version after the source created; then the cut-over.
+func (self *evsTestPushServer) commitPathEpoch(statement *EvsStatement, payload []byte) (uint64, *evsTestRefusal) {
+	refuse := func(status int, code protocol.EvsRefusalCode, paths ...*protocol.EvsTokenPath) (uint64, *evsTestRefusal) {
+		return 0, &evsTestRefusal{status: status, reply: &protocol.EvsRefusalReply{Code: code, Paths: paths}}
+	}
+	push := statement.Push
+	checked, err := EvsCheckPayload(statement, payload)
+	if err != nil {
+		self.t.Errorf("a PATH_EPOCH whose payload does not check: %v", err)
+		return refuse(http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+	}
+	self.stateLock.Lock()
+	parts := self.mapParts[hex.EncodeToString(push.GetPathMapSha256())]
+	self.stateLock.Unlock()
+	world := self.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	current := world.currentWithLock()
+	switch {
+	case push.GetPathEpoch() <= current:
+		return refuse(http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH)
+	case 3 <= len(world.sourceEpochs):
+		return refuse(http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_EPOCH_SOURCES_FULL)
+	}
+	ordered := [][]byte{}
+	for k := uint32(1); ; k += 1 {
+		part, ok := parts[k]
+		if !ok {
+			break
+		}
+		ordered = append(ordered, part)
+	}
+	if len(ordered) == 0 || !bytes.Equal(EvsPathMapSha256(ordered), push.GetPathMapSha256()) {
+		return refuse(http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_PARTS)
+	}
+	head := uint64(len(world.commits))
+	source := push.GetMapSourceVersion()
+	sourceChain := EvsChainStart(world.repoId, world.refId)
+	sourceEpoch := uint64(1)
+	if 0 < source && source <= head {
+		sourceChain = world.commits[source-1].chain
+		sourceEpoch = max(1, world.commits[source-1].parsed.Push.GetPathEpoch())
+	}
+	if head < source || !bytes.Equal(sourceChain[:], push.GetMapSourceChain()) || sourceEpoch != current {
+		return refuse(http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE)
+	}
+	moved := map[string]bool{}
+	for _, item := range checked.TailMoves {
+		move := &protocol.EvsPathMove{}
+		proto.Unmarshal(item, move)
+		for _, sourcePath := range move.GetSources() {
+			if sourcePath.GetEpoch() == current {
+				tokenPath, _ := ParseEvsChangedTokenPath(sourcePath.GetTokenPath())
+				moved[tokenPath.KeyString()] = true
+			}
+		}
+	}
+	uncovered := []*protocol.EvsTokenPath{}
+	for version := source + 1; version <= head; version += 1 {
+		for _, change := range world.commits[version-1].parsed.Changes {
+			if change.Change.GetBaseEntryVersion() == 0 && change.WritesEntry() && 0 < len(change.TokenPath) && !moved[change.TokenPath.KeyString()] {
+				uncovered = append(uncovered, change.TokenPath.Proto())
+			}
+		}
+		if tree := world.commits[version-1].built.ChangeTree; tree != nil {
+			self.t.Errorf("the stand-in's tail check reads inline lists only")
+		}
+	}
+	if 0 < len(uncovered) {
+		return refuse(http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, uncovered...)
+	}
+	var baseChain [32]byte = EvsChainStart(world.repoId, world.refId)
+	if 0 < head {
+		baseChain = world.commits[head-1].chain
+	}
+	if push.GetBaseVersion() != head || !bytes.Equal(push.GetBaseChain(), baseChain[:]) {
+		return refuse(http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+	}
+	chain := EvsChainNext(baseChain, Id(push.GetPushId()), statement.Sha256)
+	world.commits = append(world.commits, &evsTestCommit{
+		statement: statement.Bytes, parsed: statement, chain: chain,
+		built: &EvsBuiltPush{Statement: statement, Payload: payload},
+	})
+	world.sourceEpochs = append([]uint64{current}, world.sourceEpochs...)
+	world.currentEpoch = push.GetPathEpoch()
+	world.generation = max(world.generation, push.GetGeneration())
+	world.due = nil
+	for _, state := range world.paths {
+		if state.home == 0 {
+			state.home = 1
+		}
+	}
+	self.stateLock.Lock()
+	self.committedMap = append(self.committedMap, ordered)
+	self.stateLock.Unlock()
+	return uint64(len(world.commits)), nil
+}
+
+// Whether signed's signature verifies under publicKey as a path map part's.
+func ed25519Verify(publicKey []byte, signed *bridge.Signed) bool {
+	return bridge.VerifySigned(signed, "evs-path-epoch", bridge.SignedType_SIGNED_EVS_PATH_MAP, bridge.SignedKeyAlgEd25519, publicKey) == nil
 }

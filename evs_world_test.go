@@ -168,6 +168,8 @@ type evsTestWorld struct {
 	// a version of an epoch the request names no token path in is answered with its statement alone, as evs answers
 	// a version it can place by neither leaf place nor token path
 	statementAloneUnnamed bool
+	// the due the head records, nil for none: its generation, block and due_by_ms
+	due *protocol.EvsPathEpoch
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -573,6 +575,10 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 	}
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
+	}
+	if self.due != nil {
+		head.PathEpoch.DueGeneration, head.PathEpoch.DueBlocksCreation = self.due.GetDueGeneration(), self.due.GetDueBlocksCreation()
+		head.PathEpoch.DueByMs, head.PathEpoch.BlockUntilMs = self.due.GetDueByMs(), self.due.GetBlockUntilMs()
 	}
 	if len(self.commits) == 0 {
 		chain := EvsChainStart(self.repoId, self.refId)

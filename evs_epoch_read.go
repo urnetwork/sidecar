@@ -351,8 +351,13 @@ type evsClientEpochs struct {
 	waiters map[evsRefKey]chan struct{}
 	// what a mapper on this device says of a ref's job, nil until one registers (evs_epoch_map.go)
 	mapperStatus evsMapperStatusFunction
+	// the client's *evsMapper, made on first use: untyped here, since the mapper's files stay off the ios_extension
+	// leg, which links this one
+	mapper any
 	// per ref, the newest version a push of this device committed at: a ref with a head though no verified one shows it
 	committed map[evsRefKey]uint64
+	// per repo, the newest generation this device's own EnsureWritable returned, which a mapper starts at once for
+	writable map[Id]uint64
 }
 
 // A cached listing's key.
@@ -377,7 +382,22 @@ func newEvsClientEpochs() *evsClientEpochs {
 		refAlarms:    map[evsRefKey]*evsRefAlarm{},
 		waiters:      map[evsRefKey]chan struct{}{},
 		committed:    map[evsRefKey]uint64{},
+		writable:     map[Id]uint64{},
 	}
+}
+
+// Notes the generation this device's own EnsureWritable returned for a repo.
+func (self *evsClientEpochs) noteWritable(repoId Id, generation uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.writable[repoId] = max(self.writable[repoId], generation)
+}
+
+// Whether this device's own EnsureWritable returned generation, so it rotated to it and maps at once.
+func (self *evsClientEpochs) rotatedTo(repoId Id, generation uint64) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.writable[repoId] == generation
 }
 
 // Notes a push of this device committed on a ref at version.
