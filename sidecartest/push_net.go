@@ -106,7 +106,8 @@ func (self *Net) push() (*netPush, error) {
 	if err != nil {
 		return nil, err
 	}
-	longPoll, err := pushservice.NewLongPoll(self.ctx, redis, self.clock, nil, nil)
+	// each poll's lease write reaches the Net's api (http_page.go)
+	longPoll, err := pushservice.NewLongPoll(self.ctx, redis, self.clock, nil, self.touchLease)
 	if err != nil {
 		return nil, err
 	}
